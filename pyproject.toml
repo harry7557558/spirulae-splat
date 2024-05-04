@@ -1,0 +1,13 @@
+[project]
+name = "spirulae_splat"
+description = "Template repository for creating and registering new methods in nerfstudio."
+version = "0.1.0"
+
+dependencies = ["nerfstudio >= 0.3.0"] 
+
+[tool.setuptools.packages.find]
+include = ["spirulae_splat*"]
+
+# register the entry point of your new method here:
+[project.entry-points.'nerfstudio.method_configs']
+method-template = 'spirulae_splat.spirulae_config:spirulae'
