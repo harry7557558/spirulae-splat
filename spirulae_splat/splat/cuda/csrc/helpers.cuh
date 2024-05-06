@@ -4,6 +4,53 @@
 #include "glm/glm/gtc/type_ptr.hpp"
 #include <iostream>
 
+
+#if 0
+
+// "Gaussian" kernel
+inline __device__ float visibility_kernel(const float r2) {
+    float r = sqrtf(max(r2,0.0f));
+    return
+        r < 1.0f ? 1.0f-1.5f*r*r*(1.0f-0.5f*r) :
+        r < 2.0f ? 0.25f*(2.0f-r)*(2.0f-r)*(2.0f-r) :
+        0.0f;
+}
+
+// gradient of "Gaussian" kernel
+inline __device__ float visibility_kernel_grad(const float r2) {
+    float r = sqrtf(max(r2,0.0f));
+    float v_r =
+        r < 1.0f ? 0.75f*r*(3.0f*r-4.0f) :
+        r < 2.0f ? -0.75f*(2.0f-r)*(2.0f-r) :
+        0.0f;
+    return 0.5f * v_r / r;
+}
+
+// radius of "Gaussian" kernel
+inline __device__ float visibility_kernel_radius() {
+    return 2.0f;
+}
+
+#else
+
+// Gaussian kernel
+inline __device__ float visibility_kernel(const float r2) {
+    return expf(-r2);
+}
+
+// gradient of Gaussian kernel
+inline __device__ float visibility_kernel_grad(const float r2) {
+    return -expf(-r2);
+}
+
+// radius of Gaussian kernel
+inline __device__ float visibility_kernel_radius() {
+    return 3.0f;
+}
+
+#endif
+
+
 inline __device__ void get_bbox(
     const float2 center,
     const float2 dims,
@@ -59,8 +106,8 @@ compute_cov2d_bounds(const float3 cov2d, float3 &conic, float &radius) {
     float b = 0.5f * (cov2d.x + cov2d.z);
     float v1 = b + sqrt(max(0.1f, b * b - det));
     float v2 = b - sqrt(max(0.1f, b * b - det));
-    // take 3 sigma of covariance
-    radius = ceil(3.f * sqrt(max(v1, v2)));
+
+    radius = ceil(visibility_kernel_radius() * sqrt(max(v1, v2)));
     return true;
 }
 

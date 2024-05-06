@@ -13,7 +13,7 @@ namespace cg = cooperative_groups;
 __global__ void project_gaussians_forward_kernel(
     const int num_points,
     const float3* __restrict__ means3d,
-    const float3* __restrict__ scales,
+    const float2* __restrict__ scales,
     const float glob_scale,
     const float4* __restrict__ quats,
     const float* __restrict__ viewmat,
@@ -48,7 +48,7 @@ __global__ void project_gaussians_forward_kernel(
     // printf("p_view %d %.2f %.2f %.2f\n", idx, p_view.x, p_view.y, p_view.z);
 
     // compute the projected covariance
-    float3 scale = scales[idx];
+    float3 scale = make_float3(scales[idx].x, scales[idx].y, 0.0f);
     float4 quat = quats[idx];
     // printf("%d scale %.2f %.2f %.2f\n", idx, scale.x, scale.y, scale.z);
     // printf("%d quat %.2f %.2f %.2f %.2f\n", idx, quat.w, quat.x, quat.y,
@@ -169,129 +169,6 @@ __global__ void get_tile_bin_edges(
     }
 }
 
-// kernel function for rasterizing each tile
-// each thread treats a single pixel
-// each thread group uses the same gaussian data in a tile
-__global__ void nd_rasterize_forward(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const unsigned channels,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float* __restrict__ colors,
-    const float* __restrict__ opacities,
-    float* __restrict__ final_Ts,
-    int* __restrict__ final_index,
-    float* __restrict__ out_img,
-    const float* __restrict__ background
-) {
-    auto block = cg::this_thread_block();
-    int32_t tile_id =
-        block.group_index().y * tile_bounds.x + block.group_index().x;
-    unsigned i =
-        block.group_index().y * block.group_dim().y + block.thread_index().y;
-    unsigned j =
-        block.group_index().x * block.group_dim().x + block.thread_index().x;
-
-    float px = (float)j + 0.5;
-    float py = (float)i + 0.5;
-    int32_t pix_id = i * img_size.x + j;
-
-    // keep not rasterizing threads around for reading data
-    bool inside = (i < img_size.y && j < img_size.x);
-    bool done = !inside;
-
-    int2 range = tile_bins[tile_id];
-    const int block_size = block.size();
-    int num_batches = (range.y - range.x + block_size - 1) / block_size;
-
-    extern __shared__ int s[];
-    int32_t* id_batch = (int32_t*)s;
-    float3* xy_opacity_batch = (float3*)&id_batch[block_size];
-    float3* conic_batch = (float3*)&xy_opacity_batch[block_size];
-    __half* color_out_batch = (__half*)&conic_batch[block_size];
-    #pragma unroll
-    for(int c = 0; c < channels; ++c)
-        color_out_batch[block.thread_rank() * channels + c] = __float2half(0.f);
-
-    // current visibility left to render
-    float T = 1.f;
-    // index of most recent gaussian to write to this thread's pixel
-    int cur_idx = 0;
-
-    // collect and process batches of gaussians
-    // each thread loads one gaussian at a time before rasterizing its
-    // designated pixel
-    int tr = block.thread_rank();
-    __half* pix_out = &color_out_batch[block.thread_rank() * channels];
-
-    for (int b = 0; b < num_batches; ++b) {
-        // resync all threads before beginning next batch
-        // end early if entire tile is done
-        if (__syncthreads_count(done) >= block_size) {
-            break;
-        }
-        // each thread fetch 1 gaussian from front to back
-
-        int batch_start = range.x + block_size * b;
-        int idx = batch_start + tr;
-        if (idx < range.y) {
-            int32_t g_id = gaussian_ids_sorted[idx];
-            id_batch[tr] = g_id;
-            const float2 xy = xys[g_id];
-            const float opac = opacities[g_id];
-            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            conic_batch[tr] = conics[g_id];
-        }
-
-        // wait for other threads to collect the gaussians in batch
-        block.sync();
-
-        int batch_size = min(block_size, range.y - batch_start);
-        for (int t = 0; (t < batch_size) && !done; ++t) {
-            const float3 conic = conic_batch[t];
-            const float3 xy_opac = xy_opacity_batch[t];
-            const float opac = xy_opac.z;
-            const float2 delta = {xy_opac.x - px, xy_opac.y - py};
-            const float sigma = 0.5f * (conic.x * delta.x * delta.x +
-                                        conic.z * delta.y * delta.y) +
-                                conic.y * delta.x * delta.y;
-            const float alpha = min(0.999f, opac * __expf(-sigma));
-            if (sigma < 0.f || alpha < 1.f / 255.f) {
-                continue;
-            }
-
-            const float next_T = T * (1.f - alpha);
-            if (next_T <= 1e-4f) {
-                // we want to render the last gaussian that contributes and note
-                // that here idx > range.x so we don't underflow
-                done = true;
-                break;
-            }
-
-            int32_t g = id_batch[t];
-            const float vis = alpha * T;
-            #pragma unroll
-            for (int c = 0; c < channels; ++c) {
-                pix_out[c] = __hadd(pix_out[c], __float2half(colors[channels * g + c] * vis));
-            }
-            T = next_T;
-            cur_idx = batch_start + t;
-        }
-    }
-
-    if (inside) {
-        // add background
-        final_Ts[pix_id] = T; // transmittance at last gaussian in this pixel
-        final_index[pix_id] = cur_idx; // index of in bin of last gaussian in this pixel
-        #pragma unroll
-        for (int c = 0; c < channels; ++c) {
-            out_img[pix_id * channels + c] = __half2float(pix_out[c]) + T * background[c];
-        }
-    }
-}
 
 __global__ void rasterize_forward(
     const dim3 tile_bounds,

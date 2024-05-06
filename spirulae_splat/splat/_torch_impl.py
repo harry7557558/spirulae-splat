@@ -375,6 +375,7 @@ def project_gaussians_forward(
     block_width,
     clip_thresh=0.01,
 ):
+    assert False
     tile_bounds = (
         (img_size[0] + block_width - 1) // block_width,
         (img_size[1] + block_width - 1) // block_width,

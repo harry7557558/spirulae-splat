@@ -12,7 +12,7 @@ import spirulae_splat.splat.cuda as _C
 
 def project_gaussians(
     means3d: Float[Tensor, "*batch 3"],
-    scales: Float[Tensor, "*batch 3"],
+    scales: Float[Tensor, "*batch 2"],
     glob_scale: float,
     quats: Float[Tensor, "*batch 4"],
     viewmat: Float[Tensor, "4 4"],
@@ -82,7 +82,7 @@ class _ProjectGaussians(Function):
     def forward(
         ctx,
         means3d: Float[Tensor, "*batch 3"],
-        scales: Float[Tensor, "*batch 3"],
+        scales: Float[Tensor, "*batch 2"],
         glob_scale: float,
         quats: Float[Tensor, "*batch 4"],
         viewmat: Float[Tensor, "4 4"],
@@ -234,7 +234,7 @@ class _ProjectGaussians(Function):
         return (
             # means3d: Float[Tensor, "*batch 3"],
             v_mean3d,
-            # scales: Float[Tensor, "*batch 3"],
+            # scales: Float[Tensor, "*batch 2"],
             v_scale,
             # glob_scale: float,
             None,

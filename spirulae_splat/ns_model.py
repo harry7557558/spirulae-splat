@@ -138,8 +138,8 @@ class SpirulaeModelConfig(ModelConfig):
     """whether to initialize the positions uniformly randomly (not SFM points)"""
     num_random: int = 100000
     """Number of gaussians to initialize if random init is used"""
-    random_scale: float = 1.5
-    "Size of the cube to initialize random gaussians within"
+    random_scale: float = 1.0
+    """Position standard deviation to initialize random gaussians"""
     ssim_lambda: float = 0.2
     """weight of ssim loss"""
     stop_split_at: int = 15000
@@ -399,9 +399,11 @@ class SpirulaeModel(Model):
             return
         with torch.no_grad():
             # keep track of a moving average of grad norms
-            visible_mask = (self.radii[self.depth_sort_i] > 0).flatten()
+            # visible_mask = (self.radii[self.depth_sort_i] > 0).flatten()
+            visible_mask = (self.radii > 0).flatten()
             assert self.xys.absgrad is not None  # type: ignore
-            grads = self.xys.absgrad.detach().norm(dim=-1)[self.depth_sort_i]  # type: ignore
+            # grads = self.xys.absgrad.detach().norm(dim=-1)[self.depth_sort_i]  # type: ignore
+            grads = self.xys.absgrad.detach().norm(dim=-1)  # type: ignore
             # print(f"grad norm min {grads.min().item()} max {grads.max().item()} mean {grads.mean().item()} size {grads.shape}")
             if self.xys_grad_norm is None:
                 self.xys_grad_norm = grads
@@ -414,7 +416,8 @@ class SpirulaeModel(Model):
             # update the max screen size, as a ratio of number of pixels
             if self.max_2Dsize is None:
                 self.max_2Dsize = torch.zeros_like(self.radii, dtype=torch.float32)
-            newradii = self.radii.detach()[self.depth_sort_i][visible_mask]
+            # newradii = self.radii.detach()[self.depth_sort_i][visible_mask]
+            newradii = self.radii.detach()[visible_mask]
             self.max_2Dsize[visible_mask] = torch.maximum(
                 self.max_2Dsize[visible_mask],
                 newradii / float(max(self.last_size[0], self.last_size[1])),
@@ -730,14 +733,14 @@ class SpirulaeModel(Model):
             means_crop = self.means[crop_ids]
             features_dc_crop = self.features_dc[crop_ids]
             features_rest_crop = self.features_rest[crop_ids]
-            scales_crop = self.scales_3d[crop_ids]
+            scales_crop = self.scales[crop_ids]
             quats_crop = self.quats[crop_ids]
         else:
             opacities_crop = self.opacities
             means_crop = self.means
             features_dc_crop = self.features_dc
             features_rest_crop = self.features_rest
-            scales_crop = self.scales_3d
+            scales_crop = self.scales
             quats_crop = self.quats
         colors_crop = torch.cat((features_dc_crop[:, None, :], features_rest_crop), dim=1)
         quats_crop = quats_crop / quats_crop.norm(dim=-1, keepdim=True)
@@ -791,14 +794,14 @@ class SpirulaeModel(Model):
         else:
             raise ValueError("Unknown rasterize_mode: %s", self.config.rasterize_mode)
 
-        sort_i = torch.argsort(depths)
-        self.xys, depths = self.xys[sort_i], depths[sort_i]  # (2,), 1
-        self.radii, conics = self.radii[sort_i], conics[sort_i]  # 1, (3,)
-        comp, num_tiles_hit = comp[sort_i], num_tiles_hit[sort_i]  # 1, 1
-        rgbs, opacities = rgbs[sort_i], opacities[sort_i]
-        with torch.no_grad():
-            self.depth_sort_i = torch.zeros_like(sort_i)
-            self.depth_sort_i[sort_i.clone()] = torch.arange(0, len(depths), device=sort_i.device)
+        # sort_i = torch.argsort(depths)
+        # self.xys, depths = self.xys[sort_i], depths[sort_i]  # (2,), 1
+        # self.radii, conics = self.radii[sort_i], conics[sort_i]  # 1, (3,)
+        # comp, num_tiles_hit = comp[sort_i], num_tiles_hit[sort_i]  # 1, 1
+        # rgbs, opacities = rgbs[sort_i], opacities[sort_i]
+        # with torch.no_grad():
+        #     self.depth_sort_i = torch.zeros_like(sort_i)
+        #     self.depth_sort_i[sort_i.clone()] = torch.arange(0, len(depths), device=sort_i.device)
         # print((depths[1:] >= depths[:-1]).sum().item(), (depths[1:] > -1e4).sum().item())
 
         rgb, alpha = rasterize_gaussians(  # type: ignore
@@ -833,11 +836,6 @@ class SpirulaeModel(Model):
                 background=torch.zeros(3, device=self.device),
             )[..., 0:1]  # type: ignore
             depth_im = torch.where(alpha > 0, depth_im / alpha, depth_im.detach().max())
-
-        # self.xys = xys.clone().detach().requires_grad_(True)
-        # self.xys = xys.clone().detach().requires_grad_(True)[self.depth_sort_i]
-        # self.xys[self.depth_sort_i] = xys
-        # self.radii[self.depth_sort_i] = self.radii.clone()
 
         # print(rgb.shape, alpha.shape)
         return {"rgb": rgb, "depth": depth_im, "accumulation": alpha, "background": background}  # type: ignore
