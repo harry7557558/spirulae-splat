@@ -6,11 +6,11 @@ Define your custom method here that registers with Nerfstudio CLI.
 
 from __future__ import annotations
 
-from spirulae_splat.spirulae_datamanager import (
+from spirulae_splat.ns_datamanager import (
     SpirulaeDataManagerConfig,
 )
-from spirulae_splat.spirulae_model import SpirulaeModelConfig
-from spirulae_splat.spirulae_pipeline import (
+from spirulae_splat.ns_model import SpirulaeModelConfig
+from spirulae_splat.ns_pipeline import (
     SpirulaePipelineConfig,
 )
 from nerfstudio.configs.base_config import ViewerConfig

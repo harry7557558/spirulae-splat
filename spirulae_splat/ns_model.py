@@ -28,10 +28,10 @@ import torch
 from torch.nn import Parameter
 from pytorch_msssim import SSIM
 
-from gsplat._torch_impl import quat_to_rotmat
-from gsplat.project_gaussians import project_gaussians
-from gsplat.rasterize import rasterize_gaussians
-from gsplat.sh import num_sh_bases, spherical_harmonics
+from spirulae_splat.splat._torch_impl import quat_to_rotmat
+from spirulae_splat.splat.project_gaussians import project_gaussians
+from spirulae_splat.splat.rasterize import rasterize_gaussians
+from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
 
 from nerfstudio.cameras.camera_optimizers import (CameraOptimizer,
                                                   CameraOptimizerConfig)
@@ -282,6 +282,7 @@ class SpirulaeModel(Model):
     def scales_3d(self):
         scales = self.gauss_params["scales"]
         scales_thickness = torch.amin(scales, axis=1, keepdim=True) + math.log(0.001)
+        scales_thickness += -torch.inf
         return torch.concat((scales, scales_thickness), dim=1)
 
     @property

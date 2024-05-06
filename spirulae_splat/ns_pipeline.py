@@ -10,8 +10,8 @@ import torch.distributed as dist
 from torch.cuda.amp.grad_scaler import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from spirulae_splat.spirulae_datamanager import SpirulaeDataManagerConfig
-from spirulae_splat.spirulae_model import SpirulaeModel, SpirulaeModelConfig
+from spirulae_splat.ns_datamanager import SpirulaeDataManagerConfig
+from spirulae_splat.ns_model import SpirulaeModel, SpirulaeModelConfig
 from nerfstudio.data.datamanagers.base_datamanager import (
     DataManager,
     DataManagerConfig,

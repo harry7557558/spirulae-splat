@@ -1,0 +1,3 @@
+[submodule "spirulae_splat/splat/cuda/csrc/glm"]
+	path = spirulae_splat/splat/cuda/csrc/glm
+	url = https://github.com/g-truc/glm.git
