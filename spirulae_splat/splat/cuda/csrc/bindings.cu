@@ -158,6 +158,7 @@ std::tuple<
     torch::Tensor,
     torch::Tensor,
     torch::Tensor,
+    torch::Tensor,
     torch::Tensor>
 project_gaussians_forward_tensor(
     const int num_points,
@@ -194,6 +195,8 @@ project_gaussians_forward_tensor(
         torch::zeros({num_points, 2}, means3d.options().dtype(torch::kFloat32));
     torch::Tensor depths_d =
         torch::zeros({num_points}, means3d.options().dtype(torch::kFloat32));
+    torch::Tensor depth_grads_d =
+        torch::zeros({num_points, 2}, means3d.options().dtype(torch::kFloat32));
     torch::Tensor radii_d =
         torch::zeros({num_points}, means3d.options().dtype(torch::kInt32));
     torch::Tensor conics_d =
@@ -221,6 +224,7 @@ project_gaussians_forward_tensor(
         cov3d_d.contiguous().data_ptr<float>(),
         (float2 *)xys_d.contiguous().data_ptr<float>(),
         depths_d.contiguous().data_ptr<float>(),
+        (float2 *)depth_grads_d.contiguous().data_ptr<float>(),
         radii_d.contiguous().data_ptr<int>(),
         (float3 *)conics_d.contiguous().data_ptr<float>(),
         compensation_d.contiguous().data_ptr<float>(),
@@ -228,7 +232,8 @@ project_gaussians_forward_tensor(
     );
 
     return std::make_tuple(
-        cov3d_d, xys_d, depths_d, radii_d, conics_d, compensation_d, num_tiles_hit_d
+        cov3d_d, xys_d, depths_d, depth_grads_d,
+        radii_d, conics_d, compensation_d, num_tiles_hit_d
     );
 }
 
@@ -257,6 +262,7 @@ project_gaussians_backward_tensor(
     torch::Tensor &compensation,
     torch::Tensor &v_xy,
     torch::Tensor &v_depth,
+    torch::Tensor &v_depth_grad,
     torch::Tensor &v_conic,
     torch::Tensor &v_compensation
 ){
@@ -298,6 +304,7 @@ project_gaussians_backward_tensor(
         (float *)compensation.contiguous().data_ptr<float>(),
         (float2 *)v_xy.contiguous().data_ptr<float>(),
         v_depth.contiguous().data_ptr<float>(),
+        (float2 *)v_depth_grad.contiguous().data_ptr<float>(),
         (float3 *)v_conic.contiguous().data_ptr<float>(),
         (float *)v_compensation.contiguous().data_ptr<float>(),
         // Outputs.
@@ -375,7 +382,8 @@ torch::Tensor get_tile_bin_edges_tensor(
     return tile_bins;
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor,
+    torch::Tensor, torch::Tensor, torch::Tensor>
 rasterize_forward_tensor(
     const std::tuple<int, int, int> tile_bounds,
     const std::tuple<int, int, int> block,
@@ -383,6 +391,8 @@ rasterize_forward_tensor(
     const torch::Tensor &gaussian_ids_sorted,
     const torch::Tensor &tile_bins,
     const torch::Tensor &xys,
+    const torch::Tensor &depths,
+    const torch::Tensor &depth_grads,
     const torch::Tensor &conics,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
@@ -419,6 +429,12 @@ rasterize_forward_tensor(
     torch::Tensor out_img = torch::zeros(
         {img_height, img_width, channels}, xys.options().dtype(torch::kFloat32)
     );
+    torch::Tensor out_reg_depth = torch::zeros(
+        {img_height, img_width}, xys.options().dtype(torch::kFloat32)
+    );
+    torch::Tensor out_reg_normal = torch::zeros(
+        {img_height, img_width}, xys.options().dtype(torch::kFloat32)
+    );
     torch::Tensor final_Ts = torch::zeros(
         {img_height, img_width}, xys.options().dtype(torch::kFloat32)
     );
@@ -432,16 +448,21 @@ rasterize_forward_tensor(
         gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (float2 *)xys.contiguous().data_ptr<float>(),
+        depths.contiguous().data_ptr<float>(),
+        (float2 *)depth_grads.contiguous().data_ptr<float>(),
         (float3 *)conics.contiguous().data_ptr<float>(),
         (float3 *)colors.contiguous().data_ptr<float>(),
         opacities.contiguous().data_ptr<float>(),
         final_Ts.contiguous().data_ptr<float>(),
         final_idx.contiguous().data_ptr<int>(),
         (float3 *)out_img.contiguous().data_ptr<float>(),
+        out_reg_depth.contiguous().data_ptr<float>(),
+        out_reg_normal.contiguous().data_ptr<float>(),
         *(float3 *)background.contiguous().data_ptr<float>()
     );
 
-    return std::make_tuple(out_img, final_Ts, final_idx);
+    return std::make_tuple(out_img, out_reg_depth, out_reg_normal,
+        final_Ts, final_idx);
 }
 
 
@@ -460,6 +481,8 @@ std::
         const torch::Tensor &gaussians_ids_sorted,
         const torch::Tensor &tile_bins,
         const torch::Tensor &xys,
+        const torch::Tensor &depths,
+        const torch::Tensor &depth_grads,
         const torch::Tensor &conics,
         const torch::Tensor &colors,
         const torch::Tensor &opacities,

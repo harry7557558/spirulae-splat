@@ -15,6 +15,7 @@ from .utils import bin_and_sort_gaussians, compute_cumulative_intersects
 def rasterize_gaussians(
     xys: Float[Tensor, "*batch 2"],
     depths: Float[Tensor, "*batch 1"],
+    depth_grads: Float[Tensor, "*batch 2"],
     radii: Float[Tensor, "*batch 1"],
     conics: Float[Tensor, "*batch 3"],
     num_tiles_hit: Int[Tensor, "*batch 1"],
@@ -74,6 +75,7 @@ def rasterize_gaussians(
     return _RasterizeGaussians.apply(
         xys.contiguous(),
         depths.contiguous(),
+        depth_grads.contiguous(),
         radii.contiguous(),
         conics.contiguous(),
         num_tiles_hit.contiguous(),
@@ -95,6 +97,7 @@ class _RasterizeGaussians(Function):
         ctx,
         xys: Float[Tensor, "*batch 2"],
         depths: Float[Tensor, "*batch 1"],
+        depth_grads: Float[Tensor, "*batch 2"],
         radii: Float[Tensor, "*batch 1"],
         conics: Float[Tensor, "*batch 3"],
         num_tiles_hit: Int[Tensor, "*batch 1"],
@@ -122,6 +125,8 @@ class _RasterizeGaussians(Function):
                 torch.ones(img_height, img_width, colors.shape[-1], device=xys.device)
                 * background
             )
+            out_reg_depth = torch.zeros(img_height, img_width, device=xys.device)
+            out_reg_normal = torch.zeros(img_height, img_width, device=xys.device)
             gaussian_ids_sorted = torch.zeros(0, 1, device=xys.device)
             tile_bins = torch.zeros(0, 2, device=xys.device)
             final_Ts = torch.zeros(img_height, img_width, device=xys.device)
@@ -144,15 +149,16 @@ class _RasterizeGaussians(Function):
                 block_width,
             )
             assert colors.shape[-1] == 3
-            rasterize_fn = _C.rasterize_forward
 
-            out_img, final_Ts, final_idx = rasterize_fn(
+            out_img, out_reg_depth, out_reg_normal, final_Ts, final_idx = _C.rasterize_forward(
                 tile_bounds,
                 block,
                 img_size,
                 gaussian_ids_sorted,
                 tile_bins,
                 xys,
+                depths,
+                depth_grads,
                 conics,
                 colors,
                 opacity,
@@ -167,6 +173,8 @@ class _RasterizeGaussians(Function):
             gaussian_ids_sorted,
             tile_bins,
             xys,
+            depths,
+            depth_grads,
             conics,
             colors,
             opacity,
@@ -175,14 +183,11 @@ class _RasterizeGaussians(Function):
             final_idx,
         )
 
-        if return_alpha:
-            out_alpha = 1 - final_Ts
-            return out_img, out_alpha
-        else:
-            return out_img
+        out_alpha = 1.0 - final_Ts
+        return out_img, out_reg_depth, out_reg_normal, out_alpha
 
     @staticmethod
-    def backward(ctx, v_out_img, v_out_alpha=None):
+    def backward(ctx, v_out_img, v_out_reg_depth, v_out_reg_normal, v_out_alpha=None):
         img_height = ctx.img_height
         img_width = ctx.img_width
         num_intersects = ctx.num_intersects
@@ -194,6 +199,8 @@ class _RasterizeGaussians(Function):
             gaussian_ids_sorted,
             tile_bins,
             xys,
+            depths,
+            depth_grads,
             conics,
             colors,
             opacity,
@@ -211,14 +218,15 @@ class _RasterizeGaussians(Function):
 
         else:
             assert colors.shape[-1] == 3
-            rasterize_fn = _C.rasterize_backward
-            v_xy, v_xy_abs, v_conic, v_colors, v_opacity = rasterize_fn(
+            v_xy, v_xy_abs, v_conic, v_colors, v_opacity = _C.rasterize_backward(
                 img_height,
                 img_width,
                 ctx.block_width,
                 gaussian_ids_sorted,
                 tile_bins,
                 xys,
+                depths,
+                depth_grads,
                 conics,
                 colors,
                 opacity,
@@ -237,6 +245,7 @@ class _RasterizeGaussians(Function):
         return (
             v_xy,  # xys
             None,  # depths
+            None,  # depth_grads
             None,  # radii
             v_conic,  # conics
             None,  # num_tiles_hit

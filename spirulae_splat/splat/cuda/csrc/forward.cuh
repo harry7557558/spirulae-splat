@@ -18,6 +18,7 @@ __global__ void project_gaussians_forward_kernel(
     float* __restrict__ covs3d,
     float2* __restrict__ xys,
     float* __restrict__ depths,
+    float2* __restrict__ depth_grads,
     int* __restrict__ radii,
     float3* __restrict__ conics,
     float* __restrict__ compensation,
@@ -31,12 +32,16 @@ __global__ void rasterize_forward(
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
+    const float* __restrict__ depths,
+    const float2* __restrict__ depth_grads,
     const float3* __restrict__ conics,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
     float* __restrict__ final_Ts,
     int* __restrict__ final_index,
     float3* __restrict__ out_img,
+    float* __restrict__ out_reg_depth,
+    float* __restrict__ out_reg_normal,
     const float3& __restrict__ background
 );
 
@@ -56,6 +61,11 @@ __device__ void project_cov3d_ewa(
 // device helper to get 3D covariance from scale and quat parameters
 __device__ void scale_rot_to_cov3d(
     const float3 scale, const float glob_scale, const float4 quat, float *cov3d
+);
+
+__device__ float2 projected_depth_grad(
+    const float* viewmat, const float fx, const float fy,
+    const float4 quat, const float3 p_view
 );
 
 __global__ void map_gaussian_to_intersects(

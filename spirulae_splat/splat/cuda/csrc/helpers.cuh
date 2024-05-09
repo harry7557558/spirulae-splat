@@ -5,7 +5,7 @@
 #include <iostream>
 
 
-#if 0
+#if 1
 
 // "Gaussian" kernel
 inline __device__ float visibility_kernel(const float r2) {
@@ -49,6 +49,20 @@ inline __device__ float visibility_kernel_radius() {
 }
 
 #endif
+
+
+inline __device__ bool get_alpha(
+    const float3 conic, const float3 xy_opac, const float2 p,
+    float &alpha
+) {
+    const float opac = xy_opac.z;
+    const float2 delta = {xy_opac.x - p.x, xy_opac.y - p.y};
+    const float r2 = 0.5f * (conic.x * delta.x * delta.x +
+                            conic.z * delta.y * delta.y) +
+                    conic.y * delta.x * delta.y;
+    alpha = min(0.999f, opac * visibility_kernel(r2));
+    return r2 >= 0.f && alpha >= 1.f / 255.f;
+}
 
 
 inline __device__ void get_bbox(
@@ -173,11 +187,11 @@ inline __device__ float4 transform_4x4(const float *mat, const float3 p) {
 }
 
 inline __device__ float2 project_pix(
-    const float2 fxfy, const float3 p_view, const float2 pp
+    const float2 f, const float3 p_view, const float2 c
 ) {
     float rw = 1.f / (p_view.z + 1e-6f);
     float2 p_proj = { p_view.x * rw, p_view.y * rw };
-    float2 p_pix = { p_proj.x * fxfy.x + pp.x, p_proj.y * fxfy.y + pp.y };
+    float2 p_pix = { p_proj.x * f.x + c.x, p_proj.y * f.y + c.y };
     return p_pix;
 }
 

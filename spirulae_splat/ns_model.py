@@ -108,7 +108,7 @@ class SpirulaeModelConfig(ModelConfig):
     """period of steps where gaussians are culled and densified"""
     resolution_schedule: int = 3000
     """training starts at 1/d resolution, every n steps this is doubled"""
-    background_color: Literal["random", "black", "white"] = "random"
+    background_color: Literal["random", "black", "white"] = "white"
     """Whether to randomize the background color."""
     num_downscales: int = 2
     """at the beginning, resolution is 1/2^d, where d is this number"""
@@ -394,6 +394,8 @@ class SpirulaeModel(Model):
 
     def after_train(self, step: int):
         assert step == self.step
+        if self.max_2Dsize is None:
+            self.max_2Dsize = torch.zeros_like(self.radii, dtype=torch.float32)
         # to save some training time, we no longer need to update those stats post refinement
         if self.step >= self.config.stop_split_at:
             return
@@ -414,8 +416,6 @@ class SpirulaeModel(Model):
                 self.xys_grad_norm[visible_mask] = grads[visible_mask] + self.xys_grad_norm[visible_mask]
 
             # update the max screen size, as a ratio of number of pixels
-            if self.max_2Dsize is None:
-                self.max_2Dsize = torch.zeros_like(self.radii, dtype=torch.float32)
             # newradii = self.radii.detach()[self.depth_sort_i][visible_mask]
             newradii = self.radii.detach()[visible_mask]
             self.max_2Dsize[visible_mask] = torch.maximum(
@@ -755,15 +755,8 @@ class SpirulaeModel(Model):
 
         # print(self.config.sh_degree, rgbs.shape)
 
-        def kernel(r):
-            f1 = 1.0-1.5*r*r*(1.0-0.5*r)
-            f2 = 0.25*(2.0-r)**3
-            f = f1 + (f2-f1) * (0.5+0.5*torch.sign(r-1.0))
-            return torch.fmax(f, torch.zeros_like(f))
-        kernel_radius = 2.0
-
         BLOCK_WIDTH = 16  # this controls the tile size of rasterization, 16 is a good default
-        self.xys, depths, self.radii, conics, comp, num_tiles_hit, cov3d = project_gaussians(  # type: ignore
+        self.xys, depths, depth_grads, self.radii, conics, comp, num_tiles_hit, cov3d = project_gaussians(  # type: ignore
             means_crop,
             torch.exp(scales_crop),
             1,
@@ -794,19 +787,12 @@ class SpirulaeModel(Model):
         else:
             raise ValueError("Unknown rasterize_mode: %s", self.config.rasterize_mode)
 
-        # sort_i = torch.argsort(depths)
-        # self.xys, depths = self.xys[sort_i], depths[sort_i]  # (2,), 1
-        # self.radii, conics = self.radii[sort_i], conics[sort_i]  # 1, (3,)
-        # comp, num_tiles_hit = comp[sort_i], num_tiles_hit[sort_i]  # 1, 1
-        # rgbs, opacities = rgbs[sort_i], opacities[sort_i]
-        # with torch.no_grad():
-        #     self.depth_sort_i = torch.zeros_like(sort_i)
-        #     self.depth_sort_i[sort_i.clone()] = torch.arange(0, len(depths), device=sort_i.device)
-        # print((depths[1:] >= depths[:-1]).sum().item(), (depths[1:] > -1e4).sum().item())
+        # depth_grads_normalized = depth_grads / torch.norm(depth_grads, dim=1, keepdim=True)
 
-        rgb, alpha = rasterize_gaussians(  # type: ignore
+        rgb, reg_depth, reg_normal, alpha = rasterize_gaussians(  # type: ignore
             self.xys,
             depths,
+            depth_grads,
             self.radii,
             conics,
             num_tiles_hit,  # type: ignore
@@ -815,30 +801,62 @@ class SpirulaeModel(Model):
             H,
             W,
             BLOCK_WIDTH,
-            background=background,
-            return_alpha=True,
+            background=background
         )  # type: ignore
         alpha = alpha[..., None]
         rgb = torch.clamp(rgb, max=1.0)  # type: ignore
         depth_im = None
+        depth_grad_im = None
         if self.config.output_depth_during_training or not self.training:
             depth_im = rasterize_gaussians(  # type: ignore
                 self.xys,
                 depths,
+                depth_grads,
                 self.radii,
                 conics,
                 num_tiles_hit,  # type: ignore
-                depths[:, None].repeat(1, 3),
+                torch.concatenate((depths[:, None], depth_grads), axis=1),
                 opacities,
                 H,
                 W,
                 BLOCK_WIDTH,
                 background=torch.zeros(3, device=self.device),
-            )[..., 0:1]  # type: ignore
+            )[0]  # type: ignore
+            depth_im, depth_grad_im = depth_im[..., 0:1], depth_im[..., 1:3]
             depth_im = torch.where(alpha > 0, depth_im / alpha, depth_im.detach().max())
+            # depth_grad_im = torch.where(alpha > 0, depth_grad_im / alpha, depth_grad_im.detach().max())
+            depth_grad_norm_im = torch.norm(depth_grad_im, dim=2, keepdim=True)
+            depth_grad_hue_im = torch.atan2(depth_grad_im[...,1:2], depth_grad_im[...,0:1])
+            depth_grad_im = torch.clip(
+                torch.tanh(depth_grad_norm_im * 0.05*torch.numel(depth_im)**0.5) * \
+                    (torch.concat((
+                    torch.cos(depth_grad_hue_im),
+                    torch.cos(depth_grad_hue_im-2.0*np.pi/3.0),
+                    torch.cos(depth_grad_hue_im+2.0*np.pi/3.0)
+                ), axis=2)*0.5+0.5) * 2.0, 0.0, 1.0)
 
-        # print(rgb.shape, alpha.shape)
-        return {"rgb": rgb, "depth": depth_im, "accumulation": alpha, "background": background}  # type: ignore
+            with torch.no_grad():
+                # print(torch.amin(depth_grad_norm_im).item(), torch.mean(depth_grad_norm_im).item(), torch.amax(depth_grad_norm_im).item())
+                pass
+
+        with torch.no_grad():
+            # print(torch.isnan(reg_depth.view(-1)).float().mean().item(), 
+            #     torch.isnan(reg_normal.view(-1)).float().mean().item(),
+            #     reg_depth_nonzero_mean = (reg_depth!=0.0).float().mean().item(),
+            #     reg_normal_nonzero_mean = (reg_normal!=0.0).float().mean().item())
+            # print(rgb.shape, alpha.shape, reg_depth.shape, reg_normal.shape)
+            # print(torch.amin(reg_depth).item(), torch.mean(reg_depth).item(), torch.amax(reg_depth).item())
+            pass
+
+        return {
+            "rgb": rgb,
+            "depth": depth_im,
+            "accumulation": alpha,
+            "depth_grad": depth_grad_im,
+            "reg_depth": reg_depth.unsqueeze(2),
+            "reg_normal": reg_normal.unsqueeze(2),
+            "background": background
+        }  # type: ignore
 
     def get_gt_img(self, image: torch.Tensor):
         """Compute groundtruth image with iteration dependent downscale factor for evaluation purpose

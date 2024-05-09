@@ -25,6 +25,7 @@ __global__ void project_gaussians_forward_kernel(
     float* __restrict__ covs3d,
     float2* __restrict__ xys,
     float* __restrict__ depths,
+    float2* __restrict__ depth_grads,
     int* __restrict__ radii,
     float3* __restrict__ conics,
     float* __restrict__ compensation,
@@ -48,7 +49,7 @@ __global__ void project_gaussians_forward_kernel(
     // printf("p_view %d %.2f %.2f %.2f\n", idx, p_view.x, p_view.y, p_view.z);
 
     // compute the projected covariance
-    float3 scale = make_float3(scales[idx].x, scales[idx].y, 0.0f);
+    float3 scale = { scales[idx].x, scales[idx].y, 0.0f };
     float4 quat = quats[idx];
     // printf("%d scale %.2f %.2f %.2f\n", idx, scale.x, scale.y, scale.z);
     // printf("%d quat %.2f %.2f %.2f %.2f\n", idx, quat.w, quat.x, quat.y,
@@ -89,8 +90,12 @@ __global__ void project_gaussians_forward_kernel(
         return;
     }
 
+    // compute the depth gradient
+    float2 depth_grad = projected_depth_grad(viewmat, fx, fy, quat, p_view);
+
     num_tiles_hit[idx] = tile_area;
     depths[idx] = p_view.z;
+    depth_grads[idx] = {depth_grad.x, depth_grad.y};
     radii[idx] = (int)radius;
     xys[idx] = center;
     compensation[idx] = comp;
@@ -176,12 +181,16 @@ __global__ void rasterize_forward(
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
+    const float* __restrict__ depths,
+    const float2* __restrict__ depth_grads,
     const float3* __restrict__ conics,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
     float* __restrict__ final_Ts,
     int* __restrict__ final_index,
     float3* __restrict__ out_img,
+    float* __restrict__ out_reg_depth,
+    float* __restrict__ out_reg_normal,
     const float3& __restrict__ background
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
@@ -195,8 +204,7 @@ __global__ void rasterize_forward(
     unsigned j =
         block.group_index().x * block.group_dim().x + block.thread_index().x;
 
-    float px = (float)j + 0.5;
-    float py = (float)i + 0.5;
+    float2 p = { (float)j + 0.5f, (float)i + 0.5f };
     int32_t pix_id = i * img_size.x + j;
 
     // return if out of bounds
@@ -214,9 +222,9 @@ __global__ void rasterize_forward(
     __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
     __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
     __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 depth_grad_batch[MAX_BLOCK_SIZE];
 
     // current visibility left to render
-    float T = 1.f;
     // index of most recent gaussian to write to this thread's pixel
     int cur_idx = 0;
 
@@ -224,14 +232,16 @@ __global__ void rasterize_forward(
     // each thread loads one gaussian at a time before rasterizing its
     // designated pixel
     int tr = block.thread_rank();
-    float3 pix_out = {0.f, 0.f, 0.f};
+    float T = 1.f;  // current/total visibility
+    float sum_vis = 0.f;  // sum of visibilities
+    float2 sum_depth_grad = {0.f, 0.f};  // sum of "normals"
+    float3 pix_out = {0.f, 0.f, 0.f};  // output radiance
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
         if (__syncthreads_count(done) >= block_size) {
             break;
         }
-
         // each thread fetch 1 gaussian from front to back
         // index of gaussian to load
         int batch_start = range.x + block_size * b;
@@ -243,44 +253,44 @@ __global__ void rasterize_forward(
             const float opac = opacities[g_id];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[g_id];
+            const float2 depth_grad = depth_grads[g_id];
+            depth_grad_batch[tr] = {depths[g_id], depth_grad.x, depth_grad.y};
         }
-
         // wait for other threads to collect the gaussians in batch
         block.sync();
 
         // process gaussians in the current batch for this pixel
         int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
-            const float3 conic = conic_batch[t];
-            const float3 xy_opac = xy_opacity_batch[t];
-            const float opac = xy_opac.z;
-            const float2 delta = {xy_opac.x - px, xy_opac.y - py};
-            const float sigma = 0.5f * (conic.x * delta.x * delta.x +
-                                        conic.z * delta.y * delta.y) +
-                                conic.y * delta.x * delta.y;
-            const float alpha = min(0.999f, opac * __expf(-sigma));
-            if (sigma < 0.f || alpha < 1.f / 255.f) {
+            float alpha;
+            if (!get_alpha(conic_batch[t], xy_opacity_batch[t], p, alpha))
                 continue;
-            }
-
             const float next_T = T * (1.f - alpha);
-            if (next_T <= 1e-4f) { // this pixel is done
-                // we want to render the last gaussian that contributes and note
-                // that here idx > range.x so we don't underflow
-                done = true;
-                break;
-            }
 
             int32_t g = id_batch[t];
             const float vis = alpha * T;
             const float3 c = colors[g];
+            const float3 depth_grad_batch_t = depth_grad_batch[t];
+            const float2 depth_grad = {depth_grad_batch_t.y, depth_grad_batch_t.z};
             pix_out.x = pix_out.x + c.x * vis;
             pix_out.y = pix_out.y + c.y * vis;
             pix_out.z = pix_out.z + c.z * vis;
+            sum_vis += vis;
+            sum_depth_grad.x = sum_depth_grad.x + vis * depth_grad.x;
+            sum_depth_grad.y = sum_depth_grad.y + vis * depth_grad.y;
             T = next_T;
             cur_idx = batch_start + t;
+            if (T <= 1e-4f) {
+                done = true;
+                break;
+            }
         }
     }
+    float sum_depth_grad_norm = hypot(sum_depth_grad.x, sum_depth_grad.y) + 1e-6f;
+    float2 mean_depth_grad = {
+        sum_depth_grad.x / sum_depth_grad_norm,
+        sum_depth_grad.y / sum_depth_grad_norm
+    };
 
     if (inside) {
         // add background
@@ -292,6 +302,81 @@ __global__ void rasterize_forward(
         final_color.y = pix_out.y + T * background.y;
         final_color.z = pix_out.z + T * background.z;
         out_img[pix_id] = final_color;
+    }
+
+    // calculate regularization weights
+    done = !inside;
+    float reg_depth = 0.f;
+    float reg_normal = 0.f;
+    T = 1.0f;
+    float cur_vis = 0.0f;
+    for (int b = 0; b < num_batches; ++b) {
+        // resync all threads before beginning next batch
+        // end early if entire tile is done
+        if (__syncthreads_count(done) >= block_size) {
+            break;
+        }
+        // each thread fetch 1 gaussian from front to back
+        // index of gaussian to load
+        int batch_start = range.x + block_size * b;
+        int idx = batch_start + tr;
+        if (idx < range.y) {
+            int32_t g_id = gaussian_ids_sorted[idx];
+            id_batch[tr] = g_id;
+            const float2 xy = xys[g_id];
+            const float opac = opacities[g_id];
+            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
+            conic_batch[tr] = conics[g_id];
+            const float2 depth_grad = depth_grads[g_id];
+            depth_grad_batch[tr] = {depths[g_id], depth_grad.x, depth_grad.y};
+        }
+        // wait for other threads to collect the gaussians in batch
+        block.sync();
+
+        // process gaussians in the current batch for this pixel
+        int batch_size = min(block_size, range.y - batch_start);
+        for (int t = 0; (t < batch_size) && !done; ++t) {
+            float alpha;
+            if (!get_alpha(conic_batch[t], xy_opacity_batch[t], p, alpha))
+                continue;
+            const float next_T = T * (1.f - alpha);
+
+            const float vis = alpha * T;
+            float cur_vis_next = cur_vis + vis;
+
+            const float3 depth_grad_batch_t = depth_grad_batch[t];
+            const float depth = depth_grad_batch_t.x;
+            const float2 depth_grad = {depth_grad_batch_t.y, depth_grad_batch_t.z};
+            float depth_grad_norm = hypot(depth_grad.x, depth_grad.y) + 1e-6f;
+            float2 depth_grad_normalized = {
+                depth_grad.x / depth_grad_norm,
+                depth_grad.y / depth_grad_norm
+            };
+
+            // depth regularization:
+            // 1/2 \sum[i,j] w[i] w[j] |z[j]-z[i]| =
+            // \sum[i] w[i] z[i] ( \sum [j<i] w[j] - \sum[j>i] w[j] )
+            reg_depth += vis * depth * (cur_vis - (sum_vis-cur_vis_next));
+
+            // normal regularization
+            reg_normal += vis * (1.0f - (
+                depth_grad_normalized.x * mean_depth_grad.x +
+                depth_grad_normalized.y * mean_depth_grad.y
+            ));
+
+            cur_vis = cur_vis_next;
+            T = next_T;
+            cur_idx = batch_start + t;
+            if (T <= 1e-4f) {
+                done = true;
+                break;
+            }
+        }
+    }
+
+    if (inside) {
+        out_reg_depth[pix_id] = reg_depth;
+        out_reg_normal[pix_id] = reg_normal;
     }
 }
 
@@ -371,6 +456,9 @@ __device__ void project_cov3d_ewa(
     cov2d.z = c11 + 0.3f;
     float det_blur = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
     compensation = std::sqrt(std::max(0.f, det_orig / det_blur));
+
+    // depth to pixel gradient
+    // TO-DO
 }
 
 // device helper to get 3D covariance from scale and quat parameters
@@ -394,4 +482,25 @@ __device__ void scale_rot_to_cov3d(
     cov3d[3] = tmp[1][1];
     cov3d[4] = tmp[1][2];
     cov3d[5] = tmp[2][2];
+}
+
+// device helper to get screen space depth gradient
+__device__ float2 projected_depth_grad(
+    const float* viewmat, const float fx, const float fy,
+    const float4 quat, const float3 p_view
+) {
+    glm::mat3 R = glm::transpose(glm::mat3(
+        viewmat[0], viewmat[1], viewmat[2],
+        viewmat[4], viewmat[5], viewmat[6],
+        viewmat[8], viewmat[9], viewmat[10]
+    )) * quat_to_rotmat(quat);
+    glm::vec3 n = glm::vec3(R[2][0], R[2][1], R[2][2]);
+    glm::vec3 p = glm::vec3(p_view.x, p_view.y, p_view.z);
+    glm::mat3 invJ = glm::mat3(
+        p.z/fx, 0.0f, 0.0f,
+        0.0f, p.z/fy, 0.0f,
+        p.x/p.z, p.y/p.z, 1.0f
+    );
+    n = glm::transpose(invJ) * n;
+    return { -n.x/n.z, -n.y/n.z };
 }

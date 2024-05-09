@@ -105,8 +105,10 @@ __global__ void rasterize_backward_kernel(
             conic_batch[tr] = conics[g_id];
             rgbs_batch[tr] = rgbs[g_id];
         }
+
         // wait for other threads to collect the gaussians in batch
         block.sync();
+
         // process gaussians in the current batch for this pixel
         // 0 index is the furthest back gaussian in the batch
         for (int t = max(0,batch_end - warp_bin_final); t < batch_size; ++t) {
@@ -224,6 +226,7 @@ __global__ void project_gaussians_backward_kernel(
     const float* __restrict__ compensation,
     const float2* __restrict__ v_xy,
     const float* __restrict__ v_depth,
+    const float2* __restrict__ v_depth_grad,
     const float3* __restrict__ v_conic,
     const float* __restrict__ v_compensation,
     float3* __restrict__ v_cov2d,
@@ -385,7 +388,7 @@ __device__ void scale_rot_to_cov3d_vjp(
     );
     glm::mat3 R = quat_to_rotmat(quat);
     glm::mat3 S = scale_to_mat(
-        make_float3(scale.x, scale.y, 0.0f), glob_scale);
+        { scale.x, scale.y, 0.0f }, glob_scale);
     glm::mat3 M = R * S;
     // https://math.stackexchange.com/a/3850121
     // for D = W * X, G = df/dD

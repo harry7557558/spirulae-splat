@@ -46,6 +46,7 @@ std::tuple<
     torch::Tensor,
     torch::Tensor,
     torch::Tensor,
+    torch::Tensor,
     torch::Tensor>
 project_gaussians_forward_tensor(
     const int num_points,
@@ -89,6 +90,7 @@ project_gaussians_backward_tensor(
     torch::Tensor &compensation,
     torch::Tensor &v_xy,
     torch::Tensor &v_depth,
+    torch::Tensor &v_depth_grad,
     torch::Tensor &v_conic,
     torch::Tensor &v_compensation
 );
@@ -114,6 +116,8 @@ torch::Tensor get_tile_bin_edges_tensor(
 std::tuple<
     torch::Tensor,
     torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
     torch::Tensor
 > rasterize_forward_tensor(
     const std::tuple<int, int, int> tile_bounds,
@@ -122,6 +126,8 @@ std::tuple<
     const torch::Tensor &gaussian_ids_sorted,
     const torch::Tensor &tile_bins,
     const torch::Tensor &xys,
+    const torch::Tensor &depths,
+    const torch::Tensor &depth_grads,
     const torch::Tensor &conics,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
@@ -143,6 +149,8 @@ std::
         const torch::Tensor &gaussians_ids_sorted,
         const torch::Tensor &tile_bins,
         const torch::Tensor &xys,
+        const torch::Tensor &depths,
+        const torch::Tensor &depth_grads,
         const torch::Tensor &conics,
         const torch::Tensor &colors,
         const torch::Tensor &opacities,

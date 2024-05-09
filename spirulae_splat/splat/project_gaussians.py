@@ -49,7 +49,8 @@ def project_gaussians(
         A tuple of {Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor}:
 
         - **xys** (Tensor): x,y locations of 2D gaussian projections.
-        - **depths** (Tensor): z depth of gaussians.
+        - **depths** (Tensor): z depth of gaussians at the center.
+        - **depth_grads** (Tensor): xy gradient of z depth of gaussians.
         - **radii** (Tensor): radii of 2D gaussian projections.
         - **conics** (Tensor): conic parameters for 2D gaussian.
         - **compensation** (Tensor): the density compensation for blurring 2D kernel
@@ -103,6 +104,7 @@ class _ProjectGaussians(Function):
             cov3d,
             xys,
             depths,
+            depth_grads,
             radii,
             conics,
             compensation,
@@ -146,13 +148,14 @@ class _ProjectGaussians(Function):
             compensation,
         )
 
-        return (xys, depths, radii, conics, compensation, num_tiles_hit, cov3d)
+        return (xys, depths, depth_grads, radii, conics, compensation, num_tiles_hit, cov3d)
 
     @staticmethod
     def backward(
         ctx,
         v_xys,
         v_depths,
+        v_depth_grads,
         v_radii,
         v_conics,
         v_compensation,
@@ -189,6 +192,7 @@ class _ProjectGaussians(Function):
             compensation,
             v_xys,
             v_depths,
+            v_depth_grads,
             v_conics,
             v_compensation,
         )
