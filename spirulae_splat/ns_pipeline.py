@@ -59,6 +59,16 @@ class SpirulaePipeline(VanillaPipeline):
         )
         self.datamanager.to(device)
 
+        seed_pts = None
+        if (
+            hasattr(self.datamanager, "train_dataparser_outputs")
+            and "points3D_xyz" in self.datamanager.train_dataparser_outputs.metadata
+        ):
+            pts = self.datamanager.train_dataparser_outputs.metadata["points3D_xyz"]
+            pts_rgb = self.datamanager.train_dataparser_outputs.metadata["points3D_rgb"]
+            seed_pts = (pts, pts_rgb)
+        self.datamanager.to(device)
+
         assert self.datamanager.train_dataset is not None, "Missing input dataset"
         self._model = config.model.setup(
             scene_box=self.datamanager.train_dataset.scene_box,
@@ -66,6 +76,7 @@ class SpirulaePipeline(VanillaPipeline):
             metadata=self.datamanager.train_dataset.metadata,
             device=device,
             grad_scaler=grad_scaler,
+            seed_points=seed_pts,
         )
         self.model.to(device)
 

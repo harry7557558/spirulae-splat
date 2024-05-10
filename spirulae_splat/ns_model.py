@@ -134,7 +134,7 @@ class SpirulaeModelConfig(ModelConfig):
     """if a gaussian is more than this percent of screen space, split it"""
     stop_screen_size_at: int = 4000
     """stop culling/splitting at this step WRT screen size of gaussians"""
-    random_init: bool = True
+    random_init: bool = False
     """whether to initialize the positions uniformly randomly (not SFM points)"""
     num_random: int = 100000
     """Number of gaussians to initialize if random init is used"""
