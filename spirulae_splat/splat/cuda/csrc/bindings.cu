@@ -470,6 +470,7 @@ std::
     tuple<
         torch::Tensor, // dL_dxy
         torch::Tensor, // dL_dxy_abs
+        torch::Tensor, // dL_ddepth
         torch::Tensor, // dL_dconic
         torch::Tensor, // dL_dcolors
         torch::Tensor  // dL_dopacity
@@ -490,7 +491,9 @@ std::
         const torch::Tensor &final_Ts,
         const torch::Tensor &final_idx,
         const torch::Tensor &v_output, // dL_dout_color
-        const torch::Tensor &v_output_alpha // dL_dout_alpha
+        const torch::Tensor &v_output_alpha, // dL_dout_alpha
+        const torch::Tensor &v_output_reg_depth,
+        const torch::Tensor &v_output_reg_normal
     ) {
     DEVICE_GUARD(xys);
     CHECK_INPUT(xys);
@@ -516,6 +519,7 @@ std::
 
     torch::Tensor v_xy = torch::zeros({num_points, 2}, xys.options());
     torch::Tensor v_xy_abs = torch::zeros({num_points, 2}, xys.options());
+    torch::Tensor v_depth = torch::zeros(num_points, xys.options());
     torch::Tensor v_conic = torch::zeros({num_points, 3}, xys.options());
     torch::Tensor v_colors =
         torch::zeros({num_points, channels}, xys.options());
@@ -527,6 +531,8 @@ std::
         gaussians_ids_sorted.contiguous().data_ptr<int>(),
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (float2 *)xys.contiguous().data_ptr<float>(),
+        depths.contiguous().data_ptr<float>(),
+        (float2 *)depth_grads.contiguous().data_ptr<float>(),
         (float3 *)conics.contiguous().data_ptr<float>(),
         (float3 *)colors.contiguous().data_ptr<float>(),
         opacities.contiguous().data_ptr<float>(),
@@ -535,12 +541,15 @@ std::
         final_idx.contiguous().data_ptr<int>(),
         (float3 *)v_output.contiguous().data_ptr<float>(),
         v_output_alpha.contiguous().data_ptr<float>(),
+        v_output_reg_depth.contiguous().data_ptr<float>(),
+        v_output_reg_normal.contiguous().data_ptr<float>(),
         (float2 *)v_xy.contiguous().data_ptr<float>(),
         (float2 *)v_xy_abs.contiguous().data_ptr<float>(),
+        v_depth.contiguous().data_ptr<float>(),
         (float3 *)v_conic.contiguous().data_ptr<float>(),
         (float3 *)v_colors.contiguous().data_ptr<float>(),
         v_opacity.contiguous().data_ptr<float>()
     );
 
-    return std::make_tuple(v_xy, v_xy_abs, v_conic, v_colors, v_opacity);
+    return std::make_tuple(v_xy, v_xy_abs, v_depth, v_conic, v_colors, v_opacity);
 }

@@ -399,6 +399,8 @@ class SpirulaeModel(Model):
         # to save some training time, we no longer need to update those stats post refinement
         if self.step >= self.config.stop_split_at:
             return
+        if not hasattr(self.xys, 'absgrad'):
+            return
         with torch.no_grad():
             # keep track of a moving average of grad norms
             # visible_mask = (self.radii[self.depth_sort_i] > 0).flatten()
@@ -663,8 +665,19 @@ class SpirulaeModel(Model):
     def get_empty_outputs(width: int, height: int, background: torch.Tensor) -> Dict[str, Union[torch.Tensor, List]]:
         rgb = background.repeat(height, width, 1)
         depth = background.new_ones(*rgb.shape[:2], 1) * 10
-        accumulation = background.new_zeros(*rgb.shape[:2], 1)
-        return {"rgb": rgb, "depth": depth, "accumulation": accumulation, "background": background}
+        alpha = background.new_zeros(*rgb.shape[:2], 1)
+        depth_grad = background.repeat(height, width, 1)
+        reg_depth = background.new_zeros(*rgb.shape[:2], 1)
+        reg_normal = background.new_zeros(*rgb.shape[:2], 1)
+        return {
+            "rgb": rgb,
+            "depth": depth,
+            "alpha": alpha,
+            "depth_grad": depth_grad,
+            "reg_depth": reg_depth,
+            "reg_normal": reg_normal,
+            "background": background
+        }
 
     def get_outputs(self, camera: Cameras) -> Dict[str, Union[torch.Tensor, List]]:
         """Takes in a Ray Bundle and returns a dictionary of outputs.
@@ -743,7 +756,7 @@ class SpirulaeModel(Model):
             scales_crop = self.scales
             quats_crop = self.quats
         colors_crop = torch.cat((features_dc_crop[:, None, :], features_rest_crop), dim=1)
-        quats_crop = quats_crop / quats_crop.norm(dim=-1, keepdim=True)
+        quats_crop = quats_crop / (quats_crop.norm(dim=-1, keepdim=True)+1e-10)
 
         if self.config.sh_degree > 0:
             viewdirs = means_crop.detach() - optimized_camera_to_world.detach()[:3, 3]  # (N, 3)
@@ -837,6 +850,8 @@ class SpirulaeModel(Model):
 
             with torch.no_grad():
                 # print(torch.amin(depth_grad_norm_im).item(), torch.mean(depth_grad_norm_im).item(), torch.amax(depth_grad_norm_im).item())
+                assert (reg_depth > -1e-6).all()
+                print(torch.mean(reg_depth).item(), torch.mean(reg_normal).item())
                 pass
 
         with torch.no_grad():
@@ -845,13 +860,13 @@ class SpirulaeModel(Model):
             #     reg_depth_nonzero_mean = (reg_depth!=0.0).float().mean().item(),
             #     reg_normal_nonzero_mean = (reg_normal!=0.0).float().mean().item())
             # print(rgb.shape, alpha.shape, reg_depth.shape, reg_normal.shape)
-            # print(torch.amin(reg_depth).item(), torch.mean(reg_depth).item(), torch.amax(reg_depth).item())
+            # print("reg_depth", torch.amin(reg_depth).item(), torch.mean(reg_depth).item(), torch.amax(reg_depth).item())
             pass
 
         return {
             "rgb": rgb,
             "depth": depth_im,
-            "accumulation": alpha,
+            "alpha": alpha,
             "depth_grad": depth_grad_im,
             "reg_depth": reg_depth.unsqueeze(2),
             "reg_normal": reg_normal.unsqueeze(2),
@@ -935,9 +950,18 @@ class SpirulaeModel(Model):
         else:
             scale_reg = torch.tensor(0.0).to(self.device)
 
+        # regularization loss
+        depth_reg = 0.02 * torch.mean(outputs["reg_depth"] / (outputs['alpha']+1e-6))
+        normal_reg = 1.0 * torch.mean(outputs["reg_normal"])
+
+        quat_norm_reg = 0.1 * ((self.quats.norm(dim=-1)-1.0)**2).mean()
+
         loss_dict = {
             "main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss,
             "scale_reg": scale_reg,
+            "depth_reg": depth_reg,
+            # "normal_reg": normal_reg,
+            "quat_reg": quat_norm_reg
         }
 
         if self.training:

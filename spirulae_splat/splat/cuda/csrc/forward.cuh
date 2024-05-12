@@ -60,7 +60,7 @@ __device__ void project_cov3d_ewa(
 
 // device helper to get 3D covariance from scale and quat parameters
 __device__ void scale_rot_to_cov3d(
-    const float3 scale, const float glob_scale, const float4 quat, float *cov3d
+    const float2 scale, const float glob_scale, const float4 quat, float *cov3d
 );
 
 __device__ float2 projected_depth_grad(

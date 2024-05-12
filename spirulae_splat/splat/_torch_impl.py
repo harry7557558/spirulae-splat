@@ -230,9 +230,10 @@ def quat_to_rotmat(quat: Tensor) -> Tensor:
 
 
 def scale_rot_to_cov3d(scale: Tensor, glob_scale: float, quat: Tensor) -> Tensor:
-    assert scale.shape[-1] == 3, scale.shape
+    assert scale.shape[-1] == 2, scale.shape
     assert quat.shape[-1] == 4, quat.shape
     assert scale.shape[:-1] == quat.shape[:-1], (scale.shape, quat.shape)
+    scale = torch.concat((scale, torch.zeros_like(scale[:,0:1])), axis=1)
     R = normalized_quat_to_rotmat(quat)  # (..., 3, 3)
     M = R * glob_scale * scale[..., None, :]  # (..., 3, 3)
     # TODO: save upper right because symmetric
@@ -313,7 +314,7 @@ def compute_cov2d_bounds(cov2d_mat: Tensor):
     b = (cov2d[..., 0, 0] + cov2d[..., 1, 1]) / 2  # (...,)
     v1 = b + torch.sqrt(torch.clamp(b**2 - det, min=0.1))  # (...,)
     v2 = b - torch.sqrt(torch.clamp(b**2 - det, min=0.1))  # (...,)
-    radius = torch.ceil(3.0 * torch.sqrt(torch.max(v1, v2)))  # (...,)
+    radius = torch.ceil(2.0 * torch.sqrt(torch.max(v1, v2)))  # (...,)
     radius_all = torch.zeros(*cov2d_mat.shape[:-2], device=cov2d_mat.device)
     conic_all = torch.zeros(*cov2d_mat.shape[:-2], 3, device=cov2d_mat.device)
     radius_all[valid] = radius
@@ -363,6 +364,18 @@ def get_tile_bbox(pix_center, pix_radius, tile_bounds, block_width):
     )
     return tile_min, tile_max
 
+def projected_depth_grad(viewmat, fx, fy, quats, p_view):
+    R = torch.einsum('ij,njk->nik', viewmat[:3,:3], quat_to_rotmat(quats))
+    n = R[:,:,2]
+    p = p_view
+    invJ = torch.zeros((len(p), 3, 3), dtype=p.dtype, device=p.device)
+    invJ[:,0,0] = p[:,2]/fx
+    invJ[:,1,1] = p[:,2]/fy
+    invJ[:,2,0] = p[:,0]/p[:,2]
+    invJ[:,2,1] = p[:,1]/p[:,2]
+    invJ[:,2,2] = 1.0
+    n = torch.einsum('nij,nj->ni', invJ, n)
+    return -n[:,:2] / n[:,2:]
 
 def project_gaussians_forward(
     means3d,
@@ -375,7 +388,6 @@ def project_gaussians_forward(
     block_width,
     clip_thresh=0.01,
 ):
-    assert False
     tile_bounds = (
         (img_size[0] + block_width - 1) // block_width,
         (img_size[1] + block_width - 1) // block_width,
@@ -396,6 +408,7 @@ def project_gaussians_forward(
         tile_max[..., 1] - tile_min[..., 1]
     )
     mask = (tile_area > 0) & (~is_close) & det_valid
+    depth_grads = projected_depth_grad(viewmat, fx, fy, quats, p_view)
 
     num_tiles_hit = tile_area
     depths = p_view[..., 2]
@@ -419,6 +432,7 @@ def project_gaussians_forward(
         cov2d_triu,
         xys,
         depths,
+        depth_grads,
         radii,
         conic,
         compensation,

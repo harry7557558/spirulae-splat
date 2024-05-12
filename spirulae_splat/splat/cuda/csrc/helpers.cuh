@@ -60,8 +60,29 @@ inline __device__ bool get_alpha(
     const float r2 = 0.5f * (conic.x * delta.x * delta.x +
                             conic.z * delta.y * delta.y) +
                     conic.y * delta.x * delta.y;
-    alpha = min(0.999f, opac * visibility_kernel(r2));
+    const float vis = visibility_kernel(r2);
+    alpha = min(0.99f, opac * vis);
     return r2 >= 0.f && alpha >= 1.f / 255.f;
+}
+
+inline __device__ void get_alpha_grad(
+    const float3 conic, const float3 xy_opac, const float2 p,
+    const float v_alpha,
+    float3 &v_conic, float2 &v_xy, float &v_opac
+) {
+    const float opac = xy_opac.z;
+    const float2 delta = {xy_opac.x - p.x, xy_opac.y - p.y};
+    const float r2 = 0.5f * (conic.x * delta.x * delta.x +
+                            conic.z * delta.y * delta.y) +
+                    conic.y * delta.x * delta.y;
+    const float vis = visibility_kernel(r2);
+    const float v_r2 = opac * v_alpha * visibility_kernel_grad(r2);
+    v_conic = {0.5f * v_r2 * delta.x * delta.x,
+                v_r2 * delta.x * delta.y,
+                0.5f * v_r2 * delta.y * delta.y};
+    v_xy = {v_r2 * (conic.x * delta.x + conic.y * delta.y), 
+            v_r2 * (conic.y * delta.x + conic.z * delta.y)};
+    v_opac = vis * v_alpha;
 }
 
 

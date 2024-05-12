@@ -218,7 +218,7 @@ class _RasterizeGaussians(Function):
 
         else:
             assert colors.shape[-1] == 3
-            v_xy, v_xy_abs, v_conic, v_colors, v_opacity = _C.rasterize_backward(
+            v_xy, v_xy_abs, v_depth, v_conic, v_colors, v_opacity = _C.rasterize_backward(
                 img_height,
                 img_width,
                 ctx.block_width,
@@ -235,6 +235,8 @@ class _RasterizeGaussians(Function):
                 final_idx,
                 v_out_img,
                 v_out_alpha,
+                v_out_reg_depth,
+                v_out_reg_normal
             )
 
         # Abs grad for gaussian splitting criterion. See
@@ -242,9 +244,11 @@ class _RasterizeGaussians(Function):
         # - "EfficientGS: Streamlining Gaussian Splatting for Large-Scale High-Resolution Scene Representation"
         xys.absgrad = v_xy_abs
 
+        # print("v_depth", torch.amin(v_depth).item(), torch.mean(v_depth).item(), torch.amax(v_depth).item())
+
         return (
             v_xy,  # xys
-            None,  # depths
+            v_depth,  # depths
             None,  # depth_grads
             None,  # radii
             v_conic,  # conics

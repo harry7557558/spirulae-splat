@@ -49,7 +49,7 @@ __global__ void project_gaussians_forward_kernel(
     // printf("p_view %d %.2f %.2f %.2f\n", idx, p_view.x, p_view.y, p_view.z);
 
     // compute the projected covariance
-    float3 scale = { scales[idx].x, scales[idx].y, 0.0f };
+    float2 scale = scales[idx];
     float4 quat = quats[idx];
     // printf("%d scale %.2f %.2f %.2f\n", idx, scale.x, scale.y, scale.z);
     // printf("%d quat %.2f %.2f %.2f %.2f\n", idx, quat.w, quat.x, quat.y,
@@ -254,7 +254,7 @@ __global__ void rasterize_forward(
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[g_id];
             const float2 depth_grad = depth_grads[g_id];
-            depth_grad_batch[tr] = {depths[g_id], depth_grad.x, depth_grad.y};
+            depth_grad_batch[tr] = {depth_grad.x, depth_grad.y, depths[g_id]};
         }
         // wait for other threads to collect the gaussians in batch
         block.sync();
@@ -271,7 +271,7 @@ __global__ void rasterize_forward(
             const float vis = alpha * T;
             const float3 c = colors[g];
             const float3 depth_grad_batch_t = depth_grad_batch[t];
-            const float2 depth_grad = {depth_grad_batch_t.y, depth_grad_batch_t.z};
+            const float2 depth_grad = {depth_grad_batch_t.x, depth_grad_batch_t.y};
             pix_out.x = pix_out.x + c.x * vis;
             pix_out.y = pix_out.y + c.y * vis;
             pix_out.z = pix_out.z + c.z * vis;
@@ -328,7 +328,7 @@ __global__ void rasterize_forward(
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[g_id];
             const float2 depth_grad = depth_grads[g_id];
-            depth_grad_batch[tr] = {depths[g_id], depth_grad.x, depth_grad.y};
+            depth_grad_batch[tr] = {depth_grad.x, depth_grad.y, depths[g_id]};
         }
         // wait for other threads to collect the gaussians in batch
         block.sync();
@@ -345,8 +345,8 @@ __global__ void rasterize_forward(
             float cur_vis_next = cur_vis + vis;
 
             const float3 depth_grad_batch_t = depth_grad_batch[t];
-            const float depth = depth_grad_batch_t.x;
-            const float2 depth_grad = {depth_grad_batch_t.y, depth_grad_batch_t.z};
+            const float depth = depth_grad_batch_t.z;
+            const float2 depth_grad = {depth_grad_batch_t.x, depth_grad_batch_t.y};
             float depth_grad_norm = hypot(depth_grad.x, depth_grad.y) + 1e-6f;
             float2 depth_grad_normalized = {
                 depth_grad.x / depth_grad_norm,
@@ -463,12 +463,12 @@ __device__ void project_cov3d_ewa(
 
 // device helper to get 3D covariance from scale and quat parameters
 __device__ void scale_rot_to_cov3d(
-    const float3 scale, const float glob_scale, const float4 quat, float *cov3d
+    const float2 scale, const float glob_scale, const float4 quat, float *cov3d
 ) {
     // printf("quat %.2f %.2f %.2f %.2f\n", quat.x, quat.y, quat.z, quat.w);
     glm::mat3 R = quat_to_rotmat(quat);
     // printf("R %.2f %.2f %.2f\n", R[0][0], R[1][1], R[2][2]);
-    glm::mat3 S = scale_to_mat(scale, glob_scale);
+    glm::mat3 S = scale_to_mat({scale.x, scale.y, 0.0f}, glob_scale);
     // printf("S %.2f %.2f %.2f\n", S[0][0], S[1][1], S[2][2]);
 
     glm::mat3 M = R * S;
