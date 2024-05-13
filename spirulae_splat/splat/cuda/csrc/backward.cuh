@@ -75,3 +75,10 @@ __device__ void scale_rot_to_cov3d_vjp(
     float2 &v_scale,
     float4 &v_quat
 );
+
+__device__ void projected_depth_grad_vjp(
+    const float* viewmat, const float fx, const float fy,
+    const float4 quat, const float3 p_view,
+    const float2 v_depth_grad,
+    float4 *v_quat, float3 *v_p_view
+);

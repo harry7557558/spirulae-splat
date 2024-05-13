@@ -5,6 +5,11 @@
 #include <iostream>
 
 
+inline __device__ float safe_denom(float x, float e) {
+    return abs(x)>e ? x : x>0.f ? e : -e;
+}
+
+
 #if 1
 
 // "Gaussian" kernel
@@ -195,6 +200,15 @@ inline __device__ float3 transform_4x3(const float *mat, const float3 p) {
     return out;
 }
 
+inline __device__ float3 transform_4x3_vjp(const float *mat, const float3 p) {
+    float3 out = {
+        mat[0] * p.x + mat[4] * p.y + mat[8] * p.z,
+        mat[1] * p.x + mat[5] * p.y + mat[9] * p.z,
+        mat[2] * p.x + mat[6] * p.y + mat[10] * p.z,
+    };
+    return out;
+}
+
 // helper to apply 4x4 transform to 3d vector, return homo coords
 // expects mat to be ROW MAJOR
 inline __device__ float4 transform_4x4(const float *mat, const float3 p) {
@@ -237,15 +251,15 @@ inline __device__ glm::mat3 quat_to_rotmat(const float4 quat) {
 
     // glm matrices are column-major
     return glm::mat3(
-        1.f - 2.f * (y * y + z * z),
-        2.f * (x * y + w * z),
-        2.f * (x * z - w * y),
-        2.f * (x * y - w * z),
-        1.f - 2.f * (x * x + z * z),
-        2.f * (y * z + w * x),
-        2.f * (x * z + w * y),
-        2.f * (y * z - w * x),
-        1.f - 2.f * (x * x + y * y)
+        1.f - 2.f * (y * y + z * z),  // [0][0]
+        2.f * (x * y + w * z),  // [0][1]
+        2.f * (x * z - w * y),  // [0][2]
+        2.f * (x * y - w * z),  // [1][0]
+        1.f - 2.f * (x * x + z * z),  // [1][1]
+        2.f * (y * z + w * x),  // [1][2]
+        2.f * (x * z + w * y),  // [2][0]
+        2.f * (y * z - w * x),  // [2][1]
+        1.f - 2.f * (x * x + y * y)  // [2][2]
     );
 }
 

@@ -489,18 +489,21 @@ __device__ float2 projected_depth_grad(
     const float* viewmat, const float fx, const float fy,
     const float4 quat, const float3 p_view
 ) {
-    glm::mat3 R = glm::transpose(glm::mat3(
+    glm::mat3 R1 = glm::transpose(glm::mat3(
         viewmat[0], viewmat[1], viewmat[2],
         viewmat[4], viewmat[5], viewmat[6],
         viewmat[8], viewmat[9], viewmat[10]
-    )) * quat_to_rotmat(quat);
-    glm::vec3 n = glm::vec3(R[2][0], R[2][1], R[2][2]);
+    ));
+    glm::mat3 R2 = quat_to_rotmat(quat);
+    glm::mat3 R = R1 * R2;
+    glm::vec3 n1 = R[2];
     glm::vec3 p = glm::vec3(p_view.x, p_view.y, p_view.z);
     glm::mat3 invJ = glm::mat3(
         p.z/fx, 0.0f, 0.0f,
         0.0f, p.z/fy, 0.0f,
         p.x/p.z, p.y/p.z, 1.0f
     );
-    n = glm::transpose(invJ) * n;
+    glm::vec3 n = glm::transpose(invJ) * n1;
+    n.z = safe_denom(n.z, 1e-3f);
     return { -n.x/n.z, -n.y/n.z };
 }

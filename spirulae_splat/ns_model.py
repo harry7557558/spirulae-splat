@@ -756,7 +756,13 @@ class SpirulaeModel(Model):
             scales_crop = self.scales
             quats_crop = self.quats
         colors_crop = torch.cat((features_dc_crop[:, None, :], features_rest_crop), dim=1)
-        quats_crop = quats_crop / (quats_crop.norm(dim=-1, keepdim=True)+1e-10)
+
+        quats_norms = torch.norm(quats_crop, p=2, dim=1)
+        quats_norms = quats_norms.unsqueeze(1)
+        quats_norms = torch.where(quats_norms == 0,
+                                  torch.tensor([1.0],device=quats_crop.device),
+                                  quats_norms)
+        quats_crop = quats_crop / quats_norms
 
         if self.config.sh_degree > 0:
             viewdirs = means_crop.detach() - optimized_camera_to_world.detach()[:3, 3]  # (N, 3)
@@ -783,6 +789,7 @@ class SpirulaeModel(Model):
             W,
             BLOCK_WIDTH,
         )  # type: ignore
+        self.depth_grads = depth_grads
 
         # rescale the camera back to original dimensions before returning
         camera.rescale_output_resolution(camera_downscale)
@@ -851,8 +858,11 @@ class SpirulaeModel(Model):
             with torch.no_grad():
                 # print(torch.amin(depth_grad_norm_im).item(), torch.mean(depth_grad_norm_im).item(), torch.amax(depth_grad_norm_im).item())
                 assert (reg_depth > -1e-6).all()
-                print(torch.mean(reg_depth).item(), torch.mean(reg_normal).item())
+                # print(torch.mean(reg_depth).item(), torch.mean(reg_normal).item())
                 pass
+                depth_grad_reg = self.depth_grads.abs().mean()
+                print(depth_grad_reg.item())
+
 
         with torch.no_grad():
             # print(torch.isnan(reg_depth.view(-1)).float().mean().item(), 
@@ -951,17 +961,22 @@ class SpirulaeModel(Model):
             scale_reg = torch.tensor(0.0).to(self.device)
 
         # regularization loss
-        depth_reg = 0.02 * torch.mean(outputs["reg_depth"] / (outputs['alpha']+1e-6))
+        reg_depth_normalized = outputs["reg_depth"] / (outputs['alpha']+1e-6)
+        reg_depth_normalized = reg_depth_normalized.sum() / (reg_depth_normalized > 0.0).sum()
+        depth_reg = 0.02 * reg_depth_normalized
         normal_reg = 1.0 * torch.mean(outputs["reg_normal"])
+        depth_grad_reg = self.depth_grads.abs().mean()
 
-        quat_norm_reg = 0.1 * ((self.quats.norm(dim=-1)-1.0)**2).mean()
+        # quat_norm_reg = 1.0 * ((self.quats.norm(dim=-1)-1.0)**2).mean()
+        quat_norm_reg = 10.0 * (torch.log(self.quats.norm(dim=-1)+0.001)**2).mean()
 
         loss_dict = {
             "main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss,
             "scale_reg": scale_reg,
             "depth_reg": depth_reg,
             # "normal_reg": normal_reg,
-            "quat_reg": quat_norm_reg
+            "quat_reg": quat_norm_reg,
+            "depth_grad_reg": 1.0*depth_grad_reg
         }
 
         if self.training:

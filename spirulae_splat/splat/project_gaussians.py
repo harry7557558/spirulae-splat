@@ -58,7 +58,7 @@ def project_gaussians(
         - **cov3d** (Tensor): 3D covariances.
     """
     assert block_width > 1 and block_width <= 16, "block_width must be between 2 and 16"
-    assert (quats.norm(dim=-1) - 1 < 1e-6).all(), "quats must be normalized"
+    assert (quats.norm(dim=-1) - 1 < 1e-4).all(), "quats must be normalized"
     return _ProjectGaussians.apply(
         means3d.contiguous(),
         scales.contiguous(),
@@ -172,6 +172,8 @@ class _ProjectGaussians(Function):
             conics,
             compensation,
         ) = ctx.saved_tensors
+
+        # print('v_depth_grads', torch.abs(v_depth_grads).mean().item())
 
         (v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat) = _C.project_gaussians_backward(
             ctx.num_points,

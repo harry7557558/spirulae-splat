@@ -364,6 +364,21 @@ __global__ void project_gaussians_backward_kernel(
         v_scale[idx],
         v_quat[idx]
     );
+
+    // depth gradient
+    float4 v_quat_dg = {0.f, 0.f, 0.f, 0.f};
+    float3 v_p_view = {0.f, 0.f, 0.f};
+    projected_depth_grad_vjp(
+        viewmat, fx, fy, quats[idx], p_view,
+        v_depth_grad[idx], &v_quat_dg, &v_p_view);
+    v_quat[idx].x += v_quat_dg.x;
+    v_quat[idx].y += v_quat_dg.y;
+    v_quat[idx].z += v_quat_dg.z;
+    v_quat[idx].w += v_quat_dg.w;
+    float3 v_p_world = transform_4x3_vjp(viewmat, v_p_view);
+    v_mean3d[idx].x += v_p_world.x;
+    v_mean3d[idx].y += v_p_world.y;
+    v_mean3d[idx].z += v_p_world.z;
 }
 
 // output space: 2D covariance, input space: cov3d
@@ -488,3 +503,51 @@ __device__ void scale_rot_to_cov3d_vjp(
     v_quat = quat_to_rotmat_vjp(quat, v_R);
 }
 
+
+__device__ void projected_depth_grad_vjp(
+    const float* viewmat, const float fx, const float fy,
+    const float4 quat, const float3 p_view,
+    const float2 v_depth_grad,
+    float4 *v_quat, float3 *v_p_view
+) {
+    // forward
+    glm::mat3 R1 = glm::transpose(glm::mat3(
+        viewmat[0], viewmat[1], viewmat[2],
+        viewmat[4], viewmat[5], viewmat[6],
+        viewmat[8], viewmat[9], viewmat[10]
+    ));
+    glm::mat3 R2 = quat_to_rotmat(quat);
+    glm::mat3 R = R1 * R2;
+    glm::vec3 n1 = R[2];
+    glm::vec3 p = glm::vec3(p_view.x, p_view.y, p_view.z);
+    glm::mat3 invJ = glm::mat3(
+        p.z/fx, 0.0f, 0.0f,
+        0.0f, p.z/fy, 0.0f,
+        p.x/p.z, p.y/p.z, 1.0f
+    );
+    glm::vec3 n = glm::transpose(invJ) * n1;
+    n.z = safe_denom(n.z, 1e-2f);
+    glm::vec2 depth_grad = glm::vec2(-n.x/n.z, -n.y/n.z);
+
+    // backward
+    glm::vec3 v_n = glm::vec3(
+        -1.0f/n.z * v_depth_grad.x,
+        -1.0f/n.z * v_depth_grad.y,
+        (n.x*v_depth_grad.x + n.y*v_depth_grad.y) / safe_denom(n.z*n.z,1e-2f)
+    );
+    // quat
+    glm::vec3 v_n1 = invJ * v_n;
+    glm::mat3 v_R = glm::mat3(0.0);
+    v_R[2] = v_n1;
+    glm::mat3 v_R2 = glm::transpose(R1) * v_R;
+    *v_quat = quat_to_rotmat_vjp(quat, v_R2);
+    // view
+    glm::mat3 v_invJ = glm::outerProduct(v_n, n1);
+    glm::vec3 v_p = glm::vec3(
+        v_invJ[0][2] / p.z,
+        v_invJ[1][2] / p.z,
+        v_invJ[0][0]/fx + v_invJ[1][1]/fy -
+        (p.x*v_invJ[0][2]+p.y*v_invJ[1][2]) / safe_denom(p.z*p.z, 1e-2f)
+    );
+    *v_p_view = {v_p.x, v_p.y, v_p.z};
+}
