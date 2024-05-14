@@ -150,7 +150,11 @@ class _RasterizeGaussians(Function):
             )
             assert colors.shape[-1] == 3
 
-            out_img, out_reg_depth, out_reg_normal, final_Ts, final_idx = _C.rasterize_forward(
+            (
+                out_img, out_depth,
+                out_reg_depth, out_reg_normal,
+                final_Ts, final_idx
+            ) = _C.rasterize_forward(
                 tile_bounds,
                 block,
                 img_size,
@@ -184,10 +188,14 @@ class _RasterizeGaussians(Function):
         )
 
         out_alpha = 1.0 - final_Ts
-        return out_img, out_reg_depth, out_reg_normal, out_alpha
+        return out_img, out_depth, out_reg_depth, out_reg_normal, out_alpha
 
     @staticmethod
-    def backward(ctx, v_out_img, v_out_reg_depth, v_out_reg_normal, v_out_alpha=None):
+    def backward(ctx,
+                 v_out_img, v_out_depth,
+                 v_out_reg_depth, v_out_reg_normal,
+                 v_out_alpha=None):
+
         img_height = ctx.img_height
         img_width = ctx.img_width
         num_intersects = ctx.num_intersects
@@ -218,7 +226,15 @@ class _RasterizeGaussians(Function):
 
         else:
             assert colors.shape[-1] == 3
-            v_xy, v_xy_abs, v_depth, v_conic, v_colors, v_opacity = _C.rasterize_backward(
+            (
+                v_xy,
+                v_xy_abs,
+                v_depth,
+                v_depth_grad,
+                v_conic,
+                v_colors,
+                v_opacity
+            ) = _C.rasterize_backward(
                 img_height,
                 img_width,
                 ctx.block_width,
@@ -234,6 +250,7 @@ class _RasterizeGaussians(Function):
                 final_Ts,
                 final_idx,
                 v_out_img,
+                v_out_depth,
                 v_out_alpha,
                 v_out_reg_depth,
                 v_out_reg_normal
@@ -249,7 +266,7 @@ class _RasterizeGaussians(Function):
         return (
             v_xy,  # xys
             v_depth,  # depths
-            None,  # depth_grads
+            v_depth_grad,  # depth_grads
             None,  # radii
             v_conic,  # conics
             None,  # num_tiles_hit

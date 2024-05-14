@@ -189,6 +189,7 @@ __global__ void rasterize_forward(
     float* __restrict__ final_Ts,
     int* __restrict__ final_index,
     float3* __restrict__ out_img,
+    float3* __restrict__ out_depth,
     float* __restrict__ out_reg_depth,
     float* __restrict__ out_reg_normal,
     const float3& __restrict__ background
@@ -234,8 +235,9 @@ __global__ void rasterize_forward(
     int tr = block.thread_rank();
     float T = 1.f;  // current/total visibility
     float sum_vis = 0.f;  // sum of visibilities
-    float2 sum_depth_grad = {0.f, 0.f};  // sum of "normals"
+    float2 g_bar = {0.f, 0.f};  // sum of "normals"
     float3 pix_out = {0.f, 0.f, 0.f};  // output radiance
+    float depth_out = 0.f;  // output depth
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
@@ -271,13 +273,14 @@ __global__ void rasterize_forward(
             const float vis = alpha * T;
             const float3 c = colors[g];
             const float3 depth_grad_batch_t = depth_grad_batch[t];
-            const float2 depth_grad = {depth_grad_batch_t.x, depth_grad_batch_t.y};
+            const float2 g_i = {depth_grad_batch_t.x, depth_grad_batch_t.y};
             pix_out.x = pix_out.x + c.x * vis;
             pix_out.y = pix_out.y + c.y * vis;
             pix_out.z = pix_out.z + c.z * vis;
+            depth_out = depth_out + depth_grad_batch_t.z * vis;
             sum_vis += vis;
-            sum_depth_grad.x = sum_depth_grad.x + vis * depth_grad.x;
-            sum_depth_grad.y = sum_depth_grad.y + vis * depth_grad.y;
+            g_bar.x = g_bar.x + vis * g_i.x;
+            g_bar.y = g_bar.y + vis * g_i.y;
             T = next_T;
             cur_idx = batch_start + t;
             if (T <= 1e-4f) {
@@ -286,11 +289,10 @@ __global__ void rasterize_forward(
             }
         }
     }
-    float sum_depth_grad_norm = hypot(sum_depth_grad.x, sum_depth_grad.y) + 1e-6f;
-    float2 mean_depth_grad = {
-        sum_depth_grad.x / sum_depth_grad_norm,
-        sum_depth_grad.y / sum_depth_grad_norm
-    };
+
+    // regularization precompute
+    float g_bar_norm = hypot(g_bar.x, g_bar.y) + 1e-6f;
+    float2 n_bar = { g_bar.x / g_bar_norm, g_bar.y / g_bar_norm };
 
     if (inside) {
         // add background
@@ -302,6 +304,7 @@ __global__ void rasterize_forward(
         final_color.y = pix_out.y + T * background.y;
         final_color.z = pix_out.z + T * background.z;
         out_img[pix_id] = final_color;
+        out_depth[pix_id] = {g_bar.x, g_bar.y, depth_out};
     }
 
     // calculate regularization weights
@@ -346,12 +349,9 @@ __global__ void rasterize_forward(
 
             const float3 depth_grad_batch_t = depth_grad_batch[t];
             const float depth = depth_grad_batch_t.z;
-            const float2 depth_grad = {depth_grad_batch_t.x, depth_grad_batch_t.y};
-            float depth_grad_norm = hypot(depth_grad.x, depth_grad.y) + 1e-6f;
-            float2 depth_grad_normalized = {
-                depth_grad.x / depth_grad_norm,
-                depth_grad.y / depth_grad_norm
-            };
+            const float2 g_i = {depth_grad_batch_t.x, depth_grad_batch_t.y};
+            float g_i_norm = hypot(g_i.x, g_i.y) + 1e-6f;
+            float2 n_i = { g_i.x / g_i_norm, g_i.y / g_i_norm };
 
             // depth regularization:
             // 1/2 \sum[i,j] w[i] w[j] |z[j]-z[i]| =
@@ -359,10 +359,9 @@ __global__ void rasterize_forward(
             reg_depth += vis * depth * (cur_vis - (sum_vis-cur_vis_next));
 
             // normal regularization
-            reg_normal += vis * (1.0f - (
-                depth_grad_normalized.x * mean_depth_grad.x +
-                depth_grad_normalized.y * mean_depth_grad.y
-            ));
+            // g^ = \sum[i] w[i] g[i], n^ = g^ / ||g^||
+            // reg = \sum[i] w[i] ( 1 - dot(n[i], n^) )
+            reg_normal += vis * (1.0f - (n_i.x*n_bar.x+n_i.y*n_bar.y));
 
             cur_vis = cur_vis_next;
             T = next_T;
@@ -379,6 +378,7 @@ __global__ void rasterize_forward(
         out_reg_normal[pix_id] = reg_normal;
     }
 }
+
 
 // device helper to approximate projected 2d cov from 3d mean and cov
 __device__ void project_cov3d_ewa(

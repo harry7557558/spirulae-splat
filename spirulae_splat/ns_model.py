@@ -666,16 +666,18 @@ class SpirulaeModel(Model):
         rgb = background.repeat(height, width, 1)
         depth = background.new_ones(*rgb.shape[:2], 1) * 10
         alpha = background.new_zeros(*rgb.shape[:2], 1)
-        depth_grad = background.repeat(height, width, 1)
+        depth_grad_vis = background.repeat(height, width, 1)
         reg_depth = background.new_zeros(*rgb.shape[:2], 1)
         reg_normal = background.new_zeros(*rgb.shape[:2], 1)
+        depth_grad = background.repeat(height, width, 1)
         return {
             "rgb": rgb,
             "depth": depth,
-            "alpha": alpha,
-            "depth_grad": depth_grad,
+            "depth_grad_vis": depth_grad_vis,
             "reg_depth": reg_depth,
             "reg_normal": reg_normal,
+            "alpha": alpha,
+            "depth_grad": depth_grad,
             "background": background
         }
 
@@ -789,7 +791,6 @@ class SpirulaeModel(Model):
             W,
             BLOCK_WIDTH,
         )  # type: ignore
-        self.depth_grads = depth_grads
 
         # rescale the camera back to original dimensions before returning
         camera.rescale_output_resolution(camera_downscale)
@@ -809,7 +810,7 @@ class SpirulaeModel(Model):
 
         # depth_grads_normalized = depth_grads / torch.norm(depth_grads, dim=1, keepdim=True)
 
-        rgb, reg_depth, reg_normal, alpha = rasterize_gaussians(  # type: ignore
+        rgb, depth_im, reg_depth, reg_normal, alpha = rasterize_gaussians(  # type: ignore
             self.xys,
             depths,
             depth_grads,
@@ -825,29 +826,12 @@ class SpirulaeModel(Model):
         )  # type: ignore
         alpha = alpha[..., None]
         rgb = torch.clamp(rgb, max=1.0)  # type: ignore
-        depth_im = None
-        depth_grad_im = None
+        depth_grad_im, depth_im = depth_im[...,0:2], depth_im[...,2:3]
+        depth_grad_im_vis = None
         if self.config.output_depth_during_training or not self.training:
-            depth_im = rasterize_gaussians(  # type: ignore
-                self.xys,
-                depths,
-                depth_grads,
-                self.radii,
-                conics,
-                num_tiles_hit,  # type: ignore
-                torch.concatenate((depths[:, None], depth_grads), axis=1),
-                opacities,
-                H,
-                W,
-                BLOCK_WIDTH,
-                background=torch.zeros(3, device=self.device),
-            )[0]  # type: ignore
-            depth_im, depth_grad_im = depth_im[..., 0:1], depth_im[..., 1:3]
-            depth_im = torch.where(alpha > 0, depth_im / alpha, depth_im.detach().max())
-            # depth_grad_im = torch.where(alpha > 0, depth_grad_im / alpha, depth_grad_im.detach().max())
             depth_grad_norm_im = torch.norm(depth_grad_im, dim=2, keepdim=True)
             depth_grad_hue_im = torch.atan2(depth_grad_im[...,1:2], depth_grad_im[...,0:1])
-            depth_grad_im = torch.clip(
+            depth_grad_im_vis = torch.clip(
                 torch.tanh(depth_grad_norm_im * 0.05*torch.numel(depth_im)**0.5) * \
                     (torch.concat((
                     torch.cos(depth_grad_hue_im),
@@ -857,11 +841,11 @@ class SpirulaeModel(Model):
 
             with torch.no_grad():
                 # print(torch.amin(depth_grad_norm_im).item(), torch.mean(depth_grad_norm_im).item(), torch.amax(depth_grad_norm_im).item())
-                assert (reg_depth > -1e-6).all()
+                # assert (reg_depth > -1e-6).all()
                 # print(torch.mean(reg_depth).item(), torch.mean(reg_normal).item())
                 pass
-                depth_grad_reg = self.depth_grads.abs().mean()
-                print(depth_grad_reg.item())
+                # depth_grad_reg = self.depth_grads.abs().mean()
+                # print(depth_grad_reg.item())
 
 
         with torch.no_grad():
@@ -873,13 +857,17 @@ class SpirulaeModel(Model):
             # print("reg_depth", torch.amin(reg_depth).item(), torch.mean(reg_depth).item(), torch.amax(reg_depth).item())
             pass
 
+        depth_grad_im = torch.where(alpha > 0, depth_grad_im / alpha, 0.0)
+        depth_im = torch.where(alpha > 0, depth_im / alpha, depth_im.detach().max())
+
         return {
             "rgb": rgb,
             "depth": depth_im,
-            "alpha": alpha,
-            "depth_grad": depth_grad_im,
+            "depth_grad_vis": depth_grad_im_vis,
             "reg_depth": reg_depth.unsqueeze(2),
             "reg_normal": reg_normal.unsqueeze(2),
+            "alpha": alpha,
+            "depth_grad": depth_grad_im,
             "background": background
         }  # type: ignore
 
@@ -960,23 +948,35 @@ class SpirulaeModel(Model):
         else:
             scale_reg = torch.tensor(0.0).to(self.device)
 
-        # regularization loss
+        # depth regularizer
         reg_depth_normalized = outputs["reg_depth"] / (outputs['alpha']+1e-6)
         reg_depth_normalized = reg_depth_normalized.sum() / (reg_depth_normalized > 0.0).sum()
         depth_reg = 0.02 * reg_depth_normalized
-        normal_reg = 1.0 * torch.mean(outputs["reg_normal"])
-        depth_grad_reg = self.depth_grads.abs().mean()
 
-        # quat_norm_reg = 1.0 * ((self.quats.norm(dim=-1)-1.0)**2).mean()
-        quat_norm_reg = 10.0 * (torch.log(self.quats.norm(dim=-1)+0.001)**2).mean()
+        # normal regularizer
+        alpha = outputs['alpha'][1:-1,1:-1,:]
+        depth_im = outputs['depth']
+        depth_grad_im = outputs['depth_grad'][1:-1, 1:-1]
+
+        depth_im_grad = torch.concatenate((
+            (depth_im[1:-1,2:]-depth_im[1:-1,:-2])/2,
+            (depth_im[2:,1:-1]-depth_im[:-2,1:-1])/2
+        ), axis=2)
+        depth_im_grad_normalized = depth_im_grad / (depth_im_grad.norm(dim=2,keepdim=True)+1e-6)
+        depth_grad_im_normalized = depth_grad_im / (depth_grad_im.norm(dim=2,keepdim=True)+1e-6)
+        dot = (depth_im_grad_normalized * depth_grad_im_normalized).sum(dim=2)
+        # print(torch.mean(dot).item(), torch.std(dot).item())
+        normal_reg = 0.01 * (1.0-dot.mean())
+
+        # quaternion norm
+        quat_norm_reg = 0.1 * (torch.log(self.quats.norm(dim=-1)+0.001)**2).mean()
 
         loss_dict = {
             "main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss,
             "scale_reg": scale_reg,
             "depth_reg": depth_reg,
-            # "normal_reg": normal_reg,
+            "normal_reg": normal_reg,
             "quat_reg": quat_norm_reg,
-            "depth_grad_reg": 1.0*depth_grad_reg
         }
 
         if self.training:

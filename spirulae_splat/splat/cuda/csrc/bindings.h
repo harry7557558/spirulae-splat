@@ -118,6 +118,7 @@ std::tuple<
     torch::Tensor,
     torch::Tensor,
     torch::Tensor,
+    torch::Tensor,
     torch::Tensor
 > rasterize_forward_tensor(
     const std::tuple<int, int, int> tile_bounds,
@@ -139,6 +140,7 @@ std::
         torch::Tensor, // dL_dxy
         torch::Tensor, // dL_dxy_abs
         torch::Tensor, // dL_ddepth
+        torch::Tensor, // dL_ddepth_grad
         torch::Tensor, // dL_dconic
         torch::Tensor, // dL_dcolors
         torch::Tensor  // dL_dopacity
@@ -159,6 +161,7 @@ std::
         const torch::Tensor &final_Ts,
         const torch::Tensor &final_idx,
         const torch::Tensor &v_output, // dL_dout_color
+        const torch::Tensor &v_output_depth,
         const torch::Tensor &v_output_alpha,
         const torch::Tensor &v_output_reg_depth,
         const torch::Tensor &v_output_reg_normal
