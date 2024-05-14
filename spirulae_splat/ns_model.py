@@ -112,15 +112,17 @@ class SpirulaeModelConfig(ModelConfig):
     """Whether to randomize the background color."""
     num_downscales: int = 2
     """at the beginning, resolution is 1/2^d, where d is this number"""
-    cull_alpha_thresh: float = 0.1
+    cull_alpha_thresh: float = 0.2
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
     cull_scale_thresh: float = 0.5
     """threshold of scale for culling huge gaussians"""
+    cull_anisotropy_thresh: float = 10.0
+    """threshold of quotient of scale for culling long thin gaussians"""
     continue_cull_post_densification: bool = True
     """If True, continue to cull gaussians post refinement"""
     reset_alpha_every: int = 30
     """Every this many refinement steps, reset the alpha"""
-    densify_grad_thresh: float = 0.0008
+    densify_grad_thresh: float = 0.002
     """threshold of positional gradient norm for densifying gaussians"""
     densify_size_thresh: float = 0.01
     """below this size, gaussians are *duplicated*, otherwise split"""
@@ -532,6 +534,7 @@ class SpirulaeModel(Model):
         culls = (torch.sigmoid(self.opacities) < self.config.cull_alpha_thresh).squeeze()
         below_alpha_count = torch.sum(culls).item()
         toobigs_count = 0
+        toothins_count = 0
         if extra_cull_mask is not None:
             culls = culls | extra_cull_mask
         if self.step > self.config.refine_every * self.config.reset_alpha_every:
@@ -543,12 +546,19 @@ class SpirulaeModel(Model):
                 toobigs = toobigs | (self.max_2Dsize > self.config.cull_screen_size).squeeze()
             culls = culls | toobigs
             toobigs_count = torch.sum(toobigs).item()
+            # cull long/thin ones
+            toothins = (
+                torch.exp(self.scales).max(dim=-1).values /
+                torch.exp(self.scales).min(dim=-1).values > \
+                    self.config.cull_anisotropy_thresh).squeeze()
+            culls = culls | toothins
+            toothins_count = torch.sum(toothins).item()
         for name, param in self.gauss_params.items():
             self.gauss_params[name] = torch.nn.Parameter(param[~culls])
 
         CONSOLE.log(
             f"Culled {n_bef - self.num_points} gaussians "
-            f"({below_alpha_count} below alpha thresh, {toobigs_count} too bigs, {self.num_points} remaining)"
+            f"({below_alpha_count} below alpha thresh, {toobigs_count} too bigs, {toothins_count} too thins, {self.num_points} remaining)"
         )
 
         return culls
@@ -572,6 +582,8 @@ class SpirulaeModel(Model):
         new_features_rest = self.features_rest[split_mask].repeat(samps, 1, 1)
         # step 3, sample new opacities
         new_opacities = self.opacities[split_mask].repeat(samps, 1)
+        new_opacities = 1.0-torch.sqrt(1.0-torch.clip(new_opacities,0.,1.))
+        self.opacities[split_mask] = 1.0-torch.sqrt(1.0-torch.clip(self.opacities[split_mask],0.,1.))
         # step 4, sample new scales
         size_fac = 1.6
         new_scales = torch.log(torch.exp(self.scales[split_mask]) / size_fac).repeat(samps, 1)
@@ -600,6 +612,9 @@ class SpirulaeModel(Model):
         new_dups = {}
         for name, param in self.gauss_params.items():
             new_dups[name] = param[dup_mask]
+        new_opacities = 1.0 - torch.sqrt(1.0-torch.clip(new_dups['opacities'],0.,1.))
+        new_dups['opacities'] = new_opacities
+        self.opacities[dup_mask] = new_opacities
         return new_dups
 
     def get_training_callbacks(
@@ -668,14 +683,14 @@ class SpirulaeModel(Model):
         alpha = background.new_zeros(*rgb.shape[:2], 1)
         depth_grad_vis = background.repeat(height, width, 1)
         reg_depth = background.new_zeros(*rgb.shape[:2], 1)
-        reg_normal = background.new_zeros(*rgb.shape[:2], 1)
+        # reg_normal = background.new_zeros(*rgb.shape[:2], 1)
         depth_grad = background.repeat(height, width, 1)
         return {
             "rgb": rgb,
             "depth": depth,
             "depth_grad_vis": depth_grad_vis,
             "reg_depth": reg_depth,
-            "reg_normal": reg_normal,
+            # "reg_normal": reg_normal,
             "alpha": alpha,
             "depth_grad": depth_grad,
             "background": background
@@ -810,7 +825,13 @@ class SpirulaeModel(Model):
 
         # depth_grads_normalized = depth_grads / torch.norm(depth_grads, dim=1, keepdim=True)
 
-        rgb, depth_im, reg_depth, reg_normal, alpha = rasterize_gaussians(  # type: ignore
+        (
+            rgb,
+            depth_im,
+            reg_depth,
+            # reg_normal,
+            alpha
+        ) = rasterize_gaussians(  # type: ignore
             self.xys,
             depths,
             depth_grads,
@@ -832,7 +853,7 @@ class SpirulaeModel(Model):
             depth_grad_norm_im = torch.norm(depth_grad_im, dim=2, keepdim=True)
             depth_grad_hue_im = torch.atan2(depth_grad_im[...,1:2], depth_grad_im[...,0:1])
             depth_grad_im_vis = torch.clip(
-                torch.tanh(depth_grad_norm_im * 0.05*torch.numel(depth_im)**0.5) * \
+                torch.tanh(depth_grad_norm_im * 0.5*torch.numel(depth_im)**0.5) * \
                     (torch.concat((
                     torch.cos(depth_grad_hue_im),
                     torch.cos(depth_grad_hue_im-2.0*np.pi/3.0),
@@ -847,16 +868,6 @@ class SpirulaeModel(Model):
                 # depth_grad_reg = self.depth_grads.abs().mean()
                 # print(depth_grad_reg.item())
 
-
-        with torch.no_grad():
-            # print(torch.isnan(reg_depth.view(-1)).float().mean().item(), 
-            #     torch.isnan(reg_normal.view(-1)).float().mean().item(),
-            #     reg_depth_nonzero_mean = (reg_depth!=0.0).float().mean().item(),
-            #     reg_normal_nonzero_mean = (reg_normal!=0.0).float().mean().item())
-            # print(rgb.shape, alpha.shape, reg_depth.shape, reg_normal.shape)
-            # print("reg_depth", torch.amin(reg_depth).item(), torch.mean(reg_depth).item(), torch.amax(reg_depth).item())
-            pass
-
         depth_grad_im = torch.where(alpha > 0, depth_grad_im / alpha, 0.0)
         depth_im = torch.where(alpha > 0, depth_im / alpha, depth_im.detach().max())
 
@@ -865,7 +876,7 @@ class SpirulaeModel(Model):
             "depth": depth_im,
             "depth_grad_vis": depth_grad_im_vis,
             "reg_depth": reg_depth.unsqueeze(2),
-            "reg_normal": reg_normal.unsqueeze(2),
+            # "reg_normal": reg_normal.unsqueeze(2),
             "alpha": alpha,
             "depth_grad": depth_grad_im,
             "background": background
@@ -949,24 +960,23 @@ class SpirulaeModel(Model):
             scale_reg = torch.tensor(0.0).to(self.device)
 
         # depth regularizer
-        reg_depth_normalized = outputs["reg_depth"] / (outputs['alpha']+1e-6)
-        reg_depth_normalized = reg_depth_normalized.sum() / (reg_depth_normalized > 0.0).sum()
-        depth_reg = 0.02 * reg_depth_normalized
+        alpha = outputs['alpha']
+        reg_depth = outputs["reg_depth"]
+        depth_reg = 0.02 * reg_depth.sum() / alpha.sum()
 
         # normal regularizer
         alpha = outputs['alpha'][1:-1,1:-1,:]
         depth_im = outputs['depth']
         depth_grad_im = outputs['depth_grad'][1:-1, 1:-1]
-
         depth_im_grad = torch.concatenate((
             (depth_im[1:-1,2:]-depth_im[1:-1,:-2])/2,
             (depth_im[2:,1:-1]-depth_im[:-2,1:-1])/2
         ), axis=2)
         depth_im_grad_normalized = depth_im_grad / (depth_im_grad.norm(dim=2,keepdim=True)+1e-6)
         depth_grad_im_normalized = depth_grad_im / (depth_grad_im.norm(dim=2,keepdim=True)+1e-6)
-        dot = (depth_im_grad_normalized * depth_grad_im_normalized).sum(dim=2)
+        dot = (depth_im_grad_normalized * depth_grad_im_normalized).sum(dim=2,keepdim=True)
         # print(torch.mean(dot).item(), torch.std(dot).item())
-        normal_reg = 0.01 * (1.0-dot.mean())
+        normal_reg = 0.05 * ((1.0-dot)*alpha).sum() / alpha.sum()
 
         # quaternion norm
         quat_norm_reg = 0.1 * (torch.log(self.quats.norm(dim=-1)+0.001)**2).mean()

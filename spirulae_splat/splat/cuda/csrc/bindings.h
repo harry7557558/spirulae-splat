@@ -114,12 +114,12 @@ torch::Tensor get_tile_bin_edges_tensor(
 );
 
 std::tuple<
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor
+    torch::Tensor,  // out_img
+    torch::Tensor,  // out_depth
+    torch::Tensor,  // out_reg_depth
+    // torch::Tensor,  // out_reg_normal
+    torch::Tensor,  // final_Ts
+    torch::Tensor  // final_idx
 > rasterize_forward_tensor(
     const std::tuple<int, int, int> tile_bounds,
     const std::tuple<int, int, int> block,
@@ -163,6 +163,6 @@ std::
         const torch::Tensor &v_output, // dL_dout_color
         const torch::Tensor &v_output_depth,
         const torch::Tensor &v_output_alpha,
-        const torch::Tensor &v_output_reg_depth,
-        const torch::Tensor &v_output_reg_normal
+        const torch::Tensor &v_output_reg_depth
+        // const torch::Tensor &v_output_reg_normal
     );

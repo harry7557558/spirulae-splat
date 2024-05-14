@@ -382,9 +382,14 @@ torch::Tensor get_tile_bin_edges_tensor(
     return tile_bins;
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor,
-    torch::Tensor, torch::Tensor, torch::Tensor>
-rasterize_forward_tensor(
+std::tuple<
+    torch::Tensor,  // out_img
+    torch::Tensor,  // out_depth
+    torch::Tensor,  // out_reg_depth
+    // torch::Tensor,  // out_reg_normal
+    torch::Tensor,  // final_Ts
+    torch::Tensor  // final_idx
+> rasterize_forward_tensor(
     const std::tuple<int, int, int> tile_bounds,
     const std::tuple<int, int, int> block,
     const std::tuple<int, int, int> img_size,
@@ -435,9 +440,9 @@ rasterize_forward_tensor(
     torch::Tensor out_reg_depth = torch::zeros(
         {img_height, img_width}, xys.options().dtype(torch::kFloat32)
     );
-    torch::Tensor out_reg_normal = torch::zeros(
-        {img_height, img_width}, xys.options().dtype(torch::kFloat32)
-    );
+    // torch::Tensor out_reg_normal = torch::zeros(
+    //     {img_height, img_width}, xys.options().dtype(torch::kFloat32)
+    // );
     torch::Tensor final_Ts = torch::zeros(
         {img_height, img_width}, xys.options().dtype(torch::kFloat32)
     );
@@ -461,13 +466,14 @@ rasterize_forward_tensor(
         (float3 *)out_img.contiguous().data_ptr<float>(),
         (float3 *)out_depth.contiguous().data_ptr<float>(),
         out_reg_depth.contiguous().data_ptr<float>(),
-        out_reg_normal.contiguous().data_ptr<float>(),
+        // out_reg_normal.contiguous().data_ptr<float>(),
         *(float3 *)background.contiguous().data_ptr<float>()
     );
 
     return std::make_tuple(
         out_img, out_depth,
-        out_reg_depth, out_reg_normal,
+        out_reg_depth,
+        // out_reg_normal,
         final_Ts, final_idx
     );
 }
@@ -501,8 +507,8 @@ std::
         const torch::Tensor &v_output, // dL_dout_color
         const torch::Tensor &v_output_depth,
         const torch::Tensor &v_output_alpha, // dL_dout_alpha
-        const torch::Tensor &v_output_reg_depth,
-        const torch::Tensor &v_output_reg_normal
+        const torch::Tensor &v_output_reg_depth
+        // const torch::Tensor &v_output_reg_normal
     ) {
     DEVICE_GUARD(xys);
     CHECK_INPUT(xys);
@@ -553,7 +559,7 @@ std::
         (float3 *)v_output_depth.contiguous().data_ptr<float>(),
         v_output_alpha.contiguous().data_ptr<float>(),
         v_output_reg_depth.contiguous().data_ptr<float>(),
-        v_output_reg_normal.contiguous().data_ptr<float>(),
+        // v_output_reg_normal.contiguous().data_ptr<float>(),
         (float2 *)v_xy.contiguous().data_ptr<float>(),
         (float2 *)v_xy_abs.contiguous().data_ptr<float>(),
         v_depth.contiguous().data_ptr<float>(),

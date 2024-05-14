@@ -365,11 +365,6 @@ def get_tile_bbox(pix_center, pix_radius, tile_bounds, block_width):
     return tile_min, tile_max
 
 def projected_depth_grad(viewmat, fx, fy, quats, p_view):
-    # dg = torch.zeros_like(quats[:,:2])
-    # dg[:,0] = p_view[:,0]*p_view[:,1]
-    # dg[:,1] = p_view[:,2]
-    # return dg
-
     R1 = viewmat[:3,:3]
     R2 = normalized_quat_to_rotmat(quats)
     R = torch.einsum('ij,njk->nik', R1, R2)
@@ -382,10 +377,8 @@ def projected_depth_grad(viewmat, fx, fy, quats, p_view):
     invJ[:,2,1] = p[:,1]/p[:,2]
     invJ[:,2,2] = 1.0
     n = torch.einsum('nij,nj->ni', invJ, n1)
-    # dg[:,0] = n[:,0]+n[:,1]
-    # dg[:,1] = n[:,2]
-    # return dg
-    return -n[:,:2] / n[:,2:]
+    # return -n[:,:2] / n[:,2:]
+    return -n[:,:2] * n[:,2:]
 
 def project_gaussians_forward(
     means3d,

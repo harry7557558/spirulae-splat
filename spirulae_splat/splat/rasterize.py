@@ -126,7 +126,7 @@ class _RasterizeGaussians(Function):
                 * background
             )
             out_reg_depth = torch.zeros(img_height, img_width, device=xys.device)
-            out_reg_normal = torch.zeros(img_height, img_width, device=xys.device)
+            # out_reg_normal = torch.zeros(img_height, img_width, device=xys.device)
             gaussian_ids_sorted = torch.zeros(0, 1, device=xys.device)
             tile_bins = torch.zeros(0, 2, device=xys.device)
             final_Ts = torch.zeros(img_height, img_width, device=xys.device)
@@ -151,8 +151,10 @@ class _RasterizeGaussians(Function):
             assert colors.shape[-1] == 3
 
             (
-                out_img, out_depth,
-                out_reg_depth, out_reg_normal,
+                out_img,
+                out_depth,
+                out_reg_depth,
+                # out_reg_normal,
                 final_Ts, final_idx
             ) = _C.rasterize_forward(
                 tile_bounds,
@@ -188,13 +190,23 @@ class _RasterizeGaussians(Function):
         )
 
         out_alpha = 1.0 - final_Ts
-        return out_img, out_depth, out_reg_depth, out_reg_normal, out_alpha
+        return (
+            out_img,
+            out_depth,
+            out_reg_depth,
+            # out_reg_normal,
+            out_alpha
+        )
 
     @staticmethod
-    def backward(ctx,
-                 v_out_img, v_out_depth,
-                 v_out_reg_depth, v_out_reg_normal,
-                 v_out_alpha=None):
+    def backward(
+        ctx,
+        v_out_img,
+        v_out_depth,
+        v_out_reg_depth,
+        # v_out_reg_normal,
+        v_out_alpha=None
+        ):
 
         img_height = ctx.img_height
         img_width = ctx.img_width
@@ -253,7 +265,7 @@ class _RasterizeGaussians(Function):
                 v_out_depth,
                 v_out_alpha,
                 v_out_reg_depth,
-                v_out_reg_normal
+                # v_out_reg_normal
             )
 
         # Abs grad for gaussian splitting criterion. See

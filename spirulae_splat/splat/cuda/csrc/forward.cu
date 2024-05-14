@@ -191,7 +191,7 @@ __global__ void rasterize_forward(
     float3* __restrict__ out_img,
     float3* __restrict__ out_depth,
     float* __restrict__ out_reg_depth,
-    float* __restrict__ out_reg_normal,
+    // float* __restrict__ out_reg_normal,
     const float3& __restrict__ background
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
@@ -375,7 +375,7 @@ __global__ void rasterize_forward(
 
     if (inside) {
         out_reg_depth[pix_id] = reg_depth;
-        out_reg_normal[pix_id] = reg_normal;
+        // out_reg_normal[pix_id] = reg_normal;
     }
 }
 
@@ -498,12 +498,14 @@ __device__ float2 projected_depth_grad(
     glm::mat3 R = R1 * R2;
     glm::vec3 n1 = R[2];
     glm::vec3 p = glm::vec3(p_view.x, p_view.y, p_view.z);
+    p.z = safe_denom(p.z, 1e-3f);
     glm::mat3 invJ = glm::mat3(
         p.z/fx, 0.0f, 0.0f,
         0.0f, p.z/fy, 0.0f,
         p.x/p.z, p.y/p.z, 1.0f
     );
     glm::vec3 n = glm::transpose(invJ) * n1;
-    n.z = safe_denom(n.z, 1e-3f);
-    return { -n.x/n.z, -n.y/n.z };
+    // n.z = safe_denom(n.z, 1e-3f);
+    // return { -n.x/n.z, -n.y/n.z };
+    return {-n.x*n.z, -n.y*n.z};
 }

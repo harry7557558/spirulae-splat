@@ -38,7 +38,7 @@ __global__ void rasterize_backward_kernel(
     const float3* __restrict__ v_output_depth,
     const float* __restrict__ v_output_alpha,
     const float* __restrict__ v_output_reg_depth,
-    const float* __restrict__ v_output_reg_normal,
+    // const float* __restrict__ v_output_reg_normal,
     float2* __restrict__ v_xy,
     float2* __restrict__ v_xy_abs,
     float* __restrict__ v_depth,
@@ -80,7 +80,8 @@ __global__ void rasterize_backward_kernel(
     const float3 v_out_depth = v_output_depth[pix_id];
     const float v_out_alpha = v_output_alpha[pix_id];
     const float v_out_reg_depth = v_output_reg_depth[pix_id];
-    const float v_out_reg_normal = v_output_reg_normal[pix_id];
+    // const float v_out_reg_normal = v_output_reg_normal[pix_id];
+    const float v_out_reg_normal = 0.0f;
 
     // this is the T AFTER the last gaussian in this pixel
     const float T_final = final_Ts[pix_id];
@@ -569,20 +570,25 @@ __device__ void projected_depth_grad_vjp(
     glm::mat3 R = R1 * R2;
     glm::vec3 n1 = R[2];
     glm::vec3 p = glm::vec3(p_view.x, p_view.y, p_view.z);
+    p.z = safe_denom(p.z, 1e-2f);
     glm::mat3 invJ = glm::mat3(
         p.z/fx, 0.0f, 0.0f,
         0.0f, p.z/fy, 0.0f,
         p.x/p.z, p.y/p.z, 1.0f
     );
     glm::vec3 n = glm::transpose(invJ) * n1;
-    n.z = safe_denom(n.z, 1e-2f);
-    glm::vec2 depth_grad = glm::vec2(-n.x/n.z, -n.y/n.z);
+    // n.z = safe_denom(n.z, 1e-2f);
+    // glm::vec2 depth_grad = glm::vec2(-n.x/n.z, -n.y/n.z);
+    glm::vec2 depth_grad = glm::vec2(-n.x*n.z, -n.y*n.z);
 
     // backward
     glm::vec3 v_n = glm::vec3(
-        -1.0f/n.z * v_depth_grad.x,
-        -1.0f/n.z * v_depth_grad.y,
-        (n.x*v_depth_grad.x + n.y*v_depth_grad.y) / safe_denom(n.z*n.z,1e-2f)
+        // -1.0f/n.z * v_depth_grad.x,
+        // -1.0f/n.z * v_depth_grad.y,
+        // (n.x*v_depth_grad.x + n.y*v_depth_grad.y) / safe_denom(n.z*n.z,1e-2f)
+        -n.z * v_depth_grad.x,
+        -n.z * v_depth_grad.y,
+        -(n.x * v_depth_grad.x + n.y*v_depth_grad.y)
     );
     // quat
     glm::vec3 v_n1 = invJ * v_n;

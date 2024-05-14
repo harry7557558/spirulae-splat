@@ -42,7 +42,7 @@ __global__ void rasterize_forward(
     float3* __restrict__ out_img,
     float3* __restrict__ out_depth,
     float* __restrict__ out_reg_depth,
-    float* __restrict__ out_reg_normal,
+    // float* __restrict__ out_reg_normal,
     const float3& __restrict__ background
 );
 
