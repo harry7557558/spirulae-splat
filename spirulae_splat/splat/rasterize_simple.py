@@ -12,16 +12,14 @@ import spirulae_splat.splat.cuda as _C
 from .utils import bin_and_sort_gaussians, compute_cumulative_intersects
 
 
-def rasterize_gaussians(
+def rasterize_gaussians_simple(
     xys: Float[Tensor, "*batch 2"],
     depths: Float[Tensor, "*batch 1"],
-    depth_grads: Float[Tensor, "*batch 2"],
     radii: Float[Tensor, "*batch 1"],
     conics: Float[Tensor, "*batch 3"],
     num_tiles_hit: Int[Tensor, "*batch 1"],
     colors: Float[Tensor, "*batch channels"],
     opacity: Float[Tensor, "*batch 1"],
-    depth_normal_ref: Float[Tensor, "*batch 2"],
     img_height: int,
     img_width: int,
     block_width: int,
@@ -44,7 +42,6 @@ def rasterize_gaussians(
         img_width (int): width of the rendered image.
         block_width (int): MUST match whatever block width was used in the project_gaussians call. integer number of pixels between 2 and 16 inclusive
         background (Tensor): background color
-        return_alpha (bool): whether to return alpha channel
 
     Returns:
         A Tensor:
@@ -72,24 +69,22 @@ def rasterize_gaussians(
     if colors.ndimension() != 2:
         raise ValueError("colors must have dimensions (N, D)")
 
-    return _RasterizeGaussians.apply(
+    return _RasterizeGaussiansSimple.apply(
         xys.contiguous(),
         depths.contiguous(),
-        depth_grads.contiguous(),
         radii.contiguous(),
         conics.contiguous(),
         num_tiles_hit.contiguous(),
         colors.contiguous(),
         opacity.contiguous(),
-        depth_normal_ref.contiguous(),
         img_height,
         img_width,
         block_width,
-        background.contiguous()
+        background.contiguous(),
     )
 
 
-class _RasterizeGaussians(Function):
+class _RasterizeGaussiansSimple(Function):
     """Rasterizes 2D gaussians"""
 
     @staticmethod
@@ -97,17 +92,15 @@ class _RasterizeGaussians(Function):
         ctx,
         xys: Float[Tensor, "*batch 2"],
         depths: Float[Tensor, "*batch 1"],
-        depth_grads: Float[Tensor, "*batch 2"],
         radii: Float[Tensor, "*batch 1"],
         conics: Float[Tensor, "*batch 3"],
         num_tiles_hit: Int[Tensor, "*batch 1"],
         colors: Float[Tensor, "*batch channels"],
         opacity: Float[Tensor, "*batch 1"],
-        depth_normal_ref: Float[Tensor, "*batch 2"],
         img_height: int,
         img_width: int,
         block_width: int,
-        background: Optional[Float[Tensor, "channels"]] = None
+        background: Float[Tensor, "channels"],
     ) -> Tensor:
         num_points = xys.size(0)
         tile_bounds = (
@@ -125,8 +118,6 @@ class _RasterizeGaussians(Function):
                 torch.ones(img_height, img_width, colors.shape[-1], device=xys.device)
                 * background
             )
-            out_reg_depth = torch.zeros(img_height, img_width, device=xys.device)
-            out_reg_normal = torch.zeros(img_height, img_width, device=xys.device)
             gaussian_ids_sorted = torch.zeros(0, 1, device=xys.device)
             tile_bins = torch.zeros(0, 2, device=xys.device)
             final_Ts = torch.zeros(img_height, img_width, device=xys.device)
@@ -148,28 +139,17 @@ class _RasterizeGaussians(Function):
                 tile_bounds,
                 block_width,
             )
-            assert colors.shape[-1] == 3
-            assert depth_normal_ref.shape == torch.Size([img_height, img_width, 2])
 
-            (
-                out_img,
-                out_depth,
-                out_reg_depth,
-                out_reg_normal,
-                final_Ts, final_idx
-            ) = _C.rasterize_forward(
+            out_img, final_Ts, final_idx = _C.rasterize_simple_forward(
                 tile_bounds,
                 block,
                 img_size,
                 gaussian_ids_sorted,
                 tile_bins,
                 xys,
-                depths,
-                depth_grads,
                 conics,
                 colors,
                 opacity,
-                depth_normal_ref,
                 background,
             )
 
@@ -181,36 +161,19 @@ class _RasterizeGaussians(Function):
             gaussian_ids_sorted,
             tile_bins,
             xys,
-            depths,
-            depth_grads,
             conics,
             colors,
             opacity,
-            depth_normal_ref,
             background,
             final_Ts,
             final_idx,
         )
 
-        out_alpha = 1.0 - final_Ts
-        return (
-            out_img,
-            out_depth,
-            out_reg_depth,
-            out_reg_normal,
-            out_alpha
-        )
+        out_alpha = 1 - final_Ts
+        return out_img, out_alpha
 
     @staticmethod
-    def backward(
-        ctx,
-        v_out_img,
-        v_out_depth,
-        v_out_reg_depth,
-        v_out_reg_normal,
-        v_out_alpha
-        ):
-
+    def backward(ctx, v_out_img, v_out_alpha):
         img_height = ctx.img_height
         img_width = ctx.img_width
         num_intersects = ctx.num_intersects
@@ -219,12 +182,9 @@ class _RasterizeGaussians(Function):
             gaussian_ids_sorted,
             tile_bins,
             xys,
-            depths,
-            depth_grads,
             conics,
             colors,
             opacity,
-            depth_normal_ref,
             background,
             final_Ts,
             final_idx,
@@ -233,49 +193,42 @@ class _RasterizeGaussians(Function):
         if num_intersects < 1:
             v_xy = torch.zeros_like(xys)
             v_xy_abs = torch.zeros_like(xys)
-            v_depth = torch.zeros_like(depths)
-            v_depth_grad = torch.zeros_like(depth_grads)
             v_conic = torch.zeros_like(conics)
             v_colors = torch.zeros_like(colors)
             v_opacity = torch.zeros_like(opacity)
-            v_depth_normal_ref = torch.zeros_like(depth_normal_ref)
 
         else:
-            assert colors.shape[-1] == 3
-            backward_return = _C.rasterize_backward(
+            backward_return = _C.rasterize_simple_backward(
                 img_height,
                 img_width,
                 ctx.block_width,
                 gaussian_ids_sorted,
                 tile_bins,
                 xys,
-                depths,
-                depth_grads,
                 conics,
                 colors,
                 opacity,
-                depth_normal_ref,
                 background,
                 final_Ts,
                 final_idx,
                 v_out_img,
-                v_out_depth,
                 v_out_alpha,
-                v_out_reg_depth,
-                v_out_reg_normal
             )
 
             clean = lambda x: torch.nan_to_num(torch.clip(x, -1e4, 1e4))
             (
                 v_xy,
                 v_xy_abs,
-                v_depth,
-                v_depth_grad,
                 v_conic,
                 v_colors,
-                v_opacity,
-                v_depth_normal_ref
+                v_opacity
             ) = [clean(v) for v in backward_return]
+
+        v_background = None
+        if background.requires_grad:
+            v_background = torch.matmul(
+                v_out_img.float().view(-1, 3).t(), final_Ts.float().view(-1, 1)
+            ).squeeze()
 
         # Abs grad for gaussian splitting criterion. See
         # - "AbsGS: Recovering Fine Details for 3D Gaussian Splatting"
@@ -284,21 +237,17 @@ class _RasterizeGaussians(Function):
             xys.absgrad = v_xy_abs
         else:
             xys.absgrad += v_xy_abs
-
-        # print("v_depth", torch.amin(v_depth).item(), torch.mean(v_depth).item(), torch.amax(v_depth).item())
-
+        
         return (
             v_xy,  # xys
-            v_depth,  # depths
-            v_depth_grad,  # depth_grads
+            None,  # depths
             None,  # radii
             v_conic,  # conics
             None,  # num_tiles_hit
             v_colors,  # colors
             v_opacity,  # opacity
-            v_depth_normal_ref,  # depth_normal_ref
             None,  # img_height
             None,  # img_width
             None,  # block_width
-            None,  # background
+            v_background,  # background
         )

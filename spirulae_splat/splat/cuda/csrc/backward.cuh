@@ -30,6 +30,27 @@ __global__ void project_gaussians_backward_kernel(
     float4* __restrict__ v_quat
 );
 
+__global__ void rasterize_simple_backward_kernel(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float2* __restrict__ xys,
+    const float3* __restrict__ conics,
+    const float3* __restrict__ rgbs,
+    const float* __restrict__ opacities,
+    const float3& __restrict__ background,
+    const float* __restrict__ final_Ts,
+    const int* __restrict__ final_index,
+    const float3* __restrict__ v_output,
+    const float* __restrict__ v_output_alpha,
+    float2* __restrict__ v_xy,
+    float2* __restrict__ v_xy_abs,
+    float3* __restrict__ v_conic,
+    float3* __restrict__ v_rgb,
+    float* __restrict__ v_opacity
+);
+
 __global__ void rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
@@ -41,6 +62,7 @@ __global__ void rasterize_backward_kernel(
     const float3* __restrict__ conics,
     const float3* __restrict__ rgbs,
     const float* __restrict__ opacities,
+    const float2* __restrict__ depth_normal_ref_im,
     const float3& __restrict__ background,
     const float* __restrict__ final_Ts,
     const int* __restrict__ final_index,
@@ -48,14 +70,15 @@ __global__ void rasterize_backward_kernel(
     const float3* __restrict__ v_output_depth,
     const float* __restrict__ v_output_alpha,
     const float* __restrict__ v_output_reg_depth,
-    // const float* __restrict__ v_output_reg_normal,
+    const float* __restrict__ v_output_reg_normal,
     float2* __restrict__ v_xy,
     float2* __restrict__ v_xy_abs,
     float* __restrict__ v_depth,
     float2* __restrict__ v_depth_grad,
     float3* __restrict__ v_conic,
     float3* __restrict__ v_rgb,
-    float* __restrict__ v_opacity
+    float* __restrict__ v_opacity,
+    float2* __restrict__ v_depth_normal_ref
 );
 
 __device__ void project_cov3d_ewa_vjp(

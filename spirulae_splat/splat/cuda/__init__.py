@@ -13,6 +13,8 @@ def _make_lazy_cuda_func(name: str) -> Callable:
 
 rasterize_forward = _make_lazy_cuda_func("rasterize_forward")
 rasterize_backward = _make_lazy_cuda_func("rasterize_backward")
+rasterize_simple_forward = _make_lazy_cuda_func("rasterize_simple_forward")
+rasterize_simple_backward = _make_lazy_cuda_func("rasterize_simple_backward")
 compute_cov2d_bounds = _make_lazy_cuda_func("compute_cov2d_bounds")
 project_gaussians_forward = _make_lazy_cuda_func("project_gaussians_forward")
 project_gaussians_backward = _make_lazy_cuda_func("project_gaussians_backward")

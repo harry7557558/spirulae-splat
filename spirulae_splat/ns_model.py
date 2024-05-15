@@ -31,6 +31,7 @@ from pytorch_msssim import SSIM
 from spirulae_splat.splat._torch_impl import quat_to_rotmat
 from spirulae_splat.splat.project_gaussians import project_gaussians
 from spirulae_splat.splat.rasterize import rasterize_gaussians
+from spirulae_splat.splat.rasterize_simple import rasterize_gaussians_simple
 from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
 
 from nerfstudio.cameras.camera_optimizers import (CameraOptimizer,
@@ -112,17 +113,19 @@ class SpirulaeModelConfig(ModelConfig):
     """Whether to randomize the background color."""
     num_downscales: int = 2
     """at the beginning, resolution is 1/2^d, where d is this number"""
-    cull_alpha_thresh: float = 0.2
+    cull_alpha_thresh: float = 0.1
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
     cull_scale_thresh: float = 0.5
     """threshold of scale for culling huge gaussians"""
     cull_anisotropy_thresh: float = 10.0
     """threshold of quotient of scale for culling long thin gaussians"""
+    cull_absgrad_thresh: float = 0.0002
+    """threshold for culling gaussians with low visibility"""
     continue_cull_post_densification: bool = True
     """If True, continue to cull gaussians post refinement"""
     reset_alpha_every: int = 30
     """Every this many refinement steps, reset the alpha"""
-    densify_grad_thresh: float = 0.002
+    densify_grad_thresh: float = 0.001
     """threshold of positional gradient norm for densifying gaussians"""
     densify_size_thresh: float = 0.01
     """below this size, gaussians are *duplicated*, otherwise split"""
@@ -405,10 +408,8 @@ class SpirulaeModel(Model):
             return
         with torch.no_grad():
             # keep track of a moving average of grad norms
-            # visible_mask = (self.radii[self.depth_sort_i] > 0).flatten()
             visible_mask = (self.radii > 0).flatten()
             assert self.xys.absgrad is not None  # type: ignore
-            # grads = self.xys.absgrad.detach().norm(dim=-1)[self.depth_sort_i]  # type: ignore
             grads = self.xys.absgrad.detach().norm(dim=-1)  # type: ignore
             # print(f"grad norm min {grads.min().item()} max {grads.max().item()} mean {grads.mean().item()} size {grads.shape}")
             if self.xys_grad_norm is None:
@@ -448,11 +449,15 @@ class SpirulaeModel(Model):
                 self.step < self.config.stop_split_at
                 and self.step % reset_interval > self.num_train_data + self.config.refine_every
             )
+            # assert self.xys_grad_norm is not None and self.vis_counts is not None and self.max_2Dsize is not None
+            if self.xys_grad_norm is None or self.vis_counts is None or self.max_2Dsize is None:
+                do_densification = False
+                self.avg_grad_norm = None
+            else:
+                self.avg_grad_norm = (self.xys_grad_norm / self.vis_counts) * 0.5 * max(self.last_size[0], self.last_size[1])
             if do_densification:
                 # then we densify
-                assert self.xys_grad_norm is not None and self.vis_counts is not None and self.max_2Dsize is not None
-                avg_grad_norm = (self.xys_grad_norm / self.vis_counts) * 0.5 * max(self.last_size[0], self.last_size[1])
-                high_grads = (avg_grad_norm > self.config.densify_grad_thresh).squeeze()
+                high_grads = (self.avg_grad_norm > self.config.densify_grad_thresh).squeeze()
                 splits = (self.scales.exp().max(dim=-1).values > self.config.densify_size_thresh).squeeze()
                 if self.step < self.config.stop_screen_size_at:
                     splits |= (self.max_2Dsize > self.config.split_screen_size).squeeze()
@@ -522,6 +527,7 @@ class SpirulaeModel(Model):
 
             self.xys_grad_norm = None
             self.vis_counts = None
+            self.avg_grad_norm = None
             self.max_2Dsize = None
 
     def cull_gaussians(self, extra_cull_mask: Optional[torch.Tensor] = None):
@@ -533,6 +539,14 @@ class SpirulaeModel(Model):
         # cull transparent ones
         culls = (torch.sigmoid(self.opacities) < self.config.cull_alpha_thresh).squeeze()
         below_alpha_count = torch.sum(culls).item()
+        # cull ones with low visibility
+        low_grad_count = 0
+        if self.avg_grad_norm is not None:
+            low_grads = torch.zeros_like(culls)
+            low_grads[:len(self.avg_grad_norm)] = (self.avg_grad_norm < self.config.cull_absgrad_thresh).squeeze()
+            culls |= low_grads
+            low_grad_count = torch.sum(low_grads).item()
+        # others
         toobigs_count = 0
         toothins_count = 0
         if extra_cull_mask is not None:
@@ -558,7 +572,7 @@ class SpirulaeModel(Model):
 
         CONSOLE.log(
             f"Culled {n_bef - self.num_points} gaussians "
-            f"({below_alpha_count} below alpha thresh, {toobigs_count} too bigs, {toothins_count} too thins, {self.num_points} remaining)"
+            f"({below_alpha_count} below alpha thresh, {low_grad_count} low visibility, {toobigs_count} too bigs, {toothins_count} too thins, {self.num_points} remaining)"
         )
 
         return culls
@@ -681,18 +695,22 @@ class SpirulaeModel(Model):
         rgb = background.repeat(height, width, 1)
         depth = background.new_ones(*rgb.shape[:2], 1) * 10
         alpha = background.new_zeros(*rgb.shape[:2], 1)
-        depth_grad_vis = background.repeat(height, width, 1)
+        depth_grad_1_vis = background.repeat(height, width, 1)
+        depth_grad_2_vis = background.repeat(height, width, 1)
         reg_depth = background.new_zeros(*rgb.shape[:2], 1)
-        # reg_normal = background.new_zeros(*rgb.shape[:2], 1)
-        depth_grad = background.repeat(height, width, 1)
+        reg_normal = background.new_zeros(*rgb.shape[:2], 1)
+        depth_grad_1 = background.repeat(height, width, 1)
+        depth_grad_2 = background.repeat(height, width, 1)
         return {
             "rgb": rgb,
             "depth": depth,
-            "depth_grad_vis": depth_grad_vis,
+            "depth_grad_1_vis": depth_grad_1_vis,
+            "depth_grad_2_vis": depth_grad_2_vis,
             "reg_depth": reg_depth,
-            # "reg_normal": reg_normal,
+            "reg_normal": reg_normal,
             "alpha": alpha,
-            "depth_grad": depth_grad,
+            "depth_grad_1": depth_grad_1,
+            "depth_grad_2": depth_grad_2,
             "background": background
         }
 
@@ -823,13 +841,59 @@ class SpirulaeModel(Model):
         else:
             raise ValueError("Unknown rasterize_mode: %s", self.config.rasterize_mode)
 
-        # depth_grads_normalized = depth_grads / torch.norm(depth_grads, dim=1, keepdim=True)
+        # compute reference gradient
+        if False:   # seems to have a bug in backward
+            depth_im_ref, alpha_ref = rasterize_gaussians_simple(
+                self.xys,
+                depths,
+                self.radii,
+                conics,
+                num_tiles_hit,  # type: ignore
+                torch.concatenate((depth_grads, depths[...,None]), dim=1),
+                opacities,
+                H, W, BLOCK_WIDTH
+            )
+        (depth_im_ref, _, _, _, alpha_ref) = rasterize_gaussians(
+            self.xys,
+            depths,
+            depth_grads,
+            self.radii,
+            conics,
+            num_tiles_hit,  # type: ignore
+            torch.concatenate((depth_grads, depths[...,None]), dim=1),
+            opacities,
+            torch.zeros((H, W, 2), dtype=depths.dtype, device=depths.device),
+            H, W, BLOCK_WIDTH
+        )  # type: ignore
+        alpha_ref = alpha_ref[..., None]
+        depth_grad_ref, depth_ref = depth_im_ref[...,0:2], depth_im_ref[...,2:3]
 
+        # accumulated gradient
+        depth_grad_ref = torch.where(alpha_ref > 0, depth_grad_ref / alpha_ref, 0.0)
+        depth_grad_ref_norm = torch.norm(depth_grad_ref, dim=2, keepdim=True)
+        depth_grad_ref_normalized = torch.where(
+            depth_grad_ref_norm > 0,
+            depth_grad_ref / (depth_grad_ref_norm+1e-4),
+            0.0)
+        
+        # finite difference gradient
+        depth_normal_grad_ref = torch.zeros_like(depth_grad_ref)
+        depth_normal_grad_ref[1:-1,1:-1] = torch.concatenate((
+            (depth_ref[1:-1,2:]-depth_ref[1:-1,:-2])/2,
+            (depth_ref[2:,1:-1]-depth_ref[:-2,1:-1])/2
+        ), axis=2)
+        depth_normal_grad_ref_norm = torch.norm(depth_normal_grad_ref, dim=2, keepdim=True)
+        depth_normal_grad_ref_normalized = torch.where(
+            depth_normal_grad_ref_norm > 0,
+            depth_normal_grad_ref / (depth_normal_grad_ref_norm+1e-4),
+            0.0)
+
+        # main rasterization
         (
             rgb,
             depth_im,
             reg_depth,
-            # reg_normal,
+            reg_normal,
             alpha
         ) = rasterize_gaussians(  # type: ignore
             self.xys,
@@ -840,45 +904,57 @@ class SpirulaeModel(Model):
             num_tiles_hit,  # type: ignore
             rgbs,
             opacities,
-            H,
-            W,
-            BLOCK_WIDTH,
+            depth_normal_grad_ref_normalized,
+            H, W, BLOCK_WIDTH,
             background=background
         )  # type: ignore
         alpha = alpha[..., None]
         rgb = torch.clamp(rgb, max=1.0)  # type: ignore
         depth_grad_im, depth_im = depth_im[...,0:2], depth_im[...,2:3]
+
         depth_grad_im_vis = None
+        depth_grad_ref_vis = None
         if self.config.output_depth_during_training or not self.training:
-            depth_grad_norm_im = torch.norm(depth_grad_im, dim=2, keepdim=True)
-            depth_grad_hue_im = torch.atan2(depth_grad_im[...,1:2], depth_grad_im[...,0:1])
-            depth_grad_im_vis = torch.clip(
-                torch.tanh(depth_grad_norm_im * 0.5*torch.numel(depth_im)**0.5) * \
-                    (torch.concat((
-                    torch.cos(depth_grad_hue_im),
-                    torch.cos(depth_grad_hue_im-2.0*np.pi/3.0),
-                    torch.cos(depth_grad_hue_im+2.0*np.pi/3.0)
-                ), axis=2)*0.5+0.5) * 2.0, 0.0, 1.0)
+            def depth_grad_vis(im):
+                im_norm = torch.norm(im, dim=2, keepdim=True)
+                hue_im = torch.atan2(im[...,1:2], im[...,0:1])
+                return torch.clip(
+                    torch.tanh(im_norm * 0.5*torch.numel(depth_im)**0.5) * \
+                        (torch.concat((
+                        torch.cos(hue_im),
+                        torch.cos(hue_im-2.0*np.pi/3.0),
+                        torch.cos(hue_im+2.0*np.pi/3.0)
+                    ), axis=2)*0.5+0.5) * 2.0, 0.0, 1.0)
+            depth_grad_im_vis = depth_grad_vis(depth_grad_im)
+            depth_grad_ref_vis = depth_grad_vis(0.1*depth_normal_grad_ref)
 
             with torch.no_grad():
                 # print(torch.amin(depth_grad_norm_im).item(), torch.mean(depth_grad_norm_im).item(), torch.amax(depth_grad_norm_im).item())
                 # assert (reg_depth > -1e-6).all()
-                # print(torch.mean(reg_depth).item(), torch.mean(reg_normal).item())
+                print(torch.mean(reg_depth).item(), torch.mean(reg_normal).item())
                 pass
                 # depth_grad_reg = self.depth_grads.abs().mean()
                 # print(depth_grad_reg.item())
+
+        # depth_ref = torch.where(alpha_ref > 0, depth_ref / alpha_ref, depth_ref.detach().max())
+        # depth_ref = torch.where(alpha_ref > 0, depth_im / alpha_ref, depth_im.detach().max())
+        depth_ref = torch.where(alpha > 0, depth_ref / alpha, depth_ref.detach().max())
 
         depth_grad_im = torch.where(alpha > 0, depth_grad_im / alpha, 0.0)
         depth_im = torch.where(alpha > 0, depth_im / alpha, depth_im.detach().max())
 
         return {
             "rgb": rgb,
-            "depth": depth_im,
-            "depth_grad_vis": depth_grad_im_vis,
+            "depth": depth_ref,
+            # "depth_diff": torch.abs(depth_im-depth_ref),
+            # "alpha_diff": torch.abs(alpha-alpha_ref),
+            "depth_grad_1_vis": depth_grad_im_vis,
+            "depth_grad_2_vis": depth_grad_ref_vis,
             "reg_depth": reg_depth.unsqueeze(2),
-            # "reg_normal": reg_normal.unsqueeze(2),
+            "reg_normal": reg_normal.unsqueeze(2),
             "alpha": alpha,
-            "depth_grad": depth_grad_im,
+            "depth_grad_1": depth_grad_ref_normalized,
+            "depth_grad_2": depth_normal_grad_ref_normalized,
             "background": background
         }  # type: ignore
 
@@ -962,21 +1038,17 @@ class SpirulaeModel(Model):
         # depth regularizer
         alpha = outputs['alpha']
         reg_depth = outputs["reg_depth"]
+        reg_normal = outputs["reg_normal"]
         depth_reg = 0.02 * reg_depth.sum() / alpha.sum()
+        normal_reg = 0.05 * reg_normal.sum() / alpha.sum()
 
         # normal regularizer
-        alpha = outputs['alpha'][1:-1,1:-1,:]
-        depth_im = outputs['depth']
-        depth_grad_im = outputs['depth_grad'][1:-1, 1:-1]
-        depth_im_grad = torch.concatenate((
-            (depth_im[1:-1,2:]-depth_im[1:-1,:-2])/2,
-            (depth_im[2:,1:-1]-depth_im[:-2,1:-1])/2
-        ), axis=2)
-        depth_im_grad_normalized = depth_im_grad / (depth_im_grad.norm(dim=2,keepdim=True)+1e-6)
-        depth_grad_im_normalized = depth_grad_im / (depth_grad_im.norm(dim=2,keepdim=True)+1e-6)
-        dot = (depth_im_grad_normalized * depth_grad_im_normalized).sum(dim=2,keepdim=True)
-        # print(torch.mean(dot).item(), torch.std(dot).item())
-        normal_reg = 0.05 * ((1.0-dot)*alpha).sum() / alpha.sum()
+        depth_grad_1 = outputs['depth_grad_1']
+        depth_grad_2 = outputs['depth_grad_2']
+        dot = (depth_grad_1 * depth_grad_2).sum(dim=2,keepdim=True)
+        normal_reg_s = 1.0-dot
+        # normal_reg_s = torch.sqrt(torch.fmax(1.0-dot,torch.zeros_like(dot)))
+        normal_reg = normal_reg + 0.05 * (normal_reg_s*alpha).sum() / alpha.sum()
 
         # quaternion norm
         quat_norm_reg = 0.1 * (torch.log(self.quats.norm(dim=-1)+0.001)**2).mean()

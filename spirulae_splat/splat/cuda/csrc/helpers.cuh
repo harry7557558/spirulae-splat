@@ -66,7 +66,7 @@ inline __device__ bool get_alpha(
                             conic.z * delta.y * delta.y) +
                     conic.y * delta.x * delta.y;
     const float vis = visibility_kernel(r2);
-    alpha = min(0.99f, opac * vis);
+    alpha = opac * vis;
     return r2 >= 0.f && alpha >= 1.f / 255.f;
 }
 
