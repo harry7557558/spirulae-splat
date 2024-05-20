@@ -24,6 +24,7 @@ from typing import Dict, List, Tuple, Type, Union, Optional
 from typing_extensions import Literal
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 import torch
 from torch.nn import Parameter
 from pytorch_msssim import SSIM
@@ -194,13 +195,24 @@ class SpirulaeModel(Model):
             means = torch.nn.Parameter(torch.randn((self.config.num_random, 3)) * self.config.random_scale)
         self.xys_grad_norm = None
         self.max_2Dsize = None
-        distances, _ = self.k_nearest_sklearn(means.data, 3)
+        distances, indices = self.k_nearest_sklearn(means.data, 10)
         distances = torch.from_numpy(distances)
-        # find the average of the three nearest neighbors for each point and use that as the scale
-        avg_dist = distances.mean(dim=-1, keepdim=True)
-        scales = torch.nn.Parameter(torch.log(avg_dist.repeat(1, 2)))
+        # avg_dist = distances.mean(dim=-1, keepdim=True)
+        # scales = torch.nn.Parameter(torch.log(avg_dist.repeat(1, 2)))
+        points = means.data[indices] - means.data[:, None, :]
+        points = points.cpu().numpy()
+        U, S, Vt = np.linalg.svd(points)
         num_points = means.shape[0]
-        quats = torch.nn.Parameter(random_quat_tensor(num_points))
+        for i in range(num_points):
+            sorted_indices = np.argsort(-S[i])
+            S[i] = S[i][sorted_indices]
+            Vt[i] = Vt[i][sorted_indices]
+        scales = torch.nn.Parameter(torch.from_numpy(np.log(0.5*S[:,:2]+1e-8)))
+        # quats = torch.nn.Parameter(random_quat_tensor(num_points))
+        quats = torch.nn.Parameter(torch.from_numpy(np.array(
+            [Rotation.from_matrix(R.T).as_quat() for R in Vt],
+            dtype=np.float32)))
+        # colors
         dim_sh = num_sh_bases(self.config.sh_degree)
 
         if (
@@ -915,10 +927,10 @@ class SpirulaeModel(Model):
                         torch.cos(hue_im-2.0*np.pi/3.0),
                         torch.cos(hue_im+2.0*np.pi/3.0)
                     ), axis=2)*0.5+0.5) * 2.0, 0.0, 1.0)
-            depth_grad_im_vis = depth_grad_vis(depth_grad_im)
-            depth_grad_ref_vis = depth_grad_vis(0.1*depth_normal_grad_ref)
-
             with torch.no_grad():
+                depth_grad_im_vis = depth_grad_vis(depth_grad_im)
+                depth_grad_ref_vis = depth_grad_vis(0.1*depth_normal_grad_ref)
+
                 # print(torch.amin(depth_grad_norm_im).item(), torch.mean(depth_grad_norm_im).item(), torch.amax(depth_grad_norm_im).item())
                 # assert (reg_depth > -1e-6).all()
                 print(torch.mean(reg_depth).item(), torch.mean(reg_normal).item())
