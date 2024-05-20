@@ -842,34 +842,22 @@ class SpirulaeModel(Model):
             raise ValueError("Unknown rasterize_mode: %s", self.config.rasterize_mode)
 
         # compute reference gradient
-        if False:   # seems to have a bug in backward
-            depth_im_ref, alpha_ref = rasterize_gaussians_simple(
-                self.xys,
-                depths,
-                self.radii,
-                conics,
-                num_tiles_hit,  # type: ignore
-                torch.concatenate((depth_grads, depths[...,None]), dim=1),
-                opacities,
-                H, W, BLOCK_WIDTH
-            )
-        (depth_im_ref, _, _, _, alpha_ref) = rasterize_gaussians(
+        depth_im_ref, alpha_ref = rasterize_gaussians_simple(
             self.xys,
             depths,
-            depth_grads,
             self.radii,
             conics,
             num_tiles_hit,  # type: ignore
             torch.concatenate((depth_grads, depths[...,None]), dim=1),
             opacities,
-            torch.zeros((H, W, 2), dtype=depths.dtype, device=depths.device),
             H, W, BLOCK_WIDTH
-        )  # type: ignore
+        )
         alpha_ref = alpha_ref[..., None]
         depth_grad_ref, depth_ref = depth_im_ref[...,0:2], depth_im_ref[...,2:3]
 
         # accumulated gradient
         depth_grad_ref = torch.where(alpha_ref > 0, depth_grad_ref / alpha_ref, 0.0)
+        depth_ref = torch.where(alpha_ref > 0, depth_ref / alpha_ref, depth_ref.detach().max())
         depth_grad_ref_norm = torch.norm(depth_grad_ref, dim=2, keepdim=True)
         depth_grad_ref_normalized = torch.where(
             depth_grad_ref_norm > 0,
@@ -911,6 +899,8 @@ class SpirulaeModel(Model):
         alpha = alpha[..., None]
         rgb = torch.clamp(rgb, max=1.0)  # type: ignore
         depth_grad_im, depth_im = depth_im[...,0:2], depth_im[...,2:3]
+        depth_grad_im = torch.where(alpha > 0, depth_grad_im / alpha, 0.0)
+        depth_im = torch.where(alpha > 0, depth_im / alpha, depth_im.detach().max())
 
         depth_grad_im_vis = None
         depth_grad_ref_vis = None
@@ -935,13 +925,6 @@ class SpirulaeModel(Model):
                 pass
                 # depth_grad_reg = self.depth_grads.abs().mean()
                 # print(depth_grad_reg.item())
-
-        # depth_ref = torch.where(alpha_ref > 0, depth_ref / alpha_ref, depth_ref.detach().max())
-        # depth_ref = torch.where(alpha_ref > 0, depth_im / alpha_ref, depth_im.detach().max())
-        depth_ref = torch.where(alpha > 0, depth_ref / alpha, depth_ref.detach().max())
-
-        depth_grad_im = torch.where(alpha > 0, depth_grad_im / alpha, 0.0)
-        depth_im = torch.where(alpha > 0, depth_im / alpha, depth_im.detach().max())
 
         return {
             "rgb": rgb,
@@ -1040,7 +1023,7 @@ class SpirulaeModel(Model):
         reg_depth = outputs["reg_depth"]
         reg_normal = outputs["reg_normal"]
         depth_reg = 0.02 * reg_depth.sum() / alpha.sum()
-        normal_reg = 0.05 * reg_normal.sum() / alpha.sum()
+        normal_reg = 0.02 * reg_normal.sum() / alpha.sum()
 
         # normal regularizer
         depth_grad_1 = outputs['depth_grad_1']
@@ -1048,7 +1031,7 @@ class SpirulaeModel(Model):
         dot = (depth_grad_1 * depth_grad_2).sum(dim=2,keepdim=True)
         normal_reg_s = 1.0-dot
         # normal_reg_s = torch.sqrt(torch.fmax(1.0-dot,torch.zeros_like(dot)))
-        normal_reg = normal_reg + 0.05 * (normal_reg_s*alpha).sum() / alpha.sum()
+        normal_reg = normal_reg + 0.02 * (normal_reg_s*alpha).sum() / alpha.sum()
 
         # quaternion norm
         quat_norm_reg = 0.1 * (torch.log(self.quats.norm(dim=-1)+0.001)**2).mean()

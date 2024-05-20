@@ -4,9 +4,12 @@ import struct
 
 import torch
 import torch.nn.functional as F
-from jaxtyping import Float
+from jaxtyping import Float, Int
 from torch import Tensor
-from typing import Tuple, Literal
+from typing import Tuple, Literal, Optional
+from spirulae_splat.splat.utils import (
+    compute_cumulative_intersects, bin_and_sort_gaussians
+)
 
 
 def compute_sh_color(
@@ -364,6 +367,7 @@ def get_tile_bbox(pix_center, pix_radius, tile_bounds, block_width):
     )
     return tile_min, tile_max
 
+
 def projected_depth_grad(viewmat, fx, fy, quats, p_view):
     R1 = viewmat[:3,:3]
     R2 = normalized_quat_to_rotmat(quats)
@@ -379,6 +383,7 @@ def projected_depth_grad(viewmat, fx, fy, quats, p_view):
     n = torch.einsum('nij,nj->ni', invJ, n1)
     # return -n[:,:2] / n[:,2:]
     return -n[:,:2] * n[:,2:]
+
 
 def project_gaussians_forward(
     means3d,
@@ -504,71 +509,230 @@ def get_tile_bin_edges(num_intersects, isect_ids_sorted, tile_bounds):
     return tile_bins
 
 
-def rasterize_forward(
-    tile_bounds,
-    block,
-    img_size,
-    gaussian_ids_sorted,
-    tile_bins,
-    xys,
-    conics,
-    colors,
-    opacities,
-    background,
+def visibility_kernel(r2):
+    r = torch.sqrt(torch.fmax(r2, torch.zeros_like(r2)))
+    w1 = ( 1.0-1.5*r*r*(1.0-0.5*r) ) * (r < 1.0)
+    w2 = ( 0.25*(2.0-r)**3 ) * ((r >= 1.0) & (r < 2.0))
+    return w1 + w2
+
+def get_alpha(conic, xy_opac, p) -> Tuple[Tensor, bool]:
+    opac = xy_opac[2]
+    delta = [xy_opac[0] - p[0], xy_opac[1] - p[1]]
+    r2 = 0.5 * (conic[0] * delta[0] * delta[0] + \
+                conic[2] * delta[1] * delta[1]) + \
+            conic[1] * delta[0] * delta[1]
+    vis = visibility_kernel(r2)
+    alpha = opac * vis
+    alpha = torch.fmin(0.99*torch.ones_like(alpha), alpha)
+    return alpha, r2 >= 0.0 and alpha >= 1./255.
+
+
+def rasterize_gaussians_simple(
+    xys: Float[Tensor, "*batch 2"],
+    depths: Float[Tensor, "*batch 1"],
+    radii: Float[Tensor, "*batch 1"],
+    conics: Float[Tensor, "*batch 3"],
+    num_tiles_hit: Int[Tensor, "*batch 1"],
+    colors: Float[Tensor, "*batch channels"],
+    opacities: Float[Tensor, "*batch 1"],
+    img_height: int,
+    img_width: int,
+    block_width: int,
+    background: Float[Tensor, "channels"] = None
 ):
-    channels = colors.shape[1]
-    out_img = torch.zeros(
-        (img_size[1], img_size[0], channels), dtype=torch.float32, device=xys.device
+    device = xys.device
+    float32_param = { 'dtype': torch.float32, 'device': device }
+    int32_param = { 'dtype': torch.int32, 'device': device }
+    if background is None:
+        background = torch.zeros(colors.shape[-1], **float32_param)
+
+    num_points = xys.size(0)
+    tile_bounds = (
+        (img_width + block_width - 1) // block_width,
+        (img_height + block_width - 1) // block_width,
+        1,
     )
-    final_Ts = torch.zeros(
-        (img_size[1], img_size[0]), dtype=torch.float32, device=xys.device
+    block = (block_width, block_width, 1)
+    img_size = (img_width, img_height, 1)
+
+    num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_tiles_hit)
+    assert num_intersects >= 1
+
+    (
+        isect_ids_unsorted,
+        gaussian_ids_unsorted,
+        isect_ids_sorted,
+        gaussian_ids_sorted,
+        tile_bins,
+    ) = bin_and_sort_gaussians(
+        num_points,
+        num_intersects,
+        xys,
+        depths,
+        radii,
+        cum_tiles_hit,
+        tile_bounds,
+        block_width,
     )
-    final_idx = torch.zeros(
-        (img_size[1], img_size[0]), dtype=torch.int32, device=xys.device
-    )
+
+    final_Ts = torch.zeros((img_size[1], img_size[0]), **float32_param)
+    final_idx = torch.zeros((img_size[1], img_size[0]), **int32_param)
+    out_img = torch.zeros((img_size[1], img_size[0], 3), **float32_param)
+
     for i in range(img_size[1]):
         for j in range(img_size[0]):
             tile_id = (i // block[0]) * tile_bounds[0] + (j // block[1])
             tile_bin_start = tile_bins[tile_id, 0]
             tile_bin_end = tile_bins[tile_id, 1]
+            p = [j+0.5, i+0.5]
+
             T = 1.0
+            cur_idx = 0
+            pix_out = torch.zeros(3, **float32_param)
 
             for idx in range(tile_bin_start, tile_bin_end):
-                gaussian_id = gaussian_ids_sorted[idx]
-                conic = conics[gaussian_id]
-                center = xys[gaussian_id]
-                delta = center - torch.tensor(
-                    [j, i], dtype=torch.float32, device=xys.device
-                )
+                gid = gaussian_ids_sorted[idx]
+                conic = conics[gid]
+                xy_opac = [*xys[gid], opacities[gid]]
 
-                sigma = (
-                    0.5
-                    * (conic[0] * delta[0] * delta[0] + conic[2] * delta[1] * delta[1])
-                    + conic[1] * delta[0] * delta[1]
-                )
-
-                if sigma < 0:
+                alpha, valid = get_alpha(conic, xy_opac, p)
+                if not valid:
                     continue
-
-                opac = opacities[gaussian_id]
-                alpha = min(0.999, opac * torch.exp(-sigma))
-
-                if alpha < 1 / 255:
-                    continue
-
-                next_T = T * (1 - alpha)
-
-                if next_T <= 1e-4:
-                    idx -= 1
-                    break
+                # alpha = torch.fmin(0.999*torch.ones_like(alpha), alpha)
+                next_T = T * (1. - alpha)
 
                 vis = alpha * T
+                c = colors[gid]
 
-                out_img[i, j] += vis * colors[gaussian_id]
+                pix_out += vis * c
+
                 T = next_T
+                cur_idx = idx
+                if next_T <= 1e-3:
+                    break
 
             final_Ts[i, j] = T
-            final_idx[i, j] = idx
-            out_img[i, j] += T * background
+            final_idx[i, j] = cur_idx
+            out_img[i, j] = pix_out + T * background
 
-    return out_img, final_Ts, final_idx
+    out_alpha = 1 - final_Ts
+    return out_img, out_alpha, final_idx
+
+
+def rasterize_gaussians(
+    xys: Float[Tensor, "*batch 2"],
+    depths: Float[Tensor, "*batch 1"],
+    depth_grads: Float[Tensor, "*batch 2"],
+    radii: Float[Tensor, "*batch 1"],
+    conics: Float[Tensor, "*batch 3"],
+    num_tiles_hit: Int[Tensor, "*batch 1"],
+    colors: Float[Tensor, "*batch channels"],
+    opacities: Float[Tensor, "*batch 1"],
+    depth_normal_ref_im: Float[Tensor, "*batch 2"],
+    img_height: int,
+    img_width: int,
+    block_width: int,
+    background: Optional[Float[Tensor, "channels"]] = None
+):
+    device = xys.device
+    float32_param = { 'dtype': torch.float32, 'device': device }
+    int32_param = { 'dtype': torch.int32, 'device': device }
+    if background is None:
+        background = torch.zeros(colors.shape[-1], **float32_param)
+
+    num_points = xys.size(0)
+    tile_bounds = (
+        (img_width + block_width - 1) // block_width,
+        (img_height + block_width - 1) // block_width,
+        1,
+    )
+    block = (block_width, block_width, 1)
+    img_size = (img_width, img_height, 1)
+
+    num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_tiles_hit)
+    assert num_intersects >= 1
+
+    (
+        isect_ids_unsorted,
+        gaussian_ids_unsorted,
+        isect_ids_sorted,
+        gaussian_ids_sorted,
+        tile_bins,
+    ) = bin_and_sort_gaussians(
+        num_points,
+        num_intersects,
+        xys,
+        depths,
+        radii,
+        cum_tiles_hit,
+        tile_bounds,
+        block_width,
+    )
+
+    final_Ts = torch.zeros((img_size[1], img_size[0]), **float32_param)
+    final_idx = torch.zeros((img_size[1], img_size[0]), **int32_param)
+    out_img = torch.zeros((img_size[1], img_size[0], 3), **float32_param)
+    out_depth_grad = torch.zeros((img_size[1], img_size[0], 3), **float32_param)
+    out_reg_depth = torch.zeros((img_size[1], img_size[0]), **float32_param)
+    out_reg_normal = torch.zeros((img_size[1], img_size[0]), **float32_param)
+    float32_param['requires_grad'] = True
+
+    for i in range(img_size[1]):
+        for j in range(img_size[0]):
+            tile_id = (i // block[0]) * tile_bounds[0] + (j // block[1])
+            tile_bin_start = tile_bins[tile_id, 0]
+            tile_bin_end = tile_bins[tile_id, 1]
+            p = [j+0.5, i+0.5]
+
+            T = torch.ones(1, **float32_param)
+            cur_idx = 0
+            g_sum = torch.zeros(2, **float32_param)
+            pix_out = torch.zeros(3, **float32_param)
+            vis_sum = torch.zeros(1, **float32_param)
+            depth_sum = torch.zeros(1, **float32_param)
+            depth_normal_ref = depth_normal_ref_im[i, j]
+            reg_depth = torch.zeros(1, **float32_param)
+            reg_normal = torch.zeros(1, **float32_param)
+
+            for idx in range(tile_bin_start, tile_bin_end):
+                gid = gaussian_ids_sorted[idx]
+                conic = conics[gid]
+                xy_opac = [*xys[gid], opacities[gid]]
+
+                alpha, valid = get_alpha(conic, xy_opac, p)
+                if not valid:
+                    continue
+                # alpha = torch.fmin(0.999*torch.ones_like(alpha), alpha)
+                next_T = T * (1. - alpha)
+
+                vis = alpha * T
+                c = colors[gid]
+                depth = depths[gid].unsqueeze(0)
+                g_i = depth_grads[gid]
+                n_i = g_i / (torch.norm(g_i)+1e-6)
+
+                pix_out = pix_out + vis * c
+                reg_depth = reg_depth + vis*depth * vis_sum - vis * depth_sum
+                reg_normal = reg_normal + vis * (1.0 - torch.dot(n_i, depth_normal_ref))
+                vis_sum = vis_sum + vis
+                depth_sum = depth_sum + vis*depth
+                g_sum = g_sum + vis * g_i
+
+                T = next_T
+                cur_idx = idx
+                if next_T <= 1e-3:
+                    break
+
+            final_Ts[i, j] = T
+            final_idx[i, j] = cur_idx
+            out_img[i, j] = pix_out + T * background
+            out_depth_grad[i, j] = torch.concat((g_sum, depth_sum))
+            out_reg_depth[i, j] = reg_depth
+            out_reg_normal[i, j] = reg_normal
+
+    out_alpha = 1.0 - final_Ts
+    return (
+        out_img, out_depth_grad,
+        out_reg_depth, out_reg_normal,
+        out_alpha, final_idx
+    )

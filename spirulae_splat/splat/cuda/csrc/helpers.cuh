@@ -28,7 +28,7 @@ inline __device__ float visibility_kernel_grad(const float r2) {
         r < 1.0f ? 0.75f*r*(3.0f*r-4.0f) :
         r < 2.0f ? -0.75f*(2.0f-r)*(2.0f-r) :
         0.0f;
-    return 0.5f * v_r / r;
+    return r==0.0f ? 0.0f : 0.5f*v_r/r;
 }
 
 // radius of "Gaussian" kernel
@@ -67,12 +67,13 @@ inline __device__ bool get_alpha(
                     conic.y * delta.x * delta.y;
     const float vis = visibility_kernel(r2);
     alpha = opac * vis;
+    alpha = min(0.99f, alpha);
     return r2 >= 0.f && alpha >= 1.f / 255.f;
 }
 
 inline __device__ void get_alpha_grad(
     const float3 conic, const float3 xy_opac, const float2 p,
-    const float v_alpha,
+    float v_alpha,
     float3 &v_conic, float2 &v_xy, float &v_opac
 ) {
     const float opac = xy_opac.z;
@@ -81,6 +82,9 @@ inline __device__ void get_alpha_grad(
                             conic.z * delta.y * delta.y) +
                     conic.y * delta.x * delta.y;
     const float vis = visibility_kernel(r2);
+    const float alpha = opac * vis;
+    if (alpha >= 0.99f)
+        v_alpha = 0.0f;
     const float v_r2 = opac * v_alpha * visibility_kernel_grad(r2);
     v_conic = {0.5f * v_r2 * delta.x * delta.x,
                 v_r2 * delta.x * delta.y,

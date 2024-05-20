@@ -504,7 +504,7 @@ std::tuple<
     torch::Tensor out_img = torch::zeros(
         {img_height, img_width, channels}, xys.options().dtype(torch::kFloat32)
     );
-    torch::Tensor out_depth = torch::zeros(
+    torch::Tensor out_depth_grad = torch::zeros(
         {img_height, img_width, 3}, xys.options().dtype(torch::kFloat32)
     );
     torch::Tensor out_reg_depth = torch::zeros(
@@ -535,16 +535,15 @@ std::tuple<
         final_Ts.contiguous().data_ptr<float>(),
         final_idx.contiguous().data_ptr<int>(),
         (float3 *)out_img.contiguous().data_ptr<float>(),
-        (float3 *)out_depth.contiguous().data_ptr<float>(),
+        (float3 *)out_depth_grad.contiguous().data_ptr<float>(),
         out_reg_depth.contiguous().data_ptr<float>(),
         out_reg_normal.contiguous().data_ptr<float>(),
         *(float3 *)background.contiguous().data_ptr<float>()
     );
 
     return std::make_tuple(
-        out_img, out_depth,
-        out_reg_depth,
-        out_reg_normal,
+        out_img, out_depth_grad,
+        out_reg_depth, out_reg_normal,
         final_Ts, final_idx
     );
 }
@@ -653,6 +652,7 @@ std::
         const torch::Tensor &background,
         const torch::Tensor &final_Ts,
         const torch::Tensor &final_idx,
+        const torch::Tensor &output_depth_grad,
         const torch::Tensor &v_output, // dL_dout_color
         const torch::Tensor &v_output_depth,
         const torch::Tensor &v_output_alpha, // dL_dout_alpha
@@ -705,6 +705,7 @@ std::
         *(float3 *)background.contiguous().data_ptr<float>(),
         final_Ts.contiguous().data_ptr<float>(),
         final_idx.contiguous().data_ptr<int>(),
+        (float3 *)output_depth_grad.contiguous().data_ptr<float>(),
         (float3 *)v_output.contiguous().data_ptr<float>(),
         (float3 *)v_output_depth.contiguous().data_ptr<float>(),
         v_output_alpha.contiguous().data_ptr<float>(),

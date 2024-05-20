@@ -56,7 +56,7 @@ __global__ void rasterize_forward(
     float* __restrict__ final_Ts,
     int* __restrict__ final_index,
     float3* __restrict__ out_img,
-    float3* __restrict__ out_depth,
+    float3* __restrict__ out_depth_grad,
     float* __restrict__ out_reg_depth,
     float* __restrict__ out_reg_normal,
     const float3& __restrict__ background

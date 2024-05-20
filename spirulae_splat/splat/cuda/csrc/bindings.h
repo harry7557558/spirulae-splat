@@ -132,7 +132,7 @@ std::tuple<
 
 std::tuple<
     torch::Tensor,  // out_img
-    torch::Tensor,  // out_depth
+    torch::Tensor,  // out_depth_grad
     torch::Tensor,  // out_reg_depth
     torch::Tensor,  // out_reg_normal
     torch::Tensor,  // final_Ts
@@ -204,6 +204,7 @@ std::tuple<
         const torch::Tensor &background,
         const torch::Tensor &final_Ts,
         const torch::Tensor &final_idx,
+        const torch::Tensor &output_depth_grad,
         const torch::Tensor &v_output, // dL_dout_color
         const torch::Tensor &v_output_depth,
         const torch::Tensor &v_output_alpha,

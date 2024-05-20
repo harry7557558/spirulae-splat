@@ -4,12 +4,16 @@ from typing import Optional
 
 import torch
 from jaxtyping import Float, Int
+from typing import Tuple
 from torch import Tensor
 from torch.autograd import Function
 
 import spirulae_splat.splat.cuda as _C
 
 from .utils import bin_and_sort_gaussians, compute_cumulative_intersects
+
+
+RETURN_IDX = False
 
 
 def rasterize_gaussians_simple(
@@ -24,7 +28,7 @@ def rasterize_gaussians_simple(
     img_width: int,
     block_width: int,
     background: Optional[Float[Tensor, "channels"]] = None
-) -> Tensor:
+) -> Tuple[Tensor, Tensor]:
     """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an N-dimensional output using alpha-compositing.
 
     Note:
@@ -170,10 +174,12 @@ class _RasterizeGaussiansSimple(Function):
         )
 
         out_alpha = 1 - final_Ts
+        if RETURN_IDX:
+            return out_img, out_alpha, final_idx
         return out_img, out_alpha
 
     @staticmethod
-    def backward(ctx, v_out_img, v_out_alpha):
+    def backward(ctx, v_out_img, v_out_alpha, v_idx=None):
         img_height = ctx.img_height
         img_width = ctx.img_width
         num_intersects = ctx.num_intersects

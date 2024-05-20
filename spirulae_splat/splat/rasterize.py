@@ -4,12 +4,16 @@ from typing import Optional
 
 import torch
 from jaxtyping import Float, Int
+from typing import Tuple
 from torch import Tensor
 from torch.autograd import Function
 
 import spirulae_splat.splat.cuda as _C
 
 from .utils import bin_and_sort_gaussians, compute_cumulative_intersects
+
+
+RETURN_IDX = False
 
 
 def rasterize_gaussians(
@@ -26,7 +30,7 @@ def rasterize_gaussians(
     img_width: int,
     block_width: int,
     background: Optional[Float[Tensor, "channels"]] = None
-) -> Tensor:
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an N-dimensional output using alpha-compositing.
 
     Note:
@@ -153,7 +157,7 @@ class _RasterizeGaussians(Function):
 
             (
                 out_img,
-                out_depth,
+                out_depth_grad,
                 out_reg_depth,
                 out_reg_normal,
                 final_Ts, final_idx
@@ -190,25 +194,28 @@ class _RasterizeGaussians(Function):
             background,
             final_Ts,
             final_idx,
+            out_depth_grad,
         )
 
         out_alpha = 1.0 - final_Ts
-        return (
-            out_img,
-            out_depth,
-            out_reg_depth,
-            out_reg_normal,
+        output = (
+            out_img, out_depth_grad,
+            out_reg_depth, out_reg_normal,
             out_alpha
         )
+        if RETURN_IDX:
+            return (*output, final_idx)
+        return output
 
     @staticmethod
     def backward(
         ctx,
         v_out_img,
-        v_out_depth,
+        v_out_depth_grad,
         v_out_reg_depth,
         v_out_reg_normal,
-        v_out_alpha
+        v_out_alpha,
+        v_idx = None
         ):
 
         img_height = ctx.img_height
@@ -228,6 +235,7 @@ class _RasterizeGaussians(Function):
             background,
             final_Ts,
             final_idx,
+            out_depth_grad,
         ) = ctx.saved_tensors
 
         if num_intersects < 1:
@@ -258,8 +266,9 @@ class _RasterizeGaussians(Function):
                 background,
                 final_Ts,
                 final_idx,
+                out_depth_grad,
                 v_out_img,
-                v_out_depth,
+                v_out_depth_grad,
                 v_out_alpha,
                 v_out_reg_depth,
                 v_out_reg_normal

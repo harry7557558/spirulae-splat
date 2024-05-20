@@ -258,7 +258,7 @@ __global__ void rasterize_simple_forward(
             float alpha;
             if (!get_alpha(conic_batch[t], xy_opacity_batch[t], p, alpha))
                 continue;
-            alpha = min(0.999f, alpha);
+            // alpha = min(0.999f, alpha);
             const float next_T = T * (1.f - alpha);
 
             int32_t g = id_batch[t];
@@ -269,7 +269,7 @@ __global__ void rasterize_simple_forward(
             pix_out.z = pix_out.z + c.z * vis;
             T = next_T;
             cur_idx = batch_start + t;
-            if (T <= 1e-4f) {
+            if (T <= 1e-3f) {
                 done = true;
                 break;
             }
@@ -304,7 +304,7 @@ __global__ void rasterize_forward(
     float* __restrict__ final_Ts,
     int* __restrict__ final_index,
     float3* __restrict__ out_img,
-    float3* __restrict__ out_depth,
+    float3* __restrict__ out_depth_grad,
     float* __restrict__ out_reg_depth,
     float* __restrict__ out_reg_normal,
     const float3& __restrict__ background
@@ -350,12 +350,13 @@ __global__ void rasterize_forward(
     // designated pixel
     int tr = block.thread_rank();
     float T = 1.f;  // current/total visibility
-    float sum_vis = 0.f;  // sum of visibilities
-    float2 g_bar = {0.f, 0.f};  // sum of "normals"
+    float2 g_sum = {0.f, 0.f};  // sum of "normals"
     float3 pix_out = {0.f, 0.f, 0.f};  // output radiance
-    float depth_out = 0.f;  // output depth
+    float vis_sum = 0.f;  // output alpha
+    float depth_sum = 0.f;  // output depth
     const float2 depth_normal_ref = inside_border ?
         depth_normal_ref_im[pix_id] : make_float2(0.f, 0.f);
+    float reg_depth = 0.f;  // output depth regularizer
     float reg_normal = 0.f;  // output normal regularizer
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
@@ -386,36 +387,36 @@ __global__ void rasterize_forward(
             float alpha;
             if (!get_alpha(conic_batch[t], xy_opacity_batch[t], p, alpha))
                 continue;
-            alpha = min(0.999f, alpha);
+            // alpha = min(0.999f, alpha);
             const float next_T = T * (1.f - alpha);
 
             int32_t g = id_batch[t];
             const float vis = alpha * T;
             const float3 c = colors[g];
             const float3 depth_grad_batch_t = depth_grad_batch[t];
+            const float depth = depth_grad_batch_t.z;
             const float2 g_i = {depth_grad_batch_t.x, depth_grad_batch_t.y};
-            float g_i_norm = hypot(g_i.x, g_i.y) + 1e-6f;
-            float2 n_i = { g_i.x / g_i_norm, g_i.y / g_i_norm };
+            const float g_i_norm = hypot(g_i.x, g_i.y) + 1e-6f;
+            const float2 n_i = { g_i.x / g_i_norm, g_i.y / g_i_norm };
+
             pix_out.x = pix_out.x + c.x * vis;
             pix_out.y = pix_out.y + c.y * vis;
             pix_out.z = pix_out.z + c.z * vis;
-            depth_out = depth_out + depth_grad_batch_t.z * vis;
-            sum_vis += vis;
-            g_bar.x = g_bar.x + vis * g_i.x;
-            g_bar.y = g_bar.y + vis * g_i.y;
+            reg_depth += vis*depth * vis_sum - vis * depth_sum;
             reg_normal += vis * (1.0f - (n_i.x*depth_normal_ref.x+n_i.y*depth_normal_ref.y));
+            vis_sum += vis;
+            depth_sum += vis*depth;
+            g_sum.x = g_sum.x + vis * g_i.x;
+            g_sum.y = g_sum.y + vis * g_i.y;
+
             T = next_T;
             cur_idx = batch_start + t;
-            if (T <= 1e-4f) {
+            if (T <= 1e-3f) {
                 done = true;
                 break;
             }
         }
     }
-
-    // regularization precompute
-    float g_bar_norm = hypot(g_bar.x, g_bar.y) + 1e-6f;
-    float2 n_bar = { g_bar.x / g_bar_norm, g_bar.y / g_bar_norm };
 
     if (inside) {
         // add background
@@ -427,72 +428,11 @@ __global__ void rasterize_forward(
         final_color.y = pix_out.y + T * background.y;
         final_color.z = pix_out.z + T * background.z;
         out_img[pix_id] = final_color;
-        out_depth[pix_id] = {g_bar.x, g_bar.y, depth_out};
+        out_depth_grad[pix_id] = {g_sum.x, g_sum.y, depth_sum};
         out_reg_normal[pix_id] = reg_normal;
-    }
-
-    // calculate regularization weights
-    done = !inside;
-    float reg_depth = 0.f;
-    T = 1.0f;
-    float cur_vis = 0.0f;
-    for (int b = 0; b < num_batches; ++b) {
-        // resync all threads before beginning next batch
-        // end early if entire tile is done
-        if (__syncthreads_count(done) >= block_size) {
-            break;
-        }
-        // each thread fetch 1 gaussian from front to back
-        // index of gaussian to load
-        int batch_start = range.x + block_size * b;
-        int idx = batch_start + tr;
-        if (idx < range.y) {
-            int32_t g_id = gaussian_ids_sorted[idx];
-            id_batch[tr] = g_id;
-            const float2 xy = xys[g_id];
-            const float opac = opacities[g_id];
-            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            conic_batch[tr] = conics[g_id];
-            const float2 depth_grad = depth_grads[g_id];
-            depth_grad_batch[tr] = {depth_grad.x, depth_grad.y, depths[g_id]};
-        }
-        // wait for other threads to collect the gaussians in batch
-        block.sync();
-
-        // process gaussians in the current batch for this pixel
-        int batch_size = min(block_size, range.y - batch_start);
-        for (int t = 0; (t < batch_size) && !done; ++t) {
-            float alpha;
-            if (!get_alpha(conic_batch[t], xy_opacity_batch[t], p, alpha))
-                continue;
-            alpha = min(0.999f, alpha);
-            const float next_T = T * (1.f - alpha);
-
-            const float vis = alpha * T;
-            float cur_vis_next = cur_vis + vis;
-
-            const float3 depth_grad_batch_t = depth_grad_batch[t];
-            const float depth = depth_grad_batch_t.z;
-            const float2 g_i = {depth_grad_batch_t.x, depth_grad_batch_t.y};
-
-            // depth regularization:
-            // 1/2 \sum[i,j] w[i] w[j] |z[j]-z[i]| =
-            // \sum[i] w[i] z[i] ( \sum [j<i] w[j] - \sum[j>i] w[j] )
-            reg_depth += vis * depth * (cur_vis - (sum_vis-cur_vis_next));
-
-            cur_vis = cur_vis_next;
-            T = next_T;
-            cur_idx = batch_start + t;
-            if (T <= 1e-4f) {
-                done = true;
-                break;
-            }
-        }
-    }
-
-    if (inside) {
         out_reg_depth[pix_id] = reg_depth;
     }
+
 }
 
 

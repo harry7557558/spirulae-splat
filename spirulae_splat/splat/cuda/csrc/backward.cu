@@ -35,6 +35,7 @@ __global__ void rasterize_backward_kernel(
     const float3& __restrict__ background,
     const float* __restrict__ final_Ts,
     const int* __restrict__ final_index,
+    const float3* __restrict__ output_depth_grad,
     const float3* __restrict__ v_output,
     const float3* __restrict__ v_output_depth,
     const float* __restrict__ v_output_alpha,
@@ -79,11 +80,14 @@ __global__ void rasterize_backward_kernel(
     __shared__ float3 depth_grad_batch[MAX_BLOCK_SIZE];
 
     // df/d_out for this pixel
+    const float3 out_depth_grad = output_depth_grad[pix_id];
     const float3 v_out = v_output[pix_id];
-    const float3 v_out_depth = v_output_depth[pix_id];
+    const float3 v_out_depth_grad = v_output_depth[pix_id];
     const float v_out_alpha = v_output_alpha[pix_id];
     const float v_out_reg_depth = v_output_reg_depth[pix_id];
     const float v_out_reg_normal = v_output_reg_normal[pix_id];
+    const glm::vec2 v_g_sum = {v_out_depth_grad.x, v_out_depth_grad.y};
+    const float v_depth_sum = v_out_depth_grad.z;
 
     // this is the T AFTER the last gaussian in this pixel
     const float T_final = final_Ts[pix_id];
@@ -95,91 +99,32 @@ __global__ void rasterize_backward_kernel(
     // each thread loads one gaussian at a time before rasterizing
     const int tr = block.thread_rank();
 
-    // depth regularization
-    // https://arxiv.org/pdf/2206.05085
-    float sum_vis = 0.f, sum_vis_z = 0.f;  // sum of visibilities
-
-    // first run through, prepare regularization
-    cg::thread_block_tile<32> warp1 = cg::tiled_partition<32>(block);
-    const int warp_bin_final_1 = cg::reduce(warp1, bin_final, cg::greater<int>());
-    for (int b = 0; b < num_batches; ++b) {
-        // resync all threads before writing next batch of shared mem
-        block.sync();
-
-        // each thread fetch 1 gaussian from back to front
-        // 0 index will be furthest back in batch
-        // index of gaussian to load
-        // batch end is the index of the last gaussian in the batch
-        const int batch_end = range.y - 1 - block_size * b;
-        int batch_size = min(block_size, batch_end + 1 - range.x);
-        const int idx = batch_end - tr;
-        if (idx >= range.x) {
-            int32_t g_id = gaussian_ids_sorted[idx];
-            id_batch[tr] = g_id;
-            const float2 xy = xys[g_id];
-            const float opac = opacities[g_id];
-            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            conic_batch[tr] = conics[g_id];
-            rgbs_batch[tr] = rgbs[g_id];
-            const float2 depth_grad = depth_grads[g_id];
-            depth_grad_batch[tr] = {depth_grad.x, depth_grad.y, depths[g_id]};
-        }
-
-        // wait for other threads to collect the gaussians in batch
-        block.sync();
-
-        // process gaussians in the current batch for this pixel
-        // 0 index is the furthest back gaussian in the batch
-        for (int t = max(0,batch_end - warp_bin_final_1); t < batch_size; ++t) {
-            int valid = inside;
-            if (batch_end - t > bin_final) {
-                valid = 0;
-            }
-            float alpha;
-            float3 conic;
-            float3 xy_opac;
-            if(valid){
-                conic = conic_batch[t];
-                xy_opac = xy_opacity_batch[t];
-                if (!get_alpha(conic, xy_opac, p, alpha))
-                    valid = 0;
-                alpha = min(0.99f, alpha);
-            }
-            // if all threads are inactive in this warp, skip this loop
-            if(!warp1.any(valid)){
-                continue;
-            }
-            //initialize everything to 0, only set if the lane is valid
-            if(valid){
-                // compute the current T for this gaussian
-                const float ra = 1.f / (1.f - alpha);
-                const float next_T = T * ra;
-                const float vis = alpha * next_T;
-                // sum up regularizer
-                const float3 depth_grad = depth_grad_batch[t];
-                sum_vis += vis;
-                sum_vis_z += vis * depth_grad.z;
-                // update
-                T = next_T;
-            }
-        }
-    }
-
-    // regularization precompute
+    // regularization
     const float2 depth_normal_ref = inside_border ?
         depth_normal_ref_im[pix_id] : make_float2(0.f, 0.f);
     glm::vec2 n_bar = {depth_normal_ref.x, depth_normal_ref.y};
+    glm::vec2 v_n_bar = {0.f, 0.f};
 
-    // the contribution from gaussians behind the current one
+    const float vis_sum_final = 1.0f - T_final;
+    const float depth_sum_final = out_depth_grad.z;
+    float vis_sum = vis_sum_final;
+    float depth_sum = depth_sum_final;
+    glm::vec2 g_sum = {out_depth_grad.x, out_depth_grad.y};
+
     float3 buffer = {0.f, 0.f, 0.f};
     float3 buffer_depth = {0.f, 0.f, 0.f};
+    float buffer_depth_reg = 0.f;
     float buffer_normal_reg = 0.f;
+    
+    float v_sum_vis = v_out_alpha;
+
+    glm::vec2 v_g_bar = {v_out_depth_grad.x, v_out_depth_grad.y};
+    float v_depth_out = v_out_depth_grad.z;
 
     // second run through, full gradient calculation
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
     const int warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>());
     T = T_final;
-    float cur_vis = sum_vis, cur_vis_z = sum_vis_z;
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before writing next batch of shared mem
         block.sync();
@@ -221,7 +166,7 @@ __global__ void rasterize_backward_kernel(
                 xy_opac = xy_opacity_batch[t];
                 if (!get_alpha(conic, xy_opac, p, alpha))
                     valid = 0;
-                alpha = min(0.99f, alpha);
+                // alpha = min(0.99f, alpha);
             }
             // if all threads are inactive in this warp, skip this loop
             if(!warp.any(valid)){
@@ -242,40 +187,42 @@ __global__ void rasterize_backward_kernel(
 
                 // update depth regularizer
                 const float3 depth_grad = depth_grad_batch[t];
-                float cur_vis_next = cur_vis - vis;
-                float cur_vis_z_next = cur_vis_z - vis * depth_grad.z;
-                v_depth_grad_local.z = v_out_reg_depth * vis * (cur_vis_next - (sum_vis-cur_vis));
-                float d_depth_d_vis = v_out_reg_depth * (
-                    depth_grad.z * (cur_vis_next - (sum_vis-cur_vis)) -
-                    (cur_vis_z_next - (sum_vis_z-cur_vis_z))
+                const float depth = depth_grad.z;
+                float vis_sum_next = vis_sum - vis;
+                float depth_sum_next = depth_sum - vis*depth;
+                v_depth_grad_local.z = v_out_reg_depth * vis * (vis_sum_next - (vis_sum_final-vis_sum));
+                float reg_depth_i = (
+                    depth * vis_sum_next - depth_sum_next +
+                    (depth_sum_final-depth_sum) - depth * (vis_sum_final-vis_sum)
                 );
-                float v_alpha_depth = d_depth_d_vis * next_T;
 
                 // update normal regularizer
                 glm::vec2 g_i = {depth_grad.x, depth_grad.y};
-                float g_i_norm = max(glm::length(g_i), 1e-2f);
+                float g_i_norm = glm::length(g_i) + 1e-6f;
                 glm::vec2 n_i = g_i / g_i_norm;
-                glm::mat2 J_i = (glm::mat2(1.0) - glm::outerProduct(n_i, n_i)) / g_i_norm;
+                glm::mat2 J_i = (glm::mat2(1.0f) - glm::outerProduct(n_i, n_i)) / g_i_norm;
                 float reg_normal_i = 1.0f - dot(n_i, n_bar);
                 glm::vec2 v_normal_glm = v_out_reg_normal * (-vis) * J_i * n_bar;
                 v_depth_grad_local.x += v_normal_glm.x;
                 v_depth_grad_local.y += v_normal_glm.y;
+                v_n_bar += vis * (-n_i) * v_out_reg_normal;
 
                 // update v_rgb for this gaussian
-                float v_alpha = v_alpha_depth;
                 v_rgb_local = {vis * v_out.x, vis * v_out.y, vis * v_out.z};
-                v_depth_grad_local.x += vis * v_out_depth.x;
-                v_depth_grad_local.y += vis * v_out_depth.y;
-                v_depth_grad_local.z += vis * v_out_depth.z;
+                v_depth_grad_local.x += vis * v_g_sum.x;
+                v_depth_grad_local.y += vis * v_g_sum.y;
+                v_depth_grad_local.z += vis * v_depth_sum;
 
                 const float3 rgb = rgbs_batch[t];
+                float v_alpha = 0.0f;
                 // contribution from this pixel
                 v_alpha += (rgb.x * T - buffer.x) * ra * v_out.x;
                 v_alpha += (rgb.y * T - buffer.y) * ra * v_out.y;
                 v_alpha += (rgb.z * T - buffer.z) * ra * v_out.z;
-                v_alpha += (depth_grad.x * T - buffer_depth.x) * ra * v_out_depth.x;
-                v_alpha += (depth_grad.y * T - buffer_depth.y) * ra * v_out_depth.y;
-                v_alpha += (depth_grad.z * T - buffer_depth.z) * ra * v_out_depth.z;
+                v_alpha += (depth_grad.x * T - buffer_depth.x) * ra * v_g_sum.x;
+                v_alpha += (depth_grad.y * T - buffer_depth.y) * ra * v_g_sum.y;
+                v_alpha += (depth_grad.z * T - buffer_depth.z) * ra * v_depth_sum;
+                v_alpha += (reg_depth_i * T - buffer_depth_reg) * ra * v_out_reg_depth;
                 v_alpha += (reg_normal_i * T - buffer_normal_reg) * ra * v_out_reg_normal;
 
                 v_alpha += T_final * ra * v_out_alpha;
@@ -290,6 +237,7 @@ __global__ void rasterize_backward_kernel(
                 buffer_depth.x += depth_grad.x * vis;
                 buffer_depth.y += depth_grad.y * vis;
                 buffer_depth.z += depth_grad.z * vis;
+                buffer_depth_reg += reg_depth_i * vis;
                 buffer_normal_reg += reg_normal_i * vis;
 
                 get_alpha_grad(
@@ -300,8 +248,8 @@ __global__ void rasterize_backward_kernel(
                 v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
 
                 T = next_T;
-                cur_vis = cur_vis_next;
-                cur_vis_z = cur_vis_z_next;
+                vis_sum = vis_sum_next;
+                depth_sum = depth_sum_next;
             }
             warpSum3(v_rgb_local, warp);
             warpSum3(v_conic_local, warp);
@@ -338,6 +286,10 @@ __global__ void rasterize_backward_kernel(
                 atomicAdd(v_depth_grad_ptr + 2*g + 1, v_depth_grad_local.y);
             }
         }
+    }
+
+    if (inside) {
+        v_depth_normal_ref[pix_id] = {v_n_bar.x, v_n_bar.y};
     }
 }
 
@@ -443,7 +395,7 @@ __global__ void rasterize_simple_backward_kernel(
                 xy_opac = xy_opacity_batch[t];
                 if (!get_alpha(conic, xy_opac, p, alpha))
                     valid = 0;
-                alpha = min(0.99f, alpha);
+                //alpha = min(0.99f, alpha);
             }
             // if all threads are inactive in this warp, skip this loop
             if(!warp.any(valid)){
@@ -467,9 +419,9 @@ __global__ void rasterize_simple_backward_kernel(
 
                 const float3 rgb = rgbs_batch[t];
                 // contribution from this pixel
-                v_alpha += (rgb.x * T - buffer.x * ra) * v_out.x;
-                v_alpha += (rgb.y * T - buffer.y * ra) * v_out.y;
-                v_alpha += (rgb.z * T - buffer.z * ra) * v_out.z;
+                v_alpha += (rgb.x * T - buffer.x) * ra * v_out.x;
+                v_alpha += (rgb.y * T - buffer.y) * ra * v_out.y;
+                v_alpha += (rgb.z * T - buffer.z) * ra * v_out.z;
 
                 v_alpha += T_final * ra * v_out_alpha;
                 // contribution from background pixel
