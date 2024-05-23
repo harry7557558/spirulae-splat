@@ -326,7 +326,6 @@ __global__ void rasterize_forward(
     // return if out of bounds
     // keep not rasterizing threads around for reading data
     bool inside = (i < img_size.y && j < img_size.x);
-    bool inside_border = (i > 0 && i+1 < img_size.y && j > 0 && j+1 < img_size.x);
     bool done = !inside;
 
     // have all threads in tile process the same gaussians in batches
@@ -354,7 +353,7 @@ __global__ void rasterize_forward(
     float3 pix_out = {0.f, 0.f, 0.f};  // output radiance
     float vis_sum = 0.f;  // output alpha
     float depth_sum = 0.f;  // output depth
-    const float2 depth_normal_ref = inside_border ?
+    const float2 depth_normal_ref = inside ?
         depth_normal_ref_im[pix_id] : make_float2(0.f, 0.f);
     float reg_depth = 0.f;  // output depth regularizer
     float reg_normal = 0.f;  // output normal regularizer

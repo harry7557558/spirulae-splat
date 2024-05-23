@@ -317,7 +317,7 @@ def compute_cov2d_bounds(cov2d_mat: Tensor):
     b = (cov2d[..., 0, 0] + cov2d[..., 1, 1]) / 2  # (...,)
     v1 = b + torch.sqrt(torch.clamp(b**2 - det, min=0.1))  # (...,)
     v2 = b - torch.sqrt(torch.clamp(b**2 - det, min=0.1))  # (...,)
-    radius = torch.ceil(2.0 * torch.sqrt(torch.max(v1, v2)))  # (...,)
+    radius = torch.ceil(1.0 * torch.sqrt(torch.max(v1, v2)))  # (...,)
     radius_all = torch.zeros(*cov2d_mat.shape[:-2], device=cov2d_mat.device)
     conic_all = torch.zeros(*cov2d_mat.shape[:-2], 3, device=cov2d_mat.device)
     radius_all[valid] = radius
@@ -510,10 +510,8 @@ def get_tile_bin_edges(num_intersects, isect_ids_sorted, tile_bounds):
 
 
 def visibility_kernel(r2):
-    r = torch.sqrt(torch.fmax(r2, torch.zeros_like(r2)))
-    w1 = ( 1.0-1.5*r*r*(1.0-0.5*r) ) * (r < 1.0)
-    w2 = ( 0.25*(2.0-r)**3 ) * ((r >= 1.0) & (r < 2.0))
-    return w1 + w2
+    # return (1.0-r2) * (1.0-r2) * (r2 < 1.0)
+    return (1.0-r2) * (r2 < 1.0)
 
 def get_alpha(conic, xy_opac, p) -> Tuple[Tensor, bool]:
     opac = xy_opac[2]

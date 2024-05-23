@@ -64,7 +64,6 @@ __global__ void rasterize_backward_kernel(
 
     // keep not rasterizing threads around for reading data
     const bool inside = (i < img_size.y && j < img_size.x);
-    const bool inside_border = (i > 0 && i+1 < img_size.y && j > 0 && j+1 < img_size.x);
 
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
@@ -100,7 +99,7 @@ __global__ void rasterize_backward_kernel(
     const int tr = block.thread_rank();
 
     // regularization
-    const float2 depth_normal_ref = inside_border ?
+    const float2 depth_normal_ref = inside ?
         depth_normal_ref_im[pix_id] : make_float2(0.f, 0.f);
     glm::vec2 n_bar = {depth_normal_ref.x, depth_normal_ref.y};
     glm::vec2 v_n_bar = {0.f, 0.f};

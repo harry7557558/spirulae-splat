@@ -14,26 +14,19 @@ inline __device__ float safe_denom(float x, float e) {
 
 // "Gaussian" kernel
 inline __device__ float visibility_kernel(const float r2) {
-    float r = sqrtf(max(r2,0.0f));
-    return
-        r < 1.0f ? 1.0f-1.5f*r*r*(1.0f-0.5f*r) :
-        r < 2.0f ? 0.25f*(2.0f-r)*(2.0f-r)*(2.0f-r) :
-        0.0f;
+    // return r2 > 1.0f ? 0.0f : (1.0f-r2) * (1.0f-r2);
+    return r2 > 1.0f ? 0.0f : 1.0f-r2;
 }
 
 // gradient of "Gaussian" kernel
 inline __device__ float visibility_kernel_grad(const float r2) {
-    float r = sqrtf(max(r2,0.0f));
-    float v_r =
-        r < 1.0f ? 0.75f*r*(3.0f*r-4.0f) :
-        r < 2.0f ? -0.75f*(2.0f-r)*(2.0f-r) :
-        0.0f;
-    return r==0.0f ? 0.0f : 0.5f*v_r/r;
+    // return r2 > 1.0f ? 0.0f : 2.0f * (r2-1.0f);
+    return r2 > 1.0f ? 0.0f : -1.0f;
 }
 
 // radius of "Gaussian" kernel
 inline __device__ float visibility_kernel_radius() {
-    return 2.0f;
+    return 1.0f;
 }
 
 #else
