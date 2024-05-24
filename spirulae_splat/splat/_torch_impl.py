@@ -232,13 +232,13 @@ def quat_to_rotmat(quat: Tensor) -> Tensor:
     return normalized_quat_to_rotmat(F.normalize(quat, dim=-1))
 
 
-def scale_rot_to_cov3d(scale: Tensor, glob_scale: float, quat: Tensor) -> Tensor:
+def scale_rot_to_cov3d(scale: Tensor, quat: Tensor) -> Tensor:
     assert scale.shape[-1] == 2, scale.shape
     assert quat.shape[-1] == 4, quat.shape
     assert scale.shape[:-1] == quat.shape[:-1], (scale.shape, quat.shape)
     scale = torch.concat((scale, torch.zeros_like(scale[:,0:1])), axis=1)
     R = normalized_quat_to_rotmat(quat)  # (..., 3, 3)
-    M = R * glob_scale * scale[..., None, :]  # (..., 3, 3)
+    M = R * scale[..., None, :]  # (..., 3, 3)
     # TODO: save upper right because symmetric
     return M @ M.transpose(-1, -2)  # (..., 3, 3)
 
@@ -388,7 +388,6 @@ def projected_depth_grad(viewmat, fx, fy, quats, p_view):
 def project_gaussians_forward(
     means3d,
     scales,
-    glob_scale,
     quats,
     viewmat,
     intrins,
@@ -405,7 +404,7 @@ def project_gaussians_forward(
     tan_fovx = 0.5 * img_size[0] / fx
     tan_fovy = 0.5 * img_size[1] / fy
     p_view, is_close = clip_near_plane(means3d, viewmat, clip_thresh)
-    cov3d = scale_rot_to_cov3d(scales, glob_scale, quats)
+    cov3d = scale_rot_to_cov3d(scales, quats)
     cov2d, compensation = project_cov3d_ewa(
         means3d, cov3d, viewmat, fx, fy, tan_fovx, tan_fovy
     )

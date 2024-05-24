@@ -50,6 +50,7 @@ __global__ void rasterize_backward_kernel(
     float* __restrict__ v_opacity,
     float2* __restrict__ v_depth_normal_ref
 ) {
+    #if 0
     auto block = cg::this_thread_block();
     int32_t tile_id =
         block.group_index().y * tile_bounds.x + block.group_index().x;
@@ -290,6 +291,8 @@ __global__ void rasterize_backward_kernel(
     if (inside) {
         v_depth_normal_ref[pix_id] = {v_n_bar.x, v_n_bar.y};
     }
+    #endif
+
 }
 
 __global__ void rasterize_simple_backward_kernel(
@@ -298,20 +301,22 @@ __global__ void rasterize_simple_backward_kernel(
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float3* __restrict__ rgbs,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ orientations,
+    const float3* __restrict__ colors,
     const float* __restrict__ opacities,
     const float3& __restrict__ background,
-    const float* __restrict__ final_Ts,
     const int* __restrict__ final_index,
+    const float* __restrict__ output_alpha,
     const float3* __restrict__ v_output,
     const float* __restrict__ v_output_alpha,
-    float2* __restrict__ v_xy,
-    float2* __restrict__ v_xy_abs,
-    float3* __restrict__ v_conic,
-    float3* __restrict__ v_rgb,
-    float* __restrict__ v_opacity
+    float3* __restrict__ v_positions,
+    float2* __restrict__ v_positions_xy_abs,
+    glm::mat3* __restrict__ v_orientations,
+    float3* __restrict__ v_colors,
+    float* __restrict__ v_opacities
 ) {
+    #if 0
     auto block = cg::this_thread_block();
     int32_t tile_id =
         block.group_index().y * tile_bounds.x + block.group_index().x;
@@ -328,7 +333,7 @@ __global__ void rasterize_simple_backward_kernel(
     const bool inside = (i < img_size.y && j < img_size.x);
 
     // this is the T AFTER the last gaussian in this pixel
-    float T_final = final_Ts[pix_id];
+    float T_final = 1.0f-output_alpha[pix_id];
     float T = T_final;
     // the contribution from gaussians behind the current one
     float3 buffer = {0.f, 0.f, 0.f};
@@ -374,7 +379,7 @@ __global__ void rasterize_simple_backward_kernel(
             const float opac = opacities[g_id];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[g_id];
-            rgbs_batch[tr] = rgbs[g_id];
+            rgbs_batch[tr] = colors[g_id];
         }
         // wait for other threads to collect the gaussians in batch
         block.sync();
@@ -448,7 +453,7 @@ __global__ void rasterize_simple_backward_kernel(
             warpSum(v_opacity_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t];
-                float* v_rgb_ptr = (float*)(v_rgb);
+                float* v_rgb_ptr = (float*)(v_colors);
                 atomicAdd(v_rgb_ptr + 3*g + 0, v_rgb_local.x);
                 atomicAdd(v_rgb_ptr + 3*g + 1, v_rgb_local.y);
                 atomicAdd(v_rgb_ptr + 3*g + 2, v_rgb_local.z);
@@ -466,46 +471,39 @@ __global__ void rasterize_simple_backward_kernel(
                 atomicAdd(v_xy_abs_ptr + 2*g + 0, v_xy_abs_local.x);
                 atomicAdd(v_xy_abs_ptr + 2*g + 1, v_xy_abs_local.y);
                 
-                atomicAdd(v_opacity + g, v_opacity_local);
+                atomicAdd(v_opacities + g, v_opacity_local);
             }
         }
     }
+    #endif
 }
 
 __global__ void project_gaussians_backward_kernel(
     const int num_points,
     const float3* __restrict__ means3d,
     const float2* __restrict__ scales,
-    const float glob_scale,
     const float4* __restrict__ quats,
     const float* __restrict__ viewmat,
     const float4 intrins,
-    const dim3 img_size,
-    const float* __restrict__ cov3d,
-    const int* __restrict__ radii,
-    const float3* __restrict__ conics,
-    const float* __restrict__ compensation,
-    const float2* __restrict__ v_xy,
-    const float* __restrict__ v_depth,
-    const float2* __restrict__ v_depth_grad,
-    const float3* __restrict__ v_conic,
-    const float* __restrict__ v_compensation,
-    float3* __restrict__ v_cov2d,
-    float* __restrict__ v_cov3d,
-    float3* __restrict__ v_mean3d,
-    float2* __restrict__ v_scale,
-    float4* __restrict__ v_quat
+    const int2* __restrict__ radii,
+    const float3* __restrict__ v_positions,
+    const glm::mat3* __restrict__ v_orientations,
+    const float2* __restrict__ v_depth_grads,
+    float3* __restrict__ v_means3d,
+    float2* __restrict__ v_scales,
+    float4* __restrict__ v_quats
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
-    if (idx >= num_points || radii[idx] <= 0) {
+    if (idx >= num_points || min(radii[idx].x,radii[idx].y) <= 0) {
         return;
     }
+#if 0
     float3 p_world = means3d[idx];
     float fx = intrins.x;
     float fy = intrins.y;
     float3 p_view = transform_4x3(viewmat, p_world);
-    // get v_mean3d from v_xy
-    v_mean3d[idx] = transform_4x3_rot_only_transposed(
+    // get v_means3d from v_xy
+    v_means3d[idx] = transform_4x3_rot_only_transposed(
         viewmat,
         project_pix_vjp({fx, fy}, p_view, v_xy[idx]));
 
@@ -513,14 +511,14 @@ __global__ void project_gaussians_backward_kernel(
     // z = viemwat[8] * mean3d.x + viewmat[9] * mean3d.y + viewmat[10] *
     // mean3d.z + viewmat[11]
     float v_z = v_depth[idx];
-    v_mean3d[idx].x += viewmat[8] * v_z;
-    v_mean3d[idx].y += viewmat[9] * v_z;
-    v_mean3d[idx].z += viewmat[10] * v_z;
+    v_means3d[idx].x += viewmat[8] * v_z;
+    v_means3d[idx].y += viewmat[9] * v_z;
+    v_means3d[idx].z += viewmat[10] * v_z;
 
     // get v_cov2d
     cov2d_to_conic_vjp(conics[idx], v_conic[idx], v_cov2d[idx]);
     cov2d_to_compensation_vjp(compensation[idx], conics[idx], v_compensation[idx], v_cov2d[idx]);
-    // get v_cov3d (and v_mean3d contribution)
+    // get v_cov3d (and v_means3d contribution)
     project_cov3d_ewa_vjp(
         p_world,
         &(cov3d[6 * idx]),
@@ -528,16 +526,15 @@ __global__ void project_gaussians_backward_kernel(
         fx,
         fy,
         v_cov2d[idx],
-        v_mean3d[idx],
+        v_means3d[idx],
         &(v_cov3d[6 * idx])
     );
-    // get v_scale and v_quat
+    // get v_scales and v_quat
     scale_rot_to_cov3d_vjp(
         scales[idx],
-        glob_scale,
         quats[idx],
         &(v_cov3d[6 * idx]),
-        v_scale[idx],
+        v_scales[idx],
         v_quat[idx]
     );
 
@@ -546,15 +543,16 @@ __global__ void project_gaussians_backward_kernel(
     float3 v_p_view = {0.f, 0.f, 0.f};
     projected_depth_grad_vjp(
         viewmat, fx, fy, quats[idx], p_view,
-        v_depth_grad[idx], &v_quat_dg, &v_p_view);
+        v_depth_grads[idx], &v_quat_dg, &v_p_view);
     v_quat[idx].x += v_quat_dg.x;
     v_quat[idx].y += v_quat_dg.y;
     v_quat[idx].z += v_quat_dg.z;
     v_quat[idx].w += v_quat_dg.w;
-    float3 v_p_world = transform_4x3_vjp(viewmat, v_p_view);
-    v_mean3d[idx].x += v_p_world.x;
-    v_mean3d[idx].y += v_p_world.y;
-    v_mean3d[idx].z += v_p_world.z;
+    float3 v_p_world = transform_4x3_rot_only_transposed(viewmat, v_p_view);
+    v_means3d[idx].x += v_p_world.x;
+    v_means3d[idx].y += v_p_world.y;
+    v_means3d[idx].z += v_p_world.z;
+#endif
 }
 
 // output space: 2D covariance, input space: cov3d
@@ -642,7 +640,6 @@ __device__ void project_cov3d_ewa_vjp(
 // compute vJp for scale and rotation
 __device__ void scale_rot_to_cov3d_vjp(
     const float2 scale,
-    const float glob_scale,
     const float4 quat,
     const float* __restrict__ v_cov3d,
     float2& __restrict__ v_scale,
@@ -663,17 +660,16 @@ __device__ void scale_rot_to_cov3d_vjp(
         v_cov3d[5]
     );
     glm::mat3 R = quat_to_rotmat(quat);
-    glm::mat3 S = scale_to_mat(
-        { scale.x, scale.y, 0.0f }, glob_scale);
+    glm::mat3 S = scale_to_mat({ scale.x, scale.y, 0.0f });
     glm::mat3 M = R * S;
     // https://math.stackexchange.com/a/3850121
     // for D = W * X, G = df/dD
     // df/dW = G * XT, df/dX = WT * G
     glm::mat3 v_M = 2.f * v_V * M;
     // glm::mat3 v_S = glm::transpose(R) * v_M;
-    v_scale.x = (float)glm::dot(R[0], v_M[0]) * glob_scale;
-    v_scale.y = (float)glm::dot(R[1], v_M[1]) * glob_scale;
-    // v_scale.z = (float)glm::dot(R[2], v_M[2]) * glob_scale;
+    v_scale.x = (float)glm::dot(R[0], v_M[0]);
+    v_scale.y = (float)glm::dot(R[1], v_M[1]);
+    // v_scale.z = (float)glm::dot(R[2], v_M[2]);
 
     glm::mat3 v_R = v_M * S;
     v_quat = quat_to_rotmat_vjp(quat, v_R);

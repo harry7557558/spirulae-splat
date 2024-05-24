@@ -13,18 +13,14 @@ import spirulae_splat.splat.cuda as _C
 def project_gaussians(
     means3d: Float[Tensor, "*batch 3"],
     scales: Float[Tensor, "*batch 2"],
-    glob_scale: float,
     quats: Float[Tensor, "*batch 4"],
     viewmat: Float[Tensor, "4 4"],
-    fx: float,
-    fy: float,
-    cx: float,
-    cy: float,
+    intrins: Tuple[Float, Float, Float, Float],
     img_height: int,
     img_width: int,
     block_width: int,
     clip_thresh: float = 0.01,
-) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
     """This function projects 3D gaussians to 2D using the EWA splatting method for gaussian splatting.
 
     Note:
@@ -33,7 +29,6 @@ def project_gaussians(
     Args:
        means3d (Tensor): xyzs of gaussians.
        scales (Tensor): scales of the gaussians.
-       glob_scale (float): A global scaling factor applied to the scene.
        quats (Tensor): rotations in normalized quaternion [w,x,y,z] format.
        viewmat (Tensor): view matrix for rendering.
        fx (float): focal length x.
@@ -62,15 +57,10 @@ def project_gaussians(
     return _ProjectGaussians.apply(
         means3d.contiguous(),
         scales.contiguous(),
-        glob_scale,
         quats.contiguous(),
         viewmat.contiguous(),
-        fx,
-        fy,
-        cx,
-        cy,
-        img_height,
-        img_width,
+        intrins,
+        img_height, img_width,
         block_width,
         clip_thresh,
     )
@@ -84,13 +74,9 @@ class _ProjectGaussians(Function):
         ctx,
         means3d: Float[Tensor, "*batch 3"],
         scales: Float[Tensor, "*batch 2"],
-        glob_scale: float,
         quats: Float[Tensor, "*batch 4"],
         viewmat: Float[Tensor, "4 4"],
-        fx: float,
-        fy: float,
-        cx: float,
-        cy: float,
+        intrins: Tuple[Float, Float, Float, Float],
         img_height: int,
         img_width: int,
         block_width: int,
@@ -101,27 +87,17 @@ class _ProjectGaussians(Function):
             raise ValueError(f"Invalid shape for means3d: {means3d.shape}")
 
         (
-            cov3d,
-            xys,
-            depths,
+            bounds, num_tiles_hit,
+            positions, axes_u, axes_v,
             depth_grads,
-            radii,
-            conics,
-            compensation,
-            num_tiles_hit,
         ) = _C.project_gaussians_forward(
             num_points,
             means3d,
             scales,
-            glob_scale,
             quats,
             viewmat,
-            fx,
-            fy,
-            cx,
-            cy,
-            img_height,
-            img_width,
+            *intrins,
+            img_height, img_width,
             block_width,
             clip_thresh,
         )
@@ -130,47 +106,35 @@ class _ProjectGaussians(Function):
         ctx.img_height = img_height
         ctx.img_width = img_width
         ctx.num_points = num_points
-        ctx.glob_scale = glob_scale
-        ctx.fx = fx
-        ctx.fy = fy
-        ctx.cx = cx
-        ctx.cy = cy
+        ctx.intrins = intrins
 
         # Save tensors.
         ctx.save_for_backward(
-            means3d,
-            scales,
-            quats,
+            means3d, scales, quats,
             viewmat,
-            cov3d,
-            radii,
-            conics,
-            compensation,
+            bounds, num_tiles_hit,
+            positions, axes_u, axes_v,
+            depth_grads,
         )
 
-        return (xys, depths, depth_grads, radii, conics, compensation, num_tiles_hit, cov3d)
+        return (positions, axes_u, axes_v, depth_grads, bounds, num_tiles_hit)
 
     @staticmethod
     def backward(
         ctx,
-        v_xys,
-        v_depths,
+        v_positions, v_axes_u, v_axes_v,
         v_depth_grads,
-        v_radii,
-        v_conics,
-        v_compensation,
-        v_num_tiles_hit,
-        v_cov3d,
+        v_bounds, v_num_tiles_hit,
     ):
+        return (*([None]*10),)
+
+
         (
-            means3d,
-            scales,
-            quats,
+            means3d, scales, quats,
             viewmat,
-            cov3d,
-            radii,
-            conics,
-            compensation,
+            bounds, num_tiles_hit,
+            positions, axes_u, axes_v,
+            depth_grads,
         ) = ctx.saved_tensors
 
         # print('v_depth_grads', torch.abs(v_depth_grads).mean().item())
@@ -179,13 +143,9 @@ class _ProjectGaussians(Function):
             ctx.num_points,
             means3d,
             scales,
-            ctx.glob_scale,
             quats,
             viewmat,
-            ctx.fx,
-            ctx.fy,
-            ctx.cx,
-            ctx.cy,
+            *ctx.intrins,
             ctx.img_height,
             ctx.img_width,
             cov3d,
@@ -242,8 +202,6 @@ class _ProjectGaussians(Function):
             v_mean3d,
             # scales: Float[Tensor, "*batch 2"],
             v_scale,
-            # glob_scale: float,
-            None,
             # quats: Float[Tensor, "*batch 4"],
             v_quat,
             # viewmat: Float[Tensor, "4 4"],

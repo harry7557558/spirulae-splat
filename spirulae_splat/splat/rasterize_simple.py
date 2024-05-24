@@ -17,13 +17,14 @@ RETURN_IDX = False
 
 
 def rasterize_gaussians_simple(
-    xys: Float[Tensor, "*batch 2"],
-    depths: Float[Tensor, "*batch 1"],
-    radii: Float[Tensor, "*batch 1"],
-    conics: Float[Tensor, "*batch 3"],
-    num_tiles_hit: Int[Tensor, "*batch 1"],
+    positions: Float[Tensor, "*batch 3"],
+    axes_u: Float[Tensor, "*batch 3"],
+    axes_v: Float[Tensor, "*batch 3"],
     colors: Float[Tensor, "*batch channels"],
-    opacity: Float[Tensor, "*batch 1"],
+    opacities: Float[Tensor, "*batch 1"],
+    bounds: Int[Tensor, "*batch 4"],
+    num_tiles_hit: Int[Tensor, "*batch 1"],
+    intrins: Tuple[float, float, float, float],
     img_height: int,
     img_width: int,
     block_width: int,
@@ -67,22 +68,22 @@ def rasterize_gaussians_simple(
             colors.shape[-1], dtype=torch.float32, device=colors.device
         )
 
-    if xys.ndimension() != 2 or xys.size(1) != 2:
-        raise ValueError("xys must have dimensions (N, 2)")
+    if positions.ndimension() != 2 or positions.size(1) != 3:
+        raise ValueError("positions must have dimensions (N, 3)")
 
     if colors.ndimension() != 2:
         raise ValueError("colors must have dimensions (N, D)")
 
     return _RasterizeGaussiansSimple.apply(
-        xys.contiguous(),
-        depths.contiguous(),
-        radii.contiguous(),
-        conics.contiguous(),
-        num_tiles_hit.contiguous(),
+        positions.contiguous(),
+        axes_u.contiguous(),
+        axes_v.contiguous(),
         colors.contiguous(),
-        opacity.contiguous(),
-        img_height,
-        img_width,
+        opacities.contiguous(),
+        bounds.contiguous(),
+        num_tiles_hit.contiguous(),
+        intrins,
+        img_height, img_width,
         block_width,
         background.contiguous(),
     )
@@ -94,19 +95,20 @@ class _RasterizeGaussiansSimple(Function):
     @staticmethod
     def forward(
         ctx,
-        xys: Float[Tensor, "*batch 2"],
-        depths: Float[Tensor, "*batch 1"],
-        radii: Float[Tensor, "*batch 1"],
-        conics: Float[Tensor, "*batch 3"],
-        num_tiles_hit: Int[Tensor, "*batch 1"],
+        positions: Float[Tensor, "*batch 3"],
+        axes_u: Float[Tensor, "*batch 3"],
+        axes_v: Float[Tensor, "*batch 3"],
         colors: Float[Tensor, "*batch channels"],
-        opacity: Float[Tensor, "*batch 1"],
+        opacities: Float[Tensor, "*batch 1"],
+        bounds: Int[Tensor, "*batch 4"],
+        num_tiles_hit: Int[Tensor, "*batch 1"],
+        intrins: Tuple[float, float, float, float],
         img_height: int,
         img_width: int,
         block_width: int,
         background: Float[Tensor, "channels"],
     ) -> Tensor:
-        num_points = xys.size(0)
+        num_points = positions.size(0)
         tile_bounds = (
             (img_width + block_width - 1) // block_width,
             (img_height + block_width - 1) // block_width,
@@ -114,18 +116,19 @@ class _RasterizeGaussiansSimple(Function):
         )
         block = (block_width, block_width, 1)
         img_size = (img_width, img_height, 1)
+        device = positions.device
 
         num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_tiles_hit)
 
         if num_intersects < 1:
             out_img = (
-                torch.ones(img_height, img_width, colors.shape[-1], device=xys.device)
+                torch.ones(img_height, img_width, colors.shape[-1], device=device)
                 * background
             )
-            gaussian_ids_sorted = torch.zeros(0, 1, device=xys.device)
-            tile_bins = torch.zeros(0, 2, device=xys.device)
-            final_Ts = torch.zeros(img_height, img_width, device=xys.device)
-            final_idx = torch.zeros(img_height, img_width, device=xys.device)
+            gaussian_ids_sorted = torch.zeros(0, 1, device=device)
+            tile_bins = torch.zeros(0, 2, device=device)
+            final_idx = torch.zeros(img_height, img_width, device=device)
+            out_alpha = torch.ones(img_height, img_width, device=device)
         else:
             (
                 isect_ids_unsorted,
@@ -136,24 +139,19 @@ class _RasterizeGaussiansSimple(Function):
             ) = bin_and_sort_gaussians(
                 num_points,
                 num_intersects,
-                xys,
-                depths,
-                radii,
+                positions,
+                bounds,
                 cum_tiles_hit,
                 tile_bounds,
                 block_width,
             )
 
-            out_img, final_Ts, final_idx = _C.rasterize_simple_forward(
-                tile_bounds,
-                block,
-                img_size,
-                gaussian_ids_sorted,
-                tile_bins,
-                xys,
-                conics,
-                colors,
-                opacity,
+            final_idx, out_img, out_alpha = _C.rasterize_simple_forward(
+                tile_bounds, block, img_size,
+                *intrins,
+                gaussian_ids_sorted, tile_bins,
+                positions, axes_u, axes_v,
+                colors, opacities,
                 background,
             )
 
@@ -162,38 +160,34 @@ class _RasterizeGaussiansSimple(Function):
         ctx.num_intersects = num_intersects
         ctx.block_width = block_width
         ctx.save_for_backward(
-            gaussian_ids_sorted,
-            tile_bins,
-            xys,
-            conics,
-            colors,
-            opacity,
+            intrins,
+            gaussian_ids_sorted, tile_bins,
+            positions, axes_u, axes_v,
+            colors, opacities,
             background,
-            final_Ts,
-            final_idx,
+            final_idx, out_alpha,
         )
 
-        out_alpha = 1 - final_Ts
         if RETURN_IDX:
             return out_img, out_alpha, final_idx
         return out_img, out_alpha
 
     @staticmethod
     def backward(ctx, v_out_img, v_out_alpha, v_idx=None):
+        return (*([None]*14),)
+
         img_height = ctx.img_height
         img_width = ctx.img_width
         num_intersects = ctx.num_intersects
 
         (
-            gaussian_ids_sorted,
-            tile_bins,
-            xys,
-            conics,
-            colors,
-            opacity,
+            intrins,
+            gaussian_ids_sorted, tile_bins,
+            positions, axes_u, axes_v,
+            colors, opacities,
             background,
-            final_Ts,
             final_idx,
+            out_alpha,
         ) = ctx.saved_tensors
 
         if num_intersects < 1:

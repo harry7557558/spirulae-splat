@@ -32,7 +32,6 @@ def test_rasterize_simple():
 
     means3d = torch.randn((num_points, 3), device=device)
     scales = torch.exp(torch.randn((num_points, 2), device=device))
-    glob_scale = 0.1
     quats = torch.randn((num_points, 4), device=device)
     quats /= torch.linalg.norm(quats, dim=-1, keepdim=True)
 
@@ -60,7 +59,6 @@ def test_rasterize_simple():
     params = project_gaussians(
         means3d,
         scales,
-        glob_scale,
         quats,
         viewmat,
         fx, fy, cx, cy,

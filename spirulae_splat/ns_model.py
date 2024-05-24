@@ -152,6 +152,8 @@ class SpirulaeModelConfig(ModelConfig):
     """stop splitting at this step"""
     sh_degree: int = 3
     """maximum degree of spherical harmonics to use"""
+    max_opacity: float = 0.995
+    """maximum opacity of a gaussian, prevent numerical instability during backward"""
     use_scale_regularization: bool = True
     """If enabled, a scale regularization introduced in PhysGauss (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians."""
     max_gauss_ratio: float = 5.0
@@ -822,47 +824,45 @@ class SpirulaeModel(Model):
         # print(self.config.sh_degree, rgbs.shape)
 
         BLOCK_WIDTH = 16  # this controls the tile size of rasterization, 16 is a good default
-        self.xys, depths, depth_grads, self.radii, conics, comp, num_tiles_hit, cov3d = project_gaussians(  # type: ignore
+        intrins = (camera.fx.item(), camera.fy.item(), cx, cy)
+        (
+            positions, axes_u, axes_v,
+            depth_grads,
+            bounds, num_tiles_hit
+        ) = project_gaussians(  # type: ignore
             means_crop,
             torch.exp(scales_crop),
-            1,
             quats_crop,
             viewmat.squeeze()[:3, :],
-            camera.fx.item(),
-            camera.fy.item(),
-            cx,
-            cy,
-            H,
-            W,
+            intrins,
+            H, W,
             BLOCK_WIDTH,
         )  # type: ignore
+        def print_tensor(x, axis=0):
+            print(x.shape, x.dtype,
+                  torch.amin(x, axis=axis).detach().cpu().numpy(),
+                  torch.amax(x, axis=axis).detach().cpu().numpy())
+        # print()
+        # print_tensor(positions)
+        # print_tensor(axes_u)
+        # print_tensor(axes_v)
+        # print_tensor(bounds)
+        # print_tensor(num_tiles_hit)
 
         # rescale the camera back to original dimensions before returning
         camera.rescale_output_resolution(camera_downscale)
 
-        if (self.radii).sum() == 0:
-            return self.get_empty_outputs(W, H, background)
-
         assert (num_tiles_hit > 0).any()  # type: ignore
 
-        # apply the compensation of screen space blurring to gaussians
-        if self.config.rasterize_mode == "antialiased":
-            opacities = torch.sigmoid(opacities_crop) * comp[:, None]
-        elif self.config.rasterize_mode == "classic":
-            opacities = torch.sigmoid(opacities_crop)
-        else:
-            raise ValueError("Unknown rasterize_mode: %s", self.config.rasterize_mode)
+        opacities = self.config.max_opacity * torch.sigmoid(opacities_crop)
 
-        # compute reference gradient
         depth_im_ref, alpha_ref = rasterize_gaussians_simple(
-            self.xys,
-            depths,
-            self.radii,
-            conics,
-            num_tiles_hit,  # type: ignore
-            torch.concatenate((depth_grads, depths[...,None]), dim=1),
+            positions, axes_u, axes_v,
+            torch.concatenate((depth_grads, positions[...,2:]), dim=1),
+            # rgbs,
             opacities,
-            H, W, BLOCK_WIDTH
+            bounds, num_tiles_hit,
+            intrins, H, W, BLOCK_WIDTH
         )
         alpha_ref = alpha_ref[..., None]
         depth_grad_ref, depth_ref = depth_im_ref[...,0:2], depth_im_ref[...,2:3]
@@ -890,24 +890,18 @@ class SpirulaeModel(Model):
 
         # main rasterization
         (
-            rgb,
-            depth_im,
-            reg_depth,
-            reg_normal,
+            rgb, depth_im,
+            reg_depth, reg_normal,
             alpha
         ) = rasterize_gaussians(  # type: ignore
-            self.xys,
-            depths,
-            depth_grads,
-            self.radii,
-            conics,
-            num_tiles_hit,  # type: ignore
-            rgbs,
-            opacities,
-            depth_normal_grad_ref_normalized,
-            H, W, BLOCK_WIDTH,
-            background=background
+            positions, axes_u, axes_v,
+            rgbs, opacities,
+            depth_grads, depth_normal_grad_ref_normalized,
+            bounds, num_tiles_hit,
+            intrins, H, W, BLOCK_WIDTH,
+            background
         )  # type: ignore
+        # print_tensor(reg_depth, (0,1))
         alpha = alpha[..., None]
         rgb = torch.clamp(rgb, max=1.0)  # type: ignore
         depth_grad_im, depth_im = depth_im[...,0:2], depth_im[...,2:3]

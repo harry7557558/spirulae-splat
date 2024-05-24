@@ -14,105 +14,82 @@ __global__ void project_gaussians_forward_kernel(
     const int num_points,
     const float3* __restrict__ means3d,
     const float2* __restrict__ scales,
-    const float glob_scale,
     const float4* __restrict__ quats,
     const float* __restrict__ viewmat,
     const float4 intrins,
-    const dim3 img_size,
     const dim3 tile_bounds,
     const unsigned block_width,
     const float clip_thresh,
-    float* __restrict__ covs3d,
-    float2* __restrict__ xys,
-    float* __restrict__ depths,
-    float2* __restrict__ depth_grads,
-    int* __restrict__ radii,
-    float3* __restrict__ conics,
-    float* __restrict__ compensation,
-    int32_t* __restrict__ num_tiles_hit
+    int4* __restrict__ bounds,
+    int32_t* __restrict__ num_tiles_hit,
+    float3* __restrict__ positions,
+    float3* __restrict__ axes_u,
+    float3* __restrict__ axes_v,
+    float2* __restrict__ depth_grads
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
     if (idx >= num_points) {
         return;
     }
-    radii[idx] = 0;
+    bounds[idx] = {0, 0, 0, 0};
     num_tiles_hit[idx] = 0;
 
+    // world to view
     float3 p_world = means3d[idx];
-    // printf("p_world %d %.2f %.2f %.2f\n", idx, p_world.x, p_world.y,
-    // p_world.z);
-    float3 p_view;
-    if (clip_near_plane(p_world, viewmat, p_view, clip_thresh)) {
-        // printf("%d is out of frustum z %.2f, returning\n", idx, p_view.z);
+    float3 p_view = transform_4x3(viewmat, p_world);
+    if (!(p_view.z >= clip_thresh))
         return;
-    }
-    // printf("p_view %d %.2f %.2f %.2f\n", idx, p_view.x, p_view.y, p_view.z);
+    glm::vec3 T = {p_view.x, p_view.y, p_view.z};
 
-    // compute the projected covariance
+    // patch orientation
     float2 scale = scales[idx];
     float4 quat = quats[idx];
-    // printf("%d scale %.2f %.2f %.2f\n", idx, scale.x, scale.y, scale.z);
-    // printf("%d quat %.2f %.2f %.2f %.2f\n", idx, quat.w, quat.x, quat.y,
-    // quat.z);
-    float *cur_cov3d = &(covs3d[6 * idx]);
-    scale_rot_to_cov3d(scale, glob_scale, quat, cur_cov3d);
+    glm::mat3 R1 = glm::transpose(glm::mat3(
+        viewmat[0], viewmat[1], viewmat[2],
+        viewmat[4], viewmat[5], viewmat[6],
+        viewmat[8], viewmat[9], viewmat[10]
+    ));
+    glm::mat3 R2 = quat_to_rotmat(quat);
+    glm::mat3 R = R1 * R2;
+    glm::vec3 a_u = R[0], a_v = R[1], a_w = R[2];
 
-    // project to 2d with ewa approximation
-    float fx = intrins.x;
-    float fy = intrins.y;
-    float cx = intrins.z;
-    float cy = intrins.w;
-    float tan_fovx = 0.5 * img_size.x / fx;
-    float tan_fovy = 0.5 * img_size.y / fy;
-    float3 cov2d;
-    float comp;
-    project_cov3d_ewa(
-        p_world, cur_cov3d, viewmat, fx, fy, tan_fovx, tan_fovy,
-        cov2d, comp
-    );
-    // printf("cov2d %d, %.2f %.2f %.2f\n", idx, cov2d.x, cov2d.y, cov2d.z);
+    glm::mat3 S = scale_to_mat({scale.x, scale.y, 0.0f});
+    glm::mat3 M = R * S;
 
-    float3 conic;
-    float radius;
-    bool ok = compute_cov2d_bounds(cov2d, conic, radius);
-    if (!ok)
-        return; // zero determinant
-    // printf("conic %d %.2f %.2f %.2f\n", idx, conic.x, conic.y, conic.z);
-    conics[idx] = conic;
+    // project to 2d
+    const float fx = intrins.x;
+    const float fy = intrins.y;
+    const float cx = intrins.z;
+    const float cy = intrins.w;
+    float2 center;
+    float3 bound;
+    project_ellipse_bound(M, T, fx, fy, cx, cy, center, bound);
 
-    // compute the projected mean
-    float2 center = project_pix({fx, fy}, p_view, {cx, cy});
-    uint2 tile_min, tile_max;
-    get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max, block_width);
+    // compute the projected area
+    int2 tile_min, tile_max;
+    get_tile_bbox(center, {bound.x,bound.y}, tile_bounds, tile_min, tile_max, block_width);
     int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);
-    if (tile_area <= 0) {
-        // printf("%d point bbox outside of bounds\n", idx);
+    if (tile_area <= 0)
         return;
-    }
 
     // compute the depth gradient
     float2 depth_grad = projected_depth_grad(viewmat, fx, fy, quat, p_view);
 
+    // output
+    bounds[idx] = {tile_min.x, tile_min.y, tile_max.x, tile_max.y};
     num_tiles_hit[idx] = tile_area;
-    depths[idx] = p_view.z;
+    positions[idx] = {T.x, T.y, T.z};
+    axes_u[idx] = {M[0].x, M[0].y, M[0].z};
+    axes_v[idx] = {M[1].x, M[1].y, M[1].z};
     depth_grads[idx] = {depth_grad.x, depth_grad.y};
-    radii[idx] = (int)radius;
-    xys[idx] = center;
-    compensation[idx] = comp;
-    // printf(
-    //     "point %d x %.2f y %.2f z %.2f, radius %d, # tiles %d, tile_min %d
-    //     %d, tile_max %d %d\n", idx, center.x, center.y, depths[idx],
-    //     radii[idx], tile_area, tile_min.x, tile_min.y, tile_max.x, tile_max.y
-    // );
 }
 
 // kernel to map each intersection from tile ID and depth to a gaussian
 // writes output to isect_ids and gaussian_ids
 __global__ void map_gaussian_to_intersects(
     const int num_points,
-    const float2* __restrict__ xys,
-    const float* __restrict__ depths,
-    const int* __restrict__ radii,
+    const float3* __restrict__ positions,
+    int4* __restrict__ bounds,
     const int32_t* __restrict__ cum_tiles_hit,
     const dim3 tile_bounds,
     const unsigned block_width,
@@ -122,21 +99,16 @@ __global__ void map_gaussian_to_intersects(
     unsigned idx = cg::this_grid().thread_rank();
     if (idx >= num_points)
         return;
-    if (radii[idx] <= 0)
+    int4 bound = bounds[idx];
+    if (min(bound.z-bound.x, bound.w-bound.y) <= 0)
         return;
-    // get the tile bbox for gaussian
-    uint2 tile_min, tile_max;
-    float2 center = xys[idx];
-    get_tile_bbox(center, radii[idx], tile_bounds, tile_min, tile_max, block_width);
-    // printf("point %d, %d radius, min %d %d, max %d %d\n", idx, radii[idx],
-    // tile_min.x, tile_min.y, tile_max.x, tile_max.y);
 
     // update the intersection info for all tiles this gaussian hits
     int32_t cur_idx = (idx == 0) ? 0 : cum_tiles_hit[idx - 1];
     // printf("point %d starting at %d\n", idx, cur_idx);
-    int64_t depth_id = (int64_t) * (int32_t *)&(depths[idx]);
-    for (int i = tile_min.y; i < tile_max.y; ++i) {
-        for (int j = tile_min.x; j < tile_max.x; ++j) {
+    int64_t depth_id = (int64_t) * (int32_t *)&(positions[idx].z);
+    for (int i = bound.y; i < bound.w; ++i) {
+        for (int j = bound.x; j < bound.z; ++j) {
             // isect_id is tile ID and depth as int32
             int64_t tile_id = i * tile_bounds.x + j; // tile within image
             isect_ids[cur_idx] = (tile_id << 32) | depth_id; // tile | depth id
@@ -178,16 +150,18 @@ __global__ void get_tile_bin_edges(
 __global__ void rasterize_simple_forward(
     const dim3 tile_bounds,
     const dim3 img_size,
+    const float4 intrins,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
-    float* __restrict__ final_Ts,
+    const float3& __restrict__ background,
     int* __restrict__ final_index,
     float3* __restrict__ out_img,
-    const float3& __restrict__ background
+    float* __restrict__ out_alpha
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -200,7 +174,12 @@ __global__ void rasterize_simple_forward(
     unsigned j =
         block.group_index().x * block.group_dim().x + block.thread_index().x;
 
-    float2 p = { (float)j + 0.5f, (float)i + 0.5f };
+    const float fx = intrins.x;
+    const float fy = intrins.y;
+    const float cx = intrins.z;
+    const float cy = intrins.w;
+    glm::vec2 pos_screen = { (float)j + 0.5f, (float)i + 0.5f };
+    glm::vec2 pos_2d = { (pos_screen.x-cx)/fx, (pos_screen.y-cy)/fy };
     int32_t pix_id = i * img_size.x + j;
 
     // return if out of bounds
@@ -215,9 +194,9 @@ __global__ void rasterize_simple_forward(
     const int block_size = block.size();
     int num_batches = (range.y - range.x + block_size - 1) / block_size;
 
-    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec4 color_opacity_batch[MAX_BLOCK_SIZE];
 
     // current visibility left to render
     float T = 1.f;
@@ -242,11 +221,14 @@ __global__ void rasterize_simple_forward(
         int idx = batch_start + tr;
         if (idx < range.y) {
             int32_t g_id = gaussian_ids_sorted[idx];
-            id_batch[tr] = g_id;
-            const float2 xy = xys[g_id];
+            const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
-            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            conic_batch[tr] = conics[g_id];
+            const float3 color = colors[g_id];
+            const float3 v0 = axes_u[g_id];
+            const float3 v1 = axes_v[g_id];
+            position_batch[tr] = {pos.x, pos.y, pos.z};
+            axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
+            color_opacity_batch[tr] = {color.x, color.y, color.z, opac};
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -255,18 +237,28 @@ __global__ void rasterize_simple_forward(
         // process gaussians in the current batch for this pixel
         int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
-            float alpha;
-            if (!get_alpha(conic_batch[t], xy_opacity_batch[t], p, alpha))
+            glm::vec3 pos = position_batch[t];
+            glm::vec3 color = glm::vec3(color_opacity_batch[t]);
+            float opac = color_opacity_batch[t].w;
+            glm::mat2x3 axis_uv = axes_uv_batch[t];
+
+            glm::vec3 poi;
+            glm::vec2 uv;
+            // if (!get_intersection(pos, axis_uv, pos_2d, poi, uv));
+            //     continue;
+            get_intersection(pos, axis_uv, pos_2d, poi, uv);
+            if (glm::length(uv) > visibility_kernel_radius())
                 continue;
-            // alpha = min(0.999f, alpha);
+            float alpha;
+            if (!get_alpha(uv, opac, alpha))
+                continue;
+
             const float next_T = T * (1.f - alpha);
 
-            int32_t g = id_batch[t];
             const float vis = alpha * T;
-            const float3 c = colors[g];
-            pix_out.x = pix_out.x + c.x * vis;
-            pix_out.y = pix_out.y + c.y * vis;
-            pix_out.z = pix_out.z + c.z * vis;
+            pix_out.x = pix_out.x + color.x * vis;
+            pix_out.y = pix_out.y + color.y * vis;
+            pix_out.z = pix_out.z + color.z * vis;
             T = next_T;
             cur_idx = batch_start + t;
             if (T <= 1e-3f) {
@@ -277,37 +269,36 @@ __global__ void rasterize_simple_forward(
     }
 
     if (inside) {
-        // add background
-        final_Ts[pix_id] = T; // transmittance at last gaussian in this pixel
-        final_index[pix_id] =
-            cur_idx; // index of in bin of last gaussian in this pixel
+        final_index[pix_id] = cur_idx;
         float3 final_color;
         final_color.x = pix_out.x + T * background.x;
         final_color.y = pix_out.y + T * background.y;
         final_color.z = pix_out.z + T * background.z;
         out_img[pix_id] = final_color;
+        out_alpha[pix_id] = 1.0f - T;
     }
 }
 
 __global__ void rasterize_forward(
     const dim3 tile_bounds,
     const dim3 img_size,
+    const float4 intrins,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float* __restrict__ depths,
-    const float2* __restrict__ depth_grads,
-    const float3* __restrict__ conics,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
+    const float3& __restrict__ background,
+    const float2* __restrict__ depth_grads,
     const float2* __restrict__ depth_normal_ref_im,
-    float* __restrict__ final_Ts,
     int* __restrict__ final_index,
+    float* __restrict__ out_alpha,
     float3* __restrict__ out_img,
     float3* __restrict__ out_depth_grad,
     float* __restrict__ out_reg_depth,
-    float* __restrict__ out_reg_normal,
-    const float3& __restrict__ background
+    float* __restrict__ out_reg_normal
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -320,7 +311,12 @@ __global__ void rasterize_forward(
     unsigned j =
         block.group_index().x * block.group_dim().x + block.thread_index().x;
 
-    float2 p = { (float)j + 0.5f, (float)i + 0.5f };
+    const float fx = intrins.x;
+    const float fy = intrins.y;
+    const float cx = intrins.z;
+    const float cy = intrins.w;
+    glm::vec2 pos_screen = { (float)j + 0.5f, (float)i + 0.5f };
+    glm::vec2 pos_2d = { (pos_screen.x-cx)/fx, (pos_screen.y-cy)/fy };
     int32_t pix_id = i * img_size.x + j;
 
     // return if out of bounds
@@ -335,10 +331,10 @@ __global__ void rasterize_forward(
     const int block_size = block.size();
     int num_batches = (range.y - range.x + block_size - 1) / block_size;
 
-    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 depth_grad_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec4 color_opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec2 depth_grad_batch[MAX_BLOCK_SIZE];
 
     // current visibility left to render
     // index of most recent gaussian to write to this thread's pixel
@@ -369,13 +365,16 @@ __global__ void rasterize_forward(
         int idx = batch_start + tr;
         if (idx < range.y) {
             int32_t g_id = gaussian_ids_sorted[idx];
-            id_batch[tr] = g_id;
-            const float2 xy = xys[g_id];
+            const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
-            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            conic_batch[tr] = conics[g_id];
+            const float3 color = colors[g_id];
+            const float3 v0 = axes_u[g_id];
+            const float3 v1 = axes_v[g_id];
             const float2 depth_grad = depth_grads[g_id];
-            depth_grad_batch[tr] = {depth_grad.x, depth_grad.y, depths[g_id]};
+            position_batch[tr] = {pos.x, pos.y, pos.z};
+            axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
+            color_opacity_batch[tr] = {color.x, color.y, color.z, opac};
+            depth_grad_batch[tr] = {depth_grad.x, depth_grad.y};
         }
         // wait for other threads to collect the gaussians in batch
         block.sync();
@@ -383,24 +382,35 @@ __global__ void rasterize_forward(
         // process gaussians in the current batch for this pixel
         int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
-            float alpha;
-            if (!get_alpha(conic_batch[t], xy_opacity_batch[t], p, alpha))
+            glm::vec3 pos = position_batch[t];
+            glm::vec3 color = glm::vec3(color_opacity_batch[t]);
+            float opac = color_opacity_batch[t].w;
+            glm::mat2x3 axis_uv = axes_uv_batch[t];
+
+            glm::vec3 poi;
+            glm::vec2 uv;
+            // if (!get_intersection(pos, axis_uv, pos_2d, poi, uv));
+            //     continue;
+            get_intersection(pos, axis_uv, pos_2d, poi, uv);
+            if (glm::length(uv) > visibility_kernel_radius())
                 continue;
-            // alpha = min(0.999f, alpha);
+            float alpha;
+            if (!get_alpha(uv, opac, alpha))
+                continue;
+            alpha = min(alpha, 0.999f);
+
             const float next_T = T * (1.f - alpha);
 
-            int32_t g = id_batch[t];
             const float vis = alpha * T;
-            const float3 c = colors[g];
-            const float3 depth_grad_batch_t = depth_grad_batch[t];
-            const float depth = depth_grad_batch_t.z;
-            const float2 g_i = {depth_grad_batch_t.x, depth_grad_batch_t.y};
-            const float g_i_norm = hypot(g_i.x, g_i.y) + 1e-6f;
-            const float2 n_i = { g_i.x / g_i_norm, g_i.y / g_i_norm };
+            // const float depth = poi.z;
+            const float depth = pos.z;
+            const glm::vec2 g_i = depth_grad_batch[t];
+            const float g_i_norm = glm::length(g_i) + 1e-6f;
+            const glm::vec2 n_i = g_i / g_i_norm;
 
-            pix_out.x = pix_out.x + c.x * vis;
-            pix_out.y = pix_out.y + c.y * vis;
-            pix_out.z = pix_out.z + c.z * vis;
+            pix_out.x = pix_out.x + color.x * vis;
+            pix_out.y = pix_out.y + color.y * vis;
+            pix_out.z = pix_out.z + color.z * vis;
             reg_depth += vis*depth * vis_sum - vis * depth_sum;
             reg_normal += vis * (1.0f - (n_i.x*depth_normal_ref.x+n_i.y*depth_normal_ref.y));
             vis_sum += vis;
@@ -418,10 +428,8 @@ __global__ void rasterize_forward(
     }
 
     if (inside) {
-        // add background
-        final_Ts[pix_id] = T; // transmittance at last gaussian in this pixel
-        final_index[pix_id] =
-            cur_idx; // index of in bin of last gaussian in this pixel
+        final_index[pix_id] = cur_idx;
+        out_alpha[pix_id] = 1.0f - T;
         float3 final_color;
         final_color.x = pix_out.x + T * background.x;
         final_color.y = pix_out.y + T * background.y;
@@ -431,112 +439,6 @@ __global__ void rasterize_forward(
         out_reg_normal[pix_id] = reg_normal;
         out_reg_depth[pix_id] = reg_depth;
     }
-
-}
-
-
-// device helper to approximate projected 2d cov from 3d mean and cov
-__device__ void project_cov3d_ewa(
-    const float3& __restrict__ mean3d,
-    const float* __restrict__ cov3d,
-    const float* __restrict__ viewmat,
-    const float fx,
-    const float fy,
-    const float tan_fovx,
-    const float tan_fovy,
-    float3 &cov2d,
-    float &compensation
-) {
-    // clip the
-    // we expect row major matrices as input, glm uses column major
-    // upper 3x3 submatrix
-    glm::mat3 W = glm::mat3(
-        viewmat[0],
-        viewmat[4],
-        viewmat[8],
-        viewmat[1],
-        viewmat[5],
-        viewmat[9],
-        viewmat[2],
-        viewmat[6],
-        viewmat[10]
-    );
-    glm::vec3 p = glm::vec3(viewmat[3], viewmat[7], viewmat[11]);
-    glm::vec3 t = W * glm::vec3(mean3d.x, mean3d.y, mean3d.z) + p;
-
-    // clip so that the covariance
-    float lim_x = 1.3f * tan_fovx;
-    float lim_y = 1.3f * tan_fovy;
-    t.x = t.z * std::min(lim_x, std::max(-lim_x, t.x / t.z));
-    t.y = t.z * std::min(lim_y, std::max(-lim_y, t.y / t.z));
-
-    float rz = 1.f / t.z;
-    float rz2 = rz * rz;
-
-    // column major
-    // we only care about the top 2x2 submatrix
-    glm::mat3 J = glm::mat3(
-        fx * rz,
-        0.f,
-        0.f,
-        0.f,
-        fy * rz,
-        0.f,
-        -fx * t.x * rz2,
-        -fy * t.y * rz2,
-        0.f
-    );
-    glm::mat3 T = J * W;
-
-    glm::mat3 V = glm::mat3(
-        cov3d[0],
-        cov3d[1],
-        cov3d[2],
-        cov3d[1],
-        cov3d[3],
-        cov3d[4],
-        cov3d[2],
-        cov3d[4],
-        cov3d[5]
-    );
-
-    glm::mat3 cov = T * V * glm::transpose(T);
-
-    // add a little blur along axes and save upper triangular elements
-    // and compute the density compensation factor due to the blurs
-    float c00 = cov[0][0], c11 = cov[1][1], c01 = cov[0][1];
-    float det_orig = c00 * c11 - c01 * c01;
-    cov2d.x = c00 + 0.3f;
-    cov2d.y = c01;
-    cov2d.z = c11 + 0.3f;
-    float det_blur = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
-    compensation = std::sqrt(std::max(0.f, det_orig / det_blur));
-
-    // depth to pixel gradient
-    // TO-DO
-}
-
-// device helper to get 3D covariance from scale and quat parameters
-__device__ void scale_rot_to_cov3d(
-    const float2 scale, const float glob_scale, const float4 quat, float *cov3d
-) {
-    // printf("quat %.2f %.2f %.2f %.2f\n", quat.x, quat.y, quat.z, quat.w);
-    glm::mat3 R = quat_to_rotmat(quat);
-    // printf("R %.2f %.2f %.2f\n", R[0][0], R[1][1], R[2][2]);
-    glm::mat3 S = scale_to_mat({scale.x, scale.y, 0.0f}, glob_scale);
-    // printf("S %.2f %.2f %.2f\n", S[0][0], S[1][1], S[2][2]);
-
-    glm::mat3 M = R * S;
-    glm::mat3 tmp = M * glm::transpose(M);
-    // printf("tmp %.2f %.2f %.2f\n", tmp[0][0], tmp[1][1], tmp[2][2]);
-
-    // save upper right because symmetric
-    cov3d[0] = tmp[0][0];
-    cov3d[1] = tmp[0][1];
-    cov3d[2] = tmp[0][2];
-    cov3d[3] = tmp[1][1];
-    cov3d[4] = tmp[1][2];
-    cov3d[5] = tmp[2][2];
 }
 
 // device helper to get screen space depth gradient

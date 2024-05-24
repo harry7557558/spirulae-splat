@@ -50,50 +50,109 @@ inline __device__ float visibility_kernel_radius() {
 
 
 inline __device__ bool get_alpha(
-    const float3 conic, const float3 xy_opac, const float2 p,
+    const glm::vec2 uv, const float opac,
     float &alpha
 ) {
-    const float opac = xy_opac.z;
-    const float2 delta = {xy_opac.x - p.x, xy_opac.y - p.y};
-    const float r2 = 0.5f * (conic.x * delta.x * delta.x +
-                            conic.z * delta.y * delta.y) +
-                    conic.y * delta.x * delta.y;
+    const float r2 = glm::dot(uv, uv);
     const float vis = visibility_kernel(r2);
     alpha = opac * vis;
-    alpha = min(0.99f, alpha);
-    return r2 >= 0.f && alpha >= 1.f / 255.f;
+    return r2 >= 0.f && alpha >= 1e-3f;
 }
 
 inline __device__ void get_alpha_grad(
-    const float3 conic, const float3 xy_opac, const float2 p,
-    float v_alpha,
-    float3 &v_conic, float2 &v_xy, float &v_opac
+    const glm::vec2 uv, const float opac,
+    const float v_alpha,
+    glm::vec2 &v_uv, float &v_opac
 ) {
-    const float opac = xy_opac.z;
-    const float2 delta = {xy_opac.x - p.x, xy_opac.y - p.y};
-    const float r2 = 0.5f * (conic.x * delta.x * delta.x +
-                            conic.z * delta.y * delta.y) +
-                    conic.y * delta.x * delta.y;
+    const float r2 = glm::dot(uv, uv);
     const float vis = visibility_kernel(r2);
-    const float alpha = opac * vis;
-    if (alpha >= 0.99f)
-        v_alpha = 0.0f;
+    // const float alpha = opac * vis;
     const float v_r2 = opac * v_alpha * visibility_kernel_grad(r2);
-    v_conic = {0.5f * v_r2 * delta.x * delta.x,
-                v_r2 * delta.x * delta.y,
-                0.5f * v_r2 * delta.y * delta.y};
-    v_xy = {v_r2 * (conic.x * delta.x + conic.y * delta.y), 
-            v_r2 * (conic.y * delta.x + conic.z * delta.y)};
+    v_uv = 2.0f * uv * v_r2;
     v_opac = vis * v_alpha;
 }
 
+inline __device__ bool get_intersection(
+    const glm::vec3 position,
+    const glm::mat2x3 axis_uv,
+    const glm::vec2 pos_2d,
+    glm::vec3 &poi, glm::vec2 &uv
+) {
+    const float radius = visibility_kernel_radius();
+    glm::mat3 A = glm::mat3(
+        axis_uv[0], axis_uv[1],
+        glm::vec3(pos_2d, 1.0f)
+    );
+    if (glm::determinant(A) == 0.0f) {
+        uv = {-radius, -radius};
+        return false;
+    }
+    glm::vec3 uvt = -glm::inverse(A) * position;
+    uv = {uvt.x, uvt.y};
+    if (glm::length(uv) > radius)
+        return false;
+    float t = -uvt.t;
+    poi = glm::vec3(pos_2d*t, t);
+    return true;
+}
+
+
+// bound of 2d projection of a 3d ellipse
+// 3 components for bound are respectively
+// xy radius of AABB and radius of bounding circle
+inline __device__ bool project_ellipse_bound(
+    const glm::mat3 M, const glm::vec3 T,
+    float fx, float fy, float cx, float cy,
+    float2 &center, float3 &bound
+) {
+    glm::vec3 V0 = M[0], V1 = M[1];
+
+    // 2d conic coefficients
+    glm::vec3 V01 = glm::cross(V0, V1);
+    glm::vec3 V0T = glm::cross(T, V0);
+    glm::vec3 V1T = glm::cross(T, V1);
+    float A = V0T.x * V0T.x + V1T.x * V1T.x - V01.x * V01.x;
+    float B = -V01.y * V01.x + V1T.y * V1T.x + V0T.y * V0T.x;
+    float C = V0T.y * V0T.y + V1T.y * V1T.y - V01.y * V01.y;
+    float D = 2.0f * V0T.z * V0T.x + 2.0f * V1T.z * V1T.x - 2.0f * V01.z * V01.x;
+    float E = -2.0f * V01.z * V01.y + 2.0f * V1T.z * V1T.y + 2.0f * V0T.z * V0T.y;
+    float F = V0T.z * V0T.z + V1T.z * V1T.z - V01.z * V01.z;
+
+    if (!(B * B < A * C))
+        return false;
+
+    // translate to origin
+    float U = (C * D - B * E) / (2.0f * (B * B - A * C));
+    float V = (A * E - B * D) / (2.0f * (B * B - A * C));
+    float S = -(A * U * U + 2.0f * B * U * V + C * V * V + D * U + E * V + F);
+
+    // image transform
+    float U_T = fx * U + cx;
+    float V_T = fy * V + cy;
+    float A_T = A / (fx * fx);
+    float B_T = B / (fx * fy);
+    float C_T = C / (fy * fy);
+
+    // axis-aligned bounding box
+    float W_T = fx * sqrt(C * S / (A * C - B * B));
+    float H_T = fy * sqrt(A * S / (A * C - B * B));
+
+    // bounding circle
+    float L_T = 0.5f * (A_T + C_T - sqrt((A_T - C_T) * (A_T - C_T) + 4.0f * B_T * B_T));
+    float R_T = sqrt(S / L_T);
+
+    // output
+    center = {U_T, V_T};
+    bound = {W_T, H_T, R_T};
+    return true;
+}
 
 inline __device__ void get_bbox(
     const float2 center,
     const float2 dims,
     const dim3 img_size,
-    uint2 &bb_min,
-    uint2 &bb_max
+    int2 &bb_min,
+    int2 &bb_max
 ) {
     // get bounding box with center and dims, within bounds
     // bounding box coords returned in tile coords, inclusive min, exclusive max
@@ -106,10 +165,10 @@ inline __device__ void get_bbox(
 
 inline __device__ void get_tile_bbox(
     const float2 pix_center,
-    const float pix_radius,
+    const float2 pix_radius,
     const dim3 tile_bounds,
-    uint2 &tile_min,
-    uint2 &tile_max,
+    int2 &tile_min,
+    int2 &tile_max,
     const int block_size
 ) {
     // gets gaussian dimensions in tile space, i.e. the span of a gaussian in
@@ -118,7 +177,7 @@ inline __device__ void get_tile_bbox(
         pix_center.x / (float)block_size, pix_center.y / (float)block_size
     };
     float2 tile_radius = {
-        pix_radius / (float)block_size, pix_radius / (float)block_size
+        pix_radius.x / (float)block_size, pix_radius.y / (float)block_size
     };
     get_bbox(tile_center, tile_radius, tile_bounds, tile_min, tile_max);
 }
@@ -187,21 +246,21 @@ inline __device__ float3 transform_4x3_rot_only_transposed(const float *mat, con
     return out;
 }
 
+inline __device__ float3 transform_4x3_rot_only(const float *mat, const float3 p) {
+    float3 out = {
+        mat[0] * p.x + mat[1] * p.y + mat[2] * p.z,
+        mat[4] * p.x + mat[5] * p.y + mat[6] * p.z,
+        mat[8] * p.x + mat[9] * p.y + mat[10] * p.z,
+    };
+    return out;
+}
+
 // helper for applying R * p + T, expect mat to be ROW MAJOR
 inline __device__ float3 transform_4x3(const float *mat, const float3 p) {
     float3 out = {
         mat[0] * p.x + mat[1] * p.y + mat[2] * p.z + mat[3],
         mat[4] * p.x + mat[5] * p.y + mat[6] * p.z + mat[7],
         mat[8] * p.x + mat[9] * p.y + mat[10] * p.z + mat[11],
-    };
-    return out;
-}
-
-inline __device__ float3 transform_4x3_vjp(const float *mat, const float3 p) {
-    float3 out = {
-        mat[0] * p.x + mat[4] * p.y + mat[8] * p.z,
-        mat[1] * p.x + mat[5] * p.y + mat[9] * p.z,
-        mat[2] * p.x + mat[6] * p.y + mat[10] * p.z,
     };
     return out;
 }
@@ -304,11 +363,11 @@ quat_to_rotmat_vjp(const float4 quat, const glm::mat3 v_R) {
 }
 
 inline __device__ glm::mat3
-scale_to_mat(const float3 scale, const float glob_scale) {
+scale_to_mat(const float3 scale) {
     glm::mat3 S = glm::mat3(1.f);
-    S[0][0] = glob_scale * scale.x;
-    S[1][1] = glob_scale * scale.y;
-    S[2][2] = glob_scale * scale.z;
+    S[0][0] = scale.x;
+    S[1][1] = scale.y;
+    S[2][2] = scale.z;
     return S;
 }
 
