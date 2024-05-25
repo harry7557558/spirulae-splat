@@ -223,11 +223,9 @@ std::tuple<
 }
 
 std::tuple<
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor
+    torch::Tensor,  // v_means3d
+    torch::Tensor,  // v_scales
+    torch::Tensor  // v_quats
 > project_gaussians_backward_tensor(
     const int num_points,
     torch::Tensor &means3d,
@@ -238,37 +236,22 @@ std::tuple<
     const float fy,
     const float cx,
     const float cy,
-    const unsigned img_height,
-    const unsigned img_width,
-    torch::Tensor &cov3d,
-    torch::Tensor &radii,
-    torch::Tensor &conics,
-    torch::Tensor &compensation,
-    torch::Tensor &v_xy,
-    torch::Tensor &v_depth,
-    torch::Tensor &v_depth_grad,
-    torch::Tensor &v_conic,
-    torch::Tensor &v_compensation
-){
+    torch::Tensor &num_tiles_hit,
+    torch::Tensor &v_positions,
+    torch::Tensor &v_axes_u,
+    torch::Tensor &v_axes_v,
+    torch::Tensor &v_depth_grads
+) {
     DEVICE_GUARD(means3d);
-    dim3 img_size_dim3;
-    img_size_dim3.x = img_width;
-    img_size_dim3.y = img_height;
 
     float4 intrins = {fx, fy, cx, cy};
 
-    const auto num_cov3d = num_points * 6;
-
-    // Triangular covariance.
     auto int32 = means3d.options().dtype(torch::kInt32);
     auto float32 = means3d.options().dtype(torch::kFloat32);
-    torch::Tensor v_cov2d = torch::zeros({num_points, 3}, float32);
-    torch::Tensor v_cov3d = torch::zeros({num_points, 6}, float32);
-    torch::Tensor v_mean3d = torch::zeros({num_points, 3}, float32);
-    torch::Tensor v_scale = torch::zeros({num_points, 2}, float32);
-    torch::Tensor v_quat = torch::zeros({num_points, 4}, float32);
+    torch::Tensor v_means3d = torch::zeros({num_points, 3}, float32);
+    torch::Tensor v_scales = torch::zeros({num_points, 2}, float32);
+    torch::Tensor v_quats = torch::zeros({num_points, 4}, float32);
 
-#if 0
     project_gaussians_backward_kernel<<<
         (num_points + N_THREADS - 1) / N_THREADS,
         N_THREADS>>>(
@@ -278,26 +261,18 @@ std::tuple<
         (float4 *)quats.contiguous().data_ptr<float>(),
         viewmat.contiguous().data_ptr<float>(),
         intrins,
-        img_size_dim3,
-        cov3d.contiguous().data_ptr<float>(),
-        radii.contiguous().data_ptr<int32_t>(),
-        (float3 *)conics.contiguous().data_ptr<float>(),
-        (float *)compensation.contiguous().data_ptr<float>(),
-        (float2 *)v_xy.contiguous().data_ptr<float>(),
-        v_depth.contiguous().data_ptr<float>(),
-        (float2 *)v_depth_grad.contiguous().data_ptr<float>(),
-        (float3 *)v_conic.contiguous().data_ptr<float>(),
-        (float *)v_compensation.contiguous().data_ptr<float>(),
+        num_tiles_hit.contiguous().data_ptr<int32_t>(),
+        (float3 *)v_positions.contiguous().data_ptr<float>(),
+        (float3 *)v_axes_u.contiguous().data_ptr<float>(),
+        (float3 *)v_axes_v.contiguous().data_ptr<float>(),
+        (float2 *)v_depth_grads.contiguous().data_ptr<float>(),
         // Outputs.
-        (float3 *)v_cov2d.contiguous().data_ptr<float>(),
-        v_cov3d.contiguous().data_ptr<float>(),
-        (float3 *)v_mean3d.contiguous().data_ptr<float>(),
-        (float2 *)v_scale.contiguous().data_ptr<float>(),
-        (float4 *)v_quat.contiguous().data_ptr<float>()
+        (float3 *)v_means3d.contiguous().data_ptr<float>(),
+        (float2 *)v_scales.contiguous().data_ptr<float>(),
+        (float4 *)v_quats.contiguous().data_ptr<float>()
     );
-#endif
 
-    return std::make_tuple(v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat);
+    return std::make_tuple(v_means3d, v_scales, v_quats);
 }
 
 std::tuple<

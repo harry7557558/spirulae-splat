@@ -51,10 +51,8 @@ __global__ void project_gaussians_forward_kernel(
     ));
     glm::mat3 R2 = quat_to_rotmat(quat);
     glm::mat3 R = R1 * R2;
-    glm::vec3 a_u = R[0], a_v = R[1], a_w = R[2];
-
-    glm::mat3 S = scale_to_mat({scale.x, scale.y, 0.0f});
-    glm::mat3 M = R * S;
+    glm::vec3 V0 = scale.x * R[0];
+    glm::vec3 V1 = scale.y * R[1];
 
     // project to 2d
     const float fx = intrins.x;
@@ -63,7 +61,7 @@ __global__ void project_gaussians_forward_kernel(
     const float cy = intrins.w;
     float2 center;
     float3 bound;
-    project_ellipse_bound(M, T, fx, fy, cx, cy, center, bound);
+    project_ellipse_bound(T, V0, V1, fx, fy, cx, cy, center, bound);
 
     // compute the projected area
     int2 tile_min, tile_max;
@@ -73,14 +71,14 @@ __global__ void project_gaussians_forward_kernel(
         return;
 
     // compute the depth gradient
-    float2 depth_grad = projected_depth_grad(viewmat, fx, fy, quat, p_view);
+    float2 depth_grad = projected_depth_grad(p_view, R, fx, fy);
 
     // output
     bounds[idx] = {tile_min.x, tile_min.y, tile_max.x, tile_max.y};
     num_tiles_hit[idx] = tile_area;
     positions[idx] = {T.x, T.y, T.z};
-    axes_u[idx] = {M[0].x, M[0].y, M[0].z};
-    axes_v[idx] = {M[1].x, M[1].y, M[1].z};
+    axes_u[idx] = {V0.x, V0.y, V0.z};
+    axes_v[idx] = {V1.x, V1.y, V1.z};
     depth_grads[idx] = {depth_grad.x, depth_grad.y};
 }
 
@@ -443,19 +441,10 @@ __global__ void rasterize_forward(
 
 // device helper to get screen space depth gradient
 __device__ float2 projected_depth_grad(
-    const float* viewmat, const float fx, const float fy,
-    const float4 quat, const float3 p_view
+    const float3 p, const glm::mat3 R,
+    const float fx, const float fy
 ) {
-    glm::mat3 R1 = glm::transpose(glm::mat3(
-        viewmat[0], viewmat[1], viewmat[2],
-        viewmat[4], viewmat[5], viewmat[6],
-        viewmat[8], viewmat[9], viewmat[10]
-    ));
-    glm::mat3 R2 = quat_to_rotmat(quat);
-    glm::mat3 R = R1 * R2;
     glm::vec3 n1 = R[2];
-    glm::vec3 p = glm::vec3(p_view.x, p_view.y, p_view.z);
-    p.z = safe_denom(p.z, 1e-3f);
     glm::mat3 invJ = glm::mat3(
         p.z/fx, 0.0f, 0.0f,
         0.0f, p.z/fy, 0.0f,

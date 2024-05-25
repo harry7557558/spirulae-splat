@@ -110,7 +110,7 @@ class _ProjectGaussians(Function):
 
         # Save tensors.
         ctx.save_for_backward(
-            means3d, scales, quats,
+            means3d, scales, quats.clone().detach(),
             viewmat,
             bounds, num_tiles_hit,
             positions, axes_u, axes_v,
@@ -126,9 +126,6 @@ class _ProjectGaussians(Function):
         v_depth_grads,
         v_bounds, v_num_tiles_hit,
     ):
-        return (*([None]*10),)
-
-
         (
             means3d, scales, quats,
             viewmat,
@@ -139,24 +136,13 @@ class _ProjectGaussians(Function):
 
         # print('v_depth_grads', torch.abs(v_depth_grads).mean().item())
 
-        (v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat) = _C.project_gaussians_backward(
+        (v_means3d, v_scales, v_quats) = _C.project_gaussians_backward(
             ctx.num_points,
-            means3d,
-            scales,
-            quats,
+            means3d, scales, quats,
             viewmat,
             *ctx.intrins,
-            ctx.img_height,
-            ctx.img_width,
-            cov3d,
-            radii,
-            conics,
-            compensation,
-            v_xys,
-            v_depths,
-            v_depth_grads,
-            v_conics,
-            v_compensation,
+            num_tiles_hit,
+            v_positions, v_axes_u, v_axes_v, v_depth_grads
         )
 
         if viewmat.requires_grad:
@@ -182,7 +168,7 @@ class _ProjectGaussians(Function):
             #
             # Gradients for R and t can then be obtained by summing over
             # all the Gaussians.
-            v_mean3d_cam = torch.matmul(v_mean3d, R.transpose(-1, -2))
+            v_mean3d_cam = torch.matmul(v_means3d, R.transpose(-1, -2))
 
             # gradient w.r.t. view matrix translation
             v_viewmat[..., :3, 3] = v_mean3d_cam.sum(-2)
@@ -199,20 +185,14 @@ class _ProjectGaussians(Function):
         # Return a gradient for each input.
         return (
             # means3d: Float[Tensor, "*batch 3"],
-            v_mean3d,
+            v_means3d,
             # scales: Float[Tensor, "*batch 2"],
-            v_scale,
+            v_scales,
             # quats: Float[Tensor, "*batch 4"],
-            v_quat,
+            v_quats,
             # viewmat: Float[Tensor, "4 4"],
             v_viewmat,
-            # fx: float,
-            None,
-            # fy: float,
-            None,
-            # cx: float,
-            None,
-            # cy: float,
+            # intrins: Tuple[float, float, float, float]
             None,
             # img_height: int,
             None,

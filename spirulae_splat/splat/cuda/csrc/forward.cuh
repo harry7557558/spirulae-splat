@@ -83,8 +83,8 @@ __device__ void scale_rot_to_cov3d(
 );
 
 __device__ float2 projected_depth_grad(
-    const float* viewmat, const float fx, const float fy,
-    const float4 quat, const float3 p_view
+    const float3 p, const glm::mat3 R,
+    const float fx, const float fy
 );
 
 __global__ void map_gaussian_to_intersects(

@@ -101,12 +101,12 @@ inline __device__ bool get_intersection(
 // 3 components for bound are respectively
 // xy radius of AABB and radius of bounding circle
 inline __device__ bool project_ellipse_bound(
-    const glm::mat3 M, const glm::vec3 T,
+    const glm::vec3 T,
+    const glm::vec3 V0,
+    const glm::vec3 V1,
     float fx, float fy, float cx, float cy,
     float2 &center, float3 &bound
 ) {
-    glm::vec3 V0 = M[0], V1 = M[1];
-
     // 2d conic coefficients
     glm::vec3 V01 = glm::cross(V0, V1);
     glm::vec3 V0T = glm::cross(T, V0);

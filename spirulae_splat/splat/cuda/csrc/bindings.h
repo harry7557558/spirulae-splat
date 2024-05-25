@@ -63,11 +63,9 @@ std::tuple<
 );
 
 std::tuple<
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor
+    torch::Tensor,  // v_means3d
+    torch::Tensor,  // v_scales
+    torch::Tensor  // v_quats
 > project_gaussians_backward_tensor(
     const int num_points,
     torch::Tensor &means3d,
@@ -78,17 +76,11 @@ std::tuple<
     const float fy,
     const float cx,
     const float cy,
-    const unsigned img_height,
-    const unsigned img_width,
-    torch::Tensor &cov3d,
-    torch::Tensor &radii,
-    torch::Tensor &conics,
-    torch::Tensor &compensation,
-    torch::Tensor &v_xy,
-    torch::Tensor &v_depth,
-    torch::Tensor &v_depth_grad,
-    torch::Tensor &v_conic,
-    torch::Tensor &v_compensation
+    torch::Tensor &num_tiles_hit,
+    torch::Tensor &v_positions,
+    torch::Tensor &v_axes_u,
+    torch::Tensor &v_axes_v,
+    torch::Tensor &v_depth_grads
 );
 
 

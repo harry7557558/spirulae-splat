@@ -15,9 +15,10 @@ __global__ void project_gaussians_backward_kernel(
     const float4* __restrict__ quats,
     const float* __restrict__ viewmat,
     const float4 intrins,
-    const int2* __restrict__ radii,
+    const int* __restrict__ num_tiles_hit,
     const float3* __restrict__ v_positions,
-    const glm::mat3* __restrict__ v_orientations,
+    const float3* __restrict__ v_axes_u,
+    const float3* __restrict__ v_axes_v,
     const float2* __restrict__ v_depth_grads,
     float3* __restrict__ v_means3d,
     float2* __restrict__ v_scales,
@@ -97,8 +98,8 @@ __device__ void scale_rot_to_cov3d_vjp(
 );
 
 __device__ void projected_depth_grad_vjp(
-    const float* viewmat, const float fx, const float fy,
-    const float4 quat, const float3 p_view,
+    const float3 p, const glm::mat3 R,
+    const float fx, const float fy,
     const float2 v_depth_grad,
-    float4 *v_quat, float3 *v_p_view
+    float3 &v_p_view, glm::mat3 &v_R
 );

@@ -485,74 +485,67 @@ __global__ void project_gaussians_backward_kernel(
     const float4* __restrict__ quats,
     const float* __restrict__ viewmat,
     const float4 intrins,
-    const int2* __restrict__ radii,
+    const int* __restrict__ num_tiles_hit,
     const float3* __restrict__ v_positions,
-    const glm::mat3* __restrict__ v_orientations,
+    const float3* __restrict__ v_axes_u,
+    const float3* __restrict__ v_axes_v,
     const float2* __restrict__ v_depth_grads,
     float3* __restrict__ v_means3d,
     float2* __restrict__ v_scales,
     float4* __restrict__ v_quats
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
-    if (idx >= num_points || min(radii[idx].x,radii[idx].y) <= 0) {
+    if (idx >= num_points || num_tiles_hit <= 0) {
         return;
     }
-#if 0
+
+    // position
     float3 p_world = means3d[idx];
     float fx = intrins.x;
     float fy = intrins.y;
     float3 p_view = transform_4x3(viewmat, p_world);
-    // get v_means3d from v_xy
-    v_means3d[idx] = transform_4x3_rot_only_transposed(
-        viewmat,
-        project_pix_vjp({fx, fy}, p_view, v_xy[idx]));
+    float3 v_p_view = v_positions[idx];
 
-    // get z gradient contribution to mean3d gradient
-    // z = viemwat[8] * mean3d.x + viewmat[9] * mean3d.y + viewmat[10] *
-    // mean3d.z + viewmat[11]
-    float v_z = v_depth[idx];
-    v_means3d[idx].x += viewmat[8] * v_z;
-    v_means3d[idx].y += viewmat[9] * v_z;
-    v_means3d[idx].z += viewmat[10] * v_z;
+    // forward
+    float2 scale = scales[idx];
+    float4 quat = quats[idx];
+    glm::mat3 R1 = glm::transpose(glm::mat3(
+        viewmat[0], viewmat[1], viewmat[2],
+        viewmat[4], viewmat[5], viewmat[6],
+        viewmat[8], viewmat[9], viewmat[10]
+    ));
+    glm::mat3 R2 = quat_to_rotmat(quat);
+    glm::mat3 R = R1 * R2;
+    glm::vec3 V0 = scale.x * R[0];
+    glm::vec3 V1 = scale.y * R[1];
 
-    // get v_cov2d
-    cov2d_to_conic_vjp(conics[idx], v_conic[idx], v_cov2d[idx]);
-    cov2d_to_compensation_vjp(compensation[idx], conics[idx], v_compensation[idx], v_cov2d[idx]);
-    // get v_cov3d (and v_means3d contribution)
-    project_cov3d_ewa_vjp(
-        p_world,
-        &(cov3d[6 * idx]),
-        viewmat,
-        fx,
-        fy,
-        v_cov2d[idx],
-        v_means3d[idx],
-        &(v_cov3d[6 * idx])
-    );
-    // get v_scales and v_quat
-    scale_rot_to_cov3d_vjp(
-        scales[idx],
-        quats[idx],
-        &(v_cov3d[6 * idx]),
-        v_scales[idx],
-        v_quat[idx]
-    );
+    // scale
+    glm::vec3 v_V0 = *(glm::vec3*)&v_axes_u[idx];
+    glm::vec3 v_V1 = *(glm::vec3*)&v_axes_v[idx];
+    float2 v_scale = {glm::dot(R[0], v_V0), glm::dot(R[1], v_V1)};
 
-    // depth gradient
-    float4 v_quat_dg = {0.f, 0.f, 0.f, 0.f};
-    float3 v_p_view = {0.f, 0.f, 0.f};
+    // orientation
+    glm::mat3 v_R = glm::mat3(0.0f);
+    v_R[0] = scale.x * v_V0;
+    v_R[1] = scale.y * v_V1;
+
+    // depth_grad
+    glm::mat3 v_R_dg;
+    float3 v_p_view_dg = {0.f, 0.f, 0.f};
     projected_depth_grad_vjp(
-        viewmat, fx, fy, quats[idx], p_view,
-        v_depth_grads[idx], &v_quat_dg, &v_p_view);
-    v_quat[idx].x += v_quat_dg.x;
-    v_quat[idx].y += v_quat_dg.y;
-    v_quat[idx].z += v_quat_dg.z;
-    v_quat[idx].w += v_quat_dg.w;
+        p_view, R, fx, fy, v_depth_grads[idx],
+        v_p_view_dg, v_R_dg);
+    v_R += v_R_dg;
+    v_p_view.x += v_p_view_dg.x;
+    v_p_view.y += v_p_view_dg.y;
+    v_p_view.z += v_p_view_dg.z;
+
     float3 v_p_world = transform_4x3_rot_only_transposed(viewmat, v_p_view);
-    v_means3d[idx].x += v_p_world.x;
-    v_means3d[idx].y += v_p_world.y;
-    v_means3d[idx].z += v_p_world.z;
-#endif
+    v_means3d[idx] = v_p_world;
+    v_scales[idx] = v_scale;
+    glm::mat3 v_R2 = glm::transpose(R1) * v_R;
+    float4 v_quat = quat_to_rotmat_vjp(quat, v_R2);
+    v_quats[idx] = v_quat;
 }
 
 // output space: 2D covariance, input space: cov3d
@@ -677,22 +670,13 @@ __device__ void scale_rot_to_cov3d_vjp(
 
 
 __device__ void projected_depth_grad_vjp(
-    const float* viewmat, const float fx, const float fy,
-    const float4 quat, const float3 p_view,
+    const float3 p, const glm::mat3 R,
+    const float fx, const float fy,
     const float2 v_depth_grad,
-    float4 *v_quat, float3 *v_p_view
+    float3 &v_p_view, glm::mat3 &v_R
 ) {
     // forward
-    glm::mat3 R1 = glm::transpose(glm::mat3(
-        viewmat[0], viewmat[1], viewmat[2],
-        viewmat[4], viewmat[5], viewmat[6],
-        viewmat[8], viewmat[9], viewmat[10]
-    ));
-    glm::mat3 R2 = quat_to_rotmat(quat);
-    glm::mat3 R = R1 * R2;
     glm::vec3 n1 = R[2];
-    glm::vec3 p = glm::vec3(p_view.x, p_view.y, p_view.z);
-    p.z = safe_denom(p.z, 1e-2f);
     glm::mat3 invJ = glm::mat3(
         p.z/fx, 0.0f, 0.0f,
         0.0f, p.z/fy, 0.0f,
@@ -712,12 +696,10 @@ __device__ void projected_depth_grad_vjp(
         -n.z * v_depth_grad.y,
         -(n.x * v_depth_grad.x + n.y*v_depth_grad.y)
     );
-    // quat
+    // rotation
     glm::vec3 v_n1 = invJ * v_n;
-    glm::mat3 v_R = glm::mat3(0.0);
+    v_R = glm::mat3(0.0);
     v_R[2] = v_n1;
-    glm::mat3 v_R2 = glm::transpose(R1) * v_R;
-    *v_quat = quat_to_rotmat_vjp(quat, v_R2);
     // view
     glm::mat3 v_invJ = glm::outerProduct(v_n, n1);
     glm::vec3 v_p = glm::vec3(
@@ -726,5 +708,5 @@ __device__ void projected_depth_grad_vjp(
         v_invJ[0][0]/fx + v_invJ[1][1]/fy -
         (p.x*v_invJ[0][2]+p.y*v_invJ[1][2]) / safe_denom(p.z*p.z, 1e-2f)
     );
-    *v_p_view = {v_p.x, v_p.y, v_p.z};
+    v_p_view = {v_p.x, v_p.y, v_p.z};
 }

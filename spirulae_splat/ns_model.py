@@ -932,11 +932,12 @@ class SpirulaeModel(Model):
                 # depth_grad_reg = self.depth_grads.abs().mean()
                 # print(depth_grad_reg.item())
 
+        print_tensor(torch.abs(depth_im-depth_ref), (0,1))
         return {
             "rgb": rgb,
             "depth": depth_ref,
-            # "depth_diff": torch.abs(depth_im-depth_ref),
-            # "alpha_diff": torch.abs(alpha-alpha_ref),
+            "depth_diff": torch.abs(depth_im-depth_ref),
+            "alpha_diff": torch.abs(alpha-alpha_ref),
             "depth_grad_1_vis": depth_grad_im_vis,
             "depth_grad_2_vis": depth_grad_ref_vis,
             "reg_depth": reg_depth.unsqueeze(2),

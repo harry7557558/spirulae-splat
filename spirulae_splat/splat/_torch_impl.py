@@ -207,7 +207,7 @@ def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
     return result
 
 
-def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
+def quat_to_rotmat(quat: Tensor) -> Tensor:
     assert quat.shape[-1] == 4, quat.shape
     w, x, y, z = torch.unbind(quat, dim=-1)
     mat = torch.stack(
@@ -227,61 +227,15 @@ def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
     return mat.reshape(quat.shape[:-1] + (3, 3))
 
 
-def quat_to_rotmat(quat: Tensor) -> Tensor:
-    assert quat.shape[-1] == 4, quat.shape
-    return normalized_quat_to_rotmat(F.normalize(quat, dim=-1))
-
-
 def scale_rot_to_cov3d(scale: Tensor, quat: Tensor) -> Tensor:
     assert scale.shape[-1] == 2, scale.shape
     assert quat.shape[-1] == 4, quat.shape
     assert scale.shape[:-1] == quat.shape[:-1], (scale.shape, quat.shape)
     scale = torch.concat((scale, torch.zeros_like(scale[:,0:1])), axis=1)
-    R = normalized_quat_to_rotmat(quat)  # (..., 3, 3)
+    R = quat_to_rotmat(quat)  # (..., 3, 3)
     M = R * scale[..., None, :]  # (..., 3, 3)
     # TODO: save upper right because symmetric
     return M @ M.transpose(-1, -2)  # (..., 3, 3)
-
-
-def project_cov3d_ewa(
-    mean3d: Tensor,
-    cov3d: Tensor,
-    viewmat: Tensor,
-    fx: float,
-    fy: float,
-    tan_fovx: float,
-    tan_fovy: float,
-) -> Tuple[Tensor, Tensor]:
-    assert mean3d.shape[-1] == 3, mean3d.shape
-    assert cov3d.shape[-2:] == (3, 3), cov3d.shape
-    assert viewmat.shape[-2:] == (4, 4), viewmat.shape
-    W = viewmat[..., :3, :3]  # (..., 3, 3)
-    p = viewmat[..., :3, 3]  # (..., 3)
-    t = torch.einsum("...ij,...j->...i", W, mean3d) + p  # (..., 3)
-
-    rz = 1.0 / t[..., 2]  # (...,)
-    rz2 = rz**2  # (...,)
-
-    lim_x = 1.3 * torch.tensor([tan_fovx], device=mean3d.device)
-    lim_y = 1.3 * torch.tensor([tan_fovy], device=mean3d.device)
-    x_clamp = t[..., 2] * torch.clamp(t[..., 0] * rz, min=-lim_x, max=lim_x)
-    y_clamp = t[..., 2] * torch.clamp(t[..., 1] * rz, min=-lim_y, max=lim_y)
-    t = torch.stack([x_clamp, y_clamp, t[..., 2]], dim=-1)
-
-    O = torch.zeros_like(rz)
-    J = torch.stack(
-        [fx * rz, O, -fx * t[..., 0] * rz2, O, fy * rz, -fy * t[..., 1] * rz2],
-        dim=-1,
-    ).reshape(*rz.shape, 2, 3)
-    T = torch.matmul(J, W)  # (..., 2, 3)
-    cov2d = torch.einsum("...ij,...jk,...kl->...il", T, cov3d, T.transpose(-1, -2))
-    # add a little blur along axes and (TODO save upper triangular elements)
-    det_orig = cov2d[..., 0, 0] * cov2d[..., 1, 1] - cov2d[..., 0, 1] * cov2d[..., 0, 1]
-    cov2d[..., 0, 0] = cov2d[..., 0, 0] + 0.3
-    cov2d[..., 1, 1] = cov2d[..., 1, 1] + 0.3
-    det_blur = cov2d[..., 0, 0] * cov2d[..., 1, 1] - cov2d[..., 0, 1] * cov2d[..., 0, 1]
-    compensation = torch.sqrt(torch.clamp(det_orig / det_blur, min=0))
-    return cov2d[..., :2, :2], compensation
 
 
 def compute_compensation(cov2d_mat: Tensor):
@@ -296,33 +250,45 @@ def compute_compensation(cov2d_mat: Tensor):
     return torch.sqrt(torch.clamp(det_nomin / det_denom, min=0))
 
 
-def compute_cov2d_bounds(cov2d_mat: Tensor):
-    """
-    param: cov2d matrix (*, 2, 2)
-    returns: conic parameters (*, 3)
-    """
-    det_all = cov2d_mat[..., 0, 0] * cov2d_mat[..., 1, 1] - cov2d_mat[..., 0, 1] ** 2
-    valid = det_all != 0
-    # det = torch.clamp(det, min=eps)
-    det = det_all[valid]
-    cov2d = cov2d_mat[valid]
-    conic = torch.stack(
-        [
-            cov2d[..., 1, 1] / det,
-            -cov2d[..., 0, 1] / det,
-            cov2d[..., 0, 0] / det,
-        ],
-        dim=-1,
-    )  # (..., 3)
-    b = (cov2d[..., 0, 0] + cov2d[..., 1, 1]) / 2  # (...,)
-    v1 = b + torch.sqrt(torch.clamp(b**2 - det, min=0.1))  # (...,)
-    v2 = b - torch.sqrt(torch.clamp(b**2 - det, min=0.1))  # (...,)
-    radius = torch.ceil(1.0 * torch.sqrt(torch.max(v1, v2)))  # (...,)
-    radius_all = torch.zeros(*cov2d_mat.shape[:-2], device=cov2d_mat.device)
-    conic_all = torch.zeros(*cov2d_mat.shape[:-2], 3, device=cov2d_mat.device)
-    radius_all[valid] = radius
-    conic_all[valid] = conic
-    return conic_all, radius_all, valid
+def project_ellipse_bound(T, V0, V1, fx, fy, cx, cy):
+
+    V01 = torch.cross(V0, V1, dim=-1)
+    V0T = torch.cross(T, V0, dim=-1)
+    V1T = torch.cross(T, V1, dim=-1)
+
+    A = V0T[:,0]**2 + V1T[:,0]**2 - V01[:,0]**2
+    B = -V01[:,1]*V01[:,0] + V1T[:,1]*V1T[:,0] + V0T[:,1]*V0T[:,0]
+    C = V0T[:,1]**2 + V1T[:,1]**2 - V01[:,1]**2
+    D = 2.0 * (V0T[:,2]*V0T[:,0] + V1T[:,2]*V1T[:,0] - V01[:,2]*V01[:,0])
+    E = 2.0 * (-V01[:,2]*V01[:,1] + V1T[:,2]*V1T[:,1] + V0T[:,2]*V0T[:,1])
+    F = V0T[:,2]**2 + V1T[:,2]**2 - V01[:,2]**2
+
+    valid = (B * B < A * C)
+
+    # Translate to origin
+    U = (C * D - B * E) / (2.0 * (B * B - A * C))
+    V = (A * E - B * D) / (2.0 * (B * B - A * C))
+    S = -(A * U**2 + 2.0 * B * U * V + C * V**2 + D * U + E * V + F)
+
+    # Image transform
+    U_T = fx * U + cx
+    V_T = fy * V + cy
+    A_T = A / (fx**2)
+    B_T = B / (fx*fy)
+    C_T = C / (fy**2)
+
+    # Axis-aligned bounding box
+    W_T = fx * torch.sqrt(C * S / (A * C - B * B))
+    H_T = fy * torch.sqrt(A * S / (A * C - B * B))
+
+    # Bounding circle
+    L_T = 0.5 * (A_T + C_T - torch.sqrt((A_T - C_T)**2 + 4.0 * B_T**2))
+    R_T = torch.sqrt(S / L_T)
+
+    # Output
+    center = torch.stack([U_T, V_T], dim=1)
+    bound = torch.stack([W_T, H_T, R_T], dim=1)
+    return center, bound, valid
 
 
 def project_pix(fxfy, p_view, center, eps=1e-6):
@@ -342,12 +308,12 @@ def clip_near_plane(p, viewmat, clip_thresh=0.01):
     return p_view, p_view[..., 2] < clip_thresh
 
 
-def get_tile_bbox(pix_center, pix_radius, tile_bounds, block_width):
+def get_tile_bbox(center, bound, tile_bounds, block_width):
     tile_size = torch.tensor(
-        [block_width, block_width], dtype=torch.float32, device=pix_center.device
+        [block_width, block_width], dtype=torch.float32, device=center.device
     )
-    tile_center = pix_center / tile_size
-    tile_radius = pix_radius[..., None] / tile_size
+    tile_center = center / tile_size
+    tile_radius = bound[..., :2] / tile_size
 
     top_left = (tile_center - tile_radius).to(torch.int32)
     bottom_right = (tile_center + tile_radius).to(torch.int32) + 1
@@ -368,12 +334,8 @@ def get_tile_bbox(pix_center, pix_radius, tile_bounds, block_width):
     return tile_min, tile_max
 
 
-def projected_depth_grad(viewmat, fx, fy, quats, p_view):
-    R1 = viewmat[:3,:3]
-    R2 = normalized_quat_to_rotmat(quats)
-    R = torch.einsum('ij,njk->nik', R1, R2)
+def projected_depth_grad(p, R, fx, fy):
     n1 = R[:,:,2]
-    p = p_view
     invJ = torch.zeros((len(p), 3, 3), dtype=p.dtype, device=p.device)
     invJ[:,0,0] = p[:,2]/fx
     invJ[:,1,1] = p[:,2]/fy
@@ -385,14 +347,9 @@ def projected_depth_grad(viewmat, fx, fy, quats, p_view):
     return -n[:,:2] * n[:,2:]
 
 
-def project_gaussians_forward(
-    means3d,
-    scales,
-    quats,
-    viewmat,
-    intrins,
-    img_size,
-    block_width,
+def project_gaussians(
+    means3d, scales, quats,
+    viewmat, intrins, img_size, block_width,
     clip_thresh=0.01,
 ):
     tile_bounds = (
@@ -401,50 +358,35 @@ def project_gaussians_forward(
         1,
     )
     fx, fy, cx, cy = intrins
-    tan_fovx = 0.5 * img_size[0] / fx
-    tan_fovy = 0.5 * img_size[1] / fy
     p_view, is_close = clip_near_plane(means3d, viewmat, clip_thresh)
-    cov3d = scale_rot_to_cov3d(scales, quats)
-    cov2d, compensation = project_cov3d_ewa(
-        means3d, cov3d, viewmat, fx, fy, tan_fovx, tan_fovy
-    )
-    conic, radius, det_valid = compute_cov2d_bounds(cov2d)
-    xys = project_pix((fx, fy), p_view, (cx, cy))
-    tile_min, tile_max = get_tile_bbox(xys, radius, tile_bounds, block_width)
-    tile_area = (tile_max[..., 0] - tile_min[..., 0]) * (
-        tile_max[..., 1] - tile_min[..., 1]
-    )
-    mask = (tile_area > 0) & (~is_close) & det_valid
-    depth_grads = projected_depth_grad(viewmat, fx, fy, quats, p_view)
+    R1 = viewmat[:3, :3]
+    R2 = quat_to_rotmat(quats)
+    R = R1 @ R2
+    V0 = scales[:,0,None] * R[:,:,0]
+    V1 = scales[:,1,None] * R[:,:,1]
+
+    center, bound, valid = project_ellipse_bound(p_view, V0, V1, *intrins)
+
+    tile_min, tile_max = get_tile_bbox(center, bound, tile_bounds, block_width)
+    assert (tile_max >= tile_min).all()
+    tile_area = (tile_max[...,0]-tile_min[...,0]) * (tile_max[...,1]-tile_min[...,1])
+    mask = (tile_area > 0) & (~is_close) & valid
+    depth_grads = projected_depth_grad(p_view, R, fx, fy)
 
     num_tiles_hit = tile_area
-    depths = p_view[..., 2]
-    radii = radius.to(torch.int32)
 
-    radii = torch.where(~mask, 0, radii)
-    conic = torch.where(~mask[..., None], 0, conic)
-    xys = torch.where(~mask[..., None], 0, xys)
-    cov3d = torch.where(~mask[..., None, None], 0, cov3d)
-    cov2d = torch.where(~mask[..., None, None], 0, cov2d)
-    compensation = torch.where(~mask, 0, compensation)
+    bounds = torch.concatenate((tile_min, tile_max), axis=-1)
+    bounds = torch.where(~mask[..., None], 0, bounds.to(torch.int32))
     num_tiles_hit = torch.where(~mask, 0, num_tiles_hit)
-    depths = torch.where(~mask, 0, depths)
+    positions = torch.where(~mask[..., None], 0, p_view)
+    axes_u = torch.where(~mask[..., None], 0, V0)
+    axes_v = torch.where(~mask[..., None], 0, V1)
+    depth_grads = torch.where(~mask[..., None], 0, depth_grads)
 
-    i, j = torch.triu_indices(3, 3)
-    cov3d_triu = cov3d[..., i, j]
-    i, j = torch.triu_indices(2, 2)
-    cov2d_triu = cov2d[..., i, j]
     return (
-        cov3d_triu,
-        cov2d_triu,
-        xys,
-        depths,
+        positions, axes_u, axes_v,
         depth_grads,
-        radii,
-        conic,
-        compensation,
-        num_tiles_hit,
-        mask,
+        bounds, num_tiles_hit,
     )
 
 
