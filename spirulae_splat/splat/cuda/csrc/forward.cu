@@ -395,7 +395,6 @@ __global__ void rasterize_forward(
             float alpha;
             if (!get_alpha(uv, opac, alpha))
                 continue;
-            alpha = min(alpha, 0.999f);
 
             const float next_T = T * (1.f - alpha);
 

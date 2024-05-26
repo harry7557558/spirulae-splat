@@ -59,7 +59,7 @@ inline __device__ bool get_alpha(
     return r2 >= 0.f && alpha >= 1e-3f;
 }
 
-inline __device__ void get_alpha_grad(
+inline __device__ void get_alpha_vjp(
     const glm::vec2 uv, const float opac,
     const float v_alpha,
     glm::vec2 &v_uv, float &v_opac
@@ -94,6 +94,35 @@ inline __device__ bool get_intersection(
     float t = -uvt.t;
     poi = glm::vec3(pos_2d*t, t);
     return true;
+}
+
+inline __device__ void get_intersection_vjp(
+    const glm::vec3 position,
+    const glm::mat2x3 axis_uv,
+    const glm::vec2 pos_2d,
+    const glm::vec3 v_poi,
+    const glm::vec2 v_uv,
+    glm::vec3 &v_position,
+    glm::mat2x3 &v_axis_uv
+) {
+    const float radius = visibility_kernel_radius();
+    // forward
+    glm::mat3 A = glm::mat3(
+        axis_uv[0], axis_uv[1],
+        glm::vec3(pos_2d, 1.0f)
+    );
+    glm::mat3 invA = glm::inverse(A);
+    glm::vec3 uvt = -invA * position;
+    glm::vec2 uv = {uvt.x, uvt.y};
+    float t = -uvt.t;
+    glm::vec3 poi = glm::vec3(pos_2d*t, t);
+    // backward
+    float v_t = glm::dot(v_poi, glm::vec3(pos_2d, 1.0f));
+    glm::vec3 v_uvt = {v_uv.x, v_uv.y, -v_t};
+    v_position = -glm::transpose(invA) * v_uvt;
+    glm::mat3 v_invA = -glm::outerProduct(v_uvt, position);
+    glm::mat3 v_A = -glm::transpose(invA) * v_invA * glm::transpose(invA);
+    v_axis_uv = glm::mat2x3(v_A[0], v_A[1]);
 }
 
 

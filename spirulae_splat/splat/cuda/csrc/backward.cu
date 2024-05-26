@@ -5,13 +5,15 @@
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
 
-inline __device__ void warpSum3(float3& val, cg::thread_block_tile<32>& tile){
+template<typename vec3>
+inline __device__ void warpSum3(vec3& val, cg::thread_block_tile<32>& tile){
     val.x = cg::reduce(tile, val.x, cg::plus<float>());
     val.y = cg::reduce(tile, val.y, cg::plus<float>());
     val.z = cg::reduce(tile, val.z, cg::plus<float>());
 }
 
-inline __device__ void warpSum2(float2& val, cg::thread_block_tile<32>& tile){
+template<typename vec2>
+inline __device__ void warpSum2(vec2& val, cg::thread_block_tile<32>& tile){
     val.x = cg::reduce(tile, val.x, cg::plus<float>());
     val.y = cg::reduce(tile, val.y, cg::plus<float>());
 }
@@ -23,34 +25,34 @@ inline __device__ void warpSum(float& val, cg::thread_block_tile<32>& tile){
 __global__ void rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
+    const float4 intrins,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float* __restrict__ depths,
-    const float2* __restrict__ depth_grads,
-    const float3* __restrict__ conics,
-    const float3* __restrict__ rgbs,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float3* __restrict__ colors,
     const float* __restrict__ opacities,
-    const float2* __restrict__ depth_normal_ref_im,
     const float3& __restrict__ background,
-    const float* __restrict__ final_Ts,
+    const float2* __restrict__ depth_grads,
+    const float2* __restrict__ depth_normal_ref_im,
     const int* __restrict__ final_index,
+    const float* __restrict__ output_alpha,
     const float3* __restrict__ output_depth_grad,
-    const float3* __restrict__ v_output,
-    const float3* __restrict__ v_output_depth,
     const float* __restrict__ v_output_alpha,
+    const float3* __restrict__ v_output,
+    const float3* __restrict__ v_output_depth_grad,
     const float* __restrict__ v_output_reg_depth,
     const float* __restrict__ v_output_reg_normal,
-    float2* __restrict__ v_xy,
-    float2* __restrict__ v_xy_abs,
-    float* __restrict__ v_depth,
+    float3* __restrict__ v_positions,
+    float2* __restrict__ v_positions_xy_abs,
+    float3* __restrict__ v_axes_u,
+    float3* __restrict__ v_axes_v,
+    float3* __restrict__ v_colors,
+    float* __restrict__ v_opacities,
     float2* __restrict__ v_depth_grad,
-    float3* __restrict__ v_conic,
-    float3* __restrict__ v_rgb,
-    float* __restrict__ v_opacity,
     float2* __restrict__ v_depth_normal_ref
 ) {
-    #if 0
     auto block = cg::this_thread_block();
     int32_t tile_id =
         block.group_index().y * tile_bounds.x + block.group_index().x;
@@ -59,7 +61,12 @@ __global__ void rasterize_backward_kernel(
     unsigned j =
         block.group_index().x * block.group_dim().x + block.thread_index().x;
 
-    float2 p = { (float)j + 0.5f, (float)i + 0.5f };
+    const float fx = intrins.x;
+    const float fy = intrins.y;
+    const float cx = intrins.z;
+    const float cy = intrins.w;
+    glm::vec2 pos_screen = { (float)j + 0.5f, (float)i + 0.5f };
+    glm::vec2 pos_2d = { (pos_screen.x-cx)/fx, (pos_screen.y-cy)/fy };
     // clamp this value to the last pixel
     const int32_t pix_id = min(i * img_size.x + j, img_size.x * img_size.y - 1);
 
@@ -74,15 +81,15 @@ __global__ void rasterize_backward_kernel(
     const int num_batches = (range.y - range.x + block_size - 1) / block_size;
 
     __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 rgbs_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 depth_grad_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec4 color_opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec2 depth_grad_batch[MAX_BLOCK_SIZE];
 
     // df/d_out for this pixel
     const float3 out_depth_grad = output_depth_grad[pix_id];
     const float3 v_out = v_output[pix_id];
-    const float3 v_out_depth_grad = v_output_depth[pix_id];
+    const float3 v_out_depth_grad = v_output_depth_grad[pix_id];
     const float v_out_alpha = v_output_alpha[pix_id];
     const float v_out_reg_depth = v_output_reg_depth[pix_id];
     const float v_out_reg_normal = v_output_reg_normal[pix_id];
@@ -90,7 +97,7 @@ __global__ void rasterize_backward_kernel(
     const float v_depth_sum = v_out_depth_grad.z;
 
     // this is the T AFTER the last gaussian in this pixel
-    const float T_final = final_Ts[pix_id];
+    float T_final = 1.0f - output_alpha[pix_id];
     float T = T_final;
     // index of last gaussian to contribute to this pixel
     const int bin_final = inside? final_index[pix_id] : 0;
@@ -139,13 +146,16 @@ __global__ void rasterize_backward_kernel(
         if (idx >= range.x) {
             int32_t g_id = gaussian_ids_sorted[idx];
             id_batch[tr] = g_id;
-            const float2 xy = xys[g_id];
+            const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
-            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            conic_batch[tr] = conics[g_id];
-            rgbs_batch[tr] = rgbs[g_id];
+            const float3 color = colors[g_id];
+            const float3 v0 = axes_u[g_id];
+            const float3 v1 = axes_v[g_id];
             const float2 depth_grad = depth_grads[g_id];
-            depth_grad_batch[tr] = {depth_grad.x, depth_grad.y, depths[g_id]};
+            position_batch[tr] = {pos.x, pos.y, pos.z};
+            axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
+            color_opacity_batch[tr] = {color.x, color.y, color.z, opac};
+            depth_grad_batch[tr] = {depth_grad.x, depth_grad.y};
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -158,25 +168,33 @@ __global__ void rasterize_backward_kernel(
             if (batch_end - t > bin_final) {
                 valid = 0;
             }
-            float alpha;
-            float3 conic;
-            float3 xy_opac;
+
+            glm::vec3 pos = position_batch[t];
+            float opac = color_opacity_batch[t].w;
+            glm::mat2x3 axis_uv = axes_uv_batch[t];
+
+            glm::vec3 poi;
+            glm::vec2 uv;
             if(valid){
-                conic = conic_batch[t];
-                xy_opac = xy_opacity_batch[t];
-                if (!get_alpha(conic, xy_opac, p, alpha))
+                get_intersection(pos, axis_uv, pos_2d, poi, uv);
+                if (glm::length(uv) > visibility_kernel_radius())
                     valid = 0;
-                // alpha = min(0.99f, alpha);
             }
-            // if all threads are inactive in this warp, skip this loop
+            float alpha;
+            if (valid){
+                if (!get_alpha(uv, opac, alpha))
+                    valid = 0;
+            }
             if(!warp.any(valid)){
                 continue;
             }
-            float3 v_rgb_local = {0.f, 0.f, 0.f};
-            float3 v_conic_local = {0.f, 0.f, 0.f};
-            float2 v_xy_local = {0.f, 0.f};
-            float2 v_xy_abs_local = {0.f, 0.f};
-            float3 v_depth_grad_local = {0.f, 0.f, 0.f};
+
+            glm::vec3 v_position_local = {0.f, 0.f, 0.f};
+            glm::vec2 v_position_xy_abs_local = {0.f, 0.f};
+            glm::vec3 v_axis_u_local = {0.f, 0.f, 0.f};
+            glm::vec3 v_axis_v_local = {0.f, 0.f, 0.f};
+            glm::vec3 v_color_local = {0.f, 0.f, 0.f};
+            glm::vec2 v_depth_grad_local = {0.f, 0.f};
             float v_opacity_local = 0.f;
             //initialize everything to 0, only set if the lane is valid
             if(valid){
@@ -186,11 +204,11 @@ __global__ void rasterize_backward_kernel(
                 const float vis = alpha * next_T;
 
                 // update depth regularizer
-                const float3 depth_grad = depth_grad_batch[t];
-                const float depth = depth_grad.z;
+                const glm::vec2 depth_grad = depth_grad_batch[t];
+                const float depth = pos.z;
                 float vis_sum_next = vis_sum - vis;
                 float depth_sum_next = depth_sum - vis*depth;
-                v_depth_grad_local.z = v_out_reg_depth * vis * (vis_sum_next - (vis_sum_final-vis_sum));
+                v_position_local.z += v_out_reg_depth * vis * (vis_sum_next - (vis_sum_final-vis_sum));
                 float reg_depth_i = (
                     depth * vis_sum_next - depth_sum_next +
                     (depth_sum_final-depth_sum) - depth * (vis_sum_final-vis_sum)
@@ -208,20 +226,20 @@ __global__ void rasterize_backward_kernel(
                 v_n_bar += vis * (-n_i) * v_out_reg_normal;
 
                 // update v_rgb for this gaussian
-                v_rgb_local = {vis * v_out.x, vis * v_out.y, vis * v_out.z};
+                v_color_local = {vis * v_out.x, vis * v_out.y, vis * v_out.z};
                 v_depth_grad_local.x += vis * v_g_sum.x;
                 v_depth_grad_local.y += vis * v_g_sum.y;
-                v_depth_grad_local.z += vis * v_depth_sum;
+                v_position_local.z += vis * v_depth_sum;
 
-                const float3 rgb = rgbs_batch[t];
                 float v_alpha = 0.0f;
+                const glm::vec4 rgba = color_opacity_batch[t];
                 // contribution from this pixel
-                v_alpha += (rgb.x * T - buffer.x) * ra * v_out.x;
-                v_alpha += (rgb.y * T - buffer.y) * ra * v_out.y;
-                v_alpha += (rgb.z * T - buffer.z) * ra * v_out.z;
+                v_alpha += (rgba.x * T - buffer.x) * ra * v_out.x;
+                v_alpha += (rgba.y * T - buffer.y) * ra * v_out.y;
+                v_alpha += (rgba.z * T - buffer.z) * ra * v_out.z;
                 v_alpha += (depth_grad.x * T - buffer_depth.x) * ra * v_g_sum.x;
                 v_alpha += (depth_grad.y * T - buffer_depth.y) * ra * v_g_sum.y;
-                v_alpha += (depth_grad.z * T - buffer_depth.z) * ra * v_depth_sum;
+                v_alpha += (pos.z * T - buffer_depth.z) * ra * v_depth_sum;
                 v_alpha += (reg_depth_i * T - buffer_depth_reg) * ra * v_out_reg_depth;
                 v_alpha += (reg_normal_i * T - buffer_normal_reg) * ra * v_out_reg_normal;
 
@@ -231,55 +249,69 @@ __global__ void rasterize_backward_kernel(
                 v_alpha += -T_final * ra * background.y * v_out.y;
                 v_alpha += -T_final * ra * background.z * v_out.z;
                 // update the running sum
-                buffer.x += rgb.x * vis;
-                buffer.y += rgb.y * vis;
-                buffer.z += rgb.z * vis;
+                buffer.x += rgba.x * vis;
+                buffer.y += rgba.y * vis;
+                buffer.z += rgba.z * vis;
                 buffer_depth.x += depth_grad.x * vis;
                 buffer_depth.y += depth_grad.y * vis;
-                buffer_depth.z += depth_grad.z * vis;
+                buffer_depth.z += pos.z * vis;
                 buffer_depth_reg += reg_depth_i * vis;
                 buffer_normal_reg += reg_normal_i * vis;
 
-                get_alpha_grad(
-                    conic, xy_opac, p,
-                    v_alpha,
-                    v_conic_local, v_xy_local, v_opacity_local
+                glm::vec2 v_uv;
+                get_alpha_vjp(
+                    uv, rgba.w, v_alpha,
+                    v_uv, v_opacity_local
                 );
-                v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
+                glm::mat2x3 v_axis_uv;
+                glm::vec3 v_position_local_temp;
+                get_intersection_vjp(
+                    pos, axis_uv, pos_2d,
+                    glm::vec3(0), v_uv,
+                    v_position_local_temp, v_axis_uv
+                );
+                v_position_local += v_position_local_temp;
+                v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local));
+                // v_position_xy_abs_local /= pos.z;
+                v_axis_u_local = v_axis_uv[0];
+                v_axis_v_local = v_axis_uv[1];
 
                 T = next_T;
                 vis_sum = vis_sum_next;
                 depth_sum = depth_sum_next;
             }
-            warpSum3(v_rgb_local, warp);
-            warpSum3(v_conic_local, warp);
-            warpSum2(v_xy_local, warp);
-            warpSum2(v_xy_abs_local, warp);
+            warpSum3(v_position_local, warp);
+            warpSum2(v_position_xy_abs_local, warp);
+            warpSum3(v_axis_u_local, warp);
+            warpSum3(v_axis_v_local, warp);
+            warpSum3(v_color_local, warp);
             warpSum(v_opacity_local, warp);
-            warpSum3(v_depth_grad_local, warp);
+            warpSum2(v_depth_grad_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t];
-                float* v_rgb_ptr = (float*)(v_rgb);
-                atomicAdd(v_rgb_ptr + 3*g + 0, v_rgb_local.x);
-                atomicAdd(v_rgb_ptr + 3*g + 1, v_rgb_local.y);
-                atomicAdd(v_rgb_ptr + 3*g + 2, v_rgb_local.z);
-                
-                float* v_conic_ptr = (float*)(v_conic);
-                atomicAdd(v_conic_ptr + 3*g + 0, v_conic_local.x);
-                atomicAdd(v_conic_ptr + 3*g + 1, v_conic_local.y);
-                atomicAdd(v_conic_ptr + 3*g + 2, v_conic_local.z);
-                
-                float* v_xy_ptr = (float*)(v_xy);
-                atomicAdd(v_xy_ptr + 2*g + 0, v_xy_local.x);
-                atomicAdd(v_xy_ptr + 2*g + 1, v_xy_local.y);
 
-                float* v_xy_abs_ptr = (float*)(v_xy_abs);
-                atomicAdd(v_xy_abs_ptr + 2*g + 0, v_xy_abs_local.x);
-                atomicAdd(v_xy_abs_ptr + 2*g + 1, v_xy_abs_local.y);
-                
-                atomicAdd(v_opacity + g, v_opacity_local);
+                float* v_position_ptr = (float*)(v_positions);
+                atomicAdd(v_position_ptr + 3*g + 0, v_position_local.x);
+                atomicAdd(v_position_ptr + 3*g + 1, v_position_local.y);
+                atomicAdd(v_position_ptr + 3*g + 2, v_position_local.z);
+                float* v_positions_xy_abs_ptr = (float*)(v_positions_xy_abs);
+                atomicAdd(v_positions_xy_abs_ptr + 2*g + 0, v_position_xy_abs_local.x);
+                atomicAdd(v_positions_xy_abs_ptr + 2*g + 1, v_position_xy_abs_local.y);
 
-                atomicAdd(v_depth + g, v_depth_grad_local.z);
+                float* v_axis_u_ptr = (float*)(v_axes_u);
+                atomicAdd(v_axis_u_ptr + 3*g + 0, v_axis_u_local.x);
+                atomicAdd(v_axis_u_ptr + 3*g + 1, v_axis_u_local.y);
+                atomicAdd(v_axis_u_ptr + 3*g + 2, v_axis_u_local.z);
+                float* v_axis_v_ptr = (float*)(v_axes_v);
+                atomicAdd(v_axis_v_ptr + 3*g + 0, v_axis_v_local.x);
+                atomicAdd(v_axis_v_ptr + 3*g + 1, v_axis_v_local.y);
+                atomicAdd(v_axis_v_ptr + 3*g + 2, v_axis_v_local.z);
+                
+                float* v_color_ptr = (float*)(v_colors);
+                atomicAdd(v_color_ptr + 3*g + 0, v_color_local.x);
+                atomicAdd(v_color_ptr + 3*g + 1, v_color_local.y);
+                atomicAdd(v_color_ptr + 3*g + 2, v_color_local.z);
+                atomicAdd(v_opacities + g, v_opacity_local);
 
                 float* v_depth_grad_ptr = (float*)(v_depth_grad);
                 atomicAdd(v_depth_grad_ptr + 2*g + 0, v_depth_grad_local.x);
@@ -291,18 +323,18 @@ __global__ void rasterize_backward_kernel(
     if (inside) {
         v_depth_normal_ref[pix_id] = {v_n_bar.x, v_n_bar.y};
     }
-    #endif
 
 }
 
 __global__ void rasterize_simple_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
+    const float4 intrins,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
     const float3* __restrict__ positions,
-    const float3* __restrict__ orientations,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
     const float3& __restrict__ background,
@@ -312,11 +344,11 @@ __global__ void rasterize_simple_backward_kernel(
     const float* __restrict__ v_output_alpha,
     float3* __restrict__ v_positions,
     float2* __restrict__ v_positions_xy_abs,
-    glm::mat3* __restrict__ v_orientations,
+    float3* __restrict__ v_axes_u,
+    float3* __restrict__ v_axes_v,
     float3* __restrict__ v_colors,
     float* __restrict__ v_opacities
 ) {
-    #if 0
     auto block = cg::this_thread_block();
     int32_t tile_id =
         block.group_index().y * tile_bounds.x + block.group_index().x;
@@ -325,7 +357,12 @@ __global__ void rasterize_simple_backward_kernel(
     unsigned j =
         block.group_index().x * block.group_dim().x + block.thread_index().x;
 
-    float2 p = { (float)j + 0.5f, (float)i + 0.5f };
+    const float fx = intrins.x;
+    const float fy = intrins.y;
+    const float cx = intrins.z;
+    const float cy = intrins.w;
+    glm::vec2 pos_screen = { (float)j + 0.5f, (float)i + 0.5f };
+    glm::vec2 pos_2d = { (pos_screen.x-cx)/fx, (pos_screen.y-cy)/fy };
     // clamp this value to the last pixel
     const int32_t pix_id = min(i * img_size.x + j, img_size.x * img_size.y - 1);
 
@@ -333,7 +370,7 @@ __global__ void rasterize_simple_backward_kernel(
     const bool inside = (i < img_size.y && j < img_size.x);
 
     // this is the T AFTER the last gaussian in this pixel
-    float T_final = 1.0f-output_alpha[pix_id];
+    float T_final = 1.0f - output_alpha[pix_id];
     float T = T_final;
     // the contribution from gaussians behind the current one
     float3 buffer = {0.f, 0.f, 0.f};
@@ -348,9 +385,9 @@ __global__ void rasterize_simple_backward_kernel(
     const int num_batches = (range.y - range.x + block_size - 1) / block_size;
 
     __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 rgbs_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec4 color_opacity_batch[MAX_BLOCK_SIZE];
 
     // df/d_out for this pixel
     const float3 v_out = v_output[pix_id];
@@ -375,11 +412,14 @@ __global__ void rasterize_simple_backward_kernel(
         if (idx >= range.x) {
             int32_t g_id = gaussian_ids_sorted[idx];
             id_batch[tr] = g_id;
-            const float2 xy = xys[g_id];
+            const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
-            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            conic_batch[tr] = conics[g_id];
-            rgbs_batch[tr] = colors[g_id];
+            const float3 color = colors[g_id];
+            const float3 v0 = axes_u[g_id];
+            const float3 v1 = axes_v[g_id];
+            position_batch[tr] = {pos.x, pos.y, pos.z};
+            axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
+            color_opacity_batch[tr] = {color.x, color.y, color.z, opac};
         }
         // wait for other threads to collect the gaussians in batch
         block.sync();
@@ -390,25 +430,32 @@ __global__ void rasterize_simple_backward_kernel(
             if (batch_end - t > bin_final) {
                 valid = 0;
             }
-            float alpha;
-            float3 conic;
-            float3 xy_opac;
-            float vis;
+
+            glm::vec3 pos = position_batch[t];
+            float opac = color_opacity_batch[t].w;
+            glm::mat2x3 axis_uv = axes_uv_batch[t];
+
+            glm::vec3 poi;
+            glm::vec2 uv;
             if(valid){
-                conic = conic_batch[t];
-                xy_opac = xy_opacity_batch[t];
-                if (!get_alpha(conic, xy_opac, p, alpha))
+                get_intersection(pos, axis_uv, pos_2d, poi, uv);
+                if (glm::length(uv) > visibility_kernel_radius())
                     valid = 0;
-                //alpha = min(0.99f, alpha);
             }
-            // if all threads are inactive in this warp, skip this loop
+            float alpha;
+            if (valid){
+                if (!get_alpha(uv, opac, alpha))
+                    valid = 0;
+            }
             if(!warp.any(valid)){
                 continue;
             }
-            float3 v_rgb_local = {0.f, 0.f, 0.f};
-            float3 v_conic_local = {0.f, 0.f, 0.f};
-            float2 v_xy_local = {0.f, 0.f};
-            float2 v_xy_abs_local = {0.f, 0.f};
+
+            glm::vec3 v_position_local = {0.f, 0.f, 0.f};
+            glm::vec2 v_position_xy_abs_local = {0.f, 0.f};
+            glm::vec3 v_axis_u_local = {0.f, 0.f, 0.f};
+            glm::vec3 v_axis_v_local = {0.f, 0.f, 0.f};
+            glm::vec3 v_color_local = {0.f, 0.f, 0.f};
             float v_opacity_local = 0.f;
             //initialize everything to 0, only set if the lane is valid
             if(valid){
@@ -419,13 +466,13 @@ __global__ void rasterize_simple_backward_kernel(
 
                 // update v_rgb for this gaussian
                 float v_alpha = 0.f;
-                v_rgb_local = {vis * v_out.x, vis * v_out.y, vis * v_out.z};
+                v_color_local = {vis * v_out.x, vis * v_out.y, vis * v_out.z};
 
-                const float3 rgb = rgbs_batch[t];
+                const glm::vec4 rgba = color_opacity_batch[t];
                 // contribution from this pixel
-                v_alpha += (rgb.x * T - buffer.x) * ra * v_out.x;
-                v_alpha += (rgb.y * T - buffer.y) * ra * v_out.y;
-                v_alpha += (rgb.z * T - buffer.z) * ra * v_out.z;
+                v_alpha += (rgba.x * T - buffer.x) * ra * v_out.x;
+                v_alpha += (rgba.y * T - buffer.y) * ra * v_out.y;
+                v_alpha += (rgba.z * T - buffer.z) * ra * v_out.z;
 
                 v_alpha += T_final * ra * v_out_alpha;
                 // contribution from background pixel
@@ -433,49 +480,62 @@ __global__ void rasterize_simple_backward_kernel(
                 v_alpha += -T_final * ra * background.y * v_out.y;
                 v_alpha += -T_final * ra * background.z * v_out.z;
                 // update the running sum
-                buffer.x += rgb.x * vis;
-                buffer.y += rgb.y * vis;
-                buffer.z += rgb.z * vis;
+                buffer.x += rgba.x * vis;
+                buffer.y += rgba.y * vis;
+                buffer.z += rgba.z * vis;
 
-                get_alpha_grad(
-                    conic, xy_opac, p,
-                    v_alpha,
-                    v_conic_local, v_xy_local, v_opacity_local
+                glm::vec2 v_uv;
+                get_alpha_vjp(
+                    uv, rgba.w, v_alpha,
+                    v_uv, v_opacity_local
                 );
-                v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
+                glm::mat2x3 v_axis_uv;
+                get_intersection_vjp(
+                    pos, axis_uv, pos_2d,
+                    glm::vec3(0), v_uv,
+                    v_position_local, v_axis_uv
+                );
+                v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local));
+                // v_position_xy_abs_local /= pos.z;
+                v_axis_u_local = v_axis_uv[0];
+                v_axis_v_local = v_axis_uv[1];
 
                 T = next_T;
             }
-            warpSum3(v_rgb_local, warp);
-            warpSum3(v_conic_local, warp);
-            warpSum2(v_xy_local, warp);
-            warpSum2(v_xy_abs_local, warp);
+            warpSum3(v_position_local, warp);
+            warpSum2(v_position_xy_abs_local, warp);
+            warpSum3(v_axis_u_local, warp);
+            warpSum3(v_axis_v_local, warp);
+            warpSum3(v_color_local, warp);
             warpSum(v_opacity_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t];
-                float* v_rgb_ptr = (float*)(v_colors);
-                atomicAdd(v_rgb_ptr + 3*g + 0, v_rgb_local.x);
-                atomicAdd(v_rgb_ptr + 3*g + 1, v_rgb_local.y);
-                atomicAdd(v_rgb_ptr + 3*g + 2, v_rgb_local.z);
-                
-                float* v_conic_ptr = (float*)(v_conic);
-                atomicAdd(v_conic_ptr + 3*g + 0, v_conic_local.x);
-                atomicAdd(v_conic_ptr + 3*g + 1, v_conic_local.y);
-                atomicAdd(v_conic_ptr + 3*g + 2, v_conic_local.z);
-                
-                float* v_xy_ptr = (float*)(v_xy);
-                atomicAdd(v_xy_ptr + 2*g + 0, v_xy_local.x);
-                atomicAdd(v_xy_ptr + 2*g + 1, v_xy_local.y);
 
-                float* v_xy_abs_ptr = (float*)(v_xy_abs);
-                atomicAdd(v_xy_abs_ptr + 2*g + 0, v_xy_abs_local.x);
-                atomicAdd(v_xy_abs_ptr + 2*g + 1, v_xy_abs_local.y);
+                float* v_position_ptr = (float*)(v_positions);
+                atomicAdd(v_position_ptr + 3*g + 0, v_position_local.x);
+                atomicAdd(v_position_ptr + 3*g + 1, v_position_local.y);
+                atomicAdd(v_position_ptr + 3*g + 2, v_position_local.z);
+                float* v_positions_xy_abs_ptr = (float*)(v_positions_xy_abs);
+                atomicAdd(v_positions_xy_abs_ptr + 2*g + 0, v_position_xy_abs_local.x);
+                atomicAdd(v_positions_xy_abs_ptr + 2*g + 1, v_position_xy_abs_local.y);
+
+                float* v_axis_u_ptr = (float*)(v_axes_u);
+                atomicAdd(v_axis_u_ptr + 3*g + 0, v_axis_u_local.x);
+                atomicAdd(v_axis_u_ptr + 3*g + 1, v_axis_u_local.y);
+                atomicAdd(v_axis_u_ptr + 3*g + 2, v_axis_u_local.z);
+                float* v_axis_v_ptr = (float*)(v_axes_v);
+                atomicAdd(v_axis_v_ptr + 3*g + 0, v_axis_v_local.x);
+                atomicAdd(v_axis_v_ptr + 3*g + 1, v_axis_v_local.y);
+                atomicAdd(v_axis_v_ptr + 3*g + 2, v_axis_v_local.z);
                 
+                float* v_color_ptr = (float*)(v_colors);
+                atomicAdd(v_color_ptr + 3*g + 0, v_color_local.x);
+                atomicAdd(v_color_ptr + 3*g + 1, v_color_local.y);
+                atomicAdd(v_color_ptr + 3*g + 2, v_color_local.z);
                 atomicAdd(v_opacities + g, v_opacity_local);
             }
         }
     }
-    #endif
 }
 
 __global__ void project_gaussians_backward_kernel(

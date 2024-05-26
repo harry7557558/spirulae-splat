@@ -110,7 +110,7 @@ class _ProjectGaussians(Function):
 
         # Save tensors.
         ctx.save_for_backward(
-            means3d, scales, quats.clone().detach(),
+            means3d, scales, quats,
             viewmat,
             bounds, num_tiles_hit,
             positions, axes_u, axes_v,
@@ -136,7 +136,7 @@ class _ProjectGaussians(Function):
 
         # print('v_depth_grads', torch.abs(v_depth_grads).mean().item())
 
-        (v_means3d, v_scales, v_quats) = _C.project_gaussians_backward(
+        backward_return = _C.project_gaussians_backward(
             ctx.num_points,
             means3d, scales, quats,
             viewmat,
@@ -144,6 +144,9 @@ class _ProjectGaussians(Function):
             num_tiles_hit,
             v_positions, v_axes_u, v_axes_v, v_depth_grads
         )
+
+        clean = lambda x: torch.nan_to_num(torch.clip(x, -10., 10.))
+        (v_means3d, v_scales, v_quats) = [clean(v) for v in backward_return]
 
         if viewmat.requires_grad:
             v_viewmat = torch.zeros_like(viewmat)

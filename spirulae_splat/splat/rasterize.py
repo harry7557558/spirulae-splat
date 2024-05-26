@@ -169,8 +169,7 @@ class _RasterizeGaussians(Function):
                 *intrins,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
-                colors, opacities,
-                background,
+                colors, opacities, background,
                 depth_grads, depth_normal_ref,
             )
 
@@ -179,13 +178,12 @@ class _RasterizeGaussians(Function):
         ctx.num_intersects = num_intersects
         ctx.block_width = block_width
         ctx.save_for_backward(
-            intrins,
+            torch.tensor(intrins),
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
-            colors, opacities,
+            colors, opacities, background,
             depth_grads, depth_normal_ref,
-            background,
-            final_idx, out_alpha,
+            final_idx, out_alpha, out_depth_grad,
         )
 
         output = (
@@ -207,7 +205,6 @@ class _RasterizeGaussians(Function):
         v_out_alpha,
         v_idx = None
         ):
-        assert False
 
         img_height = ctx.img_height
         img_width = ctx.img_width
@@ -217,82 +214,63 @@ class _RasterizeGaussians(Function):
             intrins,
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
-            colors, opacities,
+            colors, opacities, background,
             depth_grads, depth_normal_ref,
-            background,
-            final_idx, out_alpha,
+            final_idx, out_alpha, out_depth_grad,
         ) = ctx.saved_tensors
 
         if num_intersects < 1:
-            v_xy = torch.zeros_like(xys)
-            v_xy_abs = torch.zeros_like(xys)
-            v_depth = torch.zeros_like(depths)
-            v_depth_grad = torch.zeros_like(depth_grads)
-            v_conic = torch.zeros_like(conics)
+            v_positions = torch.zeros_like(positions)
+            v_positions_xy_abs = torch.zeros_like(positions)[..., :2]
+            v_axes_u = torch.zeros_like(axes_u)
+            v_axes_v = torch.zeros_like(axes_v)
             v_colors = torch.zeros_like(colors)
-            v_opacity = torch.zeros_like(opacity)
+            v_opacities = torch.zeros_like(opacities)
+            v_depth_grads = torch.zeros_like(depth_grads)
             v_depth_normal_ref = torch.zeros_like(depth_normal_ref)
 
         else:
             assert colors.shape[-1] == 3
             backward_return = _C.rasterize_backward(
-                img_height,
-                img_width,
-                ctx.block_width,
-                gaussian_ids_sorted,
-                tile_bins,
-                xys,
-                depths,
-                depth_grads,
-                conics,
-                colors,
-                opacity,
-                depth_normal_ref,
-                background,
-                final_Ts,
-                final_idx,
-                out_depth_grad,
-                v_out_img,
-                v_out_depth_grad,
-                v_out_alpha,
-                v_out_reg_depth,
-                v_out_reg_normal
+                img_height, img_width, ctx.block_width,
+                *intrins,
+                gaussian_ids_sorted, tile_bins,
+                positions, axes_u, axes_v,
+                colors, opacities, background,
+                depth_grads, depth_normal_ref,
+                final_idx, out_alpha, out_depth_grad,
+                v_out_alpha, v_out_img, v_out_depth_grad,
+                v_out_reg_depth.contiguous(),
+                v_out_reg_normal.contiguous(),
             )
 
-            clean = lambda x: torch.nan_to_num(torch.clip(x, -1e4, 1e4))
+            clean = lambda x: torch.nan_to_num(torch.clip(x, -1., 1.))
             (
-                v_xy,
-                v_xy_abs,
-                v_depth,
-                v_depth_grad,
-                v_conic,
-                v_colors,
-                v_opacity,
-                v_depth_normal_ref
+                v_positions, v_positions_xy_abs,
+                v_axes_u, v_axes_v,
+                v_colors, v_opacities,
+                v_depth_grads, v_depth_normal_ref
             ) = [clean(v) for v in backward_return]
+
+        v_background = None
+        if background.requires_grad:
+            v_background = torch.matmul(
+                v_out_img.float().view(-1, 3).t(),
+                (1.0-out_alpha).float().view(-1, 1)
+            ).squeeze()
 
         # Abs grad for gaussian splitting criterion. See
         # - "AbsGS: Recovering Fine Details for 3D Gaussian Splatting"
         # - "EfficientGS: Streamlining Gaussian Splatting for Large-Scale High-Resolution Scene Representation"
-        if not hasattr(xys, 'absgrad') or xys.absgrad is None:
-            xys.absgrad = v_xy_abs
+        if not hasattr(positions, 'absgrad') or positions.absgrad is None:
+            positions.absgrad = v_positions_xy_abs
         else:
-            xys.absgrad += v_xy_abs
-
-        # print("v_depth", torch.amin(v_depth).item(), torch.mean(v_depth).item(), torch.amax(v_depth).item())
+            positions.absgrad += v_positions_xy_abs
 
         return (
-            v_xy,  # xys
-            v_depth,  # depths
-            v_depth_grad,  # depth_grads
-            None,  # radii
-            v_conic,  # conics
-            None,  # num_tiles_hit
-            v_colors,  # colors
-            v_opacity,  # opacity
-            v_depth_normal_ref,  # depth_normal_ref
-            None,  # img_height
-            None,  # img_width
-            None,  # block_width
-            None,  # background
+            v_positions, v_axes_u, v_axes_v,
+            v_colors, v_opacities,
+            v_depth_grads, v_depth_normal_ref,
+            None, None, None, None, None, None,
+            v_background,
         )

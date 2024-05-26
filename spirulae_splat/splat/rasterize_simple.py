@@ -107,7 +107,7 @@ class _RasterizeGaussiansSimple(Function):
         img_width: int,
         block_width: int,
         background: Float[Tensor, "channels"],
-    ) -> Tensor:
+    ) -> Tuple[Tensor, Tensor]:
         num_points = positions.size(0)
         tile_bounds = (
             (img_width + block_width - 1) // block_width,
@@ -160,11 +160,10 @@ class _RasterizeGaussiansSimple(Function):
         ctx.num_intersects = num_intersects
         ctx.block_width = block_width
         ctx.save_for_backward(
-            intrins,
+            torch.tensor(intrins),
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
-            colors, opacities,
-            background,
+            colors, opacities, background,
             final_idx, out_alpha,
         )
 
@@ -174,7 +173,6 @@ class _RasterizeGaussiansSimple(Function):
 
     @staticmethod
     def backward(ctx, v_out_img, v_out_alpha, v_idx=None):
-        return (*([None]*14),)
 
         img_height = ctx.img_height
         img_width = ctx.img_width
@@ -184,70 +182,54 @@ class _RasterizeGaussiansSimple(Function):
             intrins,
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
-            colors, opacities,
-            background,
-            final_idx,
-            out_alpha,
+            colors, opacities, background,
+            final_idx, out_alpha,
         ) = ctx.saved_tensors
 
         if num_intersects < 1:
-            v_xy = torch.zeros_like(xys)
-            v_xy_abs = torch.zeros_like(xys)
-            v_conic = torch.zeros_like(conics)
+            v_positions = torch.zeros_like(positions)
+            v_positions_xy_abs = torch.zeros_like(positions)[..., :2]
+            v_axes_u = torch.zeros_like(axes_u)
+            v_axes_v = torch.zeros_like(axes_v)
             v_colors = torch.zeros_like(colors)
-            v_opacity = torch.zeros_like(opacity)
+            v_opacities = torch.zeros_like(opacities)
 
         else:
             backward_return = _C.rasterize_simple_backward(
-                img_height,
-                img_width,
-                ctx.block_width,
-                gaussian_ids_sorted,
-                tile_bins,
-                xys,
-                conics,
-                colors,
-                opacity,
-                background,
-                final_Ts,
-                final_idx,
-                v_out_img,
-                v_out_alpha,
+                img_height, img_width, ctx.block_width,
+                *intrins,
+                gaussian_ids_sorted, tile_bins,
+                positions, axes_u, axes_v,
+                colors, opacities, background,
+                final_idx, out_alpha,
+                v_out_img, v_out_alpha,
             )
 
-            clean = lambda x: torch.nan_to_num(torch.clip(x, -1e4, 1e4))
+            clean = lambda x: torch.nan_to_num(torch.clip(x, -1., 1.))
             (
-                v_xy,
-                v_xy_abs,
-                v_conic,
-                v_colors,
-                v_opacity
+                v_positions, v_positions_xy_abs,
+                v_axes_u, v_axes_v,
+                v_colors, v_opacities
             ) = [clean(v) for v in backward_return]
 
         v_background = None
         if background.requires_grad:
             v_background = torch.matmul(
-                v_out_img.float().view(-1, 3).t(), final_Ts.float().view(-1, 1)
+                v_out_img.float().view(-1, 3).t(),
+                (1.0-out_alpha).float().view(-1, 1)
             ).squeeze()
 
         # Abs grad for gaussian splitting criterion. See
         # - "AbsGS: Recovering Fine Details for 3D Gaussian Splatting"
         # - "EfficientGS: Streamlining Gaussian Splatting for Large-Scale High-Resolution Scene Representation"
-        if not hasattr(xys, 'absgrad') or xys.absgrad is None:
-            xys.absgrad = v_xy_abs
+        if not hasattr(positions, 'absgrad') or positions.absgrad is None:
+            positions.absgrad = v_positions_xy_abs
         else:
-            xys.absgrad += v_xy_abs
-        
+            positions.absgrad += v_positions_xy_abs
+
         return (
-            v_xy,  # xys
-            None,  # depths
-            None,  # radii
-            v_conic,  # conics
-            None,  # num_tiles_hit
-            v_colors,  # colors
-            v_opacity,  # opacity
-            None,  # img_height
-            None,  # img_width
-            None,  # block_width
-            v_background,  # background
+            v_positions, v_axes_u, v_axes_v,
+            v_colors, v_opacities,
+            None, None, None, None, None, None,
+            v_background,
         )

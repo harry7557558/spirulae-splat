@@ -454,38 +454,43 @@ def visibility_kernel(r2):
     # return (1.0-r2) * (1.0-r2) * (r2 < 1.0)
     return (1.0-r2) * (r2 < 1.0)
 
-def get_alpha(conic, xy_opac, p) -> Tuple[Tensor, bool]:
-    opac = xy_opac[2]
-    delta = [xy_opac[0] - p[0], xy_opac[1] - p[1]]
-    r2 = 0.5 * (conic[0] * delta[0] * delta[0] + \
-                conic[2] * delta[1] * delta[1]) + \
-            conic[1] * delta[0] * delta[1]
+def get_alpha(uv, opac) -> Tuple[Tensor, bool]:
+    r2 = torch.norm(uv)**2
     vis = visibility_kernel(r2)
-    alpha = opac * vis
-    alpha = torch.fmin(0.99*torch.ones_like(alpha), alpha)
-    return alpha, r2 >= 0.0 and alpha >= 1./255.
+    alpha  = opac * vis
+    return alpha, r2 >= 0.0 and alpha >= 1e-3
+
+
+def get_intersection(position, axis_uv, pos_2d):
+    pos_2d_3 = torch.concat((pos_2d, torch.ones_like(pos_2d[0:1])))
+    A = torch.concat((*axis_uv, pos_2d_3)).reshape((3,3)).T
+    uvt = -torch.linalg.inv(A) @ position
+    uv = uvt[:2]
+    t = -uvt[2:]
+    return pos_2d_3*t, uv, torch.norm(uv) > 1.0
 
 
 def rasterize_gaussians_simple(
-    xys: Float[Tensor, "*batch 2"],
-    depths: Float[Tensor, "*batch 1"],
-    radii: Float[Tensor, "*batch 1"],
-    conics: Float[Tensor, "*batch 3"],
-    num_tiles_hit: Int[Tensor, "*batch 1"],
+    positions: Float[Tensor, "*batch 3"],
+    axes_u: Float[Tensor, "*batch 3"],
+    axes_v: Float[Tensor, "*batch 3"],
     colors: Float[Tensor, "*batch channels"],
     opacities: Float[Tensor, "*batch 1"],
+    bounds: Int[Tensor, "*batch 4"],
+    num_tiles_hit: Int[Tensor, "*batch 1"],
+    intrins: Tuple[float, float, float, float],
     img_height: int,
     img_width: int,
     block_width: int,
     background: Float[Tensor, "channels"] = None
 ):
-    device = xys.device
+    device = positions.device
     float32_param = { 'dtype': torch.float32, 'device': device }
     int32_param = { 'dtype': torch.int32, 'device': device }
     if background is None:
         background = torch.zeros(colors.shape[-1], **float32_param)
 
-    num_points = xys.size(0)
+    num_points = positions.size(0)
     tile_bounds = (
         (img_width + block_width - 1) // block_width,
         (img_height + block_width - 1) // block_width,
@@ -504,26 +509,26 @@ def rasterize_gaussians_simple(
         gaussian_ids_sorted,
         tile_bins,
     ) = bin_and_sort_gaussians(
-        num_points,
-        num_intersects,
-        xys,
-        depths,
-        radii,
-        cum_tiles_hit,
-        tile_bounds,
-        block_width,
+        num_points, num_intersects,
+        positions,
+        bounds, cum_tiles_hit,
+        tile_bounds, block_width,
     )
 
-    final_Ts = torch.zeros((img_size[1], img_size[0]), **float32_param)
     final_idx = torch.zeros((img_size[1], img_size[0]), **int32_param)
     out_img = torch.zeros((img_size[1], img_size[0], 3), **float32_param)
+    out_alpha = torch.zeros((img_size[1], img_size[0]), **float32_param)
+
+    fx, fy, cx, cy = intrins
 
     for i in range(img_size[1]):
         for j in range(img_size[0]):
             tile_id = (i // block[0]) * tile_bounds[0] + (j // block[1])
             tile_bin_start = tile_bins[tile_id, 0]
             tile_bin_end = tile_bins[tile_id, 1]
-            p = [j+0.5, i+0.5]
+            pos_screen = [j+0.5, i+0.5]
+            pos_2d = [(pos_screen[0]-cx)/fx, (pos_screen[1]-cy)/fy]
+            pos_2d = torch.tensor(pos_2d, **float32_param)
 
             T = 1.0
             cur_idx = 0
@@ -531,55 +536,57 @@ def rasterize_gaussians_simple(
 
             for idx in range(tile_bin_start, tile_bin_end):
                 gid = gaussian_ids_sorted[idx]
-                conic = conics[gid]
-                xy_opac = [*xys[gid], opacities[gid]]
+                pos = positions[gid]
+                color  = colors[gid]
+                opac = opacities[gid]
+                axis_uv = (axes_u[gid], axes_v[gid])
 
-                alpha, valid = get_alpha(conic, xy_opac, p)
-                if not valid:
+                poi, uv, valid = get_intersection(pos, axis_uv, pos_2d)
+                if torch.linalg.norm(uv) > 1.0:
                     continue
-                # alpha = torch.fmin(0.999*torch.ones_like(alpha), alpha)
+                alpha, valid  = get_alpha(uv, opac)
+                if  not valid:
+                    continue
+                
                 next_T = T * (1. - alpha)
 
                 vis = alpha * T
-                c = colors[gid]
-
-                pix_out += vis * c
-
+                pix_out += vis * color
                 T = next_T
                 cur_idx = idx
                 if next_T <= 1e-3:
                     break
 
-            final_Ts[i, j] = T
             final_idx[i, j] = cur_idx
             out_img[i, j] = pix_out + T * background
+            out_alpha[i, j] = 1.0 - T
 
-    out_alpha = 1 - final_Ts
     return out_img, out_alpha, final_idx
 
 
-def rasterize_gaussians(
-    xys: Float[Tensor, "*batch 2"],
-    depths: Float[Tensor, "*batch 1"],
-    depth_grads: Float[Tensor, "*batch 2"],
-    radii: Float[Tensor, "*batch 1"],
-    conics: Float[Tensor, "*batch 3"],
-    num_tiles_hit: Int[Tensor, "*batch 1"],
+def rasterize_gaussians( 
+    positions: Float[Tensor, "*batch 3"],
+    axes_u: Float[Tensor, "*batch 3"],
+    axes_v: Float[Tensor, "*batch 3"],
     colors: Float[Tensor, "*batch channels"],
     opacities: Float[Tensor, "*batch 1"],
+    depth_grads: Float[Tensor, "*batch 2"],
     depth_normal_ref_im: Float[Tensor, "*batch 2"],
+    bounds: Int[Tensor, "*batch 4"],
+    num_tiles_hit: Int[Tensor, "*batch 1"],
+    intrins: Tuple[float, float, float, float],
     img_height: int,
     img_width: int,
     block_width: int,
     background: Optional[Float[Tensor, "channels"]] = None
 ):
-    device = xys.device
+    device = positions.device
     float32_param = { 'dtype': torch.float32, 'device': device }
     int32_param = { 'dtype': torch.int32, 'device': device }
     if background is None:
         background = torch.zeros(colors.shape[-1], **float32_param)
 
-    num_points = xys.size(0)
+    num_points = positions.size(0)
     tile_bounds = (
         (img_width + block_width - 1) // block_width,
         (img_height + block_width - 1) // block_width,
@@ -598,30 +605,30 @@ def rasterize_gaussians(
         gaussian_ids_sorted,
         tile_bins,
     ) = bin_and_sort_gaussians(
-        num_points,
-        num_intersects,
-        xys,
-        depths,
-        radii,
-        cum_tiles_hit,
-        tile_bounds,
-        block_width,
+        num_points, num_intersects,
+        positions,
+        bounds, cum_tiles_hit,
+        tile_bounds, block_width,
     )
 
-    final_Ts = torch.zeros((img_size[1], img_size[0]), **float32_param)
     final_idx = torch.zeros((img_size[1], img_size[0]), **int32_param)
+    out_alpha = torch.zeros((img_size[1], img_size[0]), **float32_param)
     out_img = torch.zeros((img_size[1], img_size[0], 3), **float32_param)
     out_depth_grad = torch.zeros((img_size[1], img_size[0], 3), **float32_param)
     out_reg_depth = torch.zeros((img_size[1], img_size[0]), **float32_param)
     out_reg_normal = torch.zeros((img_size[1], img_size[0]), **float32_param)
     float32_param['requires_grad'] = True
 
+    fx, fy, cx, cy = intrins
+
     for i in range(img_size[1]):
         for j in range(img_size[0]):
             tile_id = (i // block[0]) * tile_bounds[0] + (j // block[1])
             tile_bin_start = tile_bins[tile_id, 0]
             tile_bin_end = tile_bins[tile_id, 1]
-            p = [j+0.5, i+0.5]
+            pos_screen = [j+0.5, i+0.5]
+            pos_2d = [(pos_screen[0]-cx)/fx, (pos_screen[1]-cy)/fy]
+            pos_2d = torch.tensor(pos_2d, **float32_param)
 
             T = torch.ones(1, **float32_param)
             cur_idx = 0
@@ -635,22 +642,26 @@ def rasterize_gaussians(
 
             for idx in range(tile_bin_start, tile_bin_end):
                 gid = gaussian_ids_sorted[idx]
-                conic = conics[gid]
-                xy_opac = [*xys[gid], opacities[gid]]
+                pos = positions[gid]
+                color  = colors[gid]
+                opac = opacities[gid]
+                axis_uv = (axes_u[gid], axes_v[gid])
 
-                alpha, valid = get_alpha(conic, xy_opac, p)
-                if not valid:
+                poi, uv, valid = get_intersection(pos, axis_uv, pos_2d)
+                if torch.linalg.norm(uv) > 1.0:
                     continue
-                # alpha = torch.fmin(0.999*torch.ones_like(alpha), alpha)
+                alpha, valid  = get_alpha(uv, opac)
+                if  not valid:
+                    continue
+
                 next_T = T * (1. - alpha)
 
                 vis = alpha * T
-                c = colors[gid]
-                depth = depths[gid].unsqueeze(0)
+                depth = pos[2]
                 g_i = depth_grads[gid]
                 n_i = g_i / (torch.norm(g_i)+1e-6)
 
-                pix_out = pix_out + vis * c
+                pix_out = pix_out + vis * color
                 reg_depth = reg_depth + vis*depth * vis_sum - vis * depth_sum
                 reg_normal = reg_normal + vis * (1.0 - torch.dot(n_i, depth_normal_ref))
                 vis_sum = vis_sum + vis
@@ -662,14 +673,13 @@ def rasterize_gaussians(
                 if next_T <= 1e-3:
                     break
 
-            final_Ts[i, j] = T
             final_idx[i, j] = cur_idx
+            out_alpha[i, j] = 1.0-T
             out_img[i, j] = pix_out + T * background
             out_depth_grad[i, j] = torch.concat((g_sum, depth_sum))
             out_reg_depth[i, j] = reg_depth
             out_reg_normal[i, j] = reg_normal
 
-    out_alpha = 1.0 - final_Ts
     return (
         out_img, out_depth_grad,
         out_reg_depth, out_reg_normal,

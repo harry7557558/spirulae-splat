@@ -120,7 +120,7 @@ class SpirulaeModelConfig(ModelConfig):
     """threshold of scale for culling huge gaussians"""
     cull_anisotropy_thresh: float = 10.0
     """threshold of quotient of scale for culling long thin gaussians"""
-    cull_absgrad_thresh: float = 0.0002
+    cull_grad_thresh: float = 0.0002
     """threshold for culling gaussians with low visibility"""
     continue_cull_post_densification: bool = True
     """If True, continue to cull gaussians post refinement"""
@@ -269,6 +269,12 @@ class SpirulaeModel(Model):
             )  # This color is the same as the default background color in Viser. This would only affect the background color when rendering.
         else:
             self.background_color = get_color(self.config.background_color)
+        self.background_color = torch.nn.Parameter(self.background_color)
+        self.ext_params = torch.nn.ParameterDict(
+            {
+                "background_color": self.background_color,
+            }
+        )
 
     @property
     def colors(self):
@@ -418,13 +424,13 @@ class SpirulaeModel(Model):
         # to save some training time, we no longer need to update those stats post refinement
         if self.step >= self.config.stop_split_at:
             return
-        if not hasattr(self.xys, 'absgrad'):
+        if not hasattr(self.positions, 'absgrad'):
             return
         with torch.no_grad():
             # keep track of a moving average of grad norms
             visible_mask = (self.radii > 0).flatten()
-            assert self.xys.absgrad is not None  # type: ignore
-            grads = self.xys.absgrad.detach().norm(dim=-1)  # type: ignore
+            assert self.positions.absgrad is not None  # type: ignore
+            grads = self.positions.absgrad.detach().norm(dim=-1)  # type: ignore
             # print(f"grad norm min {grads.min().item()} max {grads.max().item()} mean {grads.mean().item()} size {grads.shape}")
             if self.xys_grad_norm is None:
                 self.xys_grad_norm = grads
@@ -447,7 +453,7 @@ class SpirulaeModel(Model):
 
     def set_background(self, background_color: torch.Tensor):
         assert background_color.shape == (3,)
-        self.background_color = background_color
+        # self.background_color = background_color
 
     def refinement_after(self, optimizers: Optimizers, step):
         assert step == self.step
@@ -468,7 +474,10 @@ class SpirulaeModel(Model):
                 do_densification = False
                 self.avg_grad_norm = None
             else:
-                self.avg_grad_norm = (self.xys_grad_norm / self.vis_counts) * 0.5 * max(self.last_size[0], self.last_size[1])
+                self.avg_grad_norm = (self.xys_grad_norm / self.vis_counts) * 0.5# * max(self.last_size[0], self.last_size[1])
+            # with torch.no_grad():
+            #     print("avg_grad_norm", torch.mean(self.avg_grad_norm).item(), torch.median(self.avg_grad_norm).item())
+            #     assert False
             if do_densification:
                 # then we densify
                 high_grads = (self.avg_grad_norm > self.config.densify_grad_thresh).squeeze()
@@ -557,7 +566,7 @@ class SpirulaeModel(Model):
         low_grad_count = 0
         if self.avg_grad_norm is not None:
             low_grads = torch.zeros_like(culls)
-            low_grads[:len(self.avg_grad_norm)] = (self.avg_grad_norm < self.config.cull_absgrad_thresh).squeeze()
+            low_grads[:len(self.avg_grad_norm)] = (self.avg_grad_norm < self.config.cull_grad_thresh).squeeze()
             culls |= low_grads
             low_grad_count = torch.sum(low_grads).item()
         # others
@@ -675,8 +684,13 @@ class SpirulaeModel(Model):
         # Here we explicitly use the means, scales as parameters so that the user can override this function and
         # specify more if they want to add more optimizable params to gaussians.
         return {
-            name: [self.gauss_params[name]]
-            for name in ["means", "scales", "quats", "features_dc", "features_rest", "opacities"]
+            name: [self.gauss_params[name] if name in self.gauss_params
+                   else self.ext_params[name]]
+            for name in [
+                "means", "scales", "quats",
+                "features_dc", "features_rest",
+                "opacities", #"background_color"
+                ]
         }
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
@@ -746,27 +760,15 @@ class SpirulaeModel(Model):
         # get the background color
         if self.training:
             optimized_camera_to_world = self.camera_optimizer.apply_to_camera(camera)[0, ...]
-
-            if self.config.background_color == "random":
-                background = torch.rand(3, device=self.device)
-            elif self.config.background_color == "white":
-                background = torch.ones(3, device=self.device)
-            elif self.config.background_color == "black":
-                background = torch.zeros(3, device=self.device)
-            else:
-                background = self.background_color.to(self.device)
         else:
             optimized_camera_to_world = camera.camera_to_worlds[0, ...]
-
-            if renderers.BACKGROUND_COLOR_OVERRIDE is not None:
-                background = renderers.BACKGROUND_COLOR_OVERRIDE.to(self.device)
-            else:
-                background = self.background_color.to(self.device)
 
         if self.crop_box is not None and not self.training:
             crop_ids = self.crop_box.within(self.means).squeeze()
             if crop_ids.sum() == 0:
-                return self.get_empty_outputs(int(camera.width.item()), int(camera.height.item()), background)
+                return self.get_empty_outputs(
+                    int(camera.width.item()), int(camera.height.item()),
+                    self.background_color.detach())
         else:
             crop_ids = None
         camera_downscale = self._get_downscale_factor()
@@ -838,16 +840,6 @@ class SpirulaeModel(Model):
             H, W,
             BLOCK_WIDTH,
         )  # type: ignore
-        def print_tensor(x, axis=0):
-            print(x.shape, x.dtype,
-                  torch.amin(x, axis=axis).detach().cpu().numpy(),
-                  torch.amax(x, axis=axis).detach().cpu().numpy())
-        # print()
-        # print_tensor(positions)
-        # print_tensor(axes_u)
-        # print_tensor(axes_v)
-        # print_tensor(bounds)
-        # print_tensor(num_tiles_hit)
 
         # rescale the camera back to original dimensions before returning
         camera.rescale_output_resolution(camera_downscale)
@@ -899,9 +891,8 @@ class SpirulaeModel(Model):
             depth_grads, depth_normal_grad_ref_normalized,
             bounds, num_tiles_hit,
             intrins, H, W, BLOCK_WIDTH,
-            background
+            self.background_color
         )  # type: ignore
-        # print_tensor(reg_depth, (0,1))
         alpha = alpha[..., None]
         rgb = torch.clamp(rgb, max=1.0)  # type: ignore
         depth_grad_im, depth_im = depth_im[...,0:2], depth_im[...,2:3]
@@ -932,12 +923,15 @@ class SpirulaeModel(Model):
                 # depth_grad_reg = self.depth_grads.abs().mean()
                 # print(depth_grad_reg.item())
 
-        print_tensor(torch.abs(depth_im-depth_ref), (0,1))
+        self.intrins = intrins
+        self.positions = positions
+        self.radii = num_tiles_hit**0.5 / 2 * BLOCK_WIDTH
+
         return {
             "rgb": rgb,
             "depth": depth_ref,
-            "depth_diff": torch.abs(depth_im-depth_ref),
-            "alpha_diff": torch.abs(alpha-alpha_ref),
+            # "depth_diff": torch.abs(depth_im-depth_ref),
+            # "alpha_diff": torch.abs(alpha-alpha_ref),
             "depth_grad_1_vis": depth_grad_im_vis,
             "depth_grad_2_vis": depth_grad_ref_vis,
             "reg_depth": reg_depth.unsqueeze(2),
@@ -945,7 +939,7 @@ class SpirulaeModel(Model):
             "alpha": alpha,
             "depth_grad_1": depth_grad_ref_normalized,
             "depth_grad_2": depth_normal_grad_ref_normalized,
-            "background": background
+            "background": self.background_color
         }  # type: ignore
 
     def get_gt_img(self, image: torch.Tensor):

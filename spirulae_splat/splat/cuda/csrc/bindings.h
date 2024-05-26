@@ -151,59 +151,68 @@ std::tuple<
     const torch::Tensor &depth_normal_ref_im
 );
 
-std::
-    tuple<
-        torch::Tensor, // dL_dxy
-        torch::Tensor, // dL_dxy_abs
-        torch::Tensor, // dL_dconic
-        torch::Tensor, // dL_dcolors
-        torch::Tensor  // dL_dopacity
+std::tuple<
+    torch::Tensor, // v_positions
+    torch::Tensor, // v_positions_xy_abs
+    torch::Tensor, // v_axes_u
+    torch::Tensor, // v_axes_v
+    torch::Tensor, // v_colors
+    torch::Tensor  // v_opacities
 > rasterize_simple_backward_tensor(
     const unsigned img_height,
     const unsigned img_width,
     const unsigned block_width,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
     const torch::Tensor &gaussians_ids_sorted,
     const torch::Tensor &tile_bins,
-    const torch::Tensor &xys,
-    const torch::Tensor &conics,
+    const torch::Tensor &positions,
+    const torch::Tensor &axes_u,
+    const torch::Tensor &axes_v,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
     const torch::Tensor &background,
-    const torch::Tensor &final_Ts,
     const torch::Tensor &final_idx,
-    const torch::Tensor &v_output, // dL_dout_color
+    const torch::Tensor &output_alpha,
+    const torch::Tensor &v_output,
     const torch::Tensor &v_output_alpha
 );
 
 std::tuple<
-        torch::Tensor, // dL_dxy
-        torch::Tensor, // dL_dxy_abs
-        torch::Tensor, // dL_ddepth
-        torch::Tensor, // dL_ddepth_grad
-        torch::Tensor, // dL_dconic
-        torch::Tensor, // dL_dcolors
-        torch::Tensor, // dL_dopacity
-        torch::Tensor  // v_depth_normal_ref
+    torch::Tensor, // v_positions
+    torch::Tensor, // v_positions_xy_abs
+    torch::Tensor, // v_axes_u
+    torch::Tensor, // v_axes_v
+    torch::Tensor, // v_colors
+    torch::Tensor, // v_opacities
+    torch::Tensor, // v_depth_grad
+    torch::Tensor  // v_depth_normal_ref
 > rasterize_backward_tensor(
     const unsigned img_height,
     const unsigned img_width,
     const unsigned block_width,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
     const torch::Tensor &gaussians_ids_sorted,
     const torch::Tensor &tile_bins,
-    const torch::Tensor &xys,
-    const torch::Tensor &depths,
-    const torch::Tensor &depth_grads,
-    const torch::Tensor &conics,
+    const torch::Tensor &positions,
+    const torch::Tensor &axes_u,
+    const torch::Tensor &axes_v,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
-    const torch::Tensor &depth_normal_ref_im,
     const torch::Tensor &background,
-    const torch::Tensor &final_Ts,
+    const torch::Tensor &depth_grads,
+    const torch::Tensor &depth_normal_ref_im,
     const torch::Tensor &final_idx,
+    const torch::Tensor &output_alpha,
     const torch::Tensor &output_depth_grad,
-    const torch::Tensor &v_output, // dL_dout_color
-    const torch::Tensor &v_output_depth,
     const torch::Tensor &v_output_alpha,
+    const torch::Tensor &v_output,
+    const torch::Tensor &v_output_depth_grad,
     const torch::Tensor &v_output_reg_depth,
     const torch::Tensor &v_output_reg_normal
 );

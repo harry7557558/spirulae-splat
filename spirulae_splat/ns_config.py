@@ -27,7 +27,7 @@ spirulae = MethodSpecification(
     config=TrainerConfig(
         method_name="spirulae",
         steps_per_eval_batch=0,
-        steps_per_save=10000,
+        steps_per_save=2500,
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
@@ -56,6 +56,14 @@ spirulae = MethodSpecification(
                     max_steps=30000,
                 ),
             },
+            "scales": {
+                "optimizer": AdamOptimizerConfig(lr=0.005, eps=1e-15),
+                "scheduler": None,
+            },
+            "quats": {
+                "optimizer": AdamOptimizerConfig(lr=0.001, eps=1e-15),
+                "scheduler": None
+            },
             "features_dc": {
                 "optimizer": AdamOptimizerConfig(lr=0.0025, eps=1e-15),
                 "scheduler": None,
@@ -68,12 +76,8 @@ spirulae = MethodSpecification(
                 "optimizer": AdamOptimizerConfig(lr=0.05, eps=1e-15),
                 "scheduler": None,
             },
-            "scales": {
-                "optimizer": AdamOptimizerConfig(lr=0.005, eps=1e-15),
-                "scheduler": None,
-            },
-            "quats": {
-                "optimizer": AdamOptimizerConfig(lr=0.001, eps=1e-15),
+            "background_color": {
+                "optimizer": AdamOptimizerConfig(lr=0.0025, eps=1e-15),
                 "scheduler": None
             },
             "camera_opt": {

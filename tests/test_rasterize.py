@@ -9,7 +9,7 @@ import spirulae_splat.splat.rasterize_simple as rasterize_simple
 import spirulae_splat.splat.rasterize as rasterize
 import spirulae_splat.splat.cuda as _C
 
-torch.manual_seed(40)
+torch.manual_seed(43)
 
 device = torch.device("cuda:0")
 
@@ -22,9 +22,6 @@ def check_close(name, a, b, atol=1e-5, rtol=1e-5):
         traceback.print_exc()
         diff = torch.abs(a - b).detach()
         print(f"{diff.max()=} {diff.mean()=}", end='\n\n')
-        # assert False
-        # import ipdb
-        # ipdb.set_trace()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -34,6 +31,7 @@ def test_rasterize():
     H, W = 20, 30
     cx, cy = W / 2, H / 2
     fx, fy = int(0.7*W), int(0.7*W)
+    intrins = (fx, fy, cx, cy)
     clip_thresh = 0.01
     viewmat = torch.tensor(
         [
@@ -54,18 +52,15 @@ def test_rasterize():
     background = torch.randn(3, device=device)
 
     colors = torch.randn((num_points, 3), device=device, requires_grad=True)
-    opacities = torch.rand((num_points, 1), device=device, requires_grad=True)
+    opacities = (0.995 * torch.rand((num_points, 1), device=device)).requires_grad_(True)
     _colors = colors.detach().clone().requires_grad_(True)
     _opacities = opacities.detach().clone().requires_grad_(True)
     depth_normal_ref = torch.randn((H, W, 2), device=device, requires_grad=True)
     _depth_normal_ref = depth_normal_ref.detach().clone().requires_grad_(True)
 
     params = project_gaussians(
-        means3d,
-        scales,
-        quats,
-        viewmat,
-        fx, fy, cx, cy,
+        means3d, scales, quats,
+        viewmat, intrins,
         H, W, BLOCK_SIZE,
         clip_thresh,
     )
@@ -79,48 +74,46 @@ def test_rasterize():
                 pass
         return params
     (
-        xys,
-        depths,
+        positions,
+        axes_u,
+        axes_v,
         depth_grads,
-        radii,
-        conics,
-        compensation,
+        bounds,
         num_tiles_hit,
-        cov3d,
     ) = decode_params(params)
     (
-        _xys,
-        _depths,
+        _positions,
+        _axes_u,
+        _axes_v,
         _depth_grads,
-        _radii,
-        _conics,
-        _compensation,
+        _bounds,
         _num_tiles_hit,
-        _cov3d,
     ) = decode_params(params)
 
     output = rasterize.rasterize_gaussians(
-        xys,
-        depths,
-        depth_grads,
-        radii,
-        conics,
-        num_tiles_hit,
+        positions,
+        axes_u,
+        axes_v,
         colors,
         opacities,
+        depth_grads,
         depth_normal_ref,
+        bounds,
+        num_tiles_hit,
+        intrins,
         H, W, BLOCK_SIZE,
         background
     )
 
     rgb_im, alpha_im, idx = rasterize_simple.rasterize_gaussians_simple(
-        xys,
-        depths,
-        radii,
-        conics,
-        num_tiles_hit,
+        positions,
+        axes_u,
+        axes_v,
         colors,
         opacities,
+        bounds,
+        num_tiles_hit,
+        intrins,
         H, W, BLOCK_SIZE,
         background
     )
@@ -129,17 +122,19 @@ def test_rasterize():
     check_close('rgb', output[0], rgb_im)
     check_close('alpha', output[4], alpha_im)
     check_close('idx', output[5], idx)
+    print()
 
     _output = _torch_impl.rasterize_gaussians(
-        _xys,
-        _depths,
-        _depth_grads,
-        _radii,
-        _conics,
-        _num_tiles_hit,
+        _positions,
+        _axes_u,
+        _axes_v,
         _colors,
         _opacities,
+        _depth_grads,
         _depth_normal_ref,
+        _bounds,
+        _num_tiles_hit,
+        intrins,
         H, W, BLOCK_SIZE,
         background
     )
@@ -151,6 +146,7 @@ def test_rasterize():
     check_close('out_reg_normal', output[3], _output[3])
     check_close('out_alpha', output[4], _output[4])
     check_close('final_idx', output[5], _output[5])
+    print()
 
     def fun(output):
         img, depth_grad, reg_depth, reg_normal, alpha, idx = output
@@ -166,12 +162,12 @@ def test_rasterize():
 
     print("test backward")
     tol = { 'atol': 1e-6, 'rtol': 1e-5 }
-    check_close('v_xys', xys.grad, _xys.grad, **tol)
-    check_close('v_depth', depths.grad, _depths.grad, **tol)
-    check_close('v_depth_grad', depth_grads.grad, _depth_grads.grad, **tol)
-    check_close('v_conics', conics.grad, _conics.grad, **tol)
+    check_close('v_positions', positions.grad, _positions.grad, **tol)
+    check_close('v_axes_u', axes_u.grad, _axes_u.grad, **tol)
+    check_close('v_axes_v', axes_v.grad, _axes_v.grad, **tol)
     check_close('v_colors', colors.grad, _colors.grad, **tol)
     check_close('v_opacities', opacities.grad, _opacities.grad, **tol)
+    check_close('v_depth_grad', depth_grads.grad, _depth_grads.grad, **tol)
     check_close('v_depth_normal_ref', depth_normal_ref.grad, _depth_normal_ref.grad, **tol)
 
 
