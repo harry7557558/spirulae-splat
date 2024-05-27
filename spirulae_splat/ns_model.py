@@ -104,7 +104,7 @@ class SpirulaeModelConfig(ModelConfig):
 
     _target: Type = field(default_factory=lambda: SpirulaeModel)
 
-    warmup_length: int = 500
+    warmup_length: int = 200
     """period of steps where refinement is turned off"""
     refine_every: int = 100
     """period of steps where gaussians are culled and densified"""
@@ -120,13 +120,13 @@ class SpirulaeModelConfig(ModelConfig):
     """threshold of scale for culling huge gaussians"""
     cull_anisotropy_thresh: float = 10.0
     """threshold of quotient of scale for culling long thin gaussians"""
-    cull_grad_thresh: float = 0.0002
+    cull_grad_thresh: float = 0.0004  # 0.0004|0.0002 w/o ch
     """threshold for culling gaussians with low visibility"""
     continue_cull_post_densification: bool = True
     """If True, continue to cull gaussians post refinement"""
     reset_alpha_every: int = 30
     """Every this many refinement steps, reset the alpha"""
-    densify_grad_thresh: float = 0.001
+    densify_grad_thresh: float = 0.0015  # 0.0015|0.001 w/o ch
     """threshold of positional gradient norm for densifying gaussians"""
     densify_size_thresh: float = 0.01
     """below this size, gaussians are *duplicated*, otherwise split"""
@@ -152,6 +152,10 @@ class SpirulaeModelConfig(ModelConfig):
     """stop splitting at this step"""
     sh_degree: int = 3
     """maximum degree of spherical harmonics to use"""
+    ch_degree_r: int = 3
+    """maximum radial degree of cylindrical harmonics to use"""
+    ch_degree_phi: int = 3
+    """maximum angular degree of cylindrical harmonics to use"""
     max_opacity: float = 0.995
     """maximum opacity of a gaussian, prevent numerical instability during backward"""
     use_scale_regularization: bool = True
@@ -216,6 +220,7 @@ class SpirulaeModel(Model):
             dtype=np.float32)))
         # colors
         dim_sh = num_sh_bases(self.config.sh_degree)
+        dim_ch = self.config.ch_degree_r * (2*self.config.ch_degree_phi+1)
 
         if (
             self.seed_points is not None
@@ -224,29 +229,35 @@ class SpirulaeModel(Model):
             and self.seed_points[1].shape[0] > 0
         ):
             shs = torch.zeros((self.seed_points[1].shape[0], dim_sh, 3)).float().cuda()
+            seed_color = self.seed_points[1] / 255
             if self.config.sh_degree > 0:
-                shs[:, 0, :3] = RGB2SH(self.seed_points[1] / 255)
+                shs[:, 0, :3] = RGB2SH(seed_color)
                 shs[:, 1:, 3:] = 0.0
             else:
-                CONSOLE.log("use color only optimization with sigmoid activation")
-                shs[:, 0, :3] = torch.logit(self.seed_points[1] / 255, eps=1e-10)
+                shs[:, 0, :3] = seed_color
+            if dim_ch > 0:
+                shs *= 2
+            chs = torch.zeros((self.seed_points[1].shape[0], dim_ch, 3)).float().cuda()
             features_dc = torch.nn.Parameter(shs[:, 0, :])
-            features_rest = torch.nn.Parameter(shs[:, 1:, :])
+            features_sh = torch.nn.Parameter(shs[:, 1:, :])
+            features_ch = torch.nn.Parameter(chs)
         else:
             features_dc = torch.nn.Parameter(torch.rand(num_points, 3))
-            features_rest = torch.nn.Parameter(torch.zeros((num_points, dim_sh - 1, 3)))
+            features_sh = torch.nn.Parameter(torch.zeros((num_points, dim_sh-1, 3)))
+            features_ch = torch.nn.Parameter(torch.zeros((num_points, dim_ch, 3)))
 
         opacities = torch.nn.Parameter(torch.logit(0.1 * torch.ones(num_points, 1)))
-        self.gauss_params = torch.nn.ParameterDict(
-            {
-                "means": means,
-                "scales": scales,
-                "quats": quats,
-                "features_dc": features_dc,
-                "features_rest": features_rest,
-                "opacities": opacities,
-            }
-        )
+
+        gauss_params = {
+            "means": means,
+            "scales": scales,
+            "quats": quats,
+            "features_dc": features_dc,
+            "features_sh": features_sh,
+            "features_ch": features_ch,
+            "opacities": opacities,
+        }
+        self.gauss_params = torch.nn.ParameterDict(gauss_params)
 
         self.camera_optimizer: CameraOptimizer = self.config.camera_optimizer.setup(
             num_cameras=self.num_train_data, device="cpu"
@@ -281,15 +292,7 @@ class SpirulaeModel(Model):
         if self.config.sh_degree > 0:
             return SH2RGB(self.features_dc)
         else:
-            return torch.sigmoid(self.features_dc)
-
-    @property
-    def shs_0(self):
-        return self.features_dc
-
-    @property
-    def shs_rest(self):
-        return self.features_rest
+            return self.features_dc
 
     @property
     def num_points(self):
@@ -319,8 +322,12 @@ class SpirulaeModel(Model):
         return self.gauss_params["features_dc"]
 
     @property
-    def features_rest(self):
-        return self.gauss_params["features_rest"]
+    def features_sh(self):
+        return self.gauss_params["features_sh"]
+
+    @property
+    def features_ch(self):
+        return self.gauss_params["features_ch"]
 
     @property
     def opacities(self):
@@ -332,7 +339,8 @@ class SpirulaeModel(Model):
         if "means" in dict:
             # For backwards compatibility, we remap the names of parameters from
             # means->gauss_params.means since old checkpoints have that format
-            for p in ["means", "scales", "quats", "features_dc", "features_rest", "opacities"]:
+            for p in ["means", "scales", "quats",
+                      "features_dc", "features_sh", "features_ch", "opacities"]:
                 dict[f"gauss_params.{p}"] = dict[p]
         newp = dict["gauss_params.means"].shape[0]
         for name, param in self.gauss_params.items():
@@ -613,10 +621,11 @@ class SpirulaeModel(Model):
         quats = self.quats[split_mask] / self.quats[split_mask].norm(dim=-1, keepdim=True)  # normalize them first
         rots = quat_to_rotmat(quats.repeat(samps, 1))  # how these scales are rotated
         rotated_samples = torch.bmm(rots, scaled_samples[..., None]).squeeze()
-        new_means = rotated_samples + self.means[split_mask].repeat(samps, 1)
+        new_means = 0.4*rotated_samples + self.means[split_mask].repeat(samps, 1)
         # step 2, sample new colors
         new_features_dc = self.features_dc[split_mask].repeat(samps, 1)
-        new_features_rest = self.features_rest[split_mask].repeat(samps, 1, 1)
+        new_features_sh = self.features_sh[split_mask].repeat(samps, 1, 1)
+        new_features_ch = 0.0 * self.features_ch[split_mask].repeat(samps, 1, 1)
         # step 3, sample new opacities
         new_opacities = self.opacities[split_mask].repeat(samps, 1)
         new_opacities = 1.0-torch.sqrt(1.0-torch.clip(new_opacities,0.,1.))
@@ -630,7 +639,8 @@ class SpirulaeModel(Model):
         out = {
             "means": new_means,
             "features_dc": new_features_dc,
-            "features_rest": new_features_rest,
+            "features_sh": new_features_sh,
+            "features_ch": new_features_ch,
             "opacities": new_opacities,
             "scales": new_scales,
             "quats": new_quats,
@@ -688,7 +698,7 @@ class SpirulaeModel(Model):
                    else self.ext_params[name]]
             for name in [
                 "means", "scales", "quats",
-                "features_dc", "features_rest",
+                "features_dc", "features_sh", "features_ch",
                 "opacities", #"background_color"
                 ]
         }
@@ -796,17 +806,19 @@ class SpirulaeModel(Model):
             opacities_crop = self.opacities[crop_ids]
             means_crop = self.means[crop_ids]
             features_dc_crop = self.features_dc[crop_ids]
-            features_rest_crop = self.features_rest[crop_ids]
+            features_sh_crop = self.features_sh[crop_ids]
+            features_ch_crop = self.features_ch[crop_ids]
             scales_crop = self.scales[crop_ids]
             quats_crop = self.quats[crop_ids]
         else:
             opacities_crop = self.opacities
             means_crop = self.means
             features_dc_crop = self.features_dc
-            features_rest_crop = self.features_rest
+            features_sh_crop = self.features_sh
+            features_ch_crop = self.features_ch
             scales_crop = self.scales
             quats_crop = self.quats
-        colors_crop = torch.cat((features_dc_crop[:, None, :], features_rest_crop), dim=1)
+        colors_crop = torch.cat((features_dc_crop[:, None, :], features_sh_crop), dim=1)
 
         quats_norms = torch.norm(quats_crop, p=2, dim=1)
         quats_norms = quats_norms.unsqueeze(1)
@@ -821,7 +833,7 @@ class SpirulaeModel(Model):
             rgbs = spherical_harmonics(n, viewdirs, colors_crop)  # input unnormalized viewdirs
             rgbs = torch.clamp(rgbs + 0.5, min=0.0)  # type: ignore
         else:
-            rgbs = torch.sigmoid(colors_crop[:, 0, :])
+            rgbs = colors_crop[:, 0, :]
 
         # print(self.config.sh_degree, rgbs.shape)
 
@@ -851,7 +863,6 @@ class SpirulaeModel(Model):
         depth_im_ref, alpha_ref = rasterize_gaussians_simple(
             positions, axes_u, axes_v,
             torch.concatenate((depth_grads, positions[...,2:]), dim=1),
-            # rgbs,
             opacities,
             bounds, num_tiles_hit,
             intrins, H, W, BLOCK_WIDTH
@@ -887,7 +898,9 @@ class SpirulaeModel(Model):
             alpha
         ) = rasterize_gaussians(  # type: ignore
             positions, axes_u, axes_v,
-            rgbs, opacities,
+            rgbs,
+            self.config.ch_degree_r, self.config.ch_degree_phi, features_ch_crop,
+            opacities,
             depth_grads, depth_normal_grad_ref_normalized,
             bounds, num_tiles_hit,
             intrins, H, W, BLOCK_WIDTH,
@@ -918,10 +931,12 @@ class SpirulaeModel(Model):
 
                 # print(torch.amin(depth_grad_norm_im).item(), torch.mean(depth_grad_norm_im).item(), torch.amax(depth_grad_norm_im).item())
                 # assert (reg_depth > -1e-6).all()
-                print(torch.mean(reg_depth).item(), torch.mean(reg_normal).item())
-                pass
+                # print(torch.mean(reg_depth).item(), torch.mean(reg_normal).item())
+                # pass
                 # depth_grad_reg = self.depth_grads.abs().mean()
                 # print(depth_grad_reg.item())
+
+                # print(self.features_ch.mean().item(), self.features_ch.std().item())
 
         self.intrins = intrins
         self.positions = positions

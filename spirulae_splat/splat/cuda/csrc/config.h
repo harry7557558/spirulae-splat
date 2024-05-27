@@ -2,6 +2,7 @@
 #define N_THREADS 256
 
 #define MAX_REGISTER_CHANNELS 3
+#define MAX_CH_FLOATS (3*21)
 
 #define CUDA_CALL(x)                                                           \
     do {                                                                       \

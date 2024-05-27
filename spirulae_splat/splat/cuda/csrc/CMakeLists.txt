@@ -8,8 +8,8 @@ set(CMAKE_CUDA_STANDARD 17)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 
-# our library library
-add_library(spirulae_splat forward.cu backward.cu helpers.cuh)
+# our spirulae_splat library
+add_library(spirulae_splat forward.cu backward.cu helpers.cuh ch.cuh)
 target_link_libraries(spirulae_splat PUBLIC cuda)
 target_include_directories(spirulae_splat PRIVATE
     ${PROJECT_SOURCE_DIR}/glm

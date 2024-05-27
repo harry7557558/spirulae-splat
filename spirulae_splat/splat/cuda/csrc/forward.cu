@@ -1,5 +1,6 @@
 #include "forward.cuh"
 #include "helpers.cuh"
+#include "ch.cuh"
 #include <algorithm>
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
@@ -236,7 +237,6 @@ __global__ void rasterize_simple_forward(
         int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
             glm::vec3 pos = position_batch[t];
-            glm::vec3 color = glm::vec3(color_opacity_batch[t]);
             float opac = color_opacity_batch[t].w;
             glm::mat2x3 axis_uv = axes_uv_batch[t];
 
@@ -252,6 +252,8 @@ __global__ void rasterize_simple_forward(
                 continue;
 
             const float next_T = T * (1.f - alpha);
+
+            glm::vec3 color = glm::vec3(color_opacity_batch[t]);
 
             const float vis = alpha * T;
             pix_out.x = pix_out.x + color.x * vis;
@@ -287,6 +289,9 @@ __global__ void rasterize_forward(
     const float3* __restrict__ axes_u,
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
+    const unsigned ch_degree_r,
+    const unsigned ch_degree_phi,
+    const float* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
     const float3& __restrict__ background,
     const float2* __restrict__ depth_grads,
@@ -329,6 +334,7 @@ __global__ void rasterize_forward(
     const int block_size = block.size();
     int num_batches = (range.y - range.x + block_size - 1) / block_size;
 
+    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
     __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
     __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
     __shared__ glm::vec4 color_opacity_batch[MAX_BLOCK_SIZE];
@@ -337,6 +343,8 @@ __global__ void rasterize_forward(
     // current visibility left to render
     // index of most recent gaussian to write to this thread's pixel
     int cur_idx = 0;
+
+    const int dim_ch = ch_degree_r * (2*ch_degree_phi+1);
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing its
@@ -363,6 +371,7 @@ __global__ void rasterize_forward(
         int idx = batch_start + tr;
         if (idx < range.y) {
             int32_t g_id = gaussian_ids_sorted[idx];
+            id_batch[tr] = g_id;
             const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
             const float3 color = colors[g_id];
@@ -381,7 +390,6 @@ __global__ void rasterize_forward(
         int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
             glm::vec3 pos = position_batch[t];
-            glm::vec3 color = glm::vec3(color_opacity_batch[t]);
             float opac = color_opacity_batch[t].w;
             glm::mat2x3 axis_uv = axes_uv_batch[t];
 
@@ -397,6 +405,20 @@ __global__ void rasterize_forward(
                 continue;
 
             const float next_T = T * (1.f - alpha);
+
+            glm::vec3 color_0 = glm::vec3(color_opacity_batch[t]);
+            glm::vec3 color;
+            if (dim_ch > 0) {
+                int32_t g_id = id_batch[t];
+                const float* coeffs = &ch_coeffs[3*dim_ch*g_id];
+                glm::vec3 ch_color;
+                ch_coeffs_to_color(
+                    ch_degree_r, ch_degree_phi,
+                    coeffs, {uv.x, uv.y}, &ch_color.x
+                );
+                color = color_0 / (1.0f+glm::exp(-ch_color));
+            }
+            else color = color_0;
 
             const float vis = alpha * T;
             // const float depth = poi.z;

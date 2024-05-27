@@ -11,11 +11,23 @@ def process_ckpt_to_splat(file_path):
     pipeline = checkpoint['pipeline']
     
     features_dc = pipeline['_model.gauss_params.features_dc']
-    features_rest = pipeline['_model.gauss_params.features_rest']
+    features_sh = pipeline['_model.gauss_params.features_sh']
+    features_ch = pipeline['_model.gauss_params.features_ch']
     means = pipeline['_model.gauss_params.means']
     opacities = pipeline['_model.gauss_params.opacities']
     quats = pipeline['_model.gauss_params.quats']
     scales = pipeline['_model.gauss_params.scales']
+
+    n_splat = len(means)
+    n_floats = sum([
+        x.numel() for x in [
+            features_dc, features_sh, features_ch,
+            means, opacities, quats, scales]
+    ])
+    print(n_splat, "splats")
+    print(n_floats//n_splat, "floats per splat")
+    print("{:.2f} MB floats".format(n_floats*4/1024**2))
+    print()
 
     # means -= torch.mean(means, axis=0)
     SH_C0 = 0.28209479177387814
@@ -77,7 +89,7 @@ def main():
     )
     args = parser.parse_args()
     for input_file in args.input_files:
-        print(f"Processing {input_file}...")
+        print(f"Processing {input_file}...", end='\n\n')
         splat_data = process_ckpt_to_splat(input_file)
         output_file = (
             args.output if len(args.input_files) == 1 else input_file + ".splat"

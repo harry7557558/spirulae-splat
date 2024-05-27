@@ -446,6 +446,9 @@ std::tuple<
     const torch::Tensor &axes_u,
     const torch::Tensor &axes_v,
     const torch::Tensor &colors,
+    const int ch_degree_r,
+    const int ch_degree_phi,
+    const torch::Tensor &ch_coeffs,
     const torch::Tensor &opacities,
     const torch::Tensor &background,
     const torch::Tensor &depth_grads,
@@ -458,6 +461,7 @@ std::tuple<
     CHECK_INPUT(axes_u);
     CHECK_INPUT(axes_v);
     CHECK_INPUT(colors);
+    CHECK_INPUT(ch_coeffs);
     CHECK_INPUT(opacities);
     CHECK_INPUT(background);
     CHECK_INPUT(depth_grads);
@@ -515,6 +519,8 @@ std::tuple<
         (float3 *)axes_u.contiguous().data_ptr<float>(),
         (float3 *)axes_v.contiguous().data_ptr<float>(),
         (float3 *)colors.contiguous().data_ptr<float>(),
+        (unsigned)ch_degree_r, (unsigned)ch_degree_phi,
+        (float *)ch_coeffs.contiguous().data_ptr<float>(),
         opacities.contiguous().data_ptr<float>(),
         *(float3 *)background.contiguous().data_ptr<float>(),
         (float2 *)depth_grads.contiguous().data_ptr<float>(),
@@ -640,6 +646,7 @@ std::tuple<
     torch::Tensor, // v_axes_u
     torch::Tensor, // v_axes_v
     torch::Tensor, // v_colors
+    torch::Tensor, // v_ch_coeffs
     torch::Tensor, // v_opacities
     torch::Tensor, // v_depth_grad
     torch::Tensor  // v_depth_normal_ref
@@ -651,12 +658,15 @@ std::tuple<
     const float fy,
     const float cx,
     const float cy,
+    const unsigned ch_degree_r,
+    const unsigned ch_degree_phi,
     const torch::Tensor &gaussians_ids_sorted,
     const torch::Tensor &tile_bins,
     const torch::Tensor &positions,
     const torch::Tensor &axes_u,
     const torch::Tensor &axes_v,
     const torch::Tensor &colors,
+    const torch::Tensor &ch_coeffs,
     const torch::Tensor &opacities,
     const torch::Tensor &background,
     const torch::Tensor &depth_grads,
@@ -675,6 +685,7 @@ std::tuple<
     CHECK_INPUT(axes_u);
     CHECK_INPUT(axes_v);
     CHECK_INPUT(colors);
+    CHECK_INPUT(ch_coeffs);
     CHECK_INPUT(opacities);
     CHECK_INPUT(final_idx);
     CHECK_INPUT(output_alpha);
@@ -693,6 +704,8 @@ std::tuple<
         AT_ERROR("colors must have 2 dimensions");
     }
 
+    const int dim_ch = ch_degree_r * (2*ch_degree_phi+1);
+
     const int num_points = positions.size(0);
     const dim3 tile_bounds = {
         (img_width + block_width - 1) / block_width,
@@ -710,20 +723,21 @@ std::tuple<
     torch::Tensor v_axes_u = torch::zeros({num_points, 3}, options);
     torch::Tensor v_axes_v = torch::zeros({num_points, 3}, options);
     torch::Tensor v_colors = torch::zeros({num_points, channels}, options);
+    torch::Tensor v_ch_coeffs = torch::zeros({num_points, dim_ch, channels}, options);
     torch::Tensor v_opacities = torch::zeros({num_points, 1}, options);
     torch::Tensor v_depth_grad = torch::zeros({num_points, 2}, options);
     torch::Tensor v_depth_normal_ref = torch::zeros({img_height, img_width, 2}, options);
 
     rasterize_backward_kernel<<<tile_bounds, block>>>(
-        tile_bounds,
-        img_size,
-        intrins,
+        tile_bounds, img_size, intrins,
+        ch_degree_r, ch_degree_phi,
         gaussians_ids_sorted.contiguous().data_ptr<int>(),
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (float3 *)positions.contiguous().data_ptr<float>(),
         (float3 *)axes_u.contiguous().data_ptr<float>(),
         (float3 *)axes_v.contiguous().data_ptr<float>(),
         (float3 *)colors.contiguous().data_ptr<float>(),
+        ch_coeffs.contiguous().data_ptr<float>(),
         opacities.contiguous().data_ptr<float>(),
         *(float3 *)background.contiguous().data_ptr<float>(),
         (float2 *)depth_grads.contiguous().data_ptr<float>(),
@@ -742,6 +756,7 @@ std::tuple<
         (float3 *)v_axes_u.contiguous().data_ptr<float>(),
         (float3 *)v_axes_v.contiguous().data_ptr<float>(),
         (float3 *)v_colors.contiguous().data_ptr<float>(),
+        v_ch_coeffs.contiguous().data_ptr<float>(),
         v_opacities.contiguous().data_ptr<float>(),
         (float2 *)v_depth_grad.contiguous().data_ptr<float>(),
         (float2 *)v_depth_normal_ref.contiguous().data_ptr<float>()
@@ -750,7 +765,7 @@ std::tuple<
     return std::make_tuple(
         v_positions, v_positions_xy_abs,
         v_axes_u, v_axes_v,
-        v_colors, v_opacities,
+        v_colors, v_ch_coeffs, v_opacities,
         v_depth_grad, v_depth_normal_ref
     );
 }

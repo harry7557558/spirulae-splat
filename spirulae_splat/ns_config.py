@@ -50,9 +50,9 @@ spirulae = MethodSpecification(
         ),
         optimizers={
             "means": {
-                "optimizer": AdamOptimizerConfig(lr=1.6e-4, eps=1e-15),
+                "optimizer": AdamOptimizerConfig(lr=1.0e-4, eps=1e-15),
                 "scheduler": ExponentialDecaySchedulerConfig(
-                    lr_final=1.6e-6,
+                    lr_final=1.0e-6,
                     max_steps=30000,
                 ),
             },
@@ -68,8 +68,12 @@ spirulae = MethodSpecification(
                 "optimizer": AdamOptimizerConfig(lr=0.0025, eps=1e-15),
                 "scheduler": None,
             },
-            "features_rest": {
+            "features_sh": {
                 "optimizer": AdamOptimizerConfig(lr=0.0025 / 20, eps=1e-15),
+                "scheduler": None,
+            },
+            "features_ch": {
+                "optimizer": AdamOptimizerConfig(lr=0.0025 / 1, eps=1e-15),
                 "scheduler": None,
             },
             "opacities": {

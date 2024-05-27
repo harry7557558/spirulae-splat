@@ -1,5 +1,4 @@
 #include "cuda_runtime.h"
-#include "forward.cuh"
 #include <cstdio>
 #include <iostream>
 #include <math.h>
@@ -145,6 +144,9 @@ std::tuple<
     const torch::Tensor &axes_u,
     const torch::Tensor &axes_v,
     const torch::Tensor &colors,
+    const int ch_degree_r,
+    const int ch_degree_phi,
+    const torch::Tensor &ch_coeffs,
     const torch::Tensor &opacities,
     const torch::Tensor &background,
     const torch::Tensor &depth_grads,
@@ -186,6 +188,7 @@ std::tuple<
     torch::Tensor, // v_axes_u
     torch::Tensor, // v_axes_v
     torch::Tensor, // v_colors
+    torch::Tensor, // v_ch_coeffs
     torch::Tensor, // v_opacities
     torch::Tensor, // v_depth_grad
     torch::Tensor  // v_depth_normal_ref
@@ -197,12 +200,15 @@ std::tuple<
     const float fy,
     const float cx,
     const float cy,
+    const unsigned ch_degree_r,
+    const unsigned ch_degree_phi,
     const torch::Tensor &gaussians_ids_sorted,
     const torch::Tensor &tile_bins,
     const torch::Tensor &positions,
     const torch::Tensor &axes_u,
     const torch::Tensor &axes_v,
     const torch::Tensor &colors,
+    const torch::Tensor &ch_coeffs,
     const torch::Tensor &opacities,
     const torch::Tensor &background,
     const torch::Tensor &depth_grads,

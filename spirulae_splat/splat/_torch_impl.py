@@ -12,6 +12,45 @@ from spirulae_splat.splat.utils import (
 )
 
 
+class BesselJ0Function(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        ctx.save_for_backward(x)
+        return torch.special.bessel_j0(x)
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, = ctx.saved_tensors
+        # Derivative of J0 is -J1
+        grad_x = -torch.special.bessel_j1(x) * grad_output
+        return grad_x
+
+class BesselJ1Function(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        ctx.save_for_backward(x)
+        return torch.special.bessel_j1(x)
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, = ctx.saved_tensors
+        # Derivative of J1 is (J0 - J1/x)
+        grad_x = (torch.special.bessel_j0(x) - torch.special.bessel_j1(x) / x) * grad_output
+        grad_x[x == 0] = 0  # Handle the division by zero
+        return grad_x
+
+def bessel_j0(x):
+    return BesselJ0Function.apply(x)
+
+def bessel_j1(x):
+    return BesselJ1Function.apply(x)
+
+def bessel_j(m, x):
+    if m == 0:
+        return bessel_j0(x)
+    if m == 1:
+        return bessel_j1(x)
+    return 2*(m-1)/x * bessel_j(m-1, x) - bessel_j(m-2, x)
+
+
 def compute_sh_color(
     viewdirs: Float[Tensor, "*batch 3"],
     sh_coeffs: Float[Tensor, "*batch D C"],
@@ -205,6 +244,32 @@ def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
     result[..., 24] = fTmpA * fC3
     result[..., 16] = fTmpA * fS3
     return result
+
+
+def ch_coeffs_to_color(degree_r, degree_phi, coeffs, uv):
+    r = torch.norm(uv, dim=-1)
+    phi = torch.atan2(uv[...,1], uv[...,0])
+    pi = torch.pi
+    assert degree_phi < 4
+
+    idx = 0
+    color = torch.zeros(3, device=uv.device)
+    for k in range(1, degree_r+1):
+        w = bessel_j(0, k*pi*r)
+        color = color + w * coeffs[idx]
+        idx += 1
+        for m in range(1, degree_phi+1):
+            wr = bessel_j(m, k*pi*r)
+            wc = wr * torch.cos(m*phi)
+            ws = wr * torch.sin(m*phi)
+            color = color + wc * coeffs[idx]
+            idx += 1
+            color = color + ws * coeffs[idx]
+            idx += 1
+
+    assert idx == degree_r * (2*degree_phi+1)
+    return color
+
 
 
 def quat_to_rotmat(quat: Tensor) -> Tensor:
@@ -569,6 +634,9 @@ def rasterize_gaussians(
     axes_u: Float[Tensor, "*batch 3"],
     axes_v: Float[Tensor, "*batch 3"],
     colors: Float[Tensor, "*batch channels"],
+    ch_degree_r: int,
+    ch_degree_phi: int,
+    ch_coeffs: Float[Tensor, "*batch dim_ch 3"],
     opacities: Float[Tensor, "*batch 1"],
     depth_grads: Float[Tensor, "*batch 2"],
     depth_normal_ref_im: Float[Tensor, "*batch 2"],
@@ -620,6 +688,7 @@ def rasterize_gaussians(
     float32_param['requires_grad'] = True
 
     fx, fy, cx, cy = intrins
+    dim_ch = ch_degree_r * (2*ch_degree_phi+1)
 
     for i in range(img_size[1]):
         for j in range(img_size[0]):
@@ -643,7 +712,6 @@ def rasterize_gaussians(
             for idx in range(tile_bin_start, tile_bin_end):
                 gid = gaussian_ids_sorted[idx]
                 pos = positions[gid]
-                color  = colors[gid]
                 opac = opacities[gid]
                 axis_uv = (axes_u[gid], axes_v[gid])
 
@@ -653,6 +721,16 @@ def rasterize_gaussians(
                 alpha, valid  = get_alpha(uv, opac)
                 if  not valid:
                     continue
+
+                color_0 = colors[gid]
+                color = color_0
+                if dim_ch > 0:
+                    ch_color = ch_coeffs_to_color(
+                        ch_degree_r, ch_degree_phi,
+                        ch_coeffs[gid], uv
+                    )
+                    # ch_color = ch_coeffs[gid][0]
+                    color = color_0 * torch.sigmoid(ch_color)
 
                 next_T = T * (1. - alpha)
 
