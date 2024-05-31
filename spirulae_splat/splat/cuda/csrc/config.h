@@ -4,6 +4,8 @@
 #define MAX_REGISTER_CHANNELS 3
 #define MAX_CH_FLOATS (3*21)
 
+#define DEPTH_REG_L 2
+
 #define CUDA_CALL(x)                                                           \
     do {                                                                       \
         if ((x) != cudaSuccess) {                                              \

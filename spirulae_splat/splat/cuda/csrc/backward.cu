@@ -42,10 +42,10 @@ __global__ void rasterize_backward_kernel(
     const float2* __restrict__ depth_normal_ref_im,
     const int* __restrict__ final_index,
     const float* __restrict__ output_alpha,
-    const float3* __restrict__ output_depth_grad,
+    const float4* __restrict__ output_depth_grad,
     const float* __restrict__ v_output_alpha,
     const float3* __restrict__ v_output,
-    const float3* __restrict__ v_output_depth_grad,
+    const float4* __restrict__ v_output_depth_grad,
     const float* __restrict__ v_output_reg_depth,
     const float* __restrict__ v_output_reg_normal,
     float3* __restrict__ v_positions,
@@ -95,14 +95,15 @@ __global__ void rasterize_backward_kernel(
     __shared__ glm::vec2 depth_grad_batch[MAX_BLOCK_SIZE];
 
     // df/d_out for this pixel
-    const float3 out_depth_grad = output_depth_grad[pix_id];
+    const float4 out_depth_grad = output_depth_grad[pix_id];
     const float3 v_out = v_output[pix_id];
-    const float3 v_out_depth_grad = v_output_depth_grad[pix_id];
+    const float4 v_out_depth_grad = v_output_depth_grad[pix_id];
     const float v_out_alpha = v_output_alpha[pix_id];
     const float v_out_reg_depth = v_output_reg_depth[pix_id];
     const float v_out_reg_normal = v_output_reg_normal[pix_id];
     const glm::vec2 v_g_sum = {v_out_depth_grad.x, v_out_depth_grad.y};
     const float v_depth_sum = v_out_depth_grad.z;
+    const float v_depth_squared_sum = v_out_depth_grad.w;
 
     // this is the T AFTER the last gaussian in this pixel
     float T_final = 1.0f - output_alpha[pix_id];
@@ -122,19 +123,18 @@ __global__ void rasterize_backward_kernel(
 
     const float vis_sum_final = 1.0f - T_final;
     const float depth_sum_final = out_depth_grad.z;
+    const float depth_squared_sum_final = out_depth_grad.w;
     float vis_sum = vis_sum_final;
     float depth_sum = depth_sum_final;
+    float depth_squared_sum = depth_squared_sum_final;
     glm::vec2 g_sum = {out_depth_grad.x, out_depth_grad.y};
 
     float3 buffer = {0.f, 0.f, 0.f};
-    float3 buffer_depth = {0.f, 0.f, 0.f};
+    float4 buffer_depth = {0.f, 0.f, 0.f, 0.f};
     float buffer_depth_reg = 0.f;
     float buffer_normal_reg = 0.f;
     
     float v_sum_vis = v_out_alpha;
-
-    glm::vec2 v_g_bar = {v_out_depth_grad.x, v_out_depth_grad.y};
-    float v_depth_out = v_out_depth_grad.z;
 
     // second run through, full gradient calculation
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
@@ -215,16 +215,38 @@ __global__ void rasterize_backward_kernel(
                 const float next_T = T * ra;
                 const float vis = alpha * next_T;
 
+                // update accumulation
+                v_depth_grad_local.x += vis * v_g_sum.x;
+                v_depth_grad_local.y += vis * v_g_sum.y;
+                glm::vec3 v_poi = {0.f, 0.f, 0.f};
+                #if DEPTH_REG_L == 1
+                const float depth = pos.z;
+                v_position_local.z += vis * v_depth_sum;
+                v_position_local.z += vis * 2.0f*depth * v_depth_squared_sum;
+                #elif DEPTH_REG_L == 2
+                const float depth = poi.z;
+                v_poi.z += vis * v_depth_sum;
+                v_poi.z += vis * 2.0f*depth * v_depth_squared_sum;
+                #endif
+
                 // update depth regularizer
                 const glm::vec2 depth_grad = depth_grad_batch[t];
-                const float depth = pos.z;
                 float vis_sum_next = vis_sum - vis;
                 float depth_sum_next = depth_sum - vis*depth;
+                float depth_squared_sum_next = depth_squared_sum - vis*depth*depth;
+                #if DEPTH_REG_L == 1
                 v_position_local.z += v_out_reg_depth * vis * (vis_sum_next - (vis_sum_final-vis_sum));
                 float reg_depth_i = (
                     depth * vis_sum_next - depth_sum_next +
                     (depth_sum_final-depth_sum) - depth * (vis_sum_final-vis_sum)
                 );
+                #elif DEPTH_REG_L == 2
+                v_poi.z += v_out_reg_depth * vis * 2.0f * (
+                    vis_sum_final * depth - depth_sum_final);
+                float reg_depth_i =
+                    vis_sum_final*depth*depth + depth_squared_sum_final
+                    - 2.0f*depth*depth_sum_final;
+                #endif
 
                 // update normal regularizer
                 glm::vec2 g_i = {depth_grad.x, depth_grad.y};
@@ -272,37 +294,35 @@ __global__ void rasterize_backward_kernel(
                     v_color_local = v_color_1;
                 }
 
-                // update v_rgb for this gaussian
-                v_depth_grad_local.x += vis * v_g_sum.x;
-                v_depth_grad_local.y += vis * v_g_sum.y;
-                v_position_local.z += vis * v_depth_sum;
-
                 float v_alpha = 0.0f;
                 // contribution from this pixel
                 v_alpha += (color_1.x * T - buffer.x) * ra * v_out.x;
                 v_alpha += (color_1.y * T - buffer.y) * ra * v_out.y;
                 v_alpha += (color_1.z * T - buffer.z) * ra * v_out.z;
-                v_alpha += (depth_grad.x * T - buffer_depth.x) * ra * v_g_sum.x;
-                v_alpha += (depth_grad.y * T - buffer_depth.y) * ra * v_g_sum.y;
-                v_alpha += (pos.z * T - buffer_depth.z) * ra * v_depth_sum;
-                v_alpha += (reg_depth_i * T - buffer_depth_reg) * ra * v_out_reg_depth;
-                v_alpha += (reg_normal_i * T - buffer_normal_reg) * ra * v_out_reg_normal;
-
                 v_alpha += T_final * ra * v_out_alpha;
-                // contribution from background pixel
                 v_alpha += -T_final * ra * background.x * v_out.x;
                 v_alpha += -T_final * ra * background.y * v_out.y;
                 v_alpha += -T_final * ra * background.z * v_out.z;
+                float v_alpha_color_only = v_alpha;
+                v_alpha += (depth_grad.x * T - buffer_depth.x) * ra * v_g_sum.x;
+                v_alpha += (depth_grad.y * T - buffer_depth.y) * ra * v_g_sum.y;
+                v_alpha += (depth * T - buffer_depth.z) * ra * v_depth_sum;
+                v_alpha += (depth*depth * T - buffer_depth.w) * ra * v_depth_squared_sum;
+                v_alpha += (reg_depth_i * T - buffer_depth_reg) * ra * v_out_reg_depth;
+                v_alpha += (reg_normal_i * T - buffer_normal_reg) * ra * v_out_reg_normal;
+
                 // update the running sum
                 buffer.x += color_1.x * vis;
                 buffer.y += color_1.y * vis;
                 buffer.z += color_1.z * vis;
                 buffer_depth.x += depth_grad.x * vis;
                 buffer_depth.y += depth_grad.y * vis;
-                buffer_depth.z += pos.z * vis;
+                buffer_depth.z += depth * vis;
+                buffer_depth.w += depth*depth * vis;
                 buffer_depth_reg += reg_depth_i * vis;
                 buffer_normal_reg += reg_normal_i * vis;
 
+                // grad
                 glm::vec2 v_uv;
                 get_alpha_vjp(
                     uv, rgba.w, v_alpha,
@@ -313,18 +333,35 @@ __global__ void rasterize_backward_kernel(
                 glm::vec3 v_position_local_temp;
                 get_intersection_vjp(
                     pos, axis_uv, pos_2d,
-                    glm::vec3(0), v_uv,
+                    v_poi, v_uv,
                     v_position_local_temp, v_axis_uv
                 );
                 v_position_local += v_position_local_temp;
                 v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local));
-                // v_position_xy_abs_local /= pos.z;
                 v_axis_u_local = v_axis_uv[0];
                 v_axis_v_local = v_axis_uv[1];
 
+                // absgrad (color only)
+                #if 0
+                float v_opacity_local_1;
+                get_alpha_vjp(
+                    uv, rgba.w, v_alpha_color_only,
+                    v_uv, v_opacity_local_1
+                );
+                v_uv += v_uv_ch;
+                get_intersection_vjp(
+                    pos, axis_uv, pos_2d,
+                    glm::vec3(0), v_uv,
+                    v_position_local_temp, v_axis_uv
+                );
+                v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local_temp));
+                #endif
+
+                // next loop
                 T = next_T;
                 vis_sum = vis_sum_next;
                 depth_sum = depth_sum_next;
+                depth_squared_sum = depth_squared_sum_next;
             }
             warpSum3(v_position_local, warp);
             warpSum2(v_position_xy_abs_local, warp);

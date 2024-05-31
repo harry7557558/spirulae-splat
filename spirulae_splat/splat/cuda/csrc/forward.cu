@@ -299,7 +299,7 @@ __global__ void rasterize_forward(
     int* __restrict__ final_index,
     float* __restrict__ out_alpha,
     float3* __restrict__ out_img,
-    float3* __restrict__ out_depth_grad,
+    float4* __restrict__ out_depth_grad,
     float* __restrict__ out_reg_depth,
     float* __restrict__ out_reg_normal
 ) {
@@ -355,6 +355,7 @@ __global__ void rasterize_forward(
     float3 pix_out = {0.f, 0.f, 0.f};  // output radiance
     float vis_sum = 0.f;  // output alpha
     float depth_sum = 0.f;  // output depth
+    float depth_squared_sum = 0.f;  // for L2 depth regularizer
     const float2 depth_normal_ref = inside ?
         depth_normal_ref_im[pix_id] : make_float2(0.f, 0.f);
     float reg_depth = 0.f;  // output depth regularizer
@@ -421,8 +422,11 @@ __global__ void rasterize_forward(
             else color = color_0;
 
             const float vis = alpha * T;
-            // const float depth = poi.z;
+            #if DEPTH_REG_L == 1
             const float depth = pos.z;
+            #elif DEPTH_REG_L == 2
+            const float depth = poi.z;
+            #endif
             const glm::vec2 g_i = depth_grad_batch[t];
             const float g_i_norm = glm::length(g_i) + 1e-6f;
             const glm::vec2 n_i = g_i / g_i_norm;
@@ -430,10 +434,15 @@ __global__ void rasterize_forward(
             pix_out.x = pix_out.x + color.x * vis;
             pix_out.y = pix_out.y + color.y * vis;
             pix_out.z = pix_out.z + color.z * vis;
+            #if DEPTH_REG_L == 1
             reg_depth += vis*depth * vis_sum - vis * depth_sum;
+            #elif DEPTH_REG_L == 2
+            reg_depth += vis * (vis_sum*depth*depth + depth_squared_sum - 2.0f*depth*depth_sum);
+            #endif
             reg_normal += vis * (1.0f - (n_i.x*depth_normal_ref.x+n_i.y*depth_normal_ref.y));
             vis_sum += vis;
             depth_sum += vis*depth;
+            depth_squared_sum += vis*depth*depth;
             g_sum.x = g_sum.x + vis * g_i.x;
             g_sum.y = g_sum.y + vis * g_i.y;
 
@@ -454,7 +463,7 @@ __global__ void rasterize_forward(
         final_color.y = pix_out.y + T * background.y;
         final_color.z = pix_out.z + T * background.z;
         out_img[pix_id] = final_color;
-        out_depth_grad[pix_id] = {g_sum.x, g_sum.y, depth_sum};
+        out_depth_grad[pix_id] = {g_sum.x, g_sum.y, depth_sum, depth_squared_sum};
         out_reg_normal[pix_id] = reg_normal;
         out_reg_depth[pix_id] = reg_depth;
     }

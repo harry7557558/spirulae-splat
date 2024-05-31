@@ -91,7 +91,7 @@ inline __device__ bool get_intersection(
     uv = {uvt.x, uvt.y};
     if (glm::length(uv) > radius)
         return false;
-    float t = -uvt.t;
+    float t = -uvt.z;
     poi = glm::vec3(pos_2d*t, t);
     return true;
 }
@@ -114,7 +114,7 @@ inline __device__ void get_intersection_vjp(
     glm::mat3 invA = glm::inverse(A);
     glm::vec3 uvt = -invA * position;
     glm::vec2 uv = {uvt.x, uvt.y};
-    float t = -uvt.t;
+    float t = -uvt.z;
     glm::vec3 poi = glm::vec3(pos_2d*t, t);
     // backward
     float v_t = glm::dot(v_poi, glm::vec3(pos_2d, 1.0f));

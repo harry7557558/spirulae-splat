@@ -37,7 +37,7 @@ def test_rasterize():
         [
             [1.0, 0.0, 0.0, 0.0],
             [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 8.0],
+            [0.0, 0.0, 1.0, 6.0],
             [0.0, 0.0, 0.0, 1.0],
         ],
         device=device,
@@ -45,8 +45,8 @@ def test_rasterize():
     viewmat[:3, :3] = _torch_impl.quat_to_rotmat(torch.randn(4))
     BLOCK_SIZE = 16
 
-    means3d = torch.randn((num_points, 3), device=device)
-    scales = torch.exp(torch.randn((num_points, 2), device=device))
+    means3d = 0.8*torch.randn((num_points, 3), device=device)
+    scales = 0.8*torch.exp(torch.randn((num_points, 2), device=device))
     quats = torch.randn((num_points, 4), device=device)
     quats /= torch.linalg.norm(quats, dim=-1, keepdim=True)
     background = torch.randn(3, device=device)
@@ -162,11 +162,12 @@ def test_rasterize():
         img, depth_grad, reg_depth, reg_normal, alpha, idx = output
         # reg_normal *= 0.0
         # reg_depth *= 0.0
+        # depth_grad = depth_grad * torch.tensor([[1,1,1,1]]).cuda().float()
         img_r = torch.sin(img).norm(dim=2) + 1
-        depth_grad_r = torch.flip(torch.cos(depth_grad.norm(dim=2)), [0, 1])
+        depth_grad_r = torch.flip(torch.sigmoid(depth_grad.norm(dim=2)), [0, 1])
         reg_r = torch.exp(-0.1*(reg_depth+1)*(reg_normal+1))
         alpha_r = torch.exp(torch.flip(alpha, [0, 1]))
-        return (img_r * alpha_r + depth_grad_r * reg_r).mean()
+        return ((img_r+1) * (alpha_r+1) + (depth_grad_r+1) * (reg_r+1)).mean()
     fun(output).backward()
     fun(_output).backward()
 

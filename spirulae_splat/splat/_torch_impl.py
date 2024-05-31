@@ -250,7 +250,6 @@ def ch_coeffs_to_color(degree_r, degree_phi, coeffs, uv):
     r = torch.norm(uv, dim=-1)
     phi = torch.atan2(uv[...,1], uv[...,0])
     pi = torch.pi
-    assert degree_phi < 4
 
     idx = 0
     color = torch.zeros(3, device=uv.device)
@@ -532,7 +531,7 @@ def get_intersection(position, axis_uv, pos_2d):
     uvt = -torch.linalg.inv(A) @ position
     uv = uvt[:2]
     t = -uvt[2:]
-    return pos_2d_3*t, uv, torch.norm(uv) > 1.0
+    return pos_2d_3*t, uv, torch.norm(uv) < 1.0
 
 
 def rasterize_gaussians_simple(
@@ -682,7 +681,7 @@ def rasterize_gaussians(
     final_idx = torch.zeros((img_size[1], img_size[0]), **int32_param)
     out_alpha = torch.zeros((img_size[1], img_size[0]), **float32_param)
     out_img = torch.zeros((img_size[1], img_size[0], 3), **float32_param)
-    out_depth_grad = torch.zeros((img_size[1], img_size[0], 3), **float32_param)
+    out_depth_grad = torch.zeros((img_size[1], img_size[0], 4), **float32_param)
     out_reg_depth = torch.zeros((img_size[1], img_size[0]), **float32_param)
     out_reg_normal = torch.zeros((img_size[1], img_size[0]), **float32_param)
     float32_param['requires_grad'] = True
@@ -705,6 +704,7 @@ def rasterize_gaussians(
             pix_out = torch.zeros(3, **float32_param)
             vis_sum = torch.zeros(1, **float32_param)
             depth_sum = torch.zeros(1, **float32_param)
+            depth_squared_sum = torch.zeros(1, **float32_param)
             depth_normal_ref = depth_normal_ref_im[i, j]
             reg_depth = torch.zeros(1, **float32_param)
             reg_normal = torch.zeros(1, **float32_param)
@@ -735,15 +735,18 @@ def rasterize_gaussians(
                 next_T = T * (1. - alpha)
 
                 vis = alpha * T
-                depth = pos[2]
+                # depth = pos[2]
+                depth = poi[2]
                 g_i = depth_grads[gid]
                 n_i = g_i / (torch.norm(g_i)+1e-6)
 
                 pix_out = pix_out + vis * color
-                reg_depth = reg_depth + vis*depth * vis_sum - vis * depth_sum
+                # reg_depth = reg_depth + vis*depth * vis_sum - vis * depth_sum
+                reg_depth = reg_depth + vis * (vis_sum*depth**2 + depth_squared_sum - 2.0*depth*depth_sum)
                 reg_normal = reg_normal + vis * (1.0 - torch.dot(n_i, depth_normal_ref))
                 vis_sum = vis_sum + vis
                 depth_sum = depth_sum + vis*depth
+                depth_squared_sum = depth_squared_sum + vis*depth**2
                 g_sum = g_sum + vis * g_i
 
                 T = next_T
@@ -754,7 +757,7 @@ def rasterize_gaussians(
             final_idx[i, j] = cur_idx
             out_alpha[i, j] = 1.0-T
             out_img[i, j] = pix_out + T * background
-            out_depth_grad[i, j] = torch.concat((g_sum, depth_sum))
+            out_depth_grad[i, j] = torch.concat((g_sum, depth_sum, depth_squared_sum))
             out_reg_depth[i, j] = reg_depth
             out_reg_normal[i, j] = reg_normal
 

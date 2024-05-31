@@ -500,7 +500,7 @@ std::tuple<
         {img_height, img_width, channels}, float32
     );
     torch::Tensor out_depth_grad = torch::zeros(
-        {img_height, img_width, 3}, float32
+        {img_height, img_width, 4}, float32
     );
     torch::Tensor out_reg_depth = torch::zeros(
         {img_height, img_width}, float32
@@ -529,7 +529,7 @@ std::tuple<
         final_idx.contiguous().data_ptr<int>(),
         out_alpha.contiguous().data_ptr<float>(),
         (float3 *)out_img.contiguous().data_ptr<float>(),
-        (float3 *)out_depth_grad.contiguous().data_ptr<float>(),
+        (float4 *)out_depth_grad.contiguous().data_ptr<float>(),
         out_reg_depth.contiguous().data_ptr<float>(),
         out_reg_normal.contiguous().data_ptr<float>()
     );
@@ -699,9 +699,14 @@ std::tuple<
     if (positions.ndimension() != 2 || positions.size(1) != 3) {
         AT_ERROR("xys must have dimensions (num_points, 2)");
     }
-
     if (colors.ndimension() != 2 || colors.size(1) != 3) {
         AT_ERROR("colors must have 2 dimensions");
+    }
+    if (output_depth_grad.ndimension() != 3 || output_depth_grad.size(2) != 4) {
+        AT_ERROR("output_depth_grad must have 3 dimensions");
+    }
+    if (v_output_depth_grad.ndimension() != 3 || v_output_depth_grad.size(2) != 4) {
+        AT_ERROR("v_output_depth_grad must have 3 dimensions");
     }
 
     const int dim_ch = ch_degree_r * (2*ch_degree_phi+1);
@@ -744,10 +749,10 @@ std::tuple<
         (float2 *)depth_normal_ref_im.contiguous().data_ptr<float>(),
         final_idx.contiguous().data_ptr<int>(),
         output_alpha.contiguous().data_ptr<float>(),
-        (float3 *)output_depth_grad.contiguous().data_ptr<float>(),
+        (float4 *)output_depth_grad.contiguous().data_ptr<float>(),
         v_output_alpha.contiguous().data_ptr<float>(),
         (float3 *)v_output.contiguous().data_ptr<float>(),
-        (float3 *)v_output_depth_grad.contiguous().data_ptr<float>(),
+        (float4 *)v_output_depth_grad.contiguous().data_ptr<float>(),
         v_output_reg_depth.contiguous().data_ptr<float>(),
         v_output_reg_normal.contiguous().data_ptr<float>(),
         // outputs

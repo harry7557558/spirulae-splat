@@ -126,7 +126,7 @@ class SpirulaeModelConfig(ModelConfig):
     """If True, continue to cull gaussians post refinement"""
     reset_alpha_every: int = 30
     """Every this many refinement steps, reset the alpha"""
-    densify_grad_thresh: float = 0.0015  # 0.0015|0.001 w/o ch
+    densify_grad_thresh: float = 0.002  # 0.002|0.001 w/o ch
     """threshold of positional gradient norm for densifying gaussians"""
     densify_size_thresh: float = 0.01
     """below this size, gaussians are *duplicated*, otherwise split"""
@@ -628,8 +628,8 @@ class SpirulaeModel(Model):
         new_features_ch = 0.0 * self.features_ch[split_mask].repeat(samps, 1, 1)
         # step 3, sample new opacities
         new_opacities = self.opacities[split_mask].repeat(samps, 1)
-        new_opacities = 1.0-torch.sqrt(1.0-torch.clip(new_opacities,0.,1.))
-        self.opacities[split_mask] = 1.0-torch.sqrt(1.0-torch.clip(self.opacities[split_mask],0.,1.))
+        # new_opacities = 1.0-torch.sqrt(1.0-torch.clip(new_opacities,0.,1.))
+        # self.opacities[split_mask] = 1.0-torch.sqrt(1.0-torch.clip(self.opacities[split_mask],0.,1.))
         # step 4, sample new scales
         size_fac = 1.6
         new_scales = torch.log(torch.exp(self.scales[split_mask]) / size_fac).repeat(samps, 1)
@@ -659,7 +659,8 @@ class SpirulaeModel(Model):
         new_dups = {}
         for name, param in self.gauss_params.items():
             new_dups[name] = param[dup_mask]
-        new_opacities = 1.0 - torch.sqrt(1.0-torch.clip(new_dups['opacities'],0.,1.))
+        new_opacities = new_dups['opacities']
+        # new_opacities = 1.0 - torch.sqrt(1.0-torch.clip(new_opacities,0.,1.))
         new_dups['opacities'] = new_opacities
         self.opacities[dup_mask] = new_opacities
         return new_dups
@@ -941,6 +942,8 @@ class SpirulaeModel(Model):
         self.intrins = intrins
         self.positions = positions
         self.radii = num_tiles_hit**0.5 / 2 * BLOCK_WIDTH
+
+        reg_depth = torch.sqrt(torch.relu(reg_depth+0.01))
 
         return {
             "rgb": rgb,
