@@ -215,6 +215,7 @@ class _RasterizeGaussiansSimple(Function):
                 v_axes_u, v_axes_v,
                 v_colors, v_opacities, v_anisotropies
             ) = [clean(v) for v in backward_return]
+            v_positions_xy_abs = backward_return[1]
 
         v_background = None
         if background.requires_grad:

@@ -83,6 +83,7 @@ __global__ void rasterize_backward_kernel(
     float3* __restrict__ v_axes_v,
     float3* __restrict__ v_colors,
     float* __restrict__ v_ch_coeffs,
+    float* __restrict__ v_ch_coeffs_abs,
     float* __restrict__ v_opacities,
     float2* __restrict__ v_anisotropies,
     float2* __restrict__ v_depth_grad,

@@ -126,8 +126,10 @@ class SpirulaeModelConfig(ModelConfig):
     """If True, continue to cull gaussians post refinement"""
     reset_alpha_every: int = 30
     """Every this many refinement steps, reset the alpha"""
-    densify_grad_thresh: float = 0.0015  # 0.002|0.001 w/o ch
+    densify_xy_grad_thresh: float = 0.0015  # 0.002|0.001 w/o ch
     """threshold of positional gradient norm for densifying gaussians"""
+    densify_ch_grad_thresh: float = 3e-6
+    """threshold of cylindrical harmonics gradient norm for densifying gaussians"""
     densify_size_thresh: float = 0.01
     """below this size, gaussians are *duplicated*, otherwise split"""
     n_split_samples: int = 2
@@ -142,7 +144,7 @@ class SpirulaeModelConfig(ModelConfig):
     """stop culling/splitting at this step WRT screen size of gaussians"""
     random_init: bool = False
     """whether to initialize the positions uniformly randomly (not SFM points)"""
-    num_random: int = 100000
+    num_random: int = 20000
     """Number of gaussians to initialize if random init is used"""
     random_scale: float = 1.0
     """Position standard deviation to initialize random gaussians"""
@@ -164,18 +166,14 @@ class SpirulaeModelConfig(ModelConfig):
     """threshold of ratio of gaussian max to min scale before applying regularization
     loss from the PhysGaussian paper
     """
+    depth_regularizer_weight: float = 0.02
+    """Weight for depth regularizer"""
+    normal_regularizer_weight: float = 0.02
+    """Weight for normal regularizer"""
+    regularizer_warmup_length: int = 1000
+    """Warmup for regularizers. If the initialization is random, only apply regularizers after this many steps."""
     output_depth_during_training: bool = False
     """If True, output depth during training. Otherwise, only output depth during evaluation."""
-    rasterize_mode: Literal["classic", "antialiased"] = "classic"
-    """
-    Classic mode of rendering will use the EWA volume splatting with a [0.3, 0.3] screen space blurring kernel. This
-    approach is however not suitable to render tiny gaussians at higher or lower resolution than the captured, which
-    results "aliasing-like" artifacts. The antialiased mode overcomes this limitation by calculating compensation factors
-    and apply them to the opacities of gaussians to preserve the total integrated density of splats.
-
-    However, PLY exported with antialiased rasterize mode is not compatible with classic mode. Thus many web viewers that
-    were implemented for classic mode can not render antialiased mode PLY properly without modifications.
-    """
     camera_optimizer: CameraOptimizerConfig = field(default_factory=lambda: CameraOptimizerConfig(mode="SO3xR3"))
     """Config of the camera optimizer to use"""
 
@@ -197,9 +195,12 @@ class SpirulaeModel(Model):
     def populate_modules(self):
         if self.seed_points is not None and not self.config.random_init:
             means = torch.nn.Parameter(self.seed_points[0])
+            self.random_init = False
         else:
             means = torch.nn.Parameter(torch.randn((self.config.num_random, 3)) * self.config.random_scale)
+            self.random_init = True
         self.xys_grad_norm = None
+        self.ch_grad_norm = None
         self.max_2Dsize = None
         distances, indices = self.k_nearest_sklearn(means.data, 6)
         distances = torch.from_numpy(distances)
@@ -248,7 +249,7 @@ class SpirulaeModel(Model):
             features_sh = torch.nn.Parameter(torch.zeros((num_points, dim_sh-1, 3)))
             features_ch = torch.nn.Parameter(torch.zeros((num_points, dim_ch, 3)))
 
-        opacities = torch.nn.Parameter(torch.logit(0.2 * torch.ones(num_points, 1)))
+        opacities = torch.nn.Parameter(torch.logit(0.1 * torch.ones(num_points, 1)))
         anisotropies = torch.nn.Parameter(0.01*torch.randn(num_points, 2))
 
         gauss_params = {
@@ -443,19 +444,24 @@ class SpirulaeModel(Model):
             return
         if not hasattr(self.positions, 'absgrad'):
             return
+        if not hasattr(self.features_ch, 'absgrad'):
+            return
         with torch.no_grad():
             # keep track of a moving average of grad norms
             visible_mask = (self.radii > 0).flatten()
             assert self.positions.absgrad is not None  # type: ignore
             grads = self.positions.absgrad.detach().norm(dim=-1)  # type: ignore
+            ch_grads = self.features_ch.absgrad.detach().flatten()
             # print(f"grad norm min {grads.min().item()} max {grads.max().item()} mean {grads.mean().item()} size {grads.shape}")
-            if self.xys_grad_norm is None:
+            if self.xys_grad_norm is None or self.ch_grad_norm is None:
                 self.xys_grad_norm = grads
+                self.ch_grad_norm = ch_grads
                 self.vis_counts = torch.ones_like(self.xys_grad_norm)
             else:
                 assert self.vis_counts is not None
                 self.vis_counts[visible_mask] = self.vis_counts[visible_mask] + 1
                 self.xys_grad_norm[visible_mask] = grads[visible_mask] + self.xys_grad_norm[visible_mask]
+                self.ch_grad_norm[visible_mask] = ch_grads[visible_mask] + self.ch_grad_norm[visible_mask]
 
             # update the max screen size, as a ratio of number of pixels
             # newradii = self.radii.detach()[self.depth_sort_i][visible_mask]
@@ -487,17 +493,20 @@ class SpirulaeModel(Model):
                 and self.step % reset_interval > self.num_train_data + self.config.refine_every
             )
             # assert self.xys_grad_norm is not None and self.vis_counts is not None and self.max_2Dsize is not None
-            if self.xys_grad_norm is None or self.vis_counts is None or self.max_2Dsize is None:
+            if self.xys_grad_norm is None or self.ch_grad_norm is None \
+                or self.vis_counts is None or self.max_2Dsize is None:
                 do_densification = False
-                self.avg_grad_norm = None
+                self.avg_xy_grad_norm = None
             else:
-                self.avg_grad_norm = (self.xys_grad_norm / self.vis_counts) * 0.5# * max(self.last_size[0], self.last_size[1])
+                self.avg_xy_grad_norm = (self.xys_grad_norm / self.vis_counts) * 0.5# * max(self.last_size[0], self.last_size[1])
+                self.avg_ch_grad_norm = self.ch_grad_norm / self.vis_counts
             # with torch.no_grad():
             #     print("avg_grad_norm", torch.mean(self.avg_grad_norm).item(), torch.median(self.avg_grad_norm).item())
             #     assert False
             if do_densification:
                 # then we densify
-                high_grads = (self.avg_grad_norm > self.config.densify_grad_thresh).squeeze()
+                high_grads = (self.avg_xy_grad_norm > self.config.densify_xy_grad_thresh).squeeze()
+                high_grads |= (self.avg_ch_grad_norm > self.config.densify_ch_grad_thresh).squeeze()
                 splits = (self.scales.exp().max(dim=-1).values > self.config.densify_size_thresh).squeeze()
                 if self.step < self.config.stop_screen_size_at:
                     splits |= (self.max_2Dsize > self.config.split_screen_size).squeeze()
@@ -567,7 +576,8 @@ class SpirulaeModel(Model):
 
             self.xys_grad_norm = None
             self.vis_counts = None
-            self.avg_grad_norm = None
+            self.avg_xy_grad_norm = None
+            self.avg_ch_grad_norm = None
             self.max_2Dsize = None
 
     def cull_gaussians(self, extra_cull_mask: Optional[torch.Tensor] = None):
@@ -581,9 +591,9 @@ class SpirulaeModel(Model):
         below_alpha_count = torch.sum(culls).item()
         # cull ones with low visibility
         low_grad_count = 0
-        if self.avg_grad_norm is not None:
+        if self.avg_xy_grad_norm is not None:
             low_grads = torch.zeros_like(culls)
-            low_grads[:len(self.avg_grad_norm)] = (self.avg_grad_norm < self.config.cull_grad_thresh).squeeze()
+            low_grads[:len(self.avg_xy_grad_norm)] = (self.avg_xy_grad_norm < self.config.cull_grad_thresh).squeeze()
             culls |= low_grads
             low_grad_count = torch.sum(low_grads).item()
         # others
@@ -1057,8 +1067,12 @@ class SpirulaeModel(Model):
         alpha = outputs['alpha']
         reg_depth = outputs["reg_depth"]
         reg_normal = outputs["reg_normal"]
-        depth_reg = 0.02 * reg_depth.sum() / alpha.sum()
-        normal_reg = 0.02 * reg_normal.sum() / alpha.sum()
+        weight_depth_reg = self.config.depth_regularizer_weight
+        weight_normal_reg = self.config.normal_regularizer_weight
+        if self.step < self.config.regularizer_warmup_length and self.random_init:
+            weight_depth_reg, weight_normal_reg = 0.0, 0.0
+        depth_reg = weight_depth_reg * reg_depth.sum() / alpha.sum()
+        normal_reg = weight_normal_reg * reg_normal.sum() / alpha.sum()
 
         # normal regularizer
         depth_grad_1 = outputs['depth_grad_1']
@@ -1066,7 +1080,7 @@ class SpirulaeModel(Model):
         dot = (depth_grad_1 * depth_grad_2).sum(dim=2,keepdim=True)
         normal_reg_s = 1.0-dot
         # normal_reg_s = torch.sqrt(torch.fmax(1.0-dot,torch.zeros_like(dot)))
-        normal_reg = normal_reg + 0.02 * (normal_reg_s*alpha).sum() / alpha.sum()
+        normal_reg = normal_reg + weight_normal_reg * (normal_reg_s*alpha).sum() / alpha.sum()
 
         # quaternion norm
         quat_norm_reg = 0.1 * (torch.log(self.quats.norm(dim=-1)+0.001)**2).mean()

@@ -58,7 +58,7 @@ spirulae = MethodSpecification(
             "scales": {
                 "optimizer": AdamOptimizerConfig(lr=0.005, eps=1e-15),
                 "scheduler": ExponentialDecaySchedulerConfig(
-                    lr_final=1.0e-4, max_steps=30000,
+                    lr_final=0.001, max_steps=30000,
                 ),
             },
             "quats": {
@@ -84,7 +84,7 @@ spirulae = MethodSpecification(
                 "scheduler": None,
             },
             "anisotropies": {
-                "optimizer": AdamOptimizerConfig(lr=0.01, eps=1e-15),
+                "optimizer": AdamOptimizerConfig(lr=0.04, eps=1e-15),
                 "scheduler": ExponentialDecaySchedulerConfig(
                     lr_final=0.001, max_steps=30000, warmup_steps=200, lr_pre_warmup=0
                 ),

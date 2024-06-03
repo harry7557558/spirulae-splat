@@ -193,6 +193,7 @@ std::tuple<
     torch::Tensor, // v_axes_v
     torch::Tensor, // v_colors
     torch::Tensor, // v_ch_coeffs
+    torch::Tensor, // v_ch_coeffs_abs
     torch::Tensor, // v_opacities
     torch::Tensor, // v_anisotropies
     torch::Tensor, // v_depth_grad

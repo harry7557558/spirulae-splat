@@ -263,9 +263,12 @@ class _RasterizeGaussians(Function):
             (
                 v_positions, v_positions_xy_abs,
                 v_axes_u, v_axes_v,
-                v_colors, v_ch_coeffs, v_opacities, v_anisotropies,
+                v_colors, v_ch_coeffs, v_ch_coeffs_abs,
+                v_opacities, v_anisotropies,
                 v_depth_grads, v_depth_normal_ref
             ) = [clean(v) for v in backward_return]
+            v_positions_xy_abs = backward_return[1]
+            v_ch_coeffs_abs = backward_return[6]
 
         v_background = None
         if background.requires_grad:
@@ -281,6 +284,7 @@ class _RasterizeGaussians(Function):
             positions.absgrad = v_positions_xy_abs
         else:
             positions.absgrad += v_positions_xy_abs
+        ch_coeffs.absgrad = v_ch_coeffs_abs
 
         return (
             v_positions, v_axes_u, v_axes_v,

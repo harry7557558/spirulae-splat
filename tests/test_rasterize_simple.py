@@ -135,6 +135,9 @@ def test_rasterize_simple():
     check_close('v_opacities', opacities.grad, _opacities.grad, **tol)
     check_close('v_anisotropies', anisotropies.grad, _anisotropies.grad, **tol)
 
+    assert (positions.absgrad > 0).any()
+    assert (positions.absgrad >= abs(positions.grad)[:,:2]).all()
+
 
 if __name__ == "__main__":
     rasterize_simple.RETURN_IDX = True

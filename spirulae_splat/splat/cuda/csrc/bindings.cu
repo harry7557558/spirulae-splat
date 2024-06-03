@@ -658,6 +658,7 @@ std::tuple<
     torch::Tensor, // v_axes_v
     torch::Tensor, // v_colors
     torch::Tensor, // v_ch_coeffs
+    torch::Tensor, // v_ch_coeffs_abs
     torch::Tensor, // v_opacities
     torch::Tensor, // v_anisotropies
     torch::Tensor, // v_depth_grad
@@ -743,6 +744,7 @@ std::tuple<
     torch::Tensor v_axes_v = torch::zeros({num_points, 3}, options);
     torch::Tensor v_colors = torch::zeros({num_points, channels}, options);
     torch::Tensor v_ch_coeffs = torch::zeros({num_points, dim_ch, channels}, options);
+    torch::Tensor v_ch_coeffs_abs = torch::zeros({num_points, 1}, options);
     torch::Tensor v_opacities = torch::zeros({num_points, 1}, options);
     torch::Tensor v_anisotropies = torch::zeros({num_points, 2}, options);
     torch::Tensor v_depth_grad = torch::zeros({num_points, 2}, options);
@@ -778,6 +780,7 @@ std::tuple<
         (float3 *)v_axes_v.contiguous().data_ptr<float>(),
         (float3 *)v_colors.contiguous().data_ptr<float>(),
         v_ch_coeffs.contiguous().data_ptr<float>(),
+        v_ch_coeffs_abs.contiguous().data_ptr<float>(),
         v_opacities.contiguous().data_ptr<float>(),
         (float2 *)v_anisotropies.contiguous().data_ptr<float>(),
         (float2 *)v_depth_grad.contiguous().data_ptr<float>(),
@@ -787,7 +790,8 @@ std::tuple<
     return std::make_tuple(
         v_positions, v_positions_xy_abs,
         v_axes_u, v_axes_v,
-        v_colors, v_ch_coeffs, v_opacities, v_anisotropies,
+        v_colors, v_ch_coeffs, v_ch_coeffs_abs,
+        v_opacities, v_anisotropies,
         v_depth_grad, v_depth_normal_ref
     );
 }

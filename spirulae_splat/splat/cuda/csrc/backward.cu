@@ -55,6 +55,7 @@ __global__ void rasterize_backward_kernel(
     float3* __restrict__ v_axes_v,
     float3* __restrict__ v_colors,
     float* __restrict__ v_ch_coeffs,
+    float* __restrict__ v_ch_coeffs_abs,
     float* __restrict__ v_opacities,
     float2* __restrict__ v_anisotropies,
     float2* __restrict__ v_depth_grad,
@@ -214,6 +215,7 @@ __global__ void rasterize_backward_kernel(
             float v_ch_coeff_local[MAX_CH_FLOATS];
             for (int i = 0; i < 3*dim_ch; i++)
                 v_ch_coeff_local[i] = 0.f;
+            float v_ch_coeff_abs_local = 0.f;
             //initialize everything to 0, only set if the lane is valid
             if(valid){
                 // compute the current T for this gaussian
@@ -291,6 +293,9 @@ __global__ void rasterize_backward_kernel(
                         &ch_color.x,
                         v_ch_coeff_local, *(float2*)&v_uv_ch
                     );
+                    for (int i = 0; i < 3*dim_ch; i++)
+                        v_ch_coeff_abs_local += abs(v_ch_coeff_local[i]);
+                    v_ch_coeff_abs_local /= (float)(3*dim_ch);
                 }
                 else {
                     color_1 = color_0;
@@ -376,6 +381,7 @@ __global__ void rasterize_backward_kernel(
             warpSum3(v_color_local, warp);
             for (int i = 0; i < 3*dim_ch; i++)
                 warpSum(v_ch_coeff_local[i], warp);
+            warpSum(v_ch_coeff_abs_local, warp);
             warpSum(v_opacity_local, warp);
             warpSum2(v_anisotropy_local, warp);
             warpSum2(v_depth_grad_local, warp);
@@ -405,6 +411,7 @@ __global__ void rasterize_backward_kernel(
                 atomicAdd(v_color_ptr + 3*g + 2, v_color_local.z);
                 for (int i = 0; i < 3*dim_ch; i++)
                     atomicAdd(v_ch_coeffs + 3*dim_ch*g + i, v_ch_coeff_local[i]);
+                atomicAdd(v_ch_coeffs_abs + g, v_ch_coeff_abs_local);
 
                 atomicAdd(v_opacities + g, v_opacity_local);
                 float* v_anisotropy_ptr = (float*)(v_anisotropies);

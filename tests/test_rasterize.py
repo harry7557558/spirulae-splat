@@ -189,6 +189,11 @@ def test_rasterize():
     check_close('v_depth_grad', depth_grads.grad, _depth_grads.grad, **tol)
     check_close('v_depth_normal_ref', depth_normal_ref.grad, _depth_normal_ref.grad, **tol)
 
+    assert (positions.absgrad > 0).any()
+    assert (positions.absgrad >= abs(positions.grad)[:,:2]).all()
+    assert (ch_coeffs.absgrad > 0).any()
+    assert (ch_coeffs.absgrad >= abs(ch_coeffs.grad)).all()
+
 
 if __name__ == "__main__":
     # torch.autograd.set_detect_anomaly(True)

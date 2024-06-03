@@ -5,7 +5,6 @@ My custom method for Nerfstudio. Modified from the `splatfacto` method in offici
 
 - Use 2D splats instead of 3D, add depth and normal regularization, use ray-splat intersection, as per SIGGRAPH 2024 paper [*2D Gaussian Splatting for Geometrically Accurate Radiance Fields*](https://arxiv.org/abs/2403.17888)
   - For normal regularization, singularity is eliminated by replacing division by depth with multiplication, which perserves the unit normal
-  - For depth regularization, use L1 loss based on center of splat instead of L2 loss; This could be improved by figuring out fast per-pixel sorting
 
 - Use polynomial spline kernel splats instead of Gaussians, as inspired by [kernels used in computational physics](https://en.wikipedia.org/wiki/Smoothed-particle_hydrodynamics)
   - This increases rendering speed by zeroing out opacities beyond a certain radius
@@ -15,9 +14,23 @@ My custom method for Nerfstudio. Modified from the `splatfacto` method in offici
 - Use [cylindrical harmonics](https://en.wikipedia.org/wiki/Cylindrical_harmonics) to model uv-dependent color
   - Base+SH color multiplied by the sigmoid of 2D "polar" harmonics
   - Able to better capture fine color details and potentially reduce export file size on complex scenes
+  - Use absolute gradient of CH coefficients as a criteria to split and duplicate splats
   - Slows down training by about a half, due to resource spent on Bessel function evaluation and loading CH coefficients from global memory
 
+- Introduce splat anisotropy by multiplying opacity by a smoothstep of UV directional dot product $1-\mathrm{smoothstep}(\mathbf{a}\cdot(u,v))$, able to better represent sharp edges
+
 - Initialize splat scale and orientation based on SVD of neighbor SfM points
+
+
+### Problems / To-do
+
+- Fast per-pixel depth sorting
+  - Has potential to stop "pops" and significantly reduce the number of splats, as per [this paper](https://arxiv.org/abs/2402.00525)
+  - Has potential to improve depth regularization: So far L2 depth regularization performs worse than L1 regularization based on center of splats
+
+- Try median depth instead of mean depth as per 2DGS paper
+
+- Address holes on glossy surfaces, overlapping splats, and features on regions underrepresented in capture
 
 ## Registering with Nerfstudio
 Ensure that nerfstudio has been installed according to the [instructions](https://docs.nerf.studio/quickstart/installation.html). Clone or fork this repository and run the commands:
