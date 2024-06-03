@@ -36,6 +36,7 @@ __global__ void rasterize_simple_backward_kernel(
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
+    const float2* __restrict__ anisotropies,
     const float3& __restrict__ background,
     const int* __restrict__ final_index,
     const float* __restrict__ output_alpha,
@@ -46,7 +47,8 @@ __global__ void rasterize_simple_backward_kernel(
     float3* __restrict__ v_axes_u,
     float3* __restrict__ v_axes_v,
     float3* __restrict__ v_colors,
-    float* __restrict__ v_opacities
+    float* __restrict__ v_opacities,
+    float2* __restrict__ v_anisotropies
 );
 
 __global__ void rasterize_backward_kernel(
@@ -63,6 +65,7 @@ __global__ void rasterize_backward_kernel(
     const float3* __restrict__ colors,
     const float* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
+    const float2* __restrict__ anisotropies,
     const float3& __restrict__ background,
     const float2* __restrict__ depth_grads,
     const float2* __restrict__ depth_normal_ref_im,
@@ -81,6 +84,7 @@ __global__ void rasterize_backward_kernel(
     float3* __restrict__ v_colors,
     float* __restrict__ v_ch_coeffs,
     float* __restrict__ v_opacities,
+    float2* __restrict__ v_anisotropies,
     float2* __restrict__ v_depth_grad,
     float2* __restrict__ v_depth_normal_ref
 );

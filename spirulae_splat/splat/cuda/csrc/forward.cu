@@ -157,6 +157,7 @@ __global__ void rasterize_simple_forward(
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
+    const float2* __restrict__ anisotropies,
     const float3& __restrict__ background,
     int* __restrict__ final_index,
     float3* __restrict__ out_img,
@@ -195,7 +196,8 @@ __global__ void rasterize_simple_forward(
 
     __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
     __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::vec4 color_opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 color_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
 
     // current visibility left to render
     float T = 1.f;
@@ -222,12 +224,14 @@ __global__ void rasterize_simple_forward(
             int32_t g_id = gaussian_ids_sorted[idx];
             const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
+            const float2 aniso = anisotropies[g_id];
             const float3 color = colors[g_id];
             const float3 v0 = axes_u[g_id];
             const float3 v1 = axes_v[g_id];
             position_batch[tr] = {pos.x, pos.y, pos.z};
             axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
-            color_opacity_batch[tr] = {color.x, color.y, color.z, opac};
+            color_batch[tr] = {color.x, color.y, color.z};
+            opacity_batch[tr] = {aniso.x, aniso.y, opac};
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -237,7 +241,8 @@ __global__ void rasterize_simple_forward(
         int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
             glm::vec3 pos = position_batch[t];
-            float opac = color_opacity_batch[t].w;
+            glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
+            float opac = opacity_batch[t].z;
             glm::mat2x3 axis_uv = axes_uv_batch[t];
 
             glm::vec3 poi;
@@ -248,12 +253,13 @@ __global__ void rasterize_simple_forward(
             if (glm::length(uv) > visibility_kernel_radius())
                 continue;
             float alpha;
-            if (!get_alpha(uv, opac, alpha))
+            if (!get_alpha(uv, opac, aniso, alpha))
                 continue;
+            alpha = min(alpha, 0.999f);
 
             const float next_T = T * (1.f - alpha);
 
-            glm::vec3 color = glm::vec3(color_opacity_batch[t]);
+            glm::vec3 color = color_batch[t];
 
             const float vis = alpha * T;
             pix_out.x = pix_out.x + color.x * vis;
@@ -293,6 +299,7 @@ __global__ void rasterize_forward(
     const unsigned ch_degree_phi,
     const float* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
+    const float2* __restrict__ anisotropies,
     const float3& __restrict__ background,
     const float2* __restrict__ depth_grads,
     const float2* __restrict__ depth_normal_ref_im,
@@ -337,8 +344,9 @@ __global__ void rasterize_forward(
     __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
     __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
     __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::vec4 color_opacity_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::vec2 depth_grad_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 color_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
+    // __shared__ glm::vec2 depth_grad_batch[MAX_BLOCK_SIZE];
 
     // current visibility left to render
     // index of most recent gaussian to write to this thread's pixel
@@ -375,14 +383,16 @@ __global__ void rasterize_forward(
             id_batch[tr] = g_id;
             const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
+            const float2 aniso = anisotropies[g_id];
             const float3 color = colors[g_id];
             const float3 v0 = axes_u[g_id];
             const float3 v1 = axes_v[g_id];
-            const float2 depth_grad = depth_grads[g_id];
+            // const float2 depth_grad = depth_grads[g_id];
             position_batch[tr] = {pos.x, pos.y, pos.z};
             axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
-            color_opacity_batch[tr] = {color.x, color.y, color.z, opac};
-            depth_grad_batch[tr] = {depth_grad.x, depth_grad.y};
+            color_batch[tr] = {color.x, color.y, color.z};
+            opacity_batch[tr] = {aniso.x, aniso.y, opac};
+            // depth_grad_batch[tr] = {depth_grad.x, depth_grad.y};
         }
         // wait for other threads to collect the gaussians in batch
         block.sync();
@@ -391,7 +401,8 @@ __global__ void rasterize_forward(
         int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
             glm::vec3 pos = position_batch[t];
-            float opac = color_opacity_batch[t].w;
+            glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
+            float opac = opacity_batch[t].z;
             glm::mat2x3 axis_uv = axes_uv_batch[t];
 
             glm::vec3 poi;
@@ -402,12 +413,12 @@ __global__ void rasterize_forward(
             if (glm::length(uv) > visibility_kernel_radius())
                 continue;
             float alpha;
-            if (!get_alpha(uv, opac, alpha))
+            if (!get_alpha(uv, opac, aniso, alpha))
                 continue;
 
             const float next_T = T * (1.f - alpha);
 
-            glm::vec3 color_0 = glm::vec3(color_opacity_batch[t]);
+            glm::vec3 color_0 = color_batch[t];
             glm::vec3 color;
             if (dim_ch > 0) {
                 int32_t g_id = id_batch[t];
@@ -427,7 +438,7 @@ __global__ void rasterize_forward(
             #elif DEPTH_REG_L == 2
             const float depth = poi.z;
             #endif
-            const glm::vec2 g_i = depth_grad_batch[t];
+            const glm::vec2 g_i = *(glm::vec2*)&depth_grads[id_batch[t]];
             const float g_i_norm = glm::length(g_i) + 1e-6f;
             const glm::vec2 n_i = g_i / g_i_norm;
 

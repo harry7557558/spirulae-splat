@@ -37,6 +37,7 @@ __global__ void rasterize_backward_kernel(
     const float3* __restrict__ colors,
     const float* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
+    const float2* __restrict__ anisotropies,
     const float3& __restrict__ background,
     const float2* __restrict__ depth_grads,
     const float2* __restrict__ depth_normal_ref_im,
@@ -55,6 +56,7 @@ __global__ void rasterize_backward_kernel(
     float3* __restrict__ v_colors,
     float* __restrict__ v_ch_coeffs,
     float* __restrict__ v_opacities,
+    float2* __restrict__ v_anisotropies,
     float2* __restrict__ v_depth_grad,
     float2* __restrict__ v_depth_normal_ref
 ) {
@@ -91,8 +93,9 @@ __global__ void rasterize_backward_kernel(
     __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
     __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
     __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::vec4 color_opacity_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::vec2 depth_grad_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 color_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
+    // __shared__ glm::vec2 depth_grad_batch[MAX_BLOCK_SIZE];
 
     // df/d_out for this pixel
     const float4 out_depth_grad = output_depth_grad[pix_id];
@@ -156,14 +159,16 @@ __global__ void rasterize_backward_kernel(
             id_batch[tr] = g_id;
             const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
+            const float2 aniso = anisotropies[g_id];
             const float3 color = colors[g_id];
             const float3 v0 = axes_u[g_id];
             const float3 v1 = axes_v[g_id];
-            const float2 depth_grad = depth_grads[g_id];
+            // const float2 depth_grad = depth_grads[g_id];
             position_batch[tr] = {pos.x, pos.y, pos.z};
             axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
-            color_opacity_batch[tr] = {color.x, color.y, color.z, opac};
-            depth_grad_batch[tr] = {depth_grad.x, depth_grad.y};
+            color_batch[tr] = {color.x, color.y, color.z};
+            opacity_batch[tr] = {aniso.x, aniso.y, opac};
+            // depth_grad_batch[tr] = {depth_grad.x, depth_grad.y};
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -178,7 +183,8 @@ __global__ void rasterize_backward_kernel(
             }
 
             glm::vec3 pos = position_batch[t];
-            float opac = color_opacity_batch[t].w;
+            glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
+            float opac = opacity_batch[t].z;
             glm::mat2x3 axis_uv = axes_uv_batch[t];
 
             glm::vec3 poi;
@@ -190,7 +196,7 @@ __global__ void rasterize_backward_kernel(
             }
             float alpha;
             if (valid){
-                if (!get_alpha(uv, opac, alpha))
+                if (!get_alpha(uv, opac, aniso, alpha))
                     valid = 0;
             }
             if(!warp.any(valid)){
@@ -204,7 +210,7 @@ __global__ void rasterize_backward_kernel(
             glm::vec3 v_color_local = {0.f, 0.f, 0.f};
             glm::vec2 v_depth_grad_local = {0.f, 0.f};
             float v_opacity_local = 0.f;
-            float ch_coeffs_local[MAX_CH_FLOATS];
+            glm::vec2 v_anisotropy_local = {0.f, 0.f};
             float v_ch_coeff_local[MAX_CH_FLOATS];
             for (int i = 0; i < 3*dim_ch; i++)
                 v_ch_coeff_local[i] = 0.f;
@@ -230,7 +236,7 @@ __global__ void rasterize_backward_kernel(
                 #endif
 
                 // update depth regularizer
-                const glm::vec2 depth_grad = depth_grad_batch[t];
+                const glm::vec2 depth_grad = *(glm::vec2*)&depth_grads[id_batch[t]];
                 float vis_sum_next = vis_sum - vis;
                 float depth_sum_next = depth_sum - vis*depth;
                 float depth_squared_sum_next = depth_squared_sum - vis*depth*depth;
@@ -261,20 +267,17 @@ __global__ void rasterize_backward_kernel(
 
                 // update color
                 glm::vec3 v_color_1 = {vis * v_out.x, vis * v_out.y, vis * v_out.z};
-                const glm::vec4 rgba = color_opacity_batch[t];
-                const glm::vec3 color_0 = glm::vec3(rgba);
+                const glm::vec3 opacity = opacity_batch[t];
+                const glm::vec3 color_0 = color_batch[t];
                 glm::vec3 color_1;
                 glm::vec2 v_uv_ch = {0.f, 0.f};
                 if (dim_ch > 0) {
+                    // TODO: speed up by reading through ch_coeffs only once
                     int32_t g_id = id_batch[t];
-                    for (int i = 0; i < 3*dim_ch; i++) {
-                        ch_coeffs_local[i] = ch_coeffs[3*dim_ch*g_id+i];
-                        v_ch_coeff_local[i] = 0.f;
-                    }
                     glm::vec3 ch_color;
                     ch_coeffs_to_color(
                         ch_degree_r, ch_degree_phi,
-                        ch_coeffs_local, {uv.x, uv.y}, &ch_color.x
+                        &ch_coeffs[3*dim_ch*g_id], {uv.x, uv.y}, &ch_color.x
                     );
                     glm::vec3 ch_color_sigmoid = 1.0f / (1.0f+glm::exp(-ch_color));
                     color_1 = color_0 * ch_color_sigmoid;
@@ -283,7 +286,7 @@ __global__ void rasterize_backward_kernel(
                     glm::vec3 v_ch_color = v_ch_color_sigmoid * ch_color_sigmoid*(1.0f-ch_color_sigmoid);
                     ch_coeffs_to_color_vjp(
                         ch_degree_r, ch_degree_phi,
-                        ch_coeffs_local, {uv.x, uv.y},
+                        &ch_coeffs[3*dim_ch*g_id], {uv.x, uv.y},
                         (float*)&v_ch_color,
                         &ch_color.x,
                         v_ch_coeff_local, *(float2*)&v_uv_ch
@@ -325,8 +328,9 @@ __global__ void rasterize_backward_kernel(
                 // grad
                 glm::vec2 v_uv;
                 get_alpha_vjp(
-                    uv, rgba.w, v_alpha,
-                    v_uv, v_opacity_local
+                    uv, opacity.z, glm::vec2(opacity),
+                    v_alpha,
+                    v_uv, v_opacity_local, v_anisotropy_local
                 );
                 v_uv += v_uv_ch;
                 glm::mat2x3 v_axis_uv;
@@ -344,9 +348,11 @@ __global__ void rasterize_backward_kernel(
                 // absgrad (color only)
                 #if 0
                 float v_opacity_local_1;
+                glm::vec2 v_anisotropy_local_1;
                 get_alpha_vjp(
-                    uv, rgba.w, v_alpha_color_only,
-                    v_uv, v_opacity_local_1
+                    uv, opacity.z, glm::vec2(opacity),
+                    v_alpha_color_only,
+                    v_uv, v_opacity_local_1, v_anisotropy_local_1
                 );
                 v_uv += v_uv_ch;
                 get_intersection_vjp(
@@ -371,6 +377,7 @@ __global__ void rasterize_backward_kernel(
             for (int i = 0; i < 3*dim_ch; i++)
                 warpSum(v_ch_coeff_local[i], warp);
             warpSum(v_opacity_local, warp);
+            warpSum2(v_anisotropy_local, warp);
             warpSum2(v_depth_grad_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t];
@@ -398,7 +405,11 @@ __global__ void rasterize_backward_kernel(
                 atomicAdd(v_color_ptr + 3*g + 2, v_color_local.z);
                 for (int i = 0; i < 3*dim_ch; i++)
                     atomicAdd(v_ch_coeffs + 3*dim_ch*g + i, v_ch_coeff_local[i]);
+
                 atomicAdd(v_opacities + g, v_opacity_local);
+                float* v_anisotropy_ptr = (float*)(v_anisotropies);
+                atomicAdd(v_anisotropy_ptr + 2*g + 0, v_anisotropy_local.x);
+                atomicAdd(v_anisotropy_ptr + 2*g + 1, v_anisotropy_local.y);
 
                 float* v_depth_grad_ptr = (float*)(v_depth_grad);
                 atomicAdd(v_depth_grad_ptr + 2*g + 0, v_depth_grad_local.x);
@@ -424,6 +435,7 @@ __global__ void rasterize_simple_backward_kernel(
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
+    const float2* __restrict__ anisotropies,
     const float3& __restrict__ background,
     const int* __restrict__ final_index,
     const float* __restrict__ output_alpha,
@@ -434,7 +446,8 @@ __global__ void rasterize_simple_backward_kernel(
     float3* __restrict__ v_axes_u,
     float3* __restrict__ v_axes_v,
     float3* __restrict__ v_colors,
-    float* __restrict__ v_opacities
+    float* __restrict__ v_opacities,
+    float2* __restrict__ v_anisotropies
 ) {
     auto block = cg::this_thread_block();
     int32_t tile_id =
@@ -474,7 +487,8 @@ __global__ void rasterize_simple_backward_kernel(
     __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
     __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
     __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::vec4 color_opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 color_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
 
     // df/d_out for this pixel
     const float3 v_out = v_output[pix_id];
@@ -501,12 +515,14 @@ __global__ void rasterize_simple_backward_kernel(
             id_batch[tr] = g_id;
             const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
+            const float2 aniso = anisotropies[g_id];
             const float3 color = colors[g_id];
             const float3 v0 = axes_u[g_id];
             const float3 v1 = axes_v[g_id];
             position_batch[tr] = {pos.x, pos.y, pos.z};
             axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
-            color_opacity_batch[tr] = {color.x, color.y, color.z, opac};
+            color_batch[tr] = {color.x, color.y, color.z};
+            opacity_batch[tr] = {aniso.x, aniso.y, opac};
         }
         // wait for other threads to collect the gaussians in batch
         block.sync();
@@ -519,7 +535,8 @@ __global__ void rasterize_simple_backward_kernel(
             }
 
             glm::vec3 pos = position_batch[t];
-            float opac = color_opacity_batch[t].w;
+            glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
+            float opac = opacity_batch[t].z;
             glm::mat2x3 axis_uv = axes_uv_batch[t];
 
             glm::vec3 poi;
@@ -531,7 +548,7 @@ __global__ void rasterize_simple_backward_kernel(
             }
             float alpha;
             if (valid){
-                if (!get_alpha(uv, opac, alpha))
+                if (!get_alpha(uv, opac, aniso, alpha))
                     valid = 0;
             }
             if(!warp.any(valid)){
@@ -544,6 +561,7 @@ __global__ void rasterize_simple_backward_kernel(
             glm::vec3 v_axis_v_local = {0.f, 0.f, 0.f};
             glm::vec3 v_color_local = {0.f, 0.f, 0.f};
             float v_opacity_local = 0.f;
+            glm::vec2 v_anisotropy_local = {0.f, 0.f};
             //initialize everything to 0, only set if the lane is valid
             if(valid){
                 // compute the current T for this gaussian
@@ -555,11 +573,12 @@ __global__ void rasterize_simple_backward_kernel(
                 float v_alpha = 0.f;
                 v_color_local = {vis * v_out.x, vis * v_out.y, vis * v_out.z};
 
-                const glm::vec4 rgba = color_opacity_batch[t];
+                const glm::vec3 color = color_batch[t];
+                const glm::vec3 opacity = opacity_batch[t];
                 // contribution from this pixel
-                v_alpha += (rgba.x * T - buffer.x) * ra * v_out.x;
-                v_alpha += (rgba.y * T - buffer.y) * ra * v_out.y;
-                v_alpha += (rgba.z * T - buffer.z) * ra * v_out.z;
+                v_alpha += (color.x * T - buffer.x) * ra * v_out.x;
+                v_alpha += (color.y * T - buffer.y) * ra * v_out.y;
+                v_alpha += (color.z * T - buffer.z) * ra * v_out.z;
 
                 v_alpha += T_final * ra * v_out_alpha;
                 // contribution from background pixel
@@ -567,14 +586,15 @@ __global__ void rasterize_simple_backward_kernel(
                 v_alpha += -T_final * ra * background.y * v_out.y;
                 v_alpha += -T_final * ra * background.z * v_out.z;
                 // update the running sum
-                buffer.x += rgba.x * vis;
-                buffer.y += rgba.y * vis;
-                buffer.z += rgba.z * vis;
+                buffer.x += color.x * vis;
+                buffer.y += color.y * vis;
+                buffer.z += color.z * vis;
 
                 glm::vec2 v_uv;
                 get_alpha_vjp(
-                    uv, rgba.w, v_alpha,
-                    v_uv, v_opacity_local
+                    uv, opacity.z, glm::vec2(opacity),
+                    v_alpha,
+                    v_uv, v_opacity_local, v_anisotropy_local
                 );
                 glm::mat2x3 v_axis_uv;
                 get_intersection_vjp(
@@ -595,6 +615,7 @@ __global__ void rasterize_simple_backward_kernel(
             warpSum3(v_axis_v_local, warp);
             warpSum3(v_color_local, warp);
             warpSum(v_opacity_local, warp);
+            warpSum2(v_anisotropy_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t];
 
@@ -619,7 +640,11 @@ __global__ void rasterize_simple_backward_kernel(
                 atomicAdd(v_color_ptr + 3*g + 0, v_color_local.x);
                 atomicAdd(v_color_ptr + 3*g + 1, v_color_local.y);
                 atomicAdd(v_color_ptr + 3*g + 2, v_color_local.z);
+                
                 atomicAdd(v_opacities + g, v_opacity_local);
+                float* v_anisotropy_ptr = (float*)(v_anisotropies);
+                atomicAdd(v_anisotropy_ptr + 2*g + 0, v_anisotropy_local.x);
+                atomicAdd(v_anisotropy_ptr + 2*g + 1, v_anisotropy_local.y);
             }
         }
     }

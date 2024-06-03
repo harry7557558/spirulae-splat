@@ -15,6 +15,7 @@ def process_ckpt_to_splat(file_path):
     features_ch = pipeline['_model.gauss_params.features_ch']
     means = pipeline['_model.gauss_params.means']
     opacities = pipeline['_model.gauss_params.opacities']
+    anisotropies = pipeline['_model.gauss_params.anisotropies']
     quats = pipeline['_model.gauss_params.quats']
     scales = pipeline['_model.gauss_params.scales']
 
@@ -22,7 +23,7 @@ def process_ckpt_to_splat(file_path):
     n_floats = sum([
         x.numel() for x in [
             features_dc, features_sh, features_ch,
-            means, opacities, quats, scales]
+            means, opacities, anisotropies, quats, scales]
     ])
     print(n_splat, "splats")
     print(n_floats//n_splat, "floats per splat")

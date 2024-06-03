@@ -52,17 +52,20 @@ spirulae = MethodSpecification(
             "means": {
                 "optimizer": AdamOptimizerConfig(lr=1.0e-4, eps=1e-15),
                 "scheduler": ExponentialDecaySchedulerConfig(
-                    lr_final=1.0e-6,
-                    max_steps=30000,
+                    lr_final=1.0e-6, max_steps=30000,
                 ),
             },
             "scales": {
                 "optimizer": AdamOptimizerConfig(lr=0.005, eps=1e-15),
-                "scheduler": None,
+                "scheduler": ExponentialDecaySchedulerConfig(
+                    lr_final=1.0e-4, max_steps=30000,
+                ),
             },
             "quats": {
-                "optimizer": AdamOptimizerConfig(lr=0.001, eps=1e-15),
-                "scheduler": None
+                "optimizer": AdamOptimizerConfig(lr=0.0005, eps=1e-15),
+                "scheduler": ExponentialDecaySchedulerConfig(
+                    lr_final=0.0001, max_steps=30000,
+                ),
             },
             "features_dc": {
                 "optimizer": AdamOptimizerConfig(lr=0.0025, eps=1e-15),
@@ -79,6 +82,12 @@ spirulae = MethodSpecification(
             "opacities": {
                 "optimizer": AdamOptimizerConfig(lr=0.05, eps=1e-15),
                 "scheduler": None,
+            },
+            "anisotropies": {
+                "optimizer": AdamOptimizerConfig(lr=0.01, eps=1e-15),
+                "scheduler": ExponentialDecaySchedulerConfig(
+                    lr_final=0.001, max_steps=30000, warmup_steps=200, lr_pre_warmup=0
+                ),
             },
             "background_color": {
                 "optimizer": AdamOptimizerConfig(lr=0.0025, eps=1e-15),

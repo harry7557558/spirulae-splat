@@ -126,7 +126,7 @@ class SpirulaeModelConfig(ModelConfig):
     """If True, continue to cull gaussians post refinement"""
     reset_alpha_every: int = 30
     """Every this many refinement steps, reset the alpha"""
-    densify_grad_thresh: float = 0.002  # 0.002|0.001 w/o ch
+    densify_grad_thresh: float = 0.0015  # 0.002|0.001 w/o ch
     """threshold of positional gradient norm for densifying gaussians"""
     densify_size_thresh: float = 0.01
     """below this size, gaussians are *duplicated*, otherwise split"""
@@ -201,7 +201,7 @@ class SpirulaeModel(Model):
             means = torch.nn.Parameter(torch.randn((self.config.num_random, 3)) * self.config.random_scale)
         self.xys_grad_norm = None
         self.max_2Dsize = None
-        distances, indices = self.k_nearest_sklearn(means.data, 10)
+        distances, indices = self.k_nearest_sklearn(means.data, 6)
         distances = torch.from_numpy(distances)
         # avg_dist = distances.mean(dim=-1, keepdim=True)
         # scales = torch.nn.Parameter(torch.log(avg_dist.repeat(1, 2)))
@@ -213,7 +213,9 @@ class SpirulaeModel(Model):
             sorted_indices = np.argsort(-S[i])
             S[i] = S[i][sorted_indices]
             Vt[i] = Vt[i][sorted_indices]
-        scales = torch.nn.Parameter(torch.from_numpy(np.log(0.5*S[:,:2]+1e-8)))
+        scales = np.log(1.5*S[:,:2]+1e-8)
+        scales = 0.5*(scales+np.flip(scales,axis=1))
+        scales = torch.nn.Parameter(torch.from_numpy(scales))
         # quats = torch.nn.Parameter(random_quat_tensor(num_points))
         quats = torch.nn.Parameter(torch.from_numpy(np.array(
             [Rotation.from_matrix(R.T).as_quat() for R in Vt],
@@ -246,7 +248,8 @@ class SpirulaeModel(Model):
             features_sh = torch.nn.Parameter(torch.zeros((num_points, dim_sh-1, 3)))
             features_ch = torch.nn.Parameter(torch.zeros((num_points, dim_ch, 3)))
 
-        opacities = torch.nn.Parameter(torch.logit(0.1 * torch.ones(num_points, 1)))
+        opacities = torch.nn.Parameter(torch.logit(0.2 * torch.ones(num_points, 1)))
+        anisotropies = torch.nn.Parameter(0.01*torch.randn(num_points, 2))
 
         gauss_params = {
             "means": means,
@@ -256,6 +259,7 @@ class SpirulaeModel(Model):
             "features_sh": features_sh,
             "features_ch": features_ch,
             "opacities": opacities,
+            "anisotropies": anisotropies
         }
         self.gauss_params = torch.nn.ParameterDict(gauss_params)
 
@@ -333,6 +337,10 @@ class SpirulaeModel(Model):
     def opacities(self):
         return self.gauss_params["opacities"]
 
+    @property
+    def anisotropies(self):
+        return self.gauss_params["anisotropies"]
+
     def load_state_dict(self, dict, **kwargs):  # type: ignore
         # resize the parameters to match the new number of points
         self.step = 30000
@@ -340,7 +348,8 @@ class SpirulaeModel(Model):
             # For backwards compatibility, we remap the names of parameters from
             # means->gauss_params.means since old checkpoints have that format
             for p in ["means", "scales", "quats",
-                      "features_dc", "features_sh", "features_ch", "opacities"]:
+                      "features_dc", "features_sh", "features_ch",
+                      "opacities", "anisotropies"]:
                 dict[f"gauss_params.{p}"] = dict[p]
         newp = dict["gauss_params.means"].shape[0]
         for name, param in self.gauss_params.items():
@@ -614,9 +623,11 @@ class SpirulaeModel(Model):
         """
         n_splits = split_mask.sum().item()
         CONSOLE.log(f"Splitting {split_mask.sum().item()/self.num_points} gaussians: {n_splits}/{self.num_points}")
-        centered_samples = torch.randn((samps * n_splits, 3), device=self.device)  # Nx2 of axis-aligned scales
+        centered_samples = torch.randn((samps * n_splits, 3), device=self.device)  # Nx3 of axis-aligned scales
         scaled_samples = (
-            torch.exp(self.scales_3d[split_mask].repeat(samps, 1)) * centered_samples
+            torch.exp(self.scales_3d[split_mask].repeat(samps, 1)) * \
+                # torch.exp(0.3*centered_samples)
+                (centered_samples)
         )  # how these scales are rotated
         quats = self.quats[split_mask] / self.quats[split_mask].norm(dim=-1, keepdim=True)  # normalize them first
         rots = quat_to_rotmat(quats.repeat(samps, 1))  # how these scales are rotated
@@ -630,6 +641,7 @@ class SpirulaeModel(Model):
         new_opacities = self.opacities[split_mask].repeat(samps, 1)
         # new_opacities = 1.0-torch.sqrt(1.0-torch.clip(new_opacities,0.,1.))
         # self.opacities[split_mask] = 1.0-torch.sqrt(1.0-torch.clip(self.opacities[split_mask],0.,1.))
+        new_anisotropies = self.anisotropies[split_mask].repeat(samps, 1)
         # step 4, sample new scales
         size_fac = 1.6
         new_scales = torch.log(torch.exp(self.scales[split_mask]) / size_fac).repeat(samps, 1)
@@ -642,6 +654,7 @@ class SpirulaeModel(Model):
             "features_sh": new_features_sh,
             "features_ch": new_features_ch,
             "opacities": new_opacities,
+            "anisotropies": new_anisotropies,
             "scales": new_scales,
             "quats": new_quats,
         }
@@ -700,7 +713,7 @@ class SpirulaeModel(Model):
             for name in [
                 "means", "scales", "quats",
                 "features_dc", "features_sh", "features_ch",
-                "opacities", #"background_color"
+                "opacities", "anisotropies", #"background_color"
                 ]
         }
 
@@ -805,6 +818,7 @@ class SpirulaeModel(Model):
 
         if crop_ids is not None:
             opacities_crop = self.opacities[crop_ids]
+            anisotropies_crop = self.anisotropies[crop_ids]
             means_crop = self.means[crop_ids]
             features_dc_crop = self.features_dc[crop_ids]
             features_sh_crop = self.features_sh[crop_ids]
@@ -813,6 +827,7 @@ class SpirulaeModel(Model):
             quats_crop = self.quats[crop_ids]
         else:
             opacities_crop = self.opacities
+            anisotropies_crop = self.anisotropies
             means_crop = self.means
             features_dc_crop = self.features_dc
             features_sh_crop = self.features_sh
@@ -864,7 +879,7 @@ class SpirulaeModel(Model):
         depth_im_ref, alpha_ref = rasterize_gaussians_simple(
             positions, axes_u, axes_v,
             torch.concatenate((depth_grads, positions[...,2:]), dim=1),
-            opacities,
+            opacities, anisotropies_crop,
             bounds, num_tiles_hit,
             intrins, H, W, BLOCK_WIDTH
         )
@@ -901,7 +916,7 @@ class SpirulaeModel(Model):
             positions, axes_u, axes_v,
             rgbs,
             self.config.ch_degree_r, self.config.ch_degree_phi, features_ch_crop,
-            opacities,
+            opacities, anisotropies_crop,
             depth_grads, depth_normal_grad_ref_normalized,
             bounds, num_tiles_hit,
             intrins, H, W, BLOCK_WIDTH,
@@ -938,6 +953,7 @@ class SpirulaeModel(Model):
                 # print(depth_grad_reg.item())
 
                 # print(self.features_ch.mean().item(), self.features_ch.std().item())
+                # print(self.anisotropies.mean().item(), self.anisotropies.std().item())
 
         self.intrins = intrins
         self.positions = positions

@@ -53,8 +53,10 @@ def test_rasterize():
 
     colors = torch.randn((num_points, 3), device=device, requires_grad=True)
     opacities = (0.995 * torch.rand((num_points, 1), device=device)).requires_grad_(True)
+    anisotropies = torch.randn((num_points, 2), device=device, requires_grad=True)
     _colors = colors.detach().clone().requires_grad_(True)
     _opacities = opacities.detach().clone().requires_grad_(True)
+    _anisotropies = anisotropies.detach().clone().requires_grad_(True)
     depth_normal_ref = torch.randn((H, W, 2), device=device, requires_grad=True)
     _depth_normal_ref = depth_normal_ref.detach().clone().requires_grad_(True)
 
@@ -104,6 +106,7 @@ def test_rasterize():
         ch_degree_r, ch_degree_phi,
         ch_coeffs,
         opacities,
+        anisotropies,
         depth_grads,
         depth_normal_ref,
         bounds,
@@ -119,6 +122,7 @@ def test_rasterize():
         axes_v,
         colors,
         opacities,
+        anisotropies,
         bounds,
         num_tiles_hit,
         intrins,
@@ -140,6 +144,7 @@ def test_rasterize():
         ch_degree_r, ch_degree_phi,
         _ch_coeffs,
         _opacities,
+        _anisotropies,
         _depth_grads,
         _depth_normal_ref,
         _bounds,
@@ -180,6 +185,7 @@ def test_rasterize():
     if dim_ch > 0:
         check_close('v_ch_coeffs', ch_coeffs.grad, _ch_coeffs.grad, **tol)
     check_close('v_opacities', opacities.grad, _opacities.grad, **tol)
+    check_close('v_anisotropies', anisotropies.grad, _anisotropies.grad, **tol)
     check_close('v_depth_grad', depth_grads.grad, _depth_grads.grad, **tol)
     check_close('v_depth_normal_ref', depth_normal_ref.grad, _depth_normal_ref.grad, **tol)
 
