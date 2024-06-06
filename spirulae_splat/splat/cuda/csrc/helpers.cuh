@@ -61,7 +61,7 @@ inline __device__ bool get_alpha(
     const float m = t<0.f ? 1.f : t>1.f ? 0.f :
         t*t*(2.0f*t-3.0f) + 1.0f;
     alpha = opac * vis * m;
-    return r2 >= 0.f && alpha >= 1e-3f;
+    return r2 >= 0.f && alpha > 1e-4f;
 }
 
 inline __device__ void get_alpha_vjp(

@@ -125,6 +125,27 @@ std::tuple<
 );
 
 std::tuple<
+    torch::Tensor,  // final_index
+    torch::Tensor,  // out_img
+    torch::Tensor  // out_visibility
+> rasterize_depth_forward_tensor(
+    const std::tuple<int, int, int> tile_bounds,
+    const std::tuple<int, int, int> block,
+    const std::tuple<int, int, int> img_size,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const torch::Tensor &gaussian_ids_sorted,
+    const torch::Tensor &tile_bins,
+    const torch::Tensor &positions,
+    const torch::Tensor &axes_u,
+    const torch::Tensor &axes_v,
+    const torch::Tensor &opacities,
+    const torch::Tensor &anisotropies
+);
+
+std::tuple<
     torch::Tensor, // final_idx
     torch::Tensor,  // out_alpha
     torch::Tensor,  // out_img
@@ -184,6 +205,34 @@ std::tuple<
     const torch::Tensor &output_alpha,
     const torch::Tensor &v_output,
     const torch::Tensor &v_output_alpha
+);
+
+std::tuple<
+    torch::Tensor, // v_positions
+    torch::Tensor, // v_positions_xy_abs
+    torch::Tensor, // v_axes_u
+    torch::Tensor, // v_axes_v
+    torch::Tensor, // v_opacities
+    torch::Tensor  // v_anisotropies
+> rasterize_depth_backward_tensor(
+    const unsigned img_height,
+    const unsigned img_width,
+    const unsigned block_width,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const torch::Tensor &gaussians_ids_sorted,
+    const torch::Tensor &tile_bins,
+    const torch::Tensor &positions,
+    const torch::Tensor &axes_u,
+    const torch::Tensor &axes_v,
+    const torch::Tensor &opacities,
+    const torch::Tensor &anisotropies,
+    const torch::Tensor &final_idx,
+    const torch::Tensor &output_depth,
+    const torch::Tensor &output_visibility,
+    const torch::Tensor &v_output_depth
 );
 
 std::tuple<

@@ -24,6 +24,7 @@ __global__ void project_gaussians_forward_kernel(
     float2* __restrict__ depth_grads
 );
 
+// compute output color image from binned and sorted gaussians
 __global__ void rasterize_simple_forward(
     const dim3 tile_bounds,
     const dim3 img_size,
@@ -42,7 +43,24 @@ __global__ void rasterize_simple_forward(
     float* __restrict__ out_alpha
 );
 
-// compute output color image from binned and sorted gaussians
+// median depth
+__global__ void rasterize_depth_forward(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    const float2* __restrict__ anisotropies,
+    int* __restrict__ final_index,
+    float* __restrict__ out_depth,
+    float2* __restrict__ out_visibility
+);
+
+// with depth and regularization terms
 __global__ void rasterize_forward(
     const dim3 tile_bounds,
     const dim3 img_size,

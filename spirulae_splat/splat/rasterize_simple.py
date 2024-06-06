@@ -34,20 +34,9 @@ def rasterize_gaussians_simple(
     """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an N-dimensional output using alpha-compositing.
 
     Note:
-        This function is differentiable w.r.t the xys, conics, colors, and opacity inputs.
+        This function is differentiable w.r.t the TODO inputs.
 
-    Args:
-        xys (Tensor): xy coords of 2D gaussians.
-        depths (Tensor): depths of 2D gaussians.
-        radii (Tensor): radii of 2D gaussians
-        conics (Tensor): conics (inverse of covariance) of 2D gaussians in upper triangular format
-        num_tiles_hit (Tensor): number of tiles hit per gaussian
-        colors (Tensor): N-dimensional features associated with the gaussians.
-        opacity (Tensor): opacity associated with the gaussians.
-        img_height (int): height of the rendered image.
-        img_width (int): width of the rendered image.
-        block_width (int): MUST match whatever block width was used in the project_gaussians call. integer number of pixels between 2 and 16 inclusive
-        background (Tensor): background color
+    Args: TODO
 
     Returns:
         A Tensor:

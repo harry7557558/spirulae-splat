@@ -90,6 +90,29 @@ __global__ void rasterize_backward_kernel(
     float2* __restrict__ v_depth_normal_ref
 );
 
+__global__ void rasterize_depth_backward_kernel(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    const float2* __restrict__ anisotropies,
+    const int* __restrict__ final_index,
+    const float* __restrict__ out_depth,
+    const float2* __restrict__ out_visibility,
+    const float* __restrict__ v_out_depth,
+    float3* __restrict__ v_positions,
+    float2* __restrict__ v_positions_xy_abs,
+    float3* __restrict__ v_axes_u,
+    float3* __restrict__ v_axes_v,
+    float* __restrict__ v_opacities,
+    float2* __restrict__ v_anisotropies
+);
+
 __device__ void project_cov3d_ewa_vjp(
     const float3 &mean3d,
     const float *cov3d,

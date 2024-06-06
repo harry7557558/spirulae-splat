@@ -657,6 +657,227 @@ __global__ void rasterize_simple_backward_kernel(
     }
 }
 
+__global__ void rasterize_depth_backward_kernel(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    const float2* __restrict__ anisotropies,
+    const int* __restrict__ final_index,
+    const float* __restrict__ out_depth,
+    const float2* __restrict__ out_visibility,
+    const float* __restrict__ v_out_depth,
+    float3* __restrict__ v_positions,
+    float2* __restrict__ v_positions_xy_abs,
+    float3* __restrict__ v_axes_u,
+    float3* __restrict__ v_axes_v,
+    float* __restrict__ v_opacities,
+    float2* __restrict__ v_anisotropies
+) {
+    auto block = cg::this_thread_block();
+    int32_t tile_id =
+        block.group_index().y * tile_bounds.x + block.group_index().x;
+    unsigned i =
+        block.group_index().y * block.group_dim().y + block.thread_index().y;
+    unsigned j =
+        block.group_index().x * block.group_dim().x + block.thread_index().x;
+
+    const float fx = intrins.x;
+    const float fy = intrins.y;
+    const float cx = intrins.z;
+    const float cy = intrins.w;
+    glm::vec2 pos_screen = { (float)j + 0.5f, (float)i + 0.5f };
+    glm::vec2 pos_2d = { (pos_screen.x-cx)/fx, (pos_screen.y-cy)/fy };
+    // clamp this value to the last pixel
+    const int32_t pix_id = min(i * img_size.x + j, img_size.x * img_size.y - 1);
+
+    // keep not rasterizing threads around for reading data
+    const bool inside = (i < img_size.y && j < img_size.x);
+
+    // this is the T AFTER the last gaussian in this pixel
+    float2 meta_out = out_visibility[pix_id];
+    float T_final = meta_out.x;
+    float T = T_final;
+    float v_T = 0.0f;
+    const float interp = meta_out.y;
+    // index of last gaussian to contribute to this pixel
+    const int bin_final = inside? final_index[pix_id] : 0;
+
+    // have all threads in tile process the same gaussians in batches
+    // first collect gaussians between range.x and range.y in batches
+    // which gaussians to look through in this tile
+    const int2 range = tile_bins[tile_id];
+    const int block_size = block.size();
+    const int num_batches = (range.y - range.x + block_size - 1) / block_size;
+
+    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
+
+    // df/d_out for this pixel
+    const float v_depth_final = v_out_depth[pix_id];
+    float v_depth = 0.f;
+    float v_depth_next = 0.f;
+    float prev_depth = 0.f;
+
+    // collect and process batches of gaussians
+    // each thread loads one gaussian at a time before rasterizing
+    const int tr = block.thread_rank();
+    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+    const int warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>());
+    for (int b = 0; b < num_batches; ++b) {
+        // resync all threads before writing next batch of shared mem
+        block.sync();
+
+        // each thread fetch 1 gaussian from back to front
+        // 0 index will be furthest back in batch
+        // index of gaussian to load
+        // batch end is the index of the last gaussian in the batch
+        const int batch_end = range.y - 1 - block_size * b;
+        int batch_size = min(block_size, batch_end + 1 - range.x);
+        const int idx = batch_end - tr;
+        if (idx >= range.x) {
+            int32_t g_id = gaussian_ids_sorted[idx];
+            id_batch[tr] = g_id;
+            const float3 pos = positions[g_id];
+            const float opac = opacities[g_id];
+            const float2 aniso = anisotropies[g_id];
+            const float3 v0 = axes_u[g_id];
+            const float3 v1 = axes_v[g_id];
+            position_batch[tr] = {pos.x, pos.y, pos.z};
+            axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
+            opacity_batch[tr] = {aniso.x, aniso.y, opac};
+        }
+        // wait for other threads to collect the gaussians in batch
+        block.sync();
+        // process gaussians in the current batch for this pixel
+        // 0 index is the furthest back gaussian in the batch
+        for (int t = max(0,batch_end - warp_bin_final); t < batch_size; ++t) {
+            int valid = inside;
+            if (batch_end - t > bin_final) {
+                valid = 0;
+            }
+
+            glm::vec3 pos = position_batch[t];
+            glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
+            float opac = opacity_batch[t].z;
+            glm::mat2x3 axis_uv = axes_uv_batch[t];
+
+            glm::vec3 poi;
+            glm::vec2 uv;
+            if(valid){
+                get_intersection(pos, axis_uv, pos_2d, poi, uv);
+                if (glm::length(uv) > visibility_kernel_radius())
+                    valid = 0;
+            }
+            float alpha;
+            if (valid){
+                if (!get_alpha(uv, opac, aniso, alpha))
+                    valid = 0;
+            }
+            if(!warp.any(valid)){
+                continue;
+            }
+
+            glm::vec3 v_position_local = {0.f, 0.f, 0.f};
+            glm::vec2 v_position_xy_abs_local = {0.f, 0.f};
+            glm::vec3 v_axis_u_local = {0.f, 0.f, 0.f};
+            glm::vec3 v_axis_v_local = {0.f, 0.f, 0.f};
+            float v_opacity_local = 0.f;
+            glm::vec2 v_anisotropy_local = {0.f, 0.f};
+            //initialize everything to 0, only set if the lane is valid
+            if(valid){
+                // compute the current T for this gaussian
+                const float ra = 1.f / (1.f - alpha);
+                const float next_T = T * ra;
+
+                float depth = poi.z;
+
+                if (T == T_final) {
+                    v_depth = v_depth_final * interp;
+                    v_depth_next = v_depth_final * (1.0f-interp);
+                    if (T < 0.5f)
+                        prev_depth = depth;
+                }
+                else {
+                    v_depth = v_depth_next;
+                    v_depth_next = 0.0f;
+                }
+
+                // v_alpha
+                float v_alpha = 0.f;
+                if (T > 0.5f && T < 0.99999f && prev_depth != 0.0f) {
+                    float v_interp = (prev_depth-depth) * v_depth_final;
+                    v_alpha = (2.0f*T-1.0f) * v_interp / (-alpha*alpha);
+                    v_T = (1.0f-alpha)/alpha * v_interp * 2.0f;
+                    v_alpha += v_T * (-next_T);
+                    prev_depth = 0.0f;
+                }
+                else {
+                    v_alpha = v_T * (-next_T);
+                    v_T = v_T * (1.0f-alpha);
+                }
+                T = next_T;
+
+                // backward
+                const glm::vec3 opacity = opacity_batch[t];
+                glm::vec2 v_uv;
+                get_alpha_vjp(
+                    uv, opacity.z, glm::vec2(opacity),
+                    v_alpha,
+                    v_uv, v_opacity_local, v_anisotropy_local
+                );
+                glm::mat2x3 v_axis_uv;
+                get_intersection_vjp(
+                    pos, axis_uv, pos_2d,
+                    {0.f, 0.f, v_depth}, v_uv,
+                    v_position_local, v_axis_uv
+                );
+                v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local));
+                v_axis_u_local = v_axis_uv[0];
+                v_axis_v_local = v_axis_uv[1];
+            }
+            warpSum3(v_position_local, warp);
+            warpSum2(v_position_xy_abs_local, warp);
+            warpSum3(v_axis_u_local, warp);
+            warpSum3(v_axis_v_local, warp);
+            warpSum(v_opacity_local, warp);
+            warpSum2(v_anisotropy_local, warp);
+            if (warp.thread_rank() == 0) {
+                int32_t g = id_batch[t];
+
+                float* v_position_ptr = (float*)(v_positions);
+                atomicAdd(v_position_ptr + 3*g + 0, v_position_local.x);
+                atomicAdd(v_position_ptr + 3*g + 1, v_position_local.y);
+                atomicAdd(v_position_ptr + 3*g + 2, v_position_local.z);
+                float* v_positions_xy_abs_ptr = (float*)(v_positions_xy_abs);
+                atomicAdd(v_positions_xy_abs_ptr + 2*g + 0, v_position_xy_abs_local.x);
+                atomicAdd(v_positions_xy_abs_ptr + 2*g + 1, v_position_xy_abs_local.y);
+
+                float* v_axis_u_ptr = (float*)(v_axes_u);
+                atomicAdd(v_axis_u_ptr + 3*g + 0, v_axis_u_local.x);
+                atomicAdd(v_axis_u_ptr + 3*g + 1, v_axis_u_local.y);
+                atomicAdd(v_axis_u_ptr + 3*g + 2, v_axis_u_local.z);
+                float* v_axis_v_ptr = (float*)(v_axes_v);
+                atomicAdd(v_axis_v_ptr + 3*g + 0, v_axis_v_local.x);
+                atomicAdd(v_axis_v_ptr + 3*g + 1, v_axis_v_local.y);
+                atomicAdd(v_axis_v_ptr + 3*g + 2, v_axis_v_local.z);
+                
+                atomicAdd(v_opacities + g, v_opacity_local);
+                float* v_anisotropy_ptr = (float*)(v_anisotropies);
+                atomicAdd(v_anisotropy_ptr + 2*g + 0, v_anisotropy_local.x);
+                atomicAdd(v_anisotropy_ptr + 2*g + 1, v_anisotropy_local.y);
+            }
+        }
+    }
+}
+
 __global__ void project_gaussians_backward_kernel(
     const int num_points,
     const float3* __restrict__ means3d,
