@@ -68,7 +68,7 @@ __global__ void rasterize_backward_kernel(
     const float2* __restrict__ anisotropies,
     const float3& __restrict__ background,
     const float2* __restrict__ depth_grads,
-    const float2* __restrict__ depth_normal_ref_im,
+    const float3* __restrict__ depth_ref_im,
     const int* __restrict__ final_index,
     const float* __restrict__ output_alpha,
     const float4* __restrict__ output_depth_grad,
@@ -87,7 +87,7 @@ __global__ void rasterize_backward_kernel(
     float* __restrict__ v_opacities,
     float2* __restrict__ v_anisotropies,
     float2* __restrict__ v_depth_grad,
-    float2* __restrict__ v_depth_normal_ref
+    float3* __restrict__ v_depth_ref_im
 );
 
 __global__ void rasterize_depth_backward_kernel(

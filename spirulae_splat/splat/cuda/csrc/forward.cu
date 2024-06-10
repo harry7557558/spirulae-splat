@@ -438,7 +438,7 @@ __global__ void rasterize_forward(
     const float2* __restrict__ anisotropies,
     const float3& __restrict__ background,
     const float2* __restrict__ depth_grads,
-    const float2* __restrict__ depth_normal_ref_im,
+    const float3* __restrict__ depth_ref_im,
     int* __restrict__ final_index,
     float* __restrict__ out_alpha,
     float3* __restrict__ out_img,
@@ -500,8 +500,10 @@ __global__ void rasterize_forward(
     float vis_sum = 0.f;  // output alpha
     float depth_sum = 0.f;  // output depth
     float depth_squared_sum = 0.f;  // for L2 depth regularizer
-    const float2 depth_normal_ref = inside ?
-        depth_normal_ref_im[pix_id] : make_float2(0.f, 0.f);
+    const float3 depth_ref_raw = inside ?
+        depth_ref_im[pix_id] : make_float3(0.f, 0.f, 0.f);
+    const float2 depth_normal_ref = {depth_ref_raw.x, depth_ref_raw.y};
+    const float depth_ref = depth_ref_raw.z;
     float reg_depth = 0.f;  // output depth regularizer
     float reg_normal = 0.f;  // output normal regularizer
     for (int b = 0; b < num_batches; ++b) {
@@ -569,9 +571,9 @@ __global__ void rasterize_forward(
             else color = color_0;
 
             const float vis = alpha * T;
-            #if DEPTH_REG_L == 1
+            #if DEPTH_REG_L == 01
             const float depth = pos.z;
-            #elif DEPTH_REG_L == 2
+            #else
             const float depth = poi.z;
             #endif
             const glm::vec2 g_i = *(glm::vec2*)&depth_grads[id_batch[t]];
@@ -581,10 +583,14 @@ __global__ void rasterize_forward(
             pix_out.x = pix_out.x + color.x * vis;
             pix_out.y = pix_out.y + color.y * vis;
             pix_out.z = pix_out.z + color.z * vis;
-            #if DEPTH_REG_L == 1
+            #if DEPTH_REG_L == 01
             reg_depth += vis*depth * vis_sum - vis * depth_sum;
-            #elif DEPTH_REG_L == 2
+            #elif DEPTH_REG_L == 02
             reg_depth += vis * (vis_sum*depth*depth + depth_squared_sum - 2.0f*depth*depth_sum);
+            #elif DEPTH_REG_L == 11
+            reg_depth += vis * abs(depth - depth_ref);
+            #elif DEPTH_REG_L == 12
+            reg_depth += vis * (depth-depth_ref) * (depth-depth_ref);
             #endif
             reg_normal += vis * (1.0f - (n_i.x*depth_normal_ref.x+n_i.y*depth_normal_ref.y));
             vis_sum += vis;

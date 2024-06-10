@@ -14,6 +14,10 @@ device = torch.device("cuda:0")
 
 
 def check_close(name, a, b, atol=1e-5, rtol=1e-5):
+    if a is None or b is None:
+        print(name, a if a is None else ([*a.shape], a.dtype),
+              b if b is None else ([*b.shape], b.dtype))
+        return
     print(name, [*a.shape], [*b.shape], a.dtype, b.dtype)
     try:
         torch.testing.assert_close(a, b, atol=atol, rtol=rtol)
@@ -118,6 +122,7 @@ def test_rasterize_depth():
     def fun(depth, meta, idx):
         depth_r = torch.log(depth+1.0).squeeze()
         # depth_r = depth_r * (meta[...,0] >= 0.5)
+        # depth_r = depth_r * (meta[...,1] == 1.0)
         return (depth_r).mean()
     fun(depth_im, meta_im, idx).backward()
     fun(_depth_im, _meta_im, _idx).backward()
@@ -130,11 +135,8 @@ def test_rasterize_depth():
     check_close('v_opacities', opacities.grad, _opacities.grad, **tol)
     check_close('v_anisotropies', anisotropies.grad, _anisotropies.grad, **tol)
 
-    print(positions.grad.T)
-    print(_positions.grad.T)
-
-    # assert (positions.absgrad > 0).any()
-    # assert (positions.absgrad >= abs(positions.grad)[:,:2]).all()
+    assert (positions.absgrad > 0).any()
+    assert (positions.absgrad >= abs(positions.grad)[:,:2]).all()
 
 
 if __name__ == "__main__":

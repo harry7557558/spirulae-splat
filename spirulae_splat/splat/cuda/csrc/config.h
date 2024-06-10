@@ -2,10 +2,18 @@
 #define N_THREADS 256
 
 #define MAX_REGISTER_CHANNELS 3
+
+// max number of cylindrical harmonics coefficients
 #define MAX_CH_FLOATS (3*21)
 
-#define DEPTH_REG_L 2
+// depth regularization
+// 01: pairwise L1 with center depth
+// 02: pairwise L2 with intersected depth
+// 11: L1 intersected to reference
+// 12: L2 intersected to reference
+#define DEPTH_REG_L 11
 
+//--------------
 #define CUDA_CALL(x)                                                           \
     do {                                                                       \
         if ((x) != cudaSuccess) {                                              \

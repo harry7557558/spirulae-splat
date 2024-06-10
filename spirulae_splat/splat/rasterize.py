@@ -147,7 +147,7 @@ class _RasterizeGaussians(Function):
             assert colors.shape == torch.Size([num_points, 3])
             assert opacities.shape == torch.Size([num_points, 1])
             assert depth_grads.shape == torch.Size([num_points, 2])
-            assert depth_normal_ref.shape == torch.Size([img_height, img_width, 2])
+            assert depth_normal_ref.shape == torch.Size([img_height, img_width, 3])
 
             (
                 final_idx, out_alpha,

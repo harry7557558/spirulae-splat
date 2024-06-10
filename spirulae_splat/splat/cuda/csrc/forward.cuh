@@ -78,7 +78,7 @@ __global__ void rasterize_forward(
     const float2* __restrict__ anisotropies,
     const float3& __restrict__ background,
     const float2* __restrict__ depth_grads,
-    const float2* __restrict__ depth_normal_ref_im,
+    const float3* __restrict__ depth_ref_im,
     int* __restrict__ final_index,
     float* __restrict__ out_alpha,
     float3* __restrict__ out_img,

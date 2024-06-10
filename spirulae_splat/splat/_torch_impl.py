@@ -746,7 +746,7 @@ def rasterize_gaussians(
     opacities: Float[Tensor, "*batch 1"],
     anisotropies: Float[Tensor, "*batch 2"],
     depth_grads: Float[Tensor, "*batch 2"],
-    depth_normal_ref_im: Float[Tensor, "*batch 2"],
+    depth_ref_im: Float[Tensor, "*batch 2"],
     bounds: Int[Tensor, "*batch 4"],
     num_tiles_hit: Int[Tensor, "*batch 1"],
     intrins: Tuple[float, float, float, float],
@@ -813,7 +813,8 @@ def rasterize_gaussians(
             vis_sum = torch.zeros(1, **float32_param)
             depth_sum = torch.zeros(1, **float32_param)
             depth_squared_sum = torch.zeros(1, **float32_param)
-            depth_normal_ref = depth_normal_ref_im[i, j]
+            depth_normal_ref = depth_ref_im[i, j][:2]
+            depth_ref = depth_ref_im[i, j][2]
             reg_depth = torch.zeros(1, **float32_param)
             reg_normal = torch.zeros(1, **float32_param)
 
@@ -851,7 +852,9 @@ def rasterize_gaussians(
 
                 pix_out = pix_out + vis * color
                 # reg_depth = reg_depth + vis*depth * vis_sum - vis * depth_sum
-                reg_depth = reg_depth + vis * (vis_sum*depth**2 + depth_squared_sum - 2.0*depth*depth_sum)
+                # reg_depth = reg_depth + vis * (vis_sum*depth**2 + depth_squared_sum - 2.0*depth*depth_sum)
+                reg_depth = reg_depth + vis * abs(depth-depth_ref)
+                # reg_depth = reg_depth + vis * (depth-depth_ref)**2
                 reg_normal = reg_normal + vis * (1.0 - torch.dot(n_i, depth_normal_ref))
                 vis_sum = vis_sum + vis
                 depth_sum = depth_sum + vis*depth

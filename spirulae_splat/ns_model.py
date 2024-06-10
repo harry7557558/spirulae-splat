@@ -887,16 +887,16 @@ class SpirulaeModel(Model):
 
         opacities = self.config.max_opacity * torch.sigmoid(opacities_crop)
 
-        depth_im_ref, alpha_ref = rasterize_gaussians_simple(
-            positions, axes_u, axes_v,
-            torch.concatenate((depth_grads, positions[...,2:]), dim=1),
-            opacities, anisotropies_crop,
-            bounds, num_tiles_hit,
-            intrins, H, W, BLOCK_WIDTH
-        )
-        alpha_ref = alpha_ref[..., None]
-        depth_grad_ref, depth_ref = depth_im_ref[...,0:2], depth_im_ref[...,2:3]
-        depth_im_ref = depth_ref
+        # depth_im_ref, alpha_ref = rasterize_gaussians_simple(
+        #     positions, axes_u, axes_v,
+        #     torch.concatenate((depth_grads, positions[...,2:]), dim=1),
+        #     opacities, anisotropies_crop,
+        #     bounds, num_tiles_hit,
+        #     intrins, H, W, BLOCK_WIDTH
+        # )
+        # alpha_ref = alpha_ref[..., None]
+        # depth_grad_ref, depth_ref = depth_im_ref[...,0:2], depth_im_ref[...,2:3]
+        # depth_im_ref = depth_ref
 
         # # accumulated gradient
         # depth_grad_ref = torch.where(alpha_ref > 0, depth_grad_ref / alpha_ref, 0.0)
@@ -907,12 +907,12 @@ class SpirulaeModel(Model):
         #     depth_grad_ref / (depth_grad_ref_norm+1e-4),
         #     0.0)
         
-        # depth_im_ref = rasterize_gaussians_depth(
-        #     positions, axes_u, axes_v,
-        #     opacities, anisotropies_crop,
-        #     bounds, num_tiles_hit,
-        #     intrins, H, W, BLOCK_WIDTH
-        # )
+        depth_im_ref = rasterize_gaussians_depth(
+            positions, axes_u, axes_v,
+            opacities, anisotropies_crop,
+            bounds, num_tiles_hit,
+            intrins, H, W, BLOCK_WIDTH
+        )
 
         # finite difference gradient
         depth_normal_grad_ref = torch.zeros_like(depth_im_ref).repeat(1,1,2)
@@ -926,6 +926,8 @@ class SpirulaeModel(Model):
             depth_normal_grad_ref_norm > 0,
             depth_normal_grad_ref / (depth_normal_grad_ref_norm+1e-4),
             0.0).contiguous()
+        depth_ref_im = torch.concatenate(
+            (depth_normal_grad_ref_normalized, depth_im_ref), dim=-1)
 
         # main rasterization
         (
@@ -937,7 +939,7 @@ class SpirulaeModel(Model):
             rgbs,
             self.config.ch_degree_r, self.config.ch_degree_phi, features_ch_crop,
             opacities, anisotropies_crop,
-            depth_grads, depth_normal_grad_ref_normalized,
+            depth_grads, depth_ref_im,
             bounds, num_tiles_hit,
             intrins, H, W, BLOCK_WIDTH,
             self.background_color
@@ -997,7 +999,8 @@ class SpirulaeModel(Model):
         self.positions = positions
         self.radii = num_tiles_hit**0.5 / 2 * BLOCK_WIDTH
 
-        reg_depth = torch.sqrt(torch.relu(reg_depth+0.01))
+        # do this for L2 loss
+        # reg_depth = torch.sqrt(torch.relu(reg_depth+0.01))
 
         return {
             "rgb": rgb,

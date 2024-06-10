@@ -537,7 +537,7 @@ std::tuple<
     const torch::Tensor &anisotropies,
     const torch::Tensor &background,
     const torch::Tensor &depth_grads,
-    const torch::Tensor &depth_normal_ref_im
+    const torch::Tensor &depth_ref_im
 ) {
     DEVICE_GUARD(positions);
     CHECK_INPUT(gaussian_ids_sorted);
@@ -551,7 +551,7 @@ std::tuple<
     CHECK_INPUT(anisotropies);
     CHECK_INPUT(background);
     CHECK_INPUT(depth_grads);
-    CHECK_INPUT(depth_normal_ref_im);
+    CHECK_INPUT(depth_ref_im);
 
     dim3 tile_bounds_dim3;
     tile_bounds_dim3.x = std::get<0>(tile_bounds);
@@ -611,7 +611,7 @@ std::tuple<
         (float2 *)anisotropies.contiguous().data_ptr<float>(),
         *(float3 *)background.contiguous().data_ptr<float>(),
         (float2 *)depth_grads.contiguous().data_ptr<float>(),
-        (float2 *)depth_normal_ref_im.contiguous().data_ptr<float>(),
+        (float3 *)depth_ref_im.contiguous().data_ptr<float>(),
         // outputs
         final_idx.contiguous().data_ptr<int>(),
         out_alpha.contiguous().data_ptr<float>(),
@@ -836,7 +836,7 @@ std::tuple<
     torch::Tensor, // v_opacities
     torch::Tensor, // v_anisotropies
     torch::Tensor, // v_depth_grad
-    torch::Tensor  // v_depth_normal_ref
+    torch::Tensor  // v_depth_ref_im
 > rasterize_backward_tensor(
     const unsigned img_height,
     const unsigned img_width,
@@ -858,7 +858,7 @@ std::tuple<
     const torch::Tensor &anisotropies,
     const torch::Tensor &background,
     const torch::Tensor &depth_grads,
-    const torch::Tensor &depth_normal_ref_im,
+    const torch::Tensor &depth_ref_im,
     const torch::Tensor &final_idx,
     const torch::Tensor &output_alpha,
     const torch::Tensor &output_depth_grad,
@@ -922,7 +922,7 @@ std::tuple<
     torch::Tensor v_opacities = torch::zeros({num_points, 1}, options);
     torch::Tensor v_anisotropies = torch::zeros({num_points, 2}, options);
     torch::Tensor v_depth_grad = torch::zeros({num_points, 2}, options);
-    torch::Tensor v_depth_normal_ref = torch::zeros({img_height, img_width, 2}, options);
+    torch::Tensor v_depth_ref_im = torch::zeros({img_height, img_width, 3}, options);
 
     rasterize_backward_kernel<<<tile_bounds, block>>>(
         tile_bounds, img_size, intrins,
@@ -938,7 +938,7 @@ std::tuple<
         (float2 *)anisotropies.contiguous().data_ptr<float>(),
         *(float3 *)background.contiguous().data_ptr<float>(),
         (float2 *)depth_grads.contiguous().data_ptr<float>(),
-        (float2 *)depth_normal_ref_im.contiguous().data_ptr<float>(),
+        (float3 *)depth_ref_im.contiguous().data_ptr<float>(),
         final_idx.contiguous().data_ptr<int>(),
         output_alpha.contiguous().data_ptr<float>(),
         (float4 *)output_depth_grad.contiguous().data_ptr<float>(),
@@ -958,7 +958,7 @@ std::tuple<
         v_opacities.contiguous().data_ptr<float>(),
         (float2 *)v_anisotropies.contiguous().data_ptr<float>(),
         (float2 *)v_depth_grad.contiguous().data_ptr<float>(),
-        (float2 *)v_depth_normal_ref.contiguous().data_ptr<float>()
+        (float3 *)v_depth_ref_im.contiguous().data_ptr<float>()
     );
 
     return std::make_tuple(
@@ -966,6 +966,6 @@ std::tuple<
         v_axes_u, v_axes_v,
         v_colors, v_ch_coeffs, v_ch_coeffs_abs,
         v_opacities, v_anisotropies,
-        v_depth_grad, v_depth_normal_ref
+        v_depth_grad, v_depth_ref_im
     );
 }
