@@ -10,7 +10,7 @@ inline __device__ float safe_denom(float x, float e) {
 }
 
 
-#if 1
+#if SPLAT_KERNEL == 1
 
 // "Gaussian" kernel
 inline __device__ float visibility_kernel(const float r2) {
@@ -29,7 +29,7 @@ inline __device__ float visibility_kernel_radius() {
     return 1.0f;
 }
 
-#else
+#elif SPLAT_KERNEL == 0
 
 // Gaussian kernel
 inline __device__ float visibility_kernel(const float r2) {

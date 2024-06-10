@@ -7,11 +7,11 @@ Define your custom method here that registers with Nerfstudio CLI.
 from __future__ import annotations
 
 from spirulae_splat.ns_datamanager import (
-    SpirulaeDataManagerConfig,
+    SpirulaeDataManagerConfig, FullImageDatamanagerConfig
 )
 from spirulae_splat.ns_model import SpirulaeModelConfig
 from spirulae_splat.ns_pipeline import (
-    SpirulaePipelineConfig,
+    SpirulaePipelineConfig, VanillaPipelineConfig
 )
 from nerfstudio.configs.base_config import ViewerConfig
 from nerfstudio.data.dataparsers.nerfstudio_dataparser import NerfstudioDataParserConfig
@@ -27,13 +27,13 @@ spirulae = MethodSpecification(
     config=TrainerConfig(
         method_name="spirulae",
         steps_per_eval_batch=0,
-        steps_per_save=2500,
+        steps_per_save=1000,
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
             datamanager=SpirulaeDataManagerConfig(
                 dataparser=NerfstudioDataParserConfig(
-                    train_split_fraction=1.0,
+                    train_split_fraction=0.9,
                     load_3D_points=True,
                 ),
                 camera_res_scale_factor=1.0,

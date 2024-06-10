@@ -1,6 +1,11 @@
 #define MAX_BLOCK_SIZE ( 16 * 16 )
 #define N_THREADS 256
 
+// kernel to use
+// 0: Gaussian, 3 std
+// 1: max(1-r^2, 0)
+#define SPLAT_KERNEL 1
+
 #define MAX_REGISTER_CHANNELS 3
 
 // max number of cylindrical harmonics coefficients

@@ -86,3 +86,12 @@ class SpirulaePipeline(VanillaPipeline):
                 SpirulaeModel, DDP(self._model, device_ids=[local_rank], find_unused_parameters=True)
             )
             dist.barrier(device_ids=[local_rank])
+
+    def get_average_eval_image_metrics(
+        self, step=None, output_path=None, get_std=False
+    ):
+        result = super().get_average_eval_image_metrics(
+            step, output_path, get_std)
+        for key, value in result.items():
+            print(key, value)
+        return result

@@ -121,15 +121,15 @@ class SpirulaeModelConfig(ModelConfig):
     """threshold of scale for culling huge gaussians"""
     cull_anisotropy_thresh: float = 10.0
     """threshold of quotient of scale for culling long thin gaussians"""
-    cull_grad_thresh: float = 0.0004  # 0.0004|0.0002 w/o ch
+    cull_grad_thresh: float = 0.0004  # 0.0004|0.0002 w/o ch, default 0.0001
     """threshold for culling gaussians with low visibility"""
     continue_cull_post_densification: bool = True
     """If True, continue to cull gaussians post refinement"""
     reset_alpha_every: int = 30
     """Every this many refinement steps, reset the alpha"""
-    densify_xy_grad_thresh: float = 0.0015  # 0.002|0.001 w/o ch
+    densify_xy_grad_thresh: float = 0.0015  # 0.002|0.001 w/o ch, default 0.0008
     """threshold of positional gradient norm for densifying gaussians"""
-    densify_ch_grad_thresh: float = 3e-6
+    densify_ch_grad_thresh: float = 3e-6  # 3e-6, default 1e-6
     """threshold of cylindrical harmonics gradient norm for densifying gaussians"""
     densify_size_thresh: float = 0.01
     """below this size, gaussians are *duplicated*, otherwise split"""
@@ -171,7 +171,7 @@ class SpirulaeModelConfig(ModelConfig):
     """Weight for depth regularizer"""
     normal_regularizer_weight: float = 0.02
     """Weight for normal regularizer"""
-    regularizer_warmup_length: int = 1000
+    regularizer_warmup_length: int = 2000
     """Warmup for regularizers. If the initialization is random, only apply regularizers after this many steps."""
     output_depth_during_training: bool = False
     """If True, output depth during training. Otherwise, only output depth during evaluation."""
@@ -1176,6 +1176,7 @@ class SpirulaeModel(Model):
         # all of these metrics will be logged as scalars
         metrics_dict = {"psnr": float(psnr.item()), "ssim": float(ssim)}  # type: ignore
         metrics_dict["lpips"] = float(lpips)
+        metrics_dict["gaussian_count"] = float(self.num_points)
 
         images_dict = {"img": combined_rgb}
 

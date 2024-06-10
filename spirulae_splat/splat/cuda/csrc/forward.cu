@@ -62,7 +62,8 @@ __global__ void project_gaussians_forward_kernel(
     const float cy = intrins.w;
     float2 center;
     float3 bound;
-    project_ellipse_bound(T, V0, V1, fx, fy, cx, cy, center, bound);
+    const float kr = visibility_kernel_radius();
+    project_ellipse_bound(T, kr*V0, kr*V1, fx, fy, cx, cy, center, bound);
 
     // compute the projected area
     int2 tile_min, tile_max;
