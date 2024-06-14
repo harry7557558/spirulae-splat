@@ -145,45 +145,10 @@ class _ProjectGaussians(Function):
             v_positions, v_axes_u, v_axes_v, v_depth_grads
         )
 
-        clean = lambda x: torch.nan_to_num(torch.clip(x, -10., 10.))
-        (v_means3d, v_scales, v_quats) = [clean(v) for v in backward_return]
-
-        if viewmat.requires_grad:
-            v_viewmat = torch.zeros_like(viewmat)
-            R = viewmat[..., :3, :3]
-
-            # Denote ProjectGaussians for a single Gaussian (mean3d, q, s)
-            # viemwat = [R, t] as:
-            #
-            #   f(mean3d, q, s, R, t, intrinsics)
-            #       = g(R @ mean3d + t,
-            #           R @ cov3d_world(q, s) @ R^T ))
-            #
-            # Then, the Jacobian w.r.t., t is:
-            #
-            #   d f / d t = df / d mean3d @ R^T
-            #
-            # and, in the context of fine tuning camera poses, it is reasonable
-            # to assume that
-            #
-            #   d f / d R_ij =~ \sum_l d f / d t_l * d (R @ mean3d)_l / d R_ij
-            #                = d f / d_t_i * mean3d[j]
-            #
-            # Gradients for R and t can then be obtained by summing over
-            # all the Gaussians.
-            v_mean3d_cam = torch.matmul(v_means3d, R.transpose(-1, -2))
-
-            # gradient w.r.t. view matrix translation
-            v_viewmat[..., :3, 3] = v_mean3d_cam.sum(-2)
-
-            # gradent w.r.t. view matrix rotation
-            for j in range(3):
-                for l in range(3):
-                    v_viewmat[..., j, l] = torch.dot(
-                        v_mean3d_cam[..., j], means3d[..., l]
-                    )
-        else:
-            v_viewmat = None
+        clean = lambda x, h: torch.nan_to_num(torch.clip(x, -h, h))
+        (v_means3d, v_scales, v_quats) = [clean(v, 10.) for v in backward_return[:3]]
+        v_viewmat = clean(backward_return[3], 20.)  # 4x4
+        v_viewmat = v_viewmat[:viewmat.shape[0], :viewmat.shape[1]]  # 4x4 or 3x4
 
         # Return a gradient for each input.
         return (

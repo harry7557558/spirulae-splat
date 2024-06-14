@@ -225,7 +225,8 @@ std::tuple<
 std::tuple<
     torch::Tensor,  // v_means3d
     torch::Tensor,  // v_scales
-    torch::Tensor  // v_quats
+    torch::Tensor,  // v_quats
+    torch::Tensor  // v_viewmat
 > project_gaussians_backward_tensor(
     const int num_points,
     torch::Tensor &means3d,
@@ -251,6 +252,7 @@ std::tuple<
     torch::Tensor v_means3d = torch::zeros({num_points, 3}, float32);
     torch::Tensor v_scales = torch::zeros({num_points, 2}, float32);
     torch::Tensor v_quats = torch::zeros({num_points, 4}, float32);
+    torch::Tensor v_viewmat = torch::zeros({4, 4}, float32);
 
     project_gaussians_backward_kernel<<<
         (num_points + N_THREADS - 1) / N_THREADS,
@@ -269,10 +271,11 @@ std::tuple<
         // Outputs.
         (float3 *)v_means3d.contiguous().data_ptr<float>(),
         (float2 *)v_scales.contiguous().data_ptr<float>(),
-        (float4 *)v_quats.contiguous().data_ptr<float>()
+        (float4 *)v_quats.contiguous().data_ptr<float>(),
+        (float *)v_viewmat.contiguous().data_ptr<float>()
     );
 
-    return std::make_tuple(v_means3d, v_scales, v_quats);
+    return std::make_tuple(v_means3d, v_scales, v_quats, v_viewmat);
 }
 
 std::tuple<

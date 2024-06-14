@@ -35,23 +35,24 @@ __global__ void project_gaussians_forward_kernel(
     bounds[idx] = {0, 0, 0, 0};
     num_tiles_hit[idx] = 0;
 
+    glm::mat3 R0 = glm::mat3(
+        viewmat[0], viewmat[4], viewmat[8],
+        viewmat[1], viewmat[5], viewmat[9],
+        viewmat[2], viewmat[6], viewmat[10]
+    );
+    glm::vec3 T0 = { viewmat[3], viewmat[7], viewmat[11] };
+
     // world to view
-    float3 p_world = means3d[idx];
-    float3 p_view = transform_4x3(viewmat, p_world);
+    glm::vec3 p_world = *(glm::vec3*)&means3d[idx];
+    glm::vec3 p_view = R0 * p_world + T0;
     if (!(p_view.z >= clip_thresh))
         return;
-    glm::vec3 T = {p_view.x, p_view.y, p_view.z};
 
     // patch orientation
     float2 scale = scales[idx];
     float4 quat = quats[idx];
-    glm::mat3 R1 = glm::transpose(glm::mat3(
-        viewmat[0], viewmat[1], viewmat[2],
-        viewmat[4], viewmat[5], viewmat[6],
-        viewmat[8], viewmat[9], viewmat[10]
-    ));
-    glm::mat3 R2 = quat_to_rotmat(quat);
-    glm::mat3 R = R1 * R2;
+    glm::mat3 Rq = quat_to_rotmat(quat);
+    glm::mat3 R = R0 * Rq;
     glm::vec3 V0 = scale.x * R[0];
     glm::vec3 V1 = scale.y * R[1];
 
@@ -63,7 +64,7 @@ __global__ void project_gaussians_forward_kernel(
     float2 center;
     float3 bound;
     const float kr = visibility_kernel_radius();
-    project_ellipse_bound(T, kr*V0, kr*V1, fx, fy, cx, cy, center, bound);
+    project_ellipse_bound(p_view, kr*V0, kr*V1, fx, fy, cx, cy, center, bound);
 
     // compute the projected area
     int2 tile_min, tile_max;
@@ -78,7 +79,7 @@ __global__ void project_gaussians_forward_kernel(
     // output
     bounds[idx] = {tile_min.x, tile_min.y, tile_max.x, tile_max.y};
     num_tiles_hit[idx] = tile_area;
-    positions[idx] = {T.x, T.y, T.z};
+    positions[idx] = {p_view.x, p_view.y, p_view.z};
     axes_u[idx] = {V0.x, V0.y, V0.z};
     axes_v[idx] = {V1.x, V1.y, V1.z};
     depth_grads[idx] = {depth_grad.x, depth_grad.y};
@@ -625,7 +626,7 @@ __global__ void rasterize_forward(
 
 // device helper to get screen space depth gradient
 __device__ float2 projected_depth_grad(
-    const float3 p, const glm::mat3 R,
+    const glm::vec3 p, const glm::mat3 R,
     const float fx, const float fy
 ) {
     glm::vec3 n1 = R[2];

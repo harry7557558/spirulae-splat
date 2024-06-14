@@ -106,7 +106,7 @@ __device__ void scale_rot_to_cov3d(
 );
 
 __device__ float2 projected_depth_grad(
-    const float3 p, const glm::mat3 R,
+    const glm::vec3 p, const glm::mat3 R,
     const float fx, const float fy
 );
 

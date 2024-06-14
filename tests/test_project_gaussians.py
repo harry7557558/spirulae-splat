@@ -62,7 +62,7 @@ def test_project_gaussians():
     viewmat[:3, :3] = _torch_impl.quat_to_rotmat(torch.randn(4))
     BLOCK_SIZE = 16
 
-    params = (means3d0, scales0, quats0)
+    params = (means3d0, scales0, quats0, viewmat)
     def decode_params(params):
         params = [*params]
         for i in range(len(params)):
@@ -72,8 +72,8 @@ def test_project_gaussians():
             except RuntimeError:
                 pass
         return params
-    means3d, scales, quats = decode_params(params)
-    _means3d, _scales, _quats = decode_params(params)
+    means3d, scales, quats, viewmat = decode_params(params)
+    _means3d, _scales, _quats, _viewmat = decode_params(params)
 
     output = project_gaussians(
         means3d, scales, quats,
@@ -83,7 +83,7 @@ def test_project_gaussians():
     )
     _output = _torch_impl.project_gaussians(
         _means3d, _scales, _quats,
-        viewmat, (fx, fy, cx, cy),
+        _viewmat, (fx, fy, cx, cy),
         (W, H), BLOCK_SIZE,
         clip_thresh,
     )
@@ -113,6 +113,9 @@ def test_project_gaussians():
     check_close('v_means3d', means3d.grad, _means3d.grad, **tol)
     check_close('v_scales', scales.grad, _scales.grad, **tol)
     check_close('v_quats', quats.grad, _quats.grad, **tol)
+    check_close('v_viewmat', viewmat.grad, _viewmat.grad, **tol)
+    print(viewmat.grad)
+    print(_viewmat.grad)
 
 
 if __name__ == "__main__":

@@ -64,7 +64,8 @@ std::tuple<
 std::tuple<
     torch::Tensor,  // v_means3d
     torch::Tensor,  // v_scales
-    torch::Tensor  // v_quats
+    torch::Tensor,  // v_quats
+    torch::Tensor  // v_viewmat
 > project_gaussians_backward_tensor(
     const int num_points,
     torch::Tensor &means3d,

@@ -13,7 +13,7 @@ __global__ void project_gaussians_backward_kernel(
     const float3* __restrict__ means3d,
     const float2* __restrict__ scales,
     const float4* __restrict__ quats,
-    const float* __restrict__ viewmat,
+    const float* __restrict__ viewmat,  // 3x4 row major
     const float4 intrins,
     const int* __restrict__ num_tiles_hit,
     const float3* __restrict__ v_positions,
@@ -22,7 +22,8 @@ __global__ void project_gaussians_backward_kernel(
     const float2* __restrict__ v_depth_grads,
     float3* __restrict__ v_means3d,
     float2* __restrict__ v_scales,
-    float4* __restrict__ v_quats
+    float4* __restrict__ v_quats,
+    float* __restrict__ v_viewmat
 );
 
 __global__ void rasterize_simple_backward_kernel(
@@ -133,8 +134,8 @@ __device__ void scale_rot_to_cov3d_vjp(
 );
 
 __device__ void projected_depth_grad_vjp(
-    const float3 p, const glm::mat3 R,
+    const glm::vec3 p, const glm::mat3 R,
     const float fx, const float fy,
     const float2 v_depth_grad,
-    float3 &v_p_view, glm::mat3 &v_R
+    glm::vec3 &v_p_view, glm::mat3 &v_R
 );

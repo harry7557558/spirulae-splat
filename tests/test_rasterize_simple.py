@@ -39,6 +39,9 @@ def test_rasterize_simple():
     _opacities = opacities.detach().clone().requires_grad_(True)
     _anisotropies = anisotropies.detach().clone().requires_grad_(True)
 
+    background = torch.rand(3, device=device, requires_grad=True)
+    _background = background.detach().clone().requires_grad_(True)
+
     H, W = 20, 30
     cx, cy = W / 2, H / 2
     fx, fy = int(0.7*W), int(0.7*W)
@@ -97,7 +100,8 @@ def test_rasterize_simple():
         bounds,
         num_tiles_hit,
         intrins,
-        H, W, BLOCK_SIZE
+        H, W, BLOCK_SIZE,
+        background
     )
 
     _rgb_im, _alpha_im, _idx = _torch_impl.rasterize_gaussians_simple(
@@ -110,7 +114,8 @@ def test_rasterize_simple():
         _bounds,
         _num_tiles_hit,
         intrins,
-        H, W, BLOCK_SIZE
+        H, W, BLOCK_SIZE,
+        _background
     )
 
     print("test forward")
@@ -134,6 +139,7 @@ def test_rasterize_simple():
     check_close('v_colors', colors.grad, _colors.grad, **tol)
     check_close('v_opacities', opacities.grad, _opacities.grad, **tol)
     check_close('v_anisotropies', anisotropies.grad, _anisotropies.grad, **tol)
+    check_close('v_background', background.grad, _background.grad, **tol)
 
     assert (positions.absgrad > 0).any()
     assert (positions.absgrad >= abs(positions.grad)[:,:2]).all()

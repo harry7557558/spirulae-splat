@@ -49,7 +49,8 @@ def test_rasterize():
     scales = 0.8*torch.exp(torch.randn((num_points, 2), device=device))
     quats = torch.randn((num_points, 4), device=device)
     quats /= torch.linalg.norm(quats, dim=-1, keepdim=True)
-    background = torch.randn(3, device=device)
+    background = torch.rand(3, device=device, requires_grad=True)
+    _background = background.detach().clone().requires_grad_(True)
 
     colors = torch.randn((num_points, 3), device=device, requires_grad=True)
     opacities = (0.995 * torch.rand((num_points, 1), device=device)).requires_grad_(True)
@@ -127,7 +128,7 @@ def test_rasterize():
         num_tiles_hit,
         intrins,
         H, W, BLOCK_SIZE,
-        background
+        background.detach().clone()
     )
 
     print("test consistency")
@@ -151,7 +152,7 @@ def test_rasterize():
         _num_tiles_hit,
         intrins,
         H, W, BLOCK_SIZE,
-        background
+        _background
     )
 
     print("test forward")
@@ -188,6 +189,7 @@ def test_rasterize():
     check_close('v_anisotropies', anisotropies.grad, _anisotropies.grad, **tol)
     check_close('v_depth_grad', depth_grads.grad, _depth_grads.grad, **tol)
     check_close('v_depth_normal_ref', depth_ref_im.grad, _depth_normal_ref.grad, **tol)
+    check_close('v_background', background.grad, _background.grad, **tol)
 
     assert (positions.absgrad > 0).any()
     assert (positions.absgrad >= abs(positions.grad)[:,:2]).all()
