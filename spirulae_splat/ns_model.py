@@ -50,6 +50,8 @@ from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.rich_utils import CONSOLE
 
+from spirulae_splat.background_field import BG_Field
+
 
 def random_quat_tensor(N):
     """
@@ -98,6 +100,18 @@ def resize_image(image: torch.Tensor, d: int):
 
     weight = (1.0 / (d * d)) * torch.ones((1, 1, d, d), dtype=torch.float32, device=image.device)
     return tf.conv2d(image.permute(2, 0, 1)[:, None, ...], weight, stride=d).squeeze(1).permute(1, 2, 0)
+
+
+class SaturateKeepGradient(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        return torch.clip(x, 0.0, 1.0)
+    @staticmethod
+    def backward(ctx, v_x):
+        return v_x
+
+def saturate_keep_gradient(x):
+    return SaturateKeepGradient.apply(x)
 
 
 @dataclass
@@ -161,6 +175,10 @@ class SpirulaeModelConfig(ModelConfig):
     """maximum angular degree of cylindrical harmonics to use"""
     max_opacity: float = 0.995
     """maximum opacity of a gaussian, prevent numerical instability during backward"""
+    trainable_background_color: bool = True
+    """make background color trainable"""
+    enable_background_model: bool = True
+    """enable background model"""
     use_scale_regularization: bool = True
     """If enabled, a scale regularization introduced in PhysGauss (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians."""
     max_gauss_ratio: float = 5.0
@@ -287,11 +305,10 @@ class SpirulaeModel(Model):
         else:
             self.background_color = get_color(self.config.background_color)
         self.background_color = torch.nn.Parameter(self.background_color)
-        self.ext_params = torch.nn.ParameterDict(
-            {
-                "background_color": self.background_color,
-            }
-        )
+        if self.config.trainable_background_color:
+            self.bg_model = BG_Field()
+        else:
+            self.bg_model = None
 
     @property
     def colors(self):
@@ -403,6 +420,8 @@ class SpirulaeModel(Model):
     def remove_from_all_optim(self, optimizers, deleted_mask):
         param_groups = self.get_gaussian_param_groups()
         for group, param in param_groups.items():
+            if group not in self.gauss_params:
+                continue
             self.remove_from_optim(optimizers.optimizers[group], deleted_mask, param)
         torch.cuda.empty_cache()
 
@@ -434,6 +453,8 @@ class SpirulaeModel(Model):
     def dup_in_all_optim(self, optimizers, dup_mask, n):
         param_groups = self.get_gaussian_param_groups()
         for group, param in param_groups.items():
+            if group not in self.gauss_params:
+                continue
             self.dup_in_optim(optimizers.optimizers[group], dup_mask, param, n)
 
     def after_train(self, step: int):
@@ -719,12 +740,11 @@ class SpirulaeModel(Model):
         # Here we explicitly use the means, scales as parameters so that the user can override this function and
         # specify more if they want to add more optimizable params to gaussians.
         return {
-            name: [self.gauss_params[name] if name in self.gauss_params
-                   else self.ext_params[name]]
+            name: [self.gauss_params[name]]
             for name in [
                 "means", "scales", "quats",
                 "features_dc", "features_sh", "features_ch",
-                "opacities", "anisotropies", #"background_color"
+                "opacities", "anisotropies"
                 ]
         }
 
@@ -735,6 +755,10 @@ class SpirulaeModel(Model):
             Mapping of different parameter groups
         """
         gps = self.get_gaussian_param_groups()
+        if self.config.trainable_background_color:
+            gps["background_color"] = [self.background_color]
+        if self.config.trainable_background_color:
+            gps["field_background"] = list(self.bg_model.parameters())
         self.camera_optimizer.get_param_groups(param_groups=gps)
         return gps
 
@@ -887,32 +911,16 @@ class SpirulaeModel(Model):
 
         opacities = self.config.max_opacity * torch.sigmoid(opacities_crop)
 
-        # depth_im_ref, alpha_ref = rasterize_gaussians_simple(
-        #     positions, axes_u, axes_v,
-        #     torch.concatenate((depth_grads, positions[...,2:]), dim=1),
-        #     opacities, anisotropies_crop,
-        #     bounds, num_tiles_hit,
-        #     intrins, H, W, BLOCK_WIDTH
-        # )
-        # alpha_ref = alpha_ref[..., None]
-        # depth_grad_ref, depth_ref = depth_im_ref[...,0:2], depth_im_ref[...,2:3]
-        # depth_im_ref = depth_ref
-
-        # # accumulated gradient
-        # depth_grad_ref = torch.where(alpha_ref > 0, depth_grad_ref / alpha_ref, 0.0)
-        # depth_ref = torch.where(alpha_ref > 0, depth_ref / alpha_ref, depth_ref.detach().max())
-        # depth_grad_ref_norm = torch.norm(depth_grad_ref, dim=2, keepdim=True)
-        # depth_grad_ref_normalized = torch.where(
-        #     depth_grad_ref_norm > 0,
-        #     depth_grad_ref / (depth_grad_ref_norm+1e-4),
-        #     0.0)
-        
         depth_im_ref = rasterize_gaussians_depth(
             positions, axes_u, axes_v,
             opacities, anisotropies_crop,
             bounds, num_tiles_hit,
             intrins, H, W, BLOCK_WIDTH
         )
+        depth_im_ref = torch.where(
+            depth_im_ref > 0.0, depth_im_ref,
+            torch.amax(depth_im_ref).detach()
+        ).contiguous()
 
         # finite difference gradient
         depth_normal_grad_ref = torch.zeros_like(depth_im_ref).repeat(1,1,2)
@@ -930,6 +938,9 @@ class SpirulaeModel(Model):
             (depth_normal_grad_ref_normalized, depth_im_ref), dim=-1)
 
         # main rasterization
+        background_color = self.background_color
+        if self.config.enable_background_model:
+            background_color = torch.zeros_like(background_color)
         (
             rgb, depth_im,
             reg_depth, reg_normal,
@@ -942,7 +953,7 @@ class SpirulaeModel(Model):
             depth_grads, depth_ref_im,
             bounds, num_tiles_hit,
             intrins, H, W, BLOCK_WIDTH,
-            self.background_color
+            background_color
         )  # type: ignore
         alpha = alpha[..., None]
         rgb = torch.clamp(rgb, max=1.0)  # type: ignore
@@ -998,6 +1009,24 @@ class SpirulaeModel(Model):
         self.intrins = intrins
         self.positions = positions
         self.radii = num_tiles_hit**0.5 / 2 * BLOCK_WIDTH
+
+        # blend with background
+        if self.config.enable_background_model:
+            ray_bundle = camera.to(alpha.device).generate_rays(
+                camera_indices=0, keep_shape=False, disable_distortion=True)
+            inliners = torch.where((alpha < 0.98).flatten())
+            ray_bundle = ray_bundle[inliners]
+            if len(ray_bundle) > 0:
+                background = torch.zeros(H*W, 3, device=self.device)
+                background[inliners] = self.bg_model.get_background_rgb(ray_bundle).float()
+                background = background.view(H, W, 3)
+            else:
+                background = torch.zeros(H, W, 3, device=self.device)
+            rgb = rgb + (1.0 - alpha) * background
+
+        # clamp pixel to between 0 and 1
+        # rgb = torch.clip(rgb, 0.0, 1.0)
+        rgb = saturate_keep_gradient(rgb)
 
         # do this for L2 loss
         # reg_depth = torch.sqrt(torch.relu(reg_depth+0.01))

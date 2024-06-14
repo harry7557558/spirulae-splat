@@ -93,8 +93,12 @@ spirulae = MethodSpecification(
                 "optimizer": AdamOptimizerConfig(lr=0.0025, eps=1e-15),
                 "scheduler": None
             },
+            "field_background": {
+                "optimizer": AdamOptimizerConfig(lr=1e-3, eps=1e-15),
+                "scheduler": ExponentialDecaySchedulerConfig(lr_final=4e-5, max_steps=30000),
+            },
             "camera_opt": {
-                "optimizer": AdamOptimizerConfig(lr=1e-4, eps=1e-15),
+                "optimizer": AdamOptimizerConfig(lr=1e-6, eps=1e-15),  # 1e-4
                 "scheduler": ExponentialDecaySchedulerConfig(
                     lr_final=5e-7, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
                 ),

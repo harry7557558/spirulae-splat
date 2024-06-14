@@ -92,6 +92,27 @@ class SpirulaePipeline(VanillaPipeline):
     ):
         result = super().get_average_eval_image_metrics(
             step, output_path, get_std)
-        for key, value in result.items():
-            print(key, value)
+        def print_metric(key, get_std, decimals, name=None, sc=1.0):
+            if key not in result:
+                return
+            if name is None:
+                name = key
+            name += ' '*(8-len(name))
+            fmt = "{:."+str(decimals)+"f}"
+            val = fmt.format(sc*result[key])
+            if get_std:
+                std = fmt.format(sc*result[key+'_std'])
+                print(name, val, '±', std)
+            else:
+                print(name, val)
+        print()
+        print_metric('gaussian_count', False, 0, "splats")
+        print('-'*8)
+        print_metric('psnr', get_std, 2)
+        print_metric('ssim', get_std, 3)
+        print_metric('lpips', get_std, 3)
+        print('-'*8)
+        print_metric('num_rays_per_sec', get_std, 2, "Mrays/s", 1e-6)
+        print_metric('fps', get_std, 1)
+        print()
         return result
