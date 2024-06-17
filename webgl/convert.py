@@ -10,6 +10,7 @@ def process_ckpt_to_splat(file_path):
     checkpoint = torch.load(file_path)
     pipeline = checkpoint['pipeline']
     
+    # print(pipeline.keys())
     features_dc = pipeline['_model.gauss_params.features_dc']
     features_sh = pipeline['_model.gauss_params.features_sh']
     features_ch = pipeline['_model.gauss_params.features_ch']
@@ -18,6 +19,17 @@ def process_ckpt_to_splat(file_path):
     anisotropies = pipeline['_model.gauss_params.anisotropies']
     quats = pipeline['_model.gauss_params.quats']
     scales = pipeline['_model.gauss_params.scales']
+    background_color = pipeline['_model.background_color']
+
+    num_sh = features_sh.shape[1]
+    num_ch = features_ch.shape[1]
+    sh_degree = {
+        1: 0, 4: 1, 9: 2, 16: 3, 25: 4
+    }[num_sh+1]
+    print("SH degree:", sh_degree)
+    print("# of CH:", num_ch)
+    print("background:", background_color.cpu().numpy())
+    print()
 
     n_splat = len(means)
     n_floats = sum([
@@ -32,9 +44,12 @@ def process_ckpt_to_splat(file_path):
 
     # means -= torch.mean(means, axis=0)
     SH_C0 = 0.28209479177387814
-    features_dc = 0.5 + features_dc * SH_C0
-    opacities = torch.sigmoid(opacities)+0.5
-    scales = torch.cat((torch.exp(scales), torch.zeros_like(scales[:,0:1])), dim=1)
+    if sh_degree > 0:
+        features_dc = 0.5 + features_dc * SH_C0
+    if num_ch > 0:  # has CH and not use CH
+        features_dc *= 0.5
+    opacities = torch.sigmoid(opacities)
+    scales = torch.exp(scales)
 
     means = means.cpu().numpy()
     scales = scales.cpu().numpy()
@@ -47,12 +62,15 @@ def process_ckpt_to_splat(file_path):
     mahalanobis_dist = np.sqrt(np.sum(np.dot(
         (means-center), np.linalg.inv(cov_matrix)) * (means-center), axis=1))
     mask = mahalanobis_dist < 1.5
+    print("masked", np.sum(mask), "splats")
+    print()
 
     center = np.mean(means, axis=0)
     means -= center
 
     weight = scales[:,0] * scales[:,1] * opacities[:,0]
     sorted_indices = np.argsort(-weight)
+    sorted_indices = np.arange(len(weight))
     buffer = BytesIO()
     for idx in sorted_indices:
         if not mask[idx]:
