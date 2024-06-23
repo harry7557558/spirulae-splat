@@ -120,8 +120,131 @@ function translate4(a, x, y, z) {
     ];
 }
 
+
+function unpackComponents(config, packedData, buffers) {
+    const componentLength = config.componentLength;
+    const componentViews = config.componentViews;
+
+    if (!packedData)
+        return;
+    let packedDataLength = packedData.byteLength;
+    while ((packedDataLength % 4 != 0) ||
+        (packedDataLength % componentLength != 0))
+        packedDataLength--;
+    packedData = packedData.slice(0, packedDataLength);
+    const length = Math.min(config.length, packedData.byteLength/componentLength);
+    
+    const components = componentViews.map(view => {
+        const dataType = view.type;
+        const numElements = dataType.endsWith('2') || dataType.endsWith('3') || dataType.endsWith('4')
+            ? parseInt(dataType.slice(-1))
+            : 1;
+
+        if (dataType.startsWith('quat')) {
+            return new Uint32Array(length * numElements);
+        } else if (dataType.startsWith('float')) {
+            return new Float32Array(length * numElements);
+        } else if (dataType.startsWith('byte')) {
+            return new Uint8Array(length * numElements);
+        }
+    });
+
+    let packedDataByte = new Uint8Array(packedData);
+
+    for (let i = 0; i < length; i++) {
+        componentViews.forEach((view, j) => {
+            const bitLength = view.bitLength;
+            const bitOffset = view.bitOffset;
+            const dataType = view.type;
+            
+            if (dataType.startsWith('quat')) {
+                const numElements = dataType.endsWith('2') || dataType.endsWith('3') || dataType.endsWith('4')
+                    ? parseInt(dataType.slice(-1))
+                    : 1;
+                const bitsPerElement = bitLength / numElements;
+
+                for (let k = 0; k < numElements; k++) {
+                    let value = 0;
+                    const bitStart = bitOffset + k * bitsPerElement;
+                    const byteStart = Math.floor(bitStart / 8);
+                    const bitPos = bitStart % 8;
+
+                    for (let b = 0; b < bitsPerElement; b++) {
+                        const byteIdx = byteStart + Math.floor((bitPos + b) / 8);
+                        const bitInByte = (bitPos + b) % 8;
+                        if (packedDataByte[i * componentLength + byteIdx] & (1 << bitInByte)) {
+                            value |= (1 << b);
+                        }
+                    }
+                    components[j][i * numElements + k] = value;
+                }
+
+            } else if (dataType.startsWith('float')) {
+                const numElements = dataType.endsWith('2') || dataType.endsWith('3') || dataType.endsWith('4')
+                    ? parseInt(dataType.slice(-1))
+                    : 1;
+
+                for (let k = 0; k < numElements; k++) {
+                    const byteStart = (bitOffset / 8) + k * 4;
+                    let i0 = i * componentLength + byteStart;
+                    const floatBytes = new Float32Array(packedDataByte.slice(i0, i0+4).buffer);
+                    components[j][i * numElements + k] = floatBytes[0];
+                }
+
+            } else if (dataType.startsWith('byte')) {
+                const numElements = dataType.endsWith('2') || dataType.endsWith('3') || dataType.endsWith('4')
+                    ? parseInt(dataType.slice(-1))
+                    : 1;
+
+                for (let k = 0; k < numElements; k++) {
+                    const byteStart = (bitOffset / 8) + k;
+                    components[j][i * numElements + k] = packedDataByte[i * componentLength + byteStart];
+                }
+            }
+        });
+    }
+
+    const object = {};
+    componentViews.forEach((view, j) => {
+        if (view.type.startsWith('quat')) {
+            let numel = components[j].length;
+            let component = new Float32Array(numel);
+            let buffer = new Float32Array(buffers[view.quatBufferView]);
+            for (var i = 0; i < numel; i++)
+                component[i] = buffer[components[j][i]];
+            object[view.key] = component;
+        }
+        else {
+            object[view.key] = components[j];
+        }
+    });
+    return object;
+}
+
+function unpackModel(header, buffer) {
+    let model = {
+        header: header
+    };
+
+    let buffers = [];
+    header.bufferViews.forEach((view, j) => {
+        buffers.push(buffer.slice(
+            view.byteOffset, view.byteOffset+view.byteLength));
+    });
+
+    for (var key in header.primitives) {
+        let primitive = header.primitives[key];
+        let bufferSlice = buffers[primitive.bufferView];
+        let components = unpackComponents(primitive, bufferSlice, buffers);
+        model[key] = components;
+    };
+    return model;
+}
+
+
 function createWorker(self) {
-    let buffer;
+    let header;
+    let base;
     let vertexCount = 0;
     let viewProj;
     // 3*4 + 2*4 + 4 + 4 = 7*4
@@ -171,9 +294,8 @@ function createWorker(self) {
     }
 
     function generateTexture() {
-        if (!buffer) return;
-        const f_buffer = new Float32Array(buffer);
-        const u_buffer = new Uint8Array(buffer);
+        if (!base) return;
+        let vertexCount = base.opacity.length;
 
         var texwidth = 1024 * 2; // Set to your desired width
         var texheight = Math.ceil((2 * vertexCount) / texwidth); // Set to your desired height
@@ -186,30 +308,29 @@ function createWorker(self) {
         // should have been the native format as it'd be very easy to
         // load it into webgl.
         for (let i = 0; i < vertexCount; i++) {
-            let iBuffer = 7 * i;
             let iTex = 8 * i;
 
             // x, y, z
-            texdata_f[iTex + 0] = f_buffer[iBuffer + 0];
-            texdata_f[iTex + 1] = f_buffer[iBuffer + 1];
-            texdata_f[iTex + 2] = f_buffer[iBuffer + 2];
+            texdata_f[iTex + 0] = base.mean[3*i+0];
+            texdata_f[iTex + 1] = base.mean[3*i+1];
+            texdata_f[iTex + 2] = base.mean[3*i+2];
 
             // r, g, b, a
-            texdata_c[4*(iTex+7) + 0] = u_buffer[4*(iBuffer+5) + 0];
-            texdata_c[4*(iTex+7) + 1] = u_buffer[4*(iBuffer+5) + 1];
-            texdata_c[4*(iTex+7) + 2] = u_buffer[4*(iBuffer+5) + 2];
-            texdata_c[4*(iTex+7) + 3] = u_buffer[4*(iBuffer+5) + 3];
+            texdata_c[4*(iTex+7) + 0] = base.feature_dc[3*i+0];
+            texdata_c[4*(iTex+7) + 1] = base.feature_dc[3*i+1];
+            texdata_c[4*(iTex+7) + 2] = base.feature_dc[3*i+2];
+            texdata_c[4*(iTex+7) + 3] = base.opacity[i];
 
             // quaternions
             let scale = [
-                f_buffer[iBuffer + 3 + 0],
-                f_buffer[iBuffer + 3 + 1],
+                Math.exp(base.scale[2*i+0]),
+                Math.exp(base.scale[2*i+1]),
             ];
             let rot = [
-                (u_buffer[4*(iBuffer+6) + 0] - 128) / 128,
-                (u_buffer[4*(iBuffer+6) + 1] - 128) / 128,
-                (u_buffer[4*(iBuffer+6) + 2] - 128) / 128,
-                (u_buffer[4*(iBuffer+6) + 3] - 128) / 128,
+                (base.quat[4*i+0] - 128) / 128,
+                (base.quat[4*i+1] - 128) / 128,
+                (base.quat[4*i+2] - 128) / 128,
+                (base.quat[4*i+3] - 128) / 128,
             ];
 
             texdata[iTex + 4] = packHalf2x16(scale[0], scale[1]);
@@ -221,8 +342,8 @@ function createWorker(self) {
     }
 
     function runSort(viewProj) {
-        if (!buffer) return;
-        const f_buffer = new Float32Array(buffer);
+        if (!base) return;
+        let vertexCount = base.opacity.length;
         if (lastVertexCount == vertexCount) {
             let dot =
                 lastProj[2] * viewProj[2] +
@@ -241,11 +362,10 @@ function createWorker(self) {
         let minDepth = Infinity;
         let sizeList = new Int32Array(vertexCount);
         for (let i = 0; i < vertexCount; i++) {
-            let iBuffer = 7 * i;
             let depth =
-                ((viewProj[2] * f_buffer[iBuffer + 0] +
-                    viewProj[6] * f_buffer[iBuffer + 1] +
-                    viewProj[10] * f_buffer[iBuffer + 2]) *
+                ((viewProj[2] * base.mean[3*i+0] +
+                    viewProj[6] * base.mean[3*i+1] +
+                    viewProj[10] * base.mean[3*i+2]) *
                     4096) |
                 0;
             sizeList[i] = depth;
@@ -291,17 +411,10 @@ function createWorker(self) {
 
     let sortRunning;
     self.onmessage = (e) => {
-        if (e.data.ply) {
-            vertexCount = 0;
-            runSort(viewProj);
-            buffer = processPlyBuffer(e.data.ply);
-            vertexCount = Math.floor(buffer.byteLength / rowLength);
-            postMessage({ buffer: buffer });
-        } else if (e.data.buffer) {
-            buffer = e.data.buffer;
-            vertexCount = e.data.vertexCount;
-        } else if (e.data.vertexCount) {
-            vertexCount = e.data.vertexCount;
+        if (e.data.header) {
+            base = e.data.base;
+            header = e.data.header;
+            postMessage({ base: base });
         } else if (e.data.view) {
             viewProj = e.data.view;
             throttledSort();
@@ -312,13 +425,12 @@ function createWorker(self) {
 let vertexShaderSource = "";
 let fragmentShaderSource = "";
 
-// let defaultViewMatrix = [
-//     0.47, 0.04, 0.88, 0,
-//     -0.88, -0.11, 0.47, 0,
-//     0.11, -0.99, -0.02, 0,
-//     0.0, 0.0, 0.0, 1,
-// ];
-let defaultViewMatrix = [0.9564954234121288,0.005861386572775194,0.27709592046632586,0,-0.27860648631299867,-0.15426954942532056,0.9490939531492023,0,0.03700652018301946,-0.9848259397237886,-0.1429978528199087,0,0.4417390917933517,-0.4253635506491846,1.1252463385855087,0.9999999999999923];
+let defaultViewMatrix = [
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    0.0, -1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 1.0
+];
 let viewMatrix = defaultViewMatrix;
 async function main() {
     let carousel = true;
@@ -328,7 +440,7 @@ async function main() {
         carousel = false;
     } catch (err) {}
     const url = new URL(
-        params.get("url") || "output.splat",
+        params.get("url") || "model.splat",
         location.href
     );
     console.log(url);
@@ -340,13 +452,10 @@ async function main() {
     if (req.status != 200)
         throw new Error(req.status + " Unable to load " + req.url);
 
-    const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
     const reader = req.body.getReader();
     let splatData = new Uint8Array(req.headers.get("content-length"));
 
-    const downsample =
-        splatData.length / rowLength > 500000 ? 1 : 1 / devicePixelRatio;
-    console.log(splatData.length / rowLength, downsample);
+    const downsample = 1;
 
     const worker = new Worker(
         URL.createObjectURL(
@@ -519,31 +628,19 @@ async function main() {
                     : e.deltaMode == 2
                     ? innerHeight
                     : 1;
+            let innerSize = Math.max(innerWidth, innerHeight);
             let inv = invert4(viewMatrix);
             if (e.shiftKey) {
                 inv = translate4(
                     inv,
-                    (e.deltaX * scale) / innerWidth,
-                    (e.deltaY * scale) / innerHeight,
+                    (e.deltaX * scale) / innerSize,
+                    (e.deltaY * scale) / innerSize,
                     0,
                 );
-            } else if (e.ctrlKey || e.metaKey) {
-                // inv = rotate4(inv,  (e.deltaX * scale) / innerWidth,  0, 0, 1);
-                // inv = translate4(inv,  0, (e.deltaY * scale) / innerHeight, 0);
-                // let preY = inv[13];
-                inv = translate4(
-                    inv,
-                    0,
-                    0,
-                    (-10 * (e.deltaY * scale)) / innerHeight,
-                );
-                // inv[13] = preY;
             } else {
-                let d = 4;
+                let d = -(e.ctrlKey || e.metaKey ?  4.0 : 0.5)
+                    * scale * e.deltaY / innerSize;
                 inv = translate4(inv, 0, 0, d);
-                inv = rotate4(inv, -(e.deltaX * scale) / innerWidth, 0, 1, 0);
-                inv = rotate4(inv, (e.deltaY * scale) / innerHeight, 1, 0, 0);
-                inv = translate4(inv, 0, 0, -d);
             }
 
             viewMatrix = invert4(inv);
@@ -570,33 +667,22 @@ async function main() {
     canvas.addEventListener("mousemove", (e) => {
         e.preventDefault();
         if (down == 1) {
-            let inv = invert4(viewMatrix);
             let dx = (5 * (e.clientX - startX)) / innerWidth;
             let dy = (5 * (e.clientY - startY)) / innerHeight;
-            let d = 4;
 
-            inv = translate4(inv, 0, 0, d);
-            inv = rotate4(inv, dx, 0, 1, 0);
-            inv = rotate4(inv, -dy, 1, 0, 0);
-            inv = translate4(inv, 0, 0, -d);
-            // let postAngle = Math.atan2(inv[0], inv[10])
-            // inv = rotate4(inv, postAngle - preAngle, 0, 0, 1)
-            // console.log(postAngle)
-            viewMatrix = invert4(inv);
+            viewMatrix = rotate4(viewMatrix, dx, 0, 0, 1);
+            viewMatrix = rotate4(viewMatrix, dy, viewMatrix[0], viewMatrix[4], viewMatrix[8]);
 
             startX = e.clientX;
             startY = e.clientY;
         } else if (down == 2) {
             let inv = invert4(viewMatrix);
-            // inv = rotateY(inv, );
-            // let preY = inv[13];
             inv = translate4(
                 inv,
-                (-10 * (e.clientX - startX)) / innerWidth,
+                (-5 * (e.clientX - startX)) / innerWidth,
                 0,
-                (10 * (e.clientY - startY)) / innerHeight,
+                (5 * (e.clientY - startY)) / innerHeight,
             );
-            // inv[13] = preY;
             viewMatrix = invert4(inv);
 
             startX = e.clientX;
@@ -638,22 +724,14 @@ async function main() {
         (e) => {
             e.preventDefault();
             if (e.touches.length === 1 && down) {
-                let inv = invert4(viewMatrix);
-                let dx = (4 * (e.touches[0].clientX - startX)) / innerWidth;
-                let dy = (4 * (e.touches[0].clientY - startY)) / innerHeight;
-
-                let d = 4;
-                inv = translate4(inv, 0, 0, d);
-                // inv = translate4(inv,  -x, -y, -z);
-                // inv = translate4(inv,  x, y, z);
-                inv = rotate4(inv, dx, 0, 1, 0);
-                inv = rotate4(inv, -dy, 1, 0, 0);
-                inv = translate4(inv, 0, 0, -d);
-
-                viewMatrix = invert4(inv);
-
-                startX = e.touches[0].clientX;
-                startY = e.touches[0].clientY;
+                let dx = (5 * (e.clientX - startX)) / innerWidth;
+                let dy = (5 * (e.clientY - startY)) / innerHeight;
+    
+                viewMatrix = rotate4(viewMatrix, dx, 0, 0, 1);
+                viewMatrix = rotate4(viewMatrix, dy, viewMatrix[0], viewMatrix[4], viewMatrix[8]);
+    
+                startX = e.clientX;
+                startY = e.clientY;
             } else if (e.touches.length === 2) {
                 // alert('beep')
                 const dtheta =
@@ -726,6 +804,7 @@ async function main() {
         console.log("Gamepad disconnected");
     });
 
+    let bytesRead = 0;
     const frame = (now) => {
         let inv = invert4(viewMatrix);
         let shiftKey = activeKeys.includes("Shift") || activeKeys.includes("ShiftLeft") || activeKeys.includes("ShiftRight")
@@ -878,7 +957,8 @@ async function main() {
             document.getElementById("spinner").style.display = "";
             start = Date.now() + 2000;
         }
-        const progress = (100 * vertexCount) / (splatData.length / rowLength);
+
+        const progress = (100 * bytesRead / splatData.length);
         if (progress < 100) {
             document.getElementById("progress").style.width = progress + "%";
         } else {
@@ -903,8 +983,9 @@ async function main() {
         e.stopPropagation();
     };
 
-    let bytesRead = 0;
-    let lastVertexCount = -1;
+    let header = null;
+    let headerLength = -1;
+    let lastBytesRead = -1;
     let stopLoading = false;
 
     while (true) {
@@ -914,19 +995,30 @@ async function main() {
         splatData.set(value, bytesRead);
         bytesRead += value.length;
 
-        if (vertexCount > lastVertexCount) {
-            worker.postMessage({
-                buffer: splatData.buffer,
-                vertexCount: Math.floor(bytesRead / rowLength),
-            });
-            lastVertexCount = vertexCount;
+        if (header === null) {
+            if (bytesRead < 8)
+                continue;
+            let arrayint = new Uint32Array(splatData.buffer);
+            let arraybyte = new Uint8Array(splatData.buffer);
+            if (arrayint[0] != 1953263731)
+                break;
+            headerLength = arrayint[1]+8;
+            if (bytesRead < headerLength)
+                continue;
+            header = new TextDecoder().decode(arraybyte.slice(8, headerLength));
+            header = JSON.parse(header.trim());
+        }
+
+        if (bytesRead > lastBytesRead) {
+            worker.postMessage(unpackModel(
+                header, splatData.buffer.slice(headerLength, bytesRead)));
+            lastBytesRead = bytesRead;
         }
     }
-    if (!stopLoading)
-        worker.postMessage({
-            buffer: splatData.buffer,
-            vertexCount: Math.floor(bytesRead / rowLength),
-        });
+    if (!stopLoading) {
+        worker.postMessage(unpackModel(
+            header, splatData.buffer.slice(headerLength, bytesRead)));
+    }
 }
 
 
