@@ -1,0 +1,208 @@
+body {
+    overflow: hidden;
+    margin: 0;
+    height: 100vh;
+    width: 100vw;
+    font-family: sans-serif;
+    background: black;
+    text-shadow: 0 0 3px black;
+}
+a, body {
+    color: white;
+}
+#info {
+    z-index: 100;
+    position: absolute;
+    top: 10px;
+    left: 15px;
+}
+h3 {
+    margin: 5px 0;
+}
+p {
+    margin: 5px 0;
+    font-size: small;
+}
+
+.cube-wrapper {
+    transform-style: preserve-3d;
+}
+
+.cube {
+    transform-style: preserve-3d;
+    transform: rotateX(45deg) rotateZ(45deg);
+    animation: rotation 2s infinite;
+}
+
+.cube-faces {
+    transform-style: preserve-3d;
+    height: 80px;
+    width: 80px;
+    position: relative;
+    transform-origin: 0 0;
+    transform: translateX(0) translateY(0) translateZ(-40px);
+}
+
+.cube-face {
+    position: absolute;
+    inset: 0;
+    background: #0017ff;
+    border: solid 1px #ffffff;
+}
+.cube-face.top {
+    transform: translateZ(80px);
+}
+.cube-face.front {
+    transform-origin: 0 50%;
+    transform: rotateY(-90deg);
+}
+.cube-face.back {
+    transform-origin: 0 50%;
+    transform: rotateY(-90deg) translateZ(-80px);
+}
+.cube-face.right {
+    transform-origin: 50% 0;
+    transform: rotateX(-90deg) translateY(-80px);
+}
+.cube-face.left {
+    transform-origin: 50% 0;
+    transform: rotateX(-90deg) translateY(-80px) translateZ(80px);
+}
+
+@keyframes rotation {
+    0% {
+        transform: rotateX(45deg) rotateY(0) rotateZ(45deg);
+        animation-timing-function: cubic-bezier(
+            0.17,
+            0.84,
+            0.44,
+            1
+        );
+    }
+    50% {
+        transform: rotateX(45deg) rotateY(0) rotateZ(225deg);
+        animation-timing-function: cubic-bezier(
+            0.76,
+            0.05,
+            0.86,
+            0.06
+        );
+    }
+    100% {
+        transform: rotateX(45deg) rotateY(0) rotateZ(405deg);
+        animation-timing-function: cubic-bezier(
+            0.17,
+            0.84,
+            0.44,
+            1
+        );
+    }
+}
+
+.scene,
+#message {
+    position: absolute;
+    display: flex;
+    top: 0;
+    right: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 2;
+    height: 100%;
+    width: 100%;
+    align-items: center;
+    justify-content: center;
+}
+#message {
+    font-weight: bold;
+    font-size: large;
+    color: red;
+    pointer-events: none;
+}
+
+details {
+    font-size: small;
+    margin: 0.5em 0;
+}
+
+#progress {
+    position: absolute;
+    top: 0;
+    height: 5px;
+    background: blue;
+    z-index: 99;
+    transition: width 0.1s ease-in-out;
+}
+
+#quality {
+    position: absolute;
+    bottom: 10px;
+    z-index: 999;
+    right: 10px;
+}
+
+#caminfo {
+    position: absolute;
+    top: 10px;
+    z-index: 999;
+    right: 10px;
+}
+#canvas {
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    touch-action: none;
+}
+
+.instructions {
+    background: rgba(0,0,0,0.6);
+    padding: 10px;
+    border-radius: 10px;
+    font-size: x-small;
+}
+body.nohf .nohf {
+    display: none;
+}
+body.nohf #progress, body.nohf .cube-face {
+    background: #ff9d0d;
+}
+
+input[type="checkbox"] {
+    -webkit-appearance: none;
+    appearance: none;
+    background-color: rgba(232, 232, 232, 0.5);
+    width: 0.8em;
+    height: 0.8em;
+    border-radius: 0.2em;
+    display: inline-grid;
+    place-content: center;
+}
+
+input[type="checkbox"]:hover {
+    background-color: rgba(232, 232, 232, 1);
+}
+
+input[type="checkbox"]::before {
+    content: "";
+    width: 0.7em;
+    height: 0.7em;
+    transform: scale(0);
+    background-color: white;
+    clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+}
+
+input[type="checkbox"]:checked::before {
+    transform: scale(1);
+}
+
+input[type="checkbox"]:checked {
+    /* background-color: hsl(30,100%,70%); */
+    background-color: rgb(0, 120, 237);
+}
+
+input[type="checkbox"]:checked:hover {
+    background-color: dodgerblue;
+}

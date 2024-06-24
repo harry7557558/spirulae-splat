@@ -4,6 +4,8 @@ precision highp float;
 uniform vec2 focal;
 uniform vec2 viewport;
 
+uniform int u_use_ch;
+
 flat in vec4 vColor;
 flat in vec3 vPosition;
 flat in vec3 vAxesU;
@@ -234,6 +236,9 @@ vec3 next_coeff() {
 }
 
 vec3 ch_coeffs_to_color(vec2 uv) {
+    if (u_use_ch == 0)
+        return vec3(0);
+
     const float degree_r = float(ch_degree_r);
     const float degree_phi = float(ch_degree_phi);
 
@@ -285,5 +290,5 @@ void main () {
     vec3 color = vColor.rgb;
     init_coeffs();
     color /= 1.0 + exp(-ch_coeffs_to_color(uv));
-    fragColor = vec4(alpha * color, alpha);
+    fragColor = vec4(color, alpha);
 }

@@ -122,7 +122,7 @@ def bufferview_psa(buffer_views):
     return buffer_views
 
 
-def process_ckpt_to_splat(file_path):
+def process_ckpt_to_ssplat(file_path):
     checkpoint = torch.load(file_path)
     pipeline = checkpoint['pipeline']
     
@@ -285,37 +285,37 @@ def process_ckpt_to_splat(file_path):
     while len(header) % 4:
         header += " "
 
-    splat = BytesIO()
-    splat.write(b"splt")
-    splat.write(len(header).to_bytes(4, 'little'))
-    splat.write(bytearray(header, 'utf-8'))
-    splat.write(buffer)
-    splat = splat.getvalue()
-    return splat
+    ssplat = BytesIO()
+    ssplat.write(b"splt")
+    ssplat.write(len(header).to_bytes(4, 'little'))
+    ssplat.write(bytearray(header, 'utf-8'))
+    ssplat.write(buffer)
+    ssplat = ssplat.getvalue()
+    return ssplat
 
 
-def save_splat_file(splat_data, output_path):
+def save_ssplat_file(ssplat_data, output_path):
     with open(output_path, "wb") as f:
-        f.write(splat_data)
+        f.write(ssplat_data)
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Convert Nerfstudio spirulae-splat checkpoint files to SPLAT format.")
+        description="Convert Nerfstudio spirulae-splat checkpoint files to SSPLAT format.")
     parser.add_argument(
         "input_files", nargs="+", help="The input Nerfstudio spirulae-splat checkpoint files to process."
     )
     parser.add_argument(
-        "--output", "-o", default="model.splat", help="The output SPLAT file."
+        "--output", "-o", default="model.ssplat", help="The output SSPLAT file."
     )
     args = parser.parse_args()
     for input_file in args.input_files:
         print(f"Processing {input_file}...", end='\n\n')
-        splat_data = process_ckpt_to_splat(input_file)
+        ssplat_data = process_ckpt_to_ssplat(input_file)
         output_file = (
-            args.output if len(args.input_files) == 1 else input_file + ".splat"
+            args.output if len(args.input_files) == 1 else input_file + ".ssplat"
         )
-        save_splat_file(splat_data, output_file)
+        save_ssplat_file(ssplat_data, output_file)
         print(f"Saved {output_file}")
 
 

@@ -421,27 +421,26 @@ function createWorker(self) {
         let sizeList = new Int32Array(vertexCount);
         for (let i = 0; i < vertexCount; i++) {
             let depth =
-                ((viewProj[2] * base.means[3*i+0] +
+                -(viewProj[2] * base.means[3*i+0] +
                     viewProj[6] * base.means[3*i+1] +
-                    viewProj[10] * base.means[3*i+2]) *
-                    4096) |
-                0;
+                    viewProj[10] * base.means[3*i+2]);
+            depth = (depth * 4096) | 0;
             sizeList[i] = depth;
             if (depth > maxDepth) maxDepth = depth;
             if (depth < minDepth) minDepth = depth;
         }
 
         // This is a 16 bit single-pass counting sort
-        let depthInv = (256 * 256) / (maxDepth - minDepth);
-        let counts0 = new Uint32Array(256 * 256);
+        let depthInv = (65536) / (maxDepth - minDepth);
+        let counts0 = new Uint32Array(65536);
         for (let i = 0; i < vertexCount; i++) {
             sizeList[i] = ((sizeList[i] - minDepth) * depthInv) | 0;
             counts0[sizeList[i]]++;
         }
-        let starts0 = new Uint32Array(256 * 256);
-        for (let i = 1; i < 256 * 256; i++)
+        let starts0 = new Uint32Array(65536);
+        for (let i = 1; i < 65536; i++)
             starts0[i] = starts0[i - 1] + counts0[i - 1];
-        depthIndex = new Uint32Array(vertexCount);
+        depthIndex = new Uint32Array(vertexCount).fill(-1);
         for (let i = 0; i < vertexCount; i++)
             depthIndex[starts0[sizeList[i]]++] = i;
 
@@ -499,7 +498,7 @@ async function main() {
         carousel = false;
     } catch (err) {}
     const url = new URL(
-        params.get("url") || "model.splat",
+        params.get("url") || "model.ssplat",
         location.href
     );
     console.log(url);
@@ -512,7 +511,7 @@ async function main() {
         throw new Error(req.status + " Unable to load " + req.url);
 
     const reader = req.body.getReader();
-    let splatData = new Uint8Array(req.headers.get("content-length"));
+    let ssplatData = new Uint8Array(req.headers.get("content-length"));
 
     const downsample = 1;
 
@@ -558,13 +557,15 @@ async function main() {
 
     // Enable blending
     gl.enable(gl.BLEND);
-    gl.blendFuncSeparate(
-        gl.ONE_MINUS_DST_ALPHA,
-        gl.ONE,
-        gl.ONE_MINUS_DST_ALPHA,
-        gl.ONE,
-    );
-    gl.blendEquationSeparate(gl.FUNC_ADD, gl.FUNC_ADD);
+    // gl.blendFuncSeparate(
+    //     gl.ONE_MINUS_DST_ALPHA,
+    //     gl.ONE,
+    //     gl.ONE_MINUS_DST_ALPHA,
+    //     gl.ONE,
+    // );
+    // gl.blendEquationSeparate(gl.FUNC_ADD, gl.FUNC_ADD);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.blendEquation(gl.FUNC_ADD);
 
     const u_projection = gl.getUniformLocation(program, "projection");
     const u_viewport = gl.getUniformLocation(program, "viewport");
@@ -627,12 +628,12 @@ async function main() {
 
     worker.onmessage = (e) => {
         if (e.data.buffer) {
-            splatData = new Uint8Array(e.data.buffer);
-            const blob = new Blob([splatData.buffer], {
+            ssplatData = new Uint8Array(e.data.buffer);
+            const blob = new Blob([ssplatData.buffer], {
                 type: "application/octet-stream",
             });
             const link = document.createElement("a");
-            link.download = "model.splat";
+            link.download = "model.ssplat";
             link.href = URL.createObjectURL(blob);
             document.body.appendChild(link);
             link.click();
@@ -886,32 +887,20 @@ async function main() {
         let inv = invert4(viewMatrix);
         let shiftKey = activeKeys.includes("Shift") || activeKeys.includes("ShiftLeft") || activeKeys.includes("ShiftRight")
 
-        if (activeKeys.includes("ArrowUp")) {
-            if (shiftKey) {
-                inv = translate4(inv, 0, -0.03, 0);
-            } else {
-                inv = translate4(inv, 0, 0, 0.1);
-            }
-        }
-        if (activeKeys.includes("ArrowDown")) {
-            if (shiftKey) {
-                inv = translate4(inv, 0, 0.03, 0);
-            } else {
-                inv = translate4(inv, 0, 0, -0.1);
-            }
-        }
+        if (activeKeys.includes("ArrowUp"))
+            inv = translate4(inv, 0, -0.01, 0);
+        if (activeKeys.includes("ArrowDown"))
+            inv = translate4(inv, 0, 0.01, 0);
         if (activeKeys.includes("ArrowLeft"))
-            inv = translate4(inv, -0.03, 0, 0);
-        //
+            inv = translate4(inv, -0.01, 0, 0);
         if (activeKeys.includes("ArrowRight"))
-            inv = translate4(inv, 0.03, 0, 0);
-        // inv = rotate4(inv, 0.01, 0, 1, 0);
+            inv = translate4(inv, 0.01, 0, 0);
         if (activeKeys.includes("KeyA")) inv = rotate4(inv, -0.01, 0, 1, 0);
         if (activeKeys.includes("KeyD")) inv = rotate4(inv, 0.01, 0, 1, 0);
         if (activeKeys.includes("KeyQ")) inv = rotate4(inv, 0.01, 0, 0, 1);
         if (activeKeys.includes("KeyE")) inv = rotate4(inv, -0.01, 0, 0, 1);
-        if (activeKeys.includes("KeyW")) inv = rotate4(inv, 0.005, 1, 0, 0);
-        if (activeKeys.includes("KeyS")) inv = rotate4(inv, -0.005, 1, 0, 0);
+        if (activeKeys.includes("KeyW")) inv = rotate4(inv, 0.01, 1, 0, 0);
+        if (activeKeys.includes("KeyS")) inv = rotate4(inv, -0.01, 1, 0, 0);
 
         const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
         let isJumping = activeKeys.includes("Space");
@@ -968,14 +957,14 @@ async function main() {
         if (
             ["KeyJ", "KeyK", "KeyL", "KeyI"].some((k) => activeKeys.includes(k))
         ) {
-            let d = 4;
+            let d = 1;
             inv = translate4(inv, 0, 0, d);
             inv = rotate4(
                 inv,
                 activeKeys.includes("KeyJ")
-                    ? -0.05
+                    ? -0.02
                     : activeKeys.includes("KeyL")
-                    ? 0.05
+                    ? 0.02
                     : 0,
                 0,
                 1,
@@ -984,9 +973,9 @@ async function main() {
             inv = rotate4(
                 inv,
                 activeKeys.includes("KeyI")
-                    ? 0.05
+                    ? 0.02
                     : activeKeys.includes("KeyK")
-                    ? -0.05
+                    ? -0.02
                     : 0,
                 1,
                 0,
@@ -1026,8 +1015,20 @@ async function main() {
 
         if (vertexCount > 0) {
             document.getElementById("spinner").style.display = "none";
+
             gl.uniformMatrix4fv(u_view, false, actualViewMatrix);
+            let background = header.config.background_color;
+            let bg = document.getElementById("checkbox-bg").checked;
+            gl.clearColor(bg*background[0], bg*background[1], bg*background[2], 1.0);
             gl.clear(gl.COLOR_BUFFER_BIT);
+
+            gl.uniform1i(gl.getUniformLocation(program, "u_use_sh"),
+                document.getElementById("checkbox-sh").checked);
+            gl.uniform1i(gl.getUniformLocation(program, "u_use_ch"),
+                document.getElementById("checkbox-ch").checked);
+            gl.uniform1i(gl.getUniformLocation(program, "u_use_aniso"),
+                document.getElementById("checkbox-aniso").checked);
+
             gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, vertexCount);
         } else {
             gl.clear(gl.COLOR_BUFFER_BIT);
@@ -1035,7 +1036,7 @@ async function main() {
             start = Date.now() + 2000;
         }
 
-        const progress = (100 * bytesRead / splatData.length);
+        const progress = (100 * bytesRead / ssplatData.length);
         if (progress < 100) {
             document.getElementById("progress").style.width = progress + "%";
         } else {
@@ -1069,14 +1070,14 @@ async function main() {
         const { done, value } = await reader.read();
         if (done || stopLoading) break;
 
-        splatData.set(value, bytesRead);
+        ssplatData.set(value, bytesRead);
         bytesRead += value.length;
 
         if (header === null) {
             if (bytesRead < 8)
                 continue;
-            let arrayint = new Uint32Array(splatData.buffer);
-            let arraybyte = new Uint8Array(splatData.buffer);
+            let arrayint = new Uint32Array(ssplatData.buffer);
+            let arraybyte = new Uint8Array(ssplatData.buffer);
             if (arrayint[0] != 1953263731)
                 break;
             headerLength = arrayint[1]+8;
@@ -1088,13 +1089,13 @@ async function main() {
 
         if (bytesRead > lastBytesRead) {
             worker.postMessage(unpackModel(
-                header, splatData.buffer.slice(headerLength, bytesRead)));
+                header, ssplatData.buffer.slice(headerLength, bytesRead)));
             lastBytesRead = bytesRead;
         }
     }
     if (!stopLoading) {
         worker.postMessage(unpackModel(
-            header, splatData.buffer.slice(headerLength, bytesRead)));
+            header, ssplatData.buffer.slice(headerLength, bytesRead)));
     }
 }
 

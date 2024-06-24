@@ -7,6 +7,9 @@ uniform mat4 projection, view;
 uniform vec2 focal;
 uniform vec2 viewport;
 
+uniform int u_use_sh;
+uniform int u_use_aniso;
+
 in vec2 position;
 in int index;
 
@@ -126,7 +129,7 @@ vec3 sh_coeffs_to_color_fast(
     vec3 viewdir
 ) {
     vec3 color = 0.2820947917738781 * base_color;
-    if (degree < 1) {
+    if (degree < 1 || u_use_sh == 0) {
         return color;
     }
 
@@ -215,6 +218,10 @@ vec3 sh_coeffs_to_color_fast(
 
 
 void main () {
+    if (index == -1) {
+        gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+        return;
+    }
 
     uvec4 info0 = texelFetch(u_base_texture,
         ivec2((uint(index) & 0x3ffu) * 3u, uint(index) >> 10), 0);
@@ -271,7 +278,7 @@ void main () {
     vPosition = p_view.xyz;
     vAxesU = V0;
     vAxesV = V1;
-    vAnisotropy = anisotropy;
+    vAnisotropy = u_use_aniso == 0 ? vec2(0) : anisotropy;
     vIndex = index;
 
     gl_Position = vec4(
