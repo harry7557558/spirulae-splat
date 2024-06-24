@@ -127,24 +127,18 @@ function unpackComponents(config, packedData, buffers) {
 
     if (!packedData)
         return;
-    let packedDataLength = packedData.byteLength;
-    while ((packedDataLength % 4 != 0) ||
-        (packedDataLength % componentLength != 0))
-        packedDataLength--;
-    packedData = packedData.slice(0, packedDataLength);
     const length = Math.min(config.length, packedData.byteLength/componentLength);
     
     const components = componentViews.map(view => {
         const dataType = view.type;
-        const numElements = dataType.endsWith('2') || dataType.endsWith('3') || dataType.endsWith('4')
-            ? parseInt(dataType.slice(-1))
-            : 1;
-
         if (dataType.startsWith('quat')) {
+            const numElements = Math.max(Number(dataType.slice(4)), 1);
             return new Uint32Array(length * numElements);
         } else if (dataType.startsWith('float')) {
+            const numElements = Math.max(Number(dataType.slice(5)), 1);
             return new Float32Array(length * numElements);
         } else if (dataType.startsWith('byte')) {
+            const numElements = Math.max(Number(dataType.slice(4)), 1);
             return new Uint8Array(length * numElements);
         }
     });
@@ -158,9 +152,7 @@ function unpackComponents(config, packedData, buffers) {
             const dataType = view.type;
             
             if (dataType.startsWith('quat')) {
-                const numElements = dataType.endsWith('2') || dataType.endsWith('3') || dataType.endsWith('4')
-                    ? parseInt(dataType.slice(-1))
-                    : 1;
+                const numElements = Math.max(Number(dataType.slice(4)), 1);
                 const bitsPerElement = bitLength / numElements;
 
                 for (let k = 0; k < numElements; k++) {
@@ -180,9 +172,7 @@ function unpackComponents(config, packedData, buffers) {
                 }
 
             } else if (dataType.startsWith('float')) {
-                const numElements = dataType.endsWith('2') || dataType.endsWith('3') || dataType.endsWith('4')
-                    ? parseInt(dataType.slice(-1))
-                    : 1;
+                const numElements = Math.max(Number(dataType.slice(5)), 1);
 
                 for (let k = 0; k < numElements; k++) {
                     const byteStart = (bitOffset / 8) + k * 4;
@@ -192,9 +182,7 @@ function unpackComponents(config, packedData, buffers) {
                 }
 
             } else if (dataType.startsWith('byte')) {
-                const numElements = dataType.endsWith('2') || dataType.endsWith('3') || dataType.endsWith('4')
-                    ? parseInt(dataType.slice(-1))
-                    : 1;
+                const numElements = Math.max(Number(dataType.slice(4)), 1);
 
                 for (let k = 0; k < numElements; k++) {
                     const byteStart = (bitOffset / 8) + k;
@@ -206,7 +194,13 @@ function unpackComponents(config, packedData, buffers) {
 
     const object = {};
     componentViews.forEach((view, j) => {
-        if (view.type.startsWith('quat')) {
+        let hasQuat = view.type.startsWith('quat');
+        if (hasQuat) {
+            let bl = buffers[view.quatBufferView].byteLength;
+            if (bl < 4 || (bl & (bl - 1)) != 0)
+                hasQuat = false;
+        }
+        if (hasQuat) {
             let numel = components[j].length;
             let component = new Float32Array(numel);
             let buffer = new Float32Array(buffers[view.quatBufferView]);
@@ -244,18 +238,14 @@ function unpackModel(header, buffer) {
 
 function createWorker(self) {
     let header;
-    let base;
+    let base, harmonics;
     let vertexCount = 0;
     let viewProj;
-    // 3*4 + 2*4 + 4 + 4 = 7*4
-    // XYZ - Position (Float32)
-    // XY - Scale (Float32)
-    // RGBA - colors (uint8)
-    // IJKL - quaternion/rot (uint8)
-    const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
+
     let lastProj = [];
     let depthIndex = new Uint32Array();
-    let lastVertexCount = 0;
+    let lastBaseVertexCount = 0,
+        lastHarmonicsLength = 0;
 
     var _floatView = new Float32Array(1);
     var _int32View = new Int32Array(_floatView.buffer);
@@ -293,58 +283,126 @@ function createWorker(self) {
         return (floatToHalf(x) | (floatToHalf(y) << 16)) >>> 0;
     }
 
-    function generateTexture() {
+    function generateBaseTexture() {
         if (!base) return;
-        let vertexCount = base.opacity.length;
+        let vertexCount = base.opacities.length;
 
-        var texwidth = 1024 * 2; // Set to your desired width
-        var texheight = Math.ceil((2 * vertexCount) / texwidth); // Set to your desired height
-        var texdata = new Uint32Array(texwidth * texheight * 4); // 4 components per pixel (RGBA)
-        var texdata_c = new Uint8Array(texdata.buffer);
-        var texdata_f = new Float32Array(texdata.buffer);
-
-        // Here we convert from a .splat file buffer into a texture
-        // With a little bit more foresight perhaps this texture file
-        // should have been the native format as it'd be very easy to
-        // load it into webgl.
+        var basewidth = 1024 * 3;
+        var baseheight = Math.ceil((3 * vertexCount) / basewidth);
+        var basedata = new Uint32Array(basewidth * baseheight * 4);
+        var basedataF = new Float32Array(basedata.buffer);
         for (let i = 0; i < vertexCount; i++) {
-            let iTex = 8 * i;
+            let iTex = 12 * i;
 
-            // x, y, z
-            texdata_f[iTex + 0] = base.mean[3*i+0];
-            texdata_f[iTex + 1] = base.mean[3*i+1];
-            texdata_f[iTex + 2] = base.mean[3*i+2];
+            // position - 3 floats, info0 xyz
+            basedataF[iTex + 0] = base.means[3*i+0];
+            basedataF[iTex + 1] = base.means[3*i+1];
+            basedataF[iTex + 2] = base.means[3*i+2];
 
-            // r, g, b, a
-            texdata_c[4*(iTex+7) + 0] = base.feature_dc[3*i+0];
-            texdata_c[4*(iTex+7) + 1] = base.feature_dc[3*i+1];
-            texdata_c[4*(iTex+7) + 2] = base.feature_dc[3*i+2];
-            texdata_c[4*(iTex+7) + 3] = base.opacity[i];
+            // scale - 2 floats, info0 w, info1 x
+            basedataF[iTex + 3] = Math.exp(base.scales[2*i+0]);
+            basedataF[iTex + 4] = Math.exp(base.scales[2*i+1]);
 
-            // quaternions
-            let scale = [
-                Math.exp(base.scale[2*i+0]),
-                Math.exp(base.scale[2*i+1]),
+            // quat - 4 halfs, info1 yz
+            let quat = [
+                base.quats[4*i+0],
+                base.quats[4*i+1],
+                base.quats[4*i+2],
+                base.quats[4*i+3],
             ];
-            let rot = [
-                (base.quat[4*i+0] - 128) / 128,
-                (base.quat[4*i+1] - 128) / 128,
-                (base.quat[4*i+2] - 128) / 128,
-                (base.quat[4*i+3] - 128) / 128,
-            ];
+            basedata[iTex + 5] = packHalf2x16(quat[0], quat[1]);
+            basedata[iTex + 6] = packHalf2x16(quat[2], quat[3]);
 
-            texdata[iTex + 4] = packHalf2x16(scale[0], scale[1]);
-            texdata[iTex + 5] = packHalf2x16(rot[0], rot[1]);
-            texdata[iTex + 6] = packHalf2x16(rot[2], rot[3]);
+            // anisotropy - 2 floats, info1 w, info2 x
+            basedataF[iTex + 7] = Math.sinh(base.anisotropies[2*i+0]);
+            basedataF[iTex + 8] = Math.sinh(base.anisotropies[2*i+1]);
+
+            // rgba - 4 halfs, info2 yz
+            let m = header.config.sh_degree == 0 ? 0.28209479177387814 : 1.0;
+            let b = header.config.sh_degree == 0 ? 0.5 : 0.0;
+            let rgba = [
+                b + m * base.features_dc[3*i+0],
+                b + m * base.features_dc[3*i+1],
+                b + m * base.features_dc[3*i+2],
+                base.opacities[i]
+            ];
+            basedata[iTex + 9] = packHalf2x16(rgba[0], rgba[1]);
+            basedata[iTex + 10] = packHalf2x16(rgba[2], rgba[3]);
         }
 
-        self.postMessage({ texdata, texwidth, texheight }, [texdata.buffer]);
+        self.postMessage({
+            baseTexture: { basedata, basewidth, baseheight }
+        }, [basedata.buffer]);
+    }
+
+    function generateCHTexture() {
+        if (!harmonics) return;
+        let degree_r = header.config.ch_degree_r;
+        let degree_phi = header.config.ch_degree_phi;
+        let dim_ch = degree_r * (2*degree_phi+1);
+        let pixelPerVert = Math.ceil(dim_ch/2);
+        let vertexCount = Math.floor(harmonics.features_ch.length/(3*dim_ch));
+
+        var chwidth = Math.floor(4096/pixelPerVert)*pixelPerVert;
+        var chheight = Math.ceil(pixelPerVert*vertexCount/chwidth);
+        var chdata = new Uint32Array(chwidth * chheight * 4);
+        for (let i = 0; i < vertexCount; i++) {
+            for (var j = 0; j < dim_ch; j++) {
+                let iTex = 4 * pixelPerVert * i + 2 * j;
+                let iBuffer = 3 * dim_ch * i  +  3 * j;
+                let rgb = [
+                    harmonics.features_ch[iBuffer],
+                    harmonics.features_ch[iBuffer+1],
+                    harmonics.features_ch[iBuffer+2],
+                ];
+                chdata[iTex+0] = packHalf2x16(rgb[0], rgb[1]);
+                chdata[iTex+1] = packHalf2x16(rgb[2], 1.0);
+            }
+        }
+
+        self.postMessage({
+            chTexture: { chdata, chwidth, chheight }
+        }, [chdata.buffer]);
+    }
+
+    function generateSHTexture() {
+        if (!harmonics) return;
+        let degree = header.config.sh_degree;
+        let dim_sh = degree * (degree + 2);
+        let pixelPerVert = Math.ceil(dim_sh/2);
+        let vertexCount = Math.floor(harmonics.features_sh.length/(3*dim_sh));
+
+        var shwidth = Math.floor(4096/pixelPerVert)*pixelPerVert;
+        var shheight = Math.ceil(pixelPerVert*vertexCount/shwidth);
+        var shdata = new Uint32Array(shwidth * shheight * 4);
+        for (let i = 0; i < vertexCount; i++) {
+            for (var j = 0; j < dim_sh; j++) {
+                let iTex = 4 * pixelPerVert * i + 2 * j;
+                let iBuffer = 3 * dim_sh * i  +  3 * j;
+                let rgb = [
+                    harmonics.features_sh[iBuffer],
+                    harmonics.features_sh[iBuffer+1],
+                    harmonics.features_sh[iBuffer+2],
+                ];
+                shdata[iTex+0] = packHalf2x16(rgb[0], rgb[1]);
+                shdata[iTex+1] = packHalf2x16(rgb[2], 1.0);
+            }
+        }
+
+        self.postMessage({
+            shTexture: { shdata, shwidth, shheight }
+        }, [shdata.buffer]);
     }
 
     function runSort(viewProj) {
         if (!base) return;
-        let vertexCount = base.opacity.length;
-        if (lastVertexCount == vertexCount) {
+        if (harmonics.features_sh.length > lastHarmonicsLength) {
+            generateCHTexture();
+            generateSHTexture();
+            lastHarmonicsLength = harmonics.features_sh.length;
+        }
+        let vertexCount = base.opacities.length;
+        if (lastBaseVertexCount == vertexCount) {
             let dot =
                 lastProj[2] * viewProj[2] +
                 lastProj[6] * viewProj[6] +
@@ -353,8 +411,8 @@ function createWorker(self) {
                 return;
             }
         } else {
-            generateTexture();
-            lastVertexCount = vertexCount;
+            generateBaseTexture();
+            lastBaseVertexCount = vertexCount;
         }
 
         console.time("sort");
@@ -363,9 +421,9 @@ function createWorker(self) {
         let sizeList = new Int32Array(vertexCount);
         for (let i = 0; i < vertexCount; i++) {
             let depth =
-                ((viewProj[2] * base.mean[3*i+0] +
-                    viewProj[6] * base.mean[3*i+1] +
-                    viewProj[10] * base.mean[3*i+2]) *
+                ((viewProj[2] * base.means[3*i+0] +
+                    viewProj[6] * base.means[3*i+1] +
+                    viewProj[10] * base.means[3*i+2]) *
                     4096) |
                 0;
             sizeList[i] = depth;
@@ -413,8 +471,9 @@ function createWorker(self) {
     self.onmessage = (e) => {
         if (e.data.header) {
             base = e.data.base;
+            harmonics = e.data.harmonics;
             header = e.data.header;
-            postMessage({ base: base });
+            postMessage({ base, harmonics });
         } else if (e.data.view) {
             viewProj = e.data.view;
             throttledSort();
@@ -522,11 +581,23 @@ async function main() {
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
     gl.vertexAttribPointer(a_position, 2, gl.FLOAT, false, 0, 0);
 
-    var texture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, texture);
+    var baseTexture = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, baseTexture);
+    var uBaseTextureLocation = gl.getUniformLocation(program, "u_base_texture");
+    gl.uniform1i(uBaseTextureLocation, 0);
 
-    var u_textureLocation = gl.getUniformLocation(program, "u_texture");
-    gl.uniform1i(u_textureLocation, 0);
+    var chTexture = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, chTexture);
+    var uChTextureLocation = gl.getUniformLocation(program, "u_ch_texture");
+    gl.uniform1i(uChTextureLocation, 1);
+
+    var shTexture = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, shTexture);
+    var uShTextureLocation = gl.getUniformLocation(program, "u_sh_texture");
+    gl.uniform1i(uShTextureLocation, 2);
 
     const indexBuffer = gl.createBuffer();
     const a_index = gl.getAttribLocation(program, "index");
@@ -565,36 +636,42 @@ async function main() {
             link.href = URL.createObjectURL(blob);
             document.body.appendChild(link);
             link.click();
-        } else if (e.data.texdata) {
-            const { texdata, texwidth, texheight } = e.data;
-            // console.log(texdata)
-            gl.bindTexture(gl.TEXTURE_2D, texture);
-            gl.texParameteri(
-                gl.TEXTURE_2D,
-                gl.TEXTURE_WRAP_S,
-                gl.CLAMP_TO_EDGE,
-            );
-            gl.texParameteri(
-                gl.TEXTURE_2D,
-                gl.TEXTURE_WRAP_T,
-                gl.CLAMP_TO_EDGE,
-            );
+        } else if (e.data.baseTexture) {
+            const { basedata, basewidth, baseheight } = e.data.baseTexture;
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, baseTexture);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-
             gl.texImage2D(
-                gl.TEXTURE_2D,
-                0,
-                gl.RGBA32UI,
-                texwidth,
-                texheight,
-                0,
-                gl.RGBA_INTEGER,
-                gl.UNSIGNED_INT,
-                texdata,
-            );
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, texture);
+                gl.TEXTURE_2D, 0, gl.RGBA32UI,
+                basewidth, baseheight, 0,
+                gl.RGBA_INTEGER, gl.UNSIGNED_INT, basedata);
+        } else if (e.data.chTexture) {
+            const { chdata, chwidth, chheight } = e.data.chTexture;
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D, chTexture);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            gl.texImage2D(
+                gl.TEXTURE_2D, 0, gl.RGBA32UI,
+                chwidth, chheight, 0,
+                gl.RGBA_INTEGER, gl.UNSIGNED_INT, chdata);
+        } else if (e.data.shTexture) {
+            const { shdata, shwidth, shheight } = e.data.shTexture;
+            gl.activeTexture(gl.TEXTURE2);
+            gl.bindTexture(gl.TEXTURE_2D, shTexture);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            gl.texImage2D(
+                gl.TEXTURE_2D, 0, gl.RGBA32UI,
+                shwidth, shheight, 0,
+                gl.RGBA_INTEGER, gl.UNSIGNED_INT, shdata);
         } else if (e.data.depthIndex) {
             const { depthIndex, viewProj } = e.data;
             gl.bindBuffer(gl.ARRAY_BUFFER, indexBuffer);

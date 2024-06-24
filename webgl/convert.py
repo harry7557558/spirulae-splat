@@ -7,7 +7,7 @@ from io import BytesIO
 import json
 
 
-def quantize_tensor(tensor, n_bits, maxiter=100):
+def quantize_tensor(tensor, n_bits, maxiter=0):
     device = tensor.device
 
     sorted_numbers, sorted_indices = torch.sort(tensor.flatten())
@@ -28,7 +28,7 @@ def quantize_tensor(tensor, n_bits, maxiter=100):
 
         # monitor L1, which may increase as MSE decreases
         error = torch.mean(torch.abs(centroids[bins]-sorted_numbers)).item()
-        print(_, error)
+        # print(_, error)
 
         # Lloyd-Max quantization
         new_centroids = centroids.clone()
@@ -48,7 +48,7 @@ def quantize_tensor(tensor, n_bits, maxiter=100):
 
     centers = (centroids[1:]+centroids[:-1])/2
     bins = torch.bucketize(tensor, centers)
-    print('error:', torch.mean(torch.abs(centroids[bins]-tensor)).item())
+    print('quatization loss:', torch.mean(torch.abs(centroids[bins]-tensor)).item())
     return centroids, bins
 
     import matplotlib.pyplot as plt
@@ -60,6 +60,11 @@ def quantize_tensor(tensor, n_bits, maxiter=100):
 
 
 def pack_components(config, components):
+    components = components[:]
+    for i, comp in enumerate(components):
+        if isinstance(comp, torch.Tensor):
+            components[i] = comp.cpu().numpy()
+
     length = config["length"]
     component_length = config["componentLength"]
     component_views = config["componentViews"]
@@ -109,6 +114,14 @@ def pack_components(config, components):
     return packed_data.tobytes()
 
 
+def bufferview_psa(buffer_views):
+    total = 0
+    for view in buffer_views:
+        view['byteOffset'] = total
+        total += view['byteLength']
+    return buffer_views
+
+
 def process_ckpt_to_splat(file_path):
     checkpoint = torch.load(file_path)
     pipeline = checkpoint['pipeline']
@@ -145,22 +158,27 @@ def process_ckpt_to_splat(file_path):
     print("{:.2f} MB floats".format(n_floats*4/1024**2))
     print()
 
-    center = torch.mean(means, axis=0)
-    cov_matrix = torch.cov(means.T)
-    mahalanobis_dist = torch.sqrt(torch.sum((
-        (means-center) @ torch.linalg.inv(cov_matrix)) * (means-center), axis=1))
-    mask = mahalanobis_dist < 1.5
-    print("masked", torch.sum(mask).item(), "splats")
-    print()
+    if False:
+        center = torch.mean(means, axis=0)
+        cov_matrix = torch.cov(means.T)
+        mahalanobis_dist = torch.sqrt(torch.sum((
+            (means-center) @ torch.linalg.inv(cov_matrix)) * (means-center), axis=1))
+        mask = mahalanobis_dist < 1.5
+        print("masked", torch.sum(mask).item(), "splats")
+        print()
 
-    (features_dc, features_sh, features_ch,
-     means, opacities, anisotropies, quats, scales) = [
-        tensor[mask].contiguous() for tensor in (
-            features_dc, features_sh, features_ch,
-            means, opacities, anisotropies, quats, scales)
-    ]
+        (features_dc, features_sh, features_ch,
+        means, opacities, anisotropies, quats, scales) = [
+            tensor[mask].contiguous() for tensor in (
+                features_dc, features_sh, features_ch,
+                means, opacities, anisotropies, quats, scales)
+        ]
 
     means -= torch.mean(means, axis=0)
+
+    quats = quats / torch.norm(quats, dim=1, keepdim=True)
+    opacities = torch.sigmoid(opacities)
+    anisotropies = torch.arcsinh(anisotropies)
 
     weight = torch.exp(scales[:,0]+scales[:,1]) * opacities[:,0]
     sorted_indices = torch.argsort(-weight)
@@ -169,75 +187,100 @@ def process_ckpt_to_splat(file_path):
     from time import perf_counter
     time0 = perf_counter()
     with torch.no_grad():
-        means_bins, means_q = quantize_tensor(means, 12, maxiter=0)
-        scales_bins, scales_q = quantize_tensor(scales, 10, maxiter=0)
+        means_bins, means_q = quantize_tensor(means, 12)
+        scales_bins, scales_q = quantize_tensor(scales, 10)
+        quats_bins, quats_q = quantize_tensor(quats, 8)
+        anisotropies_bins, anisotropies_q = quantize_tensor(anisotropies, 8)
+        opacities_bins, opacities_q = quantize_tensor(opacities, 6)
+        features_dc_bins, features_dc_q = quantize_tensor(features_dc, 6)
+        features_ch_bins, features_ch_q = quantize_tensor(features_ch, 4, 100)
+        features_sh_bins, features_sh_q = quantize_tensor(features_sh, 3, 100)
     time1 = perf_counter()
-    print("time elapsed:", time1-time0)
+    print()
 
-    SH_C0 = 0.28209479177387814
-    if sh_degree > 0:
-        features_dc = 0.5 + features_dc * SH_C0
-    if num_ch > 0:  # has CH and not use CH
-        features_dc *= 0.5
-    opacities = torch.sigmoid(opacities)
+    buffer_views = [
+        { "byteLength": 4*len(means_bins) },
+        { "byteLength": 4*len(scales_bins) },
+        { "byteLength": 4*len(quats_bins) },
+        { "byteLength": 4*len(anisotropies_bins) },
+        { "byteLength": 4*len(opacities_bins) },
+        { "byteLength": 4*len(features_dc_bins) },
+        { "byteLength": 4*len(features_ch_bins) },
+        { "byteLength": 4*len(features_sh_bins) },
+    ]
 
-    means_q = means_q.cpu().numpy()
-    means_bins = means_bins.cpu().numpy()
-    scales_q = scales_q.cpu().numpy()
-    scales_bins = scales_bins.cpu().numpy()
-    quats = quats.cpu().numpy()
-    features_dc = features_dc.cpu().numpy()
-    opacities = opacities.cpu().numpy()
-
+    print("Packing base...")
     base_config = {
-        "bufferView": 2,
+        "bufferView": len(buffer_views),
         "length": len(weight),
-        "componentLength": int(np.ceil((36+20+24+8+32)/8)),  # in bytes
+        "componentLength": int(np.ceil((36+20+32+16+6+18)/8)),  # in bytes
         "componentViews": [
-            { "key": "mean", "type": "quat3", "bitLength": 36, "bitOffset": 0, "quatBufferView": 0 },
-            { "key": "scale", "type": "quat2", "bitLength": 20, "bitOffset": 36, "quatBufferView": 1 },
-            { "key": "feature_dc", "type": "byte3", "bitLength": 24, "bitOffset": 36+20 },
-            { "key": "opacity", "type": "byte", "bitLength": 8, "bitOffset": 36+20+24 },
-            { "key": "quat", "type": "byte4", "bitLength": 32, "bitOffset": 36+20+24+8 },
+            { "key": "means", "type": "quat3", "bitLength": 36, "bitOffset": 0, "quatBufferView": 0 },
+            { "key": "scales", "type": "quat2", "bitLength": 20, "bitOffset": 36, "quatBufferView": 1 },
+            { "key": "quats", "type": "quat4", "bitLength": 32, "bitOffset": 36+20, "quatBufferView": 2 },
+            { "key": "anisotropies", "type": "quat2", "bitLength": 16, "bitOffset": 36+20+32, "quatBufferView": 3 },
+            { "key": "opacities", "type": "quat", "bitLength": 6, "bitOffset": 36+20+32+16, "quatBufferView": 4 },
+            { "key": "features_dc", "type": "quat3", "bitLength": 18, "bitOffset": 36+20+32+16+6, "quatBufferView": 5 },
         ]
     }
     base_buffer = pack_components(base_config, [
-        means_q, scales_q,
-        (features_dc*255+0.5),
-        (opacities*255+0.5),
-        ((quats / np.linalg.norm(quats, axis=1).reshape(-1,1)) * 128 + 128.5)])
+        means_q, scales_q, quats_q, anisotropies_q,
+        opacities_q, features_dc_q,
+    ])
+
+    print("Packing harmonics...")
+    harmonics_config = {
+        "bufferView": len(buffer_views)+1,
+        "length": len(weight),
+        "componentLength": int(np.ceil((63*4+45*3)/8)),  # in bytes
+        "componentViews": [
+            { "key": "features_ch", "type": "quat63", "bitLength": 63*4, "bitOffset": 0, "quatBufferView": 6 },
+            { "key": "features_sh", "type": "quat45", "bitLength": 45*3, "bitOffset": 63*4, "quatBufferView": 7 },
+        ]
+    }
+    harmonics_buffer = pack_components(harmonics_config, [
+        features_ch_q.reshape((len(features_ch), -1)),
+        features_sh_q.reshape((len(features_sh), -1))
+    ])
+
+    buffer = BytesIO()
+    buffer.write(means_bins.cpu().numpy().tobytes())
+    buffer.write(scales_bins.cpu().numpy().tobytes())
+    buffer.write(quats_bins.cpu().numpy().tobytes())
+    buffer.write(anisotropies_bins.cpu().numpy().tobytes())
+    buffer.write(opacities_bins.cpu().numpy().tobytes())
+    buffer.write(features_dc_bins.cpu().numpy().tobytes())
+    buffer.write(features_ch_bins.cpu().numpy().tobytes())
+    buffer.write(features_sh_bins.cpu().numpy().tobytes())
+    buffer.write(base_buffer)
+    buffer.write(harmonics_buffer)
+    buffer = buffer.getvalue()
+    while len(buffer) % 4:
+        buffer += b'\0'
 
     header = {
         "asset": {
             "version": "0.0"
         },
         "config": {
-            "sh_degree": sh_degree,
+            "sh_degree": 3,
             "ch_degree_r": 3,
             "ch_degree_phi": 3,
             "background_color": background_color.cpu().numpy().tolist()
         },
         "buffer": {
-            "byteLength": len(base_buffer),
+            "byteLength": len(buffer),
         },
         "primitives": {
-            "base": base_config
+            "base": base_config,
+            "harmonics": harmonics_config,
         },
-        "bufferViews": [
-            {
-                "byteLength": 4*len(means_bins),
-                "byteOffset": 0
-            },
-            {
-                "byteLength": 4*len(scales_bins),
-                "byteOffset": 4*len(means_bins)
-            },
-            {
-                "byteLength": len(base_buffer),
-                "byteOffset": 4*len(means_bins)+4*len(scales_bins)
-            }
-        ]
+        "bufferViews": bufferview_psa(buffer_views + [
+            { "byteLength": len(base_buffer) },
+            { "byteLength": len(harmonics_buffer) },
+        ])
     }
+
     header = json.dumps(header)
     while len(header) % 4:
         header += " "
@@ -246,13 +289,8 @@ def process_ckpt_to_splat(file_path):
     splat.write(b"splt")
     splat.write(len(header).to_bytes(4, 'little'))
     splat.write(bytearray(header, 'utf-8'))
-    splat.write(means_bins.tobytes())
-    splat.write(scales_bins.tobytes())
-    splat.write(base_buffer)
-
+    splat.write(buffer)
     splat = splat.getvalue()
-    while len(splat) % 4:
-        splat += b'\0'
     return splat
 
 
