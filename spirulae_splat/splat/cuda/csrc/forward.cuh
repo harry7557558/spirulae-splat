@@ -73,7 +73,7 @@ __global__ void rasterize_forward(
     const float3* __restrict__ colors,
     const unsigned ch_degree_r,
     const unsigned ch_degree_phi,
-    const float* __restrict__ ch_coeffs,
+    const float3* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
     const float2* __restrict__ anisotropies,
     const float3& __restrict__ background,

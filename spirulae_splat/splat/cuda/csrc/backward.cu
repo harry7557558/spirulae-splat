@@ -35,7 +35,7 @@ __global__ void rasterize_backward_kernel(
     const float3* __restrict__ axes_u,
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
-    const float* __restrict__ ch_coeffs,
+    const float3* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
     const float2* __restrict__ anisotropies,
     const float3& __restrict__ background,
@@ -54,7 +54,7 @@ __global__ void rasterize_backward_kernel(
     float3* __restrict__ v_axes_u,
     float3* __restrict__ v_axes_v,
     float3* __restrict__ v_colors,
-    float* __restrict__ v_ch_coeffs,
+    float3* __restrict__ v_ch_coeffs,
     float* __restrict__ v_ch_coeffs_abs,
     float* __restrict__ v_opacities,
     float2* __restrict__ v_anisotropies,
@@ -89,7 +89,7 @@ __global__ void rasterize_backward_kernel(
     const int num_batches = (range.y - range.x + block_size - 1) / block_size;
 
     const int dim_ch = ch_degree_r * (2*ch_degree_phi+1);
-    assert(3*dim_ch <= MAX_CH_FLOATS);
+    assert(dim_ch <= MAX_CH_FLOAT3);
 
     __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
     __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
@@ -215,9 +215,9 @@ __global__ void rasterize_backward_kernel(
             glm::vec2 v_depth_grad_local = {0.f, 0.f};
             float v_opacity_local = 0.f;
             glm::vec2 v_anisotropy_local = {0.f, 0.f};
-            float v_ch_coeff_local[MAX_CH_FLOATS];
-            for (int i = 0; i < 3*dim_ch; i++)
-                v_ch_coeff_local[i] = 0.f;
+            glm::vec3 v_ch_coeff_local[MAX_CH_FLOAT3];
+            for (int i = 0; i < dim_ch; i++)
+                v_ch_coeff_local[i] = {0.f, 0.f, 0.f};
             float v_ch_coeff_abs_local = 0.f;
             //initialize everything to 0, only set if the lane is valid
             if(valid){
@@ -287,28 +287,40 @@ __global__ void rasterize_backward_kernel(
                 glm::vec3 color_1;
                 glm::vec2 v_uv_ch = {0.f, 0.f};
                 if (dim_ch > 0) {
-                    // TODO: speed up by reading through ch_coeffs only once
+                    glm::vec3 v_ch_color_sigmoid = v_color_1 * color_0;
+                    #if 0
                     int32_t g_id = id_batch[t];
-                    glm::vec3 ch_color;
-                    ch_coeffs_to_color(
+                    glm::vec3 ch_color = ch_coeffs_to_color(
                         ch_degree_r, ch_degree_phi,
-                        &ch_coeffs[3*dim_ch*g_id], {uv.x, uv.y}, &ch_color.x
+                        (glm::vec3*)&ch_coeffs[dim_ch*g_id], {uv.x, uv.y}
                     );
                     glm::vec3 ch_color_sigmoid = 1.0f / (1.0f+glm::exp(-ch_color));
-                    color_1 = color_0 * ch_color_sigmoid;
-                    v_color_local = v_color_1 * ch_color_sigmoid;
-                    glm::vec3 v_ch_color_sigmoid = v_color_1 * color_0;
                     glm::vec3 v_ch_color = v_ch_color_sigmoid * ch_color_sigmoid*(1.0f-ch_color_sigmoid);
                     ch_coeffs_to_color_vjp(
                         ch_degree_r, ch_degree_phi,
-                        &ch_coeffs[3*dim_ch*g_id], {uv.x, uv.y},
-                        (float*)&v_ch_color,
-                        &ch_color.x,
-                        v_ch_coeff_local, *(float2*)&v_uv_ch
+                        (glm::vec3*)&ch_coeffs[dim_ch*g_id],
+                        {uv.x, uv.y},
+                        v_ch_color,
+                        ch_color,
+                        v_ch_coeff_local, v_ch_coeff_abs_local,
+                        v_uv_ch
                     );
-                    for (int i = 0; i < 3*dim_ch; i++)
-                        v_ch_coeff_abs_local += abs(v_ch_coeff_local[i]);
-                    v_ch_coeff_abs_local /= (float)(3*dim_ch);
+                    #else
+                    // makes overall training 0.1x faster
+                    int32_t g_id = id_batch[t];
+                    glm::vec3 ch_color_sigmoid;
+                    ch_coeffs_to_color_sigmoid_vjp(
+                        ch_degree_r, ch_degree_phi,
+                        (glm::vec3*)&ch_coeffs[dim_ch*g_id],
+                        {uv.x, uv.y},
+                        v_ch_color_sigmoid,
+                        ch_color_sigmoid,
+                        v_ch_coeff_local, v_ch_coeff_abs_local,
+                        v_uv_ch
+                    );
+                    #endif
+                    color_1 = color_0 * ch_color_sigmoid;
+                    v_color_local = v_color_1 * ch_color_sigmoid;
                 }
                 else {
                     color_1 = color_0;
@@ -392,8 +404,8 @@ __global__ void rasterize_backward_kernel(
             warpSum3(v_axis_u_local, warp);
             warpSum3(v_axis_v_local, warp);
             warpSum3(v_color_local, warp);
-            for (int i = 0; i < 3*dim_ch; i++)
-                warpSum(v_ch_coeff_local[i], warp);
+            for (int i = 0; i < dim_ch; i++)
+                warpSum3(v_ch_coeff_local[i], warp);
             warpSum(v_ch_coeff_abs_local, warp);
             warpSum(v_opacity_local, warp);
             warpSum2(v_anisotropy_local, warp);
@@ -422,8 +434,12 @@ __global__ void rasterize_backward_kernel(
                 atomicAdd(v_color_ptr + 3*g + 0, v_color_local.x);
                 atomicAdd(v_color_ptr + 3*g + 1, v_color_local.y);
                 atomicAdd(v_color_ptr + 3*g + 2, v_color_local.z);
-                for (int i = 0; i < 3*dim_ch; i++)
-                    atomicAdd(v_ch_coeffs + 3*dim_ch*g + i, v_ch_coeff_local[i]);
+                float* v_ch_coeffs_ptr = (float*)(v_ch_coeffs);
+                for (int i = 0; i < dim_ch; i++) {
+                    atomicAdd(v_ch_coeffs_ptr + 3*dim_ch*g + 3*i + 0, v_ch_coeff_local[i].x);
+                    atomicAdd(v_ch_coeffs_ptr + 3*dim_ch*g + 3*i + 1, v_ch_coeff_local[i].y);
+                    atomicAdd(v_ch_coeffs_ptr + 3*dim_ch*g + 3*i + 2, v_ch_coeff_local[i].z);
+                }
                 atomicAdd(v_ch_coeffs_abs + g, v_ch_coeff_abs_local);
 
                 atomicAdd(v_opacities + g, v_opacity_local);

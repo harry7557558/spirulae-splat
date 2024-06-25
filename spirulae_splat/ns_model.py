@@ -177,7 +177,7 @@ class SpirulaeModelConfig(ModelConfig):
     """maximum opacity of a gaussian, prevent numerical instability during backward"""
     trainable_background_color: bool = True
     """make background color trainable"""
-    enable_background_model: bool = True
+    enable_background_model: bool = False
     """enable background model"""
     use_scale_regularization: bool = True
     """If enabled, a scale regularization introduced in PhysGauss (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians."""

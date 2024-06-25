@@ -9,7 +9,7 @@
 #define MAX_REGISTER_CHANNELS 3
 
 // max number of cylindrical harmonics coefficients
-#define MAX_CH_FLOATS (3*21)
+#define MAX_CH_FLOAT3 (21)
 
 // depth regularization
 // 01: pairwise L1 with center depth

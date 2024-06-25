@@ -435,7 +435,7 @@ __global__ void rasterize_forward(
     const float3* __restrict__ colors,
     const unsigned ch_degree_r,
     const unsigned ch_degree_phi,
-    const float* __restrict__ ch_coeffs,
+    const float3* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
     const float2* __restrict__ anisotropies,
     const float3& __restrict__ background,
@@ -562,11 +562,10 @@ __global__ void rasterize_forward(
             glm::vec3 color;
             if (dim_ch > 0) {
                 int32_t g_id = id_batch[t];
-                const float* coeffs = &ch_coeffs[3*dim_ch*g_id];
-                glm::vec3 ch_color;
-                ch_coeffs_to_color(
+                const glm::vec3* coeffs = (glm::vec3*)&ch_coeffs[dim_ch*g_id];
+                glm::vec3 ch_color = ch_coeffs_to_color(
                     ch_degree_r, ch_degree_phi,
-                    coeffs, {uv.x, uv.y}, &ch_color.x
+                    coeffs, {uv.x, uv.y}
                 );
                 color = color_0 / (1.0f+glm::exp(-ch_color));
             }

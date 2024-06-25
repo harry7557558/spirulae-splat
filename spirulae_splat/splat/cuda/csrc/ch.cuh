@@ -1,7 +1,8 @@
 #include <cuda_runtime.h>
 #include <cooperative_groups.h>
 #include "config.h"
-#define CHANNELS 3
+#include "glm/glm/glm.hpp"
+
 namespace cg = cooperative_groups;
 
 
@@ -148,12 +149,11 @@ inline __device__ float bessel_j(
 }
 
 
-inline __device__ void ch_coeffs_to_color(
+inline __device__ glm::vec3 ch_coeffs_to_color(
     const unsigned degree_r,
     const unsigned degree_phi,
-    const float *coeffs,
-    const float2 &uv,
-    float *colors
+    const glm::vec3 *coeffs,
+    const glm::vec2 &uv
 ) {
     const float r = hypot(uv.x, uv.y);
     const float phi = atan2(uv.y, uv.x);
@@ -162,44 +162,39 @@ inline __device__ void ch_coeffs_to_color(
     assert(degree_phi <= 4);
 
     int idx = 0;
-    for (int c = 0; c < CHANNELS; c++) {
-        colors[c] = 0.0f;
-    }
+    glm::vec3 color(0.0f);
 
     for (unsigned k = 1; k <= degree_r; k++) {
         // m == 0
         float w = bessel_j(0, k*pi*r);
-        for (int c = 0; c < CHANNELS; c++) {
-            colors[c] += w * coeffs[idx*CHANNELS+c];
-        }
+        color += w * coeffs[idx];
         idx += 1;
         // m > 0
         for (unsigned m = 1; m <= degree_phi; m++) {
             float wr = bessel_j(m, k*pi*r);
             float wc = wr * cosf(m*phi);
             float ws = wr * sinf(m*phi);
-            for (int c = 0; c < CHANNELS; c++) {
-                colors[c] += wc * coeffs[idx*CHANNELS+c];
-            }
+            color += wc * coeffs[idx];
             idx += 1;
-            for (int c = 0; c < CHANNELS; c++) {
-                colors[c] += ws * coeffs[idx*CHANNELS+c];
-            }
+            color += ws * coeffs[idx];
             idx += 1;
         }
     }
+
+    return color;
 }
 
 
 inline __device__ void ch_coeffs_to_color_vjp(
     const unsigned degree_r,
     const unsigned degree_phi,
-    const float *coeffs,
-    const float2 &uv,
-    const float* v_colors,
-    float *colors,
-    float *v_coeffs,
-    float2 &v_uv
+    const glm::vec3 *coeffs,
+    const glm::vec2 &uv,
+    const glm::vec3 v_color,
+    glm::vec3 &color,
+    glm::vec3 *v_coeffs,
+    float &v_ch_coeff_abs,
+    glm::vec2 &v_uv
 ) {
     const float r = hypot(uv.x, uv.y);
     const float phi = atan2(uv.y, uv.x);
@@ -211,25 +206,25 @@ inline __device__ void ch_coeffs_to_color_vjp(
     assert(degree_phi <= 4);
 
     int idx = 0;
-    for (int c = 0; c < CHANNELS; c++) {
-        colors[c] = 0.0f;
-    }
+    color = glm::vec3(0.0f);
+    v_ch_coeff_abs = 0.0f;
 
     // derivative of J:
     // J'(0,x) = -J(1,x)
     // J'(n,x) = J(n-1,x) - n/x J(n,x)
     // J'(n,x) = 1/2 J(n-1,x) - 1/2 J(n+1,x)
 
-
     for (unsigned k = 1; k <= degree_r; k++) {
         // m == 0
         float w = bessel_j(0, k*pi*r);
         float v_w = 0.f;
-        for (int c = 0; c < CHANNELS; c++) {
-            float coef = coeffs[idx*CHANNELS+c];
-            colors[c] += w * coef;
-            v_w += coef * v_colors[c];
-            v_coeffs[idx*CHANNELS+c] += w * v_colors[c];
+        {
+            glm::vec3 coef = coeffs[idx];
+            color += w * coef;
+            v_w += glm::dot(coef, v_color);
+            glm::vec3 v_coeff = w * v_color;
+            v_coeffs[idx] = v_coeff;
+            v_ch_coeff_abs += abs(v_coeff.x)+abs(v_coeff.y)+abs(v_coeff.z);
         }
         idx += 1;
         float w1 = bessel_j(1, k*pi*r);
@@ -243,18 +238,22 @@ inline __device__ void ch_coeffs_to_color_vjp(
             float wc = wr * cos_m_phi;
             float ws = wr * sin_m_phi;
             float v_wc = 0.f, v_ws = 0.f;
-            for (int c = 0; c < CHANNELS; c++) {
-                float coef = coeffs[idx*CHANNELS+c];
-                colors[c] += wc * coef;
-                v_wc += coef * v_colors[c];
-                v_coeffs[idx*CHANNELS+c] += wc * v_colors[c];
+            {
+                glm::vec3 coef = coeffs[idx];
+                color += wc * coef;
+                v_wc += glm::dot(coef, v_color);
+                glm::vec3 v_coeff = wc * v_color;
+                v_coeffs[idx] = v_coeff;
+                v_ch_coeff_abs += abs(v_coeff.x)+abs(v_coeff.y)+abs(v_coeff.z);
             }
             idx += 1;
-            for (int c = 0; c < CHANNELS; c++) {
-                float coef = coeffs[idx*CHANNELS+c];
-                colors[c] += ws * coef;
-                v_ws += coef * v_colors[c];
-                v_coeffs[idx*CHANNELS+c] += ws * v_colors[c];
+            {
+                glm::vec3 coef = coeffs[idx];
+                color += ws * coef;
+                v_ws += glm::dot(coef, v_color);
+                glm::vec3 v_coeff = ws * v_color;
+                v_coeffs[idx] = v_coeff;
+                v_ch_coeff_abs += abs(v_coeff.x)+abs(v_coeff.y)+abs(v_coeff.z);
             }
             idx += 1;
             float v_wr = v_wc * cos_m_phi + v_ws * sin_m_phi;
@@ -268,5 +267,96 @@ inline __device__ void ch_coeffs_to_color_vjp(
     v_uv.x = v_r * cosf(phi) - v_phi * inv_r * sinf(phi);
     v_uv.y = v_r * sinf(phi) + v_phi * inv_r * cosf(phi);
 
+    v_ch_coeff_abs /= (float)(3*idx);
 }
 
+
+// Optimized for backward of sigmoid of CH color
+inline __device__ void ch_coeffs_to_color_sigmoid_vjp(
+    const unsigned degree_r,
+    const unsigned degree_phi,
+    const glm::vec3 *coeffs,
+    const glm::vec2 &uv,
+    const glm::vec3 &v_color_sigmoid,
+    glm::vec3 &color_sigmoid,
+    glm::vec3 *v_coeffs,
+    float &v_ch_coeff_abs,
+    glm::vec2 &v_uv
+) {
+    const float r = hypot(uv.x, uv.y);
+    const float phi = atan2(uv.y, uv.x);
+    const float pi = 3.14159265358979;
+
+    const float inv_r = 1.0f / fmax(r, 1e-6f);
+    glm::vec3 v_r_vec(0.f), v_phi_vec(0.f);
+
+    assert(degree_phi <= 4);
+
+    int idx = 0;
+    glm::vec3 color = glm::vec3(0.0f);
+
+    // derivative of J:
+    // J'(0,x) = -J(1,x)
+    // J'(n,x) = J(n-1,x) - n/x J(n,x)
+    // J'(n,x) = 1/2 J(n-1,x) - 1/2 J(n+1,x)
+
+    for (unsigned k = 1; k <= degree_r; k++) {
+        // m == 0
+        float w = bessel_j(0, k*pi*r);
+        glm::vec3 v_w(0.f);
+        {
+            glm::vec3 coef = coeffs[idx];
+            color += w * coef;
+            v_w += coef;
+            v_coeffs[idx].x = w;
+        }
+        idx += 1;
+        float w1 = bessel_j(1, k*pi*r);
+        v_r_vec += k*pi * (-w1) * v_w;
+        // m > 0
+        float prev_wr = w;
+        for (unsigned m = 1; m <= degree_phi; m++) {
+            float wr = m == 1 ? w1 : bessel_j(m, k*pi*r);
+            float cos_m_phi = cosf(m*phi);
+            float sin_m_phi = sinf(m*phi);
+            float wc = wr * cos_m_phi;
+            float ws = wr * sin_m_phi;
+            glm::vec3 v_wc(0.f), v_ws(0.f);
+            {
+                glm::vec3 coef = coeffs[idx];
+                color += wc * coef;
+                v_wc += coef;
+                v_coeffs[idx].x = wc;
+            }
+            idx += 1;
+            {
+                glm::vec3 coef = coeffs[idx];
+                color += ws * coef;
+                v_ws += coef;
+                v_coeffs[idx].x = ws;
+            }
+            idx += 1;
+            glm::vec3 v_wr = v_wc * cos_m_phi + v_ws * sin_m_phi;
+            v_r_vec += k*pi * (prev_wr - m/(k*pi)*wr*inv_r) * v_wr;
+            v_phi_vec += v_wc * wr * float(m) * (-sin_m_phi);
+            v_phi_vec += v_ws * wr * float(m) * cos_m_phi;
+            prev_wr = wr;
+        }
+    }
+
+    color_sigmoid = 1.0f / (1.0f + glm::exp(-color));
+    glm::vec3 v_color = color_sigmoid * (1.0f-color_sigmoid) * v_color_sigmoid;
+
+    v_ch_coeff_abs = 0.0f;
+    for (int i = 0; i < idx; i++) {
+        glm::vec3 v_coeff = v_coeffs[i].x * v_color;
+        v_coeffs[i] = v_coeff;
+        v_ch_coeff_abs += abs(v_coeff.x) + abs(v_coeff.y) + abs(v_coeff.z);
+    }
+    v_ch_coeff_abs /= (float)(3*idx);
+
+    float v_r = glm::dot(v_r_vec, v_color);
+    float v_phi = glm::dot(v_phi_vec, v_color);
+    v_uv.x = v_r * cosf(phi) - v_phi * inv_r * sinf(phi);
+    v_uv.y = v_r * sinf(phi) + v_phi * inv_r * cosf(phi);
+}
