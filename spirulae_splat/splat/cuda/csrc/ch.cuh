@@ -351,9 +351,17 @@ inline __device__ void ch_coeffs_to_color_sigmoid_vjp(
     for (int i = 0; i < idx; i++) {
         glm::vec3 v_coeff = v_coeffs[i].x * v_color;
         v_coeffs[i] = v_coeff;
+        #if CH_ABSGRAD_REDUCE == 0
         v_ch_coeff_abs += abs(v_coeff.x) + abs(v_coeff.y) + abs(v_coeff.z);
+        #elif CH_ABSGRAD_REDUCE == 1
+        v_ch_coeff_abs = max(v_ch_coeff_abs, abs(v_coeff.x));
+        v_ch_coeff_abs = max(v_ch_coeff_abs, abs(v_coeff.y));
+        v_ch_coeff_abs = max(v_ch_coeff_abs, abs(v_coeff.z));
+        #endif
     }
+    #if CH_ABSGRAD_REDUCE == 0
     v_ch_coeff_abs /= (float)(3*idx);
+    #endif
 
     float v_r = glm::dot(v_r_vec, v_color);
     float v_phi = glm::dot(v_phi_vec, v_color);

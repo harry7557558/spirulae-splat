@@ -713,9 +713,10 @@ def rasterize_gaussians_depth(
 
                 next_depth = poi[2]
 
-                if next_T < 0.5:
+                median_th = 0.5
+                if next_T < median_th:
                     if T < 0.99999:
-                        interp = (1.0-alpha)/alpha * (2.0*T-1.0)
+                        interp = (1.0-alpha)/alpha * (T-median_th)/median_th
                         median_depth = median_depth + (next_depth-median_depth)*interp
                     else:
                         median_depth = next_depth

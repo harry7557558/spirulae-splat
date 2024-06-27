@@ -843,8 +843,9 @@ __global__ void rasterize_depth_backward_kernel(
                 if (T == T_final && interp < 1.0f && interp > 0.0f) {
                     float depth_0 = (depth_final-depth*interp) / (1.0f-interp);
                     v_interp = (depth-depth_0) * v_depth_final;
-                    v_alpha = (2.0f*next_T-1.0f) * v_interp / safe_denom(-alpha*alpha, 1e-3);
-                    v_T = (1.0f-alpha)/alpha * v_interp * 2.0f;
+                    v_alpha = (next_T-DEPTH_REG_MEDIAN_TH)/DEPTH_REG_MEDIAN_TH * \
+                         v_interp / safe_denom(-alpha*alpha, 1e-3);
+                    v_T = (1.0f-alpha)/alpha * v_interp / DEPTH_REG_MEDIAN_TH;
                 }
                 else {
                     v_alpha = v_T * (-next_T);

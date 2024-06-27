@@ -395,10 +395,10 @@ __global__ void rasterize_depth_forward(
             const float next_T = T * (1.f - alpha);
             // const float next_depth = pos.z;
             const float next_depth = poi.z;
-            if (next_T < 0.5f) {
+            if (next_T < DEPTH_REG_MEDIAN_TH) {
                 if (T < 0.99999f) {
-                    // https://www.desmos.com/3d/4kuwygxuio
-                    interp = (1.0f-alpha)/alpha * (2.0f*T-1.0f);
+                    // https://www.desmos.com/3d/fttajoozww
+                    interp = (1.0f-alpha)/alpha * (T-DEPTH_REG_MEDIAN_TH)/DEPTH_REG_MEDIAN_TH;
                     interp = glm::clamp(interp, 0.0f, 1.0f);
                     median_depth = median_depth + (next_depth-median_depth)*interp;
                 }

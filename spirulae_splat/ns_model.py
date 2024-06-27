@@ -129,21 +129,21 @@ class SpirulaeModelConfig(ModelConfig):
     """Whether to randomize the background color."""
     num_downscales: int = 2
     """at the beginning, resolution is 1/2^d, where d is this number"""
-    cull_alpha_thresh: float = 0.1
+    cull_alpha_thresh: float = 0.05
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
     cull_scale_thresh: float = 0.5
     """threshold of scale for culling huge gaussians"""
     cull_anisotropy_thresh: float = 10.0
     """threshold of quotient of scale for culling long thin gaussians"""
-    cull_grad_thresh: float = 0.0004  # 0.0004|0.0002 w/o ch, default 0.0001
+    cull_grad_thresh: float = 0.0001  # 0.0004|0.0002 w/o ch, default 0.0
     """threshold for culling gaussians with low visibility"""
     continue_cull_post_densification: bool = True
     """If True, continue to cull gaussians post refinement"""
     reset_alpha_every: int = 30
     """Every this many refinement steps, reset the alpha"""
-    densify_xy_grad_thresh: float = 0.0015  # 0.002|0.001 w/o ch, default 0.0008
+    densify_xy_grad_thresh: float = 0.0006  # 0.002|0.001 w/o ch, default 0.0006
     """threshold of positional gradient norm for densifying gaussians"""
-    densify_ch_grad_thresh: float = 3e-6  # 3e-6, default 1e-6
+    densify_ch_grad_thresh: float = 1e-6  # 3e-6, default 1e-6
     """threshold of cylindrical harmonics gradient norm for densifying gaussians"""
     densify_size_thresh: float = 0.01
     """below this size, gaussians are *duplicated*, otherwise split"""
@@ -187,8 +187,12 @@ class SpirulaeModelConfig(ModelConfig):
     """
     depth_regularizer_weight: float = 0.02
     """Weight for depth regularizer"""
+    depth_regularizer_warmup: int = 6000
+    """warmup steps for depth regularizer"""
     normal_regularizer_weight: float = 0.02
     """Weight for normal regularizer"""
+    normal_regularizer_warmup: int = 6000
+    """warmup steps for normal regularizer"""
     regularizer_warmup_length: int = 2000
     """Warmup for regularizers. If the initialization is random, only apply regularizers after this many steps."""
     output_depth_during_training: bool = False
@@ -1128,8 +1132,10 @@ class SpirulaeModel(Model):
         alpha = outputs['alpha']
         reg_depth = outputs["reg_depth"]
         reg_normal = outputs["reg_normal"]
-        weight_depth_reg = self.config.depth_regularizer_weight
-        weight_normal_reg = self.config.normal_regularizer_weight
+        weight_depth_reg = self.config.depth_regularizer_weight * \
+            min(self.step / max(self.config.depth_regularizer_warmup, 1), 1)
+        weight_normal_reg = self.config.normal_regularizer_weight * \
+            min(self.step / max(self.config.normal_regularizer_warmup, 1), 1)
         if self.step < self.config.regularizer_warmup_length and self.random_init:
             weight_depth_reg, weight_normal_reg = 0.0, 0.0
         depth_reg = weight_depth_reg * reg_depth.sum() / alpha.sum()
@@ -1140,8 +1146,9 @@ class SpirulaeModel(Model):
         depth_grad_2 = outputs['depth_grad_2']
         dot = (depth_grad_1 * depth_grad_2).sum(dim=2,keepdim=True)
         normal_reg_s = 1.0-dot
-        # normal_reg_s = torch.sqrt(torch.fmax(1.0-dot,torch.zeros_like(dot)))
-        normal_reg = normal_reg + weight_normal_reg * (normal_reg_s*alpha).sum() / alpha.sum()
+        normal_reg_s = torch.sqrt(torch.fmax(1.0-dot,torch.zeros_like(dot)))
+        # normal_reg = normal_reg + weight_normal_reg * (normal_reg_s*alpha).sum() / alpha.sum()
+        normal_reg = weight_normal_reg * (normal_reg_s*alpha).sum() / alpha.sum()
 
         # regularizations for parameters
         quat_norm_reg = 0.1 * (torch.log(self.quats.norm(dim=-1)+0.001)**2).mean()

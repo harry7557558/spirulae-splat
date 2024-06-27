@@ -18,6 +18,13 @@
 // 12: L2 intersected to reference
 #define DEPTH_REG_L 11
 
+// threshold for median in depth regularizer
+// a number less than 0.5 pushes splats away from camera
+#define DEPTH_REG_MEDIAN_TH 0.5f
+
+// CH abs grad, 0 for mean, 1 for max
+#define CH_ABSGRAD_REDUCE 1
+
 //--------------
 #define CUDA_CALL(x)                                                           \
     do {                                                                       \

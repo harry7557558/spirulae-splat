@@ -8,7 +8,7 @@ from spirulae_splat.splat.project_gaussians import project_gaussians
 import spirulae_splat.splat.rasterize_depth as rasterize_depth
 import spirulae_splat.splat.cuda as _C
 
-torch.manual_seed(40)
+torch.manual_seed(42)
 
 device = torch.device("cuda:0")
 
