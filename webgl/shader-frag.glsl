@@ -4,7 +4,7 @@ precision highp float;
 uniform vec2 focal;
 uniform vec2 viewport;
 
-uniform int u_use_ch;
+uniform ivec3 u_ch_config;
 
 flat in vec4 vColor;
 flat in vec3 vPosition;
@@ -205,9 +205,10 @@ bool get_alpha(
 }
 
 
-const int ch_degree_r = 3;
-const int ch_degree_phi = 3;
-const int ch_dim = ch_degree_r*(2*ch_degree_phi+1);
+#define use_ch bool(u_ch_config.x)
+#define ch_degree_r u_ch_config.y
+#define ch_degree_phi u_ch_config.z
+#define ch_dim (ch_degree_r*(2*ch_degree_phi+1))
 
 ivec3 pix_ch;
 uvec4 coeff_ch;
@@ -236,11 +237,11 @@ vec3 next_coeff() {
 }
 
 vec3 ch_coeffs_to_color(vec2 uv) {
-    if (u_use_ch == 0)
+    if (!use_ch)
         return vec3(0);
 
-    const float degree_r = float(ch_degree_r);
-    const float degree_phi = float(ch_degree_phi);
+    float degree_r = float(ch_degree_r);
+    float degree_phi = float(ch_degree_phi);
 
     float r = length(uv);
     float phi = atan(uv.y, uv.x);
@@ -288,7 +289,9 @@ void main () {
     if (!get_alpha(uv, vColor.a, vAnisotropy, alpha))
         discard;
     vec3 color = vColor.rgb;
-    init_coeffs();
-    color /= 1.0 + exp(-ch_coeffs_to_color(uv));
+    if (ch_dim > 0) {
+        init_coeffs();
+        color /= 1.0 + exp(-ch_coeffs_to_color(uv));
+    }
     fragColor = vec4(color, alpha);
 }

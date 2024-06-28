@@ -6,7 +6,6 @@ from .utils import (
     map_gaussian_to_intersects,
     bin_and_sort_gaussians,
     compute_cumulative_intersects,
-    compute_cov2d_bounds,
     get_tile_bin_edges,
 )
 from .sh import spherical_harmonics
@@ -22,7 +21,6 @@ __all__ = [
     # utils
     "bin_and_sort_gaussians",
     "compute_cumulative_intersects",
-    "compute_cov2d_bounds",
     "get_tile_bin_edges",
     "map_gaussian_to_intersects",
     # Function.apply() will be deprecated
@@ -62,20 +60,6 @@ class ComputeCumulativeIntersects(torch.autograd.Function):
             DeprecationWarning,
         )
         return compute_cumulative_intersects(*args, **kwargs)
-
-    @staticmethod
-    def backward(ctx: Any, *grad_outputs: Any) -> Any:
-        raise NotImplementedError
-
-
-class ComputeCov2dBounds(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, *args, **kwargs):
-        warnings.warn(
-            "ComputeCov2dBounds is deprecated, use compute_cov2d_bounds instead",
-            DeprecationWarning,
-        )
-        return compute_cov2d_bounds(*args, **kwargs)
 
     @staticmethod
     def backward(ctx: Any, *grad_outputs: Any) -> Any:

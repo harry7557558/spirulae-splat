@@ -20,19 +20,13 @@
 
 
 
-std::tuple<
-    torch::Tensor, // output conics
-    torch::Tensor  // output radii
-> compute_cov2d_bounds_tensor(const int num_pts, torch::Tensor &covs2d);
-
-
 torch::Tensor compute_sh_forward_tensor(
     const std::string &method,
     const unsigned num_points,
     const unsigned degree,
     const unsigned degrees_to_use,
-    torch::Tensor &viewdirs,
-    torch::Tensor &coeffs
+    torch::Tensor &viewdirs,  // [..., 3]
+    torch::Tensor &coeffs   // [..., K, 3]
 );
 
 
@@ -41,24 +35,24 @@ torch::Tensor compute_sh_backward_tensor(
     const unsigned num_points,
     const unsigned degree,
     const unsigned degrees_to_use,
-    torch::Tensor &viewdirs,
-    torch::Tensor &v_colors
+    torch::Tensor &viewdirs,  // [..., 3]
+    torch::Tensor &v_colors  // [..., 3]
 );
 
 
 std::tuple<
-    torch::Tensor,  // bounds
-    torch::Tensor,  // num_tiles_hit
-    torch::Tensor,  // positions
-    torch::Tensor,  // axes_u
-    torch::Tensor,  // axes_v
-    torch::Tensor  // depth_grads
+    torch::Tensor,  // bounds, [N, 4], int
+    torch::Tensor,  // num_tiles_hit, [N]
+    torch::Tensor,  // positions, [N, 3]
+    torch::Tensor,  // axes_u, [N, 3]
+    torch::Tensor,  // axes_v, [N, 4]
+    torch::Tensor  // depth_gradsm, [N, 2]
 > project_gaussians_forward_tensor(
     const int num_points,
-    torch::Tensor &means3d,
-    torch::Tensor &scales,
-    torch::Tensor &quats,
-    torch::Tensor &viewmat,
+    torch::Tensor &means3d,  // [N, 3]
+    torch::Tensor &scales,  // [N, 2]
+    torch::Tensor &quats,  // [N, 4]
+    torch::Tensor &viewmat,  // [3|4, 4]
     const float fx,
     const float fy,
     const float cx,
@@ -74,22 +68,22 @@ std::tuple<
     torch::Tensor,  // v_means3d
     torch::Tensor,  // v_scales
     torch::Tensor,  // v_quats
-    torch::Tensor  // v_viewmat
+    torch::Tensor  // v_viewmat, [4, 4]
 > project_gaussians_backward_tensor(
     const int num_points,
-    torch::Tensor &means3d,
-    torch::Tensor &scales,
-    torch::Tensor &quats,
-    torch::Tensor &viewmat,
+    torch::Tensor &means3d,  // [N, 3]
+    torch::Tensor &scales,  // [N, 2]
+    torch::Tensor &quats,  // [N, 4]
+    torch::Tensor &viewmat,  // [3|4, 4]
     const float fx,
     const float fy,
     const float cx,
     const float cy,
-    torch::Tensor &num_tiles_hit,
-    torch::Tensor &v_positions,
-    torch::Tensor &v_axes_u,
-    torch::Tensor &v_axes_v,
-    torch::Tensor &v_depth_grads
+    torch::Tensor &num_tiles_hit,  // [N], int
+    torch::Tensor &v_positions,  // [N, 3]
+    torch::Tensor &v_axes_u,  // [N, 3]
+    torch::Tensor &v_axes_v,  // [N, 3]
+    torch::Tensor &v_depth_grads  // [N, 2]
 );
 
 
@@ -138,60 +132,6 @@ std::tuple<
 
 
 std::tuple<
-    torch::Tensor,  // final_index
-    torch::Tensor,  // out_img
-    torch::Tensor  // out_visibility
-> rasterize_depth_forward_tensor(
-    const std::tuple<int, int, int> tile_bounds,
-    const std::tuple<int, int, int> block,
-    const std::tuple<int, int, int> img_size,
-    const float fx,
-    const float fy,
-    const float cx,
-    const float cy,
-    const torch::Tensor &gaussian_ids_sorted,
-    const torch::Tensor &tile_bins,
-    const torch::Tensor &positions,
-    const torch::Tensor &axes_u,
-    const torch::Tensor &axes_v,
-    const torch::Tensor &opacities,
-    const torch::Tensor &anisotropies
-);
-
-
-std::tuple<
-    torch::Tensor, // final_idx
-    torch::Tensor,  // out_alpha
-    torch::Tensor,  // out_img
-    torch::Tensor,  // out_depth
-    torch::Tensor,  // out_reg_depth
-    torch::Tensor  // out_reg_normal
-> rasterize_forward_tensor(
-    const std::tuple<int, int, int> tile_bounds,
-    const std::tuple<int, int, int> block,
-    const std::tuple<int, int, int> img_size,
-    const float fx,
-    const float fy,
-    const float cx,
-    const float cy,
-    const torch::Tensor &gaussian_ids_sorted,
-    const torch::Tensor &tile_bins,
-    const torch::Tensor &positions,
-    const torch::Tensor &axes_u,
-    const torch::Tensor &axes_v,
-    const torch::Tensor &colors,
-    const int ch_degree_r,
-    const int ch_degree_phi,
-    const torch::Tensor &ch_coeffs,
-    const torch::Tensor &opacities,
-    const torch::Tensor &anisotropies,
-    const torch::Tensor &background,
-    const torch::Tensor &depth_grads,
-    const torch::Tensor &depth_ref_im
-);
-
-
-std::tuple<
     torch::Tensor, // v_positions
     torch::Tensor, // v_positions_xy_abs
     torch::Tensor, // v_axes_u
@@ -220,6 +160,28 @@ std::tuple<
     const torch::Tensor &output_alpha,
     const torch::Tensor &v_output,
     const torch::Tensor &v_output_alpha
+);
+
+
+std::tuple<
+    torch::Tensor,  // final_index
+    torch::Tensor,  // out_img
+    torch::Tensor  // out_visibility
+> rasterize_depth_forward_tensor(
+    const std::tuple<int, int, int> tile_bounds,
+    const std::tuple<int, int, int> block,
+    const std::tuple<int, int, int> img_size,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const torch::Tensor &gaussian_ids_sorted,
+    const torch::Tensor &tile_bins,
+    const torch::Tensor &positions,
+    const torch::Tensor &axes_u,
+    const torch::Tensor &axes_v,
+    const torch::Tensor &opacities,
+    const torch::Tensor &anisotropies
 );
 
 
@@ -253,6 +215,40 @@ std::tuple<
 
 
 std::tuple<
+    torch::Tensor, // final_idx
+    torch::Tensor,  // out_alpha
+    torch::Tensor,  // out_img
+    torch::Tensor,  // out_depth
+    torch::Tensor,  // out_reg_depth
+    torch::Tensor  // out_reg_normal
+> rasterize_forward_tensor(
+    const std::tuple<int, int, int> tile_bounds,
+    const std::tuple<int, int, int> block,
+    const std::tuple<int, int, int> img_size,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const torch::Tensor &gaussian_ids_sorted,
+    const torch::Tensor &tile_bins,
+    const torch::Tensor &positions,
+    const torch::Tensor &axes_u,
+    const torch::Tensor &axes_v,
+    const torch::Tensor &colors,
+    const unsigned ch_degree_r,
+    const unsigned ch_degree_r_to_use,
+    const unsigned ch_degree_phi,
+    const unsigned ch_degree_phi_to_use,
+    const torch::Tensor &ch_coeffs,
+    const torch::Tensor &opacities,
+    const torch::Tensor &anisotropies,
+    const torch::Tensor &background,
+    const torch::Tensor &depth_grads,
+    const torch::Tensor &depth_ref_im
+);
+
+
+std::tuple<
     torch::Tensor, // v_positions
     torch::Tensor, // v_positions_xy_abs
     torch::Tensor, // v_axes_u
@@ -273,7 +269,9 @@ std::tuple<
     const float cx,
     const float cy,
     const unsigned ch_degree_r,
+    const unsigned ch_degree_r_to_use,
     const unsigned ch_degree_phi,
+    const unsigned ch_degree_phi_to_use,
     const torch::Tensor &gaussians_ids_sorted,
     const torch::Tensor &tile_bins,
     const torch::Tensor &positions,

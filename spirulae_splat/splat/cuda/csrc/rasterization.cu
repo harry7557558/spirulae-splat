@@ -770,7 +770,9 @@ __global__ void rasterize_forward_kernel(
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const unsigned ch_degree_r,
+    const unsigned ch_degree_r_to_use,
     const unsigned ch_degree_phi,
+    const unsigned ch_degree_phi_to_use,
     const float3* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
     const float2* __restrict__ anisotropies,
@@ -900,7 +902,8 @@ __global__ void rasterize_forward_kernel(
                 int32_t g_id = id_batch[t];
                 const glm::vec3* coeffs = (glm::vec3*)&ch_coeffs[dim_ch*g_id];
                 glm::vec3 ch_color = ch_coeffs_to_color(
-                    ch_degree_r, ch_degree_phi,
+                    ch_degree_r, ch_degree_r_to_use,
+                    ch_degree_phi, ch_degree_phi_to_use,
                     coeffs, {uv.x, uv.y}
                 );
                 color = color_0 / (1.0f+glm::exp(-ch_color));
@@ -965,7 +968,9 @@ __global__ void rasterize_backward_kernel(
     const dim3 img_size,
     const float4 intrins,
     const unsigned ch_degree_r,
+    const unsigned ch_degree_r_to_use,
     const unsigned ch_degree_phi,
+    const unsigned ch_degree_phi_to_use,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float3* __restrict__ positions,
@@ -1228,13 +1233,15 @@ __global__ void rasterize_backward_kernel(
                     #if 0
                     int32_t g_id = id_batch[t];
                     glm::vec3 ch_color = ch_coeffs_to_color(
-                        ch_degree_r, ch_degree_phi,
+                        ch_degree_r, ch_degree_r_to_use,
+                        ch_degree_phi, ch_degree_phi_to_use,
                         (glm::vec3*)&ch_coeffs[dim_ch*g_id], {uv.x, uv.y}
                     );
                     glm::vec3 ch_color_sigmoid = 1.0f / (1.0f+glm::exp(-ch_color));
                     glm::vec3 v_ch_color = v_ch_color_sigmoid * ch_color_sigmoid*(1.0f-ch_color_sigmoid);
                     ch_coeffs_to_color_vjp(
-                        ch_degree_r, ch_degree_phi,
+                        ch_degree_r, ch_degree_r_to_use,
+                        ch_degree_phi, ch_degree_phi_to_use,
                         (glm::vec3*)&ch_coeffs[dim_ch*g_id],
                         {uv.x, uv.y},
                         v_ch_color,
@@ -1247,7 +1254,8 @@ __global__ void rasterize_backward_kernel(
                     int32_t g_id = id_batch[t];
                     glm::vec3 ch_color_sigmoid;
                     ch_coeffs_to_color_sigmoid_vjp(
-                        ch_degree_r, ch_degree_phi,
+                        ch_degree_r, ch_degree_r_to_use,
+                        ch_degree_phi, ch_degree_phi_to_use,
                         (glm::vec3*)&ch_coeffs[dim_ch*g_id],
                         {uv.x, uv.y},
                         v_ch_color_sigmoid,

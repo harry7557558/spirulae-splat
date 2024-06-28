@@ -10,7 +10,6 @@
 
 
 
-
 // kernel function for projecting each gaussian on device
 // each thread processes one gaussian
 __global__ void project_gaussians_forward_kernel(

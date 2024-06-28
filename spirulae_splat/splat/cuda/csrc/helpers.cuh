@@ -227,31 +227,6 @@ inline __device__ void get_tile_bbox(
     get_bbox(tile_center, tile_radius, tile_bounds, tile_min, tile_max);
 }
 
-inline __device__ bool
-compute_cov2d_bounds(const float3 cov2d, float3 &conic, float &radius) {
-    // find eigenvalues of 2d covariance matrix
-    // expects upper triangular values of cov matrix as float3
-    // then compute the radius and conic dimensions
-    // the conic is the inverse cov2d matrix, represented here with upper
-    // triangular values.
-    float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
-    if (det == 0.f)
-        return false;
-    float inv_det = 1.f / det;
-
-    // inverse of 2x2 cov2d matrix
-    conic.x = cov2d.z * inv_det;
-    conic.y = -cov2d.y * inv_det;
-    conic.z = cov2d.x * inv_det;
-
-    float b = 0.5f * (cov2d.x + cov2d.z);
-    float v1 = b + sqrt(max(0.1f, b * b - det));
-    float v2 = b - sqrt(max(0.1f, b * b - det));
-
-    radius = ceil(visibility_kernel_radius() * sqrt(max(v1, v2)));
-    return true;
-}
-
 // compute vjp from df/d_conic to df/c_cov2d
 inline __device__ void cov2d_to_conic_vjp(
     const float3 &conic, const float3 &v_conic, float3 &v_cov2d

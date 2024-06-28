@@ -151,10 +151,15 @@ inline __device__ float bessel_j(
 
 inline __device__ glm::vec3 ch_coeffs_to_color(
     const unsigned degree_r,
+    const unsigned degree_r_to_use,
     const unsigned degree_phi,
+    const unsigned degree_phi_to_use,
     const glm::vec3 *coeffs,
     const glm::vec2 &uv
 ) {
+    assert(degree_r >= 0 && degree_r_to_use <= degree_r);
+    assert(degree_phi >= 0 && degree_phi_to_use <= degree_phi);
+
     const float r = hypot(uv.x, uv.y);
     const float phi = atan2(uv.y, uv.x);
     const float pi = 3.14159265358979;
@@ -165,12 +170,20 @@ inline __device__ glm::vec3 ch_coeffs_to_color(
     glm::vec3 color(0.0f);
 
     for (unsigned k = 1; k <= degree_r; k++) {
+        if (k > degree_r_to_use) {
+            idx += 2*degree_phi+1;
+            continue;
+        }
         // m == 0
         float w = bessel_j(0, k*pi*r);
         color += w * coeffs[idx];
         idx += 1;
         // m > 0
         for (unsigned m = 1; m <= degree_phi; m++) {
+            if (m > degree_phi_to_use) {
+                idx += 2;
+                continue;
+            }
             float wr = bessel_j(m, k*pi*r);
             float wc = wr * cosf(m*phi);
             float ws = wr * sinf(m*phi);
@@ -187,7 +200,9 @@ inline __device__ glm::vec3 ch_coeffs_to_color(
 
 inline __device__ void ch_coeffs_to_color_vjp(
     const unsigned degree_r,
+    const unsigned degree_r_to_use,
     const unsigned degree_phi,
+    const unsigned degree_phi_to_use,
     const glm::vec3 *coeffs,
     const glm::vec2 &uv,
     const glm::vec3 v_color,
@@ -196,6 +211,9 @@ inline __device__ void ch_coeffs_to_color_vjp(
     float &v_ch_coeff_abs,
     glm::vec2 &v_uv
 ) {
+    assert(degree_r >= 0 && degree_r_to_use <= degree_r);
+    assert(degree_phi >= 0 && degree_phi_to_use <= degree_phi);
+
     const float r = hypot(uv.x, uv.y);
     const float phi = atan2(uv.y, uv.x);
     const float pi = 3.14159265358979;
@@ -215,6 +233,10 @@ inline __device__ void ch_coeffs_to_color_vjp(
     // J'(n,x) = 1/2 J(n-1,x) - 1/2 J(n+1,x)
 
     for (unsigned k = 1; k <= degree_r; k++) {
+        if (k > degree_r_to_use) {
+            idx += 2*degree_phi+1;
+            continue;
+        }
         // m == 0
         float w = bessel_j(0, k*pi*r);
         float v_w = 0.f;
@@ -232,6 +254,10 @@ inline __device__ void ch_coeffs_to_color_vjp(
         // m > 0
         float prev_wr = w;
         for (unsigned m = 1; m <= degree_phi; m++) {
+            if (m > degree_phi_to_use) {
+                idx += 2;
+                continue;
+            }
             float wr = m == 1 ? w1 : bessel_j(m, k*pi*r);
             float cos_m_phi = cosf(m*phi);
             float sin_m_phi = sinf(m*phi);
@@ -274,7 +300,9 @@ inline __device__ void ch_coeffs_to_color_vjp(
 // Optimized for backward of sigmoid of CH color
 inline __device__ void ch_coeffs_to_color_sigmoid_vjp(
     const unsigned degree_r,
+    const unsigned degree_r_to_use,
     const unsigned degree_phi,
+    const unsigned degree_phi_to_use,
     const glm::vec3 *coeffs,
     const glm::vec2 &uv,
     const glm::vec3 &v_color_sigmoid,
@@ -283,6 +311,9 @@ inline __device__ void ch_coeffs_to_color_sigmoid_vjp(
     float &v_ch_coeff_abs,
     glm::vec2 &v_uv
 ) {
+    assert(degree_r >= 0 && degree_r_to_use <= degree_r);
+    assert(degree_phi >= 0 && degree_phi_to_use <= degree_phi);
+
     const float r = hypot(uv.x, uv.y);
     const float phi = atan2(uv.y, uv.x);
     const float pi = 3.14159265358979;
@@ -301,6 +332,10 @@ inline __device__ void ch_coeffs_to_color_sigmoid_vjp(
     // J'(n,x) = 1/2 J(n-1,x) - 1/2 J(n+1,x)
 
     for (unsigned k = 1; k <= degree_r; k++) {
+        if (k > degree_r_to_use) {
+            idx += 2*degree_phi+1;
+            continue;
+        }
         // m == 0
         float w = bessel_j(0, k*pi*r);
         glm::vec3 v_w(0.f);
@@ -316,6 +351,10 @@ inline __device__ void ch_coeffs_to_color_sigmoid_vjp(
         // m > 0
         float prev_wr = w;
         for (unsigned m = 1; m <= degree_phi; m++) {
+            if (m > degree_phi_to_use) {
+                idx += 2;
+                continue;
+            }
             float wr = m == 1 ? w1 : bessel_j(m, k*pi*r);
             float cos_m_phi = cosf(m*phi);
             float sin_m_phi = sinf(m*phi);

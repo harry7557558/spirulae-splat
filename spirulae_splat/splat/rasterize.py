@@ -22,7 +22,9 @@ def rasterize_gaussians(
     axes_v: Float[Tensor, "*batch 3"],
     colors: Float[Tensor, "*batch channels"],
     ch_degree_r: int,
+    ch_degree_r_to_use: int,
     ch_degree_phi: int,
+    ch_degree_phi_to_use: int,
     ch_coeffs: Float[Tensor, "*batch dim_ch channels"],
     opacities: Float[Tensor, "*batch 1"],
     anisotropies: Float[Tensor, "*batch 2"],
@@ -64,7 +66,8 @@ def rasterize_gaussians(
         axes_u.contiguous(),
         axes_v.contiguous(),
         colors.contiguous(),
-        ch_degree_r, ch_degree_phi,
+        ch_degree_r, ch_degree_r_to_use,
+        ch_degree_phi, ch_degree_phi_to_use,
         ch_coeffs.contiguous(),
         opacities.contiguous(),
         anisotropies.contiguous(),
@@ -91,7 +94,9 @@ class _RasterizeGaussians(Function):
         axes_v: Float[Tensor, "*batch 3"],
         colors: Float[Tensor, "*batch channels"],
         ch_degree_r: int,
+        ch_degree_r_to_use: int,
         ch_degree_phi: int,
+        ch_degree_phi_to_use: int,
         ch_coeffs: Float[Tensor, "*batch dim_ch channels"],
         opacities: Float[Tensor, "*batch 1"],
         anisotropies: Float[Tensor, "*batch 2"],
@@ -158,7 +163,10 @@ class _RasterizeGaussians(Function):
                 *intrins,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
-                colors, ch_degree_r, ch_degree_phi, ch_coeffs,
+                colors,
+                ch_degree_r, ch_degree_r_to_use,
+                ch_degree_phi, ch_degree_phi_to_use,
+                ch_coeffs,
                 opacities, anisotropies, background,
                 depth_grads, depth_normal_ref,
             )
@@ -169,7 +177,8 @@ class _RasterizeGaussians(Function):
         ctx.block_width = block_width
         ctx.save_for_backward(
             torch.tensor(intrins),
-            torch.tensor([ch_degree_r, ch_degree_phi]),
+            torch.tensor([ch_degree_r, ch_degree_r_to_use,
+                          ch_degree_phi, ch_degree_phi_to_use]),
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
             colors, ch_coeffs, opacities, anisotropies, background,
@@ -202,7 +211,7 @@ class _RasterizeGaussians(Function):
         num_intersects = ctx.num_intersects
 
         (
-            intrins, (ch_degree_r, ch_degree_phi),
+            intrins, ch_degrees,
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
             colors, ch_coeffs, opacities, anisotropies, background,
@@ -226,7 +235,7 @@ class _RasterizeGaussians(Function):
             assert colors.shape[-1] == 3
             backward_return = _C.rasterize_backward(
                 img_height, img_width, ctx.block_width,
-                *intrins, ch_degree_r, ch_degree_phi,
+                *intrins, *ch_degrees,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
                 colors, ch_coeffs, opacities, anisotropies, background,
@@ -266,7 +275,7 @@ class _RasterizeGaussians(Function):
 
         return (
             v_positions, v_axes_u, v_axes_v,
-            v_colors, None, None, v_ch_coeffs, v_opacities, v_anisotropies,
+            v_colors, *([None]*4), v_ch_coeffs, v_opacities, v_anisotropies,
             v_depth_grads, v_depth_normal_ref,
             None, None, None, None, None, None,
             v_background,

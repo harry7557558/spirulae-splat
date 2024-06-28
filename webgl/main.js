@@ -340,6 +340,8 @@ function createWorker(self) {
         let degree_r = header.config.ch_degree_r;
         let degree_phi = header.config.ch_degree_phi;
         let dim_ch = degree_r * (2*degree_phi+1);
+        if (dim_ch == 0)
+            return;
         let pixelPerVert = Math.ceil(dim_ch/2);
         let vertexCount = Math.floor(harmonics.features_ch.length/(3*dim_ch));
 
@@ -1022,12 +1024,15 @@ async function main() {
             gl.clearColor(bg*background[0], bg*background[1], bg*background[2], 1.0);
             gl.clear(gl.COLOR_BUFFER_BIT);
 
-            gl.uniform1i(gl.getUniformLocation(program, "u_use_sh"),
-                document.getElementById("checkbox-sh").checked);
-            gl.uniform1i(gl.getUniformLocation(program, "u_use_ch"),
-                document.getElementById("checkbox-ch").checked);
             gl.uniform1i(gl.getUniformLocation(program, "u_use_aniso"),
                 document.getElementById("checkbox-aniso").checked);
+            gl.uniform2i(gl.getUniformLocation(program, "u_sh_config"),
+                document.getElementById("checkbox-sh").checked,
+                header.config.sh_degree);
+            gl.uniform3i(gl.getUniformLocation(program, "u_ch_config"),
+                document.getElementById("checkbox-ch").checked,
+                header.config.ch_degree_r,
+                header.config.ch_degree_phi);
 
             gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, vertexCount);
         } else {

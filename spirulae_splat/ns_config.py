@@ -78,7 +78,7 @@ spirulae = MethodSpecification(
             "features_ch": {
                 "optimizer": AdamOptimizerConfig(lr=0.0025 / 1, eps=1e-15),
                 "scheduler": ExponentialDecaySchedulerConfig(
-                    max_steps=30000, warmup_steps=6000, lr_pre_warmup=0, ramp="linear"
+                    max_steps=30000, warmup_steps=3000, lr_pre_warmup=0
                 ),
             },
             "opacities": {

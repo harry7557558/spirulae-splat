@@ -7,7 +7,7 @@ uniform mat4 projection, view;
 uniform vec2 focal;
 uniform vec2 viewport;
 
-uniform int u_use_sh;
+uniform ivec2 u_sh_config;
 uniform int u_use_aniso;
 
 in vec2 position;
@@ -94,8 +94,9 @@ bool project_ellipse_bound(
 
 
 
-const int sh_degree = 3;
-const int sh_dim = sh_degree * (sh_degree + 2);
+#define use_sh bool(u_sh_config.x)
+#define sh_degree u_sh_config.y
+#define sh_dim (sh_degree * (sh_degree + 2))
 
 ivec3 pix_sh;
 uvec4 coeff_sh;
@@ -129,7 +130,7 @@ vec3 sh_coeffs_to_color_fast(
     vec3 viewdir
 ) {
     vec3 color = 0.2820947917738781 * base_color;
-    if (degree < 1 || u_use_sh == 0) {
+    if (degree < 1 || !use_sh) {
         return color;
     }
 
@@ -228,7 +229,7 @@ void main () {
     vec3 p_world = uintBitsToFloat(info0.xyz);
     vec4 p_view = view * vec4(p_world, 1);
     vec4 pos2d = projection * p_view;
-    if (pos2d.z < 0.02) {
+    if (pos2d.w < 0.0) {
         gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
         return;
     }
@@ -269,9 +270,11 @@ void main () {
 
     vec4 rgba = vec4(unpackHalf2x16(info2.y), unpackHalf2x16(info2.z));
     vec3 rgb = rgba.xyz;
-    init_coeffs();
-    vec3 viewdir = p_world - inverse(view)[3].xyz;
-    rgb = sh_coeffs_to_color_fast(rgb, sh_degree, viewdir) + 0.5;
+    if (sh_dim > 0) {
+        init_coeffs();
+        vec3 viewdir = p_world - inverse(view)[3].xyz;
+        rgb = sh_coeffs_to_color_fast(rgb, sh_degree, viewdir) + 0.5;
+    }
     rgb = max(rgb, 0.0);
 
     vColor = vec4(rgb, rgba.w);

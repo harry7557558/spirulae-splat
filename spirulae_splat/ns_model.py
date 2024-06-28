@@ -129,21 +129,21 @@ class SpirulaeModelConfig(ModelConfig):
     """Whether to randomize the background color."""
     num_downscales: int = 2
     """at the beginning, resolution is 1/2^d, where d is this number"""
-    cull_alpha_thresh: float = 0.05
+    cull_alpha_thresh: float = 0.1
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
     cull_scale_thresh: float = 0.5
     """threshold of scale for culling huge gaussians"""
     cull_anisotropy_thresh: float = 10.0
     """threshold of quotient of scale for culling long thin gaussians"""
-    cull_grad_thresh: float = 0.0001  # 0.0004|0.0002 w/o ch, default 0.0
+    cull_grad_thresh: float = 0.0001  # 0.0004 | 0.0001 | 0
     """threshold for culling gaussians with low visibility"""
     continue_cull_post_densification: bool = True
     """If True, continue to cull gaussians post refinement"""
     reset_alpha_every: int = 30
     """Every this many refinement steps, reset the alpha"""
-    densify_xy_grad_thresh: float = 0.0006  # 0.002|0.001 w/o ch, default 0.0006
+    densify_xy_grad_thresh: float = 0.0006  # 0.001 | 0.0006
     """threshold of positional gradient norm for densifying gaussians"""
-    densify_ch_grad_thresh: float = 1e-6  # 3e-6, default 1e-6
+    densify_ch_grad_thresh: float = 3e-6  # 5e-6 | 3e-6 | 1e-6
     """threshold of cylindrical harmonics gradient norm for densifying gaussians"""
     densify_size_thresh: float = 0.01
     """below this size, gaussians are *duplicated*, otherwise split"""
@@ -169,10 +169,12 @@ class SpirulaeModelConfig(ModelConfig):
     """stop splitting at this step"""
     sh_degree: int = 3
     """maximum degree of spherical harmonics to use"""
-    ch_degree_r: int = 3
+    ch_degree_r: int = 0  # 3 | 0
     """maximum radial degree of cylindrical harmonics to use"""
-    ch_degree_phi: int = 3
+    ch_degree_phi: int = 0  # 3 | 0
     """maximum angular degree of cylindrical harmonics to use"""
+    ch_degree_interval: int = 1000
+    """every n intervals turn on another ch degree"""
     max_opacity: float = 0.995
     """maximum opacity of a gaussian, prevent numerical instability during backward"""
     trainable_background_color: bool = True
@@ -187,14 +189,16 @@ class SpirulaeModelConfig(ModelConfig):
     """
     depth_regularizer_weight: float = 0.02
     """Weight for depth regularizer"""
-    depth_regularizer_warmup: int = 6000
+    depth_regularizer_warmup: int = 0
     """warmup steps for depth regularizer"""
-    normal_regularizer_weight: float = 0.02
+    normal_regularizer_weight: float = 0.04
     """Weight for normal regularizer"""
-    normal_regularizer_warmup: int = 6000
+    normal_regularizer_per_splat_factor: float = 0.4
+    """Factor of per-splat vs overall normal regularization, 0 to 1"""
+    normal_regularizer_warmup: int = 0
     """warmup steps for normal regularizer"""
     regularizer_warmup_length: int = 2000
-    """Warmup for regularizers. If the initialization is random, only apply regularizers after this many steps."""
+    """Warmup for regularizers. IF THE INITIALIZATION IS RANDOM, only apply regularizers after this many steps."""
     output_depth_during_training: bool = False
     """If True, output depth during training. Otherwise, only output depth during evaluation."""
     camera_optimizer: CameraOptimizerConfig = field(default_factory=lambda: CameraOptimizerConfig(mode="SO3xR3"))
@@ -945,6 +949,7 @@ class SpirulaeModel(Model):
         background_color = self.background_color
         if self.config.enable_background_model:
             background_color = torch.zeros_like(background_color)
+        ch_degree = self.step // self.config.ch_degree_interval
         (
             rgb, depth_im,
             reg_depth, reg_normal,
@@ -952,7 +957,9 @@ class SpirulaeModel(Model):
         ) = rasterize_gaussians(  # type: ignore
             positions, axes_u, axes_v,
             rgbs,
-            self.config.ch_degree_r, self.config.ch_degree_phi, features_ch_crop,
+            self.config.ch_degree_r, min(ch_degree, self.config.ch_degree_r),
+            self.config.ch_degree_phi, min(ch_degree, self.config.ch_degree_phi),
+            features_ch_crop,
             opacities, anisotropies_crop,
             depth_grads, depth_ref_im,
             bounds, num_tiles_hit,
@@ -1139,16 +1146,16 @@ class SpirulaeModel(Model):
         if self.step < self.config.regularizer_warmup_length and self.random_init:
             weight_depth_reg, weight_normal_reg = 0.0, 0.0
         depth_reg = weight_depth_reg * reg_depth.sum() / alpha.sum()
-        normal_reg = weight_normal_reg * reg_normal.sum() / alpha.sum()
+        normal_reg_per_splat = weight_normal_reg * reg_normal.sum() / alpha.sum()
 
         # normal regularizer
         depth_grad_1 = outputs['depth_grad_1']
         depth_grad_2 = outputs['depth_grad_2']
         dot = (depth_grad_1 * depth_grad_2).sum(dim=2,keepdim=True)
         normal_reg_s = 1.0-dot
-        normal_reg_s = torch.sqrt(torch.fmax(1.0-dot,torch.zeros_like(dot)))
-        # normal_reg = normal_reg + weight_normal_reg * (normal_reg_s*alpha).sum() / alpha.sum()
-        normal_reg = weight_normal_reg * (normal_reg_s*alpha).sum() / alpha.sum()
+        normal_reg_overall = weight_normal_reg * (normal_reg_s*alpha).sum() / alpha.sum()
+        normal_reg = normal_reg_overall + (normal_reg_per_splat-normal_reg_overall) * \
+            self.config.normal_regularizer_per_splat_factor
 
         # regularizations for parameters
         quat_norm_reg = 0.1 * (torch.log(self.quats.norm(dim=-1)+0.001)**2).mean()

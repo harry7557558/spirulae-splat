@@ -61,8 +61,8 @@ def test_rasterize():
     depth_ref_im = torch.randn((H, W, 3), device=device, requires_grad=True)
     _depth_normal_ref = depth_ref_im.detach().clone().requires_grad_(True)
 
-    # ch_degree_r, ch_degree_phi = 3, 3
-    ch_degree_r, ch_degree_phi = 2, 2
+    ch_degree_r, ch_degree_r_to_use = 3, 2
+    ch_degree_phi, ch_degree_phi_to_use = 2, 1
     dim_ch = ch_degree_r * (2*ch_degree_phi+1)
     ch_coeffs = torch.randn((num_points, dim_ch, 3), device=device).requires_grad_(True)
     _ch_coeffs = ch_coeffs.detach().clone().requires_grad_(True)
@@ -104,7 +104,8 @@ def test_rasterize():
         axes_u,
         axes_v,
         colors,
-        ch_degree_r, ch_degree_phi,
+        ch_degree_r, ch_degree_r_to_use,
+        ch_degree_phi, ch_degree_phi_to_use,
         ch_coeffs,
         opacities,
         anisotropies,
@@ -142,7 +143,8 @@ def test_rasterize():
         _axes_u,
         _axes_v,
         _colors,
-        ch_degree_r, ch_degree_phi,
+        ch_degree_r, ch_degree_r_to_use,
+        ch_degree_phi, ch_degree_phi_to_use,
         _ch_coeffs,
         _opacities,
         _anisotropies,

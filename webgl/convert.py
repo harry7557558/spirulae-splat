@@ -9,6 +9,11 @@ import json
 
 def quantize_tensor(tensor, n_bits, maxiter=0):
     device = tensor.device
+    if tensor.numel() == 0:
+        print("empty tensor")
+        centroids = torch.arange(0).float().to(device)
+        bins = torch.zeros_like(tensor).long()
+        return centroids, bins
 
     sorted_numbers, sorted_indices = torch.sort(tensor.flatten())
 
@@ -80,6 +85,8 @@ def pack_components(config, components):
             
             if data_type.startswith('quat'):
                 num_elements = int(data_type[4:]) if len(data_type) > 4 else 1
+                if num_elements == 0:
+                    continue
                 assert bit_length % num_elements == 0
                 bits_per_element = bit_length // num_elements
                 for k in range(num_elements):
@@ -142,7 +149,16 @@ def process_ckpt_to_ssplat(file_path):
     sh_degree = {
         1: 0, 4: 1, 9: 2, 16: 3, 25: 4
     }[num_sh+1]
+    ch_degree_r, ch_degree_phi = {
+        0: (0, 0), 1: (1, 0), 2: (2, 0),
+        3: (1, 1), 5: (1, 2), 6: (2, 1),
+        7: (1, 3), 9: (3, 1), 10: (2, 2),
+        14: (2, 3), 15: (3, 2), 21: (3, 3)
+    }[num_ch]
     print("SH degree:", sh_degree)
+    print("# of SH:", num_sh)
+    print("CH degree r:", ch_degree_r)
+    print("CH degree phi:", ch_degree_phi)
     print("# of CH:", num_ch)
     print("background:", background_color.cpu().numpy())
     print()
@@ -174,7 +190,7 @@ def process_ckpt_to_ssplat(file_path):
                 means, opacities, anisotropies, quats, scales)
         ]
 
-    means -= torch.mean(means, axis=0)
+    # means -= torch.mean(means, axis=0)
 
     quats = quats / torch.norm(quats, dim=1, keepdim=True)
     opacities = torch.sigmoid(opacities)
@@ -234,8 +250,8 @@ def process_ckpt_to_ssplat(file_path):
         "length": len(weight),
         "componentLength": int(np.ceil((63*4+45*3)/8)),  # in bytes
         "componentViews": [
-            { "key": "features_ch", "type": "quat63", "bitLength": 63*4, "bitOffset": 0, "quatBufferView": 6 },
-            { "key": "features_sh", "type": "quat45", "bitLength": 45*3, "bitOffset": 63*4, "quatBufferView": 7 },
+            { "key": "features_ch", "type": f"quat{3*num_ch}", "bitLength": 3*num_ch*4, "bitOffset": 0, "quatBufferView": 6 },
+            { "key": "features_sh", "type": f"quat{3*num_sh}", "bitLength": 3*num_sh*3, "bitOffset": 3*num_ch*4, "quatBufferView": 7 },
         ]
     }
     harmonics_buffer = pack_components(harmonics_config, [
@@ -263,9 +279,9 @@ def process_ckpt_to_ssplat(file_path):
             "version": "0.0"
         },
         "config": {
-            "sh_degree": 3,
-            "ch_degree_r": 3,
-            "ch_degree_phi": 3,
+            "sh_degree": sh_degree,
+            "ch_degree_r": ch_degree_r,
+            "ch_degree_phi": ch_degree_phi,
             "background_color": background_color.cpu().numpy().tolist()
         },
         "buffer": {

@@ -246,7 +246,10 @@ def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
     return result
 
 
-def ch_coeffs_to_color(degree_r, degree_phi, coeffs, uv):
+def ch_coeffs_to_color(
+        degree_r, degree_r_to_use,
+        degree_phi, degree_phi_to_use,
+        coeffs, uv):
     r = torch.norm(uv, dim=-1)
     phi = torch.atan2(uv[...,1], uv[...,0])
     pi = torch.pi
@@ -254,10 +257,16 @@ def ch_coeffs_to_color(degree_r, degree_phi, coeffs, uv):
     idx = 0
     color = torch.zeros(3, device=uv.device)
     for k in range(1, degree_r+1):
+        if k > degree_r_to_use:
+            idx += 2*degree_phi+1
+            continue
         w = bessel_j(0, k*pi*r)
         color = color + w * coeffs[idx]
         idx += 1
         for m in range(1, degree_phi+1):
+            if m > degree_phi_to_use:
+                idx += 2
+                continue
             wr = bessel_j(m, k*pi*r)
             wc = wr * torch.cos(m*phi)
             ws = wr * torch.sin(m*phi)
@@ -742,7 +751,9 @@ def rasterize_gaussians(
     axes_v: Float[Tensor, "*batch 3"],
     colors: Float[Tensor, "*batch channels"],
     ch_degree_r: int,
+    ch_degree_r_to_use: int,
     ch_degree_phi: int,
+    ch_degree_phi_to_use: int,
     ch_coeffs: Float[Tensor, "*batch dim_ch 3"],
     opacities: Float[Tensor, "*batch 1"],
     anisotropies: Float[Tensor, "*batch 2"],
@@ -837,7 +848,8 @@ def rasterize_gaussians(
                 color = color_0
                 if dim_ch > 0:
                     ch_color = ch_coeffs_to_color(
-                        ch_degree_r, ch_degree_phi,
+                        ch_degree_r, ch_degree_r_to_use,
+                        ch_degree_phi, ch_degree_phi_to_use,
                         ch_coeffs[gid], uv
                     )
                     # ch_color = ch_coeffs[gid][0]
