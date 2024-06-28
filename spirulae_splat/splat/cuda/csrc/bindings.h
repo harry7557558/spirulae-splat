@@ -15,28 +15,36 @@
 #define DEVICE_GUARD(_ten) \
     const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
 
+
+/* == AUTO HEADER GENERATOR - DO NOT CHANGE THIS LINE == */
+
+
+
 std::tuple<
     torch::Tensor, // output conics
-    torch::Tensor> // output radii
-compute_cov2d_bounds_tensor(const int num_pts, torch::Tensor &A);
+    torch::Tensor  // output radii
+> compute_cov2d_bounds_tensor(const int num_pts, torch::Tensor &covs2d);
+
 
 torch::Tensor compute_sh_forward_tensor(
     const std::string &method,
-    unsigned num_points,
-    unsigned degree,
-    unsigned degrees_to_use,
+    const unsigned num_points,
+    const unsigned degree,
+    const unsigned degrees_to_use,
     torch::Tensor &viewdirs,
     torch::Tensor &coeffs
 );
 
+
 torch::Tensor compute_sh_backward_tensor(
     const std::string &method,
-    unsigned num_points,
-    unsigned degree,
-    unsigned degrees_to_use,
+    const unsigned num_points,
+    const unsigned degree,
+    const unsigned degrees_to_use,
     torch::Tensor &viewdirs,
     torch::Tensor &v_colors
 );
+
 
 std::tuple<
     torch::Tensor,  // bounds
@@ -60,6 +68,7 @@ std::tuple<
     const unsigned block_width,
     const float clip_thresh
 );
+
 
 std::tuple<
     torch::Tensor,  // v_means3d
@@ -85,7 +94,8 @@ std::tuple<
 
 
 std::tuple<
-    torch::Tensor, torch::Tensor
+    torch::Tensor,
+    torch::Tensor
 > map_gaussian_to_intersects_tensor(
     const int num_points,
     const int num_intersects,
@@ -96,11 +106,12 @@ std::tuple<
     const unsigned block_width
 );
 
+
 torch::Tensor get_tile_bin_edges_tensor(
-    int num_intersects,
-    const torch::Tensor &isect_ids_sorted,
+    int num_intersects, const torch::Tensor &isect_ids_sorted, 
     const std::tuple<int, int, int> tile_bounds
 );
+
 
 std::tuple<
     torch::Tensor,  // final_index
@@ -125,6 +136,7 @@ std::tuple<
     const torch::Tensor &background
 );
 
+
 std::tuple<
     torch::Tensor,  // final_index
     torch::Tensor,  // out_img
@@ -145,6 +157,7 @@ std::tuple<
     const torch::Tensor &opacities,
     const torch::Tensor &anisotropies
 );
+
 
 std::tuple<
     torch::Tensor, // final_idx
@@ -174,8 +187,9 @@ std::tuple<
     const torch::Tensor &anisotropies,
     const torch::Tensor &background,
     const torch::Tensor &depth_grads,
-    const torch::Tensor &depth_normal_ref_im
+    const torch::Tensor &depth_ref_im
 );
+
 
 std::tuple<
     torch::Tensor, // v_positions
@@ -208,6 +222,7 @@ std::tuple<
     const torch::Tensor &v_output_alpha
 );
 
+
 std::tuple<
     torch::Tensor, // v_positions
     torch::Tensor, // v_positions_xy_abs
@@ -236,6 +251,7 @@ std::tuple<
     const torch::Tensor &v_output_depth
 );
 
+
 std::tuple<
     torch::Tensor, // v_positions
     torch::Tensor, // v_positions_xy_abs
@@ -247,7 +263,7 @@ std::tuple<
     torch::Tensor, // v_opacities
     torch::Tensor, // v_anisotropies
     torch::Tensor, // v_depth_grad
-    torch::Tensor  // v_depth_normal_ref
+    torch::Tensor  // v_depth_ref_im
 > rasterize_backward_tensor(
     const unsigned img_height,
     const unsigned img_width,
@@ -269,7 +285,7 @@ std::tuple<
     const torch::Tensor &anisotropies,
     const torch::Tensor &background,
     const torch::Tensor &depth_grads,
-    const torch::Tensor &depth_normal_ref_im,
+    const torch::Tensor &depth_ref_im,
     const torch::Tensor &final_idx,
     const torch::Tensor &output_alpha,
     const torch::Tensor &output_depth_grad,

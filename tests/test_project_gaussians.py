@@ -114,8 +114,8 @@ def test_project_gaussians():
     check_close('v_scales', scales.grad, _scales.grad, **tol)
     check_close('v_quats', quats.grad, _quats.grad, **tol)
     check_close('v_viewmat', viewmat.grad, _viewmat.grad, **tol)
-    print(viewmat.grad)
-    print(_viewmat.grad)
+    # print(viewmat.grad)
+    # print(_viewmat.grad)
 
 
 if __name__ == "__main__":

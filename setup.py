@@ -6,6 +6,10 @@ import sys
 
 from setuptools import find_packages, setup
 
+import spirulae_splat.splat.cuda.header_generator
+spirulae_splat.splat.cuda.header_generator.main()
+
+
 BUILD_NO_CUDA = os.getenv("BUILD_NO_CUDA", "0") == "1"
 WITH_SYMBOLS = os.getenv("WITH_SYMBOLS", "0") == "1"
 LINE_INFO = os.getenv("LINE_INFO", "0") == "1"
@@ -23,17 +27,8 @@ def get_extensions():
     from torch.utils.cpp_extension import CUDAExtension
 
     extensions_dir = osp.join("spirulae_splat", "splat", "cuda", "csrc")
-    sources = glob.glob(osp.join(extensions_dir, "*.cu")) + glob.glob(
-        osp.join(extensions_dir, "*.cpp")
-    )
-    # sources = [
-    #     osp.join(extensions_dir, "ext.cpp"),
-    #     osp.join(extensions_dir, "rasterize.cu"),
-    #     osp.join(extensions_dir, "bindings.cu"),
-    #     osp.join(extensions_dir, "forward.cu"),
-    #     osp.join(extensions_dir, "backward.cu"),
-    # ]
-    # remove generated 'hip' files, in case of rebuilds
+    sources = glob.glob(osp.join(extensions_dir, "*.cu")) + \
+        glob.glob(osp.join(extensions_dir, "*.cpp"))
     sources = [path for path in sources if "hip" not in path]
 
     undef_macros = []

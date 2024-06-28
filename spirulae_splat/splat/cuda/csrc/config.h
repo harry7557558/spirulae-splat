@@ -23,7 +23,7 @@
 #define DEPTH_REG_MEDIAN_TH 0.5f
 
 // CH abs grad, 0 for mean, 1 for max
-#define CH_ABSGRAD_REDUCE 1
+#define CH_ABSGRAD_REDUCE 0
 
 //--------------
 #define CUDA_CALL(x)                                                           \

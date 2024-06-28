@@ -1,7 +1,7 @@
-#include "backward.cuh"
 #include "bindings.h"
-#include "forward.cuh"
 #include "helpers.cuh"
+#include "projection.cuh"
+#include "rasterization.cuh"
 #include "sh.cuh"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
@@ -16,56 +16,15 @@
 
 namespace cg = cooperative_groups;
 
-__global__ void compute_cov2d_bounds_kernel(
-    const unsigned num_pts, const float* __restrict__ covs2d, float* __restrict__ conics, float* __restrict__ radii
-) {
-    unsigned row = cg::this_grid().thread_rank();
-    if (row >= num_pts) {
-        return;
-    }
-    int index = row * 3;
-    float3 conic;
-    float radius;
-    float3 cov2d{
-        (float)covs2d[index], (float)covs2d[index + 1], (float)covs2d[index + 2]
-    };
-    compute_cov2d_bounds(cov2d, conic, radius);
-    conics[index] = conic.x;
-    conics[index + 1] = conic.y;
-    conics[index + 2] = conic.z;
-    radii[row] = radius;
-}
 
-std::tuple<
-    torch::Tensor, // output conics
-    torch::Tensor> // output radii
-compute_cov2d_bounds_tensor(const int num_pts, torch::Tensor &covs2d) {
-    DEVICE_GUARD(covs2d);
-    CHECK_INPUT(covs2d);
-    torch::Tensor conics = torch::zeros(
-        {num_pts, covs2d.size(1)}, covs2d.options().dtype(torch::kFloat32)
-    );
-    torch::Tensor radii =
-        torch::zeros({num_pts, 1}, covs2d.options().dtype(torch::kFloat32));
-
-    int blocks = (num_pts + N_THREADS - 1) / N_THREADS;
-
-    compute_cov2d_bounds_kernel<<<blocks, N_THREADS>>>(
-        num_pts,
-        covs2d.contiguous().data_ptr<float>(),
-        conics.contiguous().data_ptr<float>(),
-        radii.contiguous().data_ptr<float>()
-    );
-    return std::make_tuple(conics, radii);
-}
 
 torch::Tensor compute_sh_forward_tensor(
     const std::string &method,
     const unsigned num_points,
     const unsigned degree,
     const unsigned degrees_to_use,
-    torch::Tensor &viewdirs,
-    torch::Tensor &coeffs
+    torch::Tensor &viewdirs,  // [..., 3]
+    torch::Tensor &coeffs   // [..., K, 3]
 ) {
     DEVICE_GUARD(viewdirs);
     unsigned num_bases = num_sh_bases(degree);
@@ -102,13 +61,14 @@ torch::Tensor compute_sh_forward_tensor(
     return colors;
 }
 
+
 torch::Tensor compute_sh_backward_tensor(
     const std::string &method,
     const unsigned num_points,
     const unsigned degree,
     const unsigned degrees_to_use,
-    torch::Tensor &viewdirs,
-    torch::Tensor &v_colors
+    torch::Tensor &viewdirs,  // [..., 3]
+    torch::Tensor &v_colors  // [..., 3]
 ) {
     DEVICE_GUARD(viewdirs);
     if (viewdirs.ndimension() != 2 || viewdirs.size(0) != num_points ||
@@ -152,18 +112,18 @@ torch::Tensor compute_sh_backward_tensor(
 
 
 std::tuple<
-    torch::Tensor,  // bounds
-    torch::Tensor,  // num_tiles_hit
-    torch::Tensor,  // positions
-    torch::Tensor,  // axes_u
-    torch::Tensor,  // axes_v
-    torch::Tensor  // depth_grads
+    torch::Tensor,  // bounds, [N, 4], int
+    torch::Tensor,  // num_tiles_hit, [N]
+    torch::Tensor,  // positions, [N, 3]
+    torch::Tensor,  // axes_u, [N, 3]
+    torch::Tensor,  // axes_v, [N, 4]
+    torch::Tensor  // depth_gradsm, [N, 2]
 > project_gaussians_forward_tensor(
     const int num_points,
-    torch::Tensor &means3d,
-    torch::Tensor &scales,
-    torch::Tensor &quats,
-    torch::Tensor &viewmat,
+    torch::Tensor &means3d,  // [N, 3]
+    torch::Tensor &scales,  // [N, 2]
+    torch::Tensor &quats,  // [N, 4]
+    torch::Tensor &viewmat,  // [3|4, 4]
     const float fx,
     const float fy,
     const float cx,
@@ -226,22 +186,22 @@ std::tuple<
     torch::Tensor,  // v_means3d
     torch::Tensor,  // v_scales
     torch::Tensor,  // v_quats
-    torch::Tensor  // v_viewmat
+    torch::Tensor  // v_viewmat, [4, 4]
 > project_gaussians_backward_tensor(
     const int num_points,
-    torch::Tensor &means3d,
-    torch::Tensor &scales,
-    torch::Tensor &quats,
-    torch::Tensor &viewmat,
+    torch::Tensor &means3d,  // [N, 3]
+    torch::Tensor &scales,  // [N, 2]
+    torch::Tensor &quats,  // [N, 4]
+    torch::Tensor &viewmat,  // [3|4, 4]
     const float fx,
     const float fy,
     const float cx,
     const float cy,
-    torch::Tensor &num_tiles_hit,
-    torch::Tensor &v_positions,
-    torch::Tensor &v_axes_u,
-    torch::Tensor &v_axes_v,
-    torch::Tensor &v_depth_grads
+    torch::Tensor &num_tiles_hit,  // [N], int
+    torch::Tensor &v_positions,  // [N, 3]
+    torch::Tensor &v_axes_u,  // [N, 3]
+    torch::Tensor &v_axes_v,  // [N, 3]
+    torch::Tensor &v_depth_grads  // [N, 2]
 ) {
     DEVICE_GUARD(means3d);
 
@@ -278,8 +238,10 @@ std::tuple<
     return std::make_tuple(v_means3d, v_scales, v_quats, v_viewmat);
 }
 
+
 std::tuple<
-    torch::Tensor, torch::Tensor
+    torch::Tensor,
+    torch::Tensor
 > map_gaussian_to_intersects_tensor(
     const int num_points,
     const int num_intersects,
@@ -323,6 +285,7 @@ std::tuple<
     return std::make_tuple(isect_ids_unsorted, gaussian_ids_unsorted);
 }
 
+
 torch::Tensor get_tile_bin_edges_tensor(
     int num_intersects, const torch::Tensor &isect_ids_sorted, 
     const std::tuple<int, int, int> tile_bounds
@@ -342,6 +305,7 @@ torch::Tensor get_tile_bin_edges_tensor(
     );
     return tile_bins;
 }
+
 
 std::tuple<
     torch::Tensor,  // final_index
@@ -409,7 +373,7 @@ std::tuple<
         {img_height, img_width}, float32
     );
 
-    rasterize_simple_forward<<<tile_bounds_dim3, block_dim3>>>(
+    rasterize_simple_forward_kernel<<<tile_bounds_dim3, block_dim3>>>(
         tile_bounds_dim3,
         img_size_dim3,
         intrins,
@@ -492,7 +456,7 @@ std::tuple<
         {img_height, img_width, 2}, float32
     );
 
-    rasterize_depth_forward<<<tile_bounds_dim3, block_dim3>>>(
+    rasterize_depth_forward_kernel<<<tile_bounds_dim3, block_dim3>>>(
         tile_bounds_dim3,
         img_size_dim3,
         intrins,
@@ -598,7 +562,7 @@ std::tuple<
         {img_height, img_width}, float32
     );
 
-    rasterize_forward<<<tile_bounds_dim3, block_dim3>>>(
+    rasterize_forward_kernel<<<tile_bounds_dim3, block_dim3>>>(
         tile_bounds_dim3,
         img_size_dim3,
         intrins,
