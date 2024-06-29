@@ -49,8 +49,7 @@ from nerfstudio.model_components import renderers
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.rich_utils import CONSOLE
-
-from spirulae_splat.background_field import BG_Field
+from nerfstudio.utils.math import components_from_spherical_harmonics
 
 
 def random_quat_tensor(N):
@@ -177,9 +176,9 @@ class SpirulaeModelConfig(ModelConfig):
     """every n intervals turn on another ch degree"""
     max_opacity: float = 0.995
     """maximum opacity of a gaussian, prevent numerical instability during backward"""
-    trainable_background_color: bool = True
+    train_background_color: bool = True
     """make background color trainable"""
-    enable_background_model: bool = False
+    background_color_sh_degree: int = 3
     """enable background model"""
     use_scale_regularization: bool = True
     """If enabled, a scale regularization introduced in PhysGauss (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians."""
@@ -313,10 +312,11 @@ class SpirulaeModel(Model):
         else:
             self.background_color = get_color(self.config.background_color)
         self.background_color = torch.nn.Parameter(self.background_color)
-        if self.config.trainable_background_color:
-            self.bg_model = BG_Field()
+        if self.config.train_background_color:
+            dim_sh = num_sh_bases(self.config.background_color_sh_degree)
+            self.background_sh = torch.nn.Parameter(torch.zeros((dim_sh-1, 3)))
         else:
-            self.bg_model = None
+            self.background_sh = None
 
     @property
     def colors(self):
@@ -763,10 +763,10 @@ class SpirulaeModel(Model):
             Mapping of different parameter groups
         """
         gps = self.get_gaussian_param_groups()
-        if self.config.trainable_background_color:
+        if self.config.train_background_color:
             gps["background_color"] = [self.background_color]
-        if self.config.trainable_background_color:
-            gps["field_background"] = list(self.bg_model.parameters())
+            if self.background_sh is not None:
+                gps["background_sh"] = [self.background_sh]
         self.camera_optimizer.get_param_groups(param_groups=gps)
         return gps
 
@@ -784,6 +784,62 @@ class SpirulaeModel(Model):
         if d > 1:
             return resize_image(image, d)
         return image
+
+    def get_background_image(self, camera: Cameras, mask: Optional[torch.Tensor]=None):
+        if not isinstance(camera, Cameras):
+            print("Called get_background_image with not a camera")
+            return {}
+        assert camera.shape[0] == 1, "Only one camera at a time"
+        camera_downscale = self._get_downscale_factor()
+        camera.rescale_output_resolution(1 / camera_downscale)
+
+        W, H = int(camera.width.item()), int(camera.height.item())
+
+        background = self.background_color.repeat(H, W, 1)
+        sh_degree = self.config.background_color_sh_degree
+        if not (sh_degree > 0):
+            return background
+
+        # camera.generate_rays seems to be slow, write from scratch
+        if False:
+            ray_bundle = camera.generate_rays(
+                camera_indices=0, keep_shape=False, disable_distortion=True)
+            if mask is not None:
+                mask_indices = torch.where(mask.flatten())
+                ray_bundle = ray_bundle[mask_indices]
+            if not len(ray_bundle) > 0:
+                return background
+            directions = ray_bundle.directions
+        else:
+            device = background.device
+            y, x = torch.meshgrid(torch.arange(H), torch.arange(W), indexing="ij")
+            x = x.flatten().float().to(device) + 0.5
+            y = y.flatten().float().to(device) + 0.5
+            if mask is not None:
+                mask_indices = torch.where(mask.flatten())
+                x, y = x[mask_indices], y[mask_indices]
+            if not len(x) > 0:
+                return background
+            fx, fy = camera.fx[0].item(), camera.fy[0].item()
+            cx, cy = camera.cx[0].item(), camera.cy[0].item()
+            coord = torch.stack([(x - cx) / fx, -(y - cy) / fy, -torch.ones_like(x)], -1)
+            rotation = camera.camera_to_worlds[0][:3, :3]
+            directions = torch.matmul(coord, rotation.T)
+            norm = torch.maximum(torch.linalg.norm(directions, dim=-1, keepdims=True), torch.tensor([1e-6]).to(device))
+            directions = directions / norm
+
+        sh_components = components_from_spherical_harmonics(sh_degree+1, directions)
+        sh_coeffs = torch.cat((self.background_color.unsqueeze(0), self.background_sh), dim=0)
+        bg_flat = torch.matmul(sh_components, sh_coeffs)
+        bg_flat = torch.clamp(bg_flat+0.5, min=0.0)
+
+        if mask is not None:
+            background = background.view(-1, 3)
+            background[mask_indices] = bg_flat
+        else:
+            background = bg_flat
+
+        return background.view(H, W, 3)
 
     @staticmethod
     def get_empty_outputs(width: int, height: int, background: torch.Tensor) -> Dict[str, Union[torch.Tensor, List]]:
@@ -947,7 +1003,7 @@ class SpirulaeModel(Model):
 
         # main rasterization
         background_color = self.background_color
-        if self.config.enable_background_model:
+        if self.config.background_color_sh_degree > 0:
             background_color = torch.zeros_like(background_color)
         ch_degree = self.step // self.config.ch_degree_interval
         (
@@ -1022,17 +1078,9 @@ class SpirulaeModel(Model):
         self.radii = num_tiles_hit**0.5 / 2 * BLOCK_WIDTH
 
         # blend with background
-        if self.config.enable_background_model:
-            ray_bundle = camera.to(alpha.device).generate_rays(
-                camera_indices=0, keep_shape=False, disable_distortion=True)
-            inliners = torch.where((alpha < 0.98).flatten())
-            ray_bundle = ray_bundle[inliners]
-            if len(ray_bundle) > 0:
-                background = torch.zeros(H*W, 3, device=self.device)
-                background[inliners] = self.bg_model.get_background_rgb(ray_bundle).float()
-                background = background.view(H, W, 3)
-            else:
-                background = torch.zeros(H, W, 3, device=self.device)
+        if self.config.background_color_sh_degree > 0:
+            mask = (alpha < 0.98)
+            background = self.get_background_image(camera, mask)
             rgb = rgb + (1.0 - alpha) * background
 
         # clamp pixel to between 0 and 1
