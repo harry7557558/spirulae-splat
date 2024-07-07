@@ -107,6 +107,15 @@ torch::Tensor get_tile_bin_edges_tensor(
 );
 
 
+std::tuple<torch::Tensor, torch::Tensor> compute_relocation_tensor(
+    torch::Tensor &opacities,
+    torch::Tensor &scales,
+    torch::Tensor &ratios,
+    torch::Tensor &binoms,
+    const int n_max
+);
+
+
 std::tuple<
     torch::Tensor,  // final_index
     torch::Tensor,  // out_img

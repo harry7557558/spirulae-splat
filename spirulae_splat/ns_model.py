@@ -35,6 +35,7 @@ from spirulae_splat.splat.rasterize import rasterize_gaussians
 from spirulae_splat.splat.rasterize_depth import rasterize_gaussians_depth
 from spirulae_splat.splat.rasterize_simple import rasterize_gaussians_simple
 from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
+from spirulae_splat.splat.relocation import compute_relocation
 
 from nerfstudio.cameras.camera_optimizers import (CameraOptimizer,
                                                   CameraOptimizerConfig)
@@ -128,6 +129,10 @@ class SpirulaeModelConfig(ModelConfig):
     """Whether to randomize the background color."""
     num_downscales: int = 2
     """at the beginning, resolution is 1/2^d, where d is this number"""
+    use_mcmc: bool = True
+    """use Markov-Chain Monte Carlo for gaussian control"""
+
+    # traditional control
     cull_alpha_thresh: float = 0.1
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
     cull_scale_thresh: float = 0.5
@@ -148,6 +153,19 @@ class SpirulaeModelConfig(ModelConfig):
     """below this size, gaussians are *duplicated*, otherwise split"""
     n_split_samples: int = 2
     """number of samples to split gaussians into"""
+
+    # MCMC control
+    refine_start_iter: int = 500
+    """start MCMC refinement at this number of steps"""
+    refine_stop_iter: int = 25000
+    """end MCMC refinement at this number of steps"""
+    cap_max: int = 100000
+    """maximum number of splats for MCMC"""
+    noise_lr: float = 5e5
+    """MCMC sampling noise learning rate"""
+    min_opacity: float = 0.005
+    """minimum opacity for MCMC relocation"""
+
     sh_degree_interval: int = 1000
     """every n intervals turn on another sh degree"""
     cull_screen_size: float = 0.15
@@ -166,6 +184,10 @@ class SpirulaeModelConfig(ModelConfig):
     """weight of ssim loss"""
     stop_split_at: int = 15000
     """stop splitting at this step"""
+
+    # representation
+    use_anisotropy: bool = False
+    """use anisotropy for splats"""
     sh_degree: int = 3
     """maximum degree of spherical harmonics to use"""
     ch_degree_r: int = 0  # 3 | 0
@@ -186,20 +208,27 @@ class SpirulaeModelConfig(ModelConfig):
     """threshold of ratio of gaussian max to min scale before applying regularization
     loss from the PhysGaussian paper
     """
-    depth_regularizer_weight: float = 0.02
+    depth_reg_weight: float = 0.02
     """Weight for depth regularizer"""
-    depth_regularizer_warmup: int = 0
+    depth_reg_warmup: int = 0
     """warmup steps for depth regularizer"""
-    normal_regularizer_weight: float = 0.04
+    normal_reg_weight: float = 0.04
     """Weight for normal regularizer"""
-    normal_regularizer_per_splat_factor: float = 0.4
+    normal_reg_per_splat_factor: float = 0.4
     """Factor of per-splat vs overall normal regularization, 0 to 1"""
-    normal_regularizer_warmup: int = 0
+    normal_reg_warmup: int = 0
     """warmup steps for normal regularizer"""
-    regularizer_warmup_length: int = 2000
-    """Warmup for regularizers. IF THE INITIALIZATION IS RANDOM, only apply regularizers after this many steps."""
+    reg_warmup_length: int = 2000
+    """Warmup for depth and normal regularizers.
+       IF THE INITIALIZATION IS RANDOM, only apply regularizers after this many steps."""
+    mcmc_opacity_reg: float = 0.01
+    """Opacity regularization from MCMC"""
+    mcmc_scale_reg: float = 0.01
+    """Scale regularization from MCMC"""
     output_depth_during_training: bool = False
     """If True, output depth during training. Otherwise, only output depth during evaluation."""
+    use_camera_optimizer: bool = False
+    """Whether to use camera optimizer"""
     camera_optimizer: CameraOptimizerConfig = field(default_factory=lambda: CameraOptimizerConfig(mode="SO3xR3"))
     """Config of the camera optimizer to use"""
 
@@ -276,7 +305,7 @@ class SpirulaeModel(Model):
             features_ch = torch.nn.Parameter(torch.zeros((num_points, dim_ch, 3)))
 
         opacities = torch.nn.Parameter(torch.logit(0.1 * torch.ones(num_points, 1)))
-        anisotropies = torch.nn.Parameter(0.01*torch.randn(num_points, 2))
+        anisotropies = torch.nn.Parameter(torch.zeros((num_points, 2)))
 
         gauss_params = {
             "means": means,
@@ -408,7 +437,7 @@ class SpirulaeModel(Model):
     def remove_from_optim(self, optimizer, deleted_mask, new_params):
         """removes the deleted_mask from the optimizer provided"""
         assert len(new_params) == 1
-        # assert isinstance(optimizer, torch.optim.Adam), "Only works with Adam"
+        assert isinstance(optimizer, torch.optim.Adam), "Only works with Adam"
 
         param = optimizer.param_groups[0]["params"][0]
         param_state = optimizer.state[param]
@@ -435,6 +464,7 @@ class SpirulaeModel(Model):
 
     def dup_in_optim(self, optimizer, dup_mask, new_params, n=2):
         """adds the parameters to the optimizer"""
+        assert isinstance(optimizer, torch.optim.Adam), "Only works with Adam"
         param = optimizer.param_groups[0]["params"][0]
         param_state = optimizer.state[param]
         if "exp_avg" in param_state:
@@ -465,6 +495,34 @@ class SpirulaeModel(Model):
                 continue
             self.dup_in_optim(optimizers.optimizers[group], dup_mask, param, n)
 
+    def reset_optim(self, optimizer, sampled_idxs):
+        """removes the deleted_mask from the optimizer provided"""
+        assert isinstance(optimizer, torch.optim.Adam), "Only works with Adam"
+
+        param = optimizer.param_groups[0]["params"][0]
+        param_state = optimizer.state[param]
+        del optimizer.state[param]
+
+        if "exp_avg" in param_state:
+            param_state["exp_avg"][sampled_idxs] = 0.0
+            param_state["exp_avg_sq"][sampled_idxs] = 0.0
+
+    def reset_all_optim(self, optimizers, sampled_idxs):
+        param_groups = self.get_gaussian_param_groups()
+        for group, param in param_groups.items():
+            if group not in self.gauss_params:
+                continue
+            self.reset_optim(optimizers.optimizers[group], sampled_idxs)
+        torch.cuda.empty_cache()
+
+    def set_crop(self, crop_box: Optional[OrientedBox]):
+        self.crop_box = crop_box
+
+    def set_background(self, background_color: torch.Tensor):
+        assert background_color.shape == (3,)
+        # self.background_color = background_color
+
+    @torch.no_grad()
     def after_train(self, step: int):
         assert step == self.step
         if self.max_2Dsize is None:
@@ -476,141 +534,134 @@ class SpirulaeModel(Model):
             return
         if not hasattr(self.features_ch, 'absgrad'):
             return
-        with torch.no_grad():
-            # keep track of a moving average of grad norms
-            visible_mask = (self.radii > 0).flatten()
-            assert self.positions.absgrad is not None  # type: ignore
-            grads = self.positions.absgrad.detach().norm(dim=-1)  # type: ignore
-            ch_grads = self.features_ch.absgrad.detach().flatten()
-            # print(f"grad norm min {grads.min().item()} max {grads.max().item()} mean {grads.mean().item()} size {grads.shape}")
-            if self.xys_grad_norm is None or self.ch_grad_norm is None:
-                self.xys_grad_norm = grads
-                self.ch_grad_norm = ch_grads
-                self.vis_counts = torch.ones_like(self.xys_grad_norm)
-            else:
-                assert self.vis_counts is not None
-                self.vis_counts[visible_mask] = self.vis_counts[visible_mask] + 1
-                self.xys_grad_norm[visible_mask] = grads[visible_mask] + self.xys_grad_norm[visible_mask]
-                self.ch_grad_norm[visible_mask] = ch_grads[visible_mask] + self.ch_grad_norm[visible_mask]
+        # keep track of a moving average of grad norms
+        visible_mask = (self.radii > 0).flatten()
+        assert self.positions.absgrad is not None  # type: ignore
+        grads = self.positions.absgrad.detach().norm(dim=-1)  # type: ignore
+        ch_grads = self.features_ch.absgrad.detach().flatten()
+        # print(f"grad norm min {grads.min().item()} max {grads.max().item()} mean {grads.mean().item()} size {grads.shape}")
+        if self.xys_grad_norm is None or self.ch_grad_norm is None:
+            self.xys_grad_norm = grads
+            self.ch_grad_norm = ch_grads
+            self.vis_counts = torch.ones_like(self.xys_grad_norm)
+        else:
+            assert self.vis_counts is not None
+            self.vis_counts[visible_mask] = self.vis_counts[visible_mask] + 1
+            self.xys_grad_norm[visible_mask] = grads[visible_mask] + self.xys_grad_norm[visible_mask]
+            self.ch_grad_norm[visible_mask] = ch_grads[visible_mask] + self.ch_grad_norm[visible_mask]
 
-            # update the max screen size, as a ratio of number of pixels
-            # newradii = self.radii.detach()[self.depth_sort_i][visible_mask]
-            newradii = self.radii.detach()[visible_mask]
-            self.max_2Dsize[visible_mask] = torch.maximum(
-                self.max_2Dsize[visible_mask],
-                newradii / float(max(self.last_size[0], self.last_size[1])),
-            )
+        # update the max screen size, as a ratio of number of pixels
+        # newradii = self.radii.detach()[self.depth_sort_i][visible_mask]
+        newradii = self.radii.detach()[visible_mask]
+        self.max_2Dsize[visible_mask] = torch.maximum(
+            self.max_2Dsize[visible_mask],
+            newradii / float(max(self.last_size[0], self.last_size[1])),
+        )
 
-    def set_crop(self, crop_box: Optional[OrientedBox]):
-        self.crop_box = crop_box
-
-    def set_background(self, background_color: torch.Tensor):
-        assert background_color.shape == (3,)
-        # self.background_color = background_color
-
+    @torch.no_grad()
     def refinement_after(self, optimizers: Optimizers, step):
         assert step == self.step
         if self.step <= self.config.warmup_length:
             return
-        with torch.no_grad():
-            # Offset all the opacity reset logic by refine_every so that we don't
-            # save checkpoints right when the opacity is reset (saves every 2k)
-            # then cull
-            # only split/cull if we've seen every image since opacity reset
-            reset_interval = self.config.reset_alpha_every * self.config.refine_every
-            do_densification = (
-                self.step < self.config.stop_split_at
-                and self.step % reset_interval > self.num_train_data + self.config.refine_every
-            )
-            # assert self.xys_grad_norm is not None and self.vis_counts is not None and self.max_2Dsize is not None
-            if self.xys_grad_norm is None or self.ch_grad_norm is None \
-                or self.vis_counts is None or self.max_2Dsize is None:
-                do_densification = False
-                self.avg_xy_grad_norm = None
-            else:
-                self.avg_xy_grad_norm = (self.xys_grad_norm / self.vis_counts) * 0.5# * max(self.last_size[0], self.last_size[1])
-                self.avg_ch_grad_norm = self.ch_grad_norm / self.vis_counts
-            # with torch.no_grad():
-            #     print("avg_grad_norm", torch.mean(self.avg_grad_norm).item(), torch.median(self.avg_grad_norm).item())
-            #     assert False
-            if do_densification:
-                # then we densify
-                high_grads = (self.avg_xy_grad_norm > self.config.densify_xy_grad_thresh).squeeze()
-                high_grads |= (self.avg_ch_grad_norm > self.config.densify_ch_grad_thresh).squeeze()
-                splits = (self.scales.exp().max(dim=-1).values > self.config.densify_size_thresh).squeeze()
-                if self.step < self.config.stop_screen_size_at:
-                    splits |= (self.max_2Dsize > self.config.split_screen_size).squeeze()
-                splits &= high_grads
-                nsamps = self.config.n_split_samples
-                split_params = self.split_gaussians(splits, nsamps)
-
-                dups = (self.scales.exp().max(dim=-1).values <= self.config.densify_size_thresh).squeeze()
-                dups &= high_grads
-                dup_params = self.dup_gaussians(dups)
-                for name, param in self.gauss_params.items():
-                    self.gauss_params[name] = torch.nn.Parameter(
-                        torch.cat([param.detach(), split_params[name], dup_params[name]], dim=0)
-                    )
-
-                # append zeros to the max_2Dsize tensor
-                self.max_2Dsize = torch.cat(
-                    [
-                        self.max_2Dsize,
-                        torch.zeros_like(split_params["scales"][:, 0]),
-                        torch.zeros_like(dup_params["scales"][:, 0]),
-                    ],
-                    dim=0,
-                )
-
-                split_idcs = torch.where(splits)[0]
-                self.dup_in_all_optim(optimizers, split_idcs, nsamps)
-
-                dup_idcs = torch.where(dups)[0]
-                self.dup_in_all_optim(optimizers, dup_idcs, 1)
-
-                # After a guassian is split into two new gaussians, the original one should also be pruned.
-                splits_mask = torch.cat(
-                    (
-                        splits,
-                        torch.zeros(
-                            nsamps * splits.sum() + dups.sum(),
-                            device=self.device,
-                            dtype=torch.bool,
-                        ),
-                    )
-                )
-
-                deleted_mask = self.cull_gaussians(splits_mask)
-            elif self.step >= self.config.stop_split_at and self.config.continue_cull_post_densification:
-                deleted_mask = self.cull_gaussians()
-            else:
-                # if we donot allow culling post refinement, no more gaussians will be pruned.
-                deleted_mask = None
-
-            if deleted_mask is not None:
-                self.remove_from_all_optim(optimizers, deleted_mask)
-
-            if self.step < self.config.stop_split_at and self.step % reset_interval == self.config.refine_every:
-                # Reset value is set to be twice of the cull_alpha_thresh
-                reset_value = self.config.cull_alpha_thresh * 2.0
-                self.opacities.data = torch.clamp(
-                    self.opacities.data,
-                    max=torch.logit(torch.tensor(reset_value, device=self.device)).item(),
-                )
-                # reset the exp of optimizer
-                optim = optimizers.optimizers["opacities"]
-                param = optim.param_groups[0]["params"][0]
-                param_state = optim.state[param]
-                param_state["exp_avg"] = torch.zeros_like(param_state["exp_avg"])
-                param_state["exp_avg_sq"] = torch.zeros_like(param_state["exp_avg_sq"])
-
-            self.xys_grad_norm = None
-            self.vis_counts = None
+        # Offset all the opacity reset logic by refine_every so that we don't
+        # save checkpoints right when the opacity is reset (saves every 2k)
+        # then cull
+        # only split/cull if we've seen every image since opacity reset
+        reset_interval = self.config.reset_alpha_every * self.config.refine_every
+        do_densification = (
+            self.step < self.config.stop_split_at
+            and self.step % reset_interval > self.num_train_data + self.config.refine_every
+        )
+        # assert self.xys_grad_norm is not None and self.vis_counts is not None and self.max_2Dsize is not None
+        if self.xys_grad_norm is None or self.ch_grad_norm is None \
+            or self.vis_counts is None or self.max_2Dsize is None:
+            do_densification = False
             self.avg_xy_grad_norm = None
-            self.avg_ch_grad_norm = None
-            self.max_2Dsize = None
+        else:
+            self.avg_xy_grad_norm = (self.xys_grad_norm / self.vis_counts) * 0.5# * max(self.last_size[0], self.last_size[1])
+            self.avg_ch_grad_norm = self.ch_grad_norm / self.vis_counts
+        # with torch.no_grad():
+        #     print("avg_grad_norm", torch.mean(self.avg_grad_norm).item(), torch.median(self.avg_grad_norm).item())
+        #     assert False
+        if do_densification:
+            # then we densify
+            high_grads = (self.avg_xy_grad_norm > self.config.densify_xy_grad_thresh).squeeze()
+            high_grads |= (self.avg_ch_grad_norm > self.config.densify_ch_grad_thresh).squeeze()
+            splits = (self.scales.exp().max(dim=-1).values > self.config.densify_size_thresh).squeeze()
+            if self.step < self.config.stop_screen_size_at:
+                splits |= (self.max_2Dsize > self.config.split_screen_size).squeeze()
+            splits &= high_grads
+            nsamps = self.config.n_split_samples
+            split_params = self.split_splats(splits, nsamps)
 
-    def cull_gaussians(self, extra_cull_mask: Optional[torch.Tensor] = None):
+            dups = (self.scales.exp().max(dim=-1).values <= self.config.densify_size_thresh).squeeze()
+            dups &= high_grads
+            dup_params = self.dup_splats(dups)
+            for name, param in self.gauss_params.items():
+                self.gauss_params[name] = torch.nn.Parameter(
+                    torch.cat([param.detach(), split_params[name], dup_params[name]], dim=0)
+                )
+
+            # append zeros to the max_2Dsize tensor
+            self.max_2Dsize = torch.cat(
+                [
+                    self.max_2Dsize,
+                    torch.zeros_like(split_params["scales"][:, 0]),
+                    torch.zeros_like(dup_params["scales"][:, 0]),
+                ],
+                dim=0,
+            )
+
+            split_idcs = torch.where(splits)[0]
+            self.dup_in_all_optim(optimizers, split_idcs, nsamps)
+
+            dup_idcs = torch.where(dups)[0]
+            self.dup_in_all_optim(optimizers, dup_idcs, 1)
+
+            # After a guassian is split into two new gaussians, the original one should also be pruned.
+            splits_mask = torch.cat(
+                (
+                    splits,
+                    torch.zeros(
+                        nsamps * splits.sum() + dups.sum(),
+                        device=self.device,
+                        dtype=torch.bool,
+                    ),
+                )
+            )
+
+            deleted_mask = self.cull_splats(splits_mask)
+        elif self.step >= self.config.stop_split_at and self.config.continue_cull_post_densification:
+            deleted_mask = self.cull_splats()
+        else:
+            # if we donot allow culling post refinement, no more gaussians will be pruned.
+            deleted_mask = None
+
+        if deleted_mask is not None:
+            self.remove_from_all_optim(optimizers, deleted_mask)
+
+        if self.step < self.config.stop_split_at and self.step % reset_interval == self.config.refine_every:
+            # Reset value is set to be twice of the cull_alpha_thresh
+            reset_value = self.config.cull_alpha_thresh * 2.0
+            self.opacities.data = torch.clamp(
+                self.opacities.data,
+                max=torch.logit(torch.tensor(reset_value, device=self.device)).item(),
+            )
+            # reset the exp of optimizer
+            optim = optimizers.optimizers["opacities"]
+            param = optim.param_groups[0]["params"][0]
+            param_state = optim.state[param]
+            param_state["exp_avg"] = torch.zeros_like(param_state["exp_avg"])
+            param_state["exp_avg_sq"] = torch.zeros_like(param_state["exp_avg_sq"])
+
+        self.xys_grad_norm = None
+        self.vis_counts = None
+        self.avg_xy_grad_norm = None
+        self.avg_ch_grad_norm = None
+        self.max_2Dsize = None
+
+    @torch.no_grad()
+    def cull_splats(self, extra_cull_mask: Optional[torch.Tensor] = None):
         """
         This function deletes gaussians with under a certain opacity threshold
         extra_cull_mask: a mask indicates extra gaussians to cull besides existing culling criterion
@@ -657,7 +708,8 @@ class SpirulaeModel(Model):
 
         return culls
 
-    def split_gaussians(self, split_mask, samps):
+    @torch.no_grad()
+    def split_splats(self, split_mask, samps):
         """
         This function splits gaussians that are too large
         """
@@ -703,7 +755,8 @@ class SpirulaeModel(Model):
                 out[name] = param[split_mask].repeat(samps, 1)
         return out
 
-    def dup_gaussians(self, dup_mask):
+    @torch.no_grad()
+    def dup_splats(self, dup_mask):
         """
         This function duplicates gaussians that are too small
         """
@@ -718,27 +771,152 @@ class SpirulaeModel(Model):
         self.opacities[dup_mask] = new_opacities
         return new_dups
 
+    @torch.no_grad()
+    def mcmc_after_train(self, optimizers: Optimizers, step: int):
+        optimizer = optimizers.optimizers['means']
+        for param_group in optimizer.param_groups:
+            lr = param_group['lr']
+            break
+        self.mcmc_add_noise_to_splats(lr)
+
+    @torch.no_grad()
+    def mcmc_refinement_after(self, optimizers: Optimizers, step: int):
+        assert step == self.step
+        if self.step <= self.config.refine_start_iter or \
+            self.step > self.config.refine_stop_iter:
+            return
+        num_relocated = self.mcmc_relocate_splats(optimizers)
+        CONSOLE.log(f"Step {step}: Relocated {num_relocated} splats.")
+        num_new = self.mcmc_add_new_splats(optimizers)
+        CONSOLE.log(f"Step {step}: Added {num_new} splats.")
+
+    @torch.no_grad()
+    def mcmc_relocate_splats(self, optimizers: Optimizers) -> int:
+        dead_mask = torch.sigmoid(self.opacities.squeeze()) <= self.config.min_opacity
+        dead_indices = dead_mask.nonzero(as_tuple=True)[0]
+        alive_indices = (~dead_mask).nonzero(as_tuple=True)[0]
+        num_gs = len(dead_indices)
+        if num_gs <= 0:
+            return num_gs
+        
+        eps = torch.finfo(torch.float32).eps
+        probs = torch.sigmoid(self.opacities)[alive_indices].squeeze()
+        probs = probs / (probs.sum() + eps)
+        sampled_idxs = torch.multinomial(probs, num_gs, replacement=True)
+        sampled_idxs = alive_indices[sampled_idxs]
+
+        new_opacities, new_scales = compute_relocation(
+            opacities=torch.sigmoid(self.opacities)[sampled_idxs],
+            scales=torch.exp(self.scales)[sampled_idxs],
+            ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
+        )
+        new_opacities = torch.clamp(
+            new_opacities, max=0.5, min=0.0*self.config.min_opacity)
+        self.opacities[sampled_idxs] = torch.logit(new_opacities)
+        self.scales[sampled_idxs] = torch.log(new_scales)
+
+        for name, param in self.gauss_params.items():
+            self.gauss_params[name][dead_indices] = param[sampled_idxs].contiguous()
+
+        self.reset_all_optim(optimizers, dead_indices)
+        self.reset_all_optim(optimizers, sampled_idxs)
+
+        return num_gs
+
+    @torch.no_grad()
+    def mcmc_add_new_splats(self, optimizers: Optimizers) -> int:
+        current_num_points = len(self.opacities)
+        target_num = min(self.config.cap_max, int(1.05 * current_num_points)+1)
+        num_gs = max(0, target_num - current_num_points)
+        if num_gs <= 0:
+            return num_gs
+
+        # Sample for new splats
+        eps = torch.finfo(torch.float32).eps
+        probs = torch.sigmoid(self.opacities).squeeze()
+        probs = probs / (probs.sum() + eps)
+        sampled_idxs = torch.multinomial(probs, num_gs, replacement=True)
+        new_opacities, new_scales = compute_relocation(
+            opacities=torch.sigmoid(self.opacities)[sampled_idxs],
+            scales=torch.exp(self.scales)[sampled_idxs],
+            ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
+        )
+        new_opacities = torch.clamp(
+            new_opacities, max=0.5, min=0.0*self.config.min_opacity)
+        self.opacities[sampled_idxs] = torch.logit(new_opacities)
+        self.scales[sampled_idxs] = torch.log(new_scales)
+
+        indices = torch.concatenate((
+            torch.arange(current_num_points).to(sampled_idxs),
+            sampled_idxs))
+        for name, param in self.gauss_params.items():
+            self.gauss_params[name] = param[indices].contiguous()
+
+        self.dup_in_all_optim(optimizers, sampled_idxs, 2)
+        return num_gs
+
+    @torch.no_grad()
+    def mcmc_add_noise_to_splats(self, last_lr):
+        opacities = torch.sigmoid(self.opacities)
+        scales = torch.exp(self.scales_3d)
+        scales[:, 2] = 0.2 * torch.fmin(scales[:,0], scales[:,1])
+
+        R = quat_to_rotmat(self.quats)  # (..., 3, 3)
+        M = R * scales[..., None, :]  # (..., 3, 3)
+        covars = torch.bmm(M, M.transpose(-1, -2))  # (..., 3, 3)
+
+        def op_sigmoid(x, k=100, x0=1.0-self.config.min_opacity):
+            return 1 / (1 + torch.exp(-k * (x - x0)))
+
+        noise_sc = torch.sqrt((self.means**2).sum(axis=0)+1)
+        noise = (
+            torch.randn_like(self.means)
+            * (op_sigmoid(1 - opacities))
+            * self.config.noise_lr
+            * last_lr
+            # * torch.clamp(noise_sc, -1e2, 1e2)
+        )
+        noise = torch.bmm(covars, noise.unsqueeze(-1)).squeeze(-1)
+        self.gauss_params['means'] = self.gauss_params['means'] + noise
+
     def get_training_callbacks(
         self, training_callback_attributes: TrainingCallbackAttributes
     ) -> List[TrainingCallback]:
         cbs = []
         cbs.append(TrainingCallback([TrainingCallbackLocation.BEFORE_TRAIN_ITERATION], self.step_cb))
         # return cbs
-        # The order of these matters
-        cbs.append(
-            TrainingCallback(
-                [TrainingCallbackLocation.AFTER_TRAIN_ITERATION],
-                self.after_train,
+        if self.config.use_mcmc:
+            cbs.append(
+                TrainingCallback(
+                    [TrainingCallbackLocation.AFTER_TRAIN_ITERATION],
+                    self.mcmc_after_train,
+                    args=[training_callback_attributes.optimizers],
+                )
             )
-        )
-        cbs.append(
-            TrainingCallback(
-                [TrainingCallbackLocation.AFTER_TRAIN_ITERATION],
-                self.refinement_after,
-                update_every_num_iters=self.config.refine_every,
-                args=[training_callback_attributes.optimizers],
+            cbs.append(
+                TrainingCallback(
+                    [TrainingCallbackLocation.AFTER_TRAIN_ITERATION],
+                    self.mcmc_refinement_after,
+                    update_every_num_iters=self.config.refine_every,
+                    args=[training_callback_attributes.optimizers],
+                )
             )
-        )
+        else:
+            # The order of these matters
+            cbs.append(
+                TrainingCallback(
+                    [TrainingCallbackLocation.AFTER_TRAIN_ITERATION],
+                    self.after_train,
+                )
+            )
+            cbs.append(
+                TrainingCallback(
+                    [TrainingCallbackLocation.AFTER_TRAIN_ITERATION],
+                    self.refinement_after,
+                    update_every_num_iters=self.config.refine_every,
+                    args=[training_callback_attributes.optimizers],
+                )
+            )
         return cbs
 
     def step_cb(self, step):
@@ -752,8 +930,8 @@ class SpirulaeModel(Model):
             for name in [
                 "means", "scales", "quats",
                 "features_dc", "features_sh", "features_ch",
-                "opacities", "anisotropies"
-                ]
+                "opacities"
+            ] + ["anisotropies"] * self.config.use_anisotropy
         }
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
@@ -767,7 +945,8 @@ class SpirulaeModel(Model):
             gps["background_color"] = [self.background_color]
             if self.background_sh is not None:
                 gps["background_sh"] = [self.background_sh]
-        self.camera_optimizer.get_param_groups(param_groups=gps)
+        if self.config.use_camera_optimizer:
+            self.camera_optimizer.get_param_groups(param_groups=gps)
         return gps
 
     def _get_downscale_factor(self):
@@ -881,7 +1060,7 @@ class SpirulaeModel(Model):
         assert camera.shape[0] == 1, "Only one camera at a time"
 
         # get the background color
-        if self.training:
+        if self.training and self.config.use_camera_optimizer:
             optimized_camera_to_world = self.camera_optimizer.apply_to_camera(camera)[0, ...]
         else:
             optimized_camera_to_world = camera.camera_to_worlds[0, ...]
@@ -1144,7 +1323,8 @@ class SpirulaeModel(Model):
 
         metrics_dict["gaussian_count"] = self.num_points
 
-        self.camera_optimizer.get_metrics_dict(metrics_dict)
+        if self.config.use_camera_optimizer:
+            self.camera_optimizer.get_metrics_dict(metrics_dict)
         return metrics_dict
 
     def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
@@ -1187,11 +1367,11 @@ class SpirulaeModel(Model):
         alpha = outputs['alpha']
         reg_depth = outputs["reg_depth"]
         reg_normal = outputs["reg_normal"]
-        weight_depth_reg = self.config.depth_regularizer_weight * \
-            min(self.step / max(self.config.depth_regularizer_warmup, 1), 1)
-        weight_normal_reg = self.config.normal_regularizer_weight * \
-            min(self.step / max(self.config.normal_regularizer_warmup, 1), 1)
-        if self.step < self.config.regularizer_warmup_length and self.random_init:
+        weight_depth_reg = self.config.depth_reg_weight * \
+            min(self.step / max(self.config.depth_reg_warmup, 1), 1)
+        weight_normal_reg = self.config.normal_reg_weight * \
+            min(self.step / max(self.config.normal_reg_warmup, 1), 1)
+        if self.step < self.config.reg_warmup_length and self.random_init:
             weight_depth_reg, weight_normal_reg = 0.0, 0.0
         depth_reg = weight_depth_reg * reg_depth.sum() / alpha.sum()
         normal_reg_per_splat = weight_normal_reg * reg_normal.sum() / alpha.sum()
@@ -1203,11 +1383,16 @@ class SpirulaeModel(Model):
         normal_reg_s = 1.0-dot
         normal_reg_overall = weight_normal_reg * (normal_reg_s*alpha).sum() / alpha.sum()
         normal_reg = normal_reg_overall + (normal_reg_per_splat-normal_reg_overall) * \
-            self.config.normal_regularizer_per_splat_factor
+            self.config.normal_reg_per_splat_factor
+        
+        # MCMC regularizers
+        mcmc_opacity_reg = self.config.mcmc_opacity_reg * \
+            torch.abs(torch.sigmoid(self.opacities)).mean()
+        mcmc_scale_reg = self.config.mcmc_scale_reg * \
+            torch.abs(torch.exp(self.scales)).mean()
 
         # regularizations for parameters
         quat_norm_reg = 0.1 * (torch.log(self.quats.norm(dim=-1)+0.001)**2).mean()
-        opac_reg = 0.01 * torch.sigmoid(self.opacities).mean()
 
         loss_dict = {
             "main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss,
@@ -1215,10 +1400,11 @@ class SpirulaeModel(Model):
             "depth_reg": depth_reg,
             "normal_reg": normal_reg,
             "quat_reg": quat_norm_reg,
-            # 'opac_reg': opac_reg,
+            'mcmc_opacity_reg': mcmc_opacity_reg,
+            'mcmc_scale_reg': mcmc_scale_reg,
         }
 
-        if self.training:
+        if self.training and self.config.use_camera_optimizer:
             # Add loss from camera optimizer
             self.camera_optimizer.get_loss_dict(loss_dict)
 

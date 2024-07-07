@@ -298,3 +298,55 @@ __global__ void get_tile_bin_edges(
         return;
     }
 }
+
+
+// Compute relocation for MCMC update
+__global__ void compute_relocation_kernel(
+    const int num_points,
+    const int num_scales,
+    const float *opacities,
+    const float *scales,
+    const int *ratios,
+    float *binoms,
+    int n_max,
+    float *new_opacities,
+    float *new_scales
+) {
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx >= num_points)
+        return;
+
+    int n_idx = ratios[idx];
+    float denom_sum = 0.0f;
+
+    float opac = opacities[idx];
+
+#if 0
+    // for Gaussian, minimize residual
+    float new_opac = 1.0f - powf(1.0f - opac, 1.0f / n_idx);
+    for (int i = 1; i <= n_idx; ++i) {
+        for (int k = 0; k <= (i - 1); ++k) {
+            float bin_coeff = binoms[(i - 1) * n_max + k];
+            float term =
+                (pow(-1, k) / sqrt(k + 1)) * pow(new_opac, k + 1);
+            denom_sum += (bin_coeff * term);
+        }
+    }
+    float sc = (opacities[idx] / denom_sum);
+#else
+    // for 1-r^2 splats, strictly less than
+
+    // keep opacity, change scale
+    //float new_opac = 1.0f - powf(1.0f - opac, 1.0f / n_idx);
+    //float sc = sqrtf(n_idx/opac * new_opac * powf(1.0f-new_opac, n_idx-1.0f));
+
+    // keep scale, change opacity
+    float new_opac = opac / n_idx;
+    float sc = 1.0f;
+
+#endif
+
+    new_opacities[idx] = new_opac;
+    for (int i = 0; i < num_scales; ++i)
+        new_scales[idx*num_scales+i] = sc * scales[idx*num_scales+i];
+}
