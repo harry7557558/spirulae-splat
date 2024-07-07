@@ -84,3 +84,15 @@ __global__ void compute_relocation_kernel(
     float *new_opacities,
     float *new_scales
 );
+
+
+__global__ void compute_relocation_split_kernel(
+    const int num_points,
+    const float3 *positions,
+    const float4 *quats,
+    const float *opacities,
+    const float2 *scales,
+    float3 *new_position_offsets,
+    float *new_opacities,
+    float2 *new_scales
+);

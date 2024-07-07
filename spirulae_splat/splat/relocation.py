@@ -37,8 +37,29 @@ def compute_relocation(
     opacities = opacities.contiguous()
     scales = scales.contiguous()
     ratios = ratios.int().contiguous()
+    assert (ratios >= 2).all()
 
     new_opacities, new_scales = _C.compute_relocation(
         opacities, scales, ratios, BINOMS, N_MAX
     )
     return new_opacities, new_scales
+
+
+
+def compute_relocation_split(
+    positions: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    opacities: Tensor,  # [N]
+    scales: Tensor,  # [N, 2]
+) -> Tuple[Tensor, Tensor, Tensor]:
+    N = opacities.shape[0]
+    assert positions.shape == (N, 3), positions.shape
+    assert quats.shape == (N, 4), quats.shape
+    assert scales.shape == (N, 2), scales.shape
+
+    return _C.compute_relocation_split(
+        positions.contiguous(),
+        quats.contiguous(),
+        opacities.contiguous(),
+        scales.contiguous(),
+    )

@@ -17,4 +17,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("map_gaussian_to_intersects", &map_gaussian_to_intersects_tensor);
     m.def("get_tile_bin_edges", &get_tile_bin_edges_tensor);
     m.def("compute_relocation", &compute_relocation_tensor);
+    m.def("compute_relocation_split", &compute_relocation_split_tensor);
 }

@@ -35,7 +35,7 @@ from spirulae_splat.splat.rasterize import rasterize_gaussians
 from spirulae_splat.splat.rasterize_depth import rasterize_gaussians_depth
 from spirulae_splat.splat.rasterize_simple import rasterize_gaussians_simple
 from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
-from spirulae_splat.splat.relocation import compute_relocation
+from spirulae_splat.splat.relocation import compute_relocation, compute_relocation_split
 
 from nerfstudio.cameras.camera_optimizers import (CameraOptimizer,
                                                   CameraOptimizerConfig)
@@ -131,8 +131,22 @@ class SpirulaeModelConfig(ModelConfig):
     """at the beginning, resolution is 1/2^d, where d is this number"""
     use_mcmc: bool = True
     """use Markov-Chain Monte Carlo for gaussian control"""
+    random_init: bool = False
+    """whether to initialize the positions uniformly randomly (not SFM points)"""
+    num_random: int = 20000
+    """Number of gaussians to initialize if random init is used"""
+    random_scale: float = 1.0
+    """Position standard deviation to initialize random gaussians"""
+    ssim_lambda: float = 0.2
+    """weight of ssim loss"""
+    output_depth_during_training: bool = False
+    """If True, output depth during training. Otherwise, only output depth during evaluation."""
+    use_camera_optimizer: bool = False
+    """Whether to use camera optimizer"""
+    camera_optimizer: CameraOptimizerConfig = field(default_factory=lambda: CameraOptimizerConfig(mode="SO3xR3"))
+    """Config of the camera optimizer to use"""
 
-    # traditional control
+    # classial control
     cull_alpha_thresh: float = 0.1
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
     cull_scale_thresh: float = 0.5
@@ -153,43 +167,36 @@ class SpirulaeModelConfig(ModelConfig):
     """below this size, gaussians are *duplicated*, otherwise split"""
     n_split_samples: int = 2
     """number of samples to split gaussians into"""
-
-    # MCMC control
-    refine_start_iter: int = 500
-    """start MCMC refinement at this number of steps"""
-    refine_stop_iter: int = 25000
-    """end MCMC refinement at this number of steps"""
-    cap_max: int = 100000
-    """maximum number of splats for MCMC"""
-    noise_lr: float = 5e5
-    """MCMC sampling noise learning rate"""
-    min_opacity: float = 0.005
-    """minimum opacity for MCMC relocation"""
-
-    sh_degree_interval: int = 1000
-    """every n intervals turn on another sh degree"""
+    stop_split_at: int = 15000
+    """stop splitting at this step"""
     cull_screen_size: float = 0.15
     """if a gaussian is more than this percent of screen space, cull it"""
     split_screen_size: float = 0.05
     """if a gaussian is more than this percent of screen space, split it"""
     stop_screen_size_at: int = 4000
     """stop culling/splitting at this step WRT screen size of gaussians"""
-    random_init: bool = False
-    """whether to initialize the positions uniformly randomly (not SFM points)"""
-    num_random: int = 20000
-    """Number of gaussians to initialize if random init is used"""
-    random_scale: float = 1.0
-    """Position standard deviation to initialize random gaussians"""
-    ssim_lambda: float = 0.2
-    """weight of ssim loss"""
-    stop_split_at: int = 15000
-    """stop splitting at this step"""
+
+    # MCMC control
+    refine_start_iter: int = 500
+    """start MCMC refinement at this number of steps"""
+    refine_stop_iter: int = 25000
+    """end MCMC refinement at this number of steps"""
+    cap_max: int = 200000
+    """maximum number of splats for MCMC"""
+    mcmc_split_splats: bool = True
+    """whether to split splats into two splats with different positions"""
+    noise_lr: float = 5e5
+    """MCMC sampling noise learning rate"""
+    min_opacity: float = 0.005
+    """minimum opacity for MCMC relocation"""
 
     # representation
     use_anisotropy: bool = False
     """use anisotropy for splats"""
     sh_degree: int = 3
     """maximum degree of spherical harmonics to use"""
+    sh_degree_interval: int = 1000
+    """every n intervals turn on another sh degree"""
     ch_degree_r: int = 0  # 3 | 0
     """maximum radial degree of cylindrical harmonics to use"""
     ch_degree_phi: int = 0  # 3 | 0
@@ -202,6 +209,8 @@ class SpirulaeModelConfig(ModelConfig):
     """make background color trainable"""
     background_color_sh_degree: int = 3
     """enable background model"""
+
+    # regularization
     use_scale_regularization: bool = True
     """If enabled, a scale regularization introduced in PhysGauss (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians."""
     max_gauss_ratio: float = 5.0
@@ -222,15 +231,10 @@ class SpirulaeModelConfig(ModelConfig):
     """Warmup for depth and normal regularizers.
        IF THE INITIALIZATION IS RANDOM, only apply regularizers after this many steps."""
     mcmc_opacity_reg: float = 0.01
-    """Opacity regularization from MCMC"""
+    """Opacity regularization from MCMC
+       Lower usually gives more accurate geometry, 0.01 gives good appearance"""
     mcmc_scale_reg: float = 0.01
     """Scale regularization from MCMC"""
-    output_depth_during_training: bool = False
-    """If True, output depth during training. Otherwise, only output depth during evaluation."""
-    use_camera_optimizer: bool = False
-    """Whether to use camera optimizer"""
-    camera_optimizer: CameraOptimizerConfig = field(default_factory=lambda: CameraOptimizerConfig(mode="SO3xR3"))
-    """Config of the camera optimizer to use"""
 
 
 class SpirulaeModel(Model):
@@ -805,18 +809,32 @@ class SpirulaeModel(Model):
         sampled_idxs = torch.multinomial(probs, num_gs, replacement=True)
         sampled_idxs = alive_indices[sampled_idxs]
 
-        new_opacities, new_scales = compute_relocation(
-            opacities=torch.sigmoid(self.opacities)[sampled_idxs],
-            scales=torch.exp(self.scales)[sampled_idxs],
-            ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
-        )
-        new_opacities = torch.clamp(
-            new_opacities, max=0.5, min=0.0*self.config.min_opacity)
-        self.opacities[sampled_idxs] = torch.logit(new_opacities)
-        self.scales[sampled_idxs] = torch.log(new_scales)
+        if self.config.mcmc_split_splats:
+            new_position_offsets, new_opacities, new_scales = compute_relocation_split(
+                self.positions[sampled_idxs],
+                self.quats[sampled_idxs],
+                torch.sigmoid(self.opacities)[sampled_idxs],
+                torch.exp(self.scales)[sampled_idxs],
+            )
+            self.opacities[sampled_idxs] = torch.logit(new_opacities)
+            self.scales[sampled_idxs] = torch.log(new_scales)
+            for name, param in self.gauss_params.items():
+                self.gauss_params[name][dead_indices] = param[sampled_idxs]
+            self.means[dead_indices] += new_position_offsets
+            self.means[sampled_idxs] -= new_position_offsets
 
-        for name, param in self.gauss_params.items():
-            self.gauss_params[name][dead_indices] = param[sampled_idxs].contiguous()
+        else:
+            new_opacities, new_scales = compute_relocation(
+                torch.sigmoid(self.opacities)[sampled_idxs],
+                torch.exp(self.scales)[sampled_idxs],
+                torch.bincount(sampled_idxs)[sampled_idxs] + 1,
+            )
+            new_opacities = torch.clamp(
+                new_opacities, max=0.5, min=0.0*self.config.min_opacity)
+            self.opacities[sampled_idxs] = torch.logit(new_opacities)
+            self.scales[sampled_idxs] = torch.log(new_scales)
+            for name, param in self.gauss_params.items():
+                self.gauss_params[name][dead_indices] = param[sampled_idxs]
 
         self.reset_all_optim(optimizers, dead_indices)
         self.reset_all_optim(optimizers, sampled_idxs)
@@ -836,21 +854,33 @@ class SpirulaeModel(Model):
         probs = torch.sigmoid(self.opacities).squeeze()
         probs = probs / (probs.sum() + eps)
         sampled_idxs = torch.multinomial(probs, num_gs, replacement=True)
-        new_opacities, new_scales = compute_relocation(
-            opacities=torch.sigmoid(self.opacities)[sampled_idxs],
-            scales=torch.exp(self.scales)[sampled_idxs],
-            ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
-        )
-        new_opacities = torch.clamp(
-            new_opacities, max=0.5, min=0.0*self.config.min_opacity)
-        self.opacities[sampled_idxs] = torch.logit(new_opacities)
-        self.scales[sampled_idxs] = torch.log(new_scales)
 
-        indices = torch.concatenate((
-            torch.arange(current_num_points).to(sampled_idxs),
-            sampled_idxs))
-        for name, param in self.gauss_params.items():
-            self.gauss_params[name] = param[indices].contiguous()
+        if self.config.mcmc_split_splats:
+            new_position_offsets, new_opacities, new_scales = compute_relocation_split(
+                self.positions[sampled_idxs],
+                self.quats[sampled_idxs],
+                torch.sigmoid(self.opacities)[sampled_idxs],
+                torch.exp(self.scales)[sampled_idxs],
+            )
+            self.opacities[sampled_idxs] = torch.logit(new_opacities)
+            self.scales[sampled_idxs] = torch.log(new_scales)
+            for name, param in self.gauss_params.items():
+                self.gauss_params[name] = torch.concatenate((param, param[sampled_idxs]))
+            self.means[sampled_idxs] += new_position_offsets
+            self.means[current_num_points:] -= new_position_offsets
+
+        else:
+            new_opacities, new_scales = compute_relocation(
+                opacities=torch.sigmoid(self.opacities)[sampled_idxs],
+                scales=torch.exp(self.scales)[sampled_idxs],
+                ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
+            )
+            new_opacities = torch.clamp(
+                new_opacities, max=0.5, min=0.0*self.config.min_opacity)
+            self.opacities[sampled_idxs] = torch.logit(new_opacities)
+            self.scales[sampled_idxs] = torch.log(new_scales)
+            for name, param in self.gauss_params.items():
+                self.gauss_params[name] = torch.concatenate((param, param[sampled_idxs]))
 
         self.dup_in_all_optim(optimizers, sampled_idxs, 2)
         return num_gs
@@ -859,7 +889,7 @@ class SpirulaeModel(Model):
     def mcmc_add_noise_to_splats(self, last_lr):
         opacities = torch.sigmoid(self.opacities)
         scales = torch.exp(self.scales_3d)
-        scales[:, 2] = 0.2 * torch.fmin(scales[:,0], scales[:,1])
+        scales[:, 2] = 0.5 * torch.fmin(scales[:,0], scales[:,1])
 
         R = quat_to_rotmat(self.quats)  # (..., 3, 3)
         M = R * scales[..., None, :]  # (..., 3, 3)
@@ -1335,8 +1365,15 @@ class SpirulaeModel(Model):
             batch: ground truth batch corresponding to outputs
             metrics_dict: dictionary of metrics, some of which we can use for loss
         """
-        gt_img = self.composite_with_background(self.get_gt_img(batch["image"]), outputs["background"])
+        gt_img_rgba = self.get_gt_img(batch["image"])
+        gt_img = self.composite_with_background(gt_img_rgba, outputs["background"])
         pred_img = outputs["rgb"]
+
+        alpha_loss = 0.0
+        if gt_img_rgba.shape[2] == 4:
+            alpha = gt_img_rgba[..., -1].unsqueeze(-1)
+            alpha_loss = alpha_loss + torch.relu(outputs['alpha']-alpha).mean()
+            print(alpha_loss.item())
 
         # Set masked part of both ground-truth and rendered image to black.
         # This is a little bit sketchy for the SSIM loss.
@@ -1347,6 +1384,8 @@ class SpirulaeModel(Model):
             assert mask.shape[:2] == gt_img.shape[:2] == pred_img.shape[:2]
             gt_img = gt_img * mask
             pred_img = pred_img * mask
+            # compute alpha loss
+            alpha_loss = alpha_loss + torch.relu(outputs['alpha']-mask).mean()
 
         Ll1 = torch.abs(gt_img - pred_img).mean()
         simloss = 1 - self.ssim(gt_img.permute(2, 0, 1)[None, ...], pred_img.permute(2, 0, 1)[None, ...])
@@ -1386,9 +1425,10 @@ class SpirulaeModel(Model):
             self.config.normal_reg_per_splat_factor
         
         # MCMC regularizers
-        mcmc_opacity_reg = self.config.mcmc_opacity_reg * \
+        use_mcmc = self.config.use_mcmc
+        mcmc_opacity_reg = use_mcmc * self.config.mcmc_opacity_reg * \
             torch.abs(torch.sigmoid(self.opacities)).mean()
-        mcmc_scale_reg = self.config.mcmc_scale_reg * \
+        mcmc_scale_reg = use_mcmc * self.config.mcmc_scale_reg * \
             torch.abs(torch.exp(self.scales)).mean()
 
         # regularizations for parameters
@@ -1396,6 +1436,7 @@ class SpirulaeModel(Model):
 
         loss_dict = {
             "main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss,
+            "alpha_loss": alpha_loss,
             "scale_reg": scale_reg,
             "depth_reg": depth_reg,
             "normal_reg": normal_reg,

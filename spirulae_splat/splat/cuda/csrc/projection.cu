@@ -350,3 +350,58 @@ __global__ void compute_relocation_kernel(
     for (int i = 0; i < num_scales; ++i)
         new_scales[idx*num_scales+i] = sc * scales[idx*num_scales+i];
 }
+
+
+__global__ void compute_relocation_split_kernel(
+    const int num_points,
+    const float3 *positions,
+    const float4 *quats,
+    const float *opacities,
+    const float2 *scales,
+    float3 *new_position_offsets,
+    float *new_opacities,
+    float2 *new_scales
+) {
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx >= num_points)
+        return;
+
+    // split into 2 splats, compute position offset (plus/minus)
+    // practically the effect of drawing more than 2 splats should be minimal
+
+    // https://www.desmos.com/3d/0ov5xkvbqx
+
+    const float a = 0.25f;
+
+    float opac = opacities[idx];
+
+    const float cx0 = 1.12234f;
+    const float cx1 = 0.394553f;
+    const float cx2 = -0.120572f;
+    float sx1 = cx0 + opac * (cx1 + cx2 * opac);
+
+    const float cy0 = 0.986738f;
+    const float cy1 = 0.0304732f;
+    const float cy2 = 0.0145201f;
+    float sy1 = cy0 + opac * (cy1 + cy2 * opac);
+
+    const float co1 = 0.554027f;
+    const float co2 = 0.295756f;
+    new_opacities[idx] = opac * (co1 + co2 * opac);
+
+    float4 quat = quats[idx];
+    glm::mat3 R = quat_to_rotmat(quat);
+
+    float2 scale = scales[idx];
+    if (scale.x > scale.y) {
+        glm::vec3 offset = a * scale.x * R[0];
+        new_position_offsets[idx] = { offset.x, offset.y, offset.z };
+        new_scales[idx] = { scale.x / sx1, scale.y / sy1 };
+    }
+    else {
+        glm::vec3 offset = a * scale.y * R[1];
+        new_position_offsets[idx] = { offset.x, offset.y, offset.z };
+        new_scales[idx] = { scale.x / sy1, scale.y / sx1 };
+    }
+
+}

@@ -308,7 +308,10 @@ torch::Tensor get_tile_bin_edges_tensor(
 
 
 
-std::tuple<torch::Tensor, torch::Tensor> compute_relocation_tensor(
+std::tuple<
+    torch::Tensor,  // new_opacities
+    torch::Tensor  // new_scales
+> compute_relocation_tensor(
     torch::Tensor &opacities,
     torch::Tensor &scales,
     torch::Tensor &ratios,
@@ -340,6 +343,48 @@ std::tuple<torch::Tensor, torch::Tensor> compute_relocation_tensor(
     }
     return std::make_tuple(new_opacities, new_scales);
 }
+
+std::tuple<
+    torch::Tensor,  // new_position_offsets
+    torch::Tensor,  // new_opacities
+    torch::Tensor  // new_scales
+> compute_relocation_split_tensor(
+    torch::Tensor &positions,
+    torch::Tensor &quats,
+    torch::Tensor &opacities,
+    torch::Tensor &scales
+) {
+    DEVICE_GUARD(opacities);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(scales);
+    CHECK_INPUT(positions);
+    CHECK_INPUT(quats);
+
+    torch::Tensor new_position_offsets = torch::empty_like(positions);
+    torch::Tensor new_opacities = torch::empty_like(opacities);
+    torch::Tensor new_scales = torch::empty_like(scales);
+
+    uint32_t N = opacities.size(0);
+    uint32_t num_scales = scales.size(1);
+    if (N) {
+        at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+        compute_relocation_split_kernel<<<(N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
+            (int)N,
+            (float3*)positions.data_ptr<float>(),
+            (float4*)quats.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            (float2*)scales.data_ptr<float>(),
+            (float3*)new_position_offsets.data_ptr<float>(),
+            new_opacities.data_ptr<float>(),
+            (float2*)new_scales.data_ptr<float>()
+        );
+    }
+    return std::make_tuple(
+        new_position_offsets,
+        new_opacities, new_scales
+    );
+}
+
 
 
 

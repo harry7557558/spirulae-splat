@@ -107,12 +107,27 @@ torch::Tensor get_tile_bin_edges_tensor(
 );
 
 
-std::tuple<torch::Tensor, torch::Tensor> compute_relocation_tensor(
+std::tuple<
+    torch::Tensor,  // new_opacities
+    torch::Tensor  // new_scales
+> compute_relocation_tensor(
     torch::Tensor &opacities,
     torch::Tensor &scales,
     torch::Tensor &ratios,
     torch::Tensor &binoms,
     const int n_max
+);
+
+
+std::tuple<
+    torch::Tensor,  // new_position_offsets
+    torch::Tensor,  // new_opacities
+    torch::Tensor  // new_scales
+> compute_relocation_split_tensor(
+    torch::Tensor &positions,
+    torch::Tensor &quats,
+    torch::Tensor &opacities,
+    torch::Tensor &scales
 );
 
 
