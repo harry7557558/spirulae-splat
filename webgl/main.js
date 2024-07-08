@@ -232,6 +232,8 @@ function unpackModel(header, buffer) {
         let components = unpackComponents(primitive, bufferSlice, buffers);
         model[key] = components;
     };
+
+    model.header = header;
     return model;
 }
 
@@ -314,8 +316,13 @@ function createWorker(self) {
             basedata[iTex + 6] = packHalf2x16(quat[2], quat[3]);
 
             // anisotropy - 2 floats, info1 w, info2 x
-            basedataF[iTex + 7] = Math.sinh(base.anisotropies[2*i+0]);
-            basedataF[iTex + 8] = Math.sinh(base.anisotropies[2*i+1]);
+            if (header.config.use_anisotropy !== false && base.anisotropies) {
+                basedataF[iTex + 7] = Math.sinh(base.anisotropies[2*i+0]);
+                basedataF[iTex + 8] = Math.sinh(base.anisotropies[2*i+1]);
+            }
+            else {
+                basedataF[iTex + 7] = basedataF[iTex + 8] = 0.0;
+            }
 
             // rgba - 4 halfs, info2 yz
             let m = header.config.sh_degree == 0 ? 0.28209479177387814 : 1.0;
@@ -482,8 +489,14 @@ function createWorker(self) {
     };
 }
 
+let genericVertexShaderSource = `#version 300 es
+precision highp float;
+in vec2 position;
+void main() { gl_Position = vec4(position, 0, 1); }
+`
 let vertexShaderSource = "";
 let fragmentShaderSource = "";
+let backgroundShaderSource = "";
 
 let defaultViewMatrix = [
     1.0, 0.0, 0.0, 0.0,
@@ -534,55 +547,59 @@ async function main() {
         antialias: false,
     });
 
-    const vertexShader = gl.createShader(gl.VERTEX_SHADER);
-    gl.shaderSource(vertexShader, vertexShaderSource);
-    gl.compileShader(vertexShader);
-    if (!gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS))
-        console.error(gl.getShaderInfoLog(vertexShader));
+    // create shader programs
+    function createShaderProgram(vsSource, fsSource) {
+        const vertexShader = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(vertexShader, vsSource);
+        gl.compileShader(vertexShader);
+        if (!gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS))
+            console.error(gl.getShaderInfoLog(vertexShader));
 
-    const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
-    gl.shaderSource(fragmentShader, fragmentShaderSource);
-    gl.compileShader(fragmentShader);
-    if (!gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS))
-        console.error(gl.getShaderInfoLog(fragmentShader));
+        const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(fragmentShader, fsSource);
+        gl.compileShader(fragmentShader);
+        if (!gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS))
+            console.error(gl.getShaderInfoLog(fragmentShader));
 
-    const program = gl.createProgram();
-    gl.attachShader(program, vertexShader);
-    gl.attachShader(program, fragmentShader);
-    gl.linkProgram(program);
-    gl.useProgram(program);
+        const program = gl.createProgram();
+        gl.attachShader(program, vertexShader);
+        gl.attachShader(program, fragmentShader);
+        gl.linkProgram(program);
+        gl.useProgram(program);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS))
+            console.error(gl.getProgramInfoLog(program));
 
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS))
-        console.error(gl.getProgramInfoLog(program));
+        return program;
+    }
+    const program = createShaderProgram(vertexShaderSource, fragmentShaderSource);
+    const backgroundProgram = createShaderProgram(genericVertexShaderSource, backgroundShaderSource);
 
-    gl.disable(gl.DEPTH_TEST); // Disable depth testing
-
-    // Enable blending
+    // depth test and blend
+    gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
-    // gl.blendFuncSeparate(
-    //     gl.ONE_MINUS_DST_ALPHA,
-    //     gl.ONE,
-    //     gl.ONE_MINUS_DST_ALPHA,
-    //     gl.ONE,
-    // );
-    // gl.blendEquationSeparate(gl.FUNC_ADD, gl.FUNC_ADD);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.blendEquation(gl.FUNC_ADD);
-
-    const u_projection = gl.getUniformLocation(program, "projection");
-    const u_viewport = gl.getUniformLocation(program, "viewport");
-    const u_focal = gl.getUniformLocation(program, "focal");
-    const u_view = gl.getUniformLocation(program, "view");
 
     // positions
     const triangleVertices = new Float32Array([-1, -1, 1, -1, 1, 1, -1, 1]);
     const vertexBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, triangleVertices, gl.STATIC_DRAW);
+
+    gl.useProgram(program);
     const a_position = gl.getAttribLocation(program, "position");
     gl.enableVertexAttribArray(a_position);
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
     gl.vertexAttribPointer(a_position, 2, gl.FLOAT, false, 0, 0);
+
+    gl.useProgram(backgroundProgram);
+    const bg_position = gl.getAttribLocation(backgroundProgram, "position");
+    gl.enableVertexAttribArray(bg_position);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+    gl.vertexAttribPointer(bg_position, 2, gl.FLOAT, false, 0, 0);
+
+    // textures
+    gl.useProgram(program);
 
     var baseTexture = gl.createTexture();
     gl.activeTexture(gl.TEXTURE0);
@@ -602,6 +619,7 @@ async function main() {
     var uShTextureLocation = gl.getUniformLocation(program, "u_sh_texture");
     gl.uniform1i(uShTextureLocation, 2);
 
+    // indices
     const indexBuffer = gl.createBuffer();
     const a_index = gl.getAttribLocation(program, "index");
     gl.enableVertexAttribArray(a_index);
@@ -612,17 +630,23 @@ async function main() {
     const resize = () => {
         let f = 0.7 * window.innerWidth;
 
-        gl.uniform2fv(u_focal, new Float32Array([f, f]));
-
         projectionMatrix = getProjectionMatrix(f, f, innerWidth, innerHeight);
-
-        gl.uniform2fv(u_viewport, new Float32Array([innerWidth, innerHeight]));
 
         gl.canvas.width = Math.round(innerWidth / downsample);
         gl.canvas.height = Math.round(innerHeight / downsample);
         gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
 
-        gl.uniformMatrix4fv(u_projection, false, projectionMatrix);
+        function setUniforms(program) {
+            gl.useProgram(program);
+            gl.uniformMatrix4fv(gl.getUniformLocation(program, "projection"),
+                false, projectionMatrix);
+            gl.uniform2fv(gl.getUniformLocation(program, "focal"),
+                new Float32Array([f, f]));
+            gl.uniform2fv(gl.getUniformLocation(program, "viewport"),
+                new Float32Array([innerWidth, innerHeight]));
+        }
+        setUniforms(program);
+        setUniforms(backgroundProgram);
     };
 
     window.addEventListener("resize", resize);
@@ -1018,12 +1042,42 @@ async function main() {
         if (vertexCount > 0) {
             document.getElementById("spinner").style.display = "none";
 
-            gl.uniformMatrix4fv(u_view, false, actualViewMatrix);
+            let use_anisotropy = header.config.use_anisotropy !== false;
+            document.getElementById("checkbox-aniso").disabled = !use_anisotropy;
+            let sh_degree = header.config.sh_degree;
+            document.getElementById("checkbox-sh").disabled = (sh_degree == 0);
+            let ch_degree_r = header.config.ch_degree_r;
+            document.getElementById("checkbox-ch").disabled = (ch_degree_r == 0);
+
             let background = header.config.background_color;
             let bg = document.getElementById("checkbox-bg").checked;
             gl.clearColor(bg*background[0], bg*background[1], bg*background[2], 1.0);
             gl.clear(gl.COLOR_BUFFER_BIT);
 
+            let background_sh_degree = header.config.background_sh_degree;
+            if (bg && background_sh_degree > 0) {
+                gl.useProgram(backgroundProgram);
+                gl.uniform1f(gl.getUniformLocation(backgroundProgram, "sh_degree"),
+                    background_sh_degree);
+                let coeff = header.config.background_color;
+                let location = gl.getUniformLocation(
+                    backgroundProgram, "background_sh[0]");
+                gl.uniform3f(location, coeff[0], coeff[1], coeff[2]);
+                var dim_sh = (background_sh_degree+1)**2;
+                for (var i = 1; i < dim_sh; i++) {
+                    coeff = header.config.background_sh.slice(3*i-3, 3*i);
+                    location = gl.getUniformLocation(
+                        backgroundProgram, "background_sh["+i+"]");
+                    gl.uniform3f(location, coeff[0], coeff[1], coeff[2]);
+                }
+                gl.uniformMatrix4fv(gl.getUniformLocation(backgroundProgram, "view"),
+                    false, actualViewMatrix);
+                gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, 4);
+            }
+
+            gl.useProgram(program);
+            gl.uniformMatrix4fv(gl.getUniformLocation(program, "view"),
+                false, actualViewMatrix);
             gl.uniform1i(gl.getUniformLocation(program, "u_use_aniso"),
                 document.getElementById("checkbox-aniso").checked);
             gl.uniform2i(gl.getUniformLocation(program, "u_sh_config"),
@@ -1033,8 +1087,8 @@ async function main() {
                 document.getElementById("checkbox-ch").checked,
                 header.config.ch_degree_r,
                 header.config.ch_degree_phi);
-
             gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, vertexCount);
+
         } else {
             gl.clear(gl.COLOR_BUFFER_BIT);
             document.getElementById("spinner").style.display = "";
@@ -1117,13 +1171,18 @@ async function loadShaderFile(url) {
 // Function to load both shaders and call main()
 async function loadShadersAndInit() {
     try {
-        const [vertexSource, fragmentSource] = await Promise.all([
+        const [
+            vertexSource, fragmentSource,
+            backgroundSource
+        ] = await Promise.all([
             loadShaderFile('shader-vert.glsl'),
-            loadShaderFile('shader-frag.glsl')
+            loadShaderFile('shader-frag.glsl'),
+            loadShaderFile('shader-background.glsl')
         ]);
   
         vertexShaderSource = vertexSource;
         fragmentShaderSource = fragmentSource;
+        backgroundShaderSource = backgroundSource;
   
         // Call the main function after both shaders are loaded
         main().catch((err) => {

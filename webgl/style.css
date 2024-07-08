@@ -199,10 +199,22 @@ input[type="checkbox"]:checked::before {
 }
 
 input[type="checkbox"]:checked {
-    /* background-color: hsl(30,100%,70%); */
     background-color: rgb(0, 120, 237);
 }
 
 input[type="checkbox"]:checked:hover {
     background-color: dodgerblue;
+}
+
+input[type="checkbox"]:disabled {
+    background-color: gray;
+    /* cursor: not-allowed; */
+}
+
+input[type="checkbox"]:disabled:hover {
+    background-color: gray;
+}
+
+input[type="checkbox"]:disabled::before {
+    background-color: rgba(255, 255, 255, 0.8);
 }

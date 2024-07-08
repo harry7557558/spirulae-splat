@@ -121,6 +121,13 @@ def pack_components(config, components):
     return packed_data.tobytes()
 
 
+def component_view_psa(component_views):
+    total = 0
+    for view in component_views:
+        view['bitOffset'] = total
+        total += view['bitLength']
+    return component_views, int(np.ceil(total/8))
+
 def bufferview_psa(buffer_views):
     total = 0
     for view in buffer_views:
@@ -143,6 +150,8 @@ def process_ckpt_to_ssplat(file_path):
     quats = pipeline['_model.gauss_params.quats']  # 8 bits
     scales = pipeline['_model.gauss_params.scales']  # 8-12 bits
     background_color = pipeline['_model.background_color']
+    background_sh = pipeline['_model.background_sh'] \
+        if '_model.background_sh' in pipeline else torch.zeros((0, 3))
 
     num_sh = features_sh.shape[1]
     num_ch = features_ch.shape[1]
@@ -155,12 +164,18 @@ def process_ckpt_to_ssplat(file_path):
         7: (1, 3), 9: (3, 1), 10: (2, 2),
         14: (2, 3), 15: (3, 2), 21: (3, 3)
     }[num_ch]
+    background_sh_degree = {
+        1: 0, 4: 1, 9: 2, 16: 3, 25: 4
+    }[len(background_sh)+1]
+    use_anisotropy = (anisotropies != 0.0).any().item()
     print("SH degree:", sh_degree)
     print("# of SH:", num_sh)
     print("CH degree r:", ch_degree_r)
     print("CH degree phi:", ch_degree_phi)
     print("# of CH:", num_ch)
     print("background:", background_color.cpu().numpy())
+    print("background SH degree:", background_sh_degree)
+    print("anisotropy:", use_anisotropy)
     print()
 
     n_splat = len(means)
@@ -190,7 +205,7 @@ def process_ckpt_to_ssplat(file_path):
                 means, opacities, anisotropies, quats, scales)
         ]
 
-    # means -= torch.mean(means, axis=0)
+    means -= torch.mean(means, axis=0)
 
     quats = quats / torch.norm(quats, dim=1, keepdim=True)
     opacities = torch.sigmoid(opacities)
@@ -206,7 +221,7 @@ def process_ckpt_to_ssplat(file_path):
         means_bins, means_q = quantize_tensor(means, 12)
         scales_bins, scales_q = quantize_tensor(scales, 10)
         quats_bins, quats_q = quantize_tensor(quats, 8)
-        anisotropies_bins, anisotropies_q = quantize_tensor(anisotropies, 8)
+        anisotropies_bins, anisotropies_q = quantize_tensor(anisotropies, 8*use_anisotropy)
         opacities_bins, opacities_q = quantize_tensor(opacities, 6)
         features_dc_bins, features_dc_q = quantize_tensor(features_dc, 6)
         features_ch_bins, features_ch_q = quantize_tensor(features_ch, 4, 100)
@@ -226,33 +241,39 @@ def process_ckpt_to_ssplat(file_path):
     ]
 
     print("Packing base...")
+    componentViews, componentLength = component_view_psa([
+        { "key": "means", "type": "quat3", "bitLength": 36, "quatBufferView": 0 },
+        { "key": "scales", "type": "quat2", "bitLength": 20, "quatBufferView": 1 },
+        { "key": "quats", "type": "quat4", "bitLength": 32, "quatBufferView": 2 },
+    ] + [
+        { "key": "anisotropies", "type": "quat2", "bitLength": 16, "quatBufferView": 3 },
+    ] * use_anisotropy + [
+        { "key": "opacities", "type": "quat", "bitLength": 6, "quatBufferView": 4 },
+        { "key": "features_dc", "type": "quat3", "bitLength": 18, "quatBufferView": 5 },
+    ])
     base_config = {
         "bufferView": len(buffer_views),
         "length": len(weight),
-        "componentLength": int(np.ceil((36+20+32+16+6+18)/8)),  # in bytes
-        "componentViews": [
-            { "key": "means", "type": "quat3", "bitLength": 36, "bitOffset": 0, "quatBufferView": 0 },
-            { "key": "scales", "type": "quat2", "bitLength": 20, "bitOffset": 36, "quatBufferView": 1 },
-            { "key": "quats", "type": "quat4", "bitLength": 32, "bitOffset": 36+20, "quatBufferView": 2 },
-            { "key": "anisotropies", "type": "quat2", "bitLength": 16, "bitOffset": 36+20+32, "quatBufferView": 3 },
-            { "key": "opacities", "type": "quat", "bitLength": 6, "bitOffset": 36+20+32+16, "quatBufferView": 4 },
-            { "key": "features_dc", "type": "quat3", "bitLength": 18, "bitOffset": 36+20+32+16+6, "quatBufferView": 5 },
-        ]
+        "componentLength": componentLength,  # in bytes
+        "componentViews": componentViews
     }
-    base_buffer = pack_components(base_config, [
-        means_q, scales_q, quats_q, anisotropies_q,
-        opacities_q, features_dc_q,
-    ])
+    base_buffer = pack_components(
+        base_config,
+        [means_q, scales_q, quats_q] + \
+            [anisotropies_q] * use_anisotropy + \
+            [opacities_q, features_dc_q]
+    )
 
     print("Packing harmonics...")
+    componentViews, componentLength = component_view_psa([
+            { "key": "features_ch", "type": f"quat{3*num_ch}", "bitLength": 3*num_ch*4, "quatBufferView": 6 },
+            { "key": "features_sh", "type": f"quat{3*num_sh}", "bitLength": 3*num_sh*3, "quatBufferView": 7 },
+        ])
     harmonics_config = {
         "bufferView": len(buffer_views)+1,
         "length": len(weight),
-        "componentLength": int(np.ceil((63*4+45*3)/8)),  # in bytes
-        "componentViews": [
-            { "key": "features_ch", "type": f"quat{3*num_ch}", "bitLength": 3*num_ch*4, "bitOffset": 0, "quatBufferView": 6 },
-            { "key": "features_sh", "type": f"quat{3*num_sh}", "bitLength": 3*num_sh*3, "bitOffset": 3*num_ch*4, "quatBufferView": 7 },
-        ]
+        "componentLength": componentLength,  # in bytes
+        "componentViews": componentViews
     }
     harmonics_buffer = pack_components(harmonics_config, [
         features_ch_q.reshape((len(features_ch), -1)),
@@ -282,7 +303,10 @@ def process_ckpt_to_ssplat(file_path):
             "sh_degree": sh_degree,
             "ch_degree_r": ch_degree_r,
             "ch_degree_phi": ch_degree_phi,
-            "background_color": background_color.cpu().numpy().tolist()
+            "background_color": background_color.cpu().numpy().flatten().tolist(),
+            "background_sh_degree": background_sh_degree,
+            "background_sh": background_sh.cpu().numpy().flatten().tolist(),
+            "use_anisotropy": use_anisotropy
         },
         "buffer": {
             "byteLength": len(buffer),
