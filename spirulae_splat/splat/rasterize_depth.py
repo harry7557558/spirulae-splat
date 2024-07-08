@@ -34,6 +34,9 @@ def rasterize_gaussians_depth(
     """
     assert block_width > 1 and block_width <= 16, "block_width must be between 2 and 16"
 
+    if not (num_tiles_hit > 0).any():
+        return torch.zeros((img_height, img_width, 1)).float().to(positions)
+
     if positions.ndimension() != 2 or positions.size(1) != 3:
         raise ValueError("positions must have dimensions (N, 3)")
 

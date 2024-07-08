@@ -42,6 +42,7 @@ def rasterize_gaussians(
     TODO
     """
     assert block_width > 1 and block_width <= 16, "block_width must be between 2 and 16"
+
     if colors.dtype == torch.uint8:
         # make sure colors are float [0,1]
         colors = colors.float() / 255
@@ -53,6 +54,20 @@ def rasterize_gaussians(
     else:
         background = torch.zeros(
             colors.shape[-1], dtype=torch.float32, device=colors.device
+        )
+
+    if not (num_tiles_hit > 0).any():
+        shape = (img_height, img_width)
+        device = positions.device
+        out_img = background.reshape((1, 1, 3)).repeat((*shape, 1))
+        out_depth_grad = torch.zeros((*shape, 4)).float().to(device)
+        out_reg_depth = torch.zeros(shape).float().to(device)
+        out_reg_normal = torch.zeros(shape).float().to(device)
+        out_alpha = torch.zeros(shape).float().to(device)
+        return (
+            out_img, out_depth_grad,
+            out_reg_depth, out_reg_normal,
+            out_alpha
         )
 
     if positions.ndimension() != 2 or positions.size(1) != 3:

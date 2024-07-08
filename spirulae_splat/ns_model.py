@@ -129,7 +129,7 @@ class SpirulaeModelConfig(ModelConfig):
     """Whether to randomize the background color."""
     num_downscales: int = 2
     """at the beginning, resolution is 1/2^d, where d is this number"""
-    use_mcmc: bool = True
+    use_mcmc: bool = False
     """use Markov-Chain Monte Carlo for gaussian control"""
     random_init: bool = False
     """whether to initialize the positions uniformly randomly (not SFM points)"""
@@ -207,7 +207,7 @@ class SpirulaeModelConfig(ModelConfig):
     """maximum opacity of a gaussian, prevent numerical instability during backward"""
     train_background_color: bool = True
     """make background color trainable"""
-    background_color_sh_degree: int = 3
+    background_sh_degree: int = 3
     """enable background model"""
 
     # regularization
@@ -346,7 +346,7 @@ class SpirulaeModel(Model):
             self.background_color = get_color(self.config.background_color)
         self.background_color = torch.nn.Parameter(self.background_color)
         if self.config.train_background_color:
-            dim_sh = num_sh_bases(self.config.background_color_sh_degree)
+            dim_sh = num_sh_bases(self.config.background_sh_degree)
             self.background_sh = torch.nn.Parameter(torch.zeros((dim_sh-1, 3)))
         else:
             self.background_sh = None
@@ -1005,7 +1005,7 @@ class SpirulaeModel(Model):
         W, H = int(camera.width.item()), int(camera.height.item())
 
         background = self.background_color.repeat(H, W, 1)
-        sh_degree = self.config.background_color_sh_degree
+        sh_degree = self.config.background_sh_degree
         if not (sh_degree > 0):
             return background
 
@@ -1180,8 +1180,6 @@ class SpirulaeModel(Model):
         # rescale the camera back to original dimensions before returning
         camera.rescale_output_resolution(camera_downscale)
 
-        assert (num_tiles_hit > 0).any()  # type: ignore
-
         opacities = self.config.max_opacity * torch.sigmoid(opacities_crop)
 
         depth_im_ref = rasterize_gaussians_depth(
@@ -1212,7 +1210,7 @@ class SpirulaeModel(Model):
 
         # main rasterization
         background_color = self.background_color
-        if self.config.background_color_sh_degree > 0:
+        if self.config.background_sh_degree > 0:
             background_color = torch.zeros_like(background_color)
         ch_degree = self.step // self.config.ch_degree_interval
         (
@@ -1287,7 +1285,7 @@ class SpirulaeModel(Model):
         self.radii = num_tiles_hit**0.5 / 2 * BLOCK_WIDTH
 
         # blend with background
-        if self.config.background_color_sh_degree > 0:
+        if self.config.background_sh_degree > 0:
             mask = (alpha < 0.98)
             background = self.get_background_image(camera, mask)
             rgb = rgb + (1.0 - alpha) * background

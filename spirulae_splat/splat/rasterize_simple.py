@@ -58,6 +58,14 @@ def rasterize_gaussians_simple(
             colors.shape[-1], dtype=torch.float32, device=colors.device
         )
 
+    if not (num_tiles_hit > 0).any():
+        shape = (img_height, img_width)
+        device = positions.device
+        return (
+            background.reshape((1, 1, 3)).repeat((*shape, 1)),
+            torch.zeros(shape).float().to(device)
+        )
+
     if positions.ndimension() != 2 or positions.size(1) != 3:
         raise ValueError("positions must have dimensions (N, 3)")
 
