@@ -7,6 +7,20 @@ from io import BytesIO
 import json
 
 
+def custom_quantile(sorted_numbers, quantiles):
+    n = len(sorted_numbers)
+    indices = quantiles * (n - 1)
+    i0 = torch.floor(indices).long()
+    i1 = torch.ceil(indices).long()
+    i0 = torch.clamp(i0, 0, n - 1)
+    i1 = torch.clamp(i1, 0, n - 1)
+    v0 = sorted_numbers[i0]
+    v1 = sorted_numbers[i1]
+    t = indices - i0.float()
+    return v0 * (1 - t) + v1 * t
+
+
+@torch.no_grad()
 def quantize_tensor(tensor, n_bits, maxiter=0):
     device = tensor.device
     if tensor.numel() == 0:
@@ -16,11 +30,12 @@ def quantize_tensor(tensor, n_bits, maxiter=0):
         return centroids, bins
 
     sorted_numbers, sorted_indices = torch.sort(tensor.flatten())
-
-    centroids = torch.quantile(
-        sorted_numbers,
-        ((torch.arange(2**n_bits)+0.5) / (2**n_bits)).float().to(device)
-    )
+    quantiles = ((torch.arange(2**n_bits)+0.5) / (2**n_bits)).float().to(device)
+    try:
+        raise RuntimeError
+        centroids = torch.quantile(sorted_numbers, quantiles)
+    except RuntimeError:
+        centroids = custom_quantile(sorted_numbers, quantiles)
     # initial_centroids = centroids.clone()
     
     initial_error = None
@@ -64,7 +79,7 @@ def quantize_tensor(tensor, n_bits, maxiter=0):
     plt.show()
 
 
-def pack_components(config, components):
+def pack_components_(config, components):
     components = components[:]
     for i, comp in enumerate(components):
         if isinstance(comp, torch.Tensor):
@@ -119,6 +134,37 @@ def pack_components(config, components):
                     packed_data[i*component_length+byte_start] = data[k]
     
     return packed_data.tobytes()
+
+
+def pack_components(config, components):
+    import os
+    import subprocess
+    import pybind11
+    import importlib.util
+
+    binary_path = "./pack_components.so"
+    if not os.path.exists(binary_path):
+        python_include = subprocess.check_output(["pkg-config", "--cflags", "python3"]).decode("utf-8").strip()
+        compile_command = [
+            "c++", "-O3", "-Wall", "-shared", "-std=c++11", "-fPIC", "pack_components.cpp", "-o", binary_path,
+            "-I", pybind11.get_include(), *(python_include.split())
+        ]
+        subprocess.run(compile_command, check=True)
+
+    spec = importlib.util.spec_from_file_location("pack_components", binary_path)
+    pack_components_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pack_components_module)
+
+    components = components[:]
+    for i, comp in enumerate(components):
+        if isinstance(comp, torch.Tensor):
+            components[i] = comp.cpu().numpy().astype(np.int32)
+
+    config_json = json.loads(json.dumps(config))
+    packed_data = pack_components_module.pack_components(config_json, components)
+    # print(packed_data)
+    
+    return bytearray(packed_data)
 
 
 def component_view_psa(component_views):

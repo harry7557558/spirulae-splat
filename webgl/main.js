@@ -121,6 +121,9 @@ function translate4(a, x, y, z) {
 }
 
 
+// config: JavaScript object
+// packedData: ArrayBuffer
+// buffers: Array of ArrayBuffers
 function unpackComponents(config, packedData, buffers) {
     const componentLength = config.componentLength;
     const componentViews = config.componentViews;
@@ -134,12 +137,8 @@ function unpackComponents(config, packedData, buffers) {
         if (dataType.startsWith('quat')) {
             const numElements = Math.max(Number(dataType.slice(4)), 1);
             return new Uint32Array(length * numElements);
-        } else if (dataType.startsWith('float')) {
-            const numElements = Math.max(Number(dataType.slice(5)), 1);
-            return new Float32Array(length * numElements);
-        } else if (dataType.startsWith('byte')) {
-            const numElements = Math.max(Number(dataType.slice(4)), 1);
-            return new Uint8Array(length * numElements);
+        } else {
+            // TODO: assert only quat is supported
         }
     });
 
@@ -171,23 +170,8 @@ function unpackComponents(config, packedData, buffers) {
                     components[j][i * numElements + k] = value;
                 }
 
-            } else if (dataType.startsWith('float')) {
-                const numElements = Math.max(Number(dataType.slice(5)), 1);
-
-                for (let k = 0; k < numElements; k++) {
-                    const byteStart = (bitOffset / 8) + k * 4;
-                    let i0 = i * componentLength + byteStart;
-                    const floatBytes = new Float32Array(packedDataByte.slice(i0, i0+4).buffer);
-                    components[j][i * numElements + k] = floatBytes[0];
-                }
-
-            } else if (dataType.startsWith('byte')) {
-                const numElements = Math.max(Number(dataType.slice(4)), 1);
-
-                for (let k = 0; k < numElements; k++) {
-                    const byteStart = (bitOffset / 8) + k;
-                    components[j][i * numElements + k] = packedDataByte[i * componentLength + byteStart];
-                }
+            } else {
+                // TODO: assert only quat is supported
             }
         });
     }
@@ -226,12 +210,14 @@ function unpackModel(header, buffer) {
             view.byteOffset, view.byteOffset+view.byteLength));
     });
 
+    console.time("unpack model");
     for (var key in header.primitives) {
         let primitive = header.primitives[key];
         let bufferSlice = buffers[primitive.bufferView];
         let components = unpackComponents(primitive, bufferSlice, buffers);
         model[key] = components;
     };
+    console.timeEnd("unpack model");
 
     model.header = header;
     return model;
@@ -406,8 +392,10 @@ function createWorker(self) {
     function runSort(viewProj) {
         if (!base) return;
         if (harmonics.features_sh.length > lastHarmonicsLength) {
+            console.time("generate CH/SH texture");
             generateCHTexture();
             generateSHTexture();
+            console.timeEnd("generate CH/SH texture");
             lastHarmonicsLength = harmonics.features_sh.length;
         }
         let vertexCount = base.opacities.length;
@@ -420,8 +408,10 @@ function createWorker(self) {
                 return;
             }
         } else {
+            console.time("generate base texture");
             generateBaseTexture();
             lastBaseVertexCount = vertexCount;
+            console.timeEnd("generate base texture");
         }
 
         console.time("sort");
@@ -540,6 +530,7 @@ async function main() {
 
     const canvas = document.getElementById("canvas");
     const fps = document.getElementById("fps");
+    let renderNeeded = true;
 
     let projectionMatrix;
 
@@ -647,6 +638,7 @@ async function main() {
         }
         setUniforms(program);
         setUniforms(backgroundProgram);
+        renderNeeded = true;
     };
 
     window.addEventListener("resize", resize);
@@ -712,12 +704,15 @@ async function main() {
     window.addEventListener("keydown", (e) => {
         // if (document.activeElement != document.body) return;
         if (!activeKeys.includes(e.code)) activeKeys.push(e.code);
+        renderNeeded = true;
     });
     window.addEventListener("keyup", (e) => {
         activeKeys = activeKeys.filter((k) => k !== e.code);
+        renderNeeded = true;
     });
     window.addEventListener("blur", () => {
         activeKeys = [];
+        renderNeeded = true;
     });
 
     window.addEventListener(
@@ -748,6 +743,7 @@ async function main() {
             }
 
             viewMatrix = invert4(inv);
+            renderNeeded = true;
         },
         { passive: false },
     );
@@ -759,6 +755,7 @@ async function main() {
         startX = e.clientX;
         startY = e.clientY;
         down = e.ctrlKey || e.metaKey ? 2 : 1;
+        renderNeeded = true;
     });
     canvas.addEventListener("contextmenu", (e) => {
         carousel = false;
@@ -766,6 +763,7 @@ async function main() {
         startX = e.clientX;
         startY = e.clientY;
         down = 2;
+        renderNeeded = true;
     });
 
     canvas.addEventListener("mousemove", (e) => {
@@ -792,12 +790,14 @@ async function main() {
             startX = e.clientX;
             startY = e.clientY;
         }
+        if (down > 0) renderNeeded = true;
     });
     canvas.addEventListener("mouseup", (e) => {
         e.preventDefault();
         down = false;
         startX = 0;
         startY = 0;
+        renderNeeded = true;
     });
 
     let altX = 0,
@@ -820,6 +820,7 @@ async function main() {
                 altY = e.touches[1].clientY;
                 down = 1;
             }
+            renderNeeded = true;
         },
         { passive: false },
     );
@@ -877,6 +878,7 @@ async function main() {
                 startY = e.touches[0].clientY;
                 altY = e.touches[1].clientY;
             }
+            renderNeeded = true;
         },
         { passive: false },
     );
@@ -887,6 +889,7 @@ async function main() {
             down = false;
             startX = 0;
             startY = 0;
+            renderNeeded = true;
         },
         { passive: false },
     );
@@ -903,9 +906,11 @@ async function main() {
         console.log(
             `Gamepad connected at index ${gp.index}: ${gp.id}. It has ${gp.buttons.length} buttons and ${gp.axes.length} axes.`,
         );
+        renderNeeded = true;
     });
     window.addEventListener("gamepaddisconnected", (e) => {
         console.log("Gamepad disconnected");
+        renderNeeded = true;
     });
 
     let bytesRead = 0;
@@ -1020,12 +1025,18 @@ async function main() {
             inv = rotate4(inv, -0.1 * t, 0, 1, 0);
 
             viewMatrix = invert4(inv);
+            renderNeeded = true;
         }
 
+        let jumpDeltaNew = jumpDelta;
         if (isJumping) {
-            jumpDelta = Math.min(1, jumpDelta + 0.05);
+            jumpDeltaNew = Math.min(1, jumpDelta + 0.05);
         } else {
-            jumpDelta = Math.max(0, jumpDelta - 0.05);
+            jumpDeltaNew = Math.max(0, jumpDelta - 0.05);
+        }
+        if (jumpDeltaNew != jumpDelta) {
+            jumpDelta = jumpDeltaNew;
+            renderNeeded = true;
         }
 
         let inv2 = invert4(viewMatrix);
@@ -1039,7 +1050,7 @@ async function main() {
         const currentFps = 1000 / (now - lastFrame) || 0;
         avgFps = avgFps * 0.9 + currentFps * 0.1;
 
-        if (vertexCount > 0) {
+        if (vertexCount > 0 && renderNeeded) {
             document.getElementById("spinner").style.display = "none";
 
             let use_anisotropy = header.config.use_anisotropy !== false;
@@ -1089,7 +1100,8 @@ async function main() {
                 header.config.ch_degree_phi);
             gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, vertexCount);
 
-        } else {
+            renderNeeded = false;
+        } else if (!(vertexCount > 0)) {
             gl.clear(gl.COLOR_BUFFER_BIT);
             document.getElementById("spinner").style.display = "";
             start = Date.now() + 2000;
@@ -1114,6 +1126,11 @@ async function main() {
             carousel = false;
         } catch (err) {}
     });
+
+    let inputs = document.getElementsByTagName("input");
+    for (var i = 0; i < inputs.length; i++) {
+        inputs[i].addEventListener("input", () => { renderNeeded = true; });
+    }
 
     const preventDefault = (e) => {
         e.preventDefault();
@@ -1150,11 +1167,13 @@ async function main() {
             worker.postMessage(unpackModel(
                 header, ssplatData.buffer.slice(headerLength, bytesRead)));
             lastBytesRead = bytesRead;
+            renderNeeded = true;
         }
     }
     if (!stopLoading) {
         worker.postMessage(unpackModel(
             header, ssplatData.buffer.slice(headerLength, bytesRead)));
+        renderNeeded = true;
     }
 }
 
