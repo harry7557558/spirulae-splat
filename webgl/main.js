@@ -9,16 +9,6 @@ function getProjectionMatrix(fx, fy, width, height) {
     ].flat();
 }
 
-// function translate4(a, x, y, z) {
-//     return [
-//         ...a.slice(0, 12),
-//         a[0] * x + a[4] * y + a[8] * z + a[12],
-//         a[1] * x + a[5] * y + a[9] * z + a[13],
-//         a[2] * x + a[6] * y + a[10] * z + a[14],
-//         a[3] * x + a[7] * y + a[11] * z + a[15],
-//     ];
-// }
-
 function multiply4(a, b) {
     return [
         b[0] * a[0] + b[1] * a[4] + b[2] * a[8] + b[3] * a[12],
@@ -121,6 +111,8 @@ function translate4(a, x, y, z) {
 }
 
 
+let Module;
+
 // config: JavaScript object
 // packedData: ArrayBuffer
 // buffers: Array of ArrayBuffers
@@ -214,7 +206,8 @@ function unpackModel(header, buffer) {
     for (var key in header.primitives) {
         let primitive = header.primitives[key];
         let bufferSlice = buffers[primitive.bufferView];
-        let components = unpackComponents(primitive, bufferSlice, buffers);
+        // let components = unpackComponents(primitive, bufferSlice, buffers);
+        let components = Module.unpackComponents(key, primitive, bufferSlice, buffers);
         model[key] = components;
     };
     console.timeEnd("unpack model");
@@ -340,20 +333,8 @@ function createWorker(self) {
 
         var chwidth = Math.floor(4096/pixelPerVert)*pixelPerVert;
         var chheight = Math.ceil(pixelPerVert*vertexCount/chwidth);
-        var chdata = new Uint32Array(chwidth * chheight * 4);
-        for (let i = 0; i < vertexCount; i++) {
-            for (var j = 0; j < dim_ch; j++) {
-                let iTex = 4 * pixelPerVert * i + 2 * j;
-                let iBuffer = 3 * dim_ch * i  +  3 * j;
-                let rgb = [
-                    harmonics.features_ch[iBuffer],
-                    harmonics.features_ch[iBuffer+1],
-                    harmonics.features_ch[iBuffer+2],
-                ];
-                chdata[iTex+0] = packHalf2x16(rgb[0], rgb[1]);
-                chdata[iTex+1] = packHalf2x16(rgb[2], 1.0);
-            }
-        }
+        var chdata = Module.packHarmonicTexture(
+            "sh", dim_ch, chwidth, chheight, harmonics.features_ch)
 
         self.postMessage({
             chTexture: { chdata, chwidth, chheight }
@@ -369,20 +350,8 @@ function createWorker(self) {
 
         var shwidth = Math.floor(4096/pixelPerVert)*pixelPerVert;
         var shheight = Math.ceil(pixelPerVert*vertexCount/shwidth);
-        var shdata = new Uint32Array(shwidth * shheight * 4);
-        for (let i = 0; i < vertexCount; i++) {
-            for (var j = 0; j < dim_sh; j++) {
-                let iTex = 4 * pixelPerVert * i + 2 * j;
-                let iBuffer = 3 * dim_sh * i  +  3 * j;
-                let rgb = [
-                    harmonics.features_sh[iBuffer],
-                    harmonics.features_sh[iBuffer+1],
-                    harmonics.features_sh[iBuffer+2],
-                ];
-                shdata[iTex+0] = packHalf2x16(rgb[0], rgb[1]);
-                shdata[iTex+1] = packHalf2x16(rgb[2], 1.0);
-            }
-        }
+        var shdata = Module.packHarmonicTexture(
+            "sh", dim_sh, shwidth, shheight, harmonics.features_sh)
 
         self.postMessage({
             shTexture: { shdata, shwidth, shheight }
@@ -466,7 +435,7 @@ function createWorker(self) {
     };
 
     let sortRunning;
-    self.onmessage = (e) => {
+    window.addEventListener("message", (e) => {
         if (e.data.header) {
             base = e.data.base;
             harmonics = e.data.harmonics;
@@ -476,7 +445,7 @@ function createWorker(self) {
             viewProj = e.data.view;
             throttledSort();
         }
-    };
+    });
 }
 
 let genericVertexShaderSource = `#version 300 es
@@ -520,13 +489,15 @@ async function main() {
 
     const downsample = 1;
 
-    const worker = new Worker(
-        URL.createObjectURL(
-            new Blob(["(", createWorker.toString(), ")(self)"], {
-                type: "application/javascript",
-            }),
-        ),
-    );
+    // const worker = new Worker(
+    //     URL.createObjectURL(
+    //         new Blob(["(", createWorker.toString(), ")(self)"], {
+    //             type: "application/javascript",
+    //         }),
+    //     ),
+    // );
+    createWorker(window);
+    let worker = window;
 
     const canvas = document.getElementById("canvas");
     const fps = document.getElementById("fps");
@@ -644,7 +615,7 @@ async function main() {
     window.addEventListener("resize", resize);
     resize();
 
-    worker.onmessage = (e) => {
+    window.addEventListener("message", (e) => {
         if (e.data.buffer) {
             ssplatData = new Uint8Array(e.data.buffer);
             const blob = new Blob([ssplatData.buffer], {
@@ -697,7 +668,7 @@ async function main() {
             gl.bufferData(gl.ARRAY_BUFFER, depthIndex, gl.DYNAMIC_DRAW);
             vertexCount = e.data.vertexCount;
         }
-    };
+    });
 
     let activeKeys = [];
 
@@ -1217,4 +1188,10 @@ async function loadShadersAndInit() {
     }
 }
 
-loadShadersAndInit();
+
+window.addEventListener("load", () => {
+    createModule().then(module => {
+        Module = module;
+        loadShadersAndInit();
+    });
+});
