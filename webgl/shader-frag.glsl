@@ -1,5 +1,6 @@
 #version 300 es
 precision highp float;
+precision highp int;
 
 uniform vec2 focal;
 uniform vec2 viewport;

@@ -3,15 +3,16 @@
 <head>
 	<title>Spirulae-Splat Viewer</title>
 	<meta charset="utf-8" />
-	<meta
-		name="viewport"
-		content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no"
-	/>
+	<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no" />
 	<meta name="apple-mobile-web-app-capable" content="yes" />
-	<meta
-		name="apple-mobile-web-app-status-bar-style"
-		content="black-translucent"
-	/>
+	<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+	<meta property="og:title" content="Spirulae-Splat Viewer" />
+	<meta property="og:description" content="Custom WebGL viewer for Spirulae-Splat novel view synthesis." />
+	<meta property="og:type" content="website" />
+	<meta name="description" content="Custom WebGL viewer for Spirulae-Splat novel view synthesis." />
+	<link href="https://harry7557558.github.io/favicon.ico" rel="icon"  />
+
     <link rel="stylesheet" href="style.css" />
 	<script src="main.js"></script>
 	<script src="module.js"></script>
@@ -50,7 +51,8 @@ trackpad
 
 mouse
 - click and drag to orbit
-- right click (or ctrl/cmd key) and drag up/down to move
+- ctrl/cmd key (or right click) and drag to move in world
+- shift key and drag to move in screen
 
 touch (mobile)
 - one finger to orbit
@@ -74,6 +76,9 @@ gamepad
 			<span title="background color, default black"><input type="checkbox" id="checkbox-bg" checked>BG</span>
 		</div>
 	</details>
+
+	<div id="console" style="display:none">
+	</div>
 
 	</div>
 
@@ -102,5 +107,6 @@ gamepad
 	<div id="caminfo">
 		<span id="camid"></span>
 	</div>
+
 </body>
 </html>

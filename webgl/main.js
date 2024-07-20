@@ -66,7 +66,16 @@ function invert4(a) {
     ];
 }
 
-function rotate4(a, rad, x, y, z) {
+function rotate4(a, rad, x, y, z, relative=false) {
+    // let dist = 0.1;
+    let inv = invert4(a);
+    let dist = -1.0 * Math.sqrt(0.5 * (
+        a[12]*a[12] + a[13]*a[13] + a[14]*a[14] + a[15]*a[15]
+    ));
+    let tr = [-inv[12]+dist*inv[8], -inv[13]+dist*inv[9], -inv[14]+dist*inv[10]];
+    if (relative) {
+        a = translate4(a, -tr[0], -tr[1], -tr[2], false);
+    }
     let len = Math.hypot(x, y, z);
     x /= len;
     y /= len;
@@ -83,7 +92,7 @@ function rotate4(a, rad, x, y, z) {
     let b20 = x * z * t + y * s;
     let b21 = y * z * t - x * s;
     let b22 = z * z * t + c;
-    return [
+    a = [
         a[0] * b00 + a[4] * b01 + a[8] * b02,
         a[1] * b00 + a[5] * b01 + a[9] * b02,
         a[2] * b00 + a[6] * b01 + a[10] * b02,
@@ -98,9 +107,19 @@ function rotate4(a, rad, x, y, z) {
         a[3] * b20 + a[7] * b21 + a[11] * b22,
         ...a.slice(12, 16),
     ];
+    if (relative) {
+        a = translate4(a, tr[0], tr[1], tr[2], false);
+    }
+    return a;
 }
 
-function translate4(a, x, y, z) {
+function translate4(a, x, y, z, relative=true) {
+    if (relative) {
+        let sc = Math.sqrt(0.5 * (
+            a[12]*a[12] + a[13]*a[13] + a[14]*a[14] + a[15]*a[15]
+        ));
+        x *= sc, y *= sc, z *= sc;
+    }
     return [
         ...a.slice(0, 12),
         a[0] * x + a[4] * y + a[8] * z + a[12],
@@ -334,7 +353,7 @@ function createWorker(self) {
         var chwidth = Math.floor(4096/pixelPerVert)*pixelPerVert;
         var chheight = Math.ceil(pixelPerVert*vertexCount/chwidth);
         var chdata = Module.packHarmonicTexture(
-            "sh", dim_ch, chwidth, chheight, harmonics.features_ch)
+            "ch", dim_ch, chwidth, chheight, harmonics.features_ch);
 
         self.postMessage({
             chTexture: { chdata, chwidth, chheight }
@@ -351,7 +370,7 @@ function createWorker(self) {
         var shwidth = Math.floor(4096/pixelPerVert)*pixelPerVert;
         var shheight = Math.ceil(pixelPerVert*vertexCount/shwidth);
         var shdata = Module.packHarmonicTexture(
-            "sh", dim_sh, shwidth, shheight, harmonics.features_sh)
+            "sh", dim_sh, shwidth, shheight, harmonics.features_sh);
 
         self.postMessage({
             shTexture: { shdata, shwidth, shheight }
@@ -739,16 +758,8 @@ async function main() {
 
     canvas.addEventListener("mousemove", (e) => {
         e.preventDefault();
-        if (down == 1) {
-            let dx = (5 * (e.clientX - startX)) / innerWidth;
-            let dy = (5 * (e.clientY - startY)) / innerHeight;
-
-            viewMatrix = rotate4(viewMatrix, dx, 0, 0, 1);
-            viewMatrix = rotate4(viewMatrix, dy, viewMatrix[0], viewMatrix[4], viewMatrix[8]);
-
-            startX = e.clientX;
-            startY = e.clientY;
-        } else if (down == 2) {
+        if (!down) return;
+        if (e.ctrlKey || down == 2) {
             let inv = invert4(viewMatrix);
             inv = translate4(
                 inv,
@@ -757,11 +768,26 @@ async function main() {
                 (5 * (e.clientY - startY)) / innerHeight,
             );
             viewMatrix = invert4(inv);
-
-            startX = e.clientX;
-            startY = e.clientY;
         }
-        if (down > 0) renderNeeded = true;
+        else if (e.shiftKey) {
+            let inv = invert4(viewMatrix);
+            inv = translate4(
+                inv,
+                (-5 * (e.clientX - startX)) / innerWidth,
+                (-5 * (e.clientY - startY)) / innerHeight,
+                0,
+            );
+            viewMatrix = invert4(inv);
+        }
+        else if (down == 1) {
+            let dx = (5 * (e.clientX - startX)) / innerWidth;
+            let dy = (5 * (e.clientY - startY)) / innerHeight;
+            viewMatrix = rotate4(viewMatrix, dx, 0, 0, 1, true);
+            viewMatrix = rotate4(viewMatrix, dy, viewMatrix[0], viewMatrix[4], viewMatrix[8], true);
+        }
+        startX = e.clientX;
+        startY = e.clientY;
+        renderNeeded = true;
     });
     canvas.addEventListener("mouseup", (e) => {
         e.preventDefault();
@@ -800,46 +826,51 @@ async function main() {
         (e) => {
             e.preventDefault();
             if (e.touches.length === 1 && down) {
-                let dx = (5 * (e.clientX - startX)) / innerWidth;
-                let dy = (5 * (e.clientY - startY)) / innerHeight;
+                let dx = (2 * (e.touches[0].clientX - startX)) / innerWidth;
+                let dy = (2 * (e.touches[0].clientY - startY)) / innerHeight;
     
-                viewMatrix = rotate4(viewMatrix, dx, 0, 0, 1);
-                viewMatrix = rotate4(viewMatrix, dy, viewMatrix[0], viewMatrix[4], viewMatrix[8]);
+                viewMatrix = rotate4(viewMatrix, dx, 0, 0, 1, true);
+                viewMatrix = rotate4(viewMatrix, dy, viewMatrix[0], viewMatrix[4], viewMatrix[8], true);
     
-                startX = e.clientX;
-                startY = e.clientY;
+                startX = e.touches[0].clientX;
+                startY = e.touches[0].clientY;
             } else if (e.touches.length === 2) {
                 // alert('beep')
-                const dtheta =
-                    Math.atan2(startY - altY, startX - altX) -
-                    Math.atan2(
-                        e.touches[0].clientY - e.touches[1].clientY,
-                        e.touches[0].clientX - e.touches[1].clientX,
+                const normalizeAngle = angle => (
+                    (angle % (2 * Math.PI)) + 3 * Math.PI) % (2 * Math.PI) - Math.PI;
+                const atan2_scale = (dx, dy) => {
+                    const dtheta_r = 10.0;
+                    return Math.tanh(1.5 *
+                        (Math.sqrt(dx*dx + dy*dy + dtheta_r*dtheta_r) - dtheta_r) /
+                        Math.sqrt(innerWidth * innerHeight)
                     );
-                const dscale =
-                    Math.hypot(startX - altX, startY - altY) /
-                    Math.hypot(
-                        e.touches[0].clientX - e.touches[1].clientX,
-                        e.touches[0].clientY - e.touches[1].clientY,
-                    );
-                const dx =
-                    (e.touches[0].clientX +
+                };
+                let dy = startY - altY, dx = startX - altX;
+                let dtx = e.touches[0].clientX - e.touches[1].clientX,
+                    dty = e.touches[0].clientY - e.touches[1].clientY;
+                const dtheta = normalizeAngle(Math.atan2(dy, dx) - Math.atan2(dty, dtx))
+                    * Math.sqrt(atan2_scale(dx, dy) * atan2_scale(dtx, dty));
+                const dscale_r = 5.0;
+                const dscale = (Math.hypot(dx, dy) + dscale_r) /
+                    (Math.hypot(dtx, dty) + dscale_r);
+                dx =
+                    2.0 * (e.touches[0].clientX +
                         e.touches[1].clientX -
                         (startX + altX)) /
                     2;
-                const dy =
-                    (e.touches[0].clientY +
+                dy =
+                    2.0 * (e.touches[0].clientY +
                         e.touches[1].clientY -
                         (startY + altY)) /
                     2;
                 let inv = invert4(viewMatrix);
                 // inv = translate4(inv,  0, 0, d);
-                inv = rotate4(inv, dtheta, 0, 0, 1);
+                inv = rotate4(inv, dtheta, 0, 0, 1, true);
 
                 inv = translate4(inv, -dx / innerWidth, -dy / innerHeight, 0);
 
                 // let preY = inv[13];
-                inv = translate4(inv, 0, 0, 3 * (1 - dscale));
+                inv = translate4(inv, 0, 0, 0.7 * (1 - dscale));
                 // inv[13] = preY;
 
                 viewMatrix = invert4(inv);
@@ -968,9 +999,7 @@ async function main() {
                     : activeKeys.includes("KeyL")
                     ? 0.02
                     : 0,
-                0,
-                1,
-                0,
+                0, 1, 0
             );
             inv = rotate4(
                 inv,
@@ -979,9 +1008,7 @@ async function main() {
                     : activeKeys.includes("KeyK")
                     ? -0.02
                     : 0,
-                1,
-                0,
-                0,
+                1, 0, 0
             );
             inv = translate4(inv, 0, 0, -d);
         }
@@ -1151,6 +1178,7 @@ async function main() {
 
 // Function to load a shader file
 async function loadShaderFile(url) {
+    url = url + "?nocache=" + Math.floor(Date.now() / 1000);
     const response = await fetch(url);
     if (!response.ok) {
         throw new Error(`Failed to load shader file: ${url}`);
@@ -1190,6 +1218,18 @@ async function loadShadersAndInit() {
 
 
 window.addEventListener("load", () => {
+    window.Console = {
+        log: (msg) => {
+            let container = document.getElementById("console");
+            let span = document.createElement("pre");
+            span.textContent = new String(msg);
+            container.appendChild(span);
+        }
+    };
+    window.addEventListener("error", (e) => {
+        console.log(e.error);
+        Console.log([e.lineno, e.colno, e.message].join(' ') + '\n' + e.error.stack);
+    });
     createModule().then(module => {
         Module = module;
         loadShadersAndInit();
