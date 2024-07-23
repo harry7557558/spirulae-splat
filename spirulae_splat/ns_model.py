@@ -181,11 +181,11 @@ class SpirulaeModelConfig(ModelConfig):
     """start MCMC refinement at this number of steps"""
     refine_stop_iter: int = 25000
     """end MCMC refinement at this number of steps"""
-    cap_max: int = 200000
+    cap_max: int = 1000000
     """maximum number of splats for MCMC"""
     mcmc_split_splats: bool = True
     """whether to split splats into two splats with different positions"""
-    noise_lr: float = 5e5
+    noise_lr: float = 5e3
     """MCMC sampling noise learning rate"""
     min_opacity: float = 0.005
     """minimum opacity for MCMC relocation"""
@@ -230,11 +230,11 @@ class SpirulaeModelConfig(ModelConfig):
     reg_warmup_length: int = 2000
     """Warmup for depth and normal regularizers.
        IF THE INITIALIZATION IS RANDOM, only apply regularizers after this many steps."""
-    mcmc_opacity_reg: float = 0.01
+    mcmc_opacity_reg: float = 0.001
     """Opacity regularization from MCMC
-       Lower usually gives more accurate geometry, 0.01 gives good appearance"""
-    mcmc_scale_reg: float = 0.01
-    """Scale regularization from MCMC"""
+       Lower usually gives more accurate geometry, original MCMC uses 0.01"""
+    mcmc_scale_reg: float = 0.002
+    """Scale regularization from MCMC, original MCMC uses 0.01"""
 
 
 class SpirulaeModel(Model):
@@ -816,6 +816,8 @@ class SpirulaeModel(Model):
                 torch.sigmoid(self.opacities)[sampled_idxs],
                 torch.exp(self.scales)[sampled_idxs],
             )
+            new_opacities = torch.clamp(
+                new_opacities, max=0.9, min=self.config.min_opacity)
             self.opacities[sampled_idxs] = torch.logit(new_opacities)
             self.scales[sampled_idxs] = torch.log(new_scales)
             for name, param in self.gauss_params.items():
@@ -830,7 +832,7 @@ class SpirulaeModel(Model):
                 torch.bincount(sampled_idxs)[sampled_idxs] + 1,
             )
             new_opacities = torch.clamp(
-                new_opacities, max=0.5, min=0.0*self.config.min_opacity)
+                new_opacities, max=0.9, min=self.config.min_opacity)
             self.opacities[sampled_idxs] = torch.logit(new_opacities)
             self.scales[sampled_idxs] = torch.log(new_scales)
             for name, param in self.gauss_params.items():
@@ -862,6 +864,8 @@ class SpirulaeModel(Model):
                 torch.sigmoid(self.opacities)[sampled_idxs],
                 torch.exp(self.scales)[sampled_idxs],
             )
+            new_opacities = torch.clamp(
+                new_opacities, max=0.9, min=self.config.min_opacity)
             self.opacities[sampled_idxs] = torch.logit(new_opacities)
             self.scales[sampled_idxs] = torch.log(new_scales)
             for name, param in self.gauss_params.items():
@@ -876,7 +880,7 @@ class SpirulaeModel(Model):
                 ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
             )
             new_opacities = torch.clamp(
-                new_opacities, max=0.5, min=0.0*self.config.min_opacity)
+                new_opacities, max=0.9, min=self.config.min_opacity)
             self.opacities[sampled_idxs] = torch.logit(new_opacities)
             self.scales[sampled_idxs] = torch.log(new_scales)
             for name, param in self.gauss_params.items():
@@ -898,13 +902,11 @@ class SpirulaeModel(Model):
         def op_sigmoid(x, k=100, x0=1.0-self.config.min_opacity):
             return 1 / (1 + torch.exp(-k * (x - x0)))
 
-        noise_sc = torch.sqrt((self.means**2).sum(axis=0)+1)
         noise = (
             torch.randn_like(self.means)
             * (op_sigmoid(1 - opacities))
             * self.config.noise_lr
             * last_lr
-            # * torch.clamp(noise_sc, -1e2, 1e2)
         )
         noise = torch.bmm(covars, noise.unsqueeze(-1)).squeeze(-1)
         self.gauss_params['means'] = self.gauss_params['means'] + noise

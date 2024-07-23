@@ -6,7 +6,8 @@
 // 1: max(1-r^2, 0)
 #define SPLAT_KERNEL 1
 
-#define MAX_REGISTER_CHANNELS 3
+// sorted splats list size
+#define MAX_SORTED_SPLATS 8
 
 // max number of cylindrical harmonics coefficients
 #define MAX_CH_FLOAT3 (21)

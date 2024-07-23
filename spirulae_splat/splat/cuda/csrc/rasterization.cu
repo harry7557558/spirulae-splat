@@ -27,6 +27,300 @@ inline __device__ void warpSum(float& val, cg::thread_block_tile<32>& tile){
 
 
 
+#if 0
+__global__ void rasterize_sorted_indices_kernel(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    const float2* __restrict__ anisotropies,
+    int* __restrict__ out_indices
+) {
+    // each thread draws one pixel, but also timeshares caching gaussians in a
+    // shared tile
+
+    auto block = cg::this_thread_block();
+    int tr = block.thread_rank();
+    int32_t tile_id =
+        block.group_index().y * tile_bounds.x + block.group_index().x;
+    unsigned i =
+        block.group_index().y * block.group_dim().y + block.thread_index().y;
+    unsigned j =
+        block.group_index().x * block.group_dim().x + block.thread_index().x;
+
+    const float fx = intrins.x;
+    const float fy = intrins.y;
+    const float cx = intrins.z;
+    const float cy = intrins.w;
+    glm::vec2 pos_screen = { (float)j + 0.5f, (float)i + 0.5f };
+    glm::vec2 pos_2d = { (pos_screen.x-cx)/fx, (pos_screen.y-cy)/fy };
+    int32_t pix_id = i * img_size.x + j;
+
+    // return if out of bounds
+    // keep not rasterizing threads around for reading data
+    bool inside = (i < img_size.y && j < img_size.x);
+    bool done = !inside;
+
+    // have all threads in tile process the same gaussians in batches
+    // first collect gaussians between range.x and range.y in batches
+    // which gaussians to look through in this tile
+    int2 range = tile_bins[tile_id];
+    const int block_size = block.size();
+    int num_batches = (range.y - range.x + block_size - 1) / block_size;
+
+    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
+
+    // number of elements in the buffer
+    int buffer_size = 0;
+    // sorted global index
+    __shared__ int32_t sorted_indices_[MAX_SORTED_SPLATS*MAX_BLOCK_SIZE];
+    int32_t *sorted_indices = &sorted_indices_[tr*MAX_SORTED_SPLATS];
+    // 24 bit depth, 8 bit weight
+    __shared__ uint32_t sorted_buffer_[MAX_SORTED_SPLATS*MAX_BLOCK_SIZE];
+    uint32_t *sorted_buffer = &sorted_buffer_[tr*MAX_SORTED_SPLATS];
+    // index of element with minimum weight contribution
+    uint8_t min_index;
+
+    // collect and process batches of gaussians
+    // each thread loads one gaussian at a time before rasterizing its
+    // designated pixel
+    for (int b = 0; b < num_batches; ++b) {
+        // resync all threads before beginning next batch
+        // end early if entire tile is done
+        if (__syncthreads_count(done) >= block_size) {
+            break;
+        }
+
+        // each thread fetch 1 gaussian from front to back
+        // index of gaussian to load
+        int batch_start = range.x + block_size * b;
+        int idx = batch_start + tr;
+        if (idx < range.y) {
+            int32_t g_id = gaussian_ids_sorted[idx];
+            const float3 pos = positions[g_id];
+            const float opac = opacities[g_id];
+            const float2 aniso = anisotropies[g_id];
+            const float3 v0 = axes_u[g_id];
+            const float3 v1 = axes_v[g_id];
+            id_batch[tr] = g_id;
+            position_batch[tr] = {pos.x, pos.y, pos.z};
+            axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
+            opacity_batch[tr] = {aniso.x, aniso.y, opac};
+        }
+
+        // wait for other threads to collect the gaussians in batch
+        block.sync();
+
+        // process gaussians in the current batch for this pixel
+        int batch_size = min(block_size, range.y - batch_start);
+        for (int t = 0; (t < batch_size) && !done; ++t) {
+            printf("%d", buffer_size);
+
+            glm::vec3 pos = position_batch[t];
+            glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
+            float opac = opacity_batch[t].z;
+            glm::mat2x3 axis_uv = axes_uv_batch[t];
+
+            glm::vec3 poi;
+            glm::vec2 uv;
+            // if (!get_intersection(pos, axis_uv, pos_2d, poi, uv));
+            //     continue;
+            get_intersection(pos, axis_uv, pos_2d, poi, uv);
+            if (glm::length(uv) > visibility_kernel_radius())
+                continue;
+            float alpha;
+            if (!get_alpha(uv, opac, aniso, alpha))
+                continue;
+
+            // 24 bit depth
+            uint32_t cur_depth = (uint32_t)(pos.z/(pos.z+1.0f) * 16777215.0f);
+
+            // add buffer
+            if (buffer_size == 0) {
+                uint8_t weight = (uint8_t)(255.0f*alpha+0.5f);
+                if (weight > 0) {
+                    sorted_indices[0] = id_batch[t];
+                    sorted_buffer[0] = (cur_depth << 8) + (uint32_t)weight;
+                    min_index = 0;
+                    buffer_size = 1;
+                }
+                continue;
+            }
+
+            // find insertion index
+            int ins_index = buffer_size;
+            while (--ins_index >= 0) {
+                uint32_t depth_i = sorted_buffer[ins_index] >> 8;
+                if (depth_i > cur_depth)
+                    break;
+            }
+            ins_index++;
+
+            // calculate weight
+            uint8_t cur_weight = ins_index == 0 ? (uint8_t)255 :
+                (uint8_t)(alpha * (uint8_t)sorted_buffer[ins_index-1] + 0.5f);
+            uint8_t min_weight = (uint8_t)sorted_buffer[min_index];
+            if (cur_weight == 0 || (
+                buffer_size >= MAX_SORTED_SPLATS && cur_weight <= min_weight))
+                continue;
+
+            // insert vs replace
+            float mult = 1.0f - alpha;
+            uint8_t new_min_weight = ins_index <= min_index ?
+                (uint8_t)(min_weight * mult + 0.5f) : min_weight;
+            bool replace_before = min_index < ins_index && (
+                new_min_weight == 0 || (buffer_size >= MAX_SORTED_SPLATS && new_min_weight < cur_weight));
+            min_weight = min(new_min_weight, cur_weight);
+            uint8_t new_min_index = min_index;
+
+            // replace an element before the insert index
+            if (replace_before) {
+                // update min index for before
+                min_weight = (uint8_t)(-1);
+                for (int i = 0; i < min_index; i++) {
+                    uint8_t weight = (uint8_t)sorted_buffer[i];
+                    if (weight <= min_weight)
+                        min_weight = weight, new_min_index = i;
+                }
+                // shift elements
+                for (int i = min_index; i < ins_index; i++) {
+                    sorted_indices[i] = sorted_indices[i+1];
+                    uint32_t info = sorted_buffer[i+1];
+                    if ((uint8_t)info <= min_weight)
+                        min_weight = (uint8_t)info, new_min_index = i;
+                    sorted_buffer[i] = info;
+                    // not updating weight here; guess it shouldn't matter much?
+                }
+                // insert
+                sorted_indices[ins_index] = id_batch[t];
+                sorted_buffer[ins_index] = (cur_depth << 8) + (uint32_t)cur_weight;
+                if (cur_weight < min_weight)
+                    min_weight = cur_weight, new_min_index = ins_index;
+                // update weights for after, squeeze zero weights
+                int offset = 1;
+                for (int i = ins_index+1; i+offset <= buffer_size; i++) {
+                    uint32_t info = sorted_buffer[i+offset];
+                    uint8_t new_weight = (uint8_t)(mult * (uint8_t)info + 0.5f);
+                    if (new_weight == 0) {
+                        offset++, i--;
+                        continue;
+                    }
+                    if (new_weight <= min_weight)
+                        min_weight = new_weight, new_min_index = i;
+                    sorted_indices[i] = sorted_indices[i+offset];
+                    sorted_buffer[i] = ((info >> 8) << 8) | (uint32_t)new_weight;
+                }
+                buffer_size -= offset-1;
+                min_index = new_min_index;
+                continue;
+            }
+
+            // replace an element after the insert index
+            bool replace_after = min_index >= ins_index && (
+                min_weight == 0 || (buffer_size >= MAX_SORTED_SPLATS && min_weight < cur_weight));
+            if (replace_after) {
+                // update min index for before
+                min_weight = (uint8_t)(-1);
+                for (int i = 0; i < ins_index; i++) {
+                    uint8_t weight = (uint8_t)sorted_buffer[i];
+                    if (weight <= min_weight)
+                        min_weight = weight, new_min_index = i;
+                }
+                // shift elements
+                for (int i = min_index; i > ins_index; i--) {
+                    sorted_indices[i] = sorted_indices[i-1];
+                    sorted_buffer[i] = sorted_buffer[i-1];
+                }
+                // insert
+                sorted_indices[ins_index] = id_batch[t];
+                sorted_buffer[ins_index] = (cur_depth << 8) + (uint32_t)cur_weight;
+                if (cur_weight < min_weight)
+                    min_weight = cur_weight, new_min_index = ins_index;
+                // update weights for after, squeeze zero weights
+                int offset = 0;
+                for (int i = ins_index+1; i+offset < buffer_size; i++) {
+                    uint32_t info = sorted_buffer[i+offset];
+                    uint8_t new_weight = (uint8_t)(mult * (uint8_t)info + 0.5f);
+                    if (new_weight == 0) {
+                        offset++, i--;
+                        continue;
+                    }
+                    if (new_weight <= min_weight)
+                        min_weight = new_weight, new_min_index = i;
+                    if (offset > 0)
+                        sorted_indices[i] = sorted_indices[i+offset];
+                    sorted_buffer[i] = ((info >> 8) << 8) | (uint32_t)new_weight;
+                }
+                buffer_size -= offset;
+                min_index = new_min_index;
+                continue;
+            }
+
+            // insert an element
+            {
+                // shift elements
+                bool has_zero = false;
+                for (int i = buffer_size; i > ins_index; i++) {
+                    sorted_indices[i] = sorted_indices[i-1];
+                    uint32_t info = sorted_buffer[i-1];
+                    uint8_t new_weight = (uint8_t)(mult * (uint8_t)info + 0.5f);
+                    if (new_weight == 0) {
+                        has_zero = true;
+                        continue;
+                    }
+                    if (new_weight <= min_weight)
+                        min_weight = new_weight, new_min_index = i;
+                    sorted_buffer[i] = ((info >> 8) << 8) | (uint32_t)new_weight;
+                }
+                buffer_size += 1;
+                // insert
+                sorted_indices[ins_index] = id_batch[t];
+                sorted_buffer[ins_index] = (cur_depth << 8) + (uint32_t)cur_weight;
+                if (cur_weight < min_weight)
+                    min_weight = cur_weight, new_min_index = ins_index;
+                // squeeze zero weights
+                if (has_zero) {
+                    int offset = 0;
+                    for (int i = ins_index+1; i+offset < buffer_size; i++) {
+                        uint32_t info = sorted_buffer[i+offset];
+                        if ((uint8_t)info == 0) {
+                            offset++, i--;
+                            continue;
+                        }
+                        if ((uint8_t)info <= min_weight)
+                            min_weight = (uint8_t)info, new_min_index = i;
+                        if (offset > 0) {
+                            sorted_indices[i] = sorted_indices[i+offset];
+                            sorted_buffer[i] = info;
+                        }
+                    }
+                    buffer_size -= offset;
+                }
+                min_index = new_min_index;
+                continue;
+            }
+
+        }
+    }
+
+    if (inside) {
+        int* out = &out_indices[pix_id*MAX_SORTED_SPLATS];
+        for (int i = 0; i < buffer_size; i++)
+            out[i] = sorted_indices[i];
+        // assume the rest are filled with -1
+    }
+}
+#endif
+
+
 __global__ void rasterize_simple_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
