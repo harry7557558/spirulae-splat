@@ -182,22 +182,82 @@ def bufferview_psa(buffer_views):
     return buffer_views
 
 
+class SplatModel:
+    def __init__(self, file_path):
+        if file_path.endswith('.cpkt'):
+            self.load_ckpt(file_path)
+        elif file_path.endswith('.ply'):
+            self.load_ply(file_path)
+
+    def load_ckpt(self, file_path):
+        checkpoint = torch.load(file_path)
+        pipeline = checkpoint['pipeline']
+        # print(pipeline.keys())
+
+        self.features_dc = pipeline['_model.gauss_params.features_dc']  # 8 bits
+        self.features_sh = pipeline['_model.gauss_params.features_sh']  # 4 bits
+        self.features_ch = pipeline['_model.gauss_params.features_ch']  # 6 bits
+        self.means = pipeline['_model.gauss_params.means']  # 12-16 bits
+        self.opacities = pipeline['_model.gauss_params.opacities']  # 8 bits after sigmoid
+        self.anisotropies = pipeline['_model.gauss_params.anisotropies']  # 8 bits
+        self.quats = pipeline['_model.gauss_params.quats']  # 8 bits
+        self.scales = pipeline['_model.gauss_params.scales']  # 8-12 bits
+        self.background_color = pipeline['_model.background_color']
+        self.background_sh = pipeline['_model.background_sh'] \
+            if '_model.background_sh' in pipeline else torch.zeros((0, 3))
+
+    def load_ply(self, file_path):
+        """for official 2DGS codebase"""
+        from plyfile import PlyData
+        plydata = PlyData.read(file_path)
+
+        means = []
+        scales = []
+        quats = []
+        features_dc = []
+        opacities = []
+        features_sh = []
+
+        v = plydata["vertex"][0]
+        sh_keys = []
+        for i in range(72):
+            key = f"f_rest_{i}"
+            try:
+                v[key]
+                sh_keys.append(key)
+            except ValueError:
+                break
+
+        for v in plydata["vertex"]:
+            means.append([v["x"], v["y"], v["z"]])
+            scales.append([v["scale_0"], v["scale_1"]])
+            quats.append([v["rot_0"], v["rot_1"], v["rot_2"], v["rot_3"]])
+            features_dc.append([v["f_dc_0"], v["f_dc_1"], v["f_dc_2"]])
+            opacities.append([v["opacity"]])
+            features_sh.append([v[key] for key in sh_keys])
+
+        n = len(means)
+        self.means = torch.tensor(means, dtype=torch.float)
+        self.opacities = torch.tensor(opacities, dtype=torch.float)
+        self.quats = torch.tensor(quats, dtype=torch.float)
+        self.scales = torch.tensor(scales, dtype=torch.float)
+        self.features_dc = torch.tensor(features_dc, dtype=torch.float)
+        self.features_sh = torch.tensor(features_sh, dtype=torch.float).view(n, -1, 3)
+        self.features_ch = torch.zeros((n, 0, 3))
+        self.anisotropies = torch.zeros((n, 2))
+        self.background_color = torch.zeros(3)
+        self.background_sh = torch.zeros((0, 3))
+
+
 def process_ckpt_to_ssplat(file_path):
-    checkpoint = torch.load(file_path)
-    pipeline = checkpoint['pipeline']
-    
-    # print(pipeline.keys())
-    features_dc = pipeline['_model.gauss_params.features_dc']  # 8 bits
-    features_sh = pipeline['_model.gauss_params.features_sh']  # 4 bits
-    features_ch = pipeline['_model.gauss_params.features_ch']  # 6 bits
-    means = pipeline['_model.gauss_params.means']  # 12-16 bits
-    opacities = pipeline['_model.gauss_params.opacities']  # 8 bits after sigmoid
-    anisotropies = pipeline['_model.gauss_params.anisotropies']  # 8 bits
-    quats = pipeline['_model.gauss_params.quats']  # 8 bits
-    scales = pipeline['_model.gauss_params.scales']  # 8-12 bits
-    background_color = pipeline['_model.background_color']
-    background_sh = pipeline['_model.background_sh'] \
-        if '_model.background_sh' in pipeline else torch.zeros((0, 3))
+
+    m = SplatModel(file_path)
+    (features_dc, features_sh, features_ch,
+        means, opacities, anisotropies, quats, scales,
+        background_color, background_sh) = \
+    (m.features_dc, m.features_sh, m.features_ch,
+        m.means, m.opacities, m.anisotropies, m.quats, m.scales,
+        m.background_color, m.background_sh)
 
     num_sh = features_sh.shape[1]
     num_ch = features_ch.shape[1]
@@ -313,8 +373,9 @@ def process_ckpt_to_ssplat(file_path):
     print("Packing harmonics...")
     componentViews, componentLength = component_view_psa([
             { "key": "features_ch", "type": f"quat{3*num_ch}", "bitLength": 3*num_ch*4, "quatBufferView": 6 },
+    ] * (num_ch > 0) + [
             { "key": "features_sh", "type": f"quat{3*num_sh}", "bitLength": 3*num_sh*3, "quatBufferView": 7 },
-        ])
+    ] * (num_sh > 0))
     harmonics_config = {
         "bufferView": len(buffer_views)+1,
         "length": len(weight),
@@ -361,10 +422,11 @@ def process_ckpt_to_ssplat(file_path):
             "base": base_config,
             "harmonics": harmonics_config,
         },
-        "bufferViews": bufferview_psa(buffer_views + [
-            { "byteLength": len(base_buffer) },
-            { "byteLength": len(harmonics_buffer) },
-        ])
+        "bufferViews": bufferview_psa(
+            buffer_views + \
+            [ { "byteLength": len(base_buffer) } ] + \
+            [ { "byteLength": len(harmonics_buffer) } ] * (len(harmonics_buffer) > 0)
+        )
     }
 
     header = json.dumps(header)

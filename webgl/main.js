@@ -379,7 +379,7 @@ function createWorker(self) {
 
     function runSort(viewProj) {
         if (!base) return;
-        if (harmonics.features_sh.length > lastHarmonicsLength) {
+        if (harmonics && harmonics.features_sh.length > lastHarmonicsLength) {
             console.time("generate CH/SH texture");
             generateCHTexture();
             generateSHTexture();
@@ -717,7 +717,8 @@ async function main() {
                     : e.deltaMode == 2
                     ? innerHeight
                     : 1;
-            let innerSize = Math.max(innerWidth, innerHeight);
+            // let innerSize = Math.max(innerWidth, innerHeight);
+            let innerSize = 840;
             let inv = invert4(viewMatrix);
             if (e.shiftKey) {
                 inv = translate4(
@@ -990,8 +991,10 @@ async function main() {
         if (
             ["KeyJ", "KeyK", "KeyL", "KeyI"].some((k) => activeKeys.includes(k))
         ) {
-            let d = 1;
-            inv = translate4(inv, 0, 0, d);
+            let d = Math.sqrt(0.5 * (
+                inv[12]*inv[12] + inv[13]*inv[13] + inv[14]*inv[14] + inv[15]*inv[15]
+            ));
+            inv = translate4(inv, 0, 0, d, false);
             inv = rotate4(
                 inv,
                 activeKeys.includes("KeyJ")
@@ -1010,7 +1013,7 @@ async function main() {
                     : 0,
                 1, 0, 0
             );
-            inv = translate4(inv, 0, 0, -d);
+            inv = translate4(inv, 0, 0, -d, false);
         }
 
         viewMatrix = invert4(inv);
@@ -1059,6 +1062,7 @@ async function main() {
             document.getElementById("checkbox-ch").disabled = (ch_degree_r == 0);
 
             let background = header.config.background_color;
+            document.getElementById("checkbox-bg").disabled = !(Math.max(background[0], background[1], background[2]) > 0);
             let bg = document.getElementById("checkbox-bg").checked;
             gl.clearColor(bg*background[0], bg*background[1], bg*background[2], 1.0);
             gl.clear(gl.COLOR_BUFFER_BIT);
