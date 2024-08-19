@@ -942,8 +942,10 @@ async function main() {
             if (!gamepad) continue;
 
             const axisThreshold = 0.1; // Threshold to detect when the axis is intentionally moved
-            const moveSpeed = 0.06;
+            const moveSpeed = 0.02;
             const rotateSpeed = 0.02;
+
+            let inv0 = JSON.stringify(inv);
 
             // Assuming the left stick controls translation (axes 0 and 1)
             if (Math.abs(gamepad.axes[0]) > axisThreshold) {
@@ -958,7 +960,6 @@ async function main() {
                 inv = translate4(inv, 0, -moveSpeed*(gamepad.buttons[12].pressed - gamepad.buttons[13].pressed), 0);
                 carousel = false;
             }
-
             if(gamepad.buttons[14].pressed || gamepad.buttons[15].pressed){
                 inv = translate4(inv, -moveSpeed*(gamepad.buttons[14].pressed - gamepad.buttons[15].pressed), 0, 0);
                 carousel = false;
@@ -986,6 +987,9 @@ async function main() {
             if(gamepad.buttons[3].pressed){
                 carousel = true;
             }
+
+            if (JSON.stringify(inv) != inv0)
+                renderNeeded = true;
         }
 
         if (
