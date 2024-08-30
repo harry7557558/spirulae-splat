@@ -119,7 +119,7 @@ setup(
     },
     entry_points={
         "nerfstudio.method_configs": [
-            "method-template = spirulae_splat.ns_config:spirulae"
+            "spirulae = spirulae_splat.ns_config:spirulae"
         ]
     },
     cmdclass={"build_ext": get_ext()} if not BUILD_NO_CUDA else {},

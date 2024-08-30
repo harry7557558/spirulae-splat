@@ -10,13 +10,15 @@ My custom method for Nerfstudio. Modified from the `splatfacto` method in offici
 - Use polynomial spline kernel splats instead of Gaussians, as inspired by [kernels used in computational physics](https://en.wikipedia.org/wiki/Smoothed-particle_hydrodynamics)
   - This increases rendering speed by zeroing out opacities beyond a certain radius
   - A splat with higher overall opacity produces fewer Gaussians, especially when combined with culling splats with absolute position gradient below a threshold
-  - $\alpha=\max(1-r^2,0)$ empirically produces fewer Gaussians, faster convergence, and higher visual and geometric fidelity compared to kernels with higher continuities like commonly used SPH kernels
+  - $\alpha=\max(1-r^2,0)$ empirically produces 1.5x-2x faster training and inference compared to Gaussians, with 0.2-0.5 drop in PSNR compared to Gaussian kernel for a similar number of splats
 
 - Use [cylindrical harmonics](https://en.wikipedia.org/wiki/Cylindrical_harmonics) to model uv-dependent color
   - Base+SH color multiplied by the sigmoid of 2D "polar" harmonics
   - Able to better capture fine color details and potentially reduce export file size on scenes with fine detail
   - Use absolute gradient of CH coefficients as a criteria to split and duplicate splats
   - Slows down training by about a half, due to resource spent on Bessel function evaluation and loading CH coefficients from global memory
+
+- Support [Markov Chain Monte Carlo (MCMC)](https://arxiv.org/abs/2404.09591) for adaptive control of splats, with relocation designed for polynomial splats
 
 - Introduce splat anisotropy by multiplying opacity by a smoothstep of UV directional dot product $1-\mathrm{smoothstep}(\mathbf{a}\cdot(u,v))$, intended to better represent sharp edges
 
