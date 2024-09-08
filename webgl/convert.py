@@ -184,7 +184,7 @@ def bufferview_psa(buffer_views):
 
 class SplatModel:
     def __init__(self, file_path):
-        if file_path.endswith('.cpkt'):
+        if file_path.endswith('.ckpt'):
             self.load_ckpt(file_path)
         elif file_path.endswith('.ply'):
             self.load_ply(file_path)
@@ -383,9 +383,10 @@ def process_ckpt_to_ssplat(file_path):
         "componentViews": componentViews
     }
     harmonics_buffer = pack_components(harmonics_config, [
-        features_ch_q.reshape((len(features_ch), -1)),
+        features_ch_q.reshape((len(features_ch), -1))
+    ] * (num_ch > 0) + [
         features_sh_q.reshape((len(features_sh), -1))
-    ])
+    ] * (num_sh > 0))
 
     buffer = BytesIO()
     buffer.write(means_bins.cpu().numpy().tobytes())
