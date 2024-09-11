@@ -323,8 +323,8 @@ function createWorker(self) {
             }
 
             // rgba - 4 halfs, info2 yz
-            let m = header.config.sh_degree == 0 ? 0.28209479177387814 : 1.0;
-            let b = header.config.sh_degree == 0 ? 0.5 : 0.0;
+            let m = header.config.sh_degree == 0 ? 1.0 : 1.0;
+            let b = header.config.sh_degree == 0 ? 0.0 : 0.0;
             let rgba = [
                 b + m * base.features_dc[3*i+0],
                 b + m * base.features_dc[3*i+1],
