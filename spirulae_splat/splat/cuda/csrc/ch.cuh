@@ -3,6 +3,10 @@
 #include "config.h"
 #include "glm/glm/glm.hpp"
 
+#ifndef M_PI
+#define M_PI 3.1415926536f
+#endif
+
 namespace cg = cooperative_groups;
 
 
