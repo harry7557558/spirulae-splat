@@ -10,8 +10,8 @@ uniform vec2 viewport;
 uniform ivec2 u_sh_config;
 uniform int u_use_aniso;
 
-in vec2 position;
-in int index;
+layout(location = 0) in vec2 vertexPosition;
+layout(location = 1) in int index;
 
 uniform highp usampler2D u_sh_texture;
 
@@ -285,7 +285,7 @@ void main () {
     vIndex = index;
 
     gl_Position = vec4(
-        vec2(1,-1) * (-1.0 + 2.0 * (center + position * bound.xy) / viewport),
+        vec2(1,-1) * (-1.0 + 2.0 * (center + vertexPosition * bound.xy) / viewport),
         0.0, 1.0);
 
 }

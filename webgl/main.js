@@ -469,8 +469,8 @@ function createWorker(self) {
 
 let genericVertexShaderSource = `#version 300 es
 precision highp float;
-in vec2 position;
-void main() { gl_Position = vec4(position, 0, 1); }
+layout(location = 0) in vec2 vertexPosition;
+void main() { gl_Position = vec4(vertexPosition, 0.0, 1.0); }
 `
 let vertexShaderSource = "";
 let fragmentShaderSource = "";
@@ -552,7 +552,7 @@ async function main() {
 
         return program;
     }
-    const program = createShaderProgram(vertexShaderSource, fragmentShaderSource);
+    const splatProgram = createShaderProgram(vertexShaderSource, fragmentShaderSource);
     const backgroundProgram = createShaderProgram(genericVertexShaderSource, backgroundShaderSource);
 
     // depth test and blend
@@ -567,42 +567,42 @@ async function main() {
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, triangleVertices, gl.STATIC_DRAW);
 
-    gl.useProgram(program);
-    const a_position = gl.getAttribLocation(program, "position");
+    gl.useProgram(splatProgram);
+    const a_position = gl.getAttribLocation(splatProgram, "vertexPosition");
     gl.enableVertexAttribArray(a_position);
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
     gl.vertexAttribPointer(a_position, 2, gl.FLOAT, false, 0, 0);
 
     gl.useProgram(backgroundProgram);
-    const bg_position = gl.getAttribLocation(backgroundProgram, "position");
+    const bg_position = gl.getAttribLocation(backgroundProgram, "vertexPosition");
     gl.enableVertexAttribArray(bg_position);
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
     gl.vertexAttribPointer(bg_position, 2, gl.FLOAT, false, 0, 0);
 
     // textures
-    gl.useProgram(program);
+    gl.useProgram(splatProgram);
 
     var baseTexture = gl.createTexture();
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, baseTexture);
-    var uBaseTextureLocation = gl.getUniformLocation(program, "u_base_texture");
+    var uBaseTextureLocation = gl.getUniformLocation(splatProgram, "u_base_texture");
     gl.uniform1i(uBaseTextureLocation, 0);
 
     var chTexture = gl.createTexture();
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, chTexture);
-    var uChTextureLocation = gl.getUniformLocation(program, "u_ch_texture");
+    var uChTextureLocation = gl.getUniformLocation(splatProgram, "u_ch_texture");
     gl.uniform1i(uChTextureLocation, 1);
 
     var shTexture = gl.createTexture();
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, shTexture);
-    var uShTextureLocation = gl.getUniformLocation(program, "u_sh_texture");
+    var uShTextureLocation = gl.getUniformLocation(splatProgram, "u_sh_texture");
     gl.uniform1i(uShTextureLocation, 2);
 
     // indices
     const indexBuffer = gl.createBuffer();
-    const a_index = gl.getAttribLocation(program, "index");
+    const a_index = gl.getAttribLocation(splatProgram, "index");
     gl.enableVertexAttribArray(a_index);
     gl.bindBuffer(gl.ARRAY_BUFFER, indexBuffer);
     gl.vertexAttribIPointer(a_index, 1, gl.INT, false, 0, 0);
@@ -626,7 +626,7 @@ async function main() {
             gl.uniform2fv(gl.getUniformLocation(program, "viewport"),
                 new Float32Array([innerWidth, innerHeight]));
         }
-        setUniforms(program);
+        setUniforms(splatProgram);
         setUniforms(backgroundProgram);
         renderNeeded = true;
     };
@@ -1092,15 +1092,15 @@ async function main() {
                 gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, 4);
             }
 
-            gl.useProgram(program);
-            gl.uniformMatrix4fv(gl.getUniformLocation(program, "view"),
+            gl.useProgram(splatProgram);
+            gl.uniformMatrix4fv(gl.getUniformLocation(splatProgram, "view"),
                 false, actualViewMatrix);
-            gl.uniform1i(gl.getUniformLocation(program, "u_use_aniso"),
+            gl.uniform1i(gl.getUniformLocation(splatProgram, "u_use_aniso"),
                 document.getElementById("checkbox-aniso").checked);
-            gl.uniform2i(gl.getUniformLocation(program, "u_sh_config"),
+            gl.uniform2i(gl.getUniformLocation(splatProgram, "u_sh_config"),
                 document.getElementById("checkbox-sh").checked,
                 header.config.sh_degree);
-            gl.uniform3i(gl.getUniformLocation(program, "u_ch_config"),
+            gl.uniform3i(gl.getUniformLocation(splatProgram, "u_ch_config"),
                 document.getElementById("checkbox-ch").checked,
                 header.config.ch_degree_r,
                 header.config.ch_degree_phi);
@@ -1170,8 +1170,8 @@ async function main() {
         }
 
         if (bytesRead > lastBytesRead) {
-            worker.postMessage(unpackModel(
-                header, ssplatData.buffer.slice(headerLength, bytesRead)));
+            // worker.postMessage(unpackModel(
+            //     header, ssplatData.buffer.slice(headerLength, bytesRead)));
             lastBytesRead = bytesRead;
             renderNeeded = true;
         }
@@ -1193,7 +1193,7 @@ async function loadShaderFile(url) {
     }
     return await response.text();
 }
-  
+
 // Function to load both shaders and call main()
 async function loadShadersAndInit() {
     try {
