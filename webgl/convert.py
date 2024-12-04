@@ -7,6 +7,16 @@ from io import BytesIO
 import json
 
 
+def quat_mult(q1, q2):
+    w1, x1, y1, z1 = torch.unbind(q1, dim=-1)
+    w2, x2, y2, z2 = torch.unbind(q2, dim=-1)
+    w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
+    x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
+    y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
+    z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
+    return torch.stack([w, x, y, z]).T.contiguous()
+
+
 def custom_quantile(sorted_numbers, quantiles):
     n = len(sorted_numbers)
     indices = quantiles * (n - 1)
@@ -249,7 +259,7 @@ class SplatModel:
         self.background_sh = torch.zeros((0, 3))
 
 
-def process_ckpt_to_ssplat(file_path):
+def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, exposure=1.0, rotate=False):
 
     m = SplatModel(file_path)
     (features_dc, features_sh, features_ch,
@@ -295,27 +305,76 @@ def process_ckpt_to_ssplat(file_path):
     print("{:.2f} MB floats".format(n_floats*4/1024**2))
     print()
 
-    if False:
-        center = torch.mean(means, axis=0)
-        cov_matrix = torch.cov(means.T)
-        mahalanobis_dist = torch.sqrt(torch.sum((
-            (means-center) @ torch.linalg.inv(cov_matrix)) * (means-center), axis=1))
-        mask = mahalanobis_dist < 1.5
-        print("masked", torch.sum(mask).item(), "splats")
-        print()
+    if 0 < cull_th < float('inf'):
+        for _ in range(cull_n):
+            center = torch.mean(means, axis=0)
+            cov_matrix = torch.cov(means.T)
+            mahalanobis_dist = torch.sqrt(torch.sum((
+                (means-center) @ torch.linalg.inv(cov_matrix)) * (means-center), axis=1))
+            mask = mahalanobis_dist < cull_th
+            print("culled", torch.sum(~mask).item(), '/', len(means), "splats")
 
-        (features_dc, features_sh, features_ch,
-        means, opacities, anisotropies, quats, scales) = [
-            tensor[mask].contiguous() for tensor in (
-                features_dc, features_sh, features_ch,
-                means, opacities, anisotropies, quats, scales)
-        ]
+            (features_dc, features_sh, features_ch,
+            means, opacities, anisotropies, quats, scales) = [
+                tensor[mask].contiguous() for tensor in (
+                    features_dc, features_sh, features_ch,
+                    means, opacities, anisotropies, quats, scales)
+            ]
+        print()
 
     means -= torch.mean(means, axis=0)
 
     quats = quats / torch.norm(quats, dim=1, keepdim=True)
     opacities = torch.sigmoid(opacities)
     anisotropies = torch.arcsinh(anisotropies)
+
+    if rotate:
+        from scipy.spatial.transform import Rotation
+        import spherical  # pip install spherical, very lightweight
+        # find rotation
+        # TODO: get rid of euler angle
+        s = torch.cov(means.T).cpu().numpy().astype(np.float64)
+        s, r0 = np.linalg.eigh(s)
+        r = Rotation.from_matrix(r0).as_euler("xyz")
+        r = np.round(r/(np.pi/2)) * (np.pi/2)
+        r1 = Rotation.from_euler("xyz", r).as_matrix()
+        dr = r1 @ r0.T
+        # rotate position
+        means = means @ torch.from_numpy(dr.T).to(means)
+        # rotate quaternion
+        dq = Rotation.from_matrix(dr).as_quat()
+        dq = torch.from_numpy(dq[[3,0,1,2]]).to(quats)
+        quats = quat_mult(dq, quats)
+        # rotate SH coefficients
+        # TODO: this is not exact, use real instead of complex matrix
+        wigner = spherical.Wigner(4)
+        # D = wigner.D(dq.cpu().numpy())
+        D = wigner.D(dq.cpu().numpy()).real
+        for l in range(1, sh_degree+1):
+            d = np.array([[D[wigner.Dindex(l, i, j)] for i in range(-l,l+1)] for j in range(-l,l+1)])
+            # d = torch.from_numpy(d).to(features_sh.device).to(torch.complex64)
+            d = torch.from_numpy(d).to(features_sh.device).to(torch.float32)
+            i0, i1 = l**2-1, (l+1)**2-1
+            # rotated = torch.einsum('ab,kbc->kac', d, features_sh[:, i0:i1].to(torch.complex64))
+            # print(torch.mean(torch.abs(rotated.imag)).item()/torch.mean(torch.abs(rotated.real)).item())
+            # features_sh[:, i0:i1] = rotated.real
+            features_sh[:, i0:i1] = torch.einsum('ab,kbc->kac', d, features_sh[:, i0:i1])
+
+    if exposure != 1.0:
+        exposure = max(exposure, 0.0) ** (1.0/2.2)
+        # adjust albedo
+        color = features_dc*0.2820947917738781+0.5 if sh_degree > 0 else features_dc
+        # color0 = torch.clip(color*exposure, max=1.0)
+        color = 1.0 - torch.relu(1.0-color) ** exposure if exposure > 1.0 else color * exposure
+        features_dc = (color - 0.5) / 0.2820947917738781 if sh_degree > 0 else color
+        # adjust SH
+        features_sh *= exposure * (1.0-color.unsqueeze(1)) if exposure > 1.0 else exposure
+        # adjust background
+        background_color *= exposure
+        if background_sh_degree > 0:
+            background_color += 0.5 * (exposure-1.0) / 0.2820947917738781
+        # TODO: adjust CH
+
 
     weight = torch.exp(scales[:,0]+scales[:,1]) * opacities[:,0]
     sorted_indices = torch.argsort(-weight)
@@ -405,7 +464,8 @@ def process_ckpt_to_ssplat(file_path):
 
     header = {
         "asset": {
-            "version": "0.0"
+            "version": "0.0",
+            "meta": meta,
         },
         "config": {
             "sh_degree": sh_degree,
@@ -457,10 +517,41 @@ def main():
     parser.add_argument(
         "--output", "-o", default="model.ssplat", help="The output SSPLAT file."
     )
+    parser.add_argument("--cull", "-c", default="inf", help="Cull threshold.")
+    parser.add_argument("--ncull", "-cn", default="1", help="Number of cull iterations.")
+    parser.add_argument("--exposure", "-e", default="1.0", help="Relative exposure.")
+    parser.add_argument("--rotate", "-r", default="0", help="Whether to rotate the scene to align with axis.")
     args = parser.parse_args()
+
+    meta = {
+        'argv': __import__('sys').argv,
+        'timestamp': __import__('datetime').datetime.now().astimezone().isoformat(),
+    }
+
+    try:
+        cull_th = float(args.cull)
+    except ValueError:
+        print("Ignore invalid cull threshold:", args.cull)
+        cull_th = float('inf')
+    try:
+        cull_n = int(args.ncull)
+    except ValueError:
+        print("Ignore invalid cull iterations:", args.ncull)
+        cull_n = 1
+    try:
+        exposure = float(args.exposure)
+    except ValueError:
+        print("Ignore invalid exposure:", args.exposure)
+        exposure = 1.0
+    try:
+        rotate = bool(eval(args.rotate))
+    except ValueError:
+        print("Ignore invalid rotate:", args.rotate)
+        rotate = False
+
     for input_file in args.input_files:
         print(f"Processing {input_file}...", end='\n\n')
-        ssplat_data = process_ckpt_to_ssplat(input_file)
+        ssplat_data = process_ckpt_to_ssplat(input_file, meta, cull_th, cull_n, exposure, rotate)
         output_file = (
             args.output if len(args.input_files) == 1 else input_file + ".ssplat"
         )
