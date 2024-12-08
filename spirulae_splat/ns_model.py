@@ -35,7 +35,7 @@ from spirulae_splat.splat.rasterize import rasterize_gaussians
 from spirulae_splat.splat.rasterize_depth import rasterize_gaussians_depth
 from spirulae_splat.splat.rasterize_simple import rasterize_gaussians_simple
 from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
-from spirulae_splat.splat.relocation import compute_relocation, compute_relocation_split
+from spirulae_splat.strategy import DefaultStrategy
 
 from nerfstudio.cameras.camera_optimizers import (CameraOptimizer,
                                                   CameraOptimizerConfig)
@@ -141,25 +141,29 @@ class SpirulaeModelConfig(ModelConfig):
     """weight of ssim loss"""
     output_depth_during_training: bool = False
     """If True, output depth during training. Otherwise, only output depth during evaluation."""
-    use_camera_optimizer: bool = False
+    use_camera_optimizer: bool = True
     """Whether to use camera optimizer"""
     camera_optimizer: CameraOptimizerConfig = field(default_factory=lambda: CameraOptimizerConfig(mode="SO3xR3"))
     """Config of the camera optimizer to use"""
+    kernel_radius: float = 1.0
+    """Radius of the splatting kernel, 3.0 for Gaussian and 1.0 for polynomial"""
+    loss_scale: float = 0.003
+    """Scaling for loss values to normalize gradient"""
 
     # classial control
     cull_alpha_thresh: float = 0.1
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
     cull_scale_thresh: float = 0.5
     """threshold of scale for culling huge gaussians"""
-    cull_anisotropy_thresh: float = 10.0
+    cull_anisotropy_thresh: float = np.inf
     """threshold of quotient of scale for culling long thin gaussians"""
-    cull_grad_thresh: float = 0.0001  # 0.0004 | 0.0001 | 0
+    cull_grad_thresh: float = 0.0003  # 0.0003 | 0.0001
     """threshold for culling gaussians with low visibility"""
     continue_cull_post_densification: bool = True
     """If True, continue to cull gaussians post refinement"""
     reset_alpha_every: int = 30
     """Every this many refinement steps, reset the alpha"""
-    densify_xy_grad_thresh: float = 0.0006  # 0.001 | 0.0006
+    densify_xy_grad_thresh: float = 0.003  # 0.003 | 0.001
     """threshold of positional gradient norm for densifying gaussians"""
     densify_ch_grad_thresh: float = 3e-6  # 5e-6 | 3e-6 | 1e-6
     """threshold of cylindrical harmonics gradient norm for densifying gaussians"""
@@ -213,7 +217,7 @@ class SpirulaeModelConfig(ModelConfig):
     # regularization
     use_scale_regularization: bool = True
     """If enabled, a scale regularization introduced in PhysGauss (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians."""
-    max_gauss_ratio: float = 5.0
+    max_gauss_ratio: float = 10.0
     """threshold of ratio of gaussian max to min scale before applying regularization
     loss from the PhysGaussian paper
     """
@@ -310,6 +314,8 @@ class SpirulaeModel(Model):
 
         opacities = torch.nn.Parameter(torch.logit(0.1 * torch.ones(num_points, 1)))
         anisotropies = torch.nn.Parameter(torch.zeros((num_points, 2)))
+        if not self.config.use_anisotropy:
+            anisotropies.requires_grad_(False)
 
         gauss_params = {
             "means": means,
@@ -350,6 +356,27 @@ class SpirulaeModel(Model):
             self.background_sh = torch.nn.Parameter(torch.zeros((dim_sh-1, 3)))
         else:
             self.background_sh = None
+
+        # Strategy for GS densification
+        self.strategy = DefaultStrategy(
+            prune_opa=self.config.cull_alpha_thresh,
+            grow_grad2d=self.config.densify_xy_grad_thresh,
+            prune_grad2d=self.config.cull_grad_thresh,
+            grow_scale3d=self.config.densify_size_thresh,
+            grow_scale2d=self.config.split_screen_size,
+            prune_scale3d=self.config.cull_scale_thresh,
+            prune_scale2d=self.config.cull_screen_size,
+            refine_scale2d_stop_iter=self.config.stop_screen_size_at,
+            refine_start_iter=self.config.warmup_length,
+            refine_stop_iter=self.config.stop_split_at,
+            reset_every=self.config.reset_alpha_every * self.config.refine_every,
+            refine_every=self.config.refine_every,
+            pause_refine_after_reset=self.num_train_data + self.config.refine_every,
+            absgrad=True,
+            revised_opacity=False,
+            verbose=True,
+        )
+        self.strategy_state = self.strategy.initialize_state(scene_scale=1.0)
 
     @property
     def colors(self):
@@ -911,10 +938,44 @@ class SpirulaeModel(Model):
         noise = torch.bmm(covars, noise.unsqueeze(-1)).squeeze(-1)
         self.gauss_params['means'] = self.gauss_params['means'] + noise
 
+    def step_cb(self, optimizers: Optimizers, step):
+        self.step = step
+        self.optimizers = optimizers.optimizers
+
+    def step_post_backward(self, step):
+        assert step == self.step
+        self.strategy.step_post_backward(
+            params=self.gauss_params,
+            optimizers=self.optimizers,
+            state=self.strategy_state,
+            step=self.step,
+            info=self.info,
+            packed=False,
+        )
+        return
+        # for splatfacto: around 1.5 and around 1e-6 @ 1k iters
+        print(self.info['radii'].float().mean().item(),
+              self.info['means2d'].absgrad.mean().item())
+
     def get_training_callbacks(
         self, training_callback_attributes: TrainingCallbackAttributes
     ) -> List[TrainingCallback]:
         cbs = []
+        cbs.append(
+            TrainingCallback(
+                [TrainingCallbackLocation.BEFORE_TRAIN_ITERATION],
+                self.step_cb,
+                args=[training_callback_attributes.optimizers],
+            )
+        )
+        cbs.append(
+            TrainingCallback(
+                [TrainingCallbackLocation.AFTER_TRAIN_ITERATION],
+                self.step_post_backward,
+            )
+        )
+        return cbs
+
         cbs.append(TrainingCallback([TrainingCallbackLocation.BEFORE_TRAIN_ITERATION], self.step_cb))
         # return cbs
         if self.config.use_mcmc:
@@ -938,7 +999,8 @@ class SpirulaeModel(Model):
             cbs.append(
                 TrainingCallback(
                     [TrainingCallbackLocation.AFTER_TRAIN_ITERATION],
-                    self.after_train,
+                    self.step_cb,
+                    args=[training_callback_attributes.optimizers],
                 )
             )
             cbs.append(
@@ -950,9 +1012,6 @@ class SpirulaeModel(Model):
                 )
             )
         return cbs
-
-    def step_cb(self, step):
-        self.step = step
 
     def get_gaussian_param_groups(self) -> Dict[str, List[Parameter]]:
         # Here we explicitly use the means, scales as parameters so that the user can override this function and
@@ -1007,6 +1066,8 @@ class SpirulaeModel(Model):
         W, H = int(camera.width.item()), int(camera.height.item())
 
         background = self.background_color.repeat(H, W, 1)
+        if not self.config.train_background_color:
+            return background
         sh_degree = self.config.background_sh_degree
         if not (sh_degree > 0):
             return background
@@ -1281,6 +1342,15 @@ class SpirulaeModel(Model):
 
                 # print(self.features_ch.mean().item(), self.features_ch.std().item())
                 # print(self.anisotropies.mean().item(), self.anisotropies.std().item())
+        else:
+            self.info = {
+                "width": W,
+                "height": H,
+                "n_cameras": camera.shape[0],
+                "radii": self.config.kernel_radius/3.0 * \
+                      num_tiles_hit.unsqueeze(0)**0.5 / 2 * BLOCK_WIDTH,
+                "means2d": positions,
+            }
 
         self.intrins = intrins
         self.positions = positions
@@ -1444,6 +1514,8 @@ class SpirulaeModel(Model):
             'mcmc_opacity_reg': mcmc_opacity_reg,
             'mcmc_scale_reg': mcmc_scale_reg,
         }
+        for key, value in loss_dict.items():
+            loss_dict[key] = self.config.loss_scale * value
 
         if self.training and self.config.use_camera_optimizer:
             # Add loss from camera optimizer

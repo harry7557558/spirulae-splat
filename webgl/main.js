@@ -323,8 +323,8 @@ function createWorker(self) {
             }
 
             // rgba - 4 halfs, info2 yz
-            let m = header.config.sh_degree == 0 ? 1.0 : 1.0;
-            let b = header.config.sh_degree == 0 ? 0.0 : 0.0;
+            let m = header.config.sh_degree == 0 ? 0.28209479177387814 : 1.0;
+            let b = header.config.sh_degree == 0 ? 0.5 : 0.0;
             let rgba = [
                 b + m * base.features_dc[3*i+0],
                 b + m * base.features_dc[3*i+1],
@@ -478,8 +478,8 @@ let backgroundShaderSource = "";
 
 let defaultViewMatrix = [
     1.0, 0.0, 0.0, 0.0,
-    0.0, 0.0, 1.0, 0.0,
-    0.0, -1.0, 0.0, 0.0,
+    0.0, -0.199, 0.98, 0.0,
+    0.0, -0.98, -0.199, 0.0,
     0.0, 0.0, 1.0, 1.0
 ];
 let viewMatrix = defaultViewMatrix;
@@ -609,7 +609,7 @@ async function main() {
     gl.vertexAttribDivisor(a_index, 1);
 
     const resize = () => {
-        let f = 0.7 * window.innerWidth;
+        let f = 0.7 * Math.max(window.innerWidth, window.innerHeight);
 
         projectionMatrix = getProjectionMatrix(f, f, innerWidth, innerHeight);
 

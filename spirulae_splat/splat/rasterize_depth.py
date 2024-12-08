@@ -175,10 +175,11 @@ class _RasterizeGaussiansDepth(Function):
         # Abs grad for gaussian splitting criterion. See
         # - "AbsGS: Recovering Fine Details for 3D Gaussian Splatting"
         # - "EfficientGS: Streamlining Gaussian Splatting for Large-Scale High-Resolution Scene Representation"
-        if not hasattr(positions, 'absgrad') or positions.absgrad is None:
-            positions.absgrad = v_positions_xy_abs
-        else:
-            positions.absgrad += v_positions_xy_abs
+        for key, value in [('grad', v_positions), ('absgrad', v_positions_xy_abs)][1:]:
+            if not hasattr(positions, key) or getattr(positions, key) is None:
+                setattr(positions, key, value)
+            else:
+                setattr(positions, key, getattr(positions, key)+value)
 
         return (
             v_positions, v_axes_u, v_axes_v,

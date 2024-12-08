@@ -1,6 +1,8 @@
 # spirulae-splat
 My custom method for Nerfstudio. Modified from the `splatfacto` method in official Nerfstudio implementation.
 
+Tested on nerfstudio 1.1.5, Python 3.8.10, Ubuntu 20.04, CUDA 11.8 and 12.5. May also work with other versions/platforms.
+
 ### Major changes / Novelties:
 
 - Use 2D splats instead of 3D, add depth and normal regularization, use ray-splat intersection, as per SIGGRAPH 2024 paper [*2D Gaussian Splatting for Geometrically Accurate Radiance Fields*](https://arxiv.org/abs/2403.17888)

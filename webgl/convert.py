@@ -370,9 +370,15 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
         # adjust SH
         features_sh *= exposure * (1.0-color.unsqueeze(1)) if exposure > 1.0 else exposure
         # adjust background
-        background_color *= exposure
         if background_sh_degree > 0:
-            background_color += 0.5 * (exposure-1.0) / 0.2820947917738781
+            print(background_color)
+            color = background_color*0.2820947917738781+0.5
+            color = 1.0 - torch.relu(1.0-color) ** exposure if exposure > 1.0 else color * exposure
+            background_color = (color - 0.5) / 0.2820947917738781
+            # background_sh *= exposure * (1.0-color) if exposure > 1.0 else exposure
+            background_sh *= exposure
+        else:
+            background_color = 1.0 - torch.relu(1.0-background_color) ** exposure if exposure > 1.0 else background_color * exposure
         # TODO: adjust CH
 
 
@@ -390,7 +396,7 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
         opacities_bins, opacities_q = quantize_tensor(opacities, 6)
         features_dc_bins, features_dc_q = quantize_tensor(features_dc, 6)
         features_ch_bins, features_ch_q = quantize_tensor(features_ch, 4, 100)
-        features_sh_bins, features_sh_q = quantize_tensor(features_sh, 3, 100)
+        features_sh_bins, features_sh_q = quantize_tensor(features_sh, bit_sh, 100)
     time1 = perf_counter()
     print()
 
@@ -433,7 +439,7 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
     componentViews, componentLength = component_view_psa([
             { "key": "features_ch", "type": f"quat{3*num_ch}", "bitLength": 3*num_ch*4, "quatBufferView": 6 },
     ] * (num_ch > 0) + [
-            { "key": "features_sh", "type": f"quat{3*num_sh}", "bitLength": 3*num_sh*3, "quatBufferView": 7 },
+            { "key": "features_sh", "type": f"quat{3*num_sh}", "bitLength": 3*num_sh*bit_sh, "quatBufferView": 7 },
     ] * (num_sh > 0))
     harmonics_config = {
         "bufferView": len(buffer_views)+1,
@@ -508,7 +514,7 @@ def save_ssplat_file(ssplat_data, output_path):
         f.write(ssplat_data)
 
 
-def main():
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Convert Nerfstudio spirulae-splat checkpoint files to SSPLAT format.")
     parser.add_argument(
@@ -521,7 +527,10 @@ def main():
     parser.add_argument("--ncull", "-cn", default="1", help="Number of cull iterations.")
     parser.add_argument("--exposure", "-e", default="1.0", help="Relative exposure.")
     parser.add_argument("--rotate", "-r", default="0", help="Whether to rotate the scene to align with axis.")
+    parser.add_argument("--bit_sh", "-bsh", default="3", help="Bits for each SH coefficients.")
     args = parser.parse_args()
+
+    bit_sh = int(args.bit_sh)
 
     meta = {
         'argv': __import__('sys').argv,
@@ -556,8 +565,5 @@ def main():
             args.output if len(args.input_files) == 1 else input_file + ".ssplat"
         )
         save_ssplat_file(ssplat_data, output_file)
-        print(f"Saved {output_file}")
-
-
-if __name__ == "__main__":
-    main()
+        file_size = len(ssplat_data) / 2**20
+        print(f"Saved {output_file} - {file_size:.2f} MB")
