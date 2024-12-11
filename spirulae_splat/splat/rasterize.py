@@ -30,13 +30,14 @@ def rasterize_gaussians(
     anisotropies: Float[Tensor, "*batch 2"],
     depth_grads: Float[Tensor, "*batch 2"],
     depth_normal_ref: Float[Tensor, "*batch 2"],
+    background: Optional[Float[Tensor, "channels"]],
+    depth_reg_pairwise_factor: float,
     bounds: Int[Tensor, "*batch 4"],
     num_tiles_hit: Int[Tensor, "*batch 1"],
     intrins: Tuple[float, float, float, float],
     img_height: int,
     img_width: int,
     block_width: int,
-    background: Optional[Float[Tensor, "channels"]] = None
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """
     TODO
@@ -88,13 +89,14 @@ def rasterize_gaussians(
         anisotropies.contiguous(),
         depth_grads.contiguous(),
         depth_normal_ref.contiguous(),
+        background.contiguous(),
+        depth_reg_pairwise_factor,
         bounds.contiguous(),
         num_tiles_hit.contiguous(),
         intrins,
         img_height,
         img_width,
         block_width,
-        background.contiguous()
     )
 
 
@@ -117,13 +119,14 @@ class _RasterizeGaussians(Function):
         anisotropies: Float[Tensor, "*batch 2"],
         depth_grads: Float[Tensor, "*batch 2"],
         depth_normal_ref: Float[Tensor, "*batch 2"],
+        background: Optional[Float[Tensor, "channels"]],
+        depth_reg_pairwise_factor: float,
         bounds: Int[Tensor, "*batch 4"],
         num_tiles_hit: Int[Tensor, "*batch 1"],
         intrins: Tuple[float, float, float, float],
         img_height: int,
         img_width: int,
         block_width: int,
-        background: Optional[Float[Tensor, "channels"]] = None
     ) -> Tensor:
         num_points = positions.size(0)
         tile_bounds = (
@@ -176,6 +179,7 @@ class _RasterizeGaussians(Function):
             ) = _C.rasterize_forward(
                 tile_bounds, block, img_size,
                 *intrins,
+                depth_reg_pairwise_factor,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
                 colors,
@@ -190,6 +194,7 @@ class _RasterizeGaussians(Function):
         ctx.img_height = img_height
         ctx.num_intersects = num_intersects
         ctx.block_width = block_width
+        ctx.depth_reg_pairwise_factor = depth_reg_pairwise_factor
         ctx.save_for_backward(
             torch.tensor(intrins),
             torch.tensor([ch_degree_r, ch_degree_r_to_use,
@@ -251,6 +256,7 @@ class _RasterizeGaussians(Function):
             backward_return = _C.rasterize_backward(
                 img_height, img_width, ctx.block_width,
                 *intrins, *ch_degrees,
+                ctx.depth_reg_pairwise_factor,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
                 colors, ch_coeffs, opacities, anisotropies, background,
@@ -293,6 +299,6 @@ class _RasterizeGaussians(Function):
             v_positions, v_axes_u, v_axes_v,
             v_colors, *([None]*4), v_ch_coeffs, v_opacities, v_anisotropies,
             v_depth_grads, v_depth_normal_ref,
+            v_background, None,
             None, None, None, None, None, None,
-            v_background,
         )

@@ -221,8 +221,12 @@ class SpirulaeModelConfig(ModelConfig):
     """threshold of ratio of gaussian max to min scale before applying regularization
     loss from the PhysGaussian paper
     """
+    depth_mode: Literal["mean", "median"] = "mean"
+    """Depth rendering mode, use mean for stable training and median for high meshing resolution"""
     depth_reg_weight: float = 0.02
     """Weight for depth regularizer"""
+    depth_reg_pairwise_factor: float = 0.7
+    """Factor of pairwise vs depth fitting depth regularization, 0 to 1"""
     depth_reg_warmup: int = 0
     """warmup steps for depth regularizer"""
     normal_reg_weight: float = 0.04
@@ -1249,7 +1253,8 @@ class SpirulaeModel(Model):
             positions, axes_u, axes_v,
             opacities, anisotropies_crop,
             bounds, num_tiles_hit,
-            intrins, H, W, BLOCK_WIDTH
+            intrins, H, W, BLOCK_WIDTH,
+            self.config.depth_mode
         )
         depth_im_ref = torch.where(
             depth_im_ref > 0.0, depth_im_ref,
@@ -1262,6 +1267,11 @@ class SpirulaeModel(Model):
             (depth_im_ref[1:-1,2:]-depth_im_ref[1:-1,:-2])/2,
             (depth_im_ref[2:,1:-1]-depth_im_ref[:-2,1:-1])/2
         ), axis=2)
+        if True:
+            depth_normal_grad_ref[0] = depth_normal_grad_ref[1]
+            depth_normal_grad_ref[:,0] = depth_normal_grad_ref[:,1]
+            depth_normal_grad_ref[-1] = depth_normal_grad_ref[-2]
+            depth_normal_grad_ref[:,-1] = depth_normal_grad_ref[:,-2]
         depth_normal_grad_ref = depth_normal_grad_ref.contiguous()
         depth_normal_grad_ref_norm = torch.norm(depth_normal_grad_ref, dim=2, keepdim=True)
         depth_normal_grad_ref_normalized = torch.where(
@@ -1288,9 +1298,10 @@ class SpirulaeModel(Model):
             features_ch_crop,
             opacities, anisotropies_crop,
             depth_grads, depth_ref_im,
+            background_color,
+            self.config.depth_reg_pairwise_factor,
             bounds, num_tiles_hit,
             intrins, H, W, BLOCK_WIDTH,
-            background_color
         )  # type: ignore
         alpha = alpha[..., None]
         rgb = torch.clamp(rgb, max=1.0)  # type: ignore

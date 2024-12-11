@@ -12,16 +12,21 @@
 // max number of cylindrical harmonics coefficients
 #define MAX_CH_FLOAT3 (21)
 
+// mean vs median depth
+#define DEPTH_MODE_MEAN 0
+#define DEPTH_MODE_MEDIAN 1
+
+// threshold for median depth
+// a number less than 0.5 pushes splats away from camera
+#define DEPTH_REG_MEDIAN_TH 0.5f
+
+// ## DEPRECATED
 // depth regularization
 // 01: pairwise L1 with center depth
 // 02: pairwise L2 with intersected depth
 // 11: L1 intersected to reference
 // 12: L2 intersected to reference
-#define DEPTH_REG_L 11
-
-// threshold for median in depth regularizer
-// a number less than 0.5 pushes splats away from camera
-#define DEPTH_REG_MEDIAN_TH 0.5f
+#define DEPTH_REG_L 0
 
 // CH abs grad, 0 for mean, 1 for max
 #define CH_ABSGRAD_REDUCE 0

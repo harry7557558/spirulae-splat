@@ -28,6 +28,7 @@ def rasterize_gaussians_depth(
     img_height: int,
     img_width: int,
     block_width: int,
+    depth_mode: str,
 ) -> Tuple[Tensor]:
     """
     TODO
@@ -40,6 +41,14 @@ def rasterize_gaussians_depth(
     if positions.ndimension() != 2 or positions.size(1) != 3:
         raise ValueError("positions must have dimensions (N, 3)")
 
+    if isinstance(depth_mode, str):
+        if depth_mode.startswith("mean"):
+            depth_mode = 0
+        elif depth_mode.startswith("median"):
+            depth_mode = 1
+    if depth_mode not in [0, 1]:
+        raise ValueError("Depth mode must start with `mean` or `median`.")
+
     return _RasterizeGaussiansDepth.apply(
         positions.contiguous(),
         axes_u.contiguous(),
@@ -51,6 +60,7 @@ def rasterize_gaussians_depth(
         intrins,
         img_height, img_width,
         block_width,
+        depth_mode,
     )
 
 
@@ -71,6 +81,7 @@ class _RasterizeGaussiansDepth(Function):
         img_height: int,
         img_width: int,
         block_width: int,
+        depth_mode: int,
     ) -> Tuple[Tensor]:
         num_points = positions.size(0)
         tile_bounds = (
@@ -107,6 +118,7 @@ class _RasterizeGaussiansDepth(Function):
             )
 
             final_idx, out_depth, out_visibility = _C.rasterize_depth_forward(
+                depth_mode,
                 tile_bounds, block, img_size,
                 *intrins,
                 gaussian_ids_sorted, tile_bins,
@@ -118,6 +130,7 @@ class _RasterizeGaussiansDepth(Function):
         ctx.img_height = img_height
         ctx.num_intersects = num_intersects
         ctx.block_width = block_width
+        ctx.depth_mode = depth_mode
         ctx.save_for_backward(
             torch.tensor(intrins),
             gaussian_ids_sorted, tile_bins,
@@ -155,6 +168,7 @@ class _RasterizeGaussiansDepth(Function):
 
         else:
             backward_return = _C.rasterize_depth_backward(
+                ctx.depth_mode,
                 img_height, img_width, ctx.block_width,
                 *intrins,
                 gaussian_ids_sorted, tile_bins,
@@ -184,5 +198,5 @@ class _RasterizeGaussiansDepth(Function):
         return (
             v_positions, v_axes_u, v_axes_v,
             v_opacities, v_anisotropies,
-            None, None, None, None, None, None,
+            None, None, None, None, None, None, None
         )

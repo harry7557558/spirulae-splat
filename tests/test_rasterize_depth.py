@@ -89,6 +89,8 @@ def test_rasterize_depth():
         _num_tiles_hit,
     ) = decode_params(params)
 
+    mode = 0  # 0 for mean, 1 for median
+
     depth_im, meta_im, idx = rasterize_depth.rasterize_gaussians_depth(
         positions,
         axes_u,
@@ -98,7 +100,7 @@ def test_rasterize_depth():
         bounds,
         num_tiles_hit,
         intrins,
-        H, W, BLOCK_SIZE
+        H, W, BLOCK_SIZE, mode
     )
 
     _depth_im, _meta_im, _idx = _torch_impl.rasterize_gaussians_depth(
@@ -110,7 +112,7 @@ def test_rasterize_depth():
         _bounds,
         _num_tiles_hit,
         intrins,
-        H, W, BLOCK_SIZE
+        H, W, BLOCK_SIZE, mode
     )
 
     print("test forward")

@@ -99,6 +99,8 @@ def test_rasterize():
         _num_tiles_hit,
     ) = decode_params(params)
 
+    depth_reg_pairwise_factor = 0.7
+
     output = rasterize.rasterize_gaussians(
         positions,
         axes_u,
@@ -111,11 +113,12 @@ def test_rasterize():
         anisotropies,
         depth_grads,
         depth_ref_im,
+        background,
+        depth_reg_pairwise_factor,
         bounds,
         num_tiles_hit,
         intrins,
         H, W, BLOCK_SIZE,
-        background
     )
 
     rgb_im, alpha_im, idx = rasterize_simple.rasterize_gaussians_simple(
@@ -150,11 +153,12 @@ def test_rasterize():
         _anisotropies,
         _depth_grads,
         _depth_normal_ref,
+        _background,
+        depth_reg_pairwise_factor,
         _bounds,
         _num_tiles_hit,
         intrins,
         H, W, BLOCK_SIZE,
-        _background
     )
 
     print("test forward")

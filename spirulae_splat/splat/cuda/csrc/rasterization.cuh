@@ -72,6 +72,7 @@ __global__ void rasterize_simple_backward_kernel(
 
 
 __global__ void rasterize_depth_forward_kernel(
+    const int depth_mode,
     const dim3 tile_bounds,
     const dim3 img_size,
     const float4 intrins,
@@ -89,6 +90,7 @@ __global__ void rasterize_depth_forward_kernel(
 
 
 __global__ void rasterize_depth_backward_kernel(
+    const int depth_mode,
     const dim3 tile_bounds,
     const dim3 img_size,
     const float4 intrins,
@@ -116,6 +118,7 @@ __global__ void rasterize_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
     const float4 intrins,
+    const float depth_reg_pairwise_factor,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float3* __restrict__ positions,
@@ -149,6 +152,7 @@ __global__ void rasterize_backward_kernel(
     const unsigned ch_degree_r_to_use,
     const unsigned ch_degree_phi,
     const unsigned ch_degree_phi_to_use,
+    const float depth_reg_pairwise_factor,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float3* __restrict__ positions,

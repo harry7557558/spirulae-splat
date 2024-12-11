@@ -587,6 +587,7 @@ std::tuple<
     torch::Tensor,  // out_img
     torch::Tensor  // out_visibility
 > rasterize_depth_forward_tensor(
+    const int depth_mode,
     const std::tuple<int, int, int> tile_bounds,
     const std::tuple<int, int, int> block,
     const std::tuple<int, int, int> img_size,
@@ -644,6 +645,7 @@ std::tuple<
     );
 
     rasterize_depth_forward_kernel<<<tile_bounds_dim3, block_dim3>>>(
+        depth_mode,
         tile_bounds_dim3,
         img_size_dim3,
         intrins,
@@ -671,6 +673,7 @@ std::tuple<
     torch::Tensor, // v_opacities
     torch::Tensor  // v_anisotropies
 > rasterize_depth_backward_tensor(
+    const int depth_mode,
     const unsigned img_height,
     const unsigned img_width,
     const unsigned block_width,
@@ -726,6 +729,7 @@ std::tuple<
     torch::Tensor v_anisotropies = torch::zeros({num_points, 2}, options);
 
     rasterize_depth_backward_kernel<<<tile_bounds, block>>>(
+        depth_mode,
         tile_bounds,
         img_size,
         intrins,
@@ -773,6 +777,7 @@ std::tuple<
     const float fy,
     const float cx,
     const float cy,
+    const float depth_reg_pairwise_factor,
     const torch::Tensor &gaussian_ids_sorted,
     const torch::Tensor &tile_bins,
     const torch::Tensor &positions,
@@ -850,6 +855,7 @@ std::tuple<
         tile_bounds_dim3,
         img_size_dim3,
         intrins,
+        depth_reg_pairwise_factor,
         gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (float3 *)positions.contiguous().data_ptr<float>(),
@@ -905,6 +911,7 @@ std::tuple<
     const unsigned ch_degree_r_to_use,
     const unsigned ch_degree_phi,
     const unsigned ch_degree_phi_to_use,
+    const float depth_reg_pairwise_factor,
     const torch::Tensor &gaussians_ids_sorted,
     const torch::Tensor &tile_bins,
     const torch::Tensor &positions,
@@ -986,6 +993,7 @@ std::tuple<
         tile_bounds, img_size, intrins,
         (unsigned)ch_degree_r, (unsigned)ch_degree_r_to_use,
         (unsigned)ch_degree_phi, (unsigned)ch_degree_phi_to_use,
+        depth_reg_pairwise_factor,
         gaussians_ids_sorted.contiguous().data_ptr<int>(),
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (float3 *)positions.contiguous().data_ptr<float>(),
