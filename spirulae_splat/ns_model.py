@@ -34,6 +34,7 @@ from spirulae_splat.splat.project_gaussians import project_gaussians
 from spirulae_splat.splat.rasterize import rasterize_gaussians
 from spirulae_splat.splat.rasterize_depth import rasterize_gaussians_depth
 from spirulae_splat.splat.rasterize_simple import rasterize_gaussians_simple
+from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
 from spirulae_splat.strategy import DefaultStrategy
 
@@ -51,6 +52,9 @@ from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.rich_utils import CONSOLE
 from nerfstudio.utils.math import components_from_spherical_harmonics
+
+from spirulae_splat.perf_timer import PerfTimer
+timer = PerfTimer("get_outputs", ema_tau=100)
 
 
 def random_quat_tensor(N):
@@ -165,8 +169,8 @@ class SpirulaeModelConfig(ModelConfig):
     """Every this many refinement steps, reset the alpha"""
     densify_xy_grad_thresh: float = 0.003  # 0.003 | 0.001
     """threshold of positional gradient norm for densifying gaussians"""
-    densify_ch_grad_thresh: float = 3e-6  # 5e-6 | 3e-6 | 1e-6
-    """threshold of cylindrical harmonics gradient norm for densifying gaussians"""
+    # densify_ch_grad_thresh: float = 3e-6  # 5e-6 | 3e-6 | 1e-6
+    # """threshold of cylindrical harmonics gradient norm for densifying gaussians"""
     densify_size_thresh: float = 0.01
     """below this size, gaussians are *duplicated*, otherwise split"""
     n_split_samples: int = 2
@@ -1059,7 +1063,7 @@ class SpirulaeModel(Model):
             return resize_image(image, d)
         return image
 
-    def get_background_image(self, camera: Cameras, mask: Optional[torch.Tensor]=None):
+    def get_background_image(self, camera: Cameras):
         if not isinstance(camera, Cameras):
             print("Called get_background_image with not a camera")
             return {}
@@ -1069,53 +1073,15 @@ class SpirulaeModel(Model):
 
         W, H = int(camera.width.item()), int(camera.height.item())
 
-        background = self.background_color.repeat(H, W, 1)
-        if not self.config.train_background_color:
-            return background
         sh_degree = self.config.background_sh_degree
-        if not (sh_degree > 0):
-            return background
+        if not self.config.train_background_color or not (sh_degree > 0):
+            return self.background_color.repeat(H, W, 1)
 
-        # camera.generate_rays seems to be slow, write from scratch
-        if False:
-            ray_bundle = camera.generate_rays(
-                camera_indices=0, keep_shape=False, disable_distortion=True)
-            if mask is not None:
-                mask_indices = torch.where(mask.flatten())
-                ray_bundle = ray_bundle[mask_indices]
-            if not len(ray_bundle) > 0:
-                return background
-            directions = ray_bundle.directions
-        else:
-            device = background.device
-            y, x = torch.meshgrid(torch.arange(H), torch.arange(W), indexing="ij")
-            x = x.flatten().float().to(device) + 0.5
-            y = y.flatten().float().to(device) + 0.5
-            if mask is not None:
-                mask_indices = torch.where(mask.flatten())
-                x, y = x[mask_indices], y[mask_indices]
-            if not len(x) > 0:
-                return background
-            fx, fy = camera.fx[0].item(), camera.fy[0].item()
-            cx, cy = camera.cx[0].item(), camera.cy[0].item()
-            coord = torch.stack([(x - cx) / fx, -(y - cy) / fy, -torch.ones_like(x)], -1)
-            rotation = camera.camera_to_worlds[0][:3, :3]
-            directions = torch.matmul(coord, rotation.T)
-            norm = torch.maximum(torch.linalg.norm(directions, dim=-1, keepdims=True), torch.tensor([1e-6]).to(device))
-            directions = directions / norm
-
-        sh_components = components_from_spherical_harmonics(sh_degree+1, directions)
-        sh_coeffs = torch.cat((self.background_color.unsqueeze(0), self.background_sh), dim=0)
-        bg_flat = torch.matmul(sh_components, sh_coeffs)
-        bg_flat = torch.clamp(bg_flat+0.5, min=0.0)
-
-        if mask is not None:
-            background = background.view(-1, 3)
-            background[mask_indices] = bg_flat
-        else:
-            background = bg_flat
-
-        return background.view(H, W, 3)
+        fx, fy = camera.fx[0].item(), camera.fy[0].item()
+        cx, cy = camera.cx[0].item(), camera.cy[0].item()
+        rotation = camera.camera_to_worlds[0][:3, :3]
+        sh_coeffs = torch.cat((self.background_color.unsqueeze(0), self.background_sh), dim=0)  # [(deg+1)^2, 3]
+        return render_background_sh(W, H, (fx, fy, cx, cy), rotation, sh_degree+1, sh_coeffs, 16)
 
     @staticmethod
     def get_empty_outputs(width: int, height: int, background: torch.Tensor) -> Dict[str, Union[torch.Tensor, List]]:
@@ -1156,11 +1122,14 @@ class SpirulaeModel(Model):
             return {}
         assert camera.shape[0] == 1, "Only one camera at a time"
 
+        timer.start()
+
         # get the background color
         if self.training and self.config.use_camera_optimizer:
             optimized_camera_to_world = self.camera_optimizer.apply_to_camera(camera)[0, ...]
         else:
             optimized_camera_to_world = camera.camera_to_worlds[0, ...]
+        timer.mark(".")  # 500ns-600ns
 
         if self.crop_box is not None and not self.training:
             crop_ids = self.crop_box.within(self.means).squeeze()
@@ -1172,24 +1141,20 @@ class SpirulaeModel(Model):
             crop_ids = None
         camera_downscale = self._get_downscale_factor()
         camera.rescale_output_resolution(1 / camera_downscale)
-        # shift the camera to center of scene looking at center
+        timer.mark(".")  # 100ns-200ns
+
         R = optimized_camera_to_world[:3, :3]  # 3 x 3
         T = optimized_camera_to_world[:3, 3:4]  # 3 x 1
-
-        # flip the z and y axes to align with gsplat conventions
         R_edit = torch.diag(torch.tensor([1, -1, -1], device=self.device, dtype=R.dtype))
         R = R @ R_edit
-        # analytic matrix inverse to get world2camera matrix
         R_inv = R.T
         T_inv = -R_inv @ T
         viewmat = torch.eye(4, device=R.device, dtype=R.dtype)
         viewmat[:3, :3] = R_inv
         viewmat[:3, 3:4] = T_inv
-        # calculate the FOV of the camera given fx and fy, width and height
-        cx = camera.cx.item()
-        cy = camera.cy.item()
         W, H = int(camera.width.item()), int(camera.height.item())
         self.last_size = (H, W)
+        timer.mark("pre")  # 300ns-600ns
 
         if crop_ids is not None:
             opacities_crop = self.opacities[crop_ids]
@@ -1210,13 +1175,12 @@ class SpirulaeModel(Model):
             scales_crop = self.scales
             quats_crop = self.quats
         colors_crop = torch.cat((features_dc_crop[:, None, :], features_sh_crop), dim=1)
+        timer.mark("crop")  # 80ns-150ns
 
         quats_norms = torch.norm(quats_crop, p=2, dim=1)
         quats_norms = quats_norms.unsqueeze(1)
-        quats_norms = torch.where(quats_norms == 0,
-                                  torch.tensor([1.0],device=quats_crop.device),
-                                  quats_norms)
-        quats_crop = quats_crop / quats_norms
+        quats_crop = quats_crop / torch.clip(quats_norms, 1e-6)
+        timer.mark("norm")  # 200ns
 
         if self.config.sh_degree > 0:
             viewdirs = means_crop.detach() - optimized_camera_to_world.detach()[:3, 3]  # (N, 3)
@@ -1225,11 +1189,12 @@ class SpirulaeModel(Model):
             rgbs = torch.clamp(rgbs + 0.5, min=0.0)  # type: ignore
         else:
             rgbs = colors_crop[:, 0, :]
+        timer.mark("color")  # 200ns-300ns
 
         # print(self.config.sh_degree, rgbs.shape)
 
         BLOCK_WIDTH = 16  # this controls the tile size of rasterization, 16 is a good default
-        intrins = (camera.fx.item(), camera.fy.item(), cx, cy)
+        intrins = (camera.fx.item(), camera.fy.item(), camera.cx.item(), camera.cy.item())
         (
             positions, axes_u, axes_v,
             depth_grads,
@@ -1243,6 +1208,7 @@ class SpirulaeModel(Model):
             H, W,
             BLOCK_WIDTH,
         )  # type: ignore
+        timer.mark("project")  # 250ns-450ns
 
         # rescale the camera back to original dimensions before returning
         camera.rescale_output_resolution(camera_downscale)
@@ -1256,6 +1222,7 @@ class SpirulaeModel(Model):
             intrins, H, W, BLOCK_WIDTH,
             self.config.depth_mode
         )
+        timer.mark("depth")  # 600ns-1200ns
         depth_im_ref = torch.where(
             depth_im_ref > 0.0, depth_im_ref,
             torch.amax(depth_im_ref).detach()
@@ -1280,11 +1247,12 @@ class SpirulaeModel(Model):
             0.0).contiguous()
         depth_ref_im = torch.concatenate(
             (depth_normal_grad_ref_normalized, depth_im_ref), dim=-1)
+        timer.mark("normal")  # 350ns-550ns
 
         # main rasterization
-        background_color = self.background_color
-        if self.config.background_sh_degree > 0:
-            background_color = torch.zeros_like(background_color)
+        # background_color = self.background_color
+        # if self.config.background_sh_degree > 0:
+        #     background_color = torch.zeros_like(background_color)
         ch_degree = self.step // self.config.ch_degree_interval
         (
             rgb, depth_im,
@@ -1298,11 +1266,12 @@ class SpirulaeModel(Model):
             features_ch_crop,
             opacities, anisotropies_crop,
             depth_grads, depth_ref_im,
-            background_color,
+            # background_color,
             self.config.depth_reg_pairwise_factor,
             bounds, num_tiles_hit,
             intrins, H, W, BLOCK_WIDTH,
         )  # type: ignore
+        timer.mark("render")  # 500ns-1000ns
         alpha = alpha[..., None]
         rgb = torch.clamp(rgb, max=1.0)  # type: ignore
         depth_grad_im, depth_im = depth_im[...,0:2], depth_im[...,2:3]
@@ -1319,6 +1288,7 @@ class SpirulaeModel(Model):
         depth_grad_ref_vis = None
         anisotropy_vis = None
         if self.config.output_depth_during_training or not self.training:
+        # if False:
             def depth_grad_vis(im):
                 im_norm = torch.norm(im, dim=2, keepdim=True)
                 hue_im = torch.atan2(im[...,1:2], im[...,0:1])
@@ -1344,15 +1314,6 @@ class SpirulaeModel(Model):
                 )
                 anisotropy_vis = meta[..., 0:1]
 
-                # print(torch.amin(depth_grad_norm_im).item(), torch.mean(depth_grad_norm_im).item(), torch.amax(depth_grad_norm_im).item())
-                # assert (reg_depth > -1e-6).all()
-                # print(torch.mean(reg_depth).item(), torch.mean(reg_normal).item())
-                # pass
-                # depth_grad_reg = self.depth_grads.abs().mean()
-                # print(depth_grad_reg.item())
-
-                # print(self.features_ch.mean().item(), self.features_ch.std().item())
-                # print(self.anisotropies.mean().item(), self.anisotropies.std().item())
         else:
             self.info = {
                 "width": W,
@@ -1362,15 +1323,15 @@ class SpirulaeModel(Model):
                       num_tiles_hit.unsqueeze(0)**0.5 / 2 * BLOCK_WIDTH,
                 "means2d": positions,
             }
+        timer.mark("post")  # 200ns-400ns
 
         self.intrins = intrins
         self.positions = positions
         self.radii = num_tiles_hit**0.5 / 2 * BLOCK_WIDTH
 
         # blend with background
-        if self.config.background_sh_degree > 0:
-            mask = (alpha < 0.98)
-            background = self.get_background_image(camera, mask)
+        if self.config.background_sh_degree > 0 or True:
+            background = self.get_background_image(camera)
             rgb = rgb + (1.0 - alpha) * background
 
         # clamp pixel to between 0 and 1
@@ -1379,6 +1340,8 @@ class SpirulaeModel(Model):
 
         # do this for L2 loss
         # reg_depth = torch.sqrt(torch.relu(reg_depth+0.01))
+
+        timer.end("bkg")  # 250ns-450ns
 
         return {
             "rgb": rgb,

@@ -40,16 +40,8 @@ extra_cflags = ["-O3"]
 extra_cuda_cflags = ["-O3"]
 
 _C = None
-sources = list(glob.glob(os.path.join(PATH, "csrc/*.cu"))) + list(
-    glob.glob(os.path.join(PATH, "csrc/*.cpp"))
-)
-# sources = [
-#     os.path.join(PATH, "csrc/ext.cpp"),
-#     os.path.join(PATH, "csrc/rasterize.cu"),
-#     os.path.join(PATH, "csrc/bindings.cu"),
-#     os.path.join(PATH, "csrc/forward.cu"),
-#     os.path.join(PATH, "csrc/backward.cu"),
-# ]
+sources = list(glob.glob(os.path.join(PATH, "csrc/*.cu"))) + \
+          list(glob.glob(os.path.join(PATH, "csrc/*.cpp")))
 
 try:
     # try to import the compiled module (via setup.py)

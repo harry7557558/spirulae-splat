@@ -78,7 +78,7 @@ inline __device__ void get_alpha_vjp(
     const float t = glm::dot(uv, aniso);
     const float m = t<0.f ? 1.f : t>1.f ? 0.f :
         t*t*(2.0f*t-3.0f) + 1.0f;
-    const float alpha = opac * vis * m;
+    // const float alpha = opac * vis * m;
     const float v_m = opac * vis * v_alpha;
     const float v_t = t<0.f||t>1.f ? 0.f : 6.0f*t*(t-1.0f) * v_m;
     const float v_vis = opac * m * v_alpha;

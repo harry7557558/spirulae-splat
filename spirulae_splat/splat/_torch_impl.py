@@ -896,6 +896,7 @@ def rasterize_gaussians(
 
             final_idx[i, j] = cur_idx
             out_alpha[i, j] = 1.0-T
+            # print(pix_out, T.item(), background)
             out_img[i, j] = pix_out + T * background
             out_depth_grad[i, j] = torch.concat((g_sum, depth_sum, depth_squared_sum))
             out_reg_depth[i, j] = reg_depth_i + (reg_depth_p-reg_depth_i) * depth_reg_pairwise_factor
@@ -906,3 +907,37 @@ def rasterize_gaussians(
         out_reg_depth, out_reg_normal,
         out_alpha, final_idx
     )
+
+
+from nerfstudio.utils.math import components_from_spherical_harmonics
+
+def render_background_sh(
+    w: int,
+    h: int,
+    intrins: Tuple[float, float, float, float],
+    rotation: Float[Tensor, "3 3"],
+    sh_degree: int,
+    sh_coeffs: Float[Tensor, "(sh_degree+1)**2 3"],
+) -> Float[Tensor, "h w 3"]:
+    device = sh_coeffs.device
+    fx, fy, cx, cy = intrins
+
+    y, x = torch.meshgrid(torch.arange(h), torch.arange(w), indexing="ij")
+    x = x.flatten().float().to(device) + 0.5
+    y = y.flatten().float().to(device) + 0.5
+
+    coord = torch.stack([(x - cx) / fx, -(y - cy) / fy, -torch.ones_like(x)], -1)
+    if True:
+        directions = torch.matmul(coord, rotation.T)
+        norm = torch.linalg.norm(directions, dim=-1, keepdims=True)
+        directions = directions / norm
+    else:
+        # no much magnitude difference, use above for denser gradient
+        norm = torch.linalg.norm(coord, dim=-1, keepdims=True)
+        directions = coord / norm @ rotation.T
+
+    sh_components = components_from_spherical_harmonics(sh_degree, directions)  # [w*h, deg^2]
+    bg_flat = torch.matmul(sh_components, sh_coeffs)  # [w*h, 3]
+    bg_flat = torch.relu(bg_flat+0.5)
+
+    return bg_flat.view(h, w, 3)

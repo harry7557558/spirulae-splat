@@ -132,7 +132,7 @@ __global__ void rasterize_forward_kernel(
     const float3* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
     const float2* __restrict__ anisotropies,
-    const float3& __restrict__ background,
+    // const float3& __restrict__ background,
     const float2* __restrict__ depth_grads,
     const float3* __restrict__ depth_ref_im,
     int* __restrict__ final_index,
@@ -162,7 +162,7 @@ __global__ void rasterize_backward_kernel(
     const float3* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
     const float2* __restrict__ anisotropies,
-    const float3& __restrict__ background,
+    // const float3& __restrict__ background,
     const float2* __restrict__ depth_grads,
     const float3* __restrict__ depth_ref_im,
     const int* __restrict__ final_index,
@@ -179,9 +179,41 @@ __global__ void rasterize_backward_kernel(
     float3* __restrict__ v_axes_v,
     float3* __restrict__ v_colors,
     float3* __restrict__ v_ch_coeffs,
-    float* __restrict__ v_ch_coeffs_abs,
+    // float* __restrict__ v_ch_coeffs_abs,
     float* __restrict__ v_opacities,
     float2* __restrict__ v_anisotropies,
+    // float3* __restrict__ v_background,
     float2* __restrict__ v_depth_grad,
     float3* __restrict__ v_depth_ref_im
+);
+
+
+__global__ void render_background_sh_forward_kernel(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const float* rotation,  // row major 3x3
+    const unsigned sh_degree,
+    const float3* __restrict__ sh_coeffs_float3,
+    float3* __restrict__ out_img
+);
+
+
+__global__ void render_background_sh_backward_kernel(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const float* rotation,  // row major 3x3
+    const unsigned sh_degree,
+    const float3* __restrict__ sh_coeffs_float3,
+    const float3* __restrict__ out_color,
+    const float3* __restrict__ v_out_color,
+    float* __restrict__ v_rotation,
+    float3* __restrict__ v_sh_coeffs
 );

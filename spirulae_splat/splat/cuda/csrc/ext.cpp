@@ -9,6 +9,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("rasterize_simple_backward", &rasterize_simple_backward_tensor);
     m.def("rasterize_depth_forward", &rasterize_depth_forward_tensor);
     m.def("rasterize_depth_backward", &rasterize_depth_backward_tensor);
+    m.def("render_background_sh_forward", &render_background_sh_forward_tensor);
+    m.def("render_background_sh_backward", &render_background_sh_backward_tensor);
     m.def("project_gaussians_forward", &project_gaussians_forward_tensor);
     m.def("project_gaussians_backward", &project_gaussians_backward_tensor);
     m.def("compute_sh_forward", &compute_sh_forward_tensor);

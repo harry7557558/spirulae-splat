@@ -47,8 +47,8 @@ def test_project_gaussians():
     quats0 /= torch.linalg.norm(quats0, dim=-1, keepdim=True)
 
     H, W = 512, 512
-    cx, cy = W / 2, H / 2
-    fx, fy = int(1.5*W), int(1.5*W)
+    cx, cy = 0.45*W, 0.55*H
+    fx, fy = 1.5*W, 1.6*W
     clip_thresh = 0.01
     viewmat = torch.tensor(
         [

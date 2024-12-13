@@ -269,7 +269,7 @@ std::tuple<
     const torch::Tensor &ch_coeffs,
     const torch::Tensor &opacities,
     const torch::Tensor &anisotropies,
-    const torch::Tensor &background,
+    // const torch::Tensor &background,
     const torch::Tensor &depth_grads,
     const torch::Tensor &depth_ref_im
 );
@@ -282,9 +282,10 @@ std::tuple<
     torch::Tensor, // v_axes_v
     torch::Tensor, // v_colors
     torch::Tensor, // v_ch_coeffs
-    torch::Tensor, // v_ch_coeffs_abs
+    // torch::Tensor, // v_ch_coeffs_abs
     torch::Tensor, // v_opacities
     torch::Tensor, // v_anisotropies
+    // torch::Tensor, // v_background
     torch::Tensor, // v_depth_grad
     torch::Tensor  // v_depth_ref_im
 > rasterize_backward_tensor(
@@ -309,7 +310,7 @@ std::tuple<
     const torch::Tensor &ch_coeffs,
     const torch::Tensor &opacities,
     const torch::Tensor &anisotropies,
-    const torch::Tensor &background,
+    // const torch::Tensor &background,
     const torch::Tensor &depth_grads,
     const torch::Tensor &depth_ref_im,
     const torch::Tensor &final_idx,
@@ -320,4 +321,37 @@ std::tuple<
     const torch::Tensor &v_output_depth_grad,
     const torch::Tensor &v_output_reg_depth,
     const torch::Tensor &v_output_reg_normal
+);
+
+
+torch::Tensor render_background_sh_forward_tensor(
+    const unsigned w,
+    const unsigned h,
+    const unsigned block_width,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const torch::Tensor &rotation,
+    const unsigned sh_degree,
+    const torch::Tensor &sh_coeffs
+);
+
+
+std::tuple<
+    torch::Tensor,  // v_rotation
+    torch::Tensor  // v_sh_coeffs
+> render_background_sh_backward_tensor(
+    const unsigned w,
+    const unsigned h,
+    const unsigned block_width,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const torch::Tensor &rotation,
+    const unsigned sh_degree,
+    const torch::Tensor &sh_coeffs,
+    const torch::Tensor &out_color,
+    const torch::Tensor &v_out_color
 );

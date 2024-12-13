@@ -43,8 +43,8 @@ def test_rasterize_simple():
     _background = background.detach().clone().requires_grad_(True)
 
     H, W = 20, 30
-    cx, cy = W / 2, H / 2
-    fx, fy = int(0.7*W), int(0.7*W)
+    cx, cy = 0.45*W, 0.55*H
+    fx, fy = 0.7*W, 0.8*W
     intrins = (fx, fy, cx, cy)
     clip_thresh = 0.01
     viewmat = torch.tensor(

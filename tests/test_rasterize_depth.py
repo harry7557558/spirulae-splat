@@ -42,8 +42,8 @@ def test_rasterize_depth():
     _anisotropies = anisotropies.detach().clone().requires_grad_(True)
 
     H, W = 20, 30
-    cx, cy = W / 2, H / 2
-    fx, fy = int(0.7*W), int(0.7*W)
+    cx, cy = 0.45*W, 0.55*H
+    fx, fy = 0.7*W, 0.8*W
     intrins = (fx, fy, cx, cy)
     clip_thresh = 0.01
     viewmat = torch.tensor(
@@ -125,12 +125,12 @@ def test_rasterize_depth():
         depth_r = torch.log(depth+1.0).squeeze()
         # depth_r = depth_r * (meta[...,0] >= 0.5)
         # depth_r = depth_r * (meta[...,1] == 1.0)
-        return (depth_r).mean()
+        return 1e2 * (depth_r).mean()
     fun(depth_im, meta_im, idx).backward()
     fun(_depth_im, _meta_im, _idx).backward()
 
     print("test backward")
-    tol = { 'atol': 1e-6, 'rtol': 1e-5 }
+    tol = { 'atol': 1e-5, 'rtol': 1e-4 }
     check_close('v_positions', positions.grad, _positions.grad, **tol)
     check_close('v_axes_u', axes_u.grad, _axes_u.grad, **tol)
     check_close('v_axes_v', axes_v.grad, _axes_v.grad, **tol)

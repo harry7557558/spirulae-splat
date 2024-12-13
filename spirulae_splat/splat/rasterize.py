@@ -12,6 +12,9 @@ import spirulae_splat.splat.cuda as _C
 
 from .utils import bin_and_sort_gaussians, compute_cumulative_intersects
 
+from spirulae_splat.perf_timer import PerfTimer
+timer = PerfTimer("rasterize", ema_tau=100)
+
 
 RETURN_IDX = False
 
@@ -30,7 +33,7 @@ def rasterize_gaussians(
     anisotropies: Float[Tensor, "*batch 2"],
     depth_grads: Float[Tensor, "*batch 2"],
     depth_normal_ref: Float[Tensor, "*batch 2"],
-    background: Optional[Float[Tensor, "channels"]],
+    # background: Optional[Float[Tensor, "channels"]],
     depth_reg_pairwise_factor: float,
     bounds: Int[Tensor, "*batch 4"],
     num_tiles_hit: Int[Tensor, "*batch 1"],
@@ -48,19 +51,20 @@ def rasterize_gaussians(
         # make sure colors are float [0,1]
         colors = colors.float() / 255
 
-    if background is not None:
-        assert (
-            background.shape[0] == colors.shape[-1]
-        ), f"incorrect shape of background color tensor, expected shape {colors.shape[-1]}"
-    else:
-        background = torch.zeros(
-            colors.shape[-1], dtype=torch.float32, device=colors.device
-        )
+    # if background is not None:
+    #     assert (
+    #         background.shape[0] == colors.shape[-1]
+    #     ), f"incorrect shape of background color tensor, expected shape {colors.shape[-1]}"
+    # else:
+    #     background = torch.zeros(
+    #         colors.shape[-1], dtype=torch.float32, device=colors.device
+    #     )
 
     if not (num_tiles_hit > 0).any():
         shape = (img_height, img_width)
         device = positions.device
-        out_img = background.reshape((1, 1, 3)).repeat((*shape, 1))
+        # out_img = background.reshape((1, 1, 3)).repeat((*shape, 1))
+        out_img = torch.zeros((*shape, 3)).float().to(device)
         out_depth_grad = torch.zeros((*shape, 4)).float().to(device)
         out_reg_depth = torch.zeros(shape).float().to(device)
         out_reg_normal = torch.zeros(shape).float().to(device)
@@ -89,7 +93,7 @@ def rasterize_gaussians(
         anisotropies.contiguous(),
         depth_grads.contiguous(),
         depth_normal_ref.contiguous(),
-        background.contiguous(),
+        # background.contiguous(),
         depth_reg_pairwise_factor,
         bounds.contiguous(),
         num_tiles_hit.contiguous(),
@@ -119,7 +123,7 @@ class _RasterizeGaussians(Function):
         anisotropies: Float[Tensor, "*batch 2"],
         depth_grads: Float[Tensor, "*batch 2"],
         depth_normal_ref: Float[Tensor, "*batch 2"],
-        background: Optional[Float[Tensor, "channels"]],
+        # background: Optional[Float[Tensor, "channels"]],
         depth_reg_pairwise_factor: float,
         bounds: Int[Tensor, "*batch 4"],
         num_tiles_hit: Int[Tensor, "*batch 1"],
@@ -142,8 +146,8 @@ class _RasterizeGaussians(Function):
 
         if num_intersects < 1:
             out_img = (
-                torch.ones(img_height, img_width, colors.shape[-1], device=device)
-                * background
+                torch.zeros(img_height, img_width, colors.shape[-1], device=device)
+                # + background
             )
             gaussian_ids_sorted = torch.zeros(0, 1, device=device)
             tile_bins = torch.zeros(0, 2, device=device)
@@ -186,7 +190,7 @@ class _RasterizeGaussians(Function):
                 ch_degree_r, ch_degree_r_to_use,
                 ch_degree_phi, ch_degree_phi_to_use,
                 ch_coeffs,
-                opacities, anisotropies, background,
+                opacities, anisotropies, #background,
                 depth_grads, depth_normal_ref,
             )
 
@@ -195,13 +199,13 @@ class _RasterizeGaussians(Function):
         ctx.num_intersects = num_intersects
         ctx.block_width = block_width
         ctx.depth_reg_pairwise_factor = depth_reg_pairwise_factor
+        ctx.intrins = intrins
+        ctx.ch_degrees = (ch_degree_r, ch_degree_r_to_use,
+                          ch_degree_phi, ch_degree_phi_to_use)
         ctx.save_for_backward(
-            torch.tensor(intrins),
-            torch.tensor([ch_degree_r, ch_degree_r_to_use,
-                          ch_degree_phi, ch_degree_phi_to_use]),
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
-            colors, ch_coeffs, opacities, anisotropies, background,
+            colors, ch_coeffs, opacities, anisotropies, #background,
             depth_grads, depth_normal_ref,
             final_idx, out_alpha, out_depth_grad,
         )
@@ -229,12 +233,13 @@ class _RasterizeGaussians(Function):
         img_height = ctx.img_height
         img_width = ctx.img_width
         num_intersects = ctx.num_intersects
+        intrins = ctx.intrins
+        ch_degrees = ctx.ch_degrees
 
         (
-            intrins, ch_degrees,
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
-            colors, ch_coeffs, opacities, anisotropies, background,
+            colors, ch_coeffs, opacities, anisotropies, #background,
             depth_grads, depth_normal_ref,
             final_idx, out_alpha, out_depth_grad,
         ) = ctx.saved_tensors
@@ -252,6 +257,8 @@ class _RasterizeGaussians(Function):
             v_depth_normal_ref = torch.zeros_like(depth_normal_ref)
 
         else:
+            timer.start()
+
             assert colors.shape[-1] == 3
             backward_return = _C.rasterize_backward(
                 img_height, img_width, ctx.block_width,
@@ -259,31 +266,33 @@ class _RasterizeGaussians(Function):
                 ctx.depth_reg_pairwise_factor,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
-                colors, ch_coeffs, opacities, anisotropies, background,
+                colors, ch_coeffs, opacities, anisotropies, #background,
                 depth_grads, depth_normal_ref,
                 final_idx, out_alpha, out_depth_grad,
                 v_out_alpha, v_out_img, v_out_depth_grad,
                 v_out_reg_depth.contiguous(),
                 v_out_reg_normal.contiguous(),
             )
+            timer.mark("rasterize")
 
             clean = lambda x: torch.nan_to_num(torch.clip(x, -1., 1.))
-            (
-                v_positions, v_positions_xy_abs,
-                v_axes_u, v_axes_v,
-                v_colors, v_ch_coeffs, v_ch_coeffs_abs,
-                v_opacities, v_anisotropies,
-                v_depth_grads, v_depth_normal_ref
-            ) = [clean(v) for v in backward_return]
+            v_positions = clean(backward_return[0])
             v_positions_xy_abs = backward_return[1]
-            v_ch_coeffs_abs = backward_return[6]
-
-        v_background = None
-        if background.requires_grad:
-            v_background = torch.matmul(
-                v_out_img.float().view(-1, 3).t(),
-                (1.0-out_alpha).float().view(-1, 1)
-            ).squeeze()
+            v_axes_u = clean(backward_return[2])
+            v_axes_v = clean(backward_return[3])
+            v_colors = clean(backward_return[4])
+            v_ch_coeffs = clean(backward_return[5])
+            # v_ch_coeffs_abs = backward_return[6]
+            # v_opacities = clean(backward_return[7])
+            # v_anisotropies = clean(backward_return[8])
+            v_opacities = clean(backward_return[6])
+            v_anisotropies = clean(backward_return[7])
+            # v_background = backward_return[9]
+            # v_depth_grads = clean(backward_return[10])
+            # v_depth_normal_ref = clean(backward_return[11])
+            v_depth_grads = clean(backward_return[8])
+            v_depth_normal_ref = clean(backward_return[9])
+            timer.mark("clean")
 
         # Abs grad for gaussian splitting criterion. See
         # - "AbsGS: Recovering Fine Details for 3D Gaussian Splatting"
@@ -293,12 +302,16 @@ class _RasterizeGaussians(Function):
                 setattr(positions, key, value)
             else:
                 setattr(positions, key, getattr(positions, key)+value)
-        ch_coeffs.absgrad = v_ch_coeffs_abs
+        # ch_coeffs.absgrad = v_ch_coeffs_abs
+
+        if num_intersects >= 1:
+            timer.end("absgrad")
 
         return (
             v_positions, v_axes_u, v_axes_v,
             v_colors, *([None]*4), v_ch_coeffs, v_opacities, v_anisotropies,
             v_depth_grads, v_depth_normal_ref,
-            v_background, None,
+            # v_background,
+            None,
             None, None, None, None, None, None,
         )

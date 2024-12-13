@@ -12,6 +12,9 @@ import spirulae_splat.splat.cuda as _C
 
 from .utils import bin_and_sort_gaussians, compute_cumulative_intersects
 
+from spirulae_splat.perf_timer import PerfTimer
+timer = PerfTimer("rasterize_depth", ema_tau=100)
+
 
 RETURN_IDX = False
 
@@ -131,8 +134,8 @@ class _RasterizeGaussiansDepth(Function):
         ctx.num_intersects = num_intersects
         ctx.block_width = block_width
         ctx.depth_mode = depth_mode
+        ctx.intrins = intrins
         ctx.save_for_backward(
-            torch.tensor(intrins),
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
             opacities, anisotropies,
@@ -149,9 +152,9 @@ class _RasterizeGaussiansDepth(Function):
         img_height = ctx.img_height
         img_width = ctx.img_width
         num_intersects = ctx.num_intersects
+        intrins = ctx.intrins
 
         (
-            intrins,
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
             opacities, anisotropies,
@@ -167,6 +170,8 @@ class _RasterizeGaussiansDepth(Function):
             v_anisotropies = torch.zeros_like(anisotropies)
 
         else:
+            timer.start()
+
             backward_return = _C.rasterize_depth_backward(
                 ctx.depth_mode,
                 img_height, img_width, ctx.block_width,
@@ -177,14 +182,16 @@ class _RasterizeGaussiansDepth(Function):
                 final_idx, out_depth, out_visibility,
                 v_out_depth,
             )
+            timer.mark("rasterize")
 
             clean = lambda x: torch.nan_to_num(torch.clip(x, -1., 1.))
-            (
-                v_positions, v_positions_xy_abs,
-                v_axes_u, v_axes_v,
-                v_opacities, v_anisotropies
-            ) = [clean(v) for v in backward_return]
+            v_positions = clean(backward_return[0])
             v_positions_xy_abs = backward_return[1]
+            v_axes_u = clean(backward_return[2])
+            v_axes_v = clean(backward_return[3])
+            v_opacities = clean(backward_return[4])
+            v_anisotropies = clean(backward_return[5])
+            timer.mark("clean")
 
         # Abs grad for gaussian splitting criterion. See
         # - "AbsGS: Recovering Fine Details for 3D Gaussian Splatting"
@@ -194,6 +201,9 @@ class _RasterizeGaussiansDepth(Function):
                 setattr(positions, key, value)
             else:
                 setattr(positions, key, getattr(positions, key)+value)
+
+        if num_intersects >= 1:
+            timer.end("absgrad")
 
         return (
             v_positions, v_axes_u, v_axes_v,

@@ -159,8 +159,8 @@ class _RasterizeGaussiansSimple(Function):
         ctx.img_height = img_height
         ctx.num_intersects = num_intersects
         ctx.block_width = block_width
+        ctx.intrins = intrins
         ctx.save_for_backward(
-            torch.tensor(intrins),
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
             colors, opacities, anisotropies, background,
@@ -177,9 +177,9 @@ class _RasterizeGaussiansSimple(Function):
         img_height = ctx.img_height
         img_width = ctx.img_width
         num_intersects = ctx.num_intersects
+        intrins = ctx.intrins
 
         (
-            intrins,
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
             colors, opacities, anisotropies, background,

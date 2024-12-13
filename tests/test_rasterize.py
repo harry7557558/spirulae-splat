@@ -29,8 +29,8 @@ def test_rasterize():
 
     num_points, H, W = 40, 20, 30
     # num_points, H, W = 20, 10, 15
-    cx, cy = W / 2, H / 2
-    fx, fy = int(0.7*W), int(0.7*W)
+    cx, cy = 0.45*W, 0.55*H
+    fx, fy = 0.7*W, 0.8*W
     intrins = (fx, fy, cx, cy)
     clip_thresh = 0.01
     viewmat = torch.tensor(
@@ -49,7 +49,8 @@ def test_rasterize():
     scales = 0.8*torch.exp(torch.randn((num_points, 2), device=device))
     quats = torch.randn((num_points, 4), device=device)
     quats /= torch.linalg.norm(quats, dim=-1, keepdim=True)
-    background = torch.rand(3, device=device, requires_grad=True)
+    # background = torch.rand(3, device=device, requires_grad=True)
+    background = torch.zeros(3, device=device, requires_grad=True)
     _background = background.detach().clone().requires_grad_(True)
 
     colors = torch.randn((num_points, 3), device=device, requires_grad=True)
@@ -113,7 +114,7 @@ def test_rasterize():
         anisotropies,
         depth_grads,
         depth_ref_im,
-        background,
+        # background,
         depth_reg_pairwise_factor,
         bounds,
         num_tiles_hit,
@@ -195,11 +196,11 @@ def test_rasterize():
     check_close('v_anisotropies', anisotropies.grad, _anisotropies.grad, **tol)
     check_close('v_depth_grad', depth_grads.grad, _depth_grads.grad, **tol)
     check_close('v_depth_normal_ref', depth_ref_im.grad, _depth_normal_ref.grad, **tol)
-    check_close('v_background', background.grad, _background.grad, **tol)
+    # check_close('v_background', background.grad, _background.grad, **tol)
 
     assert (positions.absgrad > 0).any()
     assert (positions.absgrad >= abs(positions.grad)[:,:2]).all()
-    assert (ch_coeffs.absgrad > 0).any()
+    # assert (ch_coeffs.absgrad > 0).any()
     # assert (ch_coeffs.absgrad >= abs(ch_coeffs.grad)).all()
 
 
