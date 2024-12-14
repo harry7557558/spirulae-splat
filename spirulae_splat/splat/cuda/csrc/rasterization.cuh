@@ -10,21 +10,6 @@
 
 
 
-__global__ void rasterize_sorted_indices_kernel(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const float4 intrins,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float3* __restrict__ positions,
-    const float3* __restrict__ axes_u,
-    const float3* __restrict__ axes_v,
-    const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
-    int* __restrict__ out_indices
-);
-
-
 __global__ void rasterize_simple_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
@@ -71,6 +56,7 @@ __global__ void rasterize_simple_backward_kernel(
 );
 
 
+// rewritten to test if FP16 is faster (answer: no)
 template<typename floatt>
 __global__ void rasterize_depth_forward_kernel(
     const int depth_mode,
@@ -90,6 +76,7 @@ __global__ void rasterize_depth_forward_kernel(
 );
 
 
+// rewritten to test if FP16 is faster (answer: no)
 template<typename floatt>
 __global__ void rasterize_depth_backward_kernel(
     const int depth_mode,

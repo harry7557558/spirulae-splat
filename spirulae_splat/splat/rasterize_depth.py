@@ -123,14 +123,6 @@ class _RasterizeGaussiansDepth(Function):
             )
             timerf.mark("sort")
 
-            # (positions, axes_u, axes_v,
-            #     opacities, anisotropies) = [
-            #         _.half() for _ in
-            #         (positions, axes_u, axes_v,
-            #     opacities, anisotropies,)
-            #     ]
-            # timerf.mark("float")
-
             final_idx, out_depth, out_visibility = _C.rasterize_depth_forward(
                 depth_mode,
                 tile_bounds, block, img_size,
@@ -153,10 +145,6 @@ class _RasterizeGaussiansDepth(Function):
             opacities, anisotropies,
             final_idx, out_depth, out_visibility,
         )
-        # (out_depth, out_visibility) = [
-        #         _.float() for _ in
-        #         (out_depth, out_visibility)
-        #     ]
         if num_intersects >= 1:
             timerf.end("save")
 
@@ -190,18 +178,6 @@ class _RasterizeGaussiansDepth(Function):
         else:
             timerb.start()
 
-            # (positions, axes_u, axes_v,
-            #     opacities, anisotropies,
-            #     out_depth, out_visibility,
-            #     v_out_depth,) = [
-            #         _.half() for _ in
-            #         (positions, axes_u, axes_v,
-            #         opacities, anisotropies,
-            #         out_depth, out_visibility,
-            #         v_out_depth,)
-            #     ]
-            # timerb.mark("float")
-
             backward_return = _C.rasterize_depth_backward(
                 ctx.depth_mode,
                 img_height, img_width, ctx.block_width,
@@ -232,12 +208,6 @@ class _RasterizeGaussiansDepth(Function):
             else:
                 setattr(positions, key, getattr(positions, key)+value)
 
-        # (v_positions, v_axes_u, v_axes_v,
-        #     v_opacities, v_anisotropies) = [
-        #         _.float() for _ in
-        #         (v_positions, v_axes_u, v_axes_v,
-        #     v_opacities, v_anisotropies)
-        #     ]
         if num_intersects >= 1:
             timerb.end("absgrad")
 

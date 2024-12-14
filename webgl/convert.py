@@ -16,6 +16,35 @@ def quat_mult(q1, q2):
     z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
     return torch.stack([w, x, y, z]).T.contiguous()
 
+def quat_to_rotmat(quat):
+    w, x, y, z = torch.unbind(quat, dim=-1)
+    mat = torch.stack(
+        [
+            1 - 2 * (y**2 + z**2),
+            2 * (x * y - w * z),
+            2 * (x * z + w * y),
+            2 * (x * y + w * z),
+            1 - 2 * (x**2 + z**2),
+            2 * (y * z - w * x),
+            2 * (x * z - w * y),
+            2 * (y * z + w * x),
+            1 - 2 * (x**2 + y**2),
+        ],
+        dim=-1,
+    )
+    return mat.reshape(quat.shape[:-1] + (3, 3))
+
+
+def generate_right_angle_rotation_matrices():
+    """List all "right angle" rotation matrices"""
+    import itertools
+    valid_matrices = []
+    for matrix in itertools.product([-1, 0, 1], repeat=9):
+        R = np.array(matrix).reshape(3, 3)
+        if np.linalg.det(R) == 1 and (np.dot(R.T, R) == np.eye(3)).all():
+            valid_matrices.append(R)
+    return valid_matrices
+
 
 def custom_quantile(sorted_numbers, quantiles):
     n = len(sorted_numbers)
@@ -31,10 +60,10 @@ def custom_quantile(sorted_numbers, quantiles):
 
 
 @torch.no_grad()
-def quantize_tensor(tensor, n_bits, maxiter=0):
+def quantize_tensor(name, tensor, n_bits, maxiter=0):
     device = tensor.device
     if tensor.numel() == 0:
-        print("empty tensor")
+        print(name, "empty tensor")
         centroids = torch.arange(0).float().to(device)
         bins = torch.zeros_like(tensor).long()
         return centroids, bins
@@ -78,7 +107,7 @@ def quantize_tensor(tensor, n_bits, maxiter=0):
 
     centers = (centroids[1:]+centroids[:-1])/2
     bins = torch.bucketize(tensor, centers)
-    print('quatization loss:', torch.mean(torch.abs(centroids[bins]-tensor)).item())
+    print(name, 'quantization loss:', torch.mean(torch.abs(centroids[bins]-tensor)).item())
     return centroids, bins
 
     import matplotlib.pyplot as plt
@@ -328,24 +357,36 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
     opacities = torch.sigmoid(opacities)
     anisotropies = torch.arcsinh(anisotropies)
 
+    weight = torch.exp(scales[:,0]+scales[:,1]) * opacities[:,0]
+
     if rotate:
         from scipy.spatial.transform import Rotation
         import spherical  # pip install spherical, very lightweight
-        # find rotation
-        # TODO: get rid of euler angle
-        s = torch.cov(means.T).cpu().numpy().astype(np.float64)
-        s, r0 = np.linalg.eigh(s)
-        r = Rotation.from_matrix(r0).as_euler("xyz")
-        r = np.round(r/(np.pi/2)) * (np.pi/2)
-        r1 = Rotation.from_euler("xyz", r).as_matrix()
+        # find rotation matrix
+        print("Find rotation matrix...")
+        if False:
+            s = torch.cov(means.T, aweights=weight).cpu().numpy().astype(np.float64)
+            s, r0 = np.linalg.eigh(s)
+        else:
+            normals = quat_to_rotmat(quats)[:, 2]
+            m = torch.einsum('ki,kj->kij', normals, normals) - torch.eye(3).unsqueeze(0).to(normals)
+            m = (m * weight.reshape(-1, 1, 1)).sum(0).cpu().numpy().astype(np.float64)
+            s, r0 = np.linalg.eigh(m)
+        if np.linalg.det(r0) < 0.0:
+            r0[:, 2] *= -1.0
+        possible_mats = generate_right_angle_rotation_matrices()
+        diffs = [np.abs(r0-r).sum() for r in possible_mats]
+        r1 = possible_mats[np.argmin(diffs)]
         dr = r1 @ r0.T
         # rotate position
+        print("Rotate position and quaternion...")
         means = means @ torch.from_numpy(dr.T).to(means)
         # rotate quaternion
         dq = Rotation.from_matrix(dr).as_quat()
         dq = torch.from_numpy(dq[[3,0,1,2]]).to(quats)
         quats = quat_mult(dq, quats)
         # rotate SH coefficients
+        print("Rotate SH...")
         # TODO: this is not exact, use real instead of complex matrix
         wigner = spherical.Wigner(4)
         # D = wigner.D(dq.cpu().numpy())
@@ -359,6 +400,7 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
             # print(torch.mean(torch.abs(rotated.imag)).item()/torch.mean(torch.abs(rotated.real)).item())
             # features_sh[:, i0:i1] = rotated.real
             features_sh[:, i0:i1] = torch.einsum('ab,kbc->kac', d, features_sh[:, i0:i1])
+        print()
 
     if exposure != 1.0:
         exposure = max(exposure, 0.0) ** (1.0/2.2)
@@ -382,21 +424,20 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
         # TODO: adjust CH
 
 
-    weight = torch.exp(scales[:,0]+scales[:,1]) * opacities[:,0]
     sorted_indices = torch.argsort(-weight)
     sorted_indices = torch.arange(len(weight))
 
     from time import perf_counter
     time0 = perf_counter()
     with torch.no_grad():
-        means_bins, means_q = quantize_tensor(means, 12)
-        scales_bins, scales_q = quantize_tensor(scales, 10)
-        quats_bins, quats_q = quantize_tensor(quats, 8)
-        anisotropies_bins, anisotropies_q = quantize_tensor(anisotropies, 8*use_anisotropy)
-        opacities_bins, opacities_q = quantize_tensor(opacities, 6)
-        features_dc_bins, features_dc_q = quantize_tensor(features_dc, 6)
-        features_ch_bins, features_ch_q = quantize_tensor(features_ch, 4, 100)
-        features_sh_bins, features_sh_q = quantize_tensor(features_sh, bit_sh, 100)
+        means_bins, means_q = quantize_tensor('means', means, 12)
+        scales_bins, scales_q = quantize_tensor('scale', scales, 10)
+        quats_bins, quats_q = quantize_tensor('quats', quats, 8)
+        anisotropies_bins, anisotropies_q = quantize_tensor('aniso', anisotropies, 8*use_anisotropy)
+        opacities_bins, opacities_q = quantize_tensor('opacs', opacities, 6)
+        features_dc_bins, features_dc_q = quantize_tensor('color', features_dc, 6)
+        features_ch_bins, features_ch_q = quantize_tensor('ch', features_ch, 4, 100)
+        features_sh_bins, features_sh_q = quantize_tensor('sh', features_sh, bit_sh, 100)
     time1 = perf_counter()
     print()
 

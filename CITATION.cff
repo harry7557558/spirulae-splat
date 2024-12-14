@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata from this file."
+authors:
+  - family-names: Chen
+    given-names: Jingxiang
+    affiliation: University of Toronto
+  - family-names: Rong
+    given-names: Victor
+    affiliation: University of Toronto
+  - family-names: Lindell
+    given-names: David
+    name-particle: B.
+    affiliation: University of Toronto
+title: "spirulae-splat"
+version: 1.0.0
+date-released: "2024-12-14"
+url: "https://github.com/spirulae/spirulae-splat"
+repository-code: "https://github.com/spirulae/spirulae-splat"
+license: "Apache-2.0"
+type: software
+abstract: "A custom method for Nerfstudio."
+keywords:
+  - "Gaussian Splatting"
+  - "Nerfstudio"
+  - "Radiance Fields"
