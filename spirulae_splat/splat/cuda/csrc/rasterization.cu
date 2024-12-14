@@ -4,7 +4,6 @@
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <iostream>
-#include <cuda_fp16.h>
 namespace cg = cooperative_groups;
 
 
@@ -690,6 +689,8 @@ __global__ void rasterize_simple_backward_kernel(
 
 
 
+// rewritten to test if FP16 is faster (answer: no)
+template<typename floatt>
 __global__ void rasterize_depth_forward_kernel(
     const int depth_mode,
     const dim3 tile_bounds,
@@ -697,14 +698,14 @@ __global__ void rasterize_depth_forward_kernel(
     const float4 intrins,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
-    const float3* __restrict__ positions,
-    const float3* __restrict__ axes_u,
-    const float3* __restrict__ axes_v,
-    const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
+    const vec3<floatt>* __restrict__ positions,
+    const vec3<floatt>* __restrict__ axes_u,
+    const vec3<floatt>* __restrict__ axes_v,
+    const floatt* __restrict__ opacities,
+    const vec2<floatt>* __restrict__ anisotropies,
     int* __restrict__ final_index,
-    float* __restrict__ out_depth,
-    float2* __restrict__ out_visibility
+    floatt* __restrict__ out_depth,
+    vec2<floatt>* __restrict__ out_visibility
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -737,9 +738,12 @@ __global__ void rasterize_depth_forward_kernel(
     const int block_size = block.size();
     int num_batches = (range.y - range.x + block_size - 1) / block_size;
 
-    __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ floatt position_batch_[3*MAX_BLOCK_SIZE];
+    __shared__ floatt axes_uv_batch_[6*MAX_BLOCK_SIZE];
+    __shared__ floatt opacity_batch_[3*MAX_BLOCK_SIZE];
+    vec3<floatt>* const position_batch = (vec3<floatt>*)position_batch_;
+    mat2x3<floatt>* const axes_uv_batch = (mat2x3<floatt>*)axes_uv_batch_;
+    vec3<floatt>* const opacity_batch = (vec3<floatt>*)opacity_batch_;
 
     // current visibility left to render
     float T = 1.f;
@@ -766,11 +770,11 @@ __global__ void rasterize_depth_forward_kernel(
         int idx = batch_start + tr;
         if (idx < range.y) {
             int32_t g_id = gaussian_ids_sorted[idx];
-            const float3 pos = positions[g_id];
-            const float opac = opacities[g_id];
-            const float2 aniso = anisotropies[g_id];
-            const float3 v0 = axes_u[g_id];
-            const float3 v1 = axes_v[g_id];
+            const vec3<floatt> pos = positions[g_id];
+            const floatt opac = opacities[g_id];
+            const vec2<floatt> aniso = anisotropies[g_id];
+            const vec3<floatt> v0 = axes_u[g_id];
+            const vec3<floatt> v1 = axes_v[g_id];
             position_batch[tr] = {pos.x, pos.y, pos.z};
             axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
             opacity_batch[tr] = {aniso.x, aniso.y, opac};
@@ -782,10 +786,10 @@ __global__ void rasterize_depth_forward_kernel(
         // process gaussians in the current batch for this pixel
         int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
-            glm::vec3 pos = position_batch[t];
-            glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
-            float opac = opacity_batch[t].z;
-            glm::mat2x3 axis_uv = axes_uv_batch[t];
+            glm::vec3 pos = (glm::vec3)position_batch[t];
+            glm::vec2 aniso = {(float)opacity_batch[t].x, (float)opacity_batch[t].y};
+            float opac = (float)opacity_batch[t].z;
+            glm::mat2x3 axis_uv = (glm::mat2x3)axes_uv_batch[t];
 
             glm::vec3 poi;
             glm::vec2 uv;
@@ -841,18 +845,19 @@ __global__ void rasterize_depth_forward_kernel(
     if (inside) {
         final_index[pix_id] = cur_idx;
         if (depth_mode == DEPTH_MODE_MEAN) {
-            out_depth[pix_id] = T == 1.0f ? output_depth : output_depth / (1.0f-T);
-            // out_depth[pix_id] = output_depth;
-            out_visibility[pix_id] = {T, 1.0f-T};
+            out_depth[pix_id] = (floatt)(T == 1.0f ? output_depth : output_depth / (1.0f-T));
+            out_visibility[pix_id] = {(floatt)T, (floatt)(1.0f-T)};
         }
         else if (depth_mode == DEPTH_MODE_MEDIAN) {
-            out_depth[pix_id] = output_depth;
-            out_visibility[pix_id] = {T, interp};
+            out_depth[pix_id] = (floatt)output_depth;
+            out_visibility[pix_id] = {(floatt)T, (floatt)interp};
         }
     }
 }
 
 
+// rewritten to test if FP16 is faster (answer: no)
+template<typename floatt>
 __global__ void rasterize_depth_backward_kernel(
     const int depth_mode,
     const dim3 tile_bounds,
@@ -860,21 +865,21 @@ __global__ void rasterize_depth_backward_kernel(
     const float4 intrins,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
-    const float3* __restrict__ positions,
-    const float3* __restrict__ axes_u,
-    const float3* __restrict__ axes_v,
-    const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
+    const vec3<floatt>* __restrict__ positions,
+    const vec3<floatt>* __restrict__ axes_u,
+    const vec3<floatt>* __restrict__ axes_v,
+    const floatt* __restrict__ opacities,
+    const vec2<floatt>* __restrict__ anisotropies,
     const int* __restrict__ final_index,
-    const float* __restrict__ out_depth,
-    const float2* __restrict__ out_visibility,
-    const float* __restrict__ v_out_depth,
-    float3* __restrict__ v_positions,
-    float2* __restrict__ v_positions_xy_abs,
-    float3* __restrict__ v_axes_u,
-    float3* __restrict__ v_axes_v,
-    float* __restrict__ v_opacities,
-    float2* __restrict__ v_anisotropies
+    const floatt* __restrict__ out_depth,
+    const vec2<floatt>* __restrict__ out_visibility,
+    const floatt* __restrict__ v_out_depth,
+    vec3<floatt>* __restrict__ v_positions,
+    vec2<floatt>* __restrict__ v_positions_xy_abs,
+    vec3<floatt>* __restrict__ v_axes_u,
+    vec3<floatt>* __restrict__ v_axes_v,
+    floatt* __restrict__ v_opacities,
+    vec2<floatt>* __restrict__ v_anisotropies
 ) {
     auto block = cg::this_thread_block();
     int32_t tile_id =
@@ -897,7 +902,7 @@ __global__ void rasterize_depth_backward_kernel(
     const bool inside = (i < img_size.y && j < img_size.x);
 
     // this is the T AFTER the last gaussian in this pixel
-    float2 meta_out = out_visibility[pix_id];
+    glm::vec2 meta_out = (glm::vec2)out_visibility[pix_id];
     float T_final = meta_out.x;
     float T = T_final;
     float v_T = 0.0f;
@@ -913,13 +918,16 @@ __global__ void rasterize_depth_backward_kernel(
     const int num_batches = (range.y - range.x + block_size - 1) / block_size;
 
     __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ floatt position_batch_[3*MAX_BLOCK_SIZE];
+    __shared__ floatt axes_uv_batch_[6*MAX_BLOCK_SIZE];
+    __shared__ floatt opacity_batch_[3*MAX_BLOCK_SIZE];
+    vec3<floatt>* const position_batch = (vec3<floatt>*)position_batch_;
+    mat2x3<floatt>* const axes_uv_batch = (mat2x3<floatt>*)axes_uv_batch_;
+    vec3<floatt>* const opacity_batch = (vec3<floatt>*)opacity_batch_;
 
     // df/d_out for this pixel
-    float output_depth = out_depth[pix_id];
-    float v_output_depth = v_out_depth[pix_id];
+    float output_depth = (float)out_depth[pix_id];
+    float v_output_depth = (float)v_out_depth[pix_id];
     float v_out_alpha = 0.0f;
     float v_depth = 0.f;
     float v_depth_next = 0.f;
@@ -955,11 +963,11 @@ __global__ void rasterize_depth_backward_kernel(
         if (idx >= range.x) {
             int32_t g_id = gaussian_ids_sorted[idx];
             id_batch[tr] = g_id;
-            const float3 pos = positions[g_id];
-            const float opac = opacities[g_id];
-            const float2 aniso = anisotropies[g_id];
-            const float3 v0 = axes_u[g_id];
-            const float3 v1 = axes_v[g_id];
+            const vec3<floatt> pos = positions[g_id];
+            const floatt opac = opacities[g_id];
+            const vec2<floatt> aniso = anisotropies[g_id];
+            const vec3<floatt> v0 = axes_u[g_id];
+            const vec3<floatt> v1 = axes_v[g_id];
             position_batch[tr] = {pos.x, pos.y, pos.z};
             axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
             opacity_batch[tr] = {aniso.x, aniso.y, opac};
@@ -974,10 +982,10 @@ __global__ void rasterize_depth_backward_kernel(
                 valid = 0;
             }
 
-            glm::vec3 pos = position_batch[t];
-            glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
-            float opac = opacity_batch[t].z;
-            glm::mat2x3 axis_uv = axes_uv_batch[t];
+            glm::vec3 pos = (glm::vec3)position_batch[t];
+            glm::vec2 aniso = {(float)opacity_batch[t].x, (float)opacity_batch[t].y};
+            float opac = (float)opacity_batch[t].z;
+            glm::mat2x3 axis_uv = (glm::mat2x3)axes_uv_batch[t];
 
             glm::vec3 poi;
             glm::vec2 uv;
@@ -1077,27 +1085,33 @@ __global__ void rasterize_depth_backward_kernel(
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t];
 
-                float* v_position_ptr = (float*)(v_positions);
-                atomicAdd(v_position_ptr + 3*g + 0, v_position_local.x);
-                atomicAdd(v_position_ptr + 3*g + 1, v_position_local.y);
-                atomicAdd(v_position_ptr + 3*g + 2, v_position_local.z);
-                float* v_positions_xy_abs_ptr = (float*)(v_positions_xy_abs);
-                atomicAdd(v_positions_xy_abs_ptr + 2*g + 0, v_position_xy_abs_local.x);
-                atomicAdd(v_positions_xy_abs_ptr + 2*g + 1, v_position_xy_abs_local.y);
+                floatt* v_position_ptr = (floatt*)(v_positions);
+                vec3<floatt> v_position_local_ = (vec3<floatt>)v_position_local;
+                atomicAdd(v_position_ptr + 3*g + 0, v_position_local_.x);
+                atomicAdd(v_position_ptr + 3*g + 1, v_position_local_.y);
+                atomicAdd(v_position_ptr + 3*g + 2, v_position_local_.z);
+                floatt* v_positions_xy_abs_ptr = (floatt*)(v_positions_xy_abs);
+                vec2<floatt> v_position_xy_abs_local_ = (vec2<floatt>)v_position_xy_abs_local;
+                atomicAdd(v_positions_xy_abs_ptr + 2*g + 0, v_position_xy_abs_local_.x);
+                atomicAdd(v_positions_xy_abs_ptr + 2*g + 1, v_position_xy_abs_local_.y);
 
-                float* v_axis_u_ptr = (float*)(v_axes_u);
-                atomicAdd(v_axis_u_ptr + 3*g + 0, v_axis_u_local.x);
-                atomicAdd(v_axis_u_ptr + 3*g + 1, v_axis_u_local.y);
-                atomicAdd(v_axis_u_ptr + 3*g + 2, v_axis_u_local.z);
-                float* v_axis_v_ptr = (float*)(v_axes_v);
-                atomicAdd(v_axis_v_ptr + 3*g + 0, v_axis_v_local.x);
-                atomicAdd(v_axis_v_ptr + 3*g + 1, v_axis_v_local.y);
-                atomicAdd(v_axis_v_ptr + 3*g + 2, v_axis_v_local.z);
+                floatt* v_axis_u_ptr = (floatt*)(v_axes_u);
+                vec3<floatt> v_axis_u_local_ = (vec3<floatt>)v_axis_u_local;
+                atomicAdd(v_axis_u_ptr + 3*g + 0, v_axis_u_local_.x);
+                atomicAdd(v_axis_u_ptr + 3*g + 1, v_axis_u_local_.y);
+                atomicAdd(v_axis_u_ptr + 3*g + 2, v_axis_u_local_.z);
+                floatt* v_axis_v_ptr = (floatt*)(v_axes_v);
+                vec3<floatt> v_axis_v_local_ = (vec3<floatt>)v_axis_v_local;
+                atomicAdd(v_axis_v_ptr + 3*g + 0, v_axis_v_local_.x);
+                atomicAdd(v_axis_v_ptr + 3*g + 1, v_axis_v_local_.y);
+                atomicAdd(v_axis_v_ptr + 3*g + 2, v_axis_v_local_.z);
                 
-                atomicAdd(v_opacities + g, v_opacity_local);
-                float* v_anisotropy_ptr = (float*)(v_anisotropies);
-                atomicAdd(v_anisotropy_ptr + 2*g + 0, v_anisotropy_local.x);
-                atomicAdd(v_anisotropy_ptr + 2*g + 1, v_anisotropy_local.y);
+                floatt v_opacity_local_ = (floatt)v_opacity_local;
+                atomicAdd(v_opacities + g, v_opacity_local_);
+                floatt* v_anisotropy_ptr = (floatt*)(v_anisotropies);
+                vec2<floatt> v_anisotropy_local_ = (vec2<floatt>)v_anisotropy_local;
+                atomicAdd(v_anisotropy_ptr + 2*g + 0, v_anisotropy_local_.x);
+                atomicAdd(v_anisotropy_ptr + 2*g + 1, v_anisotropy_local_.y);
             }
         }
     }
@@ -2178,3 +2192,88 @@ __global__ void render_background_sh_backward_kernel(
     atomicAdd(&v_rotation[7], v_p.z * yi);
     atomicAdd(&v_rotation[8], v_p.z * zi);
 }
+
+
+
+
+template __global__ void rasterize_depth_forward_kernel<float>(
+    const int depth_mode,
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const vec3<float>* __restrict__ positions,
+    const vec3<float>* __restrict__ axes_u,
+    const vec3<float>* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    const vec2<float>* __restrict__ anisotropies,
+    int* __restrict__ final_index,
+    float* __restrict__ out_depth,
+    vec2<float>* __restrict__ out_visibility
+);
+
+template __global__ void rasterize_depth_forward_kernel<halfc>(
+    const int depth_mode,
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const vec3<halfc>* __restrict__ positions,
+    const vec3<halfc>* __restrict__ axes_u,
+    const vec3<halfc>* __restrict__ axes_v,
+    const halfc* __restrict__ opacities,
+    const vec2<halfc>* __restrict__ anisotropies,
+    int* __restrict__ final_index,
+    halfc* __restrict__ out_depth,
+    vec2<halfc>* __restrict__ out_visibility
+);
+
+template __global__ void rasterize_depth_backward_kernel<float>(
+    const int depth_mode,
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const vec3<float>* __restrict__ positions,
+    const vec3<float>* __restrict__ axes_u,
+    const vec3<float>* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    const vec2<float>* __restrict__ anisotropies,
+    const int* __restrict__ final_index,
+    const float* __restrict__ out_depth,
+    const vec2<float>* __restrict__ out_visibility,
+    const float* __restrict__ v_out_depth,
+    vec3<float>* __restrict__ v_positions,
+    vec2<float>* __restrict__ v_positions_xy_abs,
+    vec3<float>* __restrict__ v_axes_u,
+    vec3<float>* __restrict__ v_axes_v,
+    float* __restrict__ v_opacities,
+    vec2<float>* __restrict__ v_anisotropies
+);
+
+template __global__ void rasterize_depth_backward_kernel<halfc>(
+    const int depth_mode,
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const vec3<halfc>* __restrict__ positions,
+    const vec3<halfc>* __restrict__ axes_u,
+    const vec3<halfc>* __restrict__ axes_v,
+    const halfc* __restrict__ opacities,
+    const vec2<halfc>* __restrict__ anisotropies,
+    const int* __restrict__ final_index,
+    const halfc* __restrict__ out_depth,
+    const vec2<halfc>* __restrict__ out_visibility,
+    const halfc* __restrict__ v_out_depth,
+    vec3<halfc>* __restrict__ v_positions,
+    vec2<halfc>* __restrict__ v_positions_xy_abs,
+    vec3<halfc>* __restrict__ v_axes_u,
+    vec3<halfc>* __restrict__ v_axes_v,
+    halfc* __restrict__ v_opacities,
+    vec2<halfc>* __restrict__ v_anisotropies
+);

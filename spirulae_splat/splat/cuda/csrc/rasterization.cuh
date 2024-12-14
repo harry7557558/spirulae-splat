@@ -71,6 +71,7 @@ __global__ void rasterize_simple_backward_kernel(
 );
 
 
+template<typename floatt>
 __global__ void rasterize_depth_forward_kernel(
     const int depth_mode,
     const dim3 tile_bounds,
@@ -78,17 +79,18 @@ __global__ void rasterize_depth_forward_kernel(
     const float4 intrins,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
-    const float3* __restrict__ positions,
-    const float3* __restrict__ axes_u,
-    const float3* __restrict__ axes_v,
-    const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
+    const vec3<floatt>* __restrict__ positions,
+    const vec3<floatt>* __restrict__ axes_u,
+    const vec3<floatt>* __restrict__ axes_v,
+    const floatt* __restrict__ opacities,
+    const vec2<floatt>* __restrict__ anisotropies,
     int* __restrict__ final_index,
-    float* __restrict__ out_depth,
-    float2* __restrict__ out_visibility
+    floatt* __restrict__ out_depth,
+    vec2<floatt>* __restrict__ out_visibility
 );
 
 
+template<typename floatt>
 __global__ void rasterize_depth_backward_kernel(
     const int depth_mode,
     const dim3 tile_bounds,
@@ -96,21 +98,21 @@ __global__ void rasterize_depth_backward_kernel(
     const float4 intrins,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
-    const float3* __restrict__ positions,
-    const float3* __restrict__ axes_u,
-    const float3* __restrict__ axes_v,
-    const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
+    const vec3<floatt>* __restrict__ positions,
+    const vec3<floatt>* __restrict__ axes_u,
+    const vec3<floatt>* __restrict__ axes_v,
+    const floatt* __restrict__ opacities,
+    const vec2<floatt>* __restrict__ anisotropies,
     const int* __restrict__ final_index,
-    const float* __restrict__ out_depth,
-    const float2* __restrict__ out_visibility,
-    const float* __restrict__ v_out_depth,
-    float3* __restrict__ v_positions,
-    float2* __restrict__ v_positions_xy_abs,
-    float3* __restrict__ v_axes_u,
-    float3* __restrict__ v_axes_v,
-    float* __restrict__ v_opacities,
-    float2* __restrict__ v_anisotropies
+    const floatt* __restrict__ out_depth,
+    const vec2<floatt>* __restrict__ out_visibility,
+    const floatt* __restrict__ v_out_depth,
+    vec3<floatt>* __restrict__ v_positions,
+    vec2<floatt>* __restrict__ v_positions_xy_abs,
+    vec3<floatt>* __restrict__ v_axes_u,
+    vec3<floatt>* __restrict__ v_axes_v,
+    floatt* __restrict__ v_opacities,
+    vec2<floatt>* __restrict__ v_anisotropies
 );
 
 

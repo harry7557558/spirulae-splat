@@ -19,7 +19,7 @@ def check_close(name, a, b, atol=1e-5, rtol=1e-5):
         torch.testing.assert_close(a, b, atol=atol, rtol=rtol)
     except AssertionError:
         traceback.print_exc()
-        diff = torch.abs(a - b).detach()
+        diff = (torch.abs(a - b) / torch.abs(b).mean()).detach()
         print(f"{diff.max()=} {diff.mean()=}", end='\n\n')
 
 

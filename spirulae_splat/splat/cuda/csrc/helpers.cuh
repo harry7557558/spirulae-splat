@@ -1,8 +1,35 @@
 #include "config.h"
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
 #include "glm/glm/glm.hpp"
 #include "glm/glm/gtc/type_ptr.hpp"
 #include <iostream>
+
+template <typename T> using vec2 = glm::vec<2, T>;
+template <typename T> using vec3 = glm::vec<3, T>;
+template <typename T> using vec4 = glm::vec<4, T>;
+template <typename T> using mat2 = glm::mat<2, 2, T>;
+template <typename T> using mat3 = glm::mat<3, 3, T>;
+template <typename T> using mat4 = glm::mat<4, 4, T>;
+template <typename T> using mat3x2 = glm::mat<3, 2, T>;
+template <typename T> using mat2x3 = glm::mat<2, 3, T>;
+
+struct halfc {
+    __half value;
+    __host__ __device__ halfc() {}
+    __host__ __device__ halfc(float f) : value(__float2half(f)) {}
+    __host__ __device__ halfc(__half h) : value(h) {}
+
+    __host__ __device__ operator float() const { return __half2float(value); }
+    __host__ __device__ operator __half() const { return value; }
+};
+
+inline __device__ halfc atomicAdd(halfc* address, halfc val) {
+    __half* address_v = (half*)address;
+    __half val_v = val.value;
+    __half v = atomicAdd(address_v, val_v);
+    return halfc(v);
+}
 
 
 inline __device__ float safe_denom(float x, float e) {
@@ -61,7 +88,7 @@ inline __device__ bool get_alpha(
     const float m = t<0.f ? 1.f : t>1.f ? 0.f :
         t*t*(2.0f*t-3.0f) + 1.0f;
     alpha = opac * vis * m;
-    return r2 >= 0.f && alpha > 1e-4f;
+    return r2 >= 0.f && alpha > 1e-3f;
 }
 
 inline __device__ void get_alpha_vjp(

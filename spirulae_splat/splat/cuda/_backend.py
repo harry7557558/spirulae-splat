@@ -46,7 +46,10 @@ sources = list(glob.glob(os.path.join(PATH, "csrc/*.cu"))) + \
 try:
     # try to import the compiled module (via setup.py)
     from spirulae_splat import csrc as _C
-except ImportError:
+except ImportError as error:
+    print(error)
+    assert False
+
     # if failed, try with JIT compilation
     if cuda_toolkit_available():
         # If JIT is interrupted it might leave a lock in the build directory.

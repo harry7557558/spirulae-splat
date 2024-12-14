@@ -134,9 +134,6 @@ std::tuple<
     const float clip_thresh
 ) {
     DEVICE_GUARD(means3d);
-    dim3 img_size_dim3;
-    img_size_dim3.x = img_width;
-    img_size_dim3.y = img_height;
 
     dim3 tile_bounds_dim3;
     tile_bounds_dim3.x = int((img_width + block_width - 1) / block_width);
@@ -632,35 +629,64 @@ std::tuple<
 
     float4 intrins = {fx, fy, cx, cy};
 
+    auto dtype = positions.dtype();
+    if (dtype != torch::kFloat32 && dtype != torch::kFloat16)
+        AT_ERROR("Must be FP32 or FP16");
+    if (axes_u.dtype() != positions.dtype() ||
+        axes_v.dtype() != positions.dtype() ||
+        opacities.dtype() != positions.dtype() ||
+        anisotropies.dtype() != positions.dtype()
+    ) AT_ERROR("dtype must match");
+
     auto int32 = positions.options().dtype(torch::kInt32);
-    auto float32 = positions.options().dtype(torch::kFloat32);
+    auto floatt = positions.options();
     torch::Tensor final_idx = torch::zeros(
         {img_height, img_width}, int32
     );
     torch::Tensor out_depth = torch::zeros(
-        {img_height, img_width, 1}, float32
+        {img_height, img_width, 1}, floatt
     );
     torch::Tensor out_visibility = torch::zeros(
-        {img_height, img_width, 2}, float32
+        {img_height, img_width, 2}, floatt
     );
 
-    rasterize_depth_forward_kernel<<<tile_bounds_dim3, block_dim3>>>(
-        depth_mode,
-        tile_bounds_dim3,
-        img_size_dim3,
-        intrins,
-        gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-        (int2 *)tile_bins.contiguous().data_ptr<int>(),
-        (float3 *)positions.contiguous().data_ptr<float>(),
-        (float3 *)axes_u.contiguous().data_ptr<float>(),
-        (float3 *)axes_v.contiguous().data_ptr<float>(),
-        opacities.contiguous().data_ptr<float>(),
-        (float2 *)anisotropies.contiguous().data_ptr<float>(),
-        // outputs
-        final_idx.contiguous().data_ptr<int>(),
-        out_depth.contiguous().data_ptr<float>(),
-        (float2 *)out_visibility.contiguous().data_ptr<float>()
-    );
+    if (positions.dtype() == torch::kFloat32)
+        rasterize_depth_forward_kernel<float><<<tile_bounds_dim3, block_dim3>>>(
+            depth_mode,
+            tile_bounds_dim3,
+            img_size_dim3,
+            intrins,
+            gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+            (int2 *)tile_bins.contiguous().data_ptr<int>(),
+            (vec3<float> *)positions.contiguous().data_ptr<float>(),
+            (vec3<float> *)axes_u.contiguous().data_ptr<float>(),
+            (vec3<float> *)axes_v.contiguous().data_ptr<float>(),
+            opacities.contiguous().data_ptr<float>(),
+            (vec2<float> *)anisotropies.contiguous().data_ptr<float>(),
+            // outputs
+            final_idx.contiguous().data_ptr<int>(),
+            out_depth.contiguous().data_ptr<float>(),
+            (vec2<float> *)out_visibility.contiguous().data_ptr<float>()
+        );
+
+    if (positions.dtype() == torch::kFloat16)
+        rasterize_depth_forward_kernel<halfc><<<tile_bounds_dim3, block_dim3>>>(
+            depth_mode,
+            tile_bounds_dim3,
+            img_size_dim3,
+            intrins,
+            gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+            (int2 *)tile_bins.contiguous().data_ptr<int>(),
+            (vec3<halfc> *)positions.contiguous().data_ptr<at::Half>(),
+            (vec3<halfc> *)axes_u.contiguous().data_ptr<at::Half>(),
+            (vec3<halfc> *)axes_v.contiguous().data_ptr<at::Half>(),
+            (halfc *)opacities.contiguous().data_ptr<at::Half>(),
+            (vec2<halfc> *)anisotropies.contiguous().data_ptr<at::Half>(),
+            // outputs
+            final_idx.contiguous().data_ptr<int>(),
+            (halfc *)out_depth.contiguous().data_ptr<at::Half>(),
+            (vec2<halfc> *)out_visibility.contiguous().data_ptr<at::Half>()
+        );
 
     return std::make_tuple(final_idx, out_depth, out_visibility);
 }
@@ -720,6 +746,20 @@ std::tuple<
     const dim3 img_size = {img_width, img_height, 1};
     float4 intrins = {fx, fy, cx, cy};
 
+    // rewritten to test if FP16 is faster (answer: no)
+
+    auto dtype = positions.dtype();
+    if (dtype != torch::kFloat32 && dtype != torch::kFloat16)
+        AT_ERROR("Must be FP32 or FP16");
+    if (axes_u.dtype() != positions.dtype() ||
+        axes_v.dtype() != positions.dtype() ||
+        opacities.dtype() != positions.dtype() ||
+        anisotropies.dtype() != positions.dtype() ||
+        output_depth.dtype() != positions.dtype() ||
+        output_visibility.dtype() != positions.dtype() ||
+        v_output_depth.dtype() != positions.dtype()
+    ) AT_ERROR("dtype must match");
+
     auto options = positions.options();
     torch::Tensor v_positions = torch::zeros({num_points, 3}, options);
     torch::Tensor v_positions_xy_abs = torch::zeros({num_points, 2}, options);
@@ -728,30 +768,57 @@ std::tuple<
     torch::Tensor v_opacities = torch::zeros({num_points, 1}, options);
     torch::Tensor v_anisotropies = torch::zeros({num_points, 2}, options);
 
-    rasterize_depth_backward_kernel<<<tile_bounds, block>>>(
-        depth_mode,
-        tile_bounds,
-        img_size,
-        intrins,
-        gaussians_ids_sorted.contiguous().data_ptr<int>(),
-        (int2 *)tile_bins.contiguous().data_ptr<int>(),
-        (float3 *)positions.contiguous().data_ptr<float>(),
-        (float3 *)axes_u.contiguous().data_ptr<float>(),
-        (float3 *)axes_v.contiguous().data_ptr<float>(),
-        opacities.contiguous().data_ptr<float>(),
-        (float2 *)anisotropies.contiguous().data_ptr<float>(),
-        final_idx.contiguous().data_ptr<int>(),
-        output_depth.contiguous().data_ptr<float>(),
-        (float2 *)output_visibility.contiguous().data_ptr<float>(),
-        v_output_depth.contiguous().data_ptr<float>(),
-        // outputs
-        (float3 *)v_positions.contiguous().data_ptr<float>(),
-        (float2 *)v_positions_xy_abs.contiguous().data_ptr<float>(),
-        (float3 *)v_axes_u.contiguous().data_ptr<float>(),
-        (float3 *)v_axes_v.contiguous().data_ptr<float>(),
-        v_opacities.contiguous().data_ptr<float>(),
-        (float2 *)v_anisotropies.contiguous().data_ptr<float>()
-    );
+    if (positions.dtype() == torch::kFloat32)
+        rasterize_depth_backward_kernel<float><<<tile_bounds, block>>>(
+            depth_mode,
+            tile_bounds,
+            img_size,
+            intrins,
+            gaussians_ids_sorted.contiguous().data_ptr<int>(),
+            (int2 *)tile_bins.contiguous().data_ptr<int>(),
+            (vec3<float> *)positions.contiguous().data_ptr<float>(),
+            (vec3<float> *)axes_u.contiguous().data_ptr<float>(),
+            (vec3<float> *)axes_v.contiguous().data_ptr<float>(),
+            opacities.contiguous().data_ptr<float>(),
+            (vec2<float> *)anisotropies.contiguous().data_ptr<float>(),
+            final_idx.contiguous().data_ptr<int>(),
+            output_depth.contiguous().data_ptr<float>(),
+            (vec2<float> *)output_visibility.contiguous().data_ptr<float>(),
+            v_output_depth.contiguous().data_ptr<float>(),
+            // outputs
+            (vec3<float> *)v_positions.contiguous().data_ptr<float>(),
+            (vec2<float> *)v_positions_xy_abs.contiguous().data_ptr<float>(),
+            (vec3<float> *)v_axes_u.contiguous().data_ptr<float>(),
+            (vec3<float> *)v_axes_v.contiguous().data_ptr<float>(),
+            v_opacities.contiguous().data_ptr<float>(),
+            (vec2<float> *)v_anisotropies.contiguous().data_ptr<float>()
+        );
+
+    if (positions.dtype() == torch::kFloat16)
+        rasterize_depth_backward_kernel<halfc><<<tile_bounds, block>>>(
+            depth_mode,
+            tile_bounds,
+            img_size,
+            intrins,
+            gaussians_ids_sorted.contiguous().data_ptr<int>(),
+            (int2 *)tile_bins.contiguous().data_ptr<int>(),
+            (vec3<halfc> *)positions.contiguous().data_ptr<at::Half>(),
+            (vec3<halfc> *)axes_u.contiguous().data_ptr<at::Half>(),
+            (vec3<halfc> *)axes_v.contiguous().data_ptr<at::Half>(),
+            (halfc *)opacities.contiguous().data_ptr<at::Half>(),
+            (vec2<halfc> *)anisotropies.contiguous().data_ptr<at::Half>(),
+            final_idx.contiguous().data_ptr<int>(),
+            (halfc *)output_depth.contiguous().data_ptr<at::Half>(),
+            (vec2<halfc> *)output_visibility.contiguous().data_ptr<at::Half>(),
+            (halfc *)v_output_depth.contiguous().data_ptr<at::Half>(),
+            // outputs
+            (vec3<halfc> *)v_positions.contiguous().data_ptr<at::Half>(),
+            (vec2<halfc> *)v_positions_xy_abs.contiguous().data_ptr<at::Half>(),
+            (vec3<halfc> *)v_axes_u.contiguous().data_ptr<at::Half>(),
+            (vec3<halfc> *)v_axes_v.contiguous().data_ptr<at::Half>(),
+            (halfc *)v_opacities.contiguous().data_ptr<at::Half>(),
+            (vec2<halfc> *)v_anisotropies.contiguous().data_ptr<at::Half>()
+        );
 
     return std::make_tuple(
         v_positions, v_positions_xy_abs,
