@@ -10,7 +10,7 @@ from torch.autograd import Function
 
 import spirulae_splat.splat.cuda as _C
 
-from .utils import bin_and_sort_gaussians, compute_cumulative_intersects
+from .rasterize_simple import rasterize_preprocess
 
 from spirulae_splat.perf_timer import PerfTimer
 timerf = PerfTimer("rasterize_depth_f", ema_tau=100)
@@ -34,9 +34,6 @@ def rasterize_gaussians_depth(
     block_width: int,
     depth_mode: str,
 ) -> Tuple[Tensor]:
-    """
-    TODO
-    """
     assert block_width > 1 and block_width <= 16, "block_width must be between 2 and 16"
 
     if not (num_tiles_hit > 0).any():
@@ -98,7 +95,13 @@ class _RasterizeGaussiansDepth(Function):
         img_size = (img_width, img_height, 1)
         device = positions.device
 
-        num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_tiles_hit)
+        (
+            num_intersects, gaussian_ids_sorted, tile_bins
+        ) = rasterize_preprocess(
+            positions, bounds, num_tiles_hit,
+            tile_bounds, block_width
+        )
+        timerf.mark("sort")  # 200ns-350ns
 
         if num_intersects < 1:
             out_depth = torch.ones(img_height, img_width, 1, device=device)
@@ -106,23 +109,6 @@ class _RasterizeGaussiansDepth(Function):
             tile_bins = torch.zeros(0, 2, device=device)
             final_idx = torch.zeros(img_height, img_width, device=device)
         else:
-            (
-                isect_ids_unsorted,
-                gaussian_ids_unsorted,
-                isect_ids_sorted,
-                gaussian_ids_sorted,
-                tile_bins,
-            ) = bin_and_sort_gaussians(
-                num_points,
-                num_intersects,
-                positions,
-                bounds,
-                cum_tiles_hit,
-                tile_bounds,
-                block_width,
-            )
-            timerf.mark("sort")
-
             final_idx, out_depth, out_visibility = _C.rasterize_depth_forward(
                 depth_mode,
                 tile_bounds, block, img_size,
@@ -131,7 +117,7 @@ class _RasterizeGaussiansDepth(Function):
                 positions, axes_u, axes_v,
                 opacities, anisotropies,
             )
-            timerf.mark("rasterize")
+        timerf.mark("rasterize")  # 200ns-600ns
 
         ctx.img_width = img_width
         ctx.img_height = img_height
@@ -145,8 +131,7 @@ class _RasterizeGaussiansDepth(Function):
             opacities, anisotropies,
             final_idx, out_depth, out_visibility,
         )
-        if num_intersects >= 1:
-            timerf.end("save")
+        timerf.end("save")  # ~10ns -> 450ns-950ns
 
         if RETURN_IDX:
             return out_depth, out_visibility, final_idx
@@ -188,7 +173,7 @@ class _RasterizeGaussiansDepth(Function):
                 final_idx, out_depth, out_visibility,
                 v_out_depth,
             )
-            timerb.mark("rasterize")
+            timerb.mark("rasterize")  # 600ns-2100ns
 
             clean = lambda x: torch.nan_to_num(torch.clip(x, -1., 1.))
             v_positions = clean(backward_return[0])
@@ -197,7 +182,7 @@ class _RasterizeGaussiansDepth(Function):
             v_axes_v = clean(backward_return[3])
             v_opacities = clean(backward_return[4])
             v_anisotropies = clean(backward_return[5])
-            timerb.mark("clean")
+            timerb.mark("clean")  # 60ns-80ns
 
         # Abs grad for gaussian splitting criterion. See
         # - "AbsGS: Recovering Fine Details for 3D Gaussian Splatting"
@@ -209,7 +194,7 @@ class _RasterizeGaussiansDepth(Function):
                 setattr(positions, key, getattr(positions, key)+value)
 
         if num_intersects >= 1:
-            timerb.end("absgrad")
+            timerb.end("absgrad")  # ~10ns -> 650ns-2200ns
 
         return (
             v_positions, v_axes_u, v_axes_v,

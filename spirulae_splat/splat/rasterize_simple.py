@@ -31,19 +31,6 @@ def rasterize_gaussians_simple(
     block_width: int,
     background: Optional[Float[Tensor, "channels"]] = None
 ) -> Tuple[Tensor, Tensor]:
-    """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an N-dimensional output using alpha-compositing.
-
-    Note:
-        This function is differentiable w.r.t the TODO inputs.
-
-    Args: TODO
-
-    Returns:
-        A Tensor:
-
-        - **out_img** (Tensor): N-dimensional rendered output image.
-        - **out_alpha** (Optional[Tensor]): Alpha channel of the rendered output image.
-    """
     assert block_width > 1 and block_width <= 16, "block_width must be between 2 and 16"
     if colors.dtype == torch.uint8:
         # make sure colors are float [0,1]
@@ -88,6 +75,40 @@ def rasterize_gaussians_simple(
     )
 
 
+def rasterize_preprocess(
+        positions: Float[Tensor, "*batch 3"],
+        bounds: Int[Tensor, "*batch 4"],
+        num_tiles_hit: Int[Tensor, "*batch 1"],
+        tile_bounds: Tuple[int, int, int],
+        block_width: int,
+    ):
+
+    num_points = positions.size(0)
+
+    num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_tiles_hit)
+
+    if num_intersects < 1:
+        return num_intersects, None, None
+
+    (
+        isect_ids_unsorted,
+        gaussian_ids_unsorted,
+        isect_ids_sorted,
+        gaussian_ids_sorted,
+        tile_bins,
+    ) = bin_and_sort_gaussians(
+        num_points,
+        num_intersects,
+        positions,
+        bounds,
+        cum_tiles_hit,
+        tile_bounds,
+        block_width,
+    )
+
+    return num_intersects, gaussian_ids_sorted, tile_bins
+
+
 class _RasterizeGaussiansSimple(Function):
     """Rasterizes 2D gaussians"""
 
@@ -118,7 +139,12 @@ class _RasterizeGaussiansSimple(Function):
         img_size = (img_width, img_height, 1)
         device = positions.device
 
-        num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_tiles_hit)
+        (
+            num_intersects, gaussian_ids_sorted, tile_bins
+        ) = rasterize_preprocess(
+            positions, bounds, num_tiles_hit,
+            tile_bounds, block_width
+        )
 
         if num_intersects < 1:
             out_img = (
@@ -130,22 +156,6 @@ class _RasterizeGaussiansSimple(Function):
             final_idx = torch.zeros(img_height, img_width, device=device)
             out_alpha = torch.ones(img_height, img_width, device=device)
         else:
-            (
-                isect_ids_unsorted,
-                gaussian_ids_unsorted,
-                isect_ids_sorted,
-                gaussian_ids_sorted,
-                tile_bins,
-            ) = bin_and_sort_gaussians(
-                num_points,
-                num_intersects,
-                positions,
-                bounds,
-                cum_tiles_hit,
-                tile_bounds,
-                block_width,
-            )
-
             final_idx, out_img, out_alpha = _C.rasterize_simple_forward(
                 tile_bounds, block, img_size,
                 *intrins,
