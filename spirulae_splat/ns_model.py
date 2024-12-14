@@ -54,7 +54,8 @@ from nerfstudio.utils.rich_utils import CONSOLE
 from nerfstudio.utils.math import components_from_spherical_harmonics
 
 from spirulae_splat.perf_timer import PerfTimer
-timer = PerfTimer("get_outputs", ema_tau=100)
+timerr = PerfTimer("get_outputs", ema_tau=100)
+timerl = PerfTimer("get_loss", ema_tau=100)
 
 
 def random_quat_tensor(N):
@@ -108,14 +109,14 @@ def resize_image(image: torch.Tensor, d: int):
 
 class SaturateKeepGradient(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x):
-        return torch.clip(x, 0.0, 1.0)
+    def forward(ctx, x, xmin, xmax):
+        return torch.clip(x, xmin, xmax)
     @staticmethod
     def backward(ctx, v_x):
-        return v_x
+        return v_x, None, None
 
-def saturate_keep_gradient(x):
-    return SaturateKeepGradient.apply(x)
+def saturate_keep_gradient(x, xmin=None, xmax=None):
+    return SaturateKeepGradient.apply(x, xmin, xmax)
 
 
 @dataclass
@@ -217,6 +218,18 @@ class SpirulaeModelConfig(ModelConfig):
     """make background color trainable"""
     background_sh_degree: int = 3
     """enable background model"""
+    adaptive_exposure_mode: Literal[
+        "disabled", "linear", "log_linear", "channel", "log_channel", "affine", "log_affine"
+        ] = "log_channel"
+    """Adaptive exposure mode
+        linear: gt ~ k * pred, with scalar k
+        log_linear: log(gt) ~ k * log(pred) + b, with scalar k and b
+        channel: linear but per channel
+        log_channel: log_linear but per channel
+        affine: gt ~ A * pred, with 3x3 matrix A
+        log_affine: log(gt) ~ A * log(pred) + b, with 3x3 matrix A and vec3 b
+       Additional coefficients (k,A,b) are optimized online using linear least squares
+    """
 
     # regularization
     use_scale_regularization: bool = True
@@ -247,6 +260,10 @@ class SpirulaeModelConfig(ModelConfig):
        Lower usually gives more accurate geometry, original MCMC uses 0.01"""
     mcmc_scale_reg: float = 0.002
     """Scale regularization from MCMC, original MCMC uses 0.01"""
+    exposure_reg_splat: float = 0.0  # 0.01
+    """Make sure image look right in auto exposure mode, match mean splat color with mean image color"""
+    exposure_reg_image: float = 0.1
+    """Between 0 and 1; For exposure regularization, include this fraction of L1 loss between GT image and image before exposure adjustment"""
 
 
 class SpirulaeModel(Model):
@@ -451,6 +468,8 @@ class SpirulaeModel(Model):
             old_shape = param.shape
             new_shape = (newp,) + old_shape[1:]
             self.gauss_params[name] = torch.nn.Parameter(torch.zeros(new_shape, device=self.device))
+        if not self.config.use_anisotropy:
+            self.gauss_params['anisotropies'].requires_grad_(False)
         super().load_state_dict(dict, **kwargs)
 
     def k_nearest_sklearn(self, x: torch.Tensor, k: int):
@@ -1122,14 +1141,14 @@ class SpirulaeModel(Model):
             return {}
         assert camera.shape[0] == 1, "Only one camera at a time"
 
-        timer.start()
+        timerr.start()
 
         # get the background color
         if self.training and self.config.use_camera_optimizer:
             optimized_camera_to_world = self.camera_optimizer.apply_to_camera(camera)[0, ...]
         else:
             optimized_camera_to_world = camera.camera_to_worlds[0, ...]
-        timer.mark(".")  # 500ns-600ns
+        timerr.mark(".")  # 500ns-600ns
 
         if self.crop_box is not None and not self.training:
             crop_ids = self.crop_box.within(self.means).squeeze()
@@ -1141,7 +1160,7 @@ class SpirulaeModel(Model):
             crop_ids = None
         camera_downscale = self._get_downscale_factor()
         camera.rescale_output_resolution(1 / camera_downscale)
-        timer.mark(".")  # 100ns-200ns
+        timerr.mark(".")  # 100ns-200ns
 
         R = optimized_camera_to_world[:3, :3]  # 3 x 3
         T = optimized_camera_to_world[:3, 3:4]  # 3 x 1
@@ -1154,7 +1173,7 @@ class SpirulaeModel(Model):
         viewmat[:3, 3:4] = T_inv
         W, H = int(camera.width.item()), int(camera.height.item())
         self.last_size = (H, W)
-        timer.mark("pre")  # 300ns-600ns
+        timerr.mark("pre")  # 300ns-600ns
 
         if crop_ids is not None:
             opacities_crop = self.opacities[crop_ids]
@@ -1175,12 +1194,12 @@ class SpirulaeModel(Model):
             scales_crop = self.scales
             quats_crop = self.quats
         colors_crop = torch.cat((features_dc_crop[:, None, :], features_sh_crop), dim=1)
-        timer.mark("crop")  # 80ns-150ns
+        timerr.mark("crop")  # 80ns-150ns
 
         quats_norms = torch.norm(quats_crop, p=2, dim=1)
         quats_norms = quats_norms.unsqueeze(1)
         quats_crop = quats_crop / torch.clip(quats_norms, 1e-6)
-        timer.mark("norm")  # 200ns
+        timerr.mark("norm")  # 200ns
 
         if self.config.sh_degree > 0:
             viewdirs = means_crop.detach() - optimized_camera_to_world.detach()[:3, 3]  # (N, 3)
@@ -1189,7 +1208,7 @@ class SpirulaeModel(Model):
             rgbs = torch.clamp(rgbs + 0.5, min=0.0)  # type: ignore
         else:
             rgbs = colors_crop[:, 0, :]
-        timer.mark("color")  # 200ns-300ns
+        timerr.mark("color")  # 200ns-300ns
 
         # print(self.config.sh_degree, rgbs.shape)
 
@@ -1208,7 +1227,7 @@ class SpirulaeModel(Model):
             H, W,
             BLOCK_WIDTH,
         )  # type: ignore
-        timer.mark("project")  # 250ns-450ns
+        timerr.mark("project")  # 250ns-450ns
 
         # rescale the camera back to original dimensions before returning
         camera.rescale_output_resolution(camera_downscale)
@@ -1222,7 +1241,7 @@ class SpirulaeModel(Model):
             intrins, H, W, BLOCK_WIDTH,
             self.config.depth_mode
         )
-        timer.mark("depth")  # 600ns-1200ns
+        timerr.mark("depth")  # 600ns-1200ns
         depth_im_ref = torch.where(
             depth_im_ref > 0.0, depth_im_ref,
             torch.amax(depth_im_ref).detach()
@@ -1247,7 +1266,7 @@ class SpirulaeModel(Model):
             0.0).contiguous()
         depth_ref_im = torch.concatenate(
             (depth_normal_grad_ref_normalized, depth_im_ref), dim=-1)
-        timer.mark("normal")  # 350ns-550ns
+        timerr.mark("normal")  # 350ns-550ns
 
         # main rasterization
         # background_color = self.background_color
@@ -1271,7 +1290,7 @@ class SpirulaeModel(Model):
             bounds, num_tiles_hit,
             intrins, H, W, BLOCK_WIDTH,
         )  # type: ignore
-        timer.mark("render")  # 500ns-1000ns
+        timerr.mark("render")  # 500ns-1000ns
         alpha = alpha[..., None]
         rgb = torch.clamp(rgb, max=1.0)  # type: ignore
         depth_grad_im, depth_im = depth_im[...,0:2], depth_im[...,2:3]
@@ -1323,7 +1342,7 @@ class SpirulaeModel(Model):
                       num_tiles_hit.unsqueeze(0)**0.5 / 2 * BLOCK_WIDTH,
                 "means2d": positions,
             }
-        timer.mark("post")  # 200ns-400ns
+        timerr.mark("post")  # 200ns-400ns
 
         self.intrins = intrins
         self.positions = positions
@@ -1334,14 +1353,17 @@ class SpirulaeModel(Model):
             background = self.get_background_image(camera)
             rgb = rgb + (1.0 - alpha) * background
 
-        # clamp pixel to between 0 and 1
-        # rgb = torch.clip(rgb, 0.0, 1.0)
-        rgb = saturate_keep_gradient(rgb)
+        # saturate pixel value
+        if not self.training:
+            rgb = torch.clip(rgb, 0.0, 1.0)
+        else:
+            # rgb = torch.clip(rgb, 0.0, None)
+            rgb = saturate_keep_gradient(rgb, 0.0, None)
 
         # do this for L2 loss
         # reg_depth = torch.sqrt(torch.relu(reg_depth+0.01))
 
-        timer.end("bkg")  # 250ns-450ns
+        timerr.end("bkg")  # 250ns-450ns
 
         return {
             "rgb": rgb,
@@ -1409,6 +1431,7 @@ class SpirulaeModel(Model):
             batch: ground truth batch corresponding to outputs
             metrics_dict: dictionary of metrics, some of which we can use for loss
         """
+        timerl.start()
         gt_img_rgba = self.get_gt_img(batch["image"])
         gt_img = self.composite_with_background(gt_img_rgba, outputs["background"])
         pred_img = outputs["rgb"]
@@ -1430,9 +1453,129 @@ class SpirulaeModel(Model):
             pred_img = pred_img * mask
             # compute alpha loss
             alpha_loss = alpha_loss + torch.relu(outputs['alpha']-mask).mean()
+        timerl.mark("alpha")
 
-        Ll1 = torch.abs(gt_img - pred_img).mean()
-        simloss = 1 - self.ssim(gt_img.permute(2, 0, 1)[None, ...], pred_img.permute(2, 0, 1)[None, ...])
+        # handle exposure
+        exposure_reg = 0.0
+        pred_img_e = pred_img
+        if self.config.adaptive_exposure_mode not in ["disabled", None]:
+            eeps = 0.5/255.0
+
+            # gt ~ k * pred
+            if self.config.adaptive_exposure_mode == "linear":
+                k = (gt_img.mean()+eeps) / (pred_img.mean()+eeps)
+                pred_img_e = k * (pred_img+eeps) - eeps
+                # print(k.item())
+
+            # log(gt) ~ k * log(pred) + b
+            elif self.config.adaptive_exposure_mode == "log_linear":
+                x = torch.log(pred_img+eeps)
+                y = torch.log(gt_img+eeps)
+                x_mean, y_mean = x.mean(), y.mean()
+                x2_mean, xy_mean = (x**2).mean(), (x*y).mean()
+                m = (xy_mean - x_mean * y_mean) / (x2_mean - x_mean**2)
+                b = y_mean - m * x_mean
+                pred_img_e = torch.exp(m * x + b) - eeps
+                # print(m.item(), b.item())
+
+            # gt ~ k * pred, per channel
+            if self.config.adaptive_exposure_mode == "channel":
+                x = pred_img.reshape(-1, 3)
+                y = gt_img.reshape(-1, 3)
+                k = (y.mean(0, True)+eeps) / (x.mean(0, True)+eeps)
+                pred_img_e = k * (pred_img+eeps) - eeps
+                # print(k.detach())
+
+            # log(gt) ~ k * log(pred) + b, per channel
+            if self.config.adaptive_exposure_mode == "log_channel":
+                x = torch.log(pred_img + eeps).reshape(-1, 3)
+                y = torch.log(gt_img + eeps).reshape(-1, 3)
+                x_mean, y_mean = x.mean(0, True), y.mean(0, True)
+                x2_mean, xy_mean = (x**2).mean(0, True), (x*y).mean(0, True)
+                m = (xy_mean - x_mean * y_mean) / (x2_mean - x_mean**2)
+                b = y_mean - m * x_mean
+                pred_img_e = torch.exp(m * x + b).reshape(pred_img_e.shape) - eeps
+                # print(m.detach(), b.detach())
+
+            # gt ~ A * pred
+            elif self.config.adaptive_exposure_mode == "affine":
+                x = (pred_img + eeps).reshape(-1, 3)
+                y = (gt_img + eeps).reshape(-1, 3)
+                xTy, xTx = x.T @ y, x.T @ x
+                try:
+                    A = torch.linalg.inv(xTx) @ xTy
+                except torch._C._LinAlgError:
+                    pass
+                else:
+                    pred_img_e = (x @ A).reshape(pred_img.shape) - eeps
+
+            # log(gt) ~ A * log(pred) + b
+            elif self.config.adaptive_exposure_mode == "log_affine":
+                x = torch.log(pred_img + eeps).reshape(-1, 3)
+                y = torch.log(gt_img + eeps).reshape(-1, 3)
+                mean_x = torch.mean(x, dim=0, keepdim=True)
+                mean_y = torch.mean(y, dim=0, keepdim=True)
+                centered_x = x - mean_x
+                centered_y = y - mean_y
+                xTy = centered_x.T @ centered_y
+                xTx = centered_x.T @ centered_x
+                try:
+                    A = torch.linalg.inv(xTx) @ xTy
+                except torch._C._LinAlgError:
+                    pass
+                else:
+                    B = mean_y - mean_x @ A
+                    pred_img_e = torch.exp(x @ A + B).reshape(pred_img.shape) - eeps
+            
+            timerl.mark("exposure")
+
+            # keep good value for natural image
+            if self.config.exposure_reg_splat > 0.0:
+                if not hasattr(self, '_exposure_info') or self._exposure_info_n < 4096:
+                    # get mean and covariance of image colors
+                    gt_color_flat = gt_img[..., :3].reshape((-1, 3))
+                    gt_mean = gt_color_flat.mean(0).detach()
+                    gt_mean2 = torch.cov(gt_color_flat.T).detach()
+                    if not hasattr(self, '_exposure_info'):
+                        self._exposure_info_n = 1
+                        self._exposure_info_gt_mean = gt_mean
+                        self._exposure_info_gt_mean2 = gt_mean2
+                    else:
+                        self._exposure_info_n += 1
+                        self._exposure_info_gt_mean = torch.lerp(
+                            self._exposure_info_gt_mean, gt_mean,
+                            1.0 / self._exposure_info_n
+                        )
+                        self._exposure_info_gt_mean2 = torch.lerp(
+                            self._exposure_info_gt_mean2, gt_mean2,
+                            1.0 / self._exposure_info_n
+                        )
+                splat_colors = self.features_dc
+                if self.config.sh_degree > 0:
+                    splat_colors = SH2RGB(splat_colors)
+                splat_colors = torch.nan_to_num(
+                    splat_colors, nan=0.0, posinf=0.0, neginf=0.0)
+                splat_weights = torch.exp(self.scales.mean(-1, True))
+                splat_color_mean = (splat_colors*splat_weights).sum(0) / splat_weights.sum(0)
+                splat_color_mean2 = torch.cov(splat_colors.T, aweights=splat_weights.flatten())
+                diff1 = torch.abs(splat_color_mean - self._exposure_info_gt_mean).mean()
+                diff2 = torch.abs(splat_color_mean2 - self._exposure_info_gt_mean2).mean()
+                exposure_reg = self.config.exposure_reg_splat * (diff1+diff2)
+                # print(splat_color_mean.detach(), diff1.item(), diff2.item())
+                timerl.mark("exposure_reg")
+
+        # image loss
+        pred_img_e = saturate_keep_gradient(pred_img_e, 0.0, 1.0)
+        pred_img = saturate_keep_gradient(pred_img, 0.0, 1.0)
+        Ll1 = torch.lerp(
+            torch.abs(gt_img - pred_img_e).mean(),
+            torch.abs(gt_img - pred_img).mean(),
+            self.config.exposure_reg_image
+        )
+        simloss = 1 - self.ssim(gt_img.permute(2, 0, 1)[None, ...], pred_img_e.permute(2, 0, 1)[None, ...])
+        timerl.mark("image")
+
+        # scale regularization
         if self.config.use_scale_regularization and self.step % 10 == 0:
             scale_exp = torch.exp(self.scales)
             scale_reg = (
@@ -1445,6 +1588,7 @@ class SpirulaeModel(Model):
             scale_reg = 0.1 * scale_reg.mean()
         else:
             scale_reg = torch.tensor(0.0).to(self.device)
+        timerl.mark("scale")
 
         # depth regularizer
         alpha = outputs['alpha']
@@ -1458,6 +1602,7 @@ class SpirulaeModel(Model):
             weight_depth_reg, weight_normal_reg = 0.0, 0.0
         depth_reg = weight_depth_reg * reg_depth.sum() / alpha.sum()
         normal_reg_per_splat = weight_normal_reg * reg_normal.sum() / alpha.sum()
+        timerl.mark("depth")
 
         # normal regularizer
         depth_grad_1 = outputs['depth_grad_1']
@@ -1467,6 +1612,7 @@ class SpirulaeModel(Model):
         normal_reg_overall = weight_normal_reg * (normal_reg_s*alpha).sum() / alpha.sum()
         normal_reg = normal_reg_overall + (normal_reg_per_splat-normal_reg_overall) * \
             self.config.normal_reg_per_splat_factor
+        timerl.mark("normal")
         
         # MCMC regularizers
         use_mcmc = self.config.use_mcmc
@@ -1477,6 +1623,7 @@ class SpirulaeModel(Model):
 
         # regularizations for parameters
         quat_norm_reg = 0.1 * (torch.log(self.quats.norm(dim=-1)+0.001)**2).mean()
+        timerl.mark("mcmc")
 
         loss_dict = {
             "main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss,
@@ -1487,13 +1634,16 @@ class SpirulaeModel(Model):
             "quat_reg": quat_norm_reg,
             'mcmc_opacity_reg': mcmc_opacity_reg,
             'mcmc_scale_reg': mcmc_scale_reg,
+            "exposure_reg": exposure_reg,
         }
         for key, value in loss_dict.items():
             loss_dict[key] = self.config.loss_scale * value
+        timerl.mark("scale")
 
         if self.training and self.config.use_camera_optimizer:
             # Add loss from camera optimizer
             self.camera_optimizer.get_loss_dict(loss_dict)
+        timerl.end("camera")
 
         return loss_dict
 
