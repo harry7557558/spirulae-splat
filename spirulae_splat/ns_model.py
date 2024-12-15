@@ -596,7 +596,7 @@ class SpirulaeModel(Model):
             info=self.info,
             packed=False,
         )
-        if True:
+        if False:
             # adaptive densification threshold
             # TODO: do this again after resolution change
             if not hasattr(self, '_loss_scale_n'):

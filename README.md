@@ -34,7 +34,7 @@ I'm open to bug reports and feature requests via GitHub Issues. You can alternat
   - Closed-form solution exists using linear least squares
   - To ensure predicted images look good during inference, the (weighted) mean and covariance of splat colors is fitted to mean and covariance of training image colors. This is alternatively achieved by adding a small loss component from pre-adjustment image when evaluating photometric loss with ground-truth image.
 
-- Use an adaptive densification threshold based on absgrad, for consistency in number of splats across scenes and hyperparameter sets
+<!-- - Use an adaptive densification threshold based on absgrad, for consistency in number of splats across scenes and hyperparameter sets -->
 
 - Use spherical harmonics for direction-dependent background color
 

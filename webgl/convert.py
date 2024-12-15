@@ -5,6 +5,8 @@ import numpy as np
 import argparse
 from io import BytesIO
 import json
+import os
+from pathlib import Path
 
 
 def quat_mult(q1, q2):
@@ -176,7 +178,6 @@ def pack_components_(config, components):
 
 
 def pack_components(config, components):
-    import os
     import subprocess
     import pybind11
     import importlib.util
@@ -221,10 +222,148 @@ def bufferview_psa(buffer_views):
     return buffer_views
 
 
+def load_nerfstudio_data(config):
+    from nerfstudio.utils.io import load_from_json
+    from nerfstudio.cameras import camera_utils
+    from nerfstudio.data.utils.dataparsers_utils import get_train_eval_split_fraction
+
+    data_dir = config.data
+    meta = load_from_json(data_dir / "transforms.json")
+
+    image_filenames = []
+    poses = []
+
+    fx_fixed = "fl_x" in meta
+    fy_fixed = "fl_y" in meta
+    cx_fixed = "cx" in meta
+    cy_fixed = "cy" in meta
+    height_fixed = "h" in meta
+    width_fixed = "w" in meta
+    distort_fixed = False
+    for distort_key in ["k1", "k2", "k3", "p1", "p2", "distortion_params"]:
+        if distort_key in meta:
+            distort_fixed = True
+            break
+    fx = []
+    fy = []
+    cx = []
+    cy = []
+    height = []
+    width = []
+    distort = []
+
+    # sort the frames by fname
+    fnames = []
+    for frame in meta["frames"]:
+        filepath = Path(frame["file_path"])
+        fname = data_dir / filepath
+        fnames.append(fname)
+    inds = np.argsort(fnames)
+    frames = [meta["frames"][ind] for ind in inds]
+
+    for frame in frames:
+        filepath = Path(frame["file_path"])
+        fname = data_dir / filepath
+
+        if not fx_fixed:
+            assert "fl_x" in frame, "fx not specified in frame"
+            fx.append(float(frame["fl_x"]))
+        if not fy_fixed:
+            assert "fl_y" in frame, "fy not specified in frame"
+            fy.append(float(frame["fl_y"]))
+        if not cx_fixed:
+            assert "cx" in frame, "cx not specified in frame"
+            cx.append(float(frame["cx"]))
+        if not cy_fixed:
+            assert "cy" in frame, "cy not specified in frame"
+            cy.append(float(frame["cy"]))
+        if not height_fixed:
+            assert "h" in frame, "height not specified in frame"
+            height.append(int(frame["h"]))
+        if not width_fixed:
+            assert "w" in frame, "width not specified in frame"
+            width.append(int(frame["w"]))
+        if not distort_fixed:
+            distort.append(
+                np.array(frame["distortion_params"], dtype=np.float32)
+                if "distortion_params" in frame
+                else camera_utils.get_distortion_params(
+                    k1=float(frame["k1"]) if "k1" in frame else 0.0,
+                    k2=float(frame["k2"]) if "k2" in frame else 0.0,
+                    k3=float(frame["k3"]) if "k3" in frame else 0.0,
+                    k4=float(frame["k4"]) if "k4" in frame else 0.0,
+                    p1=float(frame["p1"]) if "p1" in frame else 0.0,
+                    p2=float(frame["p2"]) if "p2" in frame else 0.0,
+                )
+            )
+
+        image_filenames.append(fname)
+        poses.append(np.array(frame["transform_matrix"], dtype=np.float32))
+
+    indices, _ = get_train_eval_split_fraction(image_filenames, config.train_split_fraction)
+
+    poses = torch.from_numpy(np.array(poses).astype(np.float32))
+    poses, transform_matrix = camera_utils.auto_orient_and_center_poses(
+        poses,
+        method=config.orientation_method,
+        center_method=config.center_method,
+    )
+    poses = poses.numpy()
+
+    # Scale poses
+    scale_factor = 1.0
+    if config.auto_scale_poses:
+        scale_factor /= float(np.max(np.abs(poses[:, :3, 3])))
+    scale_factor *= config.scale_factor
+
+    poses[:, :3, 3] *= scale_factor
+
+    idx_tensor = np.array(indices, dtype=np.int32)
+    poses = poses[idx_tensor]
+
+    camera_type = meta["camera_model"] if "camera_model" in meta else 'PERSPECTIVE'
+
+    fx = float(meta["fl_x"]) if fx_fixed else np.array(fx, dtype=np.float32)[idx_tensor]
+    fy = float(meta["fl_y"]) if fy_fixed else np.array(fy, dtype=np.float32)[idx_tensor]
+    cx = float(meta["cx"]) if cx_fixed else np.array(cx, dtype=np.float32)[idx_tensor]
+    cy = float(meta["cy"]) if cy_fixed else np.array(cy, dtype=np.float32)[idx_tensor]
+    height = int(meta["h"]) if height_fixed else np.array(height, dtype=np.int32)[idx_tensor]
+    width = int(meta["w"]) if width_fixed else np.array(width, dtype=np.int32)[idx_tensor]
+    if distort_fixed:
+        distortion_params = (
+            np.array(meta["distortion_params"], dtype=np.float32)
+            if "distortion_params" in meta
+            else camera_utils.get_distortion_params(
+                k1=float(meta["k1"]) if "k1" in meta else 0.0,
+                k2=float(meta["k2"]) if "k2" in meta else 0.0,
+                k3=float(meta["k3"]) if "k3" in meta else 0.0,
+                k4=float(meta["k4"]) if "k4" in meta else 0.0,
+                p1=float(meta["p1"]) if "p1" in meta else 0.0,
+                p2=float(meta["p2"]) if "p2" in meta else 0.0,
+            )
+        )
+    else:
+        distortion_params = np.stack(distort, axis=0)[idx_tensor]
+
+    return {
+        'fx': fx,
+        'fy': fy,
+        'cx': cx,
+        'cy': cy,
+        'dist': distortion_params,
+        'h': height,
+        'w': width,
+        'c2w': poses[:, :3, :4],
+        'type': camera_type
+    }
+
+
 class SplatModel:
     def __init__(self, file_path):
         if file_path.endswith('.ckpt'):
             self.load_ckpt(file_path)
+        elif file_path.endswith('config.yml'):
+            self.load_config(file_path)
         elif file_path.endswith('.ply'):
             self.load_ply(file_path)
 
@@ -232,6 +371,7 @@ class SplatModel:
         checkpoint = torch.load(file_path)
         pipeline = checkpoint['pipeline']
         # print(pipeline.keys())
+        # print(pipeline['_model.camera_optimizer.pose_adjustment'])
 
         self.features_dc = pipeline['_model.gauss_params.features_dc']  # 8 bits
         self.features_sh = pipeline['_model.gauss_params.features_sh']  # 4 bits
@@ -244,6 +384,29 @@ class SplatModel:
         self.background_color = pipeline['_model.background_color']
         self.background_sh = pipeline['_model.background_sh'] \
             if '_model.background_sh' in pipeline else torch.zeros((0, 3))
+
+    def load_config(self, file_path: str):
+        save_dir = file_path[:file_path.rfind(os.path.sep)]
+        ckpt_dir = os.path.join(save_dir, 'nerfstudio_models')
+        for f in os.listdir(ckpt_dir):
+            if f.endswith('.ckpt'):
+                f = os.path.join(ckpt_dir, f)
+                self.load_ckpt(f)
+                break
+        return
+
+        # attempt to find camera poses
+        import yaml
+        with open(file_path, 'r') as fp:
+            config = yaml.load(fp, yaml.UnsafeLoader)
+        # print(config)
+        launch_dir = file_path[:file_path.rfind(str(config.output_dir))]
+        data_dir = os.path.join(launch_dir, str(config.data))
+        dataparser = config.pipeline.datamanager.dataparser
+        dataparser.data = Path(data_dir)
+        print(dataparser)
+        cameras = load_nerfstudio_data(dataparser)
+        print(cameras)
 
     def load_ply(self, file_path):
         """for official 2DGS codebase"""
