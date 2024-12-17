@@ -1,7 +1,10 @@
 from typing import Any
 import torch
 from .project_gaussians import project_gaussians
+from .rasterize_simple import rasterize_gaussians_simple
+from .rasterize_depth import rasterize_gaussians_depth
 from .rasterize import rasterize_gaussians
+from .rasterize_simplified import rasterize_gaussians_simplified
 from .utils import (
     map_gaussian_to_intersects,
     bin_and_sort_gaussians,

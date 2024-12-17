@@ -534,7 +534,7 @@ def get_alpha(uv, opac, aniso) -> Tuple[Tensor, bool]:
     t = torch.clamp(t, torch.zeros_like(t), torch.ones_like(t))
     m = t*t*(2.0*t-3.0)+1.0
     alpha = opac * vis * m
-    return alpha, r2 >= 0.0 and alpha >= 1e-4
+    return alpha, r2 >= 0.0 and alpha >= 1e-3
 
 
 def get_intersection(position, axis_uv, pos_2d):
@@ -594,7 +594,7 @@ def rasterize_gaussians_simple(
 
     final_idx = torch.zeros((img_size[1], img_size[0]), **int32_param)
     out_img = torch.zeros((img_size[1], img_size[0], 3), **float32_param)
-    out_alpha = torch.zeros((img_size[1], img_size[0]), **float32_param)
+    out_alpha = torch.zeros((img_size[1], img_size[0], 1), **float32_param)
 
     fx, fy, cx, cy = intrins
 
@@ -813,11 +813,11 @@ def rasterize_gaussians(
     )
 
     final_idx = torch.zeros((img_size[1], img_size[0]), **int32_param)
-    out_alpha = torch.zeros((img_size[1], img_size[0]), **float32_param)
+    out_alpha = torch.zeros((img_size[1], img_size[0], 1), **float32_param)
     out_img = torch.zeros((img_size[1], img_size[0], 3), **float32_param)
     out_depth_grad = torch.zeros((img_size[1], img_size[0], 4), **float32_param)
-    out_reg_depth = torch.zeros((img_size[1], img_size[0]), **float32_param)
-    out_reg_normal = torch.zeros((img_size[1], img_size[0]), **float32_param)
+    out_reg_depth = torch.zeros((img_size[1], img_size[0], 1), **float32_param)
+    out_reg_normal = torch.zeros((img_size[1], img_size[0], 1), **float32_param)
     float32_param['requires_grad'] = True
 
     fx, fy, cx, cy = intrins
@@ -906,6 +906,126 @@ def rasterize_gaussians(
         out_img, out_depth_grad,
         out_reg_depth, out_reg_normal,
         out_alpha, final_idx
+    )
+
+
+def rasterize_gaussians_simplified( 
+    positions: Float[Tensor, "*batch 3"],
+    axes_u: Float[Tensor, "*batch 3"],
+    axes_v: Float[Tensor, "*batch 3"],
+    colors: Float[Tensor, "*batch channels"],
+    opacities: Float[Tensor, "*batch 1"],
+    anisotropies: Float[Tensor, "*batch 2"],
+    depth_grads: Float[Tensor, "*batch 2"],
+    bounds: Int[Tensor, "*batch 4"],
+    num_tiles_hit: Int[Tensor, "*batch 1"],
+    intrins: Tuple[float, float, float, float],
+    img_height: int,
+    img_width: int,
+    block_width: int,
+):
+    device = positions.device
+    float32_param = { 'dtype': torch.float32, 'device': device }
+    int32_param = { 'dtype': torch.int32, 'device': device }
+
+    num_points = positions.size(0)
+    tile_bounds = (
+        (img_width + block_width - 1) // block_width,
+        (img_height + block_width - 1) // block_width,
+        1,
+    )
+    block = (block_width, block_width, 1)
+    img_size = (img_width, img_height, 1)
+
+    num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_tiles_hit)
+    assert num_intersects >= 1
+
+    (
+        isect_ids_unsorted,
+        gaussian_ids_unsorted,
+        isect_ids_sorted,
+        gaussian_ids_sorted,
+        tile_bins,
+    ) = bin_and_sort_gaussians(
+        num_points, num_intersects,
+        positions,
+        bounds, cum_tiles_hit,
+        tile_bounds, block_width,
+    )
+
+    final_idx = torch.zeros((img_size[1], img_size[0]), **int32_param)
+    out_alpha = torch.zeros((img_size[1], img_size[0], 1), **float32_param)
+    out_img = torch.zeros((img_size[1], img_size[0], 3), **float32_param)
+    out_depth = torch.zeros((img_size[1], img_size[0], 4), **float32_param)
+    out_depth_reg = torch.zeros((img_size[1], img_size[0], 1), **float32_param)
+    float32_param['requires_grad'] = True
+
+    fx, fy, cx, cy = intrins
+
+    for i in range(img_size[1]):
+        for j in range(img_size[0]):
+            tile_id = (i // block[0]) * tile_bounds[0] + (j // block[1])
+            tile_bin_start = tile_bins[tile_id, 0]
+            tile_bin_end = tile_bins[tile_id, 1]
+            pos_screen = [j+0.5, i+0.5]
+            pos_2d = [(pos_screen[0]-cx)/fx, (pos_screen[1]-cy)/fy]
+            pos_2d = torch.tensor(pos_2d, **float32_param)
+
+            T = torch.ones(1, **float32_param)
+            cur_idx = 0
+            g_sum = torch.zeros(2, **float32_param)
+            pix_out = torch.zeros(3, **float32_param)
+            vis_sum = torch.zeros(1, **float32_param)
+            depth_sum = torch.zeros(1, **float32_param)
+            depth_squared_sum = torch.zeros(1, **float32_param)
+            reg_depth_p = 0.0
+
+            for idx in range(tile_bin_start, tile_bin_end):
+                gid = gaussian_ids_sorted[idx]
+                pos = positions[gid]
+                opac = opacities[gid]
+                aniso = anisotropies[gid]
+                axis_uv = (axes_u[gid], axes_v[gid])
+
+                poi, uv, valid = get_intersection(pos, axis_uv, pos_2d)
+                if torch.linalg.norm(uv) > 1.0:
+                    continue
+                alpha, valid  = get_alpha(uv, opac, aniso)
+                if  not valid:
+                    continue
+
+                color_0 = colors[gid]
+                color = color_0
+
+                next_T = T * (1. - alpha)
+
+                vis = alpha * T
+                depth = poi[2]
+                g_i = depth_grads[gid]
+
+                pix_out = pix_out + vis * color
+                pairwise_l2 = vis * (vis_sum*depth*depth + depth_squared_sum - 2.0*depth*depth_sum)
+                reg_depth_p = reg_depth_p + pairwise_l2
+                vis_sum = vis_sum + vis
+                depth_sum = depth_sum + vis*depth
+                depth_squared_sum = depth_squared_sum + vis*depth**2
+                g_sum = g_sum + vis * g_i
+
+                T = next_T
+                cur_idx = idx
+                if next_T <= 1e-3:
+                    break
+
+            final_idx[i, j] = cur_idx
+            out_alpha[i, j] = 1.0-T
+            out_img[i, j] = pix_out
+            out_depth[i, j] = torch.concat((g_sum, depth_sum, depth_squared_sum))
+            out_depth_reg[i, j] = reg_depth_p
+
+    return (
+        out_img, out_alpha,
+        out_depth, out_depth_reg,
+        final_idx
     )
 
 

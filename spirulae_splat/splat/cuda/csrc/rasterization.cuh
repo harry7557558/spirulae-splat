@@ -177,6 +177,58 @@ __global__ void rasterize_backward_kernel(
 );
 
 
+__global__ void rasterize_simplified_forward_kernel(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float3* __restrict__ colors,
+    const float* __restrict__ opacities,
+    const float2* __restrict__ anisotropies,
+    const float2* __restrict__ depth_grads,
+    int* __restrict__ final_index,
+    float* __restrict__ out_alpha,
+    float3* __restrict__ out_img,
+    float4* __restrict__ out_depth,  // rendered { gx, gy, depth, depth^2 }
+    float* __restrict__ out_depth_reg
+);
+
+
+__global__ void rasterize_simplified_backward_kernel(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float3* __restrict__ colors,
+    const float* __restrict__ opacities,
+    const float2* __restrict__ anisotropies,
+    const float2* __restrict__ depth_grads,
+    const int* __restrict__ final_index,
+    const float* __restrict__ output_alpha,
+    const float4* __restrict__ output_depth,
+    const float* __restrict__ v_output_alpha,
+    const float3* __restrict__ v_output_img,
+    const float4* __restrict__ v_output_depth,
+    const float* __restrict__ v_output_depth_reg,
+    float3* __restrict__ v_positions,
+    float2* __restrict__ v_positions_xy_abs,
+    float3* __restrict__ v_axes_u,
+    float3* __restrict__ v_axes_v,
+    float3* __restrict__ v_colors,
+    float* __restrict__ v_opacities,
+    float2* __restrict__ v_anisotropies,
+    float2* __restrict__ v_depth_grad
+);
+
+
 __global__ void render_background_sh_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,

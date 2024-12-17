@@ -101,7 +101,7 @@ class _RasterizeGaussiansDepth(Function):
             positions, bounds, num_tiles_hit,
             tile_bounds, block_width
         )
-        timerf.mark("sort")  # 200ns-350ns
+        timerf.mark("sort")  # 200us-350us
 
         if num_intersects < 1:
             out_depth = torch.ones(img_height, img_width, 1, device=device)
@@ -117,7 +117,7 @@ class _RasterizeGaussiansDepth(Function):
                 positions, axes_u, axes_v,
                 opacities, anisotropies,
             )
-        timerf.mark("rasterize")  # 200ns-600ns
+        timerf.mark("rasterize")  # 200us-600us
 
         ctx.img_width = img_width
         ctx.img_height = img_height
@@ -131,7 +131,7 @@ class _RasterizeGaussiansDepth(Function):
             opacities, anisotropies,
             final_idx, out_depth, out_visibility,
         )
-        timerf.end("save")  # ~10ns -> 450ns-950ns
+        timerf.end("save")  # ~10us -> 450us-950us
 
         if RETURN_IDX:
             return out_depth, out_visibility, final_idx
@@ -173,7 +173,7 @@ class _RasterizeGaussiansDepth(Function):
                 final_idx, out_depth, out_visibility,
                 v_out_depth,
             )
-            timerb.mark("rasterize")  # 600ns-2100ns
+            timerb.mark("rasterize")  # 600us-2100us
 
             clean = lambda x: torch.nan_to_num(torch.clip(x, -1., 1.))
             v_positions = clean(backward_return[0])
@@ -182,7 +182,7 @@ class _RasterizeGaussiansDepth(Function):
             v_axes_v = clean(backward_return[3])
             v_opacities = clean(backward_return[4])
             v_anisotropies = clean(backward_return[5])
-            timerb.mark("clean")  # 60ns-80ns
+            timerb.mark("clean")  # 60us-80us
 
         # Abs grad for gaussian splitting criterion. See
         # - "AbsGS: Recovering Fine Details for 3D Gaussian Splatting"
@@ -194,7 +194,7 @@ class _RasterizeGaussiansDepth(Function):
                 setattr(positions, key, getattr(positions, key)+value)
 
         if num_intersects >= 1:
-            timerb.end("absgrad")  # ~10ns -> 650ns-2200ns
+            timerb.end("absgrad")  # ~10us -> 650us-2200us
 
         return (
             v_positions, v_axes_u, v_axes_v,

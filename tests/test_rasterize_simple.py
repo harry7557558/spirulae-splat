@@ -125,7 +125,7 @@ def test_rasterize_simple():
     print()
 
     def fun(rgb, alpha):
-        rgb_r = torch.sin(rgb).norm(dim=2)
+        rgb_r = torch.sin(rgb).norm(dim=2, keepdim=True)
         alpha_r = torch.exp(torch.flip(alpha, [0, 1]))
         return (rgb_r * alpha_r).mean()
     fun(rgb_im, alpha_im).backward()

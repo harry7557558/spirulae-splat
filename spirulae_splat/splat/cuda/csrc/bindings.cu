@@ -449,7 +449,7 @@ std::tuple<
         {img_height, img_width, channels}, float32
     );
     torch::Tensor out_alpha = torch::zeros(
-        {img_height, img_width}, float32
+        {img_height, img_width, 1}, float32
     );
 
     rasterize_simple_forward_kernel<<<tile_bounds_dim3, block_dim3>>>(
@@ -903,7 +903,7 @@ std::tuple<
         {img_height, img_width}, int32
     );
     torch::Tensor out_alpha = torch::zeros(
-        {img_height, img_width}, float32
+        {img_height, img_width, 1}, float32
     );
     torch::Tensor out_img = torch::zeros(
         {img_height, img_width, channels}, float32
@@ -912,10 +912,10 @@ std::tuple<
         {img_height, img_width, 4}, float32
     );
     torch::Tensor out_reg_depth = torch::zeros(
-        {img_height, img_width}, float32
+        {img_height, img_width, 1}, float32
     );
     torch::Tensor out_reg_normal = torch::zeros(
-        {img_height, img_width}, float32
+        {img_height, img_width, 1}, float32
     );
 
     rasterize_forward_kernel<<<tile_bounds_dim3, block_dim3>>>(
@@ -1105,6 +1105,231 @@ std::tuple<
         v_opacities, v_anisotropies,
         // v_background,
         v_depth_grad, v_depth_ref_im
+    );
+}
+
+
+
+std::tuple<
+    torch::Tensor, // final_idx
+    torch::Tensor,  // out_alpha
+    torch::Tensor,  // out_img
+    torch::Tensor,  // out_depth
+    torch::Tensor  // out_depth_reg
+> rasterize_simplified_forward_tensor(
+    const std::tuple<int, int, int> tile_bounds,
+    const std::tuple<int, int, int> block,
+    const std::tuple<int, int, int> img_size,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const torch::Tensor &gaussian_ids_sorted,
+    const torch::Tensor &tile_bins,
+    const torch::Tensor &positions,
+    const torch::Tensor &axes_u,
+    const torch::Tensor &axes_v,
+    const torch::Tensor &colors,
+    const torch::Tensor &opacities,
+    const torch::Tensor &anisotropies,
+    const torch::Tensor &depth_grads
+) {
+    DEVICE_GUARD(positions);
+    CHECK_INPUT(gaussian_ids_sorted);
+    CHECK_INPUT(tile_bins);
+    CHECK_INPUT(positions);
+    CHECK_INPUT(axes_u);
+    CHECK_INPUT(axes_v);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(anisotropies);
+    CHECK_INPUT(depth_grads);
+
+    dim3 tile_bounds_dim3;
+    tile_bounds_dim3.x = std::get<0>(tile_bounds);
+    tile_bounds_dim3.y = std::get<1>(tile_bounds);
+    tile_bounds_dim3.z = std::get<2>(tile_bounds);
+
+    dim3 block_dim3;
+    block_dim3.x = std::get<0>(block);
+    block_dim3.y = std::get<1>(block);
+    block_dim3.z = std::get<2>(block);
+
+    dim3 img_size_dim3;
+    img_size_dim3.x = std::get<0>(img_size);
+    img_size_dim3.y = std::get<1>(img_size);
+    img_size_dim3.z = std::get<2>(img_size);
+
+    const int channels = colors.size(1);
+    const int img_width = img_size_dim3.x;
+    const int img_height = img_size_dim3.y;
+
+    float4 intrins = {fx, fy, cx, cy};
+
+    auto int32 = positions.options().dtype(torch::kInt32);
+    auto float32 = positions.options().dtype(torch::kFloat32);
+    torch::Tensor final_idx = torch::zeros(
+        {img_height, img_width}, int32
+    );
+    torch::Tensor out_alpha = torch::zeros(
+        {img_height, img_width, 1}, float32
+    );
+    torch::Tensor out_img = torch::zeros(
+        {img_height, img_width, channels}, float32
+    );
+    torch::Tensor out_depth = torch::zeros(
+        {img_height, img_width, 4}, float32
+    );
+    torch::Tensor out_depth_reg = torch::zeros(
+        {img_height, img_width, 1}, float32
+    );
+
+    rasterize_simplified_forward_kernel<<<tile_bounds_dim3, block_dim3>>>(
+        tile_bounds_dim3,
+        img_size_dim3,
+        intrins,
+        gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+        (int2 *)tile_bins.contiguous().data_ptr<int>(),
+        (float3 *)positions.contiguous().data_ptr<float>(),
+        (float3 *)axes_u.contiguous().data_ptr<float>(),
+        (float3 *)axes_v.contiguous().data_ptr<float>(),
+        (float3 *)colors.contiguous().data_ptr<float>(),
+        opacities.contiguous().data_ptr<float>(),
+        (float2 *)anisotropies.contiguous().data_ptr<float>(),
+        (float2 *)depth_grads.contiguous().data_ptr<float>(),
+        // outputs
+        final_idx.contiguous().data_ptr<int>(),
+        out_alpha.contiguous().data_ptr<float>(),
+        (float3 *)out_img.contiguous().data_ptr<float>(),
+        (float4 *)out_depth.contiguous().data_ptr<float>(),
+        out_depth_reg.contiguous().data_ptr<float>()
+    );
+
+    return std::make_tuple(
+        final_idx, out_alpha,
+        out_img,
+        out_depth, out_depth_reg
+    );
+}
+
+
+std::tuple<
+    torch::Tensor, // v_positions
+    torch::Tensor, // v_positions_xy_abs
+    torch::Tensor, // v_axes_u
+    torch::Tensor, // v_axes_v
+    torch::Tensor, // v_colors
+    torch::Tensor, // v_opacities
+    torch::Tensor, // v_anisotropies
+    torch::Tensor // v_depth_grad
+> rasterize_simplified_backward_tensor(
+    const unsigned img_height,
+    const unsigned img_width,
+    const unsigned block_width,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const torch::Tensor &gaussians_ids_sorted,
+    const torch::Tensor &tile_bins,
+    const torch::Tensor &positions,
+    const torch::Tensor &axes_u,
+    const torch::Tensor &axes_v,
+    const torch::Tensor &colors,
+    const torch::Tensor &opacities,
+    const torch::Tensor &anisotropies,
+    const torch::Tensor &depth_grads,
+    const torch::Tensor &final_idx,
+    const torch::Tensor &output_alpha,
+    const torch::Tensor &output_depth,
+    const torch::Tensor &v_output_alpha,
+    const torch::Tensor &v_output_img,
+    const torch::Tensor &v_output_depth,
+    const torch::Tensor &v_output_depth_reg
+) {
+    DEVICE_GUARD(positions);
+    CHECK_INPUT(positions);
+    CHECK_INPUT(axes_u);
+    CHECK_INPUT(axes_v);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(anisotropies);
+    CHECK_INPUT(final_idx);
+    CHECK_INPUT(output_alpha);
+    CHECK_INPUT(output_depth);
+    CHECK_INPUT(v_output_alpha);
+    CHECK_INPUT(v_output_img);
+    CHECK_INPUT(v_output_depth);
+    CHECK_INPUT(v_output_depth_reg);
+
+    if (positions.ndimension() != 2 || positions.size(1) != 3) {
+        AT_ERROR("xys must have dimensions (num_points, 2)");
+    }
+    if (colors.ndimension() != 2 || colors.size(1) != 3) {
+        AT_ERROR("colors must have 2 dimensions");
+    }
+    if (v_output_depth.ndimension() != 3 || v_output_depth.size(2) != 4) {
+        AT_ERROR("output_depth_grad must have 3 dimensions");
+    }
+    if (v_output_depth.ndimension() != 3 || v_output_depth.size(2) != 4) {
+        AT_ERROR("v_output_depth_grad must have 3 dimensions");
+    }
+
+    const int num_points = positions.size(0);
+    const dim3 tile_bounds = {
+        (img_width + block_width - 1) / block_width,
+        (img_height + block_width - 1) / block_width,
+        1
+    };
+    const dim3 block(block_width, block_width, 1);
+    const dim3 img_size = {img_width, img_height, 1};
+    const int channels = colors.size(1);
+    float4 intrins = {fx, fy, cx, cy};
+
+    auto options = positions.options();
+    torch::Tensor v_positions = torch::zeros({num_points, 3}, options);
+    torch::Tensor v_positions_xy_abs = torch::zeros({num_points, 2}, options);
+    torch::Tensor v_axes_u = torch::zeros({num_points, 3}, options);
+    torch::Tensor v_axes_v = torch::zeros({num_points, 3}, options);
+    torch::Tensor v_colors = torch::zeros({num_points, channels}, options);
+    torch::Tensor v_opacities = torch::zeros({num_points, 1}, options);
+    torch::Tensor v_anisotropies = torch::zeros({num_points, 2}, options);
+    torch::Tensor v_depth_grad = torch::zeros({num_points, 2}, options);
+
+    rasterize_simplified_backward_kernel<<<tile_bounds, block>>>(
+        tile_bounds, img_size, intrins,
+        gaussians_ids_sorted.contiguous().data_ptr<int>(),
+        (int2 *)tile_bins.contiguous().data_ptr<int>(),
+        (float3 *)positions.contiguous().data_ptr<float>(),
+        (float3 *)axes_u.contiguous().data_ptr<float>(),
+        (float3 *)axes_v.contiguous().data_ptr<float>(),
+        (float3 *)colors.contiguous().data_ptr<float>(),
+        opacities.contiguous().data_ptr<float>(),
+        (float2 *)anisotropies.contiguous().data_ptr<float>(),
+        (float2 *)depth_grads.contiguous().data_ptr<float>(),
+        final_idx.contiguous().data_ptr<int>(),
+        output_alpha.contiguous().data_ptr<float>(),
+        (float4 *)output_depth.contiguous().data_ptr<float>(),
+        v_output_alpha.contiguous().data_ptr<float>(),
+        (float3 *)v_output_img.contiguous().data_ptr<float>(),
+        (float4 *)v_output_depth.contiguous().data_ptr<float>(),
+        v_output_depth_reg.contiguous().data_ptr<float>(),
+        // outputs
+        (float3 *)v_positions.contiguous().data_ptr<float>(),
+        (float2 *)v_positions_xy_abs.contiguous().data_ptr<float>(),
+        (float3 *)v_axes_u.contiguous().data_ptr<float>(),
+        (float3 *)v_axes_v.contiguous().data_ptr<float>(),
+        (float3 *)v_colors.contiguous().data_ptr<float>(),
+        v_opacities.contiguous().data_ptr<float>(),
+        (float2 *)v_anisotropies.contiguous().data_ptr<float>(),
+        (float2 *)v_depth_grad.contiguous().data_ptr<float>()
+    );
+
+    return std::make_tuple(
+        v_positions, v_positions_xy_abs,
+        v_axes_u, v_axes_v,
+        v_colors, v_opacities, v_anisotropies,
+        v_depth_grad
     );
 }
 

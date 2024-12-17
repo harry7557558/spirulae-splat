@@ -1498,6 +1498,461 @@ __global__ void rasterize_backward_kernel(
 
 
 
+__global__ void rasterize_simplified_forward_kernel(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float3* __restrict__ colors,
+    const float* __restrict__ opacities,
+    const float2* __restrict__ anisotropies,
+    const float2* __restrict__ depth_grads,
+    int* __restrict__ final_index,
+    float* __restrict__ out_alpha,
+    float3* __restrict__ out_img,
+    float4* __restrict__ out_depth,  // rendered { gx, gy, depth, depth^2 }
+    float* __restrict__ out_depth_reg
+) {
+    // each thread draws one pixel, but also timeshares caching gaussians in a
+    // shared tile
+
+    auto block = cg::this_thread_block();
+    int32_t tile_id =
+        block.group_index().y * tile_bounds.x + block.group_index().x;
+    unsigned i =
+        block.group_index().y * block.group_dim().y + block.thread_index().y;
+    unsigned j =
+        block.group_index().x * block.group_dim().x + block.thread_index().x;
+
+    const float fx = intrins.x;
+    const float fy = intrins.y;
+    const float cx = intrins.z;
+    const float cy = intrins.w;
+    glm::vec2 pos_screen = { (float)j + 0.5f, (float)i + 0.5f };
+    glm::vec2 pos_2d = { (pos_screen.x-cx)/fx, (pos_screen.y-cy)/fy };
+    int32_t pix_id = i * img_size.x + j;
+
+    // return if out of bounds
+    // keep not rasterizing threads around for reading data
+    bool inside = (i < img_size.y && j < img_size.x);
+    bool done = !inside;
+
+    // have all threads in tile process the same gaussians in batches
+    // first collect gaussians between range.x and range.y in batches
+    // which gaussians to look through in this tile
+    int2 range = tile_bins[tile_id];
+    const int block_size = block.size();
+    int num_batches = (range.y - range.x + block_size - 1) / block_size;
+
+    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 color_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
+    // __shared__ glm::vec2 depth_grad_batch[MAX_BLOCK_SIZE];
+
+    // current visibility left to render
+    // index of most recent gaussian to write to this thread's pixel
+    int cur_idx = 0;
+
+    // collect and process batches of gaussians
+    // each thread loads one gaussian at a time before rasterizing its
+    // designated pixel
+    int tr = block.thread_rank();
+    float T = 1.f;  // current/total visibility
+    float2 g_sum = {0.f, 0.f};  // sum of "normals"
+    float3 pix_out = {0.f, 0.f, 0.f};  // output radiance
+    float vis_sum = 0.f;  // output alpha
+    float depth_sum = 0.f;  // output depth
+    float depth_squared_sum = 0.f;  // for L2 depth regularizer
+    float reg_depth_p = 0.f;  // output depth regularizer
+    for (int b = 0; b < num_batches; ++b) {
+        // resync all threads before beginning next batch
+        // end early if entire tile is done
+        if (__syncthreads_count(done) >= block_size) {
+            break;
+        }
+        // each thread fetch 1 gaussian from front to back
+        // index of gaussian to load
+        int batch_start = range.x + block_size * b;
+        int idx = batch_start + tr;
+        if (idx < range.y) {
+            int32_t g_id = gaussian_ids_sorted[idx];
+            id_batch[tr] = g_id;
+            const float3 pos = positions[g_id];
+            const float opac = opacities[g_id];
+            const float2 aniso = anisotropies[g_id];
+            const float3 color = colors[g_id];
+            const float3 v0 = axes_u[g_id];
+            const float3 v1 = axes_v[g_id];
+            position_batch[tr] = {pos.x, pos.y, pos.z};
+            axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
+            color_batch[tr] = {color.x, color.y, color.z};
+            opacity_batch[tr] = {aniso.x, aniso.y, opac};
+        }
+        // wait for other threads to collect the gaussians in batch
+        block.sync();
+
+        // process gaussians in the current batch for this pixel
+        int batch_size = min(block_size, range.y - batch_start);
+        for (int t = 0; (t < batch_size) && !done; ++t) {
+            glm::vec3 pos = position_batch[t];
+            glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
+            float opac = opacity_batch[t].z;
+            glm::mat2x3 axis_uv = axes_uv_batch[t];
+
+            glm::vec3 poi;
+            glm::vec2 uv;
+            // if (!get_intersection(pos, axis_uv, pos_2d, poi, uv));
+            //     continue;
+            get_intersection(pos, axis_uv, pos_2d, poi, uv);
+            if (glm::length(uv) > visibility_kernel_radius())
+                continue;
+            float alpha;
+            if (!get_alpha(uv, opac, aniso, alpha))
+                continue;
+
+            const float next_T = T * (1.f - alpha);
+
+            glm::vec3 color_0 = color_batch[t];
+            glm::vec3 color = color_0;
+
+            const float vis = alpha * T;
+            const float depth = poi.z;
+            const glm::vec2 g_i = *(glm::vec2*)&depth_grads[id_batch[t]];
+
+            pix_out.x = pix_out.x + color.x * vis;
+            pix_out.y = pix_out.y + color.y * vis;
+            pix_out.z = pix_out.z + color.z * vis;
+            {  // depth regularization
+                float pairwise_l1 = vis*depth * vis_sum - vis * depth_sum;  // requires pos.z for depth
+                float pairwise_l2 = vis * (vis_sum*depth*depth + depth_squared_sum - 2.0f*depth*depth_sum);
+                reg_depth_p += pairwise_l2;
+            }
+            vis_sum += vis;
+            depth_sum += vis*depth;
+            depth_squared_sum += vis*depth*depth;
+            g_sum.x = g_sum.x + vis * g_i.x;
+            g_sum.y = g_sum.y + vis * g_i.y;
+
+            T = next_T;
+            cur_idx = batch_start + t;
+            if (T <= 1e-3f) {
+                done = true;
+                break;
+            }
+        }
+    }
+
+    if (inside) {
+        final_index[pix_id] = cur_idx;
+        out_alpha[pix_id] = 1.0f - T;
+        out_img[pix_id] = pix_out;
+        out_depth[pix_id] = { g_sum.x, g_sum.y, depth_sum, depth_squared_sum };
+        out_depth_reg[pix_id] = reg_depth_p;
+    }
+}
+
+
+__global__ void rasterize_simplified_backward_kernel(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float3* __restrict__ colors,
+    const float* __restrict__ opacities,
+    const float2* __restrict__ anisotropies,
+    const float2* __restrict__ depth_grads,
+    const int* __restrict__ final_index,
+    const float* __restrict__ output_alpha,
+    const float4* __restrict__ output_depth,
+    const float* __restrict__ v_output_alpha,
+    const float3* __restrict__ v_output_img,
+    const float4* __restrict__ v_output_depth,
+    const float* __restrict__ v_output_depth_reg,
+    float3* __restrict__ v_positions,
+    float2* __restrict__ v_positions_xy_abs,
+    float3* __restrict__ v_axes_u,
+    float3* __restrict__ v_axes_v,
+    float3* __restrict__ v_colors,
+    float* __restrict__ v_opacities,
+    float2* __restrict__ v_anisotropies,
+    float2* __restrict__ v_depth_grad
+) {
+    auto block = cg::this_thread_block();
+    int32_t tile_id =
+        block.group_index().y * tile_bounds.x + block.group_index().x;
+    unsigned i =
+        block.group_index().y * block.group_dim().y + block.thread_index().y;
+    unsigned j =
+        block.group_index().x * block.group_dim().x + block.thread_index().x;
+
+    const float fx = intrins.x;
+    const float fy = intrins.y;
+    const float cx = intrins.z;
+    const float cy = intrins.w;
+    glm::vec2 pos_screen = { (float)j + 0.5f, (float)i + 0.5f };
+    glm::vec2 pos_2d = { (pos_screen.x-cx)/fx, (pos_screen.y-cy)/fy };
+    // clamp this value to the last pixel
+    const int32_t pix_id = min(i * img_size.x + j, img_size.x * img_size.y - 1);
+
+    // keep not rasterizing threads around for reading data
+    const bool inside = (i < img_size.y && j < img_size.x);
+
+    // have all threads in tile process the same gaussians in batches
+    // first collect gaussians between range.x and range.y in batches
+    // which gaussians to look through in this tile
+    const int2 range = tile_bins[tile_id];
+    const int block_size = block.size();
+    const int num_batches = (range.y - range.x + block_size - 1) / block_size;
+
+    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 color_batch[MAX_BLOCK_SIZE];
+    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
+    // __shared__ glm::vec2 depth_grad_batch[MAX_BLOCK_SIZE];
+
+    // df/d_out for this pixel
+    const float3 v_out = v_output_img[pix_id];
+    const float4 v_out_depth = v_output_depth[pix_id];
+    const float v_out_alpha = v_output_alpha[pix_id];
+    const float v_reg_depth_p = v_output_depth_reg[pix_id];
+    const glm::vec2 v_g_sum = {v_out_depth.x, v_out_depth.y };
+    const float v_depth_sum = v_out_depth.z;
+    const float v_depth_squared_sum = v_out_depth.w;
+
+    // this is the T AFTER the last gaussian in this pixel
+    float T_final = 1.0f - output_alpha[pix_id];
+    float T = T_final;
+    // index of last gaussian to contribute to this pixel
+    const int bin_final = inside? final_index[pix_id] : 0;
+
+    // collect and process batches of gaussians
+    // each thread loads one gaussian at a time before rasterizing
+    const int tr = block.thread_rank();
+
+    const float vis_sum_final = 1.0f - T_final;
+    const float depth_sum_final = output_depth[pix_id].z;
+    const float depth_squared_sum_final = output_depth[pix_id].w;
+    float vis_sum = vis_sum_final;
+
+    float3 buffer = {0.f, 0.f, 0.f};
+    float4 buffer_depth = {0.f, 0.f, 0.f, 0.f};  // gx, gy, depth, depth^2
+    float buffer_depth_reg = 0.f;
+
+    float v_sum_vis = v_out_alpha;
+
+    // gradient
+    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+    const int warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>());
+    T = T_final;
+    for (int b = 0; b < num_batches; ++b) {
+        // resync all threads before writing next batch of shared mem
+        block.sync();
+
+        // each thread fetch 1 gaussian from back to front
+        // 0 index will be furthest back in batch
+        // index of gaussian to load
+        // batch end is the index of the last gaussian in the batch
+        const int batch_end = range.y - 1 - block_size * b;
+        int batch_size = min(block_size, batch_end + 1 - range.x);
+        const int idx = batch_end - tr;
+        if (idx >= range.x) {
+            int32_t g_id = gaussian_ids_sorted[idx];
+            id_batch[tr] = g_id;
+            const float3 pos = positions[g_id];
+            const float opac = opacities[g_id];
+            const float2 aniso = anisotropies[g_id];
+            const float3 color = colors[g_id];
+            const float3 v0 = axes_u[g_id];
+            const float3 v1 = axes_v[g_id];
+            // const float2 depth_grad = depth_grads[g_id];
+            position_batch[tr] = {pos.x, pos.y, pos.z};
+            axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
+            color_batch[tr] = {color.x, color.y, color.z};
+            opacity_batch[tr] = {aniso.x, aniso.y, opac};
+            // depth_grad_batch[tr] = {depth_grad.x, depth_grad.y};
+        }
+
+        // wait for other threads to collect the gaussians in batch
+        block.sync();
+
+        // process gaussians in the current batch for this pixel
+        // 0 index is the furthest back gaussian in the batch
+        for (int t = max(0,batch_end - warp_bin_final); t < batch_size; ++t) {
+            int valid = inside;
+            if (batch_end - t > bin_final) {
+                valid = 0;
+            }
+
+            glm::vec3 pos = position_batch[t];
+            glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
+            float opac = opacity_batch[t].z;
+            glm::mat2x3 axis_uv = axes_uv_batch[t];
+
+            glm::vec3 poi;
+            glm::vec2 uv;
+            if(valid){
+                get_intersection(pos, axis_uv, pos_2d, poi, uv);
+                if (glm::length(uv) > visibility_kernel_radius())
+                    valid = 0;
+            }
+            float alpha;
+            if (valid){
+                if (!get_alpha(uv, opac, aniso, alpha))
+                    valid = 0;
+            }
+            if(!warp.any(valid)){
+                continue;
+            }
+
+            glm::vec3 v_position_local = {0.f, 0.f, 0.f};
+            glm::vec2 v_position_xy_abs_local = {0.f, 0.f};
+            glm::vec3 v_axis_u_local = {0.f, 0.f, 0.f};
+            glm::vec3 v_axis_v_local = {0.f, 0.f, 0.f};
+            glm::vec3 v_color_local = {0.f, 0.f, 0.f};
+            glm::vec2 v_depth_grad_local = {0.f, 0.f};
+            float v_opacity_local = 0.f;
+            glm::vec2 v_anisotropy_local = {0.f, 0.f};
+            //initialize everything to 0, only set if the lane is valid
+            if(valid){
+                // compute the current T for this gaussian
+                const float ra = 1.f / (1.f - alpha);
+                const float next_T = T * ra;
+                const float vis = alpha * next_T;
+
+                // update accumulation
+                v_depth_grad_local.x += vis * v_g_sum.x;
+                v_depth_grad_local.y += vis * v_g_sum.y;
+                glm::vec3 v_poi = {0.f, 0.f, 0.f};
+                const float depth = poi.z;
+                v_poi.z += vis * v_depth_sum;
+                v_poi.z += vis * 2.0f*depth * v_depth_squared_sum;
+
+                // update depth regularizer
+                const glm::vec2 depth_grad = *(glm::vec2*)&depth_grads[id_batch[t]];
+                float vis_sum_next = vis_sum - vis;
+                // pairwise L2
+                v_poi.z += v_reg_depth_p * vis * 2.0f * (
+                    vis_sum_final * depth - depth_sum_final);
+                float reg_depth_i =
+                    vis_sum_final*depth*depth + depth_squared_sum_final
+                    - 2.0f*depth*depth_sum_final;
+
+                // update color
+                glm::vec3 v_color_1 = {vis * v_out.x, vis * v_out.y, vis * v_out.z};
+                const glm::vec3 opacity = opacity_batch[t];
+                const glm::vec3 color_0 = color_batch[t];
+                glm::vec3 color_1 = color_0;
+                v_color_local = v_color_1;
+
+                float v_alpha = 0.0f;
+                // contribution from this pixel
+                v_alpha += (color_1.x * T - buffer.x) * ra * v_out.x;
+                v_alpha += (color_1.y * T - buffer.y) * ra * v_out.y;
+                v_alpha += (color_1.z * T - buffer.z) * ra * v_out.z;
+                v_alpha += T_final * ra * v_out_alpha;
+                // v_alpha += -T_final * ra * background.x * v_out.x;
+                // v_alpha += -T_final * ra * background.y * v_out.y;
+                // v_alpha += -T_final * ra * background.z * v_out.z;
+                float v_alpha_color_only = v_alpha;
+                v_alpha += (depth_grad.x * T - buffer_depth.x) * ra * v_g_sum.x;
+                v_alpha += (depth_grad.y * T - buffer_depth.y) * ra * v_g_sum.y;
+                v_alpha += (depth * T - buffer_depth.z) * ra * v_depth_sum;
+                v_alpha += (depth*depth * T - buffer_depth.w) * ra * v_depth_squared_sum;
+                v_alpha += (reg_depth_i * T - buffer_depth_reg) * ra * v_reg_depth_p;
+
+                // update the running sum
+                buffer.x += color_1.x * vis;
+                buffer.y += color_1.y * vis;
+                buffer.z += color_1.z * vis;
+                buffer_depth.x += depth_grad.x * vis;
+                buffer_depth.y += depth_grad.y * vis;
+                buffer_depth.z += depth * vis;
+                buffer_depth.w += depth*depth * vis;
+                buffer_depth_reg += reg_depth_i * vis;
+
+                // grad
+                glm::vec2 v_uv;
+                get_alpha_vjp(
+                    uv, opacity.z, glm::vec2(opacity),
+                    v_alpha,
+                    v_uv, v_opacity_local, v_anisotropy_local
+                );
+                glm::mat2x3 v_axis_uv;
+                glm::vec3 v_position_local_temp;
+                get_intersection_vjp(
+                    pos, axis_uv, pos_2d,
+                    v_poi, v_uv,
+                    v_position_local_temp, v_axis_uv
+                );
+                v_position_local += v_position_local_temp;
+                v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local));
+                v_axis_u_local = v_axis_uv[0];
+                v_axis_v_local = v_axis_uv[1];
+
+                // next loop
+                T = next_T;
+                vis_sum = vis_sum_next;
+            }
+            warpSum3(v_position_local, warp);
+            warpSum2(v_position_xy_abs_local, warp);
+            warpSum3(v_axis_u_local, warp);
+            warpSum3(v_axis_v_local, warp);
+            warpSum3(v_color_local, warp);
+            warpSum(v_opacity_local, warp);
+            warpSum2(v_anisotropy_local, warp);
+            warpSum2(v_depth_grad_local, warp);
+            if (warp.thread_rank() == 0) {
+                int32_t g = id_batch[t];
+
+                float* v_position_ptr = (float*)(v_positions);
+                atomicAdd(v_position_ptr + 3*g + 0, v_position_local.x);
+                atomicAdd(v_position_ptr + 3*g + 1, v_position_local.y);
+                atomicAdd(v_position_ptr + 3*g + 2, v_position_local.z);
+                float* v_positions_xy_abs_ptr = (float*)(v_positions_xy_abs);
+                atomicAdd(v_positions_xy_abs_ptr + 2*g + 0, v_position_xy_abs_local.x);
+                atomicAdd(v_positions_xy_abs_ptr + 2*g + 1, v_position_xy_abs_local.y);
+
+                float* v_axis_u_ptr = (float*)(v_axes_u);
+                atomicAdd(v_axis_u_ptr + 3*g + 0, v_axis_u_local.x);
+                atomicAdd(v_axis_u_ptr + 3*g + 1, v_axis_u_local.y);
+                atomicAdd(v_axis_u_ptr + 3*g + 2, v_axis_u_local.z);
+                float* v_axis_v_ptr = (float*)(v_axes_v);
+                atomicAdd(v_axis_v_ptr + 3*g + 0, v_axis_v_local.x);
+                atomicAdd(v_axis_v_ptr + 3*g + 1, v_axis_v_local.y);
+                atomicAdd(v_axis_v_ptr + 3*g + 2, v_axis_v_local.z);
+                
+                float* v_color_ptr = (float*)(v_colors);
+                atomicAdd(v_color_ptr + 3*g + 0, v_color_local.x);
+                atomicAdd(v_color_ptr + 3*g + 1, v_color_local.y);
+                atomicAdd(v_color_ptr + 3*g + 2, v_color_local.z);
+
+                atomicAdd(v_opacities + g, v_opacity_local);
+                float* v_anisotropy_ptr = (float*)(v_anisotropies);
+                atomicAdd(v_anisotropy_ptr + 2*g + 0, v_anisotropy_local.x);
+                atomicAdd(v_anisotropy_ptr + 2*g + 1, v_anisotropy_local.y);
+
+                float* v_depth_grad_ptr = (float*)(v_depth_grad);
+                atomicAdd(v_depth_grad_ptr + 2*g + 0, v_depth_grad_local.x);
+                atomicAdd(v_depth_grad_ptr + 2*g + 1, v_depth_grad_local.y);
+            }
+        }
+    }
+
+}
+
+
+
 
 __global__ void render_background_sh_forward_kernel(
     const dim3 tile_bounds,

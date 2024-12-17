@@ -599,7 +599,7 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
         anisotropies_bins, anisotropies_q = quantize_tensor('aniso', anisotropies, 8*use_anisotropy)
         opacities_bins, opacities_q = quantize_tensor('opacs', opacities, 6)
         features_dc_bins, features_dc_q = quantize_tensor('color', features_dc, 6)
-        features_ch_bins, features_ch_q = quantize_tensor('ch', features_ch, 4, 100)
+        features_ch_bins, features_ch_q = quantize_tensor('ch', features_ch, bit_ch, 100)
         features_sh_bins, features_sh_q = quantize_tensor('sh', features_sh, bit_sh, 100)
     time1 = perf_counter()
     print()
@@ -641,7 +641,7 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
 
     print("Packing harmonics...")
     componentViews, componentLength = component_view_psa([
-            { "key": "features_ch", "type": f"quat{3*num_ch}", "bitLength": 3*num_ch*4, "quatBufferView": 6 },
+            { "key": "features_ch", "type": f"quat{3*num_ch}", "bitLength": 3*num_ch*bit_ch, "quatBufferView": 6 },
     ] * (num_ch > 0) + [
             { "key": "features_sh", "type": f"quat{3*num_sh}", "bitLength": 3*num_sh*bit_sh, "quatBufferView": 7 },
     ] * (num_sh > 0))
@@ -731,10 +731,12 @@ if __name__ == "__main__":
     parser.add_argument("--ncull", "-cn", default="1", help="Number of cull iterations.")
     parser.add_argument("--exposure", "-e", default="1.0", help="Relative exposure.")
     parser.add_argument("--rotate", "-r", default="0", help="Whether to rotate the scene to align with axis.")
-    parser.add_argument("--bit_sh", "-bsh", default="3", help="Bits for each SH coefficients.")
+    parser.add_argument("--bit_sh", "-bsh", default="3", help="Bits for each SH coefficient.")
+    parser.add_argument("--bit_ch", "-bch", default="4", help="Bits for each CH coefficient.")
     args = parser.parse_args()
 
     bit_sh = int(args.bit_sh)
+    bit_ch = int(args.bit_ch)
 
     meta = {
         'argv': __import__('sys').argv,
