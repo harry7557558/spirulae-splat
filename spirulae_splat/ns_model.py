@@ -107,7 +107,7 @@ def resize_image(image: torch.Tensor, d: int):
     import torch.nn.functional as tf
 
     weight = (1.0 / (d * d)) * torch.ones((1, 1, d, d), dtype=torch.float32, device=image.device)
-    return tf.conv2d(image.permute(2, 0, 1)[:, None, ...], weight, stride=d).squeeze(1).permute(1, 2, 0)
+    return tf.conv2d(image.float().permute(2, 0, 1)[:, None, ...], weight, stride=d).squeeze(1).permute(1, 2, 0).to(image)
 
 
 class SaturateKeepGradient(torch.autograd.Function):
@@ -167,7 +167,7 @@ class SpirulaeModelConfig(ModelConfig):
     """threshold of scale for culling huge gaussians"""
     cull_anisotropy_thresh: float = np.inf
     """threshold of quotient of scale for culling long thin gaussians"""
-    cull_grad_thresh: float = 0.0003  # 0.0003 | 0.0001
+    cull_grad_thresh: float = 0.0001  # 0.0003 | 0.0001
     """threshold for culling gaussians with low visibility"""
     continue_cull_post_densification: bool = True
     """If True, continue to cull gaussians post refinement"""
@@ -235,6 +235,8 @@ class SpirulaeModelConfig(ModelConfig):
         log_affine: log(gt) ~ A * log(pred) + b, with 3x3 matrix A and vec3 b
        Additional coefficients (k,A,b) are optimized online using linear least squares
     """
+    adaptive_exposure_start_iter: int = 1000
+    """Start adaptive exposure at this number of steps"""
 
     # regularization
     use_scale_regularization: bool = True
@@ -269,6 +271,10 @@ class SpirulaeModelConfig(ModelConfig):
     """Make sure image look right in auto exposure mode, match mean splat color with mean image color"""
     exposure_reg_image: float = 0.1
     """Between 0 and 1; For exposure regularization, include this fraction of L1 loss between GT image and image before exposure adjustment"""
+    exposure_reg_param: float = 0.002
+    """Make sure image look right in auto exposure mode,
+       Use an L2 cost to match exposure parameter to the parameter at no exposure adjustment;
+       (may be summed/averaged across a batch)"""
 
 
 class SpirulaeModel(Model):
@@ -496,87 +502,6 @@ class SpirulaeModel(Model):
 
         # Exclude the point itself from the result and return
         return distances[:, 1:].astype(np.float32), indices[:, 1:].astype(np.float32)
-
-    def remove_from_optim(self, optimizer, deleted_mask, new_params):
-        """removes the deleted_mask from the optimizer provided"""
-        assert len(new_params) == 1
-        assert isinstance(optimizer, torch.optim.Adam), "Only works with Adam"
-
-        param = optimizer.param_groups[0]["params"][0]
-        param_state = optimizer.state[param]
-        del optimizer.state[param]
-
-        # Modify the state directly without deleting and reassigning.
-        if "exp_avg" in param_state:
-            param_state["exp_avg"] = param_state["exp_avg"][~deleted_mask]
-            param_state["exp_avg_sq"] = param_state["exp_avg_sq"][~deleted_mask]
-
-        # Update the parameter in the optimizer's param group.
-        del optimizer.param_groups[0]["params"][0]
-        del optimizer.param_groups[0]["params"]
-        optimizer.param_groups[0]["params"] = new_params
-        optimizer.state[new_params[0]] = param_state
-
-    def remove_from_all_optim(self, optimizers, deleted_mask):
-        param_groups = self.get_gaussian_param_groups()
-        for group, param in param_groups.items():
-            if group not in self.gauss_params:
-                continue
-            self.remove_from_optim(optimizers.optimizers[group], deleted_mask, param)
-        torch.cuda.empty_cache()
-
-    def dup_in_optim(self, optimizer, dup_mask, new_params, n=2):
-        """adds the parameters to the optimizer"""
-        assert isinstance(optimizer, torch.optim.Adam), "Only works with Adam"
-        param = optimizer.param_groups[0]["params"][0]
-        param_state = optimizer.state[param]
-        if "exp_avg" in param_state:
-            repeat_dims = (n,) + tuple(1 for _ in range(param_state["exp_avg"].dim() - 1))
-            param_state["exp_avg"] = torch.cat(
-                [
-                    param_state["exp_avg"],
-                    torch.zeros_like(param_state["exp_avg"][dup_mask.squeeze()]).repeat(*repeat_dims),
-                ],
-                dim=0,
-            )
-            param_state["exp_avg_sq"] = torch.cat(
-                [
-                    param_state["exp_avg_sq"],
-                    torch.zeros_like(param_state["exp_avg_sq"][dup_mask.squeeze()]).repeat(*repeat_dims),
-                ],
-                dim=0,
-            )
-        del optimizer.state[param]
-        optimizer.state[new_params[0]] = param_state
-        optimizer.param_groups[0]["params"] = new_params
-        del param
-
-    def dup_in_all_optim(self, optimizers, dup_mask, n):
-        param_groups = self.get_gaussian_param_groups()
-        for group, param in param_groups.items():
-            if group not in self.gauss_params:
-                continue
-            self.dup_in_optim(optimizers.optimizers[group], dup_mask, param, n)
-
-    def reset_optim(self, optimizer, sampled_idxs):
-        """removes the deleted_mask from the optimizer provided"""
-        assert isinstance(optimizer, torch.optim.Adam), "Only works with Adam"
-
-        param = optimizer.param_groups[0]["params"][0]
-        param_state = optimizer.state[param]
-        del optimizer.state[param]
-
-        if "exp_avg" in param_state:
-            param_state["exp_avg"][sampled_idxs] = 0.0
-            param_state["exp_avg_sq"][sampled_idxs] = 0.0
-
-    def reset_all_optim(self, optimizers, sampled_idxs):
-        param_groups = self.get_gaussian_param_groups()
-        for group, param in param_groups.items():
-            if group not in self.gauss_params:
-                continue
-            self.reset_optim(optimizers.optimizers[group], sampled_idxs)
-        torch.cuda.empty_cache()
 
     def set_crop(self, crop_box: Optional[OrientedBox]):
         self.crop_box = crop_box
@@ -908,7 +833,10 @@ class SpirulaeModel(Model):
                 bounds, num_tiles_hit,
                 intrins, H, W, BLOCK_WIDTH,
             )
-            depth_im_ref = depth_im[..., 2:3] / (alpha+1e-6)
+            depth_im_ref = torch.where(
+                alpha > 0.0, depth_im[..., 2:3] / alpha,
+                torch.amax(depth_im[..., 2:3]).detach()
+            ).contiguous()
             depth_normal_grad_ref_normalized = get_2d_normal_from_depth(depth_im_ref)
             reg_normal = torch.zeros_like(reg_depth)
             timerr.mark("render")  # us
@@ -960,6 +888,7 @@ class SpirulaeModel(Model):
         timerr.mark("post")  # 300us-500us
 
         # blend with background
+        background = self.background_color.reshape((1, 1, 3))
         if self.config.background_sh_degree > 0 or True:
             background = self.get_background_image(camera)
             rgb = rgb + (1.0 - alpha) * background
@@ -968,8 +897,8 @@ class SpirulaeModel(Model):
         if not self.training:
             rgb = torch.clip(rgb, 0.0, 1.0)
         else:
-            # rgb = torch.clip(rgb, 0.0, None)
-            rgb = saturate_keep_gradient(rgb, 0.0, None)
+            rgb = torch.clip(rgb, 0.0, None)
+            # rgb = saturate_keep_gradient(rgb, 0.0, None)
 
         timerr.end("bkg")  # 250us-450us -> 1500us-4200us
 
@@ -986,7 +915,7 @@ class SpirulaeModel(Model):
             "alpha": alpha,
             "depth_grad_1": depth_grad_im_normalized,
             "depth_grad_2": depth_normal_grad_ref_normalized,
-            "background": self.background_color
+            "background": background,
         }  # type: ignore
 
     def get_gt_img(self, image: torch.Tensor):
@@ -1044,29 +973,30 @@ class SpirulaeModel(Model):
         gt_img = self.composite_with_background(gt_img_rgba, outputs["background"])
         pred_img = outputs["rgb"]
 
+        # alpha channel for bounded objects - apply a cost on rendered alpha
         alpha_loss = 0.0
         if gt_img_rgba.shape[2] == 4:
             alpha = gt_img_rgba[..., -1].unsqueeze(-1)
             alpha_loss = alpha_loss + torch.relu(outputs['alpha']-alpha).mean()
             print(alpha_loss.item())
 
-        # Set masked part of both ground-truth and rendered image to black.
-        # This is a little bit sketchy for the SSIM loss.
+        # separate mask for dynamic objects, text, etc. - simply don't consider it when evaluating loss
         if "mask" in batch:
             # batch["mask"] : [H, W, 1]
             mask = self._downscale_if_required(batch["mask"])
-            mask = mask.to(self.device)
+            mask = mask.float().to(self.device)
             assert mask.shape[:2] == gt_img.shape[:2] == pred_img.shape[:2]
-            gt_img = gt_img * mask
-            pred_img = pred_img * mask
-            # compute alpha loss
-            alpha_loss = alpha_loss + torch.relu(outputs['alpha']-mask).mean()
+            # can be little bit sketchy for the SSIM loss
+            gt_img = torch.lerp(outputs["background"], gt_img, mask)
+            pred_img = torch.lerp(outputs["background"], pred_img, mask)
         timerl.mark("alpha")  # ~100us
 
         # handle exposure
         exposure_reg = 0.0
+        exposure_param_reg = 0.0
         pred_img_e = pred_img
-        if self.config.adaptive_exposure_mode is not None:
+        if self.config.adaptive_exposure_mode is not None and \
+            self.step > self.config.adaptive_exposure_start_iter:
             eeps = 0.5/255.0
 
             # gt ~ k * pred
@@ -1074,6 +1004,7 @@ class SpirulaeModel(Model):
                 k = (gt_img.mean()+eeps) / (pred_img.mean()+eeps)
                 pred_img_e = k * (pred_img+eeps) - eeps
                 # print(k.item())
+                exposure_param_reg = (k-1.0)**2
 
             # log(gt) ~ k * log(pred) + b
             elif self.config.adaptive_exposure_mode == "log_linear":
@@ -1085,6 +1016,7 @@ class SpirulaeModel(Model):
                 b = y_mean - m * x_mean
                 pred_img_e = torch.exp(m * x + b) - eeps
                 # print(m.item(), b.item())
+                exposure_param_reg = (m-1.0)**2 + b**2
 
             # gt ~ k * pred, per channel
             if self.config.adaptive_exposure_mode == "channel":
@@ -1093,6 +1025,7 @@ class SpirulaeModel(Model):
                 k = (y.mean(0, True)+eeps) / (x.mean(0, True)+eeps)
                 pred_img_e = k * (pred_img+eeps) - eeps
                 # print(k.detach())
+                exposure_param_reg = torch.mean((k-1.0)**2)
 
             # log(gt) ~ k * log(pred) + b, per channel
             if self.config.adaptive_exposure_mode == "log_channel":
@@ -1104,6 +1037,7 @@ class SpirulaeModel(Model):
                 b = y_mean - m * x_mean
                 pred_img_e = torch.exp(m * x + b).reshape(pred_img_e.shape) - eeps
                 # print(m.detach(), b.detach())
+                exposure_param_reg = torch.mean((m-1.0)**2 + b**2)
 
             # gt ~ A * pred
             elif self.config.adaptive_exposure_mode == "affine":
@@ -1116,6 +1050,7 @@ class SpirulaeModel(Model):
                     pass
                 else:
                     pred_img_e = (x @ A).reshape(pred_img.shape) - eeps
+                    exposure_param_reg = torch.mean((A-torch.eye(3).to(A))**2)
 
             # log(gt) ~ A * log(pred) + b
             elif self.config.adaptive_exposure_mode == "log_affine":
@@ -1134,6 +1069,7 @@ class SpirulaeModel(Model):
                 else:
                     B = mean_y - mean_x @ A
                     pred_img_e = torch.exp(x @ A + B).reshape(pred_img.shape) - eeps
+                    exposure_param_reg = 0.5*(torch.mean((A-torch.eye(3).to(A))**2) + torch.mean(B**2))
             
             timerl.mark("exposure")  # 200us-500us
 
@@ -1173,8 +1109,12 @@ class SpirulaeModel(Model):
                 timerl.mark("exposure_reg")
 
         # image loss
-        pred_img_e = saturate_keep_gradient(pred_img_e, 0.0, 1.0)
-        pred_img = saturate_keep_gradient(pred_img, 0.0, 1.0)
+        if False:
+            pred_img_e = saturate_keep_gradient(pred_img_e, 0.0, 1.0)
+            pred_img = saturate_keep_gradient(pred_img, 0.0, 1.0)
+        else:
+            pred_img_e = torch.clip(pred_img_e, 0.0, 1.0)
+            pred_img = torch.clip(pred_img, 0.0, 1.0)
         Ll1_e = torch.abs(gt_img - pred_img_e).mean()
         Ll1 = torch.abs(gt_img - pred_img).mean()
         simloss = 0.0
@@ -1242,6 +1182,7 @@ class SpirulaeModel(Model):
             'mcmc_opacity_reg': mcmc_opacity_reg,
             'mcmc_scale_reg': mcmc_scale_reg,
             "exposure_reg": exposure_reg,
+            "exposure_param_reg": self.config.exposure_reg_param * exposure_param_reg,
         }
         for key, value in loss_dict.items():
             loss_dict[key] = self.config.loss_scale * value

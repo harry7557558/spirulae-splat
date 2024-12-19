@@ -10,8 +10,8 @@ I'm open to bug reports and feature requests via GitHub Issues. You can alternat
 - Use 2D splats instead of 3D, add depth and normal regularization, use ray-splat intersection, as per SIGGRAPH 2024 paper [*2D Gaussian Splatting for Geometrically Accurate Radiance Fields*](https://arxiv.org/abs/2403.17888)
   - Use an interpolation function for median depth to reduce discontinuities and encourage denser gradient
   - For depth regularization, allow blending between two modes: pairwise L2 loss, and L1 loss to rendered depth
-  - For normal regularization, allow blending between two modes: loss between rendered normal and depth gradient, and loss between individual normals and depth gradient
-  - Some regularization modes require two-pass rendering (i.e. one earlier pass for depth), which slows down training. Idea: use cached depth from previous iteration?
+  <!-- - For normal regularization, allow blending between two modes: loss between rendered normal and depth gradient, and loss between individual normals and depth gradient -->
+  - L1 loss to rendered mean depth requires two-pass rendering (i.e. one earlier pass for depth) that is 1.3 times as slow to train overall. The code automatically selects one-pass and two-pass rendering based on configuration.
   <!-- - For normal regularization, singularity is eliminated by replacing division by depth with multiplication, which perserves the unit normal -->
 
 - Use polynomial spline kernel splats instead of Gaussians, as inspired by [kernels used in computational physics](https://en.wikipedia.org/wiki/Smoothed-particle_hydrodynamics)
