@@ -444,7 +444,7 @@ def project_gaussians(
     assert (tile_max >= tile_min).all()
     tile_area = (tile_max[...,0]-tile_min[...,0]) * (tile_max[...,1]-tile_min[...,1])
     mask = (tile_area > 0) & (~is_close) & valid
-    depth_grads = projected_depth_grad(p_view, R, fx, fy)
+    # depth_grads = projected_depth_grad(p_view, R, fx, fy)
 
     num_tiles_hit = tile_area
 
@@ -454,11 +454,11 @@ def project_gaussians(
     positions = torch.where(~mask[..., None], 0, p_view)
     axes_u = torch.where(~mask[..., None], 0, V0)
     axes_v = torch.where(~mask[..., None], 0, V1)
-    depth_grads = torch.where(~mask[..., None], 0, depth_grads)
+    # depth_grads = torch.where(~mask[..., None], 0, depth_grads)
 
     return (
         positions, axes_u, axes_v,
-        depth_grads,
+        # depth_grads,
         bounds, num_tiles_hit,
     )
 
@@ -770,8 +770,7 @@ def rasterize_gaussians(
     ch_coeffs: Float[Tensor, "*batch dim_ch 3"],
     opacities: Float[Tensor, "*batch 1"],
     anisotropies: Float[Tensor, "*batch 2"],
-    depth_grads: Float[Tensor, "*batch 2"],
-    depth_ref_im: Float[Tensor, "*batch 2"],
+    depth_ref_im: Float[Tensor, "h w 1"],
     background: Optional[Float[Tensor, "channels"]],
     depth_reg_pairwise_factor: float,
     bounds: Int[Tensor, "*batch 4"],
@@ -815,9 +814,9 @@ def rasterize_gaussians(
     final_idx = torch.zeros((img_size[1], img_size[0]), **int32_param)
     out_alpha = torch.zeros((img_size[1], img_size[0], 1), **float32_param)
     out_img = torch.zeros((img_size[1], img_size[0], 3), **float32_param)
-    out_depth_grad = torch.zeros((img_size[1], img_size[0], 4), **float32_param)
+    out_depth = torch.zeros((img_size[1], img_size[0], 2), **float32_param)
+    out_normal = torch.zeros((img_size[1], img_size[0], 3), **float32_param)
     out_reg_depth = torch.zeros((img_size[1], img_size[0], 1), **float32_param)
-    out_reg_normal = torch.zeros((img_size[1], img_size[0], 1), **float32_param)
     float32_param['requires_grad'] = True
 
     fx, fy, cx, cy = intrins
@@ -834,14 +833,13 @@ def rasterize_gaussians(
 
             T = torch.ones(1, **float32_param)
             cur_idx = 0
-            g_sum = torch.zeros(2, **float32_param)
             pix_out = torch.zeros(3, **float32_param)
             vis_sum = torch.zeros(1, **float32_param)
             depth_sum = torch.zeros(1, **float32_param)
             depth_squared_sum = torch.zeros(1, **float32_param)
-            depth_normal_ref = depth_ref_im[i, j][:2]
-            depth_ref = depth_ref_im[i, j][2]
-            reg_depth_p, reg_depth_i, reg_normal = 0.0, 0.0, 0.0
+            normal_sum = torch.zeros(3, **float32_param)
+            depth_ref = depth_ref_im[i, j]
+            reg_depth_p, reg_depth_i = 0.0, 0.0
 
             for idx in range(tile_bin_start, tile_bin_end):
                 gid = gaussian_ids_sorted[idx]
@@ -873,8 +871,6 @@ def rasterize_gaussians(
                 vis = alpha * T
                 # depth = pos[2]
                 depth = poi[2]
-                g_i = depth_grads[gid]
-                n_i = g_i / (torch.norm(g_i)+1e-6)
 
                 pix_out = pix_out + vis * color
                 pairwise_l1 = vis*depth * vis_sum - vis * depth_sum
@@ -883,11 +879,13 @@ def rasterize_gaussians(
                 intersect_l2 = vis * (depth-depth_ref) * (depth-depth_ref)
                 reg_depth_p = reg_depth_p + pairwise_l2
                 reg_depth_i = reg_depth_i + intersect_l1
-                reg_normal = reg_normal + vis * (1.0 - torch.dot(n_i, depth_normal_ref))
                 vis_sum = vis_sum + vis
                 depth_sum = depth_sum + vis*depth
                 depth_squared_sum = depth_squared_sum + vis*depth**2
-                g_sum = g_sum + vis * g_i
+
+                normal = torch.cross(axis_uv[0], axis_uv[1]) / (axis_uv[0].norm() * axis_uv[1].norm())
+                normal = -normal * torch.sign(torch.dot(poi, normal))
+                normal_sum = normal_sum + vis * normal
 
                 T = next_T
                 cur_idx = idx
@@ -898,14 +896,13 @@ def rasterize_gaussians(
             out_alpha[i, j] = 1.0-T
             # print(pix_out, T.item(), background)
             out_img[i, j] = pix_out + T * background
-            out_depth_grad[i, j] = torch.concat((g_sum, depth_sum, depth_squared_sum))
+            out_depth[i, j] = torch.concat(( depth_sum, depth_squared_sum))
+            out_normal[i, j] = normal_sum
             out_reg_depth[i, j] = reg_depth_i + (reg_depth_p-reg_depth_i) * depth_reg_pairwise_factor
-            out_reg_normal[i, j] = reg_normal
 
     return (
-        out_img, out_depth_grad,
-        out_reg_depth, out_reg_normal,
-        out_alpha, final_idx
+        out_img, out_alpha, out_depth, out_normal,
+        out_reg_depth, final_idx
     )
 
 
@@ -916,7 +913,6 @@ def rasterize_gaussians_simplified(
     colors: Float[Tensor, "*batch channels"],
     opacities: Float[Tensor, "*batch 1"],
     anisotropies: Float[Tensor, "*batch 2"],
-    depth_grads: Float[Tensor, "*batch 2"],
     bounds: Int[Tensor, "*batch 4"],
     num_tiles_hit: Int[Tensor, "*batch 1"],
     intrins: Tuple[float, float, float, float],
@@ -956,7 +952,8 @@ def rasterize_gaussians_simplified(
     final_idx = torch.zeros((img_size[1], img_size[0]), **int32_param)
     out_alpha = torch.zeros((img_size[1], img_size[0], 1), **float32_param)
     out_img = torch.zeros((img_size[1], img_size[0], 3), **float32_param)
-    out_depth = torch.zeros((img_size[1], img_size[0], 4), **float32_param)
+    out_depth = torch.zeros((img_size[1], img_size[0], 2), **float32_param)
+    out_normal = torch.zeros((img_size[1], img_size[0], 3), **float32_param)
     out_depth_reg = torch.zeros((img_size[1], img_size[0], 1), **float32_param)
     float32_param['requires_grad'] = True
 
@@ -973,11 +970,11 @@ def rasterize_gaussians_simplified(
 
             T = torch.ones(1, **float32_param)
             cur_idx = 0
-            g_sum = torch.zeros(2, **float32_param)
             pix_out = torch.zeros(3, **float32_param)
             vis_sum = torch.zeros(1, **float32_param)
             depth_sum = torch.zeros(1, **float32_param)
             depth_squared_sum = torch.zeros(1, **float32_param)
+            normal_sum = torch.zeros(3, **float32_param)
             reg_depth_p = 0.0
 
             for idx in range(tile_bin_start, tile_bin_end):
@@ -1001,7 +998,6 @@ def rasterize_gaussians_simplified(
 
                 vis = alpha * T
                 depth = poi[2]
-                g_i = depth_grads[gid]
 
                 pix_out = pix_out + vis * color
                 pairwise_l2 = vis * (vis_sum*depth*depth + depth_squared_sum - 2.0*depth*depth_sum)
@@ -1009,7 +1005,10 @@ def rasterize_gaussians_simplified(
                 vis_sum = vis_sum + vis
                 depth_sum = depth_sum + vis*depth
                 depth_squared_sum = depth_squared_sum + vis*depth**2
-                g_sum = g_sum + vis * g_i
+
+                normal = torch.cross(axis_uv[0], axis_uv[1]) / (axis_uv[0].norm() * axis_uv[1].norm())
+                normal = -normal * torch.sign(torch.dot(poi, normal))
+                normal_sum = normal_sum + vis * normal
 
                 T = next_T
                 cur_idx = idx
@@ -1019,12 +1018,13 @@ def rasterize_gaussians_simplified(
             final_idx[i, j] = cur_idx
             out_alpha[i, j] = 1.0-T
             out_img[i, j] = pix_out
-            out_depth[i, j] = torch.concat((g_sum, depth_sum, depth_squared_sum))
+            out_depth[i, j] = torch.concat((depth_sum, depth_squared_sum))
+            out_normal[i, j] = normal_sum
             out_depth_reg[i, j] = reg_depth_p
 
     return (
         out_img, out_alpha,
-        out_depth, out_depth_reg,
+        out_depth, out_normal, out_depth_reg,
         final_idx
     )
 

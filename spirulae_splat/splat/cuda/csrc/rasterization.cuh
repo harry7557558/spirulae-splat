@@ -122,14 +122,13 @@ __global__ void rasterize_forward_kernel(
     const float* __restrict__ opacities,
     const float2* __restrict__ anisotropies,
     // const float3& __restrict__ background,
-    const float2* __restrict__ depth_grads,
-    const float3* __restrict__ depth_ref_im,
+    const float* __restrict__ depth_ref_im,
     int* __restrict__ final_index,
     float* __restrict__ out_alpha,
     float3* __restrict__ out_img,
-    float4* __restrict__ out_depth_grad,
-    float* __restrict__ out_reg_depth,
-    float* __restrict__ out_reg_normal
+    float2* __restrict__ out_depth,
+    float3* __restrict__ out_normal,
+    float* __restrict__ out_reg_depth
 );
 
 
@@ -152,16 +151,15 @@ __global__ void rasterize_backward_kernel(
     const float* __restrict__ opacities,
     const float2* __restrict__ anisotropies,
     // const float3& __restrict__ background,
-    const float2* __restrict__ depth_grads,
-    const float3* __restrict__ depth_ref_im,
+    const float* __restrict__ depth_ref_im,
     const int* __restrict__ final_index,
     const float* __restrict__ output_alpha,
-    const float4* __restrict__ output_depth_grad,
+    const float2* __restrict__ output_depth,
     const float* __restrict__ v_output_alpha,
     const float3* __restrict__ v_output,
-    const float4* __restrict__ v_output_depth_grad,
+    const float2* __restrict__ v_output_depth,
+    const float3* __restrict__ v_output_normal,
     const float* __restrict__ v_output_reg_depth,
-    const float* __restrict__ v_output_reg_normal,
     float3* __restrict__ v_positions,
     float2* __restrict__ v_positions_xy_abs,
     float3* __restrict__ v_axes_u,
@@ -172,8 +170,7 @@ __global__ void rasterize_backward_kernel(
     float* __restrict__ v_opacities,
     float2* __restrict__ v_anisotropies,
     // float3* __restrict__ v_background,
-    float2* __restrict__ v_depth_grad,
-    float3* __restrict__ v_depth_ref_im
+    float* __restrict__ v_depth_ref_im
 );
 
 
@@ -189,11 +186,11 @@ __global__ void rasterize_simplified_forward_kernel(
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
     const float2* __restrict__ anisotropies,
-    const float2* __restrict__ depth_grads,
     int* __restrict__ final_index,
     float* __restrict__ out_alpha,
     float3* __restrict__ out_img,
-    float4* __restrict__ out_depth,  // rendered { gx, gy, depth, depth^2 }
+    float2* __restrict__ out_depth,  // { depth, depth^2 }
+    float3* __restrict__ out_normal,
     float* __restrict__ out_depth_reg
 );
 
@@ -210,13 +207,13 @@ __global__ void rasterize_simplified_backward_kernel(
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
     const float2* __restrict__ anisotropies,
-    const float2* __restrict__ depth_grads,
     const int* __restrict__ final_index,
     const float* __restrict__ output_alpha,
-    const float4* __restrict__ output_depth,
+    const float2* __restrict__ output_depth,
     const float* __restrict__ v_output_alpha,
     const float3* __restrict__ v_output_img,
-    const float4* __restrict__ v_output_depth,
+    const float2* __restrict__ v_output_depth,
+    const float3* __restrict__ v_output_normal,
     const float* __restrict__ v_output_depth_reg,
     float3* __restrict__ v_positions,
     float2* __restrict__ v_positions_xy_abs,
@@ -224,8 +221,7 @@ __global__ void rasterize_simplified_backward_kernel(
     float3* __restrict__ v_axes_v,
     float3* __restrict__ v_colors,
     float* __restrict__ v_opacities,
-    float2* __restrict__ v_anisotropies,
-    float2* __restrict__ v_depth_grad
+    float2* __restrict__ v_anisotropies
 );
 
 

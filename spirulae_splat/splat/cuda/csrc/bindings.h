@@ -45,8 +45,8 @@ std::tuple<
     torch::Tensor,  // num_tiles_hit, [N]
     torch::Tensor,  // positions, [N, 3]
     torch::Tensor,  // axes_u, [N, 3]
-    torch::Tensor,  // axes_v, [N, 4]
-    torch::Tensor  // depth_gradsm, [N, 2]
+    torch::Tensor  // axes_v, [N, 4]
+    // torch::Tensor  // depth_grads, [N, 2]
 > project_gaussians_forward_tensor(
     const int num_points,
     torch::Tensor &means3d,  // [N, 3]
@@ -82,8 +82,8 @@ std::tuple<
     torch::Tensor &num_tiles_hit,  // [N], int
     torch::Tensor &v_positions,  // [N, 3]
     torch::Tensor &v_axes_u,  // [N, 3]
-    torch::Tensor &v_axes_v,  // [N, 3]
-    torch::Tensor &v_depth_grads  // [N, 2]
+    torch::Tensor &v_axes_v  // [N, 3]
+    // torch::Tensor &v_depth_grads  // [N, 2]
 );
 
 
@@ -245,8 +245,8 @@ std::tuple<
     torch::Tensor,  // out_alpha
     torch::Tensor,  // out_img
     torch::Tensor,  // out_depth
-    torch::Tensor,  // out_reg_depth
-    torch::Tensor  // out_reg_normal
+    torch::Tensor,  // out_normal
+    torch::Tensor  // out_reg_depth
 > rasterize_forward_tensor(
     const std::tuple<int, int, int> tile_bounds,
     const std::tuple<int, int, int> block,
@@ -270,7 +270,6 @@ std::tuple<
     const torch::Tensor &opacities,
     const torch::Tensor &anisotropies,
     // const torch::Tensor &background,
-    const torch::Tensor &depth_grads,
     const torch::Tensor &depth_ref_im
 );
 
@@ -286,7 +285,6 @@ std::tuple<
     torch::Tensor, // v_opacities
     torch::Tensor, // v_anisotropies
     // torch::Tensor, // v_background
-    torch::Tensor, // v_depth_grad
     torch::Tensor  // v_depth_ref_im
 > rasterize_backward_tensor(
     const unsigned img_height,
@@ -311,16 +309,15 @@ std::tuple<
     const torch::Tensor &opacities,
     const torch::Tensor &anisotropies,
     // const torch::Tensor &background,
-    const torch::Tensor &depth_grads,
     const torch::Tensor &depth_ref_im,
     const torch::Tensor &final_idx,
     const torch::Tensor &output_alpha,
-    const torch::Tensor &output_depth_grad,
+    const torch::Tensor &output_depth,
     const torch::Tensor &v_output_alpha,
     const torch::Tensor &v_output,
-    const torch::Tensor &v_output_depth_grad,
-    const torch::Tensor &v_output_reg_depth,
-    const torch::Tensor &v_output_reg_normal
+    const torch::Tensor &v_output_depth,
+    const torch::Tensor &v_output_normal,
+    const torch::Tensor &v_output_reg_depth
 );
 
 
@@ -329,6 +326,7 @@ std::tuple<
     torch::Tensor,  // out_alpha
     torch::Tensor,  // out_img
     torch::Tensor,  // out_depth
+    torch::Tensor,  // out_normal
     torch::Tensor  // out_depth_reg
 > rasterize_simplified_forward_tensor(
     const std::tuple<int, int, int> tile_bounds,
@@ -345,8 +343,7 @@ std::tuple<
     const torch::Tensor &axes_v,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
-    const torch::Tensor &anisotropies,
-    const torch::Tensor &depth_grads
+    const torch::Tensor &anisotropies
 );
 
 
@@ -357,8 +354,7 @@ std::tuple<
     torch::Tensor, // v_axes_v
     torch::Tensor, // v_colors
     torch::Tensor, // v_opacities
-    torch::Tensor, // v_anisotropies
-    torch::Tensor // v_depth_grad
+    torch::Tensor // v_anisotropies
 > rasterize_simplified_backward_tensor(
     const unsigned img_height,
     const unsigned img_width,
@@ -375,13 +371,13 @@ std::tuple<
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
     const torch::Tensor &anisotropies,
-    const torch::Tensor &depth_grads,
     const torch::Tensor &final_idx,
     const torch::Tensor &output_alpha,
     const torch::Tensor &output_depth,
     const torch::Tensor &v_output_alpha,
     const torch::Tensor &v_output_img,
     const torch::Tensor &v_output_depth,
+    const torch::Tensor &v_output_normal,
     const torch::Tensor &v_output_depth_reg
 );
 

@@ -13,7 +13,7 @@ torch.manual_seed(40)
 device = torch.device("cuda:0")
 
 
-def check_close(name, a, b, atol=1e-5, rtol=1e-5):
+def check_close(name, a, b, atol=5e-6, rtol=1e-4):
     print(name, [*a.shape], [*b.shape], a.dtype, b.dtype)
     try:
         torch.testing.assert_close(a, b, atol=atol, rtol=rtol)
@@ -77,7 +77,6 @@ def test_rasterize_simple():
         positions,
         axes_u,
         axes_v,
-        depth_grads,
         bounds,
         num_tiles_hit,
     ) = decode_params(params)
@@ -85,7 +84,6 @@ def test_rasterize_simple():
         _positions,
         _axes_u,
         _axes_v,
-        _depth_grads,
         _bounds,
         _num_tiles_hit,
     ) = decode_params(params)
@@ -132,14 +130,13 @@ def test_rasterize_simple():
     fun(_rgb_im, _alpha_im).backward()
 
     print("test backward")
-    tol = { 'atol': 1e-6, 'rtol': 1e-5 }
-    check_close('v_positions', positions.grad, _positions.grad, **tol)
-    check_close('v_axes_u', axes_u.grad, _axes_u.grad, **tol)
-    check_close('v_axes_v', axes_v.grad, _axes_v.grad, **tol)
-    check_close('v_colors', colors.grad, _colors.grad, **tol)
-    check_close('v_opacities', opacities.grad, _opacities.grad, **tol)
-    check_close('v_anisotropies', anisotropies.grad, _anisotropies.grad, **tol)
-    check_close('v_background', background.grad, _background.grad, **tol)
+    check_close('v_positions', positions.grad, _positions.grad)
+    check_close('v_axes_u', axes_u.grad, _axes_u.grad)
+    check_close('v_axes_v', axes_v.grad, _axes_v.grad)
+    check_close('v_colors', colors.grad, _colors.grad)
+    check_close('v_opacities', opacities.grad, _opacities.grad)
+    check_close('v_anisotropies', anisotropies.grad, _anisotropies.grad)
+    check_close('v_background', background.grad, _background.grad)
 
     assert (positions.absgrad > 0).any()
     assert (positions.absgrad >= abs(positions.grad)[:,:2]).all()

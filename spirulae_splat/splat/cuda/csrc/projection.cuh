@@ -26,8 +26,8 @@ __global__ void project_gaussians_forward_kernel(
     int32_t* __restrict__ num_tiles_hit,
     float3* __restrict__ positions,
     float3* __restrict__ axes_u,
-    float3* __restrict__ axes_v,
-    float2* __restrict__ depth_grads
+    float3* __restrict__ axes_v
+    // float2* __restrict__ depth_grads
 );
 
 
@@ -42,7 +42,7 @@ __global__ void project_gaussians_backward_kernel(
     const float3* __restrict__ v_positions,
     const float3* __restrict__ v_axes_u,
     const float3* __restrict__ v_axes_v,
-    const float2* __restrict__ v_depth_grads,
+    // const float2* __restrict__ v_depth_grads,
     float3* __restrict__ v_means3d,
     float2* __restrict__ v_scales,
     float4* __restrict__ v_quats,

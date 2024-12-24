@@ -10,6 +10,8 @@ from .utils import (
     bin_and_sort_gaussians,
     compute_cumulative_intersects,
     get_tile_bin_edges,
+    depth_to_points,
+    depth_to_normal,
 )
 from .sh import spherical_harmonics
 import warnings

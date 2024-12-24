@@ -3,6 +3,7 @@
 from typing import Tuple
 
 import torch
+from typing import Optional
 from jaxtyping import Float, Int
 from torch import Tensor
 
@@ -154,3 +155,93 @@ def bin_and_sort_gaussians(
     gaussian_ids_sorted = torch.gather(gaussian_ids, 0, sorted_indices)
     tile_bins = get_tile_bin_edges(num_intersects, isect_ids_sorted, tile_bounds)
     return isect_ids, gaussian_ids, isect_ids_sorted, gaussian_ids_sorted, tile_bins
+
+
+def depth_to_points(
+    depths: Tensor, camtoworlds: Optional[Tensor], intrins: Tuple, z_depth: bool = True
+) -> Tensor:
+    """Convert depth maps to 3D points
+
+    Args:
+        depths: Depth maps [..., H, W, 1]
+        camtoworlds: Camera-to-world transformation matrices [..., 4, 4]
+        Ks: Camera intrinsics [..., 3, 3]
+        z_depth: Whether the depth is in z-depth (True) or ray depth (False)
+
+    Returns:
+        points: 3D points in the world coordinate system [..., H, W, 3]
+    """
+    assert depths.shape[-1] == 1, f"Invalid depth shape: {depths.shape}"
+    if camtoworlds is not None:
+        assert camtoworlds.shape[-2:] == (4, 4), f"Invalid viewmats shape: {camtoworlds.shape}"
+
+    device = depths.device
+    height, width = depths.shape[-3:-1]
+
+    x, y = torch.meshgrid(
+        torch.arange(width, device=device) + 0.5,
+        torch.arange(height, device=device) + 0.5,
+        indexing="xy",
+    )  # [H, W]
+
+    fx, fy, cx, cy = intrins
+
+    # camera directions in camera coordinates
+    camera_dirs = torch.stack(
+        [(x - cx) / fx, (y - cy) / fy, torch.ones_like(x)],
+        dim=-1,
+    )  # [..., H, W, 3]
+
+    # ray directions in world coordinates
+    if camtoworlds is not None:
+        directions = torch.einsum(
+            "...ij,...hwj->...hwi", camtoworlds[..., :3, :3], camera_dirs
+        )  # [..., H, W, 3]
+        origins = camtoworlds[..., :3, -1]  # [..., 3]
+    else:
+        directions = camera_dirs
+
+    if not z_depth:
+        directions = torch.nn.functional.normalize(directions, dim=-1)
+
+    if camtoworlds is None:
+        return depths * directions
+    return origins[..., None, None, :] + depths * directions
+
+
+def depth_to_normal(
+    depths: Tensor, camtoworlds: Optional[Tensor], intrins: Tuple, z_depth: bool = True, alpha: Optional[Tensor] = None
+) -> Tensor:
+    """Convert depth maps to surface normals
+
+    Args:
+        depths: Depth maps [..., H, W, 1]
+        camtoworlds: Camera-to-world transformation matrices [..., 4, 4]
+        Ks: Camera intrinsics [..., 3, 3]
+        z_depth: Whether the depth is in z-depth (True) or ray depth (False)
+
+    Returns:
+        normals: Surface normals in the world coordinate system [..., H, W, 3]
+    """
+    points = depth_to_points(depths, camtoworlds, intrins, z_depth=z_depth)  # [..., H, W, 3]
+    dx = torch.cat(
+        [points[..., 2:, 1:-1, :] - points[..., :-2, 1:-1, :]], dim=-3
+    )  # [..., H-2, W-2, 3]
+    dy = torch.cat(
+        [points[..., 1:-1, 2:, :] - points[..., 1:-1, :-2, :]], dim=-2
+    )  # [..., H-2, W-2, 3]
+    normals = torch.nn.functional.normalize(torch.cross(dx, dy, dim=-1), dim=-1)  # [..., H-2, W-2, 3]
+    normals = torch.nn.functional.pad(normals, (0, 0, 1, 1, 1, 1), value=0.0)  # [..., H, W, 3]
+
+    # apply mask
+    if alpha is not None:
+        # normals = normals * (alpha>0).float().reshape((*normals.shape[:2], 1))
+        kernel = torch.tensor([[[
+            [0, 1, 0], [1, 1, 1], [0, 1, 0]
+        ]]], dtype=normals.dtype, device=alpha.device)
+        conv_input = (alpha>0).float().reshape((1, 1, *alpha.shape[:2]))
+        conv_result = torch.nn.functional.conv2d(conv_input, kernel, padding=1)
+        alpha = (conv_result == 5).reshape((*normals.shape[:2], 1))
+        return normals * alpha, alpha
+
+    return normals

@@ -76,7 +76,6 @@ def test_rasterize_depth():
         positions,
         axes_u,
         axes_v,
-        depth_grads,
         bounds,
         num_tiles_hit,
     ) = decode_params(params)
@@ -84,7 +83,6 @@ def test_rasterize_depth():
         _positions,
         _axes_u,
         _axes_v,
-        _depth_grads,
         _bounds,
         _num_tiles_hit,
     ) = decode_params(params)

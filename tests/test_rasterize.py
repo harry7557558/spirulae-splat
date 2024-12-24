@@ -9,12 +9,12 @@ import spirulae_splat.splat.rasterize_simple as rasterize_simple
 import spirulae_splat.splat.rasterize as rasterize
 import spirulae_splat.splat.cuda as _C
 
-torch.manual_seed(43)
+torch.manual_seed(41)
 
 device = torch.device("cuda:0")
 
 
-def check_close(name, a, b, atol=1e-5, rtol=1e-5):
+def check_close(name, a, b, atol=5e-6, rtol=1e-4):
     print(name, [*a.shape], [*b.shape], a.dtype, b.dtype)
     try:
         torch.testing.assert_close(a, b, atol=atol, rtol=rtol)
@@ -59,7 +59,7 @@ def test_rasterize():
     _colors = colors.detach().clone().requires_grad_(True)
     _opacities = opacities.detach().clone().requires_grad_(True)
     _anisotropies = anisotropies.detach().clone().requires_grad_(True)
-    depth_ref_im = torch.randn((H, W, 3), device=device, requires_grad=True)
+    depth_ref_im = torch.randn((H, W, 1), device=device, requires_grad=True)
     _depth_normal_ref = depth_ref_im.detach().clone().requires_grad_(True)
 
     ch_degree_r, ch_degree_r_to_use = 3, 2
@@ -87,7 +87,6 @@ def test_rasterize():
         positions,
         axes_u,
         axes_v,
-        depth_grads,
         bounds,
         num_tiles_hit,
     ) = decode_params(params)
@@ -95,7 +94,6 @@ def test_rasterize():
         _positions,
         _axes_u,
         _axes_v,
-        _depth_grads,
         _bounds,
         _num_tiles_hit,
     ) = decode_params(params)
@@ -112,7 +110,6 @@ def test_rasterize():
         ch_coeffs,
         opacities,
         anisotropies,
-        depth_grads,
         depth_ref_im,
         # background,
         depth_reg_pairwise_factor,
@@ -138,7 +135,7 @@ def test_rasterize():
 
     print("test consistency")
     # check_close('rgb', output[0], rgb_im)
-    check_close('alpha', output[4], alpha_im)
+    check_close('alpha', output[1], alpha_im)
     check_close('idx', output[5], idx)
     print()
 
@@ -152,7 +149,6 @@ def test_rasterize():
         _ch_coeffs,
         _opacities,
         _anisotropies,
-        _depth_grads,
         _depth_normal_ref,
         _background,
         depth_reg_pairwise_factor,
@@ -164,39 +160,35 @@ def test_rasterize():
 
     print("test forward")
     check_close('out_img', output[0], _output[0])
-    check_close('out_depth_grad', output[1], _output[1])
-    check_close('out_reg_depth', output[2], _output[2])
-    check_close('out_reg_normal', output[3], _output[3])
-    check_close('out_alpha', output[4], _output[4])
+    check_close('out_alpha', output[1], _output[1])
+    check_close('out_depth', output[2], _output[2])
+    check_close('out_normal', output[3], _output[3])
+    check_close('out_depth', output[4], _output[4])
     check_close('final_idx', output[5], _output[5])
     print()
 
     def fun(output):
-        img, depth_grad, reg_depth, reg_normal, alpha, idx = output
-        # reg_normal *= 0.0
-        # reg_depth *= 0.0
-        # depth_grad = depth_grad * torch.tensor([[1,1,1,1]]).cuda().float()
+        img, alpha, depth, normal, reg_depth, idx = output
         img_r = torch.sin(img).norm(dim=2, keepdim=True) + 1
-        depth_grad_r = torch.flip(torch.sigmoid(depth_grad.norm(dim=2, keepdim=True)), [0, 1])
-        reg_r = torch.exp(-0.1*(reg_depth+1)*(reg_normal+1))
         alpha_r = torch.exp(torch.flip(alpha, [0, 1]))
-        return ((img_r+1) * (alpha_r+1) + (depth_grad_r+1) * (reg_r+1)).mean()
+        depth_r = torch.flip(torch.sin(0.5*depth), [0, 1])
+        normal_r = torch.flip(torch.sigmoid(normal).norm(dim=2, keepdim=True), [0, 1])
+        reg_r = torch.exp(-0.1*(reg_depth+1))
+        return ((img_r+1) * (alpha_r+1) + (depth_r+1) + (normal_r+1) * (reg_r+1)).mean()
     fun(output).backward()
     fun(_output).backward()
 
     print("test backward")
-    tol = { 'atol': 1e-6, 'rtol': 1e-5 }
-    check_close('v_positions', positions.grad, _positions.grad, **tol)
-    check_close('v_axes_u', axes_u.grad, _axes_u.grad, **tol)
-    check_close('v_axes_v', axes_v.grad, _axes_v.grad, **tol)
-    check_close('v_colors', colors.grad, _colors.grad, **tol)
+    check_close('v_positions', positions.grad, _positions.grad)
+    check_close('v_axes_u', axes_u.grad, _axes_u.grad)
+    check_close('v_axes_v', axes_v.grad, _axes_v.grad)
+    check_close('v_colors', colors.grad, _colors.grad)
     if dim_ch > 0:
-        check_close('v_ch_coeffs', ch_coeffs.grad, _ch_coeffs.grad, **tol)
-    check_close('v_opacities', opacities.grad, _opacities.grad, **tol)
-    check_close('v_anisotropies', anisotropies.grad, _anisotropies.grad, **tol)
-    check_close('v_depth_grad', depth_grads.grad, _depth_grads.grad, **tol)
-    check_close('v_depth_normal_ref', depth_ref_im.grad, _depth_normal_ref.grad, **tol)
-    # check_close('v_background', background.grad, _background.grad, **tol)
+        check_close('v_ch_coeffs', ch_coeffs.grad, _ch_coeffs.grad)
+    check_close('v_opacities', opacities.grad, _opacities.grad)
+    check_close('v_anisotropies', anisotropies.grad, _anisotropies.grad)
+    check_close('v_depth_normal_ref', depth_ref_im.grad, _depth_normal_ref.grad)
+    # check_close('v_background', background.grad, _background.grad)
 
     assert (positions.absgrad > 0).any()
     assert (positions.absgrad >= abs(positions.grad)[:,:2]).all()

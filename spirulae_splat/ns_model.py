@@ -27,15 +27,18 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 import torch
 from torch.nn import Parameter
+from torch.nn.functional import normalize
 from pytorch_msssim import SSIM
 
 from spirulae_splat.splat._torch_impl import quat_to_rotmat
-from spirulae_splat.splat.project_gaussians import project_gaussians
 from spirulae_splat.splat import (
+    project_gaussians,
     rasterize_gaussians_simple,
     rasterize_gaussians_depth,
     rasterize_gaussians,
     rasterize_gaussians_simplified,
+    depth_to_points,
+    depth_to_normal,
 )
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
@@ -255,8 +258,6 @@ class SpirulaeModelConfig(ModelConfig):
     """warmup steps for depth regularizer"""
     normal_reg_weight: float = 0.04
     """Weight for normal regularizer"""
-    normal_reg_per_splat_factor: float = 0.0  # 0.4, 0.0
-    """Factor of per-splat vs overall normal regularization, 0 to 1"""
     normal_reg_warmup: int = 0
     """warmup steps for normal regularizer"""
     reg_warmup_length: int = 2000
@@ -628,27 +629,7 @@ class SpirulaeModel(Model):
 
     @staticmethod
     def get_empty_outputs(width: int, height: int, background: torch.Tensor) -> Dict[str, Union[torch.Tensor, List]]:
-        rgb = background.repeat(height, width, 1)
-        depth = background.new_ones(*rgb.shape[:2], 1) * 10
-        alpha = background.new_zeros(*rgb.shape[:2], 1)
-        depth_grad_1_vis = background.repeat(height, width, 1)
-        depth_grad_2_vis = background.repeat(height, width, 1)
-        reg_depth = background.new_zeros(*rgb.shape[:2], 1)
-        reg_normal = background.new_zeros(*rgb.shape[:2], 1)
-        depth_grad_1 = background.repeat(height, width, 1)
-        depth_grad_2 = background.repeat(height, width, 1)
-        return {
-            "rgb": rgb,
-            "depth": depth,
-            "depth_grad_1_vis": depth_grad_1_vis,
-            "depth_grad_2_vis": depth_grad_2_vis,
-            "reg_depth": reg_depth,
-            "reg_normal": reg_normal,
-            "alpha": alpha,
-            "depth_grad_1": depth_grad_1,
-            "depth_grad_2": depth_grad_2,
-            "background": background
-        }
+        return {}
 
     def get_outputs(self, camera: Cameras) -> Dict[str, Union[torch.Tensor, List]]:
         """Takes in a Ray Bundle and returns a dictionary of outputs.
@@ -686,7 +667,7 @@ class SpirulaeModel(Model):
         W, H = int(camera.width.item()), int(camera.height.item())
         intrins = (camera.fx.item(), camera.fy.item(), camera.cx.item(), camera.cy.item())
         camera.rescale_output_resolution(camera_downscale)
-        timerr.mark(".")  # 350us-750us
+        timerr.mark(".")  # 450us-800us
 
         R = optimized_camera_to_world[:3, :3]  # 3 x 3
         T = optimized_camera_to_world[:3, 3:4]  # 3 x 1
@@ -698,7 +679,7 @@ class SpirulaeModel(Model):
         viewmat[:3, :3] = R_inv
         viewmat[:3, 3:4] = T_inv
         self.last_size = (H, W)
-        timerr.mark("pre")  # 300us-400us
+        timerr.mark("pre")  # 300us-500us
 
         if crop_ids is not None:
             opacities_crop = self.opacities[crop_ids]
@@ -719,12 +700,10 @@ class SpirulaeModel(Model):
             scales_crop = self.scales
             quats_crop = self.quats
         colors_crop = torch.cat((features_dc_crop[:, None, :], features_sh_crop), dim=1)
-        timerr.mark("crop")  # 70us-150us
+        timerr.mark("crop")  # 80us-200us
 
-        quats_norms = torch.norm(quats_crop, p=2, dim=1)
-        quats_norms = quats_norms.unsqueeze(1)
-        quats_crop = quats_crop / torch.clip(quats_norms, 1e-6)
-        timerr.mark("norm")  # 200us
+        quats_crop = normalize(quats_crop, dim=-1)
+        timerr.mark("norm")  # 100us-250us
 
         if self.config.sh_degree > 0:
             viewdirs = means_crop.detach() - optimized_camera_to_world.detach()[:3, 3]  # (N, 3)
@@ -739,7 +718,6 @@ class SpirulaeModel(Model):
         BLOCK_WIDTH = 16
         (
             positions, axes_u, axes_v,
-            depth_grads,
             bounds, num_tiles_hit
         ) = project_gaussians(  # type: ignore
             means_crop,
@@ -752,31 +730,8 @@ class SpirulaeModel(Model):
         )  # type: ignore
         timerr.mark("project")  # 150us-250us
 
-        # helper functions with depth
-        def get_depth_gradient(depth):
-            depth_grad = torch.zeros_like(depth).repeat(1,1,2)
-            depth_grad[1:-1,1:-1] = torch.concatenate((
-                (depth[1:-1,2:]-depth[1:-1,:-2])/2,
-                (depth[2:,1:-1]-depth[:-2,1:-1])/2
-            ), axis=2)
-            if True:
-                depth_grad[0] = depth_grad[1]
-                depth_grad[:,0] = depth_grad[:,1]
-                depth_grad[-1] = depth_grad[-2]
-                depth_grad[:,-1] = depth_grad[:,-2]
-            return depth_grad.contiguous()
-        
-        def normalize_map(m):
-            m_norm = torch.norm(m, dim=2, keepdim=True)
-            return m / (m_norm+1e-6)
-        
-        def get_2d_normal_from_depth(depth):
-            depth_grad = get_depth_gradient(depth)
-            return normalize_map(depth_grad)
-
         # slower but more capable two-pass rendering
         if False or (
-            self.config.normal_reg_per_splat_factor > 0.0 or \
             self.config.depth_reg_pairwise_factor < 1.0 or \
             self.config.ch_degree_r * (2*self.config.ch_degree_phi+1) > 0 or \
             self.config.depth_mode != "mean"
@@ -789,81 +744,50 @@ class SpirulaeModel(Model):
                 intrins, H, W, BLOCK_WIDTH,
                 self.config.depth_mode
             )
-            timerr.mark("depth")  # 600us-1200us
-
-            # finite difference gradient
             depth_im_ref = torch.where(
                 depth_im_ref > 0.0, depth_im_ref,
                 torch.amax(depth_im_ref).detach()
             ).contiguous()
-            depth_normal_grad_ref_normalized = get_2d_normal_from_depth(depth_im_ref)
-            depth_ref_im = torch.concatenate(
-                (depth_normal_grad_ref_normalized, depth_im_ref), dim=-1)
-            timerr.mark("normal")  # 400us-550us
+            timerr.mark("depth")  # 700us-1200us
 
             # main rasterization
             ch_degree = self.step // self.config.ch_degree_interval
-            (
-                rgb, depth_im,
-                reg_depth, reg_normal,
-                alpha
-            ) = rasterize_gaussians(  # type: ignore
+            (rgb, alpha, depth_im, normal_im, reg_depth) \
+             = rasterize_gaussians(  # type: ignore
                 positions, axes_u, axes_v,
                 rgbs,
                 self.config.ch_degree_r, min(ch_degree, self.config.ch_degree_r),
                 self.config.ch_degree_phi, min(ch_degree, self.config.ch_degree_phi),
                 features_ch_crop,
                 opacities, anisotropies_crop,
-                depth_grads, depth_ref_im,
+                depth_im_ref,
                 # background_color,
                 self.config.depth_reg_pairwise_factor,
                 bounds, num_tiles_hit,
                 intrins, H, W, BLOCK_WIDTH,
             )  # type: ignore
-            timerr.mark("render")  # 600us-1100us
+            timerr.mark("render")  # 650us-1400us
 
         # fast one-pass rendering
         else:
-            (rgb, alpha, depth_im, reg_depth) \
+            (rgb, alpha, depth_im, normal_im, reg_depth) \
              = rasterize_gaussians_simplified(
                 positions, axes_u, axes_v,
                 rgbs,
                 opacities, anisotropies_crop,
-                depth_grads,
                 bounds, num_tiles_hit,
                 intrins, H, W, BLOCK_WIDTH,
             )
             depth_im_ref = torch.where(
-                alpha > 0.0, depth_im[..., 2:3] / alpha,
-                torch.amax(depth_im[..., 2:3]).detach()
+                alpha > 0.0, depth_im[..., :1] / alpha,
+                torch.amax(depth_im[..., :1]).detach()
             ).contiguous()
-            depth_normal_grad_ref_normalized = get_2d_normal_from_depth(depth_im_ref)
-            reg_normal = torch.zeros_like(reg_depth)
-            timerr.mark("render")  # us
+            timerr.mark("render")  # 800us-1500us
 
-        depth_grad_im, depth_im = depth_im[...,0:2], depth_im[...,2:3]
-        depth_grad_im = depth_grad_im / (alpha+1e-6)
-        depth_im = torch.where(alpha > 0, depth_im / alpha, depth_im.detach().max()).contiguous()
-        depth_grad_im_normalized = normalize_map(depth_grad_im)
-
-        depth_grad_im_vis = None
-        depth_grad_ref_vis = None
         anisotropy_vis = None
         if self.config.output_depth_during_training or not self.training:
         # if False:
-            def depth_grad_vis(im):
-                im_norm = torch.norm(im, dim=2, keepdim=True)
-                hue_im = torch.atan2(im[...,1:2], im[...,0:1])
-                return torch.clip(
-                    torch.tanh(im_norm * 0.5*torch.numel(depth_im)**0.5) * \
-                        (torch.concat((
-                        torch.cos(hue_im),
-                        torch.cos(hue_im-2.0*np.pi/3.0),
-                        torch.cos(hue_im+2.0*np.pi/3.0)
-                    ), axis=2)*0.5+0.5) * 2.0, 0.0, 1.0)
             with torch.no_grad():
-                depth_grad_im_vis = depth_grad_vis(depth_grad_im)
-                depth_grad_ref_vis = depth_grad_vis(0.1*get_depth_gradient(depth_im_ref))
 
                 pad_zero = torch.zeros_like(opacities)
                 anisotropy_norm = torch.norm(anisotropies_crop, dim=1, keepdim=True)
@@ -885,7 +809,7 @@ class SpirulaeModel(Model):
                       num_tiles_hit.unsqueeze(0)**0.5 / 2 * BLOCK_WIDTH,
                 "means2d": positions,
             }
-        timerr.mark("post")  # 300us-500us
+        timerr.mark("post")  # 150us-300us
 
         # blend with background
         background = self.background_color.reshape((1, 1, 3))
@@ -900,21 +824,26 @@ class SpirulaeModel(Model):
             rgb = torch.clip(rgb, 0.0, None)
             # rgb = saturate_keep_gradient(rgb, 0.0, None)
 
-        timerr.end("bkg")  # 250us-450us -> 1500us-4200us
+        timerr.mark("bkg")  # 250us-450us
+
+        # normal regularization
+        normal_im = normalize(normal_im, dim=-1)
+        depth_normal, alpha_diffused = depth_to_normal(depth_im_ref, None, intrins, True, alpha)
+        reg_normal = 1.0 - (depth_normal * normal_im).sum(-1, True)
+        timerr.end("normal_reg")  # 500us-900us
+        # -> 4000us-7000us median depth, 3500us-6000us one pass
 
         return {
             "rgb": rgb,
             "depth": depth_im_ref,
-            # "depth_diff": torch.abs(depth_im-depth_ref),
-            # "alpha_diff": torch.abs(alpha-alpha_ref),
-            "depth_grad_1_vis": depth_grad_im_vis,
-            "depth_grad_2_vis": depth_grad_ref_vis,
-            "reg_depth": torch.sqrt(torch.relu(reg_depth*alpha)) / depth_im_ref.clip(1e-3),
-            "reg_normal": reg_normal,
+            "depth_normal": 0.5+0.5*depth_normal,
+            "render_normal": 0.5+0.5*normal_im,
+            "reg_depth": torch.sqrt(torch.relu(reg_depth*alpha)+1e-8) / depth_im_ref.clip(1e-3),
+            "reg_normal": torch.sqrt(torch.relu(reg_normal*alpha)+1e-8) * alpha_diffused,
+            # "reg_depth": reg_depth / depth_im_ref.clip(1e-3)**2,
+            # "reg_normal": reg_normal * alpha_diffused,
             "anisotropy_vis": anisotropy_vis,
             "alpha": alpha,
-            "depth_grad_1": depth_grad_im_normalized,
-            "depth_grad_2": depth_normal_grad_ref_normalized,
             "background": background,
         }  # type: ignore
 
@@ -1137,7 +1066,7 @@ class SpirulaeModel(Model):
             scale_reg = torch.tensor(0.0).to(self.device)
         timerl.mark("scale")  # <100us
 
-        # depth regularizer
+        # depth and normal regularizers
         alpha = outputs['alpha']
         reg_depth = outputs["reg_depth"]
         reg_normal = outputs["reg_normal"]
@@ -1147,20 +1076,10 @@ class SpirulaeModel(Model):
             min(self.step / max(self.config.normal_reg_warmup, 1), 1)
         if self.step < self.config.reg_warmup_length and self.random_init:
             weight_depth_reg, weight_normal_reg = 0.0, 0.0
-        depth_reg = weight_depth_reg * reg_depth.sum() / alpha.sum()
-        normal_reg_per_splat = weight_normal_reg * reg_normal.sum() / alpha.sum()
-        timerl.mark("depth")  # ~100us
+        depth_reg = weight_depth_reg * reg_depth.mean()
+        normal_reg = weight_normal_reg * reg_normal[1:-1, 1:-1].mean()
+        timerl.mark("reg")  # ~100us
 
-        # normal regularizer
-        depth_grad_1 = outputs['depth_grad_1']
-        depth_grad_2 = outputs['depth_grad_2']
-        dot = (depth_grad_1 * depth_grad_2).sum(dim=2,keepdim=True)
-        normal_reg_s = 1.0-dot
-        normal_reg_overall = weight_normal_reg * (normal_reg_s*alpha).sum() / alpha.sum()
-        normal_reg = normal_reg_overall + (normal_reg_per_splat-normal_reg_overall) * \
-            self.config.normal_reg_per_splat_factor
-        timerl.mark("normal")  # ~100us
-        
         # MCMC regularizers
         use_mcmc = self.config.use_mcmc
         mcmc_opacity_reg = use_mcmc * self.config.mcmc_opacity_reg * \

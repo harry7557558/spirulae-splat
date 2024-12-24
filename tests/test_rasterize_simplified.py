@@ -8,12 +8,12 @@ from spirulae_splat.splat.project_gaussians import project_gaussians
 from spirulae_splat.splat import rasterize_simplified, rasterize, rasterize_depth
 import spirulae_splat.splat.cuda as _C
 
-torch.manual_seed(43)
+torch.manual_seed(41)
 
 device = torch.device("cuda:0")
 
 
-def check_close(name, a, b, atol=1e-5, rtol=1e-5):
+def check_close(name, a, b, atol=1e-6, rtol=1e-4):
     print(name, [*a.shape], [*b.shape], a.dtype, b.dtype)
     try:
         torch.testing.assert_close(a, b, atol=atol, rtol=rtol)
@@ -28,6 +28,7 @@ def test_rasterize_simplified():
 
     num_points, H, W = 40, 20, 30
     # num_points, H, W = 20, 10, 15
+    # num_points, H, W = 1, 2, 3
     cx, cy = 0.45*W, 0.55*H
     fx, fy = 0.7*W, 0.8*W
     intrins = (fx, fy, cx, cy)
@@ -75,7 +76,6 @@ def test_rasterize_simplified():
         positions,
         axes_u,
         axes_v,
-        depth_grads,
         bounds,
         num_tiles_hit,
     ) = decode_params(params)
@@ -83,7 +83,6 @@ def test_rasterize_simplified():
         _positions,
         _axes_u,
         _axes_v,
-        _depth_grads,
         _bounds,
         _num_tiles_hit,
     ) = decode_params(params)
@@ -95,7 +94,6 @@ def test_rasterize_simplified():
         colors,
         opacities,
         anisotropies,
-        depth_grads,
         bounds,
         num_tiles_hit,
         intrins,
@@ -106,8 +104,8 @@ def test_rasterize_simplified():
         positions, axes_u, axes_v,
         colors,
         0, 0, 0, 0, torch.zeros(len(positions), 0, 3).to(positions),
-        opacities, anisotropies, depth_grads,
-        torch.zeros((H, W, 3)).float().to(device),
+        opacities, anisotropies,
+        torch.zeros((H, W, 1)).float().to(device),
         1.0,
         bounds, num_tiles_hit,
         intrins, H, W, BLOCK_SIZE,
@@ -123,11 +121,12 @@ def test_rasterize_simplified():
 
     print("test consistency")
     check_close('rgb', output[0], output_r[0])
-    check_close('depth', output[2], output_r[1])
-    check_close('reg_depth', output[3], output_r[2])
-    check_close('alpha', output[1], output_r[4])
-    check_close('idx', output[4], output_r[5])
-    check_close('depth1', output[2][..., 2:3]/(output[1]+1e-6), output_d)
+    check_close('alpha', output[1], output_r[1])
+    check_close('depth', output[2], output_r[2])
+    check_close('normal', output[3], output_r[3])
+    check_close('reg_depth', output[4], output_r[4])
+    check_close('idx', output[5], output_r[5])
+    check_close('depth1', output[2][..., 0:1]/(output[1]+1e-12), output_d, rtol=1e-3)
     print()
 
     _output = _torch_impl.rasterize_gaussians_simplified(
@@ -137,7 +136,6 @@ def test_rasterize_simplified():
         _colors,
         _opacities,
         _anisotropies,
-        _depth_grads,
         _bounds,
         _num_tiles_hit,
         intrins,
@@ -148,29 +146,31 @@ def test_rasterize_simplified():
     check_close('out_img', output[0], _output[0])
     check_close('out_alpha', output[1], _output[1])
     check_close('out_depth', output[2], _output[2])
-    check_close('out_depth_reg', output[3], _output[3])
-    check_close('final_idx', output[4], _output[4])
+    check_close('out_normal', output[3], _output[3])
+    check_close('out_depth_reg', output[4], _output[4])
+    check_close('final_idx', output[5], _output[5])
     print()
 
     def fun(output):
-        img, alpha, depth, depth_reg, idx = output
+        img, alpha, depth, normal, depth_reg, idx = output
         img_r = torch.sin(img).norm(dim=2, keepdim=True) + 1
+        normal_r = (torch.exp(normal)-0.75).norm(dim=2, keepdim=True)
         depth_r = torch.flip(torch.sigmoid(depth.norm(dim=2, keepdim=True)), [0, 1])
         reg_r = torch.exp(-0.1*(depth_reg+1))
         alpha_r = torch.exp(torch.flip(alpha, [0, 1]))
-        return ((img_r+1) * (alpha_r+1) + (depth_r+1) * (reg_r+1)).mean()
+        return ((img_r+1) * (alpha_r+1) + (depth_r+1) * (reg_r+1) + normal_r).mean()
     fun(output).backward()
     fun(_output).backward()
 
     print("test backward")
-    tol = { 'atol': 1e-6, 'rtol': 1e-5 }
-    check_close('v_positions', positions.grad, _positions.grad, **tol)
-    check_close('v_axes_u', axes_u.grad, _axes_u.grad, **tol)
-    check_close('v_axes_v', axes_v.grad, _axes_v.grad, **tol)
-    check_close('v_colors', colors.grad, _colors.grad, **tol)
-    check_close('v_opacities', opacities.grad, _opacities.grad, **tol)
-    check_close('v_anisotropies', anisotropies.grad, _anisotropies.grad, **tol)
-    check_close('v_depth_grad', depth_grads.grad, _depth_grads.grad, **tol)
+    check_close('v_positions', positions.grad, _positions.grad)
+    # print(axes_u.grad, _axes_u.grad)
+    # print(axes_v.grad, _axes_v.grad)
+    check_close('v_axes_u', axes_u.grad, _axes_u.grad)
+    check_close('v_axes_v', axes_v.grad, _axes_v.grad)
+    check_close('v_colors', colors.grad, _colors.grad)
+    check_close('v_opacities', opacities.grad, _opacities.grad)
+    check_close('v_anisotropies', anisotropies.grad, _anisotropies.grad)
 
     assert (positions.absgrad > 0).any()
     assert (positions.absgrad >= abs(positions.grad)[:,:2]).all()

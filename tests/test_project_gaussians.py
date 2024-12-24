@@ -92,19 +92,16 @@ def test_project_gaussians():
     check_close('positions', output[0], _output[0])
     check_close('axes_u', output[1], _output[1])
     check_close('axes_v', output[2], _output[2])
-    check_close('depth_grads', output[3], _output[3])
-    check_close('bounds', output[4], _output[4])
-    check_close('num_tiles_hit', output[5], _output[5])
+    check_close('bounds', output[3], _output[3])
+    check_close('num_tiles_hit', output[4], _output[4])
     print()
 
     def fun(output):
-        positions, axes_u, axes_v, depth_grads, bounds, num_tiles_hit = output
+        positions, axes_u, axes_v, bounds, num_tiles_hit = output
         positions_r = 1.0/(torch.norm(positions, dim=1)+1.0)
         axes_u_r = torch.sin(torch.norm(axes_u, dim=1)+1.0)
         axes_v_r = torch.mean(torch.cos(axes_v)-1.0, dim=1)
-        depth_grads_r = torch.log(torch.norm(depth_grads, dim=1)+1.0)
-        # return 1e2 * (positions_r + axes_u_r*axes_v_r).mean()
-        return 1e2 * (positions_r*depth_grads_r + axes_u_r*axes_v_r).mean()
+        return 1e2 * (positions_r + axes_u_r*axes_v_r).mean()
     fun(output).backward()
     fun(_output).backward()
 

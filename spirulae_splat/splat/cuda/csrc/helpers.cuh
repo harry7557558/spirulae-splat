@@ -36,6 +36,19 @@ inline __device__ float safe_denom(float x, float e) {
     return abs(x)>e ? x : x>0.f ? e : -e;
 }
 
+inline __device__ float nan_to_num(float x, float v=0.0f) {
+    return isfinite(x) ? x : v;
+}
+inline __device__ float2 nan_to_num(float2 x, float v=0.0f) {
+    return { nan_to_num(x.x), nan_to_num(x.y) };
+}
+inline __device__ float3 nan_to_num(float3 x, float v=0.0f) {
+    return { nan_to_num(x.x), nan_to_num(x.y), nan_to_num(x.z) };
+}
+inline __device__ float4 nan_to_num(float4 x, float v=0.0f) {
+    return { nan_to_num(x.x), nan_to_num(x.y), nan_to_num(x.z), nan_to_num(x.w) };
+}
+
 
 #if SPLAT_KERNEL == 1
 
@@ -165,8 +178,42 @@ inline __device__ void get_intersection_vjp(
     v_position = -glm::transpose(invA) * v_uvt;
     glm::mat3 v_invA = -glm::outerProduct(v_uvt, position);
     glm::mat3 v_A = -glm::transpose(invA) * v_invA * glm::transpose(invA);
-    v_axis_uv = glm::mat2x3(v_A[0], v_A[1]);
+    v_axis_uv += glm::mat2x3(v_A[0], v_A[1]);
 }
+
+
+inline __device__ glm::vec3 get_normal_from_axisuv(
+    const glm::mat2x3 &axis_uv,
+    const glm::vec3 &vdir
+) {
+    glm::vec3 normal = glm::cross(axis_uv[0], axis_uv[1]) / 
+        sqrtf(fmaxf(glm::dot(axis_uv[0], axis_uv[0]) * glm::dot(axis_uv[1], axis_uv[1]), 1e-12f));
+    float normal_mult = glm::dot(vdir, normal) > 0.0f ? -1.0f : 1.0f;
+    return normal * normal_mult;
+}
+
+inline __device__ void get_normal_from_axisuv_vjp(
+    const glm::mat2x3 &axis_uv,
+    const glm::vec3 &vdir,
+    const glm::vec3 &v_normal,
+    glm::vec3 &normal,
+    glm::mat2x3 &v_axis_uv
+) {
+    float norm_u = fmaxf(glm::length(axis_uv[0]), 1e-6f);
+    float norm_v = fmaxf(glm::length(axis_uv[1]), 1e-6f);
+    glm::vec3 u_norm = axis_uv[0] / norm_u;
+    glm::vec3 v_norm = axis_uv[1] / norm_v;
+    glm::vec3 normal0 = glm::cross(u_norm, v_norm);
+    float normal_mult = glm::dot(vdir, normal0) > 0.0f ? -1.0f : 1.0f;
+    normal = normal0 * normal_mult;
+    glm::vec3 v_normal0 = v_normal * normal_mult;
+    glm::vec3 v_u_norm = glm::cross(v_norm, v_normal0);
+    glm::vec3 v_v_norm = glm::cross(v_normal0, u_norm);
+    glm::vec3 v_u_nr = (v_u_norm - u_norm * glm::dot(u_norm, v_u_norm)) / norm_u;
+    glm::vec3 v_v_nr = (v_v_norm - v_norm * glm::dot(v_norm, v_v_norm)) / norm_v;
+    v_axis_uv = glm::mat2x3(v_u_nr, v_v_nr);
+}
+
 
 
 // bound of 2d projection of a 3d ellipse

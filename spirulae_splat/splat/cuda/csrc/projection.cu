@@ -85,8 +85,8 @@ __global__ void project_gaussians_forward_kernel(
     int32_t* __restrict__ num_tiles_hit,
     float3* __restrict__ positions,
     float3* __restrict__ axes_u,
-    float3* __restrict__ axes_v,
-    float2* __restrict__ depth_grads
+    float3* __restrict__ axes_v
+    // float2* __restrict__ depth_grads
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
     if (idx >= num_points) {
@@ -134,7 +134,7 @@ __global__ void project_gaussians_forward_kernel(
         return;
 
     // compute the depth gradient
-    float2 depth_grad = projected_depth_grad(p_view, R, fx, fy);
+    // float2 depth_grad = projected_depth_grad(p_view, R, fx, fy);
 
     // output
     bounds[idx] = {tile_min.x, tile_min.y, tile_max.x, tile_max.y};
@@ -142,7 +142,7 @@ __global__ void project_gaussians_forward_kernel(
     positions[idx] = {p_view.x, p_view.y, p_view.z};
     axes_u[idx] = {V0.x, V0.y, V0.z};
     axes_v[idx] = {V1.x, V1.y, V1.z};
-    depth_grads[idx] = {depth_grad.x, depth_grad.y};
+    // depth_grads[idx] = {depth_grad.x, depth_grad.y};
 }
 
 
@@ -157,7 +157,7 @@ __global__ void project_gaussians_backward_kernel(
     const float3* __restrict__ v_positions,
     const float3* __restrict__ v_axes_u,
     const float3* __restrict__ v_axes_v,
-    const float2* __restrict__ v_depth_grads,
+    // const float2* __restrict__ v_depth_grads,
     float3* __restrict__ v_means3d,
     float2* __restrict__ v_scales,
     float4* __restrict__ v_quats,
@@ -201,6 +201,7 @@ __global__ void project_gaussians_backward_kernel(
     v_R[1] = scale.y * v_V1;
 
     // depth_grad
+    #if 0
     glm::mat3 v_R_dg;
     glm::vec3 v_p_view_dg = {0.f, 0.f, 0.f};
     projected_depth_grad_vjp(
@@ -208,6 +209,7 @@ __global__ void project_gaussians_backward_kernel(
         v_p_view_dg, v_R_dg);
     v_R += v_R_dg;
     v_p_view += v_p_view_dg;
+    #endif
 
     glm::vec3 v_p_world = glm::transpose(R0) * v_p_view;
     v_means3d[idx] = {v_p_world.x, v_p_world.y, v_p_world.z};

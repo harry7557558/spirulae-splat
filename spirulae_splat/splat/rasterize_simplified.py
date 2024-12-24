@@ -27,7 +27,6 @@ def rasterize_gaussians_simplified(
     colors: Float[Tensor, "*batch channels"],
     opacities: Float[Tensor, "*batch 1"],
     anisotropies: Float[Tensor, "*batch 2"],
-    depth_grads: Float[Tensor, "*batch 2"],
     bounds: Int[Tensor, "*batch 4"],
     num_tiles_hit: Int[Tensor, "*batch 1"],
     intrins: Tuple[float, float, float, float],
@@ -46,15 +45,11 @@ def rasterize_gaussians_simplified(
         device = positions.device
         # out_img = background.reshape((1, 1, 3)).repeat((*shape, 1))
         out_img = torch.zeros((*shape, 3)).float().to(device)
-        out_depth_grad = torch.zeros((*shape, 4)).float().to(device)
-        out_reg_depth = torch.zeros(shape).float().to(device)
-        out_reg_normal = torch.zeros(shape).float().to(device)
-        out_alpha = torch.zeros(shape).float().to(device)
-        return (
-            out_img, out_depth_grad,
-            out_reg_depth, out_reg_normal,
-            out_alpha
-        )
+        out_alpha = torch.zeros((*shape, 1)).float().to(device)
+        depth_im = torch.zeros((*shape, 1)).float().to(device)
+        normal_im = torch.zeros((*shape, 3)).float().to(device)
+        reg_depth = torch.zeros((*shape, 1)).float().to(device)
+        return (out_img, out_alpha, depth_im, normal_im, reg_depth)
 
     if positions.ndimension() != 2 or positions.size(1) != 3:
         raise ValueError("xys must have dimensions (N, 3)")
@@ -69,7 +64,6 @@ def rasterize_gaussians_simplified(
         colors.contiguous(),
         opacities.contiguous(),
         anisotropies.contiguous(),
-        depth_grads.contiguous(),
         bounds.contiguous(),
         num_tiles_hit.contiguous(),
         intrins,
@@ -91,7 +85,6 @@ class _RasterizeGaussiansSimplified(Function):
         colors: Float[Tensor, "*batch channels"],
         opacities: Float[Tensor, "*batch 1"],
         anisotropies: Float[Tensor, "*batch 2"],
-        depth_grads: Float[Tensor, "*batch 2"],
         bounds: Int[Tensor, "*batch 4"],
         num_tiles_hit: Int[Tensor, "*batch 1"],
         intrins: Tuple[float, float, float, float],
@@ -119,31 +112,28 @@ class _RasterizeGaussiansSimplified(Function):
         timerf.mark("sort")  # us
 
         if num_intersects < 1:
-            out_img = (
-                torch.zeros(img_height, img_width, colors.shape[-1], device=device)
-                # + background
-            )
+            shape = (img_height, img_width)
             gaussian_ids_sorted = torch.zeros(0, 1, device=device)
             tile_bins = torch.zeros(0, 2, device=device)
             final_idx = torch.zeros(img_height, img_width, device=device)
-            out_alpha = torch.zeros(img_height, img_width, device=device)
-            out_reg_depth = torch.zeros(img_height, img_width, device=device)
-            out_reg_normal = torch.zeros(img_height, img_width, device=device)
+            out_img = torch.zeros((*shape, 3)).float().to(device)
+            out_alpha = torch.zeros((*shape, 1)).float().to(device)
+            out_depth = torch.zeros((*shape, 1)).float().to(device)
+            out_normal = torch.zeros((*shape, 3)).float().to(device)
+            out_reg_depth = torch.zeros((*shape, 1)).float().to(device)
         else:
             assert colors.shape == torch.Size([num_points, 3])
             assert opacities.shape == torch.Size([num_points, 1])
-            assert depth_grads.shape == torch.Size([num_points, 2])
 
             (
                 final_idx, out_alpha,
-                out_img, out_depth, out_reg_depth
+                out_img, out_depth, out_normal, out_reg_depth
             ) = _C.rasterize_simplified_forward(
                 tile_bounds, block, img_size,
                 *intrins,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
                 colors, opacities, anisotropies,
-                depth_grads,
             )
         timerf.mark("rasterize")  # us
 
@@ -156,14 +146,13 @@ class _RasterizeGaussiansSimplified(Function):
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
             colors, opacities, anisotropies,
-            depth_grads,
-            final_idx, out_alpha, out_depth, out_reg_depth,
+            final_idx, out_alpha, out_depth,
         )
         timerf.end("save")  # us
 
         output = (
             out_img, out_alpha,
-            out_depth, out_reg_depth
+            out_depth, out_normal, out_reg_depth
         )
         if RETURN_IDX:
             return (*output, final_idx)
@@ -175,6 +164,7 @@ class _RasterizeGaussiansSimplified(Function):
         v_out_img,
         v_out_alpha,
         v_out_depth,
+        v_out_normal,
         v_out_depth_reg,
         v_idx = None
         ):
@@ -188,8 +178,7 @@ class _RasterizeGaussiansSimplified(Function):
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
             colors, opacities, anisotropies,
-            depth_grads,
-            final_idx, out_alpha, out_depth, out_reg_depth,
+            final_idx, out_alpha, out_depth,
         ) = ctx.saved_tensors
 
         if num_intersects < 1:
@@ -200,7 +189,6 @@ class _RasterizeGaussiansSimplified(Function):
             v_colors = torch.zeros_like(colors)
             v_opacities = torch.zeros_like(opacities)
             v_anisotropies = torch.zeros_like(anisotropies)
-            v_depth_grads = torch.zeros_like(depth_grads)
 
         else:
             timerb.start()
@@ -212,12 +200,12 @@ class _RasterizeGaussiansSimplified(Function):
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
                 colors, opacities, anisotropies,
-                depth_grads,
                 final_idx, out_alpha, out_depth,
                 *[v.contiguous() for v in [
                     v_out_alpha,
                     v_out_img,
                     v_out_depth,
+                    v_out_normal,
                     v_out_depth_reg,
                 ]]
             )
@@ -231,7 +219,6 @@ class _RasterizeGaussiansSimplified(Function):
             v_colors = clean(backward_return[4])
             v_opacities = clean(backward_return[5])
             v_anisotropies = clean(backward_return[6])
-            v_depth_grads = clean(backward_return[7])
             timerb.mark("clean")  # us
 
         # Abs grad for gaussian splitting criterion. See
@@ -249,6 +236,5 @@ class _RasterizeGaussiansSimplified(Function):
         return (
             v_positions, v_axes_u, v_axes_v,
             v_colors, v_opacities, v_anisotropies,
-            v_depth_grads,
             None, None, None, None, None, None,
         )

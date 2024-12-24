@@ -47,7 +47,8 @@ class PerfTimer:
         if self.ema is None:
             self.ema = self.times
         alpha = 1 - math.exp(-1 / self.ema_tau)
-        self.ema = alpha * self.times + (1 - alpha) * self.ema
+        if len(self.ema) == len(self.times):
+            self.ema = alpha * self.times + (1 - alpha) * self.ema
         self.summary()
 
     def summary(self):
