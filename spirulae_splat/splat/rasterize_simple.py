@@ -46,10 +46,10 @@ def rasterize_gaussians_simple(
         )
 
     if not (num_tiles_hit > 0).any():
-        shape = (img_height, img_width)
+        shape = (img_height, img_width, 1)
         device = positions.device
         return (
-            background.reshape((1, 1, 3)).repeat((*shape, 1)),
+            background.reshape((1, 1, 3)).repeat(shape),
             torch.zeros(shape).float().to(device)
         )
 

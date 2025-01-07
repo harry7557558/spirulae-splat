@@ -717,7 +717,7 @@ class SpirulaeModel(Model):
 
         BLOCK_WIDTH = 16
         (
-            positions, axes_u, axes_v,
+            positions, axes_u, axes_v, normals,
             bounds, num_tiles_hit
         ) = project_gaussians(  # type: ignore
             means_crop,
@@ -728,7 +728,7 @@ class SpirulaeModel(Model):
             H, W,
             BLOCK_WIDTH,
         )  # type: ignore
-        timerr.mark("project")  # 150us-250us
+        timerr.mark("project")  # 200us-350us
 
         # slower but more capable two-pass rendering
         if False or (
@@ -748,13 +748,13 @@ class SpirulaeModel(Model):
                 depth_im_ref > 0.0, depth_im_ref,
                 torch.amax(depth_im_ref).detach()
             ).contiguous()
-            timerr.mark("depth")  # 700us-1200us
+            timerr.mark("depth")  # 700us-1300us
 
             # main rasterization
             ch_degree = self.step // self.config.ch_degree_interval
             (rgb, alpha, depth_im, normal_im, reg_depth) \
              = rasterize_gaussians(  # type: ignore
-                positions, axes_u, axes_v,
+                positions, axes_u, axes_v, normals,
                 rgbs,
                 self.config.ch_degree_r, min(ch_degree, self.config.ch_degree_r),
                 self.config.ch_degree_phi, min(ch_degree, self.config.ch_degree_phi),
@@ -766,13 +766,13 @@ class SpirulaeModel(Model):
                 bounds, num_tiles_hit,
                 intrins, H, W, BLOCK_WIDTH,
             )  # type: ignore
-            timerr.mark("render")  # 650us-1400us
+            timerr.mark("render")  # 700us-1400us
 
         # fast one-pass rendering
         else:
             (rgb, alpha, depth_im, normal_im, reg_depth) \
              = rasterize_gaussians_simplified(
-                positions, axes_u, axes_v,
+                positions, axes_u, axes_v, normals,
                 rgbs,
                 opacities, anisotropies_crop,
                 bounds, num_tiles_hit,
@@ -782,7 +782,7 @@ class SpirulaeModel(Model):
                 alpha > 0.0, depth_im[..., :1] / alpha,
                 torch.amax(depth_im[..., :1]).detach()
             ).contiguous()
-            timerr.mark("render")  # 800us-1500us
+            timerr.mark("render")  # 800us-1600us
 
         anisotropy_vis = None
         if self.config.output_depth_during_training or not self.training:

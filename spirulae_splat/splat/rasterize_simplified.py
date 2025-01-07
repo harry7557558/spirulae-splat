@@ -24,6 +24,7 @@ def rasterize_gaussians_simplified(
     positions: Float[Tensor, "*batch 3"],
     axes_u: Float[Tensor, "*batch 3"],
     axes_v: Float[Tensor, "*batch 3"],
+    normals: Float[Tensor, "*batch 3"],
     colors: Float[Tensor, "*batch channels"],
     opacities: Float[Tensor, "*batch 1"],
     anisotropies: Float[Tensor, "*batch 2"],
@@ -61,6 +62,7 @@ def rasterize_gaussians_simplified(
         positions.contiguous(),
         axes_u.contiguous(),
         axes_v.contiguous(),
+        normals.contiguous(),
         colors.contiguous(),
         opacities.contiguous(),
         anisotropies.contiguous(),
@@ -82,6 +84,7 @@ class _RasterizeGaussiansSimplified(Function):
         positions: Float[Tensor, "*batch 3"],
         axes_u: Float[Tensor, "*batch 3"],
         axes_v: Float[Tensor, "*batch 3"],
+        normals: Float[Tensor, "*batch 3"],
         colors: Float[Tensor, "*batch channels"],
         opacities: Float[Tensor, "*batch 1"],
         anisotropies: Float[Tensor, "*batch 2"],
@@ -132,7 +135,7 @@ class _RasterizeGaussiansSimplified(Function):
                 tile_bounds, block, img_size,
                 *intrins,
                 gaussian_ids_sorted, tile_bins,
-                positions, axes_u, axes_v,
+                positions, axes_u, axes_v, normals,
                 colors, opacities, anisotropies,
             )
         timerf.mark("rasterize")  # us
@@ -144,7 +147,7 @@ class _RasterizeGaussiansSimplified(Function):
         ctx.intrins = intrins
         ctx.save_for_backward(
             gaussian_ids_sorted, tile_bins,
-            positions, axes_u, axes_v,
+            positions, axes_u, axes_v, normals,
             colors, opacities, anisotropies,
             final_idx, out_alpha, out_depth,
         )
@@ -176,7 +179,7 @@ class _RasterizeGaussiansSimplified(Function):
 
         (
             gaussian_ids_sorted, tile_bins,
-            positions, axes_u, axes_v,
+            positions, axes_u, axes_v, normals,
             colors, opacities, anisotropies,
             final_idx, out_alpha, out_depth,
         ) = ctx.saved_tensors
@@ -186,6 +189,7 @@ class _RasterizeGaussiansSimplified(Function):
             v_positions_xy_abs = torch.zeros_like(positions)[..., :2]
             v_axes_u = torch.zeros_like(axes_u)
             v_axes_v = torch.zeros_like(axes_v)
+            v_normals = torch.zeros_like(normals)
             v_colors = torch.zeros_like(colors)
             v_opacities = torch.zeros_like(opacities)
             v_anisotropies = torch.zeros_like(anisotropies)
@@ -198,7 +202,7 @@ class _RasterizeGaussiansSimplified(Function):
                 img_height, img_width, ctx.block_width,
                 *intrins,
                 gaussian_ids_sorted, tile_bins,
-                positions, axes_u, axes_v,
+                positions, axes_u, axes_v, normals,
                 colors, opacities, anisotropies,
                 final_idx, out_alpha, out_depth,
                 *[v.contiguous() for v in [
@@ -216,9 +220,10 @@ class _RasterizeGaussiansSimplified(Function):
             v_positions_xy_abs = backward_return[1]
             v_axes_u = clean(backward_return[2])
             v_axes_v = clean(backward_return[3])
-            v_colors = clean(backward_return[4])
-            v_opacities = clean(backward_return[5])
-            v_anisotropies = clean(backward_return[6])
+            v_normals = clean(backward_return[4])
+            v_colors = clean(backward_return[5])
+            v_opacities = clean(backward_return[6])
+            v_anisotropies = clean(backward_return[7])
             timerb.mark("clean")  # us
 
         # Abs grad for gaussian splitting criterion. See
@@ -234,7 +239,7 @@ class _RasterizeGaussiansSimplified(Function):
             timerb.end("absgrad")  # us
 
         return (
-            v_positions, v_axes_u, v_axes_v,
+            v_positions, v_axes_u, v_axes_v, v_normals,
             v_colors, v_opacities, v_anisotropies,
             None, None, None, None, None, None,
         )

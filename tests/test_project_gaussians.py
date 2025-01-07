@@ -59,7 +59,9 @@ def test_project_gaussians():
         ],
         device=device,
     )
-    viewmat[:3, :3] = _torch_impl.quat_to_rotmat(torch.randn(4))
+    qr = torch.randn(4)
+    qr /= torch.linalg.norm(qr)
+    viewmat[:3, :3] = _torch_impl.quat_to_rotmat(qr)
     BLOCK_SIZE = 16
 
     params = (means3d0, scales0, quats0, viewmat)
@@ -92,16 +94,18 @@ def test_project_gaussians():
     check_close('positions', output[0], _output[0])
     check_close('axes_u', output[1], _output[1])
     check_close('axes_v', output[2], _output[2])
-    check_close('bounds', output[3], _output[3])
-    check_close('num_tiles_hit', output[4], _output[4])
+    check_close('normals', output[3], _output[3])
+    check_close('bounds', output[4], _output[4])
+    check_close('num_tiles_hit', output[5], _output[5])
     print()
 
     def fun(output):
-        positions, axes_u, axes_v, bounds, num_tiles_hit = output
+        positions, axes_u, axes_v, normals, bounds, num_tiles_hit = output
         positions_r = 1.0/(torch.norm(positions, dim=1)+1.0)
         axes_u_r = torch.sin(torch.norm(axes_u, dim=1)+1.0)
-        axes_v_r = torch.mean(torch.cos(axes_v)-1.0, dim=1)
-        return 1e2 * (positions_r + axes_u_r*axes_v_r).mean()
+        axes_v_r = torch.mean(torch.cos(axes_v), dim=1)
+        normals_r = torch.mean(torch.exp(normals)-1.0, dim=1)
+        return 1e2 * (positions_r + axes_u_r + axes_v_r + normals_r).mean()
     fun(output).backward()
     fun(_output).backward()
 
@@ -111,6 +115,7 @@ def test_project_gaussians():
     check_close('v_scales', scales.grad, _scales.grad, **tol)
     check_close('v_quats', quats.grad, _quats.grad, **tol)
     check_close('v_viewmat', viewmat.grad, _viewmat.grad, **tol)
+    # print(''.join(['-#'[abs(x)>1e-5] for x in (quats.grad-_quats.grad).flatten().cpu().numpy()]))
     # print(viewmat.grad)
     # print(_viewmat.grad)
 

@@ -7,6 +7,24 @@ namespace cg = cooperative_groups;
 
 
 
+template<typename vec3>
+inline __device__ void warpSum3(vec3& val, cg::thread_block_tile<32>& tile){
+    val.x = cg::reduce(tile, val.x, cg::plus<float>());
+    val.y = cg::reduce(tile, val.y, cg::plus<float>());
+    val.z = cg::reduce(tile, val.z, cg::plus<float>());
+}
+
+template<typename vec2>
+inline __device__ void warpSum2(vec2& val, cg::thread_block_tile<32>& tile){
+    val.x = cg::reduce(tile, val.x, cg::plus<float>());
+    val.y = cg::reduce(tile, val.y, cg::plus<float>());
+}
+
+inline __device__ void warpSum(float& val, cg::thread_block_tile<32>& tile){
+    val = cg::reduce(tile, val, cg::plus<float>());
+}
+
+
 
 // device helper to get screen space depth gradient
 inline __device__ float2 projected_depth_grad(
@@ -85,7 +103,8 @@ __global__ void project_gaussians_forward_kernel(
     int32_t* __restrict__ num_tiles_hit,
     float3* __restrict__ positions,
     float3* __restrict__ axes_u,
-    float3* __restrict__ axes_v
+    float3* __restrict__ axes_v,
+    float3* __restrict__ normals
     // float2* __restrict__ depth_grads
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
@@ -113,8 +132,9 @@ __global__ void project_gaussians_forward_kernel(
     float4 quat = quats[idx];
     glm::mat3 Rq = quat_to_rotmat(quat);
     glm::mat3 R = R0 * Rq;
-    glm::vec3 V0 = scale.x * R[0];
-    glm::vec3 V1 = scale.y * R[1];
+    glm::vec3 axis_u = scale.x * R[0];
+    glm::vec3 axis_v = scale.y * R[1];
+    glm::vec3 normal = get_normal_from_axisuv(glm::mat2x3(axis_u, axis_v), p_view);
 
     // project to 2d
     const float fx = intrins.x;
@@ -124,7 +144,7 @@ __global__ void project_gaussians_forward_kernel(
     float2 center;
     float3 bound;
     const float kr = visibility_kernel_radius();
-    project_ellipse_bound(p_view, kr*V0, kr*V1, fx, fy, cx, cy, center, bound);
+    project_ellipse_bound(p_view, kr*axis_u, kr*axis_v, fx, fy, cx, cy, center, bound);
 
     // compute the projected area
     int2 tile_min, tile_max;
@@ -140,8 +160,9 @@ __global__ void project_gaussians_forward_kernel(
     bounds[idx] = {tile_min.x, tile_min.y, tile_max.x, tile_max.y};
     num_tiles_hit[idx] = tile_area;
     positions[idx] = {p_view.x, p_view.y, p_view.z};
-    axes_u[idx] = {V0.x, V0.y, V0.z};
-    axes_v[idx] = {V1.x, V1.y, V1.z};
+    axes_u[idx] = {axis_u.x, axis_u.y, axis_u.z};
+    axes_v[idx] = {axis_v.x, axis_v.y, axis_v.z};
+    normals[idx] = {normal.x, normal.y, normal.z};
     // depth_grads[idx] = {depth_grad.x, depth_grad.y};
 }
 
@@ -157,6 +178,7 @@ __global__ void project_gaussians_backward_kernel(
     const float3* __restrict__ v_positions,
     const float3* __restrict__ v_axes_u,
     const float3* __restrict__ v_axes_v,
+    const float3* __restrict__ v_normals,
     // const float2* __restrict__ v_depth_grads,
     float3* __restrict__ v_means3d,
     float2* __restrict__ v_scales,
@@ -187,18 +209,25 @@ __global__ void project_gaussians_backward_kernel(
     float4 quat = quats[idx];
     glm::mat3 Rq = quat_to_rotmat(quat);
     glm::mat3 R = R0 * Rq;
-    glm::vec3 V0 = scale.x * R[0];
-    glm::vec3 V1 = scale.y * R[1];
+    glm::vec3 axis_u = scale.x * R[0];
+    glm::vec3 axis_v = scale.y * R[1];
+
+    // backward
+    glm::vec3 v_axis_u = *(glm::vec3*)&v_axes_u[idx];
+    glm::vec3 v_axis_v = *(glm::vec3*)&v_axes_v[idx];
+    glm::vec3 v_normal = *(glm::vec3*)&v_normals[idx];
+    glm::mat2x3 v_axis_uv; glm::vec3 normal;
+    get_normal_from_axisuv_vjp(glm::mat2x3(axis_u, axis_v), p_view, v_normal, normal, v_axis_uv);
+    v_axis_u += v_axis_uv[0];
+    v_axis_v += v_axis_uv[1];
 
     // scale
-    glm::vec3 v_V0 = *(glm::vec3*)&v_axes_u[idx];
-    glm::vec3 v_V1 = *(glm::vec3*)&v_axes_v[idx];
-    float2 v_scale = {glm::dot(R[0], v_V0), glm::dot(R[1], v_V1)};
+    float2 v_scale = {glm::dot(R[0], v_axis_u), glm::dot(R[1], v_axis_v)};
 
     // orientation
     glm::mat3 v_R = glm::mat3(0.0f);
-    v_R[0] = scale.x * v_V0;
-    v_R[1] = scale.y * v_V1;
+    v_R[0] = scale.x * v_axis_u;
+    v_R[1] = scale.y * v_axis_v;
 
     // depth_grad
     #if 0

@@ -76,6 +76,7 @@ def test_rasterize_simplified():
         positions,
         axes_u,
         axes_v,
+        normals,
         bounds,
         num_tiles_hit,
     ) = decode_params(params)
@@ -83,6 +84,7 @@ def test_rasterize_simplified():
         _positions,
         _axes_u,
         _axes_v,
+        _normals,
         _bounds,
         _num_tiles_hit,
     ) = decode_params(params)
@@ -91,6 +93,7 @@ def test_rasterize_simplified():
         positions,
         axes_u,
         axes_v,
+        normals,
         colors,
         opacities,
         anisotropies,
@@ -101,7 +104,7 @@ def test_rasterize_simplified():
     )
 
     output_r = rasterize.rasterize_gaussians(
-        positions, axes_u, axes_v,
+        positions, axes_u, axes_v, normals,
         colors,
         0, 0, 0, 0, torch.zeros(len(positions), 0, 3).to(positions),
         opacities, anisotropies,
@@ -133,6 +136,7 @@ def test_rasterize_simplified():
         _positions,
         _axes_u,
         _axes_v,
+        _normals,
         _colors,
         _opacities,
         _anisotropies,
@@ -168,6 +172,7 @@ def test_rasterize_simplified():
     # print(axes_v.grad, _axes_v.grad)
     check_close('v_axes_u', axes_u.grad, _axes_u.grad)
     check_close('v_axes_v', axes_v.grad, _axes_v.grad)
+    check_close('v_normals', normals.grad, _normals.grad)
     check_close('v_colors', colors.grad, _colors.grad)
     check_close('v_opacities', opacities.grad, _opacities.grad)
     check_close('v_anisotropies', anisotropies.grad, _anisotropies.grad)

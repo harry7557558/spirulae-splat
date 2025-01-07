@@ -24,6 +24,7 @@ def rasterize_gaussians(
     positions: Float[Tensor, "*batch 3"],
     axes_u: Float[Tensor, "*batch 3"],
     axes_v: Float[Tensor, "*batch 3"],
+    normals: Float[Tensor, "*batch 3"],
     colors: Float[Tensor, "*batch channels"],
     ch_degree_r: int,
     ch_degree_r_to_use: int,
@@ -81,6 +82,7 @@ def rasterize_gaussians(
         positions.contiguous(),
         axes_u.contiguous(),
         axes_v.contiguous(),
+        normals.contiguous(),
         colors.contiguous(),
         ch_degree_r, ch_degree_r_to_use,
         ch_degree_phi, ch_degree_phi_to_use,
@@ -108,6 +110,7 @@ class _RasterizeGaussians(Function):
         positions: Float[Tensor, "*batch 3"],
         axes_u: Float[Tensor, "*batch 3"],
         axes_v: Float[Tensor, "*batch 3"],
+        normals: Float[Tensor, "*batch 3"],
         colors: Float[Tensor, "*batch channels"],
         ch_degree_r: int,
         ch_degree_r_to_use: int,
@@ -170,7 +173,7 @@ class _RasterizeGaussians(Function):
                 *intrins,
                 depth_reg_pairwise_factor,
                 gaussian_ids_sorted, tile_bins,
-                positions, axes_u, axes_v,
+                positions, axes_u, axes_v, normals,
                 colors,
                 ch_degree_r, ch_degree_r_to_use,
                 ch_degree_phi, ch_degree_phi_to_use,
@@ -190,7 +193,7 @@ class _RasterizeGaussians(Function):
                           ch_degree_phi, ch_degree_phi_to_use)
         ctx.save_for_backward(
             gaussian_ids_sorted, tile_bins,
-            positions, axes_u, axes_v,
+            positions, axes_u, axes_v, normals,
             colors, ch_coeffs, opacities, anisotropies, #background,
             depth_ref,
             final_idx, out_alpha, out_depth, out_normal, out_reg_depth,
@@ -224,7 +227,7 @@ class _RasterizeGaussians(Function):
 
         (
             gaussian_ids_sorted, tile_bins,
-            positions, axes_u, axes_v,
+            positions, axes_u, axes_v, normals,
             colors, ch_coeffs, opacities, anisotropies, #background,
             depth_ref,
             final_idx, out_alpha, out_depth, out_normal, out_reg_depth,
@@ -235,6 +238,7 @@ class _RasterizeGaussians(Function):
             v_positions_xy_abs = torch.zeros_like(positions)[..., :2]
             v_axes_u = torch.zeros_like(axes_u)
             v_axes_v = torch.zeros_like(axes_v)
+            v_normals = torch.zeros_like(normals)
             v_colors = torch.zeros_like(colors)
             v_ch_coeffs = torch.zeros_like(ch_coeffs)
             v_opacities = torch.zeros_like(opacities)
@@ -250,7 +254,7 @@ class _RasterizeGaussians(Function):
                 *intrins, *ch_degrees,
                 ctx.depth_reg_pairwise_factor,
                 gaussian_ids_sorted, tile_bins,
-                positions, axes_u, axes_v,
+                positions, axes_u, axes_v, normals,
                 colors, ch_coeffs, opacities, anisotropies, #background,
                 depth_ref,
                 final_idx, out_alpha, out_depth,
@@ -264,13 +268,14 @@ class _RasterizeGaussians(Function):
             v_positions_xy_abs = backward_return[1]
             v_axes_u = clean(backward_return[2])
             v_axes_v = clean(backward_return[3])
-            v_colors = clean(backward_return[4])
-            v_ch_coeffs = clean(backward_return[5])
-            # v_ch_coeffs_abs = backward_return[6]
-            v_opacities = clean(backward_return[6])
-            v_anisotropies = clean(backward_return[7])
-            # v_background = backward_return[9]
-            v_depth_ref = clean(backward_return[8])
+            v_normals = clean(backward_return[4])
+            v_colors = clean(backward_return[5])
+            v_ch_coeffs = clean(backward_return[6])
+            # v_ch_coeffs_abs = backward_return[7]
+            v_opacities = clean(backward_return[7])
+            v_anisotropies = clean(backward_return[8])
+            # v_background = backward_return[8]
+            v_depth_ref = clean(backward_return[9])
             timerb.mark("clean")  # 150us-200us
 
         # Abs grad for gaussian splitting criterion. See
@@ -287,7 +292,7 @@ class _RasterizeGaussians(Function):
             timerb.end("absgrad")  # ~10us -> 900us-2800us
 
         return (
-            v_positions, v_axes_u, v_axes_v,
+            v_positions, v_axes_u, v_axes_v, v_normals,
             v_colors, *([None]*4), v_ch_coeffs, v_opacities, v_anisotropies,
             v_depth_ref,
             # v_background,

@@ -20,7 +20,7 @@ def project_gaussians(
     img_width: int,
     block_width: int,
     clip_thresh: float = 0.01,
-) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
     assert block_width > 1 and block_width <= 16, "block_width must be between 2 and 16"
     assert (quats.norm(dim=-1) - 1 < 1e-4).all(), "quats must be normalized"
     return _ProjectGaussians.apply(
@@ -57,7 +57,7 @@ class _ProjectGaussians(Function):
 
         (
             bounds, num_tiles_hit,
-            positions, axes_u, axes_v,
+            positions, axes_u, axes_v, normals
         ) = _C.project_gaussians_forward(
             num_points,
             means3d,
@@ -81,22 +81,20 @@ class _ProjectGaussians(Function):
             means3d, scales, quats,
             viewmat,
             bounds, num_tiles_hit,
-            positions, axes_u, axes_v,
         )
 
-        return (positions, axes_u, axes_v, bounds, num_tiles_hit)
+        return (positions, axes_u, axes_v, normals, bounds, num_tiles_hit)
 
     @staticmethod
     def backward(
         ctx,
-        v_positions, v_axes_u, v_axes_v,
+        v_positions, v_axes_u, v_axes_v, v_normals,
         v_bounds, v_num_tiles_hit,
     ):
         (
             means3d, scales, quats,
             viewmat,
             bounds, num_tiles_hit,
-            positions, axes_u, axes_v,
         ) = ctx.saved_tensors
 
         backward_return = _C.project_gaussians_backward(
@@ -105,12 +103,12 @@ class _ProjectGaussians(Function):
             viewmat,
             *ctx.intrins,
             num_tiles_hit,
-            v_positions, v_axes_u, v_axes_v
+            v_positions, v_axes_u, v_axes_v, v_normals
         )
 
         clean = lambda x, h: torch.nan_to_num(torch.clip(x, -h, h))
         (v_means3d, v_scales, v_quats) = [clean(v, 10.) for v in backward_return[:3]]
-        v_viewmat = clean(backward_return[3], 20.)  # 4x4
+        v_viewmat = clean(backward_return[3], 40.)  # 4x4
         v_viewmat = v_viewmat[:viewmat.shape[0], :viewmat.shape[1]]  # 4x4 or 3x4
 
         # Return a gradient for each input.

@@ -454,10 +454,12 @@ def project_gaussians(
     positions = torch.where(~mask[..., None], 0, p_view)
     axes_u = torch.where(~mask[..., None], 0, V0)
     axes_v = torch.where(~mask[..., None], 0, V1)
+    normal = torch.cross(F.normalize(axes_u), F.normalize(axes_v))
+    normal = -normal * torch.sign((p_view*normal).sum(-1, True))
     # depth_grads = torch.where(~mask[..., None], 0, depth_grads)
 
     return (
-        positions, axes_u, axes_v,
+        positions, axes_u, axes_v, normal,
         # depth_grads,
         bounds, num_tiles_hit,
     )
@@ -762,6 +764,7 @@ def rasterize_gaussians(
     positions: Float[Tensor, "*batch 3"],
     axes_u: Float[Tensor, "*batch 3"],
     axes_v: Float[Tensor, "*batch 3"],
+    normals: Float[Tensor, "*batch 3"],
     colors: Float[Tensor, "*batch channels"],
     ch_degree_r: int,
     ch_degree_r_to_use: int,
@@ -883,8 +886,7 @@ def rasterize_gaussians(
                 depth_sum = depth_sum + vis*depth
                 depth_squared_sum = depth_squared_sum + vis*depth**2
 
-                normal = torch.cross(axis_uv[0], axis_uv[1]) / (axis_uv[0].norm() * axis_uv[1].norm())
-                normal = -normal * torch.sign(torch.dot(poi, normal))
+                normal = normals[gid]
                 normal_sum = normal_sum + vis * normal
 
                 T = next_T
@@ -910,6 +912,7 @@ def rasterize_gaussians_simplified(
     positions: Float[Tensor, "*batch 3"],
     axes_u: Float[Tensor, "*batch 3"],
     axes_v: Float[Tensor, "*batch 3"],
+    normals: Float[Tensor, "*batch 3"],
     colors: Float[Tensor, "*batch channels"],
     opacities: Float[Tensor, "*batch 1"],
     anisotropies: Float[Tensor, "*batch 2"],
@@ -1006,8 +1009,7 @@ def rasterize_gaussians_simplified(
                 depth_sum = depth_sum + vis*depth
                 depth_squared_sum = depth_squared_sum + vis*depth**2
 
-                normal = torch.cross(axis_uv[0], axis_uv[1]) / (axis_uv[0].norm() * axis_uv[1].norm())
-                normal = -normal * torch.sign(torch.dot(poi, normal))
+                normal = normals[gid]
                 normal_sum = normal_sum + vis * normal
 
                 T = next_T

@@ -839,6 +839,7 @@ __global__ void rasterize_forward_kernel(
     const float3* __restrict__ positions,
     const float3* __restrict__ axes_u,
     const float3* __restrict__ axes_v,
+    const float3* __restrict__ normals,
     const float3* __restrict__ colors,
     const unsigned ch_degree_r,
     const unsigned ch_degree_r_to_use,
@@ -944,6 +945,7 @@ __global__ void rasterize_forward_kernel(
         // process gaussians in the current batch for this pixel
         int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
+            int32_t g_id = id_batch[t];
             glm::vec3 pos = position_batch[t];
             glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
             float opac = opacity_batch[t].z;
@@ -965,7 +967,6 @@ __global__ void rasterize_forward_kernel(
             glm::vec3 color_0 = color_batch[t];
             glm::vec3 color;
             if (dim_ch > 0) {
-                int32_t g_id = id_batch[t];
                 const glm::vec3* coeffs = (glm::vec3*)&ch_coeffs[dim_ch*g_id];
                 glm::vec3 ch_color = ch_coeffs_to_color(
                     ch_degree_r, ch_degree_r_to_use,
@@ -1001,7 +1002,7 @@ __global__ void rasterize_forward_kernel(
             depth_squared_sum += vis*depth*depth;
 
             // normal regularization
-            glm::vec3 normal = get_normal_from_axisuv(axis_uv, poi);
+            float3 normal = normals[g_id];
             normal_out.x = normal_out.x + normal.x * vis;
             normal_out.y = normal_out.y + normal.y * vis;
             normal_out.z = normal_out.z + normal.z * vis;
@@ -1047,6 +1048,7 @@ __global__ void rasterize_backward_kernel(
     const float3* __restrict__ positions,
     const float3* __restrict__ axes_u,
     const float3* __restrict__ axes_v,
+    const float3* __restrict__ normals,
     const float3* __restrict__ colors,
     const float3* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
@@ -1065,6 +1067,7 @@ __global__ void rasterize_backward_kernel(
     float2* __restrict__ v_positions_xy_abs,
     float3* __restrict__ v_axes_u,
     float3* __restrict__ v_axes_v,
+    float3* __restrict__ v_normals,
     float3* __restrict__ v_colors,
     float3* __restrict__ v_ch_coeffs,
     // float* __restrict__ v_ch_coeffs_abs,
@@ -1217,6 +1220,7 @@ __global__ void rasterize_backward_kernel(
             glm::vec3 v_axis_u_local = {0.f, 0.f, 0.f};
             glm::vec3 v_axis_v_local = {0.f, 0.f, 0.f};
             glm::vec3 v_color_local = {0.f, 0.f, 0.f};
+            glm::vec3 v_normal_local = {0.f, 0.f, 0.f};
             float v_opacity_local = 0.f;
             glm::vec2 v_anisotropy_local = {0.f, 0.f};
             glm::vec3 v_ch_coeff_local[MAX_CH_FLOAT3];
@@ -1225,6 +1229,8 @@ __global__ void rasterize_backward_kernel(
             float v_ch_coeff_abs_local = 0.f;
             //initialize everything to 0, only set if the lane is valid
             if(valid){
+                int32_t g_id = id_batch[t];
+
                 // compute the current T for this gaussian
                 const float ra = 1.f / (1.f - alpha);
                 const float next_T = T * ra;
@@ -1273,9 +1279,8 @@ __global__ void rasterize_backward_kernel(
                 float reg_depth_i = reg_depth_i_i + (reg_depth_i_p-reg_depth_i_i) * depth_reg_pairwise_factor;
 
                 // normal regularization
-                glm::vec3 v_normal = {vis * v_out_normal.x, vis * v_out_normal.y, vis * v_out_normal.z};
-                glm::mat2x3 v_axis_uv; glm::vec3 normal;
-                get_normal_from_axisuv_vjp(axis_uv, poi, v_normal, normal, v_axis_uv);
+                v_normal_local = {vis * v_out_normal.x, vis * v_out_normal.y, vis * v_out_normal.z};
+                glm::vec3 normal = *(glm::vec3*)&normals[g_id];
 
                 // update color
                 glm::vec3 v_color_1 = {vis * v_out.x, vis * v_out.y, vis * v_out.z};
@@ -1286,7 +1291,6 @@ __global__ void rasterize_backward_kernel(
                 if (dim_ch > 0) {
                     glm::vec3 v_ch_color_sigmoid = v_color_1 * color_0;
                     #if 0
-                    int32_t g_id = id_batch[t];
                     glm::vec3 ch_color = ch_coeffs_to_color(
                         ch_degree_r, ch_degree_r_to_use,
                         ch_degree_phi, ch_degree_phi_to_use,
@@ -1306,7 +1310,6 @@ __global__ void rasterize_backward_kernel(
                     );
                     #else
                     // makes overall training 0.1x faster
-                    int32_t g_id = id_batch[t];
                     glm::vec3 ch_color_sigmoid;
                     ch_coeffs_to_color_sigmoid_vjp(
                         ch_degree_r, ch_degree_r_to_use,
@@ -1364,6 +1367,7 @@ __global__ void rasterize_backward_kernel(
                 );
                 v_uv += v_uv_ch;
                 glm::vec3 v_position_local_temp;
+                glm::mat2x3 v_axis_uv = glm::mat2x3(0.0f);
                 get_intersection_vjp(
                     pos, axis_uv, pos_2d,
                     v_poi, v_uv,
@@ -1403,6 +1407,7 @@ __global__ void rasterize_backward_kernel(
             warpSum3(v_axis_u_local, warp);
             warpSum3(v_axis_v_local, warp);
             warpSum3(v_color_local, warp);
+            warpSum3(v_normal_local, warp);
             for (int i = 0; i < dim_ch; i++)
                 warpSum3(v_ch_coeff_local[i], warp);
             warpSum(v_ch_coeff_abs_local, warp);
@@ -1427,6 +1432,10 @@ __global__ void rasterize_backward_kernel(
                 atomicAdd(v_axis_v_ptr + 3*g + 0, v_axis_v_local.x);
                 atomicAdd(v_axis_v_ptr + 3*g + 1, v_axis_v_local.y);
                 atomicAdd(v_axis_v_ptr + 3*g + 2, v_axis_v_local.z);
+                float* v_normal_v_ptr = (float*)(v_normals);
+                atomicAdd(v_normal_v_ptr + 3*g + 0, v_normal_local.x);
+                atomicAdd(v_normal_v_ptr + 3*g + 1, v_normal_local.y);
+                atomicAdd(v_normal_v_ptr + 3*g + 2, v_normal_local.z);
                 
                 float* v_color_ptr = (float*)(v_colors);
                 atomicAdd(v_color_ptr + 3*g + 0, v_color_local.x);
@@ -1477,6 +1486,7 @@ __global__ void rasterize_simplified_forward_kernel(
     const float3* __restrict__ positions,
     const float3* __restrict__ axes_u,
     const float3* __restrict__ axes_v,
+    const float3* __restrict__ normals,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
     const float2* __restrict__ anisotropies,
@@ -1606,7 +1616,8 @@ __global__ void rasterize_simplified_forward_kernel(
             depth_squared_sum += vis*depth*depth;
 
             // normal regularization
-            glm::vec3 normal = get_normal_from_axisuv(axis_uv, poi);
+            int32_t g_id = id_batch[t];
+            glm::vec3 normal = *(glm::vec3*)&normals[g_id];
             normal_out.x = normal_out.x + normal.x * vis;
             normal_out.y = normal_out.y + normal.y * vis;
             normal_out.z = normal_out.z + normal.z * vis;
@@ -1640,6 +1651,7 @@ __global__ void rasterize_simplified_backward_kernel(
     const float3* __restrict__ positions,
     const float3* __restrict__ axes_u,
     const float3* __restrict__ axes_v,
+    const float3* __restrict__ normals,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
     const float2* __restrict__ anisotropies,
@@ -1655,6 +1667,7 @@ __global__ void rasterize_simplified_backward_kernel(
     float2* __restrict__ v_positions_xy_abs,
     float3* __restrict__ v_axes_u,
     float3* __restrict__ v_axes_v,
+    float3* __restrict__ v_normals,
     float3* __restrict__ v_colors,
     float* __restrict__ v_opacities,
     float2* __restrict__ v_anisotropies
@@ -1789,11 +1802,14 @@ __global__ void rasterize_simplified_backward_kernel(
             glm::vec2 v_position_xy_abs_local = {0.f, 0.f};
             glm::vec3 v_axis_u_local = {0.f, 0.f, 0.f};
             glm::vec3 v_axis_v_local = {0.f, 0.f, 0.f};
+            glm::vec3 v_normal_local = {0.f, 0.f, 0.f};
             glm::vec3 v_color_local = {0.f, 0.f, 0.f};
             float v_opacity_local = 0.f;
             glm::vec2 v_anisotropy_local = {0.f, 0.f};
             //initialize everything to 0, only set if the lane is valid
             if(valid){
+                int32_t g_id = id_batch[t];
+
                 // compute the current T for this gaussian
                 const float ra = 1.f / (1.f - alpha);
                 const float next_T = T * ra;
@@ -1820,9 +1836,8 @@ __global__ void rasterize_simplified_backward_kernel(
                 v_color_local = {vis * v_out.x, vis * v_out.y, vis * v_out.z};
 
                 // normal regularization
-                glm::vec3 v_normal = {vis * v_out_normal.x, vis * v_out_normal.y, vis * v_out_normal.z};
-                glm::mat2x3 v_axis_uv; glm::vec3 normal;
-                get_normal_from_axisuv_vjp(axis_uv, poi, v_normal, normal, v_axis_uv);
+                v_normal_local = {vis * v_out_normal.x, vis * v_out_normal.y, vis * v_out_normal.z};
+                glm::vec3 normal = *(glm::vec3*)&normals[g_id];
 
                 float v_alpha = 0.0f;
                 // contribution from this pixel
@@ -1860,6 +1875,7 @@ __global__ void rasterize_simplified_backward_kernel(
                     v_uv, v_opacity_local, v_anisotropy_local
                 );
                 glm::vec3 v_position_local_temp;
+                glm::mat2x3 v_axis_uv = glm::mat2x3(0.0f);
                 get_intersection_vjp(
                     pos, axis_uv, pos_2d,
                     v_poi, v_uv,
@@ -1878,6 +1894,7 @@ __global__ void rasterize_simplified_backward_kernel(
             warpSum2(v_position_xy_abs_local, warp);
             warpSum3(v_axis_u_local, warp);
             warpSum3(v_axis_v_local, warp);
+            warpSum3(v_normal_local, warp);
             warpSum3(v_color_local, warp);
             warpSum(v_opacity_local, warp);
             warpSum2(v_anisotropy_local, warp);
@@ -1900,6 +1917,10 @@ __global__ void rasterize_simplified_backward_kernel(
                 atomicAdd(v_axis_v_ptr + 3*g + 0, v_axis_v_local.x);
                 atomicAdd(v_axis_v_ptr + 3*g + 1, v_axis_v_local.y);
                 atomicAdd(v_axis_v_ptr + 3*g + 2, v_axis_v_local.z);
+                float* v_normal_ptr = (float*)(v_normals);
+                atomicAdd(v_normal_ptr + 3*g + 0, v_normal_local.x);
+                atomicAdd(v_normal_ptr + 3*g + 1, v_normal_local.y);
+                atomicAdd(v_normal_ptr + 3*g + 2, v_normal_local.z);
                 
                 float* v_color_ptr = (float*)(v_colors);
                 atomicAdd(v_color_ptr + 3*g + 0, v_color_local.x);

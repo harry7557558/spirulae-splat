@@ -87,6 +87,7 @@ def test_rasterize():
         positions,
         axes_u,
         axes_v,
+        normals,
         bounds,
         num_tiles_hit,
     ) = decode_params(params)
@@ -94,6 +95,7 @@ def test_rasterize():
         _positions,
         _axes_u,
         _axes_v,
+        _normals,
         _bounds,
         _num_tiles_hit,
     ) = decode_params(params)
@@ -104,6 +106,7 @@ def test_rasterize():
         positions,
         axes_u,
         axes_v,
+        normals,
         colors,
         ch_degree_r, ch_degree_r_to_use,
         ch_degree_phi, ch_degree_phi_to_use,
@@ -143,6 +146,7 @@ def test_rasterize():
         _positions,
         _axes_u,
         _axes_v,
+        _normals,
         _colors,
         ch_degree_r, ch_degree_r_to_use,
         ch_degree_phi, ch_degree_phi_to_use,
@@ -182,6 +186,7 @@ def test_rasterize():
     check_close('v_positions', positions.grad, _positions.grad)
     check_close('v_axes_u', axes_u.grad, _axes_u.grad)
     check_close('v_axes_v', axes_v.grad, _axes_v.grad)
+    check_close('v_normals', normals.grad, _normals.grad)
     check_close('v_colors', colors.grad, _colors.grad)
     if dim_ch > 0:
         check_close('v_ch_coeffs', ch_coeffs.grad, _ch_coeffs.grad)

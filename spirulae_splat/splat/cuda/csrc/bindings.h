@@ -45,7 +45,8 @@ std::tuple<
     torch::Tensor,  // num_tiles_hit, [N]
     torch::Tensor,  // positions, [N, 3]
     torch::Tensor,  // axes_u, [N, 3]
-    torch::Tensor  // axes_v, [N, 4]
+    torch::Tensor,  // axes_v, [N, 3]
+    torch::Tensor  // normals, [N, 3]
     // torch::Tensor  // depth_grads, [N, 2]
 > project_gaussians_forward_tensor(
     const int num_points,
@@ -82,7 +83,8 @@ std::tuple<
     torch::Tensor &num_tiles_hit,  // [N], int
     torch::Tensor &v_positions,  // [N, 3]
     torch::Tensor &v_axes_u,  // [N, 3]
-    torch::Tensor &v_axes_v  // [N, 3]
+    torch::Tensor &v_axes_v,  // [N, 3]
+    torch::Tensor &v_normals  // [N, 3]
     // torch::Tensor &v_depth_grads  // [N, 2]
 );
 
@@ -261,6 +263,7 @@ std::tuple<
     const torch::Tensor &positions,
     const torch::Tensor &axes_u,
     const torch::Tensor &axes_v,
+    const torch::Tensor &normals,
     const torch::Tensor &colors,
     const unsigned ch_degree_r,
     const unsigned ch_degree_r_to_use,
@@ -279,6 +282,7 @@ std::tuple<
     torch::Tensor, // v_positions_xy_abs
     torch::Tensor, // v_axes_u
     torch::Tensor, // v_axes_v
+    torch::Tensor, // v_normals
     torch::Tensor, // v_colors
     torch::Tensor, // v_ch_coeffs
     // torch::Tensor, // v_ch_coeffs_abs
@@ -304,6 +308,7 @@ std::tuple<
     const torch::Tensor &positions,
     const torch::Tensor &axes_u,
     const torch::Tensor &axes_v,
+    const torch::Tensor &normals,
     const torch::Tensor &colors,
     const torch::Tensor &ch_coeffs,
     const torch::Tensor &opacities,
@@ -341,6 +346,7 @@ std::tuple<
     const torch::Tensor &positions,
     const torch::Tensor &axes_u,
     const torch::Tensor &axes_v,
+    const torch::Tensor &normals,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
     const torch::Tensor &anisotropies
@@ -352,6 +358,7 @@ std::tuple<
     torch::Tensor, // v_positions_xy_abs
     torch::Tensor, // v_axes_u
     torch::Tensor, // v_axes_v
+    torch::Tensor, // v_normals
     torch::Tensor, // v_colors
     torch::Tensor, // v_opacities
     torch::Tensor // v_anisotropies
@@ -368,6 +375,7 @@ std::tuple<
     const torch::Tensor &positions,
     const torch::Tensor &axes_u,
     const torch::Tensor &axes_v,
+    const torch::Tensor &normals,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
     const torch::Tensor &anisotropies,
