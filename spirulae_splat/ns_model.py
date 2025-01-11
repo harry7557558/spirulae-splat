@@ -254,15 +254,15 @@ class SpirulaeModelConfig(ModelConfig):
     """Weight for depth regularizer"""
     depth_reg_pairwise_factor: float = 1.0  # 0.7, 1.0
     """Factor of pairwise vs depth fitting depth regularization, 0 to 1"""
-    depth_reg_warmup: int = 0
+    depth_reg_warmup: int = 12000
     """warmup steps for depth regularizer"""
     normal_reg_weight: float = 0.04
     """Weight for normal regularizer"""
-    normal_reg_warmup: int = 0
+    normal_reg_warmup: int = 12000
     """warmup steps for normal regularizer"""
-    reg_warmup_length: int = 2000
+    reg_warmup_length: int = 4000
     """Warmup for depth and normal regularizers.
-       IF THE INITIALIZATION IS RANDOM, only apply regularizers after this many steps."""
+       only apply regularizers after this many steps."""
     mcmc_opacity_reg: float = 0.001
     """Opacity regularization from MCMC
        Lower usually gives more accurate geometry, original MCMC uses 0.01"""
@@ -1074,7 +1074,7 @@ class SpirulaeModel(Model):
             min(self.step / max(self.config.depth_reg_warmup, 1), 1)
         weight_normal_reg = self.config.normal_reg_weight * \
             min(self.step / max(self.config.normal_reg_warmup, 1), 1)
-        if self.step < self.config.reg_warmup_length and self.random_init:
+        if self.step < self.config.reg_warmup_length:
             weight_depth_reg, weight_normal_reg = 0.0, 0.0
         depth_reg = weight_depth_reg * reg_depth.mean()
         normal_reg = weight_normal_reg * reg_normal[1:-1, 1:-1].mean()

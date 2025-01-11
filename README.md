@@ -1,10 +1,6 @@
 # spirulae-splat
 My custom method for Nerfstudio. Based on the `splatfacto` method in official Nerfstudio implementation.
 
-I made this as a custom method to create 3D models of real-world scenes that I feel like to. It is designed to create small models that can be transferred efficiently across the web (see `webgl/`). I also use this repository as a place to try some ideas that pop up in my head. As in December 2024, there is no short-term plan for a peer-reviewed publication related to this work.
-
-I'm open to bug reports and feature requests via GitHub Issues. You can alternatively forward your private inquiries to @spirulae on nerfstudio Discord server.
-
 ### Major changes / Novelties:
 
 - Use 2D splats instead of 3D, add depth and normal regularization, use ray-splat intersection, as per SIGGRAPH 2024 paper [*2D Gaussian Splatting for Geometrically Accurate Radiance Fields*](https://arxiv.org/abs/2403.17888)
@@ -46,15 +42,18 @@ I'm open to bug reports and feature requests via GitHub Issues. You can alternat
   - Has potential to improve depth regularization: So far L2 depth regularization on intersected depth performs worse than L1 regularization based on center of splats
   - Alternatively try ray tracing? Might not be fast for training, but seems to be an inference solution that's friendly with existing graphics pipelines
 
+- Better model for view-dependent colors for glossy surfaces, e.g. floor where most camera views have low elevation angle, result doesn't generalize well to bird's eye views
+  - Idea: low-degree SH with Fresnel reflectance?
+
+- Depth supervision
+   - Fit rendered depth to depth predicted using MVS or a foundational depth model
+   - Special attention needed for biased depth, possibly using an approach similar to how exposure is handled
+
 - Speed up uv-dependent color
   - Idea: use an [interpolated circular grid](https://www.desmos.com/calculator/0drgnclvod) that allow both low-latency access and accomodation for circular splat shape
   - Also [apply texture to opacity](https://arxiv.org/abs/2408.16982)?
 
 - Anti-aliasing
-
-- Depth supervision
-   - Fit rendered depth to depth predicted using MVS or a foundational depth model
-   - Special attention needed for biased depth, possibly using an approach similar to how exposure is handled
 
 - Try non-planar splats, like quadratic patches
 
