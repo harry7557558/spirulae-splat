@@ -1029,8 +1029,6 @@ def rasterize_gaussians_simplified(
     )
 
 
-from nerfstudio.utils.math import components_from_spherical_harmonics
-
 def render_background_sh(
     w: int,
     h: int,
@@ -1056,6 +1054,8 @@ def render_background_sh(
         norm = torch.linalg.norm(coord, dim=-1, keepdims=True)
         directions = coord / norm @ rotation.T
 
+    # TODO: deprecated in recent nerfstudio versions
+    from nerfstudio.utils.math import components_from_spherical_harmonics
     sh_components = components_from_spherical_harmonics(sh_degree, directions)  # [w*h, deg^2]
     bg_flat = torch.matmul(sh_components, sh_coeffs)  # [w*h, 3]
     bg_flat = torch.relu(bg_flat+0.5)

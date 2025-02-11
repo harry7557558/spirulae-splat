@@ -57,7 +57,6 @@ from nerfstudio.model_components import renderers
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.rich_utils import CONSOLE
-from nerfstudio.utils.math import components_from_spherical_harmonics
 
 from spirulae_splat.perf_timer import PerfTimer
 timerr = PerfTimer("get_outputs", ema_tau=100)
