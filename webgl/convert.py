@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 import torch
 import numpy as np
@@ -108,7 +108,7 @@ def quantize_tensor(name, tensor, n_bits, maxiter=0):
         prev_error = error
 
     centers = (centroids[1:]+centroids[:-1])/2
-    bins = torch.bucketize(tensor, centers)
+    bins = torch.bucketize(tensor.contiguous(), centers)
     print(name, 'quantization loss:', torch.mean(torch.abs(centroids[bins]-tensor)).item())
     return centroids, bins
 

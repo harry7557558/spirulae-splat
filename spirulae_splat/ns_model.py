@@ -394,6 +394,8 @@ class SpirulaeModel(Model):
             self.background_sh = None
 
         # Strategy for GS densification
+        reset_every = self.config.reset_alpha_every * self.config.refine_every
+        pause_refine_after_reset = min(self.num_train_data, reset_every//2) + self.config.refine_every
         self.strategy = DefaultStrategy(
             prune_opa=self.config.cull_alpha_thresh,
             grow_grad2d=self.config.densify_xy_grad_thresh,
@@ -405,9 +407,9 @@ class SpirulaeModel(Model):
             refine_scale2d_stop_iter=self.config.stop_screen_size_at,
             refine_start_iter=self.config.warmup_length,
             refine_stop_iter=self.config.stop_split_at,
-            reset_every=self.config.reset_alpha_every * self.config.refine_every,
+            reset_every=reset_every,
             refine_every=self.config.refine_every,
-            pause_refine_after_reset=self.num_train_data + self.config.refine_every,
+            pause_refine_after_reset=pause_refine_after_reset,
             absgrad=True,
             revised_opacity=False,
             verbose=True,
