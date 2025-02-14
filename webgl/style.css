@@ -161,7 +161,7 @@ details {
     background: rgba(0,0,0,0.6);
     padding: 10px;
     border-radius: 10px;
-    font-size: x-small;
+    font-size: small;
 }
 body.nohf .nohf {
     display: none;

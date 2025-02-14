@@ -4,6 +4,8 @@ precision highp int;
 
 uniform vec2 focal;
 uniform vec2 viewport;
+uniform int camera_model;
+uniform vec4 distortion;
 
 uniform ivec3 u_ch_config;
 
@@ -271,6 +273,41 @@ vec3 ch_coeffs_to_color(vec2 uv) {
 }
 
 
+// camera distortion models
+
+float opencv_radius(
+    in vec4 dist_coeffs
+) {
+    float k1 = dist_coeffs.x;
+    float k2 = dist_coeffs.y;
+
+    // calculate the extrema of dist(r)
+    if (k2 == 0.0) {
+        float b = -1.0/(3.0*k1);
+        return b > 0.0 ? sqrt(b) : -1.0;
+    }
+    float disc = 9.0*k1*k1-20.0*k2;
+    if (disc <= 0.0) return -1.0;
+    disc = sqrt(disc);
+    float u1 = (-3.0*k1 + disc) / (10.0*k2);
+    float u2 = (-3.0*k1 - disc) / (10.0*k2);
+    if (u1 <= 0.0) return u2>0.0 ? sqrt(u2) : -1.0;
+    return u2>0.0 ? sqrt(min(u1,u2)) : sqrt(u1);
+}
+
+float fisheye_radius(
+    in float theta, in vec4 dist_coeffs
+) {
+    float k1 = dist_coeffs.x;
+    float k2 = dist_coeffs.y;
+    float k3 = dist_coeffs.z;
+    float k4 = dist_coeffs.w;
+
+    float theta2 = theta*theta;
+    return theta*(1.0 + theta2*(k1 + theta2*(k2 + theta2*(k3 + theta2*k4))));
+}
+
+
 void main () {
 
     // uvec4 tex = texelFetch(u_ch_texture, ivec2(gl_FragCoord.xy), 0);
@@ -282,6 +319,18 @@ void main () {
     // }
 
     vec2 pos_2d = vec2(1,-1)*(gl_FragCoord.xy-0.5*viewport)/focal;
+
+    float fr = -1.0;
+    if (camera_model == 0)
+        fr = opencv_radius(distortion);
+    else if (camera_model == 1)
+        fr = fisheye_radius(1.570796, distortion);
+    const vec3 vignetting_background = vec3(0.1);
+    if (fr > 0.0 && length(pos_2d) > fr) {
+        fragColor = vec4(vignetting_background, 0.0);
+        return;
+    }
+
     vec3 poi;
     vec2 uv;
     if (!get_intersection(pos_2d, poi, uv))
@@ -294,5 +343,12 @@ void main () {
         init_coeffs();
         color /= 1.0 + exp(-ch_coeffs_to_color(uv));
     }
+    
+    if (fr > 0.0) {
+        float vignetting = min(length(pos_2d)/fr, 1.0);
+        vignetting = pow(1.0-pow(vignetting,20.0), 2.0);
+        color = mix(vignetting_background, color, vignetting);
+    }
+
     fragColor = vec4(color, alpha);
 }

@@ -608,30 +608,41 @@ async function main() {
     gl.vertexAttribIPointer(a_index, 1, gl.INT, false, 0, 0);
     gl.vertexAttribDivisor(a_index, 1);
 
-    const resize = () => {
-        let f = 0.7 * Math.max(window.innerWidth, window.innerHeight);
+    function setUniforms(program=null) {
+        if (program === null) {
+            setUniforms(splatProgram);
+            setUniforms(backgroundProgram);
+            return;
+        }
+        let camera = CameraPresets.camera;
+        gl.useProgram(program);
+        gl.uniformMatrix4fv(gl.getUniformLocation(program, "projection"),
+            false, projectionMatrix);
+        gl.uniform2fv(gl.getUniformLocation(program, "focal"),
+            new Float32Array([camera.fx, camera.fy]));
+        gl.uniform2fv(gl.getUniformLocation(program, "viewport"),
+            new Float32Array([innerWidth, innerHeight]));
+        gl.uniform1i(gl.getUniformLocation(program, "camera_model"), camera.model);
+        gl.uniform4fv(gl.getUniformLocation(program, "distortion"),
+            new Float32Array(camera.dist_coeffs));
+    }
 
-        projectionMatrix = getProjectionMatrix(f, f, innerWidth, innerHeight);
+    const resize = () => {
+        let camera = CameraPresets.camera;
+
+        projectionMatrix = getProjectionMatrix(camera.fx, camera.fy, innerWidth, innerHeight);
 
         gl.canvas.width = Math.round(innerWidth / downsample);
         gl.canvas.height = Math.round(innerHeight / downsample);
         gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
 
-        function setUniforms(program) {
-            gl.useProgram(program);
-            gl.uniformMatrix4fv(gl.getUniformLocation(program, "projection"),
-                false, projectionMatrix);
-            gl.uniform2fv(gl.getUniformLocation(program, "focal"),
-                new Float32Array([f, f]));
-            gl.uniform2fv(gl.getUniformLocation(program, "viewport"),
-                new Float32Array([innerWidth, innerHeight]));
-        }
-        setUniforms(splatProgram);
-        setUniforms(backgroundProgram);
+        setUniforms();
         renderNeeded = true;
     };
 
-    window.addEventListener("resize", resize);
+    window.addEventListener("resize", function() {
+        setTimeout(resize, 1);
+    });
     resize();
 
     window.addEventListener("message", (e) => {
@@ -693,6 +704,8 @@ async function main() {
 
     window.addEventListener("keydown", (e) => {
         // if (document.activeElement != document.body) return;
+        if (/^Key[A-Z]$/.test(e.code) || /^Arrow/.test(e.code))
+            e.preventDefault();
         if (!activeKeys.includes(e.code)) activeKeys.push(e.code);
         renderNeeded = true;
     });
@@ -917,6 +930,7 @@ async function main() {
     });
 
     let bytesRead = 0;
+    let previousCamera = "";
     const frame = (now) => {
         let inv = invert4(viewMatrix);
         let shiftKey = activeKeys.includes("Shift") || activeKeys.includes("ShiftLeft") || activeKeys.includes("ShiftRight")
@@ -1055,6 +1069,11 @@ async function main() {
         const currentFps = 1000 / (now - lastFrame) || 0;
         avgFps = avgFps * 0.9 + currentFps * 0.1;
 
+        let camera = CameraPresets.camera;
+        if (camera !== previousCamera)
+            renderNeeded = true;
+        previousCamera = camera;
+
         if (vertexCount > 0 && renderNeeded) {
             document.getElementById("spinner").style.display = "none";
 
@@ -1064,6 +1083,8 @@ async function main() {
             document.getElementById("checkbox-sh").disabled = (sh_degree == 0);
             let ch_degree_r = header.config.ch_degree_r;
             document.getElementById("checkbox-ch").disabled = (ch_degree_r == 0);
+
+            setUniforms();
 
             let background = header.config.background_color;
             document.getElementById("checkbox-bg").disabled = !(Math.max(background[0], background[1], background[2]) > 0);
@@ -1226,6 +1247,9 @@ async function loadShadersAndInit() {
 
 
 window.addEventListener("load", () => {
+    document.getElementById("camera-preset-container").appendChild(
+        CameraPresets.createSelector());
+
     window.Console = {
         log: (msg) => {
             let container = document.getElementById("console");

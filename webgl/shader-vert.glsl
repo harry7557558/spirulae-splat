@@ -6,6 +6,8 @@ uniform highp usampler2D u_base_texture;
 uniform mat4 projection, view;
 uniform vec2 focal;
 uniform vec2 viewport;
+uniform int camera_model;
+uniform vec4 distortion;
 
 uniform ivec2 u_sh_config;
 uniform int u_use_aniso;
@@ -42,6 +44,107 @@ mat3 quat_to_rotmat(vec4 quat) {
         2.f * (y * z - w * x),  // [2][1]
         1.f - 2.f * (x * x + y * y)  // [2][2]
     );
+}
+
+
+// camera distortion models
+
+float opencv_radius(
+    in vec4 dist_coeffs
+) {
+    float k1 = dist_coeffs.x;
+    float k2 = dist_coeffs.y;
+
+    // calculate the extrema of dist(r)
+    if (k2 == 0.0) {
+        float b = -1.0/(3.0*k1);
+        return b > 0.0 ? sqrt(b) : -1.0;
+    }
+    float disc = 9.0*k1*k1-20.0*k2;
+    if (disc <= 0.0) return -1.0;
+    disc = sqrt(disc);
+    float u1 = (-3.0*k1 + disc) / (10.0*k2);
+    float u2 = (-3.0*k1 - disc) / (10.0*k2);
+    if (u1 <= 0.0) return u2>0.0 ? sqrt(u2) : -1.0;
+    return u2>0.0 ? sqrt(min(u1,u2)) : sqrt(u1);
+}
+
+float fisheye_radius(
+    in float theta, in vec4 dist_coeffs
+) {
+    float k1 = dist_coeffs.x;
+    float k2 = dist_coeffs.y;
+    float k3 = dist_coeffs.z;
+    float k4 = dist_coeffs.w;
+
+    float theta2 = theta*theta;
+    return theta*(1.0 + theta2*(k1 + theta2*(k2 + theta2*(k3 + theta2*k4))));
+}
+
+void distort_opencv(
+    in vec2 p, in vec4 dist_coeffs,
+    out vec2 p_dist, out mat2 jac_dist
+) {
+    // https://www.desmos.com/calculator/adnh2fzdyi
+
+    float k1 = dist_coeffs.x;
+    float k2 = dist_coeffs.y;
+    float p1 = dist_coeffs.z;
+    float p2 = dist_coeffs.w;
+
+    float x = p.x, y = p.y;
+    float r2 = x*x + y*y;
+    float r_dist = 1.0 + k1*r2 + k2*r2*r2;
+
+    float x_dist = x*r_dist + 2.0*p1*x*y + p2*(r2 + 2.0*x*x);
+    float y_dist = y*r_dist + p1*(r2 + 2.0*y*y) + 2.0*p2*x*y;
+    p_dist = vec2(x_dist, y_dist);
+
+    float jxx = r_dist + 2.0*( x*x*(k1 + 2.0*k2*r2) + p1*y + 3.0*p2*x );
+    float jxy = 2.0*( x*y*(k1 + 2.0*k2*r2) + p1*x + p2*y );
+    float jyy = r_dist + 2.0*( y*y*(k1 + 2.0*k2*r2) + 3.0*p1*y + p2*x );
+    jac_dist = mat2(jxx, jxy, jxy, jyy);
+}
+
+void distort_fisheye(
+    in vec2 p, in vec4 dist_coeffs,
+    out vec2 p_dist, out mat2 jac_dist
+) {
+    // https://www.desmos.com/calculator/yg7gqrtgm9
+
+    float k1 = dist_coeffs.x;
+    float k2 = dist_coeffs.y;
+    float k3 = dist_coeffs.z;
+    float k4 = dist_coeffs.w;
+
+    float x = p.x, y = p.y;
+    float r2 = x*x + y*y;
+    float r = sqrt(r2);
+    float theta = atan(r);
+    float theta2 = theta*theta;
+    float r_dist = theta*(1.0 + theta2*(k1 + theta2*(k2 + theta2*(k3 + theta2*k4))));
+    float s_dist = 1.0 + theta2*(3.0*k1 + theta2*(5.0*k2 + theta2*(7.0*k3 + theta2*9.0*k4)));
+
+    float x_dist = x/r * r_dist;
+    float y_dist = y/r * r_dist;
+    p_dist = vec2(x_dist, y_dist);
+
+    float jd1 = s_dist / (r2*(r2+1.0));
+    float jd2 = r_dist / (r2*r);
+    float jxx = jd1 * x*x + jd2 * y*y;
+    float jxy = jd1 * x*y - jd2 * x*y;
+    float jyy = jd1 * y*y + jd2 * x*x;
+    jac_dist = mat2(jxx, jxy, jxy, jyy);
+}
+
+vec3 distort_jac_3d(
+    in vec2 p2d_u, in vec2 p2d_d,
+    in mat2 j2d, in vec3 dp
+) {
+    // transform dp using the Jacobian of (x,y,z) -> (distort(x/z,y/z)*z,z)
+    mat3x2 j3d = j2d * mat3x2(1, 0, 0, 1, -p2d_u.x, -p2d_u.y)
+        + mat3x2(0, 0, 0, 0, p2d_d.x, p2d_d.y);
+    return vec3(j3d * dp, dp.z);
 }
 
 
@@ -219,20 +322,17 @@ vec3 sh_coeffs_to_color_fast(
 
 
 void main () {
-    if (index == -1) {
-        gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
-        return;
-    }
+    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+
+    if (index == -1) return;
 
     uvec4 info0 = texelFetch(u_base_texture,
         ivec2((uint(index) & 0x3ffu) * 3u, uint(index) >> 10), 0);
     vec3 p_world = uintBitsToFloat(info0.xyz);
     vec4 p_view = view * vec4(p_world, 1);
     vec4 pos2d = projection * p_view;
-    if (pos2d.w < 0.0) {
-        gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+    if (pos2d.w < 0.0 || p_view.z < 0.01)
         return;
-    }
 
     uvec4 info1 = texelFetch(u_base_texture,
         ivec2((uint(index) & 0x3ffu) * 3u + 1u, uint(index) >> 10), 0);
@@ -247,8 +347,45 @@ void main () {
     mat3 R0 = mat3(view);
     mat3 Rq = quat_to_rotmat(quat);
     mat3 R = R0 * Rq;
-    vec3 V0 = scale.x * R[0];
-    vec3 V1 = scale.y * R[1];
+    vec3 axis_u = scale.x * R[0];
+    vec3 axis_v = scale.y * R[1];
+
+    // distortion
+    vec2 p_proj = p_view.xy/p_view.z;
+    vec2 p_dist = p_proj;
+    mat2 jac_dist;
+    if (camera_model == 0) {  // OPENCV
+        float fr = opencv_radius(distortion);
+        if (fr > 0.0 && !(dot(p_proj, p_proj) < fr*fr))
+            return;
+        distort_opencv(p_proj, distortion, p_dist, jac_dist);
+        axis_u = vec3(jac_dist * vec2(axis_u), axis_u.z);
+        axis_v = vec3(jac_dist * vec2(axis_v), axis_v.z);
+    }
+    else if (camera_model == 1) {  // OPENCV_FISHEYE
+        distort_fisheye(p_proj, distortion, p_dist, jac_dist);
+        float fr = fisheye_radius(1.570796, distortion);
+        if (!(dot(p_dist,p_dist) < fr*fr))
+            return;
+        axis_u = distort_jac_3d(p_proj, p_dist, jac_dist, axis_u);
+        axis_v = distort_jac_3d(p_proj, p_dist, jac_dist, axis_v);
+        // eliminate splats outside the circle
+        // TODO: use an analytical solution
+        #if 0
+        vec2 u2d = vec2(axis_u)/p_view.z;
+        vec2 v2d = vec2(axis_v)/p_view.z;
+        const int n = 8;
+        for (int i = 0; i < n; i++) {
+            float t = 6.283185*float(i)/float(n);
+            vec2 p = p_dist + u2d * cos(t) + v2d * sin(t);
+            if (!(dot(p,p) < fr*fr)) {
+                gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+                return;
+            }
+        }
+        #endif
+    }
+    p_view.xy = p_dist * p_view.z;
 
     // project to 2d
     float fx = focal.x;
@@ -259,14 +396,12 @@ void main () {
     vec3 bound = vec3(0.0);
     const float kr = 1.0;
     bool intersect = project_ellipse_bound(
-        p_view.xyz, kr*V0, kr*V1, fx, fy, cx, cy, center, bound);
+        p_view.xyz, kr*axis_u, kr*axis_v, fx, fy, cx, cy, center, bound);
 
     if (!intersect ||
         center.x+bound.x < 0.0 || center.x-bound.x > viewport.x ||
-        center.y+bound.y < 0.0 || center.y-bound.y > viewport.y) {
-        gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
-        return;
-    }
+        center.y+bound.y < 0.0 || center.y-bound.y > viewport.y
+    ) return;
 
     vec4 rgba = vec4(unpackHalf2x16(info2.y), unpackHalf2x16(info2.z));
     vec3 rgb = rgba.xyz;
@@ -279,8 +414,8 @@ void main () {
 
     vColor = vec4(rgb, rgba.w);
     vPosition = p_view.xyz;
-    vAxesU = V0;
-    vAxesV = V1;
+    vAxesU = axis_u;
+    vAxesV = axis_v;
     vAnisotropy = u_use_aniso == 0 ? vec2(0) : anisotropy;
     vIndex = index;
 

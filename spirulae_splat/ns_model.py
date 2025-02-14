@@ -171,7 +171,7 @@ class SpirulaeModelConfig(ModelConfig):
     """threshold of scale for culling huge gaussians"""
     cull_anisotropy_thresh: float = np.inf
     """threshold of quotient of scale for culling long thin gaussians"""
-    cull_grad_thresh: float = 0.00005  # 0.0003 | 0.0001 | 0.00005
+    cull_grad_thresh: float = 0.0  # 3e-4 | 1e-4 | 1e-5 | 0.0
     """threshold for culling gaussians with low visibility"""
     continue_cull_post_densification: bool = True
     """If True, continue to cull gaussians post refinement"""
