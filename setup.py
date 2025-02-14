@@ -90,17 +90,23 @@ def get_extensions():
     return [extension]
 
 
+import importlib.util
+if importlib.util.find_spec('nerfstudio') is None:
+    raise ValueError("Please make sure you have nerfstudio installed.")
+if importlib.util.find_spec('torch') is None:
+    raise ValueError("Please make sure you have PyTorch installed.")
+
 setup(
     name="spirulae_splat",
     description="TODO",
     version="0.1.0",
     packages=find_packages(include=["spirulae_splat*"]),
     install_requires=[
-        "nerfstudio >= 0.3.0",
+        # "nerfstudio",
+        # "torch",
         "jaxtyping",
         "rich>=12",
-        "torch",
-        "typing_extensions; python_version<'3.8'",
+        "typing_extensions",
     ],
     extras_require={
         # dev dependencies. Install them by `pip install gsplat[dev]`

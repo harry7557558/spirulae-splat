@@ -25,6 +25,22 @@ inline __device__ void warpSum(float& val, cg::thread_block_tile<32>& tile){
 }
 
 
+inline __device__ float depth_map(float z) {
+    return z>0.0f ? logf(z+1.0f) : z;
+}
+
+inline __device__ float depth_map_vjp(float z, float v_z) {
+    return z>0.0f ? v_z/(z+1.0f) : v_z;
+}
+
+inline __device__ float depth_inv_map(float z) {
+    return z>0.0f ? expf(z)-1.0f : z;
+}
+
+inline __device__ float depth_inv_map_vjp(float z, float v_z) {
+    return z>0.0f ? v_z*expf(z) : v_z;
+}
+
 
 
 __global__ void rasterize_simple_forward_kernel(
@@ -514,8 +530,9 @@ __global__ void rasterize_depth_forward_kernel(
             // mean depth
             if (depth_mode == DEPTH_MODE_MEAN) {
 
-                // const float depth = pos.z;
-                const float depth = poi.z;
+                // const float depth_raw = pos.z;
+                const float depth_raw = poi.z;
+                const float depth = depth_map(depth_raw);
                 float vis = alpha * T;
                 output_depth += vis * depth;
 
@@ -524,7 +541,8 @@ __global__ void rasterize_depth_forward_kernel(
             // median depth
             else if (depth_mode == DEPTH_MODE_MEDIAN) {
 
-                const float next_depth = poi.z;
+                const float next_depth_raw = poi.z;
+                const float next_depth = depth_map(next_depth_raw);
                 if (next_T < DEPTH_REG_MEDIAN_TH) {
                     if (T < 0.99999f) {
                         // https://www.desmos.com/3d/fttajoozww
@@ -552,10 +570,13 @@ __global__ void rasterize_depth_forward_kernel(
     if (inside) {
         final_index[pix_id] = cur_idx;
         if (depth_mode == DEPTH_MODE_MEAN) {
-            out_depth[pix_id] = (floatt)(T == 1.0f ? output_depth : output_depth / (1.0f-T));
+            float depth = T == 1.0f ? output_depth : output_depth / (1.0f-T);
+            // out_depth[pix_id] = (floatt)depth_inv_map(depth);
+            out_depth[pix_id] = (floatt)depth;
             out_visibility[pix_id] = {(floatt)T, (floatt)(1.0f-T)};
         }
         else if (depth_mode == DEPTH_MODE_MEDIAN) {
+            // out_depth[pix_id] = (floatt)depth_inv_map(output_depth);
             out_depth[pix_id] = (floatt)output_depth;
             out_visibility[pix_id] = {(floatt)T, (floatt)interp};
         }
@@ -723,7 +744,8 @@ __global__ void rasterize_depth_backward_kernel(
                 const float next_T = T * ra;
                 const float vis = alpha * next_T;
 
-                float depth = poi.z;
+                float depth_raw = poi.z;
+                float depth = depth_map(depth_raw);
 
                 // mean depth
                 if (depth_mode == DEPTH_MODE_MEAN) {
@@ -774,9 +796,10 @@ __global__ void rasterize_depth_backward_kernel(
                     v_uv, v_opacity_local, v_anisotropy_local
                 );
                 glm::mat2x3 v_axis_uv = glm::mat2x3(0.0f);
+                float v_depth_raw = depth_map_vjp(depth_raw, v_depth);
                 get_intersection_vjp(
                     pos, axis_uv, pos_2d,
-                    {0.f, 0.f, v_depth}, v_uv,
+                    {0.f, 0.f, v_depth_raw}, v_uv,
                     v_position_local, v_axis_uv
                 );
                 v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local));
@@ -978,10 +1001,11 @@ __global__ void rasterize_forward_kernel(
 
             const float vis = alpha * T;
             #if DEPTH_REG_L == 01 && false
-            const float depth = pos.z;
+            const float depth_raw = pos.z;
             #else
-            const float depth = poi.z;
+            const float depth_raw = poi.z;
             #endif
+            const float depth = depth_map(depth_raw);
 
             pix_out.x = pix_out.x + color.x * vis;
             pix_out.y = pix_out.y + color.y * vis;
@@ -1231,15 +1255,17 @@ __global__ void rasterize_backward_kernel(
                 const float vis = alpha * next_T;
 
                 // update accumulation
-                glm::vec3 v_poi = {0.f, 0.f, 0.f};
+                float v_depth = 0.0f;
                 #if DEPTH_REG_L == 01 && false
-                const float depth = pos.z;
-                v_position_local.z += vis * v_depth_sum;
-                v_position_local.z += vis * 2.0f*depth * v_depth_squared_sum;
+                const float depth_raw = pos.z;
+                const float depth = depth_map(depth_raw);
+                v_depth += vis * v_depth_sum;
+                v_depth += vis * 2.0f*depth * v_depth_squared_sum;
                 #else
-                const float depth = poi.z;
-                v_poi.z += vis * v_depth_sum;
-                v_poi.z += vis * 2.0f*depth * v_depth_squared_sum;
+                const float depth_raw = poi.z;
+                const float depth = depth_map(depth_raw);
+                v_depth += vis * v_depth_sum;
+                v_depth += vis * 2.0f*depth * v_depth_squared_sum;
                 #endif
 
                 // update depth regularizer
@@ -1247,13 +1273,14 @@ __global__ void rasterize_backward_kernel(
                 float depth_sum_next = depth_sum - vis*depth;
                 float depth_squared_sum_next = depth_squared_sum - vis*depth*depth;
                 #if 0  // pairwise L1, requires pos.z for depth
-                v_position_local.z += v_reg_depth_p * vis * (vis_sum_next - (vis_sum_final-vis_sum));
+                v_depth += v_reg_depth_p * vis * (vis_sum_next - (vis_sum_final-vis_sum));
                 float reg_depth_i_p = (
                     depth * vis_sum_next - depth_sum_next +
                     (depth_sum_final-depth_sum) - depth * (vis_sum_final-vis_sum)
                 );
+                v_position_local.z = depth_map_vjp(depth_raw, v_depth);
                 #else  // pairwise L2
-                v_poi.z += v_reg_depth_p * vis * 2.0f * (
+                v_depth += v_reg_depth_p * vis * 2.0f * (
                     vis_sum_final * depth - depth_sum_final);
                 float reg_depth_i_p =
                     vis_sum_final*depth*depth + depth_squared_sum_final
@@ -1261,16 +1288,19 @@ __global__ void rasterize_backward_kernel(
                 #endif
                 #if 1  // L1 with intersected depth
                 float v_z = v_reg_depth_i * vis * glm::sign(depth-depth_ref);
-                v_poi.z += v_z;
+                v_depth += v_z;
                 v_depth_ref += (-v_z);
                 float reg_depth_i_i = abs(depth-depth_ref);
                 #else  // L2 with intersected depth
                 float v_z = v_reg_depth_i * vis * 2.0f*(depth-depth_ref);
-                v_poi.z += v_z;
+                v_depth += v_z;
                 v_depth_ref += (-v_z);
                 float reg_depth_i_i = (depth-depth_ref) * (depth-depth_ref);
                 #endif
                 float reg_depth_i = reg_depth_i_i + (reg_depth_i_p-reg_depth_i_i) * depth_reg_pairwise_factor;
+
+                float v_depth_raw = depth_map_vjp(depth_raw, v_depth);
+                glm::vec3 v_poi = {0.f, 0.f, v_depth_raw};
 
                 // normal regularization
                 glm::vec3 v_normal = {vis * v_out_normal.x, vis * v_out_normal.y, vis * v_out_normal.z};
@@ -1595,7 +1625,8 @@ __global__ void rasterize_simplified_forward_kernel(
             pix_out.z = pix_out.z + color.z * vis;
 
             // depth regularization
-            const float depth = poi.z;
+            const float depth_raw = poi.z;
+            const float depth = depth_map(depth_raw);
             {
                 float pairwise_l1 = vis*depth * vis_sum - vis * depth_sum;  // requires pos.z for depth
                 float pairwise_l2 = vis * (vis_sum*depth*depth + depth_squared_sum - 2.0f*depth*depth_sum);
@@ -1800,19 +1831,23 @@ __global__ void rasterize_simplified_backward_kernel(
                 const float vis = alpha * next_T;
 
                 // update accumulation
-                glm::vec3 v_poi = {0.f, 0.f, 0.f};
-                const float depth = poi.z;
-                v_poi.z += vis * v_depth_sum;
-                v_poi.z += vis * 2.0f*depth * v_depth_squared_sum;
+                const float depth_raw = poi.z;
+                const float depth = depth_map(depth_raw);
+                float v_depth = 0.0f;
+                v_depth += vis * v_depth_sum;
+                v_depth += vis * 2.0f*depth * v_depth_squared_sum;
 
                 // update depth regularizer
                 float vis_sum_next = vis_sum - vis;
                 // pairwise L2
-                v_poi.z += v_reg_depth_p * vis * 2.0f * (
+                v_depth += v_reg_depth_p * vis * 2.0f * (
                     vis_sum_final * depth - depth_sum_final);
                 float reg_depth_i =
                     vis_sum_final*depth*depth + depth_squared_sum_final
                     - 2.0f*depth*depth_sum_final;
+
+                float v_depth_raw = depth_map_vjp(depth_raw, v_depth);
+                glm::vec3 v_poi = {0.f, 0.f, v_depth_raw};
 
                 // update color
                 const glm::vec3 opacity = opacity_batch[t];

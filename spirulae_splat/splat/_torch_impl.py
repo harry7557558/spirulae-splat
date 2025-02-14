@@ -51,6 +51,13 @@ def bessel_j(m, x):
     return 2*(m-1)/x * bessel_j(m-1, x) - bessel_j(m-2, x)
 
 
+def depth_map(z):
+    return torch.where(z>0.0, torch.log(z+1.0), z)
+
+def depth_inv_map(z):
+    return torch.where(z>0.0, torch.exp(z)-1.0, z)
+
+
 def compute_sh_color(
     viewdirs: Float[Tensor, "*batch 3"],
     sh_coeffs: Float[Tensor, "*batch D C"],
@@ -721,7 +728,7 @@ def rasterize_gaussians_depth(
                 
                 next_T = T * (1. - alpha)
 
-                next_depth = poi[2]
+                next_depth = depth_map(poi[2])
 
                 if depth_mode == 0:  # mean
                     output_depth = output_depth + alpha*T * next_depth
@@ -869,8 +876,8 @@ def rasterize_gaussians(
                 next_T = T * (1. - alpha)
 
                 vis = alpha * T
-                # depth = pos[2]
-                depth = poi[2]
+                # depth = depth_map(pos[2])
+                depth = depth_map(poi[2])
 
                 pix_out = pix_out + vis * color
                 pairwise_l1 = vis*depth * vis_sum - vis * depth_sum
@@ -997,7 +1004,7 @@ def rasterize_gaussians_simplified(
                 next_T = T * (1. - alpha)
 
                 vis = alpha * T
-                depth = poi[2]
+                depth = depth_map(poi[2])
 
                 pix_out = pix_out + vis * color
                 pairwise_l2 = vis * (vis_sum*depth*depth + depth_squared_sum - 2.0*depth*depth_sum)

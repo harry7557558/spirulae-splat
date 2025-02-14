@@ -66,12 +66,11 @@ Install Nerfstudio (see [instructions](https://docs.nerf.studio/quickstart/insta
 ```
 cd spirulae-splat/
 git submodule update --init
-conda activate nerfstudio
 pip install -e .
 ns-install-cli
 ```
 
-I mainly tested on nerfstudio 1.1.5, Python 3.8.10, Ubuntu 20.04, CUDA 11.8 and 12.5. It may also work with other versions and platforms.
+I've tested with nerfstudio 1.1.5, Python 3.8.10 and 3.10.12, Ubuntu 20.04 and 22.04, CUDA 11.8 and 12.5, both in Conda and in global environment. It may also work with other versions and platforms.
 
 ## Running the new method
 This repository creates a new Nerfstudio method named "spirulae". To train with it, run the command:

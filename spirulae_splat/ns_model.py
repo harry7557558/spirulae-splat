@@ -30,7 +30,7 @@ from torch.nn import Parameter
 from torch.nn.functional import normalize
 from pytorch_msssim import SSIM
 
-from spirulae_splat.splat._torch_impl import quat_to_rotmat
+from spirulae_splat.splat._torch_impl import depth_inv_map
 from spirulae_splat.splat import (
     project_gaussians,
     rasterize_gaussians_simple,
@@ -129,7 +129,9 @@ class SpirulaeModelConfig(ModelConfig):
 
     _target: Type = field(default_factory=lambda: SpirulaeModel)
 
-    warmup_length: int = 200
+    warmup_length: int = 500
+    """period of steps where refinement is turned off"""
+    stop_refine_at: int = 27000
     """period of steps where refinement is turned off"""
     refine_every: int = 100
     """period of steps where gaussians are culled and densified"""
@@ -151,7 +153,7 @@ class SpirulaeModelConfig(ModelConfig):
     """weight of ssim loss"""
     output_depth_during_training: bool = False
     """If True, output depth during training. Otherwise, only output depth during evaluation."""
-    use_camera_optimizer: bool = True
+    use_camera_optimizer: bool = False
     """Whether to use camera optimizer"""
     camera_optimizer: CameraOptimizerConfig = field(default_factory=lambda: CameraOptimizerConfig(mode="SO3xR3"))
     """Config of the camera optimizer to use"""
@@ -169,7 +171,7 @@ class SpirulaeModelConfig(ModelConfig):
     """threshold of scale for culling huge gaussians"""
     cull_anisotropy_thresh: float = np.inf
     """threshold of quotient of scale for culling long thin gaussians"""
-    cull_grad_thresh: float = 0.0001  # 0.0003 | 0.0001
+    cull_grad_thresh: float = 0.00005  # 0.0003 | 0.0001 | 0.00005
     """threshold for culling gaussians with low visibility"""
     continue_cull_post_densification: bool = True
     """If True, continue to cull gaussians post refinement"""
@@ -395,7 +397,7 @@ class SpirulaeModel(Model):
 
         # Strategy for GS densification
         reset_every = self.config.reset_alpha_every * self.config.refine_every
-        pause_refine_after_reset = min(self.num_train_data, reset_every//2) + self.config.refine_every
+        pause_refine_after_reset = min(self.num_train_data+self.config.refine_every, int(0.8*reset_every))
         self.strategy = DefaultStrategy(
             prune_opa=self.config.cull_alpha_thresh,
             grow_grad2d=self.config.densify_xy_grad_thresh,
@@ -406,7 +408,8 @@ class SpirulaeModel(Model):
             prune_scale2d=self.config.cull_screen_size,
             refine_scale2d_stop_iter=self.config.stop_screen_size_at,
             refine_start_iter=self.config.warmup_length,
-            refine_stop_iter=self.config.stop_split_at,
+            refine_stop_iter=self.config.stop_refine_at,
+            split_stop_iter=self.config.stop_split_at,
             reset_every=reset_every,
             refine_every=self.config.refine_every,
             pause_refine_after_reset=pause_refine_after_reset,
@@ -828,6 +831,7 @@ class SpirulaeModel(Model):
         timerr.mark("bkg")  # 250us-450us
 
         # normal regularization
+        depth_im_ref = depth_inv_map(depth_im_ref)
         normal_im = normalize(normal_im, dim=-1)
         depth_normal, alpha_diffused = depth_to_normal(depth_im_ref, None, intrins, True, alpha)
         reg_normal = 1.0 - (depth_normal * normal_im).sum(-1, True)
@@ -839,7 +843,7 @@ class SpirulaeModel(Model):
             "depth": depth_im_ref,
             "depth_normal": 0.5+0.5*depth_normal,
             "render_normal": 0.5+0.5*normal_im,
-            "reg_depth": torch.sqrt(torch.relu(reg_depth*alpha)+1e-8) / depth_im_ref.clip(1e-3),
+            "reg_depth": torch.sqrt(torch.relu(reg_depth*alpha)+1e-8),
             "reg_normal": torch.sqrt(torch.relu(reg_normal*alpha)+1e-8) * alpha_diffused,
             # "reg_depth": reg_depth / depth_im_ref.clip(1e-3)**2,
             # "reg_normal": reg_normal * alpha_diffused,
