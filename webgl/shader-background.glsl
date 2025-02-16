@@ -115,7 +115,6 @@ void undistort_opencv(
         return;
     }
     vignetting = fr > 0.0 ? length(p)/fr : 0.0;
-    vignetting = 0.0;
 
     p_ud = p;
     vec2 pd; mat2 jac;
@@ -207,6 +206,8 @@ void main () {
         color += 0.6258357354491761 * (xx * (xx - 3. * yy) - yy * (3. * xx - yy)) * background_sh[24];
     }
     color = max(color+0.5, 0.0);
+    if (sh_degree < 0.5)
+        color = background_sh[0];
 
     if (vignetting > 0.0) {
         vignetting = pow(1.0-pow(vignetting,20.0), 2.0);

@@ -1093,7 +1093,7 @@ async function main() {
             gl.clear(gl.COLOR_BUFFER_BIT);
 
             let background_sh_degree = header.config.background_sh_degree;
-            if (bg && background_sh_degree > 0) {
+            if ((bg && background_sh_degree > 0) || camera.model == 1) {
                 gl.useProgram(backgroundProgram);
                 gl.uniform1f(gl.getUniformLocation(backgroundProgram, "sh_degree"),
                     background_sh_degree);
