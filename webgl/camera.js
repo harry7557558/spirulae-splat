@@ -79,6 +79,93 @@ CameraPresets["t265"] = {
 CameraPresets["$"] = null;
 
 
+CameraPresets.invFisheyeDistort = function(k1, k2, k3, k4) {
+    `def inv_fisheye_distort(k1, k2, k3, k4):
+        N = 128
+        theta = np.pi/2 * (np.arange(N)+0.5)/N
+        theta2 = theta*theta
+        r = theta*(1+theta2*(k1+theta2*(k2+theta2*(k3+theta2*k4))))
+        A = np.stack([r**3, r**5, r**7, r**9])
+        l1, l2, l3, l4 = np.linalg.solve(A@A.T, A@(theta-r))
+        return l1, l2, l3, l4
+    `;
+
+    const N = 128, n = 4;
+    let theta = Array.from({length: N}, (_, i) => Math.PI/2 * (i + 0.5)/N);
+    let r = theta.map(t => {
+        let t2 = t*t, poly = 1 + t2*(k1 + t2*(k2 + t2*(k3 + t2*k4)));
+        return t * poly;
+    });
+    
+    // Create matrix A (4x128)
+    let A = [[], [], [], []];
+    for (let i = 0; i < N; i++) {
+        let ri = r[i], r2 = ri*ri;
+        A[0][i] = ri*r2;
+        A[1][i] = A[0][i]*r2;
+        A[2][i] = A[1][i]*r2;
+        A[3][i] = A[2][i]*r2;
+    }
+
+    // Compute M = A*A^T and b = A*(theta - r)
+    let M = Array(n).fill().map(() => Array(n).fill(0));
+    let b = Array(n).fill(0);
+    for (let i = 0; i < n; i++) {
+        for (let j = 0; j < n; j++) 
+            for (let k = 0; k < N; k++) 
+                M[i][j] += A[i][k] * A[j][k];
+        for (let k = 0; k < N; k++)
+            b[i] += A[i][k] * (theta[k] - r[k]);
+    }
+
+    // Cholesky decomposition
+    let L = Array(n).fill().map(() => Array(n).fill(0));
+    for (let i = 0; i < n; i++) 
+        for (let j = 0; j <= i; j++) {
+            let s = 0;
+            for (let k = 0; k < j; k++) s += L[i][k] * L[j][k];
+            L[i][j] = i === j ? Math.sqrt(M[i][i] - s) : (M[i][j] - s)/L[j][j];
+        }
+    
+    // Forward substitution (Ly = b)
+    let y = Array(n).fill(0);
+    for (let i = 0; i < n; i++) {
+        for (let j = 0; j < i; j++) y[i] -= L[i][j] * y[j];
+        y[i] = (b[i] + y[i]) / L[i][i];
+    }
+
+    // Backward substitution (L^Tx = y)
+    let x = Array(n).fill(0);
+    for (let i = n-1; i >= 0; i--) {
+        for (let j = i+1; j < n; j++) x[i] -= L[j][i] * x[j];
+        x[i] = (y[i] + x[i]) / L[i][i];
+    }
+
+    return x;
+}
+
+CameraPresets.init = function() {
+    for (var id in CameraPresets) {
+        if (id == '$') break;
+        let camera = CameraPresets[id];
+
+        // add undistortion coefficients
+        if (camera.model == "OPENCV") {
+            camera.dist_coeffs = [camera.k1, camera.k2, camera.p1, camera.p2];
+        }
+        else if (camera.model == "OPENCV_FISHEYE") {
+            var l = CameraPresets.invFisheyeDistort(camera.k1, camera.k2, camera.k3, camera.k4);
+            camera.dist_coeffs = [camera.k1, camera.k2, camera.k3, camera.k4];
+            camera.undist_coeffs = l;
+        }
+        else {
+            camera.dist_coeffs = [0.0, 0.0, 0.0, 0.0];
+            camera.undist_coeffs = [0.0, 0.0, 0.0, 0.0];
+        }
+    }
+};
+
+
 CameraPresets.createSelector = function() {
     let select = document.createElement("select");
     for (var id in CameraPresets) {
@@ -100,22 +187,21 @@ CameraPresets.createSelector = function() {
             fy: camera.fy * size0/size1,
             cx: camera.cx * window.innerWidth/camera.w,
             cy: camera.cy * window.innerHeight/camera.w,
-            dist_coeffs: [0.0, 0.0, 0.0, 0.0],
+            dist_coeffs: camera.dist_coeffs,
+            undist_coeffs: camera.undist_coeffs,
             model: -1,
         };
         if (camera.model == "OPENCV") {
             camera_s.model = 0;
-            camera_s.dist_coeffs = [camera.k1, camera.k2, camera.p1, camera.p2];
         }
         if (camera.model == "OPENCV_FISHEYE") {
             camera_s.model = 1;
-            camera_s.dist_coeffs = [camera.k1, camera.k2, camera.k3, camera.k4];
         }
         CameraPresets.camera = camera_s;
     }
     select.addEventListener("input", updateSelectedCamera);
     window.addEventListener("resize", updateSelectedCamera);
-    select.value = "s21";
+    select.value = "t265";
     updateSelectedCamera();
     return select;
 }

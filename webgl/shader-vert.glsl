@@ -9,6 +9,8 @@ uniform vec2 viewport;
 uniform int camera_model;
 uniform vec4 distortion;
 
+#define USE_EXACT_DISTORTION 0
+
 uniform ivec2 u_sh_config;
 uniform int u_use_aniso;
 
@@ -23,6 +25,8 @@ flat out vec3 vAxesU;
 flat out vec3 vAxesV;
 flat out vec2 vAnisotropy;
 flat out int vIndex;
+
+#define PI 3.14159265
 
 
 mat3 quat_to_rotmat(vec4 quat) {
@@ -48,6 +52,7 @@ mat3 quat_to_rotmat(vec4 quat) {
 
 
 // camera distortion models
+// TODO: refactor into a separate file
 
 float opencv_radius(
     in vec4 dist_coeffs
@@ -81,7 +86,7 @@ float fisheye_radius(
     return theta*(1.0 + theta2*(k1 + theta2*(k2 + theta2*(k3 + theta2*k4))));
 }
 
-void distort_opencv(
+void distort_opencv_with_jac(
     in vec2 p, in vec4 dist_coeffs,
     out vec2 p_dist, out mat2 jac_dist
 ) {
@@ -106,7 +111,23 @@ void distort_opencv(
     jac_dist = mat2(jxx, jxy, jxy, jyy);
 }
 
-void distort_fisheye(
+vec2 distort_fisheye(in vec2 p, in vec4 dist_coeffs) {
+    float k1 = dist_coeffs.x;
+    float k2 = dist_coeffs.y;
+    float k3 = dist_coeffs.z;
+    float k4 = dist_coeffs.w;
+
+    float x = p.x, y = p.y;
+    float r2 = x*x + y*y;
+    float r = sqrt(r2);
+    float theta = atan(r);
+    float theta2 = theta*theta;
+    float r_dist = theta*(1.0 + theta2*(k1 + theta2*(k2 + theta2*(k3 + theta2*k4))));
+
+    return p * (r_dist/r);
+}
+
+void distort_fisheye_with_jac(
     in vec2 p, in vec4 dist_coeffs,
     out vec2 p_dist, out mat2 jac_dist
 ) {
@@ -148,50 +169,134 @@ vec3 distort_jac_3d(
 }
 
 
+// compute axis-aligned bounding box
 bool project_ellipse_bound(
-    vec3 T,
-    vec3 V0,
-    vec3 V1,
+    vec3 T, vec3 V0, vec3 V1,
     float fx, float fy, float cx, float cy,
-    out vec2 center, out vec3 bound
+    int model, vec4 dist_coeffs,
+    out vec2 center, out vec2 bound
 ) {
+    // TODO: write three functions
+    // project_bound_perspective: perspective camera, analytical ellipse bound
+    // project_bound_opencv: opencv camera, brute force sample / quadratic fit on distorted 2D ellipse
+    // project_bound_fisheye: fisheye camera, brute force sample on distorted projection of 3D ellipse (handle "outside circle")
+
     // 2d conic coefficients
+    // A x^2 + 2B xy + C y^2 + 2D x + 2E y + F = 0
     vec3 V01 = cross(V0, V1);
     vec3 V0T = cross(T, V0);
     vec3 V1T = cross(T, V1);
     float A = V0T.x * V0T.x + V1T.x * V1T.x - V01.x * V01.x;
     float B = -V01.y * V01.x + V1T.y * V1T.x + V0T.y * V0T.x;
     float C = V0T.y * V0T.y + V1T.y * V1T.y - V01.y * V01.y;
-    float D = 2.0 * V0T.z * V0T.x + 2.0 * V1T.z * V1T.x - 2.0 * V01.z * V01.x;
-    float E = -2.0 * V01.z * V01.y + 2.0 * V1T.z * V1T.y + 2.0 * V0T.z * V0T.y;
+    float D = V0T.z * V0T.x + V1T.z * V1T.x - V01.z * V01.x;
+    float E = -V01.z * V01.y + V1T.z * V1T.y + V0T.z * V0T.y;
     float F = V0T.z * V0T.z + V1T.z * V1T.z - V01.z * V01.z;
 
     if (!(B * B < A * C))
         return false;
 
     // translate to origin
-    float U = (C * D - B * E) / (2.0 * (B * B - A * C));
-    float V = (A * E - B * D) / (2.0 * (B * B - A * C));
-    float S = -(A * U * U + 2.0 * B * U * V + C * V * V + D * U + E * V + F);
+    float U = (C * D - B * E) / (B * B - A * C);
+    float V = (A * E - B * D) / (B * B - A * C);
+    float S = A * U*U + 2.0*B * U*V + C * V*V + 2.0*D * U + 2.0*E * V + F;
 
-    // image transform
-    float U_T = fx * U + cx;
-    float V_T = fy * V + cy;
-    float A_T = A / (fx * fx);
-    float B_T = B / (fx * fy);
-    float C_T = C / (fy * fy);
+    // opencv model
+    if (model == 0) {
+        // TODO
+    }
 
-    // axis-aligned bounding box
-    float W_T = fx * sqrt(C * S / (A * C - B * B));
-    float H_T = fy * sqrt(A * S / (A * C - B * B));
+    // fisheye model
+    else if (model == 1) {
+        // represent ellipse in principal parametric form
+        vec2 p0 = vec2(U, V);
+        float delta = sqrt((A-C)*(A-C) + 4.0*B*B);
+        float eps = min(1e-6*S, -1e-16);
+        float lambda1 = 2.0*S/min(delta-(A+C),eps);
+        float lambda2 = 2.0*S/min(-delta-(A+C),eps);
+        vec2 v0 = normalize(vec2(-A+C+delta, -2.0*B));
+        vec2 v1 = sqrt(lambda1) * v0;
+        vec2 v2 = sqrt(lambda2) * vec2(-v0.y, v0.x);
 
-    // bounding circle
-    float L_T = 0.5 * (A_T + C_T - sqrt((A_T - C_T) * (A_T - C_T) + 4.0 * B_T * B_T));
-    float R_T = sqrt(S / L_T);
+        // do some experiments with getting bounds here
+        // 0: brute force on parametric
+        // 1: quadratic fit on parametric
+        #define BOUND_MODE 0
 
-    // output
-    center = vec2(U_T, V_T);
-    bound = vec3(W_T, H_T, R_T);
+        // sample points
+    #if BOUND_MODE == 0
+        // brute force on parametric
+        const float N = 16.0;
+        float x0 = 1e4, x1 = -1e4, y0 = 1e4, y1 = -1e4;
+        for (float i = 0.0; i < N; i++) {
+            float t = 2.0*PI*i/N;
+            vec2 c = distort_fisheye(p0+v1*cos(t)+v2*sin(t), dist_coeffs);
+            x0 = min(x0, c.x); x1 = max(x1, c.x);
+            y0 = min(y0, c.y); y1 = max(y1, c.y);
+        }
+    #elif BOUND_MODE == 1
+        // quadratic fit on parametric
+        const float N = 8.0;
+        vec2 c0 = distort_fisheye(p0+v1, dist_coeffs);
+        vec2 c1 = distort_fisheye(p0+v1*cos(2.0*PI/N)+v2*sin(2.0*PI/N), dist_coeffs);
+        float x0 = c0.x, x1 = c0.x, y0 = c0.y, y1 = c0.y;
+        for (float i = 0.0; i < N; i++) {
+            float t0 = 2.0*PI*(i+2.0)/N;
+            vec2 c2 = distort_fisheye(p0+v1*cos(t0)+v2*sin(t0), dist_coeffs);
+
+            // at sample points
+            x0 = min(x0, c2.x); x1 = max(x1, c2.x);
+            y0 = min(y0, c2.y); y1 = max(y1, c2.y);
+            // continue;
+
+            // x at quadratic fit
+            vec2 t_opt = (c0-c1)/(c0-2.0*c1+c2);
+            if (t_opt.x > 0.0 && t_opt.x < 1.0) {
+                // quadratic fit
+                float f = t_opt.x;
+                float x = (1.0-f)*(1.0-f)*c0.x+2.0*f*(1.0-f)*c1.x+f*f*c2.x;
+                x0 = min(x0, x); x1 = max(x1, x);
+                // evaluated
+                float t = 2.0*PI*(i+2.0*f)/N;
+                vec2 p = distort_fisheye(p0+v1*cos(t)+v2*sin(t), dist_coeffs);
+                x0 = min(x0, p.x); x1 = max(x1, p.x);
+                y0 = min(y0, p.y); y1 = max(y1, p.y);  // doesn't hurt
+            }
+
+            // y at quadratic fit
+            if (t_opt.y > 0.0 && t_opt.y < 1.0) {
+                // quadratic fit
+                float f = t_opt.y;
+                float y = (1.0-f)*(1.0-f)*c0.y+2.0*f*(1.0-f)*c1.y+f*f*c2.y;
+                y0 = min(y0, y); y1 = max(y1, y);
+                // evaluated
+                float t = 2.0*PI*(i+2.0*f)/N;
+                vec2 p = distort_fisheye(p0+v1*cos(t)+v2*sin(t), dist_coeffs);
+                y0 = min(y0, p.y); y1 = max(y1, p.y);
+                x0 = min(x0, p.x); x1 = max(x1, p.x);  // doesn't hurt
+            }
+
+            c0 = c1, c1 = c2;
+        }
+    #endif
+
+        #undef BOUND_MODE
+
+        // update bounds
+        vec2 b0 = vec2(x0, y0);
+        vec2 b1 = vec2(x1, y1);
+        center = 0.5*(b0+b1) * vec2(fx,fy) + vec2(cx,cy);
+        bound = 0.5*(b1-b0) * vec2(fx,fy);
+    }
+
+    // perspective model
+    else {
+        float W = sqrt(C * S / (B * B - A * C));
+        float H = sqrt(A * S / (B * B - A * C));
+        center = vec2(fx*U+cx, fx*V+cy);
+        bound = vec2(fx*W, fy*H);
+    }
+
     return true;
 }
 
@@ -351,6 +456,9 @@ void main () {
     vec3 axis_v = scale.y * R[1];
 
     // distortion
+#if USE_EXACT_DISTORTION
+    ;
+#else  // USE_EXACT_DISTORTION
     vec2 p_proj = p_view.xy/p_view.z;
     vec2 p_dist = p_proj;
     mat2 jac_dist;
@@ -358,34 +466,20 @@ void main () {
         float fr = opencv_radius(distortion);
         if (fr > 0.0 && !(dot(p_proj, p_proj) < fr*fr))
             return;
-        distort_opencv(p_proj, distortion, p_dist, jac_dist);
+        distort_opencv_with_jac(p_proj, distortion, p_dist, jac_dist);
         axis_u = vec3(jac_dist * vec2(axis_u), axis_u.z);
         axis_v = vec3(jac_dist * vec2(axis_v), axis_v.z);
     }
     else if (camera_model == 1) {  // OPENCV_FISHEYE
-        distort_fisheye(p_proj, distortion, p_dist, jac_dist);
-        float fr = fisheye_radius(1.570796, distortion);
+        distort_fisheye_with_jac(p_proj, distortion, p_dist, jac_dist);
+        float fr = fisheye_radius(0.5*PI, distortion);
         if (!(dot(p_dist,p_dist) < fr*fr))
             return;
         axis_u = distort_jac_3d(p_proj, p_dist, jac_dist, axis_u);
         axis_v = distort_jac_3d(p_proj, p_dist, jac_dist, axis_v);
-        // eliminate splats outside the circle
-        // TODO: use an analytical solution
-        #if 0
-        vec2 u2d = vec2(axis_u)/p_view.z;
-        vec2 v2d = vec2(axis_v)/p_view.z;
-        const int n = 8;
-        for (int i = 0; i < n; i++) {
-            float t = 6.283185*float(i)/float(n);
-            vec2 p = p_dist + u2d * cos(t) + v2d * sin(t);
-            if (!(dot(p,p) < fr*fr)) {
-                gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
-                return;
-            }
-        }
-        #endif
     }
     p_view.xy = p_dist * p_view.z;
+#endif  // USE_EXACT_DISTORTION
 
     // project to 2d
     float fx = focal.x;
@@ -393,10 +487,14 @@ void main () {
     float cx = 0.5 * viewport.x;
     float cy = 0.5 * viewport.y;
     vec2 center;
-    vec3 bound = vec3(0.0);
+    vec2 bound = vec2(0.0);
     const float kr = 1.0;
     bool intersect = project_ellipse_bound(
-        p_view.xyz, kr*axis_u, kr*axis_v, fx, fy, cx, cy, center, bound);
+        p_view.xyz, kr*axis_u, kr*axis_v,
+        fx, fy, cx, cy,
+        bool(USE_EXACT_DISTORTION) ? camera_model : -1, distortion,
+        center, bound
+    );
 
     if (!intersect ||
         center.x+bound.x < 0.0 || center.x-bound.x > viewport.x ||

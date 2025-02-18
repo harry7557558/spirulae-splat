@@ -6,6 +6,7 @@ uniform vec2 focal;
 uniform vec2 viewport;
 uniform int camera_model;
 uniform vec4 distortion;
+uniform vec4 undistortion;
 
 uniform ivec3 u_ch_config;
 
@@ -20,6 +21,8 @@ uniform highp usampler2D u_ch_texture;
 // uniform highp usampler2D u_sh_texture;
 
 out vec4 fragColor;
+
+#define PI 3.14159265
 
 
 float bessel_j0(float x) {
@@ -41,7 +44,7 @@ float bessel_j0(float x) {
                (1.0 + x * (B01 + x * (B02 + x * (B03 + x * B04))));
     } else {
         float inv_x = 1.0 / x;
-        return sqrt(inv_x / 3.14159265) * 
+        return sqrt(inv_x / PI) * 
                ((1.0 + inv_x * (C01 + inv_x * C02)) * cos(x) + 
                 (1.0 + inv_x * (D01 + inv_x * D02)) * sin(x));
     }
@@ -66,7 +69,7 @@ float bessel_j1(float x) {
                (1.0 + x * (B11 + x * (B12 + x * (B13 + x * B14))));
     } else {
         float inv_x = 1.0 / x;
-        return -s * sqrt(inv_x / 3.14159265) * 
+        return -s * sqrt(inv_x / PI) * 
                ((1.0 + inv_x * (C11 + inv_x * C12)) * cos(x) - 
                 (1.0 + inv_x * (D11 + inv_x * D12)) * sin(x));
     }
@@ -91,7 +94,7 @@ float bessel_j2(float x) {
                (1.0 + x * (B21 + x * (B22 + x * (B23 + x * B24))));
     } else {
         float inv_x = 1.0 / x;
-        return -sqrt(inv_x / 3.14159265) * 
+        return -sqrt(inv_x / PI) * 
                ((1.0 + inv_x * (C21 + inv_x * (C22 + inv_x * C23))) * cos(x) + 
                 (1.0 + inv_x * (D21 + inv_x * D22)) * sin(x));
     }
@@ -117,7 +120,7 @@ float bessel_j3(float x) {
                (1.0 + x * (B31 + x * (B32 + x * (B33 + x * B34))));
     } else {
         float inv_x = 1.0 / x;
-        return s * sqrt(inv_x / 3.14159265) * 
+        return s * sqrt(inv_x / PI) * 
                ((1.0 + inv_x * (C31 + inv_x * (C32 + inv_x * C33))) * cos(x) - 
                 (1.0 + inv_x * (D31 + inv_x * (D32 + inv_x * D33))) * sin(x));
     }
@@ -144,7 +147,7 @@ float bessel_j4(float x) {
                (1.0 + x * (B41 + x * (B42 + x * (B43 + x * (B44 + x * B45)))));
     } else {
         float inv_x = 1.0 / x;
-        return sqrt(inv_x / 3.14159265) * 
+        return sqrt(inv_x / PI) * 
                ((1.0 + inv_x * (C41 + inv_x * (C42 + inv_x * C43))) * cos(x) + 
                 (1.0 + inv_x * (D41 + inv_x * (D42 + inv_x * D43))) * sin(x));
     }
@@ -274,6 +277,7 @@ vec3 ch_coeffs_to_color(vec2 uv) {
 
 
 // camera distortion models
+// TODO: refactor into a separate file
 
 float opencv_radius(
     in vec4 dist_coeffs
@@ -307,6 +311,20 @@ float fisheye_radius(
     return theta*(1.0 + theta2*(k1 + theta2*(k2 + theta2*(k3 + theta2*k4))));
 }
 
+vec2 undistort_fisheye(in vec2 p, in vec4 undist_coeffs) {
+    float l1 = undist_coeffs.x;
+    float l2 = undist_coeffs.y;
+    float l3 = undist_coeffs.z;
+    float l4 = undist_coeffs.w;
+
+    float x = p.x, y = p.y;
+    float r2 = x*x + y*y;
+    float r = sqrt(r2);
+    float theta = r*(1.0 + r2*(l1 + r2*(l2 + r2*(l3 + r2*l4))));
+
+    return p * (tan(theta)/r);
+}
+
 
 void main () {
 
@@ -318,22 +336,26 @@ void main () {
     //     return;
     // }
 
-    vec2 pos_2d = vec2(1,-1)*(gl_FragCoord.xy-0.5*viewport)/focal;
+    vec2 pos2d = vec2(1,-1)*(gl_FragCoord.xy-0.5*viewport)/focal;
+    vec2 pos2d_undist = pos2d;
 
     float fr = -1.0;
-    if (camera_model == 0)
+    if (camera_model == 0) {
         fr = opencv_radius(distortion);
-    else if (camera_model == 1)
-        fr = fisheye_radius(1.570796, distortion);
+    }
+    else if (camera_model == 1) {
+        fr = fisheye_radius(0.5*PI, distortion);
+        // pos2d_undist = undistort_fisheye(pos2d, undistortion);
+    }
     const vec3 vignetting_background = vec3(0.1);
-    if (fr > 0.0 && length(pos_2d) > fr) {
+    if (fr > 0.0 && length(pos2d) > fr) {
         fragColor = vec4(vignetting_background, 0.0);
         return;
     }
 
     vec3 poi;
     vec2 uv;
-    if (!get_intersection(pos_2d, poi, uv))
+    if (!get_intersection(pos2d_undist, poi, uv))
         discard;
     float alpha;
     if (!get_alpha(uv, vColor.a, vAnisotropy, alpha))
@@ -345,7 +367,7 @@ void main () {
     }
     
     if (fr > 0.0) {
-        float vignetting = min(length(pos_2d)/fr, 1.0);
+        float vignetting = min(length(pos2d)/fr, 1.0);
         vignetting = pow(1.0-pow(vignetting,20.0), 2.0);
         color = mix(vignetting_background, color, vignetting);
     }

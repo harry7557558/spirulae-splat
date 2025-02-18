@@ -482,6 +482,8 @@ let defaultViewMatrix = [
     0.0, -0.98, -0.199, 0.0,
     0.0, 0.0, 1.0, 1.0
 ];
+// defaultViewMatrix = [-0.99396310067939, -0.0028527761475104297, 0.10967788056938267, 0, -0.10947236494874289, -0.04064304253875142, -0.9931590623621941, 0, 0.007290894500575474, -0.9991701580618988, 0.040085384110577396, 0, -0.008981957487634048, -0.019741792911632222, 0.80080398369808, 0.9999999999999599];
+// defaultViewMatrix = [0.33168228758220725, 0.1352309888257432, 0.9336489201265321, 0, -0.9433629759026162, 0.039895202904019586, 0.3293551310485557, 0, 0.007290894500575899, -0.9900110870320623, 0.1408044397597277, 0, -0.13138587004540464, -0.07371462201299227, 0.49180482237051854, 0.9999999999998919];
 let viewMatrix = defaultViewMatrix;
 async function main() {
     let carousel = true;
@@ -625,6 +627,8 @@ async function main() {
         gl.uniform1i(gl.getUniformLocation(program, "camera_model"), camera.model);
         gl.uniform4fv(gl.getUniformLocation(program, "distortion"),
             new Float32Array(camera.dist_coeffs));
+        gl.uniform4fv(gl.getUniformLocation(program, "undistortion"),
+            new Float32Array(camera.undist_coeffs));
     }
 
     const resize = () => {
@@ -1074,6 +1078,7 @@ async function main() {
             renderNeeded = true;
         previousCamera = camera;
 
+        // renderNeeded = true;
         if (vertexCount > 0 && renderNeeded) {
             document.getElementById("spinner").style.display = "none";
 
@@ -1247,6 +1252,7 @@ async function loadShadersAndInit() {
 
 
 window.addEventListener("load", () => {
+    CameraPresets.init();
     document.getElementById("camera-preset-container").appendChild(
         CameraPresets.createSelector());
 

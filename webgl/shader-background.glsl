@@ -6,14 +6,18 @@ uniform vec2 viewport;
 uniform mat4 projection, view;
 uniform int camera_model;
 uniform vec4 distortion;
+uniform vec4 undistortion;
 
 uniform float sh_degree;
 uniform vec3 background_sh[25];
 
 out vec4 fragColor;
 
+#define PI 3.14159265
+
 
 // camera distortion models
+// TODO: refactor into a separate file
 
 float opencv_radius(
     in vec4 dist_coeffs
@@ -105,7 +109,7 @@ void distort_fisheye(
 
 int iter_count = 0;
 
-void undistort_opencv(
+void undistort_opencv_iterative(
     in vec2 p, in vec4 dist_coeffs,
     out vec2 p_ud, out float vignetting
 ) {
@@ -128,11 +132,11 @@ void undistort_opencv(
     }
 }
 
-void undistort_fisheye(
+void undistort_fisheye_iterative(
     in vec2 p, in vec4 dist_coeffs,
     out vec2 p_ud, out float vignetting
 ) {
-    float fr = fisheye_radius(1.570796, dist_coeffs);
+    float fr = fisheye_radius(0.5*PI, dist_coeffs);
     if (length(p) > fr) {
         vignetting = 1.0;
         return;
@@ -151,16 +155,43 @@ void undistort_fisheye(
     }
 }
 
+void undistort_fisheye(
+    in vec2 p, in vec4 dist_coeffs, in vec4 undist_coeffs,
+    out vec2 p_ud, out float vignetting
+) {
+    float fr = fisheye_radius(0.5*PI, dist_coeffs);
+    if (length(p) > fr) {
+        vignetting = 1.0;
+        return;
+    }
+    vignetting = length(p)/fr;
+
+    float l1 = undist_coeffs.x;
+    float l2 = undist_coeffs.y;
+    float l3 = undist_coeffs.z;
+    float l4 = undist_coeffs.w;
+
+    float x = p.x, y = p.y;
+    float r2 = x*x + y*y;
+    float r = sqrt(r2);
+    float theta = r*(1.0 + r2*(l1 + r2*(l2 + r2*(l3 + r2*l4))));
+
+    p_ud = p * (tan(theta)/r);
+}
+
 
 void main () {
 
     vec2 coord0 = vec2(1,-1) * (gl_FragCoord.xy-0.5*viewport) / focal;
     vec2 coord = coord0;
     float vignetting = 0.0;
-    if (camera_model == 0)
-        undistort_opencv(coord0, distortion, coord, vignetting);
-    else if (camera_model == 1)
-        undistort_fisheye(coord0, distortion, coord, vignetting);
+    if (camera_model == 0) {
+        undistort_opencv_iterative(coord0, distortion, coord, vignetting);
+    }
+    else if (camera_model == 1) {
+        // undistort_fisheye_iterative(coord0, distortion, coord, vignetting);
+        undistort_fisheye(coord0, distortion, undistortion, coord, vignetting);
+    }
 
     const vec3 vignetting_background = vec3(0.1);
     if (vignetting == 1.0) {
