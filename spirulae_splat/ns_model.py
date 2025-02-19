@@ -636,15 +636,7 @@ class SpirulaeModel(Model):
         return {}
 
     def get_outputs(self, camera: Cameras) -> Dict[str, Union[torch.Tensor, List]]:
-        """Takes in a Ray Bundle and returns a dictionary of outputs.
-
-        Args:
-            ray_bundle: Input bundle of rays. This raybundle should have all the
-            needed information to compute the outputs.
-
-        Returns:
-            Outputs of model. (ie. rendered colors)
-        """
+        """Takes in a camera and returns a dictionary of outputs."""
         if not isinstance(camera, Cameras):
             print("Called get_outputs with not a camera")
             return {}
@@ -656,83 +648,55 @@ class SpirulaeModel(Model):
             optimized_camera_to_world = self.camera_optimizer.apply_to_camera(camera)[0, ...]
         else:
             optimized_camera_to_world = camera.camera_to_worlds[0, ...]
-        timerr.mark(".")  # 500us
+        optimized_camera_to_world = optimized_camera_to_world.cpu().numpy().astype(np.float32)
+        timerr.mark(".")  # 70us
 
-        if self.crop_box is not None and not self.training:
-            crop_ids = self.crop_box.within(self.means).squeeze()
-            if crop_ids.sum() == 0:
-                return self.get_empty_outputs(
-                    int(camera.width.item()), int(camera.height.item()),
-                    self.background_color.detach())
-        else:
-            crop_ids = None
         camera_downscale = self._get_downscale_factor()
         camera.rescale_output_resolution(1 / camera_downscale)
         W, H = int(camera.width.item()), int(camera.height.item())
         intrins = (camera.fx.item(), camera.fy.item(), camera.cx.item(), camera.cy.item())
         camera.rescale_output_resolution(camera_downscale)
-        timerr.mark(".")  # 450us-800us
+        timerr.mark(".")  # 400us
 
         R = optimized_camera_to_world[:3, :3]  # 3 x 3
         T = optimized_camera_to_world[:3, 3:4]  # 3 x 1
-        R_edit = torch.diag(torch.tensor([1, -1, -1], device=self.device, dtype=R.dtype))
-        R = R @ R_edit
+        R = R * [1, -1, -1]
         R_inv = R.T
         T_inv = -R_inv @ T
-        viewmat = torch.eye(4, device=R.device, dtype=R.dtype)
+        viewmat = np.eye(4, dtype=np.float32)
         viewmat[:3, :3] = R_inv
         viewmat[:3, 3:4] = T_inv
         self.last_size = (H, W)
-        timerr.mark("pre")  # 300us-500us
+        timerr.mark("pre")  # 80us
 
-        if crop_ids is not None:
-            opacities_crop = self.opacities[crop_ids]
-            anisotropies_crop = self.anisotropies[crop_ids]
-            means_crop = self.means[crop_ids]
-            features_dc_crop = self.features_dc[crop_ids]
-            features_sh_crop = self.features_sh[crop_ids]
-            features_ch_crop = self.features_ch[crop_ids]
-            scales_crop = self.scales[crop_ids]
-            quats_crop = self.quats[crop_ids]
-        else:
-            opacities_crop = self.opacities
-            anisotropies_crop = self.anisotropies
-            means_crop = self.means
-            features_dc_crop = self.features_dc
-            features_sh_crop = self.features_sh
-            features_ch_crop = self.features_ch
-            scales_crop = self.scales
-            quats_crop = self.quats
-        colors_crop = torch.cat((features_dc_crop[:, None, :], features_sh_crop), dim=1)
-        timerr.mark("crop")  # 80us-200us
-
-        quats_crop = normalize(quats_crop, dim=-1)
-        timerr.mark("norm")  # 100us-250us
+        colors = torch.cat((self.features_dc[:, None, :], self.features_sh), dim=1)
+        quats = normalize(self.quats, dim=-1)
+        opacities = self.config.max_opacity * torch.sigmoid(self.opacities)
+        timerr.mark("map")  # 300us-450us
 
         if self.config.sh_degree > 0:
-            viewdirs = means_crop.detach() - optimized_camera_to_world.detach()[:3, 3]  # (N, 3)
+            viewdirs = self.means.detach() - torch.from_numpy(optimized_camera_to_world[:3, 3]).cuda()  # (N, 3)
             n = min(self.step // self.config.sh_degree_interval, self.config.sh_degree)
-            rgbs = spherical_harmonics(n, viewdirs, colors_crop)  # input unnormalized viewdirs
-            rgbs = torch.clamp(rgbs + 0.5, min=0.0)  # type: ignore
+            rgbs = spherical_harmonics(n, viewdirs, colors)  # input unnormalized viewdirs
+            rgbs = torch.relu(rgbs+0.5)  # type: ignore
         else:
-            rgbs = colors_crop[:, 0, :]
-        opacities = self.config.max_opacity * torch.sigmoid(opacities_crop)
-        timerr.mark("color")  # 200us-300us
+            rgbs = colors[:, 0, :]
+        timerr.mark("sh")  # 200us-350us
 
         BLOCK_WIDTH = 16
         (
             positions, axes_u, axes_v,
             bounds, num_tiles_hit
         ) = project_gaussians(  # type: ignore
-            means_crop,
-            torch.exp(scales_crop),
-            quats_crop,
-            viewmat.squeeze()[:3, :],
+            self.means,
+            torch.exp(self.scales),
+            quats,
+            torch.from_numpy(viewmat[:3, :]).cuda(),
             intrins,
             H, W,
             BLOCK_WIDTH,
         )  # type: ignore
-        timerr.mark("project")  # 150us-250us
+        timerr.mark("project")  # 200us-350us
 
         # slower but more capable two-pass rendering
         if False or (
@@ -743,7 +707,7 @@ class SpirulaeModel(Model):
 
             depth_im_ref = rasterize_gaussians_depth(
                 positions, axes_u, axes_v,
-                opacities, anisotropies_crop,
+                opacities, self.anisotropies,
                 bounds, num_tiles_hit,
                 intrins, H, W, BLOCK_WIDTH,
                 self.config.depth_mode
@@ -752,7 +716,7 @@ class SpirulaeModel(Model):
                 depth_im_ref > 0.0, depth_im_ref,
                 torch.amax(depth_im_ref).detach()
             ).contiguous()
-            timerr.mark("depth")  # 700us-1200us
+            timerr.mark("depth")  # ?us
 
             # main rasterization
             ch_degree = self.step // self.config.ch_degree_interval
@@ -762,15 +726,15 @@ class SpirulaeModel(Model):
                 rgbs,
                 self.config.ch_degree_r, min(ch_degree, self.config.ch_degree_r),
                 self.config.ch_degree_phi, min(ch_degree, self.config.ch_degree_phi),
-                features_ch_crop,
-                opacities, anisotropies_crop,
+                self.features_ch,
+                opacities, self.anisotropies,
                 depth_im_ref,
                 # background_color,
                 self.config.depth_reg_pairwise_factor,
                 bounds, num_tiles_hit,
                 intrins, H, W, BLOCK_WIDTH,
             )  # type: ignore
-            timerr.mark("render")  # 650us-1400us
+            timerr.mark("render")  # ?us
 
         # fast one-pass rendering
         else:
@@ -778,7 +742,7 @@ class SpirulaeModel(Model):
              = rasterize_gaussians_simplified(
                 positions, axes_u, axes_v,
                 rgbs,
-                opacities, anisotropies_crop,
+                opacities, self.anisotropies,
                 bounds, num_tiles_hit,
                 intrins, H, W, BLOCK_WIDTH,
             )
@@ -786,7 +750,7 @@ class SpirulaeModel(Model):
                 alpha > 0.0, depth_im[..., :1] / alpha,
                 torch.amax(depth_im[..., :1]).detach()
             ).contiguous()
-            timerr.mark("render")  # 800us-1500us
+            timerr.mark("render")  # 750us-1200us
 
         anisotropy_vis = None
         if self.config.output_depth_during_training or not self.training:
@@ -794,11 +758,11 @@ class SpirulaeModel(Model):
             with torch.no_grad():
 
                 pad_zero = torch.zeros_like(opacities)
-                anisotropy_norm = torch.norm(anisotropies_crop, dim=1, keepdim=True)
+                anisotropy_norm = torch.norm(self.anisotropies, dim=1, keepdim=True)
                 meta, _ = rasterize_gaussians_simple(
                     positions, axes_u, axes_v,
                     torch.concatenate((anisotropy_norm, pad_zero, pad_zero), dim=1),
-                    opacities, anisotropies_crop,
+                    opacities, self.anisotropies,
                     bounds, num_tiles_hit,
                     intrins, H, W, BLOCK_WIDTH
                 )
@@ -813,7 +777,7 @@ class SpirulaeModel(Model):
                       num_tiles_hit.unsqueeze(0)**0.5 / 2 * BLOCK_WIDTH,
                 "means2d": positions,
             }
-        timerr.mark("post")  # 150us-300us
+        timerr.mark("post")  # 100us-200us
 
         # blend with background
         background = self.background_color.reshape((1, 1, 3))
@@ -825,18 +789,18 @@ class SpirulaeModel(Model):
         if not self.training:
             rgb = torch.clip(rgb, 0.0, 1.0)
         else:
-            rgb = torch.clip(rgb, 0.0, None)
+            rgb = torch.relu(rgb)
             # rgb = saturate_keep_gradient(rgb, 0.0, None)
 
-        timerr.mark("bkg")  # 250us-450us
+        timerr.mark("bkg")  # 300us-450us
 
         # normal regularization
         depth_im_ref = depth_inv_map(depth_im_ref)
         normal_im = normalize(normal_im, dim=-1)
         depth_normal, alpha_diffused = depth_to_normal(depth_im_ref, None, intrins, True, alpha)
         reg_normal = 1.0 - (depth_normal * normal_im).sum(-1, True)
-        timerr.end("normal_reg")  # 500us-900us
-        # -> 4000us-7000us median depth, 3500us-6000us one pass
+        timerr.end("normal_reg")  # 600us-900us
+        # -> ?us-?us median depth, 3000us-4500us one pass
 
         return {
             "rgb": rgb,
