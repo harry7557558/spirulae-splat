@@ -2,6 +2,9 @@
 precision highp float;
 precision highp int;
 
+#include "shader-utils.glsl"
+#line 7
+
 uniform highp usampler2D u_base_texture;
 uniform mat4 projection, view;
 uniform vec2 focal;
@@ -51,136 +54,12 @@ mat3 quat_to_rotmat(vec4 quat) {
 }
 
 
-// camera distortion models
-// TODO: refactor into a separate file
-
-float opencv_radius(
-    in vec4 dist_coeffs
-) {
-    float k1 = dist_coeffs.x;
-    float k2 = dist_coeffs.y;
-
-    // calculate the extrema of dist(r)
-    if (k2 == 0.0) {
-        float b = -1.0/(3.0*k1);
-        return b > 0.0 ? sqrt(b) : -1.0;
-    }
-    float disc = 9.0*k1*k1-20.0*k2;
-    if (disc <= 0.0) return -1.0;
-    disc = sqrt(disc);
-    float u1 = (-3.0*k1 + disc) / (10.0*k2);
-    float u2 = (-3.0*k1 - disc) / (10.0*k2);
-    if (u1 <= 0.0) return u2>0.0 ? sqrt(u2) : -1.0;
-    return u2>0.0 ? sqrt(min(u1,u2)) : sqrt(u1);
-}
-
-float fisheye_radius(
-    in float theta, in vec4 dist_coeffs
-) {
-    float k1 = dist_coeffs.x;
-    float k2 = dist_coeffs.y;
-    float k3 = dist_coeffs.z;
-    float k4 = dist_coeffs.w;
-
-    float theta2 = theta*theta;
-    return theta*(1.0 + theta2*(k1 + theta2*(k2 + theta2*(k3 + theta2*k4))));
-}
-
-void distort_opencv_with_jac(
-    in vec2 p, in vec4 dist_coeffs,
-    out vec2 p_dist, out mat2 jac_dist
-) {
-    // https://www.desmos.com/calculator/adnh2fzdyi
-
-    float k1 = dist_coeffs.x;
-    float k2 = dist_coeffs.y;
-    float p1 = dist_coeffs.z;
-    float p2 = dist_coeffs.w;
-
-    float x = p.x, y = p.y;
-    float r2 = x*x + y*y;
-    float r_dist = 1.0 + k1*r2 + k2*r2*r2;
-
-    float x_dist = x*r_dist + 2.0*p1*x*y + p2*(r2 + 2.0*x*x);
-    float y_dist = y*r_dist + p1*(r2 + 2.0*y*y) + 2.0*p2*x*y;
-    p_dist = vec2(x_dist, y_dist);
-
-    float jxx = r_dist + 2.0*( x*x*(k1 + 2.0*k2*r2) + p1*y + 3.0*p2*x );
-    float jxy = 2.0*( x*y*(k1 + 2.0*k2*r2) + p1*x + p2*y );
-    float jyy = r_dist + 2.0*( y*y*(k1 + 2.0*k2*r2) + 3.0*p1*y + p2*x );
-    jac_dist = mat2(jxx, jxy, jxy, jyy);
-}
-
-vec2 distort_fisheye(in vec2 p, in vec4 dist_coeffs) {
-    float k1 = dist_coeffs.x;
-    float k2 = dist_coeffs.y;
-    float k3 = dist_coeffs.z;
-    float k4 = dist_coeffs.w;
-
-    float x = p.x, y = p.y;
-    float r2 = x*x + y*y;
-    float r = sqrt(r2);
-    float theta = atan(r);
-    float theta2 = theta*theta;
-    float r_dist = theta*(1.0 + theta2*(k1 + theta2*(k2 + theta2*(k3 + theta2*k4))));
-
-    return p * (r_dist/r);
-}
-
-void distort_fisheye_with_jac(
-    in vec2 p, in vec4 dist_coeffs,
-    out vec2 p_dist, out mat2 jac_dist
-) {
-    // https://www.desmos.com/calculator/yg7gqrtgm9
-
-    float k1 = dist_coeffs.x;
-    float k2 = dist_coeffs.y;
-    float k3 = dist_coeffs.z;
-    float k4 = dist_coeffs.w;
-
-    float x = p.x, y = p.y;
-    float r2 = x*x + y*y;
-    float r = sqrt(r2);
-    float theta = atan(r);
-    float theta2 = theta*theta;
-    float r_dist = theta*(1.0 + theta2*(k1 + theta2*(k2 + theta2*(k3 + theta2*k4))));
-    float s_dist = 1.0 + theta2*(3.0*k1 + theta2*(5.0*k2 + theta2*(7.0*k3 + theta2*9.0*k4)));
-
-    float x_dist = x/r * r_dist;
-    float y_dist = y/r * r_dist;
-    p_dist = vec2(x_dist, y_dist);
-
-    float jd1 = s_dist / (r2*(r2+1.0));
-    float jd2 = r_dist / (r2*r);
-    float jxx = jd1 * x*x + jd2 * y*y;
-    float jxy = jd1 * x*y - jd2 * x*y;
-    float jyy = jd1 * y*y + jd2 * x*x;
-    jac_dist = mat2(jxx, jxy, jxy, jyy);
-}
-
-vec3 distort_jac_3d(
-    in vec2 p2d_u, in vec2 p2d_d,
-    in mat2 j2d, in vec3 dp
-) {
-    // transform dp using the Jacobian of (x,y,z) -> (distort(x/z,y/z)*z,z)
-    mat3x2 j3d = j2d * mat3x2(1, 0, 0, 1, -p2d_u.x, -p2d_u.y)
-        + mat3x2(0, 0, 0, 0, p2d_d.x, p2d_d.y);
-    return vec3(j3d * dp, dp.z);
-}
-
-
-// compute axis-aligned bounding box
-bool project_ellipse_bound(
+// axis-aligned bounding box for perspective camera
+bool project_bound_perspective(
     vec3 T, vec3 V0, vec3 V1,
     float fx, float fy, float cx, float cy,
-    int model, vec4 dist_coeffs,
     out vec2 center, out vec2 bound
 ) {
-    // TODO: write three functions
-    // project_bound_perspective: perspective camera, analytical ellipse bound
-    // project_bound_opencv: opencv camera, brute force sample / quadratic fit on distorted 2D ellipse
-    // project_bound_fisheye: fisheye camera, brute force sample on distorted projection of 3D ellipse (handle "outside circle")
-
     // 2d conic coefficients
     // A x^2 + 2B xy + C y^2 + 2D x + 2E y + F = 0
     vec3 V01 = cross(V0, V1);
@@ -201,102 +80,160 @@ bool project_ellipse_bound(
     float V = (A * E - B * D) / (B * B - A * C);
     float S = A * U*U + 2.0*B * U*V + C * V*V + 2.0*D * U + 2.0*E * V + F;
 
-    // opencv model
-    if (model == 0) {
-        // TODO
-    }
+    // bounds
+    float W = sqrt(C * S / (B * B - A * C));
+    float H = sqrt(A * S / (B * B - A * C));
+    center = vec2(fx*U+cx, fx*V+cy);
+    bound = vec2(fx*W, fy*H);
 
-    // fisheye model
-    else if (model == 1) {
-        // represent ellipse in principal parametric form
-        vec2 p0 = vec2(U, V);
-        float delta = sqrt((A-C)*(A-C) + 4.0*B*B);
-        float eps = min(1e-6*S, -1e-16);
-        float lambda1 = 2.0*S/min(delta-(A+C),eps);
-        float lambda2 = 2.0*S/min(-delta-(A+C),eps);
-        vec2 v0 = normalize(vec2(-A+C+delta, -2.0*B));
-        vec2 v1 = sqrt(lambda1) * v0;
-        vec2 v2 = sqrt(lambda2) * vec2(-v0.y, v0.x);
+    return true;
+}
 
-        // do some experiments with getting bounds here
-        // 0: brute force on parametric
-        // 1: quadratic fit on parametric
-        #define BOUND_MODE 0
+// axis-aligned bounding box for OpenCV camera
+bool project_bound_opencv(
+    vec3 T, vec3 V0, vec3 V1,
+    float fx, float fy, float cx, float cy, vec4 dist_coeffs,
+    out vec2 center, out vec2 bound
+) {
+    // 2d conic coefficients
+    // A x^2 + 2B xy + C y^2 + 2D x + 2E y + F = 0
+    vec3 V01 = cross(V0, V1);
+    vec3 V0T = cross(T, V0);
+    vec3 V1T = cross(T, V1);
+    float A = V0T.x * V0T.x + V1T.x * V1T.x - V01.x * V01.x;
+    float B = -V01.y * V01.x + V1T.y * V1T.x + V0T.y * V0T.x;
+    float C = V0T.y * V0T.y + V1T.y * V1T.y - V01.y * V01.y;
+    float D = V0T.z * V0T.x + V1T.z * V1T.x - V01.z * V01.x;
+    float E = -V01.z * V01.y + V1T.z * V1T.y + V0T.z * V0T.y;
+    float F = V0T.z * V0T.z + V1T.z * V1T.z - V01.z * V01.z;
 
-        // sample points
-    #if BOUND_MODE == 0
-        // brute force on parametric
-        const float N = 16.0;
-        float x0 = 1e4, x1 = -1e4, y0 = 1e4, y1 = -1e4;
-        for (float i = 0.0; i < N; i++) {
-            float t = 2.0*PI*i/N;
-            vec2 c = distort_fisheye(p0+v1*cos(t)+v2*sin(t), dist_coeffs);
+    if (!(B * B < A * C))
+        return false;
+
+    // translate to origin
+    float U = (C * D - B * E) / (B * B - A * C);
+    float V = (A * E - B * D) / (B * B - A * C);
+    float S = A * U*U + 2.0*B * U*V + C * V*V + 2.0*D * U + 2.0*E * V + F;
+
+    // represent ellipse in principal parametric form
+    vec2 p0 = vec2(U, V);
+    float delta = sqrt((A-C)*(A-C) + 4.0*B*B);
+    float eps = min(1e-8*S, -1e-24);
+    float lambda1 = 2.0*S/min(delta-(A+C),eps);
+    float lambda2 = 2.0*S/min(-delta-(A+C),eps);
+    vec2 v0 = normalize(vec2(-A+C+delta, -2.0*B));
+    vec2 v1 = sqrt(lambda1) * v0;
+    vec2 v2 = sqrt(lambda2) * vec2(-v0.y, v0.x);
+
+    // rejection
+    float fr = opencv_radius(dist_coeffs);
+
+    // brute force sampling on parametric
+    // see here for quadratic fit code (not faster): https://github.com/harry7557558/spirulae-splat/blob/f7dc2989e5383bbeb08d5723a4801a80f11242ca/webgl/shader-vert.glsl#L238-L280
+    const float N = 16.0;
+    float x0 = 1e4, x1 = -1e4, y0 = 1e4, y1 = -1e4;
+    for (float i = 0.0; i < N; i++) {
+        float t = 2.0*PI*i/N;
+        vec2 p = p0+v1*cos(t)+v2*sin(t);
+        if (dot(p,p) < fr*fr) {
+            vec2 c = distort_opencv(p, dist_coeffs);
             x0 = min(x0, c.x); x1 = max(x1, c.x);
             y0 = min(y0, c.y); y1 = max(y1, c.y);
         }
-    #elif BOUND_MODE == 1
-        // quadratic fit on parametric
-        const float N = 8.0;
-        vec2 c0 = distort_fisheye(p0+v1, dist_coeffs);
-        vec2 c1 = distort_fisheye(p0+v1*cos(2.0*PI/N)+v2*sin(2.0*PI/N), dist_coeffs);
-        float x0 = c0.x, x1 = c0.x, y0 = c0.y, y1 = c0.y;
-        for (float i = 0.0; i < N; i++) {
-            float t0 = 2.0*PI*(i+2.0)/N;
-            vec2 c2 = distort_fisheye(p0+v1*cos(t0)+v2*sin(t0), dist_coeffs);
+    }
+    if (x0 > x1 || y0 > y1)
+        return false;
 
-            // at sample points
-            x0 = min(x0, c2.x); x1 = max(x1, c2.x);
-            y0 = min(y0, c2.y); y1 = max(y1, c2.y);
-            // continue;
+    // update bounds
+    vec2 b0 = vec2(x0, y0);
+    vec2 b1 = vec2(x1, y1);
+    center = 0.5*(b0+b1) * vec2(fx,fy) + vec2(cx,cy);
+    bound = 0.5*(b1-b0) * vec2(fx,fy);
+    return true;
+}
 
-            // x at quadratic fit
-            vec2 t_opt = (c0-c1)/(c0-2.0*c1+c2);
-            if (t_opt.x > 0.0 && t_opt.x < 1.0) {
-                // quadratic fit
-                float f = t_opt.x;
-                float x = (1.0-f)*(1.0-f)*c0.x+2.0*f*(1.0-f)*c1.x+f*f*c2.x;
-                x0 = min(x0, x); x1 = max(x1, x);
-                // evaluated
-                float t = 2.0*PI*(i+2.0*f)/N;
-                vec2 p = distort_fisheye(p0+v1*cos(t)+v2*sin(t), dist_coeffs);
-                x0 = min(x0, p.x); x1 = max(x1, p.x);
-                y0 = min(y0, p.y); y1 = max(y1, p.y);  // doesn't hurt
-            }
+// axis-aligned bounding box for fisheye camera, by sampling on 2D parametric
+bool project_bound_fisheye_2d(
+    vec3 T, vec3 V0, vec3 V1,
+    float fx, float fy, float cx, float cy, vec4 dist_coeffs,
+    out vec2 center, out vec2 bound
+) {
+    // 2d conic coefficients
+    // A x^2 + 2B xy + C y^2 + 2D x + 2E y + F = 0
+    vec3 V01 = cross(V0, V1);
+    vec3 V0T = cross(T, V0);
+    vec3 V1T = cross(T, V1);
+    float A = V0T.x * V0T.x + V1T.x * V1T.x - V01.x * V01.x;
+    float B = -V01.y * V01.x + V1T.y * V1T.x + V0T.y * V0T.x;
+    float C = V0T.y * V0T.y + V1T.y * V1T.y - V01.y * V01.y;
+    float D = V0T.z * V0T.x + V1T.z * V1T.x - V01.z * V01.x;
+    float E = -V01.z * V01.y + V1T.z * V1T.y + V0T.z * V0T.y;
+    float F = V0T.z * V0T.z + V1T.z * V1T.z - V01.z * V01.z;
 
-            // y at quadratic fit
-            if (t_opt.y > 0.0 && t_opt.y < 1.0) {
-                // quadratic fit
-                float f = t_opt.y;
-                float y = (1.0-f)*(1.0-f)*c0.y+2.0*f*(1.0-f)*c1.y+f*f*c2.y;
-                y0 = min(y0, y); y1 = max(y1, y);
-                // evaluated
-                float t = 2.0*PI*(i+2.0*f)/N;
-                vec2 p = distort_fisheye(p0+v1*cos(t)+v2*sin(t), dist_coeffs);
-                y0 = min(y0, p.y); y1 = max(y1, p.y);
-                x0 = min(x0, p.x); x1 = max(x1, p.x);  // doesn't hurt
-            }
+    if (!(B * B < A * C))
+        return false;
 
-            c0 = c1, c1 = c2;
+    // translate to origin
+    float U = (C * D - B * E) / (B * B - A * C);
+    float V = (A * E - B * D) / (B * B - A * C);
+    float S = A * U*U + 2.0*B * U*V + C * V*V + 2.0*D * U + 2.0*E * V + F;
+
+    // represent ellipse in principal parametric form
+    vec2 p0 = vec2(U, V);
+    float delta = sqrt((A-C)*(A-C) + 4.0*B*B);
+    float eps = min(1e-8*S, -1e-24);
+    float lambda1 = 2.0*S/min(delta-(A+C),eps);
+    float lambda2 = 2.0*S/min(-delta-(A+C),eps);
+    vec2 v0 = normalize(vec2(-A+C+delta, -2.0*B));
+    vec2 v1 = sqrt(lambda1) * v0;
+    vec2 v2 = sqrt(lambda2) * vec2(-v0.y, v0.x);
+
+    // brute force sampling on parametric
+    const float N = 16.0;
+    float x0 = 1e4, x1 = -1e4, y0 = 1e4, y1 = -1e4;
+    for (float i = 0.0; i < N; i++) {
+        float t = 2.0*PI*i/N;
+        vec2 c = distort_fisheye(p0+v1*cos(t)+v2*sin(t), dist_coeffs);
+        x0 = min(x0, c.x); x1 = max(x1, c.x);
+        y0 = min(y0, c.y); y1 = max(y1, c.y);
+    }
+
+    // update bounds
+    vec2 b0 = vec2(x0, y0);
+    vec2 b1 = vec2(x1, y1);
+    center = 0.5*(b0+b1) * vec2(fx,fy) + vec2(cx,cy);
+    bound = 0.5*(b1-b0) * vec2(fx,fy);
+
+    return true;
+}
+
+// axis-aligned bounding box for fisheye camera, by sampling on 3D parametric
+bool project_bound_fisheye(
+    vec3 T, vec3 V0, vec3 V1,
+    float fx, float fy, float cx, float cy, vec4 dist_coeffs,
+    out vec2 center, out vec2 bound
+) {
+    // sampling
+    const float N = 16.0;
+    float x0 = 1e4, x1 = -1e4, y0 = 1e4, y1 = -1e4;
+    for (float i = 0.0; i < N; i++) {
+        float t = 2.0*PI*i/N;
+        vec3 p3d = T+V0*cos(t)+V1*sin(t);
+        if (p3d.z > 1e-4) {
+            vec2 p = p3d.xy / p3d.z;
+            vec2 c = distort_fisheye(p, dist_coeffs);
+            x0 = min(x0, c.x); x1 = max(x1, c.x);
+            y0 = min(y0, c.y); y1 = max(y1, c.y);
         }
-    #endif
-
-        #undef BOUND_MODE
-
-        // update bounds
-        vec2 b0 = vec2(x0, y0);
-        vec2 b1 = vec2(x1, y1);
-        center = 0.5*(b0+b1) * vec2(fx,fy) + vec2(cx,cy);
-        bound = 0.5*(b1-b0) * vec2(fx,fy);
     }
+    if (x0 > x1 || y0 > y1)
+        return false;
 
-    // perspective model
-    else {
-        float W = sqrt(C * S / (B * B - A * C));
-        float H = sqrt(A * S / (B * B - A * C));
-        center = vec2(fx*U+cx, fx*V+cy);
-        bound = vec2(fx*W, fy*H);
-    }
-
+    // update bounds
+    vec2 b0 = vec2(x0, y0);
+    vec2 b1 = vec2(x1, y1);
+    center = 0.5*(b0+b1) * vec2(fx,fy) + vec2(cx,cy);
+    bound = 0.5*(b1-b0) * vec2(fx,fy);
     return true;
 }
 
@@ -428,6 +365,7 @@ vec3 sh_coeffs_to_color_fast(
 
 void main () {
     gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+    vPosition = vec3(0);
 
     if (index == -1) return;
 
@@ -436,7 +374,7 @@ void main () {
     vec3 p_world = uintBitsToFloat(info0.xyz);
     vec4 p_view = view * vec4(p_world, 1);
     vec4 pos2d = projection * p_view;
-    if (pos2d.w < 0.0 || p_view.z < 0.01)
+    if (pos2d.w <= 0.0 || p_view.z <= 0.0)
         return;
 
     uvec4 info1 = texelFetch(u_base_texture,
@@ -489,12 +427,35 @@ void main () {
     vec2 center;
     vec2 bound = vec2(0.0);
     const float kr = 1.0;
-    bool intersect = project_ellipse_bound(
+
+    // compute axis-aligned bounding box
+#if USE_EXACT_DISTORTION
+    bool intersect;
+    if (camera_model == 0)
+        intersect = project_bound_opencv(
+            p_view.xyz, kr*axis_u, kr*axis_v,
+            fx, fy, cx, cy, distortion,
+            center, bound
+        );
+    else if (camera_model == 1)
+        intersect = project_bound_fisheye(
+            p_view.xyz, kr*axis_u, kr*axis_v,
+            fx, fy, cx, cy, distortion,
+            center, bound
+        );
+    else
+        intersect = project_bound_perspective(
+            p_view.xyz, kr*axis_u, kr*axis_v,
+            fx, fy, cx, cy,
+            center, bound
+        );
+#else
+    bool intersect = project_bound_perspective(
         p_view.xyz, kr*axis_u, kr*axis_v,
         fx, fy, cx, cy,
-        bool(USE_EXACT_DISTORTION) ? camera_model : -1, distortion,
         center, bound
     );
+#endif
 
     if (!intersect ||
         center.x+bound.x < 0.0 || center.x-bound.x > viewport.x ||

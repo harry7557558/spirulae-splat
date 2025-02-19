@@ -1224,17 +1224,23 @@ async function loadShaderFile(url) {
 async function loadShadersAndInit() {
     try {
         const [
+            utilsSource,
             vertexSource, fragmentSource,
             backgroundSource
         ] = await Promise.all([
+            loadShaderFile('shader-utils.glsl'),
             loadShaderFile('shader-vert.glsl'),
             loadShaderFile('shader-frag.glsl'),
             loadShaderFile('shader-background.glsl')
         ]);
-  
-        vertexShaderSource = vertexSource;
-        fragmentShaderSource = fragmentSource;
-        backgroundShaderSource = backgroundSource;
+
+        function shaderInclude(s) {
+            return s.replace('\n#include "shader-utils.glsl"\n', '\n'+utilsSource+'\n');
+        }
+
+        vertexShaderSource = shaderInclude(vertexSource);
+        fragmentShaderSource = shaderInclude(fragmentSource);
+        backgroundShaderSource = shaderInclude(backgroundSource);
   
         // Call the main function after both shaders are loaded
         main().catch((err) => {

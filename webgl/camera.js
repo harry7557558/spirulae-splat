@@ -76,6 +76,21 @@ CameraPresets["t265"] = {
     "model": "OPENCV_FISHEYE",
 };
 
+CameraPresets["debug"] = {
+    name: "Debug",
+    "w": 640,
+    "h": 640,
+    "fx": 200,
+    "fy": 200,
+    "cx": 320,
+    "cy": 320,
+    "k1": 0.2,
+    "k2": -0.1,
+    "p1": 0.05,
+    "p2": -0.05,
+    "model": "OPENCV",
+};
+
 CameraPresets["$"] = null;
 
 

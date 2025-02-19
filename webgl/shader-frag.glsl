@@ -2,6 +2,9 @@
 precision highp float;
 precision highp int;
 
+#include "shader-utils.glsl"
+#line 7
+
 uniform vec2 focal;
 uniform vec2 viewport;
 uniform int camera_model;
@@ -21,8 +24,6 @@ uniform highp usampler2D u_ch_texture;
 // uniform highp usampler2D u_sh_texture;
 
 out vec4 fragColor;
-
-#define PI 3.14159265
 
 
 float bessel_j0(float x) {
@@ -187,7 +188,7 @@ bool get_intersection(
         return false;
     float t = -uvt.z;
     poi = vec3(pos_2d*t, t);
-    return true;
+    return t > 0.0;
 }
 
 
@@ -276,57 +277,11 @@ vec3 ch_coeffs_to_color(vec2 uv) {
 }
 
 
-// camera distortion models
-// TODO: refactor into a separate file
-
-float opencv_radius(
-    in vec4 dist_coeffs
-) {
-    float k1 = dist_coeffs.x;
-    float k2 = dist_coeffs.y;
-
-    // calculate the extrema of dist(r)
-    if (k2 == 0.0) {
-        float b = -1.0/(3.0*k1);
-        return b > 0.0 ? sqrt(b) : -1.0;
-    }
-    float disc = 9.0*k1*k1-20.0*k2;
-    if (disc <= 0.0) return -1.0;
-    disc = sqrt(disc);
-    float u1 = (-3.0*k1 + disc) / (10.0*k2);
-    float u2 = (-3.0*k1 - disc) / (10.0*k2);
-    if (u1 <= 0.0) return u2>0.0 ? sqrt(u2) : -1.0;
-    return u2>0.0 ? sqrt(min(u1,u2)) : sqrt(u1);
-}
-
-float fisheye_radius(
-    in float theta, in vec4 dist_coeffs
-) {
-    float k1 = dist_coeffs.x;
-    float k2 = dist_coeffs.y;
-    float k3 = dist_coeffs.z;
-    float k4 = dist_coeffs.w;
-
-    float theta2 = theta*theta;
-    return theta*(1.0 + theta2*(k1 + theta2*(k2 + theta2*(k3 + theta2*k4))));
-}
-
-vec2 undistort_fisheye(in vec2 p, in vec4 undist_coeffs) {
-    float l1 = undist_coeffs.x;
-    float l2 = undist_coeffs.y;
-    float l3 = undist_coeffs.z;
-    float l4 = undist_coeffs.w;
-
-    float x = p.x, y = p.y;
-    float r2 = x*x + y*y;
-    float r = sqrt(r2);
-    float theta = r*(1.0 + r2*(l1 + r2*(l2 + r2*(l3 + r2*l4))));
-
-    return p * (tan(theta)/r);
-}
-
 
 void main () {
+
+    if (vPosition == vec3(0))
+        discard;
 
     // uvec4 tex = texelFetch(u_ch_texture, ivec2(gl_FragCoord.xy), 0);
     // if (tex.x != 0u) {
@@ -336,12 +291,16 @@ void main () {
     //     return;
     // }
 
+    // fragColor = vColor * vec4(1,1,1,0.2);
+    // return;
+
     vec2 pos2d = vec2(1,-1)*(gl_FragCoord.xy-0.5*viewport)/focal;
     vec2 pos2d_undist = pos2d;
 
     float fr = -1.0;
     if (camera_model == 0) {
         fr = opencv_radius(distortion);
+        // pos2d_undist = undistort_opencv_iterative(pos2d, distortion);
     }
     else if (camera_model == 1) {
         fr = fisheye_radius(0.5*PI, distortion);
