@@ -30,7 +30,7 @@ from torch.nn import Parameter
 from torch.nn.functional import normalize
 from pytorch_msssim import SSIM
 
-from spirulae_splat.splat._torch_impl import depth_inv_map
+from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map
 from spirulae_splat.splat import (
     project_gaussians,
     rasterize_gaussians_simple,
@@ -277,6 +277,28 @@ class SpirulaeModelConfig(ModelConfig):
     """Make sure image look right in auto exposure mode,
        Use an L2 cost to match exposure parameter to the parameter at no exposure adjustment;
        (may be summed/averaged across a batch)"""
+
+    # supervision using a foundational depth model
+    # enable these by setting `depth_model` in data manager config
+    depth_supervision_start_iter: int = 1000
+    """Start using foundational model depth at this number of steps"""
+    depth_distortion_depth_degree: int = 3
+    """Hyperparameter for depth distortion model, controls depth embedding, see code for details
+        Larger gives more parameters in depth distortion model"""
+    depth_distortion_uv_degree: int = 1
+    """Hyperparameter for depth distortion model, controls image space embedding, see code for details
+        Larger gives more parameters in depth distortion model"""
+    depth_supervision_weight: float = 0.0
+    """Weight for depth supervision by comparing rendered depth with depth predicted by a foundational model
+        WARNING: experimental, a nonzero value seems have made results worse consistently"""
+    normal_supervision_weight: float = 0.0
+    """Weight for normal supervision by comparing gradient of rendered depth with gradient of depth predicted by a foundational model
+        WARNING: experimental, a nonzero value seems have made results worse consistently"""
+    normal_supervision_clip: float = 10.0
+    """Clip normal magnitude to better handle normal supervision at edge with discontinuous depth"""
+    alpha_supervision_weight: float = 0.002
+    """Weight for alpha supervision by rendered alpha with alpha predicted by a foundational model
+        Useful for removing floaters from sky for outdoor scenes"""
 
 
 class SpirulaeModel(Model):
@@ -648,7 +670,7 @@ class SpirulaeModel(Model):
             optimized_camera_to_world = self.camera_optimizer.apply_to_camera(camera)[0, ...]
         else:
             optimized_camera_to_world = camera.camera_to_worlds[0, ...]
-        optimized_camera_to_world = optimized_camera_to_world.cpu().numpy().astype(np.float32)
+        optimized_camera_to_world = optimized_camera_to_world.cpu()
         timerr.mark(".")  # 70us
 
         camera_downscale = self._get_downscale_factor()
@@ -660,10 +682,10 @@ class SpirulaeModel(Model):
 
         R = optimized_camera_to_world[:3, :3]  # 3 x 3
         T = optimized_camera_to_world[:3, 3:4]  # 3 x 1
-        R = R * [1, -1, -1]
+        R = R * torch.tensor([[1.0, -1.0, -1.0]])
         R_inv = R.T
         T_inv = -R_inv @ T
-        viewmat = np.eye(4, dtype=np.float32)
+        viewmat = torch.eye(4, dtype=optimized_camera_to_world.dtype)
         viewmat[:3, :3] = R_inv
         viewmat[:3, 3:4] = T_inv
         self.last_size = (H, W)
@@ -675,7 +697,7 @@ class SpirulaeModel(Model):
         timerr.mark("map")  # 300us-450us
 
         if self.config.sh_degree > 0:
-            viewdirs = self.means.detach() - torch.from_numpy(optimized_camera_to_world[:3, 3]).cuda()  # (N, 3)
+            viewdirs = self.means.detach() - optimized_camera_to_world[:3, 3].cuda()  # (N, 3)
             n = min(self.step // self.config.sh_degree_interval, self.config.sh_degree)
             rgbs = spherical_harmonics(n, viewdirs, colors)  # input unnormalized viewdirs
             rgbs = torch.relu(rgbs+0.5)  # type: ignore
@@ -691,7 +713,7 @@ class SpirulaeModel(Model):
             self.means,
             torch.exp(self.scales),
             quats,
-            torch.from_numpy(viewmat[:3, :]).cuda(),
+            viewmat[:3, :].cuda(),
             intrins,
             H, W,
             BLOCK_WIDTH,
@@ -858,6 +880,238 @@ class SpirulaeModel(Model):
             self.camera_optimizer.get_metrics_dict(metrics_dict)
         return metrics_dict
 
+    def depth_supervision(self, ref_depth, pred_depth, pred_alpha, _uv_cache={}):
+        # details: https://github.com/harry7557558/Graphics/blob/master/mapping/relative_depth_matching/depth_fitting_01.ipynb
+
+        nd = self.config.depth_distortion_depth_degree
+        npos = self.config.depth_distortion_uv_degree
+
+        # resize depth
+        h, w, _ = pred_depth.shape
+        if ref_depth.shape != pred_depth.shape:
+            ref_depth = torch.nn.functional.interpolate(
+                ref_depth.reshape((1, 1, *ref_depth.shape[:2])),
+                size=(h, w), mode='bilinear'
+            ).reshape(pred_depth.shape)
+        alpha = (ref_depth > 0.0).squeeze(-1)
+
+        # generate UV embeddings
+        if (h, w) not in _uv_cache:
+            u = (torch.arange(w, dtype=torch.float32)+0.5)/w * 2.0 - 1.0
+            v = (torch.arange(h, dtype=torch.float32)+0.5)/h * 2.0 - 1.0
+            u = u[None, :].float().cuda().repeat((h, 1))
+            v = v[:, None].float().cuda().repeat((1, w))
+            u, v = u.flatten(), v.flatten()
+
+            uv = []
+            for i in range(npos+1):
+                for j in range(npos+1):
+                    uv.append(torch.cos(math.pi/2*i*u)*torch.cos(math.pi/2*j*v))
+                    if j != 0:
+                        uv.append(torch.cos(math.pi/2*i*u)*torch.sin(math.pi/2*j*v))
+                    if i != 0:
+                        uv.append(torch.sin(math.pi/2*i*u)*torch.cos(math.pi/2*j*v))
+                    if i != 0 and j != 0:
+                        uv.append(torch.sin(math.pi/2*i*u)*torch.sin(math.pi/2*j*v))
+
+            uv = torch.stack(uv)
+            _uv_cache[(h, w)] = uv
+
+        else:
+            uv = _uv_cache[(h, w)]
+
+        # for debugging
+        def plot_image(im):
+            return
+            import matplotlib.pyplot as plt
+            if self.step < 2000: return
+            im = im.float().reshape((h, w))
+            imx = abs(im[1:, :] - im[:-1, :]) * (alpha[1:, :] & alpha[:-1, :])
+            imy = abs(im[:, 1:] - im[:, :-1]) * (alpha[:, 1:] & alpha[:, :-1])
+            im = im * alpha
+            fig, (ax1, ax2, ax3) = plt.subplots(1, 3)
+            ax1.imshow(im.detach().cpu().numpy())
+            ax2.imshow(imx.detach().cpu().numpy())
+            ax3.imshow(imy.detach().cpu().numpy())
+            plt.show()
+
+        # depth distortion fitting
+        if self.config.depth_supervision_weight > 0.0 or self.config.normal_supervision_weight > 0.0:
+            # generate depth embeddings
+            if True:
+                pred_depth = depth_map(pred_depth)
+                ref_depth = depth_map(ref_depth)
+            x = pred_depth.flatten() / (pred_depth.sum() / alpha.sum().item())
+            y = ref_depth.flatten() / (ref_depth.sum() / alpha.sum().item())
+            # x, y = y, x
+            plot_image(alpha)
+            plot_image(x)
+            plot_image(y)
+            A = []
+            for k in range(nd+1):
+                ed = x**k / math.factorial(k) * torch.exp(-x)
+                A.append(ed * uv)
+            A = torch.concatenate(A)
+            plot_image(A[-1])
+
+            # linear least squares
+            mat = (alpha.reshape(1,-1) * A) @ A.T
+            vec = A @ (alpha.flatten() * y)
+            c = torch.linalg.solve(mat, vec)
+            corr_depth = torch.relu(c @ A)
+            depth_diff = (corr_depth - y).reshape((h, w))
+            plot_image(corr_depth)
+            plot_image(depth_diff)
+
+        # depth loss
+        depth_loss = 0.0
+        if self.config.depth_supervision_weight > 0.0:
+            # depth_loss = ((depth_diff**2)*alpha).mean()
+            depth_loss = (torch.abs(depth_diff)*alpha).mean()
+
+        # normal loss
+        normal_loss = 0.0
+        normal_scale = 720.0 / np.sqrt(w*h)
+        if self.config.normal_supervision_weight > 0.0:
+            normal_diff_x = (depth_diff[1:, :] - depth_diff[:-1, :]) * (alpha[1:, :] & alpha[:-1, :])
+            normal_diff_y = (depth_diff[:, 1:] - depth_diff[:, :-1]) * (alpha[:, 1:] & alpha[:, :-1])
+            clip = self.config.normal_supervision_clip * normal_scale
+            # normal_diff_x = torch.clip(normal_diff_x, -clip, clip)
+            # normal_diff_y = torch.clip(normal_diff_y, -clip, clip)
+            normal_diff_x = clip*torch.tanh(normal_diff_x/clip)
+            normal_diff_y = clip*torch.tanh(normal_diff_y/clip)
+            normal_loss = (normal_diff_x**2).mean() + (normal_diff_y**2).mean()
+            # normal_loss = normal_diff_x.abs().mean() + normal_diff_y.abs().mean()
+
+        # alpha loss
+        alpha_loss = torch.nn.functional.binary_cross_entropy(
+            pred_alpha.flatten(), alpha.float().flatten())
+
+        return (
+            self.config.depth_supervision_weight * depth_loss,
+            self.config.normal_supervision_weight * normal_loss,
+            (self.config.alpha_supervision_weight * normal_scale) * alpha_loss
+        )
+
+    def exposure_correction(self, pred_img, gt_img):
+        exposure_reg = 0.0
+        exposure_param_reg = 0.0
+        eeps = 0.5/255.0
+
+        # gt ~ k * pred
+        if self.config.adaptive_exposure_mode == "linear":
+            k = (gt_img.mean()+eeps) / (pred_img.mean()+eeps)
+            pred_img_e = k * (pred_img+eeps) - eeps
+            # print(k.item())
+            exposure_param_reg = (k-1.0)**2
+
+        # log(gt) ~ k * log(pred) + b
+        elif self.config.adaptive_exposure_mode == "log_linear":
+            x = torch.log(pred_img+eeps)
+            y = torch.log(gt_img+eeps)
+            x_mean, y_mean = x.mean(), y.mean()
+            x2_mean, xy_mean = (x**2).mean(), (x*y).mean()
+            m = (xy_mean - x_mean * y_mean) / (x2_mean - x_mean**2)
+            b = y_mean - m * x_mean
+            pred_img_e = torch.exp(m * x + b) - eeps
+            # print(m.item(), b.item())
+            exposure_param_reg = (m-1.0)**2 + b**2
+
+        # gt ~ k * pred, per channel
+        if self.config.adaptive_exposure_mode == "channel":
+            x = pred_img.reshape(-1, 3)
+            y = gt_img.reshape(-1, 3)
+            k = (y.mean(0, True)+eeps) / (x.mean(0, True)+eeps)
+            pred_img_e = k * (pred_img+eeps) - eeps
+            # print(k.detach())
+            exposure_param_reg = torch.mean((k-1.0)**2)
+
+        # log(gt) ~ k * log(pred) + b, per channel
+        if self.config.adaptive_exposure_mode == "log_channel":
+            x = torch.log(pred_img + eeps).reshape(-1, 3)
+            y = torch.log(gt_img + eeps).reshape(-1, 3)
+            x_mean, y_mean = x.mean(0, True), y.mean(0, True)
+            x2_mean, xy_mean = (x**2).mean(0, True), (x*y).mean(0, True)
+            m = (xy_mean - x_mean * y_mean) / (x2_mean - x_mean**2)
+            b = y_mean - m * x_mean
+            pred_img_e = torch.exp(m * x + b).reshape(pred_img.shape) - eeps
+            # print(m.detach(), b.detach())
+            exposure_param_reg = torch.mean((m-1.0)**2 + b**2)
+
+        # gt ~ A * pred
+        elif self.config.adaptive_exposure_mode == "affine":
+            x = (pred_img + eeps).reshape(-1, 3)
+            y = (gt_img + eeps).reshape(-1, 3)
+            xTy, xTx = x.T @ y, x.T @ x
+            try:
+                A = torch.linalg.inv(xTx) @ xTy
+            except torch._C._LinAlgError:
+                pass
+            else:
+                pred_img_e = (x @ A).reshape(pred_img.shape) - eeps
+                exposure_param_reg = torch.mean((A-torch.eye(3).to(A))**2)
+
+        # log(gt) ~ A * log(pred) + b
+        elif self.config.adaptive_exposure_mode == "log_affine":
+            x = torch.log(pred_img + eeps).reshape(-1, 3)
+            y = torch.log(gt_img + eeps).reshape(-1, 3)
+            mean_x = torch.mean(x, dim=0, keepdim=True)
+            mean_y = torch.mean(y, dim=0, keepdim=True)
+            centered_x = x - mean_x
+            centered_y = y - mean_y
+            xTy = centered_x.T @ centered_y
+            xTx = centered_x.T @ centered_x
+            try:
+                A = torch.linalg.inv(xTx) @ xTy
+            except torch._C._LinAlgError:
+                pass
+            else:
+                B = mean_y - mean_x @ A
+                pred_img_e = torch.exp(x @ A + B).reshape(pred_img.shape) - eeps
+                exposure_param_reg = 0.5*(torch.mean((A-torch.eye(3).to(A))**2) + torch.mean(B**2))
+
+        else:
+            raise ValueError("Invalid adaptive_exposure_mode:", self.config.adaptive_exposure_mode)
+        
+        timerl.mark("exposure")  # 200us-500us
+
+        # keep good value for natural image
+        if self.config.exposure_reg_splat > 0.0:
+            if not hasattr(self, '_exposure_info') or self._exposure_info_n < 4096:
+                # get mean and covariance of image colors
+                gt_color_flat = gt_img[..., :3].reshape((-1, 3))
+                gt_mean = gt_color_flat.mean(0).detach()
+                gt_mean2 = torch.cov(gt_color_flat.T).detach()
+                if not hasattr(self, '_exposure_info'):
+                    self._exposure_info_n = 1
+                    self._exposure_info_gt_mean = gt_mean
+                    self._exposure_info_gt_mean2 = gt_mean2
+                else:
+                    self._exposure_info_n += 1
+                    self._exposure_info_gt_mean = torch.lerp(
+                        self._exposure_info_gt_mean, gt_mean,
+                        1.0 / self._exposure_info_n
+                    )
+                    self._exposure_info_gt_mean2 = torch.lerp(
+                        self._exposure_info_gt_mean2, gt_mean2,
+                        1.0 / self._exposure_info_n
+                    )
+            splat_colors = self.features_dc
+            if self.config.sh_degree > 0:
+                splat_colors = SH2RGB(splat_colors)
+            splat_colors = torch.nan_to_num(
+                splat_colors, nan=0.0, posinf=0.0, neginf=0.0)
+            splat_weights = torch.exp(self.scales.mean(-1, True)) * torch.sigmoid(self.opacities)
+            splat_color_mean = (splat_colors*splat_weights).sum(0) / splat_weights.sum(0)
+            splat_color_mean2 = torch.cov(splat_colors.T, aweights=splat_weights.flatten())
+            diff1 = torch.abs(splat_color_mean - self._exposure_info_gt_mean).mean()
+            diff2 = torch.abs(splat_color_mean2 - self._exposure_info_gt_mean2).mean()
+            exposure_reg = self.config.exposure_reg_splat * (diff1+diff2)
+            # print(splat_color_mean.detach(), diff1.item(), diff2.item())
+            timerl.mark("exposure_reg")
+
+        return pred_img_e, exposure_reg, exposure_param_reg
+
     def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict.
 
@@ -889,122 +1143,22 @@ class SpirulaeModel(Model):
             pred_img = torch.lerp(outputs["background"], pred_img, mask)
         timerl.mark("alpha")  # ~100us
 
+        # depth supervision
+        depth_supervision_loss, normal_supervision_loss, alpha_supervision_loss = 0.0, 0.0, 0.0
+        if "depth" in batch and self.step > self.config.depth_supervision_start_iter and \
+            (self.config.depth_supervision_weight > 0.0 or
+             self.config.normal_supervision_weight > 0.0 or
+             self.config.alpha_supervision_weight > 0.0):
+            depth_supervision_loss, normal_supervision_loss, alpha_supervision_loss \
+                = self.depth_supervision(batch["depth"].cuda(), outputs["depth"], outputs["alpha"])
+            timerl.mark("depth")  # ?us
+
         # handle exposure
-        exposure_reg = 0.0
-        exposure_param_reg = 0.0
         pred_img_e = pred_img
+        exposure_reg, exposure_param_reg = 0.0, 0.0
         if self.config.adaptive_exposure_mode is not None and \
             self.step > self.config.adaptive_exposure_start_iter:
-            eeps = 0.5/255.0
-
-            # gt ~ k * pred
-            if self.config.adaptive_exposure_mode == "linear":
-                k = (gt_img.mean()+eeps) / (pred_img.mean()+eeps)
-                pred_img_e = k * (pred_img+eeps) - eeps
-                # print(k.item())
-                exposure_param_reg = (k-1.0)**2
-
-            # log(gt) ~ k * log(pred) + b
-            elif self.config.adaptive_exposure_mode == "log_linear":
-                x = torch.log(pred_img+eeps)
-                y = torch.log(gt_img+eeps)
-                x_mean, y_mean = x.mean(), y.mean()
-                x2_mean, xy_mean = (x**2).mean(), (x*y).mean()
-                m = (xy_mean - x_mean * y_mean) / (x2_mean - x_mean**2)
-                b = y_mean - m * x_mean
-                pred_img_e = torch.exp(m * x + b) - eeps
-                # print(m.item(), b.item())
-                exposure_param_reg = (m-1.0)**2 + b**2
-
-            # gt ~ k * pred, per channel
-            if self.config.adaptive_exposure_mode == "channel":
-                x = pred_img.reshape(-1, 3)
-                y = gt_img.reshape(-1, 3)
-                k = (y.mean(0, True)+eeps) / (x.mean(0, True)+eeps)
-                pred_img_e = k * (pred_img+eeps) - eeps
-                # print(k.detach())
-                exposure_param_reg = torch.mean((k-1.0)**2)
-
-            # log(gt) ~ k * log(pred) + b, per channel
-            if self.config.adaptive_exposure_mode == "log_channel":
-                x = torch.log(pred_img + eeps).reshape(-1, 3)
-                y = torch.log(gt_img + eeps).reshape(-1, 3)
-                x_mean, y_mean = x.mean(0, True), y.mean(0, True)
-                x2_mean, xy_mean = (x**2).mean(0, True), (x*y).mean(0, True)
-                m = (xy_mean - x_mean * y_mean) / (x2_mean - x_mean**2)
-                b = y_mean - m * x_mean
-                pred_img_e = torch.exp(m * x + b).reshape(pred_img_e.shape) - eeps
-                # print(m.detach(), b.detach())
-                exposure_param_reg = torch.mean((m-1.0)**2 + b**2)
-
-            # gt ~ A * pred
-            elif self.config.adaptive_exposure_mode == "affine":
-                x = (pred_img + eeps).reshape(-1, 3)
-                y = (gt_img + eeps).reshape(-1, 3)
-                xTy, xTx = x.T @ y, x.T @ x
-                try:
-                    A = torch.linalg.inv(xTx) @ xTy
-                except torch._C._LinAlgError:
-                    pass
-                else:
-                    pred_img_e = (x @ A).reshape(pred_img.shape) - eeps
-                    exposure_param_reg = torch.mean((A-torch.eye(3).to(A))**2)
-
-            # log(gt) ~ A * log(pred) + b
-            elif self.config.adaptive_exposure_mode == "log_affine":
-                x = torch.log(pred_img + eeps).reshape(-1, 3)
-                y = torch.log(gt_img + eeps).reshape(-1, 3)
-                mean_x = torch.mean(x, dim=0, keepdim=True)
-                mean_y = torch.mean(y, dim=0, keepdim=True)
-                centered_x = x - mean_x
-                centered_y = y - mean_y
-                xTy = centered_x.T @ centered_y
-                xTx = centered_x.T @ centered_x
-                try:
-                    A = torch.linalg.inv(xTx) @ xTy
-                except torch._C._LinAlgError:
-                    pass
-                else:
-                    B = mean_y - mean_x @ A
-                    pred_img_e = torch.exp(x @ A + B).reshape(pred_img.shape) - eeps
-                    exposure_param_reg = 0.5*(torch.mean((A-torch.eye(3).to(A))**2) + torch.mean(B**2))
-            
-            timerl.mark("exposure")  # 200us-500us
-
-            # keep good value for natural image
-            if self.config.exposure_reg_splat > 0.0:
-                if not hasattr(self, '_exposure_info') or self._exposure_info_n < 4096:
-                    # get mean and covariance of image colors
-                    gt_color_flat = gt_img[..., :3].reshape((-1, 3))
-                    gt_mean = gt_color_flat.mean(0).detach()
-                    gt_mean2 = torch.cov(gt_color_flat.T).detach()
-                    if not hasattr(self, '_exposure_info'):
-                        self._exposure_info_n = 1
-                        self._exposure_info_gt_mean = gt_mean
-                        self._exposure_info_gt_mean2 = gt_mean2
-                    else:
-                        self._exposure_info_n += 1
-                        self._exposure_info_gt_mean = torch.lerp(
-                            self._exposure_info_gt_mean, gt_mean,
-                            1.0 / self._exposure_info_n
-                        )
-                        self._exposure_info_gt_mean2 = torch.lerp(
-                            self._exposure_info_gt_mean2, gt_mean2,
-                            1.0 / self._exposure_info_n
-                        )
-                splat_colors = self.features_dc
-                if self.config.sh_degree > 0:
-                    splat_colors = SH2RGB(splat_colors)
-                splat_colors = torch.nan_to_num(
-                    splat_colors, nan=0.0, posinf=0.0, neginf=0.0)
-                splat_weights = torch.exp(self.scales.mean(-1, True)) * torch.sigmoid(self.opacities)
-                splat_color_mean = (splat_colors*splat_weights).sum(0) / splat_weights.sum(0)
-                splat_color_mean2 = torch.cov(splat_colors.T, aweights=splat_weights.flatten())
-                diff1 = torch.abs(splat_color_mean - self._exposure_info_gt_mean).mean()
-                diff2 = torch.abs(splat_color_mean2 - self._exposure_info_gt_mean2).mean()
-                exposure_reg = self.config.exposure_reg_splat * (diff1+diff2)
-                # print(splat_color_mean.detach(), diff1.item(), diff2.item())
-                timerl.mark("exposure_reg")
+            pred_img_e, exposure_reg, exposure_param_reg = self.exposure_correction(pred_img, gt_img)
 
         # image loss
         if False:
@@ -1057,11 +1211,15 @@ class SpirulaeModel(Model):
             torch.abs(torch.exp(self.scales)).mean()
 
         # regularizations for parameters
-        quat_norm_reg = 0.1 * (torch.log(self.quats.norm(dim=-1)+0.001)**2).mean()
+        quat_norm = self.quats.norm(dim=-1)
+        quat_norm_reg = 0.1 * (quat_norm-1.0-torch.log(quat_norm)**2).mean()
         timerl.mark("mcmc")  # ~100us
 
         loss_dict = {
             "main_loss": torch.lerp(torch.lerp(Ll1_e, simloss, self.config.ssim_lambda), Ll1, self.config.exposure_reg_image),
+            "depth_ref_loss": depth_supervision_loss,
+            "normal_ref_loss": normal_supervision_loss,
+            "alpha_ref_loss": alpha_supervision_loss,
             "alpha_loss": alpha_loss,
             "scale_reg": scale_reg,
             "depth_reg": depth_reg,
