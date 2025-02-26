@@ -29,6 +29,7 @@ import torch
 from torch.nn import Parameter
 from torch.nn.functional import normalize
 from pytorch_msssim import SSIM
+from fused_ssim import fused_ssim
 
 from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map
 from spirulae_splat.splat import (
@@ -1169,9 +1170,13 @@ class SpirulaeModel(Model):
             pred_img = torch.clip(pred_img, 0.0, 1.0)
         Ll1_e = torch.abs(gt_img - pred_img_e).mean()
         Ll1 = torch.abs(gt_img - pred_img).mean()
-        simloss = 0.0
+        simloss = torch.zeros_like(Ll1_e)
         if self.config.ssim_lambda > 0.0:
-            simloss = 1 - self.ssim(gt_img.permute(2, 0, 1)[None, ...], pred_img_e.permute(2, 0, 1)[None, ...])
+            gt_img_bchw = gt_img.permute(2, 0, 1).unsqueeze(0)
+            pred_img_bchw = pred_img_e.permute(2, 0, 1).unsqueeze(0).contiguous()
+            # simloss = 1 - self.ssim(pred_img_bchw, gt_img_bchw)
+            # simloss = 1 - fused_ssim(pred_img_bchw, gt_img_bchw, padding="valid")
+            simloss = 1 - fused_ssim(pred_img_bchw, gt_img_bchw, padding="same")
         timerl.mark("image")  # 750us-3000us, 100us-300us without ssim
 
         # scale regularization

@@ -107,6 +107,7 @@ setup(
         "jaxtyping",
         "rich>=12",
         "typing_extensions",
+        "fused_ssim @ git+https://github.com/MrNeRF/optimized-fused-ssim.git",
     ],
     extras_require={
         # dev dependencies. Install them by `pip install gsplat[dev]`
