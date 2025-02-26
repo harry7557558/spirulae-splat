@@ -1217,7 +1217,7 @@ class SpirulaeModel(Model):
 
         # regularizations for parameters
         quat_norm = self.quats.norm(dim=-1)
-        quat_norm_reg = 0.1 * (quat_norm-1.0-torch.log(quat_norm)**2).mean()
+        quat_norm_reg = 0.1 * (quat_norm-1.0-torch.log(quat_norm)).mean()
         timerl.mark("mcmc")  # ~100us
 
         loss_dict = {
