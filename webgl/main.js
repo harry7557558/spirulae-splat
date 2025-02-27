@@ -706,9 +706,16 @@ async function main() {
 
     let activeKeys = [];
 
+    let lastFrame = 0;
+    let avgFps = 0;
+    let start = 0;
+    function getVelocityScale() {
+        return 120.0 / Math.min(Math.max(avgFps, 30.0), 240.0);
+    }
+
     window.addEventListener("keydown", (e) => {
         // if (document.activeElement != document.body) return;
-        if (/^Key[A-Z]$/.test(e.code) || /^Arrow/.test(e.code))
+        if (/^Key[A-Z]$/.test(e.code) || /^Arrow/.test(e.code) || e.code == "Home" || e.code == "End")
             e.preventDefault();
         if (!activeKeys.includes(e.code)) activeKeys.push(e.code);
         renderNeeded = true;
@@ -917,10 +924,6 @@ async function main() {
     let jumpDelta = 0;
     let vertexCount = 0;
 
-    let lastFrame = 0;
-    let avgFps = 0;
-    let start = 0;
-
     window.addEventListener("gamepadconnected", (e) => {
         const gp = navigator.getGamepads()[e.gamepad.index];
         console.log(
@@ -937,22 +940,26 @@ async function main() {
     let previousCamera = "";
     const frame = (now) => {
         let inv = invert4(viewMatrix);
-        let shiftKey = activeKeys.includes("Shift") || activeKeys.includes("ShiftLeft") || activeKeys.includes("ShiftRight")
+        let shiftKey = activeKeys.includes("Shift") || activeKeys.includes("ShiftLeft") || activeKeys.includes("ShiftRight");
+        let vsc = getVelocityScale();
+
+        if (/^Key[ADQEWSJKLI]$/.test(activeKeys) ||
+            /^Arrow/.test(activeKeys)) renderNeeded = true;
 
         if (activeKeys.includes("ArrowUp"))
-            inv = translate4(inv, 0, -0.01, 0);
+            inv = translate4(inv, 0, -0.01*vsc, 0);
         if (activeKeys.includes("ArrowDown"))
-            inv = translate4(inv, 0, 0.01, 0);
+            inv = translate4(inv, 0, 0.01*vsc, 0);
         if (activeKeys.includes("ArrowLeft"))
-            inv = translate4(inv, -0.01, 0, 0);
+            inv = translate4(inv, -0.01*vsc, 0, 0);
         if (activeKeys.includes("ArrowRight"))
-            inv = translate4(inv, 0.01, 0, 0);
-        if (activeKeys.includes("KeyA")) inv = rotate4(inv, -0.01, 0, 1, 0);
-        if (activeKeys.includes("KeyD")) inv = rotate4(inv, 0.01, 0, 1, 0);
-        if (activeKeys.includes("KeyQ")) inv = rotate4(inv, 0.01, 0, 0, 1);
-        if (activeKeys.includes("KeyE")) inv = rotate4(inv, -0.01, 0, 0, 1);
-        if (activeKeys.includes("KeyW")) inv = rotate4(inv, 0.01, 1, 0, 0);
-        if (activeKeys.includes("KeyS")) inv = rotate4(inv, -0.01, 1, 0, 0);
+            inv = translate4(inv, 0.01*vsc, 0, 0);
+        if (activeKeys.includes("KeyA")) inv = rotate4(inv, -0.01*vsc, 0, 1, 0);
+        if (activeKeys.includes("KeyD")) inv = rotate4(inv, 0.01*vsc, 0, 1, 0);
+        if (activeKeys.includes("KeyQ")) inv = rotate4(inv, 0.01*vsc, 0, 0, 1);
+        if (activeKeys.includes("KeyE")) inv = rotate4(inv, -0.01*vsc, 0, 0, 1);
+        if (activeKeys.includes("KeyW")) inv = rotate4(inv, 0.01*vsc, 1, 0, 0);
+        if (activeKeys.includes("KeyS")) inv = rotate4(inv, -0.01*vsc, 1, 0, 0);
 
         const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
         let isJumping = activeKeys.includes("Space");
@@ -960,8 +967,8 @@ async function main() {
             if (!gamepad) continue;
 
             const axisThreshold = 0.1; // Threshold to detect when the axis is intentionally moved
-            const moveSpeed = 0.02;
-            const rotateSpeed = 0.02;
+            const moveSpeed = 0.02*vsc;
+            const rotateSpeed = 0.02*vsc;
 
             let inv0 = JSON.stringify(inv);
 
@@ -1020,18 +1027,18 @@ async function main() {
             inv = rotate4(
                 inv,
                 activeKeys.includes("KeyJ")
-                    ? -0.02
+                    ? -0.02*vsc
                     : activeKeys.includes("KeyL")
-                    ? 0.02
+                    ? 0.02*vsc
                     : 0,
                 0, 1, 0
             );
             inv = rotate4(
                 inv,
                 activeKeys.includes("KeyI")
-                    ? 0.02
+                    ? 0.02*vsc
                     : activeKeys.includes("KeyK")
-                    ? -0.02
+                    ? -0.02*vsc
                     : 0,
                 1, 0, 0
             );
@@ -1053,9 +1060,9 @@ async function main() {
 
         let jumpDeltaNew = jumpDelta;
         if (isJumping) {
-            jumpDeltaNew = Math.min(1, jumpDelta + 0.05);
+            jumpDeltaNew = Math.min(1, jumpDelta + 0.05*vsc);
         } else {
-            jumpDeltaNew = Math.max(0, jumpDelta - 0.05);
+            jumpDeltaNew = Math.max(0, jumpDelta - 0.05*vsc);
         }
         if (jumpDeltaNew != jumpDelta) {
             jumpDelta = jumpDeltaNew;
@@ -1071,7 +1078,7 @@ async function main() {
         worker.postMessage({ view: viewProj });
 
         const currentFps = 1000 / (now - lastFrame) || 0;
-        avgFps = avgFps * 0.9 + currentFps * 0.1;
+        avgFps = avgFps * 0.8 + currentFps * 0.2;
 
         let camera = CameraPresets.camera;
         if (camera !== previousCamera)

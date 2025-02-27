@@ -216,7 +216,7 @@ CameraPresets.createSelector = function() {
     }
     select.addEventListener("input", updateSelectedCamera);
     window.addEventListener("resize", updateSelectedCamera);
-    select.value = "t265";
+    select.value = "s21";
     updateSelectedCamera();
     return select;
 }
