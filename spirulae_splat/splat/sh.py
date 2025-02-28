@@ -37,6 +37,7 @@ def deg_from_sh(num_bases: int):
 def spherical_harmonics(
     degrees_to_use: int,
     viewdirs: Float[Tensor, "*batch 3"],
+    coeffs0: Float[Tensor, "*batch C"],
     coeffs: Float[Tensor, "*batch D C"],
     method: Literal["poly", "fast"] = "fast",
 ) -> Float[Tensor, "*batch C"]:
@@ -48,15 +49,17 @@ def spherical_harmonics(
     Args:
         degrees_to_use (int): degree of SHs to use (<= total number available).
         viewdirs (Tensor): viewing directions.
-        coeffs (Tensor): harmonic coefficients.
+        coeffs0 (Tensor): order 0 harmonic coefficients.
+        coeffs (Tensor): rest of harmonic coefficients.
 
     Returns:
         The spherical harmonics.
     """
-    assert coeffs.shape[-2] >= num_sh_bases(degrees_to_use)
+    assert coeffs.shape[-2] >= num_sh_bases(degrees_to_use)-1
     assert method in ["poly", "fast"]
     return _SphericalHarmonics.apply(
-        method, degrees_to_use, viewdirs.contiguous(), coeffs.contiguous()
+        method, degrees_to_use, viewdirs.contiguous(),
+        coeffs0.contiguous(), coeffs.contiguous()
     )
 
 
@@ -75,16 +78,17 @@ class _SphericalHarmonics(Function):
         method: Literal["poly", "fast"],
         degrees_to_use: int,
         viewdirs: Float[Tensor, "*batch 3"],
+        coeffs0: Float[Tensor, "*batch C"],
         coeffs: Float[Tensor, "*batch D C"],
     ):
         num_points = coeffs.shape[0]
         ctx.degrees_to_use = degrees_to_use
-        degree = deg_from_sh(coeffs.shape[-2])
+        degree = deg_from_sh(coeffs.shape[-2]+1)
         ctx.degree = degree
         ctx.method = method
         ctx.save_for_backward(viewdirs)
         return _C.compute_sh_forward(
-            method, num_points, degree, degrees_to_use, viewdirs, coeffs
+            method, num_points, degree, degrees_to_use, viewdirs, coeffs0, coeffs
         )
 
     @staticmethod
@@ -98,7 +102,7 @@ class _SphericalHarmonics(Function):
             None,
             None,
             None,
-            _C.compute_sh_backward(
+            *_C.compute_sh_backward(
                 method, num_points, degree, degrees_to_use, viewdirs, v_colors
             ),
         )

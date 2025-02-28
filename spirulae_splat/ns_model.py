@@ -692,7 +692,6 @@ class SpirulaeModel(Model):
         self.last_size = (H, W)
         timerr.mark("pre")  # 80us
 
-        colors = torch.cat((self.features_dc[:, None, :], self.features_sh), dim=1)
         quats = normalize(self.quats, dim=-1)
         opacities = self.config.max_opacity * torch.sigmoid(self.opacities)
         timerr.mark("map")  # 300us-450us
@@ -700,10 +699,10 @@ class SpirulaeModel(Model):
         if self.config.sh_degree > 0:
             viewdirs = self.means.detach() - optimized_camera_to_world[:3, 3].cuda()  # (N, 3)
             n = min(self.step // self.config.sh_degree_interval, self.config.sh_degree)
-            rgbs = spherical_harmonics(n, viewdirs, colors)  # input unnormalized viewdirs
+            rgbs = spherical_harmonics(n, viewdirs, self.features_dc, self.features_sh)  # input unnormalized viewdirs
             rgbs = torch.relu(rgbs+0.5)  # type: ignore
         else:
-            rgbs = colors[:, 0, :]
+            rgbs = self.features_dc
         timerr.mark("sh")  # 200us-350us
 
         BLOCK_WIDTH = 16

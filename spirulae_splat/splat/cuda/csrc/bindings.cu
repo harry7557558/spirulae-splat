@@ -24,12 +24,17 @@ torch::Tensor compute_sh_forward_tensor(
     const unsigned degree,
     const unsigned degrees_to_use,
     torch::Tensor &viewdirs,  // [..., 3]
+    torch::Tensor &coeffs0,   // [..., 3]
     torch::Tensor &coeffs   // [..., K, 3]
 ) {
     DEVICE_GUARD(viewdirs);
     unsigned num_bases = num_sh_bases(degree);
+    if (coeffs0.ndimension() != 2 || coeffs0.size(0) != num_points ||
+        coeffs0.size(1) != 3) {
+        AT_ERROR("coeffs0 must have dimensions (N, 3)");
+    }
     if (coeffs.ndimension() != 3 || coeffs.size(0) != num_points ||
-        coeffs.size(1) != num_bases || coeffs.size(2) != 3) {
+        coeffs.size(1) != num_bases-1 || coeffs.size(2) != 3) {
         AT_ERROR("coeffs must have dimensions (N, D, 3)");
     }
     torch::Tensor colors = torch::empty({num_points, 3}, coeffs.options());    
@@ -41,6 +46,7 @@ torch::Tensor compute_sh_forward_tensor(
             degree,
             degrees_to_use,
             (float3 *)viewdirs.contiguous().data_ptr<float>(),
+            coeffs0.contiguous().data_ptr<float>(),
             coeffs.contiguous().data_ptr<float>(),
             colors.contiguous().data_ptr<float>()
         );
@@ -52,6 +58,7 @@ torch::Tensor compute_sh_forward_tensor(
             degree,
             degrees_to_use,
             (float3 *)viewdirs.contiguous().data_ptr<float>(),
+            coeffs0.contiguous().data_ptr<float>(),
             coeffs.contiguous().data_ptr<float>(),
             colors.contiguous().data_ptr<float>()
         );
@@ -62,7 +69,8 @@ torch::Tensor compute_sh_forward_tensor(
 }
 
 
-torch::Tensor compute_sh_backward_tensor(
+std::tuple<torch::Tensor, torch::Tensor>
+compute_sh_backward_tensor(
     const std::string &method,
     const unsigned num_points,
     const unsigned degree,
@@ -80,8 +88,10 @@ torch::Tensor compute_sh_backward_tensor(
         AT_ERROR("v_colors must have dimensions (N, 3)");
     }
     unsigned num_bases = num_sh_bases(degree);
+    torch::Tensor v_coeffs0 =
+        torch::zeros({num_points, 3}, v_colors.options());
     torch::Tensor v_coeffs =
-        torch::zeros({num_points, num_bases, 3}, v_colors.options());
+        torch::zeros({num_points, num_bases-1, 3}, v_colors.options());
     if (method == "poly") {
         compute_sh_backward_kernel<SHType::Poly><<<
             (num_points + N_THREADS - 1) / N_THREADS,
@@ -91,6 +101,7 @@ torch::Tensor compute_sh_backward_tensor(
             degrees_to_use,
             (float3 *)viewdirs.contiguous().data_ptr<float>(),
             v_colors.contiguous().data_ptr<float>(),
+            v_coeffs0.contiguous().data_ptr<float>(),
             v_coeffs.contiguous().data_ptr<float>()
         );
     } else if (method == "fast") {
@@ -102,12 +113,13 @@ torch::Tensor compute_sh_backward_tensor(
             degrees_to_use,
             (float3 *)viewdirs.contiguous().data_ptr<float>(),
             v_colors.contiguous().data_ptr<float>(),
+            v_coeffs0.contiguous().data_ptr<float>(),
             v_coeffs.contiguous().data_ptr<float>()
         );
     } else {
         AT_ERROR("Invalid method: ", method);
     }
-    return v_coeffs;
+    return std::make_tuple(v_coeffs0, v_coeffs);
 }
 
 

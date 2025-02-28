@@ -54,11 +54,12 @@ __host__ __device__ unsigned num_sh_bases(const unsigned degree) {
 __device__ void sh_coeffs_to_color_fast(
     const unsigned degree,
     const float3 &viewdir,
+    const float *coeffs0,
     const float *coeffs,
     float *colors
 ) {
     for (int c = 0; c < CHANNELS; ++c) {
-        colors[c] = 0.2820947917738781f * coeffs[c];
+        colors[c] = 0.2820947917738781f * coeffs0[c];
     }
     if (degree < 1) {
         return;
@@ -74,9 +75,9 @@ __device__ void sh_coeffs_to_color_fast(
     for (int c = 0; c < CHANNELS; ++c) {
         float fTmp0A = 0.48860251190292f;
         colors[c] += fTmp0A *
-                     (-y * coeffs[1 * CHANNELS + c] +
-                      z * coeffs[2 * CHANNELS + c] -
-                      x * coeffs[3 * CHANNELS + c]);
+                     (-y * coeffs[0 * CHANNELS + c] +
+                      z * coeffs[1 * CHANNELS + c] -
+                      x * coeffs[2 * CHANNELS + c]);
     }
     if (degree < 2) {
         return;
@@ -94,9 +95,9 @@ __device__ void sh_coeffs_to_color_fast(
     float pSH4 = fTmp1A * fS1;
     for (int c = 0; c < CHANNELS; ++c) {
         colors[c] +=
-            pSH4 * coeffs[4 * CHANNELS + c] + pSH5 * coeffs[5 * CHANNELS + c] +
-            pSH6 * coeffs[6 * CHANNELS + c] + pSH7 * coeffs[7 * CHANNELS + c] +
-            pSH8 * coeffs[8 * CHANNELS + c];
+            pSH4 * coeffs[3 * CHANNELS + c] + pSH5 * coeffs[4 * CHANNELS + c] +
+            pSH6 * coeffs[5 * CHANNELS + c] + pSH7 * coeffs[6 * CHANNELS + c] +
+            pSH8 * coeffs[7 * CHANNELS + c];
     }
     if (degree < 3) {
         return;
@@ -115,13 +116,13 @@ __device__ void sh_coeffs_to_color_fast(
     float pSH15 = fTmp2A * fC2;
     float pSH9  = fTmp2A * fS2;
     for (int c = 0; c < CHANNELS; ++c) {
-        colors[c] += pSH9  * coeffs[9 * CHANNELS + c] +
-                     pSH10 * coeffs[10 * CHANNELS + c] +
-                     pSH11 * coeffs[11 * CHANNELS + c] +
-                     pSH12 * coeffs[12 * CHANNELS + c] +
-                     pSH13 * coeffs[13 * CHANNELS + c] +
-                     pSH14 * coeffs[14 * CHANNELS + c] +
-                     pSH15 * coeffs[15 * CHANNELS + c];
+        colors[c] += pSH9  * coeffs[8 * CHANNELS + c] +
+                     pSH10 * coeffs[9 * CHANNELS + c] +
+                     pSH11 * coeffs[10 * CHANNELS + c] +
+                     pSH12 * coeffs[11 * CHANNELS + c] +
+                     pSH13 * coeffs[12 * CHANNELS + c] +
+                     pSH14 * coeffs[13 * CHANNELS + c] +
+                     pSH15 * coeffs[14 * CHANNELS + c];
     }
     if (degree < 4) {
         return;
@@ -143,15 +144,15 @@ __device__ void sh_coeffs_to_color_fast(
     float pSH24 = fTmp3A * fC3;
     float pSH16 = fTmp3A * fS3;
     for (int c = 0; c < CHANNELS; ++c) {
-        colors[c] += pSH16 * coeffs[16 * CHANNELS + c] +
-                     pSH17 * coeffs[17 * CHANNELS + c] +
-                     pSH18 * coeffs[18 * CHANNELS + c] +
-                     pSH19 * coeffs[19 * CHANNELS + c] +
-                     pSH20 * coeffs[20 * CHANNELS + c] +
-                     pSH21 * coeffs[21 * CHANNELS + c] +
-                     pSH22 * coeffs[22 * CHANNELS + c] +
-                     pSH23 * coeffs[23 * CHANNELS + c] +
-                     pSH24 * coeffs[24 * CHANNELS + c];
+        colors[c] += pSH16 * coeffs[15 * CHANNELS + c] +
+                     pSH17 * coeffs[16 * CHANNELS + c] +
+                     pSH18 * coeffs[17 * CHANNELS + c] +
+                     pSH19 * coeffs[18 * CHANNELS + c] +
+                     pSH20 * coeffs[19 * CHANNELS + c] +
+                     pSH21 * coeffs[20 * CHANNELS + c] +
+                     pSH22 * coeffs[21 * CHANNELS + c] +
+                     pSH23 * coeffs[22 * CHANNELS + c] +
+                     pSH24 * coeffs[23 * CHANNELS + c];
     }
 }
 
@@ -159,13 +160,14 @@ __device__ void sh_coeffs_to_color_fast_vjp(
     const unsigned degree,
     const float3 &viewdir,
     const float *v_colors,
+    float *v_coeffs0,
     float *v_coeffs
 ) {
     // Expects v_colors to be len CHANNELS
     // and v_coeffs to be num_bases * CHANNELS
 #pragma unroll
     for (int c = 0; c < CHANNELS; ++c) {
-        v_coeffs[c] = 0.2820947917738781f * v_colors[c];
+        v_coeffs0[c] = 0.2820947917738781f * v_colors[c];
     }
     if (degree < 1) {
         return;
@@ -181,9 +183,9 @@ __device__ void sh_coeffs_to_color_fast_vjp(
     float fTmp0A = 0.48860251190292f;
 #pragma unroll
     for (int c = 0; c < CHANNELS; ++c) {
-        v_coeffs[1 * CHANNELS + c] = -fTmp0A * y * v_colors[c];
-        v_coeffs[2 * CHANNELS + c] = fTmp0A * z * v_colors[c];
-        v_coeffs[3 * CHANNELS + c] = -fTmp0A * x * v_colors[c];
+        v_coeffs[0 * CHANNELS + c] = -fTmp0A * y * v_colors[c];
+        v_coeffs[1 * CHANNELS + c] = fTmp0A * z * v_colors[c];
+        v_coeffs[2 * CHANNELS + c] = -fTmp0A * x * v_colors[c];
     }
     if (degree < 2) {
         return;
@@ -201,11 +203,11 @@ __device__ void sh_coeffs_to_color_fast_vjp(
     float pSH4 = fTmp1A * fS1;
 #pragma unroll
     for (int c = 0; c < CHANNELS; ++c) {
-        v_coeffs[4 * CHANNELS + c] = pSH4 * v_colors[c];
-        v_coeffs[5 * CHANNELS + c] = pSH5 * v_colors[c];
-        v_coeffs[6 * CHANNELS + c] = pSH6 * v_colors[c];
-        v_coeffs[7 * CHANNELS + c] = pSH7 * v_colors[c];
-        v_coeffs[8 * CHANNELS + c] = pSH8 * v_colors[c];
+        v_coeffs[3 * CHANNELS + c] = pSH4 * v_colors[c];
+        v_coeffs[4 * CHANNELS + c] = pSH5 * v_colors[c];
+        v_coeffs[5 * CHANNELS + c] = pSH6 * v_colors[c];
+        v_coeffs[6 * CHANNELS + c] = pSH7 * v_colors[c];
+        v_coeffs[7 * CHANNELS + c] = pSH8 * v_colors[c];
     }
     if (degree < 3) {
         return;
@@ -225,13 +227,13 @@ __device__ void sh_coeffs_to_color_fast_vjp(
     float pSH9  = fTmp2A * fS2;
 #pragma unroll
     for (int c = 0; c < CHANNELS; ++c) {
-        v_coeffs[9 * CHANNELS + c] = pSH9 * v_colors[c];
-        v_coeffs[10 * CHANNELS + c] = pSH10 * v_colors[c];
-        v_coeffs[11 * CHANNELS + c] = pSH11 * v_colors[c];
-        v_coeffs[12 * CHANNELS + c] = pSH12 * v_colors[c];
-        v_coeffs[13 * CHANNELS + c] = pSH13 * v_colors[c];
-        v_coeffs[14 * CHANNELS + c] = pSH14 * v_colors[c];
-        v_coeffs[15 * CHANNELS + c] = pSH15 * v_colors[c];
+        v_coeffs[8 * CHANNELS + c] = pSH9 * v_colors[c];
+        v_coeffs[9 * CHANNELS + c] = pSH10 * v_colors[c];
+        v_coeffs[10 * CHANNELS + c] = pSH11 * v_colors[c];
+        v_coeffs[11 * CHANNELS + c] = pSH12 * v_colors[c];
+        v_coeffs[12 * CHANNELS + c] = pSH13 * v_colors[c];
+        v_coeffs[13 * CHANNELS + c] = pSH14 * v_colors[c];
+        v_coeffs[14 * CHANNELS + c] = pSH15 * v_colors[c];
     }
     if (degree < 4) {
         return;
@@ -254,27 +256,28 @@ __device__ void sh_coeffs_to_color_fast_vjp(
     float pSH16 = fTmp3A * fS3;
 #pragma unroll
     for (int c = 0; c < CHANNELS; ++c) {
-        v_coeffs[16 * CHANNELS + c] = pSH16 * v_colors[c];
-        v_coeffs[17 * CHANNELS + c] = pSH17 * v_colors[c];
-        v_coeffs[18 * CHANNELS + c] = pSH18 * v_colors[c];
-        v_coeffs[19 * CHANNELS + c] = pSH19 * v_colors[c];
-        v_coeffs[20 * CHANNELS + c] = pSH20 * v_colors[c];
-        v_coeffs[21 * CHANNELS + c] = pSH21 * v_colors[c];
-        v_coeffs[22 * CHANNELS + c] = pSH22 * v_colors[c];
-        v_coeffs[23 * CHANNELS + c] = pSH23 * v_colors[c];
-        v_coeffs[24 * CHANNELS + c] = pSH24 * v_colors[c];
+        v_coeffs[15 * CHANNELS + c] = pSH16 * v_colors[c];
+        v_coeffs[16 * CHANNELS + c] = pSH17 * v_colors[c];
+        v_coeffs[17 * CHANNELS + c] = pSH18 * v_colors[c];
+        v_coeffs[18 * CHANNELS + c] = pSH19 * v_colors[c];
+        v_coeffs[19 * CHANNELS + c] = pSH20 * v_colors[c];
+        v_coeffs[20 * CHANNELS + c] = pSH21 * v_colors[c];
+        v_coeffs[21 * CHANNELS + c] = pSH22 * v_colors[c];
+        v_coeffs[22 * CHANNELS + c] = pSH23 * v_colors[c];
+        v_coeffs[23 * CHANNELS + c] = pSH24 * v_colors[c];
     }
 }
 __device__ void sh_coeffs_to_color(
     const unsigned degree,
     const float3 &viewdir,
+    const float *coeffs0,
     const float *coeffs,
     float *colors
 ) {
     // Expects v_colors to be len CHANNELS
     // and v_coeffs to be num_bases * CHANNELS
     for (int c = 0; c < CHANNELS; ++c) {
-        colors[c] = SH_C0 * coeffs[c];
+        colors[c] = SH_C0 * coeffs0[c];
     }
     if (degree < 1) {
         return;
@@ -296,46 +299,46 @@ __device__ void sh_coeffs_to_color(
     // expects CHANNELS * num_bases coefficients
     // supports up to num_bases = 25
     for (int c = 0; c < CHANNELS; ++c) {
-        colors[c] += SH_C1 * (-y * coeffs[1 * CHANNELS + c] +
-                              z * coeffs[2 * CHANNELS + c] -
-                              x * coeffs[3 * CHANNELS + c]);
+        colors[c] += SH_C1 * (-y * coeffs[0 * CHANNELS + c] +
+                              z * coeffs[1 * CHANNELS + c] -
+                              x * coeffs[2 * CHANNELS + c]);
         if (degree < 2) {
             continue;
         }
         colors[c] +=
-            (SH_C2[0] * xy * coeffs[4 * CHANNELS + c] +
-             SH_C2[1] * yz * coeffs[5 * CHANNELS + c] +
-             SH_C2[2] * (2.f * zz - xx - yy) * coeffs[6 * CHANNELS + c] +
-             SH_C2[3] * xz * coeffs[7 * CHANNELS + c] +
-             SH_C2[4] * (xx - yy) * coeffs[8 * CHANNELS + c]);
+            (SH_C2[0] * xy * coeffs[3 * CHANNELS + c] +
+             SH_C2[1] * yz * coeffs[4 * CHANNELS + c] +
+             SH_C2[2] * (2.f * zz - xx - yy) * coeffs[5 * CHANNELS + c] +
+             SH_C2[3] * xz * coeffs[6 * CHANNELS + c] +
+             SH_C2[4] * (xx - yy) * coeffs[7 * CHANNELS + c]);
         if (degree < 3) {
             continue;
         }
         colors[c] +=
-            (SH_C3[0] * y * (3.f * xx - yy) * coeffs[9 * CHANNELS + c] +
-             SH_C3[1] * xy * z * coeffs[10 * CHANNELS + c] +
-             SH_C3[2] * y * (4.f * zz - xx - yy) * coeffs[11 * CHANNELS + c] +
+            (SH_C3[0] * y * (3.f * xx - yy) * coeffs[8 * CHANNELS + c] +
+             SH_C3[1] * xy * z * coeffs[9 * CHANNELS + c] +
+             SH_C3[2] * y * (4.f * zz - xx - yy) * coeffs[10 * CHANNELS + c] +
              SH_C3[3] * z * (2.f * zz - 3.f * xx - 3.f * yy) *
-                 coeffs[12 * CHANNELS + c] +
-             SH_C3[4] * x * (4.f * zz - xx - yy) * coeffs[13 * CHANNELS + c] +
-             SH_C3[5] * z * (xx - yy) * coeffs[14 * CHANNELS + c] +
-             SH_C3[6] * x * (xx - 3.f * yy) * coeffs[15 * CHANNELS + c]);
+                 coeffs[11 * CHANNELS + c] +
+             SH_C3[4] * x * (4.f * zz - xx - yy) * coeffs[12 * CHANNELS + c] +
+             SH_C3[5] * z * (xx - yy) * coeffs[13 * CHANNELS + c] +
+             SH_C3[6] * x * (xx - 3.f * yy) * coeffs[14 * CHANNELS + c]);
         if (degree < 4) {
             continue;
         }
         colors[c] +=
-            (SH_C4[0] * xy * (xx - yy) * coeffs[16 * CHANNELS + c] +
-             SH_C4[1] * yz * (3.f * xx - yy) * coeffs[17 * CHANNELS + c] +
-             SH_C4[2] * xy * (7.f * zz - 1.f) * coeffs[18 * CHANNELS + c] +
-             SH_C4[3] * yz * (7.f * zz - 3.f) * coeffs[19 * CHANNELS + c] +
+            (SH_C4[0] * xy * (xx - yy) * coeffs[15 * CHANNELS + c] +
+             SH_C4[1] * yz * (3.f * xx - yy) * coeffs[16 * CHANNELS + c] +
+             SH_C4[2] * xy * (7.f * zz - 1.f) * coeffs[17 * CHANNELS + c] +
+             SH_C4[3] * yz * (7.f * zz - 3.f) * coeffs[18 * CHANNELS + c] +
              SH_C4[4] * (zz * (35.f * zz - 30.f) + 3.f) *
-                 coeffs[20 * CHANNELS + c] +
-             SH_C4[5] * xz * (7.f * zz - 3.f) * coeffs[21 * CHANNELS + c] +
+                 coeffs[19 * CHANNELS + c] +
+             SH_C4[5] * xz * (7.f * zz - 3.f) * coeffs[20 * CHANNELS + c] +
              SH_C4[6] * (xx - yy) * (7.f * zz - 1.f) *
-                 coeffs[22 * CHANNELS + c] +
-             SH_C4[7] * xz * (xx - 3.f * yy) * coeffs[23 * CHANNELS + c] +
+                 coeffs[21 * CHANNELS + c] +
+             SH_C4[7] * xz * (xx - 3.f * yy) * coeffs[22 * CHANNELS + c] +
              SH_C4[8] * (xx * (xx - 3.f * yy) - yy * (3.f * xx - yy)) *
-                 coeffs[24 * CHANNELS + c]);
+                 coeffs[23 * CHANNELS + c]);
     }
 }
 
@@ -343,13 +346,14 @@ __device__ void sh_coeffs_to_color_vjp(
     const unsigned degree,
     const float3 &viewdir,
     const float *v_colors,
+    float *v_coeffs0,
     float *v_coeffs
 ) {
     // Expects v_colors to be len CHANNELS
     // and v_coeffs to be num_bases * CHANNELS
     #pragma unroll
     for (int c = 0; c < CHANNELS; ++c) {
-        v_coeffs[c] = SH_C0 * v_colors[c];
+        v_coeffs0[c] = SH_C0 * v_colors[c];
     }
     if (degree < 1) {
         return;
@@ -374,9 +378,9 @@ __device__ void sh_coeffs_to_color_vjp(
         float v1 = -SH_C1 * y;
         float v2 = SH_C1 * z;
         float v3 = -SH_C1 * x;
-        v_coeffs[1 * CHANNELS + c] = v1 * v_colors[c];
-        v_coeffs[2 * CHANNELS + c] = v2 * v_colors[c];
-        v_coeffs[3 * CHANNELS + c] = v3 * v_colors[c];
+        v_coeffs[0 * CHANNELS + c] = v1 * v_colors[c];
+        v_coeffs[1 * CHANNELS + c] = v2 * v_colors[c];
+        v_coeffs[2 * CHANNELS + c] = v3 * v_colors[c];
         if (degree < 2) {
             continue;
         }
@@ -385,11 +389,11 @@ __device__ void sh_coeffs_to_color_vjp(
         float v6 = SH_C2[2] * (2.f * zz - xx - yy);
         float v7 = SH_C2[3] * xz;
         float v8 = SH_C2[4] * (xx - yy);
-        v_coeffs[4 * CHANNELS + c] = v4 * v_colors[c];
-        v_coeffs[5 * CHANNELS + c] = v5 * v_colors[c];
-        v_coeffs[6 * CHANNELS + c] = v6 * v_colors[c];
-        v_coeffs[7 * CHANNELS + c] = v7 * v_colors[c];
-        v_coeffs[8 * CHANNELS + c] = v8 * v_colors[c];
+        v_coeffs[3 * CHANNELS + c] = v4 * v_colors[c];
+        v_coeffs[4 * CHANNELS + c] = v5 * v_colors[c];
+        v_coeffs[5 * CHANNELS + c] = v6 * v_colors[c];
+        v_coeffs[6 * CHANNELS + c] = v7 * v_colors[c];
+        v_coeffs[7 * CHANNELS + c] = v8 * v_colors[c];
         if (degree < 3) {
             continue;
         }
@@ -400,13 +404,13 @@ __device__ void sh_coeffs_to_color_vjp(
         float v13 = SH_C3[4] * x * (4.f * zz - xx - yy);
         float v14 = SH_C3[5] * z * (xx - yy);
         float v15 = SH_C3[6] * x * (xx - 3.f * yy);
-        v_coeffs[9 * CHANNELS + c] = v9 * v_colors[c];
-        v_coeffs[10 * CHANNELS + c] = v10 * v_colors[c];
-        v_coeffs[11 * CHANNELS + c] = v11 * v_colors[c];
-        v_coeffs[12 * CHANNELS + c] = v12 * v_colors[c];
-        v_coeffs[13 * CHANNELS + c] = v13 * v_colors[c];
-        v_coeffs[14 * CHANNELS + c] = v14 * v_colors[c];
-        v_coeffs[15 * CHANNELS + c] = v15 * v_colors[c];
+        v_coeffs[8 * CHANNELS + c] = v9 * v_colors[c];
+        v_coeffs[9 * CHANNELS + c] = v10 * v_colors[c];
+        v_coeffs[10 * CHANNELS + c] = v11 * v_colors[c];
+        v_coeffs[11 * CHANNELS + c] = v12 * v_colors[c];
+        v_coeffs[12 * CHANNELS + c] = v13 * v_colors[c];
+        v_coeffs[13 * CHANNELS + c] = v14 * v_colors[c];
+        v_coeffs[14 * CHANNELS + c] = v15 * v_colors[c];
         if (degree < 4) {
             continue;
         }
@@ -419,15 +423,15 @@ __device__ void sh_coeffs_to_color_vjp(
         float v22 = SH_C4[6] * (xx - yy) * (7.f * zz - 1.f);
         float v23 = SH_C4[7] * xz * (xx - 3.f * yy);
         float v24 = SH_C4[8] * (xx * (xx - 3.f * yy) - yy * (3.f * xx - yy));
-        v_coeffs[16 * CHANNELS + c] = v16 * v_colors[c];
-        v_coeffs[17 * CHANNELS + c] = v17 * v_colors[c];
-        v_coeffs[18 * CHANNELS + c] = v18 * v_colors[c];
-        v_coeffs[19 * CHANNELS + c] = v19 * v_colors[c];
-        v_coeffs[20 * CHANNELS + c] = v20 * v_colors[c];
-        v_coeffs[21 * CHANNELS + c] = v21 * v_colors[c];
-        v_coeffs[22 * CHANNELS + c] = v22 * v_colors[c];
-        v_coeffs[23 * CHANNELS + c] = v23 * v_colors[c];
-        v_coeffs[24 * CHANNELS + c] = v24 * v_colors[c];
+        v_coeffs[15 * CHANNELS + c] = v16 * v_colors[c];
+        v_coeffs[16 * CHANNELS + c] = v17 * v_colors[c];
+        v_coeffs[17 * CHANNELS + c] = v18 * v_colors[c];
+        v_coeffs[18 * CHANNELS + c] = v19 * v_colors[c];
+        v_coeffs[19 * CHANNELS + c] = v20 * v_colors[c];
+        v_coeffs[20 * CHANNELS + c] = v21 * v_colors[c];
+        v_coeffs[21 * CHANNELS + c] = v22 * v_colors[c];
+        v_coeffs[22 * CHANNELS + c] = v23 * v_colors[c];
+        v_coeffs[23 * CHANNELS + c] = v24 * v_colors[c];
     }
 }
 
@@ -437,6 +441,7 @@ __global__ void compute_sh_forward_kernel(
     const unsigned degree,
     const unsigned degrees_to_use,
     const float3* __restrict__ viewdirs,
+    const float* __restrict__ coeffs0,
     const float* __restrict__ coeffs,
     float* __restrict__ colors
 ) {
@@ -446,19 +451,20 @@ __global__ void compute_sh_forward_kernel(
     }
     const unsigned num_channels = 3;
     unsigned num_bases = num_sh_bases(degree);
-    unsigned idx_sh = num_bases * num_channels * idx;
+    unsigned idx_sh0 = num_channels * idx;
+    unsigned idx_sh = (num_bases-1) * num_channels * idx;
     unsigned idx_col = num_channels * idx;
 
     switch (SH_TYPE)
     {
     case SHType::Poly:
         sh_coeffs_to_color(
-            degrees_to_use, viewdirs[idx], &(coeffs[idx_sh]), &(colors[idx_col])
+            degrees_to_use, viewdirs[idx], &(coeffs0[idx_sh0]), &(coeffs[idx_sh]), &(colors[idx_col])
         );
         break;
     case SHType::Fast:
         sh_coeffs_to_color_fast(
-            degrees_to_use, viewdirs[idx], &(coeffs[idx_sh]), &(colors[idx_col])
+            degrees_to_use, viewdirs[idx], &(coeffs0[idx_sh0]), &(coeffs[idx_sh]), &(colors[idx_col])
         );
         break;
     }
@@ -471,6 +477,7 @@ __global__ void compute_sh_backward_kernel(
     const unsigned degrees_to_use,
     const float3* __restrict__ viewdirs,
     const float* __restrict__ v_colors,
+    float* __restrict__ v_coeffs0,
     float* __restrict__ v_coeffs
 ) {
     unsigned idx = cg::this_grid().thread_rank();
@@ -479,19 +486,20 @@ __global__ void compute_sh_backward_kernel(
     }
     const unsigned num_channels = 3;
     unsigned num_bases = num_sh_bases(degree);
-    unsigned idx_sh = num_bases * num_channels * idx;
+    unsigned idx_sh0 = num_channels * idx;
+    unsigned idx_sh = (num_bases-1) * num_channels * idx;
     unsigned idx_col = num_channels * idx;
     
     switch (SH_TYPE)
     {
     case SHType::Poly:
         sh_coeffs_to_color_vjp(
-            degrees_to_use, viewdirs[idx], &(v_colors[idx_col]), &(v_coeffs[idx_sh])
+            degrees_to_use, viewdirs[idx], &(v_colors[idx_col]), &(v_coeffs0[idx_sh0]), &(v_coeffs[idx_sh])
         );
         break;
     case SHType::Fast:
         sh_coeffs_to_color_fast_vjp(
-            degrees_to_use, viewdirs[idx], &(v_colors[idx_col]), &(v_coeffs[idx_sh])
+            degrees_to_use, viewdirs[idx], &(v_colors[idx_col]), &(v_coeffs0[idx_sh0]), &(v_coeffs[idx_sh])
         );
         break;
     }
