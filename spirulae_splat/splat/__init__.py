@@ -5,6 +5,8 @@ from .rasterize_simple import rasterize_gaussians_simple
 from .rasterize_depth import rasterize_gaussians_depth
 from .rasterize import rasterize_gaussians
 from .rasterize_simplified import rasterize_gaussians_simplified
+from .rasterize_indices import rasterize_gaussians_indices
+from .rasterize_simple_sorted import rasterize_gaussians_simple_sorted
 from .utils import (
     map_gaussian_to_intersects,
     bin_and_sort_gaussians,

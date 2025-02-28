@@ -7,7 +7,8 @@
 #define SPLAT_KERNEL 1
 
 // sorted splats list size
-#define MAX_SORTED_SPLATS 8
+#define MAX_SORTED_SPLATS 32
+#define SORTED_INDEX_INF 0x7fffffff
 
 // max number of cylindrical harmonics coefficients
 #define MAX_CH_FLOAT3 (21)

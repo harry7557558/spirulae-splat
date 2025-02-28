@@ -1,0 +1,10 @@
+width: 1280
+height: 720
+fx: 568.0
+fy: 568.0
+cx: 640.0
+cy: 360.0
+# model: "OPENCV"
+# distortion: [-0.21, 0.03, 0.002, -0.001]
+model: "OPENCV_FISHEYE"
+distortion: [0.04342397, 0.00424523, -0.00903989, 0.0024723]

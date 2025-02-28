@@ -21,6 +21,11 @@ rasterize_backward = _make_lazy_cuda_func("rasterize_backward")
 rasterize_simplified_forward = _make_lazy_cuda_func("rasterize_simplified_forward")
 rasterize_simplified_backward = _make_lazy_cuda_func("rasterize_simplified_backward")
 
+# sorted splat rasterization
+rasterize_indices = _make_lazy_cuda_func("rasterize_indices")
+sort_per_pixel = _make_lazy_cuda_func("sort_per_pixel")
+rasterize_simple_sorted_forward = _make_lazy_cuda_func("rasterize_simple_sorted_forward")
+
 # background
 render_background_sh_forward = _make_lazy_cuda_func("render_background_sh_forward")
 render_background_sh_backward = _make_lazy_cuda_func("render_background_sh_backward")

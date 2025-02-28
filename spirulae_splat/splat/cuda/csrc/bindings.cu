@@ -2,19 +2,17 @@
 #include "helpers.cuh"
 #include "projection.cuh"
 #include "rasterization.cuh"
+#include "rasterization_sorted.cuh"
 #include "sh.cuh"
-#include <cooperative_groups.h>
-#include <cooperative_groups/reduce.h>
+
 #include <cstdio>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
-#include <iostream>
 #include <math.h>
 #include <torch/extension.h>
+#include <torch/types.h>
 #include <tuple>
-
-namespace cg = cooperative_groups;
 
 
 
@@ -1341,6 +1339,246 @@ std::tuple<
         v_colors, v_opacities, v_anisotropies
     );
 }
+
+
+
+std::tuple<
+    torch::Tensor,  // num_intersects
+    torch::Tensor,  // sorted_indices
+    torch::Tensor  // sorted_depths
+> rasterize_indices_tensor(
+    const std::tuple<int, int, int> tile_bounds,
+    const std::tuple<int, int, int> block,
+    const std::tuple<int, int, int> img_size,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const torch::Tensor &gaussian_ids_sorted,
+    const torch::Tensor &tile_bins,
+    const torch::Tensor &positions,
+    const torch::Tensor &axes_u,
+    const torch::Tensor &axes_v,
+    const torch::Tensor &opacities,
+    const torch::Tensor &anisotropies
+) {
+    DEVICE_GUARD(positions);
+    CHECK_INPUT(gaussian_ids_sorted);
+    CHECK_INPUT(tile_bins);
+    CHECK_INPUT(positions);
+    CHECK_INPUT(axes_u);
+    CHECK_INPUT(axes_v);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(anisotropies);
+
+    dim3 tile_bounds_dim3;
+    tile_bounds_dim3.x = std::get<0>(tile_bounds);
+    tile_bounds_dim3.y = std::get<1>(tile_bounds);
+    tile_bounds_dim3.z = std::get<2>(tile_bounds);
+
+    dim3 block_dim3;
+    block_dim3.x = std::get<0>(block);
+    block_dim3.y = std::get<1>(block);
+    block_dim3.z = std::get<2>(block);
+
+    dim3 img_size_dim3;
+    img_size_dim3.x = std::get<0>(img_size);
+    img_size_dim3.y = std::get<1>(img_size);
+    img_size_dim3.z = std::get<2>(img_size);
+
+    const int img_width = img_size_dim3.x;
+    const int img_height = img_size_dim3.y;
+
+    float4 intrins = {fx, fy, cx, cy};
+
+    auto int32 = positions.options().dtype(torch::kInt32);
+    auto float32 = positions.options().dtype(torch::kFloat32);
+    torch::Tensor num_intersects = torch::empty(
+        {img_height, img_width}, int32
+    );
+    torch::Tensor sorted_indices = torch::empty(
+        {img_height, img_width, MAX_SORTED_SPLATS}, int32
+    );
+    torch::Tensor sorted_depths = torch::empty(
+        {img_height, img_width, MAX_SORTED_SPLATS}, float32
+    );
+
+    rasterize_indices_kernel<<<tile_bounds_dim3, block_dim3>>>(
+        tile_bounds_dim3,
+        img_size_dim3,
+        intrins,
+        gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+        (int2 *)tile_bins.contiguous().data_ptr<int>(),
+        (float3 *)positions.contiguous().data_ptr<float>(),
+        (float3 *)axes_u.contiguous().data_ptr<float>(),
+        (float3 *)axes_v.contiguous().data_ptr<float>(),
+        opacities.contiguous().data_ptr<float>(),
+        (float2 *)anisotropies.contiguous().data_ptr<float>(),
+        // outputs
+        num_intersects.contiguous().data_ptr<int>(),
+        sorted_indices.contiguous().data_ptr<int32_t>(),
+        sorted_depths.contiguous().data_ptr<float>()
+    );
+
+    return std::make_tuple(
+        num_intersects, sorted_indices, sorted_depths
+    );
+}
+
+
+void sort_per_pixel_tensor(
+    const std::string &method,
+    const std::tuple<int, int, int> tile_bounds,
+    const std::tuple<int, int, int> block,
+    const std::tuple<int, int, int> img_size,
+    torch::Tensor &num_intersects,  // [h, w]
+    torch::Tensor &indices,  // [h, w, MAX_SORTED_SPLATS]
+    torch::Tensor &depths  // [h, w, MAX_SORTED_SPLATS]
+) {
+    DEVICE_GUARD(num_intersects);
+    if (indices.ndimension() != 3 || indices.size(2) != MAX_SORTED_SPLATS) {
+        AT_ERROR("indices must have dimensions (h, w, MAX_SORTED_SPLATS)");
+    }
+    if (depths.ndimension() != 3 || depths.size(2) != MAX_SORTED_SPLATS) {
+        AT_ERROR("depths must have dimensions (h, w, MAX_SORTED_SPLATS)");
+    }
+
+    dim3 tile_bounds_dim3;
+    tile_bounds_dim3.x = std::get<0>(tile_bounds);
+    tile_bounds_dim3.y = std::get<1>(tile_bounds);
+    tile_bounds_dim3.z = std::get<2>(tile_bounds);
+
+    dim3 block_dim3;
+    block_dim3.x = std::get<0>(block);
+    block_dim3.y = std::get<1>(block);
+    block_dim3.z = std::get<2>(block);
+
+    dim3 img_size_dim3;
+    img_size_dim3.x = std::get<0>(img_size);
+    img_size_dim3.y = std::get<1>(img_size);
+    img_size_dim3.z = std::get<2>(img_size);
+
+    if (method == "insertion") {
+        sort_per_pixel_kernel<PerPixelSortType::InsertionSort>
+        <<<tile_bounds_dim3, block_dim3>>>(
+            tile_bounds_dim3, img_size_dim3,
+            num_intersects.contiguous().data_ptr<int>(),
+            indices.contiguous().data_ptr<int32_t>(),
+            depths.contiguous().data_ptr<float>()
+        );
+    } else if (method == "quick") {
+        sort_per_pixel_kernel<PerPixelSortType::QuickSort>
+        <<<tile_bounds_dim3, block_dim3>>>(
+            tile_bounds_dim3, img_size_dim3,
+            num_intersects.contiguous().data_ptr<int>(),
+            indices.contiguous().data_ptr<int32_t>(),
+            depths.contiguous().data_ptr<float>()
+        );
+    } else if (method == "heap") {
+        sort_per_pixel_kernel<PerPixelSortType::HeapSort>
+        <<<tile_bounds_dim3, block_dim3>>>(
+            tile_bounds_dim3, img_size_dim3,
+            num_intersects.contiguous().data_ptr<int>(),
+            indices.contiguous().data_ptr<int32_t>(),
+            depths.contiguous().data_ptr<float>()
+        );
+    } else if (method == "random_quick") {
+        sort_per_pixel_kernel<PerPixelSortType::RandomizedQuickSort>
+        <<<tile_bounds_dim3, block_dim3>>>(
+            tile_bounds_dim3, img_size_dim3,
+            num_intersects.contiguous().data_ptr<int>(),
+            indices.contiguous().data_ptr<int32_t>(),
+            depths.contiguous().data_ptr<float>()
+        );
+    } else {
+        AT_ERROR("Invalid sorting method: ", method);
+    }
+}
+
+
+
+std::tuple<
+    torch::Tensor,  // out_img
+    torch::Tensor  // out_alpha
+> rasterize_simple_sorted_forward_tensor(
+    const std::tuple<int, int, int> tile_bounds,
+    const std::tuple<int, int, int> block,
+    const std::tuple<int, int, int> img_size,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const torch::Tensor &sorted_indices,
+    const torch::Tensor &positions,
+    const torch::Tensor &axes_u,
+    const torch::Tensor &axes_v,
+    const torch::Tensor &colors,
+    const torch::Tensor &opacities,
+    const torch::Tensor &anisotropies,
+    const torch::Tensor &background
+) {
+    DEVICE_GUARD(positions);
+    CHECK_INPUT(sorted_indices);
+    CHECK_INPUT(positions);
+    CHECK_INPUT(axes_u);
+    CHECK_INPUT(axes_v);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(anisotropies);
+    CHECK_INPUT(background);
+
+    dim3 tile_bounds_dim3;
+    tile_bounds_dim3.x = std::get<0>(tile_bounds);
+    tile_bounds_dim3.y = std::get<1>(tile_bounds);
+    tile_bounds_dim3.z = std::get<2>(tile_bounds);
+
+    dim3 block_dim3;
+    block_dim3.x = std::get<0>(block);
+    block_dim3.y = std::get<1>(block);
+    block_dim3.z = std::get<2>(block);
+
+    dim3 img_size_dim3;
+    img_size_dim3.x = std::get<0>(img_size);
+    img_size_dim3.y = std::get<1>(img_size);
+    img_size_dim3.z = std::get<2>(img_size);
+
+    const int channels = colors.size(1);
+    const int img_width = img_size_dim3.x;
+    const int img_height = img_size_dim3.y;
+
+    float4 intrins = {fx, fy, cx, cy};
+
+    auto int32 = positions.options().dtype(torch::kInt32);
+    auto float32 = positions.options().dtype(torch::kFloat32);
+    torch::Tensor final_idx = torch::zeros(
+        {img_height, img_width}, int32
+    );
+    torch::Tensor out_img = torch::zeros(
+        {img_height, img_width, channels}, float32
+    );
+    torch::Tensor out_alpha = torch::zeros(
+        {img_height, img_width, 1}, float32
+    );
+
+    rasterize_simple_sorted_forward_kernel<<<tile_bounds_dim3, block_dim3>>>(
+        img_size_dim3,
+        intrins,
+        sorted_indices.contiguous().data_ptr<int32_t>(),
+        (float3 *)positions.contiguous().data_ptr<float>(),
+        (float3 *)axes_u.contiguous().data_ptr<float>(),
+        (float3 *)axes_v.contiguous().data_ptr<float>(),
+        (float3 *)colors.contiguous().data_ptr<float>(),
+        opacities.contiguous().data_ptr<float>(),
+        (float2 *)anisotropies.contiguous().data_ptr<float>(),
+        *(float3 *)background.contiguous().data_ptr<float>(),
+        // outputs
+        (float3 *)out_img.contiguous().data_ptr<float>(),
+        out_alpha.contiguous().data_ptr<float>()
+    );
+
+    return std::make_tuple(out_img, out_alpha);
+}
+
 
 
 

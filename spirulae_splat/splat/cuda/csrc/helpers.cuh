@@ -1,9 +1,12 @@
 #include "config.h"
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
 #include "glm/glm/glm.hpp"
 #include "glm/glm/gtc/type_ptr.hpp"
-#include <iostream>
+
+namespace cg = cooperative_groups;
 
 template <typename T> using vec2 = glm::vec<2, T>;
 template <typename T> using vec3 = glm::vec<3, T>;
@@ -87,6 +90,23 @@ inline __device__ float visibility_kernel_radius() {
 }
 
 #endif
+
+
+inline __device__ float depth_map(float z) {
+    return z>0.0f ? logf(z+1.0f) : z;
+}
+
+inline __device__ float depth_map_vjp(float z, float v_z) {
+    return z>0.0f ? v_z/(z+1.0f) : v_z;
+}
+
+inline __device__ float depth_inv_map(float z) {
+    return z>0.0f ? expf(z)-1.0f : z;
+}
+
+inline __device__ float depth_inv_map_vjp(float z, float v_z) {
+    return z>0.0f ? v_z*expf(z) : v_z;
+}
 
 
 inline __device__ bool get_alpha(
@@ -474,4 +494,23 @@ inline __device__ bool clip_near_plane(
         return true;
     }
     return false;
+}
+
+
+
+template<typename vec3>
+inline __device__ void warpSum3(vec3& val, cg::thread_block_tile<32>& tile){
+    val.x = cg::reduce(tile, val.x, cg::plus<float>());
+    val.y = cg::reduce(tile, val.y, cg::plus<float>());
+    val.z = cg::reduce(tile, val.z, cg::plus<float>());
+}
+
+template<typename vec2>
+inline __device__ void warpSum2(vec2& val, cg::thread_block_tile<32>& tile){
+    val.x = cg::reduce(tile, val.x, cg::plus<float>());
+    val.y = cg::reduce(tile, val.y, cg::plus<float>());
+}
+
+inline __device__ void warpSum(float& val, cg::thread_block_tile<32>& tile){
+    val = cg::reduce(tile, val, cg::plus<float>());
 }

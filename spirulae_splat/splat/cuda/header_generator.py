@@ -46,6 +46,7 @@ def main():
     path = "spirulae_splat/splat/cuda/csrc/"
     generate_header(path+"projection.cu", path+"projection.cuh")
     generate_header(path+"rasterization.cu", path+"rasterization.cuh")
+    generate_header(path+"rasterization_sorted.cu", path+"rasterization_sorted.cuh")
     generate_header(path+"bindings.cu", path+"bindings.h")
 
 

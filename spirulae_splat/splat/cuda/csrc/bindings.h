@@ -1,6 +1,5 @@
 #include "cuda_runtime.h"
 #include <cstdio>
-#include <iostream>
 #include <math.h>
 #include <torch/extension.h>
 #include <tuple>
@@ -381,6 +380,61 @@ std::tuple<
     const torch::Tensor &v_output_depth,
     const torch::Tensor &v_output_normal,
     const torch::Tensor &v_output_depth_reg
+);
+
+
+std::tuple<
+    torch::Tensor,  // num_intersects
+    torch::Tensor,  // sorted_indices
+    torch::Tensor  // sorted_depths
+> rasterize_indices_tensor(
+    const std::tuple<int, int, int> tile_bounds,
+    const std::tuple<int, int, int> block,
+    const std::tuple<int, int, int> img_size,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const torch::Tensor &gaussian_ids_sorted,
+    const torch::Tensor &tile_bins,
+    const torch::Tensor &positions,
+    const torch::Tensor &axes_u,
+    const torch::Tensor &axes_v,
+    const torch::Tensor &opacities,
+    const torch::Tensor &anisotropies
+);
+
+
+void sort_per_pixel_tensor(
+    const std::string &method,
+    const std::tuple<int, int, int> tile_bounds,
+    const std::tuple<int, int, int> block,
+    const std::tuple<int, int, int> img_size,
+    torch::Tensor &num_intersects,  // [h, w]
+    torch::Tensor &indices,  // [h, w, MAX_SORTED_SPLATS]
+    torch::Tensor &depths  // [h, w, MAX_SORTED_SPLATS]
+);
+
+
+std::tuple<
+    torch::Tensor,  // out_img
+    torch::Tensor  // out_alpha
+> rasterize_simple_sorted_forward_tensor(
+    const std::tuple<int, int, int> tile_bounds,
+    const std::tuple<int, int, int> block,
+    const std::tuple<int, int, int> img_size,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const torch::Tensor &sorted_indices,
+    const torch::Tensor &positions,
+    const torch::Tensor &axes_u,
+    const torch::Tensor &axes_v,
+    const torch::Tensor &colors,
+    const torch::Tensor &opacities,
+    const torch::Tensor &anisotropies,
+    const torch::Tensor &background
 );
 
 
