@@ -56,8 +56,6 @@ __global__ void rasterize_simple_backward_kernel(
 );
 
 
-// rewritten to test if FP16 is faster (answer: no)
-template<typename floatt>
 __global__ void rasterize_depth_forward_kernel(
     const int depth_mode,
     const dim3 tile_bounds,
@@ -65,19 +63,17 @@ __global__ void rasterize_depth_forward_kernel(
     const float4 intrins,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
-    const vec3<floatt>* __restrict__ positions,
-    const vec3<floatt>* __restrict__ axes_u,
-    const vec3<floatt>* __restrict__ axes_v,
-    const floatt* __restrict__ opacities,
-    const vec2<floatt>* __restrict__ anisotropies,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    const float2* __restrict__ anisotropies,
     int* __restrict__ final_index,
-    floatt* __restrict__ out_depth,
-    vec2<floatt>* __restrict__ out_visibility
+    float* __restrict__ out_depth,
+    float2* __restrict__ out_visibility
 );
 
 
-// rewritten to test if FP16 is faster (answer: no)
-template<typename floatt>
 __global__ void rasterize_depth_backward_kernel(
     const int depth_mode,
     const dim3 tile_bounds,
@@ -85,21 +81,21 @@ __global__ void rasterize_depth_backward_kernel(
     const float4 intrins,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
-    const vec3<floatt>* __restrict__ positions,
-    const vec3<floatt>* __restrict__ axes_u,
-    const vec3<floatt>* __restrict__ axes_v,
-    const floatt* __restrict__ opacities,
-    const vec2<floatt>* __restrict__ anisotropies,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    const float2* __restrict__ anisotropies,
     const int* __restrict__ final_index,
-    const floatt* __restrict__ out_depth,
-    const vec2<floatt>* __restrict__ out_visibility,
-    const floatt* __restrict__ v_out_depth,
-    vec3<floatt>* __restrict__ v_positions,
-    vec2<floatt>* __restrict__ v_positions_xy_abs,
-    vec3<floatt>* __restrict__ v_axes_u,
-    vec3<floatt>* __restrict__ v_axes_v,
-    floatt* __restrict__ v_opacities,
-    vec2<floatt>* __restrict__ v_anisotropies
+    const float* __restrict__ out_depth,
+    const float2* __restrict__ out_visibility,
+    const float* __restrict__ v_out_depth,
+    float3* __restrict__ v_positions,
+    float2* __restrict__ v_positions_xy_abs,
+    float3* __restrict__ v_axes_u,
+    float3* __restrict__ v_axes_v,
+    float* __restrict__ v_opacities,
+    float2* __restrict__ v_anisotropies
 );
 
 
@@ -228,10 +224,7 @@ __global__ void rasterize_simplified_backward_kernel(
 __global__ void render_background_sh_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
-    const float fx,
-    const float fy,
-    const float cx,
-    const float cy,
+    const float4 intrins,
     const float* rotation,  // row major 3x3
     const unsigned sh_degree,
     const float3* __restrict__ sh_coeffs_float3,
@@ -242,10 +235,7 @@ __global__ void render_background_sh_forward_kernel(
 __global__ void render_background_sh_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
-    const float fx,
-    const float fy,
-    const float cx,
-    const float cy,
+    const float4 intrins,
     const float* rotation,  // row major 3x3
     const unsigned sh_degree,
     const float3* __restrict__ sh_coeffs_float3,

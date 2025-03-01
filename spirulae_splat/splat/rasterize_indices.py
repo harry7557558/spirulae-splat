@@ -53,7 +53,7 @@ def rasterize_gaussians_indices(
 
     size_params = (tile_bounds, block, img_size)
     num_intersects, indices, depths = _C.rasterize_indices(
-        *size_params, *intrins,
+        *size_params, intrins,
         gaussian_ids_sorted, tile_bins,
         positions, axes_u, axes_v,
         opacities, anisotropies,

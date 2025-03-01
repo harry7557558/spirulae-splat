@@ -64,7 +64,7 @@ class _ProjectGaussians(Function):
             scales,
             quats,
             viewmat,
-            *intrins,
+            intrins,
             img_height, img_width,
             block_width,
             clip_thresh,
@@ -103,7 +103,7 @@ class _ProjectGaussians(Function):
             ctx.num_points,
             means3d, scales, quats,
             viewmat,
-            *ctx.intrins,
+            ctx.intrins,
             num_tiles_hit,
             v_positions, v_axes_u, v_axes_v
         )

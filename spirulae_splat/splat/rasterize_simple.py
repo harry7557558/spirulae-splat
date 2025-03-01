@@ -158,7 +158,7 @@ class _RasterizeGaussiansSimple(Function):
         else:
             final_idx, out_img, out_alpha = _C.rasterize_simple_forward(
                 tile_bounds, block, img_size,
-                *intrins,
+                intrins,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
                 colors, opacities, anisotropies,
@@ -208,7 +208,7 @@ class _RasterizeGaussiansSimple(Function):
         else:
             backward_return = _C.rasterize_simple_backward(
                 img_height, img_width, ctx.block_width,
-                *intrins,
+                intrins,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
                 colors, opacities, anisotropies, background,

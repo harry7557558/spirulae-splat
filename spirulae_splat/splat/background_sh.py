@@ -43,7 +43,7 @@ class _RenderBackgroundSH(Function):
     ) -> Tuple[Tensor]:
 
         out_color = _C.render_background_sh_forward(
-            w, h, block_width, *intrins,
+            w, h, block_width, intrins,
             rotation, sh_degree, sh_coeffs
         )
 
@@ -66,7 +66,7 @@ class _RenderBackgroundSH(Function):
         rotation, sh_coeffs, out_color = ctx.saved_tensors
 
         v_rotation, v_sh_coeffs = _C.render_background_sh_backward(
-            w, h, block_width, *intrins,
+            w, h, block_width, intrins,
             rotation, sh_degree, sh_coeffs,
             out_color, v_out_color.contiguous()
         )

@@ -167,7 +167,7 @@ class _RasterizeGaussians(Function):
                 out_reg_depth,
             ) = _C.rasterize_forward(
                 tile_bounds, block, img_size,
-                *intrins,
+                intrins,
                 depth_reg_pairwise_factor,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
@@ -247,7 +247,7 @@ class _RasterizeGaussians(Function):
             assert colors.shape[-1] == 3
             backward_return = _C.rasterize_backward(
                 img_height, img_width, ctx.block_width,
-                *intrins, *ch_degrees,
+                intrins, *ch_degrees,
                 ctx.depth_reg_pairwise_factor,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,

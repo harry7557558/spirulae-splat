@@ -130,7 +130,7 @@ class _RasterizeGaussiansSimplified(Function):
                 out_img, out_depth, out_normal, out_reg_depth
             ) = _C.rasterize_simplified_forward(
                 tile_bounds, block, img_size,
-                *intrins,
+                intrins,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
                 colors, opacities, anisotropies,
@@ -196,7 +196,7 @@ class _RasterizeGaussiansSimplified(Function):
             assert colors.shape[-1] == 3
             backward_return = _C.rasterize_simplified_backward(
                 img_height, img_width, ctx.block_width,
-                *intrins,
+                intrins,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
                 colors, opacities, anisotropies,

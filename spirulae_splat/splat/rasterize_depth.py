@@ -112,7 +112,7 @@ class _RasterizeGaussiansDepth(Function):
             final_idx, out_depth, out_visibility = _C.rasterize_depth_forward(
                 depth_mode,
                 tile_bounds, block, img_size,
-                *intrins,
+                intrins,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
                 opacities, anisotropies,
@@ -166,7 +166,7 @@ class _RasterizeGaussiansDepth(Function):
             backward_return = _C.rasterize_depth_backward(
                 ctx.depth_mode,
                 img_height, img_width, ctx.block_width,
-                *intrins,
+                intrins,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
                 opacities, anisotropies,

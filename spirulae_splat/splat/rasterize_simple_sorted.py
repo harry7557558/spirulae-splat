@@ -89,7 +89,7 @@ class _RasterizeGaussiansSimpleSorted(Function):
 
         out_img, out_alpha = _C.rasterize_simple_sorted_forward(
             tile_bounds, block, img_size,
-            *intrins,
+            intrins,
             sorted_indices,
             positions, axes_u, axes_v,
             colors, opacities, anisotropies,
@@ -127,7 +127,7 @@ class _RasterizeGaussiansSimpleSorted(Function):
 
         backward_return = _C.rasterize_simple_sorted_backward(
             img_height, img_width, ctx.block_width,
-            *intrins,
+            intrins,
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
             colors, opacities, anisotropies, background,
