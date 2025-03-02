@@ -21,7 +21,6 @@ __global__ void rasterize_simple_forward_kernel(
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     const float3& __restrict__ background,
     int* __restrict__ final_index,
     float3* __restrict__ out_img,
@@ -40,7 +39,6 @@ __global__ void rasterize_simple_backward_kernel(
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     const float3& __restrict__ background,
     const int* __restrict__ final_index,
     const float* __restrict__ output_alpha,
@@ -51,8 +49,7 @@ __global__ void rasterize_simple_backward_kernel(
     float3* __restrict__ v_axes_u,
     float3* __restrict__ v_axes_v,
     float3* __restrict__ v_colors,
-    float* __restrict__ v_opacities,
-    float2* __restrict__ v_anisotropies
+    float* __restrict__ v_opacities
 );
 
 
@@ -67,7 +64,6 @@ __global__ void rasterize_depth_forward_kernel(
     const float3* __restrict__ axes_u,
     const float3* __restrict__ axes_v,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     int* __restrict__ final_index,
     float* __restrict__ out_depth,
     float2* __restrict__ out_visibility
@@ -85,7 +81,6 @@ __global__ void rasterize_depth_backward_kernel(
     const float3* __restrict__ axes_u,
     const float3* __restrict__ axes_v,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     const int* __restrict__ final_index,
     const float* __restrict__ out_depth,
     const float2* __restrict__ out_visibility,
@@ -94,8 +89,7 @@ __global__ void rasterize_depth_backward_kernel(
     float2* __restrict__ v_positions_xy_abs,
     float3* __restrict__ v_axes_u,
     float3* __restrict__ v_axes_v,
-    float* __restrict__ v_opacities,
-    float2* __restrict__ v_anisotropies
+    float* __restrict__ v_opacities
 );
 
 
@@ -116,7 +110,6 @@ __global__ void rasterize_forward_kernel(
     const unsigned ch_degree_phi_to_use,
     const float3* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     // const float3& __restrict__ background,
     const float* __restrict__ depth_ref_im,
     int* __restrict__ final_index,
@@ -145,7 +138,6 @@ __global__ void rasterize_backward_kernel(
     const float3* __restrict__ colors,
     const float3* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     // const float3& __restrict__ background,
     const float* __restrict__ depth_ref_im,
     const int* __restrict__ final_index,
@@ -164,7 +156,6 @@ __global__ void rasterize_backward_kernel(
     float3* __restrict__ v_ch_coeffs,
     // float* __restrict__ v_ch_coeffs_abs,
     float* __restrict__ v_opacities,
-    float2* __restrict__ v_anisotropies,
     // float3* __restrict__ v_background,
     float* __restrict__ v_depth_ref_im
 );
@@ -181,7 +172,6 @@ __global__ void rasterize_simplified_forward_kernel(
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     int* __restrict__ final_index,
     float* __restrict__ out_alpha,
     float3* __restrict__ out_img,
@@ -202,7 +192,6 @@ __global__ void rasterize_simplified_backward_kernel(
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     const int* __restrict__ final_index,
     const float* __restrict__ output_alpha,
     const float2* __restrict__ output_depth,
@@ -216,8 +205,7 @@ __global__ void rasterize_simplified_backward_kernel(
     float3* __restrict__ v_axes_u,
     float3* __restrict__ v_axes_v,
     float3* __restrict__ v_colors,
-    float* __restrict__ v_opacities,
-    float2* __restrict__ v_anisotropies
+    float* __restrict__ v_opacities
 );
 
 

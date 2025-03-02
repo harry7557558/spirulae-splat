@@ -89,9 +89,6 @@ class SplatModel:
     @property
     def opacities(self):
         return self.gauss_params["opacities"]
-    @property
-    def anisotropies(self):
-        return self.gauss_params["anisotropies"]
 
     def load_config(self, file_path: str):
         save_dir = file_path[:file_path.rfind(os.path.sep)]
@@ -157,7 +154,7 @@ class SplatModel:
         if sort_per_pixel:
             sorted_indices = rasterize_gaussians_indices(
                 positions, axes_u, axes_v,
-                opacities, self.anisotropies,
+                opacities,
                 bounds, num_tiles_hit, camera.intrins,
                 camera.h, camera.w, BLOCK_WIDTH
             )
@@ -165,7 +162,7 @@ class SplatModel:
 
             rgb, alpha = rasterize_gaussians_simple_sorted(
                 positions, axes_u, axes_v,
-                rgbs, opacities, self.anisotropies,
+                rgbs, opacities,
                 sorted_indices,
                 camera.intrins, camera.h, camera.w, BLOCK_WIDTH,
             )
@@ -175,7 +172,7 @@ class SplatModel:
             rgb, alpha = rasterize_gaussians_simple(
                 positions,
                 axes_u, axes_v,
-                rgbs, opacities, self.anisotropies,
+                rgbs, opacities,
                 bounds, num_tiles_hit, camera.intrins,
                 camera.h, camera.w, BLOCK_WIDTH,
             )
@@ -197,7 +194,7 @@ class SplatModel:
             depth = rasterize_gaussians_depth(
                 positions,
                 axes_u, axes_v,
-                opacities, self.anisotropies,
+                opacities,
                 bounds, num_tiles_hit, camera.intrins,
                 camera.h, camera.w, BLOCK_WIDTH,
                 "median"

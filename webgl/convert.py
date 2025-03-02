@@ -378,7 +378,6 @@ class SplatModel:
         self.features_ch = pipeline['_model.gauss_params.features_ch']  # 6 bits
         self.means = pipeline['_model.gauss_params.means']  # 12-16 bits
         self.opacities = pipeline['_model.gauss_params.opacities']  # 8 bits after sigmoid
-        self.anisotropies = pipeline['_model.gauss_params.anisotropies']  # 8 bits
         self.quats = pipeline['_model.gauss_params.quats']  # 8 bits
         self.scales = pipeline['_model.gauss_params.scales']  # 8-12 bits
         self.background_color = pipeline['_model.background_color']
@@ -446,7 +445,6 @@ class SplatModel:
         self.features_dc = torch.tensor(features_dc, dtype=torch.float)
         self.features_sh = torch.tensor(features_sh, dtype=torch.float).view(n, -1, 3)
         self.features_ch = torch.zeros((n, 0, 3))
-        self.anisotropies = torch.zeros((n, 2))
         self.background_color = torch.zeros(3)
         self.background_sh = torch.zeros((0, 3))
 
@@ -455,10 +453,10 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
 
     m = SplatModel(file_path)
     (features_dc, features_sh, features_ch,
-        means, opacities, anisotropies, quats, scales,
+        means, opacities, quats, scales,
         background_color, background_sh) = \
     (m.features_dc, m.features_sh, m.features_ch,
-        m.means, m.opacities, m.anisotropies, m.quats, m.scales,
+        m.means, m.opacities, m.quats, m.scales,
         m.background_color, m.background_sh)
 
     num_sh = features_sh.shape[1]
@@ -475,7 +473,6 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
     background_sh_degree = {
         1: 0, 4: 1, 9: 2, 16: 3, 25: 4
     }[len(background_sh)+1]
-    use_anisotropy = (anisotropies != 0.0).any().item()
     print("SH degree:", sh_degree)
     print("# of SH:", num_sh)
     print("CH degree r:", ch_degree_r)
@@ -483,14 +480,13 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
     print("# of CH:", num_ch)
     print("background:", background_color.cpu().numpy())
     print("background SH degree:", background_sh_degree)
-    print("anisotropy:", use_anisotropy)
     print()
 
     n_splat = len(means)
     n_floats = sum([
         x.numel() for x in [
             features_dc, features_sh, features_ch,
-            means, opacities, anisotropies, quats, scales]
+            means, opacities, quats, scales]
     ])
     print(n_splat, "splats")
     print(n_floats//n_splat, "floats per splat")
@@ -507,10 +503,10 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
             print("culled", torch.sum(~mask).item(), '/', len(means), "splats")
 
             (features_dc, features_sh, features_ch,
-            means, opacities, anisotropies, quats, scales) = [
+            means, opacities, quats, scales) = [
                 tensor[mask].contiguous() for tensor in (
                     features_dc, features_sh, features_ch,
-                    means, opacities, anisotropies, quats, scales)
+                    means, opacities, quats, scales)
             ]
         print()
 
@@ -518,7 +514,6 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
 
     quats = quats / torch.norm(quats, dim=1, keepdim=True)
     opacities = torch.sigmoid(opacities)
-    anisotropies = torch.arcsinh(anisotropies)
 
     weight = torch.exp(scales[:,0]+scales[:,1]) * opacities[:,0]
 
@@ -596,7 +591,6 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
         means_bins, means_q = quantize_tensor('means', means, 12)
         scales_bins, scales_q = quantize_tensor('scale', scales, 10)
         quats_bins, quats_q = quantize_tensor('quats', quats, 8)
-        anisotropies_bins, anisotropies_q = quantize_tensor('aniso', anisotropies, 8*use_anisotropy)
         opacities_bins, opacities_q = quantize_tensor('opacs', opacities, 6)
         features_dc_bins, features_dc_q = quantize_tensor('color', features_dc, 6)
         features_ch_bins, features_ch_q = quantize_tensor('ch', features_ch, bit_ch, 100)
@@ -608,7 +602,6 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
         { "byteLength": 4*len(means_bins) },
         { "byteLength": 4*len(scales_bins) },
         { "byteLength": 4*len(quats_bins) },
-        { "byteLength": 4*len(anisotropies_bins) },
         { "byteLength": 4*len(opacities_bins) },
         { "byteLength": 4*len(features_dc_bins) },
         { "byteLength": 4*len(features_ch_bins) },
@@ -620,11 +613,8 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
         { "key": "means", "type": "quat3", "bitLength": 36, "quatBufferView": 0 },
         { "key": "scales", "type": "quat2", "bitLength": 20, "quatBufferView": 1 },
         { "key": "quats", "type": "quat4", "bitLength": 32, "quatBufferView": 2 },
-    ] + [
-        { "key": "anisotropies", "type": "quat2", "bitLength": 16, "quatBufferView": 3 },
-    ] * use_anisotropy + [
-        { "key": "opacities", "type": "quat", "bitLength": 6, "quatBufferView": 4 },
-        { "key": "features_dc", "type": "quat3", "bitLength": 18, "quatBufferView": 5 },
+        { "key": "opacities", "type": "quat", "bitLength": 6, "quatBufferView": 3 },
+        { "key": "features_dc", "type": "quat3", "bitLength": 18, "quatBufferView": 4 },
     ])
     base_config = {
         "bufferView": len(buffer_views),
@@ -634,16 +624,14 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
     }
     base_buffer = pack_components(
         base_config,
-        [means_q, scales_q, quats_q] + \
-            [anisotropies_q] * use_anisotropy + \
-            [opacities_q, features_dc_q]
+        [means_q, scales_q, quats_q, opacities_q, features_dc_q]
     )
 
     print("Packing harmonics...")
     componentViews, componentLength = component_view_psa([
-            { "key": "features_ch", "type": f"quat{3*num_ch}", "bitLength": 3*num_ch*bit_ch, "quatBufferView": 6 },
+            { "key": "features_ch", "type": f"quat{3*num_ch}", "bitLength": 3*num_ch*bit_ch, "quatBufferView": 5 },
     ] * (num_ch > 0) + [
-            { "key": "features_sh", "type": f"quat{3*num_sh}", "bitLength": 3*num_sh*bit_sh, "quatBufferView": 7 },
+            { "key": "features_sh", "type": f"quat{3*num_sh}", "bitLength": 3*num_sh*bit_sh, "quatBufferView": 6 },
     ] * (num_sh > 0))
     harmonics_config = {
         "bufferView": len(buffer_views)+1,
@@ -661,7 +649,6 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
     buffer.write(means_bins.cpu().numpy().tobytes())
     buffer.write(scales_bins.cpu().numpy().tobytes())
     buffer.write(quats_bins.cpu().numpy().tobytes())
-    buffer.write(anisotropies_bins.cpu().numpy().tobytes())
     buffer.write(opacities_bins.cpu().numpy().tobytes())
     buffer.write(features_dc_bins.cpu().numpy().tobytes())
     buffer.write(features_ch_bins.cpu().numpy().tobytes())
@@ -683,8 +670,7 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
             "ch_degree_phi": ch_degree_phi,
             "background_color": background_color.cpu().numpy().flatten().tolist(),
             "background_sh_degree": background_sh_degree,
-            "background_sh": background_sh.cpu().numpy().flatten().tolist(),
-            "use_anisotropy": use_anisotropy
+            "background_sh": background_sh.cpu().numpy().flatten().tolist()
         },
         "buffer": {
             "byteLength": len(buffer),

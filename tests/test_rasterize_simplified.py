@@ -52,10 +52,8 @@ def test_rasterize_simplified():
 
     colors = torch.randn((num_points, 3), device=device, requires_grad=True)
     opacities = (0.995 * torch.rand((num_points, 1), device=device)).requires_grad_(True)
-    anisotropies = torch.randn((num_points, 2), device=device, requires_grad=True)
     _colors = colors.detach().clone().requires_grad_(True)
     _opacities = opacities.detach().clone().requires_grad_(True)
-    _anisotropies = anisotropies.detach().clone().requires_grad_(True)
 
     params = project_gaussians(
         means3d, scales, quats,
@@ -93,7 +91,6 @@ def test_rasterize_simplified():
         axes_v,
         colors,
         opacities,
-        anisotropies,
         bounds,
         num_tiles_hit,
         intrins,
@@ -104,7 +101,7 @@ def test_rasterize_simplified():
         positions, axes_u, axes_v,
         colors,
         0, 0, 0, 0, torch.zeros(len(positions), 0, 3).to(positions),
-        opacities, anisotropies,
+        opacities,
         torch.zeros((H, W, 1)).float().to(device),
         1.0,
         bounds, num_tiles_hit,
@@ -113,7 +110,7 @@ def test_rasterize_simplified():
 
     output_d = rasterize_depth.rasterize_gaussians_depth(
         positions, axes_u, axes_v,
-        opacities, anisotropies,
+        opacities,
         bounds, num_tiles_hit,
         intrins, H, W, BLOCK_SIZE,
         "mean"
@@ -135,7 +132,6 @@ def test_rasterize_simplified():
         _axes_v,
         _colors,
         _opacities,
-        _anisotropies,
         _bounds,
         _num_tiles_hit,
         intrins,
@@ -170,7 +166,6 @@ def test_rasterize_simplified():
     check_close('v_axes_v', axes_v.grad, _axes_v.grad)
     check_close('v_colors', colors.grad, _colors.grad)
     check_close('v_opacities', opacities.grad, _opacities.grad)
-    check_close('v_anisotropies', anisotropies.grad, _anisotropies.grad)
 
     assert (positions.absgrad > 0).any()
     assert (positions.absgrad >= abs(positions.grad)[:,:2]).all()

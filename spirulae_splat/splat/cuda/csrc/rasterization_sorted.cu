@@ -15,7 +15,6 @@ __global__ void rasterize_indices_kernel(
     const float3* __restrict__ axes_u,
     const float3* __restrict__ axes_v,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     int* __restrict__ num_intersects,
     int32_t* __restrict__ sorted_indices_,
     float* __restrict__ sorted_depths_
@@ -53,7 +52,7 @@ __global__ void rasterize_indices_kernel(
     __shared__ int id_batch[MAX_BLOCK_SIZE];
     __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
     __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ float opacity_batch[MAX_BLOCK_SIZE];
 
     // current visibility left to render
     float T = 1.f;
@@ -84,13 +83,12 @@ __global__ void rasterize_indices_kernel(
             int32_t g_id = gaussian_ids_sorted[idx];
             const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
-            const float2 aniso = anisotropies[g_id];
             const float3 v0 = axes_u[g_id];
             const float3 v1 = axes_v[g_id];
             id_batch[tr] = g_id;
             position_batch[tr] = {pos.x, pos.y, pos.z};
             axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
-            opacity_batch[tr] = {aniso.x, aniso.y, opac};
+            opacity_batch[tr] = opac;
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -100,8 +98,7 @@ __global__ void rasterize_indices_kernel(
         int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
             glm::vec3 pos = position_batch[t];
-            glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
-            float opac = opacity_batch[t].z;
+            float opac = opacity_batch[t];
             glm::mat2x3 axis_uv = axes_uv_batch[t];
 
             glm::vec3 poi;
@@ -114,7 +111,7 @@ __global__ void rasterize_indices_kernel(
             if (!std::isfinite(poi.z))
                 continue;
             float alpha;
-            if (!get_alpha(uv, opac, aniso, alpha))
+            if (!get_alpha(uv, opac, alpha))
                 continue;
 
             sorted_indices[intersect_count] = (int32_t)id_batch[t];
@@ -359,7 +356,6 @@ __global__ void rasterize_simple_sorted_forward_kernel(
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     const float3& __restrict__ background,
     float3* __restrict__ out_img,
     float* __restrict__ out_alpha
@@ -402,7 +398,6 @@ __global__ void rasterize_simple_sorted_forward_kernel(
 
         const glm::vec3 pos = *(glm::vec3*)&positions[g_id];
         const float opac = opacities[g_id];
-        const glm::vec2 aniso = *(glm::vec2*)&anisotropies[g_id];
         const glm::vec3 color = *(glm::vec3*)&colors[g_id];
         const float3 v0 = axes_u[g_id];
         const float3 v1 = axes_v[g_id];
@@ -416,7 +411,7 @@ __global__ void rasterize_simple_sorted_forward_kernel(
         if (glm::length(uv) > visibility_kernel_radius())
             continue;
         float alpha;
-        if (!get_alpha(uv, opac, aniso, alpha))
+        if (!get_alpha(uv, opac, alpha))
             continue;
 
         const float next_T = T * (1.f - alpha);

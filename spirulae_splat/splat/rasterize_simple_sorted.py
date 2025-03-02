@@ -17,7 +17,6 @@ def rasterize_gaussians_simple_sorted(
     axes_v: Float[Tensor, "*batch 3"],
     colors: Float[Tensor, "*batch channels"],
     opacities: Float[Tensor, "*batch 1"],
-    anisotropies: Float[Tensor, "*batch 2"],
     sorted_indices: Int[Tensor, "h w MAX_SORTED_INDICES"],
     intrins: Tuple[float, float, float, float],
     img_height: int,
@@ -50,7 +49,6 @@ def rasterize_gaussians_simple_sorted(
         axes_v.contiguous(),
         colors.contiguous(),
         opacities.contiguous(),
-        anisotropies.contiguous(),
         sorted_indices.contiguous(),
         intrins,
         img_height, img_width,
@@ -71,7 +69,6 @@ class _RasterizeGaussiansSimpleSorted(Function):
         axes_v: Float[Tensor, "*batch 3"],
         colors: Float[Tensor, "*batch channels"],
         opacities: Float[Tensor, "*batch 1"],
-        anisotropies: Float[Tensor, "*batch 2"],
         sorted_indices: Int[Tensor, "h w MAX_SORTED_INDICES"],
         intrins: Tuple[float, float, float, float],
         img_height: int,
@@ -92,7 +89,7 @@ class _RasterizeGaussiansSimpleSorted(Function):
             intrins,
             sorted_indices,
             positions, axes_u, axes_v,
-            colors, opacities, anisotropies,
+            colors, opacities,
             background,
         )
 
@@ -103,7 +100,7 @@ class _RasterizeGaussiansSimpleSorted(Function):
         ctx.save_for_backward(
             sorted_indices,
             positions, axes_u, axes_v,
-            colors, opacities, anisotropies, background,
+            colors, opacities, background,
             out_alpha,
         )
 
@@ -121,7 +118,7 @@ class _RasterizeGaussiansSimpleSorted(Function):
         (
             sorted_indices,
             positions, axes_u, axes_v,
-            colors, opacities, anisotropies, background,
+            colors, opacities, background,
             final_idx, out_alpha,
         ) = ctx.saved_tensors
 
@@ -130,7 +127,7 @@ class _RasterizeGaussiansSimpleSorted(Function):
             intrins,
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
-            colors, opacities, anisotropies, background,
+            colors, opacities, background,
             final_idx, out_alpha,
             v_out_img, v_out_alpha,
         )
@@ -139,7 +136,7 @@ class _RasterizeGaussiansSimpleSorted(Function):
         (
             v_positions, v_positions_xy_abs,
             v_axes_u, v_axes_v,
-            v_colors, v_opacities, v_anisotropies
+            v_colors, v_opacities,
         ) = [clean(v) for v in backward_return]
         v_positions_xy_abs = backward_return[1]
 
@@ -161,7 +158,7 @@ class _RasterizeGaussiansSimpleSorted(Function):
 
         return (
             v_positions, v_axes_u, v_axes_v,
-            v_colors, v_opacities, v_anisotropies,
+            v_colors, v_opacities,
             None, None, None, None, None, None,
             v_background,
         )

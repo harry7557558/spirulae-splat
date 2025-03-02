@@ -28,7 +28,6 @@ __global__ void rasterize_indices_kernel(
     const float3* __restrict__ axes_u,
     const float3* __restrict__ axes_v,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     int* __restrict__ num_intersects,
     int32_t* __restrict__ sorted_indices_,
     float* __restrict__ sorted_depths_
@@ -54,7 +53,6 @@ __global__ void rasterize_simple_sorted_forward_kernel(
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     const float3& __restrict__ background,
     float3* __restrict__ out_img,
     float* __restrict__ out_alpha

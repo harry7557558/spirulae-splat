@@ -31,7 +31,6 @@ def rasterize_gaussians(
     ch_degree_phi_to_use: int,
     ch_coeffs: Float[Tensor, "*batch dim_ch channels"],
     opacities: Float[Tensor, "*batch 1"],
-    anisotropies: Float[Tensor, "*batch 2"],
     depth_ref: Float[Tensor, "h w 1"],
     # background: Optional[Float[Tensor, "channels"]],
     depth_reg_pairwise_factor: float,
@@ -86,7 +85,6 @@ def rasterize_gaussians(
         ch_degree_phi, ch_degree_phi_to_use,
         ch_coeffs.contiguous(),
         opacities.contiguous(),
-        anisotropies.contiguous(),
         depth_ref.contiguous(),
         # background.contiguous(),
         depth_reg_pairwise_factor,
@@ -115,7 +113,6 @@ class _RasterizeGaussians(Function):
         ch_degree_phi_to_use: int,
         ch_coeffs: Float[Tensor, "*batch dim_ch channels"],
         opacities: Float[Tensor, "*batch 1"],
-        anisotropies: Float[Tensor, "*batch 2"],
         depth_ref: Float[Tensor, "h w 1"],
         # background: Optional[Float[Tensor, "channels"]],
         depth_reg_pairwise_factor: float,
@@ -175,7 +172,7 @@ class _RasterizeGaussians(Function):
                 ch_degree_r, ch_degree_r_to_use,
                 ch_degree_phi, ch_degree_phi_to_use,
                 ch_coeffs,
-                opacities, anisotropies, #background,
+                opacities, #background,
                 depth_ref,
             )
         timerf.mark("rasterize")  # 250us-600us
@@ -191,7 +188,7 @@ class _RasterizeGaussians(Function):
         ctx.save_for_backward(
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
-            colors, ch_coeffs, opacities, anisotropies, #background,
+            colors, ch_coeffs, opacities, #background,
             depth_ref,
             final_idx, out_alpha, out_depth, out_normal, out_reg_depth,
         )
@@ -225,7 +222,7 @@ class _RasterizeGaussians(Function):
         (
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
-            colors, ch_coeffs, opacities, anisotropies, #background,
+            colors, ch_coeffs, opacities, #background,
             depth_ref,
             final_idx, out_alpha, out_depth, out_normal, out_reg_depth,
         ) = ctx.saved_tensors
@@ -238,7 +235,6 @@ class _RasterizeGaussians(Function):
             v_colors = torch.zeros_like(colors)
             v_ch_coeffs = torch.zeros_like(ch_coeffs)
             v_opacities = torch.zeros_like(opacities)
-            v_anisotropies = torch.zeros_like(anisotropies)
             v_depth_ref = torch.zeros_like(depth_ref)
 
         else:
@@ -251,7 +247,7 @@ class _RasterizeGaussians(Function):
                 ctx.depth_reg_pairwise_factor,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
-                colors, ch_coeffs, opacities, anisotropies, #background,
+                colors, ch_coeffs, opacities, #background,
                 depth_ref,
                 final_idx, out_alpha, out_depth,
                 v_out_alpha, v_out_img, v_out_depth, v_out_normal,
@@ -268,9 +264,8 @@ class _RasterizeGaussians(Function):
             v_ch_coeffs = clean(backward_return[5])
             # v_ch_coeffs_abs = backward_return[6]
             v_opacities = clean(backward_return[6])
-            v_anisotropies = clean(backward_return[7])
-            # v_background = backward_return[9]
-            v_depth_ref = clean(backward_return[8])
+            # v_background = backward_return[8]
+            v_depth_ref = clean(backward_return[7])
             timerb.mark("clean")  # 150us-200us
 
         # Abs grad for gaussian splitting criterion. See
@@ -288,7 +283,7 @@ class _RasterizeGaussians(Function):
 
         return (
             v_positions, v_axes_u, v_axes_v,
-            v_colors, *([None]*4), v_ch_coeffs, v_opacities, v_anisotropies,
+            v_colors, *([None]*4), v_ch_coeffs, v_opacities,
             v_depth_ref,
             # v_background,
             None,

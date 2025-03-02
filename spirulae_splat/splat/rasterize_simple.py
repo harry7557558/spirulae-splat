@@ -22,7 +22,6 @@ def rasterize_gaussians_simple(
     axes_v: Float[Tensor, "*batch 3"],
     colors: Float[Tensor, "*batch channels"],
     opacities: Float[Tensor, "*batch 1"],
-    anisotropies: Float[Tensor, "*batch 2"],
     bounds: Int[Tensor, "*batch 4"],
     num_tiles_hit: Int[Tensor, "*batch 1"],
     intrins: Tuple[float, float, float, float],
@@ -65,7 +64,6 @@ def rasterize_gaussians_simple(
         axes_v.contiguous(),
         colors.contiguous(),
         opacities.contiguous(),
-        anisotropies.contiguous(),
         bounds.contiguous(),
         num_tiles_hit.contiguous(),
         intrins,
@@ -120,7 +118,6 @@ class _RasterizeGaussiansSimple(Function):
         axes_v: Float[Tensor, "*batch 3"],
         colors: Float[Tensor, "*batch channels"],
         opacities: Float[Tensor, "*batch 1"],
-        anisotropies: Float[Tensor, "*batch 2"],
         bounds: Int[Tensor, "*batch 4"],
         num_tiles_hit: Int[Tensor, "*batch 1"],
         intrins: Tuple[float, float, float, float],
@@ -161,7 +158,7 @@ class _RasterizeGaussiansSimple(Function):
                 intrins,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
-                colors, opacities, anisotropies,
+                colors, opacities,
                 background,
             )
 
@@ -173,7 +170,7 @@ class _RasterizeGaussiansSimple(Function):
         ctx.save_for_backward(
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
-            colors, opacities, anisotropies, background,
+            colors, opacities, background,
             final_idx, out_alpha,
         )
 
@@ -192,7 +189,7 @@ class _RasterizeGaussiansSimple(Function):
         (
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
-            colors, opacities, anisotropies, background,
+            colors, opacities, background,
             final_idx, out_alpha,
         ) = ctx.saved_tensors
 
@@ -203,7 +200,6 @@ class _RasterizeGaussiansSimple(Function):
             v_axes_v = torch.zeros_like(axes_v)
             v_colors = torch.zeros_like(colors)
             v_opacities = torch.zeros_like(opacities)
-            v_anisotropies = torch.zeros_like(anisotropies)
 
         else:
             backward_return = _C.rasterize_simple_backward(
@@ -211,7 +207,7 @@ class _RasterizeGaussiansSimple(Function):
                 intrins,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
-                colors, opacities, anisotropies, background,
+                colors, opacities, background,
                 final_idx, out_alpha,
                 v_out_img, v_out_alpha,
             )
@@ -220,7 +216,7 @@ class _RasterizeGaussiansSimple(Function):
             (
                 v_positions, v_positions_xy_abs,
                 v_axes_u, v_axes_v,
-                v_colors, v_opacities, v_anisotropies
+                v_colors, v_opacities,
             ) = [clean(v) for v in backward_return]
             v_positions_xy_abs = backward_return[1]
 
@@ -242,7 +238,7 @@ class _RasterizeGaussiansSimple(Function):
 
         return (
             v_positions, v_axes_u, v_axes_v,
-            v_colors, v_opacities, v_anisotropies,
+            v_colors, v_opacities,
             None, None, None, None, None, None,
             v_background,
         )

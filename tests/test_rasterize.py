@@ -55,10 +55,8 @@ def test_rasterize():
 
     colors = torch.randn((num_points, 3), device=device, requires_grad=True)
     opacities = (0.995 * torch.rand((num_points, 1), device=device)).requires_grad_(True)
-    anisotropies = torch.randn((num_points, 2), device=device, requires_grad=True)
     _colors = colors.detach().clone().requires_grad_(True)
     _opacities = opacities.detach().clone().requires_grad_(True)
-    _anisotropies = anisotropies.detach().clone().requires_grad_(True)
     depth_ref_im = torch.randn((H, W, 1), device=device, requires_grad=True)
     _depth_normal_ref = depth_ref_im.detach().clone().requires_grad_(True)
 
@@ -109,7 +107,6 @@ def test_rasterize():
         ch_degree_phi, ch_degree_phi_to_use,
         ch_coeffs,
         opacities,
-        anisotropies,
         depth_ref_im,
         # background,
         depth_reg_pairwise_factor,
@@ -125,7 +122,6 @@ def test_rasterize():
         axes_v,
         colors,
         opacities,
-        anisotropies,
         bounds,
         num_tiles_hit,
         intrins,
@@ -148,7 +144,6 @@ def test_rasterize():
         ch_degree_phi, ch_degree_phi_to_use,
         _ch_coeffs,
         _opacities,
-        _anisotropies,
         _depth_normal_ref,
         _background,
         depth_reg_pairwise_factor,
@@ -186,7 +181,6 @@ def test_rasterize():
     if dim_ch > 0:
         check_close('v_ch_coeffs', ch_coeffs.grad, _ch_coeffs.grad)
     check_close('v_opacities', opacities.grad, _opacities.grad)
-    check_close('v_anisotropies', anisotropies.grad, _anisotropies.grad)
     check_close('v_depth_normal_ref', depth_ref_im.grad, _depth_normal_ref.grad)
     # check_close('v_background', background.grad, _background.grad)
 

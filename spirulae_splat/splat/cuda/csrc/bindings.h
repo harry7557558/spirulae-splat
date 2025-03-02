@@ -145,7 +145,6 @@ std::tuple<
     const torch::Tensor &axes_v,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
-    const torch::Tensor &anisotropies,
     const torch::Tensor &background
 );
 
@@ -156,8 +155,7 @@ std::tuple<
     torch::Tensor, // v_axes_u
     torch::Tensor, // v_axes_v
     torch::Tensor, // v_colors
-    torch::Tensor, // v_opacities
-    torch::Tensor  // v_anisotropies
+    torch::Tensor // v_opacities
 > rasterize_simple_backward_tensor(
     const unsigned img_height,
     const unsigned img_width,
@@ -170,7 +168,6 @@ std::tuple<
     const torch::Tensor &axes_v,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
-    const torch::Tensor &anisotropies,
     const torch::Tensor &background,
     const torch::Tensor &final_idx,
     const torch::Tensor &output_alpha,
@@ -194,8 +191,7 @@ std::tuple<
     const torch::Tensor &positions,
     const torch::Tensor &axes_u,
     const torch::Tensor &axes_v,
-    const torch::Tensor &opacities,
-    const torch::Tensor &anisotropies
+    const torch::Tensor &opacities
 );
 
 
@@ -204,8 +200,7 @@ std::tuple<
     torch::Tensor, // v_positions_xy_abs
     torch::Tensor, // v_axes_u
     torch::Tensor, // v_axes_v
-    torch::Tensor, // v_opacities
-    torch::Tensor  // v_anisotropies
+    torch::Tensor // v_opacities
 > rasterize_depth_backward_tensor(
     const int depth_mode,
     const unsigned img_height,
@@ -218,7 +213,6 @@ std::tuple<
     const torch::Tensor &axes_u,
     const torch::Tensor &axes_v,
     const torch::Tensor &opacities,
-    const torch::Tensor &anisotropies,
     const torch::Tensor &final_idx,
     const torch::Tensor &output_depth,
     const torch::Tensor &output_visibility,
@@ -251,7 +245,6 @@ std::tuple<
     const unsigned ch_degree_phi_to_use,
     const torch::Tensor &ch_coeffs,
     const torch::Tensor &opacities,
-    const torch::Tensor &anisotropies,
     // const torch::Tensor &background,
     const torch::Tensor &depth_ref_im
 );
@@ -266,7 +259,6 @@ std::tuple<
     torch::Tensor, // v_ch_coeffs
     // torch::Tensor, // v_ch_coeffs_abs
     torch::Tensor, // v_opacities
-    torch::Tensor, // v_anisotropies
     // torch::Tensor, // v_background
     torch::Tensor  // v_depth_ref_im
 > rasterize_backward_tensor(
@@ -287,7 +279,6 @@ std::tuple<
     const torch::Tensor &colors,
     const torch::Tensor &ch_coeffs,
     const torch::Tensor &opacities,
-    const torch::Tensor &anisotropies,
     // const torch::Tensor &background,
     const torch::Tensor &depth_ref_im,
     const torch::Tensor &final_idx,
@@ -319,8 +310,7 @@ std::tuple<
     const torch::Tensor &axes_u,
     const torch::Tensor &axes_v,
     const torch::Tensor &colors,
-    const torch::Tensor &opacities,
-    const torch::Tensor &anisotropies
+    const torch::Tensor &opacities
 );
 
 
@@ -330,8 +320,7 @@ std::tuple<
     torch::Tensor, // v_axes_u
     torch::Tensor, // v_axes_v
     torch::Tensor, // v_colors
-    torch::Tensor, // v_opacities
-    torch::Tensor // v_anisotropies
+    torch::Tensor // v_opacities
 > rasterize_simplified_backward_tensor(
     const unsigned img_height,
     const unsigned img_width,
@@ -344,7 +333,6 @@ std::tuple<
     const torch::Tensor &axes_v,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
-    const torch::Tensor &anisotropies,
     const torch::Tensor &final_idx,
     const torch::Tensor &output_alpha,
     const torch::Tensor &output_depth,
@@ -370,8 +358,7 @@ std::tuple<
     const torch::Tensor &positions,
     const torch::Tensor &axes_u,
     const torch::Tensor &axes_v,
-    const torch::Tensor &opacities,
-    const torch::Tensor &anisotropies
+    const torch::Tensor &opacities
 );
 
 
@@ -400,7 +387,6 @@ std::tuple<
     const torch::Tensor &axes_v,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
-    const torch::Tensor &anisotropies,
     const torch::Tensor &background
 );
 

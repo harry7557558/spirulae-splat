@@ -34,10 +34,8 @@ def test_rasterize_simple():
 
     colors = torch.randn((num_points, 3), device=device, requires_grad=True)
     opacities = (0.995 * torch.rand((num_points, 1), device=device)).requires_grad_(True)
-    anisotropies = torch.randn((num_points, 2), device=device, requires_grad=True)
     _colors = colors.detach().clone().requires_grad_(True)
     _opacities = opacities.detach().clone().requires_grad_(True)
-    _anisotropies = anisotropies.detach().clone().requires_grad_(True)
 
     background = torch.rand(3, device=device, requires_grad=True)
     _background = background.detach().clone().requires_grad_(True)
@@ -94,7 +92,6 @@ def test_rasterize_simple():
         axes_v,
         colors,
         opacities,
-        anisotropies,
         bounds,
         num_tiles_hit,
         intrins,
@@ -108,7 +105,6 @@ def test_rasterize_simple():
         _axes_v,
         _colors,
         _opacities,
-        _anisotropies,
         _bounds,
         _num_tiles_hit,
         intrins,
@@ -135,7 +131,6 @@ def test_rasterize_simple():
     check_close('v_axes_v', axes_v.grad, _axes_v.grad)
     check_close('v_colors', colors.grad, _colors.grad)
     check_close('v_opacities', opacities.grad, _opacities.grad)
-    check_close('v_anisotropies', anisotropies.grad, _anisotropies.grad)
     check_close('v_background', background.grad, _background.grad)
 
     assert (positions.absgrad > 0).any()

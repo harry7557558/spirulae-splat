@@ -21,7 +21,9 @@ My custom method for Nerfstudio. Based on the `splatfacto` method in official Ne
 
 <!-- - Support [Markov Chain Monte Carlo (MCMC)](https://arxiv.org/abs/2404.09591) for adaptive control of splats, with relocation designed for polynomial splats -->
 
-- Introduce splat anisotropy by multiplying opacity by a smoothstep of UV directional dot product $1-\mathrm{smoothstep}(\mathbf{a}\cdot(u,v))$, intended to better represent sharp edges
+<!-- - Introduce splat anisotropy by multiplying opacity by a smoothstep of UV directional dot product $1-\mathrm{smoothstep}(\mathbf{a}\cdot(u,v))$, intended to better represent sharp edges
+
+DEPRECATED: although this seems to improve metrics (e.g. PSNR) for a similar number of splats, visualization shows anisotropy isn't actually high near sharp edges; deprecate to save memory footprint, and considering similar but more configurable methods (like https://arxiv.org/abs/2408.16982) already exist -->
 
 - Handle exposure change by fitting output image to ground-truth image with a linear model before evaluating loss
   - Supported models: `gt ~ k * pred` with scalar or per-channel k, `log(gt) ~ k * log(pred) + b` with scalar or per-channel k and b, `gt ~ A * pred` with 3x3 matrix A, `log(gt) ~ A * log(pred) + b` with matrix A and vector b

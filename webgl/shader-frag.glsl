@@ -17,7 +17,6 @@ flat in vec4 vColor;
 flat in vec3 vPosition;
 flat in vec3 vAxesU;
 flat in vec3 vAxesV;
-flat in vec2 vAnisotropy;
 flat in int vIndex;
 
 uniform highp usampler2D u_ch_texture;
@@ -199,12 +198,12 @@ float visibility_kernel(float r2) {
 bool get_alpha(
     const vec2 uv,
     const float opac,
-    const vec2 aniso,
+    // const vec2 aniso,
     out float alpha
 ) {
     float r2 = dot(uv, uv);
     float vis = visibility_kernel(r2);
-    float t = dot(uv, aniso);
+    float t = 0.0; //dot(uv, aniso);
     float m = t<0. ? 1. : t>1. ? 0. :
         t*t*(2.0*t-3.0) + 1.0;
     alpha = opac * vis * m;
@@ -317,7 +316,7 @@ void main () {
     if (!get_intersection(pos2d_undist, poi, uv))
         discard;
     float alpha;
-    if (!get_alpha(uv, vColor.a, vAnisotropy, alpha))
+    if (!get_alpha(uv, vColor.a, alpha))
         discard;
     vec3 color = vColor.rgb;
     if (ch_dim > 0) {

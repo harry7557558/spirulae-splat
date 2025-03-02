@@ -25,7 +25,6 @@ def rasterize_gaussians_depth(
     axes_u: Float[Tensor, "*batch 3"],
     axes_v: Float[Tensor, "*batch 3"],
     opacities: Float[Tensor, "*batch 1"],
-    anisotropies: Float[Tensor, "*batch 2"],
     bounds: Int[Tensor, "*batch 4"],
     num_tiles_hit: Int[Tensor, "*batch 1"],
     intrins: Tuple[float, float, float, float],
@@ -55,7 +54,6 @@ def rasterize_gaussians_depth(
         axes_u.contiguous(),
         axes_v.contiguous(),
         opacities.contiguous(),
-        anisotropies.contiguous(),
         bounds.contiguous(),
         num_tiles_hit.contiguous(),
         intrins,
@@ -75,7 +73,6 @@ class _RasterizeGaussiansDepth(Function):
         axes_u: Float[Tensor, "*batch 3"],
         axes_v: Float[Tensor, "*batch 3"],
         opacities: Float[Tensor, "*batch 1"],
-        anisotropies: Float[Tensor, "*batch 2"],
         bounds: Int[Tensor, "*batch 4"],
         num_tiles_hit: Int[Tensor, "*batch 1"],
         intrins: Tuple[float, float, float, float],
@@ -115,7 +112,7 @@ class _RasterizeGaussiansDepth(Function):
                 intrins,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
-                opacities, anisotropies,
+                opacities,
             )
         timerf.mark("rasterize")  # 200us-600us
 
@@ -128,7 +125,7 @@ class _RasterizeGaussiansDepth(Function):
         ctx.save_for_backward(
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
-            opacities, anisotropies,
+            opacities,
             final_idx, out_depth, out_visibility,
         )
         timerf.end("save")  # ~10us -> 450us-950us
@@ -148,7 +145,7 @@ class _RasterizeGaussiansDepth(Function):
         (
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
-            opacities, anisotropies,
+            opacities,
             final_idx, out_depth, out_visibility,
         ) = ctx.saved_tensors
 
@@ -158,7 +155,6 @@ class _RasterizeGaussiansDepth(Function):
             v_axes_u = torch.zeros_like(axes_u)
             v_axes_v = torch.zeros_like(axes_v)
             v_opacities = torch.zeros_like(opacities)
-            v_anisotropies = torch.zeros_like(anisotropies)
 
         else:
             timerb.start()
@@ -169,7 +165,7 @@ class _RasterizeGaussiansDepth(Function):
                 intrins,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
-                opacities, anisotropies,
+                opacities,
                 final_idx, out_depth, out_visibility,
                 v_out_depth,
             )
@@ -181,7 +177,6 @@ class _RasterizeGaussiansDepth(Function):
             v_axes_u = clean(backward_return[2])
             v_axes_v = clean(backward_return[3])
             v_opacities = clean(backward_return[4])
-            v_anisotropies = clean(backward_return[5])
             timerb.mark("clean")  # 60us-80us
 
         # Abs grad for gaussian splitting criterion. See
@@ -198,6 +193,6 @@ class _RasterizeGaussiansDepth(Function):
 
         return (
             v_positions, v_axes_u, v_axes_v,
-            v_opacities, v_anisotropies,
+            v_opacities,
             None, None, None, None, None, None, None
         )

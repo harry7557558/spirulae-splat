@@ -112,12 +112,12 @@ inline __device__ float depth_inv_map_vjp(float z, float v_z) {
 inline __device__ bool get_alpha(
     const glm::vec2 uv,
     const float opac,
-    const glm::vec2 aniso,
+    // const glm::vec2 aniso,
     float &alpha
 ) {
     const float r2 = glm::dot(uv, uv);
     const float vis = visibility_kernel(r2);
-    const float t = glm::dot(uv, aniso);
+    const float t = 0.0f; //glm::dot(uv, aniso);
     const float m = t<0.f ? 1.f : t>1.f ? 0.f :
         t*t*(2.0f*t-3.0f) + 1.0f;
     alpha = opac * vis * m;
@@ -127,15 +127,15 @@ inline __device__ bool get_alpha(
 inline __device__ void get_alpha_vjp(
     const glm::vec2 uv,
     const float opac,
-    const glm::vec2 aniso,
+    // const glm::vec2 aniso,
     const float v_alpha,
     glm::vec2 &v_uv,
-    float &v_opac,
-    glm::vec2 &v_aniso
+    float &v_opac
+    // glm::vec2 &v_aniso
 ) {
     const float r2 = glm::dot(uv, uv);
     const float vis = visibility_kernel(r2);
-    const float t = glm::dot(uv, aniso);
+    const float t = 0.0f; //glm::dot(uv, aniso);
     const float m = t<0.f ? 1.f : t>1.f ? 0.f :
         t*t*(2.0f*t-3.0f) + 1.0f;
     // const float alpha = opac * vis * m;
@@ -143,9 +143,9 @@ inline __device__ void get_alpha_vjp(
     const float v_t = t<0.f||t>1.f ? 0.f : 6.0f*t*(t-1.0f) * v_m;
     const float v_vis = opac * m * v_alpha;
     const float v_r2 = v_vis * visibility_kernel_grad(r2);
-    v_uv = 2.0f * uv * v_r2 + v_t * aniso;
+    v_uv = 2.0f * uv * v_r2;// + v_t * aniso;
     v_opac = vis * m * v_alpha;
-    v_aniso = uv * v_t;
+    // v_aniso = uv * v_t;
 }
 
 inline __device__ bool get_intersection(

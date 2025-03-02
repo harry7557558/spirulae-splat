@@ -170,8 +170,6 @@ class SpirulaeModelConfig(ModelConfig):
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
     cull_scale_thresh: float = 0.5
     """threshold of scale for culling huge gaussians"""
-    cull_anisotropy_thresh: float = np.inf
-    """threshold of quotient of scale for culling long thin gaussians"""
     cull_grad_thresh: float = 0.0  # 3e-4 | 1e-4 | 1e-5 | 0.0
     """threshold for culling gaussians with low visibility"""
     continue_cull_post_densification: bool = True
@@ -210,8 +208,6 @@ class SpirulaeModelConfig(ModelConfig):
     """minimum opacity for MCMC relocation"""
 
     # representation
-    use_anisotropy: bool = False
-    """use anisotropy for splats"""
     sh_degree: int = 3
     """maximum degree of spherical harmonics to use"""
     sh_degree_interval: int = 1000
@@ -374,9 +370,6 @@ class SpirulaeModel(Model):
             features_ch = torch.nn.Parameter(torch.zeros((num_points, dim_ch, 3)))
 
         opacities = torch.nn.Parameter(torch.logit(0.1 * torch.ones(num_points, 1)))
-        anisotropies = torch.nn.Parameter(torch.zeros((num_points, 2)))
-        if not self.config.use_anisotropy:
-            anisotropies.requires_grad_(False)
 
         gauss_params = {
             "means": means,
@@ -386,7 +379,6 @@ class SpirulaeModel(Model):
             "features_sh": features_sh,
             "features_ch": features_ch,
             "opacities": opacities,
-            "anisotropies": anisotropies
         }
         self.gauss_params = torch.nn.ParameterDict(gauss_params)
 
@@ -488,10 +480,6 @@ class SpirulaeModel(Model):
     def opacities(self):
         return self.gauss_params["opacities"]
 
-    @property
-    def anisotropies(self):
-        return self.gauss_params["anisotropies"]
-
     def load_state_dict(self, dict, **kwargs):  # type: ignore
         # resize the parameters to match the new number of points
         self.step = 30000
@@ -500,15 +488,13 @@ class SpirulaeModel(Model):
             # means->gauss_params.means since old checkpoints have that format
             for p in ["means", "scales", "quats",
                       "features_dc", "features_sh", "features_ch",
-                      "opacities", "anisotropies"]:
+                      "opacities"]:
                 dict[f"gauss_params.{p}"] = dict[p]
         newp = dict["gauss_params.means"].shape[0]
         for name, param in self.gauss_params.items():
             old_shape = param.shape
             new_shape = (newp,) + old_shape[1:]
             self.gauss_params[name] = torch.nn.Parameter(torch.zeros(new_shape, device=self.device))
-        if not self.config.use_anisotropy:
-            self.gauss_params['anisotropies'].requires_grad_(False)
         super().load_state_dict(dict, **kwargs)
 
     def k_nearest_sklearn(self, x: torch.Tensor, k: int):
@@ -601,7 +587,7 @@ class SpirulaeModel(Model):
                 "means", "scales", "quats",
                 "features_dc", "features_sh", "features_ch",
                 "opacities"
-            ] + ["anisotropies"] * self.config.use_anisotropy
+            ]
         }
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
@@ -729,7 +715,7 @@ class SpirulaeModel(Model):
 
             depth_im_ref = rasterize_gaussians_depth(
                 positions, axes_u, axes_v,
-                opacities, self.anisotropies,
+                opacities,
                 bounds, num_tiles_hit,
                 intrins, H, W, BLOCK_WIDTH,
                 self.config.depth_mode
@@ -749,7 +735,7 @@ class SpirulaeModel(Model):
                 self.config.ch_degree_r, min(ch_degree, self.config.ch_degree_r),
                 self.config.ch_degree_phi, min(ch_degree, self.config.ch_degree_phi),
                 self.features_ch,
-                opacities, self.anisotropies,
+                opacities,
                 depth_im_ref,
                 # background_color,
                 self.config.depth_reg_pairwise_factor,
@@ -764,7 +750,7 @@ class SpirulaeModel(Model):
              = rasterize_gaussians_simplified(
                 positions, axes_u, axes_v,
                 rgbs,
-                opacities, self.anisotropies,
+                opacities,
                 bounds, num_tiles_hit,
                 intrins, H, W, BLOCK_WIDTH,
             )
@@ -774,21 +760,8 @@ class SpirulaeModel(Model):
             ).contiguous()
             timerr.mark("render")  # 750us-1200us
 
-        anisotropy_vis = None
         if self.config.output_depth_during_training or not self.training:
-        # if False:
-            with torch.no_grad():
-
-                pad_zero = torch.zeros_like(opacities)
-                anisotropy_norm = torch.norm(self.anisotropies, dim=1, keepdim=True)
-                meta, _ = rasterize_gaussians_simple(
-                    positions, axes_u, axes_v,
-                    torch.concatenate((anisotropy_norm, pad_zero, pad_zero), dim=1),
-                    opacities, self.anisotropies,
-                    bounds, num_tiles_hit,
-                    intrins, H, W, BLOCK_WIDTH
-                )
-                anisotropy_vis = meta[..., 0:1]
+            pass
 
         else:
             self.info = {
@@ -833,7 +806,6 @@ class SpirulaeModel(Model):
             "reg_normal": torch.sqrt(torch.relu(reg_normal*alpha)+1e-8) * alpha_diffused,
             # "reg_depth": reg_depth / depth_im_ref.clip(1e-3)**2,
             # "reg_normal": reg_normal * alpha_diffused,
-            "anisotropy_vis": anisotropy_vis,
             "alpha": alpha,
             "background": background,
         }  # type: ignore

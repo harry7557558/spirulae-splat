@@ -85,12 +85,6 @@ spirulae = MethodSpecification(
                 "optimizer": AdamOptimizerConfig(lr=0.05, eps=1e-15),
                 "scheduler": None,
             },
-            "anisotropies": {
-                "optimizer": AdamOptimizerConfig(lr=0.04, eps=1e-15),
-                "scheduler": ExponentialDecaySchedulerConfig(
-                    lr_final=0.001, max_steps=30000, warmup_steps=200, lr_pre_warmup=0
-                ),
-            },
             "background_color": {
                 "optimizer": AdamOptimizerConfig(lr=0.0025, eps=1e-15),
                 "scheduler": None

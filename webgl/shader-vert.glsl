@@ -15,7 +15,6 @@ uniform vec4 distortion;
 #define USE_EXACT_DISTORTION 0
 
 uniform ivec2 u_sh_config;
-uniform int u_use_aniso;
 
 layout(location = 0) in vec2 vertexPosition;
 layout(location = 1) in int index;
@@ -26,7 +25,6 @@ flat out vec4 vColor;
 flat out vec3 vPosition;
 flat out vec3 vAxesU;
 flat out vec3 vAxesV;
-flat out vec2 vAnisotropy;
 flat out int vIndex;
 
 #define PI 3.14159265
@@ -385,7 +383,6 @@ void main () {
     // patch orientation
     vec2 scale = uintBitsToFloat(uvec2(info0.w, info1.x));
     vec4 quat = vec4(unpackHalf2x16(info1.y), unpackHalf2x16(info1.z));
-    vec2 anisotropy = uintBitsToFloat(uvec2(info1.w, info2.x));
 
     mat3 R0 = mat3(view);
     mat3 Rq = quat_to_rotmat(quat);
@@ -475,7 +472,6 @@ void main () {
     vPosition = p_view.xyz;
     vAxesU = axis_u;
     vAxesV = axis_v;
-    vAnisotropy = u_use_aniso == 0 ? vec2(0) : anisotropy;
     vIndex = index;
 
     gl_Position = vec4(

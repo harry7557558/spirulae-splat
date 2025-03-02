@@ -15,7 +15,6 @@ __global__ void rasterize_simple_forward_kernel(
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     const float3& __restrict__ background,
     int* __restrict__ final_index,
     float3* __restrict__ out_img,
@@ -55,7 +54,7 @@ __global__ void rasterize_simple_forward_kernel(
     __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
     __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
     __shared__ glm::vec3 color_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ float opacity_batch[MAX_BLOCK_SIZE];
 
     // current visibility left to render
     float T = 1.f;
@@ -82,14 +81,13 @@ __global__ void rasterize_simple_forward_kernel(
             int32_t g_id = gaussian_ids_sorted[idx];
             const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
-            const float2 aniso = anisotropies[g_id];
             const float3 color = colors[g_id];
             const float3 v0 = axes_u[g_id];
             const float3 v1 = axes_v[g_id];
             position_batch[tr] = {pos.x, pos.y, pos.z};
             axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
             color_batch[tr] = {color.x, color.y, color.z};
-            opacity_batch[tr] = {aniso.x, aniso.y, opac};
+            opacity_batch[tr] = opac;
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -99,8 +97,7 @@ __global__ void rasterize_simple_forward_kernel(
         int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
             glm::vec3 pos = position_batch[t];
-            glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
-            float opac = opacity_batch[t].z;
+            float opac = opacity_batch[t];
             glm::mat2x3 axis_uv = axes_uv_batch[t];
 
             glm::vec3 poi;
@@ -111,7 +108,7 @@ __global__ void rasterize_simple_forward_kernel(
             if (glm::length(uv) > visibility_kernel_radius())
                 continue;
             float alpha;
-            if (!get_alpha(uv, opac, aniso, alpha))
+            if (!get_alpha(uv, opac, alpha))
                 continue;
 
             const float next_T = T * (1.f - alpha);
@@ -154,7 +151,6 @@ __global__ void rasterize_simple_backward_kernel(
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     const float3& __restrict__ background,
     const int* __restrict__ final_index,
     const float* __restrict__ output_alpha,
@@ -165,8 +161,7 @@ __global__ void rasterize_simple_backward_kernel(
     float3* __restrict__ v_axes_u,
     float3* __restrict__ v_axes_v,
     float3* __restrict__ v_colors,
-    float* __restrict__ v_opacities,
-    float2* __restrict__ v_anisotropies
+    float* __restrict__ v_opacities
 ) {
     auto block = cg::this_thread_block();
     int32_t tile_id =
@@ -207,7 +202,7 @@ __global__ void rasterize_simple_backward_kernel(
     __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
     __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
     __shared__ glm::vec3 color_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ float opacity_batch[MAX_BLOCK_SIZE];
 
     // df/d_out for this pixel
     const float3 v_out = nan_to_num(v_output[pix_id]);
@@ -234,14 +229,13 @@ __global__ void rasterize_simple_backward_kernel(
             id_batch[tr] = g_id;
             const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
-            const float2 aniso = anisotropies[g_id];
             const float3 color = colors[g_id];
             const float3 v0 = axes_u[g_id];
             const float3 v1 = axes_v[g_id];
             position_batch[tr] = {pos.x, pos.y, pos.z};
             axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
             color_batch[tr] = {color.x, color.y, color.z};
-            opacity_batch[tr] = {aniso.x, aniso.y, opac};
+            opacity_batch[tr] = opac;
         }
         // wait for other threads to collect the gaussians in batch
         block.sync();
@@ -254,8 +248,7 @@ __global__ void rasterize_simple_backward_kernel(
             }
 
             glm::vec3 pos = position_batch[t];
-            glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
-            float opac = opacity_batch[t].z;
+            float opac = opacity_batch[t];
             glm::mat2x3 axis_uv = axes_uv_batch[t];
 
             glm::vec3 poi;
@@ -267,7 +260,7 @@ __global__ void rasterize_simple_backward_kernel(
             }
             float alpha;
             if (valid){
-                if (!get_alpha(uv, opac, aniso, alpha))
+                if (!get_alpha(uv, opac, alpha))
                     valid = 0;
             }
             if(!warp.any(valid)){
@@ -280,7 +273,6 @@ __global__ void rasterize_simple_backward_kernel(
             glm::vec3 v_axis_v_local = {0.f, 0.f, 0.f};
             glm::vec3 v_color_local = {0.f, 0.f, 0.f};
             float v_opacity_local = 0.f;
-            glm::vec2 v_anisotropy_local = {0.f, 0.f};
             //initialize everything to 0, only set if the lane is valid
             if(valid){
                 // compute the current T for this gaussian
@@ -293,7 +285,7 @@ __global__ void rasterize_simple_backward_kernel(
                 v_color_local = {vis * v_out.x, vis * v_out.y, vis * v_out.z};
 
                 const glm::vec3 color = color_batch[t];
-                const glm::vec3 opacity = opacity_batch[t];
+                const float opacity = opacity_batch[t];
                 // contribution from this pixel
                 v_alpha += (color.x * T - buffer.x) * ra * v_out.x;
                 v_alpha += (color.y * T - buffer.y) * ra * v_out.y;
@@ -311,9 +303,8 @@ __global__ void rasterize_simple_backward_kernel(
 
                 glm::vec2 v_uv;
                 get_alpha_vjp(
-                    uv, opacity.z, glm::vec2(opacity),
-                    v_alpha,
-                    v_uv, v_opacity_local, v_anisotropy_local
+                    uv, opacity,
+                    v_alpha, v_uv, v_opacity_local
                 );
                 glm::mat2x3 v_axis_uv = glm::mat2x3(0.0f);
                 get_intersection_vjp(
@@ -334,7 +325,6 @@ __global__ void rasterize_simple_backward_kernel(
             warpSum3(v_axis_v_local, warp);
             warpSum3(v_color_local, warp);
             warpSum(v_opacity_local, warp);
-            warpSum2(v_anisotropy_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t];
 
@@ -361,9 +351,6 @@ __global__ void rasterize_simple_backward_kernel(
                 atomicAdd(v_color_ptr + 3*g + 2, v_color_local.z);
                 
                 atomicAdd(v_opacities + g, v_opacity_local);
-                float* v_anisotropy_ptr = (float*)(v_anisotropies);
-                atomicAdd(v_anisotropy_ptr + 2*g + 0, v_anisotropy_local.x);
-                atomicAdd(v_anisotropy_ptr + 2*g + 1, v_anisotropy_local.y);
             }
         }
     }
@@ -384,7 +371,6 @@ __global__ void rasterize_depth_forward_kernel(
     const float3* __restrict__ axes_u,
     const float3* __restrict__ axes_v,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     int* __restrict__ final_index,
     float* __restrict__ out_depth,
     float2* __restrict__ out_visibility
@@ -422,7 +408,7 @@ __global__ void rasterize_depth_forward_kernel(
 
     __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
     __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ float opacity_batch[MAX_BLOCK_SIZE];
 
     // current visibility left to render
     float T = 1.f;
@@ -451,12 +437,11 @@ __global__ void rasterize_depth_forward_kernel(
             int32_t g_id = gaussian_ids_sorted[idx];
             const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
-            const float2 aniso = anisotropies[g_id];
             const float3 v0 = axes_u[g_id];
             const float3 v1 = axes_v[g_id];
             position_batch[tr] = {pos.x, pos.y, pos.z};
             axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
-            opacity_batch[tr] = {aniso.x, aniso.y, opac};
+            opacity_batch[tr] = opac;
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -466,8 +451,7 @@ __global__ void rasterize_depth_forward_kernel(
         int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
             glm::vec3 pos = (glm::vec3)position_batch[t];
-            glm::vec2 aniso = {(float)opacity_batch[t].x, (float)opacity_batch[t].y};
-            float opac = (float)opacity_batch[t].z;
+            float opac = opacity_batch[t];
             glm::mat2x3 axis_uv = (glm::mat2x3)axes_uv_batch[t];
 
             glm::vec3 poi;
@@ -478,7 +462,7 @@ __global__ void rasterize_depth_forward_kernel(
             if (glm::length(uv) > visibility_kernel_radius())
                 continue;
             float alpha;
-            if (!get_alpha(uv, opac, aniso, alpha))
+            if (!get_alpha(uv, opac, alpha))
                 continue;
 
             const float next_T = T * (1.f - alpha);
@@ -551,7 +535,6 @@ __global__ void rasterize_depth_backward_kernel(
     const float3* __restrict__ axes_u,
     const float3* __restrict__ axes_v,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     const int* __restrict__ final_index,
     const float* __restrict__ out_depth,
     const float2* __restrict__ out_visibility,
@@ -560,8 +543,7 @@ __global__ void rasterize_depth_backward_kernel(
     float2* __restrict__ v_positions_xy_abs,
     float3* __restrict__ v_axes_u,
     float3* __restrict__ v_axes_v,
-    float* __restrict__ v_opacities,
-    float2* __restrict__ v_anisotropies
+    float* __restrict__ v_opacities
 ) {
     auto block = cg::this_thread_block();
     int32_t tile_id =
@@ -602,7 +584,7 @@ __global__ void rasterize_depth_backward_kernel(
     __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
     __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
     __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ float opacity_batch[MAX_BLOCK_SIZE];
 
     // df/d_out for this pixel
     float output_depth = out_depth[pix_id];
@@ -644,12 +626,11 @@ __global__ void rasterize_depth_backward_kernel(
             id_batch[tr] = g_id;
             const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
-            const float2 aniso = anisotropies[g_id];
             const float3 v0 = axes_u[g_id];
             const float3 v1 = axes_v[g_id];
             position_batch[tr] = {pos.x, pos.y, pos.z};
             axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
-            opacity_batch[tr] = {aniso.x, aniso.y, opac};
+            opacity_batch[tr] = opac;
         }
         // wait for other threads to collect the gaussians in batch
         block.sync();
@@ -662,8 +643,7 @@ __global__ void rasterize_depth_backward_kernel(
             }
 
             glm::vec3 pos = (glm::vec3)position_batch[t];
-            glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
-            float opac = opacity_batch[t].z;
+            float opac = opacity_batch[t];
             glm::mat2x3 axis_uv = (glm::mat2x3)axes_uv_batch[t];
 
             glm::vec3 poi;
@@ -675,7 +655,7 @@ __global__ void rasterize_depth_backward_kernel(
             }
             float alpha;
             if (valid){
-                if (!get_alpha(uv, opac, aniso, alpha))
+                if (!get_alpha(uv, opac, alpha))
                     valid = 0;
             }
             if(!warp.any(valid)){
@@ -687,7 +667,6 @@ __global__ void rasterize_depth_backward_kernel(
             glm::vec3 v_axis_u_local = {0.f, 0.f, 0.f};
             glm::vec3 v_axis_v_local = {0.f, 0.f, 0.f};
             float v_opacity_local = 0.f;
-            glm::vec2 v_anisotropy_local = {0.f, 0.f};
             //initialize everything to 0, only set if the lane is valid
             if(valid) {
                 // compute the current T for this gaussian
@@ -739,12 +718,11 @@ __global__ void rasterize_depth_backward_kernel(
                 T = next_T;
 
                 // backward
-                const glm::vec3 opacity = opacity_batch[t];
+                const float opacity = opacity_batch[t];
                 glm::vec2 v_uv;
                 get_alpha_vjp(
-                    uv, opacity.z, glm::vec2(opacity),
-                    v_alpha,
-                    v_uv, v_opacity_local, v_anisotropy_local
+                    uv, opacity,
+                    v_alpha, v_uv, v_opacity_local
                 );
                 glm::mat2x3 v_axis_uv = glm::mat2x3(0.0f);
                 float v_depth_raw = depth_map_vjp(depth_raw, v_depth);
@@ -762,7 +740,6 @@ __global__ void rasterize_depth_backward_kernel(
             warpSum3(v_axis_u_local, warp);
             warpSum3(v_axis_v_local, warp);
             warpSum(v_opacity_local, warp);
-            warpSum2(v_anisotropy_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t];
 
@@ -785,9 +762,6 @@ __global__ void rasterize_depth_backward_kernel(
                 
                 float v_opacity_local_ = (float)v_opacity_local;
                 atomicAdd(v_opacities + g, v_opacity_local_);
-                float* v_anisotropy_ptr = (float*)(v_anisotropies);
-                atomicAdd(v_anisotropy_ptr + 2*g + 0, v_anisotropy_local.x);
-                atomicAdd(v_anisotropy_ptr + 2*g + 1, v_anisotropy_local.y);
             }
         }
     }
@@ -815,7 +789,6 @@ __global__ void rasterize_forward_kernel(
     const unsigned ch_degree_phi_to_use,
     const float3* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     // const float3& __restrict__ background,
     const float* __restrict__ depth_ref_im,
     int* __restrict__ final_index,
@@ -860,7 +833,7 @@ __global__ void rasterize_forward_kernel(
     __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
     __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
     __shared__ glm::vec3 color_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ float opacity_batch[MAX_BLOCK_SIZE];
 
     // current visibility left to render
     // index of most recent gaussian to write to this thread's pixel
@@ -896,7 +869,6 @@ __global__ void rasterize_forward_kernel(
             id_batch[tr] = g_id;
             const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
-            const float2 aniso = anisotropies[g_id];
             const float3 color = colors[g_id];
             const float3 v0 = axes_u[g_id];
             const float3 v1 = axes_v[g_id];
@@ -904,7 +876,7 @@ __global__ void rasterize_forward_kernel(
             position_batch[tr] = {pos.x, pos.y, pos.z};
             axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
             color_batch[tr] = {color.x, color.y, color.z};
-            opacity_batch[tr] = {aniso.x, aniso.y, opac};
+            opacity_batch[tr] = opac;
             // depth_grad_batch[tr] = {depth_grad.x, depth_grad.y};
         }
         // wait for other threads to collect the gaussians in batch
@@ -914,8 +886,7 @@ __global__ void rasterize_forward_kernel(
         int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
             glm::vec3 pos = position_batch[t];
-            glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
-            float opac = opacity_batch[t].z;
+            float opac = opacity_batch[t];
             glm::mat2x3 axis_uv = axes_uv_batch[t];
 
             glm::vec3 poi;
@@ -926,7 +897,7 @@ __global__ void rasterize_forward_kernel(
             if (glm::length(uv) > visibility_kernel_radius())
                 continue;
             float alpha;
-            if (!get_alpha(uv, opac, aniso, alpha))
+            if (!get_alpha(uv, opac, alpha))
                 continue;
 
             const float next_T = T * (1.f - alpha);
@@ -1020,7 +991,6 @@ __global__ void rasterize_backward_kernel(
     const float3* __restrict__ colors,
     const float3* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     // const float3& __restrict__ background,
     const float* __restrict__ depth_ref_im,
     const int* __restrict__ final_index,
@@ -1039,7 +1009,6 @@ __global__ void rasterize_backward_kernel(
     float3* __restrict__ v_ch_coeffs,
     // float* __restrict__ v_ch_coeffs_abs,
     float* __restrict__ v_opacities,
-    float2* __restrict__ v_anisotropies,
     // float3* __restrict__ v_background,
     float* __restrict__ v_depth_ref_im
 ) {
@@ -1077,7 +1046,7 @@ __global__ void rasterize_backward_kernel(
     __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
     __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
     __shared__ glm::vec3 color_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ float opacity_batch[MAX_BLOCK_SIZE];
     // __shared__ glm::vec2 depth_grad_batch[MAX_BLOCK_SIZE];
 
     // df/d_out for this pixel
@@ -1140,14 +1109,13 @@ __global__ void rasterize_backward_kernel(
             id_batch[tr] = g_id;
             const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
-            const float2 aniso = anisotropies[g_id];
             const float3 color = colors[g_id];
             const float3 v0 = axes_u[g_id];
             const float3 v1 = axes_v[g_id];
             position_batch[tr] = {pos.x, pos.y, pos.z};
             axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
             color_batch[tr] = {color.x, color.y, color.z};
-            opacity_batch[tr] = {aniso.x, aniso.y, opac};
+            opacity_batch[tr] = opac;
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -1162,8 +1130,7 @@ __global__ void rasterize_backward_kernel(
             }
 
             glm::vec3 pos = position_batch[t];
-            glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
-            float opac = opacity_batch[t].z;
+            float opac = opacity_batch[t];
             glm::mat2x3 axis_uv = axes_uv_batch[t];
 
             glm::vec3 poi;
@@ -1175,7 +1142,7 @@ __global__ void rasterize_backward_kernel(
             }
             float alpha;
             if (valid){
-                if (!get_alpha(uv, opac, aniso, alpha))
+                if (!get_alpha(uv, opac, alpha))
                     valid = 0;
             }
             if(!warp.any(valid)){
@@ -1188,7 +1155,6 @@ __global__ void rasterize_backward_kernel(
             glm::vec3 v_axis_v_local = {0.f, 0.f, 0.f};
             glm::vec3 v_color_local = {0.f, 0.f, 0.f};
             float v_opacity_local = 0.f;
-            glm::vec2 v_anisotropy_local = {0.f, 0.f};
             glm::vec3 v_ch_coeff_local[MAX_CH_FLOAT3];
             for (int i = 0; i < dim_ch; i++)
                 v_ch_coeff_local[i] = {0.f, 0.f, 0.f};
@@ -1255,7 +1221,7 @@ __global__ void rasterize_backward_kernel(
 
                 // update color
                 glm::vec3 v_color_1 = {vis * v_out.x, vis * v_out.y, vis * v_out.z};
-                const glm::vec3 opacity = opacity_batch[t];
+                const float opacity = opacity_batch[t];
                 const glm::vec3 color_0 = color_batch[t];
                 glm::vec3 color_1;
                 glm::vec2 v_uv_ch = {0.f, 0.f};
@@ -1334,9 +1300,8 @@ __global__ void rasterize_backward_kernel(
                 // grad
                 glm::vec2 v_uv;
                 get_alpha_vjp(
-                    uv, opacity.z, glm::vec2(opacity),
-                    v_alpha,
-                    v_uv, v_opacity_local, v_anisotropy_local
+                    uv, opacity,
+                    v_alpha, v_uv, v_opacity_local
                 );
                 v_uv += v_uv_ch;
                 glm::vec3 v_position_local_temp;
@@ -1353,11 +1318,10 @@ __global__ void rasterize_backward_kernel(
                 // absgrad (color only)
                 #if 0
                 float v_opacity_local_1;
-                glm::vec2 v_anisotropy_local_1;
                 get_alpha_vjp(
-                    uv, opacity.z, glm::vec2(opacity),
+                    uv, opacity,
                     v_alpha_color_only,
-                    v_uv, v_opacity_local_1, v_anisotropy_local_1
+                    v_uv, v_opacity_local_1
                 );
                 v_uv += v_uv_ch;
                 get_intersection_vjp(
@@ -1383,7 +1347,6 @@ __global__ void rasterize_backward_kernel(
                 warpSum3(v_ch_coeff_local[i], warp);
             warpSum(v_ch_coeff_abs_local, warp);
             warpSum(v_opacity_local, warp);
-            warpSum2(v_anisotropy_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t];
 
@@ -1417,9 +1380,6 @@ __global__ void rasterize_backward_kernel(
                 // atomicAdd(v_ch_coeffs_abs + g, v_ch_coeff_abs_local);
 
                 atomicAdd(v_opacities + g, v_opacity_local);
-                float* v_anisotropy_ptr = (float*)(v_anisotropies);
-                atomicAdd(v_anisotropy_ptr + 2*g + 0, v_anisotropy_local.x);
-                atomicAdd(v_anisotropy_ptr + 2*g + 1, v_anisotropy_local.y);
             }
         }
     }
@@ -1455,7 +1415,6 @@ __global__ void rasterize_simplified_forward_kernel(
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     int* __restrict__ final_index,
     float* __restrict__ out_alpha,
     float3* __restrict__ out_img,
@@ -1498,7 +1457,7 @@ __global__ void rasterize_simplified_forward_kernel(
     __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
     __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
     __shared__ glm::vec3 color_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ float opacity_batch[MAX_BLOCK_SIZE];
 
     // current visibility left to render
     // index of most recent gaussian to write to this thread's pixel
@@ -1530,14 +1489,13 @@ __global__ void rasterize_simplified_forward_kernel(
             id_batch[tr] = g_id;
             const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
-            const float2 aniso = anisotropies[g_id];
             const float3 color = colors[g_id];
             const float3 v0 = axes_u[g_id];
             const float3 v1 = axes_v[g_id];
             position_batch[tr] = {pos.x, pos.y, pos.z};
             axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
             color_batch[tr] = {color.x, color.y, color.z};
-            opacity_batch[tr] = {aniso.x, aniso.y, opac};
+            opacity_batch[tr] = opac;
         }
         // wait for other threads to collect the gaussians in batch
         block.sync();
@@ -1546,8 +1504,7 @@ __global__ void rasterize_simplified_forward_kernel(
         int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
             glm::vec3 pos = position_batch[t];
-            glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
-            float opac = opacity_batch[t].z;
+            float opac = opacity_batch[t];
             glm::mat2x3 axis_uv = axes_uv_batch[t];
 
             glm::vec3 poi;
@@ -1558,7 +1515,7 @@ __global__ void rasterize_simplified_forward_kernel(
             if (glm::length(uv) > visibility_kernel_radius())
                 continue;
             float alpha;
-            if (!get_alpha(uv, opac, aniso, alpha))
+            if (!get_alpha(uv, opac, alpha))
                 continue;
 
             const float next_T = T * (1.f - alpha);
@@ -1619,7 +1576,6 @@ __global__ void rasterize_simplified_backward_kernel(
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
-    const float2* __restrict__ anisotropies,
     const int* __restrict__ final_index,
     const float* __restrict__ output_alpha,
     const float2* __restrict__ output_depth,
@@ -1633,8 +1589,7 @@ __global__ void rasterize_simplified_backward_kernel(
     float3* __restrict__ v_axes_u,
     float3* __restrict__ v_axes_v,
     float3* __restrict__ v_colors,
-    float* __restrict__ v_opacities,
-    float2* __restrict__ v_anisotropies
+    float* __restrict__ v_opacities
 ) {
     auto block = cg::this_thread_block();
     int32_t tile_id =
@@ -1667,7 +1622,7 @@ __global__ void rasterize_simplified_backward_kernel(
     __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
     __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
     __shared__ glm::vec3 color_batch[MAX_BLOCK_SIZE];
-    __shared__ glm::vec3 opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ float opacity_batch[MAX_BLOCK_SIZE];
 
     // df/d_out for this pixel
     const float3 v_out = nan_to_num(v_output_img[pix_id]);
@@ -1720,14 +1675,13 @@ __global__ void rasterize_simplified_backward_kernel(
             id_batch[tr] = g_id;
             const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
-            const float2 aniso = anisotropies[g_id];
             const float3 color = colors[g_id];
             const float3 v0 = axes_u[g_id];
             const float3 v1 = axes_v[g_id];
             position_batch[tr] = {pos.x, pos.y, pos.z};
             axes_uv_batch[tr] = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
             color_batch[tr] = {color.x, color.y, color.z};
-            opacity_batch[tr] = {aniso.x, aniso.y, opac};
+            opacity_batch[tr] = opac;
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -1742,8 +1696,7 @@ __global__ void rasterize_simplified_backward_kernel(
             }
 
             glm::vec3 pos = position_batch[t];
-            glm::vec2 aniso = {opacity_batch[t].x, opacity_batch[t].y};
-            float opac = opacity_batch[t].z;
+            float opac = opacity_batch[t];
             glm::mat2x3 axis_uv = axes_uv_batch[t];
 
             glm::vec3 poi;
@@ -1755,7 +1708,7 @@ __global__ void rasterize_simplified_backward_kernel(
             }
             float alpha;
             if (valid){
-                if (!get_alpha(uv, opac, aniso, alpha))
+                if (!get_alpha(uv, opac, alpha))
                     valid = 0;
             }
             if(!warp.any(valid)){
@@ -1768,7 +1721,6 @@ __global__ void rasterize_simplified_backward_kernel(
             glm::vec3 v_axis_v_local = {0.f, 0.f, 0.f};
             glm::vec3 v_color_local = {0.f, 0.f, 0.f};
             float v_opacity_local = 0.f;
-            glm::vec2 v_anisotropy_local = {0.f, 0.f};
             //initialize everything to 0, only set if the lane is valid
             if(valid){
                 // compute the current T for this gaussian
@@ -1796,7 +1748,7 @@ __global__ void rasterize_simplified_backward_kernel(
                 glm::vec3 v_poi = {0.f, 0.f, v_depth_raw};
 
                 // update color
-                const glm::vec3 opacity = opacity_batch[t];
+                const float opacity = opacity_batch[t];
                 glm::vec3 color = color_batch[t];
                 v_color_local = {vis * v_out.x, vis * v_out.y, vis * v_out.z};
 
@@ -1836,9 +1788,8 @@ __global__ void rasterize_simplified_backward_kernel(
                 // grad
                 glm::vec2 v_uv;
                 get_alpha_vjp(
-                    uv, opacity.z, glm::vec2(opacity),
-                    v_alpha,
-                    v_uv, v_opacity_local, v_anisotropy_local
+                    uv, opacity,
+                    v_alpha, v_uv, v_opacity_local
                 );
                 glm::vec3 v_position_local_temp;
                 get_intersection_vjp(
@@ -1861,7 +1812,6 @@ __global__ void rasterize_simplified_backward_kernel(
             warpSum3(v_axis_v_local, warp);
             warpSum3(v_color_local, warp);
             warpSum(v_opacity_local, warp);
-            warpSum2(v_anisotropy_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t];
 
@@ -1888,9 +1838,6 @@ __global__ void rasterize_simplified_backward_kernel(
                 atomicAdd(v_color_ptr + 3*g + 2, v_color_local.z);
 
                 atomicAdd(v_opacities + g, v_opacity_local);
-                float* v_anisotropy_ptr = (float*)(v_anisotropies);
-                atomicAdd(v_anisotropy_ptr + 2*g + 0, v_anisotropy_local.x);
-                atomicAdd(v_anisotropy_ptr + 2*g + 1, v_anisotropy_local.y);
             }
         }
     }

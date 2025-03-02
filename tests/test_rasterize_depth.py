@@ -37,9 +37,7 @@ def test_rasterize_depth():
     quats /= torch.linalg.norm(quats, dim=-1, keepdim=True)
 
     opacities = (0.995 * torch.rand((num_points, 1), device=device)).requires_grad_(True)
-    anisotropies = torch.randn((num_points, 2), device=device, requires_grad=True)
     _opacities = opacities.detach().clone().requires_grad_(True)
-    _anisotropies = anisotropies.detach().clone().requires_grad_(True)
 
     H, W = 20, 30
     cx, cy = 0.45*W, 0.55*H
@@ -94,7 +92,6 @@ def test_rasterize_depth():
         axes_u,
         axes_v,
         opacities,
-        anisotropies,
         bounds,
         num_tiles_hit,
         intrins,
@@ -106,7 +103,6 @@ def test_rasterize_depth():
         _axes_u,
         _axes_v,
         _opacities,
-        _anisotropies,
         _bounds,
         _num_tiles_hit,
         intrins,
@@ -135,7 +131,6 @@ def test_rasterize_depth():
     check_close('v_axes_u', axes_u.grad, _axes_u.grad, **tol)
     check_close('v_axes_v', axes_v.grad, _axes_v.grad, **tol)
     check_close('v_opacities', opacities.grad, _opacities.grad, **tol)
-    check_close('v_anisotropies', anisotropies.grad, _anisotropies.grad, **tol)
 
     assert (positions.absgrad > 0).any()
     assert (positions.absgrad >= abs(positions.grad)[:,:2]).all()

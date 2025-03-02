@@ -24,7 +24,6 @@ def rasterize_gaussians_indices(
     axes_u: Float[Tensor, "*batch 3"],
     axes_v: Float[Tensor, "*batch 3"],
     opacities: Float[Tensor, "*batch 1"],
-    anisotropies: Float[Tensor, "*batch 2"],
     bounds: Int[Tensor, "*batch 4"],
     num_tiles_hit: Int[Tensor, "*batch 1"],
     intrins: Tuple[float, float, float, float],
@@ -56,7 +55,7 @@ def rasterize_gaussians_indices(
         *size_params, intrins,
         gaussian_ids_sorted, tile_bins,
         positions, axes_u, axes_v,
-        opacities, anisotropies,
+        opacities,
     )
     timer.mark("rasterize")  # ?us
 

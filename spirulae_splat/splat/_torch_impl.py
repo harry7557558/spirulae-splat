@@ -534,11 +534,11 @@ def visibility_kernel(r2):
     # return (1.0-r2) * (1.0-r2) * (r2 < 1.0)
     return (1.0-r2) * (r2 < 1.0)
 
-def get_alpha(uv, opac, aniso) -> Tuple[Tensor, bool]:
+def get_alpha(uv, opac) -> Tuple[Tensor, bool]:
     r2 = torch.norm(uv)**2
     vis = visibility_kernel(r2)
-    t = torch.dot(uv, aniso)
-    t = torch.clamp(t, torch.zeros_like(t), torch.ones_like(t))
+    t = 0.0 # torch.dot(uv, aniso)
+    # t = torch.clamp(t, torch.zeros_like(t), torch.ones_like(t))
     m = t*t*(2.0*t-3.0)+1.0
     alpha = opac * vis * m
     return alpha, r2 >= 0.0 and alpha >= 1e-3
@@ -559,7 +559,6 @@ def rasterize_gaussians_simple(
     axes_v: Float[Tensor, "*batch 3"],
     colors: Float[Tensor, "*batch channels"],
     opacities: Float[Tensor, "*batch 1"],
-    anisotropies: Float[Tensor, "*batch 2"],
     bounds: Int[Tensor, "*batch 4"],
     num_tiles_hit: Int[Tensor, "*batch 1"],
     intrins: Tuple[float, float, float, float],
@@ -623,13 +622,12 @@ def rasterize_gaussians_simple(
                 pos = positions[gid]
                 color  = colors[gid]
                 opac = opacities[gid]
-                aniso = anisotropies[gid]
                 axis_uv = (axes_u[gid], axes_v[gid])
 
                 poi, uv, valid = get_intersection(pos, axis_uv, pos_2d)
                 if torch.linalg.norm(uv) > 1.0:
                     continue
-                alpha, valid  = get_alpha(uv, opac, aniso)
+                alpha, valid  = get_alpha(uv, opac)
                 if  not valid:
                     continue
                 
@@ -654,7 +652,6 @@ def rasterize_gaussians_depth(
     axes_u: Float[Tensor, "*batch 3"],
     axes_v: Float[Tensor, "*batch 3"],
     opacities: Float[Tensor, "*batch 1"],
-    anisotropies: Float[Tensor, "*batch 2"],
     bounds: Int[Tensor, "*batch 4"],
     num_tiles_hit: Int[Tensor, "*batch 1"],
     intrins: Tuple[float, float, float, float],
@@ -716,13 +713,12 @@ def rasterize_gaussians_depth(
                 gid = gaussian_ids_sorted[idx]
                 pos = positions[gid]
                 opac = opacities[gid]
-                aniso = anisotropies[gid]
                 axis_uv = (axes_u[gid], axes_v[gid])
 
                 poi, uv, valid = get_intersection(pos, axis_uv, pos_2d)
                 if torch.linalg.norm(uv) > 1.0:
                     continue
-                alpha, valid  = get_alpha(uv, opac, aniso)
+                alpha, valid  = get_alpha(uv, opac)
                 if  not valid:
                     continue
                 
@@ -776,7 +772,6 @@ def rasterize_gaussians(
     ch_degree_phi_to_use: int,
     ch_coeffs: Float[Tensor, "*batch dim_ch 3"],
     opacities: Float[Tensor, "*batch 1"],
-    anisotropies: Float[Tensor, "*batch 2"],
     depth_ref_im: Float[Tensor, "h w 1"],
     background: Optional[Float[Tensor, "channels"]],
     depth_reg_pairwise_factor: float,
@@ -852,13 +847,12 @@ def rasterize_gaussians(
                 gid = gaussian_ids_sorted[idx]
                 pos = positions[gid]
                 opac = opacities[gid]
-                aniso = anisotropies[gid]
                 axis_uv = (axes_u[gid], axes_v[gid])
 
                 poi, uv, valid = get_intersection(pos, axis_uv, pos_2d)
                 if torch.linalg.norm(uv) > 1.0:
                     continue
-                alpha, valid  = get_alpha(uv, opac, aniso)
+                alpha, valid  = get_alpha(uv, opac)
                 if  not valid:
                     continue
 
@@ -919,7 +913,6 @@ def rasterize_gaussians_simplified(
     axes_v: Float[Tensor, "*batch 3"],
     colors: Float[Tensor, "*batch channels"],
     opacities: Float[Tensor, "*batch 1"],
-    anisotropies: Float[Tensor, "*batch 2"],
     bounds: Int[Tensor, "*batch 4"],
     num_tiles_hit: Int[Tensor, "*batch 1"],
     intrins: Tuple[float, float, float, float],
@@ -988,13 +981,12 @@ def rasterize_gaussians_simplified(
                 gid = gaussian_ids_sorted[idx]
                 pos = positions[gid]
                 opac = opacities[gid]
-                aniso = anisotropies[gid]
                 axis_uv = (axes_u[gid], axes_v[gid])
 
                 poi, uv, valid = get_intersection(pos, axis_uv, pos_2d)
                 if torch.linalg.norm(uv) > 1.0:
                     continue
-                alpha, valid  = get_alpha(uv, opac, aniso)
+                alpha, valid  = get_alpha(uv, opac)
                 if  not valid:
                     continue
 

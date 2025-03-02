@@ -313,14 +313,8 @@ function createWorker(self) {
             basedata[iTex + 5] = packHalf2x16(quat[0], quat[1]);
             basedata[iTex + 6] = packHalf2x16(quat[2], quat[3]);
 
-            // anisotropy - 2 floats, info1 w, info2 x
-            if (header.config.use_anisotropy !== false && base.anisotropies) {
-                basedataF[iTex + 7] = Math.sinh(base.anisotropies[2*i+0]);
-                basedataF[iTex + 8] = Math.sinh(base.anisotropies[2*i+1]);
-            }
-            else {
-                basedataF[iTex + 7] = basedataF[iTex + 8] = 0.0;
-            }
+            // anisotropy - 2 floats, info1 w, info2 x, DEPRECATED
+            basedataF[iTex + 7] = basedataF[iTex + 8] = 0.0;
 
             // rgba - 4 halfs, info2 yz
             let m = header.config.sh_degree == 0 ? 0.28209479177387814 : 1.0;
@@ -1089,8 +1083,6 @@ async function main() {
         if (vertexCount > 0 && renderNeeded) {
             document.getElementById("spinner").style.display = "none";
 
-            let use_anisotropy = header.config.use_anisotropy !== false;
-            document.getElementById("checkbox-aniso").disabled = !use_anisotropy;
             let sh_degree = header.config.sh_degree;
             document.getElementById("checkbox-sh").disabled = (sh_degree == 0);
             let ch_degree_r = header.config.ch_degree_r;
@@ -1128,8 +1120,6 @@ async function main() {
             gl.useProgram(splatProgram);
             gl.uniformMatrix4fv(gl.getUniformLocation(splatProgram, "view"),
                 false, actualViewMatrix);
-            gl.uniform1i(gl.getUniformLocation(splatProgram, "u_use_aniso"),
-                document.getElementById("checkbox-aniso").checked);
             gl.uniform2i(gl.getUniformLocation(splatProgram, "u_sh_config"),
                 document.getElementById("checkbox-sh").checked,
                 header.config.sh_degree);
@@ -1213,6 +1203,14 @@ async function main() {
         worker.postMessage(unpackModel(
             header, ssplatData.buffer.slice(headerLength, bytesRead)));
         renderNeeded = true;
+
+        // check deprecated features
+        let comps = header.primitives.base.componentViews;
+        for (var i in comps) {
+            if (comps[i].key == "anisotropies") {
+                document.getElementById("deprecation-warning").style.display = null;
+            }
+        }
     }
 }
 

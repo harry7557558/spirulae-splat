@@ -218,3 +218,13 @@ input[type="checkbox"]:disabled:hover {
 input[type="checkbox"]:disabled::before {
     background-color: rgba(255, 255, 255, 0.8);
 }
+
+
+#deprecation-warning {
+    font-weight: 800;
+    color: yellow;
+    /* background-color: red; */
+    border: 4px solid red;
+    padding: 0.1em 0.3em;
+    font-size: 1.5em;
+}
