@@ -152,7 +152,7 @@ class SplatModel:
         timer.mark("project")
 
         if sort_per_pixel:
-            sorted_indices = rasterize_gaussians_indices(
+            num_intersects, sorted_indices = rasterize_gaussians_indices(
                 positions, axes_u, axes_v,
                 opacities,
                 bounds, num_tiles_hit, camera.intrins,
@@ -163,7 +163,7 @@ class SplatModel:
             rgb, alpha = rasterize_gaussians_simple_sorted(
                 positions, axes_u, axes_v,
                 rgbs, opacities,
-                sorted_indices,
+                num_intersects, sorted_indices,
                 camera.intrins, camera.h, camera.w, BLOCK_WIDTH,
             )
             timer.mark("rasterize")

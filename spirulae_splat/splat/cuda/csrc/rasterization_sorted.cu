@@ -132,16 +132,18 @@ __global__ void rasterize_indices_kernel(
         }
     }
 
-    num_intersects[pix_id] = intersect_count;
+    if (inside) {
+        num_intersects[pix_id] = intersect_count;
 
-    // mark this so no need for num_intersects in rendering
-    if (intersect_count < MAX_SORTED_SPLATS)
-        sorted_indices[intersect_count] = SORTED_INDEX_INF;
+        // mark this so no need for num_intersects in rendering
+        if (intersect_count < MAX_SORTED_SPLATS)
+            sorted_indices[intersect_count] = SORTED_INDEX_INF;
 
-    #if 0
-        while (intersect_count < MAX_SORTED_SPLATS)
-            sorted_depths[intersect_count++] = 1e6f;
-    #endif
+        #if 0
+            while (intersect_count < MAX_SORTED_SPLATS)
+                sorted_depths[intersect_count++] = 1e6f;
+        #endif
+    }
 
 }
 
@@ -360,14 +362,14 @@ __global__ void rasterize_simple_sorted_forward_kernel(
     float3* __restrict__ out_img,
     float* __restrict__ out_alpha
 ) {
-    // each thread draws one pixel, but also timeshares caching gaussians in a
-    // shared tile
-
     auto block = cg::this_thread_block();
     unsigned i =
         block.group_index().y * block.group_dim().y + block.thread_index().y;
     unsigned j =
         block.group_index().x * block.group_dim().x + block.thread_index().x;
+
+    bool inside = (i < img_size.y && j < img_size.x);
+    if (!inside) return;
 
     const float fx = intrins.x;
     const float fy = intrins.y;
@@ -376,11 +378,6 @@ __global__ void rasterize_simple_sorted_forward_kernel(
     glm::vec2 pos_screen = { (float)j + 0.5f, (float)i + 0.5f };
     glm::vec2 pos_2d = { (pos_screen.x-cx)/fx, (pos_screen.y-cy)/fy };
     int32_t pix_id = i * img_size.x + j;
-
-    // return if out of bounds
-    // keep not rasterizing threads around for reading data
-    bool inside = (i < img_size.y && j < img_size.x);
-    bool done = !inside;
 
     // current visibility left to render
     float T = 1.f;
@@ -421,10 +418,7 @@ __global__ void rasterize_simple_sorted_forward_kernel(
         pix_out.y = pix_out.y + color.y * vis;
         pix_out.z = pix_out.z + color.z * vis;
         T = next_T;
-        if (T <= 1e-3f) {
-            done = true;
-            break;
-        }
+        if (T <= 1e-3f) break;
     }
 
     if (inside) {
@@ -436,6 +430,159 @@ __global__ void rasterize_simple_sorted_forward_kernel(
         out_alpha[pix_id] = 1.0f - T;
     }
 }
+
+
+__global__ void rasterize_simple_sorted_backward_kernel(
+    const dim3 img_size,
+    const float4 intrins,
+    const int* __restrict__ num_intersects,
+    const int32_t* __restrict__ sorted_indices_,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float3* __restrict__ colors,
+    const float* __restrict__ opacities,
+    const float3& __restrict__ background,
+    const float* __restrict__ output_alpha,
+    const float3* __restrict__ v_output,
+    const float* __restrict__ v_output_alpha,
+    float3* __restrict__ v_positions,
+    float2* __restrict__ v_positions_xy_abs,
+    float3* __restrict__ v_axes_u,
+    float3* __restrict__ v_axes_v,
+    float3* __restrict__ v_colors,
+    float* __restrict__ v_opacities
+) {
+    auto block = cg::this_thread_block();
+    unsigned i =
+        block.group_index().y * block.group_dim().y + block.thread_index().y;
+    unsigned j =
+        block.group_index().x * block.group_dim().x + block.thread_index().x;
+
+    bool inside = (i < img_size.y && j < img_size.x);
+    if (!inside) return;
+    
+    const float fx = intrins.x;
+    const float fy = intrins.y;
+    const float cx = intrins.z;
+    const float cy = intrins.w;
+    glm::vec2 pos_screen = { (float)j + 0.5f, (float)i + 0.5f };
+    glm::vec2 pos_2d = { (pos_screen.x-cx)/fx, (pos_screen.y-cy)/fy };
+    int32_t pix_id = i * img_size.x + j;
+    
+    int n = num_intersects[pix_id];
+    if (n == 0) return;
+
+    // this is the T AFTER the last gaussian in this pixel
+    float T_final = 1.0f - output_alpha[pix_id];
+    float T = T_final;
+    // the contribution from gaussians behind the current one
+    float3 buffer = {0.f, 0.f, 0.f};
+    // index of last gaussian to contribute to this pixel
+
+    // df/d_out for this pixel
+    const float3 v_out = nan_to_num(v_output[pix_id]);
+    const float v_out_alpha = nan_to_num(v_output_alpha[pix_id]);
+
+    // rasterize
+    const int32_t* sorted_indices = &sorted_indices_[pix_id*MAX_SORTED_SPLATS];
+    for (int cur_idx = n-1; cur_idx >= 0; cur_idx--) {
+        int g_id = sorted_indices[cur_idx];
+
+        const glm::vec3 pos = *(glm::vec3*)&positions[g_id];
+        const float opac = opacities[g_id];
+        const glm::vec3 color = *(glm::vec3*)&colors[g_id];
+        const float3 v0 = axes_u[g_id];
+        const float3 v1 = axes_v[g_id];
+        glm::mat2x3 axis_uv = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
+
+        glm::vec3 poi;
+        glm::vec2 uv;
+        // if (!get_intersection(pos, axis_uv, pos_2d, poi, uv));
+        //     continue;
+        get_intersection(pos, axis_uv, pos_2d, poi, uv);
+        if (glm::length(uv) > visibility_kernel_radius())
+            continue;
+        float alpha;
+        if (!get_alpha(uv, opac, alpha))
+            continue;
+
+        glm::vec3 v_position_local = {0.f, 0.f, 0.f};
+        glm::vec2 v_position_xy_abs_local = {0.f, 0.f};
+        glm::vec3 v_axis_u_local = {0.f, 0.f, 0.f};
+        glm::vec3 v_axis_v_local = {0.f, 0.f, 0.f};
+        glm::vec3 v_color_local = {0.f, 0.f, 0.f};
+        float v_opacity_local = 0.f;
+
+        // compute the current T for this gaussian
+        const float ra = 1.f / (1.f - alpha);
+        const float next_T = T * ra;
+        const float vis = alpha * next_T;
+
+        // update v_rgb for this gaussian
+        float v_alpha = 0.f;
+        v_color_local = {vis * v_out.x, vis * v_out.y, vis * v_out.z};
+
+        // contribution from this pixel
+        v_alpha += (color.x * T - buffer.x) * ra * v_out.x;
+        v_alpha += (color.y * T - buffer.y) * ra * v_out.y;
+        v_alpha += (color.z * T - buffer.z) * ra * v_out.z;
+
+        v_alpha += T_final * ra * v_out_alpha;
+        // contribution from background pixel
+        v_alpha += -T_final * ra * background.x * v_out.x;
+        v_alpha += -T_final * ra * background.y * v_out.y;
+        v_alpha += -T_final * ra * background.z * v_out.z;
+        // update the running sum
+        buffer.x += color.x * vis;
+        buffer.y += color.y * vis;
+        buffer.z += color.z * vis;
+
+        glm::vec2 v_uv;
+        get_alpha_vjp(
+            uv, opac,
+            v_alpha, v_uv, v_opacity_local
+        );
+        glm::mat2x3 v_axis_uv = glm::mat2x3(0.0f);
+        get_intersection_vjp(
+            pos, axis_uv, pos_2d,
+            glm::vec3(0), v_uv,
+            v_position_local, v_axis_uv
+        );
+        v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local));
+        // v_position_xy_abs_local /= pos.z;
+        v_axis_u_local = v_axis_uv[0];
+        v_axis_v_local = v_axis_uv[1];
+
+        T = next_T;
+
+        float* v_position_ptr = (float*)(v_positions);
+        atomicAdd(v_position_ptr + 3*g_id + 0, v_position_local.x);
+        atomicAdd(v_position_ptr + 3*g_id + 1, v_position_local.y);
+        atomicAdd(v_position_ptr + 3*g_id + 2, v_position_local.z);
+        float* v_positions_xy_abs_ptr = (float*)(v_positions_xy_abs);
+        atomicAdd(v_positions_xy_abs_ptr + 2*g_id + 0, v_position_xy_abs_local.x);
+        atomicAdd(v_positions_xy_abs_ptr + 2*g_id + 1, v_position_xy_abs_local.y);
+
+        float* v_axis_u_ptr = (float*)(v_axes_u);
+        atomicAdd(v_axis_u_ptr + 3*g_id + 0, v_axis_u_local.x);
+        atomicAdd(v_axis_u_ptr + 3*g_id + 1, v_axis_u_local.y);
+        atomicAdd(v_axis_u_ptr + 3*g_id + 2, v_axis_u_local.z);
+        float* v_axis_v_ptr = (float*)(v_axes_v);
+        atomicAdd(v_axis_v_ptr + 3*g_id + 0, v_axis_v_local.x);
+        atomicAdd(v_axis_v_ptr + 3*g_id + 1, v_axis_v_local.y);
+        atomicAdd(v_axis_v_ptr + 3*g_id + 2, v_axis_v_local.z);
+
+        float* v_color_ptr = (float*)(v_colors);
+        atomicAdd(v_color_ptr + 3*g_id + 0, v_color_local.x);
+        atomicAdd(v_color_ptr + 3*g_id + 1, v_color_local.y);
+        atomicAdd(v_color_ptr + 3*g_id + 2, v_color_local.z);
+        
+        atomicAdd(v_opacities + g_id, v_opacity_local);
+    }
+
+}
+
 
 
 

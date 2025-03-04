@@ -1342,6 +1342,100 @@ std::tuple<
 }
 
 
+std::tuple<
+    torch::Tensor, // v_positions
+    torch::Tensor, // v_positions_xy_abs
+    torch::Tensor, // v_axes_u
+    torch::Tensor, // v_axes_v
+    torch::Tensor, // v_colors
+    torch::Tensor // v_opacities
+> rasterize_simple_sorted_backward_tensor(
+    const unsigned img_height,
+    const unsigned img_width,
+    const unsigned block_width,
+    const std::tuple<float, float, float, float> intrins,
+    const torch::Tensor &num_intersects,
+    const torch::Tensor &sorted_indices,
+    const torch::Tensor &positions,
+    const torch::Tensor &axes_u,
+    const torch::Tensor &axes_v,
+    const torch::Tensor &colors,
+    const torch::Tensor &opacities,
+    const torch::Tensor &background,
+    const torch::Tensor &output_alpha,
+    const torch::Tensor &v_output,
+    const torch::Tensor &v_output_alpha
+) {
+    DEVICE_GUARD(positions);
+    CHECK_INPUT(num_intersects);
+    CHECK_INPUT(sorted_indices);
+    CHECK_INPUT(positions);
+    CHECK_INPUT(axes_u);
+    CHECK_INPUT(axes_v);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(output_alpha);
+    CHECK_INPUT(v_output);
+    CHECK_INPUT(v_output_alpha);
+
+    if (positions.ndimension() != 2 || positions.size(1) != 3) {
+        AT_ERROR("positions must have dimensions (num_points, 3)");
+    }
+
+    if (colors.ndimension() != 2 || colors.size(1) != 3) {
+        AT_ERROR("colors must have 2 dimensions");
+    }
+
+    const int num_points = positions.size(0);
+    const dim3 tile_bounds = {
+        (img_width + block_width - 1) / block_width,
+        (img_height + block_width - 1) / block_width,
+        1
+    };
+    const dim3 block(block_width, block_width, 1);
+    const dim3 img_size = {img_width, img_height, 1};
+    const int channels = colors.size(1);
+
+    auto options = positions.options();
+    torch::Tensor v_positions = torch::zeros({num_points, 3}, options);
+    torch::Tensor v_positions_xy_abs = torch::zeros({num_points, 2}, options);
+    torch::Tensor v_axes_u = torch::zeros({num_points, 3}, options);
+    torch::Tensor v_axes_v = torch::zeros({num_points, 3}, options);
+    torch::Tensor v_colors = torch::zeros({num_points, channels}, options);
+    torch::Tensor v_opacities = torch::zeros({num_points, 1}, options);
+
+    rasterize_simple_sorted_backward_kernel<<<tile_bounds, block>>>(
+        img_size,
+        tuple2float4(intrins),
+        num_intersects.contiguous().data_ptr<int>(),
+        sorted_indices.contiguous().data_ptr<int32_t>(),
+        (float3 *)positions.contiguous().data_ptr<float>(),
+        (float3 *)axes_u.contiguous().data_ptr<float>(),
+        (float3 *)axes_v.contiguous().data_ptr<float>(),
+        (float3 *)colors.contiguous().data_ptr<float>(),
+        opacities.contiguous().data_ptr<float>(),
+        *(float3 *)background.contiguous().data_ptr<float>(),
+        output_alpha.contiguous().data_ptr<float>(),
+        (float3 *)v_output.contiguous().data_ptr<float>(),
+        v_output_alpha.contiguous().data_ptr<float>(),
+        // outputs
+        (float3 *)v_positions.contiguous().data_ptr<float>(),
+        (float2 *)v_positions_xy_abs.contiguous().data_ptr<float>(),
+        (float3 *)v_axes_u.contiguous().data_ptr<float>(),
+        (float3 *)v_axes_v.contiguous().data_ptr<float>(),
+        (float3 *)v_colors.contiguous().data_ptr<float>(),
+        v_opacities.contiguous().data_ptr<float>()
+    );
+
+    return std::make_tuple(
+        v_positions, v_positions_xy_abs,
+        v_axes_u, v_axes_v,
+        v_colors, v_opacities
+    );
+}
+
+
+
 
 
 torch::Tensor render_background_sh_forward_tensor(

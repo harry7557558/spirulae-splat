@@ -159,15 +159,20 @@ inline __device__ bool get_intersection(
         axis_uv[0], axis_uv[1],
         glm::vec3(pos_2d, 1.0f)
     );
+    #if 0
     if (glm::determinant(A) == 0.0f) {
         uv = {-radius, -radius};
         return false;
     }
+    #endif
     glm::vec3 uvt = -glm::inverse(A) * position;
     uv = {uvt.x, uvt.y};
-    if (glm::length(uv) > radius)
-        return false;
+    float r2 = glm::dot(uv, uv);
     float t = -uvt.z;
+    if (r2 > radius*radius || isnan(r2) || !isfinite(t)) {
+        uv = {-radius, -radius};
+        return false;
+    }
     poi = glm::vec3(pos_2d*t, t);
     return true;
 }

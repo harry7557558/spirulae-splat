@@ -57,3 +57,26 @@ __global__ void rasterize_simple_sorted_forward_kernel(
     float3* __restrict__ out_img,
     float* __restrict__ out_alpha
 );
+
+
+__global__ void rasterize_simple_sorted_backward_kernel(
+    const dim3 img_size,
+    const float4 intrins,
+    const int* __restrict__ num_intersects,
+    const int32_t* __restrict__ sorted_indices_,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float3* __restrict__ colors,
+    const float* __restrict__ opacities,
+    const float3& __restrict__ background,
+    const float* __restrict__ output_alpha,
+    const float3* __restrict__ v_output,
+    const float* __restrict__ v_output_alpha,
+    float3* __restrict__ v_positions,
+    float2* __restrict__ v_positions_xy_abs,
+    float3* __restrict__ v_axes_u,
+    float3* __restrict__ v_axes_v,
+    float3* __restrict__ v_colors,
+    float* __restrict__ v_opacities
+);

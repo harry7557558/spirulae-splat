@@ -1060,3 +1060,66 @@ def render_background_sh(
     bg_flat = torch.relu(bg_flat+0.5)
 
     return bg_flat.view(h, w, 3)
+
+
+
+def rasterize_gaussians_simple_sorted(
+    positions: Float[Tensor, "*batch 3"],
+    axes_u: Float[Tensor, "*batch 3"],
+    axes_v: Float[Tensor, "*batch 3"],
+    colors: Float[Tensor, "*batch channels"],
+    opacities: Float[Tensor, "*batch 1"],
+    num_intersects: Int[Tensor, "h w"],
+    sorted_indices: Int[Tensor, "h w MAX_SORTED_INDICES"],
+    intrins: Tuple[float, float, float, float],
+    img_height: int,
+    img_width: int,
+    background: Float[Tensor, "channels"] = None
+):
+    device = positions.device
+    float32_param = { 'dtype': torch.float32, 'device': device }
+    int32_param = { 'dtype': torch.int32, 'device': device }
+    if background is None:
+        background = torch.zeros(colors.shape[-1], **float32_param)
+
+    img_size = (img_width, img_height, 1)
+
+    out_img = torch.zeros((img_size[1], img_size[0], 3), **float32_param)
+    out_alpha = torch.zeros((img_size[1], img_size[0], 1), **float32_param)
+
+    fx, fy, cx, cy = intrins
+
+    for i in range(img_size[1]):
+        for j in range(img_size[0]):
+            pos_screen = [j+0.5, i+0.5]
+            pos_2d = [(pos_screen[0]-cx)/fx, (pos_screen[1]-cy)/fy]
+            pos_2d = torch.tensor(pos_2d, **float32_param)
+
+            T = 1.0
+            pix_out = torch.zeros(3, **float32_param)
+
+            for gid in sorted_indices[i, j, :num_intersects[i, j]]:
+                pos = positions[gid]
+                color  = colors[gid]
+                opac = opacities[gid]
+                axis_uv = (axes_u[gid], axes_v[gid])
+
+                poi, uv, valid = get_intersection(pos, axis_uv, pos_2d)
+                if torch.linalg.norm(uv) > 1.0:
+                    continue
+                alpha, valid  = get_alpha(uv, opac)
+                if  not valid:
+                    continue
+                
+                next_T = T * (1. - alpha)
+
+                vis = alpha * T
+                pix_out += vis * color
+                T = next_T
+                if next_T <= 1e-3:
+                    break
+
+            out_img[i, j] = pix_out + T * background
+            out_alpha[i, j] = 1.0 - T
+
+    return out_img, out_alpha

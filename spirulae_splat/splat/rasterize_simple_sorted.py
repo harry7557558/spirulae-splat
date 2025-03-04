@@ -17,6 +17,7 @@ def rasterize_gaussians_simple_sorted(
     axes_v: Float[Tensor, "*batch 3"],
     colors: Float[Tensor, "*batch channels"],
     opacities: Float[Tensor, "*batch 1"],
+    num_intersects: Int[Tensor, "h w"],
     sorted_indices: Int[Tensor, "h w MAX_SORTED_INDICES"],
     intrins: Tuple[float, float, float, float],
     img_height: int,
@@ -49,6 +50,7 @@ def rasterize_gaussians_simple_sorted(
         axes_v.contiguous(),
         colors.contiguous(),
         opacities.contiguous(),
+        num_intersects.contiguous(),
         sorted_indices.contiguous(),
         intrins,
         img_height, img_width,
@@ -69,6 +71,7 @@ class _RasterizeGaussiansSimpleSorted(Function):
         axes_v: Float[Tensor, "*batch 3"],
         colors: Float[Tensor, "*batch channels"],
         opacities: Float[Tensor, "*batch 1"],
+        num_intersects: Int[Tensor, "h w"],
         sorted_indices: Int[Tensor, "h w MAX_SORTED_INDICES"],
         intrins: Tuple[float, float, float, float],
         img_height: int,
@@ -98,7 +101,7 @@ class _RasterizeGaussiansSimpleSorted(Function):
         ctx.block_width = block_width
         ctx.intrins = intrins
         ctx.save_for_backward(
-            sorted_indices,
+            num_intersects, sorted_indices,
             positions, axes_u, axes_v,
             colors, opacities, background,
             out_alpha,
@@ -107,28 +110,26 @@ class _RasterizeGaussiansSimpleSorted(Function):
         return out_img, out_alpha
 
     @staticmethod
-    def backward(ctx, v_out_img, v_out_alpha, v_idx=None):
-        raise NotImplementedError()
+    def backward(ctx, v_out_img, v_out_alpha):
 
         img_height = ctx.img_height
         img_width = ctx.img_width
-        num_intersects = ctx.num_intersects
         intrins = ctx.intrins
 
         (
-            sorted_indices,
+            num_intersects, sorted_indices,
             positions, axes_u, axes_v,
             colors, opacities, background,
-            final_idx, out_alpha,
+            out_alpha,
         ) = ctx.saved_tensors
 
         backward_return = _C.rasterize_simple_sorted_backward(
             img_height, img_width, ctx.block_width,
             intrins,
-            gaussian_ids_sorted, tile_bins,
+            num_intersects, sorted_indices,
             positions, axes_u, axes_v,
             colors, opacities, background,
-            final_idx, out_alpha,
+            out_alpha,
             v_out_img, v_out_alpha,
         )
 
