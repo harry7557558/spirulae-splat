@@ -18,6 +18,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("sort_per_pixel", &sort_per_pixel_tensor);
     m.def("rasterize_simple_sorted_forward", &rasterize_simple_sorted_forward_tensor);
     m.def("rasterize_simple_sorted_backward", &rasterize_simple_sorted_backward_tensor);
+    m.def("rasterize_depth_sorted_forward", &rasterize_depth_sorted_forward_tensor);
+    m.def("rasterize_depth_sorted_backward", &rasterize_depth_sorted_backward_tensor);
 
     // background
     m.def("render_background_sh_forward", &render_background_sh_forward_tensor);

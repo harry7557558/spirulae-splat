@@ -658,7 +658,7 @@ def rasterize_gaussians_depth(
     img_height: int,
     img_width: int,
     block_width: int,
-    depth_mode: int,
+    depth_mode: str,
 ):
     device = positions.device
     float32_param = { 'dtype': torch.float32, 'device': device }
@@ -726,10 +726,10 @@ def rasterize_gaussians_depth(
 
                 next_depth = depth_map(poi[2])
 
-                if depth_mode == 0:  # mean
+                if depth_mode == "mean":
                     output_depth = output_depth + alpha*T * next_depth
 
-                elif depth_mode == 1:  # median
+                elif depth_mode == "median":
 
                     median_th = 0.5
                     if next_T < median_th:
@@ -748,12 +748,12 @@ def rasterize_gaussians_depth(
                 cur_idx = idx
 
             final_idx[i, j] = cur_idx
-            if depth_mode == 0:  # mean
+            if depth_mode == "mean":
                 out_depth[i, j] = output_depth if T == 1.0 else output_depth / (1.0-T)
                 # out_depth[i, j] = output_depth
                 out_visibility[i, j, 0] = T
                 out_visibility[i, j, 1] = 1.0-T
-            elif depth_mode == 1:  # median
+            elif depth_mode == "median":
                 out_depth[i, j] = output_depth
                 out_visibility[i, j, 0] = T
                 out_visibility[i, j, 1] = interp
@@ -1123,3 +1123,84 @@ def rasterize_gaussians_simple_sorted(
             out_alpha[i, j] = 1.0 - T
 
     return out_img, out_alpha
+
+
+def rasterize_gaussians_depth_sorted(
+    positions: Float[Tensor, "*batch 3"],
+    axes_u: Float[Tensor, "*batch 3"],
+    axes_v: Float[Tensor, "*batch 3"],
+    opacities: Float[Tensor, "*batch 1"],
+    num_intersects: Int[Tensor, "h w"],
+    sorted_indices: Int[Tensor, "h w MAX_SORTED_INDICES"],
+    intrins: Tuple[float, float, float, float],
+    img_height: int,
+    img_width: int,
+    depth_mode: str,
+):
+    device = positions.device
+    float32_param = { 'dtype': torch.float32, 'device': device }
+    int32_param = { 'dtype': torch.int32, 'device': device }
+
+    img_size = (img_width, img_height, 1)
+
+    out_depth = torch.zeros((img_size[1], img_size[0], 1), **float32_param)
+    out_visibility = torch.zeros((img_size[1], img_size[0], 2), **float32_param)
+
+    fx, fy, cx, cy = intrins
+
+    for i in range(img_size[1]):
+        for j in range(img_size[0]):
+            pos_screen = [j+0.5, i+0.5]
+            pos_2d = [(pos_screen[0]-cx)/fx, (pos_screen[1]-cy)/fy]
+            pos_2d = torch.tensor(pos_2d, **float32_param)
+
+            T = 1.0
+            interp = 1.0
+            output_depth = 0.0
+
+            for gid in sorted_indices[i, j, :num_intersects[i, j]]:
+                pos = positions[gid]
+                opac = opacities[gid]
+                axis_uv = (axes_u[gid], axes_v[gid])
+
+                poi, uv, valid = get_intersection(pos, axis_uv, pos_2d)
+                if torch.linalg.norm(uv) > 1.0:
+                    continue
+                alpha, valid  = get_alpha(uv, opac)
+                if  not valid:
+                    continue
+                
+                next_T = T * (1. - alpha)
+
+                next_depth = depth_map(poi[2])
+
+                if depth_mode == "mean":
+                    output_depth = output_depth + alpha*T * next_depth
+
+                elif depth_mode == "median":
+
+                    median_th = 0.5
+                    if next_T < median_th:
+                        if T < 0.99999:
+                            interp = (1.0-alpha)/alpha * (T-median_th)/median_th
+                            output_depth = output_depth + (next_depth-output_depth)*interp
+                        else:
+                            output_depth = next_depth
+                        T = next_T
+                        break
+
+                    output_depth = next_depth
+
+                T = next_T
+
+            if depth_mode == "mean":
+                out_depth[i, j] = output_depth if T == 1.0 else output_depth / (1.0-T)
+                # out_depth[i, j] = output_depth
+                out_visibility[i, j, 0] = T
+                out_visibility[i, j, 1] = 1.0-T
+            elif depth_mode == "median":
+                out_depth[i, j] = output_depth
+                out_visibility[i, j, 0] = T
+                out_visibility[i, j, 1] = interp
+
+    return out_depth, out_visibility

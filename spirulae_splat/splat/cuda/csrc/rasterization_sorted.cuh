@@ -80,3 +80,39 @@ __global__ void rasterize_simple_sorted_backward_kernel(
     float3* __restrict__ v_colors,
     float* __restrict__ v_opacities
 );
+
+
+template <DepthMode DEPTH_MODE>
+__global__ void rasterize_depth_sorted_forward_kernel(
+    const dim3 img_size,
+    const float4 intrins,
+    const int32_t* __restrict__ sorted_indices_,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    int* __restrict__ final_index,
+    float* __restrict__ out_depth,
+    float2* __restrict__ out_visibility
+);
+
+
+template <DepthMode DEPTH_MODE>
+__global__ void rasterize_depth_sorted_backward_kernel(
+    const dim3 img_size,
+    const float4 intrins,
+    const int* __restrict__ final_index,
+    const int32_t* __restrict__ sorted_indices_,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    const float* __restrict__ out_depth,
+    const float2* __restrict__ out_visibility,
+    const float* __restrict__ v_out_depth,
+    float3* __restrict__ v_positions,
+    float2* __restrict__ v_positions_xy_abs,
+    float3* __restrict__ v_axes_u,
+    float3* __restrict__ v_axes_v,
+    float* __restrict__ v_opacities
+);

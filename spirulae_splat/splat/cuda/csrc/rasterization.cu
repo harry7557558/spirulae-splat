@@ -360,8 +360,8 @@ __global__ void rasterize_simple_backward_kernel(
 
 
 
+template <DepthMode DEPTH_MODE>
 __global__ void rasterize_depth_forward_kernel(
-    const int depth_mode,
     const dim3 tile_bounds,
     const dim3 img_size,
     const float4 intrins,
@@ -468,7 +468,7 @@ __global__ void rasterize_depth_forward_kernel(
             const float next_T = T * (1.f - alpha);
 
             // mean depth
-            if (depth_mode == DEPTH_MODE_MEAN) {
+            if (DEPTH_MODE == DepthMode::Mean) {
 
                 // const float depth_raw = pos.z;
                 const float depth_raw = poi.z;
@@ -476,10 +476,10 @@ __global__ void rasterize_depth_forward_kernel(
                 float vis = alpha * T;
                 output_depth += vis * depth;
 
-            }  // depth_mode
+            }  // DEPTH_MODE
 
             // median depth
-            else if (depth_mode == DEPTH_MODE_MEDIAN) {
+            else if (DEPTH_MODE == DepthMode::Median) {
 
                 const float next_depth_raw = poi.z;
                 const float next_depth = depth_map(next_depth_raw);
@@ -500,7 +500,7 @@ __global__ void rasterize_depth_forward_kernel(
                 }
                 output_depth = next_depth;
 
-            }  // depth_mode
+            }  // DEPTH_MODE
 
             T = next_T;
             cur_idx = batch_start + t;
@@ -509,13 +509,13 @@ __global__ void rasterize_depth_forward_kernel(
 
     if (inside) {
         final_index[pix_id] = cur_idx;
-        if (depth_mode == DEPTH_MODE_MEAN) {
+        if (DEPTH_MODE == DepthMode::Mean) {
             float depth = T == 1.0f ? output_depth : output_depth / (1.0f-T);
             // out_depth[pix_id] = depth_inv_map(depth);
             out_depth[pix_id] = depth;
             out_visibility[pix_id] = {T, 1.0f-T};
         }
-        else if (depth_mode == DEPTH_MODE_MEDIAN) {
+        else if (DEPTH_MODE == DepthMode::Median) {
             // out_depth[pix_id] = depth_inv_map(output_depth);
             out_depth[pix_id] = output_depth;
             out_visibility[pix_id] = {T, interp};
@@ -524,8 +524,8 @@ __global__ void rasterize_depth_forward_kernel(
 }
 
 
+template <DepthMode DEPTH_MODE>
 __global__ void rasterize_depth_backward_kernel(
-    const int depth_mode,
     const dim3 tile_bounds,
     const dim3 img_size,
     const float4 intrins,
@@ -594,7 +594,7 @@ __global__ void rasterize_depth_backward_kernel(
     float v_depth_next = 0.f;
     float v_alpha = 0.f;
     float v_interp = 0.f;
-    if (depth_mode == DEPTH_MODE_MEAN) {
+    if (DEPTH_MODE == DepthMode::Mean) {
         if (T != 1.0f) {
             float alpha = 1.0f-T;
             v_out_alpha = -output_depth / fmax(alpha, 1e-4f) * v_output_depth;
@@ -678,17 +678,17 @@ __global__ void rasterize_depth_backward_kernel(
                 float depth = depth_map(depth_raw);
 
                 // mean depth
-                if (depth_mode == DEPTH_MODE_MEAN) {
+                if (DEPTH_MODE == DepthMode::Mean) {
 
                     v_depth = vis * v_output_depth;
                     v_alpha = (depth * T - depth_buffer) * ra * v_output_depth;
                     v_alpha += T_final * ra * v_out_alpha;
                     depth_buffer += depth * vis;
 
-                }  // depth_mode
+                }  // DEPTH_MODE
 
                 // median depth
-                else if (depth_mode == DEPTH_MODE_MEDIAN) {
+                else if (DEPTH_MODE == DepthMode::Median) {
 
                     // depth gradient
                     if (T == T_final) {
@@ -713,7 +713,7 @@ __global__ void rasterize_depth_backward_kernel(
                         v_T = v_T * (1.0f-alpha);
                     }
 
-                }  // depth_mode
+                }  // DEPTH_MODE
 
                 T = next_T;
 
@@ -2247,3 +2247,82 @@ __global__ void render_background_sh_backward_kernel(
     atomicAdd(&v_rotation[7], v_p.z * yi);
     atomicAdd(&v_rotation[8], v_p.z * zi);
 }
+
+
+
+
+template __global__ void rasterize_depth_forward_kernel<DepthMode::Mean>(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    int* __restrict__ final_index,
+    float* __restrict__ out_depth,
+    float2* __restrict__ out_visibility
+);
+
+
+template __global__ void rasterize_depth_forward_kernel<DepthMode::Median>(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    int* __restrict__ final_index,
+    float* __restrict__ out_depth,
+    float2* __restrict__ out_visibility
+);
+
+
+template __global__ void rasterize_depth_backward_kernel<DepthMode::Mean>(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    const int* __restrict__ final_index,
+    const float* __restrict__ out_depth,
+    const float2* __restrict__ out_visibility,
+    const float* __restrict__ v_out_depth,
+    float3* __restrict__ v_positions,
+    float2* __restrict__ v_positions_xy_abs,
+    float3* __restrict__ v_axes_u,
+    float3* __restrict__ v_axes_v,
+    float* __restrict__ v_opacities
+);
+
+
+template __global__ void rasterize_depth_backward_kernel<DepthMode::Median>(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    const int* __restrict__ final_index,
+    const float* __restrict__ out_depth,
+    const float2* __restrict__ out_visibility,
+    const float* __restrict__ v_out_depth,
+    float3* __restrict__ v_positions,
+    float2* __restrict__ v_positions_xy_abs,
+    float3* __restrict__ v_axes_u,
+    float3* __restrict__ v_axes_v,
+    float* __restrict__ v_opacities
+);
+

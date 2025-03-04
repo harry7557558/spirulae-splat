@@ -53,8 +53,8 @@ __global__ void rasterize_simple_backward_kernel(
 );
 
 
+template <DepthMode DEPTH_MODE>
 __global__ void rasterize_depth_forward_kernel(
-    const int depth_mode,
     const dim3 tile_bounds,
     const dim3 img_size,
     const float4 intrins,
@@ -70,8 +70,8 @@ __global__ void rasterize_depth_forward_kernel(
 );
 
 
+template <DepthMode DEPTH_MODE>
 __global__ void rasterize_depth_backward_kernel(
-    const int depth_mode,
     const dim3 tile_bounds,
     const dim3 img_size,
     const float4 intrins,

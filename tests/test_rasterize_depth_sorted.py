@@ -4,8 +4,12 @@ import torch
 from torch.func import vjp  # type: ignore
 
 from spirulae_splat.splat import _torch_impl
-from spirulae_splat.splat.project_gaussians import project_gaussians
-import spirulae_splat.splat.rasterize_depth as rasterize_depth
+from spirulae_splat.splat import rasterize_depth_sorted
+from spirulae_splat.splat import (
+    project_gaussians,
+    rasterize_gaussians_indices,
+    rasterize_gaussians_depth_sorted
+)
 import spirulae_splat.splat.cuda as _C
 
 torch.manual_seed(41)
@@ -28,7 +32,7 @@ def check_close(name, a, b, atol=1e-5, rtol=1e-5):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_rasterize_depth(mode):
+def test_rasterize_depth_sorted(mode):
     num_points = 40
 
     means3d = torch.randn((num_points, 3), device=device)
@@ -85,42 +89,37 @@ def test_rasterize_depth(mode):
         _num_tiles_hit,
     ) = decode_params(params)
 
-    depth_im, meta_im, idx = rasterize_depth.rasterize_gaussians_depth(
-        positions,
-        axes_u,
-        axes_v,
-        opacities,
-        bounds,
-        num_tiles_hit,
-        intrins,
-        H, W, BLOCK_SIZE, mode
+    num_intersects, sorted_indices = rasterize_gaussians_indices(
+        positions, axes_u, axes_v,
+        opacities, bounds, num_tiles_hit,
+        intrins, H, W, BLOCK_SIZE
     )
 
-    _depth_im, _meta_im, _idx = _torch_impl.rasterize_gaussians_depth(
-        _positions,
-        _axes_u,
-        _axes_v,
-        _opacities,
-        _bounds,
-        _num_tiles_hit,
-        intrins,
-        H, W, BLOCK_SIZE, mode
+    depth_im, meta_im = rasterize_gaussians_depth_sorted(
+        positions, axes_u, axes_v, opacities,
+        sorted_indices,
+        intrins, H, W, BLOCK_SIZE, mode
+    )
+
+    _depth_im, _meta_im = _torch_impl.rasterize_gaussians_depth_sorted(
+        _positions, _axes_u, _axes_v, _opacities,
+        num_intersects, sorted_indices,
+        intrins, H, W, mode
     )
 
     print("test forward")
     tol = { 'atol': 1e-4, 'rtol': 1e-3 }
     check_close('depth_im', depth_im, _depth_im, **tol)
     check_close('meta_im', meta_im, _meta_im, **tol)
-    check_close('final_idx', idx, _idx)
     print()
 
-    def fun(depth, meta, idx):
+    def fun(depth, meta):
         depth_r = torch.log(depth+1.0).squeeze()
         # depth_r = depth_r * (meta[...,0] >= 0.5)
         # depth_r = depth_r * (meta[...,1] == 1.0)
         return 1e2 * (depth_r).mean()
-    fun(depth_im, meta_im, idx).backward()
-    fun(_depth_im, _meta_im, _idx).backward()
+    fun(depth_im, meta_im).backward()
+    fun(_depth_im, _meta_im).backward()
 
     print("test backward")
     # tol = { 'atol': 1e-5, 'rtol': 1e-4 }
@@ -135,10 +134,10 @@ def test_rasterize_depth(mode):
 
 
 if __name__ == "__main__":
-    rasterize_depth.DEBUG = True
+    rasterize_depth_sorted.DEBUG = True
 
     print("==== Mean ====")
-    test_rasterize_depth("mean")
+    test_rasterize_depth_sorted("mean")
 
     print("\n==== Median ====")
-    test_rasterize_depth("median")
+    test_rasterize_depth_sorted("median")

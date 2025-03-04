@@ -17,7 +17,7 @@ timerf = PerfTimer("rasterize_depth_f", ema_tau=100)
 timerb = PerfTimer("rasterize_depth_b", ema_tau=100)
 
 
-RETURN_IDX = False
+DEBUG = False
 
 
 def rasterize_gaussians_depth(
@@ -41,13 +41,8 @@ def rasterize_gaussians_depth(
     if positions.ndimension() != 2 or positions.size(1) != 3:
         raise ValueError("positions must have dimensions (N, 3)")
 
-    if isinstance(depth_mode, str):
-        if depth_mode.startswith("mean"):
-            depth_mode = 0
-        elif depth_mode.startswith("median"):
-            depth_mode = 1
-    if depth_mode not in [0, 1]:
-        raise ValueError("Depth mode must start with `mean` or `median`.")
+    if depth_mode not in ["mean", "median"]:
+        raise ValueError("Depth mode must be `mean` or `median`.")
 
     return _RasterizeGaussiansDepth.apply(
         positions.contiguous(),
@@ -79,7 +74,7 @@ class _RasterizeGaussiansDepth(Function):
         img_height: int,
         img_width: int,
         block_width: int,
-        depth_mode: int,
+        depth_mode: str,
     ) -> Tuple[Tensor]:
         timerf.start()
         device = positions.device
@@ -122,7 +117,7 @@ class _RasterizeGaussiansDepth(Function):
         )
         timerf.end("save")  # ~10us -> 450us-950us
 
-        if RETURN_IDX:
+        if DEBUG:
             return out_depth, out_visibility, final_idx
         return out_depth
 
@@ -163,7 +158,10 @@ class _RasterizeGaussiansDepth(Function):
             )
             timerb.mark("rasterize")  # 600us-2100us
 
-            clean = lambda x: torch.nan_to_num(torch.clip(x, -1., 1.))
+            if DEBUG:
+                clean = lambda x: torch.nan_to_num(x)
+            else:
+                clean = lambda x: torch.nan_to_num(torch.clip(x, -1., 1.))
             v_positions = clean(backward_return[0])
             v_positions_xy_abs = backward_return[1]
             v_axes_u = clean(backward_return[2])

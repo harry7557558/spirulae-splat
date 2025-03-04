@@ -1,3 +1,5 @@
+#pragma once
+
 #define MAX_BLOCK_SIZE ( 16 * 16 )
 #define N_THREADS 256
 
@@ -12,10 +14,6 @@
 
 // max number of cylindrical harmonics coefficients
 #define MAX_CH_FLOAT3 (21)
-
-// mean vs median depth
-#define DEPTH_MODE_MEAN 0
-#define DEPTH_MODE_MEDIAN 1
 
 // threshold for median depth
 // a number less than 0.5 pushes splats away from camera
@@ -45,3 +43,10 @@
             exit(EXIT_FAILURE);                                                \
         }                                                                      \
     } while (0)
+
+
+// mean vs median depth
+enum class DepthMode {
+	Mean,
+    Median,
+};

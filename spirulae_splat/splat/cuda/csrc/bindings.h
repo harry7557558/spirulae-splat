@@ -185,7 +185,7 @@ std::tuple<
     torch::Tensor,  // out_img
     torch::Tensor  // out_visibility
 > rasterize_depth_forward_tensor(
-    const int depth_mode,
+    const std::string depth_mode,
     const unsigned img_height,
     const unsigned img_width,
     const unsigned block_width,
@@ -206,7 +206,7 @@ std::tuple<
     torch::Tensor, // v_axes_v
     torch::Tensor // v_opacities
 > rasterize_depth_backward_tensor(
-    const int depth_mode,
+    const std::string depth_mode,
     const unsigned img_height,
     const unsigned img_width,
     const unsigned block_width,
@@ -418,6 +418,48 @@ std::tuple<
     const torch::Tensor &output_alpha,
     const torch::Tensor &v_output,
     const torch::Tensor &v_output_alpha
+);
+
+
+std::tuple<
+    torch::Tensor,  // final_idx
+    torch::Tensor,  // out_img
+    torch::Tensor  // out_visibility
+> rasterize_depth_sorted_forward_tensor(
+    const std::string depth_mode,
+    const unsigned img_height,
+    const unsigned img_width,
+    const unsigned block_width,
+    const std::tuple<float, float, float, float> intrins,
+    const torch::Tensor &sorted_indices,
+    const torch::Tensor &positions,
+    const torch::Tensor &axes_u,
+    const torch::Tensor &axes_v,
+    const torch::Tensor &opacities
+);
+
+
+std::tuple<
+    torch::Tensor, // v_positions
+    torch::Tensor, // v_positions_xy_abs
+    torch::Tensor, // v_axes_u
+    torch::Tensor, // v_axes_v
+    torch::Tensor // v_opacities
+> rasterize_depth_sorted_backward_tensor(
+    const std::string depth_mode,
+    const unsigned img_height,
+    const unsigned img_width,
+    const unsigned block_width,
+    const std::tuple<float, float, float, float> intrins,
+    const torch::Tensor &final_idx,
+    const torch::Tensor &sorted_indices,
+    const torch::Tensor &positions,
+    const torch::Tensor &axes_u,
+    const torch::Tensor &axes_v,
+    const torch::Tensor &opacities,
+    const torch::Tensor &output_depth,
+    const torch::Tensor &output_visibility,
+    const torch::Tensor &v_output_depth
 );
 
 

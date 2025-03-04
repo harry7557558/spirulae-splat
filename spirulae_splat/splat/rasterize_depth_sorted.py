@@ -1,0 +1,134 @@
+"""Python bindings for custom Cuda functions"""
+
+from typing import Optional
+
+import torch
+from jaxtyping import Float, Int
+from typing import Tuple
+from torch import Tensor
+from torch.autograd import Function
+
+import spirulae_splat.splat.cuda as _C
+
+
+DEBUG = False
+
+
+def rasterize_gaussians_depth_sorted(
+    positions: Float[Tensor, "*batch 3"],
+    axes_u: Float[Tensor, "*batch 3"],
+    axes_v: Float[Tensor, "*batch 3"],
+    opacities: Float[Tensor, "*batch 1"],
+    sorted_indices: Int[Tensor, "h w MAX_SORTED_INDICES"],
+    intrins: Tuple[float, float, float, float],
+    img_height: int,
+    img_width: int,
+    block_width: int,
+    depth_mode: str,
+) -> Tuple[Tensor, Tensor]:
+    if positions.ndimension() != 2 or positions.size(1) != 3:
+        raise ValueError("positions must have dimensions (N, 3)")
+
+    if depth_mode not in ["mean", "median"]:
+        raise ValueError("Depth mode be `mean` or `median`.")
+
+    return _RasterizeGaussiansDepthSorted.apply(
+        positions.contiguous(),
+        axes_u.contiguous(),
+        axes_v.contiguous(),
+        opacities.contiguous(),
+        sorted_indices.contiguous(),
+        intrins,
+        img_height, img_width,
+        block_width,
+        depth_mode,
+    )
+
+
+
+class _RasterizeGaussiansDepthSorted(Function):
+    """Rasterizes 2D gaussians"""
+
+    @staticmethod
+    def forward(
+        ctx,
+        positions: Float[Tensor, "*batch 3"],
+        axes_u: Float[Tensor, "*batch 3"],
+        axes_v: Float[Tensor, "*batch 3"],
+        opacities: Float[Tensor, "*batch 1"],
+        sorted_indices: Int[Tensor, "h w MAX_SORTED_INDICES"],
+        intrins: Tuple[float, float, float, float],
+        img_height: int,
+        img_width: int,
+        block_width: int,
+        depth_mode: str,
+    ) -> Tuple[Tensor, Tensor]:
+
+        final_idx, out_depth, out_visibility = _C.rasterize_depth_sorted_forward(
+            depth_mode,
+            img_height, img_width, block_width,
+            intrins,
+            sorted_indices,
+            positions, axes_u, axes_v,
+            opacities,
+        )
+
+        ctx.img_width = img_width
+        ctx.img_height = img_height
+        ctx.block_width = block_width
+        ctx.depth_mode = depth_mode
+        ctx.intrins = intrins
+        ctx.save_for_backward(
+            final_idx, sorted_indices,
+            positions, axes_u, axes_v, opacities,
+            out_depth, out_visibility,
+        )
+
+        return out_depth, out_visibility
+
+    @staticmethod
+    def backward(ctx, v_out_depth, v_out_visibility=None):
+
+        img_height = ctx.img_height
+        img_width = ctx.img_width
+        intrins = ctx.intrins
+
+        (
+            final_idx, sorted_indices,
+            positions, axes_u, axes_v, opacities,
+            out_depth, out_visibility,
+        ) = ctx.saved_tensors
+
+        backward_return = _C.rasterize_depth_sorted_backward(
+            ctx.depth_mode,
+            img_height, img_width, ctx.block_width,
+            intrins,
+            final_idx, sorted_indices,
+            positions, axes_u, axes_v, opacities,
+            out_depth, out_visibility,
+            v_out_depth,
+        )
+
+        if DEBUG:
+            clean = lambda x: torch.nan_to_num(x)
+        else:
+            clean = lambda x: torch.nan_to_num(torch.clip(x, -1., 1.))
+        v_positions = clean(backward_return[0])
+        v_positions_xy_abs = backward_return[1]
+        v_axes_u = clean(backward_return[2])
+        v_axes_v = clean(backward_return[3])
+        v_opacities = clean(backward_return[4])
+
+        # Abs grad for gaussian splitting criterion. See
+        # - "AbsGS: Recovering Fine Details for 3D Gaussian Splatting"
+        # - "EfficientGS: Streamlining Gaussian Splatting for Large-Scale High-Resolution Scene Representation"
+        for key, value in [('grad', v_positions), ('absgrad', v_positions_xy_abs)][1:]:
+            if not hasattr(positions, key) or getattr(positions, key) is None:
+                setattr(positions, key, value)
+            else:
+                setattr(positions, key, getattr(positions, key)+value)
+
+        return (
+            v_positions, v_axes_u, v_axes_v, v_opacities,
+            None, None, None, None, None, None, None
+        )
