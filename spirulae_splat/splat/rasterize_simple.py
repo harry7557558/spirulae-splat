@@ -77,7 +77,8 @@ def rasterize_preprocess(
         positions: Float[Tensor, "*batch 3"],
         bounds: Int[Tensor, "*batch 4"],
         num_tiles_hit: Int[Tensor, "*batch 1"],
-        tile_bounds: Tuple[int, int, int],
+        img_height: int,
+        img_width: int,
         block_width: int,
     ):
 
@@ -100,7 +101,7 @@ def rasterize_preprocess(
         positions,
         bounds,
         cum_tiles_hit,
-        tile_bounds,
+        img_height, img_width,
         block_width,
     )
 
@@ -126,21 +127,13 @@ class _RasterizeGaussiansSimple(Function):
         block_width: int,
         background: Float[Tensor, "channels"],
     ) -> Tuple[Tensor, Tensor]:
-        num_points = positions.size(0)
-        tile_bounds = (
-            (img_width + block_width - 1) // block_width,
-            (img_height + block_width - 1) // block_width,
-            1,
-        )
-        block = (block_width, block_width, 1)
-        img_size = (img_width, img_height, 1)
         device = positions.device
 
         (
             num_intersects, gaussian_ids_sorted, tile_bins
         ) = rasterize_preprocess(
             positions, bounds, num_tiles_hit,
-            tile_bounds, block_width
+            img_height, img_width, block_width
         )
 
         if num_intersects < 1:
@@ -154,7 +147,7 @@ class _RasterizeGaussiansSimple(Function):
             out_alpha = torch.ones(img_height, img_width, device=device)
         else:
             final_idx, out_img, out_alpha = _C.rasterize_simple_forward(
-                tile_bounds, block, img_size,
+                img_height, img_width, block_width,
                 intrins,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,

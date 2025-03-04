@@ -94,14 +94,18 @@ std::tuple<
     const torch::Tensor &positions,
     const torch::Tensor &bounds,
     const torch::Tensor &cum_tiles_hit,
-    const std::tuple<int, int, int> tile_bounds,
+    const unsigned img_height,
+    const unsigned img_width,
     const unsigned block_width
 );
 
 
 torch::Tensor get_tile_bin_edges_tensor(
-    int num_intersects, const torch::Tensor &isect_ids_sorted, 
-    const std::tuple<int, int, int> tile_bounds
+    int num_intersects,
+    const torch::Tensor &isect_ids_sorted, 
+    const unsigned img_height,
+    const unsigned img_width,
+    const unsigned block_width
 );
 
 
@@ -134,9 +138,9 @@ std::tuple<
     torch::Tensor,  // out_img
     torch::Tensor  // out_alpha
 > rasterize_simple_forward_tensor(
-    const std::tuple<int, int, int> tile_bounds,
-    const std::tuple<int, int, int> block,
-    const std::tuple<int, int, int> img_size,
+    const unsigned img_height,
+    const unsigned img_width,
+    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const torch::Tensor &gaussian_ids_sorted,
     const torch::Tensor &tile_bins,
@@ -182,9 +186,9 @@ std::tuple<
     torch::Tensor  // out_visibility
 > rasterize_depth_forward_tensor(
     const int depth_mode,
-    const std::tuple<int, int, int> tile_bounds,
-    const std::tuple<int, int, int> block,
-    const std::tuple<int, int, int> img_size,
+    const unsigned img_height,
+    const unsigned img_width,
+    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const torch::Tensor &gaussian_ids_sorted,
     const torch::Tensor &tile_bins,
@@ -228,9 +232,9 @@ std::tuple<
     torch::Tensor,  // out_normal
     torch::Tensor  // out_reg_depth
 > rasterize_forward_tensor(
-    const std::tuple<int, int, int> tile_bounds,
-    const std::tuple<int, int, int> block,
-    const std::tuple<int, int, int> img_size,
+    const unsigned img_height,
+    const unsigned img_width,
+    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const float depth_reg_pairwise_factor,
     const torch::Tensor &gaussian_ids_sorted,
@@ -300,9 +304,9 @@ std::tuple<
     torch::Tensor,  // out_normal
     torch::Tensor  // out_depth_reg
 > rasterize_simplified_forward_tensor(
-    const std::tuple<int, int, int> tile_bounds,
-    const std::tuple<int, int, int> block,
-    const std::tuple<int, int, int> img_size,
+    const unsigned img_height,
+    const unsigned img_width,
+    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const torch::Tensor &gaussian_ids_sorted,
     const torch::Tensor &tile_bins,
@@ -349,9 +353,9 @@ std::tuple<
     torch::Tensor,  // sorted_indices
     torch::Tensor  // sorted_depths
 > rasterize_indices_tensor(
-    const std::tuple<int, int, int> tile_bounds,
-    const std::tuple<int, int, int> block,
-    const std::tuple<int, int, int> img_size,
+    const unsigned img_height,
+    const unsigned img_width,
+    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const torch::Tensor &gaussian_ids_sorted,
     const torch::Tensor &tile_bins,
@@ -364,9 +368,9 @@ std::tuple<
 
 void sort_per_pixel_tensor(
     const std::string &method,
-    const std::tuple<int, int, int> tile_bounds,
-    const std::tuple<int, int, int> block,
-    const std::tuple<int, int, int> img_size,
+    const unsigned img_height,
+    const unsigned img_width,
+    const unsigned block_width,
     torch::Tensor &num_intersects,  // [h, w]
     torch::Tensor &indices,  // [h, w, MAX_SORTED_SPLATS]
     torch::Tensor &depths  // [h, w, MAX_SORTED_SPLATS]
@@ -377,9 +381,9 @@ std::tuple<
     torch::Tensor,  // out_img
     torch::Tensor  // out_alpha
 > rasterize_simple_sorted_forward_tensor(
-    const std::tuple<int, int, int> tile_bounds,
-    const std::tuple<int, int, int> block,
-    const std::tuple<int, int, int> img_size,
+    const unsigned img_height,
+    const unsigned img_width,
+    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const torch::Tensor &sorted_indices,
     const torch::Tensor &positions,

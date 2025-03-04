@@ -82,21 +82,13 @@ class _RasterizeGaussiansDepth(Function):
         depth_mode: int,
     ) -> Tuple[Tensor]:
         timerf.start()
-        num_points = positions.size(0)
-        tile_bounds = (
-            (img_width + block_width - 1) // block_width,
-            (img_height + block_width - 1) // block_width,
-            1,
-        )
-        block = (block_width, block_width, 1)
-        img_size = (img_width, img_height, 1)
         device = positions.device
 
         (
             num_intersects, gaussian_ids_sorted, tile_bins
         ) = rasterize_preprocess(
             positions, bounds, num_tiles_hit,
-            tile_bounds, block_width
+            img_height, img_width, block_width
         )
         timerf.mark("sort")  # 200us-350us
 
@@ -108,7 +100,7 @@ class _RasterizeGaussiansDepth(Function):
         else:
             final_idx, out_depth, out_visibility = _C.rasterize_depth_forward(
                 depth_mode,
-                tile_bounds, block, img_size,
+                img_height, img_width, block_width,
                 intrins,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,

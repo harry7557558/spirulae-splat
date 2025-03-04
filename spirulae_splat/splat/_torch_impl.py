@@ -595,7 +595,7 @@ def rasterize_gaussians_simple(
         num_points, num_intersects,
         positions,
         bounds, cum_tiles_hit,
-        tile_bounds, block_width,
+        img_height, img_width, block_width,
     )
 
     final_idx = torch.zeros((img_size[1], img_size[0]), **int32_param)
@@ -686,7 +686,7 @@ def rasterize_gaussians_depth(
         num_points, num_intersects,
         positions,
         bounds, cum_tiles_hit,
-        tile_bounds, block_width,
+        img_height, img_width, block_width,
     )
 
     final_idx = torch.zeros((img_size[1], img_size[0]), **int32_param)
@@ -810,7 +810,7 @@ def rasterize_gaussians(
         num_points, num_intersects,
         positions,
         bounds, cum_tiles_hit,
-        tile_bounds, block_width,
+        img_height, img_width, block_width,
     )
 
     final_idx = torch.zeros((img_size[1], img_size[0]), **int32_param)
@@ -946,7 +946,7 @@ def rasterize_gaussians_simplified(
         num_points, num_intersects,
         positions,
         bounds, cum_tiles_hit,
-        tile_bounds, block_width,
+        img_height, img_width, block_width,
     )
 
     final_idx = torch.zeros((img_size[1], img_size[0]), **int32_param)

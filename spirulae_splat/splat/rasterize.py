@@ -125,13 +125,6 @@ class _RasterizeGaussians(Function):
     ) -> Tensor:
         timerf.start()
         num_points = positions.size(0)
-        tile_bounds = (
-            (img_width + block_width - 1) // block_width,
-            (img_height + block_width - 1) // block_width,
-            1,
-        )
-        block = (block_width, block_width, 1)
-        img_size = (img_width, img_height, 1)
         device = positions.device
 
         # TODO: reuse this from previous render
@@ -139,7 +132,7 @@ class _RasterizeGaussians(Function):
             num_intersects, gaussian_ids_sorted, tile_bins
         ) = rasterize_preprocess(
             positions, bounds, num_tiles_hit,
-            tile_bounds, block_width
+            img_height, img_width, block_width,
         )
         timerf.mark("sort")  # 200us-350us
 
@@ -163,7 +156,7 @@ class _RasterizeGaussians(Function):
                 out_img, out_depth, out_normal,
                 out_reg_depth,
             ) = _C.rasterize_forward(
-                tile_bounds, block, img_size,
+                img_height, img_width, block_width,
                 intrins,
                 depth_reg_pairwise_factor,
                 gaussian_ids_sorted, tile_bins,

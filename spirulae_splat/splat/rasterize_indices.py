@@ -32,13 +32,6 @@ def rasterize_gaussians_indices(
     block_width: int,
 ) -> Tuple[Tensor, Tensor]:
     assert block_width > 1 and block_width <= 16, "block_width must be between 2 and 16"
-    tile_bounds = (
-        (img_width + block_width - 1) // block_width,
-        (img_height + block_width - 1) // block_width,
-        1,
-    )
-    block = (block_width, block_width, 1)
-    img_size = (img_width, img_height, 1)
 
     timer.start()
 
@@ -46,11 +39,11 @@ def rasterize_gaussians_indices(
         num_intersects, gaussian_ids_sorted, tile_bins
     ) = rasterize_preprocess(
         positions, bounds, num_tiles_hit,
-        tile_bounds, block_width
+        img_height, img_width, block_width,
     )
     timer.mark("sort")  # ?us
 
-    size_params = (tile_bounds, block, img_size)
+    size_params = (img_height, img_width, block_width)
     num_intersects, indices, depths = _C.rasterize_indices(
         *size_params, intrins,
         gaussian_ids_sorted, tile_bins,
