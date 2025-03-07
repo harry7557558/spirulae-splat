@@ -1,4 +1,5 @@
 #include "helpers.cuh"
+#include "ch.cuh"
 #include "rasterization_sorted.cuh"
 #include <algorithm>
 
@@ -417,7 +418,6 @@ __global__ void rasterize_simple_sorted_forward_kernel(
         pix_out.y = pix_out.y + color.y * vis;
         pix_out.z = pix_out.z + color.z * vis;
         T = next_T;
-        if (T <= 1e-3f) break;
     }
 
     if (inside) {
@@ -882,6 +882,823 @@ __global__ void rasterize_depth_sorted_backward_kernel(
         atomicAdd(v_opacities + g_id, v_opacity_local_);
     }
 }
+
+
+
+
+__global__ void rasterize_sorted_forward_kernel(
+    const dim3 img_size,
+    const float4 intrins,
+    const float depth_reg_pairwise_factor,
+    const int32_t* __restrict__ sorted_indices_,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float3* __restrict__ colors,
+    const unsigned ch_degree_r,
+    const unsigned ch_degree_r_to_use,
+    const unsigned ch_degree_phi,
+    const unsigned ch_degree_phi_to_use,
+    const float3* __restrict__ ch_coeffs,
+    const float* __restrict__ opacities,
+    // const float3& __restrict__ background,
+    const float* __restrict__ depth_ref_im,
+    float* __restrict__ out_alpha,
+    float3* __restrict__ out_img,
+    float2* __restrict__ out_depth,
+    float3* __restrict__ out_normal,
+    float* __restrict__ out_reg_depth
+) {
+    auto block = cg::this_thread_block();
+    unsigned i =
+        block.group_index().y * block.group_dim().y + block.thread_index().y;
+    unsigned j =
+        block.group_index().x * block.group_dim().x + block.thread_index().x;
+
+    bool inside = (i < img_size.y && j < img_size.x);
+    if (!inside) return;
+
+    const float fx = intrins.x;
+    const float fy = intrins.y;
+    const float cx = intrins.z;
+    const float cy = intrins.w;
+    glm::vec2 pos_screen = { (float)j + 0.5f, (float)i + 0.5f };
+    glm::vec2 pos_2d = { (pos_screen.x-cx)/fx, (pos_screen.y-cy)/fy };
+    int32_t pix_id = i * img_size.x + j;
+
+    // list of indices
+    const int32_t* sorted_indices = &sorted_indices_[pix_id*MAX_SORTED_SPLATS];
+
+    const int dim_ch = ch_degree_r * (2*ch_degree_phi+1);
+
+    float T = 1.f;  // current/total visibility
+    float3 normal_out = {0.f, 0.f, 0.f};  // sum of normals
+    float3 pix_out = {0.f, 0.f, 0.f};  // output radiance
+    float vis_sum = 0.f;  // output alpha
+    float depth_sum = 0.f;  // output depth
+    float depth_squared_sum = 0.f;  // for L2 depth regularizer
+    const float depth_ref = inside ? depth_ref_im[pix_id] : 0.f;
+    float reg_depth_p = 0.f, reg_depth_i = 0.f;  // output depth regularizer
+    float reg_normal = 0.f;  // output normal regularizer
+
+    // rasterize
+    for (int cur_idx = 0; cur_idx < MAX_SORTED_SPLATS; cur_idx++) {
+        int g_id = sorted_indices[cur_idx];
+        if (g_id == SORTED_INDEX_INF)
+            break;
+
+        const glm::vec3 pos = *(glm::vec3*)&positions[g_id];
+        const float opac = opacities[g_id];
+        const glm::vec3 color_0 = *(glm::vec3*)&colors[g_id];
+        const float3 v0 = axes_u[g_id];
+        const float3 v1 = axes_v[g_id];
+        glm::mat2x3 axis_uv = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
+
+        glm::vec3 poi;
+        glm::vec2 uv;
+        // if (!get_intersection(pos, axis_uv, pos_2d, poi, uv));
+        //     continue;
+        get_intersection(pos, axis_uv, pos_2d, poi, uv);
+        if (glm::length(uv) > visibility_kernel_radius())
+            continue;
+        float alpha;
+        if (!get_alpha(uv, opac, alpha))
+            continue;
+
+        const float next_T = T * (1.f - alpha);
+
+        glm::vec3 color;
+        if (dim_ch > 0) {
+            const glm::vec3* coeffs = (glm::vec3*)&ch_coeffs[dim_ch*g_id];
+            glm::vec3 ch_color = ch_coeffs_to_color(
+                ch_degree_r, ch_degree_r_to_use,
+                ch_degree_phi, ch_degree_phi_to_use,
+                coeffs, {uv.x, uv.y}
+            );
+            color = color_0 / (1.0f+glm::exp(-ch_color));
+        }
+        else color = color_0;
+
+        const float vis = alpha * T;
+        #if DEPTH_REG_L == 01 && false
+        const float depth_raw = pos.z;
+        #else
+        const float depth_raw = poi.z;
+        #endif
+        const float depth = depth_map(depth_raw);
+
+        pix_out.x = pix_out.x + color.x * vis;
+        pix_out.y = pix_out.y + color.y * vis;
+        pix_out.z = pix_out.z + color.z * vis;
+
+        // depth regularization
+        {
+            float pairwise_l1 = vis*depth * vis_sum - vis * depth_sum;  // requires pos.z for depth
+            float pairwise_l2 = vis * (vis_sum*depth*depth + depth_squared_sum - 2.0f*depth*depth_sum);
+            float intersect_l1 = vis * abs(depth - depth_ref);
+            float intersect_l2 = vis * (depth-depth_ref) * (depth-depth_ref);
+            reg_depth_p += pairwise_l2;
+            reg_depth_i += intersect_l1;
+        }
+        vis_sum += vis;
+        depth_sum += vis*depth;
+        depth_squared_sum += vis*depth*depth;
+
+        // normal regularization
+        glm::vec3 normal = get_normal_from_axisuv(axis_uv, poi);
+        normal_out.x = normal_out.x + normal.x * vis;
+        normal_out.y = normal_out.y + normal.y * vis;
+        normal_out.z = normal_out.z + normal.z * vis;
+
+        T = next_T;
+    }
+
+    if (inside) {
+        out_alpha[pix_id] = 1.0f - T;
+        float3 final_color;
+        // final_color.x = pix_out.x + T * background.x;
+        // final_color.y = pix_out.y + T * background.y;
+        // final_color.z = pix_out.z + T * background.z;
+        final_color.x = pix_out.x;
+        final_color.y = pix_out.y;
+        final_color.z = pix_out.z;
+        out_img[pix_id] = final_color;
+        out_depth[pix_id] = {depth_sum, depth_squared_sum};
+        out_normal[pix_id] = normal_out;
+        out_reg_depth[pix_id] = reg_depth_i + (reg_depth_p-reg_depth_i) * depth_reg_pairwise_factor;
+    }
+}
+
+
+__global__ void rasterize_sorted_backward_kernel(
+    const dim3 img_size,
+    const float4 intrins,
+    const unsigned ch_degree_r,
+    const unsigned ch_degree_r_to_use,
+    const unsigned ch_degree_phi,
+    const unsigned ch_degree_phi_to_use,
+    const float depth_reg_pairwise_factor,
+    const int* __restrict__ num_intersects,
+    const int32_t* __restrict__ sorted_indices_,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float3* __restrict__ colors,
+    const float3* __restrict__ ch_coeffs,
+    const float* __restrict__ opacities,
+    // const float3& __restrict__ background,
+    const float* __restrict__ depth_ref_im,
+    const float* __restrict__ output_alpha,
+    const float2* __restrict__ output_depth,
+    const float* __restrict__ v_output_alpha,
+    const float3* __restrict__ v_output,
+    const float2* __restrict__ v_output_depth,
+    const float3* __restrict__ v_output_normal,
+    const float* __restrict__ v_output_reg_depth,
+    float3* __restrict__ v_positions,
+    float2* __restrict__ v_positions_xy_abs,
+    float3* __restrict__ v_axes_u,
+    float3* __restrict__ v_axes_v,
+    float3* __restrict__ v_colors,
+    float3* __restrict__ v_ch_coeffs,
+    // float* __restrict__ v_ch_coeffs_abs,
+    float* __restrict__ v_opacities,
+    // float3* __restrict__ v_background,
+    float* __restrict__ v_depth_ref_im
+) {
+    auto block = cg::this_thread_block();
+    unsigned i =
+        block.group_index().y * block.group_dim().y + block.thread_index().y;
+    unsigned j =
+        block.group_index().x * block.group_dim().x + block.thread_index().x;
+
+    bool inside = (i < img_size.y && j < img_size.x);
+    if (!inside) return;
+    
+    const float fx = intrins.x;
+    const float fy = intrins.y;
+    const float cx = intrins.z;
+    const float cy = intrins.w;
+    glm::vec2 pos_screen = { (float)j + 0.5f, (float)i + 0.5f };
+    glm::vec2 pos_2d = { (pos_screen.x-cx)/fx, (pos_screen.y-cy)/fy };
+    int32_t pix_id = i * img_size.x + j;
+    
+    int n = num_intersects[pix_id];
+    if (n == 0) return;
+
+    const int dim_ch = ch_degree_r * (2*ch_degree_phi+1);
+    assert(dim_ch <= MAX_CH_FLOAT3);
+
+    // df/d_out for this pixel
+    const float2 out_depth = output_depth[pix_id];
+    const float3 v_out = nan_to_num(v_output[pix_id]);
+    const float2 v_out_depth = nan_to_num(v_output_depth[pix_id]);
+    const float3 v_out_normal = nan_to_num(v_output_normal[pix_id]);
+    const float v_out_alpha = nan_to_num(v_output_alpha[pix_id]);
+    const float v_out_reg_depth = nan_to_num(v_output_reg_depth[pix_id]);
+    const float v_reg_depth_p = v_out_reg_depth * depth_reg_pairwise_factor;
+    const float v_reg_depth_i = v_out_reg_depth * (1.0f-depth_reg_pairwise_factor);
+    const float v_depth_sum = v_out_depth.x;
+    const float v_depth_squared_sum = v_out_depth.y;
+
+    // this is the T AFTER the last gaussian in this pixel
+    float T_final = 1.0f - output_alpha[pix_id];
+    float T = T_final;
+
+    // regularization
+    const float depth_ref = inside ? depth_ref_im[pix_id] : 0.f;
+    float v_depth_ref = 0.f;
+
+    const float vis_sum_final = 1.0f - T_final;
+    const float depth_sum_final = out_depth.x;
+    const float depth_squared_sum_final = out_depth.y;
+    float vis_sum = vis_sum_final;
+    float depth_sum = depth_sum_final;
+    float depth_squared_sum = depth_squared_sum_final;
+
+    float3 buffer = {0.f, 0.f, 0.f};
+    float2 buffer_depth = {0.f, 0.f};
+    float3 buffer_normal = {0.f, 0.f, 0.f};
+    float buffer_depth_reg = 0.f;
+    
+    float v_sum_vis = v_out_alpha;
+
+    // rasterize
+    const int32_t* sorted_indices = &sorted_indices_[pix_id*MAX_SORTED_SPLATS];
+    for (int cur_idx = n-1; cur_idx >= 0; cur_idx--) {
+        int g_id = sorted_indices[cur_idx];
+
+        const glm::vec3 pos = *(glm::vec3*)&positions[g_id];
+        const float opac = opacities[g_id];
+        const glm::vec3 color_0 = *(glm::vec3*)&colors[g_id];
+        const float3 v0 = axes_u[g_id];
+        const float3 v1 = axes_v[g_id];
+        glm::mat2x3 axis_uv = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
+
+        glm::vec3 poi;
+        glm::vec2 uv;
+        get_intersection(pos, axis_uv, pos_2d, poi, uv);
+        if (glm::length(uv) > visibility_kernel_radius())
+            continue;
+        float alpha;
+        if (!get_alpha(uv, opac, alpha))
+            continue;
+
+        glm::vec3 v_position_local = {0.f, 0.f, 0.f};
+        glm::vec2 v_position_xy_abs_local = {0.f, 0.f};
+        glm::vec3 v_axis_u_local = {0.f, 0.f, 0.f};
+        glm::vec3 v_axis_v_local = {0.f, 0.f, 0.f};
+        glm::vec3 v_color_local = {0.f, 0.f, 0.f};
+        float v_opacity_local = 0.f;
+        glm::vec3 v_ch_coeff_local[MAX_CH_FLOAT3];
+        for (int i = 0; i < dim_ch; i++)
+            v_ch_coeff_local[i] = {0.f, 0.f, 0.f};
+        float v_ch_coeff_abs_local = 0.f;
+        //initialize everything to 0, only set if the lane is valid
+
+        // compute the current T for this gaussian
+        const float ra = 1.f / (1.f - alpha);
+        const float next_T = T * ra;
+        const float vis = alpha * next_T;
+
+        // update accumulation
+        float v_depth = 0.0f;
+        #if DEPTH_REG_L == 01 && false
+        const float depth_raw = pos.z;
+        const float depth = depth_map(depth_raw);
+        v_depth += vis * v_depth_sum;
+        v_depth += vis * 2.0f*depth * v_depth_squared_sum;
+        #else
+        const float depth_raw = poi.z;
+        const float depth = depth_map(depth_raw);
+        v_depth += vis * v_depth_sum;
+        v_depth += vis * 2.0f*depth * v_depth_squared_sum;
+        #endif
+
+        // update depth regularizer
+        float vis_sum_next = vis_sum - vis;
+        float depth_sum_next = depth_sum - vis*depth;
+        float depth_squared_sum_next = depth_squared_sum - vis*depth*depth;
+        #if 0  // pairwise L1, requires pos.z for depth
+        v_depth += v_reg_depth_p * vis * (vis_sum_next - (vis_sum_final-vis_sum));
+        float reg_depth_i_p = (
+            depth * vis_sum_next - depth_sum_next +
+            (depth_sum_final-depth_sum) - depth * (vis_sum_final-vis_sum)
+        );
+        v_position_local.z = depth_map_vjp(depth_raw, v_depth);
+        #else  // pairwise L2
+        v_depth += v_reg_depth_p * vis * 2.0f * (
+            vis_sum_final * depth - depth_sum_final);
+        float reg_depth_i_p =
+            vis_sum_final*depth*depth + depth_squared_sum_final
+            - 2.0f*depth*depth_sum_final;
+        #endif
+        #if 1  // L1 with intersected depth
+        float v_z = v_reg_depth_i * vis * glm::sign(depth-depth_ref);
+        v_depth += v_z;
+        v_depth_ref += (-v_z);
+        float reg_depth_i_i = abs(depth-depth_ref);
+        #else  // L2 with intersected depth
+        float v_z = v_reg_depth_i * vis * 2.0f*(depth-depth_ref);
+        v_depth += v_z;
+        v_depth_ref += (-v_z);
+        float reg_depth_i_i = (depth-depth_ref) * (depth-depth_ref);
+        #endif
+        float reg_depth_i = reg_depth_i_i + (reg_depth_i_p-reg_depth_i_i) * depth_reg_pairwise_factor;
+
+        float v_depth_raw = depth_map_vjp(depth_raw, v_depth);
+        glm::vec3 v_poi = {0.f, 0.f, v_depth_raw};
+
+        // normal regularization
+        glm::vec3 v_normal = {vis * v_out_normal.x, vis * v_out_normal.y, vis * v_out_normal.z};
+        glm::mat2x3 v_axis_uv; glm::vec3 normal;
+        get_normal_from_axisuv_vjp(axis_uv, poi, v_normal, normal, v_axis_uv);
+
+        // update color
+        glm::vec3 v_color_1 = {vis * v_out.x, vis * v_out.y, vis * v_out.z};
+        glm::vec3 color_1;
+        glm::vec2 v_uv_ch = {0.f, 0.f};
+        if (dim_ch > 0) {
+            glm::vec3 v_ch_color_sigmoid = v_color_1 * color_0;
+            #if 0
+            int32_t g_id = id_batch[t];
+            glm::vec3 ch_color = ch_coeffs_to_color(
+                ch_degree_r, ch_degree_r_to_use,
+                ch_degree_phi, ch_degree_phi_to_use,
+                (glm::vec3*)&ch_coeffs[dim_ch*g_id], {uv.x, uv.y}
+            );
+            glm::vec3 ch_color_sigmoid = 1.0f / (1.0f+glm::exp(-ch_color));
+            glm::vec3 v_ch_color = v_ch_color_sigmoid * ch_color_sigmoid*(1.0f-ch_color_sigmoid);
+            ch_coeffs_to_color_vjp(
+                ch_degree_r, ch_degree_r_to_use,
+                ch_degree_phi, ch_degree_phi_to_use,
+                (glm::vec3*)&ch_coeffs[dim_ch*g_id],
+                {uv.x, uv.y},
+                v_ch_color,
+                ch_color,
+                v_ch_coeff_local, v_ch_coeff_abs_local,
+                v_uv_ch
+            );
+            #else
+            // makes overall training 0.1x faster
+            glm::vec3 ch_color_sigmoid;
+            ch_coeffs_to_color_sigmoid_vjp(
+                ch_degree_r, ch_degree_r_to_use,
+                ch_degree_phi, ch_degree_phi_to_use,
+                (glm::vec3*)&ch_coeffs[dim_ch*g_id],
+                {uv.x, uv.y},
+                v_ch_color_sigmoid,
+                ch_color_sigmoid,
+                v_ch_coeff_local, v_ch_coeff_abs_local,
+                v_uv_ch
+            );
+            #endif
+            color_1 = color_0 * ch_color_sigmoid;
+            v_color_local = v_color_1 * ch_color_sigmoid;
+        }
+        else {
+            color_1 = color_0;
+            v_color_local = v_color_1;
+        }
+
+        float v_alpha = 0.0f;
+        // contribution from this pixel
+        v_alpha += (color_1.x * T - buffer.x) * ra * v_out.x;
+        v_alpha += (color_1.y * T - buffer.y) * ra * v_out.y;
+        v_alpha += (color_1.z * T - buffer.z) * ra * v_out.z;
+        v_alpha += T_final * ra * v_out_alpha;
+        // v_alpha += -T_final * ra * background.x * v_out.x;
+        // v_alpha += -T_final * ra * background.y * v_out.y;
+        // v_alpha += -T_final * ra * background.z * v_out.z;
+        float v_alpha_color_only = v_alpha;
+        v_alpha += (depth * T - buffer_depth.x) * ra * v_depth_sum;
+        v_alpha += (depth*depth * T - buffer_depth.y) * ra * v_depth_squared_sum;
+        v_alpha += (reg_depth_i * T - buffer_depth_reg) * ra * v_out_reg_depth;
+        v_alpha += (normal.x * T - buffer_normal.x) * ra * v_out_normal.x;
+        v_alpha += (normal.y * T - buffer_normal.y) * ra * v_out_normal.y;
+        v_alpha += (normal.z * T - buffer_normal.z) * ra * v_out_normal.z;
+
+        // update the running sum
+        buffer.x += color_1.x * vis;
+        buffer.y += color_1.y * vis;
+        buffer.z += color_1.z * vis;
+        buffer_depth.x += depth * vis;
+        buffer_depth.y += depth*depth * vis;
+        buffer_depth_reg += reg_depth_i * vis;
+        buffer_normal.x += normal.x * vis;
+        buffer_normal.y += normal.y * vis;
+        buffer_normal.z += normal.z * vis;
+
+        // grad
+        glm::vec2 v_uv;
+        get_alpha_vjp(
+            uv, opac,
+            v_alpha, v_uv, v_opacity_local
+        );
+        v_uv += v_uv_ch;
+        glm::vec3 v_position_local_temp;
+        get_intersection_vjp(
+            pos, axis_uv, pos_2d,
+            v_poi, v_uv,
+            v_position_local_temp, v_axis_uv
+        );
+        v_position_local += v_position_local_temp;
+        v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local));
+        v_axis_u_local = v_axis_uv[0];
+        v_axis_v_local = v_axis_uv[1];
+
+        // absgrad (color only)
+        #if 0
+        float v_opacity_local_1;
+        get_alpha_vjp(
+            uv, opac,
+            v_alpha_color_only,
+            v_uv, v_opacity_local_1
+        );
+        v_uv += v_uv_ch;
+        get_intersection_vjp(
+            pos, axis_uv, pos_2d,
+            glm::vec3(0), v_uv,
+            v_position_local_temp, v_axis_uv
+        );
+        v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local_temp));
+        #endif
+
+        // next loop
+        T = next_T;
+        vis_sum = vis_sum_next;
+        depth_sum = depth_sum_next;
+        depth_squared_sum = depth_squared_sum_next;
+
+        float* v_position_ptr = (float*)(v_positions);
+        atomicAdd(v_position_ptr + 3*g_id + 0, v_position_local.x);
+        atomicAdd(v_position_ptr + 3*g_id + 1, v_position_local.y);
+        atomicAdd(v_position_ptr + 3*g_id + 2, v_position_local.z);
+        float* v_positions_xy_abs_ptr = (float*)(v_positions_xy_abs);
+        atomicAdd(v_positions_xy_abs_ptr + 2*g_id + 0, v_position_xy_abs_local.x);
+        atomicAdd(v_positions_xy_abs_ptr + 2*g_id + 1, v_position_xy_abs_local.y);
+
+        float* v_axis_u_ptr = (float*)(v_axes_u);
+        atomicAdd(v_axis_u_ptr + 3*g_id + 0, v_axis_u_local.x);
+        atomicAdd(v_axis_u_ptr + 3*g_id + 1, v_axis_u_local.y);
+        atomicAdd(v_axis_u_ptr + 3*g_id + 2, v_axis_u_local.z);
+        float* v_axis_v_ptr = (float*)(v_axes_v);
+        atomicAdd(v_axis_v_ptr + 3*g_id + 0, v_axis_v_local.x);
+        atomicAdd(v_axis_v_ptr + 3*g_id + 1, v_axis_v_local.y);
+        atomicAdd(v_axis_v_ptr + 3*g_id + 2, v_axis_v_local.z);
+        
+        float* v_color_ptr = (float*)(v_colors);
+        atomicAdd(v_color_ptr + 3*g_id + 0, v_color_local.x);
+        atomicAdd(v_color_ptr + 3*g_id + 1, v_color_local.y);
+        atomicAdd(v_color_ptr + 3*g_id + 2, v_color_local.z);
+        float* v_ch_coeffs_ptr = (float*)(v_ch_coeffs);
+        for (int i = 0; i < dim_ch; i++) {
+            atomicAdd(v_ch_coeffs_ptr + 3*dim_ch*g_id + 3*i + 0, v_ch_coeff_local[i].x);
+            atomicAdd(v_ch_coeffs_ptr + 3*dim_ch*g_id + 3*i + 1, v_ch_coeff_local[i].y);
+            atomicAdd(v_ch_coeffs_ptr + 3*dim_ch*g_id + 3*i + 2, v_ch_coeff_local[i].z);
+        }
+        // atomicAdd(v_ch_coeffs_abs + g, v_ch_coeff_abs_local);
+
+        atomicAdd(v_opacities + g_id, v_opacity_local);
+    }
+
+    if (inside) {
+        v_depth_ref_im[pix_id] = v_depth_ref;
+
+        // background gradient
+        #if 0
+        float3 v_bkg = {
+            v_out.x * T_final,
+            v_out.y * T_final,
+            v_out.z * T_final
+        };
+        atomicAdd((float*)v_background+0, v_bkg.x);
+        atomicAdd((float*)v_background+1, v_bkg.y);
+        atomicAdd((float*)v_background+2, v_bkg.z);
+        #endif
+    }
+
+}
+
+
+
+__global__ void rasterize_simplified_sorted_forward_kernel(
+    const dim3 img_size,
+    const float4 intrins,
+    const int32_t* __restrict__ sorted_indices_,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float3* __restrict__ colors,
+    const float* __restrict__ opacities,
+    float* __restrict__ out_alpha,
+    float3* __restrict__ out_img,
+    float2* __restrict__ out_depth,  // { depth, depth^2 }
+    float3* __restrict__ out_normal,
+    float* __restrict__ out_depth_reg
+) {
+    auto block = cg::this_thread_block();
+    unsigned i =
+        block.group_index().y * block.group_dim().y + block.thread_index().y;
+    unsigned j =
+        block.group_index().x * block.group_dim().x + block.thread_index().x;
+
+    bool inside = (i < img_size.y && j < img_size.x);
+    if (!inside) return;
+
+    const float fx = intrins.x;
+    const float fy = intrins.y;
+    const float cx = intrins.z;
+    const float cy = intrins.w;
+    glm::vec2 pos_screen = { (float)j + 0.5f, (float)i + 0.5f };
+    glm::vec2 pos_2d = { (pos_screen.x-cx)/fx, (pos_screen.y-cy)/fy };
+    int32_t pix_id = i * img_size.x + j;
+
+    // list of indices
+    const int32_t* sorted_indices = &sorted_indices_[pix_id*MAX_SORTED_SPLATS];
+
+    // collect and process batches of gaussians
+    // each thread loads one gaussian at a time before rasterizing its
+    // designated pixel
+    int tr = block.thread_rank();
+    float T = 1.f;  // current/total visibility
+    float3 normal_out = {0.f, 0.f, 0.f};  // sum of normals
+    float3 pix_out = {0.f, 0.f, 0.f};  // output radiance
+    float vis_sum = 0.f;  // output alpha
+    float depth_sum = 0.f;  // output depth
+    float depth_squared_sum = 0.f;  // for L2 depth regularizer
+    float reg_depth_p = 0.f;  // output depth regularizer
+
+    // rasterize
+    for (int cur_idx = 0; cur_idx < MAX_SORTED_SPLATS; cur_idx++) {
+        int g_id = sorted_indices[cur_idx];
+        if (g_id == SORTED_INDEX_INF)
+            break;
+
+        const glm::vec3 pos = *(glm::vec3*)&positions[g_id];
+        const float opac = opacities[g_id];
+        const glm::vec3 color = *(glm::vec3*)&colors[g_id];
+        const float3 v0 = axes_u[g_id];
+        const float3 v1 = axes_v[g_id];
+        glm::mat2x3 axis_uv = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
+
+        glm::vec3 poi;
+        glm::vec2 uv;
+        // if (!get_intersection(pos, axis_uv, pos_2d, poi, uv));
+        //     continue;
+        get_intersection(pos, axis_uv, pos_2d, poi, uv);
+        if (glm::length(uv) > visibility_kernel_radius())
+            continue;
+        float alpha;
+        if (!get_alpha(uv, opac, alpha))
+            continue;
+
+        const float next_T = T * (1.f - alpha);
+        const float vis = alpha * T;
+
+        // color
+        pix_out.x = pix_out.x + color.x * vis;
+        pix_out.y = pix_out.y + color.y * vis;
+        pix_out.z = pix_out.z + color.z * vis;
+
+        // depth regularization
+        const float depth_raw = poi.z;
+        const float depth = depth_map(depth_raw);
+        {
+            float pairwise_l1 = vis*depth * vis_sum - vis * depth_sum;  // requires pos.z for depth
+            float pairwise_l2 = vis * (vis_sum*depth*depth + depth_squared_sum - 2.0f*depth*depth_sum);
+            reg_depth_p += pairwise_l2;
+        }
+        vis_sum += vis;
+        depth_sum += vis*depth;
+        depth_squared_sum += vis*depth*depth;
+
+        // normal regularization
+        glm::vec3 normal = get_normal_from_axisuv(axis_uv, poi);
+        normal_out.x = normal_out.x + normal.x * vis;
+        normal_out.y = normal_out.y + normal.y * vis;
+        normal_out.z = normal_out.z + normal.z * vis;
+
+        T = next_T;
+    }
+
+    if (inside) {
+        out_alpha[pix_id] = 1.0f - T;
+        out_img[pix_id] = pix_out;
+        out_depth[pix_id] = { depth_sum, depth_squared_sum };
+        out_normal[pix_id] = normal_out;
+        out_depth_reg[pix_id] = reg_depth_p;
+    }
+}
+
+
+__global__ void rasterize_simplified_sorted_backward_kernel(
+    const dim3 img_size,
+    const float4 intrins,
+    const int* __restrict__ num_intersects,
+    const int32_t* __restrict__ sorted_indices_,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float3* __restrict__ colors,
+    const float* __restrict__ opacities,
+    const float* __restrict__ output_alpha,
+    const float2* __restrict__ output_depth,
+    const float* __restrict__ v_output_alpha,
+    const float3* __restrict__ v_output_img,
+    const float2* __restrict__ v_output_depth,
+    const float3* __restrict__ v_output_normal,
+    const float* __restrict__ v_output_depth_reg,
+    float3* __restrict__ v_positions,
+    float2* __restrict__ v_positions_xy_abs,
+    float3* __restrict__ v_axes_u,
+    float3* __restrict__ v_axes_v,
+    float3* __restrict__ v_colors,
+    float* __restrict__ v_opacities
+) {
+    auto block = cg::this_thread_block();
+    unsigned i =
+        block.group_index().y * block.group_dim().y + block.thread_index().y;
+    unsigned j =
+        block.group_index().x * block.group_dim().x + block.thread_index().x;
+
+    bool inside = (i < img_size.y && j < img_size.x);
+    if (!inside) return;
+    
+    const float fx = intrins.x;
+    const float fy = intrins.y;
+    const float cx = intrins.z;
+    const float cy = intrins.w;
+    glm::vec2 pos_screen = { (float)j + 0.5f, (float)i + 0.5f };
+    glm::vec2 pos_2d = { (pos_screen.x-cx)/fx, (pos_screen.y-cy)/fy };
+    int32_t pix_id = i * img_size.x + j;
+    
+    int n = num_intersects[pix_id];
+    if (n == 0) return;
+
+    // df/d_out for this pixel
+    const float3 v_out = nan_to_num(v_output_img[pix_id]);
+    const float2 v_out_depth = nan_to_num(v_output_depth[pix_id]);
+    const float3 v_out_normal = nan_to_num(v_output_normal[pix_id]);
+    const float v_out_alpha = nan_to_num(v_output_alpha[pix_id]);
+    const float v_reg_depth_p = nan_to_num(v_output_depth_reg[pix_id]);
+    const float v_depth_sum = v_out_depth.x;
+    const float v_depth_squared_sum = v_out_depth.y;
+
+    // this is the T AFTER the last gaussian in this pixel
+    float T_final = 1.0f - output_alpha[pix_id];
+    float T = T_final;
+
+    // collect and process batches of gaussians
+    // each thread loads one gaussian at a time before rasterizing
+    const int tr = block.thread_rank();
+
+    const float vis_sum_final = 1.0f - T_final;
+    const float depth_sum_final = output_depth[pix_id].x;
+    const float depth_squared_sum_final = output_depth[pix_id].y;
+    float vis_sum = vis_sum_final;
+
+    float3 buffer = {0.f, 0.f, 0.f};
+    float2 buffer_depth = {0.f, 0.f};  // depth, depth^2
+    float3 buffer_normal = {0.f, 0.f, 0.f};
+    float buffer_depth_reg = 0.f;
+
+    float v_sum_vis = v_out_alpha;
+
+    // rasterize
+    const int32_t* sorted_indices = &sorted_indices_[pix_id*MAX_SORTED_SPLATS];
+    for (int cur_idx = n-1; cur_idx >= 0; cur_idx--) {
+        int g_id = sorted_indices[cur_idx];
+
+        const glm::vec3 pos = *(glm::vec3*)&positions[g_id];
+        const float opac = opacities[g_id];
+        const glm::vec3 color = *(glm::vec3*)&colors[g_id];
+        const float3 v0 = axes_u[g_id];
+        const float3 v1 = axes_v[g_id];
+        glm::mat2x3 axis_uv = {v0.x, v0.y, v0.z, v1.x, v1.y, v1.z};
+
+        glm::vec3 poi;
+        glm::vec2 uv;
+        get_intersection(pos, axis_uv, pos_2d, poi, uv);
+        if (glm::length(uv) > visibility_kernel_radius())
+            continue;
+        float alpha;
+        if (!get_alpha(uv, opac, alpha))
+            continue;
+
+        glm::vec3 v_position_local = {0.f, 0.f, 0.f};
+        glm::vec2 v_position_xy_abs_local = {0.f, 0.f};
+        glm::vec3 v_axis_u_local = {0.f, 0.f, 0.f};
+        glm::vec3 v_axis_v_local = {0.f, 0.f, 0.f};
+        glm::vec3 v_color_local = {0.f, 0.f, 0.f};
+        float v_opacity_local = 0.f;
+        //initialize everything to 0, only set if the lane is valid
+
+        // compute the current T for this gaussian
+        const float ra = 1.f / (1.f - alpha);
+        const float next_T = T * ra;
+        const float vis = alpha * next_T;
+
+        // update accumulation
+        const float depth_raw = poi.z;
+        const float depth = depth_map(depth_raw);
+        float v_depth = 0.0f;
+        v_depth += vis * v_depth_sum;
+        v_depth += vis * 2.0f*depth * v_depth_squared_sum;
+
+        // update depth regularizer
+        float vis_sum_next = vis_sum - vis;
+        // pairwise L2
+        v_depth += v_reg_depth_p * vis * 2.0f * (
+            vis_sum_final * depth - depth_sum_final);
+        float reg_depth_i =
+            vis_sum_final*depth*depth + depth_squared_sum_final
+            - 2.0f*depth*depth_sum_final;
+
+        float v_depth_raw = depth_map_vjp(depth_raw, v_depth);
+        glm::vec3 v_poi = {0.f, 0.f, v_depth_raw};
+
+        // update color
+        v_color_local = {vis * v_out.x, vis * v_out.y, vis * v_out.z};
+
+        // normal regularization
+        glm::vec3 v_normal = {vis * v_out_normal.x, vis * v_out_normal.y, vis * v_out_normal.z};
+        glm::mat2x3 v_axis_uv; glm::vec3 normal;
+        get_normal_from_axisuv_vjp(axis_uv, poi, v_normal, normal, v_axis_uv);
+
+        float v_alpha = 0.0f;
+        // contribution from this pixel
+        v_alpha += (color.x * T - buffer.x) * ra * v_out.x;
+        v_alpha += (color.y * T - buffer.y) * ra * v_out.y;
+        v_alpha += (color.z * T - buffer.z) * ra * v_out.z;
+        v_alpha += T_final * ra * v_out_alpha;
+        float v_alpha_color_only = v_alpha;
+        v_alpha += (depth * T - buffer_depth.x) * ra * v_depth_sum;
+        v_alpha += (depth*depth * T - buffer_depth.y) * ra * v_depth_squared_sum;
+        v_alpha += (reg_depth_i * T - buffer_depth_reg) * ra * v_reg_depth_p;
+        v_alpha += (normal.x * T - buffer_normal.x) * ra * v_out_normal.x;
+        v_alpha += (normal.y * T - buffer_normal.y) * ra * v_out_normal.y;
+        v_alpha += (normal.z * T - buffer_normal.z) * ra * v_out_normal.z;
+
+        // update the running sum
+        buffer.x += color.x * vis;
+        buffer.y += color.y * vis;
+        buffer.z += color.z * vis;
+        buffer_depth.x += depth * vis;
+        buffer_depth.y += depth*depth * vis;
+        buffer_depth_reg += reg_depth_i * vis;
+        buffer_normal.x += normal.x * vis;
+        buffer_normal.y += normal.y * vis;
+        buffer_normal.z += normal.z * vis;
+
+        // grad
+        glm::vec2 v_uv;
+        get_alpha_vjp(
+            uv, opac,
+            v_alpha, v_uv, v_opacity_local
+        );
+        glm::vec3 v_position_local_temp;
+        get_intersection_vjp(
+            pos, axis_uv, pos_2d,
+            v_poi, v_uv,
+            v_position_local_temp, v_axis_uv
+        );
+        v_position_local += v_position_local_temp;
+        v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local));
+        v_axis_u_local = v_axis_uv[0];
+        v_axis_v_local = v_axis_uv[1];
+
+        // next loop
+        T = next_T;
+        vis_sum = vis_sum_next;
+
+        float* v_position_ptr = (float*)(v_positions);
+        atomicAdd(v_position_ptr + 3*g_id + 0, v_position_local.x);
+        atomicAdd(v_position_ptr + 3*g_id + 1, v_position_local.y);
+        atomicAdd(v_position_ptr + 3*g_id + 2, v_position_local.z);
+        float* v_positions_xy_abs_ptr = (float*)(v_positions_xy_abs);
+        atomicAdd(v_positions_xy_abs_ptr + 2*g_id + 0, v_position_xy_abs_local.x);
+        atomicAdd(v_positions_xy_abs_ptr + 2*g_id + 1, v_position_xy_abs_local.y);
+
+        float* v_axis_u_ptr = (float*)(v_axes_u);
+        atomicAdd(v_axis_u_ptr + 3*g_id + 0, v_axis_u_local.x);
+        atomicAdd(v_axis_u_ptr + 3*g_id + 1, v_axis_u_local.y);
+        atomicAdd(v_axis_u_ptr + 3*g_id + 2, v_axis_u_local.z);
+        float* v_axis_v_ptr = (float*)(v_axes_v);
+        atomicAdd(v_axis_v_ptr + 3*g_id + 0, v_axis_v_local.x);
+        atomicAdd(v_axis_v_ptr + 3*g_id + 1, v_axis_v_local.y);
+        atomicAdd(v_axis_v_ptr + 3*g_id + 2, v_axis_v_local.z);
+        
+        float* v_color_ptr = (float*)(v_colors);
+        atomicAdd(v_color_ptr + 3*g_id + 0, v_color_local.x);
+        atomicAdd(v_color_ptr + 3*g_id + 1, v_color_local.y);
+        atomicAdd(v_color_ptr + 3*g_id + 2, v_color_local.z);
+
+        atomicAdd(v_opacities + g_id, v_opacity_local);
+    }
+
+}
+
 
 
 
