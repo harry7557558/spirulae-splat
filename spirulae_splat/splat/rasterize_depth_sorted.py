@@ -25,7 +25,7 @@ def rasterize_gaussians_depth_sorted(
     img_width: int,
     block_width: int,
     depth_mode: str,
-) -> Tuple[Tensor, Tensor]:
+) -> Tensor:
     if positions.ndimension() != 2 or positions.size(1) != 3:
         raise ValueError("positions must have dimensions (N, 3)")
 
@@ -84,7 +84,9 @@ class _RasterizeGaussiansDepthSorted(Function):
             out_depth, out_visibility,
         )
 
-        return out_depth, out_visibility
+        if DEBUG:
+            return out_depth, out_visibility
+        return out_depth
 
     @staticmethod
     def backward(ctx, v_out_depth, v_out_visibility=None):

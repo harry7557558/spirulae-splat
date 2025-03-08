@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-NeRF implementation that combines many recent advancements.
+2DGS implementation that combines many recent advancements.
 """
 
 import math
@@ -38,6 +38,11 @@ from spirulae_splat.splat import (
     rasterize_gaussians_depth,
     rasterize_gaussians,
     rasterize_gaussians_simplified,
+    rasterize_gaussians_indices,
+    rasterize_gaussians_simple_sorted,
+    rasterize_gaussians_depth_sorted,
+    rasterize_gaussians_sorted,
+    rasterize_gaussians_simplified_sorted,
     depth_to_points,
     depth_to_normal,
 )
@@ -152,8 +157,6 @@ class SpirulaeModelConfig(ModelConfig):
     """Position standard deviation to initialize random gaussians"""
     ssim_lambda: float = 0.4  # 0.2
     """weight of ssim loss"""
-    output_depth_during_training: bool = False
-    """If True, output depth during training. Otherwise, only output depth during evaluation."""
     use_camera_optimizer: bool = False
     """Whether to use camera optimizer"""
     camera_optimizer: CameraOptimizerConfig = field(default_factory=lambda: CameraOptimizerConfig(mode="SO3xR3"))
@@ -170,7 +173,7 @@ class SpirulaeModelConfig(ModelConfig):
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
     cull_scale_thresh: float = 0.5
     """threshold of scale for culling huge gaussians"""
-    cull_grad_thresh: float = 0.0  # 3e-4 | 1e-4 | 1e-5 | 0.0
+    cull_grad_thresh: float = 1e-5  # 3e-4 | 1e-4 | 1e-5 | 0.0
     """threshold for culling gaussians with low visibility"""
     continue_cull_post_densification: bool = True
     """If True, continue to cull gaussians post refinement"""
@@ -208,6 +211,10 @@ class SpirulaeModelConfig(ModelConfig):
     """minimum opacity for MCMC relocation"""
 
     # representation
+    use_per_pixel_sorting: bool = False
+    """enable per-pixel sorting"""
+    per_pixel_sorting_warmup: int = 2000
+    """use per pixel sorting only after this number of steps"""
     sh_degree: int = 3
     """maximum degree of spherical harmonics to use"""
     sh_degree_interval: int = 1000
@@ -706,6 +713,25 @@ class SpirulaeModel(Model):
         )  # type: ignore
         timerr.mark("project")  # 200us-350us
 
+        use_per_pixel_sorting = (
+            self.config.use_per_pixel_sorting and
+            self.step >= self.config.per_pixel_sorting_warmup
+        )
+        if use_per_pixel_sorting:
+            raster_indices = rasterize_gaussians_indices(
+                positions, axes_u, axes_v, opacities,
+                bounds, num_tiles_hit,
+                intrins, H, W, BLOCK_WIDTH
+            )
+            rasterize_depth = rasterize_gaussians_depth_sorted
+            rasterize = rasterize_gaussians_sorted
+            rasterize_simplified = rasterize_gaussians_simplified_sorted
+        else:
+            raster_indices = (bounds, num_tiles_hit)
+            rasterize_depth = rasterize_gaussians_depth
+            rasterize = rasterize_gaussians
+            rasterize_simplified = rasterize_gaussians_simplified
+
         # slower but more capable two-pass rendering
         if False or (
             self.config.depth_reg_pairwise_factor < 1.0 or \
@@ -713,10 +739,9 @@ class SpirulaeModel(Model):
             self.config.depth_mode != "mean"
         ):
 
-            depth_im_ref = rasterize_gaussians_depth(
-                positions, axes_u, axes_v,
-                opacities,
-                bounds, num_tiles_hit,
+            depth_im_ref = rasterize_depth(
+                positions, axes_u, axes_v, opacities,
+                *((raster_indices[1],) if use_per_pixel_sorting else raster_indices),
                 intrins, H, W, BLOCK_WIDTH,
                 self.config.depth_mode
             )
@@ -729,9 +754,8 @@ class SpirulaeModel(Model):
             # main rasterization
             ch_degree = self.step // self.config.ch_degree_interval
             (rgb, alpha, depth_im, normal_im, reg_depth) \
-             = rasterize_gaussians(  # type: ignore
-                positions, axes_u, axes_v,
-                rgbs,
+             = rasterize(  # type: ignore
+                positions, axes_u, axes_v, rgbs,
                 self.config.ch_degree_r, min(ch_degree, self.config.ch_degree_r),
                 self.config.ch_degree_phi, min(ch_degree, self.config.ch_degree_phi),
                 self.features_ch,
@@ -739,7 +763,7 @@ class SpirulaeModel(Model):
                 depth_im_ref,
                 # background_color,
                 self.config.depth_reg_pairwise_factor,
-                bounds, num_tiles_hit,
+                *raster_indices,
                 intrins, H, W, BLOCK_WIDTH,
             )  # type: ignore
             timerr.mark("render")  # ?us
@@ -747,11 +771,9 @@ class SpirulaeModel(Model):
         # fast one-pass rendering
         else:
             (rgb, alpha, depth_im, normal_im, reg_depth) \
-             = rasterize_gaussians_simplified(
-                positions, axes_u, axes_v,
-                rgbs,
-                opacities,
-                bounds, num_tiles_hit,
+             = rasterize_simplified(
+                positions, axes_u, axes_v, rgbs, opacities,
+                *raster_indices,
                 intrins, H, W, BLOCK_WIDTH,
             )
             depth_im_ref = torch.where(
@@ -760,10 +782,7 @@ class SpirulaeModel(Model):
             ).contiguous()
             timerr.mark("render")  # 750us-1200us
 
-        if self.config.output_depth_during_training or not self.training:
-            pass
-
-        else:
+        if self.training:
             self.info = {
                 "width": W,
                 "height": H,
@@ -797,7 +816,7 @@ class SpirulaeModel(Model):
         timerr.end("normal_reg")  # 600us-900us
         # -> ?us-?us median depth, 3000us-4500us one pass
 
-        return {
+        outputs = {
             "rgb": rgb,
             "depth": depth_im_ref,
             "depth_normal": 0.5+0.5*depth_normal,
@@ -809,6 +828,12 @@ class SpirulaeModel(Model):
             "alpha": alpha,
             "background": background,
         }  # type: ignore
+
+        if not self.training and use_per_pixel_sorting:
+            intersects = raster_indices[0].float() / raster_indices[1].shape[-1]
+            outputs["num_intersects"] = intersects.reshape((H, W, 1)).repeat(1, 1, 3)
+
+        return outputs
 
     def get_gt_img(self, image: torch.Tensor):
         """Compute groundtruth image with iteration dependent downscale factor for evaluation purpose
