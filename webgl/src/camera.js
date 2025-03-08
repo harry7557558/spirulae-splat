@@ -1,3 +1,5 @@
+"use strict";
+
 let CameraPresets = {};
 
 CameraPresets["s21"] = {
@@ -167,6 +169,7 @@ CameraPresets.init = function() {
         // add undistortion coefficients
         if (camera.model == "OPENCV") {
             camera.dist_coeffs = [camera.k1, camera.k2, camera.p1, camera.p2];
+            camera.undist_coeffs = [0.0, 0.0, 0.0, 0.0];
         }
         else if (camera.model == "OPENCV_FISHEYE") {
             var l = CameraPresets.invFisheyeDistort(camera.k1, camera.k2, camera.k3, camera.k4);
