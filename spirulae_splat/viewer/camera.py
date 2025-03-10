@@ -28,13 +28,21 @@ class Camera:
             self.scale = np.linalg.det(transform) ** (1/3)
             self.pose = transform / self.scale
 
-    def scale_resolution(self, sc: float):
+    def resize_rel(self, sc: float):
         self.w = int(self.w*sc+0.5)
         self.h = int(self.h*sc+0.5)
         self.fx *= sc
         self.fy *= sc
         self.cx *= sc
         self.cy *= sc
+
+    def resize(self, w: int, h: int):
+        self.fx *= w / self.w
+        self.fy *= h / self.h
+        self.cx *= w / self.w
+        self.cy *= h / self.h
+        self.w = int(w)
+        self.h = int(h)
 
     def c2w_to_c2o(self, c2w):
         c2o = self.pose @ c2w

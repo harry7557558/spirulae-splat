@@ -13,7 +13,7 @@ from spirulae_splat.splat import (
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import spherical_harmonics
 
-from camera import Camera
+from spirulae_splat.viewer.camera import Camera
 
 from spirulae_splat.perf_timer import PerfTimer
 timer = PerfTimer("render")
@@ -59,6 +59,15 @@ class SplatModel:
             1: 0, 4: 1, 9: 2, 16: 3, 25: 4
         }[len(self.background_sh)+1]
 
+    def load_config(self, file_path: str):
+        save_dir = file_path[:file_path.rfind(os.path.sep)]
+        ckpt_dir = os.path.join(save_dir, 'nerfstudio_models')
+        for f in os.listdir(ckpt_dir):
+            if f.endswith('.ckpt'):
+                f = os.path.join(ckpt_dir, f)
+                self.load_ckpt(f)
+                break
+
     @property
     def colors(self):
         if self.sh_degree > 0:
@@ -90,15 +99,6 @@ class SplatModel:
     def opacities(self):
         return self.gauss_params["opacities"]
 
-    def load_config(self, file_path: str):
-        save_dir = file_path[:file_path.rfind(os.path.sep)]
-        ckpt_dir = os.path.join(save_dir, 'nerfstudio_models')
-        for f in os.listdir(ckpt_dir):
-            if f.endswith('.ckpt'):
-                f = os.path.join(ckpt_dir, f)
-                self.load_ckpt(f)
-                break
-
     def _get_background_image(self, camera: Camera, c2w: np.ndarray):
         """TODO: support distortion"""
         sh_degree = self.background_sh_degree
@@ -109,7 +109,7 @@ class SplatModel:
         return render_background_sh(camera.w, camera.h, camera.intrins,
                                     viewmat, sh_degree+1, sh_coeffs, BLOCK_WIDTH)
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def _render(self, camera: Camera, c2w: np.ndarray, return_depth=False, sort_per_pixel=True):
 
         timer.start()

@@ -110,7 +110,9 @@ setup(
         "typing_extensions",
     ] + [
         # no need to consume internet bandwidth at each `pip install -e``
-        "fused_ssim @ git+https://github.com/MrNeRF/optimized-fused-ssim.git",
+        "fused_ssim @ git+https://github.com/rahul-goel/fused-ssim.git",
+        # "CUDA error: no kernel image is available for execution on the device" on torch==2.1.2+cu118 + A6000
+        # "fused_ssim @ git+https://github.com/MrNeRF/optimized-fused-ssim.git",
     ] * no_fused_ssim,
     extras_require={
         # dev dependencies. Install them by `pip install gsplat[dev]`
