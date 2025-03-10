@@ -43,16 +43,18 @@ def rasterize_gaussians_indices(
     )
     timer.mark("sort")  # ?us
 
-    size_params = (img_height, img_width, block_width)
     num_intersects, indices, depths = _C.rasterize_indices(
-        *size_params, intrins,
+        img_height, img_width, block_width, intrins,
         gaussian_ids_sorted, tile_bins,
         positions, axes_u, axes_v,
         opacities,
     )
     timer.mark("rasterize")  # ?us
 
-    # _test_sort(size_params, num_intersects, indices, depths)
+    num_intersects, indices, depths = [x.contiguous() for x in (num_intersects, indices, depths)]
+
+    num_pixels = img_height * img_width
+    # _test_sort(num_pixels, num_intersects, indices, depths)
 
     if False:
         sorted_depths, argsort = torch.sort(depths, dim=-1)
@@ -60,16 +62,16 @@ def rasterize_gaussians_indices(
         indices = torch.gather(indices, dim=-1, index=argsort)
         timer.end("gather")
     else:
-        # benchmark in one dataset:
-        # - insertion: ~7ms
-        # - quick: ~6ms
-        # - heap: ~14ms
-        # - random_quick: ~6ms
-        # recursive ones (quick, random_quick) may cause stack overflow on some devices
+        # benchmark in one dataset (compiled without vs with using shared memory):
+        # - insertion: ~7ms | ~2.7ms
+        # - quick: ~6ms | stack overflow
+        # - heap: ~14ms | ~3.3ms
+        # - random_quick: ~6ms | stack overflow
+        # recursive ones (quick, random_quick) may cause stack overflow depending on device
         # i.e. "CUDA error: an illegal memory access was encountered"
         _C.sort_per_pixel(
-            "quick",
-            *size_params,
+            "insertion",
+            num_pixels,
             num_intersects, indices, depths
         )
         timer.end("sort")
@@ -77,7 +79,7 @@ def rasterize_gaussians_indices(
     return num_intersects, indices
 
 
-def _test_sort(size_params, num_intersects, indices, depths):
+def _test_sort(num_pixels, num_intersects, indices, depths):
     """Making this work requires changing `#if 0` at the end of `rasterize_indices_kernel()` to `1`
         Neglectable performance difference in practice"""
 
@@ -89,8 +91,8 @@ def _test_sort(size_params, num_intersects, indices, depths):
     sorted_indices = indices.clone()
     sorted_depths = depths.clone()
     _C.sort_per_pixel(
-        "random_quick",
-        *size_params,
+        "heap",
+        num_pixels,
         num_intersects, sorted_indices, sorted_depths
     )
 

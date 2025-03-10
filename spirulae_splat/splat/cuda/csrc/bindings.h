@@ -368,9 +368,7 @@ std::tuple<
 
 void sort_per_pixel_tensor(
     const std::string &method,
-    const unsigned img_height,
-    const unsigned img_width,
-    const unsigned block_width,
+    const unsigned num_pixels,
     torch::Tensor &num_intersects,  // [h, w]
     torch::Tensor &indices,  // [h, w, MAX_SORTED_SPLATS]
     torch::Tensor &depths  // [h, w, MAX_SORTED_SPLATS]

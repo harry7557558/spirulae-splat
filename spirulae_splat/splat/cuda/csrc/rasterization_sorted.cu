@@ -302,34 +302,59 @@ inline __device__ void sort_per_pixel_randomized_quick(int32_t* indices, float* 
 }
 
 
+template<typename val4>
+inline __device__ void _pps_memcpy(int n, val4* src, val4* dst) {
+#if 0
+    for (int i = 0; i < n; i++)
+        dst[i] = src[i];
+#elif 0
+    int m = n / 4;
+    float4* src4 = (float4*)src;
+    float4* dst4 = (float4*)dst;
+    for (int i = 0; i < m; i++) {
+        dst4[i] = src4[i];
+    }
+    for (int i = 4*m; i < n; i++) {
+        dst[i] = src[i];
+    }
+#else
+    int m = (n + 3) / 4;
+    float4* src4 = (float4*)src;
+    float4* dst4 = (float4*)dst;
+    for (int i = 0; i < m; i++) {
+        dst4[i] = src4[i];
+    }
+#endif
+}
 
 template <PerPixelSortType SORT_TYPE>
 __global__ void sort_per_pixel_kernel(
-    const dim3 tile_bounds,
-    const dim3 img_size,
+    const unsigned num_pixels,
     const int* __restrict__ num_intersects,
     int32_t* __restrict__ indices_,
     float* __restrict__ depths_
 ) {
-    auto block = cg::this_thread_block();
-    int32_t tile_id =
-        block.group_index().y * tile_bounds.x + block.group_index().x;
-    unsigned i =
-        block.group_index().y * block.group_dim().y + block.thread_index().y;
-    unsigned j =
-        block.group_index().x * block.group_dim().x + block.thread_index().x;
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx >= num_pixels)
+        return;
 
-    bool inside = (i < img_size.y && j < img_size.x);
-    if (!inside) return;
-
-    int32_t pix_id = i * img_size.x + j;
-
-    int n = num_intersects[pix_id];
+    int n = num_intersects[idx];
     if (n <= 1)
         return;
-    int32_t* indices = &indices_[pix_id*MAX_SORTED_SPLATS];
-    float* depths = &depths_[pix_id*MAX_SORTED_SPLATS];
+    int32_t* indices_g = &indices_[idx*MAX_SORTED_SPLATS];
+    float* depths_g = &depths_[idx*MAX_SORTED_SPLATS];
     int intersect_count = 0;
+
+    __shared__ int32_t indices_s[MAX_SORTED_SPLATS*N_THREADS_PPS];
+    __shared__ float depths_s[MAX_SORTED_SPLATS*N_THREADS_PPS];
+
+    int32_t* indices = &indices_s[MAX_SORTED_SPLATS*threadIdx.x];
+    float* depths = &depths_s[MAX_SORTED_SPLATS*threadIdx.x];
+    _pps_memcpy<int32_t>(n, indices_g, indices);
+    _pps_memcpy<float>(n, depths_g, depths);
+
+    // int32_t* indices = indices_g;
+    // float* depths = depths_g;
 
     switch (SORT_TYPE)
     {
@@ -346,6 +371,9 @@ __global__ void sort_per_pixel_kernel(
         sort_per_pixel_randomized_quick(indices, depths, 0, n-1);
         break;
     }
+
+    _pps_memcpy<int32_t>(n, indices, indices_g);
+    _pps_memcpy<float>(n, depths, depths_g);
 }
 
 
@@ -1704,32 +1732,28 @@ __global__ void rasterize_simplified_sorted_backward_kernel(
 
 
 template __global__ void sort_per_pixel_kernel<PerPixelSortType::InsertionSort>(
-    const dim3 tile_bounds,
-    const dim3 img_size,
+    const unsigned num_pixels,
     const int* __restrict__ num_intersects,
     int32_t* __restrict__ indices_,
     float* __restrict__ depths_
 );
 
 template __global__ void sort_per_pixel_kernel<PerPixelSortType::QuickSort>(
-    const dim3 tile_bounds,
-    const dim3 img_size,
+    const unsigned num_pixels,
     const int* __restrict__ num_intersects,
     int32_t* __restrict__ indices_,
     float* __restrict__ depths_
 );
 
 template __global__ void sort_per_pixel_kernel<PerPixelSortType::HeapSort>(
-    const dim3 tile_bounds,
-    const dim3 img_size,
+    const unsigned num_pixels,
     const int* __restrict__ num_intersects,
     int32_t* __restrict__ indices_,
     float* __restrict__ depths_
 );
 
 template __global__ void sort_per_pixel_kernel<PerPixelSortType::RandomizedQuickSort>(
-    const dim3 tile_bounds,
-    const dim3 img_size,
+    const unsigned num_pixels,
     const int* __restrict__ num_intersects,
     int32_t* __restrict__ indices_,
     float* __restrict__ depths_

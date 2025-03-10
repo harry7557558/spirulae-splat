@@ -2,6 +2,8 @@
 
 #define MAX_BLOCK_SIZE ( 16 * 16 )
 #define N_THREADS 256
+// for per-pixel sorting
+#define N_THREADS_PPS 64
 
 // kernel to use
 // 0: Gaussian, 3 std

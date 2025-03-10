@@ -36,8 +36,7 @@ __global__ void rasterize_indices_kernel(
 
 template <PerPixelSortType SORT_TYPE>
 __global__ void sort_per_pixel_kernel(
-    const dim3 tile_bounds,
-    const dim3 img_size,
+    const unsigned num_pixels,
     const int* __restrict__ num_intersects,
     int32_t* __restrict__ indices_,
     float* __restrict__ depths_

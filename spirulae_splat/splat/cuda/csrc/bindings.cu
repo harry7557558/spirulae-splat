@@ -1236,53 +1236,44 @@ std::tuple<
 
 void sort_per_pixel_tensor(
     const std::string &method,
-    const unsigned img_height,
-    const unsigned img_width,
-    const unsigned block_width,
+    const unsigned num_pixels,
     torch::Tensor &num_intersects,  // [h, w]
     torch::Tensor &indices,  // [h, w, MAX_SORTED_SPLATS]
     torch::Tensor &depths  // [h, w, MAX_SORTED_SPLATS]
 ) {
     DEVICE_GUARD(num_intersects);
-    if (indices.ndimension() != 3 || indices.size(2) != MAX_SORTED_SPLATS) {
-        AT_ERROR("indices must have dimensions (h, w, MAX_SORTED_SPLATS)");
-    }
-    if (depths.ndimension() != 3 || depths.size(2) != MAX_SORTED_SPLATS) {
-        AT_ERROR("depths must have dimensions (h, w, MAX_SORTED_SPLATS)");
-    }
-
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
-    const dim3 block = {block_width, block_width, 1};
-    const dim3 img_size = {img_width, img_height, 1};
+    CHECK_INPUT(num_intersects);
+    CHECK_INPUT(indices);
+    CHECK_INPUT(depths);
 
     if (method == "insertion") {
         sort_per_pixel_kernel<PerPixelSortType::InsertionSort>
-        <<<tile_bounds, block>>>(
-            tile_bounds, img_size,
+        <<<(num_pixels+N_THREADS_PPS-1)/N_THREADS_PPS, N_THREADS_PPS>>>(
+            num_pixels,
             num_intersects.contiguous().data_ptr<int>(),
             indices.contiguous().data_ptr<int32_t>(),
             depths.contiguous().data_ptr<float>()
         );
     } else if (method == "quick") {
         sort_per_pixel_kernel<PerPixelSortType::QuickSort>
-        <<<tile_bounds, block>>>(
-            tile_bounds, img_size,
+        <<<(num_pixels+N_THREADS_PPS-1)/N_THREADS_PPS, N_THREADS_PPS>>>(
+            num_pixels,
             num_intersects.contiguous().data_ptr<int>(),
             indices.contiguous().data_ptr<int32_t>(),
             depths.contiguous().data_ptr<float>()
         );
     } else if (method == "heap") {
         sort_per_pixel_kernel<PerPixelSortType::HeapSort>
-        <<<tile_bounds, block>>>(
-            tile_bounds, img_size,
+        <<<(num_pixels+N_THREADS_PPS-1)/N_THREADS_PPS, N_THREADS_PPS>>>(
+            num_pixels,
             num_intersects.contiguous().data_ptr<int>(),
             indices.contiguous().data_ptr<int32_t>(),
             depths.contiguous().data_ptr<float>()
         );
     } else if (method == "random_quick") {
         sort_per_pixel_kernel<PerPixelSortType::RandomizedQuickSort>
-        <<<tile_bounds, block>>>(
-            tile_bounds, img_size,
+        <<<(num_pixels+N_THREADS_PPS-1)/N_THREADS_PPS, N_THREADS_PPS>>>(
+            num_pixels,
             num_intersects.contiguous().data_ptr<int>(),
             indices.contiguous().data_ptr<int32_t>(),
             depths.contiguous().data_ptr<float>()
