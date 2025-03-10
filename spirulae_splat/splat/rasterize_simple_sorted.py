@@ -9,6 +9,7 @@ from torch import Tensor
 from torch.autograd import Function
 
 import spirulae_splat.splat.cuda as _C
+from spirulae_splat.splat._camera import _Camera
 
 
 def rasterize_gaussians_simple_sorted(
@@ -19,10 +20,7 @@ def rasterize_gaussians_simple_sorted(
     opacities: Float[Tensor, "*batch 1"],
     num_intersects: Int[Tensor, "h w"],
     sorted_indices: Int[Tensor, "h w MAX_SORTED_INDICES"],
-    intrins: Tuple[float, float, float, float],
-    img_height: int,
-    img_width: int,
-    block_width: int,
+    camera: _Camera,
     background: Optional[Float[Tensor, "channels"]] = None
 ) -> Tuple[Tensor, Tensor]:
     if colors.dtype == torch.uint8:
@@ -33,9 +31,10 @@ def rasterize_gaussians_simple_sorted(
         assert (
             background.shape[0] == colors.shape[-1]
         ), f"incorrect shape of background color tensor, expected shape {colors.shape[-1]}"
+        background = background.cpu()
     else:
         background = torch.zeros(
-            colors.shape[-1], dtype=torch.float32, device=colors.device
+            colors.shape[-1], dtype=torch.float32, device="cpu"
         )
 
     if positions.ndimension() != 2 or positions.size(1) != 3:
@@ -52,9 +51,7 @@ def rasterize_gaussians_simple_sorted(
         opacities.contiguous(),
         num_intersects.contiguous(),
         sorted_indices.contiguous(),
-        intrins,
-        img_height, img_width,
-        block_width,
+        camera,
         background.contiguous(),
     )
 
@@ -73,26 +70,21 @@ class _RasterizeGaussiansSimpleSorted(Function):
         opacities: Float[Tensor, "*batch 1"],
         num_intersects: Int[Tensor, "h w"],
         sorted_indices: Int[Tensor, "h w MAX_SORTED_INDICES"],
-        intrins: Tuple[float, float, float, float],
-        img_height: int,
-        img_width: int,
-        block_width: int,
+        camera: _Camera,
         background: Float[Tensor, "channels"],
     ) -> Tuple[Tensor, Tensor]:
 
         out_img, out_alpha = _C.rasterize_simple_sorted_forward(
-            img_height, img_width, block_width,
-            intrins,
+            camera.h, camera.w, camera.model,
+            camera.intrins, camera.get_undist_map(),
             sorted_indices,
             positions, axes_u, axes_v,
             colors, opacities,
             background,
         )
 
-        ctx.img_width = img_width
-        ctx.img_height = img_height
-        ctx.block_width = block_width
-        ctx.intrins = intrins
+        ctx.camera = camera
+        ctx.intrins = camera.intrins
         ctx.save_for_backward(
             num_intersects, sorted_indices,
             positions, axes_u, axes_v,
@@ -105,8 +97,9 @@ class _RasterizeGaussiansSimpleSorted(Function):
     @staticmethod
     def backward(ctx, v_out_img, v_out_alpha):
 
-        img_height = ctx.img_height
-        img_width = ctx.img_width
+        camera = ctx.camera
+        if camera.is_distorted():
+            raise NotImplementedError("Unsupported distorted camera for backward")
         intrins = ctx.intrins
 
         (
@@ -117,7 +110,7 @@ class _RasterizeGaussiansSimpleSorted(Function):
         ) = ctx.saved_tensors
 
         backward_return = _C.rasterize_simple_sorted_backward(
-            img_height, img_width, ctx.block_width,
+            camera.h, camera.w,
             intrins,
             num_intersects, sorted_indices,
             positions, axes_u, axes_v,

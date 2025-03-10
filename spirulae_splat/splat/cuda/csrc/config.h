@@ -1,5 +1,6 @@
 #pragma once
 
+#define BLOCK_WIDTH 16
 #define MAX_BLOCK_SIZE ( 16 * 16 )
 #define N_THREADS 256
 // for per-pixel sorting
@@ -51,4 +52,23 @@
 enum class DepthMode {
 	Mean,
     Median,
+};
+
+// camera distortion type
+// implementation:
+//  - OPENCV: TODO
+//  - OPENCV_FISHEYE
+//  - OPENCV_approx: TODO
+//  - OPENCV_FISHEYE_approx: TODO
+enum class CameraType {
+    // undistorted vs generic distorted
+	Undistorted,
+    GenericDistorted,
+    // (near-)exact distortion
+    OPENCV,
+    OPENCV_FISHEYE,
+    // approximate distortion
+    // same rasterization, distort using Jacobian in projection
+    OPENCV_approx,
+    OPENCV_FISHEYE_approx,
 };

@@ -10,8 +10,11 @@
 
 
 
+// camera distortion
+
 // kernel function for projecting each gaussian on device
 // each thread processes one gaussian
+template <CameraType CAMERA_TYPE>
 __global__ void project_gaussians_forward_kernel(
     const int num_points,
     const float3* __restrict__ means3d,
@@ -19,6 +22,7 @@ __global__ void project_gaussians_forward_kernel(
     const float4* __restrict__ quats,
     const float* __restrict__ viewmat,
     const float4 intrins,
+    const float4 dist_coeffs,
     const dim3 tile_bounds,
     const unsigned block_width,
     const float clip_thresh,
@@ -47,6 +51,16 @@ __global__ void project_gaussians_backward_kernel(
     float2* __restrict__ v_scales,
     float4* __restrict__ v_quats,
     float* __restrict__ v_viewmat
+);
+
+
+template <CameraType CAMERA_TYPE>
+__global__ void render_undistortion_map_kernel(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const float4 dist_coeffs,
+    float2* __restrict__ out_img
 );
 
 

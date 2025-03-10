@@ -3,6 +3,8 @@ import yaml
 import json
 from typing import Literal
 
+from spirulae_splat.splat._camera import _Camera
+
 class Camera:
     def __init__(self, config_path: str, transform_path: str=None):
         with open(config_path, "r") as f:
@@ -53,3 +55,5 @@ class Camera:
     def intrins(self):
         return (self.fx, self.fy, self.cx, self.cy)
 
+    def _to_ssplat_camera(self):
+        return _Camera(self.h, self.w, self.model, self.intrins, self.distortion)

@@ -28,6 +28,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // background
     m.def("render_background_sh_forward", &render_background_sh_forward_tensor);
     m.def("render_background_sh_backward", &render_background_sh_backward_tensor);
+    m.def("render_undistortion_map", &render_undistortion_map_tensor);
 
     // projection
     m.def("map_gaussian_to_intersects", &map_gaussian_to_intersects_tensor);

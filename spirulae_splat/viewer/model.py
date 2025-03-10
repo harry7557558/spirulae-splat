@@ -18,8 +18,6 @@ from spirulae_splat.viewer.camera import Camera
 from spirulae_splat.perf_timer import PerfTimer
 timer = PerfTimer("render")
 
-BLOCK_WIDTH = 16
-
 
 class SplatModel:
     def __init__(self, file_path: str):
@@ -106,8 +104,7 @@ class SplatModel:
             return self.background_color.repeat(camera.h, camera.w, 1)
         sh_coeffs = torch.cat((self.background_color.unsqueeze(0), self.background_sh), dim=0)  # [(deg+1)^2, 3]
         viewmat = torch.from_numpy(c2w[:3, :3] * np.array([1,-1,-1], dtype=np.float32)).cuda()
-        return render_background_sh(camera.w, camera.h, camera.intrins,
-                                    viewmat, sh_degree+1, sh_coeffs, BLOCK_WIDTH)
+        return render_background_sh(camera._to_ssplat_camera(), viewmat, sh_degree+1, sh_coeffs)
 
     @torch.inference_mode()
     def _render(self, camera: Camera, c2w: np.ndarray, return_depth=False, sort_per_pixel=True):
@@ -122,6 +119,7 @@ class SplatModel:
         viewmat = np.eye(4, dtype=np.float32)
         viewmat[:3, :3] = R_inv
         viewmat[:3, 3:4] = T_inv
+        ssplat_camera = camera._to_ssplat_camera()
         timer.mark("pre")
 
         quats_norm = F.normalize(self.quats, dim=-1)
@@ -145,26 +143,22 @@ class SplatModel:
             torch.exp(self.scales),
             quats_norm,
             torch.from_numpy(viewmat[:3, :]).cuda(),
-            camera.intrins,
-            camera.h, camera.w,
-            BLOCK_WIDTH,
+            ssplat_camera,
         )  # type: ignore
         timer.mark("project")
 
         if sort_per_pixel:
             num_intersects, sorted_indices = rasterize_gaussians_indices(
-                positions, axes_u, axes_v,
-                opacities,
-                bounds, num_tiles_hit, camera.intrins,
-                camera.h, camera.w, BLOCK_WIDTH
+                positions, axes_u, axes_v, opacities,
+                bounds, num_tiles_hit,
+                ssplat_camera
             )
             timer.mark("sort")
 
             rgb, alpha = rasterize_gaussians_simple_sorted(
-                positions, axes_u, axes_v,
-                rgbs, opacities,
+                positions, axes_u, axes_v, rgbs, opacities,
                 num_intersects, sorted_indices,
-                camera.intrins, camera.h, camera.w, BLOCK_WIDTH,
+                ssplat_camera
             )
             timer.mark("rasterize")
 
@@ -173,8 +167,7 @@ class SplatModel:
                 positions,
                 axes_u, axes_v,
                 rgbs, opacities,
-                bounds, num_tiles_hit, camera.intrins,
-                camera.h, camera.w, BLOCK_WIDTH,
+                bounds, num_tiles_hit, ssplat_camera,
             )
             timer.mark("rasterize")
 

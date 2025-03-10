@@ -1,3 +1,5 @@
+#pragma once
+
 #include "config.h"
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
@@ -240,56 +242,6 @@ inline __device__ void get_normal_from_axisuv_vjp(
 }
 
 
-
-// bound of 2d projection of a 3d ellipse
-// 3 components for bound are respectively
-// xy radius of AABB and radius of bounding circle
-inline __device__ bool project_ellipse_bound(
-    const glm::vec3 T,
-    const glm::vec3 V0,
-    const glm::vec3 V1,
-    float fx, float fy, float cx, float cy,
-    float2 &center, float3 &bound
-) {
-    // 2d conic coefficients
-    glm::vec3 V01 = glm::cross(V0, V1);
-    glm::vec3 V0T = glm::cross(T, V0);
-    glm::vec3 V1T = glm::cross(T, V1);
-    float A = V0T.x * V0T.x + V1T.x * V1T.x - V01.x * V01.x;
-    float B = -V01.y * V01.x + V1T.y * V1T.x + V0T.y * V0T.x;
-    float C = V0T.y * V0T.y + V1T.y * V1T.y - V01.y * V01.y;
-    float D = 2.0f * V0T.z * V0T.x + 2.0f * V1T.z * V1T.x - 2.0f * V01.z * V01.x;
-    float E = -2.0f * V01.z * V01.y + 2.0f * V1T.z * V1T.y + 2.0f * V0T.z * V0T.y;
-    float F = V0T.z * V0T.z + V1T.z * V1T.z - V01.z * V01.z;
-
-    if (!(B * B < A * C))
-        return false;
-
-    // translate to origin
-    float U = (C * D - B * E) / (2.0f * (B * B - A * C));
-    float V = (A * E - B * D) / (2.0f * (B * B - A * C));
-    float S = -(A * U * U + 2.0f * B * U * V + C * V * V + D * U + E * V + F);
-
-    // image transform
-    float U_T = fx * U + cx;
-    float V_T = fy * V + cy;
-    float A_T = A / (fx * fx);
-    float B_T = B / (fx * fy);
-    float C_T = C / (fy * fy);
-
-    // axis-aligned bounding box
-    float W_T = fx * sqrt(C * S / (A * C - B * B));
-    float H_T = fy * sqrt(A * S / (A * C - B * B));
-
-    // bounding circle
-    float L_T = 0.5f * (A_T + C_T - sqrt((A_T - C_T) * (A_T - C_T) + 4.0f * B_T * B_T));
-    float R_T = sqrt(S / L_T);
-
-    // output
-    center = {U_T, V_T};
-    bound = {W_T, H_T, R_T};
-    return true;
-}
 
 inline __device__ void get_bbox(
     const float2 center,

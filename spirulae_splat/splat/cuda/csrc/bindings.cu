@@ -13,6 +13,7 @@
 #include <torch/extension.h>
 #include <torch/types.h>
 #include <tuple>
+#include <optional>
 
 
 inline __host__ float4 tuple2float4(std::tuple<float, float, float, float> v) {
@@ -23,7 +24,7 @@ inline __host__ dim3 tuple2dim3(std::tuple<int, int, int> v) {
     return {std::get<0>(v), std::get<1>(v), std::get<2>(v)};
 }
 
-inline __host__ dim3 whb2tb(int width, int height, int block_width) {
+inline __host__ dim3 whb2tb(unsigned width, unsigned height, unsigned block_width) {
     return {
         (width + block_width - 1) / block_width,
         (height + block_width - 1) / block_width,
@@ -150,7 +151,9 @@ std::tuple<
     torch::Tensor &scales,  // [N, 2]
     torch::Tensor &quats,  // [N, 4]
     torch::Tensor &viewmat,  // [3|4, 4]
+    std::string camera_model,
     std::tuple<float, float, float, float> intrins,
+    std::tuple<float, float, float, float> dist_coeffs,
     const unsigned img_height,
     const unsigned img_width,
     const unsigned block_width,
@@ -169,26 +172,45 @@ std::tuple<
     torch::Tensor axes_v_d = torch::zeros({num_points, 3}, float32);
     // torch::Tensor depth_grads_d = torch::zeros({num_points, 2}, float32);
 
-    project_gaussians_forward_kernel<<<
-        (num_points + N_THREADS - 1) / N_THREADS,
-        N_THREADS>>>(
-        num_points,
-        (float3 *)means3d.contiguous().data_ptr<float>(),
-        (float2 *)scales.contiguous().data_ptr<float>(),
-        (float4 *)quats.contiguous().data_ptr<float>(),
-        viewmat.contiguous().data_ptr<float>(),
-        tuple2float4(intrins),
-        tile_bounds,
-        block_width,
-        clip_thresh,
-        // Outputs.
-        (int4 *)bounds_d.contiguous().data_ptr<int32_t>(),
-        num_tiles_hit_d.contiguous().data_ptr<int32_t>(),
-        (float3 *)positions_d.contiguous().data_ptr<float>(),
-        (float3 *)axes_u_d.contiguous().data_ptr<float>(),
-        (float3 *)axes_v_d.contiguous().data_ptr<float>()
-        // (float2 *)depth_grads_d.contiguous().data_ptr<float>()
-    );
+    if (camera_model == "")
+        project_gaussians_forward_kernel<CameraType::Undistorted>
+        <<<(num_points + N_THREADS - 1) / N_THREADS, N_THREADS>>>(
+            num_points,
+            (float3 *)means3d.contiguous().data_ptr<float>(),
+            (float2 *)scales.contiguous().data_ptr<float>(),
+            (float4 *)quats.contiguous().data_ptr<float>(),
+            viewmat.contiguous().data_ptr<float>(),
+            tuple2float4(intrins), tuple2float4(dist_coeffs),
+            tile_bounds, block_width,
+            clip_thresh,
+            // Outputs.
+            (int4 *)bounds_d.contiguous().data_ptr<int32_t>(),
+            num_tiles_hit_d.contiguous().data_ptr<int32_t>(),
+            (float3 *)positions_d.contiguous().data_ptr<float>(),
+            (float3 *)axes_u_d.contiguous().data_ptr<float>(),
+            (float3 *)axes_v_d.contiguous().data_ptr<float>()
+        );
+
+    else if (camera_model == "OPENCV_FISHEYE")
+        project_gaussians_forward_kernel<CameraType::OPENCV_FISHEYE>
+        <<<(num_points + N_THREADS - 1) / N_THREADS, N_THREADS>>>(
+            num_points,
+            (float3 *)means3d.contiguous().data_ptr<float>(),
+            (float2 *)scales.contiguous().data_ptr<float>(),
+            (float4 *)quats.contiguous().data_ptr<float>(),
+            viewmat.contiguous().data_ptr<float>(),
+            tuple2float4(intrins), tuple2float4(dist_coeffs),
+            tile_bounds, block_width,
+            clip_thresh,
+            // Outputs.
+            (int4 *)bounds_d.contiguous().data_ptr<int32_t>(),
+            num_tiles_hit_d.contiguous().data_ptr<int32_t>(),
+            (float3 *)positions_d.contiguous().data_ptr<float>(),
+            (float3 *)axes_u_d.contiguous().data_ptr<float>(),
+            (float3 *)axes_v_d.contiguous().data_ptr<float>()
+        );
+
+    else AT_ERROR("Invalid camera model: ", camera_model);
 
     return std::make_tuple(
         bounds_d, num_tiles_hit_d,
@@ -246,6 +268,34 @@ std::tuple<
     );
 
     return std::make_tuple(v_means3d, v_scales, v_quats, v_viewmat);
+}
+
+
+torch::Tensor render_undistortion_map_tensor(
+    const unsigned w,
+    const unsigned h,
+    const std::string camera_model,
+    const std::tuple<float, float, float, float> intrins,
+    const std::tuple<float, float, float, float> dist_coeffs
+) {
+    const dim3 tile_bounds = whb2tb(w, h, BLOCK_WIDTH);
+    const dim3 block = {BLOCK_WIDTH, BLOCK_WIDTH, 1};
+    const dim3 img_size = {w, h, 1};
+
+    auto options = torch::dtype(torch::kFloat32).device(torch::kCUDA, -1);
+    torch::Tensor out_img = torch::empty({h, w, 2}, options);
+
+    if (camera_model == "OPENCV_FISHEYE")
+        render_undistortion_map_kernel<CameraType::OPENCV_FISHEYE>
+        <<<tile_bounds, block>>>(
+            tile_bounds, img_size,
+            tuple2float4(intrins), tuple2float4(dist_coeffs),
+            (float2 *)out_img.contiguous().data_ptr<float>()
+        );
+
+    else AT_ERROR("Invalid camera model: ", camera_model);
+
+    return out_img;
 }
 
 
@@ -409,7 +459,9 @@ std::tuple<
     const unsigned img_height,
     const unsigned img_width,
     const unsigned block_width,
+    const std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
+    const std::optional<torch::Tensor> &undistortion_map_,
     const torch::Tensor &gaussian_ids_sorted,
     const torch::Tensor &tile_bins,
     const torch::Tensor &positions,
@@ -427,7 +479,7 @@ std::tuple<
     CHECK_INPUT(axes_v);
     CHECK_INPUT(colors);
     CHECK_INPUT(opacities);
-    CHECK_INPUT(background);
+    // CHECK_INPUT(background);
 
     const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
     const dim3 block = {block_width, block_width, 1};
@@ -447,22 +499,49 @@ std::tuple<
         {img_height, img_width, 1}, float32
     );
 
-    rasterize_simple_forward_kernel<<<tile_bounds, block>>>(
-        tile_bounds, img_size,
-        tuple2float4(intrins),
-        gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-        (int2 *)tile_bins.contiguous().data_ptr<int>(),
-        (float3 *)positions.contiguous().data_ptr<float>(),
-        (float3 *)axes_u.contiguous().data_ptr<float>(),
-        (float3 *)axes_v.contiguous().data_ptr<float>(),
-        (float3 *)colors.contiguous().data_ptr<float>(),
-        opacities.contiguous().data_ptr<float>(),
-        *(float3 *)background.contiguous().data_ptr<float>(),
-        // outputs
-        final_idx.contiguous().data_ptr<int>(),
-        (float3 *)out_img.contiguous().data_ptr<float>(),
-        out_alpha.contiguous().data_ptr<float>()
-    );
+    if (camera_model == "") {
+        rasterize_simple_forward_kernel<CameraType::Undistorted>
+        <<<tile_bounds, block>>>(
+            tile_bounds, img_size,
+            tuple2float4(intrins), nullptr,
+            gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+            (int2 *)tile_bins.contiguous().data_ptr<int>(),
+            (float3 *)positions.contiguous().data_ptr<float>(),
+            (float3 *)axes_u.contiguous().data_ptr<float>(),
+            (float3 *)axes_v.contiguous().data_ptr<float>(),
+            (float3 *)colors.contiguous().data_ptr<float>(),
+            opacities.contiguous().data_ptr<float>(),
+            *(float3 *)background.contiguous().data_ptr<float>(),
+            // outputs
+            final_idx.contiguous().data_ptr<int>(),
+            (float3 *)out_img.contiguous().data_ptr<float>(),
+            out_alpha.contiguous().data_ptr<float>()
+        );
+    }
+
+    else {
+        const torch::Tensor& undistortion_map = undistortion_map_.value();
+        CHECK_INPUT(undistortion_map);
+
+        rasterize_simple_forward_kernel<CameraType::GenericDistorted>
+        <<<tile_bounds, block>>>(
+            tile_bounds, img_size,
+            tuple2float4(intrins),
+            (float2 *)undistortion_map.contiguous().data_ptr<float>(),
+            gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+            (int2 *)tile_bins.contiguous().data_ptr<int>(),
+            (float3 *)positions.contiguous().data_ptr<float>(),
+            (float3 *)axes_u.contiguous().data_ptr<float>(),
+            (float3 *)axes_v.contiguous().data_ptr<float>(),
+            (float3 *)colors.contiguous().data_ptr<float>(),
+            opacities.contiguous().data_ptr<float>(),
+            *(float3 *)background.contiguous().data_ptr<float>(),
+            // outputs
+            final_idx.contiguous().data_ptr<int>(),
+            (float3 *)out_img.contiguous().data_ptr<float>(),
+            out_alpha.contiguous().data_ptr<float>()
+        );
+    }
 
     return std::make_tuple(final_idx, out_img, out_alpha);
 }
@@ -1181,7 +1260,9 @@ std::tuple<
     const unsigned img_height,
     const unsigned img_width,
     const unsigned block_width,
+    const std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
+    const std::optional<torch::Tensor> &undistortion_map_,
     const torch::Tensor &gaussian_ids_sorted,
     const torch::Tensor &tile_bins,
     const torch::Tensor &positions,
@@ -1213,20 +1294,45 @@ std::tuple<
         {img_height, img_width, MAX_SORTED_SPLATS}, float32
     );
 
-    rasterize_indices_kernel<<<tile_bounds, block>>>(
-        tile_bounds, img_size,
-        tuple2float4(intrins),
-        gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-        (int2 *)tile_bins.contiguous().data_ptr<int>(),
-        (float3 *)positions.contiguous().data_ptr<float>(),
-        (float3 *)axes_u.contiguous().data_ptr<float>(),
-        (float3 *)axes_v.contiguous().data_ptr<float>(),
-        opacities.contiguous().data_ptr<float>(),
-        // outputs
-        num_intersects.contiguous().data_ptr<int>(),
-        sorted_indices.contiguous().data_ptr<int32_t>(),
-        sorted_depths.contiguous().data_ptr<float>()
-    );
+    if (camera_model == "") {
+        rasterize_indices_kernel<CameraType::Undistorted>
+        <<<tile_bounds, block>>>(
+            tile_bounds, img_size,
+            tuple2float4(intrins), nullptr,
+            gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+            (int2 *)tile_bins.contiguous().data_ptr<int>(),
+            (float3 *)positions.contiguous().data_ptr<float>(),
+            (float3 *)axes_u.contiguous().data_ptr<float>(),
+            (float3 *)axes_v.contiguous().data_ptr<float>(),
+            opacities.contiguous().data_ptr<float>(),
+            // outputs
+            num_intersects.contiguous().data_ptr<int>(),
+            sorted_indices.contiguous().data_ptr<int32_t>(),
+            sorted_depths.contiguous().data_ptr<float>()
+        );
+    }
+
+    else {
+        const torch::Tensor& undistortion_map = undistortion_map_.value();
+        CHECK_INPUT(undistortion_map);
+
+        rasterize_indices_kernel<CameraType::GenericDistorted>
+        <<<tile_bounds, block>>>(
+            tile_bounds, img_size,
+            tuple2float4(intrins),
+            (float2 *)undistortion_map.contiguous().data_ptr<float>(),
+            gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+            (int2 *)tile_bins.contiguous().data_ptr<int>(),
+            (float3 *)positions.contiguous().data_ptr<float>(),
+            (float3 *)axes_u.contiguous().data_ptr<float>(),
+            (float3 *)axes_v.contiguous().data_ptr<float>(),
+            opacities.contiguous().data_ptr<float>(),
+            // outputs
+            num_intersects.contiguous().data_ptr<int>(),
+            sorted_indices.contiguous().data_ptr<int32_t>(),
+            sorted_depths.contiguous().data_ptr<float>()
+        );
+    }
 
     return std::make_tuple(
         num_intersects, sorted_indices, sorted_depths
@@ -1291,8 +1397,9 @@ std::tuple<
 > rasterize_simple_sorted_forward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
+    const std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
+    const std::optional<torch::Tensor> &undistortion_map_,
     const torch::Tensor &sorted_indices,
     const torch::Tensor &positions,
     const torch::Tensor &axes_u,
@@ -1308,11 +1415,7 @@ std::tuple<
     CHECK_INPUT(axes_v);
     CHECK_INPUT(colors);
     CHECK_INPUT(opacities);
-    CHECK_INPUT(background);
-
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
-    const dim3 block = {block_width, block_width, 1};
-    const dim3 img_size = {img_width, img_height, 1};
+    // CHECK_INPUT(background);
 
     auto int32 = positions.options().dtype(torch::kInt32);
     auto float32 = positions.options().dtype(torch::kFloat32);
@@ -1323,20 +1426,45 @@ std::tuple<
         {img_height, img_width, 1}, float32
     );
 
-    rasterize_simple_sorted_forward_kernel<<<tile_bounds, block>>>(
-        img_size,
-        tuple2float4(intrins),
-        sorted_indices.contiguous().data_ptr<int32_t>(),
-        (float3 *)positions.contiguous().data_ptr<float>(),
-        (float3 *)axes_u.contiguous().data_ptr<float>(),
-        (float3 *)axes_v.contiguous().data_ptr<float>(),
-        (float3 *)colors.contiguous().data_ptr<float>(),
-        opacities.contiguous().data_ptr<float>(),
-        *(float3 *)background.contiguous().data_ptr<float>(),
-        // outputs
-        (float3 *)out_img.contiguous().data_ptr<float>(),
-        out_alpha.contiguous().data_ptr<float>()
-    );
+    if (camera_model == "") {
+        rasterize_simple_sorted_forward_kernel<CameraType::Undistorted>
+        <<<(img_height*img_width+N_THREADS-1)/N_THREADS, N_THREADS>>>(
+            img_width, img_height,
+            tuple2float4(intrins), nullptr,
+            sorted_indices.contiguous().data_ptr<int32_t>(),
+            (float3 *)positions.contiguous().data_ptr<float>(),
+            (float3 *)axes_u.contiguous().data_ptr<float>(),
+            (float3 *)axes_v.contiguous().data_ptr<float>(),
+            (float3 *)colors.contiguous().data_ptr<float>(),
+            opacities.contiguous().data_ptr<float>(),
+            *(float3 *)background.contiguous().data_ptr<float>(),
+            // outputs
+            (float3 *)out_img.contiguous().data_ptr<float>(),
+            out_alpha.contiguous().data_ptr<float>()
+        );
+    }
+
+    else {
+        const torch::Tensor& undistortion_map = undistortion_map_.value();
+        CHECK_INPUT(undistortion_map);
+
+        rasterize_simple_sorted_forward_kernel<CameraType::GenericDistorted>
+        <<<(img_height*img_width+N_THREADS-1)/N_THREADS, N_THREADS>>>(
+            img_width, img_height,
+            tuple2float4(intrins),
+            (float2 *)undistortion_map.contiguous().data_ptr<float>(),
+            sorted_indices.contiguous().data_ptr<int32_t>(),
+            (float3 *)positions.contiguous().data_ptr<float>(),
+            (float3 *)axes_u.contiguous().data_ptr<float>(),
+            (float3 *)axes_v.contiguous().data_ptr<float>(),
+            (float3 *)colors.contiguous().data_ptr<float>(),
+            opacities.contiguous().data_ptr<float>(),
+            *(float3 *)background.contiguous().data_ptr<float>(),
+            // outputs
+            (float3 *)out_img.contiguous().data_ptr<float>(),
+            out_alpha.contiguous().data_ptr<float>()
+        );
+    }
 
     return std::make_tuple(out_img, out_alpha);
 }
@@ -2024,8 +2152,9 @@ std::tuple<
 torch::Tensor render_background_sh_forward_tensor(
     const unsigned w,
     const unsigned h,
-    const unsigned block_width,
+    std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
+    const std::optional<torch::Tensor> &undistortion_map_,
     const torch::Tensor &rotation,
     const unsigned sh_degree,
     const torch::Tensor &sh_coeffs
@@ -2043,21 +2172,40 @@ torch::Tensor render_background_sh_forward_tensor(
         AT_ERROR("sh_coeffs must be (sh_regree**2, 3)");
     }
 
-    const dim3 tile_bounds = whb2tb(w, h, block_width);
-    const dim3 block = {block_width, block_width, 1};
+    const dim3 tile_bounds = whb2tb(w, h, BLOCK_WIDTH);
+    const dim3 block = {BLOCK_WIDTH, BLOCK_WIDTH, 1};
     const dim3 img_size = {w, h, 1};
 
     auto options = sh_coeffs.options();
     torch::Tensor out_color = torch::empty({h, w, 3}, options);
 
-    render_background_sh_forward_kernel<<<tile_bounds, block>>>(
-        tile_bounds, img_size,
-        tuple2float4(intrins),
-        rotation.contiguous().data_ptr<float>(),
-        sh_degree,
-        (float3 *)sh_coeffs.contiguous().data_ptr<float>(),
-        (float3 *)out_color.contiguous().data_ptr<float>()
-    );
+    if (camera_model == "") {
+        render_background_sh_forward_kernel<CameraType::Undistorted>
+        <<<tile_bounds, block>>>(
+            tile_bounds, img_size,
+            tuple2float4(intrins), nullptr,
+            rotation.contiguous().data_ptr<float>(),
+            sh_degree,
+            (float3 *)sh_coeffs.contiguous().data_ptr<float>(),
+            (float3 *)out_color.contiguous().data_ptr<float>()
+        );
+    }
+
+    else {
+        const torch::Tensor& undistortion_map = undistortion_map_.value();
+        CHECK_INPUT(undistortion_map);
+
+        render_background_sh_forward_kernel<CameraType::GenericDistorted>
+        <<<tile_bounds, block>>>(
+            tile_bounds, img_size,
+            tuple2float4(intrins),
+            (float2 *)undistortion_map.contiguous().data_ptr<float>(),
+            rotation.contiguous().data_ptr<float>(),
+            sh_degree,
+            (float3 *)sh_coeffs.contiguous().data_ptr<float>(),
+            (float3 *)out_color.contiguous().data_ptr<float>()
+        );
+    }
 
     return out_color;
 }
@@ -2069,7 +2217,6 @@ std::tuple<
 > render_background_sh_backward_tensor(
     const unsigned w,
     const unsigned h,
-    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const torch::Tensor &rotation,
     const unsigned sh_degree,
@@ -2103,8 +2250,8 @@ std::tuple<
         AT_ERROR("v_out_color shape must be (h, w, 3)");
     }
 
-    const dim3 tile_bounds = whb2tb(w, h, block_width);
-    const dim3 block = {block_width, block_width, 1};
+    const dim3 tile_bounds = whb2tb(w, h, BLOCK_WIDTH);
+    const dim3 block = {BLOCK_WIDTH, BLOCK_WIDTH, 1};
     const dim3 img_size = {w, h, 1};
 
     auto options = sh_coeffs.options();

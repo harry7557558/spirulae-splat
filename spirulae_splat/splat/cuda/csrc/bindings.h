@@ -57,7 +57,9 @@ std::tuple<
     torch::Tensor &scales,  // [N, 2]
     torch::Tensor &quats,  // [N, 4]
     torch::Tensor &viewmat,  // [3|4, 4]
+    std::string camera_model,
     std::tuple<float, float, float, float> intrins,
+    std::tuple<float, float, float, float> dist_coeffs,
     const unsigned img_height,
     const unsigned img_width,
     const unsigned block_width,
@@ -82,6 +84,15 @@ std::tuple<
     torch::Tensor &v_axes_u,  // [N, 3]
     torch::Tensor &v_axes_v  // [N, 3]
     // torch::Tensor &v_depth_grads  // [N, 2]
+);
+
+
+torch::Tensor render_undistortion_map_tensor(
+    const unsigned w,
+    const unsigned h,
+    const std::string camera_model,
+    const std::tuple<float, float, float, float> intrins,
+    const std::tuple<float, float, float, float> dist_coeffs
 );
 
 
@@ -141,7 +152,9 @@ std::tuple<
     const unsigned img_height,
     const unsigned img_width,
     const unsigned block_width,
+    const std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
+    const std::optional<torch::Tensor> &undistortion_map_,
     const torch::Tensor &gaussian_ids_sorted,
     const torch::Tensor &tile_bins,
     const torch::Tensor &positions,
@@ -356,7 +369,9 @@ std::tuple<
     const unsigned img_height,
     const unsigned img_width,
     const unsigned block_width,
+    const std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
+    const std::optional<torch::Tensor> &undistortion_map_,
     const torch::Tensor &gaussian_ids_sorted,
     const torch::Tensor &tile_bins,
     const torch::Tensor &positions,
@@ -381,8 +396,9 @@ std::tuple<
 > rasterize_simple_sorted_forward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
+    const std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
+    const std::optional<torch::Tensor> &undistortion_map_,
     const torch::Tensor &sorted_indices,
     const torch::Tensor &positions,
     const torch::Tensor &axes_u,
@@ -582,8 +598,9 @@ std::tuple<
 torch::Tensor render_background_sh_forward_tensor(
     const unsigned w,
     const unsigned h,
-    const unsigned block_width,
+    std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
+    const std::optional<torch::Tensor> &undistortion_map_,
     const torch::Tensor &rotation,
     const unsigned sh_degree,
     const torch::Tensor &sh_coeffs
@@ -596,7 +613,6 @@ std::tuple<
 > render_background_sh_backward_tensor(
     const unsigned w,
     const unsigned h,
-    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const torch::Tensor &rotation,
     const unsigned sh_degree,

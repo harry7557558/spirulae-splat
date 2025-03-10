@@ -9,6 +9,7 @@ from torch import Tensor
 from torch.autograd import Function
 
 import spirulae_splat.splat.cuda as _C
+from spirulae_splat.splat._camera import _Camera
 
 from .rasterize_simple import rasterize_preprocess
 
@@ -26,12 +27,8 @@ def rasterize_gaussians_indices(
     opacities: Float[Tensor, "*batch 1"],
     bounds: Int[Tensor, "*batch 4"],
     num_tiles_hit: Int[Tensor, "*batch 1"],
-    intrins: Tuple[float, float, float, float],
-    img_height: int,
-    img_width: int,
-    block_width: int,
+    camera: _Camera,
 ) -> Tuple[Tensor, Tensor]:
-    assert block_width > 1 and block_width <= 16, "block_width must be between 2 and 16"
 
     timer.start()
 
@@ -39,12 +36,13 @@ def rasterize_gaussians_indices(
         num_intersects, gaussian_ids_sorted, tile_bins
     ) = rasterize_preprocess(
         positions, bounds, num_tiles_hit,
-        img_height, img_width, block_width,
+        camera.h, camera.w,
     )
     timer.mark("sort")  # ?us
 
     num_intersects, indices, depths = _C.rasterize_indices(
-        img_height, img_width, block_width, intrins,
+        camera.h, camera.w, camera.BLOCK_WIDTH,
+        camera.model, camera.intrins, camera.get_undist_map(),
         gaussian_ids_sorted, tile_bins,
         positions, axes_u, axes_v,
         opacities,
@@ -53,7 +51,7 @@ def rasterize_gaussians_indices(
 
     num_intersects, indices, depths = [x.contiguous() for x in (num_intersects, indices, depths)]
 
-    num_pixels = img_height * img_width
+    num_pixels = camera.h * camera.w
     # _test_sort(num_pixels, num_intersects, indices, depths)
 
     if False:

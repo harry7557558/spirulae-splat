@@ -6,10 +6,12 @@
 #include "stdio.h"
 
 
+template<CameraType CAMERA_TYPE>
 __global__ void rasterize_indices_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
     const float4 intrins,
+    const float2* __restrict__ undistortion_map,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float3* __restrict__ positions,
@@ -42,6 +44,14 @@ __global__ void rasterize_indices_kernel(
     // keep not rasterizing threads around for reading data
     bool inside = (i < img_size.y && j < img_size.x);
     bool done = !inside;
+
+    if (CAMERA_TYPE == CameraType::GenericDistorted) {
+        float2 pos_2d_u = undistortion_map[pix_id];
+        if (isnan(pos_2d.x+pos_2d.y))
+            done = true;
+        else
+            pos_2d = { pos_2d_u.x, pos_2d_u.y };
+    }
 
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
@@ -378,35 +388,43 @@ __global__ void sort_per_pixel_kernel(
 
 
 
+template<CameraType CAMERA_TYPE>
 __global__ void rasterize_simple_sorted_forward_kernel(
-    const dim3 img_size,
+    const int img_width,
+    const int img_height,
     const float4 intrins,
+    const float2* __restrict__ undistortion_map,
     const int32_t* __restrict__ sorted_indices_,
     const float3* __restrict__ positions,
     const float3* __restrict__ axes_u,
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
-    const float3& __restrict__ background,
+    const float3 __restrict__ background,
     float3* __restrict__ out_img,
     float* __restrict__ out_alpha
 ) {
-    auto block = cg::this_thread_block();
-    unsigned i =
-        block.group_index().y * block.group_dim().y + block.thread_index().y;
-    unsigned j =
-        block.group_index().x * block.group_dim().x + block.thread_index().x;
-
-    bool inside = (i < img_size.y && j < img_size.x);
-    if (!inside) return;
+    const int num_pixels = img_width * img_height;
+    int pix_id = threadIdx.x + blockIdx.x * blockDim.x;
+    if (pix_id >= num_pixels)
+        return;
 
     const float fx = intrins.x;
     const float fy = intrins.y;
     const float cx = intrins.z;
     const float cy = intrins.w;
-    glm::vec2 pos_screen = { (float)j + 0.5f, (float)i + 0.5f };
-    glm::vec2 pos_2d = { (pos_screen.x-cx)/fx, (pos_screen.y-cy)/fy };
-    int32_t pix_id = i * img_size.x + j;
+
+    int i = pix_id / img_width, j = pix_id % img_width;
+    glm::vec2 pos_2d = { (j + 0.5f - cx) / fx, (i + 0.5f - cy) / fy };
+    if (CAMERA_TYPE == CameraType::GenericDistorted) {
+        float2 pos_2d_u = undistortion_map[pix_id];
+        if (isnan(pos_2d.x+pos_2d.y)) {
+            out_img[pix_id] = {0.0f, 0.0f, 0.0f};
+            return;
+        }
+        else
+            pos_2d = { pos_2d_u.x, pos_2d_u.y };
+    }
 
     // list of indices
     const int32_t* sorted_indices = &sorted_indices_[pix_id*MAX_SORTED_SPLATS];
@@ -448,14 +466,12 @@ __global__ void rasterize_simple_sorted_forward_kernel(
         T = next_T;
     }
 
-    if (inside) {
-        float3 final_color;
-        final_color.x = pix_out.x + T * background.x;
-        final_color.y = pix_out.y + T * background.y;
-        final_color.z = pix_out.z + T * background.z;
-        out_img[pix_id] = final_color;
-        out_alpha[pix_id] = 1.0f - T;
-    }
+    float3 final_color;
+    final_color.x = pix_out.x + T * background.x;
+    final_color.y = pix_out.y + T * background.y;
+    final_color.z = pix_out.z + T * background.z;
+    out_img[pix_id] = final_color;
+    out_alpha[pix_id] = 1.0f - T;
 }
 
 
@@ -469,7 +485,7 @@ __global__ void rasterize_simple_sorted_backward_kernel(
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
-    const float3& __restrict__ background,
+    const float3 __restrict__ background,
     const float* __restrict__ output_alpha,
     const float3* __restrict__ v_output,
     const float* __restrict__ v_output_alpha,
@@ -929,7 +945,7 @@ __global__ void rasterize_sorted_forward_kernel(
     const unsigned ch_degree_phi_to_use,
     const float3* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
-    // const float3& __restrict__ background,
+    // const float3 __restrict__ background,
     const float* __restrict__ depth_ref_im,
     float* __restrict__ out_alpha,
     float3* __restrict__ out_img,
@@ -1074,7 +1090,7 @@ __global__ void rasterize_sorted_backward_kernel(
     const float3* __restrict__ colors,
     const float3* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
-    // const float3& __restrict__ background,
+    // const float3 __restrict__ background,
     const float* __restrict__ depth_ref_im,
     const float* __restrict__ output_alpha,
     const float2* __restrict__ output_depth,
@@ -1730,6 +1746,37 @@ __global__ void rasterize_simplified_sorted_backward_kernel(
 
 
 
+template __global__ void rasterize_indices_kernel<CameraType::Undistorted>(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const float2* __restrict__ undistortion_map,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    int* __restrict__ num_intersects,
+    int32_t* __restrict__ sorted_indices_,
+    float* __restrict__ sorted_depths_
+);
+
+template __global__ void rasterize_indices_kernel<CameraType::GenericDistorted>(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const float2* __restrict__ undistortion_map,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    int* __restrict__ num_intersects,
+    int32_t* __restrict__ sorted_indices_,
+    float* __restrict__ sorted_depths_
+);
 
 template __global__ void sort_per_pixel_kernel<PerPixelSortType::InsertionSort>(
     const unsigned num_pixels,
@@ -1757,6 +1804,38 @@ template __global__ void sort_per_pixel_kernel<PerPixelSortType::RandomizedQuick
     const int* __restrict__ num_intersects,
     int32_t* __restrict__ indices_,
     float* __restrict__ depths_
+);
+
+template __global__ void rasterize_simple_sorted_forward_kernel<CameraType::Undistorted>(
+    const int img_width,
+    const int img_height,
+    const float4 intrins,
+    const float2* __restrict__ undistortion_map,
+    const int32_t* __restrict__ sorted_indices_,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float3* __restrict__ colors,
+    const float* __restrict__ opacities,
+    const float3 __restrict__ background,
+    float3* __restrict__ out_img,
+    float* __restrict__ out_alpha
+);
+
+template __global__ void rasterize_simple_sorted_forward_kernel<CameraType::GenericDistorted>(
+    const int img_width,
+    const int img_height,
+    const float4 intrins,
+    const float2* __restrict__ undistortion_map,
+    const int32_t* __restrict__ sorted_indices_,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float3* __restrict__ colors,
+    const float* __restrict__ opacities,
+    const float3 __restrict__ background,
+    float3* __restrict__ out_img,
+    float* __restrict__ out_alpha
 );
 
 template __global__ void rasterize_depth_sorted_forward_kernel<DepthMode::Mean>(

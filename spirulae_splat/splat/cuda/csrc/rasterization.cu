@@ -1,13 +1,16 @@
 #include "helpers.cuh"
+#include "camera.cuh"
 #include "ch.cuh"
 #include <algorithm>
 
 
 
+template<CameraType CAMERA_TYPE>
 __global__ void rasterize_simple_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
     const float4 intrins,
+    const float2* __restrict__ undistortion_map,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float3* __restrict__ positions,
@@ -15,7 +18,7 @@ __global__ void rasterize_simple_forward_kernel(
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
-    const float3& __restrict__ background,
+    const float3 __restrict__ background,
     int* __restrict__ final_index,
     float3* __restrict__ out_img,
     float* __restrict__ out_alpha
@@ -43,6 +46,14 @@ __global__ void rasterize_simple_forward_kernel(
     // keep not rasterizing threads around for reading data
     bool inside = (i < img_size.y && j < img_size.x);
     bool done = !inside;
+
+    if (CAMERA_TYPE == CameraType::GenericDistorted) {
+        float2 pos_2d_u = undistortion_map[pix_id];
+        if (isnan(pos_2d.x+pos_2d.y))
+            done = true;
+        else
+            pos_2d = { pos_2d_u.x, pos_2d_u.y };
+    }
 
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
@@ -151,7 +162,7 @@ __global__ void rasterize_simple_backward_kernel(
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
-    const float3& __restrict__ background,
+    const float3 __restrict__ background,
     const int* __restrict__ final_index,
     const float* __restrict__ output_alpha,
     const float3* __restrict__ v_output,
@@ -789,7 +800,7 @@ __global__ void rasterize_forward_kernel(
     const unsigned ch_degree_phi_to_use,
     const float3* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
-    // const float3& __restrict__ background,
+    // const float3 __restrict__ background,
     const float* __restrict__ depth_ref_im,
     int* __restrict__ final_index,
     float* __restrict__ out_alpha,
@@ -991,7 +1002,7 @@ __global__ void rasterize_backward_kernel(
     const float3* __restrict__ colors,
     const float3* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
-    // const float3& __restrict__ background,
+    // const float3 __restrict__ background,
     const float* __restrict__ depth_ref_im,
     const int* __restrict__ final_index,
     const float* __restrict__ output_alpha,
@@ -1847,10 +1858,12 @@ __global__ void rasterize_simplified_backward_kernel(
 
 
 
+template<CameraType CAMERA_TYPE>
 __global__ void render_background_sh_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
     const float4 intrins,
+    const float2* __restrict__ undistortion_map,
     const float* rotation,  // row major 3x3
     const unsigned sh_degree,
     const float3* __restrict__ sh_coeffs_float3,
@@ -1858,14 +1871,26 @@ __global__ void render_background_sh_forward_kernel(
 ) {
     unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
     unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
+    int32_t pix_id = i * img_size.x + j;
 
     if (i >= img_size.y || j >= img_size.x) return;
 
     float fx = intrins.x, fy = intrins.y;
     float cx = intrins.z, cy = intrins.w;
 
-    float xi = (j + 0.5f - cx) / fx;
-    float yi = -(i + 0.5f - cy) / fy;
+    glm::vec2 pos_2d = { (j + 0.5f - cx) / fx, (i + 0.5f - cy) / fy };
+    if (CAMERA_TYPE == CameraType::GenericDistorted) {
+        float2 pos_2d_u = undistortion_map[pix_id];
+        if (isnan(pos_2d.x+pos_2d.y)) {
+            out_img[pix_id] = {0.0f, 0.0f, 0.0f};
+            return;
+        }
+        else
+            pos_2d = { pos_2d_u.x, pos_2d_u.y };
+    }
+
+    float xi = pos_2d.x;
+    float yi = -pos_2d.y;
     float zi = -1.0f;
     float xr = rotation[0] * xi + rotation[1] * yi + rotation[2] * zi;
     float yr = rotation[3] * xi + rotation[4] * yi + rotation[5] * zi;
@@ -1927,7 +1952,7 @@ __global__ void render_background_sh_forward_kernel(
     color.y = fmaxf(color.y + 0.5f, 0.0f);
     color.z = fmaxf(color.z + 0.5f, 0.0f);
 
-    out_img[i * img_size.x + j] = *(float3*)&color;
+    out_img[pix_id] = *(float3*)&color;
 }
 
 
@@ -2250,6 +2275,43 @@ __global__ void render_background_sh_backward_kernel(
 
 
 
+template __global__ void rasterize_simple_forward_kernel<CameraType::Undistorted>(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const float2* __restrict__ undistortion_map,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float3* __restrict__ colors,
+    const float* __restrict__ opacities,
+    const float3 __restrict__ background,
+    int* __restrict__ final_index,
+    float3* __restrict__ out_img,
+    float* __restrict__ out_alpha
+);
+
+
+template __global__ void rasterize_simple_forward_kernel<CameraType::GenericDistorted>(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const float2* __restrict__ undistortion_map,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float3* __restrict__ colors,
+    const float* __restrict__ opacities,
+    const float3 __restrict__ background,
+    int* __restrict__ final_index,
+    float3* __restrict__ out_img,
+    float* __restrict__ out_alpha
+);
+
 
 template __global__ void rasterize_depth_forward_kernel<DepthMode::Mean>(
     const dim3 tile_bounds,
@@ -2326,3 +2388,24 @@ template __global__ void rasterize_depth_backward_kernel<DepthMode::Median>(
     float* __restrict__ v_opacities
 );
 
+template __global__ void render_background_sh_forward_kernel<CameraType::Undistorted>(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const float2* __restrict__ undistortion_map,
+    const float* rotation,  // row major 3x3
+    const unsigned sh_degree,
+    const float3* __restrict__ sh_coeffs_float3,
+    float3* __restrict__ out_img
+);
+
+template __global__ void render_background_sh_forward_kernel<CameraType::GenericDistorted>(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const float2* __restrict__ undistortion_map,
+    const float* rotation,  // row major 3x3
+    const unsigned sh_degree,
+    const float3* __restrict__ sh_coeffs_float3,
+    float3* __restrict__ out_img
+);

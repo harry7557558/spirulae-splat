@@ -132,7 +132,7 @@ class _RasterizeGaussians(Function):
             num_intersects, gaussian_ids_sorted, tile_bins
         ) = rasterize_preprocess(
             positions, bounds, num_tiles_hit,
-            img_height, img_width, block_width,
+            img_height, img_width,
         )
         timerf.mark("sort")  # 200us-350us
 

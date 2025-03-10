@@ -8,6 +8,7 @@ from torch import Tensor
 from torch.autograd import Function
 
 import spirulae_splat.splat.cuda as _C
+from spirulae_splat.splat._camera import _Camera
 
 
 def project_gaussians(
@@ -15,22 +16,18 @@ def project_gaussians(
     scales: Float[Tensor, "*batch 2"],
     quats: Float[Tensor, "*batch 4"],
     viewmat: Float[Tensor, "4 4"],
-    intrins: Tuple[Float, Float, Float, Float],
-    img_height: int,
-    img_width: int,
-    block_width: int,
+    camera: _Camera,
     clip_thresh: float = 0.01,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
-    assert block_width > 1 and block_width <= 16, "block_width must be between 2 and 16"
     assert (quats.norm(dim=-1) - 1 < 1e-4).all(), "quats must be normalized"
+    camera.validate_model()
+
     return _ProjectGaussians.apply(
         means3d.contiguous(),
         scales.contiguous(),
         quats.contiguous(),
         viewmat.contiguous(),
-        intrins,
-        img_height, img_width,
-        block_width,
+        camera,
         clip_thresh,
     )
 
@@ -45,10 +42,7 @@ class _ProjectGaussians(Function):
         scales: Float[Tensor, "*batch 2"],
         quats: Float[Tensor, "*batch 4"],
         viewmat: Float[Tensor, "4 4"],
-        intrins: Tuple[Float, Float, Float, Float],
-        img_height: int,
-        img_width: int,
-        block_width: int,
+        camera: _Camera,
         clip_thresh: float = 0.01,
     ):
         num_points = means3d.shape[-2]
@@ -64,17 +58,16 @@ class _ProjectGaussians(Function):
             scales,
             quats,
             viewmat,
-            intrins,
-            img_height, img_width,
-            block_width,
+            camera.model, camera.intrins, camera.dist_coeffs,
+            camera.h, camera.w, camera.BLOCK_WIDTH,
             clip_thresh,
         )
 
         # Save non-tensors.
-        ctx.img_height = img_height
-        ctx.img_width = img_width
+        ctx.img_height = camera.h
+        ctx.img_width = camera.w
         ctx.num_points = num_points
-        ctx.intrins = intrins
+        ctx.camera = camera
 
         # Save tensors.
         ctx.save_for_backward(
@@ -92,6 +85,10 @@ class _ProjectGaussians(Function):
         v_positions, v_axes_u, v_axes_v,
         v_bounds, v_num_tiles_hit,
     ):
+        camera = ctx.camera  # type: _Camera
+        if camera.is_distorted():
+            raise NotImplementedError("Unsupported distorted camera for backward")
+
         (
             means3d, scales, quats,
             viewmat,
@@ -103,7 +100,7 @@ class _ProjectGaussians(Function):
             ctx.num_points,
             means3d, scales, quats,
             viewmat,
-            ctx.intrins,
+            camera.intrins,
             num_tiles_hit,
             v_positions, v_axes_u, v_axes_v
         )
@@ -123,13 +120,7 @@ class _ProjectGaussians(Function):
             v_quats,
             # viewmat: Float[Tensor, "4 4"],
             v_viewmat,
-            # intrins: Tuple[float, float, float, float]
-            None,
-            # img_height: int,
-            None,
-            # img_width: int,
-            None,
-            # block_width: int,
+            # camera: _Camera
             None,
             # clip_thresh,
             None,

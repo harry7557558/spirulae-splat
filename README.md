@@ -8,6 +8,17 @@ My custom method for Nerfstudio. Based on the `splatfacto` method in official Ne
   - For depth regularization, allow blending between two modes: pairwise L2 loss, and L1 loss to rendered depth
   <!-- - L1 loss to rendered mean depth requires two-pass rendering (i.e. one earlier pass for depth) that is 1.3 times as slow to train overall. The code automatically selects one-pass and two-pass rendering based on configuration. -->
 
+- Per-pixel sorting: Sort intersections by depth for each intersected splat
+  - A rasterization-like pass calculates intersected depths and splat indices, and indices are sorted by depth with utilization of shared memory for speed
+  - During training, sorted indices are cached and reused in backward
+  - Significantly improves generalizability to unseen views; for example:
+    - Trained with camera views at small angles with surface, but rendered from a view perpendicular to surface (e.g. captured with a hand-held device but rendered from bird's eye view)
+    - Reverse of above (e.g. customarily captured face or mural)
+    - Rendered at focal lengths much lower than in training images (e.g. fisheye render for robot simulator)
+  - Eliminates popping artifacts in animation (e.g. while navigating in a viewer)
+  - Overall training is up to 20% slower as without per-pixel sorting but can be faster for some scenes; (for reference, [Stop-the-pop](https://arxiv.org/abs/2402.00525v3), a more complex per-pixel sorting method, reported consistent 4% slow down)
+  - Makes inference a little tricky - A scene trained with per-pixel sorting doesn't look nice when rendered without per-pixel sorting, causes compatibility issues for existing viewers
+
 - Use polynomial spline kernel splats instead of Gaussians, as inspired by [kernels used in computational physics](https://en.wikipedia.org/wiki/Smoothed-particle_hydrodynamics)
   - This increases rendering speed by zeroing out opacities beyond a certain radius
   - A splat with higher overall opacity produces fewer Gaussians, especially when combined with culling splats with [absgrad](https://arxiv.org/abs/2404.10484) below a threshold
@@ -33,34 +44,39 @@ DEPRECATED: although this seems to improve metrics (e.g. PSNR) for a similar num
 <!-- - Use an adaptive densification threshold based on absgrad, for consistency in number of splats across scenes and hyperparameter sets -->
 
 - Use spherical harmonics for direction-dependent background color
+  - Intended to better represent sky in outdoor scenes
+  - Automatically removes floaters from sky, although sometimes cause splat opacity to vanish
+  - Improves metrics (like PSNR) with fewer splats, but reduces generalizability to unseen views
 
 - Initialize splat scale and orientation based on SVD of neighbor SfM points
 
 
 ### Ideas / To-do
 
-- Fast per-pixel depth sorting
-  - Has potential to stop "pops" and significantly reduce the number of splats, as per [this paper](https://arxiv.org/abs/2402.00525)
-  - Has potential to improve depth regularization: So far L2 depth regularization on intersected depth performs worse than L1 regularization based on center of splats
-  - Alternatively try ray tracing? Might not be fast for training, but seems to be an inference solution that's friendly with existing graphics pipelines
+- Support camera distortion in rendering and training
+  - Render large image + distort is inefficient, undistorting fisheye image for training crops boundary and loses information
+  - Idea: distort using Jacobian during projection, or calculate distorted bounding box in projection and undistort pixel in rasterization
+    - Expect the latter to work better for large distortion; ([visualization](https://www.desmos.com/calculator/eqo66jd3qa))
 
 - Better model for view-dependent colors for glossy surfaces, e.g. floor where most camera views have low elevation angle, result doesn't generalize well to bird's eye views
   - Idea: low-degree SH with Fresnel reflectance?
 
 - Depth supervision
    - Fit rendered depth to depth predicted using MVS or a foundational depth model
-   - Special attention needed for biased depth, possibly using an approach similar to how exposure is handled
+   - Special attention needed for biased depth, possibly using an approach similar to how exposure is handled, or bilateral grid as in splatfacto
+   - \*\*UPDATE: a prototype was made, while I haven't got to make depth better, supervising with alpha predicted by the depth model does seem to effectively remove floaters from sky (with spherical harmonics background)
 
 - Speed up uv-dependent color
   - Idea: use an [interpolated circular grid](https://www.desmos.com/calculator/0drgnclvod) that allow both low-latency access and accomodation for circular splat shape
   - Also [apply texture to opacity](https://arxiv.org/abs/2408.16982)?
 
-- Anti-aliasing
+- Anti-aliasing, like in [Mip-Splatting](https://arxiv.org/abs/2311.16493)
+
+- Fit a splat in 8 scalars for memory speed
 
 - Try non-planar splats, like quadratic patches
 
-- Support camera distortion, either in Gaussian projection or using ray tracing
-
+- *\*\*Add some pics to this README*
 
 ## Installation
 Install Nerfstudio (see [instructions](https://docs.nerf.studio/quickstart/installation.html)). Clone this repository and run the commands:

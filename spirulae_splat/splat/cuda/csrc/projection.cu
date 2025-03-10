@@ -1,9 +1,9 @@
 #include "helpers.cuh"
+#include "camera.cuh"
 #include <algorithm>
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
-
 
 
 
@@ -67,9 +67,11 @@ inline __device__ void projected_depth_grad_vjp(
 }
 
 
+// camera distortion
 
 // kernel function for projecting each gaussian on device
 // each thread processes one gaussian
+template <CameraType CAMERA_TYPE>
 __global__ void project_gaussians_forward_kernel(
     const int num_points,
     const float3* __restrict__ means3d,
@@ -77,6 +79,7 @@ __global__ void project_gaussians_forward_kernel(
     const float4* __restrict__ quats,
     const float* __restrict__ viewmat,
     const float4 intrins,
+    const float4 dist_coeffs,
     const dim3 tile_bounds,
     const unsigned block_width,
     const float clip_thresh,
@@ -123,7 +126,11 @@ __global__ void project_gaussians_forward_kernel(
     float2 center;
     float3 bound;
     const float kr = visibility_kernel_radius();
-    project_ellipse_bound(p_view, kr*V0, kr*V1, fx, fy, cx, cy, center, bound);
+
+    if (CAMERA_TYPE == CameraType::Undistorted)
+        project_bound_perspective(p_view, kr*V0, kr*V1, fx, fy, cx, cy, center, bound);
+    else if (CAMERA_TYPE == CameraType::OPENCV_FISHEYE)
+        project_bound_fisheye(p_view, kr*V0, kr*V1, fx, fy, cx, cy, dist_coeffs, center, bound);
 
     // compute the projected area
     int2 tile_min, tile_max;
@@ -232,6 +239,34 @@ __global__ void project_gaussians_backward_kernel(
     atomicAdd(&v_viewmat[9], v_R0[1][2]);
     atomicAdd(&v_viewmat[10], v_R0[2][2]);
     atomicAdd(&v_viewmat[11], v_T0[2]);
+}
+
+
+template <CameraType CAMERA_TYPE>
+__global__ void render_undistortion_map_kernel(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const float4 dist_coeffs,
+    float2* __restrict__ out_img
+) {
+    unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= img_size.y || j >= img_size.x) return;
+
+    float fx = intrins.x, fy = intrins.y;
+    float cx = intrins.z, cy = intrins.w;
+
+    glm::vec2 pos_screen = { (float)j + 0.5f, (float)i + 0.5f };
+    glm::vec2 pos = { (pos_screen.x-cx)/fx, (pos_screen.y-cy)/fy };
+    float tol = 0.1f / hypotf(fx, fy);
+
+    if (CAMERA_TYPE == CameraType::OPENCV_FISHEYE) {
+        bool is_out = undistort_fisheye_iterative(pos, dist_coeffs, pos, tol);
+        if (is_out) pos = { NAN, NAN };
+    }
+
+    out_img[i * img_size.x + j] = { pos.x, pos.y };
 }
 
 
@@ -405,3 +440,75 @@ __global__ void compute_relocation_split_kernel(
     }
 
 }
+
+
+
+template __global__ void project_gaussians_forward_kernel<CameraType::Undistorted>(
+    const int num_points,
+    const float3* __restrict__ means3d,
+    const float2* __restrict__ scales,
+    const float4* __restrict__ quats,
+    const float* __restrict__ viewmat,
+    const float4 intrins,
+    const float4 dist_coeffs,
+    const dim3 tile_bounds,
+    const unsigned block_width,
+    const float clip_thresh,
+    int4* __restrict__ bounds,
+    int32_t* __restrict__ num_tiles_hit,
+    float3* __restrict__ positions,
+    float3* __restrict__ axes_u,
+    float3* __restrict__ axes_v
+);
+
+template __global__ void project_gaussians_forward_kernel<CameraType::OPENCV>(
+    const int num_points,
+    const float3* __restrict__ means3d,
+    const float2* __restrict__ scales,
+    const float4* __restrict__ quats,
+    const float* __restrict__ viewmat,
+    const float4 intrins,
+    const float4 dist_coeffs,
+    const dim3 tile_bounds,
+    const unsigned block_width,
+    const float clip_thresh,
+    int4* __restrict__ bounds,
+    int32_t* __restrict__ num_tiles_hit,
+    float3* __restrict__ positions,
+    float3* __restrict__ axes_u,
+    float3* __restrict__ axes_v
+);
+
+template __global__ void project_gaussians_forward_kernel<CameraType::OPENCV_FISHEYE>(
+    const int num_points,
+    const float3* __restrict__ means3d,
+    const float2* __restrict__ scales,
+    const float4* __restrict__ quats,
+    const float* __restrict__ viewmat,
+    const float4 intrins,
+    const float4 dist_coeffs,
+    const dim3 tile_bounds,
+    const unsigned block_width,
+    const float clip_thresh,
+    int4* __restrict__ bounds,
+    int32_t* __restrict__ num_tiles_hit,
+    float3* __restrict__ positions,
+    float3* __restrict__ axes_u,
+    float3* __restrict__ axes_v
+);
+
+template __global__ void render_undistortion_map_kernel<CameraType::OPENCV>(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const float4 dist_coeffs,
+    float2* __restrict__ out_img
+);
+
+template __global__ void render_undistortion_map_kernel<CameraType::OPENCV_FISHEYE>(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const float4 dist_coeffs,
+    float2* __restrict__ out_img
+);

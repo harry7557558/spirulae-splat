@@ -18,10 +18,12 @@ enum class PerPixelSortType {
 
 
 
+template<CameraType CAMERA_TYPE>
 __global__ void rasterize_indices_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
     const float4 intrins,
+    const float2* __restrict__ undistortion_map,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float3* __restrict__ positions,
@@ -43,16 +45,19 @@ __global__ void sort_per_pixel_kernel(
 );
 
 
+template<CameraType CAMERA_TYPE>
 __global__ void rasterize_simple_sorted_forward_kernel(
-    const dim3 img_size,
+    const int img_width,
+    const int img_height,
     const float4 intrins,
+    const float2* __restrict__ undistortion_map,
     const int32_t* __restrict__ sorted_indices_,
     const float3* __restrict__ positions,
     const float3* __restrict__ axes_u,
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
-    const float3& __restrict__ background,
+    const float3 __restrict__ background,
     float3* __restrict__ out_img,
     float* __restrict__ out_alpha
 );
@@ -68,7 +73,7 @@ __global__ void rasterize_simple_sorted_backward_kernel(
     const float3* __restrict__ axes_v,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
-    const float3& __restrict__ background,
+    const float3 __restrict__ background,
     const float* __restrict__ output_alpha,
     const float3* __restrict__ v_output,
     const float* __restrict__ v_output_alpha,
@@ -132,7 +137,7 @@ __global__ void rasterize_sorted_forward_kernel(
     const unsigned ch_degree_phi_to_use,
     const float3* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
-    // const float3& __restrict__ background,
+    // const float3 __restrict__ background,
     const float* __restrict__ depth_ref_im,
     float* __restrict__ out_alpha,
     float3* __restrict__ out_img,
@@ -158,7 +163,7 @@ __global__ void rasterize_sorted_backward_kernel(
     const float3* __restrict__ colors,
     const float3* __restrict__ ch_coeffs,
     const float* __restrict__ opacities,
-    // const float3& __restrict__ background,
+    // const float3 __restrict__ background,
     const float* __restrict__ depth_ref_im,
     const float* __restrict__ output_alpha,
     const float2* __restrict__ output_depth,

@@ -49,6 +49,7 @@ from spirulae_splat.splat import (
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
 from spirulae_splat.strategy import DefaultStrategy
+from spirulae_splat.splat._camera import _Camera
 
 from nerfstudio.cameras.camera_optimizers import (CameraOptimizer,
                                                   CameraOptimizerConfig)
@@ -211,7 +212,7 @@ class SpirulaeModelConfig(ModelConfig):
     """minimum opacity for MCMC relocation"""
 
     # representation
-    use_per_pixel_sorting: bool = False
+    use_per_pixel_sorting: bool = True
     """enable per-pixel sorting"""
     per_pixel_sorting_warmup: int = 2000
     """use per pixel sorting only after this number of steps"""
@@ -627,7 +628,7 @@ class SpirulaeModel(Model):
             return resize_image(image, d)
         return image
 
-    def get_background_image(self, camera: Cameras):
+    def get_background_image(self, camera: Cameras, ssplat_camera: _Camera):
         if not isinstance(camera, Cameras):
             print("Called get_background_image with not a camera")
             return {}
@@ -641,11 +642,9 @@ class SpirulaeModel(Model):
         if not self.config.train_background_color or not (sh_degree > 0):
             return self.background_color.repeat(H, W, 1)
 
-        fx, fy = camera.fx[0].item(), camera.fy[0].item()
-        cx, cy = camera.cx[0].item(), camera.cy[0].item()
         rotation = camera.camera_to_worlds[0][:3, :3]
         sh_coeffs = torch.cat((self.background_color.unsqueeze(0), self.background_sh), dim=0)  # [(deg+1)^2, 3]
-        return render_background_sh(W, H, (fx, fy, cx, cy), rotation, sh_degree+1, sh_coeffs, 16)
+        return render_background_sh(ssplat_camera, rotation, sh_degree+1, sh_coeffs)
 
     @staticmethod
     def get_empty_outputs(width: int, height: int, background: torch.Tensor) -> Dict[str, Union[torch.Tensor, List]]:
@@ -672,6 +671,7 @@ class SpirulaeModel(Model):
         W, H = int(camera.width.item()), int(camera.height.item())
         intrins = (camera.fx.item(), camera.fy.item(), camera.cx.item(), camera.cy.item())
         camera.rescale_output_resolution(camera_downscale)
+        ssplat_camera = _Camera(H, W, "", intrins)
         timerr.mark(".")  # 400us
 
         R = optimized_camera_to_world[:3, :3]  # 3 x 3
@@ -698,7 +698,6 @@ class SpirulaeModel(Model):
             rgbs = self.features_dc
         timerr.mark("sh")  # 200us-350us
 
-        BLOCK_WIDTH = 16
         (
             positions, axes_u, axes_v,
             bounds, num_tiles_hit
@@ -707,9 +706,7 @@ class SpirulaeModel(Model):
             torch.exp(self.scales),
             quats,
             viewmat[:3, :].cuda(),
-            intrins,
-            H, W,
-            BLOCK_WIDTH,
+            ssplat_camera,
         )  # type: ignore
         timerr.mark("project")  # 200us-350us
 
@@ -721,7 +718,7 @@ class SpirulaeModel(Model):
             raster_indices = rasterize_gaussians_indices(
                 positions, axes_u, axes_v, opacities,
                 bounds, num_tiles_hit,
-                intrins, H, W, BLOCK_WIDTH
+                ssplat_camera
             )
             rasterize_depth = rasterize_gaussians_depth_sorted
             rasterize = rasterize_gaussians_sorted
@@ -742,7 +739,7 @@ class SpirulaeModel(Model):
             depth_im_ref = rasterize_depth(
                 positions, axes_u, axes_v, opacities,
                 *((raster_indices[1],) if use_per_pixel_sorting else raster_indices),
-                intrins, H, W, BLOCK_WIDTH,
+                intrins, H, W, ssplat_camera.BLOCK_WIDTH,
                 self.config.depth_mode
             )
             depth_im_ref = torch.where(
@@ -764,7 +761,7 @@ class SpirulaeModel(Model):
                 # background_color,
                 self.config.depth_reg_pairwise_factor,
                 *raster_indices,
-                intrins, H, W, BLOCK_WIDTH,
+                intrins, H, W, ssplat_camera.BLOCK_WIDTH,
             )  # type: ignore
             timerr.mark("render")  # ?us
 
@@ -774,7 +771,7 @@ class SpirulaeModel(Model):
              = rasterize_simplified(
                 positions, axes_u, axes_v, rgbs, opacities,
                 *raster_indices,
-                intrins, H, W, BLOCK_WIDTH,
+                intrins, H, W, ssplat_camera.BLOCK_WIDTH,
             )
             depth_im_ref = torch.where(
                 alpha > 0.0, depth_im[..., :1] / alpha,
@@ -788,7 +785,7 @@ class SpirulaeModel(Model):
                 "height": H,
                 "n_cameras": camera.shape[0],
                 "radii": self.config.kernel_radius/3.0 * \
-                      num_tiles_hit.unsqueeze(0)**0.5 / 2 * BLOCK_WIDTH,
+                      num_tiles_hit.unsqueeze(0)**0.5 / 2 * ssplat_camera.BLOCK_WIDTH,
                 "means2d": positions,
             }
         timerr.mark("post")  # 100us-200us
@@ -796,7 +793,7 @@ class SpirulaeModel(Model):
         # blend with background
         background = self.background_color.reshape((1, 1, 3))
         if self.config.background_sh_degree > 0 or True:
-            background = self.get_background_image(camera)
+            background = self.get_background_image(camera, ssplat_camera)
             rgb = rgb + (1.0 - alpha) * background
 
         # saturate pixel value

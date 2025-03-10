@@ -36,6 +36,7 @@ rasterize_simplified_sorted_backward = _make_lazy_cuda_func("rasterize_simplifie
 # background
 render_background_sh_forward = _make_lazy_cuda_func("render_background_sh_forward")
 render_background_sh_backward = _make_lazy_cuda_func("render_background_sh_backward")
+render_undistortion_map = _make_lazy_cuda_func("render_undistortion_map")
 
 # projection
 map_gaussian_to_intersects = _make_lazy_cuda_func("map_gaussian_to_intersects")

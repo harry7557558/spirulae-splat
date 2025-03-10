@@ -144,6 +144,7 @@ class RenderViewer(QMainWindow):
 if __name__ == "__main__":
 
     camera_path = os.path.join(os.path.dirname(__file__), "camera.yaml")
+    # camera_path = os.path.join(os.path.dirname(__file__), "camera_t265.yaml")
     ssplat_camera = Camera(camera_path)
 
     file_path = "/home/harry7557558/nerfstudio/data/sfm_test/mosque/outputs/8/spirulae/2024-12-24_141831/nerfstudio_models/step-000029999.ckpt"
