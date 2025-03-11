@@ -55,11 +55,12 @@ __global__ void rasterize_simple_backward_kernel(
 );
 
 
-template <DepthMode DEPTH_MODE>
+template <DepthMode DEPTH_MODE, CameraType CAMERA_TYPE>
 __global__ void rasterize_depth_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
     const float4 intrins,
+    const float2* __restrict__ undistortion_map,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float3* __restrict__ positions,

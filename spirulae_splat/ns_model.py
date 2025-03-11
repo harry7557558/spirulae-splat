@@ -749,7 +749,7 @@ class SpirulaeModel(Model):
             depth_im_ref = rasterize_depth(
                 positions, axes_u, axes_v, opacities,
                 *((raster_indices[1],) if use_per_pixel_sorting else raster_indices),
-                intrins, H, W, ssplat_camera.BLOCK_WIDTH,
+                ssplat_camera,
                 self.config.depth_mode
             )
             depth_im_ref = torch.where(

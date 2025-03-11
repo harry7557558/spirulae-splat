@@ -47,6 +47,7 @@ __global__ void rasterize_simple_forward_kernel(
     bool inside = (i < img_size.y && j < img_size.x);
     bool done = !inside;
 
+    // camera distortion
     if (CAMERA_TYPE == CameraType::GenericDistorted) {
         float2 pos_2d_u = undistortion_map[pix_id];
         if (isnan(pos_2d.x+pos_2d.y))
@@ -371,11 +372,12 @@ __global__ void rasterize_simple_backward_kernel(
 
 
 
-template <DepthMode DEPTH_MODE>
+template <DepthMode DEPTH_MODE, CameraType CAMERA_TYPE>
 __global__ void rasterize_depth_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
     const float4 intrins,
+    const float2* __restrict__ undistortion_map,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float3* __restrict__ positions,
@@ -409,6 +411,15 @@ __global__ void rasterize_depth_forward_kernel(
     // keep not rasterizing threads around for reading data
     bool inside = (i < img_size.y && j < img_size.x);
     bool done = !inside;
+
+    // camera distortion
+    if (CAMERA_TYPE == CameraType::GenericDistorted) {
+        float2 pos_2d_u = undistortion_map[pix_id];
+        if (isnan(pos_2d.x+pos_2d.y))
+            done = true;
+        else
+            pos_2d = { pos_2d_u.x, pos_2d_u.y };
+    }
 
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
@@ -2293,7 +2304,6 @@ template __global__ void rasterize_simple_forward_kernel<CameraType::Undistorted
     float* __restrict__ out_alpha
 );
 
-
 template __global__ void rasterize_simple_forward_kernel<CameraType::GenericDistorted>(
     const dim3 tile_bounds,
     const dim3 img_size,
@@ -2313,10 +2323,12 @@ template __global__ void rasterize_simple_forward_kernel<CameraType::GenericDist
 );
 
 
-template __global__ void rasterize_depth_forward_kernel<DepthMode::Mean>(
+template __global__ void rasterize_depth_forward_kernel
+<DepthMode::Mean, CameraType::Undistorted>(
     const dim3 tile_bounds,
     const dim3 img_size,
     const float4 intrins,
+    const float2* __restrict__ undistortion_map,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float3* __restrict__ positions,
@@ -2328,11 +2340,46 @@ template __global__ void rasterize_depth_forward_kernel<DepthMode::Mean>(
     float2* __restrict__ out_visibility
 );
 
-
-template __global__ void rasterize_depth_forward_kernel<DepthMode::Median>(
+template __global__ void rasterize_depth_forward_kernel
+<DepthMode::Mean, CameraType::GenericDistorted>(
     const dim3 tile_bounds,
     const dim3 img_size,
     const float4 intrins,
+    const float2* __restrict__ undistortion_map,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    int* __restrict__ final_index,
+    float* __restrict__ out_depth,
+    float2* __restrict__ out_visibility
+);
+
+template __global__ void rasterize_depth_forward_kernel
+<DepthMode::Median, CameraType::Undistorted>(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const float2* __restrict__ undistortion_map,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    int* __restrict__ final_index,
+    float* __restrict__ out_depth,
+    float2* __restrict__ out_visibility
+);
+
+template __global__ void rasterize_depth_forward_kernel
+<DepthMode::Median, CameraType::GenericDistorted>(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float4 intrins,
+    const float2* __restrict__ undistortion_map,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float3* __restrict__ positions,

@@ -10,7 +10,7 @@ import spirulae_splat.splat.cuda as _C
 class _Camera:
     _undist_maps: Dict[Tuple, Float[torch.Tensor, "h w 2"]] = {}
     _undist_maps_list: List[Tuple[Tuple, int]] = []
-    _undist_maps_cache_size: int = 0
+    _undist_maps_cache_size: List[int] = [0]
     _undist_maps_max_cache_size: int = 1024*1024*2*128  # number of floats, 1GB
 
     BLOCK_WIDTH = 16
@@ -51,6 +51,17 @@ class _Camera:
             self.intrins, self.dist_coeffs
         )
         self._undist_maps[tup] = undist_map
-        return undist_map
 
-        # TODO: limit cache size
+        # limit cache size
+        map_size = torch.numel(undist_map)
+        self._undist_maps_list.append((tup, map_size))
+        self._undist_maps_cache_size[0] += map_size
+        while self._undist_maps_cache_size[0] > self._undist_maps_max_cache_size:
+            if len(self._undist_maps_list) == 0:
+                break
+            tup, size = self._undist_maps_list[0]
+            del self._undist_maps_list[0]
+            del self._undist_maps[tup]
+            self._undist_maps_cache_size[0] -= size
+
+        return undist_map

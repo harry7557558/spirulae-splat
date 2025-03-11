@@ -647,7 +647,9 @@ std::tuple<
     const unsigned img_height,
     const unsigned img_width,
     const unsigned block_width,
+    const std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
+    const std::optional<torch::Tensor> &undistortion_map_,
     const torch::Tensor &gaussian_ids_sorted,
     const torch::Tensor &tile_bins,
     const torch::Tensor &positions,
@@ -679,37 +681,84 @@ std::tuple<
         {img_height, img_width, 2}, float32
     );
 
-    if (depth_mode == "mean")
-        rasterize_depth_forward_kernel<DepthMode::Mean><<<tile_bounds, block>>>(
-            tile_bounds, img_size,
-            tuple2float4(intrins),
-            gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-            (int2 *)tile_bins.contiguous().data_ptr<int>(),
-            (float3 *)positions.contiguous().data_ptr<float>(),
-            (float3 *)axes_u.contiguous().data_ptr<float>(),
-            (float3 *)axes_v.contiguous().data_ptr<float>(),
-            opacities.contiguous().data_ptr<float>(),
-            // outputs
-            final_idx.contiguous().data_ptr<int>(),
-            out_depth.contiguous().data_ptr<float>(),
-            (float2 *)out_visibility.contiguous().data_ptr<float>()
-        );
+    // TODO: how to refactor this
 
-    else if (depth_mode == "median")
-        rasterize_depth_forward_kernel<DepthMode::Median><<<tile_bounds, block>>>(
-            tile_bounds, img_size,
-            tuple2float4(intrins),
-            gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-            (int2 *)tile_bins.contiguous().data_ptr<int>(),
-            (float3 *)positions.contiguous().data_ptr<float>(),
-            (float3 *)axes_u.contiguous().data_ptr<float>(),
-            (float3 *)axes_v.contiguous().data_ptr<float>(),
-            opacities.contiguous().data_ptr<float>(),
-            // outputs
-            final_idx.contiguous().data_ptr<int>(),
-            out_depth.contiguous().data_ptr<float>(),
-            (float2 *)out_visibility.contiguous().data_ptr<float>()
-        );
+    if (camera_model == "") {
+        if (depth_mode == "mean")
+            rasterize_depth_forward_kernel<DepthMode::Mean, CameraType::Undistorted>
+            <<<tile_bounds, block>>>(
+                tile_bounds, img_size,
+                tuple2float4(intrins), nullptr,
+                gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+                (int2 *)tile_bins.contiguous().data_ptr<int>(),
+                (float3 *)positions.contiguous().data_ptr<float>(),
+                (float3 *)axes_u.contiguous().data_ptr<float>(),
+                (float3 *)axes_v.contiguous().data_ptr<float>(),
+                opacities.contiguous().data_ptr<float>(),
+                // outputs
+                final_idx.contiguous().data_ptr<int>(),
+                out_depth.contiguous().data_ptr<float>(),
+                (float2 *)out_visibility.contiguous().data_ptr<float>()
+            );
+
+        else if (depth_mode == "median")
+            rasterize_depth_forward_kernel<DepthMode::Median, CameraType::Undistorted>
+            <<<tile_bounds, block>>>(
+                tile_bounds, img_size,
+                tuple2float4(intrins), nullptr,
+                gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+                (int2 *)tile_bins.contiguous().data_ptr<int>(),
+                (float3 *)positions.contiguous().data_ptr<float>(),
+                (float3 *)axes_u.contiguous().data_ptr<float>(),
+                (float3 *)axes_v.contiguous().data_ptr<float>(),
+                opacities.contiguous().data_ptr<float>(),
+                // outputs
+                final_idx.contiguous().data_ptr<int>(),
+                out_depth.contiguous().data_ptr<float>(),
+                (float2 *)out_visibility.contiguous().data_ptr<float>()
+            );
+    }
+
+    else {
+        const torch::Tensor& undistortion_map = undistortion_map_.value();
+        CHECK_INPUT(undistortion_map);
+
+        if (depth_mode == "mean")
+            rasterize_depth_forward_kernel<DepthMode::Mean, CameraType::GenericDistorted>
+            <<<tile_bounds, block>>>(
+                tile_bounds, img_size,
+                tuple2float4(intrins),
+                (float2 *)undistortion_map.contiguous().data_ptr<float>(),
+                gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+                (int2 *)tile_bins.contiguous().data_ptr<int>(),
+                (float3 *)positions.contiguous().data_ptr<float>(),
+                (float3 *)axes_u.contiguous().data_ptr<float>(),
+                (float3 *)axes_v.contiguous().data_ptr<float>(),
+                opacities.contiguous().data_ptr<float>(),
+                // outputs
+                final_idx.contiguous().data_ptr<int>(),
+                out_depth.contiguous().data_ptr<float>(),
+                (float2 *)out_visibility.contiguous().data_ptr<float>()
+            );
+
+        else if (depth_mode == "median")
+            rasterize_depth_forward_kernel<DepthMode::Median, CameraType::GenericDistorted>
+            <<<tile_bounds, block>>>(
+                tile_bounds, img_size,
+                tuple2float4(intrins),
+                (float2 *)undistortion_map.contiguous().data_ptr<float>(),
+                gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+                (int2 *)tile_bins.contiguous().data_ptr<int>(),
+                (float3 *)positions.contiguous().data_ptr<float>(),
+                (float3 *)axes_u.contiguous().data_ptr<float>(),
+                (float3 *)axes_v.contiguous().data_ptr<float>(),
+                opacities.contiguous().data_ptr<float>(),
+                // outputs
+                final_idx.contiguous().data_ptr<int>(),
+                out_depth.contiguous().data_ptr<float>(),
+                (float2 *)out_visibility.contiguous().data_ptr<float>()
+            );
+    }
 
     return std::make_tuple(final_idx, out_depth, out_visibility);
 }
@@ -1567,8 +1616,9 @@ std::tuple<
     const std::string depth_mode,
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
+    const std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
+    const std::optional<torch::Tensor> &undistortion_map_,
     const torch::Tensor &sorted_indices,
     const torch::Tensor &positions,
     const torch::Tensor &axes_u,
@@ -1582,10 +1632,6 @@ std::tuple<
     CHECK_INPUT(axes_v);
     CHECK_INPUT(opacities);
 
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
-    const dim3 block = {block_width, block_width, 1};
-    const dim3 img_size = {img_width, img_height, 1};
-
     auto int32 = positions.options().dtype(torch::kInt32);
     auto float32 = positions.options().dtype(torch::kFloat32);
     torch::Tensor final_idx = torch::zeros(
@@ -1598,35 +1644,79 @@ std::tuple<
         {img_height, img_width, 2}, float32
     );
 
-    if (depth_mode == "mean")
-        rasterize_depth_sorted_forward_kernel<DepthMode::Mean><<<tile_bounds, block>>>(
-            img_size,
-            tuple2float4(intrins),
-            sorted_indices.contiguous().data_ptr<int32_t>(),
-            (float3 *)positions.contiguous().data_ptr<float>(),
-            (float3 *)axes_u.contiguous().data_ptr<float>(),
-            (float3 *)axes_v.contiguous().data_ptr<float>(),
-            opacities.contiguous().data_ptr<float>(),
-            // outputs
-            final_idx.contiguous().data_ptr<int>(),
-            out_depth.contiguous().data_ptr<float>(),
-            (float2 *)out_visibility.contiguous().data_ptr<float>()
-        );
+    if (camera_model == "") {
 
-    else if (depth_mode == "median")
-        rasterize_depth_sorted_forward_kernel<DepthMode::Median><<<tile_bounds, block>>>(
-            img_size,
-            tuple2float4(intrins),
-            sorted_indices.contiguous().data_ptr<int32_t>(),
-            (float3 *)positions.contiguous().data_ptr<float>(),
-            (float3 *)axes_u.contiguous().data_ptr<float>(),
-            (float3 *)axes_v.contiguous().data_ptr<float>(),
-            opacities.contiguous().data_ptr<float>(),
-            // outputs
-            final_idx.contiguous().data_ptr<int>(),
-            out_depth.contiguous().data_ptr<float>(),
-            (float2 *)out_visibility.contiguous().data_ptr<float>()
-        );
+        if (depth_mode == "mean")
+            rasterize_depth_sorted_forward_kernel<DepthMode::Mean, CameraType::Undistorted>
+            <<<(img_height*img_width+N_THREADS-1)/N_THREADS, N_THREADS>>>(
+                img_width, img_height,
+                tuple2float4(intrins), nullptr,
+                sorted_indices.contiguous().data_ptr<int32_t>(),
+                (float3 *)positions.contiguous().data_ptr<float>(),
+                (float3 *)axes_u.contiguous().data_ptr<float>(),
+                (float3 *)axes_v.contiguous().data_ptr<float>(),
+                opacities.contiguous().data_ptr<float>(),
+                // outputs
+                final_idx.contiguous().data_ptr<int>(),
+                out_depth.contiguous().data_ptr<float>(),
+                (float2 *)out_visibility.contiguous().data_ptr<float>()
+            );
+
+        else if (depth_mode == "median")
+            rasterize_depth_sorted_forward_kernel<DepthMode::Median, CameraType::Undistorted>
+            <<<(img_height*img_width+N_THREADS-1)/N_THREADS, N_THREADS>>>(
+                img_width, img_height,
+                tuple2float4(intrins), nullptr,
+                sorted_indices.contiguous().data_ptr<int32_t>(),
+                (float3 *)positions.contiguous().data_ptr<float>(),
+                (float3 *)axes_u.contiguous().data_ptr<float>(),
+                (float3 *)axes_v.contiguous().data_ptr<float>(),
+                opacities.contiguous().data_ptr<float>(),
+                // outputs
+                final_idx.contiguous().data_ptr<int>(),
+                out_depth.contiguous().data_ptr<float>(),
+                (float2 *)out_visibility.contiguous().data_ptr<float>()
+            );
+    }
+
+    else {
+        const torch::Tensor& undistortion_map = undistortion_map_.value();
+        CHECK_INPUT(undistortion_map);
+
+        if (depth_mode == "mean")
+            rasterize_depth_sorted_forward_kernel<DepthMode::Mean, CameraType::GenericDistorted>
+            <<<(img_height*img_width+N_THREADS-1)/N_THREADS, N_THREADS>>>(
+                img_width, img_height,
+                tuple2float4(intrins),
+                (float2 *)undistortion_map.contiguous().data_ptr<float>(),
+                sorted_indices.contiguous().data_ptr<int32_t>(),
+                (float3 *)positions.contiguous().data_ptr<float>(),
+                (float3 *)axes_u.contiguous().data_ptr<float>(),
+                (float3 *)axes_v.contiguous().data_ptr<float>(),
+                opacities.contiguous().data_ptr<float>(),
+                // outputs
+                final_idx.contiguous().data_ptr<int>(),
+                out_depth.contiguous().data_ptr<float>(),
+                (float2 *)out_visibility.contiguous().data_ptr<float>()
+            );
+
+        else if (depth_mode == "median")
+            rasterize_depth_sorted_forward_kernel<DepthMode::Median, CameraType::GenericDistorted>
+            <<<(img_height*img_width+N_THREADS-1)/N_THREADS, N_THREADS>>>(
+                img_width, img_height,
+                tuple2float4(intrins),
+                (float2 *)undistortion_map.contiguous().data_ptr<float>(),
+                sorted_indices.contiguous().data_ptr<int32_t>(),
+                (float3 *)positions.contiguous().data_ptr<float>(),
+                (float3 *)axes_u.contiguous().data_ptr<float>(),
+                (float3 *)axes_v.contiguous().data_ptr<float>(),
+                opacities.contiguous().data_ptr<float>(),
+                // outputs
+                final_idx.contiguous().data_ptr<int>(),
+                out_depth.contiguous().data_ptr<float>(),
+                (float2 *)out_visibility.contiguous().data_ptr<float>()
+            );
+    }
 
     return std::make_tuple(final_idx, out_depth, out_visibility);
 }

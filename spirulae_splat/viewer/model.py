@@ -8,7 +8,8 @@ from spirulae_splat.splat import (
     rasterize_gaussians_simple,
     rasterize_gaussians_depth,
     rasterize_gaussians_indices,
-    rasterize_gaussians_simple_sorted
+    rasterize_gaussians_simple_sorted,
+    rasterize_gaussians_depth_sorted,
 )
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import spherical_harmonics
@@ -26,6 +27,8 @@ class SplatModel:
         elif file_path.endswith('config.yml'):
             self.load_config(file_path)
         self.bgr = True
+        self.flip_yz = False
+        self.return_torch = False
 
     def load_ckpt(self, file_path):
         checkpoint = torch.load(file_path)
@@ -117,6 +120,9 @@ class SplatModel:
         c2w = c2w.astype(np.float32)
         R = c2w[:3, :3]  # 3 x 3
         T = c2w[:3, 3:4]  # 3 x 1
+        if self.flip_yz:
+            R_edit = np.diag([1, -1, -1])
+            R = R @ R_edit
         R_inv = R.T
         T_inv = -R_inv @ T
         viewmat = np.eye(4, dtype=np.float32)
@@ -187,14 +193,21 @@ class SplatModel:
         timer.mark("background")
 
         if return_depth:
-            depth = rasterize_gaussians_depth(
-                positions,
-                axes_u, axes_v,
-                opacities,
-                bounds, num_tiles_hit, camera.intrins,
-                camera.h, camera.w, BLOCK_WIDTH,
-                "median"
-            )
+            if sort_per_pixel:
+                depth = rasterize_gaussians_depth_sorted(
+                    positions, axes_u, axes_v, opacities,
+                    sorted_indices,
+                    ssplat_camera,
+                    "median"
+                )
+            else:
+                depth = rasterize_gaussians_depth(
+                    positions, axes_u, axes_v, opacities,
+                    bounds, num_tiles_hit,
+                    ssplat_camera,
+                    "median"
+                )
+            depth = torch.where(depth == 0.0, depth.max(), depth)
             timer.end("depth")
             return rgb, depth
 
@@ -202,9 +215,23 @@ class SplatModel:
         return rgb
 
     @torch.no_grad()
-    def render(self, camera, c2w):
+    def render(self, camera, c2w, return_depth=False):
         c2w = camera.c2w_to_c2o(c2w)
+
+        if return_depth:
+            rgb, depth = self._render(camera, c2w, True)
+
+            if self.return_torch:
+                return rgb, depth
+
+            im = rgb.cpu().numpy()
+            im = (im*255).astype(np.uint8)
+            depth = depth.cpu().numpy()
+            return im, depth
+
         rgb = self._render(camera, c2w)
+        if self.return_torch:
+            return rgb
 
         im = rgb.cpu().numpy()
         im = (im*255).astype(np.uint8)

@@ -628,10 +628,12 @@ __global__ void rasterize_simple_sorted_backward_kernel(
 
 
 
-template <DepthMode DEPTH_MODE>
+template <DepthMode DEPTH_MODE, CameraType CAMERA_TYPE>
 __global__ void rasterize_depth_sorted_forward_kernel(
-    const dim3 img_size,
+    const int img_width,
+    const int img_height,
     const float4 intrins,
+    const float2* __restrict__ undistortion_map,
     const int32_t* __restrict__ sorted_indices_,
     const float3* __restrict__ positions,
     const float3* __restrict__ axes_u,
@@ -641,22 +643,28 @@ __global__ void rasterize_depth_sorted_forward_kernel(
     float* __restrict__ out_depth,
     float2* __restrict__ out_visibility
 ) {
-    auto block = cg::this_thread_block();
-    unsigned i =
-        block.group_index().y * block.group_dim().y + block.thread_index().y;
-    unsigned j =
-        block.group_index().x * block.group_dim().x + block.thread_index().x;
-
-    bool inside = (i < img_size.y && j < img_size.x);
-    if (!inside) return;
+    const int num_pixels = img_width * img_height;
+    int pix_id = threadIdx.x + blockIdx.x * blockDim.x;
+    if (pix_id >= num_pixels)
+        return;
 
     const float fx = intrins.x;
     const float fy = intrins.y;
     const float cx = intrins.z;
     const float cy = intrins.w;
-    glm::vec2 pos_screen = { (float)j + 0.5f, (float)i + 0.5f };
-    glm::vec2 pos_2d = { (pos_screen.x-cx)/fx, (pos_screen.y-cy)/fy };
-    int32_t pix_id = i * img_size.x + j;
+
+    int i = pix_id / img_width, j = pix_id % img_width;
+    glm::vec2 pos_2d = { (j + 0.5f - cx) / fx, (i + 0.5f - cy) / fy };
+    if (CAMERA_TYPE == CameraType::GenericDistorted) {
+        float2 pos_2d_u = undistortion_map[pix_id];
+        if (isnan(pos_2d.x+pos_2d.y)) {
+            out_depth[pix_id] = 0.0f;
+            out_visibility[pix_id] = { 1.0f, 0.0f };
+            return;
+        }
+        else
+            pos_2d = { pos_2d_u.x, pos_2d_u.y };
+    }
 
     // list of indices
     const int32_t* sorted_indices = &sorted_indices_[pix_id*MAX_SORTED_SPLATS];
@@ -732,19 +740,17 @@ __global__ void rasterize_depth_sorted_forward_kernel(
         T = next_T;
     }
 
-    if (inside) {
-        final_index[pix_id] = cur_idx;
-        if (DEPTH_MODE == DepthMode::Mean) {
-            float depth = T == 1.0f ? output_depth : output_depth / (1.0f-T);
-            // out_depth[pix_id] = depth_inv_map(depth);
-            out_depth[pix_id] = depth;
-            out_visibility[pix_id] = {T, 1.0f-T};
-        }
-        else if (DEPTH_MODE == DepthMode::Median) {
-            // out_depth[pix_id] = depth_inv_map(output_depth);
-            out_depth[pix_id] = output_depth;
-            out_visibility[pix_id] = {T, interp};
-        }
+    final_index[pix_id] = cur_idx;
+    if (DEPTH_MODE == DepthMode::Mean) {
+        float depth = T == 1.0f ? output_depth : output_depth / (1.0f-T);
+        // out_depth[pix_id] = depth_inv_map(depth);
+        out_depth[pix_id] = depth;
+        out_visibility[pix_id] = {T, 1.0f-T};
+    }
+    else if (DEPTH_MODE == DepthMode::Median) {
+        // out_depth[pix_id] = depth_inv_map(output_depth);
+        out_depth[pix_id] = output_depth;
+        out_visibility[pix_id] = {T, interp};
     }
 }
 
@@ -1838,9 +1844,12 @@ template __global__ void rasterize_simple_sorted_forward_kernel<CameraType::Gene
     float* __restrict__ out_alpha
 );
 
-template __global__ void rasterize_depth_sorted_forward_kernel<DepthMode::Mean>(
-    const dim3 img_size,
+template __global__ void rasterize_depth_sorted_forward_kernel
+<DepthMode::Mean, CameraType::Undistorted>(
+    const int img_width,
+    const int img_height,
     const float4 intrins,
+    const float2* __restrict__ undistortion_map,
     const int32_t* __restrict__ sorted_indices_,
     const float3* __restrict__ positions,
     const float3* __restrict__ axes_u,
@@ -1851,9 +1860,44 @@ template __global__ void rasterize_depth_sorted_forward_kernel<DepthMode::Mean>(
     float2* __restrict__ out_visibility
 );
 
-template __global__ void rasterize_depth_sorted_forward_kernel<DepthMode::Median>(
-    const dim3 img_size,
+template __global__ void rasterize_depth_sorted_forward_kernel
+<DepthMode::Mean, CameraType::GenericDistorted>(
+    const int img_width,
+    const int img_height,
     const float4 intrins,
+    const float2* __restrict__ undistortion_map,
+    const int32_t* __restrict__ sorted_indices_,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    int* __restrict__ final_index,
+    float* __restrict__ out_depth,
+    float2* __restrict__ out_visibility
+);
+
+template __global__ void rasterize_depth_sorted_forward_kernel
+<DepthMode::Median, CameraType::Undistorted>(
+    const int img_width,
+    const int img_height,
+    const float4 intrins,
+    const float2* __restrict__ undistortion_map,
+    const int32_t* __restrict__ sorted_indices_,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ axes_u,
+    const float3* __restrict__ axes_v,
+    const float* __restrict__ opacities,
+    int* __restrict__ final_index,
+    float* __restrict__ out_depth,
+    float2* __restrict__ out_visibility
+);
+
+template __global__ void rasterize_depth_sorted_forward_kernel
+<DepthMode::Median, CameraType::GenericDistorted>(
+    const int img_width,
+    const int img_height,
+    const float4 intrins,
+    const float2* __restrict__ undistortion_map,
     const int32_t* __restrict__ sorted_indices_,
     const float3* __restrict__ positions,
     const float3* __restrict__ axes_u,

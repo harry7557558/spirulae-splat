@@ -9,6 +9,7 @@ from torch import Tensor
 from torch.autograd import Function
 
 import spirulae_splat.splat.cuda as _C
+from spirulae_splat.splat._camera import _Camera
 
 
 DEBUG = False
@@ -20,10 +21,7 @@ def rasterize_gaussians_depth_sorted(
     axes_v: Float[Tensor, "*batch 3"],
     opacities: Float[Tensor, "*batch 1"],
     sorted_indices: Int[Tensor, "h w MAX_SORTED_INDICES"],
-    intrins: Tuple[float, float, float, float],
-    img_height: int,
-    img_width: int,
-    block_width: int,
+    camera: _Camera,
     depth_mode: str,
 ) -> Tensor:
     if positions.ndimension() != 2 or positions.size(1) != 3:
@@ -38,9 +36,7 @@ def rasterize_gaussians_depth_sorted(
         axes_v.contiguous(),
         opacities.contiguous(),
         sorted_indices.contiguous(),
-        intrins,
-        img_height, img_width,
-        block_width,
+        camera,
         depth_mode,
     )
 
@@ -57,27 +53,21 @@ class _RasterizeGaussiansDepthSorted(Function):
         axes_v: Float[Tensor, "*batch 3"],
         opacities: Float[Tensor, "*batch 1"],
         sorted_indices: Int[Tensor, "h w MAX_SORTED_INDICES"],
-        intrins: Tuple[float, float, float, float],
-        img_height: int,
-        img_width: int,
-        block_width: int,
+        camera: _Camera,
         depth_mode: str,
     ) -> Tuple[Tensor, Tensor]:
 
         final_idx, out_depth, out_visibility = _C.rasterize_depth_sorted_forward(
             depth_mode,
-            img_height, img_width, block_width,
-            intrins,
+            camera.h, camera.w,
+            camera.model, camera.intrins, camera.get_undist_map(),
             sorted_indices,
             positions, axes_u, axes_v,
             opacities,
         )
 
-        ctx.img_width = img_width
-        ctx.img_height = img_height
-        ctx.block_width = block_width
+        ctx.camera = camera
         ctx.depth_mode = depth_mode
-        ctx.intrins = intrins
         ctx.save_for_backward(
             final_idx, sorted_indices,
             positions, axes_u, axes_v, opacities,
@@ -91,9 +81,9 @@ class _RasterizeGaussiansDepthSorted(Function):
     @staticmethod
     def backward(ctx, v_out_depth, v_out_visibility=None):
 
-        img_height = ctx.img_height
-        img_width = ctx.img_width
-        intrins = ctx.intrins
+        camera = ctx.camera  # type: _Camera
+        if camera.is_distorted():
+            raise NotImplementedError("Unsupported distorted camera for backward")
 
         (
             final_idx, sorted_indices,
@@ -103,8 +93,8 @@ class _RasterizeGaussiansDepthSorted(Function):
 
         backward_return = _C.rasterize_depth_sorted_backward(
             ctx.depth_mode,
-            img_height, img_width, ctx.block_width,
-            intrins,
+            camera.h, camera.w, camera.BLOCK_WIDTH,
+            camera.intrins,
             final_idx, sorted_indices,
             positions, axes_u, axes_v, opacities,
             out_depth, out_visibility,
@@ -132,5 +122,5 @@ class _RasterizeGaussiansDepthSorted(Function):
 
         return (
             v_positions, v_axes_u, v_axes_v, v_opacities,
-            None, None, None, None, None, None, None
+            None, None, None,
         )

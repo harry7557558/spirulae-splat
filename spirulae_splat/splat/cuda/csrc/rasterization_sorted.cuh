@@ -86,10 +86,12 @@ __global__ void rasterize_simple_sorted_backward_kernel(
 );
 
 
-template <DepthMode DEPTH_MODE>
+template <DepthMode DEPTH_MODE, CameraType CAMERA_TYPE>
 __global__ void rasterize_depth_sorted_forward_kernel(
-    const dim3 img_size,
+    const int img_width,
+    const int img_height,
     const float4 intrins,
+    const float2* __restrict__ undistortion_map,
     const int32_t* __restrict__ sorted_indices_,
     const float3* __restrict__ positions,
     const float3* __restrict__ axes_u,

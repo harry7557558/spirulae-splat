@@ -6,11 +6,15 @@ from scipy.spatial.transform import Rotation as R
 from PyQt6.QtWidgets import QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtCore import Qt, QTimer
+import matplotlib
 
 from spirulae_splat.viewer import Camera, SplatModel
 
 
 class RenderViewer(QMainWindow):
+    colormap = matplotlib.colormaps['magma']
+    vis_modes = ["rgb", "depth"]
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("spirulae-splat Viewer")
@@ -26,6 +30,10 @@ class RenderViewer(QMainWindow):
         container.setLayout(layout)
         self.setCentralWidget(container)
         
+        self.last_mouse_pos = None
+        self.active_keys = set()
+        self.vis_mode = 0
+
         self.c2w = np.array([
             [1, 0, 0, 0],
             [0, 0, 1, 0],
@@ -33,16 +41,20 @@ class RenderViewer(QMainWindow):
             [0, 0, 0, 1]
         ], dtype=np.float32)
         self.update_image()
-        
-        self.last_mouse_pos = None
-        self.active_keys = set()
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.animation_frame)
         self.timer.start(16)  # 60 fps
 
+    def color_depth(self, depth):
+        depth = depth[..., 0] / depth.max()
+        colored_data = self.colormap(depth)
+        return (colored_data[:, :, :3] * 255).astype(np.uint8)
+
     def update_image(self):
-        image = ssplat_model.render(ssplat_camera, self.c2w)
+        image, depth = ssplat_model.render(ssplat_camera, self.c2w, True)
+        if self.vis_modes[self.vis_mode] == "depth":
+            image = self.color_depth(depth)
         h, w, c = image.shape
         qimage = QImage(image.data, w, h, 3 * w, QImage.Format.Format_RGB888)
         self.image_label.setPixmap(QPixmap.fromImage(qimage))
@@ -86,6 +98,11 @@ class RenderViewer(QMainWindow):
 
         # print(event.key(), self.active_keys)
         # print(Qt.Key.Key_Control.value)
+
+        # space to switch between RGB and depth
+        if event.key() == ord(' '):
+            self.vis_mode = (self.vis_mode + 1) % len(self.vis_modes)
+            self.update_image()
 
         # Ctrl+C or Esc to exit
         if (
