@@ -35,6 +35,9 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
     """
     _target: Type = field(default_factory=lambda: SpirulaeDataManager)
 
+    max_batch_per_epoch: int = 768
+    """Maximum number of batches per epoch, used for configuring batch size"""
+
     cache_images: Literal["cpu", "gpu"] = "gpu"
     """Whether to cache images in memory. If "cpu", caches on cpu. If "gpu", caches on device."""
     cache_images_type: Literal["uint8", "float32"] = "float32"
@@ -214,6 +217,8 @@ class SpirulaeDataManager(FullImageDatamanager):
         super().__init__(
             config=config, device=device, test_mode=test_mode, world_size=world_size, local_rank=local_rank, **kwargs
         )
+        self.num_train = 0
+        self.num_eval = 0
 
     def _load_images(
         self, split: Literal["train", "eval"], cache_images_device: Literal["cpu", "gpu"]
@@ -226,8 +231,10 @@ class SpirulaeDataManager(FullImageDatamanager):
         # Which dataset?
         if split == "train":
             dataset = self.train_dataset
+            self.num_train = len(dataset)
         elif split == "eval":
             dataset = self.eval_dataset
+            self.num_eval = len(dataset)
         else:
             assert_never(split)
 
@@ -322,6 +329,17 @@ class SpirulaeDataManager(FullImageDatamanager):
         """Returns the next training batch
 
         Returns a Camera instead of raybundle"""
+
+        train_batch_size = (self.num_train + self.config.max_batch_per_epoch - 1) \
+            // self.config.max_batch_per_epoch
+        if train_batch_size > 1 and step >= 0:
+            cameras, batches = [], []
+            for i in range(train_batch_size):
+                camera, batch = self.next_train(-1)
+                cameras.append(camera)
+                batches.append(batch)
+            return cameras, batches
+
         image_idx = self.train_unseen_cameras.pop(random.randint(0, len(self.train_unseen_cameras) - 1))
         # Make sure to re-populate the unseen cameras list if we have exhausted it
         if len(self.train_unseen_cameras) == 0:

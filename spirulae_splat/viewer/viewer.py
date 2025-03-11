@@ -153,6 +153,7 @@ if __name__ == "__main__":
 
     ssplat_model = SplatModel(file_path)
     ssplat_model.bgr = False
+    print(ssplat_model.num_splats(), "splats")
 
     app = QApplication(sys.argv)
     viewer = RenderViewer()

@@ -30,6 +30,8 @@ My custom method for Nerfstudio. Based on the `splatfacto` method in official Ne
   - Optionally use absolute gradient of CH coefficients as a criteria to split and duplicate splats
   - Slows down training by about a half, due to resource spent on Bessel function evaluation and loading CH coefficients from global memory
 
+- Set a maximum number of batches per epoch and dynamically set batch size based on number of training images, significantly improves performance for scenes with thousands of scattered images (e.g. large-scale indoor scenes)
+
 <!-- - Support [Markov Chain Monte Carlo (MCMC)](https://arxiv.org/abs/2404.09591) for adaptive control of splats, with relocation designed for polynomial splats -->
 
 <!-- - Introduce splat anisotropy by multiplying opacity by a smoothstep of UV directional dot product $1-\mathrm{smoothstep}(\mathbf{a}\cdot(u,v))$, intended to better represent sharp edges

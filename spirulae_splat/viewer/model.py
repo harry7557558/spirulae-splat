@@ -66,6 +66,9 @@ class SplatModel:
                 self.load_ckpt(f)
                 break
 
+    def num_splats(self):
+        return len(self.gauss_params["means"])
+
     @property
     def colors(self):
         if self.sh_degree > 0:

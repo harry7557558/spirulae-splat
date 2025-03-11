@@ -174,7 +174,7 @@ class SpirulaeModelConfig(ModelConfig):
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
     cull_scale_thresh: float = 0.5
     """threshold of scale for culling huge gaussians"""
-    cull_grad_thresh: float = 1e-5  # 3e-4 | 1e-4 | 1e-5 | 0.0
+    cull_grad_thresh: float = 0.0  # 3e-4 | 1e-4 | 1e-5 | 0.0
     """threshold for culling gaussians with low visibility"""
     continue_cull_post_densification: bool = True
     """If True, continue to cull gaussians post refinement"""
@@ -418,9 +418,16 @@ class SpirulaeModel(Model):
         else:
             self.background_sh = None
 
+        self._train_batch_size = 1
+        self._set_strategy()
+
+    def _set_strategy(self):
         # Strategy for GS densification
         reset_every = self.config.reset_alpha_every * self.config.refine_every
-        pause_refine_after_reset = min(self.num_train_data+self.config.refine_every, int(0.8*reset_every))
+        pause_refine_after_reset = min(
+            self.num_train_data//self._train_batch_size+self.config.refine_every,
+            int(0.8*reset_every)
+        )
         self.strategy = DefaultStrategy(
             prune_opa=self.config.cull_alpha_thresh,
             grow_grad2d=self.config.densify_xy_grad_thresh,
@@ -652,6 +659,9 @@ class SpirulaeModel(Model):
 
     def get_outputs(self, camera: Cameras) -> Dict[str, Union[torch.Tensor, List]]:
         """Takes in a camera and returns a dictionary of outputs."""
+        if isinstance(camera, list):
+            # TODO: support multi-GPU
+            return [self.get_outputs(c) for c in camera]
         if not isinstance(camera, Cameras):
             print("Called get_outputs with not a camera")
             return {}
@@ -863,6 +873,7 @@ class SpirulaeModel(Model):
             outputs: the output to compute loss dict to
             batch: ground truth batch corresponding to outputs
         """
+        return {}  # TODO
         gt_rgb = self.composite_with_background(self.get_gt_img(batch["image"]), outputs["background"])
         metrics_dict = {}
         predicted_rgb = outputs["rgb"]
@@ -1114,6 +1125,22 @@ class SpirulaeModel(Model):
             batch: ground truth batch corresponding to outputs
             metrics_dict: dictionary of metrics, some of which we can use for loss
         """
+        if isinstance(outputs, list) and isinstance(batch, list):
+            assert len(outputs) == len(batch)
+            if self._train_batch_size != len(outputs):
+                self._train_batch_size = len(outputs)
+                self._set_strategy()
+            losses = []
+            for outputs_i, batch_i in zip(outputs, batch):
+                losses.append(self.get_loss_dict(outputs_i, batch_i))
+            loss = losses[0]
+            for loss_i in losses[1:]:
+                for key, value in loss_i.items():
+                    loss[key] = loss[key] + value
+            for key in loss:
+                loss[key] = loss[key] / self._train_batch_size
+            return loss
+
         timerl.start()
         gt_img_rgba = self.get_gt_img(batch["image"])
         gt_img = self.composite_with_background(gt_img_rgba, outputs["background"])
