@@ -6,6 +6,7 @@ from torch.func import vjp  # type: ignore
 from spirulae_splat.splat import _torch_impl
 from spirulae_splat.splat.project_gaussians import project_gaussians
 import spirulae_splat.splat.cuda as _C
+from spirulae_splat.splat._camera import _Camera
 
 torch.manual_seed(42)
 
@@ -49,6 +50,7 @@ def test_project_gaussians():
     H, W = 512, 512
     cx, cy = 0.45*W, 0.55*H
     fx, fy = 1.5*W, 1.6*W
+    cam = _Camera(H, W, "OPENCV", (fx, fy, cx, cy))
     clip_thresh = 0.01
     viewmat = torch.tensor(
         [
@@ -77,9 +79,7 @@ def test_project_gaussians():
 
     output = project_gaussians(
         means3d, scales, quats,
-        viewmat, (fx, fy, cx, cy),
-        H, W, BLOCK_SIZE,
-        clip_thresh,
+        viewmat, cam, clip_thresh,
     )
     _output = _torch_impl.project_gaussians(
         _means3d, _scales, _quats,

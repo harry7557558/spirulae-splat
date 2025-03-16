@@ -51,15 +51,13 @@ class _RenderBackgroundSH(Function):
     def backward(ctx, v_out_color):
 
         camera = ctx.camera  # type: _Camera
-        if camera.is_distorted():
-            raise NotImplementedError("Unsupported distorted camera for backward")
 
         sh_degree = ctx.sh_degree
         rotation, sh_coeffs, out_color = ctx.saved_tensors
 
         v_rotation, v_sh_coeffs = _C.render_background_sh_backward(
             camera.w, camera.h,
-            camera.intrins,
+            camera.model, camera.intrins, camera.get_undist_map(),
             rotation, sh_degree, sh_coeffs,
             out_color, v_out_color.contiguous()
         )

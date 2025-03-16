@@ -9,6 +9,7 @@ from torch import Tensor
 from torch.autograd import Function
 
 import spirulae_splat.splat.cuda as _C
+from spirulae_splat.splat._camera import _Camera
 
 
 def rasterize_gaussians_simplified_sorted(
@@ -19,12 +20,8 @@ def rasterize_gaussians_simplified_sorted(
     opacities: Float[Tensor, "*batch 1"],
     num_intersects: Int[Tensor, "h w"],
     sorted_indices: Int[Tensor, "h w MAX_SORTED_INDICES"],
-    intrins: Tuple[float, float, float, float],
-    img_height: int,
-    img_width: int,
-    block_width: int,
+    camera: _Camera,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-    assert block_width > 1 and block_width <= 16, "block_width must be between 2 and 16"
 
     if colors.dtype == torch.uint8:
         # make sure colors are float [0,1]
@@ -44,9 +41,7 @@ def rasterize_gaussians_simplified_sorted(
         opacities.contiguous(),
         num_intersects.contiguous(),
         sorted_indices.contiguous(),
-        intrins,
-        img_height, img_width,
-        block_width,
+        camera
     )
 
 
@@ -63,28 +58,22 @@ class _RasterizeGaussiansSimplifiedSorted(Function):
         opacities: Float[Tensor, "*batch 1"],
         num_intersects: Int[Tensor, "h w"],
         sorted_indices: Int[Tensor, "h w MAX_SORTED_INDICES"],
-        intrins: Tuple[float, float, float, float],
-        img_height: int,
-        img_width: int,
-        block_width: int,
+        camera: _Camera,
     ) -> Tensor:
 
         (
             out_alpha,
             out_img, out_depth, out_normal, out_reg_depth
         ) = _C.rasterize_simplified_sorted_forward(
-            img_height, img_width, block_width,
-            intrins,
+            camera.h, camera.w,
+            camera.model, camera.intrins, camera.get_undist_map(),
             sorted_indices,
             positions, axes_u, axes_v,
             colors, opacities,
         )
 
-        ctx.img_width = img_width
-        ctx.img_height = img_height
+        ctx.camera = camera
         ctx.num_intersects = num_intersects
-        ctx.block_width = block_width
-        ctx.intrins = intrins
         ctx.save_for_backward(
             num_intersects, sorted_indices,
             positions, axes_u, axes_v,
@@ -107,10 +96,8 @@ class _RasterizeGaussiansSimplifiedSorted(Function):
         v_out_depth_reg
         ):
 
-        img_height = ctx.img_height
-        img_width = ctx.img_width
+        camera = ctx.camera  # type: _Camera
         num_intersects = ctx.num_intersects
-        intrins = ctx.intrins
 
         (
             num_intersects, sorted_indices,
@@ -121,8 +108,8 @@ class _RasterizeGaussiansSimplifiedSorted(Function):
 
         assert colors.shape[-1] == 3
         backward_return = _C.rasterize_simplified_sorted_backward(
-            img_height, img_width, ctx.block_width,
-            intrins,
+            camera.h, camera.w,
+            camera.model, camera.intrins, camera.get_undist_map(),
             num_intersects, sorted_indices,
             positions, axes_u, axes_v,
             colors, opacities,
@@ -156,5 +143,5 @@ class _RasterizeGaussiansSimplifiedSorted(Function):
         return (
             v_positions, v_axes_u, v_axes_v,
             v_colors, v_opacities,
-            None, None, None, None, None, None,
+            None, None, None,
         )

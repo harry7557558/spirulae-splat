@@ -164,10 +164,12 @@ __global__ void rasterize_backward_kernel(
 );
 
 
+template<CameraType CAMERA_TYPE>
 __global__ void rasterize_simplified_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
     const float4 intrins,
+    const float2* __restrict__ undistortion_map,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float3* __restrict__ positions,
@@ -184,10 +186,12 @@ __global__ void rasterize_simplified_forward_kernel(
 );
 
 
+template<CameraType CAMERA_TYPE>
 __global__ void rasterize_simplified_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
     const float4 intrins,
+    const float2* __restrict__ undistortion_map,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float3* __restrict__ positions,
@@ -225,10 +229,12 @@ __global__ void render_background_sh_forward_kernel(
 );
 
 
+template<CameraType CAMERA_TYPE>
 __global__ void render_background_sh_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
     const float4 intrins,
+    const float2* __restrict__ undistortion_map,
     const float* rotation,  // row major 3x3
     const unsigned sh_degree,
     const float3* __restrict__ sh_coeffs_float3,

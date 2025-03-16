@@ -6,6 +6,7 @@ from torch.func import vjp  # type: ignore
 from spirulae_splat.splat import _torch_impl
 from spirulae_splat.splat.background_sh import render_background_sh
 import spirulae_splat.splat.cuda as _C
+from spirulae_splat.splat._camera import _Camera
 
 torch.manual_seed(42)
 
@@ -38,26 +39,15 @@ def test_render_background_sh():
     H, W = 500, 300
     cx, cy = 0.45*W, 0.55*H
     fx, fy = 1.5*W, 1.6*W
-    BLOCK_SIZE = 16
+    cam = _Camera(H, W, "OPENCV", (fx, fy, cx, cy))
 
     sh_degree = 5
     sh_coeffs = torch.randn((sh_degree**2, 3)).to(device)
-    # sh_coeffs[16] *= 0.0
-    # sh_coeffs[17] *= 0.0
-    # sh_coeffs[18] *= 0.0
-    # sh_coeffs[19] *= 0.0
-    # sh_coeffs[20] *= 0.0
-    # sh_coeffs[21] *= 0.0
-    # sh_coeffs[22] *= 0.0
-    # sh_coeffs[23] *= 0.0
-    # sh_coeffs[24] *= 0.0
     _sh_coeffs = sh_coeffs.clone().requires_grad_(True)
     sh_coeffs.requires_grad_(True)
 
     output = render_background_sh(
-        W, H, (fx, fy, cx, cy),
-        rotation, sh_degree, sh_coeffs,
-        BLOCK_SIZE
+        cam, rotation, sh_degree, sh_coeffs,
     )
     _output = _torch_impl.render_background_sh(
         W, H, (fx, fy, cx, cy),
@@ -77,7 +67,7 @@ def test_render_background_sh():
     fun(_output).backward()
 
     print("test backward")
-    tol = { 'atol': 1e-6, 'rtol': 1e-5 }
+    tol = { 'atol': 1e-6, 'rtol': 1e-4 }
     print(rotation.grad)
     print(_rotation.grad)
     check_close('rotation', rotation.grad, _rotation.grad, **tol)

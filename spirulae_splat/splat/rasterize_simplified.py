@@ -9,6 +9,7 @@ from torch import Tensor
 from torch.autograd import Function
 
 import spirulae_splat.splat.cuda as _C
+from spirulae_splat.splat._camera import _Camera
 
 from .rasterize_simple import rasterize_preprocess
 
@@ -28,19 +29,15 @@ def rasterize_gaussians_simplified(
     opacities: Float[Tensor, "*batch 1"],
     bounds: Int[Tensor, "*batch 4"],
     num_tiles_hit: Int[Tensor, "*batch 1"],
-    intrins: Tuple[float, float, float, float],
-    img_height: int,
-    img_width: int,
-    block_width: int,
+    camera: _Camera,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-    assert block_width > 1 and block_width <= 16, "block_width must be between 2 and 16"
 
     if colors.dtype == torch.uint8:
         # make sure colors are float [0,1]
         colors = colors.float() / 255
 
     if not (num_tiles_hit > 0).any():
-        shape = (img_height, img_width)
+        shape = (camera.h, camera.w)
         device = positions.device
         # out_img = background.reshape((1, 1, 3)).repeat((*shape, 1))
         out_img = torch.zeros((*shape, 3)).float().to(device)
@@ -64,10 +61,7 @@ def rasterize_gaussians_simplified(
         opacities.contiguous(),
         bounds.contiguous(),
         num_tiles_hit.contiguous(),
-        intrins,
-        img_height,
-        img_width,
-        block_width,
+        camera,
     )
 
 
@@ -84,10 +78,7 @@ class _RasterizeGaussiansSimplified(Function):
         opacities: Float[Tensor, "*batch 1"],
         bounds: Int[Tensor, "*batch 4"],
         num_tiles_hit: Int[Tensor, "*batch 1"],
-        intrins: Tuple[float, float, float, float],
-        img_height: int,
-        img_width: int,
-        block_width: int,
+        camera: _Camera,
     ) -> Tensor:
         timerf.start()
         num_points = positions.size(0)
@@ -97,15 +88,15 @@ class _RasterizeGaussiansSimplified(Function):
             num_intersects, gaussian_ids_sorted, tile_bins
         ) = rasterize_preprocess(
             positions, bounds, num_tiles_hit,
-            img_height, img_width,
+            camera.h, camera.w,
         )
         timerf.mark("sort")  # us
 
         if num_intersects < 1:
-            shape = (img_height, img_width)
+            shape = (camera.h, camera.w)
             gaussian_ids_sorted = torch.zeros(0, 1, device=device)
             tile_bins = torch.zeros(0, 2, device=device)
-            final_idx = torch.zeros(img_height, img_width, device=device)
+            final_idx = torch.zeros(camera.h, camera.w, device=device)
             out_img = torch.zeros((*shape, 3)).float().to(device)
             out_alpha = torch.zeros((*shape, 1)).float().to(device)
             out_depth = torch.zeros((*shape, 1)).float().to(device)
@@ -119,19 +110,16 @@ class _RasterizeGaussiansSimplified(Function):
                 final_idx, out_alpha,
                 out_img, out_depth, out_normal, out_reg_depth
             ) = _C.rasterize_simplified_forward(
-                img_height, img_width, block_width,
-                intrins,
+                camera.h, camera.w, camera.BLOCK_WIDTH,
+                camera.model, camera.intrins, camera.get_undist_map(),
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
                 colors, opacities,
             )
         timerf.mark("rasterize")  # us
 
-        ctx.img_width = img_width
-        ctx.img_height = img_height
+        ctx.camera = camera
         ctx.num_intersects = num_intersects
-        ctx.block_width = block_width
-        ctx.intrins = intrins
         ctx.save_for_backward(
             gaussian_ids_sorted, tile_bins,
             positions, axes_u, axes_v,
@@ -159,10 +147,8 @@ class _RasterizeGaussiansSimplified(Function):
         v_idx = None
         ):
 
-        img_height = ctx.img_height
-        img_width = ctx.img_width
+        camera = ctx.camera  # type: _Camera
         num_intersects = ctx.num_intersects
-        intrins = ctx.intrins
 
         (
             gaussian_ids_sorted, tile_bins,
@@ -184,8 +170,8 @@ class _RasterizeGaussiansSimplified(Function):
 
             assert colors.shape[-1] == 3
             backward_return = _C.rasterize_simplified_backward(
-                img_height, img_width, ctx.block_width,
-                intrins,
+                camera.h, camera.w, camera.BLOCK_WIDTH,
+                camera.model, camera.intrins, camera.get_undist_map(),
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
                 colors, opacities,
@@ -224,5 +210,5 @@ class _RasterizeGaussiansSimplified(Function):
         return (
             v_positions, v_axes_u, v_axes_v,
             v_colors, v_opacities,
-            None, None, None, None, None, None,
+            None, None, None,
         )

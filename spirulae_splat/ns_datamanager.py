@@ -253,7 +253,11 @@ class SpirulaeDataManager(FullImageDatamanager):
             distortion_params = camera.distortion_params.numpy()
             image = data["image"].numpy()
 
-            K, image, mask = _undistort_image(camera, distortion_params, data, image, K)
+            if camera.camera_type.item() == CameraType.FISHEYE.value:
+                # don't undistort
+                mask = None
+            else:
+                K, image, mask = _undistort_image(camera, distortion_params, data, image, K)
             data["image"] = torch.from_numpy(image)
             if mask is not None:
                 data["mask"] = mask

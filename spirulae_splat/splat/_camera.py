@@ -29,6 +29,11 @@ class _Camera:
         self.dist_coeffs = dist_coeffs
         if all([x == 0 for x in dist_coeffs]):
             self.model = ""
+        if len(dist_coeffs) > 4:
+            dist_coeffs = [*dist_coeffs]
+            if any([x != 0 for x in dist_coeffs[4:]]):
+                raise ValueError("Only support at most 4 distortion coefficients")
+            self.dist_coeffs = tuple(dist_coeffs[:4])
 
     def validate_model(self):
         assert self.model in ["", "OPENCV", "OPENCV_FISHEYE"], \

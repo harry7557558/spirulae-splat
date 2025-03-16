@@ -86,8 +86,6 @@ class _ProjectGaussians(Function):
         v_bounds, v_num_tiles_hit,
     ):
         camera = ctx.camera  # type: _Camera
-        if camera.is_distorted():
-            raise NotImplementedError("Unsupported distorted camera for backward")
 
         (
             means3d, scales, quats,

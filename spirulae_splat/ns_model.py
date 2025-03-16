@@ -53,7 +53,7 @@ from spirulae_splat.splat._camera import _Camera
 
 from nerfstudio.cameras.camera_optimizers import (CameraOptimizer,
                                                   CameraOptimizerConfig)
-from nerfstudio.cameras.cameras import Cameras
+from nerfstudio.cameras.cameras import Cameras, CameraType
 from nerfstudio.data.scene_box import OrientedBox
 from nerfstudio.engine.callbacks import (TrainingCallback,
                                          TrainingCallbackAttributes,
@@ -681,7 +681,11 @@ class SpirulaeModel(Model):
         W, H = int(camera.width.item()), int(camera.height.item())
         intrins = (camera.fx.item(), camera.fy.item(), camera.cx.item(), camera.cy.item())
         camera.rescale_output_resolution(camera_downscale)
-        ssplat_camera = _Camera(H, W, "", intrins)
+        if camera.camera_type.item() == CameraType.FISHEYE.value:
+            dist_coeffs = tuple(camera.distortion_params.cpu().numpy().flatten().tolist())
+            ssplat_camera = _Camera(H, W, "OPENCV_FISHEYE", intrins, dist_coeffs)
+        else:
+            ssplat_camera = _Camera(H, W, "", intrins)
         timerr.mark(".")  # 400us
 
         R = optimized_camera_to_world[:3, :3]  # 3 x 3
@@ -745,6 +749,8 @@ class SpirulaeModel(Model):
             self.config.ch_degree_r * (2*self.config.ch_degree_phi+1) > 0 or \
             self.config.depth_mode != "mean"
         ):
+            assert not ssplat_camera.is_distorted(), \
+                "Fisheye camera is not supported for CH or median depth"
 
             depth_im_ref = rasterize_depth(
                 positions, axes_u, axes_v, opacities,
@@ -780,8 +786,7 @@ class SpirulaeModel(Model):
             (rgb, alpha, depth_im, normal_im, reg_depth) \
              = rasterize_simplified(
                 positions, axes_u, axes_v, rgbs, opacities,
-                *raster_indices,
-                intrins, H, W, ssplat_camera.BLOCK_WIDTH,
+                *raster_indices, ssplat_camera
             )
             depth_im_ref = torch.where(
                 alpha > 0.0, depth_im[..., :1] / alpha,

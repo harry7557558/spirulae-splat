@@ -13,6 +13,7 @@ from spirulae_splat.splat import (
     rasterize_gaussians_depth_sorted,
 )
 import spirulae_splat.splat.cuda as _C
+from spirulae_splat.splat._camera import _Camera
 
 torch.manual_seed(41)
 
@@ -37,7 +38,7 @@ def test_rasterize_simplified():
     # num_points, H, W = 1, 2, 3
     cx, cy = 0.45*W, 0.55*H
     fx, fy = 0.7*W, 0.8*W
-    intrins = (fx, fy, cx, cy)
+    cam = _Camera(H, W, "OPENCV", (fx, fy, cx, cy))
     clip_thresh = 0.01
     viewmat = torch.tensor(
         [
@@ -49,7 +50,6 @@ def test_rasterize_simplified():
         device=device,
     )
     viewmat[:3, :3] = _torch_impl.quat_to_rotmat(torch.randn(4))
-    BLOCK_SIZE = 16
 
     means3d = 0.8*torch.randn((num_points, 3), device=device)
     scales = 0.8*torch.exp(torch.randn((num_points, 2), device=device))
@@ -63,9 +63,7 @@ def test_rasterize_simplified():
 
     params = project_gaussians(
         means3d, scales, quats,
-        viewmat, intrins,
-        H, W, BLOCK_SIZE,
-        clip_thresh,
+        viewmat, cam, clip_thresh,
     )
     def decode_params(params):
         params = [*params]
@@ -94,13 +92,12 @@ def test_rasterize_simplified():
     num_intersects, sorted_indices = rasterize_gaussians_indices(
         positions, axes_u, axes_v,
         opacities, bounds, num_tiles_hit,
-        intrins, H, W, BLOCK_SIZE
+        cam
     )
 
     output = rasterize_gaussians_simplified_sorted(
         positions, axes_u, axes_v, colors, opacities,
-        num_intersects, sorted_indices,
-        intrins, H, W, BLOCK_SIZE,
+        num_intersects, sorted_indices, cam
     )
 
     output_r = rasterize_gaussians_sorted(
@@ -109,13 +106,13 @@ def test_rasterize_simplified():
         opacities,
         torch.zeros((H, W, 1)).float().to(device), 1.0,
         num_intersects, sorted_indices,
-        intrins, H, W, BLOCK_SIZE,
+        cam.intrins, H, W, cam.BLOCK_WIDTH,
     )
 
     output_d = rasterize_gaussians_depth_sorted(
         positions, axes_u, axes_v, opacities,
         sorted_indices,
-        intrins, H, W, BLOCK_SIZE,
+        cam,
         "mean"
     )
 
@@ -131,7 +128,7 @@ def test_rasterize_simplified():
     _output = _torch_impl.rasterize_gaussians_simplified_sorted(
         _positions, _axes_u, _axes_v, _colors, _opacities,
         num_intersects, sorted_indices,
-        intrins, H, W,
+        cam.intrins, H, W,
     )
 
     print("test forward")

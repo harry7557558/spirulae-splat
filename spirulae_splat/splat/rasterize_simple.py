@@ -36,7 +36,6 @@ def rasterize_gaussians_simple(
         assert (
             background.shape[0] == colors.shape[-1]
         ), f"incorrect shape of background color tensor, expected shape {colors.shape[-1]}"
-        background = background.cpu()
     else:
         background = torch.zeros(
             colors.shape[-1], dtype=torch.float32, device='cpu'
@@ -131,7 +130,7 @@ class _RasterizeGaussiansSimple(Function):
         if num_intersects < 1:
             out_img = (
                 torch.ones(camera.h, camera.w, colors.shape[-1], device=device)
-                * background
+                * background.to(device)
             )
             gaussian_ids_sorted = torch.zeros(0, 1, device=device)
             tile_bins = torch.zeros(0, 2, device=device)
@@ -144,7 +143,7 @@ class _RasterizeGaussiansSimple(Function):
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
                 colors, opacities,
-                background,
+                background.cpu(),
             )
 
         ctx.num_intersects = num_intersects
@@ -189,7 +188,7 @@ class _RasterizeGaussiansSimple(Function):
                 camera.intrins,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
-                colors, opacities, background,
+                colors, opacities, background.cpu(),
                 final_idx, out_alpha,
                 v_out_img, v_out_alpha,
             )
@@ -207,7 +206,7 @@ class _RasterizeGaussiansSimple(Function):
             v_background = torch.matmul(
                 v_out_img.float().view(-1, 3).t(),
                 (1.0-out_alpha).float().view(-1, 1)
-            ).squeeze()
+            ).squeeze().to(background.device)
 
         # Abs grad for gaussian splitting criterion. See
         # - "AbsGS: Recovering Fine Details for 3D Gaussian Splatting"

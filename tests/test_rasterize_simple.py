@@ -7,6 +7,7 @@ from spirulae_splat.splat import _torch_impl
 from spirulae_splat.splat.project_gaussians import project_gaussians
 import spirulae_splat.splat.rasterize_simple as rasterize_simple
 import spirulae_splat.splat.cuda as _C
+from spirulae_splat.splat._camera import _Camera
 
 torch.manual_seed(40)
 
@@ -43,7 +44,7 @@ def test_rasterize_simple():
     H, W = 20, 30
     cx, cy = 0.45*W, 0.55*H
     fx, fy = 0.7*W, 0.8*W
-    intrins = (fx, fy, cx, cy)
+    cam = _Camera(H, W, "OPENCV", (fx, fy, cx, cy))
     clip_thresh = 0.01
     viewmat = torch.tensor(
         [
@@ -55,13 +56,10 @@ def test_rasterize_simple():
         device=device,
     )
     viewmat[:3, :3] = _torch_impl.quat_to_rotmat(torch.randn(4))
-    BLOCK_SIZE = 16
 
     params = project_gaussians(
         means3d, scales, quats,
-        viewmat, intrins,
-        H, W, BLOCK_SIZE,
-        clip_thresh,
+        viewmat, cam, clip_thresh,
     )
     def decode_params(params):
         params = [param.detach().clone() for param in params]
@@ -94,8 +92,7 @@ def test_rasterize_simple():
         opacities,
         bounds,
         num_tiles_hit,
-        intrins,
-        H, W, BLOCK_SIZE,
+        cam,
         background
     )
 
@@ -107,8 +104,8 @@ def test_rasterize_simple():
         _opacities,
         _bounds,
         _num_tiles_hit,
-        intrins,
-        H, W, BLOCK_SIZE,
+        cam.intrins,
+        H, W, cam.BLOCK_WIDTH,
         _background
     )
 
