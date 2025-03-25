@@ -274,8 +274,6 @@ class SpirulaeModelConfig(ModelConfig):
        Lower usually gives more accurate geometry, original MCMC uses 0.01"""
     mcmc_scale_reg: float = 0.002
     """Scale regularization from MCMC, original MCMC uses 0.01"""
-    exposure_reg_splat: float = 0.0
-    """Make sure image look right in auto exposure mode, match mean splat color with mean image color"""
     exposure_reg_image: float = 0.1
     """Between 0 and 1; For exposure regularization, include this fraction of L1 loss between GT image and image before exposure adjustment"""
     exposure_reg_param: float = 0.002
@@ -845,6 +843,8 @@ class SpirulaeModel(Model):
             intersects = raster_indices[0].float() / raster_indices[1].shape[-1]
             outputs["num_intersects"] = intersects.reshape((H, W, 1)).repeat(1, 1, 3)
 
+        if self.training:
+            outputs["ssplat_camera"] = ssplat_camera
         return outputs
 
     def get_gt_img(self, image: torch.Tensor):
@@ -1003,14 +1003,24 @@ class SpirulaeModel(Model):
             (self.config.alpha_supervision_weight * normal_scale) * alpha_loss
         )
 
-    def exposure_correction(self, pred_img, gt_img):
-        exposure_reg = 0.0
+    def exposure_correction(
+            self,
+            pred_img: torch.Tensor, gt_img: torch.Tensor,
+            alpha_mask: Optional[torch.Tensor]=None
+        ):
         exposure_param_reg = 0.0
         eeps = 0.5/255.0
 
+        total_alpha = max(alpha_mask.sum().item(), 1.0) if alpha_mask is not None else 1.0
+        def immean(img: torch.Tensor, dim: Optional[int]=None, keepdim=False):
+            if alpha_mask is None:
+                return img.mean(dim, keepdim)
+            mask = alpha_mask.reshape(*img.shape[:-1], 1)
+            return (img*mask).sum(dim, keepdim) / total_alpha
+
         # gt ~ k * pred
         if self.config.adaptive_exposure_mode == "linear":
-            k = (gt_img.mean()+eeps) / (pred_img.mean()+eeps)
+            k = (immean(gt_img)+eeps) / (immean(pred_img)+eeps)
             pred_img_e = k * (pred_img+eeps) - eeps
             # print(k.item())
             exposure_param_reg = (k-1.0)**2
@@ -1019,8 +1029,8 @@ class SpirulaeModel(Model):
         elif self.config.adaptive_exposure_mode == "log_linear":
             x = torch.log(pred_img+eeps)
             y = torch.log(gt_img+eeps)
-            x_mean, y_mean = x.mean(), y.mean()
-            x2_mean, xy_mean = (x**2).mean(), (x*y).mean()
+            x_mean, y_mean = immean(x), immean(y)
+            x2_mean, xy_mean = immean(x**2), immean(x*y)
             m = (xy_mean - x_mean * y_mean) / (x2_mean - x_mean**2)
             b = y_mean - m * x_mean
             pred_img_e = torch.exp(m * x + b) - eeps
@@ -1028,20 +1038,20 @@ class SpirulaeModel(Model):
             exposure_param_reg = (m-1.0)**2 + b**2
 
         # gt ~ k * pred, per channel
-        if self.config.adaptive_exposure_mode == "channel":
+        elif self.config.adaptive_exposure_mode == "channel":
             x = pred_img.reshape(-1, 3)
             y = gt_img.reshape(-1, 3)
-            k = (y.mean(0, True)+eeps) / (x.mean(0, True)+eeps)
+            k = (immean(y, 0, True)+eeps) / (immean(x, 0, True)+eeps)
             pred_img_e = k * (pred_img+eeps) - eeps
             # print(k.detach())
             exposure_param_reg = torch.mean((k-1.0)**2)
 
         # log(gt) ~ k * log(pred) + b, per channel
-        if self.config.adaptive_exposure_mode == "log_channel":
+        elif self.config.adaptive_exposure_mode == "log_channel":
             x = torch.log(pred_img + eeps).reshape(-1, 3)
             y = torch.log(gt_img + eeps).reshape(-1, 3)
-            x_mean, y_mean = x.mean(0, True), y.mean(0, True)
-            x2_mean, xy_mean = (x**2).mean(0, True), (x*y).mean(0, True)
+            x_mean, y_mean = immean(x, 0, True), immean(y, 0, True)
+            x2_mean, xy_mean = immean(x**2, 0, True), immean(x*y, 0, True)
             m = (xy_mean - x_mean * y_mean) / (x2_mean - x_mean**2)
             b = y_mean - m * x_mean
             pred_img_e = torch.exp(m * x + b).reshape(pred_img.shape) - eeps
@@ -1052,12 +1062,20 @@ class SpirulaeModel(Model):
         elif self.config.adaptive_exposure_mode == "affine":
             x = (pred_img + eeps).reshape(-1, 3)
             y = (gt_img + eeps).reshape(-1, 3)
+            if alpha_mask is not None:
+                x = x * alpha_mask.reshape(-1, 1)
+                y = y * alpha_mask.reshape(-1, 1)
             xTy, xTx = x.T @ y, x.T @ x
+            xTy, xTx = xTy.cpu(), xTx.cpu()
             try:
+                xTx = xTx + (1e-6*torch.trace(xTx).item()) * torch.eye(3)
                 A = torch.linalg.inv(xTx) @ xTy
             except torch._C._LinAlgError:
-                pass
+                print("Warning: torch._C._LinAlgError")
+                print(xTx)
+                pred_img_e = pred_img.detach()
             else:
+                A = A.to(x.device)
                 pred_img_e = (x @ A).reshape(pred_img.shape) - eeps
                 exposure_param_reg = torch.mean((A-torch.eye(3).to(A))**2)
 
@@ -1065,17 +1083,25 @@ class SpirulaeModel(Model):
         elif self.config.adaptive_exposure_mode == "log_affine":
             x = torch.log(pred_img + eeps).reshape(-1, 3)
             y = torch.log(gt_img + eeps).reshape(-1, 3)
-            mean_x = torch.mean(x, dim=0, keepdim=True)
-            mean_y = torch.mean(y, dim=0, keepdim=True)
+            if alpha_mask is not None:
+                x = x * alpha_mask.reshape(-1, 1)
+                y = y * alpha_mask.reshape(-1, 1)
+            mean_x = immean(x, 0, True)
+            mean_y = immean(y, 0, True)
             centered_x = x - mean_x
             centered_y = y - mean_y
             xTy = centered_x.T @ centered_y
             xTx = centered_x.T @ centered_x
+            xTy, xTx = xTy.cpu(), xTx.cpu()
             try:
+                xTx = xTx + (1e-6*torch.trace(xTx).item()) * torch.eye(3)
                 A = torch.linalg.inv(xTx) @ xTy
             except torch._C._LinAlgError:
-                pass
+                print("Warning: torch._C._LinAlgError")
+                print(xTx)
+                pred_img_e = pred_img.detach()
             else:
+                A = A.to(x.device)
                 B = mean_y - mean_x @ A
                 pred_img_e = torch.exp(x @ A + B).reshape(pred_img.shape) - eeps
                 exposure_param_reg = 0.5*(torch.mean((A-torch.eye(3).to(A))**2) + torch.mean(B**2))
@@ -1085,42 +1111,9 @@ class SpirulaeModel(Model):
         
         timerl.mark("exposure")  # 200us-500us
 
-        # keep good value for natural image
-        if self.config.exposure_reg_splat > 0.0:
-            if not hasattr(self, '_exposure_info') or self._exposure_info_n < 4096:
-                # get mean and covariance of image colors
-                gt_color_flat = gt_img[..., :3].reshape((-1, 3))
-                gt_mean = gt_color_flat.mean(0).detach()
-                gt_mean2 = torch.cov(gt_color_flat.T).detach()
-                if not hasattr(self, '_exposure_info'):
-                    self._exposure_info_n = 1
-                    self._exposure_info_gt_mean = gt_mean
-                    self._exposure_info_gt_mean2 = gt_mean2
-                else:
-                    self._exposure_info_n += 1
-                    self._exposure_info_gt_mean = torch.lerp(
-                        self._exposure_info_gt_mean, gt_mean,
-                        1.0 / self._exposure_info_n
-                    )
-                    self._exposure_info_gt_mean2 = torch.lerp(
-                        self._exposure_info_gt_mean2, gt_mean2,
-                        1.0 / self._exposure_info_n
-                    )
-            splat_colors = self.features_dc
-            if self.config.sh_degree > 0:
-                splat_colors = SH2RGB(splat_colors)
-            splat_colors = torch.nan_to_num(
-                splat_colors, nan=0.0, posinf=0.0, neginf=0.0)
-            splat_weights = torch.exp(self.scales.mean(-1, True)) * torch.sigmoid(self.opacities)
-            splat_color_mean = (splat_colors*splat_weights).sum(0) / splat_weights.sum(0)
-            splat_color_mean2 = torch.cov(splat_colors.T, aweights=splat_weights.flatten())
-            diff1 = torch.abs(splat_color_mean - self._exposure_info_gt_mean).mean()
-            diff2 = torch.abs(splat_color_mean2 - self._exposure_info_gt_mean2).mean()
-            exposure_reg = self.config.exposure_reg_splat * (diff1+diff2)
-            # print(splat_color_mean.detach(), diff1.item(), diff2.item())
-            timerl.mark("exposure_reg")
-
-        return pred_img_e, exposure_reg, exposure_param_reg
+        if alpha_mask is not None:
+            pred_img_e = pred_img + (pred_img_e-pred_img) * alpha_mask
+        return pred_img_e, exposure_param_reg
 
     def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict.
@@ -1181,10 +1174,17 @@ class SpirulaeModel(Model):
 
         # handle exposure
         pred_img_e = pred_img
-        exposure_reg, exposure_param_reg = 0.0, 0.0
+        exposure_param_reg = 0.0
         if self.config.adaptive_exposure_mode is not None and \
             self.step > self.config.adaptive_exposure_start_iter:
-            pred_img_e, exposure_reg, exposure_param_reg = self.exposure_correction(pred_img, gt_img)
+            # mask
+            alpha_mask = None
+            ssplat_camera = outputs["ssplat_camera"]  # type: _Camera
+            if ssplat_camera.is_distorted():
+                undist_map = ssplat_camera.get_undist_map()
+                alpha_mask = torch.isfinite(undist_map.sum(-1, True))
+            # call function
+            pred_img_e, exposure_param_reg = self.exposure_correction(pred_img, gt_img, alpha_mask)
 
         # image loss
         if False:
@@ -1257,7 +1257,6 @@ class SpirulaeModel(Model):
             "quat_reg": quat_norm_reg,
             'mcmc_opacity_reg': mcmc_opacity_reg,
             'mcmc_scale_reg': mcmc_scale_reg,
-            "exposure_reg": exposure_reg,
             "exposure_param_reg": self.config.exposure_reg_param * exposure_param_reg,
         }
         for key, value in loss_dict.items():
