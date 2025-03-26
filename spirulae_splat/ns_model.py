@@ -65,6 +65,8 @@ from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.rich_utils import CONSOLE
 
+from nerfstudio.model_components.lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
+
 from spirulae_splat.perf_timer import PerfTimer
 timerr = PerfTimer("get_outputs", ema_tau=100)
 timerl = PerfTimer("get_loss", ema_tau=100)
@@ -246,6 +248,11 @@ class SpirulaeModelConfig(ModelConfig):
     """
     adaptive_exposure_start_iter: int = 1000
     """Start adaptive exposure at this number of steps"""
+    use_bilateral_grid: bool = False
+    """If True, use bilateral grid to handle the ISP changes in the image space. This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/).
+       Makes training much slower - TODO: fused bilagrid in CUDA"""
+    grid_shape: Tuple[int, int, int] = (16, 16, 8)
+    """Shape of the bilateral grid (X, Y, W)"""
 
     # regularization
     use_scale_regularization: bool = True
@@ -401,6 +408,14 @@ class SpirulaeModel(Model):
         self.ssim = SSIM(data_range=1.0, size_average=True, channel=3)
         self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
         self.step = 0
+
+        if self.config.use_bilateral_grid:
+            self.bil_grids = BilateralGrid(
+                num=self.num_train_data,
+                grid_X=self.config.grid_shape[0],
+                grid_Y=self.config.grid_shape[1],
+                grid_W=self.config.grid_shape[2],
+            )
 
         self.crop_box: Optional[OrientedBox] = None
         if self.config.background_color == "random":
@@ -614,6 +629,8 @@ class SpirulaeModel(Model):
             gps["background_color"] = [self.background_color]
             if self.background_sh is not None:
                 gps["background_sh"] = [self.background_sh]
+        if self.config.use_bilateral_grid:
+            gps["bilateral_grid"] = list(self.bil_grids.parameters())
         if self.config.use_camera_optimizer:
             self.camera_optimizer.get_param_groups(param_groups=gps)
         return gps
@@ -632,6 +649,25 @@ class SpirulaeModel(Model):
         if d > 1:
             return resize_image(image, d)
         return image
+
+    def _apply_bilateral_grid(self, rgb: torch.Tensor, cam_idx: int, H: int, W: int) -> torch.Tensor:
+        # make xy grid
+        grid_y, grid_x = torch.meshgrid(
+            torch.linspace(0, 1.0, H, device=self.device),
+            torch.linspace(0, 1.0, W, device=self.device),
+            indexing="ij",
+        )
+        grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
+
+        rgb = torch.clip(rgb, 0.0, 1.0)
+
+        out = slice(
+            bil_grids=self.bil_grids,
+            rgb=rgb,
+            xy=grid_xy,
+            grid_idx=torch.tensor(cam_idx, device=self.device, dtype=torch.long),
+        )
+        return out["rgb"]
 
     def get_background_image(self, camera: Cameras, ssplat_camera: _Camera):
         if not isinstance(camera, Cameras):
@@ -808,15 +844,23 @@ class SpirulaeModel(Model):
         if self.config.background_sh_degree > 0 or True:
             background = self.get_background_image(camera, ssplat_camera)
             rgb = rgb + (1.0 - alpha) * background
+        timerr.mark("bkg")  # 300us-450us
+
+        # apply bilateral grid
+        if self.config.use_bilateral_grid and self.training:
+            if camera.metadata is not None and "cam_idx" in camera.metadata:
+                rgb = rgb.unsqueeze(0)
+                rgb = self._apply_bilateral_grid(rgb, camera.metadata["cam_idx"], H, W)
+                rgb = rgb.squeeze(0)
 
         # saturate pixel value
-        if not self.training:
-            rgb = torch.clip(rgb, 0.0, 1.0)
         else:
-            rgb = torch.relu(rgb)
-            # rgb = saturate_keep_gradient(rgb, 0.0, None)
-
-        timerr.mark("bkg")  # 300us-450us
+            if not self.training:
+                rgb = torch.clip(rgb, 0.0, 1.0)
+            else:
+                rgb = torch.relu(rgb)
+                # rgb = saturate_keep_gradient(rgb, 0.0, None)
+        timerr.mark("bilagrid")  # 300us-450us
 
         # normal regularization
         depth_im_ref = depth_inv_map(depth_im_ref)
@@ -1262,6 +1306,9 @@ class SpirulaeModel(Model):
         for key, value in loss_dict.items():
             loss_dict[key] = self.config.loss_scale * value
         timerl.mark("scale")  # <100us
+
+        if self.config.use_bilateral_grid:
+            loss_dict["tv_loss"] = 10 * total_variation_loss(self.bil_grids.grids)
 
         if self.training and self.config.use_camera_optimizer:
             # Add loss from camera optimizer
