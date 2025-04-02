@@ -26,6 +26,8 @@ class SplatModel:
             self.load_ckpt(file_path)
         elif file_path.endswith('config.yml'):
             self.load_config(file_path)
+        else:
+            raise ValueError("Must be .ckpt or config.yml")
         self.bgr = True
         self.flip_yz = False
         self.return_torch = False

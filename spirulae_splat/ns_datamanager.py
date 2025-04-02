@@ -35,7 +35,7 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
     """
     _target: Type = field(default_factory=lambda: SpirulaeDataManager)
 
-    max_batch_per_epoch: int = 768
+    max_batch_per_epoch: int = 200
     """Maximum number of batches per epoch, used for configuring batch size"""
 
     cache_images: Literal["cpu", "gpu"] = "gpu"
@@ -253,7 +253,7 @@ class SpirulaeDataManager(FullImageDatamanager):
             distortion_params = camera.distortion_params.numpy()
             image = data["image"].numpy()
 
-            if camera.camera_type.item() == CameraType.FISHEYE.value:
+            if camera.camera_type.item() == CameraType.FISHEYE.value or distortion_params[3] != 0.0:
                 # don't undistort
                 mask = None
             else:

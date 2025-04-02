@@ -154,13 +154,13 @@ class SpirulaeModelConfig(ModelConfig):
     """use Markov-Chain Monte Carlo for gaussian control"""
     random_init: bool = False
     """whether to initialize the positions uniformly randomly (not SFM points)"""
-    num_random: int = 20000
+    num_random: int = 100000
     """Number of gaussians to initialize if random init is used"""
     random_scale: float = 1.0
     """Position standard deviation to initialize random gaussians"""
     ssim_lambda: float = 0.4  # 0.2
     """weight of ssim loss"""
-    use_camera_optimizer: bool = False
+    use_camera_optimizer: bool = True
     """Whether to use camera optimizer"""
     camera_optimizer: CameraOptimizerConfig = field(default_factory=lambda: CameraOptimizerConfig(mode="SO3xR3"))
     """Config of the camera optimizer to use"""
@@ -182,7 +182,7 @@ class SpirulaeModelConfig(ModelConfig):
     """If True, continue to cull gaussians post refinement"""
     reset_alpha_every: int = 30
     """Every this many refinement steps, reset the alpha"""
-    densify_xy_grad_thresh: float = 0.003  # 0.003 | 0.001
+    densify_xy_grad_thresh: float = 0.001  # 0.003 | 0.001
     """threshold of positional gradient norm for densifying gaussians"""
     # densify_ch_grad_thresh: float = 3e-6  # 5e-6 | 3e-6 | 1e-6
     # """threshold of cylindrical harmonics gradient norm for densifying gaussians"""
@@ -236,7 +236,7 @@ class SpirulaeModelConfig(ModelConfig):
     """enable background model"""
     adaptive_exposure_mode: Optional[Literal[
         "linear", "log_linear", "channel", "log_channel", "affine", "log_affine"
-        ]] = "log_channel"
+        ]] = None
     """Adaptive exposure mode
         linear: gt ~ k * pred, with scalar k
         log_linear: log(gt) ~ k * log(pred) + b, with scalar k and b
@@ -248,7 +248,7 @@ class SpirulaeModelConfig(ModelConfig):
     """
     adaptive_exposure_start_iter: int = 1000
     """Start adaptive exposure at this number of steps"""
-    use_bilateral_grid: bool = False
+    use_bilateral_grid: bool = True
     """If True, use bilateral grid to handle the ISP changes in the image space. This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/).
        Makes training much slower - TODO: fused bilagrid in CUDA"""
     grid_shape: Tuple[int, int, int] = (16, 16, 8)
@@ -273,7 +273,7 @@ class SpirulaeModelConfig(ModelConfig):
     """Weight for normal regularizer"""
     normal_reg_warmup: int = 12000
     """warmup steps for normal regularizer"""
-    reg_warmup_length: int = 4000
+    reg_warmup_length: int = 8000
     """Warmup for depth and normal regularizers.
        only apply regularizers after this many steps."""
     mcmc_opacity_reg: float = 0.001
@@ -347,7 +347,7 @@ class SpirulaeModel(Model):
             sorted_indices = np.argsort(-S[i])
             S[i] = S[i][sorted_indices]
             Vt[i] = Vt[i][sorted_indices]
-        scales = np.log(1.5*S[:,:2]+1e-8)
+        scales = np.log(0.1*S[:,:2]+1e-8)
         scales = 0.5*(scales+np.flip(scales,axis=1))
         scales = torch.nn.Parameter(torch.from_numpy(scales))
         # quats = torch.nn.Parameter(random_quat_tensor(num_points))
