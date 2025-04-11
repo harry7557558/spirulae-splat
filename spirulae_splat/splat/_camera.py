@@ -24,7 +24,7 @@ class _Camera:
             ):
         self.h = height
         self.w = width
-        self.model = model
+        self.model = "" if model == "OPENCV" else model
         self.intrins = intrins
         self.dist_coeffs = dist_coeffs
         if all([x == 0 for x in dist_coeffs]):

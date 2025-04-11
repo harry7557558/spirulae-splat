@@ -27,7 +27,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 import torch
 from torch.nn import Parameter
-from torch.nn.functional import normalize
+import torch.nn.functional as F
 from pytorch_msssim import SSIM
 from fused_ssim import fused_ssim
 
@@ -115,10 +115,8 @@ def resize_image(image: torch.Tensor, d: int):
 
     return downscaled image in shape [H//d, W//d, C]
     """
-    import torch.nn.functional as tf
-
     weight = (1.0 / (d * d)) * torch.ones((1, 1, d, d), dtype=torch.float32, device=image.device)
-    return tf.conv2d(image.float().permute(2, 0, 1)[:, None, ...], weight, stride=d).squeeze(1).permute(1, 2, 0).to(image)
+    return F.conv2d(image.float().permute(2, 0, 1)[:, None, ...], weight, stride=d).squeeze(1).permute(1, 2, 0).to(image)
 
 
 class SaturateKeepGradient(torch.autograd.Function):
@@ -146,7 +144,7 @@ class SpirulaeModelConfig(ModelConfig):
     """period of steps where gaussians are culled and densified"""
     resolution_schedule: int = 3000
     """training starts at 1/d resolution, every n steps this is doubled"""
-    background_color: Literal["random", "black", "white"] = "white"
+    background_color: Literal["random", "black", "white", "gray"] = "gray"
     """Whether to randomize the background color."""
     num_downscales: int = 2
     """at the beginning, resolution is 1/2^d, where d is this number"""
@@ -245,6 +243,7 @@ class SpirulaeModelConfig(ModelConfig):
         affine: gt ~ A * pred, with 3x3 matrix A
         log_affine: log(gt) ~ A * log(pred) + b, with 3x3 matrix A and vec3 b
        Additional coefficients (k,A,b) are optimized online using linear least squares
+       May degrade performance at boundary when segmentation mask supervision is used, at least when tested on SAM2.1
     """
     adaptive_exposure_start_iter: int = 1000
     """Start adaptive exposure at this number of steps"""
@@ -276,6 +275,8 @@ class SpirulaeModelConfig(ModelConfig):
     reg_warmup_length: int = 4000
     """Warmup for depth and normal regularizers.
        only apply regularizers after this many steps."""
+    alpha_loss_weight: int = 0.01
+    """Weight for alpha, if mask is provided."""
     mcmc_opacity_reg: float = 0.001
     """Opacity regularization from MCMC
        Lower usually gives more accurate geometry, original MCMC uses 0.01"""
@@ -422,6 +423,8 @@ class SpirulaeModel(Model):
             self.background_color = torch.tensor(
                 [0.1490, 0.1647, 0.2157]
             )  # This color is the same as the default background color in Viser. This would only affect the background color when rendering.
+        elif self.config.background_color == "gray":
+            self.background_color = torch.tensor([0.5, 0.5, 0.5])
         else:
             self.background_color = get_color(self.config.background_color)
         self.background_color = torch.nn.Parameter(self.background_color)
@@ -733,7 +736,7 @@ class SpirulaeModel(Model):
         self.last_size = (H, W)
         timerr.mark("pre")  # 80us
 
-        quats = normalize(self.quats, dim=-1)
+        quats = F.normalize(self.quats, dim=-1)
         opacities = self.config.max_opacity * torch.sigmoid(self.opacities)
         timerr.mark("map")  # 300us-450us
 
@@ -864,7 +867,7 @@ class SpirulaeModel(Model):
 
         # normal regularization
         depth_im_ref = depth_inv_map(depth_im_ref)
-        normal_im = normalize(normal_im, dim=-1)
+        normal_im = F.normalize(normal_im, dim=-1)
         depth_normal, alpha_diffused = depth_to_normal(depth_im_ref, None, intrins, True, alpha)
         reg_normal = 1.0 - (depth_normal * normal_im).sum(-1, True)
         timerr.end("normal_reg")  # 600us-900us
@@ -943,7 +946,7 @@ class SpirulaeModel(Model):
         # resize depth
         h, w, _ = pred_depth.shape
         if ref_depth.shape != pred_depth.shape:
-            ref_depth = torch.nn.functional.interpolate(
+            ref_depth = F.interpolate(
                 ref_depth.reshape((1, 1, *ref_depth.shape[:2])),
                 size=(h, w), mode='bilinear'
             ).reshape(pred_depth.shape)
@@ -1038,7 +1041,7 @@ class SpirulaeModel(Model):
             # normal_loss = normal_diff_x.abs().mean() + normal_diff_y.abs().mean()
 
         # alpha loss
-        alpha_loss = torch.nn.functional.binary_cross_entropy(
+        alpha_loss = F.binary_cross_entropy(
             pred_alpha.flatten(), alpha.float().flatten())
 
         return (
@@ -1159,6 +1162,18 @@ class SpirulaeModel(Model):
             pred_img_e = pred_img + (pred_img_e-pred_img) * alpha_mask
         return pred_img_e, exposure_param_reg
 
+    @staticmethod
+    def get_alpha_loss(x, y):
+        """Compute asymmetric loss for alpha, penalize only when first argument is greater than second argument
+
+        Args:
+            x: alpha output by the model
+            y: reference alpha with same shape as x
+        """
+        # return torch.relu(x-y).mean()
+        # return F.binary_cross_entropy(x, y, reduction="mean")
+        return F.binary_cross_entropy(torch.fmax(x, y), y, reduction="mean")
+
     def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict.
 
@@ -1192,10 +1207,11 @@ class SpirulaeModel(Model):
         alpha_loss = 0.0
         if gt_img_rgba.shape[2] == 4:
             alpha = gt_img_rgba[..., -1].unsqueeze(-1)
-            alpha_loss = alpha_loss + torch.relu(outputs['alpha']-alpha).mean()
-            print(alpha_loss.item())
+            alpha_loss = alpha_loss + self.get_alpha_loss(outputs['alpha'], alpha)
 
-        # separate mask for dynamic objects, text, etc. - simply don't consider it when evaluating loss
+        # separate mask for dynamic objects, text, etc.
+        # simply don't consider it when evaluating loss, unless theres's no alpha channel, where a cost is applied
+        mask = None
         if "mask" in batch:
             # batch["mask"] : [H, W, 1]
             mask = self._downscale_if_required(batch["mask"])
@@ -1203,7 +1219,9 @@ class SpirulaeModel(Model):
             assert mask.shape[:2] == gt_img.shape[:2] == pred_img.shape[:2]
             # can be little bit sketchy for the SSIM loss
             gt_img = torch.lerp(outputs["background"], gt_img, mask)
-            pred_img = torch.lerp(outputs["background"], pred_img, mask)
+            # pred_img = torch.lerp(outputs["background"], pred_img, mask)
+            if isinstance(alpha_loss, float) and alpha_loss == 0.0:
+                alpha_loss = alpha_loss + self.get_alpha_loss(outputs['alpha'], mask)
         timerl.mark("alpha")  # ~100us
 
         # depth supervision
@@ -1227,6 +1245,8 @@ class SpirulaeModel(Model):
             if ssplat_camera.is_distorted():
                 undist_map = ssplat_camera.get_undist_map()
                 alpha_mask = torch.isfinite(undist_map.sum(-1, True))
+            if mask is not None and alpha_mask is not None:
+                alpha_mask = alpha_mask & mask
             # call function
             pred_img_e, exposure_param_reg = self.exposure_correction(pred_img, gt_img, alpha_mask)
 
@@ -1294,7 +1314,7 @@ class SpirulaeModel(Model):
             "depth_ref_loss": depth_supervision_loss,
             "normal_ref_loss": normal_supervision_loss,
             "alpha_ref_loss": alpha_supervision_loss,
-            "alpha_loss": alpha_loss,
+            "alpha_loss": self.config.alpha_loss_weight * alpha_loss,
             "scale_reg": scale_reg,
             "depth_reg": depth_reg,
             "normal_reg": normal_reg,

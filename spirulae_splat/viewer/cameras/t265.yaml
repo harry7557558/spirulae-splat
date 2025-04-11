@@ -1,4 +1,4 @@
-# example 180-degree fisheye camera with a circle visible
+# 180-degree fisheye camera with a circle visible
 width: 848
 height: 800
 fx: 285.8460998535156
@@ -7,5 +7,3 @@ cx: 418.7644958496094
 cy: 415.0235900878906
 model: "OPENCV_FISHEYE"
 distortion: [-0.009076775051653385, 0.043123308569192886, -0.03921201080083847, 0.006694579962641001]
-
-# model: ""
