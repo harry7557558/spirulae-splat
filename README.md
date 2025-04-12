@@ -104,5 +104,6 @@ By default, spirulae-splat uses all available images for training. To support `n
 ns-train spirulae --data [DATASET_PATH] nerfstudio-data --train-split-fraction 0.9
 ```
 
-<!-- ### Dataset preparation
-Some scripts I use to generate datasets from videos can be found [here](https://github.com/harry7557558/Graphics/tree/master/mapping/colmap_nerfstudio). See [here](https://github.com/harry7557558/Graphics/tree/master/mapping/video_imu_alignment) for a tool (under development) that recovers scene scale and orientation using IMU data. -->
+## Dataset preparation
+
+See `scripts` folder for some scripts I use to prepare datasets.
