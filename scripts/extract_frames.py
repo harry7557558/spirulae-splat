@@ -265,7 +265,7 @@ if __name__ == "__main__":
 {open(os.path.join(cur_dir, "run_colmap_sam.bash")).read()}""".lstrip())
         open(os.path.join(dirname, 'run_sam2.bash'), 'w').write(f"""
 # Run this from SAM2 install directory, after downloading checkpoints
-python3 {os.path.join(cur_dir, "SAM2-GUI", "mask_app.py")} --root_dir {dirname}
+python3 {os.path.join(cur_dir, "SAM2-GUI", "mask_app.py")} --root_dir {os.path.abspath(dirname)}
 """.lstrip())
 
     else:

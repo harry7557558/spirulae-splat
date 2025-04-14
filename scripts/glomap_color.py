@@ -57,10 +57,10 @@ def main(workdir):
     if 'fl_x' in transforms:
         wg, hg, Kg, modelG, distCoeffsG = get_intrinsics(transforms)
 
-    applied_transform = transforms['applied_transform']
-    if len(applied_transform) < 4:
-        applied_transform.append([0.0, 0.0, 0.0, 1.0])
-    applied_transform = torch.tensor(applied_transform, dtype=torch.float32).cuda()
+    b2w = transforms['applied_transform']
+    if len(b2w) < 4:
+        b2w.append([0.0, 0.0, 0.0, 1.0])
+    b2w = np.array(b2w)
 
     transforms['frames'].sort(key=lambda _: _['file_path'])
 
@@ -72,16 +72,17 @@ def main(workdir):
         w, h, K, model, distCoeffs = wg, hg, Kg, modelG, distCoeffsG
         if 'fl_x' in frame:
             w, h, K, model, distCoeffs = get_intrinsics(frame)
-        T = torch.tensor(frame['transform_matrix'], dtype=torch.float32).cuda()
-        T = torch.linalg.inv(T)  # world to cam
-        R = T[:3, :3]
-        t = T[:3, 3:4]
-
-        # TODO: there might be a bug here, some colors don't align
+        c2w = frame['transform_matrix']
+        w2c = np.linalg.inv(c2w)
+        b2c = w2c #@ b2w
+        b2c = np.diag([1, -1, -1, 1]) @ b2c
+        b2c = torch.from_numpy(b2c).float().cuda()
+        R = b2c[:3, :3]
+        t = b2c[:3, 3:4]
 
         pts_cam = points @ R.T + t.T
-        pts_cam[:, 2:] *= -1
-        pts_2d = pts_cam / pts_cam[:, 2:]
+        depths = pts_cam[:, 2:]
+        pts_2d = pts_cam / depths
 
         pts_cam_np = pts_cam.cpu().numpy()
         if model == "OPENCV":
@@ -89,13 +90,22 @@ def main(workdir):
         elif model == "OPENCV_FISHEYE":
             pts_2d = cv2.fisheye.projectPoints(pts_cam_np, np.zeros(3), np.zeros(3), K, distCoeffs)
         pts_2d = torch.from_numpy(pts_2d[0][:,0]).cuda()
+        pts_2d = (pts_2d+0.5).int()
 
         valid_mask = (pts_2d[:, 0] >= 0) & (pts_2d[:, 0] <= w-1) & \
                      (pts_2d[:, 1] >= 0) & (pts_2d[:, 1] <= h-1) & \
-                     (pts_cam[:, 2] > 0)
-        
-        valid_pts_2d = (pts_2d[valid_mask]+0.5).long()
-        colors = image_tensor[h-1-valid_pts_2d[:, 1], valid_pts_2d[:, 0]]
+                     (depths.flatten() > 0)
+
+        # TODO: how to filter out occluded points?
+
+        if 'mask_path' in frame:
+            mask = cv2.imread(os.path.join(workdir, frame['mask_path']))[:,:,0] > 0
+            mask_tensor = torch.from_numpy(mask).cuda()
+            pts_2d_filtered = pts_2d[valid_mask]
+            valid_mask[valid_mask.clone()] &= mask_tensor[pts_2d_filtered[:, 1], pts_2d_filtered[:, 0]]
+
+        valid_pts_2d = pts_2d[valid_mask]
+        colors = image_tensor[valid_pts_2d[:, 1], valid_pts_2d[:, 0]]
 
         colors_val[valid_mask] = torch.where(
             (pts_cam[:, 2:] < colors_depth)[valid_mask],
