@@ -131,6 +131,16 @@ def saturate_keep_gradient(x, xmin=None, xmax=None):
     return SaturateKeepGradient.apply(x, xmin, xmax)
 
 
+class MaskGradient(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, mask):
+        ctx.mask = mask
+        return x
+    @staticmethod
+    def backward(ctx, v_x):
+        return v_x * ctx.mask, None
+
+
 @dataclass
 class SpirulaeModelConfig(ModelConfig):
 
@@ -172,7 +182,7 @@ class SpirulaeModelConfig(ModelConfig):
     # classial control
     cull_alpha_thresh: float = 0.1
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
-    cull_scale_thresh: float = 0.5
+    cull_scale_thresh: float = 1.0
     """threshold of scale for culling huge gaussians"""
     cull_grad_thresh: float = 0.0  # 3e-4 | 1e-4 | 1e-5 | 0.0
     """threshold for culling gaussians with low visibility"""
@@ -868,7 +878,7 @@ class SpirulaeModel(Model):
         # normal regularization
         depth_im_ref = depth_inv_map(depth_im_ref)
         normal_im = F.normalize(normal_im, dim=-1)
-        depth_normal, alpha_diffused = depth_to_normal(depth_im_ref, None, intrins, True, alpha)
+        depth_normal, alpha_diffused = depth_to_normal(depth_im_ref, ssplat_camera, None, True, alpha)
         reg_normal = 1.0 - (depth_normal * normal_im).sum(-1, True)
         timerr.end("normal_reg")  # 600us-900us
         # -> ?us-?us median depth, 3000us-4500us one pass
@@ -1198,6 +1208,16 @@ class SpirulaeModel(Model):
                 loss[key] = loss[key] / self._train_batch_size
             return loss
 
+        # mask out of bound (e.g. fisheye circle)
+        camera_mask = None
+        ssplat_camera = outputs["ssplat_camera"]  # type: _Camera
+        if ssplat_camera.is_distorted():
+            undist_map = ssplat_camera.get_undist_map()
+            camera_mask = torch.isfinite(undist_map.sum(-1, True))
+            if not camera_mask.all():
+                for key in ['rgb', 'depth', 'alpha', 'background']:
+                    outputs[key] = MaskGradient.apply(outputs[key], camera_mask)
+
         timerl.start()
         gt_img_rgba = self.get_gt_img(batch["image"])
         gt_img = self.composite_with_background(gt_img_rgba, outputs["background"])
@@ -1234,17 +1254,13 @@ class SpirulaeModel(Model):
                 = self.depth_supervision(batch["depth"].cuda(), outputs["depth"], outputs["alpha"])
             timerl.mark("depth")  # ?us
 
-        # handle exposure
+        # correct exposure
         pred_img_e = pred_img
         exposure_param_reg = 0.0
         if self.config.adaptive_exposure_mode is not None and \
             self.step > self.config.adaptive_exposure_start_iter:
-            # mask
-            alpha_mask = None
-            ssplat_camera = outputs["ssplat_camera"]  # type: _Camera
-            if ssplat_camera.is_distorted():
-                undist_map = ssplat_camera.get_undist_map()
-                alpha_mask = torch.isfinite(undist_map.sum(-1, True))
+            # mask, note that alpha_mask is defined in "mask out of bound" step
+            alpha_mask = camera_mask
             if mask is not None and alpha_mask is not None:
                 alpha_mask = alpha_mask & mask
             # call function

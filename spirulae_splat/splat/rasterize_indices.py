@@ -40,6 +40,16 @@ def rasterize_gaussians_indices(
     )
     timer.mark("sort")  # ?us
 
+    if num_intersects == 0:
+        MAX_SORTED_SPLATS = 32  # TODO: load from CUDA
+        SORTED_INDEX_INF = 0x7fffffff
+        num_intersects = torch.zeros(
+            (camera.h, camera.w), dtype=torch.int32, device=positions.device)
+        indices = torch.empty(
+            (camera.h, camera.w, MAX_SORTED_SPLATS),
+            dtype=torch.int32, device=positions.device).fill_(SORTED_INDEX_INF)
+        return num_intersects, indices
+
     num_intersects, indices, depths = _C.rasterize_indices(
         camera.h, camera.w, camera.BLOCK_WIDTH,
         camera.model, camera.intrins, camera.get_undist_map(),

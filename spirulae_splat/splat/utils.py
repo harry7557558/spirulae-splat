@@ -3,11 +3,13 @@
 from typing import Tuple
 
 import torch
+import numpy as np
 from typing import Optional
 from jaxtyping import Float, Int
 from torch import Tensor
 
 import spirulae_splat.splat.cuda as _C
+from spirulae_splat.splat._camera import _Camera
 
 
 
@@ -92,22 +94,22 @@ def bin_and_sort_gaussians(
 
 
 def depth_to_points(
-    depths: Tensor, camtoworlds: Optional[Tensor], intrins: Tuple, z_depth: bool = True
+    depths: Tensor, camera: _Camera, c2w: Optional[Tensor]=None, z_depth: bool = True
 ) -> Tensor:
     """Convert depth maps to 3D points
 
     Args:
         depths: Depth maps [..., H, W, 1]
-        camtoworlds: Camera-to-world transformation matrices [..., 4, 4]
-        Ks: Camera intrinsics [..., 3, 3]
+        camera: Camera intrinsics
+        c2w: Camera-to-world transformation matrices [..., 4, 4]
         z_depth: Whether the depth is in z-depth (True) or ray depth (False)
 
     Returns:
         points: 3D points in the world coordinate system [..., H, W, 3]
     """
     assert depths.shape[-1] == 1, f"Invalid depth shape: {depths.shape}"
-    if camtoworlds is not None:
-        assert camtoworlds.shape[-2:] == (4, 4), f"Invalid viewmats shape: {camtoworlds.shape}"
+    if c2w is not None:
+        assert c2w.shape[-2:] == (4, 4), f"Invalid viewmats shape: {c2w.shape}"
 
     device = depths.device
     height, width = depths.shape[-3:-1]
@@ -118,46 +120,53 @@ def depth_to_points(
         indexing="xy",
     )  # [H, W]
 
-    fx, fy, cx, cy = intrins
-
     # camera directions in camera coordinates
-    camera_dirs = torch.stack(
-        [(x - cx) / fx, (y - cy) / fy, torch.ones_like(x)],
-        dim=-1,
-    )  # [..., H, W, 3]
+    if camera.is_distorted():
+        undist_map = camera.get_undist_map()
+        undist_map = undist_map.reshape(*([1]*(len(depths.shape)-3)), *depths.shape[-3:-1], 2)
+        camera_dirs = torch.concatenate([
+            undist_map, torch.ones_like(undist_map[..., :1])
+        ], dim=-1)  # [..., H, W, 3]
+    else:
+        fx, fy, cx, cy = camera.intrins
+        camera_dirs = torch.stack(
+            [(x - cx) / fx, (y - cy) / fy, torch.ones_like(x)],
+            dim=-1,
+        )  # [..., H, W, 3]
 
     # ray directions in world coordinates
-    if camtoworlds is not None:
+    if c2w is not None:
         directions = torch.einsum(
-            "...ij,...hwj->...hwi", camtoworlds[..., :3, :3], camera_dirs
+            "...ij,...hwj->...hwi", c2w[..., :3, :3], camera_dirs
         )  # [..., H, W, 3]
-        origins = camtoworlds[..., :3, -1]  # [..., 3]
+        origins = c2w[..., :3, -1]  # [..., 3]
     else:
         directions = camera_dirs
 
     if not z_depth:
         directions = torch.nn.functional.normalize(directions, dim=-1)
 
-    if camtoworlds is None:
+    if c2w is None:
         return depths * directions
     return origins[..., None, None, :] + depths * directions
 
 
 def depth_to_normal(
-    depths: Tensor, camtoworlds: Optional[Tensor], intrins: Tuple, z_depth: bool = True, alpha: Optional[Tensor] = None
+    depths: Tensor, camera: _Camera, c2w: Optional[Tensor]=None, z_depth: bool = True, alpha: Optional[Tensor] = None,
+    return_points = False
 ) -> Tensor:
     """Convert depth maps to surface normals
 
     Args:
         depths: Depth maps [..., H, W, 1]
-        camtoworlds: Camera-to-world transformation matrices [..., 4, 4]
-        Ks: Camera intrinsics [..., 3, 3]
+        camera: Camera intrinsics
+        c2w: Camera-to-world transformation matrices [..., 4, 4]
         z_depth: Whether the depth is in z-depth (True) or ray depth (False)
 
     Returns:
         normals: Surface normals in the world coordinate system [..., H, W, 3]
     """
-    points = depth_to_points(depths, camtoworlds, intrins, z_depth=z_depth)  # [..., H, W, 3]
+    points = depth_to_points(depths, camera, c2w, z_depth=z_depth)  # [..., H, W, 3]
     dx = torch.cat(
         [points[..., 2:, 1:-1, :] - points[..., :-2, 1:-1, :]], dim=-3
     )  # [..., H-2, W-2, 3]
@@ -178,4 +187,6 @@ def depth_to_normal(
         alpha = (conv_result == 5).reshape((*normals.shape[:2], 1))
         return normals * alpha, alpha
 
+    if return_points:
+        return normals, points
     return normals

@@ -339,13 +339,16 @@ class DefaultStrategy(Strategy):
     ) -> int:
         # prune low opacity
         is_prune = torch.sigmoid(params["opacities"].flatten()) < self.prune_opa
+
         if step > self.reset_every:
+
             # prune low absgrad
             if self.prune_grad2d > 0.0 and step < self.refine_stop_iter:
                 count = state["count"]
                 grads = state["grad2d"] / count.clamp_min(1)
                 # grads = state["grad2d"] / count.clamp_min(1).float().mean()
                 is_prune |= (grads < self.prune_grad2d)
+
             # too big
             is_too_big = (
                 torch.exp(params["scales"]).max(dim=-1).values
