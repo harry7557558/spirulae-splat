@@ -351,15 +351,15 @@ __global__ void compute_relocation_kernel(
     if (idx >= num_points)
         return;
 
-    int n_idx = ratios[idx];
+    int n = ratios[idx];
     float denom_sum = 0.0f;
 
     float opac = opacities[idx];
 
 #if 0
     // for Gaussian, minimize residual
-    float new_opac = 1.0f - powf(1.0f - opac, 1.0f / n_idx);
-    for (int i = 1; i <= n_idx; ++i) {
+    float new_opac = 1.0f - powf(1.0f - opac, 1.0f / n);
+    for (int i = 1; i <= n; ++i) {
         for (int k = 0; k <= (i - 1); ++k) {
             float bin_coeff = binoms[(i - 1) * n_max + k];
             float term =
@@ -372,12 +372,30 @@ __global__ void compute_relocation_kernel(
     // for 1-r^2 splats, strictly less than
 
     // keep opacity, change scale
-    //float new_opac = 1.0f - powf(1.0f - opac, 1.0f / n_idx);
-    //float sc = sqrtf(n_idx/opac * new_opac * powf(1.0f-new_opac, n_idx-1.0f));
+    //float new_opac = 1.0f - powf(1.0f - opac, 1.0f / n);
+    //float sc = sqrtf(n/opac * new_opac * powf(1.0f-new_opac, n-1.0f));
 
     // keep scale, change opacity
-    float new_opac = opac / n_idx;
+    // https://www.desmos.com/calculator/qeslmm0bqu
+    // Match integrated area, Newton-Raphson with initial guess
     float sc = 1.0f;
+    opac = fmaxf(fminf(opac, 0.999f), 0.001f);
+    float o = 1.0f - powf(1.0f - opac, 1.0f / n);
+    for (int iter = 0; iter < 3; iter++) {
+        float f = 0.0f, dfdx = 0.0f;
+        for (int k = 0; k <= n; k++) {
+            float nCk = binoms[n * n_max + k];
+            float w = nCk * powf(1.0f-o, k-1) * powf(o, n-k-1) / (1+2*(n-k));
+            f += w * o * (1.0f-o);
+            dfdx += w * (-k*o + (n-k)*(1.0f-o));
+        }
+        o += (1.0f-f-(2.0f/3.0f)*opac) / dfdx;
+        o = fmaxf(fminf(o, 0.999f), 0.001f);
+    }
+    float new_opac = o;
+    // TODO:
+    // - Use 2D area instead of 1D
+    // - Also change scale - match moments?
 
 #endif
 

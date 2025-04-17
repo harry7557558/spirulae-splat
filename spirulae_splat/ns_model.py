@@ -48,7 +48,7 @@ from spirulae_splat.splat import (
 )
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
-from spirulae_splat.strategy import DefaultStrategy
+from spirulae_splat.strategy import DefaultStrategy, MCMCStrategy
 from spirulae_splat.splat._camera import _Camera
 
 from nerfstudio.cameras.camera_optimizers import (CameraOptimizer,
@@ -208,17 +208,17 @@ class SpirulaeModelConfig(ModelConfig):
     """stop culling/splitting at this step WRT screen size of gaussians"""
 
     # MCMC control
-    refine_start_iter: int = 500
+    mcmc_warmup_length: int = 500
     """start MCMC refinement at this number of steps"""
-    refine_stop_iter: int = 25000
+    mcmc_stop_refine_at: int = 25000
     """end MCMC refinement at this number of steps"""
-    cap_max: int = 1000000
-    """maximum number of splats for MCMC"""
+    mcmc_cap_max: int = 100000
+    """maximum number of splats for MCMC, dataset-specific tuning required"""
     mcmc_split_splats: bool = True
     """whether to split splats into two splats with different positions"""
-    noise_lr: float = 5e3
+    mcmc_noise_lr: float = 5e5
     """MCMC sampling noise learning rate"""
-    min_opacity: float = 0.005
+    mcmc_min_opacity: float = 0.005
     """minimum opacity for MCMC relocation"""
 
     # representation
@@ -287,11 +287,11 @@ class SpirulaeModelConfig(ModelConfig):
        only apply regularizers after this many steps."""
     alpha_loss_weight: int = 0.01
     """Weight for alpha, if mask is provided."""
-    mcmc_opacity_reg: float = 0.001
+    mcmc_opacity_reg: float = 0.01  # 0.01 in original paper
     """Opacity regularization from MCMC
-       Lower usually gives more accurate geometry, original MCMC uses 0.01"""
-    mcmc_scale_reg: float = 0.002
-    """Scale regularization from MCMC, original MCMC uses 0.01"""
+       Lower usually gives more accurate geometry"""
+    mcmc_scale_reg: float = 0.01  # 0.01 in original paper
+    """Scale regularization from MCMC"""
     exposure_reg_image: float = 0.1
     """Between 0 and 1; For exposure regularization, include this fraction of L1 loss between GT image and image before exposure adjustment"""
     exposure_reg_param: float = 0.002
@@ -449,6 +449,21 @@ class SpirulaeModel(Model):
 
     def _set_strategy(self):
         # Strategy for GS densification
+
+        # MCMC mode
+        if self.config.use_mcmc:
+            self.strategy = MCMCStrategy(
+                cap_max=self.config.mcmc_cap_max,
+                noise_lr=self.config.mcmc_noise_lr,
+                refine_start_iter=self.config.mcmc_warmup_length,
+                refine_stop_iter=self.config.mcmc_stop_refine_at,
+                refine_every=self.config.refine_every,
+                min_opacity=self.config.mcmc_min_opacity,
+            )
+            self.strategy_state = self.strategy.initialize_state()
+            return
+
+        # classical mode
         reset_every = self.config.reset_alpha_every * self.config.refine_every
         pause_refine_after_reset = min(
             self.num_train_data//self._train_batch_size+self.config.refine_every,
@@ -571,14 +586,24 @@ class SpirulaeModel(Model):
 
     def step_post_backward(self, step):
         assert step == self.step
-        self.strategy.step_post_backward(
-            params=self.gauss_params,
-            optimizers=self.optimizers,
-            state=self.strategy_state,
-            step=self.step,
-            info=self.info,
-            packed=False,
-        )
+        if self.config.use_mcmc:
+            self.strategy.step_post_backward(
+                params=self.gauss_params,
+                optimizers=self.optimizers,
+                state=self.strategy_state,
+                step=self.step,
+                info=self.info,
+                lr=self.optimizers['means'].param_groups[0]['lr']
+            )
+        else:
+            self.strategy.step_post_backward(
+                params=self.gauss_params,
+                optimizers=self.optimizers,
+                state=self.strategy_state,
+                step=self.step,
+                info=self.info,
+                packed=False,
+            )
         if False:
             # adaptive densification threshold
             # TODO: do this again after resolution change

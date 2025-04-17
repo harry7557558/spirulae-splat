@@ -5,7 +5,9 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from spirulae_splat.splat._torch_impl import quat_to_rotmat
+from spirulae_splat.splat._torch_impl import quat_to_rotmat, quat_scale_to_covar_preci
+from .relocation import compute_relocation
+
 
 @torch.no_grad()
 def _multinomial_sample(weights: Tensor, n: int, replacement: bool = True) -> Tensor:
@@ -250,10 +252,8 @@ def relocate(
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
     mask: Tensor,
-    binoms: Tensor,
     min_opacity: float = 0.005,
 ):
-    raise NotImplementedError()
     """Inplace relocate some dead Gaussians to the lives ones.
 
     Args:
@@ -277,7 +277,6 @@ def relocate(
         opacities=opacities[sampled_idxs],
         scales=torch.exp(params["scales"])[sampled_idxs],
         ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
-        binoms=binoms,
     )
     new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
 
@@ -307,10 +306,8 @@ def sample_add(
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
     n: int,
-    binoms: Tensor,
     min_opacity: float = 0.005,
 ):
-    raise NotImplementedError()
     opacities = torch.sigmoid(params["opacities"])
 
     eps = torch.finfo(torch.float32).eps
@@ -320,7 +317,6 @@ def sample_add(
         opacities=opacities[sampled_idxs],
         scales=torch.exp(params["scales"])[sampled_idxs],
         ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
-        binoms=binoms,
     )
     new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
 
@@ -351,19 +347,19 @@ def inject_noise_to_position(
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
     scaler: float,
+    min_opacity: float
 ):
-    raise NotImplementedError()
     opacities = torch.sigmoid(params["opacities"].flatten())
     scales = torch.exp(params["scales"])
     covars, _ = quat_scale_to_covar_preci(
         params["quats"],
-        scales,
+        torch.concat((scales, 0.5*torch.fmin(scales[:,0:1], scales[:,1:2])), axis=1),
         compute_covar=True,
         compute_preci=False,
         triu=False,
     )
 
-    def op_sigmoid(x, k=100, x0=0.995):
+    def op_sigmoid(x, k=0.5/min_opacity, x0=1.0-min_opacity):
         return 1 / (1 + torch.exp(-k * (x - x0)))
 
     noise = (

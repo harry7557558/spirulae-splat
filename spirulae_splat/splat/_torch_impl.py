@@ -318,6 +318,36 @@ def scale_rot_to_cov3d(scale: Tensor, quat: Tensor) -> Tensor:
     return M @ M.transpose(-1, -2)  # (..., 3, 3)
 
 
+def quat_scale_to_covar_preci(
+    quats: Tensor,  # [N, 4],
+    scales: Tensor,  # [N, 3],
+    compute_covar: bool = True,
+    compute_preci: bool = True,
+    triu: bool = False,
+) -> Tuple[Optional[Tensor], Optional[Tensor]]:
+    """PyTorch implementation of `gsplat.cuda._wrapper.quat_scale_to_covar_preci()`."""
+    R = quat_to_rotmat(quats)  # (..., 3, 3)
+
+    if compute_covar:
+        M = R * scales[..., None, :]  # (..., 3, 3)
+        covars = torch.bmm(M, M.transpose(-1, -2))  # (..., 3, 3)
+        if triu:
+            covars = covars.reshape(covars.shape[:-2] + (9,))  # (..., 9)
+            covars = (
+                covars[..., [0, 1, 2, 4, 5, 8]] + covars[..., [0, 3, 6, 4, 7, 8]]
+            ) / 2.0  # (..., 6)
+    if compute_preci:
+        P = R * (1 / scales[..., None, :])  # (..., 3, 3)
+        precis = torch.bmm(P, P.transpose(-1, -2))  # (..., 3, 3)
+        if triu:
+            precis = precis.reshape(precis.shape[:-2] + (9,))
+            precis = (
+                precis[..., [0, 1, 2, 4, 5, 8]] + precis[..., [0, 3, 6, 4, 7, 8]]
+            ) / 2.0
+
+    return covars if compute_covar else None, precis if compute_preci else None
+
+
 def compute_compensation(cov2d_mat: Tensor):
     """
     params: cov2d matrix (*, 2, 2)
