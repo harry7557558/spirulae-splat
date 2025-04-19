@@ -368,14 +368,8 @@ __global__ void compute_relocation_kernel(
         }
     }
     float sc = (opacities[idx] / denom_sum);
-#else
-    // for 1-r^2 splats, strictly less than
-
-    // keep opacity, change scale
-    //float new_opac = 1.0f - powf(1.0f - opac, 1.0f / n);
-    //float sc = sqrtf(n/opac * new_opac * powf(1.0f-new_opac, n-1.0f));
-
-    // keep scale, change opacity
+#elif 0
+    // for 1-r^2 splats, keep scale, change opacity
     // https://www.desmos.com/calculator/qeslmm0bqu
     // Match integrated area, Newton-Raphson with initial guess
     float sc = 1.0f;
@@ -393,9 +387,43 @@ __global__ void compute_relocation_kernel(
         o = fmaxf(fminf(o, 0.999f), 0.001f);
     }
     float new_opac = o;
-    // TODO:
-    // - Use 2D area instead of 1D
-    // - Also change scale - match moments?
+
+#else
+
+    // for 1-r^2 splats, change both opacity and scale
+    // https://www.desmos.com/calculator/gq1hv3btw0
+    // Match two moments, Newton-Raphson with initial guess
+    const float m0 = 0.0f;  // first moment to match, splat dimension minus 1
+    const float m2 = 2.0f;  // second moment to match, splat dimension plus 1
+
+    // pre-compute moments of original splat
+    const float m00 = 0.5f*(m0+3.0f), m01 = 0.5f*(m0*(m0+4.0f)+3.0f);
+    const float m20 = 0.5f*(m2+3.0f), m21 = 0.5f*(m2*(m2+4.0f)+3.0f);
+    const float f0 = (m00-opac)/m01;  // m0-th moment
+    const float f2 = (m20-opac)/m21;  // m2-th moment
+
+    // Newton-Raphson
+    glm::vec2 p = { opac/n, 1.0f };  // initial guess for o and s
+    for (int iter = 0; iter < 4; iter++) {
+        glm::vec2 f = {-f0, -f2};
+        glm::mat2 jac(0.0f);
+        for (int k = 0; k <= n; k++) {
+            float o = p.x, s = p.y;
+            float nCk = binoms[n * n_max + k];
+            float wn = nCk * powf(1.0f-o, k-1) * powf(o, n-k-1);
+            float w0 = wn / (m0+1+2*(n-k)) * powf(s, m0);
+            float w2 = wn / (m2+1+2*(n-k)) * powf(s, m2);
+            f += glm::vec2(w0, w2) * o * (1.0f-o) * s;
+            jac[0] += glm::vec2(w0, w2) * (-k*o + (n-k)*(1.0f-o)) * s;
+            jac[1] += glm::vec2(w0*(1.0f+m0), w2*(1.0f+m2)) * o * (1.0f-o);
+        }
+        p -= glm::inverse(jac) * f;
+        p.x = glm::clamp(p.x, 0.001f, 0.999f);
+        p.y = fmaxf(p.y, 0.01f);
+    }
+
+    float new_opac = p.x;
+    float sc = p.y;
 
 #endif
 

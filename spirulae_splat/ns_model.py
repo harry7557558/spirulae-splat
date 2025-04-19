@@ -159,7 +159,8 @@ class SpirulaeModelConfig(ModelConfig):
     num_downscales: int = 2
     """at the beginning, resolution is 1/2^d, where d is this number"""
     use_mcmc: bool = False
-    """use Markov-Chain Monte Carlo for gaussian control"""
+    """use Markov-Chain Monte Carlo for gaussian control
+        Disable per-pixel sorting if you use this"""
     random_init: bool = False
     """whether to initialize the positions uniformly randomly (not SFM points)"""
     num_random: int = 20000
@@ -223,7 +224,7 @@ class SpirulaeModelConfig(ModelConfig):
 
     # representation
     use_per_pixel_sorting: bool = True
-    """enable per-pixel sorting"""
+    """enable per-pixel sorting, disable this when using MCMC"""
     per_pixel_sorting_warmup: int = 2000
     """use per pixel sorting only after this number of steps"""
     sh_degree: int = 3
