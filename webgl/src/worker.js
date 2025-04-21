@@ -1,5 +1,103 @@
 "use strict";
 
+
+// misc help function - float/half packing
+
+var _floatView = new Float32Array(1);
+var _int32View = new Int32Array(_floatView.buffer);
+
+function floatToHalf(float) {
+    _floatView[0] = float;
+    var f = _int32View[0];
+
+    var sign = (f >> 31) & 0x0001;
+    var exp = (f >> 23) & 0x00ff;
+    var frac = f & 0x007fffff;
+
+    var newExp;
+    if (exp == 0) {
+        newExp = 0;
+    } else if (exp < 113) {
+        newExp = 0;
+        frac |= 0x00800000;
+        frac = frac >> (113 - exp);
+        if (frac & 0x01000000) {
+            newExp = 1;
+            frac = 0;
+        }
+    } else if (exp < 142) {
+        newExp = exp - 112;
+    } else {
+        newExp = 31;
+        frac = 0;
+    }
+
+    return (sign << 15) | (newExp << 10) | (frac >> 13);
+}
+
+function packHalf2x16(x, y) {
+    return (floatToHalf(x) | (floatToHalf(y) << 16)) >>> 0;
+}
+
+
+// misc help function - distance to ellipse from iq
+
+function sdEllipse(x, y, a, b) {
+    let px = Math.abs(x);
+    let py = Math.abs(y);
+    if (px > py) {
+        [px, py] = [py, px];
+        [a, b] = [b, a];
+    }
+    
+    const l = b * b - a * a;
+    const m = a * px / l;
+    const m2 = m * m;
+    const n = b * py / l;
+    const n2 = n * n;
+    const c = (m2 + n2 - 1.0) / 3.0;
+    const c3 = c * c * c;
+    const q = c3 + m2 * n2 * 2.0;
+    const d = c3 + m2 * n2;
+    const g = m + m * n2;
+    
+    let co;
+    if (d < 0.0) {
+        const p = Math.acos(q / c3) / 3.0;
+        const s = Math.cos(p);
+        const t = Math.sin(p) * Math.sqrt(3.0);
+        const rx = Math.sqrt(-c * (s + t + 2.0) + m2);
+        const ry = Math.sqrt(-c * (s - t + 2.0) + m2);
+        co = (ry + Math.sign(l) * rx + Math.abs(g) / (rx * ry) - m) / 2.0;
+    } else {
+        const h = 2.0 * m * n * Math.sqrt(d);
+        const s = Math.cbrt(q + h);
+        const u = Math.cbrt(q - h);
+        const rx = -s - u - c * 4.0 + 2.0 * m2;
+        const ry = (s - u) * Math.sqrt(3.0);
+        const rm = Math.hypot(rx, ry);
+        const p = ry / Math.sqrt(rm - rx);
+        co = (p + 2.0 * g / rm - m) / 2.0;
+    }
+    
+    const si = Math.sqrt(1.0 - co * co);
+    
+    // Calculate closest point on the ellipse
+    const closestX = a * co;
+    const closestY = b * si;
+    
+    // Calculate distance and sign
+    const distance = Math.hypot(closestX - px, closestY - py);
+    const sign = py - closestY > 0 ? 1 : -1;
+    
+    return distance * sign;
+}
+
+
+
+// Worker
+
+
 let Worker = {
     wasmModule: null
 };
@@ -118,42 +216,6 @@ Worker.createWorker = function(self) {
     let depthIndex = new Uint32Array();
     let lastBaseVertexCount = 0,
         lastHarmonicsLength = 0;
-
-    var _floatView = new Float32Array(1);
-    var _int32View = new Int32Array(_floatView.buffer);
-
-    function floatToHalf(float) {
-        _floatView[0] = float;
-        var f = _int32View[0];
-
-        var sign = (f >> 31) & 0x0001;
-        var exp = (f >> 23) & 0x00ff;
-        var frac = f & 0x007fffff;
-
-        var newExp;
-        if (exp == 0) {
-            newExp = 0;
-        } else if (exp < 113) {
-            newExp = 0;
-            frac |= 0x00800000;
-            frac = frac >> (113 - exp);
-            if (frac & 0x01000000) {
-                newExp = 1;
-                frac = 0;
-            }
-        } else if (exp < 142) {
-            newExp = exp - 112;
-        } else {
-            newExp = 31;
-            frac = 0;
-        }
-
-        return (sign << 15) | (newExp << 10) | (frac >> 13);
-    }
-
-    function packHalf2x16(x, y) {
-        return (floatToHalf(x) | (floatToHalf(y) << 16)) >>> 0;
-    }
 
     function generateBaseTexture() {
         if (!base) return;
@@ -330,5 +392,180 @@ Worker.createWorker = function(self) {
             viewProj = e.data.view;
             throttledSort();
         }
+    });
+}
+
+
+Worker.buildBVH = function(header, base) {
+    let vertexCount = base.opacities.length;
+    let numSplats = vertexCount;
+    console.log(numSplats, "splats");
+
+	let splatArray = new Float32Array(2048 * 2048 * 4);
+    let triangleArrayUint32View = new Uint32Array(splatArray.buffer);
+
+    const NT = 0;
+    let tessellatedSplats = new Array(numSplats);
+    let numAabb = 0;
+
+	for (let i = 0; i < numSplats; i++) {
+
+        let p = base.means.slice(3*i, 3*i+3);
+        let q = base.quats.slice(4*i, 4*i+4);
+        let R = quat2rotmat(q);
+        let sx = Math.exp(base.scales[2*i+0]), sy = Math.exp(base.scales[2*i+1]);
+        let pu = [R[0][0]*sx, R[0][1]*sx, R[0][2]*sx];
+        let pv = [R[1][0]*sy, R[1][1]*sy, R[1][2]*sy];
+
+        let m = header.config.sh_degree == 0 ? 0.28209479177387814 : 1.0;
+        let b = header.config.sh_degree == 0 ? 0.5 : 0.0;
+        m = 0.28209479177387814, b = 0.5;
+        let rgba = [
+            b + m * base.features_dc[3*i+0],
+            b + m * base.features_dc[3*i+1],
+            b + m * base.features_dc[3*i+2],
+            base.opacities[i]
+        ];
+
+        let iTex = 8 * i;
+
+        splatArray[iTex + 0] = p[0];
+        splatArray[iTex + 1] = p[1];
+        splatArray[iTex + 2] = p[2];
+        triangleArrayUint32View[iTex + 3] = packHalf2x16(pu[0], pu[1]);
+        triangleArrayUint32View[iTex + 4] = packHalf2x16(pu[2], pv[0]);
+        triangleArrayUint32View[iTex + 5] = packHalf2x16(pv[1], pv[2]);
+        triangleArrayUint32View[iTex + 6] = packHalf2x16(rgba[0], rgba[1]);
+        triangleArrayUint32View[iTex + 7] = packHalf2x16(rgba[2], rgba[3]);
+
+        let sr = [Math.hypot(pu[0], pv[0]), Math.hypot(pu[1], pv[1]), Math.hypot(pu[2], pv[2])];
+        let r0 = 1 / (1+Math.sqrt(2)*NT);
+
+        // tessellate splat
+        // TODO: make this more compact without missing stuff
+        var sc = Math.max(sx, sy);
+        var boxes = [];
+        for (var ti = -NT; ti <= NT; ti++) {
+            for (var tj = -NT; tj <= NT; tj++) {
+                var u = ti / (NT+0.5);
+                var v = tj / (NT+0.5);
+                // if (Math.hypot(u*sc/sx, v*sc/sy) >= 1)
+                if (sdEllipse(u, v, sx/sc, sy/sc) >= r0)
+                    continue;
+                var c = [p[0]+u*pu[0]+v*pv[0], p[1]+u*pu[1]+v*pv[1], p[2]+u*pu[2]+v*pv[2]];
+                var r = [sr[0]*r0, sr[1]*r0, sr[2]*r0];
+                boxes.push([
+                    c[0]-r[0], c[1]-r[1], c[2]-r[2],
+                    c[0]+r[0], c[1]+r[1], c[2]+r[2],
+                    c[0], c[1], c[2]
+                ]);
+            }
+        }
+        var boxesArray = new Float32Array(9*boxes.length);
+        for (var k = 0; k < boxes.length; k++) {
+            for (var _ = 0; _ < 9; _++)
+                boxesArray[9*k+_] = boxes[k][_];
+        }
+        tessellatedSplats[i] = boxesArray;
+        numAabb += boxes.length;
+	}
+
+	let aabbArray = new Float32Array(4096 * 4096 * 4);
+	let totalWork = new Uint32Array(numAabb);
+    let tmap = new Uint32Array(numAabb);
+    for (var i = 0, ptr = 0; i < numSplats; i++) {
+        var nt = tessellatedSplats[i].length / 9;
+        // totalWork.fill(i, ptr, ptr+nt);
+        aabbArray.set(tessellatedSplats[i], 9*ptr);
+        for (var k = 0; k < nt; k++) {
+            totalWork[ptr] = ptr;
+            tmap[ptr] = i;
+            ptr++;
+        }
+    }
+    console.log(numAabb, "tesselated boxes");
+
+	console.time("BvhGeneration");
+	console.log("BvhGeneration...");
+    BVH_Build_Iterative(totalWork, aabbArray);
+	console.timeEnd("BvhGeneration");
+
+    // compress AABB array
+    let aabbArrayUint32View = new Uint32Array(aabbArray.buffer);
+    for (var iTex = 0; iTex < aabbArray.length; iTex += 4) {
+        var iTex0 = 2 * iTex;
+        if (aabbArray.slice(iTex0, iTex0+8).every(x => x == 0))
+            break;
+        var idTriangle = aabbArray[iTex0];
+        var aabbMin = aabbArray.slice(iTex0+1, iTex0+4);
+        var idChild = aabbArray[iTex0+4];
+        var aabbMax = aabbArray.slice(iTex0+5, iTex0+8);
+        aabbArrayUint32View[iTex+0] = idTriangle < 0 ? -idChild : tmap[idTriangle];
+        aabbArrayUint32View[iTex+1] = packHalf2x16(aabbMin[0], aabbMax[0]);
+        aabbArrayUint32View[iTex+2] = packHalf2x16(aabbMin[1], aabbMax[1]);
+        aabbArrayUint32View[iTex+3] = packHalf2x16(aabbMin[2], aabbMax[2]);
+    }
+    console.log(iTex/4, "bounding boxes");
+
+    self.postMessage({
+        bvhTexture: {
+            splatArray: triangleArrayUint32View,
+            aabbArray: aabbArrayUint32View,
+        }
+    }, []);
+}
+
+
+Worker.createRayTracingWorker = function(self) {
+    let header;
+    let base, harmonics;
+    let vertexCount = 0;
+    let viewProj;
+
+    let lastProj = [];
+    let depthIndex = new Uint32Array();
+    let lastBaseVertexCount = 0,
+        lastHarmonicsLength = 0;
+
+    function runSort(viewProj) {
+        if (!base) return;
+        if (harmonics && harmonics.features_sh.length > lastHarmonicsLength) {
+            lastHarmonicsLength = harmonics.features_sh.length;
+        }
+    }
+
+    const throttledSort = () => {
+        if (!sortRunning) {
+            sortRunning = true;
+            let lastView = viewProj;
+            runSort(lastView);
+            setTimeout(() => {
+                sortRunning = false;
+                if (lastView !== viewProj) {
+                    throttledSort();
+                }
+            }, 0);
+        }
+    };
+
+    let sortRunning;
+    window.addEventListener("message", (e) => {
+
+        if (e.data.header) {
+            base = e.data.base;
+            harmonics = e.data.harmonics;
+            header = e.data.header;
+            vertexCount = base.opacities.length;
+            postMessage({ base, harmonics, vertexCount });
+
+            Worker.buildBVH(header, base);
+
+        }
+        
+        else if (e.data.view) {
+            viewProj = e.data.view;
+            throttledSort();
+        }
+
     });
 }

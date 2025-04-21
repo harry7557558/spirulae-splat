@@ -25,6 +25,7 @@ async function main() {
     let ssplatData = new Uint8Array(req.headers.get("content-length"));
 
     Worker.createWorker(window);
+    // Worker.createRayTracingWorker(window);
 
     const canvas = document.getElementById("canvas");
 
@@ -32,10 +33,14 @@ async function main() {
         antialias: false,
     });
     let renderer = new RasterRenderer(gl, viewportController);
+    // let renderer = new RayTracingRenderer(gl, viewportController);
 
     let vertexCount = 0;
 
     window.addEventListener("message", (e) => {
+        if (e.data.vertexCount) {
+            vertexCount = e.data.vertexCount;
+        }
         if (e.data.buffer) {
             ssplatData = new Uint8Array(e.data.buffer);
             const blob = new Blob([ssplatData.buffer], {
@@ -58,7 +63,9 @@ async function main() {
         } else if (e.data.depthIndex) {
             const { depthIndex, viewProj } = e.data;
             renderer.updateDepthIndex(depthIndex, viewProj);
-            vertexCount = e.data.vertexCount;
+        } else if (e.data.bvhTexture) {
+            const { splatArray, aabbArray } = e.data.bvhTexture;
+            renderer.updateBvhTexture(splatArray, aabbArray);
         }
     });
 
