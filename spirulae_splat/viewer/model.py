@@ -22,15 +22,17 @@ timer = PerfTimer("render")
 
 class SplatModel:
     def __init__(self, file_path: str):
+        self.bgr = True
+        self.sort_per_pixel = True
+        self.flip_yz = False
+        self.return_torch = False
+
         if file_path.endswith('.ckpt'):
             self.load_ckpt(file_path)
         elif file_path.endswith('config.yml'):
             self.load_config(file_path)
         else:
             raise ValueError("Must be .ckpt or config.yml")
-        self.bgr = True
-        self.flip_yz = False
-        self.return_torch = False
 
     def load_ckpt(self, file_path):
         checkpoint = torch.load(file_path)
@@ -70,6 +72,11 @@ class SplatModel:
                 f = os.path.join(ckpt_dir, f)
                 self.load_ckpt(f)
                 break
+
+        # check if use per pixel sorting
+        content = open(file_path).read()
+        if 'use_per_pixel_sorting: false' in content:
+            self.sort_per_pixel = False
 
     def num_splats(self):
         return len(self.gauss_params["means"])
@@ -115,7 +122,7 @@ class SplatModel:
         return render_background_sh(camera._to_ssplat_camera(), viewmat, sh_degree+1, sh_coeffs)
 
     @torch.inference_mode()
-    def _render(self, camera: Camera, c2w: np.ndarray, return_depth=False, sort_per_pixel=True):
+    def _render(self, camera: Camera, c2w: np.ndarray, return_depth=False):
 
         timer.start()
 
@@ -158,7 +165,7 @@ class SplatModel:
         )  # type: ignore
         timer.mark("project")
 
-        if sort_per_pixel:
+        if self.sort_per_pixel:
             num_intersects, sorted_indices = rasterize_gaussians_indices(
                 positions, axes_u, axes_v, opacities,
                 bounds, num_tiles_hit,
@@ -195,7 +202,7 @@ class SplatModel:
         timer.mark("background")
 
         if return_depth:
-            if sort_per_pixel:
+            if self.sort_per_pixel:
                 depth = rasterize_gaussians_depth_sorted(
                     positions, axes_u, axes_v, opacities,
                     sorted_indices,

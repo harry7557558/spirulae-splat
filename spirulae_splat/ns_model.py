@@ -300,26 +300,22 @@ class SpirulaeModelConfig(ModelConfig):
        Use an L2 cost to match exposure parameter to the parameter at no exposure adjustment;
        (may be summed/averaged across a batch)"""
 
-    # supervision using a foundational depth model
+    # supervision using a foundation depth model
     # enable these by setting `depth_model` in data manager config
     depth_supervision_start_iter: int = 1000
-    """Start using foundational model depth at this number of steps"""
-    depth_distortion_depth_degree: int = 3
+    """Start using foundation model depth at this number of steps"""
+    depth_distortion_depth_degree: int = -1  # 3
     """Hyperparameter for depth distortion model, controls depth embedding, see code for details
-        Larger gives more parameters in depth distortion model"""
-    depth_distortion_uv_degree: int = 1
+        Larger gives more parameters in depth distortion model, -1 to disable"""
+    depth_distortion_uv_degree: int = -1  # 1
     """Hyperparameter for depth distortion model, controls image space embedding, see code for details
-        Larger gives more parameters in depth distortion model"""
-    depth_supervision_weight: float = 0.0
-    """Weight for depth supervision by comparing rendered depth with depth predicted by a foundational model
-        WARNING: experimental, a nonzero value seems have made results worse consistently"""
-    normal_supervision_weight: float = 0.0
-    """Weight for normal supervision by comparing gradient of rendered depth with gradient of depth predicted by a foundational model
-        WARNING: experimental, a nonzero value seems have made results worse consistently"""
-    normal_supervision_clip: float = 10.0
-    """Clip normal magnitude to better handle normal supervision at edge with discontinuous depth"""
+        Larger gives more parameters in depth distortion model, -1 to disable"""
+    depth_supervision_weight: float = 0.5
+    """Weight for depth supervision by comparing rendered depth with depth predicted by a foundation model"""
+    normal_supervision_weight: float = 0.1
+    """Weight for normal supervision by comparing gradient of rendered depth with gradient of depth predicted by a foundation model"""
     alpha_supervision_weight: float = 0.002
-    """Weight for alpha supervision by rendered alpha with alpha predicted by a foundational model
+    """Weight for alpha supervision by rendered alpha with alpha predicted by a foundation model
         Useful for removing floaters from sky for outdoor scenes"""
 
 
@@ -976,9 +972,6 @@ class SpirulaeModel(Model):
     def depth_supervision(self, ref_depth, pred_depth, pred_alpha, _uv_cache={}):
         # details: https://github.com/harry7557558/Graphics/blob/master/mapping/relative_depth_matching/depth_fitting_01.ipynb
 
-        nd = self.config.depth_distortion_depth_degree
-        npos = self.config.depth_distortion_uv_degree
-
         # resize depth
         h, w, _ = pred_depth.shape
         if ref_depth.shape != pred_depth.shape:
@@ -989,7 +982,10 @@ class SpirulaeModel(Model):
         alpha = (ref_depth > 0.0).squeeze(-1)
 
         # generate UV embeddings
-        if (h, w) not in _uv_cache:
+        if not self.config.depth_distortion_uv_degree >= 0:
+            uv = None
+
+        elif (h, w) not in _uv_cache:
             u = (torch.arange(w, dtype=torch.float32)+0.5)/w * 2.0 - 1.0
             v = (torch.arange(h, dtype=torch.float32)+0.5)/h * 2.0 - 1.0
             u = u[None, :].float().cuda().repeat((h, 1))
@@ -997,8 +993,8 @@ class SpirulaeModel(Model):
             u, v = u.flatten(), v.flatten()
 
             uv = []
-            for i in range(npos+1):
-                for j in range(npos+1):
+            for i in range(self.config.depth_distortion_uv_degree+1):
+                for j in range(self.config.depth_distortion_uv_degree+1):
                     uv.append(torch.cos(math.pi/2*i*u)*torch.cos(math.pi/2*j*v))
                     if j != 0:
                         uv.append(torch.cos(math.pi/2*i*u)*torch.sin(math.pi/2*j*v))
@@ -1013,48 +1009,49 @@ class SpirulaeModel(Model):
         else:
             uv = _uv_cache[(h, w)]
 
-        # for debugging
-        def plot_image(im):
-            return
-            import matplotlib.pyplot as plt
-            if self.step < 2000: return
-            im = im.float().reshape((h, w))
-            imx = abs(im[1:, :] - im[:-1, :]) * (alpha[1:, :] & alpha[:-1, :])
-            imy = abs(im[:, 1:] - im[:, :-1]) * (alpha[:, 1:] & alpha[:, :-1])
-            im = im * alpha
-            fig, (ax1, ax2, ax3) = plt.subplots(1, 3)
-            ax1.imshow(im.detach().cpu().numpy())
-            ax2.imshow(imx.detach().cpu().numpy())
-            ax3.imshow(imy.detach().cpu().numpy())
-            plt.show()
-
         # depth distortion fitting
         if self.config.depth_supervision_weight > 0.0 or self.config.normal_supervision_weight > 0.0:
-            # generate depth embeddings
-            if True:
-                pred_depth = depth_map(pred_depth)
-                ref_depth = depth_map(ref_depth)
-            x = pred_depth.flatten() / (pred_depth.sum() / alpha.sum().item())
-            y = ref_depth.flatten() / (ref_depth.sum() / alpha.sum().item())
-            # x, y = y, x
-            plot_image(alpha)
-            plot_image(x)
-            plot_image(y)
-            A = []
-            for k in range(nd+1):
-                ed = x**k / math.factorial(k) * torch.exp(-x)
-                A.append(ed * uv)
-            A = torch.concatenate(A)
-            plot_image(A[-1])
+            # normalize depths - inputs are metric linear depth
+            x, y = ref_depth.flatten(), pred_depth.flatten()
+            # x, y = pred_depth.flatten(), ref_depth.flatten()
 
-            # linear least squares
-            mat = (alpha.reshape(1,-1) * A) @ A.T
-            vec = A @ (alpha.flatten() * y)
-            c = torch.linalg.solve(mat, vec)
-            corr_depth = torch.relu(c @ A)
-            depth_diff = (corr_depth - y).reshape((h, w))
-            plot_image(corr_depth)
-            plot_image(depth_diff)
+            m = alpha.flatten().float()
+            m_sum = alpha.sum().item()
+
+            if (
+                self.config.depth_distortion_depth_degree >= 0 and
+                self.config.depth_distortion_uv_degree >= 0
+            ):
+                # normalize by mean and log
+                x = x / ((x*m).sum() / m_sum)
+                y = y / ((y*m).sum() / m_sum)
+                x, y = depth_map(x), depth_map(y)
+
+                # generate depth embeddings
+                A = []
+                for k in range(self.config.depth_distortion_depth_degree+1):
+                    ed = x**k / math.factorial(k) * torch.exp(-x)
+                    A.append(ed * uv)
+                A = torch.concatenate(A)
+
+                # linear least squares
+                mat = (alpha.reshape(1,-1) * A) @ A.T
+                vec = A @ (alpha.flatten() * y)
+                c = torch.linalg.solve(mat, vec)
+                corr_depth = torch.relu(c @ A)
+                depth_diff = (corr_depth - y).reshape((h, w))
+
+            else:
+                # normalize log by mean and std
+                x, y = torch.log(torch.relu(x) + 1e-6), torch.log(torch.relu(y) + 1e-6)
+                x = x - (x*m).sum() / m_sum
+                y = y - (y*m).sum() / m_sum
+                x = x / torch.sqrt(((x*x)*m).sum() / m_sum)
+                y = y / torch.sqrt(((y*y)*m).sum() / m_sum)
+
+                # distortion disabled, just use it
+                depth_diff = (x - y).reshape((h, w))
+        # TODO: sometimes it's overfitting mean depth, need per-splat depth supervision
 
         # depth loss
         depth_loss = 0.0
@@ -1064,26 +1061,19 @@ class SpirulaeModel(Model):
 
         # normal loss
         normal_loss = 0.0
-        normal_scale = 720.0 / np.sqrt(w*h)
         if self.config.normal_supervision_weight > 0.0:
             normal_diff_x = (depth_diff[1:, :] - depth_diff[:-1, :]) * (alpha[1:, :] & alpha[:-1, :])
             normal_diff_y = (depth_diff[:, 1:] - depth_diff[:, :-1]) * (alpha[:, 1:] & alpha[:, :-1])
-            clip = self.config.normal_supervision_clip * normal_scale
-            # normal_diff_x = torch.clip(normal_diff_x, -clip, clip)
-            # normal_diff_y = torch.clip(normal_diff_y, -clip, clip)
-            normal_diff_x = clip*torch.tanh(normal_diff_x/clip)
-            normal_diff_y = clip*torch.tanh(normal_diff_y/clip)
-            normal_loss = (normal_diff_x**2).mean() + (normal_diff_y**2).mean()
-            # normal_loss = normal_diff_x.abs().mean() + normal_diff_y.abs().mean()
+            # normal_loss = (normal_diff_x**2).mean() + (normal_diff_y**2).mean()
+            normal_loss = normal_diff_x.abs().mean() + normal_diff_y.abs().mean()
 
         # alpha loss
-        alpha_loss = F.binary_cross_entropy(
-            pred_alpha.flatten(), alpha.float().flatten())
+        alpha_loss = self.get_alpha_loss(pred_alpha.float().flatten(), alpha.float().flatten())
 
         return (
             self.config.depth_supervision_weight * depth_loss,
             self.config.normal_supervision_weight * normal_loss,
-            (self.config.alpha_supervision_weight * normal_scale) * alpha_loss
+            self.config.alpha_supervision_weight * alpha_loss
         )
 
     def exposure_correction(

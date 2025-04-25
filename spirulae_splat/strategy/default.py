@@ -347,7 +347,7 @@ class DefaultStrategy(Strategy):
                 count = state["count"]
                 grads = state["grad2d"] / count.clamp_min(1)
                 # grads = state["grad2d"] / count.clamp_min(1).float().mean()
-                is_prune |= (grads < self.prune_grad2d)
+                is_prune |= (grads <= self.prune_grad2d)
 
             # too big
             is_too_big = (

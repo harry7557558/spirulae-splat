@@ -21,7 +21,7 @@ from nerfstudio.data.datamanagers.full_images_datamanager import (
 )
 from nerfstudio.cameras.cameras import Cameras, CameraType
 
-from spirulae_splat.splat._torch_impl import depth_map
+from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map
 
 
 from concurrent.futures import ThreadPoolExecutor
@@ -44,11 +44,15 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
     """The image type returned from manager, caching images in uint8 saves memory"""
 
     depth_model: Literal[
+        # disabled
         None,
+        # MoGe - https://github.com/microsoft/moge
+        "moge:Ruicheng/moge-vitl",
+        # Depth Anything v2 - not recommended based on empirical results
         "depth_anything_v2_vits",
         "depth_anything_v2_vitb",
         "depth_anything_v2_vitl",
-    ] = None
+    ] = None  # "moge:Ruicheng/moge-vitl"
 
 
 
@@ -70,6 +74,9 @@ class DepthPredictor:
             "filename": "depth_anything_v2_vitl.pth",
             "sky_threshold": 0.1,
         },
+        "moge:Ruicheng/moge-vitl": {
+            "sky_threshold": np.inf,
+        }
     }
 
     cache_dir: Optional[str] = os.path.join("scripts", "depth_cache")
@@ -82,11 +89,10 @@ class DepthPredictor:
         self.model_id = model_id
         self.sky_threshold = self.MODELS[model_id]['sky_threshold']
 
-        model_path = self.get_model_path(model_id)
-        self.model = self.load_depth_anything_v2(model_path)
+        self.load_model()
         CONSOLE.log(f"Depth model loaded: {model_id}")
 
-    def __call__(self, image: torch.Tensor):
+    def __call__(self, image: torch.Tensor, camera: Cameras=None):
 
         depth = None
         depth_loaded = False
@@ -116,20 +122,22 @@ class DepthPredictor:
         # inference depth model
         if depth is None:
             with torch.inference_mode():
-                depth = self.inference_depth_anything_v2(image)
+                depth = self.infer(image, camera)
 
         # save cache
         if self.cache_dir is not None and not depth_loaded:
             # np.savez_compressed(cache_filename, depth=depth.cpu().numpy())
             np.savez(cache_filename, depth=depth.cpu().numpy())  # 1.7MB -> 2.1MB, magnitudes faster loading
 
-        h, w, _ = image.shape
-        depth = torch.nn.functional.interpolate(
-            depth.reshape(1, 1, *depth.shape[:2]),
-            size=(h, w), mode='bilinear', align_corners=False
-        ).reshape(h, w, 1)
+        if image.shape[:2] != depth.shape[:2]:
+            h, w, _ = image.shape
+            depth = torch.nn.functional.interpolate(
+                depth.reshape(1, 1, *depth.shape[:2]),
+                size=(h, w), mode='bilinear', align_corners=False
+            ).reshape(h, w, 1)
 
-        depth[depth >= self.sky_threshold] = 0.0
+        if np.isfinite(self.sky_threshold) and self.sky_threshold >= 0.0:
+            depth[depth >= self.sky_threshold] = 0.0
 
         # return depth_map(depth)
         return depth
@@ -149,6 +157,17 @@ class DepthPredictor:
 
         return model_path
 
+    def load_model(self):
+
+        if self.model_id.startswith("depth_anything_v2"):
+            model_path = self.get_model_path(self.model_id)
+            self.model = self.load_depth_anything_v2(model_path)
+            self.infer = self.inference_depth_anything_v2
+
+        elif self.model_id.startswith("moge:"):
+            self.model = self.load_moge()
+            self.infer = self.inference_moge
+
     def load_depth_anything_v2(self, model_path):
         from spirulae_splat.scripts.depth_anything_v2.dpt import DepthAnythingV2
 
@@ -166,7 +185,16 @@ class DepthPredictor:
 
         return model
 
-    def inference_depth_anything_v2(self, image):
+    def load_moge(self):
+        try:
+            from moge.model.v1 import MoGeModel
+        except ImportError:
+            raise ImportError("Import error, please install https://github.com/microsoft/moge")
+
+        model = MoGeModel.from_pretrained(self.model_id.split(':')[-1]).cuda().eval()
+        return model
+
+    def inference_depth_anything_v2(self, image, camera=None):
 
         batch = image.permute(2, 0, 1).unsqueeze(0)
         batch = batch.float().cuda() / 255.0
@@ -194,6 +222,24 @@ class DepthPredictor:
         depth = depth.to(image.device)
         return depth
 
+    def inference_moge(self, image, camera=None):
+
+        image = image.permute(2, 0, 1)
+        image = image.float().cuda() / 255.0
+
+        fov_x = None
+        if camera is not None:
+            fov_x = 2.0 * torch.rad2deg(torch.arctan(camera.width / (2.0*camera.fx)))
+
+        output = self.model.infer(image, fov_x)
+        depth = output['depth']
+        mask = output['mask']
+
+        del output
+        torch.cuda.empty_cache()
+
+        depth[~mask] = 0.0
+        return depth
 
 
 class SpirulaeDataManager(FullImageDatamanager):
@@ -289,7 +335,8 @@ class SpirulaeDataManager(FullImageDatamanager):
             cache = undistorted_images[idx]
             # if idx != 0: return cache
             image = cache["image"]
-            depth = self.depth_model(image)
+            camera = dataset.cameras[idx]
+            depth = self.depth_model(image, camera)
             cache["depth"] = depth
             return cache
 
@@ -326,6 +373,9 @@ class SpirulaeDataManager(FullImageDatamanager):
                 self.train_cameras = self.train_dataset.cameras
         else:
             assert_never(cache_images_device)
+
+        del self.depth_model
+        torch.cuda.empty_cache()
 
         return undistorted_images
 

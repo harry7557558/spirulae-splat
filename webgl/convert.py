@@ -510,7 +510,12 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
             ]
         print()
 
+    # normalize position
     means -= torch.mean(means, axis=0)
+    # normalize scale
+    scale = ((means*means).sum(-1).mean()**0.5).item()
+    means = means / scale
+    scales = scales - np.log(scale)
 
     quats = quats / torch.norm(quats, dim=1, keepdim=True)
     opacities = torch.sigmoid(opacities)

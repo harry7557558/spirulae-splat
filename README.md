@@ -1,5 +1,7 @@
 # spirulae-splat
-My custom method for Nerfstudio. Based on the `splatfacto` method in official Nerfstudio implementation.
+My custom 2DGS method for Nerfstudio. Modified the `splatfacto` method in official Nerfstudio implementation.
+
+<!-- This project is largely (although not entirely) a hobby project to test out ideas I have. I also use it to generate splats of some real-world scenes around me. -->
 
 ### Major changes / Novelties:
 
@@ -17,7 +19,7 @@ My custom method for Nerfstudio. Based on the `splatfacto` method in official Ne
     - Rendered at focal lengths much lower than in training images (e.g. fisheye render for robot simulator)
   - Eliminates popping artifacts in animation (e.g. while navigating in a viewer)
   - Overall training is up to 20% slower as without per-pixel sorting but can be faster for some scenes; (for reference, [Stop-the-pop](https://arxiv.org/abs/2402.00525v3), a more complex per-pixel sorting method, reported consistent 4% slow down)
-  - Makes inference a little tricky - A scene trained with per-pixel sorting doesn't look nice when rendered without per-pixel sorting, causes compatibility issues for existing viewers
+  - Makes inference a little tricky &ndash; A scene trained with per-pixel sorting doesn't look nice when rendered without per-pixel sorting, causes compatibility issues for existing viewers
 
 - Use polynomial spline kernel splats instead of Gaussians, as inspired by [kernels used in computational physics](https://en.wikipedia.org/wiki/Smoothed-particle_hydrodynamics)
   - This increases rendering speed by zeroing out opacities beyond a certain radius
@@ -32,7 +34,7 @@ My custom method for Nerfstudio. Based on the `splatfacto` method in official Ne
 
 - Set a maximum number of batches per epoch and dynamically set batch size based on number of training images, significantly improves performance for scenes with thousands of scattered images (e.g. large-scale indoor scenes)
 
-<!-- - Support [Markov Chain Monte Carlo (MCMC)](https://arxiv.org/abs/2404.09591) for adaptive control of splats, with relocation designed for polynomial splats -->
+- Support [Markov Chain Monte Carlo (MCMC)](https://arxiv.org/abs/2404.09591) for adaptive control of splats, with a relocation formula specifically designed for polynomial splats by matching two moments
 
 <!-- - Introduce splat anisotropy by multiplying opacity by a smoothstep of UV directional dot product $1-\mathrm{smoothstep}(\mathbf{a}\cdot(u,v))$, intended to better represent sharp edges
 
@@ -43,7 +45,17 @@ DEPRECATED: although this seems to improve metrics (e.g. PSNR) for a similar num
   - Closed-form solution exists using linear least squares
   - To ensure predicted images look good during inference, the (weighted) mean and covariance of splat colors is fitted to mean and covariance of training image colors. This is alternatively achieved by adding a small loss component from pre-adjustment image when evaluating photometric loss with ground-truth image.
 
+- Depth supervision
+  - Directly supervising depth, normal, and alpha with depth predicted by [MoGe](https://arxiv.org/abs/2410.19115) significantly improves performance on low-texture and reflective surfaces.
+  - Before MoGe, an attempt was made to utilize [Depth Anything v2](https://arxiv.org/abs/2406.09414) predictions, a generalized linear model fitting was applied to correct distortion before evaluating loss, although result was poor for most outdoor scenes.
+
 <!-- - Use an adaptive densification threshold based on absgrad, for consistency in number of splats across scenes and hyperparameter sets -->
+
+- Support fisheye camera
+  - Exact fisheye render is achieved by using a pre-computed undistortion map in rasterization, with distorted bounding box from projection.
+  - This is different from [Fisheye-GS](https://arxiv.org/abs/2409.04751) that distorts splats using first-order approximation during projection, which has issues that our method don't have:
+    - Large approximation error near the 180° circle &ndash; a distorted splat should be a crescent, not an ellipse
+    - Culls large splats with parts behind camera that could otherwise contribute radiance, which is much more common for 180° fisheye cameras than for conventional cameras
 
 - Use spherical harmonics for direction-dependent background color
   - Intended to better represent sky in outdoor scenes
@@ -55,26 +67,33 @@ DEPRECATED: although this seems to improve metrics (e.g. PSNR) for a similar num
 
 ### Ideas / To-do
 
-- Support camera distortion in rendering and training
-  - Render large image + distort is inefficient, undistorting fisheye image for training crops boundary and loses information
-  - Idea: distort using Jacobian during projection, or calculate distorted bounding box in projection and undistort pixel in rasterization
-    - Expect the latter to work better for large distortion; ([visualization](https://www.desmos.com/calculator/eqo66jd3qa))
+- Train on low-quality images, as well as general captures from general users
+  - Mobile video captures often have mixed high-quality images and blurry images.
+    - List of other common degradations: shot noise, ringing overshoot, JPEG/AVC/HEVC artifacts, glass reflection, bloom, flare
+  - Ideas
+    - Physically model motion/defocus blur? (Google "gaussian splatting deblur" and check first few results)
+    - Process input images using an image restoration model like [this](https://github.com/swz30/Restormer)? (Need to train one for general degradation. I've tried to train one with [albumentations](https://albumentations.ai/) degradation, it worked for shot noise and JPEG artifacts but not real-world motion blur. Possibly need good synthetic data generated in a way similar to [this](https://arxiv.org/abs/1711.07064) to handle motion blur.)
+    - Use some loss or regularization term to encourage splats to learn from high-quality parts and ignore low-quality parts, when there's mixed low-quality and high-quality training data
+  - May also be useful to handle uncalibrated distortion, as in following cases:
+    - Captured through car window or curved museum glass
+    - Rolling shutter cameras under motion
+    - Cameras with intrinsics that don't fit perfectly to COLMAP models (e.g. cheap Arduino cameras, clipped external lens for smartphones)
+
+- Speed up bilateral grid from splatfacto with a fully-fused CUDA implementation
+
+- Fit a splat in 8 scalars for memory speed
+  - Current implementation represents geometry of projected splat with position and two axes, which appears to be faster than 2DGS implemented in gsplat, but it still takes high memory footprint.
+  - Quick benchmark shows loading two `float4` from global memory is 2 times faster than loading three non-contiguous `float3`.
+  - Idea: 5 scalars for projected ellipse, plus $z=a(x-x_0)+b(y-y_0)+c$ for screen-space depth, which doesn't introduce additional singularity; Pack them into one contiguous tensor.
 
 - Better model for view-dependent colors for glossy surfaces, e.g. floor where most camera views have low elevation angle, result doesn't generalize well to bird's eye views
   - Idea: low-degree SH with Fresnel reflectance?
-
-- Depth supervision
-   - Fit rendered depth to depth predicted using MVS or a foundational depth model
-   - Special attention needed for biased depth, possibly using an approach similar to how exposure is handled, or bilateral grid as in splatfacto
-   - \*\*UPDATE: a prototype was made, while I haven't got to make depth better, supervising with alpha predicted by the depth model does seem to effectively remove floaters from sky (with spherical harmonics background)
 
 - Speed up uv-dependent color
   - Idea: use an [interpolated circular grid](https://www.desmos.com/calculator/0drgnclvod) that allow both low-latency access and accomodation for circular splat shape
   - Also [apply texture to opacity](https://arxiv.org/abs/2408.16982)?
 
 - Anti-aliasing, like in [Mip-Splatting](https://arxiv.org/abs/2311.16493)
-
-- Fit a splat in 8 scalars for memory speed
 
 - Try non-planar splats, like quadratic patches
 
