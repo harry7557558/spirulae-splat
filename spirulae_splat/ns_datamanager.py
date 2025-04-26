@@ -374,8 +374,9 @@ class SpirulaeDataManager(FullImageDatamanager):
         else:
             assert_never(cache_images_device)
 
-        del self.depth_model
-        torch.cuda.empty_cache()
+        if self.config.depth_model is not None:
+            del self.depth_model
+            torch.cuda.empty_cache()
 
         return undistorted_images
 
