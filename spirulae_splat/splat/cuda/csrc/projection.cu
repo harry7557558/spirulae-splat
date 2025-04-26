@@ -1,3 +1,5 @@
+#include "projection.cuh"
+
 #include "helpers.cuh"
 #include "camera.cuh"
 #include <algorithm>
@@ -73,22 +75,7 @@ inline __device__ void projected_depth_grad_vjp(
 // each thread processes one gaussian
 template <CameraType CAMERA_TYPE>
 __global__ void project_gaussians_forward_kernel(
-    const int num_points,
-    const float3* __restrict__ means3d,
-    const float2* __restrict__ scales,
-    const float4* __restrict__ quats,
-    const float* __restrict__ viewmat,
-    const float4 intrins,
-    const float4 dist_coeffs,
-    const dim3 tile_bounds,
-    const unsigned block_width,
-    const float clip_thresh,
-    int4* __restrict__ bounds,
-    int32_t* __restrict__ num_tiles_hit,
-    float3* __restrict__ positions,
-    float3* __restrict__ axes_u,
-    float3* __restrict__ axes_v
-    // float2* __restrict__ depth_grads
+    _ARGS_project_gaussians_forward_kernel
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
     if (idx >= num_points) {
@@ -244,11 +231,7 @@ __global__ void project_gaussians_backward_kernel(
 
 template <CameraType CAMERA_TYPE>
 __global__ void render_undistortion_map_kernel(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const float4 intrins,
-    const float4 dist_coeffs,
-    float2* __restrict__ out_img
+    _ARGS_render_undistortion_map_kernel
 ) {
     unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
     unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
@@ -490,71 +473,21 @@ __global__ void compute_relocation_split_kernel(
 
 
 template __global__ void project_gaussians_forward_kernel<CameraType::Undistorted>(
-    const int num_points,
-    const float3* __restrict__ means3d,
-    const float2* __restrict__ scales,
-    const float4* __restrict__ quats,
-    const float* __restrict__ viewmat,
-    const float4 intrins,
-    const float4 dist_coeffs,
-    const dim3 tile_bounds,
-    const unsigned block_width,
-    const float clip_thresh,
-    int4* __restrict__ bounds,
-    int32_t* __restrict__ num_tiles_hit,
-    float3* __restrict__ positions,
-    float3* __restrict__ axes_u,
-    float3* __restrict__ axes_v
+    _ARGS_project_gaussians_forward_kernel
 );
 
 template __global__ void project_gaussians_forward_kernel<CameraType::OPENCV>(
-    const int num_points,
-    const float3* __restrict__ means3d,
-    const float2* __restrict__ scales,
-    const float4* __restrict__ quats,
-    const float* __restrict__ viewmat,
-    const float4 intrins,
-    const float4 dist_coeffs,
-    const dim3 tile_bounds,
-    const unsigned block_width,
-    const float clip_thresh,
-    int4* __restrict__ bounds,
-    int32_t* __restrict__ num_tiles_hit,
-    float3* __restrict__ positions,
-    float3* __restrict__ axes_u,
-    float3* __restrict__ axes_v
+    _ARGS_project_gaussians_forward_kernel
 );
 
 template __global__ void project_gaussians_forward_kernel<CameraType::OPENCV_FISHEYE>(
-    const int num_points,
-    const float3* __restrict__ means3d,
-    const float2* __restrict__ scales,
-    const float4* __restrict__ quats,
-    const float* __restrict__ viewmat,
-    const float4 intrins,
-    const float4 dist_coeffs,
-    const dim3 tile_bounds,
-    const unsigned block_width,
-    const float clip_thresh,
-    int4* __restrict__ bounds,
-    int32_t* __restrict__ num_tiles_hit,
-    float3* __restrict__ positions,
-    float3* __restrict__ axes_u,
-    float3* __restrict__ axes_v
+    _ARGS_project_gaussians_forward_kernel
 );
 
 template __global__ void render_undistortion_map_kernel<CameraType::OPENCV>(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const float4 intrins,
-    const float4 dist_coeffs,
-    float2* __restrict__ out_img
+    _ARGS_render_undistortion_map_kernel
 );
 
 template __global__ void render_undistortion_map_kernel<CameraType::OPENCV_FISHEYE>(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const float4 intrins,
-    const float4 dist_coeffs,
-    float2* __restrict__ out_img
+    _ARGS_render_undistortion_map_kernel
 );

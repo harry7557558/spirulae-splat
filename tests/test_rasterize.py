@@ -8,6 +8,10 @@ from spirulae_splat.splat.project_gaussians import project_gaussians
 import spirulae_splat.splat.rasterize_simple as rasterize_simple
 import spirulae_splat.splat.rasterize as rasterize
 import spirulae_splat.splat.cuda as _C
+from spirulae_splat.splat._camera import _Camera
+
+rasterize_simple.RETURN_IDX = True
+rasterize.RETURN_IDX = True
 
 torch.manual_seed(41)
 
@@ -32,6 +36,7 @@ def test_rasterize():
     cx, cy = 0.45*W, 0.55*H
     fx, fy = 0.7*W, 0.8*W
     intrins = (fx, fy, cx, cy)
+    cam = _Camera(H, W, "OPENCV", intrins)
     clip_thresh = 0.01
     viewmat = torch.tensor(
         [
@@ -68,8 +73,7 @@ def test_rasterize():
 
     params = project_gaussians(
         means3d, scales, quats,
-        viewmat, intrins,
-        H, W, BLOCK_SIZE,
+        viewmat, cam,
         clip_thresh,
     )
     def decode_params(params):
@@ -124,8 +128,7 @@ def test_rasterize():
         opacities,
         bounds,
         num_tiles_hit,
-        intrins,
-        H, W, BLOCK_SIZE,
+        cam,
         background.detach().clone()
     )
 
@@ -192,6 +195,4 @@ def test_rasterize():
 
 if __name__ == "__main__":
     # torch.autograd.set_detect_anomaly(True)
-    rasterize_simple.RETURN_IDX = True
-    rasterize.RETURN_IDX = True
     test_rasterize()

@@ -6,6 +6,33 @@
 #include "glm/glm/glm.hpp"
 
 
+// refactored function arguments
+
+#define _ARGS_project_gaussians_forward_kernel \
+    const int num_points, \
+    const float3* __restrict__ means3d, \
+    const float2* __restrict__ scales, \
+    const float4* __restrict__ quats, \
+    const float* __restrict__ viewmat, \
+    const float4 intrins, \
+    const float4 dist_coeffs, \
+    const dim3 tile_bounds, \
+    const unsigned block_width, \
+    const float clip_thresh, \
+    int4* __restrict__ bounds, \
+    int32_t* __restrict__ num_tiles_hit, \
+    float3* __restrict__ positions, \
+    float3* __restrict__ axes_u, \
+    float3* __restrict__ axes_v
+
+#define _ARGS_render_undistortion_map_kernel \
+    const dim3 tile_bounds, \
+    const dim3 img_size, \
+    const float4 intrins, \
+    const float4 dist_coeffs, \
+    float2* __restrict__ out_img
+
+
 /* == AUTO HEADER GENERATOR - DO NOT CHANGE THIS LINE == */
 
 
@@ -16,22 +43,7 @@
 // each thread processes one gaussian
 template <CameraType CAMERA_TYPE>
 __global__ void project_gaussians_forward_kernel(
-    const int num_points,
-    const float3* __restrict__ means3d,
-    const float2* __restrict__ scales,
-    const float4* __restrict__ quats,
-    const float* __restrict__ viewmat,
-    const float4 intrins,
-    const float4 dist_coeffs,
-    const dim3 tile_bounds,
-    const unsigned block_width,
-    const float clip_thresh,
-    int4* __restrict__ bounds,
-    int32_t* __restrict__ num_tiles_hit,
-    float3* __restrict__ positions,
-    float3* __restrict__ axes_u,
-    float3* __restrict__ axes_v
-    // float2* __restrict__ depth_grads
+    _ARGS_project_gaussians_forward_kernel
 );
 
 
@@ -56,11 +68,7 @@ __global__ void project_gaussians_backward_kernel(
 
 template <CameraType CAMERA_TYPE>
 __global__ void render_undistortion_map_kernel(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const float4 intrins,
-    const float4 dist_coeffs,
-    float2* __restrict__ out_img
+    _ARGS_render_undistortion_map_kernel
 );
 
 

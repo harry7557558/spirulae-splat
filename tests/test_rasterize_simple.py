@@ -9,6 +9,8 @@ import spirulae_splat.splat.rasterize_simple as rasterize_simple
 import spirulae_splat.splat.cuda as _C
 from spirulae_splat.splat._camera import _Camera
 
+rasterize_simple.RETURN_IDX = True
+
 torch.manual_seed(40)
 
 device = torch.device("cuda:0")
@@ -135,5 +137,4 @@ def test_rasterize_simple():
 
 
 if __name__ == "__main__":
-    rasterize_simple.RETURN_IDX = True
     test_rasterize_simple()

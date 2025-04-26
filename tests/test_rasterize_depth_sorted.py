@@ -11,6 +11,9 @@ from spirulae_splat.splat import (
     rasterize_gaussians_depth_sorted
 )
 import spirulae_splat.splat.cuda as _C
+from spirulae_splat.splat._camera import _Camera
+
+rasterize_depth_sorted.DEBUG = True
 
 torch.manual_seed(41)
 
@@ -31,8 +34,7 @@ def check_close(name, a, b, atol=1e-5, rtol=1e-5):
         print(f"{diff.max()=} {diff.mean()=}", end='\n\n')
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_rasterize_depth_sorted(mode):
+def _test_rasterize_depth_sorted(mode):
     num_points = 40
 
     means3d = torch.randn((num_points, 3), device=device)
@@ -47,6 +49,7 @@ def test_rasterize_depth_sorted(mode):
     cx, cy = 0.45*W, 0.55*H
     fx, fy = 0.7*W, 0.8*W
     intrins = (fx, fy, cx, cy)
+    cam = _Camera(H, W, "OPENCV", intrins)
     clip_thresh = 0.01
     viewmat = torch.tensor(
         [
@@ -62,9 +65,7 @@ def test_rasterize_depth_sorted(mode):
 
     params = project_gaussians(
         means3d, scales, quats,
-        viewmat, intrins,
-        H, W, BLOCK_SIZE,
-        clip_thresh,
+        viewmat, cam, clip_thresh,
     )
     def decode_params(params):
         params = [param.detach().clone() for param in params]
@@ -92,13 +93,13 @@ def test_rasterize_depth_sorted(mode):
     num_intersects, sorted_indices = rasterize_gaussians_indices(
         positions, axes_u, axes_v,
         opacities, bounds, num_tiles_hit,
-        intrins, H, W, BLOCK_SIZE
+        cam
     )
 
     depth_im, meta_im = rasterize_gaussians_depth_sorted(
         positions, axes_u, axes_v, opacities,
         sorted_indices,
-        intrins, H, W, BLOCK_SIZE, mode
+        cam, mode
     )
 
     _depth_im, _meta_im = _torch_impl.rasterize_gaussians_depth_sorted(
@@ -133,11 +134,18 @@ def test_rasterize_depth_sorted(mode):
     assert (positions.absgrad >= abs(positions.grad)[:,:2]).all()
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_mean():
+    _test_rasterize_depth_sorted("mean")
+
+@pytest.mark.skip
+def test_median():
+    _test_rasterize_depth_sorted("median")
+
 if __name__ == "__main__":
-    rasterize_depth_sorted.DEBUG = True
 
     print("==== Mean ====")
-    test_rasterize_depth_sorted("mean")
+    test_mean()
 
     print("\n==== Median ====")
-    test_rasterize_depth_sorted("median")
+    test_median()

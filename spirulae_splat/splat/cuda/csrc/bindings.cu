@@ -20,7 +20,7 @@ inline __host__ float4 tuple2float4(std::tuple<float, float, float, float> v) {
     return {std::get<0>(v), std::get<1>(v), std::get<2>(v), std::get<3>(v)};
 }
 
-inline __host__ dim3 tuple2dim3(std::tuple<int, int, int> v) {
+inline __host__ dim3 tuple2dim3(std::tuple<unsigned, unsigned, unsigned> v) {
     return {std::get<0>(v), std::get<1>(v), std::get<2>(v)};
 }
 
@@ -52,34 +52,27 @@ torch::Tensor compute_sh_forward_tensor(
         coeffs.size(1) != num_bases-1 || coeffs.size(2) != 3) {
         AT_ERROR("coeffs must have dimensions (N, D, 3)");
     }
-    torch::Tensor colors = torch::empty({num_points, 3}, coeffs.options());    
+    torch::Tensor colors = torch::empty({num_points, 3}, coeffs.options());
+
+    #define _TEMP_ARGS  \
+        num_points, degree, degrees_to_use, \
+        (float3 *)viewdirs.contiguous().data_ptr<float>(), \
+        coeffs0.contiguous().data_ptr<float>(), \
+        coeffs.contiguous().data_ptr<float>(), \
+        colors.contiguous().data_ptr<float>()
+
     if (method == "poly") {
-        compute_sh_forward_kernel<SHType::Poly><<<
-            (num_points + N_THREADS - 1) / N_THREADS,
-            N_THREADS>>>(
-            num_points,
-            degree,
-            degrees_to_use,
-            (float3 *)viewdirs.contiguous().data_ptr<float>(),
-            coeffs0.contiguous().data_ptr<float>(),
-            coeffs.contiguous().data_ptr<float>(),
-            colors.contiguous().data_ptr<float>()
-        );
+        compute_sh_forward_kernel<SHType::Poly>
+        <<<_LAUNGH_ARGS_1D(num_points)>>>(_TEMP_ARGS);
     } else if (method == "fast") {
-        compute_sh_forward_kernel<SHType::Fast><<<
-            (num_points + N_THREADS - 1) / N_THREADS,
-            N_THREADS>>>(
-            num_points,
-            degree,
-            degrees_to_use,
-            (float3 *)viewdirs.contiguous().data_ptr<float>(),
-            coeffs0.contiguous().data_ptr<float>(),
-            coeffs.contiguous().data_ptr<float>(),
-            colors.contiguous().data_ptr<float>()
-        );
+        compute_sh_forward_kernel<SHType::Fast>
+        <<<_LAUNGH_ARGS_1D(num_points)>>>(_TEMP_ARGS);
     } else {
         AT_ERROR("Invalid method: ", method);
     }
+
+    #undef _TEMP_ARGS
+
     return colors;
 }
 
@@ -103,37 +96,28 @@ compute_sh_backward_tensor(
         AT_ERROR("v_colors must have dimensions (N, 3)");
     }
     unsigned num_bases = num_sh_bases(degree);
-    torch::Tensor v_coeffs0 =
-        torch::zeros({num_points, 3}, v_colors.options());
-    torch::Tensor v_coeffs =
-        torch::zeros({num_points, num_bases-1, 3}, v_colors.options());
+    torch::Tensor v_coeffs0 = torch::zeros({num_points, 3}, v_colors.options());
+    torch::Tensor v_coeffs = torch::zeros({num_points, num_bases-1, 3}, v_colors.options());
+
+    #define _TEMP_ARGS  \
+        num_points, degree, degrees_to_use, \
+        (float3 *)viewdirs.contiguous().data_ptr<float>(), \
+        v_colors.contiguous().data_ptr<float>(), \
+        v_coeffs0.contiguous().data_ptr<float>(), \
+        v_coeffs.contiguous().data_ptr<float>()
+
     if (method == "poly") {
-        compute_sh_backward_kernel<SHType::Poly><<<
-            (num_points + N_THREADS - 1) / N_THREADS,
-            N_THREADS>>>(
-            num_points,
-            degree,
-            degrees_to_use,
-            (float3 *)viewdirs.contiguous().data_ptr<float>(),
-            v_colors.contiguous().data_ptr<float>(),
-            v_coeffs0.contiguous().data_ptr<float>(),
-            v_coeffs.contiguous().data_ptr<float>()
-        );
+        compute_sh_backward_kernel<SHType::Poly>
+        <<<_LAUNGH_ARGS_1D(num_points)>>>(_TEMP_ARGS);
     } else if (method == "fast") {
-        compute_sh_backward_kernel<SHType::Fast><<<
-            (num_points + N_THREADS - 1) / N_THREADS,
-            N_THREADS>>>(
-            num_points,
-            degree,
-            degrees_to_use,
-            (float3 *)viewdirs.contiguous().data_ptr<float>(),
-            v_colors.contiguous().data_ptr<float>(),
-            v_coeffs0.contiguous().data_ptr<float>(),
-            v_coeffs.contiguous().data_ptr<float>()
-        );
+        compute_sh_backward_kernel<SHType::Fast>
+        <<<_LAUNGH_ARGS_1D(num_points)>>>(_TEMP_ARGS);
     } else {
         AT_ERROR("Invalid method: ", method);
     }
+
+    #undef _TEMP_ARGS
+
     return std::make_tuple(v_coeffs0, v_coeffs);
 }
 
@@ -172,45 +156,31 @@ std::tuple<
     torch::Tensor axes_v_d = torch::zeros({num_points, 3}, float32);
     // torch::Tensor depth_grads_d = torch::zeros({num_points, 2}, float32);
 
+    #define _TEMP_ARGS \
+        num_points, \
+        (float3 *)means3d.contiguous().data_ptr<float>(), \
+        (float2 *)scales.contiguous().data_ptr<float>(), \
+        (float4 *)quats.contiguous().data_ptr<float>(), \
+        viewmat.contiguous().data_ptr<float>(), \
+        tuple2float4(intrins), tuple2float4(dist_coeffs), \
+        tile_bounds, block_width, \
+        clip_thresh, \
+        /* Outputs */ \
+        (int4 *)bounds_d.contiguous().data_ptr<int32_t>(), \
+        num_tiles_hit_d.contiguous().data_ptr<int32_t>(), \
+        (float3 *)positions_d.contiguous().data_ptr<float>(), \
+        (float3 *)axes_u_d.contiguous().data_ptr<float>(), \
+        (float3 *)axes_v_d.contiguous().data_ptr<float>()
+
     if (camera_model == "")
         project_gaussians_forward_kernel<CameraType::Undistorted>
-        <<<(num_points + N_THREADS - 1) / N_THREADS, N_THREADS>>>(
-            num_points,
-            (float3 *)means3d.contiguous().data_ptr<float>(),
-            (float2 *)scales.contiguous().data_ptr<float>(),
-            (float4 *)quats.contiguous().data_ptr<float>(),
-            viewmat.contiguous().data_ptr<float>(),
-            tuple2float4(intrins), tuple2float4(dist_coeffs),
-            tile_bounds, block_width,
-            clip_thresh,
-            // Outputs.
-            (int4 *)bounds_d.contiguous().data_ptr<int32_t>(),
-            num_tiles_hit_d.contiguous().data_ptr<int32_t>(),
-            (float3 *)positions_d.contiguous().data_ptr<float>(),
-            (float3 *)axes_u_d.contiguous().data_ptr<float>(),
-            (float3 *)axes_v_d.contiguous().data_ptr<float>()
-        );
-
+        <<<_LAUNGH_ARGS_1D(num_points)>>>(_TEMP_ARGS);
     else if (camera_model == "OPENCV_FISHEYE")
         project_gaussians_forward_kernel<CameraType::OPENCV_FISHEYE>
-        <<<(num_points + N_THREADS - 1) / N_THREADS, N_THREADS>>>(
-            num_points,
-            (float3 *)means3d.contiguous().data_ptr<float>(),
-            (float2 *)scales.contiguous().data_ptr<float>(),
-            (float4 *)quats.contiguous().data_ptr<float>(),
-            viewmat.contiguous().data_ptr<float>(),
-            tuple2float4(intrins), tuple2float4(dist_coeffs),
-            tile_bounds, block_width,
-            clip_thresh,
-            // Outputs.
-            (int4 *)bounds_d.contiguous().data_ptr<int32_t>(),
-            num_tiles_hit_d.contiguous().data_ptr<int32_t>(),
-            (float3 *)positions_d.contiguous().data_ptr<float>(),
-            (float3 *)axes_u_d.contiguous().data_ptr<float>(),
-            (float3 *)axes_v_d.contiguous().data_ptr<float>()
-        );
-
+        <<<_LAUNGH_ARGS_1D(num_points)>>>(_TEMP_ARGS);
     else AT_ERROR("Invalid camera model: ", camera_model);
+
+    #undef _TEMP_ARGS
 
     return std::make_tuple(
         bounds_d, num_tiles_hit_d,
@@ -246,9 +216,7 @@ std::tuple<
     torch::Tensor v_quats = torch::zeros({num_points, 4}, float32);
     torch::Tensor v_viewmat = torch::zeros({4, 4}, float32);
 
-    project_gaussians_backward_kernel<<<
-        (num_points + N_THREADS - 1) / N_THREADS,
-        N_THREADS>>>(
+    project_gaussians_backward_kernel<<<_LAUNGH_ARGS_1D(num_points)>>>(
         num_points,
         (float3 *)means3d.contiguous().data_ptr<float>(),
         (float2 *)scales.contiguous().data_ptr<float>(),
@@ -326,9 +294,7 @@ std::tuple<
     torch::Tensor isect_ids_unsorted =
         torch::zeros({num_intersects}, int64);
 
-    map_gaussian_to_intersects<<<
-        (num_points + N_THREADS - 1) / N_THREADS,
-        N_THREADS>>>(
+    map_gaussian_to_intersects<<<_LAUNGH_ARGS_1D(num_points)>>>(
         num_points,
         (float3 *)positions.contiguous().data_ptr<float>(),
         (int4 *)bounds.contiguous().data_ptr<int32_t>(),
@@ -358,9 +324,7 @@ torch::Tensor get_tile_bin_edges_tensor(
     torch::Tensor tile_bins = torch::zeros(
         {num_tiles, 2}, isect_ids_sorted.options().dtype(torch::kInt32)
     );
-    get_tile_bin_edges<<<
-        (num_intersects + N_THREADS - 1) / N_THREADS,
-        N_THREADS>>>(
+    get_tile_bin_edges<<<_LAUNGH_ARGS_1D(num_intersects)>>>(
         num_intersects,
         isect_ids_sorted.contiguous().data_ptr<int64_t>(),
         (int2 *)tile_bins.contiguous().data_ptr<int>()
@@ -499,23 +463,26 @@ std::tuple<
         {img_height, img_width, 1}, float32
     );
 
+    #define _TEMP_ARGS \
+        gaussian_ids_sorted.contiguous().data_ptr<int32_t>(), \
+        (int2 *)tile_bins.contiguous().data_ptr<int>(), \
+        (float3 *)positions.contiguous().data_ptr<float>(), \
+        (float3 *)axes_u.contiguous().data_ptr<float>(), \
+        (float3 *)axes_v.contiguous().data_ptr<float>(), \
+        (float3 *)colors.contiguous().data_ptr<float>(), \
+        opacities.contiguous().data_ptr<float>(), \
+        *(float3 *)background.contiguous().data_ptr<float>(), \
+        /* outputs */ \
+        final_idx.contiguous().data_ptr<int>(), \
+        (float3 *)out_img.contiguous().data_ptr<float>(), \
+        out_alpha.contiguous().data_ptr<float>()
+
     if (camera_model == "") {
         rasterize_simple_forward_kernel<CameraType::Undistorted>
         <<<tile_bounds, block>>>(
             tile_bounds, img_size,
             tuple2float4(intrins), nullptr,
-            gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-            (int2 *)tile_bins.contiguous().data_ptr<int>(),
-            (float3 *)positions.contiguous().data_ptr<float>(),
-            (float3 *)axes_u.contiguous().data_ptr<float>(),
-            (float3 *)axes_v.contiguous().data_ptr<float>(),
-            (float3 *)colors.contiguous().data_ptr<float>(),
-            opacities.contiguous().data_ptr<float>(),
-            *(float3 *)background.contiguous().data_ptr<float>(),
-            // outputs
-            final_idx.contiguous().data_ptr<int>(),
-            (float3 *)out_img.contiguous().data_ptr<float>(),
-            out_alpha.contiguous().data_ptr<float>()
+            _TEMP_ARGS
         );
     }
 
@@ -528,20 +495,11 @@ std::tuple<
             tile_bounds, img_size,
             tuple2float4(intrins),
             (float2 *)undistortion_map.contiguous().data_ptr<float>(),
-            gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-            (int2 *)tile_bins.contiguous().data_ptr<int>(),
-            (float3 *)positions.contiguous().data_ptr<float>(),
-            (float3 *)axes_u.contiguous().data_ptr<float>(),
-            (float3 *)axes_v.contiguous().data_ptr<float>(),
-            (float3 *)colors.contiguous().data_ptr<float>(),
-            opacities.contiguous().data_ptr<float>(),
-            *(float3 *)background.contiguous().data_ptr<float>(),
-            // outputs
-            final_idx.contiguous().data_ptr<int>(),
-            (float3 *)out_img.contiguous().data_ptr<float>(),
-            out_alpha.contiguous().data_ptr<float>()
+            _TEMP_ARGS
         );
     }
+
+    #undef _TEMP_ARGS
 
     return std::make_tuple(final_idx, out_img, out_alpha);
 }
@@ -681,7 +639,17 @@ std::tuple<
         {img_height, img_width, 2}, float32
     );
 
-    // TODO: how to refactor this
+    #define _TEMP_ARGS \
+        gaussian_ids_sorted.contiguous().data_ptr<int32_t>(), \
+        (int2 *)tile_bins.contiguous().data_ptr<int>(), \
+        (float3 *)positions.contiguous().data_ptr<float>(), \
+        (float3 *)axes_u.contiguous().data_ptr<float>(), \
+        (float3 *)axes_v.contiguous().data_ptr<float>(), \
+        opacities.contiguous().data_ptr<float>(), \
+        /* outputs */ \
+        final_idx.contiguous().data_ptr<int>(), \
+        out_depth.contiguous().data_ptr<float>(), \
+        (float2 *)out_visibility.contiguous().data_ptr<float>()
 
     if (camera_model == "") {
         if (depth_mode == "mean")
@@ -689,36 +657,16 @@ std::tuple<
             <<<tile_bounds, block>>>(
                 tile_bounds, img_size,
                 tuple2float4(intrins), nullptr,
-                gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-                (int2 *)tile_bins.contiguous().data_ptr<int>(),
-                (float3 *)positions.contiguous().data_ptr<float>(),
-                (float3 *)axes_u.contiguous().data_ptr<float>(),
-                (float3 *)axes_v.contiguous().data_ptr<float>(),
-                opacities.contiguous().data_ptr<float>(),
-                // outputs
-                final_idx.contiguous().data_ptr<int>(),
-                out_depth.contiguous().data_ptr<float>(),
-                (float2 *)out_visibility.contiguous().data_ptr<float>()
+                _TEMP_ARGS
             );
-
         else if (depth_mode == "median")
             rasterize_depth_forward_kernel<DepthMode::Median, CameraType::Undistorted>
             <<<tile_bounds, block>>>(
                 tile_bounds, img_size,
                 tuple2float4(intrins), nullptr,
-                gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-                (int2 *)tile_bins.contiguous().data_ptr<int>(),
-                (float3 *)positions.contiguous().data_ptr<float>(),
-                (float3 *)axes_u.contiguous().data_ptr<float>(),
-                (float3 *)axes_v.contiguous().data_ptr<float>(),
-                opacities.contiguous().data_ptr<float>(),
-                // outputs
-                final_idx.contiguous().data_ptr<int>(),
-                out_depth.contiguous().data_ptr<float>(),
-                (float2 *)out_visibility.contiguous().data_ptr<float>()
+                _TEMP_ARGS
             );
     }
-
     else {
         const torch::Tensor& undistortion_map = undistortion_map_.value();
         CHECK_INPUT(undistortion_map);
@@ -729,36 +677,19 @@ std::tuple<
                 tile_bounds, img_size,
                 tuple2float4(intrins),
                 (float2 *)undistortion_map.contiguous().data_ptr<float>(),
-                gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-                (int2 *)tile_bins.contiguous().data_ptr<int>(),
-                (float3 *)positions.contiguous().data_ptr<float>(),
-                (float3 *)axes_u.contiguous().data_ptr<float>(),
-                (float3 *)axes_v.contiguous().data_ptr<float>(),
-                opacities.contiguous().data_ptr<float>(),
-                // outputs
-                final_idx.contiguous().data_ptr<int>(),
-                out_depth.contiguous().data_ptr<float>(),
-                (float2 *)out_visibility.contiguous().data_ptr<float>()
+                _TEMP_ARGS
             );
-
         else if (depth_mode == "median")
             rasterize_depth_forward_kernel<DepthMode::Median, CameraType::GenericDistorted>
             <<<tile_bounds, block>>>(
                 tile_bounds, img_size,
                 tuple2float4(intrins),
                 (float2 *)undistortion_map.contiguous().data_ptr<float>(),
-                gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-                (int2 *)tile_bins.contiguous().data_ptr<int>(),
-                (float3 *)positions.contiguous().data_ptr<float>(),
-                (float3 *)axes_u.contiguous().data_ptr<float>(),
-                (float3 *)axes_v.contiguous().data_ptr<float>(),
-                opacities.contiguous().data_ptr<float>(),
-                // outputs
-                final_idx.contiguous().data_ptr<int>(),
-                out_depth.contiguous().data_ptr<float>(),
-                (float2 *)out_visibility.contiguous().data_ptr<float>()
+                _TEMP_ARGS
             );
     }
+
+    #undef _TEMP_ARGS
 
     return std::make_tuple(final_idx, out_depth, out_visibility);
 }
@@ -815,49 +746,36 @@ std::tuple<
     torch::Tensor v_axes_v = torch::zeros({num_points, 3}, options);
     torch::Tensor v_opacities = torch::zeros({num_points, 1}, options);
 
+    #define _TEMP_ARGS \
+        tile_bounds, img_size, \
+        tuple2float4(intrins), \
+        gaussians_ids_sorted.contiguous().data_ptr<int>(), \
+        (int2 *)tile_bins.contiguous().data_ptr<int>(), \
+        (float3 *)positions.contiguous().data_ptr<float>(), \
+        (float3 *)axes_u.contiguous().data_ptr<float>(), \
+        (float3 *)axes_v.contiguous().data_ptr<float>(), \
+        opacities.contiguous().data_ptr<float>(), \
+        final_idx.contiguous().data_ptr<int>(), \
+        output_depth.contiguous().data_ptr<float>(), \
+        (float2 *)output_visibility.contiguous().data_ptr<float>(), \
+        v_output_depth.contiguous().data_ptr<float>(), \
+        /* outputs */ \
+        (float3 *)v_positions.contiguous().data_ptr<float>(), \
+        (float2 *)v_positions_xy_abs.contiguous().data_ptr<float>(), \
+        (float3 *)v_axes_u.contiguous().data_ptr<float>(), \
+        (float3 *)v_axes_v.contiguous().data_ptr<float>(), \
+        v_opacities.contiguous().data_ptr<float>()
+
     if (depth_mode == "mean")
         rasterize_depth_backward_kernel<DepthMode::Mean><<<tile_bounds, block>>>(
-            tile_bounds, img_size,
-            tuple2float4(intrins),
-            gaussians_ids_sorted.contiguous().data_ptr<int>(),
-            (int2 *)tile_bins.contiguous().data_ptr<int>(),
-            (float3 *)positions.contiguous().data_ptr<float>(),
-            (float3 *)axes_u.contiguous().data_ptr<float>(),
-            (float3 *)axes_v.contiguous().data_ptr<float>(),
-            opacities.contiguous().data_ptr<float>(),
-            final_idx.contiguous().data_ptr<int>(),
-            output_depth.contiguous().data_ptr<float>(),
-            (float2 *)output_visibility.contiguous().data_ptr<float>(),
-            v_output_depth.contiguous().data_ptr<float>(),
-            // outputs
-            (float3 *)v_positions.contiguous().data_ptr<float>(),
-            (float2 *)v_positions_xy_abs.contiguous().data_ptr<float>(),
-            (float3 *)v_axes_u.contiguous().data_ptr<float>(),
-            (float3 *)v_axes_v.contiguous().data_ptr<float>(),
-            v_opacities.contiguous().data_ptr<float>()
+            _TEMP_ARGS
         );
-
     if (depth_mode == "median")
         rasterize_depth_backward_kernel<DepthMode::Median><<<tile_bounds, block>>>(
-            tile_bounds, img_size,
-            tuple2float4(intrins),
-            gaussians_ids_sorted.contiguous().data_ptr<int>(),
-            (int2 *)tile_bins.contiguous().data_ptr<int>(),
-            (float3 *)positions.contiguous().data_ptr<float>(),
-            (float3 *)axes_u.contiguous().data_ptr<float>(),
-            (float3 *)axes_v.contiguous().data_ptr<float>(),
-            opacities.contiguous().data_ptr<float>(),
-            final_idx.contiguous().data_ptr<int>(),
-            output_depth.contiguous().data_ptr<float>(),
-            (float2 *)output_visibility.contiguous().data_ptr<float>(),
-            v_output_depth.contiguous().data_ptr<float>(),
-            // outputs
-            (float3 *)v_positions.contiguous().data_ptr<float>(),
-            (float2 *)v_positions_xy_abs.contiguous().data_ptr<float>(),
-            (float3 *)v_axes_u.contiguous().data_ptr<float>(),
-            (float3 *)v_axes_v.contiguous().data_ptr<float>(),
-            v_opacities.contiguous().data_ptr<float>()
+            _TEMP_ARGS
         );
+
+    #undef _TEMP_ARGS
 
     return std::make_tuple(
         v_positions, v_positions_xy_abs,
@@ -1385,24 +1303,26 @@ std::tuple<
         {img_height, img_width, MAX_SORTED_SPLATS}, float32
     );
 
+    #define _TEMP_ARGS \
+        gaussian_ids_sorted.contiguous().data_ptr<int32_t>(), \
+        (int2 *)tile_bins.contiguous().data_ptr<int>(), \
+        (float3 *)positions.contiguous().data_ptr<float>(), \
+        (float3 *)axes_u.contiguous().data_ptr<float>(), \
+        (float3 *)axes_v.contiguous().data_ptr<float>(), \
+        opacities.contiguous().data_ptr<float>(), \
+        /* outputs */ \
+        num_intersects.contiguous().data_ptr<int>(), \
+        sorted_indices.contiguous().data_ptr<int32_t>(), \
+        sorted_depths.contiguous().data_ptr<float>()
+
     if (camera_model == "") {
         rasterize_indices_kernel<CameraType::Undistorted>
         <<<tile_bounds, block>>>(
             tile_bounds, img_size,
             tuple2float4(intrins), nullptr,
-            gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-            (int2 *)tile_bins.contiguous().data_ptr<int>(),
-            (float3 *)positions.contiguous().data_ptr<float>(),
-            (float3 *)axes_u.contiguous().data_ptr<float>(),
-            (float3 *)axes_v.contiguous().data_ptr<float>(),
-            opacities.contiguous().data_ptr<float>(),
-            // outputs
-            num_intersects.contiguous().data_ptr<int>(),
-            sorted_indices.contiguous().data_ptr<int32_t>(),
-            sorted_depths.contiguous().data_ptr<float>()
+            _TEMP_ARGS
         );
     }
-
     else {
         const torch::Tensor& undistortion_map = undistortion_map_.value();
         CHECK_INPUT(undistortion_map);
@@ -1412,18 +1332,11 @@ std::tuple<
             tile_bounds, img_size,
             tuple2float4(intrins),
             (float2 *)undistortion_map.contiguous().data_ptr<float>(),
-            gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-            (int2 *)tile_bins.contiguous().data_ptr<int>(),
-            (float3 *)positions.contiguous().data_ptr<float>(),
-            (float3 *)axes_u.contiguous().data_ptr<float>(),
-            (float3 *)axes_v.contiguous().data_ptr<float>(),
-            opacities.contiguous().data_ptr<float>(),
-            // outputs
-            num_intersects.contiguous().data_ptr<int>(),
-            sorted_indices.contiguous().data_ptr<int32_t>(),
-            sorted_depths.contiguous().data_ptr<float>()
+            _TEMP_ARGS
         );
     }
+
+    #undef _TEMP_ARGS
 
     return std::make_tuple(
         num_intersects, sorted_indices, sorted_depths
@@ -1443,41 +1356,27 @@ void sort_per_pixel_tensor(
     CHECK_INPUT(indices);
     CHECK_INPUT(depths);
 
+    #define _TEMP_ARGS \
+        <<<(num_pixels+N_THREADS_PPS-1)/N_THREADS_PPS, N_THREADS_PPS>>>( \
+            num_pixels, \
+            num_intersects.contiguous().data_ptr<int>(), \
+            indices.contiguous().data_ptr<int32_t>(), \
+            depths.contiguous().data_ptr<float>() \
+        )
+
     if (method == "insertion") {
-        sort_per_pixel_kernel<PerPixelSortType::InsertionSort>
-        <<<(num_pixels+N_THREADS_PPS-1)/N_THREADS_PPS, N_THREADS_PPS>>>(
-            num_pixels,
-            num_intersects.contiguous().data_ptr<int>(),
-            indices.contiguous().data_ptr<int32_t>(),
-            depths.contiguous().data_ptr<float>()
-        );
+        sort_per_pixel_kernel<PerPixelSortType::InsertionSort> _TEMP_ARGS;
     } else if (method == "quick") {
-        sort_per_pixel_kernel<PerPixelSortType::QuickSort>
-        <<<(num_pixels+N_THREADS_PPS-1)/N_THREADS_PPS, N_THREADS_PPS>>>(
-            num_pixels,
-            num_intersects.contiguous().data_ptr<int>(),
-            indices.contiguous().data_ptr<int32_t>(),
-            depths.contiguous().data_ptr<float>()
-        );
+        sort_per_pixel_kernel<PerPixelSortType::QuickSort> _TEMP_ARGS;
     } else if (method == "heap") {
-        sort_per_pixel_kernel<PerPixelSortType::HeapSort>
-        <<<(num_pixels+N_THREADS_PPS-1)/N_THREADS_PPS, N_THREADS_PPS>>>(
-            num_pixels,
-            num_intersects.contiguous().data_ptr<int>(),
-            indices.contiguous().data_ptr<int32_t>(),
-            depths.contiguous().data_ptr<float>()
-        );
+        sort_per_pixel_kernel<PerPixelSortType::HeapSort> _TEMP_ARGS;
     } else if (method == "random_quick") {
-        sort_per_pixel_kernel<PerPixelSortType::RandomizedQuickSort>
-        <<<(num_pixels+N_THREADS_PPS-1)/N_THREADS_PPS, N_THREADS_PPS>>>(
-            num_pixels,
-            num_intersects.contiguous().data_ptr<int>(),
-            indices.contiguous().data_ptr<int32_t>(),
-            depths.contiguous().data_ptr<float>()
-        );
+        sort_per_pixel_kernel<PerPixelSortType::RandomizedQuickSort> _TEMP_ARGS;
     } else {
         AT_ERROR("Invalid sorting method: ", method);
     }
+
+    #undef _TEMP_ARGS
 }
 
 
@@ -1517,45 +1416,40 @@ std::tuple<
         {img_height, img_width, 1}, float32
     );
 
+    #define _TEMP_ARGS \
+        sorted_indices.contiguous().data_ptr<int32_t>(), \
+        (float3 *)positions.contiguous().data_ptr<float>(), \
+        (float3 *)axes_u.contiguous().data_ptr<float>(), \
+        (float3 *)axes_v.contiguous().data_ptr<float>(), \
+        (float3 *)colors.contiguous().data_ptr<float>(), \
+        opacities.contiguous().data_ptr<float>(), \
+        *(float3 *)background.contiguous().data_ptr<float>(), \
+        /* outputs */ \
+        (float3 *)out_img.contiguous().data_ptr<float>(), \
+        out_alpha.contiguous().data_ptr<float>()
+
     if (camera_model == "") {
         rasterize_simple_sorted_forward_kernel<CameraType::Undistorted>
-        <<<(img_height*img_width+N_THREADS-1)/N_THREADS, N_THREADS>>>(
+        <<<_LAUNGH_ARGS_1D(img_height*img_width)>>>(
             img_width, img_height,
             tuple2float4(intrins), nullptr,
-            sorted_indices.contiguous().data_ptr<int32_t>(),
-            (float3 *)positions.contiguous().data_ptr<float>(),
-            (float3 *)axes_u.contiguous().data_ptr<float>(),
-            (float3 *)axes_v.contiguous().data_ptr<float>(),
-            (float3 *)colors.contiguous().data_ptr<float>(),
-            opacities.contiguous().data_ptr<float>(),
-            *(float3 *)background.contiguous().data_ptr<float>(),
-            // outputs
-            (float3 *)out_img.contiguous().data_ptr<float>(),
-            out_alpha.contiguous().data_ptr<float>()
+            _TEMP_ARGS
         );
     }
-
     else {
         const torch::Tensor& undistortion_map = undistortion_map_.value();
         CHECK_INPUT(undistortion_map);
 
         rasterize_simple_sorted_forward_kernel<CameraType::GenericDistorted>
-        <<<(img_height*img_width+N_THREADS-1)/N_THREADS, N_THREADS>>>(
+        <<<_LAUNGH_ARGS_1D(img_height*img_width)>>>(
             img_width, img_height,
             tuple2float4(intrins),
             (float2 *)undistortion_map.contiguous().data_ptr<float>(),
-            sorted_indices.contiguous().data_ptr<int32_t>(),
-            (float3 *)positions.contiguous().data_ptr<float>(),
-            (float3 *)axes_u.contiguous().data_ptr<float>(),
-            (float3 *)axes_v.contiguous().data_ptr<float>(),
-            (float3 *)colors.contiguous().data_ptr<float>(),
-            opacities.contiguous().data_ptr<float>(),
-            *(float3 *)background.contiguous().data_ptr<float>(),
-            // outputs
-            (float3 *)out_img.contiguous().data_ptr<float>(),
-            out_alpha.contiguous().data_ptr<float>()
+            _TEMP_ARGS
         );
     }
+
+    #undef _TEMP_ARGS
 
     return std::make_tuple(out_img, out_alpha);
 }
@@ -1686,79 +1580,56 @@ std::tuple<
         {img_height, img_width, 2}, float32
     );
 
-    if (camera_model == "") {
+    #define _TEMP_ARGS \
+        sorted_indices.contiguous().data_ptr<int32_t>(), \
+        (float3 *)positions.contiguous().data_ptr<float>(), \
+        (float3 *)axes_u.contiguous().data_ptr<float>(), \
+        (float3 *)axes_v.contiguous().data_ptr<float>(), \
+        opacities.contiguous().data_ptr<float>(), \
+        /* outputs */ \
+        final_idx.contiguous().data_ptr<int>(), \
+        out_depth.contiguous().data_ptr<float>(), \
+        (float2 *)out_visibility.contiguous().data_ptr<float>()
 
+    if (camera_model == "") {
         if (depth_mode == "mean")
             rasterize_depth_sorted_forward_kernel<DepthMode::Mean, CameraType::Undistorted>
-            <<<(img_height*img_width+N_THREADS-1)/N_THREADS, N_THREADS>>>(
+            <<<_LAUNGH_ARGS_1D(img_height*img_width)>>>(
                 img_width, img_height,
                 tuple2float4(intrins), nullptr,
-                sorted_indices.contiguous().data_ptr<int32_t>(),
-                (float3 *)positions.contiguous().data_ptr<float>(),
-                (float3 *)axes_u.contiguous().data_ptr<float>(),
-                (float3 *)axes_v.contiguous().data_ptr<float>(),
-                opacities.contiguous().data_ptr<float>(),
-                // outputs
-                final_idx.contiguous().data_ptr<int>(),
-                out_depth.contiguous().data_ptr<float>(),
-                (float2 *)out_visibility.contiguous().data_ptr<float>()
+                _TEMP_ARGS
             );
-
         else if (depth_mode == "median")
             rasterize_depth_sorted_forward_kernel<DepthMode::Median, CameraType::Undistorted>
-            <<<(img_height*img_width+N_THREADS-1)/N_THREADS, N_THREADS>>>(
+            <<<_LAUNGH_ARGS_1D(img_height*img_width)>>>(
                 img_width, img_height,
                 tuple2float4(intrins), nullptr,
-                sorted_indices.contiguous().data_ptr<int32_t>(),
-                (float3 *)positions.contiguous().data_ptr<float>(),
-                (float3 *)axes_u.contiguous().data_ptr<float>(),
-                (float3 *)axes_v.contiguous().data_ptr<float>(),
-                opacities.contiguous().data_ptr<float>(),
-                // outputs
-                final_idx.contiguous().data_ptr<int>(),
-                out_depth.contiguous().data_ptr<float>(),
-                (float2 *)out_visibility.contiguous().data_ptr<float>()
+                _TEMP_ARGS
             );
     }
-
     else {
         const torch::Tensor& undistortion_map = undistortion_map_.value();
         CHECK_INPUT(undistortion_map);
 
         if (depth_mode == "mean")
             rasterize_depth_sorted_forward_kernel<DepthMode::Mean, CameraType::GenericDistorted>
-            <<<(img_height*img_width+N_THREADS-1)/N_THREADS, N_THREADS>>>(
+            <<<_LAUNGH_ARGS_1D(img_height*img_width)>>>(
                 img_width, img_height,
                 tuple2float4(intrins),
                 (float2 *)undistortion_map.contiguous().data_ptr<float>(),
-                sorted_indices.contiguous().data_ptr<int32_t>(),
-                (float3 *)positions.contiguous().data_ptr<float>(),
-                (float3 *)axes_u.contiguous().data_ptr<float>(),
-                (float3 *)axes_v.contiguous().data_ptr<float>(),
-                opacities.contiguous().data_ptr<float>(),
-                // outputs
-                final_idx.contiguous().data_ptr<int>(),
-                out_depth.contiguous().data_ptr<float>(),
-                (float2 *)out_visibility.contiguous().data_ptr<float>()
+                _TEMP_ARGS
             );
-
         else if (depth_mode == "median")
             rasterize_depth_sorted_forward_kernel<DepthMode::Median, CameraType::GenericDistorted>
-            <<<(img_height*img_width+N_THREADS-1)/N_THREADS, N_THREADS>>>(
+            <<<_LAUNGH_ARGS_1D(img_height*img_width)>>>(
                 img_width, img_height,
                 tuple2float4(intrins),
                 (float2 *)undistortion_map.contiguous().data_ptr<float>(),
-                sorted_indices.contiguous().data_ptr<int32_t>(),
-                (float3 *)positions.contiguous().data_ptr<float>(),
-                (float3 *)axes_u.contiguous().data_ptr<float>(),
-                (float3 *)axes_v.contiguous().data_ptr<float>(),
-                opacities.contiguous().data_ptr<float>(),
-                // outputs
-                final_idx.contiguous().data_ptr<int>(),
-                out_depth.contiguous().data_ptr<float>(),
-                (float2 *)out_visibility.contiguous().data_ptr<float>()
+                _TEMP_ARGS
             );
     }
+
+    #undef _TEMP_ARGS
 
     return std::make_tuple(final_idx, out_depth, out_visibility);
 }
@@ -1815,46 +1686,35 @@ std::tuple<
     torch::Tensor v_axes_v = torch::zeros({num_points, 3}, options);
     torch::Tensor v_opacities = torch::zeros({num_points, 1}, options);
 
+    #define _TEMP_ARGS \
+        img_size, \
+        tuple2float4(intrins), \
+        final_idx.contiguous().data_ptr<int>(), \
+        sorted_indices.contiguous().data_ptr<int32_t>(), \
+        (float3 *)positions.contiguous().data_ptr<float>(), \
+        (float3 *)axes_u.contiguous().data_ptr<float>(), \
+        (float3 *)axes_v.contiguous().data_ptr<float>(), \
+        opacities.contiguous().data_ptr<float>(), \
+        output_depth.contiguous().data_ptr<float>(), \
+        (float2 *)output_visibility.contiguous().data_ptr<float>(), \
+        v_output_depth.contiguous().data_ptr<float>(), \
+        /* outputs */ \
+        (float3 *)v_positions.contiguous().data_ptr<float>(), \
+        (float2 *)v_positions_xy_abs.contiguous().data_ptr<float>(), \
+        (float3 *)v_axes_u.contiguous().data_ptr<float>(), \
+        (float3 *)v_axes_v.contiguous().data_ptr<float>(), \
+        v_opacities.contiguous().data_ptr<float>()
+
     if (depth_mode == "mean")
         rasterize_depth_sorted_backward_kernel<DepthMode::Mean><<<tile_bounds, block>>>(
-            img_size,
-            tuple2float4(intrins),
-            final_idx.contiguous().data_ptr<int>(),
-            sorted_indices.contiguous().data_ptr<int32_t>(),
-            (float3 *)positions.contiguous().data_ptr<float>(),
-            (float3 *)axes_u.contiguous().data_ptr<float>(),
-            (float3 *)axes_v.contiguous().data_ptr<float>(),
-            opacities.contiguous().data_ptr<float>(),
-            output_depth.contiguous().data_ptr<float>(),
-            (float2 *)output_visibility.contiguous().data_ptr<float>(),
-            v_output_depth.contiguous().data_ptr<float>(),
-            // outputs
-            (float3 *)v_positions.contiguous().data_ptr<float>(),
-            (float2 *)v_positions_xy_abs.contiguous().data_ptr<float>(),
-            (float3 *)v_axes_u.contiguous().data_ptr<float>(),
-            (float3 *)v_axes_v.contiguous().data_ptr<float>(),
-            v_opacities.contiguous().data_ptr<float>()
+            _TEMP_ARGS
         );
     if (depth_mode == "median")
         rasterize_depth_sorted_backward_kernel<DepthMode::Median><<<tile_bounds, block>>>(
-            img_size,
-            tuple2float4(intrins),
-            final_idx.contiguous().data_ptr<int>(),
-            sorted_indices.contiguous().data_ptr<int32_t>(),
-            (float3 *)positions.contiguous().data_ptr<float>(),
-            (float3 *)axes_u.contiguous().data_ptr<float>(),
-            (float3 *)axes_v.contiguous().data_ptr<float>(),
-            opacities.contiguous().data_ptr<float>(),
-            output_depth.contiguous().data_ptr<float>(),
-            (float2 *)output_visibility.contiguous().data_ptr<float>(),
-            v_output_depth.contiguous().data_ptr<float>(),
-            // outputs
-            (float3 *)v_positions.contiguous().data_ptr<float>(),
-            (float2 *)v_positions_xy_abs.contiguous().data_ptr<float>(),
-            (float3 *)v_axes_u.contiguous().data_ptr<float>(),
-            (float3 *)v_axes_v.contiguous().data_ptr<float>(),
-            v_opacities.contiguous().data_ptr<float>()
+            _TEMP_ARGS
         );
+
+    #undef _TEMP_ARGS
 
     return std::make_tuple(
         v_positions, v_positions_xy_abs,
@@ -2160,7 +2020,7 @@ std::tuple<
 
     if (camera_model == "") {
         rasterize_simplified_sorted_forward_kernel<CameraType::Undistorted>
-        <<<(img_height*img_width+N_THREADS-1)/N_THREADS, N_THREADS>>>(
+        <<<_LAUNGH_ARGS_1D(img_height*img_width)>>>(
             img_width, img_height,
             tuple2float4(intrins), nullptr,
             _TEMP_ARGS
@@ -2170,7 +2030,7 @@ std::tuple<
         const torch::Tensor& undistortion_map = undistortion_map_.value();
         CHECK_INPUT(undistortion_map);
         rasterize_simplified_sorted_forward_kernel<CameraType::GenericDistorted>
-        <<<(img_height*img_width+N_THREADS-1)/N_THREADS, N_THREADS>>>(
+        <<<_LAUNGH_ARGS_1D(img_height*img_width)>>>(
             img_width, img_height,
             tuple2float4(intrins),
             (float2 *)undistortion_map.contiguous().data_ptr<float>(),
@@ -2283,7 +2143,7 @@ std::tuple<
 
     if (camera_model == "") {
         rasterize_simplified_sorted_backward_kernel<CameraType::Undistorted>
-        <<<(img_height*img_width+N_THREADS-1)/N_THREADS, N_THREADS>>>(
+        <<<_LAUNGH_ARGS_1D(img_height*img_width)>>>(
             img_width, img_height,
             tuple2float4(intrins), nullptr,
             _TEMP_ARGS
@@ -2293,7 +2153,7 @@ std::tuple<
         const torch::Tensor& undistortion_map = undistortion_map_.value();
         CHECK_INPUT(undistortion_map);
         rasterize_simplified_sorted_backward_kernel<CameraType::GenericDistorted>
-        <<<(img_height*img_width+N_THREADS-1)/N_THREADS, N_THREADS>>>(
+        <<<_LAUNGH_ARGS_1D(img_height*img_width)>>>(
             img_width, img_height,
             tuple2float4(intrins),
             (float2 *)undistortion_map.contiguous().data_ptr<float>(),

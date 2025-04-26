@@ -8,6 +8,8 @@
 #include "glm/glm/glm.hpp"
 #include "glm/glm/gtc/type_ptr.hpp"
 
+#define _LAUNGH_ARGS_1D(n) (n+N_THREADS-1)/N_THREADS,N_THREADS
+
 namespace cg = cooperative_groups;
 
 template <typename T> using vec2 = glm::vec<2, T>;
@@ -141,8 +143,8 @@ inline __device__ void get_alpha_vjp(
     const float m = t<0.f ? 1.f : t>1.f ? 0.f :
         t*t*(2.0f*t-3.0f) + 1.0f;
     // const float alpha = opac * vis * m;
-    const float v_m = opac * vis * v_alpha;
-    const float v_t = t<0.f||t>1.f ? 0.f : 6.0f*t*(t-1.0f) * v_m;
+    // const float v_m = opac * vis * v_alpha;
+    // const float v_t = t<0.f||t>1.f ? 0.f : 6.0f*t*(t-1.0f) * v_m;
     const float v_vis = opac * m * v_alpha;
     const float v_r2 = v_vis * visibility_kernel_grad(r2);
     v_uv = 2.0f * uv * v_r2;// + v_t * aniso;

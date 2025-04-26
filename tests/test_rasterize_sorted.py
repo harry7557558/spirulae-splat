@@ -11,6 +11,7 @@ from spirulae_splat.splat import (
     rasterize_gaussians_simple_sorted,
 )
 import spirulae_splat.splat.cuda as _C
+from spirulae_splat.splat._camera import _Camera
 
 torch.manual_seed(41)
 
@@ -28,13 +29,14 @@ def check_close(name, a, b, atol=5e-6, rtol=1e-4):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_rasterize():
+def test_rasterize_sorted():
 
     num_points, H, W = 40, 20, 30
     # num_points, H, W = 20, 10, 15
     cx, cy = 0.45*W, 0.55*H
     fx, fy = 0.7*W, 0.8*W
     intrins = (fx, fy, cx, cy)
+    cam = _Camera(H, W, "OPENCV", intrins)
     clip_thresh = 0.01
     viewmat = torch.tensor(
         [
@@ -71,9 +73,7 @@ def test_rasterize():
 
     params = project_gaussians(
         means3d, scales, quats,
-        viewmat, intrins,
-        H, W, BLOCK_SIZE,
-        clip_thresh,
+        viewmat, cam, clip_thresh,
     )
     def decode_params(params):
         params = [*params]
@@ -102,7 +102,7 @@ def test_rasterize():
     num_intersects, sorted_indices = rasterize_gaussians_indices(
         positions, axes_u, axes_v,
         opacities, bounds, num_tiles_hit,
-        intrins, H, W, BLOCK_SIZE
+        cam
     )
 
     depth_reg_pairwise_factor = 0.7
@@ -122,7 +122,7 @@ def test_rasterize():
     rgb_im, alpha_im = rasterize_gaussians_simple_sorted(
         positions, axes_u, axes_v, colors, opacities,
         num_intersects, sorted_indices,
-        intrins, H, W, BLOCK_SIZE, background.detach().clone()
+        cam, background.detach().clone()
     )
 
     print("test consistency")
@@ -178,4 +178,4 @@ def test_rasterize():
 
 
 if __name__ == "__main__":
-    test_rasterize()
+    test_rasterize_sorted()

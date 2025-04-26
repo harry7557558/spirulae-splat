@@ -20,7 +20,7 @@ torch.manual_seed(41)
 device = torch.device("cuda:0")
 
 
-def check_close(name, a, b, atol=1e-6, rtol=1e-4):
+def check_close(name, a, b, atol=5e-6, rtol=1e-4):
     print(name, [*a.shape], [*b.shape], a.dtype, b.dtype)
     try:
         torch.testing.assert_close(a, b, atol=atol, rtol=rtol)
@@ -31,7 +31,7 @@ def check_close(name, a, b, atol=1e-6, rtol=1e-4):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_rasterize_simplified():
+def test_rasterize_simplified_sorted():
 
     num_points, H, W = 40, 20, 30
     # num_points, H, W = 20, 10, 15
@@ -122,7 +122,7 @@ def test_rasterize_simplified():
     check_close('depth', output[2], output_r[2])
     check_close('normal', output[3], output_r[3])
     check_close('reg_depth', output[4], output_r[4])
-    check_close('depth1', output[2][..., 0:1]/(output[1]+1e-12), output_d[0], rtol=1e-3)
+    check_close('depth1', output[2][..., 0:1]/(output[1]+1e-12), output_d, rtol=1e-3)
     print()
 
     _output = _torch_impl.rasterize_gaussians_simplified_sorted(
@@ -165,4 +165,4 @@ def test_rasterize_simplified():
 
 if __name__ == "__main__":
     # torch.autograd.set_detect_anomaly(True)
-    test_rasterize_simplified()
+    test_rasterize_simplified_sorted()

@@ -97,7 +97,7 @@ class _RasterizeGaussiansSimpleSorted(Function):
     @staticmethod
     def backward(ctx, v_out_img, v_out_alpha):
 
-        camera = ctx.camera
+        camera = ctx.camera  # type: _Camera
         if camera.is_distorted():
             raise NotImplementedError("Unsupported distorted camera for backward")
         intrins = ctx.intrins
@@ -110,7 +110,7 @@ class _RasterizeGaussiansSimpleSorted(Function):
         ) = ctx.saved_tensors
 
         backward_return = _C.rasterize_simple_sorted_backward(
-            camera.h, camera.w,
+            camera.h, camera.w, camera.BLOCK_WIDTH,
             intrins,
             num_intersects, sorted_indices,
             positions, axes_u, axes_v,
@@ -146,6 +146,6 @@ class _RasterizeGaussiansSimpleSorted(Function):
         return (
             v_positions, v_axes_u, v_axes_v,
             v_colors, v_opacities,
-            None, None, None, None, None, None,
-            v_background,
+            None, None, None,
+            v_background.cpu()
         )

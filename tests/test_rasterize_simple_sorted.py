@@ -9,6 +9,7 @@ from spirulae_splat.splat import (
     rasterize_gaussians_simple_sorted
 )
 import spirulae_splat.splat.cuda as _C
+from spirulae_splat.splat._camera import _Camera
 
 torch.manual_seed(40)
 
@@ -46,6 +47,7 @@ def test_rasterize_simple_sorted():
     cx, cy = 0.45*W, 0.55*H
     fx, fy = 0.7*W, 0.8*W
     intrins = (fx, fy, cx, cy)
+    cam = _Camera(H, W, "OPENCV", intrins)
     clip_thresh = 0.01
     viewmat = torch.tensor(
         [
@@ -61,8 +63,7 @@ def test_rasterize_simple_sorted():
 
     params = project_gaussians(
         means3d, scales, quats,
-        viewmat, intrins,
-        H, W, BLOCK_SIZE,
+        viewmat, cam,
         clip_thresh,
     )
     def decode_params(params):
@@ -91,13 +92,13 @@ def test_rasterize_simple_sorted():
     num_intersects, sorted_indices = rasterize_gaussians_indices(
         positions, axes_u, axes_v,
         opacities, bounds, num_tiles_hit,
-        intrins, H, W, BLOCK_SIZE
+        cam
     )
 
     rgb_im, alpha_im = rasterize_gaussians_simple_sorted(
         positions, axes_u, axes_v, colors, opacities,
         num_intersects, sorted_indices,
-        intrins, H, W, BLOCK_SIZE, background
+        cam, background
     )
 
     _rgb_im, _alpha_im = _torch_impl.rasterize_gaussians_simple_sorted(

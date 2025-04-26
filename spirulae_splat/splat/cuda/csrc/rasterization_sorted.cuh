@@ -14,52 +14,139 @@ enum class PerPixelSortType {
 };
 
 
+// refactored function arguments
+
+#define _ARGS_rasterize_indices_kernel \
+    const dim3 tile_bounds, \
+    const dim3 img_size, \
+    const float4 intrins, \
+    const float2* __restrict__ undistortion_map, \
+    const int32_t* __restrict__ gaussian_ids_sorted, \
+    const int2* __restrict__ tile_bins, \
+    const float3* __restrict__ positions, \
+    const float3* __restrict__ axes_u, \
+    const float3* __restrict__ axes_v, \
+    const float* __restrict__ opacities, \
+    int* __restrict__ num_intersects, \
+    int32_t* __restrict__ sorted_indices_, \
+    float* __restrict__ sorted_depths_
+
+#define _ARGS_sort_per_pixel_kernel \
+    const unsigned num_pixels, \
+    const int* __restrict__ num_intersects, \
+    int32_t* __restrict__ indices_, \
+    float* __restrict__ depths_
+
+#define _ARGS_rasterize_simple_sorted_forward_kernel \
+    const int img_width, \
+    const int img_height, \
+    const float4 intrins, \
+    const float2* __restrict__ undistortion_map, \
+    const int32_t* __restrict__ sorted_indices_, \
+    const float3* __restrict__ positions, \
+    const float3* __restrict__ axes_u, \
+    const float3* __restrict__ axes_v, \
+    const float3* __restrict__ colors, \
+    const float* __restrict__ opacities, \
+    const float3 __restrict__ background, \
+    float3* __restrict__ out_img, \
+    float* __restrict__ out_alpha
+
+#define _ARGS_rasterize_depth_sorted_forward_kernel \
+    const int img_width, \
+    const int img_height, \
+    const float4 intrins, \
+    const float2* __restrict__ undistortion_map, \
+    const int32_t* __restrict__ sorted_indices_, \
+    const float3* __restrict__ positions, \
+    const float3* __restrict__ axes_u, \
+    const float3* __restrict__ axes_v, \
+    const float* __restrict__ opacities, \
+    int* __restrict__ final_index, \
+    float* __restrict__ out_depth, \
+    float2* __restrict__ out_visibility
+
+#define _ARGS_rasterize_depth_sorted_backward_kernel \
+    const dim3 img_size, \
+    const float4 intrins, \
+    const int* __restrict__ final_index, \
+    const int32_t* __restrict__ sorted_indices_, \
+    const float3* __restrict__ positions, \
+    const float3* __restrict__ axes_u, \
+    const float3* __restrict__ axes_v, \
+    const float* __restrict__ opacities, \
+    const float* __restrict__ out_depth, \
+    const float2* __restrict__ out_visibility, \
+    const float* __restrict__ v_out_depth, \
+    float3* __restrict__ v_positions, \
+    float2* __restrict__ v_positions_xy_abs, \
+    float3* __restrict__ v_axes_u, \
+    float3* __restrict__ v_axes_v, \
+    float* __restrict__ v_opacities
+
+#define _ARGS_rasterize_simplified_sorted_forward_kernel \
+    const int img_width, \
+    const int img_height, \
+    const float4 intrins, \
+    const float2* __restrict__ undistortion_map, \
+    const int32_t* __restrict__ sorted_indices_, \
+    const float3* __restrict__ positions, \
+    const float3* __restrict__ axes_u, \
+    const float3* __restrict__ axes_v, \
+    const float3* __restrict__ colors, \
+    const float* __restrict__ opacities, \
+    float* __restrict__ out_alpha, \
+    float3* __restrict__ out_img, \
+    float2* __restrict__ out_depth,  /* { depth, depth^2 } */ \
+    float3* __restrict__ out_normal, \
+    float* __restrict__ out_depth_reg
+
+#define _ARGS_rasterize_simplified_sorted_backward_kernel \
+    const int img_width, \
+    const int img_height, \
+    const float4 intrins, \
+    const float2* __restrict__ undistortion_map, \
+    const int* __restrict__ num_intersects, \
+    const int32_t* __restrict__ sorted_indices_, \
+    const float3* __restrict__ positions, \
+    const float3* __restrict__ axes_u, \
+    const float3* __restrict__ axes_v, \
+    const float3* __restrict__ colors, \
+    const float* __restrict__ opacities, \
+    const float* __restrict__ output_alpha, \
+    const float2* __restrict__ output_depth, \
+    const float* __restrict__ v_output_alpha, \
+    const float3* __restrict__ v_output_img, \
+    const float2* __restrict__ v_output_depth, \
+    const float3* __restrict__ v_output_normal, \
+    const float* __restrict__ v_output_depth_reg, \
+    float3* __restrict__ v_positions, \
+    float2* __restrict__ v_positions_xy_abs, \
+    float3* __restrict__ v_axes_u, \
+    float3* __restrict__ v_axes_v, \
+    float3* __restrict__ v_colors, \
+    float* __restrict__ v_opacities
+
+
 /* == AUTO HEADER GENERATOR - DO NOT CHANGE THIS LINE == */
 
 
 
 template<CameraType CAMERA_TYPE>
 __global__ void rasterize_indices_kernel(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const float4 intrins,
-    const float2* __restrict__ undistortion_map,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float3* __restrict__ positions,
-    const float3* __restrict__ axes_u,
-    const float3* __restrict__ axes_v,
-    const float* __restrict__ opacities,
-    int* __restrict__ num_intersects,
-    int32_t* __restrict__ sorted_indices_,
-    float* __restrict__ sorted_depths_
+    _ARGS_rasterize_indices_kernel
 );
 
 
 template <PerPixelSortType SORT_TYPE>
 __global__ void sort_per_pixel_kernel(
-    const unsigned num_pixels,
-    const int* __restrict__ num_intersects,
-    int32_t* __restrict__ indices_,
-    float* __restrict__ depths_
+    _ARGS_sort_per_pixel_kernel
 );
 
 
 template<CameraType CAMERA_TYPE>
 __global__ void rasterize_simple_sorted_forward_kernel(
-    const int img_width,
-    const int img_height,
-    const float4 intrins,
-    const float2* __restrict__ undistortion_map,
-    const int32_t* __restrict__ sorted_indices_,
-    const float3* __restrict__ positions,
-    const float3* __restrict__ axes_u,
-    const float3* __restrict__ axes_v,
-    const float3* __restrict__ colors,
-    const float* __restrict__ opacities,
-    const float3 __restrict__ background,
-    float3* __restrict__ out_img,
-    float* __restrict__ out_alpha
+    _ARGS_rasterize_simple_sorted_forward_kernel
 );
 
 
@@ -88,39 +175,13 @@ __global__ void rasterize_simple_sorted_backward_kernel(
 
 template <DepthMode DEPTH_MODE, CameraType CAMERA_TYPE>
 __global__ void rasterize_depth_sorted_forward_kernel(
-    const int img_width,
-    const int img_height,
-    const float4 intrins,
-    const float2* __restrict__ undistortion_map,
-    const int32_t* __restrict__ sorted_indices_,
-    const float3* __restrict__ positions,
-    const float3* __restrict__ axes_u,
-    const float3* __restrict__ axes_v,
-    const float* __restrict__ opacities,
-    int* __restrict__ final_index,
-    float* __restrict__ out_depth,
-    float2* __restrict__ out_visibility
+    _ARGS_rasterize_depth_sorted_forward_kernel
 );
 
 
 template <DepthMode DEPTH_MODE>
 __global__ void rasterize_depth_sorted_backward_kernel(
-    const dim3 img_size,
-    const float4 intrins,
-    const int* __restrict__ final_index,
-    const int32_t* __restrict__ sorted_indices_,
-    const float3* __restrict__ positions,
-    const float3* __restrict__ axes_u,
-    const float3* __restrict__ axes_v,
-    const float* __restrict__ opacities,
-    const float* __restrict__ out_depth,
-    const float2* __restrict__ out_visibility,
-    const float* __restrict__ v_out_depth,
-    float3* __restrict__ v_positions,
-    float2* __restrict__ v_positions_xy_abs,
-    float3* __restrict__ v_axes_u,
-    float3* __restrict__ v_axes_v,
-    float* __restrict__ v_opacities
+    _ARGS_rasterize_depth_sorted_backward_kernel
 );
 
 
@@ -189,48 +250,11 @@ __global__ void rasterize_sorted_backward_kernel(
 
 template<CameraType CAMERA_TYPE>
 __global__ void rasterize_simplified_sorted_forward_kernel(
-    const int img_width,
-    const int img_height,
-    const float4 intrins,
-    const float2* __restrict__ undistortion_map,
-    const int32_t* __restrict__ sorted_indices_,
-    const float3* __restrict__ positions,
-    const float3* __restrict__ axes_u,
-    const float3* __restrict__ axes_v,
-    const float3* __restrict__ colors,
-    const float* __restrict__ opacities,
-    float* __restrict__ out_alpha,
-    float3* __restrict__ out_img,
-    float2* __restrict__ out_depth,  // { depth, depth^2 }
-    float3* __restrict__ out_normal,
-    float* __restrict__ out_depth_reg
+    _ARGS_rasterize_simplified_sorted_forward_kernel
 );
 
 
 template<CameraType CAMERA_TYPE>
 __global__ void rasterize_simplified_sorted_backward_kernel(
-    const int img_width,
-    const int img_height,
-    const float4 intrins,
-    const float2* __restrict__ undistortion_map,
-    const int* __restrict__ num_intersects,
-    const int32_t* __restrict__ sorted_indices_,
-    const float3* __restrict__ positions,
-    const float3* __restrict__ axes_u,
-    const float3* __restrict__ axes_v,
-    const float3* __restrict__ colors,
-    const float* __restrict__ opacities,
-    const float* __restrict__ output_alpha,
-    const float2* __restrict__ output_depth,
-    const float* __restrict__ v_output_alpha,
-    const float3* __restrict__ v_output_img,
-    const float2* __restrict__ v_output_depth,
-    const float3* __restrict__ v_output_normal,
-    const float* __restrict__ v_output_depth_reg,
-    float3* __restrict__ v_positions,
-    float2* __restrict__ v_positions_xy_abs,
-    float3* __restrict__ v_axes_u,
-    float3* __restrict__ v_axes_v,
-    float3* __restrict__ v_colors,
-    float* __restrict__ v_opacities
+    _ARGS_rasterize_simplified_sorted_backward_kernel
 );

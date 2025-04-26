@@ -9,6 +9,9 @@ from spirulae_splat.splat import rasterize_simplified, rasterize, rasterize_dept
 import spirulae_splat.splat.cuda as _C
 from spirulae_splat.splat._camera import _Camera
 
+rasterize.RETURN_IDX = True
+rasterize_simplified.RETURN_IDX = True
+
 torch.manual_seed(41)
 
 device = torch.device("cuda:0")
@@ -170,6 +173,4 @@ def test_rasterize_simplified():
 
 if __name__ == "__main__":
     # torch.autograd.set_detect_anomaly(True)
-    rasterize.RETURN_IDX = True
-    rasterize_simplified.RETURN_IDX = True
     test_rasterize_simplified()
