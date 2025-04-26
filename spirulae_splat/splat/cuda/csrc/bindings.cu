@@ -16,6 +16,9 @@
 #include <optional>
 
 
+#define BLOCK_DIM3 dim3(BLOCK_WIDTH, BLOCK_WIDTH, 1)
+
+
 inline __host__ float4 tuple2float4(std::tuple<float, float, float, float> v) {
     return {std::get<0>(v), std::get<1>(v), std::get<2>(v), std::get<3>(v)};
 }
@@ -24,10 +27,10 @@ inline __host__ dim3 tuple2dim3(std::tuple<unsigned, unsigned, unsigned> v) {
     return {std::get<0>(v), std::get<1>(v), std::get<2>(v)};
 }
 
-inline __host__ dim3 whb2tb(unsigned width, unsigned height, unsigned block_width) {
+inline __host__ dim3 whb2tb(unsigned width, unsigned height) {
     return {
-        (width + block_width - 1) / block_width,
-        (height + block_width - 1) / block_width,
+        (width + BLOCK_WIDTH - 1) / BLOCK_WIDTH,
+        (height + BLOCK_WIDTH - 1) / BLOCK_WIDTH,
         1
     };
 }
@@ -140,12 +143,11 @@ std::tuple<
     std::tuple<float, float, float, float> dist_coeffs,
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const float clip_thresh
 ) {
     DEVICE_GUARD(means3d);
 
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
+    const dim3 tile_bounds = whb2tb(img_width, img_height);
 
     auto int32 = means3d.options().dtype(torch::kInt32);
     auto float32 = means3d.options().dtype(torch::kFloat32);
@@ -163,7 +165,7 @@ std::tuple<
         (float4 *)quats.contiguous().data_ptr<float>(), \
         viewmat.contiguous().data_ptr<float>(), \
         tuple2float4(intrins), tuple2float4(dist_coeffs), \
-        tile_bounds, block_width, \
+        tile_bounds, \
         clip_thresh, \
         /* Outputs */ \
         (int4 *)bounds_d.contiguous().data_ptr<int32_t>(), \
@@ -246,8 +248,7 @@ torch::Tensor render_undistortion_map_tensor(
     const std::tuple<float, float, float, float> intrins,
     const std::tuple<float, float, float, float> dist_coeffs
 ) {
-    const dim3 tile_bounds = whb2tb(w, h, BLOCK_WIDTH);
-    const dim3 block = {BLOCK_WIDTH, BLOCK_WIDTH, 1};
+    const dim3 tile_bounds = whb2tb(w, h);
     const dim3 img_size = {w, h, 1};
 
     auto options = torch::dtype(torch::kFloat32).device(torch::kCUDA, -1);
@@ -255,7 +256,7 @@ torch::Tensor render_undistortion_map_tensor(
 
     if (camera_model == "OPENCV_FISHEYE")
         render_undistortion_map_kernel<CameraType::OPENCV_FISHEYE>
-        <<<tile_bounds, block>>>(
+        <<<tile_bounds, BLOCK_DIM3>>>(
             tile_bounds, img_size,
             tuple2float4(intrins), tuple2float4(dist_coeffs),
             (float2 *)out_img.contiguous().data_ptr<float>()
@@ -277,15 +278,14 @@ std::tuple<
     const torch::Tensor &bounds,
     const torch::Tensor &cum_tiles_hit,
     const unsigned img_height,
-    const unsigned img_width,
-    const unsigned block_width
+    const unsigned img_width
 ) {
     DEVICE_GUARD(positions);
     CHECK_INPUT(positions);
     CHECK_INPUT(bounds);
     CHECK_INPUT(cum_tiles_hit);
 
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
+    const dim3 tile_bounds = whb2tb(img_width, img_height);
 
     auto int32 = positions.options().dtype(torch::kInt32);
     auto int64 = positions.options().dtype(torch::kInt64);
@@ -299,7 +299,7 @@ std::tuple<
         (float3 *)positions.contiguous().data_ptr<float>(),
         (int4 *)bounds.contiguous().data_ptr<int32_t>(),
         cum_tiles_hit.contiguous().data_ptr<int32_t>(),
-        tile_bounds, block_width,
+        tile_bounds,
         // Outputs.
         isect_ids_unsorted.contiguous().data_ptr<int64_t>(),
         gaussian_ids_unsorted.contiguous().data_ptr<int32_t>()
@@ -313,13 +313,12 @@ torch::Tensor get_tile_bin_edges_tensor(
     int num_intersects,
     const torch::Tensor &isect_ids_sorted, 
     const unsigned img_height,
-    const unsigned img_width,
-    const unsigned block_width
+    const unsigned img_width
 ) {
     DEVICE_GUARD(isect_ids_sorted);
     CHECK_INPUT(isect_ids_sorted);
 
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
+    const dim3 tile_bounds = whb2tb(img_width, img_height);
     int num_tiles = tile_bounds.x * tile_bounds.y;
     torch::Tensor tile_bins = torch::zeros(
         {num_tiles, 2}, isect_ids_sorted.options().dtype(torch::kInt32)
@@ -422,7 +421,6 @@ std::tuple<
 > rasterize_simple_forward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
     const std::optional<torch::Tensor> &undistortion_map_,
@@ -445,8 +443,7 @@ std::tuple<
     CHECK_INPUT(opacities);
     // CHECK_INPUT(background);
 
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
-    const dim3 block = {block_width, block_width, 1};
+    const dim3 tile_bounds = whb2tb(img_width, img_height);
     const dim3 img_size = {img_width, img_height, 1};
 
     const int channels = colors.size(1);
@@ -479,7 +476,7 @@ std::tuple<
 
     if (camera_model == "") {
         rasterize_simple_forward_kernel<CameraType::Undistorted>
-        <<<tile_bounds, block>>>(
+        <<<tile_bounds, BLOCK_DIM3>>>(
             tile_bounds, img_size,
             tuple2float4(intrins), nullptr,
             _TEMP_ARGS
@@ -491,7 +488,7 @@ std::tuple<
         CHECK_INPUT(undistortion_map);
 
         rasterize_simple_forward_kernel<CameraType::GenericDistorted>
-        <<<tile_bounds, block>>>(
+        <<<tile_bounds, BLOCK_DIM3>>>(
             tile_bounds, img_size,
             tuple2float4(intrins),
             (float2 *)undistortion_map.contiguous().data_ptr<float>(),
@@ -514,7 +511,6 @@ std::tuple<
 > rasterize_simple_backward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const torch::Tensor &gaussians_ids_sorted,
     const torch::Tensor &tile_bins,
@@ -549,8 +545,7 @@ std::tuple<
     }
 
     const int num_points = positions.size(0);
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
-    const dim3 block = {block_width, block_width, 1};
+    const dim3 tile_bounds = whb2tb(img_width, img_height);
     const dim3 img_size = {img_width, img_height, 1};
     const int channels = colors.size(1);
 
@@ -562,7 +557,7 @@ std::tuple<
     torch::Tensor v_colors = torch::zeros({num_points, channels}, options);
     torch::Tensor v_opacities = torch::zeros({num_points, 1}, options);
 
-    rasterize_simple_backward_kernel<<<tile_bounds, block>>>(
+    rasterize_simple_backward_kernel<<<tile_bounds, BLOCK_DIM3>>>(
         tile_bounds,
         img_size,
         tuple2float4(intrins),
@@ -604,7 +599,6 @@ std::tuple<
     const std::string depth_mode,
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
     const std::optional<torch::Tensor> &undistortion_map_,
@@ -623,8 +617,7 @@ std::tuple<
     CHECK_INPUT(axes_v);
     CHECK_INPUT(opacities);
 
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
-    const dim3 block = {block_width, block_width, 1};
+    const dim3 tile_bounds = whb2tb(img_width, img_height);
     const dim3 img_size = {img_width, img_height, 1};
 
     auto int32 = positions.options().dtype(torch::kInt32);
@@ -654,14 +647,14 @@ std::tuple<
     if (camera_model == "") {
         if (depth_mode == "mean")
             rasterize_depth_forward_kernel<DepthMode::Mean, CameraType::Undistorted>
-            <<<tile_bounds, block>>>(
+            <<<tile_bounds, BLOCK_DIM3>>>(
                 tile_bounds, img_size,
                 tuple2float4(intrins), nullptr,
                 _TEMP_ARGS
             );
         else if (depth_mode == "median")
             rasterize_depth_forward_kernel<DepthMode::Median, CameraType::Undistorted>
-            <<<tile_bounds, block>>>(
+            <<<tile_bounds, BLOCK_DIM3>>>(
                 tile_bounds, img_size,
                 tuple2float4(intrins), nullptr,
                 _TEMP_ARGS
@@ -673,7 +666,7 @@ std::tuple<
 
         if (depth_mode == "mean")
             rasterize_depth_forward_kernel<DepthMode::Mean, CameraType::GenericDistorted>
-            <<<tile_bounds, block>>>(
+            <<<tile_bounds, BLOCK_DIM3>>>(
                 tile_bounds, img_size,
                 tuple2float4(intrins),
                 (float2 *)undistortion_map.contiguous().data_ptr<float>(),
@@ -681,7 +674,7 @@ std::tuple<
             );
         else if (depth_mode == "median")
             rasterize_depth_forward_kernel<DepthMode::Median, CameraType::GenericDistorted>
-            <<<tile_bounds, block>>>(
+            <<<tile_bounds, BLOCK_DIM3>>>(
                 tile_bounds, img_size,
                 tuple2float4(intrins),
                 (float2 *)undistortion_map.contiguous().data_ptr<float>(),
@@ -704,7 +697,6 @@ std::tuple<
     const std::string depth_mode,
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const torch::Tensor &gaussians_ids_sorted,
     const torch::Tensor &tile_bins,
@@ -735,8 +727,7 @@ std::tuple<
     }
 
     const int num_points = positions.size(0);
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
-    const dim3 block = {block_width, block_width, 1};
+    const dim3 tile_bounds = whb2tb(img_width, img_height);
     const dim3 img_size = {img_width, img_height, 1};
 
     auto options = positions.options();
@@ -767,11 +758,11 @@ std::tuple<
         v_opacities.contiguous().data_ptr<float>()
 
     if (depth_mode == "mean")
-        rasterize_depth_backward_kernel<DepthMode::Mean><<<tile_bounds, block>>>(
+        rasterize_depth_backward_kernel<DepthMode::Mean><<<tile_bounds, BLOCK_DIM3>>>(
             _TEMP_ARGS
         );
     if (depth_mode == "median")
-        rasterize_depth_backward_kernel<DepthMode::Median><<<tile_bounds, block>>>(
+        rasterize_depth_backward_kernel<DepthMode::Median><<<tile_bounds, BLOCK_DIM3>>>(
             _TEMP_ARGS
         );
 
@@ -796,7 +787,6 @@ std::tuple<
 > rasterize_forward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const float depth_reg_pairwise_factor,
     const torch::Tensor &gaussian_ids_sorted,
@@ -826,8 +816,7 @@ std::tuple<
     // CHECK_INPUT(background);
     CHECK_INPUT(depth_ref_im);
 
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
-    const dim3 block = {block_width, block_width, 1};
+    const dim3 tile_bounds = whb2tb(img_width, img_height);
     const dim3 img_size = {img_width, img_height, 1};
 
     const int channels = colors.size(1);
@@ -853,7 +842,7 @@ std::tuple<
         {img_height, img_width, 1}, float32
     );
 
-    rasterize_forward_kernel<<<tile_bounds, block>>>(
+    rasterize_forward_kernel<<<tile_bounds, BLOCK_DIM3>>>(
         tile_bounds, img_size,
         tuple2float4(intrins),
         depth_reg_pairwise_factor,
@@ -900,7 +889,6 @@ std::tuple<
 > rasterize_backward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const unsigned ch_degree_r,
     const unsigned ch_degree_r_to_use,
@@ -961,8 +949,7 @@ std::tuple<
     const int dim_ch = ch_degree_r * (2*ch_degree_phi+1);
 
     const int num_points = positions.size(0);
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
-    const dim3 block = {block_width, block_width, 1};
+    const dim3 tile_bounds = whb2tb(img_width, img_height);
     const dim3 img_size = {img_width, img_height, 1};
     const int channels = colors.size(1);
 
@@ -978,7 +965,7 @@ std::tuple<
     // torch::Tensor v_background = torch::zeros({3}, options);
     torch::Tensor v_depth_ref_im = torch::zeros({img_height, img_width, 1}, options);
 
-    rasterize_backward_kernel<<<tile_bounds, block>>>(
+    rasterize_backward_kernel<<<tile_bounds, BLOCK_DIM3>>>(
         tile_bounds, img_size,
         tuple2float4(intrins),
         (unsigned)ch_degree_r, (unsigned)ch_degree_r_to_use,
@@ -1037,7 +1024,6 @@ std::tuple<
 > rasterize_simplified_forward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
     const std::optional<torch::Tensor> &undistortion_map_,
@@ -1058,8 +1044,7 @@ std::tuple<
     CHECK_INPUT(colors);
     CHECK_INPUT(opacities);
 
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
-    const dim3 block = {block_width, block_width, 1};
+    const dim3 tile_bounds = whb2tb(img_width, img_height);
     const dim3 img_size = {img_width, img_height, 1};
 
     const int channels = colors.size(1);
@@ -1103,7 +1088,7 @@ std::tuple<
 
     if (camera_model == "") {
         rasterize_simplified_forward_kernel<CameraType::Undistorted>
-        <<<tile_bounds, block>>>(
+        <<<tile_bounds, BLOCK_DIM3>>>(
             tile_bounds, img_size,
             tuple2float4(intrins), nullptr,
             _TEMP_ARGS
@@ -1113,7 +1098,7 @@ std::tuple<
         const torch::Tensor& undistortion_map = undistortion_map_.value();
         CHECK_INPUT(undistortion_map);
         rasterize_simplified_forward_kernel<CameraType::GenericDistorted>
-        <<<tile_bounds, block>>>(
+        <<<tile_bounds, BLOCK_DIM3>>>(
             tile_bounds, img_size,
             tuple2float4(intrins),
             (float2 *)undistortion_map.contiguous().data_ptr<float>(),
@@ -1141,7 +1126,6 @@ std::tuple<
 > rasterize_simplified_backward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
     const std::optional<torch::Tensor> &undistortion_map_,
@@ -1193,8 +1177,7 @@ std::tuple<
     }
 
     const int num_points = positions.size(0);
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
-    const dim3 block = {block_width, block_width, 1};
+    const dim3 tile_bounds = whb2tb(img_width, img_height);
     const dim3 img_size = {img_width, img_height, 1};
     const int channels = colors.size(1);
 
@@ -1232,7 +1215,7 @@ std::tuple<
 
     if (camera_model == "") {
         rasterize_simplified_backward_kernel<CameraType::Undistorted>
-        <<<tile_bounds, block>>>(
+        <<<tile_bounds, BLOCK_DIM3>>>(
             tile_bounds, img_size,
             tuple2float4(intrins), nullptr,
             _TEMP_ARGS
@@ -1242,7 +1225,7 @@ std::tuple<
         const torch::Tensor& undistortion_map = undistortion_map_.value();
         CHECK_INPUT(undistortion_map);
         rasterize_simplified_backward_kernel<CameraType::GenericDistorted>
-        <<<tile_bounds, block>>>(
+        <<<tile_bounds, BLOCK_DIM3>>>(
             tile_bounds, img_size,
             tuple2float4(intrins),
             (float2 *)undistortion_map.contiguous().data_ptr<float>(),
@@ -1268,7 +1251,6 @@ std::tuple<
 > rasterize_indices_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
     const std::optional<torch::Tensor> &undistortion_map_,
@@ -1287,8 +1269,7 @@ std::tuple<
     CHECK_INPUT(axes_v);
     CHECK_INPUT(opacities);
 
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
-    const dim3 block = {block_width, block_width, 1};
+    const dim3 tile_bounds = whb2tb(img_width, img_height);
     const dim3 img_size = {img_width, img_height, 1};
 
     auto int32 = positions.options().dtype(torch::kInt32);
@@ -1317,7 +1298,7 @@ std::tuple<
 
     if (camera_model == "") {
         rasterize_indices_kernel<CameraType::Undistorted>
-        <<<tile_bounds, block>>>(
+        <<<tile_bounds, BLOCK_DIM3>>>(
             tile_bounds, img_size,
             tuple2float4(intrins), nullptr,
             _TEMP_ARGS
@@ -1328,7 +1309,7 @@ std::tuple<
         CHECK_INPUT(undistortion_map);
 
         rasterize_indices_kernel<CameraType::GenericDistorted>
-        <<<tile_bounds, block>>>(
+        <<<tile_bounds, BLOCK_DIM3>>>(
             tile_bounds, img_size,
             tuple2float4(intrins),
             (float2 *)undistortion_map.contiguous().data_ptr<float>(),
@@ -1465,7 +1446,6 @@ std::tuple<
 > rasterize_simple_sorted_backward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const torch::Tensor &num_intersects,
     const torch::Tensor &sorted_indices,
@@ -1500,8 +1480,7 @@ std::tuple<
     }
 
     const int num_points = positions.size(0);
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
-    const dim3 block = {block_width, block_width, 1};
+    const dim3 tile_bounds = whb2tb(img_width, img_height);
     const dim3 img_size = {img_width, img_height, 1};
     const int channels = colors.size(1);
 
@@ -1513,7 +1492,7 @@ std::tuple<
     torch::Tensor v_colors = torch::zeros({num_points, channels}, options);
     torch::Tensor v_opacities = torch::zeros({num_points, 1}, options);
 
-    rasterize_simple_sorted_backward_kernel<<<tile_bounds, block>>>(
+    rasterize_simple_sorted_backward_kernel<<<tile_bounds, BLOCK_DIM3>>>(
         img_size,
         tuple2float4(intrins),
         num_intersects.contiguous().data_ptr<int>(),
@@ -1644,7 +1623,6 @@ std::tuple<
     const std::string depth_mode,
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const torch::Tensor &final_idx,
     const torch::Tensor &sorted_indices,
@@ -1675,8 +1653,7 @@ std::tuple<
     }
 
     const int num_points = positions.size(0);
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
-    const dim3 block = {block_width, block_width, 1};
+    const dim3 tile_bounds = whb2tb(img_width, img_height);
     const dim3 img_size = {img_width, img_height, 1};
 
     auto options = positions.options();
@@ -1706,11 +1683,11 @@ std::tuple<
         v_opacities.contiguous().data_ptr<float>()
 
     if (depth_mode == "mean")
-        rasterize_depth_sorted_backward_kernel<DepthMode::Mean><<<tile_bounds, block>>>(
+        rasterize_depth_sorted_backward_kernel<DepthMode::Mean><<<tile_bounds, BLOCK_DIM3>>>(
             _TEMP_ARGS
         );
     if (depth_mode == "median")
-        rasterize_depth_sorted_backward_kernel<DepthMode::Median><<<tile_bounds, block>>>(
+        rasterize_depth_sorted_backward_kernel<DepthMode::Median><<<tile_bounds, BLOCK_DIM3>>>(
             _TEMP_ARGS
         );
 
@@ -1734,7 +1711,6 @@ std::tuple<
 > rasterize_sorted_forward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const float depth_reg_pairwise_factor,
     const torch::Tensor &sorted_indices,
@@ -1762,8 +1738,7 @@ std::tuple<
     // CHECK_INPUT(background);
     CHECK_INPUT(depth_ref_im);
 
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
-    const dim3 block = {block_width, block_width, 1};
+    const dim3 tile_bounds = whb2tb(img_width, img_height);
     const dim3 img_size = {img_width, img_height, 1};
 
     const int channels = colors.size(1);
@@ -1786,7 +1761,7 @@ std::tuple<
         {img_height, img_width, 1}, float32
     );
 
-    rasterize_sorted_forward_kernel<<<tile_bounds, block>>>(
+    rasterize_sorted_forward_kernel<<<tile_bounds, BLOCK_DIM3>>>(
         img_size,
         tuple2float4(intrins),
         depth_reg_pairwise_factor,
@@ -1831,7 +1806,6 @@ std::tuple<
 > rasterize_sorted_backward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const unsigned ch_degree_r,
     const unsigned ch_degree_r_to_use,
@@ -1892,8 +1866,7 @@ std::tuple<
     const int dim_ch = ch_degree_r * (2*ch_degree_phi+1);
 
     const int num_points = positions.size(0);
-    const dim3 tile_bounds = whb2tb(img_width, img_height, block_width);
-    const dim3 block = {block_width, block_width, 1};
+    const dim3 tile_bounds = whb2tb(img_width, img_height);
     const dim3 img_size = {img_width, img_height, 1};
     const int channels = colors.size(1);
 
@@ -1909,7 +1882,7 @@ std::tuple<
     // torch::Tensor v_background = torch::zeros({3}, options);
     torch::Tensor v_depth_ref_im = torch::zeros({img_height, img_width, 1}, options);
 
-    rasterize_sorted_backward_kernel<<<tile_bounds, block>>>(
+    rasterize_sorted_backward_kernel<<<tile_bounds, BLOCK_DIM3>>>(
         img_size,
         tuple2float4(intrins),
         (unsigned)ch_degree_r, (unsigned)ch_degree_r_to_use,
@@ -2197,8 +2170,7 @@ torch::Tensor render_background_sh_forward_tensor(
         AT_ERROR("sh_coeffs must be (sh_regree**2, 3)");
     }
 
-    const dim3 tile_bounds = whb2tb(w, h, BLOCK_WIDTH);
-    const dim3 block = {BLOCK_WIDTH, BLOCK_WIDTH, 1};
+    const dim3 tile_bounds = whb2tb(w, h);
     const dim3 img_size = {w, h, 1};
 
     auto options = sh_coeffs.options();
@@ -2206,7 +2178,7 @@ torch::Tensor render_background_sh_forward_tensor(
 
     if (camera_model == "") {
         render_background_sh_forward_kernel<CameraType::Undistorted>
-        <<<tile_bounds, block>>>(
+        <<<tile_bounds, BLOCK_DIM3>>>(
             tile_bounds, img_size,
             tuple2float4(intrins), nullptr,
             rotation.contiguous().data_ptr<float>(),
@@ -2221,7 +2193,7 @@ torch::Tensor render_background_sh_forward_tensor(
         CHECK_INPUT(undistortion_map);
 
         render_background_sh_forward_kernel<CameraType::GenericDistorted>
-        <<<tile_bounds, block>>>(
+        <<<tile_bounds, BLOCK_DIM3>>>(
             tile_bounds, img_size,
             tuple2float4(intrins),
             (float2 *)undistortion_map.contiguous().data_ptr<float>(),
@@ -2277,8 +2249,7 @@ std::tuple<
         AT_ERROR("v_out_color shape must be (h, w, 3)");
     }
 
-    const dim3 tile_bounds = whb2tb(w, h, BLOCK_WIDTH);
-    const dim3 block = {BLOCK_WIDTH, BLOCK_WIDTH, 1};
+    const dim3 tile_bounds = whb2tb(w, h);
     const dim3 img_size = {w, h, 1};
 
     auto options = sh_coeffs.options();
@@ -2296,7 +2267,7 @@ std::tuple<
 
     if (camera_model == "") {
         render_background_sh_backward_kernel<CameraType::Undistorted>
-        <<<tile_bounds, block>>>(
+        <<<tile_bounds, BLOCK_DIM3>>>(
             tile_bounds, img_size,
             tuple2float4(intrins), nullptr,
             _TEMP_ARGS
@@ -2306,7 +2277,7 @@ std::tuple<
         const torch::Tensor& undistortion_map = undistortion_map_.value();
         CHECK_INPUT(undistortion_map);
         render_background_sh_backward_kernel<CameraType::GenericDistorted>
-        <<<tile_bounds, block>>>(
+        <<<tile_bounds, BLOCK_DIM3>>>(
             tile_bounds, img_size,
             tuple2float4(intrins),
             (float2 *)undistortion_map.contiguous().data_ptr<float>(),

@@ -9,6 +9,7 @@ from torch import Tensor
 from torch.autograd import Function
 
 import spirulae_splat.splat.cuda as _C
+from spirulae_splat.splat._camera import _Camera
 
 
 
@@ -28,12 +29,8 @@ def rasterize_gaussians_sorted(
     depth_reg_pairwise_factor: float,
     num_intersects: Int[Tensor, "h w"],
     sorted_indices: Int[Tensor, "h w MAX_SORTED_INDICES"],
-    intrins: Tuple[float, float, float, float],
-    img_height: int,
-    img_width: int,
-    block_width: int,
+    camera: _Camera,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-    assert block_width > 1 and block_width <= 16, "block_width must be between 2 and 16"
 
     if colors.dtype == torch.uint8:
         # make sure colors are float [0,1]
@@ -59,10 +56,7 @@ def rasterize_gaussians_sorted(
         depth_reg_pairwise_factor,
         num_intersects.contiguous(),
         sorted_indices.contiguous(),
-        intrins,
-        img_height,
-        img_width,
-        block_width,
+        camera,
     )
 
 
@@ -87,10 +81,7 @@ class _RasterizeGaussiansSorted(Function):
         depth_reg_pairwise_factor: float,
         num_intersects: Int[Tensor, "h w"],
         sorted_indices: Int[Tensor, "h w MAX_SORTED_INDICES"],
-        intrins: Tuple[float, float, float, float],
-        img_height: int,
-        img_width: int,
-        block_width: int,
+        camera: _Camera,
     ) -> Tensor:
 
         (
@@ -98,8 +89,7 @@ class _RasterizeGaussiansSorted(Function):
             out_img, out_depth, out_normal,
             out_reg_depth,
         ) = _C.rasterize_sorted_forward(
-            img_height, img_width, block_width,
-            intrins,
+            camera.h, camera.w, camera.intrins,
             depth_reg_pairwise_factor,
             sorted_indices,
             positions, axes_u, axes_v,
@@ -111,12 +101,9 @@ class _RasterizeGaussiansSorted(Function):
             depth_ref,
         )
 
-        ctx.img_width = img_width
-        ctx.img_height = img_height
+        ctx.camera = camera
         ctx.num_intersects = num_intersects
-        ctx.block_width = block_width
         ctx.depth_reg_pairwise_factor = depth_reg_pairwise_factor
-        ctx.intrins = intrins
         ctx.ch_degrees = (ch_degree_r, ch_degree_r_to_use,
                           ch_degree_phi, ch_degree_phi_to_use)
         ctx.save_for_backward(
@@ -142,10 +129,8 @@ class _RasterizeGaussiansSorted(Function):
         v_out_reg_depth,
         ):
 
-        img_height = ctx.img_height
-        img_width = ctx.img_width
+        camera = ctx.camera  # type: _Camera
         num_intersects = ctx.num_intersects
-        intrins = ctx.intrins
         ch_degrees = ctx.ch_degrees
 
         (
@@ -158,8 +143,8 @@ class _RasterizeGaussiansSorted(Function):
 
         assert colors.shape[-1] == 3
         backward_return = _C.rasterize_sorted_backward(
-            img_height, img_width, ctx.block_width,
-            intrins, *ch_degrees,
+            camera.h, camera.w, camera.intrins,
+            *ch_degrees,
             ctx.depth_reg_pairwise_factor,
             num_intersects, sorted_indices,
             positions, axes_u, axes_v,
@@ -197,6 +182,5 @@ class _RasterizeGaussiansSorted(Function):
             v_colors, *([None]*4), v_ch_coeffs, v_opacities,
             v_depth_ref,
             # v_background,
-            None,
-            None, None, None, None, None, None,
+            None, None, None, None,
         )

@@ -1,15 +1,25 @@
 from typing import Callable
 
+from ._backend import _C
+
+
+def _get_constant(name: str) -> int:
+    return getattr(_C, name)
+
 
 def _make_lazy_cuda_func(name: str) -> Callable:
     def call_cuda(*args, **kwargs):
-        # pylint: disable=import-outside-toplevel
-        from ._backend import _C
-
         return getattr(_C, name)(*args, **kwargs)
 
     return call_cuda
 
+
+# constants
+BLOCK_WIDTH = _get_constant("BLOCK_WIDTH")
+MAX_SORTED_SPLATS = _get_constant("MAX_SORTED_SPLATS")
+SORTED_INDEX_INF = _get_constant("SORTED_INDEX_INF")
+N_THREADS = _get_constant("N_THREADS")
+N_THREADS_PPS = _get_constant("N_THREADS_PPS")
 
 # splat rasterization
 rasterize_simple_forward = _make_lazy_cuda_func("rasterize_simple_forward")

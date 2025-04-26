@@ -43,7 +43,6 @@ def bin_and_sort_gaussians(
     cum_tiles_hit: Float[Tensor, "batch 1"],
     img_height: int,
     img_width: int,
-    block_size: int,
 ) -> Tuple[
     Float[Tensor, "num_intersects 1"],
     Float[Tensor, "num_intersects 1"],
@@ -82,13 +81,13 @@ def bin_and_sort_gaussians(
         positions.contiguous(),
         bounds.contiguous(),
         cum_tiles_hit.contiguous(),
-        img_height, img_width, block_size,
+        img_height, img_width
     )
     isect_ids_sorted, sorted_indices = torch.sort(isect_ids)
     gaussian_ids_sorted = torch.gather(gaussian_ids, 0, sorted_indices)
     tile_bins = _C.get_tile_bin_edges(
         num_intersects, isect_ids_sorted.contiguous(),
-        img_height, img_width, block_size
+        img_height, img_width
     )
     return isect_ids, gaussian_ids, isect_ids_sorted, gaussian_ids_sorted, tile_bins
 

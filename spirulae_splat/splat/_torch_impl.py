@@ -10,6 +10,7 @@ from typing import Tuple, Literal, Optional
 from spirulae_splat.splat.utils import (
     compute_cumulative_intersects, bin_and_sort_gaussians
 )
+from .cuda import BLOCK_WIDTH
 
 
 class BesselJ0Function(torch.autograd.Function):
@@ -418,9 +419,9 @@ def clip_near_plane(p, viewmat, clip_thresh=0.01):
     return p_view, p_view[..., 2] < clip_thresh
 
 
-def get_tile_bbox(center, bound, tile_bounds, block_width):
+def get_tile_bbox(center, bound, tile_bounds):
     tile_size = torch.tensor(
-        [block_width, block_width], dtype=torch.float32, device=center.device
+        [BLOCK_WIDTH, BLOCK_WIDTH], dtype=torch.float32, device=center.device
     )
     tile_center = center / tile_size
     tile_radius = bound[..., :2] / tile_size
@@ -459,12 +460,12 @@ def projected_depth_grad(p, R, fx, fy):
 
 def project_gaussians(
     means3d, scales, quats,
-    viewmat, intrins, img_size, block_width,
+    viewmat, intrins, img_size,
     clip_thresh=0.01,
 ):
     tile_bounds = (
-        (img_size[0] + block_width - 1) // block_width,
-        (img_size[1] + block_width - 1) // block_width,
+        (img_size[0] + BLOCK_WIDTH - 1) // BLOCK_WIDTH,
+        (img_size[1] + BLOCK_WIDTH - 1) // BLOCK_WIDTH,
         1,
     )
     fx, fy, cx, cy = intrins
@@ -477,7 +478,7 @@ def project_gaussians(
 
     center, bound, valid = project_ellipse_bound(p_view, V0, V1, *intrins)
 
-    tile_min, tile_max = get_tile_bbox(center, bound, tile_bounds, block_width)
+    tile_min, tile_max = get_tile_bbox(center, bound, tile_bounds)
     assert (tile_max >= tile_min).all()
     tile_area = (tile_max[...,0]-tile_min[...,0]) * (tile_max[...,1]-tile_min[...,1])
     mask = (tile_area > 0) & (~is_close) & valid
@@ -501,7 +502,7 @@ def project_gaussians(
 
 
 def map_gaussian_to_intersects(
-    num_points, xys, depths, radii, cum_tiles_hit, tile_bounds, block_width
+    num_points, xys, depths, radii, cum_tiles_hit, tile_bounds
 ):
     num_intersects = cum_tiles_hit[-1]
     isect_ids = torch.zeros(num_intersects, dtype=torch.int64, device=xys.device)
@@ -511,9 +512,7 @@ def map_gaussian_to_intersects(
         if radii[idx] <= 0:
             break
 
-        tile_min, tile_max = get_tile_bbox(
-            xys[idx], radii[idx], tile_bounds, block_width
-        )
+        tile_min, tile_max = get_tile_bbox(xys[idx], radii[idx], tile_bounds)
 
         cur_idx = 0 if idx == 0 else cum_tiles_hit[idx - 1].item()
 
@@ -594,7 +593,6 @@ def rasterize_gaussians_simple(
     intrins: Tuple[float, float, float, float],
     img_height: int,
     img_width: int,
-    block_width: int,
     background: Float[Tensor, "channels"] = None
 ):
     device = positions.device
@@ -605,11 +603,11 @@ def rasterize_gaussians_simple(
 
     num_points = positions.size(0)
     tile_bounds = (
-        (img_width + block_width - 1) // block_width,
-        (img_height + block_width - 1) // block_width,
+        (img_width + BLOCK_WIDTH - 1) // BLOCK_WIDTH,
+        (img_height + BLOCK_WIDTH - 1) // BLOCK_WIDTH,
         1,
     )
-    block = (block_width, block_width, 1)
+    block = (BLOCK_WIDTH, BLOCK_WIDTH, 1)
     img_size = (img_width, img_height, 1)
 
     num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_tiles_hit)
@@ -625,7 +623,7 @@ def rasterize_gaussians_simple(
         num_points, num_intersects,
         positions,
         bounds, cum_tiles_hit,
-        img_height, img_width, block_width,
+        img_height, img_width,
     )
 
     final_idx = torch.zeros((img_size[1], img_size[0]), **int32_param)
@@ -687,7 +685,6 @@ def rasterize_gaussians_depth(
     intrins: Tuple[float, float, float, float],
     img_height: int,
     img_width: int,
-    block_width: int,
     depth_mode: str,
 ):
     device = positions.device
@@ -696,11 +693,11 @@ def rasterize_gaussians_depth(
 
     num_points = positions.size(0)
     tile_bounds = (
-        (img_width + block_width - 1) // block_width,
-        (img_height + block_width - 1) // block_width,
+        (img_width + BLOCK_WIDTH - 1) // BLOCK_WIDTH,
+        (img_height + BLOCK_WIDTH - 1) // BLOCK_WIDTH,
         1,
     )
-    block = (block_width, block_width, 1)
+    block = (BLOCK_WIDTH, BLOCK_WIDTH, 1)
     img_size = (img_width, img_height, 1)
 
     num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_tiles_hit)
@@ -716,7 +713,7 @@ def rasterize_gaussians_depth(
         num_points, num_intersects,
         positions,
         bounds, cum_tiles_hit,
-        img_height, img_width, block_width,
+        img_height, img_width,
     )
 
     final_idx = torch.zeros((img_size[1], img_size[0]), **int32_param)
@@ -810,7 +807,6 @@ def rasterize_gaussians(
     intrins: Tuple[float, float, float, float],
     img_height: int,
     img_width: int,
-    block_width: int,
 ):
     device = positions.device
     float32_param = { 'dtype': torch.float32, 'device': device }
@@ -820,11 +816,11 @@ def rasterize_gaussians(
 
     num_points = positions.size(0)
     tile_bounds = (
-        (img_width + block_width - 1) // block_width,
-        (img_height + block_width - 1) // block_width,
+        (img_width + BLOCK_WIDTH - 1) // BLOCK_WIDTH,
+        (img_height + BLOCK_WIDTH - 1) // BLOCK_WIDTH,
         1,
     )
-    block = (block_width, block_width, 1)
+    block = (BLOCK_WIDTH, BLOCK_WIDTH, 1)
     img_size = (img_width, img_height, 1)
 
     num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_tiles_hit)
@@ -840,7 +836,7 @@ def rasterize_gaussians(
         num_points, num_intersects,
         positions,
         bounds, cum_tiles_hit,
-        img_height, img_width, block_width,
+        img_height, img_width,
     )
 
     final_idx = torch.zeros((img_size[1], img_size[0]), **int32_param)
@@ -948,7 +944,6 @@ def rasterize_gaussians_simplified(
     intrins: Tuple[float, float, float, float],
     img_height: int,
     img_width: int,
-    block_width: int,
 ):
     device = positions.device
     float32_param = { 'dtype': torch.float32, 'device': device }
@@ -956,11 +951,11 @@ def rasterize_gaussians_simplified(
 
     num_points = positions.size(0)
     tile_bounds = (
-        (img_width + block_width - 1) // block_width,
-        (img_height + block_width - 1) // block_width,
+        (img_width + BLOCK_WIDTH - 1) // BLOCK_WIDTH,
+        (img_height + BLOCK_WIDTH - 1) // BLOCK_WIDTH,
         1,
     )
-    block = (block_width, block_width, 1)
+    block = (BLOCK_WIDTH, BLOCK_WIDTH, 1)
     img_size = (img_width, img_height, 1)
 
     num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_tiles_hit)
@@ -976,7 +971,7 @@ def rasterize_gaussians_simplified(
         num_points, num_intersects,
         positions,
         bounds, cum_tiles_hit,
-        img_height, img_width, block_width,
+        img_height, img_width,
     )
 
     final_idx = torch.zeros((img_size[1], img_size[0]), **int32_param)

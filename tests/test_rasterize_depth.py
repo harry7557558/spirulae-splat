@@ -57,7 +57,6 @@ def _test_rasterize_depth(mode):
         device=device,
     )
     viewmat[:3, :3] = _torch_impl.quat_to_rotmat(torch.randn(4))
-    BLOCK_SIZE = 16
 
     params = project_gaussians(
         means3d, scales, quats,
@@ -103,8 +102,7 @@ def _test_rasterize_depth(mode):
         _opacities,
         _bounds,
         _num_tiles_hit,
-        intrins,
-        H, W, BLOCK_SIZE, mode
+        intrins, H, W, mode
     )
 
     print("test forward")

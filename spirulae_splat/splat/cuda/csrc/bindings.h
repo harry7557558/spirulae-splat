@@ -62,7 +62,6 @@ std::tuple<
     std::tuple<float, float, float, float> dist_coeffs,
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const float clip_thresh
 );
 
@@ -106,8 +105,7 @@ std::tuple<
     const torch::Tensor &bounds,
     const torch::Tensor &cum_tiles_hit,
     const unsigned img_height,
-    const unsigned img_width,
-    const unsigned block_width
+    const unsigned img_width
 );
 
 
@@ -115,8 +113,7 @@ torch::Tensor get_tile_bin_edges_tensor(
     int num_intersects,
     const torch::Tensor &isect_ids_sorted, 
     const unsigned img_height,
-    const unsigned img_width,
-    const unsigned block_width
+    const unsigned img_width
 );
 
 
@@ -151,7 +148,6 @@ std::tuple<
 > rasterize_simple_forward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
     const std::optional<torch::Tensor> &undistortion_map_,
@@ -176,7 +172,6 @@ std::tuple<
 > rasterize_simple_backward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const torch::Tensor &gaussians_ids_sorted,
     const torch::Tensor &tile_bins,
@@ -201,7 +196,6 @@ std::tuple<
     const std::string depth_mode,
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
     const std::optional<torch::Tensor> &undistortion_map_,
@@ -224,7 +218,6 @@ std::tuple<
     const std::string depth_mode,
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const torch::Tensor &gaussians_ids_sorted,
     const torch::Tensor &tile_bins,
@@ -249,7 +242,6 @@ std::tuple<
 > rasterize_forward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const float depth_reg_pairwise_factor,
     const torch::Tensor &gaussian_ids_sorted,
@@ -283,7 +275,6 @@ std::tuple<
 > rasterize_backward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const unsigned ch_degree_r,
     const unsigned ch_degree_r_to_use,
@@ -321,7 +312,6 @@ std::tuple<
 > rasterize_simplified_forward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
     const std::optional<torch::Tensor> &undistortion_map_,
@@ -345,7 +335,6 @@ std::tuple<
 > rasterize_simplified_backward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
     const std::optional<torch::Tensor> &undistortion_map_,
@@ -374,7 +363,6 @@ std::tuple<
 > rasterize_indices_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::string camera_model,
     const std::tuple<float, float, float, float> intrins,
     const std::optional<torch::Tensor> &undistortion_map_,
@@ -425,7 +413,6 @@ std::tuple<
 > rasterize_simple_sorted_backward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const torch::Tensor &num_intersects,
     const torch::Tensor &sorted_indices,
@@ -470,7 +457,6 @@ std::tuple<
     const std::string depth_mode,
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const torch::Tensor &final_idx,
     const torch::Tensor &sorted_indices,
@@ -493,7 +479,6 @@ std::tuple<
 > rasterize_sorted_forward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const float depth_reg_pairwise_factor,
     const torch::Tensor &sorted_indices,
@@ -526,7 +511,6 @@ std::tuple<
 > rasterize_sorted_backward_tensor(
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_width,
     const std::tuple<float, float, float, float> intrins,
     const unsigned ch_degree_r,
     const unsigned ch_degree_r_to_use,

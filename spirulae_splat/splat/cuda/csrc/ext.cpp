@@ -1,7 +1,15 @@
+#include "config.h"
 #include "bindings.h"
 #include <torch/extension.h>
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+
+    // constants
+    m.attr("BLOCK_WIDTH") = py::int_(BLOCK_WIDTH);
+    m.attr("MAX_SORTED_SPLATS") = py::int_(MAX_SORTED_SPLATS);
+    m.attr("SORTED_INDEX_INF") = py::int_(SORTED_INDEX_INF);
+    m.attr("N_THREADS") = py::int_(N_THREADS);
+    m.attr("N_THREADS_PPS") = py::int_(N_THREADS_PPS);
 
     // splat rasterization
     m.def("rasterize_simple_forward", &rasterize_simple_forward_tensor);

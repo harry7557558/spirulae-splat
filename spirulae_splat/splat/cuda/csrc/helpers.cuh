@@ -265,17 +265,15 @@ inline __device__ void get_tile_bbox(
     const float2 pix_center,
     const float2 pix_radius,
     const dim3 tile_bounds,
-    int2 &tile_min,
-    int2 &tile_max,
-    const int block_size
+    int2 &tile_min, int2 &tile_max
 ) {
     // gets gaussian dimensions in tile space, i.e. the span of a gaussian in
     // tile_grid (image divided into tiles)
     float2 tile_center = {
-        pix_center.x / (float)block_size, pix_center.y / (float)block_size
+        pix_center.x / (float)BLOCK_WIDTH, pix_center.y / (float)BLOCK_WIDTH
     };
     float2 tile_radius = {
-        pix_radius.x / (float)block_size, pix_radius.y / (float)block_size
+        pix_radius.x / (float)BLOCK_WIDTH, pix_radius.y / (float)BLOCK_WIDTH
     };
     get_bbox(tile_center, tile_radius, tile_bounds, tile_min, tile_max);
 }

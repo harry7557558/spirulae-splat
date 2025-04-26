@@ -59,7 +59,6 @@ def test_rasterize_simple_sorted():
         device=device,
     )
     viewmat[:3, :3] = _torch_impl.quat_to_rotmat(torch.randn(4))
-    BLOCK_SIZE = 16
 
     params = project_gaussians(
         means3d, scales, quats,

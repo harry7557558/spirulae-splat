@@ -59,7 +59,7 @@ class _ProjectGaussians(Function):
             quats,
             viewmat,
             camera.model, camera.intrins, camera.dist_coeffs,
-            camera.h, camera.w, camera.BLOCK_WIDTH,
+            camera.h, camera.w,
             clip_thresh,
         )
 

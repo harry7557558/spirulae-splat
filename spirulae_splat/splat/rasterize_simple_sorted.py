@@ -110,7 +110,7 @@ class _RasterizeGaussiansSimpleSorted(Function):
         ) = ctx.saved_tensors
 
         backward_return = _C.rasterize_simple_sorted_backward(
-            camera.h, camera.w, camera.BLOCK_WIDTH,
+            camera.h, camera.w,
             intrins,
             num_intersects, sorted_indices,
             positions, axes_u, axes_v,

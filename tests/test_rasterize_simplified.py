@@ -11,6 +11,7 @@ from spirulae_splat.splat._camera import _Camera
 
 rasterize.RETURN_IDX = True
 rasterize_simplified.RETURN_IDX = True
+rasterize_depth.DEBUG = True
 
 torch.manual_seed(41)
 
@@ -105,7 +106,7 @@ def test_rasterize_simplified():
         torch.zeros((H, W, 1)).float().to(device),
         1.0,
         bounds, num_tiles_hit,
-        cam.intrins, H, W, cam.BLOCK_WIDTH,
+        cam
     )
 
     output_d = rasterize_depth.rasterize_gaussians_depth(
@@ -123,7 +124,7 @@ def test_rasterize_simplified():
     check_close('normal', output[3], output_r[3])
     check_close('reg_depth', output[4], output_r[4])
     check_close('idx', output[5], output_r[5])
-    check_close('depth1', output[2][..., 0:1]/(output[1]+1e-12), output_d, rtol=1e-3)
+    check_close('depth1', output[2][..., 0:1]/(output[1]+1e-12), output_d[0], rtol=1e-3)
     print()
 
     _output = _torch_impl.rasterize_gaussians_simplified(
@@ -134,8 +135,7 @@ def test_rasterize_simplified():
         _opacities,
         _bounds,
         _num_tiles_hit,
-        cam.intrins,
-        H, W, cam.BLOCK_WIDTH,
+        cam.intrins, H, W,
     )
 
     print("test forward")

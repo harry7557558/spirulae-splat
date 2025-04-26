@@ -106,8 +106,7 @@ def test_rasterize_simple():
         _opacities,
         _bounds,
         _num_tiles_hit,
-        cam.intrins,
-        H, W, cam.BLOCK_WIDTH,
+        cam.intrins, H, W,
         _background
     )
 

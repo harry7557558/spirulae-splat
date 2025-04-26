@@ -48,7 +48,6 @@ def test_rasterize_sorted():
         device=device,
     )
     viewmat[:3, :3] = _torch_impl.quat_to_rotmat(torch.randn(4))
-    BLOCK_SIZE = 16
 
     means3d = 0.8*torch.randn((num_points, 3), device=device)
     scales = 0.8*torch.exp(torch.randn((num_points, 2), device=device))
@@ -115,8 +114,7 @@ def test_rasterize_sorted():
         opacities,
         depth_ref_im, depth_reg_pairwise_factor,
         num_intersects, sorted_indices,
-        intrins,
-        H, W, BLOCK_SIZE,
+        cam
     )
 
     rgb_im, alpha_im = rasterize_gaussians_simple_sorted(

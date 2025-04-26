@@ -96,7 +96,6 @@ def rasterize_preprocess(
         bounds,
         cum_tiles_hit,
         img_height, img_width,
-        _Camera.BLOCK_WIDTH,
     )
 
     return num_intersects, gaussian_ids_sorted, tile_bins
@@ -138,7 +137,7 @@ class _RasterizeGaussiansSimple(Function):
             out_alpha = torch.ones(camera.h, camera.w, device=device)
         else:
             final_idx, out_img, out_alpha = _C.rasterize_simple_forward(
-                camera.h, camera.w, camera.BLOCK_WIDTH,
+                camera.h, camera.w,
                 camera.model, camera.intrins, camera.get_undist_map(),
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
@@ -184,7 +183,7 @@ class _RasterizeGaussiansSimple(Function):
 
         else:
             backward_return = _C.rasterize_simple_backward(
-                camera.h, camera.w, camera.BLOCK_WIDTH,
+                camera.h, camera.w,
                 camera.intrins,
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,

@@ -48,7 +48,6 @@ def test_rasterize():
         device=device,
     )
     viewmat[:3, :3] = _torch_impl.quat_to_rotmat(torch.randn(4))
-    BLOCK_SIZE = 16
 
     means3d = 0.8*torch.randn((num_points, 3), device=device)
     scales = 0.8*torch.exp(torch.randn((num_points, 2), device=device))
@@ -116,8 +115,7 @@ def test_rasterize():
         depth_reg_pairwise_factor,
         bounds,
         num_tiles_hit,
-        intrins,
-        H, W, BLOCK_SIZE,
+        cam,
     )
 
     rgb_im, alpha_im, idx = rasterize_simple.rasterize_gaussians_simple(
@@ -152,8 +150,7 @@ def test_rasterize():
         depth_reg_pairwise_factor,
         _bounds,
         _num_tiles_hit,
-        intrins,
-        H, W, BLOCK_SIZE,
+        intrins, H, W,
     )
 
     print("test forward")

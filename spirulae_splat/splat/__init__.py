@@ -15,6 +15,9 @@ from .utils import (
     depth_to_normal,
 )
 from .sh import spherical_harmonics
+from .cuda import (
+    BLOCK_WIDTH,
+)
 
 __version__ = "0.1.0"
 
@@ -37,4 +40,5 @@ __all__ = [
     "map_gaussian_to_intersects",
     "depth_to_points",
     "depth_to_normal",
+    "BLOCK_WIDTH",
 ]

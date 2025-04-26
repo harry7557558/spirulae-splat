@@ -45,6 +45,7 @@ from spirulae_splat.splat import (
     rasterize_gaussians_simplified_sorted,
     depth_to_points,
     depth_to_normal,
+    BLOCK_WIDTH
 )
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
@@ -846,7 +847,7 @@ class SpirulaeModel(Model):
                 # background_color,
                 self.config.depth_reg_pairwise_factor,
                 *raster_indices,
-                intrins, H, W, ssplat_camera.BLOCK_WIDTH,
+                ssplat_camera
             )  # type: ignore
             timerr.mark("render")  # ?us
 
@@ -869,7 +870,7 @@ class SpirulaeModel(Model):
                 "height": H,
                 "n_cameras": camera.shape[0],
                 "radii": self.config.kernel_radius/3.0 * \
-                      num_tiles_hit.unsqueeze(0)**0.5 / 2 * ssplat_camera.BLOCK_WIDTH,
+                      num_tiles_hit.unsqueeze(0)**0.5 / 2 * BLOCK_WIDTH,
                 "means2d": positions,
             }
         timerr.mark("post")  # 100us-200us

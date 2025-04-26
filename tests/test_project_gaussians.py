@@ -62,7 +62,6 @@ def test_project_gaussians():
         device=device,
     )
     viewmat[:3, :3] = _torch_impl.quat_to_rotmat(torch.randn(4))
-    BLOCK_SIZE = 16
 
     params = (means3d0, scales0, quats0, viewmat)
     def decode_params(params):
@@ -83,8 +82,7 @@ def test_project_gaussians():
     )
     _output = _torch_impl.project_gaussians(
         _means3d, _scales, _quats,
-        _viewmat, (fx, fy, cx, cy),
-        (W, H), BLOCK_SIZE,
+        _viewmat, (fx, fy, cx, cy), (W, H),
         clip_thresh,
     )
 

@@ -121,7 +121,7 @@ __global__ void project_gaussians_forward_kernel(
 
     // compute the projected area
     int2 tile_min, tile_max;
-    get_tile_bbox(center, {bound.x,bound.y}, tile_bounds, tile_min, tile_max, block_width);
+    get_tile_bbox(center, {bound.x,bound.y}, tile_bounds, tile_min, tile_max);
     int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);
     if (tile_area <= 0)
         return;
@@ -262,7 +262,6 @@ __global__ void map_gaussian_to_intersects(
     int4* __restrict__ bounds,
     const int32_t* __restrict__ cum_tiles_hit,
     const dim3 tile_bounds,
-    const unsigned block_width,
     int64_t* __restrict__ isect_ids,
     int32_t* __restrict__ gaussian_ids
 ) {

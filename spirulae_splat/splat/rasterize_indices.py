@@ -12,6 +12,7 @@ import spirulae_splat.splat.cuda as _C
 from spirulae_splat.splat._camera import _Camera
 
 from .rasterize_simple import rasterize_preprocess
+from .cuda import MAX_SORTED_SPLATS, SORTED_INDEX_INF
 
 from spirulae_splat.perf_timer import PerfTimer
 timer = PerfTimer("per_pixel_sort", ema_tau=5)
@@ -41,8 +42,6 @@ def rasterize_gaussians_indices(
     timer.mark("sort")  # ?us
 
     if num_intersects == 0:
-        MAX_SORTED_SPLATS = 32  # TODO: load from CUDA
-        SORTED_INDEX_INF = 0x7fffffff
         num_intersects = torch.zeros(
             (camera.h, camera.w), dtype=torch.int32, device=positions.device)
         indices = torch.empty(
@@ -51,7 +50,7 @@ def rasterize_gaussians_indices(
         return num_intersects, indices
 
     num_intersects, indices, depths = _C.rasterize_indices(
-        camera.h, camera.w, camera.BLOCK_WIDTH,
+        camera.h, camera.w,
         camera.model, camera.intrins, camera.get_undist_map(),
         gaussian_ids_sorted, tile_bins,
         positions, axes_u, axes_v,

@@ -93,7 +93,7 @@ class _RasterizeGaussiansDepthSorted(Function):
 
         backward_return = _C.rasterize_depth_sorted_backward(
             ctx.depth_mode,
-            camera.h, camera.w, camera.BLOCK_WIDTH,
+            camera.h, camera.w,
             camera.intrins,
             final_idx, sorted_indices,
             positions, axes_u, axes_v, opacities,

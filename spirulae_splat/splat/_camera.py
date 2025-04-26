@@ -13,8 +13,6 @@ class _Camera:
     _undist_maps_cache_size: List[int] = [0]
     _undist_maps_max_cache_size: int = 1024*1024*2*128  # number of floats, 1GB
 
-    BLOCK_WIDTH = 16
-
     def __init__(self,
                  height: int,
                  width: int,
@@ -38,7 +36,6 @@ class _Camera:
     def validate_model(self):
         assert self.model in ["", "OPENCV", "OPENCV_FISHEYE"], \
             f"Invalid camera model: {self.model}"
-        assert 1 < self.BLOCK_WIDTH <= 16, "block_width must be between 2 and 16"
 
     def is_distorted(self):
         return self.model != ""

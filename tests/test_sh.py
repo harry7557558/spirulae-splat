@@ -9,8 +9,7 @@ from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
 device = torch.device("cuda:0")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_sh(method):
+def _test_sh(method):
     torch.random.manual_seed(42)
 
     num_points = 1024
@@ -53,7 +52,6 @@ def test_sh(method):
     torch.testing.assert_close(check_colors, gt_colors)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def profile_sh(
     method, num_points: int = 1_000_000, degree: int = 4, n_iters: int = 1000
 ):
@@ -95,8 +93,16 @@ def profile_sh(
     print(f"[Bwd] Method: {method}, ellipsed: {ellipsed:.2f} ms")
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_sh_poly():
+    _test_sh("poly")
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_sh_fast():
+    _test_sh("poly")
+
 if __name__ == "__main__":
-    test_sh("poly")
-    test_sh("fast")
+    test_sh_poly()
+    test_sh_fast()
     profile_sh("poly")
     profile_sh("fast")

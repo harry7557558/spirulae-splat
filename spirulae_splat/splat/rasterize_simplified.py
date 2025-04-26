@@ -110,7 +110,7 @@ class _RasterizeGaussiansSimplified(Function):
                 final_idx, out_alpha,
                 out_img, out_depth, out_normal, out_reg_depth
             ) = _C.rasterize_simplified_forward(
-                camera.h, camera.w, camera.BLOCK_WIDTH,
+                camera.h, camera.w,
                 camera.model, camera.intrins, camera.get_undist_map(),
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,
@@ -170,7 +170,7 @@ class _RasterizeGaussiansSimplified(Function):
 
             assert colors.shape[-1] == 3
             backward_return = _C.rasterize_simplified_backward(
-                camera.h, camera.w, camera.BLOCK_WIDTH,
+                camera.h, camera.w,
                 camera.model, camera.intrins, camera.get_undist_map(),
                 gaussian_ids_sorted, tile_bins,
                 positions, axes_u, axes_v,

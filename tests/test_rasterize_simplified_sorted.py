@@ -5,6 +5,7 @@ from torch.func import vjp  # type: ignore
 
 from spirulae_splat.splat import _torch_impl
 from spirulae_splat.splat.project_gaussians import project_gaussians
+from spirulae_splat.splat import rasterize_simplified, rasterize, rasterize_depth_sorted
 from spirulae_splat.splat import (
     project_gaussians,
     rasterize_gaussians_indices,
@@ -14,6 +15,10 @@ from spirulae_splat.splat import (
 )
 import spirulae_splat.splat.cuda as _C
 from spirulae_splat.splat._camera import _Camera
+
+rasterize.RETURN_IDX = True
+rasterize_simplified.RETURN_IDX = True
+rasterize_depth_sorted.DEBUG = True
 
 torch.manual_seed(41)
 
@@ -106,7 +111,7 @@ def test_rasterize_simplified_sorted():
         opacities,
         torch.zeros((H, W, 1)).float().to(device), 1.0,
         num_intersects, sorted_indices,
-        cam.intrins, H, W, cam.BLOCK_WIDTH,
+        cam
     )
 
     output_d = rasterize_gaussians_depth_sorted(
@@ -122,7 +127,7 @@ def test_rasterize_simplified_sorted():
     check_close('depth', output[2], output_r[2])
     check_close('normal', output[3], output_r[3])
     check_close('reg_depth', output[4], output_r[4])
-    check_close('depth1', output[2][..., 0:1]/(output[1]+1e-12), output_d, rtol=1e-3)
+    check_close('depth1', output[2][..., 0:1]/(output[1]+1e-12), output_d[0], rtol=1e-3)
     print()
 
     _output = _torch_impl.rasterize_gaussians_simplified_sorted(
