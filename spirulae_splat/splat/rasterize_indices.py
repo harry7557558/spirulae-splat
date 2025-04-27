@@ -60,8 +60,7 @@ def rasterize_gaussians_indices(
 
     num_intersects, indices, depths = [x.contiguous() for x in (num_intersects, indices, depths)]
 
-    num_pixels = camera.h * camera.w
-    # _test_sort(num_pixels, num_intersects, indices, depths)
+    # _test_sort(camera.h, camera.w, num_intersects, indices, depths)
 
     if False:
         sorted_depths, argsort = torch.sort(depths, dim=-1)
@@ -78,7 +77,7 @@ def rasterize_gaussians_indices(
         # i.e. "CUDA error: an illegal memory access was encountered"
         _C.sort_per_pixel(
             "insertion",
-            num_pixels,
+            camera.h, camera.w,
             num_intersects, indices, depths
         )
         timer.end("sort")
@@ -86,7 +85,7 @@ def rasterize_gaussians_indices(
     return num_intersects, indices
 
 
-def _test_sort(num_pixels, num_intersects, indices, depths):
+def _test_sort(h, w, num_intersects, indices, depths):
     """Making this work requires changing `#if 0` at the end of `rasterize_indices_kernel()` to `1`
         Neglectable performance difference in practice"""
 
@@ -99,8 +98,7 @@ def _test_sort(num_pixels, num_intersects, indices, depths):
     sorted_depths = depths.clone()
     _C.sort_per_pixel(
         "heap",
-        num_pixels,
-        num_intersects, sorted_indices, sorted_depths
+        h, w, num_intersects, sorted_indices, sorted_depths
     )
 
     torch.testing.assert_close(sorted_depths, sorted_depths_ref)

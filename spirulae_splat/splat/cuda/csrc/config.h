@@ -3,7 +3,9 @@
 #define BLOCK_WIDTH 16
 #define MAX_BLOCK_SIZE ( 16 * 16 )
 #define N_THREADS 256
+
 // for per-pixel sorting
+#define BLOCK_WIDTH_PPS 8
 #define N_THREADS_PPS 64
 
 // kernel to use

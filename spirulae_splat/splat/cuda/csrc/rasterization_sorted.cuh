@@ -32,14 +32,15 @@ enum class PerPixelSortType {
     float* __restrict__ sorted_depths_
 
 #define _ARGS_sort_per_pixel_kernel \
-    const unsigned num_pixels, \
+    const unsigned img_height, \
+    const unsigned img_width, \
     const int* __restrict__ num_intersects, \
     int32_t* __restrict__ indices_, \
     float* __restrict__ depths_
 
 #define _ARGS_rasterize_simple_sorted_forward_kernel \
-    const int img_width, \
-    const int img_height, \
+    const unsigned img_height, \
+    const unsigned img_width, \
     const float4 intrins, \
     const float2* __restrict__ undistortion_map, \
     const int32_t* __restrict__ sorted_indices_, \
@@ -53,8 +54,8 @@ enum class PerPixelSortType {
     float* __restrict__ out_alpha
 
 #define _ARGS_rasterize_depth_sorted_forward_kernel \
-    const int img_width, \
     const int img_height, \
+    const int img_width, \
     const float4 intrins, \
     const float2* __restrict__ undistortion_map, \
     const int32_t* __restrict__ sorted_indices_, \
@@ -85,8 +86,8 @@ enum class PerPixelSortType {
     float* __restrict__ v_opacities
 
 #define _ARGS_rasterize_simplified_sorted_forward_kernel \
+const int img_height, \
     const int img_width, \
-    const int img_height, \
     const float4 intrins, \
     const float2* __restrict__ undistortion_map, \
     const int32_t* __restrict__ sorted_indices_, \
@@ -102,8 +103,8 @@ enum class PerPixelSortType {
     float* __restrict__ out_depth_reg
 
 #define _ARGS_rasterize_simplified_sorted_backward_kernel \
-    const int img_width, \
     const int img_height, \
+    const int img_width, \
     const float4 intrins, \
     const float2* __restrict__ undistortion_map, \
     const int* __restrict__ num_intersects, \

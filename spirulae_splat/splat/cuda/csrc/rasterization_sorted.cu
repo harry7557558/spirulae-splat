@@ -329,9 +329,12 @@ template <PerPixelSortType SORT_TYPE>
 __global__ void sort_per_pixel_kernel(
     _ARGS_sort_per_pixel_kernel
 ) {
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if (idx >= num_pixels)
+    unsigned i = threadIdx.y + blockIdx.y * blockDim.y;
+    unsigned j = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i >= img_height || j >= img_width)
         return;
+    unsigned idx = i * img_width + j;
+    unsigned tidx = threadIdx.y * blockDim.x + threadIdx.x;
 
     int n = num_intersects[idx];
     if (n <= 1)
@@ -343,8 +346,8 @@ __global__ void sort_per_pixel_kernel(
     __shared__ int32_t indices_s[MAX_SORTED_SPLATS*N_THREADS_PPS];
     __shared__ float depths_s[MAX_SORTED_SPLATS*N_THREADS_PPS];
 
-    int32_t* indices = &indices_s[MAX_SORTED_SPLATS*threadIdx.x];
-    float* depths = &depths_s[MAX_SORTED_SPLATS*threadIdx.x];
+    int32_t* indices = &indices_s[tidx*MAX_SORTED_SPLATS];
+    float* depths = &depths_s[tidx*MAX_SORTED_SPLATS];
     _pps_memcpy<int32_t>(n, indices_g, indices);
     _pps_memcpy<float>(n, depths_g, depths);
 
@@ -377,17 +380,17 @@ template<CameraType CAMERA_TYPE>
 __global__ void rasterize_simple_sorted_forward_kernel(
     _ARGS_rasterize_simple_sorted_forward_kernel
 ) {
-    const int num_pixels = img_width * img_height;
-    int pix_id = threadIdx.x + blockIdx.x * blockDim.x;
-    if (pix_id >= num_pixels)
+    int i = threadIdx.y + blockIdx.y * blockDim.y;
+    int j = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i >= img_height || j >= img_width)
         return;
+    int pix_id = i * img_width + j;
 
     const float fx = intrins.x;
     const float fy = intrins.y;
     const float cx = intrins.z;
     const float cy = intrins.w;
 
-    int i = pix_id / img_width, j = pix_id % img_width;
     glm::vec2 pos_2d = { (j + 0.5f - cx) / fx, (i + 0.5f - cy) / fy };
     if (CAMERA_TYPE == CameraType::GenericDistorted) {
         float2 pos_2d_u = undistortion_map[pix_id];
@@ -606,17 +609,17 @@ template <DepthMode DEPTH_MODE, CameraType CAMERA_TYPE>
 __global__ void rasterize_depth_sorted_forward_kernel(
     _ARGS_rasterize_depth_sorted_forward_kernel
 ) {
-    const int num_pixels = img_width * img_height;
-    int pix_id = threadIdx.x + blockIdx.x * blockDim.x;
-    if (pix_id >= num_pixels)
+    int i = threadIdx.y + blockIdx.y * blockDim.y;
+    int j = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i >= img_height || j >= img_width)
         return;
+    int pix_id = i * img_width + j;
 
     const float fx = intrins.x;
     const float fy = intrins.y;
     const float cx = intrins.z;
     const float cy = intrins.w;
 
-    int i = pix_id / img_width, j = pix_id % img_width;
     glm::vec2 pos_2d = { (j + 0.5f - cx) / fx, (i + 0.5f - cy) / fy };
     if (CAMERA_TYPE == CameraType::GenericDistorted) {
         float2 pos_2d_u = undistortion_map[pix_id];
@@ -1384,17 +1387,17 @@ template<CameraType CAMERA_TYPE>
 __global__ void rasterize_simplified_sorted_forward_kernel(
     _ARGS_rasterize_simplified_sorted_forward_kernel
 ) {
-    const int num_pixels = img_width * img_height;
-    int pix_id = threadIdx.x + blockIdx.x * blockDim.x;
-    if (pix_id >= num_pixels)
+    int i = threadIdx.y + blockIdx.y * blockDim.y;
+    int j = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i >= img_height || j >= img_width)
         return;
+    int pix_id = i * img_width + j;
 
     const float fx = intrins.x;
     const float fy = intrins.y;
     const float cx = intrins.z;
     const float cy = intrins.w;
 
-    int i = pix_id / img_width, j = pix_id % img_width;
     glm::vec2 pos_2d = { (j + 0.5f - cx) / fx, (i + 0.5f - cy) / fy };
     if (CAMERA_TYPE == CameraType::GenericDistorted) {
         float2 pos_2d_u = undistortion_map[pix_id];
@@ -1486,10 +1489,11 @@ template<CameraType CAMERA_TYPE>
 __global__ void rasterize_simplified_sorted_backward_kernel(
     _ARGS_rasterize_simplified_sorted_backward_kernel
 ) {
-    const int num_pixels = img_width * img_height;
-    int pix_id = threadIdx.x + blockIdx.x * blockDim.x;
-    if (pix_id >= num_pixels)
+    int i = threadIdx.y + blockIdx.y * blockDim.y;
+    int j = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i >= img_height || j >= img_width)
         return;
+    int pix_id = i * img_width + j;
 
     int n = num_intersects[pix_id];
     if (n == 0) return;
@@ -1499,7 +1503,6 @@ __global__ void rasterize_simplified_sorted_backward_kernel(
     const float cx = intrins.z;
     const float cy = intrins.w;
 
-    int i = pix_id / img_width, j = pix_id % img_width;
     glm::vec2 pos_2d = { (j + 0.5f - cx) / fx, (i + 0.5f - cy) / fy };
     if (CAMERA_TYPE == CameraType::GenericDistorted) {
         float2 pos_2d_u = undistortion_map[pix_id];
