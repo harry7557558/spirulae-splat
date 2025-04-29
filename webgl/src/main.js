@@ -24,16 +24,30 @@ async function main() {
     const reader = req.body.getReader();
     let ssplatData = new Uint8Array(req.headers.get("content-length"));
 
-    Worker.createWorker(window);
-    // Worker.createRayTracingWorker(window);
+    let RenderModes = {
+        default: {
+            createWorker: Worker.createWorker,
+            Renderer: RasterRenderer,
+        },
+        rt: {
+            createWorker: Worker.createRayTracingWorker,
+            Renderer: RayTracingRenderer
+        },
+        pps: {
+            createWorker: Worker.createWorker,
+            Renderer: PerPixelSortingRenderer
+        },
+    };
+    let renderMode = RenderModes[params.get("renderer") || "default"];
+
+    renderMode.createWorker(window);
 
     const canvas = document.getElementById("canvas");
 
     const gl = canvas.getContext("webgl2", {
         antialias: false,
     });
-    let renderer = new RasterRenderer(gl, viewportController);
-    // let renderer = new RayTracingRenderer(gl, viewportController);
+    let renderer = new renderMode.Renderer(gl, viewportController);
 
     let vertexCount = 0;
 

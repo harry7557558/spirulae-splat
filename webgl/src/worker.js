@@ -206,6 +206,94 @@ Worker.unpackModel = function(header, buffer) {
 }
 
 
+Worker.generateBaseTexture = function(header, base) {
+    let vertexCount = base.opacities.length;
+
+    var basewidth = 1024 * 3;
+    var baseheight = Math.ceil((3 * vertexCount) / basewidth);
+    var basedata = new Uint32Array(basewidth * baseheight * 4);
+    var basedataF = new Float32Array(basedata.buffer);
+    for (let i = 0; i < vertexCount; i++) {
+        let iTex = 12 * i;
+
+        // position - 3 floats, info0 xyz
+        basedataF[iTex + 0] = base.means[3*i+0];
+        basedataF[iTex + 1] = base.means[3*i+1];
+        basedataF[iTex + 2] = base.means[3*i+2];
+
+        // scale - 2 floats, info0 w, info1 x
+        basedataF[iTex + 3] = Math.exp(base.scales[2*i+0]);
+        basedataF[iTex + 4] = Math.exp(base.scales[2*i+1]);
+
+        // quat - 4 halfs, info1 yz
+        let quat = [
+            base.quats[4*i+0],
+            base.quats[4*i+1],
+            base.quats[4*i+2],
+            base.quats[4*i+3],
+        ];
+        basedata[iTex + 5] = packHalf2x16(quat[0], quat[1]);
+        basedata[iTex + 6] = packHalf2x16(quat[2], quat[3]);
+
+        // anisotropy - 2 floats, info1 w, info2 x, DEPRECATED
+        basedataF[iTex + 7] = basedataF[iTex + 8] = 0.0;
+
+        // rgba - 4 halfs, info2 yz
+        let m = header.config.sh_degree == 0 ? 0.28209479177387814 : 1.0;
+        let b = header.config.sh_degree == 0 ? 0.5 : 0.0;
+        let rgba = [
+            b + m * base.features_dc[3*i+0],
+            b + m * base.features_dc[3*i+1],
+            b + m * base.features_dc[3*i+2],
+            base.opacities[i]
+        ];
+        basedata[iTex + 9] = packHalf2x16(rgba[0], rgba[1]);
+        basedata[iTex + 10] = packHalf2x16(rgba[2], rgba[3]);
+    }
+
+    self.postMessage({
+        baseTexture: { basedata, basewidth, baseheight }
+    }, [basedata.buffer]);
+}
+
+Worker.generateCHTexture = function(header, harmonics) {
+    if (!harmonics) return;
+    let degree_r = header.config.ch_degree_r;
+    let degree_phi = header.config.ch_degree_phi;
+    let dim_ch = degree_r * (2*degree_phi+1);
+    if (dim_ch == 0)
+        return;
+    let pixelPerVert = Math.ceil(dim_ch/2);
+    let vertexCount = Math.floor(harmonics.features_ch.length/(3*dim_ch));
+
+    var chwidth = Math.floor(4096/pixelPerVert)*pixelPerVert;
+    var chheight = Math.ceil(pixelPerVert*vertexCount/chwidth);
+    var chdata = Worker.wasmModule.packHarmonicTexture(
+        "ch", dim_ch, chwidth, chheight, harmonics.features_ch);
+
+    self.postMessage({
+        chTexture: { chdata, chwidth, chheight }
+    }, [chdata.buffer]);
+}
+
+Worker.generateSHTexture = function(header, harmonics) {
+    if (!harmonics) return;
+    let degree = header.config.sh_degree;
+    let dim_sh = degree * (degree + 2);
+    let pixelPerVert = Math.ceil(dim_sh/2);
+    let vertexCount = Math.floor(harmonics.features_sh.length/(3*dim_sh));
+
+    var shwidth = Math.floor(4096/pixelPerVert)*pixelPerVert;
+    var shheight = Math.ceil(pixelPerVert*vertexCount/shwidth);
+    var shdata = Worker.wasmModule.packHarmonicTexture(
+        "sh", dim_sh, shwidth, shheight, harmonics.features_sh);
+
+    self.postMessage({
+        shTexture: { shdata, shwidth, shheight }
+    }, [shdata.buffer]);
+}
+
+
 Worker.createWorker = function(self) {
     let header;
     let base, harmonics;
@@ -217,104 +305,16 @@ Worker.createWorker = function(self) {
     let lastBaseVertexCount = 0,
         lastHarmonicsLength = 0;
 
-    function generateBaseTexture() {
-        if (!base) return;
-        let vertexCount = base.opacities.length;
-
-        var basewidth = 1024 * 3;
-        var baseheight = Math.ceil((3 * vertexCount) / basewidth);
-        var basedata = new Uint32Array(basewidth * baseheight * 4);
-        var basedataF = new Float32Array(basedata.buffer);
-        for (let i = 0; i < vertexCount; i++) {
-            let iTex = 12 * i;
-
-            // position - 3 floats, info0 xyz
-            basedataF[iTex + 0] = base.means[3*i+0];
-            basedataF[iTex + 1] = base.means[3*i+1];
-            basedataF[iTex + 2] = base.means[3*i+2];
-
-            // scale - 2 floats, info0 w, info1 x
-            basedataF[iTex + 3] = Math.exp(base.scales[2*i+0]);
-            basedataF[iTex + 4] = Math.exp(base.scales[2*i+1]);
-
-            // quat - 4 halfs, info1 yz
-            let quat = [
-                base.quats[4*i+0],
-                base.quats[4*i+1],
-                base.quats[4*i+2],
-                base.quats[4*i+3],
-            ];
-            basedata[iTex + 5] = packHalf2x16(quat[0], quat[1]);
-            basedata[iTex + 6] = packHalf2x16(quat[2], quat[3]);
-
-            // anisotropy - 2 floats, info1 w, info2 x, DEPRECATED
-            basedataF[iTex + 7] = basedataF[iTex + 8] = 0.0;
-
-            // rgba - 4 halfs, info2 yz
-            let m = header.config.sh_degree == 0 ? 0.28209479177387814 : 1.0;
-            let b = header.config.sh_degree == 0 ? 0.5 : 0.0;
-            let rgba = [
-                b + m * base.features_dc[3*i+0],
-                b + m * base.features_dc[3*i+1],
-                b + m * base.features_dc[3*i+2],
-                base.opacities[i]
-            ];
-            basedata[iTex + 9] = packHalf2x16(rgba[0], rgba[1]);
-            basedata[iTex + 10] = packHalf2x16(rgba[2], rgba[3]);
-        }
-
-        self.postMessage({
-            baseTexture: { basedata, basewidth, baseheight }
-        }, [basedata.buffer]);
-    }
-
-    function generateCHTexture() {
-        if (!harmonics) return;
-        let degree_r = header.config.ch_degree_r;
-        let degree_phi = header.config.ch_degree_phi;
-        let dim_ch = degree_r * (2*degree_phi+1);
-        if (dim_ch == 0)
-            return;
-        let pixelPerVert = Math.ceil(dim_ch/2);
-        let vertexCount = Math.floor(harmonics.features_ch.length/(3*dim_ch));
-
-        var chwidth = Math.floor(4096/pixelPerVert)*pixelPerVert;
-        var chheight = Math.ceil(pixelPerVert*vertexCount/chwidth);
-        var chdata = Worker.wasmModule.packHarmonicTexture(
-            "ch", dim_ch, chwidth, chheight, harmonics.features_ch);
-
-        self.postMessage({
-            chTexture: { chdata, chwidth, chheight }
-        }, [chdata.buffer]);
-    }
-
-    function generateSHTexture() {
-        if (!harmonics) return;
-        let degree = header.config.sh_degree;
-        let dim_sh = degree * (degree + 2);
-        let pixelPerVert = Math.ceil(dim_sh/2);
-        let vertexCount = Math.floor(harmonics.features_sh.length/(3*dim_sh));
-
-        var shwidth = Math.floor(4096/pixelPerVert)*pixelPerVert;
-        var shheight = Math.ceil(pixelPerVert*vertexCount/shwidth);
-        var shdata = Worker.wasmModule.packHarmonicTexture(
-            "sh", dim_sh, shwidth, shheight, harmonics.features_sh);
-
-        self.postMessage({
-            shTexture: { shdata, shwidth, shheight }
-        }, [shdata.buffer]);
-    }
-
     function runSort(viewProj) {
         if (!base) return;
         if (harmonics && harmonics.features_sh.length > lastHarmonicsLength) {
             console.time("generate CH/SH texture");
-            generateCHTexture();
-            generateSHTexture();
+            Worker.generateCHTexture(header, harmonics);
+            Worker.generateSHTexture(header, harmonics);
             console.timeEnd("generate CH/SH texture");
             lastHarmonicsLength = harmonics.features_sh.length;
         }
-        let vertexCount = base.opacities.length;
+        vertexCount = base.opacities.length;
         if (lastBaseVertexCount == vertexCount) {
             let dot =
                 lastProj[2] * viewProj[2] +
@@ -325,7 +325,7 @@ Worker.createWorker = function(self) {
             }
         } else {
             console.time("generate base texture");
-            generateBaseTexture();
+            Worker.generateBaseTexture(header, base);
             lastBaseVertexCount = vertexCount;
             console.timeEnd("generate base texture");
         }
@@ -527,18 +527,13 @@ Worker.createRayTracingWorker = function(self) {
     let lastBaseVertexCount = 0,
         lastHarmonicsLength = 0;
 
-    function runSort(viewProj) {
-        if (!base) return;
-        if (harmonics && harmonics.features_sh.length > lastHarmonicsLength) {
-            lastHarmonicsLength = harmonics.features_sh.length;
-        }
-    }
-
     const throttledSort = () => {
         if (!sortRunning) {
             sortRunning = true;
             let lastView = viewProj;
-            runSort(lastView);
+            if (base && harmonics && harmonics.features_sh.length > lastHarmonicsLength) {
+                lastHarmonicsLength = harmonics.features_sh.length;
+            }
             setTimeout(() => {
                 sortRunning = false;
                 if (lastView !== viewProj) {

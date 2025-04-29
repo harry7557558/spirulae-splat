@@ -18,17 +18,28 @@ layout(location = 1) in int index;
 #include "shader-utils-sh.glsl"
 #line 20
 
-flat out vec4 vColor;
-flat out vec3 vPosition;
-flat out vec3 vAxesU;
-flat out vec3 vAxesV;
-flat out int vIndex;
+flat out uvec4 vColor0;
+flat out uvec4 vColor1;
+flat out uvec4 vColor2;
 
-#define USE_EXACT_DISTORTION 0
+uniform float wh_ratio;
+
+
+#define USE_EXACT_DISTORTION 1
 
 void main () {
-    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
-    vPosition = vec3(0);
+    ivec2 pix_id = ivec2(
+        3 * (index % (BBOX_OUTPUT_WIDTH/3)),
+        (3*index) / BBOX_OUTPUT_WIDTH
+    );
+    vec4 xywh = vec4(pix_id.x, pix_id.y, 3, 1) / float(BBOX_OUTPUT_WIDTH);
+    gl_Position = vec4(
+        -1.0 + 2.0 * (xywh.xy + xywh.zw * (0.5+0.5*vertexPosition)) * vec2(1, wh_ratio),
+        0.0, 1.0);
+
+    vColor0 = uvec4(-1, 0, 0, 0);  // id, pos
+    vColor1 = uvec4(0, 0, 0, 0);  // uv (6 x half) + rgba (4 bytes)
+    vColor2 = uvec4(0, 0, 0, 0);  // xywh bounding box in tiles
 
     if (index == -1) return;
 
@@ -127,20 +138,26 @@ void main () {
     vec4 rgba = vec4(unpackHalf2x16(info2.y), unpackHalf2x16(info2.z));
     vec3 rgb = rgba.xyz;
     if (sh_dim > 0) {
+    #if 0
         init_coeffs(index);
         vec3 viewdir = p_world - inverse(view)[3].xyz;
         rgb = sh_coeffs_to_color_fast(rgb, sh_degree, viewdir) + 0.5;
+    #else
+        // disable SH - there's a bug somewhere (in red component)
+        rgb = 0.2820947917738781 * rgb + 0.5;
+    #endif
     }
-    rgb = max(rgb, 0.0);
+    rgba.xyz = rgb;
 
-    vColor = vec4(rgb, rgba.w);
-    vPosition = p_view.xyz;
-    vAxesU = axis_u;
-    vAxesV = axis_v;
-    vIndex = index;
-
-    gl_Position = vec4(
-        vec2(1,-1) * (-1.0 + 2.0 * (center + vertexPosition * bound.xy) / viewport),
-        0.0, 1.0);
+    vColor0.x = uint(index);
+    vColor0.y = floatBitsToUint(p_view.x);
+    vColor0.z = floatBitsToUint(p_view.y);
+    vColor0.w = floatBitsToUint(p_view.z);
+    vColor1.x = packHalf2x16(axis_u.xy);
+    vColor1.y = packHalf2x16(vec2(axis_u.z, axis_v.x));
+    vColor1.z = packHalf2x16(axis_v.yz);
+    vColor1.w = pack_rgba(rgba);
+    vColor2.xy = uvec2(floor(max(center-bound.xy, 0.0) / float(TILE_SIZE)));
+    vColor2.zw = uvec2(ceil(min(center+bound.xy, viewport-1.0) / float(TILE_SIZE)));
 
 }

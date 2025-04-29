@@ -1,6 +1,20 @@
-This WebGL viewer is modified from splat. See below.
+This WebGL-based viewer is modified from [splat](https://github.com/antimatter15/splat) by Kevin Kwok.
 
---------
+Major Changes
+- 3DGS -> 2DGS, with custom 2DGS features (e.g. CH texture, view-dependent background color)
+- Add support for spherical harmonics
+- Load compressed `.ssplat` format instead of weighty PLY
+- Support camera distortion, including fisheye cameras
+- Added multiple renderers &ndash; see below
+
+Renderers (`?renderer=[renderer_id]`)
+- `default`: classical pipeline with throttled sorting, as per original, fully support SH/CH
+- `rt`: ray tracing with BVH, powerful graphics card recommended
+- `pps`: per-pixel sorting, using tiles similar to CUDA rasterizer (currently CPU bound)
+
+----
+
+# Original README
 
 # splat
 

@@ -2,6 +2,18 @@
 
 #define PI 3.14159265
 
+// for per pixel sorting
+#define TILE_SIZE 24
+#define BBOX_OUTPUT_WIDTH 1536
+
+uint pack_rgba(vec4 cf) {
+    uvec4 c = uvec4(clamp(cf, 0.0, 1.0) * 255.0);
+    return (c.x<<24) | (c.y<<16) | (c.z<<8) | c.w;
+}
+vec4 unpack_rgba(uint c) {
+    uvec4 cf = uvec4(c>>24, (c>>16)&uint(255), (c>>8)&uint(255), c&uint(255));
+    return (vec4(cf)+0.5) / 255.0;
+}
 
 // camera distortion models
 
@@ -233,4 +245,211 @@ vec2 undistort_fisheye(in vec2 p, in vec4 undist_coeffs) {
     float theta = r*(1.0 + r2*(l1 + r2*(l2 + r2*(l3 + r2*l4))));
 
     return p * (tan(theta)/r);
+}
+
+
+
+mat3 quat_to_rotmat(vec4 quat) {
+    // quat to rotation matrix
+    float w = quat.x;
+    float x = quat.y;
+    float y = quat.z;
+    float z = quat.w;
+
+    // glm matrices are column-major
+    return mat3(
+        1.f - 2.f * (y * y + z * z),  // [0][0]
+        2.f * (x * y + w * z),  // [0][1]
+        2.f * (x * z - w * y),  // [0][2]
+        2.f * (x * y - w * z),  // [1][0]
+        1.f - 2.f * (x * x + z * z),  // [1][1]
+        2.f * (y * z + w * x),  // [1][2]
+        2.f * (x * z + w * y),  // [2][0]
+        2.f * (y * z - w * x),  // [2][1]
+        1.f - 2.f * (x * x + y * y)  // [2][2]
+    );
+}
+
+
+// axis-aligned bounding box for perspective camera
+bool project_bound_perspective(
+    vec3 T, vec3 V0, vec3 V1,
+    float fx, float fy, float cx, float cy,
+    out vec2 center, out vec2 bound
+) {
+    // 2d conic coefficients
+    // A x^2 + 2B xy + C y^2 + 2D x + 2E y + F = 0
+    vec3 V01 = cross(V0, V1);
+    vec3 V0T = cross(T, V0);
+    vec3 V1T = cross(T, V1);
+    float A = V0T.x * V0T.x + V1T.x * V1T.x - V01.x * V01.x;
+    float B = -V01.y * V01.x + V1T.y * V1T.x + V0T.y * V0T.x;
+    float C = V0T.y * V0T.y + V1T.y * V1T.y - V01.y * V01.y;
+    float D = V0T.z * V0T.x + V1T.z * V1T.x - V01.z * V01.x;
+    float E = -V01.z * V01.y + V1T.z * V1T.y + V0T.z * V0T.y;
+    float F = V0T.z * V0T.z + V1T.z * V1T.z - V01.z * V01.z;
+
+    if (!(B * B < A * C))
+        return false;
+
+    // translate to origin
+    float U = (C * D - B * E) / (B * B - A * C);
+    float V = (A * E - B * D) / (B * B - A * C);
+    float S = A * U*U + 2.0*B * U*V + C * V*V + 2.0*D * U + 2.0*E * V + F;
+
+    // bounds
+    float W = sqrt(C * S / (B * B - A * C));
+    float H = sqrt(A * S / (B * B - A * C));
+    center = vec2(fx*U+cx, fx*V+cy);
+    bound = vec2(fx*W, fy*H);
+
+    return true;
+}
+
+// axis-aligned bounding box for OpenCV camera
+bool project_bound_opencv(
+    vec3 T, vec3 V0, vec3 V1,
+    float fx, float fy, float cx, float cy, vec4 dist_coeffs,
+    out vec2 center, out vec2 bound
+) {
+    // 2d conic coefficients
+    // A x^2 + 2B xy + C y^2 + 2D x + 2E y + F = 0
+    vec3 V01 = cross(V0, V1);
+    vec3 V0T = cross(T, V0);
+    vec3 V1T = cross(T, V1);
+    float A = V0T.x * V0T.x + V1T.x * V1T.x - V01.x * V01.x;
+    float B = -V01.y * V01.x + V1T.y * V1T.x + V0T.y * V0T.x;
+    float C = V0T.y * V0T.y + V1T.y * V1T.y - V01.y * V01.y;
+    float D = V0T.z * V0T.x + V1T.z * V1T.x - V01.z * V01.x;
+    float E = -V01.z * V01.y + V1T.z * V1T.y + V0T.z * V0T.y;
+    float F = V0T.z * V0T.z + V1T.z * V1T.z - V01.z * V01.z;
+
+    if (!(B * B < A * C))
+        return false;
+
+    // translate to origin
+    float U = (C * D - B * E) / (B * B - A * C);
+    float V = (A * E - B * D) / (B * B - A * C);
+    float S = A * U*U + 2.0*B * U*V + C * V*V + 2.0*D * U + 2.0*E * V + F;
+
+    // represent ellipse in principal parametric form
+    vec2 p0 = vec2(U, V);
+    float delta = sqrt((A-C)*(A-C) + 4.0*B*B);
+    float eps = min(1e-8*S, -1e-24);
+    float lambda1 = 2.0*S/min(delta-(A+C),eps);
+    float lambda2 = 2.0*S/min(-delta-(A+C),eps);
+    vec2 v0 = normalize(vec2(-A+C+delta, -2.0*B));
+    vec2 v1 = sqrt(lambda1) * v0;
+    vec2 v2 = sqrt(lambda2) * vec2(-v0.y, v0.x);
+
+    // rejection
+    float fr = opencv_radius(dist_coeffs);
+
+    // brute force sampling on parametric
+    // see here for quadratic fit code (not faster): https://github.com/harry7557558/spirulae-splat/blob/f7dc2989e5383bbeb08d5723a4801a80f11242ca/webgl/shader-vert.glsl#L238-L280
+    const float N = 16.0;
+    float x0 = 1e4, x1 = -1e4, y0 = 1e4, y1 = -1e4;
+    for (float i = 0.0; i < N; i++) {
+        float t = 2.0*PI*i/N;
+        vec2 p = p0+v1*cos(t)+v2*sin(t);
+        if (dot(p,p) < fr*fr) {
+            vec2 c = distort_opencv(p, dist_coeffs);
+            x0 = min(x0, c.x); x1 = max(x1, c.x);
+            y0 = min(y0, c.y); y1 = max(y1, c.y);
+        }
+    }
+    if (x0 > x1 || y0 > y1)
+        return false;
+
+    // update bounds
+    vec2 b0 = vec2(x0, y0);
+    vec2 b1 = vec2(x1, y1);
+    center = 0.5*(b0+b1) * vec2(fx,fy) + vec2(cx,cy);
+    bound = 0.5*(b1-b0) * vec2(fx,fy);
+    return true;
+}
+
+// axis-aligned bounding box for fisheye camera, by sampling on 2D parametric
+bool project_bound_fisheye_2d(
+    vec3 T, vec3 V0, vec3 V1,
+    float fx, float fy, float cx, float cy, vec4 dist_coeffs,
+    out vec2 center, out vec2 bound
+) {
+    // 2d conic coefficients
+    // A x^2 + 2B xy + C y^2 + 2D x + 2E y + F = 0
+    vec3 V01 = cross(V0, V1);
+    vec3 V0T = cross(T, V0);
+    vec3 V1T = cross(T, V1);
+    float A = V0T.x * V0T.x + V1T.x * V1T.x - V01.x * V01.x;
+    float B = -V01.y * V01.x + V1T.y * V1T.x + V0T.y * V0T.x;
+    float C = V0T.y * V0T.y + V1T.y * V1T.y - V01.y * V01.y;
+    float D = V0T.z * V0T.x + V1T.z * V1T.x - V01.z * V01.x;
+    float E = -V01.z * V01.y + V1T.z * V1T.y + V0T.z * V0T.y;
+    float F = V0T.z * V0T.z + V1T.z * V1T.z - V01.z * V01.z;
+
+    if (!(B * B < A * C))
+        return false;
+
+    // translate to origin
+    float U = (C * D - B * E) / (B * B - A * C);
+    float V = (A * E - B * D) / (B * B - A * C);
+    float S = A * U*U + 2.0*B * U*V + C * V*V + 2.0*D * U + 2.0*E * V + F;
+
+    // represent ellipse in principal parametric form
+    vec2 p0 = vec2(U, V);
+    float delta = sqrt((A-C)*(A-C) + 4.0*B*B);
+    float eps = min(1e-8*S, -1e-24);
+    float lambda1 = 2.0*S/min(delta-(A+C),eps);
+    float lambda2 = 2.0*S/min(-delta-(A+C),eps);
+    vec2 v0 = normalize(vec2(-A+C+delta, -2.0*B));
+    vec2 v1 = sqrt(lambda1) * v0;
+    vec2 v2 = sqrt(lambda2) * vec2(-v0.y, v0.x);
+
+    // brute force sampling on parametric
+    const float N = 16.0;
+    float x0 = 1e4, x1 = -1e4, y0 = 1e4, y1 = -1e4;
+    for (float i = 0.0; i < N; i++) {
+        float t = 2.0*PI*i/N;
+        vec2 c = distort_fisheye(p0+v1*cos(t)+v2*sin(t), dist_coeffs);
+        x0 = min(x0, c.x); x1 = max(x1, c.x);
+        y0 = min(y0, c.y); y1 = max(y1, c.y);
+    }
+
+    // update bounds
+    vec2 b0 = vec2(x0, y0);
+    vec2 b1 = vec2(x1, y1);
+    center = 0.5*(b0+b1) * vec2(fx,fy) + vec2(cx,cy);
+    bound = 0.5*(b1-b0) * vec2(fx,fy);
+
+    return true;
+}
+
+// axis-aligned bounding box for fisheye camera, by sampling on 3D parametric
+bool project_bound_fisheye(
+    vec3 T, vec3 V0, vec3 V1,
+    float fx, float fy, float cx, float cy, vec4 dist_coeffs,
+    out vec2 center, out vec2 bound
+) {
+    // sampling
+    const float N = 16.0;
+    float x0 = 1e4, x1 = -1e4, y0 = 1e4, y1 = -1e4;
+    for (float i = 0.0; i < N; i++) {
+        float t = 2.0*PI*i/N;
+        vec3 p3d = T+V0*cos(t)+V1*sin(t);
+        if (p3d.z > 1e-4) {
+            vec2 p = p3d.xy / p3d.z;
+            vec2 c = distort_fisheye(p, dist_coeffs);
+            x0 = min(x0, c.x); x1 = max(x1, c.x);
+            y0 = min(y0, c.y); y1 = max(y1, c.y);
+        }
+    }
+    if (x0 > x1 || y0 > y1)
+        return false;
+
+    // update bounds
+    vec2 b0 = vec2(x0, y0);
+    vec2 b1 = vec2(x1, y1);
+    center = 0.5*(b0+b1) * vec2(fx,fy) + vec2(cx,cy);
+    bound = 0.5*(b1-b0) * vec2(fx,fy);
+    return true;
 }
