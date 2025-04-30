@@ -1361,6 +1361,8 @@ void sort_per_pixel_tensor(
         sort_per_pixel_kernel<PerPixelSortType::HeapSort> _TEMP_ARGS;
     } else if (method == "random_quick") {
         sort_per_pixel_kernel<PerPixelSortType::RandomizedQuickSort> _TEMP_ARGS;
+    } else if (method == "network") {
+        sort_per_pixel_kernel<PerPixelSortType::NetworkSort> _TEMP_ARGS;
     } else {
         AT_ERROR("Invalid sorting method: ", method);
     }

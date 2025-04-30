@@ -11,6 +11,7 @@ enum class PerPixelSortType {
 	QuickSort,
 	HeapSort,
 	RandomizedQuickSort,
+    NetworkSort,
 };
 
 

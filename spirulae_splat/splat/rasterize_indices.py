@@ -73,6 +73,7 @@ def rasterize_gaussians_indices(
         # - quick: ~6ms | stack overflow
         # - heap: ~14ms | ~3.3ms
         # - random_quick: ~6ms | stack overflow
+        # - network: ? | slowest
         # recursive ones (quick, random_quick) may cause stack overflow depending on device
         # i.e. "CUDA error: an illegal memory access was encountered"
         _C.sort_per_pixel(
@@ -97,7 +98,7 @@ def _test_sort(h, w, num_intersects, indices, depths):
     sorted_indices = indices.clone()
     sorted_depths = depths.clone()
     _C.sort_per_pixel(
-        "heap",
+        "network",
         h, w, num_intersects, sorted_indices, sorted_depths
     )
 
