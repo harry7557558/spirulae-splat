@@ -116,7 +116,7 @@ class DepthPredictor:
             if os.path.exists(cache_filename):
                 depth = np.load(cache_filename)
                 depth = depth.f.depth
-                depth = torch.from_numpy(depth).to(image.device)
+                depth = torch.from_numpy(depth).float().to(image.device)
                 depth_loaded = True
 
         # inference depth model
@@ -127,7 +127,7 @@ class DepthPredictor:
         # save cache
         if self.cache_dir is not None and not depth_loaded:
             # np.savez_compressed(cache_filename, depth=depth.cpu().numpy())
-            np.savez(cache_filename, depth=depth.cpu().numpy())  # 1.7MB -> 2.1MB, magnitudes faster loading
+            np.savez(cache_filename, depth=depth.half().cpu().numpy())  # 1.7MB -> 2.1MB, magnitudes faster loading
 
         if image.shape[:2] != depth.shape[:2]:
             h, w, _ = image.shape
