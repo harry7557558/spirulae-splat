@@ -192,6 +192,79 @@ val packHarmonicTexture(std::string key, int dim, int width, int height, const v
 }
 
 
+val preparePPSTiles(int vertexCount, int innerWidth, int innerHeight, const val& projData_, const val& depthIndex_) {
+    const int TILE_SIZE = 12;
+    int numTilesX = std::ceil(innerWidth / TILE_SIZE);
+    int numTilesY = std::ceil(innerHeight / TILE_SIZE);
+    int numTiles = numTilesX * numTilesY;
+
+    std::vector<uint32_t> projData;
+    copyToVector(projData_, projData);
+    std::vector<uint32_t> depthIndex;
+    copyToVector(depthIndex_, depthIndex);
+
+    // Create 2D vector to store tile data
+    std::vector<std::vector<int>> tiles(numTiles);
+    
+    // Process vertices and assign them to tiles
+    for (int i0 = 0; i0 < vertexCount; i0++) {
+        int i = (int)depthIndex[i0];
+        int idx = (int)projData[12*i];
+        
+        if (idx == -1) {
+            continue;
+        }
+        
+        int x0 = (int)projData[12*i+8];
+        int y0 = (int)projData[12*i+9];
+        int x1 = (int)projData[12*i+10];
+        int y1 = (int)projData[12*i+11];
+        
+        for (int x = x0; x < x1; x++)
+            for (int y = y0; y < y1; y++) {
+                tiles[y * numTilesX + x].push_back(idx);
+            }
+    }
+    
+    // Create PSA for tile indices
+    std::vector<uint32_t> numTilesPSA(4 * numTiles);
+    numTilesPSA[0] = 0;
+    for (int i = 0; i < numTiles; i++) {
+        numTilesPSA[4*i+1] = numTilesPSA[4*i] + tiles[i].size();
+        numTilesPSA[4*(i+1)] = numTilesPSA[4*i+1];
+    }
+    
+    int numIntersects = numTilesPSA[4*numTiles-3];
+    int intTexWidth = 2048;
+    int intTexHeight = std::ceil(numIntersects * 2.0 / intTexWidth);
+    
+    // Create the intersects array
+    std::vector<uint32_t> intersects(4 * intTexWidth * intTexHeight);
+    
+    // Copy data from projData to intersects
+    for (int i = 0; i < numTiles; i++) {
+        for (size_t j = 0; j < tiles[i].size(); j++) {
+            int sid = tiles[i][j];
+            int iid = numTilesPSA[4*i] + j;
+            for (int k = 0; k < 12; k++)
+                intersects[8*iid+k] = projData[12*sid+k];
+        }
+    }
+    
+    // Create and return a result object with all the computed data
+    val result = val::object();
+    result.set("numTilesX", numTilesX);
+    result.set("numTilesY", numTilesY);
+    result.set("numTiles", numTiles);
+    result.set("numIntersects", numIntersects);
+    result.set("intTexWidth", intTexWidth);
+    result.set("intTexHeight", intTexHeight);
+    result.set("numTilesPSA", val::global("Uint32Array").new_(typed_memory_view(numTilesPSA.size(), numTilesPSA.data())));
+    result.set("intersects", val::global("Uint32Array").new_(typed_memory_view(intersects.size(), intersects.data())));
+    
+    return result;
+}
+
 
 int main() {
     printf("WASM Module Initialized.\n");
@@ -216,5 +289,7 @@ EMSCRIPTEN_BINDINGS(module) {
 
     function("unpackComponents", &unpackComponents);
     function("packHarmonicTexture", &packHarmonicTexture);
+
+    function("preparePPSTiles", &preparePPSTiles);
 }
 

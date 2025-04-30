@@ -475,7 +475,6 @@ function RayTracingRenderer(gl, viewportController) {
 
 function PerPixelSortingRenderer(gl, viewportController) {
     const downsample = 2;
-    const TILE_SIZE = 24;
 
     // create shader programs
     const projProgram = createShaderProgram(gl, ppsProjShaderSource, ppsProjShaderFragSource);
@@ -635,6 +634,17 @@ function PerPixelSortingRenderer(gl, viewportController) {
             inverseDepthIndex[depthIndex[i]] = i;
     }
 
+    function glSynchronize(output) {
+        if (output) {
+            var data = new Uint8Array(4);
+            gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, data);
+        }
+        else {
+            var data = new Uint32Array(4);
+            gl.readPixels(0, 0, 1, 1, gl.RGBA_INTEGER, gl.UNSIGNED_INT, data);
+        }
+    }
+
     let oldProjHeight = 0;
     this.onFrame = function(header, vertexCount) {
         this.setUniforms();
@@ -652,6 +662,7 @@ function PerPixelSortingRenderer(gl, viewportController) {
         if (projHeight != oldProjHeight) {
             createProjTarget(projWidth, projHeight);
             oldProjHeight = projHeight;
+            console.log("Update projTarget:", projWidth, projHeight);
         }
         gl.bindFramebuffer(gl.FRAMEBUFFER, projFramebuffer);
         gl.viewport(0, 0, projWidth, projHeight);
@@ -663,46 +674,33 @@ function PerPixelSortingRenderer(gl, viewportController) {
         gl.uniform1f(gl.getUniformLocation(projProgram, "wh_ratio"), projWidth / projHeight);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, baseTexture);
+
+        // glSynchronize(false);
+        // console.time("projection");
         gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, vertexCount);
+        // glSynchronize(false);
+        // console.timeEnd("projection");
 
         /* setup tiles */
-        // CPU bound; TODO: do this in WASM, or figure out a way to do on GPU
 
-        var pixels = new Uint32Array(4 * projWidth * projHeight);
-        gl.readPixels(0, 0, projWidth, projHeight, gl.RGBA_INTEGER, gl.UNSIGNED_INT, pixels);
+        var projData = new Uint32Array(4 * projWidth * projHeight);
+        // console.time("gl.readPixels");
+        gl.readPixels(0, 0, projWidth, projHeight, gl.RGBA_INTEGER, gl.UNSIGNED_INT, projData);
+        // console.timeEnd("gl.readPixels");
 
-        var numTilesX = Math.ceil(innerWidth / TILE_SIZE);
-        var numTilesY = Math.ceil(innerHeight / TILE_SIZE);
-        var numTiles = numTilesX*numTilesY;
-        var tiles = new Array(numTiles);
-        for (var i = 0; i < numTiles; i++)
-            tiles[i] = [];
-        for (var i0 = 0; i0 < vertexCount; i0++) {
-            let i = depthIndex[i0];
-            var idx = pixels[12*i];
-            if (idx == -1)
-                continue;
-            var x0 = pixels[12*i+8];
-            var y0 = pixels[12*i+9];
-            var x1 = pixels[12*i+10];
-            var y1 = pixels[12*i+11];
-            for (var x = x0; x < x1; x++)
-                for (var y = y0; y < y1; y++)
-                    tiles[y*numTilesX+x].push(idx);
-        }
-        var numTilesPSA = new Uint32Array(4*numTiles);
-        numTilesPSA[0] = 0;
-        for (var i = 0; i < numTiles; i++) {
-            numTilesPSA[4*i+1] = numTilesPSA[4*i] + tiles[i].length;
-            numTilesPSA[4*(i+1)] = numTilesPSA[4*i+1];
-        }
-        var numIntersects = numTilesPSA[4*numTiles-3];
-        let intTexWidth = 2048;
-        let intTexHeight = Math.ceil(numIntersects/intTexWidth);
-        var intersects = new Uint32Array(intTexWidth*intTexHeight);
-        for (var i = 0; i < numTiles; i++) {
-            intersects.set(tiles[i], numTilesPSA[4*i]);
-        }
+        // console.time("preparePPSTiles");
+        let tiles = Worker.wasmModule.preparePPSTiles(
+            vertexCount, innerWidth, innerHeight,
+            projData, depthIndex
+        );
+        let numTilesX = tiles.numTilesX;
+        let numTilesY = tiles.numTilesY;
+        let intTexWidth = tiles.intTexWidth;
+        let intTexHeight = tiles.intTexHeight;
+        let numTilesPSA = tiles.numTilesPSA;
+        let intersects = tiles.intersects;
+        // console.timeEnd("preparePPSTiles");
+        // kinda CPU bound, considering figuring out doing this on GPU
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, psaTexture);
@@ -714,8 +712,8 @@ function PerPixelSortingRenderer(gl, viewportController) {
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_2D, intTexture);
         gl.texImage2D(
-            gl.TEXTURE_2D, 0, gl.R32UI, intTexWidth, intTexHeight, 0,
-            gl.RED_INTEGER, gl.UNSIGNED_INT, intersects);
+            gl.TEXTURE_2D, 0, gl.RGBA32UI, intTexWidth, intTexHeight, 0,
+            gl.RGBA_INTEGER, gl.UNSIGNED_INT, intersects);
         setDataTextureParameters(gl);
 
         /* rasterization */
@@ -755,9 +753,6 @@ function PerPixelSortingRenderer(gl, viewportController) {
         gl.useProgram(rasterProgram);
         gl.uniformMatrix4fv(gl.getUniformLocation(rasterProgram, "view"),
             false, viewportController.actualViewMatrix);
-        gl.uniform2i(gl.getUniformLocation(rasterProgram, "u_sh_config"),
-            document.getElementById("checkbox-sh").checked,
-            header.config.sh_degree);
         gl.uniform3i(gl.getUniformLocation(rasterProgram, "u_ch_config"),
             document.getElementById("checkbox-ch").checked,
             header.config.ch_degree_r,
@@ -765,7 +760,12 @@ function PerPixelSortingRenderer(gl, viewportController) {
         gl.activeTexture(gl.TEXTURE2);
         gl.bindTexture(gl.TEXTURE_2D, projTexture);
         gl.uniform1i(gl.getUniformLocation(rasterProgram, "u_proj_texture"), 2);
+
+        // glSynchronize(true);
+        // console.time("rasterization");
         gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, 4);
+        // glSynchronize(true);
+        // console.timeEnd("rasterization");
 
     }
 }

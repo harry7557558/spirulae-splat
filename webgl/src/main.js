@@ -183,7 +183,7 @@ window.addEventListener("load", () => {
         console.log(e.error);
         Console.log([e.lineno, e.colno, e.message].join(' ') + '\n' + e.error.stack);
     });
-    createModule().then(module => {
+    createWASMModule().then(module => {
         Worker.wasmModule = module;
         loadShadersAndInit();
     });

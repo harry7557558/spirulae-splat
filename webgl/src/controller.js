@@ -395,6 +395,8 @@ function ViewportController() {
 
     let previousCamera = "";
     this.onFrame = function(now) {
+        let oldRenderNeeded = this.renderNeeded;
+
         let inv = invert4(viewMatrix);
         let shiftKey = activeKeys.includes("Shift") || activeKeys.includes("ShiftLeft") || activeKeys.includes("ShiftRight");
         let vsc = getVelocityScale();
@@ -530,14 +532,14 @@ function ViewportController() {
         inv2 = rotate4(inv2, -0.1 * jumpDelta, 1, 0, 0);
         this.actualViewMatrix = invert4(inv2);
 
-        const currentFps = 1000 / (now - lastFrame) || 0;
-        avgFps = avgFps * 0.8 + currentFps * 0.2;
-
         let camera = CameraPresets.camera;
         if (camera !== previousCamera)
             this.renderNeeded = true;
         previousCamera = camera;
 
+        const currentFps = 1000 / (now - lastFrame) || 0;
+        if (this.renderNeeded)
+            avgFps = avgFps * 0.8 + currentFps * 0.2;
         fps.innerText = Math.round(avgFps) + " fps";
         lastFrame = now;
     }

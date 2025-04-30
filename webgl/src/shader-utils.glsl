@@ -3,7 +3,7 @@
 #define PI 3.14159265
 
 // for per pixel sorting
-#define TILE_SIZE 24
+#define TILE_SIZE 12
 #define BBOX_OUTPUT_WIDTH 1536
 
 uint pack_rgba(vec4 cf) {
