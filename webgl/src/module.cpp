@@ -192,6 +192,44 @@ val packHarmonicTexture(std::string key, int dim, int width, int height, const v
 }
 
 
+val sortByDepth(int vertexCount, const val& means_, float n0, float n1, float n2) {
+    int32_t maxDepth = -0x3fffffff;
+    int32_t minDepth = 0x3fffffff;
+    std::vector<int> sizeList(vertexCount);
+
+    std::vector<float> means;
+    copyToVector(means_, means);
+
+    for (int i = 0; i < vertexCount; i++) {
+        float depthf = -(n0 * means[3*i+0] + n1 * means[3*i+1] + n2 * means[3*i+2]);
+        // int32_t depth = (int32_t)(depthf * 4096);
+        int32_t depth = (int32_t)(depthf/(abs(depthf)+0.01) * (sqrt(abs(depthf)+1.0)-1.0) * 1000000);
+        sizeList[i] = depth;
+        if (depth > maxDepth) maxDepth = depth;
+        if (depth < minDepth) minDepth = depth;
+    }
+
+    // This is a 16 bit single-pass counting sort
+    float depthInv = 65535.99 / (maxDepth - minDepth);
+    std::vector<int> counts0(65536, 0);
+    for (int i = 0; i < vertexCount; i++) {
+        sizeList[i] = (int)((sizeList[i] - minDepth) * depthInv);
+        counts0[sizeList[i]]++;
+    }
+
+    std::vector<int> starts0(65536);
+    starts0[0] = 0;
+    for (int i = 1; i < 65536; i++)
+        starts0[i] = starts0[i-1] + counts0[i-1];
+
+    std::vector<uint32_t> depthIndex(vertexCount, -1);
+    for (int i = 0; i < vertexCount; i++)
+        depthIndex[starts0[sizeList[i]]++] = i;
+
+    return val::global("Uint32Array").new_(typed_memory_view(depthIndex.size(), depthIndex.data()));
+}
+
+
 val preparePPSTiles(int vertexCount, int innerWidth, int innerHeight, const val& projData_, const val& depthIndex_) {
     const int TILE_SIZE = 12;
     int numTilesX = std::ceil(innerWidth / TILE_SIZE);
@@ -289,6 +327,8 @@ EMSCRIPTEN_BINDINGS(module) {
 
     function("unpackComponents", &unpackComponents);
     function("packHarmonicTexture", &packHarmonicTexture);
+
+    function("sortByDepth", &sortByDepth);
 
     function("preparePPSTiles", &preparePPSTiles);
 }

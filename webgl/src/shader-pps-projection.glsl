@@ -138,14 +138,9 @@ void main () {
     vec4 rgba = vec4(unpackHalf2x16(info2.y), unpackHalf2x16(info2.z));
     vec3 rgb = rgba.xyz;
     if (sh_dim > 0) {
-    #if 0
         init_coeffs(index);
         vec3 viewdir = p_world - inverse(view)[3].xyz;
         rgb = sh_coeffs_to_color_fast(rgb, sh_degree, viewdir) + 0.5;
-    #else
-        // disable SH - there's a bug somewhere (in red component)
-        rgb = 0.2820947917738781 * rgb + 0.5;
-    #endif
     }
     rgba.xyz = rgb;
 

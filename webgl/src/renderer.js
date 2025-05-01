@@ -271,7 +271,7 @@ function RasterRenderer(gl, viewportController) {
         gl.clear(gl.COLOR_BUFFER_BIT);
 
         let background_sh_degree = header.config.background_sh_degree;
-        if ((bg && background_sh_degree > 0) || camera.model == 1) {
+        if ((bg && background_sh_degree > 0) || CameraPresets.camera.model == 1) {
             gl.useProgram(backgroundProgram);
             gl.uniform1f(gl.getUniformLocation(backgroundProgram, "sh_degree"),
                 background_sh_degree);
@@ -437,7 +437,7 @@ function RayTracingRenderer(gl, viewportController) {
         gl.clear(gl.COLOR_BUFFER_BIT);
 
         let background_sh_degree = header.config.background_sh_degree;
-        if ((bg && background_sh_degree > 0) || camera.model == 1) {
+        if ((bg && background_sh_degree > 0) || CameraPresets.camera.model == 1) {
             gl.useProgram(backgroundProgram);
             gl.uniform1f(gl.getUniformLocation(backgroundProgram, "sh_degree"),
                 background_sh_degree);
@@ -622,17 +622,23 @@ function PerPixelSortingRenderer(gl, viewportController) {
             gl.RGBA_INTEGER, gl.UNSIGNED_INT, shdata);
     }
 
-    let depthIndex = [];
-    let inverseDepthIndex = [];
-    this.updateDepthIndex = function(depthIndex_, viewProj) {
+    let depthIndex = new Uint32Array();
+    let viewProj = new Float32Array(12);
+    this.updateDepthIndex = function(depthIndex_, viewProj_) {
         depthIndex = depthIndex_;
         gl.bindBuffer(gl.ARRAY_BUFFER, indexBuffer);
         gl.bufferData(gl.ARRAY_BUFFER, depthIndex, gl.DYNAMIC_DRAW);
-
-        inverseDepthIndex = new Uint32Array(depthIndex.length);
-        for (var i = 0; i < depthIndex.length; i++)
-            inverseDepthIndex[depthIndex[i]] = i;
     }
+
+    let means = new Float32Array();
+    window.addEventListener("message", (e) => {
+        if (e.data.header) {
+            means = e.data.base.means;
+        }
+        else if (e.data.view) {
+            viewProj = e.data.view;
+        }
+    });
 
     function glSynchronize(output) {
         if (output) {
@@ -654,6 +660,16 @@ function PerPixelSortingRenderer(gl, viewportController) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
 
+        /* global sorting */
+
+        // console.time("sort");
+        depthIndex = Worker.wasmModule.sortByDepth(
+            vertexCount, means,
+            viewProj[2], viewProj[6], viewProj[10]
+        )
+        this.updateDepthIndex(depthIndex, viewProj);
+        // console.timeEnd("sort");
+
         /* projection */
 
         gl.useProgram(projProgram);
@@ -674,6 +690,8 @@ function PerPixelSortingRenderer(gl, viewportController) {
         gl.uniform1f(gl.getUniformLocation(projProgram, "wh_ratio"), projWidth / projHeight);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, baseTexture);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, shTexture);
 
         // glSynchronize(false);
         // console.time("projection");
@@ -730,7 +748,7 @@ function PerPixelSortingRenderer(gl, viewportController) {
         gl.clear(gl.COLOR_BUFFER_BIT);
 
         let background_sh_degree = header.config.background_sh_degree;
-        if ((bg && background_sh_degree > 0) || camera.model == 1) {
+        if ((bg && background_sh_degree > 0) || CameraPresets.camera.model == 1) {
             gl.useProgram(backgroundProgram);
             gl.uniform1f(gl.getUniformLocation(backgroundProgram, "sh_degree"),
                 background_sh_degree);
@@ -759,6 +777,8 @@ function PerPixelSortingRenderer(gl, viewportController) {
             header.config.ch_degree_phi);
         gl.activeTexture(gl.TEXTURE2);
         gl.bindTexture(gl.TEXTURE_2D, projTexture);
+        gl.activeTexture(gl.TEXTURE3);
+        gl.bindTexture(gl.TEXTURE_2D, chTexture);
         gl.uniform1i(gl.getUniformLocation(rasterProgram, "u_proj_texture"), 2);
 
         // glSynchronize(true);

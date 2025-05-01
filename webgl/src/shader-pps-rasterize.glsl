@@ -67,7 +67,7 @@ bool get_alpha(
 }
 
 
-#define MAX_N_INT 12
+#define MAX_N_INT 16
 int intersectCount = 0;
 uvec2 intersects[MAX_N_INT];  // id, packed rgba
 
@@ -127,10 +127,10 @@ void main () {
         if (!get_alpha(uv, rgba.w, alpha))
             continue;
         vec3 color = rgba.xyz;
-        // if (ch_dim > 0) {
-        //     init_coeffs(vIndex);
-        //     color /= 1.0 + exp(-ch_coeffs_to_color(uv));
-        // }
+        if (ch_dim > 0) {
+            init_coeffs(int(comp0.x));
+            color /= 1.0 + exp(-ch_coeffs_to_color(uv));
+        }
 
         if (fr > 0.0) {
             float vignetting = min(length(pos2d)/fr, 1.0);
@@ -147,7 +147,7 @@ void main () {
         if (intersectCount >= MAX_N_INT)
             break;
 
-		if (T < 0.04)
+		if (T < 0.01)
 			break;
     }
 

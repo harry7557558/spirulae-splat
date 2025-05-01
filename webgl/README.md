@@ -8,8 +8,8 @@ Major Changes
 - Added multiple renderers &ndash; see below
 
 Renderers (`?renderer=[renderer_id]`)
-- `default`: classical pipeline with throttled sorting, as per original, fully support SH/CH
-- `rt`: ray tracing with BVH, powerful graphics card recommended
+- `default`: classical pipeline with throttled sorting, as per original
+- `rt`: ray tracing with BVH, powerful graphics card recommended (doesn't support SH/CH)
 - `pps`: per-pixel sorting, using tiles similar to CUDA rasterizer (currently CPU bound)
 
 ----

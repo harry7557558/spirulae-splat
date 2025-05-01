@@ -7,12 +7,21 @@
 #define BBOX_OUTPUT_WIDTH 1536
 
 uint pack_rgba(vec4 cf) {
-    uvec4 c = uvec4(clamp(cf, 0.0, 1.0) * 255.0);
-    return (c.x<<24) | (c.y<<16) | (c.z<<8) | c.w;
+    // 8x3 bit RGB, 6 bit opacity, 2 bit exp
+    cf = max(cf, 0.0);
+    float sc = max(cf.x, max(cf.y, cf.z));
+    uint sb = uint(log2(clamp(2.0*sc, 1.0, 8.0)));
+    uvec4 c = uvec4(
+        clamp(cf.xyz * exp2(-float(sb)), 0.0, 1.0) * 255.0,
+        clamp(cf.w, 0.0, 1.0) * 64.0
+    );
+    return (c.x<<24) | (c.y<<16) | (c.z<<8) | (c.w<<2) | sb;
 }
 vec4 unpack_rgba(uint c) {
     uvec4 cf = uvec4(c>>24, (c>>16)&uint(255), (c>>8)&uint(255), c&uint(255));
-    return (vec4(cf)+0.5) / 255.0;
+    vec3 rgb = (vec3(cf.xyz)+0.5) / 255.0 * exp2(float(cf.w & 3u));
+    float a = (float(cf.w>>2)+0.5) / 64.0;
+    return vec4(rgb, a);
 }
 
 // camera distortion models

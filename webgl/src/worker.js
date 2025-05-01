@@ -331,40 +331,87 @@ Worker.createWorker = function(self) {
         }
 
         console.time("sort");
-        let maxDepth = -Infinity;
-        let minDepth = Infinity;
-        let sizeList = new Int32Array(vertexCount);
-        for (let i = 0; i < vertexCount; i++) {
-            let depth =
-                -(viewProj[2] * base.means[3*i+0] +
-                    viewProj[6] * base.means[3*i+1] +
-                    viewProj[10] * base.means[3*i+2]);
-            depth = (depth * 4096) | 0;
-            sizeList[i] = depth;
-            if (depth > maxDepth) maxDepth = depth;
-            if (depth < minDepth) minDepth = depth;
-        }
-
-        // This is a 16 bit single-pass counting sort
-        let depthInv = (65536) / (maxDepth - minDepth);
-        let counts0 = new Uint32Array(65536);
-        for (let i = 0; i < vertexCount; i++) {
-            sizeList[i] = ((sizeList[i] - minDepth) * depthInv) | 0;
-            counts0[sizeList[i]]++;
-        }
-        let starts0 = new Uint32Array(65536);
-        for (let i = 1; i < 65536; i++)
-            starts0[i] = starts0[i - 1] + counts0[i - 1];
-        depthIndex = new Uint32Array(vertexCount).fill(-1);
-        for (let i = 0; i < vertexCount; i++)
-            depthIndex[starts0[sizeList[i]]++] = i;
-
+        let depthIndex = Worker.wasmModule.sortByDepth(
+            vertexCount, base.means,
+            viewProj[2], viewProj[6], viewProj[10]
+        )
         console.timeEnd("sort");
 
         lastProj = viewProj;
         self.postMessage({ depthIndex, viewProj, vertexCount }, [
             depthIndex.buffer,
         ]);
+    }
+
+    const throttledSort = () => {
+        if (!sortRunning) {
+            sortRunning = true;
+            let lastView = viewProj;
+            runSort(lastView);
+            setTimeout(() => {
+                sortRunning = false;
+                if (lastView !== viewProj) {
+                    throttledSort();
+                }
+            }, 0);
+        }
+    };
+
+    let sortRunning;
+    window.addEventListener("message", (e) => {
+        if (e.data.header) {
+            base = e.data.base;
+            harmonics = e.data.harmonics;
+            header = e.data.header;
+            postMessage({ base, harmonics });
+        } else if (e.data.view) {
+            viewProj = e.data.view;
+            throttledSort();
+        }
+    });
+}
+
+
+Worker.createPerPixelSortingWorker = function(self) {
+    // modified from createWorker, not actually sorting anything
+
+    let header;
+    let base, harmonics;
+    let vertexCount = 0;
+    let viewProj;
+
+    let lastProj = [];
+    let depthIndex = new Uint32Array();
+    let lastBaseVertexCount = 0,
+        lastHarmonicsLength = 0;
+
+    function runSort(viewProj) {
+        if (!base) return;
+        if (harmonics && harmonics.features_sh.length > lastHarmonicsLength) {
+            console.time("generate CH/SH texture");
+            Worker.generateCHTexture(header, harmonics);
+            Worker.generateSHTexture(header, harmonics);
+            console.timeEnd("generate CH/SH texture");
+            lastHarmonicsLength = harmonics.features_sh.length;
+        }
+
+        vertexCount = base.opacities.length;
+        if (vertexCount != lastBaseVertexCount) {
+            console.time("generate base texture");
+            Worker.generateBaseTexture(header, base);
+            lastBaseVertexCount = vertexCount;
+            console.timeEnd("generate base texture");
+
+            depthIndex = new Uint32Array(vertexCount);
+            for (var i = 0; i < vertexCount; i++)
+                depthIndex[i] = i;
+            lastBaseVertexCount = vertexCount;
+
+            lastProj = viewProj;
+            self.postMessage({ depthIndex, viewProj, vertexCount }, [
+                depthIndex.buffer,
+            ]);
+        }
     }
 
     const throttledSort = () => {
@@ -420,6 +467,8 @@ Worker.buildBVH = function(header, base) {
         let m = header.config.sh_degree == 0 ? 0.28209479177387814 : 1.0;
         let b = header.config.sh_degree == 0 ? 0.5 : 0.0;
         m = 0.28209479177387814, b = 0.5;
+        if (header.config.ch_degree_r > 0 || header.config.ch_degree_phi > 0)
+            m *= 0.5, b *= 0.5;
         let rgba = [
             b + m * base.features_dc[3*i+0],
             b + m * base.features_dc[3*i+1],

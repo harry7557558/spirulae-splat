@@ -34,7 +34,7 @@ async function main() {
             Renderer: RayTracingRenderer
         },
         pps: {
-            createWorker: Worker.createWorker,
+            createWorker: Worker.createPerPixelSortingWorker,
             Renderer: PerPixelSortingRenderer
         },
     };
