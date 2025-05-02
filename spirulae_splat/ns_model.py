@@ -180,6 +180,9 @@ class SpirulaeModelConfig(ModelConfig):
     """Scaling for loss values to normalize gradient"""
     target_absgrad: float = 5.5e-6
     """Will auto tune loss_scale to fit absgrad to this number, higher gives more splats"""
+    relative_scale: Optional[float] = None
+    """Manually set scale when a scene is poorly scaled by nerfstudio
+        (e.g. Zip-NeRF dataset, very large-scale scenes across multiple street blocks)"""
 
     # classial control
     cull_alpha_thresh: float = 0.1
@@ -336,7 +339,10 @@ class SpirulaeModel(Model):
 
     def populate_modules(self):
         if self.seed_points is not None and not self.config.random_init:
-            means = torch.nn.Parameter(self.seed_points[0])
+            means = self.seed_points[0]
+            if self.config.relative_scale is not None:
+                means *= self.config.relative_scale
+            means = torch.nn.Parameter(means)
             self.random_init = False
         else:
             means = torch.nn.Parameter(torch.randn((self.config.num_random, 3)) * self.config.random_scale)
@@ -760,6 +766,8 @@ class SpirulaeModel(Model):
 
         R = optimized_camera_to_world[:3, :3]  # 3 x 3
         T = optimized_camera_to_world[:3, 3:4]  # 3 x 1
+        if self.config.relative_scale is not None:
+            T = T * self.config.relative_scale
         R = R * torch.tensor([[1.0, -1.0, -1.0]])
         R_inv = R.T
         T_inv = -R_inv @ T

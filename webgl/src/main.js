@@ -93,10 +93,22 @@ async function main() {
         if (vertexCount > 0 && viewportController.renderNeeded) {
             document.getElementById("spinner").style.display = "none";
 
+            function disableCheckbox(id) {
+                let checkbox = document.getElementById(id);
+                checkbox.checked = false;
+                checkbox.disabled = true;
+                // checkbox.parentElement.style.textDecoration = "line-through";
+                checkbox.parentElement.style.opacity = 0.6;
+            }
+
             let sh_degree = header.config.sh_degree;
-            document.getElementById("checkbox-sh").disabled = (sh_degree == 0);
+            if (sh_degree <= 0) disableCheckbox("checkbox-sh");
             let ch_degree_r = header.config.ch_degree_r;
-            document.getElementById("checkbox-ch").disabled = (ch_degree_r == 0);
+            if (ch_degree_r <= 0) disableCheckbox("checkbox-ch");
+            let background = header.config.background_color;
+            let backgroundDegree = header.config.background_sh_degree;
+            if (!(background && (Math.max(background[0], background[1], background[2]) > 0
+                || backgroundDegree > 0))) disableCheckbox("checkbox-bg");
 
             renderer.onFrame(header, vertexCount);
 

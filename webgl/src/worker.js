@@ -184,6 +184,9 @@ Worker.unpackModel = function(header, buffer) {
     let model = {
         header: header
     };
+    console.log(header.primitives.base.length.toLocaleString() + " splats, "
+        + header.buffer.byteLength.toLocaleString() + " bytes");
+    console.log(header);
 
     let buffers = [];
     header.bufferViews.forEach((view, j) => {

@@ -18,6 +18,7 @@ from spirulae_splat.splat import depth_to_normal
 class RenderViewer(QMainWindow):
     colormap = matplotlib.colormaps['magma']
     vis_modes = ["rgb", "depth", "normal", "shaded"]
+    move_mode = ["pinch", "navigate"][0]
 
     def __init__(self):
         super().__init__()
@@ -101,20 +102,26 @@ class RenderViewer(QMainWindow):
 
             # get position
             x, y = event.pos().x(), event.pos().y()
-            depth = self.last_depth[int(y+0.5), int(x+0.5), 0].item()
             ssplat_camera = camera._to_ssplat_camera()
             if ssplat_camera.is_distorted():
                 pass
             else:
                 fx, fy, cx, cy = ssplat_camera.intrins
-                self.click_pos_3d = np.array([(x-cx)/fx, (y-cy)/fy, 1]) * depth
+                if False:
+                    depth = self.last_depth[int(y+0.5), int(x+0.5), 0].item()
+                    self.click_pos_3d = np.array([(x-cx)/fx, (y-cy)/fy, 1]) * depth
+                elif True:
+                    # depth = torch.median(self.last_depth).item()
+                    # depth = 2.0
+                    depth = 0.0
+                    self.click_pos_3d = np.array([0, 0, 1]) * depth
 
     def mouseMoveEvent(self, event):
         if self.last_mouse_pos is not None:
             dx = (event.pos().x() - self.last_mouse_pos.x()) * 0.01
             dy = (event.pos().y() - self.last_mouse_pos.y()) * 0.01
             matR = self._mat_rotate(-dy, -dx, 0.0)
-            if True:
+            if self.move_mode == "pinch":
                 w2c = np.linalg.inv(self.c2w)
                 matT = self._mat_translate(*w2c[:3, 3])
             else:
@@ -155,15 +162,26 @@ class RenderViewer(QMainWindow):
         # WSAD for rotation
         mat = np.eye(4)
         rotate_speed = 0.025
-        if ord('W') in self.active_keys:
-            mat = self._mat_rotate(rotate_speed, 0, 0)
-        elif ord('S') in self.active_keys:
-            mat = self._mat_rotate(-rotate_speed, 0, 0)
-        elif ord('A') in self.active_keys:
-            mat = self._mat_rotate(0, -rotate_speed, 0)
-        elif ord('D') in self.active_keys:
-            mat = self._mat_rotate(0, rotate_speed, 0)
-        elif ord('Q') in self.active_keys:
+        move_speed = 0.02
+        if self.move_mode == "pinch":
+            if ord('W') in self.active_keys:
+                mat = self._mat_rotate(rotate_speed, 0, 0)
+            elif ord('S') in self.active_keys:
+                mat = self._mat_rotate(-rotate_speed, 0, 0)
+            elif ord('A') in self.active_keys:
+                mat = self._mat_rotate(0, -rotate_speed, 0)
+            elif ord('D') in self.active_keys:
+                mat = self._mat_translate(move_speed, 0, 0)
+        elif self.move_mode == "navigate":
+            if ord('W') in self.active_keys:
+                mat = self._mat_translate(0, 0, move_speed)
+            elif ord('S') in self.active_keys:
+                mat = self._mat_translate(0, 0, -move_speed)
+            elif ord('A') in self.active_keys:
+                mat = self._mat_translate(-move_speed, 0, 0)
+            elif ord('D') in self.active_keys:
+                mat = self._mat_translate(move_speed, 0, 0)
+        if ord('Q') in self.active_keys:
             mat = self._mat_rotate(0, 0, rotate_speed)
         elif ord('E') in self.active_keys:
             mat = self._mat_rotate(0, 0, -rotate_speed)

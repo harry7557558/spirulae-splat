@@ -570,6 +570,11 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
     print("{:.2f} MB floats".format(n_floats*4/1024**2))
     print()
 
+    if bit_sh <= 0:
+        sh_degree, num_sh = 0, 0
+    if bit_ch <= 0:
+        ch_degree_phi, ch_degree_r, num_ch = 0, 0, 0
+
     if 0 < cull_th < float('inf'):
         for _ in range(cull_n):
             center = torch.mean(means, axis=0)
@@ -662,11 +667,11 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
     from time import perf_counter
     time0 = perf_counter()
     with torch.no_grad():
-        means_bins, means_q = quantize_tensor('means', means, 12)
-        scales_bins, scales_q = quantize_tensor('scale', scales, 10)
-        quats_bins, quats_q = quantize_tensor('quats', quats, 8)
-        opacities_bins, opacities_q = quantize_tensor('opacs', opacities, 6)
-        features_dc_bins, features_dc_q = quantize_tensor('color', features_dc, 6)
+        means_bins, means_q = quantize_tensor('means', means, bit_pos)
+        scales_bins, scales_q = quantize_tensor('scale', scales, bit_sc)
+        quats_bins, quats_q = quantize_tensor('quats', quats, bit_quat)
+        opacities_bins, opacities_q = quantize_tensor('opacs', opacities, bit_opac)
+        features_dc_bins, features_dc_q = quantize_tensor('color', features_dc, bit_dc)
         features_ch_bins, features_ch_q = quantize_tensor('ch', features_ch, bit_ch, 100)
         features_sh_bins, features_sh_q = quantize_tensor('sh', features_sh, bit_sh, 100)
     time1 = perf_counter()
@@ -684,11 +689,11 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
 
     print("Packing base...")
     componentViews, componentLength = component_view_psa([
-        { "key": "means", "type": "quat3", "bitLength": 36, "quatBufferView": 0 },
-        { "key": "scales", "type": "quat2", "bitLength": 20, "quatBufferView": 1 },
-        { "key": "quats", "type": "quat4", "bitLength": 32, "quatBufferView": 2 },
-        { "key": "opacities", "type": "quat", "bitLength": 6, "quatBufferView": 3 },
-        { "key": "features_dc", "type": "quat3", "bitLength": 18, "quatBufferView": 4 },
+        { "key": "means", "type": "quat3", "bitLength": 3*bit_pos, "quatBufferView": 0 },
+        { "key": "scales", "type": "quat2", "bitLength": 2*bit_sc, "quatBufferView": 1 },
+        { "key": "quats", "type": "quat4", "bitLength": 4*bit_quat, "quatBufferView": 2 },
+        { "key": "opacities", "type": "quat", "bitLength": bit_opac, "quatBufferView": 3 },
+        { "key": "features_dc", "type": "quat3", "bitLength": 3*bit_dc, "quatBufferView": 4 },
     ])
     base_config = {
         "bufferView": len(buffer_views),
@@ -795,6 +800,20 @@ if __name__ == "__main__":
     parser.add_argument("--bit_sh", "-bsh", default=3, type=int, help="Bits for each SH coefficient.")
     parser.add_argument("--bit_ch", "-bch", default=4, type=int, help="Bits for each CH coefficient.")
     args = parser.parse_args()
+
+    # 13 bytes
+    bit_pos = 12  # x3
+    bit_sc = 7  # x2
+    bit_quat = 7  # x4
+    bit_opac = 7  # x1
+    bit_dc = 6  # x3
+
+    # 14 bytes
+    bit_pos = 14  # x3, 64KB
+    bit_sc = 7  # x2
+    bit_quat = 7  # x4
+    bit_opac = 7  # x1
+    bit_dc = 7  # x3
 
     bit_sh = args.bit_sh
     bit_ch = args.bit_ch

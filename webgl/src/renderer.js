@@ -265,7 +265,6 @@ function RasterRenderer(gl, viewportController) {
         this.setUniforms();
 
         let background = header.config.background_color;
-        document.getElementById("checkbox-bg").disabled = !(Math.max(background[0], background[1], background[2]) > 0);
         let bg = document.getElementById("checkbox-bg").checked;
         gl.clearColor(bg*background[0], bg*background[1], bg*background[2], 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
@@ -431,7 +430,6 @@ function RayTracingRenderer(gl, viewportController) {
         this.setUniforms();
 
         let background = header.config.background_color;
-        document.getElementById("checkbox-bg").disabled = !(Math.max(background[0], background[1], background[2]) > 0);
         let bg = document.getElementById("checkbox-bg").checked;
         gl.clearColor(bg*background[0], bg*background[1], bg*background[2], 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
@@ -742,7 +740,6 @@ function PerPixelSortingRenderer(gl, viewportController) {
         gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
         let background = header.config.background_color;
-        document.getElementById("checkbox-bg").disabled = !(Math.max(background[0], background[1], background[2]) > 0);
         let bg = document.getElementById("checkbox-bg").checked;
         gl.clearColor(bg*background[0], bg*background[1], bg*background[2], 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
