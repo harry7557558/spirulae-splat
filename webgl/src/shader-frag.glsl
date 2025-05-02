@@ -94,7 +94,7 @@ void main () {
     }
     else if (camera_model == 1) {
         fr = fisheye_radius(0.5*PI, distortion);
-        // pos2d_undist = undistort_fisheye(pos2d, undistortion);
+        pos2d_undist = undistort_fisheye(pos2d, undistortion);
     }
     const vec3 vignetting_background = vec3(0.1);
     if (fr > 0.0 && length(pos2d) > fr) {

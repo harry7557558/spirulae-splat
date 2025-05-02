@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 
+from typing import Literal
+
 
 def quat_mult(q1, q2):
     w1, x1, y1, z1 = torch.unbind(q1, dim=-1)
@@ -46,6 +48,81 @@ def generate_right_angle_rotation_matrices():
         if np.linalg.det(R) == 1 and (np.dot(R.T, R) == np.eye(3)).all():
             valid_matrices.append(R)
     return valid_matrices
+
+
+def generate_sh_basis(dirs: torch.Tensor, mode: Literal['nerfstudio', 'gsplat']):
+    x, y, z = torch.unbind(dirs, -1)
+    one = torch.ones_like(x)
+    xx, yy, zz = x*x, y*y, z*z
+
+    if mode == "nerfstudio":
+        return torch.stack([
+            0.28209479177387814 * one,
+            0.4886025119029199 * y,
+            0.4886025119029199 * z,
+            0.4886025119029199 * x,
+            1.0925484305920792 * x * y,
+            1.0925484305920792 * y * z,
+            (0.9461746957575601 * zz - 0.31539156525251999),
+            1.0925484305920792 * x * z,
+            0.5462742152960396 * (xx - yy),
+            0.5900435899266435 * y * (3.0 * xx - yy),
+            2.890611442640554 * x * y * z,
+            0.4570457994644658 * y * (5.0 * zz - 1.0),
+            0.3731763325901154 * z * (5.0 * zz - 3.0),
+            0.4570457994644658 * x * (5.0 * zz - 1.0),
+            1.445305721320277 * z * (xx - yy),
+            0.5900435899266435 * x * (xx - 3.0 * yy),
+            2.5033429417967046 * x * y * (xx - yy),
+            1.7701307697799304 * y * z * (3.0 * xx - yy),
+            0.9461746957575601 * x * y * (7.0 * zz - 1.0),
+            0.6690465435572892 * y * z * (7.0 * zz - 3.0),
+            0.10578554691520431 * (35.0 * zz * zz - 30.0 * zz + 3.0),
+            0.6690465435572892 * x * z * (7.0 * zz - 3.0),
+            0.47308734787878004 * (xx - yy) * (7.0 * zz - 1.0),
+            1.7701307697799304 * x * z * (xx - 3.0 * yy),
+            0.6258357354491761 * (xx * (xx - 3.0 * yy) - yy * (3.0 * xx - yy)),
+        ], dim=1)
+
+    elif mode == "gsplat":
+        from spirulae_splat.splat._torch_impl import eval_sh_bases
+        return eval_sh_bases(25, dirs)
+
+
+def rotate_sh_coeffs(coeffs: torch.Tensor, R: torch.Tensor,
+                     mode: Literal['nerfstudio', 'gsplat']) -> torch.Tensor:
+    if isinstance(R, np.ndarray):
+        R = torch.from_numpy(R).to(coeffs)
+
+    # fibonacci sample on a sphere
+    M = coeffs.shape[1]
+    N = int(1.2*M+1)  # >= M, more is slower but more numerically stable
+    idx = torch.arange(N, dtype=torch.float32, device=coeffs.device) + 0.5
+    phi = 2 * np.pi * idx / ((1 + np.sqrt(5)) / 2)
+    cos_theta = 1.0 - 2.0 * idx / N
+    sin_theta = torch.sqrt(torch.relu(1.0 - cos_theta * cos_theta))
+    dirs = torch.stack([sin_theta * torch.cos(phi),
+                        sin_theta * torch.sin(phi),
+                        cos_theta], dim=1)  # (N, 3)
+
+    # evaluate basis
+    Y_src = generate_sh_basis(dirs, mode)[:, 1:M+1]  # (N, M)
+    dirs_rot = dirs @ R.t()  # (N, 3)
+    Y_rot = generate_sh_basis(dirs_rot, mode)[:, 1:M+1]  # (N, M)
+    # coeffs: (batch, M, 3)
+
+    # direct linear transform
+    f_vals = torch.einsum('mn,bnc->bmc', Y_src, coeffs)  # (batch, M, 3)
+    Y_rot_inv = torch.linalg.inv(Y_rot.T @ Y_rot) @ Y_rot.T  # (N, M)
+    coeffs_rot = torch.einsum('ni,bic->bnc', Y_rot_inv, f_vals)  # (batch, N, 3)
+
+    # numerical check
+    if False:
+        print(torch.linalg.eigvalsh(Y_rot.T @ Y_rot))
+        f_vals_rot = torch.einsum('ni,bic->bnc', Y_rot, coeffs_rot)
+        print(abs(f_vals - f_vals_rot).max().item())
+
+    return coeffs_rot
 
 
 def custom_quantile(sorted_numbers, quantiles):
@@ -449,7 +526,7 @@ class SplatModel:
         self.background_sh = torch.zeros((0, 3))
 
 
-def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, exposure=1.0, rotate=False):
+def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, exposure=1.0, scale=1.0, rotate=False):
 
     m = SplatModel(file_path)
     (features_dc, features_sh, features_ch,
@@ -513,9 +590,9 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
     # normalize position
     means -= torch.mean(means, axis=0)
     # normalize scale
-    scale = ((means*means).sum(-1).mean()**0.5).item()
-    means = means / scale
-    scales = scales - np.log(scale)
+    scale = scale / ((means*means).sum(-1).mean()**0.5).item()
+    means = means * scale
+    scales = scales + np.log(scale)
 
     quats = quats / torch.norm(quats, dim=1, keepdim=True)
     opacities = torch.sigmoid(opacities)
@@ -524,7 +601,6 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
 
     if rotate:
         from scipy.spatial.transform import Rotation
-        import spherical  # pip install spherical, very lightweight
         # find rotation matrix
         print("Find rotation matrix...")
         if False:
@@ -541,28 +617,21 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
         diffs = [np.abs(r0-r).sum() for r in possible_mats]
         r1 = possible_mats[np.argmin(diffs)]
         dr = r1 @ r0.T
+
         # rotate position
         print("Rotate position and quaternion...")
         means = means @ torch.from_numpy(dr.T).to(means)
+
         # rotate quaternion
         dq = Rotation.from_matrix(dr).as_quat()
         dq = torch.from_numpy(dq[[3,0,1,2]]).to(quats)
         quats = quat_mult(dq, quats)
+
         # rotate SH coefficients
         print("Rotate SH...")
-        # TODO: this is not exact, use real instead of complex matrix
-        wigner = spherical.Wigner(4)
-        # D = wigner.D(dq.cpu().numpy())
-        D = wigner.D(dq.cpu().numpy()).real
-        for l in range(1, sh_degree+1):
-            d = np.array([[D[wigner.Dindex(l, i, j)] for i in range(-l,l+1)] for j in range(-l,l+1)])
-            # d = torch.from_numpy(d).to(features_sh.device).to(torch.complex64)
-            d = torch.from_numpy(d).to(features_sh.device).to(torch.float32)
-            i0, i1 = l**2-1, (l+1)**2-1
-            # rotated = torch.einsum('ab,kbc->kac', d, features_sh[:, i0:i1].to(torch.complex64))
-            # print(torch.mean(torch.abs(rotated.imag)).item()/torch.mean(torch.abs(rotated.real)).item())
-            # features_sh[:, i0:i1] = rotated.real
-            features_sh[:, i0:i1] = torch.einsum('ab,kbc->kac', d, features_sh[:, i0:i1])
+        features_sh = rotate_sh_coeffs(features_sh, dr, "gsplat")
+        if background_sh_degree > 0:
+            background_sh = rotate_sh_coeffs(background_sh[None], dr, "nerfstudio")[0]
         print()
 
     if exposure != 1.0:
@@ -718,46 +787,32 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output", "-o", default="model.ssplat", help="The output SSPLAT file."
     )
-    parser.add_argument("--cull", "-c", default="inf", help="Cull threshold.")
-    parser.add_argument("--ncull", "-cn", default="1", help="Number of cull iterations.")
-    parser.add_argument("--exposure", "-e", default="1.0", help="Relative exposure.")
-    parser.add_argument("--rotate", "-r", default="0", help="Whether to rotate the scene to align with axis.")
-    parser.add_argument("--bit_sh", "-bsh", default="3", help="Bits for each SH coefficient.")
-    parser.add_argument("--bit_ch", "-bch", default="4", help="Bits for each CH coefficient.")
+    parser.add_argument("--cull", "-c", default=float("inf"), type=float, help="Cull threshold.")
+    parser.add_argument("--ncull", "-cn", default=1, type=int, help="Number of cull iterations.")
+    parser.add_argument("--exposure", "-e", default=1.0, type=float, help="Relative exposure.")
+    parser.add_argument("--scale", "-s", default=1.0, type=float, help="Relative scale.")
+    parser.add_argument("--rotate", "-r", default=False, type=bool, help="Whether to rotate the scene to align with axis.")
+    parser.add_argument("--bit_sh", "-bsh", default=3, type=int, help="Bits for each SH coefficient.")
+    parser.add_argument("--bit_ch", "-bch", default=4, type=int, help="Bits for each CH coefficient.")
     args = parser.parse_args()
 
-    bit_sh = int(args.bit_sh)
-    bit_ch = int(args.bit_ch)
+    bit_sh = args.bit_sh
+    bit_ch = args.bit_ch
 
     meta = {
         'argv': __import__('sys').argv,
         'timestamp': __import__('datetime').datetime.now().astimezone().isoformat(),
     }
 
-    try:
-        cull_th = float(args.cull)
-    except ValueError:
-        print("Ignore invalid cull threshold:", args.cull)
-        cull_th = float('inf')
-    try:
-        cull_n = int(args.ncull)
-    except ValueError:
-        print("Ignore invalid cull iterations:", args.ncull)
-        cull_n = 1
-    try:
-        exposure = float(args.exposure)
-    except ValueError:
-        print("Ignore invalid exposure:", args.exposure)
-        exposure = 1.0
-    try:
-        rotate = bool(eval(args.rotate))
-    except ValueError:
-        print("Ignore invalid rotate:", args.rotate)
-        rotate = False
+    cull_th = args.cull
+    cull_n = args.ncull
+    exposure = args.exposure
+    rotate = args.rotate
+    scale = args.scale
 
     for input_file in args.input_files:
         print(f"Processing {input_file}...", end='\n\n')
-        ssplat_data = process_ckpt_to_ssplat(input_file, meta, cull_th, cull_n, exposure, rotate)
+        ssplat_data = process_ckpt_to_ssplat(input_file, meta, cull_th, cull_n, exposure, scale, rotate)
         output_file = (
             args.output if len(args.input_files) == 1 else input_file + ".ssplat"
         )
