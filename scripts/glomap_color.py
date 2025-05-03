@@ -64,6 +64,9 @@ def main(workdir):
 
     transforms['frames'].sort(key=lambda _: _['file_path'])
 
+    num_points = points.shape[0]
+    num_images = len(transforms['frames'])
+
     for frame in tqdm(transforms['frames']):
         image = cv2.imread(os.path.join(workdir, frame['file_path']))
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -80,30 +83,76 @@ def main(workdir):
         R = b2c[:3, :3]
         t = b2c[:3, 3:4]
 
+        # projection
         pts_cam = points @ R.T + t.T
-        depths = pts_cam[:, 2:]
-        pts_2d = pts_cam / depths
+        depths = pts_cam[:, 2]
+        x = pts_cam[:, 0] / depths
+        y = pts_cam[:, 1] / depths
 
-        pts_cam_np = pts_cam.cpu().numpy()
         if model == "OPENCV":
-            pts_2d = cv2.projectPoints(pts_cam_np, np.zeros(3), np.zeros(3), K, distCoeffs)
+            r2 = x*x+y*y
+            k1, k2, p1, p2 = distCoeffs
+            radial = 1 + r2*(k1 + k2*r2)
+            dx = 2*p1*x*y + p2*(r2 + 2*x*x)
+            dy = p1*(r2 + 2*y*y) + 2*p2*x*y
+            x = x * radial + dx
+            y = y * radial + dy
+
         elif model == "OPENCV_FISHEYE":
-            pts_2d = cv2.fisheye.projectPoints(pts_cam_np, np.zeros(3), np.zeros(3), K, distCoeffs)
-        pts_2d = torch.from_numpy(pts_2d[0][:,0]).cuda()
-        pts_2d = (pts_2d+0.5).int()
+            r = torch.hypot(x, y)
+            theta = torch.atan(r)
+            theta2 = theta**2
+            k1, k2, k3, k4 = distCoeffs
+            theta_d = theta * (1+theta2*(k1+theta2*(k2+theta2*(k3+theta2*k4))))
+            scale = theta_d / torch.clip(r, min=1e-8)
+            x = x * scale
+            y = y * scale
 
-        valid_mask = (pts_2d[:, 0] >= 0) & (pts_2d[:, 0] <= w-1) & \
-                     (pts_2d[:, 1] >= 0) & (pts_2d[:, 1] <= h-1) & \
-                     (depths.flatten() > 0)
+        fx, fy, cx, cy = K[0,0], K[1,1], K[0,2], K[1,2]
+        pts_2d_f = torch.stack([fx*x+cx, fy*y+cy], dim=1)
+        pts_2d = (pts_2d_f+0.5).int()
 
-        # TODO: how to filter out occluded points?
+        # filter out of bounds
+        valid_mask = (pts_2d[:, 0] >= 0) & (pts_2d[:, 0] < w) & \
+                     (pts_2d[:, 1] >= 0) & (pts_2d[:, 1] < h) & \
+                     (depths > 0)
 
+        # filter occluded - not perfect but good enough for initializing splats
+        if True:
+            # downscale
+            pts_2d_filtered = pts_2d[valid_mask]
+            # sc = min(0.1 * np.sqrt(len(pts_2d_filtered)/(w*h)), 1)
+            sc = min(1.0 * np.sqrt((num_points/num_images)/(w*h)), 1)
+            hs, ws = int(sc*h+1), int(sc*w+1)
+            pts_2d_s = (pts_2d_f * sc + 0.5).long()
+            valid_mask_s = (pts_2d_s[:, 0] >= 0) & (pts_2d_s[:, 0] < ws) & \
+                        (pts_2d_s[:, 1] >= 0) & (pts_2d_s[:, 1] < hs) & \
+                        (depths > 0)
+            pts_2d_s = pts_2d_s[valid_mask_s]
+
+            # render a flat depth image
+            image = torch.zeros(hs*ws, device="cuda") + torch.amax(depths)
+            raster_indices = pts_2d_s[:,1] * ws + pts_2d_s[:,0]
+            raster_depths = depths[valid_mask_s]
+            image.scatter_reduce_(0, raster_indices, raster_depths, reduce='amin', include_self=True)
+            if False:
+                import matplotlib.pyplot as plt
+                plt.figure()
+                plt.imshow(image.reshape((hs, ws)).cpu().numpy())
+                plt.show()
+
+            # depth testing
+            is_visible = 1.1 * image[raster_indices] > raster_depths
+            valid_mask[valid_mask_s] &= is_visible
+
+        # apply mask
         if 'mask_path' in frame:
             mask = cv2.imread(os.path.join(workdir, frame['mask_path']))[:,:,0] > 0
             mask_tensor = torch.from_numpy(mask).cuda()
             pts_2d_filtered = pts_2d[valid_mask]
             valid_mask[valid_mask.clone()] &= mask_tensor[pts_2d_filtered[:, 1], pts_2d_filtered[:, 0]]
 
+        # accumulate color
         valid_pts_2d = pts_2d[valid_mask]
         colors = image_tensor[valid_pts_2d[:, 1], valid_pts_2d[:, 0]]
 
