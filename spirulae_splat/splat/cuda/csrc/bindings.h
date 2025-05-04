@@ -543,7 +543,8 @@ std::tuple<
     torch::Tensor,  // out_img
     torch::Tensor,  // out_depth
     torch::Tensor,  // out_normal
-    torch::Tensor  // out_depth_reg
+    torch::Tensor,  // out_depth_reg
+    torch::Tensor  // out_intersect_count_reg
 > rasterize_simplified_sorted_forward_tensor(
     const unsigned img_height,
     const unsigned img_width,
@@ -555,7 +556,8 @@ std::tuple<
     const torch::Tensor &axes_u,
     const torch::Tensor &axes_v,
     const torch::Tensor &colors,
-    const torch::Tensor &opacities
+    const torch::Tensor &opacities,
+    const int intersect_count_reg_start
 );
 
 
@@ -579,13 +581,15 @@ std::tuple<
     const torch::Tensor &axes_v,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
+    const int intersect_count_reg_start,
     const torch::Tensor &output_alpha,
     const torch::Tensor &output_depth,
     const torch::Tensor &v_output_alpha,
     const torch::Tensor &v_output_img,
     const torch::Tensor &v_output_depth,
     const torch::Tensor &v_output_normal,
-    const torch::Tensor &v_output_depth_reg
+    const torch::Tensor &v_output_depth_reg,
+    const torch::Tensor &v_output_intersect_count_reg
 );
 
 

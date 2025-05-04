@@ -20,7 +20,7 @@ rasterize.RETURN_IDX = True
 rasterize_simplified.RETURN_IDX = True
 rasterize_depth_sorted.DEBUG = True
 
-torch.manual_seed(41)
+torch.manual_seed(42)
 
 device = torch.device("cuda:0")
 
@@ -55,6 +55,7 @@ def test_rasterize_simplified_sorted():
         device=device,
     )
     viewmat[:3, :3] = _torch_impl.quat_to_rotmat(torch.randn(4))
+    intersect_count_reg_start = 2
 
     means3d = 0.8*torch.randn((num_points, 3), device=device)
     scales = 0.8*torch.exp(torch.randn((num_points, 2), device=device))
@@ -102,7 +103,8 @@ def test_rasterize_simplified_sorted():
 
     output = rasterize_gaussians_simplified_sorted(
         positions, axes_u, axes_v, colors, opacities,
-        num_intersects, sorted_indices, cam
+        num_intersects, sorted_indices, cam,
+        intersect_count_reg_start
     )
 
     output_r = rasterize_gaussians_sorted(
@@ -127,13 +129,14 @@ def test_rasterize_simplified_sorted():
     check_close('depth', output[2], output_r[2])
     check_close('normal', output[3], output_r[3])
     check_close('reg_depth', output[4], output_r[4])
+    # check_close('reg_intersect_count', output[5], output_r[5])
     check_close('depth1', output[2][..., 0:1]/(output[1]+1e-12), output_d[0], rtol=1e-3)
     print()
 
     _output = _torch_impl.rasterize_gaussians_simplified_sorted(
         _positions, _axes_u, _axes_v, _colors, _opacities,
         num_intersects, sorted_indices,
-        cam.intrins, H, W,
+        cam.intrins, H, W, intersect_count_reg_start
     )
 
     print("test forward")
@@ -142,16 +145,18 @@ def test_rasterize_simplified_sorted():
     check_close('out_depth', output[2], _output[2])
     check_close('out_normal', output[3], _output[3])
     check_close('out_depth_reg', output[4], _output[4])
+    check_close('out_intersect_count_reg', output[5], _output[5])
     print()
 
     def fun(output):
-        img, alpha, depth, normal, depth_reg = output
+        img, alpha, depth, normal, depth_reg, intersect_count_reg = output
         img_r = torch.sin(img).norm(dim=2, keepdim=True) + 1
         normal_r = (torch.exp(normal)-0.75).norm(dim=2, keepdim=True)
         depth_r = torch.flip(torch.sigmoid(depth.norm(dim=2, keepdim=True)), [0, 1])
-        reg_r = torch.exp(-0.1*(depth_reg+1))
+        reg_d_r = torch.exp(-0.1*(depth_reg+1))
+        reg_i_r = torch.exp(-0.5*intersect_count_reg)
         alpha_r = torch.exp(torch.flip(alpha, [0, 1]))
-        return ((img_r+1) * (alpha_r+1) + (depth_r+1) * (reg_r+1) + normal_r).mean()
+        return ((img_r+1) * (alpha_r+1) + (depth_r+1) * (reg_d_r+1) * (reg_i_r+1) + normal_r).mean()
     fun(output).backward()
     fun(_output).backward()
 

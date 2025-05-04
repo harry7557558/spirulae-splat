@@ -1949,7 +1949,8 @@ std::tuple<
     torch::Tensor,  // out_img
     torch::Tensor,  // out_depth
     torch::Tensor,  // out_normal
-    torch::Tensor  // out_depth_reg
+    torch::Tensor,  // out_depth_reg
+    torch::Tensor  // out_intersect_count_reg
 > rasterize_simplified_sorted_forward_tensor(
     const unsigned img_height,
     const unsigned img_width,
@@ -1961,7 +1962,8 @@ std::tuple<
     const torch::Tensor &axes_u,
     const torch::Tensor &axes_v,
     const torch::Tensor &colors,
-    const torch::Tensor &opacities
+    const torch::Tensor &opacities,
+    const int intersect_count_reg_start
 ) {
     DEVICE_GUARD(positions);
     CHECK_INPUT(sorted_indices);
@@ -1990,6 +1992,9 @@ std::tuple<
     torch::Tensor out_depth_reg = torch::zeros(
         {img_height, img_width, 1}, float32
     );
+    torch::Tensor out_intersect_count_reg = torch::zeros(
+        {img_height, img_width, 1}, float32
+    );
 
     const dim3 tile_bounds = whb2tb(img_width, img_height);
 
@@ -2000,12 +2005,14 @@ std::tuple<
         (float3 *)axes_v.contiguous().data_ptr<float>(), \
         (float3 *)colors.contiguous().data_ptr<float>(), \
         opacities.contiguous().data_ptr<float>(), \
+        intersect_count_reg_start, \
         /* outputs */ \
         out_alpha.contiguous().data_ptr<float>(), \
         (float3 *)out_img.contiguous().data_ptr<float>(), \
         (float2 *)out_depth.contiguous().data_ptr<float>(), \
         (float3 *)out_normal.contiguous().data_ptr<float>(), \
-        out_depth_reg.contiguous().data_ptr<float>()
+        out_depth_reg.contiguous().data_ptr<float>(), \
+        out_intersect_count_reg.contiguous().data_ptr<float>()
 
     if (camera_model == "") {
         rasterize_simplified_sorted_forward_kernel<CameraType::Undistorted>
@@ -2030,8 +2037,8 @@ std::tuple<
     #undef _TEMP_ARGS
 
     return std::make_tuple(
-        out_alpha, out_img,
-        out_depth, out_normal, out_depth_reg
+        out_alpha, out_img, out_depth, out_normal,
+        out_depth_reg, out_intersect_count_reg
     );
 }
 
@@ -2056,13 +2063,15 @@ std::tuple<
     const torch::Tensor &axes_v,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
+    const int intersect_count_reg_start,
     const torch::Tensor &output_alpha,
     const torch::Tensor &output_depth,
     const torch::Tensor &v_output_alpha,
     const torch::Tensor &v_output_img,
     const torch::Tensor &v_output_depth,
     const torch::Tensor &v_output_normal,
-    const torch::Tensor &v_output_depth_reg
+    const torch::Tensor &v_output_depth_reg,
+    const torch::Tensor &v_output_intersect_count_reg
 ) {
     DEVICE_GUARD(positions);
     CHECK_INPUT(num_intersects);
@@ -2079,6 +2088,7 @@ std::tuple<
     CHECK_INPUT(v_output_depth);
     CHECK_INPUT(v_output_normal);
     CHECK_INPUT(v_output_depth_reg);
+    CHECK_INPUT(v_output_intersect_count_reg);
 
     if (positions.ndimension() != 2 || positions.size(1) != 3) {
         AT_ERROR("xys must have dimensions (num_points, 2)");
@@ -2117,6 +2127,7 @@ std::tuple<
         (float3 *)axes_v.contiguous().data_ptr<float>(), \
         (float3 *)colors.contiguous().data_ptr<float>(), \
         opacities.contiguous().data_ptr<float>(), \
+        intersect_count_reg_start, \
         output_alpha.contiguous().data_ptr<float>(), \
         (float2 *)output_depth.contiguous().data_ptr<float>(), \
         v_output_alpha.contiguous().data_ptr<float>(), \
@@ -2124,6 +2135,7 @@ std::tuple<
         (float2 *)v_output_depth.contiguous().data_ptr<float>(), \
         (float3 *)v_output_normal.contiguous().data_ptr<float>(), \
         v_output_depth_reg.contiguous().data_ptr<float>(), \
+        v_output_intersect_count_reg.contiguous().data_ptr<float>(), \
         /* outputs */ \
         (float3 *)v_positions.contiguous().data_ptr<float>(), \
         (float2 *)v_positions_xy_abs.contiguous().data_ptr<float>(), \

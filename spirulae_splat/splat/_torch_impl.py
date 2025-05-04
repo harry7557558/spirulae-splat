@@ -1350,6 +1350,7 @@ def rasterize_gaussians_simplified_sorted(
     intrins: Tuple[float, float, float, float],
     img_height: int,
     img_width: int,
+    intersect_count_reg_start: int
 ):
     device = positions.device
     float32_param = { 'dtype': torch.float32, 'device': device }
@@ -1362,6 +1363,7 @@ def rasterize_gaussians_simplified_sorted(
     out_depth = torch.zeros((img_size[1], img_size[0], 2), **float32_param)
     out_normal = torch.zeros((img_size[1], img_size[0], 3), **float32_param)
     out_depth_reg = torch.zeros((img_size[1], img_size[0], 1), **float32_param)
+    out_intersect_count_reg = torch.zeros((img_size[1], img_size[0], 1), **float32_param)
     float32_param['requires_grad'] = True
 
     fx, fy, cx, cy = intrins
@@ -1379,8 +1381,9 @@ def rasterize_gaussians_simplified_sorted(
             depth_squared_sum = torch.zeros(1, **float32_param)
             normal_sum = torch.zeros(3, **float32_param)
             reg_depth_p = 0.0
+            reg_intersect_count = 0.0
 
-            for gid in sorted_indices[i, j, :num_intersects[i, j]]:
+            for cur_idx, gid in enumerate(sorted_indices[i, j, :num_intersects[i, j]]):
                 pos = positions[gid]
                 opac = opacities[gid]
                 axis_uv = (axes_u[gid], axes_v[gid])
@@ -1388,7 +1391,7 @@ def rasterize_gaussians_simplified_sorted(
                 poi, uv, valid = get_intersection(pos, axis_uv, pos_2d)
                 if torch.linalg.norm(uv) > 1.0:
                     continue
-                alpha, valid  = get_alpha(uv, opac)
+                alpha, valid = get_alpha(uv, opac)
                 if  not valid:
                     continue
 
@@ -1411,6 +1414,11 @@ def rasterize_gaussians_simplified_sorted(
                 normal = -normal * torch.sign(torch.dot(poi, normal))
                 normal_sum = normal_sum + vis * normal
 
+                if cur_idx >= intersect_count_reg_start:
+                    # reg_intersect_count += next_T
+                    reg_intersect_count += vis
+                    # reg_intersect_count += (cur_idx-intersect_count_reg_start+1) * vis
+
                 T = next_T
 
             out_alpha[i, j] = 1.0-T
@@ -1418,8 +1426,10 @@ def rasterize_gaussians_simplified_sorted(
             out_depth[i, j] = torch.concat((depth_sum, depth_squared_sum))
             out_normal[i, j] = normal_sum
             out_depth_reg[i, j] = reg_depth_p
+            out_intersect_count_reg[i, j] = reg_intersect_count
 
     return (
         out_img, out_alpha,
-        out_depth, out_normal, out_depth_reg,
+        out_depth, out_normal,
+        out_depth_reg, out_intersect_count_reg,
     )

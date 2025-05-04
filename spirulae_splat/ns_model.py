@@ -159,7 +159,7 @@ class SpirulaeModelConfig(ModelConfig):
     """Whether to randomize the background color."""
     num_downscales: int = 2
     """at the beginning, resolution is 1/2^d, where d is this number"""
-    use_mcmc: bool = False
+    use_mcmc: bool = True
     """use Markov-Chain Monte Carlo for gaussian control
         Disable per-pixel sorting if you use this"""
     random_init: bool = False
@@ -229,7 +229,8 @@ class SpirulaeModelConfig(ModelConfig):
     # representation
     use_per_pixel_sorting: bool = True
     """enable per-pixel sorting, disable this when using MCMC"""
-    per_pixel_sorting_warmup: int = 2000
+    # per_pixel_sorting_warmup: int = 2000
+    per_pixel_sorting_warmup: int = 0
     """use per pixel sorting only after this number of steps"""
     sh_degree: int = 3
     """maximum degree of spherical harmonics to use"""
@@ -290,6 +291,13 @@ class SpirulaeModelConfig(ModelConfig):
     reg_warmup_length: int = 4000
     """Warmup for depth and normal regularizers.
        only apply regularizers after this many steps."""
+    intersect_count_reg_weight: float = 0.1
+    """Weight for regularizer to reduce intersection count"""
+    intersect_count_reg_start: int = 8
+    """Apply intersection count regularization if there's more than this number of intersections per ray"""
+    intersect_count_reg_warmup: int = 1000
+    """warmup steps for intersection count regularizer
+        only apply after this many steps"""
     alpha_loss_weight: int = 0.01
     """Weight for alpha, if mask is provided."""
     mcmc_opacity_reg: float = 0.01  # 0.01 in original paper
@@ -861,10 +869,11 @@ class SpirulaeModel(Model):
 
         # fast one-pass rendering
         else:
-            (rgb, alpha, depth_im, normal_im, reg_depth) \
+            (rgb, alpha, depth_im, normal_im, reg_depth, reg_intersect_count) \
              = rasterize_simplified(
                 positions, axes_u, axes_v, rgbs, opacities,
-                *raster_indices, ssplat_camera
+                *raster_indices, ssplat_camera,
+                self.config.intersect_count_reg_start
             )
             depth_im_ref = torch.where(
                 alpha > 0.0, depth_im[..., :1] / alpha,
@@ -921,8 +930,7 @@ class SpirulaeModel(Model):
             "render_normal": 0.5+0.5*normal_im,
             "reg_depth": torch.sqrt(torch.relu(reg_depth*alpha)+1e-8),
             "reg_normal": torch.sqrt(torch.relu(reg_normal*alpha)+1e-8) * alpha_diffused,
-            # "reg_depth": reg_depth / depth_im_ref.clip(1e-3)**2,
-            # "reg_normal": reg_normal * alpha_diffused,
+            "reg_intersect_count": reg_intersect_count,
             "alpha": alpha,
             "background": background,
         }  # type: ignore
@@ -1336,6 +1344,13 @@ class SpirulaeModel(Model):
             weight_depth_reg, weight_normal_reg = 0.0, 0.0
         depth_reg = weight_depth_reg * reg_depth.mean()
         normal_reg = weight_normal_reg * reg_normal[1:-1, 1:-1].mean()
+
+        # intersection count regularizer
+        reg_intersect_count = 0.0
+        if self.step >= self.config.intersect_count_reg_warmup:
+            reg_intersect_count = self.config.intersect_count_reg_weight * \
+                  outputs["reg_intersect_count"].mean()
+
         timerl.mark("reg")  # ~100us
 
         # MCMC regularizers
@@ -1359,6 +1374,7 @@ class SpirulaeModel(Model):
             "scale_reg": scale_reg,
             "depth_reg": depth_reg,
             "normal_reg": normal_reg,
+            "intersect_count_reg": reg_intersect_count,
             "quat_reg": quat_norm_reg,
             'mcmc_opacity_reg': mcmc_opacity_reg,
             'mcmc_scale_reg': mcmc_scale_reg,

@@ -161,8 +161,8 @@ inline __device__ glm::vec3 ch_coeffs_to_color(
     const glm::vec3 *coeffs,
     const glm::vec2 &uv
 ) {
-    assert(degree_r >= 0 && degree_r_to_use <= degree_r);
-    assert(degree_phi >= 0 && degree_phi_to_use <= degree_phi);
+    assert(degree_r_to_use <= degree_r);
+    assert(degree_phi_to_use <= degree_phi);
 
     const float r = hypot(uv.x, uv.y);
     const float phi = atan2(uv.y, uv.x);
@@ -215,8 +215,8 @@ inline __device__ void ch_coeffs_to_color_vjp(
     float &v_ch_coeff_abs,
     glm::vec2 &v_uv
 ) {
-    assert(degree_r >= 0 && degree_r_to_use <= degree_r);
-    assert(degree_phi >= 0 && degree_phi_to_use <= degree_phi);
+    assert(degree_r_to_use <= degree_r);
+    assert(degree_phi_to_use <= degree_phi);
 
     const float r = hypot(uv.x, uv.y);
     const float phi = atan2(uv.y, uv.x);
@@ -315,8 +315,8 @@ inline __device__ void ch_coeffs_to_color_sigmoid_vjp(
     float &v_ch_coeff_abs,
     glm::vec2 &v_uv
 ) {
-    assert(degree_r >= 0 && degree_r_to_use <= degree_r);
-    assert(degree_phi >= 0 && degree_phi_to_use <= degree_phi);
+    assert(degree_r_to_use <= degree_r);
+    assert(degree_phi_to_use <= degree_phi);
 
     const float r = hypot(uv.x, uv.y);
     const float phi = atan2(uv.y, uv.x);

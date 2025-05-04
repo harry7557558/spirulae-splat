@@ -87,7 +87,7 @@ enum class PerPixelSortType {
     float* __restrict__ v_opacities
 
 #define _ARGS_rasterize_simplified_sorted_forward_kernel \
-const int img_height, \
+    const int img_height, \
     const int img_width, \
     const float4 intrins, \
     const float2* __restrict__ undistortion_map, \
@@ -97,11 +97,13 @@ const int img_height, \
     const float3* __restrict__ axes_v, \
     const float3* __restrict__ colors, \
     const float* __restrict__ opacities, \
+    const int intersect_count_reg_start, \
     float* __restrict__ out_alpha, \
     float3* __restrict__ out_img, \
     float2* __restrict__ out_depth,  /* { depth, depth^2 } */ \
     float3* __restrict__ out_normal, \
-    float* __restrict__ out_depth_reg
+    float* __restrict__ out_depth_reg, \
+    float* __restrict__ out_intersect_count_reg
 
 #define _ARGS_rasterize_simplified_sorted_backward_kernel \
     const int img_height, \
@@ -115,6 +117,7 @@ const int img_height, \
     const float3* __restrict__ axes_v, \
     const float3* __restrict__ colors, \
     const float* __restrict__ opacities, \
+    const int intersect_count_reg_start, \
     const float* __restrict__ output_alpha, \
     const float2* __restrict__ output_depth, \
     const float* __restrict__ v_output_alpha, \
@@ -122,6 +125,7 @@ const int img_height, \
     const float2* __restrict__ v_output_depth, \
     const float3* __restrict__ v_output_normal, \
     const float* __restrict__ v_output_depth_reg, \
+    const float* __restrict__ v_output_intersect_count_reg, \
     float3* __restrict__ v_positions, \
     float2* __restrict__ v_positions_xy_abs, \
     float3* __restrict__ v_axes_u, \

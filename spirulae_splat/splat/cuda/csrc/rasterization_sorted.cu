@@ -55,8 +55,6 @@ __global__ void rasterize_indices_kernel(
 
     // current visibility left to render
     float T = 1.f;
-    // index of most recent gaussian to write to this thread's pixel
-    int cur_idx = 0;
 
     // outputs
     int32_t* sorted_indices = &sorted_indices_[pix_id*MAX_SORTED_SPLATS];
@@ -123,7 +121,6 @@ __global__ void rasterize_indices_kernel(
             const float next_T = T * (1.f - alpha);
 
             T = next_T;
-            cur_idx = batch_start + t;
             if (T <= 1e-3f) {
                 done = true;
                 break;
@@ -722,7 +719,6 @@ __global__ void rasterize_depth_sorted_forward_kernel(
 
     // rasterize
     float output_depth = 0.0f;
-    float output_visibility = 0.0f;
 
     for (; cur_idx < MAX_SORTED_SPLATS; cur_idx++) {
         int g_id = sorted_indices[cur_idx];
@@ -1019,7 +1015,6 @@ __global__ void rasterize_sorted_forward_kernel(
     float depth_squared_sum = 0.f;  // for L2 depth regularizer
     const float depth_ref = inside ? depth_ref_im[pix_id] : 0.f;
     float reg_depth_p = 0.f, reg_depth_i = 0.f;  // output depth regularizer
-    float reg_normal = 0.f;  // output normal regularizer
 
     // rasterize
     for (int cur_idx = 0; cur_idx < MAX_SORTED_SPLATS; cur_idx++) {
@@ -1201,8 +1196,6 @@ __global__ void rasterize_sorted_backward_kernel(
     float3 buffer_normal = {0.f, 0.f, 0.f};
     float buffer_depth_reg = 0.f;
     
-    float v_sum_vis = v_out_alpha;
-
     // rasterize
     const int32_t* sorted_indices = &sorted_indices_[pix_id*MAX_SORTED_SPLATS];
     for (int cur_idx = n-1; cur_idx >= 0; cur_idx--) {
@@ -1350,7 +1343,7 @@ __global__ void rasterize_sorted_backward_kernel(
         // v_alpha += -T_final * ra * background.x * v_out.x;
         // v_alpha += -T_final * ra * background.y * v_out.y;
         // v_alpha += -T_final * ra * background.z * v_out.z;
-        float v_alpha_color_only = v_alpha;
+        // float v_alpha_color_only = v_alpha;
         v_alpha += (depth * T - buffer_depth.x) * ra * v_depth_sum;
         v_alpha += (depth*depth * T - buffer_depth.y) * ra * v_depth_squared_sum;
         v_alpha += (reg_depth_i * T - buffer_depth_reg) * ra * v_out_reg_depth;
@@ -1502,6 +1495,7 @@ __global__ void rasterize_simplified_sorted_forward_kernel(
     float depth_sum = 0.f;  // output depth
     float depth_squared_sum = 0.f;  // for L2 depth regularizer
     float reg_depth_p = 0.f;  // output depth regularizer
+    float intersect_count_reg = 0.f;
 
     // rasterize
     for (int cur_idx = 0; cur_idx < MAX_SORTED_SPLATS; cur_idx++) {
@@ -1521,11 +1515,8 @@ __global__ void rasterize_simplified_sorted_forward_kernel(
         // if (!get_intersection(pos, axis_uv, pos_2d, poi, uv));
         //     continue;
         get_intersection(pos, axis_uv, pos_2d, poi, uv);
-        if (glm::length(uv) > visibility_kernel_radius())
-            continue;
         float alpha;
-        if (!get_alpha(uv, opac, alpha))
-            continue;
+        get_alpha(uv, opac, alpha);
 
         const float next_T = T * (1.f - alpha);
         const float vis = alpha * T;
@@ -1553,6 +1544,13 @@ __global__ void rasterize_simplified_sorted_forward_kernel(
         normal_out.y = normal_out.y + normal.y * vis;
         normal_out.z = normal_out.z + normal.z * vis;
 
+        // intersection count regularization
+        if (cur_idx >= intersect_count_reg_start) {
+            // intersect_count_reg += next_T;
+            intersect_count_reg += vis;
+            // intersect_count_reg += (cur_idx-intersect_count_reg_start+1) * vis;
+        }
+
         T = next_T;
     }
 
@@ -1561,6 +1559,7 @@ __global__ void rasterize_simplified_sorted_forward_kernel(
     out_depth[pix_id] = { depth_sum, depth_squared_sum };
     out_normal[pix_id] = normal_out;
     out_depth_reg[pix_id] = reg_depth_p;
+    out_intersect_count_reg[pix_id] = intersect_count_reg;
 }
 
 
@@ -1599,10 +1598,12 @@ __global__ void rasterize_simplified_sorted_backward_kernel(
     const float v_reg_depth_p = nan_to_num(v_output_depth_reg[pix_id]);
     const float v_depth_sum = v_out_depth.x;
     const float v_depth_squared_sum = v_out_depth.y;
+    const float v_out_intersect_count_reg = nan_to_num(v_output_intersect_count_reg[pix_id]);
 
     // this is the T AFTER the last gaussian in this pixel
     float T_final = 1.0f - output_alpha[pix_id];
     float T = T_final;
+    float v_T = 0.0f;
 
     const float vis_sum_final = 1.0f - T_final;
     const float depth_sum_final = output_depth[pix_id].x;
@@ -1613,8 +1614,7 @@ __global__ void rasterize_simplified_sorted_backward_kernel(
     float2 buffer_depth = {0.f, 0.f};  // depth, depth^2
     float3 buffer_normal = {0.f, 0.f, 0.f};
     float buffer_depth_reg = 0.f;
-
-    float v_sum_vis = v_out_alpha;
+    float buffer_intersect_count_reg = 0.0f;
 
     // rasterize
     const int32_t* sorted_indices = &sorted_indices_[pix_id*MAX_SORTED_SPLATS];
@@ -1631,11 +1631,8 @@ __global__ void rasterize_simplified_sorted_backward_kernel(
         glm::vec3 poi;
         glm::vec2 uv;
         get_intersection(pos, axis_uv, pos_2d, poi, uv);
-        if (glm::length(uv) > visibility_kernel_radius())
-            continue;
         float alpha;
-        if (!get_alpha(uv, opac, alpha))
-            continue;
+        get_alpha(uv, opac, alpha);
 
         glm::vec3 v_position_local = {0.f, 0.f, 0.f};
         glm::vec2 v_position_xy_abs_local = {0.f, 0.f};
@@ -1701,6 +1698,18 @@ __global__ void rasterize_simplified_sorted_backward_kernel(
         buffer_normal.x += normal.x * vis;
         buffer_normal.y += normal.y * vis;
         buffer_normal.z += normal.z * vis;
+
+        // intersect count regularization
+        #if 0
+        if (cur_idx >= intersect_count_reg_start)
+            buffer_intersect_count_reg += T;
+        v_alpha -= buffer_intersect_count_reg * ra * v_out_intersect_count_reg;
+        #else
+        float intersect_count_w = (cur_idx >= intersect_count_reg_start ? 1.0f : 0.0f);
+        // float intersect_count_w = fmaxf(float(cur_idx-intersect_count_reg_start+1), 0.0f);
+        v_alpha += (intersect_count_w * T - buffer_intersect_count_reg) * ra * v_out_intersect_count_reg;
+        buffer_intersect_count_reg += intersect_count_w * vis;
+        #endif
 
         // grad
         glm::vec2 v_uv;
