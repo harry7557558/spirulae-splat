@@ -227,8 +227,8 @@ class SpirulaeModelConfig(ModelConfig):
     """minimum opacity for MCMC relocation"""
 
     # representation
-    use_per_pixel_sorting: bool = True
-    """enable per-pixel sorting, disable this when using MCMC"""
+    use_per_pixel_sorting: bool = False
+    """enable per-pixel sorting, recommend disable this when using MCMC"""
     per_pixel_sorting_warmup: int = 2000
     """use per pixel sorting only after this number of steps"""
     sh_degree: int = 3
@@ -267,6 +267,14 @@ class SpirulaeModelConfig(ModelConfig):
        Makes training much slower - TODO: fused bilagrid in CUDA"""
     grid_shape: Tuple[int, int, int] = (16, 16, 8)
     """Shape of the bilateral grid (X, Y, W)"""
+
+    use_3dgs: bool = False
+    """Use 3DGS instead of 2DGS, with limited support for existing features
+        Tested with:
+         - MCMC strategy
+         - Depth supervision with alpha_supervision_weight (0.02,0.01) instead of (0.002,0)
+         - Use bilateral grid, disable adaptive exposure
+        """
 
     # regularization
     use_scale_regularization: bool = True
@@ -321,6 +329,8 @@ class SpirulaeModelConfig(ModelConfig):
     alpha_supervision_weight: float = 0.002
     """Weight for alpha supervision by rendered alpha with alpha predicted by a foundation model
         Useful for removing floaters from sky for outdoor scenes"""
+    alpha_supervision_weight_under: float = 0.0
+    """Similar to alpha_supervision_weight, but applies when renderer opacity is lower than reference opacity"""
 
 
 class SpirulaeModel(Model):
@@ -336,6 +346,18 @@ class SpirulaeModel(Model):
     ):
         self.seed_points = seed_points
         super().__init__(*args, **kwargs)
+
+        if self.config.use_3dgs:
+            global fully_fused_projection
+            global rasterize_to_pixels
+            global isect_tiles
+            global isect_offset_encode
+            from spirulae_splat.splat.gsplat_3dgs_wrapper import (
+                fully_fused_projection,
+                rasterize_to_pixels,
+                isect_tiles,
+                isect_offset_encode,
+            )
 
     def populate_modules(self):
         if self.seed_points is not None and not self.config.random_init:
@@ -353,7 +375,6 @@ class SpirulaeModel(Model):
         distances, indices = self.k_nearest_sklearn(means.data, 6)
         distances = torch.from_numpy(distances)
         # avg_dist = distances.mean(dim=-1, keepdim=True)
-        # scales = torch.nn.Parameter(torch.log(avg_dist.repeat(1, 2)))
         points = means.data[indices] - means.data[:, None, :]
         points = points.cpu().numpy()
         U, S, Vt = np.linalg.svd(points)
@@ -362,7 +383,10 @@ class SpirulaeModel(Model):
             sorted_indices = np.argsort(-S[i])
             S[i] = S[i][sorted_indices]
             Vt[i] = Vt[i][sorted_indices]
-        scales = np.log(1.5*S[:,:2]+1e-8)
+        scales = S
+        if not self.config.use_3dgs:
+            scales = S[:, :2]
+        scales = np.log(1.5*scales+1e-8)
         scales = 0.5*(scales+np.flip(scales,axis=1))
         scales = torch.nn.Parameter(torch.from_numpy(scales))
         # quats = torch.nn.Parameter(random_quat_tensor(num_points))
@@ -463,6 +487,7 @@ class SpirulaeModel(Model):
                 refine_stop_iter=self.config.mcmc_stop_refine_at,
                 refine_every=self.config.refine_every,
                 min_opacity=self.config.mcmc_min_opacity,
+                is_3dgs=self.config.use_3dgs,
             )
             self.strategy_state = self.strategy.initialize_state()
             return
@@ -513,13 +538,6 @@ class SpirulaeModel(Model):
     def scales(self):
         return self.gauss_params["scales"]
     
-    @property
-    def scales_3d(self):
-        scales = self.gauss_params["scales"]
-        scales_thickness = torch.amin(scales, axis=1, keepdim=True) + math.log(0.001)
-        scales_thickness += -torch.inf
-        return torch.concat((scales, scales_thickness), dim=1)
-
     @property
     def quats(self):
         return self.gauss_params["quats"]
@@ -785,101 +803,163 @@ class SpirulaeModel(Model):
             viewdirs = self.means.detach() - optimized_camera_to_world[:3, 3].cuda()  # (N, 3)
             n = min(self.step // self.config.sh_degree_interval, self.config.sh_degree)
             rgbs = spherical_harmonics(n, viewdirs, self.features_dc, self.features_sh)  # input unnormalized viewdirs
-            rgbs = torch.relu(rgbs+0.5)  # type: ignore
+            rgbs = rgbs + 0.5
+            # comment this - discourage below zero, make it compatible with existing viewers
+            # rgbs = torch.relu(rgbs)
         else:
             rgbs = self.features_dc
         timerr.mark("sh")  # 200us-350us
 
-        (
-            positions, axes_u, axes_v,
-            bounds, num_tiles_hit
-        ) = project_gaussians(  # type: ignore
-            self.means,
-            torch.exp(self.scales),
-            quats,
-            viewmat[:3, :].cuda(),
-            ssplat_camera,
-        )  # type: ignore
-        timerr.mark("project")  # 200us-350us
+        if not self.config.use_3dgs:
+            # 2DGS rendering
 
-        use_per_pixel_sorting = (
-            self.config.use_per_pixel_sorting and
-            self.step >= self.config.per_pixel_sorting_warmup
-        )
-        if use_per_pixel_sorting:
-            raster_indices = rasterize_gaussians_indices(
-                positions, axes_u, axes_v, opacities,
-                bounds, num_tiles_hit,
-                ssplat_camera
-            )
-            rasterize_depth = rasterize_gaussians_depth_sorted
-            rasterize = rasterize_gaussians_sorted
-            rasterize_simplified = rasterize_gaussians_simplified_sorted
-        else:
-            raster_indices = (bounds, num_tiles_hit)
-            rasterize_depth = rasterize_gaussians_depth
-            rasterize = rasterize_gaussians
-            rasterize_simplified = rasterize_gaussians_simplified
-
-        # slower but more capable two-pass rendering
-        if False or (
-            self.config.depth_reg_pairwise_factor < 1.0 or \
-            self.config.ch_degree_r * (2*self.config.ch_degree_phi+1) > 0 or \
-            self.config.depth_mode != "mean"
-        ):
-            assert not ssplat_camera.is_distorted(), \
-                "Fisheye camera is not supported for CH or median depth"
-
-            depth_im_ref = rasterize_depth(
-                positions, axes_u, axes_v, opacities,
-                *((raster_indices[1],) if use_per_pixel_sorting else raster_indices),
+            (
+                positions, axes_u, axes_v,
+                bounds, num_tiles_hit
+            ) = project_gaussians(  # type: ignore
+                self.means,
+                torch.exp(self.scales),
+                quats,
+                viewmat[:3, :].cuda(),
                 ssplat_camera,
-                self.config.depth_mode
-            )
-            depth_im_ref = torch.where(
-                depth_im_ref > 0.0, depth_im_ref,
-                torch.amax(depth_im_ref).detach()
-            ).contiguous()
-            timerr.mark("depth")  # ?us
-
-            # main rasterization
-            ch_degree = self.step // self.config.ch_degree_interval
-            (rgb, alpha, depth_im, normal_im, reg_depth) \
-             = rasterize(  # type: ignore
-                positions, axes_u, axes_v, rgbs,
-                self.config.ch_degree_r, min(ch_degree, self.config.ch_degree_r),
-                self.config.ch_degree_phi, min(ch_degree, self.config.ch_degree_phi),
-                self.features_ch,
-                opacities,
-                depth_im_ref,
-                # background_color,
-                self.config.depth_reg_pairwise_factor,
-                *raster_indices,
-                ssplat_camera
             )  # type: ignore
-            timerr.mark("render")  # ?us
+            timerr.mark("project")  # 200us-350us
 
-        # fast one-pass rendering
-        else:
-            (rgb, alpha, depth_im, normal_im, reg_depth) \
-             = rasterize_simplified(
-                positions, axes_u, axes_v, rgbs, opacities,
-                *raster_indices, ssplat_camera
+            use_per_pixel_sorting = (
+                self.config.use_per_pixel_sorting and
+                self.step >= self.config.per_pixel_sorting_warmup
             )
+            if use_per_pixel_sorting:
+                raster_indices = rasterize_gaussians_indices(
+                    positions, axes_u, axes_v, opacities,
+                    bounds, num_tiles_hit,
+                    ssplat_camera
+                )
+                rasterize_depth = rasterize_gaussians_depth_sorted
+                rasterize = rasterize_gaussians_sorted
+                rasterize_simplified = rasterize_gaussians_simplified_sorted
+            else:
+                raster_indices = (bounds, num_tiles_hit)
+                rasterize_depth = rasterize_gaussians_depth
+                rasterize = rasterize_gaussians
+                rasterize_simplified = rasterize_gaussians_simplified
+
+            # slower but more capable two-pass rendering
+            if False or (
+                self.config.depth_reg_pairwise_factor < 1.0 or \
+                self.config.ch_degree_r * (2*self.config.ch_degree_phi+1) > 0 or \
+                self.config.depth_mode != "mean"
+            ):
+                assert not ssplat_camera.is_distorted(), \
+                    "Fisheye camera is not supported for CH or median depth"
+
+                depth_im_ref = rasterize_depth(
+                    positions, axes_u, axes_v, opacities,
+                    *((raster_indices[1],) if use_per_pixel_sorting else raster_indices),
+                    ssplat_camera,
+                    self.config.depth_mode
+                )
+                depth_im_ref = torch.where(
+                    depth_im_ref > 0.0, depth_im_ref,
+                    torch.amax(depth_im_ref).detach()
+                ).contiguous()
+                timerr.mark("depth")  # ?us
+
+                # main rasterization
+                ch_degree = self.step // self.config.ch_degree_interval
+                (rgb, alpha, depth_im, normal_im, reg_depth) \
+                = rasterize(  # type: ignore
+                    positions, axes_u, axes_v, rgbs,
+                    self.config.ch_degree_r, min(ch_degree, self.config.ch_degree_r),
+                    self.config.ch_degree_phi, min(ch_degree, self.config.ch_degree_phi),
+                    self.features_ch,
+                    opacities,
+                    depth_im_ref,
+                    # background_color,
+                    self.config.depth_reg_pairwise_factor,
+                    *raster_indices,
+                    ssplat_camera
+                )  # type: ignore
+                timerr.mark("render")  # ?us
+
+            # fast one-pass rendering
+            else:
+                (rgb, alpha, depth_im, normal_im, reg_depth) \
+                = rasterize_simplified(
+                    positions, axes_u, axes_v, rgbs, opacities,
+                    *raster_indices, ssplat_camera
+                )
+                depth_im_ref = torch.where(
+                    alpha > 0.0, depth_im[..., :1] / alpha,
+                    torch.amax(depth_im[..., :1]).detach()
+                ).contiguous()
+                timerr.mark("render")  # 750us-1200us
+        
+            radii = self.config.kernel_radius/3.0 * \
+                      num_tiles_hit.unsqueeze(0)**0.5 / 2 * BLOCK_WIDTH
+            means2d = positions
+
+        else:
+            # 3DGS rendering
+
+            fx, fy, cx, cy = ssplat_camera.intrins
+            Ks = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).float()
+            (
+                camera_ids, gaussian_ids, radii,
+                means2d, depths, conics, compensations,
+            ) = fully_fused_projection(
+                self.means, None, quats, torch.exp(self.scales),
+                viewmat[None].cuda(), Ks[None].cuda(), W, H,
+                eps2d=0.3, packed=True,
+            )
+
+            tile_size = 16
+            tile_width = math.ceil(W / float(tile_size))
+            tile_height = math.ceil(H / float(tile_size))
+            tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+                means2d, radii, depths,
+                tile_size, tile_width, tile_height,
+                packed=True, n_cameras=1,
+                camera_ids=camera_ids, gaussian_ids=gaussian_ids,
+            )
+            isect_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
+
+            rgbd = torch.cat((
+                rgbs[gaussian_ids],
+                depth_map(depths)[..., None]
+            ), dim=-1)
+            opacs = opacities[gaussian_ids].squeeze(-1)
+
+            rgbd, alpha = rasterize_to_pixels(
+                means2d,
+                conics,
+                rgbd,
+                opacs,
+                W, H, tile_size,
+                isect_offsets,
+                flatten_ids,
+                backgrounds=None,
+                packed=True,
+                absgrad=True,
+            )
+            rgbd = rgbd[0]
+            alpha = alpha[0]
+
+            rgb = rgbd[..., :3]
             depth_im_ref = torch.where(
-                alpha > 0.0, depth_im[..., :1] / alpha,
-                torch.amax(depth_im[..., :1]).detach()
+                alpha > 0.0, rgbd[..., 3:] / alpha,
+                torch.amax(rgbd[..., 3:]).detach()
             ).contiguous()
-            timerr.mark("render")  # 750us-1200us
+
+            radii = radii.unsqueeze(0)
 
         if self.training:
             self.info = {
                 "width": W,
                 "height": H,
                 "n_cameras": camera.shape[0],
-                "radii": self.config.kernel_radius/3.0 * \
-                      num_tiles_hit.unsqueeze(0)**0.5 / 2 * BLOCK_WIDTH,
-                "means2d": positions,
+                "radii": radii,
+                "means2d": means2d,
             }
         timerr.mark("post")  # 100us-200us
 
@@ -908,9 +988,10 @@ class SpirulaeModel(Model):
 
         # normal regularization
         depth_im_ref = depth_inv_map(depth_im_ref)
-        normal_im = F.normalize(normal_im, dim=-1)
         depth_normal, alpha_diffused = depth_to_normal(depth_im_ref, ssplat_camera, None, True, alpha)
-        reg_normal = 1.0 - (depth_normal * normal_im).sum(-1, True)
+        if not self.config.use_3dgs:
+            normal_im = F.normalize(normal_im, dim=-1)
+            reg_normal = 1.0 - (depth_normal * normal_im).sum(-1, True)
         timerr.end("normal_reg")  # 600us-900us
         # -> ?us-?us median depth, 3000us-4500us one pass
 
@@ -918,16 +999,15 @@ class SpirulaeModel(Model):
             "rgb": rgb,
             "depth": depth_im_ref,
             "depth_normal": 0.5+0.5*depth_normal,
-            "render_normal": 0.5+0.5*normal_im,
-            "reg_depth": torch.sqrt(torch.relu(reg_depth*alpha)+1e-8),
-            "reg_normal": torch.sqrt(torch.relu(reg_normal*alpha)+1e-8) * alpha_diffused,
-            # "reg_depth": reg_depth / depth_im_ref.clip(1e-3)**2,
-            # "reg_normal": reg_normal * alpha_diffused,
-            "alpha": alpha,
-            "background": background,
-        }  # type: ignore
+        }
+        if not self.config.use_3dgs:
+            outputs["render_normal"] = 0.5+0.5*normal_im
+            outputs["reg_depth"] = torch.sqrt(torch.relu(reg_depth*alpha)+1e-8)
+            outputs["reg_normal"] = torch.sqrt(torch.relu(reg_normal*alpha)+1e-8) * alpha_diffused
+        outputs["alpha"] = alpha
+        outputs["background"] = background
 
-        if not self.training and use_per_pixel_sorting:
+        if not self.training and not self.config.use_3dgs and use_per_pixel_sorting:
             intersects = raster_indices[0].float() / raster_indices[1].shape[-1]
             outputs["num_intersects"] = intersects.reshape((H, W, 1)).repeat(1, 1, 3)
 
@@ -1077,12 +1157,17 @@ class SpirulaeModel(Model):
             normal_loss = normal_diff_x.abs().mean() + normal_diff_y.abs().mean()
 
         # alpha loss
-        alpha_loss = self.get_alpha_loss(pred_alpha.float().flatten(), alpha.float().flatten())
+        pred_alpha, alpha = pred_alpha.float().flatten(), alpha.float().flatten()
+        alpha_loss = self.get_alpha_loss(pred_alpha, alpha)
+        alpha_loss_over = 0.0
+        if self.config.alpha_supervision_weight_under > 0.0:
+            alpha_loss_over = self.get_alpha_loss(1.0-pred_alpha, 1.0-alpha)
 
         return (
             self.config.depth_supervision_weight * depth_loss,
             self.config.normal_supervision_weight * normal_loss,
-            self.config.alpha_supervision_weight * alpha_loss
+            self.config.alpha_supervision_weight * alpha_loss +
+                self.config.alpha_supervision_weight_under * alpha_loss_over
         )
 
     def exposure_correction(
@@ -1197,8 +1282,7 @@ class SpirulaeModel(Model):
             pred_img_e = pred_img + (pred_img_e-pred_img) * alpha_mask
         return pred_img_e, exposure_param_reg
 
-    @staticmethod
-    def get_alpha_loss(x, y):
+    def get_alpha_loss(self, x, y):
         """Compute asymmetric loss for alpha, penalize only when first argument is greater than second argument
 
         Args:
@@ -1274,7 +1358,8 @@ class SpirulaeModel(Model):
         if "depth" in batch and self.step > self.config.depth_supervision_start_iter and \
             (self.config.depth_supervision_weight > 0.0 or
              self.config.normal_supervision_weight > 0.0 or
-             self.config.alpha_supervision_weight > 0.0):
+             self.config.alpha_supervision_weight > 0.0 or
+             self.config.alpha_supervision_weight_under > 0.0):
             depth_supervision_loss, normal_supervision_loss, alpha_supervision_loss \
                 = self.depth_supervision(batch["depth"].cuda(), outputs["depth"], outputs["alpha"])
             timerl.mark("depth")  # ?us
@@ -1325,18 +1410,20 @@ class SpirulaeModel(Model):
         timerl.mark("scale")  # <100us
 
         # depth and normal regularizers
-        alpha = outputs['alpha']
-        reg_depth = outputs["reg_depth"]
-        reg_normal = outputs["reg_normal"]
-        weight_depth_reg = self.config.depth_reg_weight * \
-            min(self.step / max(self.config.depth_reg_warmup, 1), 1)
-        weight_normal_reg = self.config.normal_reg_weight * \
-            min(self.step / max(self.config.normal_reg_warmup, 1), 1)
-        if self.step < self.config.reg_warmup_length:
-            weight_depth_reg, weight_normal_reg = 0.0, 0.0
-        depth_reg = weight_depth_reg * reg_depth.mean()
-        normal_reg = weight_normal_reg * reg_normal[1:-1, 1:-1].mean()
-        timerl.mark("reg")  # ~100us
+        depth_reg, normal_reg = 0.0, 0.0
+        if not self.config.use_3dgs:
+            alpha = outputs['alpha']
+            reg_depth = outputs["reg_depth"]
+            reg_normal = outputs["reg_normal"]
+            weight_depth_reg = self.config.depth_reg_weight * \
+                min(self.step / max(self.config.depth_reg_warmup, 1), 1)
+            weight_normal_reg = self.config.normal_reg_weight * \
+                min(self.step / max(self.config.normal_reg_warmup, 1), 1)
+            if self.step < self.config.reg_warmup_length:
+                weight_depth_reg, weight_normal_reg = 0.0, 0.0
+            depth_reg = weight_depth_reg * reg_depth.mean()
+            normal_reg = weight_normal_reg * reg_normal[1:-1, 1:-1].mean()
+            timerl.mark("reg")  # ~100us
 
         # MCMC regularizers
         use_mcmc = self.config.use_mcmc

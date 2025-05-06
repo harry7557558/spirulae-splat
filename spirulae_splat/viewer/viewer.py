@@ -229,6 +229,8 @@ if __name__ == "__main__":
     print(ssplat_model.num_splats(), "splats")
     print("sort_per_pixel:", ssplat_model.sort_per_pixel)
 
+    ssplat_model.gauss_params["means"] -= torch.mean(ssplat_model.means, dim=0, keepdim=True)
+
     app = QApplication(sys.argv)
     viewer = RenderViewer()
     viewer.show()

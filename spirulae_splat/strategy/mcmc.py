@@ -52,6 +52,7 @@ class MCMCStrategy(Strategy):
     refine_stop_iter: int = 25_000
     refine_every: int = 100
     min_opacity: float = 0.005
+    is_3dgs: bool = False
     verbose: bool = False
 
     def initialize_state(self) -> Dict[str, Any]:
@@ -151,6 +152,7 @@ class MCMCStrategy(Strategy):
                 optimizers=optimizers,
                 state={},
                 mask=dead_mask,
+                is_3dgs=self.is_3dgs,
                 min_opacity=self.min_opacity,
             )
         return n_gs

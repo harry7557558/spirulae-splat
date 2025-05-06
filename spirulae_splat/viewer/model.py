@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import os
+import json
 
 from spirulae_splat.splat import (
     project_gaussians,
@@ -26,6 +27,9 @@ class SplatModel:
         self.sort_per_pixel = True
         self.flip_yz = False
         self.return_torch = False
+
+        self.dataparser_transform = np.eye(4)
+        self.dataparser_scale = 1.0
 
         if file_path.endswith('.ckpt'):
             self.load_ckpt(file_path)
@@ -77,6 +81,13 @@ class SplatModel:
         content = open(file_path).read()
         if 'use_per_pixel_sorting: false' in content:
             self.sort_per_pixel = False
+
+        # load dataparser transforms
+        dtr_path = os.path.join(save_dir, 'dataparser_transforms.json')
+        with open(dtr_path, 'r') as fp:
+            dtr = json.load(fp)
+        self.dataparser_transform = np.concatenate((dtr['transform'], [[0, 0, 0, 1]]))
+        self.dataparser_scale = dtr['scale']
 
     def num_splats(self):
         return len(self.gauss_params["means"])
