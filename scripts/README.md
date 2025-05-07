@@ -11,15 +11,16 @@ Extract frames from a video, pick ones with minimum motion blur. Run `python3 ex
 
 After extracting frames, you can use `run_colmap.bash` to process datasets into nerfstudio format. You may edit the bash script to customize it for your needs.
 
-### Hand-held dataset
+### Generating segmentation masks using SAM2
 
-I experimented with scanning small items where all-direction views can be useful, which unavoidably involves rotating the object while capturing and introduce distractors (like hands and moving background). See [here](https://www.youtube.com/watch?v=ugqZpQzKix8) for an example video capture.
+I experimented with scanning small items where all-direction views can be useful, which unavoidably involves rotating the object while capturing and introduce distractors (like hands and moving background). See [here](https://www.youtube.com/watch?v=ugqZpQzKix8) for an example video capture. This feature may also be helpful in the case of turntable capture, or when one needs to remove background.
 
 To build reconstruction from this type of capture:
 - Use `--sam 1` while extracting frames from video with the above script. It should generate `run_colmap.bash` and `run_sam2.bash` in the dataset directory.
 - Install [Segment Anything 2](https://github.com/facebookresearch/sam2) following instruction and download checkpoints.
   - In my case, I modified `setup.py` to disable auto PyTorch update, and I ran it in the same environment as nerfstudio without issue.
 - From the `sam2` directory, run `path/to/dataset/run_sam2.bash`. It should launch a Gradio site that lets you generate and save segmentation masks.
+  - See [this issue](https://github.com/harry7557558/spirulae-splat/issues/1) for steps about using the Gradio site.
 - From the dataset directory, run `run_colmap.bash` to process dataset into nerfstudio format.
   - If reconstruction fails, you may retry with GLOMAP instead of COLMAP.
 

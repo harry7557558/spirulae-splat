@@ -16,7 +16,7 @@ fi
 
 # solve bundle adjustment, GLOMAP is often superior for small handheld objects
 mkdir sparse
-if true; then
+if false; then
     glomap mapper --database_path database.db --output_path sparse
 else
     colmap mapper --database_path database.db --image_path ./images --output_path sparse --Mapper.abs_pose_min_num_inliers 15
