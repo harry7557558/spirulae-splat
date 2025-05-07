@@ -171,7 +171,7 @@ class RenderViewer(QMainWindow):
             elif ord('A') in self.active_keys:
                 mat = self._mat_rotate(0, -rotate_speed, 0)
             elif ord('D') in self.active_keys:
-                mat = self._mat_translate(move_speed, 0, 0)
+                mat = self._mat_rotate(0, rotate_speed, 0)
         elif self.move_mode == "navigate":
             if ord('W') in self.active_keys:
                 mat = self._mat_translate(0, 0, move_speed)

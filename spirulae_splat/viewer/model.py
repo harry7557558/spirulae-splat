@@ -164,41 +164,114 @@ class SplatModel:
         opacities = torch.sigmoid(self.opacities)
         timer.mark("map")
 
-        (
-            positions, axes_u, axes_v,
-            bounds, num_tiles_hit
-        ) = project_gaussians(  # type: ignore
-            self.means,
-            torch.exp(self.scales),
-            quats_norm,
-            torch.from_numpy(viewmat[:3, :]).cuda(),
-            ssplat_camera,
-        )  # type: ignore
-        timer.mark("project")
-
-        if self.sort_per_pixel:
-            num_intersects, sorted_indices = rasterize_gaussians_indices(
-                positions, axes_u, axes_v, opacities,
-                bounds, num_tiles_hit,
-                ssplat_camera
+        if self.scales.shape[-1] == 3:
+            from spirulae_splat.splat.gsplat_3dgs_wrapper import (
+                fully_fused_projection,
+                rasterize_to_pixels,
+                isect_tiles,
+                isect_offset_encode,
             )
-            timer.mark("sort")
-
-            rgb, alpha = rasterize_gaussians_simple_sorted(
-                positions, axes_u, axes_v, rgbs, opacities,
-                num_intersects, sorted_indices,
-                ssplat_camera
+            from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map
+            
+            fx, fy, cx, cy = ssplat_camera.intrins
+            w, h = int(ssplat_camera.w), int(ssplat_camera.h)
+            Ks = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).float()
+            (
+                camera_ids, gaussian_ids, radii,
+                means2d, depths, conics, compensations,
+            ) = fully_fused_projection(
+                self.means, None, self.quats, torch.exp(self.scales),
+                torch.from_numpy(viewmat[None]).cuda(), Ks[None].cuda(), w, h,
+                eps2d=0.3, packed=True,
             )
-            timer.mark("rasterize")
+
+            tile_size = 16
+            tile_width = int(np.ceil(ssplat_camera.w / tile_size))
+            tile_height = int(np.ceil(ssplat_camera.h / tile_size))
+            tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+                means2d, radii, depths,
+                tile_size, tile_width, tile_height,
+                packed=True, n_cameras=1,
+                camera_ids=camera_ids, gaussian_ids=gaussian_ids,
+            )
+            isect_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
+
+            colors = rgbs[gaussian_ids]
+            if return_depth:
+                colors = torch.cat((
+                    colors, depth_map(depths)[..., None]
+                ), dim=-1)
+            opacs = opacities[gaussian_ids].squeeze(-1)
+
+            colors, alpha = rasterize_to_pixels(
+                means2d, conics, colors, opacs,
+                w, h, tile_size,
+                isect_offsets, flatten_ids,
+                backgrounds=None, packed=True,
+            )
+            colors, alpha = colors[0], alpha[0]
+
+            rgb = colors[..., :3]
+            if return_depth:
+                depth = torch.where(
+                    alpha > 0.0, colors[..., 3:] / alpha,
+                    torch.amax(colors[..., 3:]).detach()
+                )
 
         else:
-            rgb, alpha = rasterize_gaussians_simple(
-                positions,
-                axes_u, axes_v,
-                rgbs, opacities,
-                bounds, num_tiles_hit, ssplat_camera,
-            )
-            timer.mark("rasterize")
+            (
+                positions, axes_u, axes_v,
+                bounds, num_tiles_hit
+            ) = project_gaussians(  # type: ignore
+                self.means,
+                torch.exp(self.scales),
+                quats_norm,
+                torch.from_numpy(viewmat[:3, :]).cuda(),
+                ssplat_camera,
+            )  # type: ignore
+            timer.mark("project")
+
+            if self.sort_per_pixel:
+                num_intersects, sorted_indices = rasterize_gaussians_indices(
+                    positions, axes_u, axes_v, opacities,
+                    bounds, num_tiles_hit,
+                    ssplat_camera
+                )
+                timer.mark("sort")
+
+                rgb, alpha = rasterize_gaussians_simple_sorted(
+                    positions, axes_u, axes_v, rgbs, opacities,
+                    num_intersects, sorted_indices,
+                    ssplat_camera
+                )
+                timer.mark("rasterize")
+
+            else:
+                rgb, alpha = rasterize_gaussians_simple(
+                    positions,
+                    axes_u, axes_v,
+                    rgbs, opacities,
+                    bounds, num_tiles_hit, ssplat_camera,
+                )
+                timer.mark("rasterize")
+
+            if return_depth:
+                if self.sort_per_pixel:
+                    depth = rasterize_gaussians_depth_sorted(
+                        positions, axes_u, axes_v, opacities,
+                        sorted_indices,
+                        ssplat_camera,
+                        "median"
+                    )
+                else:
+                    depth = rasterize_gaussians_depth(
+                        positions, axes_u, axes_v, opacities,
+                        bounds, num_tiles_hit,
+                        ssplat_camera,
+                        "median"
+                    )
+                depth = torch.where(depth == 0.0, depth.max(), depth)
+                timer.end("depth")
 
         # print(torch.mean(rgb[...,0]).item()*255.0, torch.mean(rgb[...,1]).item()*255.0, torch.mean(rgb[...,2]).item())
         # print(torch.amax(rgb, dim=(0,1))*255)
@@ -213,25 +286,7 @@ class SplatModel:
         timer.mark("background")
 
         if return_depth:
-            if self.sort_per_pixel:
-                depth = rasterize_gaussians_depth_sorted(
-                    positions, axes_u, axes_v, opacities,
-                    sorted_indices,
-                    ssplat_camera,
-                    "median"
-                )
-            else:
-                depth = rasterize_gaussians_depth(
-                    positions, axes_u, axes_v, opacities,
-                    bounds, num_tiles_hit,
-                    ssplat_camera,
-                    "median"
-                )
-            depth = torch.where(depth == 0.0, depth.max(), depth)
-            timer.end("depth")
             return rgb, depth
-
-        timer.end("depth")
         return rgb
 
     @torch.no_grad()
