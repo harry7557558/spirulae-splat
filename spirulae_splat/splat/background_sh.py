@@ -14,7 +14,7 @@ def render_background_sh(
     camera: _Camera,
     rotation: Float[Tensor, "3 3"],
     sh_degree: int,
-    sh_coeffs: Float[Tensor, "sh_degree**2 3"],
+    sh_coeffs: Float[Tensor, "(sh_degree+1)**2 3"],
 ) -> Float[Tensor, "h w 3"]:
 
     return _RenderBackgroundSH.apply(
@@ -32,13 +32,13 @@ class _RenderBackgroundSH(Function):
         camera: _Camera,
         rotation: Float[Tensor, "3 3"],
         sh_degree: int,
-        sh_coeffs: Float[Tensor, "sh_degree**2 3"],
+        sh_coeffs: Float[Tensor, "(sh_degree+1)**2 3"],
     ) -> Tuple[Tensor]:
 
         out_color = _C.render_background_sh_forward(
             camera.w, camera.h,
             camera.model, camera.intrins, camera.get_undist_map(),
-            rotation, sh_degree, sh_coeffs
+            rotation, sh_degree+1, sh_coeffs
         )
 
         ctx.camera = camera
@@ -58,7 +58,7 @@ class _RenderBackgroundSH(Function):
         v_rotation, v_sh_coeffs = _C.render_background_sh_backward(
             camera.w, camera.h,
             camera.model, camera.intrins, camera.get_undist_map(),
-            rotation, sh_degree, sh_coeffs,
+            rotation, sh_degree+1, sh_coeffs,
             out_color, v_out_color.contiguous()
         )
 

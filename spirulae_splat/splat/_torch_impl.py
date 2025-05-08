@@ -1059,7 +1059,7 @@ def render_background_sh(
     intrins: Tuple[float, float, float, float],
     rotation: Float[Tensor, "3 3"],
     sh_degree: int,
-    sh_coeffs: Float[Tensor, "(sh_degree+1)**2 3"],
+    sh_coeffs: Float[Tensor, "sh_degree**2 3"],
 ) -> Float[Tensor, "h w 3"]:
     device = sh_coeffs.device
     fx, fy, cx, cy = intrins
@@ -1079,7 +1079,7 @@ def render_background_sh(
         directions = coord / norm @ rotation.T
 
     # TODO: deprecated in recent nerfstudio versions
-    from nerfstudio.utils.math import components_from_spherical_harmonics
+    from nerfstudio.utils.spherical_harmonics import components_from_spherical_harmonics
     sh_components = components_from_spherical_harmonics(sh_degree, directions)  # [w*h, deg^2]
     bg_flat = torch.matmul(sh_components, sh_coeffs)  # [w*h, 3]
     bg_flat = torch.relu(bg_flat+0.5)

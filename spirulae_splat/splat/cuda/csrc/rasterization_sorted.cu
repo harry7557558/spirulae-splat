@@ -55,8 +55,6 @@ __global__ void rasterize_indices_kernel(
 
     // current visibility left to render
     float T = 1.f;
-    // index of most recent gaussian to write to this thread's pixel
-    int cur_idx = 0;
 
     // outputs
     int32_t* sorted_indices = &sorted_indices_[pix_id*MAX_SORTED_SPLATS];
@@ -123,7 +121,6 @@ __global__ void rasterize_indices_kernel(
             const float next_T = T * (1.f - alpha);
 
             T = next_T;
-            cur_idx = batch_start + t;
             if (T <= 1e-3f) {
                 done = true;
                 break;
@@ -417,7 +414,6 @@ __global__ void sort_per_pixel_kernel(
         return;
     int32_t* indices_g = &indices_[idx*MAX_SORTED_SPLATS];
     float* depths_g = &depths_[idx*MAX_SORTED_SPLATS];
-    int intersect_count = 0;
 
     __shared__ int32_t indices_s[MAX_SORTED_SPLATS*N_THREADS_PPS];
     __shared__ float depths_s[MAX_SORTED_SPLATS*N_THREADS_PPS];
@@ -722,7 +718,6 @@ __global__ void rasterize_depth_sorted_forward_kernel(
 
     // rasterize
     float output_depth = 0.0f;
-    float output_visibility = 0.0f;
 
     for (; cur_idx < MAX_SORTED_SPLATS; cur_idx++) {
         int g_id = sorted_indices[cur_idx];
@@ -1019,7 +1014,6 @@ __global__ void rasterize_sorted_forward_kernel(
     float depth_squared_sum = 0.f;  // for L2 depth regularizer
     const float depth_ref = inside ? depth_ref_im[pix_id] : 0.f;
     float reg_depth_p = 0.f, reg_depth_i = 0.f;  // output depth regularizer
-    float reg_normal = 0.f;  // output normal regularizer
 
     // rasterize
     for (int cur_idx = 0; cur_idx < MAX_SORTED_SPLATS; cur_idx++) {
@@ -1073,10 +1067,10 @@ __global__ void rasterize_sorted_forward_kernel(
 
         // depth regularization
         {
-            float pairwise_l1 = vis*depth * vis_sum - vis * depth_sum;  // requires pos.z for depth
+            // float pairwise_l1 = vis*depth * vis_sum - vis * depth_sum;  // requires pos.z for depth
             float pairwise_l2 = vis * (vis_sum*depth*depth + depth_squared_sum - 2.0f*depth*depth_sum);
             float intersect_l1 = vis * abs(depth - depth_ref);
-            float intersect_l2 = vis * (depth-depth_ref) * (depth-depth_ref);
+            // float intersect_l2 = vis * (depth-depth_ref) * (depth-depth_ref);
             reg_depth_p += pairwise_l2;
             reg_depth_i += intersect_l1;
         }
@@ -1201,8 +1195,6 @@ __global__ void rasterize_sorted_backward_kernel(
     float3 buffer_normal = {0.f, 0.f, 0.f};
     float buffer_depth_reg = 0.f;
     
-    float v_sum_vis = v_out_alpha;
-
     // rasterize
     const int32_t* sorted_indices = &sorted_indices_[pix_id*MAX_SORTED_SPLATS];
     for (int cur_idx = n-1; cur_idx >= 0; cur_idx--) {
@@ -1350,7 +1342,6 @@ __global__ void rasterize_sorted_backward_kernel(
         // v_alpha += -T_final * ra * background.x * v_out.x;
         // v_alpha += -T_final * ra * background.y * v_out.y;
         // v_alpha += -T_final * ra * background.z * v_out.z;
-        float v_alpha_color_only = v_alpha;
         v_alpha += (depth * T - buffer_depth.x) * ra * v_depth_sum;
         v_alpha += (depth*depth * T - buffer_depth.y) * ra * v_depth_squared_sum;
         v_alpha += (reg_depth_i * T - buffer_depth_reg) * ra * v_out_reg_depth;
@@ -1386,23 +1377,6 @@ __global__ void rasterize_sorted_backward_kernel(
         v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local));
         v_axis_u_local = v_axis_uv[0];
         v_axis_v_local = v_axis_uv[1];
-
-        // absgrad (color only)
-        #if 0
-        float v_opacity_local_1;
-        get_alpha_vjp(
-            uv, opac,
-            v_alpha_color_only,
-            v_uv, v_opacity_local_1
-        );
-        v_uv += v_uv_ch;
-        get_intersection_vjp(
-            pos, axis_uv, pos_2d,
-            glm::vec3(0), v_uv,
-            v_position_local_temp, v_axis_uv
-        );
-        v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local_temp));
-        #endif
 
         // next loop
         T = next_T;
@@ -1539,7 +1513,7 @@ __global__ void rasterize_simplified_sorted_forward_kernel(
         const float depth_raw = poi.z;
         const float depth = depth_map(depth_raw);
         {
-            float pairwise_l1 = vis*depth * vis_sum - vis * depth_sum;  // requires pos.z for depth
+            // float pairwise_l1 = vis*depth * vis_sum - vis * depth_sum;  // requires pos.z for depth
             float pairwise_l2 = vis * (vis_sum*depth*depth + depth_squared_sum - 2.0f*depth*depth_sum);
             reg_depth_p += pairwise_l2;
         }
@@ -1614,8 +1588,6 @@ __global__ void rasterize_simplified_sorted_backward_kernel(
     float3 buffer_normal = {0.f, 0.f, 0.f};
     float buffer_depth_reg = 0.f;
 
-    float v_sum_vis = v_out_alpha;
-
     // rasterize
     const int32_t* sorted_indices = &sorted_indices_[pix_id*MAX_SORTED_SPLATS];
     for (int cur_idx = n-1; cur_idx >= 0; cur_idx--) {
@@ -1683,7 +1655,6 @@ __global__ void rasterize_simplified_sorted_backward_kernel(
         v_alpha += (color.y * T - buffer.y) * ra * v_out.y;
         v_alpha += (color.z * T - buffer.z) * ra * v_out.z;
         v_alpha += T_final * ra * v_out_alpha;
-        float v_alpha_color_only = v_alpha;
         v_alpha += (depth * T - buffer_depth.x) * ra * v_depth_sum;
         v_alpha += (depth*depth * T - buffer_depth.y) * ra * v_depth_squared_sum;
         v_alpha += (reg_depth_i * T - buffer_depth_reg) * ra * v_reg_depth_p;

@@ -419,7 +419,6 @@ __global__ void rasterize_depth_forward_kernel(
     // designated pixel
     int tr = block.thread_rank();
     float output_depth = 0.0f;
-    float output_visibility = 0.0f;
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
@@ -834,7 +833,6 @@ __global__ void rasterize_forward_kernel(
     float depth_squared_sum = 0.f;  // for L2 depth regularizer
     const float depth_ref = inside ? depth_ref_im[pix_id] : 0.f;
     float reg_depth_p = 0.f, reg_depth_i = 0.f;  // output depth regularizer
-    float reg_normal = 0.f;  // output normal regularizer
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
@@ -911,10 +909,10 @@ __global__ void rasterize_forward_kernel(
 
             // depth regularization
             {
-                float pairwise_l1 = vis*depth * vis_sum - vis * depth_sum;  // requires pos.z for depth
+                // float pairwise_l1 = vis*depth * vis_sum - vis * depth_sum;  // requires pos.z for depth
                 float pairwise_l2 = vis * (vis_sum*depth*depth + depth_squared_sum - 2.0f*depth*depth_sum);
                 float intersect_l1 = vis * abs(depth - depth_ref);
-                float intersect_l2 = vis * (depth-depth_ref) * (depth-depth_ref);
+                // float intersect_l2 = vis * (depth-depth_ref) * (depth-depth_ref);
                 reg_depth_p += pairwise_l2;
                 reg_depth_i += intersect_l1;
             }
@@ -1068,8 +1066,6 @@ __global__ void rasterize_backward_kernel(
     float3 buffer_normal = {0.f, 0.f, 0.f};
     float buffer_depth_reg = 0.f;
     
-    float v_sum_vis = v_out_alpha;
-
     // gradient
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
     const int warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>());
@@ -1259,7 +1255,6 @@ __global__ void rasterize_backward_kernel(
                 // v_alpha += -T_final * ra * background.x * v_out.x;
                 // v_alpha += -T_final * ra * background.y * v_out.y;
                 // v_alpha += -T_final * ra * background.z * v_out.z;
-                float v_alpha_color_only = v_alpha;
                 v_alpha += (depth * T - buffer_depth.x) * ra * v_depth_sum;
                 v_alpha += (depth*depth * T - buffer_depth.y) * ra * v_depth_squared_sum;
                 v_alpha += (reg_depth_i * T - buffer_depth_reg) * ra * v_out_reg_depth;
@@ -1295,23 +1290,6 @@ __global__ void rasterize_backward_kernel(
                 v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local));
                 v_axis_u_local = v_axis_uv[0];
                 v_axis_v_local = v_axis_uv[1];
-
-                // absgrad (color only)
-                #if 0
-                float v_opacity_local_1;
-                get_alpha_vjp(
-                    uv, opacity,
-                    v_alpha_color_only,
-                    v_uv, v_opacity_local_1
-                );
-                v_uv += v_uv_ch;
-                get_intersection_vjp(
-                    pos, axis_uv, pos_2d,
-                    glm::vec3(0), v_uv,
-                    v_position_local_temp, v_axis_uv
-                );
-                v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local_temp));
-                #endif
 
                 // next loop
                 T = next_T;
@@ -1429,7 +1407,6 @@ __global__ void rasterize_simplified_forward_kernel(
     const int block_size = block.size();
     int num_batches = (range.y - range.x + block_size - 1) / block_size;
 
-    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
     __shared__ glm::vec3 position_batch[MAX_BLOCK_SIZE];
     __shared__ glm::mat2x3 axes_uv_batch[MAX_BLOCK_SIZE];
     __shared__ glm::vec3 color_batch[MAX_BLOCK_SIZE];
@@ -1462,7 +1439,6 @@ __global__ void rasterize_simplified_forward_kernel(
         int idx = batch_start + tr;
         if (idx < range.y) {
             int32_t g_id = gaussian_ids_sorted[idx];
-            id_batch[tr] = g_id;
             const float3 pos = positions[g_id];
             const float opac = opacities[g_id];
             const float3 color = colors[g_id];
@@ -1507,7 +1483,7 @@ __global__ void rasterize_simplified_forward_kernel(
             const float depth_raw = poi.z;
             const float depth = depth_map(depth_raw);
             {
-                float pairwise_l1 = vis*depth * vis_sum - vis * depth_sum;  // requires pos.z for depth
+                // float pairwise_l1 = vis*depth * vis_sum - vis * depth_sum;  // requires pos.z for depth
                 float pairwise_l2 = vis * (vis_sum*depth*depth + depth_squared_sum - 2.0f*depth*depth_sum);
                 reg_depth_p += pairwise_l2;
             }
@@ -1615,8 +1591,6 @@ __global__ void rasterize_simplified_backward_kernel(
     float2 buffer_depth = {0.f, 0.f};  // depth, depth^2
     float3 buffer_normal = {0.f, 0.f, 0.f};
     float buffer_depth_reg = 0.f;
-
-    float v_sum_vis = v_out_alpha;
 
     // gradient
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
@@ -1729,7 +1703,7 @@ __global__ void rasterize_simplified_backward_kernel(
                 // v_alpha += -T_final * ra * background.x * v_out.x;
                 // v_alpha += -T_final * ra * background.y * v_out.y;
                 // v_alpha += -T_final * ra * background.z * v_out.z;
-                float v_alpha_color_only = v_alpha;
+                // float v_alpha_color_only = v_alpha;
                 v_alpha += (depth * T - buffer_depth.x) * ra * v_depth_sum;
                 v_alpha += (depth*depth * T - buffer_depth.y) * ra * v_depth_squared_sum;
                 v_alpha += (reg_depth_i * T - buffer_depth_reg) * ra * v_reg_depth_p;
@@ -2205,9 +2179,9 @@ __global__ void render_background_sh_backward_kernel(
     glm::vec3 xyz = glm::vec3(x, y, z);
     glm::mat3 dp_dpr = (glm::mat3(1.0f) - glm::outerProduct(xyz, xyz)) / norm;
     glm::vec3 v_p = dp_dpr * glm::vec3(v_x, v_y, v_z);
-    float v_xi = rotation[0] * v_p.x + rotation[3] * v_p.y + rotation[6] * v_p.z;
-    float v_yi = rotation[1] * v_p.x + rotation[4] * v_p.y + rotation[7] * v_p.z;
-    float v_zi = rotation[2] * v_p.x + rotation[5] * v_p.y + rotation[8] * v_p.z;
+    // float v_xi = rotation[0] * v_p.x + rotation[3] * v_p.y + rotation[6] * v_p.z;
+    // float v_yi = rotation[1] * v_p.x + rotation[4] * v_p.y + rotation[7] * v_p.z;
+    // float v_zi = rotation[2] * v_p.x + rotation[5] * v_p.y + rotation[8] * v_p.z;
 
     atomicAdd(&v_rotation[0], v_p.x * xi);
     atomicAdd(&v_rotation[1], v_p.x * yi);

@@ -14,6 +14,7 @@ import numpy as np
 
 from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.data.datamanagers.full_images_datamanager import (
+    DataManagerConfig,
     FullImageDatamanager,
     FullImageDatamanagerConfig,
     _undistort_image,
@@ -249,7 +250,7 @@ class SpirulaeDataManager(FullImageDatamanager):
         config: the DataManagerConfig used to instantiate class
     """
 
-    config: SpirulaeDataManagerConfig
+    config: DataManagerConfig = field(default_factory=SpirulaeDataManagerConfig)
 
     def __init__(
         self,

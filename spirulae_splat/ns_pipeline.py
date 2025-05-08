@@ -29,9 +29,9 @@ class SpirulaePipelineConfig(VanillaPipelineConfig):
 
     _target: Type = field(default_factory=lambda: SpirulaePipeline)
     """target class to instantiate"""
-    datamanager: DataManagerConfig = SpirulaeDataManagerConfig()
+    datamanager: DataManagerConfig = field(default_factory=SpirulaeDataManagerConfig)
     """specifies the datamanager config"""
-    model: ModelConfig = SpirulaeModelConfig()
+    model: ModelConfig = field(default_factory=SpirulaeModelConfig)
     """specifies the model config"""
 
 

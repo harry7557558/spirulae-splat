@@ -40,30 +40,47 @@ class _Camera:
     def is_distorted(self):
         return self.model != ""
 
-    def get_undist_map(self) -> Optional[torch.Tensor]:
+    def get_undist_map(self, always=False) -> Optional[torch.Tensor]:
         tup = (self.h, self.w, self.model, self.intrins, self.dist_coeffs)
         if tup in self._undist_maps:
             return self._undist_maps[tup]
 
+        def update_cache(undist_map):
+            nonlocal tup
+            self._undist_maps[tup] = undist_map
+
+            # limit cache size
+            map_size = torch.numel(undist_map)
+            self._undist_maps_list.append((tup, map_size))
+            self._undist_maps_cache_size[0] += map_size
+            while self._undist_maps_cache_size[0] > self._undist_maps_max_cache_size:
+                if len(self._undist_maps_list) == 0:
+                    break
+                tup, size = self._undist_maps_list[0]
+                del self._undist_maps_list[0]
+                del self._undist_maps[tup]
+                self._undist_maps_cache_size[0] -= size
+
+            return undist_map
+
+        # not distorted
         if self.model == "":
+
+            if always:
+                fx, fy, cx, cy = self.intrins
+                x, y = torch.meshgrid(
+                    torch.arange(self.w).cuda() + 0.5,
+                    torch.arange(self.h).cuda() + 0.5,
+                    indexing="xy",
+                )  # [H, W]
+                undist_map = torch.stack([(x - cx) / fx, (y - cy) / fy], dim=-1)
+                return update_cache(undist_map)
+
             return None
 
+        # fisheye
         undist_map = _C.render_undistortion_map(
             self.w, self.h, self.model,
             self.intrins, self.dist_coeffs
         )
-        self._undist_maps[tup] = undist_map
-
-        # limit cache size
-        map_size = torch.numel(undist_map)
-        self._undist_maps_list.append((tup, map_size))
-        self._undist_maps_cache_size[0] += map_size
-        while self._undist_maps_cache_size[0] > self._undist_maps_max_cache_size:
-            if len(self._undist_maps_list) == 0:
-                break
-            tup, size = self._undist_maps_list[0]
-            del self._undist_maps_list[0]
-            del self._undist_maps[tup]
-            self._undist_maps_cache_size[0] -= size
-
-        return undist_map
+        return update_cache(undist_map)

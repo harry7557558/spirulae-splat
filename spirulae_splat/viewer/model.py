@@ -130,7 +130,7 @@ class SplatModel:
             return self.background_color.repeat(camera.h, camera.w, 1)
         sh_coeffs = torch.cat((self.background_color.unsqueeze(0), self.background_sh), dim=0)  # [(deg+1)^2, 3]
         viewmat = torch.from_numpy(c2w[:3, :3] * np.array([1,-1,-1], dtype=np.float32)).cuda()
-        return render_background_sh(camera._to_ssplat_camera(), viewmat, sh_degree+1, sh_coeffs)
+        return render_background_sh(camera._to_ssplat_camera(), viewmat, sh_degree, sh_coeffs)
 
     @torch.inference_mode()
     def _render(self, camera: Camera, c2w: np.ndarray, return_depth=False):

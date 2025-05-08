@@ -41,8 +41,8 @@ def test_render_background_sh():
     fx, fy = 1.5*W, 1.6*W
     cam = _Camera(H, W, "OPENCV", (fx, fy, cx, cy))
 
-    sh_degree = 5
-    sh_coeffs = torch.randn((sh_degree**2, 3)).to(device)
+    sh_degree = 4
+    sh_coeffs = torch.randn(((sh_degree+1)**2, 3)).to(device)
     _sh_coeffs = sh_coeffs.clone().requires_grad_(True)
     sh_coeffs.requires_grad_(True)
 

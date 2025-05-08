@@ -745,7 +745,7 @@ class SpirulaeModel(Model):
 
         rotation = camera.camera_to_worlds[0][:3, :3]
         sh_coeffs = torch.cat((self.background_color.unsqueeze(0), self.background_sh), dim=0)  # [(deg+1)^2, 3]
-        return render_background_sh(ssplat_camera, rotation, sh_degree+1, sh_coeffs)
+        return render_background_sh(ssplat_camera, rotation, sh_degree, sh_coeffs)
 
     @staticmethod
     def get_empty_outputs(width: int, height: int, background: torch.Tensor) -> Dict[str, Union[torch.Tensor, List]]:
@@ -931,16 +931,10 @@ class SpirulaeModel(Model):
             opacs = opacities[gaussian_ids].squeeze(-1)
 
             rgbd, alpha = rasterize_to_pixels(
-                means2d,
-                conics,
-                rgbd,
-                opacs,
+                means2d, conics, rgbd, opacs,
                 W, H, tile_size,
-                isect_offsets,
-                flatten_ids,
-                backgrounds=None,
-                packed=True,
-                absgrad=True,
+                isect_offsets, flatten_ids,
+                backgrounds=None, packed=True, absgrad=True,
             )
             rgbd = rgbd[0]
             alpha = alpha[0]
@@ -995,6 +989,7 @@ class SpirulaeModel(Model):
         timerr.end("normal_reg")  # 600us-900us
         # -> ?us-?us median depth, 3000us-4500us one pass
 
+        # pack outputs
         outputs = {
             "rgb": rgb,
             "depth": depth_im_ref,
@@ -1013,6 +1008,13 @@ class SpirulaeModel(Model):
 
         if self.training:
             outputs["ssplat_camera"] = ssplat_camera
+
+        # convert linear depth to ray depth, for correct gl_z_buf_depth in Viser
+        if not self.training:
+            undist_map = ssplat_camera.get_undist_map(always=True)
+            distances = torch.sqrt((undist_map*undist_map).sum(-1, True) + 1.0)
+            outputs["depth"] = outputs["depth"] * distances
+
         return outputs
 
     def get_gt_img(self, image: torch.Tensor):
