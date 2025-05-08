@@ -106,7 +106,7 @@ Install Nerfstudio (see [instructions](https://docs.nerf.studio/quickstart/insta
 cd spirulae-splat/
 git checkout stable
 git submodule update --init
-pip install -e .
+pip install -e . --no-build-isolation
 ns-install-cli
 ```
 

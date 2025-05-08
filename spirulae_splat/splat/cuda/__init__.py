@@ -12,12 +12,13 @@ def _get_constant(name: str) -> int:
 
 
 def _make_lazy_cuda_func(name: str) -> Callable:
-    global _C
-    if _C == None:
-        # should throw an error
-        from ._backend import _C
 
     def call_cuda(*args, **kwargs):
+        global _C
+        if _C == None:
+            # should throw an error
+            from ._backend import _C
+
         return getattr(_C, name)(*args, **kwargs)
 
     return call_cuda
