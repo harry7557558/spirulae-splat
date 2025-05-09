@@ -132,8 +132,9 @@ class MCMCStrategy(Strategy):
             torch.cuda.empty_cache()
 
         # add noise to GSs
+        scalar = lr * self.noise_lr #* min(step/max(self.refine_start_iter,1), 1)
         inject_noise_to_position(
-            params=params, optimizers=optimizers, state={}, scaler=lr * self.noise_lr,
+            params=params, optimizers=optimizers, state={}, scaler=scalar,
             min_opacity = self.min_opacity
         )
 

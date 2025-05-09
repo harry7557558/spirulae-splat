@@ -110,28 +110,12 @@ def depth_to_points(
     if c2w is not None:
         assert c2w.shape[-2:] == (4, 4), f"Invalid viewmats shape: {c2w.shape}"
 
-    device = depths.device
-    height, width = depths.shape[-3:-1]
-
-    x, y = torch.meshgrid(
-        torch.arange(width, device=device) + 0.5,
-        torch.arange(height, device=device) + 0.5,
-        indexing="xy",
-    )  # [H, W]
-
     # camera directions in camera coordinates
-    if camera.is_distorted():
-        undist_map = camera.get_undist_map()
-        undist_map = undist_map.reshape(*([1]*(len(depths.shape)-3)), *depths.shape[-3:-1], 2)
-        camera_dirs = torch.concatenate([
-            undist_map, torch.ones_like(undist_map[..., :1])
-        ], dim=-1)  # [..., H, W, 3]
-    else:
-        fx, fy, cx, cy = camera.intrins
-        camera_dirs = torch.stack(
-            [(x - cx) / fx, (y - cy) / fy, torch.ones_like(x)],
-            dim=-1,
-        )  # [..., H, W, 3]
+    undist_map = camera.get_undist_map(always=True)
+    undist_map = undist_map.reshape(*([1]*(len(depths.shape)-3)), *depths.shape[-3:-1], 2)
+    camera_dirs = torch.concatenate([
+        undist_map, torch.ones_like(undist_map[..., :1])
+    ], dim=-1)  # [..., H, W, 3]
 
     # ray directions in world coordinates
     if c2w is not None:
@@ -157,23 +141,26 @@ def depth_to_normal(
     """Convert depth maps to surface normals
 
     Args:
-        depths: Depth maps [..., H, W, 1]
+        depths: Depth maps [H, W, 1]
         camera: Camera intrinsics
-        c2w: Camera-to-world transformation matrices [..., 4, 4]
+        c2w: Camera-to-world transformation matrices [4, 4]
         z_depth: Whether the depth is in z-depth (True) or ray depth (False)
 
     Returns:
-        normals: Surface normals in the world coordinate system [..., H, W, 3]
+        normals: Surface normals in the world coordinate system [H, W, 3]
     """
-    points = depth_to_points(depths, camera, c2w, z_depth=z_depth)  # [..., H, W, 3]
+    # TODO: write a fully fused CUDA kernel for this
+
+    points = depth_to_points(depths, camera, c2w, z_depth=z_depth)  # [H, W, 3]
     dx = torch.cat(
-        [points[..., 2:, 1:-1, :] - points[..., :-2, 1:-1, :]], dim=-3
-    )  # [..., H-2, W-2, 3]
+        [points[2:, 1:-1, :] - points[:-2, 1:-1, :]], dim=-3
+    )  # [H-2, W-2, 3]
     dy = torch.cat(
-        [points[..., 1:-1, 2:, :] - points[..., 1:-1, :-2, :]], dim=-2
-    )  # [..., H-2, W-2, 3]
-    normals = torch.nn.functional.normalize(torch.cross(dx, dy, dim=-1), dim=-1)  # [..., H-2, W-2, 3]
-    normals = torch.nn.functional.pad(normals, (0, 0, 1, 1, 1, 1), value=0.0)  # [..., H, W, 3]
+        [points[1:-1, 2:, :] - points[1:-1, :-2, :]], dim=-2
+    )  # [H-2, W-2, 3]
+    normals = torch.nn.functional.normalize(torch.cross(dx, dy, dim=-1), dim=-1)  # [H-2, W-2, 3]
+    # normals = torch.nn.functional.pad(normals, (0, 0, 1, 1, 1, 1), value=0.0)  # [H, W, 3]
+    normals = torch.nn.functional.pad(normals.permute(2, 0, 1), (1, 1, 1, 1), mode="replicate").permute(1, 2, 0)  # [H, W, 3]
 
     # apply mask
     if alpha is not None:
