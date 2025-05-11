@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Literal, List, Tuple, Type, Union, Optional
 from copy import deepcopy
 import random
+import math
 import os
 import hashlib
 
@@ -48,11 +49,17 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
         # disabled
         None,
         # MoGe - https://github.com/microsoft/moge
+        # fast one with good 3D points, with some memory leak
         "moge:Ruicheng/moge-vitl",
+        # Depth Pro: https://github.com/apple/ml-depth-pro
+        # fine details (e.g. wires, tree branches); slower, recommend >10GB VRAM
+        "depth_pro",
         # Depth Anything v2 - not recommended based on empirical results
         "depth_anything_v2_vits",
         "depth_anything_v2_vitb",
         "depth_anything_v2_vitl",
+        # Composite model - Combine high resolution depth and low resolution mask to produce high resolution mask
+        "depth_pro + moge:Ruicheng/moge-vitl",
     ] = None  # "moge:Ruicheng/moge-vitl"
 
 
@@ -77,12 +84,14 @@ class DepthPredictor:
         },
         "moge:Ruicheng/moge-vitl": {
             "sky_threshold": np.inf,
-        }
+        },
+        "depth_pro": {
+            "sky_threshold": np.inf,  # inconsistent
+        },
     }
+    # TODO: https://github.com/AIVFI/Monocular-Depth-Estimation-Rankings-and-2D-to-3D-Video-Conversion-Rankings/blob/main/README.md
 
     cache_dir: Optional[str] = os.path.join("scripts", "depth_cache")
-
-    max_depth_image_size: int = 1000
 
     def __init__(self, model_id: str):
         if model_id not in self.MODELS:
@@ -90,8 +99,23 @@ class DepthPredictor:
         self.model_id = model_id
         self.sky_threshold = self.MODELS[model_id]['sky_threshold']
 
-        self.load_model()
-        CONSOLE.log(f"Depth model loaded: {model_id}")
+        self._load_model()
+
+    def _get_cache_filename(self, image: torch.Tensor, model_id: str) -> str:
+        # compute result file name (image hash ^ model ID hash)
+        image_hash = image.flatten()
+        image_hash = image_hash[:(image.numel()//16)*16].reshape(16, -1)
+        image_hash = (image_hash.sum(dim=1) % 256).byte()
+        image_hash = image_hash.cpu().numpy()
+        model_hash = hashlib.md5(model_id.encode('utf-8')).digest()
+        model_hash = np.frombuffer(model_hash, dtype=np.uint8)
+        result_hash = np.bitwise_xor(model_hash, image_hash)
+        result_hash = ''.join([f'{byte:02x}' for byte in result_hash])
+        # locate cache file
+        script_dir = os.path.dirname(os.path.realpath(__file__))
+        cache_dir = os.path.join(script_dir, self.cache_dir, result_hash[:2])
+        os.makedirs(cache_dir, exist_ok=True)
+        return os.path.join(cache_dir, f"{result_hash}.npz")
 
     def __call__(self, image: torch.Tensor, camera: Cameras=None):
 
@@ -100,20 +124,7 @@ class DepthPredictor:
 
         # cache lookup
         if self.cache_dir is not None:
-            # compute result file name (image hash ^ model ID hash)
-            image_hash = image.flatten()
-            image_hash = image_hash[:(image.numel()//16)*16].reshape(16, -1)
-            image_hash = (image_hash.sum(dim=1) % 256).byte()
-            image_hash = image_hash.cpu().numpy()
-            model_hash = hashlib.md5(self.model_id.encode('utf-8')).digest()
-            model_hash = np.frombuffer(model_hash, dtype=np.uint8)
-            result_hash = np.bitwise_xor(model_hash, image_hash)
-            result_hash = ''.join([f'{byte:02x}' for byte in result_hash])
-            # locate cache file
-            script_dir = os.path.dirname(os.path.realpath(__file__))
-            cache_dir = os.path.join(script_dir, self.cache_dir, result_hash[:2])
-            os.makedirs(cache_dir, exist_ok=True)
-            cache_filename = os.path.join(cache_dir, f"{result_hash}.npz")
+            cache_filename = self._get_cache_filename(image, self.model_id)
             if os.path.exists(cache_filename):
                 depth = np.load(cache_filename)
                 depth = depth.f.depth
@@ -122,13 +133,17 @@ class DepthPredictor:
 
         # inference depth model
         if depth is None:
+            if self.model is None:
+                self.model = self.lmodel()
+                CONSOLE.log(f"\nDepth model loaded: {self.model_id}, {self.model.__class__}")
             with torch.inference_mode():
                 depth = self.infer(image, camera)
 
         # save cache
         if self.cache_dir is not None and not depth_loaded:
             # np.savez_compressed(cache_filename, depth=depth.cpu().numpy())
-            np.savez(cache_filename, depth=depth.half().cpu().numpy())  # 1.7MB -> 2.1MB, magnitudes faster loading
+            # np.savez(cache_filename, depth=depth.half().cpu().numpy())
+            np.savez(cache_filename, depth=depth.cpu().numpy())
 
         if image.shape[:2] != depth.shape[:2]:
             h, w, _ = image.shape
@@ -143,7 +158,7 @@ class DepthPredictor:
         # return depth_map(depth)
         return depth
 
-    def get_model_path(self, model: str):
+    def _get_model_path(self, model: str):
         model = self.MODELS[model]
         download_url = model["download_url"]
         filename = model["filename"]
@@ -158,18 +173,23 @@ class DepthPredictor:
 
         return model_path
 
-    def load_model(self):
+    def _load_model(self):
+        self.model = None
 
         if self.model_id.startswith("depth_anything_v2"):
-            model_path = self.get_model_path(self.model_id)
-            self.model = self.load_depth_anything_v2(model_path)
-            self.infer = self.inference_depth_anything_v2
+            model_path = self._get_model_path(self.model_id)
+            self.lmodel = lambda: self._load_depth_anything_v2(model_path)
+            self.infer = self._infer_depth_anything_v2
+
+        elif self.model_id.startswith("depth_pro"):
+            self.lmodel = lambda: self._load_depth_pro()
+            self.infer = self._infer_depth_pro
 
         elif self.model_id.startswith("moge:"):
-            self.model = self.load_moge()
-            self.infer = self.inference_moge
+            self.lmodel = lambda: self._load_moge()
+            self.infer = self._infer_moge
 
-    def load_depth_anything_v2(self, model_path):
+    def _load_depth_anything_v2(self, model_path):
         from spirulae_splat.scripts.depth_anything_v2.dpt import DepthAnythingV2
 
         model_configs = {
@@ -186,22 +206,35 @@ class DepthPredictor:
 
         return model
 
-    def load_moge(self):
+    def _load_depth_pro(self):
+        try:
+            from depth_pro.utils import load_rgb
+            from depth_pro import depth_pro
+        except ImportError:
+            raise ImportError("Import error, please install https://github.com/apple/ml-depth-pro")
+
+        config = depth_pro.DEFAULT_MONODEPTH_CONFIG_DICT
+        config.checkpoint_uri = os.path.join(os.path.dirname(depth_pro.__file__), "../../", config.checkpoint_uri)
+        # use FP32 since FP16 gives noisy normal, need much more RAM
+        model, _ = depth_pro.create_model_and_transforms(config, 'cuda', torch.float32)
+        return model.eval()
+
+    def _load_moge(self):
         try:
             from moge.model.v1 import MoGeModel
         except ImportError:
             raise ImportError("Import error, please install https://github.com/microsoft/moge")
-
         model = MoGeModel.from_pretrained(self.model_id.split(':')[-1]).cuda().eval()
         return model
 
-    def inference_depth_anything_v2(self, image, camera=None):
+    def _infer_depth_anything_v2(self, image, camera=None):
+        max_depth_image_size: int = 1000
 
         batch = image.permute(2, 0, 1).unsqueeze(0)
         batch = batch.float().cuda() / 255.0
 
         b, c, h, w = batch.shape
-        sc = min(self.max_depth_image_size/np.sqrt(h*w), 1.0)  # save memory
+        sc = min(max_depth_image_size/np.sqrt(h*w), 1.0)  # save memory
         h, w = int(sc*h+0.5), int(sc*w+0.5)
         h1 = ((h-7)//14+1) * 14
         w1 = ((w-7)//14+1) * 14
@@ -223,7 +256,24 @@ class DepthPredictor:
         depth = depth.to(image.device)
         return depth
 
-    def inference_moge(self, image, camera=None):
+    def _infer_depth_pro(self, image, camera=None):
+
+        image = image.permute(2, 0, 1)
+        image = image.float().cuda() / 255.0
+        image = 2.0*image-1.0
+
+        f_px = None
+        if camera is not None:
+            f_px = camera.fx.to(image)
+        prediction = self.model.infer(image, f_px=f_px)
+        depth = prediction["depth"]
+
+        del prediction
+        torch.cuda.empty_cache()
+
+        return depth.unsqueeze(-1)
+
+    def _infer_moge(self, image, camera=None):
 
         image = image.permute(2, 0, 1)
         image = image.float().cuda() / 255.0
@@ -241,6 +291,174 @@ class DepthPredictor:
 
         depth[~mask] = 0.0
         return depth
+
+
+class CompositeDepthPredictor(DepthPredictor):
+
+    MODELS = {
+        frozenset({'depth_pro', 'moge:Ruicheng/moge-vitl'}): None,
+    }
+
+    _loaded_models: Dict[str, DepthPredictor] = {}
+
+    def __init__(self, model_id: str):
+        self.model_id_str = model_id
+        self.model_id = frozenset(model_id.split(' + '))
+        if self.model_id not in self.MODELS:
+            raise ValueError(f"Model must be one of {self.MODELS.keys()}; Current: `{model_id}`")
+
+        for mid in self.model_id:
+            if mid not in self._loaded_models:
+                self._loaded_models[mid] = DepthPredictor(mid)
+
+        if self.model_id == frozenset({'depth_pro', 'moge:Ruicheng/moge-vitl'}):
+            self.infer = self._infer_depth_pro_moge
+
+    def __call__(self, image: torch.Tensor, camera: Cameras=None):
+
+        depth = None
+        depth_loaded = False
+
+        # cache lookup
+        if self.cache_dir is not None:
+            cache_filename = self._get_cache_filename(image, self.model_id_str)
+            if os.path.exists(cache_filename):
+                depth = np.load(cache_filename)
+                depth = depth.f.depth
+                depth = torch.from_numpy(depth).float().to(image.device)
+                depth_loaded = True
+
+        # inference depth model
+        if depth is None:
+            with torch.inference_mode():
+                depth = self.infer(image, camera)
+
+        # save cache
+        if self.cache_dir is not None and not depth_loaded:
+            # np.savez_compressed(cache_filename, depth=depth.cpu().numpy())
+            # np.savez(cache_filename, depth=depth.half().cpu().numpy())
+            np.savez(cache_filename, depth=depth.cpu().numpy())
+
+        if image.shape[:2] != depth.shape[:2]:
+            h, w, _ = image.shape
+            depth = torch.nn.functional.interpolate(
+                depth.reshape(1, 1, *depth.shape[:2]),
+                size=(h, w), mode='bilinear', align_corners=False
+            ).reshape(h, w, 1)
+
+        # return depth_map(depth)
+        return depth
+
+    def _infer_depth_pro_moge(self, image, camera=None):
+        depth_sharp = self._loaded_models['depth_pro'](image, camera).float().cuda()
+        depth_blurry = self._loaded_models['moge:Ruicheng/moge-vitl'](image, camera).float().cuda()
+        mask_blurry = depth_blurry > 0
+
+        depth_sharp_downsampled = CompositeDepthPredictor._downscale_image(depth_sharp)
+        z1 = torch.quantile(depth_sharp_downsampled, 0.98)
+        depth_sharp_clipped = torch.clip(depth_sharp, max=z1)
+
+        # fit mask; TODO: logistic regression
+        dist_model = self._fit_distortion_model(depth_sharp_clipped, mask_blurry)
+        mask = dist_model(depth_sharp_clipped) > 0.75
+
+        # fit depth
+        dist_model = self._fit_distortion_model(depth_sharp_clipped, depth_blurry, mask)
+        depth_undistorted = dist_model(depth_sharp_clipped)
+
+        depth = depth_undistorted
+        depth[~mask] = 0.0
+        return depth.to(image.device)
+
+    @staticmethod
+    def _downscale_image(im, size=384):
+        im = im.float()
+        h0, w0 = im.shape[:2]
+        sc = size / min(h0, w0)
+        if sc >= 1:
+            return im.reshape((h0, w0))
+        h1, w1 = int(sc*h0+1), int(sc*w0+1)
+        lq = torch.nn.functional.interpolate(
+            im.reshape(1, 1, *im.shape[:2]),
+            size=(h1, w1), mode='bilinear', align_corners=False
+        )
+        return lq.reshape((h1, w1))
+
+    @staticmethod
+    def _generate_depth_embedding(x, _uv_cache={}):
+        h, w = x.shape[:2]
+        x = x.flatten()
+
+        uv_degree = 1
+        z_degree = 3
+
+        if (h, w) not in _uv_cache:
+            u = (torch.arange(w, dtype=torch.float32)+0.5)/w * 2.0 - 1.0
+            v = (torch.arange(h, dtype=torch.float32)+0.5)/h * 2.0 - 1.0
+            u = u[None, :].float().cuda().repeat((h, 1))
+            v = v[:, None].float().cuda().repeat((1, w))
+            u, v = u.flatten(), v.flatten()
+
+            uv = []
+            for i in range(uv_degree+1):
+                for j in range(uv_degree+1):
+                    uv.append(torch.cos(math.pi/2*i*u)*torch.cos(math.pi/2*j*v))
+                    if j != 0:
+                        uv.append(torch.cos(math.pi/2*i*u)*torch.sin(math.pi/2*j*v))
+                    if i != 0:
+                        uv.append(torch.sin(math.pi/2*i*u)*torch.cos(math.pi/2*j*v))
+                    if i != 0 and j != 0:
+                        uv.append(torch.sin(math.pi/2*i*u)*torch.sin(math.pi/2*j*v))
+
+            uv = torch.stack(uv)
+            _uv_cache[(h, w)] = uv
+
+        else:
+            uv = _uv_cache[(h, w)]
+
+        A = []
+        for k in range(z_degree+1):
+            ed = x**k / math.factorial(k) * torch.exp(-x)
+            A.append(ed * uv)
+        return torch.concatenate(A)
+
+    @staticmethod
+    def _fit_distortion_model(x, y, weights=None):
+
+        x = CompositeDepthPredictor._downscale_image(x)
+        y = CompositeDepthPredictor._downscale_image(y)
+        if weights is not None:
+            weights = CompositeDepthPredictor._downscale_image(weights)
+
+        if weights is None:
+            x_mean, x_std = torch.mean(x).item(), torch.std(x).item()
+            x = (x - x_mean) / x_std
+        else:
+            weights = weights + 1.0 / weights.numel()  # prevent degeneracy
+            m_sum = weights.sum().item()
+            x_mean = (x*weights).sum().item() / m_sum
+            x = x - x_mean
+            x_std = math.sqrt(((x**2)*weights).sum().item() / m_sum)
+            x = x / x_std
+
+        A = CompositeDepthPredictor._generate_depth_embedding(x)
+
+        # linear least squares
+        if weights is None:
+            mat = A @ A.T
+            vec = A @ y.flatten()
+        else:
+            mat = (weights.reshape(1,-1) * A) @ A.T
+            vec = A @ (weights.flatten() * y.flatten())
+        c = torch.linalg.solve(mat, vec)
+
+        def pred(x):
+            h, w = x.shape[:2]
+            x = (x - x_mean) / x_std
+            A = CompositeDepthPredictor._generate_depth_embedding(x)
+            return (c @ A).reshape(h, w)
+
+        return pred
 
 
 class SpirulaeDataManager(FullImageDatamanager):
@@ -273,7 +491,10 @@ class SpirulaeDataManager(FullImageDatamanager):
         undistorted_images: List[Dict[str, torch.Tensor]] = []
 
         if self.config.depth_model is not None:
-            self.depth_model = DepthPredictor(self.config.depth_model)
+            if ' + ' in self.config.depth_model:
+                self.depth_model = CompositeDepthPredictor(self.config.depth_model)
+            else:
+                self.depth_model = DepthPredictor(self.config.depth_model)
 
         # Which dataset?
         if split == "train":

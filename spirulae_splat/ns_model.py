@@ -168,7 +168,7 @@ class SpirulaeModelConfig(ModelConfig):
     """Number of gaussians to initialize if random init is used"""
     random_scale: float = 1.0
     """Position standard deviation to initialize random gaussians"""
-    ssim_lambda: float = 0.5  # 0.2
+    ssim_lambda: float = 0.2  # 0.2 in original paper
     """weight of ssim loss"""
     ssim_warmup: int = 0
     """warmup of ssim loss"""
@@ -178,7 +178,7 @@ class SpirulaeModelConfig(ModelConfig):
     """Config of the camera optimizer to use"""
     kernel_radius: float = 1.0
     """Radius of the splatting kernel, 3.0 for Gaussian and 1.0 for polynomial"""
-    loss_scale: float = 0.003
+    loss_scale: float = 0.003  # 0.003 for 2DGS, 1.0 for 3DGS
     """Scaling for loss values to normalize gradient"""
     relative_scale: Optional[float] = None
     """Manually set scale when a scene is poorly scaled by nerfstudio
@@ -188,14 +188,16 @@ class SpirulaeModelConfig(ModelConfig):
     cull_alpha_thresh: float = 0.1
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
     cull_scale_thresh: float = 1.0
-    """threshold of scale for culling huge gaussians"""
+    """threshold of world scale for culling huge gaussians"""
+    split_scale_thresh: float = float('inf')
+    """threshold of world scale for splitting huge gaussians"""
     cull_grad_thresh: float = 0.0  # 3e-4 | 1e-4 | 1e-5 | 0.0
     """threshold for culling gaussians with low visibility"""
     continue_cull_post_densification: bool = True
     """If True, continue to cull gaussians post refinement"""
     reset_alpha_every: int = 30
     """Every this many refinement steps, reset the alpha"""
-    densify_xy_grad_thresh: float = 0.003  # 0.003 | 0.001
+    densify_xy_grad_thresh: float = 0.001  # 0.003 | 0.001
     """threshold of positional gradient norm for densifying gaussians"""
     densify_size_thresh: float = 0.01
     """below this size, gaussians are *duplicated*, otherwise split"""
@@ -211,8 +213,6 @@ class SpirulaeModelConfig(ModelConfig):
     # MCMC control
     mcmc_warmup_length: int = 500
     """start MCMC refinement at this number of steps"""
-    mcmc_stop_refine_at: int = 25000
-    """end MCMC refinement at this number of steps"""
     mcmc_cap_max: int = 100000
     """maximum number of splats for MCMC, dataset-specific tuning required"""
     mcmc_noise_lr: float = 5e5
@@ -264,14 +264,11 @@ class SpirulaeModelConfig(ModelConfig):
 
     use_3dgs: bool = False
     """Use 3DGS instead of 2DGS, with limited support for existing features
-        Tested with:
-         - MCMC strategy
-         - Depth supervision with alpha_supervision_weight (0.02,0.01) instead of (0.002,0)
-         - Use bilateral grid, disable adaptive exposure
-        """
+        Tested with MCMC strategy, 3.0 kernel radius, 1.0 loss scale
+    """
 
     # regularization
-    use_scale_regularization: bool = True
+    scale_regularization_weight: float = 0.01
     """If enabled, a scale regularization introduced in PhysGauss (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians."""
     max_gauss_ratio: float = 10.0
     """threshold of ratio of gaussian max to min scale before applying regularization
@@ -315,7 +312,7 @@ class SpirulaeModelConfig(ModelConfig):
 
     # supervision using a foundation depth model
     # enable these by setting `depth_model` in data manager config
-    supervision_start_iter: int = 1000
+    supervision_warmup: int = 0
     """Start using foundation model depth at this number of steps"""
     depth_distortion_depth_degree: int = -1  # 3
     """Hyperparameter for depth distortion model, controls depth embedding, see code for details
@@ -325,7 +322,7 @@ class SpirulaeModelConfig(ModelConfig):
         Larger gives more parameters in depth distortion model, -1 to disable"""
     depth_supervision_weight: float = 0.1
     """Weight for depth supervision by comparing rendered depth with depth predicted by a foundation model"""
-    normal_supervision_weight: float = 0.5
+    normal_supervision_weight: float = 0.1
     """Weight for normal supervision by comparing normal from rendered depth with normal from depth predicted by a foundation model"""
     alpha_supervision_weight: float = 0.005
     """Weight for alpha supervision by rendered alpha with alpha predicted by a foundation model
@@ -381,14 +378,16 @@ class SpirulaeModel(Model):
         U, S, Vt = np.linalg.svd(points)
         num_points = means.shape[0]
         for i in range(num_points):
+            if self.config.use_3dgs or True:
+                S[i] = np.prod(S[i])**(1/len(S[i])) * np.ones(S[i].shape)
+                continue
             sorted_indices = np.argsort(-S[i])
             S[i] = S[i][sorted_indices]
             Vt[i] = Vt[i][sorted_indices]
         scales = S
         if not self.config.use_3dgs:
             scales = S[:, :2]
-        scales = np.log(1.5*scales+1e-8)
-        scales = 0.5*(scales+np.flip(scales,axis=1))
+        scales = np.log(1.5*scales/self.config.kernel_radius+1e-8)
         scales = torch.nn.Parameter(torch.from_numpy(scales))
         # quats = torch.nn.Parameter(random_quat_tensor(num_points))
         quats = torch.nn.Parameter(torch.from_numpy(np.array(
@@ -485,7 +484,7 @@ class SpirulaeModel(Model):
                 cap_max=self.config.mcmc_cap_max,
                 noise_lr=self.config.mcmc_noise_lr,
                 refine_start_iter=self.config.mcmc_warmup_length,
-                refine_stop_iter=self.config.mcmc_stop_refine_at,
+                refine_stop_iter=self.config.stop_refine_at,
                 refine_every=self.config.refine_every,
                 min_opacity=self.config.mcmc_min_opacity,
                 is_3dgs=self.config.use_3dgs,
@@ -507,6 +506,7 @@ class SpirulaeModel(Model):
             grow_scale2d=self.config.split_screen_size,
             prune_scale3d=self.config.cull_scale_thresh,
             prune_scale2d=self.config.cull_screen_size,
+            split_scale3d=self.config.split_scale_thresh,
             refine_scale2d_stop_iter=self.config.stop_screen_size_at,
             refine_start_iter=self.config.warmup_length,
             refine_stop_iter=self.config.stop_refine_at,
@@ -890,12 +890,11 @@ class SpirulaeModel(Model):
             fx, fy, cx, cy = ssplat_camera.intrins
             Ks = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).float()
             (
-                camera_ids, gaussian_ids, radii,
-                means2d, depths, conics, compensations,
+                radii, means2d, depths, conics, compensations,
             ) = fully_fused_projection(
                 self.means, None, quats, torch.exp(self.scales),
                 viewmat[None].cuda(), Ks[None].cuda(), W, H,
-                eps2d=0.3, packed=True,
+                eps2d=0.3, packed=False,
             )
 
             tile_size = 16
@@ -904,22 +903,18 @@ class SpirulaeModel(Model):
             tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
                 means2d, radii, depths,
                 tile_size, tile_width, tile_height,
-                packed=True, n_cameras=1,
-                camera_ids=camera_ids, gaussian_ids=gaussian_ids,
+                packed=False, n_cameras=1,
             )
             isect_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
 
-            rgbd = torch.cat((
-                rgbs[gaussian_ids],
-                depth_map(depths)[..., None]
-            ), dim=-1)
-            opacs = opacities[gaussian_ids].squeeze(-1)
+            rgbd = torch.cat((rgbs[None], depth_map(depths)[..., None]), dim=-1)
+            opacs = opacities[None].squeeze(-1)
 
             rgbd, alpha = rasterize_to_pixels(
                 means2d, conics, rgbd, opacs,
                 W, H, tile_size,
                 isect_offsets, flatten_ids,
-                backgrounds=None, packed=True, absgrad=True,
+                backgrounds=None, packed=False, absgrad=True,
             )
             rgbd = rgbd[0]
             alpha = alpha[0]
@@ -929,8 +924,6 @@ class SpirulaeModel(Model):
                 alpha > 0.0, rgbd[..., 3:] / alpha,
                 torch.amax(rgbd[..., 3:]).detach()
             ).contiguous()
-
-            radii = radii.unsqueeze(0)
 
         if self.training:
             self.info = {
@@ -999,6 +992,7 @@ class SpirulaeModel(Model):
             undist_map = ssplat_camera.get_undist_map(always=True)
             distances = torch.sqrt((undist_map*undist_map).sum(-1, True) + 1.0)
             outputs["depth"] = outputs["depth"] * distances
+            outputs["depth"] = torch.clip(outputs["depth"], max=torch.quantile(outputs["depth"], 0.99))
             outputs["depth_normal"] = 0.5+0.5*outputs["depth_normal"]
 
         return outputs
@@ -1051,11 +1045,6 @@ class SpirulaeModel(Model):
 
         # resize depth
         h, w, _ = pred_depth.shape
-        if ref_depth.shape != pred_depth.shape:
-            ref_depth = F.interpolate(
-                ref_depth.reshape((1, 1, *ref_depth.shape[:2])),
-                size=(h, w), mode='bilinear'
-            ).reshape(pred_depth.shape)
         alpha = (ref_depth > 0.0).squeeze(-1)
 
         # generate UV embeddings
@@ -1291,6 +1280,13 @@ class SpirulaeModel(Model):
         return self.config.erank_reg * reg.mean() + \
             self.config.erank_reg_s3 * s3.mean()
 
+    def get_2dgs_reg_weights(self):
+        weight_depth_reg = self.config.depth_reg_weight * \
+            min(self.step / max(self.config.depth_reg_warmup, 1), 1)
+        weight_normal_reg = self.config.normal_reg_weight * \
+            min(self.step / max(self.config.normal_reg_warmup, 1), 1)
+        return weight_depth_reg, weight_normal_reg
+
     def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict.
 
@@ -1313,6 +1309,7 @@ class SpirulaeModel(Model):
                     loss[key] = loss[key] + value
             for key in loss:
                 loss[key] = loss[key] / self._train_batch_size
+            self.print_loss_dict(loss)
             return loss
 
         # mask out of bound (e.g. fisheye circle)
@@ -1349,17 +1346,22 @@ class SpirulaeModel(Model):
             # pred_img = torch.lerp(outputs["background"], pred_img, mask)
             if isinstance(alpha_loss, float) and alpha_loss == 0.0:
                 alpha_loss = alpha_loss + self.get_alpha_loss(outputs['alpha'], mask)
+
+        alpha_loss = self.config.alpha_loss_weight * alpha_loss
         timerl.mark("alpha")  # ~100us
 
         # depth supervision
         depth_supervision_loss, normal_supervision_loss, alpha_supervision_loss = 0.0, 0.0, 0.0
-        if "depth" in batch and self.step > self.config.supervision_start_iter and \
+        if "depth" in batch and self.step > self.config.supervision_warmup and \
             (self.config.depth_supervision_weight > 0.0 or
              self.config.normal_supervision_weight > 0.0 or
              self.config.alpha_supervision_weight > 0.0 or
              self.config.alpha_supervision_weight_under > 0.0):
+            if batch["depth"].ndim == 2:
+                batch["depth"] = batch["depth"].unsqueeze(-1)
+            depth = self._downscale_if_required(batch["depth"].cuda())
             depth_supervision_loss, normal_supervision_loss, alpha_supervision_loss \
-                = self.get_supervision_losses(batch["depth"].cuda(), ssplat_camera, outputs["depth"], outputs["depth_normal"], outputs["alpha"])
+                = self.get_supervision_losses(depth, ssplat_camera, outputs["depth"], outputs["depth_normal"], outputs["alpha"])
             timerl.mark("depth")  # ?us
 
         # correct exposure
@@ -1396,7 +1398,7 @@ class SpirulaeModel(Model):
 
         # scale regularization
         scale_reg = 0.0
-        if self.config.use_scale_regularization and self.step % 10 == 0:
+        if self.config.scale_regularization_weight > 0.0:
             scale_exp = torch.exp(self.scales)
             scale_reg = (
                 torch.maximum(
@@ -1405,7 +1407,7 @@ class SpirulaeModel(Model):
                 )
                 - self.config.max_gauss_ratio
             )
-            scale_reg = 0.1 * scale_reg.mean()
+            scale_reg = self.config.scale_regularization_weight * scale_reg.mean()
         timerl.mark("scale")  # <100us
 
         # depth and normal regularizers
@@ -1414,10 +1416,7 @@ class SpirulaeModel(Model):
             alpha = outputs['alpha']
             reg_depth = outputs["reg_depth"]
             reg_normal = outputs["reg_normal"]
-            weight_depth_reg = self.config.depth_reg_weight * \
-                min(self.step / max(self.config.depth_reg_warmup, 1), 1)
-            weight_normal_reg = self.config.normal_reg_weight * \
-                min(self.step / max(self.config.normal_reg_warmup, 1), 1)
+            weight_depth_reg, weight_normal_reg = self.get_2dgs_reg_weights()
             if self.step < self.config.reg_warmup_length:
                 weight_depth_reg, weight_normal_reg = 0.0, 0.0
             depth_reg = weight_depth_reg * reg_depth.mean()
@@ -1425,11 +1424,14 @@ class SpirulaeModel(Model):
             timerl.mark("reg")  # ~100us
 
         # MCMC regularizers
-        use_mcmc = self.config.use_mcmc
-        mcmc_opacity_reg = use_mcmc * self.config.mcmc_opacity_reg * \
-            torch.abs(torch.sigmoid(self.opacities)).mean()
-        mcmc_scale_reg = use_mcmc * self.config.mcmc_scale_reg * \
-            torch.abs(torch.exp(self.scales)).mean()
+        mcmc_opacity_reg, mcmc_scale_reg = 0.0, 0.0
+        if self.config.use_mcmc and self.config.mcmc_opacity_reg > 0.0:
+            mcmc_opacity_reg = torch.sigmoid(self.opacities).mean()
+            mcmc_opacity_reg = self.config.mcmc_opacity_reg * mcmc_opacity_reg
+        if self.config.use_mcmc and self.config.mcmc_scale_reg > 0.0:
+            # mcmc_scale_reg = torch.exp(self.scales).mean()
+            mcmc_scale_reg = self.scales.mean()
+            mcmc_scale_reg = self.config.mcmc_scale_reg * mcmc_scale_reg
 
         # 3DGS regularizers
         erank_reg = 0.0
@@ -1446,23 +1448,28 @@ class SpirulaeModel(Model):
 
         ssim_lambda = self.config.ssim_lambda * min(self.step/max(self.config.ssim_warmup,1), 1)
         loss_dict = {
+            # [C] RGB and alpha
             "main_loss": torch.lerp(torch.lerp(Ll1_e, simloss, ssim_lambda), Ll1, exposure_reg_image),
+            "alpha_loss": alpha_loss,
+            # [S] supervision
             "depth_ref_loss": depth_supervision_loss,
             "normal_ref_loss": normal_supervision_loss,
             "alpha_ref_loss": alpha_supervision_loss,
-            "alpha_loss": self.config.alpha_loss_weight * alpha_loss,
-            "scale_reg": scale_reg,
+            # [G] 2DGS
             "depth_reg": depth_reg,
             "normal_reg": normal_reg,
+            # [M] MCMC
             'mcmc_opacity_reg': mcmc_opacity_reg,
             'mcmc_scale_reg': mcmc_scale_reg,
-            "exposure_param_reg": self.config.exposure_reg_param * exposure_param_reg,
+            # [R] regularization
             "erank_reg": erank_reg,
+            "scale_reg": scale_reg,
+            # misc
+            "exposure_param_reg": self.config.exposure_reg_param * exposure_param_reg,
             "quat_reg": quat_norm_reg,
         }
         for key, value in loss_dict.items():
             loss_dict[key] = self.config.loss_scale * value
-        timerl.mark("scale")  # <100us
 
         if self.config.use_bilateral_grid:
             loss_dict["tv_loss"] = 10 * total_variation_loss(self.bil_grids.grids)
@@ -1472,7 +1479,45 @@ class SpirulaeModel(Model):
             self.camera_optimizer.get_loss_dict(loss_dict)
         timerl.end("camera")  # <100us -> 1600us-4200us, 900us-1400us without ssim
 
+        self.print_loss_dict(loss_dict)
         return loss_dict
+
+    def print_loss_dict(self, losses: Dict[str, torch.Tensor], _max_vals={}):
+
+        def fmt(key: str, s: float) -> str:
+            s = self.config.loss_scale * s
+            if s == 0.0:
+                return '~'
+
+            l = float(losses[key]) / s
+            if 0.0*l != 0.0:  # not finite
+                return str(l)
+
+            if key not in _max_vals or self.step % 1000 == 0:
+                _max_vals[key] = abs(l)
+            _max_vals[key] = max(_max_vals[key], abs(l))
+            if _max_vals[key] == 0.0:
+                return '~'
+
+            n_digits = int(max(-math.log10(0.001*_max_vals[key]), 0))
+            return f"{{:.{n_digits}f}}".format(l).replace('0.', '.')
+
+        CONSOLE.print(
+                f"[N]: {len(self.opacities)}, "
+                f"[C]: {fmt('main_loss', 1.0)} "
+                f"{fmt('alpha_loss', self.config.alpha_loss_weight)}, "
+                f"[S]: {fmt('depth_ref_loss', self.config.depth_supervision_weight)} "
+                f"{fmt('normal_ref_loss', self.config.normal_supervision_weight)} "
+                f"{fmt('alpha_ref_loss', self.config.alpha_supervision_weight)}, "
+                f"[G]: {fmt('depth_reg', self.get_2dgs_reg_weights()[0])} "
+                f"{fmt('normal_reg', self.get_2dgs_reg_weights()[1])}, "
+                f"[M]: {fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg)} "
+                f"{fmt('mcmc_scale_reg', self.config.mcmc_scale_reg)}, "
+                f"[R]: {fmt('erank_reg', self.config.erank_reg_s3)} "
+                f"{fmt('scale_reg', self.config.scale_regularization_weight)}"
+                "    ".replace('nan', '~'),
+                end="\r",
+            )
 
     @torch.no_grad()
     def get_outputs_for_camera(self, camera: Cameras, obb_box: Optional[OrientedBox] = None) -> Dict[str, torch.Tensor]:

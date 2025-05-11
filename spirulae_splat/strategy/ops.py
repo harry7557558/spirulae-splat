@@ -108,7 +108,7 @@ def duplicate(
     sel = torch.where(mask)[0]
 
     def param_fn(name: str, p: Tensor) -> Tensor:
-        return torch.nn.Parameter(torch.cat([p, p[sel]]), requires_grad=p.requires_grad)
+        return torch.nn.Parameter(torch.cat([p, p[sel]]))
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
         return torch.cat([v, torch.zeros((len(sel), *v.shape[1:]), device=device)])
@@ -146,7 +146,7 @@ def split(
     scales_3d = scales
     if scales.shape[-1] == 2:
         sz = 0.1*torch.fmin(scales[...,0:1], scales[...,1:2])
-        scales_3d = torch.cat((scales, sz), dim=-1)
+        scales_3d = torch.cat((scales, sz), dim=-1) / 3.0
     quats = F.normalize(params["quats"][sel], dim=-1)
     rotmats = quat_to_rotmat(quats)  # [N, 3, 3]
     samples = torch.einsum(
@@ -154,7 +154,7 @@ def split(
         rotmats,
         scales_3d,
         torch.randn(2, len(scales_3d), 3, device=device),
-    ) / 3.0  # [2, N, 3]
+    )  # [2, N, 3]
 
     def param_fn(name: str, p: Tensor) -> Tensor:
         repeats = [2] + [1] * (p.dim() - 1)
@@ -168,7 +168,7 @@ def split(
         else:
             p_split = p[sel].repeat(repeats)
         p_new = torch.cat([p[rest], p_split])
-        p_new = torch.nn.Parameter(p_new, requires_grad=p.requires_grad)
+        p_new = torch.nn.Parameter(p_new)
         return p_new
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:

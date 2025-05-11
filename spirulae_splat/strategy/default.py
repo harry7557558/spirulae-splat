@@ -83,6 +83,7 @@ class DefaultStrategy(Strategy):
     grow_scale2d: float = 0.05
     prune_scale3d: float = 0.1
     prune_scale2d: float = 0.15
+    split_scale3d: float = float('inf')
     refine_scale2d_stop_iter: int = 0
     refine_start_iter: int = 500
     refine_stop_iter: int = 25_000
@@ -291,16 +292,18 @@ class DefaultStrategy(Strategy):
         # grads = state["grad2d"] / count.clamp_min(1).float().mean()
         device = grads.device
 
-        is_grad_high = grads > self.grow_grad2d
-        is_small = (
-            torch.exp(params["scales"]).max(dim=-1).values
-            <= self.grow_scale3d * state["scene_scale"]
-        )
-        is_dupli = is_grad_high & is_small
+        scale = torch.exp(params["scales"]).max(dim=-1).values
+
+        is_grad_high = (grads > self.grow_grad2d)
+        is_huge = (scale > self.split_scale3d * state["scene_scale"])
+        is_grow = is_grad_high | is_huge
+
+        is_small = (scale <= self.grow_scale3d * state["scene_scale"])
+        is_dupli = is_grow & is_small
         n_dupli = is_dupli.sum().item()
 
         is_large = ~is_small
-        is_split = is_grad_high & is_large
+        is_split = is_grow & is_large
         if step < self.refine_scale2d_stop_iter:
             is_split |= state["radii"] > self.grow_scale2d
         n_split = is_split.sum().item()
