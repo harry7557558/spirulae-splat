@@ -161,6 +161,7 @@ def depth_to_normal(
     normals = torch.nn.functional.normalize(torch.cross(dx, dy, dim=-1), dim=-1)  # [H-2, W-2, 3]
     # normals = torch.nn.functional.pad(normals, (0, 0, 1, 1, 1, 1), value=0.0)  # [H, W, 3]
     normals = torch.nn.functional.pad(normals.permute(2, 0, 1), (1, 1, 1, 1), mode="replicate").permute(1, 2, 0)  # [H, W, 3]
+    normals = normals.contiguous()
 
     # apply mask
     if alpha is not None:

@@ -268,7 +268,7 @@ class SpirulaeModelConfig(ModelConfig):
     """
 
     # regularization
-    scale_regularization_weight: float = 0.01
+    scale_regularization_weight: float = 0.0
     """If enabled, a scale regularization introduced in PhysGauss (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians."""
     max_gauss_ratio: float = 10.0
     """threshold of ratio of gaussian max to min scale before applying regularization
@@ -1446,11 +1446,29 @@ class SpirulaeModel(Model):
         quat_norm_reg = 0.1 * (quat_norm-1.0-torch.log(quat_norm)).mean()
         timerl.mark("mcmc")  # ~100us
 
+        # metrics, readable from console during training
+        with torch.no_grad():
+            if not hasattr(self, '_running_metrics'):
+                self._running_metrics = { 'psnr': [], 'ssim': [] }
+            psnr_list = self._running_metrics['psnr']
+            ssim_list = self._running_metrics['ssim']
+            psnr = -10.0 * math.log10(((gt_img-pred_img_e)**2).mean().item())
+            ssim = 1.0 - simloss.item()
+            psnr_list.append(psnr)
+            ssim_list.append(ssim)
+            if len(psnr_list) > self.num_train_data:
+                del psnr_list[0]
+                del ssim_list[0]
+            psnr = sum(psnr_list) / len(psnr_list)
+            ssim = sum(ssim_list) / len(ssim_list)
+
         ssim_lambda = self.config.ssim_lambda * min(self.step/max(self.config.ssim_warmup,1), 1)
         loss_dict = {
             # [C] RGB and alpha
             "main_loss": torch.lerp(torch.lerp(Ll1_e, simloss, ssim_lambda), Ll1, exposure_reg_image),
             "alpha_loss": alpha_loss,
+            "psnr": float(psnr),
+            "ssim": float(ssim),
             # [S] supervision
             "depth_ref_loss": depth_supervision_loss,
             "normal_ref_loss": normal_supervision_loss,
@@ -1484,7 +1502,7 @@ class SpirulaeModel(Model):
 
     def print_loss_dict(self, losses: Dict[str, torch.Tensor], _max_vals={}):
 
-        def fmt(key: str, s: float) -> str:
+        def fmt(key: str, s: float, decimals=None) -> str:
             s = self.config.loss_scale * s
             if s == 0.0:
                 return '~'
@@ -1499,21 +1517,24 @@ class SpirulaeModel(Model):
             if _max_vals[key] == 0.0:
                 return '~'
 
-            n_digits = int(max(-math.log10(0.001*_max_vals[key]), 0))
-            return f"{{:.{n_digits}f}}".format(l).replace('0.', '.')
+            if decimals is None:
+                decimals = int(max(-math.log10(0.001*_max_vals[key]), 0))
+            return f"{{:.{decimals}f}}".format(l).replace('0.', '.')
 
         CONSOLE.print(
-                f"[N]: {len(self.opacities)}, "
-                f"[C]: {fmt('main_loss', 1.0)} "
-                f"{fmt('alpha_loss', self.config.alpha_loss_weight)}, "
-                f"[S]: {fmt('depth_ref_loss', self.config.depth_supervision_weight)} "
+                f"[N] {len(self.opacities)}  "
+                f"[C] {fmt('main_loss', 1.0)} "
+                f"{fmt('alpha_loss', self.config.alpha_loss_weight)} "
+                f"{fmt('psnr', 1.0, 2)} "
+                f"{fmt('ssim', 1.0, 3)}  "
+                f"[S] {fmt('depth_ref_loss', self.config.depth_supervision_weight)} "
                 f"{fmt('normal_ref_loss', self.config.normal_supervision_weight)} "
-                f"{fmt('alpha_ref_loss', self.config.alpha_supervision_weight)}, "
-                f"[G]: {fmt('depth_reg', self.get_2dgs_reg_weights()[0])} "
-                f"{fmt('normal_reg', self.get_2dgs_reg_weights()[1])}, "
-                f"[M]: {fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg)} "
-                f"{fmt('mcmc_scale_reg', self.config.mcmc_scale_reg)}, "
-                f"[R]: {fmt('erank_reg', self.config.erank_reg_s3)} "
+                f"{fmt('alpha_ref_loss', self.config.alpha_supervision_weight)}  "
+                f"[G] {fmt('depth_reg', self.get_2dgs_reg_weights()[0])} "
+                f"{fmt('normal_reg', self.get_2dgs_reg_weights()[1])}  "
+                f"[M] {fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg)} "
+                f"{fmt('mcmc_scale_reg', self.config.mcmc_scale_reg)}  "
+                f"[R] {fmt('erank_reg', self.config.erank_reg_s3)} "
                 f"{fmt('scale_reg', self.config.scale_regularization_weight)}"
                 "    ".replace('nan', '~'),
                 end="\r",

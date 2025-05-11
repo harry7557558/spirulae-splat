@@ -39,7 +39,7 @@ class SplatModel:
             raise ValueError("Must be .ckpt or config.yml")
 
     def load_ckpt(self, file_path):
-        checkpoint = torch.load(file_path)
+        checkpoint = torch.load(file_path, 'cpu')
         pipeline = checkpoint['pipeline']
 
         self.gauss_params = {}

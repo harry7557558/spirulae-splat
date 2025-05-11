@@ -166,7 +166,7 @@ class DefaultStrategy(Strategy):
         self._update_state(params, state, info, packed=packed)
 
         if (
-            step > self.refine_start_iter and step <= self.refine_stop_iter
+            step > self.refine_start_iter and step < self.refine_stop_iter
             # and step % self.refine_every == 0
             and step % self.refine_every == max(self.refine_every // 10, 1)
             and step % self.reset_every >= self.pause_refine_after_reset
