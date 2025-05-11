@@ -274,7 +274,9 @@ class DefaultStrategy(Strategy):
         # update the running state
         if not packed:
             grads = grads[sel]  # [nnz, 2]
-        state["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
+        if len(grads.shape) == 2:
+            grads = grads.norm(dim=-1)
+        state["grad2d"].index_add_(0, gs_ids, grads)
         state["count"].index_add_(
             0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)
         )
