@@ -282,7 +282,7 @@ def relocate(
     if not is_3dgs:
         new_opacities, new_scales = compute_relocation(**args)
     else:
-        args['binoms'] = BINOMS
+        args['binoms'] = BINOMS.to(opacities.device)
         new_opacities, new_scales = compute_relocation_3dgs(**args)
     new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
 

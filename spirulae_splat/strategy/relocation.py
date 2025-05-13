@@ -40,7 +40,7 @@ def compute_relocation(
     assert (ratios >= 2).all()
 
     new_opacities, new_scales = _C.compute_relocation(
-        opacities, scales, ratios, BINOMS, N_MAX
+        opacities, scales, ratios, BINOMS.to(opacities.device), N_MAX
     )
     return new_opacities, new_scales
 

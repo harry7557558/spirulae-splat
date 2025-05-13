@@ -27,6 +27,7 @@ from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map
 
 
 from concurrent.futures import ThreadPoolExecutor
+from torch.nn.parallel import DataParallel
 
 
 @dataclass
@@ -64,7 +65,7 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
 
 
 
-class DepthPredictor:
+class DepthPredictor(torch.nn.Module):
 
     MODELS = {
         "depth_anything_v2_vits": {
@@ -93,15 +94,25 @@ class DepthPredictor:
 
     cache_dir: Optional[str] = os.path.join("scripts", "depth_cache")
 
-    def __init__(self, model_id: str):
+    def __init__(self, model_id: str, use_cache: bool=True, primary_device=None):
+        super().__init__()
+
         if model_id not in self.MODELS:
             raise ValueError(f"Model must be one of {self.MODELS.keys()}; Current: `{model_id}`")
         self.model_id = model_id
         self.sky_threshold = self.MODELS[model_id]['sky_threshold']
+        self.use_cache = use_cache
+
+        # Find all available CUDA devices
+        self.device_count = torch.cuda.device_count()
+        self.device0 = "cuda:0"
+        if primary_device is not None:
+            self.device0 = primary_device
 
         self._load_model()
 
-    def _get_cache_filename(self, image: torch.Tensor, model_id: str) -> str:
+    @staticmethod
+    def _get_cache_filename(image: torch.Tensor, model_id: str) -> str:
         # compute result file name (image hash ^ model ID hash)
         image_hash = image.flatten()
         image_hash = image_hash[:(image.numel()//16)*16].reshape(16, -1)
@@ -113,17 +124,18 @@ class DepthPredictor:
         result_hash = ''.join([f'{byte:02x}' for byte in result_hash])
         # locate cache file
         script_dir = os.path.dirname(os.path.realpath(__file__))
-        cache_dir = os.path.join(script_dir, self.cache_dir, result_hash[:2])
+        cache_dir = os.path.join(script_dir, DepthPredictor.cache_dir, result_hash[:2])
         os.makedirs(cache_dir, exist_ok=True)
         return os.path.join(cache_dir, f"{result_hash}.npz")
 
-    def __call__(self, image: torch.Tensor, camera: Cameras=None):
+    def forward(self, image: torch.Tensor, camera: Cameras=None):
+        image = image.to(self.device0)
 
         depth = None
         depth_loaded = False
 
         # cache lookup
-        if self.cache_dir is not None:
+        if self.use_cache and self.cache_dir is not None:
             cache_filename = self._get_cache_filename(image, self.model_id)
             if os.path.exists(cache_filename):
                 depth = np.load(cache_filename)
@@ -133,16 +145,12 @@ class DepthPredictor:
 
         # inference depth model
         if depth is None:
-            if self.model is None:
-                self.model = self.lmodel()
-                CONSOLE.log(f"\nDepth model loaded: {self.model_id}, {self.model.__class__}")
             with torch.inference_mode():
                 depth = self.infer(image, camera)
+                depth = depth.to(self.device0)
 
         # save cache
-        if self.cache_dir is not None and not depth_loaded:
-            # np.savez_compressed(cache_filename, depth=depth.cpu().numpy())
-            # np.savez(cache_filename, depth=depth.half().cpu().numpy())
+        if self.use_cache and self.cache_dir is not None and not depth_loaded:
             np.savez(cache_filename, depth=depth.cpu().numpy())
 
         if image.shape[:2] != depth.shape[:2]:
@@ -178,16 +186,20 @@ class DepthPredictor:
 
         if self.model_id.startswith("depth_anything_v2"):
             model_path = self._get_model_path(self.model_id)
-            self.lmodel = lambda: self._load_depth_anything_v2(model_path)
+            self.model = self._load_depth_anything_v2(model_path)
             self.infer = self._infer_depth_anything_v2
 
         elif self.model_id.startswith("depth_pro"):
-            self.lmodel = lambda: self._load_depth_pro()
+            self.model = self._load_depth_pro()
             self.infer = self._infer_depth_pro
 
         elif self.model_id.startswith("moge:"):
-            self.lmodel = lambda: self._load_moge()
+            self.model = self._load_moge()
             self.infer = self._infer_moge
+
+        if self.model is not None:
+            self.model = self.model.to(self.device0)
+            CONSOLE.log(f"\nDepth model loaded: {self.model_id}, {self.model.__class__}")
 
     def _load_depth_anything_v2(self, model_path):
         from spirulae_splat.scripts.depth_anything_v2.dpt import DepthAnythingV2
@@ -202,7 +214,7 @@ class DepthPredictor:
 
         model = DepthAnythingV2(**model_configs[encoder])
         model.load_state_dict(torch.load(model_path, map_location='cpu'))
-        model = model.cuda().eval()
+        model = model.to(self.device0).eval()
 
         return model
 
@@ -216,7 +228,7 @@ class DepthPredictor:
         config = depth_pro.DEFAULT_MONODEPTH_CONFIG_DICT
         config.checkpoint_uri = os.path.join(os.path.dirname(depth_pro.__file__), "../../", config.checkpoint_uri)
         # use FP32 since FP16 gives noisy normal, need much more RAM
-        model, _ = depth_pro.create_model_and_transforms(config, 'cuda', torch.float32)
+        model, _ = depth_pro.create_model_and_transforms(config, self.device0, torch.float32)
         return model.eval()
 
     def _load_moge(self):
@@ -224,14 +236,14 @@ class DepthPredictor:
             from moge.model.v1 import MoGeModel
         except ImportError:
             raise ImportError("Import error, please install https://github.com/microsoft/moge")
-        model = MoGeModel.from_pretrained(self.model_id.split(':')[-1]).cuda().eval()
+        model = MoGeModel.from_pretrained(self.model_id.split(':')[-1]).to(self.device0).eval()
         return model
 
     def _infer_depth_anything_v2(self, image, camera=None):
         max_depth_image_size: int = 1000
 
         batch = image.permute(2, 0, 1).unsqueeze(0)
-        batch = batch.float().cuda() / 255.0
+        batch = batch.float().to(self.device0) / 255.0
 
         b, c, h, w = batch.shape
         sc = min(max_depth_image_size/np.sqrt(h*w), 1.0)  # save memory
@@ -241,8 +253,8 @@ class DepthPredictor:
         batch = torch.nn.functional.interpolate(
             batch, size=(h1, w1), mode='bilinear', align_corners=False)
 
-        mean = torch.tensor([[[[0.485]], [[0.456]], [[0.406]]]]).float().cuda()
-        std = torch.tensor([[[[0.229]], [[0.224]], [[0.225]]]]).float().cuda()
+        mean = torch.tensor([[[[0.485]], [[0.456]], [[0.406]]]]).float().to(self.device0)
+        std = torch.tensor([[[[0.229]], [[0.224]], [[0.225]]]]).float().to(self.device0)
         batch = (batch - mean) / std
 
         # from time import perf_counter
@@ -257,14 +269,14 @@ class DepthPredictor:
         return depth
 
     def _infer_depth_pro(self, image, camera=None):
-
         image = image.permute(2, 0, 1)
-        image = image.float().cuda() / 255.0
+        image = image.float().to(self.device0) / 255.0
         image = 2.0*image-1.0
 
         f_px = None
         if camera is not None:
-            f_px = camera.fx.to(image)
+            f_px = camera.fx.to(image.device)
+
         prediction = self.model.infer(image, f_px=f_px)
         depth = prediction["depth"]
 
@@ -274,9 +286,8 @@ class DepthPredictor:
         return depth.unsqueeze(-1)
 
     def _infer_moge(self, image, camera=None):
-
         image = image.permute(2, 0, 1)
-        image = image.float().cuda() / 255.0
+        image = image.float().to(self.device0) / 255.0
 
         fov_x = None
         if camera is not None:
@@ -293,7 +304,7 @@ class DepthPredictor:
         return depth
 
 
-class CompositeDepthPredictor(DepthPredictor):
+class CompositeDepthPredictor(torch.nn.Module):
 
     MODELS = {
         frozenset({'depth_pro', 'moge:Ruicheng/moge-vitl'}): None,
@@ -302,26 +313,47 @@ class CompositeDepthPredictor(DepthPredictor):
     _loaded_models: Dict[str, DepthPredictor] = {}
 
     def __init__(self, model_id: str):
+        super().__init__()
         self.model_id_str = model_id
         self.model_id = frozenset(model_id.split(' + '))
-        if self.model_id not in self.MODELS:
+        if len(self.model_id) > 1 and self.model_id not in self.MODELS:
             raise ValueError(f"Model must be one of {self.MODELS.keys()}; Current: `{model_id}`")
 
-        for mid in self.model_id:
-            if mid not in self._loaded_models:
-                self._loaded_models[mid] = DepthPredictor(mid)
+        self.device_count = torch.cuda.device_count()
+        self.device0 = "cuda:0"
 
-        if self.model_id == frozenset({'depth_pro', 'moge:Ruicheng/moge-vitl'}):
+        if len(self.model_id) == 1:
+            self.infer = self._infer_single_model
+        elif self.model_id == frozenset({'depth_pro', 'moge:Ruicheng/moge-vitl'}):
             self.infer = self._infer_depth_pro_moge
 
-    def __call__(self, image: torch.Tensor, camera: Cameras=None):
+    def _init_models(self):
+        device_idx = 0
+        for mid in self.model_id:
+            if mid in self._loaded_models:
+                continue
+            device_idx = (device_idx + 1) % self.device_count
+            model = DepthPredictor(
+                mid, use_cache=False,
+                primary_device=f"cuda:{device_idx}"
+            )
+            if self.device_count > 0 and False:
+                model = DataParallel(model, device_ids=range(self.device_count))
+            self._loaded_models[mid] = model
+
+    def _get_model(self, mid: str):
+        if mid not in self._loaded_models:
+            self._init_models()
+        return self._loaded_models[mid]
+
+    def forward(self, image: torch.Tensor, camera: Cameras=None):
 
         depth = None
         depth_loaded = False
 
         # cache lookup
-        if self.cache_dir is not None:
-            cache_filename = self._get_cache_filename(image, self.model_id_str)
+        if DepthPredictor.cache_dir is not None:
+            cache_filename = DepthPredictor._get_cache_filename(image, self.model_id_str)
             if os.path.exists(cache_filename):
                 depth = np.load(cache_filename)
                 depth = depth.f.depth
@@ -332,9 +364,10 @@ class CompositeDepthPredictor(DepthPredictor):
         if depth is None:
             with torch.inference_mode():
                 depth = self.infer(image, camera)
+                depth = depth.to(self.device0)
 
         # save cache
-        if self.cache_dir is not None and not depth_loaded:
+        if DepthPredictor.cache_dir is not None and not depth_loaded:
             # np.savez_compressed(cache_filename, depth=depth.cpu().numpy())
             # np.savez(cache_filename, depth=depth.half().cpu().numpy())
             np.savez(cache_filename, depth=depth.cpu().numpy())
@@ -346,15 +379,18 @@ class CompositeDepthPredictor(DepthPredictor):
                 size=(h, w), mode='bilinear', align_corners=False
             ).reshape(h, w, 1)
 
-        # return depth_map(depth)
         return depth
 
+    def _infer_single_model(self, image, camera=None):
+        depth = self._get_model(self.model_id_str)(image, camera)
+        return depth.float().to(self.device0)
+
     def _infer_depth_pro_moge(self, image, camera=None):
-        depth_sharp = self._loaded_models['depth_pro'](image, camera).float().cuda()
-        depth_blurry = self._loaded_models['moge:Ruicheng/moge-vitl'](image, camera).float().cuda()
+        depth_sharp = self._get_model('depth_pro')(image, camera).float().to(self.device0)
+        depth_blurry = self._get_model('moge:Ruicheng/moge-vitl')(image, camera).float().to(self.device0)
         mask_blurry = depth_blurry > 0
 
-        depth_sharp_downsampled = CompositeDepthPredictor._downscale_image(depth_sharp)
+        depth_sharp_downsampled = self._downscale_image(depth_sharp)
         z1 = torch.quantile(depth_sharp_downsampled, 0.98)
         depth_sharp_clipped = torch.clip(depth_sharp, max=z1)
 
@@ -395,8 +431,8 @@ class CompositeDepthPredictor(DepthPredictor):
         if (h, w) not in _uv_cache:
             u = (torch.arange(w, dtype=torch.float32)+0.5)/w * 2.0 - 1.0
             v = (torch.arange(h, dtype=torch.float32)+0.5)/h * 2.0 - 1.0
-            u = u[None, :].float().cuda().repeat((h, 1))
-            v = v[:, None].float().cuda().repeat((1, w))
+            u = u[None, :].float().to(x.device).repeat((h, 1))
+            v = v[:, None].float().to(x.device).repeat((1, w))
             u, v = u.flatten(), v.flatten()
 
             uv = []
@@ -414,7 +450,7 @@ class CompositeDepthPredictor(DepthPredictor):
             _uv_cache[(h, w)] = uv
 
         else:
-            uv = _uv_cache[(h, w)]
+            uv = _uv_cache[(h, w)].to(x.device)
 
         A = []
         for k in range(z_degree+1):
@@ -424,7 +460,6 @@ class CompositeDepthPredictor(DepthPredictor):
 
     @staticmethod
     def _fit_distortion_model(x, y, weights=None):
-
         x = CompositeDepthPredictor._downscale_image(x)
         y = CompositeDepthPredictor._downscale_image(y)
         if weights is not None:
@@ -470,6 +505,8 @@ class SpirulaeDataManager(FullImageDatamanager):
 
     config: DataManagerConfig = field(default_factory=SpirulaeDataManagerConfig)
 
+    _train_call_count: int = 0
+
     def __init__(
         self,
         config: SpirulaeDataManagerConfig,
@@ -490,8 +527,19 @@ class SpirulaeDataManager(FullImageDatamanager):
     ) -> List[Dict[str, torch.Tensor]]:
         undistorted_images: List[Dict[str, torch.Tensor]] = []
 
-        if self.config.depth_model is not None:
-            if ' + ' in self.config.depth_model:
+        if self.config.depth_model is not None and split == "train":
+            SpirulaeDataManager._train_call_count += 1
+            if SpirulaeDataManager._train_call_count > 1 or torch.cuda.device_count() > 1:
+                message = (
+                    "\nWARNING: Multi-GPU with depth prediction is currently not supported,\n"
+                    "and can lead to poor performance and system instability if used.\n"
+                    "If multi-GPU training is intended, use single GPU on the first time training on the dataset,\n"
+                    "and abort it after depth prediction and rerun with multi-GPU.\n"
+                    "If not, set CUDA_VISIBLE_DEVICES to the index of the intended GPU before training.\n"
+                )
+                CONSOLE.print('[bold yellow]'+message)
+
+            if ' + ' in self.config.depth_model or True:
                 self.depth_model = CompositeDepthPredictor(self.config.depth_model)
             else:
                 self.depth_model = DepthPredictor(self.config.depth_model)
@@ -558,11 +606,15 @@ class SpirulaeDataManager(FullImageDatamanager):
             # if idx != 0: return cache
             image = cache["image"]
             camera = dataset.cameras[idx]
-            depth = self.depth_model(image, camera)
+            try:
+                depth = self.depth_model(image, camera)
+            except:
+                import traceback
+                traceback.print_exc()
             cache["depth"] = depth
             return cache
 
-        if self.config.depth_model is not None:
+        if self.config.depth_model is not None and split == "train":
             CONSOLE.log(f"Predicting/loading depth for {split} images")
             undistorted_images = list(track(
                 map(predict_depth, range(len(dataset))),
@@ -596,7 +648,7 @@ class SpirulaeDataManager(FullImageDatamanager):
         else:
             assert_never(cache_images_device)
 
-        if self.config.depth_model is not None:
+        if self.config.depth_model is not None and split == "train":
             del self.depth_model
             torch.cuda.empty_cache()
 

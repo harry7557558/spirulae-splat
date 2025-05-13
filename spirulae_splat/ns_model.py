@@ -347,11 +347,13 @@ class SpirulaeModel(Model):
 
         if self.config.use_3dgs:
             global fully_fused_projection
+            # global fully_fused_projection_with_ut
             global rasterize_to_pixels
             global isect_tiles
             global isect_offset_encode
             from spirulae_splat.splat.gsplat_3dgs_wrapper import (
                 fully_fused_projection,
+                # fully_fused_projection_with_ut,
                 rasterize_to_pixels,
                 isect_tiles,
                 isect_offset_encode,
@@ -376,6 +378,7 @@ class SpirulaeModel(Model):
         points = means.data[indices] - means.data[:, None, :]
         points = points.cpu().numpy()
         U, S, Vt = np.linalg.svd(points)
+        Vt[:,:,2] *= np.linalg.det(Vt)[:,None]
         num_points = means.shape[0]
         for i in range(num_points):
             if self.config.use_3dgs or True:
@@ -403,7 +406,7 @@ class SpirulaeModel(Model):
             # We can have colors without points.
             and self.seed_points[1].shape[0] > 0
         ):
-            shs = torch.zeros((self.seed_points[1].shape[0], dim_sh, 3)).float().cuda()
+            shs = torch.zeros((self.seed_points[1].shape[0], dim_sh, 3)).float()
             seed_color = self.seed_points[1] / 255
             if self.config.sh_degree > 0:
                 shs[:, 0, :3] = RGB2SH(seed_color)
@@ -412,9 +415,9 @@ class SpirulaeModel(Model):
                 shs[:, 0, :3] = seed_color
             if dim_ch > 0:
                 shs *= 2
-            chs = torch.zeros((self.seed_points[1].shape[0], dim_ch, 3)).float().cuda()
-            features_dc = torch.nn.Parameter(shs[:, 0, :])
-            features_sh = torch.nn.Parameter(shs[:, 1:, :])
+            chs = torch.zeros((self.seed_points[1].shape[0], dim_ch, 3)).float()
+            features_dc = torch.nn.Parameter(shs[:, 0, :].contiguous())
+            features_sh = torch.nn.Parameter(shs[:, 1:, :].contiguous())
             features_ch = torch.nn.Parameter(chs)
         else:
             features_dc = torch.nn.Parameter(torch.rand(num_points, 3))
@@ -747,6 +750,7 @@ class SpirulaeModel(Model):
         assert camera.shape[0] == 1, "Only one camera at a time"
 
         timerr.start()
+        device = self.means.device
 
         if self.training and self.config.use_camera_optimizer:
             optimized_camera_to_world = self.camera_optimizer.apply_to_camera(camera)[0, ...]
@@ -762,9 +766,9 @@ class SpirulaeModel(Model):
         camera.rescale_output_resolution(camera_downscale)
         if camera.camera_type.item() == CameraType.FISHEYE.value:
             dist_coeffs = tuple(camera.distortion_params.cpu().numpy().flatten().tolist())
-            ssplat_camera = _Camera(H, W, "OPENCV_FISHEYE", intrins, dist_coeffs)
+            ssplat_camera = _Camera(H, W, "OPENCV_FISHEYE", intrins, dist_coeffs, device=device)
         else:
-            ssplat_camera = _Camera(H, W, "", intrins)
+            ssplat_camera = _Camera(H, W, "", intrins, device=device)
         timerr.mark(".")  # 400us
 
         R = optimized_camera_to_world[:3, :3]  # 3 x 3
@@ -785,7 +789,7 @@ class SpirulaeModel(Model):
         timerr.mark("map")  # 300us-450us
 
         if self.config.sh_degree > 0:
-            viewdirs = self.means.detach() - optimized_camera_to_world[:3, 3].cuda()  # (N, 3)
+            viewdirs = self.means.detach() - optimized_camera_to_world[:3, 3].to(device)  # (N, 3)
             n = min(self.step // self.config.sh_degree_interval, self.config.sh_degree)
             rgbs = spherical_harmonics(n, viewdirs, self.features_dc, self.features_sh)  # input unnormalized viewdirs
             rgbs = rgbs + 0.5
@@ -805,7 +809,7 @@ class SpirulaeModel(Model):
                 self.means,
                 torch.exp(self.scales),
                 quats,
-                viewmat[:3, :].cuda(),
+                viewmat[:3, :].to(device),
                 ssplat_camera,
             )  # type: ignore
             timerr.mark("project")  # 200us-350us
@@ -889,13 +893,21 @@ class SpirulaeModel(Model):
 
             fx, fy, cx, cy = ssplat_camera.intrins
             Ks = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).float()
-            (
-                radii, means2d, depths, conics, compensations,
-            ) = fully_fused_projection(
-                self.means, None, quats, torch.exp(self.scales),
-                viewmat[None].cuda(), Ks[None].cuda(), W, H,
-                eps2d=0.3, packed=False,
-            )
+            if ssplat_camera.model == "OPENCV_FISHEYE":
+                raise NotImplementedError("gsplat fully_fused_projection_with_ut is currently not differentiable")
+                dist_coeffs = torch.tensor(ssplat_camera.dist_coeffs).float().to(device)
+                proj_return = fully_fused_projection_with_ut(
+                    self.means, quats, torch.exp(self.scales), opacities,
+                    viewmat[None].to(device), Ks[None].to(device), W, H,
+                    camera_model="fisheye", radial_coeffs=dist_coeffs
+                )
+            else:
+                proj_return = fully_fused_projection(
+                    self.means, None, quats, torch.exp(self.scales),
+                    viewmat[None].to(device), Ks[None].to(device), W, H,
+                    packed=False
+                )
+            radii, means2d, depths, conics, compensations = proj_return
 
             tile_size = 16
             tile_width = math.ceil(W / float(tile_size))
@@ -1045,7 +1057,9 @@ class SpirulaeModel(Model):
 
         # resize depth
         h, w, _ = pred_depth.shape
-        alpha = (ref_depth > 0.0).squeeze(-1)
+        alpha = (ref_depth > 0.0)
+        ref_depth = torch.where(alpha, ref_depth, 2.0*torch.amax(ref_depth).detach())
+        alpha = alpha.squeeze(-1)
 
         # generate UV embeddings
         if not self.config.depth_distortion_uv_degree >= 0:
@@ -1054,8 +1068,8 @@ class SpirulaeModel(Model):
         elif (h, w) not in _uv_cache:
             u = (torch.arange(w, dtype=torch.float32)+0.5)/w * 2.0 - 1.0
             v = (torch.arange(h, dtype=torch.float32)+0.5)/h * 2.0 - 1.0
-            u = u[None, :].float().cuda().repeat((h, 1))
-            v = v[:, None].float().cuda().repeat((1, w))
+            u = u[None, :].float().to(pred_depth.device).repeat((h, 1))
+            v = v[:, None].float().to(pred_depth.device).repeat((1, w))
             u, v = u.flatten(), v.flatten()
 
             uv = []
@@ -1270,15 +1284,24 @@ class SpirulaeModel(Model):
 
     def erank_regularization(self):
         scales = torch.exp(2.0*self.scales)
-        x, y, z = torch.unbind(scales, -1)
-        s = x + y + z
-        s1 = torch.fmax(torch.fmax(x, y), z) / s
-        s3 = torch.fmin(torch.fmin(x, y), z) / s
-        s2 = 1 - s1 - s3
-        r = torch.exp(-s1*torch.log(s1) - s2*torch.log(s2) - s3*torch.log(s3))
-        reg = torch.relu(-torch.log(r - 0.99999))
-        return self.config.erank_reg * reg.mean() + \
-            self.config.erank_reg_s3 * s3.mean()
+        if self.config.use_3dgs:
+            x, y, z = torch.unbind(scales, -1)
+            s = x + y + z
+            s1 = torch.fmax(torch.fmax(x, y), z) / s
+            s3 = torch.fmin(torch.fmin(x, y), z) / s
+            s2 = 1 - s1 - s3
+            r = torch.exp(-s1*torch.log(s1) - s2*torch.log(s2) - s3*torch.log(s3))
+            reg = torch.relu(-torch.log(r - 0.99999))
+            return self.config.erank_reg * reg.mean() + \
+                self.config.erank_reg_s3 * s3.mean()
+        else:
+            x, y = torch.unbind(scales, -1)
+            s = x + y
+            s1 = torch.fmax(x, y) / s
+            s2 = torch.fmin(x, y) / s
+            r = torch.exp(-s1*torch.log(s1) - s2*torch.log(s2))
+            reg = torch.relu(-torch.log(r - 0.99999))
+            return self.config.erank_reg * reg.mean()
 
     def get_2dgs_reg_weights(self):
         weight_depth_reg = self.config.depth_reg_weight * \
@@ -1321,6 +1344,7 @@ class SpirulaeModel(Model):
             if not camera_mask.all():
                 for key in ['rgb', 'depth', 'alpha', 'background']:
                     outputs[key] = MaskGradient.apply(outputs[key], camera_mask)
+        device = outputs['rgb'].device
 
         timerl.start()
         gt_img_rgba = self.get_gt_img(batch["image"])
@@ -1359,7 +1383,7 @@ class SpirulaeModel(Model):
              self.config.alpha_supervision_weight_under > 0.0):
             if batch["depth"].ndim == 2:
                 batch["depth"] = batch["depth"].unsqueeze(-1)
-            depth = self._downscale_if_required(batch["depth"].cuda())
+            depth = self._downscale_if_required(batch["depth"].to(device))
             depth_supervision_loss, normal_supervision_loss, alpha_supervision_loss \
                 = self.get_supervision_losses(depth, ssplat_camera, outputs["depth"], outputs["depth_normal"], outputs["alpha"])
             timerl.mark("depth")  # ?us
@@ -1430,16 +1454,16 @@ class SpirulaeModel(Model):
             mcmc_opacity_reg = self.config.mcmc_opacity_reg * mcmc_opacity_reg
         if self.config.use_mcmc and self.config.mcmc_scale_reg > 0.0:
             # mcmc_scale_reg = torch.exp(self.scales).mean()
-            mcmc_scale_reg = self.scales.mean()
+            # mcmc_scale_reg = self.scales.mean()
+            mcmc_scale_reg = torch.where(self.scales < 0, torch.exp(self.scales), self.scales+1).mean()
             mcmc_scale_reg = self.config.mcmc_scale_reg * mcmc_scale_reg
 
         # 3DGS regularizers
         erank_reg = 0.0
-        if self.config.use_3dgs:
-            if self.step >= self.config.erank_reg_warmup and (
-                self.config.erank_reg > 0.0 or self.config.erank_reg_s3 > 0.0
-            ):
-                erank_reg = self.erank_regularization()
+        if self.step >= self.config.erank_reg_warmup and (
+            self.config.erank_reg > 0.0 or self.config.erank_reg_s3 > 0.0
+        ):
+            erank_reg = self.erank_regularization()
 
         # regularizations for parameters
         quat_norm = self.quats.norm(dim=-1)

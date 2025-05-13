@@ -55,5 +55,5 @@ class Camera:
     def intrins(self):
         return (self.fx, self.fy, self.cx, self.cy)
 
-    def _to_ssplat_camera(self):
-        return _Camera(self.h, self.w, self.model, self.intrins, self.distortion)
+    def _to_ssplat_camera(self, device="cuda"):
+        return _Camera(self.h, self.w, self.model, self.intrins, self.distortion, device)

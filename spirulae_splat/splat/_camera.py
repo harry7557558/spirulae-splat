@@ -18,7 +18,8 @@ class _Camera:
                  width: int,
                  model: Literal["", "OPENCV", "OPENCV_FISHEYE"],
                  intrins: Tuple[float, float, float, float],
-                 dist_coeffs: Tuple[float, float, float, float]=(0.,0.,0.,0.,)
+                 dist_coeffs: Tuple[float, float, float, float]=(0.,0.,0.,0.,),
+                 device="cuda"
             ):
         self.h = height
         self.w = width
@@ -32,6 +33,7 @@ class _Camera:
             if any([x != 0 for x in dist_coeffs[4:]]):
                 raise ValueError("Only support at most 4 distortion coefficients")
             self.dist_coeffs = tuple(dist_coeffs[:4])
+        self.device = device
 
     def validate_model(self):
         assert self.model in ["", "OPENCV", "OPENCV_FISHEYE"], \
@@ -69,8 +71,8 @@ class _Camera:
             if always:
                 fx, fy, cx, cy = self.intrins
                 x, y = torch.meshgrid(
-                    torch.arange(self.w).cuda() + 0.5,
-                    torch.arange(self.h).cuda() + 0.5,
+                    torch.arange(self.w).to(self.device) + 0.5,
+                    torch.arange(self.h).to(self.device) + 0.5,
                     indexing="xy",
                 )  # [H, W]
                 undist_map = torch.stack([(x - cx) / fx, (y - cy) / fy], dim=-1)
