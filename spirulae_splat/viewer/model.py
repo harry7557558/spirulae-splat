@@ -31,6 +31,11 @@ class SplatModel:
         self.dataparser_transform = np.eye(4)
         self.dataparser_scale = 1.0
 
+        if os.path.isdir(file_path):
+            for fn in os.listdir(file_path):
+                if fn.endswith('.ckpt') or fn == 'config.yml':
+                    file_path = os.path.join(file_path, fn)
+                    break
         if file_path.endswith('.ckpt'):
             self.load_ckpt(file_path)
         elif file_path.endswith('config.yml'):
@@ -176,14 +181,29 @@ class SplatModel:
             fx, fy, cx, cy = ssplat_camera.intrins
             w, h = int(ssplat_camera.w), int(ssplat_camera.h)
             Ks = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).float()
-            (
-                camera_ids, gaussian_ids, radii,
-                means2d, depths, conics, compensations,
-            ) = fully_fused_projection(
-                self.means, None, self.quats, torch.exp(self.scales),
-                torch.from_numpy(viewmat[None]).cuda(), Ks[None].cuda(), w, h,
-                eps2d=0.3, packed=True,
-            )
+            dist_coeffs = [*ssplat_camera.dist_coeffs]
+            if ssplat_camera.is_distorted() or any([x != 0 for x in dist_coeffs]):
+                from gsplat.cuda._wrapper import fully_fused_projection_with_ut
+                fisheye = ssplat_camera.model == "OPENCV_FISHEYE"
+                if fisheye:
+                    radial_coeffs = torch.tensor(dist_coeffs).float().cuda()
+                    tangential_coeffs = None
+                else:
+                    radial_coeffs = torch.tensor(dist_coeffs[:2]+[0]*4).float().cuda()
+                    tangential_coeffs = torch.tensor(dist_coeffs[2:]).float().cuda()
+                proj_return = fully_fused_projection_with_ut(
+                    self.means, self.quats, torch.exp(self.scales), opacities,
+                    torch.from_numpy(viewmat[None]).cuda(), Ks[None].cuda(), w, h,
+                    camera_model="fisheye" if fisheye else "pinhole",
+                    radial_coeffs=radial_coeffs, tangential_coeffs=tangential_coeffs
+                )
+            else:
+                proj_return = fully_fused_projection(
+                    self.means, None, self.quats, torch.exp(self.scales),
+                    torch.from_numpy(viewmat[None]).cuda(), Ks[None].cuda(), w, h,
+                    packed=False
+                )
+            radii, means2d, depths, conics, compensations = proj_return
 
             tile_size = 16
             tile_width = int(np.ceil(ssplat_camera.w / tile_size))
@@ -191,31 +211,30 @@ class SplatModel:
             tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
                 means2d, radii, depths,
                 tile_size, tile_width, tile_height,
-                packed=True, n_cameras=1,
-                camera_ids=camera_ids, gaussian_ids=gaussian_ids,
+                packed=False, n_cameras=1,
             )
             isect_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
 
-            colors = rgbs[gaussian_ids]
+            colors = rgbs[None]
             if return_depth:
                 colors = torch.cat((
                     colors, depth_map(depths)[..., None]
                 ), dim=-1)
-            opacs = opacities[gaussian_ids].squeeze(-1)
+            opacs = opacities.T
 
             colors, alpha = rasterize_to_pixels(
                 means2d, conics, colors, opacs,
                 w, h, tile_size,
                 isect_offsets, flatten_ids,
-                backgrounds=None, packed=True,
+                backgrounds=None, packed=False, absgrad=True,
             )
             colors, alpha = colors[0], alpha[0]
 
             rgb = colors[..., :3]
             if return_depth:
                 depth = torch.where(
-                    alpha > 0.0, colors[..., 3:] / alpha,
-                    torch.amax(colors[..., 3:]).detach()
+                    alpha > 0.05, colors[..., 3:] / alpha,
+                    1.5*torch.amax(colors[..., 3:]).detach()
                 )
 
         else:

@@ -1,0 +1,9 @@
+# 2x downscale from Zip-NeRF dataset
+width: 1752
+height: 1168
+fx: 604.0
+fy: 605.0
+cx: 878.0
+cy: 582.0
+model: "OPENCV_FISHEYE"
+distortion: [0.034853, 0.011514, -0.003452,0.001056]

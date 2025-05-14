@@ -247,9 +247,10 @@ if __name__ == "__main__":
     print("sort_per_pixel:", ssplat_model.sort_per_pixel)
 
     # Center the model
-    ssplat_model.gauss_params["means"] -= torch.mean(
-        torch.nan_to_num(ssplat_model.means, 0.0, 0.0, 0.0),
-        dim=0, keepdim=True)
+    if False:
+        ssplat_model.gauss_params["means"] -= torch.mean(
+            torch.nan_to_num(ssplat_model.means, 0.0, 0.0, 0.0),
+            dim=0, keepdim=True)
 
     # Start tkinter app
     viewer = RenderViewer()
