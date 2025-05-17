@@ -157,9 +157,12 @@ __global__ void project_gaussians_backward_kernel(
     float* __restrict__ v_viewmat
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
-    if (idx >= num_points || num_tiles_hit <= 0) {
-        return;
-    }
+    bool inside = (idx < num_points && num_tiles_hit > 0);
+
+    glm::mat3 v_R0 = glm::mat3(0.0);
+    glm::vec3 v_T0 = glm::vec3(0.0);
+
+    if (inside) {
 
     glm::mat3 R0 = glm::mat3(
         viewmat[0], viewmat[4], viewmat[8],
@@ -210,22 +213,27 @@ __global__ void project_gaussians_backward_kernel(
     glm::mat3 v_Rq = glm::transpose(R0) * v_R;
     float4 v_quat = quat_to_rotmat_vjp(quat, v_Rq);
     v_quats[idx] = v_quat;
-    glm::mat3 v_R0 = v_R * glm::transpose(Rq) +
-        glm::outerProduct(v_p_view, p_world);
-    glm::vec3 v_T0 = v_p_view;
+    v_R0 = v_R * glm::transpose(Rq) + glm::outerProduct(v_p_view, p_world);
+    v_T0 = v_p_view;
 
-    atomicAdd(&v_viewmat[0], v_R0[0][0]);
-    atomicAdd(&v_viewmat[1], v_R0[1][0]);
-    atomicAdd(&v_viewmat[2], v_R0[2][0]);
-    atomicAdd(&v_viewmat[3], v_T0[0]);
-    atomicAdd(&v_viewmat[4], v_R0[0][1]);
-    atomicAdd(&v_viewmat[5], v_R0[1][1]);
-    atomicAdd(&v_viewmat[6], v_R0[2][1]);
-    atomicAdd(&v_viewmat[7], v_T0[1]);
-    atomicAdd(&v_viewmat[8], v_R0[0][2]);
-    atomicAdd(&v_viewmat[9], v_R0[1][2]);
-    atomicAdd(&v_viewmat[10], v_R0[2][2]);
-    atomicAdd(&v_viewmat[11], v_T0[2]);
+    }  // if (inside)
+    if (__syncthreads_count(inside) == 0)
+        return;
+
+    auto block = cg::this_thread_block();
+    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+
+    float values[12] = {
+        v_R0[0][0], v_R0[1][0], v_R0[2][0], v_T0[0],
+        v_R0[0][1], v_R0[1][1], v_R0[2][1], v_T0[1],
+        v_R0[0][2], v_R0[1][2], v_R0[2][2], v_T0[2]
+    };
+    #pragma unroll
+    for (int i = 0; i < 12; i++) {
+        warpSum(values[i], warp);
+        if (warp.thread_rank() == i)
+            atomicAdd(&v_viewmat[i], values[i]);
+    }
 }
 
 

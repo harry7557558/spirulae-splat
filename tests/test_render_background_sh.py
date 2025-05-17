@@ -26,6 +26,23 @@ def check_close(name, a, b, atol=1e-5, rtol=1e-5):
         # ipdb.set_trace()
 
 
+def timeit(fun, name: str, repeat=20):
+    from time import perf_counter
+
+    for i in range(2):
+        fun()
+    torch.cuda.synchronize()
+
+    time0 = perf_counter()
+    for i in range(repeat):
+        fun()
+        torch.cuda.synchronize()
+    time1 = perf_counter()
+
+    dt = 1e3 * (time1-time0) / repeat
+    print(f"{name}: {dt:.2f} ms")
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_render_background_sh():
 
@@ -68,13 +85,73 @@ def test_render_background_sh():
 
     print("test backward")
     tol = { 'atol': 1e-6, 'rtol': 1e-4 }
-    print(rotation.grad)
-    print(_rotation.grad)
+    # print(rotation.grad)
+    # print(_rotation.grad)
     check_close('rotation', rotation.grad, _rotation.grad, **tol)
     # print(sh_coeffs.grad)
     # print(_sh_coeffs.grad)
     check_close('sh_coeffs', sh_coeffs.grad, _sh_coeffs.grad, **tol)
+    print()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def profile_render_background_sh():
+
+    rotation = torch.randn(4).to(device)
+    rotation /= torch.linalg.norm(rotation)
+    rotation = _torch_impl.quat_to_rotmat(rotation)
+    rotation = rotation.detach().contiguous()
+    _rotation = rotation.clone().requires_grad_(True)
+    rotation.requires_grad_(True)
+
+    H, W = 1440, 1080
+    cx, cy = 0.45*W, 0.55*H
+    fx, fy = 1.5*W, 1.6*W
+    cam = _Camera(H, W, "OPENCV", (fx, fy, cx, cy))
+
+    sh_degree = 4
+    sh_coeffs = torch.randn(((sh_degree+1)**2, 3)).to(device)
+    _sh_coeffs = sh_coeffs.clone().requires_grad_(True)
+    sh_coeffs.requires_grad_(True)
+
+    print("profile forward")
+
+    output = render_background_sh(
+        cam, rotation, sh_degree, sh_coeffs,
+    )
+    _output = _torch_impl.render_background_sh(
+        W, H, (fx, fy, cx, cy),
+        _rotation, sh_degree, _sh_coeffs,
+    )
+
+    timeit(lambda: _torch_impl.render_background_sh(
+        W, H, (fx, fy, cx, cy),
+        _rotation, sh_degree, _sh_coeffs,
+    ), "forward torch")
+    timeit(lambda: render_background_sh(
+        cam, rotation, sh_degree, sh_coeffs,
+    ), "forward fused")
+
+    print()
+
+    print("profile backward")
+
+    weights = torch.randn_like(output)
+    def fun(output):
+        return (weights * output).sum()
+    output.retain_grad()
+    fun(output).backward(retain_graph=True)
+    fun(_output).backward(retain_graph=True)
+
+    timeit(lambda: fun(_output).backward(retain_graph=True), "backward torch")
+    timeit(lambda: fun(output).backward(retain_graph=True), "backward fused")
+
+    print()
 
 
 if __name__ == "__main__":
+
     test_render_background_sh()
+    print()
+
+    profile_render_background_sh()
