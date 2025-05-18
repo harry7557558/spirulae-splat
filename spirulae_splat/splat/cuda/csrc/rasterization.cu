@@ -1890,9 +1890,10 @@ __global__ void render_background_sh_backward_kernel(
     if (inside) {
         color = ((glm::vec3*)out_color)[idx];
         v_color = ((glm::vec3*)v_out_color)[idx];
-        if (color.x <= 1e-6f) v_color.x = 0.0f;
-        if (color.y <= 1e-6f) v_color.y = 0.0f;
-        if (color.z <= 1e-6f) v_color.z = 0.0f;
+        if (color.x == 0.0f || !isfinite(v_color.x)) v_color.x = 0.0f;
+        if (color.y == 0.0f || !isfinite(v_color.y)) v_color.y = 0.0f;
+        if (color.z == 0.0f || !isfinite(v_color.z)) v_color.z = 0.0f;
+        v_color = glm::clamp(v_color, -glm::vec3(-1e4f), glm::vec3(1e4f));
     }
     else v_color = { 0.0f, 0.0f, 0.0f };
 
@@ -1920,7 +1921,7 @@ __global__ void render_background_sh_backward_kernel(
     float yr = rotation[3] * xi + rotation[4] * yi + rotation[5] * zi;
     float zr = rotation[6] * xi + rotation[7] * yi + rotation[8] * zi;
     float norm2 = xr * xr + yr * yr + zr * zr;
-    float norm = sqrtf(norm2);
+    float norm = sqrtf(fmaxf(norm2, 1e-12f));
     float x = inside ? xr / norm : 0.0f;
     float y = inside ? yr / norm : 0.0f;
     float z = inside ? zr / norm : 0.0f;
@@ -1935,12 +1936,12 @@ __global__ void render_background_sh_backward_kernel(
     glm::vec3 v_sh;
     #define _ATOMIC_ADD_SH_COEFFS(idx) \
         warpSum3(v_sh, warp); \
-        if (warp.thread_rank() == 0) { \
+        if (warp.thread_rank() == idx) { \
             atomicAdd(&v_sh_coeffs[idx].x, v_sh.x); \
             atomicAdd(&v_sh_coeffs[idx].y, v_sh.y); \
             atomicAdd(&v_sh_coeffs[idx].z, v_sh.z); \
-        } \
-        __syncthreads();
+        }
+        // __syncthreads();
 
     // l0
     float v_color_dot_sh_coeff = 0.0f;

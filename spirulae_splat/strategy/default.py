@@ -196,7 +196,7 @@ class DefaultStrategy(Strategy):
             torch.cuda.empty_cache()
 
         # if step % self.reset_every == 0:
-        if step % self.reset_every == self.refine_every:
+        if step > self.refine_start_iter and step % self.reset_every == self.refine_every:
             reset_opa(
                 params=params,
                 optimizers=optimizers,

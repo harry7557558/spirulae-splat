@@ -66,7 +66,15 @@ from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.rich_utils import CONSOLE
 
-from nerfstudio.model_components.lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
+try:
+    # raise ImportError()
+    from fused_bilagrid import BilateralGrid, slice, total_variation_loss
+    USE_FUSED_BILAGRID = True
+except ImportError:
+    print("fused_bilagrid not found, fall back to nerfstudio lib_bilagrid")
+    from nerfstudio.model_components.lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
+    USE_FUSED_BILAGRID = False
+
 
 from spirulae_splat.perf_timer import PerfTimer
 timerr = PerfTimer("get_outputs", ema_tau=100)
@@ -700,19 +708,19 @@ class SpirulaeModel(Model):
 
     def _apply_bilateral_grid(self, rgb: torch.Tensor, cam_idx: int, H: int, W: int) -> torch.Tensor:
         # make xy grid
-        grid_y, grid_x = torch.meshgrid(
-            torch.linspace(0, 1.0, H, device=self.device),
-            torch.linspace(0, 1.0, W, device=self.device),
-            indexing="ij",
-        )
-        grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
+        grid_xy = None
+        if not USE_FUSED_BILAGRID:
+            grid_y, grid_x = torch.meshgrid(
+                torch.linspace(0, 1.0, H, device=self.device),
+                torch.linspace(0, 1.0, W, device=self.device),
+                indexing="ij",
+            )
+            grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
 
         rgb = torch.clip(rgb, 0.0, 1.0)
 
         out = slice(
-            bil_grids=self.bil_grids,
-            rgb=rgb,
-            xy=grid_xy,
+            bil_grids=self.bil_grids, rgb=rgb, xy=grid_xy,
             grid_idx=torch.tensor(cam_idx, device=self.device, dtype=torch.long),
         )
         return out["rgb"]
@@ -884,8 +892,10 @@ class SpirulaeModel(Model):
                 ).contiguous()
                 timerr.mark("render")  # 750us-1200us
         
-            radii = self.config.kernel_radius/3.0 * \
-                      num_tiles_hit.unsqueeze(0)**0.5 / 2 * BLOCK_WIDTH
+            radii = torch.stack([
+                bounds[:, 2] - bounds[:, 0],
+                bounds[:, 3] - bounds[:, 1],
+            ]).T.unsqueeze(0)
             means2d = positions
 
         else:
