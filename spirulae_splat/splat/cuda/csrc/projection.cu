@@ -139,25 +139,14 @@ __global__ void project_gaussians_forward_kernel(
 }
 
 
+template <NeedsGradient needs_viewmat_grad>
 __global__ void project_gaussians_backward_kernel(
-    const int num_points,
-    const float3* __restrict__ means3d,
-    const float2* __restrict__ scales,
-    const float4* __restrict__ quats,
-    const float* __restrict__ viewmat,  // 3x4 row major
-    const float4 intrins,
-    const int* __restrict__ num_tiles_hit,
-    const float3* __restrict__ v_positions,
-    const float3* __restrict__ v_axes_u,
-    const float3* __restrict__ v_axes_v,
-    // const float2* __restrict__ v_depth_grads,
-    float3* __restrict__ v_means3d,
-    float2* __restrict__ v_scales,
-    float4* __restrict__ v_quats,
-    float* __restrict__ v_viewmat
+    _ARGS_project_gaussians_backward_kernel
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
     bool inside = (idx < num_points && num_tiles_hit > 0);
+    if (needs_viewmat_grad == NeedsGradient::False)
+        if (!inside) return;
 
     glm::mat3 v_R0 = glm::mat3(0.0);
     glm::vec3 v_T0 = glm::vec3(0.0);
@@ -213,8 +202,11 @@ __global__ void project_gaussians_backward_kernel(
     glm::mat3 v_Rq = glm::transpose(R0) * v_R;
     float4 v_quat = quat_to_rotmat_vjp(quat, v_Rq);
     v_quats[idx] = v_quat;
-    v_R0 = v_R * glm::transpose(Rq) + glm::outerProduct(v_p_view, p_world);
-    v_T0 = v_p_view;
+
+    if (needs_viewmat_grad == NeedsGradient::True) {
+        v_R0 = v_R * glm::transpose(Rq) + glm::outerProduct(v_p_view, p_world);
+        v_T0 = v_p_view;
+    }
 
     }  // if (inside)
     if (__syncthreads_count(inside) == 0)
@@ -228,11 +220,14 @@ __global__ void project_gaussians_backward_kernel(
         v_R0[0][1], v_R0[1][1], v_R0[2][1], v_T0[1],
         v_R0[0][2], v_R0[1][2], v_R0[2][2], v_T0[2]
     };
-    #pragma unroll
-    for (int i = 0; i < 12; i++) {
-        warpSum(values[i], warp);
-        if (warp.thread_rank() == i)
-            atomicAdd(&v_viewmat[i], values[i]);
+
+    if (needs_viewmat_grad == NeedsGradient::True) {
+        #pragma unroll
+        for (int i = 0; i < 12; i++) {
+            warpSum(values[i], warp);
+            if (warp.thread_rank() == i)
+                atomicAdd(&v_viewmat[i], values[i]);
+        }
     }
 }
 
@@ -489,6 +484,14 @@ template __global__ void project_gaussians_forward_kernel<CameraType::OPENCV>(
 
 template __global__ void project_gaussians_forward_kernel<CameraType::OPENCV_FISHEYE>(
     _ARGS_project_gaussians_forward_kernel
+);
+
+template __global__ void project_gaussians_backward_kernel<NeedsGradient::False>(
+    _ARGS_project_gaussians_backward_kernel
+);
+
+template __global__ void project_gaussians_backward_kernel<NeedsGradient::True>(
+    _ARGS_project_gaussians_backward_kernel
 );
 
 template __global__ void render_undistortion_map_kernel<CameraType::OPENCV>(

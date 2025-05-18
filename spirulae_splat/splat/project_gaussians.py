@@ -100,13 +100,18 @@ class _ProjectGaussians(Function):
             viewmat,
             camera.intrins,
             num_tiles_hit,
-            v_positions, v_axes_u, v_axes_v
+            # ctx.needs_input_grad[3],
+            True,
+            v_positions, v_axes_u, v_axes_v,
         )
 
         clean = lambda x, h: torch.nan_to_num(torch.clip(x, -h, h))
         (v_means3d, v_scales, v_quats) = [clean(v, 10.) for v in backward_return[:3]]
-        v_viewmat = clean(backward_return[3], 20.)  # 4x4
-        v_viewmat = v_viewmat[:viewmat.shape[0], :viewmat.shape[1]]  # 4x4 or 3x4
+
+        v_viewmat = backward_return[3]
+        if v_viewmat is not None:
+            v_viewmat = clean(backward_return[3], 20.)  # 4x4
+            v_viewmat = v_viewmat[:viewmat.shape[0], :viewmat.shape[1]]  # 4x4 or 3x4
 
         # Return a gradient for each input.
         return (

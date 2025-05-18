@@ -195,7 +195,7 @@ std::tuple<
     torch::Tensor,  // v_means3d
     torch::Tensor,  // v_scales
     torch::Tensor,  // v_quats
-    torch::Tensor  // v_viewmat, [4, 4]
+    std::optional<torch::Tensor>  // v_viewmat, [4, 4]
 > project_gaussians_backward_tensor(
     const int num_points,
     torch::Tensor &means3d,  // [N, 3]
@@ -204,6 +204,7 @@ std::tuple<
     torch::Tensor &viewmat,  // [3|4, 4]
     std::tuple<float, float, float, float> intrins,
     torch::Tensor &num_tiles_hit,  // [N], int
+    bool needs_viewmat_gradient,
     torch::Tensor &v_positions,  // [N, 3]
     torch::Tensor &v_axes_u,  // [N, 3]
     torch::Tensor &v_axes_v  // [N, 3]
@@ -216,26 +217,37 @@ std::tuple<
     torch::Tensor v_means3d = torch::zeros({num_points, 3}, float32);
     torch::Tensor v_scales = torch::zeros({num_points, 2}, float32);
     torch::Tensor v_quats = torch::zeros({num_points, 4}, float32);
-    torch::Tensor v_viewmat = torch::zeros({4, 4}, float32);
+    std::optional<torch::Tensor> v_viewmat;
 
-    project_gaussians_backward_kernel<<<_LAUNGH_ARGS_1D(num_points)>>>(
-        num_points,
-        (float3 *)means3d.contiguous().data_ptr<float>(),
-        (float2 *)scales.contiguous().data_ptr<float>(),
-        (float4 *)quats.contiguous().data_ptr<float>(),
-        viewmat.contiguous().data_ptr<float>(),
-        tuple2float4(intrins),
-        num_tiles_hit.contiguous().data_ptr<int32_t>(),
-        (float3 *)v_positions.contiguous().data_ptr<float>(),
-        (float3 *)v_axes_u.contiguous().data_ptr<float>(),
-        (float3 *)v_axes_v.contiguous().data_ptr<float>(),
-        // (float2 *)v_depth_grads.contiguous().data_ptr<float>(),
-        // Outputs.
-        (float3 *)v_means3d.contiguous().data_ptr<float>(),
-        (float2 *)v_scales.contiguous().data_ptr<float>(),
-        (float4 *)v_quats.contiguous().data_ptr<float>(),
-        (float *)v_viewmat.contiguous().data_ptr<float>()
-    );
+    #define _TEMP_ARGS \
+        num_points, \
+        (float3 *)means3d.contiguous().data_ptr<float>(), \
+        (float2 *)scales.contiguous().data_ptr<float>(), \
+        (float4 *)quats.contiguous().data_ptr<float>(), \
+        viewmat.contiguous().data_ptr<float>(), \
+        tuple2float4(intrins), \
+        num_tiles_hit.contiguous().data_ptr<int32_t>(), \
+        (float3 *)v_positions.contiguous().data_ptr<float>(), \
+        (float3 *)v_axes_u.contiguous().data_ptr<float>(), \
+        (float3 *)v_axes_v.contiguous().data_ptr<float>(), \
+        /* Outputs */ \
+        (float3 *)v_means3d.contiguous().data_ptr<float>(), \
+        (float2 *)v_scales.contiguous().data_ptr<float>(), \
+        (float4 *)v_quats.contiguous().data_ptr<float>()
+
+    if (needs_viewmat_gradient) {
+        v_viewmat = torch::zeros({4, 4}, float32);
+        project_gaussians_backward_kernel<NeedsGradient::True>
+        <<<_LAUNGH_ARGS_1D(num_points)>>>(
+            _TEMP_ARGS,
+            (float *)v_viewmat.value().contiguous().data_ptr<float>()
+        );
+    }
+    else
+        project_gaussians_backward_kernel<NeedsGradient::False>
+        <<<_LAUNGH_ARGS_1D(num_points)>>>(_TEMP_ARGS, nullptr);
+
+    #undef _TEMP_ARGS
 
     return std::make_tuple(v_means3d, v_scales, v_quats, v_viewmat);
 }

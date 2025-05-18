@@ -70,7 +70,7 @@ std::tuple<
     torch::Tensor,  // v_means3d
     torch::Tensor,  // v_scales
     torch::Tensor,  // v_quats
-    torch::Tensor  // v_viewmat, [4, 4]
+    std::optional<torch::Tensor>  // v_viewmat, [4, 4]
 > project_gaussians_backward_tensor(
     const int num_points,
     torch::Tensor &means3d,  // [N, 3]
@@ -79,6 +79,7 @@ std::tuple<
     torch::Tensor &viewmat,  // [3|4, 4]
     std::tuple<float, float, float, float> intrins,
     torch::Tensor &num_tiles_hit,  // [N], int
+    bool needs_viewmat_gradient,
     torch::Tensor &v_positions,  // [N, 3]
     torch::Tensor &v_axes_u,  // [N, 3]
     torch::Tensor &v_axes_v  // [N, 3]

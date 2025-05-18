@@ -74,3 +74,8 @@ enum class CameraType {
     OPENCV_approx,
     OPENCV_FISHEYE_approx,
 };
+
+// whether gradient is needed in backward, useful for expensive ones
+enum class NeedsGradient {
+    False, True
+};

@@ -24,6 +24,22 @@
     float3* __restrict__ axes_u, \
     float3* __restrict__ axes_v
 
+#define _ARGS_project_gaussians_backward_kernel \
+    const int num_points, \
+    const float3* __restrict__ means3d, \
+    const float2* __restrict__ scales, \
+    const float4* __restrict__ quats, \
+    const float* __restrict__ viewmat,  /* 3x4 row major */ \
+    const float4 intrins, \
+    const int* __restrict__ num_tiles_hit, \
+    const float3* __restrict__ v_positions, \
+    const float3* __restrict__ v_axes_u, \
+    const float3* __restrict__ v_axes_v, \
+    float3* __restrict__ v_means3d, \
+    float2* __restrict__ v_scales, \
+    float4* __restrict__ v_quats, \
+    float* __restrict__ v_viewmat
+
 #define _ARGS_render_undistortion_map_kernel \
     const dim3 tile_bounds, \
     const dim3 img_size, \
@@ -46,22 +62,9 @@ __global__ void project_gaussians_forward_kernel(
 );
 
 
+template <NeedsGradient needs_viewmat_grad>
 __global__ void project_gaussians_backward_kernel(
-    const int num_points,
-    const float3* __restrict__ means3d,
-    const float2* __restrict__ scales,
-    const float4* __restrict__ quats,
-    const float* __restrict__ viewmat,  // 3x4 row major
-    const float4 intrins,
-    const int* __restrict__ num_tiles_hit,
-    const float3* __restrict__ v_positions,
-    const float3* __restrict__ v_axes_u,
-    const float3* __restrict__ v_axes_v,
-    // const float2* __restrict__ v_depth_grads,
-    float3* __restrict__ v_means3d,
-    float2* __restrict__ v_scales,
-    float4* __restrict__ v_quats,
-    float* __restrict__ v_viewmat
+    _ARGS_project_gaussians_backward_kernel
 );
 
 

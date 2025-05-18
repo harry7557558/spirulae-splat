@@ -144,6 +144,7 @@ def profile_project_gaussians():
         device=device,
     )
     viewmat[:3, :3] = _torch_impl.quat_to_rotmat(F.normalize(torch.randn(4), dim=0)).detach()
+    viewmat = viewmat.contiguous()
 
     params = (means3d0, scales0, quats0, viewmat)
     def decode_params(params):
@@ -191,6 +192,21 @@ def profile_project_gaussians():
     timeit(lambda: fun(_output).backward(retain_graph=True), "torch backward")
     timeit(lambda: fun(output).backward(retain_graph=True), "fused backward")
     print()
+
+    viewmat.requires_grad = False
+    _viewmat.requires_grad = False
+    output = forward()
+    _output = _forward()
+
+    fun(output).backward(retain_graph=True)
+    fun(_output).backward(retain_graph=True)
+
+    print("profile backward")
+    timeit(lambda: fun(_output).backward(retain_graph=True), "torch backward")
+    timeit(lambda: fun(output).backward(retain_graph=True), "fused backward")
+    print()
+
+
 
 
 if __name__ == "__main__":
