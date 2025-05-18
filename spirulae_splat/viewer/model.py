@@ -14,6 +14,7 @@ from spirulae_splat.splat import (
 )
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import spherical_harmonics
+from spirulae_splat.splat._torch_impl import quat_mult
 
 from spirulae_splat.viewer.camera import Camera
 
@@ -94,6 +95,43 @@ class SplatModel:
         self.dataparser_transform = np.concatenate((dtr['transform'], [[0, 0, 0, 1]]))
         self.dataparser_scale = dtr['scale']
 
+    @torch.no_grad()
+    def convert_to_input_frame(self):
+        """Convert to the same coordinate frame as in input dataset"""
+
+        from scipy.spatial.transform import Rotation
+        from spirulae_splat.viewer.utils import rotate_sh_coeffs
+
+        # TODO: load this dynamically from transforms.json
+        # It's not always this for some datasets
+        applied = np.array([
+            [1, 0, 0, 0],
+            [0, 0, 1, 0],
+            [0, -1, 0, 0],
+            [0, 0, 0, 1]
+        ])  # to match sparse_pc.ply
+        # applied = np.diag([1, -1, -1, 1])  # to match transforms.json
+
+        transform = self.dataparser_transform
+        transform = applied @ np.linalg.inv(transform)
+        transform = torch.from_numpy(transform).to(self.means)
+        rot = transform[:3, :3]
+        tr = transform[:3, 3:]
+        sc = self.dataparser_scale
+
+        self.gauss_params["means"] = (self.means / sc @ rot.T + tr.T)
+
+        self.gauss_params["scales"] = (self.scales - np.log(sc))
+
+        rot = rot.cpu().numpy()
+        dq = Rotation.from_matrix(rot).as_quat()
+        dq = torch.from_numpy(dq[[3,0,1,2]]).to(self.quats)
+        self.gauss_params["quats"] = quat_mult(dq, self.quats)
+
+        self.gauss_params["features_sh"] = rotate_sh_coeffs(self.features_sh, rot, "gsplat")
+        if self.background_sh_degree > 0:
+            self.background_sh = rotate_sh_coeffs(self.background_sh[None], rot, "nerfstudio")[0]
+
     def num_splats(self):
         return len(self.gauss_params["means"])
 
@@ -134,7 +172,7 @@ class SplatModel:
         if not (sh_degree > 0):
             return self.background_color.repeat(camera.h, camera.w, 1)
         sh_coeffs = torch.cat((self.background_color.unsqueeze(0), self.background_sh), dim=0)  # [(deg+1)^2, 3]
-        viewmat = torch.from_numpy(c2w[:3, :3] * np.array([1,-1,-1], dtype=np.float32)).cuda()
+        viewmat = torch.from_numpy(c2w[:3, :3] * np.array([1,-1,-1])).float().cuda()
         return render_background_sh(camera._to_ssplat_camera(), viewmat, sh_degree, sh_coeffs)
 
     @torch.inference_mode()

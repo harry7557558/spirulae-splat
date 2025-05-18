@@ -1,23 +1,43 @@
 import numpy as np
 import yaml
 import json
-from typing import Literal
+from typing import Literal, Union
 
 from spirulae_splat.splat._camera import _Camera
 
 class Camera:
     def __init__(self, config_path: str, transform_path: str=None):
-        with open(config_path, "r") as f:
-            data = yaml.safe_load(f)
+        if isinstance(config_path, str) and config_path.split('.')[-1] in ['yaml', 'yml']:
+            with open(config_path, "r") as f:
+                data = yaml.safe_load(f)
 
-        self.w = data.get("width", 1280)
-        self.h = data.get("height", 720)
-        self.fx = data.get("fx", 568.0)
-        self.fy = data.get("fy", 568.0)
-        self.cx = data.get("cx", self.w / 2)
-        self.cy = data.get("cy", self.h / 2)
-        self.model = data.get("model", "OPENCV")  # type: Literal["OPENCV", "OPENCV_FISHEYE"]
-        self.distortion = tuple(data.get("distortion", [0.0, 0.0, 0.0, 0.0]))
+            self.w = data.get("width", 1280)
+            self.h = data.get("height", 720)
+            self.fx = data.get("fx", 568.0)
+            self.fy = data.get("fy", 568.0)
+            self.cx = data.get("cx", self.w / 2)
+            self.cy = data.get("cy", self.h / 2)
+            self.model = data.get("model", "OPENCV")  # type: Literal["OPENCV", "OPENCV_FISHEYE"]
+            self.distortion = tuple(data.get("distortion", [0.0, 0.0, 0.0, 0.0]))
+
+        elif isinstance(config_path, dict) or config_path.endswith("transforms.json"):
+            config = config_path
+            if isinstance(config, str):
+                with open(config, 'r') as fp:
+                    config = json.load(fp)
+            if 'w' not in config:
+                config = config['frames'][0]
+            self.w = config['w']
+            self.h = config['h']
+            self.fx = config['fl_x']
+            self.fy = config['fl_y']
+            self.cx = config['cx']
+            self.cy = config['cy']
+            self.model = config['camera_model']
+            if self.model == "OPENCV":
+                self.distortion = tuple(config[k] for k in ['k1', 'k2', 'p1', 'p2'])
+            elif self.model == "OPENCV_FISHEYE":
+                self.distortion = tuple(config[k] for k in ['k1', 'k2', 'k3', 'k4'])
 
         if transform_path is None:
             self.scale = 1.0
