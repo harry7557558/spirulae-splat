@@ -231,8 +231,10 @@ __global__ void project_gaussians_backward_kernel(
     #pragma unroll
     for (int i = 0; i < 12; i++) {
         warpSum(values[i], warp);
-        if (warp.thread_rank() == i)
-            atomicAdd(&v_viewmat[i], values[i]);
+        if (warp.thread_rank() == i) {
+            float v = isfinite(values[i]) ? values[i] : 0.0f;
+            atomicAdd(&v_viewmat[i], v);
+        }
     }
 }
 

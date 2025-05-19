@@ -1814,10 +1814,10 @@ __global__ void render_background_sh_forward_kernel(
     float xr = rotation[0] * xi + rotation[1] * yi + rotation[2] * zi;
     float yr = rotation[3] * xi + rotation[4] * yi + rotation[5] * zi;
     float zr = rotation[6] * xi + rotation[7] * yi + rotation[8] * zi;
-    float norm = sqrtf(xr * xr + yr * yr + zr * zr);
-    float x = xr / norm;
-    float y = yr / norm;
-    float z = zr / norm;
+    float norm = sqrtf(fmaxf(xr * xr + yr * yr + zr * zr, 1e-12f));
+    float x = isfinite(xr) ? xr / norm : 0.0f;
+    float y = isfinite(yr) ? yr / norm : 0.0f;
+    float z = isfinite(zr) ? zr / norm : 0.0f;
 
     float xx = x*x, yy = y*y, zz = z*z;
 
@@ -1922,9 +1922,9 @@ __global__ void render_background_sh_backward_kernel(
     float zr = rotation[6] * xi + rotation[7] * yi + rotation[8] * zi;
     float norm2 = xr * xr + yr * yr + zr * zr;
     float norm = sqrtf(fmaxf(norm2, 1e-12f));
-    float x = inside ? xr / norm : 0.0f;
-    float y = inside ? yr / norm : 0.0f;
-    float z = inside ? zr / norm : 0.0f;
+    float x = inside && isfinite(xr) ? xr / norm : 0.0f;
+    float y = inside && isfinite(yr) ? yr / norm : 0.0f;
+    float z = inside && isfinite(zr) ? zr / norm : 0.0f;
 
     float xx = x*x, yy = y*y, zz = z*z;
 
@@ -2151,9 +2151,6 @@ __global__ void render_background_sh_backward_kernel(
     glm::vec3 xyz = glm::vec3(x, y, z);
     glm::mat3 dp_dpr = (glm::mat3(1.0f) - glm::outerProduct(xyz, xyz)) / norm;
     glm::vec3 v_p = dp_dpr * glm::vec3(v_x, v_y, v_z);
-    // float v_xi = rotation[0] * v_p.x + rotation[3] * v_p.y + rotation[6] * v_p.z;
-    // float v_yi = rotation[1] * v_p.x + rotation[4] * v_p.y + rotation[7] * v_p.z;
-    // float v_zi = rotation[2] * v_p.x + rotation[5] * v_p.y + rotation[8] * v_p.z;
     v_p *= (inside ? 1.0f : 0.0f);
 
     float tmp[9] = {

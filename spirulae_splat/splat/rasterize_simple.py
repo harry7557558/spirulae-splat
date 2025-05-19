@@ -192,13 +192,14 @@ class _RasterizeGaussiansSimple(Function):
                 v_out_img, v_out_alpha,
             )
 
-            clean = lambda x: torch.nan_to_num(torch.clip(x, -1., 1.))
+            def clean(x, h=1.0):
+                return torch.nan_to_num(torch.clip(x, -h, h))
             (
                 v_positions, v_positions_xy_abs,
                 v_axes_u, v_axes_v,
                 v_colors, v_opacities,
             ) = [clean(v) for v in backward_return]
-            v_positions_xy_abs = backward_return[1]
+            v_positions_xy_abs = clean(backward_return[1], 10.0)
 
         v_background = None
         if background.requires_grad:

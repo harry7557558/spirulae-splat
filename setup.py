@@ -138,6 +138,7 @@ if importlib.util.find_spec('nerfstudio') is None and False:
 if importlib.util.find_spec('torch') is None:
     raise ValueError("Please make sure you have PyTorch installed.")
 no_fused_ssim = (importlib.util.find_spec('fused_ssim') is None)
+no_fused_bilagrid = (importlib.util.find_spec('fused_bilagrid') is None)
 
 path = "spirulae_splat/splat/cuda/csrc/"
 generate_header(path+"projection.cu", path+"projection.cuh")
@@ -161,7 +162,9 @@ setup(
         "fused_ssim @ git+https://github.com/rahul-goel/fused-ssim.git",
         # "CUDA error: no kernel image is available for execution on the device" on torch==2.1.2+cu118 + A6000
         # "fused_ssim @ git+https://github.com/MrNeRF/optimized-fused-ssim.git",
-    ] * no_fused_ssim,
+    ] * no_fused_ssim + [
+        "fused_bilagrid @ git+https://github.com/harry7557558/fused-bilagrid.git",
+    ] * no_fused_bilagrid,
     extras_require={
         # dev dependencies. Install them by `pip install gsplat[dev]`
         "dev": [

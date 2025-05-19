@@ -72,7 +72,7 @@ try:
     USE_FUSED_BILAGRID = True
 except ImportError:
     print("fused_bilagrid not found, fall back to nerfstudio lib_bilagrid")
-    from nerfstudio.model_components.lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
+    from nerfstudio.model_components.lib_bilagrid import BilateralGrid, slice, total_variation_loss
     USE_FUSED_BILAGRID = False
 
 
@@ -858,7 +858,7 @@ class SpirulaeModel(Model):
                 )
                 depth_im_ref = torch.where(
                     depth_im_ref > 0.0, depth_im_ref,
-                    torch.amax(depth_im_ref).detach()
+                    2.0*torch.amax(depth_im_ref).detach()
                 ).contiguous()
                 timerr.mark("depth")  # ?us
 
@@ -888,7 +888,7 @@ class SpirulaeModel(Model):
                 )
                 depth_im_ref = torch.where(
                     alpha > 0.0, depth_im[..., :1] / alpha,
-                    torch.amax(depth_im[..., :1]).detach()
+                    2.0*torch.amax(depth_im[..., :1]).detach()
                 ).contiguous()
                 timerr.mark("render")  # 750us-1200us
         
@@ -944,7 +944,7 @@ class SpirulaeModel(Model):
             rgb = rgbd[..., :3]
             depth_im_ref = torch.where(
                 alpha > 0.0, rgbd[..., 3:] / alpha,
-                torch.amax(rgbd[..., 3:]).detach()
+                2.0*torch.amax(rgbd[..., 3:]).detach()
             ).contiguous()
 
         if self.training:
@@ -1480,6 +1480,10 @@ class SpirulaeModel(Model):
         quat_norm_reg = 0.1 * (quat_norm-1.0-torch.log(quat_norm)).mean()
         timerl.mark("mcmc")  # ~100us
 
+        bilagrid_tv_loss = 0.0
+        if self.config.use_bilateral_grid:
+            bilagrid_tv_loss = 10 * total_variation_loss(self.bil_grids.grids)
+
         # metrics, readable from console during training
         with torch.no_grad():
             if not hasattr(self, '_running_metrics'):
@@ -1516,21 +1520,20 @@ class SpirulaeModel(Model):
             # [R] regularization
             "erank_reg": erank_reg,
             "scale_reg": scale_reg,
-            # misc
+            # [E] exposure
+            "tv_loss": bilagrid_tv_loss,
             "exposure_param_reg": self.config.exposure_reg_param * exposure_param_reg,
+            # misc
             "quat_reg": quat_norm_reg,
         }
-        for key, value in loss_dict.items():
-            loss_dict[key] = self.config.loss_scale * value
-
-        if self.config.use_bilateral_grid:
-            loss_dict["tv_loss"] = 10 * total_variation_loss(self.bil_grids.grids)
 
         if self.training and self.config.use_camera_optimizer:
             # Add loss from camera optimizer
             self.camera_optimizer.get_loss_dict(loss_dict)
         timerl.end("camera")  # <100us -> 1600us-4200us, 900us-1400us without ssim
 
+        for key, value in loss_dict.items():
+            loss_dict[key] = self.config.loss_scale * value
         self.print_loss_dict(loss_dict)
         return loss_dict
 
@@ -1542,7 +1545,7 @@ class SpirulaeModel(Model):
                 return '~'
 
             l = float(losses[key]) / s
-            if 0.0*l != 0.0:  # not finite
+            if not math.isfinite(l):  # not finite
                 return str(l)
 
             if key not in _max_vals or self.step % 1000 == 0:
@@ -1569,7 +1572,9 @@ class SpirulaeModel(Model):
                 f"[M] {fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg)} "
                 f"{fmt('mcmc_scale_reg', self.config.mcmc_scale_reg)}  "
                 f"[R] {fmt('erank_reg', self.config.erank_reg_s3)} "
-                f"{fmt('scale_reg', self.config.scale_regularization_weight)}"
+                f"{fmt('scale_reg', self.config.scale_regularization_weight)}  "
+                f"[E] {fmt('tv_loss', 10.0)} "
+                f"{fmt('exposure_param_reg', self.config.exposure_reg_param)}"
                 "    ".replace('nan', '~'),
                 end="\r",
             )

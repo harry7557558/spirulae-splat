@@ -233,9 +233,10 @@ class _RasterizeGaussians(Function):
             )
             timerb.mark("rasterize")  # 600us-2600us
 
-            clean = lambda x: torch.nan_to_num(torch.clip(x, -1., 1.))
+            def clean(x, h=1.0):
+                return torch.nan_to_num(torch.clip(x, -h, h))
             v_positions = clean(backward_return[0])
-            v_positions_xy_abs = backward_return[1]
+            v_positions_xy_abs = clean(backward_return[1], 10.0)
             v_axes_u = clean(backward_return[2])
             v_axes_v = clean(backward_return[3])
             v_colors = clean(backward_return[4])

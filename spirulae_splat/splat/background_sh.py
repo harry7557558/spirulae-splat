@@ -62,6 +62,10 @@ class _RenderBackgroundSH(Function):
             out_color, v_out_color.contiguous()
         )
 
+        clean = lambda x, h: torch.nan_to_num(torch.clip(x, -h, h))
+        v_rotation = clean(v_rotation, 40.)
+        v_sh_coeffs = clean(v_sh_coeffs, 40.)
+
         return (
             None,
             v_rotation,
