@@ -354,18 +354,8 @@ class SpirulaeModel(Model):
         super().__init__(*args, **kwargs)
 
         if self.config.use_3dgs:
-            global fully_fused_projection
-            # global fully_fused_projection_with_ut
-            global rasterize_to_pixels
-            global isect_tiles
-            global isect_offset_encode
-            from spirulae_splat.splat.gsplat_3dgs_wrapper import (
-                fully_fused_projection,
-                # fully_fused_projection_with_ut,
-                rasterize_to_pixels,
-                isect_tiles,
-                isect_offset_encode,
-            )
+            global gsplat
+            import gsplat
 
     def populate_modules(self):
         if self.seed_points is not None and not self.config.random_init:
@@ -807,6 +797,8 @@ class SpirulaeModel(Model):
             rgbs = self.features_dc
         timerr.mark("sh")  # 200us-350us
 
+        max_depth_scale = 2.0 if self.training else 1.0
+
         if not self.config.use_3dgs:
             # 2DGS rendering
 
@@ -858,7 +850,7 @@ class SpirulaeModel(Model):
                 )
                 depth_im_ref = torch.where(
                     depth_im_ref > 0.0, depth_im_ref,
-                    2.0*torch.amax(depth_im_ref).detach()
+                    max_depth_scale*torch.amax(depth_im_ref).detach()
                 ).contiguous()
                 timerr.mark("depth")  # ?us
 
@@ -888,7 +880,7 @@ class SpirulaeModel(Model):
                 )
                 depth_im_ref = torch.where(
                     alpha > 0.0, depth_im[..., :1] / alpha,
-                    2.0*torch.amax(depth_im[..., :1]).detach()
+                    max_depth_scale*torch.amax(depth_im[..., :1]).detach()
                 ).contiguous()
                 timerr.mark("render")  # 750us-1200us
         
@@ -903,40 +895,36 @@ class SpirulaeModel(Model):
 
             fx, fy, cx, cy = ssplat_camera.intrins
             Ks = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).float()
+            
+            kwargs = {}
+            camera_model = "pinhole"
             if ssplat_camera.model == "OPENCV_FISHEYE":
-                raise NotImplementedError("gsplat fully_fused_projection_with_ut is currently not differentiable")
+                camera_model = "fisheye"
+                if not self.config.use_mcmc:
+                    raise ValueError("3DGS training with fisheye camera is currently only supported for MCMC.")
                 dist_coeffs = torch.tensor(ssplat_camera.dist_coeffs).float().to(device)
-                proj_return = fully_fused_projection_with_ut(
-                    self.means, quats, torch.exp(self.scales), opacities,
-                    viewmat[None].to(device), Ks[None].to(device), W, H,
-                    camera_model="fisheye", radial_coeffs=dist_coeffs
-                )
-            else:
-                proj_return = fully_fused_projection(
-                    self.means, None, quats, torch.exp(self.scales),
-                    viewmat[None].to(device), Ks[None].to(device), W, H,
-                    packed=False
-                )
-            radii, means2d, depths, conics, compensations = proj_return
+                kwargs['radial_coeffs'] = dist_coeffs[None]
 
-            tile_size = 16
-            tile_width = math.ceil(W / float(tile_size))
-            tile_height = math.ceil(H / float(tile_size))
-            tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
-                means2d, radii, depths,
-                tile_size, tile_width, tile_height,
-                packed=False, n_cameras=1,
-            )
-            isect_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
-
-            rgbd = torch.cat((rgbs[None], depth_map(depths)[..., None]), dim=-1)
-            opacs = opacities[None].squeeze(-1)
-
-            rgbd, alpha = rasterize_to_pixels(
-                means2d, conics, rgbd, opacs,
-                W, H, tile_size,
-                isect_offsets, flatten_ids,
-                backgrounds=None, packed=False, absgrad=True,
+            rgbd, alpha, meta = gsplat.rasterization(
+                means=self.means,
+                quats=quats,
+                scales=torch.exp(self.scales),
+                opacities=opacities.squeeze(-1),
+                colors=rgbs,
+                viewmats=viewmat[None].to(device),  # [C, 4, 4]
+                Ks=Ks[None].to(device),  # [C, 3, 3]
+                width=W,
+                height=H,
+                packed=False,
+                absgrad=True,
+                sparse_grad=False,
+                rasterize_mode="classic",
+                distributed=False,
+                camera_model=camera_model,
+                with_ut=(camera_model == "fisheye"),
+                with_eval3d=(camera_model == "fisheye"),
+                render_mode="RGB+D",
+                **kwargs,
             )
             rgbd = rgbd[0]
             alpha = alpha[0]
@@ -944,8 +932,11 @@ class SpirulaeModel(Model):
             rgb = rgbd[..., :3]
             depth_im_ref = torch.where(
                 alpha > 0.0, rgbd[..., 3:] / alpha,
-                2.0*torch.amax(rgbd[..., 3:]).detach()
+                max_depth_scale*torch.amax(rgbd[..., 3:]).detach()
             ).contiguous()
+
+            means2d = meta["means2d"]
+            radii = meta["radii"]
 
         if self.training:
             self.info = {
@@ -981,7 +972,8 @@ class SpirulaeModel(Model):
         timerr.mark("bilagrid")  # 300us-450us
 
         # normal regularization
-        depth_im_ref = depth_inv_map(depth_im_ref)
+        if not self.config.use_3dgs:
+            depth_im_ref = depth_inv_map(depth_im_ref)
         depth_normal, alpha_diffused = depth_to_normal(depth_im_ref, ssplat_camera, None, True, alpha)
         if not self.config.use_3dgs:
             normal_im = F.normalize(normal_im, dim=-1)

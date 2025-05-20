@@ -230,10 +230,10 @@ class SplatModel:
                     radial_coeffs = torch.tensor(dist_coeffs[:2]+[0]*4).float().cuda()
                     tangential_coeffs = torch.tensor(dist_coeffs[2:]).float().cuda()
                 proj_return = fully_fused_projection_with_ut(
-                    self.means, self.quats, torch.exp(self.scales), opacities,
+                    self.means, self.quats, torch.exp(self.scales), opacities.squeeze(-1),
                     torch.from_numpy(viewmat[None]).cuda(), Ks[None].cuda(), w, h,
                     camera_model="fisheye" if fisheye else "pinhole",
-                    radial_coeffs=radial_coeffs, tangential_coeffs=tangential_coeffs
+                    radial_coeffs=radial_coeffs[None], tangential_coeffs=tangential_coeffs[None]
                 )
             else:
                 proj_return = fully_fused_projection(
@@ -249,7 +249,7 @@ class SplatModel:
             tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
                 means2d, radii, depths,
                 tile_size, tile_width, tile_height,
-                packed=False, n_cameras=1,
+                packed=False,
             )
             isect_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
 
