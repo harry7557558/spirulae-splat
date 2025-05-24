@@ -224,16 +224,16 @@ class SplatModel:
                 from gsplat.cuda._wrapper import fully_fused_projection_with_ut
                 fisheye = ssplat_camera.model == "OPENCV_FISHEYE"
                 if fisheye:
-                    radial_coeffs = torch.tensor(dist_coeffs).float().cuda()
+                    radial_coeffs = torch.tensor(dist_coeffs).float()[None].cuda()
                     tangential_coeffs = None
                 else:
-                    radial_coeffs = torch.tensor(dist_coeffs[:2]+[0]*4).float().cuda()
-                    tangential_coeffs = torch.tensor(dist_coeffs[2:]).float().cuda()
+                    radial_coeffs = torch.tensor(dist_coeffs[:2]+[0]*4).float()[None].cuda()
+                    tangential_coeffs = torch.tensor(dist_coeffs[2:]).float()[None].cuda()
                 proj_return = fully_fused_projection_with_ut(
                     self.means, self.quats, torch.exp(self.scales), opacities.squeeze(-1),
                     torch.from_numpy(viewmat[None]).cuda(), Ks[None].cuda(), w, h,
                     camera_model="fisheye" if fisheye else "pinhole",
-                    radial_coeffs=radial_coeffs[None], tangential_coeffs=tangential_coeffs[None]
+                    radial_coeffs=radial_coeffs, tangential_coeffs=tangential_coeffs
                 )
             else:
                 proj_return = fully_fused_projection(

@@ -9,6 +9,8 @@ import random
 import math
 import os
 import hashlib
+import re
+import json
 
 import torch
 import numpy as np
@@ -110,6 +112,26 @@ class DepthPredictor(torch.nn.Module):
             self.device0 = primary_device
 
         self._load_model()
+
+    @staticmethod
+    def _get_hash_log_filename(model_id: str):
+        disallowed = r'[<>:"/\\|?*\x00-\x1F\x7F\s]'
+        model_id = re.sub(disallowed, '_', model_id)
+        model_id = re.sub(r'_+', '_', model_id).lstrip('_')
+        return f"depth_hashes_{model_id}.json"
+
+    @staticmethod
+    def _update_hash_log(log_filename: str, hash: str, idx: str):
+        try:
+            with open(log_filename, 'r') as fp:
+                content = json.load(fp)
+        except:
+            content = {}
+        idx = str(idx)
+        if idx not in content or content[idx] != hash:
+            content[idx] = hash
+            with open(log_filename, 'w') as fp:
+                json.dump(content, fp, indent=4)
 
     @staticmethod
     def _get_cache_filename(image: torch.Tensor, model_id: str) -> str:
@@ -312,7 +334,7 @@ class CompositeDepthPredictor(torch.nn.Module):
 
     _loaded_models: Dict[str, DepthPredictor] = {}
 
-    def __init__(self, model_id: str):
+    def __init__(self, model_id: str, dataset_path: Optional[str] = None):
         super().__init__()
         self.model_id_str = model_id
         self.model_id = frozenset(model_id.split(' + '))
@@ -326,6 +348,9 @@ class CompositeDepthPredictor(torch.nn.Module):
             self.infer = self._infer_single_model
         elif self.model_id == frozenset({'depth_pro', 'moge:Ruicheng/moge-vitl'}):
             self.infer = self._infer_depth_pro_moge
+
+        self._hash_log_filename = os.path.join(
+            dataset_path, DepthPredictor._get_hash_log_filename(model_id))
 
     def _init_models(self):
         device_idx = 0
@@ -346,7 +371,7 @@ class CompositeDepthPredictor(torch.nn.Module):
             self._init_models()
         return self._loaded_models[mid]
 
-    def forward(self, image: torch.Tensor, camera: Cameras=None):
+    def forward(self, image: torch.Tensor, camera: Cameras=None, idx: Optional[int]=None):
 
         depth = None
         depth_loaded = False
@@ -354,6 +379,8 @@ class CompositeDepthPredictor(torch.nn.Module):
         # cache lookup
         if DepthPredictor.cache_dir is not None:
             cache_filename = DepthPredictor._get_cache_filename(image, self.model_id_str)
+            if idx is not None:
+                DepthPredictor._update_hash_log(self._hash_log_filename, cache_filename, idx)
             if os.path.exists(cache_filename):
                 depth = np.load(cache_filename)
                 depth = depth.f.depth
@@ -540,7 +567,7 @@ class SpirulaeDataManager(FullImageDatamanager):
                 CONSOLE.print('[bold yellow]'+message)
 
             if ' + ' in self.config.depth_model or True:
-                self.depth_model = CompositeDepthPredictor(self.config.depth_model)
+                self.depth_model = CompositeDepthPredictor(self.config.depth_model, dataset_path=str(self.config.data))
             else:
                 self.depth_model = DepthPredictor(self.config.depth_model)
 
@@ -607,7 +634,7 @@ class SpirulaeDataManager(FullImageDatamanager):
             image = cache["image"]
             camera = dataset.cameras[idx]
             try:
-                depth = self.depth_model(image, camera)
+                depth = self.depth_model(image, camera, idx)
             except:
                 import traceback
                 traceback.print_exc()

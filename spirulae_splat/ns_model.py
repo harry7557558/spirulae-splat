@@ -212,9 +212,9 @@ class SpirulaeModelConfig(ModelConfig):
     stop_split_at: int = 15000
     """stop splitting at this step"""
     cull_screen_size: float = 0.15
-    """if a gaussian is more than this percent of screen space, cull it"""
+    """if a gaussian is more than this fraction of screen space, cull it"""
     split_screen_size: float = 0.05
-    """if a gaussian is more than this percent of screen space, split it"""
+    """if a gaussian is more than this fraction of screen space, split it"""
     stop_screen_size_at: int = 4000
     """stop culling/splitting at this step WRT screen size of gaussians"""
 
@@ -227,6 +227,10 @@ class SpirulaeModelConfig(ModelConfig):
     """MCMC sampling noise learning rate"""
     mcmc_min_opacity: float = 0.005
     """minimum opacity for MCMC relocation"""
+    mcmc_prob_grad_weight: float = 0.2
+    """weight of position gradient used in sampling Gaussians to relocate/add to, uses only opacity if 0 and only gradient of 1"""
+    relocate_screen_size: float = 0.3
+    """if a gaussian is more than this fraction of screen space, relocate it"""
 
     # representation
     use_per_pixel_sorting: bool = False
@@ -251,7 +255,7 @@ class SpirulaeModelConfig(ModelConfig):
     """enable background model"""
     adaptive_exposure_mode: Optional[Literal[
         "linear", "log_linear", "channel", "log_channel", "affine", "log_affine"
-        ]] = "log_channel"
+        ]] = None
     """Adaptive exposure mode
         linear: gt ~ k * pred, with scalar k
         log_linear: log(gt) ~ k * log(pred) + b, with scalar k and b
@@ -264,7 +268,7 @@ class SpirulaeModelConfig(ModelConfig):
     """
     adaptive_exposure_warmup: int = 1000
     """Start adaptive exposure at this number of steps"""
-    use_bilateral_grid: bool = False
+    use_bilateral_grid: bool = True
     """If True, use bilateral grid to handle the ISP changes in the image space. This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/).
        Makes training much slower - TODO: fused bilagrid in CUDA"""
     bilagrid_shape: Tuple[int, int, int] = (16, 16, 8)
@@ -289,13 +293,17 @@ class SpirulaeModelConfig(ModelConfig):
     depth_reg_pairwise_factor: float = 1.0  # 0.7, 1.0
     """Factor of pairwise vs depth fitting depth regularization, 0 to 1"""
     depth_reg_warmup: int = 12000
-    """warmup steps for depth regularizer"""
+    """warmup steps for depth regularizer, regularization weight ramps up"""
     normal_reg_weight: float = 0.04
     """Weight for normal regularizer"""
     normal_reg_warmup: int = 12000
-    """warmup steps for normal regularizer"""
+    """warmup steps for normal regularizer, regularization weight ramps up"""
+    alpha_reg_weight: float = 0.025
+    """Weight for alpha regularizer (encourage alpha to go to either 0 or 1)"""
+    alpha_reg_warmup: int = 12000
+    """warmup steps for alpha regularizer, regularization weight ramps up"""
     reg_warmup_length: int = 4000
-    """Warmup for depth and normal regularizers.
+    """Warmup steps for depth, normal, and alpha regularizers.
        only apply regularizers after this many steps."""
     alpha_loss_weight: int = 0.01
     """Weight for alpha, if mask is provided."""
@@ -488,7 +496,9 @@ class SpirulaeModel(Model):
                 refine_stop_iter=self.config.stop_refine_at,
                 refine_every=self.config.refine_every,
                 min_opacity=self.config.mcmc_min_opacity,
+                prob_grad_weight=self.config.mcmc_prob_grad_weight,
                 is_3dgs=self.config.use_3dgs,
+                relocate_scale2d=self.config.relocate_screen_size,
             )
             self.strategy_state = self.strategy.initialize_state()
             return
@@ -889,6 +899,7 @@ class SpirulaeModel(Model):
                 bounds[:, 3] - bounds[:, 1],
             ]).T.unsqueeze(0)
             means2d = positions
+            depths = positions[..., 2]
 
         else:
             # 3DGS rendering
@@ -897,9 +908,8 @@ class SpirulaeModel(Model):
             Ks = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).float()
             
             kwargs = {}
-            camera_model = "pinhole"
-            if ssplat_camera.model == "OPENCV_FISHEYE":
-                camera_model = "fisheye"
+            is_fisheye = ssplat_camera.model == "OPENCV_FISHEYE"
+            if is_fisheye:
                 if not self.config.use_mcmc:
                     raise ValueError("3DGS training with fisheye camera is currently only supported for MCMC.")
                 dist_coeffs = torch.tensor(ssplat_camera.dist_coeffs).float().to(device)
@@ -920,9 +930,9 @@ class SpirulaeModel(Model):
                 sparse_grad=False,
                 rasterize_mode="classic",
                 distributed=False,
-                camera_model=camera_model,
-                with_ut=(camera_model == "fisheye"),
-                with_eval3d=(camera_model == "fisheye"),
+                camera_model=["pinhole", "fisheye"][is_fisheye],
+                with_ut=is_fisheye,
+                with_eval3d=is_fisheye,
                 render_mode="RGB+D",
                 **kwargs,
             )
@@ -936,7 +946,10 @@ class SpirulaeModel(Model):
             ).contiguous()
 
             means2d = meta["means2d"]
+            if self.config.use_mcmc:
+                means2d = self.means
             radii = meta["radii"]
+            depths = meta["depths"]
 
         if self.training:
             self.info = {
@@ -945,6 +958,7 @@ class SpirulaeModel(Model):
                 "n_cameras": camera.shape[0],
                 "radii": radii,
                 "means2d": means2d,
+                "depths": depths,
             }
         timerr.mark("post")  # 100us-200us
 
@@ -1312,6 +1326,10 @@ class SpirulaeModel(Model):
             min(self.step / max(self.config.normal_reg_warmup, 1), 1)
         return weight_depth_reg, weight_normal_reg
 
+    def get_alpha_reg_weight(self):
+        return self.config.alpha_reg_weight * \
+            min(self.step / max(self.config.alpha_reg_warmup, 1), 1)
+
     def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict.
 
@@ -1438,16 +1456,23 @@ class SpirulaeModel(Model):
 
         # depth and normal regularizers
         depth_reg, normal_reg = 0.0, 0.0
-        if not self.config.use_3dgs:
-            alpha = outputs['alpha']
+        if not self.config.use_3dgs and self.step >= self.config.reg_warmup_length:
             reg_depth = outputs["reg_depth"]
             reg_normal = outputs["reg_normal"]
             weight_depth_reg, weight_normal_reg = self.get_2dgs_reg_weights()
-            if self.step < self.config.reg_warmup_length:
-                weight_depth_reg, weight_normal_reg = 0.0, 0.0
             depth_reg = weight_depth_reg * reg_depth.mean()
             normal_reg = weight_normal_reg * reg_normal[1:-1, 1:-1].mean()
-            timerl.mark("reg")  # ~100us
+
+        # alpha regularizer
+        alpha_reg = 0.0
+        if self.step >= self.config.reg_warmup_length:
+            alpha = outputs['alpha']
+            weight_alpha_reg = self.get_alpha_reg_weight()
+            # reg_alpha = torch.log(4.0*torch.clip(alpha*(1.0-alpha), min=1e-2))
+            reg_alpha = 4.0*alpha*(1.0-alpha)
+            alpha_reg = weight_alpha_reg * reg_alpha.mean()
+
+        timerl.mark("reg")  # ~100us
 
         # MCMC regularizers
         mcmc_opacity_reg, mcmc_scale_reg = 0.0, 0.0
@@ -1506,6 +1531,7 @@ class SpirulaeModel(Model):
             # [G] 2DGS
             "depth_reg": depth_reg,
             "normal_reg": normal_reg,
+            "alpha_reg": alpha_reg,
             # [M] MCMC
             'mcmc_opacity_reg': mcmc_opacity_reg,
             'mcmc_scale_reg': mcmc_scale_reg,
@@ -1560,7 +1586,8 @@ class SpirulaeModel(Model):
                 f"{fmt('normal_ref_loss', self.config.normal_supervision_weight)} "
                 f"{fmt('alpha_ref_loss', self.config.alpha_supervision_weight)}  "
                 f"[G] {fmt('depth_reg', self.get_2dgs_reg_weights()[0])} "
-                f"{fmt('normal_reg', self.get_2dgs_reg_weights()[1])}  "
+                f"{fmt('normal_reg', self.get_2dgs_reg_weights()[1])} "
+                f"{fmt('alpha_reg', self.get_alpha_reg_weight())}  "
                 f"[M] {fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg)} "
                 f"{fmt('mcmc_scale_reg', self.config.mcmc_scale_reg)}  "
                 f"[R] {fmt('erank_reg', self.config.erank_reg_s3)} "

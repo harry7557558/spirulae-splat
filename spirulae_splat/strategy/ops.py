@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Callable, Dict, List, Union
+from typing import Callable, Dict, List, Union, Optional
 
 import torch
 import torch.nn.functional as F
@@ -253,6 +253,7 @@ def relocate(
     state: Dict[str, Tensor],
     mask: Tensor,
     is_3dgs: bool,
+    probs: Optional[Tensor]=None,
     min_opacity: float = 0.005,
 ):
     """Inplace relocate some dead Gaussians to the lives ones.
@@ -271,7 +272,9 @@ def relocate(
 
     # Sample for new GSs
     eps = torch.finfo(torch.float32).eps
-    probs = opacities[alive_indices].flatten()  # ensure its shape is [N,]
+    if probs is None:
+        probs = opacities
+    probs = probs[alive_indices].flatten()  # ensure its shape is [N,]
     sampled_idxs = _multinomial_sample(probs, n, replacement=True)
     sampled_idxs = alive_indices[sampled_idxs]
     args = {
@@ -312,12 +315,15 @@ def sample_add(
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
     n: int,
+    probs: Optional[Tensor]=None,
     min_opacity: float = 0.005,
 ):
     opacities = torch.sigmoid(params["opacities"])
 
     eps = torch.finfo(torch.float32).eps
-    probs = opacities.flatten()
+    if probs is None:
+        probs = opacities
+    probs = probs.flatten()
     sampled_idxs = _multinomial_sample(probs, n, replacement=True)
     new_opacities, new_scales = compute_relocation(
         opacities=opacities[sampled_idxs],
