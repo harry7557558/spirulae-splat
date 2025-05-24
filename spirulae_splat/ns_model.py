@@ -227,7 +227,7 @@ class SpirulaeModelConfig(ModelConfig):
     """MCMC sampling noise learning rate"""
     mcmc_min_opacity: float = 0.005
     """minimum opacity for MCMC relocation"""
-    mcmc_prob_grad_weight: float = 0.2
+    mcmc_prob_grad_weight: float = 0.0
     """weight of position gradient used in sampling Gaussians to relocate/add to, uses only opacity if 0 and only gradient of 1"""
     relocate_screen_size: float = 0.3
     """if a gaussian is more than this fraction of screen space, relocate it"""
@@ -255,7 +255,7 @@ class SpirulaeModelConfig(ModelConfig):
     """enable background model"""
     adaptive_exposure_mode: Optional[Literal[
         "linear", "log_linear", "channel", "log_channel", "affine", "log_affine"
-        ]] = None
+        ]] = "log_channel"
     """Adaptive exposure mode
         linear: gt ~ k * pred, with scalar k
         log_linear: log(gt) ~ k * log(pred) + b, with scalar k and b
@@ -268,7 +268,7 @@ class SpirulaeModelConfig(ModelConfig):
     """
     adaptive_exposure_warmup: int = 1000
     """Start adaptive exposure at this number of steps"""
-    use_bilateral_grid: bool = True
+    use_bilateral_grid: bool = False
     """If True, use bilateral grid to handle the ISP changes in the image space. This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/).
        Makes training much slower - TODO: fused bilagrid in CUDA"""
     bilagrid_shape: Tuple[int, int, int] = (16, 16, 8)
@@ -489,12 +489,20 @@ class SpirulaeModel(Model):
 
         # MCMC mode
         if self.config.use_mcmc:
+            current_num = len(self.means)
+            final_num = self.config.mcmc_cap_max
+            warmup_steps = (self.config.resolution_schedule * (self.config.num_downscales+1)
+                            - self.config.mcmc_warmup_length) / self.config.refine_every
+            grow_factor = max(final_num / current_num, 1.0) ** (1/warmup_steps)
+            grow_factor = min(grow_factor, 1.05)
+
             self.strategy = MCMCStrategy(
                 cap_max=self.config.mcmc_cap_max,
                 noise_lr=self.config.mcmc_noise_lr,
                 refine_start_iter=self.config.mcmc_warmup_length,
                 refine_stop_iter=self.config.stop_refine_at,
                 refine_every=self.config.refine_every,
+                grow_factor=grow_factor,
                 min_opacity=self.config.mcmc_min_opacity,
                 prob_grad_weight=self.config.mcmc_prob_grad_weight,
                 is_3dgs=self.config.use_3dgs,

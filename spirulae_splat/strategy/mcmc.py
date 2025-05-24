@@ -51,6 +51,7 @@ class MCMCStrategy(Strategy):
     refine_start_iter: int = 500
     refine_stop_iter: int = 25_000
     refine_every: int = 100
+    grow_factor: float = 1.05
     min_opacity: float = 0.005
     relocate_scale2d: float = float('inf')
     prob_grad_weight: float = 0.0
@@ -261,7 +262,7 @@ class MCMCStrategy(Strategy):
         state: Dict[str, Any],
     ) -> int:
         current_n_points = len(params["means"])
-        n_target = min(self.cap_max, int(1.05 * current_n_points))
+        n_target = min(self.cap_max, int(self.grow_factor * current_n_points))
         n_gs = max(0, n_target - current_n_points)
         if n_gs > 0:
             sample_add(
