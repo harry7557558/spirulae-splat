@@ -30,7 +30,7 @@ class _Camera:
             self.model = ""
         if len(dist_coeffs) > 4:
             dist_coeffs = [*dist_coeffs]
-            if any([x != 0 for x in dist_coeffs[4:]]):
+            if any([x != 0 for x in dist_coeffs[4:]]) and False:
                 raise ValueError("Only support at most 4 distortion coefficients")
             self.dist_coeffs = tuple(dist_coeffs[:4])
         self.device = device

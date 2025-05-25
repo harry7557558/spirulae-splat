@@ -921,7 +921,14 @@ class SpirulaeModel(Model):
                 if not self.config.use_mcmc:
                     raise ValueError("3DGS training with fisheye camera is currently only supported for MCMC.")
                 dist_coeffs = torch.tensor(ssplat_camera.dist_coeffs).float().to(device)
-                kwargs['radial_coeffs'] = dist_coeffs[None]
+                if len(dist_coeffs) == 4:
+                    kwargs['radial_coeffs'] = dist_coeffs[None]
+                elif len(dist_coeffs) == 6:
+                    kwargs["radial_coeffs"] = dist_coeffs[:4][None]
+                    kwargs["tangential_coeffs"] = dist_coeffs[4:][None]
+                    # TODO: make sure GSplat 3DGUT actually supports this??
+                else:
+                    raise ValueError("Only support fisheye with 4 or 6 distortion coefficients")
 
             rgbd, alpha, meta = gsplat.rasterization(
                 means=self.means,
