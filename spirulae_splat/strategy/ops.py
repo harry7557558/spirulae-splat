@@ -26,6 +26,7 @@ def _multinomial_sample(weights: Tensor, n: int, replacement: bool = True) -> Te
         Tensor: A 1D tensor of sampled indices.
     """
     num_elements = weights.size(0)
+    weights = torch.nan_to_num(weights, 0.0, 0.0, 0.0)
 
     if num_elements <= 2**24:
         # Use torch.multinomial for elements within the limit

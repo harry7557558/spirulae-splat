@@ -1086,6 +1086,9 @@ class SpirulaeModel(Model):
     def get_supervision_losses(self, ref_depth, camera: _Camera, pred_depth, pred_normal, pred_alpha, _uv_cache={}):
         # details: https://github.com/harry7557558/Graphics/blob/master/mapping/relative_depth_matching/depth_fitting_01.ipynb
 
+        ref_depth = torch.nan_to_num(ref_depth, 0.0, 0.0, 0.0)
+        ref_depth = torch.clip(ref_depth, 0.0, 1e4)
+
         # resize depth
         h, w, _ = pred_depth.shape
         alpha = (ref_depth > 0.0)

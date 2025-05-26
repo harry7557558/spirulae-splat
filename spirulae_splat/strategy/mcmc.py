@@ -240,6 +240,7 @@ class MCMCStrategy(Strategy):
     ) -> int:
         opacities = torch.sigmoid(params["opacities"].flatten())
         relocate_mask = opacities <= self.min_opacity
+        relocate_mask |= ~(torch.isfinite(opacities))
         relocate_mask |= state["radii"] > self.relocate_scale2d
         n_gs = relocate_mask.sum().item()
         if n_gs > 0:
