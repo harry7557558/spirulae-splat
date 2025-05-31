@@ -226,6 +226,8 @@ class SplatModel:
                 if fisheye:
                     radial_coeffs = torch.tensor(dist_coeffs).float()[None].cuda()
                     tangential_coeffs = None
+                    # test if gsplat actually uses this - the answer is no
+                    # tangential_coeffs = torch.tensor([1000.0, 1000.0]).float()[None].cuda()
                 else:
                     radial_coeffs = torch.tensor(dist_coeffs[:2]+[0]*4).float()[None].cuda()
                     tangential_coeffs = torch.tensor(dist_coeffs[2:]).float()[None].cuda()

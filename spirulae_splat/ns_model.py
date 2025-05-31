@@ -229,8 +229,9 @@ class SpirulaeModelConfig(ModelConfig):
     """minimum opacity for MCMC relocation"""
     mcmc_prob_grad_weight: float = 0.0
     """weight of position gradient used in sampling Gaussians to relocate/add to, uses only opacity if 0 and only gradient of 1"""
-    relocate_screen_size: float = 0.3
-    """if a gaussian is more than this fraction of screen space, relocate it"""
+    relocate_screen_size: float = 0.15
+    """if a gaussian is more than this fraction of screen space, relocate it
+        Useful for fisheye with 3DGUT, may drop PSNR for conventional cameras"""
 
     # representation
     use_per_pixel_sorting: bool = False
@@ -325,6 +326,8 @@ class SpirulaeModelConfig(ModelConfig):
     """Make sure image look right in auto exposure mode,
        Use an L2 cost to match exposure parameter to the parameter at no exposure adjustment;
        (may be summed/averaged across a batch)"""
+    randomize_background: bool = False
+    """Randomize background color during training to discourage transparency. This will override background model."""
 
     # supervision using a foundation depth model
     # enable these by setting `depth_model` in data manager config
@@ -743,6 +746,10 @@ class SpirulaeModel(Model):
 
         W, H = int(camera.width.item()), int(camera.height.item())
 
+        if self.config.randomize_background:
+            # return torch.rand_like(self.background_color).repeat(H, W, 1)
+            return torch.rand((H, W, 3), device=self.background_color.device)
+
         sh_degree = self.config.background_sh_degree
         if not self.config.train_background_color or not (sh_degree > 0):
             return self.background_color.repeat(H, W, 1)
@@ -1026,6 +1033,8 @@ class SpirulaeModel(Model):
         if not self.training and not self.config.use_3dgs and use_per_pixel_sorting:
             intersects = raster_indices[0].float() / raster_indices[1].shape[-1]
             outputs["num_intersects"] = intersects.reshape((H, W, 1)).repeat(1, 1, 3)
+        if not self.training:
+            outputs["alpha"] = outputs["alpha"].reshape((H, W, 1)).repeat(1, 1, 3)
 
         if self.training:
             outputs["ssplat_camera"] = ssplat_camera

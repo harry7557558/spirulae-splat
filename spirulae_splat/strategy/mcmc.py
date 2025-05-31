@@ -205,15 +205,19 @@ class MCMCStrategy(Strategy):
 
         # move to the correct device
         if (
+            step >= self.refine_every
+            and step % self.refine_every == 0
+        ):
+            # teleport GSs
+            n_relocated_gs = self._relocate_gs(params, optimizers, state, step)
+            if self.verbose:
+                print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
+
+        if (
             step < self.refine_stop_iter
             and step > self.refine_start_iter
             and step % self.refine_every == 0
         ):
-            # teleport GSs
-            n_relocated_gs = self._relocate_gs(params, optimizers, state)
-            if self.verbose:
-                print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
-
             # add new GSs
             n_new_gs = self._add_new_gs(params, optimizers, state)
             if self.verbose:
@@ -237,11 +241,19 @@ class MCMCStrategy(Strategy):
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
         state: Dict[str, Any],
+        step: int
     ) -> int:
         opacities = torch.sigmoid(params["opacities"].flatten())
-        relocate_mask = opacities <= self.min_opacity
-        relocate_mask |= ~(torch.isfinite(opacities))
-        relocate_mask |= state["radii"] > self.relocate_scale2d
+        relocate_mask = ~(torch.isfinite(opacities))
+
+        # relocate huge splats
+        # TODO: logically it's better to split in this case?
+        relocate_mask |= (state["radii"] > self.relocate_scale2d)
+
+        # relocate low opacity, as in original MCMC
+        if step > self.refine_start_iter and step < self.refine_stop_iter:
+            relocate_mask |= (opacities <= self.min_opacity)
+
         n_gs = relocate_mask.sum().item()
         if n_gs > 0:
             relocate(
