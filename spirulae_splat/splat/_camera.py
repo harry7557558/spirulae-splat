@@ -43,7 +43,7 @@ class _Camera:
         return self.model != ""
 
     def get_undist_map(self, always=False) -> Optional[torch.Tensor]:
-        tup = (self.h, self.w, self.model, self.intrins, self.dist_coeffs)
+        tup = (self.h, self.w, self.model, self.intrins, self.dist_coeffs, str(self.device))
         if tup in self._undist_maps:
             return self._undist_maps[tup]
 
@@ -81,8 +81,9 @@ class _Camera:
             return None
 
         # fisheye
-        undist_map = _C.render_undistortion_map(
-            self.w, self.h, self.model,
-            self.intrins, self.dist_coeffs
-        )
+        with torch.cuda.device(self.device):
+            undist_map = _C.render_undistortion_map(
+                self.w, self.h, self.model,
+                self.intrins, self.dist_coeffs
+            )
         return update_cache(undist_map)

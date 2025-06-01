@@ -29,7 +29,6 @@ import torch
 from torch.nn import Parameter
 import torch.nn.functional as F
 from pytorch_msssim import SSIM
-from fused_ssim import fused_ssim
 
 from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map
 from spirulae_splat.splat import (
@@ -45,12 +44,15 @@ from spirulae_splat.splat import (
     rasterize_gaussians_simplified_sorted,
     depth_to_points,
     depth_to_normal,
-    BLOCK_WIDTH
+    BLOCK_WIDTH,
 )
+from spirulae_splat.splat.utils import resize_image
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
 from spirulae_splat.strategy import DefaultStrategy, MCMCStrategy
 from spirulae_splat.splat._camera import _Camera
+
+from spirulae_splat.modules.training_losses import SplatTrainingLosses
 
 from nerfstudio.cameras.camera_optimizers import (CameraOptimizer,
                                                   CameraOptimizerConfig)
@@ -65,15 +67,6 @@ from nerfstudio.model_components import renderers
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.rich_utils import CONSOLE
-
-try:
-    # raise ImportError()
-    from fused_bilagrid import BilateralGrid, slice, total_variation_loss
-    USE_FUSED_BILAGRID = True
-except ImportError:
-    print("fused_bilagrid not found, fall back to nerfstudio lib_bilagrid")
-    from nerfstudio.model_components.lib_bilagrid import BilateralGrid, slice, total_variation_loss
-    USE_FUSED_BILAGRID = False
 
 
 from spirulae_splat.perf_timer import PerfTimer
@@ -115,18 +108,6 @@ def SH2RGB(sh):
     return sh * C0 + 0.5
 
 
-def resize_image(image: torch.Tensor, d: int):
-    """
-    Downscale images using the same 'area' method in opencv
-
-    :param image shape [H, W, C]
-    :param d downscale factor (must be 2, 4, 8, etc.)
-
-    return downscaled image in shape [H//d, W//d, C]
-    """
-    weight = (1.0 / (d * d)) * torch.ones((1, 1, d, d), dtype=torch.float32, device=image.device)
-    return F.conv2d(image.float().permute(2, 0, 1)[:, None, ...], weight, stride=d).squeeze(1).permute(1, 2, 0).to(image)
-
 
 class SaturateKeepGradient(torch.autograd.Function):
     @staticmethod
@@ -139,15 +120,6 @@ class SaturateKeepGradient(torch.autograd.Function):
 def saturate_keep_gradient(x, xmin=None, xmax=None):
     return SaturateKeepGradient.apply(x, xmin, xmax)
 
-
-class MaskGradient(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x, mask):
-        ctx.mask = mask
-        return x
-    @staticmethod
-    def backward(ctx, v_x):
-        return v_x * ctx.mask, None
 
 
 @dataclass
@@ -229,7 +201,7 @@ class SpirulaeModelConfig(ModelConfig):
     """minimum opacity for MCMC relocation"""
     mcmc_prob_grad_weight: float = 0.0
     """weight of position gradient used in sampling Gaussians to relocate/add to, uses only opacity if 0 and only gradient of 1"""
-    relocate_screen_size: float = 0.15
+    relocate_screen_size: float = 0.4
     """if a gaussian is more than this fraction of screen space, relocate it
         Useful for fisheye with 3DGUT, may drop PSNR for conventional cameras"""
 
@@ -450,6 +422,8 @@ class SpirulaeModel(Model):
             num_cameras=self.num_train_data, device="cpu"
         )
 
+        self.training_losses = SplatTrainingLosses(self.config, self.num_train_data)
+
         # metrics
         from torchmetrics.image import PeakSignalNoiseRatio
         from torchmetrics.image.lpip import \
@@ -459,14 +433,6 @@ class SpirulaeModel(Model):
         self.ssim = SSIM(data_range=1.0, size_average=True, channel=3)
         self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
         self.step = 0
-
-        if self.config.use_bilateral_grid:
-            self.bil_grids = BilateralGrid(
-                num=self.num_train_data,
-                grid_X=self.config.bilagrid_shape[0],
-                grid_Y=self.config.bilagrid_shape[1],
-                grid_W=self.config.bilagrid_shape[2],
-            )
 
         self.crop_box: Optional[OrientedBox] = None
         if self.config.background_color == "random":
@@ -697,7 +663,7 @@ class SpirulaeModel(Model):
             if self.background_sh is not None:
                 gps["background_sh"] = [self.background_sh]
         if self.config.use_bilateral_grid:
-            gps["bilateral_grid"] = list(self.bil_grids.parameters())
+            gps["bilateral_grid"] = list(self.training_losses.bil_grids.parameters())
         if self.config.use_camera_optimizer:
             self.camera_optimizer.get_param_groups(param_groups=gps)
         return gps
@@ -716,25 +682,6 @@ class SpirulaeModel(Model):
         if d > 1:
             return resize_image(image, d)
         return image
-
-    def _apply_bilateral_grid(self, rgb: torch.Tensor, cam_idx: int, H: int, W: int) -> torch.Tensor:
-        # make xy grid
-        grid_xy = None
-        if not USE_FUSED_BILAGRID:
-            grid_y, grid_x = torch.meshgrid(
-                torch.linspace(0, 1.0, H, device=self.device),
-                torch.linspace(0, 1.0, W, device=self.device),
-                indexing="ij",
-            )
-            grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
-
-        rgb = torch.clip(rgb, 0.0, 1.0)
-
-        out = slice(
-            bil_grids=self.bil_grids, rgb=rgb, xy=grid_xy,
-            grid_idx=torch.tensor(cam_idx, device=self.device, dtype=torch.long),
-        )
-        return out["rgb"]
 
     def get_background_image(self, camera: Cameras, ssplat_camera: _Camera):
         if not isinstance(camera, Cameras):
@@ -948,7 +895,7 @@ class SpirulaeModel(Model):
                 width=W,
                 height=H,
                 packed=False,
-                absgrad=True,
+                absgrad=(not self.config.use_mcmc),
                 sparse_grad=False,
                 rasterize_mode="classic",
                 distributed=False,
@@ -995,7 +942,7 @@ class SpirulaeModel(Model):
         if self.config.use_bilateral_grid and self.training:
             if camera.metadata is not None and "cam_idx" in camera.metadata:
                 rgb = rgb.unsqueeze(0)
-                rgb = self._apply_bilateral_grid(rgb, camera.metadata["cam_idx"], H, W)
+                rgb = self.training_losses.apply_bilateral_grid(rgb, camera.metadata["cam_idx"], H, W)
                 rgb = rgb.squeeze(0)
 
         # saturate pixel value
@@ -1049,30 +996,6 @@ class SpirulaeModel(Model):
 
         return outputs
 
-    def get_gt_img(self, image: torch.Tensor):
-        """Compute groundtruth image with iteration dependent downscale factor for evaluation purpose
-
-        Args:
-            image: tensor.Tensor in type uint8 or float32
-        """
-        if image.dtype == torch.uint8:
-            image = image.float() / 255.0
-        gt_img = self._downscale_if_required(image)
-        return gt_img.to(self.device)
-
-    def composite_with_background(self, image, background) -> torch.Tensor:
-        """Composite the ground truth image with a background color when it has an alpha channel.
-
-        Args:
-            image: the image to composite
-            background: the background color
-        """
-        if image.shape[2] == 4:
-            alpha = image[..., -1].unsqueeze(-1).repeat((1, 1, 3))
-            return alpha * image[..., :3] + (1 - alpha) * background
-        else:
-            return image
-
     def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
         """Compute and returns metrics.
 
@@ -1091,239 +1014,6 @@ class SpirulaeModel(Model):
         if self.config.use_camera_optimizer:
             self.camera_optimizer.get_metrics_dict(metrics_dict)
         return metrics_dict
-
-    def get_supervision_losses(self, ref_depth, camera: _Camera, pred_depth, pred_normal, pred_alpha, _uv_cache={}):
-        # details: https://github.com/harry7557558/Graphics/blob/master/mapping/relative_depth_matching/depth_fitting_01.ipynb
-
-        ref_depth = torch.nan_to_num(ref_depth, 0.0, 0.0, 0.0)
-        ref_depth = torch.clip(ref_depth, 0.0, 1e4)
-
-        # resize depth
-        h, w, _ = pred_depth.shape
-        alpha = (ref_depth > 0.0)
-        ref_depth = torch.where(alpha, ref_depth, 2.0*torch.amax(ref_depth).detach())
-        alpha = alpha.squeeze(-1)
-
-        # generate UV embeddings
-        if not self.config.depth_distortion_uv_degree >= 0:
-            uv = None
-
-        elif (h, w) not in _uv_cache:
-            u = (torch.arange(w, dtype=torch.float32)+0.5)/w * 2.0 - 1.0
-            v = (torch.arange(h, dtype=torch.float32)+0.5)/h * 2.0 - 1.0
-            u = u[None, :].float().to(pred_depth.device).repeat((h, 1))
-            v = v[:, None].float().to(pred_depth.device).repeat((1, w))
-            u, v = u.flatten(), v.flatten()
-
-            uv = []
-            for i in range(self.config.depth_distortion_uv_degree+1):
-                for j in range(self.config.depth_distortion_uv_degree+1):
-                    uv.append(torch.cos(math.pi/2*i*u)*torch.cos(math.pi/2*j*v))
-                    if j != 0:
-                        uv.append(torch.cos(math.pi/2*i*u)*torch.sin(math.pi/2*j*v))
-                    if i != 0:
-                        uv.append(torch.sin(math.pi/2*i*u)*torch.cos(math.pi/2*j*v))
-                    if i != 0 and j != 0:
-                        uv.append(torch.sin(math.pi/2*i*u)*torch.sin(math.pi/2*j*v))
-
-            uv = torch.stack(uv)
-            _uv_cache[(h, w)] = uv
-
-        else:
-            uv = _uv_cache[(h, w)]
-
-        # depth distortion fitting
-        depth_loss = 0.0
-        if self.config.depth_supervision_weight > 0.0:
-            # normalize depths - inputs are metric linear depth
-            x, y = ref_depth.flatten(), pred_depth.flatten()
-            # x, y = pred_depth.flatten(), ref_depth.flatten()
-
-            m = alpha.flatten().float()
-            m_sum = alpha.sum().item()
-
-            if (
-                self.config.depth_distortion_depth_degree >= 0 and
-                self.config.depth_distortion_uv_degree >= 0
-            ):
-                # normalize by mean and log
-                x = x / ((x*m).sum() / m_sum)
-                y = y / ((y*m).sum() / m_sum)
-                x, y = depth_map(x), depth_map(y)
-
-                # generate depth embeddings
-                A = []
-                for k in range(self.config.depth_distortion_depth_degree+1):
-                    ed = x**k / math.factorial(k) * torch.exp(-x)
-                    A.append(ed * uv)
-                A = torch.concatenate(A)
-
-                # linear least squares
-                mat = (alpha.reshape(1,-1) * A) @ A.T
-                vec = A @ (alpha.flatten() * y)
-                c = torch.linalg.solve(mat, vec)
-                corr_depth = torch.relu(c @ A)
-                depth_diff = (corr_depth - y).reshape((h, w))
-
-            else:
-                # normalize log by mean and std
-                x, y = torch.log(torch.relu(x) + 1e-6), torch.log(torch.relu(y) + 1e-6)
-                x = x - (x*m).sum() / m_sum
-                y = y - (y*m).sum() / m_sum
-                x = x / torch.sqrt(((x*x)*m).sum() / m_sum)
-                y = y / torch.sqrt(((y*y)*m).sum() / m_sum)
-
-                # distortion disabled, just use it
-                depth_diff = (x - y).reshape((h, w))
-            # TODO: sometimes it's overfitting mean depth, need per-splat depth supervision
-
-            # depth_loss = ((depth_diff**2)*alpha).mean()
-            depth_loss = (torch.abs(depth_diff)*alpha).mean()
-
-        # normal loss
-        normal_loss = 0.0
-        if self.config.normal_supervision_weight > 0.0:
-            ref_normal = depth_to_normal(ref_depth, camera)
-            normal_loss = 1.0 - (ref_normal * pred_normal).sum(-1, True)
-            # normal_loss = torch.sqrt(torch.relu(normal_loss))
-            normal_loss = normal_loss.mean()
-
-        # alpha loss
-        pred_alpha, alpha = pred_alpha.float().flatten(), alpha.float().flatten()
-        alpha_loss = self.get_alpha_loss(pred_alpha, alpha)
-        alpha_loss_over = 0.0
-        if self.config.alpha_supervision_weight_under > 0.0:
-            alpha_loss_over = self.get_alpha_loss(1.0-pred_alpha, 1.0-alpha)
-
-        return (
-            self.config.depth_supervision_weight * depth_loss,
-            self.config.normal_supervision_weight * normal_loss,
-            self.config.alpha_supervision_weight * alpha_loss +
-                self.config.alpha_supervision_weight_under * alpha_loss_over
-        )
-
-    def exposure_correction(
-            self,
-            pred_img: torch.Tensor, gt_img: torch.Tensor,
-            alpha_mask: Optional[torch.Tensor]=None
-        ):
-        exposure_param_reg = 0.0
-        eeps = 0.5/255.0
-
-        total_alpha = max(alpha_mask.sum().item(), 1.0) if alpha_mask is not None else 1.0
-        def immean(img: torch.Tensor, dim: Optional[int]=None, keepdim=False):
-            if alpha_mask is None:
-                return img.mean(dim, keepdim)
-            mask = alpha_mask.reshape(*img.shape[:-1], 1)
-            return (img*mask).sum(dim, keepdim) / total_alpha
-
-        # gt ~ k * pred
-        if self.config.adaptive_exposure_mode == "linear":
-            k = (immean(gt_img)+eeps) / (immean(pred_img)+eeps)
-            pred_img_e = k * (pred_img+eeps) - eeps
-            # print(k.item())
-            exposure_param_reg = (k-1.0)**2
-
-        # log(gt) ~ k * log(pred) + b
-        elif self.config.adaptive_exposure_mode == "log_linear":
-            x = torch.log(pred_img+eeps)
-            y = torch.log(gt_img+eeps)
-            x_mean, y_mean = immean(x), immean(y)
-            x2_mean, xy_mean = immean(x**2), immean(x*y)
-            m = (xy_mean - x_mean * y_mean) / (x2_mean - x_mean**2)
-            b = y_mean - m * x_mean
-            pred_img_e = torch.exp(m * x + b) - eeps
-            # print(m.item(), b.item())
-            exposure_param_reg = (m-1.0)**2 + b**2
-
-        # gt ~ k * pred, per channel
-        elif self.config.adaptive_exposure_mode == "channel":
-            x = pred_img.reshape(-1, 3)
-            y = gt_img.reshape(-1, 3)
-            k = (immean(y, 0, True)+eeps) / (immean(x, 0, True)+eeps)
-            pred_img_e = k * (pred_img+eeps) - eeps
-            # print(k.detach())
-            exposure_param_reg = torch.mean((k-1.0)**2)
-
-        # log(gt) ~ k * log(pred) + b, per channel
-        elif self.config.adaptive_exposure_mode == "log_channel":
-            x = torch.log(pred_img + eeps).reshape(-1, 3)
-            y = torch.log(gt_img + eeps).reshape(-1, 3)
-            x_mean, y_mean = immean(x, 0, True), immean(y, 0, True)
-            x2_mean, xy_mean = immean(x**2, 0, True), immean(x*y, 0, True)
-            m = (xy_mean - x_mean * y_mean) / (x2_mean - x_mean**2)
-            b = y_mean - m * x_mean
-            pred_img_e = torch.exp(m * x + b).reshape(pred_img.shape) - eeps
-            # print(m.detach(), b.detach())
-            exposure_param_reg = torch.mean((m-1.0)**2 + b**2)
-
-        # gt ~ A * pred
-        elif self.config.adaptive_exposure_mode == "affine":
-            x = (pred_img + eeps).reshape(-1, 3)
-            y = (gt_img + eeps).reshape(-1, 3)
-            if alpha_mask is not None:
-                x = x * alpha_mask.reshape(-1, 1)
-                y = y * alpha_mask.reshape(-1, 1)
-            xTy, xTx = x.T @ y, x.T @ x
-            xTy, xTx = xTy.cpu(), xTx.cpu()
-            try:
-                xTx = xTx + (1e-6*torch.trace(xTx).item()) * torch.eye(3)
-                A = torch.linalg.inv(xTx) @ xTy
-            except torch._C._LinAlgError:
-                print("Warning: torch._C._LinAlgError")
-                print(xTx)
-                pred_img_e = pred_img.detach()
-            else:
-                A = A.to(x.device)
-                pred_img_e = (x @ A).reshape(pred_img.shape) - eeps
-                exposure_param_reg = torch.mean((A-torch.eye(3).to(A))**2)
-
-        # log(gt) ~ A * log(pred) + b
-        elif self.config.adaptive_exposure_mode == "log_affine":
-            x = torch.log(pred_img + eeps).reshape(-1, 3)
-            y = torch.log(gt_img + eeps).reshape(-1, 3)
-            if alpha_mask is not None:
-                x = x * alpha_mask.reshape(-1, 1)
-                y = y * alpha_mask.reshape(-1, 1)
-            mean_x = immean(x, 0, True)
-            mean_y = immean(y, 0, True)
-            centered_x = x - mean_x
-            centered_y = y - mean_y
-            xTy = centered_x.T @ centered_y
-            xTx = centered_x.T @ centered_x
-            xTy, xTx = xTy.cpu(), xTx.cpu()
-            try:
-                xTx = xTx + (1e-6*torch.trace(xTx).item()) * torch.eye(3)
-                A = torch.linalg.inv(xTx) @ xTy
-            except torch._C._LinAlgError:
-                print("Warning: torch._C._LinAlgError")
-                print(xTx)
-                pred_img_e = pred_img.detach()
-            else:
-                A = A.to(x.device)
-                B = mean_y - mean_x @ A
-                pred_img_e = torch.exp(x @ A + B).reshape(pred_img.shape) - eeps
-                exposure_param_reg = 0.5*(torch.mean((A-torch.eye(3).to(A))**2) + torch.mean(B**2))
-
-        else:
-            raise ValueError("Invalid adaptive_exposure_mode:", self.config.adaptive_exposure_mode)
-        
-        timerl.mark("exposure")  # 200us-500us
-
-        if alpha_mask is not None:
-            pred_img_e = pred_img + (pred_img_e-pred_img) * alpha_mask
-        return pred_img_e, exposure_param_reg
-
-    def get_alpha_loss(self, x, y):
-        """Compute asymmetric loss for alpha, penalize only when first argument is greater than second argument
-
-        Args:
-            x: alpha output by the model
-            y: reference alpha with same shape as x
-        """
-        # return torch.relu(x-y).mean()
-        # return F.binary_cross_entropy(x, y, reduction="mean")
-        return F.binary_cross_entropy(torch.fmax(x, y), y, reduction="mean")
 
     def erank_regularization(self):
         scales = torch.exp(2.0*self.scales)
@@ -1345,17 +1035,6 @@ class SpirulaeModel(Model):
             r = torch.exp(-s1*torch.log(s1) - s2*torch.log(s2))
             reg = torch.relu(-torch.log(r - 0.99999))
             return self.config.erank_reg * reg.mean()
-
-    def get_2dgs_reg_weights(self):
-        weight_depth_reg = self.config.depth_reg_weight * \
-            min(self.step / max(self.config.depth_reg_warmup, 1), 1)
-        weight_normal_reg = self.config.normal_reg_weight * \
-            min(self.step / max(self.config.normal_reg_warmup, 1), 1)
-        return weight_depth_reg, weight_normal_reg
-
-    def get_alpha_reg_weight(self):
-        return self.config.alpha_reg_weight * \
-            min(self.step / max(self.config.alpha_reg_warmup, 1), 1)
 
     def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict.
@@ -1382,90 +1061,7 @@ class SpirulaeModel(Model):
             self.print_loss_dict(loss)
             return loss
 
-        # mask out of bound (e.g. fisheye circle)
-        camera_mask = None
-        ssplat_camera = outputs["ssplat_camera"]  # type: _Camera
-        if ssplat_camera.is_distorted():
-            undist_map = ssplat_camera.get_undist_map()
-            camera_mask = torch.isfinite(undist_map.sum(-1, True))
-            if not camera_mask.all():
-                for key in ['rgb', 'depth', 'alpha', 'background']:
-                    outputs[key] = MaskGradient.apply(outputs[key], camera_mask)
-        device = outputs['rgb'].device
-
-        timerl.start()
-        gt_img_rgba = self.get_gt_img(batch["image"])
-        gt_img = self.composite_with_background(gt_img_rgba, outputs["background"])
-        pred_img = outputs["rgb"]
-
-        # alpha channel for bounded objects - apply a cost on rendered alpha
-        alpha_loss = 0.0
-        if gt_img_rgba.shape[2] == 4:
-            alpha = gt_img_rgba[..., -1].unsqueeze(-1)
-            alpha_loss = alpha_loss + self.get_alpha_loss(outputs['alpha'], alpha)
-
-        # separate mask for dynamic objects, text, etc.
-        # simply don't consider it when evaluating loss, unless theres's no alpha channel, where a cost is applied
-        mask = None
-        if "mask" in batch:
-            # batch["mask"] : [H, W, 1]
-            mask = self._downscale_if_required(batch["mask"])
-            mask = mask.float().to(self.device)
-            assert mask.shape[:2] == gt_img.shape[:2] == pred_img.shape[:2]
-            # can be little bit sketchy for the SSIM loss
-            gt_img = torch.lerp(outputs["background"], gt_img, mask)
-            # pred_img = torch.lerp(outputs["background"], pred_img, mask)
-            if isinstance(alpha_loss, float) and alpha_loss == 0.0:
-                alpha_loss = alpha_loss + self.get_alpha_loss(outputs['alpha'], mask)
-
-        alpha_loss = self.config.alpha_loss_weight * alpha_loss
-        timerl.mark("alpha")  # ~100us
-
-        # depth supervision
-        depth_supervision_loss, normal_supervision_loss, alpha_supervision_loss = 0.0, 0.0, 0.0
-        if "depth" in batch and self.step > self.config.supervision_warmup and \
-            (self.config.depth_supervision_weight > 0.0 or
-             self.config.normal_supervision_weight > 0.0 or
-             self.config.alpha_supervision_weight > 0.0 or
-             self.config.alpha_supervision_weight_under > 0.0):
-            if batch["depth"].ndim == 2:
-                batch["depth"] = batch["depth"].unsqueeze(-1)
-            depth = self._downscale_if_required(batch["depth"].to(device))
-            depth_supervision_loss, normal_supervision_loss, alpha_supervision_loss \
-                = self.get_supervision_losses(depth, ssplat_camera, outputs["depth"], outputs["depth_normal"], outputs["alpha"])
-            timerl.mark("depth")  # ?us
-
-        # correct exposure
-        pred_img_e = pred_img
-        exposure_param_reg = 0.0
-        exposure_reg_image = 0.0
-        if self.config.adaptive_exposure_mode is not None and \
-            self.step > self.config.adaptive_exposure_warmup:
-            exposure_reg_image = self.config.exposure_reg_image
-            # mask, note that alpha_mask is defined in "mask out of bound" step
-            alpha_mask = camera_mask
-            if mask is not None and alpha_mask is not None:
-                alpha_mask = alpha_mask & mask
-            # call function
-            pred_img_e, exposure_param_reg = self.exposure_correction(pred_img, gt_img, alpha_mask)
-
-        # image loss
-        if False:
-            pred_img_e = saturate_keep_gradient(pred_img_e, 0.0, 1.0)
-            pred_img = saturate_keep_gradient(pred_img, 0.0, 1.0)
-        else:
-            pred_img_e = torch.clip(pred_img_e, 0.0, 1.0)
-            pred_img = torch.clip(pred_img, 0.0, 1.0)
-        Ll1_e = torch.abs(gt_img - pred_img_e).mean()
-        Ll1 = torch.abs(gt_img - pred_img).mean()
-        simloss = torch.zeros_like(Ll1_e)
-        if self.config.ssim_lambda > 0.0:
-            gt_img_bchw = gt_img.permute(2, 0, 1).unsqueeze(0)
-            pred_img_bchw = pred_img_e.permute(2, 0, 1).unsqueeze(0).contiguous()
-            # simloss = 1 - self.ssim(pred_img_bchw, gt_img_bchw)
-            # simloss = 1 - fused_ssim(pred_img_bchw, gt_img_bchw, padding="valid")
-            simloss = 1 - fused_ssim(pred_img_bchw, gt_img_bchw, padding="same")
-        timerl.mark("image")  # 750us-3000us, 100us-300us without ssim
+        loss_dict = self.training_losses(self.step, batch, outputs)
 
         # scale regularization
         scale_reg = 0.0
@@ -1479,27 +1075,7 @@ class SpirulaeModel(Model):
                 - self.config.max_gauss_ratio
             )
             scale_reg = self.config.scale_regularization_weight * scale_reg.mean()
-        timerl.mark("scale")  # <100us
-
-        # depth and normal regularizers
-        depth_reg, normal_reg = 0.0, 0.0
-        if not self.config.use_3dgs and self.step >= self.config.reg_warmup_length:
-            reg_depth = outputs["reg_depth"]
-            reg_normal = outputs["reg_normal"]
-            weight_depth_reg, weight_normal_reg = self.get_2dgs_reg_weights()
-            depth_reg = weight_depth_reg * reg_depth.mean()
-            normal_reg = weight_normal_reg * reg_normal[1:-1, 1:-1].mean()
-
-        # alpha regularizer
-        alpha_reg = 0.0
-        if self.step >= self.config.reg_warmup_length:
-            alpha = outputs['alpha']
-            weight_alpha_reg = self.get_alpha_reg_weight()
-            # reg_alpha = torch.log(4.0*torch.clip(alpha*(1.0-alpha), min=1e-2))
-            reg_alpha = 4.0*alpha*(1.0-alpha)
-            alpha_reg = weight_alpha_reg * reg_alpha.mean()
-
-        timerl.mark("reg")  # ~100us
+        loss_dict['scale_reg'] = scale_reg
 
         # MCMC regularizers
         mcmc_opacity_reg, mcmc_scale_reg = 0.0, 0.0
@@ -1511,6 +1087,8 @@ class SpirulaeModel(Model):
             # mcmc_scale_reg = self.scales.mean()
             mcmc_scale_reg = torch.where(self.scales < 0, torch.exp(self.scales), self.scales+1).mean()
             mcmc_scale_reg = self.config.mcmc_scale_reg * mcmc_scale_reg
+        loss_dict['mcmc_opacity_reg'] = mcmc_opacity_reg
+        loss_dict['mcmc_scale_reg'] = mcmc_scale_reg
 
         # 3DGS regularizers
         erank_reg = 0.0
@@ -1518,62 +1096,15 @@ class SpirulaeModel(Model):
             self.config.erank_reg > 0.0 or self.config.erank_reg_s3 > 0.0
         ):
             erank_reg = self.erank_regularization()
+        loss_dict['erank_reg'] = erank_reg
 
         # regularizations for parameters
         quat_norm = self.quats.norm(dim=-1)
-        quat_norm_reg = 0.1 * (quat_norm-1.0-torch.log(quat_norm)).mean()
-        timerl.mark("mcmc")  # ~100us
+        quat_norm_reg = 0.01 * (quat_norm-1.0-torch.log(quat_norm)).mean()
+        loss_dict['quat_norm_reg'] = quat_norm_reg
 
-        bilagrid_tv_loss = 0.0
-        if self.config.use_bilateral_grid:
-            bilagrid_tv_loss = 10 * total_variation_loss(self.bil_grids.grids)
-
-        # metrics, readable from console during training
-        with torch.no_grad():
-            if not hasattr(self, '_running_metrics'):
-                self._running_metrics = { 'psnr': [], 'ssim': [] }
-            psnr_list = self._running_metrics['psnr']
-            ssim_list = self._running_metrics['ssim']
-            psnr = -10.0 * math.log10(((gt_img-pred_img_e)**2).mean().item())
-            ssim = 1.0 - simloss.item()
-            psnr_list.append(psnr)
-            ssim_list.append(ssim)
-            if len(psnr_list) > self.num_train_data:
-                del psnr_list[0]
-                del ssim_list[0]
-            psnr = sum(psnr_list) / len(psnr_list)
-            ssim = sum(ssim_list) / len(ssim_list)
-
-        ssim_lambda = self.config.ssim_lambda * min(self.step/max(self.config.ssim_warmup,1), 1)
-        loss_dict = {
-            # [C] RGB and alpha
-            "main_loss": torch.lerp(torch.lerp(Ll1_e, simloss, ssim_lambda), Ll1, exposure_reg_image),
-            "alpha_loss": alpha_loss,
-            "psnr": float(psnr),
-            "ssim": float(ssim),
-            # [S] supervision
-            "depth_ref_loss": depth_supervision_loss,
-            "normal_ref_loss": normal_supervision_loss,
-            "alpha_ref_loss": alpha_supervision_loss,
-            # [G] 2DGS
-            "depth_reg": depth_reg,
-            "normal_reg": normal_reg,
-            "alpha_reg": alpha_reg,
-            # [M] MCMC
-            'mcmc_opacity_reg': mcmc_opacity_reg,
-            'mcmc_scale_reg': mcmc_scale_reg,
-            # [R] regularization
-            "erank_reg": erank_reg,
-            "scale_reg": scale_reg,
-            # [E] exposure
-            "tv_loss": bilagrid_tv_loss,
-            "exposure_param_reg": self.config.exposure_reg_param * exposure_param_reg,
-            # misc
-            "quat_reg": quat_norm_reg,
-        }
-
+        # Camera optimizer loss
         if self.training and self.config.use_camera_optimizer:
-            # Add loss from camera optimizer
             self.camera_optimizer.get_loss_dict(loss_dict)
         timerl.end("camera")  # <100us -> 1600us-4200us, 900us-1400us without ssim
 
@@ -1612,9 +1143,9 @@ class SpirulaeModel(Model):
                 f"[S] {fmt('depth_ref_loss', self.config.depth_supervision_weight)} "
                 f"{fmt('normal_ref_loss', self.config.normal_supervision_weight)} "
                 f"{fmt('alpha_ref_loss', self.config.alpha_supervision_weight)}  "
-                f"[G] {fmt('depth_reg', self.get_2dgs_reg_weights()[0])} "
-                f"{fmt('normal_reg', self.get_2dgs_reg_weights()[1])} "
-                f"{fmt('alpha_reg', self.get_alpha_reg_weight())}  "
+                f"[G] {fmt('depth_reg', self.training_losses.get_2dgs_reg_weights()[0])} "
+                f"{fmt('normal_reg', self.training_losses.get_2dgs_reg_weights()[1])} "
+                f"{fmt('alpha_reg', self.training_losses.get_alpha_reg_weight())}  "
                 f"[M] {fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg)} "
                 f"{fmt('mcmc_scale_reg', self.config.mcmc_scale_reg)}  "
                 f"[R] {fmt('erank_reg', self.config.erank_reg_s3)} "
@@ -1652,6 +1183,7 @@ class SpirulaeModel(Model):
         Returns:
             A dictionary of metrics.
         """
+        return {}, {}   # TODO
         gt_rgb = self.composite_with_background(self.get_gt_img(batch["image"]), outputs["background"])
         predicted_rgb = outputs["rgb"]
 
