@@ -1115,6 +1115,12 @@ class SpirulaeModel(Model):
 
     def print_loss_dict(self, losses: Dict[str, torch.Tensor], _max_vals={}):
 
+        # get VRAM usage (only supports single GPU at this time)
+        free, total = torch.cuda.mem_get_info(self.means.device)
+        used = (total - free) / 1024**3
+        used_percentage = (1 - free/total)*100
+        mem_stats = f"{used:.2f}\N{ZERO WIDTH SPACE}GB {used_percentage:.0f}%"
+
         def fmt(key: str, s: float, decimals=None) -> str:
             s = self.config.loss_scale * s
             if s == 0.0:
@@ -1134,27 +1140,30 @@ class SpirulaeModel(Model):
                 decimals = int(max(-math.log10(0.001*_max_vals[key]), 0))
             return f"{{:.{decimals}f}}".format(l).replace('0.', '.')
 
+        chunks = [
+            f"[N] {len(self.opacities)} {mem_stats}",
+            f"[C] {fmt('main_loss', 1.0)} "
+            f"{fmt('alpha_loss', self.config.alpha_loss_weight)} "
+            f"{fmt('psnr', 1.0, 2)} "
+            f"{fmt('ssim', 1.0, 3)}",
+            f"[S] {fmt('depth_ref_loss', self.config.depth_supervision_weight)} "
+            f"{fmt('normal_ref_loss', self.config.normal_supervision_weight)} "
+            f"{fmt('alpha_ref_loss', self.config.alpha_supervision_weight)}",
+            f"[G] {fmt('depth_reg', self.training_losses.get_2dgs_reg_weights()[0])} "
+            f"{fmt('normal_reg', self.training_losses.get_2dgs_reg_weights()[1])} "
+            f"{fmt('alpha_reg', self.training_losses.get_alpha_reg_weight())}",
+            f"[M] {fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg)} "
+            f"{fmt('mcmc_scale_reg', self.config.mcmc_scale_reg)}",
+            f"[R] {fmt('erank_reg', self.config.erank_reg_s3)} "
+            f"{fmt('scale_reg', self.config.scale_regularization_weight)}",
+            f"[E] {fmt('tv_loss', 10.0)} "
+            f"{fmt('exposure_param_reg', self.config.exposure_reg_param)}",
+        ]
+        chunks = [c for c in chunks if any(char.isdigit() for char in c)]
         CONSOLE.print(
-                f"[N] {len(self.opacities)}  "
-                f"[C] {fmt('main_loss', 1.0)} "
-                f"{fmt('alpha_loss', self.config.alpha_loss_weight)} "
-                f"{fmt('psnr', 1.0, 2)} "
-                f"{fmt('ssim', 1.0, 3)}  "
-                f"[S] {fmt('depth_ref_loss', self.config.depth_supervision_weight)} "
-                f"{fmt('normal_ref_loss', self.config.normal_supervision_weight)} "
-                f"{fmt('alpha_ref_loss', self.config.alpha_supervision_weight)}  "
-                f"[G] {fmt('depth_reg', self.training_losses.get_2dgs_reg_weights()[0])} "
-                f"{fmt('normal_reg', self.training_losses.get_2dgs_reg_weights()[1])} "
-                f"{fmt('alpha_reg', self.training_losses.get_alpha_reg_weight())}  "
-                f"[M] {fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg)} "
-                f"{fmt('mcmc_scale_reg', self.config.mcmc_scale_reg)}  "
-                f"[R] {fmt('erank_reg', self.config.erank_reg_s3)} "
-                f"{fmt('scale_reg', self.config.scale_regularization_weight)}  "
-                f"[E] {fmt('tv_loss', 10.0)} "
-                f"{fmt('exposure_param_reg', self.config.exposure_reg_param)}"
-                "    ".replace('nan', '~'),
-                end="\r",
-            )
+            '  '.join(chunks) + "    ".replace('nan', '~'),
+            end="\r",
+        )
 
     @torch.no_grad()
     def get_outputs_for_camera(self, camera: Cameras, obb_box: Optional[OrientedBox] = None) -> Dict[str, torch.Tensor]:
