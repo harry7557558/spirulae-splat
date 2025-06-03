@@ -220,7 +220,7 @@ def export_ply(model: SplatModel, output_path: str) -> None:
         n_after = np.sum(select)
         if n_after < n_before:
             print(f"{n_before - n_after} NaN/Inf elements in {k}")
-    nan_count = np.sum(select) - n
+    nan_count = n - np.sum(select)
 
     # filter out low opacity
     low_opacity_gaussians = map_to_tensors["opacity"] < -5.5373  # logit(1/255)
@@ -247,6 +247,9 @@ def export_equirectangular(model: SplatModel, output_path: str) -> None:
 
     im = generate_equirectangular(render)
 
+    if np.std(im) < 0.5/255:
+        print("WARNING: This model does not appear to be trained with sky enabled. Exporting anyway.")
+
     import imageio
     imageio.imwrite(output_path, (im * 255).astype(np.uint8))
 
@@ -254,13 +257,14 @@ def export_equirectangular(model: SplatModel, output_path: str) -> None:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(
-        description="Export PLY, for 3DGS only.")
-    parser.add_argument("input_file", nargs=1, help="The input config file.")
-    parser.add_argument("--output", "-o", default="splat.ply", help="The output PLY file.")
+        description="Export PLY (and equirectangular map), for 3DGS only.")
+    parser.add_argument("work_dir", nargs=1, help="Path to the work folder (the one named YYYY-MM-DD_hhmmss).")
+    # parser.add_argument("--output", "-o", default="splat.ply", help="The output PLY file.")
     args = parser.parse_args()
+    args.output = "splat.ply"
 
     print("Loading model...")
-    model = SplatModel(args.input_file[0])
+    model = SplatModel(args.work_dir[0])
 
     print("Orienting model...")
     model.convert_to_input_frame()
@@ -268,12 +272,15 @@ if __name__ == "__main__":
     print()
 
     print("Start PLY export")
-    export_ply(model, args.output)
-    print("PLY saved to", args.output)
+    output_path = args.output
+    if not ('/' in args.output or '\\' in args.output or os.path.sep in args.output):
+        output_path = os.path.join(args.work_dir[0], output_path)
+    export_ply(model, output_path)
+    print("PLY saved to", output_path)
 
     print()
 
-    sky_path = os.path.join(os.path.dirname(args.output), "background.png")
+    sky_path = os.path.join(os.path.dirname(output_path), "background.png")
 
     print("Exporting sky...")
     export_equirectangular(model, sky_path)
