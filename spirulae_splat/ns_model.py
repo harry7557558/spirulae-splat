@@ -1079,14 +1079,15 @@ class SpirulaeModel(Model):
 
         # MCMC regularizers
         mcmc_opacity_reg, mcmc_scale_reg = 0.0, 0.0
-        if self.config.use_mcmc and self.config.mcmc_opacity_reg > 0.0:
-            mcmc_opacity_reg = torch.sigmoid(self.opacities).mean()
-            mcmc_opacity_reg = self.config.mcmc_opacity_reg * mcmc_opacity_reg
-        if self.config.use_mcmc and self.config.mcmc_scale_reg > 0.0:
-            # mcmc_scale_reg = torch.exp(self.scales).mean()
-            # mcmc_scale_reg = self.scales.mean()
-            mcmc_scale_reg = torch.where(self.scales < 0, torch.exp(self.scales), self.scales+1).mean()
-            mcmc_scale_reg = self.config.mcmc_scale_reg * mcmc_scale_reg
+        if self.config.use_mcmc and self.step < self.config.stop_refine_at:
+            if self.config.mcmc_opacity_reg > 0.0:
+                mcmc_opacity_reg = torch.sigmoid(self.opacities).mean()
+                mcmc_opacity_reg = self.config.mcmc_opacity_reg * mcmc_opacity_reg
+            if self.config.mcmc_scale_reg > 0.0:
+                # mcmc_scale_reg = torch.exp(self.scales).mean()
+                mcmc_scale_reg = self.scales.mean()
+                # mcmc_scale_reg = torch.where(self.scales < 0, torch.exp(self.scales), self.scales+1).mean()
+                mcmc_scale_reg = self.config.mcmc_scale_reg * mcmc_scale_reg
         loss_dict['mcmc_opacity_reg'] = mcmc_opacity_reg
         loss_dict['mcmc_scale_reg'] = mcmc_scale_reg
 
@@ -1140,6 +1141,7 @@ class SpirulaeModel(Model):
                 decimals = int(max(-math.log10(0.001*_max_vals[key]), 0))
             return f"{{:.{decimals}f}}".format(l).replace('0.', '.')
 
+        mcmc_reg = (self.config.use_mcmc and self.step < self.config.stop_refine_at)
         chunks = [
             f"[N] {len(self.opacities)} {mem_stats}",
             f"[C] {fmt('main_loss', 1.0)} "
@@ -1152,8 +1154,8 @@ class SpirulaeModel(Model):
             f"[G] {fmt('depth_reg', self.training_losses.get_2dgs_reg_weights()[0])} "
             f"{fmt('normal_reg', self.training_losses.get_2dgs_reg_weights()[1])} "
             f"{fmt('alpha_reg', self.training_losses.get_alpha_reg_weight())}",
-            f"[M] {fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg)} "
-            f"{fmt('mcmc_scale_reg', self.config.mcmc_scale_reg)}",
+            f"[M] {fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg * mcmc_reg)} "
+            f"{fmt('mcmc_scale_reg', self.config.mcmc_scale_reg * mcmc_reg)}",
             f"[R] {fmt('erank_reg', self.config.erank_reg_s3)} "
             f"{fmt('scale_reg', self.config.scale_regularization_weight)}",
             f"[E] {fmt('tv_loss', 10.0)} "
