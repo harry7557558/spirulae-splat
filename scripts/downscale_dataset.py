@@ -14,6 +14,8 @@ import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
 import random
+
+from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 
 import cv2
@@ -154,7 +156,7 @@ def adjust_intrinsics(intrinsics: Dict[str, Any], scale_factor: float,
     # Update image dimensions
     adjusted['w'] = new_width
     adjusted['h'] = new_height
-    
+
     return adjusted
 
 
@@ -222,20 +224,22 @@ def main():
     
     # Check for global intrinsics
     global_intrinsics = {}
-    for key in ['w', 'h', 'fl_x', 'fl_y', 'cx', 'cy', 'k1', 'k2', 'k3', 'k4', 'p1', 'p2']:
+    intrinsics_keys = ['w', 'h', 'fl_x', 'fl_y', 'cx', 'cy', 'k1', 'k2', 'k3', 'k4', 'p1', 'p2', 'camera_model']
+    for key in intrinsics_keys:
         if key in transforms:
             global_intrinsics[key] = transforms[key]
     
     # Process images and update frames
     processed_frames = []
-    for frame in tqdm(transforms['frames']):
+
+    def process_one_frame(frame):
         file_path = frame['file_path']
         
         # Ensure file path is within dataset directory
         full_input_path = os.path.join(args.input_dir, file_path)
         if not os.path.exists(full_input_path):
             print(f"Warning: Image not found: {full_input_path}")
-            continue
+            return
         
         # Create output directory structure
         output_file_path = file_path
@@ -257,7 +261,7 @@ def main():
         
         # Adjust intrinsics (frame-specific or use global)
         frame_intrinsics = {}
-        for key in ['w', 'h', 'fl_x', 'fl_y', 'cx', 'cy', 'k1', 'k2', 'k3', 'k4', 'p1', 'p2']:
+        for key in intrinsics_keys:
             if key in frame:
                 frame_intrinsics[key] = frame[key]
             elif key in global_intrinsics:
@@ -267,12 +271,22 @@ def main():
         adjusted_intrinsics = adjust_intrinsics(frame_intrinsics, args.image_scale, new_width, new_height)
         
         # Update frame with adjusted intrinsics (only if they were in the original frame)
+        is_non_global = any([k not in global_intrinsics for k in intrinsics_keys[:6]])
         for key, value in adjusted_intrinsics.items():
-            if key in frame or (key in ['w', 'h'] and key not in global_intrinsics):
+            if key in frame or is_non_global:
                 new_frame[key] = value
         
-        processed_frames.append(new_frame)
+        return new_frame
     
+    with ThreadPoolExecutor() as executor:
+        for new_frame in tqdm(
+            executor.map(process_one_frame, transforms['frames']),
+            total=len(transforms["frames"]),
+            desc="Downscaling images..."
+        ):
+            if new_frame is not None:
+                processed_frames.append(new_frame)
+
     # Update global intrinsics if they exist
     if global_intrinsics:
         # Use dimensions from first processed frame as reference

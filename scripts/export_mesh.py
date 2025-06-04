@@ -228,6 +228,12 @@ class GSMeshExporter:
     depth_trunc_percentile: float = 0.95
     """Depth map truncation"""
 
+    def get_depth_trunc(self, depth_map):
+        depths = depth_map[~(depth_map > 0.999*depth_map.max())]
+        if depths.numel() == 0:
+            return 0.0
+        return torch.quantile(depths, self.depth_trunc_percentile).item()
+
 
 @dataclass
 class DepthAndNormalMapsPoisson(GSMeshExporter):
@@ -311,10 +317,7 @@ class DepthAndNormalMapsPoisson(GSMeshExporter):
             else:
                 valid_depth = depth_map
             valid_mask = valid_depth
-            valid_mask *= (depth_map < torch.quantile(
-                depth_map[~(depth_map >= 0.999*depth_map.max())],
-                self.depth_trunc_percentile
-            ).item()).float()
+            valid_mask *= (depth_map < self.get_depth_trunc(depth_map)).float()
             valid_mask *= torch.isfinite(depth_map).float()
 
             indices = pick_indices_at_random(valid_mask, samples_per_frame)
@@ -442,10 +445,7 @@ class TSDFFusion(GSMeshExporter):
             H, W = camera.h, camera.w
             c2w = torch.from_numpy(c2w).float().cuda()
 
-            depth_trunc = torch.quantile(
-                depth_map[~(depth_map >= 0.999*depth_map.max())],
-                self.depth_trunc_percentile
-            ).item()
+            depth_trunc = self.get_depth_trunc(depth_map)
             depth_map[~(depth_map < depth_trunc)] = 0
 
             xyzs, rgbs = get_colored_points_from_depth(
@@ -552,10 +552,7 @@ class Open3DTSDFFusion(GSMeshExporter):
                 cy=camera.cy,
             )
 
-            depth_trunc = torch.quantile(
-                depth_map[~(depth_map >= 0.999*depth_map.max())],
-                self.depth_trunc_percentile
-            ).item()
+            depth_trunc = self.get_depth_trunc(depth_map)
 
             rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
                 o3d.geometry.Image(

@@ -163,6 +163,8 @@ class SpirulaeModelConfig(ModelConfig):
     relative_scale: Optional[float] = None
     """Manually set scale when a scene is poorly scaled by nerfstudio
         (e.g. Zip-NeRF dataset, very large-scale scenes across multiple street blocks)"""
+    compute_depth_normal: bool = True
+    """Compute normal from depth. Required for 2DGS and supervision. Disabling this can reduce VRAM usage and speed up training."""
 
     # classial control
     cull_alpha_thresh: float = 0.1
@@ -423,6 +425,9 @@ class SpirulaeModel(Model):
         )
 
         self.training_losses = SplatTrainingLosses(self.config, self.num_train_data)
+
+        if not self.config.compute_depth_normal and not self.config.use_3dgs:
+            raise ValueError("--pipeline.model.compute_depth_normal must be enabled for 2DGS")
 
         # metrics
         from torchmetrics.image import PeakSignalNoiseRatio
@@ -957,7 +962,8 @@ class SpirulaeModel(Model):
         # normal regularization
         if not self.config.use_3dgs:
             depth_im_ref = depth_inv_map(depth_im_ref)
-        depth_normal, alpha_diffused = depth_to_normal(depth_im_ref, ssplat_camera, None, True, alpha)
+        if self.config.compute_depth_normal:
+            depth_normal, alpha_diffused = depth_to_normal(depth_im_ref, ssplat_camera, None, True, alpha)
         if not self.config.use_3dgs:
             normal_im = F.normalize(normal_im, dim=-1)
             reg_normal = 1.0 - (depth_normal * normal_im).sum(-1, True)
@@ -968,8 +974,9 @@ class SpirulaeModel(Model):
         outputs = {
             "rgb": rgb,
             "depth": depth_im_ref,
-            "depth_normal": depth_normal,
         }
+        if self.config.compute_depth_normal:
+            outputs["depth_normal"] = depth_normal
         if not self.config.use_3dgs:
             outputs["render_normal"] = 0.5+0.5*normal_im
             outputs["reg_depth"] = torch.sqrt(torch.relu(reg_depth*alpha)+1e-8)
@@ -992,7 +999,8 @@ class SpirulaeModel(Model):
             distances = torch.sqrt((undist_map*undist_map).sum(-1, True) + 1.0)
             outputs["depth"] = outputs["depth"] * distances
             outputs["depth"] = torch.clip(outputs["depth"], max=torch.quantile(outputs["depth"], 0.99))
-            outputs["depth_normal"] = 0.5+0.5*outputs["depth_normal"]
+            if "depth_normal" in outputs:
+                outputs["depth_normal"] = 0.5+0.5*outputs["depth_normal"]
 
         return outputs
 
@@ -1084,8 +1092,8 @@ class SpirulaeModel(Model):
                 mcmc_opacity_reg = torch.sigmoid(self.opacities).mean()
                 mcmc_opacity_reg = self.config.mcmc_opacity_reg * mcmc_opacity_reg
             if self.config.mcmc_scale_reg > 0.0:
-                # mcmc_scale_reg = torch.exp(self.scales).mean()
-                mcmc_scale_reg = self.scales.mean()
+                mcmc_scale_reg = torch.exp(self.scales).mean()
+                # mcmc_scale_reg = self.scales.mean()
                 # mcmc_scale_reg = torch.where(self.scales < 0, torch.exp(self.scales), self.scales+1).mean()
                 mcmc_scale_reg = self.config.mcmc_scale_reg * mcmc_scale_reg
         loss_dict['mcmc_opacity_reg'] = mcmc_opacity_reg

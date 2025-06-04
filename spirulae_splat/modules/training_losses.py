@@ -169,7 +169,11 @@ class SplatTrainingLosses(torch.nn.Module):
                 batch["depth"] = batch["depth"].unsqueeze(-1)
             depth = self._downscale_if_required(batch["depth"].to(device))
             depth_supervision_loss, normal_supervision_loss, alpha_supervision_loss \
-                = self.supervision_losses(depth, ssplat_camera, outputs["depth"], outputs["depth_normal"], outputs["alpha"])
+                = self.supervision_losses(
+                    depth, ssplat_camera, outputs["depth"],
+                    outputs["depth_normal"] if self.config.compute_depth_normal else None,
+                    outputs["alpha"]
+                )
 
         # correct exposure
         pred_img_e = pred_img

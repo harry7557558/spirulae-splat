@@ -126,6 +126,8 @@ class SupervisionLosses(torch.nn.Module):
         # normal loss
         normal_loss = 0.0
         if self.normal_weight > 0.0:
+            if pred_normal is None:
+                raise ValueError("--pipeline.model.compute_depth_normal must be enabled to use normal supervision")
             ref_normal = depth_to_normal(ref_depth, camera)
             normal_loss = 1.0 - (ref_normal * pred_normal).sum(-1, True)
             # normal_loss = torch.sqrt(torch.relu(normal_loss))

@@ -248,7 +248,9 @@ class MCMCStrategy(Strategy):
 
         # relocate huge splats
         # TODO: logically it's better to split in this case?
-        relocate_mask |= (state["radii"] > self.relocate_scale2d)
+        if step < self.refine_stop_iter:
+            relocate_mask |= (state["radii"] > self.relocate_scale2d)
+        state["radii"] *= 0
 
         # relocate low opacity, as in original MCMC
         if step > self.refine_start_iter and step < self.refine_stop_iter:
