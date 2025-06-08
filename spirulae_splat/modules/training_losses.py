@@ -148,7 +148,7 @@ class SplatTrainingLosses(torch.nn.Module):
         if "mask" in batch:
             # batch["mask"] : [H, W, 1]
             mask = self._downscale_if_required(batch["mask"])
-            mask = mask.float().to(self.device)
+            mask = mask.float().to(gt_img.device)
             assert mask.shape[:2] == gt_img.shape[:2] == pred_img.shape[:2]
             # can be little bit sketchy for the SSIM loss
             gt_img = torch.lerp(outputs["background"], gt_img, mask)
@@ -220,8 +220,11 @@ class SplatTrainingLosses(torch.nn.Module):
         if self.step >= self.config.reg_warmup_length:
             alpha = outputs['alpha']
             weight_alpha_reg = self.get_alpha_reg_weight()
-            # reg_alpha = torch.log(4.0*torch.clip(alpha*(1.0-alpha), min=1e-2))
-            reg_alpha = 4.0*alpha*(1.0-alpha)
+            if self.config.randomize_background:
+                reg_alpha = 1.0 - alpha**2  # push to 1
+            else:
+                # reg_alpha = torch.log(4.0*torch.clip(alpha*(1.0-alpha), min=1e-2))
+                reg_alpha = 4.0*alpha*(1.0-alpha)
             alpha_reg = weight_alpha_reg * reg_alpha.mean()
 
         bilagrid_tv_loss = 0.0

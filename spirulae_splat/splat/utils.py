@@ -159,8 +159,8 @@ def depth_to_normal(
         [points[1:-1, 2:, :] - points[1:-1, :-2, :]], dim=-2
     )  # [H-2, W-2, 3]
     normals = torch.nn.functional.normalize(torch.cross(dx, dy, dim=-1), dim=-1)  # [H-2, W-2, 3]
-    # normals = torch.nn.functional.pad(normals, (0, 0, 1, 1, 1, 1), value=0.0)  # [H, W, 3]
-    normals = torch.nn.functional.pad(normals.permute(2, 0, 1), (1, 1, 1, 1), mode="replicate").permute(1, 2, 0)  # [H, W, 3]
+    normals = torch.nn.functional.pad(normals, (0, 0, 1, 1, 1, 1), value=0.0)  # [H, W, 3]
+    # normals = torch.nn.functional.pad(normals.permute(2, 0, 1), (1, 1, 1, 1), mode="replicate").permute(1, 2, 0)  # [H, W, 3]
     normals = normals.contiguous()
 
     # apply mask
@@ -193,4 +193,4 @@ def resize_image(image: torch.Tensor, d: int):
     H, W, C = image.shape
     reshaped = image[:H//d*d, :W//d*d].view(H//d, d, W//d, d, C)
     blocks = reshaped.permute(0, 2, 1, 3, 4).contiguous().view(H//d, W//d, d*d, C)
-    return blocks.mean(dim=2)
+    return blocks.float().mean(dim=2)

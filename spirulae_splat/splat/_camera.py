@@ -26,7 +26,7 @@ class _Camera:
         self.model = "" if model == "OPENCV" else model
         self.intrins = intrins
         self.dist_coeffs = dist_coeffs
-        if all([x == 0 for x in dist_coeffs]):
+        if self.model == "OPENCV" and all([x == 0 for x in dist_coeffs]):
             self.model = ""
         if len(dist_coeffs) > 4:
             dist_coeffs = [*dist_coeffs]

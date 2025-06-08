@@ -42,7 +42,6 @@ from spirulae_splat.splat import (
     rasterize_gaussians_depth_sorted,
     rasterize_gaussians_sorted,
     rasterize_gaussians_simplified_sorted,
-    depth_to_points,
     depth_to_normal,
     BLOCK_WIDTH,
 )
@@ -1147,7 +1146,10 @@ class SpirulaeModel(Model):
 
             if decimals is None:
                 decimals = int(max(-math.log10(0.001*_max_vals[key]), 0))
-            return f"{{:.{decimals}f}}".format(l).replace('0.', '.')
+            s = f"{{:.{decimals}f}}".format(l)
+            if s.startswith('0.'):
+                s = s[1:]
+            return s
 
         mcmc_reg = (self.config.use_mcmc and self.step < self.config.stop_refine_at)
         chunks = [

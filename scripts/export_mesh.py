@@ -24,7 +24,7 @@ from spirulae_splat.viewer.model import SplatModel
 from spirulae_splat.viewer.camera import Camera
 
 from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map
-from spirulae_splat.splat.utils import depth_to_normal
+from spirulae_splat.splat import depth_to_normal
 
 
 """
