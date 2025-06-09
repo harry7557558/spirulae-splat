@@ -362,7 +362,7 @@ def make_demo(
 
             with gr.Column():
                 img_dirs = listdir(img_root)
-                img_dirs = [img_root]
+                img_dirs = ['[select]', img_root]
                 img_dirs_field = gr.Dropdown(
                     label="Image directories", choices=img_dirs
                 )
@@ -458,6 +458,7 @@ def make_demo(
             # img_dir = f"{root_dir}/{img_name}/{seq_name}"
             img_dir = seq_name
             guru.debug(f"Selected image dir: {img_dir}")
+            prompts.set_input_image(0)
             return seq_name, img_dir
 
         def update_image_dir(root_dir, img_name, seq_name):
@@ -468,6 +469,7 @@ def make_demo(
             message = (
                 f"Loaded {num_imgs} images from {img_dir}. Choose a frame to run SAM!"
             )
+            prompts.set_input_image(0)
             return slider, message
 
         def get_select_coords(frame_idx, img, evt: gr.SelectData):
