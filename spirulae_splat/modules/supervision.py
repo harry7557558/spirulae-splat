@@ -8,6 +8,48 @@ from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map
 from spirulae_splat.splat import depth_to_normal
 
 
+def normalize_image(im, degree=1, _B_cache={}):
+    H, W, C = im.shape
+
+    key = (H, W, degree)
+    if key in _B_cache:
+        B, invBTB = _B_cache[key]
+
+    else:
+
+        v, u = torch.meshgrid(
+            torch.pi * (torch.arange(H, device=im.device)+0.5)/H,
+            torch.pi * (torch.arange(W, device=im.device)+0.5)/W,
+            indexing='ij'
+        )
+        v, u = v.flatten(), u.flatten()
+
+        B = []
+        for i in range(degree+1):
+            for j in range(degree+1):
+                ci, si = torch.cos(i*u), torch.sin(i*u)
+                cj, sj = torch.cos(j*v), torch.sin(j*v)
+                B.extend(
+                    [ci * cj] +
+                    [ci * sj] * (j != 0) +
+                    [si * cj] * (i != 0) +
+                    [si * sj] * (j != 0 and i != 0)
+                )
+
+        B = torch.stack(B, dim=-1)
+        invBTB = torch.linalg.inv(B.H @ B)
+
+        _B_cache[key] = (B, invBTB)
+
+    X = im.reshape((H*W, C))
+    weights = invBTB @ B.H @ X
+    Y = X - B @ weights
+
+    im = Y.reshape(im.shape)
+    # return im / torch.norm(im, dim=-1, keepdim=True)
+    return im / (torch.norm(im, dim=(0,1), keepdim=True) / (im.shape[0]*im.shape[1])**0.5)
+
+
 class SupervisionLosses(torch.nn.Module):
 
     _uv_cache = {}
@@ -116,22 +158,41 @@ class SupervisionLosses(torch.nn.Module):
                 x = x / torch.sqrt(((x*x)*m).sum() / m_sum)
                 y = y / torch.sqrt(((y*y)*m).sum() / m_sum)
 
-                # distortion disabled, just use it
-                depth_diff = (x - y).reshape((h, w))
+                depth_diff = (x - y)**2
+                # depth_diff = torch.abs(x - y)
+                # depth_diff = (normalize_image(x.reshape(ref_depth.shape)) - normalize_image(y.reshape(ref_depth.shape)))**2
+
             # TODO: sometimes it's overfitting mean depth, need per-splat depth supervision
 
-            # depth_loss = ((depth_diff**2)*alpha).mean()
-            depth_loss = (torch.abs(depth_diff)*alpha).mean()
+            depth_loss = (depth_diff.reshape(alpha.shape) * alpha).mean()
 
         # normal loss
         normal_loss = 0.0
         if self.normal_weight > 0.0:
-            if pred_normal is None:
-                raise ValueError("--pipeline.model.compute_depth_normal must be enabled to use normal supervision")
-            ref_normal = depth_to_normal(ref_depth, camera)
+            if camera.model == "OPENCV_FISHEYE":
+                # disable distortion since most monocular depth models aren't trained on fisheye
+                # gives much better results than accurate fisheye-distorted normal
+                camera.model = ""
+                pred_normal = depth_to_normal(pred_depth, camera)
+                ref_normal = depth_to_normal(ref_depth, camera)
+                camera.model = "OPENCV_FISHEYE"
+            else:
+                if pred_normal is None:
+                    raise ValueError("--pipeline.model.compute_depth_normal must be enabled to use normal supervision")
+                ref_normal = depth_to_normal(ref_depth, camera)
+            ref_normal = torch.nan_to_num(ref_normal, 0.0, 0.0, 0.0)
+            pred_normal = torch.nan_to_num(pred_normal, 0.0, 0.0, 0.0)
+
+            # from torchvision.transforms.functional import gaussian_blur
+            # s = ref_normal.shape[0]
+            # ref_normal = gaussian_blur(ref_normal.permute(2,0,1), s//30+1, s/100).permute(1,2,0)
+            # pred_normal = gaussian_blur(pred_normal.permute(2,0,1), s//30+1, s/100).permute(1,2,0)
+
             normal_loss = 1.0 - (ref_normal * pred_normal).sum(-1, True)
-            # normal_loss = torch.sqrt(torch.relu(normal_loss))
-            normal_loss = normal_loss.mean()
+            # normal_loss = (ref_normal - pred_normal)**2
+            # normal_loss = (normalize_image(ref_normal) - normalize_image(pred_normal))**2
+            # normal_loss = torch.abs(normalize_image(ref_normal) - normalize_image(pred_normal))
+            normal_loss = (normal_loss * alpha.reshape(*normal_loss.shape[:-1], 1)).mean()
 
         # alpha loss
         pred_alpha, alpha = pred_alpha.float().flatten(), alpha.float().flatten()

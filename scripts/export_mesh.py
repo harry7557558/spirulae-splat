@@ -214,7 +214,7 @@ class GSMeshExporter:
     """Base class for GS mesh exporters"""
 
     load_config: Path
-    """Path to the trained config YAML file."""
+    """Path to the work folder."""
 
     train_data: Path
     """Path to the training dataset."""
@@ -598,6 +598,8 @@ class Open3DTSDFFusion(GSMeshExporter):
         mesh_0.remove_unreferenced_vertices()
         mesh_0.remove_degenerate_triangles()
 
+        if not self.output_dir.exists():
+            self.output_dir.mkdir(parents=True)
         o3d.io.write_triangle_mesh(
             str(self.output_dir / "Open3dTSDFfusion_mesh.ply"),
             mesh,

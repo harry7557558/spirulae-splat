@@ -961,11 +961,12 @@ class SpirulaeModel(Model):
         # normal regularization
         if not self.config.use_3dgs:
             depth_im_ref = depth_inv_map(depth_im_ref)
-        if self.config.compute_depth_normal:
+        if self.config.compute_depth_normal or not self.training:
             depth_normal, alpha_diffused = depth_to_normal(depth_im_ref, ssplat_camera, None, True, alpha)
         if not self.config.use_3dgs:
             normal_im = F.normalize(normal_im, dim=-1)
             reg_normal = 1.0 - (depth_normal * normal_im).sum(-1, True)
+            reg_normal = torch.nan_to_num(reg_normal, 0.0, 0.0, 0.0)
         timerr.end("normal_reg")  # 600us-900us
         # -> ?us-?us median depth, 3000us-4500us one pass
 
@@ -974,7 +975,7 @@ class SpirulaeModel(Model):
             "rgb": rgb,
             "depth": depth_im_ref,
         }
-        if self.config.compute_depth_normal:
+        if self.config.compute_depth_normal or not self.training:
             outputs["depth_normal"] = depth_normal
         if not self.config.use_3dgs:
             outputs["render_normal"] = 0.5+0.5*normal_im
@@ -1172,10 +1173,7 @@ class SpirulaeModel(Model):
             f"{fmt('exposure_param_reg', self.config.exposure_reg_param)}",
         ]
         chunks = [c for c in chunks if any(char.isdigit() for char in c)]
-        CONSOLE.print(
-            '  '.join(chunks) + "    ".replace('nan', '~'),
-            end="\r",
-        )
+        CONSOLE.print(' '.join(chunks).replace('\n', '') + "    ", end="\r")
 
     @torch.no_grad()
     def get_outputs_for_camera(self, camera: Cameras, obb_box: Optional[OrientedBox] = None) -> Dict[str, torch.Tensor]:
