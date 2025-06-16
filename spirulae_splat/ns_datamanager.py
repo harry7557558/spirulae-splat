@@ -43,9 +43,9 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
     max_batch_per_epoch: int = 768
     """Maximum number of batches per epoch, used for configuring batch size"""
 
-    cache_images: Literal["cpu", "gpu"] = "gpu"
+    cache_images: Literal["cpu-pageable", "cpu", "gpu"] = "cpu-pageable"
     """Whether to cache images in memory. If "cpu", caches on cpu. If "gpu", caches on device."""
-    cache_images_type: Literal["uint8", "float32"] = "float32"
+    cache_images_type: Literal["uint8", "float32"] = "uint8"
     """The image type returned from manager, caching images in uint8 saves memory"""
 
     depth_model: Literal[
@@ -530,7 +530,7 @@ class SpirulaeDataManager(FullImageDatamanager):
         config: the DataManagerConfig used to instantiate class
     """
 
-    config: DataManagerConfig = field(default_factory=SpirulaeDataManagerConfig)
+    config: SpirulaeDataManagerConfig
 
     _train_call_count: int = 0
 
@@ -550,7 +550,7 @@ class SpirulaeDataManager(FullImageDatamanager):
         self.num_eval = 0
 
     def _load_images(
-        self, split: Literal["train", "eval"], cache_images_device: Literal["cpu", "gpu"]
+        self, split: Literal["train", "eval"], cache_images_device: Literal["cpu-pageable", "cpu", "gpu"]
     ) -> List[Dict[str, torch.Tensor]]:
         undistorted_images: List[Dict[str, torch.Tensor]] = []
 
@@ -594,14 +594,14 @@ class SpirulaeDataManager(FullImageDatamanager):
                 return data
             K = camera.get_intrinsics_matrices().numpy()
             distortion_params = camera.distortion_params.numpy()
-            image = data["image"].numpy()
 
             if camera.camera_type.item() == CameraType.FISHEYE.value:
                 # don't undistort
                 mask = None
             else:
+                image = data["image"].numpy()
                 K, image, mask = _undistort_image(camera, distortion_params, data, image, K)
-            data["image"] = torch.from_numpy(image)
+                data["image"] = torch.from_numpy(image)
             if mask is not None:
                 data["mask"] = mask
 
@@ -609,8 +609,8 @@ class SpirulaeDataManager(FullImageDatamanager):
             dataset.cameras.fy[idx] = float(K[1, 1])
             dataset.cameras.cx[idx] = float(K[0, 2])
             dataset.cameras.cy[idx] = float(K[1, 2])
-            dataset.cameras.width[idx] = image.shape[1]
-            dataset.cameras.height[idx] = image.shape[0]
+            dataset.cameras.width[idx] = data["image"].shape[1]
+            dataset.cameras.height[idx] = data["image"].shape[0]
             return data
 
         CONSOLE.log(f"Caching/undistorting {split} images")
@@ -666,11 +666,12 @@ class SpirulaeDataManager(FullImageDatamanager):
                 if "depth" in cache:
                     cache["depth"] = cache["depth"].to(self.device)
                 self.train_cameras = self.train_dataset.cameras.to(self.device)
-        elif cache_images_device == "cpu":
+        elif cache_images_device.startswith("cpu"):
             for cache in undistorted_images:
-                cache["image"] = cache["image"].pin_memory()
-                if "mask" in cache:
-                    cache["mask"] = cache["mask"].pin_memory()
+                if cache_images_device == "cpu":  # not cpu-pageable
+                    cache["image"] = cache["image"].pin_memory()
+                    if "mask" in cache:
+                        cache["mask"] = cache["mask"].pin_memory()
                 self.train_cameras = self.train_dataset.cameras
         else:
             assert_never(cache_images_device)
