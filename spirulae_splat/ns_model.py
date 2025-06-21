@@ -157,8 +157,6 @@ class SpirulaeModelConfig(ModelConfig):
     """Config of the camera optimizer to use"""
     kernel_radius: float = 1.0
     """Radius of the splatting kernel, 3.0 for Gaussian and 1.0 for polynomial"""
-    loss_scale: float = 0.003  # 0.003 for 2DGS, 1.0 for 3DGS
-    """Scaling for loss values to normalize gradient"""
     relative_scale: Optional[float] = None
     """Manually set scale when a scene is poorly scaled by nerfstudio
         (e.g. Zip-NeRF dataset, very large-scale scenes across multiple street blocks)"""
@@ -178,7 +176,7 @@ class SpirulaeModelConfig(ModelConfig):
     """If True, continue to cull gaussians post refinement"""
     reset_alpha_every: int = 30
     """Every this many refinement steps, reset the alpha"""
-    densify_xy_grad_thresh: float = 0.001  # 0.003 | 0.001
+    densify_xy_grad_thresh: float = 0.0005
     """threshold of positional gradient norm for densifying gaussians"""
     densify_size_thresh: float = 0.01
     """below this size, gaussians are *duplicated*, otherwise split"""
@@ -321,6 +319,9 @@ class SpirulaeModelConfig(ModelConfig):
         Useful for removing floaters from sky for outdoor scenes"""
     alpha_supervision_weight_under: float = 0.0
     """Similar to alpha_supervision_weight, but applies when renderer opacity is lower than reference opacity"""
+
+    # Deprecated; Keep for backward compatibility
+    loss_scale: float = 1.0
 
 
 class SpirulaeModel(Model):
@@ -980,7 +981,7 @@ class SpirulaeModel(Model):
         if not self.config.use_3dgs:
             outputs["render_normal"] = 0.5+0.5*normal_im
             outputs["reg_depth"] = torch.sqrt(torch.relu(reg_depth*alpha)+1e-8)
-            outputs["reg_normal"] = torch.sqrt(torch.relu(reg_normal*alpha)+1e-8) * alpha_diffused
+            outputs["reg_normal"] = torch.sqrt(torch.relu(reg_normal*alpha_diffused)+1e-8)
         outputs["alpha"] = alpha
         outputs["background"] = background
 
@@ -1117,8 +1118,6 @@ class SpirulaeModel(Model):
             self.camera_optimizer.get_loss_dict(loss_dict)
         timerl.end("camera")  # <100us -> 1600us-4200us, 900us-1400us without ssim
 
-        for key, value in loss_dict.items():
-            loss_dict[key] = self.config.loss_scale * value
         self.print_loss_dict(loss_dict)
         return loss_dict
 
@@ -1131,7 +1130,6 @@ class SpirulaeModel(Model):
         mem_stats = f"{used:.2f}\N{ZERO WIDTH SPACE}GB {used_percentage:.0f}%"
 
         def fmt(key: str, s: float, decimals=None) -> str:
-            s = self.config.loss_scale * s
             if s == 0.0:
                 return '~'
 

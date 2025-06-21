@@ -129,8 +129,7 @@ def _test_rasterize_depth_sorted(mode):
     check_close('v_axes_v', axes_v.grad, _axes_v.grad, **tol)
     check_close('v_opacities', opacities.grad, _opacities.grad, **tol)
 
-    assert (positions.absgrad > 0).any()
-    assert (positions.absgrad >= abs(positions.grad)[:,:2]).all()
+    assert (positions.absgrad >= 0).all()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")

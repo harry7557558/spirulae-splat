@@ -644,7 +644,7 @@ __global__ void rasterize_simple_sorted_backward_kernel(
             glm::vec3(0), v_uv,
             v_position_local, v_axis_uv
         );
-        v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local));
+        v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local)) / glm::vec2(fx, fy);
         // v_position_xy_abs_local /= pos.z;
         v_axis_u_local = v_axis_uv[0];
         v_axis_v_local = v_axis_uv[1];
@@ -932,7 +932,7 @@ __global__ void rasterize_depth_sorted_backward_kernel(
             {0.f, 0.f, v_depth_raw}, v_uv,
             v_position_local, v_axis_uv
         );
-        v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local));
+        v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local)) / glm::vec2(fx, fy);
         v_axis_u_local = v_axis_uv[0];
         v_axis_v_local = v_axis_uv[1];
         
@@ -1374,7 +1374,7 @@ __global__ void rasterize_sorted_backward_kernel(
             v_position_local_temp, v_axis_uv
         );
         v_position_local += v_position_local_temp;
-        v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local));
+        v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local)) / glm::vec2(fx, fy);
         v_axis_u_local = v_axis_uv[0];
         v_axis_v_local = v_axis_uv[1];
 
@@ -1686,7 +1686,7 @@ __global__ void rasterize_simplified_sorted_backward_kernel(
             v_position_local_temp, v_axis_uv
         );
         v_position_local += v_position_local_temp;
-        v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local));
+        v_position_xy_abs_local = glm::abs(glm::vec2(v_position_local)) / glm::vec2(fx, fy);
         v_axis_u_local = v_axis_uv[0];
         v_axis_v_local = v_axis_uv[1];
 

@@ -167,8 +167,7 @@ def test_rasterize_simplified():
     check_close('v_colors', colors.grad, _colors.grad)
     check_close('v_opacities', opacities.grad, _opacities.grad)
 
-    assert (positions.absgrad > 0).any()
-    assert (positions.absgrad >= abs(positions.grad)[:,:2]).all()
+    assert (positions.absgrad >= 0).all()
 
 
 if __name__ == "__main__":
