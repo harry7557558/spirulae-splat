@@ -764,7 +764,7 @@ class SpirulaeModel(Model):
         timerr.mark("map")  # 300us-450us
 
         if self.config.sh_degree > 0:
-            viewdirs = self.means.detach() - optimized_camera_to_world[:3, 3].to(device)  # (N, 3)
+            viewdirs = self.means.detach() - T.squeeze(-1).to(device)  # (N, 3)
             n = min(self.step // self.config.sh_degree_interval, self.config.sh_degree)
             rgbs = spherical_harmonics(n, viewdirs, self.features_dc, self.features_sh)  # input unnormalized viewdirs
             rgbs = rgbs + 0.5

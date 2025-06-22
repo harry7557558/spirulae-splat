@@ -31,7 +31,7 @@ def _test_sh(method):
         optim.zero_grad()
 
         # compute PyTorch's color and grad
-        check_colors = _torch_impl.compute_sh_color(viewdirs, sh_coeffs, method)
+        check_colors = _torch_impl.compute_sh_color(viewdirs, sh_coeffs, "poly")
         check_loss = torch.square(check_colors - gt_colors).mean()
         check_loss.backward()
         check_grad = sh_coeffs.grad.detach()
