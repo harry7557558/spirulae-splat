@@ -21,14 +21,19 @@ out vec4 fragColor;
 void main () {
 
     vec2 coord0 = vec2(1,-1) * (gl_FragCoord.xy-0.5*viewport) / focal;
-    vec2 coord = coord0;
+    vec3 viewdir;
     float vignetting = 0.0;
     if (camera_model == 0) {
+        vec2 coord;
         undistort_opencv_iterative(coord0, distortion, coord, vignetting);
+        viewdir = vec3(coord, 1.0);
     }
     else if (camera_model == 1) {
-        // undistort_fisheye_iterative(coord0, distortion, coord, vignetting);
-        undistort_fisheye(coord0, distortion, undistortion, coord, vignetting);
+        // undistort_fisheye(coord0, distortion, undistortion, coord, vignetting);
+        viewdir = unproject_fisheye(coord0, undistortion);
+    }
+    else {
+        viewdir = vec3(coord0, 1.0);
     }
 
     const vec3 vignetting_background = vec3(0.1);
@@ -37,7 +42,7 @@ void main () {
         return;
     }
 
-    vec3 dir = normalize(inverse(mat3(view)) * vec3(coord, 1));\
+    vec3 dir = normalize(inverse(mat3(view)) * viewdir);\
     float x = dir.x, y = dir.y, z = dir.z;
     float xx = x*x, yy = y*y, zz = z*z;
 

@@ -428,16 +428,22 @@ void main( void )
 	vec3 cameraPosition = vec3(inverse(view)[3]);
 
     vec2 pos2d = vec2(1,-1)*(gl_FragCoord.xy-0.5*viewport)/focal;
-	vec2 pos2d_undist = pos2d;
+    vec3 viewdir;
 
     float fr = -1.0;
     if (camera_model == 0) {
         fr = opencv_radius(distortion);
-        pos2d_undist = undistort_opencv_iterative(pos2d, distortion);
+        vec2 pos2d_undist = undistort_opencv_iterative(pos2d, distortion);
+        viewdir = vec3(pos2d_undist, 1.0);
     }
     else if (camera_model == 1) {
-        fr = fisheye_radius(0.5*PI, distortion);
-        pos2d_undist = undistort_fisheye(pos2d, undistortion);
+        fr = fisheye_radius(PI, distortion);
+        // pos2d_undist = undistort_fisheye(pos2d, undistortion);
+        // viewdir = vec3(pos2d_undist, 1.0);
+        viewdir = unproject_fisheye(pos2d, undistortion);
+    }
+    else {
+        viewdir = vec3(pos2d, 1.0);
     }
     const vec3 vignetting_background = vec3(0.1);
     if (fr > 0.0 && length(pos2d) > fr) {
@@ -446,7 +452,7 @@ void main( void )
     }
 
 	rayOrigin = cameraPosition;
-	rayDirection = transpose(mat3(view)) * normalize(vec3(pos2d_undist, 1));
+	rayDirection = transpose(mat3(view)) * normalize(viewdir);
 
 	vec4 color = CalculateRadiance();
 	// color = vec4(vec3(BoundingBoxIntersectCount) / 4096.0, 1.0);

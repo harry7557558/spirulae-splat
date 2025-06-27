@@ -71,10 +71,11 @@ CameraPresets["t265"] = {
     "fy": 287.1467554811063,
     "cx": 420.298272012518,
     "cy": 414.13518449424595,
-    "k1": -0.017462005784106175,
-    "k2": 0.05864943135824237,
-    "k3": -0.05407212566738003,
-    "k4": 0.011417049521949768,
+    // "k1": -0.017462005784106175,
+    // "k2": 0.05864943135824237,
+    // "k3": -0.05407212566738003,
+    // "k4": 0.011417049521949768,
+    k1: 0.0, k2: 0.0, k3: 0.0, k4: 0.0,
     "model": "OPENCV_FISHEYE",
 };
 
@@ -222,4 +223,77 @@ CameraPresets.createSelector = function() {
     select.value = "s21";
     updateSelectedCamera();
     return select;
+}
+
+
+
+function findPolynomialRoots(coeffs, xMin, xMax, tolerance=1e-6) {
+    if (coeffs[coeffs.length - 1] == 0.0)
+        throw new Error("Polynomial leading coefficient must be nonzero");
+
+    function evalPoly(coeffs, x) {
+        let result = 0, mult = 1;
+        for (let i = 0; i < coeffs.length; i++) {
+            result += coeffs[i] * mult;
+            mult *= x;
+        }
+        return result;
+    }
+    
+    function getDeriCoeffs(coeffs) {
+        if (coeffs.length <= 1) return [0];
+        let derivCoeffs = [];
+        for (let i = 1; i < coeffs.length; i++) {
+            derivCoeffs.push(i * coeffs[i]);
+        }
+        return derivCoeffs;
+    }
+    
+    function findRootsRecursive(coeffs, a, b, tolerance) {
+        if (coeffs.length <= 1)
+            throw new Error("Polynomial degree must be at least 1");
+        if (coeffs.length === 2) {
+            var x = -coeffs[0] / coeffs[1];
+            if (x >= a && x <= b)
+                return [x];
+            return [];
+        }
+
+        let derivCoeffs = getDeriCoeffs(coeffs);
+        let derivRoots = findRootsRecursive(derivCoeffs, a, b, tolerance);
+        let checkPoints = [a, ...derivRoots, b];
+        
+        let roots = [];
+        for (let i = 0; i < checkPoints.length - 1; i++) {
+            let a = checkPoints[i];
+            let b = checkPoints[i + 1];
+            let fa = evalPoly(coeffs, a);
+            let fb = evalPoly(coeffs, b);
+            if (fa * fb <= 0) {
+                let root = bisect(coeffs, a, b, tolerance);
+                if (roots.length == 0 || roots[roots.length-1] != root)
+                    roots.push(root);
+            }
+        }
+    
+        return roots;
+    }
+    
+    function bisect(coeffs, a, b, tolerance) {
+        
+        while (b - a > tolerance) {
+            let m = (a + b) / 2;
+            let fa = evalPoly(coeffs, a);
+            let fm = evalPoly(coeffs, m);
+            
+            if (fa * fm <= 0) b = m;
+            else a = m;
+        }
+        
+        let fa = evalPoly(coeffs, a);
+        let fb = evalPoly(coeffs, b);
+        return a - fa * (b - a) / (fb - fa);
+    }
+
+    return findRootsRecursive(coeffs, xMin, xMax, tolerance);
 }

@@ -621,7 +621,7 @@ function PerPixelSortingRenderer(gl, viewportController) {
     }
 
     let depthIndex = new Uint32Array();
-    let viewProj = new Float32Array(12);
+    let transforms = {};
     this.updateDepthIndex = function(depthIndex_, viewProj_) {
         depthIndex = depthIndex_;
         gl.bindBuffer(gl.ARRAY_BUFFER, indexBuffer);
@@ -633,8 +633,8 @@ function PerPixelSortingRenderer(gl, viewportController) {
         if (e.data.header) {
             means = e.data.base.means;
         }
-        else if (e.data.view) {
-            viewProj = e.data.view;
+        else if (e.data.transforms) {
+            transforms = e.data.transforms;
         }
     });
 
@@ -661,9 +661,12 @@ function PerPixelSortingRenderer(gl, viewportController) {
         /* global sorting */
 
         // console.time("sort");
+        let viewProj = transforms.viewProj;
+        let invViewMat = invert4(transforms.view);
         depthIndex = Worker.wasmModule.sortByDepth(
             vertexCount, means,
-            viewProj[2], viewProj[6], viewProj[10]
+            // false, viewProj[2], viewProj[6], viewProj[10]
+            true, invViewMat[12], invViewMat[13], invViewMat[14]
         )
         this.updateDepthIndex(depthIndex, viewProj);
         // console.timeEnd("sort");

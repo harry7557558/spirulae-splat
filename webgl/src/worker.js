@@ -301,14 +301,14 @@ Worker.createWorker = function(self) {
     let header;
     let base, harmonics;
     let vertexCount = 0;
-    let viewProj;
+    let transforms;
 
     let lastProj = [];
     let depthIndex = new Uint32Array();
     let lastBaseVertexCount = 0,
         lastHarmonicsLength = 0;
 
-    function runSort(viewProj) {
+    function runSort(viewMat, viewProj) {
         if (!base) return;
         if (harmonics && harmonics.features_sh.length > lastHarmonicsLength) {
             console.time("generate CH/SH texture");
@@ -319,11 +319,10 @@ Worker.createWorker = function(self) {
         }
         vertexCount = base.opacities.length;
         if (lastBaseVertexCount == vertexCount) {
-            let dot =
-                lastProj[2] * viewProj[2] +
-                lastProj[6] * viewProj[6] +
-                lastProj[10] * viewProj[10];
-            if (Math.abs(dot - 1) < 0.01) {
+            let diff = 0.0;
+            for (var i = 0; i < 16; i++)
+                diff += Math.abs(lastProj[i] - viewProj[i]);
+            if (diff < 0.05) {
                 return;
             }
         } else {
@@ -334,9 +333,11 @@ Worker.createWorker = function(self) {
         }
 
         console.time("sort");
+        let invViewMat = invert4(viewMat);
         let depthIndex = Worker.wasmModule.sortByDepth(
             vertexCount, base.means,
-            viewProj[2], viewProj[6], viewProj[10]
+            // false, viewProj[2], viewProj[6], viewProj[10]
+            true, invViewMat[12], invViewMat[13], invViewMat[14]
         )
         console.timeEnd("sort");
 
@@ -349,11 +350,11 @@ Worker.createWorker = function(self) {
     const throttledSort = () => {
         if (!sortRunning) {
             sortRunning = true;
-            let lastView = viewProj;
-            runSort(lastView);
+            let lastView = transforms.viewProj;
+            runSort(transforms.view, transforms.viewProj);
             setTimeout(() => {
                 sortRunning = false;
-                if (lastView !== viewProj) {
+                if (lastView !== transforms.viewProj) {
                     throttledSort();
                 }
             }, 0);
@@ -367,8 +368,8 @@ Worker.createWorker = function(self) {
             harmonics = e.data.harmonics;
             header = e.data.header;
             postMessage({ base, harmonics });
-        } else if (e.data.view) {
-            viewProj = e.data.view;
+        } else if (e.data.transforms) {
+            transforms = e.data.transforms;
             throttledSort();
         }
     });
@@ -381,14 +382,14 @@ Worker.createPerPixelSortingWorker = function(self) {
     let header;
     let base, harmonics;
     let vertexCount = 0;
-    let viewProj;
+    let transforms;
 
     let lastProj = [];
     let depthIndex = new Uint32Array();
     let lastBaseVertexCount = 0,
         lastHarmonicsLength = 0;
 
-    function runSort(viewProj) {
+    function runSort(viewMat, viewProj) {
         if (!base) return;
         if (harmonics && harmonics.features_sh.length > lastHarmonicsLength) {
             console.time("generate CH/SH texture");
@@ -420,11 +421,11 @@ Worker.createPerPixelSortingWorker = function(self) {
     const throttledSort = () => {
         if (!sortRunning) {
             sortRunning = true;
-            let lastView = viewProj;
-            runSort(lastView);
+            let lastView = transforms.viewProj;
+            runSort(transforms.view, transforms.viewProj);
             setTimeout(() => {
                 sortRunning = false;
-                if (lastView !== viewProj) {
+                if (lastView !== transforms.viewProj) {
                     throttledSort();
                 }
             }, 0);
@@ -438,8 +439,8 @@ Worker.createPerPixelSortingWorker = function(self) {
             harmonics = e.data.harmonics;
             header = e.data.header;
             postMessage({ base, harmonics });
-        } else if (e.data.view) {
-            viewProj = e.data.view;
+        } else if (e.data.transforms) {
+            transforms = e.data.transforms;
             throttledSort();
         }
     });
@@ -609,8 +610,8 @@ Worker.createRayTracingWorker = function(self) {
 
         }
         
-        else if (e.data.view) {
-            viewProj = e.data.view;
+        else if (e.data.transforms) {
+            viewProj = e.data.transforms.viewProj;
             throttledSort();
         }
 

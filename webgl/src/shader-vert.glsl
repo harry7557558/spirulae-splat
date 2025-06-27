@@ -36,7 +36,7 @@ void main () {
     vec3 p_world = uintBitsToFloat(info0.xyz);
     vec4 p_view = view * vec4(p_world, 1);
     vec4 pos2d = projection * p_view;
-    if (pos2d.w <= 0.0 || p_view.z <= 0.0)
+    if (camera_model != 1 && (pos2d.w <= 0.0 || p_view.z <= 0.0))
         return;
 
     uvec4 info1 = texelFetch(u_base_texture,
@@ -70,7 +70,7 @@ void main () {
         }
         else if (camera_model == 1) {  // OPENCV_FISHEYE
             distort_fisheye_with_jac(p_proj, distortion, p_dist, jac_dist);
-            float fr = fisheye_radius(0.5*PI, distortion);
+            float fr = fisheye_radius(PI, distortion);
             if (!(dot(p_dist,p_dist) < fr*fr))
                 return;
             axis_u = distort_jac_3d(p_proj, p_dist, jac_dist, axis_u);

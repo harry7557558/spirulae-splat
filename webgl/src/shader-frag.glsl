@@ -24,14 +24,11 @@ out vec4 fragColor;
 
 
 bool get_intersection(
-    vec2 pos_2d,
+    vec3 raydir,
     out vec3 poi, out vec2 uv
 ) {
     const float radius = 1.0;
-    mat3 A = mat3(
-        vAxesU, vAxesV,
-        vec3(pos_2d, 1.0)
-    );
+    mat3 A = mat3(vAxesU, vAxesV, raydir);
     if (determinant(A) == 0.0) {
         uv = vec2(-radius);
         return false;
@@ -41,7 +38,7 @@ bool get_intersection(
     if (length(uv) > radius)
         return false;
     float t = -uvt.z;
-    poi = vec3(pos_2d*t, t);
+    poi = raydir * t;
     return t > 0.0;
 }
 
@@ -85,16 +82,22 @@ void main () {
     // return;
 
     vec2 pos2d = vec2(1,-1)*(gl_FragCoord.xy-0.5*viewport)/focal;
-    vec2 pos2d_undist = pos2d;
+    vec3 viewdir;
 
     float fr = -1.0;
     if (camera_model == 0) {
         fr = opencv_radius(distortion);
         // pos2d_undist = undistort_opencv_iterative(pos2d, distortion);
+        viewdir = vec3(pos2d, 1.0);
     }
     else if (camera_model == 1) {
-        fr = fisheye_radius(0.5*PI, distortion);
-        pos2d_undist = undistort_fisheye(pos2d, undistortion);
+        fr = fisheye_radius(PI, distortion);
+        // vec2 pos2d_undist = undistort_fisheye(pos2d, undistortion);
+        // viewdir = vec3(pos2d_undist, 1.0);
+        viewdir = unproject_fisheye(pos2d, undistortion);
+    }
+    else {
+        viewdir = vec3(pos2d, 1.0);
     }
     const vec3 vignetting_background = vec3(0.1);
     if (fr > 0.0 && length(pos2d) > fr) {
@@ -104,7 +107,7 @@ void main () {
 
     vec3 poi;
     vec2 uv;
-    if (!get_intersection(pos2d_undist, poi, uv))
+    if (!get_intersection(viewdir, poi, uv))
         discard;
     float alpha;
     if (!get_alpha(uv, vColor.a, alpha))

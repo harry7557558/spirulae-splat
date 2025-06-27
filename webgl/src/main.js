@@ -86,8 +86,11 @@ async function main() {
     let bytesRead = 0;
     const frame = (now) => {
         viewportController.onFrame(now);
-        let viewProj = multiply4(viewportController.projectionMatrix, viewportController.actualViewMatrix);
-        window.postMessage({ view: viewProj });
+        window.postMessage({ transforms: {
+            view: viewportController.actualViewMatrix,
+            proj: viewportController.projectionMatrix,
+            viewProj: multiply4(viewportController.projectionMatrix, viewportController.actualViewMatrix)
+        }});
 
         // viewportController.renderNeeded = true;
         if (vertexCount > 0 && viewportController.renderNeeded) {

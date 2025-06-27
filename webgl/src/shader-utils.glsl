@@ -98,6 +98,37 @@ void distort_opencv_with_jac(
     jac_dist = mat2(jxx, jxy, jxy, jyy);
 }
 
+vec2 project_fisheye(in vec3 p_view, in vec4 dist_coeffs) {
+    float k1 = dist_coeffs.x;
+    float k2 = dist_coeffs.y;
+    float k3 = dist_coeffs.z;
+    float k4 = dist_coeffs.w;
+
+    float r = length(p_view.xy);
+    float theta = atan(r, p_view.z);
+    vec2 uv = p_view.xy * theta / r;
+
+    float r2 = dot(uv, uv);
+    float radial = 1.0 + r2*(k1 + r2*(k2 + r2*(k3 + r2*k4)));
+    return uv * radial;
+}
+
+vec3 unproject_fisheye(in vec2 uv, in vec4 undist_coeffs) {
+
+    float l1 = undist_coeffs.x;
+    float l2 = undist_coeffs.y;
+    float l3 = undist_coeffs.z;
+    float l4 = undist_coeffs.w;
+
+    float r2 = dot(uv, uv);
+    uv *= 1.0 + r2*(l1 + r2*(l2 + r2*(l3 + r2*l4)));
+
+    float theta = length(uv);
+    float theta2 = theta*theta;
+    float k = sin(theta)/theta;
+    return vec3(uv.x*k, uv.y*k, cos(theta));
+}
+
 vec2 distort_fisheye(in vec2 p, in vec4 dist_coeffs) {
     float k1 = dist_coeffs.x;
     float k2 = dist_coeffs.y;
@@ -445,12 +476,9 @@ bool project_bound_fisheye(
     for (float i = 0.0; i < N; i++) {
         float t = 2.0*PI*i/N;
         vec3 p3d = T+V0*cos(t)+V1*sin(t);
-        if (p3d.z > 1e-4) {
-            vec2 p = p3d.xy / p3d.z;
-            vec2 c = distort_fisheye(p, dist_coeffs);
-            x0 = min(x0, c.x); x1 = max(x1, c.x);
-            y0 = min(y0, c.y); y1 = max(y1, c.y);
-        }
+        vec2 c = project_fisheye(p3d, dist_coeffs);
+        x0 = min(x0, c.x); x1 = max(x1, c.x);
+        y0 = min(y0, c.y); y1 = max(y1, c.y);
     }
     if (x0 > x1 || y0 > y1)
         return false;
