@@ -147,8 +147,8 @@ class SpirulaeModelConfig(ModelConfig):
     """Number of gaussians to initialize if random init is used"""
     random_scale: float = 1.0
     """Position standard deviation to initialize random gaussians"""
-    ssim_lambda: float = 0.2  # 0.2 in original paper
-    """weight of ssim loss"""
+    ssim_lambda: float = 0.4
+    """weight of ssim loss; 0.2 for optimal PSNR, higher for better visual quality"""
     ssim_warmup: int = 0
     """warmup of ssim loss"""
     use_camera_optimizer: bool = False
@@ -200,7 +200,7 @@ class SpirulaeModelConfig(ModelConfig):
     """minimum opacity for MCMC relocation"""
     mcmc_prob_grad_weight: float = 0.0
     """weight of position gradient used in sampling Gaussians to relocate/add to, uses only opacity if 0 and only gradient of 1"""
-    relocate_screen_size: float = 0.4
+    relocate_screen_size: float = float('inf')
     """if a gaussian is more than this fraction of screen space, relocate it
         Useful for fisheye with 3DGUT, may drop PSNR for conventional cameras"""
 
