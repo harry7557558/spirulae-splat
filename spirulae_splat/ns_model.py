@@ -202,7 +202,14 @@ class SpirulaeModelConfig(ModelConfig):
     """weight of position gradient used in sampling Gaussians to relocate/add to, uses only opacity if 0 and only gradient of 1"""
     relocate_screen_size: float = float('inf')
     """if a gaussian is more than this fraction of screen space, relocate it
-        Useful for fisheye with 3DGUT, may drop PSNR for conventional cameras"""
+        Useful for fisheye with 3DGUT, may drop PSNR for conventional cameras
+        For likely better quality, use mcmc_max_screen_size instead"""
+    mcmc_max_screen_size: float = 0.15
+    """if a gaussian is more than this fraction of screen space, clip scale and increase opacity
+        Intended to be an MCMC-friendly alternative of relocate_screen_size"""
+    mcmc_max_world_size: float = float('inf')
+    """if a gaussian is more than this of world space, clip scale
+        Useful if you see huge floaters at a distance in large indoor space"""
 
     # representation
     use_per_pixel_sorting: bool = False
@@ -319,9 +326,6 @@ class SpirulaeModelConfig(ModelConfig):
         Useful for removing floaters from sky for outdoor scenes"""
     alpha_supervision_weight_under: float = 0.0
     """Similar to alpha_supervision_weight, but applies when renderer opacity is lower than reference opacity"""
-
-    # Deprecated; Keep for backward compatibility
-    loss_scale: float = 1.0
 
 
 class SpirulaeModel(Model):
@@ -468,7 +472,9 @@ class SpirulaeModel(Model):
             warmup_steps = (self.config.resolution_schedule * (self.config.num_downscales+1)
                             - self.config.mcmc_warmup_length) / self.config.refine_every
             grow_factor = max(final_num / current_num, 1.0) ** (1/warmup_steps)
-            grow_factor = min(grow_factor, 1.05)
+            # grow_factor = min(grow_factor, 1.05)
+            # grow_factor = max(grow_factor, 1.05)
+            grow_factor = 1.05
 
             self.strategy = MCMCStrategy(
                 cap_max=self.config.mcmc_cap_max,
@@ -481,6 +487,8 @@ class SpirulaeModel(Model):
                 prob_grad_weight=self.config.mcmc_prob_grad_weight,
                 is_3dgs=self.config.use_3dgs,
                 relocate_scale2d=self.config.relocate_screen_size,
+                max_scale2d=self.config.mcmc_max_screen_size,
+                max_scale3d=self.config.mcmc_max_world_size,
             )
             self.strategy_state = self.strategy.initialize_state()
             return

@@ -1,4 +1,5 @@
 import math
+import numpy as np
 from dataclasses import dataclass
 from typing import Any, Dict, Union, Literal
 
@@ -54,6 +55,8 @@ class MCMCStrategy(Strategy):
     grow_factor: float = 1.05
     min_opacity: float = 0.005
     relocate_scale2d: float = float('inf')
+    max_scale2d: float = float('inf')
+    max_scale3d: float = float('inf')
     prob_grad_weight: float = 0.0
     is_3dgs: bool = False
     verbose: bool = False
@@ -61,7 +64,9 @@ class MCMCStrategy(Strategy):
 
     def initialize_state(self) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy."""
-        return { "grad2d": None, "count": None, "radii": None }
+        if self.prob_grad_weight > 0.0:
+            return { "grad2d": None, "count": None, "radii": None }
+        return { "radii": None }
 
     @torch.no_grad()
     def _update_state(
@@ -86,10 +91,11 @@ class MCMCStrategy(Strategy):
         # initialize state on the first run
         n_gaussian = len(list(params.values())[0])
 
-        if state["grad2d"] is None:
-            state["grad2d"] = torch.zeros(n_gaussian, device=grad_info.device)
-        if state["count"] is None:
-            state["count"] = torch.zeros(n_gaussian, device=grad_info.device)
+        if self.prob_grad_weight > 0.0:
+            if state["grad2d"] is None:
+                state["grad2d"] = torch.zeros(n_gaussian, device=grad_info.device)
+            if state["count"] is None:
+                state["count"] = torch.zeros(n_gaussian, device=grad_info.device)
         if state["radii"] is None:
             assert "radii" in info, "radii is required but missing."
             state["radii"] = torch.zeros(n_gaussian, device=grad_info.device)
@@ -106,11 +112,28 @@ class MCMCStrategy(Strategy):
             radii = info["radii"][sel]  # [nnz]
 
         # Should be ideally using scatter max
+        normalized_radii = radii / float(max(info["width"], info["height"]))
         state["radii"][gs_ids] = torch.maximum(
             state["radii"][gs_ids],
-            # normalize radii to [0, 1] screen space
-            radii / float(max(info["width"], info["height"])),
+            normalized_radii
         )
+
+        # large splats in screen space
+        # clip scale while increase opacity to encourage being relocated to
+        if np.isfinite(self.max_scale2d):
+            assert not packed
+            # TODO: optionally, actually do anisotropic scale in 3d
+            oversize_factor = torch.clip(normalized_radii / self.max_scale2d, min=1.0)
+            oversize_factor = torch.log(oversize_factor).unsqueeze(-1)
+            scales, opacities = params['scales'].data, params['opacities'].data
+            scales[gs_ids] -= oversize_factor
+            opacities[gs_ids] += scales.shape[-1] * oversize_factor
+            opacities[gs_ids] = torch.clip(opacities[gs_ids], max=5.0)  # sigmoid(5.0)=0.993
+
+        # large splats in world space
+        # clip scale, without increasing opacity (which causes problems with background removal)
+        if np.isfinite(self.max_scale3d):
+            params['scales'].data.clip_(max=math.log(self.max_scale3d))
 
         if not (self.prob_grad_weight > 0.0):
             return
@@ -226,6 +249,9 @@ class MCMCStrategy(Strategy):
                     f"Now having {len(params['means'])} GSs."
                 )
 
+            if self.prob_grad_weight > 0.0:
+                state["grad2d"] *= 0.0
+                state["count"] *= 0.0
             torch.cuda.empty_cache()
 
         # add noise to GSs
@@ -248,7 +274,7 @@ class MCMCStrategy(Strategy):
 
         # relocate huge splats
         # TODO: logically it's better to split in this case?
-        if step < self.refine_stop_iter:
+        if step < self.refine_stop_iter and np.isfinite(self.relocate_scale2d):
             relocate_mask |= (state["radii"] > self.relocate_scale2d)
         state["radii"] *= 0
 
