@@ -14,7 +14,7 @@ uniform vec4 distortion;
 uniform vec4 undistortion;
 
 #include "shader-utils-ch.glsl"
-#line 16
+#line 18
 
 flat in uvec4 vColor0;  // position
 flat in uvec4 vColor1;  // shape
@@ -83,13 +83,10 @@ void main () {
     float fr = -1.0;
     if (camera_model == 0) {
         fr = opencv_radius(distortion);
-        // pos2d_undist = undistort_opencv_iterative(pos2d, distortion);
         viewdir = vec3(pos2d, 1.0);
     }
     else if (camera_model == 1) {
         fr = fisheye_radius(PI, distortion);
-        // vec2 pos2d_undist = undistort_fisheye(pos2d, undistortion);
-        // viewdir = vec3(pos2d_undist, 1.0);
         viewdir = unproject_fisheye(pos2d, undistortion);
     }
     else {
@@ -122,17 +119,23 @@ void main () {
         float sc = uintBitsToFloat(vColor1.w);
         mat3 M = mat3(axes[0], axes[1], sc * cross(axes[0], axes[1]));
         mat3 cov3d = M * transpose(M);
-        float rz = 1.0 / p_view.z;
-        float tx = p_view.x * rz;
-        float ty = p_view.y * rz;
-        mat3x2 J = mat3x2(rz, 0.0, 0.0, rz, -tx * rz, -ty * rz);
+        mat3x2 J;
+        vec2 t;
+        if (camera_model == 1) {  // opencv fisheye exact
+            project_fisheye_with_jac(p_view, distortion, t, J);
+        }
+        else {  // pinhole, undistorted
+            float rz = 1.0 / p_view.z;
+            t = p_view.xy * rz;
+            J = mat3x2(rz, 0.0, 0.0, rz, -t.x * rz, -t.y * rz);
+        }
         mat2x2 cov2d = J * cov3d * transpose(J);
         cov2d = inverse(cov2d);
-        float dx = tx - pos2d.x;
-        float dy = ty - pos2d.y;
+        float dx = t.x - pos2d.x;
+        float dy = t.y - pos2d.y;
         float sigma = 0.5 * (cov2d[0][0] * dx*dx + cov2d[1][1] * dy*dy) + cov2d[0][1] * dx*dy;
         alpha = rgba.a * exp(-sigma);
-        if (sigma < 0.0 || alpha < 1.0/255.0)
+        if (sigma < 0.0 || alpha < 0.01)
             discard;
     }
 

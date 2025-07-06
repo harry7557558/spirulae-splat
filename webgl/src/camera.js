@@ -40,10 +40,11 @@ CameraPresets["imx219"] = {
     "fy": 576.1624750819685,
     "cx": 607.5612147329209,
     "cy": 361.0335080022911,
-    "k1": 0.044675886593263776,
-    "k2": -0.012454840182315909,
-    "k3": 0.008726394633797787,
-    "k4": -0.0032802897607147976,
+    // "k1": 0.044675886593263776,
+    // "k2": -0.012454840182315909,
+    // "k3": 0.008726394633797787,
+    // "k4": -0.0032802897607147976,
+    k1: 0.0, k2: 0.0, k3: 0.0, k4: 0.0,
     "model": "OPENCV_FISHEYE",
 };
 
@@ -220,7 +221,7 @@ CameraPresets.createSelector = function() {
     }
     select.addEventListener("input", updateSelectedCamera);
     window.addEventListener("resize", updateSelectedCamera);
-    select.value = "s21";
+    select.value = "s21wide";
     updateSelectedCamera();
     return select;
 }

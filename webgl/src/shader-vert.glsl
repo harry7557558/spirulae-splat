@@ -93,7 +93,7 @@ void main () {
     float cx = 0.5 * viewport.x;
     float cy = 0.5 * viewport.y;
     vec2 center;
-    vec2 bound = vec2(0.0);
+    mat2 bound = mat2(0.0);  // obb
     
     vec3 V0 = axis_u;
     vec3 V1 = axis_v;
@@ -114,11 +114,12 @@ void main () {
     // compute axis-aligned bounding box
     bool intersect;
     if (useExactDistortion) {
+        vec2 bound2;
         if (camera_model == 0)
             intersect = project_bound_opencv(
                 p_view.xyz, V0, V1,
                 fx, fy, cx, cy, distortion,
-                center, bound
+                center, bound2  // TODO
             );
         else if (camera_model == 1)
             intersect = project_bound_fisheye(
@@ -141,9 +142,11 @@ void main () {
         );
     }
 
+    vec2 bound_extend = abs(bound[0]) + abs(bound[1]);
     if (!intersect ||
-        center.x+bound.x < 0.0 || center.x-bound.x > viewport.x ||
-        center.y+bound.y < 0.0 || center.y-bound.y > viewport.y
+        center.x+bound_extend.x < 0.0 || center.x-bound_extend.x > viewport.x ||
+        center.y+bound_extend.y < 0.0 || center.y-bound_extend.y > viewport.y ||
+        bound_extend.x > 0.5*viewport.x || bound_extend.y > 0.5*viewport.y
     ) return;
 
     vec3 rgb = rgba.xyz;
@@ -165,7 +168,7 @@ void main () {
     vColor2 = vec4(rgb, rgba.w);
 
     gl_Position = vec4(
-        vec2(1,-1) * (-1.0 + 2.0 * (center + vertexPosition * bound.xy) / viewport),
+        vec2(1,-1) * (-1.0 + 2.0 * (center + bound * vertexPosition) / viewport),
         0.0, 1.0);
 
 }
