@@ -30,17 +30,11 @@ bool get_intersection(
 ) {
     const float radius = 1.0;
     mat3 A = mat3(axis_u, axis_v, raydir);
-    if (determinant(A) == 0.0) {
-        uv = vec2(-radius);
-        return false;
-    }
     vec3 uvt = -inverse(A) * pos;
     uv = uvt.xy;
-    if (length(uv) > radius)
-        return false;
     float t = -uvt.z;
     poi = raydir * t;
-    return t > 0.0;
+    return length(uv) < radius && t > 0.0;
 }
 
 

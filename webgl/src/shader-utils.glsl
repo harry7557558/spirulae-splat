@@ -490,3 +490,40 @@ bool project_bound_fisheye(
     bound = 0.5*(b1-b0) * vec2(fx,fy);
     return true;
 }
+
+
+// https://graphics.pixar.com/library/OrthonormalB/paper.pdf
+void branchlessONB(vec3 n, out vec3 b1, out vec3 b2) {
+    float s = sign(n.z);
+    float a = -1.0 / (s + n.z);
+    float b = n.x * n.y * a;
+    b1 = vec3(1.0 + s * n.x * n.x * a, s * b, -s * n.x);
+    b2 = vec3(b, s + n.y * n.y * a, -n.y);
+}
+
+void project_ellipsoid_to_ellipse(
+    vec3 u, vec3 v, vec3 w,
+    vec3 n,
+    out vec3 a, out vec3 b
+) {
+    vec3 e1, e2;
+    branchlessONB(n, e1, e2);
+
+    vec2 u2 = vec2(dot(e1, u), dot(e2, u));
+    vec2 v2 = vec2(dot(e1, v), dot(e2, v));
+    vec2 w2 = vec2(dot(e1, w), dot(e2, w));
+
+    float Sxx = u2.x*u2.x + v2.x*v2.x + w2.x*w2.x;
+    float Sxy = u2.x*u2.y + v2.x*v2.y + w2.x*w2.y;
+    float Syy = u2.y*u2.y + v2.y*v2.y + w2.y*w2.y;
+
+    float tr = Sxx + Syy;
+    float delta = length(vec2(Sxx - Syy, 2.0*Sxy));
+    float lambda1 = 0.5 * (tr - delta);
+    float lambda2 = 0.5 * (tr + delta);
+    vec2 eigvec1 = sqrt(lambda1) * normalize(vec2(Sxy, lambda1 - Sxx));
+    vec2 eigvec2 = sqrt(lambda2) * normalize(vec2(Sxy, lambda2 - Sxx));
+
+    a = e1 * eigvec1.x + e2 * eigvec1.y;
+    b = e1 * eigvec2.x + e2 * eigvec2.y;
+}

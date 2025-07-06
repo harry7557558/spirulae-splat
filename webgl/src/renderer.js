@@ -186,6 +186,8 @@ function RasterRenderer(gl, viewportController) {
     gl.vertexAttribIPointer(a_index, 1, gl.INT, false, 0, 0);
     gl.vertexAttribDivisor(a_index, 1);
 
+    this.gsDim = 0;
+
     this.setUniforms = function(program=null) {
         if (program === null) {
             this.setUniforms(splatProgram);
@@ -194,6 +196,7 @@ function RasterRenderer(gl, viewportController) {
         }
         let camera = CameraPresets.camera;
         gl.useProgram(program);
+        gl.uniform1i(gl.getUniformLocation(program, "GS_DIM"), this.gsDim);
         gl.uniformMatrix4fv(gl.getUniformLocation(program, "projection"),
             false, viewportController.projectionMatrix);
         gl.uniform2fv(gl.getUniformLocation(program, "focal"),
@@ -262,6 +265,17 @@ function RasterRenderer(gl, viewportController) {
     }
 
     this.onFrame = function(header, vertexCount) {
+        if (this.gsDim == 0) {
+            let compViews = header.primitives.base.componentViews;
+            for (var idx in compViews) {
+                if (compViews[idx].key == "scales") {
+                    let type = compViews[idx].type;
+                    this.gsDim = Number(type.slice(type.length-1));
+                    break;
+                }
+            }
+        }
+
         this.setUniforms();
 
         let background = header.config.background_color;
@@ -390,7 +404,6 @@ function RayTracingRenderer(gl, viewportController) {
 
         gl.canvas.width = Math.round(innerWidth / downsample);
         gl.canvas.height = Math.round(innerHeight / downsample);
-        console.log(gl.canvas);
         gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
 
         this.setUniforms();

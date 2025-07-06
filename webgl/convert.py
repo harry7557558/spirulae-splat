@@ -199,7 +199,7 @@ class SplatModel:
             self.load_ply(file_path)
 
     def load_ckpt(self, file_path):
-        checkpoint = torch.load(file_path)
+        checkpoint = torch.load(file_path, weights_only=False)
         pipeline = checkpoint['pipeline']
         # print(pipeline.keys())
         # print(pipeline['_model.camera_optimizer.pose_adjustment'])
@@ -248,7 +248,10 @@ class SplatModel:
 
         for v in plydata["vertex"]:
             means.append([v["x"], v["y"], v["z"]])
-            scales.append([v["scale_0"], v["scale_1"]])
+            if 'scale_2' in v:
+                scales.append([v["scale_0"], v["scale_1"], v["scale_2"]])
+            else:
+                scales.append([v["scale_0"], v["scale_1"]])
             quats.append([v["rot_0"], v["rot_1"], v["rot_2"], v["rot_3"]])
             features_dc.append([v["f_dc_0"], v["f_dc_1"], v["f_dc_2"]])
             opacities.append([v["opacity"]])
@@ -310,6 +313,16 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
     print("{:.2f} MB floats".format(n_floats*4/1024**2))
     print()
 
+    # filter INF/NaN
+    mask = torch.isfinite(means.sum(-1))
+    if not mask.all():
+        (features_dc, features_sh, features_ch,
+            means, opacities, quats, scales) = \
+            [x[mask] for x in (features_dc, features_sh, features_ch,
+            means, opacities, quats, scales)]
+        print(f"Filtered {(~mask).sum()}/{len(mask)} Inf/NaN")
+        print()
+
     if bit_sh <= 0:
         sh_degree, num_sh = 0, 0
     if bit_ch <= 0:
@@ -342,7 +355,7 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
     quats = quats / torch.norm(quats, dim=1, keepdim=True)
     opacities = torch.sigmoid(opacities)
 
-    weight = torch.exp(scales[:,0]+scales[:,1]) * opacities[:,0]
+    weight = torch.exp(scales[:,0].sum(-1)) * opacities[:,0]
 
     if rotate:
         from scipy.spatial.transform import Rotation
@@ -428,9 +441,10 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
     ]
 
     print("Packing base...")
+    n_scale = scales.shape[-1]
     componentViews, componentLength = component_view_psa([
         { "key": "means", "type": "quat3", "bitLength": 3*bit_pos, "quatBufferView": 0 },
-        { "key": "scales", "type": "quat2", "bitLength": 2*bit_sc, "quatBufferView": 1 },
+        { "key": "scales", "type": f"quat{n_scale}", "bitLength": n_scale*bit_sc, "quatBufferView": 1 },
         { "key": "quats", "type": "quat4", "bitLength": 4*bit_quat, "quatBufferView": 2 },
         { "key": "opacities", "type": "quat", "bitLength": bit_opac, "quatBufferView": 3 },
         { "key": "features_dc", "type": "quat3", "bitLength": 3*bit_dc, "quatBufferView": 4 },

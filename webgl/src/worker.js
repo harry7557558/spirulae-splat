@@ -211,6 +211,8 @@ Worker.unpackModel = function(header, buffer) {
 
 Worker.generateBaseTexture = function(header, base) {
     let vertexCount = base.opacities.length;
+    let gsDim = base.scales.length / vertexCount;  // 2 or 3 for 2dgs/3dgs
+    console.log('xDGS:', gsDim);
 
     var basewidth = 1024 * 3;
     var baseheight = Math.ceil((3 * vertexCount) / basewidth);
@@ -224,9 +226,20 @@ Worker.generateBaseTexture = function(header, base) {
         basedataF[iTex + 1] = base.means[3*i+1];
         basedataF[iTex + 2] = base.means[3*i+2];
 
-        // scale - 2 floats, info0 w, info1 x
-        basedataF[iTex + 3] = Math.exp(base.scales[2*i+0]);
-        basedataF[iTex + 4] = Math.exp(base.scales[2*i+1]);
+        // scale - info0 w, info1 x
+        if (gsDim == 2) {
+            // 2dgs
+            basedataF[iTex + 3] = Math.exp(base.scales[2*i+0]);
+            basedataF[iTex + 4] = Math.exp(base.scales[2*i+1]);
+        }
+        else {
+            // 3dgs
+            basedata[iTex + 3] = packHalf2x16(
+                Math.exp(base.scales[3*i+0]),
+                Math.exp(base.scales[3*i+1])
+            );
+            basedataF[iTex + 4] = Math.exp(base.scales[3*i+2]);
+        }
 
         // quat - 4 halfs, info1 yz
         let quat = [

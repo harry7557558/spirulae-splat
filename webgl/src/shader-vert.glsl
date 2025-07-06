@@ -5,6 +5,8 @@ precision highp int;
 #include "shader-utils.glsl"
 #line 7
 
+uniform int GS_DIM;
+
 uniform highp usampler2D u_base_texture;
 uniform mat4 projection, view;
 uniform vec2 focal;
@@ -18,16 +20,14 @@ layout(location = 1) in int index;
 #include "shader-utils-sh.glsl"
 #line 20
 
-flat out vec4 vColor;
-flat out vec3 vPosition;
-flat out vec3 vAxesU;
-flat out vec3 vAxesV;
-flat out int vIndex;
+flat out uvec4 vColor0;  // position
+flat out uvec4 vColor1;  // shape
+flat out vec4 vColor2;  // rgba
 
 
 void main () {
     gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
-    vPosition = vec3(0);
+    vColor0.x = uint(-1);
 
     if (index == -1) return;
 
@@ -45,7 +45,14 @@ void main () {
         ivec2((uint(index) & 0x3ffu) * 3u + 2u, uint(index) >> 10), 0);
 
     // patch orientation
-    vec2 scale = uintBitsToFloat(uvec2(info0.w, info1.x));
+    vec3 scale = vec3(0);
+    if (GS_DIM == 2) {
+        scale.xy = uintBitsToFloat(uvec2(info0.w, info1.x));
+    }
+    else if (GS_DIM == 3) {
+        scale.xy = unpackHalf2x16(info0.w);
+        scale.z = uintBitsToFloat(info1.x);
+    }
     vec4 quat = vec4(unpackHalf2x16(info1.y), unpackHalf2x16(info1.z));
 
     mat3 R0 = mat3(view);
@@ -53,6 +60,7 @@ void main () {
     mat3 R = R0 * Rq;
     vec3 axis_u = scale.x * R[0];
     vec3 axis_v = scale.y * R[1];
+    vec3 axis_w = scale.z * R[2];
 
     // distortion
     bool useExactDistortion = (camera_model == 1);
@@ -86,33 +94,48 @@ void main () {
     float cy = 0.5 * viewport.y;
     vec2 center;
     vec2 bound = vec2(0.0);
-    const float kr = 1.0;
+    
+    vec3 V0 = axis_u;
+    vec3 V1 = axis_v;
+
+    vec4 rgba = vec4(unpackHalf2x16(info2.y), unpackHalf2x16(info2.z));
+    if (GS_DIM == 3) {
+        const float min_opac = 0.01;
+        float extend = sqrt(2.0*max(log(rgba.w/min_opac), 0.0));
+        project_ellipsoid_to_ellipse(
+            axis_u, axis_v, axis_w,
+            normalize(p_view.xyz),
+            V0, V1
+        );
+        V0 *= extend;
+        V1 *= extend;
+    }
 
     // compute axis-aligned bounding box
     bool intersect;
     if (useExactDistortion) {
         if (camera_model == 0)
             intersect = project_bound_opencv(
-                p_view.xyz, kr*axis_u, kr*axis_v,
+                p_view.xyz, V0, V1,
                 fx, fy, cx, cy, distortion,
                 center, bound
             );
         else if (camera_model == 1)
             intersect = project_bound_fisheye(
-                p_view.xyz, kr*axis_u, kr*axis_v,
+                p_view.xyz, V0, V1,
                 fx, fy, cx, cy, distortion,
                 center, bound
             );
         else
             intersect = project_bound_perspective(
-                p_view.xyz, kr*axis_u, kr*axis_v,
+                p_view.xyz, V0, V1,
                 fx, fy, cx, cy,
                 center, bound
             );
     }
     else {
         intersect = project_bound_perspective(
-            p_view.xyz, kr*axis_u, kr*axis_v,
+            p_view.xyz, V0, V1,
             fx, fy, cx, cy,
             center, bound
         );
@@ -123,7 +146,6 @@ void main () {
         center.y+bound.y < 0.0 || center.y-bound.y > viewport.y
     ) return;
 
-    vec4 rgba = vec4(unpackHalf2x16(info2.y), unpackHalf2x16(info2.z));
     vec3 rgb = rgba.xyz;
     if (sh_dim > 0) {
         init_coeffs(index);
@@ -132,11 +154,15 @@ void main () {
     }
     rgb = max(rgb, 0.0);
 
-    vColor = vec4(rgb, rgba.w);
-    vPosition = p_view.xyz;
-    vAxesU = axis_u;
-    vAxesV = axis_v;
-    vIndex = index;
+    vColor0.x = uint(index);
+    vColor0.y = floatBitsToUint(p_view.x);
+    vColor0.z = floatBitsToUint(p_view.y);
+    vColor0.w = floatBitsToUint(p_view.z);
+    vColor1.x = packHalf2x16(axis_u.xy);
+    vColor1.y = packHalf2x16(vec2(axis_u.z, axis_v.x));
+    vColor1.z = packHalf2x16(axis_v.yz);
+    vColor1.w = floatBitsToUint(scale.z/(scale.x*scale.y));
+    vColor2 = vec4(rgb, rgba.w);
 
     gl_Position = vec4(
         vec2(1,-1) * (-1.0 + 2.0 * (center + vertexPosition * bound.xy) / viewport),
