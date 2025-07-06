@@ -227,10 +227,6 @@ class SplatTrainingLosses(torch.nn.Module):
                 reg_alpha = 4.0*alpha*(1.0-alpha)
             alpha_reg = weight_alpha_reg * reg_alpha.mean()
 
-        bilagrid_tv_loss = 0.0
-        if self.config.use_bilateral_grid:
-            bilagrid_tv_loss = 10 * total_variation_loss(self.bil_grids.grids)
-
         # metrics, readable from console during training
         with torch.no_grad():
             if not hasattr(self, '_running_metrics'):
@@ -263,8 +259,81 @@ class SplatTrainingLosses(torch.nn.Module):
             "normal_reg": normal_reg,
             "alpha_reg": alpha_reg,
             # [E] exposure
-            "tv_loss": bilagrid_tv_loss,
+            "tv_loss": 0.0,  # see get_static_losses()
             "exposure_param_reg": self.config.exposure_reg_param * exposure_param_reg,
         }
+
+        return loss_dict
+
+    def erank_regularization(self, gauss_scales):
+        scales = torch.exp(2.0*gauss_scales)
+        if self.config.use_3dgs:
+            x, y, z = torch.unbind(scales, -1)
+            s = x + y + z
+            s1 = torch.fmax(torch.fmax(x, y), z) / s
+            s3 = torch.fmin(torch.fmin(x, y), z) / s
+            s2 = 1 - s1 - s3
+            r = torch.exp(-s1*torch.log(s1) - s2*torch.log(s2) - s3*torch.log(s3))
+            reg = torch.relu(-torch.log(r - 0.99999))
+            return self.config.erank_reg * reg.mean() + \
+                self.config.erank_reg_s3 * s3.mean()
+        else:
+            x, y = torch.unbind(scales, -1)
+            s = x + y
+            s1 = torch.fmax(x, y) / s
+            s2 = torch.fmin(x, y) / s
+            r = torch.exp(-s1*torch.log(s1) - s2*torch.log(s2))
+            reg = torch.relu(-torch.log(r - 0.99999))
+            return self.config.erank_reg * reg.mean()
+
+    def get_static_losses(self, step: int, gauss_quats, gauss_scales, gauss_opacities, loss_dict):
+        self.step = step
+
+        # bilagrid total variation loss
+        bilagrid_tv_loss = 0.0
+        if self.config.use_bilateral_grid:
+            bilagrid_tv_loss = 10 * total_variation_loss(self.bil_grids.grids)
+        loss_dict["tv_loss"] = bilagrid_tv_loss
+
+        # scale regularization
+        scale_reg = 0.0
+        if self.config.scale_regularization_weight > 0.0:
+            scale_exp = torch.exp(gauss_scales)
+            scale_reg = (
+                torch.maximum(
+                    scale_exp.amax(dim=-1) / scale_exp.amin(dim=-1),
+                    torch.tensor(self.config.max_gauss_ratio),
+                )
+                - self.config.max_gauss_ratio
+            )
+            scale_reg = self.config.scale_regularization_weight * scale_reg.mean()
+        loss_dict['scale_reg'] = scale_reg
+
+        # MCMC regularizers
+        mcmc_opacity_reg, mcmc_scale_reg = 0.0, 0.0
+        if self.config.use_mcmc and self.step < self.config.stop_refine_at:
+            if self.config.mcmc_opacity_reg > 0.0:
+                mcmc_opacity_reg = torch.sigmoid(gauss_opacities).mean()
+                mcmc_opacity_reg = self.config.mcmc_opacity_reg * mcmc_opacity_reg
+            if self.config.mcmc_scale_reg > 0.0:
+                mcmc_scale_reg = torch.exp(gauss_scales).mean()
+                # mcmc_scale_reg = gauss_scales.mean()
+                # mcmc_scale_reg = torch.where(gauss_scales < 0, torch.exp(gauss_scales), gauss_scales+1).mean()
+                mcmc_scale_reg = self.config.mcmc_scale_reg * mcmc_scale_reg
+        loss_dict['mcmc_opacity_reg'] = mcmc_opacity_reg
+        loss_dict['mcmc_scale_reg'] = mcmc_scale_reg
+
+        # 3DGS regularizers
+        erank_reg = 0.0
+        if self.step >= self.config.erank_reg_warmup and (
+            self.config.erank_reg > 0.0 or self.config.erank_reg_s3 > 0.0
+        ):
+            erank_reg = self.erank_regularization(gauss_scales)
+        loss_dict['erank_reg'] = erank_reg
+
+        # regularizations for parameters
+        quat_norm = gauss_quats.norm(dim=-1)
+        quat_norm_reg = 0.01 * (quat_norm-1.0-torch.log(quat_norm)).mean()
+        loss_dict['quat_norm_reg'] = quat_norm_reg
 
         return loss_dict

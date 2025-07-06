@@ -1032,27 +1032,6 @@ class SpirulaeModel(Model):
             self.camera_optimizer.get_metrics_dict(metrics_dict)
         return metrics_dict
 
-    def erank_regularization(self):
-        scales = torch.exp(2.0*self.scales)
-        if self.config.use_3dgs:
-            x, y, z = torch.unbind(scales, -1)
-            s = x + y + z
-            s1 = torch.fmax(torch.fmax(x, y), z) / s
-            s3 = torch.fmin(torch.fmin(x, y), z) / s
-            s2 = 1 - s1 - s3
-            r = torch.exp(-s1*torch.log(s1) - s2*torch.log(s2) - s3*torch.log(s3))
-            reg = torch.relu(-torch.log(r - 0.99999))
-            return self.config.erank_reg * reg.mean() + \
-                self.config.erank_reg_s3 * s3.mean()
-        else:
-            x, y = torch.unbind(scales, -1)
-            s = x + y
-            s1 = torch.fmax(x, y) / s
-            s2 = torch.fmin(x, y) / s
-            r = torch.exp(-s1*torch.log(s1) - s2*torch.log(s2))
-            reg = torch.relu(-torch.log(r - 0.99999))
-            return self.config.erank_reg * reg.mean()
-
     def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict.
 
@@ -1061,6 +1040,8 @@ class SpirulaeModel(Model):
             batch: ground truth batch corresponding to outputs
             metrics_dict: dictionary of metrics, some of which we can use for loss
         """
+
+        # Per-image losses
         if isinstance(outputs, list) and isinstance(batch, list):
             assert len(outputs) == len(batch)
             if self._train_batch_size != len(outputs):
@@ -1068,63 +1049,27 @@ class SpirulaeModel(Model):
                 self._set_strategy()
             losses = []
             for outputs_i, batch_i in zip(outputs, batch):
-                losses.append(self.get_loss_dict(outputs_i, batch_i))
-            loss = losses[0]
+                losses.append(self.training_losses(self.step, batch_i, outputs_i))
+            loss_dict = losses[0]
             for loss_i in losses[1:]:
                 for key, value in loss_i.items():
-                    loss[key] = loss[key] + value
-            for key in loss:
-                loss[key] = loss[key] / self._train_batch_size
-            self.print_loss_dict(loss)
-            return loss
+                    loss_dict[key] = loss_dict[key] + value
+            for key in loss_dict:
+                loss_dict[key] = loss_dict[key] / self._train_batch_size
 
-        loss_dict = self.training_losses(self.step, batch, outputs)
+        else:
+            loss_dict = self.training_losses(self.step, batch, outputs)
 
-        # scale regularization
-        scale_reg = 0.0
-        if self.config.scale_regularization_weight > 0.0:
-            scale_exp = torch.exp(self.scales)
-            scale_reg = (
-                torch.maximum(
-                    scale_exp.amax(dim=-1) / scale_exp.amin(dim=-1),
-                    torch.tensor(self.config.max_gauss_ratio),
-                )
-                - self.config.max_gauss_ratio
-            )
-            scale_reg = self.config.scale_regularization_weight * scale_reg.mean()
-        loss_dict['scale_reg'] = scale_reg
-
-        # MCMC regularizers
-        mcmc_opacity_reg, mcmc_scale_reg = 0.0, 0.0
-        if self.config.use_mcmc and self.step < self.config.stop_refine_at:
-            if self.config.mcmc_opacity_reg > 0.0:
-                mcmc_opacity_reg = torch.sigmoid(self.opacities).mean()
-                mcmc_opacity_reg = self.config.mcmc_opacity_reg * mcmc_opacity_reg
-            if self.config.mcmc_scale_reg > 0.0:
-                mcmc_scale_reg = torch.exp(self.scales).mean()
-                # mcmc_scale_reg = self.scales.mean()
-                # mcmc_scale_reg = torch.where(self.scales < 0, torch.exp(self.scales), self.scales+1).mean()
-                mcmc_scale_reg = self.config.mcmc_scale_reg * mcmc_scale_reg
-        loss_dict['mcmc_opacity_reg'] = mcmc_opacity_reg
-        loss_dict['mcmc_scale_reg'] = mcmc_scale_reg
-
-        # 3DGS regularizers
-        erank_reg = 0.0
-        if self.step >= self.config.erank_reg_warmup and (
-            self.config.erank_reg > 0.0 or self.config.erank_reg_s3 > 0.0
-        ):
-            erank_reg = self.erank_regularization()
-        loss_dict['erank_reg'] = erank_reg
-
-        # regularizations for parameters
-        quat_norm = self.quats.norm(dim=-1)
-        quat_norm_reg = 0.01 * (quat_norm-1.0-torch.log(quat_norm)).mean()
-        loss_dict['quat_norm_reg'] = quat_norm_reg
+        # Per-splat losses
+        self.training_losses.get_static_losses(
+            self.step,
+            self.quats, self.scales, self.opacities,
+            loss_dict
+        )
 
         # Camera optimizer loss
         if self.training and self.config.use_camera_optimizer:
             self.camera_optimizer.get_loss_dict(loss_dict)
-        timerl.end("camera")  # <100us -> 1600us-4200us, 900us-1400us without ssim
 
         self.print_loss_dict(loss_dict)
         return loss_dict
@@ -1173,7 +1118,7 @@ class SpirulaeModel(Model):
             f"{fmt('alpha_reg', self.training_losses.get_alpha_reg_weight())}",
             f"[M] {fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg * mcmc_reg)} "
             f"{fmt('mcmc_scale_reg', self.config.mcmc_scale_reg * mcmc_reg)}",
-            f"[R] {fmt('erank_reg', self.config.erank_reg_s3)} "
+            f"[R] {fmt('erank_reg', max(self.config.erank_reg_s3, self.config.erank_reg))} "
             f"{fmt('scale_reg', self.config.scale_regularization_weight)}",
             f"[E] {fmt('tv_loss', 10.0)} "
             f"{fmt('exposure_param_reg', self.config.exposure_reg_param)}",
