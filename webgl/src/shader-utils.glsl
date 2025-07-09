@@ -555,6 +555,16 @@ void branchlessONB(vec3 n, out vec3 b1, out vec3 b2) {
     b2 = vec3(b, s + n.y * n.y * a, -n.y);
 }
 
+mat2 principal_axes_from_cov2d(float Sxx, float Syy, float Sxy) {
+    float tr = Sxx + Syy;
+    float delta = length(vec2(Sxx - Syy, 2.0*Sxy));
+    float lambda1 = 0.5 * (tr - delta);
+    float lambda2 = 0.5 * (tr + delta);
+    vec2 eigvec1 = sqrt(lambda1) * normalize(vec2(Sxy, lambda1 - Sxx));
+    vec2 eigvec2 = sqrt(lambda2) * normalize(vec2(Sxy, lambda2 - Sxx));
+    return mat2(eigvec1, eigvec2);
+}
+
 void project_ellipsoid_to_ellipse(
     vec3 u, vec3 v, vec3 w,
     vec3 n,
@@ -571,13 +581,8 @@ void project_ellipsoid_to_ellipse(
     float Sxy = u2.x*u2.y + v2.x*v2.y + w2.x*w2.y;
     float Syy = u2.y*u2.y + v2.y*v2.y + w2.y*w2.y;
 
-    float tr = Sxx + Syy;
-    float delta = length(vec2(Sxx - Syy, 2.0*Sxy));
-    float lambda1 = 0.5 * (tr - delta);
-    float lambda2 = 0.5 * (tr + delta);
-    vec2 eigvec1 = sqrt(lambda1) * normalize(vec2(Sxy, lambda1 - Sxx));
-    vec2 eigvec2 = sqrt(lambda2) * normalize(vec2(Sxy, lambda2 - Sxx));
+    mat2 axes = principal_axes_from_cov2d(Sxx, Syy, Sxy);
 
-    a = e1 * eigvec1.x + e2 * eigvec1.y;
-    b = e1 * eigvec2.x + e2 * eigvec2.y;
+    a = e1 * axes[0].x + e2 * axes[0].y;
+    b = e1 * axes[1].x + e2 * axes[1].y;
 }
