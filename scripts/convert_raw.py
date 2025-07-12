@@ -27,6 +27,16 @@ except ImportError as e:
     sys.exit(1)
 
 
+def aces_tonemap(x: np.ndarray):
+    a = 2.51
+    b = 0.03
+    c = 2.43
+    d = 0.59
+    e = 0.14
+    y = (x * (a * x + b)) / (x * (c * x + d) + e)
+    return np.clip(y, 0.0, 1.0)
+
+
 class DNGProcessor:
     def __init__(self, input_folder: str, output_folder: str, 
                  color_space: str = 'sRGB', max_workers: Optional[int] = None):
@@ -80,8 +90,21 @@ class DNGProcessor:
                 use_auto_wb=False,
                 # gamma=(1.0, 1.0),
                 fbdd_noise_reduction=rawpy.FBDDNoiseReductionMode.Full,
-                noise_thr=100
+                noise_thr=100,
+                output_bps=16
             )
+
+            # brightness adjustment
+            target_l = 0.25
+            if False:
+                # linear brightness, can lead to over-exposure
+                lut = target_l * np.arange(2**16) / np.mean(rgb_array)
+                lut = (255*aces_tonemap(lut)).astype(np.uint8)
+            else:
+                # gamma, works well for dark area, may reduce contrast
+                k = np.log(target_l) / (np.mean(np.log(np.clip(rgb_array, min=1))) - np.log(2**16))
+                lut = (255*np.linspace(0, 1, 2**16)**k).astype(np.uint8)
+            rgb_array = lut[rgb_array]
             
             metadata = {
                 'camera_wb': raw.camera_whitebalance,
