@@ -2,4 +2,4 @@ gradio>=5.31.0
 imageio
 imageio-ffmpeg
 loguru
-fastapi==0.112.2
+#fastapi==0.112.2

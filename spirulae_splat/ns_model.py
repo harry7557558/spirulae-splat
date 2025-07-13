@@ -945,10 +945,8 @@ class SpirulaeModel(Model):
         timerr.mark("post")  # 100us-200us
 
         # blend with background
-        background = self.background_color.reshape((1, 1, 3))
-        if self.config.background_sh_degree > 0 or True:
-            background = self.get_background_image(camera, ssplat_camera)
-            rgb = rgb + (1.0 - alpha) * background
+        background = self.get_background_image(camera, ssplat_camera)
+        rgb = rgb + (1.0 - alpha) * background
         timerr.mark("bkg")  # 300us-450us
 
         # apply bilateral grid

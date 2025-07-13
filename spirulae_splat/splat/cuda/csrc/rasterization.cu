@@ -1886,16 +1886,15 @@ __global__ void render_background_sh_backward_kernel(
     bool inside = (i < img_size.y && j < img_size.x);
 
     unsigned idx = i * img_size.x + j;
-    glm::vec3 color, v_color;
+    glm::vec3 v_color = glm::vec3(0.0);
     if (inside) {
-        color = ((glm::vec3*)out_color)[idx];
+        glm::vec3 color = ((glm::vec3*)out_color)[idx];
         v_color = ((glm::vec3*)v_out_color)[idx];
         if (color.x == 0.0f || !isfinite(v_color.x)) v_color.x = 0.0f;
         if (color.y == 0.0f || !isfinite(v_color.y)) v_color.y = 0.0f;
         if (color.z == 0.0f || !isfinite(v_color.z)) v_color.z = 0.0f;
-        v_color = glm::clamp(v_color, -glm::vec3(-1e4f), glm::vec3(1e4f));
+        // v_color = glm::clamp(v_color, -glm::vec3(1e4f), glm::vec3(1e4f));
     }
-    else v_color = { 0.0f, 0.0f, 0.0f };
 
     float fx = intrins.x, fy = intrins.y;
     float cx = intrins.z, cy = intrins.w;
