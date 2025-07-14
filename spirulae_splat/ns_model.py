@@ -317,9 +317,9 @@ class SpirulaeModelConfig(ModelConfig):
     depth_distortion_uv_degree: int = -1  # 1
     """Hyperparameter for depth distortion model, controls image space embedding, see code for details
         Larger gives more parameters in depth distortion model, -1 to disable"""
-    depth_supervision_weight: float = 0.1
+    depth_supervision_weight: float = 0.01
     """Weight for depth supervision by comparing rendered depth with depth predicted by a foundation model"""
-    normal_supervision_weight: float = 0.1
+    normal_supervision_weight: float = 0.01
     """Weight for normal supervision by comparing normal from rendered depth with normal from depth predicted by a foundation model"""
     alpha_supervision_weight: float = 0.005
     """Weight for alpha supervision by rendered alpha with alpha predicted by a foundation model

@@ -57,6 +57,8 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
         # Depth Pro: https://github.com/apple/ml-depth-pro
         # fine details (e.g. wires, tree branches); slower, recommend >10GB VRAM
         "depth_pro",
+        # VGGT: https://github.com/facebookresearch/vggt
+        "vggt:facebook/VGGT-1B",
         # Depth Anything v2 - not recommended based on empirical results
         "depth_anything_v2_vits",
         "depth_anything_v2_vitb",
@@ -90,6 +92,9 @@ class DepthPredictor(torch.nn.Module):
         },
         "depth_pro": {
             "sky_threshold": np.inf,  # inconsistent
+        },
+        "vggt:facebook/VGGT-1B": {
+            "sky_threshold": np.inf,
         },
     }
     # TODO: https://github.com/AIVFI/Monocular-Depth-Estimation-Rankings-and-2D-to-3D-Video-Conversion-Rankings/blob/main/README.md
@@ -170,6 +175,7 @@ class DepthPredictor(torch.nn.Module):
             with torch.inference_mode():
                 depth = self.infer(image, camera)
                 depth = depth.to(self.device0)
+            torch.cuda.empty_cache()
 
         # save cache
         if self.use_cache and self.cache_dir is not None and not depth_loaded:
@@ -219,6 +225,10 @@ class DepthPredictor(torch.nn.Module):
             self.model = self._load_moge()
             self.infer = self._infer_moge
 
+        elif self.model_id.startswith("vggt:"):
+            self.model = self._load_vggt()
+            self.infer = self._infer_vggt
+
         if self.model is not None:
             self.model = self.model.to(self.device0)
             CONSOLE.log(f"\nDepth model loaded: {self.model_id}, {self.model.__class__}")
@@ -259,6 +269,14 @@ class DepthPredictor(torch.nn.Module):
         except ImportError:
             raise ImportError("Import error, please install https://github.com/microsoft/moge")
         model = MoGeModel.from_pretrained(self.model_id.split(':')[-1]).to(self.device0).eval()
+        return model
+
+    def _load_vggt(self):
+        try:
+            from vggt.models.vggt import VGGT
+        except ImportError:
+            raise ImportError("Import error, please install https://github.com/facebookresearch/vggt")
+        model = VGGT.from_pretrained(self.model_id.split(':')[-1]).to(self.device0).eval()
         return model
 
     def _infer_depth_anything_v2(self, image, camera=None):
@@ -303,8 +321,6 @@ class DepthPredictor(torch.nn.Module):
         depth = prediction["depth"]
 
         del prediction
-        torch.cuda.empty_cache()
-
         return depth.unsqueeze(-1)
 
     def _infer_moge(self, image, camera=None):
@@ -320,9 +336,36 @@ class DepthPredictor(torch.nn.Module):
         mask = output['mask']
 
         del output
-        torch.cuda.empty_cache()
-
         depth[~mask] = 0.0
+        return depth
+
+    def _infer_vggt(self, image, camera=None):
+        image = image.permute(2, 0, 1)
+        image = image.float().to(self.device0) / 255.0
+
+        target_size = 518
+        block_size = 14
+
+        height, width = image.shape[-2:]
+        if width >= height:
+            new_width = target_size
+            new_height = round(height * (new_width / width) / block_size) * block_size
+        else:
+            # seems to work, not sure if this drops model performance
+            new_height = target_size
+            new_width = round(width * (new_height / height) / block_size) * block_size
+
+        batch = torch.nn.functional.interpolate(
+            image.unsqueeze(0), size=(new_height, new_width),
+            mode='bilinear', align_corners=False)
+
+        with torch.amp.autocast('cuda', dtype=torch.float32):
+            aggregated_tokens_list, ps_idx = self.model.aggregator(batch[None])
+            depth, _ = self.model.depth_head(aggregated_tokens_list, batch[None], ps_idx)
+            depth = depth.squeeze(0).squeeze(0)
+        
+        del aggregated_tokens_list
+        del ps_idx
         return depth
 
 
