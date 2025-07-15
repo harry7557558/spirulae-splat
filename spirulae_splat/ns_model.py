@@ -285,7 +285,10 @@ class SpirulaeModelConfig(ModelConfig):
     """Warmup steps for depth, normal, and alpha regularizers.
        only apply regularizers after this many steps."""
     alpha_loss_weight: int = 0.01
-    """Weight for alpha, if mask is provided."""
+    """Weight for alpha, if mask is provided.
+       Set this to 0.0 to use masks to ignore distractors (e.g. people and cars, area outside fisheye circle)
+       Set this to a positive value to remove background (e.g. sky, background around centered object)
+       See scripts/SAM2-GUI for what I use to generate masks"""
     mcmc_opacity_reg: float = 0.01  # 0.01 in original paper
     """Opacity regularization from MCMC
        Lower usually gives more accurate geometry"""
