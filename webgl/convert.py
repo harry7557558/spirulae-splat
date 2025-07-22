@@ -149,11 +149,13 @@ def pack_components(config, components):
     import pybind11
     import importlib.util
 
-    binary_path = "./pack_components.so"
+    install_dir = os.path.dirname(os.path.abspath(__file__))
+    source_path = os.path.join(install_dir, "pack_components.cpp")
+    binary_path = os.path.join(install_dir, "pack_components.so")
     if not os.path.exists(binary_path):
         python_include = subprocess.check_output(["pkg-config", "--cflags", "python3"]).decode("utf-8").strip()
         compile_command = [
-            "c++", "-O3", "-Wall", "-shared", "-std=c++11", "-fPIC", "pack_components.cpp", "-o", binary_path,
+            "c++", "-O3", "-Wall", "-shared", "-std=c++11", "-fPIC", source_path, "-o", binary_path,
             "-I", pybind11.get_include(), *(python_include.split())
         ]
         subprocess.run(compile_command, check=True)
@@ -314,7 +316,8 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
     print()
 
     # filter INF/NaN
-    mask = torch.isfinite(means.sum(-1))
+    quats = quats / torch.norm(quats, dim=1, keepdim=True)
+    mask = torch.isfinite(means.sum(-1) + quats.sum(-1) + scales.sum(-1) + opacities.sum(-1) + features_dc.sum(-1))
     if not mask.all():
         (features_dc, features_sh, features_ch,
             means, opacities, quats, scales) = \
@@ -352,7 +355,6 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
     means = means * scale
     scales = scales + np.log(scale)
 
-    quats = quats / torch.norm(quats, dim=1, keepdim=True)
     opacities = torch.sigmoid(opacities)
 
     weight = torch.exp(scales[:,0].sum(-1)) * opacities[:,0]

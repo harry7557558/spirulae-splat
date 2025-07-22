@@ -1009,6 +1009,8 @@ class SpirulaeModel(Model):
             distances = torch.sqrt((undist_map*undist_map).sum(-1, True) + 1.0)
             outputs["depth"] = outputs["depth"] * distances
             outputs["depth"] = torch.clip(outputs["depth"], max=torch.quantile(outputs["depth"], 0.99))
+            if self.config.relative_scale is not None:
+                outputs["depth"] /= self.config.relative_scale
             if "depth_normal" in outputs:
                 outputs["depth_normal"] = 0.5+0.5*outputs["depth_normal"]
 
