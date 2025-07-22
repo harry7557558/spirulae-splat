@@ -76,7 +76,12 @@ def quantize_tensor(name, tensor, n_bits, maxiter=0):
 
     centers = (centroids[1:]+centroids[:-1])/2
     bins = torch.bucketize(tensor.contiguous(), centers)
-    print(name, 'quantization loss:', torch.mean(torch.abs(centroids[bins]-tensor)).item())
+    loss_l1 = torch.mean(torch.abs(centroids[bins]-tensor)).item()
+    if hasattr(tensor, 'weight'):
+        loss_rel = torch.mean(torch.abs(centroids[bins]-tensor)*tensor.weight).item() * tensor.shape[0]
+        print(f'{name} quantization loss: rel={loss_rel:.2g}, l1={loss_l1:.2g}')
+    else:
+        print(f'{name} quantization loss: l1={loss_l1:.2g}')
     return centroids, bins
 
     import matplotlib.pyplot as plt
@@ -203,16 +208,23 @@ class SplatModel:
     def load_ckpt(self, file_path):
         checkpoint = torch.load(file_path, weights_only=False)
         pipeline = checkpoint['pipeline']
-        # print(pipeline.keys())
-        # print(pipeline['_model.camera_optimizer.pose_adjustment'])
 
-        self.features_dc = pipeline['_model.gauss_params.features_dc']  # 8 bits
-        self.features_sh = pipeline['_model.gauss_params.features_sh']  # 4 bits
-        self.features_ch = pipeline['_model.gauss_params.features_ch']  # 6 bits
-        self.means = pipeline['_model.gauss_params.means']  # 12-16 bits
-        self.opacities = pipeline['_model.gauss_params.opacities']  # 8 bits after sigmoid
-        self.quats = pipeline['_model.gauss_params.quats']  # 8 bits
-        self.scales = pipeline['_model.gauss_params.scales']  # 8-12 bits
+        def get_param_group(key):
+            param = checkpoint['pipeline'][f'_model.gauss_params.{key}']
+            try:
+                weight = checkpoint['optimizers'][key]['state'][0]['exp_avg_sq']
+                param.weight = torch.sqrt(weight)
+            except KeyError:
+                pass
+            return param
+
+        self.features_dc = get_param_group('features_dc')  # 8 bits
+        self.features_sh = get_param_group('features_sh')  # 4 bits
+        self.features_ch = get_param_group('features_ch')  # 6 bits
+        self.means = get_param_group('means')  # 12-16 bits
+        self.opacities = get_param_group('opacities')  # 8 bits after sigmoid
+        self.quats = get_param_group('quats')  # 8 bits
+        self.scales = get_param_group('scales')  # 8-12 bits
         self.background_color = pipeline['_model.background_color']
         self.background_sh = pipeline['_model.background_sh'] \
             if '_model.background_sh' in pipeline else torch.zeros((0, 3))
@@ -315,16 +327,36 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
     print("{:.2f} MB floats".format(n_floats*4/1024**2))
     print()
 
-    # filter INF/NaN
-    quats = quats / torch.norm(quats, dim=1, keepdim=True)
-    mask = torch.isfinite(means.sum(-1) + quats.sum(-1) + scales.sum(-1) + opacities.sum(-1) + features_dc.sum(-1))
-    if not mask.all():
+    def apply_mask(mask):
+        nonlocal features_dc, features_sh, features_ch, means, opacities, quats, scales
+        def apply_mask_inner(x):
+            if not hasattr(x, 'weight'):
+                return x[mask]
+            x1 = x[mask]
+            x1.weight = x.weight[mask]
+            return x1
         (features_dc, features_sh, features_ch,
             means, opacities, quats, scales) = \
-            [x[mask] for x in (features_dc, features_sh, features_ch,
+            [apply_mask_inner(x) for x in (features_dc, features_sh, features_ch,
             means, opacities, quats, scales)]
+
+    # normalize quaterions
+    quats_w0 = quats.weight
+    quats_norm = torch.norm(quats, dim=1, keepdim=True)
+    quats = quats / quats_norm
+    quats *= torch.sign(quats[..., -1:])
+    quats.weight = (quats_w0 - quats * (quats * quats_w0).sum(-1, True)) / quats_norm
+
+    # filter INF/NaN
+    mask = torch.isfinite(means.sum(-1) + quats.sum(-1) + scales.sum(-1) + opacities.sum(-1) + features_dc.sum(-1))
+    if not mask.all():
+        apply_mask(mask)
         print(f"Filtered {(~mask).sum()}/{len(mask)} Inf/NaN")
-        print()
+    mask = opacities.squeeze() > -4.0  # logit(1.8e-2)
+    if not mask.all():
+        apply_mask(mask)
+        print(f"Filtered {(~mask).sum()}/{len(mask)} low opacity")
+    print()
 
     if bit_sh <= 0:
         sh_degree, num_sh = 0, 0
@@ -339,23 +371,25 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
                 (means-center) @ torch.linalg.inv(cov_matrix)) * (means-center), axis=1))
             mask = mahalanobis_dist < cull_th
             print("culled", torch.sum(~mask).item(), '/', len(means), "splats")
-
-            (features_dc, features_sh, features_ch,
-            means, opacities, quats, scales) = [
-                tensor[mask].contiguous() for tensor in (
-                    features_dc, features_sh, features_ch,
-                    means, opacities, quats, scales)
-            ]
+            apply_mask(mask)
         print()
 
+    means_w0 = means.weight
+    scales_w0 = scales.weight
     # normalize position
     means -= torch.mean(means, axis=0)
     # normalize scale
     scale = scale / ((means*means).sum(-1).mean()**0.5).item()
     means = means * scale
     scales = scales + np.log(scale)
+    # apply to weight
+    means.weight = means_w0 * scale
+    scales.weight = scales_w0
 
+    # sigmoid opacities
+    opacities_w0 = opacities.weight
     opacities = torch.sigmoid(opacities)
+    opacities.weight = opacities_w0 * opacities*(1-opacities)
 
     weight = torch.exp(scales[:,0].sum(-1)) * opacities[:,0]
 
@@ -557,18 +591,18 @@ if __name__ == "__main__":
     parser.add_argument("--bit_ch", "-bch", default=4, type=int, help="Bits for each CH coefficient.")
     args = parser.parse_args()
 
-    # 13 bytes
+    # 13|14 bytes
     bit_pos = 12  # x3
-    bit_sc = 7  # x2
+    bit_sc = 8  # x2|3
     bit_quat = 7  # x4
-    bit_opac = 7  # x1
+    bit_opac = 6  # x1
     bit_dc = 6  # x3
 
-    # 14 bytes
+    # 14|15 bytes
     bit_pos = 14  # x3, 64KB
-    bit_sc = 7  # x2
+    bit_sc = 8  # x2|3
     bit_quat = 7  # x4
-    bit_opac = 7  # x1
+    bit_opac = 5  # x1
     bit_dc = 7  # x3
 
     bit_sh = args.bit_sh
