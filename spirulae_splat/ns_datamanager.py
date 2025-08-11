@@ -277,6 +277,7 @@ class DepthPredictor(torch.nn.Module):
         except ImportError:
             raise ImportError("Import error, please install https://github.com/facebookresearch/vggt")
         model = VGGT.from_pretrained(self.model_id.split(':')[-1]).to(self.device0).eval()
+        model = model.half()
         return model
 
     def _infer_depth_anything_v2(self, image, camera=None):
@@ -340,8 +341,9 @@ class DepthPredictor(torch.nn.Module):
         return depth
 
     def _infer_vggt(self, image, camera=None):
+        # TODO: do this batched, the model wasn't trained on single image
         image = image.permute(2, 0, 1)
-        image = image.float().to(self.device0) / 255.0
+        image = image.half().to(self.device0) / 255.0
 
         target_size = 518
         block_size = 14
@@ -359,10 +361,9 @@ class DepthPredictor(torch.nn.Module):
             image.unsqueeze(0), size=(new_height, new_width),
             mode='bilinear', align_corners=False)
 
-        with torch.amp.autocast('cuda', dtype=torch.float32):
-            aggregated_tokens_list, ps_idx = self.model.aggregator(batch[None])
-            depth, _ = self.model.depth_head(aggregated_tokens_list, batch[None], ps_idx)
-            depth = depth.squeeze(0).squeeze(0)
+        aggregated_tokens_list, ps_idx = self.model.aggregator(batch[None])
+        depth, _ = self.model.depth_head(aggregated_tokens_list, batch[None], ps_idx)
+        depth = depth.squeeze(0).squeeze(0)
         
         del aggregated_tokens_list
         del ps_idx

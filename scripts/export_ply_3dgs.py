@@ -259,22 +259,35 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Export PLY (and equirectangular map), for 3DGS only.")
     parser.add_argument("work_dir", nargs=1, help="Path to the work folder (the one named YYYY-MM-DD_hhmmss).")
+    parser.add_argument("--dataset_dir", help="Path to dataset folder.")
     # parser.add_argument("--output", "-o", default="splat.ply", help="The output PLY file.")
     args = parser.parse_args()
+    work_dir = args.work_dir[0]
     args.output = "splat.ply"
 
+    print("Work directory:", work_dir)
+
     print("Loading model...")
-    model = SplatModel(args.work_dir[0])
+    model = SplatModel(work_dir)
 
     print("Orienting model...")
-    model.convert_to_input_frame()
+    model.convert_to_input_frame("ply")
+
+    if args.dataset_dir is not None and os.path.exists(os.path.join(args.dataset_dir, 'markers.yaml')):
+        print()
+        print("markers.yaml detected in dataset directory, attempt to align using markers")
+        print()
+        from spirulae_splat.viewer.align_apriltag import get_alignment
+        rot, tr, sc = get_alignment(args.dataset_dir, verbose=True)
+        model.change_frame(rot, tr, sc)
+        print("Alignment complete.")
 
     print()
 
     print("Start PLY export")
     output_path = args.output
     if not ('/' in args.output or '\\' in args.output or os.path.sep in args.output):
-        output_path = os.path.join(args.work_dir[0], output_path)
+        output_path = os.path.join(work_dir, output_path)
     export_ply(model, output_path)
     print("PLY saved to", output_path)
 

@@ -21,6 +21,8 @@ from spirulae_splat.viewer.camera import Camera
 from spirulae_splat.perf_timer import PerfTimer
 timer = PerfTimer("render")
 
+from typing import Literal
+
 
 class SplatModel:
     def __init__(self, file_path: str):
@@ -95,33 +97,21 @@ class SplatModel:
         self.dataparser_transform = np.concatenate((dtr['transform'], [[0, 0, 0, 1]]))
         self.dataparser_scale = dtr['scale']
 
-    @torch.no_grad()
-    def convert_to_input_frame(self):
-        """Convert to the same coordinate frame as in input dataset"""
-
+    @torch.no_grad
+    def change_frame(self, rot, tr, sc):
         from scipy.spatial.transform import Rotation
         from spirulae_splat.viewer.utils import rotate_sh_coeffs
 
-        # TODO: load this dynamically from transforms.json
-        # It's not always this for some datasets
-        applied = np.array([
-            [1, 0, 0, 0],
-            [0, 0, 1, 0],
-            [0, -1, 0, 0],
-            [0, 0, 0, 1]
-        ])  # to match sparse_pc.ply
-        # applied = np.diag([1, -1, -1, 1])  # to match transforms.json
+        if isinstance(rot, np.ndarray):
+            rot = torch.from_numpy(rot).to(self.means)
+        if isinstance(tr, np.ndarray):
+            tr = torch.from_numpy(tr).to(self.means)
+        if isinstance(sc, np.ndarray):
+            sc = torch.from_numpy(sc).to(self.means)
 
-        transform = self.dataparser_transform
-        transform = applied @ np.linalg.inv(transform)
-        transform = torch.from_numpy(transform).to(self.means)
-        rot = transform[:3, :3]
-        tr = transform[:3, 3:]
-        sc = self.dataparser_scale
+        self.gauss_params["means"] = (self.means * sc @ rot.T + tr)
 
-        self.gauss_params["means"] = (self.means / sc @ rot.T + tr.T)
-
-        self.gauss_params["scales"] = (self.scales - np.log(sc))
+        self.gauss_params["scales"] = (self.scales + np.log(sc))
 
         rot = rot.cpu().numpy()
         dq = Rotation.from_matrix(rot).as_quat()
@@ -131,6 +121,33 @@ class SplatModel:
         self.gauss_params["features_sh"] = rotate_sh_coeffs(self.features_sh, rot, "gsplat")
         if self.background_sh_degree > 0:
             self.background_sh = rotate_sh_coeffs(self.background_sh[None], rot, "nerfstudio")[0]
+
+    @torch.no_grad()
+    def convert_to_input_frame(self, match: Literal['ply', 'json', None]="ply"):
+        """Convert to the same coordinate frame as in input dataset"""
+
+        if match == "ply":
+            # TODO: load this dynamically from transforms.json
+            # It's not always this for some datasets
+            applied = np.array([
+                [1, 0, 0, 0],
+                [0, 0, 1, 0],
+                [0, -1, 0, 0],
+                [0, 0, 0, 1]
+            ])  # to match sparse_pc.ply
+        elif match == "json":
+            applied = np.diag([1, -1, -1, 1])  # to match transforms.json
+        else:
+            applied = np.eye(4)
+
+        transform = self.dataparser_transform
+        transform = applied @ np.linalg.inv(transform)
+        transform = torch.from_numpy(transform).to(self.means)
+        rot = transform[:3, :3]
+        tr = transform[:3, 3]
+        sc = 1.0 / self.dataparser_scale
+
+        self.change_frame(rot, tr, sc)
 
     def num_splats(self):
         return len(self.gauss_params["means"])

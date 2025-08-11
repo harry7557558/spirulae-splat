@@ -284,7 +284,7 @@ class SpirulaeModelConfig(ModelConfig):
     reg_warmup_length: int = 4000
     """Warmup steps for depth, normal, and alpha regularizers.
        only apply regularizers after this many steps."""
-    alpha_loss_weight: int = 0.01
+    alpha_loss_weight: float = 0.01
     """Weight for alpha, if mask is provided.
        Set this to 0.0 to use masks to ignore distractors (e.g. people and cars, area outside fisheye circle)
        Set this to a positive value to remove background (e.g. sky, background around centered object)
