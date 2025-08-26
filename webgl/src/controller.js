@@ -392,7 +392,6 @@ function ViewportController() {
         this.renderNeeded = true;
     });
 
-
     let previousCamera = "";
     this.onFrame = function(now) {
         let oldRenderNeeded = this.renderNeeded;
@@ -425,7 +424,7 @@ function ViewportController() {
             if (!gamepad) continue;
 
             const axisThreshold = 0.1; // Threshold to detect when the axis is intentionally moved
-            const moveSpeed = 0.02*vsc;
+            const moveSpeed = 0.01*vsc;
             const rotateSpeed = 0.02*vsc;
 
             let inv0 = JSON.stringify(inv);

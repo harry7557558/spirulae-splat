@@ -186,6 +186,8 @@ void main_3dgs(
         J = mat3x2(rz, 0.0, 0.0, rz, -t.x * rz, -t.y * rz);
     }
     mat2x2 cov2d = J * cov3d * transpose(J);
+    cov2d[0][0] += 0.3 / (focal.x*focal.x);
+    cov2d[1][1] += 0.3 / (focal.y*focal.y);
     mat2 inv_cov2d = inverse(cov2d);
 
     // found bounding box

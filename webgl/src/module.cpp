@@ -193,39 +193,28 @@ val packHarmonicTexture(std::string key, int dim, int width, int height, const v
 
 
 val sortByDepth(int vertexCount, const val& means_, bool is_fisheye, float n0, float n1, float n2) {
-    int32_t maxDepth = -0x3fffffff;
-    int32_t minDepth = 0x3fffffff;
+    static const int QN = 16384;
+
     std::vector<int> sizeList(vertexCount);
 
     std::vector<float> means;
     copyToVector(means_, means);
 
     for (int i = 0; i < vertexCount; i++) {
-        int32_t depth;
-        if (is_fisheye) {
-            float dx = means[3*i+0]-n0, dy = means[3*i+1]-n1, dz = means[3*i+2]-n2;
-            float distance = sqrt(dx*dx+dy*dy+dz*dz);
-            depth = (int32_t)(-(sqrt(distance+1.0f)-1.0f) * 1000000);
-        } else {
-            float depthf = -(n0 * means[3*i+0] + n1 * means[3*i+1] + n2 * means[3*i+2]);
-            depth = (int32_t)(depthf/(abs(depthf)+0.01f) * (sqrt(abs(depthf)+1.0f)-1.0f) * 1000000);
-        }
-        sizeList[i] = depth;
-        if (depth > maxDepth) maxDepth = depth;
-        if (depth < minDepth) minDepth = depth;
+        float dx = means[3*i+0]-n0, dy = means[3*i+1]-n1, dz = means[3*i+2]-n2;
+        // float z = sqrtf(dx*dx+dy*dy+dz*dz);
+        float z = (dx*dx+dy*dy+dz*dz);
+        sizeList[i] = int(((float)QN-0.1f)/(z+1.0f));
     }
 
-    // This is a 16 bit single-pass counting sort
-    float depthInv = 65535.99 / (maxDepth - minDepth);
-    std::vector<int> counts0(65536, 0);
+    std::vector<int> counts0(QN, 0);
     for (int i = 0; i < vertexCount; i++) {
-        sizeList[i] = (int)((sizeList[i] - minDepth) * depthInv);
         counts0[sizeList[i]]++;
     }
 
-    std::vector<int> starts0(65536);
+    std::vector<int> starts0(QN);
     starts0[0] = 0;
-    for (int i = 1; i < 65536; i++)
+    for (int i = 1; i < QN; i++)
         starts0[i] = starts0[i-1] + counts0[i-1];
 
     std::vector<uint32_t> depthIndex(vertexCount, -1);
