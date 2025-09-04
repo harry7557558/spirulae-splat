@@ -141,7 +141,7 @@ function translate4(a, x, y, z, relative=true) {
 }
 
 
-let defaultViewMatrix = [
+const defaultViewMatrix = [
     1.0, 0.0, 0.0, 0.0,
     0.0, -0.199, 0.98, 0.0,
     0.0, -0.98, -0.199, 0.0,
@@ -153,6 +153,17 @@ let viewMatrix = defaultViewMatrix;
 
 
 function ViewportController() {
+
+    const Controller = new Worker.wasmModule.Controller();
+
+    window.addEventListener("message", (e) => {
+        if (e.data.header) {
+            console.time("Controller.setGaussians");
+            Controller.setGaussians(e.data.base);
+            console.timeEnd("Controller.setGaussians");
+        }
+    });
+
     const canvas = document.getElementById("canvas");
     const fps = document.getElementById("fps");
 
@@ -171,6 +182,7 @@ function ViewportController() {
     }
 
     window.addEventListener("keydown", (e) => {
+        Controller.keydown(e.code);
         // if (document.activeElement != document.body) return;
         if (/^Key[A-Z]$/.test(e.code) || /^Arrow/.test(e.code) || e.code == "Home" || e.code == "End")
             e.preventDefault();
@@ -178,10 +190,12 @@ function ViewportController() {
         this.renderNeeded = true;
     });
     window.addEventListener("keyup", (e) => {
+        Controller.keyup(e.code);
         activeKeys = activeKeys.filter((k) => k !== e.code);
         this.renderNeeded = true;
     });
     window.addEventListener("blur", () => {
+        Controller.blur();
         activeKeys = [];
         this.renderNeeded = true;
     });
@@ -189,6 +203,8 @@ function ViewportController() {
     window.addEventListener(
         "wheel",
         (e) => {
+            Controller.wheel(e.deltaX, e.deltaY);
+            console.log(e.deltaX, e.deltaY);
             this.carousel = false;
             e.preventDefault();
             const lineHeight = 10;
@@ -381,6 +397,7 @@ function ViewportController() {
     let jumpDelta = 0;
 
     window.addEventListener("gamepadconnected", (e) => {
+        Controller.gamepadconnected();
         const gp = navigator.getGamepads()[e.gamepad.index];
         console.log(
             `Gamepad connected at index ${gp.index}: ${gp.id}. It has ${gp.buttons.length} buttons and ${gp.axes.length} axes.`,
@@ -388,12 +405,46 @@ function ViewportController() {
         this.renderNeeded = true;
     });
     window.addEventListener("gamepaddisconnected", (e) => {
+        Controller.gamepaddisconnected();
         console.log("Gamepad disconnected");
         this.renderNeeded = true;
     });
 
     let previousCamera = "";
-    this.onFrame = function(now) {
+    this.onFrame = function(now, vertexCount) {
+        if (!(vertexCount > 0)) {
+            this.actualViewMatrix = viewMatrix;
+            return;
+        }
+
+        {
+        const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+        for (let gamepad of gamepads) {
+            if (!gamepad) continue;
+            Controller.updateGamepadValues(gamepad);
+            break;
+        }
+        }
+
+        this.renderNeeded = Controller.step(1e-3 * (now - lastFrame));
+        viewMatrix = Controller.getViewMatrix();
+
+        {
+        this.actualViewMatrix = viewMatrix;
+
+        let camera = CameraPresets.camera;
+        if (camera !== previousCamera)
+            this.renderNeeded = true;
+        previousCamera = camera;
+
+        const currentFps = 1000 / (now - lastFrame) || 0;
+        if (this.renderNeeded)
+            avgFps = avgFps * 0.8 + currentFps * 0.2;
+        fps.innerText = Math.round(avgFps) + " fps";
+        lastFrame = now;
+        }
+        return;
+
         let oldRenderNeeded = this.renderNeeded;
 
         let inv = invert4(viewMatrix);
@@ -423,7 +474,7 @@ function ViewportController() {
         for (let gamepad of gamepads) {
             if (!gamepad) continue;
 
-            const axisThreshold = 0.1; // Threshold to detect when the axis is intentionally moved
+            const axisThreshold = 0.05; // Threshold to detect when the axis is intentionally moved
             const moveSpeed = 0.01*vsc;
             const rotateSpeed = 0.02*vsc;
 
@@ -431,19 +482,19 @@ function ViewportController() {
 
             // Assuming the left stick controls translation (axes 0 and 1)
             if (Math.abs(gamepad.axes[0]) > axisThreshold) {
-                inv = translate4(inv, moveSpeed * gamepad.axes[0], 0, 0);
+                inv = translate4(inv, moveSpeed * gamepad.axes[0], 0, 0, false);
                 this.carousel = false;
             }
             if (Math.abs(gamepad.axes[1]) > axisThreshold) {
-                inv = translate4(inv, 0, 0, -moveSpeed * gamepad.axes[1]);
+                inv = translate4(inv, 0, 0, -moveSpeed * gamepad.axes[1], false);
                 this.carousel = false;
             }
             if(gamepad.buttons[12].pressed || gamepad.buttons[13].pressed){
-                inv = translate4(inv, 0, -moveSpeed*(gamepad.buttons[12].pressed - gamepad.buttons[13].pressed), 0);
+                inv = translate4(inv, 0, -moveSpeed*(gamepad.buttons[12].pressed - gamepad.buttons[13].pressed), 0, false);
                 this.carousel = false;
             }
             if(gamepad.buttons[14].pressed || gamepad.buttons[15].pressed){
-                inv = translate4(inv, -moveSpeed*(gamepad.buttons[14].pressed - gamepad.buttons[15].pressed), 0, 0);
+                inv = translate4(inv, -moveSpeed*(gamepad.buttons[14].pressed - gamepad.buttons[15].pressed), 0, 0, false);
                 this.carousel = false;
             }
 

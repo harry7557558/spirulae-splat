@@ -85,7 +85,7 @@ async function main() {
 
     let bytesRead = 0;
     const frame = (now) => {
-        viewportController.onFrame(now);
+        viewportController.onFrame(now, vertexCount);
         window.postMessage({ transforms: {
             view: viewportController.actualViewMatrix,
             proj: viewportController.projectionMatrix,

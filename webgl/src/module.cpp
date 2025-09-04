@@ -4,6 +4,8 @@
 #include <cmath>
 #include <algorithm>
 
+#include "controller.h"
+
 using namespace emscripten;
 
 struct View {
@@ -20,28 +22,6 @@ struct Config {
     // std::vector<View> componentViews;
     val componentViews;
     int length;
-};
-
-
-template<typename T>
-void copyToVector(const val &typedArray, std::vector<T> &vec) {
-    vec = convertJSArrayToNumberVector<T>(typedArray);
-    return;
-
-    // https://github.com/emscripten-core/emscripten/issues/5519
-    // doesn't work after memory growth
-    unsigned int length = typedArray["length"].as<unsigned int>();
-    val heap = val::module_property("HEAPU8");
-    val memory = heap["buffer"];
-
-    val memoryView = typedArray["constructor"].new_(memory, reinterpret_cast<uintptr_t>(vec.data()), length);
-    
-    memoryView.call<void>("set", typedArray);
-}
-
-
-struct Primitive {
-    std::vector<float> output;
 };
 
 
@@ -326,5 +306,18 @@ EMSCRIPTEN_BINDINGS(module) {
     function("sortByDepth", &sortByDepth);
 
     function("preparePPSTiles", &preparePPSTiles);
+
+    class_<Controller>("Controller")
+        .constructor<>()
+        .function("getViewMatrix", &Controller::getViewMatrix)
+        .function("keydown", &Controller::keydown)
+        .function("keyup", &Controller::keyup)
+        .function("blur", &Controller::blur)
+        .function("wheel", &Controller::wheel)
+        .function("gamepadconnected", &Controller::gamepadconnected)
+        .function("gamepaddisconnected", &Controller::gamepaddisconnected)
+        .function("updateGamepadValues", &Controller::updateGamepadValues)
+        .function("step", &Controller::step)
+        .function("setGaussians", &Controller::setGaussians);
 }
 
