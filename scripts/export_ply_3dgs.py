@@ -180,7 +180,7 @@ def export_ply(model: SplatModel, output_path: str) -> None:
 
     # color
     print("Encoding color...")
-    if True:
+    if False:
         colors = torch.clamp(model.colors, 0.0, 1.0).cpu().numpy()
         colors = (colors * 255).astype(np.uint8)
         map_to_tensors["red"] = colors[:, 0]

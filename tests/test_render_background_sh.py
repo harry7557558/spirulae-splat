@@ -137,14 +137,15 @@ def profile_render_background_sh():
     print("profile backward")
 
     weights = torch.randn_like(output)
-    def fun(output):
-        return (weights * output).sum()
+    loss= (weights * output).sum()
+    _loss = (weights * _output).sum()
     output.retain_grad()
-    fun(output).backward(retain_graph=True)
-    fun(_output).backward(retain_graph=True)
+    _output.retain_grad()
+    loss.backward(retain_graph=True)
+    _loss.backward(retain_graph=True)
 
-    timeit(lambda: fun(_output).backward(retain_graph=True), "backward torch")
-    timeit(lambda: fun(output).backward(retain_graph=True), "backward fused")
+    timeit(lambda: _loss.backward(retain_graph=True), "backward torch")
+    timeit(lambda: loss.backward(retain_graph=True), "backward fused")
 
     print()
 

@@ -12,6 +12,14 @@ import spirulae_splat.splat.cuda as _C
 from spirulae_splat.splat._camera import _Camera
 
 
+_TORCH_COMPILE_ARGS = {
+    'dynamic': True,
+    # 'force_parameter_static_shapes': False
+}
+torch._dynamo.config.force_nn_module_property_static_shapes = False
+torch._dynamo.config.force_parameter_static_shapes = False
+torch._dynamo.config.capture_scalar_outputs = True
+
 
 def compute_cumulative_intersects(
     num_tiles_hit: Float[Tensor, "batch 1"]
@@ -92,6 +100,7 @@ def bin_and_sort_gaussians(
     return isect_ids, gaussian_ids, isect_ids_sorted, gaussian_ids_sorted, tile_bins
 
 
+@torch.compile(**_TORCH_COMPILE_ARGS)
 def depth_to_points(
     depths: Tensor, camera: _Camera, c2w: Optional[Tensor]=None, z_depth: bool = True
 ) -> Tensor:
@@ -134,6 +143,7 @@ def depth_to_points(
     return origins[..., None, None, :] + depths * directions
 
 
+@torch.compile(**_TORCH_COMPILE_ARGS)
 def depth_to_normal(
     depths: Tensor, camera: _Camera, c2w: Optional[Tensor]=None, z_depth: bool = True, alpha: Optional[Tensor] = None,
     return_points = False
@@ -179,6 +189,7 @@ def depth_to_normal(
     return normals
 
 
+@torch.compile(**_TORCH_COMPILE_ARGS)
 def resize_image(image: torch.Tensor, d: int):
     """
     Downscale images using the same 'area' method in opencv

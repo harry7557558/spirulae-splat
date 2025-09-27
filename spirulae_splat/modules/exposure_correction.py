@@ -8,6 +8,7 @@ class ExposureCorrection(torch.nn.Module):
     def __init__(self, config):
         super().__init__()
 
+        self.config = config
         self.adaptive_exposure_mode = config.adaptive_exposure_mode
 
     def forward(
@@ -118,4 +119,5 @@ class ExposureCorrection(torch.nn.Module):
         
         if alpha_mask is not None:
             pred_img_e = pred_img + (pred_img_e-pred_img) * alpha_mask
+        exposure_param_reg = self.config.exposure_reg_param * exposure_param_reg
         return pred_img_e, exposure_param_reg

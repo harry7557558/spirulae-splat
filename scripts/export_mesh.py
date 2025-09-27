@@ -508,12 +508,13 @@ class Open3DTSDFFusion(GSMeshExporter):
         model.return_torch = True
         model.bgr = False
 
-        scales = torch.amin(model.scales, dim=-1, keepdim=True)
-        model.gauss_params["opacities"] = torch.where(
-            scales < torch.quantile(scales, 0.9),
-            model.opacities,
-            -10*torch.ones_like(model.opacities)
-        )
+        if False:
+            scales = torch.amin(model.scales, dim=-1, keepdim=True)
+            model.gauss_params["opacities"] = torch.where(
+                scales < torch.quantile(scales, 0.9),
+                model.opacities,
+                -10*torch.ones_like(model.opacities)
+            )
 
         transforms_path = str(self.train_data / "transforms.json")
         with open(transforms_path, 'r') as fp:
@@ -591,8 +592,9 @@ class Open3DTSDFFusion(GSMeshExporter):
         triangle_clusters = np.asarray(triangle_clusters)
         cluster_n_triangles = np.asarray(cluster_n_triangles)
         cluster_area = np.asarray(cluster_area)
-        n_cluster = np.sort(cluster_n_triangles.copy())[-50]
-        n_cluster = max(n_cluster, 50)  # filter meshes smaller than 50
+        n_filter = min(50, len(cluster_n_triangles))
+        n_cluster = np.sort(cluster_n_triangles.copy())[-n_filter]
+        n_cluster = max(n_cluster, n_filter)  # filter meshes smaller than 50
         triangles_to_remove = cluster_n_triangles[triangle_clusters] < n_cluster
         mesh_0.remove_triangles_by_mask(triangles_to_remove)
         mesh_0.remove_unreferenced_vertices()

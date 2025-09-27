@@ -1,6 +1,5 @@
 import glob
 import os
-import os.path as osp
 import platform
 import sys
 import re
@@ -46,7 +45,7 @@ def generate_header(source_filename, header_filename):
     code = open(source_filename).read()
     decls = extract_function_declarations(code)
 
-    splitter = "/* == AUTO HEADER GENERATOR - DO NOT CHANGE THIS LINE == */\n"
+    splitter = "/* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */\n"
     include = open(header_filename).read()
     include = include.split(splitter)[0].strip()
 
@@ -56,8 +55,14 @@ def generate_header(source_filename, header_filename):
 
 def get_ext():
     from torch.utils.cpp_extension import BuildExtension
+    import multiprocessing
 
-    return BuildExtension.with_options(no_python_abi_suffix=True, use_ninja=False)
+    class CustomBuildExtention(BuildExtension):
+        def build_extensions(self):
+            self.parallel = multiprocessing.cpu_count()
+            super().build_extensions()
+
+    return CustomBuildExtention.with_options(no_python_abi_suffix=True, use_ninja=True)
 
 
 def get_extensions():
@@ -65,9 +70,9 @@ def get_extensions():
     from torch.__config__ import parallel_info
     from torch.utils.cpp_extension import CUDAExtension
 
-    extensions_dir = osp.join("spirulae_splat", "splat", "cuda", "csrc")
-    sources = glob.glob(osp.join(extensions_dir, "*.cu")) + \
-        glob.glob(osp.join(extensions_dir, "*.cpp"))
+    extensions_dir = os.path.join("spirulae_splat", "splat", "cuda", "csrc")
+    sources = glob.glob(os.path.join(extensions_dir, "*.cu")) + \
+        glob.glob(os.path.join(extensions_dir, "*.cpp"))
     sources = [path for path in sources if "hip" not in path]
 
     undef_macros = []
@@ -116,13 +121,18 @@ def get_extensions():
     if sys.platform == "win32":
         extra_compile_args["nvcc"] += ["-DWIN32_LEAN_AND_MEAN"]
 
+    # extra_compile_args["nvcc"] += ['-rdc=true']
+
     # disable compile warnings for glm
     extra_compile_args["nvcc"] += ['-Xcudafe=--diag_suppress=20012']
+
+    # disable compile warnings for Slang generated code
+    extra_compile_args["nvcc"] += ['-Xcudafe=--diag_suppress=550']
 
     extension = CUDAExtension(
         f"spirulae_splat.csrc",
         sources,
-        include_dirs=[osp.join(extensions_dir, "glm")],
+        include_dirs=[os.path.join(extensions_dir, "glm")],
         define_macros=define_macros,
         undef_macros=undef_macros,
         extra_compile_args=extra_compile_args,
@@ -144,6 +154,7 @@ path = "spirulae_splat/splat/cuda/csrc/"
 generate_header(path+"projection.cu", path+"projection.cuh")
 generate_header(path+"rasterization.cu", path+"rasterization.cuh")
 generate_header(path+"rasterization_sorted.cu", path+"rasterization_sorted.cuh")
+generate_header(path+"misc.cu", path+"misc.cuh")
 generate_header(path+"bindings.cu", path+"bindings.h")
 
 setup(

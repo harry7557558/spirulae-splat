@@ -5,7 +5,9 @@ from spirulae_splat.modules.supervision import SupervisionLosses
 from spirulae_splat.modules.exposure_correction import ExposureCorrection
 
 from spirulae_splat.splat._camera import _Camera
-from spirulae_splat.splat.utils import resize_image
+from spirulae_splat.splat.utils import resize_image, _TORCH_COMPILE_ARGS
+
+from spirulae_splat.splat.cuda import _C
 
 from fused_ssim import fused_ssim
 
@@ -27,6 +29,55 @@ class _MaskGradient(torch.autograd.Function):
     @staticmethod
     def backward(ctx, v_x):
         return v_x * ctx.mask, None
+
+
+class _ComputePerSplatLosses(torch.autograd.Function):
+
+    @staticmethod
+    def forward(
+        ctx,
+        scales, opacities, quats,
+        mcmc_opacity_reg: float,
+        mcmc_scale_reg: float,
+        max_gauss_ratio: float,
+        scale_regularization_weight: float,
+        erank_reg: float,
+        erank_reg_s3: float,
+        quat_norm_reg_weight: float
+    ):
+
+        hyperparams = (
+            mcmc_opacity_reg,
+            mcmc_scale_reg,
+            max_gauss_ratio,
+            scale_regularization_weight,
+            erank_reg,
+            erank_reg_s3,
+            quat_norm_reg_weight
+        )
+
+        losses = _C.compute_per_splat_losses_forward(
+            scales, opacities, quats,
+            *hyperparams
+        )
+
+        ctx.hyperparams = hyperparams
+        ctx.save_for_backward(scales, opacities, quats)
+
+        return losses
+
+    @staticmethod
+    def backward(ctx, v_losses):
+
+        hyperparams = ctx.hyperparams
+        scales, opacities, quats = ctx.saved_tensors
+
+        v_inputs = _C.compute_per_splat_losses_backward(
+            scales, opacities, quats,
+            v_losses,
+            *hyperparams
+        )
+        return (*v_inputs, *([None]*len(hyperparams)))
 
 
 
@@ -76,6 +127,7 @@ class SplatTrainingLosses(torch.nn.Module):
         return gt_img
 
     def apply_bilateral_grid(self, rgb: torch.Tensor, cam_idx: int, H: int, W: int) -> torch.Tensor:
+        """rgb must be clamped to 0-1"""
         # make xy grid
         grid_xy = None
         if not USE_FUSED_BILAGRID:
@@ -86,14 +138,13 @@ class SplatTrainingLosses(torch.nn.Module):
             )
             grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
 
-        rgb = torch.clip(rgb, 0.0, 1.0)
-
         out = slice(
             bil_grids=self.bil_grids, rgb=rgb, xy=grid_xy,
             grid_idx=torch.tensor(cam_idx, device=rgb.device, dtype=torch.long),
         )
         return out["rgb"]
 
+    @torch.compile(**_TORCH_COMPILE_ARGS)
     def composite_with_background(self, image, background) -> torch.Tensor:
         """Composite the ground truth image with a background color when it has an alpha channel.
 
@@ -117,6 +168,40 @@ class SplatTrainingLosses(torch.nn.Module):
     def get_alpha_reg_weight(self):
         return self.config.alpha_reg_weight * \
             min(self.step / max(self.config.alpha_reg_warmup, 1), 1)
+
+    @torch.compile(**_TORCH_COMPILE_ARGS)
+    def _image_loss_0(self, gt_img, pred_img, pred_img_e):
+        pred_img_e = torch.clip(pred_img_e, 0.0, 1.0)
+        pred_img = torch.clip(pred_img, 0.0, 1.0)
+        Ll1_e = torch.abs(gt_img - pred_img_e).mean()
+        Ll1 = torch.abs(gt_img - pred_img).mean()
+        Ll2_e = ((gt_img-pred_img_e)**2).mean()
+
+        gt_img_bchw = gt_img.permute(2, 0, 1).unsqueeze(0).contiguous()
+        pred_img_bchw = pred_img_e.permute(2, 0, 1).unsqueeze(0).contiguous()
+        return gt_img_bchw, pred_img_bchw, Ll1_e, Ll1, Ll2_e
+
+    @torch.compile(dynamic=False)
+    def _image_loss_1(self, Ll1_e, Ll1, ssim, ssim_lambda, exposure_reg_image):
+        return torch.lerp(torch.lerp(Ll1_e, 1-ssim, ssim_lambda), Ll1, exposure_reg_image)
+
+    def image_loss(self, gt_img, pred_img, pred_img_e, exposure_reg_image):
+        gt_img_bchw, pred_img_bchw, Ll1_e, Ll1, Ll2_e = self._image_loss_0(gt_img, pred_img, pred_img_e)
+        # ssim = fused_ssim(pred_img_bchw, gt_img_bchw, padding="valid")
+        ssim = fused_ssim(pred_img_bchw, gt_img_bchw, padding="same")
+
+        ssim_lambda = self.config.ssim_lambda * min(self.step/max(self.config.ssim_warmup,1), 1)
+        return self._image_loss_1(Ll1_e, Ll1, ssim, ssim_lambda, exposure_reg_image), Ll2_e, ssim
+
+    @torch.compile(**_TORCH_COMPILE_ARGS)
+    def alpha_reg(self, alpha):
+        weight_alpha_reg = self.get_alpha_reg_weight()
+        if self.config.randomize_background:
+            reg_alpha = 1.0 - alpha**2  # push to 1
+        else:
+            # reg_alpha = torch.log(4.0*torch.clip(alpha*(1.0-alpha), min=1e-2))
+            reg_alpha = 4.0*alpha*(1.0-alpha)
+        return weight_alpha_reg * reg_alpha.mean()
 
     def forward(self, step: int, batch, outputs):
         self.step = step
@@ -190,21 +275,7 @@ class SplatTrainingLosses(torch.nn.Module):
             pred_img_e, exposure_param_reg = self.exposure_correction(pred_img, gt_img, alpha_mask)
 
         # image loss
-        if False:
-            pred_img_e = saturate_keep_gradient(pred_img_e, 0.0, 1.0)
-            pred_img = saturate_keep_gradient(pred_img, 0.0, 1.0)
-        else:
-            pred_img_e = torch.clip(pred_img_e, 0.0, 1.0)
-            pred_img = torch.clip(pred_img, 0.0, 1.0)
-        Ll1_e = torch.abs(gt_img - pred_img_e).mean()
-        Ll1 = torch.abs(gt_img - pred_img).mean()
-        simloss = torch.zeros_like(Ll1_e)
-        if self.config.ssim_lambda > 0.0:
-            gt_img_bchw = gt_img.permute(2, 0, 1).unsqueeze(0)
-            pred_img_bchw = pred_img_e.permute(2, 0, 1).unsqueeze(0).contiguous()
-            # simloss = 1 - self.ssim(pred_img_bchw, gt_img_bchw)
-            # simloss = 1 - fused_ssim(pred_img_bchw, gt_img_bchw, padding="valid")
-            simloss = 1 - fused_ssim(pred_img_bchw, gt_img_bchw, padding="same")
+        image_loss, mse, ssim = self.image_loss(gt_img, pred_img, pred_img_e, exposure_reg_image)
 
         # depth and normal regularizers
         depth_reg, normal_reg = 0.0, 0.0
@@ -219,13 +290,7 @@ class SplatTrainingLosses(torch.nn.Module):
         alpha_reg = 0.0
         if self.step >= self.config.reg_warmup_length:
             alpha = outputs['alpha']
-            weight_alpha_reg = self.get_alpha_reg_weight()
-            if self.config.randomize_background:
-                reg_alpha = 1.0 - alpha**2  # push to 1
-            else:
-                # reg_alpha = torch.log(4.0*torch.clip(alpha*(1.0-alpha), min=1e-2))
-                reg_alpha = 4.0*alpha*(1.0-alpha)
-            alpha_reg = weight_alpha_reg * reg_alpha.mean()
+            alpha_reg = self.alpha_reg(alpha)
 
         # metrics, readable from console during training
         with torch.no_grad():
@@ -233,8 +298,8 @@ class SplatTrainingLosses(torch.nn.Module):
                 self._running_metrics = { 'psnr': [], 'ssim': [] }
             psnr_list = self._running_metrics['psnr']
             ssim_list = self._running_metrics['ssim']
-            psnr = -10.0 * math.log10(((gt_img-pred_img_e)**2).mean().item())
-            ssim = 1.0 - simloss.item()
+            psnr = -10.0 * math.log10(mse.item())
+            ssim = ssim.item()
             psnr_list.append(psnr)
             ssim_list.append(ssim)
             if len(psnr_list) > self.num_train_data:
@@ -243,10 +308,9 @@ class SplatTrainingLosses(torch.nn.Module):
             psnr = sum(psnr_list) / len(psnr_list)
             ssim = sum(ssim_list) / len(ssim_list)
 
-        ssim_lambda = self.config.ssim_lambda * min(self.step/max(self.config.ssim_warmup,1), 1)
         loss_dict = {
             # [C] RGB and alpha
-            "main_loss": torch.lerp(torch.lerp(Ll1_e, simloss, ssim_lambda), Ll1, exposure_reg_image),
+            "image_loss": image_loss,
             "alpha_loss": alpha_loss,
             "psnr": float(psnr),
             "ssim": float(ssim),
@@ -259,13 +323,14 @@ class SplatTrainingLosses(torch.nn.Module):
             "normal_reg": normal_reg,
             "alpha_reg": alpha_reg,
             # [E] exposure
-            "tv_loss": 0.0,  # see get_static_losses()
-            "exposure_param_reg": self.config.exposure_reg_param * exposure_param_reg,
+            "tv_loss": 0.0,  # see get_per_splat_losses()
+            "exposure_param_reg": exposure_param_reg,
         }
 
         return loss_dict
 
-    def erank_regularization(self, gauss_scales):
+    # @torch.compile(**_TORCH_COMPILE_ARGS)
+    def _erank_reg(self, gauss_scales):
         scales = torch.exp(2.0*gauss_scales)
         if self.config.use_3dgs:
             x, y, z = torch.unbind(scales, -1)
@@ -286,7 +351,39 @@ class SplatTrainingLosses(torch.nn.Module):
             reg = torch.relu(-torch.log(r - 0.99999))
             return self.config.erank_reg * reg.mean()
 
-    def get_static_losses(self, step: int, gauss_quats, gauss_scales, gauss_opacities, loss_dict):
+    # @torch.compile(**_TORCH_COMPILE_ARGS)
+    def _scale_reg(self, gauss_scales):
+        scale_exp = torch.exp(gauss_scales)
+        scale_reg = (
+            torch.maximum(
+                scale_exp.amax(dim=-1) / scale_exp.amin(dim=-1),
+                torch.tensor(self.config.max_gauss_ratio),
+            )
+            - self.config.max_gauss_ratio
+        )
+        return self.config.scale_regularization_weight * scale_reg.mean()
+
+    # @torch.compile(**_TORCH_COMPILE_ARGS)
+    def _mcmc_opac_reg(self, gauss_opacities):
+        mcmc_opacity_reg = torch.sigmoid(gauss_opacities).mean()
+        return self.config.mcmc_opacity_reg * mcmc_opacity_reg
+
+    # @torch.compile(**_TORCH_COMPILE_ARGS)
+    def _mcmc_scale_reg(self, gauss_scales):
+        mcmc_scale_reg = torch.exp(gauss_scales).mean()
+        # mcmc_scale_reg = gauss_scales.mean()
+        # mcmc_scale_reg = torch.where(gauss_scales < 0, torch.exp(gauss_scales), gauss_scales+1).mean()
+        return self.config.mcmc_scale_reg * mcmc_scale_reg
+
+    # @torch.compile(**_TORCH_COMPILE_ARGS)
+    def _quat_norm_reg(self, gauss_quats):
+        # quat_norm = gauss_quats.norm(dim=-1)
+        quat_norm = torch.sqrt((gauss_quats**2).sum(dim=-1))
+        quat_norm_reg = 0.01 * (quat_norm-1.0-torch.log(quat_norm)).mean()
+        return quat_norm_reg
+
+    def get_static_losses(self, step: int, gauss_quats, gauss_scales, gauss_opacities, loss_dict, _use_torch_impl=False):
+        """Separately process losses that are not dependent on images"""
         self.step = step
 
         # bilagrid total variation loss
@@ -295,45 +392,49 @@ class SplatTrainingLosses(torch.nn.Module):
             bilagrid_tv_loss = 10 * total_variation_loss(self.bil_grids.grids)
         loss_dict["tv_loss"] = bilagrid_tv_loss
 
-        # scale regularization
-        scale_reg = 0.0
-        if self.config.scale_regularization_weight > 0.0:
-            scale_exp = torch.exp(gauss_scales)
-            scale_reg = (
-                torch.maximum(
-                    scale_exp.amax(dim=-1) / scale_exp.amin(dim=-1),
-                    torch.tensor(self.config.max_gauss_ratio),
-                )
-                - self.config.max_gauss_ratio
+        if not _use_torch_impl:
+            losses = _ComputePerSplatLosses.apply(
+                gauss_scales, gauss_opacities, gauss_quats,
+                self.config.mcmc_opacity_reg * float(self.config.use_mcmc),
+                self.config.mcmc_scale_reg * float(self.config.use_mcmc),
+                self.config.max_gauss_ratio,
+                self.config.scale_regularization_weight,
+                self.config.erank_reg * float(self.step >= self.config.erank_reg_warmup),
+                self.config.erank_reg_s3 * float(self.step >= self.config.erank_reg_warmup),
+                0.01
             )
-            scale_reg = self.config.scale_regularization_weight * scale_reg.mean()
-        loss_dict['scale_reg'] = scale_reg
+            loss_dict['mcmc_opacity_reg'] = losses[0]
+            loss_dict['mcmc_scale_reg'] = losses[1]
+            loss_dict['scale_reg'] = losses[2]
+            loss_dict['erank_reg'] = losses[3]
+            loss_dict['quat_norm_reg'] = losses[4]
+            return loss_dict
 
         # MCMC regularizers
         mcmc_opacity_reg, mcmc_scale_reg = 0.0, 0.0
-        if self.config.use_mcmc and self.step < self.config.stop_refine_at:
+        if self.config.use_mcmc:
             if self.config.mcmc_opacity_reg > 0.0:
-                mcmc_opacity_reg = torch.sigmoid(gauss_opacities).mean()
-                mcmc_opacity_reg = self.config.mcmc_opacity_reg * mcmc_opacity_reg
+                mcmc_opacity_reg = self._mcmc_opac_reg(gauss_opacities)
             if self.config.mcmc_scale_reg > 0.0:
-                mcmc_scale_reg = torch.exp(gauss_scales).mean()
-                # mcmc_scale_reg = gauss_scales.mean()
-                # mcmc_scale_reg = torch.where(gauss_scales < 0, torch.exp(gauss_scales), gauss_scales+1).mean()
-                mcmc_scale_reg = self.config.mcmc_scale_reg * mcmc_scale_reg
+                mcmc_scale_reg = self._mcmc_scale_reg(gauss_scales)
         loss_dict['mcmc_opacity_reg'] = mcmc_opacity_reg
         loss_dict['mcmc_scale_reg'] = mcmc_scale_reg
 
-        # 3DGS regularizers
+        # scale regularization
+        scale_reg = 0.0
+        if self.config.scale_regularization_weight > 0.0:
+            scale_reg = self._scale_reg(gauss_scales)
+        loss_dict['scale_reg'] = scale_reg
+
+        # erank regularizers
         erank_reg = 0.0
         if self.step >= self.config.erank_reg_warmup and (
             self.config.erank_reg > 0.0 or self.config.erank_reg_s3 > 0.0
         ):
-            erank_reg = self.erank_regularization(gauss_scales)
+            erank_reg = self._erank_reg(gauss_scales)
         loss_dict['erank_reg'] = erank_reg
 
         # regularizations for parameters
-        quat_norm = gauss_quats.norm(dim=-1)
-        quat_norm_reg = 0.01 * (quat_norm-1.0-torch.log(quat_norm)).mean()
-        loss_dict['quat_norm_reg'] = quat_norm_reg
+        loss_dict['quat_norm_reg'] = self._quat_norm_reg(gauss_quats)
 
         return loss_dict

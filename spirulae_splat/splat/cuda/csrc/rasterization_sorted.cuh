@@ -130,7 +130,7 @@ const int img_height, \
     float* __restrict__ v_opacities
 
 
-/* == AUTO HEADER GENERATOR - DO NOT CHANGE THIS LINE == */
+/* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */
 
 
 

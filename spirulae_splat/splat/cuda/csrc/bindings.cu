@@ -4,6 +4,7 @@
 #include "rasterization.cuh"
 #include "rasterization_sorted.cuh"
 #include "sh.cuh"
+#include "misc.cuh"
 
 #include <cstdio>
 #include <cuda.h>
@@ -27,13 +28,26 @@ inline __host__ dim3 tuple2dim3(std::tuple<unsigned, unsigned, unsigned> v) {
     return {std::get<0>(v), std::get<1>(v), std::get<2>(v)};
 }
 
-inline __host__ dim3 whb2tb(unsigned width, unsigned height) {
+inline __host__ dim3 whb2tb(unsigned width, unsigned height, unsigned block_width=BLOCK_WIDTH) {
     return {
-        (width + BLOCK_WIDTH - 1) / BLOCK_WIDTH,
-        (height + BLOCK_WIDTH - 1) / BLOCK_WIDTH,
+        (width + block_width - 1) / block_width,
+        (height + block_width - 1) / block_width,
         1
     };
 }
+
+
+template<typename T, int ndim>
+TensorView<T, ndim> tensor2view(torch::Tensor& tensor) {
+    TensorView<T, ndim> view;
+    view.data = tensor.data_ptr<T>();
+    for (int i = 0; i < ndim; i++) {
+        view.shape[i] = tensor.size(i);
+        view.strides[i] = *(tensor.strides().begin() + i);
+    }
+    return view;
+}
+
 
 
 torch::Tensor compute_sh_forward_tensor(
@@ -2267,7 +2281,9 @@ std::tuple<
         AT_ERROR("v_out_color shape must be (h, w, 3)");
     }
 
-    const dim3 tile_bounds = whb2tb(w, h);
+    // unsigned block_width = BLOCK_WIDTH;
+    unsigned block_width = 32;  // 1024 threads
+    const dim3 tile_bounds = whb2tb(w, h, block_width);
     const dim3 img_size = {w, h, 1};
 
     auto options = sh_coeffs.options();
@@ -2280,12 +2296,12 @@ std::tuple<
         (float3 *)sh_coeffs.contiguous().data_ptr<float>(), \
         (float3 *)out_color.contiguous().data_ptr<float>(), \
         (float3 *)v_out_color.contiguous().data_ptr<float>(), \
-        v_rotation.contiguous().data_ptr<float>(), \
+        (float3 *)v_rotation.contiguous().data_ptr<float>(), \
         (float3 *)v_sh_coeffs.contiguous().data_ptr<float>()
 
     if (camera_model == "") {
         render_background_sh_backward_kernel<CameraType::Undistorted>
-        <<<tile_bounds, BLOCK_DIM3>>>(
+        <<<tile_bounds, dim3(block_width, block_width, 1)>>>(
             tile_bounds, img_size,
             tuple2float4(intrins), nullptr,
             _TEMP_ARGS
@@ -2295,7 +2311,7 @@ std::tuple<
         const torch::Tensor& undistortion_map = undistortion_map_.value();
         CHECK_INPUT(undistortion_map);
         render_background_sh_backward_kernel<CameraType::GenericDistorted>
-        <<<tile_bounds, BLOCK_DIM3>>>(
+        <<<tile_bounds, dim3(block_width, block_width, 1)>>>(
             tile_bounds, img_size,
             tuple2float4(intrins),
             (float2 *)undistortion_map.contiguous().data_ptr<float>(),
@@ -2306,4 +2322,180 @@ std::tuple<
     #undef _TEMP_ARGS
 
     return std::make_tuple(v_rotation, v_sh_coeffs);
+}
+
+
+torch::Tensor compute_per_splat_losses_forward_tensor(
+    torch::Tensor &scales,  // [N, 3] or [N, 2]
+    torch::Tensor &opacities,  // [N, 1]
+    torch::Tensor &quats,  // [N, 4]
+    float mcmc_opacity_reg_weight,
+    float mcmc_scale_reg_weight,
+    float max_gauss_ratio,
+    float scale_regularization_weight,
+    float erank_reg_weight,
+    float erank_reg_weight_s3,
+    float quat_norm_reg_weight
+) {
+    DEVICE_GUARD(scales);
+    CHECK_INPUT(scales);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(quats);
+
+    const size_t num_points = opacities.size(0);
+    const bool is_3dgs = (scales.size(-1) == 3);
+
+    if (scales.ndimension() != 2 || scales.size(0) != num_points ||
+        (scales.size(1) != 3 && scales.size(1) != 2))
+        AT_ERROR("scales shape must be (n, 2) or (n, 3)");
+    if (opacities.ndimension() != 2 || opacities.size(0) != num_points || opacities.size(1) != 1)
+        AT_ERROR("opacities shape must be (n, 1)");
+    if (quats.ndimension() != 2 || quats.size(0) != num_points || quats.size(1) != 4)
+        AT_ERROR("quats shape must be (n, 4)");
+
+    torch::Tensor loss = torch::zeros({kNumPerSplatLosses}, opacities.options());
+
+    per_splat_losses_forward_kernel<<<_LAUNGH_ARGS_1D(num_points)>>>(
+        is_3dgs,
+        num_points,
+        scales.contiguous().data_ptr<float>(),
+        opacities.contiguous().data_ptr<float>(),
+        quats.contiguous().data_ptr<float>(),
+        loss.data_ptr<float>(),
+        mcmc_opacity_reg_weight,
+        mcmc_scale_reg_weight,
+        max_gauss_ratio,
+        scale_regularization_weight,
+        erank_reg_weight,
+        erank_reg_weight_s3,
+        quat_norm_reg_weight
+    );
+
+    return loss;
+}
+
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+compute_per_splat_losses_backward_tensor(
+    torch::Tensor &scales,  // [N, 3] or [N, 2]
+    torch::Tensor &opacities,  // [N, 1]
+    torch::Tensor &quats,  // [N, 4]
+    torch::Tensor &v_losses,  // [kNumPerSplatLosses]
+    float mcmc_opacity_reg_weight,
+    float mcmc_scale_reg_weight,
+    float max_gauss_ratio,
+    float scale_regularization_weight,
+    float erank_reg_weight,
+    float erank_reg_weight_s3,
+    float quat_norm_reg_weight
+) {
+    DEVICE_GUARD(scales);
+    CHECK_INPUT(scales);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(quats);
+    CHECK_INPUT(v_losses);
+
+    const size_t num_points = opacities.size(0);
+    const bool is_3dgs = (scales.size(-1) == 3);
+
+    if (scales.ndimension() != 2 || scales.size(0) != num_points ||
+        (scales.size(1) != 3 && scales.size(1) != 2))
+        AT_ERROR("scales shape must be (n, 2) or (n, 3)");
+    if (opacities.ndimension() != 2 || opacities.size(0) != num_points || opacities.size(1) != 1)
+        AT_ERROR("opacities shape must be (n, 1)");
+    if (quats.ndimension() != 2 || quats.size(0) != num_points || quats.size(1) != 4)
+        AT_ERROR("quats shape must be (n, 4)");
+    if (v_losses.ndimension() != 1 || v_losses.size(0) != kNumPerSplatLosses)
+        AT_ERROR("v_losses shape must be (kNumPerSplatLosses,)");
+
+    torch::Tensor v_scales = torch::empty_like(scales);
+    torch::Tensor v_opacities = torch::empty_like(opacities);
+    torch::Tensor v_quats = torch::empty_like(quats);
+
+    per_splat_losses_backward_kernel<<<_LAUNGH_ARGS_1D(num_points)>>>(
+        is_3dgs,
+        num_points,
+        scales.contiguous().data_ptr<float>(),
+        opacities.contiguous().data_ptr<float>(),
+        quats.contiguous().data_ptr<float>(),
+        v_losses.data_ptr<float>(),
+        v_scales.contiguous().data_ptr<float>(),
+        v_opacities.contiguous().data_ptr<float>(),
+        v_quats.contiguous().data_ptr<float>(),
+        mcmc_opacity_reg_weight,
+        mcmc_scale_reg_weight,
+        max_gauss_ratio,
+        scale_regularization_weight,
+        erank_reg_weight,
+        erank_reg_weight_s3,
+        quat_norm_reg_weight
+    );
+
+    return std::make_tuple(v_scales, v_opacities, v_quats);
+}
+
+
+
+torch::Tensor blend_background_forward_tensor(
+    torch::Tensor &rgb,  // [H, W, 3]
+    torch::Tensor &alpha,  // [H, W, 1]
+    torch::Tensor &background  // [H, W, 3]
+) {
+    DEVICE_GUARD(rgb);
+    CHECK_CUDA(rgb);
+    CHECK_CUDA(alpha);
+    CHECK_CUDA(background);
+
+    if (rgb.ndimension() != 3 || rgb.size(2) != 3)
+        AT_ERROR("rgb shape must be (h, w, 3)");
+    long h = rgb.size(0), w = rgb.size(1);
+    if (alpha.ndimension() != 3 || alpha.size(0) != h || alpha.size(1) != w || alpha.size(2) != 1)
+        AT_ERROR("alpha shape must be (h, w, 1)");
+    if (background.ndimension() != 3 || background.size(0) != h || background.size(1) != w || background.size(2) != 3)
+        AT_ERROR("background shape must be (h, w, 3)");
+
+    torch::Tensor out_rgb = torch::empty({h, w, 3}, rgb.options());
+
+    blend_background_forward_kernel<<<_LAUNGH_ARGS_1D(h*w)>>>(
+        tensor2view<float, 3>(rgb), tensor2view<float, 3>(alpha), tensor2view<float, 3>(background),
+        tensor2view<float, 3>(out_rgb)
+    );
+
+    return out_rgb;
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+blend_background_backward_tensor(
+    torch::Tensor &rgb,  // [H, W, 3]
+    torch::Tensor &alpha,  // [H, W, 1]
+    torch::Tensor &background,  // [H, W, 3]
+    torch::Tensor &v_out_rgb  // [H, W, 3]
+) {
+    DEVICE_GUARD(rgb);
+    CHECK_CUDA(rgb);
+    CHECK_CUDA(alpha);
+    CHECK_CUDA(background);
+    CHECK_CUDA(v_out_rgb);
+
+    if (rgb.ndimension() != 3 || rgb.size(2) != 3)
+        AT_ERROR("rgb shape must be (h, w, 3)");
+    long h = rgb.size(0), w = rgb.size(1);
+    if (alpha.ndimension() != 3 || alpha.size(0) != h || alpha.size(1) != w || alpha.size(2) != 1)
+        AT_ERROR("alpha shape must be (h, w, 1)");
+    if (background.ndimension() != 3 || background.size(0) != h || background.size(1) != w || background.size(2) != 3)
+        AT_ERROR("background shape must be (h, w, 3)");
+    if (v_out_rgb.ndimension() != 3 || v_out_rgb.size(0) != h || v_out_rgb.size(1) != w || v_out_rgb.size(2) != 3)
+        AT_ERROR("v_out_rgb shape must be (h, w, 3)");
+
+    torch::Tensor v_rgb = torch::empty({h, w, 3}, rgb.options());
+    torch::Tensor v_alpha = torch::empty({h, w, 1}, alpha.options());
+    torch::Tensor v_background = torch::empty({h, w, 3}, background.options());
+
+    blend_background_backward_kernel<<<_LAUNGH_ARGS_1D(h*w)>>>(
+        tensor2view<float, 3>(rgb), tensor2view<float, 3>(alpha), tensor2view<float, 3>(background),
+        tensor2view<float, 3>(v_out_rgb),
+        tensor2view<float, 3>(v_rgb), tensor2view<float, 3>(v_alpha), tensor2view<float, 3>(v_background)
+    );
+
+    return std::make_tuple(v_rgb, v_alpha, v_background);
 }

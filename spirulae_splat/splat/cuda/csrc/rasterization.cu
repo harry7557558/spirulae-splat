@@ -1932,20 +1932,34 @@ __global__ void render_background_sh_backward_kernel(
 
     glm::vec3 *sh_coeffs = (glm::vec3*)sh_coeffs_float3;
 
-    glm::vec3 v_sh;
-    #define _ATOMIC_ADD_SH_COEFFS(idx) \
-        warpSum3(v_sh, warp); \
-        if (warp.thread_rank() == idx) { \
-            atomicAdd(&v_sh_coeffs[idx].x, v_sh.x); \
-            atomicAdd(&v_sh_coeffs[idx].y, v_sh.y); \
-            atomicAdd(&v_sh_coeffs[idx].z, v_sh.z); \
-        }
-        // __syncthreads();
+    constexpr unsigned warp_size = 32;
+    __shared__ glm::vec3 atomic_reduce[warp_size];  // assume warp_size^2 >= block_size
+
+    unsigned thread_idx = block.thread_rank();
+    unsigned warp_idx = thread_idx/warp_size;
+    unsigned lane_idx = thread_idx%warp_size;
+
+    glm::vec3 temp3;
+    float temp;
+    #define _BLOCK_REDUCE_VEC3() \
+        warpSum3(temp3, warp); \
+        if (warp.thread_rank() == 0) \
+            atomic_reduce[warp_idx] = temp3; \
+        __syncthreads(); \
+        temp = 0.0; \
+        if (warp_idx < 3 && lane_idx < (blockDim.x*blockDim.y/warp_size)) \
+            temp = atomic_reduce[lane_idx][warp_idx]; \
+        warpSum(temp, warp);
+
+    #define _ATOMIC_ADD(address, idx) \
+        _BLOCK_REDUCE_VEC3(); \
+        if (warp_idx < 3 && lane_idx == 0) \
+            atomicAdd((float*)address + (3*idx+warp_idx), temp);
 
     // l0
     float v_color_dot_sh_coeff = 0.0f;
-    v_sh = 0.28209479177387814f * v_color;
-    _ATOMIC_ADD_SH_COEFFS(0);
+    temp3 = 0.28209479177387814f * v_color;
+    _ATOMIC_ADD(v_sh_coeffs, 0);
 
     // l1 - manually calculated
     if (sh_degree > 1) {
@@ -1953,20 +1967,20 @@ __global__ void render_background_sh_backward_kernel(
         // color += 0.4886025119029199f * y * sh_coeffs[1];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[1]);
         v_y += 0.4886025119029199f * v_color_dot_sh_coeff;
-        v_sh = 0.4886025119029199f * y * v_color;
-        _ATOMIC_ADD_SH_COEFFS(1);
+        temp3 = 0.4886025119029199f * y * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 1);
 
         // color += 0.4886025119029199f * z * sh_coeffs[2];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[2]);
         v_z += 0.4886025119029199f * v_color_dot_sh_coeff;
-        v_sh = 0.4886025119029199f * z * v_color;
-        _ATOMIC_ADD_SH_COEFFS(2);
+        temp3 = 0.4886025119029199f * z * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 2);
 
         // color += 0.4886025119029199f * x * sh_coeffs[3];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[3]);
         v_x += 0.4886025119029199f * v_color_dot_sh_coeff;
-        v_sh = 0.4886025119029199f * x * v_color;
-        _ATOMIC_ADD_SH_COEFFS(3);
+        temp3 = 0.4886025119029199f * x * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 3);
     }
 
     // l2 - manually calculated
@@ -1976,35 +1990,35 @@ __global__ void render_background_sh_backward_kernel(
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[4]);
         v_x += 1.0925484305920792f * y * v_color_dot_sh_coeff;
         v_y += 1.0925484305920792f * x * v_color_dot_sh_coeff;
-        v_sh = 1.0925484305920792f * x * y * v_color;
-        _ATOMIC_ADD_SH_COEFFS(4);
+        temp3 = 1.0925484305920792f * x * y * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 4);
 
         // color += 1.0925484305920792f * y * z * sh_coeffs[5];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[5]);
         v_z += 1.0925484305920792f * y * v_color_dot_sh_coeff;
         v_y += 1.0925484305920792f * z * v_color_dot_sh_coeff;
-        v_sh = 1.0925484305920792f * y * z * v_color;
-        _ATOMIC_ADD_SH_COEFFS(5);
+        temp3 = 1.0925484305920792f * y * z * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 5);
 
         // color += (0.9461746957575601f * zz - 0.31539156525251999f) * sh_coeffs[6];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[6]);
         v_zz += 0.9461746957575601f * v_color_dot_sh_coeff;
-        v_sh = (0.9461746957575601f * zz - 0.31539156525251999f) * v_color;
-        _ATOMIC_ADD_SH_COEFFS(6);
+        temp3 = (0.9461746957575601f * zz - 0.31539156525251999f) * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 6);
 
         // color += 1.0925484305920792f * x * z * sh_coeffs[7];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[7]);
         v_x += 1.0925484305920792f * z * v_color_dot_sh_coeff;
         v_z += 1.0925484305920792f * x * v_color_dot_sh_coeff;
-        v_sh = 1.0925484305920792f * x * z * v_color;
-        _ATOMIC_ADD_SH_COEFFS(7);
+        temp3 = 1.0925484305920792f * x * z * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 7);
 
         // color += 0.5462742152960396f * (xx - yy) * sh_coeffs[8];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[8]);
         v_xx += 0.5462742152960396f * v_color_dot_sh_coeff;
         v_yy -= 0.5462742152960396f * v_color_dot_sh_coeff;
-        v_sh = 0.5462742152960396f * (xx - yy) * v_color;
-        _ATOMIC_ADD_SH_COEFFS(8);
+        temp3 = 0.5462742152960396f * (xx - yy) * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 8);
     }
 
     // l3 - AI generated, one incorrect line commented
@@ -2014,45 +2028,45 @@ __global__ void render_background_sh_backward_kernel(
         v_xx += 1.7701307697799305f * y * v_color_dot_sh_coeff;
         v_yy -= 0.5900435899266435f * y * v_color_dot_sh_coeff;
         v_y += 0.5900435899266435f * (3.0f * xx - yy) * v_color_dot_sh_coeff;
-        v_sh = 0.5900435899266435f * y * (3.0f * xx - yy) * v_color;
-        _ATOMIC_ADD_SH_COEFFS(9);
+        temp3 = 0.5900435899266435f * y * (3.0f * xx - yy) * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 9);
 
         // color += 2.890611442640554f * x * y * z * sh_coeffs[10];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[10]);
         v_x += 2.890611442640554f * y * z * v_color_dot_sh_coeff;
         v_y += 2.890611442640554f * x * z * v_color_dot_sh_coeff;
         v_z += 2.890611442640554f * x * y * v_color_dot_sh_coeff;
-        v_sh = 2.890611442640554f * x * y * z * v_color;
-        _ATOMIC_ADD_SH_COEFFS(10);
+        temp3 = 2.890611442640554f * x * y * z * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 10);
 
         // color += 0.4570457994644658f * y * (5.0f * zz - 1.0f) * sh_coeffs[11];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[11]);
         v_zz += 2.285228997322329f * y * v_color_dot_sh_coeff;
         v_y += 0.4570457994644658f * (5.0f * zz - 1.0f) * v_color_dot_sh_coeff;
-        v_sh = 0.4570457994644658f * y * (5.0f * zz - 1.0f) * v_color;
-        _ATOMIC_ADD_SH_COEFFS(11);
+        temp3 = 0.4570457994644658f * y * (5.0f * zz - 1.0f) * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 11);
 
         // color += 0.3731763325901154f * z * (5.0f * zz - 3.0f) * sh_coeffs[12];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[12]);
         v_z += 0.3731763325901154f * (5.0f * zz - 3.0f) * v_color_dot_sh_coeff;
         v_zz += 1.865881662950577f * z * v_color_dot_sh_coeff;
-        v_sh = 0.3731763325901154f * z * (5.0f * zz - 3.0f) * v_color;
-        _ATOMIC_ADD_SH_COEFFS(12);
+        temp3 = 0.3731763325901154f * z * (5.0f * zz - 3.0f) * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 12);
 
         // color += 0.4570457994644658f * x * (5.0f * zz - 1.0f) * sh_coeffs[13];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[13]);
         v_x += 0.4570457994644658f * (5.0f * zz - 1.0f) * v_color_dot_sh_coeff;
         v_zz += 2.285228997322329f * x * v_color_dot_sh_coeff;
-        v_sh = 0.4570457994644658f * x * (5.0f * zz - 1.0f) * v_color;
-        _ATOMIC_ADD_SH_COEFFS(13);
+        temp3 = 0.4570457994644658f * x * (5.0f * zz - 1.0f) * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 13);
 
         // color += 1.445305721320277f * z * (xx - yy) * sh_coeffs[14];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[14]);
         v_xx += 1.445305721320277f * z * v_color_dot_sh_coeff;
         v_yy -= 1.445305721320277f * z * v_color_dot_sh_coeff;
         v_z += 1.445305721320277f * (xx - yy) * v_color_dot_sh_coeff;
-        v_sh = 1.445305721320277f * z * (xx - yy) * v_color;
-        _ATOMIC_ADD_SH_COEFFS(14);
+        temp3 = 1.445305721320277f * z * (xx - yy) * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 14);
 
         // color += 0.5900435899266435f * x * (xx - 3.0f * yy) * sh_coeffs[15];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[15]);
@@ -2060,8 +2074,8 @@ __global__ void render_background_sh_backward_kernel(
         v_xx += 0.5900435899266435f * x * v_color_dot_sh_coeff;
         v_yy -= 1.7701307697799305f * x * v_color_dot_sh_coeff;
         v_x += 0.5900435899266435f * (xx - 3.0f * yy) * v_color_dot_sh_coeff;
-        v_sh = 0.5900435899266435f * x * (xx - 3.0f * yy) * v_color;
-        _ATOMIC_ADD_SH_COEFFS(15);
+        temp3 = 0.5900435899266435f * x * (xx - 3.0f * yy) * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 15);
     }
 
     // l4 - AI generated, two incorrect lines commented
@@ -2072,8 +2086,8 @@ __global__ void render_background_sh_backward_kernel(
         v_y += 2.5033429417967046f * x * (xx - yy) * v_color_dot_sh_coeff;
         v_xx += 2.5033429417967046f * x * y * v_color_dot_sh_coeff;
         v_yy -= 2.5033429417967046f * x * y * v_color_dot_sh_coeff;
-        v_sh = 2.5033429417967046f * x * y * (xx - yy) * v_color;
-        _ATOMIC_ADD_SH_COEFFS(16);
+        temp3 = 2.5033429417967046f * x * y * (xx - yy) * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 16);
 
         // color += 1.7701307697799304f * y * z * (3.0f * xx - yy) * sh_coeffs[17];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[17]);
@@ -2081,46 +2095,46 @@ __global__ void render_background_sh_backward_kernel(
         v_yy -= 1.7701307697799304f * y * z * v_color_dot_sh_coeff;
         v_y += 1.7701307697799304f * z * (3.0f * xx - yy) * v_color_dot_sh_coeff;
         v_z += 1.7701307697799304f * y * (3.0f * xx - yy) * v_color_dot_sh_coeff;
-        v_sh = 1.7701307697799304f * y * z * (3.0f * xx - yy) * v_color;
-        _ATOMIC_ADD_SH_COEFFS(17);
+        temp3 = 1.7701307697799304f * y * z * (3.0f * xx - yy) * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 17);
 
         // color += 0.9461746957575601f * x * y * (7.0f * zz - 1.0f) * sh_coeffs[18];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[18]);
         v_x += 0.9461746957575601f * y * (7.0f * zz - 1.0f) * v_color_dot_sh_coeff;
         v_y += 0.9461746957575601f * x * (7.0f * zz - 1.0f) * v_color_dot_sh_coeff;
         v_zz += 6.6232228703029207f * x * y * v_color_dot_sh_coeff;
-        v_sh = 0.9461746957575601f * x * y * (7.0f * zz - 1.0f) * v_color;
-        _ATOMIC_ADD_SH_COEFFS(18);
+        temp3 = 0.9461746957575601f * x * y * (7.0f * zz - 1.0f) * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 18);
 
         // color += 0.6690465435572892f * y * z * (7.0f * zz - 3.0f) * sh_coeffs[19];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[19]);
         v_y += 0.6690465435572892f * z * (7.0f * zz - 3.0f) * v_color_dot_sh_coeff;
         v_z += 0.6690465435572892f * y * (7.0f * zz - 3.0f) * v_color_dot_sh_coeff;
         v_zz += 4.6833258049010244f * y * z * v_color_dot_sh_coeff;
-        v_sh = 0.6690465435572892f * y * z * (7.0f * zz - 3.0f) * v_color;
-        _ATOMIC_ADD_SH_COEFFS(19);
+        temp3 = 0.6690465435572892f * y * z * (7.0f * zz - 3.0f) * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 19);
 
         // color += 0.10578554691520431f * (35.0f * zz * zz - 30.0f * zz + 3.0f) * sh_coeffs[20];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[20]);
         v_zz += 0.10578554691520431f * (70.0f * zz - 30.0f) * v_color_dot_sh_coeff;
-        v_sh = 0.10578554691520431f * (35.0f * zz * zz - 30.0f * zz + 3.0f) * v_color;
-        _ATOMIC_ADD_SH_COEFFS(20);
+        temp3 = 0.10578554691520431f * (35.0f * zz * zz - 30.0f * zz + 3.0f) * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 20);
 
         // color += 0.6690465435572892f * x * z * (7.0f * zz - 3.0f) * sh_coeffs[21];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[21]);
         v_x += 0.6690465435572892f * z * (7.0f * zz - 3.0f) * v_color_dot_sh_coeff;
         v_z += 0.6690465435572892f * x * (7.0f * zz - 3.0f) * v_color_dot_sh_coeff;
         v_zz += 4.6833258049010244f * x * z * v_color_dot_sh_coeff;
-        v_sh = 0.6690465435572892f * x * z * (7.0f * zz - 3.0f) * v_color;
-        _ATOMIC_ADD_SH_COEFFS(21);
+        temp3 = 0.6690465435572892f * x * z * (7.0f * zz - 3.0f) * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 21);
 
         // color += 0.47308734787878004f * (xx - yy) * (7.0f * zz - 1.0f) * sh_coeffs[22];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[22]);
         v_xx += 0.47308734787878004f * (7.0f * zz - 1.0f) * v_color_dot_sh_coeff;
         v_yy -= 0.47308734787878004f * (7.0f * zz - 1.0f) * v_color_dot_sh_coeff;
         v_zz += 3.3116114351514603f * (xx - yy) * v_color_dot_sh_coeff;
-        v_sh = 0.47308734787878004f * (xx - yy) * (7.0f * zz - 1.0f) * v_color;
-        _ATOMIC_ADD_SH_COEFFS(22);
+        temp3 = 0.47308734787878004f * (xx - yy) * (7.0f * zz - 1.0f) * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 22);
 
         // color += 1.7701307697799304f * x * z * (xx - 3.0f * yy) * sh_coeffs[23];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[23]);
@@ -2128,8 +2142,8 @@ __global__ void render_background_sh_backward_kernel(
         v_z += 1.7701307697799304f * x * (xx - 3.0f * yy) * v_color_dot_sh_coeff;
         v_xx += 1.7701307697799304f * x * z * v_color_dot_sh_coeff;
         v_yy -= 5.3103923093397912f * x * z * v_color_dot_sh_coeff;
-        v_sh = 1.7701307697799304f * x * z * (xx - 3.0f * yy) * v_color;
-        _ATOMIC_ADD_SH_COEFFS(23);
+        temp3 = 1.7701307697799304f * x * z * (xx - 3.0f * yy) * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 23);
 
         // color += 0.6258357354491761f * (xx * (xx - 3.0f * yy) - yy * (3.0f * xx - yy)) * sh_coeffs[24];
         v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[24]);
@@ -2137,11 +2151,9 @@ __global__ void render_background_sh_backward_kernel(
         // v_yy += 0.6258357354491761f * (6.0f * yy - 12.0f * xx) * v_color_dot_sh_coeff;
         v_xx += 0.6258357354491761f * (2.0f * xx - 6.0f * yy) * v_color_dot_sh_coeff;
         v_yy += 0.6258357354491761f * (2.0f * yy - 6.0f * xx) * v_color_dot_sh_coeff;
-        v_sh = 0.6258357354491761f * (xx * (xx - 3.0f * yy) - yy * (3.0f * xx - yy)) * v_color;
-        _ATOMIC_ADD_SH_COEFFS(24);
+        temp3 = 0.6258357354491761f * (xx * (xx - 3.0f * yy) - yy * (3.0f * xx - yy)) * v_color;
+        _ATOMIC_ADD(v_sh_coeffs, 24);
     }
-
-    #undef _ATOMIC_ADD_SH_COEFFS
 
     v_x += v_xx * 2.0f*x;
     v_y += v_yy * 2.0f*y;
@@ -2152,6 +2164,7 @@ __global__ void render_background_sh_backward_kernel(
     glm::vec3 v_p = dp_dpr * glm::vec3(v_x, v_y, v_z);
     v_p *= (inside ? 1.0f : 0.0f);
 
+  #if 0
     float tmp[9] = {
         v_p.x * xi, v_p.x * yi, v_p.x * zi,
         v_p.y * xi, v_p.y * yi, v_p.y * zi,
@@ -2161,8 +2174,18 @@ __global__ void render_background_sh_backward_kernel(
     for (int i = 0; i < 9; i++) {
         warpSum(tmp[i], warp);
         if (warp.thread_rank() == i)
-            atomicAdd(&v_rotation[i], tmp[i]);
+            atomicAdd((float*)v_rotation + i, tmp[i]);
     }
+  #else
+    temp3 = glm::vec3(v_p.x * xi, v_p.x * yi, v_p.x * zi);
+    _ATOMIC_ADD(v_rotation, 0);
+    temp3 = glm::vec3(v_p.y * xi, v_p.y * yi, v_p.y * zi);
+    _ATOMIC_ADD(v_rotation, 1);
+    temp3 = glm::vec3(v_p.z * xi, v_p.z * yi, v_p.z * zi);
+    _ATOMIC_ADD(v_rotation, 2);
+  #endif
+    #undef _BLOCK_REDUCE_VEC3
+    #undef _ATOMIC_ADD
 }
 
 

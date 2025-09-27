@@ -67,3 +67,8 @@ compute_sh_backward = _make_lazy_cuda_func("compute_sh_backward")
 # misc
 compute_relocation = _make_lazy_cuda_func("compute_relocation")
 compute_relocation_split = _make_lazy_cuda_func("compute_relocation_split")
+
+compute_per_splat_losses_forward = _make_lazy_cuda_func("compute_per_splat_losses_forward")
+compute_per_splat_losses_backward = _make_lazy_cuda_func("compute_per_splat_losses_backward")
+blend_background_forward = _make_lazy_cuda_func("blend_background_forward")
+blend_background_backward = _make_lazy_cuda_func("blend_background_backward")

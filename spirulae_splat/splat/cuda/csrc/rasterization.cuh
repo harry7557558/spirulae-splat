@@ -126,11 +126,11 @@
     const float3* __restrict__ sh_coeffs_float3, \
     const float3* __restrict__ out_color, \
     const float3* __restrict__ v_out_color, \
-    float* __restrict__ v_rotation, \
+    float3* __restrict__ v_rotation, \
     float3* __restrict__ v_sh_coeffs
 
 
-/* == AUTO HEADER GENERATOR - DO NOT CHANGE THIS LINE == */
+/* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */
 
 
 

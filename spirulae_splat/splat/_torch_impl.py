@@ -8,7 +8,8 @@ from jaxtyping import Float, Int
 from torch import Tensor
 from typing import Tuple, Literal, Optional
 from spirulae_splat.splat.utils import (
-    compute_cumulative_intersects, bin_and_sort_gaussians
+    compute_cumulative_intersects, bin_and_sort_gaussians,
+    _TORCH_COMPILE_ARGS
 )
 from .cuda import BLOCK_WIDTH
 
@@ -52,9 +53,11 @@ def bessel_j(m, x):
     return 2*(m-1)/x * bessel_j(m-1, x) - bessel_j(m-2, x)
 
 
+@torch.compile(**_TORCH_COMPILE_ARGS)
 def depth_map(z):
     return torch.where(z>0.0, torch.log(z+1.0), z)
 
+@torch.compile(**_TORCH_COMPILE_ARGS)
 def depth_inv_map(z):
     return torch.where(z>0.0, torch.exp(z)-1.0, z)
 

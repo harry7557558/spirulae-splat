@@ -45,13 +45,14 @@ from spirulae_splat.splat import (
     depth_to_normal,
     BLOCK_WIDTH,
 )
-from spirulae_splat.splat.utils import resize_image
+from spirulae_splat.splat.utils import resize_image, _TORCH_COMPILE_ARGS
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
 from spirulae_splat.strategy import DefaultStrategy, MCMCStrategy
 from spirulae_splat.splat._camera import _Camera
 
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
+from spirulae_splat.modules.per_pixel import blend_background
 
 from nerfstudio.cameras.camera_optimizers import (CameraOptimizer,
                                                   CameraOptimizerConfig)
@@ -136,9 +137,9 @@ class SpirulaeModelConfig(ModelConfig):
     """training starts at 1/d resolution, every n steps this is doubled"""
     background_color: Literal["random", "black", "white", "gray"] = "gray"
     """Whether to randomize the background color."""
-    num_downscales: int = 2
+    num_downscales: int = 0
     """at the beginning, resolution is 1/2^d, where d is this number"""
-    use_mcmc: bool = False
+    use_mcmc: bool = True
     """use Markov-Chain Monte Carlo for gaussian control
         Disable per-pixel sorting if you use this"""
     random_init: bool = False
@@ -155,16 +156,16 @@ class SpirulaeModelConfig(ModelConfig):
     """Whether to use camera optimizer"""
     camera_optimizer: CameraOptimizerConfig = field(default_factory=lambda: CameraOptimizerConfig(mode="SO3xR3"))
     """Config of the camera optimizer to use"""
-    kernel_radius: float = 1.0
+    kernel_radius: float = 3.0
     """Radius of the splatting kernel, 3.0 for Gaussian and 1.0 for polynomial"""
     relative_scale: Optional[float] = None
     """Manually set scale when a scene is poorly scaled by nerfstudio
         (e.g. Zip-NeRF dataset, very large-scale scenes across multiple street blocks)"""
-    compute_depth_normal: bool = True
+    compute_depth_normal: bool = False
     """Compute normal from depth. Required for 2DGS and supervision. Disabling this can reduce VRAM usage and speed up training."""
 
     # classial control
-    cull_alpha_thresh: float = 0.1
+    cull_alpha_thresh: float = 0.005
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
     cull_scale_thresh: float = 1.0
     """threshold of world scale for culling huge gaussians"""
@@ -192,7 +193,7 @@ class SpirulaeModelConfig(ModelConfig):
     # MCMC control
     mcmc_warmup_length: int = 500
     """start MCMC refinement at this number of steps"""
-    mcmc_cap_max: int = 100000
+    mcmc_cap_max: int = 1_000_000
     """maximum number of splats for MCMC, dataset-specific tuning required"""
     mcmc_noise_lr: float = 5e5
     """MCMC sampling noise learning rate"""
@@ -234,7 +235,7 @@ class SpirulaeModelConfig(ModelConfig):
     """enable background model"""
     adaptive_exposure_mode: Optional[Literal[
         "linear", "log_linear", "channel", "log_channel", "affine", "log_affine"
-        ]] = "log_channel"
+        ]] = None
     """Adaptive exposure mode
         linear: gt ~ k * pred, with scalar k
         log_linear: log(gt) ~ k * log(pred) + b, with scalar k and b
@@ -247,13 +248,13 @@ class SpirulaeModelConfig(ModelConfig):
     """
     adaptive_exposure_warmup: int = 1000
     """Start adaptive exposure at this number of steps"""
-    use_bilateral_grid: bool = False
+    use_bilateral_grid: bool = True
     """If True, use bilateral grid to handle the ISP changes in the image space. This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/).
        Makes training much slower - TODO: fused bilagrid in CUDA"""
     bilagrid_shape: Tuple[int, int, int] = (16, 16, 8)
     """Shape of the bilateral grid (X, Y, W)"""
 
-    use_3dgs: bool = False
+    use_3dgs: bool = True
     """Use 3DGS instead of 2DGS, with limited support for existing features
         Tested with MCMC strategy, 3.0 kernel radius, 1.0 loss scale
     """
@@ -297,7 +298,7 @@ class SpirulaeModelConfig(ModelConfig):
     erank_reg: float = 0.01
     """erank regularization weight, for 3DGS only -
         see *Effective Rank Analysis and Regularization for Enhanced 3D Gaussian Splatting, Hyung et al.*"""
-    erank_reg_s3: float = 0.05
+    erank_reg_s3: float = 0.01
     """erank regularization weight for smallest dimension, for 3DGS only"""
     erank_reg_warmup: int = 1000
     """only apply erank regularization after this many steps"""
@@ -923,12 +924,15 @@ class SpirulaeModel(Model):
             )
             rgbd = rgbd[0]
             alpha = alpha[0]
-
             rgb = rgbd[..., :3]
-            depth_im_ref = torch.where(
-                alpha > 0.0, rgbd[..., 3:] / alpha,
-                max_depth_scale*torch.amax(rgbd[..., 3:]).detach()
-            ).contiguous()
+
+            if not self.config.use_3dgs or self.config.compute_depth_normal or not self.training:
+                depth_im_ref = torch.where(
+                    alpha > 0.0, rgbd[..., 3:] / alpha,
+                    max_depth_scale*torch.amax(rgbd[..., 3:]).detach()
+                ).contiguous()
+            else:
+                depth_im_ref = None
 
             means2d = meta["means2d"]
             if self.config.use_mcmc:
@@ -949,7 +953,8 @@ class SpirulaeModel(Model):
 
         # blend with background
         background = self.get_background_image(camera, ssplat_camera)
-        rgb = rgb + (1.0 - alpha) * background
+        # rgb = torch.clip(rgb + (1.0 - alpha) * background, 0.0, 1.0)
+        rgb = blend_background(rgb, alpha, background)
         timerr.mark("bkg")  # 300us-450us
 
         # apply bilateral grid
@@ -959,13 +964,6 @@ class SpirulaeModel(Model):
                 rgb = self.training_losses.apply_bilateral_grid(rgb, camera.metadata["cam_idx"], H, W)
                 rgb = rgb.squeeze(0)
 
-        # saturate pixel value
-        else:
-            if not self.training:
-                rgb = torch.clip(rgb, 0.0, 1.0)
-            else:
-                rgb = torch.relu(rgb)
-                # rgb = saturate_keep_gradient(rgb, 0.0, None)
         timerr.mark("bilagrid")  # 300us-450us
 
         # normal regularization
@@ -983,8 +981,9 @@ class SpirulaeModel(Model):
         # pack outputs
         outputs = {
             "rgb": rgb,
-            "depth": depth_im_ref,
         }
+        if depth_im_ref is not None:
+            outputs["depth"] = depth_im_ref
         if self.config.compute_depth_normal or not self.training:
             outputs["depth_normal"] = depth_normal
         if not self.config.use_3dgs:
@@ -1109,7 +1108,7 @@ class SpirulaeModel(Model):
         mcmc_reg = (self.config.use_mcmc and self.step < self.config.stop_refine_at)
         chunks = [
             f"[N] {len(self.opacities)} {mem_stats}",
-            f"[C] {fmt('main_loss', 1.0)} "
+            f"[C] {fmt('image_loss', 1.0)} "
             f"{fmt('alpha_loss', self.config.alpha_loss_weight)} "
             f"{fmt('psnr', 1.0, 2)} "
             f"{fmt('ssim', 1.0, 3)}",

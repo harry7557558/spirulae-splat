@@ -15,7 +15,7 @@
     const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
 
 
-/* == AUTO HEADER GENERATOR - DO NOT CHANGE THIS LINE == */
+/* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */
 
 
 
@@ -615,4 +615,50 @@ std::tuple<
     const torch::Tensor &sh_coeffs,
     const torch::Tensor &out_color,
     const torch::Tensor &v_out_color
+);
+
+
+torch::Tensor compute_per_splat_losses_forward_tensor(
+    torch::Tensor &scales,  // [N, 3] or [N, 2]
+    torch::Tensor &opacities,  // [N, 1]
+    torch::Tensor &quats,  // [N, 4]
+    float mcmc_opacity_reg_weight,
+    float mcmc_scale_reg_weight,
+    float max_gauss_ratio,
+    float scale_regularization_weight,
+    float erank_reg_weight,
+    float erank_reg_weight_s3,
+    float quat_norm_reg_weight
+);
+
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+compute_per_splat_losses_backward_tensor(
+    torch::Tensor &scales,  // [N, 3] or [N, 2]
+    torch::Tensor &opacities,  // [N, 1]
+    torch::Tensor &quats,  // [N, 4]
+    torch::Tensor &v_losses,  // [kNumPerSplatLosses]
+    float mcmc_opacity_reg_weight,
+    float mcmc_scale_reg_weight,
+    float max_gauss_ratio,
+    float scale_regularization_weight,
+    float erank_reg_weight,
+    float erank_reg_weight_s3,
+    float quat_norm_reg_weight
+);
+
+
+torch::Tensor blend_background_forward_tensor(
+    torch::Tensor &rgb,  // [H, W, 3]
+    torch::Tensor &alpha,  // [H, W, 1]
+    torch::Tensor &background  // [H, W, 3]
+);
+
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+blend_background_backward_tensor(
+    torch::Tensor &rgb,  // [H, W, 3]
+    torch::Tensor &alpha,  // [H, W, 1]
+    torch::Tensor &background,  // [H, W, 3]
+    torch::Tensor &v_out_rgb  // [H, W, 3]
 );

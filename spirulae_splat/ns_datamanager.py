@@ -277,7 +277,7 @@ class DepthPredictor(torch.nn.Module):
         except ImportError:
             raise ImportError("Import error, please install https://github.com/facebookresearch/vggt")
         model = VGGT.from_pretrained(self.model_id.split(':')[-1]).to(self.device0).eval()
-        model = model.half()
+        # model = model.half()
         return model
 
     def _infer_depth_anything_v2(self, image, camera=None):
@@ -343,7 +343,7 @@ class DepthPredictor(torch.nn.Module):
     def _infer_vggt(self, image, camera=None):
         # TODO: do this batched, the model wasn't trained on single image
         image = image.permute(2, 0, 1)
-        image = image.half().to(self.device0) / 255.0
+        image = image.to(self.device0) / 255.0
 
         target_size = 518
         block_size = 14

@@ -32,7 +32,7 @@
     float2* __restrict__ out_img
 
 
-/* == AUTO HEADER GENERATOR - DO NOT CHANGE THIS LINE == */
+/* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */
 
 
 

@@ -173,8 +173,6 @@ __global__ void project_gaussians_backward_kernel(
 
     // position
     glm::vec3 p_world = *(glm::vec3*)&means3d[idx];
-    float fx = intrins.x;
-    float fy = intrins.y;
     glm::vec3 p_view = R0 * p_world + T0;
     glm::vec3 v_p_view = *(glm::vec3*)&v_positions[idx];
 
@@ -344,12 +342,12 @@ __global__ void compute_relocation_kernel(
         return;
 
     int n = ratios[idx];
-    float denom_sum = 0.0f;
 
     float opac = opacities[idx];
 
 #if 0
     // for Gaussian, minimize residual
+    float denom_sum = 0.0f;
     float new_opac = 1.0f - powf(1.0f - opac, 1.0f / n);
     for (int i = 1; i <= n; ++i) {
         for (int k = 0; k <= (i - 1); ++k) {
