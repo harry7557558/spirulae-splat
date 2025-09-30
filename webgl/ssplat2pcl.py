@@ -92,12 +92,12 @@ def quat_to_rotmat(quats):
     ]).T
     return mat.reshape(quats.shape[:-1] + (3, 3))
 
-def process_ssplat_to_pcl(input_file, num_points=100000):
+def process_ssplat_to_pcl(input_file, num_points=1000000):
     model = load_model(input_file)
     base = model["base"]
     means = base["means"].reshape(-1, 3)
     quats = base["quats"].reshape(-1, 4)
-    scales = np.exp(base["scales"].reshape(-1, 2))
+    scales = np.exp(base["scales"].reshape(len(means), -1))
     opacs = 1.0/(1.0+np.exp(-base["opacities"]))
     quats /= np.linalg.norm(quats, axis=-1, keepdims=True)
     # weights = scales[:,0] * scales[:,1] * opacs

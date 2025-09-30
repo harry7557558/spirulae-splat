@@ -214,7 +214,8 @@ class SplatTrainingLosses(torch.nn.Module):
             camera_mask = torch.isfinite(undist_map.sum(-1, True))
             if not camera_mask.all():
                 for key in ['rgb', 'depth', 'alpha', 'background']:
-                    outputs[key] = _MaskGradient.apply(outputs[key], camera_mask)
+                    if key in outputs:
+                        outputs[key] = _MaskGradient.apply(outputs[key], camera_mask)
         device = outputs['rgb'].device
 
         gt_img_rgba = self.get_gt_img(batch["image"].to(device))

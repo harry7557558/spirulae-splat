@@ -38,6 +38,7 @@ def quantize_tensor(name, tensor, n_bits, maxiter=0):
         return centroids, bins
 
     sorted_numbers, sorted_indices = torch.sort(tensor.flatten())
+    # sorted_numbers, sorted_indices = [x.cuda() for x in torch.sort(tensor.flatten().cpu())]
     quantiles = ((torch.arange(2**n_bits)+0.5) / (2**n_bits)).float().to(device)
     try:
         raise RuntimeError
