@@ -1,7 +1,2 @@
-# depth models
-models/depth_anything_v2_vits.pth
-models/depth_anything_v2_vitb.pth
-models/depth_anything_v2_vitl.pth
-
 # cached depth maps for trained scenes, safe to delete
 depth_cache/

@@ -48,6 +48,7 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
     cache_images_type: Literal["uint8", "float32"] = "uint8"
     """The image type returned from manager, caching images in uint8 saves memory"""
 
+    # TODO: probably do this offline and load with data
     depth_model: Literal[
         # disabled
         None,
@@ -234,7 +235,7 @@ class DepthPredictor(torch.nn.Module):
             CONSOLE.log(f"\nDepth model loaded: {self.model_id}, {self.model.__class__}")
 
     def _load_depth_anything_v2(self, model_path):
-        from spirulae_splat.scripts.depth_anything_v2.dpt import DepthAnythingV2
+        from depth_anything_v2.dpt import DepthAnythingV2
 
         model_configs = {
             'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
