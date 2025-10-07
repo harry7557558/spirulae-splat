@@ -32,6 +32,7 @@ from pytorch_msssim import SSIM
 
 from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map
 from spirulae_splat.splat import (
+    rasterization,
     depth_to_normal,
     BLOCK_WIDTH,
 )
@@ -57,11 +58,6 @@ from nerfstudio.model_components import renderers
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.rich_utils import CONSOLE
-
-
-from spirulae_splat.perf_timer import PerfTimer
-timerr = PerfTimer("get_outputs", ema_tau=100)
-timerl = PerfTimer("get_loss", ema_tau=100)
 
 
 def random_quat_tensor(N):
@@ -207,17 +203,11 @@ class SpirulaeModelConfig(ModelConfig):
     """maximum degree of spherical harmonics to use"""
     sh_degree_interval: int = 1000
     """every n intervals turn on another sh degree"""
-    ch_degree_r: int = 0  # 3 | 0
-    """maximum radial degree of cylindrical harmonics to use"""
-    ch_degree_phi: int = 0  # 3 | 0
-    """maximum angular degree of cylindrical harmonics to use"""
-    ch_degree_interval: int = 1000
-    """every n intervals turn on another ch degree"""
     max_opacity: float = 0.995
     """maximum opacity of a gaussian, prevent numerical instability during backward"""
     train_background_color: bool = True
     """make background color trainable"""
-    background_sh_degree: int = 3
+    background_sh_degree: int = 0
     """enable background model"""
     adaptive_exposure_mode: Optional[Literal[
         "linear", "log_linear", "channel", "log_channel", "affine", "log_affine"
@@ -332,10 +322,6 @@ class SpirulaeModel(Model):
         self.seed_points = seed_points
         super().__init__(*args, **kwargs)
 
-        if self.config.use_3dgs:
-            global gsplat
-            import gsplat
-
     def populate_modules(self):
         if self.seed_points is not None and not self.config.random_init:
             means = self.seed_points[0]
@@ -375,7 +361,6 @@ class SpirulaeModel(Model):
             dtype=np.float32)))
         # colors
         dim_sh = num_sh_bases(self.config.sh_degree)
-        dim_ch = self.config.ch_degree_r * (2*self.config.ch_degree_phi+1)
 
         if (
             self.seed_points is not None
@@ -390,16 +375,11 @@ class SpirulaeModel(Model):
                 shs[:, 1:, 3:] = 0.0
             else:
                 shs[:, 0, :3] = seed_color
-            if dim_ch > 0:
-                shs *= 2
-            chs = torch.zeros((self.seed_points[1].shape[0], dim_ch, 3)).float()
             features_dc = torch.nn.Parameter(shs[:, 0, :].contiguous())
             features_sh = torch.nn.Parameter(shs[:, 1:, :].contiguous())
-            features_ch = torch.nn.Parameter(chs)
         else:
             features_dc = torch.nn.Parameter(torch.rand(num_points, 3))
             features_sh = torch.nn.Parameter(torch.zeros((num_points, dim_sh-1, 3)))
-            features_ch = torch.nn.Parameter(torch.zeros((num_points, dim_ch, 3)))
 
         opacities = torch.nn.Parameter(torch.logit(0.1 * torch.ones(num_points, 1)))
 
@@ -409,7 +389,6 @@ class SpirulaeModel(Model):
             "quats": quats,
             "features_dc": features_dc,
             "features_sh": features_sh,
-            "features_ch": features_ch,
             "opacities": opacities,
         }
         self.gauss_params = torch.nn.ParameterDict(gauss_params)
@@ -419,9 +398,6 @@ class SpirulaeModel(Model):
         )
 
         self.training_losses = SplatTrainingLosses(self.config, self.num_train_data)
-
-        if not self.config.compute_depth_normal and not self.config.use_3dgs:
-            raise ValueError("--pipeline.model.compute_depth_normal must be enabled for 2DGS")
 
         # metrics
         from torchmetrics.image import PeakSignalNoiseRatio
@@ -543,10 +519,6 @@ class SpirulaeModel(Model):
         return self.gauss_params["features_sh"]
 
     @property
-    def features_ch(self):
-        return self.gauss_params["features_ch"]
-
-    @property
     def opacities(self):
         return self.gauss_params["opacities"]
 
@@ -557,7 +529,7 @@ class SpirulaeModel(Model):
             # For backwards compatibility, we remap the names of parameters from
             # means->gauss_params.means since old checkpoints have that format
             for p in ["means", "scales", "quats",
-                      "features_dc", "features_sh", "features_ch",
+                      "features_dc", "features_sh",
                       "opacities"]:
                 dict[f"gauss_params.{p}"] = dict[p]
         newp = dict["gauss_params.means"].shape[0]
@@ -649,7 +621,7 @@ class SpirulaeModel(Model):
             name: [self.gauss_params[name]]
             for name in [
                 "means", "scales", "quats",
-                "features_dc", "features_sh", "features_ch",
+                "features_dc", "features_sh",
                 "opacities"
             ]
         }
@@ -690,20 +662,18 @@ class SpirulaeModel(Model):
         if not isinstance(camera, Cameras):
             print("Called get_background_image with not a camera")
             return {}
-        assert camera.shape[0] == 1, "Only one camera at a time"
-        camera_downscale = self._get_downscale_factor()
-        camera.rescale_output_resolution(1 / camera_downscale)
 
-        W, H = int(camera.width.item()), int(camera.height.item())
+        W, H = int(camera.width[0].item()), int(camera.height[0].item())
 
         if self.config.randomize_background:
             # return torch.rand_like(self.background_color).repeat(H, W, 1)
-            return torch.rand((H, W, 3), device=self.background_color.device)
+            return torch.rand((len(camera), H, W, 3), device=self.background_color.device)
 
         sh_degree = self.config.background_sh_degree
         if not self.config.train_background_color or not (sh_degree > 0):
-            return self.background_color.repeat(H, W, 1)
+            return self.background_color[None].repeat(len(camera), H, W, 1)
 
+        raise NotImplementedError("ssplat_camera")
         rotation = camera.camera_to_worlds[0][:3, :3]
         sh_coeffs = torch.cat((self.background_color.unsqueeze(0), self.background_sh), dim=0)  # [(deg+1)^2, 3]
         return render_background_sh(ssplat_camera, rotation, sh_degree, sh_coeffs)
@@ -714,97 +684,68 @@ class SpirulaeModel(Model):
 
     def get_outputs(self, camera: Cameras) -> Dict[str, Union[torch.Tensor, List]]:
         """Takes in a camera and returns a dictionary of outputs."""
-        if isinstance(camera, list):
-            # TODO: support multi-GPU
-            return [self.get_outputs(c) for c in camera]
         if not isinstance(camera, Cameras):
             print("Called get_outputs with not a camera")
             return {}
-        assert camera.shape[0] == 1, "Only one camera at a time"
 
-        timerr.start()
         device = self.means.device
 
         if self.training and self.config.use_camera_optimizer:
-            optimized_camera_to_world = self.camera_optimizer.apply_to_camera(camera)[0, ...]
+            optimized_camera_to_world = self.camera_optimizer.apply_to_camera(camera)
         else:
-            optimized_camera_to_world = camera.camera_to_worlds[0, ...]
+            optimized_camera_to_world = camera.camera_to_worlds
         optimized_camera_to_world = optimized_camera_to_world.cpu()
-        timerr.mark(".")  # 70us
 
         camera_downscale = self._get_downscale_factor()
         camera.rescale_output_resolution(1 / camera_downscale)
-        W, H = int(camera.width.item()), int(camera.height.item())
-        intrins = (camera.fx.item(), camera.fy.item(), camera.cx.item(), camera.cy.item())
-        camera.rescale_output_resolution(camera_downscale)
-        if camera.camera_type.item() == CameraType.FISHEYE.value:
-            dist_coeffs = tuple(camera.distortion_params.cpu().numpy().flatten().tolist())
-            ssplat_camera = _Camera(H, W, "OPENCV_FISHEYE", intrins, dist_coeffs, device=device)
-        else:
-            ssplat_camera = _Camera(H, W, "", intrins, device=device)
-        timerr.mark(".")  # 400us
+        W, H = int(camera.width[0].item()), int(camera.height[0].item())
 
-        R = optimized_camera_to_world[:3, :3]  # 3 x 3
-        T = optimized_camera_to_world[:3, 3:4]  # 3 x 1
+        R = optimized_camera_to_world[:, :3, :3]  # 3 x 3
+        T = optimized_camera_to_world[:, :3, 3:4]  # 3 x 1
         if self.config.relative_scale is not None:
             T = T * self.config.relative_scale
-        R = R * torch.tensor([[1.0, -1.0, -1.0]])
-        R_inv = R.T
-        T_inv = -R_inv @ T
-        viewmat = torch.eye(4, dtype=optimized_camera_to_world.dtype)
-        viewmat[:3, :3] = R_inv
-        viewmat[:3, 3:4] = T_inv
-        self.last_size = (H, W)
-        timerr.mark("pre")  # 80us
+        R = R * torch.tensor([[[1.0, -1.0, -1.0]]])
+        R_inv = R.transpose(-1, -2)
+        T_inv = -torch.bmm(R_inv, T)
+        viewmat = torch.eye(4, dtype=optimized_camera_to_world.dtype)[None].repeat(len(camera), 1, 1)
+        viewmat[:, :3, :3] = R_inv
+        viewmat[:, :3, 3:4] = T_inv
 
         quats = F.normalize(self.quats, dim=-1)
         opacities = self.config.max_opacity * torch.sigmoid(self.opacities)
-        timerr.mark("map")  # 300us-450us
-
-        if self.config.sh_degree > 0:
-            viewdirs = self.means.detach() - T.squeeze(-1).to(device)  # (N, 3)
-            n = min(self.step // self.config.sh_degree_interval, self.config.sh_degree)
-            rgbs = spherical_harmonics(n, viewdirs, self.features_dc, self.features_sh)  # input unnormalized viewdirs
-            rgbs = rgbs + 0.5
-            # comment this - discourage below zero, make it compatible with existing viewers
-            # rgbs = torch.relu(rgbs)
-        else:
-            rgbs = self.features_dc
-        timerr.mark("sh")  # 200us-350us
 
         max_depth_scale = 2.0 if self.training else 1.0
 
         assert self.config.use_3dgs, "2DGS is deprecated"
 
         # Call GSplat for 3DGS rendering
-        fx, fy, cx, cy = ssplat_camera.intrins
-        Ks = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).float()
+        Ks = camera.get_intrinsics_matrices()
         
         kwargs = {}
-        is_fisheye = ssplat_camera.model == "OPENCV_FISHEYE"
+        is_fisheye = (camera.camera_type[0].item() == CameraType.FISHEYE.value)
         if is_fisheye:
             if not self.config.use_mcmc:
                 raise ValueError("3DGS training with fisheye camera is currently only supported for MCMC.")
-            dist_coeffs = torch.tensor(ssplat_camera.dist_coeffs).float().to(device)
-            if len(dist_coeffs) == 4:
-                kwargs['radial_coeffs'] = dist_coeffs[None]
-            elif len(dist_coeffs) == 6:
-                kwargs["radial_coeffs"] = dist_coeffs[:4][None]
-                kwargs["tangential_coeffs"] = dist_coeffs[4:][None]
+            if len(camera.distortion_params) == 4:
+                kwargs['radial_coeffs'] = camera.distortion_params
+            elif len(camera.distortion_params) == 6:
+                kwargs["radial_coeffs"] = camera.distortion_params[:, :4]
+                kwargs["tangential_coeffs"] = camera.distortion_params[:, 4:]
                 # TODO: make sure GSplat 3DGUT actually supports this??
             else:
                 raise ValueError("Only support fisheye with 4 or 6 distortion coefficients")
 
-        rgbd, alpha, meta = gsplat.rasterization(
+        rgbd, alpha, meta = rasterization(
             means=self.means,
             quats=quats,
             scales=torch.exp(self.scales),
             opacities=opacities.squeeze(-1),
-            colors=rgbs,
-            viewmats=viewmat[None].to(device),  # [C, 4, 4]
-            Ks=Ks[None].to(device),  # [C, 3, 3]
+            colors=torch.concatenate([self.features_dc.unsqueeze(1), self.features_sh], dim=1),  # TODO: slow
+            viewmats=viewmat.to(device),  # [C, 4, 4]
+            Ks=Ks.to(device),  # [C, 3, 3]
             width=W,
             height=H,
+            sh_degree=self.config.sh_degree,
             packed=False,
             absgrad=(not self.config.use_mcmc),
             sparse_grad=False,
@@ -816,11 +757,9 @@ class SpirulaeModel(Model):
             render_mode="RGB+D",
             **kwargs,
         )
-        rgbd = rgbd[0]
-        alpha = alpha[0]
         rgb = rgbd[..., :3]
 
-        if not self.config.use_3dgs or self.config.compute_depth_normal or not self.training:
+        if self.config.compute_depth_normal or not self.training:
             depth_im_ref = torch.where(
                 alpha > 0.0, rgbd[..., 3:] / alpha,
                 max_depth_scale*torch.amax(rgbd[..., 3:]).detach()
@@ -843,34 +782,19 @@ class SpirulaeModel(Model):
                 "means2d": means2d,
                 "depths": depths,
             }
-        timerr.mark("post")  # 100us-200us
 
         # blend with background
-        background = self.get_background_image(camera, ssplat_camera)
-        # rgb = torch.clip(rgb + (1.0 - alpha) * background, 0.0, 1.0)
-        rgb = blend_background(rgb, alpha, background)
-        timerr.mark("bkg")  # 300us-450us
+        background = self.get_background_image(camera, None)
+        rgb = torch.clip(rgb + (1.0 - alpha) * background, 0.0, 1.0)
 
         # apply bilateral grid
         if self.config.use_bilateral_grid and self.training:
             if camera.metadata is not None and "cam_idx" in camera.metadata:
-                rgb = rgb.unsqueeze(0)
                 rgb = self.training_losses.apply_bilateral_grid(rgb, camera.metadata["cam_idx"], H, W)
-                rgb = rgb.squeeze(0)
-
-        timerr.mark("bilagrid")  # 300us-450us
 
         # normal regularization
-        if not self.config.use_3dgs:
-            depth_im_ref = depth_inv_map(depth_im_ref)
-        if self.config.compute_depth_normal or not self.training:
-            depth_normal, alpha_diffused = depth_to_normal(depth_im_ref, ssplat_camera, None, True, alpha)
-        if not self.config.use_3dgs:
-            normal_im = F.normalize(normal_im, dim=-1)
-            reg_normal = 1.0 - (depth_normal * normal_im).sum(-1, True)
-            reg_normal = torch.nan_to_num(reg_normal, 0.0, 0.0, 0.0)
-        timerr.end("normal_reg")  # 600us-900us
-        # -> ?us-?us median depth, 3000us-4500us one pass
+        # if self.config.compute_depth_normal or not self.training:
+        #     depth_normal, alpha_diffused = depth_to_normal(depth_im_ref, ssplat_camera, None, True, alpha)
 
         # pack outputs
         outputs = {
@@ -878,31 +802,26 @@ class SpirulaeModel(Model):
         }
         if depth_im_ref is not None:
             outputs["depth"] = depth_im_ref
-        if self.config.compute_depth_normal or not self.training:
-            outputs["depth_normal"] = depth_normal
-        if not self.config.use_3dgs:
-            outputs["render_normal"] = 0.5+0.5*normal_im
-            outputs["reg_depth"] = torch.sqrt(torch.relu(reg_depth*alpha)+1e-8)
-            outputs["reg_normal"] = torch.sqrt(torch.relu(reg_normal*alpha_diffused)+1e-8)
+        # if self.config.compute_depth_normal or not self.training:
+        #     outputs["depth_normal"] = depth_normal
         outputs["alpha"] = alpha
         outputs["background"] = background
 
         if not self.training:
             outputs["alpha"] = outputs["alpha"].reshape((H, W, 1)).repeat(1, 1, 3)
 
-        if self.training:
-            outputs["ssplat_camera"] = ssplat_camera
-
         # convert linear depth to ray depth, for correct gl_z_buf_depth in Viser
         if not self.training:
-            undist_map = ssplat_camera.get_undist_map(always=True)
-            distances = torch.sqrt((undist_map*undist_map).sum(-1, True) + 1.0)
-            outputs["depth"] = outputs["depth"] * distances
-            outputs["depth"] = torch.clip(outputs["depth"], max=torch.quantile(outputs["depth"], 0.99))
+            # undist_map = ssplat_camera.get_undist_map(always=True)
+            # distances = torch.sqrt((undist_map*undist_map).sum(-1, True) + 1.0)
+            # outputs["depth"] = outputs["depth"] * distances
+            # outputs["depth"] = torch.clip(outputs["depth"], max=torch.quantile(outputs["depth"], 0.99))
             if self.config.relative_scale is not None:
                 outputs["depth"] /= self.config.relative_scale
             if "depth_normal" in outputs:
                 outputs["depth_normal"] = 0.5+0.5*outputs["depth_normal"]
+            for key in outputs:
+                outputs[key] = outputs[key].squeeze(0)
 
         return outputs
 
@@ -935,23 +854,7 @@ class SpirulaeModel(Model):
         """
 
         # Per-image losses
-        if isinstance(outputs, list) and isinstance(batch, list):
-            assert len(outputs) == len(batch)
-            if self._train_batch_size != len(outputs):
-                self._train_batch_size = len(outputs)
-                self._set_strategy()
-            losses = []
-            for outputs_i, batch_i in zip(outputs, batch):
-                losses.append(self.training_losses(self.step, batch_i, outputs_i))
-            loss_dict = losses[0]
-            for loss_i in losses[1:]:
-                for key, value in loss_i.items():
-                    loss_dict[key] = loss_dict[key] + value
-            for key in loss_dict:
-                loss_dict[key] = loss_dict[key] / self._train_batch_size
-
-        else:
-            loss_dict = self.training_losses(self.step, batch, outputs)
+        loss_dict = self.training_losses(self.step, batch, outputs)
 
         # Per-splat losses
         self.training_losses.get_static_losses(

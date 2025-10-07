@@ -11,14 +11,7 @@ from spirulae_splat.splat.cuda import _C
 
 from fused_ssim import fused_ssim
 
-try:
-    # raise ImportError()
-    from fused_bilagrid import BilateralGrid, slice, total_variation_loss
-    USE_FUSED_BILAGRID = True
-except ImportError:
-    print("fused_bilagrid not found, fall back to nerfstudio lib_bilagrid")
-    from nerfstudio.model_components.lib_bilagrid import BilateralGrid, slice, total_variation_loss
-    USE_FUSED_BILAGRID = False
+from fused_bilagrid import BilateralGrid, slice, total_variation_loss
 
 
 class _MaskGradient(torch.autograd.Function):
@@ -128,23 +121,13 @@ class SplatTrainingLosses(torch.nn.Module):
 
     def apply_bilateral_grid(self, rgb: torch.Tensor, cam_idx: int, H: int, W: int) -> torch.Tensor:
         """rgb must be clamped to 0-1"""
-        # make xy grid
-        grid_xy = None
-        if not USE_FUSED_BILAGRID:
-            grid_y, grid_x = torch.meshgrid(
-                torch.linspace(0, 1.0, H, device=rgb.device),
-                torch.linspace(0, 1.0, W, device=rgb.device),
-                indexing="ij",
-            )
-            grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
-
         out = slice(
-            bil_grids=self.bil_grids, rgb=rgb, xy=grid_xy,
-            grid_idx=torch.tensor(cam_idx, device=rgb.device, dtype=torch.long),
+            bil_grids=self.bil_grids, rgb=rgb, xy=None,
+            grid_idx=torch.tensor(cam_idx, device=rgb.device, dtype=torch.long)[:,None],
         )
         return out["rgb"]
 
-    @torch.compile(**_TORCH_COMPILE_ARGS)
+    # @torch.compile(**_TORCH_COMPILE_ARGS)
     def composite_with_background(self, image, background) -> torch.Tensor:
         """Composite the ground truth image with a background color when it has an alpha channel.
 
@@ -152,8 +135,8 @@ class SplatTrainingLosses(torch.nn.Module):
             image: the image to composite
             background: the background color
         """
-        if image.shape[2] == 4:
-            alpha = image[..., -1].unsqueeze(-1).repeat((1, 1, 3))
+        if image.shape[-1] == 4:
+            alpha = image[..., -1].unsqueeze(-1).repeat((1, 1, 1, 3))
             return alpha * image[..., :3] + (1 - alpha) * background
         else:
             return image
@@ -169,7 +152,7 @@ class SplatTrainingLosses(torch.nn.Module):
         return self.config.alpha_reg_weight * \
             min(self.step / max(self.config.alpha_reg_warmup, 1), 1)
 
-    @torch.compile(**_TORCH_COMPILE_ARGS)
+    # @torch.compile(**_TORCH_COMPILE_ARGS)
     def _image_loss_0(self, gt_img, pred_img, pred_img_e):
         pred_img_e = torch.clip(pred_img_e, 0.0, 1.0)
         pred_img = torch.clip(pred_img, 0.0, 1.0)
@@ -177,11 +160,11 @@ class SplatTrainingLosses(torch.nn.Module):
         Ll1 = torch.abs(gt_img - pred_img).mean()
         Ll2_e = ((gt_img-pred_img_e)**2).mean()
 
-        gt_img_bchw = gt_img.permute(2, 0, 1).unsqueeze(0).contiguous()
-        pred_img_bchw = pred_img_e.permute(2, 0, 1).unsqueeze(0).contiguous()
+        gt_img_bchw = gt_img.permute(0, 3, 1, 2).contiguous()
+        pred_img_bchw = pred_img_e.permute(0, 3, 1, 2).contiguous()
         return gt_img_bchw, pred_img_bchw, Ll1_e, Ll1, Ll2_e
 
-    @torch.compile(dynamic=False)
+    # @torch.compile(dynamic=False)
     def _image_loss_1(self, Ll1_e, Ll1, ssim, ssim_lambda, exposure_reg_image):
         return torch.lerp(torch.lerp(Ll1_e, 1-ssim, ssim_lambda), Ll1, exposure_reg_image)
 
@@ -193,7 +176,7 @@ class SplatTrainingLosses(torch.nn.Module):
         ssim_lambda = self.config.ssim_lambda * min(self.step/max(self.config.ssim_warmup,1), 1)
         return self._image_loss_1(Ll1_e, Ll1, ssim, ssim_lambda, exposure_reg_image), Ll2_e, ssim
 
-    @torch.compile(**_TORCH_COMPILE_ARGS)
+    # @torch.compile(**_TORCH_COMPILE_ARGS)
     def alpha_reg(self, alpha):
         weight_alpha_reg = self.get_alpha_reg_weight()
         if self.config.randomize_background:
@@ -208,14 +191,15 @@ class SplatTrainingLosses(torch.nn.Module):
 
         # mask out of bound (e.g. fisheye circle)
         camera_mask = None
-        ssplat_camera = outputs["ssplat_camera"]  # type: _Camera
-        if ssplat_camera.is_distorted():
-            undist_map = ssplat_camera.get_undist_map()
-            camera_mask = torch.isfinite(undist_map.sum(-1, True))
-            if not camera_mask.all():
-                for key in ['rgb', 'depth', 'alpha', 'background']:
-                    if key in outputs:
-                        outputs[key] = _MaskGradient.apply(outputs[key], camera_mask)
+        # TODO
+        # ssplat_camera = outputs["ssplat_camera"]  # type: _Camera
+        # if ssplat_camera.is_distorted():
+        #     undist_map = ssplat_camera.get_undist_map()
+        #     camera_mask = torch.isfinite(undist_map.sum(-1, True))
+        #     if not camera_mask.all():
+        #         for key in ['rgb', 'depth', 'alpha', 'background']:
+        #             if key in outputs:
+        #                 outputs[key] = _MaskGradient.apply(outputs[key], camera_mask)
         device = outputs['rgb'].device
 
         gt_img_rgba = self.get_gt_img(batch["image"].to(device))
@@ -224,7 +208,7 @@ class SplatTrainingLosses(torch.nn.Module):
 
         # alpha channel for bounded objects - apply a cost on rendered alpha
         alpha_loss = 0.0
-        if gt_img_rgba.shape[2] == 4:
+        if gt_img_rgba.shape[-1] == 4:
             alpha = gt_img_rgba[..., -1].unsqueeze(-1)
             alpha_loss = alpha_loss + SupervisionLosses.get_alpha_loss(outputs['alpha'], alpha)
 
@@ -235,7 +219,7 @@ class SplatTrainingLosses(torch.nn.Module):
             # batch["mask"] : [H, W, 1]
             mask = self._downscale_if_required(batch["mask"])
             mask = mask.float().to(gt_img.device)
-            assert mask.shape[:2] == gt_img.shape[:2] == pred_img.shape[:2]
+            assert mask.shape[:-1] == gt_img.shape[:-1] == pred_img.shape[:-1]
             # can be little bit sketchy for the SSIM loss
             gt_img = torch.lerp(outputs["background"], gt_img, mask)
             # pred_img = torch.lerp(outputs["background"], pred_img, mask)

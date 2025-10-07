@@ -194,14 +194,14 @@ def resize_image(image: torch.Tensor, d: int):
     """
     Downscale images using the same 'area' method in opencv
 
-    :param image shape [H, W, C]
+    :param image shape [B, H, W, C]
     :param d downscale factor (must be 2, 4, 8, etc.)
 
-    return downscaled image in shape [H//d, W//d, C]
+    return downscaled image in shape [B, H//d, W//d, C]
     """
     # weight = (1.0 / (d * d)) * torch.ones((1, 1, d, d), dtype=torch.float32, device=image.device)
     # return F.conv2d(image.float().permute(2, 0, 1)[:, None, ...], weight, stride=d).squeeze(1).permute(1, 2, 0).to(image)
-    H, W, C = image.shape
-    reshaped = image[:H//d*d, :W//d*d].view(H//d, d, W//d, d, C)
-    blocks = reshaped.permute(0, 2, 1, 3, 4).contiguous().view(H//d, W//d, d*d, C)
-    return blocks.float().mean(dim=2)
+    B, H, W, C = image.shape
+    reshaped = image[:, :H//d*d, :W//d*d, :].view(B, H//d, d, W//d, d, C)
+    blocks = reshaped.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H//d, W//d, d*d, C)
+    return blocks.float().mean(dim=-2)

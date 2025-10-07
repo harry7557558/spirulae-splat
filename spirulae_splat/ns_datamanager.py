@@ -15,6 +15,8 @@ import json
 import torch
 import numpy as np
 
+from collections import deque
+
 from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.data.datamanagers.full_images_datamanager import (
     DataManagerConfig,
@@ -591,8 +593,8 @@ class SpirulaeDataManager(FullImageDatamanager):
         super().__init__(
             config=config, device=device, test_mode=test_mode, world_size=world_size, local_rank=local_rank, **kwargs
         )
-        self.num_train = 0
-        self.num_eval = 0
+
+        self.train_unseen_cameras = deque()
 
     def _load_images(
         self, split: Literal["train", "eval"], cache_images_device: Literal["cpu-pageable", "cpu", "gpu"]
@@ -619,10 +621,8 @@ class SpirulaeDataManager(FullImageDatamanager):
         # Which dataset?
         if split == "train":
             dataset = self.train_dataset
-            self.num_train = len(dataset)
         elif split == "eval":
             dataset = self.eval_dataset
-            self.num_eval = len(dataset)
         else:
             assert_never(split)
 
@@ -732,27 +732,34 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         Returns a Camera instead of raybundle"""
 
-        train_batch_size = (self.num_train + self.config.max_batch_per_epoch - 1) \
+        train_batch_size = (len(self.train_dataset) + self.config.max_batch_per_epoch - 1) \
             // self.config.max_batch_per_epoch
-        if train_batch_size > 1 and step >= 0:
-            cameras, batches = [], []
-            for i in range(train_batch_size):
-                camera, batch = self.next_train(-1)
-                cameras.append(camera)
-                batches.append(batch)
-            return cameras, batches
+        # train_batch_size = 4
 
-        image_idx = self.train_unseen_cameras.pop(random.randint(0, len(self.train_unseen_cameras) - 1))
-        # Make sure to re-populate the unseen cameras list if we have exhausted it
-        if len(self.train_unseen_cameras) == 0:
-            self.train_unseen_cameras = [i for i in range(len(self.train_dataset))]
+        image_indices = []
+        for i in range(train_batch_size):
+            if len(self.train_unseen_cameras) == 0:
+                perm = list(range(len(self.train_dataset)))
+                random.shuffle(perm)
+                self.train_unseen_cameras.extend(perm)
+            image_idx = self.train_unseen_cameras.popleft()
+            image_indices.append(image_idx)
 
-        data = deepcopy(self.cached_train[image_idx])
-        data["image"] = data["image"].to(self.device)
+        batch = {}
+        for image_idx in image_indices:
+            img = self.cached_train[image_idx]
+            for key, value in img.items():
+                if key not in batch:
+                    batch[key] = []
+                if isinstance(value, torch.Tensor):
+                    value = value.clone()
+                batch[key].append(value)
+        for key in batch:
+            if isinstance(batch[key][0], torch.Tensor):
+                batch[key] = torch.stack(batch[key]).to(self.device)
 
-        assert len(self.train_dataset.cameras.shape) == 1, "Assumes single batch dimension"
-        camera = self.train_dataset.cameras[image_idx : image_idx + 1].to(self.device)
+        camera = self.train_dataset.cameras[torch.tensor(image_indices)].to(self.device)
         if camera.metadata is None:
             camera.metadata = {}
-        camera.metadata["cam_idx"] = image_idx
-        return camera, data
+        camera.metadata["cam_idx"] = image_indices
+        return camera, batch

@@ -225,7 +225,7 @@ class SplatModel:
         timer.mark("map")
 
         if self.scales.shape[-1] == 3:
-            from spirulae_splat.splat.gsplat_3dgs_wrapper import (
+            from spirulae_splat.splat.rendering import (
                 fully_fused_projection,
                 rasterize_to_pixels,
                 isect_tiles,

@@ -6,6 +6,7 @@ from .sh import spherical_harmonics
 from .cuda import (
     BLOCK_WIDTH,
 )
+from .rendering import rasterization
 
 from torch import Tensor
 
