@@ -90,29 +90,3 @@ __global__ void map_gaussian_to_intersects(
 __global__ void get_tile_bin_edges(
     const int num_intersects, const int64_t* __restrict__ isect_ids_sorted, int2* __restrict__ tile_bins
 );
-
-
-// Compute relocation for MCMC update
-__global__ void compute_relocation_kernel(
-    const int num_points,
-    const int num_scales,
-    const float *opacities,
-    const float *scales,
-    const int *ratios,
-    float *binoms,
-    int n_max,
-    float *new_opacities,
-    float *new_scales
-);
-
-
-__global__ void compute_relocation_split_kernel(
-    const int num_points,
-    const float3 *positions,
-    const float4 *quats,
-    const float *opacities,
-    const float2 *scales,
-    float3 *new_position_offsets,
-    float *new_opacities,
-    float2 *new_scales
-);

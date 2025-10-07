@@ -6,8 +6,15 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from spirulae_splat.splat._torch_impl import quat_to_rotmat, quat_scale_to_covar_preci
-from .relocation import compute_relocation, BINOMS
-from gsplat.relocation import compute_relocation as compute_relocation_3dgs
+from gsplat.relocation import compute_relocation
+
+import math
+
+N_BINOMS = 51
+BINOMS = torch.zeros((N_BINOMS, N_BINOMS))
+for n in range(N_BINOMS):
+    for k in range(n + 1):
+        BINOMS[n, k] = math.comb(n, k)
 
 @torch.no_grad()
 def _multinomial_sample(weights: Tensor, n: int, replacement: bool = True) -> Tensor:
@@ -278,16 +285,12 @@ def relocate(
     probs = probs[alive_indices].flatten()  # ensure its shape is [N,]
     sampled_idxs = _multinomial_sample(probs, n, replacement=True)
     sampled_idxs = alive_indices[sampled_idxs]
-    args = {
-        'opacities': opacities[sampled_idxs],
-        'scales': torch.exp(params["scales"])[sampled_idxs],
-        'ratios': torch.bincount(sampled_idxs)[sampled_idxs] + 1
-    }
-    if not is_3dgs:
-        new_opacities, new_scales = compute_relocation(**args)
-    else:
-        args['binoms'] = BINOMS.to(opacities.device)
-        new_opacities, new_scales = compute_relocation_3dgs(**args)
+    new_opacities, new_scales = compute_relocation(
+        opacities=opacities[sampled_idxs],
+        scales=torch.exp(params["scales"])[sampled_idxs],
+        ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
+        binoms=BINOMS.to(opacities.device)
+    )
     new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
 
     def param_fn(name: str, p: Tensor) -> Tensor:
@@ -330,6 +333,7 @@ def sample_add(
         opacities=opacities[sampled_idxs],
         scales=torch.exp(params["scales"])[sampled_idxs],
         ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
+        binoms=BINOMS.to(opacities.device)
     )
     new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
 

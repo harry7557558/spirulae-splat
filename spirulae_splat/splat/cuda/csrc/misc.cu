@@ -1,5 +1,3 @@
-#include "misc.cuh"
-
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
@@ -7,6 +5,8 @@ namespace cg = cooperative_groups;
 #define TensorView _Slang_TensorView
 #include "generated/slang_all.cu"
 #undef TensorView
+
+#include "misc.cuh"
 
 
 __global__ void per_splat_losses_forward_kernel(

@@ -153,7 +153,6 @@ no_fused_bilagrid = (importlib.util.find_spec('fused_bilagrid') is None)
 path = "spirulae_splat/splat/cuda/csrc/"
 generate_header(path+"projection.cu", path+"projection.cuh")
 generate_header(path+"rasterization.cu", path+"rasterization.cuh")
-generate_header(path+"rasterization_sorted.cu", path+"rasterization_sorted.cuh")
 generate_header(path+"misc.cu", path+"misc.cuh")
 generate_header(path+"bindings.cu", path+"bindings.h")
 

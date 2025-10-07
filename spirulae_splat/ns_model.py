@@ -32,16 +32,6 @@ from pytorch_msssim import SSIM
 
 from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map
 from spirulae_splat.splat import (
-    project_gaussians,
-    rasterize_gaussians_simple,
-    rasterize_gaussians_depth,
-    rasterize_gaussians,
-    rasterize_gaussians_simplified,
-    rasterize_gaussians_indices,
-    rasterize_gaussians_simple_sorted,
-    rasterize_gaussians_depth_sorted,
-    rasterize_gaussians_sorted,
-    rasterize_gaussians_simplified_sorted,
     depth_to_normal,
     BLOCK_WIDTH,
 )
@@ -213,10 +203,6 @@ class SpirulaeModelConfig(ModelConfig):
         Useful if you see huge floaters at a distance in large indoor space"""
 
     # representation
-    use_per_pixel_sorting: bool = False
-    """enable per-pixel sorting, recommend disable this when using MCMC"""
-    per_pixel_sorting_warmup: int = 2000
-    """use per pixel sorting only after this number of steps"""
     sh_degree: int = 3
     """maximum degree of spherical harmonics to use"""
     sh_degree_interval: int = 1000
@@ -251,7 +237,7 @@ class SpirulaeModelConfig(ModelConfig):
     use_bilateral_grid: bool = True
     """If True, use bilateral grid to handle the ISP changes in the image space. This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/).
        Makes training much slower - TODO: fused bilagrid in CUDA"""
-    bilagrid_shape: Tuple[int, int, int] = (16, 16, 8)
+    bilagrid_shape: Tuple[int, int, int] = (8, 8, 4)
     """Shape of the bilateral grid (X, Y, W)"""
 
     use_3dgs: bool = True
@@ -788,157 +774,65 @@ class SpirulaeModel(Model):
 
         max_depth_scale = 2.0 if self.training else 1.0
 
-        if not self.config.use_3dgs:
-            # 2DGS rendering
+        assert self.config.use_3dgs, "2DGS is deprecated"
 
-            (
-                positions, axes_u, axes_v,
-                bounds, num_tiles_hit
-            ) = project_gaussians(  # type: ignore
-                self.means,
-                torch.exp(self.scales),
-                quats,
-                viewmat[:3, :].to(device),
-                ssplat_camera,
-            )  # type: ignore
-            timerr.mark("project")  # 200us-350us
-
-            use_per_pixel_sorting = (
-                self.config.use_per_pixel_sorting and
-                self.step >= self.config.per_pixel_sorting_warmup
-            )
-            if use_per_pixel_sorting:
-                raster_indices = rasterize_gaussians_indices(
-                    positions, axes_u, axes_v, opacities,
-                    bounds, num_tiles_hit,
-                    ssplat_camera
-                )
-                rasterize_depth = rasterize_gaussians_depth_sorted
-                rasterize = rasterize_gaussians_sorted
-                rasterize_simplified = rasterize_gaussians_simplified_sorted
-            else:
-                raster_indices = (bounds, num_tiles_hit)
-                rasterize_depth = rasterize_gaussians_depth
-                rasterize = rasterize_gaussians
-                rasterize_simplified = rasterize_gaussians_simplified
-
-            # slower but more capable two-pass rendering
-            if False or (
-                self.config.depth_reg_pairwise_factor < 1.0 or \
-                self.config.ch_degree_r * (2*self.config.ch_degree_phi+1) > 0 or \
-                self.config.depth_mode != "mean"
-            ):
-                assert not ssplat_camera.is_distorted(), \
-                    "Fisheye camera is not supported for CH or median depth"
-
-                depth_im_ref = rasterize_depth(
-                    positions, axes_u, axes_v, opacities,
-                    *((raster_indices[1],) if use_per_pixel_sorting else raster_indices),
-                    ssplat_camera,
-                    self.config.depth_mode
-                )
-                depth_im_ref = torch.where(
-                    depth_im_ref > 0.0, depth_im_ref,
-                    max_depth_scale*torch.amax(depth_im_ref).detach()
-                ).contiguous()
-                timerr.mark("depth")  # ?us
-
-                # main rasterization
-                ch_degree = self.step // self.config.ch_degree_interval
-                (rgb, alpha, depth_im, normal_im, reg_depth) \
-                = rasterize(  # type: ignore
-                    positions, axes_u, axes_v, rgbs,
-                    self.config.ch_degree_r, min(ch_degree, self.config.ch_degree_r),
-                    self.config.ch_degree_phi, min(ch_degree, self.config.ch_degree_phi),
-                    self.features_ch,
-                    opacities,
-                    depth_im_ref,
-                    # background_color,
-                    self.config.depth_reg_pairwise_factor,
-                    *raster_indices,
-                    ssplat_camera
-                )  # type: ignore
-                timerr.mark("render")  # ?us
-
-            # fast one-pass rendering
-            else:
-                (rgb, alpha, depth_im, normal_im, reg_depth) \
-                = rasterize_simplified(
-                    positions, axes_u, axes_v, rgbs, opacities,
-                    *raster_indices, ssplat_camera
-                )
-                depth_im_ref = torch.where(
-                    alpha > 0.0, depth_im[..., :1] / alpha,
-                    max_depth_scale*torch.amax(depth_im[..., :1]).detach()
-                ).contiguous()
-                timerr.mark("render")  # 750us-1200us
+        # Call GSplat for 3DGS rendering
+        fx, fy, cx, cy = ssplat_camera.intrins
+        Ks = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).float()
         
-            radii = torch.stack([
-                bounds[:, 2] - bounds[:, 0],
-                bounds[:, 3] - bounds[:, 1],
-            ]).T.unsqueeze(0)
-            means2d = positions
-            depths = positions[..., 2]
-
-        else:
-            # 3DGS rendering
-
-            fx, fy, cx, cy = ssplat_camera.intrins
-            Ks = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).float()
-            
-            kwargs = {}
-            is_fisheye = ssplat_camera.model == "OPENCV_FISHEYE"
-            if is_fisheye:
-                if not self.config.use_mcmc:
-                    raise ValueError("3DGS training with fisheye camera is currently only supported for MCMC.")
-                dist_coeffs = torch.tensor(ssplat_camera.dist_coeffs).float().to(device)
-                if len(dist_coeffs) == 4:
-                    kwargs['radial_coeffs'] = dist_coeffs[None]
-                elif len(dist_coeffs) == 6:
-                    kwargs["radial_coeffs"] = dist_coeffs[:4][None]
-                    kwargs["tangential_coeffs"] = dist_coeffs[4:][None]
-                    # TODO: make sure GSplat 3DGUT actually supports this??
-                else:
-                    raise ValueError("Only support fisheye with 4 or 6 distortion coefficients")
-
-            rgbd, alpha, meta = gsplat.rasterization(
-                means=self.means,
-                quats=quats,
-                scales=torch.exp(self.scales),
-                opacities=opacities.squeeze(-1),
-                colors=rgbs,
-                viewmats=viewmat[None].to(device),  # [C, 4, 4]
-                Ks=Ks[None].to(device),  # [C, 3, 3]
-                width=W,
-                height=H,
-                packed=False,
-                absgrad=(not self.config.use_mcmc),
-                sparse_grad=False,
-                rasterize_mode="classic",
-                distributed=False,
-                camera_model=["pinhole", "fisheye"][is_fisheye],
-                with_ut=is_fisheye,
-                with_eval3d=is_fisheye,
-                render_mode="RGB+D",
-                **kwargs,
-            )
-            rgbd = rgbd[0]
-            alpha = alpha[0]
-            rgb = rgbd[..., :3]
-
-            if not self.config.use_3dgs or self.config.compute_depth_normal or not self.training:
-                depth_im_ref = torch.where(
-                    alpha > 0.0, rgbd[..., 3:] / alpha,
-                    max_depth_scale*torch.amax(rgbd[..., 3:]).detach()
-                ).contiguous()
+        kwargs = {}
+        is_fisheye = ssplat_camera.model == "OPENCV_FISHEYE"
+        if is_fisheye:
+            if not self.config.use_mcmc:
+                raise ValueError("3DGS training with fisheye camera is currently only supported for MCMC.")
+            dist_coeffs = torch.tensor(ssplat_camera.dist_coeffs).float().to(device)
+            if len(dist_coeffs) == 4:
+                kwargs['radial_coeffs'] = dist_coeffs[None]
+            elif len(dist_coeffs) == 6:
+                kwargs["radial_coeffs"] = dist_coeffs[:4][None]
+                kwargs["tangential_coeffs"] = dist_coeffs[4:][None]
+                # TODO: make sure GSplat 3DGUT actually supports this??
             else:
-                depth_im_ref = None
+                raise ValueError("Only support fisheye with 4 or 6 distortion coefficients")
 
-            means2d = meta["means2d"]
-            if self.config.use_mcmc:
-                means2d = self.means
-            radii = meta["radii"]
-            depths = meta["depths"]
+        rgbd, alpha, meta = gsplat.rasterization(
+            means=self.means,
+            quats=quats,
+            scales=torch.exp(self.scales),
+            opacities=opacities.squeeze(-1),
+            colors=rgbs,
+            viewmats=viewmat[None].to(device),  # [C, 4, 4]
+            Ks=Ks[None].to(device),  # [C, 3, 3]
+            width=W,
+            height=H,
+            packed=False,
+            absgrad=(not self.config.use_mcmc),
+            sparse_grad=False,
+            rasterize_mode="classic",
+            distributed=False,
+            camera_model=["pinhole", "fisheye"][is_fisheye],
+            with_ut=is_fisheye,
+            with_eval3d=is_fisheye,
+            render_mode="RGB+D",
+            **kwargs,
+        )
+        rgbd = rgbd[0]
+        alpha = alpha[0]
+        rgb = rgbd[..., :3]
+
+        if not self.config.use_3dgs or self.config.compute_depth_normal or not self.training:
+            depth_im_ref = torch.where(
+                alpha > 0.0, rgbd[..., 3:] / alpha,
+                max_depth_scale*torch.amax(rgbd[..., 3:]).detach()
+            ).contiguous()
+        else:
+            depth_im_ref = None
+
+        means2d = meta["means2d"]
+        if self.config.use_mcmc:
+            means2d = self.means
+        radii = meta["radii"]
+        depths = meta["depths"]
 
         if self.training:
             self.info = {
@@ -993,9 +887,6 @@ class SpirulaeModel(Model):
         outputs["alpha"] = alpha
         outputs["background"] = background
 
-        if not self.training and not self.config.use_3dgs and use_per_pixel_sorting:
-            intersects = raster_indices[0].float() / raster_indices[1].shape[-1]
-            outputs["num_intersects"] = intersects.reshape((H, W, 1)).repeat(1, 1, 3)
         if not self.training:
             outputs["alpha"] = outputs["alpha"].reshape((H, W, 1)).repeat(1, 1, 3)
 
