@@ -189,7 +189,7 @@ def depth_to_normal(
     return normals
 
 
-@torch.compile(**_TORCH_COMPILE_ARGS)
+# @torch.compile(**_TORCH_COMPILE_ARGS)
 def resize_image(image: torch.Tensor, d: int):
     """
     Downscale images using the same 'area' method in opencv

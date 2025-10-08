@@ -3,7 +3,7 @@ Template DataManager
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Literal, List, Tuple, Type, Union, Optional
+from typing import Dict, Literal, List, Tuple, Type, Union, Optional, TypeVar, Generic
 from copy import deepcopy
 import random
 import math
@@ -16,6 +16,7 @@ import torch
 import numpy as np
 
 from collections import deque
+from functools import cached_property
 
 from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.data.datamanagers.full_images_datamanager import (
@@ -23,9 +24,11 @@ from nerfstudio.data.datamanagers.full_images_datamanager import (
     FullImageDatamanager,
     FullImageDatamanagerConfig,
     _undistort_image,
-    CONSOLE, track
+    CONSOLE, track, TDataset
 )
 from nerfstudio.cameras.cameras import Cameras, CameraType
+
+from spirulae_splat.ns_dataset import SpirulaeDataset
 
 from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map
 
@@ -596,6 +599,8 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         self.train_unseen_cameras = deque()
 
+        self.cached_train_images = []
+
     def _load_images(
         self, split: Literal["train", "eval"], cache_images_device: Literal["cpu-pageable", "cpu", "gpu"]
     ) -> List[Dict[str, torch.Tensor]]:
@@ -627,7 +632,7 @@ class SpirulaeDataManager(FullImageDatamanager):
             assert_never(split)
 
         def undistort_idx(idx: int) -> Dict[str, torch.Tensor]:
-            data = dataset.get_data(idx, image_type=self.config.cache_images_type)
+            data = dataset.get_data(idx, image_type=self.config.cache_images_type, _is_viewer=False)
             dataset.cameras.width[idx] = data["image"].shape[1]
             dataset.cameras.height[idx] = data["image"].shape[0]
             camera = dataset.cameras[idx].reshape(())
@@ -732,6 +737,9 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         Returns a Camera instead of raybundle"""
 
+        if len(self.cached_train_images) == 0:
+            self.cached_train_images = self._load_images("train", cache_images_device=self.config.cache_images)
+
         train_batch_size = (len(self.train_dataset) + self.config.max_batch_per_epoch - 1) \
             // self.config.max_batch_per_epoch
         # train_batch_size = 4
@@ -747,7 +755,7 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         batch = {}
         for image_idx in image_indices:
-            img = self.cached_train[image_idx]
+            img = self.cached_train_images[image_idx]
             for key, value in img.items():
                 if key not in batch:
                     batch[key] = []
@@ -763,3 +771,9 @@ class SpirulaeDataManager(FullImageDatamanager):
             camera.metadata = {}
         camera.metadata["cam_idx"] = image_indices
         return camera, batch
+
+    @cached_property
+    def dataset_type(self) -> Type[TDataset]:
+        """Returns the dataset type passed as the generic argument"""
+        return SpirulaeDataset
+
