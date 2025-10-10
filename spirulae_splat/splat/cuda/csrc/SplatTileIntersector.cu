@@ -1,3 +1,5 @@
+#include "SplatTileIntersector.cuh"
+
 #include <cuda_runtime.h>
 #include <cub/cub.cuh>
 #include <thrust/sort.h>
@@ -6,9 +8,6 @@
 
 #include <c10/cuda/CUDAGuard.h>
 
-#include "splat_tile_intersector.cuh"
-
-#include "utils.cuh"
 #include "helpers.cuh"
 
 

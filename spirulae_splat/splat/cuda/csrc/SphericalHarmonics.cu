@@ -1,12 +1,17 @@
-#include <cuda_runtime.h>
+#include "SphericalHarmonics.cuh"
+
 #include <cooperative_groups.h>
-#define CHANNELS 3
-namespace cg = cooperative_groups;
+
+#include "common.cuh"
 
 enum class SHType {
 	Poly,
 	Fast,
 };
+
+namespace cg = cooperative_groups;
+
+#define CHANNELS 3
 
 __device__ __constant__ float SH_C0 = 0.28209479177387814f;
 __device__ __constant__ float SH_C1 = 0.4886025119029199f;
@@ -35,6 +40,7 @@ __device__ __constant__ float SH_C4[] = {
     -1.7701307697799304f,
     0.6258357354491761f};
 
+
 // This function is used in both host and device code
 __host__ __device__ unsigned num_sh_bases(const unsigned degree) {
     if (degree == 0)
@@ -47,6 +53,8 @@ __host__ __device__ unsigned num_sh_bases(const unsigned degree) {
         return 16;
     return 25;
 }
+
+
 
 // Evaluate spherical harmonics bases at unit direction for high orders using approach described by
 // Efficient Spherical Harmonic Evaluation, Peter-Pike Sloan, JCGT 2013
@@ -165,7 +173,7 @@ __device__ void sh_coeffs_to_color_fast_vjp(
 ) {
     // Expects v_colors to be len CHANNELS
     // and v_coeffs to be num_bases * CHANNELS
-#pragma unroll
+    #pragma unroll
     for (int c = 0; c < CHANNELS; ++c) {
         v_coeffs0[c] = 0.2820947917738781f * v_colors[c];
     }
@@ -181,7 +189,7 @@ __device__ void sh_coeffs_to_color_fast_vjp(
 
 
     float fTmp0A = 0.48860251190292f;
-#pragma unroll
+    #pragma unroll
     for (int c = 0; c < CHANNELS; ++c) {
         v_coeffs[0 * CHANNELS + c] = -fTmp0A * y * v_colors[c];
         v_coeffs[1 * CHANNELS + c] = fTmp0A * z * v_colors[c];
@@ -201,7 +209,7 @@ __device__ void sh_coeffs_to_color_fast_vjp(
     float pSH5 = fTmp0B * y;
     float pSH8 = fTmp1A * fC1;
     float pSH4 = fTmp1A * fS1;
-#pragma unroll
+    #pragma unroll
     for (int c = 0; c < CHANNELS; ++c) {
         v_coeffs[3 * CHANNELS + c] = pSH4 * v_colors[c];
         v_coeffs[4 * CHANNELS + c] = pSH5 * v_colors[c];
@@ -225,7 +233,7 @@ __device__ void sh_coeffs_to_color_fast_vjp(
     float pSH10 = fTmp1B * fS1;
     float pSH15 = fTmp2A * fC2;
     float pSH9  = fTmp2A * fS2;
-#pragma unroll
+    #pragma unroll
     for (int c = 0; c < CHANNELS; ++c) {
         v_coeffs[8 * CHANNELS + c] = pSH9 * v_colors[c];
         v_coeffs[9 * CHANNELS + c] = pSH10 * v_colors[c];
@@ -254,7 +262,7 @@ __device__ void sh_coeffs_to_color_fast_vjp(
     float pSH17 = fTmp2B * fS2;
     float pSH24 = fTmp3A * fC3;
     float pSH16 = fTmp3A * fS3;
-#pragma unroll
+    #pragma unroll
     for (int c = 0; c < CHANNELS; ++c) {
         v_coeffs[15 * CHANNELS + c] = pSH16 * v_colors[c];
         v_coeffs[16 * CHANNELS + c] = pSH17 * v_colors[c];
@@ -267,6 +275,7 @@ __device__ void sh_coeffs_to_color_fast_vjp(
         v_coeffs[23 * CHANNELS + c] = pSH24 * v_colors[c];
     }
 }
+
 __device__ void sh_coeffs_to_color(
     const unsigned degree,
     const float3 &viewdir,
@@ -504,3 +513,94 @@ __global__ void compute_sh_backward_kernel(
         break;
     }
 }
+
+
+torch::Tensor compute_sh_forward_tensor(
+    const std::string &method,
+    const unsigned num_points,
+    const unsigned degree,
+    const unsigned degrees_to_use,
+    torch::Tensor &viewdirs,  // [..., 3]
+    torch::Tensor &coeffs0,   // [..., 3]
+    torch::Tensor &coeffs   // [..., K, 3]
+) {
+    DEVICE_GUARD(viewdirs);
+    unsigned num_bases = num_sh_bases(degree);
+    if (coeffs0.ndimension() != 2 || coeffs0.size(0) != num_points ||
+        coeffs0.size(1) != 3) {
+        AT_ERROR("coeffs0 must have dimensions (N, 3)");
+    }
+    if (coeffs.ndimension() != 3 || coeffs.size(0) != num_points ||
+        coeffs.size(1) != num_bases-1 || coeffs.size(2) != 3) {
+        AT_ERROR("coeffs must have dimensions (N, D, 3)");
+    }
+    torch::Tensor colors = torch::empty({num_points, 3}, coeffs.options());
+
+    #define _TEMP_ARGS  \
+        num_points, degree, degrees_to_use, \
+        (float3 *)viewdirs.contiguous().data_ptr<float>(), \
+        coeffs0.contiguous().data_ptr<float>(), \
+        coeffs.contiguous().data_ptr<float>(), \
+        colors.contiguous().data_ptr<float>()
+
+    if (method == "poly") {
+        compute_sh_forward_kernel<SHType::Poly>
+        <<<_LAUNGH_ARGS_1D(num_points)>>>(_TEMP_ARGS);
+    } else if (method == "fast") {
+        compute_sh_forward_kernel<SHType::Fast>
+        <<<_LAUNGH_ARGS_1D(num_points)>>>(_TEMP_ARGS);
+    } else {
+        AT_ERROR("Invalid method: ", method);
+    }
+
+    #undef _TEMP_ARGS
+
+    return colors;
+}
+
+
+
+std::tuple<torch::Tensor, torch::Tensor>
+compute_sh_backward_tensor(
+    const std::string &method,
+    const unsigned num_points,
+    const unsigned degree,
+    const unsigned degrees_to_use,
+    torch::Tensor &viewdirs,  // [..., 3]
+    torch::Tensor &v_colors  // [..., 3]
+) {
+    DEVICE_GUARD(viewdirs);
+    if (viewdirs.ndimension() != 2 || viewdirs.size(0) != num_points ||
+        viewdirs.size(1) != 3) {
+        AT_ERROR("viewdirs must have dimensions (N, 3)");
+    }
+    if (v_colors.ndimension() != 2 || v_colors.size(0) != num_points ||
+        v_colors.size(1) != 3) {
+        AT_ERROR("v_colors must have dimensions (N, 3)");
+    }
+    unsigned num_bases = num_sh_bases(degree);
+    torch::Tensor v_coeffs0 = torch::zeros({num_points, 3}, v_colors.options());
+    torch::Tensor v_coeffs = torch::zeros({num_points, num_bases-1, 3}, v_colors.options());
+
+    #define _TEMP_ARGS  \
+        num_points, degree, degrees_to_use, \
+        (float3 *)viewdirs.contiguous().data_ptr<float>(), \
+        v_colors.contiguous().data_ptr<float>(), \
+        v_coeffs0.contiguous().data_ptr<float>(), \
+        v_coeffs.contiguous().data_ptr<float>()
+
+    if (method == "poly") {
+        compute_sh_backward_kernel<SHType::Poly>
+        <<<_LAUNGH_ARGS_1D(num_points)>>>(_TEMP_ARGS);
+    } else if (method == "fast") {
+        compute_sh_backward_kernel<SHType::Fast>
+        <<<_LAUNGH_ARGS_1D(num_points)>>>(_TEMP_ARGS);
+    } else {
+        AT_ERROR("Invalid method: ", method);
+    }
+
+    #undef _TEMP_ARGS
+
+    return std::make_tuple(v_coeffs0, v_coeffs);
+}
+

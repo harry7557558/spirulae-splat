@@ -2477,7 +2477,7 @@ struct ElementTypeTrait<Matrix<T, ROWS, COLS>>
 
 // Scalar
 template<typename INTF, typename T>
-__device__ T _waveReduceScalar(WarpMask mask, T val)
+inline __device__ T _waveReduceScalar(WarpMask mask, T val)
 {
     const int offsetSize = _waveCalcPow2Offset(mask);
     if (offsetSize > 0)
@@ -2509,7 +2509,7 @@ __device__ T _waveReduceScalar(WarpMask mask, T val)
 
 // Multiple values
 template<typename INTF, typename T, size_t COUNT>
-__device__ void _waveReduceMultiple(WarpMask mask, T* val)
+inline __device__ void _waveReduceMultiple(WarpMask mask, T* val)
 {
     const int offsetSize = _waveCalcPow2Offset(mask);
     if (offsetSize > 0)
@@ -2551,7 +2551,7 @@ __device__ void _waveReduceMultiple(WarpMask mask, T* val)
 }
 
 template<typename INTF, typename T>
-__device__ void _waveReduceMultiple(WarpMask mask, T* val)
+inline __device__ void _waveReduceMultiple(WarpMask mask, T* val)
 {
     typedef typename ElementTypeTrait<T>::Type ElemType;
     _waveReduceMultiple<INTF, ElemType, sizeof(T) / sizeof(ElemType)>(mask, (ElemType*)val);
@@ -2785,7 +2785,7 @@ __inline__ __device__ T _waveShuffleMultiple(WarpMask mask, T inVal, int lane)
 // Invertable means that when we get to the end of the reduce, we can remove val (to make
 // exclusive), using the inverse of the op.
 template<typename INTF, typename T>
-__device__ T _wavePrefixInvertableScalar(WarpMask mask, T val)
+inline __device__ T _wavePrefixInvertableScalar(WarpMask mask, T val)
 {
     const int offsetSize = _waveCalcPow2Offset(mask);
 
@@ -2835,7 +2835,7 @@ __device__ T _wavePrefixInvertableScalar(WarpMask mask, T val)
 // This implementation separately tracks the value to be propogated, and the value
 // that is the final result
 template<typename INTF, typename T>
-__device__ T _wavePrefixScalar(WarpMask mask, T val)
+inline __device__ T _wavePrefixScalar(WarpMask mask, T val)
 {
     const int offsetSize = _waveCalcPow2Offset(mask);
 
@@ -2883,7 +2883,7 @@ __device__ T _wavePrefixScalar(WarpMask mask, T val)
 
 
 template<typename INTF, typename T, size_t COUNT>
-__device__ T _waveOpCopy(T* dst, const T* src)
+inline __device__ T _waveOpCopy(T* dst, const T* src)
 {
     for (size_t j = 0; j < COUNT; ++j)
     {
@@ -2893,7 +2893,7 @@ __device__ T _waveOpCopy(T* dst, const T* src)
 
 
 template<typename INTF, typename T, size_t COUNT>
-__device__ T _waveOpDoInverse(T* inOut, const T* val)
+inline __device__ T _waveOpDoInverse(T* inOut, const T* val)
 {
     for (size_t j = 0; j < COUNT; ++j)
     {
@@ -2902,7 +2902,7 @@ __device__ T _waveOpDoInverse(T* inOut, const T* val)
 }
 
 template<typename INTF, typename T, size_t COUNT>
-__device__ T _waveOpSetInitial(T* out, const T* val)
+inline __device__ T _waveOpSetInitial(T* out, const T* val)
 {
     for (size_t j = 0; j < COUNT; ++j)
     {
@@ -2911,7 +2911,7 @@ __device__ T _waveOpSetInitial(T* out, const T* val)
 }
 
 template<typename INTF, typename T, size_t COUNT>
-__device__ T _wavePrefixInvertableMultiple(WarpMask mask, T* val)
+inline __device__ T _wavePrefixInvertableMultiple(WarpMask mask, T* val)
 {
     const int offsetSize = _waveCalcPow2Offset(mask);
 
@@ -2969,7 +2969,7 @@ __device__ T _wavePrefixInvertableMultiple(WarpMask mask, T* val)
 }
 
 template<typename INTF, typename T, size_t COUNT>
-__device__ T _wavePrefixMultiple(WarpMask mask, T* val)
+inline __device__ T _wavePrefixMultiple(WarpMask mask, T* val)
 {
     const int offsetSize = _waveCalcPow2Offset(mask);
 
@@ -3128,12 +3128,12 @@ __inline__ __device__ uint4 _waveMatchMultiple(WarpMask mask, const T& inVal)
     return make_uint4(matchBits, 0, 0, 0);
 }
 
-__device__ uint getAt(dim3 a, int b)
+inline __device__ uint getAt(dim3 a, int b)
 {
     SLANG_PRELUDE_ASSERT(b >= 0 && b < 3);
     return (&a.x)[b];
 }
-__device__ uint3 operator*(uint3 a, dim3 b)
+inline __device__ uint3 operator*(uint3 a, dim3 b)
 {
     uint3 r;
     r.x = a.x * b.x;

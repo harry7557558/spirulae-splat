@@ -1,14 +1,12 @@
 #pragma once
 
-#include "config.h"
+#include "common.cuh"
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include "glm/glm/glm.hpp"
 #include "glm/glm/gtc/type_ptr.hpp"
-
-#define _LAUNGH_ARGS_1D(n) (n+N_THREADS-1)/N_THREADS,N_THREADS
 
 namespace cg = cooperative_groups;
 

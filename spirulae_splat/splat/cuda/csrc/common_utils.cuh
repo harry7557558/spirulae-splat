@@ -1,7 +1,13 @@
 #pragma once
 
+#include "glm/glm/glm.hpp"
+
+#include <cuda.h>
+#include <cuda_runtime.h>
+#include <cuda_fp16.h>
 #include <vector_types.h>
 #include <type_traits>
+
 
 #ifndef SLANG_PRELUDE_EXPORT
 
@@ -112,11 +118,11 @@ _DEF_MAKE_VEC_FROM_VEC(uint, float)
 
 #define _DEF_GENERIC_VEC_BINARY_FUN(dtype, fun, efun) \
     __device__ __forceinline__ dtype##2 fun(dtype##2 a, dtype##2 b) \
-        { return { efun(a.x, b.x), efun(a.y, b.y) }; } \
+        { return make_##dtype##2(efun(a.x, b.x), efun(a.y, b.y)); } \
     __device__ __forceinline__ dtype##3 fun(dtype##3 a, dtype##3 b) \
-        { return { efun(a.x, b.x), efun(a.y, b.y), efun(a.z, b.z) }; } \
+        { return make_##dtype##3(efun(a.x, b.x), efun(a.y, b.y), efun(a.z, b.z)); } \
     __device__ __forceinline__ dtype##4 fun(dtype##4 a, dtype##4 b) \
-        { return { efun(a.x, b.x), efun(a.y, b.y), efun(a.z, b.z), efun(a.w, b.w) }; } \
+        { return make_##dtype##4(efun(a.x, b.x), efun(a.y, b.y), efun(a.z, b.z), efun(a.w, b.w)); } \
 
 #define _DEF_FLOAT_VEC_TO_SCALAR_FUN(dtype) \
     __device__ __forceinline__ dtype length(dtype##2 v) \

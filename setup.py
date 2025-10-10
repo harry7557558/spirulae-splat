@@ -37,6 +37,8 @@ def extract_function_declarations(code):
     for m in matches:
         if re.compile(r"inline\s+(__global__|__device__)").findall(m):
             continue
+        if True and re.compile(r"(__global__|__device__)").findall(m):
+            continue
         decls.append(m.strip()+';')
     
     return decls
@@ -152,10 +154,10 @@ no_fused_ssim = (importlib.util.find_spec('fused_ssim') is None)
 no_fused_bilagrid = (importlib.util.find_spec('fused_bilagrid') is None)
 
 path = "spirulae_splat/splat/cuda/csrc/"
-generate_header(path+"projection.cu", path+"projection.cuh")
-generate_header(path+"rasterization.cu", path+"rasterization.cuh")
-generate_header(path+"misc.cu", path+"misc.cuh")
-generate_header(path+"bindings.cu", path+"bindings.h")
+generate_header(path+"SphericalHarmonics.cu", path+"SphericalHarmonics.cuh")
+generate_header(path+"BackgroundSphericalHarmonics.cu", path+"BackgroundSphericalHarmonics.cuh")
+generate_header(path+"PerSplatLoss.cu", path+"PerSplatLoss.cuh")
+generate_header(path+"PixelWise.cu", path+"PixelWise.cuh")
 
 setup(
     name="spirulae_splat",

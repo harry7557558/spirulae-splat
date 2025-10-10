@@ -1,8 +1,22 @@
-#include "rasterization.cuh"
+#include "BackgroundSphericalHarmonics.cuh"
 
-#include "helpers.cuh"
+#include "common.cuh"
 #include "camera.cuh"
 #include <algorithm>
+
+
+enum class CameraType {
+    // undistorted vs generic distorted
+	Undistorted,
+    GenericDistorted,
+    // (near-)exact distortion
+    OPENCV,
+    OPENCV_FISHEYE,
+    // approximate distortion
+    // same rasterization, distort using Jacobian in projection
+    OPENCV_approx,
+    OPENCV_FISHEYE_approx,
+};
 
 
 
@@ -408,6 +422,153 @@ __global__ void render_background_sh_backward_kernel(
   #endif
     #undef _BLOCK_REDUCE_VEC3
     #undef _ATOMIC_ADD
+}
+
+
+
+torch::Tensor render_background_sh_forward_tensor(
+    const unsigned w,
+    const unsigned h,
+    std::string camera_model,
+    const std::tuple<float, float, float, float> intrins,
+    const std::optional<torch::Tensor> &undistortion_map_,
+    const torch::Tensor &rotation,
+    const unsigned sh_degree,
+    const torch::Tensor &sh_coeffs
+) {
+    DEVICE_GUARD(sh_coeffs);
+    CHECK_INPUT(sh_coeffs);
+    CHECK_INPUT(rotation);
+
+    if (rotation.numel() != 9) {
+        AT_ERROR("rotation must be 3x3");
+    }
+    if (sh_coeffs.ndimension() != 2 ||
+        sh_coeffs.size(0) != sh_degree*sh_degree ||
+        sh_coeffs.size(1) != 3) {
+        AT_ERROR("sh_coeffs must be (sh_regree**2, 3)");
+    }
+
+    const dim3 tile_bounds = whb2tb(w, h);
+    const dim3 img_size = {w, h, 1};
+
+    auto options = sh_coeffs.options();
+    torch::Tensor out_color = torch::empty({h, w, 3}, options);
+
+    if (camera_model == "") {
+        render_background_sh_forward_kernel<CameraType::Undistorted>
+        <<<tile_bounds, BLOCK_DIM3>>>(
+            tile_bounds, img_size,
+            tuple2float4(intrins), nullptr,
+            rotation.contiguous().data_ptr<float>(),
+            sh_degree,
+            (float3 *)sh_coeffs.contiguous().data_ptr<float>(),
+            (float3 *)out_color.contiguous().data_ptr<float>()
+        );
+    }
+
+    else {
+        const torch::Tensor& undistortion_map = undistortion_map_.value();
+        CHECK_INPUT(undistortion_map);
+
+        render_background_sh_forward_kernel<CameraType::GenericDistorted>
+        <<<tile_bounds, BLOCK_DIM3>>>(
+            tile_bounds, img_size,
+            tuple2float4(intrins),
+            (float2 *)undistortion_map.contiguous().data_ptr<float>(),
+            rotation.contiguous().data_ptr<float>(),
+            sh_degree,
+            (float3 *)sh_coeffs.contiguous().data_ptr<float>(),
+            (float3 *)out_color.contiguous().data_ptr<float>()
+        );
+    }
+
+    return out_color;
+}
+
+
+std::tuple<
+    torch::Tensor,  // v_rotation
+    torch::Tensor  // v_sh_coeffs
+> render_background_sh_backward_tensor(
+    const unsigned w,
+    const unsigned h,
+    const std::string camera_model,
+    const std::tuple<float, float, float, float> intrins,
+    const std::optional<torch::Tensor> &undistortion_map_,
+    const torch::Tensor &rotation,
+    const unsigned sh_degree,
+    const torch::Tensor &sh_coeffs,
+    const torch::Tensor &out_color,
+    const torch::Tensor &v_out_color
+) {
+    DEVICE_GUARD(sh_coeffs);
+    CHECK_INPUT(sh_coeffs);
+    CHECK_INPUT(rotation);
+    CHECK_INPUT(v_out_color);
+
+    if (rotation.numel() != 9) {
+        AT_ERROR("rotation must be 3x3");
+    }
+    if (sh_coeffs.ndimension() != 2 ||
+        sh_coeffs.size(0) != sh_degree*sh_degree ||
+        sh_coeffs.size(1) != 3) {
+        AT_ERROR("sh_coeffs shape must be (sh_regree**2, 3)");
+    }
+    if (out_color.ndimension() != 3 ||
+        out_color.size(0) != h ||
+        out_color.size(1) != w ||
+        out_color.size(2) != 3) {
+        AT_ERROR("out_color shape must be (h, w, 3)");
+    }
+    if (v_out_color.ndimension() != 3 ||
+        v_out_color.size(0) != h ||
+        v_out_color.size(1) != w ||
+        v_out_color.size(2) != 3) {
+        AT_ERROR("v_out_color shape must be (h, w, 3)");
+    }
+
+    // unsigned block_width = BLOCK_WIDTH;
+    unsigned block_width = 32;  // 1024 threads
+    const dim3 tile_bounds = whb2tb(w, h, block_width);
+    const dim3 img_size = {w, h, 1};
+
+    auto options = sh_coeffs.options();
+    torch::Tensor v_rotation = torch::zeros({3, 3}, options);
+    torch::Tensor v_sh_coeffs = torch::zeros({sh_degree*sh_degree, 3}, options);
+
+    #define _TEMP_ARGS \
+        rotation.contiguous().data_ptr<float>(), \
+        sh_degree, \
+        (float3 *)sh_coeffs.contiguous().data_ptr<float>(), \
+        (float3 *)out_color.contiguous().data_ptr<float>(), \
+        (float3 *)v_out_color.contiguous().data_ptr<float>(), \
+        (float3 *)v_rotation.contiguous().data_ptr<float>(), \
+        (float3 *)v_sh_coeffs.contiguous().data_ptr<float>()
+
+    if (camera_model == "") {
+        render_background_sh_backward_kernel<CameraType::Undistorted>
+        <<<tile_bounds, dim3(block_width, block_width, 1)>>>(
+            tile_bounds, img_size,
+            tuple2float4(intrins), nullptr,
+            _TEMP_ARGS
+        );
+    }
+    else {
+        const torch::Tensor& undistortion_map = undistortion_map_.value();
+        CHECK_INPUT(undistortion_map);
+        render_background_sh_backward_kernel<CameraType::GenericDistorted>
+        <<<tile_bounds, dim3(block_width, block_width, 1)>>>(
+            tile_bounds, img_size,
+            tuple2float4(intrins),
+            (float2 *)undistortion_map.contiguous().data_ptr<float>(),
+            _TEMP_ARGS
+        );
+    }
+
+    #undef _TEMP_ARGS
+
+    return std::make_tuple(v_rotation, v_sh_coeffs);
 }
 
 

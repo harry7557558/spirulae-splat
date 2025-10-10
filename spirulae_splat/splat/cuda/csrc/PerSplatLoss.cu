@@ -1,3 +1,5 @@
+#include "PerSplatLoss.cuh"
+
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
@@ -6,8 +8,7 @@ namespace cg = cooperative_groups;
 #include "generated/slang_all.cu"
 #undef TensorView
 
-#include "misc.cuh"
-
+#include "common.cuh"
 
 __global__ void per_splat_losses_forward_kernel(
     bool is_3dgs,
@@ -120,58 +121,114 @@ __global__ void per_splat_losses_backward_kernel(
 }
 
 
-__global__ void blend_background_forward_kernel(
-    const TensorView<float, 3> in_rgb,
-    const TensorView<float, 3> in_alpha,
-    const TensorView<float, 3> in_background,
-    TensorView<float, 3> out_rgb
+
+torch::Tensor compute_per_splat_losses_forward_tensor(
+    torch::Tensor &scales,  // [N, 3] or [N, 2]
+    torch::Tensor &opacities,  // [N, 1]
+    torch::Tensor &quats,  // [N, 4]
+    float mcmc_opacity_reg_weight,
+    float mcmc_scale_reg_weight,
+    float max_gauss_ratio,
+    float scale_regularization_weight,
+    float erank_reg_weight,
+    float erank_reg_weight_s3,
+    float quat_norm_reg_weight
 ) {
-    unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (gid >= in_rgb.shape[0]*in_rgb.shape[1])
-        return;
-    unsigned y = gid / in_rgb.shape[1];
-    unsigned x = gid % in_rgb.shape[1];
+    DEVICE_GUARD(scales);
+    CHECK_INPUT(scales);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(quats);
 
-    float3 rgb = in_rgb.load3f(y, x);
-    float alpha = in_alpha.load1f(y, x);
-    float3 background = in_background.load3f(y, x);
+    const size_t num_points = opacities.size(0);
+    const bool is_3dgs = (scales.size(-1) == 3);
 
-    rgb = blend_background(rgb, alpha, background);
+    if (scales.ndimension() != 2 || scales.size(0) != num_points ||
+        (scales.size(1) != 3 && scales.size(1) != 2))
+        AT_ERROR("scales shape must be (n, 2) or (n, 3)");
+    if (opacities.ndimension() != 2 || opacities.size(0) != num_points || opacities.size(1) != 1)
+        AT_ERROR("opacities shape must be (n, 1)");
+    if (quats.ndimension() != 2 || quats.size(0) != num_points || quats.size(1) != 4)
+        AT_ERROR("quats shape must be (n, 4)");
 
-    out_rgb.store3f(y, x, rgb);
-}
+    torch::Tensor loss = torch::zeros({kNumPerSplatLosses}, opacities.options());
 
-
-__global__ void blend_background_backward_kernel(
-    const TensorView<float, 3> in_rgb,
-    const TensorView<float, 3> in_alpha,
-    const TensorView<float, 3> in_background,
-    const TensorView<float, 3> v_out_rgb,
-    TensorView<float, 3> v_in_rgb,
-    TensorView<float, 3> v_in_alpha,
-    TensorView<float, 3> v_in_background
-) {
-    unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (gid >= in_rgb.shape[0]*in_rgb.shape[1])
-        return;
-    unsigned y = gid / in_rgb.shape[1];
-    unsigned x = gid % in_rgb.shape[1];
-
-    float3 rgb = in_rgb.load3f(y, x);
-    float alpha = in_alpha.load1f(y, x);
-    float3 background = in_background.load3f(y, x);
-
-    float3 v_out = v_out_rgb.load3f(y, x);
-
-    float3 v_rgb; float v_alpha; float3 v_background;
-    blend_background_bwd(
-        rgb, alpha, background,
-        v_out,
-        &v_rgb, &v_alpha, &v_background
+    per_splat_losses_forward_kernel<<<_LAUNGH_ARGS_1D(num_points)>>>(
+        is_3dgs,
+        num_points,
+        scales.contiguous().data_ptr<float>(),
+        opacities.contiguous().data_ptr<float>(),
+        quats.contiguous().data_ptr<float>(),
+        loss.data_ptr<float>(),
+        mcmc_opacity_reg_weight,
+        mcmc_scale_reg_weight,
+        max_gauss_ratio,
+        scale_regularization_weight,
+        erank_reg_weight,
+        erank_reg_weight_s3,
+        quat_norm_reg_weight
     );
 
-    v_in_rgb.store3f(y, x, v_rgb);
-    v_in_alpha.store1f(y, x, v_alpha);
-    v_in_background.store3f(y, x, v_background);
-
+    return loss;
 }
+
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+compute_per_splat_losses_backward_tensor(
+    torch::Tensor &scales,  // [N, 3] or [N, 2]
+    torch::Tensor &opacities,  // [N, 1]
+    torch::Tensor &quats,  // [N, 4]
+    torch::Tensor &v_losses,  // [kNumPerSplatLosses]
+    float mcmc_opacity_reg_weight,
+    float mcmc_scale_reg_weight,
+    float max_gauss_ratio,
+    float scale_regularization_weight,
+    float erank_reg_weight,
+    float erank_reg_weight_s3,
+    float quat_norm_reg_weight
+) {
+    DEVICE_GUARD(scales);
+    CHECK_INPUT(scales);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(quats);
+    CHECK_INPUT(v_losses);
+
+    const size_t num_points = opacities.size(0);
+    const bool is_3dgs = (scales.size(-1) == 3);
+
+    if (scales.ndimension() != 2 || scales.size(0) != num_points ||
+        (scales.size(1) != 3 && scales.size(1) != 2))
+        AT_ERROR("scales shape must be (n, 2) or (n, 3)");
+    if (opacities.ndimension() != 2 || opacities.size(0) != num_points || opacities.size(1) != 1)
+        AT_ERROR("opacities shape must be (n, 1)");
+    if (quats.ndimension() != 2 || quats.size(0) != num_points || quats.size(1) != 4)
+        AT_ERROR("quats shape must be (n, 4)");
+    if (v_losses.ndimension() != 1 || v_losses.size(0) != kNumPerSplatLosses)
+        AT_ERROR("v_losses shape must be (kNumPerSplatLosses,)");
+
+    torch::Tensor v_scales = torch::empty_like(scales);
+    torch::Tensor v_opacities = torch::empty_like(opacities);
+    torch::Tensor v_quats = torch::empty_like(quats);
+
+    per_splat_losses_backward_kernel<<<_LAUNGH_ARGS_1D(num_points)>>>(
+        is_3dgs,
+        num_points,
+        scales.contiguous().data_ptr<float>(),
+        opacities.contiguous().data_ptr<float>(),
+        quats.contiguous().data_ptr<float>(),
+        v_losses.data_ptr<float>(),
+        v_scales.contiguous().data_ptr<float>(),
+        v_opacities.contiguous().data_ptr<float>(),
+        v_quats.contiguous().data_ptr<float>(),
+        mcmc_opacity_reg_weight,
+        mcmc_scale_reg_weight,
+        max_gauss_ratio,
+        scale_regularization_weight,
+        erank_reg_weight,
+        erank_reg_weight_s3,
+        quat_norm_reg_weight
+    );
+
+    return std::make_tuple(v_scales, v_opacities, v_quats);
+}
+
+

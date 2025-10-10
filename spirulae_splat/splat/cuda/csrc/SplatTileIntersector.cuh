@@ -1,27 +1,6 @@
 #pragma once
 
-#include <torch/types.h>
-#include "glm/glm/glm.hpp"
-
-#define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
-#define CHECK_CONTIGUOUS(x)                                                    \
-    TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
-#define CHECK_INPUT(x)                                                         \
-    CHECK_CUDA(x);                                                             \
-    CHECK_CONTIGUOUS(x)
-#define DEVICE_GUARD(_ten) \
-    const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
-
-#define CHECK_DEVICE_ERROR(call)                                      \
-do {                                                                \
-    cudaError_t err = call;                                         \
-    if (err != cudaSuccess) {                                       \
-        fprintf(stderr, "CUDA Error at %s:%d: %s\n",                \
-                __FILE__, __LINE__, cudaGetErrorString(err));       \
-        exit(EXIT_FAILURE);                                         \
-    }                                                               \
-} while (0)
-
+#include "common.cuh"
 
 struct SplatBuffers {
     long size;
@@ -98,4 +77,24 @@ struct SplatTileIntersector {
 
     std::tuple<torch::Tensor, torch::Tensor> getIntersections_lbvh();
 
+    static std::tuple<torch::Tensor, torch::Tensor>
+    intersect_splat_tile(
+        torch::Tensor& means,
+        torch::Tensor& scales,
+        torch::Tensor& opacs,
+        torch::Tensor& quats,
+        torch::Tensor& viewmats,
+        torch::Tensor& Ks
+    ) {
+        SplatBuffers splat_buffers = {means, scales, opacs, quats};
+        TileBuffers tile_buffers = {viewmats, Ks};
+
+        return SplatTileIntersector(
+            means.options(),
+            splat_buffers,
+            tile_buffers
+        ).getIntersections_lbvh();
+    }
+
 };
+
