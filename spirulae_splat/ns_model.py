@@ -121,9 +121,9 @@ class SpirulaeModelConfig(ModelConfig):
     """period of steps where gaussians are culled and densified"""
     resolution_schedule: int = 3000
     """training starts at 1/d resolution, every n steps this is doubled"""
-    background_color: Literal["random", "black", "white", "gray"] = "gray"
+    background_color: Literal["random", "black", "white", "gray"] = "black"
     """Whether to randomize the background color."""
-    num_downscales: int = 2
+    num_downscales: int = 0
     """at the beginning, resolution is 1/2^d, where d is this number"""
     use_mcmc: bool = True
     """use Markov-Chain Monte Carlo for gaussian control
@@ -205,9 +205,9 @@ class SpirulaeModelConfig(ModelConfig):
     """every n intervals turn on another sh degree"""
     max_opacity: float = 0.995
     """maximum opacity of a gaussian, prevent numerical instability during backward"""
-    train_background_color: bool = True
+    train_background_color: bool = False
     """make background color trainable"""
-    background_sh_degree: int = 0
+    background_sh_degree: int = 0  # 3
     """enable background model"""
     adaptive_exposure_mode: Optional[Literal[
         "linear", "log_linear", "channel", "log_channel", "affine", "log_affine"
@@ -224,7 +224,7 @@ class SpirulaeModelConfig(ModelConfig):
     """
     adaptive_exposure_warmup: int = 1000
     """Start adaptive exposure at this number of steps"""
-    use_bilateral_grid: bool = True
+    use_bilateral_grid: bool = False
     """If True, use bilateral grid to handle the ISP changes in the image space. This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/).
        Makes training much slower - TODO: fused bilagrid in CUDA"""
     bilagrid_shape: Tuple[int, int, int] = (8, 8, 4)
@@ -399,14 +399,6 @@ class SpirulaeModel(Model):
 
         self.training_losses = SplatTrainingLosses(self.config, self.num_train_data)
 
-        # metrics
-        from torchmetrics.image import PeakSignalNoiseRatio
-        from torchmetrics.image.lpip import \
-            LearnedPerceptualImagePatchSimilarity
-
-        self.psnr = PeakSignalNoiseRatio(data_range=1.0)
-        self.ssim = SSIM(data_range=1.0, size_average=True, channel=3)
-        self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
         self.step = 0
 
         self.crop_box: Optional[OrientedBox] = None
@@ -588,7 +580,7 @@ class SpirulaeModel(Model):
                 state=self.strategy_state,
                 step=self.step,
                 info=self.info,
-                packed=False,
+                packed=True,
             )
         return
         # for splatfacto: around 1.5 and around 1e-6 @ 1k iters
@@ -697,7 +689,10 @@ class SpirulaeModel(Model):
         optimized_camera_to_world = optimized_camera_to_world.cpu()
 
         camera_downscale = self._get_downscale_factor()
-        camera.rescale_output_resolution(1 / camera_downscale)
+        if camera_downscale > 1:
+            camera.rescale_output_resolution(1 / camera_downscale)
+
+        # TODO: separate different sizes/intrins
         W, H = int(camera.width[0].item()), int(camera.height[0].item())
 
         R = optimized_camera_to_world[:, :3, :3]  # 3 x 3
@@ -746,7 +741,8 @@ class SpirulaeModel(Model):
             width=W,
             height=H,
             sh_degree=self.config.sh_degree,
-            packed=False,
+            packed=True,
+            with_bvh=True,
             absgrad=(not self.config.use_mcmc),
             sparse_grad=False,
             rasterize_mode="classic",
@@ -822,6 +818,50 @@ class SpirulaeModel(Model):
                 outputs["depth_normal"] = 0.5+0.5*outputs["depth_normal"]
             for key in outputs:
                 outputs[key] = outputs[key].squeeze(0)
+
+        # 
+        if not self.training and True:
+            with torch.no_grad():
+                from spirulae_splat.splat.cuda import intersect_splat_tile
+                from time import perf_counter
+                # undist_map = _Camera(
+                #     camera.height[0].item(), camera.width[0].item(),
+                #     "OPENCV",
+                #     (getattr(camera, a)[0].item() for a in ('fx', 'fy', 'cx', 'cy'))
+                # ).get_undist_map(True)
+                # rd = torch.concatenate((undist_map, torch.ones_like(undist_map[...,:1])), dim=-1)
+                # ro = T.reshape((1, 1, 3)).cuda().repeat(*undist_map.shape[:2], 1)
+                # print(self.means.shape, self.scales.shape, self.opacities.shape, self.quats.shape,
+                #     ro.reshape((-1, 3)).shape, rd.reshape((-1, 3)).shape)
+                # for x in [self.means, self.scales, self.opacities, self.quats, ro, rd]:
+                #     print((~torch.isfinite(x)).float().mean())
+                tile_size = 16
+                gh, gw = H // tile_size, W // tile_size
+                dh, dw = torch.meshgrid(torch.arange(gh)*tile_size, torch.arange(gw)*tile_size)
+                Ks = Ks.clone().repeat(gh*gw, 1, 1)
+                viewmat = viewmat.clone().repeat(gh*gw, 1, 1)
+                Ks[:, 0, 2] -= dw.flatten()
+                Ks[:, 1, 2] -= dh.flatten()
+                print(viewmat.shape, Ks.shape)
+                torch.cuda.synchronize()
+                time0 = perf_counter()
+                bounds, indices = intersect_splat_tile(
+                    self.means.contiguous(),
+                    self.scales.contiguous(),
+                    self.opacities.contiguous(),
+                    self.quats.contiguous(),
+                    # ro.reshape((-1, 3)).contiguous(),
+                    # (rd.reshape((-1, 3)) @ R[0].T.cuda()).contiguous()
+                    viewmat.to(device).contiguous(),
+                    Ks.to(device).contiguous()
+                )
+                torch.cuda.synchronize()
+                time1 = perf_counter()
+                outputs['ray'] = (bounds[1:] - bounds[:-1]).float().reshape(gh, 1, gw, 1).repeat(1, tile_size, 1, tile_size).reshape(gh*tile_size, gw*tile_size, 1)
+                print(1e3*(time1-time0), 'ms')
+                # import matplotlib.pyplot as plt
+                # plt.imshow(outputs['ray'].detach().cpu().numpy())
+                # plt.show()
 
         return outputs
 
@@ -949,8 +989,11 @@ class SpirulaeModel(Model):
         Returns:
             A dictionary of metrics.
         """
-        return {}, {}   # TODO
-        gt_rgb = self.composite_with_background(self.get_gt_img(batch["image"]), outputs["background"])
+        # return {}, {}   # TODO
+        # gt_rgb = self.composite_with_background(self.get_gt_img(batch["image"]), outputs["background"])
+        gt_rgb = batch["image"]  # TODO
+        if gt_rgb.dtype == torch.uint8:
+            gt_rgb = gt_rgb.float() / 255.0
         predicted_rgb = outputs["rgb"]
 
         combined_rgb = torch.cat([gt_rgb, predicted_rgb], dim=1)
@@ -958,6 +1001,15 @@ class SpirulaeModel(Model):
         # Switch images from [H, W, C] to [1, C, H, W] for metrics computations
         gt_rgb = torch.moveaxis(gt_rgb, -1, 0)[None, ...]
         predicted_rgb = torch.moveaxis(predicted_rgb, -1, 0)[None, ...]
+
+        # metrics
+        from torchmetrics.image import PeakSignalNoiseRatio
+        from torchmetrics.image.lpip import \
+            LearnedPerceptualImagePatchSimilarity
+
+        self.psnr = PeakSignalNoiseRatio(data_range=1.0).to(self.device)
+        self.ssim = SSIM(data_range=1.0, size_average=True, channel=3).to(self.device)
+        self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True).to(self.device)
 
         psnr = self.psnr(gt_rgb, predicted_rgb)
         ssim = self.ssim(gt_rgb, predicted_rgb)

@@ -5,6 +5,8 @@
 #include "sh.cuh"
 #include "misc.cuh"
 
+#include "splat_tile_intersector.cuh"
+
 #include <cstdio>
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -556,4 +558,24 @@ blend_background_backward_tensor(
     );
 
     return std::make_tuple(v_rgb, v_alpha, v_background);
+}
+
+
+std::tuple<torch::Tensor, torch::Tensor>
+intersect_splat_tile(
+    torch::Tensor& means,
+    torch::Tensor& scales,
+    torch::Tensor& opacs,
+    torch::Tensor& quats,
+    torch::Tensor& viewmats,
+    torch::Tensor& Ks
+) {
+    SplatBuffers splat_buffers = {means, scales, opacs, quats};
+    TileBuffers tile_buffers = {viewmats, Ks};
+
+    return SplatTileIntersector(
+        means.options(),
+        splat_buffers,
+        tile_buffers
+    ).getIntersections_lbvh();
 }

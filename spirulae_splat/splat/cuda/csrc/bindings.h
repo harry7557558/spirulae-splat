@@ -16,6 +16,16 @@
 #define DEVICE_GUARD(_ten) \
     const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
 
+#define CHECK_DEVICE_ERROR(call)                                      \
+do {                                                                \
+    cudaError_t err = call;                                         \
+    if (err != cudaSuccess) {                                       \
+        fprintf(stderr, "CUDA Error at %s:%d: %s\n",                \
+                __FILE__, __LINE__, cudaGetErrorString(err));       \
+        exit(EXIT_FAILURE);                                         \
+    }                                                               \
+} while (0)
+
 
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */
 
@@ -149,4 +159,15 @@ blend_background_backward_tensor(
     torch::Tensor &alpha,  // [H, W, 1]
     torch::Tensor &background,  // [H, W, 3]
     torch::Tensor &v_out_rgb  // [H, W, 3]
+);
+
+
+std::tuple<torch::Tensor, torch::Tensor>
+intersect_splat_tile(
+    torch::Tensor& means,
+    torch::Tensor& scales,
+    torch::Tensor& opacs,
+    torch::Tensor& quats,
+    torch::Tensor& viewmats,
+    torch::Tensor& Ks
 );

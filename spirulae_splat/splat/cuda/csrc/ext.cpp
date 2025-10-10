@@ -27,5 +27,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("compute_per_splat_losses_backward", &compute_per_splat_losses_backward_tensor);
     m.def("blend_background_forward", &blend_background_forward_tensor);
     m.def("blend_background_backward", &blend_background_backward_tensor);
+
+    m.def("intersect_splat_tile", &intersect_splat_tile);
     
 }

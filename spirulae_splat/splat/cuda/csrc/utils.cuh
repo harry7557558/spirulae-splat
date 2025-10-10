@@ -1,14 +1,16 @@
+#pragma once
+
 #include <vector_types.h>
 #include <type_traits>
 
 #ifndef SLANG_PRELUDE_EXPORT
 
-__device__ float atomicMin(float* p, float v) {
+inline __device__ float atomicMin(float* p, float v) {
     return (__float_as_int(v) >= 0) ?
         __int_as_float(atomicMin((int*)p, __float_as_int(v))) :
         __uint_as_float(atomicMax((unsigned*)p, __float_as_uint(v)));
 }
-__device__ float atomicMax(float* p, float v) {
+inline __device__ float atomicMax(float* p, float v) {
     return (__float_as_int(v) >= 0) ?
         __int_as_float(atomicMax((int*)p, __float_as_int(v))) :
         __uint_as_float(atomicMin((unsigned*)p, __float_as_uint(v)));

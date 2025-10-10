@@ -35,8 +35,8 @@ spirulae = MethodSpecification(
             datamanager=SpirulaeDataManagerConfig(
                 _target=SpirulaeDataManager,
                 dataparser=NerfstudioDataParserConfig(
-                    # train_split_fraction=0.9,
-                    train_split_fraction=1.0,
+                    train_split_fraction=0.9,
+                    # train_split_fraction=1.0,
                     load_3D_points=True,
                 ),
                 camera_res_scale_factor=1.0,

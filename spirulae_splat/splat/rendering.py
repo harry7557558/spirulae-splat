@@ -26,6 +26,8 @@ from gsplat.distributed import (
 
 from .utils import depth_to_normal
 
+from spirulae_splat.splat.cuda import intersect_splat_tile
+
 
 # from gsplat
 
@@ -45,6 +47,7 @@ def rasterization(
     eps2d: float = 0.3,
     sh_degree: Optional[int] = None,
     packed: bool = True,
+    with_bvh: bool = False,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
     render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
@@ -55,7 +58,6 @@ def rasterization(
     distributed: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
     segmented: bool = False,
-    covars: Optional[Tensor] = None,
     with_ut: bool = False,
     with_eval3d: bool = False,
     # distortion
@@ -205,8 +207,6 @@ def rasterization(
             Segmented radix sort performs sorting in segments, which is more efficient for the sorting operation itself.
             However, since it requires offset indices as input, additional global memory access is needed, which results
             in slower overall performance in most use cases.
-        covars: Optional covariance matrices of the Gaussians. If provided, the `quats` and
-            `scales` will be ignored. [..., N, 3, 3], Default is None.
         with_ut: Whether to use Unscented Transform (UT) for projection. Default is False.
         with_eval3d: Whether to calculate Gaussian response in 3D world space, instead
             of 2D image space. Default is False.
@@ -272,15 +272,8 @@ def rasterization(
     I = B * C
     device = means.device
     assert means.shape == batch_dims + (N, 3), means.shape
-    if covars is None:
-        assert quats.shape == batch_dims + (N, 4), quats.shape
-        assert scales.shape == batch_dims + (N, 3), scales.shape
-    else:
-        assert covars.shape == batch_dims + (N, 3, 3), covars.shape
-        quats, scales = None, None
-        # convert covars from 3x3 matrix to upper-triangular 6D vector
-        tri_indices = ([0, 0, 0, 1, 1, 2], [0, 1, 2, 1, 2, 2])
-        covars = covars[..., tri_indices[0], tri_indices[1]]
+    assert quats.shape == batch_dims + (N, 4), quats.shape
+    assert scales.shape == batch_dims + (N, 3), scales.shape
     assert opacities.shape == batch_dims + (N,), opacities.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
@@ -407,7 +400,7 @@ def rasterization(
         # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
         proj_results = fully_fused_projection(
             means,
-            covars,
+            None,  # covars
             quats,
             scales,
             viewmats,
@@ -768,247 +761,3 @@ def rasterization(
 
     return render_colors, render_alphas, meta
 
-
-def _rasterization(
-    means: Tensor,  # [..., N, 3]
-    quats: Tensor,  # [..., N, 4]
-    scales: Tensor,  # [..., N, 3]
-    opacities: Tensor,  # [..., N]
-    colors: Tensor,  # [..., (C,) N, D] or [..., (C,) N, K, 3]
-    viewmats: Tensor,  # [..., C, 4, 4]
-    Ks: Tensor,  # [..., C, 3, 3]
-    width: int,
-    height: int,
-    near_plane: float = 0.01,
-    far_plane: float = 1e10,
-    eps2d: float = 0.3,
-    sh_degree: Optional[int] = None,
-    tile_size: int = 16,
-    backgrounds: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
-    rasterize_mode: Literal["classic", "antialiased"] = "classic",
-    channel_chunk: int = 32,
-    batch_per_iter: int = 100,
-) -> Tuple[Tensor, Tensor, Dict]:
-    """A version of rasterization() that utilies on PyTorch's autograd.
-
-    .. note::
-        This function still relies on gsplat's CUDA backend for some computation, but the
-        entire differentiable graph is on of PyTorch (and nerfacc) so could use Pytorch's
-        autograd for backpropagation.
-
-    .. note::
-        This function relies on installing latest nerfacc, via:
-        pip install git+https://github.com/nerfstudio-project/nerfacc
-
-    .. note::
-        Compared to rasterization(), this function does not support some arguments such as
-        `packed`, `sparse_grad` and `absgrad`.
-    """
-    from gsplat.cuda._torch_impl import (
-        _fully_fused_projection,
-        _quat_scale_to_covar_preci,
-        _rasterize_to_pixels,
-    )
-
-    batch_dims = means.shape[:-2]
-    num_batch_dims = len(batch_dims)
-    B = math.prod(batch_dims)
-    N = means.shape[-2]
-    C = viewmats.shape[-3]
-    I = B * C
-    device = means.device
-    assert means.shape == batch_dims + (N, 3), means.shape
-    assert quats.shape == batch_dims + (N, 4), quats.shape
-    assert scales.shape == batch_dims + (N, 3), scales.shape
-    assert opacities.shape == batch_dims + (N,), opacities.shape
-    assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
-    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
-
-    if sh_degree is None:
-        # treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]
-        assert (
-            colors.dim() == num_batch_dims + 2
-            and colors.shape[:-1] == batch_dims + (N,)
-        ) or (
-            colors.dim() == num_batch_dims + 3
-            and colors.shape[:-1] == batch_dims + (C, N)
-        ), colors.shape
-    else:
-        # treat colors as SH coefficients, should be in shape [..., N, K, 3] or [..., C, N, K, 3]
-        # Allowing for activating partial SH bands
-        assert (
-            colors.dim() == num_batch_dims + 3
-            and colors.shape[:-2] == batch_dims + (N,)
-            and colors.shape[-1] == 3
-        ) or (
-            colors.dim() == num_batch_dims + 4
-            and colors.shape[:-2] == batch_dims + (C, N)
-            and colors.shape[-1] == 3
-        ), colors.shape
-        assert (sh_degree + 1) ** 2 <= colors.shape[-2], colors.shape
-
-    # Project Gaussians to 2D.
-    # The results are with shape [..., C, N, ...]. Only the elements with radii > 0 are valid.
-    covars, _ = _quat_scale_to_covar_preci(quats, scales, True, False, triu=False)
-    radii, means2d, depths, conics, compensations = _fully_fused_projection(
-        means,
-        covars,
-        viewmats,
-        Ks,
-        width,
-        height,
-        eps2d=eps2d,
-        near_plane=near_plane,
-        far_plane=far_plane,
-        calc_compensations=(rasterize_mode == "antialiased"),
-    )
-    opacities = torch.broadcast_to(
-        opacities[..., None, :], batch_dims + (C, N)
-    )  # [..., C, N]
-    batch_ids, camera_ids, gaussian_ids = None, None, None
-    image_ids = None
-
-    if compensations is not None:
-        opacities = opacities * compensations
-
-    # Identify intersecting tiles
-    tile_width = math.ceil(width / float(tile_size))
-    tile_height = math.ceil(height / float(tile_size))
-    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
-        means2d,
-        radii,
-        depths,
-        tile_size,
-        tile_width,
-        tile_height,
-        packed=False,
-        n_images=I,
-        image_ids=image_ids,
-        gaussian_ids=gaussian_ids,
-    )
-    isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
-    isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
-
-    # Turn colors into [..., C, N, D] or [..., nnz, D] to pass into rasterize_to_pixels()
-    if sh_degree is None:
-        # Colors are post-activation values, with shape [..., N, D] or [..., C, N, D]
-        if colors.dim() == num_batch_dims + 2:
-            # Turn [..., N, D] into [..., C, N, D]
-            colors = torch.broadcast_to(
-                colors[..., None, :, :], batch_dims + (C, N, -1)
-            )
-        else:
-            # colors is already [..., C, N, D]
-            pass
-    else:
-        # Colors are SH coefficients, with shape [..., N, K, 3] or [..., C, N, K, 3]
-        camtoworlds = torch.inverse(viewmats)  # [..., C, 4, 4]
-        dirs = means[..., None, :, :] - camtoworlds[..., None, :3, 3]  # [..., C, N, 3]
-        masks = (radii > 0).all(dim=-1)  # [..., C, N]
-        if colors.dim() == num_batch_dims + 3:
-            # Turn [..., N, K, 3] into [..., C, N, K, 3]
-            shs = torch.broadcast_to(
-                colors[..., None, :, :, :], batch_dims + (C, N, -1, 3)
-            )  # [..., C, N, K, 3]
-        else:
-            # colors is already [..., C, N, K, 3]
-            shs = colors
-        colors = spherical_harmonics(
-            sh_degree, dirs, shs, masks=masks
-        )  # [..., C, N, 3]
-        # make it apple-to-apple with Inria's CUDA Backend.
-        colors = torch.clamp_min(colors + 0.5, 0.0)
-
-    # Rasterize to pixels
-    if render_mode in ["RGB+D", "RGB+ED"]:
-        colors = torch.cat((colors, depths[..., None]), dim=-1)
-        if backgrounds is not None:
-            backgrounds = torch.cat(
-                [
-                    backgrounds,
-                    torch.zeros(batch_dims + (C, 1), device=backgrounds.device),
-                ],
-                dim=-1,
-            )
-    elif render_mode in ["D", "ED"]:
-        colors = depths[..., None]
-        if backgrounds is not None:
-            backgrounds = torch.zeros(batch_dims + (C, 1), device=backgrounds.device)
-    else:  # RGB
-        pass
-    if colors.shape[-1] > channel_chunk:
-        # slice into chunks
-        n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
-        render_colors, render_alphas = [], []
-        for i in range(n_chunks):
-            colors_chunk = colors[..., i * channel_chunk : (i + 1) * channel_chunk]
-            backgrounds_chunk = (
-                backgrounds[..., i * channel_chunk : (i + 1) * channel_chunk]
-                if backgrounds is not None
-                else None
-            )
-            render_colors_, render_alphas_ = _rasterize_to_pixels(
-                means2d,
-                conics,
-                colors_chunk,
-                opacities,
-                width,
-                height,
-                tile_size,
-                isect_offsets,
-                flatten_ids,
-                backgrounds=backgrounds_chunk,
-                batch_per_iter=batch_per_iter,
-            )
-            render_colors.append(render_colors_)
-            render_alphas.append(render_alphas_)
-        render_colors = torch.cat(render_colors, dim=-1)
-        render_alphas = render_alphas[0]  # discard the rest
-    else:
-        render_colors, render_alphas = _rasterize_to_pixels(
-            means2d,
-            conics,
-            colors,
-            opacities,
-            width,
-            height,
-            tile_size,
-            isect_offsets,
-            flatten_ids,
-            backgrounds=backgrounds,
-            batch_per_iter=batch_per_iter,
-        )
-    if render_mode in ["ED", "RGB+ED"]:
-        # normalize the accumulated depth to get the expected depth
-        render_colors = torch.cat(
-            [
-                render_colors[..., :-1],
-                render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
-            ],
-            dim=-1,
-        )
-
-    meta = {
-        "batch_ids": batch_ids,
-        "camera_ids": camera_ids,
-        "gaussian_ids": gaussian_ids,
-        "radii": radii,
-        "means2d": means2d,
-        "depths": depths,
-        "conics": conics,
-        "opacities": opacities,
-        "tile_width": tile_width,
-        "tile_height": tile_height,
-        "tiles_per_gauss": tiles_per_gauss,
-        "isect_ids": isect_ids,
-        "flatten_ids": flatten_ids,
-        "isect_offsets": isect_offsets,
-        "width": width,
-        "height": height,
-        "tile_size": tile_size,
-        "n_batches": B,
-        "n_cameras": C,
-    }
-    return render_colors, render_alphas, meta

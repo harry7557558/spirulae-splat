@@ -45,3 +45,5 @@ compute_per_splat_losses_forward = _make_lazy_cuda_func("compute_per_splat_losse
 compute_per_splat_losses_backward = _make_lazy_cuda_func("compute_per_splat_losses_backward")
 blend_background_forward = _make_lazy_cuda_func("blend_background_forward")
 blend_background_backward = _make_lazy_cuda_func("blend_background_backward")
+
+intersect_splat_tile = _make_lazy_cuda_func("intersect_splat_tile")

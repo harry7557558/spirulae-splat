@@ -48,6 +48,9 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
     max_batch_per_epoch: int = 768
     """Maximum number of batches per epoch, used for configuring batch size"""
 
+    patch_size: Optional[int] = 256
+    """If set, batch tiles instead of images"""
+
     cache_images: Literal["cpu-pageable", "cpu", "gpu"] = "cpu-pageable"
     """Whether to cache images in memory. If "cpu", caches on cpu. If "gpu", caches on device."""
     cache_images_type: Literal["uint8", "float32"] = "uint8"
@@ -599,8 +602,6 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         self.train_unseen_cameras = deque()
 
-        self.cached_train_images = []
-
     def _load_images(
         self, split: Literal["train", "eval"], cache_images_device: Literal["cpu-pageable", "cpu", "gpu"]
     ) -> List[Dict[str, torch.Tensor]]:
@@ -732,13 +733,49 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         return undistorted_images
 
+    def get_tiles(self, batch_size: int):
+        TILE_SIZE = 16
+        assert self.config.patch_size > 0 and self.config.patch_size % TILE_SIZE == 0, "Patch size must be a multiple of tile size"
+
+        # image_shapes = torch.stack([self.train_dataset.cameras.height, self.train_dataset.cameras.width], dim=-1)
+        image_shapes = torch.tensor([im['image'].shape[:2] for im in self.cached_train])
+        assert (image_shapes >= self.config.patch_size).all(), "Image shape must be at least patch size"
+        effective_offsets = image_shapes - self.config.patch_size
+
+        image_indices = torch.randint(0, len(self.cached_train), (batch_size,))
+        offsets = (torch.rand([batch_size, 2]) * effective_offsets[image_indices] + 0.5).long()
+        patches = []
+        offset_slices = []
+        for image_idx, (y0, x0) in zip(image_indices, offsets):
+            y0, x0 = y0.item(), x0.item()
+            y1 = y0 + self.config.patch_size
+            x1 = x0 + self.config.patch_size
+            patch = self.cached_train[image_idx]['image'][y0:y1, x0:x1]
+            patches.append(patch)
+            offset_slices.append((slice(y0, y1), slice(x0, x1)))
+        patches = torch.stack(patches).to(self.device)
+        batch = { 'image': patches }
+
+        camera = self.train_dataset.cameras[image_indices]
+        camera.height = self.config.patch_size * torch.ones_like(camera.height)
+        camera.width = self.config.patch_size * torch.ones_like(camera.width)
+        camera.cx = camera.cx - offsets[:, 1:2]
+        camera.cy = camera.cy - offsets[:, 0:1]
+        camera = camera.to(self.device)
+        if camera.metadata is None:
+            camera.metadata = {}
+        camera.metadata["cam_idx"] = image_indices
+        camera.metadata["slices"] = offset_slices
+
+        return camera, batch
+
     def next_train(self, step: int) -> Tuple[Cameras, Dict]:
         """Returns the next training batch
 
         Returns a Camera instead of raybundle"""
 
-        if len(self.cached_train_images) == 0:
-            self.cached_train_images = self._load_images("train", cache_images_device=self.config.cache_images)
+        if self.config.patch_size is not None:
+            return self.get_tiles(16)
 
         train_batch_size = (len(self.train_dataset) + self.config.max_batch_per_epoch - 1) \
             // self.config.max_batch_per_epoch
@@ -755,7 +792,7 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         batch = {}
         for image_idx in image_indices:
-            img = self.cached_train_images[image_idx]
+            img = self.cached_train[image_idx]
             for key, value in img.items():
                 if key not in batch:
                     batch[key] = []
