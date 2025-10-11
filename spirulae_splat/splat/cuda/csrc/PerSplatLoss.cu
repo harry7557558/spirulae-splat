@@ -51,7 +51,7 @@ __global__ void per_splat_losses_forward_kernel(
     }
 
     auto block = cg::this_thread_block();
-    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+    cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
     for (int i = 0; i < kNumPerSplatLosses; i++) {
         float loss = inside ? losses[i] : 0.0f;
         float loss_reduced = cg::reduce(warp, loss, cg::plus<float>());

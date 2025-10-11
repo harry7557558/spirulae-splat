@@ -10,6 +10,8 @@
 
 #include "helpers.cuh"
 
+// #define DEBUG
+
 
 struct Splat {
     float3 mean;
@@ -35,7 +37,7 @@ __device__ __forceinline__ Splat loadSplat(unsigned splatIdx, const SplatBuffers
 
     // opac = 1.0f / (1.0f+__expf(-opac));
     // scales = { __expf(scales.x), __expf(scales.y), __expf(scales.z) };
-    // quat = normalize(quat);
+    quat = normalize(quat);
 
     float extend = fmin(3.33f, sqrt(2.0f * __logf(opac / ALPHA_THRESHOLD)));
 
@@ -173,7 +175,7 @@ __global__ void computeSplatAABB(
     }
 
     auto block = cg::this_thread_block();
-    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+    cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
 
     aabb_min.x = cg::reduce(warp, aabb_min.x, cg::less<float>());
     if (warp.thread_rank() == 0) atomicMin((float*)aabb_reduced+0, aabb_min.x);
@@ -581,7 +583,6 @@ __global__ void getTileSplatIntersections_octree(
     const uint32_t* __restrict__ splatRanges,
     const uint32_t* __restrict__ splatIndices,
     uint32_t* __restrict__ intersect_counts,  // to be filled or exclusive scan
-    uint64_t* __restrict__ intersection_sorting_keys,  // nullptr or to be filled
     uint32_t* __restrict__ intersectionSplatID  // nullptr or to be filled
 ) {
     static_assert(BRANCH_FACTOR == 2);
@@ -596,7 +597,7 @@ __global__ void getTileSplatIntersections_octree(
     unsigned tileThreadIdx = threadIdx.x % kThreadsPerTile;
     bool isActive = (globalTileIdx < tiles.size);
 
-    bool isCountingPass = (intersection_sorting_keys == nullptr || intersectionSplatID == nullptr);
+    bool isCountingPass = (intersectionSplatID == nullptr);
     uint32_t intersectGlobalOffset = 0, intersectGlobalOffsetMax = 0;
     if (!isCountingPass) {
         intersectGlobalOffset = intersect_counts[globalTileIdx];
@@ -649,7 +650,6 @@ __global__ void getTileSplatIntersections_octree(
                     if (overlap > 0.0) {
                         uint idx = atomicAdd(&numSplatIntersects[warpTileIdx], 1) + intersectGlobalOffset;
                         if (idx < intersectGlobalOffsetMax) {
-                            intersection_sorting_keys[idx] = ((uint64_t)globalTileIdx << 32) | (uint64_t)__float_as_uint(overlap);
                             intersectionSplatID[idx] = splatIdx;
                         }
                     }
@@ -707,7 +707,6 @@ __global__ void getTileSplatIntersections_octree(
         else {
             uint32_t idx = numSplatIntersects[warpTileIdx] + intersectGlobalOffset;
             while (idx < intersectGlobalOffsetMax) {
-                intersection_sorting_keys[idx] = ~(uint32_t)0;
                 intersectionSplatID[idx] = 0;
                 ++idx;
             }
@@ -719,14 +718,13 @@ __global__ void getTileSplatIntersections_octree(
 __global__ void getTileSplatIntersections_brute(
     const TileBuffers tiles, const SplatBuffers& splats,
     uint32_t* __restrict__ intersect_counts,  // to be filled or exclusive scan
-    uint64_t* __restrict__ intersection_sorting_keys,  // nullptr or to be filled
     uint32_t* __restrict__ intersectionSplatID  // nullptr or to be filled
 ) {
     unsigned tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= tiles.size)
         return;
 
-    bool isCountingPass = (intersection_sorting_keys == nullptr || intersectionSplatID == nullptr);
+    bool isCountingPass = (intersectionSplatID == nullptr);
     uint32_t intersectGlobalOffset = 0, intersectGlobalOffsetMax = 0;
     if (!isCountingPass) {
         intersectGlobalOffset = intersect_counts[tid];
@@ -743,7 +741,6 @@ __global__ void getTileSplatIntersections_brute(
             uint32_t idx = intersectGlobalOffset + intersectCount;
             intersectCount += 1;
             if (idx < intersectGlobalOffsetMax) {
-                intersection_sorting_keys[idx] = ((uint64_t)tid << 32) | (uint64_t)__float_as_uint(overlap);
                 intersectionSplatID[idx] = sid;
             }
         }
@@ -754,7 +751,6 @@ __global__ void getTileSplatIntersections_brute(
     else {
         uint32_t idx = intersectCount + intersectGlobalOffset;
         while (idx < intersectGlobalOffsetMax) {
-            intersection_sorting_keys[idx] = ~(uint32_t)0;
             intersectionSplatID[idx] = 0;
             ++idx;
         }
@@ -911,16 +907,15 @@ __global__ void getTileSplatIntersections_lbvh(
     const int2* __restrict__ internal_nodes,
     float3* __restrict__ treeAABB,
     uint32_t* __restrict__ intersect_counts,  // to be filled or exclusive scan
-    uint64_t* __restrict__ intersection_sorting_keys,  // nullptr or to be filled
     uint32_t* __restrict__ intersectionSplatID  // nullptr or to be filled
 ) {
+    // one thread per tile
     unsigned tileIdx = blockIdx.x * blockDim.x + threadIdx.x;
     if (tileIdx >= tiles.size)
         return;
-    constexpr uint warpSize = 32;
-    uint laneIdx = tileIdx % warpSize;
+    uint laneIdx = tileIdx % WARP_SIZE;
 
-    bool isCountingPass = (intersection_sorting_keys == nullptr || intersectionSplatID == nullptr);
+    bool isCountingPass = (intersectionSplatID == nullptr);
     uint32_t intersectGlobalOffset = 0, intersectGlobalOffsetMax = 0;
     if (!isCountingPass) {
         intersectGlobalOffset = intersect_counts[tileIdx];
@@ -932,7 +927,8 @@ __global__ void getTileSplatIntersections_lbvh(
     struct StackElem {
         uint32_t nodeIdx;
     };
-    __shared__ StackElem stack[warpSize][8*sizeof(int32_t)+1];
+    inline constexpr uint MAX_STACK_SIZE = 8*sizeof(int32_t)+1;
+    __shared__ StackElem stack[WARP_SIZE][MAX_STACK_SIZE];
     uint stackSize = 0;
     if (tile.isOverlap(treeAABB[0], treeAABB[1])) {
         stack[laneIdx][stackSize] = { 0 };
@@ -959,14 +955,14 @@ __global__ void getTileSplatIntersections_lbvh(
                 if (overlap > 0.0) {
                     uint idx = numSplatIntersects + intersectGlobalOffset;
                     if (idx < intersectGlobalOffsetMax) {
-                        intersection_sorting_keys[idx] = ((uint64_t)tileIdx << 32) | (uint64_t)__float_as_uint(overlap);
                         intersectionSplatID[idx] = splatIdx;
                     }
                     numSplatIntersects += 1;
                 }
             }
             // node
-            else if (tile.isOverlap(treeAABB[2*childIdx+0], treeAABB[2*childIdx+1])) {
+            else if (tile.isOverlap(treeAABB[2*childIdx+0], treeAABB[2*childIdx+1])
+                    && stackSize < MAX_STACK_SIZE) {
                 stack[laneIdx][stackSize] = { (uint)childIdx };
                 stackSize += 1;
             }
@@ -979,9 +975,137 @@ __global__ void getTileSplatIntersections_lbvh(
     else {
         uint32_t idx = numSplatIntersects + intersectGlobalOffset;
         while (idx < intersectGlobalOffsetMax) {
-            intersection_sorting_keys[idx] = ~(uint32_t)0;
             intersectionSplatID[idx] = 0;
             ++idx;
+        }
+    }
+}
+
+
+__global__ void getTileSplatIntersections_lbvh_warp(
+    const TileBuffers tiles, const SplatBuffers& splats,
+    const int2* __restrict__ internal_nodes,
+    float3* __restrict__ treeAABB,
+    uint32_t* __restrict__ intersect_counts,  // to be filled or exclusive scan
+    uint32_t* __restrict__ intersectionSplatID  // nullptr or to be filled
+) {
+    // one warp per tile, blockDim.x must be warp size
+    unsigned tileIdx = blockIdx.x;
+    if (tileIdx >= tiles.size)
+        return;
+    unsigned laneIdx = threadIdx.x % WARP_SIZE;
+
+    bool isCountingPass = (intersectionSplatID == nullptr);
+    uint32_t intersectGlobalOffset = 0, intersectGlobalOffsetMax = 0;
+    if (!isCountingPass) {
+        intersectGlobalOffset = intersect_counts[tileIdx];
+        intersectGlobalOffsetMax = intersect_counts[tileIdx+1];
+    }
+
+    Tile tile = loadTile(tileIdx, tiles);
+
+    struct StackElem {
+        uint32_t nodeIdx;
+    };
+    constexpr uint MAX_STACK_SIZE = (8*sizeof(int32_t)+1)*WARP_SIZE;
+    __shared__ StackElem stack[MAX_STACK_SIZE];
+    uint stackSize = 0;
+    if (tile.isOverlap(treeAABB[0], treeAABB[1])) {
+        if (laneIdx == 0)
+            stack[stackSize] = { 0 };
+        stackSize++;
+    }
+    __syncwarp();
+    uint numSplatIntersects = 0;
+
+    auto block = cg::this_thread_block();
+    cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
+
+    for (uint _num_steps = 0; _num_steps < 65536; _num_steps++) {
+        if (stackSize == 0)
+            break;
+
+        int elemIdx = (int)stackSize - (int)laneIdx - 1;
+        bool active = elemIdx >= 0;
+
+        StackElem elem;
+        if (active) elem = stack[elemIdx];
+
+        stackSize -= __syncthreads_count(active);
+
+        #pragma unroll
+        for (uint ci = 0; ci < 2; ci++) {
+
+            bool hasSplat = false;
+            bool hasNode = false;
+            int splatIdx = 0;
+            int nodeIdx = 0;
+
+            if (active) {
+                int2 node = internal_nodes[elem.nodeIdx];
+
+                int childIdx = ci == 0 ? node.x : node.y;
+                // splat
+                if (childIdx < 0) {
+                    splatIdx = ~childIdx;
+                    Splat splat = loadSplat(splatIdx, splats);
+                    float overlap = tile.isOverlap(splat);
+                    if (overlap > 0.0)
+                        hasSplat = true;
+                }
+                // node
+                else if (tile.isOverlap(treeAABB[2*childIdx+0], treeAABB[2*childIdx+1])) {
+                    nodeIdx = childIdx;
+                    hasNode = true;
+                }
+            }
+
+            // fill splats
+            if (!isCountingPass) {
+                int inclusiveScan = (int)hasSplat;
+                #pragma unroll
+                for (unsigned offset = 1; offset < WARP_SIZE; offset <<= 1) {
+                    int temp = __shfl_up_sync(~0u, inclusiveScan, offset, WARP_SIZE);
+                    if (laneIdx >= offset)
+                        inclusiveScan += temp;
+                }
+                int exclusiveScan = inclusiveScan - (int)hasSplat;
+
+                uint idx = (numSplatIntersects + exclusiveScan) + intersectGlobalOffset;
+                if (hasSplat && idx < intersectGlobalOffsetMax)
+                    intersectionSplatID[idx] = splatIdx;
+            }
+            numSplatIntersects += __syncthreads_count(hasSplat);
+
+            // fill nodes
+            {
+                int inclusiveScan = (int)hasNode;
+                #pragma unroll
+                for (unsigned offset = 1; offset < WARP_SIZE; offset <<= 1) {
+                    int temp = __shfl_up_sync(~0u, inclusiveScan, offset, WARP_SIZE);
+                    if (laneIdx >= offset)
+                        inclusiveScan += temp;
+                }
+                int exclusiveScan = inclusiveScan - (int)hasNode;
+
+                uint idx = stackSize + exclusiveScan;
+                if (hasNode && idx < MAX_STACK_SIZE)
+                    stack[idx] = { (uint)nodeIdx };
+            }
+            stackSize += __syncthreads_count(hasNode);
+            stackSize = min(stackSize, MAX_STACK_SIZE);
+        }
+
+    }
+
+    if (isCountingPass)
+        intersect_counts[tileIdx] = numSplatIntersects;
+    else {
+        uint32_t idx = numSplatIntersects + intersectGlobalOffset;
+        while (idx < intersectGlobalOffsetMax) {
+            if (idx + laneIdx < intersectGlobalOffsetMax)
+                intersectionSplatID[idx + laneIdx] = 0;
+            idx += WARP_SIZE;
         }
     }
 }
@@ -1037,6 +1161,7 @@ void _print_tensor(std::string name, torch::Tensor tensor) {
 #define print_tensor(dtype, tensor) ;
 
 
+#ifdef DEBUG
 void printAABB(float3 p0, float3 p1) {
     float3 c = -0.5f*(p0+p1), r = -0.5f*(p1-p0);
     printf("\\max\\left(\\left|x%+f\\right|%+f,\\left|y%+f\\right|%+f,\\left|z%+f\\right|%+f\\right)=0\n", c.x, r.x, c.y, r.y, c.z, r.z);
@@ -1073,6 +1198,7 @@ void checkMatch(std::string name, const torch::Tensor &a, const torch::Tensor &b
     int numdiff = torch::abs(a - b).clip(0, 1).sum().item<int>();
     printf("%s: %d / %d mismatch\n", name.c_str(), numdiff, (int)a.size(0));
 }
+#endif
 
 
 SplatTileIntersector::SplatTileIntersector(
@@ -1087,26 +1213,39 @@ SplatTileIntersector::SplatTileIntersector(
     tensorI64 = tensorOptions.dtype(torch::kInt64);
     tensorU8 = tensorOptions.dtype(torch::kUInt8);
 
-    #if 0
+    #ifdef DEBUG
     std::chrono::system_clock::time_point t0, t1;
 
     for (int i = 0; i < 1000; i++) {
         t0 = std::chrono::high_resolution_clock::now();
         // auto [icm1, sid1] = getIntersections_octree<12, 2>();
-        auto [icm1, sid1] = getIntersections_lbvh<12, 2>();
+        auto [icm1, sid1] = getIntersections_lbvh();
         t1 = std::chrono::high_resolution_clock::now();
         printf("tree: %.2f ms\n", std::chrono::duration<float>(t1-t0).count()*1e3f);
 
-        continue;
+        // continue;
 
         t0 = std::chrono::high_resolution_clock::now();
         auto [icm0, sid0] = getIntersections_brute();
         t1 = std::chrono::high_resolution_clock::now();
         printf("brute: %.2f ms\n", std::chrono::duration<float>(t1-t0).count()*1e3f);
 
+        icm0 = icm0.cpu();
+        icm1 = icm1.cpu();
+        sid0 = sid0.cpu();
+        sid1 = sid1.cpu();
+        for (int k = 0; k+1 < icm0.size(0); k++) {
+            int i0 = icm0[k].item<int>();
+            int i1 = icm0[k+1].item<int>();
+            std::sort(sid0.data_ptr<int>()+i0, sid0.data_ptr<int>()+i1);
+            i0 = icm1[k].item<int>();
+            i1 = icm1[k+1].item<int>();
+            std::sort(sid1.data_ptr<int>()+i0, sid1.data_ptr<int>()+i1);
+        }
         checkMatch("icm", icm1, icm0);
         checkMatch("sid", sid1, sid0);
     }
+    exit(0);
     #endif
 }
 
@@ -1117,7 +1256,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
     getTileSplatIntersections_brute<<<(tiles.size+warp-1)/warp, warp>>>(
         tiles, splats,
         (uint32_t*)intersection_count.data_ptr<int32_t>(),
-        nullptr, nullptr
+        nullptr
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
     cudaDeviceSynchronize();
@@ -1127,19 +1266,13 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
     print_tensor(int, intersection_count_map);
     unsigned total_intersections = (unsigned)intersection_count_map[tiles.size].item<int32_t>();
 
-    torch::Tensor intersection_sorting_keys = torch::empty({total_intersections}, tensorI64);
     torch::Tensor intersectionSplatID = torch::empty({total_intersections}, tensorI32);
     getTileSplatIntersections_brute<<<(tiles.size+warp-1)/warp, warp>>>(
         tiles, splats,
         (uint32_t*)intersection_count_map.data_ptr<int32_t>(),
-        (uint64_t*)intersection_sorting_keys.data_ptr<int64_t>(),
         (uint32_t*)intersectionSplatID.data_ptr<int32_t>()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-    print_tensor(int64_t, intersection_sorting_keys);
-    print_tensor(int32_t, intersectionSplatID);
-
-    intersectionSplatID = torch::index(intersectionSplatID, {intersection_sorting_keys.argsort()});
     print_tensor(int32_t, intersectionSplatID);
 
     return std::make_tuple(intersection_count_map, intersectionSplatID);
@@ -1346,6 +1479,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
     print_tensor(int, children);
     cudaDeviceSynchronize();
     // std::cout << treeAABB << std::endl;
+    #ifdef DEBUG
     if (0) {
         torch::Tensor treeAABB_cpu = treeAABB.cpu();
         for (int i = 0; i < total_cells; i++) {
@@ -1353,6 +1487,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
             printAABB_wireframe(p[0], p[1]);
         }
     }
+    #endif
     // return;
 
     // Traverse tree - get counts
@@ -1366,7 +1501,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
         (unsigned*)splatRanges.data_ptr<int32_t>(),
         (unsigned*)splatIndices.data_ptr<int32_t>(),
         (uint32_t*)intersection_count.data_ptr<int32_t>(),
-        nullptr, nullptr
+        nullptr
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
     cudaDeviceSynchronize();
@@ -1378,7 +1513,6 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
     unsigned total_intersections = (unsigned)intersection_count_map[tiles.size].item<int32_t>();
 
     // Traverse tree - write data
-    torch::Tensor intersection_sorting_keys = torch::empty({total_intersections}, tensorI64);
     torch::Tensor intersectionSplatID = torch::empty({total_intersections}, tensorI32);
     getTileSplatIntersections_octree<MAX_NUM_LEVELS, BRANCH_FACTOR>
     <<<(tiles.size*B3+warp-1)/warp, warp>>>(
@@ -1388,15 +1522,9 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
         (unsigned*)splatRanges.data_ptr<int32_t>(),
         (unsigned*)splatIndices.data_ptr<int32_t>(),
         (uint32_t*)intersection_count_map.data_ptr<int32_t>(),
-        (uint64_t*)intersection_sorting_keys.data_ptr<int64_t>(),
         (uint32_t*)intersectionSplatID.data_ptr<int32_t>()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-    print_tensor(int64_t, intersection_sorting_keys);
-    print_tensor(int32_t, intersectionSplatID);
-
-    // Sort by key
-    intersectionSplatID = torch::index(intersectionSplatID, {intersection_sorting_keys.argsort()});
     print_tensor(int32_t, intersectionSplatID);
 
     return std::make_tuple(intersection_count_map, intersectionSplatID);
@@ -1405,7 +1533,6 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
 
 std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_lbvh() {
     constexpr uint MAX_NUM_LEVELS = 12;
-    constexpr uint BRANCH_FACTOR = 2;
 
     static_assert(MAX_NUM_LEVELS < 32);
 
@@ -1425,6 +1552,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
         (float3*)root_aabb_tensor.data_ptr<float>()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
+    #ifdef DEBUG
     if (0) {
         torch::Tensor splat_aabb_cpu = splat_aabb.cpu();
         for (int i = 0; i < splats.size; i++) {
@@ -1432,6 +1560,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
             printAABB(ps[0], ps[1]);
         }
     }
+    #endif
 
     // find root AABB, pad them to cubes
     {
@@ -1459,6 +1588,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
     auto [sorted_morton, splat_argsort] = torch::sort(morton);
     splat_argsort = splat_argsort.to(torch::kInt32);
 
+    #ifdef DEBUG
     if (0) {
         splat_aabb = torch::index(splat_aabb, {splat_argsort});
         // torch::Tensor splat_idx = invertPermutation(splat_argsort);
@@ -1471,6 +1601,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
         }
         printf("\b\\right]\n");
     }
+    #endif
 
     // Build tree
     torch::Tensor internal_nodes = torch::empty({splats.size-1, 2}, tensorI32);
@@ -1502,6 +1633,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
     cudaDeviceSynchronize();
+    #ifdef DEBUG
     if (0) {
         torch::Tensor treeAABB_cpu = treeAABB.cpu();
         for (int i = 0; i < splats.size-1; i++) {
@@ -1509,15 +1641,17 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
             printAABB_wireframe(p[0], p[1]);
         }
     }
+    #endif
 
     // Traverse to find intersections
     torch::Tensor intersection_count = torch::zeros({tiles.size+1}, tensorI32);
-    getTileSplatIntersections_lbvh<<<(tiles.size+warp-1)/warp, warp>>>(
+    // getTileSplatIntersections_lbvh<<<(tiles.size+warp-1)/warp, warp>>>(
+    getTileSplatIntersections_lbvh_warp<<<tiles.size, warp>>>(
         tiles, splats,
         (int2*)internal_nodes.data_ptr<int32_t>(),
         (float3*)treeAABB.data_ptr<float>(),
         (uint32_t*)intersection_count.data_ptr<int32_t>(),
-        nullptr, nullptr
+        nullptr
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
     cudaDeviceSynchronize();
@@ -1528,22 +1662,16 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
     print_tensor(int, intersection_count_map);
     unsigned total_intersections = (unsigned)intersection_count_map[tiles.size].item<int32_t>();
 
-    torch::Tensor intersection_sorting_keys = torch::empty({total_intersections}, tensorI64);
     torch::Tensor intersectionSplatID = torch::empty({total_intersections}, tensorI32);
-    getTileSplatIntersections_lbvh<<<(tiles.size+warp-1)/warp, warp>>>(
+    // getTileSplatIntersections_lbvh<<<(tiles.size+warp-1)/warp, warp>>>(
+    getTileSplatIntersections_lbvh_warp<<<tiles.size, warp>>>(
         tiles, splats,
         (int2*)internal_nodes.data_ptr<int32_t>(),
         (float3*)treeAABB.data_ptr<float>(),
         (uint32_t*)intersection_count_map.data_ptr<int32_t>(),
-        (uint64_t*)intersection_sorting_keys.data_ptr<int64_t>(),
         (uint32_t*)intersectionSplatID.data_ptr<int32_t>()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-    cudaDeviceSynchronize();
-    print_tensor(int64_t, intersection_sorting_keys);
-    print_tensor(int32_t, intersectionSplatID);
-
-    intersectionSplatID = torch::index(intersectionSplatID, {intersection_sorting_keys.argsort()});
     cudaDeviceSynchronize();
     print_tensor(int32_t, intersectionSplatID);
 
@@ -1551,34 +1679,133 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
 }
 
 
-#if 0
+#ifdef DEBUG
 
 #include <stdio.h>
 
-int main(int argc, char** argv) {
-    torch::manual_seed(std::stoll(argv[3]));
+#include <regex>
+#include <filesystem>
+#include <fstream>
 
-    unsigned num_splat = std::stod(argv[1]);
-    torch::Tensor splat_means = torch::randn({num_splat, 3}).cuda();
-    torch::Tensor splat_scales = 0.2*torch::randn({num_splat, 3}).cuda() - 0.4f*logf(num_splat) - 0.0f;
-    torch::Tensor splat_opacs = torch::randn({num_splat, 1}).cuda();
-    torch::Tensor splat_quats = torch::randn({num_splat, 4}).cuda();
-    unsigned num_tiles = std::stod(argv[2]);
-    torch::Tensor tile_apex = 3.0f * torch::randn({num_tiles, 3}).cuda();
-    torch::Tensor tile_dirs = torch::randn({num_tiles, 3}).cuda() - tile_apex;
-
-    if (0) {
-        torch::Tensor tile_ro_cpu = tile_apex.cpu();
-        torch::Tensor tile_rd_cpu = tile_dirs.cpu();
-        for (unsigned i = 0; i < num_tiles; i++)
-            printTile(((glm::vec3*)tile_ro_cpu.data_ptr<float>())[i],
-            ((glm::vec3*)tile_rd_cpu.data_ptr<float>())[i]);
+torch::Tensor loadBinaryToTensor(const std::string& filepath) {
+    namespace fs = std::filesystem;
+    
+    // Extract filename from path
+    fs::path p(filepath);
+    std::string filename = p.filename().string();
+    
+    // Remove extension if present
+    size_t dot_pos = filename.rfind('.');
+    if (dot_pos != std::string::npos) {
+        filename = filename.substr(0, dot_pos);
     }
+    
+    // Parse dimensions from filename using regex
+    // Pattern: alphanumeric_name followed by numbers separated by underscores
+    std::regex pattern(R"(^[a-zA-Z0-9]+_(.+)$)");
+    std::smatch match;
+    
+    if (!std::regex_match(filename, match, pattern)) {
+        throw std::runtime_error("Filename does not match expected pattern");
+    }
+    
+    std::string dims_str = match[1].str();
+    
+    // Parse dimension values
+    std::vector<int64_t> shape;
+    std::stringstream ss(dims_str);
+    std::string token;
+    
+    while (std::getline(ss, token, '_')) {
+        if (!token.empty()) {
+            try {
+                shape.push_back(std::stoll(token));
+            } catch (const std::exception& e) {
+                throw std::runtime_error("Failed to parse dimension: " + token);
+            }
+        }
+    }
+    
+    if (shape.empty()) {
+        throw std::runtime_error("No dimensions found in filename");
+    }
+    
+    // Calculate total number of elements
+    int64_t total_elements = 1;
+    for (int64_t dim : shape) {
+        total_elements *= dim;
+    }
+    
+    // Read binary file
+    std::ifstream file(filepath, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        throw std::runtime_error("Failed to open file: " + filepath);
+    }
+    
+    std::streamsize file_size = file.tellg();
+    file.seekg(0, std::ios::beg);
+    
+    int64_t expected_bytes = total_elements * sizeof(float);
+    if (file_size != expected_bytes) {
+        throw std::runtime_error(
+            "File size mismatch. Expected " + std::to_string(expected_bytes) +
+            " bytes, but file contains " + std::to_string(file_size) + " bytes"
+        );
+    }
+    
+    // Allocate buffer and read data
+    auto buffer = std::make_unique<float[]>(total_elements);
+    file.read(reinterpret_cast<char*>(buffer.get()), file_size);
+    file.close();
+    
+    if (!file) {
+        throw std::runtime_error("Failed to read file completely");
+    }
+    
+    // Create torch tensor on CUDA device
+    torch::Tensor tensor = torch::from_blob(
+        buffer.get(),
+        shape,
+        torch::kFloat32
+    ).clone();
+    
+    return tensor.to(torch::kCUDA);
+}
 
-    SplatTileIntersector tree(
-        splat_means.options(),
-        {splat_means, splat_scales, splat_opacs, splat_quats},
-        {tile_apex, tile_dirs}
+int main(int argc, char** argv) {
+    auto seed = std::stoll(argv[3]);
+    torch::manual_seed(seed);
+
+    // unsigned num_splat = std::stod(argv[1]);
+    // torch::Tensor means = torch::randn({num_splat, 3}).cuda();
+    // torch::Tensor scales = 0.2*torch::randn({num_splat, 3}).cuda() - 0.4f*logf(num_splat) - 0.0f;
+    // torch::Tensor opacs = torch::randn({num_splat, 1}).cuda();
+    // torch::Tensor quats = torch::randn({num_splat, 4}).cuda();
+    // unsigned num_tiles = std::stod(argv[2]);
+    // auto [viewmats, Ks] = generate_random_camera_poses(num_tiles, seed);
+
+    // if (0) {
+    //     torch::Tensor tile_ro_cpu = tile_apex.cpu();
+    //     torch::Tensor tile_rd_cpu = tile_dirs.cpu();
+    //     for (unsigned i = 0; i < num_tiles; i++)
+    //         printTile(((glm::vec3*)tile_ro_cpu.data_ptr<float>())[i],
+    //         ((glm::vec3*)tile_rd_cpu.data_ptr<float>())[i]);
+    // }
+
+    // scales = torch::exp(scales);
+    // opacs = torch::sigmoid(opacs);
+
+    torch::Tensor means = loadBinaryToTensor("means_765390_3.bin");
+    torch::Tensor scales = loadBinaryToTensor("scales_765390_3.bin");
+    torch::Tensor opacs = loadBinaryToTensor("opacities_765390.bin");
+    torch::Tensor quats = loadBinaryToTensor("quats_765390_4.bin");
+    torch::Tensor viewmats = loadBinaryToTensor("viewmats_672_4_4.bin");
+    torch::Tensor Ks = loadBinaryToTensor("Ks_672_3_3.bin");
+
+    SplatTileIntersector::intersect_splat_tile(
+        means, scales, opacs, quats,
+        TILE_SIZE, TILE_SIZE,
+        viewmats, Ks
     );
     return 0;
 }
@@ -1586,5 +1813,5 @@ int main(int argc, char** argv) {
 #endif
 
 
-// /usr/local/cuda-12.8/bin/nvcc -Ispirulae_splat/splat/cuda/csrc/glm -I/home/harry/.venv/base/lib/python3.12/site-packages/torch/include -I/home/harry/.venv/base/lib/python3.12/site-packages/torch/include/torch/csrc/api/include -I/usr/local/cuda-12.8/include /media/harry/d/gs/spirulae-splat/spirulae_splat/splat/cuda/csrc/rt_tree.cu -o ./temp -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr --compiler-options ''"'"'-fPIC'"'"'' -O3 --use_fast_math --expt-relaxed-constexpr -Xcudafe=--diag_suppress=20012 -Xcudafe=--diag_suppress=550 -DTORCH_API_INCLUDE_EXTENSION_H -gencode=arch=compute_120,code=compute_120 -gencode=arch=compute_120,code=sm_120 -std=c++17 -L/home/harry/.venv/base/lib/python3.12/site-packages/torch/lib -L/usr/local/cuda-12.8/lib64 -L/usr/lib/x86_64-linux-gnu -lc10 -ltorch -ltorch_cpu -lcudart -lc10_cuda -ltorch_cuda
+// /usr/local/cuda-12.8/bin/nvcc -I/media/harry/d/gs/spirulae-splat/spirulae_splat/splat/cuda/csrc/glm -I/home/harry/.venv/base/lib/python3.12/site-packages/torch/include -I/home/harry/.venv/base/lib/python3.12/site-packages/torch/include/torch/csrc/api/include -I/usr/local/cuda-12.8/include /media/harry/d/gs/spirulae-splat/spirulae_splat/splat/cuda/csrc/SplatTileIntersector.cu -o ./temp -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ -DDEBUG --expt-relaxed-constexpr --compiler-options ''"'"'-fPIC'"'"'' -O3 --use_fast_math --expt-relaxed-constexpr -Xcudafe=--diag_suppress=20012 -Xcudafe=--diag_suppress=550 -DTORCH_API_INCLUDE_EXTENSION_H -gencode=arch=compute_120,code=compute_120 -gencode=arch=compute_120,code=sm_120 -std=c++17 -L/home/harry/.venv/base/lib/python3.12/site-packages/torch/lib -L/usr/local/cuda-12.8/lib64 -L/usr/lib/x86_64-linux-gnu -lc10 -ltorch -ltorch_cpu -lcudart -lc10_cuda -ltorch_cuda
 

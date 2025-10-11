@@ -391,6 +391,17 @@ def rasterization(
             viewmats.contiguous(),
             Ks.contiguous(),
         )
+        # def dump(name, tensor):
+        #     shape = '_'.join(map(str, tensor.shape))
+        #     tensor.contiguous().detach().cpu().numpy().tofile(f"/home/harry/temp/{name}_{shape}.bin")
+        # dump('means', means)
+        # dump('scales', scales)
+        # dump('opacities', opacities)
+        # dump('quats', quats)
+        # dump('viewmats', viewmats)
+        # dump('Ks', Ks)
+        # print(width)
+        # print(height)
         torch.cuda.synchronize()
         time1 = perf_counter()
         print(1e3*(time1-time0), 'ms')

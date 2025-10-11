@@ -147,7 +147,7 @@ __global__ void render_background_sh_backward_kernel(
         return;
 
     auto block = cg::this_thread_block();
-    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+    cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
 
     float xi = pos_2d.x;
     float yi = -pos_2d.y;
@@ -168,12 +168,11 @@ __global__ void render_background_sh_backward_kernel(
 
     glm::vec3 *sh_coeffs = (glm::vec3*)sh_coeffs_float3;
 
-    constexpr unsigned warp_size = 32;
-    __shared__ glm::vec3 atomic_reduce[warp_size];  // assume warp_size^2 >= block_size
+    __shared__ glm::vec3 atomic_reduce[WARP_SIZE];  // assume WARP_SIZE^2 >= block_size
 
     unsigned thread_idx = block.thread_rank();
-    unsigned warp_idx = thread_idx/warp_size;
-    unsigned lane_idx = thread_idx%warp_size;
+    unsigned warp_idx = thread_idx/WARP_SIZE;
+    unsigned lane_idx = thread_idx%WARP_SIZE;
 
     glm::vec3 temp3;
     float temp;
@@ -183,7 +182,7 @@ __global__ void render_background_sh_backward_kernel(
             atomic_reduce[warp_idx] = temp3; \
         __syncthreads(); \
         temp = 0.0; \
-        if (warp_idx < 3 && lane_idx < (blockDim.x*blockDim.y/warp_size)) \
+        if (warp_idx < 3 && lane_idx < (blockDim.x*blockDim.y/WARP_SIZE)) \
             temp = atomic_reduce[lane_idx][warp_idx]; \
         warpSum(temp, warp);
 
