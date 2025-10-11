@@ -450,22 +450,3 @@ inline __device__ bool clip_near_plane(
     }
     return false;
 }
-
-
-
-template<typename vec3>
-inline __device__ void warpSum3(vec3& val, cg::thread_block_tile<32>& tile){
-    val.x = cg::reduce(tile, val.x, cg::plus<float>());
-    val.y = cg::reduce(tile, val.y, cg::plus<float>());
-    val.z = cg::reduce(tile, val.z, cg::plus<float>());
-}
-
-template<typename vec2>
-inline __device__ void warpSum2(vec2& val, cg::thread_block_tile<32>& tile){
-    val.x = cg::reduce(tile, val.x, cg::plus<float>());
-    val.y = cg::reduce(tile, val.y, cg::plus<float>());
-}
-
-inline __device__ void warpSum(float& val, cg::thread_block_tile<32>& tile){
-    val = cg::reduce(tile, val, cg::plus<float>());
-}

@@ -121,7 +121,7 @@ class SpirulaeModelConfig(ModelConfig):
     """period of steps where gaussians are culled and densified"""
     resolution_schedule: int = 3000
     """training starts at 1/d resolution, every n steps this is doubled"""
-    background_color: Literal["random", "black", "white", "gray"] = "black"
+    background_color: Literal["random", "black", "white", "gray"] = "gray"
     """Whether to randomize the background color."""
     num_downscales: int = 0
     """at the beginning, resolution is 1/2^d, where d is this number"""
@@ -139,7 +139,8 @@ class SpirulaeModelConfig(ModelConfig):
     ssim_warmup: int = 0
     """warmup of ssim loss"""
     use_camera_optimizer: bool = False
-    """Whether to use camera optimizer"""
+    """Whether to use camera optimizer
+        Note: this only works well in patch batching mode"""
     camera_optimizer: CameraOptimizerConfig = field(default_factory=lambda: CameraOptimizerConfig(mode="SO3xR3"))
     """Config of the camera optimizer to use"""
     kernel_radius: float = 3.0
@@ -149,6 +150,10 @@ class SpirulaeModelConfig(ModelConfig):
         (e.g. Zip-NeRF dataset, very large-scale scenes across multiple street blocks)"""
     compute_depth_normal: bool = False
     """Compute normal from depth. Required for 2DGS and supervision. Disabling this can reduce VRAM usage and speed up training."""
+    packed: bool = False
+    """Pack projection outputs, reduce VRAM usage at large batch size but can be slightly slower"""
+    use_bvh: bool = False
+    """Use BVH for splat-patch intersection test, may be faster when batching large number of small patches"""
 
     # classial control
     cull_alpha_thresh: float = 0.005
@@ -205,9 +210,9 @@ class SpirulaeModelConfig(ModelConfig):
     """every n intervals turn on another sh degree"""
     max_opacity: float = 0.995
     """maximum opacity of a gaussian, prevent numerical instability during backward"""
-    train_background_color: bool = False
+    train_background_color: bool = True
     """make background color trainable"""
-    background_sh_degree: int = 0  # 3
+    background_sh_degree: int = 3
     """enable background model"""
     adaptive_exposure_mode: Optional[Literal[
         "linear", "log_linear", "channel", "log_channel", "affine", "log_affine"
@@ -580,7 +585,7 @@ class SpirulaeModel(Model):
                 state=self.strategy_state,
                 step=self.step,
                 info=self.info,
-                packed=True,
+                packed=(self.config.packed or self.config.use_bvh),
             )
         return
         # for splatfacto: around 1.5 and around 1e-6 @ 1k iters
@@ -650,7 +655,7 @@ class SpirulaeModel(Model):
             return resize_image(image, d)
         return image
 
-    def get_background_image(self, camera: Cameras, ssplat_camera: _Camera):
+    def get_background_image(self, camera: Cameras, c2w: torch.Tensor, Ks: torch.Tensor):
         if not isinstance(camera, Cameras):
             print("Called get_background_image with not a camera")
             return {}
@@ -665,10 +670,12 @@ class SpirulaeModel(Model):
         if not self.config.train_background_color or not (sh_degree > 0):
             return self.background_color[None].repeat(len(camera), H, W, 1)
 
-        raise NotImplementedError("ssplat_camera")
-        rotation = camera.camera_to_worlds[0][:3, :3]
         sh_coeffs = torch.cat((self.background_color.unsqueeze(0), self.background_sh), dim=0)  # [(deg+1)^2, 3]
-        return render_background_sh(ssplat_camera, rotation, sh_degree, sh_coeffs)
+        return render_background_sh(
+            camera.width[0].item(), camera.height[0].item(),
+            ['pinhole', 'fisheye'][camera.camera_type[0].item() == CameraType.FISHEYE.value],
+            Ks, c2w[..., :3, :3], sh_degree, sh_coeffs
+        )
 
     @staticmethod
     def get_empty_outputs(width: int, height: int, background: torch.Tensor) -> Dict[str, Union[torch.Tensor, List]]:
@@ -702,9 +709,9 @@ class SpirulaeModel(Model):
         R = R * torch.tensor([[[1.0, -1.0, -1.0]]])
         R_inv = R.transpose(-1, -2)
         T_inv = -torch.bmm(R_inv, T)
-        viewmat = torch.eye(4, dtype=optimized_camera_to_world.dtype)[None].repeat(len(camera), 1, 1)
-        viewmat[:, :3, :3] = R_inv
-        viewmat[:, :3, 3:4] = T_inv
+        viewmats = torch.eye(4, dtype=optimized_camera_to_world.dtype)[None].repeat(len(camera), 1, 1)
+        viewmats[:, :3, :3] = R_inv
+        viewmats[:, :3, 3:4] = T_inv
 
         quats = F.normalize(self.quats, dim=-1)
         opacities = self.config.max_opacity * torch.sigmoid(self.opacities)
@@ -745,10 +752,14 @@ class SpirulaeModel(Model):
             im = im[:, :camera.height[0].item(), :camera.width[0].item(), :]
             return im
 
-        if not self.training:
-            viewmat, Ks = split_into_tiles(viewmat, Ks)
-            W = TILE_SIZE
-            H = TILE_SIZE
+        # if not self.training:
+        #     viewmat, Ks = split_into_tiles(viewmat, Ks)
+        #     W = TILE_SIZE
+        #     H = TILE_SIZE
+
+        optimized_camera_to_world = optimized_camera_to_world.to(device)
+        viewmats = viewmats.to(device)
+        Ks = Ks.to(device)
 
         rgbd, alpha, meta = rasterization(
             means=self.means,
@@ -756,13 +767,13 @@ class SpirulaeModel(Model):
             scales=torch.exp(self.scales),
             opacities=opacities.squeeze(-1),
             colors=torch.concatenate([self.features_dc.unsqueeze(1), self.features_sh], dim=1),  # TODO: slow
-            viewmats=viewmat.to(device),  # [C, 4, 4]
-            Ks=Ks.to(device),  # [C, 3, 3]
+            viewmats=viewmats,  # [C, 4, 4]
+            Ks=Ks,  # [C, 3, 3]
             width=W,
             height=H,
             sh_degree=self.config.sh_degree,
-            packed=True,
-            heterogeneous=True,
+            packed=(self.config.packed or (self.config.use_bvh and self.training)),
+            use_bvh=(self.config.use_bvh and self.training),
             absgrad=(not self.config.use_mcmc),
             sparse_grad=False,
             rasterize_mode="classic",
@@ -774,13 +785,13 @@ class SpirulaeModel(Model):
             **kwargs,
         )
 
-        if not self.training:
-            W = gw*TILE_SIZE
-            H = gh*TILE_SIZE
-            print(rgbd.shape, alpha.shape)
-            rgbd = merge_tiles(rgbd)
-            alpha = merge_tiles(alpha)
-            W, H = camera.width[0].item(), camera.height[0].item()
+        # if not self.training:
+        #     W = gw*TILE_SIZE
+        #     H = gh*TILE_SIZE
+        #     print(rgbd.shape, alpha.shape)
+        #     rgbd = merge_tiles(rgbd)
+        #     alpha = merge_tiles(alpha)
+        #     W, H = camera.width[0].item(), camera.height[0].item()
 
         rgb = rgbd[..., :3]
 
@@ -809,7 +820,7 @@ class SpirulaeModel(Model):
             }
 
         # blend with background
-        background = self.get_background_image(camera, None)
+        background = self.get_background_image(camera, optimized_camera_to_world, Ks)
         rgb = torch.clip(rgb + (1.0 - alpha) * background, 0.0, 1.0)
 
         # apply bilateral grid
@@ -848,8 +859,8 @@ class SpirulaeModel(Model):
             for key in outputs:
                 outputs[key] = outputs[key].squeeze(0)
 
-        if not self.training and True:
-            outputs['ray'] = merge_tiles(meta['intersection_count'].float().reshape(-1, 1, 1, 1).repeat(1, TILE_SIZE, TILE_SIZE, 1))
+        # if not self.training and True:
+        #     outputs['ray'] = merge_tiles(meta['intersection_count'].float().reshape(-1, 1, 1, 1).repeat(1, TILE_SIZE, TILE_SIZE, 1))
 
         return outputs
 

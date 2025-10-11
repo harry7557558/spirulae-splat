@@ -1,4 +1,5 @@
 #define SLANG_PRELUDE_EXPORT
+#define SSPLAT_HOST_ONLY
 #include "common.cuh"
 
 #include "SphericalHarmonics.cuh"
@@ -43,5 +44,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     
     // ProjectionEWA3DGSHetero.cuh
     m.def("projection_ewa_3dgs_hetero_forward", &projection_ewa_3dgs_hetero_forward_tensor);
+    m.def("projection_ewa_3dgs_hetero_backward", &projection_ewa_3dgs_hetero_backward_tensor);
 
 }

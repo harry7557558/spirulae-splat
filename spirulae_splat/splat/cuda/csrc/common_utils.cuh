@@ -168,7 +168,85 @@ _DEF_FLOAT_VEC_FUN(float)
 _DEF_INTEGRAL_VEC_FUN(int)
 _DEF_INTEGRAL_VEC_FUN(uint)
 
-#endif
+#endif  // #ifndef SLANG_PRELUDE_EXPORT
+
+
+
+///////////////////////////////
+// Reduce (from gsplat)
+///////////////////////////////
+
+#ifndef SSPLAT_HOST_ONLY
+
+#include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
+
+namespace cg = cooperative_groups;
+
+template <uint32_t DIM, typename WarpT>
+inline __device__ void warpSum(float *val, WarpT &warp) {
+    #pragma unroll
+    for (uint32_t i = 0; i < DIM; i++) {
+        val[i] = cg::reduce(warp, val[i], cg::plus<float>());
+    }
+}
+
+template <typename WarpT> inline __device__ void warpSum(float &val, WarpT &warp) {
+    val = cg::reduce(warp, val, cg::plus<float>());
+}
+
+template <typename WarpT> inline __device__ void warpSum(glm::vec4 &val, WarpT &warp) {
+    val.x = cg::reduce(warp, val.x, cg::plus<float>());
+    val.y = cg::reduce(warp, val.y, cg::plus<float>());
+    val.z = cg::reduce(warp, val.z, cg::plus<float>());
+    val.w = cg::reduce(warp, val.w, cg::plus<float>());
+}
+
+template <typename WarpT> inline __device__ void warpSum(glm::vec3 &val, WarpT &warp) {
+    val.x = cg::reduce(warp, val.x, cg::plus<float>());
+    val.y = cg::reduce(warp, val.y, cg::plus<float>());
+    val.z = cg::reduce(warp, val.z, cg::plus<float>());
+}
+
+template <typename WarpT> inline __device__ void warpSum(glm::vec2 &val, WarpT &warp) {
+    val.x = cg::reduce(warp, val.x, cg::plus<float>());
+    val.y = cg::reduce(warp, val.y, cg::plus<float>());
+}
+
+template <typename WarpT> inline __device__ void warpSum(glm::mat4 &val, WarpT &warp) {
+    warpSum(val[0], warp);
+    warpSum(val[1], warp);
+    warpSum(val[2], warp);
+    warpSum(val[3], warp);
+}
+
+template <typename WarpT> inline __device__ void warpSum(glm::mat3 &val, WarpT &warp) {
+    warpSum(val[0], warp);
+    warpSum(val[1], warp);
+    warpSum(val[2], warp);
+}
+
+template <typename WarpT> inline __device__ void warpSum(glm::mat2 &val, WarpT &warp) {
+    warpSum(val[0], warp);
+    warpSum(val[1], warp);
+}
+
+template <typename WarpT> inline __device__ void warpMax(float &val, WarpT &warp) {
+    val = cg::reduce(warp, val, cg::greater<float>());
+}
+
+template <typename WarpT> inline __device__ void warpSum(int &val, WarpT &warp) {
+    val = cg::reduce(warp, val, cg::plus<int>());
+}
+
+#endif  // #ifndef SSPLAT_HOST_ONLY
+
+
+
+///////////////////////////////
+// Non-Contiguous Tensor
+///////////////////////////////
+
 
 template<typename T, int ndim>
 struct TensorView {

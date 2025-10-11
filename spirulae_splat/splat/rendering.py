@@ -49,7 +49,7 @@ def rasterization(
     eps2d: float = 0.3,
     sh_degree: Optional[int] = None,
     packed: bool = True,
-    heterogeneous: bool = False,
+    use_bvh: bool = False,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
     render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
@@ -374,7 +374,7 @@ def rasterization(
         # Silently change C from local #Cameras to global #Cameras.
         C = len(viewmats)
 
-    if heterogeneous:
+    if use_bvh:
         assert not with_ut, "Not implemented"
         assert packed, "BVH must be packed"
         assert B == 1, "Not support batching"
@@ -471,7 +471,7 @@ def rasterization(
             opacities=opacities,  # use opacities to compute a tigher bound for radii.
         )
 
-    if heterogeneous:
+    if use_bvh:
         (
             camera_ids,
             gaussian_ids,
@@ -523,10 +523,10 @@ def rasterization(
             "opacities": opacities,
         }
     )
-    if heterogeneous:
-        meta.update({
-            "intersection_count": intersection_count_map[1:]-intersection_count_map[:-1]
-        })
+    # if heterogeneous:
+    #     meta.update({
+    #         "intersection_count": intersection_count_map[1:]-intersection_count_map[:-1]
+    #     })
 
     # Turn colors into [..., C, N, D] or [..., nnz, D] to pass into rasterize_to_pixels()
     if sh_degree is None:

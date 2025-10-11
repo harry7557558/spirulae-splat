@@ -1,52 +1,60 @@
 #include "BackgroundSphericalHarmonics.cuh"
 
 #include "common.cuh"
-#include "camera.cuh"
+
+#include <gsplat/Common.h>
+#include <gsplat/Cameras.cuh>
+
 #include <algorithm>
 
 
-enum class CameraType {
-    // undistorted vs generic distorted
-	Undistorted,
-    GenericDistorted,
-    // (near-)exact distortion
-    OPENCV,
-    OPENCV_FISHEYE,
-    // approximate distortion
-    // same rasterization, distort using Jacobian in projection
-    OPENCV_approx,
-    OPENCV_FISHEYE_approx,
-};
 
-
-
-template<CameraType CAMERA_TYPE>
+template<gsplat::CameraModelType CAMERA_MODEL>
 __global__ void render_background_sh_forward_kernel(
-    _ARGS_render_background_sh_forward_kernel
+    const dim3 img_size,
+    const float* Ks,  // row major 3x3
+    const float* rotation,  // row major 3x3
+    const unsigned sh_degree,
+    const glm::vec3* __restrict__ sh_coeffs,
+    glm::vec3* __restrict__ out_img
 ) {
+    unsigned camera_id = blockIdx.z * blockDim.z + threadIdx.z;
+    Ks += 9 * camera_id;
+    rotation += 9 * camera_id;
+
     unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
     unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
-    int32_t pix_id = i * img_size.x + j;
+    int32_t pix_id = (camera_id * img_size.y + i) * img_size.x + j;
 
-    if (i >= img_size.y || j >= img_size.x) return;
+    if (i >= img_size.y || j >= img_size.x || camera_id >= img_size.z)
+        return;
 
-    float fx = intrins.x, fy = intrins.y;
-    float cx = intrins.z, cy = intrins.w;
+    float fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
 
-    glm::vec2 pos_2d = { (j + 0.5f - cx) / fx, (i + 0.5f - cy) / fy };
-    if (CAMERA_TYPE == CameraType::GenericDistorted) {
-        float2 pos_2d_u = undistortion_map[pix_id];
-        if (isnan(pos_2d.x+pos_2d.y)) {
-            out_img[pix_id] = {0.0f, 0.0f, 0.0f};
-            return;
-        }
-        else
-            pos_2d = { pos_2d_u.x, pos_2d_u.y };
+    glm::vec2 pos_2d(j+0.5f, i+0.5f);
+    CameraRay camera_ray;
+    camera_ray.valid_flag = false;
+
+    switch (CAMERA_MODEL) {
+    case gsplat::CameraModelType::PINHOLE:
+        camera_ray = PerfectPinholeCameraModel(
+            { {{img_size.x, img_size.y}, ShutterType::GLOBAL}, {cx, cy}, {fx, fy} }
+        ).image_point_to_camera_ray(pos_2d);
+        break;
+    case gsplat::CameraModelType::FISHEYE:
+        camera_ray = OpenCVFisheyeCameraModel(
+            { {{img_size.x, img_size.y}, ShutterType::GLOBAL}, {cx, cy}, {fx, fy} }
+        ).image_point_to_camera_ray(pos_2d);
+        break;
+    }
+    if (!camera_ray.valid_flag) {
+        out_img[pix_id] = {0.0f, 0.0f, 0.0f};
+        return;
     }
 
-    float xi = pos_2d.x;
-    float yi = -pos_2d.y;
-    float zi = -1.0f;
+    float xi = camera_ray.ray_dir.x;
+    float yi = -camera_ray.ray_dir.y;
+    float zi = -camera_ray.ray_dir.z;
     float xr = rotation[0] * xi + rotation[1] * yi + rotation[2] * zi;
     float yr = rotation[3] * xi + rotation[4] * yi + rotation[5] * zi;
     float zr = rotation[6] * xi + rotation[7] * yi + rotation[8] * zi;
@@ -58,7 +66,6 @@ __global__ void render_background_sh_forward_kernel(
     float xx = x*x, yy = y*y, zz = z*z;
 
     glm::vec3 color = glm::vec3(0.0f);
-    glm::vec3 *sh_coeffs = (glm::vec3*)sh_coeffs_float3;
 
     // l0
     color += 0.28209479177387814f * sh_coeffs[0];
@@ -107,51 +114,89 @@ __global__ void render_background_sh_forward_kernel(
     color.y = fmaxf(color.y + 0.5f, 0.0f);
     color.z = fmaxf(color.z + 0.5f, 0.0f);
 
-    out_img[pix_id] = *(float3*)&color;
+    out_img[pix_id] = color;
 }
 
 
-template<CameraType CAMERA_TYPE>
+template<gsplat::CameraModelType CAMERA_MODEL>
 __global__ void render_background_sh_backward_kernel(
-    _ARGS_render_background_sh_backward_kernel
+    const dim3 img_size,
+    const float* Ks,  // row major 3x3
+    const float* rotation,  // row major 3x3
+    const unsigned sh_degree,
+    const glm::vec3* __restrict__ sh_coeffs,
+    const glm::vec3* __restrict__ out_color,
+    const glm::vec3* __restrict__ v_out_color,
+    glm::vec3* __restrict__ v_rotation,
+    glm::vec3* __restrict__ v_sh_coeffs
 ) {
+    unsigned camera_id = blockIdx.z * blockDim.z + threadIdx.z;
+
     unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
     unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
-    int32_t pix_id = i * img_size.x + j;
+    int32_t pix_id = (camera_id * img_size.y + i) * img_size.x + j;
 
     bool inside = (i < img_size.y && j < img_size.x);
 
-    unsigned idx = i * img_size.x + j;
+    // backprop color output
     glm::vec3 v_color = glm::vec3(0.0);
     if (inside) {
-        glm::vec3 color = ((glm::vec3*)out_color)[idx];
-        v_color = ((glm::vec3*)v_out_color)[idx];
+        glm::vec3 color = out_color[pix_id];
+        v_color = v_out_color[pix_id];
         if (color.x == 0.0f || !isfinite(v_color.x)) v_color.x = 0.0f;
         if (color.y == 0.0f || !isfinite(v_color.y)) v_color.y = 0.0f;
         if (color.z == 0.0f || !isfinite(v_color.z)) v_color.z = 0.0f;
-        // v_color = glm::clamp(v_color, -glm::vec3(1e4f), glm::vec3(1e4f));
     }
 
-    float fx = intrins.x, fy = intrins.y;
-    float cx = intrins.z, cy = intrins.w;
+    // undistort
+    Ks += 9 * camera_id;
+    float fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
 
-    glm::vec2 pos_2d = { (j + 0.5f - cx) / fx, (i + 0.5f - cy) / fy };
-    if (CAMERA_TYPE == CameraType::GenericDistorted && inside) {
-        float2 pos_2d_u = undistortion_map[pix_id];
-        if (isnan(pos_2d.x+pos_2d.y))
-            inside = false;
-        else
-            pos_2d = { pos_2d_u.x, pos_2d_u.y };
+    glm::vec2 pos_2d(j+0.5f, i+0.5f);
+    CameraRay camera_ray;
+    camera_ray.valid_flag = false;
+
+    switch (CAMERA_MODEL) {
+    case gsplat::CameraModelType::PINHOLE:
+        camera_ray = PerfectPinholeCameraModel(
+            { {{img_size.x, img_size.y}, ShutterType::GLOBAL}, {cx, cy}, {fx, fy} }
+        ).image_point_to_camera_ray(pos_2d);
+        break;
+    case gsplat::CameraModelType::FISHEYE:
+        camera_ray = OpenCVFisheyeCameraModel(
+            { {{img_size.x, img_size.y}, ShutterType::GLOBAL}, {cx, cy}, {fx, fy} }
+        ).image_point_to_camera_ray(pos_2d);
+        break;
     }
-    if (__syncthreads_count(inside) == 0)
-        return;
+    if (!camera_ray.valid_flag)
+        inside = false;
 
+    // early termination
     auto block = cg::this_thread_block();
     cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
 
-    float xi = pos_2d.x;
-    float yi = -pos_2d.y;
-    float zi = -1.0f;
+    unsigned thread_idx = block.thread_rank();
+    unsigned warp_idx = thread_idx/WARP_SIZE;
+    unsigned lane_idx = thread_idx%WARP_SIZE;
+
+    {
+        __shared__ int inside_count[1024/WARP_SIZE];
+        int count = __syncthreads_count(inside);
+        if (warp.thread_rank() == 0)
+            inside_count[warp_idx] = count;
+        __syncthreads();
+        count = lane_idx < blockDim.x*blockDim.y/WARP_SIZE ?
+            inside_count[lane_idx] : 0;
+        warpSum(count, warp);
+        if (count == 0) return;
+    }
+
+    // backward
+
+    float xi = camera_ray.ray_dir.x;
+    float yi = -camera_ray.ray_dir.y;
+    float zi = -camera_ray.ray_dir.z;
+    rotation += 9 * camera_id;
     float xr = rotation[0] * xi + rotation[1] * yi + rotation[2] * zi;
     float yr = rotation[3] * xi + rotation[4] * yi + rotation[5] * zi;
     float zr = rotation[6] * xi + rotation[7] * yi + rotation[8] * zi;
@@ -166,18 +211,12 @@ __global__ void render_background_sh_backward_kernel(
     float v_x = 0.0f, v_y = 0.0f, v_z = 0.0f;
     float v_xx = 0.0f, v_yy = 0.0f, v_zz = 0.0f;
 
-    glm::vec3 *sh_coeffs = (glm::vec3*)sh_coeffs_float3;
-
     __shared__ glm::vec3 atomic_reduce[WARP_SIZE];  // assume WARP_SIZE^2 >= block_size
-
-    unsigned thread_idx = block.thread_rank();
-    unsigned warp_idx = thread_idx/WARP_SIZE;
-    unsigned lane_idx = thread_idx%WARP_SIZE;
 
     glm::vec3 temp3;
     float temp;
     #define _BLOCK_REDUCE_VEC3() \
-        warpSum3(temp3, warp); \
+        warpSum(temp3, warp); \
         if (warp.thread_rank() == 0) \
             atomic_reduce[warp_idx] = temp3; \
         __syncthreads(); \
@@ -390,6 +429,9 @@ __global__ void render_background_sh_backward_kernel(
         _ATOMIC_ADD(v_sh_coeffs, 24);
     }
 
+    if (v_rotation == nullptr)
+        return;
+
     v_x += v_xx * 2.0f*x;
     v_y += v_yy * 2.0f*y;
     v_z += v_zz * 2.0f*z;
@@ -399,6 +441,7 @@ __global__ void render_background_sh_backward_kernel(
     glm::vec3 v_p = dp_dpr * glm::vec3(v_x, v_y, v_z);
     v_p *= (inside ? 1.0f : 0.0f);
 
+    v_rotation += 3 * camera_id;
   #if 0
     float tmp[9] = {
         v_p.x * xi, v_p.x * yi, v_p.x * zi,
@@ -429,55 +472,55 @@ torch::Tensor render_background_sh_forward_tensor(
     const unsigned w,
     const unsigned h,
     std::string camera_model,
-    const std::tuple<float, float, float, float> intrins,
-    const std::optional<torch::Tensor> &undistortion_map_,
-    const torch::Tensor &rotation,
+    const torch::Tensor &Ks,  // row major 3x3
+    const torch::Tensor &rotation,  // row major 3x3
     const unsigned sh_degree,
     const torch::Tensor &sh_coeffs
 ) {
     DEVICE_GUARD(sh_coeffs);
     CHECK_INPUT(sh_coeffs);
+    CHECK_INPUT(Ks);
     CHECK_INPUT(rotation);
 
-    if (rotation.numel() != 9) {
-        AT_ERROR("rotation must be 3x3");
+    if (Ks.size(-1) != 3 || Ks.size(-2) != 3) {
+        AT_ERROR("Ks must be (..., 3, 3)");
     }
-    if (sh_coeffs.ndimension() != 2 ||
-        sh_coeffs.size(0) != sh_degree*sh_degree ||
-        sh_coeffs.size(1) != 3) {
-        AT_ERROR("sh_coeffs must be (sh_regree**2, 3)");
+    if (rotation.size(-1) != 3 || rotation.size(-2) != 3) {
+        AT_ERROR("rotation must be (..., 3, 3)");
+    }
+    if (sh_coeffs.size(-2) != sh_degree*sh_degree ||
+        sh_coeffs.size(-1) != 3) {
+        AT_ERROR("sh_coeffs shape must be (..., sh_regree**2, 3)");
     }
 
-    const dim3 img_size = {w, h, 1};
+    unsigned b = Ks.numel() / 9;
+    if (b != rotation.numel() / 9)
+        AT_ERROR("Ks and rotation must have same batch dimension");
+
+    const dim3 img_size = {w, h, b};
 
     auto options = sh_coeffs.options();
-    torch::Tensor out_color = torch::empty({h, w, 3}, options);
+    torch::Tensor out_color = torch::empty({b, h, w, 3}, options);
 
-    if (camera_model == "") {
-        render_background_sh_forward_kernel<CameraType::Undistorted>
-        <<<_LAUNCH_ARGS_2D(w, h, TILE_SIZE, TILE_SIZE)>>>(
+    if (camera_model == "fisheye") {
+        render_background_sh_forward_kernel<gsplat::CameraModelType::FISHEYE>
+        <<<_LAUNCH_ARGS_3D(w, h, b, TILE_SIZE, TILE_SIZE, 1)>>>(
             img_size,
-            tuple2float4(intrins), nullptr,
-            rotation.contiguous().data_ptr<float>(),
+            Ks.data_ptr<float>(),
+            rotation.data_ptr<float>(),
             sh_degree,
-            (float3 *)sh_coeffs.contiguous().data_ptr<float>(),
-            (float3 *)out_color.contiguous().data_ptr<float>()
+            (glm::vec3*)sh_coeffs.contiguous().data_ptr<float>(),
+            (glm::vec3*)out_color.contiguous().data_ptr<float>()
         );
-    }
-
-    else {
-        const torch::Tensor& undistortion_map = undistortion_map_.value();
-        CHECK_INPUT(undistortion_map);
-
-        render_background_sh_forward_kernel<CameraType::GenericDistorted>
-        <<<_LAUNCH_ARGS_2D(w, h, TILE_SIZE, TILE_SIZE)>>>(
+    } else {
+        render_background_sh_forward_kernel<gsplat::CameraModelType::PINHOLE>
+        <<<_LAUNCH_ARGS_3D(w, h, b, TILE_SIZE, TILE_SIZE, 1)>>>(
             img_size,
-            tuple2float4(intrins),
-            (float2 *)undistortion_map.contiguous().data_ptr<float>(),
-            rotation.contiguous().data_ptr<float>(),
+            Ks.data_ptr<float>(),
+            rotation.data_ptr<float>(),
             sh_degree,
-            (float3 *)sh_coeffs.contiguous().data_ptr<float>(),
-            (float3 *)out_color.contiguous().data_ptr<float>()
+            (glm::vec3*)sh_coeffs.contiguous().data_ptr<float>(),
+            (glm::vec3*)out_color.contiguous().data_ptr<float>()
         );
     }
 
@@ -492,9 +535,8 @@ std::tuple<
     const unsigned w,
     const unsigned h,
     const std::string camera_model,
-    const std::tuple<float, float, float, float> intrins,
-    const std::optional<torch::Tensor> &undistortion_map_,
-    const torch::Tensor &rotation,
+    const torch::Tensor &Ks,  // row major 3x3
+    const torch::Tensor &rotation,  // row major 3x3
     const unsigned sh_degree,
     const torch::Tensor &sh_coeffs,
     const torch::Tensor &out_color,
@@ -502,64 +544,66 @@ std::tuple<
 ) {
     DEVICE_GUARD(sh_coeffs);
     CHECK_INPUT(sh_coeffs);
+    CHECK_INPUT(Ks);
     CHECK_INPUT(rotation);
+    CHECK_INPUT(out_color);
     CHECK_INPUT(v_out_color);
 
-    if (rotation.numel() != 9) {
-        AT_ERROR("rotation must be 3x3");
+    if (Ks.size(-1) != 3 || Ks.size(-2) != 3) {
+        AT_ERROR("Ks must be (..., 3, 3)");
     }
-    if (sh_coeffs.ndimension() != 2 ||
-        sh_coeffs.size(0) != sh_degree*sh_degree ||
-        sh_coeffs.size(1) != 3) {
-        AT_ERROR("sh_coeffs shape must be (sh_regree**2, 3)");
+    if (rotation.size(-1) != 3 || rotation.size(-2) != 3) {
+        AT_ERROR("rotation must be (..., 3, 3)");
     }
-    if (out_color.ndimension() != 3 ||
-        out_color.size(0) != h ||
-        out_color.size(1) != w ||
-        out_color.size(2) != 3) {
-        AT_ERROR("out_color shape must be (h, w, 3)");
+    if (sh_coeffs.size(-2) != sh_degree*sh_degree ||
+        sh_coeffs.size(-1) != 3) {
+        AT_ERROR("sh_coeffs shape must be (..., sh_regree**2, 3)");
     }
-    if (v_out_color.ndimension() != 3 ||
-        v_out_color.size(0) != h ||
-        v_out_color.size(1) != w ||
-        v_out_color.size(2) != 3) {
-        AT_ERROR("v_out_color shape must be (h, w, 3)");
+    if (out_color.size(-3) != h ||
+        out_color.size(-2) != w ||
+        out_color.size(-1) != 3) {
+        AT_ERROR("out_color shape must be (..., h, w, 3)");
     }
+    if (v_out_color.size(-3) != h ||
+        v_out_color.size(-2) != w ||
+        v_out_color.size(-1) != 3) {
+        AT_ERROR("v_out_color shape must be (... h, w, 3)");
+    }
+    unsigned b = Ks.numel() / 9;
 
     // unsigned block_width = TILE_SIZE;
     unsigned block_width = 32;  // 1024 threads
-    const dim3 img_size = {w, h, 1};
+    const dim3 img_size = {w, h, b};
 
     auto options = sh_coeffs.options();
-    torch::Tensor v_rotation = torch::zeros({3, 3}, options);
+    torch::Tensor v_rotation = torch::zeros({b, 3, 3}, options);
     torch::Tensor v_sh_coeffs = torch::zeros({sh_degree*sh_degree, 3}, options);
 
-    #define _TEMP_ARGS \
-        rotation.contiguous().data_ptr<float>(), \
-        sh_degree, \
-        (float3 *)sh_coeffs.contiguous().data_ptr<float>(), \
-        (float3 *)out_color.contiguous().data_ptr<float>(), \
-        (float3 *)v_out_color.contiguous().data_ptr<float>(), \
-        (float3 *)v_rotation.contiguous().data_ptr<float>(), \
-        (float3 *)v_sh_coeffs.contiguous().data_ptr<float>()
-
-    if (camera_model == "") {
-        render_background_sh_backward_kernel<CameraType::Undistorted>
-        <<<_LAUNCH_ARGS_2D(w, h, block_width, block_width)>>>(
+    if (camera_model == "fisheye") {
+        render_background_sh_backward_kernel<gsplat::CameraModelType::FISHEYE>
+        <<<_LAUNCH_ARGS_3D(w, h, b, block_width, block_width, 1)>>>(
             img_size,
-            tuple2float4(intrins), nullptr,
-            _TEMP_ARGS
+            Ks.data_ptr<float>(),
+            rotation.data_ptr<float>(),
+            sh_degree,
+            (glm::vec3*)sh_coeffs.contiguous().data_ptr<float>(),
+            (glm::vec3*)out_color.contiguous().data_ptr<float>(),
+            (glm::vec3*)v_out_color.contiguous().data_ptr<float>(),
+            (glm::vec3*)v_rotation.data_ptr<float>(),
+            (glm::vec3*)v_sh_coeffs.data_ptr<float>()
         );
-    }
-    else {
-        const torch::Tensor& undistortion_map = undistortion_map_.value();
-        CHECK_INPUT(undistortion_map);
-        render_background_sh_backward_kernel<CameraType::GenericDistorted>
-        <<<_LAUNCH_ARGS_2D(w, h, block_width, block_width)>>>(
+    } else {
+        render_background_sh_backward_kernel<gsplat::CameraModelType::FISHEYE>
+        <<<_LAUNCH_ARGS_3D(w, h, b, block_width, block_width, 1)>>>(
             img_size,
-            tuple2float4(intrins),
-            (float2 *)undistortion_map.contiguous().data_ptr<float>(),
-            _TEMP_ARGS
+            Ks.data_ptr<float>(),
+            rotation.data_ptr<float>(),
+            sh_degree,
+            (glm::vec3*)sh_coeffs.contiguous().data_ptr<float>(),
+            (glm::vec3*)out_color.contiguous().data_ptr<float>(),
+            (glm::vec3*)v_out_color.contiguous().data_ptr<float>(),
+            (glm::vec3*)v_rotation.data_ptr<float>(),
+            (glm::vec3*)v_sh_coeffs.data_ptr<float>()
         );
     }
 
@@ -568,17 +612,3 @@ std::tuple<
     return std::make_tuple(v_rotation, v_sh_coeffs);
 }
 
-
-
-template __global__ void render_background_sh_forward_kernel<CameraType::Undistorted>(
-    _ARGS_render_background_sh_forward_kernel
-);
-template __global__ void render_background_sh_forward_kernel<CameraType::GenericDistorted>(
-    _ARGS_render_background_sh_forward_kernel
-);
-template __global__ void render_background_sh_backward_kernel<CameraType::Undistorted>(
-    _ARGS_render_background_sh_backward_kernel
-);
-template __global__ void render_background_sh_backward_kernel<CameraType::GenericDistorted>(
-    _ARGS_render_background_sh_backward_kernel
-);

@@ -124,6 +124,7 @@ struct Tile {
 
     // return negative if no overlap, strictly positive for sorting ID
     __device__ __forceinline__ float isOverlap(const Splat &splat) const {
+        // TODO
         float3 aabb_min, aabb_max;
         splat.getAABB(aabb_min, aabb_max);
         if (!isOverlap(aabb_min, aabb_max))
@@ -927,7 +928,7 @@ __global__ void getTileSplatIntersections_lbvh(
     struct StackElem {
         uint32_t nodeIdx;
     };
-    inline constexpr uint MAX_STACK_SIZE = 8*sizeof(int32_t)+1;
+    constexpr uint MAX_STACK_SIZE = 8*sizeof(int32_t)+1;
     __shared__ StackElem stack[WARP_SIZE][MAX_STACK_SIZE];
     uint stackSize = 0;
     if (tile.isOverlap(treeAABB[0], treeAABB[1])) {

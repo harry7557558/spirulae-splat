@@ -167,8 +167,6 @@ class _FullyFusedProjectionHetero(torch.autograd.Function):
             Ks,
             conics,
             compensations,
-            intersection_count_map,
-            intersection_splat_id,
         )
         ctx.width = width
         ctx.height = height
@@ -189,7 +187,6 @@ class _FullyFusedProjectionHetero(torch.autograd.Function):
     @staticmethod
     def backward(
         ctx,
-        v_batch_ids,
         v_camera_ids,
         v_gaussian_ids,
         v_radii,
@@ -198,13 +195,10 @@ class _FullyFusedProjectionHetero(torch.autograd.Function):
         v_conics,
         v_compensations,
     ):
-        raise NotImplementedError()
         (
-            batch_ids,
             camera_ids,
             gaussian_ids,
             means,
-            covars,
             quats,
             scales,
             viewmats,
@@ -220,11 +214,10 @@ class _FullyFusedProjectionHetero(torch.autograd.Function):
 
         if v_compensations is not None:
             v_compensations = v_compensations.contiguous()
-        v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+        v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
             "projection_ewa_3dgs_hetero_backward"
         )(
             means,
-            covars,
             quats,
             scales,
             viewmats,
@@ -233,7 +226,6 @@ class _FullyFusedProjectionHetero(torch.autograd.Function):
             height,
             eps2d,
             camera_model_type,
-            batch_ids,
             camera_ids,
             gaussian_ids,
             conics,
@@ -265,16 +257,6 @@ class _FullyFusedProjectionHetero(torch.autograd.Function):
                     is_coalesced=len(viewmats) == 1,
                 )
         if not ctx.needs_input_grad[1]:
-            v_covars = None
-        else:
-            if sparse_grad:
-                v_covars = torch.sparse_coo_tensor(
-                    indices=gaussian_ids[None],
-                    values=v_covars,  # [nnz, 6]
-                    size=covars.shape,
-                    is_coalesced=len(viewmats) == 1,
-                )
-        if not ctx.needs_input_grad[2]:
             v_quats = None
         else:
             if sparse_grad:
@@ -284,7 +266,7 @@ class _FullyFusedProjectionHetero(torch.autograd.Function):
                     size=quats.shape,
                     is_coalesced=len(viewmats) == 1,
                 )
-        if not ctx.needs_input_grad[3]:
+        if not ctx.needs_input_grad[2]:
             v_scales = None
         else:
             if sparse_grad:
@@ -299,21 +281,11 @@ class _FullyFusedProjectionHetero(torch.autograd.Function):
 
         return (
             v_means,
-            v_covars,
             v_quats,
             v_scales,
+            None,
             v_viewmats,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            *([None]*(len(ctx.needs_input_grad)-5))
         )
 
 

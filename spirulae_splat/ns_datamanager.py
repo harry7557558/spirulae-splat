@@ -48,8 +48,16 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
     max_batch_per_epoch: int = 768
     """Maximum number of batches per epoch, used for configuring batch size"""
 
-    patch_size: Optional[int] = 256
-    """If set, batch tiles instead of images"""
+    patch_batch_size: Optional[int] = None  # 256
+    """If set, batch patches instead of full images
+        Make this a multiple of 16 (tile size)
+        Affects training speed, optimal value depends on image focal length
+        Too small may lead to suboptimal performance in SSIM, as well as increasing VRAM usage / floating point issues"""
+
+    patch_size: int = 64
+    """Patch size used in patch batching
+        Make number of pixels (patch_batch_size * patch_size**2) consistent (e.g. 1M)
+        """
 
     cache_images: Literal["cpu-pageable", "cpu", "gpu"] = "cpu-pageable"
     """Whether to cache images in memory. If "cpu", caches on cpu. If "gpu", caches on device."""
@@ -774,8 +782,8 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         Returns a Camera instead of raybundle"""
 
-        if self.config.patch_size is not None:
-            return self.get_tiles(16)
+        if self.config.patch_batch_size is not None:
+            return self.get_tiles(self.config.patch_batch_size)
 
         train_batch_size = (len(self.train_dataset) + self.config.max_batch_per_epoch - 1) \
             // self.config.max_batch_per_epoch

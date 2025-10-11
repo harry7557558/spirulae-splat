@@ -33,6 +33,7 @@ do {                                                                \
 
 #define _LAUNCH_ARGS_1D(n,b) _CEIL_DIV(n,b),b
 #define _LAUNCH_ARGS_2D(nx,ny,bx,by) dim3(_CEIL_DIV(nx,bx),_CEIL_DIV(ny,by),1),dim3(bx,by)
+#define _LAUNCH_ARGS_3D(nx,ny,nz,bx,by,bz) dim3(_CEIL_DIV(nx,bx),_CEIL_DIV(ny,by),_CEIL_DIV(nz,bz)),dim3(bx,by,bz)
 
 //--------------
 #define CUDA_CALL(x)                                                           \
