@@ -34,13 +34,16 @@ struct SplatBuffers {
 
 struct TileBuffers {
     long size;
+    float width, height;
     glm::mat4* __restrict__ viewmats;
     glm::mat3* __restrict__ Ks;  // TODO: make aligned
 
     TileBuffers(
+        unsigned width,
+        unsigned height,
         torch::Tensor& viewmats,  // [B, 4, 4]
         torch::Tensor& Ks  // [B, 3, 3]
-    ) {
+    ) : width((float)width), height((float)height) {
         CHECK_CUDA(viewmats);
         CHECK_INPUT(viewmats);
         CHECK_INPUT(Ks);
@@ -83,11 +86,13 @@ struct SplatTileIntersector {
         torch::Tensor& scales,
         torch::Tensor& opacs,
         torch::Tensor& quats,
+        unsigned width,
+        unsigned height,
         torch::Tensor& viewmats,
         torch::Tensor& Ks
     ) {
         SplatBuffers splat_buffers = {means, scales, opacs, quats};
-        TileBuffers tile_buffers = {viewmats, Ks};
+        TileBuffers tile_buffers = {width, height, viewmats, Ks};
 
         return SplatTileIntersector(
             means.options(),

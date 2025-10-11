@@ -545,10 +545,10 @@ torch::Tensor compute_sh_forward_tensor(
 
     if (method == "poly") {
         compute_sh_forward_kernel<SHType::Poly>
-        <<<_LAUNGH_ARGS_1D(num_points)>>>(_TEMP_ARGS);
+        <<<_LAUNCH_ARGS_1D(num_points, 256)>>>(_TEMP_ARGS);
     } else if (method == "fast") {
         compute_sh_forward_kernel<SHType::Fast>
-        <<<_LAUNGH_ARGS_1D(num_points)>>>(_TEMP_ARGS);
+        <<<_LAUNCH_ARGS_1D(num_points, 256)>>>(_TEMP_ARGS);
     } else {
         AT_ERROR("Invalid method: ", method);
     }
@@ -591,10 +591,10 @@ compute_sh_backward_tensor(
 
     if (method == "poly") {
         compute_sh_backward_kernel<SHType::Poly>
-        <<<_LAUNGH_ARGS_1D(num_points)>>>(_TEMP_ARGS);
+        <<<_LAUNCH_ARGS_1D(num_points, 256)>>>(_TEMP_ARGS);
     } else if (method == "fast") {
         compute_sh_backward_kernel<SHType::Fast>
-        <<<_LAUNGH_ARGS_1D(num_points)>>>(_TEMP_ARGS);
+        <<<_LAUNCH_ARGS_1D(num_points, 256)>>>(_TEMP_ARGS);
     } else {
         AT_ERROR("Invalid method: ", method);
     }

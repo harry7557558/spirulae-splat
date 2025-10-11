@@ -5,8 +5,8 @@
 #include <cuda_fp16.h>
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
-#include "glm/glm/glm.hpp"
-#include "glm/glm/gtc/type_ptr.hpp"
+#include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 namespace cg = cooperative_groups;
 
@@ -268,10 +268,10 @@ inline __device__ void get_tile_bbox(
     // gets gaussian dimensions in tile space, i.e. the span of a gaussian in
     // tile_grid (image divided into tiles)
     float2 tile_center = {
-        pix_center.x / (float)BLOCK_WIDTH, pix_center.y / (float)BLOCK_WIDTH
+        pix_center.x / (float)TILE_SIZE, pix_center.y / (float)TILE_SIZE
     };
     float2 tile_radius = {
-        pix_radius.x / (float)BLOCK_WIDTH, pix_radius.y / (float)BLOCK_WIDTH
+        pix_radius.x / (float)TILE_SIZE, pix_radius.y / (float)TILE_SIZE
     };
     get_bbox(tile_center, tile_radius, tile_bounds, tile_min, tile_max);
 }

@@ -84,7 +84,7 @@ torch::Tensor blend_background_forward_tensor(
 
     torch::Tensor out_rgb = torch::empty({h, w, 3}, rgb.options());
 
-    blend_background_forward_kernel<<<_LAUNGH_ARGS_1D(h*w)>>>(
+    blend_background_forward_kernel<<<_LAUNCH_ARGS_1D(h*w, 256)>>>(
         tensor2view<float, 3>(rgb), tensor2view<float, 3>(alpha), tensor2view<float, 3>(background),
         tensor2view<float, 3>(out_rgb)
     );
@@ -120,7 +120,7 @@ blend_background_backward_tensor(
     torch::Tensor v_alpha = torch::empty({h, w, 1}, alpha.options());
     torch::Tensor v_background = torch::empty({h, w, 3}, background.options());
 
-    blend_background_backward_kernel<<<_LAUNGH_ARGS_1D(h*w)>>>(
+    blend_background_backward_kernel<<<_LAUNCH_ARGS_1D(h*w, 256)>>>(
         tensor2view<float, 3>(rgb), tensor2view<float, 3>(alpha), tensor2view<float, 3>(background),
         tensor2view<float, 3>(v_out_rgb),
         tensor2view<float, 3>(v_rgb), tensor2view<float, 3>(v_alpha), tensor2view<float, 3>(v_background)

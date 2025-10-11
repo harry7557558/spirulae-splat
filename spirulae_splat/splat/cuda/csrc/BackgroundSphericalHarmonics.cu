@@ -449,7 +449,6 @@ torch::Tensor render_background_sh_forward_tensor(
         AT_ERROR("sh_coeffs must be (sh_regree**2, 3)");
     }
 
-    const dim3 tile_bounds = whb2tb(w, h);
     const dim3 img_size = {w, h, 1};
 
     auto options = sh_coeffs.options();
@@ -457,8 +456,8 @@ torch::Tensor render_background_sh_forward_tensor(
 
     if (camera_model == "") {
         render_background_sh_forward_kernel<CameraType::Undistorted>
-        <<<tile_bounds, BLOCK_DIM3>>>(
-            tile_bounds, img_size,
+        <<<_LAUNCH_ARGS_2D(w, h, TILE_SIZE, TILE_SIZE)>>>(
+            img_size,
             tuple2float4(intrins), nullptr,
             rotation.contiguous().data_ptr<float>(),
             sh_degree,
@@ -472,8 +471,8 @@ torch::Tensor render_background_sh_forward_tensor(
         CHECK_INPUT(undistortion_map);
 
         render_background_sh_forward_kernel<CameraType::GenericDistorted>
-        <<<tile_bounds, BLOCK_DIM3>>>(
-            tile_bounds, img_size,
+        <<<_LAUNCH_ARGS_2D(w, h, TILE_SIZE, TILE_SIZE)>>>(
+            img_size,
             tuple2float4(intrins),
             (float2 *)undistortion_map.contiguous().data_ptr<float>(),
             rotation.contiguous().data_ptr<float>(),
@@ -528,9 +527,8 @@ std::tuple<
         AT_ERROR("v_out_color shape must be (h, w, 3)");
     }
 
-    // unsigned block_width = BLOCK_WIDTH;
+    // unsigned block_width = TILE_SIZE;
     unsigned block_width = 32;  // 1024 threads
-    const dim3 tile_bounds = whb2tb(w, h, block_width);
     const dim3 img_size = {w, h, 1};
 
     auto options = sh_coeffs.options();
@@ -548,8 +546,8 @@ std::tuple<
 
     if (camera_model == "") {
         render_background_sh_backward_kernel<CameraType::Undistorted>
-        <<<tile_bounds, dim3(block_width, block_width, 1)>>>(
-            tile_bounds, img_size,
+        <<<_LAUNCH_ARGS_2D(w, h, block_width, block_width)>>>(
+            img_size,
             tuple2float4(intrins), nullptr,
             _TEMP_ARGS
         );
@@ -558,8 +556,8 @@ std::tuple<
         const torch::Tensor& undistortion_map = undistortion_map_.value();
         CHECK_INPUT(undistortion_map);
         render_background_sh_backward_kernel<CameraType::GenericDistorted>
-        <<<tile_bounds, dim3(block_width, block_width, 1)>>>(
-            tile_bounds, img_size,
+        <<<_LAUNCH_ARGS_2D(w, h, block_width, block_width)>>>(
+            img_size,
             tuple2float4(intrins),
             (float2 *)undistortion_map.contiguous().data_ptr<float>(),
             _TEMP_ARGS

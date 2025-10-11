@@ -1,8 +1,8 @@
 #pragma once
 
-#define BLOCK_WIDTH 16
-#define MAX_BLOCK_SIZE ( 16 * 16 )
-#define N_THREADS 256
+inline constexpr int TILE_SIZE = 16;
+
+inline constexpr float ALPHA_THRESHOLD = (1.f/255.f);
 
 
 #include <c10/cuda/CUDAGuard.h>
@@ -27,8 +27,10 @@ do {                                                                \
     }                                                               \
 } while (0)
 
+#define _CEIL_DIV(n,m) (((n)+(m)-1)/(m))
 
-#define _LAUNGH_ARGS_1D(n) (n+N_THREADS-1)/N_THREADS,N_THREADS
+#define _LAUNCH_ARGS_1D(n,b) _CEIL_DIV(n,b),b
+#define _LAUNCH_ARGS_2D(nx,ny,bx,by) dim3(_CEIL_DIV(nx,bx),_CEIL_DIV(ny,by),1),dim3(bx,by)
 
 //--------------
 #define CUDA_CALL(x)                                                           \
@@ -45,24 +47,12 @@ do {                                                                \
     } while (0)
 
 
-
-#define BLOCK_DIM3 dim3(BLOCK_WIDTH, BLOCK_WIDTH, 1)
-
-
 inline __host__ float4 tuple2float4(std::tuple<float, float, float, float> v) {
     return {std::get<0>(v), std::get<1>(v), std::get<2>(v), std::get<3>(v)};
 }
 
 inline __host__ dim3 tuple2dim3(std::tuple<unsigned, unsigned, unsigned> v) {
     return {std::get<0>(v), std::get<1>(v), std::get<2>(v)};
-}
-
-inline __host__ dim3 whb2tb(unsigned width, unsigned height, unsigned block_width=BLOCK_WIDTH) {
-    return {
-        (width + block_width - 1) / block_width,
-        (height + block_width - 1) / block_width,
-        1
-    };
 }
 
 #include "common_utils.cuh"

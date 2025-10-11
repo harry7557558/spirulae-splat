@@ -33,17 +33,18 @@ __device__ __forceinline__ Splat loadSplat(unsigned splatIdx, const SplatBuffers
     float opac = buffers.opacs[splatIdx];
     float4 quat = buffers.quats[splatIdx];
 
-    opac = 1.0f / (1.0f+exp(-opac));
+    // opac = 1.0f / (1.0f+__expf(-opac));
+    // scales = { __expf(scales.x), __expf(scales.y), __expf(scales.z) };
+    // quat = normalize(quat);
 
-    constexpr float ALPHA_THRESHOLD = 1.0f/255.0f;
     float extend = fmin(3.33f, sqrt(2.0f * __logf(opac / ALPHA_THRESHOLD)));
 
     glm::mat3 S = {
-        exp(scales.x), 0.0f, 0.0f,
-        0.0f, exp(scales.y), 0.0f,
-        0.0f, 0.0f, exp(scales.z)
+        scales.x, 0.0f, 0.0f,
+        0.0f, scales.y, 0.0f,
+        0.0f, 0.0f, scales.z
     };
-    glm::mat3 R = quat_to_rotmat(normalize(quat));
+    glm::mat3 R = quat_to_rotmat(quat);
     glm::mat3 M = extend * R * S;
     return {
         {mean.x, mean.y, mean.z},
@@ -144,11 +145,9 @@ __device__ __forceinline__ Tile loadTile(unsigned tileIdx, const TileBuffers buf
     float cy = intrins[1][2];
     // printf("%f %f %f %f\n", fx, fy, cx, cy);
 
-    static constexpr float kTileSize = 16;
-
     Tile res = {
-        -cx / fx, (kTileSize - cx) / fx,
-        -cy / fy, (kTileSize - cy) / fy,
+        -cx / fx, (buffers.width - cx) / fx,
+        -cy / fy, (buffers.height - cy) / fy,
         glm::mat4x3(glm::vec3(view[0]), glm::vec3(view[1]), glm::vec3(view[2]), glm::vec3(view[3]))
     };
     res.precompute();

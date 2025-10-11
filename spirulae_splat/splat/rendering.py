@@ -17,6 +17,10 @@ from gsplat.cuda._wrapper import (
     rasterize_to_pixels_eval3d,
     spherical_harmonics,
 )
+from spirulae_splat.splat.cuda._wrapper import (
+    intersect_splat_tile,
+    fully_fused_projection_hetero,
+)
 from gsplat.distributed import (
     all_gather_int32,
     all_gather_tensor_list,
@@ -25,8 +29,6 @@ from gsplat.distributed import (
 )
 
 from .utils import depth_to_normal
-
-from spirulae_splat.splat.cuda import intersect_splat_tile
 
 
 # from gsplat
@@ -47,7 +49,7 @@ def rasterization(
     eps2d: float = 0.3,
     sh_degree: Optional[int] = None,
     packed: bool = True,
-    with_bvh: bool = False,
+    heterogeneous: bool = False,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
     render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
@@ -372,7 +374,47 @@ def rasterization(
         # Silently change C from local #Cameras to global #Cameras.
         C = len(viewmats)
 
-    if with_ut:
+    if heterogeneous:
+        assert not with_ut, "Not implemented"
+        assert packed, "BVH must be packed"
+        assert B == 1, "Not support batching"
+        from time import perf_counter
+        torch.cuda.synchronize()
+        time0 = perf_counter()
+        intersection_count_map, intersection_splat_id = intersect_splat_tile(
+            means.contiguous(),
+            scales.contiguous(),
+            opacities.contiguous(),
+            quats.contiguous(),
+            width,
+            height,
+            viewmats.contiguous(),
+            Ks.contiguous(),
+        )
+        torch.cuda.synchronize()
+        time1 = perf_counter()
+        print(1e3*(time1-time0), 'ms')
+        proj_results = fully_fused_projection_hetero(
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            intersection_count_map,
+            intersection_splat_id,
+            eps2d=eps2d,
+            near_plane=near_plane,
+            far_plane=far_plane,
+            radius_clip=radius_clip,
+            sparse_grad=sparse_grad,
+            calc_compensations=(rasterize_mode == "antialiased"),
+            camera_model=camera_model,
+            opacities=opacities,  # use opacities to compute a tigher bound for radii.
+        )
+
+    elif with_ut:
         proj_results = fully_fused_projection_with_ut(
             means,
             quats,
@@ -418,7 +460,19 @@ def rasterization(
             opacities=opacities,  # use opacities to compute a tigher bound for radii.
         )
 
-    if packed:
+    if heterogeneous:
+        (
+            camera_ids,
+            gaussian_ids,
+            radii,
+            means2d,
+            depths,
+            conics,
+            compensations,
+        ) = proj_results
+        batch_ids, image_ids = 0, camera_ids
+        opacities = opacities.view(B, N)[batch_ids, gaussian_ids]  # [nnz]
+    elif packed:
         # The results are packed into shape [nnz, ...]. All elements are valid.
         (
             batch_ids,
@@ -458,6 +512,10 @@ def rasterization(
             "opacities": opacities,
         }
     )
+    if heterogeneous:
+        meta.update({
+            "intersection_count": intersection_count_map[1:]-intersection_count_map[:-1]
+        })
 
     # Turn colors into [..., C, N, D] or [..., nnz, D] to pass into rasterize_to_pixels()
     if sh_degree is None:
@@ -692,6 +750,7 @@ def rasterization(
                     viewmats_rs=viewmats_rs,
                 )
             else:
+                # TODO
                 render_colors_, render_alphas_ = rasterize_to_pixels(
                     means2d,
                     conics,

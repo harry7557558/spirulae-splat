@@ -73,7 +73,7 @@ def get_extensions():
     from torch.__config__ import parallel_info
     from torch.utils.cpp_extension import CUDAExtension
 
-    extensions_dir = os.path.join("spirulae_splat", "splat", "cuda", "csrc")
+    extensions_dir = os.path.abspath(os.path.join("spirulae_splat", "splat", "cuda", "csrc"))
     sources = glob.glob(os.path.join(extensions_dir, "*.cu")) + \
         glob.glob(os.path.join(extensions_dir, "*.cpp"))
     sources = [path for path in sources if "hip" not in path]
@@ -135,7 +135,10 @@ def get_extensions():
     extension = CUDAExtension(
         f"spirulae_splat.csrc",
         sources,
-        include_dirs=[os.path.join(extensions_dir, "glm")],
+        include_dirs=[
+            extensions_dir,
+            os.path.join(extensions_dir, "glm"),
+        ],
         define_macros=define_macros,
         undef_macros=undef_macros,
         extra_compile_args=extra_compile_args,
@@ -158,6 +161,7 @@ generate_header(path+"SphericalHarmonics.cu", path+"SphericalHarmonics.cuh")
 generate_header(path+"BackgroundSphericalHarmonics.cu", path+"BackgroundSphericalHarmonics.cuh")
 generate_header(path+"PerSplatLoss.cu", path+"PerSplatLoss.cuh")
 generate_header(path+"PixelWise.cu", path+"PixelWise.cuh")
+generate_header(path+"ProjectionEWA3DGSHetero.cu", path+"ProjectionEWA3DGSHetero.cuh")
 
 setup(
     name="spirulae_splat",

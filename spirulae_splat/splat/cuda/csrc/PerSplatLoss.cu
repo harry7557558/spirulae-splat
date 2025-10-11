@@ -152,7 +152,7 @@ torch::Tensor compute_per_splat_losses_forward_tensor(
 
     torch::Tensor loss = torch::zeros({kNumPerSplatLosses}, opacities.options());
 
-    per_splat_losses_forward_kernel<<<_LAUNGH_ARGS_1D(num_points)>>>(
+    per_splat_losses_forward_kernel<<<_LAUNCH_ARGS_1D(num_points, 256)>>>(
         is_3dgs,
         num_points,
         scales.contiguous().data_ptr<float>(),
@@ -209,7 +209,7 @@ compute_per_splat_losses_backward_tensor(
     torch::Tensor v_opacities = torch::empty_like(opacities);
     torch::Tensor v_quats = torch::empty_like(quats);
 
-    per_splat_losses_backward_kernel<<<_LAUNGH_ARGS_1D(num_points)>>>(
+    per_splat_losses_backward_kernel<<<_LAUNCH_ARGS_1D(num_points, 256)>>>(
         is_3dgs,
         num_points,
         scales.contiguous().data_ptr<float>(),

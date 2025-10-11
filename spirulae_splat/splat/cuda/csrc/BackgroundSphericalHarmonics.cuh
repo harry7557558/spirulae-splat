@@ -8,7 +8,6 @@
 // refactored function arguments
 
 #define _ARGS_render_background_sh_forward_kernel \
-    const dim3 tile_bounds, \
     const dim3 img_size, \
     const float4 intrins, \
     const float2* __restrict__ undistortion_map, \
@@ -18,7 +17,6 @@
     float3* __restrict__ out_img
 
 #define _ARGS_render_background_sh_backward_kernel \
-    const dim3 tile_bounds, \
     const dim3 img_size, \
     const float4 intrins, \
     const float2* __restrict__ undistortion_map, \

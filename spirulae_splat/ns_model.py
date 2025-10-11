@@ -730,6 +730,26 @@ class SpirulaeModel(Model):
             else:
                 raise ValueError("Only support fisheye with 4 or 6 distortion coefficients")
 
+        TILE_SIZE = 16
+        gh, gw = (H+TILE_SIZE-1) // TILE_SIZE, (W+TILE_SIZE-1) // TILE_SIZE
+        def split_into_tiles(viewmat, Ks):
+            dh, dw = torch.meshgrid(torch.arange(gh)*TILE_SIZE, torch.arange(gw)*TILE_SIZE)
+            Ks = Ks.clone().repeat(gh*gw, 1, 1)
+            viewmat = viewmat.clone().repeat(gh*gw, 1, 1)
+            Ks[:, 0, 2] -= dw.flatten()
+            Ks[:, 1, 2] -= dh.flatten()
+            return viewmat, Ks
+
+        def merge_tiles(im):
+            im = im.reshape(gh, gw, TILE_SIZE, TILE_SIZE, -1).permute(0, 2, 1, 3, 4).reshape(1, gh*TILE_SIZE, gw*TILE_SIZE, -1)
+            im = im[:, :camera.height[0].item(), :camera.width[0].item(), :]
+            return im
+
+        if not self.training:
+            viewmat, Ks = split_into_tiles(viewmat, Ks)
+            W = TILE_SIZE
+            H = TILE_SIZE
+
         rgbd, alpha, meta = rasterization(
             means=self.means,
             quats=quats,
@@ -742,7 +762,7 @@ class SpirulaeModel(Model):
             height=H,
             sh_degree=self.config.sh_degree,
             packed=True,
-            with_bvh=True,
+            heterogeneous=True,
             absgrad=(not self.config.use_mcmc),
             sparse_grad=False,
             rasterize_mode="classic",
@@ -753,6 +773,15 @@ class SpirulaeModel(Model):
             render_mode="RGB+D",
             **kwargs,
         )
+
+        if not self.training:
+            W = gw*TILE_SIZE
+            H = gh*TILE_SIZE
+            print(rgbd.shape, alpha.shape)
+            rgbd = merge_tiles(rgbd)
+            alpha = merge_tiles(alpha)
+            W, H = camera.width[0].item(), camera.height[0].item()
+
         rgb = rgbd[..., :3]
 
         if self.config.compute_depth_normal or not self.training:
@@ -819,49 +848,8 @@ class SpirulaeModel(Model):
             for key in outputs:
                 outputs[key] = outputs[key].squeeze(0)
 
-        # 
         if not self.training and True:
-            with torch.no_grad():
-                from spirulae_splat.splat.cuda import intersect_splat_tile
-                from time import perf_counter
-                # undist_map = _Camera(
-                #     camera.height[0].item(), camera.width[0].item(),
-                #     "OPENCV",
-                #     (getattr(camera, a)[0].item() for a in ('fx', 'fy', 'cx', 'cy'))
-                # ).get_undist_map(True)
-                # rd = torch.concatenate((undist_map, torch.ones_like(undist_map[...,:1])), dim=-1)
-                # ro = T.reshape((1, 1, 3)).cuda().repeat(*undist_map.shape[:2], 1)
-                # print(self.means.shape, self.scales.shape, self.opacities.shape, self.quats.shape,
-                #     ro.reshape((-1, 3)).shape, rd.reshape((-1, 3)).shape)
-                # for x in [self.means, self.scales, self.opacities, self.quats, ro, rd]:
-                #     print((~torch.isfinite(x)).float().mean())
-                tile_size = 16
-                gh, gw = H // tile_size, W // tile_size
-                dh, dw = torch.meshgrid(torch.arange(gh)*tile_size, torch.arange(gw)*tile_size)
-                Ks = Ks.clone().repeat(gh*gw, 1, 1)
-                viewmat = viewmat.clone().repeat(gh*gw, 1, 1)
-                Ks[:, 0, 2] -= dw.flatten()
-                Ks[:, 1, 2] -= dh.flatten()
-                print(viewmat.shape, Ks.shape)
-                torch.cuda.synchronize()
-                time0 = perf_counter()
-                bounds, indices = intersect_splat_tile(
-                    self.means.contiguous(),
-                    self.scales.contiguous(),
-                    self.opacities.contiguous(),
-                    self.quats.contiguous(),
-                    # ro.reshape((-1, 3)).contiguous(),
-                    # (rd.reshape((-1, 3)) @ R[0].T.cuda()).contiguous()
-                    viewmat.to(device).contiguous(),
-                    Ks.to(device).contiguous()
-                )
-                torch.cuda.synchronize()
-                time1 = perf_counter()
-                outputs['ray'] = (bounds[1:] - bounds[:-1]).float().reshape(gh, 1, gw, 1).repeat(1, tile_size, 1, tile_size).reshape(gh*tile_size, gw*tile_size, 1)
-                print(1e3*(time1-time0), 'ms')
-                # import matplotlib.pyplot as plt
-                # plt.imshow(outputs['ray'].detach().cpu().numpy())
-                # plt.show()
+            outputs['ray'] = merge_tiles(meta['intersection_count'].float().reshape(-1, 1, 1, 1).repeat(1, TILE_SIZE, TILE_SIZE, 1))
 
         return outputs
 

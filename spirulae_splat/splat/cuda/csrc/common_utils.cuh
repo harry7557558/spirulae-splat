@@ -1,6 +1,6 @@
 #pragma once
 
-#include "glm/glm/glm.hpp"
+#include <glm/glm.hpp>
 
 #include <cuda.h>
 #include <cuda_runtime.h>
