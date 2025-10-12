@@ -4,10 +4,10 @@
 
 struct SplatBuffers {
     long size;
-    glm::vec3* __restrict__ means;
-    glm::vec3* __restrict__ scales;
-    float* __restrict__ opacs;
-    float4* __restrict__ quats;
+    const glm::vec3* __restrict__ means;
+    const glm::vec3* __restrict__ scales;
+    const float* __restrict__ opacs;
+    const float4* __restrict__ quats;
 
     SplatBuffers(
         torch::Tensor& means,
@@ -35,8 +35,8 @@ struct SplatBuffers {
 struct TileBuffers {
     long size;
     float width, height;
-    glm::mat4* __restrict__ viewmats;
-    glm::mat3* __restrict__ Ks;  // TODO: make aligned
+    const glm::mat4* __restrict__ viewmats;
+    const glm::mat3* __restrict__ Ks;  // TODO: make aligned
 
     TileBuffers(
         unsigned width,

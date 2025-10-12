@@ -378,33 +378,41 @@ def rasterization(
         assert not with_ut, "Not implemented"
         assert packed, "BVH must be packed"
         assert B == 1, "Not support batching"
+        def dump_all():
+            print(width, height)
+            def dump(name, tensor):
+                shape = '_'.join(map(str, tensor.shape))
+                name = f"{name}_{shape}.bin"
+                print("dump", name)
+                tensor.contiguous().detach().cpu().numpy().tofile(f"/home/harry/temp/{name}")
+            dump('means', means)
+            dump('scales', scales)
+            dump('opacities', opacities)
+            dump('quats', quats)
+            dump('viewmats', viewmats)
+            dump('Ks', Ks)
+            # exit(0)
         from time import perf_counter
         torch.cuda.synchronize()
         time0 = perf_counter()
-        intersection_count_map, intersection_splat_id = intersect_splat_tile(
-            means.contiguous(),
-            scales.contiguous(),
-            opacities.contiguous(),
-            quats.contiguous(),
-            width,
-            height,
-            viewmats.contiguous(),
-            Ks.contiguous(),
-        )
-        # def dump(name, tensor):
-        #     shape = '_'.join(map(str, tensor.shape))
-        #     tensor.contiguous().detach().cpu().numpy().tofile(f"/home/harry/temp/{name}_{shape}.bin")
-        # dump('means', means)
-        # dump('scales', scales)
-        # dump('opacities', opacities)
-        # dump('quats', quats)
-        # dump('viewmats', viewmats)
-        # dump('Ks', Ks)
-        # print(width)
-        # print(height)
+        # dump_all()
+        with torch.no_grad():
+            intersection_count_map, intersection_splat_id = intersect_splat_tile(
+                means.contiguous(),
+                scales.contiguous(),
+                opacities.contiguous(),
+                quats.contiguous(),
+                width,
+                height,
+                viewmats.contiguous(),
+                Ks.contiguous(),
+            )
         torch.cuda.synchronize()
         time1 = perf_counter()
         print(1e3*(time1-time0), 'ms')
+        # if 1e3*(time1-time0) > 100:
+        #     dump_all()
+        #     exit(0)
         proj_results = fully_fused_projection_hetero(
             means,
             quats,
