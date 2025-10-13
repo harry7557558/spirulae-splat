@@ -10,6 +10,12 @@ constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
 constexpr uint SPLAT_BATCH_SIZE = 128;
 
 
+struct DSplat {
+    glm::vec2 xy;
+    glm::vec3 conic;
+    float opac;
+};
+
 template <uint32_t CDIM>
 struct Splat {
     int gid = -1;
@@ -17,6 +23,45 @@ struct Splat {
     glm::vec3 conic;
     float opac;
     float color[CDIM];
+
+    __device__ __forceinline__ float evaluate_alpha(float px, float py) {
+        glm::vec2 delta = {xy.x - px, xy.y - py};
+        float sigma = 0.5f * (conic.x * delta.x * delta.x +
+                                conic.z * delta.y * delta.y) +
+                        conic.y * delta.x * delta.y;
+        float vis = __expf(-sigma);
+        float alpha = min(0.999f, opac * vis);
+        return sigma < 0.f ? 0.f : alpha;
+    }
+
+    __device__ __forceinline__ DSplat evaluate_alpha_vjp(float px, float py, float v_alpha) {
+        glm::vec2 delta = {xy.x - px, xy.y - py};
+        float sigma = 0.5f * (conic.x * delta.x * delta.x +
+                                conic.z * delta.y * delta.y) +
+                        conic.y * delta.x * delta.y;
+        float vis = __expf(-sigma);
+        float alpha = min(0.999f, opac * vis);
+
+        DSplat v_splat = {
+            glm::vec2(0),
+            glm::vec3(0),
+            0.0f,
+        };
+        if (sigma >= 0.f && opac * vis <= 0.999f) {
+            const float v_sigma = -opac * vis * v_alpha;
+            v_splat.conic = glm::vec3(
+                0.5f * v_sigma * delta.x * delta.x,
+                v_sigma * delta.x * delta.y,
+                0.5f * v_sigma * delta.y * delta.y
+            );
+            v_splat.xy = glm::vec2(
+                v_sigma * (conic.x * delta.x + conic.y * delta.y),
+                v_sigma * (conic.y * delta.x + conic.z * delta.y)
+            );
+            v_splat.opac = vis * v_alpha;
+        }
+        return v_splat;
+    }
 };
 
 
@@ -80,11 +125,8 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
 
     // load pixels
     __shared__ int pix_bin_final[BLOCK_SIZE];
-    __shared__ float pix_alphas[BLOCK_SIZE];
-    __shared__ float pix_alphas_final[BLOCK_SIZE];
-    __shared__ float pix_buffer[BLOCK_SIZE*CDIM];
-    __shared__ float v_pix_colors_final[BLOCK_SIZE*CDIM];
-    __shared__ float v_pix_alphas_final[BLOCK_SIZE];
+    __shared__ float2 pix_Ts_with_grad[BLOCK_SIZE];
+    __shared__ float v_pix_colors[BLOCK_SIZE*CDIM];
     #pragma unroll
     for (uint pix_id0 = 0; pix_id0 < BLOCK_SIZE; pix_id0 += SPLAT_BATCH_SIZE) {
         static_assert(BLOCK_SIZE % SPLAT_BATCH_SIZE == 0);
@@ -94,16 +136,16 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
         uint pix_id_global = pix_y * image_width + pix_x;
         bool inside = (pix_x < image_width && pix_y < image_height);
         
+        // TODO: store T instead of alpha, 1-<small number> breaks floating point
         pix_bin_final[pix_id_local] = (inside ? last_ids[pix_id_global] : 0);
-        pix_alphas_final[pix_id_local] = pix_alphas[pix_id_local] =
-            (inside ? render_alphas[pix_id_global] : 0.0f);
-        v_pix_alphas_final[pix_id_local] =
-            (inside ? v_render_alphas[pix_id_global] : 0.0f);
+        pix_Ts_with_grad[pix_id_local] = {
+            (inside ? 1.0f - render_alphas[pix_id_global] : 0.0f),
+            (inside ? -v_render_alphas[pix_id_global] : 0.0f)
+        };
         #pragma unroll
         for (uint k = 0; k < CDIM; k++) {
-            v_pix_colors_final[pix_id_local * CDIM + k] =
+            v_pix_colors[pix_id_local * CDIM + k] =
                 (inside ? v_render_colors[pix_id_global * CDIM + k] : 0.0f);
-            pix_buffer[pix_id_local * CDIM + k] = 0.0f;
         }
     }
     static_assert(CDIM <= SPLAT_BATCH_SIZE);
@@ -175,94 +217,60 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
                 splat_idx - range_start > pix_bin_final[pix_id]
             ) continue;
 
+            // evaluate alpha and early skip
+            float alpha = splat.evaluate_alpha(px, py);
+            if (alpha < ALPHA_THRESHOLD)
+                continue;
+
             // printf("t=%d, thread %u, splat %d (%u), pix_id %d, pix %d %d\n", t, thread_id, splat_idx-range_start, splat.gid, pix_id, pix_global_x, pix_global_y);
 
-            // load pixel states
-            float T_final = 1.0f - pix_alphas_final[pix_id];
-            float T = 1.0f - pix_alphas[pix_id];
-            float buffer[CDIM];
-            #pragma unroll
-            for (uint32_t k = 0; k < CDIM; ++k)
-                buffer[k] = pix_buffer[pix_id * CDIM + k];
+            // forward:
+            // \left(c_{1},T_{1}\right)=\left(c_{0}+\alpha_{i}T_{0}c_{i},\ T_{0}\left(1-\alpha_{i}\right)\right)
+            float T1 = pix_Ts_with_grad[pix_id].x;
+            float v_T1 = pix_Ts_with_grad[pix_id].y;
 
-            // df/d_out for this pixel
-            float v_render_c[CDIM];
-            #pragma unroll
-            for (uint32_t k = 0; k < CDIM; ++k)
-                v_render_c[k] = v_pix_colors_final[pix_id * CDIM + k];
-            const float v_render_a = v_pix_alphas_final[pix_id];
+            // undo pixel:
+            // T_{0}=\frac{T_{1}}{1-\alpha_{i}}
+            float ra = 1.0f / (1.0f - alpha);
+            float T0 = T1 * ra;
 
-            // evaluate alpha
-            float opac = splat.opac;
-            glm::vec2 delta = {splat.xy.x - px, splat.xy.y - py};
-            glm::vec3 conic = splat.conic;
-            float sigma = 0.5f * (conic.x * delta.x * delta.x +
-                                    conic.z * delta.y * delta.y) +
-                            conic.y * delta.x * delta.y;
-            float vis = __expf(-sigma);
-            float alpha = min(0.999f, opac * vis);
-            if (sigma < 0.f || alpha < ALPHA_THRESHOLD) {
-                continue;
+            // gradient to alpha:
+            // \frac{dL}{d\alpha_{i}}
+            // = \frac{dL}{dc_{1}}\frac{dc_{1}}{d\alpha_{i}}+\frac{dL}{dT_{1}}\frac{dT_{1}}{d\alpha_{i}}
+            // = T_{0}\frac{dL}{dc_{1}}c_{i}-\frac{dL}{dT_{1}}T_{0}
+
+            // gradient to color:
+            // \frac{dL}{dc_{i}}
+            // = \frac{dL}{dc_{1}}\frac{dc_{1}}{dc_{i}}
+            // = \alpha_{i}T_{0}\frac{dL}{dc_{1}}
+
+            // update pixel gradient:
+            // \frac{dL}{dT_{0}}
+            // = \frac{dL}{dc_{1}}\frac{dc_{1}}{dT_{0}}+\frac{dL}{dT_{1}}\frac{dT_{1}}{dT_{0}}
+            // = \alpha_{i}\frac{dL}{dc_{1}}c_{i}+\frac{dL}{dT_{1}}\left(1-\alpha_{i}\right)
+
+            float v_alpha = -v_T1 * T0;  // gradient to alpha
+            float v_T0 = v_T1 * (1.0f - alpha);  // update pixel gradient
+            #pragma unroll
+            for (uint32_t k = 0; k < CDIM; ++k) {
+                float c = splat.color[k];
+                float v_c = v_pix_colors[pix_id * CDIM + k];
+                v_alpha += c * v_c * T0;  // gradient to alpha
+                v_rgb_local[k] += alpha * T0 * v_c;  // gradient to color
+                v_T0 += c * v_c * alpha; // update pixel gradient
             }
 
-            // per original gsplat
-            {
-                // compute the current T for this gaussian
-                float ra = 1.0f / (1.0f - alpha);
-                T *= ra;
-                // update v_rgb for this gaussian
-                const float fac = alpha * T;
-                #pragma unroll
-                for (uint32_t k = 0; k < CDIM; ++k) {
-                    v_rgb_local[k] += fac * v_render_c[k];
-                }
-                // contribution from this pixel
-                float v_alpha = 0.f;
-                #pragma unroll
-                for (uint32_t k = 0; k < CDIM; ++k) {
-                    v_alpha += (splat.color[k] * T - buffer[k] * ra) *
-                               v_render_c[k];
-                }
-
-                v_alpha += T_final * ra * v_render_a;
-                // contribution from background pixel
-                if (backgrounds != nullptr) {
-                    float accum = 0.f;
-                    #pragma unroll
-                    for (uint32_t k = 0; k < CDIM; ++k) {
-                        accum += pix_background[k] * v_render_c[k];
-                    }
-                    v_alpha += -T_final * ra * accum;
-                }
-
-                if (opac * vis <= 0.999f) {
-                    const float v_sigma = -opac * vis * v_alpha;
-                    v_conic_local += glm::vec3(
-                        0.5f * v_sigma * delta.x * delta.x,
-                        v_sigma * delta.x * delta.y,
-                        0.5f * v_sigma * delta.y * delta.y
-                    );
-                    v_xy_local += glm::vec2(
-                        v_sigma * (conic.x * delta.x + conic.y * delta.y),
-                        v_sigma * (conic.y * delta.x + conic.z * delta.y)
-                    );
-                    if (v_means2d_abs != nullptr) {
-                        v_xy_abs_local += glm::vec2(abs(v_xy_local.x), abs(v_xy_local.y));
-                    }
-                    v_opacity_local += vis * v_alpha;
-                }
-
-                #pragma unroll
-                for (uint32_t k = 0; k < CDIM; ++k) {
-                    buffer[k] += splat.color[k] * fac;
-                }
-            }
+            // backward diff splat
+            DSplat v_splat = splat.evaluate_alpha_vjp(px, py, v_alpha);
+            v_xy_local += v_splat.xy;
+            if (v_means2d_abs != nullptr)
+                v_xy_abs_local += glm::vec2(fabsf(v_splat.xy.x), fabsf(v_splat.xy.y));
+            v_conic_local += v_splat.conic;
+            v_opacity_local += v_splat.opac;
 
             // update pixel states
-            pix_alphas[pix_id] = 1.0f - T;
-            #pragma unroll
-            for (uint32_t k = 0; k < CDIM; ++k)
-                pix_buffer[pix_id * CDIM + k] = buffer[k];
+            pix_Ts_with_grad[pix_id] = { T0, v_T0 };
+            // v_pix_colors remains the same
         }
 
         // accumulate gradient

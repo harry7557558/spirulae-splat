@@ -9,6 +9,9 @@
 
 
 
+float evaluate_alpha(float px, float py);
+
+
 template <uint32_t CDIM>
 void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     // Gaussian parameters
