@@ -19,8 +19,6 @@ __global__ void render_background_sh_forward_kernel(
     glm::vec3* __restrict__ out_img
 ) {
     unsigned camera_id = blockIdx.z * blockDim.z + threadIdx.z;
-    Ks += 9 * camera_id;
-    rotation += 9 * camera_id;
 
     unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
     unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
@@ -29,6 +27,7 @@ __global__ void render_background_sh_forward_kernel(
     if (i >= img_size.y || j >= img_size.x || camera_id >= img_size.z)
         return;
 
+    Ks += 9 * camera_id;
     float fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
 
     glm::vec2 pos_2d(j+0.5f, i+0.5f);
@@ -55,13 +54,10 @@ __global__ void render_background_sh_forward_kernel(
     float xi = camera_ray.ray_dir.x;
     float yi = -camera_ray.ray_dir.y;
     float zi = -camera_ray.ray_dir.z;
-    float xr = rotation[0] * xi + rotation[1] * yi + rotation[2] * zi;
-    float yr = rotation[3] * xi + rotation[4] * yi + rotation[5] * zi;
-    float zr = rotation[6] * xi + rotation[7] * yi + rotation[8] * zi;
-    float norm = sqrtf(fmaxf(xr * xr + yr * yr + zr * zr, 1e-12f));
-    float x = isfinite(xr) ? xr / norm : 0.0f;
-    float y = isfinite(yr) ? yr / norm : 0.0f;
-    float z = isfinite(zr) ? zr / norm : 0.0f;
+    rotation += 9 * camera_id;
+    float x = rotation[0] * xi + rotation[1] * yi + rotation[2] * zi;
+    float y = rotation[3] * xi + rotation[4] * yi + rotation[5] * zi;
+    float z = rotation[6] * xi + rotation[7] * yi + rotation[8] * zi;
 
     float xx = x*x, yy = y*y, zz = z*z;
 
@@ -136,7 +132,7 @@ __global__ void render_background_sh_backward_kernel(
     unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
     int32_t pix_id = (camera_id * img_size.y + i) * img_size.x + j;
 
-    bool inside = (i < img_size.y && j < img_size.x);
+    bool inside = (i < img_size.y && j < img_size.x && camera_id < img_size.z);
 
     // backprop color output
     glm::vec3 v_color = glm::vec3(0.0);
@@ -168,8 +164,10 @@ __global__ void render_background_sh_backward_kernel(
         ).image_point_to_camera_ray(pos_2d);
         break;
     }
-    if (!camera_ray.valid_flag)
+    if (!camera_ray.valid_flag) {
         inside = false;
+        v_color = glm::vec3(0.0);
+    }
 
     // early termination
     auto block = cg::this_thread_block();
@@ -197,14 +195,9 @@ __global__ void render_background_sh_backward_kernel(
     float yi = -camera_ray.ray_dir.y;
     float zi = -camera_ray.ray_dir.z;
     rotation += 9 * camera_id;
-    float xr = rotation[0] * xi + rotation[1] * yi + rotation[2] * zi;
-    float yr = rotation[3] * xi + rotation[4] * yi + rotation[5] * zi;
-    float zr = rotation[6] * xi + rotation[7] * yi + rotation[8] * zi;
-    float norm2 = xr * xr + yr * yr + zr * zr;
-    float norm = sqrtf(fmaxf(norm2, 1e-12f));
-    float x = inside && isfinite(xr) ? xr / norm : 0.0f;
-    float y = inside && isfinite(yr) ? yr / norm : 0.0f;
-    float z = inside && isfinite(zr) ? zr / norm : 0.0f;
+    float x = rotation[0] * xi + rotation[1] * yi + rotation[2] * zi;
+    float y = rotation[3] * xi + rotation[4] * yi + rotation[5] * zi;
+    float z = rotation[6] * xi + rotation[7] * yi + rotation[8] * zi;
 
     float xx = x*x, yy = y*y, zz = z*z;
 
@@ -229,6 +222,13 @@ __global__ void render_background_sh_backward_kernel(
         _BLOCK_REDUCE_VEC3(); \
         if (warp_idx < 3 && lane_idx == 0) \
             atomicAdd((float*)address + (3*idx+warp_idx), temp);
+
+    // #define _ATOMIC_ADD(address, idx) \
+    //     if (inside) { \
+    //         atomicAdd((float*)address+3*idx+0, temp3.x); \
+    //         atomicAdd((float*)address+3*idx+1, temp3.y); \
+    //         atomicAdd((float*)address+3*idx+2, temp3.z); \
+    //     }
 
     // l0
     float v_color_dot_sh_coeff = 0.0f;
@@ -437,7 +437,7 @@ __global__ void render_background_sh_backward_kernel(
     v_z += v_zz * 2.0f*z;
 
     glm::vec3 xyz = glm::vec3(x, y, z);
-    glm::mat3 dp_dpr = (glm::mat3(1.0f) - glm::outerProduct(xyz, xyz)) / norm;
+    glm::mat3 dp_dpr = glm::mat3(1.0f) - glm::outerProduct(xyz, xyz);
     glm::vec3 v_p = dp_dpr * glm::vec3(v_x, v_y, v_z);
     v_p *= (inside ? 1.0f : 0.0f);
 
@@ -593,7 +593,7 @@ std::tuple<
             (glm::vec3*)v_sh_coeffs.data_ptr<float>()
         );
     } else {
-        render_background_sh_backward_kernel<gsplat::CameraModelType::FISHEYE>
+        render_background_sh_backward_kernel<gsplat::CameraModelType::PINHOLE>
         <<<_LAUNCH_ARGS_3D(w, h, b, block_width, block_width, 1)>>>(
             img_size,
             Ks.data_ptr<float>(),

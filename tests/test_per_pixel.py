@@ -1,25 +1,14 @@
 import pytest
-import traceback
 import torch
 import torch.nn.functional as F
 
 import spirulae_splat.modules.per_pixel as module
 
-from test_render_background_sh import timeit
+from utils import check_close, timeit
 
 torch.manual_seed(42)
 
 device = torch.device("cuda:0")
-
-
-def check_close(name, a, b, atol=1e-5, rtol=1e-5):
-    print(name, [*a.shape], [*b.shape], a.dtype, b.dtype)
-    try:
-        torch.testing.assert_close(a, b, atol=atol, rtol=rtol)
-    except AssertionError:
-        traceback.print_exc()
-        diff = torch.abs(a - b).detach()
-        print(f"{diff.max()=} {diff.float().mean()=}")
 
 
 def _torch_blend_background(rgb, alpha, background):

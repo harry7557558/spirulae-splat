@@ -49,6 +49,12 @@ inline __device__ float atomicMax(float* p, float v) {
         { return { a o b.x, a o b.y, a o b.z }; } \
     __host__ __device__ __forceinline__ dtype##4 operator o(dtype a, dtype##4 b) \
         { return { a o b.x, a o b.y, a o b.z, a o b.w }; } \
+    __host__ __device__ __forceinline__ dtype##2 operator o##=(dtype##2 &a, dtype##2 b) \
+        { return { a.x o##= b.x, a.y o##= b.y }; } \
+    __host__ __device__ __forceinline__ dtype##3 operator o##=(dtype##3 &a, dtype##3 b) \
+        { return { a.x o##= b.x, a.y o##= b.y, a.z o##= b.z }; } \
+    __host__ __device__ __forceinline__ dtype##4 operator o##=(dtype##4 &a, dtype##4 b) \
+        { return { a.x o##= b.x, a.y o##= b.y, a.z o##= b.z, a.w o##= b.w }; } \
 
 #define _DEF_BOOLEAN_VEC_BINARY_OP(dtype, oc, ox) \
     __device__ __forceinline__ bool operator oc(dtype##2 a, dtype##2 b) \
@@ -123,6 +129,12 @@ _DEF_MAKE_VEC_FROM_VEC(uint, float)
         { return make_##dtype##3(efun(a.x, b.x), efun(a.y, b.y), efun(a.z, b.z)); } \
     __device__ __forceinline__ dtype##4 fun(dtype##4 a, dtype##4 b) \
         { return make_##dtype##4(efun(a.x, b.x), efun(a.y, b.y), efun(a.z, b.z), efun(a.w, b.w)); } \
+    __device__ __forceinline__ dtype##2 fun(dtype##2 a, dtype b) \
+        { return make_##dtype##2(efun(a.x, b), efun(a.y, b)); } \
+    __device__ __forceinline__ dtype##3 fun(dtype##3 a, dtype b) \
+        { return make_##dtype##3(efun(a.x, b), efun(a.y, b), efun(a.z, b)); } \
+    __device__ __forceinline__ dtype##4 fun(dtype##4 a, dtype b) \
+        { return make_##dtype##4(efun(a.x, b), efun(a.y, b), efun(a.z, b), efun(a.w, b)); } \
 
 #define _DEF_FLOAT_VEC_TO_SCALAR_FUN(dtype) \
     __device__ __forceinline__ dtype length(dtype##2 v) \

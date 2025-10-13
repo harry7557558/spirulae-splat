@@ -1,5 +1,4 @@
 import pytest
-import traceback
 import torch
 from torch.func import vjp  # type: ignore
 
@@ -8,55 +7,32 @@ from spirulae_splat.splat.background_sh import render_background_sh
 import spirulae_splat.splat.cuda as _C
 from spirulae_splat.splat._camera import _Camera
 
+from utils import check_close, timeit
+
 torch.manual_seed(42)
 
 device = torch.device("cuda:0")
 
 
-def check_close(name, a, b, atol=1e-5, rtol=1e-5):
-    print(name, [*a.shape], [*b.shape], a.dtype, b.dtype)
-    try:
-        torch.testing.assert_close(a, b, atol=atol, rtol=rtol)
-    except AssertionError:
-        traceback.print_exc()
-        diff = torch.abs(a - b).detach()
-        print(f"{diff.max()=} {diff.float().mean()=}")
-        # assert False
-        # import ipdb
-        # ipdb.set_trace()
-
-
-def timeit(fun, name: str, repeat=20):
-    from time import perf_counter
-
-    for i in range(2):
-        fun()
-    torch.cuda.synchronize()
-
-    time0 = perf_counter()
-    for i in range(repeat):
-        fun()
-        torch.cuda.synchronize()
-    time1 = perf_counter()
-
-    dt = 1e3 * (time1-time0) / repeat
-    print(f"{name}: {dt:.2f} ms")
+MODEL = "pinhole"  # pinhole or fisheye
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_render_background_sh():
 
-    rotation = torch.randn(4).to(device)
-    rotation /= torch.linalg.norm(rotation)
+    B, H, W = 3, 500, 300
+    cx, cy = 0.45*W, 0.55*H
+    fx, fy = 1.5*W, 1.6*W
+
+    Ks = torch.tensor([[[fx, 0, cx], [0, fy, cy], [0, 0, 1]]]).repeat(B, 1, 1).to(device)
+    Ks *= torch.exp(0.2*torch.randn_like(Ks))
+
+    rotation = torch.randn(B, 4).to(device)
+    rotation /= torch.norm(rotation, dim=-1, keepdim=True)
     rotation = _torch_impl.quat_to_rotmat(rotation)
     rotation = rotation.detach().contiguous()
     _rotation = rotation.clone().requires_grad_(True)
     rotation.requires_grad_(True)
-
-    H, W = 500, 300
-    cx, cy = 0.45*W, 0.55*H
-    fx, fy = 1.5*W, 1.6*W
-    cam = _Camera(H, W, "OPENCV", (fx, fy, cx, cy))
 
     sh_degree = 4
     sh_coeffs = torch.randn(((sh_degree+1)**2, 3)).to(device)
@@ -64,22 +40,24 @@ def test_render_background_sh():
     sh_coeffs.requires_grad_(True)
 
     output = render_background_sh(
-        cam, rotation, sh_degree, sh_coeffs,
+        W, H, MODEL,
+        Ks, rotation, sh_degree, sh_coeffs
     )
-    _output = _torch_impl.render_background_sh(
-        W, H, (fx, fy, cx, cy),
-        _rotation, sh_degree, _sh_coeffs,
-    )
+    _output = torch.stack([
+        _torch_impl.render_background_sh(
+            W, H,
+            (Ks_i[0][0].item(), Ks_i[1][1].item(), Ks_i[0][2].item(), Ks_i[1][2].item()),
+            rotation_i, sh_degree, _sh_coeffs,
+        ) for (Ks_i, rotation_i) in zip(Ks, _rotation)
+    ])
 
     print("test forward")
     check_close('image', output, _output)
     print()
 
+    weight = torch.randn_like(output)
     def fun(output):
-        y, x = torch.meshgrid(torch.arange(H), torch.arange(W), indexing="ij")
-        x = x.float().to(device).unsqueeze(-1) + 0.5
-        y = y.float().to(device).unsqueeze(-1) + 0.5
-        return torch.mean(torch.sin(output+x)*y)
+        return (weight*output).mean()
     fun(output).backward()
     fun(_output).backward()
 
@@ -97,17 +75,19 @@ def test_render_background_sh():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def profile_render_background_sh():
 
+    B, H, W = 1, 1440, 1080
+    cx, cy = 0.45*W, 0.55*H
+    fx, fy = 1.5*W, 1.6*W
+
+    Ks = torch.tensor([[[fx, 0, cx], [0, fy, cy], [0, 0, 1]]]).repeat(B, 1, 1).to(device)
+    Ks *= torch.exp(0.2*torch.randn_like(Ks))
+
     rotation = torch.randn(4).to(device)
     rotation /= torch.linalg.norm(rotation)
     rotation = _torch_impl.quat_to_rotmat(rotation)
     rotation = rotation.detach().contiguous()
     _rotation = rotation.clone().requires_grad_(True)
     rotation.requires_grad_(True)
-
-    H, W = 1440, 1080
-    cx, cy = 0.45*W, 0.55*H
-    fx, fy = 1.5*W, 1.6*W
-    cam = _Camera(H, W, "OPENCV", (fx, fy, cx, cy))
 
     sh_degree = 4
     sh_coeffs = torch.randn(((sh_degree+1)**2, 3)).to(device)
@@ -117,8 +97,9 @@ def profile_render_background_sh():
     print("profile forward")
 
     output = render_background_sh(
-        cam, rotation, sh_degree, sh_coeffs,
-    )
+        W, H, MODEL,
+        Ks[None], rotation[None], sh_degree, sh_coeffs
+    )[0]
     _output = _torch_impl.render_background_sh(
         W, H, (fx, fy, cx, cy),
         _rotation, sh_degree, _sh_coeffs,
@@ -129,8 +110,9 @@ def profile_render_background_sh():
         _rotation, sh_degree, _sh_coeffs,
     ), "forward torch")
     timeit(lambda: render_background_sh(
-        cam, rotation, sh_degree, sh_coeffs,
-    ), "forward fused")
+        W, H, MODEL,
+        Ks[None], rotation[None], sh_degree, sh_coeffs
+    )[0], "forward fused")
 
     print()
 

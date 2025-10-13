@@ -1,3 +1,5 @@
+# Modified from https://github.com/nerfstudio-project/gsplat/blob/2323de5905d5e90e035f792fe65bad0fedd413e7/gsplat/cuda/_wrapper.py
+
 import math
 import warnings
 from dataclasses import dataclass
@@ -27,6 +29,44 @@ def _make_lazy_cuda_func(name: str) -> Callable:
         return getattr(_C, name)(*args, **kwargs)
 
     return call_cuda
+
+
+def spherical_harmonics(
+    degrees_to_use: int,
+    dirs: Tensor,  # [..., 3]
+    coeffs_dc: Tensor,  # [..., K, 3]
+    coeffs_sh: Tensor  # [..., K, 3]
+) -> Tensor:
+    """Computes spherical harmonics.
+
+    Args:
+        degrees_to_use: The degree to be used.
+        dirs: Directions. [..., 3]
+        coeffs: Coefficients. [..., K, 3]
+        masks: Optional boolen masks to skip some computation. [...,] Default: None.
+
+    Returns:
+        Spherical harmonics. [..., 3]
+    """
+    assert (degrees_to_use + 1) ** 2 - 1 <= coeffs_sh.shape[-2], coeffs_sh.shape
+    batch_dims = dirs.shape[:-1]
+    assert dirs.shape == batch_dims + (3,), dirs.shape
+    assert coeffs_dc.shape == batch_dims + (3,), coeffs_dc.shape
+    assert (
+        (len(coeffs_sh.shape) == len(batch_dims) + 2)
+        and coeffs_sh.shape[:-2] == batch_dims
+        and coeffs_sh.shape[-1] == 3
+    ), coeffs_sh.shape
+    sh_degree = {
+        0: 0,
+        3: 1,
+        8: 2,
+        15: 3,
+        24: 4
+    }[coeffs_sh.shape[-2]]
+    return _SphericalHarmonics.apply(
+        sh_degree, degrees_to_use, dirs.contiguous(), coeffs_dc.contiguous(), coeffs_sh.contiguous()
+    )
 
 
 def fully_fused_projection_hetero(
@@ -92,6 +132,125 @@ def fully_fused_projection_hetero(
         intersection_count_map,
         intersection_splat_id,
     )
+
+
+def rasterize_to_pixels(
+    means2d: Tensor,  # [..., N, 2] or [nnz, 2]
+    conics: Tensor,  # [..., N, 3] or [nnz, 3]
+    colors: Tensor,  # [..., N, channels] or [nnz, channels]
+    opacities: Tensor,  # [..., N] or [nnz]
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    isect_offsets: Tensor,  # [..., tile_height, tile_width]
+    flatten_ids: Tensor,  # [n_isects]
+    backgrounds: Optional[Tensor] = None,  # [..., channels]
+    masks: Optional[Tensor] = None,  # [..., tile_height, tile_width]
+    packed: bool = False,
+    absgrad: bool = False,
+) -> Tuple[Tensor, Tensor]:
+    image_dims = means2d.shape[:-2]
+    channels = colors.shape[-1]
+    device = means2d.device
+    if packed:
+        nnz = means2d.size(0)
+        assert means2d.shape == (nnz, 2), means2d.shape
+        assert conics.shape == (nnz, 3), conics.shape
+        assert colors.shape[0] == nnz, colors.shape
+        assert opacities.shape == (nnz,), opacities.shape
+    else:
+        N = means2d.size(-2)
+        assert means2d.shape == image_dims + (N, 2), means2d.shape
+        assert conics.shape == image_dims + (N, 3), conics.shape
+        assert colors.shape == image_dims + (N, channels), colors.shape
+        assert opacities.shape == image_dims + (N,), opacities.shape
+    if backgrounds is not None:
+        assert backgrounds.shape == image_dims + (channels,), backgrounds.shape
+        backgrounds = backgrounds.contiguous()
+    if masks is not None:
+        assert masks.shape == isect_offsets.shape, masks.shape
+        masks = masks.contiguous()
+
+    # Pad the channels to the nearest supported number if necessary
+    if channels > 513 or channels == 0:
+        # TODO: maybe worth to support zero channels?
+        raise ValueError(f"Unsupported number of color channels: {channels}")
+    if channels not in (1, 2, 3, 4, 5):
+        padded_channels = (1 << (channels - 1).bit_length()) - channels
+        colors = torch.cat(
+            [
+                colors,
+                torch.zeros(*colors.shape[:-1], padded_channels, device=device),
+            ],
+            dim=-1,
+        )
+        if backgrounds is not None:
+            backgrounds = torch.cat(
+                [
+                    backgrounds,
+                    torch.zeros(
+                        *backgrounds.shape[:-1], padded_channels, device=device
+                    ),
+                ],
+                dim=-1,
+            )
+    else:
+        padded_channels = 0
+
+    tile_height, tile_width = isect_offsets.shape[-2:]
+    assert (
+        tile_height * tile_size >= image_height
+    ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
+    assert (
+        tile_width * tile_size >= image_width
+    ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
+
+    render_colors, render_alphas = _RasterizeToPixels.apply(
+        means2d.contiguous(),
+        conics.contiguous(),
+        colors.contiguous(),
+        opacities.contiguous(),
+        backgrounds,
+        masks,
+        image_width,
+        image_height,
+        tile_size,
+        isect_offsets.contiguous(),
+        flatten_ids.contiguous(),
+        absgrad,
+    )
+
+    if padded_channels > 0:
+        render_colors = render_colors[..., :-padded_channels]
+    return render_colors, render_alphas
+
+
+
+class _SphericalHarmonics(torch.autograd.Function):
+    """Spherical Harmonics"""
+
+    @staticmethod
+    def forward(
+        ctx, sh_degree: int, degrees_to_use: int, dirs: Tensor, coeffs_dc: Tensor, coeffs_sh: Tensor
+    ) -> Tensor:
+        colors = _make_lazy_cuda_func("compute_sh_forward")(
+            sh_degree, degrees_to_use,
+            dirs, coeffs_dc, coeffs_sh
+        )
+        ctx.save_for_backward(dirs, coeffs_sh, colors)
+        ctx.sh_degree = (sh_degree, degrees_to_use)
+        return colors
+
+    @staticmethod
+    def backward(ctx, v_colors: Tensor):
+        dirs, coeffs_sh, colors = ctx.saved_tensors
+        (sh_degree, degrees_to_use) = ctx.sh_degree
+        compute_v_dirs = ctx.needs_input_grad[1]  # TODO
+        v_coeffs_dc, v_coeffs_sh, v_dirs = _make_lazy_cuda_func("compute_sh_backward")(
+            sh_degree, degrees_to_use,
+            dirs, coeffs_sh, colors, v_colors.contiguous()
+        )
+        return None, None, v_dirs, v_coeffs_dc, v_coeffs_sh
 
 
 
@@ -286,6 +445,136 @@ class _FullyFusedProjectionHetero(torch.autograd.Function):
             None,
             v_viewmats,
             *([None]*(len(ctx.needs_input_grad)-5))
+        )
+
+
+class _RasterizeToPixels(torch.autograd.Function):
+    """Rasterize gaussians"""
+
+    @staticmethod
+    def forward(
+        ctx,
+        means2d: Tensor,  # [..., N, 2] or [nnz, 2]
+        conics: Tensor,  # [..., N, 3] or [nnz, 3]
+        colors: Tensor,  # [..., N, channels] or [nnz, channels]
+        opacities: Tensor,  # [..., N] or [nnz]
+        backgrounds: Tensor,  # [..., channels], Optional
+        masks: Tensor,  # [..., tile_height, tile_width], Optional
+        width: int,
+        height: int,
+        tile_size: int,
+        isect_offsets: Tensor,  # [..., tile_height, tile_width]
+        flatten_ids: Tensor,  # [n_isects]
+        absgrad: bool,
+    ) -> Tuple[Tensor, Tensor]:
+        render_colors, render_alphas, last_ids = gsplat.cuda._wrapper._make_lazy_cuda_func(
+            "rasterize_to_pixels_3dgs_fwd"
+        )(
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            width,
+            height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+        )
+
+        ctx.save_for_backward(
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+        )
+        ctx.width = width
+        ctx.height = height
+        ctx.tile_size = tile_size
+        ctx.absgrad = absgrad
+
+        # double to float
+        render_alphas = render_alphas.float()
+        return render_colors, render_alphas
+
+    @staticmethod
+    def backward(
+        ctx,
+        v_render_colors: Tensor,  # [..., H, W, 3]
+        v_render_alphas: Tensor,  # [..., H, W, 1]
+    ):
+        (
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+        ) = ctx.saved_tensors
+        width = ctx.width
+        height = ctx.height
+        tile_size = ctx.tile_size
+        absgrad = ctx.absgrad
+
+        (
+            v_means2d_abs,
+            v_means2d,
+            v_conics,
+            v_colors,
+            v_opacities,
+        ) = _make_lazy_cuda_func("rasterization_3dgs_backward")(
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            width,
+            height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+            v_render_colors.contiguous(),
+            v_render_alphas.contiguous(),
+            absgrad,
+        )
+
+        if absgrad:
+            means2d.absgrad = v_means2d_abs
+
+        if ctx.needs_input_grad[4]:
+            v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
+                dim=(-3, -2)
+            )
+        else:
+            v_backgrounds = None
+
+        return (
+            v_means2d,
+            v_conics,
+            v_colors,
+            v_opacities,
+            v_backgrounds,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
 
 

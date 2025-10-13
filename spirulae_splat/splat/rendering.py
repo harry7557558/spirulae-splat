@@ -13,13 +13,15 @@ from gsplat.cuda._wrapper import (
     fully_fused_projection_with_ut,
     isect_offset_encode,
     isect_tiles,
-    rasterize_to_pixels,
+    # rasterize_to_pixels,
     rasterize_to_pixels_eval3d,
-    spherical_harmonics,
+    # spherical_harmonics,
 )
 from spirulae_splat.splat.cuda._wrapper import (
     intersect_splat_tile,
     fully_fused_projection_hetero,
+    rasterize_to_pixels,
+    spherical_harmonics,
 )
 from gsplat.distributed import (
     all_gather_int32,
@@ -38,7 +40,8 @@ def rasterization(
     quats: Tensor,  # [..., N, 4]
     scales: Tensor,  # [..., N, 3]
     opacities: Tensor,  # [..., N]
-    colors: Tensor,  # [..., (C,) N, D] or [..., (C,) N, K, 3]
+    colors_dc: Tensor,  # [..., N, 3]
+    colors_sh: Optional[Tensor],  # [..., N, K, 3]
     viewmats: Tensor,  # [..., C, 4, 4]
     Ks: Tensor,  # [..., C, 3, 3]
     width: int,
@@ -290,35 +293,34 @@ def rasterization(
         )
         return torch.stack([torch.cat(l, dim=0) for l in zip(*view_list)], dim=0)
 
-    if sh_degree is None:
-        # treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]
+    # treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]
+    assert (
+        colors_dc.dim() == num_batch_dims + 2
+        and colors_dc.shape[:-1] == batch_dims + (N,)
+    ) or (
+        colors_dc.dim() == num_batch_dims + 3
+        and colors_dc.shape[:-1] == batch_dims + (C, N)
+    ), colors_dc.shape
+    if distributed:
         assert (
-            colors.dim() == num_batch_dims + 2
-            and colors.shape[:-1] == batch_dims + (N,)
-        ) or (
-            colors.dim() == num_batch_dims + 3
-            and colors.shape[:-1] == batch_dims + (C, N)
-        ), colors.shape
-        if distributed:
-            assert (
-                colors.dim() == num_batch_dims + 2
-            ), "Distributed mode only supports per-Gaussian colors."
-    else:
+            colors_dc.dim() == num_batch_dims + 2
+        ), "Distributed mode only supports per-Gaussian colors."
+    if sh_degree is not None:
         # treat colors as SH coefficients, should be in shape [..., N, K, 3] or [..., C, N, K, 3]
         # Allowing for activating partial SH bands
         assert (
-            colors.dim() == num_batch_dims + 3
-            and colors.shape[:-2] == batch_dims + (N,)
-            and colors.shape[-1] == 3
+            colors_sh.dim() == num_batch_dims + 3
+            and colors_sh.shape[:-2] == batch_dims + (N,)
+            and colors_sh.shape[-1] == 3
         ) or (
-            colors.dim() == num_batch_dims + 4
-            and colors.shape[:-2] == batch_dims + (C, N)
-            and colors.shape[-1] == 3
-        ), colors.shape
-        assert (sh_degree + 1) ** 2 <= colors.shape[-2], colors.shape
+            colors_sh.dim() == num_batch_dims + 4
+            and colors_sh.shape[:-2] == batch_dims + (C, N)
+            and colors_sh.shape[-1] == 3
+        ), colors_sh.shape
+        assert (sh_degree + 1) ** 2 - 1 <= colors_sh.shape[-2], colors_sh.shape
         if distributed:
             assert (
-                colors.dim() == num_batch_dims + 3
+                colors_sh.dim() == num_batch_dims + 3
             ), "Distributed mode only supports per-Gaussian colors."
 
     if absgrad:
@@ -537,24 +539,25 @@ def rasterization(
     #     })
 
     # Turn colors into [..., C, N, D] or [..., nnz, D] to pass into rasterize_to_pixels()
-    if sh_degree is None:
-        # Colors are post-activation values, with shape [..., N, D] or [..., C, N, D]
-        if packed:
-            if colors.dim() == num_batch_dims + 2:
-                # Turn [..., N, D] into [nnz, D]
-                colors = colors.view(B, N, -1)[batch_ids, gaussian_ids]
-            else:
-                # Turn [..., C, N, D] into [nnz, D]
-                colors = colors.view(B, C, N, -1)[batch_ids, camera_ids, gaussian_ids]
+    # Colors are post-activation values, with shape [..., N, D] or [..., C, N, D]
+    if packed:
+        if colors_dc.dim() == num_batch_dims + 2:
+            # Turn [..., N, D] into [nnz, D]
+            colors_dc = colors_dc.view(B, N, -1)[batch_ids, gaussian_ids]
         else:
-            if colors.dim() == num_batch_dims + 2:
-                # Turn [..., N, D] into [..., C, N, D]
-                colors = torch.broadcast_to(
-                    colors[..., None, :, :], batch_dims + (C, N, -1)
-                )
-            else:
-                # colors is already [..., C, N, D]
-                pass
+            # Turn [..., C, N, D] into [nnz, D]
+            colors_dc = colors_dc.view(B, C, N, -1)[batch_ids, camera_ids, gaussian_ids]
+    else:
+        if colors_dc.dim() == num_batch_dims + 2:
+            # Turn [..., N, D] into [..., C, N, D]
+            colors_dc = torch.broadcast_to(
+                colors_dc[..., None, :, :], batch_dims + (C, N, -1)
+            )
+        else:
+            # colors_dc is already [..., C, N, D]
+            pass
+    if sh_degree is None:
+        colors = colors_dc
     else:
         # Colors are SH coefficients, with shape [..., N, K, 3] or [..., C, N, K, 3]
         campos = torch.inverse(viewmats)[..., :3, 3]  # [..., C, 3]
@@ -566,32 +569,30 @@ def rasterization(
                 means.view(B, N, 3)[batch_ids, gaussian_ids]
                 - campos.view(B, C, 3)[batch_ids, camera_ids]
             )  # [nnz, 3]
-            masks = (radii > 0).all(dim=-1)  # [nnz]
-            if colors.dim() == num_batch_dims + 3:
+            masks = (radii > 0).all(dim=-1)  # [nnz]  # TODO
+            if colors_sh.dim() == num_batch_dims + 3:
                 # Turn [..., N, K, 3] into [nnz, 3]
-                shs = colors.view(B, N, -1, 3)[batch_ids, gaussian_ids]  # [nnz, K, 3]
+                colors_sh = colors_sh.view(B, N, -1, 3)[batch_ids, gaussian_ids]  # [nnz, K, 3]
             else:
                 # Turn [..., C, N, K, 3] into [nnz, 3]
-                shs = colors.view(B, C, N, -1, 3)[
+                colors_sh = colors_sh.view(B, C, N, -1, 3)[
                     batch_ids, camera_ids, gaussian_ids
                 ]  # [nnz, K, 3]
-            colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [nnz, 3]
+            colors = spherical_harmonics(sh_degree, dirs, colors_dc, colors_sh)  # [nnz, 3]
         else:
             dirs = means[..., None, :, :] - campos[..., None, :]  # [..., C, N, 3]
-            masks = (radii > 0).all(dim=-1)  # [..., C, N]
-            if colors.dim() == num_batch_dims + 3:
+            if colors_sh.dim() == num_batch_dims + 3:
                 # Turn [..., N, K, 3] into [..., C, N, K, 3]
-                shs = torch.broadcast_to(
-                    colors[..., None, :, :, :], batch_dims + (C, N, -1, 3)
+                colors_sh = torch.broadcast_to(
+                    colors_sh[..., None, :, :, :], batch_dims + (C, N, -1, 3)
                 )
             else:
                 # colors is already [..., C, N, K, 3]
-                shs = colors
+                colors_sh = colors_sh
             colors = spherical_harmonics(
-                sh_degree, dirs, shs, masks=masks
+                sh_degree, dirs, colors_dc, colors_sh
             )  # [..., C, N, 3]
-        # make it apple-to-apple with Inria's CUDA Backend.
-        colors = torch.clamp_min(colors + 0.5, 0.0)
+        # colors = torch.clamp_min(colors+0.5, 0.0)
 
     # If in distributed mode, we need to scatter the GSs to the destination ranks, based
     # on which cameras they are visible to, which we already figured out in the projection

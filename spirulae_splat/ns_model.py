@@ -766,7 +766,8 @@ class SpirulaeModel(Model):
             quats=quats,
             scales=torch.exp(self.scales),
             opacities=opacities.squeeze(-1),
-            colors=torch.concatenate([self.features_dc.unsqueeze(1), self.features_sh], dim=1),  # TODO: slow
+            colors_dc=self.features_dc,
+            colors_sh=self.features_sh,
             viewmats=viewmats,  # [C, 4, 4]
             Ks=Ks,  # [C, 3, 3]
             width=W,

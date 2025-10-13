@@ -8,8 +8,6 @@
 
 
 torch::Tensor compute_sh_forward_tensor(
-    const std::string &method,
-    const unsigned num_points,
     const unsigned degree,
     const unsigned degrees_to_use,
     torch::Tensor &viewdirs,  // [..., 3]
@@ -18,12 +16,12 @@ torch::Tensor compute_sh_forward_tensor(
 );
 
 
-std::tuple<torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 compute_sh_backward_tensor(
-    const std::string &method,
-    const unsigned num_points,
     const unsigned degree,
     const unsigned degrees_to_use,
     torch::Tensor &viewdirs,  // [..., 3]
+    torch::Tensor &coeffs,  // [..., 3]
+    torch::Tensor &colors,  // [..., 3]
     torch::Tensor &v_colors  // [..., 3]
 );
