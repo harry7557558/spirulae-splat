@@ -5,6 +5,21 @@
 #include <gsplat/Common.h>
 #include <gsplat/Utils.cuh>
 
+
+constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
+constexpr uint SPLAT_BATCH_SIZE = 128;
+
+
+template <uint32_t CDIM>
+struct Splat {
+    int gid = -1;
+    glm::vec2 xy;
+    glm::vec3 conic;
+    float opac;
+    float color[CDIM];
+};
+
+
 template <uint32_t CDIM>
 __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     const uint32_t I,
@@ -20,7 +35,6 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     const bool *__restrict__ masks,           // [..., tile_height, tile_width]
     const uint32_t image_width,
     const uint32_t image_height,
-    const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [..., tile_height, tile_width]
@@ -43,10 +57,8 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
 ) {
     auto block = cg::this_thread_block();
     uint32_t image_id = block.group_index().x;
-    uint32_t tile_id =
-        block.group_index().y * tile_width + block.group_index().z;
-    uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
-    uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
+    uint32_t tile_id = block.group_index().y * tile_width + block.group_index().z;
+    uint32_t thread_id = block.thread_rank();
 
     tile_offsets += image_id * tile_height * tile_width;
     render_alphas += image_id * image_height * image_width;
@@ -66,124 +78,135 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
         return;
     }
 
-    const float px = (float)j + 0.5f;
-    const float py = (float)i + 0.5f;
-    // clamp this value to the last pixel
-    const int32_t pix_id =
-        min(i * image_width + j, image_width * image_height - 1);
+    // load pixels
+    __shared__ int pix_bin_final[BLOCK_SIZE];
+    __shared__ float pix_alphas[BLOCK_SIZE];
+    __shared__ float pix_alphas_final[BLOCK_SIZE];
+    __shared__ float pix_buffer[BLOCK_SIZE*CDIM];
+    __shared__ float v_pix_colors_final[BLOCK_SIZE*CDIM];
+    __shared__ float v_pix_alphas_final[BLOCK_SIZE];
+    #pragma unroll
+    for (uint pix_id0 = 0; pix_id0 < BLOCK_SIZE; pix_id0 += SPLAT_BATCH_SIZE) {
+        static_assert(BLOCK_SIZE % SPLAT_BATCH_SIZE == 0);
+        uint pix_id_local = pix_id0 + thread_id;
+        int pix_x = block.group_index().z * TILE_SIZE + pix_id_local % TILE_SIZE;
+        int pix_y = block.group_index().y * TILE_SIZE + pix_id_local / TILE_SIZE;
+        uint pix_id_global = pix_y * image_width + pix_x;
+        bool inside = (pix_x < image_width && pix_y < image_height);
+        
+        pix_bin_final[pix_id_local] = (inside ? last_ids[pix_id_global] : 0);
+        pix_alphas_final[pix_id_local] = pix_alphas[pix_id_local] =
+            (inside ? render_alphas[pix_id_global] : 0.0f);
+        v_pix_alphas_final[pix_id_local] =
+            (inside ? v_render_alphas[pix_id_global] : 0.0f);
+        #pragma unroll
+        for (uint k = 0; k < CDIM; k++) {
+            v_pix_colors_final[pix_id_local * CDIM + k] =
+                (inside ? v_render_colors[pix_id_global * CDIM + k] : 0.0f);
+            pix_buffer[pix_id_local * CDIM + k] = 0.0f;
+        }
+    }
+    static_assert(CDIM <= SPLAT_BATCH_SIZE);
+    __shared__ float pix_background[CDIM];
+    if (thread_id < CDIM && backgrounds != nullptr)
+        pix_background[thread_id] = backgrounds[thread_id];
+    block.sync();
 
-    // keep not rasterizing threads around for reading data
-    bool inside = (i < image_height && j < image_width);
+    // threads fist load splats, then swept through pixels
+    // do this in batches
 
-    // have all threads in tile process the same gaussians in batches
-    // first collect gaussians between range.x and range.y in batches
-    // which gaussians to look through in this tile
     int32_t range_start = tile_offsets[tile_id];
     int32_t range_end =
         (image_id == I - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
-    const uint32_t block_size = block.size();
-    const uint32_t num_batches =
-        (range_end - range_start + block_size - 1) / block_size;
+    const uint32_t num_splat_batches =
+        _CEIL_DIV(range_end - range_start, SPLAT_BATCH_SIZE);
 
-    extern __shared__ int s[];
-    int32_t *id_batch = (int32_t *)s; // [block_size]
-    glm::vec3 *xy_opacity_batch =
-        reinterpret_cast<glm::vec3 *>(&id_batch[block_size]); // [block_size]
-    glm::vec3 *conic_batch =
-        reinterpret_cast<glm::vec3 *>(&xy_opacity_batch[block_size]); // [block_size]
-    float *rgbs_batch =
-        (float *)&conic_batch[block_size]; // [block_size * CDIM]
-
-    // this is the T AFTER the last gaussian in this pixel
-    float T_final = 1.0f - render_alphas[pix_id];
-    float T = T_final;
-    // the contribution from gaussians behind the current one
-    float buffer[CDIM] = {0.f};
-    // index of last gaussian to contribute to this pixel
-    const int32_t bin_final = inside ? last_ids[pix_id] : 0;
-
-    // df/d_out for this pixel
-    float v_render_c[CDIM];
-    #pragma unroll
-    for (uint32_t k = 0; k < CDIM; ++k) {
-        v_render_c[k] = v_render_colors[pix_id * CDIM + k];
-    }
-    const float v_render_a = v_render_alphas[pix_id];
-
-    // collect and process batches of gaussians
-    // each thread loads one gaussian at a time before rasterizing
-    const uint32_t tr = block.thread_rank();
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
-    const int32_t warp_bin_final =
-        cg::reduce(warp, bin_final, cg::greater<int>());
-    for (uint32_t b = 0; b < num_batches; ++b) {
-        // resync all threads before writing next batch of shared mem
-        block.sync();
+    // if (warp.thread_rank() == 0)
+    //     printf("range_start=%d range_end=%d num_splat_batches=%u\n", range_start, range_end, num_splat_batches);
+    for (uint32_t splat_b = 0; splat_b < num_splat_batches; ++splat_b) {
+        const int32_t splat_batch_end = range_end - 1 - SPLAT_BATCH_SIZE * splat_b;
+        const int32_t splat_batch_size = min(SPLAT_BATCH_SIZE, splat_batch_end + 1 - range_start);
+        const int32_t splat_idx = splat_batch_end - thread_id;
 
-        // each thread fetch 1 gaussian from back to front
-        // 0 index will be furthest back in batch
-        // index of gaussian to load
-        // batch end is the index of the last gaussian in the batch
-        // These values can be negative so must be int32 instead of uint32
-        const int32_t batch_end = range_end - 1 - block_size * b;
-        const int32_t batch_size = min(block_size, batch_end + 1 - range_start);
-        const int32_t idx = batch_end - tr;
-        if (idx >= range_start) {
-            int32_t g = flatten_ids[idx]; // flatten index in [I * N] or [nnz]
-            id_batch[tr] = g;
-            const glm::vec2 xy = means2d[g];
-            const float opac = opacities[g];
-            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            conic_batch[tr] = conics[g];
+        // load splats
+        Splat<CDIM> splat;
+        if (splat_idx >= range_start) {
+            splat.gid = flatten_ids[splat_idx]; // flatten index in [I * N] or [nnz]
+            splat.xy = means2d[splat.gid];
+            splat.conic = conics[splat.gid];
+            splat.opac = opacities[splat.gid];
             #pragma unroll
-            for (uint32_t k = 0; k < CDIM; ++k) {
-                rgbs_batch[tr * CDIM + k] = colors[g * CDIM + k];
-            }
+            for (uint32_t k = 0; k < CDIM; ++k)
+                splat.color[k] = colors[splat.gid * CDIM + k];
         }
-        // wait for other threads to collect the gaussians in batch
-        block.sync();
+
+        // accumulate gradient
+        float v_rgb_local[CDIM] = {0.f};
+        #pragma unroll
+        for (uint32_t k = 0; k < CDIM; ++k)
+            v_rgb_local[k] = 0.f;
+        glm::vec3 v_conic_local = {0.f, 0.f, 0.f};
+        glm::vec2 v_xy_local = {0.f, 0.f};
+        glm::vec2 v_xy_abs_local = {0.f, 0.f};
+        float v_opacity_local = 0.f;
+
+        // thread 0 takes last splat, 1 takes second last, etc.
+        // at t=0, thread 0 (splat -1) undo pixel 0
+        // at t=1, thread 0 (splat -1) undo pixel 1, thread 1 (splat -2) undo pixel 0
+        // ......
+
         // process gaussians in the current batch for this pixel
         // 0 index is the furthest back gaussian in the batch
-        for (uint32_t t = max(0, batch_end - warp_bin_final); t < batch_size;
-             ++t) {
-            bool valid = inside;
-            if (batch_end - t > bin_final) {
-                valid = 0;
-            }
-            float alpha;
-            float opac;
-            glm::vec2 delta;
-            glm::vec3 conic;
-            float vis;
+        for (int t = 0; t < splat_batch_size + BLOCK_SIZE - 1; ++t, block.sync()) {
+            int pix_id = t - thread_id;
 
-            if (valid) {
-                conic = conic_batch[t];
-                glm::vec3 xy_opac = xy_opacity_batch[t];
-                opac = xy_opac.z;
-                delta = {xy_opac.x - px, xy_opac.y - py};
-                float sigma = 0.5f * (conic.x * delta.x * delta.x +
-                                      conic.z * delta.y * delta.y) +
-                              conic.y * delta.x * delta.y;
-                vis = __expf(-sigma);
-                alpha = min(0.999f, opac * vis);
-                if (sigma < 0.f || alpha < ALPHA_THRESHOLD) {
-                    valid = false;
-                }
-            }
+            int pix_local_x = pix_id % TILE_SIZE;
+            int pix_local_y = pix_id / TILE_SIZE;
+            int pix_global_x = block.group_index().z * TILE_SIZE + pix_local_x;
+            int pix_global_y = block.group_index().y * TILE_SIZE + pix_local_y;
+            const float px = (float)pix_global_x + 0.5f;
+            const float py = (float)pix_global_y + 0.5f;
+            if ((pix_id < 0 | pix_id >= BLOCK_SIZE |
+                pix_global_x >= image_width | pix_global_y >= image_height |
+                splat_idx < range_start) ||
+                splat_idx - range_start > pix_bin_final[pix_id]
+            ) continue;
 
-            // if all threads are inactive in this warp, skip this loop
-            if (!warp.any(valid)) {
+            // printf("t=%d, thread %u, splat %d (%u), pix_id %d, pix %d %d\n", t, thread_id, splat_idx-range_start, splat.gid, pix_id, pix_global_x, pix_global_y);
+
+            // load pixel states
+            float T_final = 1.0f - pix_alphas_final[pix_id];
+            float T = 1.0f - pix_alphas[pix_id];
+            float buffer[CDIM];
+            #pragma unroll
+            for (uint32_t k = 0; k < CDIM; ++k)
+                buffer[k] = pix_buffer[pix_id * CDIM + k];
+
+            // df/d_out for this pixel
+            float v_render_c[CDIM];
+            #pragma unroll
+            for (uint32_t k = 0; k < CDIM; ++k)
+                v_render_c[k] = v_pix_colors_final[pix_id * CDIM + k];
+            const float v_render_a = v_pix_alphas_final[pix_id];
+
+            // evaluate alpha
+            float opac = splat.opac;
+            glm::vec2 delta = {splat.xy.x - px, splat.xy.y - py};
+            glm::vec3 conic = splat.conic;
+            float sigma = 0.5f * (conic.x * delta.x * delta.x +
+                                    conic.z * delta.y * delta.y) +
+                            conic.y * delta.x * delta.y;
+            float vis = __expf(-sigma);
+            float alpha = min(0.999f, opac * vis);
+            if (sigma < 0.f || alpha < ALPHA_THRESHOLD) {
                 continue;
             }
-            float v_rgb_local[CDIM] = {0.f};
-            glm::vec3 v_conic_local = {0.f, 0.f, 0.f};
-            glm::vec2 v_xy_local = {0.f, 0.f};
-            glm::vec2 v_xy_abs_local = {0.f, 0.f};
-            float v_opacity_local = 0.f;
-            // initialize everything to 0, only set if the lane is valid
-            if (valid) {
+
+            // per original gsplat
+            {
                 // compute the current T for this gaussian
                 float ra = 1.0f / (1.0f - alpha);
                 T *= ra;
@@ -191,13 +214,13 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
                 const float fac = alpha * T;
                 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
-                    v_rgb_local[k] = fac * v_render_c[k];
+                    v_rgb_local[k] += fac * v_render_c[k];
                 }
                 // contribution from this pixel
                 float v_alpha = 0.f;
                 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
-                    v_alpha += (rgbs_batch[t * CDIM + k] * T - buffer[k] * ra) *
+                    v_alpha += (splat.color[k] * T - buffer[k] * ra) *
                                v_render_c[k];
                 }
 
@@ -207,64 +230,72 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
                     float accum = 0.f;
                     #pragma unroll
                     for (uint32_t k = 0; k < CDIM; ++k) {
-                        accum += backgrounds[k] * v_render_c[k];
+                        accum += pix_background[k] * v_render_c[k];
                     }
                     v_alpha += -T_final * ra * accum;
                 }
 
                 if (opac * vis <= 0.999f) {
                     const float v_sigma = -opac * vis * v_alpha;
-                    v_conic_local = {
+                    v_conic_local += glm::vec3(
                         0.5f * v_sigma * delta.x * delta.x,
                         v_sigma * delta.x * delta.y,
                         0.5f * v_sigma * delta.y * delta.y
-                    };
-                    v_xy_local = {
+                    );
+                    v_xy_local += glm::vec2(
                         v_sigma * (conic.x * delta.x + conic.y * delta.y),
                         v_sigma * (conic.y * delta.x + conic.z * delta.y)
-                    };
+                    );
                     if (v_means2d_abs != nullptr) {
-                        v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
+                        v_xy_abs_local += glm::vec2(abs(v_xy_local.x), abs(v_xy_local.y));
                     }
-                    v_opacity_local = vis * v_alpha;
+                    v_opacity_local += vis * v_alpha;
                 }
 
                 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
-                    buffer[k] += rgbs_batch[t * CDIM + k] * fac;
+                    buffer[k] += splat.color[k] * fac;
                 }
             }
-            warpSum<CDIM>(v_rgb_local, warp);
-            warpSum(v_conic_local, warp);
-            warpSum(v_xy_local, warp);
-            if (v_means2d_abs != nullptr) {
-                warpSum(v_xy_abs_local, warp);
-            }
-            warpSum(v_opacity_local, warp);
-            if (warp.thread_rank() == 0) {
-                int32_t g = id_batch[t]; // flatten index in [I * N] or [nnz]
+
+            // update pixel states
+            pix_alphas[pix_id] = 1.0f - T;
+            #pragma unroll
+            for (uint32_t k = 0; k < CDIM; ++k)
+                pix_buffer[pix_id * CDIM + k] = buffer[k];
+        }
+
+        // accumulate gradient
+        {
+            if (splat_idx >= range_start) {
+                #define gpuAtomicAdd(addr, val) \
+                    if ((val) != 0.0f) atomicAdd(addr, val)
+
+                int32_t g = splat.gid; // flatten index in [I * N] or [nnz]
                 float *v_rgb_ptr = (float *)(v_colors) + CDIM * g;
                 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
-                    atomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
+                    gpuAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
                 }
 
                 float *v_conic_ptr = (float *)(v_conics) + 3 * g;
-                atomicAdd(v_conic_ptr, v_conic_local.x);
-                atomicAdd(v_conic_ptr + 1, v_conic_local.y);
-                atomicAdd(v_conic_ptr + 2, v_conic_local.z);
+                gpuAtomicAdd(v_conic_ptr, v_conic_local.x);
+                gpuAtomicAdd(v_conic_ptr + 1, v_conic_local.y);
+                gpuAtomicAdd(v_conic_ptr + 2, v_conic_local.z);
 
                 float *v_xy_ptr = (float *)(v_means2d) + 2 * g;
-                atomicAdd(v_xy_ptr, v_xy_local.x);
-                atomicAdd(v_xy_ptr + 1, v_xy_local.y);
+                gpuAtomicAdd(v_xy_ptr, v_xy_local.x);
+                gpuAtomicAdd(v_xy_ptr + 1, v_xy_local.y);
 
                 if (v_means2d_abs != nullptr) {
                     float *v_xy_abs_ptr = (float *)(v_means2d_abs) + 2 * g;
-                    atomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
-                    atomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
+                    gpuAtomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
+                    gpuAtomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
                 }
 
-                atomicAdd(v_opacities + g, v_opacity_local);
+                gpuAtomicAdd(v_opacities + g, v_opacity_local);
+
+                #undef gpuAtomicAdd
             }
         }
     }
@@ -283,7 +314,6 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
-    const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -310,12 +340,12 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
 
     // Each block covers a tile on the image. In total there are
     // I * tile_height * tile_width blocks.
-    dim3 threads = {tile_size, tile_size, 1};
+    dim3 threads = {SPLAT_BATCH_SIZE, 1, 1};
     dim3 grid = {I, tile_height, tile_width};
 
-    int64_t shmem_size =
-        tile_size * tile_size *
-        (sizeof(int32_t) + sizeof(glm::vec3) + sizeof(glm::vec3) + sizeof(float) * CDIM);
+    // int64_t shmem_size =
+    //     TILE_SIZE * TILE_SIZE *
+    //     (sizeof(int32_t) + sizeof(glm::vec3) + sizeof(glm::vec3) + sizeof(float) * CDIM);
 
     if (n_isects == 0) {
         // skip the kernel launch if there are no elements
@@ -325,20 +355,21 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     // TODO: an optimization can be done by passing the actual number of
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
-    if (cudaFuncSetAttribute(
-            rasterize_to_pixels_3dgs_bwd_kernel<CDIM>,
-            cudaFuncAttributeMaxDynamicSharedMemorySize,
-            shmem_size
-        ) != cudaSuccess) {
-        AT_ERROR(
-            "Failed to set maximum shared memory size (requested ",
-            shmem_size,
-            " bytes), try lowering tile_size."
-        );
-    }
+    // if (cudaFuncSetAttribute(
+    //         rasterize_to_pixels_3dgs_bwd_kernel<CDIM>,
+    //         cudaFuncAttributeMaxDynamicSharedMemorySize,
+    //         shmem_size
+    //     ) != cudaSuccess) {
+    //     AT_ERROR(
+    //         "Failed to set maximum shared memory size (requested ",
+    //         shmem_size,
+    //         " bytes), try lowering tile_size."
+    //     );
+    // }
 
     rasterize_to_pixels_3dgs_bwd_kernel<CDIM>
-        <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+        // <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+        <<<grid, threads>>>(
             I,
             N,
             n_isects,
@@ -352,7 +383,6 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
             masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
             image_width,
             image_height,
-            tile_size,
             tile_width,
             tile_height,
             tile_offsets.data_ptr<int32_t>(),
@@ -371,6 +401,7 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
             v_colors.data_ptr<float>(),
             v_opacities.data_ptr<float>()
         );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 
@@ -417,6 +448,9 @@ rasterize_to_pixels_3dgs_bwd(
         CHECK_INPUT(masks.value());
     }
 
+    if (tile_size != TILE_SIZE)
+        AT_ERROR("Unsupported tile size");
+
     uint32_t channels = colors.size(-1);
 
     at::Tensor v_means2d = at::zeros_like(means2d);
@@ -439,7 +473,6 @@ rasterize_to_pixels_3dgs_bwd(
             masks,                                                             \
             image_width,                                                       \
             image_height,                                                      \
-            tile_size,                                                         \
             tile_offsets,                                                      \
             flatten_ids,                                                       \
             render_alphas,                                                     \
@@ -501,7 +534,6 @@ rasterize_to_pixels_3dgs_bwd(
         const at::optional<at::Tensor> masks,                                  \
         uint32_t image_width,                                                  \
         uint32_t image_height,                                                 \
-        uint32_t tile_size,                                                    \
         const at::Tensor tile_offsets,                                         \
         const at::Tensor flatten_ids,                                          \
         const at::Tensor render_alphas,                                        \

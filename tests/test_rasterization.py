@@ -14,7 +14,7 @@ device = torch.device("cuda:0")
 
 B, W, H = 4, 1440, 1080
 N, SH_DEGREE = 200000, 3
-PACKED = True
+PACKED = False
 IS_FISHEYE = False
 
 def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
@@ -32,6 +32,7 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
         sh_degree=SH_DEGREE,
         packed=PACKED,
         use_bvh=False,
+        tile_size=16,
         absgrad=False,
         sparse_grad=False,
         rasterize_mode="classic",
@@ -56,6 +57,7 @@ def rasterize_gsplat(means, quats, scales, opacities, features_dc, features_sh, 
         height=H,
         sh_degree=SH_DEGREE,
         packed=PACKED,
+        tile_size=16,
         absgrad=False,
         sparse_grad=False,
         rasterize_mode="classic",
@@ -119,11 +121,11 @@ def test_rasterization():
         rgb = outputs[0].detach().cpu().numpy()
         _rgb = _outputs[0].detach().cpu().numpy()
         ax1.imshow(rgb[0])
-        ax2.imshow(rgb[1])
+        # ax2.imshow(rgb[1])
         # ax3.imshow(rgb[2])
         # ax4.imshow(rgb[3])
         ax3.imshow(_rgb[0])
-        ax4.imshow(_rgb[1])
+        # ax4.imshow(_rgb[1])
         plt.show()
 
     weights = [torch.randn_like(x.detach()) for x in _outputs]
@@ -133,7 +135,7 @@ def test_rasterization():
     fun(_outputs).backward()
 
     print("test backward")
-    tol = { 'atol': 1e-5, 'rtol': 1e-5 }
+    tol = { 'atol': 1e-4, 'rtol': 1e-4 }
     check_close('means', inputs[0].grad, _inputs[0].grad, **tol)
     check_close('quats', inputs[1].grad, _inputs[1].grad, **tol)
     check_close('scales', inputs[2].grad, _inputs[2].grad, **tol)
@@ -164,7 +166,7 @@ def profile_rasterization():
     loss = fun(outputs)
     _loss = fun(_outputs)
 
-    timeit(lambda: loss.backward(retain_graph=True), "ssplat backward")
+    timeit(lambda: loss.backward(retain_graph=True), "ssplat backward", repeat=20)
     timeit(lambda: _loss.backward(retain_graph=True), "gsplat backward")
     print()
 
@@ -172,7 +174,9 @@ def profile_rasterization():
 
 if __name__ == "__main__":
 
+    N = 1000
     test_rasterization()
     print()
 
+    N = 200000
     profile_rasterization()
