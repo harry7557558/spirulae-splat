@@ -8,6 +8,7 @@
 #include "PixelWise.cuh"
 #include "SplatTileIntersector.cuh"
 #include "ProjectionEWA3DGSHetero.cuh"
+#include "Rasterization3DGSFwd.cuh"
 #include "Rasterization3DGSBwd.cuh"
 
 #define TORCH_INDUCTOR_CPP_WRAPPER
@@ -46,6 +47,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // ProjectionEWA3DGSHetero.cuh
     m.def("projection_ewa_3dgs_hetero_forward", &projection_ewa_3dgs_hetero_forward_tensor);
     m.def("projection_ewa_3dgs_hetero_backward", &projection_ewa_3dgs_hetero_backward_tensor);
+
+    // Rasterization3DGSFwd.cuh
+    m.def("rasterization_3dgs_forward", &rasterize_to_pixels_3dgs_fwd);
 
     // Rasterization3DGSBwd.cuh
     m.def("rasterization_3dgs_backward", &rasterize_to_pixels_3dgs_bwd);

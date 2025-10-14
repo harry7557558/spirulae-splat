@@ -229,16 +229,14 @@ class SpirulaeModelConfig(ModelConfig):
     """
     adaptive_exposure_warmup: int = 1000
     """Start adaptive exposure at this number of steps"""
-    use_bilateral_grid: bool = False
+    use_bilateral_grid: bool = True
     """If True, use bilateral grid to handle the ISP changes in the image space. This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/).
        Makes training much slower - TODO: fused bilagrid in CUDA"""
     bilagrid_shape: Tuple[int, int, int] = (8, 8, 4)
     """Shape of the bilateral grid (X, Y, W)"""
 
     use_3dgs: bool = True
-    """Use 3DGS instead of 2DGS, with limited support for existing features
-        Tested with MCMC strategy, 3.0 kernel radius, 1.0 loss scale
-    """
+    """Must be True, kept for backward compatibility"""
 
     # regularization
     scale_regularization_weight: float = 0.0
@@ -728,11 +726,11 @@ class SpirulaeModel(Model):
         if is_fisheye:
             if not self.config.use_mcmc:
                 raise ValueError("3DGS training with fisheye camera is currently only supported for MCMC.")
-            if len(camera.distortion_params) == 4:
+            if camera.distortion_params.shape[-1] == 4:
                 kwargs['radial_coeffs'] = camera.distortion_params
-            elif len(camera.distortion_params) == 6:
-                kwargs["radial_coeffs"] = camera.distortion_params[:, :4]
-                kwargs["tangential_coeffs"] = camera.distortion_params[:, 4:]
+            elif camera.distortion_params.shape[-1] == 6:
+                kwargs["radial_coeffs"] = camera.distortion_params[..., :4]
+                kwargs["tangential_coeffs"] = camera.distortion_params[..., 4:]
                 # TODO: make sure GSplat 3DGUT actually supports this??
             else:
                 raise ValueError("Only support fisheye with 4 or 6 distortion coefficients")

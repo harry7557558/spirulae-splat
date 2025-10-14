@@ -162,6 +162,7 @@ generate_header(path+"BackgroundSphericalHarmonics.cu", path+"BackgroundSpherica
 generate_header(path+"PerSplatLoss.cu", path+"PerSplatLoss.cuh")
 generate_header(path+"PixelWise.cu", path+"PixelWise.cuh")
 generate_header(path+"ProjectionEWA3DGSHetero.cu", path+"ProjectionEWA3DGSHetero.cuh")
+generate_header(path+"Rasterization3DGSFwd.cu", path+"Rasterization3DGSFwd.cuh")
 generate_header(path+"Rasterization3DGSBwd.cu", path+"Rasterization3DGSBwd.cuh")
 
 setup(

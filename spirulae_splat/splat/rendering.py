@@ -13,14 +13,14 @@ from gsplat.cuda._wrapper import (
     fully_fused_projection_with_ut,
     isect_offset_encode,
     isect_tiles,
-    rasterize_to_pixels,
+    # rasterize_to_pixels,
     rasterize_to_pixels_eval3d,
     # spherical_harmonics,
 )
 from spirulae_splat.splat.cuda._wrapper import (
     intersect_splat_tile,
     fully_fused_projection_hetero,
-    # rasterize_to_pixels,
+    rasterize_to_pixels,
     spherical_harmonics,
 )
 from gsplat.distributed import (

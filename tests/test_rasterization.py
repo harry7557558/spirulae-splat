@@ -71,7 +71,7 @@ def rasterize_gsplat(means, quats, scales, opacities, features_dc, features_sh, 
 
 
 def get_inputs():
-    torch.manual_seed(42)
+    torch.manual_seed(44)
 
     means = torch.randn((N, 3)).to(device)
     quats = torch.randn((N, 4)).to(device)

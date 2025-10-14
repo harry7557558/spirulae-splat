@@ -467,8 +467,8 @@ class _RasterizeToPixels(torch.autograd.Function):
         flatten_ids: Tensor,  # [n_isects]
         absgrad: bool,
     ) -> Tuple[Tensor, Tensor]:
-        render_colors, render_alphas, last_ids = gsplat.cuda._wrapper._make_lazy_cuda_func(
-            "rasterize_to_pixels_3dgs_fwd"
+        render_colors, render_Ts, last_ids = _make_lazy_cuda_func(
+            "rasterization_3dgs_forward"
         )(
             means2d,
             conics,
@@ -492,7 +492,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             masks,
             isect_offsets,
             flatten_ids,
-            render_alphas,
+            render_Ts,
             last_ids,
         )
         ctx.width = width
@@ -500,8 +500,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         ctx.tile_size = tile_size
         ctx.absgrad = absgrad
 
-        # double to float
-        render_alphas = render_alphas.float()
+        render_alphas = 1.0 - render_Ts
         return render_colors, render_alphas
 
     @staticmethod
@@ -519,13 +518,17 @@ class _RasterizeToPixels(torch.autograd.Function):
             masks,
             isect_offsets,
             flatten_ids,
-            render_alphas,
+            render_Ts,
             last_ids,
         ) = ctx.saved_tensors
         width = ctx.width
         height = ctx.height
         tile_size = ctx.tile_size
         absgrad = ctx.absgrad
+
+        # print(last_ids)
+        # print(render_Ts)
+        # print(tile_size, flatten_ids.shape)
 
         (
             v_means2d_abs,
@@ -545,7 +548,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             tile_size,
             isect_offsets,
             flatten_ids,
-            render_alphas,
+            render_Ts,
             last_ids,
             v_render_colors.contiguous(),
             v_render_alphas.contiguous(),
@@ -556,7 +559,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             means2d.absgrad = v_means2d_abs
 
         if ctx.needs_input_grad[4]:
-            v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
+            v_backgrounds = (v_render_colors * render_Ts.float()).sum(
                 dim=(-3, -2)
             )
         else:

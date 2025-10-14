@@ -5,6 +5,8 @@
 #include <gsplat/Common.h>
 #include <gsplat/Utils.cuh>
 
+#include <cub/cub.cuh>
+
 
 constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
 constexpr uint SPLAT_BATCH_SIZE = 128;
@@ -86,7 +88,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     // fwd outputs
     const float
-        *__restrict__ render_alphas,      // [..., image_height, image_width, 1]
+        *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
     // grad outputs
     const float *__restrict__ v_render_colors, // [..., image_height,
@@ -101,12 +103,13 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     float *__restrict__ v_opacities // [..., N] or [nnz]
 ) {
     auto block = cg::this_thread_block();
+    cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
     uint32_t image_id = block.group_index().x;
     uint32_t tile_id = block.group_index().y * tile_width + block.group_index().z;
     uint32_t thread_id = block.thread_rank();
 
     tile_offsets += image_id * tile_height * tile_width;
-    render_alphas += image_id * image_height * image_width;
+    render_Ts += image_id * image_height * image_width;
     last_ids += image_id * image_height * image_width;
     v_render_colors += image_id * image_height * image_width * CDIM;
     v_render_alphas += image_id * image_height * image_width;
@@ -124,7 +127,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     }
 
     // load pixels
-    __shared__ int pix_bin_final[BLOCK_SIZE];
+    __shared__ int32_t pix_bin_final[BLOCK_SIZE];
     __shared__ float2 pix_Ts_with_grad[BLOCK_SIZE];
     __shared__ float v_pix_colors[BLOCK_SIZE*CDIM];
     #pragma unroll
@@ -136,10 +139,10 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
         uint pix_id_global = pix_y * image_width + pix_x;
         bool inside = (pix_x < image_width && pix_y < image_height);
         
-        // TODO: store T instead of alpha, 1-<small number> breaks floating point
-        pix_bin_final[pix_id_local] = (inside ? last_ids[pix_id_global] : 0);
+        int32_t bin_final = (inside ? last_ids[pix_id_global] : 0);
+        pix_bin_final[pix_id_local] = bin_final;
         pix_Ts_with_grad[pix_id_local] = {
-            (inside ? 1.0f - render_alphas[pix_id_global] : 0.0f),
+            (inside ? render_Ts[pix_id_global] : 0.0f),
             (inside ? -v_render_alphas[pix_id_global] : 0.0f)
         };
         #pragma unroll
@@ -165,7 +168,6 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     const uint32_t num_splat_batches =
         _CEIL_DIV(range_end - range_start, SPLAT_BATCH_SIZE);
 
-    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
     // if (warp.thread_rank() == 0)
     //     printf("range_start=%d range_end=%d num_splat_batches=%u\n", range_start, range_end, num_splat_batches);
     for (uint32_t splat_b = 0; splat_b < num_splat_batches; ++splat_b) {
@@ -202,7 +204,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
 
         // process gaussians in the current batch for this pixel
         // 0 index is the furthest back gaussian in the batch
-        for (int t = 0; t < splat_batch_size + BLOCK_SIZE - 1; ++t, block.sync()) {
+        for (int t = 0; t < splat_batch_size + BLOCK_SIZE - 1; ++t) {
             int pix_id = t - thread_id;
 
             int pix_local_x = pix_id % TILE_SIZE;
@@ -211,16 +213,15 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
             int pix_global_y = block.group_index().y * TILE_SIZE + pix_local_y;
             const float px = (float)pix_global_x + 0.5f;
             const float py = (float)pix_global_y + 0.5f;
-            if ((pix_id < 0 | pix_id >= BLOCK_SIZE |
-                pix_global_x >= image_width | pix_global_y >= image_height |
-                splat_idx < range_start) ||
-                splat_idx - range_start > pix_bin_final[pix_id]
-            ) continue;
+            if ((pix_id >= 0 && pix_id < BLOCK_SIZE &&
+                pix_global_x < image_width && pix_global_y < image_height &&
+                splat_idx >= range_start) &&
+                splat_idx <= pix_bin_final[pix_id]
+            ) {
 
             // evaluate alpha and early skip
             float alpha = splat.evaluate_alpha(px, py);
-            if (alpha < ALPHA_THRESHOLD)
-                continue;
+            if (alpha >= ALPHA_THRESHOLD) {
 
             // printf("t=%d, thread %u, splat %d (%u), pix_id %d, pix %d %d\n", t, thread_id, splat_idx-range_start, splat.gid, pix_id, pix_global_x, pix_global_y);
 
@@ -271,6 +272,9 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
             // update pixel states
             pix_Ts_with_grad[pix_id] = { T0, v_T0 };
             // v_pix_colors remains the same
+
+            }}
+            block.sync();
         }
 
         // accumulate gradient
@@ -326,7 +330,7 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     // forward outputs
-    const at::Tensor render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
     // gradients of outputs
     const at::Tensor v_render_colors, // [..., image_height, image_width, 3]
@@ -341,7 +345,7 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     bool packed = means2d.dim() == 2;
 
     uint32_t N = packed ? 0 : means2d.size(-2); // number of gaussians
-    uint32_t I = render_alphas.numel() / (image_height * image_width); // number of images
+    uint32_t I = render_Ts.numel() / (image_height * image_width); // number of images
     uint32_t tile_height = tile_offsets.size(-2);
     uint32_t tile_width = tile_offsets.size(-1);
     uint32_t n_isects = flatten_ids.size(0);
@@ -395,7 +399,7 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
             tile_height,
             tile_offsets.data_ptr<int32_t>(),
             flatten_ids.data_ptr<int32_t>(),
-            render_alphas.data_ptr<float>(),
+            render_Ts.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
             v_render_colors.data_ptr<float>(),
             v_render_alphas.data_ptr<float>(),
@@ -430,7 +434,7 @@ rasterize_to_pixels_3dgs_bwd(
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     // forward outputs
-    const at::Tensor render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
     // gradients of outputs
     const at::Tensor v_render_colors, // [..., image_height, image_width, channels]
@@ -445,7 +449,7 @@ rasterize_to_pixels_3dgs_bwd(
     CHECK_INPUT(opacities);
     CHECK_INPUT(tile_offsets);
     CHECK_INPUT(flatten_ids);
-    CHECK_INPUT(render_alphas);
+    CHECK_INPUT(render_Ts);
     CHECK_INPUT(last_ids);
     CHECK_INPUT(v_render_colors);
     CHECK_INPUT(v_render_alphas);
@@ -483,7 +487,7 @@ rasterize_to_pixels_3dgs_bwd(
             image_height,                                                      \
             tile_offsets,                                                      \
             flatten_ids,                                                       \
-            render_alphas,                                                     \
+            render_Ts,                                                         \
             last_ids,                                                          \
             v_render_colors,                                                   \
             v_render_alphas,                                                   \
@@ -544,7 +548,7 @@ rasterize_to_pixels_3dgs_bwd(
         uint32_t image_height,                                                 \
         const at::Tensor tile_offsets,                                         \
         const at::Tensor flatten_ids,                                          \
-        const at::Tensor render_alphas,                                        \
+        const at::Tensor render_Ts,                                            \
         const at::Tensor last_ids,                                             \
         const at::Tensor v_render_colors,                                      \
         const at::Tensor v_render_alphas,                                      \
