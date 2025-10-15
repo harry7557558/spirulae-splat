@@ -411,7 +411,7 @@ def rasterization(
             )
         torch.cuda.synchronize()
         time1 = perf_counter()
-        print(1e3*(time1-time0), 'ms')
+        # print(1e3*(time1-time0), 'ms')
         # if 1e3*(time1-time0) > 100:
         #     dump_all()
         #     exit(0)

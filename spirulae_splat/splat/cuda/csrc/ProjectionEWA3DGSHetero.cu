@@ -53,10 +53,12 @@ __global__ void projection_ewa_3dgs_hetero_forward_kernel(
     float *__restrict__ compensations // [nnz] optional
 ) {
     int32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (thread_idx >= nnz)
+        return;
     int32_t camera_idx = upper_bound(intersection_count_map, C+1, thread_idx) - 1;
     int32_t splat_idx = intersection_splat_id[thread_idx];
 
-    bool valid = (thread_idx < nnz);
+    bool valid = true;
 
     // check if points are with camera near and far plane
     glm::vec3 mean_c;
@@ -189,7 +191,7 @@ __global__ void projection_ewa_3dgs_hetero_forward_kernel(
         }
     }
 
-    if (thread_idx < nnz) {
+    {
         // write to outputs
         camera_ids[thread_idx] = camera_idx;
         gaussian_ids[thread_idx] = splat_idx;
@@ -325,10 +327,10 @@ __global__ void projection_ewa_3dgs_hetero_backward_kernel(
 ) {
     // parallelize over nnz.
     int32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int32_t camera_idx = camera_ids[thread_idx];
-    int32_t splat_idx = gaussian_ids[thread_idx];
     if (thread_idx >= nnz)
         return;
+    int32_t camera_idx = camera_ids[thread_idx];
+    int32_t splat_idx = gaussian_ids[thread_idx];
 
     // shift pointers to the current camera and gaussian
     means += splat_idx * 3;

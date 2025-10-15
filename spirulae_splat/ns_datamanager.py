@@ -608,7 +608,8 @@ class SpirulaeDataManager(FullImageDatamanager):
             config=config, device=device, test_mode=test_mode, world_size=world_size, local_rank=local_rank, **kwargs
         )
 
-        self.train_unseen_cameras = deque()
+        self.train_cameras_splits = []  # type: list[list]
+        self.train_unseen_cameras = []  # type: list[deque]
 
     def _load_images(
         self, split: Literal["train", "eval"], cache_images_device: Literal["cpu-pageable", "cpu", "gpu"]
@@ -753,16 +754,28 @@ class SpirulaeDataManager(FullImageDatamanager):
         image_indices = torch.randint(0, len(self.cached_train), (batch_size,))
         offsets = (torch.rand([batch_size, 2]) * effective_offsets[image_indices] + 0.5).long()
         patches = []
+        masks = []
+        has_mask = False
+        default_mask = torch.ones((self.config.patch_size, self.config.patch_size, 1), dtype=torch.bool)
         offset_slices = []
         for image_idx, (y0, x0) in zip(image_indices, offsets):
             y0, x0 = y0.item(), x0.item()
             y1 = y0 + self.config.patch_size
             x1 = x0 + self.config.patch_size
-            patch = self.cached_train[image_idx]['image'][y0:y1, x0:x1]
+            image = self.cached_train[image_idx]
+            patch = image['image'][y0:y1, x0:x1]
+            mask = default_mask
+            if 'mask' in image:
+                assert image['mask'].shape[:2] == image['image'].shape[:2], \
+                    f"image shape ({image['image'].shape[:2]}) and mask shape ({image['mask'].shape[:2]}) mismatch"
+                mask = image['mask'][y0:y1, x0:x1]
+                has_mask = True
             patches.append(patch)
+            masks.append(mask)
             offset_slices.append((slice(y0, y1), slice(x0, x1)))
-        patches = torch.stack(patches).to(self.device)
-        batch = { 'image': patches }
+        batch = { 'image': torch.stack(patches).to(self.device) }
+        if has_mask:
+            batch['mask'] = torch.stack(masks).to(self.device)
 
         camera = self.train_dataset.cameras[image_indices]
         camera.height = self.config.patch_size * torch.ones_like(camera.height)
@@ -777,6 +790,25 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         return camera, batch
 
+    def setup_batches(self):
+        """Make separate lists for images with different shapes and camera models"""
+        key_map = {}
+        self.train_cameras_splits = []
+        self.train_unseen_cameras = []
+        for cam_idx in range(len(self.train_dataset)):
+            cam = self.train_dataset.cameras[cam_idx]
+            w, h = cam.width.item(), cam.height.item()
+            model = cam.camera_type.item()
+            key = (w, h, model)
+            if key not in key_map:
+                key_map[key] = len(self.train_cameras_splits)
+                self.train_cameras_splits.append([])
+                self.train_unseen_cameras.append(deque())
+            key = key_map[key]
+            self.train_cameras_splits[key].append(cam_idx)
+
+        self.camera_split_weights = np.array([len(s) for s in self.train_cameras_splits]) / len(self.train_dataset)
+
     def next_train(self, step: int) -> Tuple[Cameras, Dict]:
         """Returns the next training batch
 
@@ -789,14 +821,20 @@ class SpirulaeDataManager(FullImageDatamanager):
             // self.config.max_batch_per_epoch
         # train_batch_size = 4
 
+        if len(self.train_cameras_splits) == 0:
+            self.setup_batches()
+
         image_indices = []
+        split = np.random.choice(range(len(self.train_cameras_splits)), p=self.camera_split_weights)
+        train_batch_size = min(train_batch_size, len(self.train_cameras_splits[split]))
         for i in range(train_batch_size):
-            if len(self.train_unseen_cameras) == 0:
-                perm = list(range(len(self.train_dataset)))
+            if len(self.train_unseen_cameras[split]) == 0:
+                perm = self.train_cameras_splits[split][:]
                 random.shuffle(perm)
-                self.train_unseen_cameras.extend(perm)
-            image_idx = self.train_unseen_cameras.popleft()
+                self.train_unseen_cameras[split].extend(perm)
+            image_idx = self.train_unseen_cameras[split].popleft()
             image_indices.append(image_idx)
+        image_indices = list(set(image_indices))  # TODO: better way for this
 
         batch = {}
         for image_idx in image_indices:

@@ -39,7 +39,7 @@ __device__ __forceinline__ Splat loadSplat(unsigned splatIdx, const SplatBuffers
     // scales = { __expf(scales.x), __expf(scales.y), __expf(scales.z) };
     quat = normalize(quat);
 
-    float extend = fmin(3.33f, sqrt(2.0f * __logf(opac / ALPHA_THRESHOLD)));
+    float extend = fmin(3.33f, sqrt(2.0f * __logf(fmaxf(opac / ALPHA_THRESHOLD, 1.0f))));
 
     glm::mat3 S = {
         scales.x, 0.0f, 0.0f,
@@ -159,7 +159,7 @@ __device__ __forceinline__ Tile loadTile(unsigned tileIdx, const TileBuffers buf
 
 
 __global__ void computeSplatAABB(
-    const SplatBuffers& splats,
+    const SplatBuffers splats,
     float3* __restrict__ aabb,
     float3* __restrict__ aabb_reduced
 ) {
@@ -219,7 +219,7 @@ __device__ __forceinline__ uint getSubcellOffset(uint3 subcell) {
 
 template<uint BRANCH_FACTOR>
 __global__ void countCellOverlaps(
-    const SplatBuffers& splats,
+    const SplatBuffers splats,
     float3 root_min, float3 root_max,
     unsigned num_levels,
     unsigned* __restrict__ overlap_counts
@@ -274,7 +274,7 @@ __device__ __forceinline__ uint64_t getCellKey(
 
 template<uint BRANCH_FACTOR>
 __global__ void fillCellOverlaps(
-    const SplatBuffers& splats,
+    const SplatBuffers splats,
     float3 root_min, float3 root_max,
     unsigned num_levels,
     unsigned* __restrict__ overlap_offsets,
@@ -576,7 +576,7 @@ __global__ void fillTreeSubcells_perOverlap(
 
 template<uint MAX_NUM_LEVELS, uint BRANCH_FACTOR>
 __global__ void getTileSplatIntersections_octree(
-    const TileBuffers tiles, const SplatBuffers& splats,
+    const TileBuffers tiles, const SplatBuffers splats,
     const float3 rootAABBMin, const float3 rootAABBMax,
     const int32_t* __restrict__ children,
     const float3* __restrict__ treeAABB,
@@ -716,7 +716,7 @@ __global__ void getTileSplatIntersections_octree(
 
 
 __global__ void getTileSplatIntersections_brute(
-    const TileBuffers tiles, const SplatBuffers& splats,
+    const TileBuffers tiles, const SplatBuffers splats,
     uint32_t* __restrict__ intersect_counts,  // to be filled or exclusive scan
     uint32_t* __restrict__ intersectionSplatID  // nullptr or to be filled
 ) {
@@ -775,7 +775,7 @@ __device__ __forceinline__ uint64_t getSplatSortingKey(
 }
 
 __global__ void fillSplatSortingKeys(
-    const SplatBuffers& splats,
+    const SplatBuffers splats,
     float3 root_min, float3 root_max,
     unsigned num_levels, float branch_factor,
     uint64_t* __restrict__ splat_keys
@@ -943,7 +943,7 @@ __global__ void fillLbvhInternalNodes(
 }
 
 __global__ void computeLbvhAABB(
-    const SplatBuffers& splats,
+    const SplatBuffers splats,
     unsigned num_levels,
     const uint2* __restrict__ trees_ranges,
     const int2* __restrict__ internal_nodes,
@@ -1011,7 +1011,7 @@ __global__ void computeLbvhAABB(
 
 
 __global__ void getTileSplatIntersections_lbvh(
-    const TileBuffers tiles, const SplatBuffers& splats,
+    const TileBuffers tiles, const SplatBuffers splats,
     const int2* __restrict__ internal_nodes,
     float3* __restrict__ treeAABB,
     uint32_t* __restrict__ intersect_counts,  // to be filled or exclusive scan
@@ -1091,7 +1091,7 @@ __global__ void getTileSplatIntersections_lbvh(
 
 
 __global__ void getTileSplatIntersections_lbvh_warp(
-    const TileBuffers tiles, const SplatBuffers& splats,
+    const TileBuffers tiles, const SplatBuffers splats,
     unsigned num_levels,
     const uint2* __restrict__ trees_ranges,
     const int2* __restrict__ internal_nodes_0,
@@ -1131,8 +1131,8 @@ __global__ void getTileSplatIntersections_lbvh_warp(
 
     // handle this case where treeAABB may be uninitialized
     if (range.y-range.x == 1) {
-        if (laneIdx == 0)
-        printf("range.y-range.x == 1: %u %u %u\n", level, range.x, range.y);
+        // if (laneIdx == 0)
+        // printf("range.y-range.x == 1: %u %u %u\n", level, range.x, range.y);
         continue;
     }
 
@@ -1339,7 +1339,7 @@ void clearL2Cache() {
 SplatTileIntersector::SplatTileIntersector(
     c10::TensorOptions tensorOptions,
     const SplatBuffers &splats,
-    TileBuffers tiles
+    const TileBuffers &tiles
 ) : splats(splats), tiles(tiles)
 {
     tensorF32 = tensorOptions.dtype(torch::kFloat32);

@@ -15,6 +15,22 @@
 
 from nerfstudio.data.datasets.base_dataset import *
 
+
+def get_image_mask_tensor_from_path(filepath: Path, scale_factor: float = 1.0) -> torch.Tensor:
+    """
+    Utility function to read a mask image from the given path and return a boolean tensor
+    Modified to handle masks that are apparently grayscale but actually RGB
+    """
+    pil_mask = Image.open(filepath).convert("L")
+    if scale_factor != 1.0:
+        width, height = pil_mask.size
+        newsize = (int(width * scale_factor), int(height * scale_factor))
+        pil_mask = pil_mask.resize(newsize, resample=Image.Resampling.NEAREST)
+    mask_tensor = torch.from_numpy(np.array(pil_mask)).unsqueeze(-1).bool()
+    # TODO: configurable all nonzero vs 128/0.5?
+    return mask_tensor
+
+
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 
@@ -35,8 +51,8 @@ class SpirulaeDataset(InputDataset):
     exclude_batch_keys_from_device: List[str] = ["image", "mask"]
     cameras: Cameras
 
-    def __init__(self, dataparser_outputs: DataparserOutputs, scale_factor: float = 1.0):
-        super().__init__(dataparser_outputs, scale_factor)
+    def __init__(self, dataparser_outputs: DataparserOutputs, scale_factor: float = 1.0, *args, **kwargs):
+        super().__init__(dataparser_outputs, scale_factor, *args, **kwargs)
         self._dataparser_outputs = dataparser_outputs
         self.scale_factor = scale_factor
         self.scene_box = deepcopy(dataparser_outputs.scene_box)

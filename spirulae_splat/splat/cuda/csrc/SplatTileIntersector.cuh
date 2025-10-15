@@ -71,7 +71,7 @@ struct SplatTileIntersector {
     SplatTileIntersector(
         c10::TensorOptions tensorOptions,
         const SplatBuffers &splats,
-        TileBuffers tiles
+        const TileBuffers &tiles
     );
 
     std::tuple<torch::Tensor, torch::Tensor> getIntersections_brute();

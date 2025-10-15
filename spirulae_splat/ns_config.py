@@ -14,8 +14,8 @@ from spirulae_splat.ns_pipeline import (
     SpirulaePipelineConfig, VanillaPipelineConfig
 )
 from spirulae_splat.ns_dataset import SpirulaeDataset
+from spirulae_splat.ns_dataparser import Nerfstudio2DataParserConfig
 from nerfstudio.configs.base_config import ViewerConfig
-from nerfstudio.data.dataparsers.nerfstudio_dataparser import NerfstudioDataParserConfig
 from nerfstudio.engine.optimizers import AdamOptimizerConfig, RAdamOptimizerConfig
 from nerfstudio.engine.schedulers import (
     ExponentialDecaySchedulerConfig,
@@ -26,10 +26,9 @@ from nerfstudio.plugins.types import MethodSpecification
 
 _DEFAULT_DATAMANAGER_CONFIG = {
     '_target': SpirulaeDataManager,
-    'dataparser': NerfstudioDataParserConfig(
-        # train_split_fraction=0.9,
-        train_split_fraction=1.0,
-        load_3D_points=True,
+    'dataparser': Nerfstudio2DataParserConfig(
+        eval_mode="fraction", train_split_fraction=1.0,  # use all for training
+        # eval_mode="interval", eval_interval=8,  # consistent with academic benchmarks
     ),
     'camera_res_scale_factor': 1.0,
     'eval_num_images_to_sample_from': -1,
@@ -104,6 +103,7 @@ spirulae = MethodSpecification(
             ),
             model=SpirulaeModelConfig(
             ),
+            
         ),
         optimizers={
             **_DEFAULT_OPTIMIZERS
@@ -130,7 +130,7 @@ spirulae_patched = MethodSpecification(
             model=SpirulaeModelConfig(
                 packed=True,
                 use_bvh=True,
-                use_camera_optimizer=True,
+                use_camera_optimizer=False,
                 use_bilateral_grid=False,
             ),
         ),

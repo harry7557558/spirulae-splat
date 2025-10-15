@@ -342,25 +342,16 @@ class SpirulaeModel(Model):
         distances = torch.from_numpy(distances)
         # avg_dist = distances.mean(dim=-1, keepdim=True)
         points = means.data[indices] - means.data[:, None, :]
-        points = points.cpu().numpy()
         U, S, Vt = np.linalg.svd(points)
         Vt[:,:,2] *= np.linalg.det(Vt)[:,None]
         num_points = means.shape[0]
-        for i in range(num_points):
-            if self.config.use_3dgs or True:
-                S[i] = np.prod(S[i])**(1/len(S[i])) * np.ones(S[i].shape)
-                continue
-            sorted_indices = np.argsort(-S[i])
-            S[i] = S[i][sorted_indices]
-            Vt[i] = Vt[i][sorted_indices]
+        S = np.prod(S, axis=-1, keepdims=True)**(1/3) * np.ones(S.shape)
         scales = S
-        if not self.config.use_3dgs:
-            scales = S[:, :2]
         scales = np.log(1.5*scales/self.config.kernel_radius+1e-8)
-        scales = torch.nn.Parameter(torch.from_numpy(scales))
+        scales = torch.nn.Parameter(torch.from_numpy(scales.astype(np.float32)))
         # quats = torch.nn.Parameter(random_quat_tensor(num_points))
         quats = torch.nn.Parameter(torch.from_numpy(np.array(
-            [Rotation.from_matrix(R.T).as_quat() for R in Vt],
+            Rotation.from_matrix(np.transpose(Vt, axes=(0, 2, 1))).as_quat(),
             dtype=np.float32)))
         # colors
         dim_sh = num_sh_bases(self.config.sh_degree)
