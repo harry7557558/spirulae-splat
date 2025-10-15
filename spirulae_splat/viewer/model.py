@@ -4,14 +4,7 @@ import torch.nn.functional as F
 import os
 import json
 
-from spirulae_splat.splat import (
-    project_gaussians,
-    rasterize_gaussians_simple,
-    rasterize_gaussians_depth,
-    rasterize_gaussians_indices,
-    rasterize_gaussians_simple_sorted,
-    rasterize_gaussians_depth_sorted,
-)
+from spirulae_splat.splat.rendering import rasterization
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import spherical_harmonics
 from spirulae_splat.splat._torch_impl import quat_mult
@@ -61,17 +54,9 @@ class SplatModel:
             if '_model.background_sh' in pipeline else torch.zeros((0, 3))
 
         self.num_sh = self.features_sh.shape[1]
-        self.num_ch = self.features_ch.shape[1]
-        assert self.num_ch == 0, "Not implemented"
         self.sh_degree = {
             1: 0, 4: 1, 9: 2, 16: 3, 25: 4
         }[self.num_sh+1]
-        self.ch_degree_r, self.ch_degree_phi = {
-            0: (0, 0), 1: (1, 0), 2: (2, 0),
-            3: (1, 1), 5: (1, 2), 6: (2, 1),
-            7: (1, 3), 9: (3, 1), 10: (2, 2),
-            14: (2, 3), 15: (3, 2), 21: (3, 3)
-        }[self.num_ch]
         self.background_sh_degree = {
             1: 0, 4: 1, 9: 2, 16: 3, 25: 4
         }[len(self.background_sh)+1]
@@ -177,20 +162,21 @@ class SplatModel:
     def features_sh(self):
         return self.gauss_params["features_sh"]
     @property
-    def features_ch(self):
-        return self.gauss_params["features_ch"]
-    @property
     def opacities(self):
         return self.gauss_params["opacities"]
 
-    def _get_background_image(self, camera: Camera, c2w: np.ndarray):
+    def _get_background_image(self, camera: Camera, c2w, Ks):
         """TODO: support distortion"""
         sh_degree = self.background_sh_degree
         if not (sh_degree > 0):
             return self.background_color.repeat(camera.h, camera.w, 1)
         sh_coeffs = torch.cat((self.background_color.unsqueeze(0), self.background_sh), dim=0)  # [(deg+1)^2, 3]
-        viewmat = torch.from_numpy(c2w[:3, :3] * np.array([1,-1,-1])).float().cuda()
-        return render_background_sh(camera._to_ssplat_camera(), viewmat, sh_degree, sh_coeffs)
+
+        return render_background_sh(
+            camera.w, camera.h,
+            ['pinhole', 'fisheye'][camera.model == "OPENCV_FISHEYE"],
+            Ks, c2w[..., :3, :3], sh_degree, sh_coeffs
+        )[0]
 
     @torch.inference_mode()
     def _render(self, camera: Camera, c2w: np.ndarray, return_depth=False):
@@ -208,84 +194,55 @@ class SplatModel:
         viewmat = np.eye(4, dtype=np.float32)
         viewmat[:3, :3] = R_inv
         viewmat[:3, 3:4] = T_inv
+        viewmat = torch.from_numpy(viewmat).to(self.means.device)
         ssplat_camera = camera._to_ssplat_camera()
         timer.mark("pre")
 
-        quats_norm = F.normalize(self.quats, dim=-1)
-        if self.sh_degree > 0:
-            viewdirs = self.means.detach() - torch.from_numpy(c2w[:3, 3]).cuda()  # (N, 3)
-            n = self.sh_degree
-            rgbs = spherical_harmonics(n, viewdirs, self.features_dc, self.features_sh)
-            rgbs = torch.relu(rgbs+0.5)  # type: ignore
-        else:
-            rgbs = self.features_dc
-        if self.bgr:
-            rgbs = rgbs[:, [2, 1, 0]]
-        opacities = torch.sigmoid(self.opacities)
-        timer.mark("map")
-
         if self.scales.shape[-1] == 3:
-            from spirulae_splat.splat.rendering import (
-                fully_fused_projection,
-                rasterize_to_pixels,
-                isect_tiles,
-                isect_offset_encode,
-            )
-            from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map
-            
             fx, fy, cx, cy = ssplat_camera.intrins
             w, h = int(ssplat_camera.w), int(ssplat_camera.h)
-            Ks = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).float()
-            dist_coeffs = [*ssplat_camera.dist_coeffs]
-            if ssplat_camera.is_distorted() or any([x != 0 for x in dist_coeffs]):
-                from gsplat.cuda._wrapper import fully_fused_projection_with_ut
-                fisheye = ssplat_camera.model == "OPENCV_FISHEYE"
-                if fisheye:
-                    radial_coeffs = torch.tensor(dist_coeffs).float()[None].cuda()
-                    tangential_coeffs = None
-                    # test if gsplat actually uses this - the answer is no
-                    # tangential_coeffs = torch.tensor([1000.0, 1000.0]).float()[None].cuda()
+            Ks = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).float().to(viewmat)
+
+            kwargs = {}
+            dist_coeffs = torch.tensor([*ssplat_camera.dist_coeffs]).float().to(viewmat)
+            is_fisheye = ssplat_camera.model == "OPENCV_FISHEYE"
+            is_distorted = ssplat_camera.is_distorted() or any([x != 0 for x in dist_coeffs])
+            is_distorted = False  # TODO
+            if is_distorted:
+                if is_fisheye:
+                    kwargs['radial_coeffs'] = dist_coeffs[None]
                 else:
-                    radial_coeffs = torch.tensor(dist_coeffs[:2]+[0]*4).float()[None].cuda()
-                    tangential_coeffs = torch.tensor(dist_coeffs[2:]).float()[None].cuda()
-                proj_return = fully_fused_projection_with_ut(
-                    self.means, self.quats, torch.exp(self.scales), opacities.squeeze(-1),
-                    torch.from_numpy(viewmat[None]).cuda(), Ks[None].cuda(), w, h,
-                    camera_model="fisheye" if fisheye else "pinhole",
-                    radial_coeffs=radial_coeffs, tangential_coeffs=tangential_coeffs
-                )
-            else:
-                proj_return = fully_fused_projection(
-                    self.means, None, self.quats, torch.exp(self.scales),
-                    torch.from_numpy(viewmat[None]).cuda(), Ks[None].cuda(), w, h,
-                    packed=False
-                )
-            radii, means2d, depths, conics, compensations = proj_return
+                    kwargs["radial_coeffs"] = torch.concat((dist_coeffs[:2], 0.0*dist_coeffs[:2]))[None]
+                    kwargs["tangential_coeffs"] = dist_coeffs[2:][None]
 
-            tile_size = 16
-            tile_width = int(np.ceil(ssplat_camera.w / tile_size))
-            tile_height = int(np.ceil(ssplat_camera.h / tile_size))
-            tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
-                means2d, radii, depths,
-                tile_size, tile_width, tile_height,
+            rgbd, alpha, meta = rasterization(
+                means=self.means,
+                quats=F.normalize(self.quats, dim=-1),
+                scales=torch.exp(self.scales),
+                opacities=torch.sigmoid(self.opacities).squeeze(-1),
+                colors_dc=self.features_dc,
+                colors_sh=self.features_sh,
+                viewmats=viewmat[None].contiguous(),  # [C, 4, 4]
+                Ks=Ks[None].contiguous(),  # [C, 3, 3]
+                width=w,
+                height=h,
+                sh_degree=self.sh_degree,
                 packed=False,
+                use_bvh=False,
+                absgrad=False,
+                sparse_grad=False,
+                rasterize_mode="classic",
+                distributed=False,
+                camera_model=["pinhole", "fisheye"][is_fisheye],
+                with_ut=is_distorted,
+                with_eval3d=is_distorted,
+                render_mode="RGB+D",
+                **kwargs,
             )
-            isect_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
-
-            colors = rgbs[None]
+            colors = rgbd[0, ..., :3]
+            alpha = alpha[0]
             if return_depth:
-                colors = torch.cat((
-                    colors, depth_map(depths)[..., None]
-                ), dim=-1)
-            opacs = opacities.T
-
-            colors, alpha = rasterize_to_pixels(
-                means2d, conics, colors, opacs,
-                w, h, tile_size,
-                isect_offsets, flatten_ids,
-                backgrounds=None, packed=False, absgrad=True,
-            )
-            colors, alpha = colors[0], alpha[0]
+                colors = rgbd[0]
 
             rgb = colors[..., :3]
             if return_depth:
@@ -295,59 +252,7 @@ class SplatModel:
                 )
 
         else:
-            (
-                positions, axes_u, axes_v,
-                bounds, num_tiles_hit
-            ) = project_gaussians(  # type: ignore
-                self.means,
-                torch.exp(self.scales),
-                quats_norm,
-                torch.from_numpy(viewmat[:3, :]).cuda(),
-                ssplat_camera,
-            )  # type: ignore
-            timer.mark("project")
-
-            if self.sort_per_pixel:
-                num_intersects, sorted_indices = rasterize_gaussians_indices(
-                    positions, axes_u, axes_v, opacities,
-                    bounds, num_tiles_hit,
-                    ssplat_camera
-                )
-                timer.mark("sort")
-
-                rgb, alpha = rasterize_gaussians_simple_sorted(
-                    positions, axes_u, axes_v, rgbs, opacities,
-                    num_intersects, sorted_indices,
-                    ssplat_camera
-                )
-                timer.mark("rasterize")
-
-            else:
-                rgb, alpha = rasterize_gaussians_simple(
-                    positions,
-                    axes_u, axes_v,
-                    rgbs, opacities,
-                    bounds, num_tiles_hit, ssplat_camera,
-                )
-                timer.mark("rasterize")
-
-            if return_depth:
-                if self.sort_per_pixel:
-                    depth = rasterize_gaussians_depth_sorted(
-                        positions, axes_u, axes_v, opacities,
-                        sorted_indices,
-                        ssplat_camera,
-                        "median"
-                    )
-                else:
-                    depth = rasterize_gaussians_depth(
-                        positions, axes_u, axes_v, opacities,
-                        bounds, num_tiles_hit,
-                        ssplat_camera,
-                        "median"
-                    )
-                depth = torch.where(depth == 0.0, depth.max(), depth)
-                timer.end("depth")
+            raise NotImplementedError("2DGS is deprecated")
 
         # print(torch.mean(rgb[...,0]).item()*255.0, torch.mean(rgb[...,1]).item()*255.0, torch.mean(rgb[...,2]).item())
         # print(torch.amax(rgb, dim=(0,1))*255)
@@ -355,7 +260,10 @@ class SplatModel:
         # blend with background
         background = self.background_color.reshape((1, 1, 3))
         if self.background_sh_degree > 0 or True:
-            background = self._get_background_image(camera, c2w)
+            if not self.flip_yz:
+                c2w = c2w @ np.diag([1, -1, -1, 1])
+            background = self._get_background_image(
+                camera, torch.from_numpy(c2w).to(Ks), Ks)
             rgb = rgb + (1.0 - alpha) * background
 
         rgb = torch.clip(rgb, 0.0, 1.0)
