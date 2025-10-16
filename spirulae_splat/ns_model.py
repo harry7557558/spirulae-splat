@@ -258,7 +258,8 @@ class SpirulaeModelConfig(ModelConfig):
     normal_reg_warmup: int = 12000
     """warmup steps for normal regularizer, regularization weight ramps up"""
     alpha_reg_weight: float = 0.025
-    """Weight for alpha regularizer (encourage alpha to go to either 0 or 1)"""
+    """Weight for alpha regularizer (encourage alpha to go to either 0 or 1)
+        Recommend using with --pipeline.model.cull_screen_size for better results"""
     alpha_reg_warmup: int = 12000
     """warmup steps for alpha regularizer, regularization weight ramps up"""
     reg_warmup_length: int = 4000
@@ -266,7 +267,7 @@ class SpirulaeModelConfig(ModelConfig):
        only apply regularizers after this many steps."""
     alpha_loss_weight: float = 0.01
     """Weight for alpha, if mask is provided.
-       Set this to 0.0 to use masks to ignore distractors (e.g. people and cars, area outside fisheye circle)
+       Set this to 0.0 to use masks to ignore distractors (e.g. people and cars, area outside fisheye circle, over exposure)
        Set this to a positive value to remove background (e.g. sky, background around centered object)
        See scripts/SAM2-GUI for what I use to generate masks"""
     mcmc_opacity_reg: float = 0.01  # 0.01 in original paper

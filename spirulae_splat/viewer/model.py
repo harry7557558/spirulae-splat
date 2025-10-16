@@ -165,17 +165,23 @@ class SplatModel:
     def opacities(self):
         return self.gauss_params["opacities"]
 
-    def _get_background_image(self, camera: Camera, c2w, Ks):
+    def _get_background_image(self, camera: Camera, c2w: np.ndarray):
         """TODO: support distortion"""
         sh_degree = self.background_sh_degree
         if not (sh_degree > 0):
             return self.background_color.repeat(camera.h, camera.w, 1)
         sh_coeffs = torch.cat((self.background_color.unsqueeze(0), self.background_sh), dim=0)  # [(deg+1)^2, 3]
 
+        if not self.flip_yz:
+            c2w = c2w[..., :3, :3] @ np.diag([1, -1, -1])
+        c2w = torch.from_numpy(c2w).to(sh_coeffs)
+
+        fx, fy, cx, cy = camera.intrins
+        Ks = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).float().to(c2w)
         return render_background_sh(
             camera.w, camera.h,
             ['pinhole', 'fisheye'][camera.model == "OPENCV_FISHEYE"],
-            Ks, c2w[..., :3, :3], sh_degree, sh_coeffs
+            Ks, c2w, sh_degree, sh_coeffs
         )[0]
 
     @torch.inference_mode()
@@ -260,10 +266,7 @@ class SplatModel:
         # blend with background
         background = self.background_color.reshape((1, 1, 3))
         if self.background_sh_degree > 0 or True:
-            if not self.flip_yz:
-                c2w = c2w @ np.diag([1, -1, -1, 1])
-            background = self._get_background_image(
-                camera, torch.from_numpy(c2w).to(Ks), Ks)
+            background = self._get_background_image(camera, c2w)
             rgb = rgb + (1.0 - alpha) * background
 
         rgb = torch.clip(rgb, 0.0, 1.0)

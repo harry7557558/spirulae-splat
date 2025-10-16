@@ -132,6 +132,7 @@ spirulae_patched = MethodSpecification(
                 use_bvh=True,
                 use_camera_optimizer=False,
                 use_bilateral_grid=False,
+                alpha_reg_weight=0.0,
             ),
         ),
         optimizers={

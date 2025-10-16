@@ -31,6 +31,19 @@ def get_image_mask_tensor_from_path(filepath: Path, scale_factor: float = 1.0) -
     return mask_tensor
 
 
+def compute_overexposure_mask(img: torch.Tensor, image_type: Literal['uint8', 'float32']):
+    """Compute over exposure mask, should suffice for most unedited real-world photos"""
+    import cv2
+    img = img.numpy()
+    if image_type == "uint8":
+        img = img.astype(np.float32) / 255.0
+    gray = 0.2126 * img[...,0] + 0.7152 * img[...,1] + 0.0722 * img[...,2]
+    mask = (gray > 0.97) | ((img[...,0] > 0.98) & (img[...,1] > 0.98) & (img[...,2] > 0.98))
+    mask = cv2.GaussianBlur(mask.astype(np.float32), (5,5), 0)
+    mask = (mask < 0.5).astype(np.bool_)
+    return torch.from_numpy(mask).unsqueeze(-1)
+
+
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 
@@ -60,6 +73,7 @@ class SpirulaeDataset(InputDataset):
         self.cameras = deepcopy(dataparser_outputs.cameras)
         self.cameras.rescale_output_resolution(scaling_factor=scale_factor)
         self.mask_color = dataparser_outputs.metadata.get("mask_color", None)
+        self.mask_overexposure = dataparser_outputs.metadata.get("mask_overexposure", False)
 
     def __len__(self):
         return len(self._dataparser_outputs.image_filenames)
@@ -115,7 +129,7 @@ class SpirulaeDataset(InputDataset):
             image = torch.clamp(image, min=0, max=255).to(torch.uint8)
         return image
 
-    def get_data(self, image_idx: int, image_type: Literal["uint8", "float32"] = "float32", _is_viewer=True, _viewer_thumbnail_cache=[]) -> Dict:
+    def get_data(self, image_idx: int, image_type: Literal["uint8", "float32"] = "float32", _is_viewer=True, _viewer_thumbnail_cache={}) -> Dict:
         """Returns the ImageDataset data as a dictionary.
 
         Args:
@@ -126,9 +140,13 @@ class SpirulaeDataset(InputDataset):
         # data manager will explicitly pass _is_viewer=False
         if _is_viewer:
             if len(_viewer_thumbnail_cache) == 0:
-                _viewer_thumbnail_cache.append(None)
+                _viewer_thumbnail_cache_1 = []
                 def load_data(idx):
-                    data = self.get_data(idx, image_type, _is_viewer=True)
+                    data = self.get_data(idx, image_type, _is_viewer=False)
+                    if 'mask' in data:
+                        # background = torch.ones_like(data['image']) * [0.125, 32][image_type == 'uint8']
+                        background = torch.ones_like(data['image']) * torch.tensor([(0,0,1), (0,0,255)][image_type == 'uint8']).to(data['image'])
+                        data['image'] = torch.where(data['mask'], data['image'], background)
                     data['image'] = resize_image(data['image'][None], 2**int(max(0.5*math.log2(data['image'].numel()/10000), 0.0)))[0]
                     return data
                 with ThreadPoolExecutor() as executor:
@@ -137,11 +155,13 @@ class SpirulaeDataset(InputDataset):
                         total=len(self),
                         desc="Loading images"
                     ):
-                        _viewer_thumbnail_cache.append(result)
-                del _viewer_thumbnail_cache[0]
+                        _viewer_thumbnail_cache_1.append(result)
+                for i, im in enumerate(_viewer_thumbnail_cache_1):
+                    _viewer_thumbnail_cache[i] = im
             if image_idx in _viewer_thumbnail_cache:
                 # print('cache hit:', image_idx, image_type)
                 data = _viewer_thumbnail_cache[image_idx]
+                del _viewer_thumbnail_cache[image_idx]
                 return data
             # print('cache miss:', image_idx, image_type)
         else:
@@ -166,6 +186,13 @@ class SpirulaeDataset(InputDataset):
             data["image"] = torch.where(
                 data["mask"] == 1.0, data["image"], torch.ones_like(data["image"]) * torch.tensor(self.mask_color)
             )
+        if self.mask_overexposure:
+            o_mask = compute_overexposure_mask(data["image"], image_type)
+            if "mask" not in data:
+                data['mask'] = o_mask
+            else:
+                data['mask'] = data['mask'] & o_mask
+
         metadata = self.get_metadata(data)
         data.update(metadata)
         return data

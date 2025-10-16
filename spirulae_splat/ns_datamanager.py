@@ -657,7 +657,7 @@ class SpirulaeDataManager(FullImageDatamanager):
 
             if camera.camera_type.item() == CameraType.FISHEYE.value:
                 # don't undistort
-                mask = None
+                mask = data["mask"] if "mask" in data else None
             else:
                 image = data["image"].numpy()
                 K, image, mask = _undistort_image(camera, distortion_params, data, image, K)

@@ -80,6 +80,9 @@ class Nerfstudio2DataParserConfig(NerfstudioDataParserConfig):
     load_3D_points: bool = True
     """Whether to load the 3D points from the colmap reconstruction."""
 
+    mask_overexposure: bool = False
+    """Whether to mask over exposure"""
+
 
 @dataclass
 class Nerfstudio2(Nerfstudio):
@@ -419,6 +422,7 @@ class Nerfstudio2(Nerfstudio):
                 "depth_filenames": depth_filenames if len(depth_filenames) > 0 else None,
                 "depth_unit_scale_factor": self.config.depth_unit_scale_factor,
                 "mask_color": self.config.mask_color,
+                "mask_overexposure": self.config.mask_overexposure,
                 **metadata,
             },
         )
