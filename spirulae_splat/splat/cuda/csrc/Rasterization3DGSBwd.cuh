@@ -9,18 +9,13 @@
 
 
 
-float evaluate_alpha(float px, float py);
-
-
 template <uint32_t CDIM>
 void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     // Gaussian parameters
-    const at::Tensor means2d,                   // [..., N, 2] or [nnz, 2]
-    const at::Tensor conics,                    // [..., N, 3] or [nnz, 3]
+    Vanilla3DGS::Screen::Tensor splats,
     const at::Tensor colors,                    // [..., N, 3] or [nnz, 3]
-    const at::Tensor opacities,                 // [..., N] or [nnz]
-    const at::optional<at::Tensor> backgrounds, // [..., 3]
-    const at::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    const std::optional<at::Tensor> backgrounds, // [..., 3]
+    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -34,23 +29,21 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     const at::Tensor v_render_colors, // [..., image_height, image_width, 3]
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
     // outputs
-    at::optional<at::Tensor> v_means2d_abs, // [..., N, 2] or [nnz, 2]
-    at::Tensor v_means2d,                   // [..., N, 2] or [nnz, 2]
-    at::Tensor v_conics,                    // [..., N, 3] or [nnz, 3]
-    at::Tensor v_colors,                    // [..., N, 3] or [nnz, 3]
-    at::Tensor v_opacities                  // [..., N] or [nnz]
+    Vanilla3DGS::Screen::Tensor v_splats,
+    at::Tensor v_colors                    // [..., N, 3] or [nnz, 3]
 );
 
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-rasterize_to_pixels_3dgs_bwd(
+std::tuple<
+    Vanilla3DGS::Screen::TensorTuple,
+    at::Tensor,  // v_colors
+    std::optional<at::Tensor>  // absgrad
+> rasterize_to_pixels_3dgs_bwd(
     // Gaussian parameters
-    const at::Tensor means2d,                   // [..., N, 2] or [nnz, 2]
-    const at::Tensor conics,                    // [..., N, 3] or [nnz, 3]
+    Vanilla3DGS::Screen::TensorTuple splats_tuple,
     const at::Tensor colors,                    // [..., N, channels] or [nnz, channels]
-    const at::Tensor opacities,                 // [..., N] or [nnz]
-    const at::optional<at::Tensor> backgrounds, // [..., channels]
-    const at::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    const std::optional<at::Tensor> backgrounds, // [..., channels]
+    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,

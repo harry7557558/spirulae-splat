@@ -15,8 +15,8 @@ for filename in cu_files:
     src = open(filename, 'r').read()
     if src[:len(header)] == header:
         src = src[len(header):]
-        src = process(src)
         src = """#include "slang.cuh"\n\n""" + src
+        src = process(src)
     open(filename, 'w').write(src)
 
 header = process(header)

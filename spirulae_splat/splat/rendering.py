@@ -7,9 +7,9 @@ import math
 
 from gsplat.cuda._wrapper import (
     RollingShutterType,
-    FThetaCameraDistortionParameters,
-    FThetaPolynomialType,
-    fully_fused_projection,
+    # FThetaCameraDistortionParameters,
+    # FThetaPolynomialType,
+    # fully_fused_projection,
     fully_fused_projection_with_ut,
     isect_offset_encode,
     isect_tiles,
@@ -19,6 +19,7 @@ from gsplat.cuda._wrapper import (
 )
 from spirulae_splat.splat.cuda._wrapper import (
     intersect_splat_tile,
+    fully_fused_projection,
     fully_fused_projection_hetero,
     rasterize_to_pixels,
     spherical_harmonics,
@@ -61,7 +62,8 @@ def rasterization(
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
     channel_chunk: int = 32,
     distributed: bool = False,
-    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    # camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     segmented: bool = False,
     with_ut: bool = False,
     with_eval3d: bool = False,
@@ -69,7 +71,7 @@ def rasterization(
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
-    ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    # ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
@@ -222,8 +224,8 @@ def rasterization(
             The shape should be [..., C, 2] if provided.
         thin_prism_coeffs: Opencv pinhole thin prism distortion coefficients. Default is None.
             The shape should be [..., C, 4] if provided.
-        ftheta_coeffs: F-Theta camera distortion coefficients shared for all cameras.
-            Default is None. See `FThetaCameraDistortionParameters` for details.
+        # ftheta_coeffs: F-Theta camera distortion coefficients shared for all cameras.
+        #     Default is None. See `FThetaCameraDistortionParameters` for details.
         rolling_shutter: The rolling shutter type. Default `RollingShutterType.GLOBAL` means
             global shutter.
         viewmats_rs: The second viewmat when rolling shutter is used. Default is None.
@@ -330,7 +332,7 @@ def rasterization(
         radial_coeffs is not None
         or tangential_coeffs is not None
         or thin_prism_coeffs is not None
-        or ftheta_coeffs is not None
+        # or ftheta_coeffs is not None
         or rolling_shutter != RollingShutterType.GLOBAL
     ):
         assert (
@@ -402,7 +404,7 @@ def rasterization(
             intersection_count_map, intersection_splat_id = intersect_splat_tile(
                 means.contiguous(),
                 scales.contiguous(),
-                opacities.contiguous(),
+                torch.sigmoid(opacities).contiguous(),
                 quats.contiguous(),
                 width,
                 height,
@@ -432,7 +434,7 @@ def rasterization(
             sparse_grad=sparse_grad,
             calc_compensations=(rasterize_mode == "antialiased"),
             camera_model=camera_model,
-            opacities=opacities,  # use opacities to compute a tigher bound for radii.
+            opacities=torch.sigmoid(opacities),  # use opacities to compute a tigher bound for radii.
         )
 
     elif with_ut:
@@ -440,7 +442,7 @@ def rasterization(
             means,
             quats,
             scales,
-            opacities,  # use opacities to compute a tigher bound for radii.
+            torch.sigmoid(opacities),  # use opacities to compute a tigher bound for radii.
             viewmats,
             Ks,
             width,
@@ -454,7 +456,7 @@ def rasterization(
             radial_coeffs=radial_coeffs,
             tangential_coeffs=tangential_coeffs,
             thin_prism_coeffs=thin_prism_coeffs,
-            ftheta_coeffs=ftheta_coeffs,
+            # ftheta_coeffs=ftheta_coeffs,
             rolling_shutter=rolling_shutter,
             viewmats_rs=viewmats_rs,
         )
@@ -463,9 +465,9 @@ def rasterization(
         # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
         proj_results = fully_fused_projection(
             means,
-            None,  # covars
             quats,
             scales,
+            opacities,
             viewmats,
             Ks,
             width,
@@ -476,10 +478,38 @@ def rasterization(
             far_plane=far_plane,
             radius_clip=radius_clip,
             sparse_grad=sparse_grad,
-            calc_compensations=(rasterize_mode == "antialiased"),
+            is_antialiased=(rasterize_mode == "antialiased"),
             camera_model=camera_model,
-            opacities=opacities,  # use opacities to compute a tigher bound for radii.
         )
+        # import gsplat.cuda._wrapper
+        # proj_results_1 = gsplat.cuda._wrapper.fully_fused_projection(
+        #     means,
+        #     None,
+        #     quats,
+        #     scales,
+        #     viewmats,
+        #     Ks,
+        #     width,
+        #     height,
+        #     eps2d=eps2d,
+        #     packed=packed,
+        #     near_plane=near_plane,
+        #     far_plane=far_plane,
+        #     radius_clip=radius_clip,
+        #     sparse_grad=sparse_grad,
+        #     calc_compensations=(rasterize_mode == "antialiased"),
+        #     camera_model=camera_model,
+        #     opacities=torch.sigmoid(opacities),  # use opacities to compute a tigher bound for radii.
+        # )
+        # for x0, x1 in zip(proj_results, proj_results_1):
+        #     print(x0.shape, x0.dtype, x1.shape, x1.dtype)
+        #     print(x0)
+        #     print(x1)
+        #     import matplotlib.pyplot as plt
+        #     plt.scatter(x0.flatten().detach().cpu().numpy(), x1.flatten().detach().cpu().numpy())
+        #     # plt.xscale('log')
+        #     # plt.yscale('log')
+        #     plt.show()
 
     if use_bvh:
         (
@@ -489,10 +519,10 @@ def rasterization(
             means2d,
             depths,
             conics,
-            compensations,
+            proj_opacities,
         ) = proj_results
         batch_ids, image_ids = 0, camera_ids
-        opacities = opacities.view(B, N)[batch_ids, gaussian_ids]  # [nnz]
+        proj_opacities = proj_opacities.view(B, N)[batch_ids, gaussian_ids]  # [nnz]
     elif packed:
         # The results are packed into shape [nnz, ...]. All elements are valid.
         (
@@ -503,21 +533,17 @@ def rasterization(
             means2d,
             depths,
             conics,
-            compensations,
+            proj_opacities,
         ) = proj_results
-        opacities = opacities.view(B, N)[batch_ids, gaussian_ids]  # [nnz]
         image_ids = batch_ids * C + camera_ids
     else:
         # The results are with shape [..., C, N, ...]. Only the elements with radii > 0 are valid.
-        radii, means2d, depths, conics, compensations = proj_results
-        opacities = torch.broadcast_to(
-            opacities[..., None, :], batch_dims + (C, N)
-        )  # [..., C, N]
+        radii, means2d, depths, conics, proj_opacities = proj_results
         batch_ids, camera_ids, gaussian_ids = None, None, None
         image_ids = None
 
-    if compensations is not None:
-        opacities = opacities * compensations
+    # if compensations is not None:  # TODO
+    #     opacities = torch.logit(torch.sigmoid(opacities) * compensations)
 
     meta.update(
         {
@@ -530,7 +556,6 @@ def rasterization(
             "means2d": means2d,
             "depths": depths,
             "conics": conics,
-            "opacities": opacities,
         }
     )
     # if heterogeneous:
@@ -610,9 +635,9 @@ def rasterization(
             (radii,) = all_to_all_tensor_list(
                 world_size, [radii], cnts, output_splits=collected_splits
             )
-            (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(
+            (means2d, depths, conics, proj_opacities, colors) = all_to_all_tensor_list(
                 world_size,
-                [means2d, depths, conics, opacities, colors],
+                [means2d, depths, conics, proj_opacities, colors],
                 cnts,
                 output_splits=collected_splits,
             )
@@ -662,13 +687,13 @@ def rasterization(
             )
             radii = reshape_view(C, radii, N_world)
 
-            (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(
+            (means2d, depths, conics, proj_opacities, colors) = all_to_all_tensor_list(
                 world_size,
                 [
                     means2d.flatten(0, 1),
                     depths.flatten(0, 1),
                     conics.flatten(0, 1),
-                    opacities.flatten(0, 1),
+                    proj_opacities.flatten(0, 1),
                     colors.flatten(0, 1),
                 ],
                 splits=[C_i * N for C_i in C_world],
@@ -677,7 +702,7 @@ def rasterization(
             means2d = reshape_view(C, means2d, N_world)
             depths = reshape_view(C, depths, N_world)
             conics = reshape_view(C, conics, N_world)
-            opacities = reshape_view(C, opacities, N_world)
+            proj_opacities = reshape_view(C, proj_opacities, N_world)
             colors = reshape_view(C, colors, N_world)
 
     # Rasterize to pixels
@@ -752,7 +777,7 @@ def rasterization(
                     quats,
                     scales,
                     colors_chunk,
-                    opacities,
+                    torch.sigmoid(opacities),
                     viewmats,
                     Ks,
                     width,
@@ -765,7 +790,7 @@ def rasterization(
                     radial_coeffs=radial_coeffs,
                     tangential_coeffs=tangential_coeffs,
                     thin_prism_coeffs=thin_prism_coeffs,
-                    ftheta_coeffs=ftheta_coeffs,
+                    # ftheta_coeffs=ftheta_coeffs,
                     rolling_shutter=rolling_shutter,
                     viewmats_rs=viewmats_rs,
                 )
@@ -775,7 +800,7 @@ def rasterization(
                     means2d,
                     conics,
                     colors_chunk,
-                    opacities,
+                    proj_opacities,
                     width,
                     height,
                     tile_size,
@@ -796,7 +821,7 @@ def rasterization(
                 quats,
                 scales,
                 colors,
-                opacities,
+                torch.sigmoid(opacities),
                 viewmats,
                 Ks,
                 width,
@@ -809,7 +834,7 @@ def rasterization(
                 radial_coeffs=radial_coeffs,
                 tangential_coeffs=tangential_coeffs,
                 thin_prism_coeffs=thin_prism_coeffs,
-                ftheta_coeffs=ftheta_coeffs,
+                # ftheta_coeffs=ftheta_coeffs,
                 rolling_shutter=rolling_shutter,
                 viewmats_rs=viewmats_rs,
             )
@@ -818,7 +843,7 @@ def rasterization(
                 means2d,
                 conics,
                 colors,
-                opacities,
+                proj_opacities,
                 width,
                 height,
                 tile_size,

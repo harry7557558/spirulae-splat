@@ -225,7 +225,7 @@ class SplatModel:
                 means=self.means,
                 quats=F.normalize(self.quats, dim=-1),
                 scales=torch.exp(self.scales),
-                opacities=torch.sigmoid(self.opacities).squeeze(-1),
+                opacities=self.opacities.squeeze(-1),
                 colors_dc=self.features_dc,
                 colors_sh=self.features_sh,
                 viewmats=viewmat[None].contiguous(),  # [C, 4, 4]

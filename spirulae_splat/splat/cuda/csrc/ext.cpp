@@ -7,6 +7,7 @@
 #include "PerSplatLoss.cuh"
 #include "PixelWise.cuh"
 #include "SplatTileIntersector.cuh"
+#include "ProjectionEWA3DGS.cuh"
 #include "ProjectionEWA3DGSHetero.cuh"
 #include "Rasterization3DGSFwd.cuh"
 #include "Rasterization3DGSBwd.cuh"
@@ -44,6 +45,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // SplatTileIntersector.cuh
     m.def("intersect_splat_tile", &SplatTileIntersector::intersect_splat_tile);
     
+    // ProjectionEWA3DGS.cuh
+    m.def("projection_ewa_3dgs_forward", &projection_ewa_3dgs_forward_tensor);
+    m.def("projection_ewa_3dgs_backward", &projection_ewa_3dgs_backward_tensor);
+
     // ProjectionEWA3DGSHetero.cuh
     m.def("projection_ewa_3dgs_hetero_forward", &projection_ewa_3dgs_hetero_forward_tensor);
     m.def("projection_ewa_3dgs_hetero_backward", &projection_ewa_3dgs_hetero_backward_tensor);

@@ -69,10 +69,73 @@ def spherical_harmonics(
     )
 
 
+
+def fully_fused_projection(
+    means: Tensor,  # [..., N, 3]
+    quats: Tensor,  # [..., N, 4]
+    scales: Tensor,  # [..., N, 3]
+    opacities: Tensor,  # [..., N]
+    viewmats: Tensor,  # [..., C, 4, 4]
+    Ks: Tensor,  # [..., C, 3, 3]
+    width: int,
+    height: int,
+    eps2d: float = 0.3,
+    near_plane: float = 0.01,
+    far_plane: float = 1e10,
+    radius_clip: float = 0.0,
+    packed: bool = False,
+    sparse_grad: bool = False,
+    is_antialiased: bool = False,
+    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    batch_dims = means.shape[:-2]
+    N = means.shape[-2]
+    C = viewmats.shape[-3]
+    assert means.shape == batch_dims + (N, 3), means.shape
+    assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
+    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
+    means = means.contiguous()
+    assert quats.shape == batch_dims + (N, 4), quats.shape
+    assert scales.shape == batch_dims + (N, 3), scales.shape
+    quats = quats.contiguous()
+    assert opacities.shape == batch_dims + (N,), opacities.shape
+    opacities = opacities.contiguous()
+    scales = scales.contiguous()
+    if sparse_grad:
+        assert packed, "sparse_grad is only supported when packed is True"
+        assert batch_dims == (), "sparse_grad does not support batch dimensions"
+
+    assert (
+        camera_model != "ftheta"
+    ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
+
+    viewmats = viewmats.contiguous()
+    Ks = Ks.contiguous()
+    if packed:
+        raise NotImplementedError("Packed not supported for fully_fused_projection without use_bvh")
+    else:
+        return _FullyFusedProjection.apply(
+            means,
+            quats,
+            scales,
+            opacities,
+            viewmats,
+            Ks,
+            width,
+            height,
+            eps2d,
+            near_plane,
+            far_plane,
+            radius_clip,
+            is_antialiased,
+            camera_model,
+        )
+
+
 def fully_fused_projection_hetero(
     means: Tensor,  # [..., N, 3]
-    quats: Optional[Tensor],  # [..., N, 4] or None
-    scales: Optional[Tensor],  # [..., N, 3] or None
+    quats: Tensor,  # [..., N, 4]
+    scales: Tensor,  # [..., N, 3]
     viewmats: Tensor,  # [..., C, 4, 4]
     Ks: Tensor,  # [..., C, 3, 3]
     width: int,
@@ -95,8 +158,6 @@ def fully_fused_projection_hetero(
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
     means = means.contiguous()
-    assert quats is not None, "covars or quats is required"
-    assert scales is not None, "covars or scales is required"
     assert quats.shape == batch_dims + (N, 4), quats.shape
     assert scales.shape == batch_dims + (N, 3), scales.shape
     quats = quats.contiguous()
@@ -252,6 +313,103 @@ class _SphericalHarmonics(torch.autograd.Function):
         )
         return None, None, v_dirs, v_coeffs_dc, v_coeffs_sh
 
+
+
+class _FullyFusedProjection(torch.autograd.Function):
+    """Projects Gaussians to 2D."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        means: Tensor,  # [..., N, 3]
+        quats: Tensor,  # [..., N, 4]
+        scales: Tensor,  # [..., N, 3]
+        opacities: Tensor,  # [..., N]
+        viewmats: Tensor,  # [..., C, 4, 4]
+        Ks: Tensor,  # [..., C, 3, 3]
+        width: int,
+        height: int,
+        eps2d: float,
+        near_plane: float,
+        far_plane: float,
+        radius_clip: float,
+        is_antialiased: bool,
+        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        assert (
+            camera_model != "ftheta"
+        ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
+
+        camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
+            f"CameraModelType.{camera_model.upper()}"
+        )
+
+        # "covars" and {"quats", "scales"} are mutually exclusive
+        radii, depths, (means2d, conics, proj_opacities) = _make_lazy_cuda_func(
+            "projection_ewa_3dgs_forward"
+        )(
+            (means, quats, scales, opacities),
+            viewmats,
+            Ks,
+            width,
+            height,
+            eps2d,
+            near_plane,
+            far_plane,
+            radius_clip,
+            is_antialiased,
+            camera_model_type,
+        )
+        ctx.save_for_backward(
+            means, quats, scales, opacities, viewmats, Ks, radii
+        )
+        ctx.width = width
+        ctx.height = height
+        ctx.eps2d = eps2d
+        ctx.camera_model_type = camera_model_type
+
+        return radii, means2d, depths, conics, proj_opacities
+
+    @staticmethod
+    def backward(ctx, v_radii, v_means2d, v_depths, v_conics, v_opacities):
+        (
+            means,
+            quats,
+            scales,
+            opacities,
+            viewmats,
+            Ks,
+            radii,
+        ) = ctx.saved_tensors
+        width = ctx.width
+        height = ctx.height
+        eps2d = ctx.eps2d
+        camera_model_type = ctx.camera_model_type
+        (v_means, v_quats, v_scales, v_opacities), v_viewmats = _make_lazy_cuda_func(
+            "projection_ewa_3dgs_backward"
+        )(
+            (means, quats, scales, opacities),
+            viewmats,
+            Ks,
+            width,
+            height,
+            eps2d,
+            camera_model_type,
+            radii,
+            v_depths.contiguous(),
+            (v_means2d.contiguous(), v_conics.contiguous(), v_opacities.contiguous()),
+            ctx.needs_input_grad[4],  # viewmats_requires_grad
+        )
+        if not ctx.needs_input_grad[4]:
+            v_viewmats = None
+        return (
+            v_means,
+            v_quats,
+            v_scales,
+            v_opacities,
+            v_viewmats,
+            *([None]*(len(ctx.needs_input_grad)-5))
+        )
 
 
 class _FullyFusedProjectionHetero(torch.autograd.Function):
@@ -470,10 +628,8 @@ class _RasterizeToPixels(torch.autograd.Function):
         render_colors, render_Ts, last_ids = _make_lazy_cuda_func(
             "rasterization_3dgs_forward"
         )(
-            means2d,
-            conics,
+            (means2d, conics, opacities),
             colors,
-            opacities,
             backgrounds,
             masks,
             width,
@@ -531,16 +687,12 @@ class _RasterizeToPixels(torch.autograd.Function):
         # print(tile_size, flatten_ids.shape)
 
         (
-            v_means2d_abs,
-            v_means2d,
-            v_conics,
+            (v_means2d, v_conics, v_opacities),
             v_colors,
-            v_opacities,
+            v_means2d_abs,
         ) = _make_lazy_cuda_func("rasterization_3dgs_backward")(
-            means2d,
-            conics,
+            (means2d, conics, opacities),
             colors,
-            opacities,
             backgrounds,
             masks,
             width,

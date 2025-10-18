@@ -15,7 +15,7 @@ struct SplatBuffers {
         torch::Tensor& opacs,
         torch::Tensor& quats
     ) {
-        CHECK_CUDA(means);
+        DEVICE_GUARD(means);
         CHECK_INPUT(means);
         CHECK_INPUT(scales);
         CHECK_INPUT(opacs);
@@ -44,7 +44,7 @@ struct TileBuffers {
         torch::Tensor& viewmats,  // [B, 4, 4]
         torch::Tensor& Ks  // [B, 3, 3]
     ) : width((float)width), height((float)height) {
-        CHECK_CUDA(viewmats);
+        DEVICE_GUARD(viewmats);
         CHECK_INPUT(viewmats);
         CHECK_INPUT(Ks);
         // TODO: check dimension and shape

@@ -7,64 +7,11 @@
 
 #include <cub/cub.cuh>
 
+#include "Primitive.cuh"
+
 
 constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
 constexpr uint SPLAT_BATCH_SIZE = 128;
-
-
-struct DSplat {
-    glm::vec2 xy;
-    glm::vec3 conic;
-    float opac;
-};
-
-template <uint32_t CDIM>
-struct Splat {
-    int gid = -1;
-    glm::vec2 xy;
-    glm::vec3 conic;
-    float opac;
-    float color[CDIM];
-
-    __device__ __forceinline__ float evaluate_alpha(float px, float py) {
-        glm::vec2 delta = {xy.x - px, xy.y - py};
-        float sigma = 0.5f * (conic.x * delta.x * delta.x +
-                                conic.z * delta.y * delta.y) +
-                        conic.y * delta.x * delta.y;
-        float vis = __expf(-sigma);
-        float alpha = min(0.999f, opac * vis);
-        return sigma < 0.f ? 0.f : alpha;
-    }
-
-    __device__ __forceinline__ DSplat evaluate_alpha_vjp(float px, float py, float v_alpha) {
-        glm::vec2 delta = {xy.x - px, xy.y - py};
-        float sigma = 0.5f * (conic.x * delta.x * delta.x +
-                                conic.z * delta.y * delta.y) +
-                        conic.y * delta.x * delta.y;
-        float vis = __expf(-sigma);
-        float alpha = min(0.999f, opac * vis);
-
-        DSplat v_splat = {
-            glm::vec2(0),
-            glm::vec3(0),
-            0.0f,
-        };
-        if (sigma >= 0.f && opac * vis <= 0.999f) {
-            const float v_sigma = -opac * vis * v_alpha;
-            v_splat.conic = glm::vec3(
-                0.5f * v_sigma * delta.x * delta.x,
-                v_sigma * delta.x * delta.y,
-                0.5f * v_sigma * delta.y * delta.y
-            );
-            v_splat.xy = glm::vec2(
-                v_sigma * (conic.x * delta.x + conic.y * delta.y),
-                v_sigma * (conic.y * delta.x + conic.z * delta.y)
-            );
-            v_splat.opac = vis * v_alpha;
-        }
-        return v_splat;
-    }
-};
 
 
 template <uint32_t CDIM>
@@ -74,10 +21,8 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     const uint32_t n_isects,
     const bool packed,
     // fwd inputs
-    const glm::vec2 *__restrict__ means2d,         // [..., N, 2] or [nnz, 2]
-    const glm::vec3 *__restrict__ conics,          // [..., N, 3] or [nnz, 3]
+    Vanilla3DGS::Screen::Buffer splat_buffer,
     const float *__restrict__ colors,      // [..., N, CDIM] or [nnz, CDIM]
-    const float *__restrict__ opacities,   // [..., N] or [nnz]
     const float *__restrict__ backgrounds, // [..., CDIM] or [nnz, CDIM]
     const bool *__restrict__ masks,           // [..., tile_height, tile_width]
     const uint32_t image_width,
@@ -96,11 +41,8 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     const float
         *__restrict__ v_render_alphas, // [..., image_height, image_width, 1]
     // grad inputs
-    glm::vec2 *__restrict__ v_means2d_abs,  // [..., N, 2] or [nnz, 2]
-    glm::vec2 *__restrict__ v_means2d,      // [..., N, 2] or [nnz, 2]
-    glm::vec3 *__restrict__ v_conics,       // [..., N, 3] or [nnz, 3]
-    float *__restrict__ v_colors,   // [..., N, CDIM] or [nnz, CDIM]
-    float *__restrict__ v_opacities // [..., N] or [nnz]
+    Vanilla3DGS::Screen::Buffer v_splat_buffer,
+    float *__restrict__ v_colors   // [..., N, CDIM] or [nnz, CDIM]
 ) {
     auto block = cg::this_thread_block();
     cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
@@ -176,15 +118,15 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
         const int32_t splat_idx = splat_batch_end - thread_id;
 
         // load splats
-        Splat<CDIM> splat;
+        Vanilla3DGS::Screen splat;
+        uint32_t splat_gid;
+        float splat_color[CDIM];
         if (splat_idx >= range_start) {
-            splat.gid = flatten_ids[splat_idx]; // flatten index in [I * N] or [nnz]
-            splat.xy = means2d[splat.gid];
-            splat.conic = conics[splat.gid];
-            splat.opac = opacities[splat.gid];
+            splat_gid = flatten_ids[splat_idx]; // flatten index in [I * N] or [nnz]
+            splat = Vanilla3DGS::Screen::load(splat_buffer, splat_gid);
             #pragma unroll
             for (uint32_t k = 0; k < CDIM; ++k)
-                splat.color[k] = colors[splat.gid * CDIM + k];
+                splat_color[k] = colors[splat_gid * CDIM + k];
         }
 
         // accumulate gradient
@@ -192,10 +134,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
         #pragma unroll
         for (uint32_t k = 0; k < CDIM; ++k)
             v_rgb_local[k] = 0.f;
-        glm::vec3 v_conic_local = {0.f, 0.f, 0.f};
-        glm::vec2 v_xy_local = {0.f, 0.f};
-        glm::vec2 v_xy_abs_local = {0.f, 0.f};
-        float v_opacity_local = 0.f;
+        Vanilla3DGS::Screen v_splat = Vanilla3DGS::Screen::zero();
 
         // thread 0 takes last splat, 1 takes second last, etc.
         // at t=0, thread 0 (splat -1) undo pixel 0
@@ -223,7 +162,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
             float alpha = splat.evaluate_alpha(px, py);
             if (alpha >= ALPHA_THRESHOLD) {
 
-            // printf("t=%d, thread %u, splat %d (%u), pix_id %d, pix %d %d\n", t, thread_id, splat_idx-range_start, splat.gid, pix_id, pix_global_x, pix_global_y);
+            // printf("t=%d, thread %u, splat %d (%u), pix_id %d, pix %d %d\n", t, thread_id, splat_idx-range_start, splat_gid, pix_id, pix_global_x, pix_global_y);
 
             // forward:
             // \left(c_{1},T_{1}\right)=\left(c_{0}+\alpha_{i}T_{0}c_{i},\ T_{0}\left(1-\alpha_{i}\right)\right)
@@ -254,7 +193,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
             float v_T0 = v_T1 * (1.0f - alpha);  // update pixel gradient
             #pragma unroll
             for (uint32_t k = 0; k < CDIM; ++k) {
-                float c = splat.color[k];
+                float c = splat_color[k];
                 float v_c = v_pix_colors[pix_id * CDIM + k];
                 v_alpha += c * v_c * T0;  // gradient to alpha
                 v_rgb_local[k] += alpha * T0 * v_c;  // gradient to color
@@ -262,12 +201,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
             }
 
             // backward diff splat
-            DSplat v_splat = splat.evaluate_alpha_vjp(px, py, v_alpha);
-            v_xy_local += v_splat.xy;
-            if (v_means2d_abs != nullptr)
-                v_xy_abs_local += glm::vec2(fabsf(v_splat.xy.x), fabsf(v_splat.xy.y));
-            v_conic_local += v_splat.conic;
-            v_opacity_local += v_splat.opac;
+            v_splat += splat.evaluate_alpha_vjp(px, py, v_alpha);
 
             // update pixel states
             pix_Ts_with_grad[pix_id] = { T0, v_T0 };
@@ -280,34 +214,15 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
         // accumulate gradient
         {
             if (splat_idx >= range_start) {
-                #define gpuAtomicAdd(addr, val) \
-                    if ((val) != 0.0f) atomicAdd(addr, val)
 
-                int32_t g = splat.gid; // flatten index in [I * N] or [nnz]
-                float *v_rgb_ptr = (float *)(v_colors) + CDIM * g;
+                float *v_rgb_ptr = (float *)(v_colors) + CDIM * splat_gid;
                 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
-                    gpuAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
+                    if (v_rgb_local[k] != 0.0f)
+                        atomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
                 }
 
-                float *v_conic_ptr = (float *)(v_conics) + 3 * g;
-                gpuAtomicAdd(v_conic_ptr, v_conic_local.x);
-                gpuAtomicAdd(v_conic_ptr + 1, v_conic_local.y);
-                gpuAtomicAdd(v_conic_ptr + 2, v_conic_local.z);
-
-                float *v_xy_ptr = (float *)(v_means2d) + 2 * g;
-                gpuAtomicAdd(v_xy_ptr, v_xy_local.x);
-                gpuAtomicAdd(v_xy_ptr + 1, v_xy_local.y);
-
-                if (v_means2d_abs != nullptr) {
-                    float *v_xy_abs_ptr = (float *)(v_means2d_abs) + 2 * g;
-                    gpuAtomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
-                    gpuAtomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
-                }
-
-                gpuAtomicAdd(v_opacities + g, v_opacity_local);
-
-                #undef gpuAtomicAdd
+                v_splat.atomicAddBuffer(v_splat_buffer, splat_gid);
             }
         }
     }
@@ -317,12 +232,10 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
 template <uint32_t CDIM>
 void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     // Gaussian parameters
-    const at::Tensor means2d,                   // [..., N, 2] or [nnz, 2]
-    const at::Tensor conics,                    // [..., N, 3] or [nnz, 3]
+    Vanilla3DGS::Screen::Tensor splats,
     const at::Tensor colors,                    // [..., N, 3] or [nnz, 3]
-    const at::Tensor opacities,                 // [..., N] or [nnz]
-    const at::optional<at::Tensor> backgrounds, // [..., 3]
-    const at::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    const std::optional<at::Tensor> backgrounds, // [..., 3]
+    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -336,15 +249,11 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     const at::Tensor v_render_colors, // [..., image_height, image_width, 3]
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
     // outputs
-    at::optional<at::Tensor> v_means2d_abs, // [..., N, 2] or [nnz, 2]
-    at::Tensor v_means2d,                   // [..., N, 2] or [nnz, 2]
-    at::Tensor v_conics,                    // [..., N, 3] or [nnz, 3]
-    at::Tensor v_colors,                    // [..., N, 3] or [nnz, 3]
-    at::Tensor v_opacities                  // [..., N] or [nnz]
+    Vanilla3DGS::Screen::Tensor v_splats,
+    at::Tensor v_colors                    // [..., N, 3] or [nnz, 3]
 ) {
-    bool packed = means2d.dim() == 2;
-
-    uint32_t N = packed ? 0 : means2d.size(-2); // number of gaussians
+    bool packed = splats.isPacked();
+    uint32_t N = packed ? 0 : splats.size(); // number of gaussians
     uint32_t I = render_Ts.numel() / (image_height * image_width); // number of images
     uint32_t tile_height = tile_offsets.size(-2);
     uint32_t tile_width = tile_offsets.size(-1);
@@ -386,10 +295,8 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
             N,
             n_isects,
             packed,
-            reinterpret_cast<glm::vec2 *>(means2d.data_ptr<float>()),
-            reinterpret_cast<glm::vec3 *>(conics.data_ptr<float>()),
+            splats,
             colors.data_ptr<float>(),
-            opacities.data_ptr<float>(),
             backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
                                     : nullptr,
             masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
@@ -403,29 +310,23 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
             last_ids.data_ptr<int32_t>(),
             v_render_colors.data_ptr<float>(),
             v_render_alphas.data_ptr<float>(),
-            v_means2d_abs.has_value()
-                ? reinterpret_cast<glm::vec2 *>(
-                      v_means2d_abs.value().data_ptr<float>()
-                  )
-                : nullptr,
-            reinterpret_cast<glm::vec2 *>(v_means2d.data_ptr<float>()),
-            reinterpret_cast<glm::vec3 *>(v_conics.data_ptr<float>()),
-            v_colors.data_ptr<float>(),
-            v_opacities.data_ptr<float>()
+            v_splats,
+            v_colors.data_ptr<float>()
         );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-rasterize_to_pixels_3dgs_bwd(
+std::tuple<
+    Vanilla3DGS::Screen::TensorTuple,
+    at::Tensor,  // v_colors
+    std::optional<at::Tensor>  // absgrad
+> rasterize_to_pixels_3dgs_bwd(
     // Gaussian parameters
-    const at::Tensor means2d,                   // [..., N, 2] or [nnz, 2]
-    const at::Tensor conics,                    // [..., N, 3] or [nnz, 3]
+    Vanilla3DGS::Screen::TensorTuple splats_tuple,
     const at::Tensor colors,                    // [..., N, channels] or [nnz, channels]
-    const at::Tensor opacities,                 // [..., N] or [nnz]
-    const at::optional<at::Tensor> backgrounds, // [..., channels]
-    const at::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    const std::optional<at::Tensor> backgrounds, // [..., channels]
+    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -442,45 +343,34 @@ rasterize_to_pixels_3dgs_bwd(
     // options
     bool absgrad
 ) {
-    DEVICE_GUARD(means2d);
-    CHECK_INPUT(means2d);
-    CHECK_INPUT(conics);
+    DEVICE_GUARD(colors);
     CHECK_INPUT(colors);
-    CHECK_INPUT(opacities);
     CHECK_INPUT(tile_offsets);
     CHECK_INPUT(flatten_ids);
     CHECK_INPUT(render_Ts);
     CHECK_INPUT(last_ids);
     CHECK_INPUT(v_render_colors);
     CHECK_INPUT(v_render_alphas);
-    if (backgrounds.has_value()) {
+    if (backgrounds.has_value())
         CHECK_INPUT(backgrounds.value());
-    }
-    if (masks.has_value()) {
+    if (masks.has_value())
         CHECK_INPUT(masks.value());
-    }
 
     if (tile_size != TILE_SIZE)
         AT_ERROR("Unsupported tile size");
 
     uint32_t channels = colors.size(-1);
 
-    at::Tensor v_means2d = at::zeros_like(means2d);
-    at::Tensor v_conics = at::zeros_like(conics);
-    at::Tensor v_colors = at::zeros_like(colors);
-    at::Tensor v_opacities = at::zeros_like(opacities);
-    at::Tensor v_means2d_abs;
-    if (absgrad) {
-        v_means2d_abs = at::zeros_like(means2d);
-    }
+    Vanilla3DGS::Screen::Tensor splats(splats_tuple);
+    Vanilla3DGS::Screen::Tensor v_splats = splats.zeros_like(absgrad);
+
+    at::Tensor v_colors = torch::zeros_like(colors, splats.options());
 
 #define __LAUNCH_KERNEL__(N)                                                   \
     case N:                                                                    \
         launch_rasterize_to_pixels_3dgs_bwd_kernel<N>(                         \
-            means2d,                                                           \
-            conics,                                                            \
+            splats,                                                            \
             colors,                                                            \
-            opacities,                                                         \
             backgrounds,                                                       \
             masks,                                                             \
             image_width,                                                       \
@@ -491,11 +381,8 @@ rasterize_to_pixels_3dgs_bwd(
             last_ids,                                                          \
             v_render_colors,                                                   \
             v_render_alphas,                                                   \
-            absgrad ? c10::optional<at::Tensor>(v_means2d_abs) : c10::nullopt, \
-            v_means2d,                                                         \
-            v_conics,                                                          \
-            v_colors,                                                          \
-            v_opacities                                                        \
+            v_splats,                                                          \
+            v_colors                                                           \
         );                                                                     \
         break;
 
@@ -528,7 +415,7 @@ rasterize_to_pixels_3dgs_bwd(
 #undef __LAUNCH_KERNEL__
 
     return std::make_tuple(
-        v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities
+        v_splats.tuple(), v_colors, v_splats.absgrad
     );
 }
 
@@ -538,12 +425,10 @@ rasterize_to_pixels_3dgs_bwd(
 // TODO: this is slow to compile, can we do something about it?
 #define __INS__(CDIM)                                                          \
     template void launch_rasterize_to_pixels_3dgs_bwd_kernel<CDIM>(            \
-        const at::Tensor means2d,                                              \
-        const at::Tensor conics,                                               \
+        Vanilla3DGS::Screen::Tensor splats,                                                \
         const at::Tensor colors,                                               \
-        const at::Tensor opacities,                                            \
-        const at::optional<at::Tensor> backgrounds,                            \
-        const at::optional<at::Tensor> masks,                                  \
+        const std::optional<at::Tensor> backgrounds,                            \
+        const std::optional<at::Tensor> masks,                                  \
         uint32_t image_width,                                                  \
         uint32_t image_height,                                                 \
         const at::Tensor tile_offsets,                                         \
@@ -552,10 +437,7 @@ rasterize_to_pixels_3dgs_bwd(
         const at::Tensor last_ids,                                             \
         const at::Tensor v_render_colors,                                      \
         const at::Tensor v_render_alphas,                                      \
-        at::optional<at::Tensor> v_means2d_abs,                                \
-        at::Tensor v_means2d,                                                  \
-        at::Tensor v_conics,                                                   \
-        at::Tensor v_colors,                                                   \
+        Vanilla3DGS::Screen::Tensor v_splats,                                              \
         at::Tensor v_opacities                                                 \
     );
 

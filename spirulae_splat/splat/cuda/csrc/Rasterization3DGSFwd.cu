@@ -5,6 +5,7 @@
 #include <gsplat/Common.h>
 #include <gsplat/Utils.cuh>
 
+#include "Primitive.cuh"
 
 template <uint32_t CDIM>
 __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
@@ -12,10 +13,8 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     const uint32_t N,
     const uint32_t n_isects,
     const bool packed,
-    const glm::vec2 *__restrict__ means2d,         // [I, N, 2] or [nnz, 2]
-    const glm::vec3 *__restrict__ conics,          // [I, N, 3] or [nnz, 3]
+    Vanilla3DGS::Screen::Buffer splat_buffer,
     const float *__restrict__ colors,      // [I, N, CDIM] or [nnz, CDIM]
-    const float *__restrict__ opacities,   // [I, N] or [nnz]
     const float *__restrict__ backgrounds, // [I, CDIM]
     const bool *__restrict__ masks,           // [I, tile_height, tile_width]
     const uint32_t image_width,
@@ -63,7 +62,7 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     // when the mask is provided, render the background color and return
     // if this tile is labeled as False
     if (masks != nullptr && inside && !masks[tile_id]) {
-#pragma unroll
+        #pragma unroll
         for (uint32_t k = 0; k < CDIM; ++k) {
             render_colors[pix_id * CDIM + k] =
                 backgrounds == nullptr ? 0.0f : backgrounds[k];
@@ -85,10 +84,8 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
 
     extern __shared__ int s[];
     int32_t *id_batch = (int32_t *)s; // [block_size]
-    glm::vec3 *xy_opacity_batch =
-        reinterpret_cast<glm::vec3 *>(&id_batch[block_size]); // [block_size]
-    glm::vec3 *conic_batch =
-        reinterpret_cast<glm::vec3 *>(&xy_opacity_batch[block_size]); // [block_size]
+    Vanilla3DGS::Screen *splat_batch =
+        reinterpret_cast<Vanilla3DGS::Screen*>(&id_batch[block_size]); // [block_size]
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
@@ -118,10 +115,7 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [I * N] or [nnz]
             id_batch[tr] = g;
-            const glm::vec2 xy = means2d[g];
-            const float opac = opacities[g];
-            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            conic_batch[tr] = conics[g];
+            splat_batch[tr] = Vanilla3DGS::Screen::load(splat_buffer, g);
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -130,15 +124,9 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
         // process gaussians in the current batch for this pixel
         uint32_t batch_size = min(block_size, range_end - batch_start);
         for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
-            const glm::vec3 conic = conic_batch[t];
-            const glm::vec3 xy_opac = xy_opacity_batch[t];
-            const float opac = xy_opac.z;
-            const glm::vec2 delta = {xy_opac.x - px, xy_opac.y - py};
-            const float sigma = 0.5f * (conic.x * delta.x * delta.x +
-                                        conic.z * delta.y * delta.y) +
-                                conic.y * delta.x * delta.y;
-            float alpha = min(0.999f, opac * __expf(-sigma));
-            if (sigma < 0.f || alpha < ALPHA_THRESHOLD) {
+            Vanilla3DGS::Screen splat = splat_batch[t];
+            float alpha = splat.evaluate_alpha(px, py);
+            if (alpha < ALPHA_THRESHOLD) {
                 continue;
             }
 
@@ -151,7 +139,7 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
             int32_t g = id_batch[t];
             const float vis = alpha * T;
             const float *c_ptr = colors + g * CDIM;
-#pragma unroll
+            #pragma unroll
             for (uint32_t k = 0; k < CDIM; ++k) {
                 pix_out[k] += c_ptr[k] * vis;
             }
@@ -163,7 +151,7 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
 
     if (inside) {
         render_Ts[pix_id] = T;
-#pragma unroll
+        #pragma unroll
         for (uint32_t k = 0; k < CDIM; ++k) {
             render_colors[pix_id * CDIM + k] =
                 backgrounds == nullptr ? pix_out[k]
@@ -177,12 +165,10 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
 template <uint32_t CDIM>
 void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     // Gaussian parameters
-    const at::Tensor means2d,   // [..., N, 2] or [nnz, 2]
-    const at::Tensor conics,    // [..., N, 3] or [nnz, 3]
+    Vanilla3DGS::Screen::Tensor splats,
     const at::Tensor colors,    // [..., N, channels] or [nnz, channels]
-    const at::Tensor opacities, // [..., N]  or [nnz]
-    const at::optional<at::Tensor> backgrounds, // [..., channels]
-    const at::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    const std::optional<at::Tensor> backgrounds, // [..., channels]
+    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -195,9 +181,8 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     at::Tensor transmittances,  // [..., image_height, image_width]
     at::Tensor last_ids // [..., image_height, image_width]
 ) {
-    bool packed = means2d.dim() == 2;
-
-    uint32_t N = packed ? 0 : means2d.size(-2); // number of gaussians
+    bool packed = splats.isPacked();
+    uint32_t N = packed ? 0 : splats.size(); // number of gaussians
     uint32_t I = transmittances.numel() / (image_height * image_width); // number of images
     uint32_t tile_height = tile_offsets.size(-2);
     uint32_t tile_width = tile_offsets.size(-1);
@@ -209,7 +194,7 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     dim3 grid = {I, tile_height, tile_width};
 
     int64_t shmem_size =
-        tile_size * tile_size * (sizeof(int32_t) + sizeof(glm::vec3) + sizeof(glm::vec3));
+        tile_size * tile_size * (sizeof(int32_t) + sizeof(Vanilla3DGS::Screen));
 
     // TODO: an optimization can be done by passing the actual number of
     // channels into the kernel functions and avoid necessary global memory
@@ -232,10 +217,8 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
             N,
             n_isects,
             packed,
-            reinterpret_cast<glm::vec2 *>(means2d.data_ptr<float>()),
-            reinterpret_cast<glm::vec3 *>(conics.data_ptr<float>()),
+            splats.buffer(),
             colors.data_ptr<float>(),
-            opacities.data_ptr<float>(),
             backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
                                     : nullptr,
             masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
@@ -257,12 +240,10 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
 // TODO: this is slow to compile, can we do something about it?
 #define __INS__(CDIM)                                                          \
     template void launch_rasterize_to_pixels_3dgs_fwd_kernel<CDIM>(            \
-        const at::Tensor means2d,                                              \
-        const at::Tensor conics,                                               \
+        Vanilla3DGS::Screen::Tensor splats,                                                \
         const at::Tensor colors,                                               \
-        const at::Tensor opacities,                                            \
-        const at::optional<at::Tensor> backgrounds,                            \
-        const at::optional<at::Tensor> masks,                                  \
+        const std::optional<at::Tensor> backgrounds,                            \
+        const std::optional<at::Tensor> masks,                                  \
         uint32_t image_width,                                                  \
         uint32_t image_height,                                                 \
         uint32_t tile_size,                                                    \
@@ -297,12 +278,10 @@ __INS__(5)
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     // Gaussian parameters
-    const at::Tensor means2d,   // [..., N, 2] or [nnz, 2]
-    const at::Tensor conics,    // [..., N, 3] or [nnz, 3]
+    Vanilla3DGS::Screen::TensorTuple splats_tuple,
     const at::Tensor colors,    // [..., N, channels] or [nnz, channels]
-    const at::Tensor opacities, // [..., N]  or [nnz]
-    const at::optional<at::Tensor> backgrounds, // [..., channels]
-    const at::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    const std::optional<at::Tensor> backgrounds, // [..., channels]
+    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -311,21 +290,18 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids   // [n_isects]
 ) {
-    DEVICE_GUARD(means2d);
-    CHECK_INPUT(means2d);
-    CHECK_INPUT(conics);
+    DEVICE_GUARD(colors);
     CHECK_INPUT(colors);
-    CHECK_INPUT(opacities);
     CHECK_INPUT(tile_offsets);
     CHECK_INPUT(flatten_ids);
-    if (backgrounds.has_value()) {
+    if (backgrounds.has_value())
         CHECK_INPUT(backgrounds.value());
-    }
-    if (masks.has_value()) {
+    if (masks.has_value())
         CHECK_INPUT(masks.value());
-    }
+    
+    Vanilla3DGS::Screen::Tensor splats(splats_tuple);
 
-    auto opt = means2d.options();
+    auto opt = splats.options();
     at::DimVector image_dims(tile_offsets.sizes().slice(0, tile_offsets.dim() - 2));
     uint32_t channels = colors.size(-1);
 
@@ -344,10 +320,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
 #define __LAUNCH_KERNEL__(N)                                                   \
     case N:                                                                    \
         launch_rasterize_to_pixels_3dgs_fwd_kernel<N>(                         \
-            means2d,                                                           \
-            conics,                                                            \
+            splats,                                                            \
             colors,                                                            \
-            opacities,                                                         \
             backgrounds,                                                       \
             masks,                                                             \
             image_width,                                                       \

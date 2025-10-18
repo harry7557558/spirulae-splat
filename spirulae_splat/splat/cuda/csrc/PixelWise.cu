@@ -18,13 +18,13 @@ __global__ void blend_background_forward_kernel(
     unsigned y = gid / in_rgb.shape[1];
     unsigned x = gid % in_rgb.shape[1];
 
-    float3 rgb = in_rgb.load3f(y, x);
-    float alpha = in_alpha.load1f(y, x);
-    float3 background = in_background.load3f(y, x);
+    float3 rgb = in_rgb.load3(y, x);
+    float alpha = in_alpha.load1(y, x);
+    float3 background = in_background.load3(y, x);
 
     rgb = blend_background(rgb, alpha, background);
 
-    out_rgb.store3f(y, x, rgb);
+    out_rgb.store3(y, x, rgb);
 }
 
 
@@ -43,11 +43,11 @@ __global__ void blend_background_backward_kernel(
     unsigned y = gid / in_rgb.shape[1];
     unsigned x = gid % in_rgb.shape[1];
 
-    float3 rgb = in_rgb.load3f(y, x);
-    float alpha = in_alpha.load1f(y, x);
-    float3 background = in_background.load3f(y, x);
+    float3 rgb = in_rgb.load3(y, x);
+    float alpha = in_alpha.load1(y, x);
+    float3 background = in_background.load3(y, x);
 
-    float3 v_out = v_out_rgb.load3f(y, x);
+    float3 v_out = v_out_rgb.load3(y, x);
 
     float3 v_rgb; float v_alpha; float3 v_background;
     blend_background_bwd(
@@ -56,9 +56,9 @@ __global__ void blend_background_backward_kernel(
         &v_rgb, &v_alpha, &v_background
     );
 
-    v_in_rgb.store3f(y, x, v_rgb);
-    v_in_alpha.store1f(y, x, v_alpha);
-    v_in_background.store3f(y, x, v_background);
+    v_in_rgb.store3(y, x, v_rgb);
+    v_in_alpha.store1(y, x, v_alpha);
+    v_in_background.store3(y, x, v_background);
 
 }
 

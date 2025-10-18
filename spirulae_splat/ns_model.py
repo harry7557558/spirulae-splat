@@ -208,8 +208,6 @@ class SpirulaeModelConfig(ModelConfig):
     """maximum degree of spherical harmonics to use"""
     sh_degree_interval: int = 1000
     """every n intervals turn on another sh degree"""
-    max_opacity: float = 0.995
-    """maximum opacity of a gaussian, prevent numerical instability during backward"""
     train_background_color: bool = True
     """make background color trainable"""
     background_sh_degree: int = 3
@@ -704,7 +702,6 @@ class SpirulaeModel(Model):
         viewmats[:, :3, 3:4] = T_inv
 
         quats = F.normalize(self.quats, dim=-1)
-        opacities = self.config.max_opacity * torch.sigmoid(self.opacities)
 
         max_depth_scale = 2.0 if self.training else 1.0
 
@@ -755,7 +752,7 @@ class SpirulaeModel(Model):
             means=self.means,
             quats=quats,
             scales=torch.exp(self.scales),
-            opacities=opacities.squeeze(-1),
+            opacities=self.opacities.squeeze(-1),
             colors_dc=self.features_dc,
             colors_sh=self.features_sh,
             viewmats=viewmats,  # [C, 4, 4]

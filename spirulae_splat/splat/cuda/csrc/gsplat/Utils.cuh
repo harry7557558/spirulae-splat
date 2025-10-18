@@ -443,6 +443,129 @@ inline __device__ void persp_proj(
     const float fy,
     const float cx,
     const float cy,
+    const uint32_t width,
+    const uint32_t height,
+    // outputs
+    mat2 &cov2d,
+    vec2 &mean2d,
+    bool patched = false
+) {
+    float x = mean3d[0], y = mean3d[1], z = mean3d[2];
+
+    // Comment out certain code to make patched rendering happy
+
+    float tan_fovx = 0.5f * width / fx;
+    float tan_fovy = 0.5f * height / fy;
+    float lim_x_pos = (width - cx) / fx + 0.3f * tan_fovx;
+    float lim_x_neg = cx / fx + 0.3f * tan_fovx;
+    float lim_y_pos = (height - cy) / fy + 0.3f * tan_fovy;
+    float lim_y_neg = cy / fy + 0.3f * tan_fovy;
+
+    float rz = 1.f / z;
+    float rz2 = rz * rz;
+    float tx = z * min(lim_x_pos, max(-lim_x_neg, x * rz));
+    float ty = z * min(lim_y_pos, max(-lim_y_neg, y * rz));
+
+    // mat3x2 is 3 columns x 2 rows.
+    mat3x2 J = mat3x2(
+        fx * rz,
+        0.f, // 1st column
+        0.f,
+        fy * rz, // 2nd column
+        -fx * tx * rz2,
+        -fy * ty * rz2 // 3rd column
+    );
+    cov2d = J * cov3d * glm::transpose(J);
+    mean2d = vec2({fx * x * rz + cx, fy * y * rz + cy});
+}
+
+inline __device__ void persp_proj_vjp(
+    // fwd inputs
+    const vec3 mean3d,
+    const mat3 cov3d,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const uint32_t width,
+    const uint32_t height,
+    // grad outputs
+    const mat2 v_cov2d,
+    const vec2 v_mean2d,
+    // grad inputs
+    vec3 &v_mean3d,
+    mat3 &v_cov3d
+) {
+    float x = mean3d[0], y = mean3d[1], z = mean3d[2];
+
+    float tan_fovx = 0.5f * width / fx;
+    float tan_fovy = 0.5f * height / fy;
+    float lim_x_pos = (width - cx) / fx + 0.3f * tan_fovx;
+    float lim_x_neg = cx / fx + 0.3f * tan_fovx;
+    float lim_y_pos = (height - cy) / fy + 0.3f * tan_fovy;
+    float lim_y_neg = cy / fy + 0.3f * tan_fovy;
+
+    float rz = 1.f / z;
+    float rz2 = rz * rz;
+    float tx = z * min(lim_x_pos, max(-lim_x_neg, x * rz));
+    float ty = z * min(lim_y_pos, max(-lim_y_neg, y * rz));
+
+    // mat3x2 is 3 columns x 2 rows.
+    mat3x2 J = mat3x2(
+        fx * rz,
+        0.f, // 1st column
+        0.f,
+        fy * rz, // 2nd column
+        -fx * tx * rz2,
+        -fy * ty * rz2 // 3rd column
+    );
+
+    // cov = J * V * Jt; G = df/dcov = v_cov
+    // -> df/dV = Jt * G * J
+    // -> df/dJ = G * J * Vt + Gt * J * V
+    v_cov3d += glm::transpose(J) * v_cov2d * J;
+
+    // df/dx = fx * rz * df/dpixx
+    // df/dy = fy * rz * df/dpixy
+    // df/dz = - fx * mean.x * rz2 * df/dpixx - fy * mean.y * rz2 * df/dpixy
+    v_mean3d += vec3(
+        fx * rz * v_mean2d[0],
+        fy * rz * v_mean2d[1],
+        -(fx * x * v_mean2d[0] + fy * y * v_mean2d[1]) * rz2
+    );
+
+    // df/dx = -fx * rz2 * df/dJ_02
+    // df/dy = -fy * rz2 * df/dJ_12
+    // df/dz = -fx * rz2 * df/dJ_00 - fy * rz2 * df/dJ_11
+    //         + 2 * fx * tx * rz3 * df/dJ_02 + 2 * fy * ty * rz3
+    float rz3 = rz2 * rz;
+    mat3x2 v_J = v_cov2d * J * glm::transpose(cov3d) +
+                 glm::transpose(v_cov2d) * J * cov3d;
+
+    // fov clipping
+    if (x * rz <= lim_x_pos && x * rz >= -lim_x_neg) {
+        v_mean3d.x += -fx * rz2 * v_J[2][0];
+    } else {
+        v_mean3d.z += -fx * rz3 * v_J[2][0] * tx;
+    }
+    if (y * rz <= lim_y_pos && y * rz >= -lim_y_neg) {
+        v_mean3d.y += -fy * rz2 * v_J[2][1];
+    } else {
+        v_mean3d.z += -fy * rz3 * v_J[2][1] * ty;
+    }
+    v_mean3d.z += -fx * rz2 * v_J[0][0] - fy * rz2 * v_J[1][1] +
+                  2.f * fx * tx * rz3 * v_J[2][0] +
+                  2.f * fy * ty * rz3 * v_J[2][1];
+}
+
+inline __device__ void persp_proj(
+    // inputs
+    const vec3 mean3d,
+    const mat3 cov3d,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
     // const uint32_t width,
     // const uint32_t height,
     // outputs
