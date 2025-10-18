@@ -1,3 +1,5 @@
+#include "ProjectionEWA3DGS.cuh"
+
 #include <ATen/Dispatch.h>
 #include <ATen/core/Tensor.h>
 #include <ATen/cuda/Atomic.cuh>
@@ -5,28 +7,19 @@
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;
 
-#define TensorView _Slang_TensorView
-#include "generated/projection.cu"
-#undef TensorView
-
 #include "common.cuh"
 
 #include <gsplat/Common.h>
 #include <gsplat/Utils.cuh>
 
-typedef Matrix<float, 2, 2> float2x2;
-typedef Matrix<float, 3, 3> float3x3;
 
-
-#include "Primitive.cuh"
-
-
-template<gsplat::CameraModelType camera_model>
-__global__ void projection_ewa_3dgs_fused_fwd_kernel(
+template<typename SplatPrimitive, gsplat::CameraModelType camera_model>
+__global__ void projection_fused_fwd_kernel(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const Vanilla3DGS::World::Buffer splats_world,
+    const bool antialiased,
+    const typename SplatPrimitive::World::Buffer splats_world,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float *__restrict__ Ks,       // [B, C, 3, 3]
     const uint32_t image_width,
@@ -38,7 +31,7 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     // outputs
     int2 *__restrict__ radii,         // [B, C, N, 2]
     float *__restrict__ depths,       // [B, C, N]
-    Vanilla3DGS::Screen::Buffer splats_screen
+    typename SplatPrimitive::Screen::Buffer splats_screen
 ) {
     // parallelize over B * C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -49,60 +42,48 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     const uint32_t cid = (idx / N) % C; // camera id
     const uint32_t gid = idx % N; // gaussian id
 
-    // shift pointers to the current camera and gaussian
+    // Load camera
     viewmats += bid * C * 16 + cid * 16;
     Ks += bid * C * 9 + cid * 9;
-
-    // glm is column-major but input is row-major
     float3x3 R = {
         viewmats[0], viewmats[1], viewmats[2],  // 1st row
         viewmats[4], viewmats[5], viewmats[6],  // 2nd row
         viewmats[8], viewmats[9], viewmats[10],  // 3rd row
     };
     float3 t = { viewmats[3], viewmats[7], viewmats[11] };
-
-    float3 mean = splats_world.means[bid * N + gid];
-    float4 quat = splats_world.quats[bid * N + gid];
-    float3 scale = splats_world.scales[bid * N + gid];
-    float in_opacity = splats_world.opacities[bid * N + gid];
     float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
+    typename SplatPrimitive::FwdProjCamera cam = {
+        R, t, fx, fy, cx, cy,
+        image_width, image_height, antialiased,
+        near_plane, far_plane, radius_clip
+    };
 
+    // Load splat
+    typename SplatPrimitive::World splat_world =
+        SplatPrimitive::World::load(splats_world, bid * N + gid);
+
+    // Projection
     int2 radius;
-    float2 mean2d;
     float depth;
-    float3 conic;
-    float opacity;
+    typename SplatPrimitive::Screen splat_screen;
     switch (camera_model) {
     case gsplat::CameraModelType::PINHOLE: // perspective projection
-        projection_3dgs_persp(
-            mean, quat, scale, in_opacity, R, t, fx, fy, cx, cy,
-            image_width, image_height, eps2d, near_plane, far_plane, radius_clip,
-            &radius, &mean2d, &depth, &conic, &opacity
-        );
+        SplatPrimitive::project_persp(splat_world, cam, splat_screen, radius, depth);
         break;
-    case gsplat::CameraModelType::ORTHO: // orthographic projection
-        projection_3dgs_ortho(
-            mean, quat, scale, in_opacity, R, t, fx, fy, cx, cy,
-            image_width, image_height, eps2d, near_plane, far_plane, radius_clip,
-            &radius, &mean2d, &depth, &conic, &opacity
-        );
-        break;
-    case gsplat::CameraModelType::FISHEYE: // fisheye projection
-        projection_3dgs_fisheye(
-            mean, quat, scale, in_opacity, R, t, fx, fy, cx, cy,
-            image_width, image_height, eps2d, near_plane, far_plane, radius_clip,
-            &radius, &mean2d, &depth, &conic, &opacity
-        );
-        break;
+    // case gsplat::CameraModelType::ORTHO: // orthographic projection
+    //     SplatPrimitive::project_ortho(splat_world, cam, splat_screen, radius, depth);
+    //     break;
+    // case gsplat::CameraModelType::FISHEYE: // fisheye projection
+    //     SplatPrimitive::project_fisheye(splat_world, cam, splat_screen, radius, depth);
+    //     break;
     }
+
+    // Save results
     radii[idx] = radius;
     if (radius.x * radius.y > 0) {
         depths[idx] = depth;
-        splats_screen.means2d[idx] = mean2d;
-        splats_screen.conics[idx] = conic;
-        splats_screen.opacities[idx] = opacity;
+        splat_screen.saveBuffer(splats_screen, idx);
     }
-
 }
 
 std::tuple<
@@ -110,6 +91,7 @@ std::tuple<
     at::Tensor,  // depths
     Vanilla3DGS::Screen::TensorTuple  // out splats
 > projection_ewa_3dgs_forward_tensor(
+    const bool antialiased,
     // inputs
     const Vanilla3DGS::World::TensorTuple &in_splats,
     const at::Tensor viewmats,             // [..., C, 4, 4]
@@ -120,7 +102,6 @@ std::tuple<
     const float near_plane,
     const float far_plane,
     const float radius_clip,
-    bool is_antialiased,
     const gsplat::CameraModelType camera_model
 ) {
     Vanilla3DGS::World::Tensor splats_world(in_splats);
@@ -142,6 +123,7 @@ std::tuple<
     #define _LAUNCH_ARGS \
         <<<_CEIL_DIV(B*C*N, block), block>>>( \
             B, C, N, \
+            antialiased, \
             splats_world.buffer(), \
             viewmats.data_ptr<float>(), \
             Ks.data_ptr<float>(), \
@@ -158,24 +140,27 @@ std::tuple<
 
     constexpr uint block = 256;
     if (camera_model == gsplat::CameraModelType::PINHOLE)
-        projection_ewa_3dgs_fused_fwd_kernel<gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
-    else if (camera_model == gsplat::CameraModelType::ORTHO)
-        projection_ewa_3dgs_fused_fwd_kernel<gsplat::CameraModelType::ORTHO> _LAUNCH_ARGS;
-    else if (camera_model == gsplat::CameraModelType::FISHEYE)
-        projection_ewa_3dgs_fused_fwd_kernel<gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+        projection_fused_fwd_kernel<Vanilla3DGS, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
+    // else if (camera_model == gsplat::CameraModelType::ORTHO)
+    //     projection_fused_fwd_kernel<Vanilla3DGS, gsplat::CameraModelType::ORTHO> _LAUNCH_ARGS;
+    // else if (camera_model == gsplat::CameraModelType::FISHEYE)
+    //     projection_fused_fwd_kernel<Vanilla3DGS, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+    else
+        throw std::runtime_error("Unsupported camera model");
 
     #undef _LAUNCH_ARGS
 
     return std::make_tuple(radii, depths, std::make_tuple(means2d, conics, out_opacities));
 }
 
-template<gsplat::CameraModelType camera_model>
-__global__ void projection_ewa_3dgs_fused_bwd_kernel(
+template<typename SplatPrimitive, gsplat::CameraModelType camera_model>
+__global__ void projection_fused_bwd_kernel(
     // fwd inputs
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const Vanilla3DGS::World::Buffer splats_world,
+    const bool antialiased,
+    const typename SplatPrimitive::World::Buffer splats_world,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float *__restrict__ Ks,       // [B, C, 3, 3]
     const uint32_t image_width,
@@ -185,9 +170,9 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     const int2 *__restrict__ radii,          // [B, C, N, 2]
     // grad outputs
     const float *__restrict__ v_depths,        // [B, C, N]
-    Vanilla3DGS::Screen::Buffer v_splats_screen,
+    typename SplatPrimitive::Screen::Buffer v_splats_screen,
     // grad inputs
-    Vanilla3DGS::World::Buffer v_splats_world,
+    typename SplatPrimitive::World::Buffer v_splats_world,
     float *__restrict__ v_viewmats // [B, C, 4, 4] optional
 ) {
     // parallelize over B * C * N.
@@ -199,61 +184,47 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     const uint32_t cid = (idx / N) % C; // camera id
     const uint32_t gid = idx % N; // gaussian id
 
-    // shift pointers to the current camera and gaussian
+    // Load camera
     viewmats += bid * C * 16 + cid * 16;
     Ks += bid * C * 9 + cid * 9;
-
-    // glm is column-major but input is row-major
     float3x3 R = {
         viewmats[0], viewmats[1], viewmats[2],  // 1st row
         viewmats[4], viewmats[5], viewmats[6],  // 2nd row
         viewmats[8], viewmats[9], viewmats[10],  // 3rd row
     };
     float3 t = { viewmats[3], viewmats[7], viewmats[11] };
-
-    float3 mean = splats_world.means[bid * N + gid];
-    float4 quat = splats_world.quats[bid * N + gid];
-    float3 scale = splats_world.scales[bid * N + gid];
-    float opacity = splats_world.opacities[bid * N + gid];
     float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
+    typename SplatPrimitive::BwdProjCamera cam = {
+        R, t, fx, fy, cx, cy,
+        image_width, image_height, antialiased,
+    };
 
-    float3 v_mean = {0.f, 0.f, 0.f};
-    float4 v_quat = {0.f, 0.f, 0.f, 0.f};
-    float3 v_scale = {0.f, 0.f, 0.f};
-    float v_opacity = 0.f;
+    // Load splat
+    typename SplatPrimitive::World splat_world =
+        SplatPrimitive::World::load(splats_world, bid * N + gid);
+    typename SplatPrimitive::Screen v_splat_screen =
+        SplatPrimitive::Screen::load(v_splats_screen, idx);
+
+    // Projection
+    typename SplatPrimitive::World v_splat_world = SplatPrimitive::World::zero();
     float3x3 v_R = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
     float3 v_t = {0.f, 0.f, 0.f};
     switch (camera_model) {
     case gsplat::CameraModelType::PINHOLE: // perspective projection
-        projection_3dgs_persp_vjp(
-            mean, quat, scale, opacity, R, t, fx, fy, cx, cy,
-            image_width, image_height, eps2d,
-            v_splats_screen.means2d[idx], 0.f, v_splats_screen.conics[idx], v_splats_screen.opacities[idx],
-            &v_mean, &v_quat, &v_scale, &v_opacity, &v_R, &v_t
-        );
+        SplatPrimitive::project_persp_vjp(splat_world, cam, v_splat_screen, 0.f, v_splat_world, v_R, v_t);
         break;
-    case gsplat::CameraModelType::ORTHO: // orthographic projection
-        projection_3dgs_ortho_vjp(
-            mean, quat, scale, opacity, R, t, fx, fy, cx, cy,
-            image_width, image_height, eps2d,
-            v_splats_screen.means2d[idx], 0.f, v_splats_screen.conics[idx], v_splats_screen.opacities[idx],
-            &v_mean, &v_quat, &v_scale, &v_opacity, &v_R, &v_t
-        );
-        break;
-    case gsplat::CameraModelType::FISHEYE: // fisheye projection
-        projection_3dgs_fisheye_vjp(
-            mean, quat, scale, opacity, R, t, fx, fy, cx, cy,
-            image_width, image_height, eps2d,
-            v_splats_screen.means2d[idx], 0.f, v_splats_screen.conics[idx], v_splats_screen.opacities[idx],
-            &v_mean, &v_quat, &v_scale, &v_opacity, &v_R, &v_t
-        );
-        break;
+    // case gsplat::CameraModelType::ORTHO: // orthographic projection
+    //     SplatPrimitive::project_ortho_vjp(splat_world, cam, v_splat_screen, 0.f, v_splat_world, v_R, v_t);
+    //     break;
+    // case gsplat::CameraModelType::FISHEYE: // fisheye projection
+    //     SplatPrimitive::project_fisheye_vjp(splat_world, cam, v_splat_screen, 0.f, v_splat_world, v_R, v_t);
+    //     break;
     }
 
+    // Save results
     auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
     auto warp_group_g = cg::labeled_partition(warp, gid);
-    Vanilla3DGS::World v_splat = { v_mean, v_quat, v_scale, v_opacity };
-    v_splat.atomicAddBuffer(v_splats_world, bid * N + gid);
+    v_splat_world.atomicAddBuffer(v_splats_world, bid * N + gid);
 
     if (v_viewmats != nullptr) {
         auto warp_group_c = cg::labeled_partition(warp, cid);
@@ -281,7 +252,7 @@ std::tuple<
     Vanilla3DGS::World::TensorTuple,  // v_splats
     at::Tensor  // v_viewmats
 > projection_ewa_3dgs_backward_tensor(
-    // inputs
+    const bool antialiased,
     // fwd inputs
     const Vanilla3DGS::World::TensorTuple &splats_world_tuple,
     const at::Tensor viewmats,             // [..., C, 4, 4]
@@ -314,6 +285,7 @@ std::tuple<
     #define _LAUNCH_ARGS \
         <<<_CEIL_DIV(B*C*N, block), block>>>( \
             B, C, N, \
+            antialiased, \
             splats_world.buffer(), \
             viewmats.data_ptr<float>(), \
             Ks.data_ptr<float>(), \
@@ -329,11 +301,13 @@ std::tuple<
 
     constexpr uint block = 256;
     if (camera_model == gsplat::CameraModelType::PINHOLE)
-        projection_ewa_3dgs_fused_bwd_kernel<gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
-    else if (camera_model == gsplat::CameraModelType::ORTHO)
-        projection_ewa_3dgs_fused_bwd_kernel<gsplat::CameraModelType::ORTHO> _LAUNCH_ARGS;
-    else if (camera_model == gsplat::CameraModelType::FISHEYE)
-        projection_ewa_3dgs_fused_bwd_kernel<gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+        projection_fused_bwd_kernel<Vanilla3DGS, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
+    // else if (camera_model == gsplat::CameraModelType::ORTHO)
+    //     projection_fused_bwd_kernel<Vanilla3DGS, gsplat::CameraModelType::ORTHO> _LAUNCH_ARGS;
+    // else if (camera_model == gsplat::CameraModelType::FISHEYE)
+    //     projection_fused_bwd_kernel<Vanilla3DGS, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+    else
+        throw std::runtime_error("Unsupported camera model");
 
     #undef _LAUNCH_ARGS
 

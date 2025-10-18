@@ -1,5 +1,7 @@
 // Modified from https://github.com/nerfstudio-project/gsplat/blob/main/gsplat/cuda/csrc/RasterizeToPixels3DGSBwd.cu
 
+#include "Rasterization3DGSBwd.cuh"
+
 #include "common.cuh"
 
 #include <gsplat/Common.h>
@@ -7,21 +9,19 @@
 
 #include <cub/cub.cuh>
 
-#include "Primitive.cuh"
-
 
 constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
 constexpr uint SPLAT_BATCH_SIZE = 128;
 
 
-template <uint32_t CDIM>
-__global__ void rasterize_to_pixels_3dgs_bwd_kernel(
+template <typename SplatPrimitive, uint32_t CDIM>
+__global__ void rasterize_to_pixels_bwd_kernel(
     const uint32_t I,
     const uint32_t N,
     const uint32_t n_isects,
     const bool packed,
     // fwd inputs
-    Vanilla3DGS::Screen::Buffer splat_buffer,
+    typename SplatPrimitive::Screen::Buffer splat_buffer,
     const float *__restrict__ colors,      // [..., N, CDIM] or [nnz, CDIM]
     const float *__restrict__ backgrounds, // [..., CDIM] or [nnz, CDIM]
     const bool *__restrict__ masks,           // [..., tile_height, tile_width]
@@ -41,7 +41,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     const float
         *__restrict__ v_render_alphas, // [..., image_height, image_width, 1]
     // grad inputs
-    Vanilla3DGS::Screen::Buffer v_splat_buffer,
+    typename SplatPrimitive::Screen::Buffer v_splat_buffer,
     float *__restrict__ v_colors   // [..., N, CDIM] or [nnz, CDIM]
 ) {
     auto block = cg::this_thread_block();
@@ -69,9 +69,19 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     }
 
     // load pixels
+    #if 0
+    // seems to be slower
+    extern __shared__ int s[];
+    int32_t* pix_bin_final = (int32_t*)s;  // [BLOCK_SIZE]
+    float2* pix_Ts_with_grad = (float2*)&pix_bin_final[BLOCK_SIZE]+1;  // [BLOCK_SIZE], +1 to avoid bank conflicts
+    float* v_pix_colors = (float*)&pix_Ts_with_grad[BLOCK_SIZE]+1;  // [BLOCK_SIZE*CDIM]
+    float* pix_background = (float*)&v_pix_colors[BLOCK_SIZE*CDIM];  // [CDIM], possibly put in register?
+    #else
     __shared__ int32_t pix_bin_final[BLOCK_SIZE];
     __shared__ float2 pix_Ts_with_grad[BLOCK_SIZE];
     __shared__ float v_pix_colors[BLOCK_SIZE*CDIM];
+    __shared__ float pix_background[CDIM];
+    #endif
     #pragma unroll
     for (uint pix_id0 = 0; pix_id0 < BLOCK_SIZE; pix_id0 += SPLAT_BATCH_SIZE) {
         static_assert(BLOCK_SIZE % SPLAT_BATCH_SIZE == 0);
@@ -94,7 +104,6 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
         }
     }
     static_assert(CDIM <= SPLAT_BATCH_SIZE);
-    __shared__ float pix_background[CDIM];
     if (thread_id < CDIM && backgrounds != nullptr)
         pix_background[thread_id] = backgrounds[thread_id];
     block.sync();
@@ -118,12 +127,12 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
         const int32_t splat_idx = splat_batch_end - thread_id;
 
         // load splats
-        Vanilla3DGS::Screen splat;
+        typename SplatPrimitive::Screen splat;
         uint32_t splat_gid;
         float splat_color[CDIM];
         if (splat_idx >= range_start) {
             splat_gid = flatten_ids[splat_idx]; // flatten index in [I * N] or [nnz]
-            splat = Vanilla3DGS::Screen::load(splat_buffer, splat_gid);
+            splat = SplatPrimitive::Screen::load(splat_buffer, splat_gid);
             #pragma unroll
             for (uint32_t k = 0; k < CDIM; ++k)
                 splat_color[k] = colors[splat_gid * CDIM + k];
@@ -134,7 +143,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
         #pragma unroll
         for (uint32_t k = 0; k < CDIM; ++k)
             v_rgb_local[k] = 0.f;
-        Vanilla3DGS::Screen v_splat = Vanilla3DGS::Screen::zero();
+        typename SplatPrimitive::Screen v_splat = SplatPrimitive::Screen::zero();
 
         // thread 0 takes last splat, 1 takes second last, etc.
         // at t=0, thread 0 (splat -1) undo pixel 0
@@ -264,31 +273,30 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     dim3 threads = {SPLAT_BATCH_SIZE, 1, 1};
     dim3 grid = {I, tile_height, tile_width};
 
-    // int64_t shmem_size =
-    //     TILE_SIZE * TILE_SIZE *
-    //     (sizeof(int32_t) + sizeof(glm::vec3) + sizeof(glm::vec3) + sizeof(float) * CDIM);
-
     if (n_isects == 0) {
         // skip the kernel launch if there are no elements
         return;
     }
 
-    // TODO: an optimization can be done by passing the actual number of
-    // channels into the kernel functions and avoid necessary global memory
-    // writes. This requires moving the channel padding from python to C side.
-    // if (cudaFuncSetAttribute(
-    //         rasterize_to_pixels_3dgs_bwd_kernel<CDIM>,
-    //         cudaFuncAttributeMaxDynamicSharedMemorySize,
-    //         shmem_size
-    //     ) != cudaSuccess) {
-    //     AT_ERROR(
-    //         "Failed to set maximum shared memory size (requested ",
-    //         shmem_size,
-    //         " bytes), try lowering tile_size."
-    //     );
-    // }
+    #if 0
+    int64_t shmem_size =
+        BLOCK_SIZE * (sizeof(int32_t) + sizeof(float2) + sizeof(float) * CDIM)
+        + CDIM * sizeof(float) + sizeof(float2) + sizeof(float);
 
-    rasterize_to_pixels_3dgs_bwd_kernel<CDIM>
+    if (cudaFuncSetAttribute(
+            rasterize_to_pixels_bwd_kernel<Vanilla3DGS, CDIM>,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            shmem_size
+        ) != cudaSuccess) {
+        AT_ERROR(
+            "Failed to set maximum shared memory size (requested ",
+            shmem_size,
+            " bytes)."
+        );
+    }
+    #endif
+
+    rasterize_to_pixels_bwd_kernel<Vanilla3DGS, CDIM>
         // <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
         <<<grid, threads>>>(
             I,

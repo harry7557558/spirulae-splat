@@ -751,7 +751,7 @@ class SpirulaeModel(Model):
         rgbd, alpha, meta = rasterization(
             means=self.means,
             quats=quats,
-            scales=torch.exp(self.scales),
+            scales=self.scales,
             opacities=self.opacities.squeeze(-1),
             colors_dc=self.features_dc,
             colors_sh=self.features_sh,

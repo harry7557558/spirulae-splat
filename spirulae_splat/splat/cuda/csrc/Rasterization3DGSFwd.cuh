@@ -4,7 +4,7 @@
 
 #include <torch/types.h>
 
-#include "Primitive.cuh"
+#include "Primitive3DGS.cuh"
 
 
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */

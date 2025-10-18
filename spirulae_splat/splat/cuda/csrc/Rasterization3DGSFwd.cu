@@ -1,19 +1,19 @@
 // Modified from https://github.com/nerfstudio-project/gsplat/blob/main/gsplat/cuda/csrc/RasterizeToPixels3DGSFwd.cu
 
+#include "Rasterization3DGSFwd.cuh"
+
 #include "common.cuh"
 
 #include <gsplat/Common.h>
 #include <gsplat/Utils.cuh>
 
-#include "Primitive.cuh"
-
-template <uint32_t CDIM>
-__global__ void rasterize_to_pixels_3dgs_fwd_kernel(
+template <typename SplatPrimitive, uint32_t CDIM>
+__global__ void rasterize_to_pixels_fwd_kernel(
     const uint32_t I,
     const uint32_t N,
     const uint32_t n_isects,
     const bool packed,
-    Vanilla3DGS::Screen::Buffer splat_buffer,
+    typename SplatPrimitive::Screen::Buffer splat_buffer,
     const float *__restrict__ colors,      // [I, N, CDIM] or [nnz, CDIM]
     const float *__restrict__ backgrounds, // [I, CDIM]
     const bool *__restrict__ masks,           // [I, tile_height, tile_width]
@@ -84,8 +84,8 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
 
     extern __shared__ int s[];
     int32_t *id_batch = (int32_t *)s; // [block_size]
-    Vanilla3DGS::Screen *splat_batch =
-        reinterpret_cast<Vanilla3DGS::Screen*>(&id_batch[block_size]); // [block_size]
+    typename SplatPrimitive::Screen *splat_batch =
+        reinterpret_cast<typename SplatPrimitive::Screen*>(&id_batch[block_size]); // [block_size]
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
@@ -115,7 +115,7 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [I * N] or [nnz]
             id_batch[tr] = g;
-            splat_batch[tr] = Vanilla3DGS::Screen::load(splat_buffer, g);
+            splat_batch[tr] = SplatPrimitive::Screen::load(splat_buffer, g);
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -124,7 +124,7 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
         // process gaussians in the current batch for this pixel
         uint32_t batch_size = min(block_size, range_end - batch_start);
         for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
-            Vanilla3DGS::Screen splat = splat_batch[t];
+            typename SplatPrimitive::Screen splat = splat_batch[t];
             float alpha = splat.evaluate_alpha(px, py);
             if (alpha < ALPHA_THRESHOLD) {
                 continue;
@@ -200,18 +200,18 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
     if (cudaFuncSetAttribute(
-            rasterize_to_pixels_3dgs_fwd_kernel<CDIM>,
+            rasterize_to_pixels_fwd_kernel<Vanilla3DGS, CDIM>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shmem_size
         ) != cudaSuccess) {
         AT_ERROR(
             "Failed to set maximum shared memory size (requested ",
             shmem_size,
-            " bytes), try lowering tile_size."
+            " bytes)."
         );
     }
 
-    rasterize_to_pixels_3dgs_fwd_kernel<CDIM>
+    rasterize_to_pixels_fwd_kernel<Vanilla3DGS, CDIM>
         <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
             I,
             N,

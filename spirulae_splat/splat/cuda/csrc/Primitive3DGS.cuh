@@ -1,25 +1,73 @@
 #pragma once
 
+#ifdef __CUDACC__
+#define TensorView _Slang_TensorView
+#include "generated/projection_3dgs.cu"
+#undef TensorView
+#endif
 
 #include "common.cuh"
 
 #include <tuple>
 
 
-#ifdef __CUDACC__
-
-inline __device__ float triangle_opac_approx(float2 p0, float2 p1, float2 p2, float2 p, float t) {
-    float x_0 = p0.x, y_0 = p0.y, x_1 = p1.x, y_1 = p1.y, x_2 = p2.x, y_2 = p2.y, x = p.x, y = p.y;
-    float v0=x_1-x_0, v1=y_1-y_0, v2=x_2-x_1, v3=y_2-y_1, v4=v0*v3, v5=v1*v2, v6=v4-v5, v7=v6>0.0f?1.0f:v6<0.0f?-1.0f:0.0f, v8=x-x_0, v9=y-y_0, v10=sqrt(v0*v0+v1*v1), v11=v0/v10, v12=v1/v10, v13=v8*v12, v14=v9*v11, v15=v13-v14, v16=v7*v15, v17=x-x_1, v18=y-y_1, v19=sqrt(v2*v2+v3*v3), v20=v2/v19, v21=v3/v19, v22=v17*v21, v23=v18*v20, v24=v22-v23, v25=v7*v24, v26=x-x_2, v27=y-y_2, v28=x_0-x_2, v29=y_0-y_2, v30=sqrt(v28*v28+v29*v29), v31=v28/v30, v32=v29/v30, v33=v26*v32, v34=v27*v31, v35=v33-v34, v36=v7*v35, v37=fmax(fmax(v16,v25),v36), v38=-v37, v39=v10+v19, v40=v39+v30, v41=v6/v40, v42=2.0f*v41, v43=1.0f-t, v44=v42*v43, v45=v44+t, v46=v38/v45, v47=v46+0.5f, v48=fmin(fmax(v47,0.0f),1.0f);
-    return v48;
-}
-
-#endif
-
-
 struct Vanilla3DGS {
     struct World;
     struct Screen;
+
+#ifdef __CUDACC__
+
+    struct FwdProjCamera {
+        float3x3 R;
+        float3 t;
+        float fx, fy, cx, cy;
+        uint width, height, antialiased;
+        float near_plane, far_plane, radius_clip;
+    };
+
+    inline static __device__ void project_persp(
+        World world, FwdProjCamera cam,
+        Screen& screen, int2& radius, float& depth
+    );
+
+    inline static __device__ void project_ortho(
+        World world, FwdProjCamera cam,
+        Screen& screen, int2& radius, float& depth
+    );
+
+    inline static __device__ void project_fisheye(
+        World world, FwdProjCamera cam,
+        Screen& screen, int2& radius, float& depth
+    );
+
+    struct BwdProjCamera {
+        float3x3 R;
+        float3 t;
+        float fx, fy, cx, cy;
+        uint width, height, antialiased;
+    };
+
+    inline static __device__ void project_persp_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_screen, float v_depth,
+        World& v_world, float3x3 &v_R, float3 &v_t
+    );
+
+    inline static __device__ void project_ortho_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_screen, float v_depth,
+        World& v_world, float3x3 &v_R, float3 &v_t
+    );
+
+    inline static __device__ void project_fisheye_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_screen, float v_depth,
+        World& v_world, float3x3 &v_R, float3 &v_t
+    );
+
+#endif  // #ifdef __CUDACC__
+
+    static constexpr float eps2d = 0.3f;
 };
 
 struct Vanilla3DGS::World {
@@ -92,6 +140,24 @@ struct Vanilla3DGS::World {
     float opacity;
 
 #ifdef __CUDACC__
+
+    static __device__ World load(const Buffer &buffer, long idx) {
+        return {
+            buffer.means[idx],
+            buffer.quats[idx],
+            buffer.scales[idx],
+            buffer.opacities[idx]
+        };
+    }
+
+    static __device__ __forceinline__ World zero() {
+        return {
+            {0.f, 0.f, 0.f},
+            {0.f, 0.f, 0.f, 0.f},
+            {0.f, 0.f, 0.f},
+            0.f
+        };
+    }
 
     template<typename Partition>
     __device__ void reduce(Partition& partition) {
@@ -209,31 +275,23 @@ struct Vanilla3DGS::Screen {
         xy_abs += fabs(other.xy);
     }
 
+    __device__ void saveBuffer(Buffer &buffer, long idx) {
+        buffer.means2d[idx] = xy;
+        buffer.conics[idx] = conic;
+        buffer.opacities[idx] = opac;
+        if (buffer.absgrad != nullptr)
+            buffer.absgrad[idx] = xy_abs;
+    }
+
     __device__ void atomicAddBuffer(Buffer &buffer, long idx) {
-        float *v_conic_ptr = (float*)buffer.conics + 3 * idx;
-        if (conic.x != 0.0f) atomicAdd(v_conic_ptr, conic.x);
-        if (conic.y != 0.0f) atomicAdd(v_conic_ptr + 1, conic.y);
-        if (conic.z != 0.0f) atomicAdd(v_conic_ptr + 2, conic.z);
-
-        float *v_xy_ptr = (float*)buffer.means2d + 2 * idx;
-        if (xy.x != 0.0f) atomicAdd(v_xy_ptr, xy.x);
-        if (xy.y != 0.0f) atomicAdd(v_xy_ptr + 1, xy.y);
-
-        if (buffer.absgrad != nullptr) {
-            float *v_xy_abs_ptr = (float*)buffer.absgrad + 2 * idx;
-            if (xy_abs.x != 0.0f) atomicAdd(v_xy_abs_ptr, xy_abs.x);
-            if (xy_abs.y != 0.0f) atomicAdd(v_xy_abs_ptr + 1, xy_abs.y);
-        }
-
-        if (opac != 0.0f) atomicAdd((float*)buffer.opacities + idx, opac);
+        atomicAddFVec(buffer.means2d + idx, xy);
+        atomicAddFVec(buffer.conics + idx, conic);
+        atomicAdd(buffer.opacities + idx, opac);
+        if (buffer.absgrad != nullptr)
+            atomicAddFVec(buffer.absgrad + idx, xy_abs);
     }
 
     __device__ __forceinline__ float evaluate_alpha(float px, float py) {
-        // float size = 0.2f * rsqrtf(conic.x*conic.z-0.25f*conic.y*conic.y);
-        // float2 p0 = {xy.x + size, xy.y - size};
-        // float2 p1 = {xy.x - size, xy.y - size};
-        // float2 p2 = {xy.x, xy.y + size};
-        // return 0.01f+0.98f*triangle_opac_approx(p0, p1, p2, {px,py}, 0.98f);
         float2 delta = {xy.x - px, xy.y - py};
         float sigma = 0.5f * (conic.x * delta.x * delta.x +
                                 conic.z * delta.y * delta.y) +
@@ -271,3 +329,95 @@ struct Vanilla3DGS::Screen {
 #endif  // #ifdef __CUDACC__
 
 };
+
+
+#ifdef __CUDACC__
+
+inline __device__ void Vanilla3DGS::project_persp(
+    Vanilla3DGS::World world, Vanilla3DGS::FwdProjCamera cam,
+    Vanilla3DGS::Screen& screen, int2& radius, float& depth
+) {
+    projection_3dgs_persp(
+        bool(cam.antialiased),
+        world.mean, world.quat, world.scale, world.opacity,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.width, cam.height, Vanilla3DGS::eps2d, cam.near_plane, cam.far_plane, cam.radius_clip,
+        &radius, &depth, &screen.xy, &screen.conic, &screen.opac
+    );
+}
+
+inline __device__ void Vanilla3DGS::project_ortho(
+    Vanilla3DGS::World world, Vanilla3DGS::FwdProjCamera cam,
+    Vanilla3DGS::Screen& screen, int2& radius, float& depth
+) {
+    projection_3dgs_ortho(
+        bool(cam.antialiased),
+        world.mean, world.quat, world.scale, world.opacity,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.width, cam.height, Vanilla3DGS::eps2d, cam.near_plane, cam.far_plane, cam.radius_clip,
+        &radius, &depth, &screen.xy, &screen.conic, &screen.opac
+    );
+}
+
+inline __device__ void Vanilla3DGS::project_fisheye(
+    Vanilla3DGS::World world, Vanilla3DGS::FwdProjCamera cam,
+    Vanilla3DGS::Screen& screen, int2& radius, float& depth
+) {
+    projection_3dgs_fisheye(
+        bool(cam.antialiased),
+        world.mean, world.quat, world.scale, world.opacity,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.width, cam.height, Vanilla3DGS::eps2d, cam.near_plane, cam.far_plane, cam.radius_clip,
+        &radius, &depth, &screen.xy, &screen.conic, &screen.opac
+    );
+}
+
+inline __device__ void Vanilla3DGS::project_persp_vjp(
+    Vanilla3DGS::World world, Vanilla3DGS::BwdProjCamera cam,
+    Vanilla3DGS::Screen v_screen, float v_depth,
+    Vanilla3DGS::World& v_world, float3x3 &v_R, float3 &v_t
+) {
+    projection_3dgs_persp_vjp(
+        bool(cam.antialiased),
+        world.mean, world.quat, world.scale, world.opacity,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.width, cam.height, Vanilla3DGS::eps2d,
+        v_depth, v_screen.xy, v_screen.conic, v_screen.opac,
+        &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
+        &v_R, &v_t
+    );
+}
+
+inline __device__ void Vanilla3DGS::project_ortho_vjp(
+    Vanilla3DGS::World world, Vanilla3DGS::BwdProjCamera cam,
+    Vanilla3DGS::Screen v_screen, float v_depth,
+    Vanilla3DGS::World& v_world, float3x3 &v_R, float3 &v_t
+) {
+    projection_3dgs_ortho_vjp(
+        bool(cam.antialiased),
+        world.mean, world.quat, world.scale, world.opacity,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.width, cam.height, Vanilla3DGS::eps2d,
+        v_depth, v_screen.xy, v_screen.conic, v_screen.opac,
+        &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
+        &v_R, &v_t
+    );
+}
+
+inline __device__ void Vanilla3DGS::project_fisheye_vjp(
+    Vanilla3DGS::World world, Vanilla3DGS::BwdProjCamera cam,
+    Vanilla3DGS::Screen v_screen, float v_depth,
+    Vanilla3DGS::World& v_world, float3x3 &v_R, float3 &v_t
+) {
+    projection_3dgs_fisheye_vjp(
+        bool(cam.antialiased),
+        world.mean, world.quat, world.scale, world.opacity,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.width, cam.height, Vanilla3DGS::eps2d,
+        v_depth, v_screen.xy, v_screen.conic, v_screen.opac,
+        &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
+        &v_R, &v_t
+    );
+}
+
+#endif  // #ifdef __CUDACC__

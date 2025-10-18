@@ -37,10 +37,8 @@ from .utils import depth_to_normal
 # from gsplat
 
 def rasterization(
-    means: Tensor,  # [..., N, 3]
-    quats: Tensor,  # [..., N, 4]
-    scales: Tensor,  # [..., N, 3]
-    opacities: Tensor,  # [..., N]
+    primitive: Literal["3dgs", "mip", "opaque_triangle"],
+    gauss_params: tuple[Tensor],  # means, quats, scales, opacities
     colors_dc: Tensor,  # [..., N, 3]
     colors_sh: Optional[Tensor],  # [..., N, K, 3]
     viewmats: Tensor,  # [..., C, 4, 4]
@@ -59,7 +57,7 @@ def rasterization(
     render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
-    rasterize_mode: Literal["classic", "antialiased"] = "classic",
+    # rasterize_mode: Literal["classic", "antialiased"] = "classic",
     channel_chunk: int = 32,
     distributed: bool = False,
     # camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
@@ -141,13 +139,13 @@ def rasterization(
         also get skipped (which is rarely happened in practice). This is by default disabled by setting
         `radius_clip` to 0.0.
 
-    .. note::
-        **Antialiased Rendering**: If `rasterize_mode` is "antialiased", the function will
-        apply a view-dependent compensation factor
-        :math:`\\rho=\\sqrt{\\frac{Det(\\Sigma)}{Det(\\Sigma+ \\epsilon I)}}` to Gaussian
-        opacities, where :math:`\\Sigma` is the projected 2D covariance matrix and :math:`\\epsilon`
-        is the `eps2d`. This will make the rendered image more antialiased, as proposed in
-        the paper `Mip-Splatting: Alias-free 3D Gaussian Splatting <https://arxiv.org/pdf/2311.16493>`_.
+    # .. note::
+    #     **Antialiased Rendering**: If `rasterize_mode` is "antialiased", the function will
+    #     apply a view-dependent compensation factor
+    #     :math:`\\rho=\\sqrt{\\frac{Det(\\Sigma)}{Det(\\Sigma+ \\epsilon I)}}` to Gaussian
+    #     opacities, where :math:`\\Sigma` is the projected 2D covariance matrix and :math:`\\epsilon`
+    #     is the `eps2d`. This will make the rendered image more antialiased, as proposed in
+    #     the paper `Mip-Splatting: Alias-free 3D Gaussian Splatting <https://arxiv.org/pdf/2311.16493>`_.
 
     .. note::
         **AbsGrad**: If `absgrad` is True, the absolute gradients of the projected
@@ -200,8 +198,8 @@ def rasterization(
         absgrad: If true, the absolute gradients of the projected 2D means
             will be computed during the backward pass, which could be accessed by
             `meta["means2d"].absgrad`. Default is False.
-        rasterize_mode: The rasterization mode. Supported modes are "classic" and
-            "antialiased". Default is "classic".
+        # rasterize_mode: The rasterization mode. Supported modes are "classic" and
+        #     "antialiased". Default is "classic".
         channel_chunk: The number of channels to render in one go. Default is 32.
             If the required rendering channels are larger than this value, the rendering
             will be done looply in chunks.
@@ -271,17 +269,19 @@ def rasterization(
     """
     meta = {}
 
-    batch_dims = means.shape[:-2]
+    if primitive in ["3dgs", "mip"]:
+        means, quats, scales, opacities = gauss_params
+        batch_dims = means.shape[:-2]
+        N = means.shape[-2]
+        device = means.device
+        assert means.shape == batch_dims + (N, 3), means.shape
+        assert quats.shape == batch_dims + (N, 4), quats.shape
+        assert scales.shape == batch_dims + (N, 3), scales.shape
+        assert opacities.shape == batch_dims + (N,), opacities.shape
     num_batch_dims = len(batch_dims)
     B = math.prod(batch_dims)
-    N = means.shape[-2]
     C = viewmats.shape[-3]
     I = B * C
-    device = means.device
-    assert means.shape == batch_dims + (N, 3), means.shape
-    assert quats.shape == batch_dims + (N, 4), quats.shape
-    assert scales.shape == batch_dims + (N, 3), scales.shape
-    assert opacities.shape == batch_dims + (N,), opacities.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
@@ -379,6 +379,7 @@ def rasterization(
         C = len(viewmats)
 
     if use_bvh:
+        raise NotImplementedError()
         assert not with_ut, "Not implemented"
         assert packed, "BVH must be packed"
         assert B == 1, "Not support batching"
@@ -403,7 +404,7 @@ def rasterization(
         with torch.no_grad():
             intersection_count_map, intersection_splat_id = intersect_splat_tile(
                 means.contiguous(),
-                scales.contiguous(),
+                torch.exp(scales).contiguous(),
                 torch.sigmoid(opacities).contiguous(),
                 quats.contiguous(),
                 width,
@@ -420,7 +421,7 @@ def rasterization(
         proj_results = fully_fused_projection_hetero(
             means,
             quats,
-            scales,
+            torch.exp(scales),
             viewmats,
             Ks,
             width,
@@ -438,10 +439,11 @@ def rasterization(
         )
 
     elif with_ut:
+        raise NotImplementedError()
         proj_results = fully_fused_projection_with_ut(
             means,
             quats,
-            scales,
+            torch.exp(scales),
             torch.sigmoid(opacities),  # use opacities to compute a tigher bound for radii.
             viewmats,
             Ks,
@@ -462,12 +464,10 @@ def rasterization(
         )
 
     else:
-        # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
+        # Project Gaussians to 2D
         proj_results = fully_fused_projection(
-            means,
-            quats,
-            scales,
-            opacities,
+            primitive,
+            gauss_params,
             viewmats,
             Ks,
             width,
@@ -478,7 +478,6 @@ def rasterization(
             far_plane=far_plane,
             radius_clip=radius_clip,
             sparse_grad=sparse_grad,
-            is_antialiased=(rasterize_mode == "antialiased"),
             camera_model=camera_model,
         )
         # import gsplat.cuda._wrapper
@@ -486,7 +485,7 @@ def rasterization(
         #     means,
         #     None,
         #     quats,
-        #     scales,
+        #     torch.exp(scales),
         #     viewmats,
         #     Ks,
         #     width,
@@ -497,7 +496,7 @@ def rasterization(
         #     far_plane=far_plane,
         #     radius_clip=radius_clip,
         #     sparse_grad=sparse_grad,
-        #     calc_compensations=(rasterize_mode == "antialiased"),
+        #     calc_compensations=(primitive == "mip"),
         #     camera_model=camera_model,
         #     opacities=torch.sigmoid(opacities),  # use opacities to compute a tigher bound for radii.
         # )
@@ -538,7 +537,7 @@ def rasterization(
         image_ids = batch_ids * C + camera_ids
     else:
         # The results are with shape [..., C, N, ...]. Only the elements with radii > 0 are valid.
-        radii, means2d, depths, conics, proj_opacities = proj_results
+        radii, depths, proj_splats = proj_results
         batch_ids, camera_ids, gaussian_ids = None, None, None
         image_ids = None
 
@@ -553,9 +552,8 @@ def rasterization(
             # local gaussian_ids
             "gaussian_ids": gaussian_ids,
             "radii": radii,
-            "means2d": means2d,
             "depths": depths,
-            "conics": conics,
+            "means2d": proj_splats[0],
         }
     )
     # if heterogeneous:
@@ -623,6 +621,7 @@ def rasterization(
     # on which cameras they are visible to, which we already figured out in the projection
     # stage.
     if distributed:
+        raise NotImplementedError()
         if packed:
             # count how many elements need to be sent to each rank
             cnts = torch.bincount(camera_ids, minlength=C)  # all cameras
@@ -727,7 +726,7 @@ def rasterization(
     tile_width = math.ceil(width / float(tile_size))
     tile_height = math.ceil(height / float(tile_size))
     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
-        means2d,
+        proj_splats[0],
         radii,
         depths,
         tile_size,
@@ -761,65 +760,14 @@ def rasterization(
 
     # print("rank", world_rank, "Before rasterize_to_pixels")
     if colors.shape[-1] > channel_chunk:
-        # slice into chunks
-        n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
-        render_colors, render_alphas = [], []
-        for i in range(n_chunks):
-            colors_chunk = colors[..., i * channel_chunk : (i + 1) * channel_chunk]
-            backgrounds_chunk = (
-                backgrounds[..., i * channel_chunk : (i + 1) * channel_chunk]
-                if backgrounds is not None
-                else None
-            )
-            if with_eval3d:
-                render_colors_, render_alphas_ = rasterize_to_pixels_eval3d(
-                    means,
-                    quats,
-                    scales,
-                    colors_chunk,
-                    torch.sigmoid(opacities),
-                    viewmats,
-                    Ks,
-                    width,
-                    height,
-                    tile_size,
-                    isect_offsets,
-                    flatten_ids,
-                    backgrounds=backgrounds_chunk,
-                    camera_model=camera_model,
-                    radial_coeffs=radial_coeffs,
-                    tangential_coeffs=tangential_coeffs,
-                    thin_prism_coeffs=thin_prism_coeffs,
-                    # ftheta_coeffs=ftheta_coeffs,
-                    rolling_shutter=rolling_shutter,
-                    viewmats_rs=viewmats_rs,
-                )
-            else:
-                # TODO
-                render_colors_, render_alphas_ = rasterize_to_pixels(
-                    means2d,
-                    conics,
-                    colors_chunk,
-                    proj_opacities,
-                    width,
-                    height,
-                    tile_size,
-                    isect_offsets,
-                    flatten_ids,
-                    backgrounds=backgrounds_chunk,
-                    packed=packed,
-                    absgrad=absgrad,
-                )
-            render_colors.append(render_colors_)
-            render_alphas.append(render_alphas_)
-        render_colors = torch.cat(render_colors, dim=-1)
-        render_alphas = render_alphas[0]  # discard the rest
+        raise NotImplementedError()  # TODO
     else:
         if with_eval3d:
+            raise NotImplementedError()
             render_colors, render_alphas = rasterize_to_pixels_eval3d(
                 means,
                 quats,
-                scales,
+                torch.exp(scales),
                 colors,
                 torch.sigmoid(opacities),
                 viewmats,
@@ -840,10 +788,9 @@ def rasterization(
             )
         else:
             render_colors, render_alphas = rasterize_to_pixels(
-                means2d,
-                conics,
+                primitive,
+                proj_splats,
                 colors,
-                proj_opacities,
                 width,
                 height,
                 tile_size,

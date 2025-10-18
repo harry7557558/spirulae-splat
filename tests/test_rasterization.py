@@ -9,6 +9,8 @@ from gsplat.rendering import rasterization as gsplat_rasterization
 
 from utils import check_close, timeit
 
+from typing import Literal
+
 device = torch.device("cuda:0")
 
 
@@ -16,13 +18,12 @@ B, W, H = 4, 1440, 1080
 N, SH_DEGREE = 200000, 3
 PACKED = False
 IS_FISHEYE = False
+IS_ANTIALIASED = False
 
 def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
     rgbd, alpha, meta = ssplat_rasterization(
-        means=means,
-        quats=quats,
-        scales=torch.exp(scales),
-        opacities=opacities.squeeze(-1),
+        primitive=["3dgs", "mip"][IS_ANTIALIASED],
+        gauss_params=(means, quats, scales, opacities.squeeze(-1)),
         colors_dc=features_dc,
         colors_sh=features_sh,
         viewmats=viewmats,  # [C, 4, 4]
@@ -35,11 +36,10 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
         tile_size=16,
         absgrad=False,
         sparse_grad=False,
-        rasterize_mode="classic",
         distributed=False,
         camera_model=["pinhole", "fisheye"][IS_FISHEYE],
-        with_ut=IS_FISHEYE,
-        with_eval3d=IS_FISHEYE,
+        with_ut=False,
+        with_eval3d=False,
         render_mode="RGB+D",
     )
     return rgbd[..., :3], rgbd[..., 3:], alpha
@@ -60,11 +60,11 @@ def rasterize_gsplat(means, quats, scales, opacities, features_dc, features_sh, 
         tile_size=16,
         absgrad=False,
         sparse_grad=False,
-        rasterize_mode="classic",
+        rasterize_mode=["classic", "antialiased"][IS_ANTIALIASED],
         distributed=False,
         camera_model=["pinhole", "fisheye"][IS_FISHEYE],
-        with_ut=IS_FISHEYE,
-        with_eval3d=IS_FISHEYE,
+        with_ut=False,
+        with_eval3d=False,
         render_mode="RGB+D",
     )
     return rgbd[..., :3], rgbd[..., 3:], alpha

@@ -71,10 +71,8 @@ def spherical_harmonics(
 
 
 def fully_fused_projection(
-    means: Tensor,  # [..., N, 3]
-    quats: Tensor,  # [..., N, 4]
-    scales: Tensor,  # [..., N, 3]
-    opacities: Tensor,  # [..., N]
+    primitive: Literal["3dgs", "mip", "opaque_triangle"],
+    splats: tuple[Tensor],  # means, quats, scales, opacities
     viewmats: Tensor,  # [..., C, 4, 4]
     Ks: Tensor,  # [..., C, 3, 3]
     width: int,
@@ -85,22 +83,19 @@ def fully_fused_projection(
     radius_clip: float = 0.0,
     packed: bool = False,
     sparse_grad: bool = False,
-    is_antialiased: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-    batch_dims = means.shape[:-2]
-    N = means.shape[-2]
+    if primitive in ["3dgs", "mip"]:
+        means, quats, scales, opacities = splats
+        batch_dims = means.shape[:-2]
+        N = means.shape[-2]
+        assert means.shape == batch_dims + (N, 3), means.shape
+        assert quats.shape == batch_dims + (N, 4), quats.shape
+        assert scales.shape == batch_dims + (N, 3), scales.shape
+        assert opacities.shape == batch_dims + (N,), opacities.shape
     C = viewmats.shape[-3]
-    assert means.shape == batch_dims + (N, 3), means.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    means = means.contiguous()
-    assert quats.shape == batch_dims + (N, 4), quats.shape
-    assert scales.shape == batch_dims + (N, 3), scales.shape
-    quats = quats.contiguous()
-    assert opacities.shape == batch_dims + (N,), opacities.shape
-    opacities = opacities.contiguous()
-    scales = scales.contiguous()
     if sparse_grad:
         assert packed, "sparse_grad is only supported when packed is True"
         assert batch_dims == (), "sparse_grad does not support batch dimensions"
@@ -114,11 +109,8 @@ def fully_fused_projection(
     if packed:
         raise NotImplementedError("Packed not supported for fully_fused_projection without use_bvh")
     else:
-        return _FullyFusedProjection.apply(
-            means,
-            quats,
-            scales,
-            opacities,
+        proj_return = _FullyFusedProjection3DGS.apply(
+            *[x.contiguous() for x in splats],
             viewmats,
             Ks,
             width,
@@ -127,8 +119,13 @@ def fully_fused_projection(
             near_plane,
             far_plane,
             radius_clip,
-            is_antialiased,
+            primitive == "mip",
             camera_model,
+        )
+        return (
+            proj_return[0],  # radii
+            proj_return[1],  # depth
+            tuple(proj_return[2:])
         )
 
 
@@ -196,10 +193,9 @@ def fully_fused_projection_hetero(
 
 
 def rasterize_to_pixels(
-    means2d: Tensor,  # [..., N, 2] or [nnz, 2]
-    conics: Tensor,  # [..., N, 3] or [nnz, 3]
+    primitive: Literal["3dgs", "mip", "opaque_triangle"],
+    splats: tuple[Tensor],  # means, quats, scales, opacities
     colors: Tensor,  # [..., N, channels] or [nnz, channels]
-    opacities: Tensor,  # [..., N] or [nnz]
     image_width: int,
     image_height: int,
     tile_size: int,
@@ -210,21 +206,21 @@ def rasterize_to_pixels(
     packed: bool = False,
     absgrad: bool = False,
 ) -> Tuple[Tensor, Tensor]:
-    image_dims = means2d.shape[:-2]
+    image_dims = colors.shape[:-2]
     channels = colors.shape[-1]
-    device = means2d.device
+    device = colors.device
     if packed:
-        nnz = means2d.size(0)
-        assert means2d.shape == (nnz, 2), means2d.shape
-        assert conics.shape == (nnz, 3), conics.shape
+        nnz = colors.size(0)
         assert colors.shape[0] == nnz, colors.shape
-        assert opacities.shape == (nnz,), opacities.shape
+        # assert means2d.shape == (nnz, 2), means2d.shape
+        # assert conics.shape == (nnz, 3), conics.shape
+        # assert opacities.shape == (nnz,), opacities.shape
     else:
-        N = means2d.size(-2)
-        assert means2d.shape == image_dims + (N, 2), means2d.shape
-        assert conics.shape == image_dims + (N, 3), conics.shape
+        N = colors.size(-2)
         assert colors.shape == image_dims + (N, channels), colors.shape
-        assert opacities.shape == image_dims + (N,), opacities.shape
+        # assert means2d.shape == image_dims + (N, 2), means2d.shape
+        # assert conics.shape == image_dims + (N, 3), conics.shape
+        # assert opacities.shape == image_dims + (N,), opacities.shape
     if backgrounds is not None:
         assert backgrounds.shape == image_dims + (channels,), backgrounds.shape
         backgrounds = backgrounds.contiguous()
@@ -266,11 +262,9 @@ def rasterize_to_pixels(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    render_colors, render_alphas = _RasterizeToPixels.apply(
-        means2d.contiguous(),
-        conics.contiguous(),
+    render_colors, render_alphas = _RasterizeToPixels3DGS.apply(
+        *[x.contiguous() for x in splats],
         colors.contiguous(),
-        opacities.contiguous(),
         backgrounds,
         masks,
         image_width,
@@ -314,8 +308,7 @@ class _SphericalHarmonics(torch.autograd.Function):
         return None, None, v_dirs, v_coeffs_dc, v_coeffs_sh
 
 
-
-class _FullyFusedProjection(torch.autograd.Function):
+class _FullyFusedProjection3DGS(torch.autograd.Function):
     """Projects Gaussians to 2D."""
 
     @staticmethod
@@ -348,6 +341,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         radii, depths, (means2d, conics, proj_opacities) = _make_lazy_cuda_func(
             "projection_ewa_3dgs_forward"
         )(
+            is_antialiased,
             (means, quats, scales, opacities),
             viewmats,
             Ks,
@@ -357,21 +351,21 @@ class _FullyFusedProjection(torch.autograd.Function):
             near_plane,
             far_plane,
             radius_clip,
-            is_antialiased,
             camera_model_type,
         )
         ctx.save_for_backward(
             means, quats, scales, opacities, viewmats, Ks, radii
         )
+        ctx.is_antialiased = is_antialiased
         ctx.width = width
         ctx.height = height
         ctx.eps2d = eps2d
         ctx.camera_model_type = camera_model_type
 
-        return radii, means2d, depths, conics, proj_opacities
+        return radii, depths, means2d, conics, proj_opacities
 
     @staticmethod
-    def backward(ctx, v_radii, v_means2d, v_depths, v_conics, v_opacities):
+    def backward(ctx, v_radii, v_depths, v_means2d, v_conics, v_opacities):
         (
             means,
             quats,
@@ -381,20 +375,17 @@ class _FullyFusedProjection(torch.autograd.Function):
             Ks,
             radii,
         ) = ctx.saved_tensors
-        width = ctx.width
-        height = ctx.height
-        eps2d = ctx.eps2d
-        camera_model_type = ctx.camera_model_type
         (v_means, v_quats, v_scales, v_opacities), v_viewmats = _make_lazy_cuda_func(
             "projection_ewa_3dgs_backward"
         )(
+            ctx.is_antialiased,
             (means, quats, scales, opacities),
             viewmats,
             Ks,
-            width,
-            height,
-            eps2d,
-            camera_model_type,
+            ctx.width,
+            ctx.height,
+            ctx.eps2d,
+            ctx.camera_model_type,
             radii,
             v_depths.contiguous(),
             (v_means2d.contiguous(), v_conics.contiguous(), v_opacities.contiguous()),
@@ -606,7 +597,7 @@ class _FullyFusedProjectionHetero(torch.autograd.Function):
         )
 
 
-class _RasterizeToPixels(torch.autograd.Function):
+class _RasterizeToPixels3DGS(torch.autograd.Function):
     """Rasterize gaussians"""
 
     @staticmethod
@@ -614,8 +605,8 @@ class _RasterizeToPixels(torch.autograd.Function):
         ctx,
         means2d: Tensor,  # [..., N, 2] or [nnz, 2]
         conics: Tensor,  # [..., N, 3] or [nnz, 3]
-        colors: Tensor,  # [..., N, channels] or [nnz, channels]
         opacities: Tensor,  # [..., N] or [nnz]
+        colors: Tensor,  # [..., N, channels] or [nnz, channels]
         backgrounds: Tensor,  # [..., channels], Optional
         masks: Tensor,  # [..., tile_height, tile_width], Optional
         width: int,
@@ -720,8 +711,8 @@ class _RasterizeToPixels(torch.autograd.Function):
         return (
             v_means2d,
             v_conics,
-            v_colors,
             v_opacities,
+            v_colors,
             v_backgrounds,
             None,
             None,

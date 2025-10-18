@@ -5,7 +5,7 @@
 
 #include <gsplat/Common.h>
 
-#include "Primitive.cuh"
+#include "Primitive3DGS.cuh"
 
 
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */
@@ -17,6 +17,7 @@ std::tuple<
     at::Tensor,  // depths
     Vanilla3DGS::Screen::TensorTuple  // out splats
 > projection_ewa_3dgs_forward_tensor(
+    const bool antialiased,
     // inputs
     const Vanilla3DGS::World::TensorTuple &in_splats,
     const at::Tensor viewmats,             // [..., C, 4, 4]
@@ -27,7 +28,6 @@ std::tuple<
     const float near_plane,
     const float far_plane,
     const float radius_clip,
-    bool is_antialiased,
     const gsplat::CameraModelType camera_model
 );
 
@@ -36,7 +36,7 @@ std::tuple<
     Vanilla3DGS::World::TensorTuple,  // v_splats
     at::Tensor  // v_viewmats
 > projection_ewa_3dgs_backward_tensor(
-    // inputs
+    const bool antialiased,
     // fwd inputs
     const Vanilla3DGS::World::TensorTuple &splats_world_tuple,
     const at::Tensor viewmats,             // [..., C, 4, 4]

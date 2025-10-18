@@ -243,6 +243,15 @@ _DEF_INTEGRAL_VEC_FUN(int)
 _DEF_INTEGRAL_VEC_FUN(uint)
 
 
+#ifdef __CUDACC__
+#ifdef SLANG_PRELUDE_EXPORT
+typedef Matrix<float, 2, 2> float2x2;
+typedef Matrix<float, 3, 3> float3x3;
+typedef Matrix<float, 4, 4> float4x4;
+#endif
+#endif
+
+
 ///////////////////////////////
 // Reduce (from gsplat)
 ///////////////////////////////
