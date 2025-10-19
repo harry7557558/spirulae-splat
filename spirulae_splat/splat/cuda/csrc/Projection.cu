@@ -30,6 +30,7 @@ __global__ void projection_fused_fwd_kernel(
     // outputs
     int2 *__restrict__ radii,         // [B, C, N, 2]
     float *__restrict__ depths,       // [B, C, N]
+    float3 *__restrict__ normals,       // [B, C, N, 3]
     typename SplatPrimitive::Screen::Buffer splats_screen
 ) {
     // parallelize over B * C * N.
@@ -64,16 +65,17 @@ __global__ void projection_fused_fwd_kernel(
     // Projection
     int2 radius;
     float depth;
+    float3 normal;
     typename SplatPrimitive::Screen splat_screen;
     switch (camera_model) {
     case gsplat::CameraModelType::PINHOLE: // perspective projection
-        SplatPrimitive::project_persp(splat_world, cam, splat_screen, radius, depth);
+        SplatPrimitive::project_persp(splat_world, cam, splat_screen, radius, depth, normal);
         break;
     // case gsplat::CameraModelType::ORTHO: // orthographic projection
-    //     SplatPrimitive::project_ortho(splat_world, cam, splat_screen, radius, depth);
+    //     SplatPrimitive::project_ortho(splat_world, cam, splat_screen, radius, depth, normal);
     //     break;
     // case gsplat::CameraModelType::FISHEYE: // fisheye projection
-    //     SplatPrimitive::project_fisheye(splat_world, cam, splat_screen, radius, depth);
+    //     SplatPrimitive::project_fisheye(splat_world, cam, splat_screen, radius, depth, normal);
     //     break;
     }
 
@@ -81,6 +83,8 @@ __global__ void projection_fused_fwd_kernel(
     radii[idx] = radius;
     if (radius.x * radius.y > 0) {
         depths[idx] = depth;
+        if (normals != nullptr)
+            normals[idx] = normal;
         splat_screen.saveBuffer(splats_screen, idx);
     }
 }
@@ -101,6 +105,7 @@ __global__ void projection_fused_bwd_kernel(
     const int2 *__restrict__ radii,          // [B, C, N, 2]
     // grad outputs
     const float *__restrict__ v_depths,        // [B, C, N]
+    const float3 *__restrict__ v_normals,        // [B, C, N, 3]
     typename SplatPrimitive::Screen::Buffer v_splats_screen,
     // grad inputs
     typename SplatPrimitive::World::Buffer v_splats_world,
@@ -140,15 +145,17 @@ __global__ void projection_fused_bwd_kernel(
     typename SplatPrimitive::World v_splat_world = SplatPrimitive::World::zero();
     float3x3 v_R = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
     float3 v_t = {0.f, 0.f, 0.f};
+    float v_depth = (v_depths == nullptr) ? 0.f : v_depths[idx];
+    float3 v_normal = (v_normals == nullptr) ? make_float3(0.f) : v_normals[idx];
     switch (camera_model) {
     case gsplat::CameraModelType::PINHOLE: // perspective projection
-        SplatPrimitive::project_persp_vjp(splat_world, cam, v_splat_screen, 0.f, v_splat_world, v_R, v_t);
+        SplatPrimitive::project_persp_vjp(splat_world, cam, v_splat_screen, v_depth, v_normal, v_splat_world, v_R, v_t);
         break;
     // case gsplat::CameraModelType::ORTHO: // orthographic projection
-    //     SplatPrimitive::project_ortho_vjp(splat_world, cam, v_splat_screen, 0.f, v_splat_world, v_R, v_t);
+    //     SplatPrimitive::project_ortho_vjp(splat_world, cam, v_splat_screen, v_depth, v_normal, v_splat_world, v_R, v_t);
     //     break;
     // case gsplat::CameraModelType::FISHEYE: // fisheye projection
-    //     SplatPrimitive::project_fisheye_vjp(splat_world, cam, v_splat_screen, 0.f, v_splat_world, v_R, v_t);
+    //     SplatPrimitive::project_fisheye_vjp(splat_world, cam, v_splat_screen, v_depth, v_normal, v_splat_world, v_R, v_t);
     //     break;
     }
 
@@ -182,6 +189,7 @@ __global__ void projection_fused_bwd_kernel(
 std::tuple<
     at::Tensor,  // radii
     at::Tensor,  // depths
+    std::optional<at::Tensor>,  // normals
     Vanilla3DGS::Screen::TensorTuple  // out splats
 > projection_ewa_3dgs_forward_tensor(
     const bool antialiased,
@@ -213,7 +221,7 @@ std::tuple<
             B, C, N, antialiased, \
             splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), \
             image_width, image_height, near_plane, far_plane, radius_clip, \
-            (int2*)radii.data_ptr<int32_t>(), depths.data_ptr<float>(), splats_screen.buffer() \
+            (int2*)radii.data_ptr<int32_t>(), depths.data_ptr<float>(), nullptr, splats_screen.buffer() \
         )
 
     constexpr uint block = 256;
@@ -228,12 +236,13 @@ std::tuple<
 
     #undef _LAUNCH_ARGS
 
-    return std::make_tuple(radii, depths, splats_screen.tuple());
+    return std::make_tuple(radii, depths, (std::optional<at::Tensor>)at::nullopt, splats_screen.tuple());
 }
 
 std::tuple<
     at::Tensor,  // radii
     at::Tensor,  // depths
+    std::optional<at::Tensor>,  // normals
     OpaqueTriangle::Screen::TensorTuple  // out splats
 > projection_opaque_triangle_forward_tensor(
     // inputs
@@ -255,6 +264,7 @@ std::tuple<
     auto opt = splats_world.options();
     at::Tensor radii = at::empty({C, N, 2}, opt.dtype(at::kInt));
     at::Tensor depths = at::empty({C, N}, opt);
+    at::Tensor normals = at::empty({C, N, 3}, opt);
 
     OpaqueTriangle::Screen::Tensor splats_screen =
         OpaqueTriangle::Screen::Tensor::empty(C, N, splats_world.options());
@@ -264,7 +274,8 @@ std::tuple<
             B, C, N, false, \
             splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), \
             image_width, image_height, near_plane, far_plane, radius_clip, \
-            (int2*)radii.data_ptr<int32_t>(), depths.data_ptr<float>(), splats_screen.buffer() \
+            (int2*)radii.data_ptr<int32_t>(), depths.data_ptr<float>(), (float3*)normals.data_ptr<float>(), \
+            splats_screen.buffer() \
         )
 
     constexpr uint block = 256;
@@ -279,7 +290,7 @@ std::tuple<
 
     #undef _LAUNCH_ARGS
 
-    return std::make_tuple(radii, depths, splats_screen.tuple());
+    return std::make_tuple(radii, depths, normals, splats_screen.tuple());
 }
 
 std::tuple<
@@ -298,6 +309,7 @@ std::tuple<
     const at::Tensor radii,                       // [..., C, N, 2]
     // grad outputs
     const at::Tensor v_depths,                      // [..., C, N]
+    const std::optional<at::Tensor> v_normals,      // [..., C, N, 3]
     const Vanilla3DGS::Screen::TensorTuple &v_splats_screen_tuple,
     const bool viewmats_requires_grad
 ) {
@@ -320,7 +332,8 @@ std::tuple<
             B, C, N, antialiased, \
             splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), \
             image_width, image_height, (int2*)radii.data_ptr<int32_t>(), \
-            v_depths.data_ptr<float>(), v_splats_screen.buffer(), v_splats_world.buffer(), \
+            v_depths.data_ptr<float>(), v_normals.has_value() ? (float3*)v_normals.value().data_ptr<float>() : nullptr, \
+            v_splats_screen.buffer(), v_splats_world.buffer(), \
             viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr \
         )
 
@@ -354,6 +367,7 @@ std::tuple<
     const at::Tensor radii,                       // [..., C, N, 2]
     // grad outputs
     const at::Tensor v_depths,                      // [..., C, N]
+    const std::optional<at::Tensor> v_normals,      // [..., C, N, 3]
     const OpaqueTriangle::Screen::TensorTuple &v_splats_screen_tuple,
     const bool viewmats_requires_grad
 ) {
@@ -376,7 +390,8 @@ std::tuple<
             B, C, N, false, \
             splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), \
             image_width, image_height, (int2*)radii.data_ptr<int32_t>(), \
-            v_depths.data_ptr<float>(), v_splats_screen.buffer(), v_splats_world.buffer(), \
+            v_depths.data_ptr<float>(), v_normals.has_value() ? (float3*)v_normals.value().data_ptr<float>() : nullptr, \
+            v_splats_screen.buffer(), v_splats_world.buffer(), \
             viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr \
         )
 

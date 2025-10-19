@@ -238,12 +238,34 @@ class SplatTrainingLosses(torch.nn.Module):
             if batch["depth"].ndim == 2:
                 batch["depth"] = batch["depth"].unsqueeze(-1)
             depth = self._downscale_if_required(batch["depth"].to(device))
-            depth_supervision_loss, normal_supervision_loss, alpha_supervision_loss \
-                = self.supervision_losses(
-                    depth, ssplat_camera, outputs["depth"],
-                    outputs["depth_normal"] if self.config.compute_depth_normal else None,
-                    outputs["alpha"]
-                )
+            # TODO
+            # depth_supervision_loss, normal_supervision_loss, alpha_supervision_loss \
+            #     = self.supervision_losses(
+            #         depth, ssplat_camera, outputs["depth"],
+            #         outputs["depth_normal"] if self.config.compute_depth_normal else None,
+            #         outputs["alpha"]
+            #     )
+        if self.step > self.config.supervision_warmup and (self.config.normal_supervision_weight > 0.0) and \
+                ("normal" in batch or 'normal' in outputs or 'depth_normal' in outputs):
+            if 'normal' in batch:
+                batch_normal = self._downscale_if_required(batch["normal"].to(device))
+            weight = 0
+            normal_loss = lambda x, y : (1.0 - (x*y).sum(-1)).mean()
+            if 'normal' in outputs and 'normal' in batch:
+                normal_supervision_loss = normal_supervision_loss + \
+                    normal_loss(batch_normal, outputs["normal"])
+                weight += 1
+            if 'depth_normal' in outputs and 'normal' in batch:
+                normal_supervision_loss = normal_supervision_loss + \
+                    normal_loss(batch_normal, outputs["depth_normal"])
+                weight += 1
+            if 'normal' in outputs and 'depth_normal' in outputs:
+                normal_supervision_loss = normal_supervision_loss + \
+                    normal_loss(outputs["normal"], outputs["depth_normal"])
+                weight += 1
+            if weight > 0:
+                normal_supervision_loss = normal_supervision_loss * \
+                    (self.config.normal_supervision_weight / weight)
 
         # correct exposure
         pred_img_e = pred_img

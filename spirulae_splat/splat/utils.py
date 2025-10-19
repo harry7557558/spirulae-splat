@@ -100,7 +100,7 @@ def bin_and_sort_gaussians(
     return isect_ids, gaussian_ids, isect_ids_sorted, gaussian_ids_sorted, tile_bins
 
 
-@torch.compile(**_TORCH_COMPILE_ARGS)
+# @torch.compile(**_TORCH_COMPILE_ARGS)
 def depth_to_points(
     depths: Tensor, camera: _Camera, c2w: Optional[Tensor]=None, z_depth: bool = True
 ) -> Tensor:
@@ -143,7 +143,7 @@ def depth_to_points(
     return origins[..., None, None, :] + depths * directions
 
 
-@torch.compile(**_TORCH_COMPILE_ARGS)
+# @torch.compile(**_TORCH_COMPILE_ARGS)
 def depth_to_normal(
     depths: Tensor, camera: _Camera, c2w: Optional[Tensor]=None, z_depth: bool = True, alpha: Optional[Tensor] = None,
     return_points = False

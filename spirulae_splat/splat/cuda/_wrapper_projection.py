@@ -109,7 +109,8 @@ def fully_fused_projection(
     packed: bool = False,
     sparse_grad: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
-) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+) -> Tuple[Tensor, Tensor, Optional[Tensor], Tuple[Tensor]]:
+    # if primitive in ["3dgs", "mip"]:
     if primitive in ["3dgs", "mip", "opaque_triangle"]:
         means, quats, scales, opacities = splats
         batch_dims = means.shape[:-2]
@@ -118,6 +119,12 @@ def fully_fused_projection(
         assert quats.shape == batch_dims + (N, 4), quats.shape
         assert scales.shape == batch_dims + (N, 3), scales.shape
         assert opacities.shape == batch_dims + (N,), opacities.shape
+    elif primitive in ["opaque_triangle"]:
+        means, hardness = splats
+        batch_dims = means.shape[:-3]
+        N = means.shape[-3]
+        assert means.shape == batch_dims + (N, 3, 3), means.shape
+        assert hardness.shape == batch_dims + (N,), hardness.shape
     C = viewmats.shape[-3]
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
@@ -151,7 +158,8 @@ def fully_fused_projection(
         return (
             proj_return[0],  # radii
             proj_return[1],  # depth
-            tuple(proj_return[2:])
+            proj_return[2],  # normal
+            tuple(proj_return[3:])
         )
 
 class _FullyFusedProjection3DGS(torch.autograd.Function):
@@ -182,7 +190,7 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
             f"CameraModelType.{camera_model.upper()}"
         )
 
-        radii, depths, (means2d, conics, proj_opacities) = _make_lazy_cuda_func(
+        radii, depths, normals, (means2d, conics, proj_opacities) = _make_lazy_cuda_func(
             "projection_ewa_3dgs_forward"
         )(
             is_antialiased,
@@ -197,10 +205,10 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
         ctx.height = height
         ctx.camera_model_type = camera_model_type
 
-        return radii, depths, means2d, conics, proj_opacities
+        return radii, depths, normals, means2d, conics, proj_opacities
 
     @staticmethod
-    def backward(ctx, v_radii, v_depths, v_means2d, v_conics, v_opacities):
+    def backward(ctx, v_radii, v_depths, v_normals, v_means2d, v_conics, v_opacities):
         means, quats, scales, opacities, viewmats, Ks, radii = ctx.saved_tensors
         (v_means, v_quats, v_scales, v_opacities), v_viewmats = _make_lazy_cuda_func(
             "projection_ewa_3dgs_backward"
@@ -208,7 +216,7 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
             ctx.is_antialiased,
             (means, quats, scales, opacities),
             viewmats, Ks, ctx.width, ctx.height, ctx.camera_model_type,
-            radii, v_depths.contiguous(),
+            radii, v_depths.contiguous(), v_normals.contiguous() if v_normals is not None else None,
             (v_means2d.contiguous(), v_conics.contiguous(), v_opacities.contiguous()),
             ctx.needs_input_grad[4],  # viewmats_requires_grad
         )
@@ -246,30 +254,35 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
             f"CameraModelType.{camera_model.upper()}"
         )
 
-        radii, depths, (means2d, proj_hardness) = _make_lazy_cuda_func(
+        radii, depths, normals, (means2d, proj_hardness) = _make_lazy_cuda_func(
             "projection_opaque_triangle_forward"
         )(
             (means, quats, scales, hardness),
+            # (means, hardness),
             viewmats, Ks, width, height,
             near_plane, far_plane, radius_clip,
             camera_model_type,
         )
         ctx.save_for_backward(means, quats, scales, hardness, viewmats, Ks, radii)
+        # ctx.save_for_backward(means, hardness, viewmats, Ks, radii)
         ctx.width = width
         ctx.height = height
         ctx.camera_model_type = camera_model_type
 
-        return radii, depths, means2d, proj_hardness
+        return radii, depths, normals, means2d, proj_hardness
 
     @staticmethod
-    def backward(ctx, v_radii, v_depths, v_means2d, v_proj_hardness):
+    def backward(ctx, v_radii, v_depths, v_normals, v_means2d, v_proj_hardness):
         means, quats, scales, hardness, viewmats, Ks, radii = ctx.saved_tensors
         (v_means, v_quats, v_scales, v_hardness), v_viewmats = _make_lazy_cuda_func(
+        # means, hardness, viewmats, Ks, radii = ctx.saved_tensors
+        # (v_means, v_hardness), v_viewmats = _make_lazy_cuda_func(
             "projection_opaque_triangle_backward"
         )(
             (means, quats, scales, hardness),
+            # (means, hardness),
             viewmats, Ks, ctx.width, ctx.height, ctx.camera_model_type,
-            radii, v_depths.contiguous(),
+            radii, v_depths.contiguous(), v_normals.contiguous() if v_normals is not None else None,
             (v_means2d.contiguous(), v_proj_hardness.contiguous()),
             ctx.needs_input_grad[4],  # viewmats_requires_grad
         )
@@ -277,6 +290,7 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
             v_viewmats = None
         return (
             v_means, v_quats, v_scales, v_hardness, v_viewmats,
+            # v_means, v_hardness, v_viewmats,
             *([None]*(len(ctx.needs_input_grad)-3))
         )
 

@@ -219,10 +219,12 @@ class SplatModel:
                 "opaque_triangle",
                 (
                     self.means,
+                    # self.means.unsqueeze(-2).repeat(1, 3, 1) + 3.0*torch.exp(self.scales.mean(-1, True).unsqueeze(-1)) * torch.tensor([[[1,0,0],[0,1,0],[0,0,1]]]).to(self.means),
                     F.normalize(self.quats, dim=-1),
-                    self.scales,
+                    # self.scales,
+                    self.scales+np.log(3),
                     # self.opacities.squeeze(-1),
-                    0.999*torch.ones_like(self.opacities).squeeze(-1),
+                    0.9*torch.ones_like(self.opacities).squeeze(-1),
                 ),
                 colors_dc=self.features_dc,
                 colors_sh=self.features_sh,
@@ -239,20 +241,20 @@ class SplatModel:
                 camera_model=["pinhole", "fisheye"][is_fisheye],
                 with_ut=is_distorted,
                 with_eval3d=is_distorted,
-                render_mode="RGB+D",
+                # render_mode="RGB+ED",
+                render_mode="RGB+ED+N",
                 **kwargs,
             )
             colors = rgbd[0, ..., :3]
+            # colors = 0.5+0.5*rgbd[0, ..., 4:]
             alpha = alpha[0]
             if return_depth:
                 colors = rgbd[0]
+                # colors = 0.5+0.5*rgbd[0, ..., 4:]
 
             rgb = colors[..., :3]
             if return_depth:
-                depth = torch.where(
-                    alpha > 0.05, colors[..., 3:] / alpha,
-                    1.5*torch.amax(colors[..., 3:]).detach()
-                )
+                depth = rgbd[0, ..., 3:4]
 
         else:
             raise NotImplementedError("2DGS is deprecated")

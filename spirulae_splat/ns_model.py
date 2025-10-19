@@ -30,7 +30,7 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 from pytorch_msssim import SSIM
 
-from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map
+from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map, quat_to_rotmat
 from spirulae_splat.splat import (
     rasterization,
     depth_to_normal,
@@ -356,11 +356,20 @@ class SpirulaeModel(Model):
             dtype=np.float32))
         opacities = torch.logit(0.1 * torch.ones(num_points, 1))
 
+        if self.config.primitive in ["opaque_triangle"]:
+            scales += math.log(3.0)
+        # if self.config.primitive in ["opaque_triangle"]:
+        if self.config.primitive in []:
+            M = quat_to_rotmat(quats) * torch.exp(scales[..., None, :])
+            means = means.unsqueeze(-2) + torch.bmm(M, torch.tensor([[
+                [1, 0, 0], [-0.5, 0.75**0.5, 0], [-0.5, -0.75**0.5, 0]
+            ]]).to(M).repeat(len(M), 1, 1))
+
         if self.config.primitive in ["3dgs", "mip", "opaque_triangle"]:
             means = torch.nn.Parameter(means)
+        if self.config.primitive in ["3dgs", "mip"]:
             quats = torch.nn.Parameter(quats)
             scales = torch.nn.Parameter(scales)
-        if self.config.primitive in ["3dgs", "mip"]:
             opacities = torch.nn.Parameter(opacities)
 
         # colors
@@ -759,13 +768,15 @@ class SpirulaeModel(Model):
         Ks = Ks.to(device)
 
         # hardness = min(max(self.step / self.config.stop_refine_at, 0.1), 1.0)
-        hardness = min(max(self.step / 2000, 0.1), 1.0)
+        hardness = min(self.step / 30000, 0.999)
         rgbd, alpha, meta = rasterization(
             self.config.primitive,
             (self.means, quats, self.scales, self.opacities.squeeze(-1))
                 if self.config.primitive in ['3dgs', 'mip'] else
-            (self.means, quats, self.scales.mean(-1, keepdim=True).repeat(1,3),
+            # (self.means, quats, self.scales.mean(-1, keepdim=True).repeat(1,3),
+            (self.means, quats, self.scales,
              hardness * torch.ones_like(self.opacities.squeeze(-1))),
+            # (self.means, hardness * torch.ones_like(self.opacities.squeeze(-1))),
             colors_dc=self.features_dc,
             colors_sh=self.features_sh,
             viewmats=viewmats,  # [C, 4, 4]
@@ -781,7 +792,7 @@ class SpirulaeModel(Model):
             camera_model=["pinhole", "fisheye"][is_fisheye],
             with_ut=is_fisheye,
             with_eval3d=is_fisheye,
-            render_mode="RGB+D",
+            render_mode="RGB+D" if self.config.primitive in ['3dgs', 'mip'] else "RGB+D+N",
             **kwargs,
         )
 
@@ -797,11 +808,17 @@ class SpirulaeModel(Model):
 
         if self.config.compute_depth_normal or not self.training:
             depth_im_ref = torch.where(
-                alpha > 0.0, rgbd[..., 3:] / alpha,
-                max_depth_scale*torch.amax(rgbd[..., 3:]).detach()
+                alpha > 0.0, rgbd[..., 3:4] / alpha,
+                max_depth_scale*torch.amax(rgbd[..., 3:4]).detach()
             ).contiguous()
         else:
             depth_im_ref = None
+
+        render_normal = None
+        if rgbd.shape[-1] > 4:
+            render_normal = rgbd[..., -3:]
+            if not self.training:
+                render_normal = 0.5+0.5*render_normal
 
         means2d = meta["means2d"]
         if self.config.use_mcmc:
@@ -829,8 +846,10 @@ class SpirulaeModel(Model):
                 rgb = self.training_losses.apply_bilateral_grid(rgb, camera.metadata["cam_idx"], H, W)
 
         # normal regularization
-        # if self.config.compute_depth_normal or not self.training:
-        #     depth_normal, alpha_diffused = depth_to_normal(depth_im_ref, ssplat_camera, None, True, alpha)
+        if self.config.compute_depth_normal or not self.training:
+            ssplat_camera = _Camera(H, W, "OPENCV", (camera.fx[0].item(), camera.fy[0].item(), camera.cx[0].item(), camera.cy[0].item()))
+            depth_normal, alpha_diffused = depth_to_normal(depth_im_ref[0], ssplat_camera, None, True, alpha)
+            depth_normal = depth_normal[None]
 
         # pack outputs
         outputs = {
@@ -838,8 +857,10 @@ class SpirulaeModel(Model):
         }
         if depth_im_ref is not None:
             outputs["depth"] = depth_im_ref
-        # if self.config.compute_depth_normal or not self.training:
-        #     outputs["depth_normal"] = depth_normal
+        if render_normal is not None:
+            outputs["normal"] = render_normal
+        if self.config.compute_depth_normal or not self.training:
+            outputs["depth_normal"] = depth_normal
         outputs["alpha"] = alpha
         outputs["background"] = background
 

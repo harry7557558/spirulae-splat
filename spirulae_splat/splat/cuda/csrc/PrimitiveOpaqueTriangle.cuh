@@ -28,7 +28,7 @@ struct OpaqueTriangle {
 
     inline static __device__ void project_persp(
         World world, FwdProjCamera cam,
-        Screen& screen, int2& radius, float& depth
+        Screen& screen, int2& radius, float& depth, float3& normal
     );
 
     struct BwdProjCamera {
@@ -40,7 +40,7 @@ struct OpaqueTriangle {
 
     inline static __device__ void project_persp_vjp(
         World world, BwdProjCamera cam,
-        Screen v_screen, float v_depth,
+        Screen v_screen, float v_depth, float3 v_normal,
         World& v_world, float3x3 &v_R, float3 &v_t
     );
 
@@ -51,6 +51,7 @@ struct OpaqueTriangle {
 struct OpaqueTriangle::World {
 
     typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTuple;
+    // typedef std::tuple<at::Tensor, at::Tensor> TensorTuple;
 
     struct Buffer;
 
@@ -58,6 +59,7 @@ struct OpaqueTriangle::World {
         at::Tensor means;
         at::Tensor quats;
         at::Tensor scales;
+        // at::Tensor verts;
         at::Tensor hardness;
 
         Tensor(const TensorTuple& splats) {
@@ -65,10 +67,13 @@ struct OpaqueTriangle::World {
             quats = std::get<1>(splats);
             scales = std::get<2>(splats);
             hardness = std::get<3>(splats);
+            // verts = std::get<0>(splats);
+            // hardness = std::get<1>(splats);
         }
 
         TensorTuple tuple() const {
             return std::make_tuple(means, quats, scales, hardness);
+            // return std::make_tuple(verts, hardness);
         }
 
         Tensor zeros_like() const {
@@ -76,18 +81,22 @@ struct OpaqueTriangle::World {
                 at::zeros_like(means),
                 at::zeros_like(quats),
                 at::zeros_like(scales),
+                // at::zeros_like(verts),
                 at::zeros_like(hardness)
             ));
         }
 
         auto options() {
             return means.options();
+            // return verts.options();
         }
         long size() const {
             return quats.size(-2);
+            // return verts.size(-3);
         }
         long batchSize() const {
             return quats.numel() / (4*size());
+            // return verts.numel() / (3*3*size());
         }
 
         Buffer buffer() { return Buffer(*this); }
@@ -97,6 +106,7 @@ struct OpaqueTriangle::World {
         float3* __restrict__ means;
         float4* __restrict__ quats;
         float3* __restrict__ scales;
+        // float3* __restrict__ verts;
         float* __restrict__ hardness;
 
         Buffer(const Tensor& tensors) {
@@ -104,10 +114,13 @@ struct OpaqueTriangle::World {
             CHECK_INPUT(tensors.means);
             CHECK_INPUT(tensors.quats);
             CHECK_INPUT(tensors.scales);
+            // DEVICE_GUARD(tensors.verts);
+            // CHECK_INPUT(tensors.verts);
             CHECK_INPUT(tensors.hardness);
             means = (float3*)tensors.means.data_ptr<float>();
             quats = (float4*)tensors.quats.data_ptr<float>();
             scales = (float3*)tensors.scales.data_ptr<float>();
+            // verts = (float3*)tensors.verts.data_ptr<float>();
             hardness = tensors.hardness.data_ptr<float>();
         }
     };
@@ -115,6 +128,7 @@ struct OpaqueTriangle::World {
     float3 mean;
     float4 quat;
     float3 scale;
+    // float3 vert0, vert1, vert2;
     float hardness;
 
 #ifdef __CUDACC__
@@ -124,6 +138,9 @@ struct OpaqueTriangle::World {
             buffer.means[idx],
             buffer.quats[idx],
             buffer.scales[idx],
+            // buffer.verts[3*idx+0],
+            // buffer.verts[3*idx+1],
+            // buffer.verts[3*idx+2],
             buffer.hardness[idx]
         };
     }
@@ -132,6 +149,7 @@ struct OpaqueTriangle::World {
         return {
             {0.f, 0.f, 0.f},
             {0.f, 0.f, 0.f, 0.f},
+            // {0.f, 0.f, 0.f},
             {0.f, 0.f, 0.f},
             0.f
         };
@@ -142,6 +160,9 @@ struct OpaqueTriangle::World {
         warpSum(mean, partition);
         warpSum(quat, partition);
         warpSum(scale, partition);
+        // warpSum(vert0, partition);
+        // warpSum(vert1, partition);
+        // warpSum(vert2, partition);
         warpSum(hardness, partition);
     }
     
@@ -149,6 +170,9 @@ struct OpaqueTriangle::World {
         atomicAddFVec(buffer.means + idx, mean);
         atomicAddFVec(buffer.quats + idx, quat);
         atomicAddFVec(buffer.scales + idx, scale);
+        // atomicAddFVec(buffer.verts + 3*idx+0, vert0);
+        // atomicAddFVec(buffer.verts + 3*idx+1, vert1);
+        // atomicAddFVec(buffer.verts + 3*idx+2, vert2);
         atomicAdd(buffer.hardness + idx, hardness);
     }
 
@@ -279,6 +303,7 @@ struct OpaqueTriangle::Screen {
     }
 
     __device__ __forceinline__ float evaluate_alpha(float px, float py) {
+        // return evaluate_alpha_opaque_triangle_fast(
         return evaluate_alpha_opaque_triangle_precise(
             vert0, vert1, vert2, hardness,
             make_float2(px, py)
@@ -287,6 +312,7 @@ struct OpaqueTriangle::Screen {
 
     __device__ __forceinline__ Screen evaluate_alpha_vjp(float px, float py, float v_alpha) {
         Screen v_splat = Screen::zero();
+        // evaluate_alpha_opaque_triangle_fast_vjp(
         evaluate_alpha_opaque_triangle_precise_vjp(
             vert0, vert1, vert2, hardness,
             make_float2(px, py), v_alpha,
@@ -304,27 +330,30 @@ struct OpaqueTriangle::Screen {
 
 inline __device__ void OpaqueTriangle::project_persp(
     OpaqueTriangle::World world, OpaqueTriangle::FwdProjCamera cam,
-    OpaqueTriangle::Screen& screen, int2& radius, float& depth
+    OpaqueTriangle::Screen& screen, int2& radius, float& depth, float3& normal
 ) {
     projection_opaque_triangle_persp(
         world.mean, world.quat, world.scale, world.hardness,
+        // world.vert0, world.vert1, world.vert2, world.hardness,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
         cam.width, cam.height, cam.near_plane, cam.far_plane, cam.radius_clip,
-        &radius, &depth, &screen.vert0, &screen.vert1, &screen.vert2, &screen.hardness
+        &radius, &depth, &normal, &screen.vert0, &screen.vert1, &screen.vert2, &screen.hardness
     );
 }
 
 inline __device__ void OpaqueTriangle::project_persp_vjp(
     OpaqueTriangle::World world, OpaqueTriangle::BwdProjCamera cam,
-    OpaqueTriangle::Screen v_screen, float v_depth,
+    OpaqueTriangle::Screen v_screen, float v_depth, float3 v_normal,
     OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
     projection_opaque_triangle_persp_vjp(
         world.mean, world.quat, world.scale, world.hardness,
+        // world.vert0, world.vert1, world.vert2, world.hardness,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
         cam.width, cam.height,
-        v_depth, v_screen.vert0, v_screen.vert1, v_screen.vert2, v_screen.hardness,
+        v_depth, v_normal, v_screen.vert0, v_screen.vert1, v_screen.vert2, v_screen.hardness,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.hardness,
+        // &v_world.vert0, &v_world.vert1, &v_world.vert2, &v_world.hardness,
         &v_R, &v_t
     );
 }

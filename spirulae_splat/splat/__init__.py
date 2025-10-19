@@ -11,6 +11,7 @@ from .rendering import rasterization
 from torch import Tensor
 
 try:
+    raise ImportError()
     import ssplat_camera_utils
 
     from spirulae_splat.splat._camera import _Camera

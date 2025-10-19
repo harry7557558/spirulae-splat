@@ -72,7 +72,7 @@ def rasterize_to_pixels(
     if channels > 513 or channels == 0:
         # TODO: maybe worth to support zero channels?
         raise ValueError(f"Unsupported number of color channels: {channels}")
-    if channels not in (1, 2, 3, 4, 5):
+    if channels not in (1, 2, 3, 4, 5, 6, 7):
         padded_channels = (1 << (channels - 1).bit_length()) - channels
         colors = torch.cat(
             [

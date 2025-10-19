@@ -1,6 +1,10 @@
 #include "projection_utils.slang"
 
 
+    // const float3 vert0, \
+    // const float3 vert1, \
+    // const float3 vert2, \
+
 #define _projection_opaque_triangle_ARGS \
     const float3 mean, \
     const float4 quat, \
@@ -19,6 +23,7 @@
     no_diff const float radius_clip, \
     out int2 radii, \
     out float depth, \
+    out float3 normal, \
     out float2 uv0, \
     out float2 uv1, \
     out float2 uv2, \
@@ -29,6 +34,7 @@
 void projection_opaque_triangle<let camera_model: CameraModelType, let assume_valid: bool>(
     _projection_opaque_triangle_ARGS
 ) {
+    // float3 mean = (vert0+vert1+vert2)/3.0f;
     float3 mean_c;
     posW2C(R, t, mean, mean_c);
     if (!assume_valid && (mean_c.z < near_plane || mean_c.z > far_plane)) {
@@ -39,9 +45,12 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
     // transform mean+scale+quat to vertices
     float3x3 M;
     quat_scale_to_sqrt_covar(quat, exp(scale), M);
-    float3 vert0 = mul(M, float3(1, 0, 0)) + mean;
-    float3 vert1 = mul(M, float3(-0.5f, sqrt(0.75f), 0)) + mean;
-    float3 vert2 = mul(M, float3(-0.5f, -sqrt(0.75f), 0)) + mean;
+    // float3 vert0 = mul(M, float3(1, 0, 0)) + mean;
+    // float3 vert1 = mul(M, float3(-0.5f, sqrt(0.75f), 0)) + mean;
+    // float3 vert2 = mul(M, float3(-0.5f, -sqrt(0.75f), 0)) + mean;
+    float3 vert0 = mul(float3(1, 0, 0), M) + mean;
+    float3 vert1 = mul(float3(-0.5f, sqrt(0.75f), 0), M) + mean;
+    float3 vert2 = mul(float3(-0.5f, -sqrt(0.75f), 0), M) + mean;
 
     // transform center to camera space
     float3 vert0_c, vert1_c, vert2_c;
@@ -98,6 +107,9 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
     radii = {(int)radius_x, (int)radius_y};
     depth = mean_c.z;
 
+    normal = normalize(mul(R, cross(vert1-vert0, vert2-vert0)));
+    normal *= -sign(normal.z);
+
     out_hardness = hardness;
 }
 
@@ -109,13 +121,21 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
     void funname(_projection_opaque_triangle_ARGS) { \
         return projection_opaque_triangle<__VA_ARGS__>( \
             mean, quat, scale, hardness, R, t, fx, fy, cx, cy, \
+            /* vert0, vert1, vert2, hardness, R, t, fx, fy, cx, cy, */ \
             image_width, image_height, near_plane, far_plane, radius_clip, \
-            radii, depth, uv0, uv1, uv2, out_hardness \
+            radii, depth, normal, uv0, uv1, uv2, out_hardness \
         ); \
     }
 
 _DEF_projection_opaque_triangle(projection_opaque_triangle_persp, CameraModelType::PINHOLE, false)
 
+    // const float3 vert0, \
+    // const float3 vert1, \
+    // const float3 vert2, \
+
+    // out float3 v_vert0, \
+    // out float3 v_vert1, \
+    // out float3 v_vert2, \
 
 #define _projection_opaque_triangle_vjp_ARGS \
     const float3 mean, \
@@ -131,6 +151,7 @@ _DEF_projection_opaque_triangle(projection_opaque_triangle_persp, CameraModelTyp
     const uint image_width, \
     const uint image_height, \
     const float v_depth, \
+    const float3 v_normal, \
     const float2 v_uv0, \
     const float2 v_uv1, \
     const float2 v_uv2, \
@@ -152,23 +173,47 @@ void projection_opaque_triangle_persp_vjp(
     DifferentialPair<float3> dp_mean = diffPair(mean);
     DifferentialPair<float4> dp_quat = diffPair(quat);
     DifferentialPair<float3> dp_scale = diffPair(scale);
+    // DifferentialPair<float3> dp_vert0 = diffPair(vert0);
+    // DifferentialPair<float3> dp_vert1 = diffPair(vert1);
+    // DifferentialPair<float3> dp_vert2 = diffPair(vert2);
     DifferentialPair<float> dp_hardness = diffPair(hardness);
     DifferentialPair<float3x3> dp_R = diffPair(R);
     DifferentialPair<float3> dp_t = diffPair(t);
     bwd_diff(_projection_opaque_triangle_persp_differentiable)(
         dp_mean, dp_quat, dp_scale, dp_hardness, dp_R, dp_t, fx, fy, cx, cy,
+        // dp_vert0, dp_vert1, dp_vert2, dp_hardness, dp_R, dp_t, fx, fy, cx, cy,
         image_width, image_height, 0.0f, 1e30f, -1.0f,
-        v_depth, v_uv0, v_uv1, v_uv2, v_out_hardness
+        v_depth, v_normal, v_uv0, v_uv1, v_uv2, v_out_hardness
     );
     v_mean = dp_mean.d;
     v_quat = dp_quat.d;
     v_scale = dp_scale.d;
+    // v_vert0 = dp_vert0.d;
+    // v_vert1 = dp_vert1.d;
+    // v_vert2 = dp_vert2.d;
     v_hardness = dp_hardness.d;
     v_R = dp_R.d;
     v_t = dp_t.d;
 }
 
 
+[ForceInline]
+[Differentiable]
+float antialiase_map(float d, float dmax, float hardness) {
+    hardness = clamp(hardness, 0.005f, 0.995f);
+
+    // float a = d/(2.0f*dmax*(1.0f-hardness)+hardness);
+    // // return clamp(-a+0.5f, 0.0f, 0.999f);
+    // return 0.999f/(1.0f+exp(4.0f*a));
+
+    // float a = -d / dmax + exp2(-1.0f/(1.0f-hardness));
+    // float a = -d / dmax;
+    float a = 1.0f - (1.0f + d / dmax) * (1.0f - exp2(-1.0f/(1.0f-hardness)));
+    return a <= 0.0f ? 0.0f : min(pow(a, 1.0f-hardness), 0.999f);
+
+    // float a = -d / dmax * (-log(1.0f-hardness));
+    // return 0.999f/(1.0f + exp(-4.0f*a));
+}
 
 [CudaDeviceExport]
 [Differentiable]
@@ -183,9 +228,7 @@ float evaluate_alpha_opaque_triangle_fast(
     float de2 = se * det(p-v2, normalize(e2));
     float dv = max(max(de0, de1), de2);
     float dmax = abs(det(e0, e1)) / (length(e0) + length(e1) + length(e2));
-    float a = dv/(2.0f*dmax*(1.0f-hardness)+hardness);
-    // return clamp(-a+0.5f, 0.0f, 0.999f);
-    return 0.999f/(1.0f+exp(4.0f*a));
+    return antialiase_map(dv, dmax, hardness);
 }
 
 [CudaDeviceExport]
@@ -222,9 +265,7 @@ float evaluate_alpha_opaque_triangle_precise(
     float sv = sign(max(max(s0, s1), s2));
     float dv = sv * min(min(dv0, dv1), dv2);
     float dmax = abs(det(e0, e1)) / (length(e0) + length(e1) + length(e2));
-    float a = dv/(2.0f*dmax*(1.0f-hardness)+hardness);
-    // return clamp(-a+0.5f, 0.0f, 0.999f);
-    return 0.999f/(1.0f+exp(4.0f*a));
+    return antialiase_map(dv, dmax, hardness);
 }
 
 [CudaDeviceExport]

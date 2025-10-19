@@ -306,6 +306,8 @@ rasterize_to_pixels_fwd_tensor(
         __LAUNCH_KERNEL__(3)
         __LAUNCH_KERNEL__(4)
         __LAUNCH_KERNEL__(5)
+        __LAUNCH_KERNEL__(6)
+        __LAUNCH_KERNEL__(7)
         // __LAUNCH_KERNEL__(8)
         // __LAUNCH_KERNEL__(9)
         // __LAUNCH_KERNEL__(16)

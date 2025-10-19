@@ -269,6 +269,7 @@ def rasterization(
     """
     meta = {}
 
+    # if primitive in ["3dgs", "mip"]:
     if primitive in ["3dgs", "mip", "opaque_triangle"]:
         assert len(splat_params) == 4, "3DGS requires 4 params (means, quats, scales, opacities)"
         means, quats, scales, opacities = splat_params
@@ -280,6 +281,15 @@ def rasterization(
         assert quats.shape == batch_dims + (N, 4), quats.shape
         assert scales.shape == batch_dims + (N, 3), scales.shape
         assert opacities.shape == batch_dims + (N,), opacities.shape
+    elif primitive in ["opaque_triangle"]:
+        assert len(splat_params) == 2, "Opaque triangle requires 4 params (means, hardness)"
+        means, hardness = splat_params
+        assert len(means.shape) >= 3, "means must have at least 3 dimensions"
+        batch_dims = means.shape[:-3]
+        N = means.shape[-3]
+        device = means.device
+        assert means.shape == batch_dims + (N, 3, 3), means.shape
+        assert hardness.shape == batch_dims + (N,), hardness.shape
     else:
         assert False, f"Invalid primitive ({primitive})"
     num_batch_dims = len(batch_dims)
@@ -288,7 +298,7 @@ def rasterization(
     I = B * C
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED", "RGB+D+N", "RGB+ED+N"], render_mode
 
     def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
         view_list = list(
@@ -540,7 +550,7 @@ def rasterization(
         image_ids = batch_ids * C + camera_ids
     else:
         # The results are with shape [..., C, N, ...]. Only the elements with radii > 0 are valid.
-        radii, depths, proj_splats = proj_results
+        radii, depths, normals, proj_splats = proj_results
         batch_ids, camera_ids, gaussian_ids = None, None, None
         image_ids = None
 
@@ -562,6 +572,7 @@ def rasterization(
             "gaussian_ids": gaussian_ids,
             "radii": radii,
             "depths": depths,
+            "normals": normals,
             "means2d": means2d,
         }
     )
@@ -596,8 +607,11 @@ def rasterization(
         if viewmats_rs is not None:
             campos_rs = torch.inverse(viewmats_rs)[..., :3, 3]
             campos = 0.5 * (campos + campos_rs)  # [..., C, 3]
+        # if primitive in ["3dgs", "mip"]:
         if primitive in ["3dgs", "mip", "opaque_triangle"]:
             means = splat_params[0]
+        elif primitive in ["opaque_triangle"]:
+            means = splat_params[0].mean(-2)
         if packed:
             dirs = (
                 means.view(B, N, 3)[batch_ids, gaussian_ids]
@@ -716,7 +730,18 @@ def rasterization(
             colors = reshape_view(C, colors, N_world)
 
     # Rasterize to pixels
-    if render_mode in ["RGB+D", "RGB+ED"]:
+    if render_mode in ["RGB+D+N", "RGB+ED+N"]:
+        assert normals is not None, "Primitive does not support normal"
+        colors = torch.cat((colors, depths[..., None], normals), dim=-1)
+        if backgrounds is not None:
+            backgrounds = torch.cat(
+                [
+                    backgrounds,
+                    torch.zeros(batch_dims + (C, 1), device=backgrounds.device),
+                ],
+                dim=-1,
+            )
+    elif render_mode in ["RGB+D", "RGB+ED"]:
         colors = torch.cat((colors, depths[..., None]), dim=-1)
         if backgrounds is not None:
             backgrounds = torch.cat(
@@ -812,12 +837,14 @@ def rasterization(
                 packed=packed,
                 absgrad=absgrad,
             )
-    if render_mode in ["ED", "RGB+ED"]:
+    if "ED" in render_mode:
         # normalize the accumulated depth to get the expected depth
+        depth_idx = 3 if "RGB" in render_mode else 0
         render_colors = torch.cat(
             [
-                render_colors[..., :-1],
-                render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
+                render_colors[..., :depth_idx],
+                render_colors[..., depth_idx:depth_idx+1] / render_alphas.clamp(min=1e-10),
+                render_colors[..., depth_idx+1:],
             ],
             dim=-1,
         )

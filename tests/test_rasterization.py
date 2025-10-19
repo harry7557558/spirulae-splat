@@ -45,7 +45,8 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
         camera_model=["pinhole", "fisheye"][IS_FISHEYE],
         with_ut=False,
         with_eval3d=False,
-        render_mode="RGB+D",
+        # render_mode="RGB+D",
+        render_mode="RGB+D+N",
     )
     return rgbd[..., :3], rgbd[..., 3:], alpha
 
