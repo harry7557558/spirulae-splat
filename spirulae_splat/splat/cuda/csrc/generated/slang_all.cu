@@ -1,3 +1,5 @@
+#pragma once
+
 #include "slang.cuh"
 
 struct DiffPair_float_0

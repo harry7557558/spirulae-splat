@@ -6,6 +6,7 @@ cu_files = [os.path.join(cu_dir, f) for f in os.listdir(cu_dir) if f.endswith(".
 
 def process(src: str):
     src = src.replace("\n__device__", "\ninline __device__")  # make linker happy
+    src = "#pragma once\n\n" + src
     return src
 
 header_filename = os.path.join(cu_dir, 'slang.cuh')

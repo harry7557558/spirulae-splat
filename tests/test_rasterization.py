@@ -22,8 +22,13 @@ IS_ANTIALIASED = False
 
 def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
     rgbd, alpha, meta = ssplat_rasterization(
-        primitive=["3dgs", "mip"][IS_ANTIALIASED],
-        gauss_params=(means, quats, scales, opacities.squeeze(-1)),
+        # primitive=["3dgs", "mip"][IS_ANTIALIASED],
+        splat_params=(means, quats, scales, opacities.squeeze(-1)),
+        primitive="opaque_triangle",
+        # splat_params=(
+        #     means.unsqueeze(-2).repeat(1, 3, 1) + 0.1 * torch.tensor([[[1,0,0],[0,1,0],[0,0,1]]]).to(means),
+        #     opacities.squeeze(-1)
+        # ),
         colors_dc=features_dc,
         colors_sh=features_sh,
         viewmats=viewmats,  # [C, 4, 4]

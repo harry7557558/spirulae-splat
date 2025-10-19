@@ -113,6 +113,9 @@ class SpirulaeModelConfig(ModelConfig):
 
     _target: Type = field(default_factory=lambda: SpirulaeModel)
 
+    primitive: Literal["3dgs", "mip", "opaque_triangle"] = "opaque_triangle"
+    """Splat primitive to use"""
+
     warmup_length: int = 500
     """period of steps where refinement is turned off"""
     stop_refine_at: int = 27000
@@ -121,7 +124,7 @@ class SpirulaeModelConfig(ModelConfig):
     """period of steps where gaussians are culled and densified"""
     resolution_schedule: int = 3000
     """training starts at 1/d resolution, every n steps this is doubled"""
-    background_color: Literal["random", "black", "white", "gray"] = "gray"
+    background_color: Literal["random", "black", "white", "gray"] = "black"  # TODO
     """Whether to randomize the background color."""
     num_downscales: int = 0
     """at the beginning, resolution is 1/2^d, where d is this number"""
@@ -208,7 +211,7 @@ class SpirulaeModelConfig(ModelConfig):
     """maximum degree of spherical harmonics to use"""
     sh_degree_interval: int = 1000
     """every n intervals turn on another sh degree"""
-    train_background_color: bool = True
+    train_background_color: bool = False  # TODO
     """make background color trainable"""
     background_sh_degree: int = 3
     """enable background model"""
@@ -329,10 +332,9 @@ class SpirulaeModel(Model):
             means = self.seed_points[0]
             if self.config.relative_scale is not None:
                 means *= self.config.relative_scale
-            means = torch.nn.Parameter(means)
             self.random_init = False
         else:
-            means = torch.nn.Parameter(torch.randn((self.config.num_random, 3)) * self.config.random_scale)
+            means = torch.randn((self.config.num_random, 3)) * self.config.random_scale
             self.random_init = True
         self.xys_grad_norm = None
         self.ch_grad_norm = None
@@ -347,11 +349,20 @@ class SpirulaeModel(Model):
         S = np.prod(S, axis=-1, keepdims=True)**(1/3) * np.ones(S.shape)
         scales = S
         scales = np.log(1.5*scales/self.config.kernel_radius+1e-8)
-        scales = torch.nn.Parameter(torch.from_numpy(scales.astype(np.float32)))
-        # quats = torch.nn.Parameter(random_quat_tensor(num_points))
-        quats = torch.nn.Parameter(torch.from_numpy(np.array(
+        scales = torch.from_numpy(scales.astype(np.float32))
+        # quats = random_quat_tensor(num_points)
+        quats = torch.from_numpy(np.array(
             Rotation.from_matrix(np.transpose(Vt, axes=(0, 2, 1))).as_quat(),
-            dtype=np.float32)))
+            dtype=np.float32))
+        opacities = torch.logit(0.1 * torch.ones(num_points, 1))
+
+        if self.config.primitive in ["3dgs", "mip", "opaque_triangle"]:
+            means = torch.nn.Parameter(means)
+            quats = torch.nn.Parameter(quats)
+            scales = torch.nn.Parameter(scales)
+        if self.config.primitive in ["3dgs", "mip"]:
+            opacities = torch.nn.Parameter(opacities)
+
         # colors
         dim_sh = num_sh_bases(self.config.sh_degree)
 
@@ -373,8 +384,6 @@ class SpirulaeModel(Model):
         else:
             features_dc = torch.nn.Parameter(torch.rand(num_points, 3))
             features_sh = torch.nn.Parameter(torch.zeros((num_points, dim_sh-1, 3)))
-
-        opacities = torch.nn.Parameter(torch.logit(0.1 * torch.ones(num_points, 1)))
 
         gauss_params = {
             "means": means,
@@ -436,6 +445,7 @@ class SpirulaeModel(Model):
                 grow_factor=grow_factor,
                 min_opacity=self.config.mcmc_min_opacity,
                 prob_grad_weight=self.config.mcmc_prob_grad_weight,
+                use_scale_for_probs=(self.config.primitive == "opaque_triangle"),
                 is_3dgs=self.config.use_3dgs,
                 relocate_scale2d=self.config.relocate_screen_size,
                 max_scale2d=self.config.mcmc_max_screen_size,
@@ -748,11 +758,14 @@ class SpirulaeModel(Model):
         viewmats = viewmats.to(device)
         Ks = Ks.to(device)
 
+        # hardness = min(max(self.step / self.config.stop_refine_at, 0.1), 1.0)
+        hardness = min(max(self.step / 2000, 0.1), 1.0)
         rgbd, alpha, meta = rasterization(
-            means=self.means,
-            quats=quats,
-            scales=self.scales,
-            opacities=self.opacities.squeeze(-1),
+            self.config.primitive,
+            (self.means, quats, self.scales, self.opacities.squeeze(-1))
+                if self.config.primitive in ['3dgs', 'mip'] else
+            (self.means, quats, self.scales.mean(-1, keepdim=True).repeat(1,3),
+             hardness * torch.ones_like(self.opacities.squeeze(-1))),
             colors_dc=self.features_dc,
             colors_sh=self.features_sh,
             viewmats=viewmats,  # [C, 4, 4]
@@ -764,7 +777,6 @@ class SpirulaeModel(Model):
             use_bvh=(self.config.use_bvh and self.training),
             absgrad=(not self.config.use_mcmc),
             sparse_grad=False,
-            rasterize_mode="classic",
             distributed=False,
             camera_model=["pinhole", "fisheye"][is_fisheye],
             with_ut=is_fisheye,

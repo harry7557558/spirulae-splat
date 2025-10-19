@@ -7,10 +7,10 @@
 #include "PerSplatLoss.cuh"
 #include "PixelWise.cuh"
 #include "SplatTileIntersector.cuh"
-#include "ProjectionEWA3DGS.cuh"
+#include "Projection.cuh"
 #include "ProjectionEWA3DGSHetero.cuh"
-#include "Rasterization3DGSFwd.cuh"
-#include "Rasterization3DGSBwd.cuh"
+#include "RasterizationFwd.cuh"
+#include "RasterizationBwd.cuh"
 
 #define TORCH_INDUCTOR_CPP_WRAPPER
 #include <torch/extension.h>
@@ -45,18 +45,22 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // SplatTileIntersector.cuh
     m.def("intersect_splat_tile", &SplatTileIntersector::intersect_splat_tile);
     
-    // ProjectionEWA3DGS.cuh
+    // Projection.cuh
     m.def("projection_ewa_3dgs_forward", &projection_ewa_3dgs_forward_tensor);
     m.def("projection_ewa_3dgs_backward", &projection_ewa_3dgs_backward_tensor);
+    m.def("projection_opaque_triangle_forward", &projection_opaque_triangle_forward_tensor);
+    m.def("projection_opaque_triangle_backward", &projection_opaque_triangle_backward_tensor);
 
     // ProjectionEWA3DGSHetero.cuh
     m.def("projection_ewa_3dgs_hetero_forward", &projection_ewa_3dgs_hetero_forward_tensor);
     m.def("projection_ewa_3dgs_hetero_backward", &projection_ewa_3dgs_hetero_backward_tensor);
 
-    // Rasterization3DGSFwd.cuh
+    // RasterizationFwd.cuh
     m.def("rasterization_3dgs_forward", &rasterize_to_pixels_3dgs_fwd);
+    m.def("rasterization_opaque_triangle_forward", &rasterize_to_pixels_opaque_triangle_fwd);
 
-    // Rasterization3DGSBwd.cuh
+    // RasterizationBwd.cuh
     m.def("rasterization_3dgs_backward", &rasterize_to_pixels_3dgs_bwd);
+    m.def("rasterization_opaque_triangle_backward", &rasterize_to_pixels_opaque_triangle_bwd);
 
 }

@@ -58,6 +58,7 @@ class MCMCStrategy(Strategy):
     max_scale2d: float = float('inf')
     max_scale3d: float = float('inf')
     prob_grad_weight: float = 0.0
+    use_scale_for_probs: bool = False
     is_3dgs: bool = False
     verbose: bool = False
     key_for_gradient: Literal["means2d", "gradient_2dgs"] = "means2d"
@@ -98,7 +99,7 @@ class MCMCStrategy(Strategy):
                 state["count"] = torch.zeros(n_gaussian, device=grad_info.device)
         if state["radii"] is None:
             assert "radii" in info, "radii is required but missing."
-            state["radii"] = torch.zeros(n_gaussian, device=grad_info.device)
+            state["radii"] = torch.zeros(n_gaussian, device=grad_info.device).float()
 
         # update the running state
         if packed:
@@ -117,6 +118,16 @@ class MCMCStrategy(Strategy):
             state["radii"][gs_ids],
             normalized_radii
         )
+
+        # For opaque triangle splatting
+        if self.use_scale_for_probs:
+            probs = state["radii"] + 1e-6 * torch.randn_like(state["radii"])
+            if np.isfinite(self.relocate_scale2d) or np.isfinite(self.max_scale2d):
+                max_radii = min(self.relocate_scale2d, self.max_scale2d)
+                probs = torch.relu(torch.fmin(probs, max_radii - state["radii"]))
+            opacities = (probs - probs.mean()) / probs.std()
+            opacities = 0.5+0.5*torch.erf(0.4*opacities)
+            params["opacities"].data = opacities.reshape(params["opacities"].shape)
 
         # large splats in screen space
         # clip scale while increase opacity to encourage being relocated to
@@ -258,7 +269,7 @@ class MCMCStrategy(Strategy):
         scalar = lr * self.noise_lr #* min(step/max(self.refine_start_iter,1), 1)
         inject_noise_to_position(
             params=params, optimizers=optimizers, state={}, scaler=scalar,
-            min_opacity = self.min_opacity
+            min_opacity=self.min_opacity
         )
 
     @torch.no_grad()

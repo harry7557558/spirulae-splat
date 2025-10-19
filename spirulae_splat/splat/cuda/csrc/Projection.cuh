@@ -6,6 +6,7 @@
 #include <gsplat/Common.h>
 
 #include "Primitive3DGS.cuh"
+#include "PrimitiveOpaqueTriangle.cuh"
 
 
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */
@@ -24,7 +25,24 @@ std::tuple<
     const at::Tensor Ks,                   // [..., C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
-    const float eps2d,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip,
+    const gsplat::CameraModelType camera_model
+);
+
+
+std::tuple<
+    at::Tensor,  // radii
+    at::Tensor,  // depths
+    OpaqueTriangle::Screen::TensorTuple  // out splats
+> projection_opaque_triangle_forward_tensor(
+    // inputs
+    const OpaqueTriangle::World::TensorTuple &in_splats,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
     const float near_plane,
     const float far_plane,
     const float radius_clip,
@@ -43,12 +61,31 @@ std::tuple<
     const at::Tensor Ks,                   // [..., C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
-    const float eps2d,
     const gsplat::CameraModelType camera_model,
     // fwd outputs
     const at::Tensor radii,                       // [..., C, N, 2]
     // grad outputs
     const at::Tensor v_depths,                      // [..., C, N]
     const Vanilla3DGS::Screen::TensorTuple &v_splats_screen_tuple,
+    const bool viewmats_requires_grad
+);
+
+
+std::tuple<
+    OpaqueTriangle::World::TensorTuple,  // v_splats
+    at::Tensor  // v_viewmats
+> projection_opaque_triangle_backward_tensor(
+    // fwd inputs
+    const OpaqueTriangle::World::TensorTuple &splats_world_tuple,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const gsplat::CameraModelType camera_model,
+    // fwd outputs
+    const at::Tensor radii,                       // [..., C, N, 2]
+    // grad outputs
+    const at::Tensor v_depths,                      // [..., C, N]
+    const OpaqueTriangle::Screen::TensorTuple &v_splats_screen_tuple,
     const bool viewmats_requires_grad
 );

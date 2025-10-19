@@ -38,7 +38,7 @@ from .utils import depth_to_normal
 
 def rasterization(
     primitive: Literal["3dgs", "mip", "opaque_triangle"],
-    gauss_params: tuple[Tensor],  # means, quats, scales, opacities
+    splat_params: tuple[Tensor],  # means, quats, scales, opacities
     colors_dc: Tensor,  # [..., N, 3]
     colors_sh: Optional[Tensor],  # [..., N, K, 3]
     viewmats: Tensor,  # [..., C, 4, 4]
@@ -269,8 +269,10 @@ def rasterization(
     """
     meta = {}
 
-    if primitive in ["3dgs", "mip"]:
-        means, quats, scales, opacities = gauss_params
+    if primitive in ["3dgs", "mip", "opaque_triangle"]:
+        assert len(splat_params) == 4, "3DGS requires 4 params (means, quats, scales, opacities)"
+        means, quats, scales, opacities = splat_params
+        assert len(means.shape) >= 2, "means must have at least 2 dimensions"
         batch_dims = means.shape[:-2]
         N = means.shape[-2]
         device = means.device
@@ -278,6 +280,8 @@ def rasterization(
         assert quats.shape == batch_dims + (N, 4), quats.shape
         assert scales.shape == batch_dims + (N, 3), scales.shape
         assert opacities.shape == batch_dims + (N,), opacities.shape
+    else:
+        assert False, f"Invalid primitive ({primitive})"
     num_batch_dims = len(batch_dims)
     B = math.prod(batch_dims)
     C = viewmats.shape[-3]
@@ -467,12 +471,11 @@ def rasterization(
         # Project Gaussians to 2D
         proj_results = fully_fused_projection(
             primitive,
-            gauss_params,
+            splat_params,
             viewmats,
             Ks,
             width,
             height,
-            eps2d=eps2d,
             packed=packed,
             near_plane=near_plane,
             far_plane=far_plane,
@@ -544,6 +547,12 @@ def rasterization(
     # if compensations is not None:  # TODO
     #     opacities = torch.logit(torch.sigmoid(opacities) * compensations)
 
+    if primitive in ["3dgs", "mip"]:
+        means2d = proj_splats[0]
+    elif primitive in ["opaque_triangle"]:  # TODO: tight bbox
+        means2d = proj_splats[0].mean(-2)
+        if absgrad:
+            means2d.absgrad = proj_splats[0].absgrad
     meta.update(
         {
             # global batch and camera ids
@@ -553,7 +562,7 @@ def rasterization(
             "gaussian_ids": gaussian_ids,
             "radii": radii,
             "depths": depths,
-            "means2d": proj_splats[0],
+            "means2d": means2d,
         }
     )
     # if heterogeneous:
@@ -587,6 +596,8 @@ def rasterization(
         if viewmats_rs is not None:
             campos_rs = torch.inverse(viewmats_rs)[..., :3, 3]
             campos = 0.5 * (campos + campos_rs)  # [..., C, 3]
+        if primitive in ["3dgs", "mip", "opaque_triangle"]:
+            means = splat_params[0]
         if packed:
             dirs = (
                 means.view(B, N, 3)[batch_ids, gaussian_ids]
@@ -723,10 +734,11 @@ def rasterization(
         pass
 
     # Identify intersecting tiles
+    # TODO: get triangle splatting right
     tile_width = math.ceil(width / float(tile_size))
     tile_height = math.ceil(height / float(tile_size))
     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
-        proj_splats[0],
+        means2d,
         radii,
         depths,
         tile_size,

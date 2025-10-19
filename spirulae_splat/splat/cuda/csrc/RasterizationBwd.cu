@@ -1,6 +1,6 @@
 // Modified from https://github.com/nerfstudio-project/gsplat/blob/main/gsplat/cuda/csrc/RasterizeToPixels3DGSBwd.cu
 
-#include "Rasterization3DGSBwd.cuh"
+#include "RasterizationBwd.cuh"
 
 #include "common.cuh"
 
@@ -238,10 +238,10 @@ __global__ void rasterize_to_pixels_bwd_kernel(
 }
 
 
-template <uint32_t CDIM>
-void launch_rasterize_to_pixels_3dgs_bwd_kernel(
+template <typename SplatPrimitive, uint32_t CDIM>
+inline void launch_rasterize_to_pixels_bwd_kernel(
     // Gaussian parameters
-    Vanilla3DGS::Screen::Tensor splats,
+    typename SplatPrimitive::Screen::Tensor splats,
     const at::Tensor colors,                    // [..., N, 3] or [nnz, 3]
     const std::optional<at::Tensor> backgrounds, // [..., 3]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -258,7 +258,7 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     const at::Tensor v_render_colors, // [..., image_height, image_width, 3]
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
     // outputs
-    Vanilla3DGS::Screen::Tensor v_splats,
+    typename SplatPrimitive::Screen::Tensor v_splats,
     at::Tensor v_colors                    // [..., N, 3] or [nnz, 3]
 ) {
     bool packed = splats.isPacked();
@@ -284,7 +284,7 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
         + CDIM * sizeof(float) + sizeof(float2) + sizeof(float);
 
     if (cudaFuncSetAttribute(
-            rasterize_to_pixels_bwd_kernel<Vanilla3DGS, CDIM>,
+            rasterize_to_pixels_bwd_kernel<SplatPrimitive, CDIM>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shmem_size
         ) != cudaSuccess) {
@@ -296,7 +296,7 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     }
     #endif
 
-    rasterize_to_pixels_bwd_kernel<Vanilla3DGS, CDIM>
+    rasterize_to_pixels_bwd_kernel<SplatPrimitive, CDIM>
         // <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
         <<<grid, threads>>>(
             I,
@@ -325,13 +325,14 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
 }
 
 
-std::tuple<
-    Vanilla3DGS::Screen::TensorTuple,
+template<typename SplatPrimitive>
+inline std::tuple<
+    typename SplatPrimitive::Screen::TensorTuple,
     at::Tensor,  // v_colors
     std::optional<at::Tensor>  // absgrad
-> rasterize_to_pixels_3dgs_bwd(
+> rasterize_to_pixels_bwd_tensor(
     // Gaussian parameters
-    Vanilla3DGS::Screen::TensorTuple splats_tuple,
+    typename SplatPrimitive::Screen::TensorTuple splats_tuple,
     const at::Tensor colors,                    // [..., N, channels] or [nnz, channels]
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -369,14 +370,14 @@ std::tuple<
 
     uint32_t channels = colors.size(-1);
 
-    Vanilla3DGS::Screen::Tensor splats(splats_tuple);
-    Vanilla3DGS::Screen::Tensor v_splats = splats.zeros_like(absgrad);
+    typename SplatPrimitive::Screen::Tensor splats(splats_tuple);
+    typename SplatPrimitive::Screen::Tensor v_splats = splats.zeros_like(absgrad);
 
     at::Tensor v_colors = torch::zeros_like(colors, splats.options());
 
 #define __LAUNCH_KERNEL__(N)                                                   \
     case N:                                                                    \
-        launch_rasterize_to_pixels_3dgs_bwd_kernel<N>(                         \
+        launch_rasterize_to_pixels_bwd_kernel<SplatPrimitive, N>(              \
             splats,                                                            \
             colors,                                                            \
             backgrounds,                                                       \
@@ -427,45 +428,68 @@ std::tuple<
     );
 }
 
-
-// Explicit Instantiation: this should match how it is being called in .cpp
-// file.
-// TODO: this is slow to compile, can we do something about it?
-#define __INS__(CDIM)                                                          \
-    template void launch_rasterize_to_pixels_3dgs_bwd_kernel<CDIM>(            \
-        Vanilla3DGS::Screen::Tensor splats,                                                \
-        const at::Tensor colors,                                               \
-        const std::optional<at::Tensor> backgrounds,                            \
-        const std::optional<at::Tensor> masks,                                  \
-        uint32_t image_width,                                                  \
-        uint32_t image_height,                                                 \
-        const at::Tensor tile_offsets,                                         \
-        const at::Tensor flatten_ids,                                          \
-        const at::Tensor render_Ts,                                            \
-        const at::Tensor last_ids,                                             \
-        const at::Tensor v_render_colors,                                      \
-        const at::Tensor v_render_alphas,                                      \
-        Vanilla3DGS::Screen::Tensor v_splats,                                              \
-        at::Tensor v_opacities                                                 \
+std::tuple<
+    Vanilla3DGS::Screen::TensorTuple,
+    at::Tensor,  // v_colors
+    std::optional<at::Tensor>  // absgrad
+> rasterize_to_pixels_3dgs_bwd(
+    // Gaussian parameters
+    Vanilla3DGS::Screen::TensorTuple splats_tuple,
+    const at::Tensor colors,                    // [..., N, channels] or [nnz, channels]
+    const std::optional<at::Tensor> backgrounds, // [..., channels]
+    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    // forward outputs
+    const at::Tensor render_Ts, // [..., image_height, image_width, 1]
+    const at::Tensor last_ids,      // [..., image_height, image_width]
+    // gradients of outputs
+    const at::Tensor v_render_colors, // [..., image_height, image_width, channels]
+    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    // options
+    bool absgrad
+) {
+    return rasterize_to_pixels_bwd_tensor<Vanilla3DGS>(
+        splats_tuple, colors, backgrounds, masks,
+        image_width, image_height, tile_size, tile_offsets, flatten_ids,
+        render_Ts, last_ids, v_render_colors, v_render_alphas, absgrad
     );
+}
 
-__INS__(1)
-__INS__(2)
-__INS__(3)
-__INS__(4)
-__INS__(5)
-// __INS__(8)
-// __INS__(9)
-// __INS__(16)
-// __INS__(17)
-// __INS__(32)
-// __INS__(33)
-// __INS__(64)
-// __INS__(65)
-// __INS__(128)
-// __INS__(129)
-// __INS__(256)
-// __INS__(257)
-// __INS__(512)
-// __INS__(513)
-#undef __INS__
+std::tuple<
+    OpaqueTriangle::Screen::TensorTuple,
+    at::Tensor,  // v_colors
+    std::optional<at::Tensor>  // absgrad
+> rasterize_to_pixels_opaque_triangle_bwd(
+    // Gaussian parameters
+    OpaqueTriangle::Screen::TensorTuple splats_tuple,
+    const at::Tensor colors,                    // [..., N, channels] or [nnz, channels]
+    const std::optional<at::Tensor> backgrounds, // [..., channels]
+    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    // forward outputs
+    const at::Tensor render_Ts, // [..., image_height, image_width, 1]
+    const at::Tensor last_ids,      // [..., image_height, image_width]
+    // gradients of outputs
+    const at::Tensor v_render_colors, // [..., image_height, image_width, channels]
+    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    // options
+    bool absgrad
+) {
+    return rasterize_to_pixels_bwd_tensor<OpaqueTriangle>(
+        splats_tuple, colors, backgrounds, masks,
+        image_width, image_height, tile_size, tile_offsets, flatten_ids,
+        render_Ts, last_ids, v_render_colors, v_render_alphas, absgrad
+    );
+}

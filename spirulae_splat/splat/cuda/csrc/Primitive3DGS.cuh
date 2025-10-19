@@ -2,7 +2,7 @@
 
 #ifdef __CUDACC__
 #define TensorView _Slang_TensorView
-#include "generated/projection_3dgs.cu"
+#include "generated/projection.cu"
 #undef TensorView
 #endif
 
@@ -208,6 +208,14 @@ struct Vanilla3DGS::Screen {
             if (absgrad)
                 result.absgrad = at::zeros_like(means2d);
             return result;
+        }
+
+        static Tensor empty(long C, long N, c10::TensorOptions opt) {
+            return std::make_tuple(
+                at::empty({C, N, 2}, opt),
+                at::empty({C, N, 3}, opt),
+                at::empty({C, N}, opt)
+            );
         }
 
         auto options() {

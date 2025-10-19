@@ -1,3 +1,5 @@
+#pragma once
+
 #define SLANG_PRELUDE_EXPORT
 
 #ifdef __CUDACC_RTC__

@@ -20,7 +20,6 @@ from typing import Literal
 class SplatModel:
     def __init__(self, file_path: str):
         self.bgr = True
-        self.sort_per_pixel = True
         self.flip_yz = False
         self.return_torch = False
 
@@ -69,11 +68,6 @@ class SplatModel:
                 f = os.path.join(ckpt_dir, f)
                 self.load_ckpt(f)
                 break
-
-        # check if use per pixel sorting
-        content = open(file_path).read()
-        if 'use_per_pixel_sorting: false' in content:
-            self.sort_per_pixel = False
 
         # load dataparser transforms
         dtr_path = os.path.join(save_dir, 'dataparser_transforms.json')
@@ -222,10 +216,14 @@ class SplatModel:
                     kwargs["tangential_coeffs"] = dist_coeffs[2:][None]
 
             rgbd, alpha, meta = rasterization(
-                means=self.means,
-                quats=F.normalize(self.quats, dim=-1),
-                scales=torch.exp(self.scales),
-                opacities=self.opacities.squeeze(-1),
+                "opaque_triangle",
+                (
+                    self.means,
+                    F.normalize(self.quats, dim=-1),
+                    self.scales,
+                    # self.opacities.squeeze(-1),
+                    0.999*torch.ones_like(self.opacities).squeeze(-1),
+                ),
                 colors_dc=self.features_dc,
                 colors_sh=self.features_sh,
                 viewmats=viewmat[None].contiguous(),  # [C, 4, 4]
@@ -237,7 +235,6 @@ class SplatModel:
                 use_bvh=False,
                 absgrad=False,
                 sparse_grad=False,
-                rasterize_mode="classic",
                 distributed=False,
                 camera_model=["pinhole", "fisheye"][is_fisheye],
                 with_ut=is_distorted,

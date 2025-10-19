@@ -1,6 +1,6 @@
 // Modified from https://github.com/nerfstudio-project/gsplat/blob/main/gsplat/cuda/csrc/RasterizeToPixels3DGSFwd.cu
 
-#include "Rasterization3DGSFwd.cuh"
+#include "RasterizationFwd.cuh"
 
 #include "common.cuh"
 
@@ -162,10 +162,10 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     }
 }
 
-template <uint32_t CDIM>
-void launch_rasterize_to_pixels_3dgs_fwd_kernel(
+template <typename SplatPrimitive, uint32_t CDIM>
+inline void launch_rasterize_to_pixels_fwd_kernel(
     // Gaussian parameters
-    Vanilla3DGS::Screen::Tensor splats,
+    typename SplatPrimitive::Screen::Tensor splats,
     const at::Tensor colors,    // [..., N, channels] or [nnz, channels]
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -194,13 +194,13 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     dim3 grid = {I, tile_height, tile_width};
 
     int64_t shmem_size =
-        tile_size * tile_size * (sizeof(int32_t) + sizeof(Vanilla3DGS::Screen));
+        tile_size * tile_size * (sizeof(int32_t) + sizeof(typename SplatPrimitive::Screen));
 
     // TODO: an optimization can be done by passing the actual number of
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
     if (cudaFuncSetAttribute(
-            rasterize_to_pixels_fwd_kernel<Vanilla3DGS, CDIM>,
+            rasterize_to_pixels_fwd_kernel<SplatPrimitive, CDIM>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shmem_size
         ) != cudaSuccess) {
@@ -211,7 +211,7 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
         );
     }
 
-    rasterize_to_pixels_fwd_kernel<Vanilla3DGS, CDIM>
+    rasterize_to_pixels_fwd_kernel<SplatPrimitive, CDIM>
         <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
             I,
             N,
@@ -235,50 +235,12 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
         );
 }
 
-// Explicit Instantiation: this should match how it is being called in .cpp
-// file.
-// TODO: this is slow to compile, can we do something about it?
-#define __INS__(CDIM)                                                          \
-    template void launch_rasterize_to_pixels_3dgs_fwd_kernel<CDIM>(            \
-        Vanilla3DGS::Screen::Tensor splats,                                                \
-        const at::Tensor colors,                                               \
-        const std::optional<at::Tensor> backgrounds,                            \
-        const std::optional<at::Tensor> masks,                                  \
-        uint32_t image_width,                                                  \
-        uint32_t image_height,                                                 \
-        uint32_t tile_size,                                                    \
-        const at::Tensor tile_offsets,                                         \
-        const at::Tensor flatten_ids,                                          \
-        at::Tensor renders,                                                    \
-        at::Tensor transmittances,                                             \
-        at::Tensor last_ids                                                    \
-    );
 
-__INS__(1)
-__INS__(2)
-__INS__(3)
-__INS__(4)
-__INS__(5)
-// __INS__(8)
-// __INS__(9)
-// __INS__(16)
-// __INS__(17)
-// __INS__(32)
-// __INS__(33)
-// __INS__(64)
-// __INS__(65)
-// __INS__(128)
-// __INS__(129)
-// __INS__(256)
-// __INS__(257)
-// __INS__(512)
-// __INS__(513)
-#undef __INS__
-
-
-std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
+template <typename SplatPrimitive>
+inline std::tuple<at::Tensor, at::Tensor, at::Tensor>
+rasterize_to_pixels_fwd_tensor(
     // Gaussian parameters
-    Vanilla3DGS::Screen::TensorTuple splats_tuple,
+    typename SplatPrimitive::Screen::TensorTuple splats_tuple,
     const at::Tensor colors,    // [..., N, channels] or [nnz, channels]
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -299,7 +261,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     if (masks.has_value())
         CHECK_INPUT(masks.value());
     
-    Vanilla3DGS::Screen::Tensor splats(splats_tuple);
+    typename SplatPrimitive::Screen::Tensor splats(splats_tuple);
 
     auto opt = splats.options();
     at::DimVector image_dims(tile_offsets.sizes().slice(0, tile_offsets.dim() - 2));
@@ -319,7 +281,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
 
 #define __LAUNCH_KERNEL__(N)                                                   \
     case N:                                                                    \
-        launch_rasterize_to_pixels_3dgs_fwd_kernel<N>(                         \
+        launch_rasterize_to_pixels_fwd_kernel<SplatPrimitive, N>(              \
             splats,                                                            \
             colors,                                                            \
             backgrounds,                                                       \
@@ -364,4 +326,49 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
 #undef __LAUNCH_KERNEL__
 
     return std::make_tuple(renders, transmittances, last_ids);
+}
+
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor>
+rasterize_to_pixels_3dgs_fwd(
+    // Gaussian parameters
+    Vanilla3DGS::Screen::TensorTuple splats_tuple,
+    const at::Tensor colors,    // [..., N, channels] or [nnz, channels]
+    const std::optional<at::Tensor> backgrounds, // [..., channels]
+    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids   // [n_isects]
+) {
+    return rasterize_to_pixels_fwd_tensor<Vanilla3DGS>(
+        splats_tuple, colors, backgrounds, masks,
+        image_width, image_height, tile_size,
+        tile_offsets, flatten_ids
+    );
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor>
+rasterize_to_pixels_opaque_triangle_fwd(
+    // Gaussian parameters
+    OpaqueTriangle::Screen::TensorTuple splats_tuple,
+    const at::Tensor colors,    // [..., N, channels] or [nnz, channels]
+    const std::optional<at::Tensor> backgrounds, // [..., channels]
+    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids   // [n_isects]
+) {
+    return rasterize_to_pixels_fwd_tensor<OpaqueTriangle>(
+        splats_tuple, colors, backgrounds, masks,
+        image_width, image_height, tile_size,
+        tile_offsets, flatten_ids
+    );
 }

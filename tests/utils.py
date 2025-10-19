@@ -11,6 +11,9 @@ def _color_text(text: str, color: str):
     return f"\033[{color}m{text}\033[m"
 
 def check_close(name, a, b, atol=1e-5, rtol=1e-5):
+    if a is None:
+        print(name, _color_text("None None", 'r'), [*b.shape], str(b.dtype).lstrip("torch."))
+        return
     if b is None:
         print(name, [*a.shape], str(a.dtype).lstrip("torch."), None, None, end=' | ')
         b = torch.zeros_like(a)

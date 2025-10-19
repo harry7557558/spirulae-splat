@@ -245,7 +245,6 @@ if __name__ == "__main__":
     ssplat_model.return_torch = True
     ssplat_model.convert_to_input_frame()
     print(ssplat_model.num_splats(), "splats")
-    print("sort_per_pixel:", ssplat_model.sort_per_pixel)
 
     # Center the model
     if False:

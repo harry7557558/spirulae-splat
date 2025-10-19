@@ -1,4 +1,4 @@
-#include "ProjectionEWA3DGS.cuh"
+#include "Projection.cuh"
 
 #include <ATen/Dispatch.h>
 #include <ATen/core/Tensor.h>
@@ -24,7 +24,6 @@ __global__ void projection_fused_fwd_kernel(
     const float *__restrict__ Ks,       // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
-    const float eps2d,
     const float near_plane,
     const float far_plane,
     const float radius_clip,
@@ -86,73 +85,6 @@ __global__ void projection_fused_fwd_kernel(
     }
 }
 
-std::tuple<
-    at::Tensor,  // radii
-    at::Tensor,  // depths
-    Vanilla3DGS::Screen::TensorTuple  // out splats
-> projection_ewa_3dgs_forward_tensor(
-    const bool antialiased,
-    // inputs
-    const Vanilla3DGS::World::TensorTuple &in_splats,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const float eps2d,
-    const float near_plane,
-    const float far_plane,
-    const float radius_clip,
-    const gsplat::CameraModelType camera_model
-) {
-    Vanilla3DGS::World::Tensor splats_world(in_splats);
-    uint32_t N = splats_world.size();    // number of gaussians
-    uint32_t C = viewmats.size(-3); // number of cameras
-    uint32_t B = splats_world.batchSize();    // number of batches
-
-    auto opt = splats_world.options();
-    at::Tensor radii = at::empty({C, N, 2}, opt.dtype(at::kInt));
-    at::Tensor means2d = at::empty({C, N, 2}, opt);
-    at::Tensor depths = at::empty({C, N}, opt);
-    at::Tensor conics = at::empty({C, N, 3}, opt);
-    at::Tensor out_opacities = at::empty({C, N}, opt);
-
-    Vanilla3DGS::Screen::Tensor splats_screen = std::make_tuple(
-        means2d, conics, out_opacities
-    );
-
-    #define _LAUNCH_ARGS \
-        <<<_CEIL_DIV(B*C*N, block), block>>>( \
-            B, C, N, \
-            antialiased, \
-            splats_world.buffer(), \
-            viewmats.data_ptr<float>(), \
-            Ks.data_ptr<float>(), \
-            image_width, \
-            image_height, \
-            eps2d, \
-            near_plane, \
-            far_plane, \
-            radius_clip, \
-            (int2*)radii.data_ptr<int32_t>(), \
-            depths.data_ptr<float>(), \
-            splats_screen.buffer() \
-        )
-
-    constexpr uint block = 256;
-    if (camera_model == gsplat::CameraModelType::PINHOLE)
-        projection_fused_fwd_kernel<Vanilla3DGS, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
-    // else if (camera_model == gsplat::CameraModelType::ORTHO)
-    //     projection_fused_fwd_kernel<Vanilla3DGS, gsplat::CameraModelType::ORTHO> _LAUNCH_ARGS;
-    // else if (camera_model == gsplat::CameraModelType::FISHEYE)
-    //     projection_fused_fwd_kernel<Vanilla3DGS, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
-    else
-        throw std::runtime_error("Unsupported camera model");
-
-    #undef _LAUNCH_ARGS
-
-    return std::make_tuple(radii, depths, std::make_tuple(means2d, conics, out_opacities));
-}
-
 template<typename SplatPrimitive, gsplat::CameraModelType camera_model>
 __global__ void projection_fused_bwd_kernel(
     // fwd inputs
@@ -165,7 +97,6 @@ __global__ void projection_fused_bwd_kernel(
     const float *__restrict__ Ks,       // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
-    const float eps2d,
     // fwd outputs
     const int2 *__restrict__ radii,          // [B, C, N, 2]
     // grad outputs
@@ -249,6 +180,109 @@ __global__ void projection_fused_bwd_kernel(
 }
 
 std::tuple<
+    at::Tensor,  // radii
+    at::Tensor,  // depths
+    Vanilla3DGS::Screen::TensorTuple  // out splats
+> projection_ewa_3dgs_forward_tensor(
+    const bool antialiased,
+    // inputs
+    const Vanilla3DGS::World::TensorTuple &in_splats,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip,
+    const gsplat::CameraModelType camera_model
+) {
+    Vanilla3DGS::World::Tensor splats_world(in_splats);
+    uint32_t N = splats_world.size();    // number of gaussians
+    uint32_t C = viewmats.size(-3); // number of cameras
+    uint32_t B = splats_world.batchSize();    // number of batches
+
+    auto opt = splats_world.options();
+    at::Tensor radii = at::empty({C, N, 2}, opt.dtype(at::kInt));
+    at::Tensor depths = at::empty({C, N}, opt);
+
+    Vanilla3DGS::Screen::Tensor splats_screen =
+        Vanilla3DGS::Screen::Tensor::empty(C, N, splats_world.options());
+
+    #define _LAUNCH_ARGS \
+        <<<_CEIL_DIV(B*C*N, block), block>>>( \
+            B, C, N, antialiased, \
+            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), \
+            image_width, image_height, near_plane, far_plane, radius_clip, \
+            (int2*)radii.data_ptr<int32_t>(), depths.data_ptr<float>(), splats_screen.buffer() \
+        )
+
+    constexpr uint block = 256;
+    if (camera_model == gsplat::CameraModelType::PINHOLE)
+        projection_fused_fwd_kernel<Vanilla3DGS, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
+    // else if (camera_model == gsplat::CameraModelType::ORTHO)
+    //     projection_fused_fwd_kernel<Vanilla3DGS, gsplat::CameraModelType::ORTHO> _LAUNCH_ARGS;
+    // else if (camera_model == gsplat::CameraModelType::FISHEYE)
+    //     projection_fused_fwd_kernel<Vanilla3DGS, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+    else
+        throw std::runtime_error("Unsupported camera model");
+
+    #undef _LAUNCH_ARGS
+
+    return std::make_tuple(radii, depths, splats_screen.tuple());
+}
+
+std::tuple<
+    at::Tensor,  // radii
+    at::Tensor,  // depths
+    OpaqueTriangle::Screen::TensorTuple  // out splats
+> projection_opaque_triangle_forward_tensor(
+    // inputs
+    const OpaqueTriangle::World::TensorTuple &in_splats,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip,
+    const gsplat::CameraModelType camera_model
+) {
+    OpaqueTriangle::World::Tensor splats_world(in_splats);
+    uint32_t N = splats_world.size();    // number of gaussians
+    uint32_t C = viewmats.size(-3); // number of cameras
+    uint32_t B = splats_world.batchSize();    // number of batches
+
+    auto opt = splats_world.options();
+    at::Tensor radii = at::empty({C, N, 2}, opt.dtype(at::kInt));
+    at::Tensor depths = at::empty({C, N}, opt);
+
+    OpaqueTriangle::Screen::Tensor splats_screen =
+        OpaqueTriangle::Screen::Tensor::empty(C, N, splats_world.options());
+
+    #define _LAUNCH_ARGS \
+        <<<_CEIL_DIV(B*C*N, block), block>>>( \
+            B, C, N, false, \
+            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), \
+            image_width, image_height, near_plane, far_plane, radius_clip, \
+            (int2*)radii.data_ptr<int32_t>(), depths.data_ptr<float>(), splats_screen.buffer() \
+        )
+
+    constexpr uint block = 256;
+    if (camera_model == gsplat::CameraModelType::PINHOLE)
+        projection_fused_fwd_kernel<OpaqueTriangle, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
+    // else if (camera_model == gsplat::CameraModelType::ORTHO)
+    //     projection_fused_fwd_kernel<OpaqueTriangle, gsplat::CameraModelType::ORTHO> _LAUNCH_ARGS;
+    // else if (camera_model == gsplat::CameraModelType::FISHEYE)
+    //     projection_fused_fwd_kernel<OpaqueTriangle, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+    else
+        throw std::runtime_error("Unsupported camera model");
+
+    #undef _LAUNCH_ARGS
+
+    return std::make_tuple(radii, depths, splats_screen.tuple());
+}
+
+std::tuple<
     Vanilla3DGS::World::TensorTuple,  // v_splats
     at::Tensor  // v_viewmats
 > projection_ewa_3dgs_backward_tensor(
@@ -259,7 +293,6 @@ std::tuple<
     const at::Tensor Ks,                   // [..., C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
-    const float eps2d,
     const gsplat::CameraModelType camera_model,
     // fwd outputs
     const at::Tensor radii,                       // [..., C, N, 2]
@@ -284,18 +317,10 @@ std::tuple<
 
     #define _LAUNCH_ARGS \
         <<<_CEIL_DIV(B*C*N, block), block>>>( \
-            B, C, N, \
-            antialiased, \
-            splats_world.buffer(), \
-            viewmats.data_ptr<float>(), \
-            Ks.data_ptr<float>(), \
-            image_width, \
-            image_height, \
-            eps2d, \
-            (int2*)radii.data_ptr<int32_t>(), \
-            v_depths.data_ptr<float>(), \
-            v_splats_screen.buffer(), \
-            v_splats_world.buffer(), \
+            B, C, N, antialiased, \
+            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), \
+            image_width, image_height, (int2*)radii.data_ptr<int32_t>(), \
+            v_depths.data_ptr<float>(), v_splats_screen.buffer(), v_splats_world.buffer(), \
             viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr \
         )
 
@@ -306,6 +331,62 @@ std::tuple<
     //     projection_fused_bwd_kernel<Vanilla3DGS, gsplat::CameraModelType::ORTHO> _LAUNCH_ARGS;
     // else if (camera_model == gsplat::CameraModelType::FISHEYE)
     //     projection_fused_bwd_kernel<Vanilla3DGS, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+    else
+        throw std::runtime_error("Unsupported camera model");
+
+    #undef _LAUNCH_ARGS
+
+    return std::make_tuple(v_splats_world.tuple(), v_viewmats);
+}
+
+std::tuple<
+    OpaqueTriangle::World::TensorTuple,  // v_splats
+    at::Tensor  // v_viewmats
+> projection_opaque_triangle_backward_tensor(
+    // fwd inputs
+    const OpaqueTriangle::World::TensorTuple &splats_world_tuple,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const gsplat::CameraModelType camera_model,
+    // fwd outputs
+    const at::Tensor radii,                       // [..., C, N, 2]
+    // grad outputs
+    const at::Tensor v_depths,                      // [..., C, N]
+    const OpaqueTriangle::Screen::TensorTuple &v_splats_screen_tuple,
+    const bool viewmats_requires_grad
+) {
+    OpaqueTriangle::World::Tensor splats_world(splats_world_tuple);
+    uint32_t N = splats_world.size();    // number of gaussians
+    uint32_t C = viewmats.size(-3); // number of cameras
+    uint32_t B = splats_world.batchSize();    // number of batches
+
+    OpaqueTriangle::Screen::Tensor v_splats_screen(v_splats_screen_tuple);
+
+    OpaqueTriangle::World::Tensor v_splats_world = splats_world.zeros_like();
+
+    auto opt = splats_world.options();
+    at::Tensor v_viewmats;
+    if (viewmats_requires_grad)
+        v_viewmats = at::zeros_like(viewmats, opt);
+
+    #define _LAUNCH_ARGS \
+        <<<_CEIL_DIV(B*C*N, block), block>>>( \
+            B, C, N, false, \
+            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), \
+            image_width, image_height, (int2*)radii.data_ptr<int32_t>(), \
+            v_depths.data_ptr<float>(), v_splats_screen.buffer(), v_splats_world.buffer(), \
+            viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr \
+        )
+
+    constexpr uint block = 256;
+    if (camera_model == gsplat::CameraModelType::PINHOLE)
+        projection_fused_bwd_kernel<OpaqueTriangle, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
+    // else if (camera_model == gsplat::CameraModelType::ORTHO)
+    //     projection_fused_bwd_kernel<OpaqueTriangle, gsplat::CameraModelType::ORTHO> _LAUNCH_ARGS;
+    // else if (camera_model == gsplat::CameraModelType::FISHEYE)
+    //     projection_fused_bwd_kernel<OpaqueTriangle, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
 

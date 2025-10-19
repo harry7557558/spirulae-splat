@@ -1,3 +1,4 @@
+#pragma once
 
 static const float ALPHA_THRESHOLD = 1.0f/255.0f;
 
@@ -75,6 +76,19 @@ void quat_scale_to_covar(
 [CudaDeviceExport]
 [ForceInline]
 [Differentiable]
+void quat_scale_to_sqrt_covar(
+    const float4 quat,
+    const float3 scale,
+    out float3x3 M
+) {
+    float3x3 R = quat_to_rotmat(quat);
+    float3x3 S = float3x3(scale[0], 0.f, 0.f, 0.f, scale[1], 0.f, 0.f, 0.f, scale[2]);
+    M = mul(R, S);
+}
+
+[CudaDeviceExport]
+[ForceInline]
+[Differentiable]
 float2x2 inverse(float2x2 m){
     float invdet = 1.0f / (m[0][0] * m[1][1] - m[0][1] * m[1][0]);
     return {
@@ -83,4 +97,10 @@ float2x2 inverse(float2x2 m){
         -m[1][0] * invdet,
         m[0][0] * invdet
     };
+}
+
+[ForceInline]
+[Differentiable]
+float det(float2 u, float2 v) {
+    return u.x*v.y - u.y*v.x;
 }
