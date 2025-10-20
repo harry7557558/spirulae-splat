@@ -204,6 +204,7 @@ setup(
         "nerfstudio.method_configs": [
             "spirulae = spirulae_splat.ns_config:spirulae",
             "spirulae-patched = spirulae_splat.ns_config:spirulae_patched",
+            "spirulae-triangle = spirulae_splat.ns_config:spirulae_triangle",
         ]
     },
     cmdclass={"build_ext": get_ext()} if not BUILD_NO_CUDA else {},

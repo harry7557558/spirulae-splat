@@ -113,7 +113,7 @@ class SpirulaeModelConfig(ModelConfig):
 
     _target: Type = field(default_factory=lambda: SpirulaeModel)
 
-    primitive: Literal["3dgs", "mip", "opaque_triangle"] = "opaque_triangle"
+    primitive: Literal["3dgs", "mip", "opaque_triangle"] = "3dgs"
     """Splat primitive to use"""
 
     num_iterations: int = 30000
@@ -126,7 +126,7 @@ class SpirulaeModelConfig(ModelConfig):
     """period of steps where gaussians are culled and densified"""
     resolution_schedule: int = 3000
     """training starts at 1/d resolution, every n steps this is doubled"""
-    background_color: Literal["random", "black", "white", "gray"] = "black"  # TODO
+    background_color: Literal["random", "black", "white", "gray"] = "gray"
     """Whether to randomize the background color."""
     num_downscales: int = 0
     """at the beginning, resolution is 1/2^d, where d is this number"""
@@ -148,7 +148,7 @@ class SpirulaeModelConfig(ModelConfig):
         Note: this only works well in patch batching mode"""
     camera_optimizer: CameraOptimizerConfig = field(default_factory=lambda: CameraOptimizerConfig(mode="SO3xR3"))
     """Config of the camera optimizer to use"""
-    kernel_radius: float = 1.0  # TODO
+    kernel_radius: float = 3.0
     """Radius of the splatting kernel, 3.0 for Gaussian and 1.0 for triangle"""
     relative_scale: Optional[float] = None
     """Manually set scale when a scene is poorly scaled by nerfstudio
@@ -213,7 +213,7 @@ class SpirulaeModelConfig(ModelConfig):
     """maximum degree of spherical harmonics to use"""
     sh_degree_interval: int = 1000
     """every n intervals turn on another sh degree"""
-    train_background_color: bool = False  # TODO
+    train_background_color: bool = True
     """make background color trainable"""
     background_sh_degree: int = 3
     """enable background model"""
@@ -233,8 +233,8 @@ class SpirulaeModelConfig(ModelConfig):
     adaptive_exposure_warmup: int = 1000
     """Start adaptive exposure at this number of steps"""
     use_bilateral_grid: bool = True
-    """If True, use bilateral grid to handle the ISP changes in the image space. This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/).
-       Makes training much slower - TODO: fused bilagrid in CUDA"""
+    """If True, use bilateral grid to handle the ISP changes in the image space.
+        This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/)."""
     bilagrid_shape: Tuple[int, int, int] = (8, 8, 4)
     """Shape of the bilateral grid (X, Y, W)"""
 
@@ -260,7 +260,7 @@ class SpirulaeModelConfig(ModelConfig):
     """Weight for normal regularizer"""
     normal_reg_warmup: int = 12000
     """warmup steps for normal regularizer, regularization weight ramps up"""
-    alpha_reg_weight: float = 0.0  # TODO: 0.025
+    alpha_reg_weight: float = 0.025
     """Weight for alpha regularizer (encourage alpha to go to either 0 or 1)
         Recommend using with --pipeline.model.cull_screen_size for better results"""
     alpha_reg_warmup: int = 12000
@@ -387,7 +387,8 @@ class SpirulaeModel(Model):
                 shs[:, 0, :3] = RGB2SH(seed_color)
                 shs[:, 1:, 3:] = 0.0
             else:
-                shs[:, 0, :3] = seed_color
+                # shs[:, 0, :3] = seed_color
+                shs[:, 0, :3] = RGB2SH(seed_color)
             features_dc = torch.nn.Parameter(shs[:, 0, :].contiguous())
             features_sh = torch.nn.Parameter(shs[:, 1:, :].contiguous())
         else:
@@ -439,7 +440,7 @@ class SpirulaeModel(Model):
             current_num = len(self.means)
             final_num = self.config.mcmc_cap_max
             grow_factor = 1.05
-            warpup_steps = math.log(final_num / current_num) / math.log(grow_factor) * \
+            warpup_steps = math.log(max(final_num, current_num) / current_num) / math.log(grow_factor) * \
                 self.config.refine_every + (self.config.warmup_length + self.config.refine_every)
             self.mcmc_num_steps_until_full = warpup_steps
 
@@ -769,16 +770,26 @@ class SpirulaeModel(Model):
 
         # hardness = min(max(self.step / self.config.stop_refine_at, 0.1), 1.0)
         if self.config.primitive == "opaque_triangle":
+            # TODO: refactor this out
             warmup_steps_0 = min(self.mcmc_num_steps_until_full, self.config.num_iterations/3)
             warmup_steps_1 = min(1.5*self.mcmc_num_steps_until_full, self.config.num_iterations/2)
+            new_opacity_floor = 0.2
             hardness = max(min(
                 (self.step-warmup_steps_0) / (self.config.num_iterations-warmup_steps_0),
                 0.999), 0.0)
             opacity_floor = max(min(
                 (self.step-warmup_steps_0) / (warmup_steps_1-warmup_steps_0),
                 1.0), 0.0)
-            # TODO: prune low opacity at switch?
+            if self.step >= warmup_steps_0:
+                opacity_floor = opacity_floor * (1.0-new_opacity_floor) + new_opacity_floor
+            # print(warmup_steps_0, warmup_steps_1, opacity_floor)
             if self.config.use_mcmc:
+                # TODO: this seems to prune a lot, and MCMC continues growing afterwards
+                # TODO: actually add and prune at every step?
+                self.strategy.opacity_refloor = (
+                    self.config.refine_every * int(math.ceil(warmup_steps_0 / self.config.refine_every)),
+                    new_opacity_floor
+                )
                 self.strategy.refine_stop_iter = warmup_steps_1
                 self.strategy.noise_lr = self.config.mcmc_noise_lr * max(1.0-5.0*opacity_floor, 0.0)
                 if opacity_floor != 0.0:

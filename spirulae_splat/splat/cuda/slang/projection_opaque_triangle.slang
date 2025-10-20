@@ -104,7 +104,7 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
     depth = mean_c.z;
 
     normal = normalize(mul(R, cross(vert1-vert0, vert2-vert0)));
-    normal *= -sign(normal.z);
+    normal *= -sign(dot(normal, mean_c));
 
     out_hardness = hardness;
 }

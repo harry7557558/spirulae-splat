@@ -1,13 +1,13 @@
 import math
 import numpy as np
 from dataclasses import dataclass
-from typing import Any, Dict, Union, Literal
+from typing import Any, Dict, Union, Literal, List, Tuple, Dict
 
 import torch
 from torch import Tensor
 
 from .base import Strategy
-from .ops import inject_noise_to_position, relocate, sample_add
+from .ops import inject_noise_to_position, relocate, sample_add, remove
 
 
 @dataclass
@@ -59,6 +59,7 @@ class MCMCStrategy(Strategy):
     max_scale3d: float = float('inf')
     prob_grad_weight: float = 0.0
     use_scale_for_probs: bool = False
+    opacity_refloor: Tuple[int, float] = (-1, 0.0)
     is_3dgs: bool = False
     verbose: bool = False
     key_for_gradient: Literal["means2d", "gradient_2dgs"] = "means2d"
@@ -268,6 +269,9 @@ class MCMCStrategy(Strategy):
                 state["count"] *= 0.0
             torch.cuda.empty_cache()
 
+        if step == self.opacity_refloor[0]:
+            self._refloor_opacity(params, optimizers, state)
+
         # add noise to GSs
         scalar = lr * self.noise_lr #* min(step/max(self.refine_start_iter,1), 1)
         inject_noise_to_position(
@@ -330,3 +334,23 @@ class MCMCStrategy(Strategy):
                 min_opacity=self.min_opacity,
             )
         return n_gs
+
+    @torch.no_grad()
+    def _refloor_opacity(
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+        state: Dict[str, Any],
+    ) -> int:
+        opacity_floor = self.opacity_refloor[1]
+        is_prune = torch.sigmoid(params["opacities"].flatten()) < opacity_floor
+
+        n_prune = is_prune.sum().item()
+        if n_prune > 0:
+            remove(params=params, optimizers=optimizers, state=state, mask=is_prune)
+
+        opacities = torch.sigmoid(params["opacities"])
+        opacities = 1.0 - (1.0-opacities) / (1.0-opacity_floor)
+        params["opacities"].data = torch.logit(opacities)
+
+        return n_prune

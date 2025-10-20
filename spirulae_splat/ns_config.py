@@ -144,3 +144,34 @@ spirulae_patched = MethodSpecification(
     description="Spirulae 3DGS with patch batching.",
 )
 
+spirulae_triangle = MethodSpecification(
+    config=TrainerConfig(
+        method_name="spirulae-triangle",
+        steps_per_eval_batch=0,
+        steps_per_save=2000,
+        max_num_iterations=30000,
+        mixed_precision=False,
+        pipeline=SpirulaePipelineConfig(
+            datamanager=SpirulaeDataManagerConfig(
+                **_DEFAULT_DATAMANAGER_CONFIG
+            ),
+            model=SpirulaeModelConfig(
+                primitive="opaque_triangle",
+                kernel_radius=1.0,
+                compute_depth_normal=True,
+                sh_degree=1,  # TODO: debug sh_degree=0
+                background_color="black",
+                train_background_color=False,
+                # alpha_reg_weight=0.0,
+            ),
+            
+        ),
+        optimizers={
+            **_DEFAULT_OPTIMIZERS
+        },
+        viewer=ViewerConfig(),
+        vis="viewer",
+    ),
+    description="Spirulae opaque triangle splatting.",
+)
+
