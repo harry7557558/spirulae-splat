@@ -124,6 +124,14 @@ class SpirulaeDataManager(FullImageDatamanager):
                 image = data["image"].numpy()
                 K, image, mask = _undistort_image(camera, distortion_params, data, image, K)
                 data["image"] = torch.from_numpy(image)
+                if "depth" in data:
+                    depth = data["depth"].numpy()
+                    _, depth, _ = _undistort_image(camera, distortion_params, data, depth, K)
+                    data["depth"] = torch.from_numpy(depth)
+                if "normal" in data:
+                    normal = data["normal"].numpy()
+                    _, normal, _ = _undistort_image(camera, distortion_params, data, normal, K)
+                    data["normal"] = torch.from_numpy(normal)
             if mask is not None:
                 data["mask"] = mask
 

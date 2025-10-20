@@ -23,12 +23,12 @@ struct OpaqueTriangle {
         float3 t;
         float fx, fy, cx, cy;
         uint width, height, antialiased;
-        float near_plane, far_plane, radius_clip;
+        float near_plane, far_plane;
     };
 
     inline static __device__ void project_persp(
         World world, FwdProjCamera cam,
-        Screen& screen, int2& radius, float& depth, float3& normal
+        Screen& screen, int4& aabb, float& depth, float3& normal
     );
 
     struct BwdProjCamera {
@@ -107,7 +107,7 @@ struct OpaqueTriangle::World {
         float4* __restrict__ quats;
         float3* __restrict__ scales;
         // float3* __restrict__ verts;
-        float* __restrict__ hardness;
+        float2* __restrict__ hardness;
 
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.means);
@@ -121,7 +121,7 @@ struct OpaqueTriangle::World {
             quats = (float4*)tensors.quats.data_ptr<float>();
             scales = (float3*)tensors.scales.data_ptr<float>();
             // verts = (float3*)tensors.verts.data_ptr<float>();
-            hardness = tensors.hardness.data_ptr<float>();
+            hardness = (float2*)tensors.hardness.data_ptr<float>();
         }
     };
 
@@ -129,7 +129,7 @@ struct OpaqueTriangle::World {
     float4 quat;
     float3 scale;
     // float3 vert0, vert1, vert2;
-    float hardness;
+    float2 hardness;
 
 #ifdef __CUDACC__
 
@@ -173,7 +173,7 @@ struct OpaqueTriangle::World {
         // atomicAddFVec(buffer.verts + 3*idx+0, vert0);
         // atomicAddFVec(buffer.verts + 3*idx+1, vert1);
         // atomicAddFVec(buffer.verts + 3*idx+2, vert2);
-        atomicAdd(buffer.hardness + idx, hardness);
+        atomicAddFVec(buffer.hardness + idx, hardness);
     }
 
 #endif  // #ifdef __CUDACC__
@@ -187,7 +187,7 @@ struct OpaqueTriangle::Screen {
 
     struct Tensor {
         at::Tensor vertices;  // [..., 3, 2]
-        at::Tensor hardness;  // [..., 3, 2]
+        at::Tensor hardness;  // [..., 2]
         std::optional<at::Tensor> absgrad;
 
         Tensor(const TensorTuple& splats) {
@@ -214,7 +214,7 @@ struct OpaqueTriangle::Screen {
         static Tensor empty(long C, long N, c10::TensorOptions opt) {
             return std::make_tuple(
                 at::empty({C, N, 3, 2}, opt),
-                at::empty({C, N}, opt)
+                at::empty({C, N, 2}, opt)
             );
         }
 
@@ -233,7 +233,7 @@ struct OpaqueTriangle::Screen {
 
     struct Buffer {
         float2* __restrict__ vertices;  // [I, N, 3, 2] or [nnz, 3, 2]
-        float* __restrict__ hardness;  // [I, N] or [nnz]
+        float2* __restrict__ hardness;  // [I, N, 2] or [nnz, 2]
         float2* __restrict__ absgrad;  // [I, N, 2] or [nnz, 2]
 
         Buffer(const Tensor& tensors) {
@@ -241,7 +241,7 @@ struct OpaqueTriangle::Screen {
             CHECK_INPUT(tensors.vertices);
             CHECK_INPUT(tensors.hardness);
             vertices = (float2*)tensors.vertices.data_ptr<float>();
-            hardness = tensors.hardness.data_ptr<float>();
+            hardness = (float2*)tensors.hardness.data_ptr<float>();
             absgrad = tensors.absgrad.has_value() ?
                 (float2*)tensors.absgrad.value().data_ptr<float>()
                 : nullptr;
@@ -251,7 +251,7 @@ struct OpaqueTriangle::Screen {
     float2 vert0;
     float2 vert1;
     float2 vert2;
-    float hardness;
+    float2 hardness;
     float2 absgrad;
 
 #ifdef __CUDACC__
@@ -271,7 +271,7 @@ struct OpaqueTriangle::Screen {
             {0.f, 0.f},
             {0.f, 0.f},
             {0.f, 0.f},
-            0.0f,
+            {0.f, 0.f},
             {0.f, 0.f}
         };
     }
@@ -297,7 +297,7 @@ struct OpaqueTriangle::Screen {
         atomicAddFVec(buffer.vertices + 3*idx+0, vert0);
         atomicAddFVec(buffer.vertices + 3*idx+1, vert1);
         atomicAddFVec(buffer.vertices + 3*idx+2, vert2);
-        atomicAdd(buffer.hardness + idx, hardness);
+        atomicAddFVec(buffer.hardness + idx, hardness);
         if (buffer.absgrad != nullptr)
             atomicAddFVec(buffer.absgrad + idx, absgrad);
     }
@@ -330,14 +330,14 @@ struct OpaqueTriangle::Screen {
 
 inline __device__ void OpaqueTriangle::project_persp(
     OpaqueTriangle::World world, OpaqueTriangle::FwdProjCamera cam,
-    OpaqueTriangle::Screen& screen, int2& radius, float& depth, float3& normal
+    OpaqueTriangle::Screen& screen, int4& aabb, float& depth, float3& normal
 ) {
     projection_opaque_triangle_persp(
         world.mean, world.quat, world.scale, world.hardness,
         // world.vert0, world.vert1, world.vert2, world.hardness,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
-        cam.width, cam.height, cam.near_plane, cam.far_plane, cam.radius_clip,
-        &radius, &depth, &normal, &screen.vert0, &screen.vert1, &screen.vert2, &screen.hardness
+        cam.width, cam.height, cam.near_plane, cam.far_plane,
+        &aabb, &depth, &normal, &screen.vert0, &screen.vert1, &screen.vert2, &screen.hardness
     );
 }
 

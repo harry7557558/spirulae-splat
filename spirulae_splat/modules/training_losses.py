@@ -153,12 +153,19 @@ class SplatTrainingLosses(torch.nn.Module):
             min(self.step / max(self.config.alpha_reg_warmup, 1), 1)
 
     # @torch.compile(**_TORCH_COMPILE_ARGS)
-    def _image_loss_0(self, gt_img, pred_img, pred_img_e):
+    def _image_loss_0(self, gt_img, pred_img, pred_img_e, mask=None):
         pred_img_e = torch.clip(pred_img_e, 0.0, 1.0)
         pred_img = torch.clip(pred_img, 0.0, 1.0)
-        Ll1_e = torch.abs(gt_img - pred_img_e).mean()
-        Ll1 = torch.abs(gt_img - pred_img).mean()
-        Ll2_e = ((gt_img-pred_img_e)**2).mean()
+        if mask is None:
+            Ll1_e = torch.abs(gt_img - pred_img_e).mean()
+            Ll1 = torch.abs(gt_img - pred_img).mean()
+            Ll2_e = ((gt_img-pred_img_e)**2).mean()
+        else:  # TODO: pass mask here and see how it goes
+            num_channels = gt_img.shape[-1]
+            inv_denom = 1.0 / torch.clamp(mask.sum() * num_channels, min=1.0)
+            Ll1_e = (mask * torch.abs(gt_img - pred_img_e)).sum() * inv_denom
+            Ll1 = (mask * torch.abs(gt_img - pred_img)).sum() * inv_denom
+            Ll2_e = (mask * (gt_img-pred_img_e)**2).sum() * inv_denom
 
         gt_img_bchw = gt_img.permute(0, 3, 1, 2).contiguous()
         pred_img_bchw = pred_img_e.permute(0, 3, 1, 2).contiguous()
@@ -208,7 +215,7 @@ class SplatTrainingLosses(torch.nn.Module):
 
         # alpha channel for bounded objects - apply a cost on rendered alpha
         alpha_loss = 0.0
-        if gt_img_rgba.shape[-1] == 4:
+        if gt_img_rgba.shape[-1] == 4 and self.config.alpha_loss_weight > 0.0:
             alpha = gt_img_rgba[..., -1].unsqueeze(-1)
             alpha_loss = alpha_loss + SupervisionLosses.get_alpha_loss(outputs['alpha'], alpha)
 
@@ -222,8 +229,10 @@ class SplatTrainingLosses(torch.nn.Module):
             assert mask.shape[:-1] == gt_img.shape[:-1] == pred_img.shape[:-1]
             # can be little bit sketchy for the SSIM loss
             gt_img = torch.lerp(outputs["background"], gt_img, mask)
-            # pred_img = torch.lerp(outputs["background"], pred_img, mask)
-            if isinstance(alpha_loss, float) and alpha_loss == 0.0:
+            pred_img = torch.lerp(outputs["background"], pred_img, mask)
+            
+            # If alpha channel is not specified, apply loss
+            if isinstance(alpha_loss, float) and alpha_loss == 0.0 and self.config.alpha_loss_weight > 0.0:
                 alpha_loss = alpha_loss + SupervisionLosses.get_alpha_loss(outputs['alpha'], mask)
 
         alpha_loss = self.config.alpha_loss_weight * alpha_loss
@@ -235,7 +244,7 @@ class SplatTrainingLosses(torch.nn.Module):
              self.config.normal_supervision_weight > 0.0 or
              self.config.alpha_supervision_weight > 0.0 or
              self.config.alpha_supervision_weight_under > 0.0):
-            if batch["depth"].ndim == 2:
+            if batch["depth"].ndim == 3:
                 batch["depth"] = batch["depth"].unsqueeze(-1)
             depth = self._downscale_if_required(batch["depth"].to(device))
             # TODO

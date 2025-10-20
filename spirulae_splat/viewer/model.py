@@ -217,14 +217,16 @@ class SplatModel:
 
             rgbd, alpha, meta = rasterization(
                 "opaque_triangle",
+                # "3dgs",
                 (
                     self.means,
                     # self.means.unsqueeze(-2).repeat(1, 3, 1) + 3.0*torch.exp(self.scales.mean(-1, True).unsqueeze(-1)) * torch.tensor([[[1,0,0],[0,1,0],[0,0,1]]]).to(self.means),
                     F.normalize(self.quats, dim=-1),
-                    # self.scales,
-                    self.scales+np.log(3),
+                    self.scales,
+                    # self.scales+np.log(3),
                     # self.opacities.squeeze(-1),
-                    0.9*torch.ones_like(self.opacities).squeeze(-1),
+                    torch.stack([torch.sigmoid(self.opacities.squeeze(-1)),
+                        0.9*torch.ones_like(self.opacities).squeeze(-1)], dim=-1)
                 ),
                 colors_dc=self.features_dc,
                 colors_sh=self.features_sh,
@@ -241,8 +243,8 @@ class SplatModel:
                 camera_model=["pinhole", "fisheye"][is_fisheye],
                 with_ut=is_distorted,
                 with_eval3d=is_distorted,
-                # render_mode="RGB+ED",
-                render_mode="RGB+ED+N",
+                render_mode="RGB+ED",
+                # render_mode="RGB+ED+N",
                 **kwargs,
             )
             colors = rgbd[0, ..., :3]

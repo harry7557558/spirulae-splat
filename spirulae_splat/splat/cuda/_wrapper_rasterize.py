@@ -261,6 +261,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
         )
         if absgrad:
             means2d.absgrad = v_means2d_abs
+            # means2d.absgrad = v_means2d.mean(-2)
 
         v_backgrounds = None
         if ctx.needs_input_grad[3]:

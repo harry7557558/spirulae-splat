@@ -160,11 +160,9 @@ float add_blur(const float eps2d, inout float2x2 covar, out float compensation) 
     no_diff const float cy, \
     const uint image_width, \
     const uint image_height, \
-    no_diff const float eps2d, \
     no_diff const float near_plane, \
     no_diff const float far_plane, \
-    no_diff const float radius_clip, \
-    out int2 radii, \
+    out int4 aabb_xyxy, \
     out float depth, \
     out float2 mean2d, \
     out float3 conic, \
@@ -180,7 +178,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool>(
     float3 mean_c;
     posW2C(R, t, mean, mean_c);
     if (!assume_valid && (mean_c.z < near_plane || mean_c.z > far_plane)) {
-        radii = {0, 0};
+        aabb_xyxy = {0, 0, 0, 0};
         return;
     }
 
@@ -224,9 +222,10 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool>(
         );
 
     float compensation;
+    static const float eps2d = 0.3;
     float det = add_blur(eps2d, covar2d, compensation);
     if (!assume_valid && det <= 0.f) {
-        radii = {0, 0};
+        aabb_xyxy = {0, 0, 0, 0};
         return;
     }
 
@@ -239,7 +238,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool>(
         if (antialiased)
             opacity *= compensation;
         if (!assume_valid && opacity < ALPHA_THRESHOLD) {
-            radii = {0, 0};
+            aabb_xyxy = {0, 0, 0, 0};
             return;
         }
         // Compute opacity-aware bounding box.
@@ -249,24 +248,23 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool>(
 
     // compute tight rectangular bounding box (non differentiable)
     // https://arxiv.org/pdf/2402.00525
-    float radius_x = ceil(extend * sqrt(covar2d[0].x));
-    float radius_y = ceil(extend * sqrt(covar2d[1].y));
-
-    if (!assume_valid && radius_x <= radius_clip && radius_y <= radius_clip) {
-        radii = {0, 0};
-        return;
-    }
+    float radius_x = extend * sqrt(covar2d[0].x);
+    float radius_y = extend * sqrt(covar2d[1].y);
+    float xmin = floor(mean2d.x - radius_x);
+    float xmax = ceil(mean2d.x + radius_x);
+    float ymin = floor(mean2d.y - radius_y);
+    float ymax = ceil(mean2d.y + radius_y);
 
     // mask out gaussians outside the image region
     if (!assume_valid && (
-        mean2d.x + radius_x <= 0 || mean2d.x - radius_x >= image_width ||
-        mean2d.y + radius_y <= 0 || mean2d.y - radius_y >= image_height
+        xmax <= 0 || xmin >= image_width ||
+        ymax <= 0 || ymin >= image_height
     )) {
-        radii = {0, 0};
+        aabb_xyxy = {0, 0, 0, 0};
         return;
     }
 
-    radii = {(int)radius_x, (int)radius_y};
+    aabb_xyxy = {(int)xmin, (int)ymin, (int)xmax, (int)ymax};  // don't clamp
     depth = mean_c.z;
     conic = {covar2d_inv[0][0], covar2d_inv[0][1], covar2d_inv[1][1]};
 }
@@ -279,8 +277,8 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool>(
         return projection_3dgs<__VA_ARGS__>( \
             antialiased, \
             mean, quat, scale, in_opacity, R, t, fx, fy, cx, cy, \
-            image_width, image_height, eps2d, near_plane, far_plane, radius_clip, \
-            radii, depth, mean2d, conic, opacity \
+            image_width, image_height, near_plane, far_plane, \
+            aabb_xyxy, depth, mean2d, conic, opacity \
         ); \
     }
 
@@ -303,7 +301,6 @@ _DEF_projection_3dgs(projection_3dgs_ortho, CameraModelType::ORTHO, false)
     const float cy, \
     const uint image_width, \
     const uint image_height, \
-    const float eps2d, \
     const float v_depth, \
     const float2 v_mean2d, \
     const float3 v_conic, \
@@ -333,7 +330,7 @@ void projection_3dgs_persp_vjp(
     bwd_diff(_projection_3dgs_persp_differentiable)(
         antialiased,
         dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_R, dp_t, fx, fy, cx, cy,
-        image_width, image_height, eps2d, 0.0f, 1e30f, -1.0f,
+        image_width, image_height, 0.0f, 1e30f,
         v_depth, v_mean2d, v_conic, v_opacity
     );
     v_mean = dp_mean.d;
@@ -357,7 +354,7 @@ void projection_3dgs_fisheye_vjp(
     bwd_diff(_projection_3dgs_fisheye_differentiable)(
         antialiased,
         dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_R, dp_t, fx, fy, cx, cy,
-        image_width, image_height, eps2d, 0.0f, 1e30f, -1.0f,
+        image_width, image_height, 0.0f, 1e30f,
         v_depth, v_mean2d, v_conic, v_opacity
     );
     v_mean = dp_mean.d;
@@ -381,7 +378,7 @@ void projection_3dgs_ortho_vjp(
     bwd_diff(_projection_3dgs_ortho_differentiable)(
         antialiased,
         dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_R, dp_t, fx, fy, cx, cy,
-        image_width, image_height, eps2d, 0.0f, 1e30f, -1.0f,
+        image_width, image_height, 0.0f, 1e30f,
         v_depth, v_mean2d, v_conic, v_opacity
     );
     v_mean = dp_mean.d;

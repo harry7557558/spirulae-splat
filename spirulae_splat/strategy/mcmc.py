@@ -120,6 +120,8 @@ class MCMCStrategy(Strategy):
         )
 
         # For opaque triangle splatting
+        # TODO: better heuristics?
+        params = dict(params)
         if self.use_scale_for_probs:
             probs = state["radii"] + 1e-6 * torch.randn_like(state["radii"])
             if np.isfinite(self.relocate_scale2d) or np.isfinite(self.max_scale2d):
@@ -127,6 +129,7 @@ class MCMCStrategy(Strategy):
                 probs = torch.relu(torch.fmin(probs, max_radii - state["radii"]))
             opacities = (probs - probs.mean()) / probs.std()
             opacities = 0.5+0.5*torch.erf(0.4*opacities)
+            params["opacities"] = params["opacities"].clone()
             params["opacities"].data = opacities.reshape(params["opacities"].shape)
 
         # large splats in screen space
@@ -290,7 +293,8 @@ class MCMCStrategy(Strategy):
         state["radii"] *= 0
 
         # relocate low opacity, as in original MCMC
-        if step > self.refine_start_iter and step < self.refine_stop_iter:
+        if step > self.refine_start_iter and step < self.refine_stop_iter \
+                and not self.use_scale_for_probs:
             relocate_mask |= (opacities <= self.min_opacity)
 
         n_gs = relocate_mask.sum().item()

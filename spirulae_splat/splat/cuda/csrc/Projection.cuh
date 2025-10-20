@@ -14,7 +14,7 @@
 
 
 std::tuple<
-    at::Tensor,  // radii
+    at::Tensor,  // aabb
     at::Tensor,  // depths
     std::optional<at::Tensor>,  // normals
     Vanilla3DGS::Screen::TensorTuple  // out splats
@@ -28,13 +28,12 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const float radius_clip,
     const gsplat::CameraModelType camera_model
 );
 
 
 std::tuple<
-    at::Tensor,  // radii
+    at::Tensor,  // aabb
     at::Tensor,  // depths
     std::optional<at::Tensor>,  // normals
     OpaqueTriangle::Screen::TensorTuple  // out splats
@@ -47,7 +46,6 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const float radius_clip,
     const gsplat::CameraModelType camera_model
 );
 
@@ -65,7 +63,7 @@ std::tuple<
     const uint32_t image_height,
     const gsplat::CameraModelType camera_model,
     // fwd outputs
-    const at::Tensor radii,                       // [..., C, N, 2]
+    const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const at::Tensor v_depths,                      // [..., C, N]
     const std::optional<at::Tensor> v_normals,      // [..., C, N, 3]
@@ -86,7 +84,7 @@ std::tuple<
     const uint32_t image_height,
     const gsplat::CameraModelType camera_model,
     // fwd outputs
-    const at::Tensor radii,                       // [..., C, N, 2]
+    const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const at::Tensor v_depths,                      // [..., C, N]
     const std::optional<at::Tensor> v_normals,      // [..., C, N, 3]

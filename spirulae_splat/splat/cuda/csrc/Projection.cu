@@ -26,9 +26,8 @@ __global__ void projection_fused_fwd_kernel(
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const float radius_clip,
     // outputs
-    int2 *__restrict__ radii,         // [B, C, N, 2]
+    int4 *__restrict__ aabbs,         // [B, C, N, 4]
     float *__restrict__ depths,       // [B, C, N]
     float3 *__restrict__ normals,       // [B, C, N, 3]
     typename SplatPrimitive::Screen::Buffer splats_screen
@@ -55,7 +54,7 @@ __global__ void projection_fused_fwd_kernel(
     typename SplatPrimitive::FwdProjCamera cam = {
         R, t, fx, fy, cx, cy,
         image_width, image_height, antialiased,
-        near_plane, far_plane, radius_clip
+        near_plane, far_plane
     };
 
     // Load splat
@@ -63,29 +62,31 @@ __global__ void projection_fused_fwd_kernel(
         SplatPrimitive::World::load(splats_world, bid * N + gid);
 
     // Projection
-    int2 radius;
+    int4 aabb;
     float depth;
     float3 normal;
     typename SplatPrimitive::Screen splat_screen;
     switch (camera_model) {
     case gsplat::CameraModelType::PINHOLE: // perspective projection
-        SplatPrimitive::project_persp(splat_world, cam, splat_screen, radius, depth, normal);
+        SplatPrimitive::project_persp(splat_world, cam, splat_screen, aabb, depth, normal);
         break;
     // case gsplat::CameraModelType::ORTHO: // orthographic projection
-    //     SplatPrimitive::project_ortho(splat_world, cam, splat_screen, radius, depth, normal);
+    //     SplatPrimitive::project_ortho(splat_world, cam, splat_screen, aabb, depth, normal);
     //     break;
     // case gsplat::CameraModelType::FISHEYE: // fisheye projection
-    //     SplatPrimitive::project_fisheye(splat_world, cam, splat_screen, radius, depth, normal);
+    //     SplatPrimitive::project_fisheye(splat_world, cam, splat_screen, aabb, depth, normal);
     //     break;
     }
 
     // Save results
-    radii[idx] = radius;
-    if (radius.x * radius.y > 0) {
+    if ((aabb.z-aabb.x)*(aabb.w-aabb.y) > 0) {
         depths[idx] = depth;
         if (normals != nullptr)
             normals[idx] = normal;
         splat_screen.saveBuffer(splats_screen, idx);
+        aabbs[idx] = aabb;
+    } else {
+        aabbs[idx] = {0, 0, 0, 0};
     }
 }
 
@@ -102,7 +103,7 @@ __global__ void projection_fused_bwd_kernel(
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
-    const int2 *__restrict__ radii,          // [B, C, N, 2]
+    const int4 *__restrict__ aabb,          // [B, C, N, 4]
     // grad outputs
     const float *__restrict__ v_depths,        // [B, C, N]
     const float3 *__restrict__ v_normals,        // [B, C, N, 3]
@@ -113,7 +114,7 @@ __global__ void projection_fused_bwd_kernel(
 ) {
     // parallelize over B * C * N.
     uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= B * C * N || radii[idx].x * radii[idx].y <= 0) {
+    if (idx >= B * C * N || (aabb[idx].z-aabb[idx].x)*(aabb[idx].w-aabb[idx].y) <= 0) {
         return;
     }
     const uint32_t bid = idx / (C * N); // batch id
@@ -187,7 +188,7 @@ __global__ void projection_fused_bwd_kernel(
 }
 
 std::tuple<
-    at::Tensor,  // radii
+    at::Tensor,  // aabb
     at::Tensor,  // depths
     std::optional<at::Tensor>,  // normals
     Vanilla3DGS::Screen::TensorTuple  // out splats
@@ -201,7 +202,6 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const float radius_clip,
     const gsplat::CameraModelType camera_model
 ) {
     Vanilla3DGS::World::Tensor splats_world(in_splats);
@@ -210,7 +210,7 @@ std::tuple<
     uint32_t B = splats_world.batchSize();    // number of batches
 
     auto opt = splats_world.options();
-    at::Tensor radii = at::empty({C, N, 2}, opt.dtype(at::kInt));
+    at::Tensor aabb = at::empty({C, N, 4}, opt.dtype(at::kInt));
     at::Tensor depths = at::empty({C, N}, opt);
 
     Vanilla3DGS::Screen::Tensor splats_screen =
@@ -220,8 +220,8 @@ std::tuple<
         <<<_CEIL_DIV(B*C*N, block), block>>>( \
             B, C, N, antialiased, \
             splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), \
-            image_width, image_height, near_plane, far_plane, radius_clip, \
-            (int2*)radii.data_ptr<int32_t>(), depths.data_ptr<float>(), nullptr, splats_screen.buffer() \
+            image_width, image_height, near_plane, far_plane, \
+            (int4*)aabb.data_ptr<int32_t>(), depths.data_ptr<float>(), nullptr, splats_screen.buffer() \
         )
 
     constexpr uint block = 256;
@@ -236,11 +236,11 @@ std::tuple<
 
     #undef _LAUNCH_ARGS
 
-    return std::make_tuple(radii, depths, (std::optional<at::Tensor>)at::nullopt, splats_screen.tuple());
+    return std::make_tuple(aabb, depths, (std::optional<at::Tensor>)at::nullopt, splats_screen.tuple());
 }
 
 std::tuple<
-    at::Tensor,  // radii
+    at::Tensor,  // aabb
     at::Tensor,  // depths
     std::optional<at::Tensor>,  // normals
     OpaqueTriangle::Screen::TensorTuple  // out splats
@@ -253,7 +253,6 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const float radius_clip,
     const gsplat::CameraModelType camera_model
 ) {
     OpaqueTriangle::World::Tensor splats_world(in_splats);
@@ -262,7 +261,7 @@ std::tuple<
     uint32_t B = splats_world.batchSize();    // number of batches
 
     auto opt = splats_world.options();
-    at::Tensor radii = at::empty({C, N, 2}, opt.dtype(at::kInt));
+    at::Tensor aabb = at::empty({C, N, 4}, opt.dtype(at::kInt));
     at::Tensor depths = at::empty({C, N}, opt);
     at::Tensor normals = at::empty({C, N, 3}, opt);
 
@@ -273,8 +272,8 @@ std::tuple<
         <<<_CEIL_DIV(B*C*N, block), block>>>( \
             B, C, N, false, \
             splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), \
-            image_width, image_height, near_plane, far_plane, radius_clip, \
-            (int2*)radii.data_ptr<int32_t>(), depths.data_ptr<float>(), (float3*)normals.data_ptr<float>(), \
+            image_width, image_height, near_plane, far_plane, \
+            (int4*)aabb.data_ptr<int32_t>(), depths.data_ptr<float>(), (float3*)normals.data_ptr<float>(), \
             splats_screen.buffer() \
         )
 
@@ -290,7 +289,7 @@ std::tuple<
 
     #undef _LAUNCH_ARGS
 
-    return std::make_tuple(radii, depths, normals, splats_screen.tuple());
+    return std::make_tuple(aabb, depths, normals, splats_screen.tuple());
 }
 
 std::tuple<
@@ -306,7 +305,7 @@ std::tuple<
     const uint32_t image_height,
     const gsplat::CameraModelType camera_model,
     // fwd outputs
-    const at::Tensor radii,                       // [..., C, N, 2]
+    const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const at::Tensor v_depths,                      // [..., C, N]
     const std::optional<at::Tensor> v_normals,      // [..., C, N, 3]
@@ -331,7 +330,7 @@ std::tuple<
         <<<_CEIL_DIV(B*C*N, block), block>>>( \
             B, C, N, antialiased, \
             splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), \
-            image_width, image_height, (int2*)radii.data_ptr<int32_t>(), \
+            image_width, image_height, (int4*)aabb.data_ptr<int32_t>(), \
             v_depths.data_ptr<float>(), v_normals.has_value() ? (float3*)v_normals.value().data_ptr<float>() : nullptr, \
             v_splats_screen.buffer(), v_splats_world.buffer(), \
             viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr \
@@ -364,7 +363,7 @@ std::tuple<
     const uint32_t image_height,
     const gsplat::CameraModelType camera_model,
     // fwd outputs
-    const at::Tensor radii,                       // [..., C, N, 2]
+    const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const at::Tensor v_depths,                      // [..., C, N]
     const std::optional<at::Tensor> v_normals,      // [..., C, N, 3]
@@ -389,7 +388,7 @@ std::tuple<
         <<<_CEIL_DIV(B*C*N, block), block>>>( \
             B, C, N, false, \
             splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), \
-            image_width, image_height, (int2*)radii.data_ptr<int32_t>(), \
+            image_width, image_height, (int4*)aabb.data_ptr<int32_t>(), \
             v_depths.data_ptr<float>(), v_normals.has_value() ? (float3*)v_normals.value().data_ptr<float>() : nullptr, \
             v_splats_screen.buffer(), v_splats_world.buffer(), \
             viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr \

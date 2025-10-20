@@ -236,12 +236,14 @@ class SpirulaeDataset(InputDataset):
                 filepath=depth_filepath, scale_factor=self.scale_factor,
                 width=data["image"].shape[1], height=data["image"].shape[0]
             )
+            assert data["depth"].shape[:2] == data["image"].shape[:2]
         if self._dataparser_outputs.metadata.get("normal_filenames", None) is not None:
             normal_filepath = self._dataparser_outputs.metadata["normal_filenames"][image_idx]
             data["normal"] = get_normal_image_from_path(
                 filepath=normal_filepath,
                 width=data["image"].shape[1], height=data["image"].shape[0]
             )
+            assert data["normal"].shape[:2] == data["image"].shape[:2]
         if self.mask_color:
             data["image"] = torch.where(
                 data["mask"] == 1.0, data["image"], torch.ones_like(data["image"]) * torch.tensor(self.mask_color)

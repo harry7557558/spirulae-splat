@@ -47,7 +47,6 @@ def rasterization(
     height: int,
     near_plane: float = 0.01,
     far_plane: float = 1e10,
-    radius_clip: float = 0.0,
     eps2d: float = 0.3,
     sh_degree: Optional[int] = None,
     packed: bool = True,
@@ -130,15 +129,6 @@ def rasterization(
         such as `torch.optim.SparseAdam <https://pytorch.org/docs/stable/generated/torch.optim.SparseAdam.html#sparseadam>`_.
         This argument is only effective when `packed` is True.
 
-    .. note::
-        **Speed-up for Large Scenes**: The `radius_clip` argument is extremely helpful for
-        speeding up large scale scenes or scenes with large depth of fields. Gaussians with
-        2D radius smaller or equal than this value (in pixel unit) will be skipped during rasterization.
-        This will skip all the far-away Gaussians that are too small to be seen in the image.
-        But be warned that if there are close-up Gaussians that are also below this threshold, they will
-        also get skipped (which is rarely happened in practice). This is by default disabled by setting
-        `radius_clip` to 0.0.
-
     # .. note::
     #     **Antialiased Rendering**: If `rasterize_mode` is "antialiased", the function will
     #     apply a view-dependent compensation factor
@@ -176,9 +166,6 @@ def rasterization(
         height: The height of the image.
         near_plane: The near plane for clipping. Default is 0.01.
         far_plane: The far plane for clipping. Default is 1e10.
-        radius_clip: Gaussians with 2D radius smaller or equal than this value will be
-            skipped. This is extremely helpful for speeding up large scale scenes.
-            Default is 0.0.
         eps2d: An epsilon added to the egienvalues of projected 2D covariance matrices.
             This will prevents the projected GS to be too small. For example eps2d=0.3
             leads to minimal 3 pixel unit. Default is 0.3.
@@ -280,7 +267,10 @@ def rasterization(
         assert means.shape == batch_dims + (N, 3), means.shape
         assert quats.shape == batch_dims + (N, 4), quats.shape
         assert scales.shape == batch_dims + (N, 3), scales.shape
-        assert opacities.shape == batch_dims + (N,), opacities.shape
+        if primitive in ["3dgs", "mip"]:
+            assert opacities.shape == batch_dims + (N,), opacities.shape
+        else:
+            assert opacities.shape == batch_dims + (N, 2), opacities.shape
     elif primitive in ["opaque_triangle"]:
         assert len(splat_params) == 2, "Opaque triangle requires 4 params (means, hardness)"
         means, hardness = splat_params
@@ -445,7 +435,6 @@ def rasterization(
             eps2d=eps2d,
             near_plane=near_plane,
             far_plane=far_plane,
-            radius_clip=radius_clip,
             sparse_grad=sparse_grad,
             calc_compensations=(rasterize_mode == "antialiased"),
             camera_model=camera_model,
@@ -466,7 +455,6 @@ def rasterization(
             eps2d=eps2d,
             near_plane=near_plane,
             far_plane=far_plane,
-            radius_clip=radius_clip,
             calc_compensations=(rasterize_mode == "antialiased"),
             camera_model=camera_model,
             radial_coeffs=radial_coeffs,
@@ -489,7 +477,6 @@ def rasterization(
             packed=packed,
             near_plane=near_plane,
             far_plane=far_plane,
-            radius_clip=radius_clip,
             sparse_grad=sparse_grad,
             camera_model=camera_model,
         )
@@ -507,7 +494,6 @@ def rasterization(
         #     packed=packed,
         #     near_plane=near_plane,
         #     far_plane=far_plane,
-        #     radius_clip=radius_clip,
         #     sparse_grad=sparse_grad,
         #     calc_compensations=(primitive == "mip"),
         #     camera_model=camera_model,
@@ -550,19 +536,12 @@ def rasterization(
         image_ids = batch_ids * C + camera_ids
     else:
         # The results are with shape [..., C, N, ...]. Only the elements with radii > 0 are valid.
-        radii, depths, normals, proj_splats = proj_results
+        aabb_xyxy, depths, normals, proj_splats = proj_results
         batch_ids, camera_ids, gaussian_ids = None, None, None
         image_ids = None
+    means2d = (aabb_xyxy[..., 2:] + aabb_xyxy[..., :2]).float() / 2
+    radii = (aabb_xyxy[..., 2:] - aabb_xyxy[..., :2] + 1) // 2
 
-    # if compensations is not None:  # TODO
-    #     opacities = torch.logit(torch.sigmoid(opacities) * compensations)
-
-    if primitive in ["3dgs", "mip"]:
-        means2d = proj_splats[0]
-    elif primitive in ["opaque_triangle"]:  # TODO: tight bbox
-        means2d = proj_splats[0].mean(-2)
-        if absgrad:
-            means2d.absgrad = proj_splats[0].absgrad
     meta.update(
         {
             # global batch and camera ids
@@ -573,7 +552,7 @@ def rasterization(
             "radii": radii,
             "depths": depths,
             "normals": normals,
-            "means2d": means2d,
+            "means2d": proj_splats[0],  # with grad
         }
     )
     # if heterogeneous:
@@ -759,7 +738,6 @@ def rasterization(
         pass
 
     # Identify intersecting tiles
-    # TODO: get triangle splatting right
     tile_width = math.ceil(width / float(tile_size))
     tile_height = math.ceil(height / float(tile_size))
     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(

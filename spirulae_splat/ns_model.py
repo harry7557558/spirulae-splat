@@ -116,6 +116,8 @@ class SpirulaeModelConfig(ModelConfig):
     primitive: Literal["3dgs", "mip", "opaque_triangle"] = "opaque_triangle"
     """Splat primitive to use"""
 
+    num_iterations: int = 30000
+    """number of training iterations, should be consistent with --max_num_iterations"""
     warmup_length: int = 500
     """period of steps where refinement is turned off"""
     stop_refine_at: int = 27000
@@ -146,8 +148,8 @@ class SpirulaeModelConfig(ModelConfig):
         Note: this only works well in patch batching mode"""
     camera_optimizer: CameraOptimizerConfig = field(default_factory=lambda: CameraOptimizerConfig(mode="SO3xR3"))
     """Config of the camera optimizer to use"""
-    kernel_radius: float = 3.0
-    """Radius of the splatting kernel, 3.0 for Gaussian and 1.0 for polynomial"""
+    kernel_radius: float = 1.0  # TODO
+    """Radius of the splatting kernel, 3.0 for Gaussian and 1.0 for triangle"""
     relative_scale: Optional[float] = None
     """Manually set scale when a scene is poorly scaled by nerfstudio
         (e.g. Zip-NeRF dataset, very large-scale scenes across multiple street blocks)"""
@@ -161,17 +163,17 @@ class SpirulaeModelConfig(ModelConfig):
     # classial control
     cull_alpha_thresh: float = 0.005
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
-    cull_scale_thresh: float = 1.0
+    cull_scale_thresh: float = 0.15
     """threshold of world scale for culling huge gaussians"""
-    split_scale_thresh: float = float('inf')
+    split_scale_thresh: float = 0.05
     """threshold of world scale for splitting huge gaussians"""
-    cull_grad_thresh: float = 0.0  # 3e-4 | 1e-4 | 1e-5 | 0.0
+    cull_grad_thresh: float = 3e-4  # 3e-4 | 1e-4 | 1e-5 | 0.0
     """threshold for culling gaussians with low visibility"""
     continue_cull_post_densification: bool = True
     """If True, continue to cull gaussians post refinement"""
     reset_alpha_every: int = 30
     """Every this many refinement steps, reset the alpha"""
-    densify_xy_grad_thresh: float = 0.0005
+    densify_xy_grad_thresh: float = 0.005
     """threshold of positional gradient norm for densifying gaussians"""
     densify_size_thresh: float = 0.01
     """below this size, gaussians are *duplicated*, otherwise split"""
@@ -258,7 +260,7 @@ class SpirulaeModelConfig(ModelConfig):
     """Weight for normal regularizer"""
     normal_reg_warmup: int = 12000
     """warmup steps for normal regularizer, regularization weight ramps up"""
-    alpha_reg_weight: float = 0.025
+    alpha_reg_weight: float = 0.0  # TODO: 0.025
     """Weight for alpha regularizer (encourage alpha to go to either 0 or 1)
         Recommend using with --pipeline.model.cull_screen_size for better results"""
     alpha_reg_warmup: int = 12000
@@ -356,8 +358,6 @@ class SpirulaeModel(Model):
             dtype=np.float32))
         opacities = torch.logit(0.1 * torch.ones(num_points, 1))
 
-        if self.config.primitive in ["opaque_triangle"]:
-            scales += math.log(3.0)
         # if self.config.primitive in ["opaque_triangle"]:
         if self.config.primitive in []:
             M = quat_to_rotmat(quats) * torch.exp(scales[..., None, :])
@@ -438,23 +438,22 @@ class SpirulaeModel(Model):
         if self.config.use_mcmc:
             current_num = len(self.means)
             final_num = self.config.mcmc_cap_max
-            warmup_steps = (self.config.resolution_schedule * (self.config.num_downscales+1)
-                            - self.config.mcmc_warmup_length) / self.config.refine_every
-            grow_factor = max(final_num / current_num, 1.0) ** (1/warmup_steps)
-            # grow_factor = min(grow_factor, 1.05)
-            # grow_factor = max(grow_factor, 1.05)
             grow_factor = 1.05
+            warpup_steps = math.log(final_num / current_num) / math.log(grow_factor) * \
+                self.config.refine_every + (self.config.warmup_length + self.config.refine_every)
+            self.mcmc_num_steps_until_full = warpup_steps
 
             self.strategy = MCMCStrategy(
                 cap_max=self.config.mcmc_cap_max,
-                noise_lr=self.config.mcmc_noise_lr,
+                noise_lr=self.config.mcmc_noise_lr,# * (self.config.kernel_radius/3.0),
                 refine_start_iter=self.config.mcmc_warmup_length,
                 refine_stop_iter=self.config.stop_refine_at,
                 refine_every=self.config.refine_every,
                 grow_factor=grow_factor,
                 min_opacity=self.config.mcmc_min_opacity,
                 prob_grad_weight=self.config.mcmc_prob_grad_weight,
-                use_scale_for_probs=(self.config.primitive == "opaque_triangle"),
+                # use_scale_for_probs=(self.config.primitive == "opaque_triangle"),
+                use_scale_for_probs=False,
                 is_3dgs=self.config.use_3dgs,
                 relocate_scale2d=self.config.relocate_screen_size,
                 max_scale2d=self.config.mcmc_max_screen_size,
@@ -485,6 +484,7 @@ class SpirulaeModel(Model):
             reset_every=reset_every,
             refine_every=self.config.refine_every,
             pause_refine_after_reset=pause_refine_after_reset,
+            kernel_radius=self.config.kernel_radius,
             absgrad=True,
             revised_opacity=False,
             verbose=True,
@@ -528,7 +528,7 @@ class SpirulaeModel(Model):
 
     def load_state_dict(self, dict, **kwargs):  # type: ignore
         # resize the parameters to match the new number of points
-        self.step = 30000
+        self.step = self.config.num_iterations
         if "means" in dict:
             # For backwards compatibility, we remap the names of parameters from
             # means->gauss_params.means since old checkpoints have that format
@@ -768,14 +768,35 @@ class SpirulaeModel(Model):
         Ks = Ks.to(device)
 
         # hardness = min(max(self.step / self.config.stop_refine_at, 0.1), 1.0)
-        hardness = min(self.step / 30000, 0.999)
+        if self.config.primitive == "opaque_triangle":
+            warmup_steps_0 = min(self.mcmc_num_steps_until_full, self.config.num_iterations/3)
+            warmup_steps_1 = min(1.5*self.mcmc_num_steps_until_full, self.config.num_iterations/2)
+            hardness = max(min(
+                (self.step-warmup_steps_0) / (self.config.num_iterations-warmup_steps_0),
+                0.999), 0.0)
+            opacity_floor = max(min(
+                (self.step-warmup_steps_0) / (warmup_steps_1-warmup_steps_0),
+                1.0), 0.0)
+            # TODO: prune low opacity at switch?
+            if self.config.use_mcmc:
+                self.strategy.refine_stop_iter = warmup_steps_1
+                self.strategy.noise_lr = self.config.mcmc_noise_lr * max(1.0-5.0*opacity_floor, 0.0)
+                if opacity_floor != 0.0:
+                    self.strategy.use_scale_for_probs = True
+
         rgbd, alpha, meta = rasterization(
             self.config.primitive,
             (self.means, quats, self.scales, self.opacities.squeeze(-1))
                 if self.config.primitive in ['3dgs', 'mip'] else
             # (self.means, quats, self.scales.mean(-1, keepdim=True).repeat(1,3),
             (self.means, quats, self.scales,
-             hardness * torch.ones_like(self.opacities.squeeze(-1))),
+            #  hardness * torch.ones_like(self.opacities.squeeze(-1))
+            #  hardness + (1.0-hardness) * torch.sigmoid(self.opacities.squeeze(-1))
+            torch.concat([
+                opacity_floor + (1.0-opacity_floor)*torch.sigmoid(self.opacities),
+                hardness * torch.ones_like(self.opacities)
+            ], dim=-1)
+             ),
             # (self.means, hardness * torch.ones_like(self.opacities.squeeze(-1))),
             colors_dc=self.features_dc,
             colors_sh=self.features_sh,

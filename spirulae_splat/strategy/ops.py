@@ -120,6 +120,10 @@ def duplicate(
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
         return torch.cat([v, torch.zeros((len(sel), *v.shape[1:]), device=device)])
+        return torch.cat([
+            v * (~mask).float().reshape((len(v), *([1]*(len(v.shape)-1)))),
+            torch.zeros((len(sel), *v.shape[1:]), device=device)
+        ])
 
     # update the parameters and the state in the optimizers
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
@@ -135,6 +139,7 @@ def split(
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
     mask: Tensor,
+    std_scale: float = 1.0,
     revised_opacity: bool = False,
 ):
     """Inplace split the Gaussian with the given mask.
@@ -157,7 +162,7 @@ def split(
         scales_3d = torch.cat((scales, sz), dim=-1) / 3.0
     quats = F.normalize(params["quats"][sel], dim=-1)
     rotmats = quat_to_rotmat(quats)  # [N, 3, 3]
-    samples = torch.einsum(
+    samples = std_scale * torch.einsum(
         "nij,nj,bnj->bni",
         rotmats,
         scales_3d,
