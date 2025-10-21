@@ -108,6 +108,9 @@ def fully_fused_projection(
     packed: bool = False,
     sparse_grad: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    radial_coeffs: Optional[Tensor] = None,
+    tangential_coeffs: Optional[Tensor] = None,
+    thin_prism_coeffs: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Optional[Tensor], Tuple[Tensor]]:
     # if primitive in ["3dgs", "mip"]:
     if primitive in ["3dgs", "mip", "opaque_triangle"]:
@@ -134,6 +137,19 @@ def fully_fused_projection(
         assert packed, "sparse_grad is only supported when packed is True"
         assert batch_dims == (), "sparse_grad does not support batch dimensions"
 
+    if camera_model != "fisheye":
+        assert radial_coeffs is None and tangential_coeffs is None and thin_prism_coeffs is None, \
+            "Camera distortion is only supported for fisheye model"
+    if radial_coeffs is not None:
+        assert radial_coeffs.shape == batch_dims + (C, 4), radial_coeffs.shape
+        radial_coeffs = radial_coeffs.contiguous().to(viewmats)
+    if tangential_coeffs is not None:
+        assert tangential_coeffs.shape == batch_dims + (C, 2), tangential_coeffs.shape
+        tangential_coeffs = tangential_coeffs.contiguous().to(viewmats)
+    if thin_prism_coeffs is not None:
+        assert thin_prism_coeffs.shape == batch_dims + (C, 2), thin_prism_coeffs.shape
+        thin_prism_coeffs = thin_prism_coeffs.contiguous().to(viewmats)
+
     assert (
         camera_model != "ftheta"
     ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
@@ -154,6 +170,7 @@ def fully_fused_projection(
             near_plane,
             far_plane,
             camera_model,
+            (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
             *additional_args
         )
         return (
@@ -180,6 +197,7 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
         near_plane: float,
         far_plane: float,
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
+        dist_coeffs: Tuple[Tensor, Tensor, Tensor],
         is_antialiased: bool,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         assert (
@@ -197,13 +215,14 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
             (means, quats, scales, opacities),
             viewmats, Ks, width, height,
             near_plane, far_plane,
-            camera_model_type,
+            camera_model_type, dist_coeffs
         )
         ctx.save_for_backward(means, quats, scales, opacities, viewmats, Ks, aabb)
         ctx.is_antialiased = is_antialiased
         ctx.width = width
         ctx.height = height
         ctx.camera_model_type = camera_model_type
+        ctx.dist_coeffs = dist_coeffs
 
         return aabb, depths, normals, means2d, conics, proj_opacities
 
@@ -215,7 +234,7 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
         )(
             ctx.is_antialiased,
             (means, quats, scales, opacities),
-            viewmats, Ks, ctx.width, ctx.height, ctx.camera_model_type,
+            viewmats, Ks, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs,
             aabb, v_depths.contiguous(), v_normals.contiguous() if v_normals is not None else None,
             (v_means2d.contiguous(), v_conics.contiguous(), v_opacities.contiguous()),
             ctx.needs_input_grad[4],  # viewmats_requires_grad
@@ -244,6 +263,7 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
         near_plane: float,
         far_plane: float,
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
+        dist_coeffs: Tuple[Tensor, Tensor, Tensor],
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         assert (
             camera_model != "ftheta"
@@ -260,13 +280,14 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
             # (means, hardness),
             viewmats, Ks, width, height,
             near_plane, far_plane,
-            camera_model_type,
+            camera_model_type, dist_coeffs
         )
         ctx.save_for_backward(means, quats, scales, hardness, viewmats, Ks, aabb)
         # ctx.save_for_backward(means, hardness, viewmats, Ks, aabb)
         ctx.width = width
         ctx.height = height
         ctx.camera_model_type = camera_model_type
+        ctx.dist_coeffs = dist_coeffs
 
         return aabb, depths, normals, means2d, proj_hardness
 
@@ -280,7 +301,7 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
         )(
             (means, quats, scales, hardness),
             # (means, hardness),
-            viewmats, Ks, ctx.width, ctx.height, ctx.camera_model_type,
+            viewmats, Ks, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs,
             aabb, v_depths.contiguous(), v_normals.contiguous() if v_normals is not None else None,
             (v_means2d.contiguous(), v_proj_hardness.contiguous()),
             ctx.needs_input_grad[4],  # viewmats_requires_grad

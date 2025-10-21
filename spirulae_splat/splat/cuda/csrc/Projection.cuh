@@ -9,6 +9,21 @@
 #include "PrimitiveOpaqueTriangle.cuh"
 
 
+typedef std::tuple<
+    std::optional<at::Tensor>,
+    std::optional<at::Tensor>,
+    std::optional<at::Tensor>
+> CameraDistortionCoeffsTensor;
+
+struct CameraDistortionCoeffsBuffer {
+    float4* __restrict__ radial_coeffs;
+    float2* __restrict__ tangential_coeffs;
+    float2* __restrict__ thin_prism_coeffs;
+
+    CameraDistortionCoeffsBuffer(const CameraDistortionCoeffsTensor &tensors);
+};
+
+
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */
 
 
@@ -28,7 +43,8 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs
 );
 
 
@@ -46,7 +62,8 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs
 );
 
 
@@ -62,6 +79,7 @@ std::tuple<
     const uint32_t image_width,
     const uint32_t image_height,
     const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
@@ -83,6 +101,7 @@ std::tuple<
     const uint32_t image_width,
     const uint32_t image_height,
     const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs

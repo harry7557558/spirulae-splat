@@ -16,6 +16,9 @@
     no_diff const float fy, \
     no_diff const float cx, \
     no_diff const float cy, \
+    no_diff const float4 radial_coeffs, \
+    no_diff const float2 tangential_coeffs, \
+    no_diff const float2 thin_prism_coeffs, \
     const uint image_width, \
     const uint image_height, \
     no_diff const float near_plane, \
@@ -69,15 +72,20 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
         uv0 = vert0_c.xy / vert0_c.z;
         uv1 = vert1_c.xy / vert1_c.z;
         uv2 = vert2_c.xy / vert2_c.z;
+        uv0 = float2(fx, fy) * uv0 + float2(cx, cy);
+        uv1 = float2(fx, fy) * uv1 + float2(cx, cy);
+        uv2 = float2(fx, fy) * uv2 + float2(cx, cy);
     }
-    else if (camera_model == CameraModelType::FISHEYE)
-        {}  // TODO
+    else if (camera_model == CameraModelType::FISHEYE) {
+        float4 intrins = float4(fx, fy, cx, cy);
+        CameraDistortion dist_coeffs = {radial_coeffs, tangential_coeffs, thin_prism_coeffs};
+        // TODO: some approximation better than this
+        uv0 = fisheye_proj(vert0_c, intrins, dist_coeffs);
+        uv1 = fisheye_proj(vert1_c, intrins, dist_coeffs);
+        uv2 = fisheye_proj(vert2_c, intrins, dist_coeffs);
+    }
     else if (camera_model == CameraModelType::ORTHO)
         {}  // TODO
-
-    uv0 = float2(fx, fy) * uv0 + float2(cx, cy);
-    uv1 = float2(fx, fy) * uv1 + float2(cx, cy);
-    uv2 = float2(fx, fy) * uv2 + float2(cx, cy);
 
     // compute tight rectangular bounding box (non differentiable)
 
@@ -116,14 +124,16 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
     [Differentiable] \
     void funname(_projection_opaque_triangle_ARGS) { \
         return projection_opaque_triangle<__VA_ARGS__>( \
-            mean, quat, scale, hardness, R, t, fx, fy, cx, cy, \
-            /* vert0, vert1, vert2, hardness, R, t, fx, fy, cx, cy, */ \
+            mean, quat, scale, hardness, R, t, \
+            /* vert0, vert1, vert2, hardness, R, t, */ \
+            fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs, \
             image_width, image_height, near_plane, far_plane, \
             aabb_xyxy, depth, normal, uv0, uv1, uv2, out_hardness \
         ); \
     }
 
 _DEF_projection_opaque_triangle(projection_opaque_triangle_persp, CameraModelType::PINHOLE, false)
+_DEF_projection_opaque_triangle(projection_opaque_triangle_fisheye, CameraModelType::FISHEYE, false)
 
     // const float3 vert0, \
     // const float3 vert1, \
@@ -144,6 +154,9 @@ _DEF_projection_opaque_triangle(projection_opaque_triangle_persp, CameraModelTyp
     const float fy, \
     const float cx, \
     const float cy, \
+    const float4 radial_coeffs, \
+    const float2 tangential_coeffs, \
+    const float2 thin_prism_coeffs, \
     const uint image_width, \
     const uint image_height, \
     const float v_depth, \
@@ -160,6 +173,7 @@ _DEF_projection_opaque_triangle(projection_opaque_triangle_persp, CameraModelTyp
     out float3 v_t
 
 _DEF_projection_opaque_triangle(_projection_opaque_triangle_persp_differentiable, CameraModelType::PINHOLE, true)
+_DEF_projection_opaque_triangle(_projection_opaque_triangle_fisheye_differentiable, CameraModelType::FISHEYE, true)
 
 
 [CudaDeviceExport]
@@ -176,8 +190,40 @@ void projection_opaque_triangle_persp_vjp(
     DifferentialPair<float3x3> dp_R = diffPair(R);
     DifferentialPair<float3> dp_t = diffPair(t);
     bwd_diff(_projection_opaque_triangle_persp_differentiable)(
-        dp_mean, dp_quat, dp_scale, dp_hardness, dp_R, dp_t, fx, fy, cx, cy,
-        // dp_vert0, dp_vert1, dp_vert2, dp_hardness, dp_R, dp_t, fx, fy, cx, cy,
+        dp_mean, dp_quat, dp_scale, dp_hardness, dp_R, dp_t,
+        // dp_vert0, dp_vert1, dp_vert2, dp_hardness, dp_R, dp_t,
+        fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        image_width, image_height, 0.0f, 1e30f,
+        v_depth, v_normal, v_uv0, v_uv1, v_uv2, v_out_hardness
+    );
+    v_mean = dp_mean.d;
+    v_quat = dp_quat.d;
+    v_scale = dp_scale.d;
+    // v_vert0 = dp_vert0.d;
+    // v_vert1 = dp_vert1.d;
+    // v_vert2 = dp_vert2.d;
+    v_hardness = dp_hardness.d;
+    v_R = dp_R.d;
+    v_t = dp_t.d;
+}
+
+[CudaDeviceExport]
+void projection_opaque_triangle_fisheye_vjp(
+    _projection_opaque_triangle_vjp_ARGS
+) {
+    DifferentialPair<float3> dp_mean = diffPair(mean);
+    DifferentialPair<float4> dp_quat = diffPair(quat);
+    DifferentialPair<float3> dp_scale = diffPair(scale);
+    // DifferentialPair<float3> dp_vert0 = diffPair(vert0);
+    // DifferentialPair<float3> dp_vert1 = diffPair(vert1);
+    // DifferentialPair<float3> dp_vert2 = diffPair(vert2);
+    DifferentialPair<float2> dp_hardness = diffPair(hardness);
+    DifferentialPair<float3x3> dp_R = diffPair(R);
+    DifferentialPair<float3> dp_t = diffPair(t);
+    bwd_diff(_projection_opaque_triangle_fisheye_differentiable)(
+        dp_mean, dp_quat, dp_scale, dp_hardness, dp_R, dp_t,
+        // dp_vert0, dp_vert1, dp_vert2, dp_hardness, dp_R, dp_t,
+        fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
         image_width, image_height, 0.0f, 1e30f,
         v_depth, v_normal, v_uv0, v_uv1, v_uv2, v_out_hardness
     );

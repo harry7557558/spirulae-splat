@@ -13,6 +13,21 @@ namespace cg = cooperative_groups;
 #include <gsplat/Utils.cuh>
 
 
+CameraDistortionCoeffsBuffer::CameraDistortionCoeffsBuffer(
+    const CameraDistortionCoeffsTensor &tensors
+) {
+    std::optional<at::Tensor> radial_coeffs_tensor = std::get<0>(tensors);
+    radial_coeffs = radial_coeffs_tensor.has_value() ?
+        (float4*)radial_coeffs_tensor.value().data_ptr<float>() : nullptr;
+    std::optional<at::Tensor> tangential_coeffs_tensor = std::get<1>(tensors);
+    tangential_coeffs = tangential_coeffs_tensor.has_value() ?
+        (float2*)tangential_coeffs_tensor.value().data_ptr<float>() : nullptr;
+    std::optional<at::Tensor> thin_prism_coeffs_tensor = std::get<2>(tensors);
+    thin_prism_coeffs = thin_prism_coeffs_tensor.has_value() ?
+        (float2*)thin_prism_coeffs_tensor.value().data_ptr<float>() : nullptr;
+}
+
+
 template<typename SplatPrimitive, gsplat::CameraModelType camera_model>
 __global__ void projection_fused_fwd_kernel(
     const uint32_t B,
@@ -22,6 +37,7 @@ __global__ void projection_fused_fwd_kernel(
     const typename SplatPrimitive::World::Buffer splats_world,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float *__restrict__ Ks,       // [B, C, 3, 3]
+    const CameraDistortionCoeffsBuffer dist_coeffs,
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
@@ -56,6 +72,14 @@ __global__ void projection_fused_fwd_kernel(
         image_width, image_height, antialiased,
         near_plane, far_plane
     };
+    if (camera_model == gsplat::CameraModelType::FISHEYE) {
+        if (dist_coeffs.radial_coeffs != nullptr)
+            cam.radial_coeffs = dist_coeffs.radial_coeffs[bid * C + cid];
+        if (dist_coeffs.tangential_coeffs != nullptr)
+            cam.tangential_coeffs = dist_coeffs.tangential_coeffs[bid * C + cid];
+        if (dist_coeffs.thin_prism_coeffs != nullptr)
+            cam.thin_prism_coeffs = dist_coeffs.thin_prism_coeffs[bid * C + cid];
+    }
 
     // Load splat
     typename SplatPrimitive::World splat_world =
@@ -73,9 +97,9 @@ __global__ void projection_fused_fwd_kernel(
     // case gsplat::CameraModelType::ORTHO: // orthographic projection
     //     SplatPrimitive::project_ortho(splat_world, cam, splat_screen, aabb, depth, normal);
     //     break;
-    // case gsplat::CameraModelType::FISHEYE: // fisheye projection
-    //     SplatPrimitive::project_fisheye(splat_world, cam, splat_screen, aabb, depth, normal);
-    //     break;
+    case gsplat::CameraModelType::FISHEYE: // fisheye projection
+        SplatPrimitive::project_fisheye(splat_world, cam, splat_screen, aabb, depth, normal);
+        break;
     }
 
     // Save results
@@ -100,6 +124,7 @@ __global__ void projection_fused_bwd_kernel(
     const typename SplatPrimitive::World::Buffer splats_world,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float *__restrict__ Ks,       // [B, C, 3, 3]
+    const CameraDistortionCoeffsBuffer dist_coeffs,
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
@@ -135,6 +160,14 @@ __global__ void projection_fused_bwd_kernel(
         R, t, fx, fy, cx, cy,
         image_width, image_height, antialiased,
     };
+    if (camera_model == gsplat::CameraModelType::FISHEYE) {
+        if (dist_coeffs.radial_coeffs != nullptr)
+            cam.radial_coeffs = dist_coeffs.radial_coeffs[bid * C + cid];
+        if (dist_coeffs.tangential_coeffs != nullptr)
+            cam.tangential_coeffs = dist_coeffs.tangential_coeffs[bid * C + cid];
+        if (dist_coeffs.thin_prism_coeffs != nullptr)
+            cam.thin_prism_coeffs = dist_coeffs.thin_prism_coeffs[bid * C + cid];
+    }
 
     // Load splat
     typename SplatPrimitive::World splat_world =
@@ -155,9 +188,9 @@ __global__ void projection_fused_bwd_kernel(
     // case gsplat::CameraModelType::ORTHO: // orthographic projection
     //     SplatPrimitive::project_ortho_vjp(splat_world, cam, v_splat_screen, v_depth, v_normal, v_splat_world, v_R, v_t);
     //     break;
-    // case gsplat::CameraModelType::FISHEYE: // fisheye projection
-    //     SplatPrimitive::project_fisheye_vjp(splat_world, cam, v_splat_screen, v_depth, v_normal, v_splat_world, v_R, v_t);
-    //     break;
+    case gsplat::CameraModelType::FISHEYE: // fisheye projection
+        SplatPrimitive::project_fisheye_vjp(splat_world, cam, v_splat_screen, v_depth, v_normal, v_splat_world, v_R, v_t);
+        break;
     }
 
     // Save results
@@ -202,7 +235,8 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     Vanilla3DGS::World::Tensor splats_world(in_splats);
     uint32_t N = splats_world.size();    // number of gaussians
@@ -219,7 +253,7 @@ std::tuple<
     #define _LAUNCH_ARGS \
         <<<_CEIL_DIV(B*C*N, block), block>>>( \
             B, C, N, antialiased, \
-            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), \
+            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, near_plane, far_plane, \
             (int4*)aabb.data_ptr<int32_t>(), depths.data_ptr<float>(), nullptr, splats_screen.buffer() \
         )
@@ -229,8 +263,8 @@ std::tuple<
         projection_fused_fwd_kernel<Vanilla3DGS, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
     // else if (camera_model == gsplat::CameraModelType::ORTHO)
     //     projection_fused_fwd_kernel<Vanilla3DGS, gsplat::CameraModelType::ORTHO> _LAUNCH_ARGS;
-    // else if (camera_model == gsplat::CameraModelType::FISHEYE)
-    //     projection_fused_fwd_kernel<Vanilla3DGS, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+    else if (camera_model == gsplat::CameraModelType::FISHEYE)
+        projection_fused_fwd_kernel<Vanilla3DGS, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
 
@@ -253,7 +287,8 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     OpaqueTriangle::World::Tensor splats_world(in_splats);
     uint32_t N = splats_world.size();    // number of gaussians
@@ -271,7 +306,7 @@ std::tuple<
     #define _LAUNCH_ARGS \
         <<<_CEIL_DIV(B*C*N, block), block>>>( \
             B, C, N, false, \
-            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), \
+            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, near_plane, far_plane, \
             (int4*)aabb.data_ptr<int32_t>(), depths.data_ptr<float>(), (float3*)normals.data_ptr<float>(), \
             splats_screen.buffer() \
@@ -282,8 +317,8 @@ std::tuple<
         projection_fused_fwd_kernel<OpaqueTriangle, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
     // else if (camera_model == gsplat::CameraModelType::ORTHO)
     //     projection_fused_fwd_kernel<OpaqueTriangle, gsplat::CameraModelType::ORTHO> _LAUNCH_ARGS;
-    // else if (camera_model == gsplat::CameraModelType::FISHEYE)
-    //     projection_fused_fwd_kernel<OpaqueTriangle, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+    else if (camera_model == gsplat::CameraModelType::FISHEYE)
+        projection_fused_fwd_kernel<OpaqueTriangle, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
 
@@ -304,6 +339,7 @@ std::tuple<
     const uint32_t image_width,
     const uint32_t image_height,
     const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
@@ -329,7 +365,7 @@ std::tuple<
     #define _LAUNCH_ARGS \
         <<<_CEIL_DIV(B*C*N, block), block>>>( \
             B, C, N, antialiased, \
-            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), \
+            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, (int4*)aabb.data_ptr<int32_t>(), \
             v_depths.data_ptr<float>(), v_normals.has_value() ? (float3*)v_normals.value().data_ptr<float>() : nullptr, \
             v_splats_screen.buffer(), v_splats_world.buffer(), \
@@ -341,8 +377,8 @@ std::tuple<
         projection_fused_bwd_kernel<Vanilla3DGS, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
     // else if (camera_model == gsplat::CameraModelType::ORTHO)
     //     projection_fused_bwd_kernel<Vanilla3DGS, gsplat::CameraModelType::ORTHO> _LAUNCH_ARGS;
-    // else if (camera_model == gsplat::CameraModelType::FISHEYE)
-    //     projection_fused_bwd_kernel<Vanilla3DGS, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+    else if (camera_model == gsplat::CameraModelType::FISHEYE)
+        projection_fused_bwd_kernel<Vanilla3DGS, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
 
@@ -362,6 +398,7 @@ std::tuple<
     const uint32_t image_width,
     const uint32_t image_height,
     const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
@@ -387,7 +424,7 @@ std::tuple<
     #define _LAUNCH_ARGS \
         <<<_CEIL_DIV(B*C*N, block), block>>>( \
             B, C, N, false, \
-            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), \
+            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, (int4*)aabb.data_ptr<int32_t>(), \
             v_depths.data_ptr<float>(), v_normals.has_value() ? (float3*)v_normals.value().data_ptr<float>() : nullptr, \
             v_splats_screen.buffer(), v_splats_world.buffer(), \
@@ -399,8 +436,8 @@ std::tuple<
         projection_fused_bwd_kernel<OpaqueTriangle, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
     // else if (camera_model == gsplat::CameraModelType::ORTHO)
     //     projection_fused_bwd_kernel<OpaqueTriangle, gsplat::CameraModelType::ORTHO> _LAUNCH_ARGS;
-    // else if (camera_model == gsplat::CameraModelType::FISHEYE)
-    //     projection_fused_bwd_kernel<OpaqueTriangle, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+    else if (camera_model == gsplat::CameraModelType::FISHEYE)
+        projection_fused_bwd_kernel<OpaqueTriangle, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
 

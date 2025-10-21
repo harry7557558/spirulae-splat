@@ -333,9 +333,9 @@ def rasterization(
         assert not distributed, "AbsGrad is not supported in distributed mode."
 
     if (
-        radial_coeffs is not None
-        or tangential_coeffs is not None
-        or thin_prism_coeffs is not None
+        # radial_coeffs is not None
+        # or tangential_coeffs is not None
+        thin_prism_coeffs is not None
         # or ftheta_coeffs is not None
         or rolling_shutter != RollingShutterType.GLOBAL
     ):
@@ -479,6 +479,9 @@ def rasterization(
             far_plane=far_plane,
             sparse_grad=sparse_grad,
             camera_model=camera_model,
+            radial_coeffs=radial_coeffs,
+            tangential_coeffs=tangential_coeffs,
+            thin_prism_coeffs=thin_prism_coeffs,
         )
         # import gsplat.cuda._wrapper
         # proj_results_1 = gsplat.cuda._wrapper.fully_fused_projection(

@@ -104,3 +104,85 @@ float2x2 inverse(float2x2 m){
 float det(float2 u, float2 v) {
     return u.x*v.y - u.y*v.x;
 }
+
+
+struct CameraDistortion : IDifferentiable {
+    float4 radial_coeffs;
+    float2 tangential_coeffs;
+    float2 thin_prism_coeffs;
+};
+
+[ForceInline]
+[Differentiable]
+float2 camera_distortion(float2 uv, no_diff CameraDistortion dist_coeffs) {
+    float k1 = dist_coeffs.radial_coeffs.x,
+        k2 = dist_coeffs.radial_coeffs.y,
+        k3 = dist_coeffs.radial_coeffs.z,
+        k4 = dist_coeffs.radial_coeffs.w,
+        p1 = dist_coeffs.tangential_coeffs.x,
+        p2 = dist_coeffs.tangential_coeffs.y,
+        sx1 = dist_coeffs.thin_prism_coeffs.x,
+        sy1 = dist_coeffs.thin_prism_coeffs.y;
+    float u = uv.x, v = uv.y;
+    float r2 = u*u+v*v;
+    float radial = 1.0 + r2*(k1 + r2*(k2 + r2*(k3 + r2*k4)));
+    float du = 2.0*p1*u*v + p2*(r2+2.0*u*u) + sx1*r2;
+    float dv = 2.0*p2*u*v + p1*(r2+2.0*v*v) + sy1*r2;
+    return uv * radial + float2(du, dv);
+}
+
+[ForceInline]
+[Differentiable]
+float2x2 camera_distortion_jac(float2 uv, no_diff CameraDistortion dist_coeffs) {
+    float2x2 J;
+    [ForceUnroll]
+    for (int i = 0; i < 2; ++i) {
+        float2 seed = 0.0; seed[i] = 1.0;
+        DifferentialPair<float2> dp_uv = diffPair(uv);
+        bwd_diff(camera_distortion)(dp_uv, dist_coeffs, seed);
+        J[i] = dp_uv.d;
+    }
+    return J;
+}
+
+[ForceInline]
+bool is_valid_distortion(float2 uv, no_diff CameraDistortion dist_coeffs) {
+    float2x2 J = camera_distortion_jac(uv, dist_coeffs);
+    return min(determinant(J), min(J[0][0], J[1][1])) > 0.0;
+}
+
+
+[ForceInline]
+[Differentiable]
+float2 fisheye_proj(float3 p_view) {
+    float r = length(p_view.xy);
+    float theta = atan2(r, p_view.z);
+    float k = theta < 1e-3 ? (1.0 - theta*theta/3.0) / p_view.z : theta / r;
+    return p_view.xy * k;
+}
+
+[ForceInline]
+[Differentiable]
+float2 fisheye_proj(float3 p_view, no_diff float4 intrins, no_diff CameraDistortion dist_coeffs) {
+    float2 uv = camera_distortion(fisheye_proj(p_view), dist_coeffs);
+    float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
+    return float2(
+        fx * uv.x + cx,
+        fy * uv.y + cy
+    );
+}
+
+[ForceInline]
+[Differentiable]
+float2x3 fisheye_proj_jac(float3 p_view, no_diff float4 intrins, no_diff CameraDistortion dist_coeffs) {
+    float2x3 J;
+    [ForceUnroll]
+    for (int i = 0; i < 2; ++i) {
+        float2 seed = 0.0; seed[i] = 1.0;
+        DifferentialPair<float3> dp_p_view = diffPair(p_view);
+        bwd_diff(fisheye_proj)(dp_p_view, intrins, dist_coeffs, seed);
+        J[i] = dp_p_view.d;
+    }
+    return J;
+}
+

@@ -822,8 +822,10 @@ class SpirulaeModel(Model):
             sparse_grad=False,
             distributed=False,
             camera_model=["pinhole", "fisheye"][is_fisheye],
-            with_ut=is_fisheye,
-            with_eval3d=is_fisheye,
+            # with_ut=is_fisheye,
+            # with_eval3d=is_fisheye,  # TODO
+            with_ut=False,
+            with_eval3d=False,
             render_mode="RGB+D" if self.config.primitive in ['3dgs', 'mip'] else "RGB+D+N",
             **kwargs,
         )
@@ -974,7 +976,10 @@ class SpirulaeModel(Model):
             if s == 0.0:
                 return '~'
 
-            l = float(losses[key]) / s
+            l = losses[key]
+            if isinstance(l, torch.Tensor):
+                l = l.detach().item()
+            l = l / s
             if not math.isfinite(l):  # not finite
                 return str(l)
 

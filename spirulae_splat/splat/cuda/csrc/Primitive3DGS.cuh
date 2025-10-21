@@ -23,6 +23,9 @@ struct Vanilla3DGS {
         float fx, fy, cx, cy;
         uint width, height, antialiased;
         float near_plane, far_plane;
+        float4 radial_coeffs = {0, 0, 0, 0};
+        float2 tangential_coeffs = {0, 0};
+        float2 thin_prism_coeffs = {0, 0};
     };
 
     inline static __device__ void project_persp(
@@ -45,6 +48,9 @@ struct Vanilla3DGS {
         float3 t;
         float fx, fy, cx, cy;
         uint width, height, antialiased;
+        float4 radial_coeffs = {0, 0, 0, 0};
+        float2 tangential_coeffs = {0, 0};
+        float2 thin_prism_coeffs = {0, 0};
     };
 
     inline static __device__ void project_persp_vjp(
@@ -349,6 +355,7 @@ inline __device__ void Vanilla3DGS::project_persp(
         bool(cam.antialiased),
         world.mean, world.quat, world.scale, world.opacity,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &depth, &screen.xy, &screen.conic, &screen.opac
     );
@@ -362,6 +369,7 @@ inline __device__ void Vanilla3DGS::project_ortho(
         bool(cam.antialiased),
         world.mean, world.quat, world.scale, world.opacity,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &depth, &screen.xy, &screen.conic, &screen.opac
     );
@@ -375,6 +383,7 @@ inline __device__ void Vanilla3DGS::project_fisheye(
         bool(cam.antialiased),
         world.mean, world.quat, world.scale, world.opacity,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &depth, &screen.xy, &screen.conic, &screen.opac
     );
@@ -389,6 +398,7 @@ inline __device__ void Vanilla3DGS::project_persp_vjp(
         bool(cam.antialiased),
         world.mean, world.quat, world.scale, world.opacity,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
         cam.width, cam.height,
         v_depth, v_screen.xy, v_screen.conic, v_screen.opac,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
@@ -405,6 +415,7 @@ inline __device__ void Vanilla3DGS::project_ortho_vjp(
         bool(cam.antialiased),
         world.mean, world.quat, world.scale, world.opacity,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
         cam.width, cam.height,
         v_depth, v_screen.xy, v_screen.conic, v_screen.opac,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
@@ -421,6 +432,7 @@ inline __device__ void Vanilla3DGS::project_fisheye_vjp(
         bool(cam.antialiased),
         world.mean, world.quat, world.scale, world.opacity,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
         cam.width, cam.height,
         v_depth, v_screen.xy, v_screen.conic, v_screen.opac,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,

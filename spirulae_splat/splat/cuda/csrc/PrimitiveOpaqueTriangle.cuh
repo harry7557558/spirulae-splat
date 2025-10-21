@@ -24,9 +24,17 @@ struct OpaqueTriangle {
         float fx, fy, cx, cy;
         uint width, height, antialiased;
         float near_plane, far_plane;
+        float4 radial_coeffs = {0, 0, 0, 0};
+        float2 tangential_coeffs = {0, 0};
+        float2 thin_prism_coeffs = {0, 0};
     };
 
     inline static __device__ void project_persp(
+        World world, FwdProjCamera cam,
+        Screen& screen, int4& aabb, float& depth, float3& normal
+    );
+
+    inline static __device__ void project_fisheye(
         World world, FwdProjCamera cam,
         Screen& screen, int4& aabb, float& depth, float3& normal
     );
@@ -36,9 +44,18 @@ struct OpaqueTriangle {
         float3 t;
         float fx, fy, cx, cy;
         uint width, height, antialiased;
+        float4 radial_coeffs = {0, 0, 0, 0};
+        float2 tangential_coeffs = {0, 0};
+        float2 thin_prism_coeffs = {0, 0};
     };
 
     inline static __device__ void project_persp_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_screen, float v_depth, float3 v_normal,
+        World& v_world, float3x3 &v_R, float3 &v_t
+    );
+
+    inline static __device__ void project_fisheye_vjp(
         World world, BwdProjCamera cam,
         Screen v_screen, float v_depth, float3 v_normal,
         World& v_world, float3x3 &v_R, float3 &v_t
@@ -336,6 +353,21 @@ inline __device__ void OpaqueTriangle::project_persp(
         world.mean, world.quat, world.scale, world.hardness,
         // world.vert0, world.vert1, world.vert2, world.hardness,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
+        cam.width, cam.height, cam.near_plane, cam.far_plane,
+        &aabb, &depth, &normal, &screen.vert0, &screen.vert1, &screen.vert2, &screen.hardness
+    );
+}
+
+inline __device__ void OpaqueTriangle::project_fisheye(
+    OpaqueTriangle::World world, OpaqueTriangle::FwdProjCamera cam,
+    OpaqueTriangle::Screen& screen, int4& aabb, float& depth, float3& normal
+) {
+    projection_opaque_triangle_fisheye(
+        world.mean, world.quat, world.scale, world.hardness,
+        // world.vert0, world.vert1, world.vert2, world.hardness,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &depth, &normal, &screen.vert0, &screen.vert1, &screen.vert2, &screen.hardness
     );
@@ -350,6 +382,25 @@ inline __device__ void OpaqueTriangle::project_persp_vjp(
         world.mean, world.quat, world.scale, world.hardness,
         // world.vert0, world.vert1, world.vert2, world.hardness,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
+        cam.width, cam.height,
+        v_depth, v_normal, v_screen.vert0, v_screen.vert1, v_screen.vert2, v_screen.hardness,
+        &v_world.mean, &v_world.quat, &v_world.scale, &v_world.hardness,
+        // &v_world.vert0, &v_world.vert1, &v_world.vert2, &v_world.hardness,
+        &v_R, &v_t
+    );
+}
+
+inline __device__ void OpaqueTriangle::project_fisheye_vjp(
+    OpaqueTriangle::World world, OpaqueTriangle::BwdProjCamera cam,
+    OpaqueTriangle::Screen v_screen, float v_depth, float3 v_normal,
+    OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t
+) {
+    projection_opaque_triangle_fisheye_vjp(
+        world.mean, world.quat, world.scale, world.hardness,
+        // world.vert0, world.vert1, world.vert2, world.hardness,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
         cam.width, cam.height,
         v_depth, v_normal, v_screen.vert0, v_screen.vert1, v_screen.vert2, v_screen.hardness,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.hardness,
