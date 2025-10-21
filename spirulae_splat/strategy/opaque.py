@@ -1,17 +1,17 @@
 import math
 import numpy as np
 from dataclasses import dataclass
-from typing import Any, Dict, Union, Literal
+from typing import Any, Dict, Union, Literal, List, Tuple, Dict
 
 import torch
 from torch import Tensor
 
 from .base import Strategy
-from .ops import inject_noise_to_position, relocate, sample_add
+from .ops import inject_noise_to_position, relocate, sample_add, remove, split, _multinomial_sample
 
 
 @dataclass
-class MCMCStrategy(Strategy):
+class OpaqueStrategy(Strategy):
     """Strategy that follows the paper:
 
     `3D Gaussian Splatting as Markov Chain Monte Carlo <https://arxiv.org/abs/2404.09591>`_
@@ -50,15 +50,18 @@ class MCMCStrategy(Strategy):
     cap_max: int = 1_000_000
     noise_lr: float = 5e5
     refine_start_iter: int = 500
-    refine_stop_iter: int = 25_000
+    warmup_steps_0: int = 6_000
+    warmup_steps_1: int = 15_000
+    refine_stop_iter: int = 30_000
     refine_every: int = 100
     grow_factor: float = 1.05
     min_opacity: float = 0.005
+    prune_opacity: float = 0.2
     relocate_scale2d: float = float('inf')
     max_scale2d: float = float('inf')
     max_scale3d: float = float('inf')
     prob_grad_weight: float = 0.0
-    is_3dgs: bool = False
+    kernel_radius: float = 1.0
     verbose: bool = False
     key_for_gradient: Literal["means2d", "gradient_2dgs"] = "means2d"
 
@@ -67,6 +70,18 @@ class MCMCStrategy(Strategy):
         if self.prob_grad_weight > 0.0:
             return { "grad2d": None, "count": None, "radii": None }
         return { "radii": None }
+
+    def get_opacity_floor(self, step):
+        a = (step - self.warmup_steps_0) / (self.refine_stop_iter - self.warmup_steps_0)
+        return max(min(a, 1.0), 0.0)
+
+    def get_hardness(self, step):
+        a = (step - self.warmup_steps_0) / (self.refine_stop_iter - self.warmup_steps_0)
+        return max(min(a, 1.0), 0.0)
+
+    def map_opacities(self, step, opacities):
+        opacity_floor = self.get_opacity_floor(step)
+        return opacity_floor + (1.0-opacity_floor) * torch.sigmoid(opacities)
 
     @torch.no_grad()
     def _update_state(
@@ -98,7 +113,7 @@ class MCMCStrategy(Strategy):
                 state["count"] = torch.zeros(n_gaussian, device=grad_info.device)
         if state["radii"] is None:
             assert "radii" in info, "radii is required but missing."
-            state["radii"] = torch.zeros(n_gaussian, device=grad_info.device)
+            state["radii"] = torch.zeros(n_gaussian, device=grad_info.device).float()
 
         # update the running state
         if packed:
@@ -165,10 +180,10 @@ class MCMCStrategy(Strategy):
             0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)
         )
 
-    def _get_probs(self, state, params):
+    def _get_probs(self, state, params, step):
         if not (self.prob_grad_weight > 0.0):
             return None
-        opacs = torch.sigmoid(params["opacities"])
+        opacs = self.map_opacities(step, params["opacities"])
         grads = state["grad2d"] / state["count"].clamp_min(1)
         grads = ((0.5+torch.sort(grads)[1]) / len(grads)).unsqueeze(-1)
         return opacs * (1.0-self.prob_grad_weight) + grads * self.prob_grad_weight
@@ -226,12 +241,16 @@ class MCMCStrategy(Strategy):
         """
         self._update_state(params, state, info)
 
-        # move to the correct device
         if (
             step >= self.refine_every
             and step % self.refine_every == 0
         ):
-            # teleport GSs
+            # prune splats
+            opacity_floor = self.get_opacity_floor(step)
+            if opacity_floor > 0.0 and opacity_floor < self.prune_opacity:
+                self._prune_gs(params, optimizers, state, step)
+
+            # relocate splats
             n_relocated_gs = self._relocate_gs(params, optimizers, state, step)
             if self.verbose:
                 print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
@@ -241,8 +260,9 @@ class MCMCStrategy(Strategy):
             and step > self.refine_start_iter
             and step % self.refine_every == 0
         ):
-            # add new GSs
-            n_new_gs = self._add_new_gs(params, optimizers, state)
+            # add new splats
+            # TODO: if after warmup_steps_1, split instead of creating overlapping splats?
+            n_new_gs = self._add_new_gs(params, optimizers, state, step)
             if self.verbose:
                 print(
                     f"Step {step}: Added {n_new_gs} GSs. "
@@ -258,7 +278,8 @@ class MCMCStrategy(Strategy):
         scalar = lr * self.noise_lr #* min(step/max(self.refine_start_iter,1), 1)
         inject_noise_to_position(
             params=params, optimizers=optimizers, state={}, scaler=scalar,
-            min_opacity=self.min_opacity
+            min_opacity=self.min_opacity,
+            opacities=self.map_opacities(step, params["opacities"].flatten())
         )
 
     @torch.no_grad()
@@ -269,7 +290,7 @@ class MCMCStrategy(Strategy):
         state: Dict[str, Any],
         step: int
     ) -> int:
-        opacities = torch.sigmoid(params["opacities"].flatten())
+        opacities = self.map_opacities(step, params["opacities"].flatten())
         relocate_mask = ~(torch.isfinite(opacities))
 
         # relocate huge splats
@@ -289,8 +310,8 @@ class MCMCStrategy(Strategy):
                 optimizers=optimizers,
                 state=state,
                 mask=relocate_mask,
-                is_3dgs=self.is_3dgs,
-                probs=self._get_probs(state, params),
+                is_3dgs=True,
+                probs=self._get_probs(state, params, step),
                 min_opacity=self.min_opacity,
             )
         return n_gs
@@ -301,17 +322,60 @@ class MCMCStrategy(Strategy):
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
         state: Dict[str, Any],
+        step: int
     ) -> int:
         current_n_points = len(params["means"])
         n_target = min(self.cap_max, int(self.grow_factor * current_n_points))
         n_gs = max(0, n_target - current_n_points)
-        if n_gs > 0:
+        if not (n_gs > 0):
+            return 0
+        
+        # TODO: split triangle into two
+        if step > self.warmup_steps_1 and False:
+            probs = self.map_opacities(step, params["opacities"].flatten())
+            samples = _multinomial_sample(probs, n_gs, replacement=False)
+            is_split = torch.zeros(len(probs), device=probs.device, dtype=torch.bool)
+            is_split[samples] = True
+            split(
+                params=params,
+                optimizers=optimizers,
+                state=state,
+                mask=is_split,
+                std_scale=self.kernel_radius/3.0,
+                revised_opacity=False,
+            )
+        else:
             sample_add(
                 params=params,
                 optimizers=optimizers,
                 state=state,
                 n=n_gs,
-                probs=self._get_probs(state, params),
+                probs=self._get_probs(state, params, step),
                 min_opacity=self.min_opacity,
             )
         return n_gs
+
+    @torch.no_grad()
+    def _prune_gs(
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+        state: Dict[str, Any],
+        step: int
+    ) -> int:
+        opacity_floor = self.get_opacity_floor(step)
+        opacities = self.map_opacities(step, params["opacities"].flatten())
+
+        if True:
+            # TODO: make it work if opacity floor grows faster than prune opacity
+            a = (step - self.warmup_steps_0) / (self.warmup_steps_1 - self.warmup_steps_0)
+            is_prune = opacities < self.prune_opacity * max(min(a, 1.0), 0.0)
+        else:
+            a = min(opacity_floor + self.min_opacity, self.get_opacity_floor(self.warmup_steps_1))
+            is_prune = opacities < a
+
+        n_prune = is_prune.sum().item()
+        if n_prune > 0:
+            remove(params=params, optimizers=optimizers, state=state, mask=is_prune)
+
+        return n_prune

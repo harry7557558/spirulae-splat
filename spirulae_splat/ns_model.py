@@ -39,7 +39,7 @@ from spirulae_splat.splat import (
 from spirulae_splat.splat.utils import resize_image, _TORCH_COMPILE_ARGS
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
-from spirulae_splat.strategy import DefaultStrategy, MCMCStrategy
+from spirulae_splat.strategy import DefaultStrategy, MCMCStrategy, OpaqueStrategy
 from spirulae_splat.splat._camera import _Camera
 
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
@@ -195,6 +195,8 @@ class SpirulaeModelConfig(ModelConfig):
     """MCMC sampling noise learning rate"""
     mcmc_min_opacity: float = 0.005
     """minimum opacity for MCMC relocation"""
+    mcmc_growth_factor: float = 1.05
+    """multiply number of splats by this number at every refinement"""
     mcmc_prob_grad_weight: float = 0.0
     """weight of position gradient used in sampling Gaussians to relocate/add to, uses only opacity if 0 and only gradient of 1"""
     relocate_screen_size: float = float('inf')
@@ -435,26 +437,53 @@ class SpirulaeModel(Model):
     def _set_strategy(self):
         # Strategy for GS densification
 
+        # opaque triangle mode
+        if self.config.primitive == "opaque_triangle":
+            current_num = len(self.means)
+            final_num = self.config.mcmc_cap_max
+
+            min_warmup_steps = self.config.refine_every * self.config.reset_alpha_every
+            num_steps_until_full = math.log(max(final_num, current_num) / current_num) / math.log(self.config.mcmc_growth_factor) * \
+                self.config.refine_every + (self.config.warmup_length + self.config.refine_every)
+            warmup_steps_0 = min(max(min_warmup_steps, 1.5*num_steps_until_full), self.config.num_iterations/3)
+            warmup_steps_1 = min(max(1.5*warmup_steps_0, warmup_steps_0+min_warmup_steps), self.config.num_iterations/2)
+
+            self.strategy = OpaqueStrategy(
+                cap_max=self.config.mcmc_cap_max,
+                noise_lr=self.config.mcmc_noise_lr,# * (self.config.kernel_radius/3.0),
+                refine_start_iter=self.config.mcmc_warmup_length,
+                warmup_steps_0=warmup_steps_0,
+                warmup_steps_1=warmup_steps_1,
+                refine_stop_iter=self.config.num_iterations,
+                refine_every=self.config.refine_every,
+                grow_factor=self.config.mcmc_growth_factor,
+                min_opacity=self.config.mcmc_min_opacity,
+                prob_grad_weight=self.config.mcmc_prob_grad_weight,
+                kernel_radius=self.config.kernel_radius,
+                relocate_scale2d=self.config.relocate_screen_size,
+                max_scale2d=self.config.mcmc_max_screen_size,
+                max_scale3d=self.config.mcmc_max_world_size,
+            )
+            self.strategy_state = self.strategy.initialize_state()
+            return
+
         # MCMC mode
         if self.config.use_mcmc:
             current_num = len(self.means)
             final_num = self.config.mcmc_cap_max
-            grow_factor = 1.05
-            warpup_steps = math.log(max(final_num, current_num) / current_num) / math.log(grow_factor) * \
+            warpup_steps = math.log(max(final_num, current_num) / current_num) / math.log(self.config.mcmc_growth_factor) * \
                 self.config.refine_every + (self.config.warmup_length + self.config.refine_every)
             self.mcmc_num_steps_until_full = warpup_steps
 
             self.strategy = MCMCStrategy(
                 cap_max=self.config.mcmc_cap_max,
-                noise_lr=self.config.mcmc_noise_lr,# * (self.config.kernel_radius/3.0),
+                noise_lr=self.config.mcmc_noise_lr,
                 refine_start_iter=self.config.mcmc_warmup_length,
                 refine_stop_iter=self.config.stop_refine_at,
                 refine_every=self.config.refine_every,
-                grow_factor=grow_factor,
+                grow_factor=self.config.mcmc_growth_factor,
                 min_opacity=self.config.mcmc_min_opacity,
                 prob_grad_weight=self.config.mcmc_prob_grad_weight,
-                # use_scale_for_probs=(self.config.primitive == "opaque_triangle"),
-                use_scale_for_probs=False,
                 is_3dgs=self.config.use_3dgs,
                 relocate_scale2d=self.config.relocate_screen_size,
                 max_scale2d=self.config.mcmc_max_screen_size,
@@ -770,30 +799,9 @@ class SpirulaeModel(Model):
 
         # hardness = min(max(self.step / self.config.stop_refine_at, 0.1), 1.0)
         if self.config.primitive == "opaque_triangle":
-            # TODO: refactor this out
-            warmup_steps_0 = min(self.mcmc_num_steps_until_full, self.config.num_iterations/3)
-            warmup_steps_1 = min(1.5*self.mcmc_num_steps_until_full, self.config.num_iterations/2)
-            new_opacity_floor = 0.2
-            hardness = max(min(
-                (self.step-warmup_steps_0) / (self.config.num_iterations-warmup_steps_0),
-                0.999), 0.0)
-            opacity_floor = max(min(
-                (self.step-warmup_steps_0) / (warmup_steps_1-warmup_steps_0),
-                1.0), 0.0)
-            if self.step >= warmup_steps_0:
-                opacity_floor = opacity_floor * (1.0-new_opacity_floor) + new_opacity_floor
-            # print(warmup_steps_0, warmup_steps_1, opacity_floor)
-            if self.config.use_mcmc:
-                # TODO: this seems to prune a lot, and MCMC continues growing afterwards
-                # TODO: actually add and prune at every step?
-                self.strategy.opacity_refloor = (
-                    self.config.refine_every * int(math.ceil(warmup_steps_0 / self.config.refine_every)),
-                    new_opacity_floor
-                )
-                self.strategy.refine_stop_iter = warmup_steps_1
-                self.strategy.noise_lr = self.config.mcmc_noise_lr * max(1.0-5.0*opacity_floor, 0.0)
-                if opacity_floor != 0.0:
-                    self.strategy.use_scale_for_probs = True
+            opacity_floor = self.strategy.get_opacity_floor(self.step)
+            hardness = self.strategy.get_hardness(self.step)
+            print(opacity_floor, hardness)
 
         rgbd, alpha, meta = rasterization(
             self.config.primitive,
@@ -804,7 +812,7 @@ class SpirulaeModel(Model):
             #  hardness * torch.ones_like(self.opacities.squeeze(-1))
             #  hardness + (1.0-hardness) * torch.sigmoid(self.opacities.squeeze(-1))
             torch.concat([
-                opacity_floor + (1.0-opacity_floor)*torch.sigmoid(self.opacities),
+                self.strategy.map_opacities(self.step, self.opacities),
                 hardness * torch.ones_like(self.opacities)
             ], dim=-1)
              ),

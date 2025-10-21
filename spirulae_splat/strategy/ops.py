@@ -277,6 +277,7 @@ def relocate(
         mask: A boolean mask to indicates which Gaussians are dead.
     """
     # support "opacities" with shape [N,] or [N, 1]
+    # TODO: get this right for opaque triangle splatting
     opacities = torch.sigmoid(params["opacities"])
 
     dead_indices = mask.nonzero(as_tuple=True)[0]
@@ -327,6 +328,7 @@ def sample_add(
     probs: Optional[Tensor]=None,
     min_opacity: float = 0.005,
 ):
+    # TODO: get this right for opaque triangle splatting
     opacities = torch.sigmoid(params["opacities"])
 
     eps = torch.finfo(torch.float32).eps
@@ -369,9 +371,11 @@ def inject_noise_to_position(
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
     scaler: float,
-    min_opacity: float
+    min_opacity: float,
+    opacities: Optional[Tensor] = None
 ):
-    opacities = torch.sigmoid(params["opacities"].flatten())
+    if opacities is None:
+        opacities = torch.sigmoid(params["opacities"].flatten())
     scales = torch.exp(params["scales"])
     if scales.shape[-1] == 2:
         scales = torch.concat((scales, 0.5*torch.fmin(scales[:,0:1], scales[:,1:2])), axis=1)

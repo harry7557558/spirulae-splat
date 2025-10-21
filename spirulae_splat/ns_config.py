@@ -45,15 +45,17 @@ _DEFAULT_OPTIMIZERS = {
     },
     "scales": {
         "optimizer": AdamOptimizerConfig(lr=0.005, eps=1e-15),
-        "scheduler": ExponentialDecaySchedulerConfig(
-            lr_final=0.001, max_steps=30000,
-        ),
+        # "scheduler": ExponentialDecaySchedulerConfig(
+        #     lr_final=0.001, max_steps=30000,
+        # ),
+        "scheduler": None,
     },
     "quats": {
         "optimizer": AdamOptimizerConfig(lr=0.0005, eps=1e-15),
-        "scheduler": ExponentialDecaySchedulerConfig(
-            lr_final=0.0001, max_steps=30000
-        ),
+        # "scheduler": ExponentialDecaySchedulerConfig(
+        #     lr_final=0.0001, max_steps=30000
+        # ),
+        "scheduler": None,
     },
     "features_dc": {
         "optimizer": AdamOptimizerConfig(lr=0.0025, eps=1e-15),
@@ -159,10 +161,11 @@ spirulae_triangle = MethodSpecification(
                 primitive="opaque_triangle",
                 kernel_radius=1.0,
                 compute_depth_normal=True,
-                sh_degree=1,  # TODO: debug sh_degree=0
+                # sh_degree=1,  # TODO: debug sh_degree=0
                 background_color="black",
                 train_background_color=False,
                 # alpha_reg_weight=0.0,
+                mcmc_scale_reg=0.04,
             ),
             
         ),
