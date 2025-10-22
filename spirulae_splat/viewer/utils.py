@@ -4,6 +4,8 @@ import numpy as np
 
 from typing import Literal
 
+from spirulae_splat.splat._torch_impl import quat_to_rotmat
+
 
 def generate_right_angle_rotation_matrices() -> np.ndarray:
     """List all "right angle" rotation matrices"""
@@ -89,3 +91,70 @@ def rotate_sh_coeffs(coeffs: torch.Tensor, R: torch.Tensor,
         print(abs(f_vals - f_vals_rot).max().item())
 
     return coeffs_rot
+
+
+def quat_to_rotmat(quat: torch.Tensor) -> torch.Tensor:
+    assert quat.shape[-1] == 4, quat.shape
+    w, x, y, z = torch.unbind(quat, dim=-1)
+    mat = torch.stack(
+        [
+            1 - 2 * (y**2 + z**2),
+            2 * (x * y - w * z),
+            2 * (x * z + w * y),
+            2 * (x * y + w * z),
+            1 - 2 * (x**2 + z**2),
+            2 * (y * z - w * x),
+            2 * (x * z - w * y),
+            2 * (y * z + w * x),
+            1 - 2 * (x**2 + y**2),
+        ],
+        dim=-1,
+    )
+    return mat.reshape(quat.shape[:-1] + (3, 3))
+
+def rotmat_to_quat(R: torch.tensor):
+    tr = R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2]
+    qw = 0.5 * torch.sqrt(torch.clamp(tr + 1.0, min=0.0))
+    qx = torch.where(
+        qw > 1e-8,
+        (R[..., 2, 1] - R[..., 1, 2]) / (4 * qw),
+        torch.sqrt(torch.clamp(1 + R[..., 0, 0] - R[..., 1, 1] - R[..., 2, 2], min=0.0)) / 2,
+    )
+    qy = torch.where(
+        qw > 1e-8,
+        (R[..., 0, 2] - R[..., 2, 0]) / (4 * qw),
+        (R[..., 0, 1] + R[..., 1, 0]) / (4 * qx + 1e-12),
+    )
+    qz = torch.where(
+        qw > 1e-8,
+        (R[..., 1, 0] - R[..., 0, 1]) / (4 * qw),
+        (R[..., 0, 2] + R[..., 2, 0]) / (4 * qx + 1e-12),
+    )
+
+    quats = torch.stack([qw, qx, qy, qz], dim=-1)
+    return F.normalize(quats, dim=-1)
+
+
+def quat_scale_to_triangle_verts(quats, scales, means=None):
+    quats = quats / torch.norm(quats, dim=-1, keepdim=True)
+    M = quat_to_rotmat(quats)
+    
+    sx = torch.exp(scales[..., 0])
+    sy = torch.exp(scales[..., 1])
+    sz = scales[..., 2] - 0.5*(scales[..., 0]+scales[..., 1])
+    zero = torch.zeros_like(sx)
+    verts = torch.stack([
+        sx, zero, zero,
+        sx*(-0.5+sz), sy, zero,
+        sx*(-0.5-sz), -sy, zero
+    ], dim=-1).reshape(scales.shape[:-1] + (3, 3))
+
+    verts = torch.bmm(verts, M.transpose(-1, -2))
+    if means is not None:
+        verts = verts + means[..., None, :]
+    return verts
+
+
+def triangle_verts_to_quat_scale(verts: torch.Tensor):
+    raise NotImplementedError("TODO")
+

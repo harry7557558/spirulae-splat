@@ -45,6 +45,7 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
     }
 
     // transform mean+scale+quat to vertices
+  #if 0
     float3x3 M;
     quat_scale_to_sqrt_covar(quat, exp(scale), M);
     // float3 vert0 = mul(M, float3(1, 0, 0)) + mean;
@@ -53,6 +54,15 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
     float3 vert0 = mul(float3(1, 0, 0), M) + mean;
     float3 vert1 = mul(float3(-0.5f, sqrt(0.75f), 0), M) + mean;
     float3 vert2 = mul(float3(-0.5f, -sqrt(0.75f), 0), M) + mean;
+  #else
+    float sx = exp(scale.x),
+        sy = exp(scale.y),
+        sz = scale.z - 0.5*(scale.x+scale.y);
+    float3x3 M = quat_to_rotmat(quat);
+    float3 vert0 = mul(M, float3(sx, 0, 0)) + mean;
+    float3 vert1 = mul(M, float3(sx*(-0.5+sz), sy, 0)) + mean;
+    float3 vert2 = mul(M, float3(sx*(-0.5-sz), -sy, 0)) + mean;
+  #endif
 
     // transform center to camera space
     float3 vert0_c, vert1_c, vert2_c;

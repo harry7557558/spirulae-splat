@@ -9,6 +9,13 @@ from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import spherical_harmonics
 from spirulae_splat.splat._torch_impl import quat_mult
 
+from spirulae_splat.viewer.utils import (
+    quat_to_rotmat,
+    rotmat_to_quat,
+    quat_scale_to_triangle_verts,
+    triangle_verts_to_quat_scale,
+)
+
 from spirulae_splat.viewer.camera import Camera
 
 from spirulae_splat.perf_timer import PerfTimer
@@ -22,6 +29,8 @@ class SplatModel:
         self.bgr = True
         self.flip_yz = False
         self.return_torch = False
+        
+        self.primitive = "3dgs"  # type: Literal["3dgs", "mip", "opaque_triangle"]
 
         self.dataparser_transform = np.eye(4)
         self.dataparser_scale = 1.0
@@ -38,7 +47,10 @@ class SplatModel:
         else:
             raise ValueError("Must be .ckpt or config.yml")
 
-    def load_ckpt(self, file_path):
+    def load_ckpt(self, file_path, _from_load_config=False):
+        if not _from_load_config:
+            print("WARNING: ckpt file does not contain information about scene type. Assuming vanilla 3DGS. "
+                "Use config.yml file instead of .ckpt file for more information.")
         checkpoint = torch.load(file_path, 'cpu', weights_only=False)
         pipeline = checkpoint['pipeline']
 
@@ -66,8 +78,15 @@ class SplatModel:
         for f in os.listdir(ckpt_dir):
             if f.endswith('.ckpt'):
                 f = os.path.join(ckpt_dir, f)
-                self.load_ckpt(f)
+                self.load_ckpt(f, _from_load_config=True)
                 break
+
+        content = open(file_path).read()
+        if "primitive: mip" in content:
+            self.primitive = "mip"
+        elif "primitive: opaque_triangle" in content:
+            self.primitive = "opaque_triangle"
+        print("Primitive:", self.primitive)
 
         # load dataparser transforms
         dtr_path = os.path.join(save_dir, 'dataparser_transforms.json')
@@ -92,9 +111,7 @@ class SplatModel:
 
         self.gauss_params["scales"] = (self.scales + np.log(sc))
 
-        rot = rot.cpu().numpy()
-        dq = Rotation.from_matrix(rot).as_quat()
-        dq = torch.from_numpy(dq[[3,0,1,2]]).to(self.quats)
+        dq = rotmat_to_quat(rot)
         self.gauss_params["quats"] = quat_mult(dq, self.quats)
 
         self.gauss_params["features_sh"] = rotate_sh_coeffs(self.features_sh, rot, "gsplat")
@@ -216,17 +233,14 @@ class SplatModel:
                     kwargs["tangential_coeffs"] = dist_coeffs[2:][None]
 
             rgbd, alpha, meta = rasterization(
-                "opaque_triangle",
-                # "3dgs",
+                self.primitive,
                 (
                     self.means,
-                    # self.means.unsqueeze(-2).repeat(1, 3, 1) + 3.0*torch.exp(self.scales.mean(-1, True).unsqueeze(-1)) * torch.tensor([[[1,0,0],[0,1,0],[0,0,1]]]).to(self.means),
                     F.normalize(self.quats, dim=-1),
                     self.scales,
-                    # self.scales+np.log(3),
-                    # self.opacities.squeeze(-1),
-                    torch.stack([torch.sigmoid(self.opacities.squeeze(-1)),
-                        0.9*torch.ones_like(self.opacities).squeeze(-1)], dim=-1)
+                    torch.stack([torch.ones_like(self.opacities.squeeze(-1)),
+                        torch.ones_like(self.opacities).squeeze(-1)], dim=-1)
+                        if self.primitive == "opaque_triangle" else self.opacities
                 ),
                 colors_dc=self.features_dc,
                 colors_sh=self.features_sh,

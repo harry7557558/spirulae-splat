@@ -219,7 +219,7 @@ class GSMeshExporter:
     train_data: Path
     """Path to the training dataset."""
 
-    output_dir: Path = Path("./mesh_exports/")
+    output_dir: Optional[Path] = None
     """Path to the output directory."""
 
     max_image_size: int = 1440
@@ -233,6 +233,11 @@ class GSMeshExporter:
         if depths.numel() == 0:
             return 0.0
         return torch.quantile(depths, self.depth_trunc_percentile).item()
+
+    def get_output_dir(self):
+        if self.output_dir is not None:
+            return self.output_dir
+        return self.load_config.parent
 
 
 @dataclass
@@ -262,8 +267,8 @@ class DepthAndNormalMapsPoisson(GSMeshExporter):
 
     @torch.no_grad()
     def main(self):
-        if not self.output_dir.exists():
-            self.output_dir.mkdir(parents=True)
+        if not self.get_output_dir().exists():
+            self.get_output_dir().mkdir(parents=True)
 
         model = SplatModel(str(self.load_config))
         model.convert_to_input_frame()
@@ -300,7 +305,7 @@ class DepthAndNormalMapsPoisson(GSMeshExporter):
             c2w = c2w @ np.diag([1, -1, -1, 1])
 
             rgb, depth_map = model.render(camera, c2w, return_depth=True)
-            depth_map = depth_inv_map(depth_map)
+            # depth_map = depth_inv_map(depth_map)
 
             H, W = camera.h, camera.w
             c2w = torch.from_numpy(c2w).float().cuda()
@@ -374,7 +379,7 @@ class DepthAndNormalMapsPoisson(GSMeshExporter):
 
         CONSOLE.print("Writing point cloud...")
         o3d.io.write_point_cloud(
-            str(self.output_dir / "DepthAndNormalMapsPoisson_pcd.ply"), pcd
+            str(self.get_output_dir() / "DepthAndNormalMapsPoisson_pcd.ply"), pcd
         )
         CONSOLE.print("Computing Mesh... this may take a while.")
         mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
@@ -385,10 +390,10 @@ class DepthAndNormalMapsPoisson(GSMeshExporter):
         CONSOLE.print("[bold green]:white_check_mark: Computing Mesh")
 
         CONSOLE.print(
-            f"Saving Mesh to {str(self.output_dir / 'DepthAndNormalMapsPoisson_poisson_mesh.ply')}"
+            f"Saving Mesh to {str(self.get_output_dir() / 'DepthAndNormalMapsPoisson_poisson_mesh.ply')}"
         )
         o3d.io.write_triangle_mesh(
-            str(self.output_dir / "DepthAndNormalMapsPoisson_poisson_mesh.ply"),
+            str(self.get_output_dir() / "DepthAndNormalMapsPoisson_poisson_mesh.ply"),
             mesh,
         )
 
@@ -412,8 +417,8 @@ class TSDFFusion(GSMeshExporter):
     def main(self):
         import vdbfusion
 
-        if not self.output_dir.exists():
-            self.output_dir.mkdir(parents=True)
+        if not self.get_output_dir().exists():
+            self.get_output_dir().mkdir(parents=True)
 
         model = SplatModel(str(self.load_config))
         model.convert_to_input_frame()
@@ -440,7 +445,7 @@ class TSDFFusion(GSMeshExporter):
             c2w = c2w @ np.diag([1, -1, -1, 1])
 
             rgb, depth_map = model.render(camera, c2w, return_depth=True)
-            depth_map = depth_inv_map(depth_map)
+            # depth_map = depth_inv_map(depth_map)
 
             H, W = camera.h, camera.w
             c2w = torch.from_numpy(c2w).float().cuda()
@@ -480,11 +485,11 @@ class TSDFFusion(GSMeshExporter):
             mesh = mesh.simplify_quadric_decimation(self.target_triangles)
 
         o3d.io.write_triangle_mesh(
-            str(self.output_dir / "TSDFfusion_mesh.ply"),
+            str(self.get_output_dir() / "TSDFfusion_mesh.ply"),
             mesh,
         )
         CONSOLE.print(
-            f"Finished computing mesh: {str(self.output_dir / 'TSDFfusion.ply')}"
+            f"Finished computing mesh: {str(self.get_output_dir() / 'TSDFfusion.ply')}"
         )
 
 
@@ -539,7 +544,14 @@ class Open3DTSDFFusion(GSMeshExporter):
             c2w = c2w @ np.diag([1, -1, -1, 1])
 
             rgb_map, depth_map = model.render(camera, c2w, return_depth=True)
-            depth_map = depth_inv_map(depth_map)
+            # depth_map = depth_inv_map(depth_map)
+
+            # print(rgb_map.shape, depth_map.shape)
+            # import matplotlib.pyplot as plt
+            # fig, (ax1, ax2) = plt.subplots(1, 2)
+            # ax1.imshow(rgb_map.cpu().numpy())
+            # ax2.imshow(depth_map.cpu().numpy())
+            # plt.show()
 
             H, W = camera.h, camera.w
             c2w = torch.from_numpy(c2w).float().cuda()
@@ -600,14 +612,14 @@ class Open3DTSDFFusion(GSMeshExporter):
         mesh_0.remove_unreferenced_vertices()
         mesh_0.remove_degenerate_triangles()
 
-        if not self.output_dir.exists():
-            self.output_dir.mkdir(parents=True)
+        if not self.get_output_dir().exists():
+            self.get_output_dir().mkdir(parents=True)
         o3d.io.write_triangle_mesh(
-            str(self.output_dir / "Open3dTSDFfusion_mesh.ply"),
+            str(self.get_output_dir() / "Open3dTSDFfusion_mesh.ply"),
             mesh,
         )
         CONSOLE.print(
-            f"Finished computing mesh: {str(self.output_dir / 'Open3dTSDFfusion.ply')}"
+            f"Finished computing mesh: {str(self.get_output_dir() / 'Open3dTSDFfusion.ply')}"
         )
 
 

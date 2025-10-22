@@ -10,7 +10,7 @@ from spirulae_splat.viewer.camera import Camera
 
 from scipy.spatial.transform import Rotation
 
-from spirulae_splat.splat._torch_impl import quat_to_rotmat
+from spirulae_splat.viewer.utils import quat_scale_to_triangle_verts
 
 def write_ply(
     filename: str,
@@ -49,15 +49,11 @@ def export_ply(model: SplatModel, output_path: str) -> None:
 
     map_to_tensors = OrderedDict()
 
-    quats = model.quats / torch.norm(model.quats, dim=-1, keepdim=True)
-    M = quat_to_rotmat(quats) * torch.exp(model.scales)[:, None, :]
-    M = M.transpose(-1, -2)
-    vert0 = model.means + M[:, :, 0]
-    vert1 = model.means - 0.5*M[:, :, 0] + (0.75**0.5)*M[:, :, 1]
-    vert2 = model.means - 0.5*M[:, :, 0] - (0.75**0.5)*M[:, :, 1]
-    positions = torch.stack([vert0, vert1, vert2], dim=-2).detach().cpu().numpy()
+    positions = quat_scale_to_triangle_verts(model.quats, model.scales, model.means)
+    vert0, vert1, vert2 = torch.unbind(positions, dim=-2)
     normals = torch.cross(vert1-vert0, vert2-vert0, dim=-1)
     normals = normals / torch.norm(normals, dim=-1, keepdim=True).clip(min=1e-12)
+    positions = positions.detach().cpu().numpy()
     normals = normals.detach().cpu().numpy()
 
     # position
@@ -90,7 +86,8 @@ def export_ply(model: SplatModel, output_path: str) -> None:
     nan_count = n - np.sum(select)
 
     print(f"NaN/Inf: {nan_count}; Export: {np.sum(select)}/{n}")
-    if np.sum(select) < n:
+    count = np.sum(select)
+    if count < n:
         for k, t in map_to_tensors.items():
             map_to_tensors[k] = map_to_tensors[k].reshape(-1, 3)[select].flatten()
         count = np.sum(select)
@@ -117,8 +114,8 @@ if __name__ == "__main__":
     print("Loading model...")
     model = SplatModel(work_dir)
 
-    # print("Orienting model...")
-    # model.convert_to_input_frame("ply")
+    print("Orienting model...")
+    model.convert_to_input_frame("ply")
 
     if args.dataset_dir is not None and os.path.exists(os.path.join(args.dataset_dir, 'markers.yaml')):
         print()
