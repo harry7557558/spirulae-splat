@@ -8,6 +8,12 @@ from torch import Tensor
 from spirulae_splat.splat._torch_impl import quat_to_rotmat, quat_scale_to_covar_preci
 from gsplat.relocation import compute_relocation
 
+from spirulae_splat.viewer.utils import (
+    quat_scale_to_triangle_verts,
+    split_triangles,
+    triangle_verts_to_quat_scale_mean
+)
+
 import math
 
 N_BINOMS = 51
@@ -276,8 +282,6 @@ def relocate(
         optimizers: A dictionary of optimizers, each corresponding to a parameter.
         mask: A boolean mask to indicates which Gaussians are dead.
     """
-    # support "opacities" with shape [N,] or [N, 1]
-    # TODO: get this right for opaque triangle splatting
     opacities = torch.sigmoid(params["opacities"])
 
     dead_indices = mask.nonzero(as_tuple=True)[0]
@@ -316,6 +320,70 @@ def relocate(
     # update the extra running state
     for k, v in state.items():
         if isinstance(v, torch.Tensor):
+            v[sampled_idxs] = 0
+
+
+@torch.no_grad()
+def relocate_opaque_triangles(
+    params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+    optimizers: Dict[str, torch.optim.Optimizer],
+    state: Dict[str, Tensor],
+    mask: Tensor,
+    probs: Tensor
+):
+    """Inplace relocate some dead triangles to the lives ones.
+
+    Args:
+        params: A dictionary of parameters.
+        optimizers: A dictionary of optimizers, each corresponding to a parameter.
+        mask: A boolean mask to indicates which triangles are dead.
+    """
+
+    dead_indices = mask.nonzero(as_tuple=True)[0]
+    alive_indices = (~mask).nonzero(as_tuple=True)[0]
+    n = len(dead_indices)
+
+    # Sample for new triangles
+    probs = probs[alive_indices].flatten()  # ensure its shape is [N,]
+    sampled_idxs = _multinomial_sample(probs, n, replacement=True)
+    sampled_idxs = alive_indices[sampled_idxs]
+
+    triangles = quat_scale_to_triangle_verts(
+        params["quats"][sampled_idxs],
+        params["scales"][sampled_idxs],
+        params["means"][sampled_idxs]
+    )
+    # TODO: better way to handle triangles sampled >2 times?
+    # TODO: doesn't look nice, possibly bug?
+    split_1, split_2 = split_triangles(triangles)
+    quats1, scales1, means1 = triangle_verts_to_quat_scale_mean(split_1)
+    quats2, scales2, means2 = triangle_verts_to_quat_scale_mean(split_2)
+
+    def param_fn(name: str, p: Tensor) -> Tensor:
+        if name == "quats":
+            p[dead_indices] = quats1
+            p[sampled_idxs] = quats2
+        elif name == "scales":
+            p[dead_indices] = scales1
+            p[sampled_idxs] = scales2
+        elif name == "means":
+            p[dead_indices] = means1
+            p[sampled_idxs] = means2
+        else:
+            p[dead_indices] = p[sampled_idxs]
+        return torch.nn.Parameter(p, requires_grad=p.requires_grad)
+
+    def optimizer_fn(key: str, v: Tensor) -> Tensor:
+        v[dead_indices] = 0
+        v[sampled_idxs] = 0
+        return v
+
+    # update the parameters and the state in the optimizers
+    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
+    # update the extra running state
+    for k, v in state.items():
+        if isinstance(v, torch.Tensor):
+            v[dead_indices] = 0
             v[sampled_idxs] = 0
 
 
@@ -360,6 +428,58 @@ def sample_add(
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
     for k, v in state.items():
+        v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
+        if isinstance(v, torch.Tensor):
+            state[k] = torch.cat((v, v_new))
+
+
+@torch.no_grad()
+def sample_add_opaque_triangles(
+    params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+    optimizers: Dict[str, torch.optim.Optimizer],
+    state: Dict[str, Tensor],
+    n: int,
+    probs: Tensor
+):
+    eps = torch.finfo(torch.float32).eps
+    probs = probs.flatten()
+    sampled_idxs = _multinomial_sample(probs, n, replacement=True)
+
+    triangles = quat_scale_to_triangle_verts(
+        params["quats"][sampled_idxs],
+        params["scales"][sampled_idxs],
+        params["means"][sampled_idxs]
+    )
+    # TODO: better way to handle triangles sampled >2 times?
+    # TODO: doesn't look nice, possibly bug?
+    split_1, split_2 = split_triangles(triangles)
+    quats1, scales1, means1 = triangle_verts_to_quat_scale_mean(split_1)
+    quats2, scales2, means2 = triangle_verts_to_quat_scale_mean(split_2)
+
+    def param_fn(name: str, p: Tensor) -> Tensor:
+        if name == "quats":
+            p[sampled_idxs] = quats1
+            p_new = torch.cat([p, quats2])
+        elif name == "scales":
+            p[sampled_idxs] = scales1
+            p_new = torch.cat([p, scales2])
+        elif name == "means":
+            p[sampled_idxs] = means1
+            p_new = torch.cat([p, means2])
+        else:
+            p_new = torch.cat([p, p[sampled_idxs]])
+        return torch.nn.Parameter(p_new, requires_grad=p.requires_grad)
+
+    def optimizer_fn(key: str, v: Tensor) -> Tensor:
+        v[sampled_idxs] = 0
+        v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
+        return torch.cat([v, v_new])
+
+    # update the parameters and the state in the optimizers
+    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
+    # update the extra running state
+    for k, v in state.items():
+        v[sampled_idxs] = 0
         v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
         if isinstance(v, torch.Tensor):
             state[k] = torch.cat((v, v_new))

@@ -13,7 +13,7 @@ from spirulae_splat.viewer.utils import (
     quat_to_rotmat,
     rotmat_to_quat,
     quat_scale_to_triangle_verts,
-    triangle_verts_to_quat_scale,
+    triangle_verts_to_quat_scale_mean,
 )
 
 from spirulae_splat.viewer.camera import Camera

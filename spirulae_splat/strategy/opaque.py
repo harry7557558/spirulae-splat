@@ -7,7 +7,10 @@ import torch
 from torch import Tensor
 
 from .base import Strategy
-from .ops import inject_noise_to_position, relocate, sample_add, remove, split, _multinomial_sample
+from .ops import (
+    inject_noise_to_position, relocate, sample_add, remove, split, _multinomial_sample,
+    relocate_opaque_triangles, sample_add_opaque_triangles
+)
 
 
 @dataclass
@@ -56,19 +59,16 @@ class OpaqueStrategy(Strategy):
     refine_every: int = 100
     grow_factor: float = 1.05
     min_opacity: float = 0.005
-    prune_opacity: float = 0.2
+    prune_opacity: float = 0.1
     relocate_scale2d: float = float('inf')
     max_scale2d: float = float('inf')
     max_scale3d: float = float('inf')
-    prob_grad_weight: float = 0.0
     kernel_radius: float = 1.0
     verbose: bool = False
     key_for_gradient: Literal["means2d", "gradient_2dgs"] = "means2d"
 
     def initialize_state(self) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy."""
-        if self.prob_grad_weight > 0.0:
-            return { "grad2d": None, "count": None, "radii": None }
         return { "radii": None }
 
     def get_opacity_floor(self, step):
@@ -106,11 +106,6 @@ class OpaqueStrategy(Strategy):
         # initialize state on the first run
         n_gaussian = len(list(params.values())[0])
 
-        if self.prob_grad_weight > 0.0:
-            if state["grad2d"] is None:
-                state["grad2d"] = torch.zeros(n_gaussian, device=grad_info.device)
-            if state["count"] is None:
-                state["count"] = torch.zeros(n_gaussian, device=grad_info.device)
         if state["radii"] is None:
             assert "radii" in info, "radii is required but missing."
             state["radii"] = torch.zeros(n_gaussian, device=grad_info.device).float()
@@ -150,43 +145,12 @@ class OpaqueStrategy(Strategy):
         if np.isfinite(self.max_scale3d):
             params['scales'].data.clip_(max=math.log(self.max_scale3d))
 
-        if not (self.prob_grad_weight > 0.0):
-            return
-
-        # normalize grads to [-1, 1] screen space
-        if not hasattr(grad_info, 'grad') or grad_info.grad is None:
-            print("Error: grad not found")
-            return
-        grads = grad_info.grad.clone()
-        if grads.shape[-1] == 3:  # world space, the 3DGUT case
-            sel = sel[..., :1] & (info["depths"] > 0.01).unsqueeze(-1)  # [C, N]
-            gs_ids = torch.where(sel)[1]  # [nnz]
-            grads = grads.norm(dim=-1, keepdim=True)
-            grads = grads * info["depths"].unsqueeze(-1)  # to screen space
-        else:
-            grads[..., 0] *= info["width"] / 2.0 * info["n_cameras"]
-            grads[..., 1] *= info["height"] / 2.0 * info["n_cameras"]
-        if len(grads.shape) == 2:
-            assert info["n_cameras"] == 1
-            grads = grads.unsqueeze(0)
-
-        # update the running state
-        if not packed:
-            grads = grads[sel]  # [nnz, 2]
-        if len(grads.shape) == 2:
-            grads = grads.norm(dim=-1)
-        state["grad2d"].index_add_(0, gs_ids, torch.relu(grads))
-        state["count"].index_add_(
-            0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)
-        )
-
     def _get_probs(self, state, params, step):
-        if not (self.prob_grad_weight > 0.0):
-            return None
-        opacs = self.map_opacities(step, params["opacities"])
-        grads = state["grad2d"] / state["count"].clamp_min(1)
-        grads = ((0.5+torch.sort(grads)[1]) / len(grads)).unsqueeze(-1)
-        return opacs * (1.0-self.prob_grad_weight) + grads * self.prob_grad_weight
+        opacs = self.map_opacities(step, params["opacities"].flatten())
+        # scales = torch.exp(params["scales"][..., :2].mean(-1))
+        scales = torch.nan_to_num(state["radii"], 0.0, 0.0, 0.0).clip(min=1e-5)
+        return opacs * scales
+        # return opacs * scales**0.5
 
     def check_sanity(
         self,
@@ -245,11 +209,6 @@ class OpaqueStrategy(Strategy):
             step >= self.refine_every
             and step % self.refine_every == 0
         ):
-            # prune splats
-            opacity_floor = self.get_opacity_floor(step)
-            if opacity_floor > 0.0 and opacity_floor < self.prune_opacity:
-                self._prune_gs(params, optimizers, state, step)
-
             # relocate splats
             n_relocated_gs = self._relocate_gs(params, optimizers, state, step)
             if self.verbose:
@@ -269,9 +228,6 @@ class OpaqueStrategy(Strategy):
                     f"Now having {len(params['means'])} GSs."
                 )
 
-            if self.prob_grad_weight > 0.0:
-                state["grad2d"] *= 0.0
-                state["count"] *= 0.0
             torch.cuda.empty_cache()
 
         # add noise to GSs
@@ -303,16 +259,21 @@ class OpaqueStrategy(Strategy):
         if step > self.refine_start_iter and step < self.refine_stop_iter:
             relocate_mask |= (opacities <= self.min_opacity)
 
+        # get rid of floaters to prepare for opacity increase
+        opacity_floor = self.get_opacity_floor(step)
+        if opacity_floor > 0.0 and opacity_floor < self.prune_opacity:
+            # TODO: make it work if opacity floor grows faster than prune opacity
+            a = (step - self.warmup_steps_0) / (self.warmup_steps_1 - self.warmup_steps_0)
+            relocate_mask |= (opacities < self.prune_opacity * max(min(a, 1.0), 0.0))
+
         n_gs = relocate_mask.sum().item()
         if n_gs > 0:
-            relocate(
+            relocate_opaque_triangles(
                 params=params,
                 optimizers=optimizers,
                 state=state,
                 mask=relocate_mask,
-                is_3dgs=True,
                 probs=self._get_probs(state, params, step),
-                min_opacity=self.min_opacity,
             )
         return n_gs
 
@@ -330,52 +291,11 @@ class OpaqueStrategy(Strategy):
         if not (n_gs > 0):
             return 0
         
-        # TODO: split triangle into two
-        if step > self.warmup_steps_1 and False:
-            probs = self.map_opacities(step, params["opacities"].flatten())
-            samples = _multinomial_sample(probs, n_gs, replacement=False)
-            is_split = torch.zeros(len(probs), device=probs.device, dtype=torch.bool)
-            is_split[samples] = True
-            split(
-                params=params,
-                optimizers=optimizers,
-                state=state,
-                mask=is_split,
-                std_scale=self.kernel_radius/3.0,
-                revised_opacity=False,
-            )
-        else:
-            sample_add(
-                params=params,
-                optimizers=optimizers,
-                state=state,
-                n=n_gs,
-                probs=self._get_probs(state, params, step),
-                min_opacity=self.min_opacity,
-            )
+        sample_add_opaque_triangles(
+            params=params,
+            optimizers=optimizers,
+            state=state,
+            n=n_gs,
+            probs=self._get_probs(state, params, step),
+        )
         return n_gs
-
-    @torch.no_grad()
-    def _prune_gs(
-        self,
-        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
-        state: Dict[str, Any],
-        step: int
-    ) -> int:
-        opacity_floor = self.get_opacity_floor(step)
-        opacities = self.map_opacities(step, params["opacities"].flatten())
-
-        if True:
-            # TODO: make it work if opacity floor grows faster than prune opacity
-            a = (step - self.warmup_steps_0) / (self.warmup_steps_1 - self.warmup_steps_0)
-            is_prune = opacities < self.prune_opacity * max(min(a, 1.0), 0.0)
-        else:
-            a = min(opacity_floor + self.min_opacity, self.get_opacity_floor(self.warmup_steps_1))
-            is_prune = opacities < a
-
-        n_prune = is_prune.sum().item()
-        if n_prune > 0:
-            remove(params=params, optimizers=optimizers, state=state, mask=is_prune)
-
-        return n_prune

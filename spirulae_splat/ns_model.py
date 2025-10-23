@@ -458,7 +458,6 @@ class SpirulaeModel(Model):
                 refine_every=self.config.refine_every,
                 grow_factor=self.config.mcmc_growth_factor,
                 min_opacity=self.config.mcmc_min_opacity,
-                prob_grad_weight=self.config.mcmc_prob_grad_weight,
                 kernel_radius=self.config.kernel_radius,
                 relocate_scale2d=self.config.relocate_screen_size,
                 max_scale2d=self.config.mcmc_max_screen_size,
@@ -804,7 +803,6 @@ class SpirulaeModel(Model):
         if self.config.primitive == "opaque_triangle":
             opacity_floor = self.strategy.get_opacity_floor(self.step)
             hardness = self.strategy.get_hardness(self.step)
-            print(opacity_floor, hardness)
 
         rgbd, alpha, meta = rasterization(
             self.config.primitive,
@@ -1008,8 +1006,10 @@ class SpirulaeModel(Model):
             return s
 
         mcmc_reg = (self.config.use_mcmc and self.step < self.config.stop_refine_at)
+        opacity_floor = f" {self.strategy.get_opacity_floor(self.step):.2f}".replace('0.', 'o.') \
+            if self.config.primitive == "opaque_triangle" else ""
         chunks = [
-            f"[N] {len(self.opacities)} {mem_stats}",
+            f"[N] {len(self.opacities)} {mem_stats}" + opacity_floor,
             f"[C] {fmt('image_loss', 1.0)} "
             f"{fmt('alpha_loss', self.config.alpha_loss_weight)} "
             f"{fmt('psnr', 1.0, 2)} "

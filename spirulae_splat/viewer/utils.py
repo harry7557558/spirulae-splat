@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from typing import Literal
+from typing import Literal, Tuple, Optional
 
 from spirulae_splat.splat._torch_impl import quat_to_rotmat
 
@@ -135,7 +135,11 @@ def rotmat_to_quat(R: torch.tensor):
     return F.normalize(quats, dim=-1)
 
 
-def quat_scale_to_triangle_verts(quats, scales, means=None):
+def quat_scale_to_triangle_verts(
+        quats: torch.Tensor,
+        scales: torch.Tensor,
+        means: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
     quats = quats / torch.norm(quats, dim=-1, keepdim=True)
     M = quat_to_rotmat(quats)
     
@@ -155,6 +159,116 @@ def quat_scale_to_triangle_verts(quats, scales, means=None):
     return verts
 
 
-def triangle_verts_to_quat_scale(verts: torch.Tensor):
-    raise NotImplementedError("TODO")
+def split_triangles(verts: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Split each triangle into two along its longest edge,
+    choosing the split point near the perpendicular projection of the opposite vertex
+    (to avoid needle-like triangles).
+    verts: (..., 3, 3)
+    Returns: (tri1, tri2) each (..., 3, 3)
+    """
+    a, b, c = verts[..., 0, :], verts[..., 1, :], verts[..., 2, :]
 
+    e01 = torch.norm(b - a, dim=-1)
+    e12 = torch.norm(c - b, dim=-1)
+    e20 = torch.norm(a - c, dim=-1)
+
+    edges = torch.stack([e01, e12, e20], dim=-1)
+    longest = torch.argmax(edges, dim=-1)
+
+    # Prepare containers
+    tri1 = verts.clone()
+    tri2 = verts.clone()
+
+    def split_edge(a, b, c):
+        ab = b - a
+        ab_len2 = (ab ** 2).sum(dim=-1, keepdim=True)
+        # projection factor t of c onto line ab
+        t = ((c - a) * ab).sum(dim=-1, keepdim=True) / (ab_len2 + 1e-9)
+        t = t.clamp(0.25, 0.75)
+        p = a + t * ab
+        return p
+
+    # edge (0,1), opposite c
+    mask = (longest == 0)[..., None, None]
+    p01 = split_edge(a, b, c)
+    tri1 = torch.where(mask, torch.stack([a, p01, c], dim=-2), tri1)
+    tri2 = torch.where(mask, torch.stack([b, p01, c], dim=-2), tri2)
+
+    # edge (1,2), opposite a
+    mask = (longest == 1)[..., None, None]
+    p12 = split_edge(b, c, a)
+    tri1 = torch.where(mask, torch.stack([b, p12, a], dim=-2), tri1)
+    tri2 = torch.where(mask, torch.stack([c, p12, a], dim=-2), tri2)
+
+    # edge (2,0), opposite b
+    mask = (longest == 2)[..., None, None]
+    p20 = split_edge(c, a, b)
+    tri1 = torch.where(mask, torch.stack([c, p20, b], dim=-2), tri1)
+    tri2 = torch.where(mask, torch.stack([a, p20, b], dim=-2), tri2)
+
+    return tri1, tri2
+
+
+def triangle_verts_to_quat_scale_mean(
+        verts: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Invert `quat_scale_to_triangle_verts`.
+    verts: (..., 3, 3)
+    Returns quats (..., 4), scales (..., 3), means (..., 3)
+    """
+    means = verts.mean(dim=-2)
+    centered = verts - means[..., None, :]
+
+    # Get rotation from normal and edge directions
+    e0 = centered[..., 1, :] - centered[..., 0, :]
+    e1 = centered[..., 2, :] - centered[..., 0, :]
+    n = torch.cross(e0, e1, dim=-1)
+    n = n / torch.norm(n, dim=-1, keepdim=True)
+
+    xdir = centered[..., 0, :] / torch.norm(centered[..., 0, :], dim=-1, keepdim=True)
+    zdir = n
+    ydir = torch.cross(zdir, xdir, dim=-1)
+    ydir = ydir / torch.norm(ydir, dim=-1, keepdim=True)
+    zdir = torch.cross(xdir, ydir, dim=-1)
+
+    M = torch.stack([xdir, ydir, zdir], dim=-1)  # (..., 3, 3)
+    quats = rotmat_to_quat(M)
+
+    # Transform verts into local frame
+    local = torch.matmul(centered, M)
+    v0, v1, v2 = local[..., 0, :], local[..., 1, :], local[..., 2, :]
+
+    sx = v0[..., 0]
+    sy = 0.5 * (v1[..., 1] - v2[..., 1])
+    sz = 0.5 * ((v1[..., 0] - v2[..., 0]) / (sx + 1e-9))
+    s0 = torch.log(sx)
+    s1 = torch.log(sy)
+    s2 = sz + 0.5 * (s0 + s1)
+    scales = torch.stack([s0, s1, s2], dim=-1)
+
+    return quats, scales, means
+
+
+if __name__ == "__main__":
+    torch.random.manual_seed(42)
+    N = 10
+    quats = torch.randn(N, 4)
+    scales = torch.randn(N, 3)
+    means = torch.randn(N, 3)
+
+    verts = quat_scale_to_triangle_verts(quats, scales, means)
+    quats1, scales1, means1 = triangle_verts_to_quat_scale_mean(verts)
+
+    quats = quats / torch.norm(quats, dim=-1, keepdim=True)
+    print((quats*quats1).sum(-1))
+    print(scales-scales1)
+    print(means-means1)
+
+    def print_trig(verts):
+        print([tuple(x) for x in verts.cpu().numpy().tolist()])
+    print_trig(verts[0])
+    verts1, verts2 = split_triangles(verts)
+    print_trig(verts1[0])
+    print_trig(verts2[0])

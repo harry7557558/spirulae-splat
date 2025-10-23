@@ -165,7 +165,8 @@ spirulae_triangle = MethodSpecification(
                 background_color="black",
                 train_background_color=False,
                 # alpha_reg_weight=0.0,
-                mcmc_scale_reg=0.04,
+                # mcmc_scale_reg=0.04,
+                # erank_reg=1.0,
             ),
             
         ),

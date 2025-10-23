@@ -7,20 +7,17 @@ from typing import Optional
 
 import os
 from tqdm import tqdm
+import json
 
 
 @dataclass
 class Config:
-    dataset_dir: str = "/media/harry/d/gs/data/360_v2/garden_4"
+    dataset_dir: str
     max_size: int = 99999999
 
 
-print("Loading model...")
-model = torch.hub.load('yvanyin/metric3d', 'metric3d_vit_large', pretrain=True)
-model = model.eval().cuda()
-print("Model loaded")
-
 def process_image(
+    model,
     image_path: str,
     depth_save_path: Optional[str]=None,
     normal_save_path: Optional[str]=None
@@ -58,9 +55,12 @@ def process_dir(dataset_dir: str):
     image_dir = os.path.join(dataset_dir, "images")
 
     image_filenames = []
-    for dirpath, dirnames, filenames in os.walk(image_dir):
-        for filename in filenames:
-            image_filenames.append(os.path.join(dirpath, filename).lstrip(dataset_dir).lstrip(os.path.sep))
+    with open(os.path.join(dataset_dir, "transforms.json")) as fp:
+        content = json.load(fp)
+    for frame in content['frames']:
+        file_path = frame['file_path'].lstrip('./')
+        assert file_path.startswith("images")
+        image_filenames.append(file_path[len("images")+1:])
     if len(image_filenames) == 0:
         print("No image found")
         return
@@ -75,18 +75,22 @@ def process_dir(dataset_dir: str):
         base_name, _ = os.path.splitext(file_path)
         return base_name + '.' + new_ext
 
+    print("Loading model...")
+    model = torch.hub.load('yvanyin/metric3d', 'metric3d_vit_large', pretrain=True)
+    model = model.eval().cuda()
+    print("Model loaded")
+
     for image_filename in tqdm(image_filenames, "Predicting depth/normal"):
         process_image(
+            model,
             os.path.join(image_dir, image_filename),
             os.path.join(depth_dir, ext(image_filename, 'png')),
             os.path.join(normal_dir, ext(image_filename, 'png'))
         )
 
 
-# process_image(
-#     "/media/harry/d/gs/data/360_v2/garden_4/images/DSC07956.JPG",
-#     depth_save_path="/media/harry/d/gs/data/360_v2/garden_4/depths/DSC07956.png",
-#     normal_save_path="/media/harry/d/gs/data/360_v2/garden_4/normals/DSC07956.png",
-# )
-
-process_dir(Config.dataset_dir)
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) < 2:
+        print("Usage: python3 predict_geometry.py path/to/dataset/dir")
+    process_dir(sys.argv[1])
