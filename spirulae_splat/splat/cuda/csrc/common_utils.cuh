@@ -402,6 +402,13 @@ struct TensorView {
     __device__ void store1(long i0, long i1, long i2, T v)
         { static_assert(ndim == 4); at(i0, i1, i2, 0) = v; }
 
+    __device__ void atomicStore1(long i, T v)
+        { static_assert(ndim == 2); if (v) atomicAdd(&at(i, 0), v); }
+    __device__ void atomicStore1(long i0, long i1, T v)
+        { static_assert(ndim == 3); if (v) atomicAdd(&at(i0, i1, 0), v); }
+    __device__ void atomicStore1(long i0, long i1, long i2, T v)
+        { static_assert(ndim == 4); if (v) atomicAdd(&at(i0, i1, i2, 0), v); }
+
     __device__ vec2_t load2(long i) const
         { static_assert(ndim == 2); return {at(i, 0), at(i, 1)}; }
     __device__ vec2_t load2(long i0, long i1) const

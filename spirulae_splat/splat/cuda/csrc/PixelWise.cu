@@ -6,6 +6,43 @@
 
 #include "common.cuh"
 
+
+CameraDistortionCoeffsBuffer::CameraDistortionCoeffsBuffer(
+    const CameraDistortionCoeffsTensor &tensors
+) {
+    radial_coeffs = nullptr;
+    tangential_coeffs = nullptr;
+    thin_prism_coeffs = nullptr;
+
+    std::optional<at::Tensor> radial_coeffs_tensor = std::get<0>(tensors);
+    if (radial_coeffs_tensor.has_value()) {
+        CHECK_INPUT(radial_coeffs_tensor.value());
+        if (radial_coeffs_tensor.value().size(-1) != 4)
+            AT_ERROR("radial_coeffs must be (..., 4)");
+        radial_coeffs = (float4*)radial_coeffs_tensor.value().data_ptr<float>();
+    }
+
+    std::optional<at::Tensor> tangential_coeffs_tensor = std::get<1>(tensors);
+    if (tangential_coeffs_tensor.has_value()) {
+        CHECK_INPUT(tangential_coeffs_tensor.value());
+        if (tangential_coeffs_tensor.value().size(-1) != 2)
+            AT_ERROR("tangential_coeffs must be (..., 2)");
+        tangential_coeffs = (float2*)tangential_coeffs_tensor.value().data_ptr<float>();
+    }
+    
+    std::optional<at::Tensor> thin_prism_coeffs_tensor = std::get<2>(tensors);
+    if (thin_prism_coeffs_tensor.has_value()) {
+        CHECK_INPUT(thin_prism_coeffs_tensor.value());
+        if (thin_prism_coeffs_tensor.value().size(-1) != 2)
+            AT_ERROR("tangential_coeffs must be (..., 2)");
+        thin_prism_coeffs = (float2*)thin_prism_coeffs_tensor.value().data_ptr<float>();
+    }
+}
+
+// ================
+// Blend Background
+// ================
+
 __global__ void blend_background_forward_kernel(
     const TensorView<float, 3> in_rgb,
     const TensorView<float, 3> in_alpha,
@@ -129,3 +166,183 @@ blend_background_backward_tensor(
     return std::make_tuple(v_rgb, v_alpha, v_background);
 }
 
+
+
+// ================
+// Depth to Normal
+// ================
+
+
+__global__ void depth_to_normal_forward_kernel(
+    gsplat::CameraModelType camera_model,
+    const float *__restrict__ Ks,  // [B, 3, 3]
+    const CameraDistortionCoeffsBuffer dist_coeffs,
+    const bool is_ray_depth,
+    const TensorView<float, 4> depths,  // [B, H, W, 1]
+    TensorView<float, 4> normals  // [B, H, W, 3]
+) {
+    const uint B = depths.shape[0],
+        H = depths.shape[1],
+        W = depths.shape[2];
+    uint32_t bid = blockIdx.z * blockDim.z + threadIdx.z;
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (bid >= B || i >= W || j >= H)
+        return;
+
+    // Zero for border pixels (consistent with Python)
+    // TODO: possibly do a finite difference?
+    if (i == 0 || i == W-1 || j == 0 || j == H-1) {
+        normals.store3(bid, j, i, make_float3(0.0f));
+        return;
+    }
+
+    // Load camera
+    Ks += bid * 9;
+    float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
+    float4 radial_coeffs = {0, 0, 0, 0};
+    float2 tangential_coeffs = {0, 0};
+    float2 thin_prism_coeffs = {0, 0};
+    if (camera_model == gsplat::CameraModelType::FISHEYE || true) {
+        if (dist_coeffs.radial_coeffs != nullptr)
+            radial_coeffs = dist_coeffs.radial_coeffs[bid];
+        if (dist_coeffs.tangential_coeffs != nullptr)
+            tangential_coeffs = dist_coeffs.tangential_coeffs[bid];
+        if (dist_coeffs.thin_prism_coeffs != nullptr)
+            thin_prism_coeffs = dist_coeffs.thin_prism_coeffs[bid];
+    }
+
+    // Process
+    float4 depth = {
+        depths.load1(bid, j, i-1),
+        depths.load1(bid, j, i+1),
+        depths.load1(bid, j-1, i),
+        depths.load1(bid, j+1, i),
+    };
+    float3 normal;
+    depth_to_normal(
+        W, H, {(float)i+0.5f, (float)j+0.5f},
+        {fx, fy, cx, cy}, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        camera_model == gsplat::CameraModelType::FISHEYE, is_ray_depth,
+        depth, &normal
+    );
+    normals.store3(bid, j, i, normal);
+
+}
+
+
+__global__ void depth_to_normal_backward_kernel(
+    gsplat::CameraModelType camera_model,
+    const float *__restrict__ Ks,  // [B, 3, 3]
+    const CameraDistortionCoeffsBuffer dist_coeffs,
+    const bool is_ray_depth,
+    const TensorView<float, 4> depths,  // [B, H, W, 1]
+    const TensorView<float, 4> v_normals,  // [B, H, W, 3]
+    TensorView<float, 4> v_depths  // [B, H, W, 1]
+) {
+    const uint B = depths.shape[0],
+        H = depths.shape[1],
+        W = depths.shape[2];
+    uint32_t bid = blockIdx.z * blockDim.z + threadIdx.z;
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (bid >= B || i >= W || j >= H)
+        return;
+
+    // Zero for border pixels (consistent with Python)
+    // TODO: possibly do a finite difference?
+    if (i == 0 || i == W-1 || j == 0 || j == H-1) {
+        return;
+    }
+
+    // Load camera
+    Ks += bid * 9;
+    float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
+    float4 radial_coeffs = {0, 0, 0, 0};
+    float2 tangential_coeffs = {0, 0};
+    float2 thin_prism_coeffs = {0, 0};
+    if (camera_model == gsplat::CameraModelType::FISHEYE || true) {
+        if (dist_coeffs.radial_coeffs != nullptr)
+            radial_coeffs = dist_coeffs.radial_coeffs[bid];
+        if (dist_coeffs.tangential_coeffs != nullptr)
+            tangential_coeffs = dist_coeffs.tangential_coeffs[bid];
+        if (dist_coeffs.thin_prism_coeffs != nullptr)
+            thin_prism_coeffs = dist_coeffs.thin_prism_coeffs[bid];
+    }
+
+    // Process
+    float4 depth = {
+        depths.load1(bid, j, i-1),
+        depths.load1(bid, j, i+1),
+        depths.load1(bid, j-1, i),
+        depths.load1(bid, j+1, i),
+    };
+    float3 v_normal = v_normals.load3(bid, j, i);
+    float4 v_depth;
+    depth_to_normal_vjp(
+        W, H, {(float)i+0.5f, (float)j+0.5f},
+        {fx, fy, cx, cy}, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        camera_model == gsplat::CameraModelType::FISHEYE, is_ray_depth,
+        depth, v_normal, &v_depth
+    );
+    v_depths.atomicStore1(bid, j, i-1, v_depth.x);
+    v_depths.atomicStore1(bid, j, i+1, v_depth.y);
+    v_depths.atomicStore1(bid, j-1, i, v_depth.z);
+    v_depths.atomicStore1(bid, j+1, i, v_depth.w);
+}
+
+
+torch::Tensor depth_to_normal_forward_tensor(
+    gsplat::CameraModelType camera_model,
+    torch::Tensor Ks,  // [B, 3, 3]
+    CameraDistortionCoeffsTensor dist_coeffs,
+    bool is_ray_depth,
+    torch::Tensor depths  // [B, H, W, 1]
+) {
+    DEVICE_GUARD(depths);
+    CHECK_CUDA(depths);
+    CHECK_INPUT(Ks);
+
+    if (Ks.ndimension() != 3 || Ks.size(-1) != 3 || Ks.size(-2) != 3)
+        AT_ERROR("Ks shape must be (B, 3, 3)");
+    if (depths.ndimension() != 4 || depths.size(-1) != 1)
+        AT_ERROR("depths shape must be (B, H, W, 1)");
+    if (depths.size(0) != Ks.size(0))
+        AT_ERROR("depths and Ks batch dimension mismatch");
+
+    uint b = depths.size(0), h = depths.size(1), w = depths.size(2);
+    torch::Tensor normals = torch::empty({b, h, w, 3}, depths.options());
+
+    depth_to_normal_forward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
+        camera_model, Ks.data_ptr<float>(), dist_coeffs,
+        is_ray_depth, tensor2view<float, 4>(depths), tensor2view<float, 4>(normals)
+    );
+
+    return normals;
+}
+
+torch::Tensor depth_to_normal_backward_tensor(
+    gsplat::CameraModelType camera_model,
+    torch::Tensor Ks,  // [B, 3, 3]
+    CameraDistortionCoeffsTensor dist_coeffs,
+    bool is_ray_depth,
+    torch::Tensor depths,  // [B, H, W, 1]
+    torch::Tensor v_normals  // [B, H, W, 3]
+) {
+    DEVICE_GUARD(depths);
+    CHECK_CUDA(depths);
+    CHECK_INPUT(Ks);
+    CHECK_CUDA(v_normals);
+
+    uint b = depths.size(0), h = depths.size(1), w = depths.size(2);
+    torch::Tensor v_depths = torch::zeros_like(depths);
+
+    depth_to_normal_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
+        camera_model, Ks.data_ptr<float>(), dist_coeffs,
+        is_ray_depth, tensor2view<float, 4>(depths),
+        tensor2view<float, 4>(v_normals),
+        tensor2view<float, 4>(v_depths)
+    );
+
+    return v_depths;
+}

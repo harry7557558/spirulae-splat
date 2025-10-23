@@ -41,6 +41,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // PixelWise.cuh
     m.def("blend_background_forward", &blend_background_forward_tensor);
     m.def("blend_background_backward", &blend_background_backward_tensor);
+    m.def("depth_to_normal_forward", &depth_to_normal_forward_tensor);
+    m.def("depth_to_normal_backward", &depth_to_normal_backward_tensor);
 
     // SplatTileIntersector.cuh
     m.def("intersect_splat_tile", &SplatTileIntersector::intersect_splat_tile);

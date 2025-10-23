@@ -342,7 +342,7 @@ class DepthAndNormalMapsPoisson(GSMeshExporter):
             )
 
             # normals to OPENGL
-            normal_map = depth_to_normal(depth_map, camera._to_ssplat_camera())
+            normal_map = depth_to_normal(depth_map, "pinhole", (camera.fx, camera.fy, camera.cx, camera.cy))
 
             # normals to World
             rot = c2w[:3, :3]
@@ -499,9 +499,9 @@ class Open3DTSDFFusion(GSMeshExporter):
     Backproject depths and run TSDF fusion
     """
 
-    voxel_size: float = 0.05
+    voxel_size: float = 0.025
     """tsdf voxel size"""
-    sdf_truc: float = 0.2
+    sdf_truc: float = 0.5
     """TSDF truncation"""
 
     @torch.no_grad()

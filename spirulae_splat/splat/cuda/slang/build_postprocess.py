@@ -1,4 +1,5 @@
 import os
+import re
 
 cu_dir = "csrc/generated"
 
@@ -19,6 +20,10 @@ for filename in cu_files:
         src = """#include "slang.cuh"\n\n""" + src
         src = process(src)
     open(filename, 'w').write(src)
+
+match = re.match(r'\#include "(.*?slang-cuda-prelude.h)"', header)
+if match:
+    header = header.replace(match[0], open(match[1]).read())
 
 header = process(header)
 open(header_filename, 'w').write(header)

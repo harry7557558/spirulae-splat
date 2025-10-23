@@ -13,21 +13,6 @@ namespace cg = cooperative_groups;
 #include <gsplat/Utils.cuh>
 
 
-CameraDistortionCoeffsBuffer::CameraDistortionCoeffsBuffer(
-    const CameraDistortionCoeffsTensor &tensors
-) {
-    std::optional<at::Tensor> radial_coeffs_tensor = std::get<0>(tensors);
-    radial_coeffs = radial_coeffs_tensor.has_value() ?
-        (float4*)radial_coeffs_tensor.value().data_ptr<float>() : nullptr;
-    std::optional<at::Tensor> tangential_coeffs_tensor = std::get<1>(tensors);
-    tangential_coeffs = tangential_coeffs_tensor.has_value() ?
-        (float2*)tangential_coeffs_tensor.value().data_ptr<float>() : nullptr;
-    std::optional<at::Tensor> thin_prism_coeffs_tensor = std::get<2>(tensors);
-    thin_prism_coeffs = thin_prism_coeffs_tensor.has_value() ?
-        (float2*)thin_prism_coeffs_tensor.value().data_ptr<float>() : nullptr;
-}
-
-
 template<typename SplatPrimitive, gsplat::CameraModelType camera_model>
 __global__ void projection_fused_fwd_kernel(
     const uint32_t B,

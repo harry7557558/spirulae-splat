@@ -186,3 +186,31 @@ float2x3 fisheye_proj_jac(float3 p_view, no_diff float4 intrins, no_diff CameraD
     return J;
 }
 
+
+[ForceInline]
+[Differentiable]
+float2 _solve2x2(float2x2 A, float2 b) {
+    float inv_det = 1.0 / (A[0][0]*A[1][1] - A[0][1]*A[1][0]);
+    return float2(
+        ( b.x*A[1][1] - b.y*A[0][1]) * inv_det,
+        (-b.x*A[1][0] + b.y*A[0][0]) * inv_det
+    );
+}
+
+// [ForceInline]
+float2 undistort_point(
+    no_diff float2 uv, no_diff CameraDistortion dist_coeffs,
+    int maxiter//, float tol
+) {
+    float2 q = uv;
+    for (int i = 0; i < maxiter; i++) {
+        float2 qd = camera_distortion(q, dist_coeffs);
+        float2x2 jac = camera_distortion_jac(q, dist_coeffs);
+        float2 dq = _solve2x2(jac, qd-uv);
+        q -= dq;
+        // float err = length(dq);
+        // if (err <= tol)
+        //     { maxiter = i; tol = err; return q; }
+    }
+    return q;
+}

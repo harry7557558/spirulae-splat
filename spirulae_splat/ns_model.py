@@ -43,7 +43,7 @@ from spirulae_splat.strategy import DefaultStrategy, MCMCStrategy, OpaqueStrateg
 from spirulae_splat.splat._camera import _Camera
 
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
-from spirulae_splat.modules.per_pixel import blend_background
+from spirulae_splat.splat.cuda._wrapper_per_pixel import blend_background
 
 from nerfstudio.cameras.camera_optimizers import (CameraOptimizer,
                                                   CameraOptimizerConfig)
@@ -306,7 +306,7 @@ class SpirulaeModelConfig(ModelConfig):
     depth_distortion_uv_degree: int = -1  # 1
     """Hyperparameter for depth distortion model, controls image space embedding, see code for details
         Larger gives more parameters in depth distortion model, -1 to disable"""
-    depth_supervision_weight: float = 0.01
+    depth_supervision_weight: float = 0.0
     """Weight for depth supervision by comparing rendered depth with depth predicted by a foundation model"""
     normal_supervision_weight: float = 0.01
     """Weight for normal supervision by comparing normal from rendered depth with normal from depth predicted by a foundation model"""
@@ -761,17 +761,20 @@ class SpirulaeModel(Model):
         
         kwargs = {}
         is_fisheye = (camera.camera_type[0].item() == CameraType.FISHEYE.value)
+        if not self.training:
+            is_fisheye = True
         if is_fisheye:
             if not self.config.use_mcmc:
                 raise ValueError("3DGS training with fisheye camera is currently only supported for MCMC.")
-            if camera.distortion_params.shape[-1] == 4:
-                kwargs['radial_coeffs'] = camera.distortion_params
-            elif camera.distortion_params.shape[-1] == 6:
-                kwargs["radial_coeffs"] = camera.distortion_params[..., :4]
-                kwargs["tangential_coeffs"] = camera.distortion_params[..., 4:]
-                # TODO: make sure GSplat 3DGUT actually supports this??
-            else:
-                raise ValueError("Only support fisheye with 4 or 6 distortion coefficients")
+            if camera.distortion_params is not None:
+                if camera.distortion_params.shape[-1] == 4:
+                    kwargs['radial_coeffs'] = camera.distortion_params
+                elif camera.distortion_params.shape[-1] == 6:
+                    kwargs["radial_coeffs"] = camera.distortion_params[..., :4]
+                    kwargs["tangential_coeffs"] = camera.distortion_params[..., 4:]
+                    # TODO: make sure GSplat 3DGUT actually supports this??
+                else:
+                    raise ValueError("Only support fisheye with 4 or 6 distortion coefficients")
 
         TILE_SIZE = 16
         gh, gw = (H+TILE_SIZE-1) // TILE_SIZE, (W+TILE_SIZE-1) // TILE_SIZE
@@ -889,9 +892,9 @@ class SpirulaeModel(Model):
 
         # normal regularization
         if self.config.compute_depth_normal or not self.training:
-            ssplat_camera = _Camera(H, W, "OPENCV", (camera.fx[0].item(), camera.fy[0].item(), camera.cx[0].item(), camera.cy[0].item()))
-            depth_normal, alpha_diffused = depth_to_normal(depth_im_ref[0], ssplat_camera, None, True, alpha)
-            depth_normal = depth_normal[None]
+            depth_normal = depth_to_normal(
+                depth_im_ref, ["pinhole", "fisheye"][is_fisheye], Ks, **kwargs
+            )
 
         # pack outputs
         outputs = {

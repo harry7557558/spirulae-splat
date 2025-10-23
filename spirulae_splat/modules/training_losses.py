@@ -240,14 +240,16 @@ class SplatTrainingLosses(torch.nn.Module):
         # depth supervision
         depth_supervision_loss, normal_supervision_loss, alpha_supervision_loss = 0.0, 0.0, 0.0
         if "depth" in batch and self.step > self.config.supervision_warmup and \
-            (self.config.depth_supervision_weight > 0.0 or
-             self.config.normal_supervision_weight > 0.0 or
-             self.config.alpha_supervision_weight > 0.0 or
-             self.config.alpha_supervision_weight_under > 0.0):
+            (self.config.depth_supervision_weight > 0.0 #or
+            #  self.config.normal_supervision_weight > 0.0 or
+            #  self.config.alpha_supervision_weight > 0.0 or
+            #  self.config.alpha_supervision_weight_under > 0.0
+            ):
             if batch["depth"].ndim == 3:
                 batch["depth"] = batch["depth"].unsqueeze(-1)
             depth = self._downscale_if_required(batch["depth"].to(device))
             # TODO
+            raise NotImplementedError("Depth supervision WIP")
             # depth_supervision_loss, normal_supervision_loss, alpha_supervision_loss \
             #     = self.supervision_losses(
             #         depth, ssplat_camera, outputs["depth"],

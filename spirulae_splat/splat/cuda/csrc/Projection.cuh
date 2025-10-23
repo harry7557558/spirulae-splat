@@ -8,20 +8,7 @@
 #include "Primitive3DGS.cuh"
 #include "PrimitiveOpaqueTriangle.cuh"
 
-
-typedef std::tuple<
-    std::optional<at::Tensor>,
-    std::optional<at::Tensor>,
-    std::optional<at::Tensor>
-> CameraDistortionCoeffsTensor;
-
-struct CameraDistortionCoeffsBuffer {
-    float4* __restrict__ radial_coeffs;
-    float2* __restrict__ tangential_coeffs;
-    float2* __restrict__ thin_prism_coeffs;
-
-    CameraDistortionCoeffsBuffer(const CameraDistortionCoeffsTensor &tensors);
-};
+#include "PixelWise.cuh"  // CameraDistortionCoeffsBuffer
 
 
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */

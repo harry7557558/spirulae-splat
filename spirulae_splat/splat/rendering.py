@@ -829,6 +829,14 @@ def rasterization(
             ],
             dim=-1,
         )
+    if "N" in render_mode:
+        render_colors = torch.cat(
+            [
+                render_colors[..., :-3],
+                render_colors[..., -3:] / render_colors[..., -3:].norm(dim=-1, keepdim=True).clamp(min=1e-10),
+            ],
+            dim=-1,
+        )
 
     return render_colors, render_alphas, meta
 
