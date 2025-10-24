@@ -388,12 +388,10 @@ std::tuple<
 
 std::tuple<
     OpaqueTriangle::Screen::TensorTuple,
-    at::Tensor,  // v_colors
     std::optional<at::Tensor>  // absgrad
 > rasterize_to_pixels_opaque_triangle_bwd(
     // Gaussian parameters
     OpaqueTriangle::Screen::TensorTuple splats_tuple,
-    const at::Tensor colors,                    // [..., N, channels] or [nnz, channels]
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -407,15 +405,14 @@ std::tuple<
     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
     // gradients of outputs
-    const at::Tensor v_render_colors, // [..., image_height, image_width, channels]
+    OpaqueTriangle::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
     // options
     bool absgrad
 ) {
-    throw std::runtime_error("TODO");
-    // return rasterize_to_pixels_bwd_tensor<OpaqueTriangle>(
-    //     splats_tuple, colors, backgrounds, masks,
-    //     image_width, image_height, tile_size, tile_offsets, flatten_ids,
-    //     render_Ts, last_ids, v_render_colors, v_render_alphas, absgrad
-    // );
+    return rasterize_to_pixels_bwd_tensor<OpaqueTriangle>(
+        splats_tuple, backgrounds, masks,
+        image_width, image_height, tile_size, tile_offsets, flatten_ids,
+        render_Ts, last_ids, v_render_outputs, v_render_alphas, absgrad
+    );
 }

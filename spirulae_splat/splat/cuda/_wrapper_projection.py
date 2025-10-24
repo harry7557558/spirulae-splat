@@ -177,8 +177,7 @@ def fully_fused_projection(
         return (
             proj_return[0],  # aabb
             proj_return[2],  # depth
-            proj_return[3],  # normal
-            tuple(proj_return[1:3] + proj_return[4:])
+            tuple(proj_return[1:])
         )
 
 class _FullyFusedProjection3DGS(torch.autograd.Function):
@@ -211,7 +210,7 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
             f"CameraModelType.{camera_model.upper()}"
         )
 
-        aabb, normals, (means2d, depths, conics, proj_opacities, proj_rgbs) = _make_lazy_cuda_func(
+        aabb, (means2d, depths, conics, proj_opacities, proj_rgbs) = _make_lazy_cuda_func(
             "projection_ewa_3dgs_forward"
         )(
             is_antialiased,
@@ -227,18 +226,17 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
         ctx.camera_model_type = camera_model_type
         ctx.dist_coeffs = dist_coeffs
 
-        return aabb, means2d, depths, normals, conics, proj_opacities, proj_rgbs
+        return aabb, means2d, depths, conics, proj_opacities, proj_rgbs
 
     @staticmethod
-    def backward(ctx, v_aabb, v_means2d, v_depths, v_normals, v_conics, v_opacities, v_proj_rgbs):
+    def backward(ctx, v_aabb, v_means2d, v_depths, v_conics, v_opacities, v_proj_rgbs):
         means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks, aabb = ctx.saved_tensors
         (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh), v_viewmats = _make_lazy_cuda_func(
             "projection_ewa_3dgs_backward"
         )(
             ctx.is_antialiased,
             (means, quats, scales, opacities, features_dc, features_sh),
-            viewmats, Ks, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs,
-            aabb, v_normals.contiguous() if v_normals is not None else None,
+            viewmats, Ks, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs, aabb,
             tuple([x.contiguous() for x in (v_means2d, v_depths, v_conics, v_opacities, v_proj_rgbs)]),
             ctx.needs_input_grad[6],  # viewmats_requires_grad
         )
@@ -246,7 +244,7 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
             v_viewmats = None
         return (
             v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh, v_viewmats,
-            *([None]*(len(ctx.needs_input_grad)-6))
+            *([None]*(len(ctx.needs_input_grad)-7))
         )
 
 class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
@@ -259,6 +257,8 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
         quats: Tensor,  # [..., N, 4]
         scales: Tensor,  # [..., N, 3]
         hardness: Tensor,  # [..., N]
+        features_dc: Tensor,  # [..., N, 3]
+        features_sh: Tensor,  # [..., N, x, 3]
         viewmats: Tensor,  # [..., C, 4, 4]
         Ks: Tensor,  # [..., C, 3, 3]
         width: int,
@@ -276,45 +276,44 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
             f"CameraModelType.{camera_model.upper()}"
         )
 
-        aabb, depths, normals, (means2d, proj_hardness) = _make_lazy_cuda_func(
+        aabb, (means2d, depths, proj_hardness, rgbs, normals) = _make_lazy_cuda_func(
             "projection_opaque_triangle_forward"
         )(
-            (means, quats, scales, hardness),
+            (means, quats, scales, hardness, features_dc, features_sh),
             # (means, hardness),
             viewmats, Ks, width, height,
             near_plane, far_plane,
             camera_model_type, dist_coeffs
         )
-        ctx.save_for_backward(means, quats, scales, hardness, viewmats, Ks, aabb)
+        ctx.save_for_backward(means, quats, scales, hardness, features_dc, features_sh, viewmats, Ks, aabb)
         # ctx.save_for_backward(means, hardness, viewmats, Ks, aabb)
         ctx.width = width
         ctx.height = height
         ctx.camera_model_type = camera_model_type
         ctx.dist_coeffs = dist_coeffs
 
-        return aabb, depths, normals, means2d, proj_hardness
+        return aabb, means2d, depths, proj_hardness, rgbs, normals
 
     @staticmethod
-    def backward(ctx, v_aabb, v_depths, v_normals, v_means2d, v_proj_hardness):
-        means, quats, scales, hardness, viewmats, Ks, aabb = ctx.saved_tensors
-        (v_means, v_quats, v_scales, v_hardness), v_viewmats = _make_lazy_cuda_func(
+    def backward(ctx, v_aabb, v_means2d, v_depths, v_proj_hardness, v_rgbs, v_normals):
+        means, quats, scales, hardness, features_dc, features_sh, viewmats, Ks, aabb = ctx.saved_tensors
+        (v_means, v_quats, v_scales, v_hardness, v_features_dc, v_features_sh), v_viewmats = _make_lazy_cuda_func(
         # means, hardness, viewmats, Ks, aabb = ctx.saved_tensors
         # (v_means, v_hardness), v_viewmats = _make_lazy_cuda_func(
             "projection_opaque_triangle_backward"
         )(
-            (means, quats, scales, hardness),
+            (means, quats, scales, hardness, features_dc, features_sh),
             # (means, hardness),
-            viewmats, Ks, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs,
-            aabb, v_depths.contiguous(), v_normals.contiguous() if v_normals is not None else None,
-            (v_means2d.contiguous(), v_proj_hardness.contiguous()),
-            ctx.needs_input_grad[4],  # viewmats_requires_grad
+            viewmats, Ks, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs, aabb,
+            tuple([x.contiguous() for x in (v_means2d, v_depths, v_proj_hardness, v_rgbs, v_normals)]),
+            ctx.needs_input_grad[6],  # viewmats_requires_grad
         )
-        if not ctx.needs_input_grad[2]:
+        if not ctx.needs_input_grad[6]:
             v_viewmats = None
         return (
-            v_means, v_quats, v_scales, v_hardness, v_viewmats,
+            v_means, v_quats, v_scales, v_hardness, v_features_dc, v_features_sh, v_viewmats,
             # v_means, v_hardness, v_viewmats,
-            *([None]*(len(ctx.needs_input_grad)-3))
+            *([None]*(len(ctx.needs_input_grad)-7))
         )
 
 

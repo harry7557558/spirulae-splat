@@ -10,6 +10,7 @@
     const float4 quat, \
     const float3 scale, \
     const float2 hardness, \
+    const float3 sh_coeffs[16], \
     const float3x3 R, \
     const float3 t, \
     no_diff const float fx, \
@@ -24,12 +25,13 @@
     no_diff const float near_plane, \
     no_diff const float far_plane, \
     out int4 aabb_xyxy, \
-    out float depth, \
-    out float3 normal, \
     out float2 uv0, \
     out float2 uv1, \
     out float2 uv2, \
-    out float2 out_hardness
+    out float depth, \
+    out float2 out_hardness, \
+    out float3 rgb, \
+    out float3 normal
 
 [ForceInline]
 [Differentiable]
@@ -121,10 +123,13 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
     aabb_xyxy = {(int)floor(xmin), (int)floor(ymin), (int)ceil(xmax), (int)ceil(ymax)};
     depth = mean_c.z;
 
+    out_hardness = hardness;
+
+    float3 campos = -mul(transpose(R), t);
+    sh_coeffs_to_color(mean - campos, sh_coeffs, rgb);
+
     normal = normalize(mul(R, cross(vert1-vert0, vert2-vert0)));
     normal *= -sign(dot(normal, mean_c));
-
-    out_hardness = hardness;
 }
 
 
@@ -134,11 +139,11 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
     [Differentiable] \
     void funname(_projection_opaque_triangle_ARGS) { \
         return projection_opaque_triangle<__VA_ARGS__>( \
-            mean, quat, scale, hardness, R, t, \
-            /* vert0, vert1, vert2, hardness, R, t, */ \
+            mean, quat, scale, hardness, sh_coeffs, R, t, \
+            /* vert0, vert1, vert2, hardness, sh_coeffs, R, t, */ \
             fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs, \
             image_width, image_height, near_plane, far_plane, \
-            aabb_xyxy, depth, normal, uv0, uv1, uv2, out_hardness \
+            aabb_xyxy, uv0, uv1, uv2, depth, out_hardness, rgb, normal \
         ); \
     }
 
@@ -158,6 +163,7 @@ _DEF_projection_opaque_triangle(projection_opaque_triangle_fisheye, CameraModelT
     const float4 quat, \
     const float3 scale, \
     const float2 hardness, \
+    const float3 sh_coeffs[16], \
     const float3x3 R, \
     const float3 t, \
     const float fx, \
@@ -169,16 +175,18 @@ _DEF_projection_opaque_triangle(projection_opaque_triangle_fisheye, CameraModelT
     const float2 thin_prism_coeffs, \
     const uint image_width, \
     const uint image_height, \
-    const float v_depth, \
-    const float3 v_normal, \
     const float2 v_uv0, \
     const float2 v_uv1, \
     const float2 v_uv2, \
+    const float v_depth, \
     const float2 v_out_hardness, \
+    const float3 v_rgb, \
+    const float3 v_normal, \
     out float3 v_mean, \
     out float4 v_quat, \
     out float3 v_scale, \
     out float2 v_hardness, \
+    out float3 v_sh_coeffs[16], \
     out float3x3 v_R, \
     out float3 v_t
 
@@ -197,14 +205,15 @@ void projection_opaque_triangle_persp_vjp(
     // DifferentialPair<float3> dp_vert1 = diffPair(vert1);
     // DifferentialPair<float3> dp_vert2 = diffPair(vert2);
     DifferentialPair<float2> dp_hardness = diffPair(hardness);
+    DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);
     DifferentialPair<float3x3> dp_R = diffPair(R);
     DifferentialPair<float3> dp_t = diffPair(t);
     bwd_diff(_projection_opaque_triangle_persp_differentiable)(
-        dp_mean, dp_quat, dp_scale, dp_hardness, dp_R, dp_t,
-        // dp_vert0, dp_vert1, dp_vert2, dp_hardness, dp_R, dp_t,
+        dp_mean, dp_quat, dp_scale, dp_hardness, dp_sh_coeffs, dp_R, dp_t,
+        // dp_vert0, dp_vert1, dp_vert2, dp_hardness, dp_sh_coeffs, dp_R, dp_t,
         fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
         image_width, image_height, 0.0f, 1e30f,
-        v_depth, v_normal, v_uv0, v_uv1, v_uv2, v_out_hardness
+        v_uv0, v_uv1, v_uv2, v_depth, v_out_hardness, v_rgb, v_normal
     );
     v_mean = dp_mean.d;
     v_quat = dp_quat.d;
@@ -213,6 +222,7 @@ void projection_opaque_triangle_persp_vjp(
     // v_vert1 = dp_vert1.d;
     // v_vert2 = dp_vert2.d;
     v_hardness = dp_hardness.d;
+    v_sh_coeffs = dp_sh_coeffs.d;
     v_R = dp_R.d;
     v_t = dp_t.d;
 }
@@ -228,14 +238,15 @@ void projection_opaque_triangle_fisheye_vjp(
     // DifferentialPair<float3> dp_vert1 = diffPair(vert1);
     // DifferentialPair<float3> dp_vert2 = diffPair(vert2);
     DifferentialPair<float2> dp_hardness = diffPair(hardness);
+    DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);
     DifferentialPair<float3x3> dp_R = diffPair(R);
     DifferentialPair<float3> dp_t = diffPair(t);
     bwd_diff(_projection_opaque_triangle_fisheye_differentiable)(
-        dp_mean, dp_quat, dp_scale, dp_hardness, dp_R, dp_t,
-        // dp_vert0, dp_vert1, dp_vert2, dp_hardness, dp_R, dp_t,
+        dp_mean, dp_quat, dp_scale, dp_hardness, dp_sh_coeffs, dp_R, dp_t,
+        // dp_vert0, dp_vert1, dp_vert2, dp_hardness, dp_sh_coeffs, dp_R, dp_t,
         fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
         image_width, image_height, 0.0f, 1e30f,
-        v_depth, v_normal, v_uv0, v_uv1, v_uv2, v_out_hardness
+        v_uv0, v_uv1, v_uv2, v_depth, v_out_hardness, v_rgb, v_normal
     );
     v_mean = dp_mean.d;
     v_quat = dp_quat.d;
@@ -244,6 +255,7 @@ void projection_opaque_triangle_fisheye_vjp(
     // v_vert1 = dp_vert1.d;
     // v_vert2 = dp_vert2.d;
     v_hardness = dp_hardness.d;
+    v_sh_coeffs = dp_sh_coeffs.d;
     v_R = dp_R.d;
     v_t = dp_t.d;
 }

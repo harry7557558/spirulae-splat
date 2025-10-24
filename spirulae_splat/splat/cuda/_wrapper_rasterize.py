@@ -171,7 +171,7 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
     def backward(
         ctx,
         v_render_rgbs: Tensor,  # [..., H, W, 3]
-        v_render_depths: Tensor,  # [..., H, W, 3]
+        v_render_depths: Tensor,  # [..., H, W, 1]
         v_render_alphas: Tensor,  # [..., H, W, 1]
     ):
         (
@@ -213,8 +213,10 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
     def forward(
         ctx,
         means2d: Tensor,  # [..., N, 3, 2] or [nnz, 3, 2]
+        depths: Tensor,  # [..., N, 1] or [nnz, 1]
         hardness: Tensor,  # [..., N] or [nnz]
-        colors: Tensor,  # [..., N, channels] or [nnz, channels]
+        colors: Tensor,  # [..., N, 3] or [nnz, 3]
+        normals: Tensor,  # [..., N, 3] or [nnz, 3]
         backgrounds: Tensor,  # [..., channels], Optional
         masks: Tensor,  # [..., tile_height, tile_width], Optional
         width: int,
@@ -224,15 +226,15 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
         flatten_ids: Tensor,  # [n_isects]
         absgrad: bool,
     ) -> Tuple[Tensor, Tensor]:
-        render_colors, render_Ts, last_ids = _make_lazy_cuda_func(
+        (render_rgbs, render_depths, render_normals), render_Ts, last_ids = _make_lazy_cuda_func(
             "rasterization_opaque_triangle_forward"
         )(
-            (means2d, hardness), colors, backgrounds, masks,
+            (means2d, depths, hardness, colors, normals), backgrounds, masks,
             width, height, tile_size, isect_offsets, flatten_ids,
         )
 
         ctx.save_for_backward(
-            means2d, hardness, colors, backgrounds, masks,
+            means2d, depths, hardness, colors, normals, backgrounds, masks,
             isect_offsets, flatten_ids, render_Ts, last_ids,
         )
         ctx.width = width
@@ -241,16 +243,18 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
         ctx.absgrad = absgrad
 
         render_alphas = 1.0 - render_Ts
-        return render_colors, render_alphas
+        return render_rgbs, render_depths, render_normals, render_alphas
 
     @staticmethod
     def backward(
         ctx,
-        v_render_colors: Tensor,  # [..., H, W, 3]
+        v_render_rgbs: Tensor,  # [..., H, W, 3]
+        v_render_depths: Tensor,  # [..., H, W, 1]
+        v_render_normals: Tensor,  # [..., H, W, 3]
         v_render_alphas: Tensor,  # [..., H, W, 1]
     ):
         (
-            means2d, hardness, colors, backgrounds, masks,
+            means2d, depths, hardness, colors, normals, backgrounds, masks,
             isect_offsets, flatten_ids, render_Ts, last_ids,
         ) = ctx.saved_tensors
         width = ctx.width
@@ -259,22 +263,23 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
         absgrad = ctx.absgrad
 
         (
-            (v_means2d, v_hardness),
-            v_colors, v_means2d_abs,
+            (v_means2d, v_depths, v_hardness, v_rgbs, v_normals), v_means2d_abs,
         ) = _make_lazy_cuda_func("rasterization_opaque_triangle_backward")(
-            (means2d, hardness), colors, backgrounds, masks,
+            (means2d, depths, hardness, colors, normals), backgrounds, masks,
             width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids,
-            v_render_colors.contiguous(), v_render_alphas.contiguous(), absgrad,
+            (v_render_rgbs.contiguous(), v_render_depths.contiguous(), v_render_normals.contiguous()),
+            v_render_alphas.contiguous(), absgrad,
         )
         if absgrad:
             means2d.absgrad = v_means2d_abs
             # means2d.absgrad = v_means2d.mean(-2)
 
         v_backgrounds = None
-        if ctx.needs_input_grad[3]:
-            v_backgrounds = (v_render_colors * render_Ts.float()).sum(dim=(-3, -2))
+        if ctx.needs_input_grad[5]:
+            v_backgrounds = (torch.cat([v_render_rgbs, v_render_depths, v_render_normals], dim=-1) * \
+                             render_Ts.float()).sum(dim=(-3, -2))
 
         return (
-            v_means2d, v_hardness, v_colors, v_backgrounds,
-            *([None]*(len(ctx.needs_input_grad)-4))
+            v_means2d, v_depths, v_hardness, v_rgbs, v_normals, v_backgrounds,
+            *([None]*(len(ctx.needs_input_grad)-6))
         )

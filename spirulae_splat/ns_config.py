@@ -65,6 +65,10 @@ _DEFAULT_OPTIMIZERS = {
         "optimizer": AdamOptimizerConfig(lr=0.0025 / 20, eps=1e-15),
         "scheduler": None,
     },
+    "features_ch": {
+        "optimizer": AdamOptimizerConfig(lr=0.0025 / 5, eps=1e-15),
+        "scheduler": None,
+    },
     "opacities": {
         "optimizer": AdamOptimizerConfig(lr=0.05, eps=1e-15),
         "scheduler": None,

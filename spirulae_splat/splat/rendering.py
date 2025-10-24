@@ -404,48 +404,6 @@ def rasterization(
         else:
             # colors_dc is already [..., C, N, D]
             pass
-    # if sh_degree is None:
-    #     colors = colors_dc
-    # else:
-    #     # Colors are SH coefficients, with shape [..., N, K, 3] or [..., C, N, K, 3]
-    #     campos = torch.inverse(viewmats)[..., :3, 3]  # [..., C, 3]
-    #     if viewmats_rs is not None:
-    #         campos_rs = torch.inverse(viewmats_rs)[..., :3, 3]
-    #         campos = 0.5 * (campos + campos_rs)  # [..., C, 3]
-    #     # if primitive in ["3dgs", "mip"]:
-    #     if primitive in ["3dgs", "mip", "opaque_triangle"]:
-    #         means = splat_params[0]
-    #     elif primitive in ["opaque_triangle"]:
-    #         means = splat_params[0].mean(-2)
-    #     if packed:
-    #         dirs = (
-    #             means.view(B, N, 3)[batch_ids, gaussian_ids]
-    #             - campos.view(B, C, 3)[batch_ids, camera_ids]
-    #         )  # [nnz, 3]
-    #         masks = (radii > 0).all(dim=-1)  # [nnz]  # TODO
-    #         if colors_sh.dim() == num_batch_dims + 3:
-    #             # Turn [..., N, K, 3] into [nnz, 3]
-    #             colors_sh = colors_sh.view(B, N, -1, 3)[batch_ids, gaussian_ids]  # [nnz, K, 3]
-    #         else:
-    #             # Turn [..., C, N, K, 3] into [nnz, 3]
-    #             colors_sh = colors_sh.view(B, C, N, -1, 3)[
-    #                 batch_ids, camera_ids, gaussian_ids
-    #             ]  # [nnz, K, 3]
-    #         colors = spherical_harmonics(sh_degree, dirs, colors_dc, colors_sh)  # [nnz, 3]
-    #     else:
-    #         dirs = means[..., None, :, :] - campos[..., None, :]  # [..., C, N, 3]
-    #         if colors_sh.dim() == num_batch_dims + 3:
-    #             # Turn [..., N, K, 3] into [..., C, N, K, 3]
-    #             colors_sh = torch.broadcast_to(
-    #                 colors_sh[..., None, :, :, :], batch_dims + (C, N, -1, 3)
-    #             )
-    #         else:
-    #             # colors is already [..., C, N, K, 3]
-    #             colors_sh = colors_sh
-    #         colors = spherical_harmonics(
-    #             sh_degree, dirs, colors_dc, colors_sh
-    #         )  # [..., C, N, 3]
-    #     # colors = torch.clamp_min(colors+0.5, 0.0)
 
     if use_bvh:
         raise NotImplementedError()
@@ -604,7 +562,7 @@ def rasterization(
         image_ids = batch_ids * C + camera_ids
     else:
         # The results are with shape [..., C, N, ...]. Only the elements with radii > 0 are valid.
-        aabb_xyxy, depths, normals, proj_splats = proj_results
+        aabb_xyxy, depths, proj_splats = proj_results
         batch_ids, camera_ids, gaussian_ids = None, None, None
         image_ids = None
     means2d = (aabb_xyxy[..., 2:] + aabb_xyxy[..., :2]).float() / 2
@@ -619,7 +577,7 @@ def rasterization(
             "gaussian_ids": gaussian_ids,
             "radii": radii,
             "depths": depths,
-            "normals": normals,
+            # "normals": normals,
             "means2d": proj_splats[0],  # with grad
         }
     )
@@ -809,7 +767,6 @@ def rasterization(
         render_colors, render_alphas = rasterize_to_pixels(
             primitive,
             proj_splats,
-            # colors,
             width,
             height,
             tile_size,

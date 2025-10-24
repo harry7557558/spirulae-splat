@@ -33,7 +33,7 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
 
 
 template <typename SplatPrimitive>
-inline std::tuple<Vanilla3DGS::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
+inline std::tuple<typename SplatPrimitive::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
 rasterize_to_pixels_fwd_tensor(
     // Gaussian parameters
     typename SplatPrimitive::Screen::TensorTuple splats_tuple,
@@ -65,7 +65,7 @@ rasterize_to_pixels_3dgs_fwd(
 );
 
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor>
+std::tuple<OpaqueTriangle::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
 rasterize_to_pixels_opaque_triangle_fwd(
     // Gaussian parameters
     OpaqueTriangle::Screen::TensorTuple splats_tuple,

@@ -31,17 +31,17 @@ struct Vanilla3DGS {
 
     inline static __device__ void project_persp(
         World world, FwdProjCamera cam,
-        Screen& screen, int4& aabb, float3& normal
+        Screen& screen, int4& aabb
     );
 
     inline static __device__ void project_ortho(
         World world, FwdProjCamera cam,
-        Screen& screen, int4& aabb, float3& normal
+        Screen& screen, int4& aabb
     );
 
     inline static __device__ void project_fisheye(
         World world, FwdProjCamera cam,
-        Screen& screen, int4& aabb, float3& normal
+        Screen& screen, int4& aabb
     );
 
     struct BwdProjCamera {
@@ -56,19 +56,19 @@ struct Vanilla3DGS {
 
     inline static __device__ void project_persp_vjp(
         World world, BwdProjCamera cam,
-        Screen v_screen, float3 v_normal,
+        Screen v_screen,
         World& v_world, float3x3 &v_R, float3 &v_t
     );
 
     inline static __device__ void project_ortho_vjp(
         World world, BwdProjCamera cam,
-        Screen v_screen, float3 v_normal,
+        Screen v_screen,
         World& v_world, float3x3 &v_R, float3 &v_t
     );
 
     inline static __device__ void project_fisheye_vjp(
         World world, BwdProjCamera cam,
-        Screen v_screen, float3 v_normal,
+        Screen v_screen,
         World& v_world, float3x3 &v_R, float3 &v_t
     );
 
@@ -517,7 +517,7 @@ struct Vanilla3DGS::Screen {
 
 inline __device__ void Vanilla3DGS::project_persp(
     Vanilla3DGS::World world, Vanilla3DGS::FwdProjCamera cam,
-    Vanilla3DGS::Screen& screen, int4& aabb, float3& normal
+    Vanilla3DGS::Screen& screen, int4& aabb
 ) {
     projection_3dgs_persp(
         bool(cam.antialiased),
@@ -531,7 +531,7 @@ inline __device__ void Vanilla3DGS::project_persp(
 
 inline __device__ void Vanilla3DGS::project_ortho(
     Vanilla3DGS::World world, Vanilla3DGS::FwdProjCamera cam,
-    Vanilla3DGS::Screen& screen, int4& aabb, float3& normal
+    Vanilla3DGS::Screen& screen, int4& aabb
 ) {
     projection_3dgs_ortho(
         bool(cam.antialiased),
@@ -545,7 +545,7 @@ inline __device__ void Vanilla3DGS::project_ortho(
 
 inline __device__ void Vanilla3DGS::project_fisheye(
     Vanilla3DGS::World world, Vanilla3DGS::FwdProjCamera cam,
-    Vanilla3DGS::Screen& screen, int4& aabb, float3& normal
+    Vanilla3DGS::Screen& screen, int4& aabb
 ) {
     projection_3dgs_fisheye(
         bool(cam.antialiased),
@@ -559,7 +559,7 @@ inline __device__ void Vanilla3DGS::project_fisheye(
 
 inline __device__ void Vanilla3DGS::project_persp_vjp(
     Vanilla3DGS::World world, Vanilla3DGS::BwdProjCamera cam,
-    Vanilla3DGS::Screen v_screen, float3 v_normal,
+    Vanilla3DGS::Screen v_screen,
     Vanilla3DGS::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
     projection_3dgs_persp_vjp(
@@ -576,7 +576,7 @@ inline __device__ void Vanilla3DGS::project_persp_vjp(
 
 inline __device__ void Vanilla3DGS::project_ortho_vjp(
     Vanilla3DGS::World world, Vanilla3DGS::BwdProjCamera cam,
-    Vanilla3DGS::Screen v_screen, float3 v_normal,
+    Vanilla3DGS::Screen v_screen,
     Vanilla3DGS::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
     projection_3dgs_ortho_vjp(
@@ -593,7 +593,7 @@ inline __device__ void Vanilla3DGS::project_ortho_vjp(
 
 inline __device__ void Vanilla3DGS::project_fisheye_vjp(
     Vanilla3DGS::World world, Vanilla3DGS::BwdProjCamera cam,
-    Vanilla3DGS::Screen v_screen, float3 v_normal,
+    Vanilla3DGS::Screen v_screen,
     Vanilla3DGS::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
     projection_3dgs_fisheye_vjp(

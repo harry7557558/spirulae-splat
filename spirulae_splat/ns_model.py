@@ -399,7 +399,7 @@ class SpirulaeModel(Model):
 
         features_ch = None
         if self.config.primitive == "opaque_triangle":
-            features_ch = torch.nn.Parameter(torch.zeros((len(self.means), 2, 3)))
+            features_ch = torch.nn.Parameter(torch.zeros((len(means), 2, 3)))
 
         gauss_params = {
             "means": means,
@@ -830,7 +830,7 @@ class SpirulaeModel(Model):
                 self.strategy.map_opacities(self.step, self.opacities),
                 hardness * torch.ones_like(self.opacities)
             ], dim=-1),
-            self.features_ch
+            self.features_dc, self.features_sh
              ),
             # (self.means, hardness * torch.ones_like(self.opacities.squeeze(-1))),
             colors_dc=self.features_dc,
@@ -875,7 +875,8 @@ class SpirulaeModel(Model):
 
         render_normal = None
         if len(rgbd) > 2:
-            render_normal = rgbd[3]
+            render_normal = rgbd[2]
+            render_normal = torch.where(alpha > 0.0, rgbd[2] / alpha, rgbd[2])
             if not self.training:
                 render_normal = 0.5+0.5*render_normal
 

@@ -133,7 +133,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
             }
 
             const float vis = alpha * T;
-            const Vanilla3DGS::RenderOutput color = splat.evaluate_color(px, py);
+            const typename SplatPrimitive::RenderOutput color = splat.evaluate_color(px, py);
             pix_out += color * vis;
             cur_idx = batch_start + t;
 
@@ -223,7 +223,7 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
 
 
 template <typename SplatPrimitive>
-inline std::tuple<Vanilla3DGS::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
+inline std::tuple<typename SplatPrimitive::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
 rasterize_to_pixels_fwd_tensor(
     // Gaussian parameters
     typename SplatPrimitive::Screen::TensorTuple splats_tuple,
@@ -252,8 +252,8 @@ rasterize_to_pixels_fwd_tensor(
 
     at::DimVector renders_dims(image_dims);
     renders_dims.append({image_height, image_width});
-    typename Vanilla3DGS::RenderOutput::Tensor renders =
-        Vanilla3DGS::RenderOutput::Tensor::empty(renders_dims, opt);
+    typename SplatPrimitive::RenderOutput::Tensor renders =
+        SplatPrimitive::RenderOutput::Tensor::empty(renders_dims, opt);
 
     at::DimVector transmittance_dims(image_dims);
     transmittance_dims.append({image_height, image_width, 1});
@@ -302,7 +302,7 @@ rasterize_to_pixels_3dgs_fwd(
     );
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor>
+std::tuple<OpaqueTriangle::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
 rasterize_to_pixels_opaque_triangle_fwd(
     // Gaussian parameters
     OpaqueTriangle::Screen::TensorTuple splats_tuple,
@@ -316,10 +316,9 @@ rasterize_to_pixels_opaque_triangle_fwd(
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids   // [n_isects]
 ) {
-    throw std::runtime_error("TODO");
-    // return rasterize_to_pixels_fwd_tensor<OpaqueTriangle>(
-    //     splats_tuple, backgrounds, masks,
-    //     image_width, image_height, tile_size,
-    //     tile_offsets, flatten_ids
-    // );
+    return rasterize_to_pixels_fwd_tensor<OpaqueTriangle>(
+        splats_tuple, backgrounds, masks,
+        image_width, image_height, tile_size,
+        tile_offsets, flatten_ids
+    );
 }

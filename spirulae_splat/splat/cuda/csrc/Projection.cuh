@@ -17,7 +17,6 @@
 
 std::tuple<
     at::Tensor,  // aabb
-    std::optional<at::Tensor>,  // normals
     Vanilla3DGS::Screen::TensorTuple  // out splats
 > projection_ewa_3dgs_forward_tensor(
     const bool antialiased,
@@ -36,7 +35,6 @@ std::tuple<
 
 std::tuple<
     at::Tensor,  // aabb
-    std::optional<at::Tensor>,  // normals
     OpaqueTriangle::Screen::TensorTuple  // out splats
 > projection_opaque_triangle_forward_tensor(
     // inputs
@@ -68,7 +66,6 @@ std::tuple<
     // fwd outputs
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
-    const std::optional<at::Tensor> v_normals,      // [..., C, N, 3]
     const Vanilla3DGS::Screen::TensorTuple &v_splats_screen_tuple,
     const bool viewmats_requires_grad
 );
@@ -89,7 +86,6 @@ std::tuple<
     // fwd outputs
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
-    const std::optional<at::Tensor> v_normals,      // [..., C, N, 3]
     const OpaqueTriangle::Screen::TensorTuple &v_splats_screen_tuple,
     const bool viewmats_requires_grad
 );
