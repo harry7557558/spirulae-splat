@@ -258,8 +258,8 @@ def rasterization(
 
     # if primitive in ["3dgs", "mip"]:
     if primitive in ["3dgs", "mip", "opaque_triangle"]:
-        assert len(splat_params) == 4, "3DGS requires 4 params (means, quats, scales, opacities)"
-        means, quats, scales, opacities = splat_params
+        assert len(splat_params) == 6, "3DGS requires 4 params (means, quats, scales, opacities)"
+        means, quats, scales, opacities, features_dc, features_sh = splat_params
         assert len(means.shape) >= 2, "means must have at least 2 dimensions"
         batch_dims = means.shape[:-2]
         N = means.shape[-2]
@@ -269,6 +269,10 @@ def rasterization(
         assert scales.shape == batch_dims + (N, 3), scales.shape
         if primitive in ["3dgs", "mip"]:
             assert opacities.shape == batch_dims + (N,), opacities.shape
+            assert features_dc.shape == batch_dims + (N, 3), features_dc.shape
+            assert features_sh.shape == batch_dims + (N, 3, 3) or \
+                features_sh.shape == batch_dims + (N, 8, 3) or \
+                features_sh.shape == batch_dims + (N, 15, 3), features_sh.shape
         else:
             assert opacities.shape == batch_dims + (N, 2), opacities.shape
     elif primitive in ["opaque_triangle"]:
@@ -381,6 +385,67 @@ def rasterization(
 
         # Silently change C from local #Cameras to global #Cameras.
         C = len(viewmats)
+
+    # Turn colors into [..., C, N, D] or [..., nnz, D] to pass into rasterize_to_pixels()
+    # Colors are post-activation values, with shape [..., N, D] or [..., C, N, D]
+    if packed:
+        if colors_dc.dim() == num_batch_dims + 2:
+            # Turn [..., N, D] into [nnz, D]
+            colors_dc = colors_dc.view(B, N, -1)[batch_ids, gaussian_ids]
+        else:
+            # Turn [..., C, N, D] into [nnz, D]
+            colors_dc = colors_dc.view(B, C, N, -1)[batch_ids, camera_ids, gaussian_ids]
+    else:
+        if colors_dc.dim() == num_batch_dims + 2:
+            # Turn [..., N, D] into [..., C, N, D]
+            colors_dc = torch.broadcast_to(
+                colors_dc[..., None, :, :], batch_dims + (C, N, -1)
+            )
+        else:
+            # colors_dc is already [..., C, N, D]
+            pass
+    # if sh_degree is None:
+    #     colors = colors_dc
+    # else:
+    #     # Colors are SH coefficients, with shape [..., N, K, 3] or [..., C, N, K, 3]
+    #     campos = torch.inverse(viewmats)[..., :3, 3]  # [..., C, 3]
+    #     if viewmats_rs is not None:
+    #         campos_rs = torch.inverse(viewmats_rs)[..., :3, 3]
+    #         campos = 0.5 * (campos + campos_rs)  # [..., C, 3]
+    #     # if primitive in ["3dgs", "mip"]:
+    #     if primitive in ["3dgs", "mip", "opaque_triangle"]:
+    #         means = splat_params[0]
+    #     elif primitive in ["opaque_triangle"]:
+    #         means = splat_params[0].mean(-2)
+    #     if packed:
+    #         dirs = (
+    #             means.view(B, N, 3)[batch_ids, gaussian_ids]
+    #             - campos.view(B, C, 3)[batch_ids, camera_ids]
+    #         )  # [nnz, 3]
+    #         masks = (radii > 0).all(dim=-1)  # [nnz]  # TODO
+    #         if colors_sh.dim() == num_batch_dims + 3:
+    #             # Turn [..., N, K, 3] into [nnz, 3]
+    #             colors_sh = colors_sh.view(B, N, -1, 3)[batch_ids, gaussian_ids]  # [nnz, K, 3]
+    #         else:
+    #             # Turn [..., C, N, K, 3] into [nnz, 3]
+    #             colors_sh = colors_sh.view(B, C, N, -1, 3)[
+    #                 batch_ids, camera_ids, gaussian_ids
+    #             ]  # [nnz, K, 3]
+    #         colors = spherical_harmonics(sh_degree, dirs, colors_dc, colors_sh)  # [nnz, 3]
+    #     else:
+    #         dirs = means[..., None, :, :] - campos[..., None, :]  # [..., C, N, 3]
+    #         if colors_sh.dim() == num_batch_dims + 3:
+    #             # Turn [..., N, K, 3] into [..., C, N, K, 3]
+    #             colors_sh = torch.broadcast_to(
+    #                 colors_sh[..., None, :, :, :], batch_dims + (C, N, -1, 3)
+    #             )
+    #         else:
+    #             # colors is already [..., C, N, K, 3]
+    #             colors_sh = colors_sh
+    #         colors = spherical_harmonics(
+    #             sh_degree, dirs, colors_dc, colors_sh
+    #         )  # [..., C, N, 3]
+    #     # colors = torch.clamp_min(colors+0.5, 0.0)
 
     if use_bvh:
         raise NotImplementedError()
@@ -563,67 +628,6 @@ def rasterization(
     #         "intersection_count": intersection_count_map[1:]-intersection_count_map[:-1]
     #     })
 
-    # Turn colors into [..., C, N, D] or [..., nnz, D] to pass into rasterize_to_pixels()
-    # Colors are post-activation values, with shape [..., N, D] or [..., C, N, D]
-    if packed:
-        if colors_dc.dim() == num_batch_dims + 2:
-            # Turn [..., N, D] into [nnz, D]
-            colors_dc = colors_dc.view(B, N, -1)[batch_ids, gaussian_ids]
-        else:
-            # Turn [..., C, N, D] into [nnz, D]
-            colors_dc = colors_dc.view(B, C, N, -1)[batch_ids, camera_ids, gaussian_ids]
-    else:
-        if colors_dc.dim() == num_batch_dims + 2:
-            # Turn [..., N, D] into [..., C, N, D]
-            colors_dc = torch.broadcast_to(
-                colors_dc[..., None, :, :], batch_dims + (C, N, -1)
-            )
-        else:
-            # colors_dc is already [..., C, N, D]
-            pass
-    if sh_degree is None:
-        colors = colors_dc
-    else:
-        # Colors are SH coefficients, with shape [..., N, K, 3] or [..., C, N, K, 3]
-        campos = torch.inverse(viewmats)[..., :3, 3]  # [..., C, 3]
-        if viewmats_rs is not None:
-            campos_rs = torch.inverse(viewmats_rs)[..., :3, 3]
-            campos = 0.5 * (campos + campos_rs)  # [..., C, 3]
-        # if primitive in ["3dgs", "mip"]:
-        if primitive in ["3dgs", "mip", "opaque_triangle"]:
-            means = splat_params[0]
-        elif primitive in ["opaque_triangle"]:
-            means = splat_params[0].mean(-2)
-        if packed:
-            dirs = (
-                means.view(B, N, 3)[batch_ids, gaussian_ids]
-                - campos.view(B, C, 3)[batch_ids, camera_ids]
-            )  # [nnz, 3]
-            masks = (radii > 0).all(dim=-1)  # [nnz]  # TODO
-            if colors_sh.dim() == num_batch_dims + 3:
-                # Turn [..., N, K, 3] into [nnz, 3]
-                colors_sh = colors_sh.view(B, N, -1, 3)[batch_ids, gaussian_ids]  # [nnz, K, 3]
-            else:
-                # Turn [..., C, N, K, 3] into [nnz, 3]
-                colors_sh = colors_sh.view(B, C, N, -1, 3)[
-                    batch_ids, camera_ids, gaussian_ids
-                ]  # [nnz, K, 3]
-            colors = spherical_harmonics(sh_degree, dirs, colors_dc, colors_sh)  # [nnz, 3]
-        else:
-            dirs = means[..., None, :, :] - campos[..., None, :]  # [..., C, N, 3]
-            if colors_sh.dim() == num_batch_dims + 3:
-                # Turn [..., N, K, 3] into [..., C, N, K, 3]
-                colors_sh = torch.broadcast_to(
-                    colors_sh[..., None, :, :, :], batch_dims + (C, N, -1, 3)
-                )
-            else:
-                # colors is already [..., C, N, K, 3]
-                colors_sh = colors_sh
-            colors = spherical_harmonics(
-                sh_degree, dirs, colors_dc, colors_sh
-            )  # [..., C, N, 3]
-        # colors = torch.clamp_min(colors+0.5, 0.0)
-
     # If in distributed mode, we need to scatter the GSs to the destination ranks, based
     # on which cameras they are visible to, which we already figured out in the projection
     # stage.
@@ -712,33 +716,33 @@ def rasterization(
             colors = reshape_view(C, colors, N_world)
 
     # Rasterize to pixels
-    if render_mode in ["RGB+D+N", "RGB+ED+N"]:
-        assert normals is not None, "Primitive does not support normal"
-        colors = torch.cat((colors, depths[..., None], normals), dim=-1)
-        if backgrounds is not None:
-            backgrounds = torch.cat(
-                [
-                    backgrounds,
-                    torch.zeros(batch_dims + (C, 1), device=backgrounds.device),
-                ],
-                dim=-1,
-            )
-    elif render_mode in ["RGB+D", "RGB+ED"]:
-        colors = torch.cat((colors, depths[..., None]), dim=-1)
-        if backgrounds is not None:
-            backgrounds = torch.cat(
-                [
-                    backgrounds,
-                    torch.zeros(batch_dims + (C, 1), device=backgrounds.device),
-                ],
-                dim=-1,
-            )
-    elif render_mode in ["D", "ED"]:
-        colors = depths[..., None]
-        if backgrounds is not None:
-            backgrounds = torch.zeros(batch_dims + (C, 1), device=backgrounds.device)
-    else:  # RGB
-        pass
+    # if render_mode in ["RGB+D+N", "RGB+ED+N"]:
+    #     assert normals is not None, "Primitive does not support normal"
+    #     colors = torch.cat((colors, depths[..., None], normals), dim=-1)
+    #     if backgrounds is not None:
+    #         backgrounds = torch.cat(
+    #             [
+    #                 backgrounds,
+    #                 torch.zeros(batch_dims + (C, 1), device=backgrounds.device),
+    #             ],
+    #             dim=-1,
+    #         )
+    # elif render_mode in ["RGB+D", "RGB+ED"]:
+    #     colors = torch.cat((colors, depths[..., None]), dim=-1)
+    #     if backgrounds is not None:
+    #         backgrounds = torch.cat(
+    #             [
+    #                 backgrounds,
+    #                 torch.zeros(batch_dims + (C, 1), device=backgrounds.device),
+    #             ],
+    #             dim=-1,
+    #         )
+    # elif render_mode in ["D", "ED"]:
+    #     colors = depths[..., None]
+    #     if backgrounds is not None:
+    #         backgrounds = torch.zeros(batch_dims + (C, 1), device=backgrounds.device)
+    # else:  # RGB
+    #     pass
 
     # Identify intersecting tiles
     tile_width = math.ceil(width / float(tile_size))
@@ -777,66 +781,63 @@ def rasterization(
     )
 
     # print("rank", world_rank, "Before rasterize_to_pixels")
-    if colors.shape[-1] > channel_chunk:
-        raise NotImplementedError()  # TODO
+    if with_eval3d:
+        raise NotImplementedError()
+        render_colors, render_alphas = rasterize_to_pixels_eval3d(
+            means,
+            quats,
+            torch.exp(scales),
+            colors,
+            torch.sigmoid(opacities),
+            viewmats,
+            Ks,
+            width,
+            height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+            backgrounds=backgrounds,
+            camera_model=camera_model,
+            radial_coeffs=radial_coeffs,
+            tangential_coeffs=tangential_coeffs,
+            thin_prism_coeffs=thin_prism_coeffs,
+            # ftheta_coeffs=ftheta_coeffs,
+            rolling_shutter=rolling_shutter,
+            viewmats_rs=viewmats_rs,
+        )
     else:
-        if with_eval3d:
-            raise NotImplementedError()
-            render_colors, render_alphas = rasterize_to_pixels_eval3d(
-                means,
-                quats,
-                torch.exp(scales),
-                colors,
-                torch.sigmoid(opacities),
-                viewmats,
-                Ks,
-                width,
-                height,
-                tile_size,
-                isect_offsets,
-                flatten_ids,
-                backgrounds=backgrounds,
-                camera_model=camera_model,
-                radial_coeffs=radial_coeffs,
-                tangential_coeffs=tangential_coeffs,
-                thin_prism_coeffs=thin_prism_coeffs,
-                # ftheta_coeffs=ftheta_coeffs,
-                rolling_shutter=rolling_shutter,
-                viewmats_rs=viewmats_rs,
-            )
-        else:
-            render_colors, render_alphas = rasterize_to_pixels(
-                primitive,
-                proj_splats,
-                colors,
-                width,
-                height,
-                tile_size,
-                isect_offsets,
-                flatten_ids,
-                backgrounds=backgrounds,
-                packed=packed,
-                absgrad=absgrad,
-            )
-    if "ED" in render_mode:
-        # normalize the accumulated depth to get the expected depth
-        depth_idx = 3 if "RGB" in render_mode else 0
-        render_colors = torch.cat(
-            [
-                render_colors[..., :depth_idx],
-                render_colors[..., depth_idx:depth_idx+1] / render_alphas.clamp(min=1e-10),
-                render_colors[..., depth_idx+1:],
-            ],
-            dim=-1,
+        render_colors, render_alphas = rasterize_to_pixels(
+            primitive,
+            proj_splats,
+            # colors,
+            width,
+            height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+            backgrounds=backgrounds,
+            packed=packed,
+            absgrad=absgrad,
         )
-    if "N" in render_mode:
-        render_colors = torch.cat(
-            [
-                render_colors[..., :-3],
-                render_colors[..., -3:] / render_colors[..., -3:].norm(dim=-1, keepdim=True).clamp(min=1e-10),
-            ],
-            dim=-1,
-        )
+    # if "ED" in render_mode:
+    #     # normalize the accumulated depth to get the expected depth
+    #     depth_idx = 3 if "RGB" in render_mode else 0
+    #     render_colors = torch.cat(
+    #         [
+    #             render_colors[..., :depth_idx],
+    #             render_colors[..., depth_idx:depth_idx+1] / render_alphas.clamp(min=1e-10),
+    #             render_colors[..., depth_idx+1:],
+    #         ],
+    #         dim=-1,
+    #     )
+    # if "N" in render_mode:
+    #     render_colors = torch.cat(
+    #         [
+    #             render_colors[..., :-3],
+    #             render_colors[..., -3:] / render_colors[..., -3:].norm(dim=-1, keepdim=True).clamp(min=1e-10),
+    #         ],
+    #         dim=-1,
+    #     )
 
     return render_colors, render_alphas, meta
 

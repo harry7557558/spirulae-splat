@@ -103,7 +103,7 @@ struct OpaqueTriangle::World {
             ));
         }
 
-        auto options() {
+        auto options() const {
             return means.options();
             // return verts.options();
         }
@@ -235,7 +235,7 @@ struct OpaqueTriangle::Screen {
             );
         }
 
-        auto options() {
+        auto options() const {
             return vertices.options();
         }
         bool isPacked() const {

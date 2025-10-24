@@ -1,5 +1,7 @@
 # run this from the `cuda` folder
 
+# tested with slang-2025.19.1-linux-x86_64
+
 compile_args="-ignore-capabilities -line-directive-mode none"
 
 slangc slang/.slang -target cuda -o csrc/generated/slang.cuh $compile_args

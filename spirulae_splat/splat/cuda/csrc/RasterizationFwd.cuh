@@ -12,11 +12,10 @@
 
 
 
-template <typename SplatPrimitive, uint32_t CDIM>
+template <typename SplatPrimitive>
 inline void launch_rasterize_to_pixels_fwd_kernel(
     // Gaussian parameters
     typename SplatPrimitive::Screen::Tensor splats,
-    const at::Tensor colors,    // [..., N, channels] or [nnz, channels]
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -27,18 +26,17 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     // outputs
-    at::Tensor renders, // [..., image_height, image_width, channels]
+    typename SplatPrimitive::RenderOutput::Tensor renders,
     at::Tensor transmittances,  // [..., image_height, image_width]
     at::Tensor last_ids // [..., image_height, image_width]
 );
 
 
 template <typename SplatPrimitive>
-inline std::tuple<at::Tensor, at::Tensor, at::Tensor>
+inline std::tuple<Vanilla3DGS::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
 rasterize_to_pixels_fwd_tensor(
     // Gaussian parameters
     typename SplatPrimitive::Screen::TensorTuple splats_tuple,
-    const at::Tensor colors,    // [..., N, channels] or [nnz, channels]
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -51,11 +49,10 @@ rasterize_to_pixels_fwd_tensor(
 );
 
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor>
+std::tuple<Vanilla3DGS::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
 rasterize_to_pixels_3dgs_fwd(
     // Gaussian parameters
     Vanilla3DGS::Screen::TensorTuple splats_tuple,
-    const at::Tensor colors,    // [..., N, channels] or [nnz, channels]
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -72,7 +69,6 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor>
 rasterize_to_pixels_opaque_triangle_fwd(
     // Gaussian parameters
     OpaqueTriangle::Screen::TensorTuple splats_tuple,
-    const at::Tensor colors,    // [..., N, channels] or [nnz, channels]
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size

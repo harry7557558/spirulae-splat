@@ -105,6 +105,66 @@ float det(float2 u, float2 v) {
     return u.x*v.y - u.y*v.x;
 }
 
+[ForceInline]
+[Differentiable]
+void sh_coeffs_to_color(
+    const float3 viewdir,
+    const float3 coeffs[16],
+    out float3 colors
+) {
+    colors = 0.2820947917738781f * coeffs[0];
+
+    float norm = sqrt(
+        viewdir.x * viewdir.x + viewdir.y * viewdir.y + viewdir.z * viewdir.z
+    );
+    float x = viewdir.x / norm;
+    float y = viewdir.y / norm;
+    float z = viewdir.z / norm;
+
+    float fTmp0A = 0.48860251190292f;
+    colors += fTmp0A *
+            (-y * coeffs[1] +
+            z * coeffs[2] -
+            x * coeffs[3]);
+    float z2 = z * z;
+
+    float fTmp0B = -1.092548430592079f * z;
+    float fTmp1A = 0.5462742152960395f;
+    float fC1 = x * x - y * y;
+    float fS1 = 2.f * x * y;
+    float pSH6 = (0.9461746957575601f * z2 - 0.3153915652525201f);
+    float pSH7 = fTmp0B * x;
+    float pSH5 = fTmp0B * y;
+    float pSH8 = fTmp1A * fC1;
+    float pSH4 = fTmp1A * fS1;
+    colors +=
+        pSH4 * coeffs[4] + pSH5 * coeffs[5] +
+        pSH6 * coeffs[6] + pSH7 * coeffs[7] +
+        pSH8 * coeffs[8];
+
+    float fTmp0C = -2.285228997322329f * z2 + 0.4570457994644658f;
+    float fTmp1B = 1.445305721320277f * z;
+    float fTmp2A = -0.5900435899266435f;
+    float fC2 = x * fC1 - y * fS1;
+    float fS2 = x * fS1 + y * fC1;
+    float pSH12 = z * (1.865881662950577f * z2 - 1.119528997770346f);
+    float pSH13 = fTmp0C * x;
+    float pSH11 = fTmp0C * y;
+    float pSH14 = fTmp1B * fC1;
+    float pSH10 = fTmp1B * fS1;
+    float pSH15 = fTmp2A * fC2;
+    float pSH9  = fTmp2A * fS2;
+    colors += pSH9  * coeffs[9] +
+            pSH10 * coeffs[10] +
+            pSH11 * coeffs[11] +
+            pSH12 * coeffs[12] +
+            pSH13 * coeffs[13] +
+            pSH14 * coeffs[14] +
+            pSH15 * coeffs[15];
+
+    colors = max(colors+0.5f, 0.0f);
+}
+
 
 struct CameraDistortion : IDifferentiable {
     float4 radial_coeffs;

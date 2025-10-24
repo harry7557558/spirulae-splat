@@ -397,6 +397,10 @@ class SpirulaeModel(Model):
             features_dc = torch.nn.Parameter(torch.rand(num_points, 3))
             features_sh = torch.nn.Parameter(torch.zeros((num_points, dim_sh-1, 3)))
 
+        features_ch = None
+        if self.config.primitive == "opaque_triangle":
+            features_ch = torch.nn.Parameter(torch.zeros((len(self.means), 2, 3)))
+
         gauss_params = {
             "means": means,
             "scales": scales,
@@ -405,6 +409,8 @@ class SpirulaeModel(Model):
             "features_sh": features_sh,
             "opacities": opacities,
         }
+        if features_ch is not None:
+            gauss_params["features_ch"] = features_ch
         self.gauss_params = torch.nn.ParameterDict(gauss_params)
 
         self.camera_optimizer: CameraOptimizer = self.config.camera_optimizer.setup(
@@ -552,6 +558,12 @@ class SpirulaeModel(Model):
         return self.gauss_params["features_sh"]
 
     @property
+    def features_ch(self):
+        if "features_ch" not in self.gauss_params:
+            return None
+        return self.gauss_params["features_ch"]
+
+    @property
     def opacities(self):
         return self.gauss_params["opacities"]
 
@@ -562,9 +574,10 @@ class SpirulaeModel(Model):
             # For backwards compatibility, we remap the names of parameters from
             # means->gauss_params.means since old checkpoints have that format
             for p in ["means", "scales", "quats",
-                      "features_dc", "features_sh",
+                      "features_dc", "features_sh", "features_ch",
                       "opacities"]:
-                dict[f"gauss_params.{p}"] = dict[p]
+                if p in dict:
+                    dict[f"gauss_params.{p}"] = dict[p]
         newp = dict["gauss_params.means"].shape[0]
         for name, param in self.gauss_params.items():
             old_shape = param.shape
@@ -654,9 +667,9 @@ class SpirulaeModel(Model):
             name: [self.gauss_params[name]]
             for name in [
                 "means", "scales", "quats",
-                "features_dc", "features_sh",
+                "features_dc", "features_sh", "features_ch",
                 "opacities"
-            ]
+            ] if name in self.gauss_params
         }
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
@@ -806,7 +819,8 @@ class SpirulaeModel(Model):
 
         rgbd, alpha, meta = rasterization(
             self.config.primitive,
-            (self.means, quats, self.scales, self.opacities.squeeze(-1))
+            (self.means, quats, self.scales, self.opacities.squeeze(-1),
+                self.features_dc, self.features_sh)
                 if self.config.primitive in ['3dgs', 'mip'] else
             # (self.means, quats, self.scales.mean(-1, keepdim=True).repeat(1,3),
             (self.means, quats, self.scales,
@@ -815,7 +829,8 @@ class SpirulaeModel(Model):
             torch.concat([
                 self.strategy.map_opacities(self.step, self.opacities),
                 hardness * torch.ones_like(self.opacities)
-            ], dim=-1)
+            ], dim=-1),
+            self.features_ch
              ),
             # (self.means, hardness * torch.ones_like(self.opacities.squeeze(-1))),
             colors_dc=self.features_dc,
@@ -847,19 +862,20 @@ class SpirulaeModel(Model):
         #     alpha = merge_tiles(alpha)
         #     W, H = camera.width[0].item(), camera.height[0].item()
 
-        rgb = rgbd[..., :3]
+        # rgb = rgbd[..., :3]
+        rgb = rgbd[0]
 
         if self.config.compute_depth_normal or not self.training:
             depth_im_ref = torch.where(
-                alpha > 0.0, rgbd[..., 3:4] / alpha,
-                max_depth_scale*torch.amax(rgbd[..., 3:4]).detach()
+                alpha > 0.0, rgbd[1] / alpha,
+                max_depth_scale*torch.amax(rgbd[1]).detach()
             ).contiguous()
         else:
             depth_im_ref = None
 
         render_normal = None
-        if rgbd.shape[-1] > 4:
-            render_normal = rgbd[..., -3:]
+        if len(rgbd) > 2:
+            render_normal = rgbd[3]
             if not self.training:
                 render_normal = 0.5+0.5*render_normal
 

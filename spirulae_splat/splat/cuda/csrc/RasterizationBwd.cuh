@@ -12,11 +12,10 @@
 
 
 
-template <typename SplatPrimitive, uint32_t CDIM>
+template <typename SplatPrimitive>
 inline void launch_rasterize_to_pixels_bwd_kernel(
     // Gaussian parameters
     typename SplatPrimitive::Screen::Tensor splats,
-    const at::Tensor colors,                    // [..., N, 3] or [nnz, 3]
     const std::optional<at::Tensor> backgrounds, // [..., 3]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -29,23 +28,20 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
     // gradients of outputs
-    const at::Tensor v_render_colors, // [..., image_height, image_width, 3]
+    typename SplatPrimitive::RenderOutput::Tensor v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
     // outputs
-    typename SplatPrimitive::Screen::Tensor v_splats,
-    at::Tensor v_colors                    // [..., N, 3] or [nnz, 3]
+    typename SplatPrimitive::Screen::Tensor v_splats
 );
 
 
 template<typename SplatPrimitive>
 inline std::tuple<
     typename SplatPrimitive::Screen::TensorTuple,
-    at::Tensor,  // v_colors
     std::optional<at::Tensor>  // absgrad
 > rasterize_to_pixels_bwd_tensor(
     // Gaussian parameters
     typename SplatPrimitive::Screen::TensorTuple splats_tuple,
-    const at::Tensor colors,                    // [..., N, channels] or [nnz, channels]
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -59,7 +55,7 @@ inline std::tuple<
     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
     // gradients of outputs
-    const at::Tensor v_render_colors, // [..., image_height, image_width, channels]
+    typename SplatPrimitive::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
     // options
     bool absgrad
@@ -68,12 +64,10 @@ inline std::tuple<
 
 std::tuple<
     Vanilla3DGS::Screen::TensorTuple,
-    at::Tensor,  // v_colors
     std::optional<at::Tensor>  // absgrad
 > rasterize_to_pixels_3dgs_bwd(
     // Gaussian parameters
     Vanilla3DGS::Screen::TensorTuple splats_tuple,
-    const at::Tensor colors,                    // [..., N, channels] or [nnz, channels]
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -87,7 +81,7 @@ std::tuple<
     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
     // gradients of outputs
-    const at::Tensor v_render_colors, // [..., image_height, image_width, channels]
+    Vanilla3DGS::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
     // options
     bool absgrad

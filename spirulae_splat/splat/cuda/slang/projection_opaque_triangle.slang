@@ -254,6 +254,8 @@ void projection_opaque_triangle_fisheye_vjp(
 float antialiase_map(float d, float dmax, float hardness) {
     hardness = clamp(hardness, 0.005f, 0.995f);
 
+    // return d/dmax >= 0.0f ? 0.0f : pow(-d/dmax, 1.0f-hardness);
+
     // float a = d/(2.0f*dmax*(1.0f-hardness)+hardness);
     // // return clamp(-a+0.5f, 0.0f, 0.999f);
     // return 0.999f/(1.0f+exp(4.0f*a));

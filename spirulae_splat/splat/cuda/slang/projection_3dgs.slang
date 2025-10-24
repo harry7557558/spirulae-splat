@@ -144,6 +144,7 @@ float add_blur(const float eps2d, inout float2x2 covar, out float compensation) 
     const float4 quat, \
     const float3 scale, \
     const float in_opacity, \
+    const float3 sh_coeffs[16], \
     const float3x3 R, \
     const float3 t, \
     no_diff const float fx, \
@@ -158,10 +159,11 @@ float add_blur(const float eps2d, inout float2x2 covar, out float compensation) 
     no_diff const float near_plane, \
     no_diff const float far_plane, \
     out int4 aabb_xyxy, \
-    out float depth, \
     out float2 mean2d, \
+    out float depth, \
     out float3 conic, \
-    out float opacity
+    out float opacity, \
+    out float3 rgb
 
 [ForceInline]
 [Differentiable]
@@ -263,6 +265,9 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool>(
     aabb_xyxy = {(int)xmin, (int)ymin, (int)xmax, (int)ymax};  // don't clamp
     depth = mean_c.z;
     conic = {covar2d_inv[0][0], covar2d_inv[0][1], covar2d_inv[1][1]};
+
+    float3 campos = -mul(transpose(R), t);
+    sh_coeffs_to_color(mean - campos, sh_coeffs, rgb);
 }
 
 #define _DEF_projection_3dgs(funname, ...) \
@@ -272,10 +277,10 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool>(
     void funname(_projection_3dgs_ARGS) { \
         return projection_3dgs<__VA_ARGS__>( \
             antialiased, \
-            mean, quat, scale, in_opacity, R, t, \
+            mean, quat, scale, in_opacity, sh_coeffs, R, t, \
             fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs, \
             image_width, image_height, near_plane, far_plane, \
-            aabb_xyxy, depth, mean2d, conic, opacity \
+            aabb_xyxy, mean2d, depth, conic, opacity, rgb \
         ); \
     }
 
@@ -290,6 +295,7 @@ _DEF_projection_3dgs(projection_3dgs_ortho, CameraModelType::ORTHO, false)
     const float4 quat, \
     const float3 scale, \
     const float in_opacity, \
+    const float3 sh_coeffs[16], \
     const float3x3 R, \
     const float3 t, \
     const float fx, \
@@ -301,14 +307,16 @@ _DEF_projection_3dgs(projection_3dgs_ortho, CameraModelType::ORTHO, false)
     const float2 thin_prism_coeffs, \
     const uint image_width, \
     const uint image_height, \
-    const float v_depth, \
     const float2 v_mean2d, \
+    const float v_depth, \
     const float3 v_conic, \
     const float v_opacity, \
+    const float3 v_rgb, \
     out float3 v_mean, \
     out float4 v_quat, \
     out float3 v_scale, \
     out float v_in_opacity, \
+    out float3 v_sh_coeffs[16], \
     out float3x3 v_R, \
     out float3 v_t
 
@@ -325,19 +333,21 @@ void projection_3dgs_persp_vjp(
     DifferentialPair<float4> dp_quat = diffPair(quat);
     DifferentialPair<float3> dp_scale = diffPair(scale);
     DifferentialPair<float> dp_in_opacity = diffPair(in_opacity);
+    DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);
     DifferentialPair<float3x3> dp_R = diffPair(R);
     DifferentialPair<float3> dp_t = diffPair(t);
     bwd_diff(_projection_3dgs_persp_differentiable)(
         antialiased,
-        dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_R, dp_t,
+        dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
         fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
         image_width, image_height, 0.0f, 1e30f,
-        v_depth, v_mean2d, v_conic, v_opacity
+        v_mean2d, v_depth, v_conic, v_opacity, v_rgb
     );
     v_mean = dp_mean.d;
     v_quat = dp_quat.d;
     v_scale = dp_scale.d;
     v_in_opacity = dp_in_opacity.d;
+    v_sh_coeffs = dp_sh_coeffs.d;
     v_R = dp_R.d;
     v_t = dp_t.d;
 }
@@ -350,19 +360,21 @@ void projection_3dgs_fisheye_vjp(
     DifferentialPair<float4> dp_quat = diffPair(quat);
     DifferentialPair<float3> dp_scale = diffPair(scale);
     DifferentialPair<float> dp_in_opacity = diffPair(in_opacity);
+    DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);
     DifferentialPair<float3x3> dp_R = diffPair(R);
     DifferentialPair<float3> dp_t = diffPair(t);
     bwd_diff(_projection_3dgs_fisheye_differentiable)(
         antialiased,
-        dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_R, dp_t,
+        dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
         fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
         image_width, image_height, 0.0f, 1e30f,
-        v_depth, v_mean2d, v_conic, v_opacity
+        v_mean2d, v_depth, v_conic, v_opacity, v_rgb
     );
     v_mean = dp_mean.d;
     v_quat = dp_quat.d;
     v_scale = dp_scale.d;
     v_in_opacity = dp_in_opacity.d;
+    v_sh_coeffs = dp_sh_coeffs.d;
     v_R = dp_R.d;
     v_t = dp_t.d;
 }
@@ -375,19 +387,21 @@ void projection_3dgs_ortho_vjp(
     DifferentialPair<float4> dp_quat = diffPair(quat);
     DifferentialPair<float3> dp_scale = diffPair(scale);
     DifferentialPair<float> dp_in_opacity = diffPair(in_opacity);
+    DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);
     DifferentialPair<float3x3> dp_R = diffPair(R);
     DifferentialPair<float3> dp_t = diffPair(t);
     bwd_diff(_projection_3dgs_ortho_differentiable)(
         antialiased,
-        dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_R, dp_t,
+        dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
         fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
         image_width, image_height, 0.0f, 1e30f,
-        v_depth, v_mean2d, v_conic, v_opacity
+        v_mean2d, v_depth, v_conic, v_opacity, v_rgb
     );
     v_mean = dp_mean.d;
     v_quat = dp_quat.d;
     v_scale = dp_scale.d;
     v_in_opacity = dp_in_opacity.d;
+    v_sh_coeffs = dp_sh_coeffs.d;
     v_R = dp_R.d;
     v_t = dp_t.d;
 }

@@ -14,7 +14,7 @@ constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
 constexpr uint SPLAT_BATCH_SIZE = 128;
 
 
-template <typename SplatPrimitive, uint32_t CDIM>
+template <typename SplatPrimitive>
 __global__ void rasterize_to_pixels_bwd_kernel(
     const uint32_t I,
     const uint32_t N,
@@ -22,7 +22,6 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const bool packed,
     // fwd inputs
     typename SplatPrimitive::Screen::Buffer splat_buffer,
-    const float *__restrict__ colors,      // [..., N, CDIM] or [nnz, CDIM]
     const float *__restrict__ backgrounds, // [..., CDIM] or [nnz, CDIM]
     const bool *__restrict__ masks,           // [..., tile_height, tile_width]
     const uint32_t image_width,
@@ -36,13 +35,11 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
     // grad outputs
-    const float *__restrict__ v_render_colors, // [..., image_height,
-                                                  // image_width, CDIM]
+    typename SplatPrimitive::RenderOutput::Buffer v_render_output_buffer,
     const float
         *__restrict__ v_render_alphas, // [..., image_height, image_width, 1]
     // grad inputs
-    typename SplatPrimitive::Screen::Buffer v_splat_buffer,
-    float *__restrict__ v_colors   // [..., N, CDIM] or [nnz, CDIM]
+    typename SplatPrimitive::Screen::Buffer v_splat_buffer
 ) {
     auto block = cg::this_thread_block();
     cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
@@ -53,10 +50,9 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     tile_offsets += image_id * tile_height * tile_width;
     render_Ts += image_id * image_height * image_width;
     last_ids += image_id * image_height * image_width;
-    v_render_colors += image_id * image_height * image_width * CDIM;
     v_render_alphas += image_id * image_height * image_width;
     if (backgrounds != nullptr) {
-        backgrounds += image_id * CDIM;
+        backgrounds += image_id;
     }
     if (masks != nullptr) {
         masks += image_id * tile_height * tile_width;
@@ -79,8 +75,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     #else
     __shared__ int32_t pix_bin_final[BLOCK_SIZE];
     __shared__ float2 pix_Ts_with_grad[BLOCK_SIZE];
-    __shared__ float v_pix_colors[BLOCK_SIZE*CDIM];
-    __shared__ float pix_background[CDIM];
+    __shared__ typename SplatPrimitive::RenderOutput v_pix_colors[BLOCK_SIZE];
+    // __shared__ float pix_background[CDIM];  // TODO
     #endif
     #pragma unroll
     for (uint pix_id0 = 0; pix_id0 < BLOCK_SIZE; pix_id0 += SPLAT_BATCH_SIZE) {
@@ -97,15 +93,14 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             (inside ? render_Ts[pix_id_global] : 0.0f),
             (inside ? -v_render_alphas[pix_id_global] : 0.0f)
         };
-        #pragma unroll
-        for (uint k = 0; k < CDIM; k++) {
-            v_pix_colors[pix_id_local * CDIM + k] =
-                (inside ? v_render_colors[pix_id_global * CDIM + k] : 0.0f);
-        }
+        v_pix_colors[pix_id_local] = (inside ?
+            SplatPrimitive::RenderOutput::load(v_render_output_buffer,
+                    image_id * image_height * image_width + pix_id_global)
+             : SplatPrimitive::RenderOutput::zero());
     }
-    static_assert(CDIM <= SPLAT_BATCH_SIZE);
-    if (thread_id < CDIM && backgrounds != nullptr)
-        pix_background[thread_id] = backgrounds[thread_id];
+    // static_assert(CDIM <= SPLAT_BATCH_SIZE);
+    // if (thread_id < CDIM && backgrounds != nullptr)
+    //     pix_background[thread_id] = backgrounds[thread_id];  // TODO
     block.sync();
 
     // threads fist load splats, then swept through pixels
@@ -129,20 +124,12 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         // load splats
         typename SplatPrimitive::Screen splat;
         uint32_t splat_gid;
-        float splat_color[CDIM];
         if (splat_idx >= range_start) {
             splat_gid = flatten_ids[splat_idx]; // flatten index in [I * N] or [nnz]
             splat = SplatPrimitive::Screen::load(splat_buffer, splat_gid);
-            #pragma unroll
-            for (uint32_t k = 0; k < CDIM; ++k)
-                splat_color[k] = colors[splat_gid * CDIM + k];
         }
 
         // accumulate gradient
-        float v_rgb_local[CDIM] = {0.f};
-        #pragma unroll
-        for (uint32_t k = 0; k < CDIM; ++k)
-            v_rgb_local[k] = 0.f;
         typename SplatPrimitive::Screen v_splat = SplatPrimitive::Screen::zero();
 
         // thread 0 takes last splat, 1 takes second last, etc.
@@ -183,34 +170,30 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             float ra = 1.0f / (1.0f - alpha);
             float T0 = T1 * ra;
 
+            typename SplatPrimitive::RenderOutput splat_color = splat.evaluate_color(px, py);
+            typename SplatPrimitive::RenderOutput v_c = v_pix_colors[pix_id];
+
             // gradient to alpha:
             // \frac{dL}{d\alpha_{i}}
             // = \frac{dL}{dc_{1}}\frac{dc_{1}}{d\alpha_{i}}+\frac{dL}{dT_{1}}\frac{dT_{1}}{d\alpha_{i}}
             // = T_{0}\frac{dL}{dc_{1}}c_{i}-\frac{dL}{dT_{1}}T_{0}
+            float v_alpha = T0 * splat_color.dot(v_c) -v_T1 * T0;
 
             // gradient to color:
             // \frac{dL}{dc_{i}}
             // = \frac{dL}{dc_{1}}\frac{dc_{1}}{dc_{i}}
             // = \alpha_{i}T_{0}\frac{dL}{dc_{1}}
+            typename SplatPrimitive::RenderOutput v_rgb_local = v_c * (alpha * T0);
 
             // update pixel gradient:
             // \frac{dL}{dT_{0}}
             // = \frac{dL}{dc_{1}}\frac{dc_{1}}{dT_{0}}+\frac{dL}{dT_{1}}\frac{dT_{1}}{dT_{0}}
             // = \alpha_{i}\frac{dL}{dc_{1}}c_{i}+\frac{dL}{dT_{1}}\left(1-\alpha_{i}\right)
-
-            float v_alpha = -v_T1 * T0;  // gradient to alpha
-            float v_T0 = v_T1 * (1.0f - alpha);  // update pixel gradient
-            #pragma unroll
-            for (uint32_t k = 0; k < CDIM; ++k) {
-                float c = splat_color[k];
-                float v_c = v_pix_colors[pix_id * CDIM + k];
-                v_alpha += c * v_c * T0;  // gradient to alpha
-                v_rgb_local[k] += alpha * T0 * v_c;  // gradient to color
-                v_T0 += c * v_c * alpha; // update pixel gradient
-            }
+            float v_T0 = alpha * splat_color.dot(v_c) + v_T1 * (1.0f - alpha);
 
             // backward diff splat
             v_splat += splat.evaluate_alpha_vjp(px, py, v_alpha);
+            v_splat += splat.evaluate_color_vjp(px, py, v_rgb_local);
 
             // update pixel states
             pix_Ts_with_grad[pix_id] = { T0, v_T0 };
@@ -221,28 +204,16 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         }
 
         // accumulate gradient
-        {
-            if (splat_idx >= range_start) {
-
-                float *v_rgb_ptr = (float *)(v_colors) + CDIM * splat_gid;
-                #pragma unroll
-                for (uint32_t k = 0; k < CDIM; ++k) {
-                    if (v_rgb_local[k] != 0.0f)
-                        atomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
-                }
-
-                v_splat.atomicAddBuffer(v_splat_buffer, splat_gid);
-            }
-        }
+        if (splat_idx >= range_start)
+            v_splat.atomicAddBuffer(v_splat_buffer, splat_gid);
     }
 }
 
 
-template <typename SplatPrimitive, uint32_t CDIM>
+template <typename SplatPrimitive>
 inline void launch_rasterize_to_pixels_bwd_kernel(
     // Gaussian parameters
     typename SplatPrimitive::Screen::Tensor splats,
-    const at::Tensor colors,                    // [..., N, 3] or [nnz, 3]
     const std::optional<at::Tensor> backgrounds, // [..., 3]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -255,11 +226,10 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
     // gradients of outputs
-    const at::Tensor v_render_colors, // [..., image_height, image_width, 3]
+    typename SplatPrimitive::RenderOutput::Tensor v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
     // outputs
-    typename SplatPrimitive::Screen::Tensor v_splats,
-    at::Tensor v_colors                    // [..., N, 3] or [nnz, 3]
+    typename SplatPrimitive::Screen::Tensor v_splats
 ) {
     bool packed = splats.isPacked();
     uint32_t N = packed ? 0 : splats.size(); // number of gaussians
@@ -296,15 +266,14 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
     }
     #endif
 
-    rasterize_to_pixels_bwd_kernel<SplatPrimitive, CDIM>
+    rasterize_to_pixels_bwd_kernel<SplatPrimitive>
         // <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
         <<<grid, threads>>>(
             I,
             N,
             n_isects,
             packed,
-            splats,
-            colors.data_ptr<float>(),
+            splats.buffer(),
             backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
                                     : nullptr,
             masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
@@ -316,10 +285,9 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
             flatten_ids.data_ptr<int32_t>(),
             render_Ts.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            v_render_colors.data_ptr<float>(),
+            v_render_outputs.buffer(),
             v_render_alphas.data_ptr<float>(),
-            v_splats,
-            v_colors.data_ptr<float>()
+            v_splats.buffer()
         );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
@@ -328,12 +296,10 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
 template<typename SplatPrimitive>
 inline std::tuple<
     typename SplatPrimitive::Screen::TensorTuple,
-    at::Tensor,  // v_colors
     std::optional<at::Tensor>  // absgrad
 > rasterize_to_pixels_bwd_tensor(
     // Gaussian parameters
     typename SplatPrimitive::Screen::TensorTuple splats_tuple,
-    const at::Tensor colors,                    // [..., N, channels] or [nnz, channels]
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -347,18 +313,16 @@ inline std::tuple<
     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
     // gradients of outputs
-    const at::Tensor v_render_colors, // [..., image_height, image_width, channels]
+    typename SplatPrimitive::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
     // options
     bool absgrad
 ) {
-    DEVICE_GUARD(colors);
-    CHECK_INPUT(colors);
+    DEVICE_GUARD(tile_offsets);
     CHECK_INPUT(tile_offsets);
     CHECK_INPUT(flatten_ids);
     CHECK_INPUT(render_Ts);
     CHECK_INPUT(last_ids);
-    CHECK_INPUT(v_render_colors);
     CHECK_INPUT(v_render_alphas);
     if (backgrounds.has_value())
         CHECK_INPUT(backgrounds.value());
@@ -368,76 +332,35 @@ inline std::tuple<
     if (tile_size != TILE_SIZE)
         AT_ERROR("Unsupported tile size");
 
-    uint32_t channels = colors.size(-1);
-
     typename SplatPrimitive::Screen::Tensor splats(splats_tuple);
     typename SplatPrimitive::Screen::Tensor v_splats = splats.zeros_like(absgrad);
 
-    at::Tensor v_colors = torch::zeros_like(colors, splats.options());
-
-#define __LAUNCH_KERNEL__(N)                                                   \
-    case N:                                                                    \
-        launch_rasterize_to_pixels_bwd_kernel<SplatPrimitive, N>(              \
-            splats,                                                            \
-            colors,                                                            \
-            backgrounds,                                                       \
-            masks,                                                             \
-            image_width,                                                       \
-            image_height,                                                      \
-            tile_offsets,                                                      \
-            flatten_ids,                                                       \
-            render_Ts,                                                         \
-            last_ids,                                                          \
-            v_render_colors,                                                   \
-            v_render_alphas,                                                   \
-            v_splats,                                                          \
-            v_colors                                                           \
-        );                                                                     \
-        break;
-
-    // TODO: an optimization can be done by passing the actual number of
-    // channels into the kernel functions and avoid necessary global memory
-    // writes. This requires moving the channel padding from python to C side.
-    switch (channels) {
-        __LAUNCH_KERNEL__(1)
-        __LAUNCH_KERNEL__(2)
-        __LAUNCH_KERNEL__(3)
-        __LAUNCH_KERNEL__(4)
-        __LAUNCH_KERNEL__(5)
-        __LAUNCH_KERNEL__(6)
-        __LAUNCH_KERNEL__(7)
-        // __LAUNCH_KERNEL__(8)
-        // __LAUNCH_KERNEL__(9)
-        // __LAUNCH_KERNEL__(16)
-        // __LAUNCH_KERNEL__(17)
-        // __LAUNCH_KERNEL__(32)
-        // __LAUNCH_KERNEL__(33)
-        // __LAUNCH_KERNEL__(64)
-        // __LAUNCH_KERNEL__(65)
-        // __LAUNCH_KERNEL__(128)
-        // __LAUNCH_KERNEL__(129)
-        // __LAUNCH_KERNEL__(256)
-        // __LAUNCH_KERNEL__(257)
-        // __LAUNCH_KERNEL__(512)
-        // __LAUNCH_KERNEL__(513)
-    default:
-        AT_ERROR("Unsupported number of channels: ", channels);
-    }
-#undef __LAUNCH_KERNEL__
+    launch_rasterize_to_pixels_bwd_kernel<SplatPrimitive>(
+        splats,
+        backgrounds,
+        masks,
+        image_width,
+        image_height,
+        tile_offsets,
+        flatten_ids,
+        render_Ts,
+        last_ids,
+        v_render_outputs,
+        v_render_alphas,
+        v_splats
+    );
 
     return std::make_tuple(
-        v_splats.tuple(), v_colors, v_splats.absgrad
+        v_splats.tuple(), v_splats.absgrad
     );
 }
 
 std::tuple<
     Vanilla3DGS::Screen::TensorTuple,
-    at::Tensor,  // v_colors
     std::optional<at::Tensor>  // absgrad
 > rasterize_to_pixels_3dgs_bwd(
     // Gaussian parameters
     Vanilla3DGS::Screen::TensorTuple splats_tuple,
-    const at::Tensor colors,                    // [..., N, channels] or [nnz, channels]
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -451,15 +374,15 @@ std::tuple<
     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
     // gradients of outputs
-    const at::Tensor v_render_colors, // [..., image_height, image_width, channels]
+    Vanilla3DGS::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
     // options
     bool absgrad
 ) {
     return rasterize_to_pixels_bwd_tensor<Vanilla3DGS>(
-        splats_tuple, colors, backgrounds, masks,
+        splats_tuple, backgrounds, masks,
         image_width, image_height, tile_size, tile_offsets, flatten_ids,
-        render_Ts, last_ids, v_render_colors, v_render_alphas, absgrad
+        render_Ts, last_ids, v_render_outputs, v_render_alphas, absgrad
     );
 }
 
@@ -489,9 +412,10 @@ std::tuple<
     // options
     bool absgrad
 ) {
-    return rasterize_to_pixels_bwd_tensor<OpaqueTriangle>(
-        splats_tuple, colors, backgrounds, masks,
-        image_width, image_height, tile_size, tile_offsets, flatten_ids,
-        render_Ts, last_ids, v_render_colors, v_render_alphas, absgrad
-    );
+    throw std::runtime_error("TODO");
+    // return rasterize_to_pixels_bwd_tensor<OpaqueTriangle>(
+    //     splats_tuple, colors, backgrounds, masks,
+    //     image_width, image_height, tile_size, tile_offsets, flatten_ids,
+    //     render_Ts, last_ids, v_render_colors, v_render_alphas, absgrad
+    // );
 }

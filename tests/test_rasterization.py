@@ -23,7 +23,7 @@ IS_ANTIALIASED = False
 def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
     rgbd, alpha, meta = ssplat_rasterization(
         primitive=["3dgs", "mip"][IS_ANTIALIASED],
-        splat_params=(means, quats, scales, opacities.squeeze(-1)),
+        splat_params=(means, quats, scales, opacities.squeeze(-1), features_dc, features_sh),
         # primitive="opaque_triangle",
         # splat_params=(
         #     means.unsqueeze(-2).repeat(1, 3, 1) + 0.1 * torch.tensor([[[1,0,0],[0,1,0],[0,0,1]]]).to(means),
@@ -48,7 +48,7 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
         render_mode="RGB+D",
         # render_mode="RGB+D+N",
     )
-    return rgbd[..., :3], rgbd[..., 3:], alpha
+    return *rgbd, alpha
 
 def rasterize_gsplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
     rgbd, alpha, meta = gsplat_rasterization(
@@ -127,13 +127,18 @@ def test_rasterization():
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2)
         rgb = outputs[0].detach().cpu().numpy()
         _rgb = _outputs[0].detach().cpu().numpy()
+        alpha = outputs[2].detach().cpu().numpy()
+        _alpha = _outputs[2].detach().cpu().numpy()
         ax1.imshow(rgb[0])
+        ax2.imshow(alpha[1])
         # ax2.imshow(rgb[1])
         # ax3.imshow(rgb[2])
         # ax4.imshow(rgb[3])
         ax3.imshow(_rgb[0])
+        ax4.imshow(_alpha[0])
         # ax4.imshow(_rgb[1])
-        plt.show()
+        # plt.show()
+        plt.savefig("/workspace/plot.png")
 
     weights = [torch.randn_like(x.detach()) for x in _outputs]
     def fun(outputs):

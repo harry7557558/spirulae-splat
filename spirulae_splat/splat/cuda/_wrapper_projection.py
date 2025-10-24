@@ -114,7 +114,7 @@ def fully_fused_projection(
 ) -> Tuple[Tensor, Tensor, Optional[Tensor], Tuple[Tensor]]:
     # if primitive in ["3dgs", "mip"]:
     if primitive in ["3dgs", "mip", "opaque_triangle"]:
-        means, quats, scales, opacities = splats
+        means, quats, scales, opacities, features_dc, features_sh = splats
         batch_dims = means.shape[:-2]
         N = means.shape[-2]
         assert means.shape == batch_dims + (N, 3), means.shape
@@ -124,6 +124,7 @@ def fully_fused_projection(
             assert opacities.shape == batch_dims + (N,), opacities.shape
         else:
             assert opacities.shape == batch_dims + (N, 2), opacities.shape
+        assert features_dc.shape == batch_dims + (N, 3), features_dc.shape
     elif primitive in ["opaque_triangle"]:
         means, hardness = splats
         batch_dims = means.shape[:-3]
@@ -175,9 +176,9 @@ def fully_fused_projection(
         )
         return (
             proj_return[0],  # aabb
-            proj_return[1],  # depth
-            proj_return[2],  # normal
-            tuple(proj_return[3:])
+            proj_return[2],  # depth
+            proj_return[3],  # normal
+            tuple(proj_return[1:3] + proj_return[4:])
         )
 
 class _FullyFusedProjection3DGS(torch.autograd.Function):
@@ -190,6 +191,8 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
         quats: Tensor,  # [..., N, 4]
         scales: Tensor,  # [..., N, 3]
         opacities: Tensor,  # [..., N]
+        features_dc: Tensor,  # [..., N, 3]
+        features_sh: Tensor,  # [..., N, x, 3]
         viewmats: Tensor,  # [..., C, 4, 4]
         Ks: Tensor,  # [..., C, 3, 3]
         width: int,
@@ -208,42 +211,42 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
             f"CameraModelType.{camera_model.upper()}"
         )
 
-        aabb, depths, normals, (means2d, conics, proj_opacities) = _make_lazy_cuda_func(
+        aabb, normals, (means2d, depths, conics, proj_opacities, proj_rgbs) = _make_lazy_cuda_func(
             "projection_ewa_3dgs_forward"
         )(
             is_antialiased,
-            (means, quats, scales, opacities),
+            (means, quats, scales, opacities, features_dc, features_sh),
             viewmats, Ks, width, height,
             near_plane, far_plane,
             camera_model_type, dist_coeffs
         )
-        ctx.save_for_backward(means, quats, scales, opacities, viewmats, Ks, aabb)
+        ctx.save_for_backward(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks, aabb)
         ctx.is_antialiased = is_antialiased
         ctx.width = width
         ctx.height = height
         ctx.camera_model_type = camera_model_type
         ctx.dist_coeffs = dist_coeffs
 
-        return aabb, depths, normals, means2d, conics, proj_opacities
+        return aabb, means2d, depths, normals, conics, proj_opacities, proj_rgbs
 
     @staticmethod
-    def backward(ctx, v_aabb, v_depths, v_normals, v_means2d, v_conics, v_opacities):
-        means, quats, scales, opacities, viewmats, Ks, aabb = ctx.saved_tensors
-        (v_means, v_quats, v_scales, v_opacities), v_viewmats = _make_lazy_cuda_func(
+    def backward(ctx, v_aabb, v_means2d, v_depths, v_normals, v_conics, v_opacities, v_proj_rgbs):
+        means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks, aabb = ctx.saved_tensors
+        (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh), v_viewmats = _make_lazy_cuda_func(
             "projection_ewa_3dgs_backward"
         )(
             ctx.is_antialiased,
-            (means, quats, scales, opacities),
+            (means, quats, scales, opacities, features_dc, features_sh),
             viewmats, Ks, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs,
-            aabb, v_depths.contiguous(), v_normals.contiguous() if v_normals is not None else None,
-            (v_means2d.contiguous(), v_conics.contiguous(), v_opacities.contiguous()),
-            ctx.needs_input_grad[4],  # viewmats_requires_grad
+            aabb, v_normals.contiguous() if v_normals is not None else None,
+            tuple([x.contiguous() for x in (v_means2d, v_depths, v_conics, v_opacities, v_proj_rgbs)]),
+            ctx.needs_input_grad[6],  # viewmats_requires_grad
         )
-        if not ctx.needs_input_grad[4]:
+        if not ctx.needs_input_grad[6]:
             v_viewmats = None
         return (
-            v_means, v_quats, v_scales, v_opacities, v_viewmats,
-            *([None]*(len(ctx.needs_input_grad)-5))
+            v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh, v_viewmats,
+            *([None]*(len(ctx.needs_input_grad)-6))
         )
 
 class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):

@@ -6,7 +6,14 @@ cu_dir = "csrc/generated"
 cu_files = [os.path.join(cu_dir, f) for f in os.listdir(cu_dir) if f.endswith(".cu")]
 
 def process(src: str):
-    src = src.replace("\n__device__", "\ninline __device__")  # make linker happy
+    src = src.split('\n')
+    for i, line in enumerate(src):
+        if line.startswith('__device__') and 'inline' not in line:
+            line = 'inline ' + line  # make linker happy
+        if line.strip().startswith("static_assert(false,"):
+            line = "//" + line
+        src[i] = line
+    src = '\n'.join(src)
     src = "#pragma once\n\n" + src
     return src
 

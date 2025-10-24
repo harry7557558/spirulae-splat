@@ -7,15 +7,14 @@
 #include <gsplat/Common.h>
 #include <gsplat/Utils.cuh>
 
-template <typename SplatPrimitive, uint32_t CDIM>
+template <typename SplatPrimitive>
 __global__ void rasterize_to_pixels_fwd_kernel(
     const uint32_t I,
     const uint32_t N,
     const uint32_t n_isects,
     const bool packed,
     typename SplatPrimitive::Screen::Buffer splat_buffer,
-    const float *__restrict__ colors,      // [I, N, CDIM] or [nnz, CDIM]
-    const float *__restrict__ backgrounds, // [I, CDIM]
+    const float3 *__restrict__ backgrounds, // [I, 3]
     const bool *__restrict__ masks,           // [I, tile_height, tile_width]
     const uint32_t image_width,
     const uint32_t image_height,
@@ -24,8 +23,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [I, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    float
-        *__restrict__ render_colors, // [I, image_height, image_width, CDIM]
+    typename SplatPrimitive::RenderOutput::Buffer render_colors, // [I, image_height, image_width, 3]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids        // [I, image_height, image_width]
 ) {
@@ -40,11 +38,10 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
     tile_offsets += image_id * tile_height * tile_width;
-    render_colors += image_id * image_height * image_width * CDIM;
     render_Ts += image_id * image_height * image_width;
     last_ids += image_id * image_height * image_width;
     if (backgrounds != nullptr) {
-        backgrounds += image_id * CDIM;
+        backgrounds += image_id;
     }
     if (masks != nullptr) {
         masks += image_id * tile_height * tile_width;
@@ -62,11 +59,10 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     // when the mask is provided, render the background color and return
     // if this tile is labeled as False
     if (masks != nullptr && inside && !masks[tile_id]) {
-        #pragma unroll
-        for (uint32_t k = 0; k < CDIM; ++k) {
-            render_colors[pix_id * CDIM + k] =
-                backgrounds == nullptr ? 0.0f : backgrounds[k];
-        }
+        // TODO
+        // render_colors[pix_id] = backgrounds == nullptr ?
+        //     SplatPrimitive::RenderOutput(make_float3(0.f)) :
+        //     SplatPrimitive::RenderOutput(*backgrounds);
         return;
     }
 
@@ -83,7 +79,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         (range_end - range_start + block_size - 1) / block_size;
 
     extern __shared__ int s[];
-    int32_t *id_batch = (int32_t *)s; // [block_size]
+    int32_t *id_batch = (int32_t *)s; // [block_size]  // TODO: don't need this
     typename SplatPrimitive::Screen *splat_batch =
         reinterpret_cast<typename SplatPrimitive::Screen*>(&id_batch[block_size]); // [block_size]
 
@@ -100,7 +96,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     // designated pixel
     uint32_t tr = block.thread_rank();
 
-    float pix_out[CDIM] = {0.f};
+    typename SplatPrimitive::RenderOutput pix_out = SplatPrimitive::RenderOutput::zero();
     for (uint32_t b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
@@ -114,7 +110,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         uint32_t idx = batch_start + tr;
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [I * N] or [nnz]
-            id_batch[tr] = g;
+            // id_batch[tr] = g;
             splat_batch[tr] = SplatPrimitive::Screen::load(splat_buffer, g);
         }
 
@@ -136,13 +132,9 @@ __global__ void rasterize_to_pixels_fwd_kernel(
                 break;
             }
 
-            int32_t g = id_batch[t];
             const float vis = alpha * T;
-            const float *c_ptr = colors + g * CDIM;
-            #pragma unroll
-            for (uint32_t k = 0; k < CDIM; ++k) {
-                pix_out[k] += c_ptr[k] * vis;
-            }
+            const Vanilla3DGS::RenderOutput color = splat.evaluate_color(px, py);
+            pix_out += color * vis;
             cur_idx = batch_start + t;
 
             T = next_T;
@@ -151,22 +143,17 @@ __global__ void rasterize_to_pixels_fwd_kernel(
 
     if (inside) {
         render_Ts[pix_id] = T;
-        #pragma unroll
-        for (uint32_t k = 0; k < CDIM; ++k) {
-            render_colors[pix_id * CDIM + k] =
-                backgrounds == nullptr ? pix_out[k]
-                                       : (pix_out[k] + T * backgrounds[k]);
-        }
+        // TODO: blend background
+        pix_out.saveBuffer(render_colors, image_id * image_height * image_width + pix_id);
         // index in bin of last gaussian in this pixel
         last_ids[pix_id] = static_cast<int32_t>(cur_idx);
     }
 }
 
-template <typename SplatPrimitive, uint32_t CDIM>
+template <typename SplatPrimitive>
 inline void launch_rasterize_to_pixels_fwd_kernel(
     // Gaussian parameters
     typename SplatPrimitive::Screen::Tensor splats,
-    const at::Tensor colors,    // [..., N, channels] or [nnz, channels]
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -177,7 +164,7 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     // outputs
-    at::Tensor renders, // [..., image_height, image_width, channels]
+    typename SplatPrimitive::RenderOutput::Tensor renders,
     at::Tensor transmittances,  // [..., image_height, image_width]
     at::Tensor last_ids // [..., image_height, image_width]
 ) {
@@ -200,7 +187,7 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
     if (cudaFuncSetAttribute(
-            rasterize_to_pixels_fwd_kernel<SplatPrimitive, CDIM>,
+            rasterize_to_pixels_fwd_kernel<SplatPrimitive>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shmem_size
         ) != cudaSuccess) {
@@ -211,15 +198,14 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
         );
     }
 
-    rasterize_to_pixels_fwd_kernel<SplatPrimitive, CDIM>
+    rasterize_to_pixels_fwd_kernel<SplatPrimitive>
         <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
             I,
             N,
             n_isects,
             packed,
             splats.buffer(),
-            colors.data_ptr<float>(),
-            backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+            backgrounds.has_value() ? (float3*)backgrounds.value().data_ptr<float>()
                                     : nullptr,
             masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
             image_width,
@@ -229,7 +215,7 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
             tile_height,
             tile_offsets.data_ptr<int32_t>(),
             flatten_ids.data_ptr<int32_t>(),
-            renders.data_ptr<float>(),
+            renders,
             transmittances.data_ptr<float>(),
             last_ids.data_ptr<int32_t>()
         );
@@ -237,11 +223,10 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
 
 
 template <typename SplatPrimitive>
-inline std::tuple<at::Tensor, at::Tensor, at::Tensor>
+inline std::tuple<Vanilla3DGS::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
 rasterize_to_pixels_fwd_tensor(
     // Gaussian parameters
     typename SplatPrimitive::Screen::TensorTuple splats_tuple,
-    const at::Tensor colors,    // [..., N, channels] or [nnz, channels]
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -252,8 +237,7 @@ rasterize_to_pixels_fwd_tensor(
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids   // [n_isects]
 ) {
-    DEVICE_GUARD(colors);
-    CHECK_INPUT(colors);
+    DEVICE_GUARD(tile_offsets);
     CHECK_INPUT(tile_offsets);
     CHECK_INPUT(flatten_ids);
     if (backgrounds.has_value())
@@ -265,11 +249,11 @@ rasterize_to_pixels_fwd_tensor(
 
     auto opt = splats.options();
     at::DimVector image_dims(tile_offsets.sizes().slice(0, tile_offsets.dim() - 2));
-    uint32_t channels = colors.size(-1);
 
     at::DimVector renders_dims(image_dims);
-    renders_dims.append({image_height, image_width, channels});
-    at::Tensor renders = at::empty(renders_dims, opt);
+    renders_dims.append({image_height, image_width});
+    typename Vanilla3DGS::RenderOutput::Tensor renders =
+        Vanilla3DGS::RenderOutput::Tensor::empty(renders_dims, opt);
 
     at::DimVector transmittance_dims(image_dims);
     transmittance_dims.append({image_height, image_width, 1});
@@ -279,63 +263,28 @@ rasterize_to_pixels_fwd_tensor(
     last_ids_dims.append({image_height, image_width});
     at::Tensor last_ids = at::empty(last_ids_dims, opt.dtype(at::kInt));
 
-#define __LAUNCH_KERNEL__(N)                                                   \
-    case N:                                                                    \
-        launch_rasterize_to_pixels_fwd_kernel<SplatPrimitive, N>(              \
-            splats,                                                            \
-            colors,                                                            \
-            backgrounds,                                                       \
-            masks,                                                             \
-            image_width,                                                       \
-            image_height,                                                      \
-            tile_size,                                                         \
-            tile_offsets,                                                      \
-            flatten_ids,                                                       \
-            renders,                                                           \
-            transmittances,                                                    \
-            last_ids                                                           \
-        );                                                                     \
-        break;
+    launch_rasterize_to_pixels_fwd_kernel<SplatPrimitive>(
+        splats,
+        backgrounds,
+        masks,
+        image_width,
+        image_height,
+        tile_size,
+        tile_offsets,
+        flatten_ids,
+        renders,
+        transmittances,
+        last_ids
+    );
 
-    // TODO: an optimization can be done by passing the actual number of
-    // channels into the kernel functions and avoid necessary global memory
-    // writes. This requires moving the channel padding from python to C side.
-    switch (channels) {
-        __LAUNCH_KERNEL__(1)
-        __LAUNCH_KERNEL__(2)
-        __LAUNCH_KERNEL__(3)
-        __LAUNCH_KERNEL__(4)
-        __LAUNCH_KERNEL__(5)
-        __LAUNCH_KERNEL__(6)
-        __LAUNCH_KERNEL__(7)
-        // __LAUNCH_KERNEL__(8)
-        // __LAUNCH_KERNEL__(9)
-        // __LAUNCH_KERNEL__(16)
-        // __LAUNCH_KERNEL__(17)
-        // __LAUNCH_KERNEL__(32)
-        // __LAUNCH_KERNEL__(33)
-        // __LAUNCH_KERNEL__(64)
-        // __LAUNCH_KERNEL__(65)
-        // __LAUNCH_KERNEL__(128)
-        // __LAUNCH_KERNEL__(129)
-        // __LAUNCH_KERNEL__(256)
-        // __LAUNCH_KERNEL__(257)
-        // __LAUNCH_KERNEL__(512)
-        // __LAUNCH_KERNEL__(513)
-    default:
-        AT_ERROR("Unsupported number of channels: ", channels);
-    }
-#undef __LAUNCH_KERNEL__
-
-    return std::make_tuple(renders, transmittances, last_ids);
+    return std::make_tuple(renders.tuple(), transmittances, last_ids);
 }
 
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor>
+std::tuple<Vanilla3DGS::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
 rasterize_to_pixels_3dgs_fwd(
     // Gaussian parameters
     Vanilla3DGS::Screen::TensorTuple splats_tuple,
-    const at::Tensor colors,    // [..., N, channels] or [nnz, channels]
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -347,7 +296,7 @@ rasterize_to_pixels_3dgs_fwd(
     const at::Tensor flatten_ids   // [n_isects]
 ) {
     return rasterize_to_pixels_fwd_tensor<Vanilla3DGS>(
-        splats_tuple, colors, backgrounds, masks,
+        splats_tuple, backgrounds, masks,
         image_width, image_height, tile_size,
         tile_offsets, flatten_ids
     );
@@ -357,7 +306,6 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor>
 rasterize_to_pixels_opaque_triangle_fwd(
     // Gaussian parameters
     OpaqueTriangle::Screen::TensorTuple splats_tuple,
-    const at::Tensor colors,    // [..., N, channels] or [nnz, channels]
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -368,9 +316,10 @@ rasterize_to_pixels_opaque_triangle_fwd(
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids   // [n_isects]
 ) {
-    return rasterize_to_pixels_fwd_tensor<OpaqueTriangle>(
-        splats_tuple, colors, backgrounds, masks,
-        image_width, image_height, tile_size,
-        tile_offsets, flatten_ids
-    );
+    throw std::runtime_error("TODO");
+    // return rasterize_to_pixels_fwd_tensor<OpaqueTriangle>(
+    //     splats_tuple, backgrounds, masks,
+    //     image_width, image_height, tile_size,
+    //     tile_offsets, flatten_ids
+    // );
 }
