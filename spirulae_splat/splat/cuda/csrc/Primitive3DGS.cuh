@@ -205,8 +205,8 @@ struct Vanilla3DGS::World {
         atomicAddFVec(buffer.means + idx, mean);
         atomicAddFVec(buffer.quats + idx, quat);
         atomicAddFVec(buffer.scales + idx, scale);
-        atomicAdd(buffer.opacities + idx, opacity);
-        atomicAdd(buffer.features_dc + idx, sh_coeffs[0]);
+        atomicAddFVec(buffer.opacities + idx, opacity);
+        atomicAddFVec(buffer.features_dc + idx, sh_coeffs[0]);
         for (int i = 0; i < buffer.num_sh; i++)
             atomicAddFVec(buffer.features_sh + idx*buffer.num_sh + i, sh_coeffs[i+1]);
     }
@@ -454,9 +454,9 @@ struct Vanilla3DGS::Screen {
 
     __device__ void atomicAddBuffer(Buffer &buffer, long idx) {
         atomicAddFVec(buffer.means2d + idx, xy);
-        atomicAdd(buffer.depths + idx, depth);
+        atomicAddFVec(buffer.depths + idx, depth);
         atomicAddFVec(buffer.conics + idx, conic);
-        atomicAdd(buffer.opacities + idx, opac);
+        atomicAddFVec(buffer.opacities + idx, opac);
         atomicAddFVec(buffer.rgbs + idx, rgb);
         if (buffer.absgrad != nullptr)
             atomicAddFVec(buffer.absgrad + idx, xy_abs);

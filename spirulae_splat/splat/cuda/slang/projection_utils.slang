@@ -162,7 +162,7 @@ void sh_coeffs_to_color(
             pSH14 * coeffs[14] +
             pSH15 * coeffs[15];
 
-    colors = max(colors+0.5f, 0.0f);
+    // colors = max(colors+0.5f, 0.0f);
 }
 
 

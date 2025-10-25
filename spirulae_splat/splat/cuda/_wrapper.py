@@ -10,6 +10,7 @@ from ._wrapper_rasterize import (
 from ._wrapper_per_pixel import (
     blend_background,
     depth_to_normal,
+    ray_depth_to_linear_depth,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "rasterize_to_pixels",
     "blend_background",
     "depth_to_normal",
+    "ray_depth_to_linear_depth",
 ]

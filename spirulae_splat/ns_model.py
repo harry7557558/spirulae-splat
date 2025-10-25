@@ -830,16 +830,13 @@ class SpirulaeModel(Model):
                 self.strategy.map_opacities(self.step, self.opacities),
                 hardness * torch.ones_like(self.opacities)
             ], dim=-1),
-            self.features_dc, self.features_sh
+            self.features_dc, self.features_sh, self.features_ch
              ),
             # (self.means, hardness * torch.ones_like(self.opacities.squeeze(-1))),
-            colors_dc=self.features_dc,
-            colors_sh=self.features_sh,
             viewmats=viewmats,  # [C, 4, 4]
             Ks=Ks,  # [C, 3, 3]
             width=W,
             height=H,
-            sh_degree=self.config.sh_degree,
             packed=(self.config.packed or (self.config.use_bvh and self.training)),
             use_bvh=(self.config.use_bvh and self.training),
             absgrad=(not self.config.use_mcmc),
@@ -868,15 +865,15 @@ class SpirulaeModel(Model):
         if self.config.compute_depth_normal or not self.training:
             depth_im_ref = torch.where(
                 alpha > 0.0, rgbd[1] / alpha,
-                max_depth_scale*torch.amax(rgbd[1]).detach()
+                # max_depth_scale*torch.amax(rgbd[1]).detach()
+                rgbd[1]
             ).contiguous()
         else:
             depth_im_ref = None
 
         render_normal = None
         if len(rgbd) > 2:
-            render_normal = rgbd[2]
-            render_normal = torch.where(alpha > 0.0, rgbd[2] / alpha, rgbd[2])
+            render_normal = torch.where(alpha > 0.0, F.normalize(rgbd[2], dim=-1), rgbd[2])
             if not self.training:
                 render_normal = 0.5+0.5*render_normal
 

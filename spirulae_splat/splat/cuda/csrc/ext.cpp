@@ -43,6 +43,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("blend_background_backward", &blend_background_backward_tensor);
     m.def("depth_to_normal_forward", &depth_to_normal_forward_tensor);
     m.def("depth_to_normal_backward", &depth_to_normal_backward_tensor);
+    m.def("ray_depth_to_linear_depth", &ray_depth_to_linear_depth_tensor);
 
     // SplatTileIntersector.cuh
     m.def("intersect_splat_tile", &SplatTileIntersector::intersect_splat_tile);

@@ -174,7 +174,9 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool>(
     // transform Gaussian center to camera space
     float3 mean_c;
     posW2C(R, t, mean, mean_c);
-    if (!assume_valid && (mean_c.z < near_plane || mean_c.z > far_plane)) {
+    float cull_z = (camera_model == CameraModelType::FISHEYE) ?
+        length(mean_c) : mean_c.z;
+    if (!assume_valid && (cull_z < near_plane || cull_z > far_plane)) {
         aabb_xyxy = {0, 0, 0, 0};
         return;
     }
@@ -263,11 +265,13 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool>(
     }
 
     aabb_xyxy = {(int)xmin, (int)ymin, (int)xmax, (int)ymax};  // don't clamp
-    depth = mean_c.z;
+    // depth = mean_c.z;
+    depth = length(mean_c);
     conic = {covar2d_inv[0][0], covar2d_inv[0][1], covar2d_inv[1][1]};
 
     float3 campos = -mul(transpose(R), t);
     sh_coeffs_to_color(mean - campos, sh_coeffs, rgb);
+    rgb = max(rgb+0.5f, 0.0f);
 }
 
 #define _DEF_projection_3dgs(funname, ...) \

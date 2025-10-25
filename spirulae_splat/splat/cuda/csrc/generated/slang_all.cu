@@ -2000,3 +2000,26 @@ inline __device__ void depth_to_normal_vjp(uint width_3, uint height_3, float2  
     return;
 }
 
+inline __device__ void ray_depth_to_linear_depth(uint width_4, uint height_4, float2  pix_center_4, float4  intrins_4, float4  radial_coeffs_5, float2  tangential_coeffs_5, float2  thin_prism_coeffs_5, bool is_fisheye_4, float in_depth_0, float * out_depth_0)
+{
+    float2  uv_13 = (pix_center_4 - float2 {intrins_4.z, intrins_4.w}) / float2 {intrins_4.x, intrins_4.y};
+    float3  raydir_30;
+    if(is_fisheye_4)
+    {
+        CameraDistortion_0 _S470;
+        (&_S470)->radial_coeffs_0 = radial_coeffs_5;
+        (&_S470)->tangential_coeffs_0 = tangential_coeffs_5;
+        (&_S470)->thin_prism_coeffs_0 = thin_prism_coeffs_5;
+        float2  _S471 = undistort_point_0(uv_13, &_S470, int(12));
+        float theta_4 = length_1(_S471);
+        float3  raydir_31 = make_float3 ((_S471 / make_float2 ((F32_max((theta_4), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_4))))).x, (_S471 / make_float2 ((F32_max((theta_4), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_4))))).y, (F32_cos((theta_4))));
+        raydir_30 = raydir_31 / make_float3 (raydir_31.z);
+    }
+    else
+    {
+        raydir_30 = make_float3 (uv_13.x, uv_13.y, 1.0f);
+    }
+    *out_depth_0 = in_depth_0 / length_2(raydir_30);
+    return;
+}
+

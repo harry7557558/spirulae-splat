@@ -8,6 +8,7 @@ from spirulae_splat.splat.rendering import rasterization
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import spherical_harmonics
 from spirulae_splat.splat._torch_impl import quat_mult
+from spirulae_splat.splat.cuda import ray_depth_to_linear_depth
 
 from spirulae_splat.viewer.utils import (
     quat_to_rotmat,
@@ -234,21 +235,21 @@ class SplatModel:
 
             rgbd, alpha, meta = rasterization(
                 self.primitive,
-                (
-                    self.means,
-                    F.normalize(self.quats, dim=-1),
-                    self.scales,
-                    torch.stack([torch.ones_like(self.opacities.squeeze(-1)),
-                        torch.ones_like(self.opacities).squeeze(-1)], dim=-1)
-                        if self.primitive == "opaque_triangle" else self.opacities
+                (self.means, F.normalize(self.quats, dim=-1), self.scales, self.opacities.squeeze(-1),
+                    self.features_dc, self.features_sh)
+                    if self.primitive in ['3dgs', 'mip'] else
+                (self.means, F.normalize(self.quats, dim=-1), self.scales,
+                    torch.concat([
+                        torch.ones_like(self.opacities),
+                        torch.ones_like(self.opacities)
+                    ], dim=-1),
+                    self.features_dc, self.features_sh, #self.features_ch
+                    torch.zeros_like(self.features_sh[..., :2, :])
                 ),
-                colors_dc=self.features_dc,
-                colors_sh=self.features_sh,
                 viewmats=viewmat[None].contiguous(),  # [C, 4, 4]
                 Ks=Ks[None].contiguous(),  # [C, 3, 3]
                 width=w,
                 height=h,
-                sh_degree=self.sh_degree,
                 packed=False,
                 use_bvh=False,
                 absgrad=False,
@@ -261,16 +262,22 @@ class SplatModel:
                 # render_mode="RGB+ED+N",
                 **kwargs,
             )
-            colors = rgbd[0, ..., :3]
+            colors = rgbd[0]
             # colors = 0.5+0.5*rgbd[0, ..., 4:]
             alpha = alpha[0]
             if return_depth:
                 colors = rgbd[0]
                 # colors = 0.5+0.5*rgbd[0, ..., 4:]
 
-            rgb = colors[..., :3]
+            rgb = rgbd[0]
             if return_depth:
-                depth = rgbd[0, ..., 3:4]
+                depth = rgbd[1]
+            depth = ray_depth_to_linear_depth(
+                depth,
+                ["pinhole", "fisheye"][is_fisheye],
+                Ks[None].contiguous(),
+                **kwargs
+            )
 
         else:
             raise NotImplementedError("2DGS is deprecated")
@@ -288,8 +295,8 @@ class SplatModel:
         timer.mark("background")
 
         if return_depth:
-            return rgb, depth
-        return rgb
+            return rgb[0], depth[0]
+        return rgb[0]
 
     @torch.no_grad()
     def render(self, camera, c2w, return_depth=False):

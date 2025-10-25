@@ -63,7 +63,7 @@ def depth_to_normal(
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
-    is_ray_depth: bool = False,
+    is_ray_depth: bool = True,
 ) -> Tensor:
     if isinstance(Ks, tuple):
         fx, fy, cx, cy = Ks
@@ -89,10 +89,10 @@ class _DepthToNormal(torch.autograd.Function):
         depths: Tensor,  # [B, H, W, 1]
         camera_model: Literal["pinhole", "fisheye"],
         Ks: Tensor,
-        radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
-        tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
-        thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
-        is_ray_depth: bool = False,
+        radial_coeffs: Optional[Tensor],  # [..., C, 6] or [..., C, 4]
+        tangential_coeffs: Optional[Tensor],  # [..., C, 2]
+        thin_prism_coeffs: Optional[Tensor],  # [..., C, 4]
+        is_ray_depth: bool
     ) -> Tensor:
 
         camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
@@ -119,3 +119,56 @@ class _DepthToNormal(torch.autograd.Function):
             ctx.is_ray_depth, depths, v_normals
         )
         return (v_depths, *([None]*(len(ctx.needs_input_grad)-1)))
+
+
+
+def ray_depth_to_linear_depth(
+    depths: Tensor,  # [B, H, W, 1]
+    camera_model: Literal["pinhole", "fisheye"],
+    Ks: Union[Tensor, Tuple[float, float, float, float]],
+    radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
+    tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
+    thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
+) -> Tensor:
+    if isinstance(Ks, tuple):
+        fx, fy, cx, cy = Ks
+        Ks = torch.tensor([[[fx, 0, cx], [0, fy, cy], [0, 0, 1]]])
+        Ks = Ks.to(depths).repeat(len(depths), 1, 1)
+    return _RayDepthToLinearDepth.apply(
+        depths,
+        camera_model,
+        Ks.contiguous(),
+        radial_coeffs,
+        tangential_coeffs,
+        thin_prism_coeffs,
+    )
+
+
+class _RayDepthToLinearDepth(torch.autograd.Function):
+    """Projects Gaussians to 2D."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        depths: Tensor,  # [B, H, W, 1]
+        camera_model: Literal["pinhole", "fisheye"],
+        Ks: Tensor,
+        radial_coeffs: Optional[Tensor],  # [..., C, 6] or [..., C, 4]
+        tangential_coeffs: Optional[Tensor],  # [..., C, 2]
+        thin_prism_coeffs: Optional[Tensor],  # [..., C, 4]
+    ) -> Tensor:
+
+        camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
+            f"CameraModelType.{camera_model.upper()}"
+        )
+
+        return _make_lazy_cuda_func("ray_depth_to_linear_depth")(
+            camera_model_type, Ks,
+            (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
+            depths
+        )
+
+    @staticmethod
+    def backward(ctx, v_depths):
+        raise NotImplementedError("ray_depth_to_linear_depth is not differentiable")
+

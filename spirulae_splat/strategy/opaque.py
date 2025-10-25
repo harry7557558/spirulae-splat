@@ -59,7 +59,7 @@ class OpaqueStrategy(Strategy):
     refine_every: int = 100
     grow_factor: float = 1.05
     min_opacity: float = 0.005
-    prune_opacity: float = 0.1
+    prune_opacity: float = 0.2
     relocate_scale2d: float = float('inf')
     max_scale2d: float = float('inf')
     max_scale3d: float = float('inf')

@@ -11,6 +11,7 @@
     const float3 scale, \
     const float2 hardness, \
     const float3 sh_coeffs[16], \
+    const float3 ch_coeffs[2], \
     const float3x3 R, \
     const float3 t, \
     no_diff const float fx, \
@@ -28,9 +29,9 @@
     out float2 uv0, \
     out float2 uv1, \
     out float2 uv2, \
-    out float depth, \
+    out float3 depth, \
     out float2 out_hardness, \
-    out float3 rgb, \
+    out float3 rgb[3], \
     out float3 normal
 
 [ForceInline]
@@ -41,7 +42,9 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
     // float3 mean = (vert0+vert1+vert2)/3.0f;
     float3 mean_c;
     posW2C(R, t, mean, mean_c);
-    if (!assume_valid && (mean_c.z < near_plane || mean_c.z > far_plane)) {
+    float cull_zc = (camera_model == CameraModelType::FISHEYE) ?
+        length(mean_c) : mean_c.z;
+    if (!assume_valid && (cull_zc < near_plane || cull_zc > far_plane)) {
         aabb_xyxy = {0, 0, 0, 0};
         return;
     }
@@ -71,10 +74,13 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
     posW2C(R, t, vert0, vert0_c);
     posW2C(R, t, vert1, vert1_c);
     posW2C(R, t, vert2, vert2_c);
+    float3 cull_z = (camera_model == CameraModelType::FISHEYE) ?
+        float3(length(vert0_c), length(vert1_c), length(vert2_c)) :
+        float3(vert0_c.z, vert1_c.z, vert2_c.z);
     if (!assume_valid && (
-        vert0_c.z < near_plane || vert0_c.z > far_plane ||
-        vert1_c.z < near_plane || vert1_c.z > far_plane ||
-        vert2_c.z < near_plane || vert2_c.z > far_plane
+        cull_z.x < near_plane || cull_z.x > far_plane ||
+        cull_z.y < near_plane || cull_z.y > far_plane ||
+        cull_z.z < near_plane || cull_z.z > far_plane
     )) {
         aabb_xyxy = {0, 0, 0, 0};
         return;
@@ -114,21 +120,29 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
     // mask out splats outside the image region
     if (!assume_valid && (
         xmax <= 0 || xmin >= image_width ||
-        ymax <= 0 || ymin >= image_height
+        ymax <= 0 || ymin >= image_height ||
+        (mean_c.z <= 0.0 && ((xmin <= 0 && xmax >= image_width) || (ymin <= 0 && ymax >= image_width)))
     )) {
         aabb_xyxy = {0, 0, 0, 0};
         return;
     }
 
     aabb_xyxy = {(int)floor(xmin), (int)floor(ymin), (int)ceil(xmax), (int)ceil(ymax)};
-    depth = mean_c.z;
+    // depth = float3(vert0_c.z, vert1_c.z, vert2_c.z);
+    depth = float3(length(vert0_c), length(vert1_c), length(vert2_c));
 
     out_hardness = hardness;
 
     float3 campos = -mul(transpose(R), t);
-    sh_coeffs_to_color(mean - campos, sh_coeffs, rgb);
+    float3 color;
+    sh_coeffs_to_color(mean - campos, sh_coeffs, color);
+    #define colormap(c) max((c)+0.5f, 0.0f)
+    rgb[0] = colormap(color + ch_coeffs[0]);
+    rgb[1] = colormap(color - ch_coeffs[0] * 0.5f + ch_coeffs[1] * sqrt(0.75f));
+    rgb[2] = colormap(color - ch_coeffs[0] * 0.5f - ch_coeffs[1] * sqrt(0.75f));
+    #undef colormap
 
-    normal = normalize(mul(R, cross(vert1-vert0, vert2-vert0)));
+    normal = normalize(cross(vert1_c-vert0_c, vert2_c-vert0_c));
     normal *= -sign(dot(normal, mean_c));
 }
 
@@ -139,8 +153,8 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
     [Differentiable] \
     void funname(_projection_opaque_triangle_ARGS) { \
         return projection_opaque_triangle<__VA_ARGS__>( \
-            mean, quat, scale, hardness, sh_coeffs, R, t, \
-            /* vert0, vert1, vert2, hardness, sh_coeffs, R, t, */ \
+            mean, quat, scale, hardness, sh_coeffs, ch_coeffs, R, t, \
+            /* vert0, vert1, vert2, hardness, sh_coeffs, ch_coeffs, R, t, */ \
             fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs, \
             image_width, image_height, near_plane, far_plane, \
             aabb_xyxy, uv0, uv1, uv2, depth, out_hardness, rgb, normal \
@@ -164,6 +178,7 @@ _DEF_projection_opaque_triangle(projection_opaque_triangle_fisheye, CameraModelT
     const float3 scale, \
     const float2 hardness, \
     const float3 sh_coeffs[16], \
+    const float3 ch_coeffs[2], \
     const float3x3 R, \
     const float3 t, \
     const float fx, \
@@ -178,15 +193,16 @@ _DEF_projection_opaque_triangle(projection_opaque_triangle_fisheye, CameraModelT
     const float2 v_uv0, \
     const float2 v_uv1, \
     const float2 v_uv2, \
-    const float v_depth, \
+    const float3 v_depth, \
     const float2 v_out_hardness, \
-    const float3 v_rgb, \
+    const float3 v_rgb[3], \
     const float3 v_normal, \
     out float3 v_mean, \
     out float4 v_quat, \
     out float3 v_scale, \
     out float2 v_hardness, \
     out float3 v_sh_coeffs[16], \
+    out float3 v_ch_coeffs[2], \
     out float3x3 v_R, \
     out float3 v_t
 
@@ -206,11 +222,12 @@ void projection_opaque_triangle_persp_vjp(
     // DifferentialPair<float3> dp_vert2 = diffPair(vert2);
     DifferentialPair<float2> dp_hardness = diffPair(hardness);
     DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);
+    DifferentialPair<float3[2]> dp_ch_coeffs = diffPair(ch_coeffs);
     DifferentialPair<float3x3> dp_R = diffPair(R);
     DifferentialPair<float3> dp_t = diffPair(t);
     bwd_diff(_projection_opaque_triangle_persp_differentiable)(
-        dp_mean, dp_quat, dp_scale, dp_hardness, dp_sh_coeffs, dp_R, dp_t,
-        // dp_vert0, dp_vert1, dp_vert2, dp_hardness, dp_sh_coeffs, dp_R, dp_t,
+        dp_mean, dp_quat, dp_scale, dp_hardness, dp_sh_coeffs, dp_ch_coeffs, dp_R, dp_t,
+        // dp_vert0, dp_vert1, dp_vert2, dp_hardness, dp_sh_coeffs, dp_ch_coeffs, dp_R, dp_t,
         fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
         image_width, image_height, 0.0f, 1e30f,
         v_uv0, v_uv1, v_uv2, v_depth, v_out_hardness, v_rgb, v_normal
@@ -223,6 +240,7 @@ void projection_opaque_triangle_persp_vjp(
     // v_vert2 = dp_vert2.d;
     v_hardness = dp_hardness.d;
     v_sh_coeffs = dp_sh_coeffs.d;
+    v_ch_coeffs = dp_ch_coeffs.d;
     v_R = dp_R.d;
     v_t = dp_t.d;
 }
@@ -239,11 +257,12 @@ void projection_opaque_triangle_fisheye_vjp(
     // DifferentialPair<float3> dp_vert2 = diffPair(vert2);
     DifferentialPair<float2> dp_hardness = diffPair(hardness);
     DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);
+    DifferentialPair<float3[2]> dp_ch_coeffs = diffPair(ch_coeffs);
     DifferentialPair<float3x3> dp_R = diffPair(R);
     DifferentialPair<float3> dp_t = diffPair(t);
     bwd_diff(_projection_opaque_triangle_fisheye_differentiable)(
-        dp_mean, dp_quat, dp_scale, dp_hardness, dp_sh_coeffs, dp_R, dp_t,
-        // dp_vert0, dp_vert1, dp_vert2, dp_hardness, dp_sh_coeffs, dp_R, dp_t,
+        dp_mean, dp_quat, dp_scale, dp_hardness, dp_sh_coeffs, dp_ch_coeffs, dp_R, dp_t,
+        // dp_vert0, dp_vert1, dp_vert2, dp_hardness, dp_sh_coeffs, dp_ch_coeffs, dp_R, dp_t,
         fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
         image_width, image_height, 0.0f, 1e30f,
         v_uv0, v_uv1, v_uv2, v_depth, v_out_hardness, v_rgb, v_normal
@@ -256,6 +275,7 @@ void projection_opaque_triangle_fisheye_vjp(
     // v_vert2 = dp_vert2.d;
     v_hardness = dp_hardness.d;
     v_sh_coeffs = dp_sh_coeffs.d;
+    v_ch_coeffs = dp_ch_coeffs.d;
     v_R = dp_R.d;
     v_t = dp_t.d;
 }
@@ -264,7 +284,7 @@ void projection_opaque_triangle_fisheye_vjp(
 [ForceInline]
 [Differentiable]
 float antialiase_map(float d, float dmax, float hardness) {
-    hardness = clamp(hardness, 0.005f, 0.995f);
+    hardness = clamp(hardness, 0.005f, 0.98f);
 
     // return d/dmax >= 0.0f ? 0.0f : pow(-d/dmax, 1.0f-hardness);
 
@@ -349,4 +369,63 @@ void evaluate_alpha_opaque_triangle_precise_vjp(
     v_v1 = dp_v2.d;
     v_v2 = dp_v1.d;
     v_hardness = dp_hardness.d;
+}
+
+[CudaDeviceExport]
+[Differentiable]
+void evaluate_color_opaque_triangle(
+    float2 v0, float2 v1, float2 v2,
+    float3 colors[3], float3 depths,
+    no_diff float2 p,
+    out float3 color, out float depth
+) {
+    float2 v0v1 = v1 - v0;
+    float2 v0v2 = v2 - v0;
+    float2 v0p  = p  - v0;
+
+    float denom = v0v1.x * v0v2.y - v0v1.y * v0v2.x;
+
+    float invDenom = 1.0 / denom;
+    float w1 = (v0p.x * v0v2.y - v0p.y * v0v2.x) * invDenom;
+    float w2 = (v0v1.x * v0p.y - v0v1.y * v0p.x) * invDenom;
+    float w0 = 1.0 - w1 - w2;
+
+    #if 0
+    w0 /= depths[0]; w1 /= depths[1]; w2 /= depths[2];
+    float ws = 1.0 / (w0+w1+w2);
+    w0 *= ws; w1 *= ws; w2 *= ws;
+    #endif
+
+    // TODO: seems to give bad gradient to vertex positions
+    // color = w0 * colors[0] + w1 * colors[1] + w2 * colors[2];
+    color = (colors[0] + colors[1] + colors[2]) / 3.0;
+
+    // TODO: seems to give bad gradient to vertex positions
+    // TODO: exact depth?
+    // depth = w0 * depths[0] + w1 * depths[1] + w2 * depths[2];
+    depth = (depths[0] + depths[1] + depths[2]) / 3.0;
+}
+
+[CudaDeviceExport]
+void evaluate_color_opaque_triangle_vjp(
+    float2 v0, float2 v1, float2 v2,
+    float3 colors[3], float3 depths,
+    float2 p, float3 v_color, float v_depth,
+    out float2 v_v0, out float2 v_v1, out float2 v_v2,
+    out float3 v_colors[3], out float3 v_depths
+) {
+    DifferentialPair<float2> dp_v0 = diffPair(v0);
+    DifferentialPair<float2> dp_v1 = diffPair(v1);
+    DifferentialPair<float2> dp_v2 = diffPair(v2);
+    DifferentialPair<float3[3]> dp_colors = diffPair(colors);
+    DifferentialPair<float3> dp_depths = diffPair(depths);
+    bwd_diff(evaluate_color_opaque_triangle)(
+        dp_v0, dp_v1, dp_v2, dp_colors, dp_depths,
+        p, v_color, v_depth
+    );
+    v_v0 = dp_v0.d;
+    v_v1 = dp_v2.d;
+    v_v2 = dp_v1.d;
+    v_colors = dp_colors.d;
+    v_depths = dp_depths.d;
 }

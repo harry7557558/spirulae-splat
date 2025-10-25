@@ -47,6 +47,7 @@ void depth_to_normal(
     normal = cross(dx, -dy);
     if (length(normal) != 0.0)
         normal /= length(normal);
+    // normal *= -sign(dot(normal, points[0]+points[1]+points[2]+points[3]));
 }
 
 [CudaDeviceExport]
@@ -72,4 +73,37 @@ void depth_to_normal_vjp(
         dp_depths, v_normal
     );
     v_depths = dp_depths.d;
+}
+
+
+[CudaDeviceExport]
+[Differentiable]
+void ray_depth_to_linear_depth(
+    const uint width,
+    const uint height,
+    const no_diff float2 pix_center,
+    const no_diff float4 intrins,  // fx, fy, cx, cy
+    const no_diff float4 radial_coeffs,
+    const no_diff float2 tangential_coeffs,
+    const no_diff float2 thin_prism_coeffs,
+    const bool is_fisheye,
+    const float in_depth,
+    out float out_depth
+) {
+
+    float2 uv = (pix_center - intrins.zw) / intrins.xy;
+
+    float3 raydir;
+    if (is_fisheye) {
+        uv = no_diff undistort_point(uv, {radial_coeffs, tangential_coeffs, thin_prism_coeffs}, 12);
+        float theta = length(uv);
+        raydir = float3(uv/max(theta,1e-7f)*sin(theta), cos(theta));
+        raydir /= raydir.z;
+    }
+    else {
+        raydir = float3(uv.x, uv.y, 1.0f);
+    }
+
+    out_depth = in_depth / length(raydir);
+
 }

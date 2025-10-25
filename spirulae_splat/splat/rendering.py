@@ -39,8 +39,6 @@ from .utils import depth_to_normal
 def rasterization(
     primitive: Literal["3dgs", "mip", "opaque_triangle"],
     splat_params: tuple[Tensor],  # means, quats, scales, opacities
-    colors_dc: Tensor,  # [..., N, 3]
-    colors_sh: Optional[Tensor],  # [..., N, K, 3]
     viewmats: Tensor,  # [..., C, 4, 4]
     Ks: Tensor,  # [..., C, 3, 3]
     width: int,
@@ -48,7 +46,6 @@ def rasterization(
     near_plane: float = 0.01,
     far_plane: float = 1e10,
     eps2d: float = 0.3,
-    sh_degree: Optional[int] = None,
     packed: bool = True,
     use_bvh: bool = False,
     tile_size: int = 16,
@@ -94,15 +91,6 @@ def rasterization(
     .. note::
         **Batch Rasterization**: This function allows for rasterizing a set of 3D Gaussians
         to a batch of images in one go, by simplly providing the batched `viewmats` and `Ks`.
-
-    .. note::
-        **Support N-D Features**: If `sh_degree` is None,
-        the `colors` is expected to be with shape [..., N, D] or [..., C, N, D], in which D is the channel of
-        the features to be rendered. The computation is slow when D > 32 at the moment.
-        If `sh_degree` is set, the `colors` is expected to be the SH coefficients with
-        shape [..., N, K, 3] or [..., C, N, K, 3], where K is the number of SH bases. In this case, it is expected
-        that :math:`(\\textit{sh_degree} + 1) ^ 2 \\leq K`, where `sh_degree` controls the
-        activated bases in the SH coefficients.
 
     .. note::
         **Depth Rendering**: This function supports colors or/and depths via `render_mode`.
@@ -169,9 +157,6 @@ def rasterization(
         eps2d: An epsilon added to the egienvalues of projected 2D covariance matrices.
             This will prevents the projected GS to be too small. For example eps2d=0.3
             leads to minimal 3 pixel unit. Default is 0.3.
-        sh_degree: The SH degree to use, which can be smaller than the total
-            number of bands. If set, the `colors` should be [..., (C,) N, K, 3] SH coefficients,
-            else the `colors` should be [..., (C,) N, D] post-activation color values. Default is None.
         packed: Whether to use packed mode which is more memory efficient but might or
             might not be as fast. Default is True.
         tile_size: The size of the tiles for rasterization. Default is 16.
@@ -256,10 +241,13 @@ def rasterization(
     """
     meta = {}
 
-    # if primitive in ["3dgs", "mip"]:
     if primitive in ["3dgs", "mip", "opaque_triangle"]:
-        assert len(splat_params) == 6, "3DGS requires 4 params (means, quats, scales, opacities)"
-        means, quats, scales, opacities, features_dc, features_sh = splat_params
+        if primitive in ["3dgs", "mip"]:
+            assert len(splat_params) == 6, "3DGS requires 6 params (means, quats, scales, opacities, color, sh)"
+            means, quats, scales, opacities, features_dc, features_sh = splat_params
+        else:
+            assert len(splat_params) == 7, "Opaque triangle requires 4 params (means, quats, scales, opacities, color, ch, sh)"
+            means, quats, scales, opacities, features_dc, features_sh, features_ch = splat_params
         assert len(means.shape) >= 2, "means must have at least 2 dimensions"
         batch_dims = means.shape[:-2]
         N = means.shape[-2]
@@ -275,15 +263,7 @@ def rasterization(
                 features_sh.shape == batch_dims + (N, 15, 3), features_sh.shape
         else:
             assert opacities.shape == batch_dims + (N, 2), opacities.shape
-    elif primitive in ["opaque_triangle"]:
-        assert len(splat_params) == 2, "Opaque triangle requires 4 params (means, hardness)"
-        means, hardness = splat_params
-        assert len(means.shape) >= 3, "means must have at least 3 dimensions"
-        batch_dims = means.shape[:-3]
-        N = means.shape[-3]
-        device = means.device
-        assert means.shape == batch_dims + (N, 3, 3), means.shape
-        assert hardness.shape == batch_dims + (N,), hardness.shape
+            assert features_ch.shape == batch_dims + (N, 2, 3), features_ch.shape
     else:
         assert False, f"Invalid primitive ({primitive})"
     num_batch_dims = len(batch_dims)
@@ -302,36 +282,6 @@ def rasterization(
             )
         )
         return torch.stack([torch.cat(l, dim=0) for l in zip(*view_list)], dim=0)
-
-    # treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]
-    assert (
-        colors_dc.dim() == num_batch_dims + 2
-        and colors_dc.shape[:-1] == batch_dims + (N,)
-    ) or (
-        colors_dc.dim() == num_batch_dims + 3
-        and colors_dc.shape[:-1] == batch_dims + (C, N)
-    ), colors_dc.shape
-    if distributed:
-        assert (
-            colors_dc.dim() == num_batch_dims + 2
-        ), "Distributed mode only supports per-Gaussian colors."
-    if sh_degree is not None:
-        # treat colors as SH coefficients, should be in shape [..., N, K, 3] or [..., C, N, K, 3]
-        # Allowing for activating partial SH bands
-        assert (
-            colors_sh.dim() == num_batch_dims + 3
-            and colors_sh.shape[:-2] == batch_dims + (N,)
-            and colors_sh.shape[-1] == 3
-        ) or (
-            colors_sh.dim() == num_batch_dims + 4
-            and colors_sh.shape[:-2] == batch_dims + (C, N)
-            and colors_sh.shape[-1] == 3
-        ), colors_sh.shape
-        assert (sh_degree + 1) ** 2 - 1 <= colors_sh.shape[-2], colors_sh.shape
-        if distributed:
-            assert (
-                colors_sh.dim() == num_batch_dims + 3
-            ), "Distributed mode only supports per-Gaussian colors."
 
     if absgrad:
         assert not distributed, "AbsGrad is not supported in distributed mode."
@@ -385,25 +335,6 @@ def rasterization(
 
         # Silently change C from local #Cameras to global #Cameras.
         C = len(viewmats)
-
-    # Turn colors into [..., C, N, D] or [..., nnz, D] to pass into rasterize_to_pixels()
-    # Colors are post-activation values, with shape [..., N, D] or [..., C, N, D]
-    if packed:
-        if colors_dc.dim() == num_batch_dims + 2:
-            # Turn [..., N, D] into [nnz, D]
-            colors_dc = colors_dc.view(B, N, -1)[batch_ids, gaussian_ids]
-        else:
-            # Turn [..., C, N, D] into [nnz, D]
-            colors_dc = colors_dc.view(B, C, N, -1)[batch_ids, camera_ids, gaussian_ids]
-    else:
-        if colors_dc.dim() == num_batch_dims + 2:
-            # Turn [..., N, D] into [..., C, N, D]
-            colors_dc = torch.broadcast_to(
-                colors_dc[..., None, :, :], batch_dims + (C, N, -1)
-            )
-        else:
-            # colors_dc is already [..., C, N, D]
-            pass
 
     if use_bvh:
         raise NotImplementedError()

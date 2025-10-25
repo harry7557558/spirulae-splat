@@ -22,20 +22,23 @@ inline __device__ float atomicMax(float* p, float v) {
         __uint_as_float(atomicMin((unsigned*)p, __float_as_uint(v)));
 }
 
+inline __device__ void atomicAddFVec(float* p, float v) {
+    if (v != 0.0f && isfinite(v)) atomicAdd(p, v);
+}
 inline __device__ void atomicAddFVec(float2* p, float2 v) {
-    if (v.x != 0.0f) atomicAdd(&p->x, v.x);
-    if (v.y != 0.0f) atomicAdd(&p->y, v.y);
+    if (v.x != 0.0f && isfinite(v.x)) atomicAdd(&p->x, v.x);
+    if (v.y != 0.0f && isfinite(v.y)) atomicAdd(&p->y, v.y);
 }
 inline __device__ void atomicAddFVec(float3* p, float3 v) {
-    if (v.x != 0.0f) atomicAdd(&p->x, v.x);
-    if (v.y != 0.0f) atomicAdd(&p->y, v.y);
-    if (v.z != 0.0f) atomicAdd(&p->z, v.z);
+    if (v.x != 0.0f && isfinite(v.x)) atomicAdd(&p->x, v.x);
+    if (v.y != 0.0f && isfinite(v.y)) atomicAdd(&p->y, v.y);
+    if (v.z != 0.0f && isfinite(v.z)) atomicAdd(&p->z, v.z);
 }
 inline __device__ void atomicAddFVec(float4* p, float4 v) {
-    if (v.x != 0.0f) atomicAdd(&p->x, v.x);
-    if (v.y != 0.0f) atomicAdd(&p->y, v.y);
-    if (v.z != 0.0f) atomicAdd(&p->z, v.z);
-    if (v.w != 0.0f) atomicAdd(&p->w, v.w);
+    if (v.x != 0.0f && isfinite(v.x)) atomicAdd(&p->x, v.x);
+    if (v.y != 0.0f && isfinite(v.y)) atomicAdd(&p->y, v.y);
+    if (v.z != 0.0f && isfinite(v.z)) atomicAdd(&p->z, v.z);
+    if (v.w != 0.0f && isfinite(v.w)) atomicAdd(&p->w, v.w);
 }
 
 #endif  // #ifdef __CUDACC__
