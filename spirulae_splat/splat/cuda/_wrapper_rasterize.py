@@ -34,6 +34,7 @@ def _make_lazy_cuda_func(name: str) -> Callable:
 
 def rasterize_to_pixels(
     primitive: Literal["3dgs", "mip", "opaque_triangle"],
+    eval3d: bool,
     splats: tuple[Tensor],  # means, quats, scales, opacities
     # colors: Tensor,  # [..., N, channels] or [nnz, channels]
     image_width: int,
@@ -45,6 +46,7 @@ def rasterize_to_pixels(
     masks: Optional[Tensor] = None,  # [..., tile_height, tile_width]
     packed: bool = False,
     absgrad: bool = False,
+    **kwargs
 ) -> Tuple[Tensor, Tensor]:
     # TODO
     # image_dims = colors.shape[:-2]
@@ -105,13 +107,26 @@ def rasterize_to_pixels(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    if primitive in ["3dgs", "mip"]:
-        _RasterizeToPixels = _RasterizeToPixels3DGS
-    elif primitive in ["opaque_triangle"]:
-        _RasterizeToPixels = _RasterizeToPixelsOpaqueTriangle
+    if not eval3d:
+        if primitive in ["3dgs", "mip"]:
+            _RasterizeToPixels = _RasterizeToPixels3DGS
+        elif primitive in ["opaque_triangle"]:
+            _RasterizeToPixels = _RasterizeToPixelsOpaqueTriangle
+        kwargs = []
+    else:
+        assert not packed, "packed is not supported for eval3d"
+        for key in ['viewmats', 'Ks']:
+            assert key in kwargs, "Camera extrinsics and intrinsics must be provided for Eval3D"
+        kwargs = [kwargs.get(key, None) for key in [
+            'viewmats', 'Ks', 'camera_model',
+            'radial_coeffs', 'tangential_coeffs', 'thin_prism_coeffs'
+        ]]
+        if primitive in ["3dgs", "mip"]:
+            _RasterizeToPixels = _RasterizeToPixels3DGSEval3D
+        elif primitive in ["opaque_triangle"]:
+            _RasterizeToPixels = _RasterizeToPixelsOpaqueTriangleEval3D
     render_outputs = _RasterizeToPixels.apply(
         *[(x.contiguous() if x is not None else None) for x in splats],
-        # colors.contiguous(),
         backgrounds,
         masks,
         image_width,
@@ -120,6 +135,7 @@ def rasterize_to_pixels(
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
         absgrad,
+        *kwargs
     )
 
     # if padded_channels > 0:
@@ -282,4 +298,106 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
         return (
             v_means2d, v_depths, v_hardness, v_rgbs, v_normals, v_backgrounds,
             *([None]*(len(ctx.needs_input_grad)-6))
+        )
+
+
+class _RasterizeToPixels3DGSEval3D(torch.autograd.Function):
+    """Rasterize gaussians"""
+
+    @staticmethod
+    def forward(
+        ctx,
+        # gauss params
+        means: Tensor,  # [..., N, 3]
+        quats: Tensor,  # [..., N, 4]
+        scales: Tensor,  # [..., N, 3]
+        opacities: Tensor,  # [..., N]
+        features_dc: Tensor,  # [..., N, 3]
+        features_sh: Tensor,  # [..., N, x, 3]
+        # proj outputs
+        depths: Tensor,  # [..., N, 1] or [nnz, 1]
+        colors: Tensor,  # [..., N, channels] or [nnz, channels]
+        # rest
+        backgrounds: Tensor,  # [..., channels], Optional
+        masks: Tensor,  # [..., tile_height, tile_width], Optional
+        width: int,
+        height: int,
+        tile_size: int,
+        isect_offsets: Tensor,  # [..., tile_height, tile_width]
+        flatten_ids: Tensor,  # [n_isects]
+        absgrad: bool,
+        viewmats: Tensor,
+        Ks: Tensor,
+        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
+        radial_coeffs: Optional[Tensor],
+        tangential_coeffs: Optional[Tensor],
+        thin_prism_coeffs: Optional[Tensor],
+    ) -> Tuple[Tensor, Tensor]:
+        if absgrad:
+            raise NotImplementedError("Absgrad not supported with Eval3D")
+
+        camera_model = gsplat.cuda._wrapper._make_lazy_cuda_obj(
+            f"CameraModelType.{camera_model.upper()}"
+        )
+
+        (render_rgbs, render_depths), render_Ts, last_ids = _make_lazy_cuda_func(
+            "rasterization_3dgs_eval3d_forward"
+        )(
+            (means, quats, scales, opacities, depths, colors),
+            viewmats, Ks, camera_model, (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
+            backgrounds, masks,
+            width, height, tile_size, isect_offsets, flatten_ids,
+        )
+
+        ctx.save_for_backward(
+            means, quats, scales, opacities, depths, colors,
+            viewmats, Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            backgrounds, masks,
+            isect_offsets, flatten_ids, render_Ts, last_ids,
+        )
+        ctx.width = width
+        ctx.height = height
+        ctx.camera_model = camera_model
+        ctx.tile_size = tile_size
+
+        render_alphas = 1.0 - render_Ts
+        return render_rgbs, render_depths, render_alphas
+
+    @staticmethod
+    def backward(
+        ctx,
+        v_render_rgbs: Tensor,  # [..., H, W, 3]
+        v_render_depths: Tensor,  # [..., H, W, 1]
+        v_render_alphas: Tensor,  # [..., H, W, 1]
+    ):
+        (
+            means, quats, scales, opacities, depths, colors,
+            viewmats, Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            backgrounds, masks,
+            isect_offsets, flatten_ids, render_Ts, last_ids,
+        ) = ctx.saved_tensors
+        width = ctx.width
+        height = ctx.height
+        tile_size = ctx.tile_size
+
+        (
+            (v_means, v_quats, v_scales, v_opacities, v_depths, v_colors),
+            v_viewmats,
+        ) = _make_lazy_cuda_func("rasterization_3dgs_eval3d_backward")(
+            (means, quats, scales, opacities, depths, colors),
+            viewmats, Ks, ctx.camera_model, (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
+            backgrounds, masks,
+            width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids,
+            (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
+            v_render_alphas.contiguous(),
+        )
+
+        v_backgrounds = None
+        if ctx.needs_input_grad[8]:
+            v_backgrounds = (torch.cat([v_render_rgbs, v_render_depths], dim=-1) * \
+                             render_Ts.float()).sum(dim=(-3, -2))
+
+        return (
+            v_means, v_quats, v_scales, v_opacities, None, None, v_depths, v_colors, v_backgrounds,
+            *([None]*(len(ctx.needs_input_grad)-9))
         )

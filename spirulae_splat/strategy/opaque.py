@@ -59,7 +59,7 @@ class OpaqueStrategy(Strategy):
     refine_every: int = 100
     grow_factor: float = 1.05
     min_opacity: float = 0.005
-    prune_opacity: float = 0.2
+    prune_opacity: float = 0.25
     relocate_scale2d: float = float('inf')
     max_scale2d: float = float('inf')
     max_scale3d: float = float('inf')
@@ -232,10 +232,12 @@ class OpaqueStrategy(Strategy):
 
         # add noise to GSs
         scalar = lr * self.noise_lr #* min(step/max(self.refine_start_iter,1), 1)
+        sc = max(1 - self.get_opacity_floor(step) / self.prune_opacity, 0.0)
         inject_noise_to_position(
-            params=params, optimizers=optimizers, state={}, scaler=scalar,
-            min_opacity=self.min_opacity,
-            opacities=self.map_opacities(step, params["opacities"].flatten())
+            params=params, optimizers=optimizers, state={}, scaler=scalar*sc,
+            min_opacity=self.min_opacity*sc,
+            # opacities=self.map_opacities(step, params["opacities"].flatten())
+            opacities=self.map_opacities(0, params["opacities"].flatten())
         )
 
     @torch.no_grad()
@@ -262,9 +264,9 @@ class OpaqueStrategy(Strategy):
         # get rid of floaters to prepare for opacity increase
         opacity_floor = self.get_opacity_floor(step)
         if opacity_floor > 0.0 and opacity_floor < self.prune_opacity:
-            # TODO: make it work if opacity floor grows faster than prune opacity
-            a = (step - self.warmup_steps_0) / (self.warmup_steps_1 - self.warmup_steps_0)
-            relocate_mask |= (opacities < self.prune_opacity * max(min(a, 1.0), 0.0))
+            # a = self.prune_opacity * max(min((step - self.warmup_steps_0) / (self.warmup_steps_1 - self.warmup_steps_0), 1.0), 0.0)
+            a = opacity_floor + self.min_opacity * max(1 - opacity_floor / self.prune_opacity, 0.0)
+            relocate_mask |= (opacities < a)
 
         n_gs = relocate_mask.sum().item()
         if n_gs > 0:

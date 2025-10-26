@@ -15,6 +15,7 @@
 struct OpaqueTriangle {
     struct World;
     struct Screen;
+    struct WorldEval3D;
     struct RenderOutput;
 
 #ifdef __CUDACC__
@@ -567,6 +568,11 @@ struct OpaqueTriangle::Screen {
     }
 
 #endif  // #ifdef __CUDACC__
+
+};
+
+
+struct OpaqueTriangle::WorldEval3D {
 
 };
 

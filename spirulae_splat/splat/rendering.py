@@ -395,34 +395,11 @@ def rasterization(
             opacities=torch.sigmoid(opacities),  # use opacities to compute a tigher bound for radii.
         )
 
-    elif with_ut:
-        raise NotImplementedError()
-        proj_results = fully_fused_projection_with_ut(
-            means,
-            quats,
-            torch.exp(scales),
-            torch.sigmoid(opacities),  # use opacities to compute a tigher bound for radii.
-            viewmats,
-            Ks,
-            width,
-            height,
-            eps2d=eps2d,
-            near_plane=near_plane,
-            far_plane=far_plane,
-            calc_compensations=(rasterize_mode == "antialiased"),
-            camera_model=camera_model,
-            radial_coeffs=radial_coeffs,
-            tangential_coeffs=tangential_coeffs,
-            thin_prism_coeffs=thin_prism_coeffs,
-            # ftheta_coeffs=ftheta_coeffs,
-            rolling_shutter=rolling_shutter,
-            viewmats_rs=viewmats_rs,
-        )
-
     else:
         # Project Gaussians to 2D
         proj_results = fully_fused_projection(
             primitive,
+            with_eval3d,
             splat_params,
             viewmats,
             Ks,
@@ -670,43 +647,30 @@ def rasterization(
     )
 
     # print("rank", world_rank, "Before rasterize_to_pixels")
+    kwargs = {}
     if with_eval3d:
-        raise NotImplementedError()
-        render_colors, render_alphas = rasterize_to_pixels_eval3d(
-            means,
-            quats,
-            torch.exp(scales),
-            colors,
-            torch.sigmoid(opacities),
-            viewmats,
-            Ks,
-            width,
-            height,
-            tile_size,
-            isect_offsets,
-            flatten_ids,
-            backgrounds=backgrounds,
-            camera_model=camera_model,
-            radial_coeffs=radial_coeffs,
-            tangential_coeffs=tangential_coeffs,
-            thin_prism_coeffs=thin_prism_coeffs,
-            # ftheta_coeffs=ftheta_coeffs,
-            rolling_shutter=rolling_shutter,
-            viewmats_rs=viewmats_rs,
-        )
-    else:
-        render_colors, render_alphas = rasterize_to_pixels(
-            primitive,
-            proj_splats,
-            width,
-            height,
-            tile_size,
-            isect_offsets,
-            flatten_ids,
-            backgrounds=backgrounds,
-            packed=packed,
-            absgrad=absgrad,
-        )
+        kwargs = {
+            "viewmats": viewmats,
+            "Ks": Ks,
+            "camera_model": camera_model,
+            "radial_coeffs": radial_coeffs,
+            "tangential_coeffs": tangential_coeffs,
+            "thin_prism_coeffs": thin_prism_coeffs,
+        }
+    render_colors, render_alphas = rasterize_to_pixels(
+        primitive,
+        with_eval3d,
+        proj_splats,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        backgrounds=backgrounds,
+        packed=packed,
+        absgrad=absgrad,
+        **kwargs
+    )
     # if "ED" in render_mode:
     #     # normalize the accumulated depth to get the expected depth
     #     depth_idx = 3 if "RGB" in render_mode else 0

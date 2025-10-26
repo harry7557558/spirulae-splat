@@ -12,6 +12,9 @@ def _color_text(text: str, color: str):
 
 def check_close(name, a, b, atol=1e-5, rtol=1e-5):
     if a is None:
+        if b is None:
+            print(name, None, None, None, None)
+            return
         print(name, _color_text("None None", 'r'), [*b.shape], str(b.dtype).lstrip("torch."))
         return
     if b is None:

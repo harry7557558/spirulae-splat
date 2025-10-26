@@ -23,18 +23,22 @@ inline __device__ float atomicMax(float* p, float v) {
 }
 
 inline __device__ void atomicAddFVec(float* p, float v) {
+    if (p == nullptr) return;
     if (v != 0.0f && isfinite(v)) atomicAdd(p, v);
 }
 inline __device__ void atomicAddFVec(float2* p, float2 v) {
+    if (p == nullptr) return;
     if (v.x != 0.0f && isfinite(v.x)) atomicAdd(&p->x, v.x);
     if (v.y != 0.0f && isfinite(v.y)) atomicAdd(&p->y, v.y);
 }
 inline __device__ void atomicAddFVec(float3* p, float3 v) {
+    if (p == nullptr) return;
     if (v.x != 0.0f && isfinite(v.x)) atomicAdd(&p->x, v.x);
     if (v.y != 0.0f && isfinite(v.y)) atomicAdd(&p->y, v.y);
     if (v.z != 0.0f && isfinite(v.z)) atomicAdd(&p->z, v.z);
 }
 inline __device__ void atomicAddFVec(float4* p, float4 v) {
+    if (p == nullptr) return;
     if (v.x != 0.0f && isfinite(v.x)) atomicAdd(&p->x, v.x);
     if (v.y != 0.0f && isfinite(v.y)) atomicAdd(&p->y, v.y);
     if (v.z != 0.0f && isfinite(v.z)) atomicAdd(&p->z, v.z);

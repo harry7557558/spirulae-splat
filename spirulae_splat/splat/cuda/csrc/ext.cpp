@@ -8,9 +8,12 @@
 #include "PixelWise.cuh"
 #include "SplatTileIntersector.cuh"
 #include "Projection.cuh"
+#include "ProjectionEval3D.cuh"
 #include "ProjectionEWA3DGSHetero.cuh"
 #include "RasterizationFwd.cuh"
 #include "RasterizationBwd.cuh"
+#include "RasterizationEval3DFwd.cuh"
+#include "RasterizationEval3DBwd.cuh"
 
 #define TORCH_INDUCTOR_CPP_WRAPPER
 #include <torch/extension.h>
@@ -54,16 +57,26 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("projection_opaque_triangle_forward", &projection_opaque_triangle_forward_tensor);
     m.def("projection_opaque_triangle_backward", &projection_opaque_triangle_backward_tensor);
 
+    // ProjectionEval3D.cuh
+    m.def("projection_ewa_3dgs_eval3d_forward", &projection_ewa_3dgs_eval3d_forward_tensor);
+    m.def("projection_ewa_3dgs_eval3d_backward", &projection_ewa_3dgs_eval3d_backward_tensor);
+    m.def("projection_opaque_triangle_eval3d_forward", &projection_opaque_triangle_eval3d_forward_tensor);
+    m.def("projection_opaque_triangle_eval3d_backward", &projection_opaque_triangle_eval3d_backward_tensor);
+
     // ProjectionEWA3DGSHetero.cuh
     m.def("projection_ewa_3dgs_hetero_forward", &projection_ewa_3dgs_hetero_forward_tensor);
     m.def("projection_ewa_3dgs_hetero_backward", &projection_ewa_3dgs_hetero_backward_tensor);
 
-    // RasterizationFwd.cuh
+    // RasterizationFwd.cuh and RasterizationBwd.cuh
     m.def("rasterization_3dgs_forward", &rasterize_to_pixels_3dgs_fwd);
-    m.def("rasterization_opaque_triangle_forward", &rasterize_to_pixels_opaque_triangle_fwd);
-
-    // RasterizationBwd.cuh
     m.def("rasterization_3dgs_backward", &rasterize_to_pixels_3dgs_bwd);
+    m.def("rasterization_opaque_triangle_forward", &rasterize_to_pixels_opaque_triangle_fwd);
     m.def("rasterization_opaque_triangle_backward", &rasterize_to_pixels_opaque_triangle_bwd);
+
+    // RasterizationEval3DFwd.cuh and RasterizationEval3DBwd.cuh
+    m.def("rasterization_3dgs_eval3d_forward", &rasterize_to_pixels_3dgs_eval3d_fwd);
+    m.def("rasterization_3dgs_eval3d_backward", &rasterize_to_pixels_3dgs_eval3d_bwd);
+    m.def("rasterization_opaque_triangle_eval3d_forward", &rasterize_to_pixels_opaque_triangle_eval3d_fwd);
+    m.def("rasterization_opaque_triangle_eval3d_backward", &rasterize_to_pixels_opaque_triangle_eval3d_bwd);
 
 }

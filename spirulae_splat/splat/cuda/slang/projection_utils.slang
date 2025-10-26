@@ -246,6 +246,16 @@ float2x3 fisheye_proj_jac(float3 p_view, no_diff float4 intrins, no_diff CameraD
     return J;
 }
 
+[ForceInline]
+[Differentiable]
+float3 fisheye_unproj(float2 uv) {
+    float theta = length(uv);
+    return float3(
+        uv * (theta < 1e-3 ? 1.0-theta*theta/6.0 : sin(theta) / theta),
+        cos(theta)
+    );
+}
+
 
 [ForceInline]
 [Differentiable]
@@ -274,3 +284,37 @@ float2 undistort_point(
     }
     return q;
 }
+
+
+[CudaDeviceExport]
+[Differentiable]
+void generate_ray(
+    float3x3 R, float3 t, no_diff float2 uv, bool is_fisheye,
+    no_diff float4 radial_coeffs, no_diff float2 tangential_coeffs, no_diff float2 thin_prism_coeffs,
+    out float3 ray_o, out float3 ray_d
+) {
+    ray_o = -mul(t, R);
+
+    uv = no_diff undistort_point(uv, {radial_coeffs, tangential_coeffs, thin_prism_coeffs}, 8);
+    float3 raydir = is_fisheye ? fisheye_unproj(uv) : float3(uv, 1.0);
+    ray_d = normalize(mul(raydir, R));
+}
+
+[CudaDeviceExport]
+void generate_ray_vjp(
+    float3x3 R, float3 t, no_diff float2 uv, bool is_fisheye,
+    no_diff float4 radial_coeffs, no_diff float2 tangential_coeffs, no_diff float2 thin_prism_coeffs,
+    float3 v_ray_o, float3 v_ray_d,
+    out float3x3 v_R, out float3 v_t
+) {
+    DifferentialPair<float3x3> dp_R = diffPair(R);
+    DifferentialPair<float3> dp_t = diffPair(t);
+    bwd_diff(generate_ray)(
+        dp_R, dp_t, uv, is_fisheye,
+        radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        v_ray_o, v_ray_d
+    );
+    v_R = dp_R.d;
+    v_t = dp_t.d;
+}
+

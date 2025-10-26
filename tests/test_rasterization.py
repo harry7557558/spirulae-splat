@@ -17,23 +17,20 @@ device = torch.device("cuda:0")
 B, W, H = 4, 1440, 1080
 N, SH_DEGREE = 200000, 3
 PACKED = False
-IS_FISHEYE = False
+IS_FISHEYE = True
 IS_ANTIALIASED = False
+WITH_UT = True
 
 def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
     rgbd, alpha, meta = ssplat_rasterization(
         primitive=["3dgs", "mip"][IS_ANTIALIASED],
         splat_params=(means, quats, scales, opacities, features_dc, features_sh),
         # primitive="opaque_triangle",
-        # splat_params=(means, quats, scales, opacities.unsqueeze(-1).repeat(1, 2), features_dc, features_sh),
-        # splat_params=(means, quats, scales, opacities.squeeze(-1), features_dc, features_dc.unsqueeze(-2).repeat(1, 2, 1), features_sh),
-        colors_dc=features_dc,
-        colors_sh=features_sh,
+        # splat_params=(means, quats, scales, opacities.unsqueeze(-1).repeat(1, 2), features_dc, features_sh, features_dc.unsqueeze(-2).repeat(1, 2, 1)),
         viewmats=viewmats,  # [C, 4, 4]
         Ks=Ks,  # [C, 3, 3]
         width=W,
         height=H,
-        sh_degree=SH_DEGREE,
         packed=PACKED,
         use_bvh=False,
         tile_size=16,
@@ -41,8 +38,8 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
         sparse_grad=False,
         distributed=False,
         camera_model=["pinhole", "fisheye"][IS_FISHEYE],
-        with_ut=False,
-        with_eval3d=False,
+        with_ut=WITH_UT,
+        with_eval3d=WITH_UT,
         render_mode="RGB+D",
         # render_mode="RGB+D+N",
     )
@@ -67,8 +64,8 @@ def rasterize_gsplat(means, quats, scales, opacities, features_dc, features_sh, 
         rasterize_mode=["classic", "antialiased"][IS_ANTIALIASED],
         distributed=False,
         camera_model=["pinhole", "fisheye"][IS_FISHEYE],
-        with_ut=False,
-        with_eval3d=False,
+        with_ut=WITH_UT,
+        with_eval3d=WITH_UT,
         render_mode="RGB+D",
     )
     return rgbd[..., :3], rgbd[..., 3:], alpha
@@ -101,6 +98,8 @@ def get_inputs():
 
     inputs = (means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks)
     inputs = [torch.nn.Parameter(x.contiguous().clone()) for x in inputs]
+    if WITH_UT:
+        inputs = inputs[:-2] + [viewmats, Ks]
     return inputs
 
 

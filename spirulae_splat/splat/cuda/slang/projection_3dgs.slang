@@ -409,3 +409,88 @@ void projection_3dgs_ortho_vjp(
     v_R = dp_R.d;
     v_t = dp_t.d;
 }
+
+
+[CudaDeviceExport]
+[Differentiable]
+float evaluate_alpha_3dgs(
+    float3 mean, float4 quat, float3 scale, float opacity,
+    float3 ray_o, float3 ray_d
+) {
+    float3x3 R = quat_to_rotmat(quat);
+    float3x3 S = float3x3(
+        exp(-scale.x), 0.f, 0.f,
+        0.f, exp(-scale.y), 0.f,
+        0.f, 0.f, exp(-scale.z)
+    );
+    float3x3 iscl_rot = mul(S, transpose(R));
+
+    float3 gro = mul(iscl_rot, (ray_o - mean));
+    float3 grd = normalize(mul(iscl_rot, ray_d));
+    float3 gcrod = cross(grd, gro);
+    float val = exp(-0.5f * dot(gcrod, gcrod));
+    return val / (1.0 + exp(-opacity));
+}
+
+[CudaDeviceExport]
+void evaluate_alpha_3dgs_vjp(
+    float3 mean, float4 quat, float3 scale, float opacity,
+    float3 ray_o, float3 ray_d, float v_alpha,
+    out float3 v_mean, out float4 v_quat, out float3 v_scale, out float v_opacity,
+    out float3 v_ray_o, out float3 v_ray_d
+) {
+    DifferentialPair<float3> dp_mean = diffPair(mean);
+    DifferentialPair<float4> dp_quat = diffPair(quat);
+    DifferentialPair<float3> dp_scale = diffPair(scale);
+    DifferentialPair<float> dp_opacity = diffPair(opacity);
+    DifferentialPair<float3> dp_ray_o = diffPair(ray_o);
+    DifferentialPair<float3> dp_ray_d = diffPair(ray_d);
+    bwd_diff(evaluate_alpha_3dgs)(
+        dp_mean, dp_quat, dp_scale, dp_opacity,
+        dp_ray_o, dp_ray_d, v_alpha
+    );
+    v_mean = dp_mean.d;
+    v_quat = dp_quat.d;
+    v_scale = dp_scale.d;
+    v_opacity = dp_opacity.d;
+    v_ray_o = dp_ray_o.d;
+    v_ray_d = dp_ray_d.d;
+}
+
+[CudaDeviceExport]
+[Differentiable]
+void evaluate_color_3dgs(
+    float3 mean, float4 quat, float3 scale, float opacity, float3 rgb,
+    float3 ray_o, float3 ray_d,
+    out float3 out_rgb, out float depth
+) {
+    out_rgb = rgb;
+    depth = length(mean - ray_o);  // TODO: more accurate depth for large splats
+}
+
+[CudaDeviceExport]
+void evaluate_color_3dgs_vjp(
+    float3 mean, float4 quat, float3 scale, float opacity, float3 rgb,
+    float3 ray_o, float3 ray_d, float3 v_out_rgb, float v_depth,
+    out float3 v_mean, out float4 v_quat, out float3 v_scale, out float v_opacity, out float3 v_rgb,
+    out float3 v_ray_o, out float3 v_ray_d
+) {
+    DifferentialPair<float3> dp_mean = diffPair(mean);
+    DifferentialPair<float4> dp_quat = diffPair(quat);
+    DifferentialPair<float3> dp_scale = diffPair(scale);
+    DifferentialPair<float> dp_opacity = diffPair(opacity);
+    DifferentialPair<float3> dp_rgb = diffPair(rgb);
+    DifferentialPair<float3> dp_ray_o = diffPair(ray_o);
+    DifferentialPair<float3> dp_ray_d = diffPair(ray_d);
+    bwd_diff(evaluate_color_3dgs)(
+        dp_mean, dp_quat, dp_scale, dp_opacity, dp_rgb,
+        dp_ray_o, dp_ray_d, v_out_rgb, v_depth
+    );
+    v_mean = dp_mean.d;
+    v_quat = dp_quat.d;
+    v_scale = dp_scale.d;
+    v_opacity = dp_opacity.d;
+    v_rgb = dp_rgb.d;
+    v_ray_o = dp_ray_o.d;
+    v_ray_d = dp_ray_d.d;
+}

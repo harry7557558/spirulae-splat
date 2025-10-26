@@ -494,6 +494,9 @@ def inject_noise_to_position(
     min_opacity: float,
     opacities: Optional[Tensor] = None
 ):
+    if scaler <= 0.0 or min_opacity <= 0.0:
+        return
+
     if opacities is None:
         opacities = torch.sigmoid(params["opacities"].flatten())
     scales = torch.exp(params["scales"])

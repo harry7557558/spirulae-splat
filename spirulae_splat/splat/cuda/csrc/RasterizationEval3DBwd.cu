@@ -1,0 +1,425 @@
+// Modified from https://github.com/nerfstudio-project/gsplat/blob/main/gsplat/cuda/csrc/RasterizeToPixels3DGSBwd.cu
+
+#include "RasterizationEval3DBwd.cuh"
+
+#include "common.cuh"
+
+#include <gsplat/Common.h>
+#include <gsplat/Utils.cuh>
+
+#include <cub/cub.cuh>
+
+
+constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
+constexpr uint SPLAT_BATCH_SIZE = 128;
+
+
+template <typename SplatPrimitive, gsplat::CameraModelType camera_model>
+__global__ void rasterize_to_pixels_eval3d_bwd_kernel(
+    const uint32_t I,
+    const uint32_t N,
+    const uint32_t n_isects,
+    const bool packed,
+    // fwd inputs
+    typename SplatPrimitive::WorldEval3D::Buffer splat_buffer,
+    const float *__restrict__ viewmats, // [B, C, 4, 4]
+    const float *__restrict__ Ks,       // [B, C, 3, 3]
+    const CameraDistortionCoeffsBuffer dist_coeffs,
+    const float *__restrict__ backgrounds, // [..., CDIM] or [nnz, CDIM]
+    const bool *__restrict__ masks,           // [..., tile_height, tile_width]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const int32_t *__restrict__ tile_offsets, // [..., tile_height, tile_width]
+    const int32_t *__restrict__ flatten_ids,  // [n_isects]
+    // fwd outputs
+    const float
+        *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
+    const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    // grad outputs
+    typename SplatPrimitive::RenderOutput::Buffer v_render_output_buffer,
+    const float
+        *__restrict__ v_render_alphas, // [..., image_height, image_width, 1]
+    // grad inputs
+    typename SplatPrimitive::WorldEval3D::Buffer v_splat_buffer
+) {
+    auto block = cg::this_thread_block();
+    cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
+    uint32_t image_id = block.group_index().x;
+    uint32_t tile_id = block.group_index().y * tile_width + block.group_index().z;
+    uint32_t thread_id = block.thread_rank();
+
+    tile_offsets += image_id * tile_height * tile_width;
+    render_Ts += image_id * image_height * image_width;
+    last_ids += image_id * image_height * image_width;
+    v_render_alphas += image_id * image_height * image_width;
+    if (backgrounds != nullptr) {
+        backgrounds += image_id;
+    }
+    if (masks != nullptr) {
+        masks += image_id * tile_height * tile_width;
+    }
+
+    // when the mask is provided, do nothing and return if
+    // this tile is labeled as False
+    if (masks != nullptr && !masks[tile_id]) {
+        return;
+    }
+
+    // Load camera
+    viewmats += image_id * 16;
+    Ks += image_id * 9;
+    float3x3 R = {
+        viewmats[0], viewmats[1], viewmats[2],  // 1st row
+        viewmats[4], viewmats[5], viewmats[6],  // 2nd row
+        viewmats[8], viewmats[9], viewmats[10],  // 3rd row
+    };
+    float3 t = { viewmats[3], viewmats[7], viewmats[11] };
+    float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
+    float4 radial_coeffs = dist_coeffs.radial_coeffs != nullptr ?
+        dist_coeffs.radial_coeffs[image_id] : make_float4(0.0f);
+    float2 tangential_coeffs = dist_coeffs.tangential_coeffs != nullptr ?
+        dist_coeffs.tangential_coeffs[image_id] : make_float2(0.0f);
+    float2 thin_prism_coeffs = dist_coeffs.thin_prism_coeffs != nullptr ?
+        dist_coeffs.thin_prism_coeffs[image_id] : make_float2(0.0f);
+
+    // load pixels
+    __shared__ int32_t pix_bin_final[BLOCK_SIZE];
+    __shared__ float2 pix_Ts_with_grad[BLOCK_SIZE];
+    __shared__ typename SplatPrimitive::RenderOutput v_pix_colors[BLOCK_SIZE];
+    __shared__ float3 rays[BLOCK_SIZE][2];
+    // __shared__ float pix_background[CDIM];  // TODO
+
+    #pragma unroll
+    for (uint pix_id0 = 0; pix_id0 < BLOCK_SIZE; pix_id0 += SPLAT_BATCH_SIZE) {
+        static_assert(BLOCK_SIZE % SPLAT_BATCH_SIZE == 0);
+        uint pix_id_local = pix_id0 + thread_id;
+        int pix_x = block.group_index().z * TILE_SIZE + pix_id_local % TILE_SIZE;
+        int pix_y = block.group_index().y * TILE_SIZE + pix_id_local / TILE_SIZE;
+        uint pix_id_global = pix_y * image_width + pix_x;
+        bool inside = (pix_x < image_width && pix_y < image_height);
+        
+        int32_t bin_final = (inside ? last_ids[pix_id_global] : 0);
+        pix_bin_final[pix_id_local] = bin_final;
+        pix_Ts_with_grad[pix_id_local] = {
+            (inside ? render_Ts[pix_id_global] : 0.0f),
+            (inside ? -v_render_alphas[pix_id_global] : 0.0f)
+        };
+        v_pix_colors[pix_id_local] = (inside ?
+            SplatPrimitive::RenderOutput::load(v_render_output_buffer,
+                    image_id * image_height * image_width + pix_id_global)
+             : SplatPrimitive::RenderOutput::zero());
+
+        const float px = (float)pix_x + 0.5f;
+        const float py = (float)pix_y + 0.5f;
+        generate_ray(
+            R, t, {(px-cx)/fx, (py-cy)/fy}, camera_model == gsplat::CameraModelType::FISHEYE,
+            radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            &rays[pix_id_local][0], &rays[pix_id_local][1]
+        );
+    }
+    // static_assert(CDIM <= SPLAT_BATCH_SIZE);
+    // if (thread_id < CDIM && backgrounds != nullptr)
+    //     pix_background[thread_id] = backgrounds[thread_id];  // TODO
+    block.sync();
+
+    // threads fist load splats, then swept through pixels
+    // do this in batches
+
+    int32_t range_start = tile_offsets[tile_id];
+    int32_t range_end =
+        (image_id == I - 1) && (tile_id == tile_width * tile_height - 1)
+            ? n_isects
+            : tile_offsets[tile_id + 1];
+    const uint32_t num_splat_batches =
+        _CEIL_DIV(range_end - range_start, SPLAT_BATCH_SIZE);
+
+    // if (warp.thread_rank() == 0)
+    //     printf("range_start=%d range_end=%d num_splat_batches=%u\n", range_start, range_end, num_splat_batches);
+    for (uint32_t splat_b = 0; splat_b < num_splat_batches; ++splat_b) {
+        const int32_t splat_batch_end = range_end - 1 - SPLAT_BATCH_SIZE * splat_b;
+        const int32_t splat_batch_size = min(SPLAT_BATCH_SIZE, splat_batch_end + 1 - range_start);
+        const int32_t splat_idx = splat_batch_end - thread_id;
+
+        // load splats
+        typename SplatPrimitive::WorldEval3D splat;
+        uint32_t splat_gid;
+        if (splat_idx >= range_start) {
+            splat_gid = flatten_ids[splat_idx]; // flatten index in [I * N] or [nnz]
+            splat = SplatPrimitive::WorldEval3D::load(splat_buffer, splat_gid);
+        }
+
+        // accumulate gradient
+        typename SplatPrimitive::WorldEval3D v_splat = SplatPrimitive::WorldEval3D::zero();
+
+        // thread 0 takes last splat, 1 takes second last, etc.
+        // at t=0, thread 0 (splat -1) undo pixel 0
+        // at t=1, thread 0 (splat -1) undo pixel 1, thread 1 (splat -2) undo pixel 0
+        // ......
+
+        // process gaussians in the current batch for this pixel
+        // 0 index is the furthest back gaussian in the batch
+        for (int t = 0; t < splat_batch_size + BLOCK_SIZE - 1; ++t) {
+            int pix_id = t - thread_id;
+
+            int pix_local_x = pix_id % TILE_SIZE;
+            int pix_local_y = pix_id / TILE_SIZE;
+            int pix_global_x = block.group_index().z * TILE_SIZE + pix_local_x;
+            int pix_global_y = block.group_index().y * TILE_SIZE + pix_local_y;
+            if ((pix_id >= 0 && pix_id < BLOCK_SIZE &&
+                pix_global_x < image_width && pix_global_y < image_height &&
+                splat_idx >= range_start) &&
+                splat_idx <= pix_bin_final[pix_id]
+            ) {
+            float3 ray_o = rays[pix_id][0];
+            float3 ray_d = rays[pix_id][1];
+
+            // evaluate alpha and early skip
+            float alpha = splat.evaluate_alpha(ray_o, ray_d);
+            if (alpha >= ALPHA_THRESHOLD) {
+
+            // printf("t=%d, thread %u, splat %d (%u), pix_id %d, pix %d %d\n", t, thread_id, splat_idx-range_start, splat_gid, pix_id, pix_global_x, pix_global_y);
+
+            // forward:
+            // \left(c_{1},T_{1}\right)=\left(c_{0}+\alpha_{i}T_{0}c_{i},\ T_{0}\left(1-\alpha_{i}\right)\right)
+            float T1 = pix_Ts_with_grad[pix_id].x;
+            float v_T1 = pix_Ts_with_grad[pix_id].y;
+
+            // undo pixel:
+            // T_{0}=\frac{T_{1}}{1-\alpha_{i}}
+            float ra = 1.0f / (1.0f - alpha);
+            float T0 = T1 * ra;
+
+            typename SplatPrimitive::RenderOutput splat_color = splat.evaluate_color(ray_o, ray_d);
+            typename SplatPrimitive::RenderOutput v_c = v_pix_colors[pix_id];
+
+            // gradient to alpha:
+            // \frac{dL}{d\alpha_{i}}
+            // = \frac{dL}{dc_{1}}\frac{dc_{1}}{d\alpha_{i}}+\frac{dL}{dT_{1}}\frac{dT_{1}}{d\alpha_{i}}
+            // = T_{0}\frac{dL}{dc_{1}}c_{i}-\frac{dL}{dT_{1}}T_{0}
+            float v_alpha = T0 * splat_color.dot(v_c) -v_T1 * T0;
+
+            // gradient to color:
+            // \frac{dL}{dc_{i}}
+            // = \frac{dL}{dc_{1}}\frac{dc_{1}}{dc_{i}}
+            // = \alpha_{i}T_{0}\frac{dL}{dc_{1}}
+            typename SplatPrimitive::RenderOutput v_rgb_local = v_c * (alpha * T0);
+
+            // update pixel gradient:
+            // \frac{dL}{dT_{0}}
+            // = \frac{dL}{dc_{1}}\frac{dc_{1}}{dT_{0}}+\frac{dL}{dT_{1}}\frac{dT_{1}}{dT_{0}}
+            // = \alpha_{i}\frac{dL}{dc_{1}}c_{i}+\frac{dL}{dT_{1}}\left(1-\alpha_{i}\right)
+            float v_T0 = alpha * splat_color.dot(v_c) + v_T1 * (1.0f - alpha);
+
+            // backward diff splat
+            float3 v_ray_o, v_ray_d;  // TODO
+            v_splat += splat.evaluate_alpha_vjp(ray_o, ray_d, v_alpha, v_ray_o, v_ray_d);
+            v_splat += splat.evaluate_color_vjp(ray_o, ray_d, v_rgb_local, v_ray_o, v_ray_d);
+
+            // update pixel states
+            pix_Ts_with_grad[pix_id] = { T0, v_T0 };
+            // v_pix_colors remains the same
+
+            }}
+            block.sync();
+        }
+
+        // accumulate gradient
+        if (splat_idx >= range_start)
+            v_splat.atomicAddBuffer(v_splat_buffer, splat_gid);
+    }
+    // TODO: gradient to viewmat
+}
+
+
+template <typename SplatPrimitive>
+inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
+    // Gaussian parameters
+    typename SplatPrimitive::WorldEval3D::Tensor splats,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
+    const std::optional<at::Tensor> backgrounds, // [..., 3]
+    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // intersections
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    // forward outputs
+    const at::Tensor render_Ts, // [..., image_height, image_width, 1]
+    const at::Tensor last_ids,      // [..., image_height, image_width]
+    // gradients of outputs
+    typename SplatPrimitive::RenderOutput::Tensor v_render_outputs,
+    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    // outputs
+    typename SplatPrimitive::WorldEval3D::Tensor v_splats
+) {
+    bool packed = splats.isPacked();
+    uint32_t N = packed ? 0 : splats.size(); // number of gaussians
+    uint32_t I = render_Ts.numel() / (image_height * image_width); // number of images
+    uint32_t tile_height = tile_offsets.size(-2);
+    uint32_t tile_width = tile_offsets.size(-1);
+    uint32_t n_isects = flatten_ids.size(0);
+
+    // Each block covers a tile on the image. In total there are
+    // I * tile_height * tile_width blocks.
+    dim3 threads = {SPLAT_BATCH_SIZE, 1, 1};
+    dim3 grid = {I, tile_height, tile_width};
+
+    if (n_isects == 0) {
+        // skip the kernel launch if there are no elements
+        return;
+    }
+
+    #define _LAUNCH_ARGS <<<grid, threads>>>( \
+            I, N, n_isects, packed, \
+            splats.buffer(), \
+            viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr, \
+            masks.has_value() ? masks.value().data_ptr<bool>() : nullptr, \
+            image_width, image_height, tile_width, tile_height, \
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(), \
+            render_Ts.data_ptr<float>(), last_ids.data_ptr<int32_t>(), \
+            v_render_outputs.buffer(), v_render_alphas.data_ptr<float>(), v_splats.buffer() \
+        )
+
+    if (camera_model == gsplat::CameraModelType::PINHOLE)
+        rasterize_to_pixels_eval3d_bwd_kernel<SplatPrimitive, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
+    else if (camera_model == gsplat::CameraModelType::FISHEYE)
+        rasterize_to_pixels_eval3d_bwd_kernel<SplatPrimitive, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+    else
+        throw std::runtime_error("Unsupported camera model");
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    #undef _LAUNCH_ARGS
+}
+
+
+template<typename SplatPrimitive>
+inline std::tuple<
+    typename SplatPrimitive::WorldEval3D::TensorTuple,
+    std::optional<at::Tensor>  // v_viewmats
+> rasterize_to_pixels_eval3d_bwd_tensor(
+    // Gaussian parameters
+    typename SplatPrimitive::WorldEval3D::TensorTuple splats_tuple,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
+    const std::optional<at::Tensor> backgrounds, // [..., channels]
+    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    // forward outputs
+    const at::Tensor render_Ts, // [..., image_height, image_width, 1]
+    const at::Tensor last_ids,      // [..., image_height, image_width]
+    // gradients of outputs
+    typename SplatPrimitive::RenderOutput::TensorTuple v_render_outputs,
+    const at::Tensor v_render_alphas // [..., image_height, image_width, 1]
+) {
+    DEVICE_GUARD(tile_offsets);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+    CHECK_INPUT(viewmats);
+    CHECK_INPUT(Ks);
+    CHECK_INPUT(render_Ts);
+    CHECK_INPUT(last_ids);
+    CHECK_INPUT(v_render_alphas);
+    if (backgrounds.has_value())
+        CHECK_INPUT(backgrounds.value());
+    if (masks.has_value())
+        CHECK_INPUT(masks.value());
+
+    if (tile_size != TILE_SIZE)
+        AT_ERROR("Unsupported tile size");
+
+    typename SplatPrimitive::WorldEval3D::Tensor splats(splats_tuple);
+    typename SplatPrimitive::WorldEval3D::Tensor v_splats = splats.zeros_like();
+
+    at::Tensor v_viewmats = at::zeros_like(viewmats);  // TODO
+
+    launch_rasterize_to_pixels_eval3d_bwd_kernel<SplatPrimitive>(
+        splats,
+        viewmats, Ks, camera_model, dist_coeffs,
+        backgrounds, masks,
+        image_width, image_height, tile_offsets, flatten_ids,
+        render_Ts, last_ids,
+        v_render_outputs, v_render_alphas, v_splats
+    );
+
+    return std::make_tuple(v_splats.tupleAll(), v_viewmats);
+}
+
+std::tuple<
+    Vanilla3DGS::WorldEval3D::TensorTuple,
+    std::optional<at::Tensor>  // v_viewmats
+> rasterize_to_pixels_3dgs_eval3d_bwd(
+    // Gaussian parameters
+    Vanilla3DGS::WorldEval3D::TensorTuple splats_tuple,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
+    const std::optional<at::Tensor> backgrounds, // [..., channels]
+    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    // forward outputs
+    const at::Tensor render_Ts, // [..., image_height, image_width, 1]
+    const at::Tensor last_ids,      // [..., image_height, image_width]
+    // gradients of outputs
+    Vanilla3DGS::RenderOutput::TensorTuple v_render_outputs,
+    const at::Tensor v_render_alphas // [..., image_height, image_width, 1]
+) {
+    return rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGS>(
+        splats_tuple,
+        viewmats, Ks, camera_model, dist_coeffs,
+        backgrounds, masks,
+        image_width, image_height, tile_size, tile_offsets, flatten_ids,
+        render_Ts, last_ids, v_render_outputs, v_render_alphas
+    );
+}
+
+std::tuple<
+    // OpaqueTriangle::WorldEval3D::TensorTuple,
+    // std::optional<at::Tensor>  // absgrad
+> rasterize_to_pixels_opaque_triangle_eval3d_bwd(
+    // // Gaussian parameters
+    // OpaqueTriangle::WorldEval3D::TensorTuple splats_tuple,
+    // const std::optional<at::Tensor> backgrounds, // [..., channels]
+    // const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    // // image size
+    // const uint32_t image_width,
+    // const uint32_t image_height,
+    // const uint32_t tile_size,
+    // // intersections
+    // const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    // const at::Tensor flatten_ids,  // [n_isects]
+    // // forward outputs
+    // const at::Tensor render_Ts, // [..., image_height, image_width, 1]
+    // const at::Tensor last_ids,      // [..., image_height, image_width]
+    // // gradients of outputs
+    // OpaqueTriangle::RenderOutput::TensorTuple v_render_outputs,
+    // const at::Tensor v_render_alphas // [..., image_height, image_width, 1]
+) {
+    throw std::runtime_error("TODO");
+    // return rasterize_to_pixels_bwd_tensor<OpaqueTriangle>(
+    //     splats_tuple, backgrounds, masks,
+    //     image_width, image_height, tile_size, tile_offsets, flatten_ids,
+    //     render_Ts, last_ids, v_render_outputs, v_render_alphas
+    // );
+}

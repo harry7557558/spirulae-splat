@@ -162,9 +162,12 @@ generate_header(path+"BackgroundSphericalHarmonics.cu", path+"BackgroundSpherica
 generate_header(path+"PerSplatLoss.cu", path+"PerSplatLoss.cuh")
 generate_header(path+"PixelWise.cu", path+"PixelWise.cuh")
 generate_header(path+"Projection.cu", path+"Projection.cuh")
+generate_header(path+"ProjectionEval3D.cu", path+"ProjectionEval3D.cuh")
 generate_header(path+"ProjectionEWA3DGSHetero.cu", path+"ProjectionEWA3DGSHetero.cuh")
 generate_header(path+"RasterizationFwd.cu", path+"RasterizationFwd.cuh")
 generate_header(path+"RasterizationBwd.cu", path+"RasterizationBwd.cuh")
+generate_header(path+"RasterizationEval3DFwd.cu", path+"RasterizationEval3DFwd.cuh")
+generate_header(path+"RasterizationEval3DBwd.cu", path+"RasterizationEval3DBwd.cuh")
 
 setup(
     name="spirulae_splat",

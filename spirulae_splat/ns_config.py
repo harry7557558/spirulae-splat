@@ -166,8 +166,8 @@ spirulae_triangle = MethodSpecification(
                 kernel_radius=1.0,
                 compute_depth_normal=True,
                 # sh_degree=1,  # TODO: debug sh_degree=0
-                # background_color="black",
-                # train_background_color=False,
+                background_color="black",
+                train_background_color=False,
                 # alpha_reg_weight=0.0,
                 # mcmc_scale_reg=0.04,
                 # erank_reg=1.0,

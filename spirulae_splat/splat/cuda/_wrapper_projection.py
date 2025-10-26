@@ -98,6 +98,7 @@ class _SphericalHarmonics(torch.autograd.Function):
 
 def fully_fused_projection(
     primitive: Literal["3dgs", "mip", "opaque_triangle"],
+    eval3d: bool,
     splats: tuple[Tensor],  # means, quats, scales, opacities
     viewmats: Tensor,  # [..., C, 4, 4]
     Ks: Tensor,  # [..., C, 3, 3]
@@ -157,13 +158,22 @@ def fully_fused_projection(
         raise NotImplementedError("Packed not supported for fully_fused_projection without use_bvh")
     else:
         additional_args = []
-        if primitive in ["3dgs", "mip"]:
-            _RasterizeToPixels = _FullyFusedProjection3DGS
-            additional_args = [primitive == "mip"]
-        elif primitive in ["opaque_triangle"]:
-            _RasterizeToPixels = _FullyFusedProjectionOpaqueTriangle
+        if not eval3d:
+            if primitive in ["3dgs", "mip"]:
+                _RasterizeToPixels = _FullyFusedProjection3DGS
+                additional_args = [primitive == "mip"]
+            elif primitive in ["opaque_triangle"]:
+                _RasterizeToPixels = _FullyFusedProjectionOpaqueTriangle
+        else:
+            if primitive in ["3dgs", "mip"]:
+                _RasterizeToPixels = _FullyFusedProjection3DGSEval3D
+            elif primitive in ["opaque_triangle"]:
+                _RasterizeToPixels = _FullyFusedProjectionOpaqueTriangleEval3D
+        in_splats = [x.contiguous() for x in splats]
         proj_return = _RasterizeToPixels.apply(
-            *[x.contiguous() for x in [*splats] + [viewmats, Ks]],
+            *in_splats,
+            viewmats.contiguous(),
+            Ks.contiguous(),
             width,
             height,
             near_plane,
@@ -172,13 +182,18 @@ def fully_fused_projection(
             (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
             *additional_args
         )
-        depths = proj_return[2]
+        if not eval3d:
+            depths = proj_return[2]
+            out_splats = tuple(proj_return[1:])
+        else:
+            depths = proj_return[1]
+            out_splats = (*in_splats, *proj_return[1:])
         if primitive == "opaque_triangle":
             depths = depths.mean(-1)
         return (
             proj_return[0],  # aabb
             depths,  # depth
-            tuple(proj_return[1:])
+            out_splats
         )
 
 class _FullyFusedProjection3DGS(torch.autograd.Function):
@@ -316,6 +331,70 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
             v_means, v_quats, v_scales, v_hardness, v_features_dc, v_features_sh, v_features_ch, v_viewmats,
             # v_means, v_hardness, v_viewmats,
             *([None]*(len(ctx.needs_input_grad)-8))
+        )
+
+class _FullyFusedProjection3DGSEval3D(torch.autograd.Function):
+
+    @staticmethod
+    def forward(
+        ctx,
+        means: Tensor,  # [..., N, 3]
+        quats: Tensor,  # [..., N, 4]
+        scales: Tensor,  # [..., N, 3]
+        opacities: Tensor,  # [..., N]
+        features_dc: Tensor,  # [..., N, 3]
+        features_sh: Tensor,  # [..., N, x, 3]
+        viewmats: Tensor,  # [..., C, 4, 4]
+        Ks: Tensor,  # [..., C, 3, 3]
+        width: int,
+        height: int,
+        near_plane: float,
+        far_plane: float,
+        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
+        dist_coeffs: Tuple[Tensor, Tensor, Tensor],
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        assert (
+            camera_model != "ftheta"
+        ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
+
+        camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
+            f"CameraModelType.{camera_model.upper()}"
+        )
+
+        aabb, (depths, proj_rgbs) = _make_lazy_cuda_func(
+            "projection_ewa_3dgs_eval3d_forward"
+        )(
+            (means, quats, scales, opacities, features_dc, features_sh),
+            viewmats, Ks, width, height,
+            near_plane, far_plane,
+            camera_model_type, dist_coeffs
+        )
+        ctx.save_for_backward(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks, aabb)
+        ctx.width = width
+        ctx.height = height
+        ctx.camera_model_type = camera_model_type
+        ctx.dist_coeffs = dist_coeffs
+
+        return aabb, depths, proj_rgbs
+
+    @staticmethod
+    def backward(ctx, v_aabb, v_depths, v_proj_rgbs):
+        means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks, aabb = ctx.saved_tensors
+        (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh), v_viewmats = _make_lazy_cuda_func(
+            "projection_ewa_3dgs_eval3d_backward"
+        )(
+            (means, quats, scales, opacities, features_dc, features_sh),
+            viewmats, Ks, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs, aabb,
+            tuple([x.contiguous() for x in (v_depths, v_proj_rgbs)]),
+            ctx.needs_input_grad[6],  # viewmats_requires_grad
+        )
+        if not ctx.needs_input_grad[6]:
+            v_viewmats = None
+        else:
+            raise NotImplementedError("viewmat grad")
+        return (
+            v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh, v_viewmats,
+            *([None]*(len(ctx.needs_input_grad)-7))
         )
 
 

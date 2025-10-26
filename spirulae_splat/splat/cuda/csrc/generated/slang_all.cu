@@ -1319,6 +1319,78 @@ inline __device__ Matrix<float, 2, 2>  inverse(Matrix<float, 2, 2>  m_0)
     return makeMatrix<float, 2, 2> (m_0.rows[int(1)].y * invdet_0, - m_0.rows[int(0)].y * invdet_0, - m_0.rows[int(1)].x * invdet_0, m_0.rows[int(0)].x * invdet_0);
 }
 
+struct DiffPair_matrixx3Cfloatx2C3x2C3x3E_0
+{
+    Matrix<float, 3, 3>  primal_0;
+    Matrix<float, 3, 3>  differential_0;
+};
+
+inline __device__ void _d_mul_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * left_2, DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * right_2, float3  dOut_9)
+{
+    float _S307 = (*right_2).primal_0.rows[int(0)].x * dOut_9.x;
+    Matrix<float, 3, 3>  right_d_result_1;
+    *&(((&right_d_result_1)->rows + (int(0)))->x) = (*left_2).primal_0.x * dOut_9.x;
+    float sum_4 = _S307 + (*right_2).primal_0.rows[int(0)].y * dOut_9.y;
+    *&(((&right_d_result_1)->rows + (int(0)))->y) = (*left_2).primal_0.x * dOut_9.y;
+    float sum_5 = sum_4 + (*right_2).primal_0.rows[int(0)].z * dOut_9.z;
+    *&(((&right_d_result_1)->rows + (int(0)))->z) = (*left_2).primal_0.x * dOut_9.z;
+    float3  left_d_result_1;
+    *&((&left_d_result_1)->x) = sum_5;
+    float _S308 = (*right_2).primal_0.rows[int(1)].x * dOut_9.x;
+    *&(((&right_d_result_1)->rows + (int(1)))->x) = (*left_2).primal_0.y * dOut_9.x;
+    float sum_6 = _S308 + (*right_2).primal_0.rows[int(1)].y * dOut_9.y;
+    *&(((&right_d_result_1)->rows + (int(1)))->y) = (*left_2).primal_0.y * dOut_9.y;
+    float sum_7 = sum_6 + (*right_2).primal_0.rows[int(1)].z * dOut_9.z;
+    *&(((&right_d_result_1)->rows + (int(1)))->z) = (*left_2).primal_0.y * dOut_9.z;
+    *&((&left_d_result_1)->y) = sum_7;
+    float _S309 = (*right_2).primal_0.rows[int(2)].x * dOut_9.x;
+    *&(((&right_d_result_1)->rows + (int(2)))->x) = (*left_2).primal_0.z * dOut_9.x;
+    float sum_8 = _S309 + (*right_2).primal_0.rows[int(2)].y * dOut_9.y;
+    *&(((&right_d_result_1)->rows + (int(2)))->y) = (*left_2).primal_0.z * dOut_9.y;
+    float sum_9 = sum_8 + (*right_2).primal_0.rows[int(2)].z * dOut_9.z;
+    *&(((&right_d_result_1)->rows + (int(2)))->z) = (*left_2).primal_0.z * dOut_9.z;
+    *&((&left_d_result_1)->z) = sum_9;
+    left_2->primal_0 = (*left_2).primal_0;
+    left_2->differential_0 = left_d_result_1;
+    right_2->primal_0 = (*right_2).primal_0;
+    right_2->differential_0 = right_d_result_1;
+    return;
+}
+
+inline __device__ float3  mul_2(float3  left_3, Matrix<float, 3, 3>  right_3)
+{
+    float3  result_13;
+    int j_1 = int(0);
+    for(;;)
+    {
+        if(j_1 < int(3))
+        {
+        }
+        else
+        {
+            break;
+        }
+        int i_9 = int(0);
+        float sum_10 = 0.0f;
+        for(;;)
+        {
+            if(i_9 < int(3))
+            {
+            }
+            else
+            {
+                break;
+            }
+            float sum_11 = sum_10 + _slang_vector_get_element(left_3, i_9) * _slang_vector_get_element(right_3.rows[i_9], j_1);
+            i_9 = i_9 + int(1);
+            sum_10 = sum_11;
+        }
+        *_slang_vector_get_element_ptr(&result_13, j_1) = sum_10;
+        j_1 = j_1 + int(1);
+    }
+    return result_13;
+}
+
 struct CameraDistortion_0
 {
     float4  radial_coeffs_0;
@@ -1328,11 +1400,11 @@ struct CameraDistortion_0
 
 inline __device__ float2  undistort_point_0(float2  uv_0, CameraDistortion_0 * dist_coeffs_0, int maxiter_0)
 {
-    int i_9 = int(0);
+    int i_10 = int(0);
     float2  q_0 = uv_0;
     for(;;)
     {
-        if(i_9 < maxiter_0)
+        if(i_10 < maxiter_0)
         {
         }
         else
@@ -1347,50 +1419,50 @@ inline __device__ float2  undistort_point_0(float2  uv_0, CameraDistortion_0 * d
         float u_0 = q_0.x;
         float v_0 = q_0.y;
         float r2_0 = u_0 * u_0 + v_0 * v_0;
-        float _S307 = dist_coeffs_0->radial_coeffs_0.z + r2_0 * k4_0;
-        float _S308 = dist_coeffs_0->radial_coeffs_0.y + r2_0 * _S307;
-        float _S309 = dist_coeffs_0->radial_coeffs_0.x + r2_0 * _S308;
-        float radial_0 = 1.0f + r2_0 * _S309;
-        float _S310 = 2.0f * p1_0;
-        float _S311 = _S310 * u_0;
-        float _S312 = 2.0f * u_0;
-        float _S313 = 2.0f * p2_0;
+        float _S310 = dist_coeffs_0->radial_coeffs_0.z + r2_0 * k4_0;
+        float _S311 = dist_coeffs_0->radial_coeffs_0.y + r2_0 * _S310;
+        float _S312 = dist_coeffs_0->radial_coeffs_0.x + r2_0 * _S311;
+        float radial_0 = 1.0f + r2_0 * _S312;
+        float _S313 = 2.0f * p1_0;
         float _S314 = _S313 * u_0;
-        float _S315 = 2.0f * v_0;
-        float2  _S316 = q_0 * make_float2 (radial_0) + make_float2 (_S311 * v_0 + p2_0 * (r2_0 + _S312 * u_0) + sx1_0 * r2_0, _S314 * v_0 + p1_0 * (r2_0 + _S315 * v_0) + sy1_0 * r2_0);
-        float2  _S317 = make_float2 (0.0f);
-        float2  seed_0 = _S317;
+        float _S315 = 2.0f * u_0;
+        float _S316 = 2.0f * p2_0;
+        float _S317 = _S316 * u_0;
+        float _S318 = 2.0f * v_0;
+        float2  _S319 = q_0 * make_float2 (radial_0) + make_float2 (_S314 * v_0 + p2_0 * (r2_0 + _S315 * u_0) + sx1_0 * r2_0, _S317 * v_0 + p1_0 * (r2_0 + _S318 * v_0) + sy1_0 * r2_0);
+        float2  _S320 = make_float2 (0.0f);
+        float2  seed_0 = _S320;
         *&((&seed_0)->x) = 1.0f;
-        float2  _S318 = make_float2 (radial_0);
-        float2  _S319 = q_0 * seed_0;
-        float _S320 = p1_0 * seed_0.y;
-        float _S321 = p2_0 * seed_0.x;
-        float _S322 = _S319.x + _S319.y;
-        float _S323 = r2_0 * _S322;
-        float _S324 = r2_0 * _S323;
-        float _S325 = sy1_0 * seed_0.y + _S320 + sx1_0 * seed_0.x + _S321 + _S309 * _S322 + _S308 * _S323 + _S307 * _S324 + k4_0 * (r2_0 * _S324);
-        float _S326 = v_0 * _S325;
-        float _S327 = u_0 * _S325;
+        float2  _S321 = make_float2 (radial_0);
+        float2  _S322 = q_0 * seed_0;
+        float _S323 = p1_0 * seed_0.y;
+        float _S324 = p2_0 * seed_0.x;
+        float _S325 = _S322.x + _S322.y;
+        float _S326 = r2_0 * _S325;
+        float _S327 = r2_0 * _S326;
+        float _S328 = sy1_0 * seed_0.y + _S323 + sx1_0 * seed_0.x + _S324 + _S312 * _S325 + _S311 * _S326 + _S310 * _S327 + k4_0 * (r2_0 * _S327);
+        float _S329 = v_0 * _S328;
+        float _S330 = u_0 * _S328;
         Matrix<float, 2, 2>  J_0;
-        J_0[int(0)] = _S318 * seed_0 + make_float2 (_S313 * (v_0 * seed_0.y) + _S312 * _S321 + 2.0f * (u_0 * _S321) + _S310 * (v_0 * seed_0.x) + _S327 + _S327, _S315 * _S320 + 2.0f * (v_0 * _S320) + _S314 * seed_0.y + _S311 * seed_0.x + _S326 + _S326);
-        float2  seed_1 = _S317;
+        J_0[int(0)] = _S321 * seed_0 + make_float2 (_S316 * (v_0 * seed_0.y) + _S315 * _S324 + 2.0f * (u_0 * _S324) + _S313 * (v_0 * seed_0.x) + _S330 + _S330, _S318 * _S323 + 2.0f * (v_0 * _S323) + _S317 * seed_0.y + _S314 * seed_0.x + _S329 + _S329);
+        float2  seed_1 = _S320;
         *&((&seed_1)->y) = 1.0f;
-        float2  _S328 = q_0 * seed_1;
-        float _S329 = p1_0 * seed_1.y;
-        float _S330 = p2_0 * seed_1.x;
-        float _S331 = _S328.x + _S328.y;
-        float _S332 = r2_0 * _S331;
-        float _S333 = r2_0 * _S332;
-        float _S334 = sy1_0 * seed_1.y + _S329 + sx1_0 * seed_1.x + _S330 + _S309 * _S331 + _S308 * _S332 + _S307 * _S333 + k4_0 * (r2_0 * _S333);
-        float _S335 = v_0 * _S334;
-        float _S336 = u_0 * _S334;
-        J_0[int(1)] = _S318 * seed_1 + make_float2 (_S313 * (v_0 * seed_1.y) + _S312 * _S330 + 2.0f * (u_0 * _S330) + _S310 * (v_0 * seed_1.x) + _S336 + _S336, _S315 * _S329 + 2.0f * (v_0 * _S329) + _S314 * seed_1.y + _S311 * seed_1.x + _S335 + _S335);
-        float2  _S337 = _S316 - uv_0;
+        float2  _S331 = q_0 * seed_1;
+        float _S332 = p1_0 * seed_1.y;
+        float _S333 = p2_0 * seed_1.x;
+        float _S334 = _S331.x + _S331.y;
+        float _S335 = r2_0 * _S334;
+        float _S336 = r2_0 * _S335;
+        float _S337 = sy1_0 * seed_1.y + _S332 + sx1_0 * seed_1.x + _S333 + _S312 * _S334 + _S311 * _S335 + _S310 * _S336 + k4_0 * (r2_0 * _S336);
+        float _S338 = v_0 * _S337;
+        float _S339 = u_0 * _S337;
+        J_0[int(1)] = _S321 * seed_1 + make_float2 (_S316 * (v_0 * seed_1.y) + _S315 * _S333 + 2.0f * (u_0 * _S333) + _S313 * (v_0 * seed_1.x) + _S339 + _S339, _S318 * _S332 + 2.0f * (v_0 * _S332) + _S317 * seed_1.y + _S314 * seed_1.x + _S338 + _S338);
+        float2  _S340 = _S319 - uv_0;
         float inv_det_0 = 1.0f / (J_0.rows[int(0)].x * J_0.rows[int(1)].y - J_0.rows[int(0)].y * J_0.rows[int(1)].x);
-        float _S338 = _S337.x;
-        float _S339 = _S337.y;
-        float2  q_1 = q_0 - make_float2 ((_S338 * J_0.rows[int(1)].y - _S339 * J_0.rows[int(0)].y) * inv_det_0, (- _S338 * J_0.rows[int(1)].x + _S339 * J_0.rows[int(0)].x) * inv_det_0);
-        i_9 = i_9 + int(1);
+        float _S341 = _S340.x;
+        float _S342 = _S340.y;
+        float2  q_1 = q_0 - make_float2 ((_S341 * J_0.rows[int(1)].y - _S342 * J_0.rows[int(0)].y) * inv_det_0, (- _S341 * J_0.rows[int(1)].x + _S342 * J_0.rows[int(0)].x) * inv_det_0);
+        i_10 = i_10 + int(1);
         q_0 = q_1;
     }
     return q_0;
@@ -1401,171 +1473,399 @@ inline __device__ float3  normalize_0(float3  x_22)
     return x_22 / make_float3 (length_2(x_22));
 }
 
-inline __device__ void _d_cross_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * a_0, DiffPair_vectorx3Cfloatx2C3x3E_0 * b_0, float3  dOut_9)
+inline __device__ void generate_ray(Matrix<float, 3, 3>  R_2, float3  t_1, float2  uv_1, bool is_fisheye_0, float4  radial_coeffs_1, float2  tangential_coeffs_1, float2  thin_prism_coeffs_1, float3  * ray_o_0, float3  * ray_d_0)
 {
-    float _S340 = dOut_9.y;
-    float _S341 = dOut_9.z;
-    float _S342 = dOut_9.x;
-    float _S343 = (*a_0).primal_0.z * _S340 + - (*a_0).primal_0.y * _S341;
-    float _S344 = - (*a_0).primal_0.z * _S342 + (*a_0).primal_0.x * _S341;
-    float _S345 = (*a_0).primal_0.y * _S342 + - (*a_0).primal_0.x * _S340;
-    float3  _S346 = make_float3 (- (*b_0).primal_0.z * _S340 + (*b_0).primal_0.y * _S341, (*b_0).primal_0.z * _S342 + - (*b_0).primal_0.x * _S341, - (*b_0).primal_0.y * _S342 + (*b_0).primal_0.x * _S340);
-    a_0->primal_0 = (*a_0).primal_0;
-    a_0->differential_0 = _S346;
-    float3  _S347 = make_float3 (_S343, _S344, _S345);
-    b_0->primal_0 = (*b_0).primal_0;
-    b_0->differential_0 = _S347;
-    return;
-}
-
-inline __device__ float3  cross_0(float3  left_2, float3  right_2)
-{
-    float _S348 = left_2.y;
-    float _S349 = right_2.z;
-    float _S350 = left_2.z;
-    float _S351 = right_2.y;
-    float _S352 = right_2.x;
-    float _S353 = left_2.x;
-    return make_float3 (_S348 * _S349 - _S350 * _S351, _S350 * _S352 - _S353 * _S349, _S353 * _S351 - _S348 * _S352);
-}
-
-inline __device__ void depth_to_normal(uint width_0, uint height_0, float2  pix_center_0, float4  intrins_0, float4  radial_coeffs_1, float2  tangential_coeffs_1, float2  thin_prism_coeffs_1, bool is_fisheye_0, bool is_ray_depth_0, float4  depths_0, float3  * normal_0)
-{
-    FixedArray<float3 , 4>  points_0;
-    float2  _S354 = float2 {intrins_0.z, intrins_0.w};
-    float2  _S355 = float2 {intrins_0.x, intrins_0.y};
-    float2  uv_1 = (pix_center_0 + make_float2 (-1.0f, -0.0f) - _S354) / _S355;
+    *ray_o_0 = - mul_2(t_1, R_2);
+    CameraDistortion_0 _S343;
+    (&_S343)->radial_coeffs_0 = radial_coeffs_1;
+    (&_S343)->tangential_coeffs_0 = tangential_coeffs_1;
+    (&_S343)->thin_prism_coeffs_0 = thin_prism_coeffs_1;
+    float2  _S344 = undistort_point_0(uv_1, &_S343, int(8));
     float3  raydir_0;
     if(is_fisheye_0)
     {
-        CameraDistortion_0 _S356;
-        (&_S356)->radial_coeffs_0 = radial_coeffs_1;
-        (&_S356)->tangential_coeffs_0 = tangential_coeffs_1;
-        (&_S356)->thin_prism_coeffs_0 = thin_prism_coeffs_1;
-        float2  _S357 = undistort_point_0(uv_1, &_S356, int(12));
-        float theta_0 = length_1(_S357);
-        float3  raydir_1 = make_float3 ((_S357 / make_float2 ((F32_max((theta_0), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_0))))).x, (_S357 / make_float2 ((F32_max((theta_0), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_0))))).y, (F32_cos((theta_0))));
-        if(!is_ray_depth_0)
+        float theta_0 = length_1(_S344);
+        float _S345;
+        if(theta_0 < 0.00100000004749745f)
         {
-            raydir_0 = raydir_1 / make_float3 (raydir_1.z);
+            _S345 = 1.0f - theta_0 * theta_0 / 6.0f;
         }
         else
         {
-            raydir_0 = raydir_1;
+            _S345 = (F32_sin((theta_0))) / theta_0;
+        }
+        float3  _S346 = make_float3 ((_S344 * make_float2 (_S345)).x, (_S344 * make_float2 (_S345)).y, (F32_cos((theta_0))));
+        raydir_0 = _S346;
+    }
+    else
+    {
+        raydir_0 = make_float3 (_S344.x, _S344.y, 1.0f);
+    }
+    *ray_d_0 = normalize_0(mul_2(raydir_0, R_2));
+    return;
+}
+
+struct s_bwd_prop_generate_ray_Intermediates_0
+{
+    float2  _S347;
+};
+
+inline __device__ float3  s_primal_ctx_mul_0(float3  _S348, Matrix<float, 3, 3>  _S349)
+{
+    return mul_2(_S348, _S349);
+}
+
+inline __device__ float s_primal_ctx_sin_0(float _S350)
+{
+    return (F32_sin((_S350)));
+}
+
+inline __device__ float s_primal_ctx_cos_0(float _S351)
+{
+    return (F32_cos((_S351)));
+}
+
+inline __device__ void s_primal_ctx_generate_ray_0(Matrix<float, 3, 3>  dpR_0, float3  dpt_0, float2  uv_2, bool is_fisheye_1, float4  radial_coeffs_2, float2  tangential_coeffs_2, float2  thin_prism_coeffs_2, float3  * dpray_o_0, float3  * dpray_d_0, s_bwd_prop_generate_ray_Intermediates_0 * _s_diff_ctx_0)
+{
+    _s_diff_ctx_0->_S347 = make_float2 (0.0f);
+    float3  _S352 = - s_primal_ctx_mul_0(dpt_0, dpR_0);
+    CameraDistortion_0 _S353;
+    (&_S353)->radial_coeffs_0 = radial_coeffs_2;
+    (&_S353)->tangential_coeffs_0 = tangential_coeffs_2;
+    (&_S353)->thin_prism_coeffs_0 = thin_prism_coeffs_2;
+    float2  _S354 = undistort_point_0(uv_2, &_S353, int(8));
+    _s_diff_ctx_0->_S347 = _S354;
+    float3  raydir_1;
+    if(is_fisheye_1)
+    {
+        float _S355 = length_1(_S354);
+        float _S356;
+        if(_S355 < 0.00100000004749745f)
+        {
+            _S356 = 1.0f - _S355 * _S355 / 6.0f;
+        }
+        else
+        {
+            _S356 = s_primal_ctx_sin_0(_S355) / _S355;
+        }
+        float3  _S357 = make_float3 ((_S354 * make_float2 (_S356)).x, (_S354 * make_float2 (_S356)).y, s_primal_ctx_cos_0(_S355));
+        raydir_1 = _S357;
+    }
+    else
+    {
+        raydir_1 = make_float3 (_S354.x, _S354.y, 1.0f);
+    }
+    float3  _S358 = normalize_0(s_primal_ctx_mul_0(raydir_1, dpR_0));
+    *dpray_o_0 = _S352;
+    *dpray_d_0 = _S358;
+    return;
+}
+
+inline __device__ void s_bwd_prop_length_impl_1(DiffPair_vectorx3Cfloatx2C3x3E_0 * dpx_10, float _s_dOut_3)
+{
+    float _S359 = (*dpx_10).primal_0.x;
+    float _S360 = (*dpx_10).primal_0.y;
+    float _S361 = (*dpx_10).primal_0.z;
+    DiffPair_float_0 _S362;
+    (&_S362)->primal_0 = _S359 * _S359 + _S360 * _S360 + _S361 * _S361;
+    (&_S362)->differential_0 = 0.0f;
+    s_bwd_prop_sqrt_0(&_S362, _s_dOut_3);
+    float _S363 = (*dpx_10).primal_0.z * _S362.differential_0;
+    float _S364 = _S363 + _S363;
+    float _S365 = (*dpx_10).primal_0.y * _S362.differential_0;
+    float _S366 = _S365 + _S365;
+    float _S367 = (*dpx_10).primal_0.x * _S362.differential_0;
+    float _S368 = _S367 + _S367;
+    float3  _S369 = make_float3 (0.0f);
+    *&((&_S369)->z) = _S364;
+    *&((&_S369)->y) = _S366;
+    *&((&_S369)->x) = _S368;
+    dpx_10->primal_0 = (*dpx_10).primal_0;
+    dpx_10->differential_0 = _S369;
+    return;
+}
+
+inline __device__ void s_bwd_length_impl_1(DiffPair_vectorx3Cfloatx2C3x3E_0 * _S370, float _S371)
+{
+    s_bwd_prop_length_impl_1(_S370, _S371);
+    return;
+}
+
+inline __device__ void s_bwd_prop_normalize_impl_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * dpx_11, float3  _s_dOut_4)
+{
+    float _S372 = length_2((*dpx_11).primal_0);
+    float3  _S373 = (*dpx_11).primal_0 * _s_dOut_4;
+    float3  _S374 = make_float3 (1.0f / _S372) * _s_dOut_4;
+    float _S375 = - ((_S373.x + _S373.y + _S373.z) / (_S372 * _S372));
+    float3  _S376 = make_float3 (0.0f);
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S377;
+    (&_S377)->primal_0 = (*dpx_11).primal_0;
+    (&_S377)->differential_0 = _S376;
+    s_bwd_length_impl_1(&_S377, _S375);
+    float3  _S378 = _S374 + _S377.differential_0;
+    dpx_11->primal_0 = (*dpx_11).primal_0;
+    dpx_11->differential_0 = _S378;
+    return;
+}
+
+inline __device__ void s_bwd_normalize_impl_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * _S379, float3  _S380)
+{
+    s_bwd_prop_normalize_impl_0(_S379, _S380);
+    return;
+}
+
+inline __device__ void s_bwd_prop_mul_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * _S381, DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * _S382, float3  _S383)
+{
+    _d_mul_0(_S381, _S382, _S383);
+    return;
+}
+
+inline __device__ void s_bwd_prop_generate_ray_0(DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * dpR_1, DiffPair_vectorx3Cfloatx2C3x3E_0 * dpt_1, float2  uv_3, bool is_fisheye_2, float4  radial_coeffs_3, float2  tangential_coeffs_3, float2  thin_prism_coeffs_3, float3  dpray_o_1, float3  dpray_d_1, s_bwd_prop_generate_ray_Intermediates_0 * _s_diff_ctx_1)
+{
+    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S384 = *dpR_1;
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S385 = *dpt_1;
+    float3  raydir_2;
+    if(is_fisheye_2)
+    {
+        float _S386 = length_1(_s_diff_ctx_1->_S347);
+        float _S387;
+        if(_S386 < 0.00100000004749745f)
+        {
+            _S387 = 1.0f - _S386 * _S386 / 6.0f;
+        }
+        else
+        {
+            _S387 = s_primal_ctx_sin_0(_S386) / _S386;
+        }
+        float3  _S388 = make_float3 ((_s_diff_ctx_1->_S347 * make_float2 (_S387)).x, (_s_diff_ctx_1->_S347 * make_float2 (_S387)).y, s_primal_ctx_cos_0(_S386));
+        raydir_2 = _S388;
+    }
+    else
+    {
+        raydir_2 = make_float3 (_s_diff_ctx_1->_S347.x, _s_diff_ctx_1->_S347.y, 1.0f);
+    }
+    float3  _S389 = s_primal_ctx_mul_0(raydir_2, _S384.primal_0);
+    float3  _S390 = make_float3 (0.0f);
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S391;
+    (&_S391)->primal_0 = _S389;
+    (&_S391)->differential_0 = _S390;
+    s_bwd_normalize_impl_0(&_S391, dpray_d_1);
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S392;
+    (&_S392)->primal_0 = raydir_2;
+    (&_S392)->differential_0 = _S390;
+    Matrix<float, 3, 3>  _S393 = makeMatrix<float, 3, 3> (0.0f);
+    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S394;
+    (&_S394)->primal_0 = _S384.primal_0;
+    (&_S394)->differential_0 = _S393;
+    s_bwd_prop_mul_0(&_S392, &_S394, _S391.differential_0);
+    float3  _S395 = - dpray_o_1;
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S396;
+    (&_S396)->primal_0 = _S385.primal_0;
+    (&_S396)->differential_0 = _S390;
+    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S397;
+    (&_S397)->primal_0 = _S384.primal_0;
+    (&_S397)->differential_0 = _S393;
+    s_bwd_prop_mul_0(&_S396, &_S397, _S395);
+    dpt_1->primal_0 = (*dpt_1).primal_0;
+    dpt_1->differential_0 = _S396.differential_0;
+    Matrix<float, 3, 3>  _S398 = _S397.differential_0 + _S394.differential_0;
+    dpR_1->primal_0 = (*dpR_1).primal_0;
+    dpR_1->differential_0 = _S398;
+    return;
+}
+
+inline __device__ void s_bwd_generate_ray_0(DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * _S399, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S400, float2  _S401, bool _S402, float4  _S403, float2  _S404, float2  _S405, float3  _S406, float3  _S407)
+{
+    float3  _S408;
+    float3  _S409;
+    s_bwd_prop_generate_ray_Intermediates_0 _S410;
+    s_primal_ctx_generate_ray_0((*_S399).primal_0, (*_S400).primal_0, _S401, _S402, _S403, _S404, _S405, &_S408, &_S409, &_S410);
+    s_bwd_prop_generate_ray_Intermediates_0 _S411 = _S410;
+    s_bwd_prop_generate_ray_0(_S399, _S400, _S401, _S402, _S403, _S404, _S405, _S406, _S407, &_S411);
+    return;
+}
+
+inline __device__ void generate_ray_vjp(Matrix<float, 3, 3>  R_3, float3  t_2, float2  uv_4, bool is_fisheye_3, float4  radial_coeffs_4, float2  tangential_coeffs_4, float2  thin_prism_coeffs_4, float3  v_ray_o_0, float3  v_ray_d_0, Matrix<float, 3, 3>  * v_R_0, float3  * v_t_0)
+{
+    Matrix<float, 3, 3>  _S412 = makeMatrix<float, 3, 3> (0.0f);
+    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 dp_R_0;
+    (&dp_R_0)->primal_0 = R_3;
+    (&dp_R_0)->differential_0 = _S412;
+    float3  _S413 = make_float3 (0.0f);
+    DiffPair_vectorx3Cfloatx2C3x3E_0 dp_t_0;
+    (&dp_t_0)->primal_0 = t_2;
+    (&dp_t_0)->differential_0 = _S413;
+    s_bwd_generate_ray_0(&dp_R_0, &dp_t_0, uv_4, is_fisheye_3, radial_coeffs_4, tangential_coeffs_4, thin_prism_coeffs_4, v_ray_o_0, v_ray_d_0);
+    *v_R_0 = dp_R_0.differential_0;
+    *v_t_0 = dp_t_0.differential_0;
+    return;
+}
+
+inline __device__ void _d_cross_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * a_0, DiffPair_vectorx3Cfloatx2C3x3E_0 * b_0, float3  dOut_10)
+{
+    float _S414 = dOut_10.y;
+    float _S415 = dOut_10.z;
+    float _S416 = dOut_10.x;
+    float _S417 = (*a_0).primal_0.z * _S414 + - (*a_0).primal_0.y * _S415;
+    float _S418 = - (*a_0).primal_0.z * _S416 + (*a_0).primal_0.x * _S415;
+    float _S419 = (*a_0).primal_0.y * _S416 + - (*a_0).primal_0.x * _S414;
+    float3  _S420 = make_float3 (- (*b_0).primal_0.z * _S414 + (*b_0).primal_0.y * _S415, (*b_0).primal_0.z * _S416 + - (*b_0).primal_0.x * _S415, - (*b_0).primal_0.y * _S416 + (*b_0).primal_0.x * _S414);
+    a_0->primal_0 = (*a_0).primal_0;
+    a_0->differential_0 = _S420;
+    float3  _S421 = make_float3 (_S417, _S418, _S419);
+    b_0->primal_0 = (*b_0).primal_0;
+    b_0->differential_0 = _S421;
+    return;
+}
+
+inline __device__ float3  cross_0(float3  left_4, float3  right_4)
+{
+    float _S422 = left_4.y;
+    float _S423 = right_4.z;
+    float _S424 = left_4.z;
+    float _S425 = right_4.y;
+    float _S426 = right_4.x;
+    float _S427 = left_4.x;
+    return make_float3 (_S422 * _S423 - _S424 * _S425, _S424 * _S426 - _S427 * _S423, _S427 * _S425 - _S422 * _S426);
+}
+
+inline __device__ void depth_to_normal(uint width_0, uint height_0, float2  pix_center_0, float4  intrins_0, float4  radial_coeffs_5, float2  tangential_coeffs_5, float2  thin_prism_coeffs_5, bool is_fisheye_4, bool is_ray_depth_0, float4  depths_0, float3  * normal_0)
+{
+    FixedArray<float3 , 4>  points_0;
+    float2  _S428 = float2 {intrins_0.z, intrins_0.w};
+    float2  _S429 = float2 {intrins_0.x, intrins_0.y};
+    float2  uv_5 = (pix_center_0 + make_float2 (-1.0f, -0.0f) - _S428) / _S429;
+    float3  raydir_3;
+    if(is_fisheye_4)
+    {
+        CameraDistortion_0 _S430;
+        (&_S430)->radial_coeffs_0 = radial_coeffs_5;
+        (&_S430)->tangential_coeffs_0 = tangential_coeffs_5;
+        (&_S430)->thin_prism_coeffs_0 = thin_prism_coeffs_5;
+        float2  _S431 = undistort_point_0(uv_5, &_S430, int(12));
+        float theta_1 = length_1(_S431);
+        float3  raydir_4 = make_float3 ((_S431 / make_float2 ((F32_max((theta_1), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_1))))).x, (_S431 / make_float2 ((F32_max((theta_1), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_1))))).y, (F32_cos((theta_1))));
+        if(!is_ray_depth_0)
+        {
+            raydir_3 = raydir_4 / make_float3 (raydir_4.z);
+        }
+        else
+        {
+            raydir_3 = raydir_4;
         }
     }
     else
     {
-        float3  raydir_2 = make_float3 (uv_1.x, uv_1.y, 1.0f);
+        float3  raydir_5 = make_float3 (uv_5.x, uv_5.y, 1.0f);
         if(is_ray_depth_0)
         {
-            raydir_0 = normalize_0(raydir_2);
+            raydir_3 = normalize_0(raydir_5);
         }
         else
         {
-            raydir_0 = raydir_2;
+            raydir_3 = raydir_5;
         }
     }
-    points_0[int(0)] = make_float3 (depths_0.x) * raydir_0;
-    float2  uv_2 = (pix_center_0 + make_float2 (1.0f, -0.0f) - _S354) / _S355;
-    if(is_fisheye_0)
+    points_0[int(0)] = make_float3 (depths_0.x) * raydir_3;
+    float2  uv_6 = (pix_center_0 + make_float2 (1.0f, -0.0f) - _S428) / _S429;
+    if(is_fisheye_4)
     {
-        CameraDistortion_0 _S358;
-        (&_S358)->radial_coeffs_0 = radial_coeffs_1;
-        (&_S358)->tangential_coeffs_0 = tangential_coeffs_1;
-        (&_S358)->thin_prism_coeffs_0 = thin_prism_coeffs_1;
-        float2  _S359 = undistort_point_0(uv_2, &_S358, int(12));
-        float theta_1 = length_1(_S359);
-        float3  raydir_3 = make_float3 ((_S359 / make_float2 ((F32_max((theta_1), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_1))))).x, (_S359 / make_float2 ((F32_max((theta_1), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_1))))).y, (F32_cos((theta_1))));
+        CameraDistortion_0 _S432;
+        (&_S432)->radial_coeffs_0 = radial_coeffs_5;
+        (&_S432)->tangential_coeffs_0 = tangential_coeffs_5;
+        (&_S432)->thin_prism_coeffs_0 = thin_prism_coeffs_5;
+        float2  _S433 = undistort_point_0(uv_6, &_S432, int(12));
+        float theta_2 = length_1(_S433);
+        float3  raydir_6 = make_float3 ((_S433 / make_float2 ((F32_max((theta_2), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_2))))).x, (_S433 / make_float2 ((F32_max((theta_2), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_2))))).y, (F32_cos((theta_2))));
         if(!is_ray_depth_0)
         {
-            raydir_0 = raydir_3 / make_float3 (raydir_3.z);
+            raydir_3 = raydir_6 / make_float3 (raydir_6.z);
         }
         else
         {
-            raydir_0 = raydir_3;
+            raydir_3 = raydir_6;
         }
     }
     else
     {
-        float3  raydir_4 = make_float3 (uv_2.x, uv_2.y, 1.0f);
+        float3  raydir_7 = make_float3 (uv_6.x, uv_6.y, 1.0f);
         if(is_ray_depth_0)
         {
-            raydir_0 = normalize_0(raydir_4);
+            raydir_3 = normalize_0(raydir_7);
         }
         else
         {
-            raydir_0 = raydir_4;
+            raydir_3 = raydir_7;
         }
     }
-    points_0[int(1)] = make_float3 (depths_0.y) * raydir_0;
-    float2  uv_3 = (pix_center_0 + make_float2 (0.0f, -1.0f) - _S354) / _S355;
-    if(is_fisheye_0)
+    points_0[int(1)] = make_float3 (depths_0.y) * raydir_3;
+    float2  uv_7 = (pix_center_0 + make_float2 (0.0f, -1.0f) - _S428) / _S429;
+    if(is_fisheye_4)
     {
-        CameraDistortion_0 _S360;
-        (&_S360)->radial_coeffs_0 = radial_coeffs_1;
-        (&_S360)->tangential_coeffs_0 = tangential_coeffs_1;
-        (&_S360)->thin_prism_coeffs_0 = thin_prism_coeffs_1;
-        float2  _S361 = undistort_point_0(uv_3, &_S360, int(12));
-        float theta_2 = length_1(_S361);
-        float3  raydir_5 = make_float3 ((_S361 / make_float2 ((F32_max((theta_2), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_2))))).x, (_S361 / make_float2 ((F32_max((theta_2), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_2))))).y, (F32_cos((theta_2))));
+        CameraDistortion_0 _S434;
+        (&_S434)->radial_coeffs_0 = radial_coeffs_5;
+        (&_S434)->tangential_coeffs_0 = tangential_coeffs_5;
+        (&_S434)->thin_prism_coeffs_0 = thin_prism_coeffs_5;
+        float2  _S435 = undistort_point_0(uv_7, &_S434, int(12));
+        float theta_3 = length_1(_S435);
+        float3  raydir_8 = make_float3 ((_S435 / make_float2 ((F32_max((theta_3), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_3))))).x, (_S435 / make_float2 ((F32_max((theta_3), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_3))))).y, (F32_cos((theta_3))));
         if(!is_ray_depth_0)
         {
-            raydir_0 = raydir_5 / make_float3 (raydir_5.z);
+            raydir_3 = raydir_8 / make_float3 (raydir_8.z);
         }
         else
         {
-            raydir_0 = raydir_5;
+            raydir_3 = raydir_8;
         }
     }
     else
     {
-        float3  raydir_6 = make_float3 (uv_3.x, uv_3.y, 1.0f);
+        float3  raydir_9 = make_float3 (uv_7.x, uv_7.y, 1.0f);
         if(is_ray_depth_0)
         {
-            raydir_0 = normalize_0(raydir_6);
+            raydir_3 = normalize_0(raydir_9);
         }
         else
         {
-            raydir_0 = raydir_6;
+            raydir_3 = raydir_9;
         }
     }
-    points_0[int(2)] = make_float3 (depths_0.z) * raydir_0;
-    float2  uv_4 = (pix_center_0 + make_float2 (0.0f, 1.0f) - _S354) / _S355;
-    if(is_fisheye_0)
+    points_0[int(2)] = make_float3 (depths_0.z) * raydir_3;
+    float2  uv_8 = (pix_center_0 + make_float2 (0.0f, 1.0f) - _S428) / _S429;
+    if(is_fisheye_4)
     {
-        CameraDistortion_0 _S362;
-        (&_S362)->radial_coeffs_0 = radial_coeffs_1;
-        (&_S362)->tangential_coeffs_0 = tangential_coeffs_1;
-        (&_S362)->thin_prism_coeffs_0 = thin_prism_coeffs_1;
-        float2  _S363 = undistort_point_0(uv_4, &_S362, int(12));
-        float theta_3 = length_1(_S363);
-        float3  raydir_7 = make_float3 ((_S363 / make_float2 ((F32_max((theta_3), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_3))))).x, (_S363 / make_float2 ((F32_max((theta_3), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_3))))).y, (F32_cos((theta_3))));
+        CameraDistortion_0 _S436;
+        (&_S436)->radial_coeffs_0 = radial_coeffs_5;
+        (&_S436)->tangential_coeffs_0 = tangential_coeffs_5;
+        (&_S436)->thin_prism_coeffs_0 = thin_prism_coeffs_5;
+        float2  _S437 = undistort_point_0(uv_8, &_S436, int(12));
+        float theta_4 = length_1(_S437);
+        float3  raydir_10 = make_float3 ((_S437 / make_float2 ((F32_max((theta_4), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_4))))).x, (_S437 / make_float2 ((F32_max((theta_4), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_4))))).y, (F32_cos((theta_4))));
         if(!is_ray_depth_0)
         {
-            raydir_0 = raydir_7 / make_float3 (raydir_7.z);
+            raydir_3 = raydir_10 / make_float3 (raydir_10.z);
         }
         else
         {
-            raydir_0 = raydir_7;
+            raydir_3 = raydir_10;
         }
     }
     else
     {
-        float3  raydir_8 = make_float3 (uv_4.x, uv_4.y, 1.0f);
+        float3  raydir_11 = make_float3 (uv_8.x, uv_8.y, 1.0f);
         if(is_ray_depth_0)
         {
-            raydir_0 = normalize_0(raydir_8);
+            raydir_3 = normalize_0(raydir_11);
         }
         else
         {
-            raydir_0 = raydir_8;
+            raydir_3 = raydir_11;
         }
     }
-    points_0[int(3)] = make_float3 (depths_0.w) * raydir_0;
-    float3  _S364 = cross_0(points_0[int(1)] - points_0[int(0)], - (points_0[int(3)] - points_0[int(2)]));
-    *normal_0 = _S364;
-    if((length_2(_S364)) != 0.0f)
+    points_0[int(3)] = make_float3 (depths_0.w) * raydir_3;
+    float3  _S438 = cross_0(points_0[int(1)] - points_0[int(0)], - (points_0[int(3)] - points_0[int(2)]));
+    *normal_0 = _S438;
+    if((length_2(_S438)) != 0.0f)
     {
         *normal_0 = *normal_0 / make_float3 (length_2(*normal_0));
     }
@@ -1574,263 +1874,195 @@ inline __device__ void depth_to_normal(uint width_0, uint height_0, float2  pix_
 
 struct s_bwd_prop_depth_to_normal_Intermediates_0
 {
-    float2  _S365;
-    float2  _S366;
-    float2  _S367;
-    float2  _S368;
+    float2  _S439;
+    float2  _S440;
+    float2  _S441;
+    float2  _S442;
 };
 
-inline __device__ float s_primal_ctx_sin_0(float _S369)
+inline __device__ float3  s_primal_ctx_cross_0(float3  _S443, float3  _S444)
 {
-    return (F32_sin((_S369)));
+    return cross_0(_S443, _S444);
 }
 
-inline __device__ float s_primal_ctx_cos_0(float _S370)
+inline __device__ void s_primal_ctx_depth_to_normal_0(uint width_1, uint height_1, float2  pix_center_1, float4  intrins_1, float4  radial_coeffs_6, float2  tangential_coeffs_6, float2  thin_prism_coeffs_6, bool is_fisheye_5, bool is_ray_depth_1, float4  dpdepths_0, float3  * dpnormal_0, s_bwd_prop_depth_to_normal_Intermediates_0 * _s_diff_ctx_2)
 {
-    return (F32_cos((_S370)));
-}
-
-inline __device__ float3  s_primal_ctx_cross_0(float3  _S371, float3  _S372)
-{
-    return cross_0(_S371, _S372);
-}
-
-inline __device__ void s_primal_ctx_depth_to_normal_0(uint width_1, uint height_1, float2  pix_center_1, float4  intrins_1, float4  radial_coeffs_2, float2  tangential_coeffs_2, float2  thin_prism_coeffs_2, bool is_fisheye_1, bool is_ray_depth_1, float4  dpdepths_0, float3  * dpnormal_0, s_bwd_prop_depth_to_normal_Intermediates_0 * _s_diff_ctx_0)
-{
-    float2  _S373 = make_float2 (0.0f);
-    _s_diff_ctx_0->_S365 = _S373;
-    _s_diff_ctx_0->_S366 = _S373;
-    _s_diff_ctx_0->_S367 = _S373;
-    _s_diff_ctx_0->_S368 = _S373;
-    _s_diff_ctx_0->_S365 = _S373;
-    _s_diff_ctx_0->_S366 = _S373;
-    _s_diff_ctx_0->_S367 = _S373;
-    _s_diff_ctx_0->_S368 = _S373;
-    float2  _S374 = float2 {intrins_1.z, intrins_1.w};
-    float2  _S375 = float2 {intrins_1.x, intrins_1.y};
-    float2  uv_5 = (pix_center_1 + make_float2 (-1.0f, -0.0f) - _S374) / _S375;
-    float3  raydir_9;
-    if(is_fisheye_1)
+    float2  _S445 = make_float2 (0.0f);
+    _s_diff_ctx_2->_S439 = _S445;
+    _s_diff_ctx_2->_S440 = _S445;
+    _s_diff_ctx_2->_S441 = _S445;
+    _s_diff_ctx_2->_S442 = _S445;
+    _s_diff_ctx_2->_S439 = _S445;
+    _s_diff_ctx_2->_S440 = _S445;
+    _s_diff_ctx_2->_S441 = _S445;
+    _s_diff_ctx_2->_S442 = _S445;
+    float2  _S446 = float2 {intrins_1.z, intrins_1.w};
+    float2  _S447 = float2 {intrins_1.x, intrins_1.y};
+    float2  uv_9 = (pix_center_1 + make_float2 (-1.0f, -0.0f) - _S446) / _S447;
+    float3  raydir_12;
+    if(is_fisheye_5)
     {
-        CameraDistortion_0 _S376;
-        (&_S376)->radial_coeffs_0 = radial_coeffs_2;
-        (&_S376)->tangential_coeffs_0 = tangential_coeffs_2;
-        (&_S376)->thin_prism_coeffs_0 = thin_prism_coeffs_2;
-        float2  _S377 = undistort_point_0(uv_5, &_S376, int(12));
-        _s_diff_ctx_0->_S365 = _S377;
-        float _S378 = length_1(_S377);
-        float3  raydir_10 = make_float3 ((_S377 / make_float2 (s_primal_ctx_max_0(_S378, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S378))).x, (_S377 / make_float2 (s_primal_ctx_max_0(_S378, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S378))).y, s_primal_ctx_cos_0(_S378));
+        CameraDistortion_0 _S448;
+        (&_S448)->radial_coeffs_0 = radial_coeffs_6;
+        (&_S448)->tangential_coeffs_0 = tangential_coeffs_6;
+        (&_S448)->thin_prism_coeffs_0 = thin_prism_coeffs_6;
+        float2  _S449 = undistort_point_0(uv_9, &_S448, int(12));
+        _s_diff_ctx_2->_S439 = _S449;
+        float _S450 = length_1(_S449);
+        float3  raydir_13 = make_float3 ((_S449 / make_float2 (s_primal_ctx_max_0(_S450, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S450))).x, (_S449 / make_float2 (s_primal_ctx_max_0(_S450, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S450))).y, s_primal_ctx_cos_0(_S450));
         if(!is_ray_depth_1)
         {
-            raydir_9 = raydir_10 / make_float3 (raydir_10.z);
+            raydir_12 = raydir_13 / make_float3 (raydir_13.z);
         }
         else
         {
-            raydir_9 = raydir_10;
+            raydir_12 = raydir_13;
         }
     }
     else
     {
-        float3  raydir_11 = make_float3 (uv_5.x, uv_5.y, 1.0f);
+        float3  raydir_14 = make_float3 (uv_9.x, uv_9.y, 1.0f);
         if(is_ray_depth_1)
         {
-            raydir_9 = normalize_0(raydir_11);
+            raydir_12 = normalize_0(raydir_14);
         }
         else
         {
-            raydir_9 = raydir_11;
+            raydir_12 = raydir_14;
         }
     }
-    float3  _S379 = make_float3 (dpdepths_0.x) * raydir_9;
-    float2  uv_6 = (pix_center_1 + make_float2 (1.0f, -0.0f) - _S374) / _S375;
-    if(is_fisheye_1)
+    float3  _S451 = make_float3 (dpdepths_0.x) * raydir_12;
+    float2  uv_10 = (pix_center_1 + make_float2 (1.0f, -0.0f) - _S446) / _S447;
+    if(is_fisheye_5)
     {
-        CameraDistortion_0 _S380;
-        (&_S380)->radial_coeffs_0 = radial_coeffs_2;
-        (&_S380)->tangential_coeffs_0 = tangential_coeffs_2;
-        (&_S380)->thin_prism_coeffs_0 = thin_prism_coeffs_2;
-        float2  _S381 = undistort_point_0(uv_6, &_S380, int(12));
-        _s_diff_ctx_0->_S366 = _S381;
-        float _S382 = length_1(_S381);
-        float3  raydir_12 = make_float3 ((_S381 / make_float2 (s_primal_ctx_max_0(_S382, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S382))).x, (_S381 / make_float2 (s_primal_ctx_max_0(_S382, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S382))).y, s_primal_ctx_cos_0(_S382));
+        CameraDistortion_0 _S452;
+        (&_S452)->radial_coeffs_0 = radial_coeffs_6;
+        (&_S452)->tangential_coeffs_0 = tangential_coeffs_6;
+        (&_S452)->thin_prism_coeffs_0 = thin_prism_coeffs_6;
+        float2  _S453 = undistort_point_0(uv_10, &_S452, int(12));
+        _s_diff_ctx_2->_S440 = _S453;
+        float _S454 = length_1(_S453);
+        float3  raydir_15 = make_float3 ((_S453 / make_float2 (s_primal_ctx_max_0(_S454, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S454))).x, (_S453 / make_float2 (s_primal_ctx_max_0(_S454, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S454))).y, s_primal_ctx_cos_0(_S454));
         if(!is_ray_depth_1)
         {
-            raydir_9 = raydir_12 / make_float3 (raydir_12.z);
+            raydir_12 = raydir_15 / make_float3 (raydir_15.z);
         }
         else
         {
-            raydir_9 = raydir_12;
+            raydir_12 = raydir_15;
         }
     }
     else
     {
-        float3  raydir_13 = make_float3 (uv_6.x, uv_6.y, 1.0f);
+        float3  raydir_16 = make_float3 (uv_10.x, uv_10.y, 1.0f);
         if(is_ray_depth_1)
         {
-            raydir_9 = normalize_0(raydir_13);
+            raydir_12 = normalize_0(raydir_16);
         }
         else
         {
-            raydir_9 = raydir_13;
+            raydir_12 = raydir_16;
         }
     }
-    float3  _S383 = make_float3 (dpdepths_0.y) * raydir_9;
-    float2  uv_7 = (pix_center_1 + make_float2 (0.0f, -1.0f) - _S374) / _S375;
-    if(is_fisheye_1)
+    float3  _S455 = make_float3 (dpdepths_0.y) * raydir_12;
+    float2  uv_11 = (pix_center_1 + make_float2 (0.0f, -1.0f) - _S446) / _S447;
+    if(is_fisheye_5)
     {
-        CameraDistortion_0 _S384;
-        (&_S384)->radial_coeffs_0 = radial_coeffs_2;
-        (&_S384)->tangential_coeffs_0 = tangential_coeffs_2;
-        (&_S384)->thin_prism_coeffs_0 = thin_prism_coeffs_2;
-        float2  _S385 = undistort_point_0(uv_7, &_S384, int(12));
-        _s_diff_ctx_0->_S367 = _S385;
-        float _S386 = length_1(_S385);
-        float3  raydir_14 = make_float3 ((_S385 / make_float2 (s_primal_ctx_max_0(_S386, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S386))).x, (_S385 / make_float2 (s_primal_ctx_max_0(_S386, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S386))).y, s_primal_ctx_cos_0(_S386));
+        CameraDistortion_0 _S456;
+        (&_S456)->radial_coeffs_0 = radial_coeffs_6;
+        (&_S456)->tangential_coeffs_0 = tangential_coeffs_6;
+        (&_S456)->thin_prism_coeffs_0 = thin_prism_coeffs_6;
+        float2  _S457 = undistort_point_0(uv_11, &_S456, int(12));
+        _s_diff_ctx_2->_S441 = _S457;
+        float _S458 = length_1(_S457);
+        float3  raydir_17 = make_float3 ((_S457 / make_float2 (s_primal_ctx_max_0(_S458, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S458))).x, (_S457 / make_float2 (s_primal_ctx_max_0(_S458, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S458))).y, s_primal_ctx_cos_0(_S458));
         if(!is_ray_depth_1)
         {
-            raydir_9 = raydir_14 / make_float3 (raydir_14.z);
+            raydir_12 = raydir_17 / make_float3 (raydir_17.z);
         }
         else
         {
-            raydir_9 = raydir_14;
+            raydir_12 = raydir_17;
         }
     }
     else
     {
-        float3  raydir_15 = make_float3 (uv_7.x, uv_7.y, 1.0f);
+        float3  raydir_18 = make_float3 (uv_11.x, uv_11.y, 1.0f);
         if(is_ray_depth_1)
         {
-            raydir_9 = normalize_0(raydir_15);
+            raydir_12 = normalize_0(raydir_18);
         }
         else
         {
-            raydir_9 = raydir_15;
+            raydir_12 = raydir_18;
         }
     }
-    float3  _S387 = make_float3 (dpdepths_0.z) * raydir_9;
-    float2  uv_8 = (pix_center_1 + make_float2 (0.0f, 1.0f) - _S374) / _S375;
-    if(is_fisheye_1)
+    float3  _S459 = make_float3 (dpdepths_0.z) * raydir_12;
+    float2  uv_12 = (pix_center_1 + make_float2 (0.0f, 1.0f) - _S446) / _S447;
+    if(is_fisheye_5)
     {
-        CameraDistortion_0 _S388;
-        (&_S388)->radial_coeffs_0 = radial_coeffs_2;
-        (&_S388)->tangential_coeffs_0 = tangential_coeffs_2;
-        (&_S388)->thin_prism_coeffs_0 = thin_prism_coeffs_2;
-        float2  _S389 = undistort_point_0(uv_8, &_S388, int(12));
-        _s_diff_ctx_0->_S368 = _S389;
-        float _S390 = length_1(_S389);
-        float3  raydir_16 = make_float3 ((_S389 / make_float2 (s_primal_ctx_max_0(_S390, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S390))).x, (_S389 / make_float2 (s_primal_ctx_max_0(_S390, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S390))).y, s_primal_ctx_cos_0(_S390));
+        CameraDistortion_0 _S460;
+        (&_S460)->radial_coeffs_0 = radial_coeffs_6;
+        (&_S460)->tangential_coeffs_0 = tangential_coeffs_6;
+        (&_S460)->thin_prism_coeffs_0 = thin_prism_coeffs_6;
+        float2  _S461 = undistort_point_0(uv_12, &_S460, int(12));
+        _s_diff_ctx_2->_S442 = _S461;
+        float _S462 = length_1(_S461);
+        float3  raydir_19 = make_float3 ((_S461 / make_float2 (s_primal_ctx_max_0(_S462, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S462))).x, (_S461 / make_float2 (s_primal_ctx_max_0(_S462, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S462))).y, s_primal_ctx_cos_0(_S462));
         if(!is_ray_depth_1)
         {
-            raydir_9 = raydir_16 / make_float3 (raydir_16.z);
+            raydir_12 = raydir_19 / make_float3 (raydir_19.z);
         }
         else
         {
-            raydir_9 = raydir_16;
+            raydir_12 = raydir_19;
         }
     }
     else
     {
-        float3  raydir_17 = make_float3 (uv_8.x, uv_8.y, 1.0f);
+        float3  raydir_20 = make_float3 (uv_12.x, uv_12.y, 1.0f);
         if(is_ray_depth_1)
         {
-            raydir_9 = normalize_0(raydir_17);
+            raydir_12 = normalize_0(raydir_20);
         }
         else
         {
-            raydir_9 = raydir_17;
+            raydir_12 = raydir_20;
         }
     }
-    float3  _S391 = make_float3 (dpdepths_0.w) * raydir_9;
-    float3  _S392 = s_primal_ctx_cross_0(_S383 - _S379, - (_S391 - _S387));
-    float _S393 = length_2(_S392);
-    if(_S393 != 0.0f)
+    float3  _S463 = make_float3 (dpdepths_0.w) * raydir_12;
+    float3  _S464 = s_primal_ctx_cross_0(_S455 - _S451, - (_S463 - _S459));
+    float _S465 = length_2(_S464);
+    if(_S465 != 0.0f)
     {
-        raydir_9 = _S392 / make_float3 (_S393);
+        raydir_12 = _S464 / make_float3 (_S465);
     }
     else
     {
-        raydir_9 = _S392;
+        raydir_12 = _S464;
     }
-    *dpnormal_0 = raydir_9;
+    *dpnormal_0 = raydir_12;
     return;
 }
 
-inline __device__ void s_bwd_prop_length_impl_1(DiffPair_vectorx3Cfloatx2C3x3E_0 * dpx_10, float _s_dOut_3)
+inline __device__ void s_bwd_prop_cross_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * _S466, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S467, float3  _S468)
 {
-    float _S394 = (*dpx_10).primal_0.x;
-    float _S395 = (*dpx_10).primal_0.y;
-    float _S396 = (*dpx_10).primal_0.z;
-    DiffPair_float_0 _S397;
-    (&_S397)->primal_0 = _S394 * _S394 + _S395 * _S395 + _S396 * _S396;
-    (&_S397)->differential_0 = 0.0f;
-    s_bwd_prop_sqrt_0(&_S397, _s_dOut_3);
-    float _S398 = (*dpx_10).primal_0.z * _S397.differential_0;
-    float _S399 = _S398 + _S398;
-    float _S400 = (*dpx_10).primal_0.y * _S397.differential_0;
-    float _S401 = _S400 + _S400;
-    float _S402 = (*dpx_10).primal_0.x * _S397.differential_0;
-    float _S403 = _S402 + _S402;
-    float3  _S404 = make_float3 (0.0f);
-    *&((&_S404)->z) = _S399;
-    *&((&_S404)->y) = _S401;
-    *&((&_S404)->x) = _S403;
-    dpx_10->primal_0 = (*dpx_10).primal_0;
-    dpx_10->differential_0 = _S404;
+    _d_cross_0(_S466, _S467, _S468);
     return;
 }
 
-inline __device__ void s_bwd_length_impl_1(DiffPair_vectorx3Cfloatx2C3x3E_0 * _S405, float _S406)
+inline __device__ void s_bwd_prop_depth_to_normal_0(uint width_2, uint height_2, float2  pix_center_2, float4  intrins_2, float4  radial_coeffs_7, float2  tangential_coeffs_7, float2  thin_prism_coeffs_7, bool is_fisheye_6, bool is_ray_depth_2, DiffPair_vectorx3Cfloatx2C4x3E_0 * dpdepths_1, float3  dpnormal_1, s_bwd_prop_depth_to_normal_Intermediates_0 * _s_diff_ctx_3)
 {
-    s_bwd_prop_length_impl_1(_S405, _S406);
-    return;
-}
-
-inline __device__ void s_bwd_prop_cross_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * _S407, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S408, float3  _S409)
-{
-    _d_cross_0(_S407, _S408, _S409);
-    return;
-}
-
-inline __device__ void s_bwd_prop_depth_to_normal_0(uint width_2, uint height_2, float2  pix_center_2, float4  intrins_2, float4  radial_coeffs_3, float2  tangential_coeffs_3, float2  thin_prism_coeffs_3, bool is_fisheye_2, bool is_ray_depth_2, DiffPair_vectorx3Cfloatx2C4x3E_0 * dpdepths_1, float3  dpnormal_1, s_bwd_prop_depth_to_normal_Intermediates_0 * _s_diff_ctx_1)
-{
-    DiffPair_vectorx3Cfloatx2C4x3E_0 _S410 = *dpdepths_1;
-    float3  _S411 = make_float3 (0.0f);
-    float2  _S412 = float2 {intrins_2.z, intrins_2.w};
-    float2  _S413 = float2 {intrins_2.x, intrins_2.y};
-    float2  uv_9 = (pix_center_2 + make_float2 (-1.0f, -0.0f) - _S412) / _S413;
-    float3  raydir_18;
-    if(is_fisheye_2)
-    {
-        float _S414 = length_1(_s_diff_ctx_1->_S365);
-        float3  raydir_19 = make_float3 ((_s_diff_ctx_1->_S365 / make_float2 (s_primal_ctx_max_0(_S414, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S414))).x, (_s_diff_ctx_1->_S365 / make_float2 (s_primal_ctx_max_0(_S414, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S414))).y, s_primal_ctx_cos_0(_S414));
-        if(!is_ray_depth_2)
-        {
-            raydir_18 = raydir_19 / make_float3 (raydir_19.z);
-        }
-        else
-        {
-            raydir_18 = raydir_19;
-        }
-    }
-    else
-    {
-        float3  raydir_20 = make_float3 (uv_9.x, uv_9.y, 1.0f);
-        if(is_ray_depth_2)
-        {
-            raydir_18 = normalize_0(raydir_20);
-        }
-        else
-        {
-            raydir_18 = raydir_20;
-        }
-    }
-    float3  _S415 = make_float3 (_S410.primal_0.x) * raydir_18;
-    float2  uv_10 = (pix_center_2 + make_float2 (1.0f, -0.0f) - _S412) / _S413;
+    DiffPair_vectorx3Cfloatx2C4x3E_0 _S469 = *dpdepths_1;
+    float3  _S470 = make_float3 (0.0f);
+    float2  _S471 = float2 {intrins_2.z, intrins_2.w};
+    float2  _S472 = float2 {intrins_2.x, intrins_2.y};
+    float2  uv_13 = (pix_center_2 + make_float2 (-1.0f, -0.0f) - _S471) / _S472;
     float3  raydir_21;
-    if(is_fisheye_2)
+    if(is_fisheye_6)
     {
-        float _S416 = length_1(_s_diff_ctx_1->_S366);
-        float3  raydir_22 = make_float3 ((_s_diff_ctx_1->_S366 / make_float2 (s_primal_ctx_max_0(_S416, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S416))).x, (_s_diff_ctx_1->_S366 / make_float2 (s_primal_ctx_max_0(_S416, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S416))).y, s_primal_ctx_cos_0(_S416));
+        float _S473 = length_1(_s_diff_ctx_3->_S439);
+        float3  raydir_22 = make_float3 ((_s_diff_ctx_3->_S439 / make_float2 (s_primal_ctx_max_0(_S473, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S473))).x, (_s_diff_ctx_3->_S439 / make_float2 (s_primal_ctx_max_0(_S473, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S473))).y, s_primal_ctx_cos_0(_S473));
         if(!is_ray_depth_2)
         {
             raydir_21 = raydir_22 / make_float3 (raydir_22.z);
@@ -1842,7 +2074,7 @@ inline __device__ void s_bwd_prop_depth_to_normal_0(uint width_2, uint height_2,
     }
     else
     {
-        float3  raydir_23 = make_float3 (uv_10.x, uv_10.y, 1.0f);
+        float3  raydir_23 = make_float3 (uv_13.x, uv_13.y, 1.0f);
         if(is_ray_depth_2)
         {
             raydir_21 = normalize_0(raydir_23);
@@ -1852,13 +2084,13 @@ inline __device__ void s_bwd_prop_depth_to_normal_0(uint width_2, uint height_2,
             raydir_21 = raydir_23;
         }
     }
-    float3  _S417 = make_float3 (_S410.primal_0.y) * raydir_21;
-    float2  uv_11 = (pix_center_2 + make_float2 (0.0f, -1.0f) - _S412) / _S413;
+    float3  _S474 = make_float3 (_S469.primal_0.x) * raydir_21;
+    float2  uv_14 = (pix_center_2 + make_float2 (1.0f, -0.0f) - _S471) / _S472;
     float3  raydir_24;
-    if(is_fisheye_2)
+    if(is_fisheye_6)
     {
-        float _S418 = length_1(_s_diff_ctx_1->_S367);
-        float3  raydir_25 = make_float3 ((_s_diff_ctx_1->_S367 / make_float2 (s_primal_ctx_max_0(_S418, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S418))).x, (_s_diff_ctx_1->_S367 / make_float2 (s_primal_ctx_max_0(_S418, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S418))).y, s_primal_ctx_cos_0(_S418));
+        float _S475 = length_1(_s_diff_ctx_3->_S440);
+        float3  raydir_25 = make_float3 ((_s_diff_ctx_3->_S440 / make_float2 (s_primal_ctx_max_0(_S475, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S475))).x, (_s_diff_ctx_3->_S440 / make_float2 (s_primal_ctx_max_0(_S475, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S475))).y, s_primal_ctx_cos_0(_S475));
         if(!is_ray_depth_2)
         {
             raydir_24 = raydir_25 / make_float3 (raydir_25.z);
@@ -1870,7 +2102,7 @@ inline __device__ void s_bwd_prop_depth_to_normal_0(uint width_2, uint height_2,
     }
     else
     {
-        float3  raydir_26 = make_float3 (uv_11.x, uv_11.y, 1.0f);
+        float3  raydir_26 = make_float3 (uv_14.x, uv_14.y, 1.0f);
         if(is_ray_depth_2)
         {
             raydir_24 = normalize_0(raydir_26);
@@ -1880,13 +2112,13 @@ inline __device__ void s_bwd_prop_depth_to_normal_0(uint width_2, uint height_2,
             raydir_24 = raydir_26;
         }
     }
-    float3  _S419 = make_float3 (_S410.primal_0.z) * raydir_24;
-    float2  uv_12 = (pix_center_2 + make_float2 (0.0f, 1.0f) - _S412) / _S413;
+    float3  _S476 = make_float3 (_S469.primal_0.y) * raydir_24;
+    float2  uv_15 = (pix_center_2 + make_float2 (0.0f, -1.0f) - _S471) / _S472;
     float3  raydir_27;
-    if(is_fisheye_2)
+    if(is_fisheye_6)
     {
-        float _S420 = length_1(_s_diff_ctx_1->_S368);
-        float3  raydir_28 = make_float3 ((_s_diff_ctx_1->_S368 / make_float2 (s_primal_ctx_max_0(_S420, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S420))).x, (_s_diff_ctx_1->_S368 / make_float2 (s_primal_ctx_max_0(_S420, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S420))).y, s_primal_ctx_cos_0(_S420));
+        float _S477 = length_1(_s_diff_ctx_3->_S441);
+        float3  raydir_28 = make_float3 ((_s_diff_ctx_3->_S441 / make_float2 (s_primal_ctx_max_0(_S477, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S477))).x, (_s_diff_ctx_3->_S441 / make_float2 (s_primal_ctx_max_0(_S477, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S477))).y, s_primal_ctx_cos_0(_S477));
         if(!is_ray_depth_2)
         {
             raydir_27 = raydir_28 / make_float3 (raydir_28.z);
@@ -1898,7 +2130,7 @@ inline __device__ void s_bwd_prop_depth_to_normal_0(uint width_2, uint height_2,
     }
     else
     {
-        float3  raydir_29 = make_float3 (uv_12.x, uv_12.y, 1.0f);
+        float3  raydir_29 = make_float3 (uv_15.x, uv_15.y, 1.0f);
         if(is_ray_depth_2)
         {
             raydir_27 = normalize_0(raydir_29);
@@ -1908,118 +2140,146 @@ inline __device__ void s_bwd_prop_depth_to_normal_0(uint width_2, uint height_2,
             raydir_27 = raydir_29;
         }
     }
-    float3  _S421 = make_float3 (_S410.primal_0.w) * raydir_27;
-    float3  dx_0 = _S417 - _S415;
-    float3  _S422 = - (_S421 - _S419);
-    float3  _S423 = s_primal_ctx_cross_0(dx_0, _S422);
-    float _S424 = length_2(_S423);
-    float3  _S425 = make_float3 (_S424);
-    bool _S426 = _S424 != 0.0f;
-    float3  _S427;
-    if(_S426)
+    float3  _S478 = make_float3 (_S469.primal_0.z) * raydir_27;
+    float2  uv_16 = (pix_center_2 + make_float2 (0.0f, 1.0f) - _S471) / _S472;
+    float3  raydir_30;
+    if(is_fisheye_6)
     {
-        _S427 = make_float3 (_S424 * _S424);
+        float _S479 = length_1(_s_diff_ctx_3->_S442);
+        float3  raydir_31 = make_float3 ((_s_diff_ctx_3->_S442 / make_float2 (s_primal_ctx_max_0(_S479, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S479))).x, (_s_diff_ctx_3->_S442 / make_float2 (s_primal_ctx_max_0(_S479, 1.00000001168609742e-07f)) * make_float2 (s_primal_ctx_sin_0(_S479))).y, s_primal_ctx_cos_0(_S479));
+        if(!is_ray_depth_2)
+        {
+            raydir_30 = raydir_31 / make_float3 (raydir_31.z);
+        }
+        else
+        {
+            raydir_30 = raydir_31;
+        }
     }
     else
     {
-        _S427 = _S411;
+        float3  raydir_32 = make_float3 (uv_16.x, uv_16.y, 1.0f);
+        if(is_ray_depth_2)
+        {
+            raydir_30 = normalize_0(raydir_32);
+        }
+        else
+        {
+            raydir_30 = raydir_32;
+        }
     }
-    float3  _S428;
-    if(_S426)
+    float3  _S480 = make_float3 (_S469.primal_0.w) * raydir_30;
+    float3  dx_0 = _S476 - _S474;
+    float3  _S481 = - (_S480 - _S478);
+    float3  _S482 = s_primal_ctx_cross_0(dx_0, _S481);
+    float _S483 = length_2(_S482);
+    float3  _S484 = make_float3 (_S483);
+    bool _S485 = _S483 != 0.0f;
+    float3  _S486;
+    if(_S485)
     {
-        float3  _S429 = dpnormal_1 / _S427;
-        float3  _S430 = _S425 * _S429;
-        _S427 = _S423 * - _S429;
-        _S428 = _S430;
+        _S486 = make_float3 (_S483 * _S483);
     }
     else
     {
-        _S427 = _S411;
-        _S428 = dpnormal_1;
+        _S486 = _S470;
     }
-    float _S431 = _S427.x + _S427.y + _S427.z;
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S432;
-    (&_S432)->primal_0 = _S423;
-    (&_S432)->differential_0 = _S411;
-    s_bwd_length_impl_1(&_S432, _S431);
-    float3  _S433 = _S432.differential_0 + _S428;
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S434;
-    (&_S434)->primal_0 = dx_0;
-    (&_S434)->differential_0 = _S411;
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S435;
-    (&_S435)->primal_0 = _S422;
-    (&_S435)->differential_0 = _S411;
-    s_bwd_prop_cross_0(&_S434, &_S435, _S433);
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S436 = _S434;
-    float3  s_diff_dy_T_0 = - _S435.differential_0;
-    float3  _S437 = - s_diff_dy_T_0;
-    float3  _S438 = - _S434.differential_0;
-    float3  _S439 = raydir_27 * s_diff_dy_T_0;
-    float _S440 = _S439.x + _S439.y + _S439.z;
-    float4  _S441 = make_float4 (0.0f);
-    float4  _S442 = _S441;
-    *&((&_S442)->w) = _S440;
-    float3  _S443 = raydir_24 * _S437;
-    float _S444 = _S443.x + _S443.y + _S443.z;
-    float4  _S445 = _S441;
-    *&((&_S445)->z) = _S444;
-    float4  _S446 = _S442 + _S445;
-    float3  _S447 = raydir_21 * _S436.differential_0;
-    float _S448 = _S447.x + _S447.y + _S447.z;
-    float4  _S449 = _S441;
-    *&((&_S449)->y) = _S448;
-    float4  _S450 = _S446 + _S449;
-    float3  _S451 = raydir_18 * _S438;
-    float _S452 = _S451.x + _S451.y + _S451.z;
-    float4  _S453 = _S441;
-    *&((&_S453)->x) = _S452;
-    float4  _S454 = _S450 + _S453;
+    float3  _S487;
+    if(_S485)
+    {
+        float3  _S488 = dpnormal_1 / _S486;
+        float3  _S489 = _S484 * _S488;
+        _S486 = _S482 * - _S488;
+        _S487 = _S489;
+    }
+    else
+    {
+        _S486 = _S470;
+        _S487 = dpnormal_1;
+    }
+    float _S490 = _S486.x + _S486.y + _S486.z;
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S491;
+    (&_S491)->primal_0 = _S482;
+    (&_S491)->differential_0 = _S470;
+    s_bwd_length_impl_1(&_S491, _S490);
+    float3  _S492 = _S491.differential_0 + _S487;
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S493;
+    (&_S493)->primal_0 = dx_0;
+    (&_S493)->differential_0 = _S470;
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S494;
+    (&_S494)->primal_0 = _S481;
+    (&_S494)->differential_0 = _S470;
+    s_bwd_prop_cross_0(&_S493, &_S494, _S492);
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S495 = _S493;
+    float3  s_diff_dy_T_0 = - _S494.differential_0;
+    float3  _S496 = - s_diff_dy_T_0;
+    float3  _S497 = - _S493.differential_0;
+    float3  _S498 = raydir_30 * s_diff_dy_T_0;
+    float _S499 = _S498.x + _S498.y + _S498.z;
+    float4  _S500 = make_float4 (0.0f);
+    float4  _S501 = _S500;
+    *&((&_S501)->w) = _S499;
+    float3  _S502 = raydir_27 * _S496;
+    float _S503 = _S502.x + _S502.y + _S502.z;
+    float4  _S504 = _S500;
+    *&((&_S504)->z) = _S503;
+    float4  _S505 = _S501 + _S504;
+    float3  _S506 = raydir_24 * _S495.differential_0;
+    float _S507 = _S506.x + _S506.y + _S506.z;
+    float4  _S508 = _S500;
+    *&((&_S508)->y) = _S507;
+    float4  _S509 = _S505 + _S508;
+    float3  _S510 = raydir_21 * _S497;
+    float _S511 = _S510.x + _S510.y + _S510.z;
+    float4  _S512 = _S500;
+    *&((&_S512)->x) = _S511;
+    float4  _S513 = _S509 + _S512;
     dpdepths_1->primal_0 = (*dpdepths_1).primal_0;
-    dpdepths_1->differential_0 = _S454;
+    dpdepths_1->differential_0 = _S513;
     return;
 }
 
-inline __device__ void s_bwd_depth_to_normal_0(uint _S455, uint _S456, float2  _S457, float4  _S458, float4  _S459, float2  _S460, float2  _S461, bool _S462, bool _S463, DiffPair_vectorx3Cfloatx2C4x3E_0 * _S464, float3  _S465)
+inline __device__ void s_bwd_depth_to_normal_0(uint _S514, uint _S515, float2  _S516, float4  _S517, float4  _S518, float2  _S519, float2  _S520, bool _S521, bool _S522, DiffPair_vectorx3Cfloatx2C4x3E_0 * _S523, float3  _S524)
 {
-    float3  _S466;
-    s_bwd_prop_depth_to_normal_Intermediates_0 _S467;
-    s_primal_ctx_depth_to_normal_0(_S455, _S456, _S457, _S458, _S459, _S460, _S461, _S462, _S463, (*_S464).primal_0, &_S466, &_S467);
-    s_bwd_prop_depth_to_normal_Intermediates_0 _S468 = _S467;
-    s_bwd_prop_depth_to_normal_0(_S455, _S456, _S457, _S458, _S459, _S460, _S461, _S462, _S463, _S464, _S465, &_S468);
+    float3  _S525;
+    s_bwd_prop_depth_to_normal_Intermediates_0 _S526;
+    s_primal_ctx_depth_to_normal_0(_S514, _S515, _S516, _S517, _S518, _S519, _S520, _S521, _S522, (*_S523).primal_0, &_S525, &_S526);
+    s_bwd_prop_depth_to_normal_Intermediates_0 _S527 = _S526;
+    s_bwd_prop_depth_to_normal_0(_S514, _S515, _S516, _S517, _S518, _S519, _S520, _S521, _S522, _S523, _S524, &_S527);
     return;
 }
 
-inline __device__ void depth_to_normal_vjp(uint width_3, uint height_3, float2  pix_center_3, float4  intrins_3, float4  radial_coeffs_4, float2  tangential_coeffs_4, float2  thin_prism_coeffs_4, bool is_fisheye_3, bool is_ray_depth_3, float4  depths_1, float3  v_normal_0, float4  * v_depths_0)
+inline __device__ void depth_to_normal_vjp(uint width_3, uint height_3, float2  pix_center_3, float4  intrins_3, float4  radial_coeffs_8, float2  tangential_coeffs_8, float2  thin_prism_coeffs_8, bool is_fisheye_7, bool is_ray_depth_3, float4  depths_1, float3  v_normal_0, float4  * v_depths_0)
 {
-    float4  _S469 = make_float4 (0.0f);
+    float4  _S528 = make_float4 (0.0f);
     DiffPair_vectorx3Cfloatx2C4x3E_0 dp_depths_0;
     (&dp_depths_0)->primal_0 = depths_1;
-    (&dp_depths_0)->differential_0 = _S469;
-    s_bwd_depth_to_normal_0(width_3, height_3, pix_center_3, intrins_3, radial_coeffs_4, tangential_coeffs_4, thin_prism_coeffs_4, is_fisheye_3, is_ray_depth_3, &dp_depths_0, v_normal_0);
+    (&dp_depths_0)->differential_0 = _S528;
+    s_bwd_depth_to_normal_0(width_3, height_3, pix_center_3, intrins_3, radial_coeffs_8, tangential_coeffs_8, thin_prism_coeffs_8, is_fisheye_7, is_ray_depth_3, &dp_depths_0, v_normal_0);
     *v_depths_0 = dp_depths_0.differential_0;
     return;
 }
 
-inline __device__ void ray_depth_to_linear_depth(uint width_4, uint height_4, float2  pix_center_4, float4  intrins_4, float4  radial_coeffs_5, float2  tangential_coeffs_5, float2  thin_prism_coeffs_5, bool is_fisheye_4, float in_depth_0, float * out_depth_0)
+inline __device__ void ray_depth_to_linear_depth(uint width_4, uint height_4, float2  pix_center_4, float4  intrins_4, float4  radial_coeffs_9, float2  tangential_coeffs_9, float2  thin_prism_coeffs_9, bool is_fisheye_8, float in_depth_0, float * out_depth_0)
 {
-    float2  uv_13 = (pix_center_4 - float2 {intrins_4.z, intrins_4.w}) / float2 {intrins_4.x, intrins_4.y};
-    float3  raydir_30;
-    if(is_fisheye_4)
+    float2  uv_17 = (pix_center_4 - float2 {intrins_4.z, intrins_4.w}) / float2 {intrins_4.x, intrins_4.y};
+    float3  raydir_33;
+    if(is_fisheye_8)
     {
-        CameraDistortion_0 _S470;
-        (&_S470)->radial_coeffs_0 = radial_coeffs_5;
-        (&_S470)->tangential_coeffs_0 = tangential_coeffs_5;
-        (&_S470)->thin_prism_coeffs_0 = thin_prism_coeffs_5;
-        float2  _S471 = undistort_point_0(uv_13, &_S470, int(12));
-        float theta_4 = length_1(_S471);
-        float3  raydir_31 = make_float3 ((_S471 / make_float2 ((F32_max((theta_4), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_4))))).x, (_S471 / make_float2 ((F32_max((theta_4), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_4))))).y, (F32_cos((theta_4))));
-        raydir_30 = raydir_31 / make_float3 (raydir_31.z);
+        CameraDistortion_0 _S529;
+        (&_S529)->radial_coeffs_0 = radial_coeffs_9;
+        (&_S529)->tangential_coeffs_0 = tangential_coeffs_9;
+        (&_S529)->thin_prism_coeffs_0 = thin_prism_coeffs_9;
+        float2  _S530 = undistort_point_0(uv_17, &_S529, int(12));
+        float theta_5 = length_1(_S530);
+        float3  raydir_34 = make_float3 ((_S530 / make_float2 ((F32_max((theta_5), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_5))))).x, (_S530 / make_float2 ((F32_max((theta_5), (1.00000001168609742e-07f)))) * make_float2 ((F32_sin((theta_5))))).y, (F32_cos((theta_5))));
+        raydir_33 = raydir_34 / make_float3 (raydir_34.z);
     }
     else
     {
-        raydir_30 = make_float3 (uv_13.x, uv_13.y, 1.0f);
+        raydir_33 = make_float3 (uv_17.x, uv_17.y, 1.0f);
     }
-    *out_depth_0 = in_depth_0 / length_2(raydir_30);
+    *out_depth_0 = in_depth_0 / length_2(raydir_33);
     return;
 }
 
