@@ -174,6 +174,9 @@ class SplatModel:
     def features_sh(self):
         return self.gauss_params["features_sh"]
     @property
+    def features_ch(self):
+        return self.gauss_params["features_ch"]
+    @property
     def opacities(self):
         return self.gauss_params["opacities"]
 

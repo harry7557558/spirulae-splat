@@ -199,6 +199,8 @@ def resize_image(image: torch.Tensor, d: int):
 
     return downscaled image in shape [B, H//d, W//d, C]
     """
+    if d == 1:
+        return image
     # weight = (1.0 / (d * d)) * torch.ones((1, 1, d, d), dtype=torch.float32, device=image.device)
     # return F.conv2d(image.float().permute(2, 0, 1)[:, None, ...], weight, stride=d).squeeze(1).permute(1, 2, 0).to(image)
     B, H, W, C = image.shape

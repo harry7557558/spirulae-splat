@@ -2279,7 +2279,7 @@ inline __device__ void ray_depth_to_linear_depth(uint width_4, uint height_4, fl
     {
         raydir_33 = make_float3 (uv_17.x, uv_17.y, 1.0f);
     }
-    *out_depth_0 = in_depth_0 / length_2(raydir_33);
+    *out_depth_0 = in_depth_0 / length_2(raydir_33) * float((F32_sign((raydir_33.z))));
     return;
 }
 

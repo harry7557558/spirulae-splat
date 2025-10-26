@@ -163,7 +163,7 @@ spirulae_triangle = MethodSpecification(
             ),
             model=SpirulaeModelConfig(
                 primitive="opaque_triangle",
-                kernel_radius=1.0,
+                kernel_radius=0.5,
                 compute_depth_normal=True,
                 # sh_degree=1,  # TODO: debug sh_degree=0
                 background_color="black",
@@ -171,6 +171,10 @@ spirulae_triangle = MethodSpecification(
                 # alpha_reg_weight=0.0,
                 # mcmc_scale_reg=0.04,
                 # erank_reg=1.0,
+                # supersampling=2,
+                mcmc_min_opacity=0.01,
+                mcmc_noise_lr=1e3,  # or 0.0
+                mcmc_max_screen_size=0.05,
             ),
             
         ),

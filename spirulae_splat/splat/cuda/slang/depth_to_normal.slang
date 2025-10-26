@@ -104,6 +104,6 @@ void ray_depth_to_linear_depth(
         raydir = float3(uv.x, uv.y, 1.0f);
     }
 
-    out_depth = in_depth / length(raydir);
+    out_depth = in_depth / length(raydir) * sign(raydir.z);
 
 }

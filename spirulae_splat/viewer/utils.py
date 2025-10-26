@@ -138,7 +138,9 @@ def rotmat_to_quat(R: torch.tensor):
 def quat_scale_to_triangle_verts(
         quats: torch.Tensor,
         scales: torch.Tensor,
-        means: Optional[torch.Tensor] = None
+        means: Optional[torch.Tensor] = None,
+        features_dc: Optional[torch.Tensor] = None,
+        features_ch: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
     quats = quats / torch.norm(quats, dim=-1, keepdim=True)
     M = quat_to_rotmat(quats)
@@ -156,6 +158,15 @@ def quat_scale_to_triangle_verts(
     verts = torch.bmm(verts, M.transpose(-1, -2))
     if means is not None:
         verts = verts + means[..., None, :]
+
+    if features_dc is not None:
+        colors = [features_dc, features_dc, features_dc]
+        if features_ch is not None:
+            colors[0] = colors[0] + features_ch[..., 0, :]
+            colors[1] = colors[1] + -0.5 * features_ch[..., 0, :] + 0.75**0.5 * features_ch[..., 1, :]
+            colors[2] = colors[2] + -0.5 * features_ch[..., 0, :] - 0.75**0.5 * features_ch[..., 1, :]
+        return verts, torch.stack(colors, dim=-2)
+
     return verts
 
 

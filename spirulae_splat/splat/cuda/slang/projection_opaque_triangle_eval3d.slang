@@ -1,5 +1,12 @@
 #include "projection_utils.slang"
 
+[ForceInline]
+float hash41(float4 seed) {
+    // https://www.shadertoy.com/view/4djSRW
+    seed = fract(seed * float4(.1031, .1030, .0973, .1099));
+    seed += dot(seed, seed.wzxy + 33.33);
+    return fract((seed.x + seed.y) * (seed.z + seed.w));
+}
 
 #define _projection_opaque_triangle_eval3d_ARGS \
     const float3 mean, \
@@ -113,6 +120,16 @@ void projection_opaque_triangle_eval3d<let camera_model: CameraModelType, let as
     aabb_xyxy = {(int)floor(xmin), (int)floor(ymin), (int)ceil(xmax), (int)ceil(ymax)};
     // depth = (vert0_c.z + vert1_c.z + vert2_c.z) / 3.0;
     depth = length(vert0_c + vert1_c + vert2_c) / 3.0;
+    #if 0
+    // stochastic depth
+    float depths[3] = { length(vert0_c), length(vert1_c), length(vert2_c) };
+    float t = no_diff hash41(quat * (depths[0] + depths[1] + depths[2]));
+    depth = lerp(
+        min(min(depths[0], depths[1]), depths[2]),
+        max(max(depths[0], depths[1]), depths[2]),
+        t * t * (3.0 - 2.0 * t)
+    );
+    #endif
 
     float3 campos = -mul(transpose(R), t);
     float3 color;
@@ -241,10 +258,10 @@ void projection_opaque_triangle_eval3d_fisheye_vjp(
 
 [Differentiable]
 [ForceInline]
-bool ray_triangle_intersection_uv(
+bool ray_triangle_intersection_uvt(
     float3 ray_o, float3 ray_d,
     float3 verts[3],
-    out float u, out float v
+    out float u, out float v, out float t
 ) {
     float3 v1v0 = verts[1] - verts[0];
     float3 v2v0 = verts[2] - verts[0];
@@ -254,7 +271,7 @@ bool ray_triangle_intersection_uv(
     float d = 1.0 / dot(ray_d, n);
     u = d * dot(-q, v2v0);
     v = d * dot(q, v1v0);
-    float t = d * dot(-n, rov0);
+    t = d * dot(-n, rov0);
     return (u >= 0.0 && v >= 0.0 && (u + v) <= 1.0 && t >= 0.0);
 }
 
@@ -264,13 +281,15 @@ float evaluate_alpha_opaque_triangle(
     float3 verts[3], float2 hardness,
     float3 ray_o, float3 ray_d
 ) {
-    float u, v;
-    if (!ray_triangle_intersection_uv(ray_o, ray_d, verts, u, v))
+    float u, v, t;
+    if (!ray_triangle_intersection_uvt(ray_o, ray_d, verts, u, v, t))
         return 0.0f;
     float opac = min(min(u, v), sqrt(0.5f) * (1.0f - u - v)) * (2.0f + sqrt(2.0f));
-    float h = clamp(hardness.y, 0.005f, 0.98f);
+    float h = clamp(hardness.y, 0.0f, 0.96f);
+    // float o = clamp(hardness.x, 0.0f, 0.98f);
+    float o = hardness.x;
     return opac < 0.0f ? 0.0f :
-        min(hardness.x * pow(opac, 1.0f - h), 0.995f);
+        min(o * pow(opac, 1.0f - h), 0.995f);
 }
 
 [CudaDeviceExport]
@@ -302,11 +321,11 @@ void evaluate_color_opaque_triangle(
     out float3 color, out float depth
 ) {
     float u, v;
-    ray_triangle_intersection_uv(ray_o, ray_d, verts, u, v);
+    ray_triangle_intersection_uvt(ray_o, ray_d, verts, u, v, depth);
     float w = 1.0f - u - v;
 
-    color = rgbs[0] * u + rgbs[1] * v + rgbs[2] * w;
-    depth = length(verts[0] * u + verts[1] * v + verts[2] * w - ray_o);
+    color = rgbs[0] * w + rgbs[1] * u + rgbs[2] * v;
+    // depth = length(verts[0] * w + verts[1] * u + verts[2] * v - ray_o);
 }
 
 [CudaDeviceExport]

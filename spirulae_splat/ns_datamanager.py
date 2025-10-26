@@ -30,8 +30,6 @@ from nerfstudio.cameras.cameras import Cameras, CameraType
 
 from spirulae_splat.ns_dataset import SpirulaeDataset
 
-from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map
-
 
 from concurrent.futures import ThreadPoolExecutor
 from torch.nn.parallel import DataParallel

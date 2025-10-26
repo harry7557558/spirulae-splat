@@ -30,7 +30,7 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 from pytorch_msssim import SSIM
 
-from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map, quat_to_rotmat
+from spirulae_splat.splat._torch_impl import quat_to_rotmat
 from spirulae_splat.splat import (
     rasterization,
     depth_to_normal,
@@ -149,7 +149,7 @@ class SpirulaeModelConfig(ModelConfig):
     camera_optimizer: CameraOptimizerConfig = field(default_factory=lambda: CameraOptimizerConfig(mode="SO3xR3"))
     """Config of the camera optimizer to use"""
     kernel_radius: float = 3.0
-    """Radius of the splatting kernel, 3.0 for Gaussian and 1.0 for triangle"""
+    """Radius of the splatting kernel, 3.0 for Gaussian and 0.5 for triangle"""
     relative_scale: Optional[float] = None
     """Manually set scale when a scene is poorly scaled by nerfstudio
         (e.g. Zip-NeRF dataset, very large-scale scenes across multiple street blocks)"""
@@ -159,6 +159,8 @@ class SpirulaeModelConfig(ModelConfig):
     """Pack projection outputs, reduce VRAM usage at large batch size but can be slightly slower"""
     use_bvh: bool = False
     """Use BVH for splat-patch intersection test, may be faster when batching large number of small patches"""
+    supersampling: int = 1
+    """Antialiasing by rendering at higher resolution and downsampling to a lower resolution, as per triangle splatting +"""
 
     # classial control
     cull_alpha_thresh: float = 0.005
@@ -834,9 +836,9 @@ class SpirulaeModel(Model):
              ),
             # (self.means, hardness * torch.ones_like(self.opacities.squeeze(-1))),
             viewmats=viewmats,  # [C, 4, 4]
-            Ks=Ks,  # [C, 3, 3]
-            width=W,
-            height=H,
+            Ks=Ks * self.config.supersampling,  # [C, 3, 3]
+            width=W * self.config.supersampling,
+            height=H * self.config.supersampling,
             packed=(self.config.packed or (self.config.use_bvh and self.training)),
             use_bvh=(self.config.use_bvh and self.training),
             absgrad=(not self.config.use_mcmc),
@@ -852,6 +854,9 @@ class SpirulaeModel(Model):
             render_mode="RGB+D" if self.config.primitive in ['3dgs', 'mip'] else "RGB+D+N",
             **kwargs,
         )
+        if self.config.supersampling != 1:
+            rgbd = [resize_image(im, self.config.supersampling) for im in rgbd]
+            alpha = resize_image(alpha, self.config.supersampling)
 
         # if not self.training:
         #     W = gw*TILE_SIZE

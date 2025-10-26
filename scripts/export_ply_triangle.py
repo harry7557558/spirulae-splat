@@ -49,7 +49,10 @@ def export_ply(model: SplatModel, output_path: str) -> None:
 
     map_to_tensors = OrderedDict()
 
-    positions = quat_scale_to_triangle_verts(model.quats, model.scales, model.means)
+    positions, colors = quat_scale_to_triangle_verts(
+        model.quats, model.scales, model.means,
+        model.colors, model.features_ch
+    )
     vert0, vert1, vert2 = torch.unbind(positions, dim=-2)
     normals = torch.cross(vert1-vert0, vert2-vert0, dim=-1)
     normals = normals / torch.norm(normals, dim=-1, keepdim=True).clip(min=1e-12)
@@ -68,11 +71,11 @@ def export_ply(model: SplatModel, output_path: str) -> None:
 
     # color
     print("Encoding color...")
-    colors = torch.clamp(model.colors, 0.0, 1.0).cpu().numpy()
+    colors = torch.clamp(colors, 0.0, 1.0).cpu().numpy()
     colors = (colors * 255).astype(np.uint8)
-    map_to_tensors["red"] = colors[:, 0].repeat(3)
-    map_to_tensors["green"] = colors[:, 1].repeat(3)
-    map_to_tensors["blue"] = colors[:, 2].repeat(3)
+    map_to_tensors["red"] = colors[:, :, 0].flatten()
+    map_to_tensors["green"] = colors[:, :, 1].flatten()
+    map_to_tensors["blue"] = colors[:, :, 2].flatten()
 
     # filter out inf/nan
     print("Filtering...")

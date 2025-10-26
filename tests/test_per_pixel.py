@@ -97,7 +97,8 @@ def test_depth_to_normal():
     forward = lambda: module.depth_to_normal(depths, "pinhole", Ks)
     _forward = lambda: torch.stack([
         spirulae_splat.splat.utils.depth_to_normal(_depths[i],
-        spirulae_splat.splat.utils._Camera(h, w, "OPENCV", (Ks[i,0,0], Ks[i,1,1], Ks[i,0,2], Ks[i,1,2])))
+        spirulae_splat.splat.utils._Camera(h, w, "OPENCV", (Ks[i,0,0], Ks[i,1,1], Ks[i,0,2], Ks[i,1,2])),
+        z_depth=False)
         for i in range(b)])
     output = forward()
     _output = _forward()

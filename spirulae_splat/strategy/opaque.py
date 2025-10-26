@@ -253,7 +253,7 @@ class OpaqueStrategy(Strategy):
 
         # relocate huge splats
         # TODO: logically it's better to split in this case?
-        if step < self.refine_stop_iter and np.isfinite(self.relocate_scale2d):
+        if np.isfinite(self.relocate_scale2d):
             relocate_mask |= (state["radii"] > self.relocate_scale2d)
         state["radii"] *= 0
 
