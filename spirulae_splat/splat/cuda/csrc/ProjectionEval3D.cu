@@ -233,50 +233,49 @@ std::tuple<
 }
 
 std::tuple<
-    // at::Tensor,  // aabb
-    // OpaqueTriangle::WorldEval3D::TensorTupleProj  // out splats
+    at::Tensor,  // aabb
+    OpaqueTriangle::WorldEval3D::TensorTupleProj  // out splats
 > projection_opaque_triangle_eval3d_forward_tensor(
-    // const OpaqueTriangle::World::TensorTuple &in_splats,
-    // const at::Tensor viewmats,             // [..., C, 4, 4]
-    // const at::Tensor Ks,                   // [..., C, 3, 3]
-    // const uint32_t image_width,
-    // const uint32_t image_height,
-    // const float near_plane,
-    // const float far_plane,
-    // const gsplat::CameraModelType camera_model,
-    // const CameraDistortionCoeffsTensor dist_coeffs
+    const OpaqueTriangle::World::TensorTuple &in_splats,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float near_plane,
+    const float far_plane,
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs
 ) {
-    throw std::runtime_error("TODO");
-    // OpaqueTriangle::World::Tensor splats_world(in_splats);
-    // uint32_t N = splats_world.size();    // number of gaussians
-    // uint32_t C = viewmats.size(-3); // number of cameras
-    // uint32_t B = splats_world.batchSize();    // number of batches
+    OpaqueTriangle::World::Tensor splats_world(in_splats);
+    uint32_t N = splats_world.size();    // number of gaussians
+    uint32_t C = viewmats.size(-3); // number of cameras
+    uint32_t B = splats_world.batchSize();    // number of batches
 
-    // auto opt = splats_world.options();
-    // at::Tensor aabb = at::empty({C, N, 4}, opt.dtype(at::kInt));
+    auto opt = splats_world.options();
+    at::Tensor aabb = at::empty({C, N, 4}, opt.dtype(at::kInt));
 
-    // OpaqueTriangle::WorldEval3D::Tensor splats_proj =
-    //     OpaqueTriangle::WorldEval3D::Tensor::empty(C, N, splats_world.options());
+    OpaqueTriangle::WorldEval3D::Tensor splats_proj =
+        OpaqueTriangle::WorldEval3D::Tensor::empty(C, N, splats_world.options());
 
-    // #define _LAUNCH_ARGS \
-    //     <<<_CEIL_DIV(B*C*N, block), block>>>( \
-    //         B, C, N, \
-    //         splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
-    //         image_width, image_height, near_plane, far_plane, \
-    //         (int4*)aabb.data_ptr<int32_t>(), splats_proj.buffer() \
-    //     )
+    #define _LAUNCH_ARGS \
+        <<<_CEIL_DIV(B*C*N, block), block>>>( \
+            B, C, N, \
+            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
+            image_width, image_height, near_plane, far_plane, \
+            (int4*)aabb.data_ptr<int32_t>(), splats_proj.buffer() \
+        )
 
-    // constexpr uint block = 256;
-    // if (camera_model == gsplat::CameraModelType::PINHOLE)
-    //     projection_eval3d_kernel<OpaqueTriangle, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
-    // else if (camera_model == gsplat::CameraModelType::FISHEYE)
-    //     projection_eval3d_kernel<OpaqueTriangle, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
-    // else
-    //     throw std::runtime_error("Unsupported camera model");
+    constexpr uint block = 256;
+    if (camera_model == gsplat::CameraModelType::PINHOLE)
+        projection_eval3d_fwd_kernel<OpaqueTriangle, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
+    else if (camera_model == gsplat::CameraModelType::FISHEYE)
+        projection_eval3d_fwd_kernel<OpaqueTriangle, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+    else
+        throw std::runtime_error("Unsupported camera model");
 
-    // #undef _LAUNCH_ARGS
+    #undef _LAUNCH_ARGS
 
-    // return std::make_tuple(aabb, splats_proj.tupleProj());
+    return std::make_tuple(aabb, splats_proj.tupleProj());
 }
 
 std::tuple<
@@ -323,8 +322,6 @@ std::tuple<
     constexpr uint block = 256;
     if (camera_model == gsplat::CameraModelType::PINHOLE)
         projection_fused_eval3d_bwd_kernel<Vanilla3DGS, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
-    // else if (camera_model == gsplat::CameraModelType::ORTHO)
-    //     projection_fused_bwd_kernel<Vanilla3DGS, gsplat::CameraModelType::ORTHO> _LAUNCH_ARGS;
     else if (camera_model == gsplat::CameraModelType::FISHEYE)
         projection_fused_eval3d_bwd_kernel<Vanilla3DGS, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
     else
@@ -336,59 +333,56 @@ std::tuple<
 }
 
 std::tuple<
-    // OpaqueTriangle::World::TensorTuple,  // v_splats
-    // at::Tensor  // v_viewmats
+    OpaqueTriangle::World::TensorTuple,  // v_splats
+    at::Tensor  // v_viewmats
 > projection_opaque_triangle_eval3d_backward_tensor(
-    // // fwd inputs
-    // const OpaqueTriangle::World::TensorTuple &splats_world_tuple,
-    // const at::Tensor viewmats,             // [..., C, 4, 4]
-    // const at::Tensor Ks,                   // [..., C, 3, 3]
-    // const uint32_t image_width,
-    // const uint32_t image_height,
-    // const gsplat::CameraModelType camera_model,
-    // const CameraDistortionCoeffsTensor dist_coeffs,
-    // // fwd outputs
-    // const at::Tensor aabb,                       // [..., C, N, 2]
-    // // grad outputs
-    // const OpaqueTriangle::Screen::TensorTuple &v_splats_screen_tuple,
-    // const bool viewmats_requires_grad
+    // fwd inputs
+    const OpaqueTriangle::World::TensorTuple &splats_world_tuple,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
+    // fwd outputs
+    const at::Tensor aabb,                       // [..., C, N, 2]
+    // grad outputs
+    const OpaqueTriangle::WorldEval3D::TensorTupleProj &v_splats_proj_tuple,
+    const bool viewmats_requires_grad
 ) {
-    throw std::runtime_error("TODO");
-    // OpaqueTriangle::World::Tensor splats_world(splats_world_tuple);
-    // uint32_t N = splats_world.size();    // number of gaussians
-    // uint32_t C = viewmats.size(-3); // number of cameras
-    // uint32_t B = splats_world.batchSize();    // number of batches
+    OpaqueTriangle::World::Tensor splats_world(splats_world_tuple);
+    uint32_t N = splats_world.size();    // number of gaussians
+    uint32_t C = viewmats.size(-3); // number of cameras
+    uint32_t B = splats_world.batchSize();    // number of batches
 
-    // OpaqueTriangle::Screen::Tensor v_splats_screen(v_splats_screen_tuple);
+    OpaqueTriangle::WorldEval3D::Tensor v_splats_proj(v_splats_proj_tuple);
 
-    // OpaqueTriangle::World::Tensor v_splats_world = splats_world.zeros_like();
+    OpaqueTriangle::World::Tensor v_splats_world = splats_world.zeros_like();
 
-    // auto opt = splats_world.options();
-    // at::Tensor v_viewmats;
-    // if (viewmats_requires_grad)
-    //     v_viewmats = at::zeros_like(viewmats, opt);
+    auto opt = splats_world.options();
+    at::Tensor v_viewmats;
+    if (viewmats_requires_grad)
+        v_viewmats = at::zeros_like(viewmats, opt);
 
-    // #define _LAUNCH_ARGS \
-    //     <<<_CEIL_DIV(B*C*N, block), block>>>( \
-    //         B, C, N, false, \
-    //         splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
-    //         image_width, image_height, (int4*)aabb.data_ptr<int32_t>(), \
-    //         v_splats_screen.buffer(), v_splats_world.buffer(), \
-    //         viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr \
-    //     )
+    #define _LAUNCH_ARGS \
+        <<<_CEIL_DIV(B*C*N, block), block>>>( \
+            B, C, N, \
+            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
+            image_width, image_height, (int4*)aabb.data_ptr<int32_t>(), \
+            v_splats_proj.buffer(), v_splats_world.buffer(), \
+            viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr \
+        )
 
-    // constexpr uint block = 256;
-    // if (camera_model == gsplat::CameraModelType::PINHOLE)
-    //     projection_fused_bwd_kernel<OpaqueTriangle, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
-    // // else if (camera_model == gsplat::CameraModelType::ORTHO)
-    // //     projection_fused_bwd_kernel<OpaqueTriangle, gsplat::CameraModelType::ORTHO> _LAUNCH_ARGS;
-    // else if (camera_model == gsplat::CameraModelType::FISHEYE)
-    //     projection_fused_bwd_kernel<OpaqueTriangle, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
-    // else
-    //     throw std::runtime_error("Unsupported camera model");
+    constexpr uint block = 256;
+    if (camera_model == gsplat::CameraModelType::PINHOLE)
+        projection_fused_eval3d_bwd_kernel<OpaqueTriangle, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
+    else if (camera_model == gsplat::CameraModelType::FISHEYE)
+        projection_fused_eval3d_bwd_kernel<OpaqueTriangle, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+    else
+        throw std::runtime_error("Unsupported camera model");
 
-    // #undef _LAUNCH_ARGS
+    #undef _LAUNCH_ARGS
 
-    // return std::make_tuple(v_splats_world.tuple(), v_viewmats);
+    return std::make_tuple(v_splats_world.tuple(), v_viewmats);
 }
 

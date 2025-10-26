@@ -631,7 +631,7 @@ struct Vanilla3DGS::WorldEval3D {
         long size;
 
         Buffer(const Tensor& tensors) {
-            DEVICE_GUARD(tensors.means);
+            DEVICE_GUARD(tensors.depths);
             if (tensors.hasWorld) {
                 CHECK_INPUT(tensors.means);
                 CHECK_INPUT(tensors.quats);

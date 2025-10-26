@@ -32,18 +32,18 @@ std::tuple<
 
 
 std::tuple<
-    // at::Tensor,  // aabb
-    // OpaqueTriangle::WorldEval3D::TensorTupleProj  // out splats
+    at::Tensor,  // aabb
+    OpaqueTriangle::WorldEval3D::TensorTupleProj  // out splats
 > projection_opaque_triangle_eval3d_forward_tensor(
-    // const OpaqueTriangle::World::TensorTuple &in_splats,
-    // const at::Tensor viewmats,             // [..., C, 4, 4]
-    // const at::Tensor Ks,                   // [..., C, 3, 3]
-    // const uint32_t image_width,
-    // const uint32_t image_height,
-    // const float near_plane,
-    // const float far_plane,
-    // const gsplat::CameraModelType camera_model,
-    // const CameraDistortionCoeffsTensor dist_coeffs
+    const OpaqueTriangle::World::TensorTuple &in_splats,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float near_plane,
+    const float far_plane,
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs
 );
 
 
@@ -68,20 +68,20 @@ std::tuple<
 
 
 std::tuple<
-    // OpaqueTriangle::World::TensorTuple,  // v_splats
-    // at::Tensor  // v_viewmats
+    OpaqueTriangle::World::TensorTuple,  // v_splats
+    at::Tensor  // v_viewmats
 > projection_opaque_triangle_eval3d_backward_tensor(
-    // // fwd inputs
-    // const OpaqueTriangle::World::TensorTuple &splats_world_tuple,
-    // const at::Tensor viewmats,             // [..., C, 4, 4]
-    // const at::Tensor Ks,                   // [..., C, 3, 3]
-    // const uint32_t image_width,
-    // const uint32_t image_height,
-    // const gsplat::CameraModelType camera_model,
-    // const CameraDistortionCoeffsTensor dist_coeffs,
-    // // fwd outputs
-    // const at::Tensor aabb,                       // [..., C, N, 2]
-    // // grad outputs
-    // const OpaqueTriangle::Screen::TensorTuple &v_splats_screen_tuple,
-    // const bool viewmats_requires_grad
+    // fwd inputs
+    const OpaqueTriangle::World::TensorTuple &splats_world_tuple,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
+    // fwd outputs
+    const at::Tensor aabb,                       // [..., C, N, 2]
+    // grad outputs
+    const OpaqueTriangle::WorldEval3D::TensorTupleProj &v_splats_proj_tuple,
+    const bool viewmats_requires_grad
 );

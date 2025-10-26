@@ -23,10 +23,10 @@ WITH_UT = True
 
 def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
     rgbd, alpha, meta = ssplat_rasterization(
-        primitive=["3dgs", "mip"][IS_ANTIALIASED],
-        splat_params=(means, quats, scales, opacities, features_dc, features_sh),
-        # primitive="opaque_triangle",
-        # splat_params=(means, quats, scales, opacities.unsqueeze(-1).repeat(1, 2), features_dc, features_sh, features_dc.unsqueeze(-2).repeat(1, 2, 1)),
+        # primitive=["3dgs", "mip"][IS_ANTIALIASED],
+        # splat_params=(means, quats, scales, opacities, features_dc, features_sh),
+        primitive="opaque_triangle",
+        splat_params=(means, quats, scales, opacities.unsqueeze(-1).repeat(1, 2), features_dc, features_sh, features_dc.unsqueeze(-2).repeat(1, 2, 1)),
         viewmats=viewmats,  # [C, 4, 4]
         Ks=Ks,  # [C, 3, 3]
         width=W,
@@ -136,6 +136,7 @@ def test_rasterization():
         # ax4.imshow(_rgb[1])
         # plt.show()
         plt.savefig("/workspace/plot.png")
+        exit(0)
 
     weights = [torch.randn_like(x.detach()) for x in _outputs]
     def fun(outputs):

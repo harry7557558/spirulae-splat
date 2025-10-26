@@ -867,8 +867,8 @@ class SpirulaeModel(Model):
         if self.config.compute_depth_normal or not self.training:
             depth_im_ref = torch.where(
                 alpha > 0.0, rgbd[1] / alpha,
-                # max_depth_scale*torch.amax(rgbd[1]).detach()
-                rgbd[1]
+                max_depth_scale*torch.amax(rgbd[1]).detach()
+                # rgbd[1]
             ).contiguous()
         else:
             depth_im_ref = None

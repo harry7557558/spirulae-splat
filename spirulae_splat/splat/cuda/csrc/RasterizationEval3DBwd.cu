@@ -395,31 +395,36 @@ std::tuple<
 }
 
 std::tuple<
-    // OpaqueTriangle::WorldEval3D::TensorTuple,
-    // std::optional<at::Tensor>  // absgrad
+    OpaqueTriangle::WorldEval3D::TensorTuple,
+    std::optional<at::Tensor>  // v_viewmats
 > rasterize_to_pixels_opaque_triangle_eval3d_bwd(
-    // // Gaussian parameters
-    // OpaqueTriangle::WorldEval3D::TensorTuple splats_tuple,
-    // const std::optional<at::Tensor> backgrounds, // [..., channels]
-    // const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
-    // // image size
-    // const uint32_t image_width,
-    // const uint32_t image_height,
-    // const uint32_t tile_size,
-    // // intersections
-    // const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    // const at::Tensor flatten_ids,  // [n_isects]
-    // // forward outputs
-    // const at::Tensor render_Ts, // [..., image_height, image_width, 1]
-    // const at::Tensor last_ids,      // [..., image_height, image_width]
-    // // gradients of outputs
-    // OpaqueTriangle::RenderOutput::TensorTuple v_render_outputs,
-    // const at::Tensor v_render_alphas // [..., image_height, image_width, 1]
+    // Gaussian parameters
+    OpaqueTriangle::WorldEval3D::TensorTuple splats_tuple,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
+    const std::optional<at::Tensor> backgrounds, // [..., channels]
+    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    // forward outputs
+    const at::Tensor render_Ts, // [..., image_height, image_width, 1]
+    const at::Tensor last_ids,      // [..., image_height, image_width]
+    // gradients of outputs
+    OpaqueTriangle::RenderOutput::TensorTuple v_render_outputs,
+    const at::Tensor v_render_alphas // [..., image_height, image_width, 1]
 ) {
-    throw std::runtime_error("TODO");
-    // return rasterize_to_pixels_bwd_tensor<OpaqueTriangle>(
-    //     splats_tuple, backgrounds, masks,
-    //     image_width, image_height, tile_size, tile_offsets, flatten_ids,
-    //     render_Ts, last_ids, v_render_outputs, v_render_alphas
-    // );
+    return rasterize_to_pixels_eval3d_bwd_tensor<OpaqueTriangle>(
+        splats_tuple,
+        viewmats, Ks, camera_model, dist_coeffs,
+        backgrounds, masks,
+        image_width, image_height, tile_size, tile_offsets, flatten_ids,
+        render_Ts, last_ids, v_render_outputs, v_render_alphas
+    );
 }

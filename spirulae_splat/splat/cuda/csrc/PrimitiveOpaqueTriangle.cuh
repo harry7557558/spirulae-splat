@@ -41,6 +41,16 @@ struct OpaqueTriangle {
         Screen& screen, int4& aabb
     );
 
+    inline static __device__ void project_persp_eval3d(
+        World world, FwdProjCamera cam,
+        WorldEval3D& proj, int4& aabb
+    );
+
+    inline static __device__ void project_fisheye_eval3d(
+        World world, FwdProjCamera cam,
+        WorldEval3D& proj, int4& aabb
+    );
+
     struct BwdProjCamera {
         float3x3 R;
         float3 t;
@@ -60,6 +70,18 @@ struct OpaqueTriangle {
     inline static __device__ void project_fisheye_vjp(
         World world, BwdProjCamera cam,
         Screen v_screen,
+        World& v_world, float3x3 &v_R, float3 &v_t
+    );
+
+    inline static __device__ void project_persp_eval3d_vjp(
+        World world, BwdProjCamera cam,
+        WorldEval3D v_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t
+    );
+
+    inline static __device__ void project_fisheye_eval3d_vjp(
+        World world, BwdProjCamera cam,
+        WorldEval3D v_proj,
         World& v_world, float3x3 &v_R, float3 &v_t
     );
 
@@ -365,7 +387,7 @@ struct OpaqueTriangle::Screen {
 #ifdef __CUDACC__
     FixedArray<float3, 3> rgb;
 #endif
-    float3 normal;  // TODO: probably faster to compute this in fragment
+    float3 normal;
     float2 absgrad;
 
     typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTuple;
@@ -574,6 +596,213 @@ struct OpaqueTriangle::Screen {
 
 struct OpaqueTriangle::WorldEval3D {
 
+    // from world
+    float2 hardness;
+    // from screen
+    float depth;  // for sorting only
+#ifdef __CUDACC__
+    FixedArray<float3, 3> verts;
+    FixedArray<float3, 3> rgbs;
+#endif
+    float3 normal;
+
+    typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTupleProj;
+    typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTuple;
+
+    struct Buffer;
+
+    struct Tensor {
+        bool hasWorld;
+        at::Tensor hardness;
+        at::Tensor depths;
+        at::Tensor verts;
+        at::Tensor rgbs;
+        at::Tensor normals;
+
+        Tensor(const TensorTuple& splats) : hasWorld(true) {
+            hardness = std::get<0>(splats);
+            depths = std::get<1>(splats);
+            verts = std::get<2>(splats);
+            rgbs = std::get<3>(splats);
+            normals = std::get<4>(splats);
+        }
+
+        Tensor(const TensorTupleProj& splats) : hasWorld(false) {
+            depths = std::get<0>(splats);
+            verts = std::get<1>(splats);
+            rgbs = std::get<2>(splats);
+            normals = std::get<3>(splats);
+        }
+
+        TensorTuple tupleAll() const {
+            return std::make_tuple(hardness, depths, verts, rgbs, normals);
+        }
+
+        TensorTupleProj tupleProj() const {
+            return std::make_tuple(depths, verts, rgbs, normals);
+        }
+
+        Tensor zeros_like() const {
+            if (!hasWorld)
+                throw std::runtime_error("!hasWorld");
+            Tensor result = Tensor(std::make_tuple(
+                at::zeros_like(hardness),
+                at::zeros_like(depths),
+                at::zeros_like(verts),
+                at::zeros_like(rgbs),
+                at::zeros_like(normals)
+            ));
+            return result;
+        }
+
+        static Tensor empty(long C, long N, c10::TensorOptions opt) {
+            return std::make_tuple(
+                at::empty({N, 2}, opt),
+                at::empty({C, N}, opt),
+                at::empty({C, N, 3, 3}, opt),
+                at::empty({C, N, 3, 3}, opt),
+                at::empty({C, N, 3}, opt)
+            );
+        }
+
+        auto options() const {
+            return rgbs.options();
+        }
+        bool isPacked() const {
+            return rgbs.dim() == 2;
+        }
+        long size() const {
+            return rgbs.numel() / 9;
+        }
+
+        Buffer buffer() { return Buffer(*this); }
+    };
+
+    struct Buffer {
+        float2* __restrict__ hardness = nullptr;
+        float* __restrict__ depths;
+        float3* __restrict__ verts;
+        float3* __restrict__ rgbs;
+        float3* __restrict__ normals;
+        long size;
+
+        Buffer(const Tensor& tensors) {
+            DEVICE_GUARD(tensors.verts);
+            if (tensors.hasWorld) {
+                CHECK_INPUT(tensors.hardness);
+                hardness = (float2*)tensors.hardness.data_ptr<float>();
+            }
+            CHECK_INPUT(tensors.depths);
+            CHECK_INPUT(tensors.verts);
+            CHECK_INPUT(tensors.rgbs);
+            depths = tensors.depths.data_ptr<float>();
+            verts = (float3*)tensors.verts.data_ptr<float>();
+            rgbs = (float3*)tensors.rgbs.data_ptr<float>();
+            normals = (float3*)tensors.normals.data_ptr<float>();
+            size = tensors.hasWorld ?
+                tensors.hardness.numel() / 2 : tensors.verts.numel() / 9;
+        }
+    };
+
+#ifdef __CUDACC__
+
+    static __device__ WorldEval3D load(const Buffer &buffer, long idx) {
+        return {
+            buffer.hardness ? buffer.hardness[idx % buffer.size] : make_float2(0.f),
+            buffer.depths[idx],
+            { buffer.verts[3*idx+0], buffer.verts[3*idx+1], buffer.verts[3*idx+2] },
+            { buffer.rgbs[3*idx+0], buffer.rgbs[3*idx+1], buffer.rgbs[3*idx+2] },
+            buffer.normals[idx]
+        };
+    }
+
+    static __device__ __forceinline__ WorldEval3D zero() {
+        return {
+            {0.f, 0.f},
+            0.f,
+            {make_float3(0.f), make_float3(0.f), make_float3(0.f)},
+            {make_float3(0.f), make_float3(0.f), make_float3(0.f)},
+            {0.f, 0.f, 0.f},
+        };
+    }
+
+    __device__ __forceinline__ void operator+=(const WorldEval3D &other) {
+        hardness += other.hardness;
+        depth += other.depth;
+        #pragma unroll
+        for (int i = 0; i < 3; i++) {
+            verts[i] += other.verts[i];
+            rgbs[i] += other.rgbs[i];
+        }
+        normal += other.normal;
+    }
+
+    __device__ void saveBuffer(Buffer &buffer, long idx) {
+        if (buffer.hardness) buffer.hardness[idx % buffer.size] = hardness;
+        buffer.depths[idx] = depth;
+        #pragma unroll
+        for (int i = 0; i < 3; i++) {
+            buffer.verts[3*idx+i] = verts[i];
+            buffer.rgbs[3*idx+i] = rgbs[i];
+        }
+        buffer.normals[idx] = normal;
+    }
+
+    __device__ void atomicAddBuffer(Buffer &buffer, long idx) {
+        atomicAddFVec(buffer.hardness + idx % buffer.size, hardness);
+        atomicAddFVec(buffer.depths + idx, depth);
+        #pragma unroll
+        for (int i = 0; i < 3; i++) {
+            atomicAddFVec(buffer.verts + 3*idx+i, verts[i]);
+            atomicAddFVec(buffer.rgbs + 3*idx+i, rgbs[i]);
+        }
+        atomicAddFVec(buffer.normals + idx, normal);
+    }
+
+    __device__ __forceinline__ float evaluate_alpha(float3 ray_o, float3 ray_d) {
+        return evaluate_alpha_opaque_triangle(&verts, hardness, ray_o, ray_d);
+    }
+
+    __device__ __forceinline__ WorldEval3D evaluate_alpha_vjp(
+        float3 ray_o, float3 ray_d, float v_alpha,
+        float3 &v_ray_o, float3 &v_ray_d
+    ) {
+        WorldEval3D v_splat = WorldEval3D::zero();
+        evaluate_alpha_opaque_triangle_vjp(
+            &verts, hardness,
+            ray_o, ray_d, v_alpha,
+            &v_splat.verts, &v_splat.hardness,
+            &v_ray_o, &v_ray_d
+        );
+        return v_splat;
+    }
+
+    __device__ __forceinline__ OpaqueTriangle::RenderOutput evaluate_color(float3 ray_o, float3 ray_d) {
+        float3 out_rgb; float out_depth;
+        evaluate_color_opaque_triangle(
+            &verts, &rgbs, ray_o, ray_d,
+            &out_rgb, &out_depth
+        );
+        return {out_rgb, out_depth, normal};
+    }
+
+    __device__ __forceinline__ WorldEval3D evaluate_color_vjp(
+        float3 ray_o, float3 ray_d, OpaqueTriangle::RenderOutput v_render,
+        float3 &v_ray_o, float3 &v_ray_d
+    ) {
+        WorldEval3D v_splat = WorldEval3D::zero();
+        evaluate_color_opaque_triangle_vjp(
+            &verts, &rgbs, ray_o, ray_d,
+            v_render.rgb, v_render.depth,
+            &v_splat.verts, &v_splat.rgbs,
+            &v_ray_o, &v_ray_d
+        );
+        v_splat.normal = v_render.normal;
+        return v_splat;
+    }
+
+#endif  // #ifdef __CUDACC__
+
 };
 
 
@@ -604,6 +833,32 @@ inline __device__ void OpaqueTriangle::project_fisheye(
         cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &screen.vert0, &screen.vert1, &screen.vert2, &screen.depth, &screen.hardness, &screen.rgb, &screen.normal
+    );
+}
+
+inline __device__ void OpaqueTriangle::project_persp_eval3d(
+    OpaqueTriangle::World world, OpaqueTriangle::FwdProjCamera cam,
+    OpaqueTriangle::WorldEval3D& proj, int4& aabb
+) {
+    projection_opaque_triangle_eval3d_persp(
+        world.mean, world.quat, world.scale, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
+        cam.width, cam.height, cam.near_plane, cam.far_plane,
+        &aabb, &proj.depth, &proj.verts, &proj.rgbs, &proj.normal
+    );
+}
+
+inline __device__ void OpaqueTriangle::project_fisheye_eval3d(
+    OpaqueTriangle::World world, OpaqueTriangle::FwdProjCamera cam,
+    OpaqueTriangle::WorldEval3D& proj, int4& aabb
+) {
+    projection_opaque_triangle_eval3d_fisheye(
+        world.mean, world.quat, world.scale, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
+        cam.width, cam.height, cam.near_plane, cam.far_plane,
+        &aabb, &proj.depth, &proj.verts, &proj.rgbs, &proj.normal
     );
 }
 
@@ -639,6 +894,38 @@ inline __device__ void OpaqueTriangle::project_fisheye_vjp(
         v_screen.vert0, v_screen.vert1, v_screen.vert2, v_screen.depth, v_screen.hardness, &v_screen.rgb, v_screen.normal,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.hardness, &v_world.sh_coeffs, &v_world.ch_coeffs,
         // &v_world.vert0, &v_world.vert1, &v_world.vert2, &v_world.hardness, &v_world.sh_coeffs, &v_world.ch_coeffs,
+        &v_R, &v_t
+    );
+}
+
+inline __device__ void OpaqueTriangle::project_persp_eval3d_vjp(
+    OpaqueTriangle::World world, OpaqueTriangle::BwdProjCamera cam,
+    OpaqueTriangle::WorldEval3D v_proj,
+    OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t
+) {
+    projection_opaque_triangle_eval3d_persp_vjp(
+        world.mean, world.quat, world.scale, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
+        cam.width, cam.height,
+        v_proj.depth, &v_proj.verts, &v_proj.rgbs, v_proj.normal,
+        &v_world.mean, &v_world.quat, &v_world.scale, &v_world.hardness, &v_world.sh_coeffs, &v_world.ch_coeffs,
+        &v_R, &v_t
+    );
+}
+
+inline __device__ void OpaqueTriangle::project_fisheye_eval3d_vjp(
+    OpaqueTriangle::World world, OpaqueTriangle::BwdProjCamera cam,
+    OpaqueTriangle::WorldEval3D v_proj,
+    OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t
+) {
+    projection_opaque_triangle_eval3d_fisheye_vjp(
+        world.mean, world.quat, world.scale, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
+        cam.width, cam.height,
+        v_proj.depth, &v_proj.verts, &v_proj.rgbs, v_proj.normal,
+        &v_world.mean, &v_world.quat, &v_world.scale, &v_world.hardness, &v_world.sh_coeffs, &v_world.ch_coeffs,
         &v_R, &v_t
     );
 }
