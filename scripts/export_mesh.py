@@ -295,6 +295,7 @@ class DepthAndNormalMapsPoisson(GSMeshExporter):
         for frame in tqdm(transforms["frames"]):
 
             camera = Camera(frame if 'w' in frame else transforms)
+            camera.model = "OPENCV"
             camera.distortion = (0, 0, 0, 0)
 
             sc = self.max_image_size / max(camera.w, camera.h)
@@ -499,9 +500,9 @@ class Open3DTSDFFusion(GSMeshExporter):
     Backproject depths and run TSDF fusion
     """
 
-    voxel_size: float = 0.2
+    voxel_size: float = 0.005
     """tsdf voxel size"""
-    sdf_truc: float = 1.0
+    sdf_truc: float = 0.04
     """TSDF truncation"""
 
     @torch.no_grad()
@@ -509,6 +510,7 @@ class Open3DTSDFFusion(GSMeshExporter):
         import open3d as o3d
 
         model = SplatModel(str(self.load_config))
+        model_scale = model.dataparser_scale
         model.convert_to_input_frame()
         model.return_torch = True
         model.bgr = False
@@ -526,14 +528,15 @@ class Open3DTSDFFusion(GSMeshExporter):
             transforms = json.load(fp)
 
         volume = o3d.pipelines.integration.ScalableTSDFVolume(
-            voxel_length=self.voxel_size,
-            sdf_trunc=self.sdf_truc,
+            voxel_length=self.voxel_size/model_scale,
+            sdf_trunc=self.sdf_truc/model_scale,
             color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8,
         )
 
         for frame in tqdm(transforms["frames"]):
 
             camera = Camera(frame if 'w' in frame else transforms)
+            camera.model = "OPENCV"
             camera.distortion = (0, 0, 0, 0)
 
             sc = self.max_image_size / max(camera.w, camera.h)

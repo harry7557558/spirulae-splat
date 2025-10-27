@@ -78,7 +78,7 @@ void depth_to_normal_vjp(
 
 [CudaDeviceExport]
 [Differentiable]
-void ray_depth_to_linear_depth(
+float ray_depth_to_linear_depth_factor(
     const uint width,
     const uint height,
     const no_diff float2 pix_center,
@@ -86,9 +86,7 @@ void ray_depth_to_linear_depth(
     const no_diff float4 radial_coeffs,
     const no_diff float2 tangential_coeffs,
     const no_diff float2 thin_prism_coeffs,
-    const bool is_fisheye,
-    const float in_depth,
-    out float out_depth
+    const bool is_fisheye
 ) {
 
     float2 uv = (pix_center - intrins.zw) / intrins.xy;
@@ -104,6 +102,5 @@ void ray_depth_to_linear_depth(
         raydir = float3(uv.x, uv.y, 1.0f);
     }
 
-    out_depth = in_depth / length(raydir) * sign(raydir.z);
-
+    return sign(raydir.z) / length(raydir);
 }

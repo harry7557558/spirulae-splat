@@ -38,10 +38,10 @@ def process_image(
         pred_depth = torch.nn.functional.interpolate(
             pred_depth, size=(h, w), mode='bilinear', align_corners=False
         )[0].permute(1, 2, 0)  # [h, w, 1]
-        pred_depth = torch.log(torch.relu(pred_depth) + 1.0)
+        # pred_depth = torch.log(torch.relu(pred_depth) + 1.0)
         pred_depth /= torch.amax(pred_depth)
-        pred_depth = torch.clip(255*pred_depth, 0, 255).to(torch.uint8).cpu().numpy()
-        Image.fromarray(pred_depth.squeeze(-1)).save(depth_save_path)
+        pred_depth = torch.clip(65535*pred_depth, 0, 65535).cpu().numpy().astype(np.uint16)
+        Image.fromarray(pred_depth.squeeze(-1), mode='I;16').save(depth_save_path)
 
     if normal_save_path is not None:
         pred_normal = torch.nn.functional.interpolate(
@@ -54,38 +54,46 @@ def process_image(
 def process_dir(dataset_dir: str):
     image_dir = os.path.join(dataset_dir, "images")
 
+    def with_ext(file_path, new_ext):
+        base_name, _ = os.path.splitext(file_path)
+        return base_name + '.' + new_ext
+
     image_filenames = []
     with open(os.path.join(dataset_dir, "transforms.json")) as fp:
         content = json.load(fp)
     for frame in content['frames']:
         file_path = frame['file_path'].lstrip('./')
         assert file_path.startswith("images")
-        image_filenames.append(file_path[len("images")+1:])
+        image_filename = file_path[len("images")+1:]
+        depth_filename = with_ext(image_filename, 'png')
+        normal_filename = with_ext(image_filename, 'png')
+        image_filenames.append((image_filename, depth_filename, normal_filename))
+        frame["depth_file_path"] = os.path.join("depths", depth_filename)
+        frame["normal_file_path"] = os.path.join("normals", normal_filename)
     if len(image_filenames) == 0:
         print("No image found")
         return
     image_filenames.sort()
+    with open(os.path.join(dataset_dir, "transforms.json"), 'w') as fp:
+        json.dump(content, fp, indent=4)
 
     depth_dir = os.path.join(dataset_dir, "depths")
     normal_dir = os.path.join(dataset_dir, "normals")
     os.makedirs(depth_dir, exist_ok=True)
     os.makedirs(normal_dir, exist_ok=True)
 
-    def ext(file_path, new_ext):
-        base_name, _ = os.path.splitext(file_path)
-        return base_name + '.' + new_ext
-
     print("Loading model...")
     model = torch.hub.load('yvanyin/metric3d', 'metric3d_vit_large', pretrain=True)
     model = model.eval().cuda()
     print("Model loaded")
 
-    for image_filename in tqdm(image_filenames, "Predicting depth/normal"):
+    for (image_filename, depth_filename, normal_filename) \
+          in tqdm(image_filenames, "Predicting depth/normal"):
         process_image(
             model,
             os.path.join(image_dir, image_filename),
-            os.path.join(depth_dir, ext(image_filename, 'png')),
-            os.path.join(normal_dir, ext(image_filename, 'png'))
+            os.path.join(depth_dir, depth_filename),
+            os.path.join(normal_dir, normal_filename)
         )
 
 

@@ -246,8 +246,7 @@ class SplatModel:
                         torch.ones_like(self.opacities),
                         torch.ones_like(self.opacities)
                     ], dim=-1),
-                    self.features_dc, self.features_sh, #self.features_ch
-                    torch.zeros_like(self.features_sh[..., :2, :])
+                    self.features_dc, self.features_sh, self.features_ch
                 ),
                 viewmats=viewmat[None].contiguous(),  # [C, 4, 4]
                 Ks=Ks[None].contiguous(),  # [C, 3, 3]

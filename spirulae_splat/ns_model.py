@@ -115,6 +115,13 @@ class SpirulaeModelConfig(ModelConfig):
 
     primitive: Literal["3dgs", "mip", "opaque_triangle"] = "3dgs"
     """Splat primitive to use"""
+    fit: Literal["rgb", "depth", "normal"] = "rgb"
+    """Fit RGB image by default, fit depth/normal for geometry reconstruction
+        Will apply the same as RGB for depth and normal (e.g. bilagrid, SSIM, unless you disable them)"""
+    fit_normal_depth_factor: float = 0.2
+    """Probability to use depth normal instead of rendered normal in normal fitting mode"""
+    fit_normal_depth_warmup_steps: int = 3000
+    """Warmup for probability to use depth normal instead of rendered normal in normal fitting mode"""
 
     num_iterations: int = 30000
     """number of training iterations, should be consistent with --max_num_iterations"""
@@ -258,18 +265,18 @@ class SpirulaeModelConfig(ModelConfig):
     """Weight for depth regularizer"""
     depth_reg_pairwise_factor: float = 1.0  # 0.7, 1.0
     """Factor of pairwise vs depth fitting depth regularization, 0 to 1"""
-    depth_reg_warmup: int = 12000
+    depth_reg_warmup: int = 6000
     """warmup steps for depth regularizer, regularization weight ramps up"""
     normal_reg_weight: float = 0.04
     """Weight for normal regularizer"""
-    normal_reg_warmup: int = 12000
+    normal_reg_warmup: int = 6000
     """warmup steps for normal regularizer, regularization weight ramps up"""
     alpha_reg_weight: float = 0.025
     """Weight for alpha regularizer (encourage alpha to go to either 0 or 1)
         Recommend using with --pipeline.model.cull_screen_size for better results"""
     alpha_reg_warmup: int = 12000
     """warmup steps for alpha regularizer, regularization weight ramps up"""
-    reg_warmup_length: int = 4000
+    reg_warmup_length: int = 0
     """Warmup steps for depth, normal, and alpha regularizers.
        only apply regularizers after this many steps."""
     alpha_loss_weight: float = 0.01
@@ -310,12 +317,12 @@ class SpirulaeModelConfig(ModelConfig):
         Larger gives more parameters in depth distortion model, -1 to disable"""
     depth_supervision_weight: float = 0.0
     """Weight for depth supervision by comparing rendered depth with depth predicted by a foundation model"""
-    normal_supervision_weight: float = 0.01
+    normal_supervision_weight: float = 0.1
     """Weight for normal supervision by comparing normal from rendered depth with normal from depth predicted by a foundation model"""
-    alpha_supervision_weight: float = 0.005
+    alpha_supervision_weight: float = 0.01
     """Weight for alpha supervision by rendered alpha with alpha predicted by a foundation model
         Useful for removing floaters from sky for outdoor scenes"""
-    alpha_supervision_weight_under: float = 0.0
+    alpha_supervision_weight_under: float = 0.005
     """Similar to alpha_supervision_weight, but applies when renderer opacity is lower than reference opacity"""
 
 
@@ -866,9 +873,6 @@ class SpirulaeModel(Model):
         #     alpha = merge_tiles(alpha)
         #     W, H = camera.width[0].item(), camera.height[0].item()
 
-        # rgb = rgbd[..., :3]
-        rgb = rgbd[0]
-
         if self.config.compute_depth_normal or not self.training:
             depth_im_ref = torch.where(
                 alpha > 0.0, rgbd[1] / alpha,
@@ -878,11 +882,38 @@ class SpirulaeModel(Model):
         else:
             depth_im_ref = None
 
+        # normals
         render_normal = None
         if len(rgbd) > 2:
             render_normal = torch.where(alpha > 0.0, F.normalize(rgbd[2], dim=-1), rgbd[2])
-            if not self.training:
-                render_normal = 0.5+0.5*render_normal
+
+        depth_normal = None
+        if self.config.compute_depth_normal or self.config.fit == "depth_normal" or not self.training:
+            depth_normal = depth_to_normal(
+                depth_im_ref, ["pinhole", "fisheye"][is_fisheye], Ks, **kwargs
+            )
+
+        if self.config.fit == "rgb":
+            rgb = rgbd[0]
+        elif self.config.fit == "depth":
+            rgb = depth_im_ref
+            rgb = rgb / rgb.mean()
+            rgb = (rgb / (1.0 + rgb)).repeat(1, 1, 1, 3)
+        elif self.config.fit == "normal":
+            assert render_normal is not None, "Normal map not available"
+            assert depth_normal is not None, "Depth normal map not available"
+            factor = self.config.fit_normal_depth_factor * min(
+                -1 + 2 * self.step / self.config.fit_normal_depth_warmup_steps, 1.0)
+            # rgb = 0.5+0.5*torch.lerp(
+            #     render_normal, depth_normal,
+            #     # factor * torch.rand_like(render_normal[..., :1])
+            #     (torch.rand_like(render_normal[..., :1]) < factor).float()
+            # )
+            # if factor > 0.0:
+            if np.random.random() < factor:# and self.training:
+                rgb = 0.5+0.5*depth_normal
+            else:
+                rgb = 0.5+0.5*render_normal
 
         means2d = meta["means2d"]
         if self.config.use_mcmc:
@@ -901,19 +932,17 @@ class SpirulaeModel(Model):
             }
 
         # blend with background
-        background = self.get_background_image(camera, optimized_camera_to_world, Ks)
-        rgb = torch.clip(rgb + (1.0 - alpha) * background, 0.0, 1.0)
+        if self.config.fit == "rgb":
+            background = self.get_background_image(camera, optimized_camera_to_world, Ks)
+            rgb = torch.clip(rgb + (1.0 - alpha) * background, 0.0, 1.0)
+        else:
+            background = torch.zeros_like(rgb)
 
         # apply bilateral grid
-        if self.config.use_bilateral_grid and self.training:
+        if self.config.use_bilateral_grid and self.training and self.config.fit == "rgb":
             if camera.metadata is not None and "cam_idx" in camera.metadata:
                 rgb = self.training_losses.apply_bilateral_grid(rgb, camera.metadata["cam_idx"], H, W)
-
-        # normal regularization
-        if self.config.compute_depth_normal or not self.training:
-            depth_normal = depth_to_normal(
-                depth_im_ref, ["pinhole", "fisheye"][is_fisheye], Ks, **kwargs
-            )
+            # in depth and normal fit mode, will apply in loss function
 
         # pack outputs
         outputs = {
@@ -930,6 +959,7 @@ class SpirulaeModel(Model):
 
         if not self.training:
             outputs["alpha"] = outputs["alpha"].reshape((H, W, 1)).repeat(1, 1, 3)
+            outputs["background"] = torch.clip(outputs["background"], min=0.0, max=1.0)
 
         # convert linear depth to ray depth, for correct gl_z_buf_depth in Viser
         if not self.training:
@@ -939,11 +969,18 @@ class SpirulaeModel(Model):
             # outputs["depth"] = torch.clip(outputs["depth"], max=torch.quantile(outputs["depth"], 0.99))
             if self.config.relative_scale is not None:
                 outputs["depth"] /= self.config.relative_scale
+            if "normal" in outputs:
+                outputs["normal"] = 0.5+0.5*outputs["normal"]
             if "depth_normal" in outputs:
                 outputs["depth_normal"] = 0.5+0.5*outputs["depth_normal"]
             for key in outputs:
                 outputs[key] = outputs[key].squeeze(0)
 
+        if self.training:
+            kwargs["Ks"] = Ks
+            kwargs["camera_model"] = ["pinhole", "fisheye"][is_fisheye]
+            outputs["camera"] = camera
+            outputs["camera_intrins"] = kwargs
         # if not self.training and True:
         #     outputs['ray'] = merge_tiles(meta['intersection_count'].float().reshape(-1, 1, 1, 1).repeat(1, TILE_SIZE, TILE_SIZE, 1))
 

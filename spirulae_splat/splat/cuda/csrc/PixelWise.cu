@@ -353,12 +353,12 @@ torch::Tensor depth_to_normal_backward_tensor(
 // ================
 
 
-__global__ void ray_depth_to_linear_depth_kernel(
+__global__ void ray_depth_to_linear_depth_forward_kernel(
     gsplat::CameraModelType camera_model,
     const float *__restrict__ Ks,  // [B, 3, 3]
     const CameraDistortionCoeffsBuffer dist_coeffs,
     const TensorView<float, 4> in_depths,  // [B, H, W, 1]
-    TensorView<float, 4> out_depths  // [B, H, W, 3]
+    TensorView<float, 4> out_depths  // [B, H, W, 1]
 ) {
     const uint B = in_depths.shape[0],
         H = in_depths.shape[1],
@@ -386,17 +386,57 @@ __global__ void ray_depth_to_linear_depth_kernel(
 
     // Process
     float in_depth = in_depths.load1(bid, j, i);
-    float out_depth;
-    ray_depth_to_linear_depth(
+    float out_depth = in_depth * ray_depth_to_linear_depth_factor(
         W, H, {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
-        camera_model == gsplat::CameraModelType::FISHEYE,
-        in_depth, &out_depth
+        camera_model == gsplat::CameraModelType::FISHEYE
     );
     out_depths.store1(bid, j, i, out_depth);
 }
 
-torch::Tensor ray_depth_to_linear_depth_tensor(
+__global__ void ray_depth_to_linear_depth_backward_kernel(
+    gsplat::CameraModelType camera_model,
+    const float *__restrict__ Ks,  // [B, 3, 3]
+    const CameraDistortionCoeffsBuffer dist_coeffs,
+    const TensorView<float, 4> v_out_depths,  // [B, H, W, 1]
+    TensorView<float, 4> v_in_depths  // [B, H, W, 1]
+) {
+    const uint B = v_out_depths.shape[0],
+        H = v_out_depths.shape[1],
+        W = v_out_depths.shape[2];
+    uint32_t bid = blockIdx.z * blockDim.z + threadIdx.z;
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (bid >= B || i >= W || j >= H)
+        return;
+
+    // Load camera
+    Ks += bid * 9;
+    float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
+    float4 radial_coeffs = {0, 0, 0, 0};
+    float2 tangential_coeffs = {0, 0};
+    float2 thin_prism_coeffs = {0, 0};
+    if (camera_model == gsplat::CameraModelType::FISHEYE || true) {
+        if (dist_coeffs.radial_coeffs != nullptr)
+            radial_coeffs = dist_coeffs.radial_coeffs[bid];
+        if (dist_coeffs.tangential_coeffs != nullptr)
+            tangential_coeffs = dist_coeffs.tangential_coeffs[bid];
+        if (dist_coeffs.thin_prism_coeffs != nullptr)
+            thin_prism_coeffs = dist_coeffs.thin_prism_coeffs[bid];
+    }
+
+    // Process
+    float v_out_depth = v_out_depths.load1(bid, j, i);
+    float factor = ray_depth_to_linear_depth_factor(
+        W, H, {(float)i+0.5f, (float)j+0.5f},
+        {fx, fy, cx, cy}, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        camera_model == gsplat::CameraModelType::FISHEYE
+    );
+    float v_in_depth = factor * v_out_depth;
+    v_in_depths.store1(bid, j, i, v_in_depth);
+}
+
+torch::Tensor ray_depth_to_linear_depth_forward_tensor(
     gsplat::CameraModelType camera_model,
     torch::Tensor Ks,  // [B, 3, 3]
     CameraDistortionCoeffsTensor dist_coeffs,
@@ -416,10 +456,38 @@ torch::Tensor ray_depth_to_linear_depth_tensor(
     uint b = depths.size(0), h = depths.size(1), w = depths.size(2);
     torch::Tensor out_depths = torch::empty_like(depths);
 
-    ray_depth_to_linear_depth_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
+    ray_depth_to_linear_depth_forward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
         camera_model, Ks.data_ptr<float>(), dist_coeffs,
         tensor2view<float, 4>(depths), tensor2view<float, 4>(out_depths)
     );
 
     return out_depths;
+}
+
+torch::Tensor ray_depth_to_linear_depth_backward_tensor(
+    gsplat::CameraModelType camera_model,
+    torch::Tensor Ks,  // [B, 3, 3]
+    CameraDistortionCoeffsTensor dist_coeffs,
+    torch::Tensor v_out_depths  // [B, H, W, 1]
+) {
+    DEVICE_GUARD(v_out_depths);
+    CHECK_CUDA(v_out_depths);
+    CHECK_INPUT(Ks);
+
+    if (Ks.ndimension() != 3 || Ks.size(-1) != 3 || Ks.size(-2) != 3)
+        AT_ERROR("Ks shape must be (B, 3, 3)");
+    if (v_out_depths.ndimension() != 4 || v_out_depths.size(-1) != 1)
+        AT_ERROR("v_out_depths shape must be (B, H, W, 1)");
+    if (v_out_depths.size(0) != Ks.size(0))
+        AT_ERROR("v_out_depths and Ks batch dimension mismatch");
+
+    uint b = v_out_depths.size(0), h = v_out_depths.size(1), w = v_out_depths.size(2);
+    torch::Tensor v_in_depths = torch::empty_like(v_out_depths);
+
+    ray_depth_to_linear_depth_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
+        camera_model, Ks.data_ptr<float>(), dist_coeffs,
+        tensor2view<float, 4>(v_out_depths), tensor2view<float, 4>(v_in_depths)
+    );
+
+    return v_in_depths;
 }

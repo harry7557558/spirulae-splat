@@ -59,9 +59,17 @@ torch::Tensor depth_to_normal_backward_tensor(
 );
 
 
-torch::Tensor ray_depth_to_linear_depth_tensor(
+torch::Tensor ray_depth_to_linear_depth_forward_tensor(
     gsplat::CameraModelType camera_model,
     torch::Tensor Ks,  // [B, 3, 3]
     CameraDistortionCoeffsTensor dist_coeffs,
     torch::Tensor depths  // [B, H, W, 1]
+);
+
+
+torch::Tensor ray_depth_to_linear_depth_backward_tensor(
+    gsplat::CameraModelType camera_model,
+    torch::Tensor Ks,  // [B, 3, 3]
+    CameraDistortionCoeffsTensor dist_coeffs,
+    torch::Tensor v_out_depths  // [B, H, W, 1]
 );

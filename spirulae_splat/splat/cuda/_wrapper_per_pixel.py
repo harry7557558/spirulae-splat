@@ -162,13 +162,27 @@ class _RayDepthToLinearDepth(torch.autograd.Function):
             f"CameraModelType.{camera_model.upper()}"
         )
 
-        return _make_lazy_cuda_func("ray_depth_to_linear_depth")(
+        out_depths = _make_lazy_cuda_func("ray_depth_to_linear_depth_forward")(
             camera_model_type, Ks,
             (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
             depths
         )
 
+        ctx.save_for_backward(Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs)
+        ctx.camera_model_type = camera_model_type
+        
+        return out_depths
+
     @staticmethod
-    def backward(ctx, v_depths):
-        raise NotImplementedError("ray_depth_to_linear_depth is not differentiable")
+    def backward(ctx, v_out_depths):
+
+        Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs = ctx.saved_tensors
+    
+        v_in_depths = _make_lazy_cuda_func("ray_depth_to_linear_depth_backward")(
+            ctx.camera_model_type, Ks,
+            (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
+            v_out_depths
+        )
+
+        return (v_in_depths, *([None]*(len(ctx.needs_input_grad)-1)))
 

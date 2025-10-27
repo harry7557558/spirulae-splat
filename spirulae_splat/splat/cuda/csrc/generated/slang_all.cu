@@ -2260,7 +2260,7 @@ inline __device__ void depth_to_normal_vjp(uint width_3, uint height_3, float2  
     return;
 }
 
-inline __device__ void ray_depth_to_linear_depth(uint width_4, uint height_4, float2  pix_center_4, float4  intrins_4, float4  radial_coeffs_9, float2  tangential_coeffs_9, float2  thin_prism_coeffs_9, bool is_fisheye_8, float in_depth_0, float * out_depth_0)
+inline __device__ float ray_depth_to_linear_depth_factor(uint width_4, uint height_4, float2  pix_center_4, float4  intrins_4, float4  radial_coeffs_9, float2  tangential_coeffs_9, float2  thin_prism_coeffs_9, bool is_fisheye_8)
 {
     float2  uv_17 = (pix_center_4 - float2 {intrins_4.z, intrins_4.w}) / float2 {intrins_4.x, intrins_4.y};
     float3  raydir_33;
@@ -2279,7 +2279,6 @@ inline __device__ void ray_depth_to_linear_depth(uint width_4, uint height_4, fl
     {
         raydir_33 = make_float3 (uv_17.x, uv_17.y, 1.0f);
     }
-    *out_depth_0 = in_depth_0 / length_2(raydir_33) * float((F32_sign((raydir_33.z))));
-    return;
+    return float((F32_sign((raydir_33.z)))) / length_2(raydir_33);
 }
 
