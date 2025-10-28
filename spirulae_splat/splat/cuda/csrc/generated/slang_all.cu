@@ -1158,23 +1158,18 @@ inline __device__ Matrix<float, 3, 3>  transpose_0(Matrix<float, 3, 3>  x_15)
     return result_10;
 }
 
-inline __device__ Matrix<float, 3, 3>  quat_to_rotmat(float4  quat_2)
+inline __device__ Matrix<float, 3, 3>  normalized_quat_to_rotmat(float4  quat_2)
 {
     float x_16 = quat_2.y;
-    float inv_norm_0 = (F32_rsqrt((x_16 * x_16 + quat_2.z * quat_2.z + quat_2.w * quat_2.w + quat_2.x * quat_2.x)));
-    float x_17 = quat_2.y * inv_norm_0;
-    float y_9 = quat_2.z * inv_norm_0;
-    float z_2 = quat_2.w * inv_norm_0;
-    float w_0 = quat_2.x * inv_norm_0;
-    float x2_0 = x_17 * x_17;
-    float y2_0 = y_9 * y_9;
-    float z2_0 = z_2 * z_2;
-    float xy_0 = x_17 * y_9;
-    float xz_0 = x_17 * z_2;
-    float yz_0 = y_9 * z_2;
-    float wx_0 = w_0 * x_17;
-    float wy_0 = w_0 * y_9;
-    float wz_0 = w_0 * z_2;
+    float x2_0 = x_16 * x_16;
+    float y2_0 = quat_2.z * quat_2.z;
+    float z2_0 = quat_2.w * quat_2.w;
+    float xy_0 = quat_2.y * quat_2.z;
+    float xz_0 = quat_2.y * quat_2.w;
+    float yz_0 = quat_2.z * quat_2.w;
+    float wx_0 = quat_2.x * quat_2.y;
+    float wy_0 = quat_2.x * quat_2.z;
+    float wz_0 = quat_2.x * quat_2.w;
     return transpose_0(makeMatrix<float, 3, 3> (1.0f - 2.0f * (y2_0 + z2_0), 2.0f * (xy_0 + wz_0), 2.0f * (xz_0 - wy_0), 2.0f * (xy_0 - wz_0), 1.0f - 2.0f * (x2_0 + z2_0), 2.0f * (yz_0 + wx_0), 2.0f * (xz_0 + wy_0), 2.0f * (yz_0 - wx_0), 1.0f - 2.0f * (x2_0 + y2_0)));
 }
 
@@ -1272,21 +1267,16 @@ inline __device__ void covarW2C(Matrix<float, 3, 3>  R_1, Matrix<float, 3, 3>  c
 
 inline __device__ void quat_scale_to_covar(float4  quat_3, float3  scale_0, Matrix<float, 3, 3>  * covar_0)
 {
-    float x_18 = quat_3.y;
-    float inv_norm_1 = (F32_rsqrt((x_18 * x_18 + quat_3.z * quat_3.z + quat_3.w * quat_3.w + quat_3.x * quat_3.x)));
-    float x_19 = quat_3.y * inv_norm_1;
-    float y_10 = quat_3.z * inv_norm_1;
-    float z_3 = quat_3.w * inv_norm_1;
-    float w_1 = quat_3.x * inv_norm_1;
-    float x2_1 = x_19 * x_19;
-    float y2_1 = y_10 * y_10;
-    float z2_1 = z_3 * z_3;
-    float xy_1 = x_19 * y_10;
-    float xz_1 = x_19 * z_3;
-    float yz_1 = y_10 * z_3;
-    float wx_1 = w_1 * x_19;
-    float wy_1 = w_1 * y_10;
-    float wz_1 = w_1 * z_3;
+    float x_17 = quat_3.y;
+    float x2_1 = x_17 * x_17;
+    float y2_1 = quat_3.z * quat_3.z;
+    float z2_1 = quat_3.w * quat_3.w;
+    float xy_1 = quat_3.y * quat_3.z;
+    float xz_1 = quat_3.y * quat_3.w;
+    float yz_1 = quat_3.z * quat_3.w;
+    float wx_1 = quat_3.x * quat_3.y;
+    float wy_1 = quat_3.x * quat_3.z;
+    float wz_1 = quat_3.x * quat_3.w;
     Matrix<float, 3, 3>  M_0 = mul_1(transpose_0(makeMatrix<float, 3, 3> (1.0f - 2.0f * (y2_1 + z2_1), 2.0f * (xy_1 + wz_1), 2.0f * (xz_1 - wy_1), 2.0f * (xy_1 - wz_1), 1.0f - 2.0f * (x2_1 + z2_1), 2.0f * (yz_1 + wx_1), 2.0f * (xz_1 + wy_1), 2.0f * (yz_1 - wx_1), 1.0f - 2.0f * (x2_1 + y2_1))), makeMatrix<float, 3, 3> (scale_0.x, 0.0f, 0.0f, 0.0f, scale_0.y, 0.0f, 0.0f, 0.0f, scale_0.z));
     *covar_0 = mul_1(M_0, transpose_0(M_0));
     return;
@@ -1294,21 +1284,16 @@ inline __device__ void quat_scale_to_covar(float4  quat_3, float3  scale_0, Matr
 
 inline __device__ void quat_scale_to_sqrt_covar(float4  quat_4, float3  scale_1, Matrix<float, 3, 3>  * M_1)
 {
-    float x_20 = quat_4.y;
-    float inv_norm_2 = (F32_rsqrt((x_20 * x_20 + quat_4.z * quat_4.z + quat_4.w * quat_4.w + quat_4.x * quat_4.x)));
-    float x_21 = quat_4.y * inv_norm_2;
-    float y_11 = quat_4.z * inv_norm_2;
-    float z_4 = quat_4.w * inv_norm_2;
-    float w_2 = quat_4.x * inv_norm_2;
-    float x2_2 = x_21 * x_21;
-    float y2_2 = y_11 * y_11;
-    float z2_2 = z_4 * z_4;
-    float xy_2 = x_21 * y_11;
-    float xz_2 = x_21 * z_4;
-    float yz_2 = y_11 * z_4;
-    float wx_2 = w_2 * x_21;
-    float wy_2 = w_2 * y_11;
-    float wz_2 = w_2 * z_4;
+    float x_18 = quat_4.y;
+    float x2_2 = x_18 * x_18;
+    float y2_2 = quat_4.z * quat_4.z;
+    float z2_2 = quat_4.w * quat_4.w;
+    float xy_2 = quat_4.y * quat_4.z;
+    float xz_2 = quat_4.y * quat_4.w;
+    float yz_2 = quat_4.z * quat_4.w;
+    float wx_2 = quat_4.x * quat_4.y;
+    float wy_2 = quat_4.x * quat_4.z;
+    float wz_2 = quat_4.x * quat_4.w;
     *M_1 = mul_1(transpose_0(makeMatrix<float, 3, 3> (1.0f - 2.0f * (y2_2 + z2_2), 2.0f * (xy_2 + wz_2), 2.0f * (xz_2 - wy_2), 2.0f * (xy_2 - wz_2), 1.0f - 2.0f * (x2_2 + z2_2), 2.0f * (yz_2 + wx_2), 2.0f * (xz_2 + wy_2), 2.0f * (yz_2 - wx_2), 1.0f - 2.0f * (x2_2 + y2_2))), makeMatrix<float, 3, 3> (scale_1.x, 0.0f, 0.0f, 0.0f, scale_1.y, 0.0f, 0.0f, 0.0f, scale_1.z));
     return;
 }
@@ -1468,9 +1453,9 @@ inline __device__ float2  undistort_point_0(float2  uv_0, CameraDistortion_0 * d
     return q_0;
 }
 
-inline __device__ float3  normalize_0(float3  x_22)
+inline __device__ float3  normalize_0(float3  x_19)
 {
-    return x_22 / make_float3 (length_2(x_22));
+    return x_19 / make_float3 (length_2(x_19));
 }
 
 inline __device__ void generate_ray(Matrix<float, 3, 3>  R_2, float3  t_1, float2  uv_1, bool is_fisheye_0, float4  radial_coeffs_1, float2  tangential_coeffs_1, float2  thin_prism_coeffs_1, float3  * ray_o_0, float3  * ray_d_0)

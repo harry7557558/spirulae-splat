@@ -136,7 +136,7 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
         uint32_t idx = batch_start + tr;
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [I * N] or [nnz]
-            splat_batch[tr] = SplatPrimitive::WorldEval3D::load(splat_buffer, g);
+            splat_batch[tr] = SplatPrimitive::WorldEval3D::loadWithPrecompute(splat_buffer, g);
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -169,7 +169,7 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     if (inside) {
         render_Ts[pix_id] = T;
         // TODO: blend background
-        pix_out.saveBuffer(render_colors, image_id * image_height * image_width + pix_id);
+        pix_out.saveParamsToBuffer(render_colors, image_id * image_height * image_width + pix_id);
         // index in bin of last gaussian in this pixel
         last_ids[pix_id] = static_cast<int32_t>(cur_idx);
     }

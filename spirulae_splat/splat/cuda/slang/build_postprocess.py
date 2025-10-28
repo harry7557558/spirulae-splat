@@ -10,6 +10,7 @@ def process(src: str):
     for i, line in enumerate(src):
         if line.startswith('__device__') and 'inline' not in line:
             line = 'inline ' + line  # make linker happy
+            # line = '__forceinline__ ' + line  # why?
         if line.strip().startswith("static_assert(false,"):
             line = "//" + line
         src[i] = line

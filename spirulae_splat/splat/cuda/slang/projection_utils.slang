@@ -11,14 +11,8 @@ enum CameraModelType {
 [CudaDeviceExport]
 [ForceInline]
 [Differentiable]
-float3x3 quat_to_rotmat(const float4 quat) {
+float3x3 normalized_quat_to_rotmat(const float4 quat) {
     float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
-    // normalize
-    float inv_norm = rsqrt(x * x + y * y + z * z + w * w);
-    x *= inv_norm;
-    y *= inv_norm;
-    z *= inv_norm;
-    w *= inv_norm;
     float x2 = x * x, y2 = y * y, z2 = z * z;
     float xy = x * y, xz = x * z, yz = y * z;
     float wx = w * x, wy = w * y, wz = w * z;
@@ -66,7 +60,7 @@ void quat_scale_to_covar(
     const float3 scale,
     out float3x3 covar
 ) {
-    float3x3 R = quat_to_rotmat(quat);
+    float3x3 R = normalized_quat_to_rotmat(quat);
     // C = R * S * S * Rt
     float3x3 S = float3x3(scale[0], 0.f, 0.f, 0.f, scale[1], 0.f, 0.f, 0.f, scale[2]);
     float3x3 M = mul(R, S);
@@ -81,7 +75,7 @@ void quat_scale_to_sqrt_covar(
     const float3 scale,
     out float3x3 M
 ) {
-    float3x3 R = quat_to_rotmat(quat);
+    float3x3 R = normalized_quat_to_rotmat(quat);
     float3x3 S = float3x3(scale[0], 0.f, 0.f, 0.f, scale[1], 0.f, 0.f, 0.f, scale[2]);
     M = mul(R, S);
 }

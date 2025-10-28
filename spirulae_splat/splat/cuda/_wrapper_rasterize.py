@@ -316,6 +316,8 @@ class _RasterizeToPixels3DGSEval3D(torch.autograd.Function):
         features_sh: Tensor,  # [..., N, x, 3]
         # proj outputs
         depths: Tensor,  # [..., N, 1] or [nnz, 1]
+        proj_scales: Tensor,  # [..., N, 3]
+        proj_opacities: Tensor,  # [..., N]
         colors: Tensor,  # [..., N, channels] or [nnz, channels]
         # rest
         backgrounds: Tensor,  # [..., channels], Optional
@@ -343,14 +345,14 @@ class _RasterizeToPixels3DGSEval3D(torch.autograd.Function):
         (render_rgbs, render_depths), render_Ts, last_ids = _make_lazy_cuda_func(
             "rasterization_3dgs_eval3d_forward"
         )(
-            (means, quats, scales, opacities, depths, colors),
+            (means, quats, depths, proj_scales, proj_opacities, colors),
             viewmats, Ks, camera_model, (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
             backgrounds, masks,
             width, height, tile_size, isect_offsets, flatten_ids,
         )
 
         ctx.save_for_backward(
-            means, quats, scales, opacities, depths, colors,
+            means, quats, depths, proj_scales, proj_opacities, colors,
             viewmats, Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
             backgrounds, masks,
             isect_offsets, flatten_ids, render_Ts, last_ids,
@@ -371,7 +373,7 @@ class _RasterizeToPixels3DGSEval3D(torch.autograd.Function):
         v_render_alphas: Tensor,  # [..., H, W, 1]
     ):
         (
-            means, quats, scales, opacities, depths, colors,
+            means, quats, depths, proj_scales, proj_opacities, colors,
             viewmats, Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
             backgrounds, masks,
             isect_offsets, flatten_ids, render_Ts, last_ids,
@@ -381,10 +383,10 @@ class _RasterizeToPixels3DGSEval3D(torch.autograd.Function):
         tile_size = ctx.tile_size
 
         (
-            (v_means, v_quats, v_scales, v_opacities, v_depths, v_colors),
+            (v_means, v_quats, v_depths, v_proj_scales, v_proj_opacities, v_colors),
             v_viewmats,
         ) = _make_lazy_cuda_func("rasterization_3dgs_eval3d_backward")(
-            (means, quats, scales, opacities, depths, colors),
+            (means, quats, depths, proj_scales, proj_opacities, colors),
             viewmats, Ks, ctx.camera_model, (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
             backgrounds, masks,
             width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids,
@@ -393,13 +395,14 @@ class _RasterizeToPixels3DGSEval3D(torch.autograd.Function):
         )
 
         v_backgrounds = None
-        if ctx.needs_input_grad[8]:
+        if ctx.needs_input_grad[10]:
             v_backgrounds = (torch.cat([v_render_rgbs, v_render_depths], dim=-1) * \
                              render_Ts.float()).sum(dim=(-3, -2))
 
         return (
-            v_means, v_quats, v_scales, v_opacities, None, None, v_depths, v_colors, v_backgrounds,
-            *([None]*(len(ctx.needs_input_grad)-9))
+            v_means, v_quats, None, None, None, None,
+            v_depths, v_proj_scales, v_proj_opacities, v_colors, v_backgrounds,
+            *([None]*(len(ctx.needs_input_grad)-11))
         )
 
 

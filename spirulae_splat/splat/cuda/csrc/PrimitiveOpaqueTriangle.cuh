@@ -2,7 +2,7 @@
 
 #ifdef __CUDACC__
 #define TensorView _Slang_TensorView
-#include "generated/projection.cu"
+#include "generated/primitive.cu"
 #undef TensorView
 #endif
 
@@ -246,7 +246,7 @@ struct OpaqueTriangle::World {
         warpSum(ch_coeffs[1], partition);
     }
     
-    __device__ void atomicAddBuffer(Buffer &buffer, long idx) {
+    __device__ void atomicAddGradientToBuffer(Buffer &buffer, long idx) {
         atomicAddFVec(buffer.means + idx, mean);
         atomicAddFVec(buffer.quats + idx, quat);
         atomicAddFVec(buffer.scales + idx, scale);
@@ -367,7 +367,7 @@ struct OpaqueTriangle::RenderOutput {
             + (normal.x * other.normal.x + normal.y * other.normal.y + normal.z * other.normal.z);
     }
 
-    __device__ void saveBuffer(Buffer &buffer, long idx) {
+    __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
         buffer.rgbs[idx] = rgb;
         buffer.depths[idx] = depth;
         buffer.normals[idx] = normal;
@@ -519,7 +519,7 @@ struct OpaqueTriangle::Screen {
         absgrad += fabs(other.vert0 + other.vert1 + other.vert2) / 3.0f;
     }
 
-    __device__ void saveBuffer(Buffer &buffer, long idx) {
+    __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
         buffer.vertices[3*idx+0] = vert0;
         buffer.vertices[3*idx+1] = vert2;
         buffer.vertices[3*idx+2] = vert1;
@@ -533,7 +533,7 @@ struct OpaqueTriangle::Screen {
             buffer.absgrad[idx] = absgrad;
     }
 
-    __device__ void atomicAddBuffer(Buffer &buffer, long idx) {
+    __device__ void atomicAddGradientToBuffer(Buffer &buffer, long idx) {
         atomicAddFVec(buffer.vertices + 3*idx+0, vert0);
         atomicAddFVec(buffer.vertices + 3*idx+1, vert1);
         atomicAddFVec(buffer.vertices + 3*idx+2, vert2);
@@ -716,6 +716,10 @@ struct OpaqueTriangle::WorldEval3D {
         };
     }
 
+    static __device__ __forceinline__ WorldEval3D loadWithPrecompute(const Buffer &buffer, long idx) {
+        return WorldEval3D::load(buffer, idx);
+    }
+
     static __device__ __forceinline__ WorldEval3D zero() {
         return {
             {0.f, 0.f},
@@ -737,7 +741,7 @@ struct OpaqueTriangle::WorldEval3D {
         normal += other.normal;
     }
 
-    __device__ void saveBuffer(Buffer &buffer, long idx) {
+    __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
         if (buffer.hardness) buffer.hardness[idx % buffer.size] = hardness;
         buffer.depths[idx] = depth;
         #pragma unroll
@@ -748,15 +752,15 @@ struct OpaqueTriangle::WorldEval3D {
         buffer.normals[idx] = normal;
     }
 
-    __device__ void atomicAddBuffer(Buffer &buffer, long idx) {
-        atomicAddFVec(buffer.hardness + idx % buffer.size, hardness);
-        atomicAddFVec(buffer.depths + idx, depth);
+    __device__ void atomicAddGradientToBuffer(const WorldEval3D &grad, Buffer &buffer, long idx) const {
+        atomicAddFVec(buffer.hardness + idx % buffer.size, grad.hardness);
+        atomicAddFVec(buffer.depths + idx, grad.depth);
         #pragma unroll
         for (int i = 0; i < 3; i++) {
-            atomicAddFVec(buffer.verts + 3*idx+i, verts[i]);
-            atomicAddFVec(buffer.rgbs + 3*idx+i, rgbs[i]);
+            atomicAddFVec(buffer.verts + 3*idx+i, grad.verts[i]);
+            atomicAddFVec(buffer.rgbs + 3*idx+i, grad.rgbs[i]);
         }
-        atomicAddFVec(buffer.normals + idx, normal);
+        atomicAddFVec(buffer.normals + idx, grad.normal);
     }
 
     __device__ __forceinline__ float evaluate_alpha(float3 ray_o, float3 ray_d) {

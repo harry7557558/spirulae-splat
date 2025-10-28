@@ -63,7 +63,7 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
     float sx = exp(scale.x),
         sy = exp(scale.y),
         sz = scale.z - 0.5*(scale.x+scale.y);
-    float3x3 M = quat_to_rotmat(quat);
+    float3x3 M = normalized_quat_to_rotmat(quat);
     float3 vert0 = mul(M, float3(sx, 0, 0)) + mean;
     float3 vert1 = mul(M, float3(sx*(-0.5+sz), sy, 0)) + mean;
     float3 vert2 = mul(M, float3(sx*(-0.5-sz), -sy, 0)) + mean;

@@ -144,7 +144,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     if (inside) {
         render_Ts[pix_id] = T;
         // TODO: blend background
-        pix_out.saveBuffer(render_colors, image_id * image_height * image_width + pix_id);
+        pix_out.saveParamsToBuffer(render_colors, image_id * image_height * image_width + pix_id);
         // index in bin of last gaussian in this pixel
         last_ids[pix_id] = static_cast<int32_t>(cur_idx);
     }

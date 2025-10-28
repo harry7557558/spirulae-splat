@@ -85,7 +85,7 @@ __global__ void projection_fused_fwd_kernel(
 
     // Save results
     if ((aabb.z-aabb.x)*(aabb.w-aabb.y) > 0) {
-        splat_screen.saveBuffer(splats_screen, idx);
+        splat_screen.saveParamsToBuffer(splats_screen, idx);
         aabbs[idx] = aabb;
     } else {
         aabbs[idx] = {0, 0, 0, 0};
@@ -170,7 +170,7 @@ __global__ void projection_fused_bwd_kernel(
     // Save results
     auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
     auto warp_group_g = cg::labeled_partition(warp, gid);
-    v_splat_world.atomicAddBuffer(v_splats_world, bid * N + gid);
+    v_splat_world.atomicAddGradientToBuffer(v_splats_world, bid * N + gid);
 
     if (v_viewmats != nullptr) {
         auto warp_group_c = cg::labeled_partition(warp, cid);

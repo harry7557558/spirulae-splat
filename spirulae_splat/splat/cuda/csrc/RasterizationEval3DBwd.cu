@@ -11,7 +11,7 @@
 
 
 constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
-constexpr uint SPLAT_BATCH_SIZE = 128;
+constexpr uint SPLAT_BATCH_SIZE = WARP_SIZE;
 
 
 template <typename SplatPrimitive, gsplat::CameraModelType camera_model>
@@ -85,11 +85,12 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         dist_coeffs.thin_prism_coeffs[image_id] : make_float2(0.0f);
 
     // load pixels
-    __shared__ int32_t pix_bin_final[BLOCK_SIZE];
+    __shared__ float4 shared_ray_d_pix_bin_final[BLOCK_SIZE];
     __shared__ float2 pix_Ts_with_grad[BLOCK_SIZE];
     __shared__ typename SplatPrimitive::RenderOutput v_pix_colors[BLOCK_SIZE];
-    __shared__ float3 rays[BLOCK_SIZE][2];
     // __shared__ float pix_background[CDIM];  // TODO
+
+    float3 ray_o;
 
     #pragma unroll
     for (uint pix_id0 = 0; pix_id0 < BLOCK_SIZE; pix_id0 += SPLAT_BATCH_SIZE) {
@@ -101,7 +102,6 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         bool inside = (pix_x < image_width && pix_y < image_height);
         
         int32_t bin_final = (inside ? last_ids[pix_id_global] : 0);
-        pix_bin_final[pix_id_local] = bin_final;
         pix_Ts_with_grad[pix_id_local] = {
             (inside ? render_Ts[pix_id_global] : 0.0f),
             (inside ? -v_render_alphas[pix_id_global] : 0.0f)
@@ -113,11 +113,14 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
 
         const float px = (float)pix_x + 0.5f;
         const float py = (float)pix_y + 0.5f;
+        float3 ray_d;
         generate_ray(
             R, t, {(px-cx)/fx, (py-cy)/fy}, camera_model == gsplat::CameraModelType::FISHEYE,
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,
-            &rays[pix_id_local][0], &rays[pix_id_local][1]
+            &ray_o, &ray_d
         );
+        shared_ray_d_pix_bin_final[pix_id_local] =
+            {ray_d.x, ray_d.y, ray_d.z, __int_as_float(bin_final)};
     }
     // static_assert(CDIM <= SPLAT_BATCH_SIZE);
     // if (thread_id < CDIM && backgrounds != nullptr)
@@ -147,7 +150,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         uint32_t splat_gid;
         if (splat_idx >= range_start) {
             splat_gid = flatten_ids[splat_idx]; // flatten index in [I * N] or [nnz]
-            splat = SplatPrimitive::WorldEval3D::load(splat_buffer, splat_gid);
+            splat = SplatPrimitive::WorldEval3D::loadWithPrecompute(splat_buffer, splat_gid);
         }
 
         // accumulate gradient
@@ -160,24 +163,19 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
 
         // process gaussians in the current batch for this pixel
         // 0 index is the furthest back gaussian in the batch
-        for (int t = 0; t < splat_batch_size + BLOCK_SIZE - 1; ++t) {
+        for (int t = 0; t < splat_batch_size + BLOCK_SIZE - 1; ++t, __syncwarp()) {
             int pix_id = t - thread_id;
-
-            int pix_local_x = pix_id % TILE_SIZE;
-            int pix_local_y = pix_id / TILE_SIZE;
-            int pix_global_x = block.group_index().z * TILE_SIZE + pix_local_x;
-            int pix_global_y = block.group_index().y * TILE_SIZE + pix_local_y;
-            if ((pix_id >= 0 && pix_id < BLOCK_SIZE &&
-                pix_global_x < image_width && pix_global_y < image_height &&
-                splat_idx >= range_start) &&
-                splat_idx <= pix_bin_final[pix_id]
-            ) {
-            float3 ray_o = rays[pix_id][0];
-            float3 ray_d = rays[pix_id][1];
+            if (pix_id < 0 || pix_id >= BLOCK_SIZE || splat_idx < range_start)
+                continue;
+            float4 ray_d_pix_bin_final = shared_ray_d_pix_bin_final[pix_id];
+            if (splat_idx > __float_as_int(ray_d_pix_bin_final.w))
+                continue;
 
             // evaluate alpha and early skip
+            float3 ray_d = {ray_d_pix_bin_final.x, ray_d_pix_bin_final.y, ray_d_pix_bin_final.z};
             float alpha = splat.evaluate_alpha(ray_o, ray_d);
-            if (alpha >= ALPHA_THRESHOLD) {
+            if (alpha <= ALPHA_THRESHOLD)
+                continue;
 
             // printf("t=%d, thread %u, splat %d (%u), pix_id %d, pix %d %d\n", t, thread_id, splat_idx-range_start, splat_gid, pix_id, pix_global_x, pix_global_y);
 
@@ -221,13 +219,11 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
             pix_Ts_with_grad[pix_id] = { T0, v_T0 };
             // v_pix_colors remains the same
 
-            }}
-            block.sync();
         }
 
         // accumulate gradient
         if (splat_idx >= range_start)
-            v_splat.atomicAddBuffer(v_splat_buffer, splat_gid);
+            splat.atomicAddGradientToBuffer(v_splat, v_splat_buffer, splat_gid);
     }
     // TODO: gradient to viewmat
 }

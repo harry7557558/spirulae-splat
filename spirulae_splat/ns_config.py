@@ -174,7 +174,7 @@ spirulae_triangle = MethodSpecification(
                 # supersampling=2,
                 mcmc_min_opacity=0.01,
                 mcmc_noise_lr=1e3,  # or 0.0
-                mcmc_max_screen_size=0.05,
+                # mcmc_max_screen_size=0.05,
             ),
             
         ),

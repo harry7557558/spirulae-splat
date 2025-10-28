@@ -205,7 +205,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
 
         // accumulate gradient
         if (splat_idx >= range_start)
-            v_splat.atomicAddBuffer(v_splat_buffer, splat_gid);
+            v_splat.atomicAddGradientToBuffer(v_splat_buffer, splat_gid);
     }
 }
 

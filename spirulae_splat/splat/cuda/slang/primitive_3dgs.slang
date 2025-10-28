@@ -167,7 +167,7 @@ float add_blur(const float eps2d, inout float2x2 covar, out float compensation) 
 
 [ForceInline]
 [Differentiable]
-void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool>(
+void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, let eval3d: bool>(
     _projection_3dgs_ARGS
 ) {
 
@@ -267,7 +267,8 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool>(
     aabb_xyxy = {(int)xmin, (int)ymin, (int)xmax, (int)ymax};  // don't clamp
     // depth = mean_c.z;
     depth = length(mean_c);
-    conic = {covar2d_inv[0][0], covar2d_inv[0][1], covar2d_inv[1][1]};
+    conic = eval3d ? exp(-scale) :
+        float3(covar2d_inv[0][0], covar2d_inv[0][1], covar2d_inv[1][1]);
 
     float3 campos = -mul(transpose(R), t);
     sh_coeffs_to_color(mean - campos, sh_coeffs, rgb);
@@ -288,9 +289,11 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool>(
         ); \
     }
 
-_DEF_projection_3dgs(projection_3dgs_persp, CameraModelType::PINHOLE, false)
-_DEF_projection_3dgs(projection_3dgs_fisheye, CameraModelType::FISHEYE, false)
-_DEF_projection_3dgs(projection_3dgs_ortho, CameraModelType::ORTHO, false)
+_DEF_projection_3dgs(projection_3dgs_persp, CameraModelType::PINHOLE, false, false)
+_DEF_projection_3dgs(projection_3dgs_fisheye, CameraModelType::FISHEYE, false, false)
+_DEF_projection_3dgs(projection_3dgs_ortho, CameraModelType::ORTHO, false, false)
+_DEF_projection_3dgs(projection_3dgs_eval3d_persp, CameraModelType::PINHOLE, false, true)
+_DEF_projection_3dgs(projection_3dgs_eval3d_fisheye, CameraModelType::FISHEYE, false, true)
 
 
 #define _projection_3dgs_vjp_ARGS \
@@ -324,134 +327,106 @@ _DEF_projection_3dgs(projection_3dgs_ortho, CameraModelType::ORTHO, false)
     out float3x3 v_R, \
     out float3 v_t
 
-_DEF_projection_3dgs(_projection_3dgs_persp_differentiable, CameraModelType::PINHOLE, true)
-_DEF_projection_3dgs(_projection_3dgs_fisheye_differentiable, CameraModelType::FISHEYE, true)
-_DEF_projection_3dgs(_projection_3dgs_ortho_differentiable, CameraModelType::ORTHO, true)
+_DEF_projection_3dgs(_projection_3dgs_persp_differentiable, CameraModelType::PINHOLE, true, false)
+_DEF_projection_3dgs(_projection_3dgs_fisheye_differentiable, CameraModelType::FISHEYE, true, false)
+_DEF_projection_3dgs(_projection_3dgs_ortho_differentiable, CameraModelType::ORTHO, true, false)
+_DEF_projection_3dgs(_projection_3dgs_eval3d_persp_differentiable, CameraModelType::PINHOLE, true, true)
+_DEF_projection_3dgs(_projection_3dgs_eval3d_fisheye_differentiable, CameraModelType::FISHEYE, true, true)
 
 
-[CudaDeviceExport]
-void projection_3dgs_persp_vjp(
-    _projection_3dgs_vjp_ARGS
-) {
-    DifferentialPair<float3> dp_mean = diffPair(mean);
-    DifferentialPair<float4> dp_quat = diffPair(quat);
-    DifferentialPair<float3> dp_scale = diffPair(scale);
-    DifferentialPair<float> dp_in_opacity = diffPair(in_opacity);
-    DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);
-    DifferentialPair<float3x3> dp_R = diffPair(R);
-    DifferentialPair<float3> dp_t = diffPair(t);
-    bwd_diff(_projection_3dgs_persp_differentiable)(
-        antialiased,
-        dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
-        fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
-        image_width, image_height, 0.0f, 1e30f,
-        v_mean2d, v_depth, v_conic, v_opacity, v_rgb
-    );
-    v_mean = dp_mean.d;
-    v_quat = dp_quat.d;
-    v_scale = dp_scale.d;
-    v_in_opacity = dp_in_opacity.d;
-    v_sh_coeffs = dp_sh_coeffs.d;
-    v_R = dp_R.d;
-    v_t = dp_t.d;
-}
+#define _DEF_projection_3dgs_vjp(funname, fwd_funname, ...) \
+    [CudaDeviceExport] \
+    void funname( \
+        _projection_3dgs_vjp_ARGS \
+    ) { \
+        DifferentialPair<float3> dp_mean = diffPair(mean); \
+        DifferentialPair<float4> dp_quat = diffPair(quat); \
+        DifferentialPair<float3> dp_scale = diffPair(scale); \
+        DifferentialPair<float> dp_in_opacity = diffPair(in_opacity); \
+        DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs); \
+        DifferentialPair<float3x3> dp_R = diffPair(R); \
+        DifferentialPair<float3> dp_t = diffPair(t); \
+        bwd_diff(fwd_funname)( \
+            antialiased, \
+            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t, \
+            fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs, \
+            image_width, image_height, 0.0f, 1e30f, \
+            v_mean2d, v_depth, v_conic, v_opacity, v_rgb \
+        ); \
+        v_mean = dp_mean.d; \
+        v_quat = dp_quat.d; \
+        v_scale = dp_scale.d; \
+        v_in_opacity = dp_in_opacity.d; \
+        v_sh_coeffs = dp_sh_coeffs.d; \
+        v_R = dp_R.d; \
+        v_t = dp_t.d; \
+    }
 
-[CudaDeviceExport]
-void projection_3dgs_fisheye_vjp(
-    _projection_3dgs_vjp_ARGS
-) {
-    DifferentialPair<float3> dp_mean = diffPair(mean);
-    DifferentialPair<float4> dp_quat = diffPair(quat);
-    DifferentialPair<float3> dp_scale = diffPair(scale);
-    DifferentialPair<float> dp_in_opacity = diffPair(in_opacity);
-    DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);
-    DifferentialPair<float3x3> dp_R = diffPair(R);
-    DifferentialPair<float3> dp_t = diffPair(t);
-    bwd_diff(_projection_3dgs_fisheye_differentiable)(
-        antialiased,
-        dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
-        fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
-        image_width, image_height, 0.0f, 1e30f,
-        v_mean2d, v_depth, v_conic, v_opacity, v_rgb
-    );
-    v_mean = dp_mean.d;
-    v_quat = dp_quat.d;
-    v_scale = dp_scale.d;
-    v_in_opacity = dp_in_opacity.d;
-    v_sh_coeffs = dp_sh_coeffs.d;
-    v_R = dp_R.d;
-    v_t = dp_t.d;
-}
-
-[CudaDeviceExport]
-void projection_3dgs_ortho_vjp(
-    _projection_3dgs_vjp_ARGS
-) {
-    DifferentialPair<float3> dp_mean = diffPair(mean);
-    DifferentialPair<float4> dp_quat = diffPair(quat);
-    DifferentialPair<float3> dp_scale = diffPair(scale);
-    DifferentialPair<float> dp_in_opacity = diffPair(in_opacity);
-    DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);
-    DifferentialPair<float3x3> dp_R = diffPair(R);
-    DifferentialPair<float3> dp_t = diffPair(t);
-    bwd_diff(_projection_3dgs_ortho_differentiable)(
-        antialiased,
-        dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
-        fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
-        image_width, image_height, 0.0f, 1e30f,
-        v_mean2d, v_depth, v_conic, v_opacity, v_rgb
-    );
-    v_mean = dp_mean.d;
-    v_quat = dp_quat.d;
-    v_scale = dp_scale.d;
-    v_in_opacity = dp_in_opacity.d;
-    v_sh_coeffs = dp_sh_coeffs.d;
-    v_R = dp_R.d;
-    v_t = dp_t.d;
-}
+_DEF_projection_3dgs_vjp(projection_3dgs_persp_vjp, _projection_3dgs_persp_differentiable)
+_DEF_projection_3dgs_vjp(projection_3dgs_fisheye_vjp, _projection_3dgs_fisheye_differentiable)
+_DEF_projection_3dgs_vjp(projection_3dgs_ortho_vjp, _projection_3dgs_ortho_differentiable)
+_DEF_projection_3dgs_vjp(projection_3dgs_eval3d_persp_vjp, _projection_3dgs_eval3d_persp_differentiable)
+_DEF_projection_3dgs_vjp(projection_3dgs_eval3d_fisheye_vjp, _projection_3dgs_eval3d_fisheye_differentiable)
 
 
 [CudaDeviceExport]
 [Differentiable]
+float3x3 compute_3dgut_iscl_rot(float4 quat, float3 scale) {
+    float3x3 R = normalized_quat_to_rotmat(quat);
+    float3x3 S = float3x3(
+        scale.x, 0.f, 0.f,
+        0.f, scale.y, 0.f,
+        0.f, 0.f, scale.z
+    );
+    return mul(S, transpose(R));
+}
+
+[CudaDeviceExport]
+void compute_3dgut_iscl_rot_vjp(
+    float4 quat, float3 scale,
+    float3x3 v_iscl_rot,
+    out float4 v_quat, out float3 v_scale
+) {
+    DifferentialPair<float4> dp_quat = diffPair(quat);
+    DifferentialPair<float3> dp_scale = diffPair(scale);
+    bwd_diff(compute_3dgut_iscl_rot)(
+        dp_quat, dp_scale, v_iscl_rot
+    );
+    v_quat = dp_quat.d;
+    v_scale = dp_scale.d;
+}
+
+[CudaDeviceExport]
+[Differentiable]
 float evaluate_alpha_3dgs(
-    float3 mean, float4 quat, float3 scale, float opacity,
+    float3 mean, float3x3 iscl_rot, float opacity,
     float3 ray_o, float3 ray_d
 ) {
-    float3x3 R = quat_to_rotmat(quat);
-    float3x3 S = float3x3(
-        exp(-scale.x), 0.f, 0.f,
-        0.f, exp(-scale.y), 0.f,
-        0.f, 0.f, exp(-scale.z)
-    );
-    float3x3 iscl_rot = mul(S, transpose(R));
-
     float3 gro = mul(iscl_rot, (ray_o - mean));
-    float3 grd = normalize(mul(iscl_rot, ray_d));
+    float3 grd = mul(iscl_rot, ray_d);
     float3 gcrod = cross(grd, gro);
-    float val = exp(-0.5f * dot(gcrod, gcrod));
-    return val / (1.0 + exp(-opacity));
+    float val = exp(-0.5f * dot(gcrod, gcrod) / dot(grd, grd));
+    return opacity * val;
 }
 
 [CudaDeviceExport]
 void evaluate_alpha_3dgs_vjp(
-    float3 mean, float4 quat, float3 scale, float opacity,
+    float3 mean, float3x3 iscl_rot, float opacity,
     float3 ray_o, float3 ray_d, float v_alpha,
-    out float3 v_mean, out float4 v_quat, out float3 v_scale, out float v_opacity,
+    out float3 v_mean, out float3x3 v_iscl_rot, out float v_opacity,
     out float3 v_ray_o, out float3 v_ray_d
 ) {
     DifferentialPair<float3> dp_mean = diffPair(mean);
-    DifferentialPair<float4> dp_quat = diffPair(quat);
-    DifferentialPair<float3> dp_scale = diffPair(scale);
+    DifferentialPair<float3x3> dp_iscl_rot = diffPair(iscl_rot);
     DifferentialPair<float> dp_opacity = diffPair(opacity);
     DifferentialPair<float3> dp_ray_o = diffPair(ray_o);
     DifferentialPair<float3> dp_ray_d = diffPair(ray_d);
     bwd_diff(evaluate_alpha_3dgs)(
-        dp_mean, dp_quat, dp_scale, dp_opacity,
+        dp_mean, dp_iscl_rot, dp_opacity,
         dp_ray_o, dp_ray_d, v_alpha
     );
     v_mean = dp_mean.d;
-    v_quat = dp_quat.d;
-    v_scale = dp_scale.d;
+    v_iscl_rot = dp_iscl_rot.d;
     v_opacity = dp_opacity.d;
     v_ray_o = dp_ray_o.d;
     v_ray_d = dp_ray_d.d;
@@ -460,7 +435,7 @@ void evaluate_alpha_3dgs_vjp(
 [CudaDeviceExport]
 [Differentiable]
 void evaluate_color_3dgs(
-    float3 mean, float4 quat, float3 scale, float opacity, float3 rgb,
+    float3 mean, float3x3 iscl_rot, float opacity, float3 rgb,
     float3 ray_o, float3 ray_d,
     out float3 out_rgb, out float depth
 ) {
@@ -470,25 +445,23 @@ void evaluate_color_3dgs(
 
 [CudaDeviceExport]
 void evaluate_color_3dgs_vjp(
-    float3 mean, float4 quat, float3 scale, float opacity, float3 rgb,
+    float3 mean, float3x3 iscl_rot, float opacity, float3 rgb,
     float3 ray_o, float3 ray_d, float3 v_out_rgb, float v_depth,
-    out float3 v_mean, out float4 v_quat, out float3 v_scale, out float v_opacity, out float3 v_rgb,
+    out float3 v_mean, out float3x3 v_iscl_rot, out float v_opacity, out float3 v_rgb,
     out float3 v_ray_o, out float3 v_ray_d
 ) {
     DifferentialPair<float3> dp_mean = diffPair(mean);
-    DifferentialPair<float4> dp_quat = diffPair(quat);
-    DifferentialPair<float3> dp_scale = diffPair(scale);
+    DifferentialPair<float3x3> dp_iscl_rot = diffPair(iscl_rot);
     DifferentialPair<float> dp_opacity = diffPair(opacity);
     DifferentialPair<float3> dp_rgb = diffPair(rgb);
     DifferentialPair<float3> dp_ray_o = diffPair(ray_o);
     DifferentialPair<float3> dp_ray_d = diffPair(ray_d);
     bwd_diff(evaluate_color_3dgs)(
-        dp_mean, dp_quat, dp_scale, dp_opacity, dp_rgb,
+        dp_mean, dp_iscl_rot, dp_opacity, dp_rgb,
         dp_ray_o, dp_ray_d, v_out_rgb, v_depth
     );
     v_mean = dp_mean.d;
-    v_quat = dp_quat.d;
-    v_scale = dp_scale.d;
+    v_iscl_rot = dp_iscl_rot.d;
     v_opacity = dp_opacity.d;
     v_rgb = dp_rgb.d;
     v_ray_o = dp_ray_o.d;

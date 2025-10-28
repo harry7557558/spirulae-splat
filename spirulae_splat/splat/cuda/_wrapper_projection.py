@@ -361,7 +361,7 @@ class _FullyFusedProjection3DGSEval3D(torch.autograd.Function):
             f"CameraModelType.{camera_model.upper()}"
         )
 
-        aabb, (depths, proj_rgbs) = _make_lazy_cuda_func(
+        aabb, (depths, proj_scales, proj_opacities, proj_rgbs) = _make_lazy_cuda_func(
             "projection_ewa_3dgs_eval3d_forward"
         )(
             (means, quats, scales, opacities, features_dc, features_sh),
@@ -375,17 +375,17 @@ class _FullyFusedProjection3DGSEval3D(torch.autograd.Function):
         ctx.camera_model_type = camera_model_type
         ctx.dist_coeffs = dist_coeffs
 
-        return aabb, depths, proj_rgbs
+        return aabb, depths, proj_scales, proj_opacities, proj_rgbs
 
     @staticmethod
-    def backward(ctx, v_aabb, v_depths, v_proj_rgbs):
+    def backward(ctx, v_aabb, v_depths, v_proj_scales, v_proj_opacities, v_proj_rgbs):
         means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks, aabb = ctx.saved_tensors
         (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh), v_viewmats = _make_lazy_cuda_func(
             "projection_ewa_3dgs_eval3d_backward"
         )(
             (means, quats, scales, opacities, features_dc, features_sh),
             viewmats, Ks, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs, aabb,
-            tuple([x.contiguous() for x in (v_depths, v_proj_rgbs)]),
+            tuple([x.contiguous() for x in (v_depths, v_proj_scales, v_proj_opacities, v_proj_rgbs)]),
             ctx.needs_input_grad[6],  # viewmats_requires_grad
         )
         if not ctx.needs_input_grad[6]:
