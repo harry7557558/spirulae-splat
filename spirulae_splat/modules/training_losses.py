@@ -18,6 +18,16 @@ from fused_ssim import fused_ssim
 from fused_bilagrid import BilateralGrid, slice, total_variation_loss
 
 
+def pearson_correlation_loss(y_pred, y_true):
+    y_pred_flat = y_pred.flatten()
+    y_true_flat = y_true.flatten()
+
+    stacked_data = torch.stack((y_pred_flat, y_true_flat))
+    correlation_matrix = torch.corrcoef(stacked_data)
+
+    return 1 - correlation_matrix[0, 1]
+
+
 class _MaskGradient(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, mask):
@@ -96,6 +106,19 @@ class SplatTrainingLosses(torch.nn.Module):
                 grid_Y=self.config.bilagrid_shape[1],
                 grid_W=self.config.bilagrid_shape[2],
             )
+        if self.config.use_bilateral_grid_for_geometry:
+            self.bil_grids_depth = BilateralGrid(
+                num=self.num_train_data,
+                grid_X=self.config.bilagrid_shape_geometry[0],
+                grid_Y=self.config.bilagrid_shape_geometry[1],
+                grid_W=self.config.bilagrid_shape_geometry[2],
+            )
+            self.bil_grids_normal = BilateralGrid(
+                num=self.num_train_data,
+                grid_X=self.config.bilagrid_shape_geometry[0],
+                grid_Y=self.config.bilagrid_shape_geometry[1],
+                grid_W=self.config.bilagrid_shape_geometry[2],
+            )
 
     def _get_downscale_factor(self):
         if self.training:
@@ -123,10 +146,10 @@ class SplatTrainingLosses(torch.nn.Module):
         gt_img = self._downscale_if_required(image)
         return gt_img
 
-    def apply_bilateral_grid(self, rgb: torch.Tensor, cam_idx: int, H: int, W: int) -> torch.Tensor:
+    def apply_bilateral_grid(self, bilagrid, rgb: torch.Tensor, cam_idx: int, H: int, W: int) -> torch.Tensor:
         """rgb must be clamped to 0-1"""
         out = slice(
-            bil_grids=self.bil_grids, rgb=rgb, xy=None,
+            bil_grids=bilagrid, rgb=rgb, xy=None,
             grid_idx=torch.tensor(cam_idx, device=rgb.device, dtype=torch.long)[:,None],
         )
         return out["rgb"]
@@ -146,11 +169,12 @@ class SplatTrainingLosses(torch.nn.Module):
             return image
 
     def get_2dgs_reg_weights(self):
-        weight_depth_reg = self.config.depth_reg_weight * \
-            min(self.step / max(self.config.depth_reg_warmup, 1), 1)
-        weight_normal_reg = self.config.normal_reg_weight * \
-            min(self.step / max(self.config.normal_reg_warmup, 1), 1)
-        return weight_depth_reg, weight_normal_reg
+        factor = min(self.step / max(self.config.distortion_reg_warmup, 1), 1)
+        weight_depth_reg = self.config.depth_reg_weight * factor
+        weight_normal_dist_reg = self.config.normal_distortion_reg_weight * factor
+        weight_rgb_dist_reg = self.config.rgb_distortion_reg_weight * factor
+        weight_normal_reg = self.config.normal_reg_weight * factor
+        return (weight_depth_reg, weight_normal_dist_reg, weight_rgb_dist_reg), weight_normal_reg
 
     def get_alpha_reg_weight(self):
         return self.config.alpha_reg_weight * \
@@ -213,14 +237,38 @@ class SplatTrainingLosses(torch.nn.Module):
         #                 outputs[key] = _MaskGradient.apply(outputs[key], camera_mask)
         device = outputs['rgb'].device
 
+        # apply bilateral grid
+        gt_depth = batch.get("depth", None).to(device)
+        gt_normal = batch.get("normal", None).to(device)
+        if self.config.use_bilateral_grid_for_geometry:
+            camera = outputs["camera"]
+            if camera.metadata is not None and "cam_idx" in camera.metadata:
+                # TODO: might not be the best way to use RGB bilagrid
+                if gt_normal is not None:
+                    B, H, W, C = gt_normal.shape
+                    gt_normal = self.apply_bilateral_grid(
+                        self.bil_grids_normal,
+                        0.5+0.5*gt_normal, camera.metadata["cam_idx"], H, W
+                    ) * 2.0 - 1.0
+                    gt_normal = F.normalize(gt_normal, dim=-1)
+                if gt_depth is not None:
+                    B, H, W, C = gt_depth.shape
+                    gt_depth = gt_depth / torch.mean(gt_depth, dim=(1, 2, 3))  # TODO: median might be better
+                    gt_depth = gt_depth / (gt_depth + 1.0)
+                    gt_depth = self.apply_bilateral_grid(
+                        self.bil_grids_depth,
+                        gt_depth.repeat(1, 1, 1, 3), camera.metadata["cam_idx"], H, W
+                    )[..., :1]
+                    gt_depth = gt_depth / (1.0 - gt_depth).clip(max=0.999)
+
         if self.config.fit == "rgb":
             gt_img_rgba = self.get_gt_img(batch["image"].to(device))
         elif self.config.fit == "depth":
-            gt_img_rgba = self.get_gt_img(batch["depth"].to(device))
+            gt_img_rgba = self.get_gt_img(gt_depth)
             gt_img_rgba = gt_img_rgba / gt_img_rgba.mean()
             gt_img_rgba = (gt_img_rgba / (1.0 + gt_img_rgba)).repeat(1, 1, 1, 3)
         elif self.config.fit in ["normal", "depth_normal"]:
-            gt_img_rgba = 0.5+0.5*self.get_gt_img(batch["normal"].to(device))
+            gt_img_rgba = 0.5+0.5*self.get_gt_img(gt_normal)
         gt_img = self.composite_with_background(gt_img_rgba, outputs["background"])
         pred_img = outputs["rgb"]
 
@@ -229,21 +277,6 @@ class SplatTrainingLosses(torch.nn.Module):
         if gt_img_rgba.shape[-1] == 4 and self.config.alpha_loss_weight > 0.0:
             alpha = gt_img_rgba[..., -1].unsqueeze(-1)
             alpha_loss = alpha_loss + SupervisionLosses.get_alpha_loss(outputs['alpha'], alpha)
-
-        # apply bilateral grid
-        if self.config.use_bilateral_grid and self.config.fit in ["depth", "normal"]:
-            camera = outputs["camera"]
-            if camera.metadata is not None and "cam_idx" in camera.metadata:
-                if self.config.fit in ["normal", "depth_normal"]:
-                    B, H, W, C = gt_img.shape
-                    gt_img = self.apply_bilateral_grid(
-                        gt_img, camera.metadata["cam_idx"], H, W
-                    )
-                    gt_img = F.normalize(gt_img * 2.0 - 1.0, dim=-1)
-                    batch["normal"] = gt_img
-                    gt_img = 0.5 + 0.5 * gt_img
-                elif self.config.fit == "depth":
-                    pass  # TODO
 
         # separate mask for dynamic objects, text, etc.
         # simply don't consider it when evaluating loss, unless theres's no alpha channel, where a cost is applied
@@ -265,40 +298,58 @@ class SplatTrainingLosses(torch.nn.Module):
 
         # depth supervision
         depth_supervision_loss, normal_supervision_loss, alpha_supervision_loss = 0.0, 0.0, 0.0
-        depth_reg, normal_reg = 0.0, 0.0
-        weight_depth_reg, weight_normal_reg = self.get_2dgs_reg_weights()
+        normal_reg = 0.0
+        (weight_depth_dist_reg, weight_normal_dist_reg, weight_rgb_dist_reg), weight_normal_reg = \
+            self.get_2dgs_reg_weights()
         if "depth" in batch and 'depth' in outputs \
                 and self.step > self.config.supervision_warmup \
                 and (self.config.depth_supervision_weight > 0.0 or \
                      self.config.alpha_supervision_weight > 0.0 or \
                     self.config.alpha_supervision_weight_under > 0.0
                 ):
-            if batch["depth"].ndim == 3:
-                batch["depth"] = batch["depth"].unsqueeze(-1)
-            batch_depth = self._downscale_if_required(batch["depth"].to(device))
+            if gt_depth.ndim == 3:
+                gt_depth = gt_depth.unsqueeze(-1)
+            batch_depth = self._downscale_if_required(gt_depth.to(device))
+
+            if self.config.depth_supervision_weight > 0.0 or \
+                    self.config.alpha_supervision_weight > 0.0 or \
+                    self.config.alpha_supervision_weight_under > 0.0:
+                # This works for Metric3D depth, not every model
+                batch_depth_original = batch_depth
+                if self.config.use_bilateral_grid_for_geometry:
+                    batch_depth_original = self._downscale_if_required(batch["depth"].to(device))
+                batch_alpha = (batch_depth_original < torch.amax(
+                    batch_depth_original, dim=(1,2,3), keepdims=True).detach().item())
 
             if self.config.depth_supervision_weight > 0.0:
                 output_depth = ray_depth_to_linear_depth(outputs["depth"], **outputs["camera_intrins"])
 
                 def normalize_depth(d):
                     d = torch.log(d.clip(min=1e-4))
-                    return (d - d.mean(dim=(0,1,2), keepdims=True)) / d.std(dim=(0,1,2), keepdims=True)
+                    mean_squared = (d*d * batch_alpha).sum((1, 2, 3)) / batch_alpha.sum((1, 2, 3))
+                    mean = (d * batch_alpha).sum((1, 2, 3)) / batch_alpha.sum((1, 2, 3))
+                    std = torch.sqrt((mean_squared - mean*mean).clip(min=1e-8))
+                    return (d - mean.reshape(1, 1, 1, -1)) / std.reshape(1, 1, 1, -1)
                 
-                batch_depth_n = normalize_depth(batch_depth)
-                output_depth_n = normalize_depth(output_depth)
+                # batch_alpha = batch_alpha.float()
+                # batch_depth_n = normalize_depth(batch_depth)
+                # output_depth_n = normalize_depth(output_depth)
+                # depth_supervision_loss = self.config.depth_supervision_weight * \
+                #     (torch.sum(batch_alpha * (batch_depth_n - output_depth_n)**2) / \
+                #         batch_alpha.sum()) ** 0.5
                 depth_supervision_loss = self.config.depth_supervision_weight * \
-                    torch.mean((batch_depth_n - output_depth_n)**2) ** 0.5
+                    pearson_correlation_loss(
+                        torch.log(batch_depth[batch_alpha].clip(min=1e-4)),
+                        torch.log(output_depth[batch_alpha].clip(min=1e-4))
+                    )
             
             if self.config.alpha_supervision_weight > 0.0 or \
                     self.config.alpha_supervision_weight_under > 0.0:
 
-                # This works for Metric3D depth, not every model
-                batch_alpha = (batch_depth < torch.amax(batch_depth, dim=(1,2,3), keepdims=True).detach().item())
-                batch_alpha = batch_alpha.float()
-
                 def alpha_loss_fun(x, y):
                     return F.binary_cross_entropy(torch.fmax(x, y), y, reduction="mean")
 
+                batch_alpha = batch_alpha.float()
                 alpha_supervision_loss = self.config.alpha_supervision_weight * \
                     alpha_loss_fun(outputs["alpha"], batch_alpha)
                 if self.config.alpha_supervision_weight_under > 0.0:
@@ -311,7 +362,7 @@ class SplatTrainingLosses(torch.nn.Module):
                 weight_normal_reg > 0.0) and \
                 ("normal" in batch or 'normal' in outputs or 'depth_normal' in outputs):
             if 'normal' in batch:
-                batch_normal = self._downscale_if_required(batch["normal"].to(device))
+                batch_normal = self._downscale_if_required(gt_normal.to(device))
             weight = 0
             normal_loss = lambda x, y : (1.0 - (x*y).sum(-1)).mean()
             # with reference image
@@ -332,6 +383,16 @@ class SplatTrainingLosses(torch.nn.Module):
                 normal_reg = weight_normal_reg * \
                     normal_loss(outputs["normal"], outputs["depth_normal"])
 
+        # distortion regularization
+        depth_dist_reg, normal_dist_reg, rgb_dist_reg = 0.0, 0.0, 0.0
+        if self.step >= self.config.reg_warmup_length:
+            if weight_depth_dist_reg > 0.0 and 'depth_distortion' in outputs:
+                depth_dist_reg = weight_depth_dist_reg * outputs['depth_distortion'].mean()
+            if weight_normal_dist_reg > 0.0 and 'normal_distortion' in outputs:
+                normal_dist_reg = weight_normal_dist_reg * outputs['normal_distortion'].mean()
+            if weight_rgb_dist_reg > 0.0 and 'rgb_distortion' in outputs:
+                rgb_dist_reg = weight_rgb_dist_reg * outputs['rgb_distortion'].mean()
+
         # correct exposure
         pred_img_e = pred_img
         exposure_param_reg = 0.0
@@ -348,11 +409,6 @@ class SplatTrainingLosses(torch.nn.Module):
 
         # image loss
         image_loss, mse, ssim = self.image_loss(gt_img, pred_img, pred_img_e, exposure_reg_image)
-
-        # depth and normal regularizers
-        if not self.config.use_3dgs and self.step >= self.config.reg_warmup_length:
-            reg_depth = outputs["reg_depth"]
-            depth_reg = weight_depth_reg * reg_depth.mean()
 
         # alpha regularizer
         alpha_reg = 0.0
@@ -387,9 +443,11 @@ class SplatTrainingLosses(torch.nn.Module):
             "normal_ref_loss": normal_supervision_loss,
             "alpha_ref_loss": alpha_supervision_loss,
             # [G] 2DGS
-            "depth_reg": depth_reg,
             "normal_reg": normal_reg,
             "alpha_reg": alpha_reg,
+            "depth_dist_reg": depth_dist_reg,
+            "normal_dist_reg": normal_dist_reg,
+            "rgb_dist_reg": rgb_dist_reg,
             # [E] exposure
             "tv_loss": 0.0,  # see get_per_splat_losses()
             "exposure_param_reg": exposure_param_reg,
@@ -458,6 +516,11 @@ class SplatTrainingLosses(torch.nn.Module):
         bilagrid_tv_loss = 0.0
         if self.config.use_bilateral_grid:
             bilagrid_tv_loss = 10 * total_variation_loss(self.bil_grids.grids)
+        if self.config.use_bilateral_grid_for_geometry:
+            bilagrid_tv_loss = bilagrid_tv_loss + 10 * (
+                total_variation_loss(self.bil_grids_depth.grids) +
+                total_variation_loss(self.bil_grids_normal.grids)
+            )
         loss_dict["tv_loss"] = bilagrid_tv_loss
 
         if not _use_torch_impl:

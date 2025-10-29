@@ -289,6 +289,8 @@ struct Vanilla3DGS::RenderOutput {
         float3* __restrict__ rgbs;
         float* __restrict__ depths;
 
+        Buffer() : rgbs(nullptr), depths(nullptr) {}
+
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.rgbs);
             CHECK_INPUT(tensors.rgbs);
@@ -322,6 +324,14 @@ struct Vanilla3DGS::RenderOutput {
 
     __device__ __forceinline__ RenderOutput operator*(float k) const {
         return {rgb * k, depth * k};
+    }
+
+    __device__ __forceinline__ RenderOutput operator+(const RenderOutput &other) const {
+        return {rgb + other.rgb, depth + other.depth};
+    }
+
+    __device__ __forceinline__ RenderOutput operator*(const RenderOutput &other) const {
+        return {rgb * other.rgb, depth * other.depth};
     }
 
     __device__ __forceinline__ float dot(const RenderOutput &other) const {

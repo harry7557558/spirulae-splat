@@ -14,7 +14,7 @@
 
 
 
-template <typename SplatPrimitive>
+template <typename SplatPrimitive, bool output_distortion>
 inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     // Gaussian parameters
     typename SplatPrimitive::WorldEval3D::Tensor splats,
@@ -33,15 +33,18 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     // forward outputs
     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
+    typename SplatPrimitive::RenderOutput::Tensor *render_outputs,
+    typename SplatPrimitive::RenderOutput::Tensor *render2_outputs,
     // gradients of outputs
     typename SplatPrimitive::RenderOutput::Tensor v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    typename SplatPrimitive::RenderOutput::Tensor *v_distortion_outputs,
     // outputs
     typename SplatPrimitive::WorldEval3D::Tensor v_splats
 );
 
 
-template<typename SplatPrimitive>
+template<typename SplatPrimitive, bool output_distortion>
 inline std::tuple<
     typename SplatPrimitive::WorldEval3D::TensorTuple,
     std::optional<at::Tensor>  // v_viewmats
@@ -64,9 +67,12 @@ inline std::tuple<
     // forward outputs
     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
+    std::optional<typename SplatPrimitive::RenderOutput::TensorTuple> render_outputs_tuple,
+    std::optional<typename SplatPrimitive::RenderOutput::TensorTuple> render2_outputs_tuple,
     // gradients of outputs
     typename SplatPrimitive::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas // [..., image_height, image_width, 1]
+    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    std::optional<typename SplatPrimitive::RenderOutput::TensorTuple> v_distortion_outputs_tuple
 );
 
 
@@ -92,9 +98,12 @@ std::tuple<
     // forward outputs
     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
+    std::optional<typename Vanilla3DGS::RenderOutput::TensorTuple> render_outputs,
+    std::optional<typename Vanilla3DGS::RenderOutput::TensorTuple> render2_outputs,
     // gradients of outputs
     Vanilla3DGS::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas // [..., image_height, image_width, 1]
+    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    std::optional<typename Vanilla3DGS::RenderOutput::TensorTuple> v_distortion_outputs
 );
 
 
@@ -120,7 +129,10 @@ std::tuple<
     // forward outputs
     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
+    std::optional<typename OpaqueTriangle::RenderOutput::TensorTuple> render_outputs,
+    std::optional<typename OpaqueTriangle::RenderOutput::TensorTuple> render2_outputs,
     // gradients of outputs
     OpaqueTriangle::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas // [..., image_height, image_width, 1]
+    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    std::optional<typename OpaqueTriangle::RenderOutput::TensorTuple> v_distortion_outputs
 );

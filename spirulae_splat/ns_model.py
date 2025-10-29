@@ -160,7 +160,7 @@ class SpirulaeModelConfig(ModelConfig):
     relative_scale: Optional[float] = None
     """Manually set scale when a scene is poorly scaled by nerfstudio
         (e.g. Zip-NeRF dataset, very large-scale scenes across multiple street blocks)"""
-    compute_depth_normal: bool = False
+    compute_depth_normal: bool = True
     """Compute normal from depth. Required for 2DGS and supervision. Disabling this can reduce VRAM usage and speed up training."""
     packed: bool = False
     """Pack projection outputs, reduce VRAM usage at large batch size but can be slightly slower"""
@@ -248,6 +248,10 @@ class SpirulaeModelConfig(ModelConfig):
         This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/)."""
     bilagrid_shape: Tuple[int, int, int] = (8, 8, 4)
     """Shape of the bilateral grid (X, Y, W)"""
+    use_bilateral_grid_for_geometry: bool = False
+    """If True, use bilateral grid for depth and normal (e.g. AI generated biased ones)"""
+    bilagrid_shape_geometry: Tuple[int, int, int] = (4, 4, 4)
+    """Shape of the bilateral grid for depth and normal (X, Y, W)"""
 
     use_3dgs: bool = True
     """Must be True, kept for backward compatibility"""
@@ -261,11 +265,13 @@ class SpirulaeModelConfig(ModelConfig):
     """
     depth_mode: Literal["mean", "median"] = "mean"
     """Depth rendering mode, use mean for stable training and median for high meshing resolution"""
-    depth_reg_weight: float = 0.02
-    """Weight for depth regularizer"""
-    depth_reg_pairwise_factor: float = 1.0  # 0.7, 1.0
-    """Factor of pairwise vs depth fitting depth regularization, 0 to 1"""
-    depth_reg_warmup: int = 6000
+    depth_reg_weight: float = 0.0
+    """Weight for depth distortion regularizer"""
+    normal_distortion_reg_weight: float = 0.01
+    """Weight for normal distortion regularizer"""
+    rgb_distortion_reg_weight: float = 0.0
+    """Weight for rgb distortion regularizer"""
+    distortion_reg_warmup: int = 6000
     """warmup steps for depth regularizer, regularization weight ramps up"""
     normal_reg_weight: float = 0.04
     """Weight for normal regularizer"""
@@ -307,7 +313,7 @@ class SpirulaeModelConfig(ModelConfig):
 
     # supervision using a foundation depth model
     # enable these by setting `depth_model` in data manager config
-    supervision_warmup: int = 0
+    supervision_warmup: int = 1000
     """Start using foundation model depth at this number of steps"""
     depth_distortion_depth_degree: int = -1  # 3
     """Hyperparameter for depth distortion model, controls depth embedding, see code for details
@@ -317,7 +323,7 @@ class SpirulaeModelConfig(ModelConfig):
         Larger gives more parameters in depth distortion model, -1 to disable"""
     depth_supervision_weight: float = 0.0
     """Weight for depth supervision by comparing rendered depth with depth predicted by a foundation model"""
-    normal_supervision_weight: float = 0.1
+    normal_supervision_weight: float = 0.0
     """Weight for normal supervision by comparing normal from rendered depth with normal from depth predicted by a foundation model"""
     alpha_supervision_weight: float = 0.01
     """Weight for alpha supervision by rendered alpha with alpha predicted by a foundation model
@@ -692,8 +698,14 @@ class SpirulaeModel(Model):
             gps["background_color"] = [self.background_color]
             if self.background_sh is not None:
                 gps["background_sh"] = [self.background_sh]
+
         if self.config.use_bilateral_grid:
             gps["bilateral_grid"] = list(self.training_losses.bil_grids.parameters())
+        if self.config.use_bilateral_grid_for_geometry:
+            gps["bilateral_grid_geometry"] = \
+                list(self.training_losses.bil_grids_depth.parameters()) + \
+                list(self.training_losses.bil_grids_normal.parameters())
+
         if self.config.use_camera_optimizer:
             self.camera_optimizer.get_param_groups(param_groups=gps)
         return gps
@@ -900,16 +912,11 @@ class SpirulaeModel(Model):
             rgb = rgb / rgb.mean()
             rgb = (rgb / (1.0 + rgb)).repeat(1, 1, 1, 3)
         elif self.config.fit == "normal":
-            assert render_normal is not None, "Normal map not available"
             assert depth_normal is not None, "Depth normal map not available"
             factor = self.config.fit_normal_depth_factor * min(
                 -1 + 2 * self.step / self.config.fit_normal_depth_warmup_steps, 1.0)
-            # rgb = 0.5+0.5*torch.lerp(
-            #     render_normal, depth_normal,
-            #     # factor * torch.rand_like(render_normal[..., :1])
-            #     (torch.rand_like(render_normal[..., :1]) < factor).float()
-            # )
-            # if factor > 0.0:
+            if render_normal is None:
+                factor = 1.0
             if np.random.random() < factor:# and self.training:
                 rgb = 0.5+0.5*depth_normal
             else:
@@ -941,7 +948,10 @@ class SpirulaeModel(Model):
         # apply bilateral grid
         if self.config.use_bilateral_grid and self.training and self.config.fit == "rgb":
             if camera.metadata is not None and "cam_idx" in camera.metadata:
-                rgb = self.training_losses.apply_bilateral_grid(rgb, camera.metadata["cam_idx"], H, W)
+                rgb = self.training_losses.apply_bilateral_grid(
+                    self.training_losses.bil_grids,
+                    rgb, camera.metadata["cam_idx"], H, W
+                )
             # in depth and normal fit mode, will apply in loss function
 
         # pack outputs
@@ -956,6 +966,15 @@ class SpirulaeModel(Model):
             outputs["depth_normal"] = depth_normal
         outputs["alpha"] = alpha
         outputs["background"] = background
+
+        for key in ['rgb_distortion', 'depth_distortion', 'normal_distortion']:
+            if key in meta:
+                value = meta[key]
+                if value is not None:
+                    if key == "depth_distortion":
+                        value = torch.log(value + 1.0)
+                    value = torch.sqrt(value + (1/255)**2) - (1/255)
+                    outputs[key] = value
 
         if not self.training:
             outputs["alpha"] = outputs["alpha"].reshape((H, W, 1)).repeat(1, 1, 3)
@@ -1075,9 +1094,11 @@ class SpirulaeModel(Model):
             f"[S] {fmt('depth_ref_loss', self.config.depth_supervision_weight)} "
             f"{fmt('normal_ref_loss', self.config.normal_supervision_weight)} "
             f"{fmt('alpha_ref_loss', self.config.alpha_supervision_weight)}",
-            f"[G] {fmt('depth_reg', self.training_losses.get_2dgs_reg_weights()[0])} "
-            f"{fmt('normal_reg', self.training_losses.get_2dgs_reg_weights()[1])} "
-            f"{fmt('alpha_reg', self.training_losses.get_alpha_reg_weight())}",
+            f"[G] {fmt('normal_reg', self.training_losses.get_2dgs_reg_weights()[1])} "
+            f"{fmt('alpha_reg', self.training_losses.get_alpha_reg_weight())} "
+            f"{fmt('depth_dist_reg', self.training_losses.get_2dgs_reg_weights()[0][0])} "
+            f"{fmt('normal_dist_reg', self.training_losses.get_2dgs_reg_weights()[0][1])} "
+            f"{fmt('rgb_dist_reg', self.training_losses.get_2dgs_reg_weights()[0][2])}",
             f"[M] {fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg * mcmc_reg)} "
             f"{fmt('mcmc_scale_reg', self.config.mcmc_scale_reg * mcmc_reg)}",
             f"[R] {fmt('erank_reg', max(self.config.erank_reg_s3, self.config.erank_reg))} "

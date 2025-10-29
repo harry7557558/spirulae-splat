@@ -321,6 +321,8 @@ struct OpaqueTriangle::RenderOutput {
         float* __restrict__ depths;
         float3* __restrict__ normals;
 
+        Buffer() : rgbs(nullptr), depths(nullptr), normals(nullptr) {}
+
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.rgbs);
             CHECK_INPUT(tensors.rgbs);
@@ -359,6 +361,14 @@ struct OpaqueTriangle::RenderOutput {
 
     __device__ __forceinline__ RenderOutput operator*(float k) const {
         return {rgb * k, depth * k, normal * k};
+    }
+
+    __device__ __forceinline__ RenderOutput operator+(const RenderOutput &other) const {
+        return {rgb + other.rgb, depth + other.depth, normal + other.normal};
+    }
+
+    __device__ __forceinline__ RenderOutput operator*(const RenderOutput &other) const {
+        return {rgb * other.rgb, depth * other.depth, normal * other.normal};
     }
 
     __device__ __forceinline__ float dot(const RenderOutput &other) const {

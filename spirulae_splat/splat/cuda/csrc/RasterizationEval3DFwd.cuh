@@ -14,7 +14,7 @@
 
 
 
-template <typename SplatPrimitive>
+template <typename SplatPrimitive, bool output_distortion>
 inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     // Gaussian parameters
     typename SplatPrimitive::WorldEval3D::Tensor splats,
@@ -34,13 +34,20 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     // outputs
     typename SplatPrimitive::RenderOutput::Tensor renders,
     at::Tensor transmittances,  // [..., image_height, image_width]
-    at::Tensor last_ids // [..., image_height, image_width]
+    at::Tensor last_ids, // [..., image_height, image_width]
+    typename SplatPrimitive::RenderOutput::Tensor *renders2,
+    typename SplatPrimitive::RenderOutput::Tensor *distortions
 );
 
 
-template <typename SplatPrimitive>
-inline std::tuple<typename SplatPrimitive::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
-rasterize_to_pixels_eval3d_fwd_tensor(
+template <typename SplatPrimitive, bool output_distortion>
+inline std::tuple<
+    typename SplatPrimitive::RenderOutput::TensorTuple,
+    at::Tensor,
+    at::Tensor,
+    std::optional<typename SplatPrimitive::RenderOutput::TensorTuple>,
+    std::optional<typename SplatPrimitive::RenderOutput::TensorTuple>
+> rasterize_to_pixels_eval3d_fwd_tensor(
     // Gaussian parameters
     typename SplatPrimitive::WorldEval3D::TensorTuple splats_tuple,
     const at::Tensor viewmats,             // [..., C, 4, 4]
@@ -59,8 +66,13 @@ rasterize_to_pixels_eval3d_fwd_tensor(
 );
 
 
-std::tuple<Vanilla3DGS::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
-rasterize_to_pixels_3dgs_eval3d_fwd(
+std::tuple<
+    Vanilla3DGS::RenderOutput::TensorTuple,
+    at::Tensor,
+    at::Tensor,
+    std::optional<Vanilla3DGS::RenderOutput::TensorTuple>,
+    std::optional<Vanilla3DGS::RenderOutput::TensorTuple>
+> rasterize_to_pixels_3dgs_eval3d_fwd(
     // Gaussian parameters
     Vanilla3DGS::WorldEval3D::TensorTuple splats_tuple,
     const at::Tensor viewmats,             // [..., C, 4, 4]
@@ -79,8 +91,13 @@ rasterize_to_pixels_3dgs_eval3d_fwd(
 );
 
 
-std::tuple<OpaqueTriangle::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
-rasterize_to_pixels_opaque_triangle_eval3d_fwd(
+std::tuple<
+    OpaqueTriangle::RenderOutput::TensorTuple,
+    at::Tensor,
+    at::Tensor,
+    std::optional<OpaqueTriangle::RenderOutput::TensorTuple>,
+    std::optional<OpaqueTriangle::RenderOutput::TensorTuple>
+> rasterize_to_pixels_opaque_triangle_eval3d_fwd(
     // Gaussian parameters
     OpaqueTriangle::WorldEval3D::TensorTuple splats_tuple,
     const at::Tensor viewmats,             // [..., C, 4, 4]

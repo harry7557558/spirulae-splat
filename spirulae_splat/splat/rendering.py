@@ -657,7 +657,7 @@ def rasterization(
             "tangential_coeffs": tangential_coeffs,
             "thin_prism_coeffs": thin_prism_coeffs,
         }
-    render_colors, render_alphas = rasterize_to_pixels(
+    render_colors, render_alphas, render_meta = rasterize_to_pixels(
         primitive,
         with_eval3d,
         proj_splats,
@@ -671,6 +671,7 @@ def rasterization(
         absgrad=absgrad,
         **kwargs
     )
+    meta.update(render_meta)
     # if "ED" in render_mode:
     #     # normalize the accumulated depth to get the expected depth
     #     depth_idx = 3 if "RGB" in render_mode else 0
