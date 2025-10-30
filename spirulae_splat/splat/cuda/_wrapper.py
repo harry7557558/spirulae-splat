@@ -11,6 +11,8 @@ from ._wrapper_per_pixel import (
     blend_background,
     depth_to_normal,
     ray_depth_to_linear_depth,
+    undistort_image,
+    distort_image,
 )
 
 __all__ = [
@@ -22,4 +24,6 @@ __all__ = [
     "blend_background",
     "depth_to_normal",
     "ray_depth_to_linear_depth",
+    "undistort_image",
+    "distort_image",
 ]

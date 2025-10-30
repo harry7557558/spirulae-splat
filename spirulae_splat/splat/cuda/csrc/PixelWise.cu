@@ -491,3 +491,113 @@ torch::Tensor ray_depth_to_linear_depth_backward_tensor(
 
     return v_in_depths;
 }
+
+
+// ================
+// Distort / Undistort
+// ================
+
+template<bool is_undistort>
+__global__ void distort_image_kernel(
+    gsplat::CameraModelType camera_model,
+    const float *__restrict__ Ks,  // [B, 3, 3]
+    const CameraDistortionCoeffsBuffer dist_coeffs,
+    const TensorView<float, 4> in_image,  // [B, H, W, C]
+    TensorView<float, 4> out_image  // [B, H, W, C]
+) {
+    const uint B = in_image.shape[0],
+        H = in_image.shape[1],
+        W = in_image.shape[2],
+        C = in_image.shape[3];
+    uint32_t bid = blockIdx.z * blockDim.z + threadIdx.z;
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (bid >= B || i >= W || j >= H)
+        return;
+
+    // Load camera
+    Ks += bid * 9;
+    float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
+    float4 radial_coeffs = {0, 0, 0, 0};
+    float2 tangential_coeffs = {0, 0};
+    float2 thin_prism_coeffs = {0, 0};
+    if (camera_model == gsplat::CameraModelType::FISHEYE || true) {
+        if (dist_coeffs.radial_coeffs != nullptr)
+            radial_coeffs = dist_coeffs.radial_coeffs[bid];
+        if (dist_coeffs.tangential_coeffs != nullptr)
+            tangential_coeffs = dist_coeffs.tangential_coeffs[bid];
+        if (dist_coeffs.thin_prism_coeffs != nullptr)
+            thin_prism_coeffs = dist_coeffs.thin_prism_coeffs[bid];
+    }
+
+    // Undistort point
+    float2 uv = { (i+0.5f-cx) / fx, (j+0.5f-cy) / fy };
+    if (is_undistort)
+        uv = distort_point(uv, camera_model == gsplat::CameraModelType::FISHEYE,
+            radial_coeffs, tangential_coeffs, thin_prism_coeffs);
+    else
+        uv = undistort_point(uv, camera_model == gsplat::CameraModelType::FISHEYE,
+            radial_coeffs, tangential_coeffs, thin_prism_coeffs);
+    int i1 = (int)floor(uv.x*fx+cx);
+    int j1 = (int)floor(uv.y*fy+cy);
+
+    // Process
+    if (i1 < 0 || i1 >= W || j1 < 0 || j1 >= H)
+        return;
+    for (int c = 0; c < C; c++) {
+        // TODO: bilinear/bicubic interpolation
+        out_image.at(bid, j, i, c) = in_image.at(bid, j1, i1, c);
+    }
+}
+
+torch::Tensor distort_image_tensor(
+    gsplat::CameraModelType camera_model,
+    torch::Tensor Ks,  // [B, 3, 3]
+    CameraDistortionCoeffsTensor dist_coeffs,
+    torch::Tensor in_image  // [B, H, W, C]
+) {
+    DEVICE_GUARD(in_image);
+    CHECK_CUDA(in_image);
+    CHECK_INPUT(Ks);
+
+    if (Ks.ndimension() != 3 || Ks.size(-1) != 3 || Ks.size(-2) != 3)
+        AT_ERROR("Ks shape must be (B, 3, 3)");
+    if (in_image.ndimension() != 4 || in_image.size(0) != Ks.size(0))
+        AT_ERROR("in_image shape must be (B, H, W, C) where B is consistent with Ks");
+
+    uint b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
+    torch::Tensor out_image = torch::zeros_like(in_image);
+
+    distort_image_kernel<false><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
+        camera_model, Ks.data_ptr<float>(), dist_coeffs,
+        tensor2view<float, 4>(in_image), tensor2view<float, 4>(out_image)
+    );
+
+    return out_image;
+}
+
+torch::Tensor undistort_image_tensor(
+    gsplat::CameraModelType camera_model,
+    torch::Tensor Ks,  // [B, 3, 3]
+    CameraDistortionCoeffsTensor dist_coeffs,
+    torch::Tensor in_image  // [B, H, W, C]
+) {
+    DEVICE_GUARD(in_image);
+    CHECK_CUDA(in_image);
+    CHECK_INPUT(Ks);
+
+    if (Ks.ndimension() != 3 || Ks.size(-1) != 3 || Ks.size(-2) != 3)
+        AT_ERROR("Ks shape must be (B, 3, 3)");
+    if (in_image.ndimension() != 4 || in_image.size(0) != Ks.size(0))
+        AT_ERROR("in_image shape must be (B, H, W, C) where B is consistent with Ks");
+
+    uint b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
+    torch::Tensor out_image = torch::zeros_like(in_image);
+
+    distort_image_kernel<true><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
+        camera_model, Ks.data_ptr<float>(), dist_coeffs,
+        tensor2view<float, 4>(in_image), tensor2view<float, 4>(out_image)
+    );
+
+    return out_image;
+}

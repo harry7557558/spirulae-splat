@@ -866,8 +866,10 @@ class SpirulaeModel(Model):
             camera_model=["pinhole", "fisheye"][is_fisheye],
             # with_ut=is_fisheye,
             # with_eval3d=is_fisheye,  # TODO
-            with_ut=self.training,
-            with_eval3d=self.training,
+            # with_ut=self.training,
+            # with_eval3d=self.training,
+            with_ut=True,
+            with_eval3d=True,
             # with_ut=False,
             # with_eval3d=False,
             render_mode="RGB+D" if self.config.primitive in ['3dgs', 'mip'] else "RGB+D+N",

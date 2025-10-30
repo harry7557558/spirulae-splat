@@ -184,3 +184,72 @@ class _RayDepthToLinearDepth(torch.autograd.Function):
 
         return (v_in_depths, *([None]*(len(ctx.needs_input_grad)-1)))
 
+
+def distort_image(
+    image: Tensor,  # [B, H, W, C]
+    camera_model: Literal["pinhole", "fisheye"],
+    Ks: Union[Tensor, Tuple[float, float, float, float]],
+    radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
+    tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
+    thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
+) -> Tensor:
+    return _DistortOrUndistortImage.apply(
+        False, image, camera_model, Ks,
+        radial_coeffs, tangential_coeffs, thin_prism_coeffs
+    )
+
+def undistort_image(
+    image: Tensor,  # [B, H, W, C]
+    camera_model: Literal["pinhole", "fisheye"],
+    Ks: Union[Tensor, Tuple[float, float, float, float]],
+    radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
+    tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
+    thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
+) -> Tensor:
+    return _DistortOrUndistortImage.apply(
+        True, image, camera_model, Ks,
+        radial_coeffs, tangential_coeffs, thin_prism_coeffs
+    )
+
+
+class _DistortOrUndistortImage(torch.autograd.Function):
+    """Projects Gaussians to 2D."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        is_undistort: bool,
+        image: Tensor,  # [B, H, W, C]
+        camera_model: Literal["pinhole", "fisheye"],
+        Ks: Tensor,
+        radial_coeffs: Optional[Tensor],  # [..., C, 6] or [..., C, 4]
+        tangential_coeffs: Optional[Tensor],  # [..., C, 2]
+        thin_prism_coeffs: Optional[Tensor],  # [..., C, 4]
+    ) -> Tensor:
+
+        if isinstance(Ks, tuple):
+            fx, fy, cx, cy = Ks
+            Ks = torch.tensor([[[fx, 0, cx], [0, fy, cy], [0, 0, 1]]])
+            Ks = Ks.to(image).repeat(len(image), 1, 1)
+        if isinstance(radial_coeffs, tuple):
+            radial_coeffs = torch.tensor(radial_coeffs)[None].to(image).repeat(len(image), 1)
+        if isinstance(tangential_coeffs, tuple):
+            tangential_coeffs = torch.tensor(tangential_coeffs)[None].to(image).repeat(len(image), 1)
+        if isinstance(thin_prism_coeffs, tuple):
+            thin_prism_coeffs = torch.tensor(thin_prism_coeffs)[None].to(image).repeat(len(image), 1)
+
+        camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
+            f"CameraModelType.{camera_model.upper()}"
+        )
+
+        return _make_lazy_cuda_func("un"*int(is_undistort) + "distort_image")(
+            camera_model_type, Ks.contiguous(),
+            (radial_coeffs.contiguous() if radial_coeffs is not None else None,
+            tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
+            thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None),
+            image.contiguous()
+        )
+
+    @staticmethod
+    def backward(ctx, v_out_image):
+        raise NotImplementedError("undistort_image does not support backward")

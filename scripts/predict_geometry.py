@@ -9,6 +9,8 @@ import os
 from tqdm import tqdm
 import json
 
+from spirulae_splat.splat.cuda import undistort_image, distort_image
+
 
 @dataclass
 class Config:
@@ -18,6 +20,7 @@ class Config:
 
 def process_image(
     model,
+    intrins: dict,
     image_path: str,
     depth_save_path: Optional[str]=None,
     normal_save_path: Optional[str]=None
@@ -29,27 +32,69 @@ def process_image(
         w, h = int(sc*w+0.5), int(sc*h+0.5)
         image = image.resize((w, h))
 
-    image = torch.from_numpy(np.array(image)).permute((2, 0, 1))[None].float().cuda() / 255.0
+    image = torch.from_numpy(np.array(image))[None].float().cuda() / 255.0
+
+    sw = image.shape[2] / intrins['w']
+    sh = image.shape[1] / intrins['h']
+    Ks = (intrins['fl_x']*sw, intrins['fl_y']*sh, intrins['cx']*sw, intrins['cy']*sh)
+    radial_coeffs = (intrins['k1'], intrins['k2'], intrins['k3'], intrins['k4'])
+    tangential_coeffs = (intrins['p1'], intrins['p2'])
+    thin_prism_coeffs = (intrins['sx1'], intrins['sy1'])
+    intrins = (intrins['camera_model'], Ks,
+        radial_coeffs, tangential_coeffs, thin_prism_coeffs)
+    image = undistort_image(image, *intrins)
+
     with torch.autocast(device_type="cuda", dtype=torch.float32):
-        pred_depth, _, output_dict = model.inference({'input': image})
+        pred_depth, _, output_dict = model.inference({'input': image.permute((0, 3, 1, 2))})
     pred_normal = output_dict['prediction_normal']
 
     if depth_save_path is not None:
         pred_depth = torch.nn.functional.interpolate(
             pred_depth, size=(h, w), mode='bilinear', align_corners=False
-        )[0].permute(1, 2, 0)  # [h, w, 1]
+        ).permute(0, 2, 3, 1)  # [h, w, 1]
         # pred_depth = torch.log(torch.relu(pred_depth) + 1.0)
         pred_depth /= torch.amax(pred_depth)
+        pred_depth = distort_image(pred_depth, *intrins)[0]
         pred_depth = torch.clip(65535*pred_depth, 0, 65535).cpu().numpy().astype(np.uint16)
         Image.fromarray(pred_depth.squeeze(-1), mode='I;16').save(depth_save_path)
 
     if normal_save_path is not None:
         pred_normal = torch.nn.functional.interpolate(
             pred_normal, size=(h, w), mode='bilinear', align_corners=False
-        )[0, :3].permute(1, 2, 0)  # [h, w, 3]
+        )[:, :3].permute(0, 2, 3, 1)  # [h, w, 3]
+        # TODO: probably also need to distort values of normals
         pred_normal = 0.5 + 0.5 * pred_normal / torch.norm(pred_normal, dim=-1, keepdim=True)
+        pred_normal = distort_image(pred_normal, *intrins)[0]
         pred_normal = torch.clip(255*pred_normal, 0, 255).to(torch.uint8).cpu().numpy()
         Image.fromarray(pred_normal).save(normal_save_path)
+
+
+def update_intrins(in_obj, out_obj):
+    out_obj = {**out_obj}
+
+    if 'camera_model' in in_obj:
+        out_obj['camera_model'] = {
+            'SIMPLE_PINHOLE': "pinhole",
+            'PINHOLE': "pinhole",
+            'SIMPLE_RADIAL': "pinhole",
+            'SIMPLE_RADIAL_FISHEYE': "fisheye",
+            'RADIAL': "pinhole",
+            'RADIAL_FISHEYE': "fisheye",
+            'OPENCV': "pinhole",
+            'OPENCV_FISHEYE': "fisheye",
+            'THIN_PRISM_FISHEYE': "fisheye",
+        }[in_obj['camera_model']]
+    elif 'camera_model' not in out_obj:
+        out_obj['camera_model'] = 'pinhole'
+
+    for key in 'w h fl_x fl_y cx cy k1 k2 p1 p2 k3 k4 sx1 sy1'.split():
+        if key in in_obj:
+            out_obj[key] = in_obj[key]
+        elif key not in out_obj:
+            out_obj[key] = 0.0
+
+    return out_obj
+
 
 def process_dir(dataset_dir: str):
     image_dir = os.path.join(dataset_dir, "images")
@@ -61,13 +106,17 @@ def process_dir(dataset_dir: str):
     image_filenames = []
     with open(os.path.join(dataset_dir, "transforms.json")) as fp:
         content = json.load(fp)
+        global_intrins = update_intrins(content, {})
     for frame in content['frames']:
         file_path = frame['file_path'].lstrip('./')
         assert file_path.startswith("images")
         image_filename = file_path[len("images")+1:]
         depth_filename = with_ext(image_filename, 'png')
         normal_filename = with_ext(image_filename, 'png')
-        image_filenames.append((image_filename, depth_filename, normal_filename))
+        image_filenames.append((
+            image_filename, depth_filename, normal_filename,
+            update_intrins(frame, global_intrins)
+        ))
         frame["depth_file_path"] = os.path.join("depths", depth_filename)
         frame["normal_file_path"] = os.path.join("normals", normal_filename)
     if len(image_filenames) == 0:
@@ -87,10 +136,10 @@ def process_dir(dataset_dir: str):
     model = model.eval().cuda()
     print("Model loaded")
 
-    for (image_filename, depth_filename, normal_filename) \
+    for (image_filename, depth_filename, normal_filename, intrins) \
           in tqdm(image_filenames, "Predicting depth/normal"):
         process_image(
-            model,
+            model, intrins,
             os.path.join(image_dir, image_filename),
             os.path.join(depth_dir, depth_filename),
             os.path.join(normal_dir, normal_filename)

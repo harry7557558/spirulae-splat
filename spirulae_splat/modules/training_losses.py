@@ -237,12 +237,16 @@ class SplatTrainingLosses(torch.nn.Module):
         #                 outputs[key] = _MaskGradient.apply(outputs[key], camera_mask)
         device = outputs['rgb'].device
 
+        gt_depth_mask, gt_normal_mask = None, None
         if 'depth' in batch and len(batch['depth'].shape) == 3:
             batch['depth'] = batch['depth'].unsqueeze(-1)
         if 'depth' in batch:
             batch['depth'] = batch['depth'].to(device)
+            gt_depth_mask = (batch['depth'] != 0.0)
         if 'normal' in batch:
             batch['normal'] = batch['normal'].to(device)
+            gt_normal_mask = (batch['normal'].sum(-1) > -2.366)
+            batch['normal'] = F.normalize(batch['normal'], dim=-1)
 
         # apply bilateral grid
         gt_depth = batch.get("depth", None)
@@ -346,8 +350,8 @@ class SplatTrainingLosses(torch.nn.Module):
                 #         batch_alpha.sum()) ** 0.5
                 depth_supervision_loss = self.config.depth_supervision_weight * \
                     pearson_correlation_loss(
-                        torch.log(batch_depth[batch_alpha].clip(min=1e-4)),
-                        torch.log(output_depth[batch_alpha].clip(min=1e-4))
+                        torch.log(batch_depth[batch_alpha & gt_depth_mask].clip(min=1e-4)),
+                        torch.log(output_depth[batch_alpha & gt_depth_mask].clip(min=1e-4))
                     )
             
             if self.config.alpha_supervision_weight > 0.0 or \
@@ -358,10 +362,10 @@ class SplatTrainingLosses(torch.nn.Module):
 
                 batch_alpha = batch_alpha.float()
                 alpha_supervision_loss = self.config.alpha_supervision_weight * \
-                    alpha_loss_fun(outputs["alpha"], batch_alpha)
+                    alpha_loss_fun(outputs["alpha"][gt_depth_mask], batch_alpha[gt_depth_mask])
                 if self.config.alpha_supervision_weight_under > 0.0:
                     alpha_supervision_loss = alpha_supervision_loss + self.config.alpha_supervision_weight_under *\
-                         alpha_loss_fun(1.0-outputs["alpha"], 1.0-batch_alpha)
+                         alpha_loss_fun(1.0-outputs["alpha"][gt_depth_mask], 1.0-batch_alpha[gt_depth_mask])
     
         # normal supervision
         if self.step > self.config.supervision_warmup and (
@@ -375,11 +379,11 @@ class SplatTrainingLosses(torch.nn.Module):
             # with reference image
             if 'normal' in outputs and 'normal' in batch:
                 normal_supervision_loss = normal_supervision_loss + \
-                    normal_loss(batch_normal, outputs["normal"])
+                    normal_loss(batch_normal[gt_normal_mask], outputs["normal"][gt_normal_mask])
                 weight += 1
             if 'depth_normal' in outputs and 'normal' in batch:
                 normal_supervision_loss = normal_supervision_loss + \
-                    normal_loss(batch_normal, outputs["depth_normal"])
+                    normal_loss(batch_normal[gt_normal_mask], outputs["depth_normal"][gt_normal_mask])
                 weight += 1
             if weight > 0:
                 normal_supervision_loss = normal_supervision_loss * \

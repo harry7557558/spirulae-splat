@@ -282,6 +282,32 @@ float2 undistort_point(
 
 [CudaDeviceExport]
 [Differentiable]
+float2 distort_point(
+    no_diff float2 uv, bool is_fisheye,
+    no_diff float4 radial_coeffs, no_diff float2 tangential_coeffs, no_diff float2 thin_prism_coeffs
+) {
+    if (is_fisheye) {
+        float r = length(uv);
+        float theta = atan(r);
+        uv *= (r < 1e-3 ? 1.0-r*r/3.0 : theta/r);
+    }
+    return camera_distortion(uv, {radial_coeffs, tangential_coeffs, thin_prism_coeffs});
+}
+
+[CudaDeviceExport]
+[Differentiable]
+float2 undistort_point(
+    no_diff float2 uv, bool is_fisheye,
+    no_diff float4 radial_coeffs, no_diff float2 tangential_coeffs, no_diff float2 thin_prism_coeffs
+) {
+    uv = no_diff undistort_point(uv, {radial_coeffs, tangential_coeffs, thin_prism_coeffs}, 8);
+    float3 raydir = is_fisheye ? fisheye_unproj(uv) : float3(uv, 1.0);
+    return raydir.xy / max(raydir.z, 1e-12);
+}
+
+
+[CudaDeviceExport]
+[Differentiable]
 void generate_ray(
     float3x3 R, float3 t, no_diff float2 uv, bool is_fisheye,
     no_diff float4 radial_coeffs, no_diff float2 tangential_coeffs, no_diff float2 thin_prism_coeffs,

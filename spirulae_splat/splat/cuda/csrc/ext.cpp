@@ -48,6 +48,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("depth_to_normal_backward", &depth_to_normal_backward_tensor);
     m.def("ray_depth_to_linear_depth_forward", &ray_depth_to_linear_depth_forward_tensor);
     m.def("ray_depth_to_linear_depth_backward", &ray_depth_to_linear_depth_backward_tensor);
+    m.def("distort_image", &distort_image_tensor);
+    m.def("undistort_image", &undistort_image_tensor);
 
     // SplatTileIntersector.cuh
     m.def("intersect_splat_tile", &SplatTileIntersector::intersect_splat_tile);

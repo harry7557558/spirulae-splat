@@ -72,11 +72,12 @@ def get_normal_image_from_path(
         image = np.load(filepath).astype(np.float32)
         image = cv2.resize(image, (width, height), interpolation=interpolation)
     else:
-        image = cv2.imread(str(filepath.absolute()), cv2.IMREAD_COLOR_RGB)
+        image = cv2.cvtColor(cv2.imread(str(filepath.absolute())), cv2.COLOR_BGR2RGB)
         image = (image.astype(np.float32) / 255.0) * 2.0 - 1.0
         image = cv2.resize(image, (width, height), interpolation=interpolation)
     image = torch.from_numpy(image[:, :, :3])
-    return image / torch.norm(image, dim=-1, keepdim=True).clip(min=1e-12)
+    return image
+    # return image / torch.norm(image, dim=-1, keepdim=True).clip(min=1e-12)
 
 
 def compute_overexposure_mask(img: torch.Tensor, image_type: Literal['uint8', 'float32']):
