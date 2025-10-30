@@ -73,9 +73,8 @@ def depth_to_normal(
         depths,
         camera_model,
         Ks.contiguous(),
-        radial_coeffs,
-        tangential_coeffs,
-        thin_prism_coeffs,
+        *[x.contiguous() if x is not None else None for x in
+            (radial_coeffs, tangential_coeffs, thin_prism_coeffs)],
         is_ray_depth
     )
 
@@ -138,9 +137,8 @@ def ray_depth_to_linear_depth(
         depths,
         camera_model,
         Ks.contiguous(),
-        radial_coeffs,
-        tangential_coeffs,
-        thin_prism_coeffs,
+        *[x.contiguous() if x is not None else None for x in
+            (radial_coeffs, tangential_coeffs, thin_prism_coeffs)],
     )
 
 

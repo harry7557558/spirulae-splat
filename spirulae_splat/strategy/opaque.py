@@ -139,6 +139,7 @@ class OpaqueStrategy(Strategy):
             scales[gs_ids] -= oversize_factor
             opacities[gs_ids] += scales.shape[-1] * oversize_factor
             opacities[gs_ids] = torch.clip(opacities[gs_ids], max=5.0)  # sigmoid(5.0)=0.993
+            state["radii"][gs_ids] *= (normalized_radii < self.max_scale2d).float()
 
         # large splats in world space
         # clip scale, without increasing opacity (which causes problems with background removal)

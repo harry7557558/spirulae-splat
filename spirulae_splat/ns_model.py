@@ -248,7 +248,7 @@ class SpirulaeModelConfig(ModelConfig):
         This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/)."""
     bilagrid_shape: Tuple[int, int, int] = (8, 8, 4)
     """Shape of the bilateral grid (X, Y, W)"""
-    use_bilateral_grid_for_geometry: bool = False
+    use_bilateral_grid_for_geometry: bool = True
     """If True, use bilateral grid for depth and normal (e.g. AI generated biased ones)"""
     bilagrid_shape_geometry: Tuple[int, int, int] = (4, 4, 4)
     """Shape of the bilateral grid for depth and normal (X, Y, W)"""
@@ -265,9 +265,9 @@ class SpirulaeModelConfig(ModelConfig):
     """
     depth_mode: Literal["mean", "median"] = "mean"
     """Depth rendering mode, use mean for stable training and median for high meshing resolution"""
-    depth_reg_weight: float = 0.0
+    depth_reg_weight: float = 0.01
     """Weight for depth distortion regularizer"""
-    normal_distortion_reg_weight: float = 0.01
+    normal_distortion_reg_weight: float = 0.0
     """Weight for normal distortion regularizer"""
     rgb_distortion_reg_weight: float = 0.0
     """Weight for rgb distortion regularizer"""
@@ -321,9 +321,9 @@ class SpirulaeModelConfig(ModelConfig):
     depth_distortion_uv_degree: int = -1  # 1
     """Hyperparameter for depth distortion model, controls image space embedding, see code for details
         Larger gives more parameters in depth distortion model, -1 to disable"""
-    depth_supervision_weight: float = 0.0
+    depth_supervision_weight: float = 0.01
     """Weight for depth supervision by comparing rendered depth with depth predicted by a foundation model"""
-    normal_supervision_weight: float = 0.0
+    normal_supervision_weight: float = 0.01
     """Weight for normal supervision by comparing normal from rendered depth with normal from depth predicted by a foundation model"""
     alpha_supervision_weight: float = 0.01
     """Weight for alpha supervision by rendered alpha with alpha predicted by a foundation model
@@ -866,8 +866,8 @@ class SpirulaeModel(Model):
             camera_model=["pinhole", "fisheye"][is_fisheye],
             # with_ut=is_fisheye,
             # with_eval3d=is_fisheye,  # TODO
-            with_ut=True,
-            with_eval3d=True,
+            with_ut=self.training,
+            with_eval3d=self.training,
             # with_ut=False,
             # with_eval3d=False,
             render_mode="RGB+D" if self.config.primitive in ['3dgs', 'mip'] else "RGB+D+N",
@@ -887,9 +887,8 @@ class SpirulaeModel(Model):
 
         if self.config.compute_depth_normal or not self.training:
             depth_im_ref = torch.where(
-                alpha > 0.0, rgbd[1] / alpha,
+                alpha > 0.0, rgbd[1],
                 max_depth_scale*torch.amax(rgbd[1]).detach()
-                # rgbd[1]
             ).contiguous()
         else:
             depth_im_ref = None
@@ -971,9 +970,9 @@ class SpirulaeModel(Model):
             if key in meta:
                 value = meta[key]
                 if value is not None:
-                    if key == "depth_distortion":
-                        value = torch.log(value + 1.0)
-                    value = torch.sqrt(value + (1/255)**2) - (1/255)
+                    value = torch.where(alpha > 0.0, value / alpha, value)
+                    if not self.training:
+                        value = torch.sqrt(value + (1/255)**2) - (1/255)
                     outputs[key] = value
 
         if not self.training:

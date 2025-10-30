@@ -228,7 +228,6 @@ class SplatModel:
             dist_coeffs = torch.tensor([*ssplat_camera.dist_coeffs]).float().to(viewmat)
             is_fisheye = ssplat_camera.model == "OPENCV_FISHEYE"
             is_distorted = ssplat_camera.is_distorted() or any([x != 0 for x in dist_coeffs])
-            is_distorted = False  # TODO
             if is_distorted:
                 if is_fisheye:
                     kwargs['radial_coeffs'] = dist_coeffs[None]
@@ -258,28 +257,27 @@ class SplatModel:
                 sparse_grad=False,
                 distributed=False,
                 camera_model=["pinhole", "fisheye"][is_fisheye],
-                with_ut=is_distorted,
-                with_eval3d=is_distorted,
+                with_ut=True,
+                with_eval3d=True,
                 render_mode="RGB+ED",
                 # render_mode="RGB+ED+N",
                 **kwargs,
             )
-            colors = rgbd[0]
-            # colors = 0.5+0.5*rgbd[0, ..., 4:]
             alpha = alpha[0]
-            if return_depth:
-                colors = rgbd[0]
-                # colors = 0.5+0.5*rgbd[0, ..., 4:]
 
             rgb = rgbd[0]
             if return_depth:
                 depth = rgbd[1]
-            depth = ray_depth_to_linear_depth(
-                depth,
-                ["pinhole", "fisheye"][is_fisheye],
-                Ks[None].contiguous(),
-                **kwargs
-            )
+                depth = ray_depth_to_linear_depth(
+                    depth,
+                    ["pinhole", "fisheye"][is_fisheye],
+                    Ks[None].contiguous(),
+                    **kwargs
+                )
+                depth = torch.where(
+                    alpha > 0.0, depth,
+                    1.5*torch.amax(depth).detach()
+                ).contiguous()
 
         else:
             raise NotImplementedError("2DGS is deprecated")

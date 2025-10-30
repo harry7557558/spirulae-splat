@@ -84,6 +84,10 @@ __global__ void projection_fused_fwd_kernel(
     }
 
     // Save results
+    aabb.x = min(max(aabb.x, 0), image_width-1);
+    aabb.y = min(max(aabb.y, 0), image_height-1);
+    aabb.z = min(max(aabb.z, 0), image_width-1);
+    aabb.w = min(max(aabb.w, 0), image_height-1);
     if ((aabb.z-aabb.x)*(aabb.w-aabb.y) > 0) {
         splat_screen.saveParamsToBuffer(splats_screen, idx);
         aabbs[idx] = aabb;

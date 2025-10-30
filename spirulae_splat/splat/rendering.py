@@ -14,7 +14,7 @@ from gsplat.cuda._wrapper import (
     isect_offset_encode,
     isect_tiles,
     # rasterize_to_pixels,
-    rasterize_to_pixels_eval3d,
+    # rasterize_to_pixels_eval3d,
     # spherical_harmonics,
 )
 from spirulae_splat.splat.cuda._wrapper import (
@@ -313,6 +313,13 @@ def rasterization(
         assert packed is False, "Packed mode is not supported with UT."
         assert sparse_grad is False, "Sparse grad is not supported with UT."
 
+    if radial_coeffs is not None:
+        radial_coeffs = radial_coeffs.contiguous()
+    if tangential_coeffs is not None:
+        tangential_coeffs = tangential_coeffs.contiguous()
+    if thin_prism_coeffs is not None:
+        thin_prism_coeffs = thin_prism_coeffs.contiguous()
+
     # Implement the multi-GPU strategy proposed in
     # `On Scaling Up 3D Gaussian Splatting Training <https://arxiv.org/abs/2406.18533>`.
     #
@@ -475,6 +482,7 @@ def rasterization(
         image_ids = None
     means2d = (aabb_xyxy[..., 2:] + aabb_xyxy[..., :2]).float() / 2
     radii = (aabb_xyxy[..., 2:] - aabb_xyxy[..., :2] + 1) // 2
+    depths = torch.exp(depths)
 
     meta.update(
         {
@@ -672,6 +680,15 @@ def rasterization(
         **kwargs
     )
     meta.update(render_meta)
+
+    # `rasterize_to_pixels` outputs log ray depth, map it to ray depth
+    if len(render_colors) > 1:
+        render_colors = (
+            render_colors[0],
+            torch.exp(render_colors[1] / render_alphas.clamp(min=1e-10)),
+            *render_colors[2:]
+        )
+
     # if "ED" in render_mode:
     #     # normalize the accumulated depth to get the expected depth
     #     depth_idx = 3 if "RGB" in render_mode else 0

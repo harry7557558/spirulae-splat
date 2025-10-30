@@ -45,16 +45,10 @@ _DEFAULT_OPTIMIZERS = {
     },
     "scales": {
         "optimizer": AdamOptimizerConfig(lr=0.005, eps=1e-15),
-        # "scheduler": ExponentialDecaySchedulerConfig(
-        #     lr_final=0.001, max_steps=30000,
-        # ),
         "scheduler": None,
     },
     "quats": {
         "optimizer": AdamOptimizerConfig(lr=0.0005, eps=1e-15),
-        # "scheduler": ExponentialDecaySchedulerConfig(
-        #     lr_final=0.0001, max_steps=30000
-        # ),
         "scheduler": None,
     },
     "features_dc": {
@@ -66,7 +60,7 @@ _DEFAULT_OPTIMIZERS = {
         "scheduler": None,
     },
     "features_ch": {
-        "optimizer": AdamOptimizerConfig(lr=0.0025, eps=1e-15),
+        "optimizer": AdamOptimizerConfig(lr=0.0025 / 5, eps=1e-15),
         "scheduler": None,
     },
     "opacities": {
@@ -102,6 +96,20 @@ _DEFAULT_OPTIMIZERS = {
     },
 }
 
+_TRIANGLE_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS}
+_TRIANGLE_OPTIMIZERS["scales"] = {
+    "optimizer": AdamOptimizerConfig(lr=0.005, eps=1e-15),
+    "scheduler": ExponentialDecaySchedulerConfig(
+        lr_final=0.0002, max_steps=30000,
+    ),
+}
+_TRIANGLE_OPTIMIZERS["quats"] = {
+    "optimizer": AdamOptimizerConfig(lr=0.0005, eps=1e-15),
+    "scheduler": ExponentialDecaySchedulerConfig(
+        lr_final=0.0002, max_steps=30000
+    ),
+}
+
 
 spirulae = MethodSpecification(
     config=TrainerConfig(
@@ -115,6 +123,8 @@ spirulae = MethodSpecification(
                 **_DEFAULT_DATAMANAGER_CONFIG
             ),
             model=SpirulaeModelConfig(
+                background_color="black",
+                train_background_color=False,
             ),
             
         ),
@@ -173,8 +183,8 @@ spirulae_triangle = MethodSpecification(
                 kernel_radius=0.5,
                 compute_depth_normal=True,
                 # sh_degree=1,  # TODO: debug sh_degree=0
-                # background_color="black",
-                # train_background_color=False,
+                background_color="black",
+                train_background_color=False,
                 # alpha_reg_weight=0.0,
                 # mcmc_scale_reg=0.04,
                 # erank_reg=1.0,
@@ -186,7 +196,7 @@ spirulae_triangle = MethodSpecification(
             
         ),
         optimizers={
-            **_DEFAULT_OPTIMIZERS
+            **_TRIANGLE_OPTIMIZERS
         },
         viewer=ViewerConfig(),
         vis="viewer",

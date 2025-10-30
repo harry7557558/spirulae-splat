@@ -264,9 +264,10 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
         return;
     }
 
-    aabb_xyxy = {(int)xmin, (int)ymin, (int)xmax, (int)ymax};  // don't clamp
+    aabb_xyxy = {(int)xmin, (int)ymin, (int)xmax, (int)ymax};
     // depth = mean_c.z;
-    depth = length(mean_c);
+    // depth = length(mean_c);
+    depth = 0.5*log(dot(mean_c, mean_c) + 1e-6);
     conic = eval3d ? exp(-scale) :
         float3(covar2d_inv[0][0], covar2d_inv[0][1], covar2d_inv[1][1]);
 
@@ -440,7 +441,8 @@ void evaluate_color_3dgs(
     out float3 out_rgb, out float depth
 ) {
     out_rgb = rgb;
-    depth = length(mean - ray_o);  // TODO: more accurate depth for large splats
+    // depth = length(mean - ray_o);  // TODO: more accurate depth for large splats
+    depth = 0.5*log(dot(mean-ray_o, mean-ray_o) + 1e-6);
 }
 
 [CudaDeviceExport]

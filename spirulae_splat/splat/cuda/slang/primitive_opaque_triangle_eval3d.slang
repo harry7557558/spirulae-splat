@@ -120,16 +120,7 @@ void projection_opaque_triangle_eval3d<let camera_model: CameraModelType, let as
     aabb_xyxy = {(int)floor(xmin), (int)floor(ymin), (int)ceil(xmax), (int)ceil(ymax)};
     // depth = (vert0_c.z + vert1_c.z + vert2_c.z) / 3.0;
     depth = length(vert0_c + vert1_c + vert2_c) / 3.0;
-    #if 0
-    // stochastic depth
-    float depths[3] = { length(vert0_c), length(vert1_c), length(vert2_c) };
-    float t = no_diff hash41(quat * (depths[0] + depths[1] + depths[2]));
-    depth = lerp(
-        min(min(depths[0], depths[1]), depths[2]),
-        max(max(depths[0], depths[1]), depths[2]),
-        t * t * (3.0 - 2.0 * t)
-    );
-    #endif
+    depth = log(depth + 1e-12);
 
     float3 campos = -mul(transpose(R), t);
     float3 color;
@@ -326,6 +317,7 @@ void evaluate_color_opaque_triangle(
 
     color = rgbs[0] * w + rgbs[1] * u + rgbs[2] * v;
     // depth = length(verts[0] * w + verts[1] * u + verts[2] * v - ray_o);
+    depth = log(max(depth, 1e-12));
 }
 
 [CudaDeviceExport]

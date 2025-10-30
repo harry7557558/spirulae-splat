@@ -130,6 +130,7 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
     aabb_xyxy = {(int)floor(xmin), (int)floor(ymin), (int)ceil(xmax), (int)ceil(ymax)};
     // depth = float3(vert0_c.z, vert1_c.z, vert2_c.z);
     depth = float3(length(vert0_c), length(vert1_c), length(vert2_c));
+    depth = log(depth + 1e-12);
 
     out_hardness = hardness;
 
@@ -389,12 +390,6 @@ void evaluate_color_opaque_triangle(
     float w1 = (v0p.x * v0v2.y - v0p.y * v0v2.x) * invDenom;
     float w2 = (v0v1.x * v0p.y - v0v1.y * v0p.x) * invDenom;
     float w0 = 1.0 - w1 - w2;
-
-    #if 0
-    w0 /= depths[0]; w1 /= depths[1]; w2 /= depths[2];
-    float ws = 1.0 / (w0+w1+w2);
-    w0 *= ws; w1 *= ws; w2 *= ws;
-    #endif
 
     // TODO: seems to give bad gradient to vertex positions
     // color = w0 * colors[0] + w1 * colors[1] + w2 * colors[2];

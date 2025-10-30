@@ -237,9 +237,16 @@ class SplatTrainingLosses(torch.nn.Module):
         #                 outputs[key] = _MaskGradient.apply(outputs[key], camera_mask)
         device = outputs['rgb'].device
 
+        if 'depth' in batch and len(batch['depth'].shape) == 3:
+            batch['depth'] = batch['depth'].unsqueeze(-1)
+        if 'depth' in batch:
+            batch['depth'] = batch['depth'].to(device)
+        if 'normal' in batch:
+            batch['normal'] = batch['normal'].to(device)
+
         # apply bilateral grid
-        gt_depth = batch.get("depth", None).to(device)
-        gt_normal = batch.get("normal", None).to(device)
+        gt_depth = batch.get("depth", None)
+        gt_normal = batch.get("normal", None)
         if self.config.use_bilateral_grid_for_geometry:
             camera = outputs["camera"]
             if camera.metadata is not None and "cam_idx" in camera.metadata:
