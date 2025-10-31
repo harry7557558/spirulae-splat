@@ -51,7 +51,7 @@ def export_ply(model: SplatModel, output_path: str) -> None:
 
     positions, colors = quat_scale_to_triangle_verts(
         model.quats, model.scales, model.means,
-        model.colors, model.features_ch
+        model.features_dc, model.features_ch
     )
     vert0, vert1, vert2 = torch.unbind(positions, dim=-2)
     normals = torch.cross(vert1-vert0, vert2-vert0, dim=-1)
@@ -118,7 +118,7 @@ if __name__ == "__main__":
     model = SplatModel(work_dir)
 
     print("Orienting model...")
-    model.convert_to_input_frame("ply")
+    model.convert_to_input_frame()
 
     if args.dataset_dir is not None and os.path.exists(os.path.join(args.dataset_dir, 'markers.yaml')):
         print()

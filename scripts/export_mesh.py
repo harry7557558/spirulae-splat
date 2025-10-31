@@ -271,9 +271,14 @@ class DepthAndNormalMapsPoisson(GSMeshExporter):
             self.get_output_dir().mkdir(parents=True)
 
         model = SplatModel(str(self.load_config))
-        model.convert_to_input_frame()
         model.return_torch = True
         model.bgr = False
+
+        applied_transform = np.array(transforms.get('applied_transform', np.eye(4)))
+        if len(applied_transform) == 3:
+            applied_transform = np.concat((applied_transform, [[0, 0, 0, 1]]))
+        model.dataparser_transform = model.dataparser_transform @ np.linalg.inv(applied_transform)
+        model.convert_to_input_frame()
 
         scales = torch.amin(model.scales, dim=-1, keepdim=True)
         model.gauss_params["opacities"] = torch.where(
@@ -422,13 +427,18 @@ class TSDFFusion(GSMeshExporter):
             self.get_output_dir().mkdir(parents=True)
 
         model = SplatModel(str(self.load_config))
-        model.convert_to_input_frame()
         model.return_torch = True
         model.bgr = False
 
         transforms_path = str(self.train_data / "transforms.json")
         with open(transforms_path, 'r') as fp:
             transforms = json.load(fp)
+
+        applied_transform = np.array(transforms.get('applied_transform', np.eye(4)))
+        if len(applied_transform) == 3:
+            applied_transform = np.concat((applied_transform, [[0, 0, 0, 1]]))
+        model.dataparser_transform = model.dataparser_transform @ np.linalg.inv(applied_transform)
+        model.convert_to_input_frame()
 
         TSDFvolume = vdbfusion.VDBVolume(
             voxel_size=self.voxel_size, sdf_trunc=self.sdf_truc, space_carving=True
@@ -511,7 +521,6 @@ class Open3DTSDFFusion(GSMeshExporter):
 
         model = SplatModel(str(self.load_config))
         model_scale = model.dataparser_scale
-        model.convert_to_input_frame()
         model.return_torch = True
         model.bgr = False
 
@@ -526,6 +535,12 @@ class Open3DTSDFFusion(GSMeshExporter):
         transforms_path = str(self.train_data / "transforms.json")
         with open(transforms_path, 'r') as fp:
             transforms = json.load(fp)
+
+        applied_transform = np.array(transforms.get('applied_transform', np.eye(4)))
+        if len(applied_transform) == 3:
+            applied_transform = np.concat((applied_transform, [[0, 0, 0, 1]]))
+        model.dataparser_transform = model.dataparser_transform @ np.linalg.inv(applied_transform)
+        model.convert_to_input_frame()
 
         volume = o3d.pipelines.integration.ScalableTSDFVolume(
             voxel_length=self.voxel_size/model_scale,
@@ -547,14 +562,6 @@ class Open3DTSDFFusion(GSMeshExporter):
             c2w = c2w @ np.diag([1, -1, -1, 1])
 
             rgb_map, depth_map = model.render(camera, c2w, return_depth=True)
-            # depth_map = depth_inv_map(depth_map)
-
-            # print(rgb_map.shape, depth_map.shape)
-            # import matplotlib.pyplot as plt
-            # fig, (ax1, ax2) = plt.subplots(1, 2)
-            # ax1.imshow(rgb_map.cpu().numpy())
-            # ax2.imshow(depth_map.cpu().numpy())
-            # plt.show()
 
             H, W = camera.h, camera.w
             c2w = torch.from_numpy(c2w).float().cuda()

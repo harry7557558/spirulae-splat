@@ -120,7 +120,7 @@ class SplatModel:
             self.background_sh = rotate_sh_coeffs(self.background_sh[None], rot, "nerfstudio")[0]
 
     @torch.no_grad()
-    def convert_to_input_frame(self, match: Literal['ply', 'json', None]="ply"):
+    def convert_to_input_frame(self, match: Literal['ply', 'json', None]=None):
         """Convert to the same coordinate frame as in input dataset"""
 
         if match == "ply":

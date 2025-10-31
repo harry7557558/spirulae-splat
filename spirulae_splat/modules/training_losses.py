@@ -375,7 +375,10 @@ class SplatTrainingLosses(torch.nn.Module):
             if 'normal' in batch:
                 batch_normal = self._downscale_if_required(gt_normal.to(device))
             weight = 0
-            normal_loss = lambda x, y : (1.0 - (x*y).sum(-1)).mean()
+            def normal_loss(x, y):
+                mask = (torch.norm(x, dim=-1) > 0.5) & (torch.norm(y, dim=-1) > 0.5)
+                # return 1.0 - (x*y).sum(-1)[mask].mean()
+                return torch.abs(x-y)[mask].mean()  # TODO: why this works much better
             # with reference image
             if 'normal' in outputs and 'normal' in batch:
                 normal_supervision_loss = normal_supervision_loss + \

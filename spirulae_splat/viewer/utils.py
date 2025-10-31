@@ -160,6 +160,7 @@ def quat_scale_to_triangle_verts(
         verts = verts + means[..., None, :]
 
     if features_dc is not None:
+        features_dc = 0.28209479177387814 * features_dc + 0.5
         colors = [features_dc, features_dc, features_dc]
         if features_ch is not None:
             colors[0] = colors[0] + features_ch[..., 0, :]

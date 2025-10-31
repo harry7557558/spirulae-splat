@@ -271,7 +271,7 @@ if __name__ == "__main__":
     model = SplatModel(work_dir)
 
     print("Orienting model...")
-    model.convert_to_input_frame("ply")
+    model.convert_to_input_frame()
 
     if args.dataset_dir is not None and os.path.exists(os.path.join(args.dataset_dir, 'markers.yaml')):
         print()
