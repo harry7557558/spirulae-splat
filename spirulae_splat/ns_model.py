@@ -148,8 +148,6 @@ class SpirulaeModelConfig(ModelConfig):
     """Position standard deviation to initialize random gaussians"""
     ssim_lambda: float = 0.4
     """weight of ssim loss; 0.2 for optimal PSNR, higher for better visual quality"""
-    ssim_warmup: int = 0
-    """warmup of ssim loss"""
     use_camera_optimizer: bool = False
     """Whether to use camera optimizer
         Note: this only works well in patch batching mode"""
@@ -285,11 +283,13 @@ class SpirulaeModelConfig(ModelConfig):
     reg_warmup_length: int = 0
     """Warmup steps for depth, normal, and alpha regularizers.
        only apply regularizers after this many steps."""
+    apply_loss_for_mask: bool = True
+    """Set this to False to use masks to ignore distractors (e.g. people and cars, area outside fisheye circle, over exposure)
+       Set this to True to remove background (e.g. sky, background outside centered object)"""
     alpha_loss_weight: float = 0.01
-    """Weight for alpha, if mask is provided.
-       Set this to 0.0 to use masks to ignore distractors (e.g. people and cars, area outside fisheye circle, over exposure)
-       Set this to a positive value to remove background (e.g. sky, background around centered object)
-       See scripts/SAM2-GUI for what I use to generate masks"""
+    """Loss weight for alpha, applies when rendered alpha is above reference alpha"""
+    alpha_loss_weight_under: float = 0.005
+    """Loss weight for alpha, applies when rendered alpha is below reference alpha"""
     mcmc_opacity_reg: float = 0.01  # 0.01 in original paper
     """Opacity regularization from MCMC
        Lower usually gives more accurate geometry"""
@@ -325,12 +325,6 @@ class SpirulaeModelConfig(ModelConfig):
     """Weight for depth supervision by comparing rendered depth with depth predicted by a foundation model"""
     normal_supervision_weight: float = 0.01
     """Weight for normal supervision by comparing normal from rendered depth with normal from depth predicted by a foundation model"""
-    alpha_supervision_weight: float = 0.01
-    """Weight for alpha supervision by rendered alpha with alpha predicted by a foundation model
-        Useful for removing floaters from sky for outdoor scenes"""
-    alpha_supervision_weight_under: float = 0.005
-    """Similar to alpha_supervision_weight, but applies when renderer opacity is lower than reference opacity"""
-
 
 class SpirulaeModel(Model):
     """Template Model."""
@@ -972,7 +966,6 @@ class SpirulaeModel(Model):
             if key in meta:
                 value = meta[key]
                 if value is not None:
-                    value = torch.where(alpha > 0.0, value / alpha, value)
                     if not self.training:
                         value = torch.sqrt(value + (1/255)**2) - (1/255)
                     outputs[key] = value
@@ -1076,39 +1069,42 @@ class SpirulaeModel(Model):
             if _max_vals[key] == 0.0:
                 return '~'
 
-            if decimals is None:
-                decimals = int(max(-math.log10(0.001*_max_vals[key]), 0))
+            if decimals is None:  # 3 sig figs
+                decimals = int(max(-math.log10(0.001*abs(l)), 0)) if l != 0.0 else 0
             s = f"{{:.{decimals}f}}".format(l)
             if s.startswith('0.'):
                 s = s[1:]
             return s
 
         mcmc_reg = (self.config.use_mcmc and self.step < self.config.stop_refine_at)
-        opacity_floor = f" {self.strategy.get_opacity_floor(self.step):.2f}".replace('0.', 'o.') \
+        opacity_floor = f"[OpacFloor] {self.strategy.get_opacity_floor(self.step):.3f}".replace('0.', '.') \
             if self.config.primitive == "opaque_triangle" else ""
         chunks = [
-            f"[N] {len(self.opacities)} {mem_stats}" + opacity_floor,
-            f"[C] {fmt('image_loss', 1.0)} "
-            f"{fmt('alpha_loss', self.config.alpha_loss_weight)} "
-            f"{fmt('psnr', 1.0, 2)} "
-            f"{fmt('ssim', 1.0, 3)}",
-            f"[S] {fmt('depth_ref_loss', self.config.depth_supervision_weight)} "
-            f"{fmt('normal_ref_loss', self.config.normal_supervision_weight)} "
-            f"{fmt('alpha_ref_loss', self.config.alpha_supervision_weight)}",
-            f"[G] {fmt('normal_reg', self.training_losses.get_2dgs_reg_weights()[1])} "
-            f"{fmt('alpha_reg', self.training_losses.get_alpha_reg_weight())} "
-            f"{fmt('depth_dist_reg', self.training_losses.get_2dgs_reg_weights()[0][0])} "
-            f"{fmt('normal_dist_reg', self.training_losses.get_2dgs_reg_weights()[0][1])} "
-            f"{fmt('rgb_dist_reg', self.training_losses.get_2dgs_reg_weights()[0][2])}",
-            f"[M] {fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg * mcmc_reg)} "
-            f"{fmt('mcmc_scale_reg', self.config.mcmc_scale_reg * mcmc_reg)}",
-            f"[R] {fmt('erank_reg', max(self.config.erank_reg_s3, self.config.erank_reg))} "
-            f"{fmt('scale_reg', self.config.scale_regularization_weight)}",
-            f"[E] {fmt('tv_loss', 10.0)} "
-            f"{fmt('exposure_param_reg', self.config.exposure_reg_param)}",
+            f"[N] {len(self.opacities)}",
+            f"[Mem] {mem_stats}",
+            f"[Train] loss={fmt('image_loss', 1.0)} "
+            f"psnr={fmt('psnr', 1.0, 2)} "
+            f"ssim={fmt('ssim', 1.0, 3)}",
+            "                \n",
+            f"[RefLoss] depth={fmt('depth_ref_loss', self.config.depth_supervision_weight, 3)} "
+            f"normal={fmt('normal_ref_loss', self.config.normal_supervision_weight, 3)} "
+            f"alpha={fmt('alpha_ref_loss', 0.5*(self.config.alpha_loss_weight+self.config.alpha_loss_weight_under), 4)}",
+            f"[DistLoss] depth={fmt('depth_dist_reg', self.training_losses.get_2dgs_reg_weights()[0][0], 3)} "
+            f"normal={fmt('normal_dist_reg', self.training_losses.get_2dgs_reg_weights()[0][1], 3)} "
+            f"rgb={fmt('rgb_dist_reg', self.training_losses.get_2dgs_reg_weights()[0][2], 3)}",
+            "                \n",
+            f"[ImReg] normal={fmt('normal_reg', self.training_losses.get_2dgs_reg_weights()[1], 3)} "
+            f"alpha={fmt('alpha_reg', self.training_losses.get_alpha_reg_weight(), 3)}",
+            f"[SplatReg] opac={fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg * mcmc_reg, 3)} "
+            f"scale={fmt('mcmc_scale_reg', self.config.mcmc_scale_reg * mcmc_reg, 4)} "
+            f"erank={fmt('erank_reg', max(self.config.erank_reg_s3, self.config.erank_reg, 3))} "
+            f"aniso={fmt('scale_reg', self.config.scale_regularization_weight, 3)}",
+            "                \n",
+            f"[Reg] bilagrid={fmt('tv_loss', 10.0)}",
+        ] + [opacity_floor] * (len(opacity_floor) > 0) + [
+            "                \n",
         ]
-        chunks = [c for c in chunks if any(char.isdigit() for char in c)]
-        CONSOLE.print(' '.join(chunks).replace('\n', '') + "    ", end="\r")
+        CONSOLE.print(' '.join(chunks).replace('\n ', '\n'), end="\033[F"*4)
 
     @torch.no_grad()
     def get_outputs_for_camera(self, camera: Cameras, obb_box: Optional[OrientedBox] = None) -> Dict[str, torch.Tensor]:

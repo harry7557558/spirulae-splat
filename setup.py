@@ -28,7 +28,7 @@ def extract_function_declarations(code):
         # Match the function name
         \s+\b\w+\b\s*
         # Match the function parameters
-        \([^)]*\)
+        \(.*?\)\s
     """, re.MULTILINE | re.VERBOSE | re.DOTALL)
     
     matches = function_decl_pattern.findall(code)
@@ -160,6 +160,7 @@ path = "spirulae_splat/splat/cuda/csrc/"
 generate_header(path+"SphericalHarmonics.cu", path+"SphericalHarmonics.cuh")
 generate_header(path+"BackgroundSphericalHarmonics.cu", path+"BackgroundSphericalHarmonics.cuh")
 generate_header(path+"PerSplatLoss.cu", path+"PerSplatLoss.cuh")
+generate_header(path+"PerPixelLoss.cu", path+"PerPixelLoss.cuh")
 generate_header(path+"PixelWise.cu", path+"PixelWise.cuh")
 generate_header(path+"Projection.cu", path+"Projection.cuh")
 generate_header(path+"ProjectionEval3D.cu", path+"ProjectionEval3D.cuh")

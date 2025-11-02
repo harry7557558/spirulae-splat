@@ -197,7 +197,10 @@ class SpirulaeDataset(InputDataset):
                         background = torch.ones_like(data['image']) * torch.tensor([(0,0,1), (0,0,255)][image_type == 'uint8']).to(data['image'])
                         data['image'] = torch.where(data['mask'], data['image'], background)
                     data['image'] = resize_image(data['image'][None], 2**int(max(0.5*math.log2(data['image'].numel()/10000), 0.0)))[0]
-                    return data
+                    return {
+                        'image_idx': data['image_idx'],
+                        'image': data['image'],
+                    }
                 with ThreadPoolExecutor() as executor:
                     for result in tqdm(
                         executor.map(load_data, range(len(self))),

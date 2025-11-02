@@ -62,8 +62,8 @@ class SupervisionLosses(torch.nn.Module):
 
         self.depth_weight = config.depth_supervision_weight
         self.normal_weight = config.normal_supervision_weight
-        self.alpha_weight = config.alpha_supervision_weight
-        self.alpha_weight_under = config.alpha_supervision_weight_under
+        self.alpha_weight = config.alpha_loss_weight
+        self.alpha_weight_under = config.alpha_loss_weight_under
 
     @staticmethod
     def get_alpha_loss(x, y):

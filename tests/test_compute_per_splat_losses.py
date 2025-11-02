@@ -32,8 +32,8 @@ class Config:
     depth_distortion_uv_degree = -1
     depth_supervision_weight = 0.0
     normal_supervision_weight = 0.0
-    alpha_supervision_weight = 0.0
-    alpha_supervision_weight_under = 0.0
+    alpha_loss_weight = 0.0
+    alpha_loss_weight_under = 0.0
     adaptive_exposure_mode = ""
 
 

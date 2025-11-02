@@ -5,6 +5,7 @@
 #include "SphericalHarmonics.cuh"
 #include "BackgroundSphericalHarmonics.cuh"
 #include "PerSplatLoss.cuh"
+#include "PerPixelLoss.cuh"
 #include "PixelWise.cuh"
 #include "SplatTileIntersector.cuh"
 #include "Projection.cuh"
@@ -40,6 +41,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // PerSplatLoss.cuh
     m.def("compute_per_splat_losses_forward", &compute_per_splat_losses_forward_tensor);
     m.def("compute_per_splat_losses_backward", &compute_per_splat_losses_backward_tensor);
+
+    // PerPixelLoss.cuh
+    m.def("compute_per_pixel_losses_forward", &compute_per_pixel_losses_forward_tensor);
+    m.def("compute_per_pixel_losses_backward", &compute_per_pixel_losses_backward_tensor);
 
     // PixelWise.cuh
     m.def("blend_background_forward", &blend_background_forward_tensor);
