@@ -262,8 +262,7 @@ class SplatTrainingLosses(torch.nn.Module):
             gt_depth_mask = (gt_depth != 0.0)
 
             # mask sky
-            none_sky_mask = gt_depth < torch.amax(
-                gt_depth, dim=(1,2,3), keepdims=True).detach().item()
+            none_sky_mask = gt_depth < torch.amax(gt_depth, dim=(1,2,3), keepdims=True).detach()
             gt_depth_mask = gt_depth_mask & none_sky_mask
             if gt_alpha is not None:
                 gt_alpha = gt_alpha & none_sky_mask
@@ -320,7 +319,6 @@ class SplatTrainingLosses(torch.nn.Module):
                 gt_alpha = gt_alpha & alpha if gt_rgb_mask is None else alpha
 
         # do this to make SSIM happier
-        mask = None
         if gt_rgb_mask is not None:
             gt_rgb = torch.where(gt_rgb_mask, gt_rgb, outputs["background"])
             pred_rgb = torch.where(gt_rgb_mask, pred_rgb, outputs["background"])
@@ -391,6 +389,8 @@ class SplatTrainingLosses(torch.nn.Module):
             rgb_dist_reg, depth_dist_reg, normal_dist_reg
         ) = losses
 
+        image_loss = rgb_l1 + self.config.ssim_lambda * (1.0 - ssim)
+
         # metrics, readable from console during training
         with torch.no_grad():
             if not hasattr(self, '_running_metrics'):
@@ -409,7 +409,7 @@ class SplatTrainingLosses(torch.nn.Module):
 
         loss_dict = {
             # [C] RGB and alpha
-            "image_loss": rgb_l1 + self.config.ssim_lambda * (1.0 - ssim),
+            "image_loss": image_loss,
             "psnr": float(psnr),
             "ssim": float(ssim),
             # [S] supervision

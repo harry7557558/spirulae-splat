@@ -276,7 +276,7 @@ class DepthAndNormalMapsPoisson(GSMeshExporter):
 
         applied_transform = np.array(transforms.get('applied_transform', np.eye(4)))
         if len(applied_transform) == 3:
-            applied_transform = np.concat((applied_transform, [[0, 0, 0, 1]]))
+            applied_transform = np.concatenate((applied_transform, [[0, 0, 0, 1]]))
         model.dataparser_transform = model.dataparser_transform @ np.linalg.inv(applied_transform)
         model.convert_to_input_frame()
 
@@ -436,7 +436,7 @@ class TSDFFusion(GSMeshExporter):
 
         applied_transform = np.array(transforms.get('applied_transform', np.eye(4)))
         if len(applied_transform) == 3:
-            applied_transform = np.concat((applied_transform, [[0, 0, 0, 1]]))
+            applied_transform = np.concatenate((applied_transform, [[0, 0, 0, 1]]))
         model.dataparser_transform = model.dataparser_transform @ np.linalg.inv(applied_transform)
         model.convert_to_input_frame()
 
@@ -538,7 +538,7 @@ class Open3DTSDFFusion(GSMeshExporter):
 
         applied_transform = np.array(transforms.get('applied_transform', np.eye(4)))
         if len(applied_transform) == 3:
-            applied_transform = np.concat((applied_transform, [[0, 0, 0, 1]]))
+            applied_transform = np.concatenate((applied_transform, [[0, 0, 0, 1]]))
         model.dataparser_transform = model.dataparser_transform @ np.linalg.inv(applied_transform)
         model.convert_to_input_frame()
 

@@ -537,10 +537,7 @@ class SpirulaeModel(Model):
 
     @property
     def colors(self):
-        if self.config.sh_degree > 0:
-            return SH2RGB(self.features_dc)
-        else:
-            return self.features_dc
+        return SH2RGB(self.features_dc)
 
     @property
     def num_points(self):
@@ -1053,7 +1050,7 @@ class SpirulaeModel(Model):
         mem_stats = f"{used:.2f}\N{ZERO WIDTH SPACE}GB {used_percentage:.0f}%"
 
         def fmt(key: str, s: float, decimals=None) -> str:
-            if s == 0.0:
+            if s == 0.0 or key not in losses:
                 return '~'
 
             l = losses[key]

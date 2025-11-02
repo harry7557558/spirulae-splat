@@ -64,6 +64,7 @@ __global__ void per_pixel_losses_forward_kernel(
 
     for (uint i = 0; i < (uint)RawLossIndex::length; i++) {
         float loss = inside ? losses[i] : 0.0f;
+        loss = isfinite(loss) ? loss : 0.0f;
         float loss_reduced = cg::reduce(warp, loss, cg::plus<float>());
         if (warp.thread_rank() == 0)
             atomic_reduce[warp_idx] = loss_reduced;
@@ -72,7 +73,7 @@ __global__ void per_pixel_losses_forward_kernel(
         if (__ballot_sync(~0u, loss != 0.0f) == 0)
             continue;
         loss_reduced = cg::reduce(warp, loss, cg::plus<float>());
-        if (block.thread_rank() == 0 && loss_reduced != 0.0f)
+        if (block.thread_rank() == 0 && loss_reduced != 0.0f && isfinite(loss_reduced))
             atomicAdd(out_losses+i, loss_reduced);
     }
 }

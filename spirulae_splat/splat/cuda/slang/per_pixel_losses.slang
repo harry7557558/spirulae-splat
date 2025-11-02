@@ -33,7 +33,8 @@ float3 normalize_normal(float3 normal, inout bool mask) {
 [Differentiable]
 float normal_loss(float3 normal, float3 normal_ref) {
     // return 1.0 - dot(normal, normal_ref);
-    return l1_loss(normal, normal_ref);
+    // return l1_loss(normal, normal_ref);
+    return sqrt(max(1.0 - dot(normal, normal_ref), 1e-12));
 }
 
 [ForceInline]

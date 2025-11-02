@@ -182,7 +182,7 @@ spirulae_triangle = MethodSpecification(
                 primitive="opaque_triangle",
                 kernel_radius=0.5,
                 compute_depth_normal=True,
-                # sh_degree=1,  # TODO: debug sh_degree=0
+                sh_degree=0,
                 background_color="black",
                 train_background_color=False,
                 # alpha_reg_weight=0.0,
@@ -190,11 +190,13 @@ spirulae_triangle = MethodSpecification(
                 # erank_reg=1.0,
                 # supersampling=2,
                 mcmc_min_opacity=0.01,
-                mcmc_noise_lr=1e3,  # or 0.0
+                mcmc_noise_lr=1e4,  # or 0.0
                 # mcmc_max_screen_size=0.05,
                 supervision_warmup=0,
-                depth_supervision_weight=1.0,
-                normal_supervision_weight=1.0
+                depth_supervision_weight=0.25,
+                normal_supervision_weight=0.25,
+                rgb_distortion_reg_weight=0.01,
+                ssim_lambda=0.6,
             ),
             
         ),

@@ -53,8 +53,9 @@ def process_image(
             pred_depth, size=(h, w), mode='bilinear', align_corners=False
         ).permute(0, 2, 3, 1)  # [h, w, 1]
         # pred_depth = torch.log(torch.relu(pred_depth) + 1.0)
-        pred_depth /= torch.amax(pred_depth)
         pred_depth = distort_image(pred_depth, *intrins)[0]
+        pad = 8  # fix bad values in case undistortion gives black border that messes up model
+        pred_depth /= torch.amax(pred_depth[pad:-pad, pad:-pad])
         pred_depth = torch.clip(65535*pred_depth, 0, 65535).cpu().numpy().astype(np.uint16)
         Image.fromarray(pred_depth.squeeze(-1), mode='I;16').save(depth_save_path)
 
