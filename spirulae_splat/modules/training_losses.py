@@ -256,9 +256,10 @@ class SplatTrainingLosses(torch.nn.Module):
 
         # load depth
         if 'depth' in batch:
-            gt_depth = self._downscale_if_required(batch['depth'].to(device))
+            gt_depth = batch['depth'].to(device)
             if len(gt_depth.shape) == 3:
                 gt_depth = gt_depth.unsqueeze(-1)
+            gt_depth = self._downscale_if_required(gt_depth)
             gt_depth_mask = (gt_depth != 0.0)
 
             # mask sky

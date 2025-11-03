@@ -57,6 +57,7 @@ class OpaqueStrategy(Strategy):
     warmup_steps_1: int = 15_000
     refine_stop_iter: int = 30_000
     refine_every: int = 100
+    geometry_optimizer_stop_iter: int = 29000
     grow_factor: float = 1.05
     min_opacity: float = 0.005
     prune_opacity: float = 0.25
@@ -205,6 +206,11 @@ class OpaqueStrategy(Strategy):
             lr (float): Learning rate for "means" attribute of the GS.
         """
         self._update_state(params, state, info)
+
+        if step > self.geometry_optimizer_stop_iter:
+            for key in optimizers:
+                if key in ['means', 'scales', 'quats']:
+                    optimizers[key].param_groups[0]['lr'] = 0.0
 
         if (
             step >= self.refine_every

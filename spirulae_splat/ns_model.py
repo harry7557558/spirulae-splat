@@ -142,7 +142,7 @@ class SpirulaeModelConfig(ModelConfig):
         Disable per-pixel sorting if you use this"""
     random_init: bool = False
     """whether to initialize the positions uniformly randomly (not SFM points)"""
-    num_random: int = 20000
+    num_random: int = 200000
     """Number of gaussians to initialize if random init is used"""
     random_scale: float = 1.0
     """Position standard deviation to initialize random gaussians"""
@@ -477,6 +477,7 @@ class SpirulaeModel(Model):
                 relocate_scale2d=self.config.relocate_screen_size,
                 max_scale2d=self.config.mcmc_max_screen_size,
                 max_scale3d=self.config.mcmc_max_world_size,
+                geometry_optimizer_stop_iter=self.config.stop_refine_at
             )
             self.strategy_state = self.strategy.initialize_state()
             return

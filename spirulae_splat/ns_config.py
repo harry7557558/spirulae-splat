@@ -100,7 +100,7 @@ _TRIANGLE_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS}
 _TRIANGLE_OPTIMIZERS["scales"] = {
     "optimizer": AdamOptimizerConfig(lr=0.005, eps=1e-15),
     "scheduler": ExponentialDecaySchedulerConfig(
-        lr_final=0.0002, max_steps=30000,
+        lr_final=0.002, max_steps=30000,
     ),
 }
 _TRIANGLE_OPTIMIZERS["quats"] = {
@@ -183,6 +183,7 @@ spirulae_triangle = MethodSpecification(
                 kernel_radius=0.5,
                 compute_depth_normal=True,
                 sh_degree=0,
+                stop_refine_at=29000,
                 background_color="black",
                 train_background_color=False,
                 # alpha_reg_weight=0.0,
