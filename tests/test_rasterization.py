@@ -30,7 +30,7 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
         primitive=["3dgs", "mip"][IS_ANTIALIASED],
         splat_params=(means, quats, scales, opacities, features_dc, features_sh),
         # primitive="opaque_triangle",
-        # splat_params=(means, quats, scales, opacities.unsqueeze(-1).repeat(1, 2), features_dc, features_sh, features_dc.unsqueeze(-2).repeat(1, 2, 1)),
+        # splat_params=(means, quats, scales+1.8, opacities.unsqueeze(-1).repeat(1, 2), features_dc, features_sh, features_dc.unsqueeze(-2).repeat(1, 2, 1)),
         viewmats=viewmats,  # [C, 4, 4]
         Ks=Ks,  # [C, 3, 3]
         width=W,

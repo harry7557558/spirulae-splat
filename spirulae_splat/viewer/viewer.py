@@ -241,7 +241,7 @@ if __name__ == "__main__":
         sys.exit(-1)
 
     # Load camera
-    camera_path = os.path.join(os.path.dirname(__file__), "cameras/s21.yaml")
+    camera_path = os.path.join(os.path.dirname(__file__), "cameras/zipnerf.yaml")
     camera = Camera(camera_path)
 
     # Initialize model

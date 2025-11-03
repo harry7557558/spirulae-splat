@@ -791,6 +791,12 @@ struct OpaqueTriangle::WorldEval3D {
         return v_splat;
     }
 
+    __device__ __forceinline__ float evaluate_sorting_depth(float3 ray_o, float3 ray_d) {
+        return evaluate_sorting_depth_opaque_triangle(
+            &verts, &rgbs, ray_o, ray_d
+        );
+    }
+
     __device__ __forceinline__ OpaqueTriangle::RenderOutput evaluate_color(float3 ray_o, float3 ray_d) {
         float3 out_rgb; float out_depth;
         evaluate_color_opaque_triangle(
