@@ -199,7 +199,7 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
         // early skip if done
         done |= (t >= range_end && pqueue_size == 0);
         if (__ballot_sync(~0u, !done) == 0)
-            break;
+            continue;
 
         bool hasSplat = false;
         float depth;
