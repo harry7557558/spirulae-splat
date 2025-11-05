@@ -15,6 +15,8 @@
 #include "RasterizationBwd.cuh"
 #include "RasterizationEval3DFwd.cuh"
 #include "RasterizationEval3DBwd.cuh"
+#include "RasterizationSortedEval3DFwd.cuh"
+#include "RasterizationSortedEval3DBwd.cuh"
 
 #define TORCH_INDUCTOR_CPP_WRAPPER
 #include <torch/extension.h>
@@ -84,7 +86,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // RasterizationEval3DFwd.cuh and RasterizationEval3DBwd.cuh
     m.def("rasterization_3dgs_eval3d_forward", &rasterize_to_pixels_3dgs_eval3d_fwd);
     m.def("rasterization_3dgs_eval3d_backward", &rasterize_to_pixels_3dgs_eval3d_bwd);
-    m.def("rasterization_opaque_triangle_eval3d_forward", &rasterize_to_pixels_opaque_triangle_eval3d_fwd);
-    m.def("rasterization_opaque_triangle_eval3d_backward", &rasterize_to_pixels_opaque_triangle_eval3d_bwd);
+    // m.def("rasterization_opaque_triangle_eval3d_forward", &rasterize_to_pixels_opaque_triangle_eval3d_fwd);
+    // m.def("rasterization_opaque_triangle_eval3d_backward", &rasterize_to_pixels_opaque_triangle_eval3d_bwd);
+    m.def("rasterization_opaque_triangle_eval3d_forward", &rasterize_to_pixels_opaque_triangle_sorted_eval3d_fwd);
+    m.def("rasterization_opaque_triangle_eval3d_backward", &rasterize_to_pixels_opaque_triangle_sorted_eval3d_bwd);
 
 }

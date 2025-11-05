@@ -403,7 +403,7 @@ def rasterization(
         )
 
     else:
-        # Project Gaussians to 2D
+        # Project splats to 2D
         proj_results = fully_fused_projection(
             primitive,
             with_eval3d,
@@ -588,35 +588,6 @@ def rasterization(
             conics = reshape_view(C, conics, N_world)
             proj_opacities = reshape_view(C, proj_opacities, N_world)
             colors = reshape_view(C, colors, N_world)
-
-    # Rasterize to pixels
-    # if render_mode in ["RGB+D+N", "RGB+ED+N"]:
-    #     assert normals is not None, "Primitive does not support normal"
-    #     colors = torch.cat((colors, depths[..., None], normals), dim=-1)
-    #     if backgrounds is not None:
-    #         backgrounds = torch.cat(
-    #             [
-    #                 backgrounds,
-    #                 torch.zeros(batch_dims + (C, 1), device=backgrounds.device),
-    #             ],
-    #             dim=-1,
-    #         )
-    # elif render_mode in ["RGB+D", "RGB+ED"]:
-    #     colors = torch.cat((colors, depths[..., None]), dim=-1)
-    #     if backgrounds is not None:
-    #         backgrounds = torch.cat(
-    #             [
-    #                 backgrounds,
-    #                 torch.zeros(batch_dims + (C, 1), device=backgrounds.device),
-    #             ],
-    #             dim=-1,
-    #         )
-    # elif render_mode in ["D", "ED"]:
-    #     colors = depths[..., None]
-    #     if backgrounds is not None:
-    #         backgrounds = torch.zeros(batch_dims + (C, 1), device=backgrounds.device)
-    # else:  # RGB
-    #     pass
 
     # Identify intersecting tiles
     tile_width = math.ceil(width / float(tile_size))

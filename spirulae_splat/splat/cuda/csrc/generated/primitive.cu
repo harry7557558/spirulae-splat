@@ -12329,18 +12329,24 @@ inline __device__ void evaluate_alpha_opaque_triangle_vjp(FixedArray<float3 , 3>
     return;
 }
 
-inline __device__ void evaluate_color_opaque_triangle(FixedArray<float3 , 3>  * verts_6, FixedArray<float3 , 3>  * rgbs_4, float3  ray_o_7, float3  ray_d_7, float3  * color_13, float * depth_20)
+inline __device__ float evaluate_sorting_depth_opaque_triangle(FixedArray<float3 , 3>  * verts_6, FixedArray<float3 , 3>  * rgbs_4, float3  ray_o_7, float3  ray_d_7)
 {
-    float3  v1v0_2 = (*verts_6)[int(1)] - (*verts_6)[int(0)];
-    float3  v2v0_2 = (*verts_6)[int(2)] - (*verts_6)[int(0)];
-    float3  rov0_2 = ray_o_7 - (*verts_6)[int(0)];
-    float3  n_1 = cross_0(v1v0_2, v2v0_2);
-    float3  q_3 = cross_0(rov0_2, ray_d_7);
-    float d_2 = 1.0f / dot_0(ray_d_7, n_1);
+    float3  n_1 = cross_0((*verts_6)[int(1)] - (*verts_6)[int(0)], (*verts_6)[int(2)] - (*verts_6)[int(0)]);
+    return 1.0f / dot_0(ray_d_7, n_1) * dot_0(- n_1, ray_o_7 - (*verts_6)[int(0)]);
+}
+
+inline __device__ void evaluate_color_opaque_triangle(FixedArray<float3 , 3>  * verts_7, FixedArray<float3 , 3>  * rgbs_5, float3  ray_o_8, float3  ray_d_8, float3  * color_13, float * depth_20)
+{
+    float3  v1v0_2 = (*verts_7)[int(1)] - (*verts_7)[int(0)];
+    float3  v2v0_2 = (*verts_7)[int(2)] - (*verts_7)[int(0)];
+    float3  rov0_2 = ray_o_8 - (*verts_7)[int(0)];
+    float3  n_2 = cross_0(v1v0_2, v2v0_2);
+    float3  q_3 = cross_0(rov0_2, ray_d_8);
+    float d_2 = 1.0f / dot_0(ray_d_8, n_2);
     float u_31 = d_2 * dot_0(- q_3, v2v0_2);
     float v_31 = d_2 * dot_0(q_3, v1v0_2);
-    *depth_20 = d_2 * dot_0(- n_1, rov0_2);
-    *color_13 = (*rgbs_4)[int(0)] * make_float3 (1.0f - u_31 - v_31) + (*rgbs_4)[int(1)] * make_float3 (u_31) + (*rgbs_4)[int(2)] * make_float3 (v_31);
+    *depth_20 = d_2 * dot_0(- n_2, rov0_2);
+    *color_13 = (*rgbs_5)[int(0)] * make_float3 (1.0f - u_31 - v_31) + (*rgbs_5)[int(1)] * make_float3 (u_31) + (*rgbs_5)[int(2)] * make_float3 (v_31);
     *depth_20 = (F32_log(((F32_max((*depth_20), (9.999999960041972e-13f))))));
     return;
 }
@@ -12476,21 +12482,21 @@ inline __device__ void s_bwd_evaluate_color_opaque_triangle_1(DiffPair_arrayx3Cv
     return;
 }
 
-inline __device__ void evaluate_color_opaque_triangle_vjp(FixedArray<float3 , 3>  * verts_7, FixedArray<float3 , 3>  * rgbs_5, float3  ray_o_8, float3  ray_d_8, float3  v_color_1, float v_depth_11, FixedArray<float3 , 3>  * v_verts_3, FixedArray<float3 , 3>  * v_rgbs_2, float3  * v_ray_o_4, float3  * v_ray_d_4)
+inline __device__ void evaluate_color_opaque_triangle_vjp(FixedArray<float3 , 3>  * verts_8, FixedArray<float3 , 3>  * rgbs_6, float3  ray_o_9, float3  ray_d_9, float3  v_color_1, float v_depth_11, FixedArray<float3 , 3>  * v_verts_3, FixedArray<float3 , 3>  * v_rgbs_2, float3  * v_ray_o_4, float3  * v_ray_d_4)
 {
     float3  _S4788 = make_float3 (0.0f);
     FixedArray<float3 , 3>  _S4789 = { _S4788, _S4788, _S4788 };
     DiffPair_arrayx3Cvectorx3Cfloatx2C3x3Ex2C3x3E_0 dp_verts_1;
-    (&dp_verts_1)->primal_0 = *verts_7;
+    (&dp_verts_1)->primal_0 = *verts_8;
     (&dp_verts_1)->differential_0 = _S4789;
     DiffPair_arrayx3Cvectorx3Cfloatx2C3x3Ex2C3x3E_0 dp_rgbs_0;
-    (&dp_rgbs_0)->primal_0 = *rgbs_5;
+    (&dp_rgbs_0)->primal_0 = *rgbs_6;
     (&dp_rgbs_0)->differential_0 = _S4789;
     DiffPair_vectorx3Cfloatx2C3x3E_0 dp_ray_o_3;
-    (&dp_ray_o_3)->primal_0 = ray_o_8;
+    (&dp_ray_o_3)->primal_0 = ray_o_9;
     (&dp_ray_o_3)->differential_0 = _S4788;
     DiffPair_vectorx3Cfloatx2C3x3E_0 dp_ray_d_3;
-    (&dp_ray_d_3)->primal_0 = ray_d_8;
+    (&dp_ray_d_3)->primal_0 = ray_d_9;
     (&dp_ray_d_3)->differential_0 = _S4788;
     s_bwd_evaluate_color_opaque_triangle_1(&dp_verts_1, &dp_rgbs_0, &dp_ray_o_3, &dp_ray_d_3, v_color_1, v_depth_11);
     *v_verts_3 = (&dp_verts_1)->differential_0;

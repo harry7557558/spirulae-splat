@@ -305,6 +305,16 @@ void evaluate_alpha_opaque_triangle_vjp(
 }
 
 [CudaDeviceExport]
+float evaluate_sorting_depth_opaque_triangle(
+    float3 verts[3], float3 rgbs[3],
+    float3 ray_o, float3 ray_d
+) {
+    float u, v, t;
+    ray_triangle_intersection_uvt(ray_o, ray_d, verts, u, v, t);
+    return t;
+}
+
+[CudaDeviceExport]
 [Differentiable]
 void evaluate_color_opaque_triangle(
     float3 verts[3], float3 rgbs[3],
