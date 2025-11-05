@@ -10,6 +10,7 @@
 #include <cub/cub.cuh>
 
 
+<<<<<<< HEAD
 template<uint MAX_SIZE>
 struct MaxPriorityQueue {
     uint2 arr[MAX_SIZE];   // x is key and y is sorting value
@@ -21,6 +22,17 @@ struct MaxPriorityQueue {
     __forceinline__ __device__ bool full() const { return size >= MAX_SIZE;  }
 
     inline __device__ void push(uint key, float value) {
+=======
+constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
+
+
+template<uint MAX_SIZE>
+struct MaxPriorityQueue {
+    uint2 arr[MAX_SIZE];   // x is key and y is sorting value
+    // uint size;  // commented to prevent spill to local memory
+
+    inline __device__ void push(uint key, uint& size, float value) {
+>>>>>>> 251104-triangle-splatting
         uint idx = size;
         arr[idx] = make_uint2(key, value <= 0.0f ? 0u : __float_as_uint(value));
         size++;
@@ -35,6 +47,7 @@ struct MaxPriorityQueue {
         }
     }
 
+<<<<<<< HEAD
     inline __device__ uint2 pop() {
         uint2 result = arr[0];
         size--;
@@ -55,6 +68,29 @@ struct MaxPriorityQueue {
                 arr[idx] = arr[smallest];
                 arr[smallest] = temp;
                 idx = smallest;
+=======
+    inline __device__ uint2 pop(uint& size) {
+        uint2 result = arr[0];
+        size--;
+        if (size > 0) {
+            uint idx = 0;
+            uint2 mval = arr[size];
+            arr[0] = mval;
+            while (true) {
+                uint left = 2 * idx + 1;
+                uint right = 2 * idx + 2;
+                uint midx = idx;
+                if (left < size && arr[left].y > mval.y)
+                    midx = left, mval = arr[left];
+                if (right < size && arr[right].y > mval.y)
+                    midx = right, mval = arr[right];
+                if (midx == idx)
+                    break;
+                uint2 temp = arr[midx];
+                mval = arr[midx] = arr[idx];
+                arr[idx] = temp;
+                idx = midx;
+>>>>>>> 251104-triangle-splatting
             }
         }
         return result;
@@ -189,28 +225,66 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
 
     static constexpr uint MAX_PQUEUE_SIZE = 32;
     MaxPriorityQueue<MAX_PQUEUE_SIZE> pqueue;
+<<<<<<< HEAD
     pqueue.init();
 
     for (int32_t t = range_end-1; t >= (int)range_start - (int)MAX_PQUEUE_SIZE-1; t--) {
         bool active = inside && (t <= bin_final);
         active &= (t >= range_start || !pqueue.empty());
+=======
+    uint pqueue_size = 0;
+
+    __shared__ typename SplatPrimitive::WorldEval3D splat_batch[BLOCK_SIZE];
+
+    for (int32_t t = range_end-1; t >= (int)range_start - (int)MAX_PQUEUE_SIZE-1; t--) {
+
+        // load splats into shared memory
+        if (((range_end-1) - t) % BLOCK_SIZE == 0) {
+            block.sync();
+            int32_t t1 = t - (int)block.thread_rank();
+            if (t1 >= range_start) {
+                uint32_t splat_idx = flatten_ids[t1];
+                typename SplatPrimitive::WorldEval3D splat =
+                    SplatPrimitive::WorldEval3D::loadWithPrecompute(splat_buffer, splat_idx);
+                splat_batch[block.thread_rank()] = splat;
+            }
+            block.sync();
+        }
+
+        // early skip if done
+        bool active = inside && (t <= bin_final);
+        active &= (t >= range_start || pqueue_size != 0);
+>>>>>>> 251104-triangle-splatting
         if (__ballot_sync(~0u, active) == 0)
             continue;
 
         bool hasSplat = false;
         float depth;
         if (active && t >= range_start) {
+<<<<<<< HEAD
             uint32_t splat_idx = flatten_ids[t];
             typename SplatPrimitive::WorldEval3D splat =
                 SplatPrimitive::WorldEval3D::loadWithPrecompute(splat_buffer, splat_idx);
+=======
+            // uint32_t splat_idx = flatten_ids[t];
+            // typename SplatPrimitive::WorldEval3D splat =
+            //     SplatPrimitive::WorldEval3D::loadWithPrecompute(splat_buffer, splat_idx);
+            typename SplatPrimitive::WorldEval3D splat =
+                splat_batch[((range_end-1) - t) % BLOCK_SIZE];
+>>>>>>> 251104-triangle-splatting
             float alpha = splat.evaluate_alpha(ray_o, ray_d);
             hasSplat |= (alpha >= ALPHA_THRESHOLD);
             if (hasSplat)
                 depth = splat.evaluate_sorting_depth(ray_o, ray_d);
         }
 
+<<<<<<< HEAD
         if (pqueue.full() || (t < range_start && !pqueue.empty())) {
             uint32_t t = pqueue.pop().x;
+=======
+        if (pqueue_size >= MAX_PQUEUE_SIZE || (t < range_start && pqueue_size != 0)) {
+            uint32_t t = pqueue.pop(pqueue_size).x;
+>>>>>>> 251104-triangle-splatting
             uint32_t splat_idx = flatten_ids[t];
             typename SplatPrimitive::WorldEval3D splat =
                 SplatPrimitive::WorldEval3D::loadWithPrecompute(splat_buffer, splat_idx);
@@ -290,10 +364,15 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
             splat.atomicAddGradientToBuffer(v_splat, v_splat_buffer, splat_idx);
         }
 
+<<<<<<< HEAD
         if (__ballot_sync(~0u, active && hasSplat) == 0)
             continue;
         if (hasSplat) {
             pqueue.push(t, depth);
+=======
+        if (hasSplat) {
+            pqueue.push(t, pqueue_size, depth);
+>>>>>>> 251104-triangle-splatting
         }
     }
     // TODO: gradient to viewmat

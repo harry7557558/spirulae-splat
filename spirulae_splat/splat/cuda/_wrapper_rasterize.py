@@ -432,6 +432,9 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
             f"CameraModelType.{camera_model.upper()}"
         )
 
+        # from time import perf_counter
+        # torch.cuda.synchronize()
+        # time0 = perf_counter()
         (
             (render_rgbs, render_depths, render_normals),
             render_Ts, last_ids,
@@ -443,6 +446,9 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
             backgrounds, masks,
             width, height, tile_size, isect_offsets, flatten_ids,
         )
+        # torch.cuda.synchronize()
+        # time1 = perf_counter()
+        # print(f"fwd: {1e3*(time1-time0):.2f} ms")
 
         ctx.save_for_backward(
             hardness, depths, verts, rgbs, normals,
@@ -486,6 +492,9 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
         height = ctx.height
         tile_size = ctx.tile_size
 
+        # from time import perf_counter
+        # torch.cuda.synchronize()
+        # time0 = perf_counter()
         (
             (v_hardness, v_depths, v_verts, v_rgbs, v_normals),
             v_viewmats,
@@ -500,6 +509,9 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
             v_render_alphas.contiguous(),
             (v_distortion_rgbs.contiguous(), v_distortion_depths.contiguous(), v_distortion_normals.contiguous()),
         )
+        # torch.cuda.synchronize()
+        # time1 = perf_counter()
+        # print(f"bwd: {1e3*(time1-time0):.2f} ms")
 
         v_backgrounds = None
         if ctx.needs_input_grad[11]:

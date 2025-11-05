@@ -8,17 +8,15 @@
 #include <gsplat/Utils.cuh>
 
 
+constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
+
+
 template<uint MAX_SIZE>
 struct MinPriorityQueue {
     uint2 arr[MAX_SIZE];   // x is key and y is sorting value
-    uint size;
+    // uint size;  // commented to prevent spill to local memory
     
-    __forceinline__ __device__ void init() { size = 0; }
-    __forceinline__ __device__ bool empty() const { return size == 0; }
-    __forceinline__ __device__ void clear() { size = 0; }
-    __forceinline__ __device__ bool full() const { return size >= MAX_SIZE;  }
-    
-    inline __device__ void push(uint key, float value) {
+    inline __device__ void push(uint key, uint& size, float value) {
         uint idx = size;
         arr[idx] = make_uint2(key, value <= 0.0f ? 0u : __float_as_uint(value));
         size++;
@@ -33,26 +31,27 @@ struct MinPriorityQueue {
         }
     }
 
-    inline __device__ uint2 pop() {
+    inline __device__ uint2 pop(uint& size) {
         uint2 result = arr[0];
         size--;
         if (size > 0) {
-            arr[0] = arr[size];
             uint idx = 0;
+            uint2 mval = arr[size];
+            arr[0] = mval;
             while (true) {
                 uint left = 2 * idx + 1;
                 uint right = 2 * idx + 2;
-                uint smallest = idx;
-                if (left < size && arr[left].y < arr[smallest].y)
-                    smallest = left;
-                if (right < size && arr[right].y < arr[smallest].y)
-                    smallest = right;
-                if (smallest == idx)
+                uint midx = idx;
+                if (left < size && arr[left].y < mval.y)
+                    midx = left, mval = arr[left];
+                if (right < size && arr[right].y < mval.y)
+                    midx = right, mval = arr[right];
+                if (midx == idx)
                     break;
-                uint2 temp = arr[idx];
-                arr[idx] = arr[smallest];
-                arr[smallest] = temp;
-                idx = smallest;
+                uint2 temp = arr[midx];
+                mval = arr[midx] = arr[idx];
+                arr[idx] = temp;
+                idx = midx;
             }
         }
         return result;
@@ -178,28 +177,46 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
 
     static constexpr uint MAX_PQUEUE_SIZE = 32;
     MinPriorityQueue<MAX_PQUEUE_SIZE> pqueue;
-    pqueue.init();
+    uint pqueue_size = 0;
+
+    __shared__ typename SplatPrimitive::WorldEval3D splat_batch[BLOCK_SIZE];
 
     for (uint32_t t = range_start; t < range_end + MAX_PQUEUE_SIZE + 1; ++t) {
 
-        done |= (t >= range_end && pqueue.empty());
+        // load splats into shared memory
+        if ((t - range_start) % BLOCK_SIZE == 0) {
+            block.sync();
+            int32_t t1 = t + (int)block.thread_rank();
+            if (t1 < range_end) {
+                uint32_t splat_idx = flatten_ids[t1];
+                typename SplatPrimitive::WorldEval3D splat =
+                    SplatPrimitive::WorldEval3D::loadWithPrecompute(splat_buffer, splat_idx);
+                splat_batch[block.thread_rank()] = splat;
+            }
+            block.sync();
+        }
+
+        // early skip if done
+        done |= (t >= range_end && pqueue_size == 0);
         if (__ballot_sync(~0u, !done) == 0)
             break;
 
         bool hasSplat = false;
         float depth;
         if (!done && t < range_end) {
-            uint32_t splat_idx = flatten_ids[t];
+            // uint32_t splat_idx = flatten_ids[t];
+            // typename SplatPrimitive::WorldEval3D splat =
+            //     SplatPrimitive::WorldEval3D::loadWithPrecompute(splat_buffer, splat_idx);
             typename SplatPrimitive::WorldEval3D splat =
-                SplatPrimitive::WorldEval3D::loadWithPrecompute(splat_buffer, splat_idx);
+                splat_batch[(t - range_start) % BLOCK_SIZE];
             float alpha = splat.evaluate_alpha(ray_o, ray_d);
             hasSplat |= (alpha >= ALPHA_THRESHOLD);
             if (hasSplat)
                 depth = splat.evaluate_sorting_depth(ray_o, ray_d);
         }
 
-        if (pqueue.full() || (t >= range_end && !pqueue.empty())) {
-            uint32_t t = pqueue.pop().x;
+        if (pqueue_size >= MAX_PQUEUE_SIZE || (t >= range_end && pqueue_size != 0)) {
+            uint32_t t = pqueue.pop(pqueue_size).x;
             uint32_t splat_idx = flatten_ids[t];
             typename SplatPrimitive::WorldEval3D splat =
                 SplatPrimitive::WorldEval3D::loadWithPrecompute(splat_buffer, splat_idx);
@@ -208,7 +225,7 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
             const float next_T = T * (1.0f - alpha);
             if (next_T <= 1e-4f && false) { // this pixel is done: exclusive
                 done = true;
-                pqueue.clear();
+                pqueue_size = 0;
             }
             else {
                 const float vis = alpha * T;
@@ -229,10 +246,8 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
             }
         }
 
-        if (__ballot_sync(~0u, !done && hasSplat) == 0)
-            continue;
         if (hasSplat) {
-            pqueue.push(t, depth);
+            pqueue.push(t, pqueue_size, depth);
         }
     }
 
