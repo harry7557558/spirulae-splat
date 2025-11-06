@@ -97,16 +97,28 @@ _DEFAULT_OPTIMIZERS = {
 }
 
 _TRIANGLE_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS}
+_TRIANGLE_OPTIMIZERS["means"] = {
+    "optimizer": AdamOptimizerConfig(lr=1.0e-4, eps=1e-15),
+    "scheduler": ExponentialDecaySchedulerConfig(
+        lr_final=1.0e-6, max_steps=30000,
+    ),
+}
 _TRIANGLE_OPTIMIZERS["scales"] = {
     "optimizer": AdamOptimizerConfig(lr=0.005, eps=1e-15),
     "scheduler": ExponentialDecaySchedulerConfig(
-        lr_final=0.002, max_steps=30000,
+        lr_final=0.0002, max_steps=30000,
     ),
 }
 _TRIANGLE_OPTIMIZERS["quats"] = {
     "optimizer": AdamOptimizerConfig(lr=0.0005, eps=1e-15),
     "scheduler": ExponentialDecaySchedulerConfig(
-        lr_final=0.0002, max_steps=30000
+        lr_final=0.0001, max_steps=30000
+    ),
+}
+_TRIANGLE_OPTIMIZERS["bilateral_grid"] = {
+    "optimizer": AdamOptimizerConfig(lr=2e-3, eps=1e-15),
+    "scheduler": ExponentialDecaySchedulerConfig(
+        lr_final=1e-6, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
     ),
 }
 
@@ -183,15 +195,15 @@ spirulae_triangle = MethodSpecification(
                 kernel_radius=0.5,
                 compute_depth_normal=True,
                 sh_degree=0,
-                stop_refine_at=29000,
+                stop_refine_at=30000,
                 background_color="black",
                 train_background_color=False,
                 # alpha_reg_weight=0.0,
-                # mcmc_scale_reg=0.04,
+                mcmc_scale_reg=0.0,
                 # erank_reg=1.0,
                 # supersampling=2,
                 mcmc_min_opacity=0.01,
-                mcmc_noise_lr=1e4,  # or 0.0
+                mcmc_noise_lr=1e3,  # or 0.0
                 # mcmc_max_screen_size=0.05,
                 supervision_warmup=0,
                 depth_supervision_weight=0.25,

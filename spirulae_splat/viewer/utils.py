@@ -222,6 +222,23 @@ def split_triangles(verts: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     return tri1, tri2
 
 
+def split_triangles_4(verts: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Split each triangle into four
+    verts: (..., 3, 3)
+    Returns: (tri1, tri2) each (..., 3, 3)
+    """
+    a, b, c = verts[..., 0:1, :], verts[..., 1:2, :], verts[..., 2:3, :]
+    a1, b1, c1 = (b+c)/2, (a+c)/2, (a+b)/2
+
+    tri0 = torch.cat([a1, b1, c1], dim=-2)
+    tri1 = torch.cat([a, b1, c1], dim=-2)
+    tri2 = torch.cat([a1, b, c1], dim=-2)
+    tri3 = torch.cat([a1, b1, c], dim=-2)
+
+    return tri0, torch.cat((tri1, tri2, tri3), dim=-3)
+
+
 def triangle_verts_to_quat_scale_mean(
         verts: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:

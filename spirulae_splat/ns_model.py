@@ -461,14 +461,12 @@ class SpirulaeModel(Model):
             num_steps_until_full = math.log(max(final_num, current_num) / current_num) / math.log(self.config.mcmc_growth_factor) * \
                 self.config.refine_every + (self.config.warmup_length + self.config.refine_every)
             warmup_steps_0 = min(max(min_warmup_steps, 1.5*num_steps_until_full), self.config.num_iterations/3)
-            warmup_steps_1 = min(max(1.5*warmup_steps_0, warmup_steps_0+min_warmup_steps), self.config.num_iterations/2)
 
             self.strategy = OpaqueStrategy(
                 cap_max=self.config.mcmc_cap_max,
                 noise_lr=self.config.mcmc_noise_lr,# * (self.config.kernel_radius/3.0),
                 refine_start_iter=self.config.mcmc_warmup_length,
-                warmup_steps_0=warmup_steps_0,
-                warmup_steps_1=warmup_steps_1,
+                warmup_steps=warmup_steps_0,
                 refine_stop_iter=self.config.num_iterations,
                 refine_every=self.config.refine_every,
                 grow_factor=self.config.mcmc_growth_factor,
@@ -964,6 +962,8 @@ class SpirulaeModel(Model):
             if key in meta:
                 value = meta[key]
                 if value is not None:
+                    if self.config.supersampling != 1:
+                        value = resize_image(value, self.config.supersampling)
                     if not self.training:
                         value = torch.sqrt(value + (1/255)**2) - (1/255)
                     outputs[key] = value

@@ -53,14 +53,16 @@ class OpaqueStrategy(Strategy):
     cap_max: int = 1_000_000
     noise_lr: float = 5e5
     refine_start_iter: int = 500
-    warmup_steps_0: int = 6_000
-    warmup_steps_1: int = 15_000
+    warmup_steps: int = 6_000
     refine_stop_iter: int = 30_000
     refine_every: int = 100
     geometry_optimizer_stop_iter: int = 29000
     grow_factor: float = 1.05
     min_opacity: float = 0.005
-    prune_opacity: float = 0.25
+    final_opacity_floor: float = 0.999
+    final_hardness: float = 0.999
+    hard_prune_opacity: float = 0.2
+    gradual_prune_opacity: float = 0.45
     relocate_scale2d: float = float('inf')
     max_scale2d: float = float('inf')
     max_scale3d: float = float('inf')
@@ -73,12 +75,12 @@ class OpaqueStrategy(Strategy):
         return { "radii": None }
 
     def get_opacity_floor(self, step):
-        a = (step - self.warmup_steps_0) / (self.refine_stop_iter - self.warmup_steps_0)
-        return max(min(a, 1.0), 0.0)
+        a = (step - self.warmup_steps) / (self.refine_stop_iter - self.warmup_steps)
+        return 1.0 - (1.0 - self.final_opacity_floor) ** max(min(a, 1.0), 0.0)
 
     def get_hardness(self, step):
-        a = (step - self.warmup_steps_0) / (self.refine_stop_iter - self.warmup_steps_0)
-        return max(min(a, 1.0), 0.0)
+        a = (step - self.warmup_steps) / (self.refine_stop_iter - self.warmup_steps)
+        return 1.0 - (1.0 - self.final_hardness) ** max(min(a, 1.0), 0.0)
 
     def map_opacities(self, step, opacities):
         opacity_floor = self.get_opacity_floor(step)
@@ -148,9 +150,11 @@ class OpaqueStrategy(Strategy):
             params['scales'].data.clip_(max=math.log(self.max_scale3d))
 
     def _get_probs(self, state, params, step):
+        return torch.sigmoid(params["opacities"].flatten())
         opacs = self.map_opacities(step, params["opacities"].flatten())
         # scales = torch.exp(params["scales"][..., :2].mean(-1))
-        scales = torch.nan_to_num(state["radii"], 0.0, 0.0, 0.0).clip(min=1e-5)
+        MIN_RADII = 0.15
+        scales = torch.nan_to_num(state["radii"], 0.0, 0.0, 0.0).clip(min=MIN_RADII)
         return opacs * scales
         # return opacs * scales**0.5
 
@@ -227,7 +231,6 @@ class OpaqueStrategy(Strategy):
             and step % self.refine_every == 0
         ):
             # add new splats
-            # TODO: if after warmup_steps_1, split instead of creating overlapping splats?
             n_new_gs = self._add_new_gs(params, optimizers, state, step)
             if self.verbose:
                 print(
@@ -239,7 +242,7 @@ class OpaqueStrategy(Strategy):
 
         # add noise to GSs
         scalar = lr * self.noise_lr #* min(step/max(self.refine_start_iter,1), 1)
-        sc = max(1 - self.get_opacity_floor(step) / self.prune_opacity, 0.0)
+        sc = max(1 - self.get_opacity_floor(step) / self.gradual_prune_opacity, 0.0)
         inject_noise_to_position(
             params=params, optimizers=optimizers, state={}, scaler=scalar*sc,
             min_opacity=self.min_opacity*sc,
@@ -255,6 +258,7 @@ class OpaqueStrategy(Strategy):
         state: Dict[str, Any],
         step: int
     ) -> int:
+        opacity_floor = self.get_opacity_floor(step)
         opacities = self.map_opacities(step, params["opacities"].flatten())
         relocate_mask = ~(torch.isfinite(opacities))
 
@@ -266,14 +270,23 @@ class OpaqueStrategy(Strategy):
 
         # relocate low opacity, as in original MCMC
         if step > self.refine_start_iter and step < self.refine_stop_iter:
-            relocate_mask |= (opacities <= self.min_opacity)
+            # min_opacity = opacity_floor + self.min_opacity * (1.0 - opacity_floor)
+            min_opacity = self.min_opacity
+            relocate_mask |= (opacities <= min_opacity)
+
+        # hard prune
+        if step // self.refine_every == self.warmup_steps // self.refine_every:
+            relocate_mask |= (opacities < self.hard_prune_opacity)
 
         # get rid of floaters to prepare for opacity increase
-        opacity_floor = self.get_opacity_floor(step)
-        if opacity_floor > 0.0 and opacity_floor < self.prune_opacity:
-            # a = self.prune_opacity * max(min((step - self.warmup_steps_0) / (self.warmup_steps_1 - self.warmup_steps_0), 1.0), 0.0)
-            a = opacity_floor + self.min_opacity * max(1 - opacity_floor / self.prune_opacity, 0.0)
+        if opacity_floor > 0.0 and opacity_floor < self.gradual_prune_opacity:
+            a = opacity_floor + self.min_opacity * max(1 - opacity_floor / self.gradual_prune_opacity, 0.0)
             relocate_mask |= (opacities < a)
+
+        # relocate low opacity ones to high opacity ones
+        if True:
+            relocate_quantile = (self.grow_factor - 1) * (1 - opacity_floor)
+            relocate_mask |= (opacities < torch.quantile(opacities, relocate_quantile))
 
         n_gs = relocate_mask.sum().item()
         if n_gs > 0:
@@ -304,7 +317,7 @@ class OpaqueStrategy(Strategy):
             params=params,
             optimizers=optimizers,
             state=state,
-            n=n_gs,
+            n=(n_gs+2)//3,
             probs=self._get_probs(state, params, step),
         )
         return n_gs

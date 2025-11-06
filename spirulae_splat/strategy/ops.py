@@ -11,6 +11,7 @@ from gsplat.relocation import compute_relocation
 from spirulae_splat.viewer.utils import (
     quat_scale_to_triangle_verts,
     split_triangles,
+    split_triangles_4,
     triangle_verts_to_quat_scale_mean
 )
 
@@ -342,10 +343,11 @@ def relocate_opaque_triangles(
     dead_indices = mask.nonzero(as_tuple=True)[0]
     alive_indices = (~mask).nonzero(as_tuple=True)[0]
     n = len(dead_indices)
+    ns = (n + 2) // 3
 
     # Sample for new triangles
     probs = probs[alive_indices].flatten()  # ensure its shape is [N,]
-    sampled_idxs = _multinomial_sample(probs, n, replacement=True)
+    sampled_idxs = _multinomial_sample(probs, ns, replacement=True)
     sampled_idxs = alive_indices[sampled_idxs]
 
     triangles = quat_scale_to_triangle_verts(
@@ -354,9 +356,9 @@ def relocate_opaque_triangles(
         params["means"][sampled_idxs]
     )
     # TODO: better way to handle triangles sampled >2 times?
-    # TODO: doesn't look nice, possibly bug?
-    split_1, split_2 = split_triangles(triangles)
-    quats1, scales1, means1 = triangle_verts_to_quat_scale_mean(split_1)
+    # split_1, split_2 = split_triangles(triangles)  # TODO: doesn't look nice, possibly bug?
+    split_2, split_1 = split_triangles_4(triangles)
+    quats1, scales1, means1 = triangle_verts_to_quat_scale_mean(split_1[:n])
     quats2, scales2, means2 = triangle_verts_to_quat_scale_mean(split_2)
 
     def param_fn(name: str, p: Tensor) -> Tensor:
@@ -370,7 +372,7 @@ def relocate_opaque_triangles(
             p[dead_indices] = means1
             p[sampled_idxs] = means2
         else:
-            p[dead_indices] = p[sampled_idxs]
+            p[dead_indices] = p[sampled_idxs.repeat(3)[:n]]
         return torch.nn.Parameter(p, requires_grad=p.requires_grad)
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
@@ -451,8 +453,8 @@ def sample_add_opaque_triangles(
         params["means"][sampled_idxs]
     )
     # TODO: better way to handle triangles sampled >2 times?
-    # TODO: doesn't look nice, possibly bug?
-    split_1, split_2 = split_triangles(triangles)
+    # split_1, split_2 = split_triangles(triangles)  # TODO: doesn't look nice, possibly bug?
+    split_1, split_2 = split_triangles_4(triangles)
     quats1, scales1, means1 = triangle_verts_to_quat_scale_mean(split_1)
     quats2, scales2, means2 = triangle_verts_to_quat_scale_mean(split_2)
 
@@ -467,12 +469,12 @@ def sample_add_opaque_triangles(
             p[sampled_idxs] = means1
             p_new = torch.cat([p, means2])
         else:
-            p_new = torch.cat([p, p[sampled_idxs]])
+            p_new = torch.cat([p, p[sampled_idxs].repeat(3, *([1]*(len(p.shape)-1)))])
         return torch.nn.Parameter(p_new, requires_grad=p.requires_grad)
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
         v[sampled_idxs] = 0
-        v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
+        v_new = torch.zeros((3*len(sampled_idxs), *v.shape[1:]), device=v.device)
         return torch.cat([v, v_new])
 
     # update the parameters and the state in the optimizers
@@ -480,7 +482,7 @@ def sample_add_opaque_triangles(
     # update the extra running state
     for k, v in state.items():
         v[sampled_idxs] = 0
-        v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
+        v_new = torch.zeros((3*len(sampled_idxs), *v.shape[1:]), device=v.device)
         if isinstance(v, torch.Tensor):
             state[k] = torch.cat((v, v_new))
 
