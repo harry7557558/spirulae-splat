@@ -103,18 +103,18 @@ _TRIANGLE_OPTIMIZERS["means"] = {
         lr_final=1.0e-6, max_steps=30000,
     ),
 }
-_TRIANGLE_OPTIMIZERS["scales"] = {
-    "optimizer": AdamOptimizerConfig(lr=0.005, eps=1e-15),
-    "scheduler": ExponentialDecaySchedulerConfig(
-        lr_final=0.0002, max_steps=30000,
-    ),
-}
-_TRIANGLE_OPTIMIZERS["quats"] = {
-    "optimizer": AdamOptimizerConfig(lr=0.0005, eps=1e-15),
-    "scheduler": ExponentialDecaySchedulerConfig(
-        lr_final=0.0001, max_steps=30000
-    ),
-}
+# _TRIANGLE_OPTIMIZERS["scales"] = {
+#     "optimizer": AdamOptimizerConfig(lr=0.005, eps=1e-15),
+#     "scheduler": ExponentialDecaySchedulerConfig(
+#         lr_final=0.0002, max_steps=30000,
+#     ),
+# }
+# _TRIANGLE_OPTIMIZERS["quats"] = {
+#     "optimizer": AdamOptimizerConfig(lr=0.0005, eps=1e-15),
+#     "scheduler": ExponentialDecaySchedulerConfig(
+#         lr_final=0.0001, max_steps=30000
+#     ),
+# }
 _TRIANGLE_OPTIMIZERS["bilateral_grid"] = {
     "optimizer": AdamOptimizerConfig(lr=2e-3, eps=1e-15),
     "scheduler": ExponentialDecaySchedulerConfig(
@@ -195,15 +195,16 @@ spirulae_triangle = MethodSpecification(
                 kernel_radius=0.5,
                 compute_depth_normal=True,
                 sh_degree=0,
+                bilagrid_shape=(16, 16, 8),
                 stop_refine_at=30000,
                 background_color="black",
                 train_background_color=False,
                 # alpha_reg_weight=0.0,
-                mcmc_scale_reg=0.0,
+                mcmc_scale_reg=0.02,
                 # erank_reg=1.0,
                 # supersampling=2,
-                mcmc_min_opacity=0.01,
-                mcmc_noise_lr=1e3,  # or 0.0
+                mcmc_min_opacity=0.005,
+                mcmc_noise_lr=5e5,  # or 0.0
                 # mcmc_max_screen_size=0.05,
                 supervision_warmup=0,
                 depth_supervision_weight=0.25,

@@ -114,6 +114,9 @@ def rasterize_to_pixels(
 
     if eval3d:  # (rgbd,), alpha, last_id, (distortion,)
         meta = {}
+        if primitive in ["opaque_triangle"]:
+            meta["max_blending"] = render_outputs[-1]
+            render_outputs = render_outputs[:-1]
         n_dist = len(render_outputs) // 2
         for tensor, name in zip(render_outputs[-n_dist:], ['rgb', 'depth', 'normal']):
             if tensor is not None:
@@ -440,6 +443,7 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
             render_Ts, last_ids,
             (render2_rgbs, render2_depths, render2_normals),
             (distortion_rgbs, distortion_depths, distortion_normals),
+            max_blending
         ) = _make_lazy_cuda_func("rasterization_opaque_triangle_eval3d_forward")(
             (hardness, depths, verts, rgbs, normals),
             viewmats, Ks, camera_model, (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
@@ -466,7 +470,7 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
         render_alphas = 1.0 - render_Ts
         return (
             render_rgbs, render_depths, render_normals, render_alphas,
-            distortion_rgbs, distortion_depths, distortion_normals
+            distortion_rgbs, distortion_depths, distortion_normals, max_blending
         )
 
     @staticmethod
@@ -479,6 +483,7 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
         v_distortion_rgbs: Tensor,  # [..., H, W, 3]
         v_distortion_depths: Tensor,  # [..., H, W, 1]
         v_distortion_normals: Tensor,  # [..., H, W, 3]
+        v_max_blending = None
     ):
         (
             hardness, depths, verts, rgbs, normals,

@@ -59,20 +59,19 @@ class OpaqueStrategy(Strategy):
     geometry_optimizer_stop_iter: int = 29000
     grow_factor: float = 1.05
     min_opacity: float = 0.005
-    final_opacity_floor: float = 0.999
-    final_hardness: float = 0.999
+    final_opacity_floor: float = 0.9999
+    final_hardness: float = 0.99
     hard_prune_opacity: float = 0.2
     gradual_prune_opacity: float = 0.45
     relocate_scale2d: float = float('inf')
     max_scale2d: float = float('inf')
     max_scale3d: float = float('inf')
-    kernel_radius: float = 1.0
     verbose: bool = False
     key_for_gradient: Literal["means2d", "gradient_2dgs"] = "means2d"
 
     def initialize_state(self) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy."""
-        return { "radii": None }
+        return { "radii": None, "max_blending": None, "n_train_seen": 0 }
 
     def get_opacity_floor(self, step):
         a = (step - self.warmup_steps) / (self.refine_stop_iter - self.warmup_steps)
@@ -99,8 +98,10 @@ class OpaqueStrategy(Strategy):
             "height",
             "n_cameras",
             "radii",
+            "max_blending",
             self.key_for_gradient,
             "depths",
+            "n_train",
         ] + ["gaussian_ids"] * packed:
             assert key in info, f"{key} is required but missing."
 
@@ -112,6 +113,12 @@ class OpaqueStrategy(Strategy):
         if state["radii"] is None:
             assert "radii" in info, "radii is required but missing."
             state["radii"] = torch.zeros(n_gaussian, device=grad_info.device).float()
+
+        if state["max_blending"] is None:
+            assert "max_blending" in info, "max_blending is required but missing."
+            state["max_blending"] = torch.zeros(n_gaussian, device=grad_info.device).float()
+
+        state["n_train_seen"] += info["n_cameras"]
 
         # update the running state
         if packed:
@@ -129,6 +136,10 @@ class OpaqueStrategy(Strategy):
         state["radii"][gs_ids] = torch.maximum(
             state["radii"][gs_ids],
             normalized_radii
+        )
+        state["max_blending"] = torch.maximum(
+            state["max_blending"],
+            info["max_blending"]
         )
 
         # large splats in screen space
@@ -150,11 +161,11 @@ class OpaqueStrategy(Strategy):
             params['scales'].data.clip_(max=math.log(self.max_scale3d))
 
     def _get_probs(self, state, params, step):
-        return torch.sigmoid(params["opacities"].flatten())
-        opacs = self.map_opacities(step, params["opacities"].flatten())
+        # opacs = self.map_opacities(step, params["opacities"].flatten())
+        opacs = torch.sigmoid(params["opacities"].flatten())
+        return opacs
         # scales = torch.exp(params["scales"][..., :2].mean(-1))
-        MIN_RADII = 0.15
-        scales = torch.nan_to_num(state["radii"], 0.0, 0.0, 0.0).clip(min=MIN_RADII)
+        scales = torch.nan_to_num(state["radii"], 0.0, 0.0, 0.0).clip(min=self.max_scale2d/2)
         return opacs * scales
         # return opacs * scales**0.5
 
@@ -210,6 +221,13 @@ class OpaqueStrategy(Strategy):
             lr (float): Learning rate for "means" attribute of the GS.
         """
         self._update_state(params, state, info)
+
+        if step == self.warmup_steps:
+            state["max_blending"] = torch.zeros_like(state["max_blending"])
+        if step > self.warmup_steps and state["n_train_seen"] > info["n_train"]:
+            state["n_train_seen"] = 0
+            self._relocate_gs_max_blending(params, optimizers, state, step)
+            state["max_blending"] = torch.zeros_like(state["max_blending"])
 
         if step > self.geometry_optimizer_stop_iter:
             for key in optimizers:
@@ -284,7 +302,7 @@ class OpaqueStrategy(Strategy):
             relocate_mask |= (opacities < a)
 
         # relocate low opacity ones to high opacity ones
-        if True:
+        if False:
             relocate_quantile = (self.grow_factor - 1) * (1 - opacity_floor)
             relocate_mask |= (opacities < torch.quantile(opacities, relocate_quantile))
 
@@ -320,4 +338,27 @@ class OpaqueStrategy(Strategy):
             n=(n_gs+2)//3,
             probs=self._get_probs(state, params, step),
         )
+        return n_gs
+
+    @torch.no_grad()
+    def _relocate_gs_max_blending(
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+        state: Dict[str, Any],
+        step: int
+    ) -> int:
+        # prune_threshold = min(self.hard_prune_opacity, self.get_opacity_floor(step))
+        prune_threshold = self.min_opacity
+        relocate_mask = (state["max_blending"] < prune_threshold)
+
+        n_gs = relocate_mask.sum().item()
+        if n_gs > 0:
+            relocate_opaque_triangles(
+                params=params,
+                optimizers=optimizers,
+                state=state,
+                mask=relocate_mask,
+                probs=self._get_probs(state, params, step),
+            )
         return n_gs

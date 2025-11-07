@@ -35,7 +35,8 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     at::Tensor transmittances,  // [..., image_height, image_width]
     at::Tensor last_ids, // [..., image_height, image_width]
     typename SplatPrimitive::RenderOutput::Tensor *renders2,
-    typename SplatPrimitive::RenderOutput::Tensor *distortions
+    typename SplatPrimitive::RenderOutput::Tensor *distortions,
+    std::optional<at::Tensor>& out_max_blending
 );
 
 
@@ -45,7 +46,8 @@ inline std::tuple<
     at::Tensor,
     at::Tensor,
     std::optional<typename SplatPrimitive::RenderOutput::TensorTuple>,
-    std::optional<typename SplatPrimitive::RenderOutput::TensorTuple>
+    std::optional<typename SplatPrimitive::RenderOutput::TensorTuple>,
+    std::optional<at::Tensor>
 > rasterize_to_pixels_sorted_eval3d_fwd_tensor(
     // Gaussian parameters
     typename SplatPrimitive::WorldEval3D::TensorTuple splats_tuple,
@@ -69,7 +71,8 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     std::optional<OpaqueTriangle::RenderOutput::TensorTuple>,
-    std::optional<OpaqueTriangle::RenderOutput::TensorTuple>
+    std::optional<OpaqueTriangle::RenderOutput::TensorTuple>,
+    std::optional<at::Tensor>
 > rasterize_to_pixels_opaque_triangle_sorted_eval3d_fwd(
     // Gaussian parameters
     OpaqueTriangle::WorldEval3D::TensorTuple splats_tuple,

@@ -82,7 +82,8 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
     typename SplatPrimitive::RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
-    typename SplatPrimitive::RenderOutput::Buffer render_distortions // [I, image_height, image_width, ...]
+    typename SplatPrimitive::RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
+    float* __restrict__ out_max_blending
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -243,6 +244,9 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
                 cur_idx = t;
 
                 T = next_T;
+
+                if (out_max_blending != nullptr)
+                    atomicMax(out_max_blending + splat_idx % N, vis);
             }
         }
 
@@ -287,7 +291,8 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     at::Tensor transmittances,  // [..., image_height, image_width]
     at::Tensor last_ids, // [..., image_height, image_width]
     typename SplatPrimitive::RenderOutput::Tensor *renders2,
-    typename SplatPrimitive::RenderOutput::Tensor *distortions
+    typename SplatPrimitive::RenderOutput::Tensor *distortions,
+    std::optional<at::Tensor>& out_max_blending
 ) {
     bool packed = splats.isPacked();
     uint32_t N = packed ? 0 : splats.size(); // number of gaussians
@@ -311,7 +316,8 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel(
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(), \
             renders, transmittances.data_ptr<float>(), last_ids.data_ptr<int32_t>(), \
             output_distortion ? renders2->buffer() : typename SplatPrimitive::RenderOutput::Buffer(), \
-            output_distortion ? distortions->buffer() : typename SplatPrimitive::RenderOutput::Buffer() \
+            output_distortion ? distortions->buffer() : typename SplatPrimitive::RenderOutput::Buffer(), \
+            out_max_blending.has_value() ? out_max_blending.value().data_ptr<float>() : nullptr \
         )
 
     if (camera_model == gsplat::CameraModelType::PINHOLE)
@@ -333,7 +339,8 @@ inline std::tuple<
     at::Tensor,
     at::Tensor,
     std::optional<typename SplatPrimitive::RenderOutput::TensorTuple>,
-    std::optional<typename SplatPrimitive::RenderOutput::TensorTuple>
+    std::optional<typename SplatPrimitive::RenderOutput::TensorTuple>,
+    std::optional<at::Tensor>
 > rasterize_to_pixels_sorted_eval3d_fwd_tensor(
     // Gaussian parameters
     typename SplatPrimitive::WorldEval3D::TensorTuple splats_tuple,
@@ -385,6 +392,8 @@ inline std::tuple<
     last_ids_dims.append({image_height, image_width});
     at::Tensor last_ids = at::empty(last_ids_dims, opt.dtype(at::kInt));
 
+    std::optional<at::Tensor> out_max_blending = at::zeros({splats.size()}, opt);
+
     launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel<SplatPrimitive, output_distortion>(
         splats,
         viewmats, Ks, camera_model, dist_coeffs,
@@ -392,14 +401,15 @@ inline std::tuple<
         image_width, image_height, tile_offsets, flatten_ids,
         renders, transmittances, last_ids,
         output_distortion ? &renders2.value() : nullptr,
-        output_distortion ? &distortions.value() : nullptr
+        output_distortion ? &distortions.value() : nullptr,
+        out_max_blending
     );
 
     if (output_distortion)
         return std::make_tuple(renders.tuple(), transmittances, last_ids,
-            renders2.value().tuple(), distortions.value().tuple());
+            renders2.value().tuple(), distortions.value().tuple(), out_max_blending);
     return std::make_tuple(renders.tuple(), transmittances, last_ids,
-        std::nullopt, std::nullopt);
+        std::nullopt, std::nullopt, out_max_blending);
 }
 
 
@@ -408,7 +418,8 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     std::optional<OpaqueTriangle::RenderOutput::TensorTuple>,
-    std::optional<OpaqueTriangle::RenderOutput::TensorTuple>
+    std::optional<OpaqueTriangle::RenderOutput::TensorTuple>,
+    std::optional<at::Tensor>
 > rasterize_to_pixels_opaque_triangle_sorted_eval3d_fwd(
     // Gaussian parameters
     OpaqueTriangle::WorldEval3D::TensorTuple splats_tuple,

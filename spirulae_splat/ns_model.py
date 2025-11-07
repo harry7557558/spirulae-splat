@@ -352,22 +352,36 @@ class SpirulaeModel(Model):
         self.xys_grad_norm = None
         self.ch_grad_norm = None
         self.max_2Dsize = None
-        distances, indices = self.k_nearest_sklearn(means.data, 6)
-        distances = torch.from_numpy(distances)
-        # avg_dist = distances.mean(dim=-1, keepdim=True)
-        points = means.data[indices] - means.data[:, None, :]
-        U, S, Vt = np.linalg.svd(points)
-        Vt[:,:,2] *= np.linalg.det(Vt)[:,None]
-        num_points = means.shape[0]
-        S = np.prod(S, axis=-1, keepdims=True)**(1/3) * np.ones(S.shape)
-        scales = S
-        scales = np.log(1.5*scales/self.config.kernel_radius+1e-8)
-        scales = torch.from_numpy(scales.astype(np.float32))
-        # quats = random_quat_tensor(num_points)
-        quats = torch.from_numpy(np.array(
-            Rotation.from_matrix(np.transpose(Vt, axes=(0, 2, 1))).as_quat(),
-            dtype=np.float32))
-        opacities = torch.logit(0.1 * torch.ones(num_points, 1))
+
+        if self.config.primitive in ["3dgs", "mip"] or True:
+            distances, indices = self.k_nearest_sklearn(means.data, 4)
+            num_points = means.shape[0]
+            scales = torch.sqrt(torch.from_numpy(distances**2).mean(-1, keepdim=True)).repeat(1, 3).float()
+            scale_init = 0.1 if self.config.use_mcmc else 1.0  # per original papers
+            if self.config.use_mcmc and self.config.mcmc_max_screen_size < 1.0:
+                scale_init = 0.5
+            scales = torch.log(scale_init * scales / (self.config.kernel_radius/3.0) + 1e-8)
+            quats = F.normalize(torch.randn((num_points, 4)))
+            opacity_init = 0.5 if self.config.use_mcmc else 0.1  # per original papers
+            opacities = torch.logit(opacity_init * torch.ones(num_points, 1))
+
+        else:
+            distances, indices = self.k_nearest_sklearn(means.data, 6)
+            distances = torch.from_numpy(distances)
+            # avg_dist = distances.mean(dim=-1, keepdim=True)
+            points = means.data[indices] - means.data[:, None, :]
+            U, S, Vt = np.linalg.svd(points)
+            Vt[:,:,2] *= np.linalg.det(Vt)[:,None]
+            num_points = means.shape[0]
+            S = np.prod(S, axis=-1, keepdims=True)**(1/3) * np.ones(S.shape)
+            scales = S
+            scales = np.log(1.5*scales/self.config.kernel_radius+1e-8)
+            scales = torch.from_numpy(scales.astype(np.float32))
+            # quats = random_quat_tensor(num_points)
+            quats = torch.from_numpy(np.array(
+                Rotation.from_matrix(np.transpose(Vt, axes=(0, 2, 1))).as_quat(),
+                dtype=np.float32))
+            opacities = torch.logit(0.1 * torch.ones(num_points, 1))
 
         # if self.config.primitive in ["opaque_triangle"]:
         if self.config.primitive in []:
@@ -471,7 +485,6 @@ class SpirulaeModel(Model):
                 refine_every=self.config.refine_every,
                 grow_factor=self.config.mcmc_growth_factor,
                 min_opacity=self.config.mcmc_min_opacity,
-                kernel_radius=self.config.kernel_radius,
                 relocate_scale2d=self.config.relocate_screen_size,
                 max_scale2d=self.config.mcmc_max_screen_size,
                 max_scale3d=self.config.mcmc_max_world_size,
@@ -924,10 +937,13 @@ class SpirulaeModel(Model):
                 "width": W,
                 "height": H,
                 "n_cameras": camera.shape[0],
+                "n_train": self.num_train_data,
                 "radii": radii,
                 "means2d": means2d,
                 "depths": depths,
             }
+            if 'max_blending' in meta:
+                self.info['max_blending'] = meta['max_blending']
 
         # blend with background
         if self.config.fit == "rgb":
@@ -1075,7 +1091,10 @@ class SpirulaeModel(Model):
             return s
 
         mcmc_reg = (self.config.use_mcmc and self.step < self.config.stop_refine_at)
-        opacity_floor = f"[OpacFloor] {self.strategy.get_opacity_floor(self.step):.3f}".replace('0.', '.') \
+        opacity_floor = (
+            f"[OpacFloor] {self.strategy.get_opacity_floor(self.step):.3f} "
+            f"[Hardness] {self.strategy.get_hardness(self.step):.3f}"
+        ).replace('0.', '.') \
             if self.config.primitive == "opaque_triangle" else ""
         chunks = [
             f"[N] {len(self.opacities)}",

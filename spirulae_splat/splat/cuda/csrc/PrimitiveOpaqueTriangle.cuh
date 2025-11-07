@@ -679,10 +679,13 @@ struct OpaqueTriangle::WorldEval3D {
             return rgbs.options();
         }
         bool isPacked() const {
-            return rgbs.dim() == 2;
+            return rgbs.dim() == 3;
         }
         long size() const {
-            return rgbs.numel() / 9;
+            return rgbs.size(-3);
+        }
+        long batchSize() const {
+            return rgbs.numel() / (9*size());
         }
 
         Buffer buffer() { return Buffer(*this); }

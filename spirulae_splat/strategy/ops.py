@@ -481,9 +481,9 @@ def sample_add_opaque_triangles(
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
     for k, v in state.items():
-        v[sampled_idxs] = 0
-        v_new = torch.zeros((3*len(sampled_idxs), *v.shape[1:]), device=v.device)
         if isinstance(v, torch.Tensor):
+            v[sampled_idxs] = 0
+            v_new = torch.zeros((3*len(sampled_idxs), *v.shape[1:]), device=v.device)
             state[k] = torch.cat((v, v_new))
 
 

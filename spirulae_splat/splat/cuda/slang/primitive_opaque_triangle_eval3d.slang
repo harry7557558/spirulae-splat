@@ -276,11 +276,11 @@ float evaluate_alpha_opaque_triangle(
     if (!ray_triangle_intersection_uvt(ray_o, ray_d, verts, u, v, t))
         return 0.0f;
     float opac = min(min(u, v), sqrt(0.5f) * (1.0f - u - v)) * (2.0f + sqrt(2.0f));
-    float h = clamp(hardness.y, 0.0f, 0.96f);
-    // float o = clamp(hardness.x, 0.0f, 0.98f);
+    float h = clamp(hardness.y, 0.0f, 0.9999f);
+    // float w = pow(opac, 1.0f - h);
+    float w = 1.0 - pow(1.0-opac, 1.0/(1.0-h));
     float o = hardness.x;
-    return opac < 0.0f ? 0.0f :
-        min(o * pow(opac, 1.0f - h), 0.995f);
+    return opac < 0.0f ? 0.0f : min(o * w, 0.995f);
 }
 
 [CudaDeviceExport]
