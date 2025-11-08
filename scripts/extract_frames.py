@@ -243,7 +243,7 @@ if __name__ == "__main__":
     parser.add_argument("--quality", "-q", default="95", help="Quality to save JPEG images. Save lossless PNG if this is not between 0 and 100.")
     parser.add_argument("--rotate", "-r", default="0", help="Rotate clockwise this degrees, must be one of {0, 90, 180, 270}.")
     parser.add_argument("--scale", default="1", help="Relative image size scale, less than 1.0 for downscale.")
-    parser.add_argument("--sam", default="0", help="Whether to use Segment Anything for image segmentation.")
+    parser.add_argument("--mask", default="0", help="Whether to use export scripts to generate masks.")
     args = parser.parse_args()
 
     quality = int(args.quality)
@@ -258,17 +258,23 @@ if __name__ == "__main__":
 
     cur_dir = os.path.dirname(__file__)
 
-    if int(args.sam) != 0:
+    # generate masks
+    if int(args.mask) != 0:
+        # run_colmap.bash
         open(os.path.join(dirname, 'run_colmap.bash'), 'w').write(f"""
 # {' '.join(__import__('sys').argv)}
 
-{open(os.path.join(cur_dir, "run_colmap_sam.bash")).read()}""".lstrip())
+{open(os.path.join(cur_dir, "run_colmap_mask.bash")).read()}""".lstrip())
+        # run_sam2.bash
         open(os.path.join(dirname, 'run_sam2.bash'), 'w').write(f"""
 # Run this from SAM2 install directory, after downloading checkpoints
 python3 {os.path.join(cur_dir, "SAM2-GUI", "mask_app.py")} --root_dir {os.path.abspath(dirname)}
 """.lstrip())
+        # run_lang_sam.bash
 
+    # no mask
     else:
+        # run_colmap.bash
         open(os.path.join(dirname, 'run_colmap.bash'), 'w').write(f"""
 # {' '.join(__import__('sys').argv)}
 
