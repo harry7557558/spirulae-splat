@@ -14,6 +14,7 @@
 
 
 from nerfstudio.data.datasets.base_dataset import *
+import cv2
 
 
 def get_image_mask_tensor_from_path(filepath: Path, scale_factor: float = 1.0) -> torch.Tensor:
@@ -29,6 +30,54 @@ def get_image_mask_tensor_from_path(filepath: Path, scale_factor: float = 1.0) -
     mask_tensor = torch.from_numpy(np.array(pil_mask)).unsqueeze(-1).bool()
     # TODO: configurable all nonzero vs 128/0.5?
     return mask_tensor
+
+
+def get_depth_image_from_path(
+    filepath: Path,
+    height: int,
+    width: int,
+    scale_factor: float,
+    interpolation: int = cv2.INTER_NEAREST,
+) -> torch.Tensor:
+    """Loads, rescales and resizes depth images.
+    Filepath points to a 16-bit or 32-bit depth image, or a numpy array `*.npy`.
+
+    Args:
+        filepath: Path to depth image.
+        height: Target depth image height.
+        width: Target depth image width.
+        scale_factor: Factor by which to scale depth image.
+        interpolation: Depth value interpolation for resizing.
+
+    Returns:
+        Depth image torch tensor with shape [height, width, 1].
+    """
+    if filepath.suffix == ".npy":
+        image = np.load(filepath).astype(np.float32) * scale_factor
+        image = cv2.resize(image, (width, height), interpolation=interpolation)
+    else:
+        image = cv2.imread(str(filepath.absolute()), cv2.IMREAD_ANYDEPTH)
+        image = image.astype(np.float32) * scale_factor
+        image = cv2.resize(image, (width, height), interpolation=interpolation)
+    return torch.from_numpy(image[:, :, np.newaxis])
+
+
+def get_normal_image_from_path(
+    filepath: Path,
+    height: int,
+    width: int,
+    interpolation: int = cv2.INTER_NEAREST,
+) -> torch.Tensor:
+    if filepath.suffix == ".npy":
+        image = np.load(filepath).astype(np.float32)
+        image = cv2.resize(image, (width, height), interpolation=interpolation)
+    else:
+        image = cv2.cvtColor(cv2.imread(str(filepath.absolute())), cv2.COLOR_BGR2RGB)
+        image = (image.astype(np.float32) / 255.0) * 2.0 - 1.0
+        image = cv2.resize(image, (width, height), interpolation=interpolation)
+    image = torch.from_numpy(image[:, :, :3])
+    return image
+    # return image / torch.norm(image, dim=-1, keepdim=True).clip(min=1e-12)
 
 
 def compute_overexposure_mask(img: torch.Tensor, image_type: Literal['uint8', 'float32']):
@@ -148,7 +197,10 @@ class SpirulaeDataset(InputDataset):
                         background = torch.ones_like(data['image']) * torch.tensor([(0,0,1), (0,0,255)][image_type == 'uint8']).to(data['image'])
                         data['image'] = torch.where(data['mask'], data['image'], background)
                     data['image'] = resize_image(data['image'][None], 2**int(max(0.5*math.log2(data['image'].numel()/10000), 0.0)))[0]
-                    return data
+                    return {
+                        'image_idx': data['image_idx'],
+                        'image': data['image'],
+                    }
                 with ThreadPoolExecutor() as executor:
                     for result in tqdm(
                         executor.map(load_data, range(len(self))),
@@ -182,6 +234,20 @@ class SpirulaeDataset(InputDataset):
             assert (
                 data["mask"].shape[:2] == data["image"].shape[:2]
             ), f"Mask and image have different shapes. Got {data['mask'].shape[:2]} and {data['image'].shape[:2]}"
+        if self._dataparser_outputs.metadata.get("depth_filenames", None) is not None:
+            depth_filepath = self._dataparser_outputs.metadata["depth_filenames"][image_idx]
+            data["depth"] = get_depth_image_from_path(
+                filepath=depth_filepath, scale_factor=self.scale_factor,
+                width=data["image"].shape[1], height=data["image"].shape[0]
+            )
+            assert data["depth"].shape[:2] == data["image"].shape[:2]
+        if self._dataparser_outputs.metadata.get("normal_filenames", None) is not None:
+            normal_filepath = self._dataparser_outputs.metadata["normal_filenames"][image_idx]
+            data["normal"] = get_normal_image_from_path(
+                filepath=normal_filepath,
+                width=data["image"].shape[1], height=data["image"].shape[0]
+            )
+            assert data["normal"].shape[:2] == data["image"].shape[:2]
         if self.mask_color:
             data["image"] = torch.where(
                 data["mask"] == 1.0, data["image"], torch.ones_like(data["image"]) * torch.tensor(self.mask_color)

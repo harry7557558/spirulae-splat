@@ -45,15 +45,11 @@ _DEFAULT_OPTIMIZERS = {
     },
     "scales": {
         "optimizer": AdamOptimizerConfig(lr=0.005, eps=1e-15),
-        "scheduler": ExponentialDecaySchedulerConfig(
-            lr_final=0.001, max_steps=30000,
-        ),
+        "scheduler": None,
     },
     "quats": {
         "optimizer": AdamOptimizerConfig(lr=0.0005, eps=1e-15),
-        "scheduler": ExponentialDecaySchedulerConfig(
-            lr_final=0.0001, max_steps=30000
-        ),
+        "scheduler": None,
     },
     "features_dc": {
         "optimizer": AdamOptimizerConfig(lr=0.0025, eps=1e-15),
@@ -61,6 +57,10 @@ _DEFAULT_OPTIMIZERS = {
     },
     "features_sh": {
         "optimizer": AdamOptimizerConfig(lr=0.0025 / 20, eps=1e-15),
+        "scheduler": None,
+    },
+    "features_ch": {
+        "optimizer": AdamOptimizerConfig(lr=0.0025 / 5, eps=1e-15),
         "scheduler": None,
     },
     "opacities": {
@@ -81,12 +81,45 @@ _DEFAULT_OPTIMIZERS = {
             lr_final=1e-4, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
         ),
     },
+    "bilateral_grid_geometry": {
+        # "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
+        "optimizer": AdamOptimizerConfig(lr=2e-3, eps=1e-15),
+        "scheduler": ExponentialDecaySchedulerConfig(
+            lr_final=1e-4, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
+        ),
+    },
     "camera_opt": {
         "optimizer": AdamOptimizerConfig(lr=1e-4, eps=1e-15),  # 1e-4
         "scheduler": ExponentialDecaySchedulerConfig(
             lr_final=5e-7, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
         ),
     },
+}
+
+_TRIANGLE_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS}
+_TRIANGLE_OPTIMIZERS["means"] = {
+    "optimizer": AdamOptimizerConfig(lr=1.0e-4, eps=1e-15),
+    "scheduler": ExponentialDecaySchedulerConfig(
+        lr_final=1.0e-6, max_steps=30000,
+    ),
+}
+# _TRIANGLE_OPTIMIZERS["scales"] = {
+#     "optimizer": AdamOptimizerConfig(lr=0.005, eps=1e-15),
+#     "scheduler": ExponentialDecaySchedulerConfig(
+#         lr_final=0.0002, max_steps=30000,
+#     ),
+# }
+# _TRIANGLE_OPTIMIZERS["quats"] = {
+#     "optimizer": AdamOptimizerConfig(lr=0.0005, eps=1e-15),
+#     "scheduler": ExponentialDecaySchedulerConfig(
+#         lr_final=0.0001, max_steps=30000
+#     ),
+# }
+_TRIANGLE_OPTIMIZERS["bilateral_grid"] = {
+    "optimizer": AdamOptimizerConfig(lr=2e-3, eps=1e-15),
+    "scheduler": ExponentialDecaySchedulerConfig(
+        lr_final=1e-6, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
+    ),
 }
 
 
@@ -102,6 +135,8 @@ spirulae = MethodSpecification(
                 **_DEFAULT_DATAMANAGER_CONFIG
             ),
             model=SpirulaeModelConfig(
+                background_color="black",
+                train_background_color=False,
             ),
             
         ),
@@ -142,5 +177,49 @@ spirulae_patched = MethodSpecification(
         vis="viewer",
     ),
     description="Spirulae 3DGS with patch batching.",
+)
+
+spirulae_triangle = MethodSpecification(
+    config=TrainerConfig(
+        method_name="spirulae-triangle",
+        steps_per_eval_batch=0,
+        steps_per_save=2000,
+        max_num_iterations=30000,
+        mixed_precision=False,
+        pipeline=SpirulaePipelineConfig(
+            datamanager=SpirulaeDataManagerConfig(
+                **_DEFAULT_DATAMANAGER_CONFIG
+            ),
+            model=SpirulaeModelConfig(
+                primitive="opaque_triangle",
+                kernel_radius=0.5,
+                compute_depth_normal=True,
+                sh_degree=0,
+                bilagrid_shape=(16, 16, 8),
+                stop_refine_at=30000,
+                background_color="black",
+                train_background_color=False,
+                # alpha_reg_weight=0.0,
+                mcmc_scale_reg=0.02,
+                # erank_reg=1.0,
+                # supersampling=2,
+                mcmc_min_opacity=0.005,
+                mcmc_noise_lr=5e5,  # or 0.0
+                # mcmc_max_screen_size=0.05,
+                supervision_warmup=0,
+                depth_supervision_weight=0.25,
+                normal_supervision_weight=0.25,
+                rgb_distortion_reg_weight=0.01,
+                ssim_lambda=0.6,
+            ),
+            
+        ),
+        optimizers={
+            **_TRIANGLE_OPTIMIZERS
+        },
+        viewer=ViewerConfig(),
+        vis="viewer",
+    ),
+    description="Spirulae opaque triangle splatting.",
 )
 

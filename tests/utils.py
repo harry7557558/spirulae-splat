@@ -11,6 +11,12 @@ def _color_text(text: str, color: str):
     return f"\033[{color}m{text}\033[m"
 
 def check_close(name, a, b, atol=1e-5, rtol=1e-5):
+    if a is None:
+        if b is None:
+            print(name, None, None, None, None)
+            return
+        print(name, _color_text("None None", 'r'), [*b.shape], str(b.dtype).lstrip("torch."))
+        return
     if b is None:
         print(name, [*a.shape], str(a.dtype).lstrip("torch."), None, None, end=' | ')
         b = torch.zeros_like(a)
@@ -31,7 +37,7 @@ def check_close(name, a, b, atol=1e-5, rtol=1e-5):
         f"{err:.2g}", 'g' if err < 0.1*tol else 'y' if err < tol else 'r')
     n = b.numel()
     xsc = math.log(n) + 0.5/n + 0.577  # E(max of n unit exponential random)
-    print(f"err: μa={fmt(abserr_μ, atol)}, μr={fmt(relerr_μ, rtol)}, xa={fmt(abserr, atol*xsc)}, xr={fmt(relerr, rtol*xsc)}")
+    print(f"diff: μa={fmt(abserr_μ, atol)}, μr={fmt(relerr_μ, rtol)}, xa={fmt(abserr, atol*xsc)}, xr={fmt(relerr, rtol*xsc)}")
 
 
 def timeit(fun, name: str, repeat=20):

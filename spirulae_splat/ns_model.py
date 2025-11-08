@@ -30,7 +30,7 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 from pytorch_msssim import SSIM
 
-from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map
+from spirulae_splat.splat._torch_impl import quat_to_rotmat
 from spirulae_splat.splat import (
     rasterization,
     depth_to_normal,
@@ -39,11 +39,11 @@ from spirulae_splat.splat import (
 from spirulae_splat.splat.utils import resize_image, _TORCH_COMPILE_ARGS
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
-from spirulae_splat.strategy import DefaultStrategy, MCMCStrategy
+from spirulae_splat.strategy import DefaultStrategy, MCMCStrategy, OpaqueStrategy
 from spirulae_splat.splat._camera import _Camera
 
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
-from spirulae_splat.modules.per_pixel import blend_background
+from spirulae_splat.splat.cuda._wrapper_per_pixel import blend_background
 
 from nerfstudio.cameras.camera_optimizers import (CameraOptimizer,
                                                   CameraOptimizerConfig)
@@ -113,6 +113,18 @@ class SpirulaeModelConfig(ModelConfig):
 
     _target: Type = field(default_factory=lambda: SpirulaeModel)
 
+    primitive: Literal["3dgs", "mip", "opaque_triangle"] = "3dgs"
+    """Splat primitive to use"""
+    fit: Literal["rgb", "depth", "normal"] = "rgb"
+    """Fit RGB image by default, fit depth/normal for geometry reconstruction
+        Will apply the same as RGB for depth and normal (e.g. bilagrid, SSIM, unless you disable them)"""
+    fit_normal_depth_factor: float = 0.2
+    """Probability to use depth normal instead of rendered normal in normal fitting mode"""
+    fit_normal_depth_warmup_steps: int = 3000
+    """Warmup for probability to use depth normal instead of rendered normal in normal fitting mode"""
+
+    num_iterations: int = 30000
+    """number of training iterations, should be consistent with --max_num_iterations"""
     warmup_length: int = 500
     """period of steps where refinement is turned off"""
     stop_refine_at: int = 27000
@@ -130,45 +142,45 @@ class SpirulaeModelConfig(ModelConfig):
         Disable per-pixel sorting if you use this"""
     random_init: bool = False
     """whether to initialize the positions uniformly randomly (not SFM points)"""
-    num_random: int = 20000
+    num_random: int = 200000
     """Number of gaussians to initialize if random init is used"""
     random_scale: float = 1.0
     """Position standard deviation to initialize random gaussians"""
     ssim_lambda: float = 0.4
     """weight of ssim loss; 0.2 for optimal PSNR, higher for better visual quality"""
-    ssim_warmup: int = 0
-    """warmup of ssim loss"""
     use_camera_optimizer: bool = False
     """Whether to use camera optimizer
         Note: this only works well in patch batching mode"""
     camera_optimizer: CameraOptimizerConfig = field(default_factory=lambda: CameraOptimizerConfig(mode="SO3xR3"))
     """Config of the camera optimizer to use"""
     kernel_radius: float = 3.0
-    """Radius of the splatting kernel, 3.0 for Gaussian and 1.0 for polynomial"""
+    """Radius of the splatting kernel, 3.0 for Gaussian and 0.5 for triangle"""
     relative_scale: Optional[float] = None
     """Manually set scale when a scene is poorly scaled by nerfstudio
         (e.g. Zip-NeRF dataset, very large-scale scenes across multiple street blocks)"""
-    compute_depth_normal: bool = False
+    compute_depth_normal: bool = True
     """Compute normal from depth. Required for 2DGS and supervision. Disabling this can reduce VRAM usage and speed up training."""
     packed: bool = False
     """Pack projection outputs, reduce VRAM usage at large batch size but can be slightly slower"""
     use_bvh: bool = False
     """Use BVH for splat-patch intersection test, may be faster when batching large number of small patches"""
+    supersampling: int = 1
+    """Antialiasing by rendering at higher resolution and downsampling to a lower resolution, as per triangle splatting +"""
 
     # classial control
     cull_alpha_thresh: float = 0.005
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
-    cull_scale_thresh: float = 1.0
+    cull_scale_thresh: float = 0.15
     """threshold of world scale for culling huge gaussians"""
-    split_scale_thresh: float = float('inf')
+    split_scale_thresh: float = 0.05
     """threshold of world scale for splitting huge gaussians"""
-    cull_grad_thresh: float = 0.0  # 3e-4 | 1e-4 | 1e-5 | 0.0
+    cull_grad_thresh: float = 3e-4  # 3e-4 | 1e-4 | 1e-5 | 0.0
     """threshold for culling gaussians with low visibility"""
     continue_cull_post_densification: bool = True
     """If True, continue to cull gaussians post refinement"""
     reset_alpha_every: int = 30
     """Every this many refinement steps, reset the alpha"""
-    densify_xy_grad_thresh: float = 0.0005
+    densify_xy_grad_thresh: float = 0.005
     """threshold of positional gradient norm for densifying gaussians"""
     densify_size_thresh: float = 0.01
     """below this size, gaussians are *duplicated*, otherwise split"""
@@ -190,6 +202,8 @@ class SpirulaeModelConfig(ModelConfig):
     """MCMC sampling noise learning rate"""
     mcmc_min_opacity: float = 0.005
     """minimum opacity for MCMC relocation"""
+    mcmc_growth_factor: float = 1.05
+    """multiply number of splats by this number at every refinement"""
     mcmc_prob_grad_weight: float = 0.0
     """weight of position gradient used in sampling Gaussians to relocate/add to, uses only opacity if 0 and only gradient of 1"""
     relocate_screen_size: float = float('inf')
@@ -208,8 +222,6 @@ class SpirulaeModelConfig(ModelConfig):
     """maximum degree of spherical harmonics to use"""
     sh_degree_interval: int = 1000
     """every n intervals turn on another sh degree"""
-    max_opacity: float = 0.995
-    """maximum opacity of a gaussian, prevent numerical instability during backward"""
     train_background_color: bool = True
     """make background color trainable"""
     background_sh_degree: int = 3
@@ -230,10 +242,14 @@ class SpirulaeModelConfig(ModelConfig):
     adaptive_exposure_warmup: int = 1000
     """Start adaptive exposure at this number of steps"""
     use_bilateral_grid: bool = True
-    """If True, use bilateral grid to handle the ISP changes in the image space. This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/).
-       Makes training much slower - TODO: fused bilagrid in CUDA"""
+    """If True, use bilateral grid to handle the ISP changes in the image space.
+        This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/)."""
     bilagrid_shape: Tuple[int, int, int] = (8, 8, 4)
     """Shape of the bilateral grid (X, Y, W)"""
+    use_bilateral_grid_for_geometry: bool = True
+    """If True, use bilateral grid for depth and normal (e.g. AI generated biased ones)"""
+    bilagrid_shape_geometry: Tuple[int, int, int] = (4, 4, 4)
+    """Shape of the bilateral grid for depth and normal (X, Y, W)"""
 
     use_3dgs: bool = True
     """Must be True, kept for backward compatibility"""
@@ -247,29 +263,33 @@ class SpirulaeModelConfig(ModelConfig):
     """
     depth_mode: Literal["mean", "median"] = "mean"
     """Depth rendering mode, use mean for stable training and median for high meshing resolution"""
-    depth_reg_weight: float = 0.02
-    """Weight for depth regularizer"""
-    depth_reg_pairwise_factor: float = 1.0  # 0.7, 1.0
-    """Factor of pairwise vs depth fitting depth regularization, 0 to 1"""
-    depth_reg_warmup: int = 12000
+    depth_reg_weight: float = 0.01
+    """Weight for depth distortion regularizer"""
+    normal_distortion_reg_weight: float = 0.0
+    """Weight for normal distortion regularizer"""
+    rgb_distortion_reg_weight: float = 0.0
+    """Weight for rgb distortion regularizer"""
+    distortion_reg_warmup: int = 6000
     """warmup steps for depth regularizer, regularization weight ramps up"""
     normal_reg_weight: float = 0.04
     """Weight for normal regularizer"""
-    normal_reg_warmup: int = 12000
+    normal_reg_warmup: int = 6000
     """warmup steps for normal regularizer, regularization weight ramps up"""
     alpha_reg_weight: float = 0.025
     """Weight for alpha regularizer (encourage alpha to go to either 0 or 1)
         Recommend using with --pipeline.model.cull_screen_size for better results"""
     alpha_reg_warmup: int = 12000
     """warmup steps for alpha regularizer, regularization weight ramps up"""
-    reg_warmup_length: int = 4000
+    reg_warmup_length: int = 0
     """Warmup steps for depth, normal, and alpha regularizers.
        only apply regularizers after this many steps."""
+    apply_loss_for_mask: bool = True
+    """Set this to False to use masks to ignore distractors (e.g. people and cars, area outside fisheye circle, over exposure)
+       Set this to True to remove background (e.g. sky, background outside centered object)"""
     alpha_loss_weight: float = 0.01
-    """Weight for alpha, if mask is provided.
-       Set this to 0.0 to use masks to ignore distractors (e.g. people and cars, area outside fisheye circle, over exposure)
-       Set this to a positive value to remove background (e.g. sky, background around centered object)
-       See scripts/SAM2-GUI for what I use to generate masks"""
+    """Loss weight for alpha, applies when rendered alpha is above reference alpha"""
+    alpha_loss_weight_under: float = 0.005
+    """Loss weight for alpha, applies when rendered alpha is below reference alpha"""
     mcmc_opacity_reg: float = 0.01  # 0.01 in original paper
     """Opacity regularization from MCMC
        Lower usually gives more accurate geometry"""
@@ -293,7 +313,7 @@ class SpirulaeModelConfig(ModelConfig):
 
     # supervision using a foundation depth model
     # enable these by setting `depth_model` in data manager config
-    supervision_warmup: int = 0
+    supervision_warmup: int = 1000
     """Start using foundation model depth at this number of steps"""
     depth_distortion_depth_degree: int = -1  # 3
     """Hyperparameter for depth distortion model, controls depth embedding, see code for details
@@ -305,12 +325,6 @@ class SpirulaeModelConfig(ModelConfig):
     """Weight for depth supervision by comparing rendered depth with depth predicted by a foundation model"""
     normal_supervision_weight: float = 0.01
     """Weight for normal supervision by comparing normal from rendered depth with normal from depth predicted by a foundation model"""
-    alpha_supervision_weight: float = 0.005
-    """Weight for alpha supervision by rendered alpha with alpha predicted by a foundation model
-        Useful for removing floaters from sky for outdoor scenes"""
-    alpha_supervision_weight_under: float = 0.0
-    """Similar to alpha_supervision_weight, but applies when renderer opacity is lower than reference opacity"""
-
 
 class SpirulaeModel(Model):
     """Template Model."""
@@ -331,29 +345,58 @@ class SpirulaeModel(Model):
             means = self.seed_points[0]
             if self.config.relative_scale is not None:
                 means *= self.config.relative_scale
-            means = torch.nn.Parameter(means)
             self.random_init = False
         else:
-            means = torch.nn.Parameter(torch.randn((self.config.num_random, 3)) * self.config.random_scale)
+            means = torch.randn((self.config.num_random, 3)) * self.config.random_scale
             self.random_init = True
         self.xys_grad_norm = None
         self.ch_grad_norm = None
         self.max_2Dsize = None
-        distances, indices = self.k_nearest_sklearn(means.data, 6)
-        distances = torch.from_numpy(distances)
-        # avg_dist = distances.mean(dim=-1, keepdim=True)
-        points = means.data[indices] - means.data[:, None, :]
-        U, S, Vt = np.linalg.svd(points)
-        Vt[:,:,2] *= np.linalg.det(Vt)[:,None]
-        num_points = means.shape[0]
-        S = np.prod(S, axis=-1, keepdims=True)**(1/3) * np.ones(S.shape)
-        scales = S
-        scales = np.log(1.5*scales/self.config.kernel_radius+1e-8)
-        scales = torch.nn.Parameter(torch.from_numpy(scales.astype(np.float32)))
-        # quats = torch.nn.Parameter(random_quat_tensor(num_points))
-        quats = torch.nn.Parameter(torch.from_numpy(np.array(
-            Rotation.from_matrix(np.transpose(Vt, axes=(0, 2, 1))).as_quat(),
-            dtype=np.float32)))
+
+        if self.config.primitive in ["3dgs", "mip"] or True:
+            distances, indices = self.k_nearest_sklearn(means.data, 4)
+            num_points = means.shape[0]
+            scales = torch.sqrt(torch.from_numpy(distances**2).mean(-1, keepdim=True)).repeat(1, 3).float()
+            scale_init = 0.1 if self.config.use_mcmc else 1.0  # per original papers
+            if self.config.use_mcmc and self.config.mcmc_max_screen_size < 1.0:
+                scale_init = 0.5
+            scales = torch.log(scale_init * scales / (self.config.kernel_radius/3.0) + 1e-8)
+            quats = F.normalize(torch.randn((num_points, 4)))
+            opacity_init = 0.5 if self.config.use_mcmc else 0.1  # per original papers
+            opacities = torch.logit(opacity_init * torch.ones(num_points, 1))
+
+        else:
+            distances, indices = self.k_nearest_sklearn(means.data, 6)
+            distances = torch.from_numpy(distances)
+            # avg_dist = distances.mean(dim=-1, keepdim=True)
+            points = means.data[indices] - means.data[:, None, :]
+            U, S, Vt = np.linalg.svd(points)
+            Vt[:,:,2] *= np.linalg.det(Vt)[:,None]
+            num_points = means.shape[0]
+            S = np.prod(S, axis=-1, keepdims=True)**(1/3) * np.ones(S.shape)
+            scales = S
+            scales = np.log(1.5*scales/self.config.kernel_radius+1e-8)
+            scales = torch.from_numpy(scales.astype(np.float32))
+            # quats = random_quat_tensor(num_points)
+            quats = torch.from_numpy(np.array(
+                Rotation.from_matrix(np.transpose(Vt, axes=(0, 2, 1))).as_quat(),
+                dtype=np.float32))
+            opacities = torch.logit(0.1 * torch.ones(num_points, 1))
+
+        # if self.config.primitive in ["opaque_triangle"]:
+        if self.config.primitive in []:
+            M = quat_to_rotmat(quats) * torch.exp(scales[..., None, :])
+            means = means.unsqueeze(-2) + torch.bmm(M, torch.tensor([[
+                [1, 0, 0], [-0.5, 0.75**0.5, 0], [-0.5, -0.75**0.5, 0]
+            ]]).to(M).repeat(len(M), 1, 1))
+
+        if self.config.primitive in ["3dgs", "mip", "opaque_triangle"]:
+            means = torch.nn.Parameter(means)
+        if self.config.primitive in ["3dgs", "mip"]:
+            quats = torch.nn.Parameter(quats)
+            scales = torch.nn.Parameter(scales)
+            opacities = torch.nn.Parameter(opacities)
+
         # colors
         dim_sh = num_sh_bases(self.config.sh_degree)
 
@@ -369,14 +412,17 @@ class SpirulaeModel(Model):
                 shs[:, 0, :3] = RGB2SH(seed_color)
                 shs[:, 1:, 3:] = 0.0
             else:
-                shs[:, 0, :3] = seed_color
+                # shs[:, 0, :3] = seed_color
+                shs[:, 0, :3] = RGB2SH(seed_color)
             features_dc = torch.nn.Parameter(shs[:, 0, :].contiguous())
             features_sh = torch.nn.Parameter(shs[:, 1:, :].contiguous())
         else:
             features_dc = torch.nn.Parameter(torch.rand(num_points, 3))
             features_sh = torch.nn.Parameter(torch.zeros((num_points, dim_sh-1, 3)))
 
-        opacities = torch.nn.Parameter(torch.logit(0.1 * torch.ones(num_points, 1)))
+        features_ch = None
+        if self.config.primitive == "opaque_triangle":
+            features_ch = torch.nn.Parameter(torch.zeros((len(means), 2, 3)))
 
         gauss_params = {
             "means": means,
@@ -386,6 +432,8 @@ class SpirulaeModel(Model):
             "features_sh": features_sh,
             "opacities": opacities,
         }
+        if features_ch is not None:
+            gauss_params["features_ch"] = features_ch
         self.gauss_params = torch.nn.ParameterDict(gauss_params)
 
         self.camera_optimizer: CameraOptimizer = self.config.camera_optimizer.setup(
@@ -418,16 +466,40 @@ class SpirulaeModel(Model):
     def _set_strategy(self):
         # Strategy for GS densification
 
+        # opaque triangle mode
+        if self.config.primitive == "opaque_triangle":
+            current_num = len(self.means)
+            final_num = self.config.mcmc_cap_max
+
+            min_warmup_steps = self.config.refine_every * self.config.reset_alpha_every
+            num_steps_until_full = math.log(max(final_num, current_num) / current_num) / math.log(self.config.mcmc_growth_factor) * \
+                self.config.refine_every + (self.config.warmup_length + self.config.refine_every)
+            warmup_steps_0 = min(max(min_warmup_steps, 1.5*num_steps_until_full), self.config.num_iterations/3)
+
+            self.strategy = OpaqueStrategy(
+                cap_max=self.config.mcmc_cap_max,
+                noise_lr=self.config.mcmc_noise_lr,# * (self.config.kernel_radius/3.0),
+                refine_start_iter=self.config.mcmc_warmup_length,
+                warmup_steps=warmup_steps_0,
+                refine_stop_iter=self.config.num_iterations,
+                refine_every=self.config.refine_every,
+                grow_factor=self.config.mcmc_growth_factor,
+                min_opacity=self.config.mcmc_min_opacity,
+                relocate_scale2d=self.config.relocate_screen_size,
+                max_scale2d=self.config.mcmc_max_screen_size,
+                max_scale3d=self.config.mcmc_max_world_size,
+                geometry_optimizer_stop_iter=self.config.stop_refine_at
+            )
+            self.strategy_state = self.strategy.initialize_state()
+            return
+
         # MCMC mode
         if self.config.use_mcmc:
             current_num = len(self.means)
             final_num = self.config.mcmc_cap_max
-            warmup_steps = (self.config.resolution_schedule * (self.config.num_downscales+1)
-                            - self.config.mcmc_warmup_length) / self.config.refine_every
-            grow_factor = max(final_num / current_num, 1.0) ** (1/warmup_steps)
-            # grow_factor = min(grow_factor, 1.05)
-            # grow_factor = max(grow_factor, 1.05)
-            grow_factor = 1.05
+            warpup_steps = math.log(max(final_num, current_num) / current_num) / math.log(self.config.mcmc_growth_factor) * \
+                self.config.refine_every + (self.config.warmup_length + self.config.refine_every)
+            self.mcmc_num_steps_until_full = warpup_steps
 
             self.strategy = MCMCStrategy(
                 cap_max=self.config.mcmc_cap_max,
@@ -435,7 +507,7 @@ class SpirulaeModel(Model):
                 refine_start_iter=self.config.mcmc_warmup_length,
                 refine_stop_iter=self.config.stop_refine_at,
                 refine_every=self.config.refine_every,
-                grow_factor=grow_factor,
+                grow_factor=self.config.mcmc_growth_factor,
                 min_opacity=self.config.mcmc_min_opacity,
                 prob_grad_weight=self.config.mcmc_prob_grad_weight,
                 is_3dgs=self.config.use_3dgs,
@@ -468,6 +540,7 @@ class SpirulaeModel(Model):
             reset_every=reset_every,
             refine_every=self.config.refine_every,
             pause_refine_after_reset=pause_refine_after_reset,
+            kernel_radius=self.config.kernel_radius,
             absgrad=True,
             revised_opacity=False,
             verbose=True,
@@ -476,10 +549,7 @@ class SpirulaeModel(Model):
 
     @property
     def colors(self):
-        if self.config.sh_degree > 0:
-            return SH2RGB(self.features_dc)
-        else:
-            return self.features_dc
+        return SH2RGB(self.features_dc)
 
     @property
     def num_points(self):
@@ -506,19 +576,26 @@ class SpirulaeModel(Model):
         return self.gauss_params["features_sh"]
 
     @property
+    def features_ch(self):
+        if "features_ch" not in self.gauss_params:
+            return None
+        return self.gauss_params["features_ch"]
+
+    @property
     def opacities(self):
         return self.gauss_params["opacities"]
 
     def load_state_dict(self, dict, **kwargs):  # type: ignore
         # resize the parameters to match the new number of points
-        self.step = 30000
+        self.step = self.config.num_iterations
         if "means" in dict:
             # For backwards compatibility, we remap the names of parameters from
             # means->gauss_params.means since old checkpoints have that format
             for p in ["means", "scales", "quats",
-                      "features_dc", "features_sh",
+                      "features_dc", "features_sh", "features_ch",
                       "opacities"]:
-                dict[f"gauss_params.{p}"] = dict[p]
+                if p in dict:
+                    dict[f"gauss_params.{p}"] = dict[p]
         newp = dict["gauss_params.means"].shape[0]
         for name, param in self.gauss_params.items():
             old_shape = param.shape
@@ -608,9 +685,9 @@ class SpirulaeModel(Model):
             name: [self.gauss_params[name]]
             for name in [
                 "means", "scales", "quats",
-                "features_dc", "features_sh",
+                "features_dc", "features_sh", "features_ch",
                 "opacities"
-            ]
+            ] if name in self.gauss_params
         }
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
@@ -624,8 +701,14 @@ class SpirulaeModel(Model):
             gps["background_color"] = [self.background_color]
             if self.background_sh is not None:
                 gps["background_sh"] = [self.background_sh]
+
         if self.config.use_bilateral_grid:
             gps["bilateral_grid"] = list(self.training_losses.bil_grids.parameters())
+        if self.config.use_bilateral_grid_for_geometry:
+            gps["bilateral_grid_geometry"] = \
+                list(self.training_losses.bil_grids_depth.parameters()) + \
+                list(self.training_losses.bil_grids_normal.parameters())
+
         if self.config.use_camera_optimizer:
             self.camera_optimizer.get_param_groups(param_groups=gps)
         return gps
@@ -704,7 +787,6 @@ class SpirulaeModel(Model):
         viewmats[:, :3, 3:4] = T_inv
 
         quats = F.normalize(self.quats, dim=-1)
-        opacities = self.config.max_opacity * torch.sigmoid(self.opacities)
 
         max_depth_scale = 2.0 if self.training else 1.0
 
@@ -715,17 +797,20 @@ class SpirulaeModel(Model):
         
         kwargs = {}
         is_fisheye = (camera.camera_type[0].item() == CameraType.FISHEYE.value)
+        if not self.training:
+            is_fisheye = True
         if is_fisheye:
             if not self.config.use_mcmc:
                 raise ValueError("3DGS training with fisheye camera is currently only supported for MCMC.")
-            if camera.distortion_params.shape[-1] == 4:
-                kwargs['radial_coeffs'] = camera.distortion_params
-            elif camera.distortion_params.shape[-1] == 6:
-                kwargs["radial_coeffs"] = camera.distortion_params[..., :4]
-                kwargs["tangential_coeffs"] = camera.distortion_params[..., 4:]
-                # TODO: make sure GSplat 3DGUT actually supports this??
-            else:
-                raise ValueError("Only support fisheye with 4 or 6 distortion coefficients")
+            if camera.distortion_params is not None:
+                if camera.distortion_params.shape[-1] == 4:
+                    kwargs['radial_coeffs'] = camera.distortion_params
+                elif camera.distortion_params.shape[-1] == 6:
+                    kwargs["radial_coeffs"] = camera.distortion_params[..., :4]
+                    kwargs["tangential_coeffs"] = camera.distortion_params[..., 4:]
+                    # TODO: make sure GSplat 3DGUT actually supports this??
+                else:
+                    raise ValueError("Only support fisheye with 4 or 6 distortion coefficients")
 
         TILE_SIZE = 16
         gh, gw = (H+TILE_SIZE-1) // TILE_SIZE, (W+TILE_SIZE-1) // TILE_SIZE
@@ -751,30 +836,51 @@ class SpirulaeModel(Model):
         viewmats = viewmats.to(device)
         Ks = Ks.to(device)
 
+        # hardness = min(max(self.step / self.config.stop_refine_at, 0.1), 1.0)
+        if self.config.primitive == "opaque_triangle":
+            opacity_floor = self.strategy.get_opacity_floor(self.step)
+            hardness = self.strategy.get_hardness(self.step)
+
         rgbd, alpha, meta = rasterization(
-            means=self.means,
-            quats=quats,
-            scales=torch.exp(self.scales),
-            opacities=opacities.squeeze(-1),
-            colors_dc=self.features_dc,
-            colors_sh=self.features_sh,
+            self.config.primitive,
+            (self.means, quats, self.scales, self.opacities.squeeze(-1),
+                self.features_dc, self.features_sh)
+                if self.config.primitive in ['3dgs', 'mip'] else
+            # (self.means, quats, self.scales.mean(-1, keepdim=True).repeat(1,3),
+            (self.means, quats, self.scales,
+            #  hardness * torch.ones_like(self.opacities.squeeze(-1))
+            #  hardness + (1.0-hardness) * torch.sigmoid(self.opacities.squeeze(-1))
+            torch.concat([
+                self.strategy.map_opacities(self.step, self.opacities),
+                hardness * torch.ones_like(self.opacities)
+            ], dim=-1),
+            self.features_dc, self.features_sh, self.features_ch
+             ),
+            # (self.means, hardness * torch.ones_like(self.opacities.squeeze(-1))),
             viewmats=viewmats,  # [C, 4, 4]
-            Ks=Ks,  # [C, 3, 3]
-            width=W,
-            height=H,
-            sh_degree=self.config.sh_degree,
+            Ks=Ks * self.config.supersampling,  # [C, 3, 3]
+            width=W * self.config.supersampling,
+            height=H * self.config.supersampling,
             packed=(self.config.packed or (self.config.use_bvh and self.training)),
             use_bvh=(self.config.use_bvh and self.training),
             absgrad=(not self.config.use_mcmc),
             sparse_grad=False,
-            rasterize_mode="classic",
             distributed=False,
             camera_model=["pinhole", "fisheye"][is_fisheye],
-            with_ut=is_fisheye,
-            with_eval3d=is_fisheye,
-            render_mode="RGB+D",
+            # with_ut=is_fisheye,
+            # with_eval3d=is_fisheye,  # TODO
+            # with_ut=self.training,
+            # with_eval3d=self.training,
+            with_ut=True,
+            with_eval3d=True,
+            # with_ut=False,
+            # with_eval3d=False,
+            render_mode="RGB+D" if self.config.primitive in ['3dgs', 'mip'] else "RGB+D+N",
             **kwargs,
         )
+        if self.config.supersampling != 1:
+            rgbd = [resize_image(im, self.config.supersampling) for im in rgbd]
+            alpha = resize_image(alpha, self.config.supersampling)
 
         # if not self.training:
         #     W = gw*TILE_SIZE
@@ -784,15 +890,41 @@ class SpirulaeModel(Model):
         #     alpha = merge_tiles(alpha)
         #     W, H = camera.width[0].item(), camera.height[0].item()
 
-        rgb = rgbd[..., :3]
-
         if self.config.compute_depth_normal or not self.training:
             depth_im_ref = torch.where(
-                alpha > 0.0, rgbd[..., 3:] / alpha,
-                max_depth_scale*torch.amax(rgbd[..., 3:]).detach()
+                alpha > 0.0, rgbd[1],
+                max_depth_scale*torch.amax(rgbd[1]).detach()
             ).contiguous()
         else:
             depth_im_ref = None
+
+        # normals
+        render_normal = None
+        if len(rgbd) > 2:
+            render_normal = torch.where(alpha > 0.0, F.normalize(rgbd[2], dim=-1), rgbd[2])
+
+        depth_normal = None
+        if self.config.compute_depth_normal or self.config.fit == "depth_normal" or not self.training:
+            depth_normal = depth_to_normal(
+                depth_im_ref, ["pinhole", "fisheye"][is_fisheye], Ks, **kwargs
+            )
+
+        if self.config.fit == "rgb":
+            rgb = rgbd[0]
+        elif self.config.fit == "depth":
+            rgb = depth_im_ref
+            rgb = rgb / rgb.mean()
+            rgb = (rgb / (1.0 + rgb)).repeat(1, 1, 1, 3)
+        elif self.config.fit == "normal":
+            assert depth_normal is not None, "Depth normal map not available"
+            factor = self.config.fit_normal_depth_factor * min(
+                -1 + 2 * self.step / self.config.fit_normal_depth_warmup_steps, 1.0)
+            if render_normal is None:
+                factor = 1.0
+            if np.random.random() < factor:# and self.training:
+                rgb = 0.5+0.5*depth_normal
+            else:
+                rgb = 0.5+0.5*render_normal
 
         means2d = meta["means2d"]
         if self.config.use_mcmc:
@@ -805,23 +937,29 @@ class SpirulaeModel(Model):
                 "width": W,
                 "height": H,
                 "n_cameras": camera.shape[0],
+                "n_train": self.num_train_data,
                 "radii": radii,
                 "means2d": means2d,
                 "depths": depths,
             }
+            if 'max_blending' in meta:
+                self.info['max_blending'] = meta['max_blending']
 
         # blend with background
-        background = self.get_background_image(camera, optimized_camera_to_world, Ks)
-        rgb = torch.clip(rgb + (1.0 - alpha) * background, 0.0, 1.0)
+        if self.config.fit == "rgb":
+            background = self.get_background_image(camera, optimized_camera_to_world, Ks)
+            rgb = torch.clip(rgb + (1.0 - alpha) * background, 0.0, 1.0)
+        else:
+            background = torch.zeros_like(rgb)
 
         # apply bilateral grid
-        if self.config.use_bilateral_grid and self.training:
+        if self.config.use_bilateral_grid and self.training and self.config.fit == "rgb":
             if camera.metadata is not None and "cam_idx" in camera.metadata:
-                rgb = self.training_losses.apply_bilateral_grid(rgb, camera.metadata["cam_idx"], H, W)
-
-        # normal regularization
-        # if self.config.compute_depth_normal or not self.training:
-        #     depth_normal, alpha_diffused = depth_to_normal(depth_im_ref, ssplat_camera, None, True, alpha)
+                rgb = self.training_losses.apply_bilateral_grid(
+                    self.training_losses.bil_grids,
+                    rgb, camera.metadata["cam_idx"], H, W
+                )
+            # in depth and normal fit mode, will apply in loss function
 
         # pack outputs
         outputs = {
@@ -829,13 +967,26 @@ class SpirulaeModel(Model):
         }
         if depth_im_ref is not None:
             outputs["depth"] = depth_im_ref
-        # if self.config.compute_depth_normal or not self.training:
-        #     outputs["depth_normal"] = depth_normal
+        if render_normal is not None:
+            outputs["normal"] = render_normal
+        if self.config.compute_depth_normal or not self.training:
+            outputs["depth_normal"] = depth_normal
         outputs["alpha"] = alpha
         outputs["background"] = background
 
+        for key in ['rgb_distortion', 'depth_distortion', 'normal_distortion']:
+            if key in meta:
+                value = meta[key]
+                if value is not None:
+                    if self.config.supersampling != 1:
+                        value = resize_image(value, self.config.supersampling)
+                    if not self.training:
+                        value = torch.sqrt(value + (1/255)**2) - (1/255)
+                    outputs[key] = value
+
         if not self.training:
             outputs["alpha"] = outputs["alpha"].reshape((H, W, 1)).repeat(1, 1, 3)
+            outputs["background"] = torch.clip(outputs["background"], min=0.0, max=1.0)
 
         # convert linear depth to ray depth, for correct gl_z_buf_depth in Viser
         if not self.training:
@@ -845,11 +996,18 @@ class SpirulaeModel(Model):
             # outputs["depth"] = torch.clip(outputs["depth"], max=torch.quantile(outputs["depth"], 0.99))
             if self.config.relative_scale is not None:
                 outputs["depth"] /= self.config.relative_scale
+            if "normal" in outputs:
+                outputs["normal"] = 0.5+0.5*outputs["normal"]
             if "depth_normal" in outputs:
                 outputs["depth_normal"] = 0.5+0.5*outputs["depth_normal"]
             for key in outputs:
                 outputs[key] = outputs[key].squeeze(0)
 
+        if self.training:
+            kwargs["Ks"] = Ks
+            kwargs["camera_model"] = ["pinhole", "fisheye"][is_fisheye]
+            outputs["camera"] = camera
+            outputs["camera_intrins"] = kwargs
         # if not self.training and True:
         #     outputs['ray'] = merge_tiles(meta['intersection_count'].float().reshape(-1, 1, 1, 1).repeat(1, TILE_SIZE, TILE_SIZE, 1))
 
@@ -909,10 +1067,13 @@ class SpirulaeModel(Model):
         mem_stats = f"{used:.2f}\N{ZERO WIDTH SPACE}GB {used_percentage:.0f}%"
 
         def fmt(key: str, s: float, decimals=None) -> str:
-            if s == 0.0:
+            if s == 0.0 or key not in losses:
                 return '~'
 
-            l = float(losses[key]) / s
+            l = losses[key]
+            if isinstance(l, torch.Tensor):
+                l = l.detach().item()
+            l = l / s
             if not math.isfinite(l):  # not finite
                 return str(l)
 
@@ -922,35 +1083,45 @@ class SpirulaeModel(Model):
             if _max_vals[key] == 0.0:
                 return '~'
 
-            if decimals is None:
-                decimals = int(max(-math.log10(0.001*_max_vals[key]), 0))
+            if decimals is None:  # 3 sig figs
+                decimals = int(max(-math.log10(0.001*abs(l)), 0)) if l != 0.0 else 0
             s = f"{{:.{decimals}f}}".format(l)
             if s.startswith('0.'):
                 s = s[1:]
             return s
 
         mcmc_reg = (self.config.use_mcmc and self.step < self.config.stop_refine_at)
+        opacity_floor = (
+            f"[OpacFloor] {self.strategy.get_opacity_floor(self.step):.3f} "
+            f"[Hardness] {self.strategy.get_hardness(self.step):.3f}"
+        ).replace('0.', '.') \
+            if self.config.primitive == "opaque_triangle" else ""
         chunks = [
-            f"[N] {len(self.opacities)} {mem_stats}",
-            f"[C] {fmt('image_loss', 1.0)} "
-            f"{fmt('alpha_loss', self.config.alpha_loss_weight)} "
-            f"{fmt('psnr', 1.0, 2)} "
-            f"{fmt('ssim', 1.0, 3)}",
-            f"[S] {fmt('depth_ref_loss', self.config.depth_supervision_weight)} "
-            f"{fmt('normal_ref_loss', self.config.normal_supervision_weight)} "
-            f"{fmt('alpha_ref_loss', self.config.alpha_supervision_weight)}",
-            f"[G] {fmt('depth_reg', self.training_losses.get_2dgs_reg_weights()[0])} "
-            f"{fmt('normal_reg', self.training_losses.get_2dgs_reg_weights()[1])} "
-            f"{fmt('alpha_reg', self.training_losses.get_alpha_reg_weight())}",
-            f"[M] {fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg * mcmc_reg)} "
-            f"{fmt('mcmc_scale_reg', self.config.mcmc_scale_reg * mcmc_reg)}",
-            f"[R] {fmt('erank_reg', max(self.config.erank_reg_s3, self.config.erank_reg))} "
-            f"{fmt('scale_reg', self.config.scale_regularization_weight)}",
-            f"[E] {fmt('tv_loss', 10.0)} "
-            f"{fmt('exposure_param_reg', self.config.exposure_reg_param)}",
+            f"[N] {len(self.opacities)}",
+            f"[Mem] {mem_stats}",
+            f"[Train] loss={fmt('image_loss', 1.0)} "
+            f"psnr={fmt('psnr', 1.0, 2)} "
+            f"ssim={fmt('ssim', 1.0, 3)}",
+            "                \n",
+            f"[RefLoss] depth={fmt('depth_ref_loss', self.config.depth_supervision_weight, 3)} "
+            f"normal={fmt('normal_ref_loss', self.config.normal_supervision_weight, 3)} "
+            f"alpha={fmt('alpha_ref_loss', 0.5*(self.config.alpha_loss_weight+self.config.alpha_loss_weight_under), 4)}",
+            f"[DistLoss] depth={fmt('depth_dist_reg', self.training_losses.get_2dgs_reg_weights()[0][0], 3)} "
+            f"normal={fmt('normal_dist_reg', self.training_losses.get_2dgs_reg_weights()[0][1], 3)} "
+            f"rgb={fmt('rgb_dist_reg', self.training_losses.get_2dgs_reg_weights()[0][2], 3)}",
+            "                \n",
+            f"[ImReg] normal={fmt('normal_reg', self.training_losses.get_2dgs_reg_weights()[1], 3)} "
+            f"alpha={fmt('alpha_reg', self.training_losses.get_alpha_reg_weight(), 3)}",
+            f"[SplatReg] opac={fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg * mcmc_reg, 3)} "
+            f"scale={fmt('mcmc_scale_reg', self.config.mcmc_scale_reg * mcmc_reg, 4)} "
+            f"erank={fmt('erank_reg', max(self.config.erank_reg_s3, self.config.erank_reg, 3))} "
+            f"aniso={fmt('scale_reg', self.config.scale_regularization_weight, 3)}",
+            "                \n",
+            f"[Reg] bilagrid={fmt('tv_loss', 10.0)}",
+        ] + [opacity_floor] * (len(opacity_floor) > 0) + [
+            "                \n",
         ]
-        chunks = [c for c in chunks if any(char.isdigit() for char in c)]
-        CONSOLE.print(' '.join(chunks).replace('\n', '') + "    ", end="\r")
+        CONSOLE.print(' '.join(chunks).replace('\n ', '\n'), end="\033[F"*4)
 
     @torch.no_grad()
     def get_outputs_for_camera(self, camera: Cameras, obb_box: Optional[OrientedBox] = None) -> Dict[str, torch.Tensor]:

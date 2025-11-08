@@ -2,7 +2,10 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-import spirulae_splat.modules.per_pixel as module
+import spirulae_splat.splat.cuda._wrapper_per_pixel as module
+
+from test_compute_per_splat_losses import Config
+from spirulae_splat.modules.training_losses import SplatTrainingLosses
 
 from utils import check_close, timeit
 
@@ -74,43 +77,48 @@ def test_blend_background():
     _loss.backward(retain_graph=True)
 
     print("profile backward")
-    timeit(lambda: loss.backward(retain_graph=True), "torch backward", repeat=repeat)
-    timeit(lambda: _loss.backward(retain_graph=True), "fused backward", repeat=repeat)
+    timeit(lambda: _loss.backward(retain_graph=True), "torch backward", repeat=repeat)
+    timeit(lambda: loss.backward(retain_graph=True), "fused backward", repeat=repeat)
     print()
 
 
-
-
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def profile_compute_per_splat_losses():
-    num_points = 2_000_000
+def test_depth_to_normal():
+    b, w, h = 4, 144, 108
 
-    config = Config()
-    torch_impl = SplatTrainingLosses(config, 0)
+    import spirulae_splat.splat.utils
 
-    scales = torch.randn((num_points, 2+int(config.use_3dgs)), device=device)
-    opacities = torch.randn((num_points, 1), device=device)
-    quats = torch.randn((num_points, 4), device=device)
+    depths = torch.exp(0.1*torch.randn((b, h, w, 1), device=device))
+    Ks = 0.5*(w*h)**0.5 * torch.exp(0.2*torch.randn((b, 3, 3), device=device))
 
-    _scales = torch.nn.Parameter(scales.clone())
-    _opacities = torch.nn.Parameter(opacities.clone())
-    _quats = torch.nn.Parameter(quats.clone())
+    _depths = torch.nn.Parameter(depths.clone())
+    depths = torch.nn.Parameter(depths)
 
-    scales = torch.nn.Parameter(scales)
-    opacities = torch.nn.Parameter(opacities)
-    quats = torch.nn.Parameter(quats)
-
-    step = 15000
-    forward = lambda: torch_impl.get_static_losses(
-        step, quats, scales, opacities,
-        {}, _use_torch_impl = False
-    )
-    _forward = lambda: torch_impl.get_static_losses(
-        step, _quats, _scales, _opacities,
-        {}, _use_torch_impl = True
-    )
+    forward = lambda: module.depth_to_normal(depths, "pinhole", Ks)
+    _forward = lambda: torch.stack([
+        spirulae_splat.splat.utils.depth_to_normal(_depths[i],
+        spirulae_splat.splat.utils._Camera(h, w, "OPENCV", (Ks[i,0,0], Ks[i,1,1], Ks[i,0,2], Ks[i,1,2])),
+        z_depth=False)
+        for i in range(b)])
     output = forward()
     _output = _forward()
+
+    print("test forward")
+    check_close("output", output, _output)
+    print()
+
+    weights = torch.randn_like(output)
+    def loss_fun(output):
+        return (weights*output).sum()
+    loss = loss_fun(output)
+    _loss = loss_fun(_output)
+
+    loss.backward(retain_graph=True)
+    _loss.backward(retain_graph=True)
+
+    print("test backward")
+    check_close('depths.grad', depths.grad, _depths.grad)
+    print()
 
     repeat = 100
 
@@ -119,20 +127,16 @@ def profile_compute_per_splat_losses():
     timeit(forward, "fused forward", repeat=repeat)
     print()
 
-    keys = "mcmc_opacity_reg mcmc_scale_reg scale_reg erank_reg quat_norm_reg".split()
-    weights = dict(zip(keys, torch.randn(5).numpy().tolist()))
-
-    def fun(output):
-        return sum([weights[key]*output[key] for key in keys])
-    fun(output).backward(retain_graph=True)
-    fun(_output).backward(retain_graph=True)
+    loss.backward(retain_graph=True)
+    _loss.backward(retain_graph=True)
 
     print("profile backward")
-    timeit(lambda: fun(_output).backward(retain_graph=True), "torch backward", repeat=repeat)
-    timeit(lambda: fun(output).backward(retain_graph=True), "fused backward", repeat=repeat)
+    timeit(lambda: _loss.backward(retain_graph=True), "torch backward", repeat=repeat)
+    timeit(lambda: loss.backward(retain_graph=True), "fused backward", repeat=repeat)
     print()
 
 
+
 if __name__ == "__main__":
-    test_blend_background()
-    # profile_compute_per_splat_losses()
+    # test_blend_background()
+    test_depth_to_normal()

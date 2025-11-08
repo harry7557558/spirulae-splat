@@ -23,7 +23,7 @@ std::tuple<
     const at::Tensor means,                // [..., N, 3]
     const at::Tensor quats,  // [..., N, 4]
     const at::Tensor scales, // [..., N, 3]
-    const at::optional<at::Tensor> opacities, // [..., N]
+    const std::optional<at::Tensor> opacities, // [..., N]
     const at::Tensor viewmats,             // [..., C, 4, 4]
     const at::Tensor Ks,                   // [..., C, 3, 3]
     const uint32_t image_width,
@@ -59,12 +59,12 @@ std::tuple<
     const at::Tensor camera_ids, // [nnz]
     const at::Tensor gaussian_ids, // [nnz]
     const at::Tensor conics, // [nnz, 3]
-    const at::optional<at::Tensor> compensations, // [nnz] optional
+    const std::optional<at::Tensor> compensations, // [nnz] optional
     // grad outputs
     const at::Tensor v_means2d, // [nnz, 2]
     const at::Tensor v_depths, // [nnz]
     const at::Tensor v_conics, // [nnz, 3]
-    const at::optional<at::Tensor> v_compensations, // [nnz] optional
+    const std::optional<at::Tensor> v_compensations, // [nnz] optional
     const bool viewmats_requires_grad,
     const bool sparse_grad
 );

@@ -24,11 +24,11 @@ def extract_function_declarations(code):
         (?:inline)?\s*
         (?:__global__|__device__)?\s*
         # Match the return type
-        (?:void|int[234]?|float[234]?|torch::Tensor|std::tuple<[\w:\s*&<>\[\],\/]+?>)
+        (?:void|u?int[234]?|float[234]?|torch::Tensor|std::tuple<[\w:\s*&<>\[\],\/]+?>)
         # Match the function name
         \s+\b\w+\b\s*
         # Match the function parameters
-        \([^)]*\)
+        \(.*?\)\s
     """, re.MULTILINE | re.VERBOSE | re.DOTALL)
     
     matches = function_decl_pattern.findall(code)
@@ -113,6 +113,7 @@ def get_extensions():
     nvcc_flags += ["-O3", "--use_fast_math"]
     if LINE_INFO:
         nvcc_flags += ["-lineinfo", "--generate-line-info", "--source-in-ptx"]
+        # nvcc_flags += ["-Xptxas", "-v", "-Xptxas", "--warn-on-spills"]
     if torch.version.hip:
         # USE_ROCM was added to later versions of PyTorch.
         # Define here to support older PyTorch versions as well:
@@ -160,10 +161,17 @@ path = "spirulae_splat/splat/cuda/csrc/"
 generate_header(path+"SphericalHarmonics.cu", path+"SphericalHarmonics.cuh")
 generate_header(path+"BackgroundSphericalHarmonics.cu", path+"BackgroundSphericalHarmonics.cuh")
 generate_header(path+"PerSplatLoss.cu", path+"PerSplatLoss.cuh")
+generate_header(path+"PerPixelLoss.cu", path+"PerPixelLoss.cuh")
 generate_header(path+"PixelWise.cu", path+"PixelWise.cuh")
+generate_header(path+"Projection.cu", path+"Projection.cuh")
+generate_header(path+"ProjectionEval3D.cu", path+"ProjectionEval3D.cuh")
 generate_header(path+"ProjectionEWA3DGSHetero.cu", path+"ProjectionEWA3DGSHetero.cuh")
-generate_header(path+"Rasterization3DGSFwd.cu", path+"Rasterization3DGSFwd.cuh")
-generate_header(path+"Rasterization3DGSBwd.cu", path+"Rasterization3DGSBwd.cuh")
+generate_header(path+"RasterizationFwd.cu", path+"RasterizationFwd.cuh")
+generate_header(path+"RasterizationBwd.cu", path+"RasterizationBwd.cuh")
+generate_header(path+"RasterizationEval3DFwd.cu", path+"RasterizationEval3DFwd.cuh")
+generate_header(path+"RasterizationEval3DBwd.cu", path+"RasterizationEval3DBwd.cuh")
+generate_header(path+"RasterizationSortedEval3DFwd.cu", path+"RasterizationSortedEval3DFwd.cuh")
+generate_header(path+"RasterizationSortedEval3DBwd.cu", path+"RasterizationSortedEval3DBwd.cuh")
 
 setup(
     name="spirulae_splat",
@@ -203,6 +211,7 @@ setup(
         "nerfstudio.method_configs": [
             "spirulae = spirulae_splat.ns_config:spirulae",
             "spirulae-patched = spirulae_splat.ns_config:spirulae_patched",
+            "spirulae-triangle = spirulae_splat.ns_config:spirulae_triangle",
         ]
     },
     cmdclass={"build_ext": get_ext()} if not BUILD_NO_CUDA else {},

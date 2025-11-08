@@ -1,0 +1,3 @@
+#include "primitive_3dgs.slang"
+#include "primitive_opaque_triangle.slang"
+#include "primitive_opaque_triangle_eval3d.slang"

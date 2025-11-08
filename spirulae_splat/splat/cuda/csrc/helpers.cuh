@@ -94,22 +94,6 @@ inline __device__ float visibility_kernel_radius() {
 #endif
 
 
-inline __device__ float depth_map(float z) {
-    return z>0.0f ? logf(z+1.0f) : z;
-}
-
-inline __device__ float depth_map_vjp(float z, float v_z) {
-    return z>0.0f ? v_z/(z+1.0f) : v_z;
-}
-
-inline __device__ float depth_inv_map(float z) {
-    return z>0.0f ? expf(z)-1.0f : z;
-}
-
-inline __device__ float depth_inv_map_vjp(float z, float v_z) {
-    return z>0.0f ? v_z*expf(z) : v_z;
-}
-
 
 inline __device__ bool get_alpha(
     const glm::vec2 uv,

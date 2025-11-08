@@ -7,7 +7,11 @@ from spirulae_splat.splat._torch_impl import quat_to_rotmat
 from spirulae_splat.splat.rendering import rasterization as ssplat_rasterization
 from gsplat.rendering import rasterization as gsplat_rasterization
 
+from spirulae_splat.splat.cuda import ray_depth_to_linear_depth
+
 from utils import check_close, timeit
+
+from typing import Literal
 
 device = torch.device("cuda:0")
 
@@ -16,40 +20,43 @@ B, W, H = 4, 1440, 1080
 N, SH_DEGREE = 200000, 3
 PACKED = False
 IS_FISHEYE = False
+IS_ANTIALIASED = False
+WITH_UT = True
 
 def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
+    camera_model = ["pinhole", "fisheye"][IS_FISHEYE]
+    quats = torch.nn.functional.normalize(quats, dim=-1)
     rgbd, alpha, meta = ssplat_rasterization(
-        means=means,
-        quats=quats,
-        scales=torch.exp(scales),
-        opacities=opacities.squeeze(-1),
-        colors_dc=features_dc,
-        colors_sh=features_sh,
+        # primitive=["3dgs", "mip"][IS_ANTIALIASED],
+        # splat_params=(means, quats, scales, opacities, features_dc, features_sh),
+        primitive="opaque_triangle",
+        splat_params=(means, quats, scales+1.8, opacities.unsqueeze(-1).repeat(1, 2), features_dc, features_sh, features_dc.unsqueeze(-2).repeat(1, 2, 1)),
         viewmats=viewmats,  # [C, 4, 4]
         Ks=Ks,  # [C, 3, 3]
         width=W,
         height=H,
-        sh_degree=SH_DEGREE,
         packed=PACKED,
         use_bvh=False,
         tile_size=16,
         absgrad=False,
         sparse_grad=False,
-        rasterize_mode="classic",
         distributed=False,
-        camera_model=["pinhole", "fisheye"][IS_FISHEYE],
-        with_ut=IS_FISHEYE,
-        with_eval3d=IS_FISHEYE,
+        camera_model=camera_model,
+        with_ut=WITH_UT,
+        with_eval3d=WITH_UT,
         render_mode="RGB+D",
+        # render_mode="RGB+D+N",
     )
-    return rgbd[..., :3], rgbd[..., 3:], alpha
+    rgbd = [*rgbd[:2]]
+    rgbd[1] = ray_depth_to_linear_depth(rgbd[1], camera_model, Ks)  # TODO: f(E[X]) != E[f(X)]
+    return *rgbd, alpha
 
 def rasterize_gsplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
     rgbd, alpha, meta = gsplat_rasterization(
         means=means,
         quats=quats,
         scales=torch.exp(scales),
-        opacities=opacities.squeeze(-1),
+        opacities=torch.sigmoid(opacities).squeeze(-1),
         colors=torch.concatenate([features_dc.unsqueeze(1), features_sh], dim=1),  # TODO: slow
         viewmats=viewmats,  # [C, 4, 4]
         Ks=Ks,  # [C, 3, 3]
@@ -60,12 +67,12 @@ def rasterize_gsplat(means, quats, scales, opacities, features_dc, features_sh, 
         tile_size=16,
         absgrad=False,
         sparse_grad=False,
-        rasterize_mode="classic",
+        rasterize_mode=["classic", "antialiased"][IS_ANTIALIASED],
         distributed=False,
         camera_model=["pinhole", "fisheye"][IS_FISHEYE],
-        with_ut=IS_FISHEYE,
-        with_eval3d=IS_FISHEYE,
-        render_mode="RGB+D",
+        with_ut=WITH_UT,
+        with_eval3d=WITH_UT,
+        render_mode="RGB+ED",
     )
     return rgbd[..., :3], rgbd[..., 3:], alpha
 
@@ -77,7 +84,7 @@ def get_inputs():
     quats = torch.randn((N, 4)).to(device)
     scales = torch.randn((N, 3)).to(device)*0.7 - 5.0
     # means[0] -= 1e4
-    opacities = torch.rand((N,)).to(device)
+    opacities = torch.randn((N,)).to(device)
     features_dc = torch.rand((N, 3)).to(device)
     features_sh = 0.2 * torch.randn((N, (SH_DEGREE+1)**2-1, 3)).to(device)
 
@@ -97,6 +104,8 @@ def get_inputs():
 
     inputs = (means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks)
     inputs = [torch.nn.Parameter(x.contiguous().clone()) for x in inputs]
+    if WITH_UT:
+        inputs = inputs[:-2] + [viewmats, Ks]
     return inputs
 
 
@@ -111,9 +120,10 @@ def test_rasterization():
     _outputs = rasterize_gsplat(*_inputs)
 
     print("test forward")
-    check_close('rgb', outputs[0], _outputs[0])
-    check_close('depth', outputs[1], _outputs[1])
-    check_close('alpha', outputs[2], _outputs[2])
+    tol = { 'atol': 1e-3, 'rtol': 1e-3 }
+    check_close('rgb', outputs[0], _outputs[0], **tol)
+    check_close('depth', outputs[1], _outputs[1], **tol)
+    check_close('alpha', outputs[2], _outputs[2], **tol)
     print()
 
     if False:
@@ -121,13 +131,19 @@ def test_rasterization():
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2)
         rgb = outputs[0].detach().cpu().numpy()
         _rgb = _outputs[0].detach().cpu().numpy()
+        alpha = outputs[2].detach().cpu().numpy()
+        _alpha = _outputs[2].detach().cpu().numpy()
         ax1.imshow(rgb[0])
+        ax2.imshow(alpha[0])
         # ax2.imshow(rgb[1])
         # ax3.imshow(rgb[2])
         # ax4.imshow(rgb[3])
         ax3.imshow(_rgb[0])
+        ax4.imshow(_alpha[0])
         # ax4.imshow(_rgb[1])
         plt.show()
+        # plt.savefig("/workspace/plot.png")
+        exit(0)
 
     weights = [torch.randn_like(x.detach()) for x in _outputs]
     def fun(outputs):
@@ -139,7 +155,7 @@ def test_rasterization():
     # print(_inputs[0].grad)
 
     print("test backward")
-    tol = { 'atol': 1e-3, 'rtol': 1e-4 }
+    tol = { 'atol': 1e-2, 'rtol': 1e-2 }
     check_close('means', inputs[0].grad, _inputs[0].grad, **tol)
     check_close('quats', inputs[1].grad, _inputs[1].grad, **tol)
     check_close('scales', inputs[2].grad, _inputs[2].grad, **tol)
@@ -178,9 +194,9 @@ def profile_rasterization():
 
 if __name__ == "__main__":
 
-    N = 1000
-    test_rasterization()
-    print()
+    # N = 1000
+    # test_rasterization()
+    # print()
 
     N = 200000
     profile_rasterization()

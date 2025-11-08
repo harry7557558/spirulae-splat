@@ -54,9 +54,10 @@ __global__ void per_splat_losses_forward_kernel(
     cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
     for (int i = 0; i < kNumPerSplatLosses; i++) {
         float loss = inside ? losses[i] : 0.0f;
+        if (!isfinite(loss)) loss = 0.0f;
         float loss_reduced = cg::reduce(warp, loss, cg::plus<float>());
         loss_reduced = loss_reduced / (float)num_points;
-        if (warp.thread_rank() == 0) {
+        if (warp.thread_rank() == 0 && loss_reduced != 0.0f && isfinite(loss_reduced)) {
             atomicAdd(&out_losses[i], loss_reduced);
         }
     }
@@ -103,7 +104,7 @@ __global__ void per_splat_losses_backward_kernel(
     per_splat_losses_bwd(
         is_3dgs,
         scale, opacity, quat,
-        v_losses,
+        &v_losses,
         &v_scale, &v_opacity, &v_quat,
         max_gauss_ratio,
         scale_regularization_weight,

@@ -19,7 +19,7 @@ import time
 
 class RenderViewer(tk.Tk):
     colormap = matplotlib.colormaps['magma']
-    vis_modes = ["rgb", "depth", "normal", "shaded"]
+    vis_modes = ["rgb", "depth", "normal", "shaded"][:3]  # TODO
     move_mode = ["pinch", "navigate"][0]
 
     def __init__(self):
@@ -83,9 +83,14 @@ class RenderViewer(tk.Tk):
             depth = depth.cpu().numpy()
             image = self.color_depth(depth)
         elif self.vis_modes[self.vis_mode] == "normal":
-            normal = depth_to_normal(depth_inv_map(depth), camera._to_ssplat_camera())
+            normal = depth_to_normal(
+                depth_inv_map(depth),
+                ["pinhole", "fisheye"][camera.model == "OPENCV_FISHEYE"],
+                (camera.fx, camera.fy, camera.cx, camera.cy)
+            )
             image = (255*(0.5-0.5*normal)).byte().cpu().numpy()
         elif self.vis_modes[self.vis_mode] == "shaded":
+            raise NotImplementedError()  # TODO
             normal, point = depth_to_normal(depth_inv_map(depth), camera._to_ssplat_camera(), return_points=True)
             ldir = F.normalize(torch.tensor([[[1.0, -1.0, -1.0]]]), dim=-1).to(image)
             rdir = F.normalize(point, dim=-1)
@@ -236,7 +241,7 @@ if __name__ == "__main__":
         sys.exit(-1)
 
     # Load camera
-    camera_path = os.path.join(os.path.dirname(__file__), "cameras/s21.yaml")
+    camera_path = os.path.join(os.path.dirname(__file__), "cameras/zipnerf.yaml")
     camera = Camera(camera_path)
 
     # Initialize model
@@ -245,7 +250,6 @@ if __name__ == "__main__":
     ssplat_model.return_torch = True
     ssplat_model.convert_to_input_frame()
     print(ssplat_model.num_splats(), "splats")
-    print("sort_per_pixel:", ssplat_model.sort_per_pixel)
 
     # Center the model
     if False:

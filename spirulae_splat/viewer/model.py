@@ -8,6 +8,14 @@ from spirulae_splat.splat.rendering import rasterization
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import spherical_harmonics
 from spirulae_splat.splat._torch_impl import quat_mult
+from spirulae_splat.splat.cuda import ray_depth_to_linear_depth
+
+from spirulae_splat.viewer.utils import (
+    quat_to_rotmat,
+    rotmat_to_quat,
+    quat_scale_to_triangle_verts,
+    triangle_verts_to_quat_scale_mean,
+)
 
 from spirulae_splat.viewer.camera import Camera
 
@@ -20,9 +28,10 @@ from typing import Literal
 class SplatModel:
     def __init__(self, file_path: str):
         self.bgr = True
-        self.sort_per_pixel = True
         self.flip_yz = False
         self.return_torch = False
+        
+        self.primitive = "3dgs"  # type: Literal["3dgs", "mip", "opaque_triangle"]
 
         self.dataparser_transform = np.eye(4)
         self.dataparser_scale = 1.0
@@ -39,7 +48,10 @@ class SplatModel:
         else:
             raise ValueError("Must be .ckpt or config.yml")
 
-    def load_ckpt(self, file_path):
+    def load_ckpt(self, file_path, _from_load_config=False):
+        if not _from_load_config:
+            print("WARNING: ckpt file does not contain information about scene type. Assuming vanilla 3DGS. "
+                "Use config.yml file instead of .ckpt file for more information.")
         checkpoint = torch.load(file_path, 'cpu', weights_only=False)
         pipeline = checkpoint['pipeline']
 
@@ -67,13 +79,15 @@ class SplatModel:
         for f in os.listdir(ckpt_dir):
             if f.endswith('.ckpt'):
                 f = os.path.join(ckpt_dir, f)
-                self.load_ckpt(f)
+                self.load_ckpt(f, _from_load_config=True)
                 break
 
-        # check if use per pixel sorting
         content = open(file_path).read()
-        if 'use_per_pixel_sorting: false' in content:
-            self.sort_per_pixel = False
+        if "primitive: mip" in content:
+            self.primitive = "mip"
+        elif "primitive: opaque_triangle" in content:
+            self.primitive = "opaque_triangle"
+        print("Primitive:", self.primitive)
 
         # load dataparser transforms
         dtr_path = os.path.join(save_dir, 'dataparser_transforms.json')
@@ -98,9 +112,7 @@ class SplatModel:
 
         self.gauss_params["scales"] = (self.scales + np.log(sc))
 
-        rot = rot.cpu().numpy()
-        dq = Rotation.from_matrix(rot).as_quat()
-        dq = torch.from_numpy(dq[[3,0,1,2]]).to(self.quats)
+        dq = rotmat_to_quat(rot)
         self.gauss_params["quats"] = quat_mult(dq, self.quats)
 
         self.gauss_params["features_sh"] = rotate_sh_coeffs(self.features_sh, rot, "gsplat")
@@ -108,7 +120,7 @@ class SplatModel:
             self.background_sh = rotate_sh_coeffs(self.background_sh[None], rot, "nerfstudio")[0]
 
     @torch.no_grad()
-    def convert_to_input_frame(self, match: Literal['ply', 'json', None]="ply"):
+    def convert_to_input_frame(self, match: Literal['ply', 'json', None]=None):
         """Convert to the same coordinate frame as in input dataset"""
 
         if match == "ply":
@@ -162,6 +174,9 @@ class SplatModel:
     def features_sh(self):
         return self.gauss_params["features_sh"]
     @property
+    def features_ch(self):
+        return self.gauss_params["features_ch"]
+    @property
     def opacities(self):
         return self.gauss_params["opacities"]
 
@@ -213,7 +228,6 @@ class SplatModel:
             dist_coeffs = torch.tensor([*ssplat_camera.dist_coeffs]).float().to(viewmat)
             is_fisheye = ssplat_camera.model == "OPENCV_FISHEYE"
             is_distorted = ssplat_camera.is_distorted() or any([x != 0 for x in dist_coeffs])
-            is_distorted = False  # TODO
             if is_distorted:
                 if is_fisheye:
                     kwargs['radial_coeffs'] = dist_coeffs[None]
@@ -222,40 +236,48 @@ class SplatModel:
                     kwargs["tangential_coeffs"] = dist_coeffs[2:][None]
 
             rgbd, alpha, meta = rasterization(
-                means=self.means,
-                quats=F.normalize(self.quats, dim=-1),
-                scales=torch.exp(self.scales),
-                opacities=torch.sigmoid(self.opacities).squeeze(-1),
-                colors_dc=self.features_dc,
-                colors_sh=self.features_sh,
+                self.primitive,
+                (self.means, F.normalize(self.quats, dim=-1), self.scales, self.opacities.squeeze(-1),
+                    self.features_dc, self.features_sh)
+                    if self.primitive in ['3dgs', 'mip'] else
+                (self.means, F.normalize(self.quats, dim=-1), self.scales,
+                    torch.concat([
+                        torch.ones_like(self.opacities),
+                        torch.ones_like(self.opacities)
+                    ], dim=-1),
+                    self.features_dc, self.features_sh, self.features_ch
+                ),
                 viewmats=viewmat[None].contiguous(),  # [C, 4, 4]
                 Ks=Ks[None].contiguous(),  # [C, 3, 3]
                 width=w,
                 height=h,
-                sh_degree=self.sh_degree,
                 packed=False,
                 use_bvh=False,
                 absgrad=False,
                 sparse_grad=False,
-                rasterize_mode="classic",
                 distributed=False,
                 camera_model=["pinhole", "fisheye"][is_fisheye],
-                with_ut=is_distorted,
-                with_eval3d=is_distorted,
-                render_mode="RGB+D",
+                with_ut=True,
+                with_eval3d=True,
+                render_mode="RGB+ED",
+                # render_mode="RGB+ED+N",
                 **kwargs,
             )
-            colors = rgbd[0, ..., :3]
             alpha = alpha[0]
-            if return_depth:
-                colors = rgbd[0]
 
-            rgb = colors[..., :3]
+            rgb = rgbd[0]
             if return_depth:
-                depth = torch.where(
-                    alpha > 0.05, colors[..., 3:] / alpha,
-                    1.5*torch.amax(colors[..., 3:]).detach()
+                depth = rgbd[1]
+                depth = ray_depth_to_linear_depth(
+                    depth,
+                    ["pinhole", "fisheye"][is_fisheye],
+                    Ks[None].contiguous(),
+                    **kwargs
                 )
+                depth = torch.where(
+                    alpha > 0.0, depth,
+                    1.5*torch.amax(depth).detach()
+                ).contiguous()
 
         else:
             raise NotImplementedError("2DGS is deprecated")
@@ -273,8 +295,8 @@ class SplatModel:
         timer.mark("background")
 
         if return_depth:
-            return rgb, depth
-        return rgb
+            return rgb[0], depth[0]
+        return rgb[0]
 
     @torch.no_grad()
     def render(self, camera, c2w, return_depth=False):

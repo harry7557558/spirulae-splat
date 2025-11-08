@@ -91,6 +91,7 @@ class DefaultStrategy(Strategy):
     reset_every: int = 3000
     refine_every: int = 100
     pause_refine_after_reset: int = 0
+    kernel_radius: float = 3.0
     absgrad: bool = False
     revised_opacity: bool = False
     verbose: bool = False
@@ -296,6 +297,11 @@ class DefaultStrategy(Strategy):
 
         scale = torch.exp(params["scales"]).max(dim=-1).values
 
+        # TODO: handle 2DGS, triangle splatting, etc. with bad gradient
+        if False:
+            new_grads = grads * scale
+            grads = new_grads * (grads.mean() / new_grads.mean())
+
         is_grad_high = (grads > self.grow_grad2d)
         is_huge = (scale > self.split_scale3d * state["scene_scale"])
         is_grow = is_grad_high | is_huge
@@ -330,6 +336,7 @@ class DefaultStrategy(Strategy):
                 optimizers=optimizers,
                 state=state,
                 mask=is_split,
+                std_scale=self.kernel_radius/3.0,
                 revised_opacity=self.revised_opacity,
             )
         return n_dupli, n_split

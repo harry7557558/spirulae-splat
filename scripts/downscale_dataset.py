@@ -294,8 +294,10 @@ def main():
             ref_frame = processed_frames[0]
             ref_width = ref_frame.get('w', global_intrinsics.get('w', 0))
             ref_height = ref_frame.get('h', global_intrinsics.get('h', 0))
+            new_width = int(ref_width * args.image_scale)
+            new_height = int(ref_height * args.image_scale)
             
-            adjusted_global = adjust_intrinsics(global_intrinsics, args.image_scale, ref_width, ref_height)
+            adjusted_global = adjust_intrinsics(global_intrinsics, args.image_scale, new_width, new_height)
             for key, value in adjusted_global.items():
                 transforms[key] = value
     

@@ -6,6 +6,7 @@ except:
     # possibly from setup.py
     _C = None
 
+from ._wrapper import *
 
 def _get_constant(name: str) -> int:
     return getattr(_C, name, -1)

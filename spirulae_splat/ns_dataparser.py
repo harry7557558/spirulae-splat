@@ -104,6 +104,7 @@ class Nerfstudio2(Nerfstudio):
         image_filenames = []
         mask_filenames = []
         depth_filenames = []
+        normal_filenames = []
         poses = []
 
         fx_fixed = "fl_x" in meta
@@ -195,6 +196,11 @@ class Nerfstudio2(Nerfstudio):
                 depth_fname = self._get_fname(depth_filepath, data_dir, downsample_folder_prefix="depths_")
                 depth_filenames.append(depth_fname)
 
+            if "normal_file_path" in frame:
+                normal_filepath = Path(frame["normal_file_path"])
+                normal_fname = self._get_fname(normal_filepath, data_dir, downsample_folder_prefix="normals_")
+                normal_filenames.append(normal_fname)
+
         assert len(mask_filenames) == 0 or (len(mask_filenames) == len(image_filenames)), """
         Different number of image and mask filenames.
         You should check that mask_path is specified for every frame (or zero frames) in transforms.json.
@@ -202,6 +208,10 @@ class Nerfstudio2(Nerfstudio):
         assert len(depth_filenames) == 0 or (len(depth_filenames) == len(image_filenames)), """
         Different number of image and depth filenames.
         You should check that depth_file_path is specified for every frame (or zero frames) in transforms.json.
+        """
+        assert len(normal_filenames) == 0 or (len(normal_filenames) == len(image_filenames)), """
+        Different number of image and normal filenames.
+        You should check that normal_file_path is specified for every frame (or zero frames) in transforms.json.
         """
 
         has_split_files_spec = any(f"{split}_filenames" in meta for split in ("train", "val", "test"))
@@ -265,6 +275,7 @@ class Nerfstudio2(Nerfstudio):
         image_filenames = [image_filenames[i] for i in indices]
         mask_filenames = [mask_filenames[i] for i in indices] if len(mask_filenames) > 0 else []
         depth_filenames = [depth_filenames[i] for i in indices] if len(depth_filenames) > 0 else []
+        normal_filenames = [normal_filenames[i] for i in indices] if len(normal_filenames) > 0 else []
 
         idx_tensor = torch.tensor(indices, dtype=torch.long)
         poses = poses[idx_tensor]
@@ -421,6 +432,7 @@ class Nerfstudio2(Nerfstudio):
             metadata={
                 "depth_filenames": depth_filenames if len(depth_filenames) > 0 else None,
                 "depth_unit_scale_factor": self.config.depth_unit_scale_factor,
+                "normal_filenames": normal_filenames if len(normal_filenames) > 0 else None,
                 "mask_color": self.config.mask_color,
                 "mask_overexposure": self.config.mask_overexposure,
                 **metadata,
