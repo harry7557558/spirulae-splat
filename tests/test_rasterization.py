@@ -1,6 +1,5 @@
 import pytest
 import torch
-from torch.func import vjp  # type: ignore
 
 from spirulae_splat.splat._torch_impl import quat_to_rotmat
 
@@ -22,15 +21,16 @@ PACKED = False
 IS_FISHEYE = False
 IS_ANTIALIASED = False
 WITH_UT = True
+WORLD_SIZE = 2
 
 def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
     camera_model = ["pinhole", "fisheye"][IS_FISHEYE]
     quats = torch.nn.functional.normalize(quats, dim=-1)
     rgbd, alpha, meta = ssplat_rasterization(
-        # primitive=["3dgs", "mip"][IS_ANTIALIASED],
-        # splat_params=(means, quats, scales, opacities, features_dc, features_sh),
-        primitive="opaque_triangle",
-        splat_params=(means, quats, scales+1.8, opacities.unsqueeze(-1).repeat(1, 2), features_dc, features_sh, features_dc.unsqueeze(-2).repeat(1, 2, 1)),
+        primitive=["3dgs", "mip"][IS_ANTIALIASED],
+        splat_params=(means, quats, scales, opacities, features_dc, features_sh),
+        # primitive="opaque_triangle",
+        # splat_params=(means, quats, scales+1.8, opacities.unsqueeze(-1).repeat(1, 2), features_dc, features_sh, features_dc.unsqueeze(-2).repeat(1, 2, 1)),
         viewmats=viewmats,  # [C, 4, 4]
         Ks=Ks,  # [C, 3, 3]
         width=W,
@@ -47,6 +47,44 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
         render_mode="RGB+D",
         # render_mode="RGB+D+N",
     )
+    rgbd = [*rgbd[:2]]
+    rgbd[1] = ray_depth_to_linear_depth(rgbd[1], camera_model, Ks)  # TODO: f(E[X]) != E[f(X)]
+    return *rgbd, alpha
+
+def rasterize_ssplat_distributed(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
+    quats = torch.nn.functional.normalize(quats, dim=-1)
+    for world_rank in range(WORLD_SIZE):
+        device = torch.device(f"cuda:{world_rank}")
+        camera_model = ["pinhole", "fisheye"][IS_FISHEYE]
+        splat_params = [
+            comp[world_rank::WORLD_SIZE].to(device)
+            for comp in (means, quats, scales, opacities, features_dc, features_sh)
+        ]
+        with torch.cuda.device(device):
+            rgbd, alpha, meta = ssplat_rasterization(
+                primitive=["3dgs", "mip"][IS_ANTIALIASED],
+                splat_params=splat_params,
+                viewmats=viewmats.to(device),  # [C, 4, 4]
+                Ks=Ks.to(device),  # [C, 3, 3]
+                width=W,
+                height=H,
+                packed=PACKED,
+                use_bvh=False,
+                tile_size=16,
+                absgrad=False,
+                sparse_grad=False,
+                distributed=True,
+                camera_model=camera_model,
+                with_ut=WITH_UT,
+                with_eval3d=WITH_UT,
+                render_mode="RGB+D",
+                # render_mode="RGB+D+N",
+                world_size=WORLD_SIZE,
+                world_rank=world_rank,
+            )
+            torch.cuda.synchronize()
+        rgbd = [comp.to(device="cuda:0") for comp in rgbd]
+        alpha = alpha.to(device="cuda:0")
     rgbd = [*rgbd[:2]]
     rgbd[1] = ray_depth_to_linear_depth(rgbd[1], camera_model, Ks)  # TODO: f(E[X]) != E[f(X)]
     return *rgbd, alpha
@@ -194,9 +232,9 @@ def profile_rasterization():
 
 if __name__ == "__main__":
 
-    # N = 1000
-    # test_rasterization()
-    # print()
+    N = 1000
+    test_rasterization()
+    print()
 
     N = 200000
     profile_rasterization()

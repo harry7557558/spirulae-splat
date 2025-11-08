@@ -69,6 +69,8 @@ def rasterization(
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
+    world_rank: int = 0,
+    world_size: int = 1
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -327,9 +329,10 @@ def rasterization(
     # and the rasterize computation over cameras. So first we gather the cameras
     # from all ranks for projection.
     if distributed:
+        raise NotImplementedError()
         assert batch_dims == (), "Distributed mode does not support batch dimensions"
-        world_rank = torch.distributed.get_rank()
-        world_size = torch.distributed.get_world_size()
+        # world_rank = torch.distributed.get_rank()
+        # world_size = torch.distributed.get_world_size()
 
         # Gather the number of Gaussians in each rank.
         N_world = all_gather_int32(world_size, N, device=device)
@@ -506,8 +509,8 @@ def rasterization(
     # on which cameras they are visible to, which we already figured out in the projection
     # stage.
     if distributed:
-        raise NotImplementedError()
         if packed:
+            raise NotImplementedError()
             # count how many elements need to be sent to each rank
             cnts = torch.bincount(camera_ids, minlength=C)  # all cameras
             cnts = cnts.split(C_world, dim=0)
@@ -571,23 +574,16 @@ def rasterization(
             )
             radii = reshape_view(C, radii, N_world)
 
-            (means2d, depths, conics, proj_opacities, colors) = all_to_all_tensor_list(
+            is_batched = [(comp.shape[0] == C) for comp in proj_splats]  # TODO: splat count == C?
+            proj_splats = all_to_all_tensor_list(
                 world_size,
-                [
-                    means2d.flatten(0, 1),
-                    depths.flatten(0, 1),
-                    conics.flatten(0, 1),
-                    proj_opacities.flatten(0, 1),
-                    colors.flatten(0, 1),
-                ],
+                [(comp.flatten(0, 1) if comp.shape[0] == C else comp)  # TODO
+                 for comp in proj_splats],
                 splits=[C_i * N for C_i in C_world],
                 output_splits=[C * N_i for N_i in N_world],
             )
-            means2d = reshape_view(C, means2d, N_world)
-            depths = reshape_view(C, depths, N_world)
-            conics = reshape_view(C, conics, N_world)
-            proj_opacities = reshape_view(C, proj_opacities, N_world)
-            colors = reshape_view(C, colors, N_world)
+            proj_splats = [(reshape_view(C, comp, N_world) if ib else comp)
+                           for (ib, comp) in zip(is_batched, proj_splats)]
 
     # Identify intersecting tiles
     tile_width = math.ceil(width / float(tile_size))
