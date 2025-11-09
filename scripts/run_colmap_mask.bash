@@ -3,6 +3,7 @@ export max_num_features=32768  # in my cases <3000 are left after filtering mask
 export vocab_tree_path="../vocab_tree_flickr100K_words32K.bin"
 
 # feature extraction
+# replace `--ImageReader.single_camera 1` with `--ImageReader.single_camera 0`, `--ImageReader.single_camera_per_folder 1`, etc.
 colmap feature_extractor --database_path database.db --image_path ./images --ImageReader.mask_path ./masks --ImageReader.single_camera 1 --ImageReader.camera_model $camera_model --SiftExtraction.max_num_features $max_num_features
 
 # pairwise feature matching
@@ -26,7 +27,7 @@ fi
 # export poses and point cloud using nerfstudio
 ns-process-data images --data ./images --output-dir . --skip-image-processing --skip-colmap --colmap-model-path sparse/0/
 cp transforms.json transforms_no_masks.json
-sed -E 's/"file_path": "images\/([0-9]+\.jpg)",/"file_path": "images\/\1", "mask_path": "masks\/\1.png",/g' transforms_no_masks.json > transforms.json
+sed -E 's/"file_path": "images\/(.*?\.jpg)",/"file_path": "images\/\1", "mask_path": "masks\/\1.png",/g' transforms_no_masks.json > transforms.json
 
 # dense reconstruction
 if false; then

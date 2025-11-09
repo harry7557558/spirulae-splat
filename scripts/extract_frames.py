@@ -8,6 +8,8 @@ import cv2
 import numpy as np
 import os
 
+import subprocess
+
 quality = 95
 rotate = 0
 scale = 1.0
@@ -78,6 +80,10 @@ def write_image(image, filename, filename_enh=None, _enhance_model=[]):
 
 class FrameSelector:
     def __init__(self, image_dir, enhance_dir, max_frames, skip, keep):
+        os.makedirs(image_dir, exist_ok=True)
+        if enhance_dir is not None:
+            os.makedirs(enhance_dir, exist_ok=True)
+
         self.image_dir = image_dir
         self.enhance_dir = enhance_dir
         self.max_frames = max_frames
@@ -184,25 +190,65 @@ def extract_rosbag_frames(bag_path, image_dir, enhance_dir, max_frames, skip, ke
 
 def extract_video_frames(video_path, image_dir, enhance_dir, max_frames, skip, keep):
 
-    video = cv2.VideoCapture(video_path)
+    def get_video_streams(video_path):
+        cmd = [
+            "ffprobe", "-v", "error", "-select_streams", "v",
+            "-show_entries", "stream=index", "-of", "csv=p=0", video_path
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        except FileNotFoundError:
+            print("ffprobe not found. Please install ffmpeg.")
+            exit(0)
+        if result.returncode != 0:
+            raise RuntimeError(f"ffprobe failed: {result.stderr}")
+        streams = [int(x.strip()) for x in result.stdout.splitlines() if x.strip()]
+        return streams
 
-    if not video.isOpened():
-        print("Error: Could not open video file.")
+    streams = get_video_streams(video_path) if video_path.endswith(".insv") else [0]
+
+    if len(streams) == 0:
+        print(f"Error: no video streams found in {video_path}")
         return
 
-    frame_selector = FrameSelector(image_dir, enhance_dir, max_frames, skip, keep)
+    for idx, stream_idx in enumerate(streams):
+        # Handle multi-track video by splitting track via ffmpeg if needed
+        if len(streams) > 1:
+            print(f"Extracting track {stream_idx} to cam{idx}")
+            temp_path = os.path.join(image_dir, f"temp_cam{idx}.mp4")
+            subprocess.run([
+                "ffmpeg", "-y", "-i", video_path,
+                "-map", f"0:v:{idx}", "-c", "copy", temp_path
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            track_video_path = temp_path
+            out_image_dir = os.path.join(image_dir, f"cam{idx}")
+            out_enhance_dir = os.path.join(enhance_dir, f"cam{idx}") if enhance_dir is not None else None
+        else:
+            track_video_path = video_path
+            out_image_dir = image_dir
+            out_enhance_dir = enhance_dir
 
-    while True:
-        success, frame = video.read()
-        if not success:
-            break
+        video = cv2.VideoCapture(track_video_path)
+        if not video.isOpened():
+            print(f"Error: could not open {track_video_path}")
+            continue
 
-        if not frame_selector.add_frame(frame):
-            break
+        frame_selector = FrameSelector(out_image_dir, out_enhance_dir, max_frames, skip, keep)
 
-    frame_selector.conclude()
+        while True:
+            success, frame = video.read()
+            if not success:
+                break
+            if not frame_selector.add_frame(frame):
+                break
 
-    video.release()
+        frame_selector.conclude()
+        video.release()
+
+        if len(streams) > 1:
+            os.remove(track_video_path)
+
+    print("Frame extraction completed.")
 
 
 def extract_frames(filename, dirname, max_frames=100000, skip=1, keep=-1, ros_topic=""):

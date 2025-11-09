@@ -15,7 +15,7 @@ from spirulae_splat.splat.cuda import undistort_image, distort_image
 @dataclass
 class Config:
     dataset_dir: str
-    max_size: int = 99999999
+    max_size: int = 1600  # result not always better at high res
 
 
 def process_image(
@@ -44,7 +44,7 @@ def process_image(
         radial_coeffs, tangential_coeffs, thin_prism_coeffs)
     image = undistort_image(image, *intrins)
 
-    with torch.autocast(device_type="cuda", dtype=torch.float32):
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
         pred_depth, _, output_dict = model.inference({'input': image.permute((0, 3, 1, 2))})
     pred_normal = output_dict['prediction_normal']
 
@@ -134,7 +134,7 @@ def process_dir(dataset_dir: str):
 
     print("Loading model...")
     model = torch.hub.load('yvanyin/metric3d', 'metric3d_vit_large', pretrain=True)
-    model = model.eval().cuda()
+    model = model.eval().cuda().bfloat16()
     print("Model loaded")
 
     for (image_filename, depth_filename, normal_filename, intrins) \

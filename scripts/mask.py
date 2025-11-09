@@ -72,7 +72,7 @@ if __name__ == "__main__":
     parser.add_argument("--images", default="images", help="Name of the subdirectory containing images.")
     parser.add_argument("--masks", default="masks", help="Name of the subdirectory to save masks.")
     parser.add_argument("--max_image_size", type=int, default=1600, help="Maximum image size.")
-    parser.add_argument("--sam_type", default="sam2.1_hiera_small", help="SAM model to use.")
+    parser.add_argument("--sam_type", default="sam2.1_hiera_large", help="SAM model to use.")
     parser.add_argument("--box_threshold", type=float, default=0.4, help="Box threshold for lang-sam model.")
     parser.add_argument("--text_threshold", type=float, default=0.25, help="Text threshold for lang-sam model.")
     args = parser.parse_args()

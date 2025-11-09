@@ -17,16 +17,14 @@ from nerfstudio.data.datasets.base_dataset import *
 import cv2
 
 
-def get_image_mask_tensor_from_path(filepath: Path, scale_factor: float = 1.0) -> torch.Tensor:
+def get_image_mask_tensor_from_path(filepath: Path, height: int, width: int) -> torch.Tensor:
     """
     Utility function to read a mask image from the given path and return a boolean tensor
     Modified to handle masks that are apparently grayscale but actually RGB
     """
     pil_mask = Image.open(filepath).convert("L")
-    if scale_factor != 1.0:
-        width, height = pil_mask.size
-        newsize = (int(width * scale_factor), int(height * scale_factor))
-        pil_mask = pil_mask.resize(newsize, resample=Image.Resampling.NEAREST)
+    if pil_mask.size[0] != width or pil_mask.size[1] != height:
+        pil_mask = pil_mask.resize((width, height), resample=Image.Resampling.NEAREST)
     mask_tensor = torch.from_numpy(np.array(pil_mask)).unsqueeze(-1).bool()
     # TODO: configurable all nonzero vs 128/0.5?
     return mask_tensor
@@ -230,7 +228,10 @@ class SpirulaeDataset(InputDataset):
         data = {"image_idx": image_idx, "image": image}
         if self._dataparser_outputs.mask_filenames is not None:
             mask_filepath = self._dataparser_outputs.mask_filenames[image_idx]
-            data["mask"] = get_image_mask_tensor_from_path(filepath=mask_filepath, scale_factor=self.scale_factor)
+            data["mask"] = get_image_mask_tensor_from_path(
+                filepath=mask_filepath,
+                width=data["image"].shape[1], height=data["image"].shape[0]
+            )
             assert (
                 data["mask"].shape[:2] == data["image"].shape[:2]
             ), f"Mask and image have different shapes. Got {data['mask'].shape[:2]} and {data['image'].shape[:2]}"

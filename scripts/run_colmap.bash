@@ -4,6 +4,7 @@ export image_path="images"  # or images_2, images_4
 export vocab_tree_path="../vocab_tree_flickr100K_words32K.bin"
 
 # feature extraction
+# replace `--ImageReader.single_camera 1` with `--ImageReader.single_camera 0`, `--ImageReader.single_camera_per_folder 1`, etc.
 colmap feature_extractor --database_path database.db --image_path ./$image_path --ImageReader.single_camera 1 --ImageReader.camera_model $camera_model --SiftExtraction.max_num_features $max_num_features
 
 # pairwise feature matching
