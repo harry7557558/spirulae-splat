@@ -299,7 +299,10 @@ class DepthAndNormalMapsPoisson(GSMeshExporter):
         colors = []
         for frame in tqdm(transforms["frames"]):
 
-            camera = Camera(frame if 'w' in frame else transforms)
+            for key in 'camera_model w h fl_x fl_y cx cy'.split():
+                if key in transforms and key not in frame:
+                    frame[key] = transforms[key]
+            camera = Camera(frame)
             camera.model = "OPENCV"
             camera.distortion = (0, 0, 0, 0)
 
@@ -450,7 +453,10 @@ class TSDFFusion(GSMeshExporter):
         points = []
         colors = []
         for frame in tqdm(transforms["frames"]):
-            camera = Camera(frame if 'w' in frame else transforms)
+            for key in 'camera_model w h fl_x fl_y cx cy'.split():
+                if key in transforms and key not in frame:
+                    frame[key] = transforms[key]
+            camera = Camera(frame)
 
             c2w = np.array(frame['transform_matrix'])
             c2w = c2w @ np.diag([1, -1, -1, 1])
@@ -550,7 +556,10 @@ class Open3DTSDFFusion(GSMeshExporter):
 
         for frame in tqdm(transforms["frames"]):
 
-            camera = Camera(frame if 'w' in frame else transforms)
+            for key in 'camera_model w h fl_x fl_y cx cy'.split():
+                if key in transforms and key not in frame:
+                    frame[key] = transforms[key]
+            camera = Camera(frame)
             camera.model = "OPENCV"
             camera.distortion = (0, 0, 0, 0)
 
