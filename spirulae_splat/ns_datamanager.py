@@ -110,35 +110,6 @@ class SpirulaeDataManager(FullImageDatamanager):
                 f'The size of image ({data["image"].shape[1]}, {data["image"].shape[0]}) loaded '
                 f'does not match the camera parameters ({camera.width.item(), camera.height.item()})'
             )
-            if camera.distortion_params is None or torch.all(camera.distortion_params == 0):
-                return data
-            K = camera.get_intrinsics_matrices().numpy()
-            distortion_params = camera.distortion_params.numpy()
-
-            if camera.camera_type.item() == CameraType.FISHEYE.value:
-                # don't undistort
-                mask = data["mask"] if "mask" in data else None
-            else:
-                image = data["image"].numpy()
-                K, image, mask = _undistort_image(camera, distortion_params, data, image, K)
-                data["image"] = torch.from_numpy(image)
-                if "depth" in data:
-                    depth = data["depth"].numpy()
-                    _, depth, _ = _undistort_image(camera, distortion_params, data, depth, K)
-                    data["depth"] = torch.from_numpy(depth)
-                if "normal" in data:
-                    normal = data["normal"].numpy()
-                    _, normal, _ = _undistort_image(camera, distortion_params, data, normal, K)
-                    data["normal"] = torch.from_numpy(normal)
-            if mask is not None:
-                data["mask"] = mask
-
-            dataset.cameras.fx[idx] = float(K[0, 0])
-            dataset.cameras.fy[idx] = float(K[1, 1])
-            dataset.cameras.cx[idx] = float(K[0, 2])
-            dataset.cameras.cy[idx] = float(K[1, 2])
-            dataset.cameras.width[idx] = data["image"].shape[1]
-            dataset.cameras.height[idx] = data["image"].shape[0]
             return data
 
         CONSOLE.log(f"Caching/undistorting {split} images")

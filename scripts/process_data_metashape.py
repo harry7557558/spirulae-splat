@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # Copyright 2022 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -211,8 +213,8 @@ def metashape_to_json(
             s["k4"] = _find_param(calib, "k4")
             s["p1"] = _find_param(calib, "p2")
             s["p2"] = _find_param(calib, "p1")
-            s["b1"] = _find_param(calib, "b1")
-            s["b2"] = _find_param(calib, "b2")
+            s["b1"] = _find_param(calib, "b1") / s["fl_x"]
+            s["b2"] = _find_param(calib, "b2") / s["fl_x"]
 
         sensor_dict[sensor.get("id")] = s
 

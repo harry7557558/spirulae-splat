@@ -123,13 +123,13 @@ class MCMCStrategy(Strategy):
         if np.isfinite(self.max_scale2d):
             assert not packed
             # TODO: optionally, actually do anisotropic scale in 3d
-            oversize_factor = torch.clip(normalized_radii / self.max_scale2d, min=1.0)
+            oversize_factor = torch.clip(normalized_radii / self.max_scale2d, min=1.0, max=1.1)
             oversize_factor = torch.log(oversize_factor).unsqueeze(-1)
             scales, opacities = params['scales'].data, params['opacities'].data
             scales[gs_ids] -= oversize_factor
             opacities[gs_ids] += scales.shape[-1] * oversize_factor
             opacities[gs_ids] = torch.clip(opacities[gs_ids], max=5.0)  # sigmoid(5.0)=0.993
-            state["radii"][gs_ids] *= (normalized_radii < self.max_scale2d).float()
+            state["radii"][gs_ids] *= (normalized_radii <= self.max_scale2d).float()
 
         # large splats in world space
         # clip scale, without increasing opacity (which causes problems with background removal)

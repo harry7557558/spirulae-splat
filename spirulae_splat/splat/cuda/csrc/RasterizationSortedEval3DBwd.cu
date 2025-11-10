@@ -72,7 +72,7 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
     typename SplatPrimitive::WorldEval3D::Buffer splat_buffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float *__restrict__ Ks,       // [B, C, 3, 3]
-    const CameraDistortionCoeffsBuffer dist_coeffs,
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const float *__restrict__ backgrounds, // [..., CDIM] or [nnz, CDIM]
     const bool *__restrict__ masks,           // [..., tile_height, tile_width]
     const uint32_t image_width,
@@ -126,12 +126,7 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
     };
     float3 t = { viewmats[3], viewmats[7], viewmats[11] };
     float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
-    float4 radial_coeffs = dist_coeffs.radial_coeffs != nullptr ?
-        dist_coeffs.radial_coeffs[image_id] : make_float4(0.0f);
-    float2 tangential_coeffs = dist_coeffs.tangential_coeffs != nullptr ?
-        dist_coeffs.tangential_coeffs[image_id] : make_float2(0.0f);
-    float2 thin_prism_coeffs = dist_coeffs.thin_prism_coeffs != nullptr ?
-        dist_coeffs.thin_prism_coeffs[image_id] : make_float2(0.0f);
+    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(image_id);
 
     // arrange 16x16 tile into 8x4 subtiles (one per warp)
     static_assert(TILE_SIZE == 16);
@@ -159,8 +154,8 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
     const float py = (float)pix_y + 0.5f;
     float3 ray_o, ray_d;
     generate_ray(
-        R, t, {(px-cx)/fx, (py-cy)/fy}, camera_model == gsplat::CameraModelType::FISHEYE,
-        radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        R, t, {(px-cx)/fx, (py-cy)/fy},
+        camera_model == gsplat::CameraModelType::FISHEYE, &dist_coeffs,
         &ray_o, &ray_d
     );
 
@@ -222,7 +217,7 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
             typename SplatPrimitive::WorldEval3D splat =
                 splat_batch[((range_end-1) - t) % BLOCK_SIZE];
             float alpha = splat.evaluate_alpha(ray_o, ray_d);
-            hasSplat |= (alpha >= ALPHA_THRESHOLD);
+            hasSplat |= (alpha >= ALPHA_THRESHOLD && dot(ray_d, ray_d) > 0.0f);
             if (hasSplat)
                 depth = splat.evaluate_sorting_depth(ray_o, ray_d);
         }

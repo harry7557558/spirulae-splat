@@ -6,6 +6,7 @@
 #undef TensorView
 #endif
 
+#include "types.cuh"
 #include "common.cuh"
 
 #include <tuple>
@@ -26,9 +27,7 @@ struct OpaqueTriangle {
         float fx, fy, cx, cy;
         uint width, height, antialiased;
         float near_plane, far_plane;
-        float4 radial_coeffs = {0, 0, 0, 0};
-        float2 tangential_coeffs = {0, 0};
-        float2 thin_prism_coeffs = {0, 0};
+        CameraDistortionCoeffs dist_coeffs;
     };
 
     inline static __device__ void project_persp(
@@ -56,9 +55,7 @@ struct OpaqueTriangle {
         float3 t;
         float fx, fy, cx, cy;
         uint width, height, antialiased;
-        float4 radial_coeffs = {0, 0, 0, 0};
-        float2 tangential_coeffs = {0, 0};
-        float2 thin_prism_coeffs = {0, 0};
+        CameraDistortionCoeffs dist_coeffs;
     };
 
     inline static __device__ void project_persp_vjp(
@@ -96,10 +93,8 @@ struct OpaqueTriangle::World {
     float3 scale;
     // float3 vert0, vert1, vert2;
     float2 hardness;
-#ifdef __CUDACC__
     FixedArray<float3, 16> sh_coeffs;
     FixedArray<float3, 2> ch_coeffs;
-#endif
 
     typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTuple;
     // typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTuple;
@@ -838,8 +833,7 @@ inline __device__ void OpaqueTriangle::project_persp(
     projection_opaque_triangle_persp(
         world.mean, world.quat, world.scale, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
         // world.vert0, world.vert1, world.vert2, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
-        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &screen.vert0, &screen.vert1, &screen.vert2, &screen.depth, &screen.hardness, &screen.rgb, &screen.normal
     );
@@ -852,8 +846,7 @@ inline __device__ void OpaqueTriangle::project_fisheye(
     projection_opaque_triangle_fisheye(
         world.mean, world.quat, world.scale, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
         // world.vert0, world.vert1, world.vert2, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
-        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &screen.vert0, &screen.vert1, &screen.vert2, &screen.depth, &screen.hardness, &screen.rgb, &screen.normal
     );
@@ -865,8 +858,7 @@ inline __device__ void OpaqueTriangle::project_persp_eval3d(
 ) {
     projection_opaque_triangle_eval3d_persp(
         world.mean, world.quat, world.scale, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
-        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &proj.depth, &proj.verts, &proj.rgbs, &proj.normal
     );
@@ -878,8 +870,7 @@ inline __device__ void OpaqueTriangle::project_fisheye_eval3d(
 ) {
     projection_opaque_triangle_eval3d_fisheye(
         world.mean, world.quat, world.scale, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
-        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &proj.depth, &proj.verts, &proj.rgbs, &proj.normal
     );
@@ -893,8 +884,7 @@ inline __device__ void OpaqueTriangle::project_persp_vjp(
     projection_opaque_triangle_persp_vjp(
         world.mean, world.quat, world.scale, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
         // world.vert0, world.vert1, world.vert2, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
-        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
         cam.width, cam.height,
         v_screen.vert0, v_screen.vert1, v_screen.vert2, v_screen.depth, v_screen.hardness, &v_screen.rgb, v_screen.normal,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.hardness, &v_world.sh_coeffs, &v_world.ch_coeffs,
@@ -911,8 +901,7 @@ inline __device__ void OpaqueTriangle::project_fisheye_vjp(
     projection_opaque_triangle_fisheye_vjp(
         world.mean, world.quat, world.scale, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
         // world.vert0, world.vert1, world.vert2, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
-        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
         cam.width, cam.height,
         v_screen.vert0, v_screen.vert1, v_screen.vert2, v_screen.depth, v_screen.hardness, &v_screen.rgb, v_screen.normal,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.hardness, &v_world.sh_coeffs, &v_world.ch_coeffs,
@@ -928,8 +917,7 @@ inline __device__ void OpaqueTriangle::project_persp_eval3d_vjp(
 ) {
     projection_opaque_triangle_eval3d_persp_vjp(
         world.mean, world.quat, world.scale, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
-        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
         cam.width, cam.height,
         v_proj.depth, &v_proj.verts, &v_proj.rgbs, v_proj.normal,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.hardness, &v_world.sh_coeffs, &v_world.ch_coeffs,
@@ -944,8 +932,7 @@ inline __device__ void OpaqueTriangle::project_fisheye_eval3d_vjp(
 ) {
     projection_opaque_triangle_eval3d_fisheye_vjp(
         world.mean, world.quat, world.scale, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
-        cam.radial_coeffs, cam.tangential_coeffs, cam.thin_prism_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
         cam.width, cam.height,
         v_proj.depth, &v_proj.verts, &v_proj.rgbs, v_proj.normal,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.hardness, &v_world.sh_coeffs, &v_world.ch_coeffs,

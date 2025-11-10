@@ -25,7 +25,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     typename SplatPrimitive::WorldEval3D::Buffer splat_buffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float *__restrict__ Ks,       // [B, C, 3, 3]
-    const CameraDistortionCoeffsBuffer dist_coeffs,
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const float *__restrict__ backgrounds, // [..., CDIM] or [nnz, CDIM]
     const bool *__restrict__ masks,           // [..., tile_height, tile_width]
     const uint32_t image_width,
@@ -79,12 +79,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     };
     float3 t = { viewmats[3], viewmats[7], viewmats[11] };
     float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
-    float4 radial_coeffs = dist_coeffs.radial_coeffs != nullptr ?
-        dist_coeffs.radial_coeffs[image_id] : make_float4(0.0f);
-    float2 tangential_coeffs = dist_coeffs.tangential_coeffs != nullptr ?
-        dist_coeffs.tangential_coeffs[image_id] : make_float2(0.0f);
-    float2 thin_prism_coeffs = dist_coeffs.thin_prism_coeffs != nullptr ?
-        dist_coeffs.thin_prism_coeffs[image_id] : make_float2(0.0f);
+    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(image_id);
 
     // load pixels
     __shared__ float4 shared_ray_d_pix_bin_final[BLOCK_SIZE];
@@ -124,8 +119,8 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         const float py = (float)pix_y + 0.5f;
         float3 ray_d;
         generate_ray(
-            R, t, {(px-cx)/fx, (py-cy)/fy}, camera_model == gsplat::CameraModelType::FISHEYE,
-            radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            R, t, {(px-cx)/fx, (py-cy)/fy},
+            camera_model == gsplat::CameraModelType::FISHEYE, &dist_coeffs,
             &ray_o, &ray_d
         );
         shared_ray_d_pix_bin_final[pix_id_local] =
@@ -192,7 +187,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
             // evaluate alpha and early skip
             float3 ray_d = {ray_d_pix_bin_final.x, ray_d_pix_bin_final.y, ray_d_pix_bin_final.z};
             float alpha = splat.evaluate_alpha(ray_o, ray_d);
-            if (alpha <= ALPHA_THRESHOLD)
+            if (alpha <= ALPHA_THRESHOLD || dot(ray_d, ray_d) == 0.0f)
                 continue;
 
             // printf("t=%d, thread %u, splat %d (%u), pix_id %d, pix %d %d\n", t, thread_id, splat_idx-range_start, splat_gid, pix_id, pix_global_x, pix_global_y);

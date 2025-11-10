@@ -4,6 +4,7 @@ from PIL import Image
 
 from dataclasses import dataclass
 from typing import Optional
+from pathlib import Path
 
 import os
 from tqdm import tqdm
@@ -37,11 +38,8 @@ def process_image(
     sw = image.shape[2] / intrins['w']
     sh = image.shape[1] / intrins['h']
     Ks = (intrins['fl_x']*sw, intrins['fl_y']*sh, intrins['cx']*sw, intrins['cy']*sh)
-    radial_coeffs = (intrins['k1'], intrins['k2'], intrins['k3'], intrins['k4'])
-    tangential_coeffs = (intrins['p1'], intrins['p2'])
-    thin_prism_coeffs = (intrins['sx1'], intrins['sy1'])
-    intrins = (intrins['camera_model'], Ks,
-        radial_coeffs, tangential_coeffs, thin_prism_coeffs)
+    dist_coeffs = tuple(intrins.get(key, 0.0) for key in "k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2".split())
+    intrins = (intrins['camera_model'], Ks, dist_coeffs)
     image = undistort_image(image, *intrins)
 
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
@@ -57,6 +55,7 @@ def process_image(
         pad = 8  # fix bad values in case undistortion gives black border that messes up model
         pred_depth /= torch.amax(pred_depth[pad:-pad, pad:-pad])
         pred_depth = torch.clip(65535*pred_depth, 0, 65535).cpu().numpy().astype(np.uint16)
+        os.makedirs(Path(depth_save_path).parent, exist_ok=True)
         Image.fromarray(pred_depth.squeeze(-1), mode='I;16').save(depth_save_path)
 
     if normal_save_path is not None:
@@ -67,6 +66,7 @@ def process_image(
         pred_normal = 0.5 + 0.5 * pred_normal / torch.norm(pred_normal, dim=-1, keepdim=True)
         pred_normal = distort_image(pred_normal, *intrins)[0]
         pred_normal = torch.clip(255*pred_normal, 0, 255).to(torch.uint8).cpu().numpy()
+        os.makedirs(Path(normal_save_path).parent, exist_ok=True)
         Image.fromarray(pred_normal).save(normal_save_path)
 
 
@@ -88,7 +88,7 @@ def update_intrins(in_obj, out_obj):
     elif 'camera_model' not in out_obj:
         out_obj['camera_model'] = 'pinhole'
 
-    for key in 'w h fl_x fl_y cx cy k1 k2 p1 p2 k3 k4 sx1 sy1'.split():
+    for key in 'w h fl_x fl_y cx cy k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2'.split():
         if key in in_obj:
             out_obj[key] = in_obj[key]
         elif key not in out_obj:

@@ -93,7 +93,7 @@ def rasterize_to_pixels(
             assert key in kwargs, "Camera extrinsics and intrinsics must be provided for Eval3D"
         kwargs = [kwargs.get(key, None) for key in [
             'viewmats', 'Ks', 'camera_model',
-            'radial_coeffs', 'tangential_coeffs', 'thin_prism_coeffs'
+            'dist_coeffs'
         ]]
         if primitive in ["3dgs", "mip"]:
             _RasterizeToPixels = _RasterizeToPixels3DGSEval3D
@@ -315,9 +315,7 @@ class _RasterizeToPixels3DGSEval3D(torch.autograd.Function):
         viewmats: Tensor,
         Ks: Tensor,
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
-        radial_coeffs: Optional[Tensor],
-        tangential_coeffs: Optional[Tensor],
-        thin_prism_coeffs: Optional[Tensor],
+        dist_coeffs: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor]:
         if absgrad:
             raise NotImplementedError("Absgrad not supported with Eval3D")
@@ -330,14 +328,14 @@ class _RasterizeToPixels3DGSEval3D(torch.autograd.Function):
             "rasterization_3dgs_eval3d_forward"
         )(
             (means, quats, depths, proj_scales, proj_opacities, colors),
-            viewmats, Ks, camera_model, (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
+            viewmats, Ks, camera_model, dist_coeffs,
             backgrounds, masks,
             width, height, tile_size, isect_offsets, flatten_ids,
         )
 
         ctx.save_for_backward(
             means, quats, depths, proj_scales, proj_opacities, colors,
-            viewmats, Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            viewmats, Ks, dist_coeffs,
             backgrounds, masks,
             isect_offsets, flatten_ids, render_Ts, last_ids,
         )
@@ -360,7 +358,7 @@ class _RasterizeToPixels3DGSEval3D(torch.autograd.Function):
     ):
         (
             means, quats, depths, proj_scales, proj_opacities, colors,
-            viewmats, Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            viewmats, Ks, dist_coeffs,
             backgrounds, masks,
             isect_offsets, flatten_ids, render_Ts, last_ids,
         ) = ctx.saved_tensors
@@ -373,7 +371,7 @@ class _RasterizeToPixels3DGSEval3D(torch.autograd.Function):
             v_viewmats,
         ) = _make_lazy_cuda_func("rasterization_3dgs_eval3d_backward")(
             (means, quats, depths, proj_scales, proj_opacities, colors),
-            viewmats, Ks, ctx.camera_model, (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
+            viewmats, Ks, ctx.camera_model, dist_coeffs,
             backgrounds, masks,
             width, height, tile_size, isect_offsets, flatten_ids,
             render_Ts, last_ids, None, None,
@@ -424,9 +422,7 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
         viewmats: Tensor,
         Ks: Tensor,
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
-        radial_coeffs: Optional[Tensor],
-        tangential_coeffs: Optional[Tensor],
-        thin_prism_coeffs: Optional[Tensor],
+        dist_coeffs: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor]:
         if absgrad:
             raise NotImplementedError("Absgrad not supported with Eval3D")
@@ -446,7 +442,7 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
             max_blending
         ) = _make_lazy_cuda_func("rasterization_opaque_triangle_eval3d_forward")(
             (hardness, depths, verts, rgbs, normals),
-            viewmats, Ks, camera_model, (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
+            viewmats, Ks, camera_model, dist_coeffs,
             backgrounds, masks,
             width, height, tile_size, isect_offsets, flatten_ids,
         )
@@ -456,7 +452,7 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
 
         ctx.save_for_backward(
             hardness, depths, verts, rgbs, normals,
-            viewmats, Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            viewmats, Ks, dist_coeffs,
             backgrounds, masks,
             isect_offsets, flatten_ids, render_Ts, last_ids,
             render_rgbs, render_depths, render_normals,
@@ -487,7 +483,7 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
     ):
         (
             hardness, depths, verts, rgbs, normals,
-            viewmats, Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            viewmats, Ks, dist_coeffs,
             backgrounds, masks,
             isect_offsets, flatten_ids, render_Ts, last_ids,
             render_rgbs, render_depths, render_normals,
@@ -505,7 +501,7 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
             v_viewmats,
         ) = _make_lazy_cuda_func("rasterization_opaque_triangle_eval3d_backward")(
             (hardness, depths, verts, rgbs, normals),
-            viewmats, Ks, ctx.camera_model, (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
+            viewmats, Ks, ctx.camera_model, dist_coeffs,
             backgrounds, masks,
             width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids,
             (render_rgbs, render_depths, render_normals),

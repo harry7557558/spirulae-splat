@@ -22,7 +22,7 @@ __global__ void projection_fused_fwd_kernel(
     const typename SplatPrimitive::World::Buffer splats_world,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float *__restrict__ Ks,       // [B, C, 3, 3]
-    const CameraDistortionCoeffsBuffer dist_coeffs,
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
@@ -53,16 +53,9 @@ __global__ void projection_fused_fwd_kernel(
     typename SplatPrimitive::FwdProjCamera cam = {
         R, t, fx, fy, cx, cy,
         image_width, image_height, antialiased,
-        near_plane, far_plane
+        near_plane, far_plane,
     };
-    if (camera_model == gsplat::CameraModelType::FISHEYE) {
-        if (dist_coeffs.radial_coeffs != nullptr)
-            cam.radial_coeffs = dist_coeffs.radial_coeffs[bid * C + cid];
-        if (dist_coeffs.tangential_coeffs != nullptr)
-            cam.tangential_coeffs = dist_coeffs.tangential_coeffs[bid * C + cid];
-        if (dist_coeffs.thin_prism_coeffs != nullptr)
-            cam.thin_prism_coeffs = dist_coeffs.thin_prism_coeffs[bid * C + cid];
-    }
+    cam.dist_coeffs = dist_coeffs_buffer.load(bid * C + cid);
 
     // Load splat
     typename SplatPrimitive::World splat_world =
@@ -106,7 +99,7 @@ __global__ void projection_fused_bwd_kernel(
     const typename SplatPrimitive::World::Buffer splats_world,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float *__restrict__ Ks,       // [B, C, 3, 3]
-    const CameraDistortionCoeffsBuffer dist_coeffs,
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
@@ -140,14 +133,7 @@ __global__ void projection_fused_bwd_kernel(
         R, t, fx, fy, cx, cy,
         image_width, image_height, antialiased,
     };
-    if (camera_model == gsplat::CameraModelType::FISHEYE) {
-        if (dist_coeffs.radial_coeffs != nullptr)
-            cam.radial_coeffs = dist_coeffs.radial_coeffs[bid * C + cid];
-        if (dist_coeffs.tangential_coeffs != nullptr)
-            cam.tangential_coeffs = dist_coeffs.tangential_coeffs[bid * C + cid];
-        if (dist_coeffs.thin_prism_coeffs != nullptr)
-            cam.thin_prism_coeffs = dist_coeffs.thin_prism_coeffs[bid * C + cid];
-    }
+    cam.dist_coeffs = dist_coeffs_buffer.load(bid * C + cid);
 
     // Load splat
     typename SplatPrimitive::World splat_world =

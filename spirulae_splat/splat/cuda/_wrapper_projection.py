@@ -109,9 +109,7 @@ def fully_fused_projection(
     packed: bool = False,
     sparse_grad: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
-    radial_coeffs: Optional[Tensor] = None,
-    tangential_coeffs: Optional[Tensor] = None,
-    thin_prism_coeffs: Optional[Tensor] = None,
+    dist_coeffs: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Optional[Tensor], Tuple[Tensor]]:
     # if primitive in ["3dgs", "mip"]:
     if primitive in ["3dgs", "mip", "opaque_triangle"]:
@@ -137,18 +135,9 @@ def fully_fused_projection(
         assert packed, "sparse_grad is only supported when packed is True"
         assert batch_dims == (), "sparse_grad does not support batch dimensions"
 
-    if camera_model != "fisheye":
-        assert radial_coeffs is None and tangential_coeffs is None and thin_prism_coeffs is None, \
-            "Camera distortion is only supported for fisheye model"
-    if radial_coeffs is not None:
-        assert radial_coeffs.shape == batch_dims + (C, 4), radial_coeffs.shape
-        radial_coeffs = radial_coeffs.contiguous().to(viewmats)
-    if tangential_coeffs is not None:
-        assert tangential_coeffs.shape == batch_dims + (C, 2), tangential_coeffs.shape
-        tangential_coeffs = tangential_coeffs.contiguous().to(viewmats)
-    if thin_prism_coeffs is not None:
-        assert thin_prism_coeffs.shape == batch_dims + (C, 2), thin_prism_coeffs.shape
-        thin_prism_coeffs = thin_prism_coeffs.contiguous().to(viewmats)
+    if dist_coeffs is not None:
+        assert dist_coeffs.shape == batch_dims + (C, 10), dist_coeffs.shape
+        dist_coeffs = dist_coeffs.contiguous().to(viewmats)
 
     assert (
         camera_model != "ftheta"
@@ -179,7 +168,7 @@ def fully_fused_projection(
             near_plane,
             far_plane,
             camera_model,
-            (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
+            dist_coeffs,
             *additional_args
         )
         if not eval3d:
@@ -215,7 +204,7 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
         near_plane: float,
         far_plane: float,
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
-        dist_coeffs: Tuple[Tensor, Tensor, Tensor],
+        dist_coeffs: Optional[Tensor],
         is_antialiased: bool,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         assert (
@@ -283,7 +272,7 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
         near_plane: float,
         far_plane: float,
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
-        dist_coeffs: Tuple[Tensor, Tensor, Tensor],
+        dist_coeffs: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         assert (
             camera_model != "ftheta"
@@ -351,7 +340,7 @@ class _FullyFusedProjection3DGSEval3D(torch.autograd.Function):
         near_plane: float,
         far_plane: float,
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
-        dist_coeffs: Tuple[Tensor, Tensor, Tensor],
+        dist_coeffs: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         assert (
             camera_model != "ftheta"
@@ -417,7 +406,7 @@ class _FullyFusedProjectionOpaqueTriangleEval3D(torch.autograd.Function):
         near_plane: float,
         far_plane: float,
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
-        dist_coeffs: Tuple[Tensor, Tensor, Tensor],
+        dist_coeffs: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         assert (
             camera_model != "ftheta"

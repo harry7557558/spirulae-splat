@@ -799,18 +799,15 @@ class SpirulaeModel(Model):
         is_fisheye = (camera.camera_type[0].item() == CameraType.FISHEYE.value)
         if not self.training:
             is_fisheye = True
-        if is_fisheye:
+            # kwargs['dist_coeffs'] = torch.tensor([[0.0259, 0.0082, 0.0002, -0.0013, -0.0012, -0.0008, 0.0000, 0.0000, -0.0006, -0.0001]]).float().cuda()
+            
+            # TODO: investigate why this uses a ton of VRAM
+            # kwargs['dist_coeffs'] = torch.tensor([[-0.29, 0.07, 0, 0, 1e-5, -1e-3, 0, 0, 0, 0]]).float().cuda()
+
+        if camera.distortion_params is not None and camera.distortion_params.any():
             if not self.config.use_mcmc:
-                raise ValueError("3DGS training with fisheye camera is currently only supported for MCMC.")
-            if camera.distortion_params is not None:
-                if camera.distortion_params.shape[-1] == 4:
-                    kwargs['radial_coeffs'] = camera.distortion_params
-                elif camera.distortion_params.shape[-1] == 6:
-                    kwargs["radial_coeffs"] = camera.distortion_params[..., :4]
-                    kwargs["tangential_coeffs"] = camera.distortion_params[..., 4:]
-                    # TODO: make sure GSplat 3DGUT actually supports this??
-                else:
-                    raise ValueError("Only support fisheye with 4 or 6 distortion coefficients")
+                raise NotImplementedError("3DGS training with fisheye camera is currently only supported for MCMC.")
+            kwargs['dist_coeffs'] = camera.distortion_params
 
         TILE_SIZE = 16
         gh, gw = (H+TILE_SIZE-1) // TILE_SIZE, (W+TILE_SIZE-1) // TILE_SIZE

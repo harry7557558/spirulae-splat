@@ -7,7 +7,7 @@
 #include "Primitive3DGS.cuh"
 #include "PrimitiveOpaqueTriangle.cuh"
 
-#include "PixelWise.cuh"  // CameraDistortionCoeffsBuffer
+#include "types.cuh"
 
 
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */

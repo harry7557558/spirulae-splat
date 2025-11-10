@@ -41,6 +41,9 @@ from nerfstudio.utils.rich_utils import CONSOLE
 MAX_AUTO_RESOLUTION = 1600
 
 
+DISTORTION_KEYS = "k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2".split()
+
+
 @dataclass
 class Nerfstudio2DataParserConfig(NerfstudioDataParserConfig):
     """Nerfstudio dataset config"""
@@ -115,7 +118,7 @@ class Nerfstudio2(Nerfstudio):
         width_fixed = "w" in meta
         default_camera_model = CAMERA_MODEL_TO_TYPE[meta.get("camera_model", "OPENCV")].value
         distort_fixed = False
-        for distort_key in ["k1", "k2", "k3", "p1", "p2", "distortion_params"]:
+        for distort_key in DISTORTION_KEYS:
             if distort_key in meta:
                 distort_fixed = True
                 break
@@ -168,16 +171,9 @@ class Nerfstudio2(Nerfstudio):
             )
             if not distort_fixed:
                 distort.append(
-                    torch.tensor(frame["distortion_params"], dtype=torch.float32)
-                    if "distortion_params" in frame
-                    else camera_utils.get_distortion_params(
-                        k1=float(frame["k1"]) if "k1" in frame else 0.0,
-                        k2=float(frame["k2"]) if "k2" in frame else 0.0,
-                        k3=float(frame["k3"]) if "k3" in frame else 0.0,
-                        k4=float(frame["k4"]) if "k4" in frame else 0.0,
-                        p1=float(frame["p1"]) if "p1" in frame else 0.0,
-                        p2=float(frame["p2"]) if "p2" in frame else 0.0,
-                    )
+                    torch.tensor([
+                        float(frame.get(key, 0.0)) for key in DISTORTION_KEYS
+                    ])
                 )
 
             image_filenames.append(fname)
@@ -297,18 +293,9 @@ class Nerfstudio2(Nerfstudio):
         width = int(meta["w"]) if width_fixed else torch.tensor(width, dtype=torch.int32)[idx_tensor]
         camera_type = torch.tensor(camera_type, dtype=torch.int32)[idx_tensor]
         if distort_fixed:
-            distortion_params = (
-                torch.tensor(meta["distortion_params"], dtype=torch.float32)
-                if "distortion_params" in meta
-                else camera_utils.get_distortion_params(
-                    k1=float(meta["k1"]) if "k1" in meta else 0.0,
-                    k2=float(meta["k2"]) if "k2" in meta else 0.0,
-                    k3=float(meta["k3"]) if "k3" in meta else 0.0,
-                    k4=float(meta["k4"]) if "k4" in meta else 0.0,
-                    p1=float(meta["p1"]) if "p1" in meta else 0.0,
-                    p2=float(meta["p2"]) if "p2" in meta else 0.0,
-                )
-            )
+            distortion_params = torch.tensor([
+                float(meta.get(key, 0.0)) for key in DISTORTION_KEYS
+            ])
         else:
             distortion_params = torch.stack(distort, dim=0)[idx_tensor]
 

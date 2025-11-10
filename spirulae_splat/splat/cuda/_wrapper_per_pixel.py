@@ -60,9 +60,7 @@ def depth_to_normal(
     depths: Tensor,  # [B, H, W, 1]
     camera_model: Literal["pinhole", "fisheye"],
     Ks: Union[Tensor, Tuple[float, float, float, float]],
-    radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
-    tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
-    thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
+    dist_coeffs: Optional[Tensor] = None,  # [..., C, 10]
     is_ray_depth: bool = True,
 ) -> Tensor:
     if isinstance(Ks, tuple):
@@ -73,8 +71,7 @@ def depth_to_normal(
         depths,
         camera_model,
         Ks.contiguous(),
-        *[x.contiguous() if x is not None else None for x in
-            (radial_coeffs, tangential_coeffs, thin_prism_coeffs)],
+        dist_coeffs.contiguous() if dist_coeffs is not None else None,
         is_ray_depth
     )
 
@@ -88,9 +85,7 @@ class _DepthToNormal(torch.autograd.Function):
         depths: Tensor,  # [B, H, W, 1]
         camera_model: Literal["pinhole", "fisheye"],
         Ks: Tensor,
-        radial_coeffs: Optional[Tensor],  # [..., C, 6] or [..., C, 4]
-        tangential_coeffs: Optional[Tensor],  # [..., C, 2]
-        thin_prism_coeffs: Optional[Tensor],  # [..., C, 4]
+        dist_coeffs: Optional[Tensor],  # [..., C, 10]
         is_ray_depth: bool
     ) -> Tensor:
 
@@ -100,10 +95,10 @@ class _DepthToNormal(torch.autograd.Function):
 
         normals = _make_lazy_cuda_func("depth_to_normal_forward")(
             camera_model_type, Ks,
-            (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
+            dist_coeffs,
             is_ray_depth, depths
         )
-        ctx.save_for_backward(depths, Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs)
+        ctx.save_for_backward(depths, Ks, dist_coeffs)
         ctx.camera_model_type = camera_model_type
         ctx.is_ray_depth = is_ray_depth
 
@@ -111,10 +106,10 @@ class _DepthToNormal(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, v_normals):
-        depths, Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs = ctx.saved_tensors
+        depths, Ks, dist_coeffs = ctx.saved_tensors
         v_depths = _make_lazy_cuda_func("depth_to_normal_backward")(
             ctx.camera_model_type, Ks,
-            (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
+            dist_coeffs,
             ctx.is_ray_depth, depths, v_normals
         )
         return (v_depths, *([None]*(len(ctx.needs_input_grad)-1)))
@@ -125,9 +120,7 @@ def ray_depth_to_linear_depth(
     depths: Tensor,  # [B, H, W, 1]
     camera_model: Literal["pinhole", "fisheye"],
     Ks: Union[Tensor, Tuple[float, float, float, float]],
-    radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
-    tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
-    thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
+    dist_coeffs: Optional[Tensor] = None,  # [..., C, 10]
 ) -> Tensor:
     if isinstance(Ks, tuple):
         fx, fy, cx, cy = Ks
@@ -137,8 +130,7 @@ def ray_depth_to_linear_depth(
         depths,
         camera_model,
         Ks.contiguous(),
-        *[x.contiguous() if x is not None else None for x in
-            (radial_coeffs, tangential_coeffs, thin_prism_coeffs)],
+        dist_coeffs.contiguous() if dist_coeffs is not None else None,
     )
 
 
@@ -151,9 +143,7 @@ class _RayDepthToLinearDepth(torch.autograd.Function):
         depths: Tensor,  # [B, H, W, 1]
         camera_model: Literal["pinhole", "fisheye"],
         Ks: Tensor,
-        radial_coeffs: Optional[Tensor],  # [..., C, 6] or [..., C, 4]
-        tangential_coeffs: Optional[Tensor],  # [..., C, 2]
-        thin_prism_coeffs: Optional[Tensor],  # [..., C, 4]
+        dist_coeffs: Optional[Tensor],  # [..., C, 10]
     ) -> Tensor:
 
         camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
@@ -161,12 +151,11 @@ class _RayDepthToLinearDepth(torch.autograd.Function):
         )
 
         out_depths = _make_lazy_cuda_func("ray_depth_to_linear_depth_forward")(
-            camera_model_type, Ks,
-            (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
+            camera_model_type, Ks, dist_coeffs,
             depths
         )
 
-        ctx.save_for_backward(Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs)
+        ctx.save_for_backward(Ks, dist_coeffs)
         ctx.camera_model_type = camera_model_type
         
         return out_depths
@@ -174,11 +163,10 @@ class _RayDepthToLinearDepth(torch.autograd.Function):
     @staticmethod
     def backward(ctx, v_out_depths):
 
-        Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs = ctx.saved_tensors
+        Ks, dist_coeffs = ctx.saved_tensors
     
         v_in_depths = _make_lazy_cuda_func("ray_depth_to_linear_depth_backward")(
-            ctx.camera_model_type, Ks,
-            (radial_coeffs, tangential_coeffs, thin_prism_coeffs),
+            ctx.camera_model_type, Ks, dist_coeffs,
             v_out_depths
         )
 
@@ -189,26 +177,20 @@ def distort_image(
     image: Tensor,  # [B, H, W, C]
     camera_model: Literal["pinhole", "fisheye"],
     Ks: Union[Tensor, Tuple[float, float, float, float]],
-    radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
-    tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
-    thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
+    dist_coeffs: Optional[Tensor] = None,  # [..., C, 10]
 ) -> Tensor:
     return _DistortOrUndistortImage.apply(
-        False, image, camera_model, Ks,
-        radial_coeffs, tangential_coeffs, thin_prism_coeffs
+        False, image, camera_model, Ks, dist_coeffs
     )
 
 def undistort_image(
     image: Tensor,  # [B, H, W, C]
     camera_model: Literal["pinhole", "fisheye"],
     Ks: Union[Tensor, Tuple[float, float, float, float]],
-    radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
-    tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
-    thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
+    dist_coeffs: Optional[Tensor] = None,  # [..., C, 10]
 ) -> Tensor:
     return _DistortOrUndistortImage.apply(
-        True, image, camera_model, Ks,
-        radial_coeffs, tangential_coeffs, thin_prism_coeffs
+        True, image, camera_model, Ks, dist_coeffs
     )
 
 
@@ -222,21 +204,15 @@ class _DistortOrUndistortImage(torch.autograd.Function):
         image: Tensor,  # [B, H, W, C]
         camera_model: Literal["pinhole", "fisheye"],
         Ks: Tensor,
-        radial_coeffs: Optional[Tensor],  # [..., C, 6] or [..., C, 4]
-        tangential_coeffs: Optional[Tensor],  # [..., C, 2]
-        thin_prism_coeffs: Optional[Tensor],  # [..., C, 4]
+        dist_coeffs: Optional[Tensor],  # [..., C, 10]
     ) -> Tensor:
 
         if isinstance(Ks, tuple):
             fx, fy, cx, cy = Ks
             Ks = torch.tensor([[[fx, 0, cx], [0, fy, cy], [0, 0, 1]]])
             Ks = Ks.to(image).repeat(len(image), 1, 1)
-        if isinstance(radial_coeffs, tuple):
-            radial_coeffs = torch.tensor(radial_coeffs)[None].to(image).repeat(len(image), 1)
-        if isinstance(tangential_coeffs, tuple):
-            tangential_coeffs = torch.tensor(tangential_coeffs)[None].to(image).repeat(len(image), 1)
-        if isinstance(thin_prism_coeffs, tuple):
-            thin_prism_coeffs = torch.tensor(thin_prism_coeffs)[None].to(image).repeat(len(image), 1)
+        if isinstance(dist_coeffs, tuple):
+            dist_coeffs = torch.tensor(dist_coeffs)[None].to(image).repeat(len(image), 1)
 
         camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
@@ -244,9 +220,7 @@ class _DistortOrUndistortImage(torch.autograd.Function):
 
         return _make_lazy_cuda_func("un"*int(is_undistort) + "distort_image")(
             camera_model_type, Ks.contiguous(),
-            (radial_coeffs.contiguous() if radial_coeffs is not None else None,
-            tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
-            thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None),
+            dist_coeffs.contiguous() if dist_coeffs is not None else None,
             image.contiguous()
         )
 

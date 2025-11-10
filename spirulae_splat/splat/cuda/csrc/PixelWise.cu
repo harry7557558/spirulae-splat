@@ -1,41 +1,18 @@
 #include "PixelWise.cuh"
 
-#define TensorView _Slang_TensorView
-#include "generated/slang_all.cu"
-#undef TensorView
-
 #include "common.cuh"
 
 
 CameraDistortionCoeffsBuffer::CameraDistortionCoeffsBuffer(
     const CameraDistortionCoeffsTensor &tensors
 ) {
-    radial_coeffs = nullptr;
-    tangential_coeffs = nullptr;
-    thin_prism_coeffs = nullptr;
+    coeffs = nullptr;
 
-    std::optional<at::Tensor> radial_coeffs_tensor = std::get<0>(tensors);
-    if (radial_coeffs_tensor.has_value()) {
-        CHECK_INPUT(radial_coeffs_tensor.value());
-        if (radial_coeffs_tensor.value().size(-1) != 4)
-            AT_ERROR("radial_coeffs must be (..., 4)");
-        radial_coeffs = (float4*)radial_coeffs_tensor.value().data_ptr<float>();
-    }
-
-    std::optional<at::Tensor> tangential_coeffs_tensor = std::get<1>(tensors);
-    if (tangential_coeffs_tensor.has_value()) {
-        CHECK_INPUT(tangential_coeffs_tensor.value());
-        if (tangential_coeffs_tensor.value().size(-1) != 2)
-            AT_ERROR("tangential_coeffs must be (..., 2)");
-        tangential_coeffs = (float2*)tangential_coeffs_tensor.value().data_ptr<float>();
-    }
-    
-    std::optional<at::Tensor> thin_prism_coeffs_tensor = std::get<2>(tensors);
-    if (thin_prism_coeffs_tensor.has_value()) {
-        CHECK_INPUT(thin_prism_coeffs_tensor.value());
-        if (thin_prism_coeffs_tensor.value().size(-1) != 2)
-            AT_ERROR("tangential_coeffs must be (..., 2)");
-        thin_prism_coeffs = (float2*)thin_prism_coeffs_tensor.value().data_ptr<float>();
+    if (tensors.has_value()) {
+        CHECK_INPUT(tensors.value());
+        if (tensors.value().size(-1) != 10)
+            AT_ERROR("dist_coeffs must be (..., 10)");
+        coeffs = (float*)tensors.value().data_ptr<float>();
     }
 }
 
@@ -176,7 +153,7 @@ blend_background_backward_tensor(
 __global__ void depth_to_normal_forward_kernel(
     gsplat::CameraModelType camera_model,
     const float *__restrict__ Ks,  // [B, 3, 3]
-    const CameraDistortionCoeffsBuffer dist_coeffs,
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const bool is_ray_depth,
     const TensorView<float, 4> depths,  // [B, H, W, 1]
     TensorView<float, 4> normals  // [B, H, W, 3]
@@ -200,17 +177,7 @@ __global__ void depth_to_normal_forward_kernel(
     // Load camera
     Ks += bid * 9;
     float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
-    float4 radial_coeffs = {0, 0, 0, 0};
-    float2 tangential_coeffs = {0, 0};
-    float2 thin_prism_coeffs = {0, 0};
-    if (camera_model == gsplat::CameraModelType::FISHEYE || true) {
-        if (dist_coeffs.radial_coeffs != nullptr)
-            radial_coeffs = dist_coeffs.radial_coeffs[bid];
-        if (dist_coeffs.tangential_coeffs != nullptr)
-            tangential_coeffs = dist_coeffs.tangential_coeffs[bid];
-        if (dist_coeffs.thin_prism_coeffs != nullptr)
-            thin_prism_coeffs = dist_coeffs.thin_prism_coeffs[bid];
-    }
+    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
 
     // Process
     float4 depth = {
@@ -222,7 +189,7 @@ __global__ void depth_to_normal_forward_kernel(
     float3 normal;
     depth_to_normal(
         W, H, {(float)i+0.5f, (float)j+0.5f},
-        {fx, fy, cx, cy}, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        {fx, fy, cx, cy}, &dist_coeffs,
         camera_model == gsplat::CameraModelType::FISHEYE, is_ray_depth,
         depth, &normal
     );
@@ -234,7 +201,7 @@ __global__ void depth_to_normal_forward_kernel(
 __global__ void depth_to_normal_backward_kernel(
     gsplat::CameraModelType camera_model,
     const float *__restrict__ Ks,  // [B, 3, 3]
-    const CameraDistortionCoeffsBuffer dist_coeffs,
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const bool is_ray_depth,
     const TensorView<float, 4> depths,  // [B, H, W, 1]
     const TensorView<float, 4> v_normals,  // [B, H, W, 3]
@@ -258,17 +225,7 @@ __global__ void depth_to_normal_backward_kernel(
     // Load camera
     Ks += bid * 9;
     float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
-    float4 radial_coeffs = {0, 0, 0, 0};
-    float2 tangential_coeffs = {0, 0};
-    float2 thin_prism_coeffs = {0, 0};
-    if (camera_model == gsplat::CameraModelType::FISHEYE || true) {
-        if (dist_coeffs.radial_coeffs != nullptr)
-            radial_coeffs = dist_coeffs.radial_coeffs[bid];
-        if (dist_coeffs.tangential_coeffs != nullptr)
-            tangential_coeffs = dist_coeffs.tangential_coeffs[bid];
-        if (dist_coeffs.thin_prism_coeffs != nullptr)
-            thin_prism_coeffs = dist_coeffs.thin_prism_coeffs[bid];
-    }
+    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
 
     // Process
     float4 depth = {
@@ -281,7 +238,7 @@ __global__ void depth_to_normal_backward_kernel(
     float4 v_depth;
     depth_to_normal_vjp(
         W, H, {(float)i+0.5f, (float)j+0.5f},
-        {fx, fy, cx, cy}, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        {fx, fy, cx, cy}, &dist_coeffs,
         camera_model == gsplat::CameraModelType::FISHEYE, is_ray_depth,
         depth, v_normal, &v_depth
     );
@@ -356,7 +313,7 @@ torch::Tensor depth_to_normal_backward_tensor(
 __global__ void ray_depth_to_linear_depth_forward_kernel(
     gsplat::CameraModelType camera_model,
     const float *__restrict__ Ks,  // [B, 3, 3]
-    const CameraDistortionCoeffsBuffer dist_coeffs,
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const TensorView<float, 4> in_depths,  // [B, H, W, 1]
     TensorView<float, 4> out_depths  // [B, H, W, 1]
 ) {
@@ -372,23 +329,13 @@ __global__ void ray_depth_to_linear_depth_forward_kernel(
     // Load camera
     Ks += bid * 9;
     float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
-    float4 radial_coeffs = {0, 0, 0, 0};
-    float2 tangential_coeffs = {0, 0};
-    float2 thin_prism_coeffs = {0, 0};
-    if (camera_model == gsplat::CameraModelType::FISHEYE || true) {
-        if (dist_coeffs.radial_coeffs != nullptr)
-            radial_coeffs = dist_coeffs.radial_coeffs[bid];
-        if (dist_coeffs.tangential_coeffs != nullptr)
-            tangential_coeffs = dist_coeffs.tangential_coeffs[bid];
-        if (dist_coeffs.thin_prism_coeffs != nullptr)
-            thin_prism_coeffs = dist_coeffs.thin_prism_coeffs[bid];
-    }
+    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
 
     // Process
     float in_depth = in_depths.load1(bid, j, i);
     float out_depth = in_depth * ray_depth_to_linear_depth_factor(
         W, H, {(float)i+0.5f, (float)j+0.5f},
-        {fx, fy, cx, cy}, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        {fx, fy, cx, cy}, &dist_coeffs,
         camera_model == gsplat::CameraModelType::FISHEYE
     );
     out_depths.store1(bid, j, i, out_depth);
@@ -397,7 +344,7 @@ __global__ void ray_depth_to_linear_depth_forward_kernel(
 __global__ void ray_depth_to_linear_depth_backward_kernel(
     gsplat::CameraModelType camera_model,
     const float *__restrict__ Ks,  // [B, 3, 3]
-    const CameraDistortionCoeffsBuffer dist_coeffs,
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const TensorView<float, 4> v_out_depths,  // [B, H, W, 1]
     TensorView<float, 4> v_in_depths  // [B, H, W, 1]
 ) {
@@ -413,23 +360,13 @@ __global__ void ray_depth_to_linear_depth_backward_kernel(
     // Load camera
     Ks += bid * 9;
     float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
-    float4 radial_coeffs = {0, 0, 0, 0};
-    float2 tangential_coeffs = {0, 0};
-    float2 thin_prism_coeffs = {0, 0};
-    if (camera_model == gsplat::CameraModelType::FISHEYE || true) {
-        if (dist_coeffs.radial_coeffs != nullptr)
-            radial_coeffs = dist_coeffs.radial_coeffs[bid];
-        if (dist_coeffs.tangential_coeffs != nullptr)
-            tangential_coeffs = dist_coeffs.tangential_coeffs[bid];
-        if (dist_coeffs.thin_prism_coeffs != nullptr)
-            thin_prism_coeffs = dist_coeffs.thin_prism_coeffs[bid];
-    }
+    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
 
     // Process
     float v_out_depth = v_out_depths.load1(bid, j, i);
     float factor = ray_depth_to_linear_depth_factor(
         W, H, {(float)i+0.5f, (float)j+0.5f},
-        {fx, fy, cx, cy}, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        {fx, fy, cx, cy}, &dist_coeffs,
         camera_model == gsplat::CameraModelType::FISHEYE
     );
     float v_in_depth = factor * v_out_depth;
@@ -501,7 +438,7 @@ template<bool is_undistort>
 __global__ void distort_image_kernel(
     gsplat::CameraModelType camera_model,
     const float *__restrict__ Ks,  // [B, 3, 3]
-    const CameraDistortionCoeffsBuffer dist_coeffs,
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const TensorView<float, 4> in_image,  // [B, H, W, C]
     TensorView<float, 4> out_image  // [B, H, W, C]
 ) {
@@ -518,26 +455,16 @@ __global__ void distort_image_kernel(
     // Load camera
     Ks += bid * 9;
     float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
-    float4 radial_coeffs = {0, 0, 0, 0};
-    float2 tangential_coeffs = {0, 0};
-    float2 thin_prism_coeffs = {0, 0};
-    if (camera_model == gsplat::CameraModelType::FISHEYE || true) {
-        if (dist_coeffs.radial_coeffs != nullptr)
-            radial_coeffs = dist_coeffs.radial_coeffs[bid];
-        if (dist_coeffs.tangential_coeffs != nullptr)
-            tangential_coeffs = dist_coeffs.tangential_coeffs[bid];
-        if (dist_coeffs.thin_prism_coeffs != nullptr)
-            thin_prism_coeffs = dist_coeffs.thin_prism_coeffs[bid];
-    }
+    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
 
     // Undistort point
     float2 uv = { (i+0.5f-cx) / fx, (j+0.5f-cy) / fy };
     if (is_undistort)
-        uv = distort_point(uv, camera_model == gsplat::CameraModelType::FISHEYE,
-            radial_coeffs, tangential_coeffs, thin_prism_coeffs);
-    else
-        uv = undistort_point(uv, camera_model == gsplat::CameraModelType::FISHEYE,
-            radial_coeffs, tangential_coeffs, thin_prism_coeffs);
+        uv = distort_point(uv, camera_model == gsplat::CameraModelType::FISHEYE, &dist_coeffs);
+    else {
+        if (!undistort_point(uv, camera_model == gsplat::CameraModelType::FISHEYE, &dist_coeffs, &uv))
+            return;
+    }
     int i1 = (int)floor(uv.x*fx+cx);
     int j1 = (int)floor(uv.y*fy+cy);
 

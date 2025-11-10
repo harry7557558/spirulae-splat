@@ -160,34 +160,31 @@ void sh_coeffs_to_color(
 }
 
 
-struct CameraDistortion : IDifferentiable {
-    float4 radial_coeffs;
-    float2 tangential_coeffs;
-    float2 thin_prism_coeffs;
-};
-
 [ForceInline]
 [Differentiable]
-float2 camera_distortion(float2 uv, no_diff CameraDistortion dist_coeffs) {
-    float k1 = dist_coeffs.radial_coeffs.x,
-        k2 = dist_coeffs.radial_coeffs.y,
-        k3 = dist_coeffs.radial_coeffs.z,
-        k4 = dist_coeffs.radial_coeffs.w,
-        p1 = dist_coeffs.tangential_coeffs.x,
-        p2 = dist_coeffs.tangential_coeffs.y,
-        sx1 = dist_coeffs.thin_prism_coeffs.x,
-        sy1 = dist_coeffs.thin_prism_coeffs.y;
+float2 camera_distortion(float2 uv, no_diff float[10] dist_coeffs) {
+    float k1 = dist_coeffs[0],
+          k2 = dist_coeffs[1],
+          k3 = dist_coeffs[2],
+          k4 = dist_coeffs[3],
+          p1 = dist_coeffs[4],
+          p2 = dist_coeffs[5],
+          sx1 = dist_coeffs[6],
+          sy1 = dist_coeffs[7],
+          b1 = dist_coeffs[8],
+          b2 = dist_coeffs[9];
     float u = uv.x, v = uv.y;
     float r2 = u*u+v*v;
     float radial = 1.0 + r2*(k1 + r2*(k2 + r2*(k3 + r2*k4)));
     float du = 2.0*p1*u*v + p2*(r2+2.0*u*u) + sx1*r2;
     float dv = 2.0*p2*u*v + p1*(r2+2.0*v*v) + sy1*r2;
-    return uv * radial + float2(du, dv);
+    uv = uv * radial + float2(du, dv);
+    return uv + float2(b1 * uv.x + b2 * uv.y, 0.0);
 }
 
 [ForceInline]
 [Differentiable]
-float2x2 camera_distortion_jac(float2 uv, no_diff CameraDistortion dist_coeffs) {
+float2x2 camera_distortion_jac(float2 uv, no_diff float[10] dist_coeffs) {
     float2x2 J;
     [ForceUnroll]
     for (int i = 0; i < 2; ++i) {
@@ -199,12 +196,42 @@ float2x2 camera_distortion_jac(float2 uv, no_diff CameraDistortion dist_coeffs) 
     return J;
 }
 
-[ForceInline]
-bool is_valid_distortion(float2 uv, no_diff CameraDistortion dist_coeffs) {
+// [ForceInline]
+[CudaDeviceExport]
+bool is_valid_distortion(no_diff float2 uv, no_diff float[10] dist_coeffs) {
+    // TODO: doesn't always work for more than 2 radial coeffs
     float2x2 J = camera_distortion_jac(uv, dist_coeffs);
     return min(determinant(J), min(J[0][0], J[1][1])) > 0.0;
 }
 
+
+[ForceInline]
+[Differentiable]
+float2 persp_proj(float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs) {
+    float2 uv = p_view.xy / p_view.z;
+    if (p_view.z < 0.0 || !is_valid_distortion(uv, dist_coeffs))
+        return float2(-1e4);
+    uv = camera_distortion(uv, dist_coeffs);
+    float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
+    return float2(
+        fx * uv.x + cx,
+        fy * uv.y + cy
+    );
+}
+
+[ForceInline]
+[Differentiable]
+float2x3 persp_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs) {
+    float2x3 J;
+    [ForceUnroll]
+    for (int i = 0; i < 2; ++i) {
+        float2 seed = 0.0; seed[i] = 1.0;
+        DifferentialPair<float3> dp_p_view = diffPair(p_view);
+        bwd_diff(persp_proj)(dp_p_view, intrins, dist_coeffs, seed);
+        J[i] = dp_p_view.d;
+    }
+    return J;
+}
 
 [ForceInline]
 [Differentiable]
@@ -217,7 +244,7 @@ float2 fisheye_proj(float3 p_view) {
 
 [ForceInline]
 [Differentiable]
-float2 fisheye_proj(float3 p_view, no_diff float4 intrins, no_diff CameraDistortion dist_coeffs) {
+float2 fisheye_proj(float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs) {
     float2 uv = camera_distortion(fisheye_proj(p_view), dist_coeffs);
     float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
     return float2(
@@ -228,7 +255,7 @@ float2 fisheye_proj(float3 p_view, no_diff float4 intrins, no_diff CameraDistort
 
 [ForceInline]
 [Differentiable]
-float2x3 fisheye_proj_jac(float3 p_view, no_diff float4 intrins, no_diff CameraDistortion dist_coeffs) {
+float2x3 fisheye_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs) {
     float2x3 J;
     [ForceUnroll]
     for (int i = 0; i < 2; ++i) {
@@ -262,21 +289,37 @@ float2 _solve2x2(float2x2 A, float2 b) {
 }
 
 // [ForceInline]
-float2 undistort_point(
-    no_diff float2 uv, no_diff CameraDistortion dist_coeffs,
-    int maxiter//, float tol
+bool undistort_point(
+    no_diff float2 uv, no_diff float[10] dist_coeffs,
+    int maxiter, out float2 uv_undist
 ) {
     float2 q = uv;
+    float2 prev_q = q;
+
     for (int i = 0; i < maxiter; i++) {
         float2 qd = camera_distortion(q, dist_coeffs);
-        float2x2 jac = camera_distortion_jac(q, dist_coeffs);
-        float2 dq = _solve2x2(jac, qd-uv);
-        q -= dq;
-        // float err = length(dq);
-        // if (err <= tol)
-        //     { maxiter = i; tol = err; return q; }
+        float2 r = qd - uv;
+        float err = dot(r, r);
+
+        // bool use_newton = err < 1e-2;
+        bool use_newton = true;
+
+        if (use_newton) {
+            float2x2 J = camera_distortion_jac(q, dist_coeffs);
+            q -= _solve2x2(J, r);;
+        } else {
+            // float step = 0.5;
+            float step = clamp(0.5 + 0.5 / (1.0 + dot(r, r) * 10.0), 0.1, 0.9);
+            q = q - step * r;
+        }
+
+        prev_q = q;
     }
-    return q;
+
+    uv_undist = q;
+    // TODO: better way to tell so
+    return is_valid_distortion(uv_undist, dist_coeffs) &&
+           length(camera_distortion(uv_undist, dist_coeffs) - uv) < 1e-2;
 }
 
 
@@ -284,54 +327,58 @@ float2 undistort_point(
 [Differentiable]
 float2 distort_point(
     no_diff float2 uv, bool is_fisheye,
-    no_diff float4 radial_coeffs, no_diff float2 tangential_coeffs, no_diff float2 thin_prism_coeffs
+    no_diff float[10] dist_coeffs
 ) {
     if (is_fisheye) {
         float r = length(uv);
         float theta = atan(r);
         uv *= (r < 1e-3 ? 1.0-r*r/3.0 : theta/r);
     }
-    return camera_distortion(uv, {radial_coeffs, tangential_coeffs, thin_prism_coeffs});
+    return camera_distortion(uv, dist_coeffs);
 }
 
 [CudaDeviceExport]
 [Differentiable]
-float2 undistort_point(
+bool undistort_point(
     no_diff float2 uv, bool is_fisheye,
-    no_diff float4 radial_coeffs, no_diff float2 tangential_coeffs, no_diff float2 thin_prism_coeffs
+    no_diff float[10] dist_coeffs,
+    out float2 uv_undist
 ) {
-    uv = no_diff undistort_point(uv, {radial_coeffs, tangential_coeffs, thin_prism_coeffs}, 8);
+    if (!no_diff undistort_point(uv, dist_coeffs, 8, uv))
+        return false;
     float3 raydir = is_fisheye ? fisheye_unproj(uv) : float3(uv, 1.0);
-    return raydir.xy / max(raydir.z, 1e-12);
+    uv_undist = raydir.xy / max(raydir.z, 1e-12);
+    return true;
 }
 
 
 [CudaDeviceExport]
 [Differentiable]
-void generate_ray(
+bool generate_ray(
     float3x3 R, float3 t, no_diff float2 uv, bool is_fisheye,
-    no_diff float4 radial_coeffs, no_diff float2 tangential_coeffs, no_diff float2 thin_prism_coeffs,
+    no_diff float[10] dist_coeffs,
     out float3 ray_o, out float3 ray_d
 ) {
     ray_o = -mul(t, R);
 
-    uv = no_diff undistort_point(uv, {radial_coeffs, tangential_coeffs, thin_prism_coeffs}, 8);
+    if (!no_diff undistort_point(uv, dist_coeffs, 8, uv))
+        return false;
     float3 raydir = is_fisheye ? fisheye_unproj(uv) : float3(uv, 1.0);
     ray_d = normalize(mul(raydir, R));
+    return true;
 }
 
 [CudaDeviceExport]
 void generate_ray_vjp(
     float3x3 R, float3 t, no_diff float2 uv, bool is_fisheye,
-    no_diff float4 radial_coeffs, no_diff float2 tangential_coeffs, no_diff float2 thin_prism_coeffs,
+    no_diff float[10] dist_coeffs,
     float3 v_ray_o, float3 v_ray_d,
     out float3x3 v_R, out float3 v_t
 ) {
     DifferentialPair<float3x3> dp_R = diffPair(R);
     DifferentialPair<float3> dp_t = diffPair(t);
     bwd_diff(generate_ray)(
-        dp_R, dp_t, uv, is_fisheye,
-        radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        dp_R, dp_t, uv, is_fisheye, dist_coeffs,
         v_ray_o, v_ray_d
     );
     v_R = dp_R.d;

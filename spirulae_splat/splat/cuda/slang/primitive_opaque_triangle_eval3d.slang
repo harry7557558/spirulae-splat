@@ -21,9 +21,7 @@ float hash41(float4 seed) {
     no_diff const float fy, \
     no_diff const float cx, \
     no_diff const float cy, \
-    no_diff const float4 radial_coeffs, \
-    no_diff const float2 tangential_coeffs, \
-    no_diff const float2 thin_prism_coeffs, \
+    no_diff const float[10] dist_coeffs, \
     const uint image_width, \
     const uint image_height, \
     no_diff const float near_plane, \
@@ -77,16 +75,14 @@ void projection_opaque_triangle_eval3d<let camera_model: CameraModelType, let as
 
     float2 uv0, uv1, uv2;
     if (camera_model == CameraModelType::PINHOLE) {
-        uv0 = vert0_c.xy / vert0_c.z;
-        uv1 = vert1_c.xy / vert1_c.z;
-        uv2 = vert2_c.xy / vert2_c.z;
-        uv0 = float2(fx, fy) * uv0 + float2(cx, cy);
-        uv1 = float2(fx, fy) * uv1 + float2(cx, cy);
-        uv2 = float2(fx, fy) * uv2 + float2(cx, cy);
+        float4 intrins = float4(fx, fy, cx, cy);
+        // TODO: some approximation better than this
+        uv0 = persp_proj(vert0_c, intrins, dist_coeffs);
+        uv1 = persp_proj(vert1_c, intrins, dist_coeffs);
+        uv2 = persp_proj(vert2_c, intrins, dist_coeffs);
     }
     else if (camera_model == CameraModelType::FISHEYE) {
         float4 intrins = float4(fx, fy, cx, cy);
-        CameraDistortion dist_coeffs = {radial_coeffs, tangential_coeffs, thin_prism_coeffs};
         // TODO: some approximation better than this
         uv0 = fisheye_proj(vert0_c, intrins, dist_coeffs);
         uv1 = fisheye_proj(vert1_c, intrins, dist_coeffs);
@@ -147,7 +143,7 @@ void projection_opaque_triangle_eval3d<let camera_model: CameraModelType, let as
     void funname(_projection_opaque_triangle_eval3d_ARGS) { \
         return projection_opaque_triangle_eval3d<__VA_ARGS__>( \
             mean, quat, scale, hardness, sh_coeffs, ch_coeffs, R, t, \
-            fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs, \
+            fx, fy, cx, cy, dist_coeffs, \
             image_width, image_height, near_plane, far_plane, \
             aabb_xyxy, depth, verts, rgbs, normal \
         ); \
@@ -169,9 +165,7 @@ _DEF_projection_opaque_triangle_eval3d(projection_opaque_triangle_eval3d_fisheye
     const float fy, \
     const float cx, \
     const float cy, \
-    const float4 radial_coeffs, \
-    const float2 tangential_coeffs, \
-    const float2 thin_prism_coeffs, \
+    const float[10] dist_coeffs, \
     const uint image_width, \
     const uint image_height, \
     const float v_depth, \
@@ -205,7 +199,7 @@ void projection_opaque_triangle_eval3d_persp_vjp(
     DifferentialPair<float3> dp_t = diffPair(t);
     bwd_diff(_projection_opaque_triangle_eval3d_persp_differentiable)(
         dp_mean, dp_quat, dp_scale, dp_hardness, dp_sh_coeffs, dp_ch_coeffs, dp_R, dp_t,
-        fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        fx, fy, cx, cy, dist_coeffs,
         image_width, image_height, 0.0f, 1e30f,
         v_depth, v_verts, v_rgbs, v_normal
     );
@@ -233,7 +227,7 @@ void projection_opaque_triangle_eval3d_fisheye_vjp(
     DifferentialPair<float3> dp_t = diffPair(t);
     bwd_diff(_projection_opaque_triangle_eval3d_fisheye_differentiable)(
         dp_mean, dp_quat, dp_scale, dp_hardness, dp_sh_coeffs, dp_ch_coeffs, dp_R, dp_t,
-        fx, fy, cx, cy, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        fx, fy, cx, cy, dist_coeffs,
         image_width, image_height, 0.0f, 1e30f,
         v_depth, v_verts, v_rgbs, v_normal
     );

@@ -229,6 +229,8 @@ class SplatModel:
             is_fisheye = ssplat_camera.model == "OPENCV_FISHEYE"
             is_distorted = ssplat_camera.is_distorted() or any([x != 0 for x in dist_coeffs])
             if is_distorted:
+                # TODO
+                raise NotImplementedError()
                 if is_fisheye:
                     kwargs['radial_coeffs'] = dist_coeffs[None]
                 else:

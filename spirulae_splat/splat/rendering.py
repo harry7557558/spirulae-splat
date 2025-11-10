@@ -62,10 +62,7 @@ def rasterization(
     with_ut: bool = False,
     with_eval3d: bool = False,
     # distortion
-    radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
-    tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
-    thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
-    # ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    dist_coeffs: Optional[Tensor] = None,  # [..., C, 10]
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
@@ -134,7 +131,7 @@ def rasterization(
 
     .. note::
         **Camera Distortion and Rolling Shutter**: The function supports rendering with opencv
-        distortion formula for pinhole and fisheye cameras (`radial_coeffs`, `tangential_coeffs`, `thin_prism_coeffs`).
+        distortion formula for pinhole and fisheye cameras (`dist_coeffs`).
         It also supports rolling shutter rendering with the `rolling_shutter` argument. We take
         reference from the paper `3DGUT: Enabling Distorted Cameras and Secondary Rays in Gaussian Splatting
         <https://arxiv.org/abs/2412.12507>`_.
@@ -187,15 +184,7 @@ def rasterization(
         with_ut: Whether to use Unscented Transform (UT) for projection. Default is False.
         with_eval3d: Whether to calculate Gaussian response in 3D world space, instead
             of 2D image space. Default is False.
-        radial_coeffs: Opencv pinhole/fisheye radial distortion coefficients. Default is None.
-            For pinhole camera, the shape should be [..., C, 6]. For fisheye camera, the shape
-            should be [..., C, 4].
-        tangential_coeffs: Opencv pinhole tangential distortion coefficients. Default is None.
-            The shape should be [..., C, 2] if provided.
-        thin_prism_coeffs: Opencv pinhole thin prism distortion coefficients. Default is None.
-            The shape should be [..., C, 4] if provided.
-        # ftheta_coeffs: F-Theta camera distortion coefficients shared for all cameras.
-        #     Default is None. See `FThetaCameraDistortionParameters` for details.
+        dist_coeffs: Should be [..., C, 10]. [k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2]
         rolling_shutter: The rolling shutter type. Default `RollingShutterType.GLOBAL` means
             global shutter.
         viewmats_rs: The second viewmat when rolling shutter is used. Default is None.
@@ -287,10 +276,7 @@ def rasterization(
         assert not distributed, "AbsGrad is not supported in distributed mode."
 
     if (
-        # radial_coeffs is not None
-        # or tangential_coeffs is not None
-        thin_prism_coeffs is not None
-        # or ftheta_coeffs is not None
+        dist_coeffs is not None
         or rolling_shutter != RollingShutterType.GLOBAL
     ):
         assert (
@@ -313,12 +299,8 @@ def rasterization(
         assert packed is False, "Packed mode is not supported with UT."
         assert sparse_grad is False, "Sparse grad is not supported with UT."
 
-    if radial_coeffs is not None:
-        radial_coeffs = radial_coeffs.contiguous()
-    if tangential_coeffs is not None:
-        tangential_coeffs = tangential_coeffs.contiguous()
-    if thin_prism_coeffs is not None:
-        thin_prism_coeffs = thin_prism_coeffs.contiguous()
+    if dist_coeffs is not None:
+        dist_coeffs = dist_coeffs.contiguous()
 
     # Implement the multi-GPU strategy proposed in
     # `On Scaling Up 3D Gaussian Splatting Training <https://arxiv.org/abs/2406.18533>`.
@@ -417,9 +399,7 @@ def rasterization(
             far_plane=far_plane,
             sparse_grad=sparse_grad,
             camera_model=camera_model,
-            radial_coeffs=radial_coeffs,
-            tangential_coeffs=tangential_coeffs,
-            thin_prism_coeffs=thin_prism_coeffs,
+            dist_coeffs=dist_coeffs,
         )
         # import gsplat.cuda._wrapper
         # proj_results_1 = gsplat.cuda._wrapper.fully_fused_projection(
@@ -632,9 +612,7 @@ def rasterization(
             "viewmats": viewmats,
             "Ks": Ks,
             "camera_model": camera_model,
-            "radial_coeffs": radial_coeffs,
-            "tangential_coeffs": tangential_coeffs,
-            "thin_prism_coeffs": thin_prism_coeffs,
+            "dist_coeffs": dist_coeffs,
         }
     render_colors, render_alphas, render_meta = rasterize_to_pixels(
         primitive,

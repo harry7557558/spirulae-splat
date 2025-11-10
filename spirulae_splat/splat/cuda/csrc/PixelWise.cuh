@@ -2,22 +2,13 @@
 
 #include <torch/types.h>
 
-#include <gsplat/Common.h>
+#ifdef __CUDACC__
+#define TensorView _Slang_TensorView
+#include "generated/slang_all.cu"
+#undef TensorView
+#endif
 
-
-typedef std::tuple<
-    std::optional<at::Tensor>,
-    std::optional<at::Tensor>,
-    std::optional<at::Tensor>
-> CameraDistortionCoeffsTensor;
-
-struct CameraDistortionCoeffsBuffer {
-    float4* __restrict__ radial_coeffs;
-    float2* __restrict__ tangential_coeffs;
-    float2* __restrict__ thin_prism_coeffs;
-
-    CameraDistortionCoeffsBuffer(const CameraDistortionCoeffsTensor &tensors);
-};
+#include "types.cuh"
 
 
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */
