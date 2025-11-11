@@ -224,6 +224,7 @@ class OpaqueStrategy(Strategy):
 
         if step == self.warmup_steps:
             state["max_blending"] = torch.zeros_like(state["max_blending"])
+            state["n_train_seen"] = 0
         if step > self.warmup_steps and state["n_train_seen"] > info["n_train"]:
             state["n_train_seen"] = 0
             self._relocate_gs_max_blending(params, optimizers, state, step)

@@ -280,10 +280,10 @@ class SpirulaeModelConfig(ModelConfig):
         Recommend using with --pipeline.model.cull_screen_size for better results"""
     alpha_reg_warmup: int = 12000
     """warmup steps for alpha regularizer, regularization weight ramps up"""
-    reg_warmup_length: int = 0
+    reg_warmup_length: int = 5000
     """Warmup steps for depth, normal, and alpha regularizers.
        only apply regularizers after this many steps."""
-    apply_loss_for_mask: bool = True
+    apply_loss_for_mask: bool = False
     """Set this to False to use masks to ignore distractors (e.g. people and cars, area outside fisheye circle, over exposure)
        Set this to True to remove background (e.g. sky, background outside centered object)"""
     alpha_loss_weight: float = 0.01
@@ -800,7 +800,7 @@ class SpirulaeModel(Model):
         if not self.training:
             is_fisheye = True
             # kwargs['dist_coeffs'] = torch.tensor([[0.0259, 0.0082, 0.0002, -0.0013, -0.0012, -0.0008, 0.0000, 0.0000, -0.0006, -0.0001]]).float().cuda()
-            
+
             # TODO: investigate why this uses a ton of VRAM
             # kwargs['dist_coeffs'] = torch.tensor([[-0.29, 0.07, 0, 0, 1e-5, -1e-3, 0, 0, 0, 0]]).float().cuda()
 

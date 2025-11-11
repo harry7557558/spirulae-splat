@@ -12,7 +12,8 @@ namespace cg = cooperative_groups;
 
 
 __global__ void per_pixel_losses_forward_kernel(
-    const size_t num_pixels,
+    const size_t batch_size,
+    const size_t pixels_per_image,
     const float3* __restrict__ render_rgb,
     const float3* __restrict__ ref_rgb,
     const float* __restrict__ render_depth,
@@ -30,11 +31,15 @@ __global__ void per_pixel_losses_forward_kernel(
     const bool* __restrict__ normal_mask,
     float* __restrict__ out_losses
 ) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t pixel_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t batch_idx = blockIdx.y * blockDim.y + threadIdx.y;
+    if (batch_idx >= batch_size)
+        return;
+    size_t idx = batch_idx * pixels_per_image + pixel_idx;
 
     FixedArray<float, (uint)RawLossIndex::length> losses;
 
-    bool inside = idx < num_pixels;
+    bool inside = pixel_idx < pixels_per_image;
     if (inside) {
         per_pixel_losses(
             render_rgb ? render_rgb[idx] : make_float3(0),
@@ -62,6 +67,7 @@ __global__ void per_pixel_losses_forward_kernel(
 
     __shared__ float atomic_reduce[WARP_SIZE];
 
+    out_losses += batch_idx * (size_t)RawLossIndex::length;
     for (uint i = 0; i < (uint)RawLossIndex::length; i++) {
         float loss = inside ? losses[i] : 0.0f;
         loss = isfinite(loss) ? loss : 0.0f;
@@ -79,7 +85,8 @@ __global__ void per_pixel_losses_forward_kernel(
 }
 
 __global__ void per_pixel_losses_backward_kernel(
-    const size_t num_pixels,
+    const size_t batch_size,
+    const size_t pixels_per_image,
     const float3* __restrict__ render_rgb,
     const float3* __restrict__ ref_rgb,
     const float* __restrict__ render_depth,
@@ -108,11 +115,16 @@ __global__ void per_pixel_losses_backward_kernel(
     float* __restrict__ v_depth_dist,
     float3* __restrict__ v_normal_dist
 ) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t pixel_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t batch_idx = blockIdx.y * blockDim.y + threadIdx.y;
+    if (batch_idx >= batch_size)
+        return;
+    size_t idx = batch_idx * pixels_per_image + pixel_idx;
 
-    bool inside = idx < num_pixels;
+    bool inside = pixel_idx < pixels_per_image;
     if (!inside) return;
 
+    v_out_losses += batch_idx * (size_t)RawLossIndex::length;
     FixedArray<float, (uint)RawLossIndex::length> v_losses;
     for (uint i = 0; i < (uint)RawLossIndex::length; i++)
         v_losses[i] = v_out_losses[i];
@@ -173,27 +185,41 @@ __global__ void per_pixel_losses_backward_kernel(
 }
 
 __global__ void per_pixel_losses_reduce_forward_kernel(
+    const size_t batch_size, const size_t num_pixels,
     FixedArray<float, (uint)RawLossIndex::length>* __restrict__ raw_losses,
-    size_t num_pixels,
     FixedArray<float, (uint)LossWeightIndex::length> loss_weights,
     FixedArray<float, (uint)LossIndex::length>* __restrict__ losses
 ) {
+    size_t batch_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (batch_idx >= batch_size)
+        return;
+    FixedArray<float, (uint)LossIndex::length> temp_losses;
     per_pixel_losses_reduce(
-        raw_losses, num_pixels, &loss_weights,
-        losses
+        raw_losses + batch_idx, num_pixels, &loss_weights,
+        &temp_losses
     );
+    #pragma unroll
+    for (int i = 0; i < (uint)LossIndex::length; i++)
+        atomicAdd(&(*losses)[i], temp_losses[i] / (float)batch_size);
 }
 
 __global__ void per_pixel_losses_reduce_backward_kernel(
+    const size_t batch_size, const size_t num_pixels,
     FixedArray<float, (uint)RawLossIndex::length>* __restrict__ raw_losses,
-    size_t num_pixels,
     FixedArray<float, (uint)LossWeightIndex::length> loss_weights,
     FixedArray<float, (uint)LossIndex::length>* __restrict__ v_losses,
     FixedArray<float, (uint)RawLossIndex::length>* __restrict__ v_raw_losses
 ) {
+    size_t batch_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (batch_idx >= batch_size)
+        return;
+    FixedArray<float, (uint)LossIndex::length> temp_v_losses;
+    #pragma unroll
+    for (int i = 0; i < (uint)LossIndex::length; i++)
+        temp_v_losses[i] = (*v_losses)[i] / (float)batch_size;
     per_pixel_losses_reduce_bwd(
         raw_losses, num_pixels, &loss_weights,
-        v_losses, v_raw_losses
+        &temp_v_losses, v_raw_losses + batch_idx
     );
 }
 
@@ -253,16 +279,16 @@ compute_per_pixel_losses_forward_tensor(
     check_float("depth_mask", depth_mask, 1);
     check_float("normal_mask", normal_mask, 1);
 
-    size_t num_pixels = render_rgb.value().numel() / 3;
+    size_t pixels_per_image = render_rgb.value().numel() / (3 * B);
 
     FixedArray<float, (uint)LossWeightIndex::length> loss_weights =
         *reinterpret_cast<const FixedArray<float, (uint)LossWeightIndex::length>*>(loss_weights_0.data());
 
-    torch::Tensor raw_losses = torch::zeros({(uint)RawLossIndex::length}, render_rgb.value().options());
+    torch::Tensor raw_losses = torch::zeros({B, (uint)RawLossIndex::length}, render_rgb.value().options());
     torch::Tensor losses = torch::zeros({(uint)LossIndex::length}, render_rgb.value().options());
 
-    per_pixel_losses_forward_kernel<<<_LAUNCH_ARGS_1D(num_pixels, WARP_SIZE*WARP_SIZE)>>>(
-        num_pixels,
+    per_pixel_losses_forward_kernel<<<_LAUNCH_ARGS_2D(pixels_per_image, B, WARP_SIZE*WARP_SIZE, 1)>>>(
+        B, pixels_per_image,
         render_rgb.has_value() ? (float3*)render_rgb.value().contiguous().data_ptr<float>() : nullptr,
         ref_rgb.has_value() ? (float3*)ref_rgb.value().contiguous().data_ptr<float>() : nullptr,
         render_depth.has_value() ? (float*)render_depth.value().contiguous().data_ptr<float>() : nullptr,
@@ -281,9 +307,9 @@ compute_per_pixel_losses_forward_tensor(
         raw_losses.data_ptr<float>()
     );
 
-    per_pixel_losses_reduce_forward_kernel<<<1, 1>>>(
+    per_pixel_losses_reduce_forward_kernel<<<_LAUNCH_ARGS_1D(B, WARP_SIZE)>>>(
+        B, pixels_per_image,
         (FixedArray<float, (uint)RawLossIndex::length>*)raw_losses.data_ptr<float>(),
-        num_pixels,
         loss_weights,
         (FixedArray<float, (uint)LossIndex::length>*)losses.data_ptr<float>()
     );
@@ -325,7 +351,8 @@ std::tuple<
     at::Tensor v_losses
 ) {
 
-    size_t num_pixels = render_rgb.value().numel() / 3;
+    long B = render_rgb.value().size(0);
+    size_t pixels_per_image = render_rgb.value().numel() / (3 * B);
 
     std::optional<at::Tensor> v_render_rgb = render_rgb.has_value() ? (std::optional<at::Tensor>)at::empty_like(render_rgb.value()) : std::nullopt;
     std::optional<at::Tensor> v_ref_rgb = ref_rgb.has_value() ? (std::optional<at::Tensor>)at::empty_like(ref_rgb.value()) : std::nullopt;
@@ -342,18 +369,18 @@ std::tuple<
     FixedArray<float, (uint)LossWeightIndex::length> loss_weights =
         *reinterpret_cast<const FixedArray<float, (uint)LossWeightIndex::length>*>(loss_weights_0.data());
 
-    torch::Tensor v_raw_losses = torch::empty({(uint)RawLossIndex::length}, render_rgb.value().options());
+    torch::Tensor v_raw_losses = torch::empty({B, (uint)RawLossIndex::length}, render_rgb.value().options());
 
-    per_pixel_losses_reduce_backward_kernel<<<1, 1>>>(
+    per_pixel_losses_reduce_backward_kernel<<<B, 1>>>(
+        B, pixels_per_image,
         (FixedArray<float, (uint)RawLossIndex::length>*)raw_losses.data_ptr<float>(),
-        num_pixels,
         loss_weights,
         (FixedArray<float, (uint)LossIndex::length>*)v_losses.data_ptr<float>(),
         (FixedArray<float, (uint)RawLossIndex::length>*)v_raw_losses.data_ptr<float>()
     );
 
-    per_pixel_losses_backward_kernel<<<_LAUNCH_ARGS_1D(num_pixels, WARP_SIZE*WARP_SIZE)>>>(
-        num_pixels,
+    per_pixel_losses_backward_kernel<<<_LAUNCH_ARGS_2D(pixels_per_image, B, WARP_SIZE*WARP_SIZE, 1)>>>(
+        B, pixels_per_image,
         render_rgb.has_value() ? (float3*)render_rgb.value().contiguous().data_ptr<float>() : nullptr,
         ref_rgb.has_value() ? (float3*)ref_rgb.value().contiguous().data_ptr<float>() : nullptr,
         render_depth.has_value() ? (float*)render_depth.value().contiguous().data_ptr<float>() : nullptr,

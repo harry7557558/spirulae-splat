@@ -317,7 +317,7 @@ class SplatTrainingLosses(torch.nn.Module):
             alpha = gt_img_rgba[..., -1].unsqueeze(-1)
             gt_rgb_mask = gt_rgb_mask & alpha if gt_rgb_mask is None else alpha
             if self.config.apply_loss_for_mask:
-                gt_alpha = gt_alpha & alpha if gt_rgb_mask is None else alpha
+                gt_alpha = gt_alpha & alpha if gt_alpha is None else alpha
 
         # do this to make SSIM happier
         if gt_rgb_mask is not None:

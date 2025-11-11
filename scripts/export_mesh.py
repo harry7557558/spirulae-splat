@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """Based on https://github.com/maturk/dn-splatter/blob/main/dn_splatter/export_mesh.py"""
 
 import random

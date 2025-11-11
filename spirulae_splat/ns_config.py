@@ -116,7 +116,7 @@ _TRIANGLE_OPTIMIZERS["means"] = {
 #     ),
 # }
 _TRIANGLE_OPTIMIZERS["bilateral_grid"] = {
-    "optimizer": AdamOptimizerConfig(lr=2e-3, eps=1e-15),
+    "optimizer": AdamOptimizerConfig(lr=5e-4, eps=1e-15),
     "scheduler": ExponentialDecaySchedulerConfig(
         lr_final=1e-6, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
     ),
@@ -208,9 +208,9 @@ spirulae_triangle = MethodSpecification(
                 # mcmc_max_screen_size=0.05,
                 supervision_warmup=0,
                 depth_supervision_weight=0.25,
-                normal_supervision_weight=0.25,
+                normal_supervision_weight=0.04,
                 rgb_distortion_reg_weight=0.01,
-                ssim_lambda=0.6,
+                ssim_lambda=0.4,
             ),
             
         ),

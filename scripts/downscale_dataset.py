@@ -12,7 +12,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Literal
 import random
 
 from concurrent.futures import ThreadPoolExecutor
@@ -96,7 +96,7 @@ def downscale_image(input_path: str, output_path: str, scale_factor: float,
                    jpeg_quality: Optional[int] = None):
     """Downscale an image and save it."""
     # Read image
-    img = cv2.imread(input_path)
+    img = cv2.imread(input_path, -1)
     if img is None:
         raise ValueError(f"Could not read image: {input_path}")
     
@@ -112,7 +112,9 @@ def downscale_image(input_path: str, output_path: str, scale_factor: float,
     
     # Downscale image
     if scale_factor != 1.0:
+        # print(img.shape, img.dtype, end=' -> ')
         img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_AREA)
+        # print(img.shape, img.dtype)
     
     # Determine output format and quality
     if jpeg_quality is not None:
@@ -232,8 +234,14 @@ def main():
     # Process images and update frames
     processed_frames = []
 
-    def process_one_frame(frame):
-        file_path = frame['file_path']
+    def process_one_frame(frame, key: Literal['file_path', 'mask_path', 'depth_file_path', 'normal_file_path', None] = None):
+        if key is None:
+            return_val = None
+            for key in ['file_path', 'mask_path', 'depth_file_path', 'normal_file_path'][::-1]:
+                return_val = process_one_frame(frame, key)
+            return return_val
+
+        file_path = frame[key]
         
         # Ensure file path is within dataset directory
         full_input_path = os.path.join(args.input_dir, file_path)
@@ -257,7 +265,7 @@ def main():
         
         # Update frame data
         new_frame = frame.copy()
-        new_frame['file_path'] = output_file_path
+        new_frame[key] = output_file_path
         
         # Adjust intrinsics (frame-specific or use global)
         frame_intrinsics = {}

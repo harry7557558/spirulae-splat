@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import torch
 import numpy as np
 from PIL import Image
@@ -50,10 +52,9 @@ def process_image(
         pred_depth = torch.nn.functional.interpolate(
             pred_depth, size=(h, w), mode='bilinear', align_corners=False
         ).permute(0, 2, 3, 1)  # [h, w, 1]
-        # pred_depth = torch.log(torch.relu(pred_depth) + 1.0)
+        pad = Config.max_size // 200 + 1  # fix bad values in case undistortion gives black border that messes up model
+        pred_depth /= torch.amax(pred_depth[0, pad:-pad, pad:-pad])
         pred_depth = distort_image(pred_depth, *intrins)[0]
-        pad = 8  # fix bad values in case undistortion gives black border that messes up model
-        pred_depth /= torch.amax(pred_depth[pad:-pad, pad:-pad])
         pred_depth = torch.clip(65535*pred_depth, 0, 65535).cpu().numpy().astype(np.uint16)
         os.makedirs(Path(depth_save_path).parent, exist_ok=True)
         Image.fromarray(pred_depth.squeeze(-1), mode='I;16').save(depth_save_path)
