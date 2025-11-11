@@ -67,13 +67,13 @@ def process(predictor, dataset_dir: str, image_dir: str, mask_dir: str):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Generate masks with natural language prompts.")
-    parser.add_argument("input_dir", nargs=1, help="The image directory.")
+    parser.add_argument("input_dir", nargs=1, help="The dataset folder. Should contain a subfolder containing images. Masks will be saved to a different subfolder.")
     parser.add_argument("--prompt", required=True,
                         help="Text prompt for mask objects, semicolon separated. "
                             "Example: \"people; cars; shadow; fisheye border\"")
-    parser.add_argument("--images", default="images", help="Name of the subdirectory containing images.")
-    parser.add_argument("--masks", default="masks", help="Name of the subdirectory to save masks.")
-    parser.add_argument("--max_image_size", type=int, default=1600, help="Maximum image size.")
+    parser.add_argument("--images", default="images", help="Subfolder containing images. Default: images")
+    parser.add_argument("--masks", default="masks", help="Subfolder to save masks. Default: masks")
+    parser.add_argument("--max_image_size", type=int, default=1600, help="Maximum image size. Default: 1600")
     parser.add_argument("--sam_type", default="sam2.1_hiera_large", help="SAM model to use.")
     parser.add_argument("--box_threshold", type=float, default=0.4, help="Box threshold for lang-sam model.")
     parser.add_argument("--text_threshold", type=float, default=0.25, help="Text threshold for lang-sam model.")

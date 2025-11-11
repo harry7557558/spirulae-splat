@@ -339,15 +339,10 @@ class ProcessMetashape():
     """Process Metashape data into a nerfstudio dataset.
 
     This script assumes that cameras have been aligned using Metashape. After alignment, it is necessary to export the
-    camera poses as a `.xml` file. This option can be found under `File > Export > Export Cameras`.
+    camera poses as a `.xml` and point clouds as a `.ply` file under the dataset folder. For point cloud, Make sure to
+    export the data in non-binary format and exclude the normals. Optionally, provide the Metashape `.psx` file to 
+    resolve file name ambiguity (Tested with Metashape Standard Version 2.2.2).
 
-    Additionally, the points can be exported as pointcloud under `File > Export > Export Point Cloud`. Make sure to
-    export the data in non-binary format and exclude the normals.
-
-    This script does the following:
-
-    1. Scales images to a specified size.
-    2. Converts Metashape poses into the nerfstudio format.
     """
 
     work_dir: Path
@@ -363,7 +358,9 @@ class ProcessMetashape():
     """Path to the Metashape point export ply file. Will automatically find in work_dir if not specified."""
 
     psx: Optional[Path] = None
-    """Path to the Metashape psx file. Will automatically find in work_dir if not specified."""
+    """Optional path to the Metashape psx file. Will automatically find in work_dir if not specified.
+        Used to resolve ambiguity in file name that can't be resolved by xml file alone
+        (This typically happens when you import multiple images with the same file name.)"""
 
     def main(self) -> None:
         """Process images into a nerfstudio dataset."""

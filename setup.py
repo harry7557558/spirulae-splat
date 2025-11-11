@@ -35,6 +35,8 @@ def extract_function_declarations(code):
     decls = []
 
     for m in matches:
+        if 'inline' in m:
+            continue
         if re.compile(r"inline\s+(__global__|__device__)").findall(m):
             continue
         if True and re.compile(r"(__global__|__device__)").findall(m):

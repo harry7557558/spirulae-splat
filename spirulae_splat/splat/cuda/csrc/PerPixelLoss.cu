@@ -11,6 +11,23 @@ namespace cg = cooperative_groups;
 #include "common.cuh"
 
 
+template<typename T, uint size>
+inline __device__ FixedArray<T, size> loadFixedArray(const T* p, long idx) {
+    FixedArray<T, size> arr;
+    #pragma unroll
+    for (int i = 0; i < size; i++)
+        arr[i] = p[idx * size + i];
+    return arr;
+}
+
+template<typename T, uint size>
+inline __device__ void saveFixedArray(T* __restrict__ p, long idx, const FixedArray<T, size> &arr) {
+    #pragma unroll
+    for (int i = 0; i < size; i++)
+        p[idx * size + i] = arr[i];
+}
+
+
 __global__ void per_pixel_losses_forward_kernel(
     const size_t batch_size,
     const size_t pixels_per_image,
@@ -186,41 +203,53 @@ __global__ void per_pixel_losses_backward_kernel(
 
 __global__ void per_pixel_losses_reduce_forward_kernel(
     const size_t batch_size, const size_t num_pixels,
-    FixedArray<float, (uint)RawLossIndex::length>* __restrict__ raw_losses,
+    const float* __restrict__ raw_losses,  // [B, RawLossIndex::length]
     FixedArray<float, (uint)LossWeightIndex::length> loss_weights,
-    FixedArray<float, (uint)LossIndex::length>* __restrict__ losses
+    float* __restrict__ losses  // [LossIndex::length]
 ) {
     size_t batch_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (batch_idx >= batch_size)
         return;
-    FixedArray<float, (uint)LossIndex::length> temp_losses;
+
+    FixedArray<float, (uint)RawLossIndex::length> local_raw_losses =
+        loadFixedArray<float, (uint)RawLossIndex::length>(raw_losses, batch_idx);
+
+    FixedArray<float, (uint)LossIndex::length> local_losses;
     per_pixel_losses_reduce(
-        raw_losses + batch_idx, num_pixels, &loss_weights,
-        &temp_losses
+        &local_raw_losses, num_pixels, &loss_weights,
+        &local_losses
     );
     #pragma unroll
     for (int i = 0; i < (uint)LossIndex::length; i++)
-        atomicAdd(&(*losses)[i], temp_losses[i] / (float)batch_size);
+        atomicAdd(&losses[i], local_losses[i] / (float)batch_size);
 }
 
 __global__ void per_pixel_losses_reduce_backward_kernel(
     const size_t batch_size, const size_t num_pixels,
-    FixedArray<float, (uint)RawLossIndex::length>* __restrict__ raw_losses,
+    const float* __restrict__ raw_losses,  // [B, RawLossIndex::length]
     FixedArray<float, (uint)LossWeightIndex::length> loss_weights,
-    FixedArray<float, (uint)LossIndex::length>* __restrict__ v_losses,
-    FixedArray<float, (uint)RawLossIndex::length>* __restrict__ v_raw_losses
+    const float* __restrict__ v_losses,  // [LossIndex::length]
+    float* __restrict__ v_raw_losses  // [B, RawLossIndex::length]
 ) {
     size_t batch_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (batch_idx >= batch_size)
         return;
-    FixedArray<float, (uint)LossIndex::length> temp_v_losses;
+
+    FixedArray<float, (uint)LossIndex::length> local_v_losses;
     #pragma unroll
     for (int i = 0; i < (uint)LossIndex::length; i++)
-        temp_v_losses[i] = (*v_losses)[i] / (float)batch_size;
+        local_v_losses[i] = v_losses[i] / (float)batch_size;
+
+    FixedArray<float, (uint)RawLossIndex::length> local_raw_losses =
+        loadFixedArray<float, (uint)RawLossIndex::length>(raw_losses, batch_idx);
+    FixedArray<float, (uint)RawLossIndex::length> local_v_raw_losses;
+
     per_pixel_losses_reduce_bwd(
-        raw_losses, num_pixels, &loss_weights,
-        &temp_v_losses, v_raw_losses + batch_idx
+        &local_raw_losses, num_pixels, &loss_weights,
+        &local_v_losses, &local_v_raw_losses
     );
+
+    saveFixedArray<float, (uint)RawLossIndex::length>(v_raw_losses, batch_idx, local_v_raw_losses);
 }
 
 
@@ -309,9 +338,9 @@ compute_per_pixel_losses_forward_tensor(
 
     per_pixel_losses_reduce_forward_kernel<<<_LAUNCH_ARGS_1D(B, WARP_SIZE)>>>(
         B, pixels_per_image,
-        (FixedArray<float, (uint)RawLossIndex::length>*)raw_losses.data_ptr<float>(),
+        raw_losses.data_ptr<float>(),
         loss_weights,
-        (FixedArray<float, (uint)LossIndex::length>*)losses.data_ptr<float>()
+        losses.data_ptr<float>()
     );
 
     return std::make_tuple(losses, raw_losses);
@@ -371,12 +400,12 @@ std::tuple<
 
     torch::Tensor v_raw_losses = torch::empty({B, (uint)RawLossIndex::length}, render_rgb.value().options());
 
-    per_pixel_losses_reduce_backward_kernel<<<B, 1>>>(
+    per_pixel_losses_reduce_backward_kernel<<<_LAUNCH_ARGS_1D(B, WARP_SIZE)>>>(
         B, pixels_per_image,
-        (FixedArray<float, (uint)RawLossIndex::length>*)raw_losses.data_ptr<float>(),
+        raw_losses.data_ptr<float>(),
         loss_weights,
-        (FixedArray<float, (uint)LossIndex::length>*)v_losses.data_ptr<float>(),
-        (FixedArray<float, (uint)RawLossIndex::length>*)v_raw_losses.data_ptr<float>()
+        v_losses.data_ptr<float>(),
+        v_raw_losses.data_ptr<float>()
     );
 
     per_pixel_losses_backward_kernel<<<_LAUNCH_ARGS_2D(pixels_per_image, B, WARP_SIZE*WARP_SIZE, 1)>>>(

@@ -264,7 +264,7 @@ float[LossIndex::length] per_pixel_losses_reduce(
 
     // depth supervision loss - Pearson correlation
     losses[LossIndex::DepthSup] = raw_losses[RawLossIndex::DepthMaskTotal] > 0.0 ?
-        weights[LossWeightIndex::DepthSup] * (1.0 -
+        weights[LossWeightIndex::DepthSup] * clamp(1.0 -
         (
             raw_losses[RawLossIndex::DepthSupXY] -
                 raw_losses[RawLossIndex::DepthSupX] * raw_losses[RawLossIndex::DepthSupY]
@@ -278,7 +278,7 @@ float[LossIndex::length] per_pixel_losses_reduce(
                     / raw_losses[RawLossIndex::DepthMaskTotal]
             )
          + 1.0))  // numerical issue
-    ) : 0.0;
+    , 0.0, 2.0) : 0.0;
 
     // normal supervision loss
     losses[LossIndex::NormalSup] = weights[LossWeightIndex::NormalSup] * (

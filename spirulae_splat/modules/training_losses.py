@@ -277,8 +277,8 @@ class SplatTrainingLosses(torch.nn.Module):
                 # TODO: might not be the best way to use RGB bilagrid
                 B, H, W, C = gt_depth.shape
                 gt_depth = gt_depth * (
-                    gt_depth_mask.float().sum(dim=(1, 2, 3)) /
-                    (gt_depth * gt_depth_mask.float()).sum(dim=(1, 2, 3))  # TODO: fix zero division
+                    gt_depth_mask.float().sum(dim=(1, 2, 3), keepdims=True) /
+                    (gt_depth * gt_depth_mask.float()).sum(dim=(1, 2, 3), keepdims=True)  # TODO: fix zero division
                 )
                 gt_depth = gt_depth / (gt_depth + 1.0)
                 gt_depth = self.apply_bilateral_grid(

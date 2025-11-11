@@ -358,11 +358,11 @@ class SpirulaeModel(Model):
             num_points = means.shape[0]
             scales = torch.sqrt(torch.from_numpy(distances**2).mean(-1, keepdim=True)).repeat(1, 3).float()
             scale_init = 0.1 if self.config.use_mcmc else 1.0  # per original papers
+            opacity_init = 0.5 if self.config.use_mcmc else 0.1  # per original papers
             if self.config.use_mcmc and self.config.mcmc_max_screen_size < 1.0:
-                scale_init = 0.5
+                scale_init, opacity_init = 0.5, 0.1
             scales = torch.log(scale_init * scales / (self.config.kernel_radius/3.0) + 1e-8)
             quats = F.normalize(torch.randn((num_points, 4)))
-            opacity_init = 0.5 if self.config.use_mcmc else 0.1  # per original papers
             opacities = torch.logit(opacity_init * torch.ones(num_points, 1))
 
         else:
