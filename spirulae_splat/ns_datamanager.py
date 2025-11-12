@@ -250,13 +250,25 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         batch = {}
         for image_idx in image_indices:
+            # TODO: handle cases where different img has different set of auxiliary buffers
             img = self.cached_train[image_idx]
             for key, value in img.items():
                 if key not in batch:
                     batch[key] = []
                 if isinstance(value, torch.Tensor):
-                    value = value.clone()
+                    value = value.clone().cuda()
                 batch[key].append(value)
+            assert 'image' in img
+            h, w, _ = batch['image'][-1].shape
+            for key in ['depth', 'normal', 'mask']:
+                if key not in batch:
+                    continue
+                if len(batch[key][-1].shape) == 2:
+                    batch[key][-1] = batch[key][-1].unsqueeze(-1)
+                batch[key][-1] = torch.nn.functional.interpolate(
+                    batch[key][-1].float().permute(2, 0, 1)[None],
+                    size=(h, w), mode='bilinear', align_corners=False
+                )[0].permute(1, 2, 0).to(batch[key][-1].dtype)
         for key in batch:
             if isinstance(batch[key][0], torch.Tensor):
                 batch[key] = torch.stack(batch[key]).to(self.device)

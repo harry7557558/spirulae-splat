@@ -289,7 +289,10 @@ class SplatTrainingLosses(torch.nn.Module):
 
         # load normal
         if 'normal' in batch:
-            gt_normal = self._downscale_if_required(batch['normal'].to(device))
+            gt_normal = batch['normal']
+            if gt_normal.dtype == torch.uint8:
+                gt_normal = gt_normal.float() / (255/2) - 1.0
+            gt_normal = self._downscale_if_required(gt_normal.to(device))
             gt_normal_mask = (gt_normal.sum(-1, True) > -2.366)  # background is (-1, -1, -1)
 
             # apply bilagrid
@@ -488,15 +491,12 @@ class SplatTrainingLosses(torch.nn.Module):
         self.step = step
 
         # bilagrid total variation loss
-        bilagrid_tv_loss = 0.0
+        bilagrid_tv_loss_weight = 10.0
         if self.config.use_bilateral_grid:
-            bilagrid_tv_loss = 10 * total_variation_loss(self.bil_grids.grids)
+            loss_dict["tv_loss"] = bilagrid_tv_loss_weight * total_variation_loss(self.bil_grids.grids)
         if self.config.use_bilateral_grid_for_geometry:
-            bilagrid_tv_loss = bilagrid_tv_loss + 10 * (
-                total_variation_loss(self.bil_grids_depth.grids) +
-                total_variation_loss(self.bil_grids_normal.grids)
-            )
-        loss_dict["tv_loss"] = bilagrid_tv_loss
+            loss_dict["tv_loss_depth"] = bilagrid_tv_loss_weight * total_variation_loss(self.bil_grids_depth.grids)
+            loss_dict["tv_loss_normal"] = bilagrid_tv_loss_weight * total_variation_loss(self.bil_grids_normal.grids)
 
         if not _use_torch_impl:
             losses = _ComputePerSplatLosses.apply(

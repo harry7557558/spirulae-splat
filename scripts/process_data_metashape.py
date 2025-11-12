@@ -163,29 +163,21 @@ def metashape_to_json(
     calibrated_sensors = [
         sensor for sensor in sensors.iter("sensor") if sensor.get("type") == "spherical" or sensor.find("calibration") is not None
     ]
-    if not calibrated_sensors:
-        raise ValueError("No calibrated sensor found in Metashape XML")
-    sensor_type = [s.get("type") for s in calibrated_sensors]
-    if sensor_type.count(sensor_type[0]) != len(sensor_type):
-        raise ValueError(
-            "All Metashape sensors do not have the same sensor type. "
-            "nerfstudio does not support per-frame camera_model types."
-            "Only one camera type can be used: frame, fisheye or spherical (perspective, fisheye or equirectangular)"
-        )
-    data = {}
-    if sensor_type[0] == "frame":
-        data["camera_model"] = CAMERA_MODELS["perspective"].value
-    elif sensor_type[0] == "fisheye":
-        data["camera_model"] = CAMERA_MODELS["fisheye"].value
-    elif sensor_type[0] == "spherical":
-        data["camera_model"] = CAMERA_MODELS["equirectangular"].value
-    else:
-        # Cylindrical and RPC sensor types are not supported
-        raise ValueError(f"Unsupported Metashape sensor type '{sensor_type[0]}'")
-
     sensor_dict = {}
     for sensor in calibrated_sensors:
         s = {}
+
+        sensor_type = sensor.get("type")
+        if sensor_type == "frame":
+            s["camera_model"] = CAMERA_MODELS["perspective"].value
+        elif sensor_type == "fisheye":
+            s["camera_model"] = CAMERA_MODELS["fisheye"].value
+        elif sensor_type == "spherical":
+            s["camera_model"] = CAMERA_MODELS["equirectangular"].value
+        else:
+            # Cylindrical and RPC sensor types are not supported
+            raise ValueError(f"Unsupported Metashape sensor type '{sensor_type}'")
+
         resolution = sensor.find("resolution")
         assert resolution is not None, "Resolution not found in Metashape xml"
         s["w"] = int(resolution.get("width"))  # type: ignore
@@ -302,6 +294,7 @@ def metashape_to_json(
         frame["transform_matrix"] = transform.tolist()
         frames.append(frame)
 
+    data = {}
     data["frames"] = frames
     applied_transform = np.eye(4)[:3, :]
     applied_transform = applied_transform[np.array([2, 0, 1]), :]
@@ -371,7 +364,7 @@ class ProcessMetashape():
 
         # Load .xml file
         if self.xml is None:
-            xml_files = [fn for fn in work_dir_files if fn.suffix == ".xml"]
+            xml_files = [fn for fn in work_dir_files if fn.suffix.lower() == ".xml"]
             if len(xml_files) == 0:
                 raise ValueError("No XML file found in work_dir. Please specify using --xml")
             if len(xml_files) > 1:
@@ -382,12 +375,12 @@ class ProcessMetashape():
             self.xml = self.work_dir / self.xml
         if not self.xml.exists():
             raise ValueError(f"XML file {self.xml} doesn't exist")
-        if self.xml.suffix != ".xml":
+        if self.xml.suffix.lower() != ".xml":
             raise ValueError(f"XML file {self.xml} must have a .xml extension")
 
         # Load .ply file
         if self.ply is None:
-            ply_files = [fn for fn in work_dir_files if fn.suffix == ".ply" and fn.name != "sparse_pc.ply"]
+            ply_files = [fn for fn in work_dir_files if fn.suffix.lower() == ".ply" and fn.name != "sparse_pc.ply"]
             if len(ply_files) == 0:
                 raise ValueError("No ply file found in work_dir (other than sparse_pc.ply). Please specify using --ply")
             if len(ply_files) > 1:
@@ -398,25 +391,24 @@ class ProcessMetashape():
             self.ply = self.work_dir / self.ply
         if not self.ply.exists():
             raise ValueError(f"ply file {self.ply} doesn't exist")
-        if self.ply.suffix != ".ply":
+        if self.ply.suffix.lower() != ".ply":
             raise ValueError(f"ply file {self.ply} must have a .ply extension")
 
         # Load .psx file
-        if self.psx is None:
-            psx_files = [fn for fn in work_dir_files if fn.suffix == ".psx"]
-            if len(psx_files) == 0:
-                raise ValueError("No psx file found in work_dir. Please specify using --psx")
+        if self.psx is None and False:
+            psx_files = [fn for fn in work_dir_files if fn.suffix.lower() == ".psx"]
             if len(psx_files) > 1:
                 raise ValueError("Multiple psx file found in work_dir. Please specify using --psx")
-            self.psx = psx_files[0]
-            CONSOLE.log("Using PSX file found:", self.psx)
-        elif not self.psx.exists():
+            if len(psx_files) != 0:
+                self.psx = psx_files[0]
+                CONSOLE.log("Using PSX file found:", self.psx)
+        if self.psx is not None and not self.psx.exists():
             self.psx = self.work_dir / self.psx
             if not self.psx.exists():
                 raise ValueError(f"psx file {self.psx} doesn't exist")
         camera_dict = None
         if self.psx is not None:
-            if self.psx.suffix != ".psx":
+            if self.psx.suffix.lower() != ".psx":
                 raise ValueError(f"psx file {self.psx} must have a .psx extension")
             root = ET.parse(self.psx).getroot()
             metashape_dir = self.psx.parent / root.get("path").replace("{projectname}", self.psx.name.rstrip(".psx"))

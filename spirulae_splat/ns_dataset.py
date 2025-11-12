@@ -52,11 +52,11 @@ def get_depth_image_from_path(
     """
     if filepath.suffix == ".npy":
         image = np.load(filepath).astype(np.float32) * scale_factor
-        image = cv2.resize(image, (width, height), interpolation=interpolation)
+        # image = cv2.resize(image, (width, height), interpolation=interpolation)
     else:
         image = cv2.imread(str(filepath.absolute()), cv2.IMREAD_ANYDEPTH)
         image = image.astype(np.float32) * scale_factor
-        image = cv2.resize(image, (width, height), interpolation=interpolation)
+        # image = cv2.resize(image, (width, height), interpolation=interpolation)
     return torch.from_numpy(image[:, :, np.newaxis])
 
 
@@ -68,11 +68,11 @@ def get_normal_image_from_path(
 ) -> torch.Tensor:
     if filepath.suffix == ".npy":
         image = np.load(filepath).astype(np.float32)
-        image = cv2.resize(image, (width, height), interpolation=interpolation)
+        # image = cv2.resize(image, (width, height), interpolation=interpolation)
     else:
         image = cv2.cvtColor(cv2.imread(str(filepath.absolute())), cv2.COLOR_BGR2RGB)
-        image = (image.astype(np.float32) / 255.0) * 2.0 - 1.0
-        image = cv2.resize(image, (width, height), interpolation=interpolation)
+        # image = (image.astype(np.float32) / 255.0) * 2.0 - 1.0
+        # image = cv2.resize(image, (width, height), interpolation=interpolation)
     image = torch.from_numpy(image[:, :, :3])
     return image
     # return image / torch.norm(image, dim=-1, keepdim=True).clip(min=1e-12)
@@ -176,7 +176,7 @@ class SpirulaeDataset(InputDataset):
             image = torch.clamp(image, min=0, max=255).to(torch.uint8)
         return image
 
-    def get_data(self, image_idx: int, image_type: Literal["uint8", "float32"] = "float32", _is_viewer=True, _viewer_thumbnail_cache={}) -> Dict:
+    def get_data(self, image_idx: int, image_type: Literal["uint8", "float32"] = "float32", _is_viewer=True, _load_auxiliary=True, _viewer_thumbnail_cache={}) -> Dict:
         """Returns the ImageDataset data as a dictionary.
 
         Args:
@@ -189,7 +189,7 @@ class SpirulaeDataset(InputDataset):
             if len(_viewer_thumbnail_cache) == 0:
                 _viewer_thumbnail_cache_1 = []
                 def load_data(idx):
-                    data = self.get_data(idx, image_type, _is_viewer=False)
+                    data = self.get_data(idx, image_type, _is_viewer=False, _load_auxiliary=False)
                     if 'mask' in data:
                         # background = torch.ones_like(data['image']) * [0.125, 32][image_type == 'uint8']
                         background = torch.ones_like(data['image']) * torch.tensor([(0,0,1), (0,0,255)][image_type == 'uint8']).to(data['image'])
@@ -235,20 +235,21 @@ class SpirulaeDataset(InputDataset):
             assert (
                 data["mask"].shape[:2] == data["image"].shape[:2]
             ), f"Mask and image have different shapes. Got {data['mask'].shape[:2]} and {data['image'].shape[:2]}"
-        if self._dataparser_outputs.metadata.get("depth_filenames", None) is not None:
-            depth_filepath = self._dataparser_outputs.metadata["depth_filenames"][image_idx]
-            data["depth"] = get_depth_image_from_path(
-                filepath=depth_filepath, scale_factor=self.scale_factor,
-                width=data["image"].shape[1], height=data["image"].shape[0]
-            )
-            assert data["depth"].shape[:2] == data["image"].shape[:2]
-        if self._dataparser_outputs.metadata.get("normal_filenames", None) is not None:
-            normal_filepath = self._dataparser_outputs.metadata["normal_filenames"][image_idx]
-            data["normal"] = get_normal_image_from_path(
-                filepath=normal_filepath,
-                width=data["image"].shape[1], height=data["image"].shape[0]
-            )
-            assert data["normal"].shape[:2] == data["image"].shape[:2]
+        if _load_auxiliary:
+            if self._dataparser_outputs.metadata.get("depth_filenames", None) is not None:
+                depth_filepath = self._dataparser_outputs.metadata["depth_filenames"][image_idx]
+                data["depth"] = get_depth_image_from_path(
+                    filepath=depth_filepath, scale_factor=self.scale_factor,
+                    width=data["image"].shape[1], height=data["image"].shape[0]
+                )
+                # assert data["depth"].shape[:2] == data["image"].shape[:2]
+            if self._dataparser_outputs.metadata.get("normal_filenames", None) is not None:
+                normal_filepath = self._dataparser_outputs.metadata["normal_filenames"][image_idx]
+                data["normal"] = get_normal_image_from_path(
+                    filepath=normal_filepath,
+                    width=data["image"].shape[1], height=data["image"].shape[0]
+                )
+                # assert data["normal"].shape[:2] == data["image"].shape[:2]
         if self.mask_color:
             data["image"] = torch.where(
                 data["mask"] == 1.0, data["image"], torch.ones_like(data["image"]) * torch.tensor(self.mask_color)

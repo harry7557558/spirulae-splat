@@ -28,6 +28,10 @@ def process_image(
     depth_save_path: Optional[str]=None,
     normal_save_path: Optional[str]=None
 ):
+    if (depth_save_path is None or os.path.exists(depth_save_path)) and \
+        (normal_save_path is None or os.path.exists(normal_save_path)):
+        return
+
     image = Image.open(image_path).convert("RGB")
     w, h = image.size
     sc = Config.max_size / max(w, h)

@@ -210,7 +210,7 @@ class SpirulaeModelConfig(ModelConfig):
     """if a gaussian is more than this fraction of screen space, relocate it
         Useful for fisheye with 3DGUT, may drop PSNR for conventional cameras
         For likely better quality, use mcmc_max_screen_size instead"""
-    mcmc_max_screen_size: float = 0.15
+    mcmc_max_screen_size: float = float('inf')
     """if a gaussian is more than this fraction of screen space, clip scale and increase opacity
         Intended to be an MCMC-friendly alternative of relocate_screen_size"""
     mcmc_max_world_size: float = float('inf')
@@ -280,7 +280,7 @@ class SpirulaeModelConfig(ModelConfig):
         Recommend using with --pipeline.model.cull_screen_size for better results"""
     alpha_reg_warmup: int = 12000
     """warmup steps for alpha regularizer, regularization weight ramps up"""
-    reg_warmup_length: int = 5000
+    reg_warmup_length: int = 3000
     """Warmup steps for depth, normal, and alpha regularizers.
        only apply regularizers after this many steps."""
     apply_loss_for_mask: bool = False
@@ -1114,11 +1114,14 @@ class SpirulaeModel(Model):
             f"erank={fmt('erank_reg', max(self.config.erank_reg_s3, self.config.erank_reg, 3))} "
             f"aniso={fmt('scale_reg', self.config.scale_regularization_weight, 3)}",
             "                \n",
-            f"[Reg] bilagrid={fmt('tv_loss', 10.0)}",
-        ] + [opacity_floor] * (len(opacity_floor) > 0) + [
+            f"[BilagridTVLoss] rgb={fmt('tv_loss', 10.0)} "
+            f"depth={fmt('tv_loss_depth', 10.0)} "
+            f"normal={fmt('tv_loss_normal', 10.0)}",
+        ] + ["                \n", opacity_floor] * (len(opacity_floor) > 0) + [
             "                \n",
         ]
-        CONSOLE.print(' '.join(chunks).replace('\n ', '\n'), end="\033[F"*4)
+        chunks = ' '.join(chunks).replace('\n ', '\n')
+        CONSOLE.print(chunks, end="\033[F"*(chunks.count('\n')))
 
     @torch.no_grad()
     def get_outputs_for_camera(self, camera: Cameras, obb_box: Optional[OrientedBox] = None) -> Dict[str, torch.Tensor]:

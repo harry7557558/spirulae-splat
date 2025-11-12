@@ -241,6 +241,8 @@ def main():
                 return_val = process_one_frame(frame, key)
             return return_val
 
+        if key not in frame:
+            return
         file_path = frame[key]
         
         # Ensure file path is within dataset directory
