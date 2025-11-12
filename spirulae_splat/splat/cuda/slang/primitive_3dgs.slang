@@ -1,5 +1,53 @@
 #include "projection_utils.slang"
 
+struct SigmaPoints {
+    float3 p[7];
+    float w_mean[7];
+    float w_cov[7];
+};
+
+[ForceInline]
+SigmaPoints world_gaussian_sigma_points(
+    float3 world_mean,
+    float3 world_scale,
+    float4 world_quat,
+    float3x3 R, float3 t
+) {
+    static const float alpha = 1.0;
+    static const float beta = 2.0;
+    static const float kappa = 0.0;
+    static const uint dim = 3;
+    static const float lambda = alpha * alpha * (dim + kappa) - dim;
+    static const float r = sqrt(dim + lambda);
+
+    float3x3 Rq = transpose(normalized_quat_to_rotmat(world_quat));
+
+    SigmaPoints ret;
+    ret.p[0] = world_mean;
+    ret.w_mean[0] = lambda / (dim + lambda);
+    ret.w_cov[0] = lambda / (dim + lambda) + (1.0 - alpha * alpha + beta);
+
+    [ForceUnroll]
+    for (uint i = 0; i < dim; i++) {
+        float3 delta = sqrt(dim + lambda) * world_scale[i] * Rq[i];
+        ret.p[i + 1] = world_mean + delta;
+        ret.p[i + 1 + dim] = world_mean - delta;
+    }
+
+    [ForceUnroll]
+    for (uint i = 1; i <= 2 * dim; i++) {
+        ret.w_mean[i] = 0.5 / (dim + lambda);
+        ret.w_cov[i] = 0.5 / (dim + lambda);
+    }
+
+    [ForceUnroll]
+    for (uint i = 0; i < 7; i++) {
+        float3 temp = ret.p[i];
+        posW2C(R, t, temp, ret.p[i]);
+    }
+
+    return ret;
+}
 
 [CudaDeviceExport]
 [ForceInline]
@@ -41,51 +89,122 @@ void persp_proj_3dgs(
 }
 
 [CudaDeviceExport]
-// [ForceInline]
 [Differentiable]
-void persp_proj_3dgs(
+bool persp_proj_3dgs<let assume_valid : bool>(
     // inputs
     const float3 mean3d,
     const float3x3 cov3d,
-    const float fx,
-    const float fy,
-    const float cx,
-    const float cy,
+    const float4 intrins,
     const float[10] dist_coeffs,
     // outputs
     out float2x2 cov2d,
     out float2 mean2d
 ) {
-    float4 intrins = float4(fx, fy, cx, cy);
-
-    mean2d = persp_proj(mean3d, intrins, dist_coeffs);
+    bool valid = persp_proj<assume_valid>(mean3d, intrins, dist_coeffs, mean2d);
+    if (!assume_valid && !valid)
+        return false;
 
     float2x3 J = persp_proj_jac(mean3d, intrins, dist_coeffs);
     cov2d = mul(mul(J, cov3d), transpose(J));
+    return true;
 }
 
 [CudaDeviceExport]
-// [ForceInline]
+bool persp_proj_3dgs_ut<let assume_valid : bool>(
+    // inputs
+    const SigmaPoints sigmas,
+    const float4 intrins,
+    const float[10] dist_coeffs,
+    const uint width,
+    const uint height,
+    // outputs
+    out float2x2 cov2d,
+    out float2 mean2d
+) {
+    mean2d = float2(0);
+    cov2d = float2x2(0);
+
+    float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
+    float tan_fovx = 0.5f * width / fx;
+    float tan_fovy = 0.5f * height / fy;
+    float lim_x_pos = width + 0.3f * tan_fovx * fx;
+    float lim_x_neg = cx + 0.3f * tan_fovx * fx;
+    float lim_y_pos = height + 0.3f * tan_fovy * fy;
+    float lim_y_neg = cy + 0.3f * tan_fovy * fy;
+
+    float2 proj_points[7];
+    bool all_valid = true;
+    [ForceUnroll] for (int i = 0; i < 7; i++)
+        all_valid &= persp_proj<assume_valid>(sigmas.p[i], intrins, dist_coeffs, proj_points[i]);
+    if (!assume_valid && !all_valid)
+        return false;
+
+    [ForceUnroll] for (int i = 0; i < 7; i++)
+        mean2d += sigmas.w_mean[i] * proj_points[i];
+
+    float2 mean2d_clipped = {
+        clamp(mean2d.x, -lim_x_neg, lim_x_pos),
+        clamp(mean2d.y, -lim_y_neg, lim_y_pos)
+    };
+    [ForceUnroll] for (int i = 0; i < 7; i++) {
+        float2 d = float2(
+            clamp(proj_points[i].x, -lim_x_neg, lim_x_pos),
+            clamp(proj_points[i].y, -lim_y_neg, lim_y_pos)
+        ) - mean2d_clipped;
+        cov2d += sigmas.w_cov[i] * float2x2(d.x * d.x, d.x * d.y, d.x * d.y, d.y * d.y);
+    }
+    return true;
+}
+
+[CudaDeviceExport]
 [Differentiable]
-void fisheye_proj_3dgs(
+bool fisheye_proj_3dgs<let assume_valid : bool>(
     // inputs
     const float3 mean3d,
     const float3x3 cov3d,
-    const float fx,
-    const float fy,
-    const float cx,
-    const float cy,
+    const float4 intrins,
     const float[10] dist_coeffs,
     // outputs
     out float2x2 cov2d,
     out float2 mean2d
 ) {
-    float4 intrins = float4(fx, fy, cx, cy);
-
-    mean2d = fisheye_proj(mean3d, intrins, dist_coeffs);
+    bool valid = fisheye_proj<assume_valid>(mean3d, intrins, dist_coeffs, mean2d);
+    if (!assume_valid && !valid)
+        return false;
 
     float2x3 J = fisheye_proj_jac(mean3d, intrins, dist_coeffs);
-    cov2d = mul(mul(J, cov3d), transpose(J));;
+    cov2d = mul(mul(J, cov3d), transpose(J));
+    return true;
+}
+
+[CudaDeviceExport]
+bool fisheye_proj_3dgs_ut<let assume_valid : bool>(
+    // inputs
+    const SigmaPoints sigmas,
+    const float4 intrins,
+    const float[10] dist_coeffs,
+    // outputs
+    out float2x2 cov2d,
+    out float2 mean2d
+) {
+    mean2d = float2(0);
+    cov2d = float2x2(0);
+
+    float2 proj_points[7];
+    bool all_valid = true;
+    [ForceUnroll] for (int i = 0; i < 7; i++)
+        all_valid &= fisheye_proj<assume_valid>(sigmas.p[i], intrins, dist_coeffs, proj_points[i]);
+    if (!assume_valid && !all_valid)
+        return false;
+
+    [ForceUnroll] for (int i = 0; i < 7; i++)
+        mean2d += sigmas.w_mean[i] * proj_points[i];
+
+    [ForceUnroll] for (int i = 0; i < 7; i++) {
+        float2 d = proj_points[i] - mean2d;
+        cov2d += sigmas.w_cov[i] * float2x2(d.x * d.x, d.x * d.y, d.x * d.y, d.y * d.y);
+    }
+    return true;
 }
 
 [CudaDeviceExport]
@@ -169,44 +288,60 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
         return;
     }
 
-    // transform Gaussian covariance to camera space
-    float3x3 covar;
-    {
-        // compute from quaternions and scales
-        quat_scale_to_covar(quat, exp(scale), covar);
-    }
-    float3x3 covar_c;
-    covarW2C(R, covar, covar_c);
-
-    // perspective projection
+    float4 intrins = { fx, fy, cx, cy };
     float2x2 covar2d;
 
-    if (camera_model == CameraModelType::PINHOLE)
-        persp_proj_3dgs(
-            mean_c,
-            covar_c,
-            fx, fy, cx, cy,
-            dist_coeffs,
-            covar2d,
-            mean2d
-        );
-    else if (camera_model == CameraModelType::FISHEYE)
-        fisheye_proj_3dgs(
-            mean_c,
-            covar_c,
-            fx, fy, cx, cy,
-            dist_coeffs,
-            covar2d,
-            mean2d
-        );
-    else if (camera_model == CameraModelType::ORTHO)
-        ortho_proj_3dgs(
-            mean_c,
-            covar_c,
-            fx, fy, cx, cy,
-            covar2d,
-            mean2d
-        );
+    bool is_valid = true;
+    if (eval3d) {
+        SigmaPoints sigmas = world_gaussian_sigma_points(mean, exp(scale), quat, R, t);
+
+        if (camera_model == CameraModelType::PINHOLE)
+            is_valid &= persp_proj_3dgs_ut<assume_valid>(
+                sigmas,
+                intrins, dist_coeffs, image_width, image_height,
+                covar2d, mean2d
+            );
+        else if (camera_model == CameraModelType::FISHEYE)
+            is_valid &= fisheye_proj_3dgs_ut<assume_valid>(
+                sigmas,
+                intrins, dist_coeffs,
+                covar2d, mean2d
+            );
+    }
+    else {
+        // transform Gaussian covariance to camera space
+        float3x3 covar;
+        {
+            // compute from quaternions and scales
+            quat_scale_to_covar(quat, exp(scale), covar);
+        }
+        float3x3 covar_c;
+        covarW2C(R, covar, covar_c);
+
+        if (camera_model == CameraModelType::PINHOLE)
+            // does not support dist_coeffs - asserted on Python side
+            persp_proj_3dgs(
+                mean_c, covar_c,
+                fx, fy, cx, cy, image_width, image_height,
+                covar2d, mean2d
+            );
+        else if (camera_model == CameraModelType::FISHEYE)
+            is_valid &= fisheye_proj_3dgs<assume_valid>(
+                mean_c, covar_c,
+                intrins, dist_coeffs,
+                covar2d, mean2d
+            );
+        else if (camera_model == CameraModelType::ORTHO)
+            ortho_proj_3dgs(
+                mean_c, covar_c,
+                fx, fy, cx, cy,
+                covar2d, mean2d
+            );
+    }
+    if (!assume_valid && !is_valid) {
+        aabb_xyxy = { 0, 0, 0, 0 };
+        return;
+    }
 
     float compensation;
     static const float eps2d = 0.3;

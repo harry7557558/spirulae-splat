@@ -207,16 +207,20 @@ bool is_valid_distortion(no_diff float2 uv, no_diff float[10] dist_coeffs) {
 
 [ForceInline]
 [Differentiable]
-float2 persp_proj(float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs) {
-    float2 uv = p_view.xy / p_view.z;
-    if (p_view.z < 0.0 || !is_valid_distortion(uv, dist_coeffs))
-        return float2(-1e4);
+bool persp_proj<let assume_valid : bool>(
+    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
+    out float2 uv
+) {
+    uv = p_view.xy / p_view.z;
+    if (!assume_valid && (p_view.z < 0.0 || !is_valid_distortion(uv, dist_coeffs)))
+        return false;
     uv = camera_distortion(uv, dist_coeffs);
     float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
-    return float2(
+    uv = float2(
         fx * uv.x + cx,
         fy * uv.y + cy
     );
+    return true;
 }
 
 [ForceInline]
@@ -227,7 +231,7 @@ float2x3 persp_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[10]
     for (int i = 0; i < 2; ++i) {
         float2 seed = 0.0; seed[i] = 1.0;
         DifferentialPair<float3> dp_p_view = diffPair(p_view);
-        bwd_diff(persp_proj)(dp_p_view, intrins, dist_coeffs, seed);
+        bwd_diff(persp_proj<true>)(dp_p_view, intrins, dist_coeffs, seed);
         J[i] = dp_p_view.d;
     }
     return J;
@@ -244,13 +248,20 @@ float2 fisheye_proj(float3 p_view) {
 
 [ForceInline]
 [Differentiable]
-float2 fisheye_proj(float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs) {
-    float2 uv = camera_distortion(fisheye_proj(p_view), dist_coeffs);
+bool fisheye_proj<let assume_valid : bool>(
+    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
+    out float2 uv
+) {
+    uv = fisheye_proj(p_view);
+    if (!assume_valid && !is_valid_distortion(uv, dist_coeffs))
+        return false;
+    uv = camera_distortion(uv, dist_coeffs);
     float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
-    return float2(
+    uv = float2(
         fx * uv.x + cx,
         fy * uv.y + cy
     );
+    return true;
 }
 
 [ForceInline]
@@ -261,7 +272,7 @@ float2x3 fisheye_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[1
     for (int i = 0; i < 2; ++i) {
         float2 seed = 0.0; seed[i] = 1.0;
         DifferentialPair<float3> dp_p_view = diffPair(p_view);
-        bwd_diff(fisheye_proj)(dp_p_view, intrins, dist_coeffs, seed);
+        bwd_diff(fisheye_proj<true>)(dp_p_view, intrins, dist_coeffs, seed);
         J[i] = dp_p_view.d;
     }
     return J;

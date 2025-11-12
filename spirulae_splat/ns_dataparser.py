@@ -95,6 +95,22 @@ class Nerfstudio2(Nerfstudio):
     downscale_factor: Optional[int] = None
 
     def _generate_dataparser_outputs(self, split="train"):
+
+        # debug code to run ns-viewer without dataset
+        if not self.config.data.exists() and True:
+            n = 88
+            return DataparserOutputs(
+                image_filenames=["/home/harry/Downloads/1x1.png"]*n,
+                cameras=Cameras(camera_to_worlds=torch.eye(4)[None].repeat(n, 1, 1),
+                                fx=torch.ones(n), fy=torch.ones(n),
+                                cx=torch.zeros(n), cy=torch.zeros(n)),
+                scene_box=None,
+                mask_filenames=None,
+                dataparser_scale=1.0,
+                dataparser_transform=torch.eye(4),
+                metadata={},
+            )
+
         assert self.config.data.exists(), f"Data directory {self.config.data} does not exist."
 
         if self.config.data.suffix == ".json":

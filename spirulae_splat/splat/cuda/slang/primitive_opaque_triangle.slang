@@ -84,22 +84,26 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
         return;
     }
 
+    bool all_valid = true;
     if (camera_model == CameraModelType::PINHOLE) {
         float4 intrins = float4(fx, fy, cx, cy);
         // TODO: some approximation better than this
-        uv0 = persp_proj(vert0_c, intrins, dist_coeffs);
-        uv1 = persp_proj(vert1_c, intrins, dist_coeffs);
-        uv2 = persp_proj(vert2_c, intrins, dist_coeffs);
+        all_valid &= persp_proj<assume_valid>(vert0_c, intrins, dist_coeffs, uv0);
+        all_valid &= persp_proj<assume_valid>(vert1_c, intrins, dist_coeffs, uv1);
+        all_valid &= persp_proj<assume_valid>(vert2_c, intrins, dist_coeffs, uv2);
     }
     else if (camera_model == CameraModelType::FISHEYE) {
         float4 intrins = float4(fx, fy, cx, cy);
         // TODO: some approximation better than this
-        uv0 = fisheye_proj(vert0_c, intrins, dist_coeffs);
-        uv1 = fisheye_proj(vert1_c, intrins, dist_coeffs);
-        uv2 = fisheye_proj(vert2_c, intrins, dist_coeffs);
+        all_valid &= fisheye_proj<assume_valid>(vert0_c, intrins, dist_coeffs, uv0);
+        all_valid &= fisheye_proj<assume_valid>(vert1_c, intrins, dist_coeffs, uv1);
+        all_valid &= fisheye_proj<assume_valid>(vert2_c, intrins, dist_coeffs, uv2);
     }
-    else if (camera_model == CameraModelType::ORTHO)
-        {}  // TODO
+    else if (camera_model == CameraModelType::ORTHO) {} // TODO
+    if (!assume_valid && !all_valid) {
+        aabb_xyxy = { 0, 0, 0, 0 };
+        return;
+    }
 
     // compute tight rectangular bounding box (non differentiable)
 

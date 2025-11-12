@@ -27,10 +27,10 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
     camera_model = ["pinhole", "fisheye"][IS_FISHEYE]
     quats = torch.nn.functional.normalize(quats, dim=-1)
     rgbd, alpha, meta = ssplat_rasterization(
-        # primitive=["3dgs", "mip"][IS_ANTIALIASED],
-        # splat_params=(means, quats, scales, opacities, features_dc, features_sh),
-        primitive="opaque_triangle",
-        splat_params=(means, quats, scales+1.8, opacities.unsqueeze(-1).repeat(1, 2), features_dc, features_sh, features_dc.unsqueeze(-2).repeat(1, 2, 1)),
+        primitive=["3dgs", "mip"][IS_ANTIALIASED],
+        splat_params=(means, quats, scales, opacities, features_dc, features_sh),
+        # primitive="opaque_triangle",
+        # splat_params=(means, quats, scales+1.8, opacities.unsqueeze(-1).repeat(1, 2), features_dc, features_sh, features_dc.unsqueeze(-2).repeat(1, 2, 1)),
         viewmats=viewmats,  # [C, 4, 4]
         Ks=Ks,  # [C, 3, 3]
         width=W,
@@ -146,6 +146,7 @@ def test_rasterization():
         exit(0)
 
     weights = [torch.randn_like(x.detach()) for x in _outputs]
+    weights[1] *= 0.0  # depth
     def fun(outputs):
         return sum([(w*o).sum() for w, o in zip(weights, outputs)])
     fun(outputs).backward()
@@ -194,9 +195,9 @@ def profile_rasterization():
 
 if __name__ == "__main__":
 
-    # N = 1000
-    # test_rasterization()
-    # print()
+    N = 1000
+    test_rasterization()
+    print()
 
     N = 200000
     profile_rasterization()
