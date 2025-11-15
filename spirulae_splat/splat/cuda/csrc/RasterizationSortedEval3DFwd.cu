@@ -241,7 +241,7 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
                 T = next_T;
 
                 if (out_max_blending != nullptr)
-                    atomicMax(out_max_blending + splat_idx % N, vis);
+                    atomicMax(out_max_blending + (N == 0 ? splat_idx : splat_idx % N), vis);
             }
         }
 

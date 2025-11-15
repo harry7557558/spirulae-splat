@@ -1,6 +1,16 @@
 #pragma once
 
+#include <cuda_runtime.h>
+#include <torch/types.h>
+
+#include <gsplat/Common.h>
+
+#include "Primitive3DGS.cuh"
+#include "PrimitiveOpaqueTriangle.cuh"
+
 #include "common.cuh"
+#include "types.cuh"
+
 
 struct SplatBuffers {
     long size;
@@ -32,18 +42,21 @@ struct SplatBuffers {
 
 
 
+template<gsplat::CameraModelType camera_model>
 struct TileBuffers {
     long size;
     float width, height;
     const glm::mat4* __restrict__ viewmats;
     const glm::mat3* __restrict__ Ks;  // TODO: make aligned
+    CameraDistortionCoeffsBuffer dist_coeffs;
 
     TileBuffers(
         unsigned width,
         unsigned height,
-        torch::Tensor& viewmats,  // [B, 4, 4]
-        torch::Tensor& Ks  // [B, 3, 3]
-    ) : width((float)width), height((float)height) {
+        const torch::Tensor& viewmats,  // [B, 4, 4]
+        const torch::Tensor& Ks,  // [B, 3, 3]
+        const CameraDistortionCoeffsTensor& dist_coeffs
+    ) : width((float)width), height((float)height), dist_coeffs(dist_coeffs) {
         DEVICE_GUARD(viewmats);
         CHECK_INPUT(viewmats);
         CHECK_INPUT(Ks);
@@ -59,47 +72,45 @@ struct TileBuffers {
 };
 
 
+template<typename Primitive, gsplat::CameraModelType camera_model>
 struct SplatTileIntersector {
-
-    float3 rootAABBMin, rootAABBMax;
 
     c10::TensorOptions tensorF32;
     c10::TensorOptions tensorI32, tensorI16, tensorI64, tensorU8;
-    SplatBuffers splats;
-    TileBuffers tiles;
+    typename Primitive::World::Buffer splats;
+    long numSplats;
+    TileBuffers<camera_model> tiles;
 
     SplatTileIntersector(
-        c10::TensorOptions tensorOptions,
-        const SplatBuffers &splats,
-        const TileBuffers &tiles
+        const typename Primitive::World::Tensor &splats,
+        const TileBuffers<camera_model> &tiles
     );
 
     std::tuple<torch::Tensor, torch::Tensor> getIntersections_brute();
 
-    std::tuple<torch::Tensor, torch::Tensor> getIntersections_octree();
-
     std::tuple<torch::Tensor, torch::Tensor> getIntersections_lbvh();
-
-    static std::tuple<torch::Tensor, torch::Tensor>
-    intersect_splat_tile(
-        torch::Tensor& means,
-        torch::Tensor& scales,
-        torch::Tensor& opacs,
-        torch::Tensor& quats,
-        unsigned width,
-        unsigned height,
-        torch::Tensor& viewmats,
-        torch::Tensor& Ks
-    ) {
-        SplatBuffers splat_buffers = {means, scales, opacs, quats};
-        TileBuffers tile_buffers = {width, height, viewmats, Ks};
-
-        return SplatTileIntersector(
-            means.options(),
-            splat_buffers,
-            tile_buffers
-        ).getIntersections_lbvh();
-    }
 
 };
 
+
+std::tuple<torch::Tensor, torch::Tensor>
+intersect_splat_tile_3dgs(
+    Vanilla3DGS::World::TensorTuple splats_tuple,
+    unsigned width,
+    unsigned height,
+    const torch::Tensor& viewmats,
+    const torch::Tensor& Ks,
+    const gsplat::CameraModelType& camera_model,
+    const CameraDistortionCoeffsTensor& dist_coeffs
+);
+
+std::tuple<torch::Tensor, torch::Tensor>
+intersect_splat_tile_opaque_triangle(
+    OpaqueTriangle::World::TensorTuple splats_tuple,
+    unsigned width,
+    unsigned height,
+    const torch::Tensor& viewmats,
+    const torch::Tensor& Ks,
+    const gsplat::CameraModelType& camera_model,
+    const CameraDistortionCoeffsTensor& dist_coeffs
+);

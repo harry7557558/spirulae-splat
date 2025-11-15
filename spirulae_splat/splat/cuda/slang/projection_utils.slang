@@ -362,6 +362,18 @@ bool undistort_point(
     return true;
 }
 
+[CudaDeviceExport]
+[Differentiable]
+bool unproject_point(
+    no_diff float2 uv, bool is_fisheye,
+    no_diff float[10] dist_coeffs,
+    out float3 raydir
+) {
+    if (!no_diff undistort_point(uv, dist_coeffs, 8, uv))
+        return false;
+    raydir = is_fisheye ? fisheye_unproj(uv) : float3(uv, 1.0);
+    return true;
+}
 
 [CudaDeviceExport]
 [Differentiable]

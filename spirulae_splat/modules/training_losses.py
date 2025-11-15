@@ -492,6 +492,8 @@ class SplatTrainingLosses(torch.nn.Module):
 
         # bilagrid total variation loss
         bilagrid_tv_loss_weight = 10.0
+        if self.config.use_bilateral_grid or self.config.use_bilateral_grid_for_geometry:
+            assert not self.config.use_bvh, "Bilateral grid is currently not supported with patched batching."
         if self.config.use_bilateral_grid:
             loss_dict["tv_loss"] = bilagrid_tv_loss_weight * total_variation_loss(self.bil_grids.grids)
         if self.config.use_bilateral_grid_for_geometry:

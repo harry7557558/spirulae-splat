@@ -159,15 +159,22 @@ spirulae_patched = MethodSpecification(
         pipeline=SpirulaePipelineConfig(
             datamanager=SpirulaeDataManagerConfig(
                 **_DEFAULT_DATAMANAGER_CONFIG,
-                patch_batch_size=256,
+                patch_batch_size=-1,
                 patch_size=64,
+                max_batch_per_epoch=512,
             ),
             model=SpirulaeModelConfig(
                 packed=True,
                 use_bvh=True,
                 use_camera_optimizer=False,
                 use_bilateral_grid=False,
+                use_bilateral_grid_for_geometry=False,
                 alpha_reg_weight=0.0,
+                mcmc_max_screen_size=0.15,
+                mcmc_max_screen_size_clip_hardness=1.5,
+                # mcmc_max_world_size=1.0,
+                background_color="black",
+                train_background_color=False,
             ),
         ),
         optimizers={
@@ -223,3 +230,57 @@ spirulae_triangle = MethodSpecification(
     description="Spirulae opaque triangle splatting.",
 )
 
+spirulae_triangle_patched = MethodSpecification(
+    config=TrainerConfig(
+        method_name="spirulae-triangle-patched",
+        steps_per_eval_batch=0,
+        steps_per_save=2000,
+        max_num_iterations=30000,
+        mixed_precision=False,
+        pipeline=SpirulaePipelineConfig(
+            datamanager=SpirulaeDataManagerConfig(
+                **_DEFAULT_DATAMANAGER_CONFIG,
+                patch_batch_size=-1,
+                patch_size=64,
+                max_batch_per_epoch=512,
+            ),
+            model=SpirulaeModelConfig(
+                primitive="opaque_triangle",
+                kernel_radius=0.5,
+                compute_depth_normal=True,
+                sh_degree=0,
+                bilagrid_shape=(16, 16, 8),
+                stop_refine_at=30000,
+                background_color="black",
+                train_background_color=False,
+                # alpha_reg_weight=0.0,
+                mcmc_scale_reg=0.02,
+                # erank_reg=1.0,
+                # supersampling=2,
+                mcmc_min_opacity=0.005,
+                mcmc_noise_lr=5e5,  # or 0.0
+                supervision_warmup=0,
+                depth_supervision_weight=0.25,
+                normal_supervision_weight=0.04,
+                rgb_distortion_reg_weight=0.01,
+                ssim_lambda=0.4,
+
+                packed=True,
+                use_bvh=True,
+                use_camera_optimizer=False,
+                use_bilateral_grid=False,
+                use_bilateral_grid_for_geometry=False,
+                alpha_reg_weight=0.0,
+                mcmc_max_screen_size=0.15,
+                mcmc_max_screen_size_clip_hardness=1.5,
+            ),
+            
+        ),
+        optimizers={
+            **_TRIANGLE_OPTIMIZERS
+        },
+        viewer=ViewerConfig(),
+        vis="viewer",
+    ),
+    description="Spirulae opaque triangle splatting with patched batching.",
+)

@@ -32,6 +32,22 @@ float hash41(float4 seed) {
     out float3 rgbs[3], \
     out float3 normal
 
+[CudaDeviceExport]
+[ForceInline]
+[Differentiable]
+void map_opaque_triangle(
+    float3 mean, float4 quat, float3 scale,
+    out float3 vert0, out float3 vert1, out float3 vert2
+) {
+    float sx = exp(scale.x),
+          sy = exp(scale.y),
+          sz = scale.z - 0.5 * (scale.x + scale.y);
+    float3x3 M = normalized_quat_to_rotmat(quat);
+    vert0 = mul(M, float3(sx, 0, 0)) + mean;
+    vert1 = mul(M, float3(sx * (-0.5 + sz), sy, 0)) + mean;
+    vert2 = mul(M, float3(sx * (-0.5 - sz), -sy, 0)) + mean;
+}
+
 [ForceInline]
 [Differentiable]
 void projection_opaque_triangle_eval3d<let camera_model: CameraModelType, let assume_valid: bool>(
@@ -48,13 +64,8 @@ void projection_opaque_triangle_eval3d<let camera_model: CameraModelType, let as
     }
 
     // transform mean+scale+quat to vertices
-    float sx = exp(scale.x),
-        sy = exp(scale.y),
-        sz = scale.z - 0.5*(scale.x+scale.y);
-    float3x3 M = normalized_quat_to_rotmat(quat);
-    float3 vert0 = mul(M, float3(sx, 0, 0)) + mean;
-    float3 vert1 = mul(M, float3(sx*(-0.5+sz), sy, 0)) + mean;
-    float3 vert2 = mul(M, float3(sx*(-0.5-sz), -sy, 0)) + mean;
+    float3 vert0, vert1, vert2;
+    map_opaque_triangle(mean, quat, scale, vert0, vert1, vert2);
 
     // transform center to camera space
     float3 vert0_c, vert1_c, vert2_c;
@@ -245,6 +256,7 @@ void projection_opaque_triangle_eval3d_fisheye_vjp(
     v_t = dp_t.d;
 }
 
+[CudaDeviceExport]
 [Differentiable]
 [ForceInline]
 bool ray_triangle_intersection_uvt(

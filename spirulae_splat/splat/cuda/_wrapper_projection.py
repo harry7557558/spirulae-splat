@@ -149,17 +149,17 @@ def fully_fused_projection(
         additional_args = []
         if not eval3d:
             if primitive in ["3dgs", "mip"]:
-                _RasterizeToPixels = _FullyFusedProjection3DGS
+                _FullyFusedProjection = _FullyFusedProjection3DGS
                 additional_args = [primitive == "mip"]
             elif primitive in ["opaque_triangle"]:
-                _RasterizeToPixels = _FullyFusedProjectionOpaqueTriangle
+                _FullyFusedProjection = _FullyFusedProjectionOpaqueTriangle
         else:
             if primitive in ["3dgs", "mip"]:
-                _RasterizeToPixels = _FullyFusedProjection3DGSEval3D
+                _FullyFusedProjection = _FullyFusedProjection3DGSEval3D
             elif primitive in ["opaque_triangle"]:
-                _RasterizeToPixels = _FullyFusedProjectionOpaqueTriangleEval3D
+                _FullyFusedProjection = _FullyFusedProjectionOpaqueTriangleEval3D
         in_splats = [x.contiguous() for x in splats]
-        proj_return = _RasterizeToPixels.apply(
+        proj_return = _FullyFusedProjection.apply(
             *in_splats,
             viewmats.contiguous(),
             Ks.contiguous(),
@@ -453,69 +453,75 @@ class _FullyFusedProjectionOpaqueTriangleEval3D(torch.autograd.Function):
 
 
 def fully_fused_projection_hetero(
-    means: Tensor,  # [..., N, 3]
-    quats: Tensor,  # [..., N, 4]
-    scales: Tensor,  # [..., N, 3]
+    primitive: Literal["3dgs", "mip", "opaque_triangle"],
+    splats: tuple[Tensor],  # means, quats, scales, opacities
     viewmats: Tensor,  # [..., C, 4, 4]
     Ks: Tensor,  # [..., C, 3, 3]
-    width: int,
-    height: int,
+    image_width: int,
+    image_height: int,
+    tile_width: int,
+    tile_height: int,
     intersection_count_map: Tensor,  # [C+1]
     intersection_splat_id: Tensor,  # [nnz]
-    eps2d: float = 0.3,
     near_plane: float = 0.01,
     far_plane: float = 1e10,
-    radius_clip: float = 0.0,
     sparse_grad: bool = False,
-    calc_compensations: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
-    opacities: Optional[Tensor] = None,  # [..., N] or None
+    dist_coeffs: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-    batch_dims = means.shape[:-2]
-    N = means.shape[-2]
-    C = viewmats.shape[-3]
-    assert means.shape == batch_dims + (N, 3), means.shape
+    # if primitive in ["3dgs", "mip"]:
+    if primitive in ["3dgs", "mip", "opaque_triangle"]:
+        if primitive in ["3dgs", "mip"]:
+            means, quats, scales, opacities, features_dc, features_sh = splats
+        else:
+            means, quats, scales, opacities, features_dc, features_sh, features_ch = splats
+        batch_dims = means.shape[:-2]
+        batch_dims = means.shape[:-2]
+        N = means.shape[-2]
+        C = viewmats.shape[-3]
+        assert means.shape == batch_dims + (N, 3), means.shape
+        assert quats.shape == batch_dims + (N, 4), quats.shape
+        assert scales.shape == batch_dims + (N, 3), scales.shape
+        if primitive in ["3dgs", "mip"]:
+            assert opacities.shape == batch_dims + (N,), opacities.shape
+        else:
+            assert opacities.shape == batch_dims + (N, 2), opacities.shape
+            assert features_ch.shape == batch_dims + (N, 2, 3), features_ch.shape
+        assert features_dc.shape == batch_dims + (N, 3), features_dc.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    means = means.contiguous()
-    assert quats.shape == batch_dims + (N, 4), quats.shape
-    assert scales.shape == batch_dims + (N, 3), scales.shape
-    quats = quats.contiguous()
-    scales = scales.contiguous()
     if sparse_grad:
         assert batch_dims == (), "sparse_grad does not support batch dimensions"
-    if opacities is not None:
-        assert opacities.shape == batch_dims + (N,), opacities.shape
-        opacities = opacities.contiguous()
 
-    assert (
-        camera_model != "ftheta"
-    ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
-
-    viewmats = viewmats.contiguous()
-    Ks = Ks.contiguous()
-    return _FullyFusedProjectionHetero.apply(
-        means,
-        quats,
-        scales,
-        opacities,
-        viewmats,
-        Ks,
-        width,
-        height,
-        eps2d,
-        near_plane,
-        far_plane,
-        radius_clip,
-        sparse_grad,
-        calc_compensations,
-        camera_model,
-        intersection_count_map,
-        intersection_splat_id,
+    additional_args = []
+    if primitive in ["3dgs", "mip"]:
+        _FullyFusedProjection = _FullyFusedProjection3DGSHetero
+    elif primitive in ["opaque_triangle"]:
+        _FullyFusedProjection = _FullyFusedProjectionOpaqueTriangleHetero
+    in_splats = [x.contiguous() for x in splats]
+    proj_return = _FullyFusedProjection.apply(
+        *in_splats,
+        viewmats.contiguous(), Ks.contiguous(),
+        image_width, image_height, tile_width, tile_height,
+        near_plane, far_plane,
+        camera_model, dist_coeffs,
+        intersection_count_map, intersection_splat_id,
+        *additional_args
+    )
+    splat_ids = proj_return[1]
+    depths = proj_return[3]
+    # out_splats = (*in_splats, *proj_return[3:])
+    out_splats = (*[x[splat_ids] for x in in_splats], *proj_return[3:])
+    return (
+        proj_return[0],  # camera_ids
+        splat_ids,  # splat_ids
+        proj_return[2],  # aabb
+        depths,  # depth
+        out_splats
     )
 
 
-class _FullyFusedProjectionHetero(torch.autograd.Function):
+class _FullyFusedProjection3DGSHetero(torch.autograd.Function):
     """Projects Gaussians to 2D. Return packed tensors."""
 
     @staticmethod
@@ -525,20 +531,21 @@ class _FullyFusedProjectionHetero(torch.autograd.Function):
         quats: Tensor,  # [..., N, 4]
         scales: Tensor,  # [..., N, 3]
         opacities: Tensor,  # [..., N]
+        features_dc: Tensor,  # [..., N, 3]
+        features_sh: Tensor,  # [..., N, x, 3]
         viewmats: Tensor,  # [..., C, 4, 4]
         Ks: Tensor,  # [..., C, 3, 3]
-        width: int,
-        height: int,
-        eps2d: float,
+        image_width: int,
+        image_height: int,
+        tile_width: int,
+        tile_height: int,
         near_plane: float,
         far_plane: float,
-        radius_clip: float,
-        sparse_grad: bool,
-        calc_compensations: bool,
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
+        dist_coeffs: Optional[Tensor],
         intersection_count_map: Tensor,  # [C+1]
         intersection_splat_id: Tensor,  # [nnz]
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    ):
         assert (
             camera_model != "ftheta"
         ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
@@ -547,166 +554,185 @@ class _FullyFusedProjectionHetero(torch.autograd.Function):
             f"CameraModelType.{camera_model.upper()}"
         )
 
-        nnz = len(intersection_splat_id)
-
         (
-            camera_ids,
-            gaussian_ids,
-            radii,
-            means2d,
-            depths,
-            conics,
-            compensations,
+            camera_ids, gaussian_ids, aabb,
+            (depths, proj_scales, proj_opacities, proj_rgbs)
         ) = _make_lazy_cuda_func("projection_ewa_3dgs_hetero_forward")(
-            means,
-            quats,
-            scales,
-            opacities,
-            viewmats,
-            Ks,
-            width,
-            height,
-            eps2d,
-            near_plane,
-            far_plane,
-            radius_clip,
-            calc_compensations,
-            camera_model_type,
-            intersection_count_map,
-            intersection_splat_id
+            (means, quats, scales, opacities, features_dc, features_sh),
+            viewmats, Ks, image_width, image_height, tile_width, tile_height,
+            near_plane, far_plane, camera_model_type, dist_coeffs,
+            intersection_count_map, intersection_splat_id
         )
-        if not calc_compensations:
-            compensations = None
         ctx.save_for_backward(
-            camera_ids,
-            gaussian_ids,
-            means,
-            quats,
-            scales,
-            viewmats,
-            Ks,
-            conics,
-            compensations,
+            means, quats, scales, opacities, features_dc, features_sh,
+            viewmats, Ks, dist_coeffs, aabb,
+            camera_ids, gaussian_ids
         )
-        ctx.width = width
-        ctx.height = height
-        ctx.eps2d = eps2d
-        ctx.sparse_grad = sparse_grad
-        ctx.camera_model_type = camera_model_type
+        ctx.camera = (image_width, image_height, tile_width, tile_height, camera_model_type)
 
-        return (
-            camera_ids,
-            gaussian_ids,
-            radii,
-            means2d,
-            depths,
-            conics,
-            compensations,
-        )
+        return camera_ids, gaussian_ids, aabb, depths, proj_scales, proj_opacities, proj_rgbs
 
     @staticmethod
     def backward(
         ctx,
         v_camera_ids,
         v_gaussian_ids,
-        v_radii,
-        v_means2d,
+        v_aabb,
         v_depths,
-        v_conics,
-        v_compensations,
+        v_proj_scales,
+        v_proj_opacities,
+        v_proj_rgbs,
     ):
         (
-            camera_ids,
-            gaussian_ids,
-            means,
-            quats,
-            scales,
-            viewmats,
-            Ks,
-            conics,
-            compensations,
+            means, quats, scales, opacities, features_dc, features_sh,
+            viewmats, Ks, dist_coeffs, aabb,
+            camera_ids, gaussian_ids
         ) = ctx.saved_tensors
-        width = ctx.width
-        height = ctx.height
-        eps2d = ctx.eps2d
-        sparse_grad = ctx.sparse_grad
-        camera_model_type = ctx.camera_model_type
+        (image_width, image_height, tile_width, tile_height, camera_model_type) = ctx.camera
+        sparse_grad = False
 
-        if v_compensations is not None:
-            v_compensations = v_compensations.contiguous()
-        v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+        (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh), v_viewmats = _make_lazy_cuda_func(
             "projection_ewa_3dgs_hetero_backward"
         )(
-            means,
-            quats,
-            scales,
-            viewmats,
-            Ks,
-            width,
-            height,
-            eps2d,
-            camera_model_type,
-            camera_ids,
-            gaussian_ids,
-            conics,
-            compensations,
-            v_means2d.contiguous(),
-            v_depths.contiguous(),
-            v_conics.contiguous(),
-            v_compensations,
-            ctx.needs_input_grad[4],  # viewmats_requires_grad
-            sparse_grad,
+            (means, quats, scales, opacities, features_dc, features_sh),
+            viewmats, Ks, image_width, image_height, tile_width, tile_height, camera_model_type, dist_coeffs,
+            camera_ids, gaussian_ids, aabb,
+            tuple([x.contiguous() for x in (v_depths, v_proj_scales, v_proj_opacities, v_proj_rgbs)]),
+            ctx.needs_input_grad[6], sparse_grad,
         )
 
         if sparse_grad:
             batch_dims = means.shape[:-2]
             B = math.prod(batch_dims)
             N = means.shape[-2]
-        if not ctx.needs_input_grad[0]:
-            v_means = None
-        else:
-            if sparse_grad:
-                # TODO: gaussian_ids is duplicated so not ideal.
-                # An idea is to directly set the attribute (e.g., .sparse_grad) of
-                # the tensor but this requires the tensor to be leaf node only. And
-                # a customized optimizer would be needed in this case.
-                v_means = torch.sparse_coo_tensor(
-                    indices=gaussian_ids[None],
-                    values=v_means,  # [nnz, 3]
-                    size=means.shape,
-                    is_coalesced=len(viewmats) == 1,
-                )
-        if not ctx.needs_input_grad[1]:
-            v_quats = None
-        else:
-            if sparse_grad:
-                v_quats = torch.sparse_coo_tensor(
-                    indices=gaussian_ids[None],
-                    values=v_quats,  # [nnz, 4]
-                    size=quats.shape,
-                    is_coalesced=len(viewmats) == 1,
-                )
-        if not ctx.needs_input_grad[2]:
-            v_scales = None
-        else:
-            if sparse_grad:
-                v_scales = torch.sparse_coo_tensor(
-                    indices=gaussian_ids[None],
-                    values=v_scales,  # [nnz, 3]
-                    size=scales.shape,
-                    is_coalesced=len(viewmats) == 1,
-                )
-        if not ctx.needs_input_grad[4]:
-            v_viewmats = None
+        if ctx.needs_input_grad[0] and sparse_grad:
+            # TODO: gaussian_ids is duplicated so not ideal.
+            # An idea is to directly set the attribute (e.g., .sparse_grad) of
+            # the tensor but this requires the tensor to be leaf node only. And
+            # a customized optimizer would be needed in this case.
+            v_means = torch.sparse_coo_tensor(
+                indices=gaussian_ids[None],
+                values=v_means,  # [nnz, 3]
+                size=means.shape,
+                is_coalesced=len(viewmats) == 1,
+            )
 
         return (
-            v_means,
-            v_quats,
-            v_scales,
-            None,
+            v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh,
             v_viewmats,
-            *([None]*(len(ctx.needs_input_grad)-5))
+            *([None]*(len(ctx.needs_input_grad)-7))
         )
 
 
-intersect_splat_tile = _make_lazy_cuda_func("intersect_splat_tile")
+class _FullyFusedProjectionOpaqueTriangleHetero(torch.autograd.Function):
+    """Projects Gaussians to 2D."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        means: Tensor,  # [..., N, 3]
+        quats: Tensor,  # [..., N, 4]
+        scales: Tensor,  # [..., N, 3]
+        hardness: Tensor,  # [..., N]
+        features_dc: Tensor,  # [..., N, 3]
+        features_sh: Tensor,  # [..., N, x, 3]
+        features_ch: Tensor,  # [..., N, 2, 3]
+        viewmats: Tensor,  # [..., C, 4, 4]
+        Ks: Tensor,  # [..., C, 3, 3]
+        image_width: int,
+        image_height: int,
+        tile_width: int,
+        tile_height: int,
+        near_plane: float,
+        far_plane: float,
+        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
+        dist_coeffs: Optional[Tensor],
+        intersection_count_map: Tensor,  # [C+1]
+        intersection_splat_id: Tensor,  # [nnz]
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        assert (
+            camera_model != "ftheta"
+        ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
+
+        camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
+            f"CameraModelType.{camera_model.upper()}"
+        )
+
+        (
+            camera_ids, gaussian_ids, aabb,
+            (depths, verts, rgbs, normals)
+        ) = _make_lazy_cuda_func(
+            "projection_opaque_triangle_hetero_forward"
+        )(
+            (means, quats, scales, hardness, features_dc, features_sh, features_ch),
+            viewmats, Ks, image_width, image_height, tile_width, tile_height,
+            near_plane, far_plane, camera_model_type, dist_coeffs,
+            intersection_count_map, intersection_splat_id
+        )
+        ctx.save_for_backward(
+            means, quats, scales, hardness, features_dc, features_sh, features_ch,
+            viewmats, Ks, dist_coeffs, aabb, 
+            camera_ids, gaussian_ids
+        )
+        ctx.camera = (image_width, image_height, tile_width, tile_height, camera_model_type)
+
+        return camera_ids, gaussian_ids, aabb, depths, verts, rgbs, normals
+
+    @staticmethod
+    def backward(ctx, v_camera_ids, v_gaussian_ids, v_aabb, v_depths, v_verts, v_rgbs, v_normals):
+        (
+            means, quats, scales, hardness, features_dc, features_sh, features_ch,
+            viewmats, Ks, dist_coeffs, aabb, 
+            camera_ids, gaussian_ids
+        ) = ctx.saved_tensors
+        (image_width, image_height, tile_width, tile_height, camera_model_type) = ctx.camera
+        sparse_grad = False
+
+        (v_means, v_quats, v_scales, v_hardness, v_features_dc, v_features_sh, v_features_ch), v_viewmats = _make_lazy_cuda_func(
+            "projection_opaque_triangle_hetero_backward"
+        )(
+            (means, quats, scales, hardness, features_dc, features_sh, features_ch),
+            viewmats, Ks, image_width, image_height, tile_width, tile_height, camera_model_type, dist_coeffs,
+            camera_ids, gaussian_ids, aabb,
+            tuple([x.contiguous() for x in (v_depths, v_verts, v_rgbs, v_normals)]),
+            ctx.needs_input_grad[7], sparse_grad,
+        )
+        if not ctx.needs_input_grad[7]:
+            v_viewmats = None
+        if sparse_grad:
+            raise NotImplementedError()
+        return (
+            v_means, v_quats, v_scales, v_hardness, v_features_dc, v_features_sh, v_features_ch, v_viewmats,
+            *([None]*(len(ctx.needs_input_grad)-8))
+        )
+
+
+@torch.no_grad()
+def intersect_splat_tile(
+    primitive: Literal["3dgs", "mip", "opaque_triangle"],
+    splats: Tuple,
+    width: int,
+    height: int,
+    viewmats: Tensor,
+    Ks: Tensor,
+    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    dist_coeffs: Optional[Tensor] = None
+) -> Tuple[Tensor, Tensor]:
+    camera_model = gsplat.cuda._wrapper._make_lazy_cuda_obj(
+        f"CameraModelType.{camera_model.upper()}"
+    )
+    return _make_lazy_cuda_func(
+        "intersect_splat_tile_" + {
+            '3dgs': '3dgs',
+            'mip': '3dgs',
+            'opaque_triangle': 'opaque_triangle',
+        }[primitive]
+    )(
+        splats,
+        width,
+        height,
+        viewmats.contiguous(),
+        Ks.contiguous(),
+        camera_model,
+        dist_coeffs.contiguous() if dist_coeffs is not None else None
+    )

@@ -88,7 +88,6 @@ def rasterize_to_pixels(
             _RasterizeToPixels = _RasterizeToPixelsOpaqueTriangle
         kwargs = []
     else:
-        assert not packed, "packed is not supported for eval3d"
         for key in ['viewmats', 'Ks']:
             assert key in kwargs, "Camera extrinsics and intrinsics must be provided for Eval3D"
         kwargs = [kwargs.get(key, None) for key in [

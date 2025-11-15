@@ -59,7 +59,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("undistort_image", &undistort_image_tensor);
 
     // SplatTileIntersector.cuh
-    m.def("intersect_splat_tile", &SplatTileIntersector::intersect_splat_tile);
+    m.def("intersect_splat_tile_3dgs", &intersect_splat_tile_3dgs);
+    m.def("intersect_splat_tile_opaque_triangle", &intersect_splat_tile_opaque_triangle);
     
     // Projection.cuh
     m.def("projection_ewa_3dgs_forward", &projection_ewa_3dgs_forward_tensor);
@@ -76,6 +77,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // ProjectionEWA3DGSHetero.cuh
     m.def("projection_ewa_3dgs_hetero_forward", &projection_ewa_3dgs_hetero_forward_tensor);
     m.def("projection_ewa_3dgs_hetero_backward", &projection_ewa_3dgs_hetero_backward_tensor);
+    m.def("projection_opaque_triangle_hetero_forward", &projection_opaque_triangle_hetero_forward_tensor);
+    m.def("projection_opaque_triangle_hetero_backward", &projection_opaque_triangle_hetero_backward_tensor);
 
     // RasterizationFwd.cuh and RasterizationBwd.cuh
     m.def("rasterization_3dgs_forward", &rasterize_to_pixels_3dgs_fwd);

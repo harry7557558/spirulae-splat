@@ -65,6 +65,7 @@ class OpaqueStrategy(Strategy):
     gradual_prune_opacity: float = 0.45
     relocate_scale2d: float = float('inf')
     max_scale2d: float = float('inf')
+    max_scale2d_clip_hardness: float = 1.1
     max_scale3d: float = float('inf')
     verbose: bool = False
     key_for_gradient: Literal["means2d", "gradient_2dgs"] = "means2d"
@@ -124,12 +125,16 @@ class OpaqueStrategy(Strategy):
         if packed:
             # grads is [nnz, 2]
             gs_ids = info["gaussian_ids"]  # [nnz]
-            radii = info["radii"]  # [nnz]
+            radii = info["radii"]  # [nnz] or [nnz, 2]
+            if radii.shape[-1] == 2:
+                radii = torch.amax(radii, dim=-1)
+            max_blending = info["max_blending"]
         else:
             # grads is [C, N, 2]
             sel = info["radii"] > 0.0  # [C, N]
             gs_ids = torch.where(sel)[1]  # [nnz]
             radii = info["radii"][sel]  # [nnz]
+            max_blending = info["max_blending"][gs_ids]
 
         # Should be ideally using scatter max
         normalized_radii = radii / float(max(info["width"], info["height"]))
@@ -137,17 +142,16 @@ class OpaqueStrategy(Strategy):
             state["radii"][gs_ids],
             normalized_radii
         )
-        state["max_blending"] = torch.maximum(
-            state["max_blending"],
-            info["max_blending"]
+        state["max_blending"][gs_ids] = torch.maximum(
+            state["max_blending"][gs_ids],
+            max_blending
         )
 
         # large splats in screen space
         # clip scale while increase opacity to encourage being relocated to
         if np.isfinite(self.max_scale2d):
-            assert not packed
             # TODO: optionally, actually do anisotropic scale in 3d
-            oversize_factor = torch.clip(normalized_radii / self.max_scale2d, min=1.0, max=1.1)
+            oversize_factor = torch.clip(normalized_radii / self.max_scale2d, min=1.0, max=self.max_scale2d_clip_hardness)
             oversize_factor = torch.log(oversize_factor).unsqueeze(-1)
             scales, opacities = params['scales'].data, params['opacities'].data
             scales[gs_ids] -= oversize_factor
@@ -214,13 +218,14 @@ class OpaqueStrategy(Strategy):
         step: int,
         info: Dict[str, Any],
         lr: float,
+        packed: bool = False
     ):
         """Callback function to be executed after the `loss.backward()` call.
 
         Args:
             lr (float): Learning rate for "means" attribute of the GS.
         """
-        self._update_state(params, state, info)
+        self._update_state(params, state, info, packed)
 
         if step == self.warmup_steps:
             state["max_blending"] = torch.zeros_like(state["max_blending"])

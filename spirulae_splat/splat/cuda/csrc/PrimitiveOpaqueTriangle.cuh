@@ -241,6 +241,21 @@ struct OpaqueTriangle::World {
         warpSum(ch_coeffs[1], partition);
     }
     
+    __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
+        buffer.means[idx] = mean;
+        buffer.quats[idx] = quat;
+        buffer.scales[idx] = scale;
+        // buffer.verts[3*idx+0] = vert0;
+        // buffer.verts[3*idx+1] = vert1;
+        // buffer.verts[3*idx+2] = vert2;
+        buffer.hardness[idx] = hardness;
+        buffer.features_dc[idx] = sh_coeffs[0];
+        for (int i = 0; i < buffer.num_sh; i++)
+            buffer.features_sh[idx*buffer.num_sh + i] = sh_coeffs[i+1];
+        buffer.features_ch[2*idx+0] = ch_coeffs[0];
+        buffer.features_ch[2*idx+1] = ch_coeffs[1];
+    }
+
     __device__ void atomicAddGradientToBuffer(Buffer &buffer, long idx) {
         atomicAddFVec(buffer.means + idx, mean);
         atomicAddFVec(buffer.quats + idx, quat);
@@ -436,11 +451,11 @@ struct OpaqueTriangle::Screen {
 
         static Tensor empty(long C, long N, c10::TensorOptions opt) {
             return std::make_tuple(
-                at::empty({C, N, 3, 2}, opt),
-                at::empty({C, N, 3}, opt),
-                at::empty({C, N, 2}, opt),
-                at::empty({C, N, 3, 3}, opt),
-                at::empty({C, N, 3}, opt)
+                C == -1 ? at::empty({N, 3, 2}, opt) : at::empty({C, N, 3, 2}, opt),
+                C == -1 ? at::empty({N, 3}, opt) : at::empty({C, N, 3}, opt),
+                C == -1 ? at::empty({N, 2}, opt) : at::empty({C, N, 2}, opt),
+                C == -1 ? at::empty({N, 3, 3}, opt) : at::empty({C, N, 3, 3}, opt),
+                C == -1 ? at::empty({N, 3}, opt) : at::empty({C, N, 3}, opt)
             );
         }
 
@@ -663,10 +678,10 @@ struct OpaqueTriangle::WorldEval3D {
         static Tensor empty(long C, long N, c10::TensorOptions opt) {
             return std::make_tuple(
                 at::empty({N, 2}, opt),
-                at::empty({C, N}, opt),
-                at::empty({C, N, 3, 3}, opt),
-                at::empty({C, N, 3, 3}, opt),
-                at::empty({C, N, 3}, opt)
+                C == -1 ? at::empty({N}, opt) : at::empty({C, N}, opt),
+                C == -1 ? at::empty({N, 3, 3}, opt) : at::empty({C, N, 3, 3}, opt),
+                C == -1 ? at::empty({N, 3, 3}, opt) : at::empty({C, N, 3, 3}, opt),
+                C == -1 ? at::empty({N, 3}, opt) : at::empty({C, N, 3}, opt)
             );
         }
 

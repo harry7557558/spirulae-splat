@@ -62,6 +62,7 @@ def depth_to_normal(
     Ks: Union[Tensor, Tuple[float, float, float, float]],
     dist_coeffs: Optional[Tensor] = None,  # [..., C, 10]
     is_ray_depth: bool = True,
+    **kwargs
 ) -> Tensor:
     if isinstance(Ks, tuple):
         fx, fy, cx, cy = Ks

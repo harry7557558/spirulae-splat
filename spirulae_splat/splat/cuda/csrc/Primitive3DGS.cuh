@@ -219,6 +219,16 @@ struct Vanilla3DGS::World {
             warpSum(sh_coeffs[i], partition);
     }
     
+    __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
+        buffer.means[idx] = mean;
+        buffer.quats[idx] = quat;
+        buffer.scales[idx] = scale;
+        buffer.opacities[idx] = opacity;
+        buffer.features_dc[idx] = sh_coeffs[0];
+        for (int i = 0; i < buffer.num_sh; i++)
+            buffer.features_sh[idx*buffer.num_sh + i] = sh_coeffs[i+1];
+    }
+
     __device__ void atomicAddGradientToBuffer(Buffer &buffer, long idx) {
         atomicAddFVec(buffer.means + idx, mean);
         atomicAddFVec(buffer.quats + idx, quat);
@@ -612,10 +622,10 @@ struct Vanilla3DGS::WorldEval3D {
             return std::make_tuple(
                 at::empty({N, 3}, opt),
                 at::empty({N, 4}, opt),
-                at::empty({C, N}, opt),
-                at::empty({C, N, 3}, opt),
-                at::empty({C, N}, opt),
-                at::empty({C, N, 3}, opt)
+                C == -1 ? at::empty({N}, opt) : at::empty({C, N}, opt),
+                C == -1 ? at::empty({N, 3}, opt) : at::empty({C, N, 3}, opt),
+                C == -1 ? at::empty({N}, opt) : at::empty({C, N}, opt),
+                C == -1 ? at::empty({N, 3}, opt) : at::empty({C, N, 3}, opt)
             );
         }
 

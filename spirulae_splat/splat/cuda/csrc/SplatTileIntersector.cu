@@ -8,99 +8,96 @@
 
 #include <c10/cuda/CUDAGuard.h>
 
+#include <gsplat/Utils.cuh>
+
 #include "helpers.cuh"
 
 // #define DEBUG
 
 
-struct Splat {
-    float3 mean;
-    glm::mat3 cov;
+__device__ void getAABB(
+    const Vanilla3DGS::World::Buffer& splatBuffer, long idx,
+    float3 &aabb_min, float3 &aabb_max
+) {
+    float3 mean = splatBuffer.means[idx];
+    float3 scales = splatBuffer.scales[idx];
+    float opac = splatBuffer.opacities[idx];
+    float4 quat = splatBuffer.quats[idx];
 
-    __device__ __forceinline__ void getAABB(float3 &aabb_min, float3 &aabb_max) const {
-        float3 extend = make_float3(sqrtf(cov[0][0]), sqrtf(cov[1][1]), sqrtf(cov[2][2]));
-        if (isfinite(dot(mean, extend))) {
-            aabb_min = mean - extend;
-            aabb_max = mean + extend;
-        } else {
-            aabb_min = aabb_max = make_float3(0.0f);
-        }
-    }
-};
-
-__device__ __forceinline__ Splat loadSplat(unsigned splatIdx, const SplatBuffers& buffers) {
-
-    glm::vec3 mean = buffers.means[splatIdx];
-    glm::vec3 scales = buffers.scales[splatIdx];
-    float opac = buffers.opacs[splatIdx];
-    float4 quat = buffers.quats[splatIdx];
-
-    // opac = 1.0f / (1.0f+__expf(-opac));
-    // scales = { __expf(scales.x), __expf(scales.y), __expf(scales.z) };
+    opac = 1.0f / (1.0f+__expf(-opac));
+    scales = { __expf(scales.x), __expf(scales.y), __expf(scales.z) };
     quat = normalize(quat);
+
+    float3x3 covar;
+    quat_scale_to_covar(quat, scales, &covar);
 
     float extend = fmin(3.33f, sqrt(2.0f * __logf(fmaxf(opac / ALPHA_THRESHOLD, 1.0f))));
 
-    glm::mat3 S = {
-        scales.x, 0.0f, 0.0f,
-        0.0f, scales.y, 0.0f,
-        0.0f, 0.0f, scales.z
+    float3 bound = extend * make_float3(
+        sqrtf(covar[0].x), sqrtf(covar[1].y), sqrtf(covar[2].z)
+    );
+    aabb_min = mean - bound;
+    aabb_max = mean + bound;
+}
+
+__device__ void getAABB(
+    const OpaqueTriangle::World::Buffer& splatBuffer, long idx,
+    float3 &aabb_min, float3 &aabb_max
+) {
+    float3 mean = splatBuffer.means[idx];
+    float3 scales = splatBuffer.scales[idx];
+    float4 quat = splatBuffer.quats[idx];
+
+    float3 vert0, vert1, vert2;
+    map_opaque_triangle(mean, quat, scales, &vert0, &vert1, &vert2);
+
+    aabb_min = {
+        fmin(fmin(vert0.x, vert1.x), vert2.x),
+        fmin(fmin(vert0.y, vert1.y), vert2.y),
+        fmin(fmin(vert0.z, vert1.z), vert2.z),
     };
-    glm::mat3 R = quat_to_rotmat(quat);
-    glm::mat3 M = extend * R * S;
-    return {
-        {mean.x, mean.y, mean.z},
-        M * glm::transpose(M)
+    aabb_max = {
+        fmax(fmax(vert0.x, vert1.x), vert2.x),
+        fmax(fmax(vert0.y, vert1.y), vert2.y),
+        fmax(fmax(vert0.z, vert1.z), vert2.z),
     };
 }
 
 
-struct Ray {
-    float3 ro;
-    float3 rd;
-
-    __device__ __forceinline__ bool isOverlap(float3 aabb_min, float3 aabb_max) const {
-        float3 aabb_center = 0.5f*(aabb_min+aabb_max);
-        float3 aabb_size = 0.5f*(aabb_max-aabb_min);
-        float3 m = 1.0f / rd;
-        float3 n = m * (ro - aabb_center);
-        float3 k = fabs(m) * aabb_size;
-        float3 t1 = -n - k;
-        float3 t2 = -n + k;
-        float tn = fmax(fmax(t1.x, t1.y), t1.z);
-        float tf = fmin(fmin(t2.x, t2.y), t2.z);
-        return (tn < tf && tf > 0.0f);
-    }
-
-    // return negative if no overlap, strictly positive for sorting ID
-    __device__ __forceinline__ float isOverlap(const Splat &splat) const {
-        float3 aabb_min, aabb_max;
-        splat.getAABB(aabb_min, aabb_max);
-        if (!isOverlap(aabb_min, aabb_max))
-            return -1.0f;
-        return dot(splat.mean-ro, rd);  // negative if center is behind
-    }
-
-};
-
+template<gsplat::CameraModelType camera_model>
 struct Tile {
-    float x0, x1, y0, y1;
-    glm::mat4x3 view;
     glm::vec3 ro, rd;
     glm::vec3 n0, n1, n2, n3;
 
-    __device__ __forceinline__ void precompute() {
+    __device__ bool init(
+        CameraDistortionCoeffs dist_coeffs,
+        float x0, float x1, float y0, float y1,
+        glm::mat4x3 view
+    ) {
+        bool is_fisheye = (camera_model == gsplat::CameraModelType::FISHEYE);
+
         glm::mat3 R = glm::transpose(glm::mat3(view));
         ro = -R * glm::vec3(view[3]);
         rd = R[2];
-        glm::vec3 e0 = R * glm::vec3(x0, y0, 1.0f);
-        glm::vec3 e1 = R * glm::vec3(x0, y1, 1.0f);
-        glm::vec3 e2 = R * glm::vec3(x1, y1, 1.0f);
-        glm::vec3 e3 = R * glm::vec3(x1, y0, 1.0f);
+
+        // TODO: better way to handle this in nonlinear and partially invalid case
+        // May not matter in training with small tiles, but obvious artifact when rendering >180deg fisheye
+        float3 e0_, e1_, e2_, e3_;
+        int num_valid = 0;
+        num_valid += (int)unproject_point({x0, y0}, is_fisheye, &dist_coeffs, &e0_);
+        num_valid += (int)unproject_point({x0, y1}, is_fisheye, &dist_coeffs, &e1_);
+        num_valid += (int)unproject_point({x1, y1}, is_fisheye, &dist_coeffs, &e2_);
+        num_valid += (int)unproject_point({x1, y0}, is_fisheye, &dist_coeffs, &e3_);
+        glm::vec3 e0 = R * glm::vec3(e0_.x, e0_.y, e0_.z);
+        glm::vec3 e1 = R * glm::vec3(e1_.x, e1_.y, e1_.z);
+        glm::vec3 e2 = R * glm::vec3(e2_.x, e2_.y, e2_.z);
+        glm::vec3 e3 = R * glm::vec3(e3_.x, e3_.y, e3_.z);
+
         n0 = glm::cross(e0, e1);
         n1 = glm::cross(e1, e2);
         n2 = glm::cross(e2, e3);
         n3 = glm::cross(e3, e0);
+        return num_valid == 4;
     }
 
     __device__ __forceinline__ bool isOverlap(float3 aabb_min, float3 aabb_max) const {
@@ -118,24 +115,45 @@ struct Tile {
         float s2 = glm::dot(n2, roc) - glm::dot(r, glm::abs(n2));
         float s3 = glm::dot(n3, roc) - glm::dot(r, glm::abs(n3));
         float s = fmax(fmax(s0, s1), fmax(s2, s3));
+        if (camera_model != gsplat::CameraModelType::PINHOLE)
+            return s < 0.0f;
         float sz = -glm::dot(rd, roc) - glm::dot(r, glm::abs(rd));
         return fmax(s, sz) < 0.0f;
     }
 
     // return negative if no overlap, strictly positive for sorting ID
-    __device__ __forceinline__ float isOverlap(const Splat &splat) const {
-        // TODO
+    __device__ __forceinline__ float isOverlap(const Vanilla3DGS::World::Buffer& splatBuffer, long idx) const {
+        // TODO: primitive aware version with less false positives
         float3 aabb_min, aabb_max;
-        splat.getAABB(aabb_min, aabb_max);
+        getAABB(splatBuffer, idx, aabb_min, aabb_max);
         if (!isOverlap(aabb_min, aabb_max))
             return -1.0f;
-        glm::vec3 mean = {splat.mean.x, splat.mean.y, splat.mean.z};
-        return glm::dot(mean-ro, rd);  // negative if center is behind
+        float3 mean_ = 0.5f * (aabb_min + aabb_max);
+        glm::vec3 mean(mean_.x, mean_.y, mean_.z);
+        return camera_model != gsplat::CameraModelType::PINHOLE ?
+            glm::length(mean - ro) :
+            glm::dot(mean - ro, rd);  // negative if center is behind
+    }
+
+    __device__ __forceinline__ float isOverlap(const OpaqueTriangle::World::Buffer& splatBuffer, long idx) const {
+        // TODO: primitive aware version with less false positives
+        float3 aabb_min, aabb_max;
+        getAABB(splatBuffer, idx, aabb_min, aabb_max);
+        if (!isOverlap(aabb_min, aabb_max))
+            return -1.0f;
+        float3 mean_ = 0.5f * (aabb_min + aabb_max);
+        glm::vec3 mean(mean_.x, mean_.y, mean_.z);
+        return camera_model != gsplat::CameraModelType::PINHOLE ?
+            glm::length(mean - ro) :
+            glm::dot(mean - ro, rd);  // negative if center is behind
     }
 
 };
 
-__device__ __forceinline__ Tile loadTile(unsigned tileIdx, const TileBuffers buffers) {
+
+template<gsplat::CameraModelType camera_model>
+__device__ __forceinline__ Tile<camera_model>
+loadTile(unsigned tileIdx, const TileBuffers<camera_model> buffers, bool& isActive) {
     static_assert(sizeof(glm::mat4) == 16*sizeof(float));
     static_assert(sizeof(glm::mat3) == 9*sizeof(float));
 
@@ -148,28 +166,30 @@ __device__ __forceinline__ Tile loadTile(unsigned tileIdx, const TileBuffers buf
     float cy = intrins[1][2];
     // printf("%f %f %f %f\n", fx, fy, cx, cy);
 
-    Tile res = {
+    Tile<camera_model> res;
+    isActive &= res.init(
+        buffers.dist_coeffs.load(tileIdx),
         -cx / fx, (buffers.width - cx) / fx,
         -cy / fy, (buffers.height - cy) / fy,
         glm::mat4x3(glm::vec3(view[0]), glm::vec3(view[1]), glm::vec3(view[2]), glm::vec3(view[3]))
-    };
-    res.precompute();
+    );
     return res;
 }
 
 
+template<typename Primitive>
 __global__ void computeSplatAABB(
-    const SplatBuffers splats,
+    long numSplats,
+    const typename Primitive::World::Buffer& splatBuffer,
     float3* __restrict__ aabb,
     float3* __restrict__ aabb_reduced
 ) {
     unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (gid >= splats.size)
+    if (gid >= numSplats)
         return;
 
-    Splat g = loadSplat(gid, splats);
     float3 aabb_min, aabb_max;
-    g.getAABB(aabb_min, aabb_max);
+    getAABB(splatBuffer, gid, aabb_min, aabb_max);
     if (aabb != nullptr) {
         aabb[2*gid+0] = aabb_min;
         aabb[2*gid+1] = aabb_max;
@@ -217,19 +237,19 @@ __device__ __forceinline__ uint getSubcellOffset(uint3 subcell) {
     return (i.z * BRANCH_FACTOR + i.y) * BRANCH_FACTOR + i.x;
 }
 
-template<uint BRANCH_FACTOR>
+template<typename Primitive, uint BRANCH_FACTOR>
 __global__ void countCellOverlaps(
-    const SplatBuffers splats,
+    const long numSplats,
+    const typename Primitive::World::Buffer &splatBuffer,
     float3 root_min, float3 root_max,
     unsigned num_levels,
     unsigned* __restrict__ overlap_counts
 ) {
     unsigned tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid >= splats.size) return;
+    if (tid >= numSplats) return;
     
-    Splat g = loadSplat(tid, splats);
     float3 aabb_min, aabb_max;
-    g.getAABB(aabb_min, aabb_max);
+    getAABB(splatBuffer, tid, aabb_min, aabb_max);
     
     unsigned level = getLevel(aabb_min, aabb_max, root_min, root_max, num_levels, (float)BRANCH_FACTOR);
     
@@ -272,9 +292,10 @@ __device__ __forceinline__ uint64_t getCellKey(
     ) | (uint64_t)isSplat);
 }
 
-template<uint BRANCH_FACTOR>
+template<typename Primitive, uint BRANCH_FACTOR>
 __global__ void fillCellOverlaps(
-    const SplatBuffers splats,
+    const long numSplats,
+    const typename Primitive::World::Buffer splatBuffer,
     float3 root_min, float3 root_max,
     unsigned num_levels,
     unsigned* __restrict__ overlap_offsets,
@@ -285,11 +306,10 @@ __global__ void fillCellOverlaps(
     float3* __restrict__ subcell_aabb
 ) {
     unsigned tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid >= splats.size) return;
+    if (tid >= numSplats) return;
     
-    Splat g = loadSplat(tid, splats);
     float3 aabb_min, aabb_max;
-    g.getAABB(aabb_min, aabb_max);
+    getAABB(splatBuffer, tid, aabb_min, aabb_max);
     float3 aabb_center = (aabb_min + aabb_max) * 0.5f;
 
     unsigned level = getLevel(aabb_min, aabb_max, root_min, root_max, num_levels, (float)BRANCH_FACTOR);
@@ -354,7 +374,11 @@ __global__ void fillCellOverlaps(
             subcell_ids[offset+idx] = cellsRef[i];
             subcell_aabb[2*(offset+idx)+0] = aabb_min;
             subcell_aabb[2*(offset+idx)+1] = aabb_max;
-            if (i0 == 0 || cells[i0-1] != cells[i0]) {
+            if (i0 == 0 || (
+                cells[i0-1].x != cells[i0].x ||
+                cells[i0-1].y != cells[i0].y ||
+                cells[i0-1].z != cells[i0].z
+            )) {
                 cellsRef[i0] = offset+idx;
                 ++i0;
             }
@@ -574,149 +598,12 @@ __global__ void fillTreeSubcells_perOverlap(
 }
 
 
-template<uint MAX_NUM_LEVELS, uint BRANCH_FACTOR>
-__global__ void getTileSplatIntersections_octree(
-    const TileBuffers tiles, const SplatBuffers splats,
-    const float3 rootAABBMin, const float3 rootAABBMax,
-    const int32_t* __restrict__ children,
-    const float3* __restrict__ treeAABB,
-    const uint32_t* __restrict__ splatRanges,
-    const uint32_t* __restrict__ splatIndices,
-    uint32_t* __restrict__ intersect_counts,  // to be filled or exclusive scan
-    uint32_t* __restrict__ intersectionSplatID  // nullptr or to be filled
-) {
-    static_assert(BRANCH_FACTOR == 2);
-    constexpr uint kNumSubtree = BRANCH_FACTOR*BRANCH_FACTOR*BRANCH_FACTOR;  // 8
-    constexpr uint kThreadsPerTile = BRANCH_FACTOR*BRANCH_FACTOR*BRANCH_FACTOR;  // 8
-    constexpr uint kTilesPerWarp = 32 / kThreadsPerTile;  // 4
 
-    unsigned tid = blockIdx.x * blockDim.x + threadIdx.x;
-    unsigned globalTileIdx = tid / kThreadsPerTile;
-
-    unsigned warpTileIdx = threadIdx.x / kThreadsPerTile;
-    unsigned tileThreadIdx = threadIdx.x % kThreadsPerTile;
-    bool isActive = (globalTileIdx < tiles.size);
-
-    bool isCountingPass = (intersectionSplatID == nullptr);
-    uint32_t intersectGlobalOffset = 0, intersectGlobalOffsetMax = 0;
-    if (!isCountingPass) {
-        intersectGlobalOffset = intersect_counts[globalTileIdx];
-        intersectGlobalOffsetMax = intersect_counts[globalTileIdx+1];
-    }
-
-    Tile tile;
-    if (isActive)
-        tile = loadTile(globalTileIdx, tiles);
-
-    struct StackElem {
-        uint32_t cellIdx;
-        uint32_t level;
-        uint3 offset;
-    };
-    __shared__ StackElem stack[kTilesPerWarp][(MAX_NUM_LEVELS+1)*kThreadsPerTile];
-    uint stackSize = 0;
-    if (isActive && tile.isOverlap(treeAABB[0], treeAABB[1])) {
-        if (tileThreadIdx == 0)
-            stack[warpTileIdx][stackSize] = {0, 0, make_uint3(0)};
-        stackSize++;
-    }
-    __shared__ uint numSplatIntersects[kTilesPerWarp];
-    if (tileThreadIdx == 0)
-        numSplatIntersects[warpTileIdx] = 0;
-    __syncwarp();
-
-    for (uint _num_steps = 0; _num_steps < 65536; _num_steps++) {
-
-        if (stackSize == 0)
-            isActive = false;
-        if (__ballot_sync(~0u, isActive) == 0)
-            break;
-
-        --stackSize;
-        StackElem elem;
-        if (isActive)
-            elem = stack[warpTileIdx][stackSize];
-
-        // Process splats
-        if (isActive) {
-            uint gi0 = splatRanges[2*elem.cellIdx+0], gi1 = splatRanges[2*elem.cellIdx+1];
-
-            for (uint gi_ = gi0; gi_ < gi1; gi_ += kThreadsPerTile) {
-                uint gi = gi_ + tileThreadIdx;
-                if (gi < gi1) {
-                    uint splatIdx = splatIndices[gi];
-                    Splat splat = loadSplat(splatIdx, splats);
-                    float overlap = tile.isOverlap(splat);
-                    if (overlap > 0.0) {
-                        uint idx = atomicAdd(&numSplatIntersects[warpTileIdx], 1) + intersectGlobalOffset;
-                        if (idx < intersectGlobalOffsetMax) {
-                            intersectionSplatID[idx] = splatIdx;
-                        }
-                    }
-                }
-            }
-        }
-        __syncwarp();
-        if (!isCountingPass && numSplatIntersects[warpTileIdx] >= intersectGlobalOffsetMax-intersectGlobalOffset)
-            isActive = false;
-        if (__ballot_sync(~0u, isActive) == 0)
-            break;
-
-        // Process subcells
-        #pragma unroll
-        for (uint si_ = 0; si_ < kNumSubtree; si_ += kThreadsPerTile) {
-            uint si = si_ + tileThreadIdx;
-            int childIdx = isActive && si < kNumSubtree ?
-                children[kNumSubtree*elem.cellIdx + si] : -1;
-            int isActiveChild = int(childIdx >= 0);
-            if (isActiveChild)
-                isActiveChild &= tile.isOverlap(treeAABB[2*childIdx+0], treeAABB[2*childIdx+1]);
-
-            int inclusiveActiveSum = isActiveChild;
-            #pragma unroll
-            for (unsigned offset = 1; offset < kThreadsPerTile; offset <<= 1) {
-                int temp = __shfl_up_sync(~0u, inclusiveActiveSum, offset, kThreadsPerTile);
-                if (tileThreadIdx >= offset)
-                    inclusiveActiveSum += temp;
-            }
-            int exclusiveActiveSum = inclusiveActiveSum - isActiveChild;
-
-            int last_lane = warpTileIdx * kThreadsPerTile + (kThreadsPerTile - 1);
-            int activeSum = __shfl_sync(~0u, inclusiveActiveSum, last_lane, kThreadsPerTile);
-
-            if (isActiveChild != 0) {
-                uint3 delta = {
-                    si / (MAX_NUM_LEVELS * MAX_NUM_LEVELS),
-                    (si / MAX_NUM_LEVELS) % MAX_NUM_LEVELS,
-                    si % MAX_NUM_LEVELS
-                };
-                stack[warpTileIdx][stackSize+exclusiveActiveSum] = {
-                    (uint)childIdx,
-                    elem.level + 1,
-                    elem.offset * make_uint3(MAX_NUM_LEVELS) + delta
-                };
-            }
-            stackSize += activeSum;
-        }
-        __syncwarp();
-    }
-
-    if (tileThreadIdx == 0) {
-        if (isCountingPass)
-            intersect_counts[globalTileIdx] = numSplatIntersects[warpTileIdx];
-        else {
-            uint32_t idx = numSplatIntersects[warpTileIdx] + intersectGlobalOffset;
-            while (idx < intersectGlobalOffsetMax) {
-                intersectionSplatID[idx] = 0;
-                ++idx;
-            }
-        }
-    }
-}
-
-
+template<typename Primitive, gsplat::CameraModelType camera_model>
 __global__ void getTileSplatIntersections_brute(
-    const TileBuffers tiles, const SplatBuffers splats,
+    const long numSplats,
+    const TileBuffers<camera_model> tiles,
+    const typename Primitive::World::Buffer splatBuffer,
     uint32_t* __restrict__ intersect_counts,  // to be filled or exclusive scan
     uint32_t* __restrict__ intersectionSplatID  // nullptr or to be filled
 ) {
@@ -732,11 +619,16 @@ __global__ void getTileSplatIntersections_brute(
     }
     uint32_t intersectCount = 0;
 
-    Tile tile = loadTile(tid, tiles);
+    bool isActive = true;
+    Tile<camera_model> tile = loadTile(tid, tiles, isActive);
+    if (!isActive) {
+        if (isCountingPass)
+            intersect_counts[tid] = 0;
+        return;
+    }
 
-    for (uint32_t sid = 0; sid < splats.size; sid++) {
-        Splat splat = loadSplat(sid, splats);
-        float overlap = tile.isOverlap(splat);
+    for (uint32_t sid = 0; sid < numSplats; sid++) {
+        float overlap = tile.isOverlap(splatBuffer, sid);
         if (overlap > 0.0) {
             uint32_t idx = intersectGlobalOffset + intersectCount;
             intersectCount += 1;
@@ -774,18 +666,19 @@ __device__ __forceinline__ uint64_t getSplatSortingKey(
     return ((uint64_t)level << (3*kMortonBitsPerDim)) | morton;
 }
 
+template<typename Primitive>
 __global__ void fillSplatSortingKeys(
-    const SplatBuffers splats,
+    const long numSplats,
+    const typename Primitive::World::Buffer splatBuffer,
     float3 root_min, float3 root_max,
     unsigned num_levels, float branch_factor,
     uint64_t* __restrict__ splat_keys
 ) {
     unsigned tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid >= splats.size) return;
+    if (tid >= numSplats) return;
     
-    Splat g = loadSplat(tid, splats);
     float3 aabb_min, aabb_max;
-    g.getAABB(aabb_min, aabb_max);
+    getAABB(splatBuffer, tid, aabb_min, aabb_max);
     float3 aabb_center = (aabb_min + aabb_max) * 0.5f;
 
     unsigned level = getLevel(aabb_min, aabb_max, root_min, root_max, num_levels, branch_factor);
@@ -942,8 +835,10 @@ __global__ void fillLbvhInternalNodes(
     #undef delta
 }
 
+template<typename Primitive>
 __global__ void computeLbvhAABB(
-    const SplatBuffers splats,
+    const long numSplats,
+    const typename Primitive::World::Buffer splatBuffer,
     unsigned num_levels,
     const uint2* __restrict__ trees_ranges,
     const int2* __restrict__ internal_nodes,
@@ -951,7 +846,7 @@ __global__ void computeLbvhAABB(
     float3* __restrict__ treeAABB
 ) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= splats.size-1) return;
+    if (i >= numSplats-1) return;
 
     uint2 range = {0, 0};
     for (uint l = 0; l < num_levels; l++) {
@@ -976,10 +871,10 @@ __global__ void computeLbvhAABB(
     // find splat AABB
     float3 aabb_min, aabb_max;
     if (children.x < 0)
-        loadSplat(~children.x, splats).getAABB(aabb_min, aabb_max);
+        getAABB(splatBuffer, ~children.x, aabb_min, aabb_max);
     if (children.y < 0) {
         float3 aabb_min1, aabb_max1;
-        loadSplat(~children.y, splats).getAABB(aabb_min1, aabb_max1);
+        getAABB(splatBuffer, ~children.y, aabb_min1, aabb_max1);
         if (children.x < 0)
             aabb_min = fmin(aabb_min, aabb_min1),
             aabb_max = fmax(aabb_max, aabb_max1);
@@ -1010,8 +905,10 @@ __global__ void computeLbvhAABB(
 }
 
 
+template<typename Primitive, gsplat::CameraModelType camera_model>
 __global__ void getTileSplatIntersections_lbvh(
-    const TileBuffers tiles, const SplatBuffers splats,
+    const TileBuffers<camera_model> tiles,
+    const typename Primitive::World::Buffer splatBuffer,
     const int2* __restrict__ internal_nodes,
     float3* __restrict__ treeAABB,
     uint32_t* __restrict__ intersect_counts,  // to be filled or exclusive scan
@@ -1030,7 +927,13 @@ __global__ void getTileSplatIntersections_lbvh(
         intersectGlobalOffsetMax = intersect_counts[tileIdx+1];
     }
 
-    Tile tile = loadTile(tileIdx, tiles);
+    bool isActive = true;
+    Tile<camera_model> tile = loadTile(tileIdx, tiles, isActive);
+    if (!isActive) {
+        if (isCountingPass)
+            intersect_counts[tileIdx] = 0;
+        return;
+    }
 
     struct StackElem {
         uint32_t nodeIdx;
@@ -1058,8 +961,7 @@ __global__ void getTileSplatIntersections_lbvh(
             // splat
             if (childIdx < 0) {
                 int splatIdx = ~childIdx;
-                Splat splat = loadSplat(splatIdx, splats);
-                float overlap = tile.isOverlap(splat);
+                float overlap = tile.isOverlap(splatBuffer, splatIdx);
                 if (overlap > 0.0) {
                     uint idx = numSplatIntersects + intersectGlobalOffset;
                     if (idx < intersectGlobalOffsetMax) {
@@ -1090,8 +992,10 @@ __global__ void getTileSplatIntersections_lbvh(
 }
 
 
+template<typename Primitive, gsplat::CameraModelType camera_model>
 __global__ void getTileSplatIntersections_lbvh_warp(
-    const TileBuffers tiles, const SplatBuffers splats,
+    const TileBuffers<camera_model> tiles,
+    const typename Primitive::World::Buffer& splatBuffer,
     unsigned num_levels,
     const uint2* __restrict__ trees_ranges,
     const int2* __restrict__ internal_nodes_0,
@@ -1112,7 +1016,22 @@ __global__ void getTileSplatIntersections_lbvh_warp(
         intersectGlobalOffsetMax = intersect_counts[tileIdx+1];
     }
 
-    Tile tile = loadTile(tileIdx, tiles);
+    bool isActive = true;
+    Tile<camera_model> tile = loadTile(tileIdx, tiles, isActive);
+    if (__ballot_sync(~0u, isActive) != ~0u) {
+        if (isCountingPass) {
+            if (laneIdx == 0)
+                intersect_counts[tileIdx] = 0;
+        } else {
+            uint32_t idx = intersectGlobalOffset;
+            while (idx < intersectGlobalOffsetMax) {
+                if (idx + laneIdx < intersectGlobalOffsetMax)
+                    intersectionSplatID[idx + laneIdx] = 0;
+                idx += WARP_SIZE;
+            }
+        }
+        return;
+    }
 
     struct StackElem {
         uint32_t nodeIdx;
@@ -1174,8 +1093,7 @@ __global__ void getTileSplatIntersections_lbvh_warp(
                 // splat
                 if (childIdx < 0) {
                     splatIdx = ~childIdx;
-                    Splat splat = loadSplat(splatIdx, splats);
-                    float overlap = tile.isOverlap(splat);
+                    float overlap = tile.isOverlap(splatBuffer, splatIdx);
                     if (overlap > 0.0)
                         hasSplat = true;
                 }
@@ -1226,8 +1144,10 @@ __global__ void getTileSplatIntersections_lbvh_warp(
 
   }  // for (uint level = 0; level < num_levels; level++)
 
-    if (isCountingPass)
-        intersect_counts[tileIdx] = numSplatIntersects;
+    if (isCountingPass) {
+        if (laneIdx == 0)
+            intersect_counts[tileIdx] = numSplatIntersects;
+    }
     else {
         uint32_t idx = numSplatIntersects + intersectGlobalOffset;
         while (idx < intersectGlobalOffsetMax) {
@@ -1336,17 +1256,21 @@ void clearL2Cache() {
 #endif
 
 
-SplatTileIntersector::SplatTileIntersector(
-    c10::TensorOptions tensorOptions,
-    const SplatBuffers &splats,
-    const TileBuffers &tiles
-) : splats(splats), tiles(tiles)
+template<typename Primitive, gsplat::CameraModelType camera_model>
+SplatTileIntersector<Primitive, camera_model>::SplatTileIntersector(
+    const typename Primitive::World::Tensor &splats,
+    const TileBuffers<camera_model> &tiles
+) : tiles(tiles), splats(splats)
 {
-    tensorF32 = tensorOptions.dtype(torch::kFloat32);
-    tensorI32 = tensorOptions.dtype(torch::kInt32);
-    tensorI16 = tensorOptions.dtype(torch::kInt16);
-    tensorI64 = tensorOptions.dtype(torch::kInt64);
-    tensorU8 = tensorOptions.dtype(torch::kUInt8);
+    if (splats.batchSize() != 1)
+        AT_ERROR("Patched mode only supports splat batch size 1");
+    this->numSplats = splats.size();
+    
+    this->tensorF32 = splats.options().dtype(torch::kFloat32);
+    this->tensorI32 = splats.options().dtype(torch::kInt32);
+    this->tensorI16 = splats.options().dtype(torch::kInt16);
+    this->tensorI64 = splats.options().dtype(torch::kInt64);
+    this->tensorU8 = splats.options().dtype(torch::kUInt8);
 
     #ifdef DEBUG
     std::chrono::system_clock::time_point t0, t1;
@@ -1386,7 +1310,8 @@ SplatTileIntersector::SplatTileIntersector(
     #endif
 }
 
-std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_brute() {
+template<typename Primitive, gsplat::CameraModelType camera_model>
+std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_model>::getIntersections_brute() {
     constexpr unsigned warp = 32;
 
     torch::Tensor intersection_count = torch::zeros({tiles.size+1}, tensorI32);
@@ -1400,7 +1325,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
 
     torch::Tensor intersection_count_map = exclusiveScan(intersection_count);
     print_tensor(int, intersection_count_map);
-    unsigned total_intersections = (unsigned)intersection_count_map[tiles.size].item<int32_t>();
+    unsigned total_intersections = (unsigned)intersection_count_map[(long)tiles.size].item<int32_t>();
 
     torch::Tensor intersectionSplatID = torch::empty({total_intersections}, tensorI32);
     getTileSplatIntersections_brute<<<(tiles.size+warp-1)/warp, warp>>>(
@@ -1415,257 +1340,8 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
 }
 
 
-std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_octree() {
-    constexpr uint MAX_NUM_LEVELS = 12;
-    constexpr uint BRANCH_FACTOR = 2;
-
-    static_assert(MAX_NUM_LEVELS < 16);
-    static_assert(BRANCH_FACTOR == 2 || BRANCH_FACTOR == 3 || BRANCH_FACTOR == 4);
-
-    constexpr unsigned block = 256;
-    constexpr unsigned warp = 32;
-    constexpr int kFloatPInfByte = 0x7f;  // 0x7f7f7f7f -> 3.39615e+38
-    constexpr int kFloatNInfByte = 0xfe;  // 0xfefefefe -> -1.69474e+38
-
-    // find splat AABB
-    // torch::Tensor splat_aabb = torch::empty({splats.size, 2, 3}, tensorF32);
-    torch::Tensor root_aabb_tensor = torch::empty({2, 3}, tensorF32);
-    cudaMemset(root_aabb_tensor.data_ptr<float>()+0, kFloatPInfByte, 3*sizeof(float));
-    cudaMemset(root_aabb_tensor.data_ptr<float>()+3, kFloatNInfByte, 3*sizeof(float));
-    computeSplatAABB<<<(splats.size+block-1)/block, block>>>(
-        splats,
-        // (float3*)splat_aabb.data_ptr<float>(),
-        nullptr,
-        (float3*)root_aabb_tensor.data_ptr<float>()
-    );
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-    #if 0
-    {
-        torch::Tensor splat_aabb_cpu = splat_aabb.cpu();
-        for (int i = 0; i < splats.size; i++) {
-            float3* ps = (float3*)splat_aabb_cpu.data_ptr<float>() + 2*i;
-            printAABB(ps[0], ps[1]);
-        }
-    }
-    #endif
-
-    // find root AABB, pad them to cubes
-    {
-        root_aabb_tensor = root_aabb_tensor.cpu();
-        float3* root_aabb = (float3*)root_aabb_tensor.data_ptr<float>();
-        rootAABBMin = root_aabb[0];
-        rootAABBMax = root_aabb[1];
-        float3 center = 0.5f * (rootAABBMax + rootAABBMin);
-        float3 extend = 0.5f * (rootAABBMax - rootAABBMin);
-        float max_size = 1.01f * fmax(extend.x, fmax(extend.y, extend.z));
-        rootAABBMin = center - make_float3(max_size);
-        rootAABBMax = center + make_float3(max_size);        
-    }
-    // printAABB(rootAABBMin, rootAABBMax);
-    // printf("%f %f %f  %f %f %f\n", rootAABBMin.x, rootAABBMin.y, rootAABBMin.z, rootAABBMax.x, rootAABBMax.y, rootAABBMax.z);
-
-    // determine number of levels
-    unsigned numLevels = MAX_NUM_LEVELS;
-    
-    // count number of cell overlaps for each splat
-    torch::Tensor splat_cell_overlap_counts = torch::zeros({splats.size+1}, tensorI32);
-    countCellOverlaps<BRANCH_FACTOR><<<(splats.size+block-1)/block, block>>>(
-        splats, rootAABBMin, rootAABBMax, numLevels,
-        (unsigned*)splat_cell_overlap_counts.data_ptr<int32_t>()
-    );
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-    print_tensor(int32_t, splat_cell_overlap_counts);
-
-    // prefix sum to get offsets
-    torch::Tensor splat_cell_overlap_offsets = exclusiveScan(splat_cell_overlap_counts);
-    print_tensor(int32_t, splat_cell_overlap_offsets);
-    unsigned total_overlaps = (unsigned)splat_cell_overlap_offsets[splats.size].item<int32_t>();
-    // printf("%d\n", (int)total_overlaps);
-
-    // fill overlap data
-    torch::Tensor cell_keys = torch::zeros({total_overlaps}, tensorI64);
-    torch::Tensor splat_ids = torch::zeros({total_overlaps}, tensorI32);
-    torch::Tensor subcell_masks = torch::zeros({total_overlaps}, tensorU8);
-    torch::Tensor subcell_ids = torch::zeros({total_overlaps}, tensorI32);
-    torch::Tensor subcell_aabb = torch::zeros({total_overlaps, 2, 3}, tensorF32);
-    fillCellOverlaps<BRANCH_FACTOR><<<(splats.size+block-1)/block, block>>>(
-        splats, rootAABBMin, rootAABBMax, numLevels,
-        (unsigned*)splat_cell_overlap_offsets.data_ptr<int32_t>(),
-        (uint64_t*)cell_keys.data_ptr<int64_t>(),
-        splat_ids.data_ptr<int32_t>(),
-        subcell_masks.data_ptr<uint8_t>(),
-        subcell_ids.data_ptr<int32_t>(),
-        (float3*)subcell_aabb.data_ptr<float>()
-    );
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-    // printCells(cell_keys, splat_ids, subcell_masks, subcell_ids);
-
-    // sort cells by keys
-    // thrust::device_ptr<uint64_t> keys_ptr((uint64_t*)cell_keys.data_ptr<int64_t>());
-    // thrust::device_ptr<int32_t> vals1_ptr(splat_ids.data_ptr<int32_t>());
-    // thrust::device_ptr<uint64_t> vals2_ptr((uint64_t*)subcell_masks.data_ptr<int64_t>());
-    // thrust::device_ptr<int32_t> vals3_ptr(subcell_ids.data_ptr<int32_t>());
-
-    // auto first = thrust::make_zip_iterator(thrust::make_tuple(vals1_ptr, vals2_ptr, vals3_ptr));
-    // thrust::sort_by_key(keys_ptr, keys_ptr + total_overlaps, first);
-
-    auto [cell_keys_sorted, cell_keys_argsort] = torch::sort(cell_keys);
-    cell_keys_argsort = cell_keys_argsort.to(torch::kInt32);
-    cell_keys = cell_keys_sorted;
-    splat_ids = torch::index(splat_ids, {cell_keys_argsort});
-    subcell_masks = torch::index(subcell_masks, {cell_keys_argsort});
-    subcell_aabb = torch::index(subcell_aabb, {cell_keys_argsort});
-    #if 0
-    subcell_ids = torch::index(subcell_ids, {cell_keys_argsort});
-    subcell_ids = torch::where(subcell_ids == -1, subcell_ids, torch::index(cell_keys_argsort.argsort(), {subcell_ids})).contiguous().to(torch::kInt32);
-    #else
-    torch::Tensor cell_keys_argsort_argsort = invertPermutation(cell_keys_argsort);
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-    torch::Tensor new_subcell_ids = torch::empty_like(subcell_ids);
-    gatherAndRemap<<<(total_overlaps+block-1)/block, block>>>(
-        total_overlaps,
-        subcell_ids.data_ptr<int32_t>(),
-        cell_keys_argsort.data_ptr<int32_t>(),
-        cell_keys_argsort_argsort.data_ptr<int32_t>(),
-        new_subcell_ids.data_ptr<int32_t>()
-    );
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-    subcell_ids = new_subcell_ids;
-    #endif
-    
-    print_tensor(long, cell_keys_argsort);
-    print_tensor(long, cell_keys_argsort.argsort());
-    // printCells(cell_keys, splat_ids, subcell_masks, subcell_ids);
-
-    // Get number of cells and splats as well as index map
-    torch::Tensor cell_id_differential_map = torch::empty({total_overlaps+1}, tensorI32);
-    torch::Tensor is_splat_map = torch::empty({total_overlaps+1}, tensorI32);
-    getCellDifferential<<<(total_overlaps+block-1)/block, block>>>(
-        total_overlaps,
-        (uint64_t*)cell_keys.data_ptr<int64_t>(),
-        cell_id_differential_map.data_ptr<int32_t>(),
-        is_splat_map.data_ptr<int32_t>()
-    );
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    torch::Tensor cell_id_map = exclusiveScan(cell_id_differential_map);
-    torch::Tensor splat_idx_map = exclusiveScan(is_splat_map);
-    unsigned total_cells = (unsigned)cell_id_map[total_overlaps].item<int32_t>();
-    unsigned total_splat_overlaps = (unsigned)splat_idx_map[total_overlaps].item<int32_t>();
-    // print_tensor(int, cell_id_differential_map);
-    print_tensor(int, cell_id_map);
-    // print_tensor(int, is_splat_map);
-    print_tensor(int, splat_idx_map);
-    // printf("%d cells, %d splat overlaps\n", (int)total_cells, (int)total_splat_overlaps);
-
-    // Fill splats
-    torch::Tensor splatRanges = torch::zeros({total_cells, 2}, tensorI32);
-    torch::Tensor splatIndices = torch::empty({total_splat_overlaps}, tensorI32);
-
-    torch::Tensor treeAABB = torch::empty({total_cells, 2, 3}, tensorF32);
-    fillTreeSplats<<<(total_overlaps+block-1)/block, block>>>(
-        total_overlaps,
-        (uint64_t*)cell_keys.data_ptr<int64_t>(),
-        splat_ids.data_ptr<int32_t>(),
-        (unsigned*)splat_idx_map.data_ptr<int32_t>(),
-        (unsigned*)cell_id_map.data_ptr<int32_t>(),
-        (unsigned*)splatRanges.data_ptr<int32_t>(),
-        (unsigned*)splatIndices.data_ptr<int32_t>()
-    );
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-    print_tensor(int, splatRanges);
-    print_tensor(int, splatIndices);
-    print_tensor(uint8_t, subcell_masks);
-
-    // Fill subcell map
-    constexpr unsigned B3 = BRANCH_FACTOR * BRANCH_FACTOR * BRANCH_FACTOR;
-    torch::Tensor children = torch::empty({total_cells, B3}, tensorI32);
-    cudaMemset(children.data_ptr<int32_t>(), 0xff, total_cells*B3*sizeof(int32_t));
-    
-    print_tensor(int, cell_id_map);
-    // print_tensor(int, torch::arange(cell_id_map.size(0)).cuda().to(torch::kInt32) - cell_id_map);
-    print_tensor(int, subcell_ids);
-    #if 0
-    fillTreeSubcells_perCell<BRANCH_FACTOR><<<(total_cells+block-1)/block, block>>>(
-        total_overlaps, total_cells,
-        (unsigned*)cell_id_map.data_ptr<int32_t>(),
-        subcell_ids.data_ptr<int32_t>(),
-        subcell_masks.data_ptr<uint8_t>(),
-        (float3*)subcell_aabb.data_ptr<float>(),
-        children.data_ptr<int32_t>(),
-        (float3*)treeAABB.data_ptr<float>()
-    );
-    #else
-    fillTreeSubcells_initAABB<<<(total_cells+block-1)/block, block>>>(
-        total_cells,
-        (float3*)treeAABB.data_ptr<float>()
-    );
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-    fillTreeSubcells_perOverlap<BRANCH_FACTOR><<<(total_overlaps+block-1)/block, block>>>(
-        total_overlaps, total_cells,
-        (unsigned*)cell_id_map.data_ptr<int32_t>(),
-        subcell_ids.data_ptr<int32_t>(),
-        subcell_masks.data_ptr<uint8_t>(),
-        (float3*)subcell_aabb.data_ptr<float>(),
-        children.data_ptr<int32_t>(),
-        (float3*)treeAABB.data_ptr<float>()
-    );
-    #endif
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-    print_tensor(int, children);
-    // std::cout << treeAABB << std::endl;
-    #ifdef DEBUG
-    if (0) {
-        torch::Tensor treeAABB_cpu = treeAABB.cpu();
-        for (int i = 0; i < total_cells; i++) {
-            float3* p = (float3*)treeAABB_cpu.data_ptr<float>() + 2*i;
-            printAABB_wireframe(p[0], p[1]);
-        }
-    }
-    #endif
-    // return;
-
-    // Traverse tree - get counts
-    torch::Tensor intersection_count = torch::zeros({tiles.size+1}, tensorI32);
-    print_tensor(int, intersection_count);
-    getTileSplatIntersections_octree<MAX_NUM_LEVELS, BRANCH_FACTOR>
-    <<<(tiles.size*B3+warp-1)/warp, warp>>>(
-        tiles, splats, rootAABBMin, rootAABBMax,
-        children.data_ptr<int32_t>(),
-        (float3*)treeAABB.data_ptr<float>(),
-        (unsigned*)splatRanges.data_ptr<int32_t>(),
-        (unsigned*)splatIndices.data_ptr<int32_t>(),
-        (uint32_t*)intersection_count.data_ptr<int32_t>(),
-        nullptr
-    );
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-    print_tensor(int, intersection_count);
-
-    // Traverse tree - get offsets
-    torch::Tensor intersection_count_map = exclusiveScan(intersection_count);
-    print_tensor(int, intersection_count_map);
-    unsigned total_intersections = (unsigned)intersection_count_map[tiles.size].item<int32_t>();
-
-    // Traverse tree - write data
-    torch::Tensor intersectionSplatID = torch::empty({total_intersections}, tensorI32);
-    getTileSplatIntersections_octree<MAX_NUM_LEVELS, BRANCH_FACTOR>
-    <<<(tiles.size*B3+warp-1)/warp, warp>>>(
-        tiles, splats, rootAABBMin, rootAABBMax,
-        children.data_ptr<int32_t>(),
-        (float3*)treeAABB.data_ptr<float>(),
-        (unsigned*)splatRanges.data_ptr<int32_t>(),
-        (unsigned*)splatIndices.data_ptr<int32_t>(),
-        (uint32_t*)intersection_count_map.data_ptr<int32_t>(),
-        (uint32_t*)intersectionSplatID.data_ptr<int32_t>()
-    );
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-    print_tensor(int32_t, intersectionSplatID);
-
-    return std::make_tuple(intersection_count_map, intersectionSplatID);
-}
-
-
-std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_lbvh() {
+template<typename Primitive, gsplat::CameraModelType camera_model>
+std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_model>::getIntersections_lbvh() {
     // TODO: use a separate rotated AABB aligned with (1,1,1) for thin off-diagnoal Gaussians?
     constexpr uint MAX_NUM_LEVELS = 28;
     constexpr float BRANCH_FACTOR = 2.0f;
@@ -1679,12 +1355,12 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
     cudaDeviceSynchronize();
 
     // find splat AABB
-    torch::Tensor splat_aabb = torch::empty({splats.size, 2, 3}, tensorF32);
+    torch::Tensor splat_aabb = torch::empty({numSplats, 2, 3}, tensorF32);
     torch::Tensor root_aabb_tensor = torch::empty({2, 3}, tensorF32);
     cudaMemset(root_aabb_tensor.data_ptr<float>()+0, kFloatPInfByte, 3*sizeof(float));
     cudaMemset(root_aabb_tensor.data_ptr<float>()+3, kFloatNInfByte, 3*sizeof(float));
-    computeSplatAABB<<<(splats.size+block-1)/block, block>>>(
-        splats,
+    computeSplatAABB<Primitive><<<(numSplats+block-1)/block, block>>>(
+        numSplats, splats,
         (float3*)splat_aabb.data_ptr<float>(),
         (float3*)root_aabb_tensor.data_ptr<float>()
     );
@@ -1692,7 +1368,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
     #ifdef DEBUG
     if (0) {
         torch::Tensor splat_aabb_cpu = splat_aabb.cpu();
-        for (int i = 0; i < splats.size; i++) {
+        for (int i = 0; i < numSplats; i++) {
             float3* ps = (float3*)splat_aabb_cpu.data_ptr<float>() + 2*i;
             printAABB(ps[0], ps[1]);
         }
@@ -1700,23 +1376,25 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
     #endif
 
     // find root AABB, pad them to cubes
+    glm::vec3 rootAABBMin, rootAABBMax;
     {
         root_aabb_tensor = root_aabb_tensor.cpu();
-        float3* root_aabb = (float3*)root_aabb_tensor.data_ptr<float>();
+        glm::vec3* root_aabb = (glm::vec3*)root_aabb_tensor.data_ptr<float>();
         rootAABBMin = root_aabb[0];
         rootAABBMax = root_aabb[1];
-        float3 center = 0.5f * (rootAABBMax + rootAABBMin);
-        float3 extend = 0.5f * (rootAABBMax - rootAABBMin);
+        glm::vec3 center = 0.5f * (rootAABBMax + rootAABBMin);
+        glm::vec3 extend = 0.5f * (rootAABBMax - rootAABBMin);
         float max_size = 1.01f * fmax(extend.x, fmax(extend.y, extend.z));
-        rootAABBMin = center - make_float3(max_size);
-        rootAABBMax = center + make_float3(max_size);
+        rootAABBMin = center - glm::vec3(max_size);
+        rootAABBMax = center + glm::vec3(max_size);
     }
     // printAABB_wireframe(rootAABBMin, rootAABBMax);
 
     // compute sorting keys (level and Morton code)
-    torch::Tensor morton = torch::empty({splats.size}, tensorI64);
-    fillSplatSortingKeys<<<(splats.size+block-1)/block, block>>>(
-        splats, rootAABBMin, rootAABBMax, MAX_NUM_LEVELS, BRANCH_FACTOR,
+    torch::Tensor morton = torch::empty({numSplats}, tensorI64);
+    fillSplatSortingKeys<Primitive><<<(numSplats+block-1)/block, block>>>(
+        numSplats, splats,
+        *(float3*)&rootAABBMin, *(float3*)&rootAABBMax, MAX_NUM_LEVELS, BRANCH_FACTOR,
         (uint64_t*)morton.data_ptr<int64_t>()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -1726,8 +1404,8 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
 
     torch::Tensor tree_ranges = torch::empty({MAX_NUM_LEVELS, 2}, tensorI32);
     cudaMemset(tree_ranges.data_ptr<int32_t>(), 0xff, (2*MAX_NUM_LEVELS)*sizeof(int32_t));
-    fillLbvhTreeRanges<<<(splats.size+block-1)/block, block>>>(
-        MAX_NUM_LEVELS, splats.size,
+    fillLbvhTreeRanges<<<(numSplats+block-1)/block, block>>>(
+        MAX_NUM_LEVELS, numSplats,
         (uint64_t*)sorted_morton.data_ptr<int64_t>(),
         (uint2*)tree_ranges.data_ptr<int32_t>()
     );
@@ -1749,7 +1427,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
         torch::Tensor splat_aabb_cpu = splat_aabb.cpu();
         float3* aabb = (float3*)splat_aabb_cpu.data_ptr<float>();
         printf("\\left[");
-        for (int i = 0; i < splats.size; i++) {
+        for (int i = 0; i < numSplats; i++) {
             float3 p = 0.5f*(aabb[2*i]+aabb[2*i+1]);
             printf("\\left(%f,%f,%f\\right),", p.x, p.y, p.z);
         }
@@ -1758,11 +1436,11 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
     #endif
 
     // Build tree
-    torch::Tensor internal_nodes = torch::empty({splats.size-1, 2}, tensorI32);
-    torch::Tensor parent_nodes = torch::empty({splats.size-1}, tensorI32);
-    cudaMemset(parent_nodes.data_ptr<int32_t>(), 0xff, (splats.size-1)*sizeof(int32_t));
+    torch::Tensor internal_nodes = torch::empty({numSplats-1, 2}, tensorI32);
+    torch::Tensor parent_nodes = torch::empty({numSplats-1}, tensorI32);
+    cudaMemset(parent_nodes.data_ptr<int32_t>(), 0xff, (numSplats-1)*sizeof(int32_t));
     CHECK_DEVICE_ERROR(cudaGetLastError());
-    fillLbvhInternalNodes<<<((splats.size-1)+block-1)/block, block>>>(
+    fillLbvhInternalNodes<<<((numSplats-1)+block-1)/block, block>>>(
         MAX_NUM_LEVELS,
         (uint2*)tree_ranges.data_ptr<int32_t>(),
         (uint64_t*)sorted_morton.data_ptr<int64_t>(),
@@ -1775,14 +1453,14 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
     print_tensor(int, parent_nodes);
 
     // Compute AABB
-    torch::Tensor treeAABB = torch::empty({splats.size, 2, 3}, tensorF32);
-    fillTreeSubcells_initAABB<<<((splats.size-1)+block-1)/block, block>>>(
-        splats.size-1,
+    torch::Tensor treeAABB = torch::empty({numSplats, 2, 3}, tensorF32);
+    fillTreeSubcells_initAABB<<<((numSplats-1)+block-1)/block, block>>>(
+        numSplats-1,
         (float3*)treeAABB.data_ptr<float>()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-    computeLbvhAABB<<<((splats.size-1)+block-1)/block, block>>>(
-        splats, MAX_NUM_LEVELS,
+    computeLbvhAABB<Primitive><<<((numSplats-1)+block-1)/block, block>>>(
+        numSplats, splats, MAX_NUM_LEVELS,
         (uint2*)tree_ranges.data_ptr<int32_t>(),
         (int2*)internal_nodes.data_ptr<int32_t>(),
         parent_nodes.data_ptr<int32_t>(),
@@ -1792,7 +1470,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
     #ifdef DEBUG
     if (0) {
         torch::Tensor treeAABB_cpu = treeAABB.cpu();
-        for (int i = 0; i < splats.size-1; i++) {
+        for (int i = 0; i < numSplats-1; i++) {
             float3* p = (float3*)treeAABB_cpu.data_ptr<float>() + 2*i;
             printAABB_wireframe(p[0], p[1]);
         }
@@ -1803,7 +1481,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
     torch::Tensor intersection_count = torch::zeros({tiles.size+1}, tensorI32);
     // cudaDeviceSynchronize();
     // getTileSplatIntersections_lbvh<<<(tiles.size+warp-1)/warp, warp>>>(
-    getTileSplatIntersections_lbvh_warp<<<tiles.size, warp>>>(
+    getTileSplatIntersections_lbvh_warp<Primitive, camera_model><<<tiles.size, warp>>>(
         tiles, splats, MAX_NUM_LEVELS,
         (uint2*)tree_ranges.data_ptr<int32_t>(),
         (int2*)internal_nodes.data_ptr<int32_t>(),
@@ -1816,11 +1494,11 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector::getIntersections_
 
     torch::Tensor intersection_count_map = exclusiveScan(intersection_count);
     print_tensor(int, intersection_count_map);
-    unsigned total_intersections = (unsigned)intersection_count_map[tiles.size].item<int32_t>();
+    unsigned total_intersections = (unsigned)intersection_count_map[(long)tiles.size].item<int32_t>();
 
     torch::Tensor intersectionSplatID = torch::empty({total_intersections}, tensorI32);
     // getTileSplatIntersections_lbvh<<<(tiles.size+warp-1)/warp, warp>>>(
-    getTileSplatIntersections_lbvh_warp<<<tiles.size, warp>>>(
+    getTileSplatIntersections_lbvh_warp<Primitive, camera_model><<<tiles.size, warp>>>(
         tiles, splats, MAX_NUM_LEVELS,
         (uint2*)tree_ranges.data_ptr<int32_t>(),
         (int2*)internal_nodes.data_ptr<int32_t>(),
@@ -1971,3 +1649,63 @@ int main(int argc, char** argv) {
 
 
 #endif
+
+
+
+std::tuple<torch::Tensor, torch::Tensor>
+intersect_splat_tile_3dgs(
+    Vanilla3DGS::World::TensorTuple splats_tuple,
+    unsigned width,
+    unsigned height,
+    const torch::Tensor& viewmats,
+    const torch::Tensor& Ks,
+    const gsplat::CameraModelType& camera_model,
+    const CameraDistortionCoeffsTensor& dist_coeffs
+) {
+    Vanilla3DGS::World::Tensor splats_tensor(splats_tuple);
+
+    if (camera_model == gsplat::CameraModelType::PINHOLE) {
+        TileBuffers<gsplat::CameraModelType::PINHOLE> tile_buffers =
+            {width, height, viewmats, Ks, dist_coeffs};
+        return SplatTileIntersector<Vanilla3DGS, gsplat::CameraModelType::PINHOLE>
+            (splats_tensor, tile_buffers).getIntersections_lbvh();
+    }
+    else if (camera_model == gsplat::CameraModelType::FISHEYE) {
+        TileBuffers<gsplat::CameraModelType::FISHEYE> tile_buffers =
+            {width, height, viewmats, Ks, dist_coeffs};
+        return SplatTileIntersector<Vanilla3DGS, gsplat::CameraModelType::FISHEYE>
+            (splats_tensor, tile_buffers).getIntersections_lbvh();
+    }
+    else
+        throw std::runtime_error("Unsupported camera model");
+
+}
+
+std::tuple<torch::Tensor, torch::Tensor>
+intersect_splat_tile_opaque_triangle(
+    OpaqueTriangle::World::TensorTuple splats_tuple,
+    unsigned width,
+    unsigned height,
+    const torch::Tensor& viewmats,
+    const torch::Tensor& Ks,
+    const gsplat::CameraModelType& camera_model,
+    const CameraDistortionCoeffsTensor& dist_coeffs
+) {
+    OpaqueTriangle::World::Tensor splats_tensor(splats_tuple);
+
+    if (camera_model == gsplat::CameraModelType::PINHOLE) {
+        TileBuffers<gsplat::CameraModelType::PINHOLE> tile_buffers =
+            {width, height, viewmats, Ks, dist_coeffs};
+        return SplatTileIntersector<OpaqueTriangle, gsplat::CameraModelType::PINHOLE>
+            (splats_tensor, tile_buffers).getIntersections_lbvh();
+    }
+    else if (camera_model == gsplat::CameraModelType::FISHEYE) {
+        TileBuffers<gsplat::CameraModelType::FISHEYE> tile_buffers =
+            {width, height, viewmats, Ks, dist_coeffs};
+        return SplatTileIntersector<OpaqueTriangle, gsplat::CameraModelType::FISHEYE>
+            (splats_tensor, tile_buffers).getIntersections_lbvh();
+    }
+    else
+        throw std::runtime_error("Unsupported camera model");
+
+}

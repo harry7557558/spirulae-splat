@@ -213,6 +213,8 @@ class SpirulaeModelConfig(ModelConfig):
     mcmc_max_screen_size: float = float('inf')
     """if a gaussian is more than this fraction of screen space, clip scale and increase opacity
         Intended to be an MCMC-friendly alternative of relocate_screen_size"""
+    mcmc_max_screen_size_clip_hardness: float = 1.1
+    """clip hardness for Gaussians with large screen space size, between 1 and infinity, larger is harder"""
     mcmc_max_world_size: float = float('inf')
     """if a gaussian is more than this of world space, clip scale
         Useful if you see huge floaters at a distance in large indoor space"""
@@ -487,6 +489,7 @@ class SpirulaeModel(Model):
                 min_opacity=self.config.mcmc_min_opacity,
                 relocate_scale2d=self.config.relocate_screen_size,
                 max_scale2d=self.config.mcmc_max_screen_size,
+                max_scale2d_clip_hardness=self.config.mcmc_max_screen_size_clip_hardness,
                 max_scale3d=self.config.mcmc_max_world_size,
                 geometry_optimizer_stop_iter=self.config.stop_refine_at
             )
@@ -513,6 +516,7 @@ class SpirulaeModel(Model):
                 is_3dgs=self.config.use_3dgs,
                 relocate_scale2d=self.config.relocate_screen_size,
                 max_scale2d=self.config.mcmc_max_screen_size,
+                max_scale2d_clip_hardness=self.config.mcmc_max_screen_size_clip_hardness,
                 max_scale3d=self.config.mcmc_max_world_size,
             )
             self.strategy_state = self.strategy.initialize_state()
@@ -643,7 +647,8 @@ class SpirulaeModel(Model):
                 state=self.strategy_state,
                 step=self.step,
                 info=self.info,
-                lr=self.optimizers['means'].param_groups[0]['lr']
+                lr=self.optimizers['means'].param_groups[0]['lr'],
+                packed=(self.config.packed or self.config.use_bvh),
             )
         else:
             self.strategy.step_post_backward(
@@ -795,7 +800,11 @@ class SpirulaeModel(Model):
         # Call GSplat for 3DGS rendering
         Ks = camera.get_intrinsics_matrices()
         
-        kwargs = {}
+        kwargs = {'actual_width': W, 'actual_height': H}
+        if 'actual_width' in camera.metadata:
+            kwargs['actual_width'] = int(camera.metadata['actual_width'] + 0.5)
+        if 'actual_height' in camera.metadata:
+            kwargs['actual_height'] = int(camera.metadata['actual_height'] + 0.5)
         is_fisheye = (camera.camera_type[0].item() == CameraType.FISHEYE.value)
         if not self.training:
             is_fisheye = True
@@ -809,14 +818,18 @@ class SpirulaeModel(Model):
                 raise NotImplementedError("3DGS training with fisheye camera is currently only supported for MCMC.")
             kwargs['dist_coeffs'] = camera.distortion_params
 
-        TILE_SIZE = 16
+        optimized_camera_to_world = optimized_camera_to_world.to(device)
+        viewmats = viewmats.to(device)
+        Ks = Ks.to(device)
+
+        TILE_SIZE = 64
         gh, gw = (H+TILE_SIZE-1) // TILE_SIZE, (W+TILE_SIZE-1) // TILE_SIZE
         def split_into_tiles(viewmat, Ks):
             dh, dw = torch.meshgrid(torch.arange(gh)*TILE_SIZE, torch.arange(gw)*TILE_SIZE)
             Ks = Ks.clone().repeat(gh*gw, 1, 1)
             viewmat = viewmat.clone().repeat(gh*gw, 1, 1)
-            Ks[:, 0, 2] -= dw.flatten()
-            Ks[:, 1, 2] -= dh.flatten()
+            Ks[:, 0, 2] -= dw.flatten().to(Ks)
+            Ks[:, 1, 2] -= dh.flatten().to(Ks)
             return viewmat, Ks
 
         def merge_tiles(im):
@@ -825,13 +838,12 @@ class SpirulaeModel(Model):
             return im
 
         # if not self.training:
-        #     viewmat, Ks = split_into_tiles(viewmat, Ks)
+        #     viewmats_0, Ks_0 = viewmats, Ks
+        #     viewmats, Ks = split_into_tiles(viewmats, Ks)
+        #     if 'dist_coeffs' in kwargs:
+        #         kwargs['dist_coeffs'] = kwargs['dist_coeffs'].repeat(gh*gw, 1, 1)
         #     W = TILE_SIZE
         #     H = TILE_SIZE
-
-        optimized_camera_to_world = optimized_camera_to_world.to(device)
-        viewmats = viewmats.to(device)
-        Ks = Ks.to(device)
 
         # hardness = min(max(self.step / self.config.stop_refine_at, 0.1), 1.0)
         if self.config.primitive == "opaque_triangle":
@@ -858,8 +870,10 @@ class SpirulaeModel(Model):
             Ks=Ks * self.config.supersampling,  # [C, 3, 3]
             width=W * self.config.supersampling,
             height=H * self.config.supersampling,
-            packed=(self.config.packed or (self.config.use_bvh and self.training)),
+            packed=((self.config.packed or self.config.use_bvh) and self.training),
             use_bvh=(self.config.use_bvh and self.training),
+            # packed=True,
+            # use_bvh=True,
             absgrad=(not self.config.use_mcmc),
             sparse_grad=False,
             distributed=False,
@@ -882,10 +896,13 @@ class SpirulaeModel(Model):
         # if not self.training:
         #     W = gw*TILE_SIZE
         #     H = gh*TILE_SIZE
-        #     print(rgbd.shape, alpha.shape)
-        #     rgbd = merge_tiles(rgbd)
+        #     # print(rgbd.shape, alpha.shape)
+        #     rgbd = [merge_tiles(comp) for comp in rgbd]
         #     alpha = merge_tiles(alpha)
         #     W, H = camera.width[0].item(), camera.height[0].item()
+        #     viewmats, Ks = viewmats_0, Ks_0
+        #     if 'dist_coeffs' in kwargs:
+        #         kwargs['dist_coeffs'] = kwargs['dist_coeffs'][:1]
 
         if self.config.compute_depth_normal or not self.training:
             depth_im_ref = torch.where(
@@ -931,8 +948,8 @@ class SpirulaeModel(Model):
 
         if self.training:
             self.info = {
-                "width": W,
-                "height": H,
+                "width": kwargs["actual_width"],
+                "height": kwargs["actual_height"],
                 "n_cameras": camera.shape[0],
                 "n_train": self.num_train_data,
                 "radii": radii,
@@ -941,6 +958,8 @@ class SpirulaeModel(Model):
             }
             if 'max_blending' in meta:
                 self.info['max_blending'] = meta['max_blending']
+            if 'gaussian_ids' in meta:
+                self.info['gaussian_ids'] = meta['gaussian_ids']
 
         # blend with background
         if self.config.fit == "rgb":

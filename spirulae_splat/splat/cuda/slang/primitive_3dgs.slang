@@ -124,13 +124,13 @@ bool persp_proj_3dgs_ut<let assume_valid : bool>(
     mean2d = float2(0);
     cov2d = float2x2(0);
 
-    float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
+    float fx = intrins.x, fy = intrins.y;
     float tan_fovx = 0.5f * width / fx;
     float tan_fovy = 0.5f * height / fy;
     float lim_x_pos = width + 0.3f * tan_fovx * fx;
-    float lim_x_neg = cx + 0.3f * tan_fovx * fx;
+    float lim_x_neg = 0.3f * tan_fovx * fx;
     float lim_y_pos = height + 0.3f * tan_fovy * fy;
-    float lim_y_neg = cy + 0.3f * tan_fovy * fy;
+    float lim_y_neg = 0.3f * tan_fovy * fy;
 
     float2 proj_points[7];
     bool all_valid = true;

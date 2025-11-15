@@ -47,14 +47,14 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
     """Maximum number of batches per epoch, used for configuring batch size"""
 
     patch_batch_size: Optional[int] = None  # 256
-    """If set, batch patches instead of full images
-        Make this a multiple of 16 (tile size)
-        Affects training speed, optimal value depends on image focal length
-        Too small may lead to suboptimal performance in SSIM, as well as increasing VRAM usage / floating point issues"""
+    """If not None, batch patches instead of full images
+        Leave -1 to let program decide"""
 
     patch_size: int = 64
     """Patch size used in patch batching
-        Make number of pixels (patch_batch_size * patch_size**2) consistent (e.g. 1M)
+        Make this a multiple of 16 (tile size)
+        Affects training speed, optimal value depends on image focal length
+        Too small may lead to suboptimal performance in SSIM, as well as increasing VRAM usage / floating point issues
         """
 
     cache_images: Literal["cpu-pageable", "cpu", "gpu"] = "cpu-pageable"
@@ -162,6 +162,13 @@ class SpirulaeDataManager(FullImageDatamanager):
         assert (image_shapes >= self.config.patch_size).all(), "Image shape must be at least patch size"
         effective_offsets = image_shapes - self.config.patch_size
 
+        if batch_size == -1:
+            pixels_per_image = sum([w*h for (w, h) in image_shapes]) / len(image_shapes)
+            images_per_batch = max(len(self.cached_train) / self.config.max_batch_per_epoch, 1)
+            pixels_per_batch = pixels_per_image / images_per_batch
+            pixels_per_patch = self.config.patch_size**2
+            batch_size = max(int(pixels_per_batch // pixels_per_patch), 1)
+
         image_indices = torch.randint(0, len(self.cached_train), (batch_size,))
         offsets = (torch.rand([batch_size, 2]) * effective_offsets[image_indices] + 0.5).long()
         patches = []
@@ -190,13 +197,15 @@ class SpirulaeDataManager(FullImageDatamanager):
             batch['mask'] = torch.stack(masks).to(self.device)
 
         camera = self.train_dataset.cameras[image_indices]
+        if camera.metadata is None:
+            camera.metadata = {}
+        camera.metadata['actual_height'] = camera.height.float().mean().item()
+        camera.metadata['actual_width'] = camera.width.float().mean().item()
         camera.height = self.config.patch_size * torch.ones_like(camera.height)
         camera.width = self.config.patch_size * torch.ones_like(camera.width)
         camera.cx = camera.cx - offsets[:, 1:2]
         camera.cy = camera.cy - offsets[:, 0:1]
         camera = camera.to(self.device)
-        if camera.metadata is None:
-            camera.metadata = {}
         camera.metadata["cam_idx"] = image_indices
         camera.metadata["slices"] = offset_slices
 

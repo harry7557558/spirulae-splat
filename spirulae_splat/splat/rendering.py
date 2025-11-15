@@ -5,6 +5,7 @@ from typing import Dict, Optional, Tuple, Literal
 import math
 
 
+import gsplat.cuda._wrapper
 from gsplat.cuda._wrapper import (
     RollingShutterType,
     # FThetaCameraDistortionParameters,
@@ -66,6 +67,8 @@ def rasterization(
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
+    actual_width: int = None,
+    actual_height: int = None,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -296,7 +299,7 @@ def rasterization(
         assert (quats is not None) and (
             scales is not None
         ), "UT and eval3d requires to provide quats and scales."
-        assert packed is False, "Packed mode is not supported with UT."
+        # assert packed is False, "Packed mode is not supported with UT."
         assert sparse_grad is False, "Sparse grad is not supported with UT."
 
     if dist_coeffs is not None:
@@ -326,8 +329,8 @@ def rasterization(
         C = len(viewmats)
 
     if use_bvh:
-        raise NotImplementedError()
-        assert not with_ut, "Not implemented"
+        # raise NotImplementedError()
+        # assert not with_ut, "Not implemented"
         assert packed, "BVH must be packed"
         assert B == 1, "Not support batching"
         def dump_all():
@@ -348,40 +351,38 @@ def rasterization(
         torch.cuda.synchronize()
         time0 = perf_counter()
         # dump_all()
-        with torch.no_grad():
-            intersection_count_map, intersection_splat_id = intersect_splat_tile(
-                means.contiguous(),
-                torch.exp(scales).contiguous(),
-                torch.sigmoid(opacities).contiguous(),
-                quats.contiguous(),
-                width,
-                height,
-                viewmats.contiguous(),
-                Ks.contiguous(),
-            )
+        intersection_count_map, intersection_splat_id = intersect_splat_tile(
+            primitive,
+            splat_params,
+            width,
+            height,
+            viewmats.contiguous(),
+            Ks.contiguous(),
+            camera_model,
+            dist_coeffs.contiguous() if dist_coeffs is not None else None
+        )
         torch.cuda.synchronize()
         time1 = perf_counter()
-        # print(1e3*(time1-time0), 'ms')
+        print(1e3*(time1-time0), 'ms')
         # if 1e3*(time1-time0) > 100:
         #     dump_all()
         #     exit(0)
         proj_results = fully_fused_projection_hetero(
-            means,
-            quats,
-            torch.exp(scales),
+            primitive,
+            splat_params,
             viewmats,
             Ks,
+            actual_width,
+            actual_height,
             width,
             height,
             intersection_count_map,
             intersection_splat_id,
-            eps2d=eps2d,
             near_plane=near_plane,
             far_plane=far_plane,
             sparse_grad=sparse_grad,
-            calc_compensations=(rasterize_mode == "antialiased"),
             camera_model=camera_model,
-            opacities=torch.sigmoid(opacities),  # use opacities to compute a tigher bound for radii.
+            dist_coeffs=dist_coeffs,
         )
 
     else:
@@ -401,47 +402,10 @@ def rasterization(
             camera_model=camera_model,
             dist_coeffs=dist_coeffs,
         )
-        # import gsplat.cuda._wrapper
-        # proj_results_1 = gsplat.cuda._wrapper.fully_fused_projection(
-        #     means,
-        #     None,
-        #     quats,
-        #     torch.exp(scales),
-        #     viewmats,
-        #     Ks,
-        #     width,
-        #     height,
-        #     eps2d=eps2d,
-        #     packed=packed,
-        #     near_plane=near_plane,
-        #     far_plane=far_plane,
-        #     sparse_grad=sparse_grad,
-        #     calc_compensations=(primitive == "mip"),
-        #     camera_model=camera_model,
-        #     opacities=torch.sigmoid(opacities),  # use opacities to compute a tigher bound for radii.
-        # )
-        # for x0, x1 in zip(proj_results, proj_results_1):
-        #     print(x0.shape, x0.dtype, x1.shape, x1.dtype)
-        #     print(x0)
-        #     print(x1)
-        #     import matplotlib.pyplot as plt
-        #     plt.scatter(x0.flatten().detach().cpu().numpy(), x1.flatten().detach().cpu().numpy())
-        #     # plt.xscale('log')
-        #     # plt.yscale('log')
-        #     plt.show()
 
     if use_bvh:
-        (
-            camera_ids,
-            gaussian_ids,
-            radii,
-            means2d,
-            depths,
-            conics,
-            proj_opacities,
-        ) = proj_results
+        (camera_ids, gaussian_ids, aabb_xyxy, depths, proj_splats) = proj_results
         batch_ids, image_ids = 0, camera_ids
-        proj_opacities = proj_opacities.view(B, N)[batch_ids, gaussian_ids]  # [nnz]
     elif packed:
         # The results are packed into shape [nnz, ...]. All elements are valid.
         (
@@ -593,8 +557,8 @@ def rasterization(
         {
             "tile_width": tile_width,
             "tile_height": tile_height,
-            "tiles_per_gauss": tiles_per_gauss,
-            "isect_ids": isect_ids,
+            # "tiles_per_gauss": tiles_per_gauss,
+            # "isect_ids": isect_ids,
             "flatten_ids": flatten_ids,
             "isect_offsets": isect_offsets,
             "width": width,

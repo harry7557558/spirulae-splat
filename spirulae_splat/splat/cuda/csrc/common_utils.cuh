@@ -159,6 +159,8 @@ _DEF_MAKE_VEC_FROM_SCALAR(float)
 _DEF_MAKE_VEC_FROM_SCALAR(int)
 _DEF_MAKE_VEC_FROM_SCALAR(uint)
 
+#endif  // #ifndef SLANG_PRELUDE_EXPORT
+
 #define _DEF_MAKE_VEC_FROM_VEC(dtype1, dtype2) \
     __host__ __device__ __forceinline__ dtype1##2 make_##dtype1##2(dtype2##2 v) \
         { return { (dtype1)v.x, (dtype1)v.y }; } \
@@ -171,8 +173,6 @@ _DEF_MAKE_VEC_FROM_VEC(float, int)
 _DEF_MAKE_VEC_FROM_VEC(float, uint)
 _DEF_MAKE_VEC_FROM_VEC(int, float)
 _DEF_MAKE_VEC_FROM_VEC(uint, float)
-
-#endif  // #ifndef SLANG_PRELUDE_EXPORT
 
 #define _DEF_GENERIC_VEC_UNARY_FUN(dtype, fun, efun) \
     __device__ __forceinline__ dtype##2 fun(dtype##2 v) \

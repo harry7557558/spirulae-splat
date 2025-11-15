@@ -56,6 +56,7 @@ class MCMCStrategy(Strategy):
     min_opacity: float = 0.005
     relocate_scale2d: float = float('inf')
     max_scale2d: float = float('inf')
+    max_scale2d_clip_hardness: float = 1.1
     max_scale3d: float = float('inf')
     prob_grad_weight: float = 0.0
     is_3dgs: bool = False
@@ -104,7 +105,9 @@ class MCMCStrategy(Strategy):
         if packed:
             # grads is [nnz, 2]
             gs_ids = info["gaussian_ids"]  # [nnz]
-            radii = info["radii"]  # [nnz]
+            radii = info["radii"]  # [nnz] or [nnz, 2]
+            if radii.shape[-1] == 2:
+                radii = torch.amax(radii, dim=-1)
         else:
             # grads is [C, N, 2]
             sel = info["radii"] > 0.0  # [C, N]
@@ -121,9 +124,8 @@ class MCMCStrategy(Strategy):
         # large splats in screen space
         # clip scale while increase opacity to encourage being relocated to
         if np.isfinite(self.max_scale2d):
-            assert not packed
             # TODO: optionally, actually do anisotropic scale in 3d
-            oversize_factor = torch.clip(normalized_radii / self.max_scale2d, min=1.0, max=1.1)
+            oversize_factor = torch.clip(normalized_radii / self.max_scale2d, min=1.0, max=self.max_scale2d_clip_hardness)
             oversize_factor = torch.log(oversize_factor).unsqueeze(-1)
             scales, opacities = params['scales'].data, params['opacities'].data
             scales[gs_ids] -= oversize_factor
@@ -219,13 +221,14 @@ class MCMCStrategy(Strategy):
         step: int,
         info: Dict[str, Any],
         lr: float,
+        packed: bool = False
     ):
         """Callback function to be executed after the `loss.backward()` call.
 
         Args:
             lr (float): Learning rate for "means" attribute of the GS.
         """
-        self._update_state(params, state, info)
+        self._update_state(params, state, info, packed)
 
         # move to the correct device
         if (
