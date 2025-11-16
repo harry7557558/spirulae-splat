@@ -182,21 +182,17 @@ float2 camera_distortion(float2 uv, no_diff float[10] dist_coeffs) {
     return uv + float2(b1 * uv.x + b2 * uv.y, 0.0);
 }
 
-[ForceInline]
+// [ForceInline]
 [Differentiable]
 float2x2 camera_distortion_jac(float2 uv, no_diff float[10] dist_coeffs) {
-    float2x2 J;
-    [ForceUnroll]
-    for (int i = 0; i < 2; ++i) {
-        float2 seed = 0.0; seed[i] = 1.0;
-        DifferentialPair<float2> dp_uv = diffPair(uv);
-        bwd_diff(camera_distortion)(dp_uv, dist_coeffs, seed);
-        J[i] = dp_uv.d;
-    }
-    return J;
+    DifferentialPair<float2> dp_uv_x = diffPair(uv);
+    bwd_diff(camera_distortion)(dp_uv_x, dist_coeffs, float2(1, 0));
+    DifferentialPair<float2> dp_uv_y = diffPair(uv);
+    bwd_diff(camera_distortion)(dp_uv_y, dist_coeffs, float2(0, 1));
+    return float2x2(dp_uv_x.d, dp_uv_y.d);
 }
 
-// [ForceInline]
+[ForceInline]
 [CudaDeviceExport]
 bool is_valid_distortion(no_diff float2 uv, no_diff float[10] dist_coeffs) {
     // TODO: doesn't always work for more than 2 radial coeffs
@@ -204,6 +200,32 @@ bool is_valid_distortion(no_diff float2 uv, no_diff float[10] dist_coeffs) {
     return min(determinant(J), min(J[0][0], J[1][1])) > 0.0;
 }
 
+// [ForceInline]
+[Differentiable]
+float valid_distortion_log_barrier(float2 uv, no_diff float[10] dist_coeffs) {
+    // TODO: doesn't always work for more than 2 radial coeffs
+    float2x2 J = camera_distortion_jac(uv, dist_coeffs);
+    float val0 = min(determinant(J), min(J[0][0], J[1][1])); // positive if inside
+    return -log(val0);
+}
+
+[ForceInline]
+[Differentiable]
+float2 valid_distortion_log_barrier_grad(float2 uv, no_diff float[10] dist_coeffs) {
+    DifferentialPair<float2> dp_uv = diffPair(uv);
+    bwd_diff(valid_distortion_log_barrier)(dp_uv, dist_coeffs, 1.0f);
+    return dp_uv.d;
+}
+
+[ForceInline]
+[Differentiable]
+float2x2 valid_distortion_log_barrier_hess(float2 uv, no_diff float[10] dist_coeffs) {
+    DifferentialPair<float2> dp_uv_x = diffPair(uv);
+    bwd_diff(valid_distortion_log_barrier_grad)(dp_uv_x, dist_coeffs, float2(1.0f, 0.0f));
+    DifferentialPair<float2> dp_uv_y = diffPair(uv);
+    bwd_diff(valid_distortion_log_barrier_grad)(dp_uv_y, dist_coeffs, float2(0.0f, 1.0f));
+    return float2x2(dp_uv_x.d, dp_uv_y.d);
+}
 
 [ForceInline]
 [Differentiable]
@@ -299,7 +321,7 @@ float2 _solve2x2(float2x2 A, float2 b) {
     );
 }
 
-// [ForceInline]
+// find uv' s.t. distort(uv') = uv
 bool undistort_point(
     no_diff float2 uv, no_diff float[10] dist_coeffs,
     int maxiter, out float2 uv_undist
@@ -317,7 +339,7 @@ bool undistort_point(
 
         if (use_newton) {
             float2x2 J = camera_distortion_jac(q, dist_coeffs);
-            q -= _solve2x2(J, r);;
+            q -= _solve2x2(J, r);
         } else {
             // float step = 0.5;
             float step = clamp(0.5 + 0.5 / (1.0 + dot(r, r) * 10.0), 0.1, 0.9);
@@ -333,6 +355,62 @@ bool undistort_point(
            length(camera_distortion(uv_undist, dist_coeffs) - uv) < 1e-2;
 }
 
+// find uv' that minimizes (distort(uv') - uv)^2 s.t. is_valid_distortion_func(uv') < 0
+bool undistort_point_clipped(
+    no_diff float2 uv, no_diff float[10] dist_coeffs,
+    int maxiter, out float2 q
+) {
+    q = uv;
+    for (int i = 0; i < 4; i++) {
+        if (is_valid_distortion(q, dist_coeffs))
+            break;
+        q *= 0.618f;
+    }
+    if (!is_valid_distortion(q, dist_coeffs))
+        return false;
+
+    float weight_b = 0.0f;
+    for (int i = 0; i < maxiter; i++) {
+        float2 qd = camera_distortion(q, dist_coeffs);
+        float2 r = qd - uv;
+        if (length(r) < 1e-4)
+            break;
+
+        float2x2 J = camera_distortion_jac(q, dist_coeffs);
+        float2 grad_f = mul(transpose(J), r);
+        float2x2 hess_f = mul(transpose(J), J);
+
+        float2 grad_b = valid_distortion_log_barrier_grad(q, dist_coeffs);
+        float2x2 hess_b = valid_distortion_log_barrier_hess(q, dist_coeffs);
+
+        if (i == 0) {
+            weight_b = 10.0f * length(grad_f) / (length(grad_b) + 1e-6f);
+        }
+
+        bool valid_found = false;
+        for (int j = 0; j < 8; j++) {
+            float2 grad = grad_f + weight_b * grad_b;
+            float2x2 hess = hess_f + weight_b * hess_b;
+            float2 dq = _solve2x2(J, r);
+            float2 q1 = q - dq;
+            if (is_valid_distortion(q1, dist_coeffs)) {
+                valid_found = true;
+                q = q1;
+                weight_b *= 0.25f;
+                break;
+            }
+            else {
+                weight_b *= 1.618f;
+            }
+        }
+        if (!valid_found)
+            return false;
+    }
+
+    // TODO: better way to tell so
+    return true;
+    // return length(camera_distortion(q, dist_coeffs) - uv) < 1e-2;
+}
 
 [CudaDeviceExport]
 [Differentiable]
@@ -363,13 +441,14 @@ bool undistort_point(
 }
 
 [CudaDeviceExport]
-[Differentiable]
 bool unproject_point(
     no_diff float2 uv, bool is_fisheye,
     no_diff float[10] dist_coeffs,
     out float3 raydir
 ) {
-    if (!no_diff undistort_point(uv, dist_coeffs, 8, uv))
+    raydir = float3(0);
+    // if (!undistort_point_clipped(uv, dist_coeffs, 8, uv))
+    if (!undistort_point(uv, dist_coeffs, 8, uv))
         return false;
     raydir = is_fisheye ? fisheye_unproj(uv) : float3(uv, 1.0);
     return true;

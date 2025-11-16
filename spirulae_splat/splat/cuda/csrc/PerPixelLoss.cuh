@@ -20,6 +20,7 @@ enum class RawLossIndex {
     RgbDistReg,
     DepthDistReg,
     NormalDistReg,
+    PixelsTotal,
     MaskTotal,
     DepthMaskTotal,
     RenderNormalMaskTotal,
@@ -78,7 +79,9 @@ compute_per_pixel_losses_forward_tensor(
     std::optional<at::Tensor> mask,
     std::optional<at::Tensor> depth_mask,
     std::optional<at::Tensor> normal_mask,
-    const std::array<float, (uint)LossIndex::length> loss_weights_0
+    const std::array<float, (uint)LossIndex::length> loss_weights_0,
+    long num_train_images,
+    std::optional<at::Tensor> camera_indices
 );
 
 
@@ -112,5 +115,7 @@ std::tuple<
     std::optional<at::Tensor> normal_mask,
     at::Tensor raw_losses,
     const std::array<float, (uint)LossIndex::length> loss_weights_0,
-    at::Tensor v_losses
+    at::Tensor v_losses,
+    long num_train_images,
+    std::optional<at::Tensor> camera_indices
 );

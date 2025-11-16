@@ -68,6 +68,7 @@ enum RawLossIndex {
     RgbDistReg,
     DepthDistReg,
     NormalDistReg,
+    PixelsTotal,
     MaskTotal,
     DepthMaskTotal,
     RenderNormalMaskTotal,
@@ -100,7 +101,8 @@ float[RawLossIndex::length] per_pixel_losses(
 
     // RGB - L1 and L2
     losses[RawLossIndex::RgbL1] = float(mask) * l1_loss(render_rgb, ref_rgb);
-    losses[RawLossIndex::RgbL2] = float(mask) * l2_loss(render_rgb, ref_rgb);
+    losses[RawLossIndex::RgbL2] = float(mask) *
+        clamp(l2_loss(render_rgb, ref_rgb), 0.0f, 1.0f);
 
     // Depth - Pearson correlation in log space
     depth_mask &= mask;
@@ -138,6 +140,7 @@ float[RawLossIndex::length] per_pixel_losses(
     losses[RawLossIndex::NormalDistReg] = mean3(normal_dist) / max(render_alpha, 1e-12);
 
     // Mask total
+    losses[RawLossIndex::PixelsTotal] = 1.0f;  // required for patched batching
     losses[RawLossIndex::MaskTotal] = float(mask);
     losses[RawLossIndex::DepthMaskTotal] = float(depth_mask);
     losses[RawLossIndex::RenderNormalMaskTotal] = float(render_normal_mask & normal_mask);
@@ -251,7 +254,6 @@ enum LossIndex {
 [CudaDeviceExport]
 float[LossIndex::length] per_pixel_losses_reduce(
     float[RawLossIndex::length] raw_losses,
-    no_diff float num_pixels,
     no_diff float[LossWeightIndex::length] weights
 ) {
     float[LossIndex::length] losses;
@@ -294,7 +296,7 @@ float[LossIndex::length] per_pixel_losses_reduce(
     losses[LossIndex::AlphaSup] = (
         weights[LossWeightIndex::AlphaSup] * raw_losses[RawLossIndex::AlphaSup] +
         weights[LossWeightIndex::AlphaSupUnder] * raw_losses[RawLossIndex::AlphaSupUnder]
-    ) / max(num_pixels, 1);
+    ) / max(raw_losses[RawLossIndex::PixelsTotal], 1);
 
     // normal regularization
     losses[LossIndex::NormalReg] = weights[LossWeightIndex::NormalReg] *
@@ -303,15 +305,15 @@ float[LossIndex::length] per_pixel_losses_reduce(
     // alpha regularization
     // TODO: push-to-1 mode for random background
     losses[LossIndex::AlphaReg] = weights[LossWeightIndex::AlphaReg] *
-        raw_losses[RawLossIndex::AlphaReg] / max(num_pixels, 1);
+        raw_losses[RawLossIndex::AlphaReg] / max(raw_losses[RawLossIndex::PixelsTotal], 1);
 
     // distortion regularizations
     losses[LossIndex::RgbDistReg] = weights[LossWeightIndex::RgbDistReg] *
-        raw_losses[RawLossIndex::RgbDistReg] / max(num_pixels, 1);
+        raw_losses[RawLossIndex::RgbDistReg] / max(raw_losses[RawLossIndex::PixelsTotal], 1);
     losses[LossIndex::DepthDistReg] = weights[LossWeightIndex::DepthDistReg] *
-        raw_losses[RawLossIndex::DepthDistReg] / max(num_pixels, 1);
+        raw_losses[RawLossIndex::DepthDistReg] / max(raw_losses[RawLossIndex::PixelsTotal], 1);
     losses[LossIndex::NormalDistReg] = weights[LossWeightIndex::NormalDistReg] *
-        raw_losses[RawLossIndex::NormalDistReg] / max(num_pixels, 1);
+        raw_losses[RawLossIndex::NormalDistReg] / max(raw_losses[RawLossIndex::PixelsTotal], 1);
 
     return losses;
 }
@@ -319,13 +321,12 @@ float[LossIndex::length] per_pixel_losses_reduce(
 [CudaDeviceExport]
 float[RawLossIndex::length] per_pixel_losses_reduce_bwd(
     const float[RawLossIndex::length] raw_losses,
-    no_diff float num_pixels,
     const no_diff float[LossWeightIndex::length] weights,
     float[LossIndex::length] v_losses
 ) {
     DifferentialPair<float[RawLossIndex::length]> dp_raw_losses = diffPair(raw_losses);
     bwd_diff(per_pixel_losses_reduce)(
-        dp_raw_losses, num_pixels, weights,
+        dp_raw_losses, weights,
         v_losses
     );
     return dp_raw_losses.d;

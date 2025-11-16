@@ -156,6 +156,7 @@ std::tuple<
         else
             throw std::runtime_error("Unsupported camera model");
     }
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     #undef _LAUNCH_ARGS
 
@@ -218,6 +219,7 @@ std::tuple<
         else
             throw std::runtime_error("Unsupported camera model");
     }
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     #undef _LAUNCH_ARGS
 
@@ -391,6 +393,7 @@ std::tuple<
         else
             throw std::runtime_error("Unsupported camera model");
     }
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     #undef _LAUNCH_ARGS
 
@@ -453,6 +456,7 @@ std::tuple<
         else
             throw std::runtime_error("Unsupported camera model");
     }
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     #undef _LAUNCH_ARGS
 

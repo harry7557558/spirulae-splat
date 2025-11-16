@@ -15,7 +15,7 @@
 // #define DEBUG
 
 
-__device__ void getAABB(
+__device__ bool getAABB(
     const Vanilla3DGS::World::Buffer& splatBuffer, long idx,
     float3 &aabb_min, float3 &aabb_max
 ) {
@@ -38,9 +38,11 @@ __device__ void getAABB(
     );
     aabb_min = mean - bound;
     aabb_max = mean + bound;
+
+    return opac > ALPHA_THRESHOLD && isfinite(dot(aabb_min, aabb_max));
 }
 
-__device__ void getAABB(
+__device__ bool getAABB(
     const OpaqueTriangle::World::Buffer& splatBuffer, long idx,
     float3 &aabb_min, float3 &aabb_max
 ) {
@@ -61,6 +63,8 @@ __device__ void getAABB(
         fmax(fmax(vert0.y, vert1.y), vert2.y),
         fmax(fmax(vert0.z, vert1.z), vert2.z),
     };
+
+    return isfinite(dot(aabb_min, aabb_max));
 }
 
 
@@ -83,21 +87,29 @@ struct Tile {
         // TODO: better way to handle this in nonlinear and partially invalid case
         // May not matter in training with small tiles, but obvious artifact when rendering >180deg fisheye
         float3 e0_, e1_, e2_, e3_;
-        int num_valid = 0;
-        num_valid += (int)unproject_point({x0, y0}, is_fisheye, &dist_coeffs, &e0_);
-        num_valid += (int)unproject_point({x0, y1}, is_fisheye, &dist_coeffs, &e1_);
-        num_valid += (int)unproject_point({x1, y1}, is_fisheye, &dist_coeffs, &e2_);
-        num_valid += (int)unproject_point({x1, y0}, is_fisheye, &dist_coeffs, &e3_);
+        bool valid0 = unproject_point({x0, y0}, is_fisheye, &dist_coeffs, &e0_);
+        bool valid1 = unproject_point({x0, y1}, is_fisheye, &dist_coeffs, &e1_);
+        bool valid2 = unproject_point({x1, y1}, is_fisheye, &dist_coeffs, &e2_);
+        bool valid3 = unproject_point({x1, y0}, is_fisheye, &dist_coeffs, &e3_);
+        if (!valid0 && valid3 && valid1 && valid2)
+            e0_ = e3_ + e1_ - e2_, valid0 = true;
+        if (!valid1 && valid0 && valid2 && valid3)
+            e1_ = e0_ + e2_ - e3_, valid1 = true;
+        if (!valid2 && valid1 && valid3 && valid0)
+            e2_ = e1_ + e3_ - e0_, valid2 = true;
+        if (!valid3 && valid2 && valid0 && valid1)
+            e3_ = e2_ + e0_ - e1_, valid3 = true;
         glm::vec3 e0 = R * glm::vec3(e0_.x, e0_.y, e0_.z);
         glm::vec3 e1 = R * glm::vec3(e1_.x, e1_.y, e1_.z);
         glm::vec3 e2 = R * glm::vec3(e2_.x, e2_.y, e2_.z);
         glm::vec3 e3 = R * glm::vec3(e3_.x, e3_.y, e3_.z);
 
-        n0 = glm::cross(e0, e1);
-        n1 = glm::cross(e1, e2);
-        n2 = glm::cross(e2, e3);
-        n3 = glm::cross(e3, e0);
-        return num_valid == 4;
+        n0 = glm::normalize(glm::cross(e0, e1));
+        n1 = glm::normalize(glm::cross(e1, e2));
+        n2 = glm::normalize(glm::cross(e2, e3));
+        n3 = glm::normalize(glm::cross(e3, e0));
+        return (valid0 && valid1 && valid2 && valid3 &&
+            isfinite(glm::length(n0+n1+n2+n3)));
     }
 
     __device__ __forceinline__ bool isOverlap(float3 aabb_min, float3 aabb_max) const {
@@ -125,8 +137,8 @@ struct Tile {
     __device__ __forceinline__ float isOverlap(const Vanilla3DGS::World::Buffer& splatBuffer, long idx) const {
         // TODO: primitive aware version with less false positives
         float3 aabb_min, aabb_max;
-        getAABB(splatBuffer, idx, aabb_min, aabb_max);
-        if (!isOverlap(aabb_min, aabb_max))
+        bool valid_aabb = getAABB(splatBuffer, idx, aabb_min, aabb_max);
+        if (!valid_aabb || !isOverlap(aabb_min, aabb_max))
             return -1.0f;
         float3 mean_ = 0.5f * (aabb_min + aabb_max);
         glm::vec3 mean(mean_.x, mean_.y, mean_.z);
@@ -138,8 +150,8 @@ struct Tile {
     __device__ __forceinline__ float isOverlap(const OpaqueTriangle::World::Buffer& splatBuffer, long idx) const {
         // TODO: primitive aware version with less false positives
         float3 aabb_min, aabb_max;
-        getAABB(splatBuffer, idx, aabb_min, aabb_max);
-        if (!isOverlap(aabb_min, aabb_max))
+        bool valid_aabb = getAABB(splatBuffer, idx, aabb_min, aabb_max);
+        if (!valid_aabb || !isOverlap(aabb_min, aabb_max))
             return -1.0f;
         float3 mean_ = 0.5f * (aabb_min + aabb_max);
         glm::vec3 mean(mean_.x, mean_.y, mean_.z);
@@ -189,7 +201,9 @@ __global__ void computeSplatAABB(
         return;
 
     float3 aabb_min, aabb_max;
-    getAABB(splatBuffer, gid, aabb_min, aabb_max);
+    bool valid_aabb = getAABB(splatBuffer, gid, aabb_min, aabb_max);
+    if (!valid_aabb)
+        aabb_min = aabb_max = make_float3(0.0f);  // TODO: better way
     if (aabb != nullptr) {
         aabb[2*gid+0] = aabb_min;
         aabb[2*gid+1] = aabb_max;
@@ -249,7 +263,11 @@ __global__ void countCellOverlaps(
     if (tid >= numSplats) return;
     
     float3 aabb_min, aabb_max;
-    getAABB(splatBuffer, tid, aabb_min, aabb_max);
+    bool valid_aabb = getAABB(splatBuffer, tid, aabb_min, aabb_max);
+    if (!valid_aabb) {
+        overlap_counts[tid] = 0;
+        return;
+    }
     
     unsigned level = getLevel(aabb_min, aabb_max, root_min, root_max, num_levels, (float)BRANCH_FACTOR);
     
@@ -309,17 +327,27 @@ __global__ void fillCellOverlaps(
     if (tid >= numSplats) return;
     
     float3 aabb_min, aabb_max;
-    getAABB(splatBuffer, tid, aabb_min, aabb_max);
+    bool valid_aabb = getAABB(splatBuffer, tid, aabb_min, aabb_max);
     float3 aabb_center = (aabb_min + aabb_max) * 0.5f;
 
-    unsigned level = getLevel(aabb_min, aabb_max, root_min, root_max, num_levels, (float)BRANCH_FACTOR);
     unsigned offset = overlap_offsets[tid];
     unsigned num_cells = overlap_offsets[tid+1] - offset;
     if (num_cells == 0)
         return;
     unsigned idx = 0;
+    if (!valid_aabb) {
+        while (idx < num_cells) {
+            cell_keys[offset+idx] = (~((uint64_t)0)) >> 1;
+            splat_ids[offset+idx] = -1;
+            subcell_masks[offset+idx] = (uint8_t)0;
+            subcell_ids[offset+idx] = -1;
+            idx++;
+        }
+        return;
+    }
 
     // Fill splat cells
+    unsigned level = getLevel(aabb_min, aabb_max, root_min, root_max, num_levels, (float)BRANCH_FACTOR);
     float scale = powf(BRANCH_FACTOR, level);
     float3 cell_size = (root_max - root_min) / scale;
     
@@ -678,7 +706,11 @@ __global__ void fillSplatSortingKeys(
     if (tid >= numSplats) return;
     
     float3 aabb_min, aabb_max;
-    getAABB(splatBuffer, tid, aabb_min, aabb_max);
+    bool valid_aabb = getAABB(splatBuffer, tid, aabb_min, aabb_max);
+    if (!valid_aabb) {
+        splat_keys[tid] = 0;
+        return;
+    }
     float3 aabb_center = (aabb_min + aabb_max) * 0.5f;
 
     unsigned level = getLevel(aabb_min, aabb_max, root_min, root_max, num_levels, branch_factor);
@@ -870,17 +902,20 @@ __global__ void computeLbvhAABB(
 
     // find splat AABB
     float3 aabb_min, aabb_max;
+    bool valid_aabb = true;
     if (children.x < 0)
-        getAABB(splatBuffer, ~children.x, aabb_min, aabb_max);
+        valid_aabb = getAABB(splatBuffer, ~children.x, aabb_min, aabb_max);
     if (children.y < 0) {
         float3 aabb_min1, aabb_max1;
-        getAABB(splatBuffer, ~children.y, aabb_min1, aabb_max1);
+        valid_aabb = getAABB(splatBuffer, ~children.y, aabb_min1, aabb_max1);
         if (children.x < 0)
             aabb_min = fmin(aabb_min, aabb_min1),
             aabb_max = fmax(aabb_max, aabb_max1);
         else
             aabb_min = aabb_min1, aabb_max = aabb_max1;
     }
+    if (!valid_aabb)
+        return;
 
     // fill parent AABB
     do {

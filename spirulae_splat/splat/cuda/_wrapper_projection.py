@@ -168,7 +168,7 @@ def fully_fused_projection(
             near_plane,
             far_plane,
             camera_model,
-            dist_coeffs,
+            dist_coeffs.contiguous() if dist_coeffs is not None else None,
             *additional_args
         )
         if not eval3d:
@@ -504,8 +504,8 @@ def fully_fused_projection_hetero(
         viewmats.contiguous(), Ks.contiguous(),
         image_width, image_height, tile_width, tile_height,
         near_plane, far_plane,
-        camera_model, dist_coeffs,
-        intersection_count_map, intersection_splat_id,
+        camera_model, dist_coeffs.contiguous() if dist_coeffs is not None else None,
+        intersection_count_map.contiguous(), intersection_splat_id.contiguous(),
         *additional_args
     )
     splat_ids = proj_return[1]

@@ -264,6 +264,7 @@ spirulae_triangle_patched = MethodSpecification(
                 normal_supervision_weight=0.04,
                 rgb_distortion_reg_weight=0.01,
                 ssim_lambda=0.4,
+                reg_warmup_length=1000,
 
                 packed=True,
                 use_bvh=True,

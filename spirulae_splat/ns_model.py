@@ -808,7 +808,7 @@ class SpirulaeModel(Model):
         is_fisheye = (camera.camera_type[0].item() == CameraType.FISHEYE.value)
         if not self.training:
             is_fisheye = True
-            # kwargs['dist_coeffs'] = torch.tensor([[0.0259, 0.0082, 0.0002, -0.0013, -0.0012, -0.0008, 0.0000, 0.0000, -0.0006, -0.0001]]).float().cuda()
+            kwargs['dist_coeffs'] = torch.tensor([[0.0259, 0.0082, 0.0002, -0.0013, -0.0012, -0.0008, 0.0000, 0.0000, -0.0006, -0.0001]]).float().cuda()
 
             # TODO: investigate why this uses a ton of VRAM
             # kwargs['dist_coeffs'] = torch.tensor([[-0.29, 0.07, 0, 0, 1e-5, -1e-3, 0, 0, 0, 0]]).float().cuda()
@@ -899,6 +899,9 @@ class SpirulaeModel(Model):
         #     # print(rgbd.shape, alpha.shape)
         #     rgbd = [merge_tiles(comp) for comp in rgbd]
         #     alpha = merge_tiles(alpha)
+        #     for key in ['rgb_distortion', 'depth_distortion', 'normal_distortion']:
+        #         if key in meta:
+        #             meta[key] = merge_tiles(meta[key])
         #     W, H = camera.width[0].item(), camera.height[0].item()
         #     viewmats, Ks = viewmats_0, Ks_0
         #     if 'dist_coeffs' in kwargs:
@@ -956,10 +959,11 @@ class SpirulaeModel(Model):
                 "means2d": means2d,
                 "depths": depths,
             }
-            if 'max_blending' in meta:
-                self.info['max_blending'] = meta['max_blending']
-            if 'gaussian_ids' in meta:
-                self.info['gaussian_ids'] = meta['gaussian_ids']
+            if 'actual_images_per_batch' in camera.metadata:
+                self.info['n_cameras'] = camera.metadata['actual_images_per_batch']
+            for key in ['gaussian_ids', 'camera_ids', 'max_blending']:
+                if key in meta:
+                    self.info[key] = meta[key]
 
         # blend with background
         if self.config.fit == "rgb":
@@ -1058,7 +1062,8 @@ class SpirulaeModel(Model):
         """
 
         # Per-image losses
-        loss_dict = self.training_losses(self.step, batch, outputs)
+        self.info['num_train_data'] = self.num_train_data
+        loss_dict = self.training_losses(self.step, batch, outputs, self.info)
 
         # Per-splat losses
         self.training_losses.get_static_losses(

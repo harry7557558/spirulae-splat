@@ -17,7 +17,7 @@ from fused_ssim import fused_ssim
 
 from fused_bilagrid import BilateralGrid, slice, total_variation_loss
 
-from typing import Optional
+from typing import List, Optional
 
 
 class _MaskGradient(torch.autograd.Function):
@@ -99,8 +99,13 @@ class _ComputePerPixelLosses(torch.autograd.Function):
         mask: Optional[torch.Tensor],
         depth_mask: Optional[torch.Tensor],
         normal_mask: Optional[torch.Tensor],
-        weights
+        weights: List[float],
+        num_train_images: int = -1,
+        camera_indices: Optional[torch.Tensor] = None,
     ):
+        if not isinstance(camera_indices, torch.Tensor):
+            num_train_images = -1
+            camera_indices = None
         
         tensors = (
             render_rgb,
@@ -121,20 +126,27 @@ class _ComputePerPixelLosses(torch.autograd.Function):
         )
 
         losses, raw_losses = _C.compute_per_pixel_losses_forward(
-            *tensors, weights
+            *tensors, weights,
+            num_train_images, camera_indices
         )
+        # print(losses)
+        # print(raw_losses[0].detach().cpu().numpy().tolist())
+        # print(raw_losses[1].detach().cpu().numpy().tolist())
 
         ctx.weights = weights
-        ctx.save_for_backward(*tensors, raw_losses)
+        ctx.num_train_images = num_train_images
+        ctx.save_for_backward(*tensors, raw_losses, camera_indices)
 
         return losses
 
     @staticmethod
     def backward(ctx, v_losses):
         grads = _C.compute_per_pixel_losses_backward(
-            *ctx.saved_tensors,
+            *ctx.saved_tensors[:-1],
             ctx.weights,
-            v_losses
+            v_losses,
+            ctx.num_train_images,
+            ctx.saved_tensors[-1],
         )
         return *grads, *([None]*(len(ctx.needs_input_grad)-len(grads)))
 
@@ -232,7 +244,7 @@ class SplatTrainingLosses(torch.nn.Module):
         return self.config.alpha_reg_weight * \
             min(self.step / max(self.config.alpha_reg_warmup, 1), 1)
 
-    def forward(self, step: int, batch, outputs):
+    def forward(self, step: int, batch, outputs, meta={}):
         self.step = step
 
         device = outputs['rgb'].device
@@ -384,7 +396,9 @@ class SplatTrainingLosses(torch.nn.Module):
                 float(self.step >= self.config.reg_warmup_length) * weight_rgb_dist_reg,
                 float(self.step >= self.config.reg_warmup_length) * weight_depth_dist_reg,
                 float(self.step >= self.config.reg_warmup_length) * weight_normal_dist_reg,
-            ]
+            ],
+            meta.get("num_train_data", -1),
+            camera.metadata.get('cam_idx', None),
         )
         (
             rgb_l1, rgb_psnr,

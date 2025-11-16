@@ -110,6 +110,14 @@ class SpirulaeDataManager(FullImageDatamanager):
                 f'The size of image ({data["image"].shape[1]}, {data["image"].shape[0]}) loaded '
                 f'does not match the camera parameters ({camera.width.item(), camera.height.item()})'
             )
+            if self.config.patch_batch_size is not None:
+                for key in ['mask', 'depth', 'normal']:
+                    if key not in data or data['image'].shape[:2] == data[key].shape[:2]:
+                        continue
+                    data[key] = torch.nn.functional.interpolate(
+                        data[key].float().permute(2, 0, 1)[None],
+                        size=data['image'].shape[:2], mode='bilinear', align_corners=False
+                    )[0].permute(1, 2, 0).to(data[key].dtype)
             return data
 
         CONSOLE.log(f"Caching/undistorting {split} images")
@@ -157,24 +165,23 @@ class SpirulaeDataManager(FullImageDatamanager):
         TILE_SIZE = 16
         assert self.config.patch_size > 0 and self.config.patch_size % TILE_SIZE == 0, "Patch size must be a multiple of tile size"
 
-        # image_shapes = torch.stack([self.train_dataset.cameras.height, self.train_dataset.cameras.width], dim=-1)
-        image_shapes = torch.tensor([im['image'].shape[:2] for im in self.cached_train])
-        assert (image_shapes >= self.config.patch_size).all(), "Image shape must be at least patch size"
-        effective_offsets = image_shapes - self.config.patch_size
+        if not hasattr(self, 'image_shapes'):
+            # self.image_shapes = torch.stack([self.train_dataset.cameras.height, self.train_dataset.cameras.width], dim=-1)
+            self.image_shapes = torch.tensor([im['image'].shape[:2] for im in self.cached_train])
+            assert (self.image_shapes >= self.config.patch_size).all(), "Image shape must be at least patch size"
+            self.effective_offsets = self.image_shapes - self.config.patch_size
+            
+            self.pixels_per_image = sum([w*h for (w, h) in self.image_shapes]) / len(self.image_shapes)
+            self.images_per_batch = max(len(self.cached_train) / self.config.max_batch_per_epoch, 1)
 
         if batch_size == -1:
-            pixels_per_image = sum([w*h for (w, h) in image_shapes]) / len(image_shapes)
-            images_per_batch = max(len(self.cached_train) / self.config.max_batch_per_epoch, 1)
-            pixels_per_batch = pixels_per_image / images_per_batch
+            pixels_per_batch = self.pixels_per_image / self.images_per_batch
             pixels_per_patch = self.config.patch_size**2
             batch_size = max(int(pixels_per_batch // pixels_per_patch), 1)
 
         image_indices = torch.randint(0, len(self.cached_train), (batch_size,))
-        offsets = (torch.rand([batch_size, 2]) * effective_offsets[image_indices] + 0.5).long()
-        patches = []
-        masks = []
-        has_mask = False
-        default_mask = torch.ones((self.config.patch_size, self.config.patch_size, 1), dtype=torch.bool)
+        offsets = (torch.rand([batch_size, 2]) * self.effective_offsets[image_indices] + 0.5).long()
+        batch = { 'image': [] }
         offset_slices = []
         for image_idx, (y0, x0) in zip(image_indices, offsets):
             y0, x0 = y0.item(), x0.item()
@@ -182,31 +189,38 @@ class SpirulaeDataManager(FullImageDatamanager):
             x1 = x0 + self.config.patch_size
             image = self.cached_train[image_idx]
             patch = image['image'][y0:y1, x0:x1]
-            mask = default_mask
-            if 'mask' in image:
-                assert image['mask'].shape[:2] == image['image'].shape[:2], \
-                    f"image shape ({image['image'].shape[:2]}) and mask shape ({image['mask'].shape[:2]}) mismatch"
-                mask = image['mask'][y0:y1, x0:x1]
-                has_mask = True
-            # TODO: depth, normal
-            patches.append(patch)
-            masks.append(mask)
+            batch['image'].append(patch)
+
+            for key in ['depth', 'normal', 'mask']:
+                if key not in image:
+                    continue
+                assert image[key].shape[:2] == image['image'].shape[:2], \
+                    f"image shape ({image['image'].shape[:2]}) and {key} shape ({image[key].shape[:2]}) mismatch"
+                patch = image[key][y0:y1, x0:x1]
+                if len(patch.shape) == 2:
+                    patch = patch.unsqueeze(-1)
+                if key not in batch:
+                    batch[key] = []
+                batch[key].append(patch)
+
             offset_slices.append((slice(y0, y1), slice(x0, x1)))
-        batch = { 'image': torch.stack(patches).to(self.device) }
-        if has_mask:
-            batch['mask'] = torch.stack(masks).to(self.device)
+
+        for key in batch:
+            batch[key] = torch.stack(batch[key]).to(self.device)
 
         camera = self.train_dataset.cameras[image_indices]
         if camera.metadata is None:
             camera.metadata = {}
         camera.metadata['actual_height'] = camera.height.float().mean().item()
         camera.metadata['actual_width'] = camera.width.float().mean().item()
+        camera.metadata['actual_images_per_batch'] = self.images_per_batch
         camera.height = self.config.patch_size * torch.ones_like(camera.height)
         camera.width = self.config.patch_size * torch.ones_like(camera.width)
         camera.cx = camera.cx - offsets[:, 1:2]
         camera.cy = camera.cy - offsets[:, 0:1]
         camera = camera.to(self.device)
         camera.metadata["cam_idx"] = image_indices
+        # camera.metadata["num_unique_cam_idx"] = len(set(*image_indices))
         camera.metadata["slices"] = offset_slices
 
         return camera, batch
