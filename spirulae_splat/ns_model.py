@@ -805,6 +805,8 @@ class SpirulaeModel(Model):
             kwargs['actual_width'] = int(camera.metadata['actual_width'] + 0.5)
         if 'actual_height' in camera.metadata:
             kwargs['actual_height'] = int(camera.metadata['actual_height'] + 0.5)
+        if 'patch_offsets' in camera.metadata:
+            kwargs['patch_offsets'] = camera.metadata['patch_offsets']
         is_fisheye = (camera.camera_type[0].item() == CameraType.FISHEYE.value)
         if not self.training:
             is_fisheye = True
@@ -959,6 +961,8 @@ class SpirulaeModel(Model):
                 "means2d": means2d,
                 "depths": depths,
             }
+            if 'patch_offsets' in camera.metadata:
+                self.info['patch_offsets'] = camera.metadata['patch_offsets']
             if 'actual_images_per_batch' in camera.metadata:
                 self.info['n_cameras'] = camera.metadata['actual_images_per_batch']
             for key in ['gaussian_ids', 'camera_ids', 'max_blending']:
@@ -977,7 +981,8 @@ class SpirulaeModel(Model):
             if camera.metadata is not None and "cam_idx" in camera.metadata:
                 rgb = self.training_losses.apply_bilateral_grid(
                     self.training_losses.bil_grids,
-                    rgb, camera.metadata["cam_idx"], H, W
+                    rgb, camera.metadata["cam_idx"],
+                    **kwargs
                 )
             # in depth and normal fit mode, will apply in loss function
 

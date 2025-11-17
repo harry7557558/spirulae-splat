@@ -182,7 +182,7 @@ class SpirulaeDataManager(FullImageDatamanager):
         image_indices = torch.randint(0, len(self.cached_train), (batch_size,))
         offsets = (torch.rand([batch_size, 2]) * self.effective_offsets[image_indices] + 0.5).long()
         batch = { 'image': [] }
-        offset_slices = []
+        patch_offsets = []
         for image_idx, (y0, x0) in zip(image_indices, offsets):
             y0, x0 = y0.item(), x0.item()
             y1 = y0 + self.config.patch_size
@@ -203,7 +203,7 @@ class SpirulaeDataManager(FullImageDatamanager):
                     batch[key] = []
                 batch[key].append(patch)
 
-            offset_slices.append((slice(y0, y1), slice(x0, x1)))
+            patch_offsets.append((x0, y0))
 
         for key in batch:
             batch[key] = torch.stack(batch[key]).to(self.device)
@@ -221,7 +221,7 @@ class SpirulaeDataManager(FullImageDatamanager):
         camera = camera.to(self.device)
         camera.metadata["cam_idx"] = image_indices
         # camera.metadata["num_unique_cam_idx"] = len(set(*image_indices))
-        camera.metadata["slices"] = offset_slices
+        camera.metadata["patch_offsets"] = torch.tensor(patch_offsets, dtype=torch.int32)
 
         return camera, batch
 

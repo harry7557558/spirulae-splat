@@ -210,12 +210,23 @@ class SplatTrainingLosses(torch.nn.Module):
         gt_img = self._downscale_if_required(image)
         return gt_img
 
-    def apply_bilateral_grid(self, bilagrid, rgb: torch.Tensor, cam_idx: int, H: int, W: int) -> torch.Tensor:
+    def apply_bilateral_grid(self, bilagrid, rgb: torch.Tensor, cam_idx: int, **kwargs) -> torch.Tensor:
         """rgb must be clamped to 0-1"""
-        out = slice(
-            bil_grids=bilagrid, rgb=rgb, xy=None,
-            grid_idx=torch.tensor(cam_idx, device=rgb.device, dtype=torch.long)[:,None],
-        )
+        try:
+            out = slice(
+                bil_grids=bilagrid, rgb=rgb, xy=None,
+                grid_idx=torch.tensor(cam_idx, device=rgb.device, dtype=torch.long)[:,None],
+                actual_width=kwargs.get('actual_width', None),
+                actual_height=kwargs.get('actual_height', None),
+                patch_offsets=kwargs.get('patch_offsets', None),
+            )
+        except TypeError:
+            raise RuntimeError(
+                "\033[93m"
+                "You are likely using an outdated version of fused_bilagrid. "
+                "Please update to latest fused_bilagrid from https://github.com/harry7557558/fused-bilagrid"
+                "\033[0m"
+            )
         return out["rgb"]
 
     # @torch.compile(**_TORCH_COMPILE_ARGS)
@@ -295,7 +306,8 @@ class SplatTrainingLosses(torch.nn.Module):
                 gt_depth = gt_depth / (gt_depth + 1.0)
                 gt_depth = self.apply_bilateral_grid(
                     self.bil_grids_depth,
-                    gt_depth.repeat(1, 1, 1, 3), camera.metadata["cam_idx"], H, W
+                    gt_depth.repeat(1, 1, 1, 3), camera.metadata["cam_idx"],
+                    **meta
                 )[..., :1]
                 gt_depth = gt_depth / (1.0 - gt_depth).clip(max=0.999)
 
@@ -315,7 +327,8 @@ class SplatTrainingLosses(torch.nn.Module):
                 B, H, W, C = gt_normal.shape
                 gt_normal = self.apply_bilateral_grid(
                     self.bil_grids_normal,
-                    0.5+0.5*gt_normal, camera.metadata["cam_idx"], H, W
+                    0.5+0.5*gt_normal, camera.metadata["cam_idx"],
+                    **meta
                 ) * 2.0 - 1.0
 
         # load RGB
@@ -506,8 +519,6 @@ class SplatTrainingLosses(torch.nn.Module):
 
         # bilagrid total variation loss
         bilagrid_tv_loss_weight = 10.0
-        if self.config.use_bilateral_grid or self.config.use_bilateral_grid_for_geometry:
-            assert not self.config.use_bvh, "Bilateral grid is currently not supported with patched batching."
         if self.config.use_bilateral_grid:
             loss_dict["tv_loss"] = bilagrid_tv_loss_weight * total_variation_loss(self.bil_grids.grids)
         if self.config.use_bilateral_grid_for_geometry:

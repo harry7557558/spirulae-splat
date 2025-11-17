@@ -69,6 +69,7 @@ def rasterization(
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
     actual_width: int = None,
     actual_height: int = None,
+    patch_offsets: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 

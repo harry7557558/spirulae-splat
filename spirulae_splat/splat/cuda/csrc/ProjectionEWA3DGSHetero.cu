@@ -200,8 +200,10 @@ std::tuple<
     OpaqueTriangle::WorldEval3D::Tensor splats_proj =
         OpaqueTriangle::WorldEval3D::Tensor::empty(-1, nnz, opt);
 
+    auto stream = at::cuda::getCurrentCUDAStream();
+
     #define _LAUNCH_ARGS \
-        <<<_CEIL_DIV(nnz, block), block>>>( \
+        <<<_CEIL_DIV(nnz, block), block, 0, stream>>>( \
             C, nnz, \
             in_splats.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, tile_width, tile_height, near_plane, far_plane, \
@@ -235,7 +237,8 @@ std::tuple<
 template<typename SplatPrimitive, gsplat::CameraModelType camera_model>
 __global__ void projection_ewa_3dgs_hetero_backward_kernel(
     // fwd inputs
-    const uint32_t C,
+    const long C,
+    const long N,
     const uint32_t nnz,
     const typename SplatPrimitive::World::Buffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
@@ -374,9 +377,11 @@ std::tuple<
     if (viewmats_requires_grad)
         v_viewmats = at::zeros_like(viewmats, opt);
 
+    auto stream = at::cuda::getCurrentCUDAStream();
+
     #define _LAUNCH_ARGS \
-        <<<_CEIL_DIV(nnz, block), block>>>( \
-            C, nnz, \
+        <<<_CEIL_DIV(nnz, block), block, 0, stream>>>( \
+            C, N, nnz, \
             splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, tile_width, tile_height, \
             camera_ids.data_ptr<int64_t>(), gaussian_ids.data_ptr<int64_t>(), (int4*)aabb.data_ptr<int32_t>(), \
@@ -439,7 +444,7 @@ std::tuple<
 
     #define _LAUNCH_ARGS \
         <<<_CEIL_DIV(nnz, block), block>>>( \
-            C, nnz, \
+            C, N, nnz, \
             splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, tile_width, tile_height, \
             camera_ids.data_ptr<int64_t>(), gaussian_ids.data_ptr<int64_t>(), (int4*)aabb.data_ptr<int32_t>(), \
