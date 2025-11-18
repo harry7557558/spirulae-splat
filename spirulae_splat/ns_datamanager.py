@@ -175,7 +175,7 @@ class SpirulaeDataManager(FullImageDatamanager):
             self.images_per_batch = max(len(self.cached_train) / self.config.max_batch_per_epoch, 1)
 
         if batch_size == -1:
-            pixels_per_batch = self.pixels_per_image / self.images_per_batch
+            pixels_per_batch = self.pixels_per_image * self.images_per_batch
             pixels_per_patch = self.config.patch_size**2
             batch_size = max(int(pixels_per_batch // pixels_per_patch), 1)
 

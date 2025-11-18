@@ -43,6 +43,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // PerSplatLoss.cuh
     m.def("compute_per_splat_losses_forward", &compute_per_splat_losses_forward_tensor);
     m.def("compute_per_splat_losses_backward", &compute_per_splat_losses_backward_tensor);
+    m.def("mcmc_add_noise_3dgs", &mcmc_add_noise_3dgs_tensor);
 
     // PerPixelLoss.cuh
     m.def("compute_per_pixel_losses_forward", &compute_per_pixel_losses_forward_tensor);

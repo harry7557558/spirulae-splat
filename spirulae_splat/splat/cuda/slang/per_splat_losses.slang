@@ -139,3 +139,45 @@ void per_splat_losses_bwd(
     v_opacity = p_opacity.d;
     v_quat = p_quat.d;
 }
+
+
+#include "projection_utils.slang"
+
+[CudaDeviceExport]
+void mcmc_add_noise_3dgs(
+    float scaler, float min_opacity,
+    inout float3 mean, float3 scale, float4 quat, float opac
+) {
+    float k = 0.5 / min_opacity;
+    float x0 = 1.0 - min_opacity;
+    float op_sigmoid = 1.0 / (1.0 + exp(-k * ((1.0 - opac) - x0)));
+
+    float3x3 covar;
+    quat_scale_to_covar(normalize(quat), exp(scale), covar);
+
+    float3 noise = randn3(float4(dot(mean, mean), dot(mean, scale), dot(scale, scale), dot(quat, float4(opac))));
+    noise = noise * scaler * op_sigmoid;
+    mean += mul(covar, noise);
+}
+
+[CudaDeviceExport]
+void mcmc_add_noise_triangle(
+    float scaler, float min_opacity,
+    inout float3 mean, float3 scale, float4 quat, float opac
+) {
+    float k = 0.5 / min_opacity;
+    float x0 = 1.0 - min_opacity;
+    float op_sigmoid = 1.0 / (1.0 + exp(-k * ((1.0 - opac) - x0)));
+
+    float3 vert0, vert1, vert2;
+    map_opaque_triangle(mean, normalize(quat), scale, vert0, vert1, vert2);
+
+    float3 vertc = (vert0 + vert1 + vert2) / 3.0f;
+    float3 d0 = vert0 - vertc, d1 = vert1 - vertc, d2 = vert2 - vertc;
+    float3 dn = 0.5f * min(min(length(d0), length(d1)), length(d2)) * normalize(cross(d0, d1));
+    float3x3 covar = 0.5f * (outerProduct(d0) + outerProduct(d1) + outerProduct(d2) + outerProduct(dn)) / 3.5f;
+
+    float3 noise = randn3(float4(dot(mean, mean), dot(mean, scale), dot(scale, scale), dot(quat, float4(opac))));
+    noise = noise * scaler * op_sigmoid;
+    mean += mul(covar, noise);
+}

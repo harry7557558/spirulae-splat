@@ -1,4 +1,4 @@
-import per_splat_losses;
-import per_pixel_losses;
-import pixel_wise;
-import depth_to_normal;
+#include "per_splat_losses.slang"
+#include "per_pixel_losses.slang"
+#include "pixel_wise.slang"
+#include "depth_to_normal.slang"

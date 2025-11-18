@@ -233,3 +233,76 @@ compute_per_splat_losses_backward_tensor(
 }
 
 
+
+__global__ void mcmc_add_noise_3dgs_kernel(
+    long num_splats,
+    float scaler, float min_opacity,
+    float3* __restrict__ means,
+    const float3* __restrict__ scales,
+    const float4* __restrict__ quats,
+    const float* __restrict__ opacs
+) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_splats)
+        return;
+
+    mcmc_add_noise_3dgs(
+        scaler, min_opacity,
+        &means[idx], scales[idx], quats[idx], opacs[idx]
+    );
+}
+
+__global__ void mcmc_add_noise_triangle_kernel(
+    long num_splats,
+    float scaler, float min_opacity,
+    float3* __restrict__ means,
+    const float3* __restrict__ scales,
+    const float4* __restrict__ quats,
+    const float* __restrict__ opacs
+) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_splats)
+        return;
+
+    mcmc_add_noise_triangle(
+        scaler, min_opacity,
+        &means[idx], scales[idx], quats[idx], opacs[idx]
+    );
+}
+
+void mcmc_add_noise_3dgs_tensor(
+    std::string primitive,
+    float scaler, float min_opacity,
+    torch::Tensor &means,
+    torch::Tensor &scales,
+    torch::Tensor &quats,
+    torch::Tensor &opacs
+) {
+    DEVICE_GUARD(means);
+    CHECK_INPUT(means);
+    CHECK_INPUT(scales);
+    CHECK_INPUT(quats);
+    CHECK_INPUT(opacs);
+
+    const size_t num_splats = opacs.numel();
+
+    if (primitive == "3dgs" || primitive == "mip")
+        mcmc_add_noise_3dgs_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
+            num_splats, scaler, min_opacity,
+            (float3*)means.data_ptr<float>(),
+            (float3*)scales.data_ptr<float>(),
+            (float4*)quats.data_ptr<float>(),
+            opacs.data_ptr<float>()
+        );
+    else if (primitive == "opaque_triangle")
+        mcmc_add_noise_triangle_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
+            num_splats, scaler, min_opacity,
+            (float3*)means.data_ptr<float>(),
+            (float3*)scales.data_ptr<float>(),
+            (float4*)quats.data_ptr<float>(),
+            opacs.data_ptr<float>()
+        );
+    else throw std::runtime_error("Unknown primitive: " + primitive);
+}
+
+

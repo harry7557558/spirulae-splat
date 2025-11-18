@@ -364,7 +364,8 @@ def rasterization(
         )
         torch.cuda.synchronize()
         time1 = perf_counter()
-        print(1e3*(time1-time0), 'ms')
+        bvh_time = 1e3*(time1-time0)
+        # print(1e3*(time1-time0), 'ms')
         # if 1e3*(time1-time0) > 100:
         #     dump_all()
         #     exit(0)
@@ -442,6 +443,8 @@ def rasterization(
             "means2d": proj_splats[0],  # with grad
         }
     )
+    if use_bvh:
+        meta['bvh_time'] = bvh_time
     # if heterogeneous:
     #     meta.update({
     #         "intersection_count": intersection_count_map[1:]-intersection_count_map[:-1]

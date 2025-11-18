@@ -250,7 +250,7 @@ class SpirulaeModelConfig(ModelConfig):
     """Shape of the bilateral grid (X, Y, W)"""
     use_bilateral_grid_for_geometry: bool = True
     """If True, use bilateral grid for depth and normal (e.g. AI generated biased ones)"""
-    bilagrid_shape_geometry: Tuple[int, int, int] = (4, 4, 4)
+    bilagrid_shape_geometry: Tuple[int, int, int] = (8, 8, 4)
     """Shape of the bilateral grid for depth and normal (X, Y, W)"""
 
     use_3dgs: bool = True
@@ -480,7 +480,7 @@ class SpirulaeModel(Model):
 
             self.strategy = OpaqueStrategy(
                 cap_max=self.config.mcmc_cap_max,
-                noise_lr=self.config.mcmc_noise_lr,# * (self.config.kernel_radius/3.0),
+                noise_lr=self.config.mcmc_noise_lr,
                 refine_start_iter=self.config.mcmc_warmup_length,
                 warmup_steps=warmup_steps_0,
                 refine_stop_iter=self.config.num_iterations,
@@ -965,7 +965,7 @@ class SpirulaeModel(Model):
                 self.info['patch_offsets'] = camera.metadata['patch_offsets']
             if 'actual_images_per_batch' in camera.metadata:
                 self.info['n_cameras'] = camera.metadata['actual_images_per_batch']
-            for key in ['gaussian_ids', 'camera_ids', 'max_blending']:
+            for key in ['gaussian_ids', 'camera_ids', 'max_blending', 'bvh_time']:
                 if key in meta:
                     self.info[key] = meta[key]
 
@@ -1146,9 +1146,17 @@ class SpirulaeModel(Model):
             f"[BilagridTVLoss] rgb={fmt('tv_loss', 10.0)} "
             f"depth={fmt('tv_loss_depth', 10.0)} "
             f"normal={fmt('tv_loss_normal', 10.0)}",
-        ] + ["                \n", opacity_floor] * (len(opacity_floor) > 0) + [
-            "                \n",
         ]
+        additional_chunks = []
+        if len(opacity_floor) > 0:
+            additional_chunks.append(opacity_floor)
+        if 'bvh_time' in self.info:
+            losses['bvh_time'] = self.info['bvh_time']
+            additional_chunks.append(f"[BvhTime] {fmt('bvh_time', 1.0, 1)} ms")
+        if len(additional_chunks) > 0:
+            chunks.append("                \n")
+            chunks.extend(additional_chunks)
+        chunks.append("                \n")
         chunks = ' '.join(chunks).replace('\n ', '\n')
         CONSOLE.print(chunks, end="\033[F"*(chunks.count('\n')))
 

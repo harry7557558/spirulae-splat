@@ -268,6 +268,7 @@ class OpaqueStrategy(Strategy):
         scalar = lr * self.noise_lr #* min(step/max(self.refine_start_iter,1), 1)
         sc = max(1 - self.get_opacity_floor(step) / self.gradual_prune_opacity, 0.0)
         inject_noise_to_position(
+            "opaque_triangle",
             params=params, optimizers=optimizers, state={}, scaler=scalar*sc,
             min_opacity=self.min_opacity*sc,
             # opacities=self.map_opacities(step, params["opacities"].flatten())

@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Callable, Dict, List, Union, Optional
+from typing import Callable, Dict, List, Union, Optional, Literal
 
 import torch
 import torch.nn.functional as F
@@ -7,6 +7,8 @@ from torch import Tensor
 
 from spirulae_splat.splat._torch_impl import quat_to_rotmat, quat_scale_to_covar_preci
 from gsplat.relocation import compute_relocation
+
+from spirulae_splat.splat.cuda._wrapper_projection import _make_lazy_cuda_func
 
 from spirulae_splat.viewer.utils import (
     quat_scale_to_triangle_verts,
@@ -489,6 +491,7 @@ def sample_add_opaque_triangles(
 
 @torch.no_grad()
 def inject_noise_to_position(
+    primitive: Literal["3dgs", "mip", "opaque_triangle"],
     params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
@@ -501,24 +504,13 @@ def inject_noise_to_position(
 
     if opacities is None:
         opacities = torch.sigmoid(params["opacities"].flatten())
-    scales = torch.exp(params["scales"])
-    if scales.shape[-1] == 2:
-        scales = torch.concat((scales, 0.5*torch.fmin(scales[:,0:1], scales[:,1:2])), axis=1)
-    covars, _ = quat_scale_to_covar_preci(
-        params["quats"],
-        scales,
-        compute_covar=True,
-        compute_preci=False,
-        triu=False,
-    )
 
-    def op_sigmoid(x, k=0.5/min_opacity, x0=1.0-min_opacity):
-        return 1 / (1 + torch.exp(-k * (x - x0)))
-
-    noise = (
-        torch.randn_like(params["means"])
-        * (op_sigmoid(1 - opacities)).unsqueeze(-1)
-        * scaler
+    _make_lazy_cuda_func("mcmc_add_noise_3dgs")(
+        primitive,
+        scaler,
+        min_opacity,
+        params["means"].data,
+        params["scales"].data,
+        params['quats'].data,
+        opacities
     )
-    noise = torch.einsum("bij,bj->bi", covars, noise)
-    params["means"].add_(noise)

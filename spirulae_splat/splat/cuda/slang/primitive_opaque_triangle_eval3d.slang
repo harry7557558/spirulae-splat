@@ -1,13 +1,5 @@
 #include "projection_utils.slang"
 
-[ForceInline]
-float hash41(float4 seed) {
-    // https://www.shadertoy.com/view/4djSRW
-    seed = fract(seed * float4(.1031, .1030, .0973, .1099));
-    seed += dot(seed, seed.wzxy + 33.33);
-    return fract((seed.x + seed.y) * (seed.z + seed.w));
-}
-
 #define _projection_opaque_triangle_eval3d_ARGS \
     const float3 mean, \
     const float4 quat, \
@@ -31,22 +23,6 @@ float hash41(float4 seed) {
     out float3 verts[3], \
     out float3 rgbs[3], \
     out float3 normal
-
-[CudaDeviceExport]
-[ForceInline]
-[Differentiable]
-void map_opaque_triangle(
-    float3 mean, float4 quat, float3 scale,
-    out float3 vert0, out float3 vert1, out float3 vert2
-) {
-    float sx = exp(scale.x),
-          sy = exp(scale.y),
-          sz = scale.z - 0.5 * (scale.x + scale.y);
-    float3x3 M = normalized_quat_to_rotmat(quat);
-    vert0 = mul(M, float3(sx, 0, 0)) + mean;
-    vert1 = mul(M, float3(sx * (-0.5 + sz), sy, 0)) + mean;
-    vert2 = mul(M, float3(sx * (-0.5 - sz), -sy, 0)) + mean;
-}
 
 [ForceInline]
 [Differentiable]

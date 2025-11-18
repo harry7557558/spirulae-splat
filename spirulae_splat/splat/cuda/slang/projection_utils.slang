@@ -1,4 +1,10 @@
 #pragma once
+// ^ not working for [CudaDeviceExport]
+
+#ifndef _PROJECTION_UTILS_SLANG_INC
+
+#define _PROJECTION_UTILS_SLANG_INC
+
 
 static const float ALPHA_THRESHOLD = 1.0f/255.0f;
 
@@ -7,6 +13,56 @@ enum CameraModelType {
     FISHEYE = 1,
     ORTHO = 2
 };
+
+// https://www.shadertoy.com/view/4djSRW
+
+#define fract(x) ((x)-floor(x))
+
+[ForceInline]
+float hash14(in float4 p4) {
+    p4 = fract(p4 * float4(.1031, .1030, .0973, .1099));
+    p4 += dot(p4, p4.wzxy + 33.33);
+    return fract((p4.x + p4.y) * (p4.z + p4.w));
+}
+
+[ForceInline]
+float2 hash24(in float4 p4) {
+    p4 = fract(p4 * float4(.1031, .1030, .0973, .1099));
+    p4 += dot(p4, p4.wzxy + 33.33);
+    return fract((p4.xz + p4.yw) * p4.wx);
+}
+
+[ForceInline]
+float4 hash44(in float4 p4) {
+    p4 = fract(p4 * float4(.1031, .1030, .0973, .1099));
+    p4 += dot(p4, p4.wzxy + 33.33);
+    return fract((p4.xxyz + p4.yzzw) * p4.zywx);
+}
+
+#undef fract
+
+[ForceInline]
+float2 box_muller(in float2 uv) {
+    return sqrt(-2.0f * log(1.0 - uv.x)) * float2(
+        cos(6.28318530718 * uv.y),
+        sin(6.28318530718 * uv.y)
+    );
+}
+
+[ForceInline]
+float2 randn2(in float4 seed) {
+    float2 val = hash24(seed);
+    return box_muller(val);
+}
+
+[ForceInline]
+float3 randn3(in float4 seed) {
+    float4 val = hash44(seed);
+    return float3(
+        box_muller(val.xz),
+        box_muller(val.yw).x
+    );
+}
 
 [CudaDeviceExport]
 [ForceInline]
@@ -487,3 +543,25 @@ void generate_ray_vjp(
     v_t = dp_t.d;
 }
 
+[CudaDeviceExport]
+[ForceInline]
+[Differentiable]
+void map_opaque_triangle(
+    float3 mean, float4 quat, float3 scale,
+    out float3 vert0, out float3 vert1, out float3 vert2
+) {
+    float sx = exp(scale.x),
+          sy = exp(scale.y),
+          sz = scale.z - 0.5 * (scale.x + scale.y);
+    float3x3 M = normalized_quat_to_rotmat(quat);
+    vert0 = mul(M, float3(sx, 0, 0)) + mean;
+    vert1 = mul(M, float3(sx * (-0.5 + sz), sy, 0)) + mean;
+    vert2 = mul(M, float3(sx * (-0.5 - sz), -sy, 0)) + mean;
+}
+
+[ForceInline]
+float3x3 outerProduct(float3 u) {
+    return float3x3(u.x * u, u.y * u, u.z * u);
+}
+
+#endif  // _PROJECTION_UTILS_SLANG_INC

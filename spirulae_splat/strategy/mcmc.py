@@ -261,6 +261,7 @@ class MCMCStrategy(Strategy):
         # add noise to GSs
         scalar = lr * self.noise_lr #* min(step/max(self.refine_start_iter,1), 1)
         inject_noise_to_position(
+            "3dgs",
             params=params, optimizers=optimizers, state={}, scaler=scalar,
             min_opacity=self.min_opacity
         )
