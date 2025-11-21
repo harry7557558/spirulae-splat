@@ -219,9 +219,9 @@ class SpirulaeDataManager(FullImageDatamanager):
         camera.cx = camera.cx - offsets[:, 1:2]
         camera.cy = camera.cy - offsets[:, 0:1]
         camera = camera.to(self.device)
-        camera.metadata["cam_idx"] = image_indices
         # camera.metadata["num_unique_cam_idx"] = len(set(*image_indices))
-        camera.metadata["patch_offsets"] = torch.tensor(patch_offsets, dtype=torch.int32)
+        camera.metadata["cam_idx"] = image_indices.to(self.device)
+        camera.metadata["patch_offsets"] = torch.tensor(patch_offsets, dtype=torch.int32).to(self.device)
 
         return camera, batch
 

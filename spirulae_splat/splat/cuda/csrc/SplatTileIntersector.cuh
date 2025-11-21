@@ -12,35 +12,6 @@
 #include "types.cuh"
 
 
-struct SplatBuffers {
-    long size;
-    const glm::vec3* __restrict__ means;
-    const glm::vec3* __restrict__ scales;
-    const float* __restrict__ opacs;
-    const float4* __restrict__ quats;
-
-    SplatBuffers(
-        torch::Tensor& means,
-        torch::Tensor& scales,
-        torch::Tensor& opacs,
-        torch::Tensor& quats
-    ) {
-        DEVICE_GUARD(means);
-        CHECK_INPUT(means);
-        CHECK_INPUT(scales);
-        CHECK_INPUT(opacs);
-        CHECK_INPUT(quats);
-        // TODO: check dimension and shape
-
-        this->size = means.size(0);
-        this->means = (glm::vec3*)means.data_ptr<float>();
-        this->scales = (glm::vec3*)scales.data_ptr<float>();
-        this->opacs = opacs.data_ptr<float>();
-        this->quats = (float4*)quats.data_ptr<float>();
-    }
-};
-
-
 
 template<gsplat::CameraModelType camera_model>
 struct TileBuffers {

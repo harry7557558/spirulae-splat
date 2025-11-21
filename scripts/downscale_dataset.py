@@ -107,8 +107,8 @@ def downscale_image(input_path: str, output_path: str, scale_factor: float,
     
     # Calculate new dimensions
     original_height, original_width = img.shape[:2]
-    new_width = int(original_width * scale_factor)
-    new_height = int(original_height * scale_factor)
+    new_width = max(int(original_width * scale_factor + 0.5), 1)
+    new_height = max(int(original_height * scale_factor + 0.5), 1)
     
     # Downscale image
     if scale_factor != 1.0:

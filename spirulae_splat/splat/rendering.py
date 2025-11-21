@@ -234,6 +234,8 @@ def rasterization(
     """
     meta = {}
 
+    splat_params = [tensor.contiguous() for tensor in splat_params]
+
     if primitive in ["3dgs", "mip", "opaque_triangle"]:
         if primitive in ["3dgs", "mip"]:
             assert len(splat_params) == 6, "3DGS requires 6 params (means, quats, scales, opacities, color, sh)"

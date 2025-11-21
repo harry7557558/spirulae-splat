@@ -192,7 +192,7 @@ loadTile(unsigned tileIdx, const TileBuffers<camera_model> buffers, bool& isActi
 template<typename Primitive>
 __global__ void computeSplatAABB(
     long numSplats,
-    const typename Primitive::World::Buffer& splatBuffer,
+    const typename Primitive::World::Buffer splatBuffer,
     float3* __restrict__ aabb,
     float3* __restrict__ aabb_reduced
 ) {
@@ -1030,7 +1030,7 @@ __global__ void getTileSplatIntersections_lbvh(
 template<typename Primitive, gsplat::CameraModelType camera_model>
 __global__ void getTileSplatIntersections_lbvh_warp(
     const TileBuffers<camera_model> tiles,
-    const typename Primitive::World::Buffer& splatBuffer,
+    const typename Primitive::World::Buffer splatBuffer,
     unsigned num_levels,
     const uint2* __restrict__ trees_ranges,
     const int2* __restrict__ internal_nodes_0,
