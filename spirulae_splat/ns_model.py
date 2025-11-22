@@ -147,7 +147,9 @@ class SpirulaeModelConfig(ModelConfig):
     random_scale: float = 1.0
     """Position standard deviation to initialize random gaussians"""
     ssim_lambda: float = 0.4
-    """weight of ssim loss; 0.2 for optimal PSNR, higher for better visual quality"""
+    """Weight of ssim loss; 0.2 for optimal PSNR, higher for better visual quality"""
+    lpips_lambda: float = 0.0
+    """Weight of lpips loss for better perceptual quality; Note that this can make training much slower"""
     use_camera_optimizer: bool = False
     """Whether to use camera optimizer
         Note: this only works well in patch batching mode"""
@@ -1128,7 +1130,8 @@ class SpirulaeModel(Model):
             f"[Mem] {mem_stats}",
             f"[Train] loss={fmt('image_loss', 1.0)} "
             f"psnr={fmt('psnr', 1.0, 2)} "
-            f"ssim={fmt('ssim', 1.0, 3)}",
+            f"ssim={fmt('ssim', 1.0, 3)}" + \
+                f" lpips={fmt('lpips', 1.0, 3)}" * ('lpips' in losses),
             "                \n",
             f"[RefLoss] depth={fmt('depth_ref_loss', self.config.depth_supervision_weight, 3)} "
             f"normal={fmt('normal_ref_loss', self.config.normal_supervision_weight, 3)} "

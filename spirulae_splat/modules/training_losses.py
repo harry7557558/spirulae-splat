@@ -184,6 +184,15 @@ class SplatTrainingLosses(torch.nn.Module):
                 grid_W=self.config.bilagrid_shape_geometry[2],
             )
 
+        if self.config.lpips_lambda > 0.0:
+            from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+            # self.lpips_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32
+            self.lpips_dtype = torch.float32
+            self.lpips = LearnedPerceptualImagePatchSimilarity(
+                net_type="vgg", normalize=True
+                # net_type="alex", normalize=True
+            ).to(self.lpips_dtype)
+
     def _get_downscale_factor(self):
         if self.training:
             return 2 ** max(
@@ -394,7 +403,7 @@ class SplatTrainingLosses(torch.nn.Module):
             # gt_alpha_mask,
             [
                 # RGB supervision
-                1.0 - self.config.ssim_lambda,
+                (1.0 - self.config.ssim_lambda) * (1.0 - self.config.lpips_lambda),
                 # depth supervison
                 float(self.step > self.config.supervision_warmup) *
                     self.config.depth_supervision_weight,
@@ -427,21 +436,38 @@ class SplatTrainingLosses(torch.nn.Module):
 
         image_loss = rgb_l1 + self.config.ssim_lambda * (1.0 - ssim)
 
+        if self.config.lpips_lambda > 0.0:
+            lpips = self.lpips(
+                pred_rgb.permute(0, 3, 1, 2).clip(0, 1).to(self.lpips_dtype),
+                gt_rgb.permute(0, 3, 1, 2).clip(0, 1).to(self.lpips_dtype)
+            ).float()
+            image_loss = torch.lerp(image_loss, lpips, self.config.lpips_lambda)
+
         # metrics, readable from console during training
         with torch.no_grad():
+            # list_cap_max = self.num_train_data
+            list_cap_max = self.config.refine_every
             if not hasattr(self, '_running_metrics'):
-                self._running_metrics = { 'psnr': [], 'ssim': [] }
+                self._running_metrics = { 'psnr': [], 'ssim': [], 'lpips': [] }
             psnr_list = self._running_metrics['psnr']
             ssim_list = self._running_metrics['ssim']
             psnr = rgb_psnr.item()
             ssim = ssim.item()
             psnr_list.append(psnr)
             ssim_list.append(ssim)
-            if len(psnr_list) > self.num_train_data:
+            if len(psnr_list) > list_cap_max:
                 del psnr_list[0]
                 del ssim_list[0]
             psnr = sum(psnr_list) / len(psnr_list)
             ssim = sum(ssim_list) / len(ssim_list)
+
+            if self.config.lpips_lambda > 0.0:
+                lpips_list = self._running_metrics['lpips']
+                lpips = lpips.item()
+                lpips_list.append(lpips)
+                if len(lpips_list) > list_cap_max:
+                    del lpips_list[0]
+                lpips = sum(lpips_list) / len(lpips_list)
 
         loss_dict = {
             # [C] RGB and alpha
@@ -462,6 +488,8 @@ class SplatTrainingLosses(torch.nn.Module):
             "tv_loss": 0.0,  # see get_per_splat_losses()
             # "exposure_param_reg": exposure_param_reg,
         }
+        if self.config.lpips_lambda > 0.0:
+            loss_dict['lpips'] = float(lpips)
 
         return loss_dict
 
