@@ -479,7 +479,7 @@ class SpirulaeModel(Model):
             min_warmup_steps = self.config.refine_every * self.config.reset_alpha_every
             num_steps_until_full = math.log(max(final_num, current_num) / current_num) / math.log(self.config.mcmc_growth_factor) * \
                 self.config.refine_every + (self.config.warmup_length + self.config.refine_every)
-            warmup_steps_0 = min(max(min_warmup_steps, 1.5*num_steps_until_full), self.config.num_iterations/3)
+            warmup_steps_0 = min(2.0*max(min_warmup_steps, num_steps_until_full), self.config.num_iterations/3)
 
             self.strategy = OpaqueStrategy(
                 cap_max=self.config.mcmc_cap_max,
@@ -822,6 +822,11 @@ class SpirulaeModel(Model):
             if not self.config.use_mcmc:
                 raise NotImplementedError("3DGS training with fisheye camera is currently only supported for MCMC.")
             kwargs['dist_coeffs'] = camera.distortion_params
+
+        if 'visibility_masks' in camera.metadata:
+            visibility_masks = camera.metadata['visibility_masks']
+            visibility_masks = self._downscale_if_required(visibility_masks)
+            kwargs['masks'] = visibility_masks
 
         optimized_camera_to_world = optimized_camera_to_world.to(device)
         viewmats = viewmats.to(device)

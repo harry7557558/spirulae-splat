@@ -71,7 +71,7 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     const float *__restrict__ Ks,       // [B, C, 3, 3]
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const float3 *__restrict__ backgrounds, // [I, 3]
-    const bool *__restrict__ masks,           // [I, tile_height, tile_width]
+    const bool *__restrict__ max_blending_masks,  // [B, C, image_width, image_height]
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,
@@ -96,12 +96,10 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     tile_offsets += image_id * tile_height * tile_width;
     render_Ts += image_id * image_height * image_width;
     last_ids += image_id * image_height * image_width;
-    if (backgrounds != nullptr) {
+    if (backgrounds != nullptr)
         backgrounds += image_id;
-    }
-    if (masks != nullptr) {
-        masks += image_id * tile_height * tile_width;
-    }
+    if (max_blending_masks != nullptr)
+        max_blending_masks += image_id * image_height * image_width;
 
     // arrange 16x16 tile into 8x4 subtiles (one per warp)
     static_assert(TILE_SIZE == 16);
@@ -140,16 +138,6 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     bool inside = (i < image_height && j < image_width);
     bool done = !inside;
 
-    // when the mask is provided, render the background color and return
-    // if this tile is labeled as False
-    if (masks != nullptr && inside && !masks[tile_id]) {
-        // TODO
-        // render_colors[pix_id] = backgrounds == nullptr ?
-        //     SplatPrimitive::RenderOutput(make_float3(0.f)) :
-        //     SplatPrimitive::RenderOutput(*backgrounds);
-        return;
-    }
-
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
@@ -166,6 +154,8 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     float T = 1.0f;
     // index of most recent gaussian to write to this thread's pixel
     uint32_t cur_idx = 0;
+
+    bool max_blending_mask = max_blending_masks ? max_blending_masks[pix_id] : true;
 
     typename SplatPrimitive::RenderOutput pix_out = SplatPrimitive::RenderOutput::zero();
     typename SplatPrimitive::RenderOutput pix2_out = SplatPrimitive::RenderOutput::zero();
@@ -240,7 +230,8 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
 
                 T = next_T;
 
-                if (out_max_blending != nullptr)
+                // TODO: mask
+                if (out_max_blending != nullptr && max_blending_mask)
                     atomicMax(out_max_blending + (N == 0 ? splat_idx : splat_idx % N), vis);
             }
         }
@@ -274,7 +265,7 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    const std::optional<at::Tensor> max_blending_masks,  // [..., C, image_width, image_height]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -306,7 +297,7 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel(
             splats.buffer(), \
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
             backgrounds.has_value() ? (float3*)backgrounds.value().data_ptr<float>() : nullptr, \
-            masks.has_value() ? masks.value().data_ptr<bool>() : nullptr, \
+            max_blending_masks.has_value() ? max_blending_masks.value().data_ptr<bool>() : nullptr, \
             image_width, image_height, tile_width, tile_height, \
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(), \
             renders, transmittances.data_ptr<float>(), last_ids.data_ptr<int32_t>(), \
@@ -344,7 +335,7 @@ inline std::tuple<
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    const std::optional<at::Tensor> max_blending_masks,  // [..., C, image_width, image_height]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -359,8 +350,8 @@ inline std::tuple<
     CHECK_INPUT(Ks);
     if (backgrounds.has_value())
         CHECK_INPUT(backgrounds.value());
-    if (masks.has_value())
-        CHECK_INPUT(masks.value());
+    if (max_blending_masks.has_value())
+        CHECK_INPUT(max_blending_masks.value());
     
     typename SplatPrimitive::WorldEval3D::Tensor splats(splats_tuple);
 
@@ -392,7 +383,7 @@ inline std::tuple<
     launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel<SplatPrimitive, output_distortion>(
         splats,
         viewmats, Ks, camera_model, dist_coeffs,
-        backgrounds, masks,
+        backgrounds, max_blending_masks,
         image_width, image_height, tile_offsets, flatten_ids,
         renders, transmittances, last_ids,
         output_distortion ? &renders2.value() : nullptr,
@@ -423,7 +414,7 @@ std::tuple<
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    const std::optional<at::Tensor> max_blending_masks,       // [..., image_height, image_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -437,7 +428,7 @@ std::tuple<
     return rasterize_to_pixels_sorted_eval3d_fwd_tensor<OpaqueTriangle, true>(
         splats_tuple,
         viewmats, Ks, camera_model, dist_coeffs,
-        backgrounds, masks,
+        backgrounds, max_blending_masks,
         image_width, image_height,
         tile_offsets, flatten_ids
     );

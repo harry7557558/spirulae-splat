@@ -191,7 +191,8 @@ spirulae_triangle = MethodSpecification(
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
             datamanager=SpirulaeDataManagerConfig(
-                **_DEFAULT_DATAMANAGER_CONFIG
+                **_DEFAULT_DATAMANAGER_CONFIG,
+                compute_visibility_masks=True,
             ),
             model=SpirulaeModelConfig(
                 primitive="opaque_triangle",
@@ -235,6 +236,7 @@ spirulae_triangle_patched = MethodSpecification(
         pipeline=SpirulaePipelineConfig(
             datamanager=SpirulaeDataManagerConfig(
                 **_DEFAULT_DATAMANAGER_CONFIG,
+                compute_visibility_masks=True,
                 patch_batch_size=-1,
                 patch_size=64,
                 max_batch_per_epoch=512,

@@ -27,7 +27,7 @@ class Config:
 
 
 def process_image(
-    model_type: Literal['metric3d', 'da3'],
+    model_type: Literal['metric3d', 'da3', 'da3+lang-sam'],
     model,
     intrins: dict,
     image_path: str,
@@ -45,6 +45,7 @@ def process_image(
         w, h = int(sc*w+0.5), int(sc*h+0.5)
         image = image.resize((w, h))
 
+    image_original = image
     image = torch.from_numpy(np.array(image))[None].float().cuda() / 255.0
 
     sw = image.shape[2] / intrins['w']
@@ -58,13 +59,43 @@ def process_image(
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             pred_depth, _, output_dict = model.inference({'input': image.permute((0, 3, 1, 2))})
         pred_normal = output_dict['prediction_normal']
-    elif model_type == "da3":
+        pred_sky = None
+
+    elif model_type in ["da3", "da3+lang-sam"]:
+        model_langsam = None
+        if model_type == "da3+lang-sam":
+            model, model_langsam = model
+
         # TODO: provide intrinsics, or verify the model doesn't use intrinsics
         with redirect_stdout(StringIO()):
-            outputs = model.inference([Image.fromarray((255*image[0].clip(0,1)).to('cpu',torch.uint8).numpy())])
-        depth, sky = outputs.depth[0], outputs.sky[0]
+            outputs = model.inference([
+                # image_original,
+                Image.fromarray((255*image[0].clip(0,1)).to('cpu',torch.uint8).numpy())
+            ])
+        depth, sky, sky_original = outputs.depth[-1], outputs.sky[-1], outputs.sky[0]
         depth = np.where(sky, np.amax(depth)*np.ones_like(depth), depth)
         pred_depth = torch.from_numpy(depth)[None][None].cuda()
+        # pred_sky = torch.from_numpy(sky_original)[None][None].cuda()
+        pred_sky = None
+
+        # TODO: SAM-3
+        if model_langsam is not None:
+            box_threshold = 0.3
+            text_threshold = 0.25
+            with redirect_stdout(StringIO()):
+                results = model_langsam.predict([image_original], ["sky"], box_threshold, text_threshold)
+            for output in results:
+                masks = output['masks']
+                if not np.any(masks):
+                    continue
+                masks = np.any(masks, axis=0)
+                if pred_sky is None:
+                    pred_sky = masks
+                else:
+                    pred_sky |= masks
+            if pred_sky is not None:
+                pred_sky = torch.from_numpy(pred_sky)[None][None].cuda()
+
 
     if depth_save_path is not None:
         pred_depth = torch.nn.functional.interpolate(
@@ -73,6 +104,15 @@ def process_image(
         pad = Config.max_size // 200 + 1  # fix bad values in case undistortion gives black border that messes up model
         pred_depth /= torch.amax(pred_depth[0, pad:-pad, pad:-pad])
         pred_depth = distort_image(pred_depth, *intrins)[0]
+        if pred_sky is not None:
+            pred_sky = torch.nn.functional.interpolate(
+                pred_sky.float(), size=(h, w), mode='bilinear', align_corners=False
+            ).permute(0, 2, 3, 1)[0] > 0.5  # [h, w, 1]
+            pred_depth = torch.where(
+                pred_sky & (pred_depth == 0.0),
+                torch.amax(pred_depth)*torch.ones_like(pred_depth),
+                pred_depth
+            )
         pred_depth = torch.clip(65535*pred_depth, 0, 65535).cpu().numpy().astype(np.uint16)
         os.makedirs(Path(depth_save_path).parent, exist_ok=True)
         Image.fromarray(pred_depth.squeeze(-1), mode='I;16').save(depth_save_path)
@@ -116,7 +156,7 @@ def update_intrins(in_obj, out_obj):
     return out_obj
 
 
-def process_dir(dataset_dir: str, include_normal: bool):
+def process_dir(dataset_dir: str, include_normal: bool, include_sky: bool):
     image_dir = os.path.join(dataset_dir, "images")
 
     def with_ext(file_path, new_ext):
@@ -140,7 +180,7 @@ def process_dir(dataset_dir: str, include_normal: bool):
         frame["depth_file_path"] = os.path.join("depths", depth_filename)
         if include_normal:
             frame["normal_file_path"] = os.path.join("normals", normal_filename)
-        elif 'normal_file_path' in frame:
+        elif 'normal_file_path' in frame and False:
             del frame['normal_file_path']
     if len(image_filenames) == 0:
         print("No image found")
@@ -165,10 +205,23 @@ def process_dir(dataset_dir: str, include_normal: bool):
     model = model.cuda()
     print("Depth Anything 3 model loaded")
 
+    if include_sky:
+        # TODO: SAM-3
+        print("Loading lang-sam model...")
+        try:
+            from lang_sam.lang_sam import LangSAM
+        except ImportError:
+            print("lang-sam not found. Please install https://github.com/luca-medeiros/lang-segment-anything")
+            exit(0)
+        model_langsam = LangSAM("sam2.1_hiera_large", device="cuda")
+        model = (model, model_langsam)
+        print("lang-sam model loaded")
+
     for (image_filename, depth_filename, normal_filename, intrins) \
           in tqdm(image_filenames, "Predicting depths"):
         process_image(
-            "da3", model, intrins,
+            "da3+lang-sam" if include_sky else "da3",
+            model, intrins,
             os.path.join(image_dir, image_filename),
             os.path.join(depth_dir, depth_filename),
             # os.path.join(normal_dir, normal_filename)
@@ -200,5 +253,6 @@ if __name__ == "__main__":
         description="Export PLY (and equirectangular map), for 3DGS only.")
     parser.add_argument("dataset_dir", nargs=1, help="Path to the dataset folder.")
     parser.add_argument("--normal", action="store_true", help="Whether to predict normal in addition to depth.")
+    parser.add_argument("--sky", action="store_true", help="Whether to predict sky for full images. Useful for highly distorted fisheye images.")
     args = parser.parse_args()
-    process_dir(args.dataset_dir[0], args.normal)
+    process_dir(args.dataset_dir[0], args.normal, args.sky)

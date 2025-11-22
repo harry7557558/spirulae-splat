@@ -518,9 +518,9 @@ class Open3DTSDFFusion(GSMeshExporter):
     Backproject depths and run TSDF fusion
     """
 
-    voxel_size: float = 0.005
+    voxel_size: float = 0.0025
     """tsdf voxel size"""
-    sdf_truc: float = 0.04
+    sdf_truc: float = 0.02
     """TSDF truncation"""
 
     @torch.no_grad()

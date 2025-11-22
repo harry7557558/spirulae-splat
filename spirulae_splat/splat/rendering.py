@@ -51,6 +51,7 @@ def rasterization(
     use_bvh: bool = False,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
+    masks: Optional[Tensor] = None,
     render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
@@ -594,6 +595,7 @@ def rasterization(
         isect_offsets,
         flatten_ids,
         backgrounds=backgrounds,
+        masks=masks,
         packed=packed,
         absgrad=absgrad,
         **kwargs

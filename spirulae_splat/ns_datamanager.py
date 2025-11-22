@@ -29,6 +29,7 @@ from nerfstudio.data.datamanagers.full_images_datamanager import (
 from nerfstudio.cameras.cameras import Cameras, CameraType
 
 from spirulae_splat.ns_dataset import SpirulaeDataset
+from spirulae_splat.modules.training_losses import SplatTrainingLosses
 
 
 from concurrent.futures import ThreadPoolExecutor
@@ -61,6 +62,8 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
     """Whether to cache images in memory. If "cpu", caches on cpu. If "gpu", caches on device."""
     cache_images_type: Literal["uint8", "float32"] = "uint8"
     """The image type returned from manager, caching images in uint8 saves memory"""
+
+    compute_visibility_masks: bool = False
 
 
 class SpirulaeDataManager(FullImageDatamanager):
@@ -223,6 +226,9 @@ class SpirulaeDataManager(FullImageDatamanager):
         camera.metadata["cam_idx"] = image_indices.to(self.device)
         camera.metadata["patch_offsets"] = torch.tensor(patch_offsets, dtype=torch.int32).to(self.device)
 
+        if self.config.compute_visibility_masks:
+            camera.metadata['visibility_masks'] = SplatTrainingLosses.get_visibility_masks(batch, self.device)
+
         return camera, batch
 
     def setup_batches(self):
@@ -300,6 +306,10 @@ class SpirulaeDataManager(FullImageDatamanager):
         if camera.metadata is None:
             camera.metadata = {}
         camera.metadata["cam_idx"] = image_indices
+
+        if self.config.compute_visibility_masks:
+            camera.metadata['visibility_masks'] = SplatTrainingLosses.get_visibility_masks(batch, self.device)
+
         return camera, batch
 
     @cached_property

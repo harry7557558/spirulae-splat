@@ -74,7 +74,6 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
     const float *__restrict__ Ks,       // [B, C, 3, 3]
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const float *__restrict__ backgrounds, // [..., CDIM] or [nnz, CDIM]
-    const bool *__restrict__ masks,           // [..., tile_height, tile_width]
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,
@@ -105,15 +104,6 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
     v_render_alphas += image_id * image_height * image_width;
     if (backgrounds != nullptr) {
         backgrounds += image_id;
-    }
-    if (masks != nullptr) {
-        masks += image_id * tile_height * tile_width;
-    }
-
-    // when the mask is provided, do nothing and return if
-    // this tile is labeled as False
-    if (masks != nullptr && !masks[tile_id]) {
-        return;
     }
 
     // Load camera
@@ -320,7 +310,6 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_bwd_kernel(
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., 3]
-    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -361,7 +350,6 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_bwd_kernel(
             splats.buffer(), \
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr, \
-            masks.has_value() ? masks.value().data_ptr<bool>() : nullptr, \
             image_width, image_height, tile_width, tile_height, \
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(), \
             render_Ts.data_ptr<float>(), last_ids.data_ptr<int32_t>(), \
@@ -398,7 +386,6 @@ inline std::tuple<
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -426,8 +413,6 @@ inline std::tuple<
     CHECK_INPUT(v_render_alphas);
     if (backgrounds.has_value())
         CHECK_INPUT(backgrounds.value());
-    if (masks.has_value())
-        CHECK_INPUT(masks.value());
 
     if (tile_size != TILE_SIZE)
         AT_ERROR("Unsupported tile size");
@@ -449,7 +434,7 @@ inline std::tuple<
     launch_rasterize_to_pixels_sorted_eval3d_bwd_kernel<SplatPrimitive, output_distortion>(
         splats,
         viewmats, Ks, camera_model, dist_coeffs,
-        backgrounds, masks,
+        backgrounds,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids,
         output_distortion ? &render_outputs.value() : nullptr,
@@ -473,7 +458,6 @@ std::tuple<
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -494,7 +478,7 @@ std::tuple<
     return rasterize_to_pixels_sorted_eval3d_bwd_tensor<OpaqueTriangle, true>(
         splats_tuple,
         viewmats, Ks, camera_model, dist_coeffs,
-        backgrounds, masks,
+        backgrounds,
         image_width, image_height, tile_size, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs,
         v_render_outputs, v_render_alphas, v_distortion_outputs

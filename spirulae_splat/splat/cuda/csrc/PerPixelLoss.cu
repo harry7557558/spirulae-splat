@@ -66,6 +66,7 @@ __global__ void per_pixel_losses_forward_kernel(
     const bool* __restrict__ mask,
     const bool* __restrict__ depth_mask,
     const bool* __restrict__ normal_mask,
+    const bool* __restrict__ alpha_mask,
     float* __restrict__ out_losses
 ) {
     size_t pixel_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -94,6 +95,7 @@ __global__ void per_pixel_losses_forward_kernel(
             mask ? mask[idx] : true,
             depth_mask ? depth_mask[idx] : true,
             normal_mask ? normal_mask[idx] : true,
+            alpha_mask ? alpha_mask[idx] : true,
             &losses
         );
     }
@@ -146,6 +148,7 @@ __global__ void per_pixel_losses_backward_kernel(
     const bool* __restrict__ mask,
     const bool* __restrict__ depth_mask,
     const bool* __restrict__ normal_mask,
+    const bool* __restrict__ alpha_mask,
     const float* __restrict__ v_out_losses,
     float3* __restrict__ v_render_rgb,
     float3* __restrict__ v_ref_rgb,
@@ -209,6 +212,7 @@ __global__ void per_pixel_losses_backward_kernel(
         mask ? mask[idx] : true,
         depth_mask ? depth_mask[idx] : true,
         normal_mask ? normal_mask[idx] : true,
+        alpha_mask ? alpha_mask[idx] : true,
         &v_losses,
         &temp_v_render_rgb,
         &temp_v_ref_rgb,
@@ -320,6 +324,7 @@ compute_per_pixel_losses_forward_tensor(
     std::optional<at::Tensor> mask,
     std::optional<at::Tensor> depth_mask,
     std::optional<at::Tensor> normal_mask,
+    std::optional<at::Tensor> alpha_mask,
     const std::array<float, (uint)LossIndex::length> loss_weights_0,
     long num_train_images,
     std::optional<at::Tensor> camera_indices
@@ -361,6 +366,7 @@ compute_per_pixel_losses_forward_tensor(
     check_float("mask", mask, 1);
     check_float("depth_mask", depth_mask, 1);
     check_float("normal_mask", normal_mask, 1);
+    check_float("alpha_mask", alpha_mask, 1);
 
     size_t pixels_per_image = render_rgb.value().numel() / (3 * B);
 
@@ -390,6 +396,7 @@ compute_per_pixel_losses_forward_tensor(
         mask.has_value() ? (bool*)mask.value().contiguous().data_ptr<bool>() : nullptr,
         depth_mask.has_value() ? (bool*)depth_mask.value().contiguous().data_ptr<bool>() : nullptr,
         normal_mask.has_value() ? (bool*)normal_mask.value().contiguous().data_ptr<bool>() : nullptr,
+        alpha_mask.has_value() ? (bool*)alpha_mask.value().contiguous().data_ptr<bool>() : nullptr,
         raw_losses.data_ptr<float>()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -435,6 +442,7 @@ std::tuple<
     std::optional<at::Tensor> mask,
     std::optional<at::Tensor> depth_mask,
     std::optional<at::Tensor> normal_mask,
+    std::optional<at::Tensor> alpha_mask,
     at::Tensor raw_losses,
     const std::array<float, (uint)LossIndex::length> loss_weights_0,
     at::Tensor v_losses,
@@ -492,6 +500,7 @@ std::tuple<
         mask.has_value() ? (bool*)mask.value().contiguous().data_ptr<bool>() : nullptr,
         depth_mask.has_value() ? (bool*)depth_mask.value().contiguous().data_ptr<bool>() : nullptr,
         normal_mask.has_value() ? (bool*)normal_mask.value().contiguous().data_ptr<bool>() : nullptr,
+        alpha_mask.has_value() ? (bool*)alpha_mask.value().contiguous().data_ptr<bool>() : nullptr,
         v_raw_losses.data_ptr<float>(),
         v_render_rgb.has_value() ? (float3*)v_render_rgb.value().contiguous().data_ptr<float>() : nullptr,
         v_ref_rgb.has_value() ? (float3*)v_ref_rgb.value().contiguous().data_ptr<float>() : nullptr,

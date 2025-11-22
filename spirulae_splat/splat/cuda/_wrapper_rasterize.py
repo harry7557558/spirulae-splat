@@ -43,7 +43,7 @@ def rasterize_to_pixels(
     isect_offsets: Tensor,  # [..., tile_height, tile_width]
     flatten_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [..., channels]
-    masks: Optional[Tensor] = None,  # [..., tile_height, tile_width]
+    masks: Optional[Tensor] = None,  # [..., image_height, image_width]
     packed: bool = False,
     absgrad: bool = False,
     **kwargs
@@ -410,8 +410,8 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
         rgbs: Tensor,  # [..., N, 3, 3] or [nnz, 3, 3]
         normals: Tensor,  # [..., N, 3] or [nnz, 3]
         # rest
-        backgrounds: Tensor,  # [..., channels], Optional
-        masks: Tensor,  # [..., tile_height, tile_width], Optional
+        backgrounds: Optional[Tensor],  # [..., channels]
+        max_blending_masks: Optional[Tensor],  # [..., image_height, image_width]
         width: int,
         height: int,
         tile_size: int,
@@ -442,7 +442,7 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
         ) = _make_lazy_cuda_func("rasterization_opaque_triangle_eval3d_forward")(
             (hardness, depths, verts, rgbs, normals),
             viewmats, Ks, camera_model, dist_coeffs,
-            backgrounds, masks,
+            backgrounds, max_blending_masks,
             width, height, tile_size, isect_offsets, flatten_ids,
         )
         # torch.cuda.synchronize()
@@ -452,7 +452,7 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
         ctx.save_for_backward(
             hardness, depths, verts, rgbs, normals,
             viewmats, Ks, dist_coeffs,
-            backgrounds, masks,
+            backgrounds,
             isect_offsets, flatten_ids, render_Ts, last_ids,
             render_rgbs, render_depths, render_normals,
             render2_rgbs, render2_depths, render2_normals
@@ -483,7 +483,7 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
         (
             hardness, depths, verts, rgbs, normals,
             viewmats, Ks, dist_coeffs,
-            backgrounds, masks,
+            backgrounds,
             isect_offsets, flatten_ids, render_Ts, last_ids,
             render_rgbs, render_depths, render_normals,
             render2_rgbs, render2_depths, render2_normals
@@ -501,7 +501,7 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
         ) = _make_lazy_cuda_func("rasterization_opaque_triangle_eval3d_backward")(
             (hardness, depths, verts, rgbs, normals),
             viewmats, Ks, ctx.camera_model, dist_coeffs,
-            backgrounds, masks,
+            backgrounds,
             width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids,
             (render_rgbs, render_depths, render_normals),
             (render2_rgbs, render2_depths, render2_normals),

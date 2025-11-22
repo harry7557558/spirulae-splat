@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 import math
+import random
 
 from spirulae_splat.modules.supervision import SupervisionLosses
 from spirulae_splat.modules.exposure_correction import ExposureCorrection
@@ -99,6 +100,7 @@ class _ComputePerPixelLosses(torch.autograd.Function):
         mask: Optional[torch.Tensor],
         depth_mask: Optional[torch.Tensor],
         normal_mask: Optional[torch.Tensor],
+        alpha_mask: Optional[torch.Tensor],
         weights: List[float],
         num_train_images: int = -1,
         camera_indices: Optional[torch.Tensor] = None,
@@ -122,7 +124,8 @@ class _ComputePerPixelLosses(torch.autograd.Function):
             ref_alpha,
             mask,
             depth_mask,
-            normal_mask
+            normal_mask,
+            alpha_mask
         )
 
         losses, raw_losses = _C.compute_per_pixel_losses_forward(
@@ -238,6 +241,24 @@ class SplatTrainingLosses(torch.nn.Module):
             )
         return out["rgb"]
 
+    @staticmethod
+    def get_visibility_masks(batch, device=torch.device("cuda")):
+        masks = None
+
+        if "mask" in batch:
+            batch_mask = batch['mask'].to(device)
+            masks = batch_mask
+
+        if 'depth' in batch:
+            gt_depth = batch['depth'].to(device)
+            if len(gt_depth.shape) == 3:
+                gt_depth = gt_depth.unsqueeze(-1)
+
+            none_sky_mask = gt_depth < torch.amax(gt_depth, dim=(1,2,3), keepdims=True).detach()
+            masks = masks & none_sky_mask if masks is not None else none_sky_mask
+
+        return masks
+
     # @torch.compile(**_TORCH_COMPILE_ARGS)
     def composite_with_background(self, image, background) -> torch.Tensor:
         """Composite the ground truth image with a background color when it has an alpha channel.
@@ -278,10 +299,11 @@ class SplatTrainingLosses(torch.nn.Module):
 
         gt_rgb, gt_depth, gt_normal, gt_alpha = None, None, None, None  # for loss
         gt_rgb_mask, gt_depth_mask, gt_normal_mask, gt_alpha_mask = None, None, None, None  # for masking
+        none_sky_mask = None
 
         # load alpha
         if "mask" in batch:
-            batch_mask = self._downscale_if_required(batch['mask'].to(device).float()).bool()
+            batch_mask = self._downscale_if_required(batch['mask'].to(device).float()) > 0.5
             gt_rgb_mask = batch_mask
             if self.config.apply_loss_for_mask:
                 gt_alpha = batch_mask
@@ -294,18 +316,9 @@ class SplatTrainingLosses(torch.nn.Module):
             gt_depth = self._downscale_if_required(gt_depth)
             gt_depth_mask = (gt_depth != 0.0)
 
-            # mask sky
+            # sky mask
             none_sky_mask = gt_depth < torch.amax(gt_depth, dim=(1,2,3), keepdims=True).detach()
-            gt_depth_mask = gt_depth_mask & none_sky_mask
-            if gt_alpha is not None:  # always apply loss
-                gt_alpha = gt_alpha & none_sky_mask
-            else:
-                gt_alpha = none_sky_mask
-            if not (self.config.apply_loss_for_mask or self.config.train_background_color):
-                if gt_rgb_mask is not None:
-                    gt_rgb_mask = gt_rgb_mask & none_sky_mask
-                else:
-                    gt_rgb_mask = none_sky_mask
+            gt_alpha_mask = gt_depth_mask
 
             # apply bilagrid
             if self.config.use_bilateral_grid_for_geometry and \
@@ -345,6 +358,27 @@ class SplatTrainingLosses(torch.nn.Module):
                     **meta
                 ) * 2.0 - 1.0
 
+        # mask sky
+        if none_sky_mask is not None:
+            # apply to depth mask (already there if sky mask is there)
+            gt_depth_mask = gt_depth_mask & none_sky_mask
+            # apply to normal desk
+            if gt_normal_mask is None:
+                gt_normal_mask = none_sky_mask
+            else:
+                gt_normal_mask = gt_normal_mask & none_sky_mask
+            # apply loss to discourage opacity
+            if gt_alpha is not None:
+                gt_alpha = gt_alpha & none_sky_mask
+            else:
+                gt_alpha = none_sky_mask
+            # apply to rgb mask
+            if not (self.config.apply_loss_for_mask or self.config.train_background_color):
+                if gt_rgb_mask is not None:
+                    gt_rgb_mask = gt_rgb_mask & none_sky_mask
+                else:
+                    gt_rgb_mask = none_sky_mask
+
         # load RGB
         if self.config.fit == "rgb":
             gt_img_rgba = self.get_gt_img(batch["image"].to(device))
@@ -361,10 +395,17 @@ class SplatTrainingLosses(torch.nn.Module):
             if self.config.apply_loss_for_mask:
                 gt_alpha = gt_alpha & alpha if gt_alpha is None else alpha
 
-        # do this to make SSIM happier
+        # do this to make SSIM happier + encourage sky transparency
+        # TODO: bilagrid is currently not applied to background; probably apply to train images instead
         if gt_rgb_mask is not None:
             gt_rgb = torch.where(gt_rgb_mask, gt_rgb, outputs["background"])
-            pred_rgb = torch.where(gt_rgb_mask, pred_rgb, outputs["background"])
+        if gt_rgb_mask is not None or none_sky_mask is not None:
+            background_mask = gt_rgb_mask
+            if none_sky_mask is not None and ('max_blending' in meta or random.random() < 0.1):
+                background_mask = none_sky_mask if background_mask is None else \
+                    background_mask & none_sky_mask
+            if background_mask is not None:
+                pred_rgb = torch.where(background_mask, pred_rgb, outputs["background"])
 
         # correct exposure (deprecated)
         if self.config.adaptive_exposure_mode is not None and \
@@ -400,7 +441,7 @@ class SplatTrainingLosses(torch.nn.Module):
             gt_rgb_mask,
             gt_depth_mask,
             gt_normal_mask,
-            # gt_alpha_mask,
+            gt_alpha_mask,
             [
                 # RGB supervision
                 (1.0 - self.config.ssim_lambda) * (1.0 - self.config.lpips_lambda),

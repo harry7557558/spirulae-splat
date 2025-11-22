@@ -25,7 +25,6 @@ std::tuple<
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,

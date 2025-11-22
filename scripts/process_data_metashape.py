@@ -37,7 +37,8 @@ from difflib import SequenceMatcher
 
 
 class StringMatcher:
-    """Brute force solution, fast enough"""
+    """Brute force solution
+    TODO: prefix/suffix tree, O(N^2) takes a few minutes for 6000 images"""
 
     def __init__(self, strings):
         self.strings = strings
