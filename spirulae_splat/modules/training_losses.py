@@ -288,10 +288,15 @@ class SplatTrainingLosses(torch.nn.Module):
             # mask sky
             none_sky_mask = gt_depth < torch.amax(gt_depth, dim=(1,2,3), keepdims=True).detach()
             gt_depth_mask = gt_depth_mask & none_sky_mask
-            if gt_alpha is not None:
+            if gt_alpha is not None:  # always apply loss
                 gt_alpha = gt_alpha & none_sky_mask
             else:
                 gt_alpha = none_sky_mask
+            if not (self.config.apply_loss_for_mask or self.config.train_background_color):
+                if gt_rgb_mask is not None:
+                    gt_rgb_mask = gt_rgb_mask & none_sky_mask
+                else:
+                    gt_rgb_mask = none_sky_mask
 
             # apply bilagrid
             if self.config.use_bilateral_grid_for_geometry and \

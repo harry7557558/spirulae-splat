@@ -135,8 +135,6 @@ spirulae = MethodSpecification(
                 **_DEFAULT_DATAMANAGER_CONFIG
             ),
             model=SpirulaeModelConfig(
-                background_color="black",
-                train_background_color=False,
             ),
             
         ),
@@ -173,8 +171,6 @@ spirulae_patched = MethodSpecification(
                 mcmc_max_screen_size=0.15,
                 mcmc_max_screen_size_clip_hardness=1.5,
                 # mcmc_max_world_size=1.0,
-                background_color="black",
-                train_background_color=False,
             ),
         ),
         optimizers={
@@ -204,8 +200,6 @@ spirulae_triangle = MethodSpecification(
                 sh_degree=0,
                 bilagrid_shape=(16, 16, 8),
                 stop_refine_at=30000,
-                background_color="black",
-                train_background_color=False,
                 # alpha_reg_weight=0.0,
                 mcmc_scale_reg=0.02,
                 # erank_reg=1.0,
@@ -252,8 +246,6 @@ spirulae_triangle_patched = MethodSpecification(
                 sh_degree=0,
                 bilagrid_shape=(16, 16, 8),
                 stop_refine_at=30000,
-                background_color="black",
-                train_background_color=False,
                 # alpha_reg_weight=0.0,
                 mcmc_scale_reg=0.02,
                 # erank_reg=1.0,

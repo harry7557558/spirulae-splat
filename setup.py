@@ -65,6 +65,19 @@ def get_ext():
     class CustomBuildExtention(BuildExtension):
         def build_extensions(self):
             self.parallel = multiprocessing.cpu_count()
+
+            # Prevent out of memory on low memory devices
+            try:
+                import psutil
+                free_mem = psutil.virtual_memory().available
+                mem_per_worker = 2 * 1024**3  # 2GB; TODO: separate libtorch like fused-bilagrid
+                self.parallel = min(
+                    self.parallel,
+                    max(free_mem // mem_per_worker, 1)
+                )
+            except ImportError:
+                pass
+
             super().build_extensions()
 
     return CustomBuildExtention.with_options(no_python_abi_suffix=True, use_ninja=True)

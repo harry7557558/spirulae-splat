@@ -14,6 +14,11 @@ import json
 
 from spirulae_splat.splat.cuda import undistort_image, distort_image
 
+from typing import Literal
+
+from io import StringIO
+from contextlib import redirect_stdout
+
 
 @dataclass
 class Config:
@@ -22,6 +27,7 @@ class Config:
 
 
 def process_image(
+    model_type: Literal['metric3d', 'da3'],
     model,
     intrins: dict,
     image_path: str,
@@ -48,9 +54,17 @@ def process_image(
     intrins = (intrins['camera_model'], Ks, dist_coeffs)
     image = undistort_image(image, *intrins)
 
-    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-        pred_depth, _, output_dict = model.inference({'input': image.permute((0, 3, 1, 2))})
-    pred_normal = output_dict['prediction_normal']
+    if model_type == "metric3d":
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            pred_depth, _, output_dict = model.inference({'input': image.permute((0, 3, 1, 2))})
+        pred_normal = output_dict['prediction_normal']
+    elif model_type == "da3":
+        # TODO: provide intrinsics, or verify the model doesn't use intrinsics
+        with redirect_stdout(StringIO()):
+            outputs = model.inference([Image.fromarray((255*image[0].clip(0,1)).to('cpu',torch.uint8).numpy())])
+        depth, sky = outputs.depth[0], outputs.sky[0]
+        depth = np.where(sky, np.amax(depth)*np.ones_like(depth), depth)
+        pred_depth = torch.from_numpy(depth)[None][None].cuda()
 
     if depth_save_path is not None:
         pred_depth = torch.nn.functional.interpolate(
@@ -102,7 +116,7 @@ def update_intrins(in_obj, out_obj):
     return out_obj
 
 
-def process_dir(dataset_dir: str):
+def process_dir(dataset_dir: str, include_normal: bool):
     image_dir = os.path.join(dataset_dir, "images")
 
     def with_ext(file_path, new_ext):
@@ -124,7 +138,10 @@ def process_dir(dataset_dir: str):
             update_intrins(frame, global_intrins)
         ))
         frame["depth_file_path"] = os.path.join("depths", depth_filename)
-        frame["normal_file_path"] = os.path.join("normals", normal_filename)
+        if include_normal:
+            frame["normal_file_path"] = os.path.join("normals", normal_filename)
+        elif 'normal_file_path' in frame:
+            del frame['normal_file_path']
     if len(image_filenames) == 0:
         print("No image found")
         return
@@ -135,25 +152,53 @@ def process_dir(dataset_dir: str):
     depth_dir = os.path.join(dataset_dir, "depths")
     normal_dir = os.path.join(dataset_dir, "normals")
     os.makedirs(depth_dir, exist_ok=True)
-    os.makedirs(normal_dir, exist_ok=True)
+    if include_normal:
+        os.makedirs(normal_dir, exist_ok=True)
 
-    print("Loading model...")
-    model = torch.hub.load('yvanyin/metric3d', 'metric3d_vit_large', pretrain=True)
-    model = model.eval().cuda().bfloat16()
-    print("Model loaded")
+    print("Loading Depth Anything 3 model...")
+    try:
+        from depth_anything_3.api import DepthAnything3
+    except ImportError:
+        print("Depth Anything v3 not found. Please install following https://huggingface.co/depth-anything/DA3MONO-LARGE.")
+        exit(0)
+    model = DepthAnything3.from_pretrained("depth-anything/da3mono-large")
+    model = model.cuda()
+    print("Depth Anything 3 model loaded")
 
     for (image_filename, depth_filename, normal_filename, intrins) \
-          in tqdm(image_filenames, "Predicting depth/normal"):
+          in tqdm(image_filenames, "Predicting depths"):
         process_image(
-            model, intrins,
+            "da3", model, intrins,
             os.path.join(image_dir, image_filename),
             os.path.join(depth_dir, depth_filename),
+            # os.path.join(normal_dir, normal_filename)
+            None
+        )
+
+    if not include_normal:
+        return
+
+    print("Loading Metric3D v2 model...")
+    model = torch.hub.load('yvanyin/metric3d', 'metric3d_vit_large', pretrain=True)
+    model = model.eval().cuda().bfloat16()
+    print("Metric3D v2 model loaded")
+
+    for (image_filename, depth_filename, normal_filename, intrins) \
+          in tqdm(image_filenames, "Predicting normals"):
+        process_image(
+            "metric3d", model, intrins,
+            os.path.join(image_dir, image_filename),
+            # os.path.join(depth_dir, depth_filename),
+            None,
             os.path.join(normal_dir, normal_filename)
         )
 
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) < 2:
-        print("Usage: python3 predict_geometry.py path/to/dataset/dir")
-    process_dir(sys.argv[1])
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Export PLY (and equirectangular map), for 3DGS only.")
+    parser.add_argument("dataset_dir", nargs=1, help="Path to the dataset folder.")
+    parser.add_argument("--normal", action="store_true", help="Whether to predict normal in addition to depth.")
+    args = parser.parse_args()
+    process_dir(args.dataset_dir[0], args.normal)
