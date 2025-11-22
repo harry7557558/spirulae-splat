@@ -15,6 +15,21 @@
 // #define DEBUG
 
 
+__device__ __forceinline__ float remapFunction(float x) {
+    // identity near origin, proportional to x^(1/k) for large x
+    constexpr float k = 2.5f;
+    return k * sinhf( (1.0f/k) * asinhf( x ) );
+}
+
+__device__ __forceinline__ float3 remapAABB(float3 b) {
+    return {
+        remapFunction(b.x),
+        remapFunction(b.y),
+        remapFunction(b.z),
+    };
+}
+
+template<bool remap>
 __device__ bool getAABB(
     const Vanilla3DGS::World::Buffer& splatBuffer, long idx,
     float3 &aabb_min, float3 &aabb_max
@@ -39,9 +54,14 @@ __device__ bool getAABB(
     aabb_min = mean - bound;
     aabb_max = mean + bound;
 
+    if (remap) {
+        aabb_min = remapAABB(aabb_min);
+        aabb_max = remapAABB(aabb_max);
+    }
     return opac > ALPHA_THRESHOLD && isfinite(dot(aabb_min, aabb_max));
 }
 
+template<bool remap>
 __device__ bool getAABB(
     const OpaqueTriangle::World::Buffer& splatBuffer, long idx,
     float3 &aabb_min, float3 &aabb_max
@@ -64,6 +84,10 @@ __device__ bool getAABB(
         fmax(fmax(vert0.z, vert1.z), vert2.z),
     };
 
+    if (remap) {
+        aabb_min = remapAABB(aabb_min);
+        aabb_max = remapAABB(aabb_max);
+    }
     return isfinite(dot(aabb_min, aabb_max));
 }
 
@@ -137,7 +161,7 @@ struct Tile {
     __device__ __forceinline__ float isOverlap(const Vanilla3DGS::World::Buffer& splatBuffer, long idx) const {
         // TODO: primitive aware version with less false positives
         float3 aabb_min, aabb_max;
-        bool valid_aabb = getAABB(splatBuffer, idx, aabb_min, aabb_max);
+        bool valid_aabb = getAABB<false>(splatBuffer, idx, aabb_min, aabb_max);
         if (!valid_aabb || !isOverlap(aabb_min, aabb_max))
             return -1.0f;
         float3 mean_ = 0.5f * (aabb_min + aabb_max);
@@ -150,7 +174,7 @@ struct Tile {
     __device__ __forceinline__ float isOverlap(const OpaqueTriangle::World::Buffer& splatBuffer, long idx) const {
         // TODO: primitive aware version with less false positives
         float3 aabb_min, aabb_max;
-        bool valid_aabb = getAABB(splatBuffer, idx, aabb_min, aabb_max);
+        bool valid_aabb = getAABB<false>(splatBuffer, idx, aabb_min, aabb_max);
         if (!valid_aabb || !isOverlap(aabb_min, aabb_max))
             return -1.0f;
         float3 mean_ = 0.5f * (aabb_min + aabb_max);
@@ -201,7 +225,7 @@ __global__ void computeSplatAABB(
         return;
 
     float3 aabb_min, aabb_max;
-    bool valid_aabb = getAABB(splatBuffer, gid, aabb_min, aabb_max);
+    bool valid_aabb = getAABB<true>(splatBuffer, gid, aabb_min, aabb_max);
     if (!valid_aabb)
         aabb_min = aabb_max = make_float3(0.0f);  // TODO: better way
     if (aabb != nullptr) {
@@ -245,37 +269,6 @@ __device__ unsigned getLevel(
     return min(max((unsigned)level, (unsigned)0), num_levels-1);
 }
 
-template<uint BRANCH_FACTOR>
-__device__ __forceinline__ uint getSubcellOffset(uint3 subcell) {
-    uint3 i = subcell % BRANCH_FACTOR;
-    return (i.z * BRANCH_FACTOR + i.y) * BRANCH_FACTOR + i.x;
-}
-
-template<typename Primitive, uint BRANCH_FACTOR>
-__global__ void countCellOverlaps(
-    const long numSplats,
-    const typename Primitive::World::Buffer &splatBuffer,
-    float3 root_min, float3 root_max,
-    unsigned num_levels,
-    unsigned* __restrict__ overlap_counts
-) {
-    unsigned tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid >= numSplats) return;
-    
-    float3 aabb_min, aabb_max;
-    bool valid_aabb = getAABB(splatBuffer, tid, aabb_min, aabb_max);
-    if (!valid_aabb) {
-        overlap_counts[tid] = 0;
-        return;
-    }
-    
-    unsigned level = getLevel(aabb_min, aabb_max, root_min, root_max, num_levels, (float)BRANCH_FACTOR);
-    
-    unsigned count_splat = 1;
-    unsigned count_subcell = level;
-    overlap_counts[tid] = count_splat + count_subcell;
-}
-
 __device__ __forceinline__ uint64_t insert_2_zeros_between_bits(uint64_t x) {
     x = (x | (x << 32)) & (uint64_t)0xFFFF00000000FFFFULL;
     x = (x | (x << 16)) & (uint64_t)0x00FF0000FF0000FFULL;
@@ -284,149 +277,6 @@ __device__ __forceinline__ uint64_t insert_2_zeros_between_bits(uint64_t x) {
     x = (x | (x << 2))  & (uint64_t)0x1249249249249249ULL;
     return x;
 }
-
-template<uint BRANCH_FACTOR>
-__device__ __forceinline__ uint64_t getCellKey(
-    unsigned level,
-    uint3 pos, bool isSplat
-) {
-    static_assert(BRANCH_FACTOR == 2);
-    // 6 bit level, 1 bit splat vs cell, (64-6-1)/3=19 Morton bits in each dimension
-    constexpr unsigned kMortonBitsPerDim = 19;
-    uint64_t x = (uint64_t)(pos.x & ((1<<level)-1)) << (kMortonBitsPerDim - level);
-    uint64_t y = (uint64_t)(pos.y & ((1<<level)-1)) << (kMortonBitsPerDim - level);
-    uint64_t z = (uint64_t)(pos.z & ((1<<level)-1)) << (kMortonBitsPerDim - level);
-  #if 0
-    x = insert_2_zeros_between_bits(x) & (((uint64_t)1<<(3*kMortonBitsPerDim))-1);
-    y = insert_2_zeros_between_bits(y) & (((uint64_t)1<<(3*kMortonBitsPerDim))-1);
-    z = insert_2_zeros_between_bits(z) & (((uint64_t)1<<(3*kMortonBitsPerDim))-1);
-    uint64_t morton = (x * 2 + y) * 2 + z;
-  #else
-    uint64_t morton = (((x << kMortonBitsPerDim) | y) << kMortonBitsPerDim) | z;
-  #endif
-    // printf("%u  %d %d %d  %llx\n", level, pos.x, pos.y, pos.z, morton);
-    return ((
-        (((uint64_t)level << (3*kMortonBitsPerDim)) | morton) << 1
-    ) | (uint64_t)isSplat);
-}
-
-template<typename Primitive, uint BRANCH_FACTOR>
-__global__ void fillCellOverlaps(
-    const long numSplats,
-    const typename Primitive::World::Buffer splatBuffer,
-    float3 root_min, float3 root_max,
-    unsigned num_levels,
-    unsigned* __restrict__ overlap_offsets,
-    uint64_t* __restrict__ cell_keys,
-    int32_t* __restrict__ splat_ids,
-    uint8_t* __restrict__ subcell_masks,
-    int32_t* __restrict__ subcell_ids,
-    float3* __restrict__ subcell_aabb
-) {
-    unsigned tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid >= numSplats) return;
-    
-    float3 aabb_min, aabb_max;
-    bool valid_aabb = getAABB(splatBuffer, tid, aabb_min, aabb_max);
-    float3 aabb_center = (aabb_min + aabb_max) * 0.5f;
-
-    unsigned offset = overlap_offsets[tid];
-    unsigned num_cells = overlap_offsets[tid+1] - offset;
-    if (num_cells == 0)
-        return;
-    unsigned idx = 0;
-    if (!valid_aabb) {
-        while (idx < num_cells) {
-            cell_keys[offset+idx] = (~((uint64_t)0)) >> 1;
-            splat_ids[offset+idx] = -1;
-            subcell_masks[offset+idx] = (uint8_t)0;
-            subcell_ids[offset+idx] = -1;
-            idx++;
-        }
-        return;
-    }
-
-    // Fill splat cells
-    unsigned level = getLevel(aabb_min, aabb_max, root_min, root_max, num_levels, (float)BRANCH_FACTOR);
-    float scale = powf(BRANCH_FACTOR, level);
-    float3 cell_size = (root_max - root_min) / scale;
-    
-  #if 0
-    uint3 min_cell = make_uint3((aabb_min - root_min) / cell_size);
-    uint3 max_cell = make_uint3((aabb_max - root_min) / cell_size);
-    min_cell = clamp(min_cell, 0, (int)(scale-0.99f));
-    max_cell = clamp(max_cell, 0, (int)(scale-0.99f));
-    max_cell.x = min(max_cell.x, min_cell.x + 1);
-    max_cell.y = min(max_cell.y, min_cell.y + 1);
-    max_cell.z = min(max_cell.z, min_cell.z + 1);
-    uint3 cells[8];  // max this number of cells guaranteed by getLevel
-    int cellsRef[8];
-  #else
-    uint3 min_cell = make_uint3((aabb_center - root_min) / cell_size + 0.5f);
-    uint3 max_cell = min_cell;
-    uint3 cells[1];
-    int cellsRef[1];
-  #endif
-    
-    uint cellCount = 0;
-    for (uint z = min_cell.z; z <= max_cell.z; z++) {
-        for (uint y = min_cell.y; y <= max_cell.y; y++) {
-            for (uint x = min_cell.x; x <= max_cell.x; x++) {
-                cell_keys[offset+idx] = getCellKey<BRANCH_FACTOR>(level, {x, y, z}, true);
-                splat_ids[offset+idx] = tid;
-                subcell_masks[offset+idx] = (uint8_t)0;
-                subcell_ids[offset+idx] = -1;
-                subcell_aabb[2*(offset+idx)+0] = aabb_min;
-                subcell_aabb[2*(offset+idx)+1] = aabb_max;
-                cells[cellCount] = {x, y, z};
-                cellsRef[cellCount] = offset+idx;
-                if (++idx >= num_cells)
-                    return;
-                ++cellCount;
-            }
-        }
-    }
-    
-    // Fill parent cells
-    while (level--) {
-        // reduce cell list while writing grid
-        // notice cells are sorted by z, then y, then x
-        uint i0 = 0;
-        for (uint i = 0; i < cellCount; i++) {
-            // uint8_t mask = (uint8_t)1 << getSubcellOffset<BRANCH_FACTOR>(cells[i]);
-            uint8_t mask = (uint8_t)(1 + getSubcellOffset<BRANCH_FACTOR>(cells[i]));
-            cells[i0] = (cells[i] >> 1);
-            cell_keys[offset+idx] = getCellKey<BRANCH_FACTOR>(level, cells[i0], false);;
-            splat_ids[offset+idx] = -1;
-            subcell_masks[offset+idx] = mask;
-            subcell_ids[offset+idx] = cellsRef[i];
-            subcell_aabb[2*(offset+idx)+0] = aabb_min;
-            subcell_aabb[2*(offset+idx)+1] = aabb_max;
-            if (i0 == 0 || (
-                cells[i0-1].x != cells[i0].x ||
-                cells[i0-1].y != cells[i0].y ||
-                cells[i0-1].z != cells[i0].z
-            )) {
-                cellsRef[i0] = offset+idx;
-                ++i0;
-            }
-            if (++idx >= num_cells)
-                return;
-        }
-        cellCount = i0;
-        if (level == 0) break;
-    }
-
-    // set the rest empty
-    while (idx < num_cells) {
-        cell_keys[offset+idx] = (~((uint64_t)0)) >> 1;
-        splat_ids[offset+idx] = -1;
-        subcell_masks[offset+idx] = (uint8_t)0;
-        subcell_ids[offset+idx] = -1;
-        idx++;
-    }
-}
-
 
 
 template<typename T>
@@ -528,55 +378,6 @@ __device__ __forceinline__ void lower_upper_bounds(
     hi = left;
 }
 
-
-
-template<uint BRANCH_FACTOR>
-__global__ void fillTreeSubcells_perCell(
-    unsigned num_overlaps,
-    unsigned num_cells,
-    const unsigned* __restrict__ cell_id_map,
-    const int32_t* __restrict__ subcell_ids,
-    const uint8_t* __restrict__ subcell_masks,
-    const float3* __restrict__ subcell_aabb,
-    int32_t* __restrict__ children,
-    float3* __restrict__ treeAABB
-) {
-    unsigned tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid >= num_cells) return;
-
-    // binary search bounds [i0, i1)
-    unsigned i0, i1;
-    lower_upper_bounds(cell_id_map, num_overlaps, tid, i0, i1);
-    // printf("%u [%u, %u)\n", tid, i0, i1);
-
-    float3 aabbMin, aabbMax;
-
-    // fill
-    constexpr unsigned B3 = BRANCH_FACTOR * BRANCH_FACTOR * BRANCH_FACTOR;
-    for (unsigned i = i0; i < i1; i++) {
-
-        // update children
-        int mask = (int)subcell_masks[i];
-        if (mask != 0) {
-            // unsigned cid = tid * B3 + (31 - __clz(mask));
-            unsigned cid = tid * B3 + (mask - 1);
-            unsigned sid = subcell_ids[i];
-            children[cid] = cell_id_map[sid];
-        }
-
-        // update AABB
-        if (i == i0) {
-            aabbMin = subcell_aabb[2*i+0];
-            aabbMax = subcell_aabb[2*i+1];
-        } else {
-            aabbMin = fmin(aabbMin, subcell_aabb[2*i+0]);
-            aabbMax = fmax(aabbMax, subcell_aabb[2*i+1]);
-        }
-    }
-
-    treeAABB[2*tid+0] = aabbMin;
-    treeAABB[2*tid+1] = aabbMax;
-}
 
 
 __global__ void fillTreeSubcells_initAABB(
@@ -682,14 +483,16 @@ __global__ void getTileSplatIntersections_brute(
 inline constexpr uint kMortonBitsPerDim = 19;
 
 __device__ __forceinline__ uint64_t getSplatSortingKey(
-    uint level, uint3 pos
+    uint level, float3 pos
 ) {
-    uint64_t x = (uint64_t)(pos.x & ((1<<level)-1)) << (kMortonBitsPerDim - level);
-    uint64_t y = (uint64_t)(pos.y & ((1<<level)-1)) << (kMortonBitsPerDim - level);
-    uint64_t z = (uint64_t)(pos.z & ((1<<level)-1)) << (kMortonBitsPerDim - level);
-    x = insert_2_zeros_between_bits(x) & (((uint64_t)1<<(3*kMortonBitsPerDim))-1);
-    y = insert_2_zeros_between_bits(y) & (((uint64_t)1<<(3*kMortonBitsPerDim))-1);
-    z = insert_2_zeros_between_bits(z) & (((uint64_t)1<<(3*kMortonBitsPerDim))-1);
+    constexpr uint64_t mask_comp = ((uint64_t)1 << (uint64_t)kMortonBitsPerDim) - 1;
+    uint64_t x = uint64_t(pos.x * exp2f(kMortonBitsPerDim - level) + 0.5f) & mask_comp;
+    uint64_t y = uint64_t(pos.y * exp2f(kMortonBitsPerDim - level) + 0.5f) & mask_comp;
+    uint64_t z = uint64_t(pos.z * exp2f(kMortonBitsPerDim - level) + 0.5f) & mask_comp;
+    constexpr uint64_t mask_full = (((uint64_t)1 << (uint64_t)(3*kMortonBitsPerDim)) - 1);
+    x = insert_2_zeros_between_bits(x) & mask_full;
+    y = insert_2_zeros_between_bits(y) & mask_full;
+    z = insert_2_zeros_between_bits(z) & mask_full;
     uint64_t morton = (x * 2 + y) * 2 + z;
     return ((uint64_t)level << (3*kMortonBitsPerDim)) | morton;
 }
@@ -706,7 +509,7 @@ __global__ void fillSplatSortingKeys(
     if (tid >= numSplats) return;
     
     float3 aabb_min, aabb_max;
-    bool valid_aabb = getAABB(splatBuffer, tid, aabb_min, aabb_max);
+    bool valid_aabb = getAABB<true>(splatBuffer, tid, aabb_min, aabb_max);
     if (!valid_aabb) {
         splat_keys[tid] = 0;
         return;
@@ -718,7 +521,7 @@ __global__ void fillSplatSortingKeys(
 
     float scale = exp2f(level);
     float3 cell_size = (root_max - root_min) / scale;
-    uint3 cell = make_uint3((aabb_center - root_min) / cell_size + 0.5f);
+    float3 cell = (aabb_center - root_min) / cell_size;
 
     uint64_t key = getSplatSortingKey(level, cell);
     splat_keys[tid] = key;
@@ -904,10 +707,10 @@ __global__ void computeLbvhAABB(
     float3 aabb_min, aabb_max;
     bool valid_aabb = true;
     if (children.x < 0)
-        valid_aabb = getAABB(splatBuffer, ~children.x, aabb_min, aabb_max);
+        valid_aabb = getAABB<false>(splatBuffer, ~children.x, aabb_min, aabb_max);
     if (children.y < 0) {
         float3 aabb_min1, aabb_max1;
-        valid_aabb = getAABB(splatBuffer, ~children.y, aabb_min1, aabb_max1);
+        valid_aabb = getAABB<false>(splatBuffer, ~children.y, aabb_min1, aabb_max1);
         if (children.x < 0)
             aabb_min = fmin(aabb_min, aabb_min1),
             aabb_max = fmax(aabb_max, aabb_max1);
@@ -1423,6 +1226,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_
         rootAABBMin = center - glm::vec3(max_size);
         rootAABBMax = center + glm::vec3(max_size);
     }
+    // printf("AABB: %f %f %f  %f %f %f\n", rootAABBMin.x, rootAABBMin.y, rootAABBMin.z, rootAABBMax.x, rootAABBMax.y, rootAABBMax.z);
     // printAABB_wireframe(rootAABBMin, rootAABBMax);
 
     // compute sorting keys (level and Morton code)
@@ -1469,6 +1273,11 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_
         printf("\b\\right]\n");
     }
     #endif
+
+    // auto uniques = torch::unique_consecutive(sorted_morton, true, true);
+    // int64_t num_unique = std::get<0>(uniques).numel();
+    // int64_t max_collision_count = std::get<2>(uniques).amax().item<int64_t>();
+    // printf("%d/%d collisions, %d max\n", (int)(numSplats-num_unique), (int)numSplats, (int)max_collision_count);
 
     // Build tree
     torch::Tensor internal_nodes = torch::empty({numSplats-1, 2}, tensorI32);
