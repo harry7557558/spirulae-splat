@@ -50,11 +50,13 @@ struct SplatTileIntersector {
     c10::TensorOptions tensorI32, tensorI16, tensorI64, tensorU8;
     typename Primitive::World::Buffer splats;
     long numSplats;
+    float rel_scale;
     TileBuffers<camera_model> tiles;
 
     SplatTileIntersector(
         const typename Primitive::World::Tensor &splats,
-        const TileBuffers<camera_model> &tiles
+        const TileBuffers<camera_model> &tiles,
+        float rel_scale
     );
 
     std::tuple<torch::Tensor, torch::Tensor> getIntersections_brute();
@@ -72,7 +74,8 @@ intersect_splat_tile_3dgs(
     const torch::Tensor& viewmats,
     const torch::Tensor& Ks,
     const gsplat::CameraModelType& camera_model,
-    const CameraDistortionCoeffsTensor& dist_coeffs
+    const CameraDistortionCoeffsTensor& dist_coeffs,
+    float rel_scale
 );
 
 std::tuple<torch::Tensor, torch::Tensor>
@@ -83,5 +86,6 @@ intersect_splat_tile_opaque_triangle(
     const torch::Tensor& viewmats,
     const torch::Tensor& Ks,
     const gsplat::CameraModelType& camera_model,
-    const CameraDistortionCoeffsTensor& dist_coeffs
+    const CameraDistortionCoeffsTensor& dist_coeffs,
+    float rel_scale
 );

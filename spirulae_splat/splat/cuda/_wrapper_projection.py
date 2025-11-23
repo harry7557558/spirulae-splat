@@ -716,7 +716,8 @@ def intersect_splat_tile(
     viewmats: Tensor,
     Ks: Tensor,
     camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
-    dist_coeffs: Optional[Tensor] = None
+    dist_coeffs: Optional[Tensor] = None,
+    relative_scale: float = 1.0
 ) -> Tuple[Tensor, Tensor]:
     camera_model = gsplat.cuda._wrapper._make_lazy_cuda_obj(
         f"CameraModelType.{camera_model.upper()}"
@@ -734,5 +735,6 @@ def intersect_splat_tile(
         viewmats.contiguous(),
         Ks.contiguous(),
         camera_model,
-        dist_coeffs.contiguous() if dist_coeffs is not None else None
+        dist_coeffs.contiguous() if dist_coeffs is not None else None,
+        relative_scale
     )

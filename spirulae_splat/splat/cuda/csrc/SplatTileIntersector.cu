@@ -15,24 +15,24 @@
 // #define DEBUG
 
 
-__device__ __forceinline__ float remapFunction(float x) {
+__device__ __forceinline__ float remapFunction(float x, float rel_scale) {
     // identity near origin, proportional to x^(1/k) for large x
     constexpr float k = 2.5f;
-    return k * sinhf( (1.0f/k) * asinhf( x ) );
+    return k * sinhf( (1.0f/k) * asinhf( x / rel_scale ) ) * rel_scale;
 }
 
-__device__ __forceinline__ float3 remapAABB(float3 b) {
+__device__ __forceinline__ float3 remapAABB(float3 b, float rel_scale) {
     return {
-        remapFunction(b.x),
-        remapFunction(b.y),
-        remapFunction(b.z),
+        remapFunction(b.x, rel_scale),
+        remapFunction(b.y, rel_scale),
+        remapFunction(b.z, rel_scale),
     };
 }
 
 template<bool remap>
 __device__ bool getAABB(
     const Vanilla3DGS::World::Buffer& splatBuffer, long idx,
-    float3 &aabb_min, float3 &aabb_max
+    float3 &aabb_min, float3 &aabb_max, float rel_scale = 1.0f
 ) {
     float3 mean = splatBuffer.means[idx];
     float3 scales = splatBuffer.scales[idx];
@@ -55,8 +55,8 @@ __device__ bool getAABB(
     aabb_max = mean + bound;
 
     if (remap) {
-        aabb_min = remapAABB(aabb_min);
-        aabb_max = remapAABB(aabb_max);
+        aabb_min = remapAABB(aabb_min, rel_scale);
+        aabb_max = remapAABB(aabb_max, rel_scale);
     }
     return opac > ALPHA_THRESHOLD && isfinite(dot(aabb_min, aabb_max));
 }
@@ -64,7 +64,7 @@ __device__ bool getAABB(
 template<bool remap>
 __device__ bool getAABB(
     const OpaqueTriangle::World::Buffer& splatBuffer, long idx,
-    float3 &aabb_min, float3 &aabb_max
+    float3 &aabb_min, float3 &aabb_max, float rel_scale = 1.0f
 ) {
     float3 mean = splatBuffer.means[idx];
     float3 scales = splatBuffer.scales[idx];
@@ -85,8 +85,8 @@ __device__ bool getAABB(
     };
 
     if (remap) {
-        aabb_min = remapAABB(aabb_min);
-        aabb_max = remapAABB(aabb_max);
+        aabb_min = remapAABB(aabb_min, rel_scale);
+        aabb_max = remapAABB(aabb_max, rel_scale);
     }
     return isfinite(dot(aabb_min, aabb_max));
 }
@@ -217,6 +217,7 @@ template<typename Primitive>
 __global__ void computeSplatAABB(
     long numSplats,
     const typename Primitive::World::Buffer splatBuffer,
+    float rel_scale,
     float3* __restrict__ aabb,
     float3* __restrict__ aabb_reduced
 ) {
@@ -225,7 +226,7 @@ __global__ void computeSplatAABB(
         return;
 
     float3 aabb_min, aabb_max;
-    bool valid_aabb = getAABB<true>(splatBuffer, gid, aabb_min, aabb_max);
+    bool valid_aabb = getAABB<true>(splatBuffer, gid, aabb_min, aabb_max, rel_scale);
     if (!valid_aabb)
         aabb_min = aabb_max = make_float3(0.0f);  // TODO: better way
     if (aabb != nullptr) {
@@ -503,13 +504,14 @@ __global__ void fillSplatSortingKeys(
     const typename Primitive::World::Buffer splatBuffer,
     float3 root_min, float3 root_max,
     unsigned num_levels, float branch_factor,
+    float rel_scale,
     uint64_t* __restrict__ splat_keys
 ) {
     unsigned tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= numSplats) return;
     
     float3 aabb_min, aabb_max;
-    bool valid_aabb = getAABB<true>(splatBuffer, tid, aabb_min, aabb_max);
+    bool valid_aabb = getAABB<true>(splatBuffer, tid, aabb_min, aabb_max, rel_scale);
     if (!valid_aabb) {
         splat_keys[tid] = 0;
         return;
@@ -1097,8 +1099,9 @@ void clearL2Cache() {
 template<typename Primitive, gsplat::CameraModelType camera_model>
 SplatTileIntersector<Primitive, camera_model>::SplatTileIntersector(
     const typename Primitive::World::Tensor &splats,
-    const TileBuffers<camera_model> &tiles
-) : tiles(tiles), splats(splats)
+    const TileBuffers<camera_model> &tiles,
+    float rel_scale
+) : tiles(tiles), splats(splats), rel_scale(rel_scale)
 {
     if (splats.batchSize() != 1)
         AT_ERROR("Patched mode only supports splat batch size 1");
@@ -1198,7 +1201,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_
     cudaMemset(root_aabb_tensor.data_ptr<float>()+0, kFloatPInfByte, 3*sizeof(float));
     cudaMemset(root_aabb_tensor.data_ptr<float>()+3, kFloatNInfByte, 3*sizeof(float));
     computeSplatAABB<Primitive><<<(numSplats+block-1)/block, block>>>(
-        numSplats, splats,
+        numSplats, splats, rel_scale,
         (float3*)splat_aabb.data_ptr<float>(),
         (float3*)root_aabb_tensor.data_ptr<float>()
     );
@@ -1233,7 +1236,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_
     torch::Tensor morton = torch::empty({numSplats}, tensorI64);
     fillSplatSortingKeys<Primitive><<<(numSplats+block-1)/block, block>>>(
         numSplats, splats,
-        *(float3*)&rootAABBMin, *(float3*)&rootAABBMax, MAX_NUM_LEVELS, BRANCH_FACTOR,
+        *(float3*)&rootAABBMin, *(float3*)&rootAABBMax, MAX_NUM_LEVELS, BRANCH_FACTOR, rel_scale,
         (uint64_t*)morton.data_ptr<int64_t>()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -1504,7 +1507,8 @@ intersect_splat_tile_3dgs(
     const torch::Tensor& viewmats,
     const torch::Tensor& Ks,
     const gsplat::CameraModelType& camera_model,
-    const CameraDistortionCoeffsTensor& dist_coeffs
+    const CameraDistortionCoeffsTensor& dist_coeffs,
+    float rel_scale
 ) {
     Vanilla3DGS::World::Tensor splats_tensor(splats_tuple);
 
@@ -1512,13 +1516,13 @@ intersect_splat_tile_3dgs(
         TileBuffers<gsplat::CameraModelType::PINHOLE> tile_buffers =
             {width, height, viewmats, Ks, dist_coeffs};
         return SplatTileIntersector<Vanilla3DGS, gsplat::CameraModelType::PINHOLE>
-            (splats_tensor, tile_buffers).getIntersections_lbvh();
+            (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
     else if (camera_model == gsplat::CameraModelType::FISHEYE) {
         TileBuffers<gsplat::CameraModelType::FISHEYE> tile_buffers =
             {width, height, viewmats, Ks, dist_coeffs};
         return SplatTileIntersector<Vanilla3DGS, gsplat::CameraModelType::FISHEYE>
-            (splats_tensor, tile_buffers).getIntersections_lbvh();
+            (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
     else
         throw std::runtime_error("Unsupported camera model");
@@ -1533,7 +1537,8 @@ intersect_splat_tile_opaque_triangle(
     const torch::Tensor& viewmats,
     const torch::Tensor& Ks,
     const gsplat::CameraModelType& camera_model,
-    const CameraDistortionCoeffsTensor& dist_coeffs
+    const CameraDistortionCoeffsTensor& dist_coeffs,
+    float rel_scale
 ) {
     OpaqueTriangle::World::Tensor splats_tensor(splats_tuple);
 
@@ -1541,13 +1546,13 @@ intersect_splat_tile_opaque_triangle(
         TileBuffers<gsplat::CameraModelType::PINHOLE> tile_buffers =
             {width, height, viewmats, Ks, dist_coeffs};
         return SplatTileIntersector<OpaqueTriangle, gsplat::CameraModelType::PINHOLE>
-            (splats_tensor, tile_buffers).getIntersections_lbvh();
+            (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
     else if (camera_model == gsplat::CameraModelType::FISHEYE) {
         TileBuffers<gsplat::CameraModelType::FISHEYE> tile_buffers =
             {width, height, viewmats, Ks, dist_coeffs};
         return SplatTileIntersector<OpaqueTriangle, gsplat::CameraModelType::FISHEYE>
-            (splats_tensor, tile_buffers).getIntersections_lbvh();
+            (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
     else
         throw std::runtime_error("Unsupported camera model");

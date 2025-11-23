@@ -884,6 +884,7 @@ class SpirulaeModel(Model):
             use_bvh=(self.config.use_bvh and self.training),
             # packed=True,
             # use_bvh=True,
+            relative_scale=self.config.relative_scale,
             absgrad=(not self.config.use_mcmc),
             sparse_grad=False,
             distributed=False,

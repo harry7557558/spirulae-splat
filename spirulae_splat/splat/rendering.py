@@ -46,9 +46,9 @@ def rasterization(
     height: int,
     near_plane: float = 0.01,
     far_plane: float = 1e10,
-    eps2d: float = 0.3,
     packed: bool = True,
     use_bvh: bool = False,
+    relative_scale: Optional[float] = None,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
     masks: Optional[Tensor] = None,
@@ -56,7 +56,6 @@ def rasterization(
     sparse_grad: bool = False,
     absgrad: bool = False,
     # rasterize_mode: Literal["classic", "antialiased"] = "classic",
-    channel_chunk: int = 32,
     distributed: bool = False,
     # camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
@@ -156,9 +155,6 @@ def rasterization(
         height: The height of the image.
         near_plane: The near plane for clipping. Default is 0.01.
         far_plane: The far plane for clipping. Default is 1e10.
-        eps2d: An epsilon added to the egienvalues of projected 2D covariance matrices.
-            This will prevents the projected GS to be too small. For example eps2d=0.3
-            leads to minimal 3 pixel unit. Default is 0.3.
         packed: Whether to use packed mode which is more memory efficient but might or
             might not be as fast. Default is True.
         tile_size: The size of the tiles for rasterization. Default is 16.
@@ -174,9 +170,6 @@ def rasterization(
             `meta["means2d"].absgrad`. Default is False.
         # rasterize_mode: The rasterization mode. Supported modes are "classic" and
         #     "antialiased". Default is "classic".
-        channel_chunk: The number of channels to render in one go. Default is 32.
-            If the required rendering channels are larger than this value, the rendering
-            will be done looply in chunks.
         distributed: Whether to use distributed rendering. Default is False. If True,
             The input Gaussians are expected to be a subset of scene in each rank, and
             the function will collaboratively render the images for all ranks.
@@ -363,7 +356,8 @@ def rasterization(
             viewmats.contiguous(),
             Ks.contiguous(),
             camera_model,
-            dist_coeffs.contiguous() if dist_coeffs is not None else None
+            dist_coeffs.contiguous() if dist_coeffs is not None else None,
+            1.0 if relative_scale is None else relative_scale
         )
         torch.cuda.synchronize()
         time1 = perf_counter()
