@@ -289,8 +289,9 @@ class SpirulaeModelConfig(ModelConfig):
        only apply regularizers after this many steps."""
     apply_loss_for_mask: bool = False
     """Set this to False to use masks to ignore distractors (e.g. people and cars, area outside fisheye circle, over exposure)
-       Set this to True to remove background (e.g. sky, background outside centered object)
-       If sky is from provided depth map, alpha loss will always be provided even if this is False"""
+       Set this to True to remove background (e.g. sky, background outside centered object)"""
+    enable_sky_masking: bool = True
+    """If enabled, sky from depth map will be used for masking. Alpha loss will always be applied for sky."""
     alpha_loss_weight: float = 0.01
     """Loss weight for alpha, applies when rendered alpha is above reference alpha"""
     alpha_loss_weight_under: float = 0.005

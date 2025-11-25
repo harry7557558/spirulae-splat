@@ -255,6 +255,9 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         Returns a Camera instead of raybundle"""
 
+        if not hasattr(self, 'cached_train'):
+            self.cached_train = self._load_images("train", cache_images_device=self.config.cache_images)
+
         if self.config.patch_batch_size is not None:
             return self.get_tiles(self.config.patch_batch_size)
 

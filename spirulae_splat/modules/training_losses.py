@@ -367,6 +367,9 @@ class SplatTrainingLosses(torch.nn.Module):
                 gt_normal_mask = none_sky_mask
             else:
                 gt_normal_mask = gt_normal_mask & none_sky_mask
+            if not self.config.enable_sky_masking:
+                none_sky_mask = None
+        if none_sky_mask is not None:
             # apply loss to discourage opacity
             if gt_alpha is not None:
                 gt_alpha = gt_alpha & none_sky_mask
@@ -596,7 +599,8 @@ class SplatTrainingLosses(torch.nn.Module):
         if self.config.use_bilateral_grid:
             loss_dict["tv_loss"] = bilagrid_tv_loss_weight * total_variation_loss(self.bil_grids.grids)
         if self.config.use_bilateral_grid_for_geometry:
-            loss_dict["tv_loss_depth"] = bilagrid_tv_loss_weight * total_variation_loss(self.bil_grids_depth.grids)
+            if self.config.depth_supervision_weight > 0.0:  # do this because bilagrid backward is expensive, especially in patched mode
+                loss_dict["tv_loss_depth"] = bilagrid_tv_loss_weight * total_variation_loss(self.bil_grids_depth.grids)
             loss_dict["tv_loss_normal"] = bilagrid_tv_loss_weight * total_variation_loss(self.bil_grids_normal.grids)
 
         if not _use_torch_impl:

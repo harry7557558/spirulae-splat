@@ -230,11 +230,16 @@ class GSMeshExporter:
     depth_trunc_percentile: float = 0.95
     """Depth map truncation"""
 
+    depth_trunc_max: float = float('inf')
+
     def get_depth_trunc(self, depth_map):
         depths = depth_map[~(depth_map > 0.999*depth_map.max())]
         if depths.numel() == 0:
             return 0.0
-        return torch.quantile(depths, self.depth_trunc_percentile).item()
+        return min(
+            torch.quantile(depths, self.depth_trunc_percentile).item(),
+            self.depth_trunc_max
+        )
 
     def get_output_dir(self):
         if self.output_dir is not None:
@@ -531,6 +536,8 @@ class Open3DTSDFFusion(GSMeshExporter):
         model_scale = model.dataparser_scale
         model.return_torch = True
         model.bgr = False
+        if model.relative_scale is not None:
+            model_scale /= model.relative_scale
 
         if False:
             scales = torch.amin(model.scales, dim=-1, keepdim=True)

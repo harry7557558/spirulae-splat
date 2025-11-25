@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 import os
 import json
+import re
 
 from spirulae_splat.splat.rendering import rasterization
 from spirulae_splat.splat.background_sh import render_background_sh
@@ -35,6 +36,8 @@ class SplatModel:
 
         self.dataparser_transform = np.eye(4)
         self.dataparser_scale = 1.0
+
+        self.relative_scale = None
 
         if os.path.isdir(file_path):
             for fn in os.listdir(file_path):
@@ -88,6 +91,12 @@ class SplatModel:
         elif "primitive: opaque_triangle" in content:
             self.primitive = "opaque_triangle"
         print("Primitive:", self.primitive)
+
+        relative_scale = re.findall(r"relative_scale:\s*([\d\.e\+\-]+)", content)
+        if len(relative_scale) > 0:
+            assert len(relative_scale) == 1
+            self.relative_scale = float(relative_scale[0])
+            print("Relative scale:", self.relative_scale)
 
         # load dataparser transforms
         dtr_path = os.path.join(save_dir, 'dataparser_transforms.json')
