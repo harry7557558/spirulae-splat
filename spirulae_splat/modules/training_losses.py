@@ -259,20 +259,6 @@ class SplatTrainingLosses(torch.nn.Module):
 
         return masks
 
-    # @torch.compile(**_TORCH_COMPILE_ARGS)
-    def composite_with_background(self, image, background) -> torch.Tensor:
-        """Composite the ground truth image with a background color when it has an alpha channel.
-
-        Args:
-            image: the image to composite
-            background: the background color
-        """
-        if image.shape[-1] == 4:
-            alpha = image[..., -1].unsqueeze(-1).repeat((1, 1, 1, 3))
-            return alpha * image[..., :3] + (1 - alpha) * background
-        else:
-            return image
-
     def get_2dgs_reg_weights(self):
         factor = min(self.step / max(self.config.distortion_reg_warmup, 1), 1)
         weight_depth_reg = self.config.depth_reg_weight * factor
@@ -389,7 +375,7 @@ class SplatTrainingLosses(torch.nn.Module):
             gt_img_rgba = gt_depth
         elif self.config.fit in ["normal"]:
             gt_img_rgba = 0.5+0.5*F.normalize(gt_normal, dim=-1)
-        gt_rgb = self.composite_with_background(gt_img_rgba, outputs["background"])
+        gt_rgb = gt_img_rgba[..., :3]
 
         # update alpha if image is RGBA
         if gt_img_rgba.shape[-1] == 4 and self.config.alpha_loss_weight > 0.0:
@@ -398,17 +384,38 @@ class SplatTrainingLosses(torch.nn.Module):
             if self.config.apply_loss_for_mask:
                 gt_alpha = gt_alpha & alpha if gt_alpha is None else alpha
 
+        # replace parts of background with random noise to discourage transparency
+        background = outputs["background"]
+        if self.config.randomize_background == "opaque-only":
+            background_mask = gt_rgb_mask
+            if none_sky_mask is not None:
+                background_mask = none_sky_mask if background_mask is None else \
+                    background_mask & none_sky_mask
+            if background_mask is not None:
+                background = torch.where(background_mask, torch.rand_like(background), background)
+        if self.config.randomize_background == "non-sky-only":
+            if none_sky_mask is not None:
+                background = torch.where(none_sky_mask, torch.rand_like(background), background)
+
         # do this to make SSIM happier + encourage sky transparency
-        # TODO: bilagrid is currently not applied to background; probably apply to train images instead
-        if gt_rgb_mask is not None:
-            gt_rgb = torch.where(gt_rgb_mask, gt_rgb, outputs["background"])
+        if gt_rgb_mask is not None and False:
+            gt_rgb = torch.where(gt_rgb_mask, gt_rgb, background)
         if gt_rgb_mask is not None or none_sky_mask is not None:
             background_mask = gt_rgb_mask
             if none_sky_mask is not None and ('max_blending' in meta or random.random() < 0.1):
                 background_mask = none_sky_mask if background_mask is None else \
                     background_mask & none_sky_mask
             if background_mask is not None:
-                pred_rgb = torch.where(background_mask, pred_rgb, outputs["background"])
+                pred_rgb = torch.where(background_mask, pred_rgb, background)
+
+        # apply bilateral grid
+        if self.config.use_bilateral_grid and self.config.fit == "rgb" and \
+            camera.metadata is not None and "cam_idx" in camera.metadata:
+                pred_rgb = self.apply_bilateral_grid(
+                    self.bil_grids,
+                    pred_rgb, camera.metadata["cam_idx"],
+                    **meta
+                )
 
         # correct exposure (deprecated)
         if self.config.adaptive_exposure_mode is not None and \
@@ -456,7 +463,7 @@ class SplatTrainingLosses(torch.nn.Module):
                     self.config.normal_supervision_weight,
                 # alpha supervision (over and under)
                 self.config.alpha_loss_weight,
-                self.config.alpha_loss_weight_under,
+                0.0 if gt_alpha is None else self.config.alpha_loss_weight_under,
                 # normal regularization
                 float(self.step > self.config.reg_warmup_length) *
                     weight_normal_reg,

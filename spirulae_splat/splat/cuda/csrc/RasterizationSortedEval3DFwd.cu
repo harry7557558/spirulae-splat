@@ -314,6 +314,7 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel(
             gsplat::CameraModelType::FISHEYE, output_distortion> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     #undef _LAUNCH_ARGS
 }

@@ -228,7 +228,7 @@ class SpirulaeModelConfig(ModelConfig):
     """every n intervals turn on another sh degree"""
     train_background_color: bool = True
     """make background color trainable"""
-    background_sh_degree: int = 3
+    background_sh_degree: int = 4
     """enable background model"""
     adaptive_exposure_mode: Optional[Literal[
         "linear", "log_linear", "channel", "log_channel", "affine", "log_affine"
@@ -314,8 +314,8 @@ class SpirulaeModelConfig(ModelConfig):
     """Make sure image look right in auto exposure mode,
        Use an L2 cost to match exposure parameter to the parameter at no exposure adjustment;
        (may be summed/averaged across a batch)"""
-    randomize_background: bool = False
-    """Randomize background color during training to discourage transparency. This will override background model."""
+    randomize_background: Literal[True, False, "opaque-only", "non-sky-only"] = False
+    """Use random noise for background color during training to discourage transparency."""
 
     # supervision using a foundation depth model
     # enable these by setting `depth_model` in data manager config
@@ -327,8 +327,9 @@ class SpirulaeModelConfig(ModelConfig):
     depth_distortion_uv_degree: int = -1  # 1
     """Hyperparameter for depth distortion model, controls image space embedding, see code for details
         Larger gives more parameters in depth distortion model, -1 to disable"""
-    depth_supervision_weight: float = 0.01
-    """Weight for depth supervision by comparing rendered depth with depth predicted by a foundation model"""
+    depth_supervision_weight: float = 0.0
+    """Weight for depth supervision by comparing rendered depth with depth predicted by a foundation model
+        Warn that this can reduce quality if AI generated depth is heavily biased"""
     normal_supervision_weight: float = 0.01
     """Weight for normal supervision by comparing normal from rendered depth with normal from depth predicted by a foundation model"""
 
@@ -744,7 +745,7 @@ class SpirulaeModel(Model):
 
         W, H = int(camera.width[0].item()), int(camera.height[0].item())
 
-        if self.config.randomize_background:
+        if self.config.randomize_background == True:
             # return torch.rand_like(self.background_color).repeat(H, W, 1)
             return torch.rand((len(camera), H, W, 3), device=self.background_color.device)
 
@@ -827,7 +828,7 @@ class SpirulaeModel(Model):
         if 'visibility_masks' in camera.metadata:
             visibility_masks = camera.metadata['visibility_masks']
             visibility_masks = self._downscale_if_required(visibility_masks)
-            kwargs['masks'] = visibility_masks
+            kwargs['masks'] = visibility_masks.bool()
 
         optimized_camera_to_world = optimized_camera_to_world.to(device)
         viewmats = viewmats.to(device)
@@ -985,16 +986,6 @@ class SpirulaeModel(Model):
             rgb = torch.clip(rgb + (1.0 - alpha) * background, 0.0, 1.0)
         else:
             background = torch.zeros_like(rgb)
-
-        # apply bilateral grid
-        if self.config.use_bilateral_grid and self.training and self.config.fit == "rgb":
-            if camera.metadata is not None and "cam_idx" in camera.metadata:
-                rgb = self.training_losses.apply_bilateral_grid(
-                    self.training_losses.bil_grids,
-                    rgb, camera.metadata["cam_idx"],
-                    **kwargs
-                )
-            # in depth and normal fit mode, will apply in loss function
 
         # pack outputs
         outputs = {

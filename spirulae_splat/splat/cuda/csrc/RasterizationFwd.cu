@@ -219,6 +219,7 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
             transmittances.data_ptr<float>(),
             last_ids.data_ptr<int32_t>()
         );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 
