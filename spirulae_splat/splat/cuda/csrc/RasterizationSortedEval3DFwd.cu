@@ -292,7 +292,7 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     dim3 threads = {TILE_SIZE, TILE_SIZE, 1};
     dim3 grid = {I, tile_height, tile_width};
 
-    #define _LAUNCH_ARGS <<<grid, threads>>>( \
+    #define _LAUNCH_ARGS <<<grid, threads, 0, at::cuda::getCurrentCUDAStream()>>>( \
             I, N, n_isects, packed, \
             splats.buffer(), \
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \

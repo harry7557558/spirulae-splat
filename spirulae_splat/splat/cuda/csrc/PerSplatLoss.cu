@@ -168,6 +168,7 @@ torch::Tensor compute_per_splat_losses_forward_tensor(
         erank_reg_weight_s3,
         quat_norm_reg_weight
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return loss;
 }
@@ -228,6 +229,7 @@ compute_per_splat_losses_backward_tensor(
         erank_reg_weight_s3,
         quat_norm_reg_weight
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return std::make_tuple(v_scales, v_opacities, v_quats);
 }
@@ -303,6 +305,7 @@ void mcmc_add_noise_3dgs_tensor(
             opacs.data_ptr<float>()
         );
     else throw std::runtime_error("Unknown primitive: " + primitive);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 

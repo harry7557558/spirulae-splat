@@ -202,7 +202,7 @@ std::tuple<
         Vanilla3DGS::WorldEval3D::Tensor::empty(C, N, splats_world.options());
 
     #define _LAUNCH_ARGS \
-        <<<_CEIL_DIV(B*C*N, block), block>>>( \
+        <<<_LAUNCH_ARGS_1D(B*C*N, block)>>>( \
             B, C, N, \
             splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, near_plane, far_plane, \
@@ -216,6 +216,7 @@ std::tuple<
         projection_eval3d_fwd_kernel<Vanilla3DGS, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     #undef _LAUNCH_ARGS
 
@@ -248,7 +249,7 @@ std::tuple<
         OpaqueTriangle::WorldEval3D::Tensor::empty(C, N, splats_world.options());
 
     #define _LAUNCH_ARGS \
-        <<<_CEIL_DIV(B*C*N, block), block>>>( \
+        <<<_LAUNCH_ARGS_1D(B*C*N, block)>>>( \
             B, C, N, \
             splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, near_plane, far_plane, \
@@ -262,6 +263,7 @@ std::tuple<
         projection_eval3d_fwd_kernel<OpaqueTriangle, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     #undef _LAUNCH_ARGS
 
@@ -301,7 +303,7 @@ std::tuple<
         v_viewmats = at::zeros_like(viewmats, opt);
 
     #define _LAUNCH_ARGS \
-        <<<_CEIL_DIV(B*C*N, block), block>>>( \
+        <<<_LAUNCH_ARGS_1D(B*C*N, block)>>>( \
             B, C, N, \
             splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, (int4*)aabb.data_ptr<int32_t>(), \
@@ -316,6 +318,7 @@ std::tuple<
         projection_fused_eval3d_bwd_kernel<Vanilla3DGS, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     #undef _LAUNCH_ARGS
 
@@ -355,7 +358,7 @@ std::tuple<
         v_viewmats = at::zeros_like(viewmats, opt);
 
     #define _LAUNCH_ARGS \
-        <<<_CEIL_DIV(B*C*N, block), block>>>( \
+        <<<_LAUNCH_ARGS_1D(B*C*N, block)>>>( \
             B, C, N, \
             splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, (int4*)aabb.data_ptr<int32_t>(), \
@@ -370,6 +373,7 @@ std::tuple<
         projection_fused_eval3d_bwd_kernel<OpaqueTriangle, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     #undef _LAUNCH_ARGS
 

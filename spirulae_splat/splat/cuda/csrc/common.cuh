@@ -18,11 +18,11 @@ inline constexpr float ALPHA_THRESHOLD = (1.f/255.f);
 #define DEVICE_GUARD(_ten) \
     const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
 
-#define CHECK_DEVICE_ERROR(call)                                      \
+#define CHECK_DEVICE_ERROR(call)                                    \
 do {                                                                \
     cudaError_t err = call;                                         \
     if (err != cudaSuccess) {                                       \
-        fprintf(stderr, "CUDA Error at %s:%d: %s\n",                \
+        fprintf(stderr, "\033[41mCUDA Error at %s:%d: %s\033[m\n",  \
                 __FILE__, __LINE__, cudaGetErrorString(err));       \
         exit(EXIT_FAILURE);                                         \
     }                                                               \
@@ -30,9 +30,9 @@ do {                                                                \
 
 #define _CEIL_DIV(n,m) (((n)+(m)-1)/(m))
 
-#define _LAUNCH_ARGS_1D(n,b) _CEIL_DIV(n,b),b
-#define _LAUNCH_ARGS_2D(nx,ny,bx,by) dim3(_CEIL_DIV(nx,bx),_CEIL_DIV(ny,by),1),dim3(bx,by)
-#define _LAUNCH_ARGS_3D(nx,ny,nz,bx,by,bz) dim3(_CEIL_DIV(nx,bx),_CEIL_DIV(ny,by),_CEIL_DIV(nz,bz)),dim3(bx,by,bz)
+#define _LAUNCH_ARGS_1D(n,b) _CEIL_DIV(n,b),b,0,at::cuda::getCurrentCUDAStream()
+#define _LAUNCH_ARGS_2D(nx,ny,bx,by) dim3(_CEIL_DIV(nx,bx),_CEIL_DIV(ny,by),1),dim3(bx,by),0,at::cuda::getCurrentCUDAStream()
+#define _LAUNCH_ARGS_3D(nx,ny,nz,bx,by,bz) dim3(_CEIL_DIV(nx,bx),_CEIL_DIV(ny,by),_CEIL_DIV(nz,bz)),dim3(bx,by,bz),0,at::cuda::getCurrentCUDAStream()
 
 //--------------
 #define CUDA_CALL(x)                                                           \

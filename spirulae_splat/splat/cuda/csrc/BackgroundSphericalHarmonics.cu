@@ -523,6 +523,7 @@ torch::Tensor render_background_sh_forward_tensor(
             (glm::vec3*)out_color.contiguous().data_ptr<float>()
         );
     }
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return out_color;
 }
@@ -606,6 +607,7 @@ std::tuple<
             (glm::vec3*)v_sh_coeffs.data_ptr<float>()
         );
     }
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     #undef _TEMP_ARGS
 

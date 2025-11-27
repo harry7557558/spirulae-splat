@@ -329,8 +329,6 @@ compute_per_pixel_losses_forward_tensor(
     long num_train_images,
     std::optional<at::Tensor> camera_indices
 ) {
-    auto stream = at::cuda::getCurrentCUDAStream();
-
     long B = -1, H = -1, W = -1;
     auto check_generic = [&](std::string name, const at::Tensor& tensor) {
         CHECK_CUDA(tensor);
@@ -378,7 +376,7 @@ compute_per_pixel_losses_forward_tensor(
     torch::Tensor raw_losses = torch::zeros({num_train_images+1, (uint)RawLossIndex::length}, render_rgb.value().options());
     torch::Tensor losses = torch::zeros({(uint)LossIndex::length}, render_rgb.value().options());
 
-    per_pixel_losses_forward_kernel<<<_LAUNCH_ARGS_2D(pixels_per_image, B, WARP_SIZE*WARP_SIZE, 1), 0, stream>>>(
+    per_pixel_losses_forward_kernel<<<_LAUNCH_ARGS_2D(pixels_per_image, B, WARP_SIZE*WARP_SIZE, 1)>>>(
         B, pixels_per_image,
         camera_indices.has_value() ? camera_indices.value().contiguous().data_ptr<int64_t>() : nullptr,
         render_rgb.has_value() ? (float3*)render_rgb.value().contiguous().data_ptr<float>() : nullptr,
@@ -402,7 +400,7 @@ compute_per_pixel_losses_forward_tensor(
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     per_pixel_losses_reduce_forward_kernel
-    <<<_LAUNCH_ARGS_1D(num_train_images+1, WARP_SIZE), 0, stream>>>(
+    <<<_LAUNCH_ARGS_1D(num_train_images+1, WARP_SIZE)>>>(
         num_train_images,
         raw_losses.data_ptr<float>(),
         loss_weights,
@@ -449,8 +447,6 @@ std::tuple<
     long num_train_images,
     std::optional<at::Tensor> camera_indices
 ) {
-    auto stream = at::cuda::getCurrentCUDAStream();
-
     long B = render_rgb.value().size(0);
     size_t pixels_per_image = render_rgb.value().numel() / (3 * B);
 
@@ -473,7 +469,7 @@ std::tuple<
         num_train_images = B;
     torch::Tensor v_raw_losses = torch::empty({num_train_images+1, (uint)RawLossIndex::length}, render_rgb.value().options());
 
-    per_pixel_losses_reduce_backward_kernel<<<_LAUNCH_ARGS_1D(num_train_images+1, WARP_SIZE), 0, stream>>>(
+    per_pixel_losses_reduce_backward_kernel<<<_LAUNCH_ARGS_1D(num_train_images+1, WARP_SIZE)>>>(
         num_train_images,
         raw_losses.data_ptr<float>(),
         loss_weights,
@@ -482,7 +478,7 @@ std::tuple<
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    per_pixel_losses_backward_kernel<<<_LAUNCH_ARGS_2D(pixels_per_image, B, WARP_SIZE*WARP_SIZE, 1), 0, stream>>>(
+    per_pixel_losses_backward_kernel<<<_LAUNCH_ARGS_2D(pixels_per_image, B, WARP_SIZE*WARP_SIZE, 1)>>>(
         B, pixels_per_image,
         camera_indices.has_value() ? camera_indices.value().contiguous().data_ptr<int64_t>() : nullptr,
         render_rgb.has_value() ? (float3*)render_rgb.value().contiguous().data_ptr<float>() : nullptr,
@@ -517,8 +513,8 @@ std::tuple<
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     // TODO: investigate why program crashes without this
-    if (camera_indices.has_value())
-        cudaDeviceSynchronize();
+    // if (camera_indices.has_value())
+    //     cudaDeviceSynchronize();
 
     return std::make_tuple(
         v_render_rgb,

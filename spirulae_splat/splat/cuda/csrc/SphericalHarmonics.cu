@@ -491,6 +491,7 @@ torch::Tensor compute_sh_forward_tensor(
         (float3*)coeffs.data_ptr<float>(),
         (float3*)colors.data_ptr<float>()
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return colors;
 }
@@ -537,6 +538,7 @@ compute_sh_backward_tensor(
         (float3*)v_coeffs.data_ptr<float>(),
         (float3*)v_viewdirs.data_ptr<float>()
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return std::make_tuple(v_coeffs0, v_coeffs, v_viewdirs);
 }

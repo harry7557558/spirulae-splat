@@ -102,6 +102,7 @@ torch::Tensor blend_background_forward_tensor(
         tensor2view<float, 3>(rgb), tensor2view<float, 3>(alpha), tensor2view<float, 3>(background),
         tensor2view<float, 3>(out_rgb)
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return out_rgb;
 }
@@ -139,6 +140,7 @@ blend_background_backward_tensor(
         tensor2view<float, 3>(v_out_rgb),
         tensor2view<float, 3>(v_rgb), tensor2view<float, 3>(v_alpha), tensor2view<float, 3>(v_background)
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return std::make_tuple(v_rgb, v_alpha, v_background);
 }
@@ -274,6 +276,7 @@ torch::Tensor depth_to_normal_forward_tensor(
         camera_model, Ks.data_ptr<float>(), dist_coeffs,
         is_ray_depth, tensor2view<float, 4>(depths), tensor2view<float, 4>(normals)
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return normals;
 }
@@ -300,6 +303,7 @@ torch::Tensor depth_to_normal_backward_tensor(
         tensor2view<float, 4>(v_normals),
         tensor2view<float, 4>(v_depths)
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return v_depths;
 }
@@ -397,6 +401,7 @@ torch::Tensor ray_depth_to_linear_depth_forward_tensor(
         camera_model, Ks.data_ptr<float>(), dist_coeffs,
         tensor2view<float, 4>(depths), tensor2view<float, 4>(out_depths)
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return out_depths;
 }
@@ -425,6 +430,7 @@ torch::Tensor ray_depth_to_linear_depth_backward_tensor(
         camera_model, Ks.data_ptr<float>(), dist_coeffs,
         tensor2view<float, 4>(v_out_depths), tensor2view<float, 4>(v_in_depths)
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return v_in_depths;
 }
@@ -499,6 +505,7 @@ torch::Tensor distort_image_tensor(
         camera_model, Ks.data_ptr<float>(), dist_coeffs,
         tensor2view<float, 4>(in_image), tensor2view<float, 4>(out_image)
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return out_image;
 }
@@ -525,6 +532,7 @@ torch::Tensor undistort_image_tensor(
         camera_model, Ks.data_ptr<float>(), dist_coeffs,
         tensor2view<float, 4>(in_image), tensor2view<float, 4>(out_image)
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return out_image;
 }

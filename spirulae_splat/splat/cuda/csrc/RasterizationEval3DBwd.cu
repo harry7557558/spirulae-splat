@@ -318,7 +318,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
         return;
     }
 
-    #define _LAUNCH_ARGS <<<grid, threads>>>( \
+    #define _LAUNCH_ARGS <<<grid, threads, 0, at::cuda::getCurrentCUDAStream()>>>( \
             I, N, n_isects, packed, \
             splats.buffer(), \
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \

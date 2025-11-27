@@ -138,7 +138,7 @@ std::tuple<
         Vanilla3DGS::WorldEval3D::Tensor::empty(-1, nnz, opt);
 
     #define _LAUNCH_ARGS \
-        <<<_CEIL_DIV(nnz, block), block>>>( \
+        <<<_LAUNCH_ARGS_1D(nnz, block)>>>( \
             C, nnz, \
             in_splats.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, tile_width, tile_height, near_plane, far_plane, \
@@ -200,10 +200,8 @@ std::tuple<
     OpaqueTriangle::WorldEval3D::Tensor splats_proj =
         OpaqueTriangle::WorldEval3D::Tensor::empty(-1, nnz, opt);
 
-    auto stream = at::cuda::getCurrentCUDAStream();
-
     #define _LAUNCH_ARGS \
-        <<<_CEIL_DIV(nnz, block), block, 0, stream>>>( \
+        <<<_LAUNCH_ARGS_1D(nnz, block)>>>( \
             C, nnz, \
             in_splats.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, tile_width, tile_height, near_plane, far_plane, \
@@ -380,7 +378,7 @@ std::tuple<
     auto stream = at::cuda::getCurrentCUDAStream();
 
     #define _LAUNCH_ARGS \
-        <<<_CEIL_DIV(nnz, block), block, 0, stream>>>( \
+        <<<_LAUNCH_ARGS_1D(nnz, block)>>>( \
             C, N, nnz, \
             splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, tile_width, tile_height, \
@@ -443,7 +441,7 @@ std::tuple<
         v_viewmats = at::zeros_like(viewmats, opt);
 
     #define _LAUNCH_ARGS \
-        <<<_CEIL_DIV(nnz, block), block>>>( \
+        <<<_LAUNCH_ARGS_1D(nnz, block)>>>( \
             C, N, nnz, \
             splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, tile_width, tile_height, \

@@ -268,7 +268,7 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
 
     rasterize_to_pixels_bwd_kernel<SplatPrimitive>
         // <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-        <<<grid, threads>>>(
+        <<<grid, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
             I,
             N,
             n_isects,
