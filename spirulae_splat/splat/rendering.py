@@ -247,7 +247,8 @@ def rasterization(
         if primitive in ["3dgs", "mip"]:
             assert opacities.shape == batch_dims + (N,), opacities.shape
             assert features_dc.shape == batch_dims + (N, 3), features_dc.shape
-            assert features_sh.shape == batch_dims + (N, 3, 3) or \
+            assert features_sh.shape == batch_dims + (N, 0, 3) or \
+                features_sh.shape == batch_dims + (N, 3, 3) or \
                 features_sh.shape == batch_dims + (N, 8, 3) or \
                 features_sh.shape == batch_dims + (N, 15, 3), features_sh.shape
         else:
