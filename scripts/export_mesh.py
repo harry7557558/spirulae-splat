@@ -319,6 +319,7 @@ class DepthAndNormalMapsPoisson(GSMeshExporter):
 
             c2w = np.array(frame['transform_matrix'])
             c2w = c2w @ np.diag([1, -1, -1, 1])
+            c2w[:3, 3] *= model.relative_scale
 
             rgb, depth_map = model.render(camera, c2w, return_depth=True)
             # depth_map = depth_inv_map(depth_map)
@@ -467,6 +468,7 @@ class TSDFFusion(GSMeshExporter):
 
             c2w = np.array(frame['transform_matrix'])
             c2w = c2w @ np.diag([1, -1, -1, 1])
+            c2w[:3, 3] *= model.relative_scale
 
             rgb, depth_map = model.render(camera, c2w, return_depth=True)
             # depth_map = depth_inv_map(depth_map)
@@ -578,6 +580,7 @@ class Open3DTSDFFusion(GSMeshExporter):
 
             c2w = np.array(frame['transform_matrix'])
             c2w = c2w @ np.diag([1, -1, -1, 1])
+            c2w[:3, 3] *= model.relative_scale
 
             rgb_map, depth_map = model.render(camera, c2w, return_depth=True)
 
