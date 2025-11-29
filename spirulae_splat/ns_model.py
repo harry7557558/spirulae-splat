@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-2DGS implementation that combines many recent advancements.
+3DGS implementation that combines many recent advancements.
 """
 
 import math
@@ -150,6 +150,8 @@ class SpirulaeModelConfig(ModelConfig):
     """Weight of ssim loss; 0.2 for optimal PSNR, higher for better visual quality"""
     lpips_lambda: float = 0.0
     """Weight of lpips loss for better perceptual quality; Note that this can make training much slower"""
+    log_map_factor: float = 0.0
+    """Weight of logarithm map for image loss (L1 and SSIM); may give more details on dark areas for night/HDR captures"""
     use_camera_optimizer: bool = False
     """Whether to use camera optimizer
         Note: this only works well in patch batching mode"""
@@ -368,6 +370,8 @@ class SpirulaeModel(Model):
             opacity_init = 0.5 if self.config.use_mcmc else 0.1  # per original papers
             if self.config.use_mcmc and self.config.mcmc_max_screen_size < 1.0:
                 scale_init, opacity_init = 0.5, 0.1
+            # if self.config.train_background_color:
+            #     scale_init, opacity_init = 1.0, 0.1
             scales = torch.log(scale_init * scales / (self.config.kernel_radius/3.0) + 1e-8)
             quats = F.normalize(torch.randn((num_points, 4)))
             opacities = torch.logit(opacity_init * torch.ones(num_points, 1))
@@ -983,7 +987,8 @@ class SpirulaeModel(Model):
         # blend with background
         if self.config.fit == "rgb":
             background = self.get_background_image(camera, optimized_camera_to_world, Ks)
-            rgb = torch.clip(rgb + (1.0 - alpha) * background, 0.0, 1.0)
+            # rgb = torch.clip(rgb + (1.0 - alpha) * background, 0.0, 1.0)
+            rgb = blend_background(rgb, alpha, background)
         else:
             background = torch.zeros_like(rgb)
 

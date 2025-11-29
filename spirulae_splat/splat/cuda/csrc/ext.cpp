@@ -52,6 +52,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // PixelWise.cuh
     m.def("blend_background_forward", &blend_background_forward_tensor);
     m.def("blend_background_backward", &blend_background_backward_tensor);
+    m.def("log_map_image_forward", &log_map_image_forward_tensor);
+    m.def("log_map_image_backward", &log_map_image_backward_tensor);
     m.def("depth_to_normal_forward", &depth_to_normal_forward_tensor);
     m.def("depth_to_normal_backward", &depth_to_normal_backward_tensor);
     m.def("ray_depth_to_linear_depth_forward", &ray_depth_to_linear_depth_forward_tensor);

@@ -16,18 +16,31 @@
 
 
 torch::Tensor blend_background_forward_tensor(
-    torch::Tensor &rgb,  // [H, W, 3]
-    torch::Tensor &alpha,  // [H, W, 1]
-    torch::Tensor &background  // [H, W, 3]
+    torch::Tensor &rgb,  // [B, H, W, 3]
+    torch::Tensor &alpha,  // [B, H, W, 1]
+    torch::Tensor &background  // [B, H, W, 3]
 );
 
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 blend_background_backward_tensor(
-    torch::Tensor &rgb,  // [H, W, 3]
-    torch::Tensor &alpha,  // [H, W, 1]
-    torch::Tensor &background,  // [H, W, 3]
-    torch::Tensor &v_out_rgb  // [H, W, 3]
+    torch::Tensor &rgb,  // [B, H, W, 3]
+    torch::Tensor &alpha,  // [B, H, W, 1]
+    torch::Tensor &background,  // [B, H, W, 3]
+    torch::Tensor &v_out_rgb  // [B, H, W, 3]
+);
+
+
+torch::Tensor log_map_image_forward_tensor(
+    torch::Tensor &rgb,  // [B, H, W, 3]
+    float t
+);
+
+
+torch::Tensor log_map_image_backward_tensor(
+    torch::Tensor &rgb,  // [B, H, W, 3]
+    float t,
+    torch::Tensor &v_out_rgb  // [B, H, W, 3]
 );
 
 

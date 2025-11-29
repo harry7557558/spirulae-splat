@@ -14,6 +14,8 @@ from spirulae_splat.splat.cuda import (
     ray_depth_to_linear_depth
 )
 
+from spirulae_splat.splat.cuda._wrapper_per_pixel import log_map_image
+
 from fused_ssim import fused_ssim
 
 from fused_bilagrid import BilateralGrid, slice, total_variation_loss
@@ -423,9 +425,11 @@ class SplatTrainingLosses(torch.nn.Module):
             raise NotImplementedError("Adaptive exposure is deprecated. Use bilateral grid instead.")
 
         # ssim loss
+        pred_rgb_mapped = log_map_image(pred_rgb, self.config.log_map_factor)
+        gt_rgb_mapped = log_map_image(gt_rgb, self.config.log_map_factor)
         ssim = fused_ssim(
-            pred_rgb.permute(0, 3, 1, 2).contiguous(),
-            gt_rgb.permute(0, 3, 1, 2).contiguous(),
+            pred_rgb_mapped.permute(0, 3, 1, 2).contiguous(),
+            gt_rgb_mapped.permute(0, 3, 1, 2).contiguous(),
             padding="same",
             train=True
         )
@@ -454,6 +458,7 @@ class SplatTrainingLosses(torch.nn.Module):
             gt_alpha_mask,
             [
                 # RGB supervision
+                self.config.log_map_factor,
                 (1.0 - self.config.ssim_lambda) * (1.0 - self.config.lpips_lambda),
                 # depth supervison
                 float(self.step > self.config.supervision_warmup) *

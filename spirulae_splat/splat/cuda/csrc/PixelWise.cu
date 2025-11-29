@@ -21,47 +21,51 @@ CameraDistortionCoeffsBuffer::CameraDistortionCoeffsBuffer(
 // ================
 
 __global__ void blend_background_forward_kernel(
-    const TensorView<float, 3> in_rgb,
-    const TensorView<float, 3> in_alpha,
-    const TensorView<float, 3> in_background,
-    TensorView<float, 3> out_rgb
+    const TensorView<float, 4> in_rgb,
+    const TensorView<float, 4> in_alpha,
+    const TensorView<float, 4> in_background,
+    TensorView<float, 4> out_rgb
 ) {
     unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (gid >= in_rgb.shape[0]*in_rgb.shape[1])
+    unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned B = in_rgb.shape[0], H = in_rgb.shape[1], W = in_rgb.shape[2];
+    if (bid >= B || gid >= H*W)
         return;
-    unsigned y = gid / in_rgb.shape[1];
-    unsigned x = gid % in_rgb.shape[1];
+    unsigned y = gid / W;
+    unsigned x = gid % W;
 
-    float3 rgb = in_rgb.load3(y, x);
-    float alpha = in_alpha.load1(y, x);
-    float3 background = in_background.load3(y, x);
+    float3 rgb = in_rgb.load3(bid, y, x);
+    float alpha = in_alpha.load1(bid, y, x);
+    float3 background = in_background.load3(bid, y, x);
 
     rgb = blend_background(rgb, alpha, background);
 
-    out_rgb.store3(y, x, rgb);
+    out_rgb.store3(bid, y, x, rgb);
 }
 
 
 __global__ void blend_background_backward_kernel(
-    const TensorView<float, 3> in_rgb,
-    const TensorView<float, 3> in_alpha,
-    const TensorView<float, 3> in_background,
-    const TensorView<float, 3> v_out_rgb,
-    TensorView<float, 3> v_in_rgb,
-    TensorView<float, 3> v_in_alpha,
-    TensorView<float, 3> v_in_background
+    const TensorView<float, 4> in_rgb,
+    const TensorView<float, 4> in_alpha,
+    const TensorView<float, 4> in_background,
+    const TensorView<float, 4> v_out_rgb,
+    TensorView<float, 4> v_in_rgb,
+    TensorView<float, 4> v_in_alpha,
+    TensorView<float, 4> v_in_background
 ) {
     unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (gid >= in_rgb.shape[0]*in_rgb.shape[1])
+    unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned B = in_rgb.shape[0], H = in_rgb.shape[1], W = in_rgb.shape[2];
+    if (bid >= B || gid >= H*W)
         return;
-    unsigned y = gid / in_rgb.shape[1];
-    unsigned x = gid % in_rgb.shape[1];
+    unsigned y = gid / W;
+    unsigned x = gid % W;
 
-    float3 rgb = in_rgb.load3(y, x);
-    float alpha = in_alpha.load1(y, x);
-    float3 background = in_background.load3(y, x);
+    float3 rgb = in_rgb.load3(bid, y, x);
+    float alpha = in_alpha.load1(bid, y, x);
+    float3 background = in_background.load3(bid, y, x);
 
-    float3 v_out = v_out_rgb.load3(y, x);
+    float3 v_out = v_out_rgb.load3(bid, y, x);
 
     float3 v_rgb; float v_alpha; float3 v_background;
     blend_background_bwd(
@@ -70,37 +74,37 @@ __global__ void blend_background_backward_kernel(
         &v_rgb, &v_alpha, &v_background
     );
 
-    v_in_rgb.store3(y, x, v_rgb);
-    v_in_alpha.store1(y, x, v_alpha);
-    v_in_background.store3(y, x, v_background);
+    v_in_rgb.store3(bid, y, x, v_rgb);
+    v_in_alpha.store1(bid, y, x, v_alpha);
+    v_in_background.store3(bid, y, x, v_background);
 
 }
 
 
 
 torch::Tensor blend_background_forward_tensor(
-    torch::Tensor &rgb,  // [H, W, 3]
-    torch::Tensor &alpha,  // [H, W, 1]
-    torch::Tensor &background  // [H, W, 3]
+    torch::Tensor &rgb,  // [B, H, W, 3]
+    torch::Tensor &alpha,  // [B, H, W, 1]
+    torch::Tensor &background  // [B, H, W, 3]
 ) {
     DEVICE_GUARD(rgb);
     CHECK_CUDA(rgb);
     CHECK_CUDA(alpha);
     CHECK_CUDA(background);
 
-    if (rgb.ndimension() != 3 || rgb.size(2) != 3)
-        AT_ERROR("rgb shape must be (h, w, 3)");
-    long h = rgb.size(0), w = rgb.size(1);
-    if (alpha.ndimension() != 3 || alpha.size(0) != h || alpha.size(1) != w || alpha.size(2) != 1)
-        AT_ERROR("alpha shape must be (h, w, 1)");
-    if (background.ndimension() != 3 || background.size(0) != h || background.size(1) != w || background.size(2) != 3)
-        AT_ERROR("background shape must be (h, w, 3)");
+    if (rgb.ndimension() != 4 || rgb.size(-1) != 3)
+        AT_ERROR("rgb shape must be (b, h, w, 3)");
+    long b = rgb.size(0), h = rgb.size(1), w = rgb.size(2);
+    if (alpha.ndimension() != 4 || alpha.size(0) != b || alpha.size(1) != h || alpha.size(2) != w || alpha.size(3) != 1)
+        AT_ERROR("alpha shape must be (b, h, w, 1)");
+    if (background.ndimension() != 4 || background.size(0) != b || background.size(1) != h || background.size(2) != w || background.size(3) != 3)
+        AT_ERROR("background shape must be (b, h, w, 3)");
 
-    torch::Tensor out_rgb = torch::empty({h, w, 3}, rgb.options());
+    torch::Tensor out_rgb = torch::empty({b, h, w, 3}, rgb.options());
 
-    blend_background_forward_kernel<<<_LAUNCH_ARGS_1D(h*w, 256)>>>(
-        tensor2view<float, 3>(rgb), tensor2view<float, 3>(alpha), tensor2view<float, 3>(background),
-        tensor2view<float, 3>(out_rgb)
+    blend_background_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
+        tensor2view<float, 4>(rgb), tensor2view<float, 4>(alpha), tensor2view<float, 4>(background),
+        tensor2view<float, 4>(out_rgb)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
@@ -110,10 +114,10 @@ torch::Tensor blend_background_forward_tensor(
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 blend_background_backward_tensor(
-    torch::Tensor &rgb,  // [H, W, 3]
-    torch::Tensor &alpha,  // [H, W, 1]
-    torch::Tensor &background,  // [H, W, 3]
-    torch::Tensor &v_out_rgb  // [H, W, 3]
+    torch::Tensor &rgb,  // [B, H, W, 3]
+    torch::Tensor &alpha,  // [B, H, W, 1]
+    torch::Tensor &background,  // [B, H, W, 3]
+    torch::Tensor &v_out_rgb  // [B, H, W, 3]
 ) {
     DEVICE_GUARD(rgb);
     CHECK_CUDA(rgb);
@@ -121,28 +125,117 @@ blend_background_backward_tensor(
     CHECK_CUDA(background);
     CHECK_CUDA(v_out_rgb);
 
-    if (rgb.ndimension() != 3 || rgb.size(2) != 3)
-        AT_ERROR("rgb shape must be (h, w, 3)");
-    long h = rgb.size(0), w = rgb.size(1);
-    if (alpha.ndimension() != 3 || alpha.size(0) != h || alpha.size(1) != w || alpha.size(2) != 1)
-        AT_ERROR("alpha shape must be (h, w, 1)");
-    if (background.ndimension() != 3 || background.size(0) != h || background.size(1) != w || background.size(2) != 3)
-        AT_ERROR("background shape must be (h, w, 3)");
-    if (v_out_rgb.ndimension() != 3 || v_out_rgb.size(0) != h || v_out_rgb.size(1) != w || v_out_rgb.size(2) != 3)
-        AT_ERROR("v_out_rgb shape must be (h, w, 3)");
+    long b = rgb.size(0), h = rgb.size(1), w = rgb.size(2);
 
-    torch::Tensor v_rgb = torch::empty({h, w, 3}, rgb.options());
-    torch::Tensor v_alpha = torch::empty({h, w, 1}, alpha.options());
-    torch::Tensor v_background = torch::empty({h, w, 3}, background.options());
+    torch::Tensor v_rgb = torch::empty({b, h, w, 3}, rgb.options());
+    torch::Tensor v_alpha = torch::empty({b, h, w, 1}, alpha.options());
+    torch::Tensor v_background = torch::empty({b, h, w, 3}, background.options());
 
-    blend_background_backward_kernel<<<_LAUNCH_ARGS_1D(h*w, 256)>>>(
-        tensor2view<float, 3>(rgb), tensor2view<float, 3>(alpha), tensor2view<float, 3>(background),
-        tensor2view<float, 3>(v_out_rgb),
-        tensor2view<float, 3>(v_rgb), tensor2view<float, 3>(v_alpha), tensor2view<float, 3>(v_background)
+    blend_background_backward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
+        tensor2view<float, 4>(rgb), tensor2view<float, 4>(alpha), tensor2view<float, 4>(background),
+        tensor2view<float, 4>(v_out_rgb),
+        tensor2view<float, 4>(v_rgb), tensor2view<float, 4>(v_alpha), tensor2view<float, 4>(v_background)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return std::make_tuple(v_rgb, v_alpha, v_background);
+}
+
+
+// ================
+// Log Map Image
+// ================
+
+__global__ void log_map_image_forward_kernel(
+    const TensorView<float, 4> in_rgb,
+    float t,
+    TensorView<float, 4> out_rgb
+) {
+    unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned B = in_rgb.shape[0], H = in_rgb.shape[1], W = in_rgb.shape[2];
+    if (bid >= B || gid >= H*W)
+        return;
+    unsigned y = gid / W;
+    unsigned x = gid % W;
+
+    float3 rgb = in_rgb.load3(bid, y, x);
+
+    rgb = log_map_image(rgb, t);
+
+    out_rgb.store3(bid, y, x, rgb);
+}
+
+
+__global__ void log_map_image_backward_kernel(
+    const TensorView<float, 4> in_rgb,
+    float t,
+    const TensorView<float, 4> v_out_rgb,
+    TensorView<float, 4> v_in_rgb
+) {
+    unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned B = in_rgb.shape[0], H = in_rgb.shape[1], W = in_rgb.shape[2];
+    if (bid >= B || gid >= H*W)
+        return;
+    unsigned y = gid / W;
+    unsigned x = gid % W;
+
+    float3 rgb = in_rgb.load3(bid, y, x);
+
+    float3 v_out = v_out_rgb.load3(bid, y, x);
+
+    float3 v_rgb = log_map_image_bwd(rgb, t, v_out);
+
+    v_in_rgb.store3(bid, y, x, v_rgb);
+}
+
+
+
+torch::Tensor log_map_image_forward_tensor(
+    torch::Tensor &rgb,  // [B, H, W, 3]
+    float t
+) {
+    DEVICE_GUARD(rgb);
+    CHECK_CUDA(rgb);
+
+    if (rgb.ndimension() != 4 || rgb.size(-1) != 3)
+        AT_ERROR("rgb shape must be (b, h, w, 3)");
+    long b = rgb.size(0), h = rgb.size(1), w = rgb.size(2);
+
+    torch::Tensor out_rgb = torch::empty({b, h, w, 3}, rgb.options());
+
+    log_map_image_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
+        tensor2view<float, 4>(rgb), t,
+        tensor2view<float, 4>(out_rgb)
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return out_rgb;
+}
+
+
+torch::Tensor log_map_image_backward_tensor(
+    torch::Tensor &rgb,  // [B, H, W, 3]
+    float t,
+    torch::Tensor &v_out_rgb  // [B, H, W, 3]
+) {
+    DEVICE_GUARD(rgb);
+    CHECK_CUDA(rgb);
+    CHECK_CUDA(v_out_rgb);
+
+    long b = rgb.size(0), h = rgb.size(1), w = rgb.size(2);
+
+    torch::Tensor v_rgb = torch::empty({b, h, w, 3}, rgb.options());
+
+    log_map_image_backward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
+        tensor2view<float, 4>(rgb), t,
+        tensor2view<float, 4>(v_out_rgb),
+        tensor2view<float, 4>(v_rgb)
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return v_rgb;
 }
 
 

@@ -54,6 +54,37 @@ class _BlendBackground(torch.autograd.Function):
         )
 
 
+def log_map_image(rgb: Tensor, t: float) -> Tensor:
+    if t <= 0.0:
+        return rgb
+    return _LogMapImage.apply(rgb, t)
+
+
+class _LogMapImage(torch.autograd.Function):
+
+    @staticmethod
+    def forward(
+        ctx,
+        rgb, t
+    ):
+        out_rgb = _make_lazy_cuda_func("log_map_image_forward")(rgb, t)
+
+        ctx.save_for_backward(rgb)
+        ctx.t = t
+
+        return out_rgb
+
+    @staticmethod
+    def backward(ctx, v_out_rgb):
+
+        (rgb,) = ctx.saved_tensors
+
+        return _make_lazy_cuda_func("log_map_image_backward")(
+            rgb, ctx.t,
+            v_out_rgb
+        ), None
+
+
 
 
 def depth_to_normal(
