@@ -111,23 +111,8 @@ def fully_fused_projection(
     camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
     dist_coeffs: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Optional[Tensor], Tuple[Tensor]]:
-    # if primitive in ["3dgs", "mip"]:
-    if primitive in ["3dgs", "mip", "opaque_triangle"]:
-        if primitive in ["3dgs", "mip"]:
-            means, quats, scales, opacities, features_dc, features_sh = splats
-        else:
-            means, quats, scales, opacities, features_dc, features_sh, features_ch = splats
-        batch_dims = means.shape[:-2]
-        N = means.shape[-2]
-        assert means.shape == batch_dims + (N, 3), means.shape
-        assert quats.shape == batch_dims + (N, 4), quats.shape
-        assert scales.shape == batch_dims + (N, 3), scales.shape
-        if primitive in ["3dgs", "mip"]:
-            assert opacities.shape == batch_dims + (N,), opacities.shape
-        else:
-            assert opacities.shape == batch_dims + (N, 2), opacities.shape
-            assert features_ch.shape == batch_dims + (N, 2, 3), features_ch.shape
-        assert features_dc.shape == batch_dims + (N, 3), features_dc.shape
+    batch_dims = splats[0].shape[:-2]
+    N = splats[0].shape[-2]
     C = viewmats.shape[-3]
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
@@ -158,6 +143,8 @@ def fully_fused_projection(
                 _FullyFusedProjection = _FullyFusedProjection3DGSEval3D
             elif primitive in ["opaque_triangle"]:
                 _FullyFusedProjection = _FullyFusedProjectionOpaqueTriangleEval3D
+            elif primitive in ["voxel"]:
+                _FullyFusedProjection = _FullyFusedProjectionVoxelEval3D
         in_splats = [x.contiguous() for x in splats]
         proj_return = _FullyFusedProjection.apply(
             *in_splats,
@@ -448,6 +435,73 @@ class _FullyFusedProjectionOpaqueTriangleEval3D(torch.autograd.Function):
         return (
             v_means, v_quats, v_scales, v_hardness, v_features_dc, v_features_sh, v_features_ch, v_viewmats,
             *([None]*(len(ctx.needs_input_grad)-8))
+        )
+
+class _FullyFusedProjectionVoxelEval3D(torch.autograd.Function):
+
+    @staticmethod
+    def forward(
+        ctx,
+        pos_sizes: Tensor,  # [..., N, 4]
+        densities: Tensor,  # [..., N, 8]
+        features_dc: Tensor,  # [..., N, 3]
+        features_sh: Tensor,  # [..., N, x, 3]
+        viewmats: Tensor,  # [..., C, 4, 4]
+        Ks: Tensor,  # [..., C, 3, 3]
+        width: int,
+        height: int,
+        near_plane: float,
+        far_plane: float,
+        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
+        dist_coeffs: Optional[Tensor],
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        assert (
+            camera_model != "ftheta"
+        ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
+
+        camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
+            f"CameraModelType.{camera_model.upper()}"
+        )
+
+        aabb, (depths, proj_rgbs) = _make_lazy_cuda_func(
+            "projection_voxel_eval3d_forward"
+        )(
+            (pos_sizes, densities, features_dc, features_sh),
+            viewmats, Ks, width, height,
+            near_plane, far_plane,
+            camera_model_type, dist_coeffs
+        )
+        ctx.save_for_backward(pos_sizes, densities, features_dc, features_sh, viewmats, Ks, aabb)
+        ctx.width = width
+        ctx.height = height
+        ctx.camera_model_type = camera_model_type
+        ctx.dist_coeffs = dist_coeffs
+
+        return aabb, depths, proj_rgbs
+
+    @staticmethod
+    def backward(ctx, v_aabb, v_depths, v_proj_rgbs):
+        pos_sizes, densities, features_dc, features_sh, viewmats, Ks, aabb = ctx.saved_tensors
+        (v_pos_sizes, v_densities, v_features_dc, v_features_sh), v_viewmats = _make_lazy_cuda_func(
+            "projection_voxel_eval3d_backward"
+        )(
+            (pos_sizes, densities, features_dc, features_sh),
+            viewmats, Ks, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs, aabb,
+            (v_depths, v_proj_rgbs.contiguous()),
+            ctx.needs_input_grad[4],  # viewmats_requires_grad
+        )
+        assert v_pos_sizes is None
+        assert v_densities is None
+        assert v_features_dc is not None
+        assert v_features_sh is not None
+
+        if not ctx.needs_input_grad[4]:
+            v_viewmats = None
+        else:
+            raise NotImplementedError("viewmat grad")
+        return (
+            v_pos_sizes, v_densities, v_features_dc, v_features_sh, v_viewmats,
+            *([None]*(len(ctx.needs_input_grad)-5))
         )
 
 

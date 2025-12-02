@@ -615,6 +615,9 @@ class SplatTrainingLosses(torch.nn.Module):
                 loss_dict["tv_loss_depth"] = bilagrid_tv_loss_weight * total_variation_loss(self.bil_grids_depth.grids)
             loss_dict["tv_loss_normal"] = bilagrid_tv_loss_weight * total_variation_loss(self.bil_grids_normal.grids)
 
+        if self.config.primitive == "voxel":
+            return loss_dict
+
         if not _use_torch_impl:
             losses = _ComputePerSplatLosses.apply(
                 gauss_scales, gauss_opacities, gauss_quats,

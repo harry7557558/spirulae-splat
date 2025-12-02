@@ -8,6 +8,7 @@
 #include "PerPixelLoss.cuh"
 #include "PixelWise.cuh"
 #include "SplatTileIntersector.cuh"
+#include "SVHash.cuh"
 #include "Projection.cuh"
 #include "ProjectionEval3D.cuh"
 #include "ProjectionEWA3DGSHetero.cuh"
@@ -64,6 +65,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // SplatTileIntersector.cuh
     m.def("intersect_splat_tile_3dgs", &intersect_splat_tile_3dgs);
     m.def("intersect_splat_tile_opaque_triangle", &intersect_splat_tile_opaque_triangle);
+
+    // SVHash.cuh
+    m.def("svhash_create_initial_volume", &svhashCreateInitialVolume);
+    m.def("svhash_get_voxels", &svhashGetVoxels);
     
     // Projection.cuh
     m.def("projection_ewa_3dgs_forward", &projection_ewa_3dgs_forward_tensor);
@@ -76,6 +81,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("projection_ewa_3dgs_eval3d_backward", &projection_ewa_3dgs_eval3d_backward_tensor);
     m.def("projection_opaque_triangle_eval3d_forward", &projection_opaque_triangle_eval3d_forward_tensor);
     m.def("projection_opaque_triangle_eval3d_backward", &projection_opaque_triangle_eval3d_backward_tensor);
+    m.def("projection_voxel_eval3d_forward", &projection_voxel_eval3d_forward_tensor);
+    m.def("projection_voxel_eval3d_backward", &projection_voxel_eval3d_backward_tensor);
 
     // ProjectionEWA3DGSHetero.cuh
     m.def("projection_ewa_3dgs_hetero_forward", &projection_ewa_3dgs_hetero_forward_tensor);
@@ -96,5 +103,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // m.def("rasterization_opaque_triangle_eval3d_backward", &rasterize_to_pixels_opaque_triangle_eval3d_bwd);
     m.def("rasterization_opaque_triangle_eval3d_forward", &rasterize_to_pixels_opaque_triangle_sorted_eval3d_fwd);
     m.def("rasterization_opaque_triangle_eval3d_backward", &rasterize_to_pixels_opaque_triangle_sorted_eval3d_bwd);
+    m.def("rasterization_voxel_eval3d_forward", &rasterize_to_pixels_voxel_eval3d_fwd);
+    m.def("rasterization_voxel_eval3d_backward", &rasterize_to_pixels_voxel_eval3d_bwd);
 
 }

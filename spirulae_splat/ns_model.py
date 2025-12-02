@@ -44,6 +44,10 @@ from spirulae_splat.splat._camera import _Camera
 
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
 from spirulae_splat.splat.cuda._wrapper_per_pixel import blend_background
+from spirulae_splat.splat.cuda import (
+    svhash_create_initial_volume,
+    svhash_get_voxels
+)
 
 from nerfstudio.cameras.camera_optimizers import (CameraOptimizer,
                                                   CameraOptimizerConfig)
@@ -113,7 +117,7 @@ class SpirulaeModelConfig(ModelConfig):
 
     _target: Type = field(default_factory=lambda: SpirulaeModel)
 
-    primitive: Literal["3dgs", "mip", "opaque_triangle"] = "3dgs"
+    primitive: Literal["3dgs", "mip", "opaque_triangle", "voxel"] = "3dgs"
     """Splat primitive to use"""
     fit: Literal["rgb", "depth", "normal"] = "rgb"
     """Fit RGB image by default, fit depth/normal for geometry reconstruction
@@ -362,16 +366,31 @@ class SpirulaeModel(Model):
         self.ch_grad_norm = None
         self.max_2Dsize = None
 
-        if self.config.primitive in ["3dgs", "mip"] or True:
+        scale_init = 0.1 if self.config.use_mcmc else 1.0  # per original papers
+        opacity_init = 0.5 if self.config.use_mcmc else 0.1  # per original papers
+        if self.config.use_mcmc and self.config.mcmc_max_screen_size < 1.0:
+            scale_init, opacity_init = 0.5, 0.1
+        # if self.config.train_background_color:
+        #     scale_init, opacity_init = 1.0, 0.1
+
+        if self.config.primitive in ["voxel"]:
+            means_mean = torch.mean(means, 0)
+            means_extend = 2.0 * torch.std(means, 0)
+            pos_min = (means_mean - means_extend).detach().cpu().numpy()
+            pos_max = (means_mean + means_extend).detach().cpu().numpy()
+            num_voxels = len(means)
+            unit_size = 0.4 * np.cbrt(np.prod(pos_max - pos_min) / num_voxels)
+            pos_diff = np.ceil((pos_max - pos_min) / unit_size).astype(np.int32)
+            self.svhash = svhash_create_initial_volume(pos_min, pos_max, pos_diff)
+            num_points = int(np.prod(pos_diff))
+            num_nodes = int(np.prod(pos_diff + 1))
+            densities = opacity_init * torch.ones(num_nodes) / np.cbrt(np.prod(pos_max - pos_min))
+            densities = torch.log(densities)
+
+        elif self.config.primitive in ["3dgs", "mip"] or True:
             distances, indices = self.k_nearest_sklearn(means.data, 4)
             num_points = means.shape[0]
             scales = torch.sqrt(torch.from_numpy(distances**2).mean(-1, keepdim=True)).repeat(1, 3).float()
-            scale_init = 0.1 if self.config.use_mcmc else 1.0  # per original papers
-            opacity_init = 0.5 if self.config.use_mcmc else 0.1  # per original papers
-            if self.config.use_mcmc and self.config.mcmc_max_screen_size < 1.0:
-                scale_init, opacity_init = 0.5, 0.1
-            # if self.config.train_background_color:
-            #     scale_init, opacity_init = 1.0, 0.1
             scales = torch.log(scale_init * scales / (self.config.kernel_radius/3.0) + 1e-8)
             quats = F.normalize(torch.randn((num_points, 4)))
             opacities = torch.logit(opacity_init * torch.ones(num_points, 1))
@@ -401,12 +420,15 @@ class SpirulaeModel(Model):
                 [1, 0, 0], [-0.5, 0.75**0.5, 0], [-0.5, -0.75**0.5, 0]
             ]]).to(M).repeat(len(M), 1, 1))
 
+        gauss_params = {}
         if self.config.primitive in ["3dgs", "mip", "opaque_triangle"]:
-            means = torch.nn.Parameter(means)
+            gauss_params['means'] = torch.nn.Parameter(means)
         if self.config.primitive in ["3dgs", "mip"]:
-            quats = torch.nn.Parameter(quats)
-            scales = torch.nn.Parameter(scales)
-            opacities = torch.nn.Parameter(opacities)
+            gauss_params['quats'] = torch.nn.Parameter(quats)
+            gauss_params['scales'] = torch.nn.Parameter(scales)
+            gauss_params['opacities'] = torch.nn.Parameter(opacities)
+        if self.config.primitive in ["voxel"]:
+            gauss_params['densities'] = torch.nn.Parameter(densities)
 
         # colors
         dim_sh = num_sh_bases(self.config.sh_degree)
@@ -417,34 +439,25 @@ class SpirulaeModel(Model):
             # We can have colors without points.
             and self.seed_points[1].shape[0] > 0
         ):
-            shs = torch.zeros((self.seed_points[1].shape[0], dim_sh, 3)).float()
+            shs = torch.zeros((num_points, dim_sh, 3)).float()
             seed_color = self.seed_points[1] / 255
+            if len(seed_color) != num_points:
+                seed_color = seed_color.mean(0, True).repeat(num_points, 1)
             if self.config.sh_degree > 0:
                 shs[:, 0, :3] = RGB2SH(seed_color)
                 shs[:, 1:, 3:] = 0.0
             else:
                 # shs[:, 0, :3] = seed_color
                 shs[:, 0, :3] = RGB2SH(seed_color)
-            features_dc = torch.nn.Parameter(shs[:, 0, :].contiguous())
-            features_sh = torch.nn.Parameter(shs[:, 1:, :].contiguous())
+            gauss_params['features_dc'] = torch.nn.Parameter(shs[:, 0, :].contiguous())
+            gauss_params['features_sh'] = torch.nn.Parameter(shs[:, 1:, :].contiguous())
         else:
-            features_dc = torch.nn.Parameter(torch.rand(num_points, 3))
-            features_sh = torch.nn.Parameter(torch.zeros((num_points, dim_sh-1, 3)))
+            gauss_params['features_dc'] = torch.nn.Parameter(torch.rand(num_points, 3))
+            gauss_params['features_sh'] = torch.nn.Parameter(torch.zeros((num_points, dim_sh-1, 3)))
 
-        features_ch = None
         if self.config.primitive == "opaque_triangle":
-            features_ch = torch.nn.Parameter(torch.zeros((len(means), 2, 3)))
+            gauss_params['features_ch'] = torch.nn.Parameter(torch.zeros((num_points, 2, 3)))
 
-        gauss_params = {
-            "means": means,
-            "scales": scales,
-            "quats": quats,
-            "features_dc": features_dc,
-            "features_sh": features_sh,
-            "opacities": opacities,
-        }
-        if features_ch is not None:
-            gauss_params["features_ch"] = features_ch
         self.gauss_params = torch.nn.ParameterDict(gauss_params)
 
         self.camera_optimizer: CameraOptimizer = self.config.camera_optimizer.setup(
@@ -476,6 +489,8 @@ class SpirulaeModel(Model):
 
     def _set_strategy(self):
         # Strategy for GS densification
+        if self.config.primitive in ['voxel']:
+            return  # TODO
 
         # opaque triangle mode
         if self.config.primitive == "opaque_triangle":
@@ -566,50 +581,49 @@ class SpirulaeModel(Model):
 
     @property
     def num_points(self):
-        return self.means.shape[0]
+        return self.features_dc.shape[0]
 
     @property
     def means(self):
-        return self.gauss_params["means"]
+        return self.gauss_params.get("means", None)
 
     @property
     def scales(self):
-        return self.gauss_params["scales"]
+        return self.gauss_params.get("scales", None)
     
     @property
     def quats(self):
-        return self.gauss_params["quats"]
+        return self.gauss_params.get("quats", None)
 
     @property
     def features_dc(self):
-        return self.gauss_params["features_dc"]
+        return self.gauss_params.get("features_dc", None)
 
     @property
     def features_sh(self):
-        return self.gauss_params["features_sh"]
+        return self.gauss_params.get("features_sh", None)
 
     @property
     def features_ch(self):
-        if "features_ch" not in self.gauss_params:
-            return None
-        return self.gauss_params["features_ch"]
+        return self.gauss_params.get("features_ch", None)
 
     @property
     def opacities(self):
-        return self.gauss_params["opacities"]
+        return self.gauss_params.get("opacities", None)
+
+    @property
+    def densities(self):
+        return self.gauss_params.get("densities", None)
 
     def load_state_dict(self, dict, **kwargs):  # type: ignore
         # resize the parameters to match the new number of points
         self.step = self.config.num_iterations
-        if "means" in dict:
-            # For backwards compatibility, we remap the names of parameters from
-            # means->gauss_params.means since old checkpoints have that format
-            for p in ["means", "scales", "quats",
-                      "features_dc", "features_sh", "features_ch",
-                      "opacities"]:
-                if p in dict:
-                    dict[f"gauss_params.{p}"] = dict[p]
-        newp = dict["gauss_params.means"].shape[0]
+        for p in ["means", "scales", "quats",
+                    "features_dc", "features_sh", "features_ch",
+                    "opacities", "densities"]:
+            if p in dict:
+                dict[f"gauss_params.{p}"] = dict[p]
+        newp = dict["gauss_params.features_dc"].shape[0]
         for name, param in self.gauss_params.items():
             old_shape = param.shape
             new_shape = (newp,) + old_shape[1:]
@@ -648,6 +662,8 @@ class SpirulaeModel(Model):
         self.optimizers = optimizers.optimizers
 
     def step_post_backward(self, step):
+        if self.config.primitive == 'voxel':
+            return
         assert step == self.step
         if self.config.use_mcmc:
             self.strategy.step_post_backward(
@@ -700,7 +716,7 @@ class SpirulaeModel(Model):
             for name in [
                 "means", "scales", "quats",
                 "features_dc", "features_sh", "features_ch",
-                "opacities"
+                "opacities", "densities"
             ] if name in self.gauss_params
         }
 
@@ -774,7 +790,7 @@ class SpirulaeModel(Model):
             print("Called get_outputs with not a camera")
             return {}
 
-        device = self.means.device
+        device = self.features_dc.device
 
         if self.training and self.config.use_camera_optimizer:
             optimized_camera_to_world = self.camera_optimizer.apply_to_camera(camera)
@@ -799,8 +815,6 @@ class SpirulaeModel(Model):
         viewmats = torch.eye(4, dtype=optimized_camera_to_world.dtype)[None].repeat(len(camera), 1, 1)
         viewmats[:, :3, :3] = R_inv
         viewmats[:, :3, 3:4] = T_inv
-
-        quats = F.normalize(self.quats, dim=-1)
 
         max_depth_scale = 2.0 if self.training else 1.0
 
@@ -861,26 +875,47 @@ class SpirulaeModel(Model):
         #     W = TILE_SIZE
         #     H = TILE_SIZE
 
-        # hardness = min(max(self.step / self.config.stop_refine_at, 0.1), 1.0)
-        if self.config.primitive == "opaque_triangle":
+        if self.config.primitive in ['3dgs', 'mip']:
+            splat_params = (
+                self.means, F.normalize(self.quats, dim=-1), self.scales,
+                self.opacities.squeeze(-1),
+                self.features_dc, self.features_sh
+            )
+        elif self.config.primitive in ['opaque_triangle']:
+            # hardness = min(max(self.step / self.config.stop_refine_at, 0.1), 1.0)
             opacity_floor = self.strategy.get_opacity_floor(self.step)
             hardness = self.strategy.get_hardness(self.step)
+            splat_params = (
+                self.means, F.normalize(self.quats, dim=-1), self.scales,
+                #  hardness * torch.ones_like(self.opacities.squeeze(-1))
+                #  hardness + (1.0-hardness) * torch.sigmoid(self.opacities.squeeze(-1))
+                torch.concat([
+                    self.strategy.map_opacities(self.step, self.opacities),
+                    hardness * torch.ones_like(self.opacities)
+                ], dim=-1),
+                self.features_dc, self.features_sh, self.features_ch
+            )
+        elif self.config.primitive in ['voxel']:
+            # print(self.svhash)
+            # torch.cuda.synchronize()
+            voxels, voxel_indices = svhash_get_voxels(self.svhash)
+            # print(torch.amin(voxel_indices), torch.amax(voxel_indices), self.densities.shape)
+            # print(voxels)
+            # print(voxel_indices)
+            # exit(0)
+            splat_params = (
+                voxels, torch.exp(self.densities)[voxel_indices],
+                self.features_dc, self.features_sh
+            )
+            # print([x.shape for x in splat_params])
 
         rgbd, alpha, meta = rasterization(
             self.config.primitive,
-            (self.means, quats, self.scales, self.opacities.squeeze(-1),
-                self.features_dc, self.features_sh)
-                if self.config.primitive in ['3dgs', 'mip'] else
-            # (self.means, quats, self.scales.mean(-1, keepdim=True).repeat(1,3),
-            (self.means, quats, self.scales,
-            #  hardness * torch.ones_like(self.opacities.squeeze(-1))
-            #  hardness + (1.0-hardness) * torch.sigmoid(self.opacities.squeeze(-1))
-            torch.concat([
-                self.strategy.map_opacities(self.step, self.opacities),
-                hardness * torch.ones_like(self.opacities)
-            ], dim=-1),
-            self.features_dc, self.features_sh, self.features_ch
-             ),
+            splat_params,
+            # "voxel",
+            # (torch.cat((self.means, 20.0*torch.exp(self.scales.mean(-1, True))), dim=-1), torch.exp(self.opacities).repeat(1, 8), self.features_dc, self.features_sh),
+            # # (torch.cat((self.means, 0.025*torch.ones_like(self.scales.mean(-1, True))), dim=-1), torch.exp(self.opacities).repeat(1, 8), self.features_dc, self.features_sh),
+
             # (self.means, hardness * torch.ones_like(self.opacities.squeeze(-1))),
             viewmats=viewmats,  # [C, 4, 4]
             Ks=Ks * self.config.supersampling,  # [C, 3, 3]
@@ -1093,7 +1128,7 @@ class SpirulaeModel(Model):
     def print_loss_dict(self, losses: Dict[str, torch.Tensor], _max_vals={}):
 
         # get VRAM usage (only supports single GPU at this time)
-        free, total = torch.cuda.mem_get_info(self.means.device)
+        free, total = torch.cuda.mem_get_info(self.features_dc.device)
         used = (total - free) / 1024**3
         used_percentage = (1 - free/total)*100
         mem_stats = f"{used:.2f}\N{ZERO WIDTH SPACE}GB {used_percentage:.0f}%"
@@ -1129,7 +1164,7 @@ class SpirulaeModel(Model):
         ).replace('0.', '.') \
             if self.config.primitive == "opaque_triangle" else ""
         chunks = [
-            f"[N] {len(self.opacities)}",
+            f"[N] {self.num_points}",
             f"[Mem] {mem_stats}",
             f"[Train] loss={fmt('image_loss', 1.0)} "
             f"psnr={fmt('psnr', 1.0, 2)} "

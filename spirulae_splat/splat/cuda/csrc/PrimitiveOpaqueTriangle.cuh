@@ -765,7 +765,8 @@ struct OpaqueTriangle::WorldEval3D {
     }
 
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
-        if (buffer.hardness) buffer.hardness[idx % buffer.size] = hardness;
+        if (buffer.hardness != nullptr && idx < buffer.size)
+            buffer.hardness[idx] = hardness;
         buffer.depths[idx] = depth;
         #pragma unroll
         for (int i = 0; i < 3; i++) {
@@ -775,8 +776,9 @@ struct OpaqueTriangle::WorldEval3D {
         buffer.normals[idx] = normal;
     }
 
-    __device__ void atomicAddGradientToBuffer(const WorldEval3D &grad, Buffer &buffer, long idx) const {
-        atomicAddFVec(buffer.hardness + idx % buffer.size, grad.hardness);
+    static __device__ void atomicAddGradientToBuffer(const WorldEval3D &grad, Buffer &buffer, long idx) {
+        if (buffer.hardness != nullptr)
+            atomicAddFVec(buffer.hardness + idx % buffer.size, grad.hardness);
         atomicAddFVec(buffer.depths + idx, grad.depth);
         #pragma unroll
         for (int i = 0; i < 3; i++) {

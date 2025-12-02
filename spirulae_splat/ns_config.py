@@ -67,6 +67,10 @@ _DEFAULT_OPTIMIZERS = {
         "optimizer": AdamOptimizerConfig(lr=0.05, eps=1e-15),
         "scheduler": None,
     },
+    "densities": {
+        "optimizer": AdamOptimizerConfig(lr=0.05, eps=1e-15),
+        "scheduler": None,
+    },
     "background_color": {
         "optimizer": AdamOptimizerConfig(lr=0.0025, eps=1e-15),
         "scheduler": None
@@ -280,4 +284,42 @@ spirulae_triangle_patched = MethodSpecification(
         vis="viewer",
     ),
     description="Spirulae opaque triangle splatting with patched batching.",
+)
+
+spirulae_voxel = MethodSpecification(
+    config=TrainerConfig(
+        method_name="spirulae-voxel",
+        steps_per_eval_batch=0,
+        steps_per_save=2000,
+        max_num_iterations=30000,
+        mixed_precision=False,
+        pipeline=SpirulaePipelineConfig(
+            datamanager=SpirulaeDataManagerConfig(
+                **_DEFAULT_DATAMANAGER_CONFIG,
+            ),
+            model=SpirulaeModelConfig(
+                primitive="voxel",
+                sh_degree=0,
+                background_color="black",
+                train_background_color=False,
+                # use_bilateral_grid=False,
+                use_bilateral_grid_for_geometry=False,
+                alpha_reg_weight=0.0,
+                # alpha_loss_weight=0.0,
+                # alpha_loss_weight_under=0.0,
+                mcmc_opacity_reg=0.0001,
+                mcmc_scale_reg=0.0,
+                erank_reg=0.0,
+                erank_reg_s3=0.0,
+                depth_supervision_weight=0.0,
+                supervision_warmup=0
+            ),
+        ),
+        optimizers={
+            **_DEFAULT_OPTIMIZERS
+        },
+        viewer=ViewerConfig(),
+        vis="viewer",
+    ),
+    description="Spirulae sparse voxel grid with patch batching.",
 )

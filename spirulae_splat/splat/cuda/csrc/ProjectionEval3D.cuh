@@ -7,6 +7,7 @@
 
 #include "Primitive3DGS.cuh"
 #include "PrimitiveOpaqueTriangle.cuh"
+#include "PrimitiveVoxel.cuh"
 
 #include "types.cuh"
 
@@ -36,6 +37,22 @@ std::tuple<
     OpaqueTriangle::WorldEval3D::TensorTupleProj  // out splats
 > projection_opaque_triangle_eval3d_forward_tensor(
     const OpaqueTriangle::World::TensorTuple &in_splats,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float near_plane,
+    const float far_plane,
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs
+);
+
+
+std::tuple<
+    at::Tensor,  // aabb
+    VoxelPrimitive::WorldEval3D::TensorTupleProj  // out splats
+> projection_voxel_eval3d_forward_tensor(
+    const VoxelPrimitive::World::TensorTuple &in_splats,
     const at::Tensor viewmats,             // [..., C, 4, 4]
     const at::Tensor Ks,                   // [..., C, 3, 3]
     const uint32_t image_width,
@@ -83,5 +100,25 @@ std::tuple<
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const OpaqueTriangle::WorldEval3D::TensorTupleProj &v_splats_proj_tuple,
+    const bool viewmats_requires_grad
+);
+
+
+std::tuple<
+    VoxelPrimitive::World::TensorTuple,  // v_splats
+    at::Tensor  // v_viewmats
+> projection_voxel_eval3d_backward_tensor(
+    // fwd inputs
+    const VoxelPrimitive::World::TensorTuple &splats_world_tuple,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
+    // fwd outputs
+    const at::Tensor aabb,                       // [..., C, N, 2]
+    // grad outputs
+    const VoxelPrimitive::WorldEval3D::TensorTupleProj &v_splats_proj_tuple,
     const bool viewmats_requires_grad
 );

@@ -7,13 +7,24 @@ from spirulae_splat.splat._torch_impl import quat_to_rotmat
 from spirulae_splat.splat.rendering import rasterization as ssplat_rasterization
 from gsplat.rendering import rasterization as gsplat_rasterization
 
-from spirulae_splat.splat.cuda import ray_depth_to_linear_depth
+from spirulae_splat.splat.cuda import (
+    ray_depth_to_linear_depth,
+    svhash_create_initial_volume,
+    svhash_get_voxels
+)
 
 from utils import check_close, timeit
 
 from typing import Literal
 
 device = torch.device("cuda:0")
+
+# volume = svhash_create_initial_volume((-3, -3, -2), (3, 3, 2), (30, 30, 20))
+volume = svhash_create_initial_volume((-0.6, -0.6, -0.6), (0.6, 0.6, 0.6), (6, 6, 6))
+# print(volume)
+voxels, voxel_indices = svhash_get_voxels(volume)
+# print(voxels)
+# exit(0)
 
 
 B, W, H = 4, 1440, 1080
@@ -27,10 +38,13 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
     camera_model = ["pinhole", "fisheye"][IS_FISHEYE]
     quats = torch.nn.functional.normalize(quats, dim=-1)
     rgbd, alpha, meta = ssplat_rasterization(
-        primitive=["3dgs", "mip"][IS_ANTIALIASED],
-        splat_params=(means, quats, scales, opacities, features_dc, features_sh),
+        # primitive=["3dgs", "mip"][IS_ANTIALIASED],
+        # splat_params=(means, quats, scales, opacities, features_dc, features_sh),
         # primitive="opaque_triangle",
         # splat_params=(means, quats, scales+1.8, opacities.unsqueeze(-1).repeat(1, 2), features_dc, features_sh, features_dc.unsqueeze(-2).repeat(1, 2, 1)),
+        primitive="voxel",
+        # splat_params=(torch.cat((means, 5.0*torch.exp(scales.mean(-1, True))), dim=-1), 2.0*torch.exp(opacities).unsqueeze(-1).repeat(1, 8), features_dc, features_sh),
+        splat_params=(voxels, 2.0*torch.exp(opacities)[voxel_indices], features_dc[:len(voxels)], features_sh[:len(voxels)]),
         viewmats=viewmats,  # [C, 4, 4]
         Ks=Ks,  # [C, 3, 3]
         width=W,
@@ -126,7 +140,7 @@ def test_rasterization():
     check_close('alpha', outputs[2], _outputs[2], **tol)
     print()
 
-    if False:
+    if True:
         import matplotlib.pyplot as plt
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2)
         rgb = outputs[0].detach().cpu().numpy()
@@ -141,8 +155,8 @@ def test_rasterization():
         ax3.imshow(_rgb[0])
         ax4.imshow(_alpha[0])
         # ax4.imshow(_rgb[1])
-        plt.show()
-        # plt.savefig("/workspace/plot.png")
+        # plt.show()
+        plt.savefig("/mnt/d/plot.png")
         exit(0)
 
     weights = [torch.randn_like(x.detach()) for x in _outputs]

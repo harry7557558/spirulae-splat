@@ -394,3 +394,35 @@ std::tuple<
         tile_offsets, flatten_ids
     );
 }
+
+std::tuple<
+    VoxelPrimitive::RenderOutput::TensorTuple,
+    at::Tensor,
+    at::Tensor,
+    std::optional<VoxelPrimitive::RenderOutput::TensorTuple>,
+    std::optional<VoxelPrimitive::RenderOutput::TensorTuple>
+> rasterize_to_pixels_voxel_eval3d_fwd(
+    // Gaussian parameters
+    VoxelPrimitive::WorldEval3D::TensorTuple splats_tuple,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
+    const std::optional<at::Tensor> backgrounds, // [..., channels]
+    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids   // [n_isects]
+) {
+    return rasterize_to_pixels_eval3d_fwd_tensor<VoxelPrimitive, false>(
+        splats_tuple,
+        viewmats, Ks, camera_model, dist_coeffs,
+        backgrounds, masks,
+        image_width, image_height, tile_size,
+        tile_offsets, flatten_ids
+    );
+}

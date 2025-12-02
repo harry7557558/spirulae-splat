@@ -38,7 +38,7 @@ from .utils import depth_to_normal
 # from gsplat
 
 def rasterization(
-    primitive: Literal["3dgs", "mip", "opaque_triangle"],
+    primitive: Literal["3dgs", "mip", "opaque_triangle", "voxel"],
     splat_params: tuple[Tensor],  # means, quats, scales, opacities
     viewmats: Tensor,  # [..., C, 4, 4]
     Ks: Tensor,  # [..., C, 3, 3]
@@ -230,6 +230,7 @@ def rasterization(
 
     splat_params = [tensor.contiguous() for tensor in splat_params]
 
+    features_dc, features_sh = None, None
     if primitive in ["3dgs", "mip", "opaque_triangle"]:
         if primitive in ["3dgs", "mip"]:
             assert len(splat_params) == 6, "3DGS requires 6 params (means, quats, scales, opacities, color, sh)"
@@ -246,17 +247,26 @@ def rasterization(
         assert scales.shape == batch_dims + (N, 3), scales.shape
         if primitive in ["3dgs", "mip"]:
             assert opacities.shape == batch_dims + (N,), opacities.shape
-            assert features_dc.shape == batch_dims + (N, 3), features_dc.shape
-            assert features_sh.shape == batch_dims + (N, 0, 3) or \
-                features_sh.shape == batch_dims + (N, 3, 3) or \
-                features_sh.shape == batch_dims + (N, 8, 3) or \
-                features_sh.shape == batch_dims + (N, 15, 3), features_sh.shape
         else:
             assert opacities.shape == batch_dims + (N, 2), opacities.shape
             assert features_ch.shape == batch_dims + (N, 2, 3), features_ch.shape
+    elif primitive in ["voxel"]:
+        assert len(splat_params) == 4, "Voxel requires 4 params (pos_sizes, densities, features_dc, features_sh)"
+        pos_sizes, densities, features_dc, features_sh = splat_params
+        batch_dims = pos_sizes.shape[:-2]
+        N = pos_sizes.shape[-2]
+        device = pos_sizes.device
+        assert pos_sizes.shape == batch_dims + (N, 4), pos_sizes.shape
+        assert densities.shape == batch_dims + (N, 8), densities.shape
     else:
         assert False, f"Invalid primitive ({primitive})"
-    num_batch_dims = len(batch_dims)
+    if features_dc is not None and features_sh is not None:
+        assert features_dc.shape == batch_dims + (N, 3), features_dc.shape
+        assert features_sh.shape == batch_dims + (N, 0, 3) or \
+            features_sh.shape == batch_dims + (N, 3, 3) or \
+            features_sh.shape == batch_dims + (N, 8, 3) or \
+            features_sh.shape == batch_dims + (N, 15, 3), features_sh.shape
+
     B = math.prod(batch_dims)
     C = viewmats.shape[-3]
     I = B * C
@@ -294,9 +304,6 @@ def rasterization(
         ), "viewmats_rs should be None for global rolling shutter."
 
     if with_ut or with_eval3d:
-        assert (quats is not None) and (
-            scales is not None
-        ), "UT and eval3d requires to provide quats and scales."
         # assert packed is False, "Packed mode is not supported with UT."
         assert sparse_grad is False, "Sparse grad is not supported with UT."
 

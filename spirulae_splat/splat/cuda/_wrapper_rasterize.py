@@ -98,6 +98,8 @@ def rasterize_to_pixels(
             _RasterizeToPixels = _RasterizeToPixels3DGSEval3D
         elif primitive in ["opaque_triangle"]:
             _RasterizeToPixels = _RasterizeToPixelsOpaqueTriangleEval3D
+        elif primitive in ["voxel"]:
+            _RasterizeToPixels = _RasterizeToPixelsVoxelEval3D
     render_outputs = _RasterizeToPixels.apply(
         *[(x.contiguous() if x is not None else None) for x in splats],
         backgrounds,
@@ -522,3 +524,109 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
             None, None, None, v_hardness, None, None, None, v_depths, v_verts, v_rgbs, v_normals, v_backgrounds,
             *([None]*(len(ctx.needs_input_grad)-12))
         )
+
+class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
+    """Rasterize gaussians"""
+
+    @staticmethod
+    def forward(
+        ctx,
+        # gauss params
+        pos_sizes: Tensor,  # [..., N, 4]
+        densities: Tensor,  # [..., N, 8]
+        features_dc: Tensor,  # [..., N, 3]
+        features_sh: Tensor,  # [..., N, x, 3]
+        # proj outputs
+        depths: Tensor,  # [..., N, 1] or [nnz, 1]
+        colors: Tensor,  # [..., N, channels] or [nnz, channels]
+        # rest
+        backgrounds: Tensor,  # [..., channels], Optional
+        masks: Tensor,  # [..., tile_height, tile_width], Optional
+        width: int,
+        height: int,
+        tile_size: int,
+        isect_offsets: Tensor,  # [..., tile_height, tile_width]
+        flatten_ids: Tensor,  # [n_isects]
+        absgrad: bool,
+        viewmats: Tensor,
+        Ks: Tensor,
+        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
+        dist_coeffs: Optional[Tensor],
+    ) -> Tuple[Tensor, Tensor]:
+        if absgrad:
+            raise NotImplementedError("Absgrad not supported with Eval3D")
+
+        camera_model = gsplat.cuda._wrapper._make_lazy_cuda_obj(
+            f"CameraModelType.{camera_model.upper()}"
+        )
+
+        (render_rgbs, render_depths), render_Ts, last_ids, _1, _2 = _make_lazy_cuda_func(
+            "rasterization_voxel_eval3d_forward"
+        )(
+            (pos_sizes, None, densities, colors),
+            viewmats, Ks, camera_model, dist_coeffs,
+            backgrounds, masks,
+            width, height, tile_size, isect_offsets, flatten_ids,
+        )
+
+        ctx.save_for_backward(
+            pos_sizes, densities, colors,
+            viewmats, Ks, dist_coeffs,
+            backgrounds, masks,
+            isect_offsets, flatten_ids, render_Ts, last_ids,
+        )
+        ctx.width = width
+        ctx.height = height
+        ctx.camera_model = camera_model
+        ctx.tile_size = tile_size
+
+        render_alphas = 1.0 - render_Ts
+        return render_rgbs, render_depths, render_alphas, None, None
+
+    @staticmethod
+    def backward(
+        ctx,
+        v_render_rgbs: Tensor,  # [..., H, W, 3]
+        v_render_depths: Tensor,  # [..., H, W, 1]
+        v_render_alphas: Tensor,  # [..., H, W, 1]
+        v_render_rgb_distortions: Optional[Tensor],
+        v_render_depth_distortions: Optional[Tensor]
+    ):
+        (
+            pos_sizes, densities, colors,
+            viewmats, Ks, dist_coeffs,
+            backgrounds, masks,
+            isect_offsets, flatten_ids, render_Ts, last_ids,
+        ) = ctx.saved_tensors
+        width = ctx.width
+        height = ctx.height
+        tile_size = ctx.tile_size
+
+        (
+            (v_pos_sizes, v_depths, v_densities, v_colors),
+            v_viewmats,
+        ) = _make_lazy_cuda_func("rasterization_voxel_eval3d_backward")(
+            (pos_sizes, None, densities, colors),
+            viewmats, Ks, ctx.camera_model, dist_coeffs,
+            backgrounds, masks,
+            width, height, tile_size, isect_offsets, flatten_ids,
+            render_Ts, last_ids, None, None,
+            (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
+            v_render_alphas.contiguous(), None
+        )
+        assert v_pos_sizes is None
+        assert v_depths is None
+        assert v_densities is not None
+        assert v_colors is not None
+
+        v_backgrounds = None
+        if ctx.needs_input_grad[10]:
+            v_backgrounds = (torch.cat([v_render_rgbs, v_render_depths], dim=-1) * \
+                             render_Ts.float()).sum(dim=(-3, -2))
+
+        return (
+            v_pos_sizes, v_densities, None, None,
+            v_depths, v_colors, v_backgrounds,
+            *([None]*(len(ctx.needs_input_grad)-7))
+        )
+

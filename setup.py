@@ -228,6 +228,7 @@ setup(
             "spirulae-patched = spirulae_splat.ns_config:spirulae_patched",
             "spirulae-triangle = spirulae_splat.ns_config:spirulae_triangle",
             "spirulae-triangle-patched = spirulae_splat.ns_config:spirulae_triangle_patched",
+            "spirulae-voxel = spirulae_splat.ns_config:spirulae_voxel",
         ]
     },
     cmdclass={"build_ext": get_ext()} if not BUILD_NO_CUDA else {},
