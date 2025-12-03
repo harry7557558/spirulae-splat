@@ -59,6 +59,19 @@ void projection_voxel_eval3d<let camera_model : CameraModelType, let assume_vali
         return;
     }
 
+    // early skip low opacity
+    if (!assume_valid) {
+        float maxDensity = densities[0];
+        [ForceUnroll]
+        for (int i = 1; i < 8; i++)
+            maxDensity = max(maxDensity, densities[i]);
+        float maxPossibleOpacity = 1.0 - exp(-maxDensity * size * sqrt(3.0));
+        if (maxPossibleOpacity <= ALPHA_THRESHOLD) {
+            aabb_xyxy = { 0, 0, 0, 0 };
+            return;
+        }
+    }
+
     // compute tight rectangular bounding box (non differentiable)
 
     float xmax = uv[0].x, xmin = uv[0].x, ymax = uv[0].y, ymin = uv[0].y;
@@ -81,7 +94,7 @@ void projection_voxel_eval3d<let camera_model : CameraModelType, let assume_vali
     }
 
     aabb_xyxy = { (int)floor(xmin), (int)floor(ymin), (int)ceil(xmax), (int)ceil(ymax) };
-    depth = mean_c.z;  // TODO: morton code
+    depth = 0.5 * log(dot(mean_c, mean_c) + 1e-6);  // TODO: morton code
 
     float3 campos = -mul(transpose(R), t);
     sh_coeffs_to_color(mean_c - campos, sh_coeffs, rgbs);
@@ -186,6 +199,27 @@ bool ray_aabb_intersection(
     return t0 < t1;
 }
 
+[Differentiable]
+void evaluate_density_coefficients(
+    float size, float[8] densities,
+    float3 ro, float3 rd,
+    out float c3, out float c2, out float c1, out float c0
+) {
+    float a000 = densities[0], a001 = densities[1], a010 = densities[2], a011 = densities[3],
+          a100 = densities[4], a101 = densities[5], a110 = densities[6], a111 = densities[7];
+    float a0 = (a111 - a110 - a101 + a100 - a011 + a010 + a001 - a000) / (size * size * size);
+    float a1 = (a110 - a100 - a010 + a000) / (size * size);
+    float a2 = (a101 - a100 - a001 + a000) / (size * size);
+    float a3 = (a011 - a010 - a001 + a000) / (size * size);
+    float3 a4 = float3(a001 - a000, a010 - a000, a100 - a000) / size;
+    float3 rd2 = float3(rd.y * rd.z, rd.x * rd.z, rd.x * rd.y);
+    float3 ro2 = float3(ro.y * ro.z, ro.x * ro.z, ro.x * ro.y);
+    c3 = a0 * rd.x * rd.y * rd.z;
+    c2 = dot(rd2, a0 * ro + float3(a1, a2, a3));
+    c1 = dot(rd, a0 * ro2 + float3(a3 * ro.y + a2 * ro.z, a3 * ro.x + a1 * ro.z, a2 * ro.x + a1 * ro.y) + a4);
+    c0 = a0 * ro.x * ro.y * ro.z + dot(float3(a1, a2, a3), ro2) + dot(a4, ro) + a000;
+}
+
 [CudaDeviceExport]
 [Differentiable]
 float evaluate_alpha_voxel(
@@ -197,10 +231,15 @@ float evaluate_alpha_voxel(
     float t0, t1;
     if (!ray_aabb_intersection(ray_o, ray_d, pos + 0.5 * size, 0.5 * size, t0, t1)) 
         return 0.0f;
-    // TODO: analytical integration of linear interpolation
-    float density = (densities[0] + densities[1] + densities[2] + densities[3] +
-                     densities[4] + densities[5] + densities[6] + densities[7]) / 8.0;
-    return min(1.0 - exp(-(t1 - t0) * max(density, 0.0)), 0.999);
+    float c3, c2, c1, c0;
+    evaluate_density_coefficients(
+        size, densities,
+        ray_o + ray_d * t0 - pos, ray_d,
+        c3, c2, c1, c0
+    );
+    float dt = t1 - t0;
+    float accum = (((c3/4 * dt + c2/3) * dt + c1/2) * dt + c0) * dt;
+    return min(1.0 - exp(-max(accum, 0.0)), 0.999);
 }
 
 [CudaDeviceExport]
@@ -229,6 +268,7 @@ void evaluate_alpha_voxel_vjp(
 void evaluate_color_voxel(
     const no_diff float3 pos,
     const no_diff float size,
+    const float[8] densities,
     float3 rgb,
     float3 ray_o, float3 ray_d,
     out float3 out_rgb, out float depth
@@ -237,23 +277,40 @@ void evaluate_color_voxel(
     // TODO: analytical solution with density
     float t0, t1;
     ray_aabb_intersection(ray_o, ray_d, pos + 0.5 * size, 0.5 * size, t0, t1);
-    depth = 0.5 * (t0 + t1);
+#if 1
+    // depth = 0.5 * (t0 + t1);
+    depth = t0;
+#else
+    float c3, c2, c1, c0;
+    evaluate_density_coefficients(
+        size, densities,
+        ray_o + ray_d * t0 - pos, ray_d,
+        c3, c2, c1, c0
+    );
+    float dt = t1 - t0;
+    depth = t0 +
+        (((c3/5 * dt + c2/4) * dt + c1/3) * dt + c0/2) * dt /
+        (((c3/4 * dt + c2/3) * dt + c1/2) * dt + c0);
+#endif
+    depth = log(max(depth, 0.0) + 1e-6);
 }
 
 [CudaDeviceExport]
 void evaluate_color_voxel_vjp(
-    float3 pos, float size, float3 rgb,
+    float3 pos, float size, float[8] densities, float3 rgb,
     float3 ray_o, float3 ray_d, float3 v_out_rgb, float v_depth,
-    out float3 v_rgb,
+    out float[8] v_densities, out float3 v_rgb,
     out float3 v_ray_o, out float3 v_ray_d
 ) {
+    DifferentialPair<float[8]> dp_densities = diffPair(densities);
     DifferentialPair<float3> dp_rgb = diffPair(rgb);
     DifferentialPair<float3> dp_ray_o = diffPair(ray_o);
     DifferentialPair<float3> dp_ray_d = diffPair(ray_d);
     bwd_diff(evaluate_color_voxel)(
-        pos, size, dp_rgb,
+        pos, size, dp_densities, dp_rgb,
         dp_ray_o, dp_ray_d, v_out_rgb, v_depth
     );
+    v_densities = dp_densities.d;
     v_rgb = dp_rgb.d;
     v_ray_o = dp_ray_o.d;
     v_ray_d = dp_ray_d.d;

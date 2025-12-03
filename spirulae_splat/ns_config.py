@@ -69,7 +69,9 @@ _DEFAULT_OPTIMIZERS = {
     },
     "densities": {
         "optimizer": AdamOptimizerConfig(lr=0.05, eps=1e-15),
-        "scheduler": None,
+        "scheduler": ExponentialDecaySchedulerConfig(
+            lr_final=0.0005, max_steps=30000,
+        ),
     },
     "background_color": {
         "optimizer": AdamOptimizerConfig(lr=0.0025, eps=1e-15),

@@ -400,6 +400,10 @@ struct VoxelPrimitive::WorldEval3D {
                 CHECK_INPUT(tensors.pos_size.value());
                 pos_size = (float4*)tensors.pos_size.value().data_ptr<float>();
             }
+            if (tensors.depths.has_value()) {
+                CHECK_INPUT(tensors.depths.value());
+                depths = tensors.depths.value().data_ptr<float>();
+            }
             if (tensors.densities.has_value())
                 CHECK_INPUT(tensors.densities.value());
             CHECK_INPUT(tensors.rgbs);
@@ -497,7 +501,7 @@ struct VoxelPrimitive::WorldEval3D {
     __device__ __forceinline__ VoxelPrimitive::RenderOutput evaluate_color(float3 ray_o, float3 ray_d) {
         float3 out_rgb; float out_depth;
         evaluate_color_voxel(
-            pos, size, rgb, ray_o, ray_d,
+            pos, size, &densities, rgb, ray_o, ray_d,
             &out_rgb, &out_depth
         );
         return {out_rgb, out_depth};
@@ -509,9 +513,9 @@ struct VoxelPrimitive::WorldEval3D {
     ) {
         WorldEval3D v_splat = WorldEval3D::zero();
         evaluate_color_voxel_vjp(
-            pos, size, rgb, ray_o, ray_d,
+            pos, size, &densities, rgb, ray_o, ray_d,
             v_render.rgb, v_render.depth,
-            &v_splat.rgb,
+            &v_splat.densities, &v_splat.rgb,
             &v_ray_o, &v_ray_d
         );
         return v_splat;

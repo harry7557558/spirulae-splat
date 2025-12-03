@@ -375,7 +375,7 @@ class SpirulaeModel(Model):
 
         if self.config.primitive in ["voxel"]:
             means_mean = torch.mean(means, 0)
-            means_extend = 2.0 * torch.std(means, 0)
+            means_extend = 4.0 * torch.std(means, 0)
             pos_min = (means_mean - means_extend).detach().cpu().numpy()
             pos_max = (means_mean + means_extend).detach().cpu().numpy()
             num_voxels = len(means)
@@ -832,8 +832,9 @@ class SpirulaeModel(Model):
             kwargs['patch_offsets'] = camera.metadata['patch_offsets']
         is_fisheye = (camera.camera_type[0].item() == CameraType.FISHEYE.value)
         if not self.training:
-            is_fisheye = True
-            kwargs['dist_coeffs'] = torch.tensor([[0.0259, 0.0082, 0.0002, -0.0013, -0.0012, -0.0008, 0.0000, 0.0000, -0.0006, -0.0001]]).float().cuda()
+            pass
+            # is_fisheye = True
+            # kwargs['dist_coeffs'] = torch.tensor([[0.0259, 0.0082, 0.0002, -0.0013, -0.0012, -0.0008, 0.0000, 0.0000, -0.0006, -0.0001]]).float().cuda()
 
             # TODO: investigate why this uses a ton of VRAM
             # kwargs['dist_coeffs'] = torch.tensor([[-0.29, 0.07, 0, 0, 1e-5, -1e-3, 0, 0, 0, 0]]).float().cuda()
