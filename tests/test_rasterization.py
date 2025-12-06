@@ -10,7 +10,8 @@ from gsplat.rendering import rasterization as gsplat_rasterization
 from spirulae_splat.splat.cuda import (
     ray_depth_to_linear_depth,
     svhash_create_initial_volume,
-    svhash_get_voxels
+    svhash_get_voxels,
+    svhash_split_voxels,
 )
 
 from utils import check_close, timeit
@@ -19,12 +20,44 @@ from typing import Literal
 
 device = torch.device("cuda:0")
 
-# volume = svhash_create_initial_volume((-3, -3, -2), (3, 3, 2), (30, 30, 20))
-volume = svhash_create_initial_volume((-0.6, -0.6, -0.6), (0.6, 0.6, 0.6), (6, 6, 6))
-# print(volume)
-voxels, voxel_indices = svhash_get_voxels(volume)
-# print(voxels)
-# exit(0)
+# # volume = svhash_create_initial_volume((-3, -3, -2), (3, 3, 2), (30, 30, 20))
+# volume = svhash_create_initial_volume((-0.6, -0.6, -0.6), (0.6, 0.6, 0.6), (6, 6, 6))
+# # volume = svhash_create_initial_volume((-0.6, -0.6, -0.6), (0.6, 0.6, 0.6), (1, 1, 1))
+# # print(volume)
+# voxels, voxel_indices = svhash_get_voxels(volume)
+# print(voxels.shape, voxel_indices.shape)
+
+# # densities_0 = 1.0*torch.exp(2.0*torch.randn(len(volume[0])).cuda())
+# densities_0 = 1.0*torch.exp(2.0*torch.linspace(-1, 1, len(volume[0])).cuda())
+# features_dc_0 = 0.5+1.0*voxels[:, :3]
+# features_sh_0 = torch.zeros((len(features_dc_0), 0, 3)).cuda()
+
+# torch.random.manual_seed(42)
+# mask = torch.rand(len(voxels)).to(voxels.device) < 0.2
+# print(mask)
+# # print(volume)
+# volume, cell_idx, vert_idx, vert_weight = svhash_split_voxels(volume, mask)
+# # print(cell_idx)
+# # print(vert_idx)
+# # print(vert_weight)
+# # print(vert_weight.sum(-1))
+# # print(densities_0)
+# densities_0 = torch.cat((
+#     densities_0,
+#     (densities_0[vert_idx.flatten()].reshape(*vert_idx.shape, *densities_0.shape[1:]) * vert_weight).sum(1)
+#     # densities_0[vert_idx[:,0]]
+# ), 0)
+# # print(densities_0)
+# # print(features_dc_0.shape)
+# features_dc_0 = torch.cat((features_dc_0, features_dc_0[cell_idx]), 0)
+# features_sh_0 = torch.cat((features_sh_0, features_sh_0[cell_idx]), 0)
+# # # print(volume)
+# voxels, voxel_indices = svhash_get_voxels(volume)
+# # print(voxel_indices)
+# # print(voxels.shape, voxel_indices.shape)
+
+# # print(voxels)
+# # exit(0)
 
 
 B, W, H = 4, 1440, 1080
@@ -32,19 +65,20 @@ N, SH_DEGREE = 200000, 3
 PACKED = False
 IS_FISHEYE = False
 IS_ANTIALIASED = False
-WITH_UT = True
+WITH_UT = False
 
 def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
     camera_model = ["pinhole", "fisheye"][IS_FISHEYE]
     quats = torch.nn.functional.normalize(quats, dim=-1)
     rgbd, alpha, meta = ssplat_rasterization(
-        # primitive=["3dgs", "mip"][IS_ANTIALIASED],
+        # primitive="3dgut" if WITH_UT else ["3dgs", "mip"][IS_ANTIALIASED],
         # splat_params=(means, quats, scales, opacities, features_dc, features_sh),
         # primitive="opaque_triangle",
         # splat_params=(means, quats, scales+1.8, opacities.unsqueeze(-1).repeat(1, 2), features_dc, features_sh, features_dc.unsqueeze(-2).repeat(1, 2, 1)),
         primitive="voxel",
-        # splat_params=(torch.cat((means, 5.0*torch.exp(scales.mean(-1, True))), dim=-1), 2.0*torch.exp(opacities).unsqueeze(-1).repeat(1, 8), features_dc, features_sh),
-        splat_params=(voxels, 2.0*torch.exp(opacities)[voxel_indices], features_dc[:len(voxels)], features_sh[:len(voxels)]),
+        splat_params=(torch.cat((means, 5.0*torch.exp(scales.mean(-1, True))), dim=-1), 2.0*torch.exp(opacities).unsqueeze(-1).repeat(1, 8), features_dc, features_sh),
+        # splat_params=(voxels, 10.0*torch.exp(opacities)[voxel_indices], features_dc[:len(voxels)], features_sh[:len(voxels)]),
+        # splat_params=(voxels, densities_0[voxel_indices], features_dc_0, features_sh_0),
         viewmats=viewmats,  # [C, 4, 4]
         Ks=Ks,  # [C, 3, 3]
         width=W,
@@ -52,12 +86,9 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
         packed=PACKED,
         use_bvh=False,
         tile_size=16,
-        absgrad=False,
         sparse_grad=False,
         distributed=False,
         camera_model=camera_model,
-        with_ut=WITH_UT,
-        with_eval3d=WITH_UT,
         render_mode="RGB+D",
         # render_mode="RGB+D+N",
     )
@@ -112,7 +143,7 @@ def get_inputs():
     viewmats = viewmats.contiguous().to(device)
 
     cx, cy = 0.5*W, 0.5*H
-    fx, fy = 0.4*W, 0.4*W
+    fx, fy = 0.4*W, 0.4*W  # 0.4
     Ks = torch.tensor([[[fx, 0, cx], [0, fy, cy], [0, 0, 1]]]).repeat(B, 1, 1).to(device)
     Ks *= torch.exp(0.2*torch.randn_like(Ks))
 
@@ -140,7 +171,7 @@ def test_rasterization():
     check_close('alpha', outputs[2], _outputs[2], **tol)
     print()
 
-    if True:
+    if False:
         import matplotlib.pyplot as plt
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2)
         rgb = outputs[0].detach().cpu().numpy()

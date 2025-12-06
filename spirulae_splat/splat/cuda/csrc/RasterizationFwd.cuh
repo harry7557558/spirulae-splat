@@ -28,10 +28,10 @@ rasterize_to_pixels_3dgs_fwd(
 );
 
 
-std::tuple<OpaqueTriangle::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
-rasterize_to_pixels_opaque_triangle_fwd(
+std::tuple<MipSplatting::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
+rasterize_to_pixels_mip_fwd(
     // Gaussian parameters
-    OpaqueTriangle::Screen::TensorTuple splats_tuple,
+    MipSplatting::Screen::TensorTuple splats_tuple,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size

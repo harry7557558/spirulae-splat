@@ -293,11 +293,10 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
 }
 
 
+/*[AutoHeaderGeneratorExport]*/
 template<typename SplatPrimitive>
-inline std::tuple<
-    typename SplatPrimitive::Screen::TensorTuple,
-    std::optional<at::Tensor>  // absgrad
-> rasterize_to_pixels_bwd_tensor(
+typename SplatPrimitive::Screen::TensorTuple
+rasterize_to_pixels_bwd_tensor(
     // Gaussian parameters
     typename SplatPrimitive::Screen::TensorTuple splats_tuple,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
@@ -314,9 +313,7 @@ inline std::tuple<
     const at::Tensor last_ids,      // [..., image_height, image_width]
     // gradients of outputs
     typename SplatPrimitive::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
-    // options
-    bool absgrad
+    const at::Tensor v_render_alphas // [..., image_height, image_width, 1]
 ) {
     DEVICE_GUARD(tile_offsets);
     CHECK_INPUT(tile_offsets);
@@ -333,7 +330,7 @@ inline std::tuple<
         AT_ERROR("Unsupported tile size");
 
     typename SplatPrimitive::Screen::Tensor splats(splats_tuple);
-    typename SplatPrimitive::Screen::Tensor v_splats = splats.zeros_like(absgrad);
+    typename SplatPrimitive::Screen::Tensor v_splats = splats.allocRasterBwd();
 
     launch_rasterize_to_pixels_bwd_kernel<SplatPrimitive>(
         splats,
@@ -350,15 +347,11 @@ inline std::tuple<
         v_splats
     );
 
-    return std::make_tuple(
-        v_splats.tuple(), v_splats.absgrad
-    );
+    return v_splats.tupleRasterBwd();
 }
 
-std::tuple<
-    Vanilla3DGS::Screen::TensorTuple,
-    std::optional<at::Tensor>  // absgrad
-> rasterize_to_pixels_3dgs_bwd(
+/*[AutoHeaderGeneratorExport]*/
+Vanilla3DGS::Screen::TensorTuple rasterize_to_pixels_3dgs_bwd(
     // Gaussian parameters
     Vanilla3DGS::Screen::TensorTuple splats_tuple,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
@@ -375,23 +368,19 @@ std::tuple<
     const at::Tensor last_ids,      // [..., image_height, image_width]
     // gradients of outputs
     Vanilla3DGS::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
-    // options
-    bool absgrad
+    const at::Tensor v_render_alphas // [..., image_height, image_width, 1]
 ) {
     return rasterize_to_pixels_bwd_tensor<Vanilla3DGS>(
         splats_tuple, backgrounds, masks,
         image_width, image_height, tile_size, tile_offsets, flatten_ids,
-        render_Ts, last_ids, v_render_outputs, v_render_alphas, absgrad
+        render_Ts, last_ids, v_render_outputs, v_render_alphas
     );
 }
 
-std::tuple<
-    OpaqueTriangle::Screen::TensorTuple,
-    std::optional<at::Tensor>  // absgrad
-> rasterize_to_pixels_opaque_triangle_bwd(
+/*[AutoHeaderGeneratorExport]*/
+MipSplatting::Screen::TensorTuple rasterize_to_pixels_mip_bwd(
     // Gaussian parameters
-    OpaqueTriangle::Screen::TensorTuple splats_tuple,
+    MipSplatting::Screen::TensorTuple splats_tuple,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -405,14 +394,12 @@ std::tuple<
     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
     // gradients of outputs
-    OpaqueTriangle::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
-    // options
-    bool absgrad
+    MipSplatting::RenderOutput::TensorTuple v_render_outputs,
+    const at::Tensor v_render_alphas // [..., image_height, image_width, 1]
 ) {
-    return rasterize_to_pixels_bwd_tensor<OpaqueTriangle>(
+    return rasterize_to_pixels_bwd_tensor<MipSplatting>(
         splats_tuple, backgrounds, masks,
         image_width, image_height, tile_size, tile_offsets, flatten_ids,
-        render_Ts, last_ids, v_render_outputs, v_render_alphas, absgrad
+        render_Ts, last_ids, v_render_outputs, v_render_alphas
     );
 }

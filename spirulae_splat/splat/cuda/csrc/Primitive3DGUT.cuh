@@ -12,8 +12,7 @@
 #include <tuple>
 
 
-template<bool antialiased>
-struct _Base3DGS {
+struct Vanilla3DGUT {
     struct World;
     struct Screen;
     struct RenderOutput;
@@ -31,17 +30,12 @@ struct _Base3DGS {
 
     inline static __device__ void project_persp(
         World world, FwdProjCamera cam,
-        Screen& screen, int4& aabb
-    );
-
-    inline static __device__ void project_ortho(
-        World world, FwdProjCamera cam,
-        Screen& screen, int4& aabb
+        Screen& proj, int4& aabb
     );
 
     inline static __device__ void project_fisheye(
         World world, FwdProjCamera cam,
-        Screen& screen, int4& aabb
+        Screen& proj, int4& aabb
     );
 
     struct BwdProjCamera {
@@ -54,28 +48,22 @@ struct _Base3DGS {
 
     inline static __device__ void project_persp_vjp(
         World world, BwdProjCamera cam,
-        Screen v_screen,
-        World& v_world, float3x3 &v_R, float3 &v_t
-    );
-
-    inline static __device__ void project_ortho_vjp(
-        World world, BwdProjCamera cam,
-        Screen v_screen,
+        Screen v_proj,
         World& v_world, float3x3 &v_R, float3 &v_t
     );
 
     inline static __device__ void project_fisheye_vjp(
         World world, BwdProjCamera cam,
-        Screen v_screen,
+        Screen v_proj,
         World& v_world, float3x3 &v_R, float3 &v_t
     );
 
 #endif  // #ifdef __CUDACC__
 
+    static constexpr float eps2d = 0.3f;
 };
 
-template<bool antialiased>
-struct _Base3DGS<antialiased>::World {
+struct Vanilla3DGUT::World {
 
     float3 mean;
     float4 quat;
@@ -149,12 +137,12 @@ struct _Base3DGS<antialiased>::World {
             CHECK_INPUT(tensors.opacities);
             CHECK_INPUT(tensors.features_dc);
             CHECK_INPUT(tensors.features_sh);
-            means = (float3*)tensors.means.template data_ptr<float>();
-            quats = (float4*)tensors.quats.template data_ptr<float>();
-            scales = (float3*)tensors.scales.template data_ptr<float>();
-            opacities = tensors.opacities.template data_ptr<float>();
-            features_dc = (float3*)tensors.features_dc.template data_ptr<float>();
-            features_sh = (float3*)tensors.features_sh.template data_ptr<float>();
+            means = (float3*)tensors.means.data_ptr<float>();
+            quats = (float4*)tensors.quats.data_ptr<float>();
+            scales = (float3*)tensors.scales.data_ptr<float>();
+            opacities = tensors.opacities.data_ptr<float>();
+            features_dc = (float3*)tensors.features_dc.data_ptr<float>();
+            features_sh = (float3*)tensors.features_sh.data_ptr<float>();
             num_sh = tensors.features_sh.size(-2);
         }
     };
@@ -221,8 +209,7 @@ struct _Base3DGS<antialiased>::World {
 };
 
 
-template<bool antialiased>
-struct _Base3DGS<antialiased>::RenderOutput {
+struct Vanilla3DGUT::RenderOutput {
 
     float3 rgb;
     float depth;
@@ -279,8 +266,8 @@ struct _Base3DGS<antialiased>::RenderOutput {
             DEVICE_GUARD(tensors.rgbs);
             CHECK_INPUT(tensors.rgbs);
             CHECK_INPUT(tensors.depths);
-            rgbs = (float3*)tensors.rgbs.template data_ptr<float>();
-            depths = tensors.depths.template data_ptr<float>();
+            rgbs = (float3*)tensors.rgbs.data_ptr<float>();
+            depths = tensors.depths.data_ptr<float>();
         }
     };
 
@@ -331,114 +318,124 @@ struct _Base3DGS<antialiased>::RenderOutput {
 };
 
 
-template<bool antialiased>
-struct _Base3DGS<antialiased>::Screen {
+struct Vanilla3DGUT::Screen {
 
-    float2 xy;
+    // from world
+    float3 mean;
+    float4 quat;
+    // from screen
     float depth;
-    float3 conic;
-    float opac;
+    float3 scale;
+    float opacity;
     float3 rgb;
-    float2 xy_abs;
+    // precompute
+#ifdef __CUDACC__
+    float3x3 iscl_rot;
+#endif
 
-    typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTupleProj;
-    typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, std::optional<at::Tensor>> TensorTuple;
+    typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTupleProj;
+    typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTuple;
 
     struct Buffer;
 
     struct Tensor {
-        at::Tensor means2d;
+        bool hasWorld;
+        at::Tensor means;
+        at::Tensor quats;
         at::Tensor depths;
-        at::Tensor conics;
+        at::Tensor scales;
         at::Tensor opacities;
         at::Tensor rgbs;
-        std::optional<at::Tensor> absgrad;
 
-        Tensor(const TensorTuple& splats) {
-            means2d = std::get<0>(splats);
-            depths = std::get<1>(splats);
-            conics = std::get<2>(splats);
-            opacities = std::get<3>(splats);
-            rgbs = std::get<4>(splats);
-            absgrad = std::get<5>(splats);
+        Tensor(const TensorTuple& splats) : hasWorld(true) {
+            means = std::get<0>(splats);
+            quats = std::get<1>(splats);
+            depths = std::get<2>(splats);
+            scales = std::get<3>(splats);
+            opacities = std::get<4>(splats);
+            rgbs = std::get<5>(splats);
         }
 
-        Tensor(const TensorTupleProj& splats) {
-            means2d = std::get<0>(splats);
-            depths = std::get<1>(splats);
-            conics = std::get<2>(splats);
-            opacities = std::get<3>(splats);
-            rgbs = std::get<4>(splats);
+        Tensor(const TensorTupleProj& splats) : hasWorld(false) {
+            depths = std::get<0>(splats);
+            scales = std::get<1>(splats);
+            opacities = std::get<2>(splats);
+            rgbs = std::get<3>(splats);
         }
 
         TensorTupleProj tupleProjFwd() const {
-            return std::make_tuple(means2d, depths, conics, opacities, rgbs);
+            return std::make_tuple(depths, scales, opacities, rgbs);
         }
 
         TensorTuple tupleRasterBwd() const {
-            return std::make_tuple(means2d, depths, conics, opacities, rgbs, absgrad);
+            return std::make_tuple(means, quats, depths, scales, opacities, rgbs);
         }
 
         static Tensor allocProjFwd(long C, long N, c10::TensorOptions opt) {
             return std::make_tuple(
-                at::empty({C, N, 2}, opt),
-                at::empty({C, N}, opt),
-                at::empty({C, N, 3}, opt),
-                at::empty({C, N}, opt),
-                at::empty({C, N, 3}, opt),
-                (std::optional<at::Tensor>)std::nullopt
+                at::empty({N, 3}, opt),
+                at::empty({N, 4}, opt),
+                C == -1 ? at::empty({N}, opt) : at::empty({C, N}, opt),
+                C == -1 ? at::empty({N, 3}, opt) : at::empty({C, N, 3}, opt),
+                C == -1 ? at::empty({N}, opt) : at::empty({C, N}, opt),
+                C == -1 ? at::empty({N, 3}, opt) : at::empty({C, N, 3}, opt)
             );
         }
 
         Tensor allocRasterBwd() const {
+            if (!hasWorld)
+                throw std::runtime_error("!hasWorld");
             Tensor result = Tensor(std::make_tuple(
-                at::zeros_like(means2d),
+                at::zeros_like(means),
+                at::zeros_like(quats),
                 at::zeros_like(depths),
-                at::zeros_like(conics),
+                at::zeros_like(scales),
                 at::zeros_like(opacities),
                 at::zeros_like(rgbs)
             ));
-            if (true)  // TODO: option to not include this
-                result.absgrad = at::zeros_like(means2d);
             return result;
         }
 
         auto options() const {
-            return means2d.options();
+            return rgbs.options();
         }
         bool isPacked() const {
-            return means2d.dim() == 2;
+            return rgbs.dim() == 2;
         }
         long size() const {
-            return means2d.size(-2);
+            return rgbs.numel() / 3;
         }
 
         Buffer buffer() { return Buffer(*this); }
     };
 
     struct Buffer {
-        float2* __restrict__ means2d;  // [I, N, 2] or [nnz, 2]
-        float* __restrict__ depths;  // [I, N] or [nnz]
-        float3* __restrict__ conics;  // [I, N, 3] or [nnz, 3]
-        float* __restrict__ opacities;  // [I, N] or [nnz]
-        float3* __restrict__ rgbs;  // [I, N, 3] or [nnz, 3]
-        float2* __restrict__ absgrad = nullptr;  // [I, N, 2] or [nnz, 2]
+        float3* __restrict__ means = nullptr;
+        float4* __restrict__ quats = nullptr;
+        float* __restrict__ depths;
+        float3* __restrict__ scales;
+        float* __restrict__ opacities;
+        float3* __restrict__ rgbs;
+        long size;
 
         Buffer(const Tensor& tensors) {
-            DEVICE_GUARD(tensors.means2d);
-            CHECK_INPUT(tensors.means2d);
+            DEVICE_GUARD(tensors.depths);
+            if (tensors.hasWorld) {
+                CHECK_INPUT(tensors.means);
+                CHECK_INPUT(tensors.quats);
+                means = (float3*)tensors.means.data_ptr<float>();
+                quats = (float4*)tensors.quats.data_ptr<float>();
+            }
             CHECK_INPUT(tensors.depths);
-            CHECK_INPUT(tensors.conics);
+            CHECK_INPUT(tensors.scales);
             CHECK_INPUT(tensors.opacities);
             CHECK_INPUT(tensors.rgbs);
-            means2d = (float2*)tensors.means2d.template data_ptr<float>();
-            depths = tensors.depths.template data_ptr<float>();
-            conics = (float3*)tensors.conics.template data_ptr<float>();
-            opacities = tensors.opacities.template data_ptr<float>();
-            rgbs = (float3*)tensors.rgbs.template data_ptr<float>();
-            absgrad = tensors.absgrad.has_value() ?
-                (float2*)tensors.absgrad.value().template data_ptr<float>()
-                : nullptr;
+            depths = tensors.depths.data_ptr<float>();
+            scales = (float3*)tensors.scales.data_ptr<float>();
+            opacities = tensors.opacities.data_ptr<float>();
+            rgbs = (float3*)tensors.rgbs.data_ptr<float>();
+            size = tensors.hasWorld ?
+                tensors.quats.numel() / 4 : tensors.depths.numel();
         }
     };
 
@@ -446,99 +443,99 @@ struct _Base3DGS<antialiased>::Screen {
 
     static __device__ Screen load(const Buffer &buffer, long idx) {
         return {
-            buffer.means2d[idx],
+            buffer.means ? buffer.means[idx % buffer.size] : make_float3(0.f),
+            buffer.quats ? buffer.quats[idx % buffer.size] : make_float4(0.f),
             buffer.depths[idx],
-            buffer.conics[idx],
+            buffer.scales[idx],
             buffer.opacities[idx],
             buffer.rgbs[idx],
-            buffer.absgrad ? buffer.absgrad[idx] : make_float2(0.0f),
         };
     }
 
     static __device__ Screen loadWithPrecompute(const Buffer &buffer, long idx) {
-        return load(buffer, idx);
+        Screen splat = Screen::load(buffer, idx);
+        splat.iscl_rot = compute_3dgut_iscl_rot(splat.quat, splat.scale);
+        return splat;
     }
 
     static __device__ __forceinline__ Screen zero() {
         return {
-            {0.f, 0.f},
+            {0.f, 0.f, 0.f},
+            {0.f, 0.f, 0.f, 0.f},
             0.0f,
             {0.f, 0.f, 0.f},
             0.0f,
             {0.f, 0.f, 0.f},
-            {0.f, 0.f}
+            {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f},
         };
     }
 
     __device__ __forceinline__ void operator+=(const Screen &other) {
-        xy += other.xy;
+        mean += other.mean;
+        quat += other.quat;
         depth += other.depth;
-        conic += other.conic;
-        opac += other.opac;
+        scale += other.scale;
+        opacity += other.opacity;
         rgb += other.rgb;
-        xy_abs += fabs(other.xy);
+        iscl_rot = iscl_rot + other.iscl_rot;
     }
 
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
-        buffer.means2d[idx] = xy;
+        if (buffer.means) buffer.means[idx % buffer.size] = mean;
+        if (buffer.quats) buffer.quats[idx % buffer.size] = quat;
         buffer.depths[idx] = depth;
-        buffer.conics[idx] = conic;
-        buffer.opacities[idx] = opac;
+        buffer.scales[idx] = scale;
+        buffer.opacities[idx] = opacity;
         buffer.rgbs[idx] = rgb;
-        if (buffer.absgrad != nullptr)
-            buffer.absgrad[idx] = xy_abs;
+        // iscl_rot is not saved
     }
 
-    __device__ void atomicAddGradientToBuffer(Buffer &buffer, long idx) {
-        atomicAddFVec(buffer.means2d + idx, xy);
-        atomicAddFVec(buffer.depths + idx, depth);
-        atomicAddFVec(buffer.conics + idx, conic);
-        atomicAddFVec(buffer.opacities + idx, opac);
-        atomicAddFVec(buffer.rgbs + idx, rgb);
-        if (buffer.absgrad != nullptr)
-            atomicAddFVec(buffer.absgrad + idx, xy_abs);
+    __device__ void atomicAddGradientToBuffer(const Screen &grad, Buffer &buffer, long idx) const {
+        float4 v_quat; float3 v_scale;
+        compute_3dgut_iscl_rot_vjp(quat, scale, grad.iscl_rot, &v_quat, &v_scale);
+        atomicAddFVec(buffer.means + idx % buffer.size, grad.mean);
+        atomicAddFVec(buffer.quats + idx % buffer.size, grad.quat + v_quat);
+        atomicAddFVec(buffer.depths + idx, grad.depth);
+        atomicAddFVec(buffer.scales + idx, grad.scale + v_scale);
+        atomicAddFVec(buffer.opacities + idx, grad.opacity);
+        atomicAddFVec(buffer.rgbs + idx, grad.rgb);
     }
 
-    __device__ __forceinline__ float evaluate_alpha(float px, float py) {
-        float2 delta = {xy.x - px, xy.y - py};
-        float sigma = 0.5f * (conic.x * delta.x * delta.x +
-                                conic.z * delta.y * delta.y) +
-                        conic.y * delta.x * delta.y;
-        float vis = __expf(-sigma);
-        float alpha = min(0.999f, opac * vis);
-        return sigma < 0.f ? 0.f : alpha;
+    __device__ __forceinline__ float evaluate_alpha(float3 ray_o, float3 ray_d) {
+        if (dot(mean-ray_o, ray_d) <= 0.0f)
+            return 0.0;
+        return evaluate_alpha_3dgs(
+            mean, iscl_rot, opacity,
+            ray_o, ray_d
+        );
     }
 
-    __device__ __forceinline__ Screen evaluate_alpha_vjp(float px, float py, float v_alpha) {
-        float2 delta = {xy.x - px, xy.y - py};
-        float sigma = 0.5f * (conic.x * delta.x * delta.x +
-                                conic.z * delta.y * delta.y) +
-                        conic.y * delta.x * delta.y;
-        float vis = __expf(-sigma);
-        float alpha = min(0.999f, opac * vis);
-
+    __device__ __forceinline__ Screen evaluate_alpha_vjp(
+        float3 ray_o, float3 ray_d, float v_alpha,
+        float3 &v_ray_o, float3 &v_ray_d
+    ) {
         Screen v_splat = Screen::zero();
-        if (sigma >= 0.f && opac * vis <= 0.999f) {
-            const float v_sigma = -opac * vis * v_alpha;
-            v_splat.conic = {
-                0.5f * v_sigma * delta.x * delta.x,
-                v_sigma * delta.x * delta.y,
-                0.5f * v_sigma * delta.y * delta.y
-            };
-            v_splat.xy = {
-                v_sigma * (conic.x * delta.x + conic.y * delta.y),
-                v_sigma * (conic.y * delta.x + conic.z * delta.y)
-            };
-            v_splat.opac = vis * v_alpha;
+        if (dot(mean-ray_o, ray_d) <= 0.0f) {
+            v_ray_o = v_ray_d = make_float3(0.f);
+            return v_splat;
         }
+        evaluate_alpha_3dgs_vjp(
+            mean, iscl_rot, opacity,
+            ray_o, ray_d, v_alpha,
+            &v_splat.mean, &v_splat.iscl_rot, &v_splat.opacity,
+            &v_ray_o, &v_ray_d
+        );
         return v_splat;
     }
 
-    __device__ __forceinline__ _Base3DGS::RenderOutput evaluate_color(float px, float py) {
-        return { rgb, depth };
+    __device__ __forceinline__ Vanilla3DGUT::RenderOutput evaluate_color(float3 ray_o, float3 ray_d) {
+        return {rgb, depth};
     }
 
-    __device__ __forceinline__ Screen evaluate_color_vjp(float px, float py, _Base3DGS::RenderOutput v_render) {
+    __device__ __forceinline__ Screen evaluate_color_vjp(
+        float3 ray_o, float3 ray_d, Vanilla3DGUT::RenderOutput v_render,
+        float3 &v_ray_o, float3 &v_ray_d
+    ) {
         Screen v_splat = Screen::zero();
         v_splat.rgb = v_render.rgb;
         v_splat.depth = v_render.depth;
@@ -552,103 +549,64 @@ struct _Base3DGS<antialiased>::Screen {
 
 #ifdef __CUDACC__
 
-template<bool antialiased>
-inline __device__ void _Base3DGS<antialiased>::project_persp(
-    _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::FwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen& screen, int4& aabb
+inline __device__ void Vanilla3DGUT::project_persp(
+    Vanilla3DGUT::World world, Vanilla3DGUT::FwdProjCamera cam,
+    Vanilla3DGUT::Screen& proj, int4& aabb
 ) {
-    projection_3dgs_persp(
-        antialiased,
-        world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
-        &cam.dist_coeffs,
-        cam.width, cam.height, cam.near_plane, cam.far_plane,
-        &aabb, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
-    );
-}
-
-template<bool antialiased>
-inline __device__ void _Base3DGS<antialiased>::project_ortho(
-    _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::FwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen& screen, int4& aabb
-) {
-    projection_3dgs_ortho(
-        antialiased,
+    float2 xy;
+    projection_3dgs_eval3d_persp(
+        false,
         world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
-        &aabb, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
+        &aabb, &xy, &proj.depth, &proj.scale, &proj.opacity, &proj.rgb
     );
 }
 
-template<bool antialiased>
-inline __device__ void _Base3DGS<antialiased>::project_fisheye(
-    _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::FwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen& screen, int4& aabb
+inline __device__ void Vanilla3DGUT::project_fisheye(
+    Vanilla3DGUT::World world, Vanilla3DGUT::FwdProjCamera cam,
+    Vanilla3DGUT::Screen& proj, int4& aabb
 ) {
-    projection_3dgs_fisheye(
-        antialiased,
+    float2 xy;
+    projection_3dgs_eval3d_fisheye(
+        false,
         world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
-        &aabb, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
+        &aabb, &xy, &proj.depth, &proj.scale, &proj.opacity, &proj.rgb
     );
 }
 
-
-template<bool antialiased>
-inline __device__ void _Base3DGS<antialiased>::project_persp_vjp(
-    _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::BwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen v_screen,
-    _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t
+inline __device__ void Vanilla3DGUT::project_persp_vjp(
+    Vanilla3DGUT::World world, Vanilla3DGUT::BwdProjCamera cam,
+    Vanilla3DGUT::Screen v_proj,
+    Vanilla3DGUT::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
-    projection_3dgs_persp_vjp(
-        antialiased,
+    projection_3dgs_eval3d_persp_vjp(
+        false,
         world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
         cam.width, cam.height,
-        v_screen.xy, v_screen.depth, v_screen.conic, v_screen.opac, v_screen.rgb,
+        make_float2(0), v_proj.depth, v_proj.scale, v_proj.opacity, v_proj.rgb,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
         &v_R, &v_t
     );
 }
 
-template<bool antialiased>
-inline __device__ void _Base3DGS<antialiased>::project_ortho_vjp(
-    _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::BwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen v_screen,
-    _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t
+inline __device__ void Vanilla3DGUT::project_fisheye_vjp(
+    Vanilla3DGUT::World world, Vanilla3DGUT::BwdProjCamera cam,
+    Vanilla3DGUT::Screen v_proj,
+    Vanilla3DGUT::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
-    projection_3dgs_ortho_vjp(
-        antialiased,
+    projection_3dgs_eval3d_fisheye_vjp(
+        false,
         world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
         cam.width, cam.height,
-        v_screen.xy, v_screen.depth, v_screen.conic, v_screen.opac, v_screen.rgb,
-        &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
-        &v_R, &v_t
-    );
-}
-
-template<bool antialiased>
-inline __device__ void _Base3DGS<antialiased>::project_fisheye_vjp(
-    _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::BwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen v_screen,
-    _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t
-) {
-    projection_3dgs_fisheye_vjp(
-        antialiased,
-        world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
-        cam.width, cam.height,
-        v_screen.xy, v_screen.depth, v_screen.conic, v_screen.opac, v_screen.rgb,
+        make_float2(0), v_proj.depth, v_proj.scale, v_proj.opacity, v_proj.rgb,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
         &v_R, &v_t
     );
 }
 
 #endif  // #ifdef __CUDACC__
-
-
-typedef _Base3DGS<false> Vanilla3DGS;
-typedef _Base3DGS<true> MipSplatting;

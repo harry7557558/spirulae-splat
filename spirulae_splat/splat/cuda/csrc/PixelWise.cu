@@ -82,6 +82,7 @@ __global__ void blend_background_backward_kernel(
 
 
 
+/*[AutoHeaderGeneratorExport]*/
 torch::Tensor blend_background_forward_tensor(
     torch::Tensor &rgb,  // [B, H, W, 3]
     torch::Tensor &alpha,  // [B, H, W, 1]
@@ -112,6 +113,7 @@ torch::Tensor blend_background_forward_tensor(
 }
 
 
+/*[AutoHeaderGeneratorExport]*/
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 blend_background_backward_tensor(
     torch::Tensor &rgb,  // [B, H, W, 3]
@@ -192,6 +194,7 @@ __global__ void log_map_image_backward_kernel(
 
 
 
+/*[AutoHeaderGeneratorExport]*/
 torch::Tensor log_map_image_forward_tensor(
     torch::Tensor &rgb,  // [B, H, W, 3]
     float t
@@ -215,6 +218,7 @@ torch::Tensor log_map_image_forward_tensor(
 }
 
 
+/*[AutoHeaderGeneratorExport]*/
 torch::Tensor log_map_image_backward_tensor(
     torch::Tensor &rgb,  // [B, H, W, 3]
     float t,
@@ -344,6 +348,7 @@ __global__ void depth_to_normal_backward_kernel(
 }
 
 
+/*[AutoHeaderGeneratorExport]*/
 torch::Tensor depth_to_normal_forward_tensor(
     gsplat::CameraModelType camera_model,
     torch::Tensor Ks,  // [B, 3, 3]
@@ -374,6 +379,7 @@ torch::Tensor depth_to_normal_forward_tensor(
     return normals;
 }
 
+/*[AutoHeaderGeneratorExport]*/
 torch::Tensor depth_to_normal_backward_tensor(
     gsplat::CameraModelType camera_model,
     torch::Tensor Ks,  // [B, 3, 3]
@@ -470,6 +476,7 @@ __global__ void ray_depth_to_linear_depth_backward_kernel(
     v_in_depths.store1(bid, j, i, v_in_depth);
 }
 
+/*[AutoHeaderGeneratorExport]*/
 torch::Tensor ray_depth_to_linear_depth_forward_tensor(
     gsplat::CameraModelType camera_model,
     torch::Tensor Ks,  // [B, 3, 3]
@@ -499,6 +506,7 @@ torch::Tensor ray_depth_to_linear_depth_forward_tensor(
     return out_depths;
 }
 
+/*[AutoHeaderGeneratorExport]*/
 torch::Tensor ray_depth_to_linear_depth_backward_tensor(
     gsplat::CameraModelType camera_model,
     torch::Tensor Ks,  // [B, 3, 3]
@@ -576,6 +584,7 @@ __global__ void distort_image_kernel(
     }
 }
 
+/*[AutoHeaderGeneratorExport]*/
 torch::Tensor distort_image_tensor(
     gsplat::CameraModelType camera_model,
     torch::Tensor Ks,  // [B, 3, 3]
@@ -603,6 +612,7 @@ torch::Tensor distort_image_tensor(
     return out_image;
 }
 
+/*[AutoHeaderGeneratorExport]*/
 torch::Tensor undistort_image_tensor(
     gsplat::CameraModelType camera_model,
     torch::Tensor Ks,  // [B, 3, 3]

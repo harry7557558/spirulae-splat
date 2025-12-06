@@ -123,6 +123,7 @@ __global__ void per_splat_losses_backward_kernel(
 
 
 
+/*[AutoHeaderGeneratorExport]*/
 torch::Tensor compute_per_splat_losses_forward_tensor(
     torch::Tensor &scales,  // [N, 3] or [N, 2]
     torch::Tensor &opacities,  // [N, 1]
@@ -174,6 +175,7 @@ torch::Tensor compute_per_splat_losses_forward_tensor(
 }
 
 
+/*[AutoHeaderGeneratorExport]*/
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 compute_per_splat_losses_backward_tensor(
     torch::Tensor &scales,  // [N, 3] or [N, 2]
@@ -272,6 +274,7 @@ __global__ void mcmc_add_noise_triangle_kernel(
     );
 }
 
+/*[AutoHeaderGeneratorExport]*/
 void mcmc_add_noise_3dgs_tensor(
     std::string primitive,
     float scaler, float min_opacity,

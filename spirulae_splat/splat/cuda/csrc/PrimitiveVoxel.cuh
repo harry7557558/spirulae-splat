@@ -15,7 +15,7 @@
 
 struct VoxelPrimitive {
     struct World;
-    struct WorldEval3D;
+    struct Screen;
     struct RenderOutput;
 
 #ifdef __CUDACC__
@@ -24,38 +24,38 @@ struct VoxelPrimitive {
         float3x3 R;
         float3 t;
         float fx, fy, cx, cy;
-        uint width, height, antialiased;
+        uint width, height;
         float near_plane, far_plane;
         CameraDistortionCoeffs dist_coeffs;
     };
 
-    inline static __device__ void project_persp_eval3d(
+    inline static __device__ void project_persp(
         World world, FwdProjCamera cam,
-        WorldEval3D& proj, int4& aabb
+        Screen& proj, int4& aabb
     );
 
-    inline static __device__ void project_fisheye_eval3d(
+    inline static __device__ void project_fisheye(
         World world, FwdProjCamera cam,
-        WorldEval3D& proj, int4& aabb
+        Screen& proj, int4& aabb
     );
 
     struct BwdProjCamera {
         float3x3 R;
         float3 t;
         float fx, fy, cx, cy;
-        uint width, height, antialiased;
+        uint width, height;
         CameraDistortionCoeffs dist_coeffs;
     };
 
-    inline static __device__ void project_persp_eval3d_vjp(
+    inline static __device__ void project_persp_vjp(
         World world, BwdProjCamera cam,
-        WorldEval3D v_proj,
+        Screen v_proj,
         World& v_world, float3x3 &v_R, float3 &v_t
     );
 
-    inline static __device__ void project_fisheye_eval3d_vjp(
+    inline static __device__ void project_fisheye_vjp(
         World world, BwdProjCamera cam,
-        WorldEval3D v_proj,
+        Screen v_proj,
         World& v_world, float3x3 &v_R, float3 &v_t
     );
 
@@ -310,13 +310,14 @@ struct VoxelPrimitive::RenderOutput {
 
 
 
-struct VoxelPrimitive::WorldEval3D {
+struct VoxelPrimitive::Screen {
 
     float3 pos;
     float size;
     float depth;  // non differentiable
     FixedArray<float, 8> densities;
     float3 rgb;
+    float density_abs;
 
     typedef std::tuple<std::optional<at::Tensor>, at::Tensor> TensorTupleProj;
     typedef std::tuple<std::optional<at::Tensor>, std::optional<at::Tensor>, std::optional<at::Tensor>, at::Tensor> TensorTuple;
@@ -329,6 +330,7 @@ struct VoxelPrimitive::WorldEval3D {
         std::optional<at::Tensor> depths;
         std::optional<at::Tensor> densities;
         at::Tensor rgbs;
+        std::optional<at::Tensor> absgrad;
 
         Tensor(const TensorTuple& splats) : hasWorld(true) {
             pos_size = std::get<0>(splats);
@@ -342,15 +344,24 @@ struct VoxelPrimitive::WorldEval3D {
             rgbs = std::get<1>(splats);
         }
 
-        TensorTuple tupleAll() const {
-            return std::make_tuple(pos_size, depths, densities, rgbs);
-        }
-
-        TensorTupleProj tupleProj() const {
+        TensorTupleProj tupleProjFwd() const {
             return std::make_tuple(depths, rgbs);
         }
 
-        Tensor zeros_like() const {
+        TensorTuple tupleRasterBwd() const {
+            return std::make_tuple(pos_size, depths, densities, rgbs);
+        }
+
+        static Tensor allocProjFwd(long C, long N, c10::TensorOptions opt) {
+            return std::make_tuple(
+                (std::optional<at::Tensor>)at::empty({N, 4}, opt),
+                (std::optional<at::Tensor>)(C == -1 ? at::empty({N}, opt) : at::empty({C, N}, opt)),
+                (std::optional<at::Tensor>)at::empty({N, 8}, opt),
+                C == -1 ? at::empty({N, 3}, opt) : at::empty({C, N, 3}, opt)
+            );
+        }
+
+        Tensor allocRasterBwd() const {
             if (!hasWorld)
                 throw std::runtime_error("!hasWorld");
             Tensor result = Tensor(std::make_tuple(
@@ -360,15 +371,6 @@ struct VoxelPrimitive::WorldEval3D {
                 at::zeros_like(rgbs)
             ));
             return result;
-        }
-
-        static Tensor empty(long C, long N, c10::TensorOptions opt) {
-            return std::make_tuple(
-                (std::optional<at::Tensor>)at::empty({N, 4}, opt),
-                (std::optional<at::Tensor>)(C == -1 ? at::empty({N}, opt) : at::empty({C, N}, opt)),
-                (std::optional<at::Tensor>)at::empty({N, 8}, opt),
-                C == -1 ? at::empty({N, 3}, opt) : at::empty({C, N, 3}, opt)
-            );
         }
 
         auto options() const {
@@ -416,7 +418,7 @@ struct VoxelPrimitive::WorldEval3D {
 
 #ifdef __CUDACC__
 
-    static __device__ WorldEval3D load(const Buffer &buffer, long idx) {
+    static __device__ Screen load(const Buffer &buffer, long idx) {
         long idx0 = idx % buffer.size;
         float4 pos_size = buffer.pos_size ? buffer.pos_size[idx0] : make_float4(0, 0, 0, 0);
         float4 d0 = buffer.densities[2*idx0],
@@ -430,11 +432,11 @@ struct VoxelPrimitive::WorldEval3D {
         };
     }
 
-    static __device__ __forceinline__ WorldEval3D loadWithPrecompute(const Buffer &buffer, long idx) {
-        return WorldEval3D::load(buffer, idx);
+    static __device__ __forceinline__ Screen loadWithPrecompute(const Buffer &buffer, long idx) {
+        return Screen::load(buffer, idx);
     }
 
-    static __device__ __forceinline__ WorldEval3D zero() {
+    static __device__ __forceinline__ Screen zero() {
         return {
             {0.f, 0.f, 0.f},
             0.f,
@@ -444,7 +446,7 @@ struct VoxelPrimitive::WorldEval3D {
         };
     }
 
-    __device__ __forceinline__ void operator+=(const WorldEval3D &other) {
+    __device__ __forceinline__ void operator+=(const Screen &other) {
         pos += other.pos;
         size += other.size;
         depth += other.depth;
@@ -466,7 +468,7 @@ struct VoxelPrimitive::WorldEval3D {
         buffer.rgbs[idx] = rgb;
     }
 
-    static __device__ void atomicAddGradientToBuffer(const WorldEval3D &grad, Buffer &buffer, long idx) {
+    static __device__ void atomicAddGradientToBuffer(const Screen &grad, Buffer &buffer, long idx) {
         long idx0 = idx % buffer.size;
         if (buffer.pos_size != nullptr)
             atomicAddFVec(buffer.pos_size + idx0, {grad.pos.x, grad.pos.y, grad.pos.z, grad.size});
@@ -484,11 +486,11 @@ struct VoxelPrimitive::WorldEval3D {
         return evaluate_alpha_voxel(pos, size, &densities, ray_o, ray_d);
     }
 
-    __device__ __forceinline__ WorldEval3D evaluate_alpha_vjp(
+    __device__ __forceinline__ Screen evaluate_alpha_vjp(
         float3 ray_o, float3 ray_d, float v_alpha,
         float3 &v_ray_o, float3 &v_ray_d
     ) {
-        WorldEval3D v_splat = WorldEval3D::zero();
+        Screen v_splat = Screen::zero();
         evaluate_alpha_voxel_vjp(
             pos, size, &densities,
             ray_o, ray_d, v_alpha,
@@ -507,11 +509,11 @@ struct VoxelPrimitive::WorldEval3D {
         return {out_rgb, out_depth};
     }
 
-    __device__ __forceinline__ WorldEval3D evaluate_color_vjp(
+    __device__ __forceinline__ Screen evaluate_color_vjp(
         float3 ray_o, float3 ray_d, VoxelPrimitive::RenderOutput v_render,
         float3 &v_ray_o, float3 &v_ray_d
     ) {
-        WorldEval3D v_splat = WorldEval3D::zero();
+        Screen v_splat = Screen::zero();
         evaluate_color_voxel_vjp(
             pos, size, &densities, rgb, ray_o, ray_d,
             v_render.rgb, v_render.depth,
@@ -528,9 +530,9 @@ struct VoxelPrimitive::WorldEval3D {
 
 #ifdef __CUDACC__
 
-inline __device__ void VoxelPrimitive::project_persp_eval3d(
+inline __device__ void VoxelPrimitive::project_persp(
     VoxelPrimitive::World world, VoxelPrimitive::FwdProjCamera cam,
-    VoxelPrimitive::WorldEval3D& proj, int4& aabb
+    VoxelPrimitive::Screen& proj, int4& aabb
 ) {
     projection_voxel_eval3d_persp(
         world.pos, world.size, &world.densities, &world.sh_coeffs,
@@ -540,9 +542,9 @@ inline __device__ void VoxelPrimitive::project_persp_eval3d(
     );
 }
 
-inline __device__ void VoxelPrimitive::project_fisheye_eval3d(
+inline __device__ void VoxelPrimitive::project_fisheye(
     VoxelPrimitive::World world, VoxelPrimitive::FwdProjCamera cam,
-    VoxelPrimitive::WorldEval3D& proj, int4& aabb
+    VoxelPrimitive::Screen& proj, int4& aabb
 ) {
     projection_voxel_eval3d_fisheye(
         world.pos, world.size, &world.densities, &world.sh_coeffs,
@@ -552,9 +554,9 @@ inline __device__ void VoxelPrimitive::project_fisheye_eval3d(
     );
 }
 
-inline __device__ void VoxelPrimitive::project_persp_eval3d_vjp(
+inline __device__ void VoxelPrimitive::project_persp_vjp(
     VoxelPrimitive::World world, VoxelPrimitive::BwdProjCamera cam,
-    VoxelPrimitive::WorldEval3D v_proj,
+    VoxelPrimitive::Screen v_proj,
     VoxelPrimitive::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
     projection_voxel_eval3d_persp_vjp(
@@ -567,9 +569,9 @@ inline __device__ void VoxelPrimitive::project_persp_eval3d_vjp(
     );
 }
 
-inline __device__ void VoxelPrimitive::project_fisheye_eval3d_vjp(
+inline __device__ void VoxelPrimitive::project_fisheye_vjp(
     VoxelPrimitive::World world, VoxelPrimitive::BwdProjCamera cam,
-    VoxelPrimitive::WorldEval3D v_proj,
+    VoxelPrimitive::Screen v_proj,
     VoxelPrimitive::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
     projection_voxel_eval3d_fisheye_vjp(

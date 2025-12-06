@@ -15,11 +15,11 @@
 
 
 std::tuple<
-    OpaqueTriangle::WorldEval3D::TensorTuple,
+    OpaqueTriangle::Screen::TensorTuple,
     std::optional<at::Tensor>  // v_viewmats
-> rasterize_to_pixels_opaque_triangle_sorted_eval3d_bwd(
+> rasterize_to_pixels_opaque_triangle_sorted_bwd(
     // Gaussian parameters
-    OpaqueTriangle::WorldEval3D::TensorTuple splats_tuple,
+    OpaqueTriangle::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,             // [..., C, 4, 4]
     const at::Tensor Ks,                   // [..., C, 3, 3]
     const gsplat::CameraModelType camera_model,

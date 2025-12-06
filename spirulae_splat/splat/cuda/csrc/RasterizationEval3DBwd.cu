@@ -22,7 +22,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     const uint32_t n_isects,
     const bool packed,
     // fwd inputs
-    typename SplatPrimitive::WorldEval3D::Buffer splat_buffer,
+    typename SplatPrimitive::Screen::Buffer splat_buffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float *__restrict__ Ks,       // [B, C, 3, 3]
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -44,7 +44,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     const float *__restrict__ v_render_alphas, // [..., image_height, image_width, 1]
     typename SplatPrimitive::RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
-    typename SplatPrimitive::WorldEval3D::Buffer v_splat_buffer
+    typename SplatPrimitive::Screen::Buffer v_splat_buffer
 ) {
     auto block = cg::this_thread_block();
     cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
@@ -159,15 +159,15 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         const int32_t splat_idx = splat_batch_end - thread_id;
 
         // load splats
-        typename SplatPrimitive::WorldEval3D splat;
+        typename SplatPrimitive::Screen splat;
         uint32_t splat_gid;
         if (splat_idx >= range_start) {
             splat_gid = flatten_ids[splat_idx]; // flatten index in [I * N] or [nnz]
-            splat = SplatPrimitive::WorldEval3D::loadWithPrecompute(splat_buffer, splat_gid);
+            splat = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_gid);
         }
 
         // accumulate gradient
-        typename SplatPrimitive::WorldEval3D v_splat = SplatPrimitive::WorldEval3D::zero();
+        typename SplatPrimitive::Screen v_splat = SplatPrimitive::Screen::zero();
 
         // thread 0 takes last splat, 1 takes second last, etc.
         // at t=0, thread 0 (splat -1) undo pixel 0
@@ -274,7 +274,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
 template <typename SplatPrimitive, bool output_distortion>
 inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     // Gaussian parameters
-    typename SplatPrimitive::WorldEval3D::Tensor splats,
+    typename SplatPrimitive::Screen::Tensor splats,
     const at::Tensor viewmats,             // [..., C, 4, 4]
     const at::Tensor Ks,                   // [..., C, 3, 3]
     const gsplat::CameraModelType camera_model,
@@ -297,7 +297,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
     typename SplatPrimitive::RenderOutput::Tensor *v_distortion_outputs,
     // outputs
-    typename SplatPrimitive::WorldEval3D::Tensor v_splats
+    typename SplatPrimitive::Screen::Tensor v_splats
 ) {
     bool packed = splats.isPacked();
     uint32_t N = packed ? 0 : splats.size(); // number of gaussians
@@ -350,11 +350,11 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
 
 template<typename SplatPrimitive, bool output_distortion>
 inline std::tuple<
-    typename SplatPrimitive::WorldEval3D::TensorTuple,
+    typename SplatPrimitive::Screen::TensorTuple,
     std::optional<at::Tensor>  // v_viewmats
 > rasterize_to_pixels_eval3d_bwd_tensor(
     // Gaussian parameters
-    typename SplatPrimitive::WorldEval3D::TensorTuple splats_tuple,
+    typename SplatPrimitive::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,             // [..., C, 4, 4]
     const at::Tensor Ks,                   // [..., C, 3, 3]
     const gsplat::CameraModelType camera_model,
@@ -394,8 +394,8 @@ inline std::tuple<
     if (tile_size != TILE_SIZE)
         AT_ERROR("Unsupported tile size");
 
-    typename SplatPrimitive::WorldEval3D::Tensor splats(splats_tuple);
-    typename SplatPrimitive::WorldEval3D::Tensor v_splats = splats.zeros_like();
+    typename SplatPrimitive::Screen::Tensor splats(splats_tuple);
+    typename SplatPrimitive::Screen::Tensor v_splats = splats.allocRasterBwd();
 
     at::Tensor v_viewmats = at::zeros_like(viewmats);  // TODO
 
@@ -421,15 +421,16 @@ inline std::tuple<
         v_splats
     );
 
-    return std::make_tuple(v_splats.tupleAll(), v_viewmats);
+    return std::make_tuple(v_splats.tupleRasterBwd(), v_viewmats);
 }
 
+/*[AutoHeaderGeneratorExport]*/
 std::tuple<
-    Vanilla3DGS::WorldEval3D::TensorTuple,
+    Vanilla3DGUT::Screen::TensorTuple,
     std::optional<at::Tensor>  // v_viewmats
-> rasterize_to_pixels_3dgs_eval3d_bwd(
+> rasterize_to_pixels_3dgut_bwd(
     // Gaussian parameters
-    Vanilla3DGS::WorldEval3D::TensorTuple splats_tuple,
+    Vanilla3DGUT::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,             // [..., C, 4, 4]
     const at::Tensor Ks,                   // [..., C, 3, 3]
     const gsplat::CameraModelType camera_model,
@@ -446,14 +447,14 @@ std::tuple<
     // forward outputs
     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
-    std::optional<typename Vanilla3DGS::RenderOutput::TensorTuple> render_outputs,
-    std::optional<typename Vanilla3DGS::RenderOutput::TensorTuple> render2_outputs,
+    std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> render_outputs,
+    std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> render2_outputs,
     // gradients of outputs
-    Vanilla3DGS::RenderOutput::TensorTuple v_render_outputs,
+    Vanilla3DGUT::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
-    std::optional<typename Vanilla3DGS::RenderOutput::TensorTuple> v_distortion_outputs
+    std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> v_distortion_outputs
 ) {
-    return rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGS, false>(
+    return rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, false>(
         splats_tuple,
         viewmats, Ks, camera_model, dist_coeffs,
         backgrounds, masks,
@@ -463,12 +464,13 @@ std::tuple<
     );
 }
 
+/*[AutoHeaderGeneratorExport]*/
 std::tuple<
-    OpaqueTriangle::WorldEval3D::TensorTuple,
+    OpaqueTriangle::Screen::TensorTuple,
     std::optional<at::Tensor>  // v_viewmats
 > rasterize_to_pixels_opaque_triangle_eval3d_bwd(
     // Gaussian parameters
-    OpaqueTriangle::WorldEval3D::TensorTuple splats_tuple,
+    OpaqueTriangle::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,             // [..., C, 4, 4]
     const at::Tensor Ks,                   // [..., C, 3, 3]
     const gsplat::CameraModelType camera_model,
@@ -502,12 +504,13 @@ std::tuple<
     );
 }
 
+/*[AutoHeaderGeneratorExport]*/
 std::tuple<
-    VoxelPrimitive::WorldEval3D::TensorTuple,
+    VoxelPrimitive::Screen::TensorTuple,
     std::optional<at::Tensor>  // v_viewmats
 > rasterize_to_pixels_voxel_eval3d_bwd(
     // Gaussian parameters
-    VoxelPrimitive::WorldEval3D::TensorTuple splats_tuple,
+    VoxelPrimitive::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,             // [..., C, 4, 4]
     const at::Tensor Ks,                   // [..., C, 3, 3]
     const gsplat::CameraModelType camera_model,

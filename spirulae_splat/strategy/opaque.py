@@ -15,38 +15,9 @@ from .ops import (
 
 @dataclass
 class OpaqueStrategy(Strategy):
-    """Strategy that follows the paper:
+    """Strategy that loosely based on the paper:
 
-    `3D Gaussian Splatting as Markov Chain Monte Carlo <https://arxiv.org/abs/2404.09591>`_
-
-    This strategy will:
-
-    - Periodically teleport GSs with low opacity to a place that has high opacity.
-    - Periodically introduce new GSs sampled based on the opacity distribution.
-    - Periodically perturb the GSs locations.
-
-    Args:
-        cap_max (int): Maximum number of GSs. Default to 1_000_000.
-        noise_lr (float): MCMC samping noise learning rate. Default to 5e5.
-        refine_start_iter (int): Start refining GSs after this iteration. Default to 500.
-        refine_stop_iter (int): Stop refining GSs after this iteration. Default to 25_000.
-        refine_every (int): Refine GSs every this steps. Default to 100.
-        min_opacity (float): GSs with opacity below this value will be pruned. Default to 0.005.
-        verbose (bool): Whether to print verbose information. Default to False.
-
-    Examples:
-
-        >>> from gsplat import MCMCStrategy, rasterization
-        >>> params: Dict[str, torch.nn.Parameter] | torch.nn.ParameterDict = ...
-        >>> optimizers: Dict[str, torch.optim.Optimizer] = ...
-        >>> strategy = MCMCStrategy()
-        >>> strategy.check_sanity(params, optimizers)
-        >>> strategy_state = strategy.initialize_state()
-        >>> for step in range(1000):
-        ...     render_image, render_alpha, info = rasterization(...)
-        ...     loss = ...
-        ...     loss.backward()
-        ...     strategy.step_post_backward(params, optimizers, strategy_state, step, info, lr=1e-3)
+    `Triangle Splatting+: Differentiable Rendering with Opaque Triangles <https://arxiv.org/abs/2509.25122>`_
 
     """
 

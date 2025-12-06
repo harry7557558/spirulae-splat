@@ -17,8 +17,8 @@ std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
-    Vanilla3DGS::WorldEval3D::TensorTupleProj  // out splats
-> projection_ewa_3dgs_hetero_forward_tensor(
+    Vanilla3DGS::Screen::TensorTupleProj  // out splats
+> projection_3dgs_hetero_forward_tensor(
     // inputs
     const Vanilla3DGS::World::TensorTuple &in_splats_tensor,
     const at::Tensor viewmats,             // [..., C, 4, 4]
@@ -40,7 +40,7 @@ std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
-    OpaqueTriangle::WorldEval3D::TensorTupleProj  // out splats
+    OpaqueTriangle::Screen::TensorTupleProj  // out splats
 > projection_opaque_triangle_hetero_forward_tensor(
     // inputs
     const OpaqueTriangle::World::TensorTuple &in_splats_tensor,
@@ -59,10 +59,37 @@ std::tuple<
 );
 
 
+template<typename SplatPrimitive, gsplat::CameraModelType camera_model>
+__global__ void projection_3dgs_hetero_backward_kernel(
+    // fwd inputs
+    const long C,
+    const long N,
+    const uint32_t nnz,
+    const typename SplatPrimitive::World::Buffer splats_world,
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float *__restrict__ Ks,       // [C, 3, 3]
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    // fwd outputs
+    const int64_t *__restrict__ camera_ids,     // [nnz]
+    const int64_t *__restrict__ gaussian_ids,   // [nnz]
+    const int4 *__restrict__ aabbs,          // [B, C, N, 4]
+    // grad outputs
+    typename SplatPrimitive::Screen::Buffer v_splats_proj,
+    const bool sparse_grad, // whether the outputs are in COO format [nnz, ...]
+    // grad inputs
+    typename SplatPrimitive::World::Buffer v_splats_world,
+    float *__restrict__ v_viewmats // [C, 4, 4]
+);
+
+
 std::tuple<
     Vanilla3DGS::World::TensorTuple,  // v_splats
     at::Tensor  // v_viewmats
-> projection_ewa_3dgs_hetero_backward_tensor(
+> projection_3dgs_hetero_backward_tensor(
     // fwd inputs
     const Vanilla3DGS::World::TensorTuple &splats_world_tuple,
     const at::Tensor viewmats, // [..., C, 4, 4]
@@ -78,7 +105,7 @@ std::tuple<
     const at::Tensor gaussian_ids, // [nnz]
     const at::Tensor aabb,  // [nnz, 4]
     // grad outputs
-    const Vanilla3DGS::WorldEval3D::TensorTupleProj &v_splats_proj_tuple,
+    const Vanilla3DGS::Screen::TensorTupleProj &v_splats_proj_tuple,
     const bool viewmats_requires_grad,
     const bool sparse_grad
 );
@@ -103,7 +130,7 @@ std::tuple<
     const at::Tensor gaussian_ids, // [nnz]
     const at::Tensor aabb,  // [nnz, 4]
     // grad outputs
-    const OpaqueTriangle::WorldEval3D::TensorTupleProj &v_splats_proj_tuple,
+    const OpaqueTriangle::Screen::TensorTupleProj &v_splats_proj_tuple,
     const bool viewmats_requires_grad,
     const bool sparse_grad
 );

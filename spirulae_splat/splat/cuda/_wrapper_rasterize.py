@@ -33,8 +33,7 @@ def _make_lazy_cuda_func(name: str) -> Callable:
 
 
 def rasterize_to_pixels(
-    primitive: Literal["3dgs", "mip", "opaque_triangle"],
-    eval3d: bool,
+    primitive: Literal["3dgs", "mip", "3dgut", "opaque_triangle", "voxel"],
     splats: tuple[Tensor],  # means, quats, scales, opacities
     # colors: Tensor,  # [..., N, channels] or [nnz, channels]
     image_width: int,
@@ -81,25 +80,17 @@ def rasterize_to_pixels(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    if not eval3d:
-        if primitive in ["3dgs", "mip"]:
-            _RasterizeToPixels = _RasterizeToPixels3DGS
-        elif primitive in ["opaque_triangle"]:
-            _RasterizeToPixels = _RasterizeToPixelsOpaqueTriangle
-        kwargs = []
-    else:
-        for key in ['viewmats', 'Ks']:
-            assert key in kwargs, "Camera extrinsics and intrinsics must be provided for Eval3D"
-        kwargs = [kwargs.get(key, None) for key in [
-            'viewmats', 'Ks', 'camera_model',
-            'dist_coeffs'
-        ]]
-        if primitive in ["3dgs", "mip"]:
-            _RasterizeToPixels = _RasterizeToPixels3DGSEval3D
-        elif primitive in ["opaque_triangle"]:
-            _RasterizeToPixels = _RasterizeToPixelsOpaqueTriangleEval3D
-        elif primitive in ["voxel"]:
-            _RasterizeToPixels = _RasterizeToPixelsVoxelEval3D
+    additional_args = [kwargs['viewmats'], kwargs['Ks'], kwargs['camera_model'], kwargs['dist_coeffs']]
+    if primitive in ["3dgs", "mip"]:
+        _RasterizeToPixels = _RasterizeToPixels3DGS
+        additional_args = [primitive == "mip"]
+    if primitive in ["3dgut"]:
+        _RasterizeToPixels = _RasterizeToPixels3DGUT
+    elif primitive in ["opaque_triangle"]:
+        _RasterizeToPixels = _RasterizeToPixelsOpaqueTriangle
+    elif primitive in ["voxel"]:
+        _RasterizeToPixels = _RasterizeToPixelsVoxelEval3D
+
     render_outputs = _RasterizeToPixels.apply(
         *[(x.contiguous() if x is not None else None) for x in splats],
         backgrounds,
@@ -109,28 +100,35 @@ def rasterize_to_pixels(
         tile_size,
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
-        absgrad,
-        *kwargs
+        *additional_args
     )
 
-    if eval3d:  # (rgbd,), alpha, last_id, (distortion,)
-        meta = {}
-        if primitive in ["opaque_triangle"]:
-            meta["max_blending"] = render_outputs[-1]
-            render_outputs = render_outputs[:-1]
-        n_dist = len(render_outputs) // 2
-        for tensor, name in zip(render_outputs[-n_dist:], ['rgb', 'depth', 'normal']):
-            if tensor is not None:
-                meta[f"{name}_distortion"] = tensor
-        return tuple(render_outputs[:n_dist]), render_outputs[n_dist], meta
-
-    # (rgbd,), alpha, last_id
-    return tuple(render_outputs[:-1]), render_outputs[-1], {}
+    if primitive in ["3dgs", "mip", "3dgut"]:
+        render_rgbs, render_depths, render_alphas = render_outputs
+        return (render_rgbs, render_depths), render_alphas, {}
+    elif primitive in ["opaque_triangle"]:
+        (
+            render_rgbs, render_depths, render_normals, render_alphas,
+            distortion_rgbs, distortion_depths, distortion_normals, max_blending
+        ) = render_outputs
+        return (
+            (render_rgbs, render_depths, render_normals), render_alphas,
+            {
+                'max_blending': max_blending,
+                'rgb_distortion': distortion_rgbs,
+                'depth_distortion': distortion_depths,
+                'normal_distortion': distortion_normals,
+            }
+        )
+    elif primitive in ["voxel"]:
+        render_rgbs, render_depths, render_alphas = render_outputs
+        return (render_rgbs, render_depths), render_alphas, {}
+    else:
+        raise NotImplementedError()
 
 
 
 class _RasterizeToPixels3DGS(torch.autograd.Function):
-    """Rasterize gaussians"""
 
     @staticmethod
     def forward(
@@ -147,12 +145,12 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
         tile_size: int,
         isect_offsets: Tensor,  # [..., tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
-        absgrad: bool,
+        antialiased: bool,
     ) -> Tuple[Tensor, Tensor]:
         (render_rgbs, render_depths), render_Ts, last_ids = _make_lazy_cuda_func(
-            "rasterization_3dgs_forward"
+            f"rasterization_{['3dgs', 'mip'][antialiased]}_forward"
         )(
-            (means2d, depths, conics, opacities, colors), backgrounds, masks,
+            (means2d, depths, conics, opacities, colors, None), backgrounds, masks,
             width, height, tile_size, isect_offsets, flatten_ids,
         )
 
@@ -163,7 +161,7 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
         ctx.width = width
         ctx.height = height
         ctx.tile_size = tile_size
-        ctx.absgrad = absgrad
+        ctx.antialiased = antialiased
 
         render_alphas = 1.0 - render_Ts
         return render_rgbs, render_depths, render_alphas
@@ -182,18 +180,18 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
         width = ctx.width
         height = ctx.height
         tile_size = ctx.tile_size
-        absgrad = ctx.absgrad
 
         (
-            (v_means2d, v_depths, v_conics, v_opacities, v_colors),
-            v_means2d_abs,
-        ) = _make_lazy_cuda_func("rasterization_3dgs_backward")(
-            (means2d, depths, conics, opacities, colors), backgrounds, masks,
+            v_means2d, v_depths, v_conics, v_opacities, v_colors, v_means2d_abs
+        ) = _make_lazy_cuda_func(
+            f"rasterization_{['3dgs', 'mip'][ctx.antialiased]}_backward"
+        )(
+            (means2d, depths, conics, opacities, colors, None), backgrounds, masks,
             width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids,
             (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
-            v_render_alphas.contiguous(), absgrad,
+            v_render_alphas.contiguous(),
         )
-        if absgrad:
+        if v_means2d_abs is not None:
             means2d.absgrad = v_means2d_abs
 
         v_backgrounds = None
@@ -207,87 +205,7 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
         )
 
 
-class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
-    """Rasterize opaque triangles"""
-
-    @staticmethod
-    def forward(
-        ctx,
-        means2d: Tensor,  # [..., N, 3, 2] or [nnz, 3, 2]
-        depths: Tensor,  # [..., N, 1] or [nnz, 1]
-        hardness: Tensor,  # [..., N] or [nnz]
-        colors: Tensor,  # [..., N, 3] or [nnz, 3]
-        normals: Tensor,  # [..., N, 3] or [nnz, 3]
-        backgrounds: Tensor,  # [..., channels], Optional
-        masks: Tensor,  # [..., tile_height, tile_width], Optional
-        width: int,
-        height: int,
-        tile_size: int,
-        isect_offsets: Tensor,  # [..., tile_height, tile_width]
-        flatten_ids: Tensor,  # [n_isects]
-        absgrad: bool,
-    ) -> Tuple[Tensor, Tensor]:
-        (render_rgbs, render_depths, render_normals), render_Ts, last_ids = _make_lazy_cuda_func(
-            "rasterization_opaque_triangle_forward"
-        )(
-            (means2d, depths, hardness, colors, normals), backgrounds, masks,
-            width, height, tile_size, isect_offsets, flatten_ids,
-        )
-
-        ctx.save_for_backward(
-            means2d, depths, hardness, colors, normals, backgrounds, masks,
-            isect_offsets, flatten_ids, render_Ts, last_ids,
-        )
-        ctx.width = width
-        ctx.height = height
-        ctx.tile_size = tile_size
-        ctx.absgrad = absgrad
-
-        render_alphas = 1.0 - render_Ts
-        return render_rgbs, render_depths, render_normals, render_alphas
-
-    @staticmethod
-    def backward(
-        ctx,
-        v_render_rgbs: Tensor,  # [..., H, W, 3]
-        v_render_depths: Tensor,  # [..., H, W, 1]
-        v_render_normals: Tensor,  # [..., H, W, 3]
-        v_render_alphas: Tensor,  # [..., H, W, 1]
-    ):
-        (
-            means2d, depths, hardness, colors, normals, backgrounds, masks,
-            isect_offsets, flatten_ids, render_Ts, last_ids,
-        ) = ctx.saved_tensors
-        width = ctx.width
-        height = ctx.height
-        tile_size = ctx.tile_size
-        absgrad = ctx.absgrad
-
-        (
-            (v_means2d, v_depths, v_hardness, v_rgbs, v_normals), v_means2d_abs,
-        ) = _make_lazy_cuda_func("rasterization_opaque_triangle_backward")(
-            (means2d, depths, hardness, colors, normals), backgrounds, masks,
-            width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids,
-            (v_render_rgbs.contiguous(), v_render_depths.contiguous(), v_render_normals.contiguous()),
-            v_render_alphas.contiguous(), absgrad,
-        )
-        if absgrad:
-            means2d.absgrad = v_means2d_abs
-            # means2d.absgrad = v_means2d.mean(-2)
-
-        v_backgrounds = None
-        if ctx.needs_input_grad[5]:
-            v_backgrounds = (torch.cat([v_render_rgbs, v_render_depths, v_render_normals], dim=-1) * \
-                             render_Ts.float()).sum(dim=(-3, -2))
-
-        return (
-            v_means2d, v_depths, v_hardness, v_rgbs, v_normals, v_backgrounds,
-            *([None]*(len(ctx.needs_input_grad)-6))
-        )
-
-
-class _RasterizeToPixels3DGSEval3D(torch.autograd.Function):
-    """Rasterize gaussians"""
+class _RasterizeToPixels3DGUT(torch.autograd.Function):
 
     @staticmethod
     def forward(
@@ -295,11 +213,6 @@ class _RasterizeToPixels3DGSEval3D(torch.autograd.Function):
         # gauss params
         means: Tensor,  # [..., N, 3]
         quats: Tensor,  # [..., N, 4]
-        scales: Tensor,  # [..., N, 3]
-        opacities: Tensor,  # [..., N]
-        features_dc: Tensor,  # [..., N, 3]
-        features_sh: Tensor,  # [..., N, x, 3]
-        # proj outputs
         depths: Tensor,  # [..., N, 1] or [nnz, 1]
         proj_scales: Tensor,  # [..., N, 3]
         proj_opacities: Tensor,  # [..., N]
@@ -312,21 +225,18 @@ class _RasterizeToPixels3DGSEval3D(torch.autograd.Function):
         tile_size: int,
         isect_offsets: Tensor,  # [..., tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
-        absgrad: bool,
         viewmats: Tensor,
         Ks: Tensor,
-        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
+        camera_model: Literal["pinhole", "fisheye"],
         dist_coeffs: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor]:
-        if absgrad:
-            raise NotImplementedError("Absgrad not supported with Eval3D")
 
         camera_model = gsplat.cuda._wrapper._make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )
 
         (render_rgbs, render_depths), render_Ts, last_ids, _1, _2 = _make_lazy_cuda_func(
-            "rasterization_3dgs_eval3d_forward"
+            "rasterization_3dgut_forward"
         )(
             (means, quats, depths, proj_scales, proj_opacities, colors),
             viewmats, Ks, camera_model, dist_coeffs,
@@ -346,7 +256,7 @@ class _RasterizeToPixels3DGSEval3D(torch.autograd.Function):
         ctx.tile_size = tile_size
 
         render_alphas = 1.0 - render_Ts
-        return render_rgbs, render_depths, render_alphas, None, None
+        return render_rgbs, render_depths, render_alphas
 
     @staticmethod
     def backward(
@@ -354,8 +264,6 @@ class _RasterizeToPixels3DGSEval3D(torch.autograd.Function):
         v_render_rgbs: Tensor,  # [..., H, W, 3]
         v_render_depths: Tensor,  # [..., H, W, 1]
         v_render_alphas: Tensor,  # [..., H, W, 1]
-        v_render_rgb_distortions: Optional[Tensor],
-        v_render_depth_distortions: Optional[Tensor]
     ):
         (
             means, quats, depths, proj_scales, proj_opacities, colors,
@@ -370,42 +278,33 @@ class _RasterizeToPixels3DGSEval3D(torch.autograd.Function):
         (
             (v_means, v_quats, v_depths, v_proj_scales, v_proj_opacities, v_colors),
             v_viewmats,
-        ) = _make_lazy_cuda_func("rasterization_3dgs_eval3d_backward")(
+        ) = _make_lazy_cuda_func("rasterization_3dgut_backward")(
             (means, quats, depths, proj_scales, proj_opacities, colors),
             viewmats, Ks, ctx.camera_model, dist_coeffs,
             backgrounds, masks,
-            width, height, tile_size, isect_offsets, flatten_ids,
-            render_Ts, last_ids, None, None,
+            width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids, None, None,
             (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
             v_render_alphas.contiguous(), None
         )
 
         v_backgrounds = None
-        if ctx.needs_input_grad[10]:
+        if ctx.needs_input_grad[6]:
             v_backgrounds = (torch.cat([v_render_rgbs, v_render_depths], dim=-1) * \
                              render_Ts.float()).sum(dim=(-3, -2))
 
         return (
-            v_means, v_quats, None, None, None, None,
-            v_depths, v_proj_scales, v_proj_opacities, v_colors, v_backgrounds,
-            *([None]*(len(ctx.needs_input_grad)-11))
+            v_means, v_quats, v_depths, v_proj_scales, v_proj_opacities, v_colors, v_backgrounds,
+            *([None]*(len(ctx.needs_input_grad)-7))
         )
 
 
-class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
-    """Rasterize opaque triangles"""
+class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
 
     @staticmethod
     def forward(
         ctx,
         # gauss params
-        means: Tensor,  # [..., N, 3]
-        quats: Tensor,  # [..., N, 4]
-        scales: Tensor,  # [..., N, 3]
         hardness: Tensor,  # [..., N]
-        features_dc: Tensor,  # [..., N, 3]
-        features_sh: Tensor,  # [..., N, x, 3]
-        features_ch: Tensor,  # [..., N, x, 3]
         # proj outputs
         depths: Tensor,  # [..., N, 1] or [nnz, 1]
         verts: Tensor,  # [..., N, 3, 3] or [nnz, 3, 3]
@@ -419,14 +318,11 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
         tile_size: int,
         isect_offsets: Tensor,  # [..., tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
-        absgrad: bool,
         viewmats: Tensor,
         Ks: Tensor,
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
         dist_coeffs: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor]:
-        if absgrad:
-            raise NotImplementedError("Absgrad not supported with Eval3D")
 
         camera_model = gsplat.cuda._wrapper._make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
@@ -441,7 +337,7 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
             (render2_rgbs, render2_depths, render2_normals),
             (distortion_rgbs, distortion_depths, distortion_normals),
             max_blending
-        ) = _make_lazy_cuda_func("rasterization_opaque_triangle_eval3d_forward")(
+        ) = _make_lazy_cuda_func("rasterization_opaque_triangle_forward")(
             (hardness, depths, verts, rgbs, normals),
             viewmats, Ks, camera_model, dist_coeffs,
             backgrounds, max_blending_masks,
@@ -500,7 +396,7 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
         (
             (v_hardness, v_depths, v_verts, v_rgbs, v_normals),
             v_viewmats,
-        ) = _make_lazy_cuda_func("rasterization_opaque_triangle_eval3d_backward")(
+        ) = _make_lazy_cuda_func("rasterization_opaque_triangle_backward")(
             (hardness, depths, verts, rgbs, normals),
             viewmats, Ks, ctx.camera_model, dist_coeffs,
             backgrounds,
@@ -516,13 +412,13 @@ class _RasterizeToPixelsOpaqueTriangleEval3D(torch.autograd.Function):
         # print(f"bwd: {1e3*(time1-time0):.2f} ms")
 
         v_backgrounds = None
-        if ctx.needs_input_grad[11]:
+        if ctx.needs_input_grad[5]:
             v_backgrounds = (torch.cat([v_render_rgbs, v_render_depths, v_render_normals], dim=-1) * \
                              render_Ts.float()).sum(dim=(-3, -2))
 
         return (
-            None, None, None, v_hardness, None, None, None, v_depths, v_verts, v_rgbs, v_normals, v_backgrounds,
-            *([None]*(len(ctx.needs_input_grad)-12))
+            v_hardness, v_depths, v_verts, v_rgbs, v_normals, v_backgrounds,
+            *([None]*(len(ctx.needs_input_grad)-6))
         )
 
 class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
@@ -534,10 +430,7 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         # gauss params
         pos_sizes: Tensor,  # [..., N, 4]
         densities: Tensor,  # [..., N, 8]
-        features_dc: Tensor,  # [..., N, 3]
-        features_sh: Tensor,  # [..., N, x, 3]
         # proj outputs
-        depths: Tensor,  # [..., N, 1] or [nnz, 1]
         colors: Tensor,  # [..., N, channels] or [nnz, channels]
         # rest
         backgrounds: Tensor,  # [..., channels], Optional
@@ -547,21 +440,18 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         tile_size: int,
         isect_offsets: Tensor,  # [..., tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
-        absgrad: bool,
         viewmats: Tensor,
         Ks: Tensor,
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
         dist_coeffs: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor]:
-        if absgrad:
-            raise NotImplementedError("Absgrad not supported with Eval3D")
 
         camera_model = gsplat.cuda._wrapper._make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )
 
         (render_rgbs, render_depths), render_Ts, last_ids, _1, _2 = _make_lazy_cuda_func(
-            "rasterization_voxel_eval3d_forward"
+            "rasterization_voxel_forward"
         )(
             (pos_sizes, None, densities, colors),
             viewmats, Ks, camera_model, dist_coeffs,
@@ -581,7 +471,7 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         ctx.tile_size = tile_size
 
         render_alphas = 1.0 - render_Ts
-        return render_rgbs, render_depths, render_alphas, None, None
+        return render_rgbs, render_depths, render_alphas
 
     @staticmethod
     def backward(
@@ -589,8 +479,6 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         v_render_rgbs: Tensor,  # [..., H, W, 3]
         v_render_depths: Tensor,  # [..., H, W, 1]
         v_render_alphas: Tensor,  # [..., H, W, 1]
-        v_render_rgb_distortions: Optional[Tensor],
-        v_render_depth_distortions: Optional[Tensor]
     ):
         (
             pos_sizes, densities, colors,
@@ -605,7 +493,7 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         (
             (v_pos_sizes, v_depths, v_densities, v_colors),
             v_viewmats,
-        ) = _make_lazy_cuda_func("rasterization_voxel_eval3d_backward")(
+        ) = _make_lazy_cuda_func("rasterization_voxel_backward")(
             (pos_sizes, None, densities, colors),
             viewmats, Ks, ctx.camera_model, dist_coeffs,
             backgrounds, masks,
@@ -620,13 +508,13 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         assert v_colors is not None
 
         v_backgrounds = None
-        if ctx.needs_input_grad[10]:
+        if ctx.needs_input_grad[3]:
             v_backgrounds = (torch.cat([v_render_rgbs, v_render_depths], dim=-1) * \
                              render_Ts.float()).sum(dim=(-3, -2))
 
         return (
-            v_pos_sizes, v_densities, None, None,
-            v_depths, v_colors, v_backgrounds,
-            *([None]*(len(ctx.needs_input_grad)-7))
+            v_pos_sizes, v_densities,
+            v_colors, v_backgrounds,
+            *([None]*(len(ctx.needs_input_grad)-4))
         )
 

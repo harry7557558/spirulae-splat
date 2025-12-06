@@ -70,3 +70,8 @@ SVHashTensor::TensorTuple svhashCreateInitialVolume(
 std::tuple<at::Tensor, at::Tensor>
 svhashGetVoxels(SVHashTensor::TensorTuple tensorTuples);
 
+std::tuple<SVHashTensor::TensorTuple, at::Tensor, at::Tensor, at::Tensor>
+svhashSplitVoxels(
+    SVHashTensor::TensorTuple tensorTuples,
+    at::Tensor split_mask
+);

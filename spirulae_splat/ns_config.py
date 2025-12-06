@@ -301,6 +301,7 @@ spirulae_voxel = MethodSpecification(
             ),
             model=SpirulaeModelConfig(
                 primitive="voxel",
+                use_mcmc=False,
                 sh_degree=0,
                 background_color="black",
                 train_background_color=False,

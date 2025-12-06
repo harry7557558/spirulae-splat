@@ -311,6 +311,7 @@ __global__ void per_pixel_losses_reduce_backward_kernel(
 }
 
 
+/*[AutoHeaderGeneratorExport]*/
 std::tuple<torch::Tensor, torch::Tensor>
 compute_per_pixel_losses_forward_tensor(
     std::optional<at::Tensor> render_rgb,
@@ -417,6 +418,7 @@ compute_per_pixel_losses_forward_tensor(
 }
 
 
+/*[AutoHeaderGeneratorExport]*/
 std::tuple<
     std::optional<at::Tensor>, // render_rgb
     std::optional<at::Tensor>, // ref_rgb

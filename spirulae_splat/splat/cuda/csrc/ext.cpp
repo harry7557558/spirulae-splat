@@ -10,7 +10,6 @@
 #include "SplatTileIntersector.cuh"
 #include "SVHash.cuh"
 #include "Projection.cuh"
-#include "ProjectionEval3D.cuh"
 #include "ProjectionEWA3DGSHetero.cuh"
 #include "RasterizationFwd.cuh"
 #include "RasterizationBwd.cuh"
@@ -69,41 +68,38 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // SVHash.cuh
     m.def("svhash_create_initial_volume", &svhashCreateInitialVolume);
     m.def("svhash_get_voxels", &svhashGetVoxels);
+    m.def("svhash_split_voxels", &svhashSplitVoxels);
     
     // Projection.cuh
-    m.def("projection_ewa_3dgs_forward", &projection_ewa_3dgs_forward_tensor);
-    m.def("projection_ewa_3dgs_backward", &projection_ewa_3dgs_backward_tensor);
+    m.def("projection_3dgs_forward", &projection_3dgs_forward_tensor);
+    m.def("projection_3dgs_backward", &projection_3dgs_backward_tensor);
+    m.def("projection_mip_forward", &projection_mip_forward_tensor);
+    m.def("projection_mip_backward", &projection_mip_backward_tensor);
+    m.def("projection_3dgut_forward", &projection_3dgut_forward_tensor);
+    m.def("projection_3dgut_backward", &projection_3dgut_backward_tensor);
     m.def("projection_opaque_triangle_forward", &projection_opaque_triangle_forward_tensor);
     m.def("projection_opaque_triangle_backward", &projection_opaque_triangle_backward_tensor);
-
-    // ProjectionEval3D.cuh
-    m.def("projection_ewa_3dgs_eval3d_forward", &projection_ewa_3dgs_eval3d_forward_tensor);
-    m.def("projection_ewa_3dgs_eval3d_backward", &projection_ewa_3dgs_eval3d_backward_tensor);
-    m.def("projection_opaque_triangle_eval3d_forward", &projection_opaque_triangle_eval3d_forward_tensor);
-    m.def("projection_opaque_triangle_eval3d_backward", &projection_opaque_triangle_eval3d_backward_tensor);
-    m.def("projection_voxel_eval3d_forward", &projection_voxel_eval3d_forward_tensor);
-    m.def("projection_voxel_eval3d_backward", &projection_voxel_eval3d_backward_tensor);
+    m.def("projection_voxel_forward", &projection_voxel_forward_tensor);
+    m.def("projection_voxel_backward", &projection_voxel_backward_tensor);
 
     // ProjectionEWA3DGSHetero.cuh
-    m.def("projection_ewa_3dgs_hetero_forward", &projection_ewa_3dgs_hetero_forward_tensor);
-    m.def("projection_ewa_3dgs_hetero_backward", &projection_ewa_3dgs_hetero_backward_tensor);
+    m.def("projection_3dgs_hetero_forward", &projection_3dgs_hetero_forward_tensor);
+    m.def("projection_3dgs_hetero_backward", &projection_3dgs_hetero_backward_tensor);
     m.def("projection_opaque_triangle_hetero_forward", &projection_opaque_triangle_hetero_forward_tensor);
     m.def("projection_opaque_triangle_hetero_backward", &projection_opaque_triangle_hetero_backward_tensor);
 
     // RasterizationFwd.cuh and RasterizationBwd.cuh
     m.def("rasterization_3dgs_forward", &rasterize_to_pixels_3dgs_fwd);
     m.def("rasterization_3dgs_backward", &rasterize_to_pixels_3dgs_bwd);
-    m.def("rasterization_opaque_triangle_forward", &rasterize_to_pixels_opaque_triangle_fwd);
-    m.def("rasterization_opaque_triangle_backward", &rasterize_to_pixels_opaque_triangle_bwd);
+    m.def("rasterization_mip_forward", &rasterize_to_pixels_mip_fwd);
+    m.def("rasterization_mip_backward", &rasterize_to_pixels_mip_bwd);
 
     // RasterizationEval3DFwd.cuh and RasterizationEval3DBwd.cuh
-    m.def("rasterization_3dgs_eval3d_forward", &rasterize_to_pixels_3dgs_eval3d_fwd);
-    m.def("rasterization_3dgs_eval3d_backward", &rasterize_to_pixels_3dgs_eval3d_bwd);
-    // m.def("rasterization_opaque_triangle_eval3d_forward", &rasterize_to_pixels_opaque_triangle_eval3d_fwd);
-    // m.def("rasterization_opaque_triangle_eval3d_backward", &rasterize_to_pixels_opaque_triangle_eval3d_bwd);
-    m.def("rasterization_opaque_triangle_eval3d_forward", &rasterize_to_pixels_opaque_triangle_sorted_eval3d_fwd);
-    m.def("rasterization_opaque_triangle_eval3d_backward", &rasterize_to_pixels_opaque_triangle_sorted_eval3d_bwd);
-    m.def("rasterization_voxel_eval3d_forward", &rasterize_to_pixels_voxel_eval3d_fwd);
-    m.def("rasterization_voxel_eval3d_backward", &rasterize_to_pixels_voxel_eval3d_bwd);
+    m.def("rasterization_3dgut_forward", &rasterize_to_pixels_3dgut_fwd);
+    m.def("rasterization_3dgut_backward", &rasterize_to_pixels_3dgut_bwd);
+    m.def("rasterization_opaque_triangle_forward", &rasterize_to_pixels_opaque_triangle_sorted_fwd);
+    m.def("rasterization_opaque_triangle_backward", &rasterize_to_pixels_opaque_triangle_sorted_bwd);
+    m.def("rasterization_voxel_forward", &rasterize_to_pixels_voxel_eval3d_fwd);
+    m.def("rasterization_voxel_backward", &rasterize_to_pixels_voxel_eval3d_bwd);
 
 }

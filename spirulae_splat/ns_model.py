@@ -39,7 +39,7 @@ from spirulae_splat.splat import (
 from spirulae_splat.splat.utils import resize_image, _TORCH_COMPILE_ARGS
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
-from spirulae_splat.strategy import DefaultStrategy, MCMCStrategy, OpaqueStrategy
+from spirulae_splat.strategy import DefaultStrategy, MCMCStrategy, OpaqueStrategy, SVRasterStrategy
 from spirulae_splat.splat._camera import _Camera
 
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
@@ -117,7 +117,7 @@ class SpirulaeModelConfig(ModelConfig):
 
     _target: Type = field(default_factory=lambda: SpirulaeModel)
 
-    primitive: Literal["3dgs", "mip", "opaque_triangle", "voxel"] = "3dgs"
+    primitive: Literal["3dgs", "mip", "3dgut", "opaque_triangle", "voxel"] = "3dgut"
     """Splat primitive to use"""
     fit: Literal["rgb", "depth", "normal"] = "rgb"
     """Fit RGB image by default, fit depth/normal for geometry reconstruction
@@ -374,20 +374,21 @@ class SpirulaeModel(Model):
         #     scale_init, opacity_init = 1.0, 0.1
 
         if self.config.primitive in ["voxel"]:
-            means_mean = torch.mean(means, 0)
-            means_extend = 4.0 * torch.std(means, 0)
+            means_mean, means_std = torch.mean(means, 0), torch.std(means, 0)
+            means_extend = 4.0 * means_std
             pos_min = (means_mean - means_extend).detach().cpu().numpy()
             pos_max = (means_mean + means_extend).detach().cpu().numpy()
             num_voxels = len(means)
-            unit_size = 0.4 * np.cbrt(np.prod(pos_max - pos_min) / num_voxels)
+            unit_size = 1.0 * np.cbrt(np.prod(pos_max - pos_min) / num_voxels)
             pos_diff = np.ceil((pos_max - pos_min) / unit_size).astype(np.int32)
             self.svhash = svhash_create_initial_volume(pos_min, pos_max, pos_diff)
-            num_points = int(np.prod(pos_diff))
-            num_nodes = int(np.prod(pos_diff + 1))
-            densities = opacity_init * torch.ones(num_nodes) / np.cbrt(np.prod(pos_max - pos_min))
+            self.voxels, self.voxel_indices = svhash_get_voxels(self.svhash)
+            num_verts = int(len(self.svhash[0]))
+            num_points = int(len(self.voxels))
+            densities = opacity_init * torch.ones(num_verts) / np.cbrt(np.prod(means_std.detach().cpu().numpy()))
             densities = torch.log(densities)
 
-        elif self.config.primitive in ["3dgs", "mip"] or True:
+        elif self.config.primitive in ["3dgs", "mip", "3dgut"] or True:
             distances, indices = self.k_nearest_sklearn(means.data, 4)
             num_points = means.shape[0]
             scales = torch.sqrt(torch.from_numpy(distances**2).mean(-1, keepdim=True)).repeat(1, 3).float()
@@ -421,13 +422,12 @@ class SpirulaeModel(Model):
             ]]).to(M).repeat(len(M), 1, 1))
 
         gauss_params = {}
-        if self.config.primitive in ["3dgs", "mip", "opaque_triangle"]:
+        if self.config.primitive in ["3dgs", "mip", "3dgut", "opaque_triangle"]:
             gauss_params['means'] = torch.nn.Parameter(means)
-        if self.config.primitive in ["3dgs", "mip"]:
             gauss_params['quats'] = torch.nn.Parameter(quats)
             gauss_params['scales'] = torch.nn.Parameter(scales)
             gauss_params['opacities'] = torch.nn.Parameter(opacities)
-        if self.config.primitive in ["voxel"]:
+        elif self.config.primitive in ["voxel"]:
             gauss_params['densities'] = torch.nn.Parameter(densities)
 
         # colors
@@ -490,7 +490,10 @@ class SpirulaeModel(Model):
     def _set_strategy(self):
         # Strategy for GS densification
         if self.config.primitive in ['voxel']:
-            return  # TODO
+            self.strategy = SVRasterStrategy(
+            )
+            self.strategy_state = self.strategy.initialize_state()
+            return
 
         # opaque triangle mode
         if self.config.primitive == "opaque_triangle":
@@ -662,10 +665,19 @@ class SpirulaeModel(Model):
         self.optimizers = optimizers.optimizers
 
     def step_post_backward(self, step):
-        if self.config.primitive == 'voxel':
-            return
         assert step == self.step
-        if self.config.use_mcmc:
+        if self.config.primitive == 'voxel':
+            self.svhash, self.voxels, self.voxel_indices = \
+            self.strategy.step_post_backward(
+                self.svhash, self.voxels, self.voxel_indices,
+                params=self.gauss_params,
+                optimizers=self.optimizers,
+                state=self.strategy_state,
+                step=self.step,
+                info=self.info,
+                packed=(self.config.packed or self.config.use_bvh),
+            )
+        elif self.config.use_mcmc:
             self.strategy.step_post_backward(
                 params=self.gauss_params,
                 optimizers=self.optimizers,
@@ -840,8 +852,6 @@ class SpirulaeModel(Model):
             # kwargs['dist_coeffs'] = torch.tensor([[-0.29, 0.07, 0, 0, 1e-5, -1e-3, 0, 0, 0, 0]]).float().cuda()
 
         if camera.distortion_params is not None and camera.distortion_params.any():
-            if not self.config.use_mcmc:
-                raise NotImplementedError("3DGS training with fisheye camera is currently only supported for MCMC.")
             kwargs['dist_coeffs'] = camera.distortion_params
 
         if 'visibility_masks' in camera.metadata:
@@ -876,7 +886,7 @@ class SpirulaeModel(Model):
         #     W = TILE_SIZE
         #     H = TILE_SIZE
 
-        if self.config.primitive in ['3dgs', 'mip']:
+        if self.config.primitive in ['3dgs', 'mip', '3dgut']:
             splat_params = (
                 self.means, F.normalize(self.quats, dim=-1), self.scales,
                 self.opacities.squeeze(-1),
@@ -899,13 +909,12 @@ class SpirulaeModel(Model):
         elif self.config.primitive in ['voxel']:
             # print(self.svhash)
             # torch.cuda.synchronize()
-            voxels, voxel_indices = svhash_get_voxels(self.svhash)
             # print(torch.amin(voxel_indices), torch.amax(voxel_indices), self.densities.shape)
             # print(voxels)
             # print(voxel_indices)
             # exit(0)
             splat_params = (
-                voxels, torch.exp(self.densities)[voxel_indices],
+                self.voxels, torch.exp(self.densities)[self.voxel_indices],
                 self.features_dc, self.features_sh
             )
             # print([x.shape for x in splat_params])
@@ -927,19 +936,10 @@ class SpirulaeModel(Model):
             # packed=True,
             # use_bvh=True,
             relative_scale=self.config.relative_scale,
-            absgrad=(not self.config.use_mcmc),
             sparse_grad=False,
             distributed=False,
             camera_model=["pinhole", "fisheye"][is_fisheye],
-            # with_ut=is_fisheye,
-            # with_eval3d=is_fisheye,  # TODO
-            # with_ut=self.training,
-            # with_eval3d=self.training,
-            with_ut=True,
-            with_eval3d=True,
-            # with_ut=False,
-            # with_eval3d=False,
-            render_mode="RGB+D" if self.config.primitive in ['3dgs', 'mip'] else "RGB+D+N",
+            render_mode="RGB+D" if self.config.primitive in ['3dgs', 'mip', '3dgut'] else "RGB+D+N",
             **kwargs,
         )
         if self.config.supersampling != 1:

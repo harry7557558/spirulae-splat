@@ -468,6 +468,7 @@ __global__ void render_background_sh_backward_kernel(
 
 
 
+/*[AutoHeaderGeneratorExport]*/
 torch::Tensor render_background_sh_forward_tensor(
     const unsigned w,
     const unsigned h,
@@ -529,6 +530,7 @@ torch::Tensor render_background_sh_forward_tensor(
 }
 
 
+/*[AutoHeaderGeneratorExport]*/
 std::tuple<
     torch::Tensor,  // v_rotation
     torch::Tensor  // v_sh_coeffs

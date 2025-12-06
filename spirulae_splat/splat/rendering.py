@@ -8,15 +8,8 @@ import math
 import gsplat.cuda._wrapper
 from gsplat.cuda._wrapper import (
     RollingShutterType,
-    # FThetaCameraDistortionParameters,
-    # FThetaPolynomialType,
-    # fully_fused_projection,
-    fully_fused_projection_with_ut,
     isect_offset_encode,
     isect_tiles,
-    # rasterize_to_pixels,
-    # rasterize_to_pixels_eval3d,
-    # spherical_harmonics,
 )
 from spirulae_splat.splat.cuda._wrapper import (
     intersect_splat_tile,
@@ -38,7 +31,7 @@ from .utils import depth_to_normal
 # from gsplat
 
 def rasterization(
-    primitive: Literal["3dgs", "mip", "opaque_triangle", "voxel"],
+    primitive: Literal["3dgs", "mip", "3dgut", "opaque_triangle", "voxel"],
     splat_params: tuple[Tensor],  # means, quats, scales, opacities
     viewmats: Tensor,  # [..., C, 4, 4]
     Ks: Tensor,  # [..., C, 3, 3]
@@ -54,14 +47,11 @@ def rasterization(
     masks: Optional[Tensor] = None,
     render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
     sparse_grad: bool = False,
-    absgrad: bool = False,
     # rasterize_mode: Literal["classic", "antialiased"] = "classic",
     distributed: bool = False,
     # camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     segmented: bool = False,
-    with_ut: bool = False,
-    with_eval3d: bool = False,
     # distortion
     dist_coeffs: Optional[Tensor] = None,  # [..., C, 10]
     # rolling shutter
@@ -165,11 +155,6 @@ def rasterization(
             "ED" renders the expected depth. Default is "RGB".
         sparse_grad: If true, the gradients for {means, quats, scales} will be stored in
             a COO sparse layout. This can be helpful for saving memory. Default is False.
-        absgrad: If true, the absolute gradients of the projected 2D means
-            will be computed during the backward pass, which could be accessed by
-            `meta["means2d"].absgrad`. Default is False.
-        # rasterize_mode: The rasterization mode. Supported modes are "classic" and
-        #     "antialiased". Default is "classic".
         distributed: Whether to use distributed rendering. Default is False. If True,
             The input Gaussians are expected to be a subset of scene in each rank, and
             the function will collaboratively render the images for all ranks.
@@ -179,9 +164,6 @@ def rasterization(
             Segmented radix sort performs sorting in segments, which is more efficient for the sorting operation itself.
             However, since it requires offset indices as input, additional global memory access is needed, which results
             in slower overall performance in most use cases.
-        with_ut: Whether to use Unscented Transform (UT) for projection. Default is False.
-        with_eval3d: Whether to calculate Gaussian response in 3D world space, instead
-            of 2D image space. Default is False.
         dist_coeffs: Should be [..., C, 10]. [k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2]
         rolling_shutter: The rolling shutter type. Default `RollingShutterType.GLOBAL` means
             global shutter.
@@ -231,8 +213,8 @@ def rasterization(
     splat_params = [tensor.contiguous() for tensor in splat_params]
 
     features_dc, features_sh = None, None
-    if primitive in ["3dgs", "mip", "opaque_triangle"]:
-        if primitive in ["3dgs", "mip"]:
+    if primitive in ["3dgs", "mip", "3dgut", "opaque_triangle"]:
+        if primitive in ["3dgs", "mip", "3dgut"]:
             assert len(splat_params) == 6, "3DGS requires 6 params (means, quats, scales, opacities, color, sh)"
             means, quats, scales, opacities, features_dc, features_sh = splat_params
         else:
@@ -245,7 +227,7 @@ def rasterization(
         assert means.shape == batch_dims + (N, 3), means.shape
         assert quats.shape == batch_dims + (N, 4), quats.shape
         assert scales.shape == batch_dims + (N, 3), scales.shape
-        if primitive in ["3dgs", "mip"]:
+        if primitive in ["3dgs", "mip", "3dgut"]:
             assert opacities.shape == batch_dims + (N,), opacities.shape
         else:
             assert opacities.shape == batch_dims + (N, 2), opacities.shape
@@ -283,17 +265,6 @@ def rasterization(
         )
         return torch.stack([torch.cat(l, dim=0) for l in zip(*view_list)], dim=0)
 
-    if absgrad:
-        assert not distributed, "AbsGrad is not supported in distributed mode."
-
-    if (
-        dist_coeffs is not None
-        or rolling_shutter != RollingShutterType.GLOBAL
-    ):
-        assert (
-            with_ut
-        ), "Distortion and rolling shutter are only supported with `with_ut=True`."
-
     if rolling_shutter != RollingShutterType.GLOBAL:
         assert (
             viewmats_rs is not None
@@ -302,10 +273,6 @@ def rasterization(
         assert (
             viewmats_rs is None
         ), "viewmats_rs should be None for global rolling shutter."
-
-    if with_ut or with_eval3d:
-        # assert packed is False, "Packed mode is not supported with UT."
-        assert sparse_grad is False, "Sparse grad is not supported with UT."
 
     if dist_coeffs is not None:
         dist_coeffs = dist_coeffs.contiguous()
@@ -335,7 +302,6 @@ def rasterization(
 
     if use_bvh:
         # raise NotImplementedError()
-        # assert not with_ut, "Not implemented"
         assert packed, "BVH must be packed"
         assert B == 1, "Not support batching"
         def dump_all():
@@ -396,7 +362,6 @@ def rasterization(
         # Project splats to 2D
         proj_results = fully_fused_projection(
             primitive,
-            with_eval3d,
             splat_params,
             viewmats,
             Ks,
@@ -579,17 +544,14 @@ def rasterization(
     )
 
     # print("rank", world_rank, "Before rasterize_to_pixels")
-    kwargs = {}
-    if with_eval3d:
-        kwargs = {
-            "viewmats": viewmats,
-            "Ks": Ks,
-            "camera_model": camera_model,
-            "dist_coeffs": dist_coeffs,
-        }
+    kwargs = {
+        "viewmats": viewmats,
+        "Ks": Ks,
+        "camera_model": camera_model,
+        "dist_coeffs": dist_coeffs,
+    }
     render_colors, render_alphas, render_meta = rasterize_to_pixels(
         primitive,
-        with_eval3d,
         proj_splats,
         width,
         height,
@@ -599,7 +561,6 @@ def rasterization(
         backgrounds=backgrounds,
         masks=masks,
         packed=packed,
-        absgrad=absgrad,
         **kwargs
     )
     meta.update(render_meta)

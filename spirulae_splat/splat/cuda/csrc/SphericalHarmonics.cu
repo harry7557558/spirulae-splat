@@ -462,6 +462,7 @@ __global__ void compute_sh_backward_kernel(
 }
 
 
+/*[AutoHeaderGeneratorExport]*/
 torch::Tensor compute_sh_forward_tensor(
     const unsigned degree,
     const unsigned degrees_to_use,
@@ -498,6 +499,7 @@ torch::Tensor compute_sh_forward_tensor(
 
 
 
+/*[AutoHeaderGeneratorExport]*/
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 compute_sh_backward_tensor(
     const unsigned degree,

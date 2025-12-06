@@ -21,9 +21,9 @@ std::tuple<
     std::optional<OpaqueTriangle::RenderOutput::TensorTuple>,
     std::optional<OpaqueTriangle::RenderOutput::TensorTuple>,
     std::optional<at::Tensor>
-> rasterize_to_pixels_opaque_triangle_sorted_eval3d_fwd(
+> rasterize_to_pixels_opaque_triangle_sorted_fwd(
     // Gaussian parameters
-    OpaqueTriangle::WorldEval3D::TensorTuple splats_tuple,
+    OpaqueTriangle::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,             // [..., C, 4, 4]
     const at::Tensor Ks,                   // [..., C, 3, 3]
     const gsplat::CameraModelType camera_model,

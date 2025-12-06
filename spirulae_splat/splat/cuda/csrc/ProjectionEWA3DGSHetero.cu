@@ -45,7 +45,7 @@ __global__ void projection_hetero_forward_kernel(
     int64_t *__restrict__ camera_ids,    // [nnz]
     int64_t *__restrict__ gaussian_ids,  // [nnz]
     int4 *__restrict__ aabbs,    // [nnz, 4]
-    typename SplatPrimitive::WorldEval3D::Buffer splats_proj
+    typename SplatPrimitive::Screen::Buffer splats_proj
 ) {
     int32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (thread_idx >= nnz)
@@ -76,13 +76,13 @@ __global__ void projection_hetero_forward_kernel(
 
     // Projection
     int4 aabb;
-    typename SplatPrimitive::WorldEval3D splat_proj;
+    typename SplatPrimitive::Screen splat_proj;
     switch (camera_model) {
     case gsplat::CameraModelType::PINHOLE: // perspective projection
-        SplatPrimitive::project_persp_eval3d(splat_world, cam, splat_proj, aabb);
+        SplatPrimitive::project_persp(splat_world, cam, splat_proj, aabb);
         break;
     case gsplat::CameraModelType::FISHEYE: // fisheye projection
-        SplatPrimitive::project_fisheye_eval3d(splat_world, cam, splat_proj, aabb);
+        SplatPrimitive::project_fisheye(splat_world, cam, splat_proj, aabb);
         break;
     }
 
@@ -104,12 +104,13 @@ __global__ void projection_hetero_forward_kernel(
 }
 
 
+/*[AutoHeaderGeneratorExport]*/
 std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
-    Vanilla3DGS::WorldEval3D::TensorTupleProj  // out splats
-> projection_ewa_3dgs_hetero_forward_tensor(
+    Vanilla3DGS::Screen::TensorTupleProj  // out splats
+> projection_3dgs_hetero_forward_tensor(
     // inputs
     const Vanilla3DGS::World::TensorTuple &in_splats_tensor,
     const at::Tensor viewmats,             // [..., C, 4, 4]
@@ -134,8 +135,8 @@ std::tuple<
     at::Tensor camera_ids = at::empty({nnz}, opt.dtype(at::kLong));
     at::Tensor gaussian_ids = at::empty({nnz}, opt.dtype(at::kLong));
     at::Tensor aabb = at::empty({nnz, 4}, opt.dtype(at::kInt));
-    Vanilla3DGS::WorldEval3D::Tensor splats_proj =
-        Vanilla3DGS::WorldEval3D::Tensor::empty(-1, nnz, opt);
+    Vanilla3DGS::Screen::Tensor splats_proj =
+        Vanilla3DGS::Screen::Tensor::allocProjFwd(-1, nnz, opt);
 
     #define _LAUNCH_ARGS \
         <<<_LAUNCH_ARGS_1D(nnz, block)>>>( \
@@ -162,16 +163,17 @@ std::tuple<
 
     return std::make_tuple(
         camera_ids, gaussian_ids, aabb,
-        splats_proj.tupleProj()
+        splats_proj.tupleProjFwd()
     );
 }
 
 
+/*[AutoHeaderGeneratorExport]*/
 std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
-    OpaqueTriangle::WorldEval3D::TensorTupleProj  // out splats
+    OpaqueTriangle::Screen::TensorTupleProj  // out splats
 > projection_opaque_triangle_hetero_forward_tensor(
     // inputs
     const OpaqueTriangle::World::TensorTuple &in_splats_tensor,
@@ -197,8 +199,8 @@ std::tuple<
     at::Tensor camera_ids = at::empty({nnz}, opt.dtype(at::kLong));
     at::Tensor gaussian_ids = at::empty({nnz}, opt.dtype(at::kLong));
     at::Tensor aabb = at::empty({nnz, 4}, opt.dtype(at::kInt));
-    OpaqueTriangle::WorldEval3D::Tensor splats_proj =
-        OpaqueTriangle::WorldEval3D::Tensor::empty(-1, nnz, opt);
+    OpaqueTriangle::Screen::Tensor splats_proj =
+        OpaqueTriangle::Screen::Tensor::allocProjFwd(-1, nnz, opt);
 
     #define _LAUNCH_ARGS \
         <<<_LAUNCH_ARGS_1D(nnz, block)>>>( \
@@ -225,15 +227,16 @@ std::tuple<
 
     return std::make_tuple(
         camera_ids, gaussian_ids, aabb,
-        splats_proj.tupleProj()
+        splats_proj.tupleProjFwd()
     );
 }
 
 
 
 
+/*[AutoHeaderGeneratorExport]*/
 template<typename SplatPrimitive, gsplat::CameraModelType camera_model>
-__global__ void projection_ewa_3dgs_hetero_backward_kernel(
+__global__ void projection_3dgs_hetero_backward_kernel(
     // fwd inputs
     const long C,
     const long N,
@@ -251,7 +254,7 @@ __global__ void projection_ewa_3dgs_hetero_backward_kernel(
     const int64_t *__restrict__ gaussian_ids,   // [nnz]
     const int4 *__restrict__ aabbs,          // [B, C, N, 4]
     // grad outputs
-    typename SplatPrimitive::WorldEval3D::Buffer v_splats_proj,
+    typename SplatPrimitive::Screen::Buffer v_splats_proj,
     const bool sparse_grad, // whether the outputs are in COO format [nnz, ...]
     // grad inputs
     typename SplatPrimitive::World::Buffer v_splats_world,
@@ -292,8 +295,8 @@ __global__ void projection_ewa_3dgs_hetero_backward_kernel(
     // Load splat
     typename SplatPrimitive::World splat_world =
         SplatPrimitive::World::load(splats_world, splat_idx);
-    typename SplatPrimitive::WorldEval3D v_splat_proj =
-        SplatPrimitive::WorldEval3D::load(v_splats_proj, thread_idx);
+    typename SplatPrimitive::Screen v_splat_proj =
+        SplatPrimitive::Screen::load(v_splats_proj, thread_idx);
 
     // Projection
     typename SplatPrimitive::World v_splat_world = SplatPrimitive::World::zero();
@@ -301,10 +304,10 @@ __global__ void projection_ewa_3dgs_hetero_backward_kernel(
     float3 v_t = {0.f, 0.f, 0.f};
     switch (camera_model) {
     case gsplat::CameraModelType::PINHOLE: // perspective projection
-        SplatPrimitive::project_persp_eval3d_vjp(splat_world, cam, v_splat_proj, v_splat_world, v_R, v_t);
+        SplatPrimitive::project_persp_vjp(splat_world, cam, v_splat_proj, v_splat_world, v_R, v_t);
         break;
     case gsplat::CameraModelType::FISHEYE: // fisheye projection
-        SplatPrimitive::project_fisheye_eval3d_vjp(splat_world, cam, v_splat_proj, v_splat_world, v_R, v_t);
+        SplatPrimitive::project_fisheye_vjp(splat_world, cam, v_splat_proj, v_splat_world, v_R, v_t);
         break;
     }
     
@@ -338,10 +341,11 @@ __global__ void projection_ewa_3dgs_hetero_backward_kernel(
 
 
 
+/*[AutoHeaderGeneratorExport]*/
 std::tuple<
     Vanilla3DGS::World::TensorTuple,  // v_splats
     at::Tensor  // v_viewmats
-> projection_ewa_3dgs_hetero_backward_tensor(
+> projection_3dgs_hetero_backward_tensor(
     // fwd inputs
     const Vanilla3DGS::World::TensorTuple &splats_world_tuple,
     const at::Tensor viewmats, // [..., C, 4, 4]
@@ -357,7 +361,7 @@ std::tuple<
     const at::Tensor gaussian_ids, // [nnz]
     const at::Tensor aabb,  // [nnz, 4]
     // grad outputs
-    const Vanilla3DGS::WorldEval3D::TensorTupleProj &v_splats_proj_tuple,
+    const Vanilla3DGS::Screen::TensorTupleProj &v_splats_proj_tuple,
     const bool viewmats_requires_grad,
     const bool sparse_grad
 ) {
@@ -366,7 +370,7 @@ std::tuple<
     uint32_t C = viewmats.size(-3);  // number of cameras
     uint32_t nnz = camera_ids.size(0);  // number of intersections
 
-    Vanilla3DGS::WorldEval3D::Tensor v_splats_proj(v_splats_proj_tuple);
+    Vanilla3DGS::Screen::Tensor v_splats_proj(v_splats_proj_tuple);
 
     Vanilla3DGS::World::Tensor v_splats_world = splats_world.zeros_like();
 
@@ -390,9 +394,9 @@ std::tuple<
     if (nnz != 0) {
         constexpr uint block = 256;
         if (camera_model == gsplat::CameraModelType::PINHOLE)
-            projection_ewa_3dgs_hetero_backward_kernel<Vanilla3DGS, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
+            projection_3dgs_hetero_backward_kernel<Vanilla3DGS, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
         else if (camera_model == gsplat::CameraModelType::FISHEYE)
-            projection_ewa_3dgs_hetero_backward_kernel<Vanilla3DGS, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+            projection_3dgs_hetero_backward_kernel<Vanilla3DGS, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
         else
             throw std::runtime_error("Unsupported camera model");
     }
@@ -403,6 +407,7 @@ std::tuple<
     return std::make_tuple(v_splats_world.tuple(), v_viewmats);
 }
 
+/*[AutoHeaderGeneratorExport]*/
 std::tuple<
     OpaqueTriangle::World::TensorTuple,  // v_splats
     at::Tensor  // v_viewmats
@@ -422,7 +427,7 @@ std::tuple<
     const at::Tensor gaussian_ids, // [nnz]
     const at::Tensor aabb,  // [nnz, 4]
     // grad outputs
-    const OpaqueTriangle::WorldEval3D::TensorTupleProj &v_splats_proj_tuple,
+    const OpaqueTriangle::Screen::TensorTupleProj &v_splats_proj_tuple,
     const bool viewmats_requires_grad,
     const bool sparse_grad
 ) {
@@ -431,7 +436,7 @@ std::tuple<
     uint32_t C = viewmats.size(-3);  // number of cameras
     uint32_t nnz = camera_ids.size(0);  // number of intersections
 
-    OpaqueTriangle::WorldEval3D::Tensor v_splats_proj(v_splats_proj_tuple);
+    OpaqueTriangle::Screen::Tensor v_splats_proj(v_splats_proj_tuple);
 
     OpaqueTriangle::World::Tensor v_splats_world = splats_world.zeros_like();
 
@@ -453,9 +458,9 @@ std::tuple<
     if (nnz != 0) {
         constexpr uint block = 256;
         if (camera_model == gsplat::CameraModelType::PINHOLE)
-            projection_ewa_3dgs_hetero_backward_kernel<OpaqueTriangle, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
+            projection_3dgs_hetero_backward_kernel<OpaqueTriangle, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
         else if (camera_model == gsplat::CameraModelType::FISHEYE)
-            projection_ewa_3dgs_hetero_backward_kernel<OpaqueTriangle, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+            projection_3dgs_hetero_backward_kernel<OpaqueTriangle, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
         else
             throw std::runtime_error("Unsupported camera model");
     }

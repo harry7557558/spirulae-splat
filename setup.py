@@ -16,31 +16,14 @@ LINE_INFO = True
 def extract_function_declarations(code):
     # Regex to match non-inline function declarations
     function_decl_pattern = re.compile(r"""
-        # Match comments before the function declaration
-        (?:/\*[^*]*\*+(?:[^/*][^*]*\*+)*/|//[^\n]*?$\s*)*
-        # Match return type (including template declarations)
-        (?:template\s*<[^>]+>\s*)?
-        # Match function attributes like __global__, __device__, etc.
-        (?:inline)?\s*
-        (?:__global__|__device__)?\s*
-        # Match the return type
-        (?:void|u?int[234]?|float[234]?|torch::Tensor|std::tuple<[\w:\s*&<>\[\],\/]+?>)
-        # Match the function name
-        \s+\b\w+\b\s*
-        # Match the function parameters
-        \(.*?\)\s
+        \/\*\[AutoHeaderGeneratorExport\]\*\/\s*
+        (.*?\))\s*\{
     """, re.MULTILINE | re.VERBOSE | re.DOTALL)
     
     matches = function_decl_pattern.findall(code)
     decls = []
 
     for m in matches:
-        if 'inline' in m:
-            continue
-        if re.compile(r"inline\s+(__global__|__device__)").findall(m):
-            continue
-        if True and re.compile(r"(__global__|__device__)").findall(m):
-            continue
         decls.append(m.strip()+';')
     
     return decls
@@ -179,7 +162,7 @@ generate_header(path+"PerSplatLoss.cu", path+"PerSplatLoss.cuh")
 generate_header(path+"PerPixelLoss.cu", path+"PerPixelLoss.cuh")
 generate_header(path+"PixelWise.cu", path+"PixelWise.cuh")
 generate_header(path+"Projection.cu", path+"Projection.cuh")
-generate_header(path+"ProjectionEval3D.cu", path+"ProjectionEval3D.cuh")
+# generate_header(path+"ProjectionEval3D.cu", path+"ProjectionEval3D.cuh")
 generate_header(path+"ProjectionEWA3DGSHetero.cu", path+"ProjectionEWA3DGSHetero.cuh")
 generate_header(path+"RasterizationFwd.cu", path+"RasterizationFwd.cuh")
 generate_header(path+"RasterizationBwd.cu", path+"RasterizationBwd.cuh")

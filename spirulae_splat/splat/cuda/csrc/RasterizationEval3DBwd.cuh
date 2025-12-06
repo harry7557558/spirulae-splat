@@ -4,7 +4,7 @@
 
 #include <torch/types.h>
 
-#include "Primitive3DGS.cuh"
+#include "Primitive3DGUT.cuh"
 #include "PrimitiveOpaqueTriangle.cuh"
 #include "PrimitiveVoxel.cuh"
 
@@ -16,11 +16,11 @@
 
 
 std::tuple<
-    Vanilla3DGS::WorldEval3D::TensorTuple,
+    Vanilla3DGUT::Screen::TensorTuple,
     std::optional<at::Tensor>  // v_viewmats
-> rasterize_to_pixels_3dgs_eval3d_bwd(
+> rasterize_to_pixels_3dgut_bwd(
     // Gaussian parameters
-    Vanilla3DGS::WorldEval3D::TensorTuple splats_tuple,
+    Vanilla3DGUT::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,             // [..., C, 4, 4]
     const at::Tensor Ks,                   // [..., C, 3, 3]
     const gsplat::CameraModelType camera_model,
@@ -37,21 +37,21 @@ std::tuple<
     // forward outputs
     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
-    std::optional<typename Vanilla3DGS::RenderOutput::TensorTuple> render_outputs,
-    std::optional<typename Vanilla3DGS::RenderOutput::TensorTuple> render2_outputs,
+    std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> render_outputs,
+    std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> render2_outputs,
     // gradients of outputs
-    Vanilla3DGS::RenderOutput::TensorTuple v_render_outputs,
+    Vanilla3DGUT::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
-    std::optional<typename Vanilla3DGS::RenderOutput::TensorTuple> v_distortion_outputs
+    std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> v_distortion_outputs
 );
 
 
 std::tuple<
-    OpaqueTriangle::WorldEval3D::TensorTuple,
+    OpaqueTriangle::Screen::TensorTuple,
     std::optional<at::Tensor>  // v_viewmats
 > rasterize_to_pixels_opaque_triangle_eval3d_bwd(
     // Gaussian parameters
-    OpaqueTriangle::WorldEval3D::TensorTuple splats_tuple,
+    OpaqueTriangle::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,             // [..., C, 4, 4]
     const at::Tensor Ks,                   // [..., C, 3, 3]
     const gsplat::CameraModelType camera_model,
@@ -78,11 +78,11 @@ std::tuple<
 
 
 std::tuple<
-    VoxelPrimitive::WorldEval3D::TensorTuple,
+    VoxelPrimitive::Screen::TensorTuple,
     std::optional<at::Tensor>  // v_viewmats
 > rasterize_to_pixels_voxel_eval3d_bwd(
     // Gaussian parameters
-    VoxelPrimitive::WorldEval3D::TensorTuple splats_tuple,
+    VoxelPrimitive::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,             // [..., C, 4, 4]
     const at::Tensor Ks,                   // [..., C, 3, 3]
     const gsplat::CameraModelType camera_model,
