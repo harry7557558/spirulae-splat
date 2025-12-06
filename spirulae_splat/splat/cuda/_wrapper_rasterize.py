@@ -121,8 +121,18 @@ def rasterize_to_pixels(
             }
         )
     elif primitive in ["voxel"]:
-        render_rgbs, render_depths, render_alphas = render_outputs
-        return (render_rgbs, render_depths), render_alphas, {}
+        (
+            render_rgbs, render_depths, render_alphas,
+            distortion_rgbs, distortion_depths, max_blending
+        ) = render_outputs
+        return (
+            (render_rgbs, render_depths), render_alphas,
+            {
+                'max_blending': max_blending,
+                'rgb_distortion': distortion_rgbs,
+                'depth_distortion': distortion_depths,
+            }
+        )
     else:
         raise NotImplementedError()
 
@@ -235,7 +245,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
             f"CameraModelType.{camera_model.upper()}"
         )
 
-        (render_rgbs, render_depths), render_Ts, last_ids, _1, _2 = _make_lazy_cuda_func(
+        (render_rgbs, render_depths), render_Ts, last_ids = _make_lazy_cuda_func(
             "rasterization_3dgut_forward"
         )(
             (means, quats, depths, proj_scales, proj_opacities, colors),
@@ -378,6 +388,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
         v_distortion_normals: Tensor,  # [..., H, W, 3]
         v_max_blending = None
     ):
+        # assert v_max_blending is None, "max_blending does not support gradient"
         (
             hardness, depths, verts, rgbs, normals,
             viewmats, Ks, dist_coeffs,
@@ -450,9 +461,12 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
             f"CameraModelType.{camera_model.upper()}"
         )
 
-        (render_rgbs, render_depths), render_Ts, last_ids, _1, _2 = _make_lazy_cuda_func(
-            "rasterization_voxel_forward"
-        )(
+        (
+            (render_rgbs, render_depths), render_Ts, last_ids,
+            (render2_rgbs, render2_depths),
+            (distortion_rgbs, distortion_depths),
+            max_blending
+        ) = _make_lazy_cuda_func("rasterization_voxel_forward")(
             (pos_sizes, None, densities, colors),
             viewmats, Ks, camera_model, dist_coeffs,
             backgrounds, masks,
@@ -464,6 +478,8 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
             viewmats, Ks, dist_coeffs,
             backgrounds, masks,
             isect_offsets, flatten_ids, render_Ts, last_ids,
+            render_rgbs, render_depths,
+            render2_rgbs, render2_depths,
         )
         ctx.width = width
         ctx.height = height
@@ -471,7 +487,10 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         ctx.tile_size = tile_size
 
         render_alphas = 1.0 - render_Ts
-        return render_rgbs, render_depths, render_alphas
+        return (
+            render_rgbs, render_depths, render_alphas,
+            distortion_rgbs, distortion_depths, max_blending
+        )
 
     @staticmethod
     def backward(
@@ -479,12 +498,18 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         v_render_rgbs: Tensor,  # [..., H, W, 3]
         v_render_depths: Tensor,  # [..., H, W, 1]
         v_render_alphas: Tensor,  # [..., H, W, 1]
+        v_distortion_rgbs: Tensor,  # [..., H, W, 3]
+        v_distortion_depths: Tensor,  # [..., H, W, 1]
+        v_max_blending = None
     ):
+        # assert v_max_blending is None, "max_blending does not support gradient"
         (
             pos_sizes, densities, colors,
             viewmats, Ks, dist_coeffs,
             backgrounds, masks,
             isect_offsets, flatten_ids, render_Ts, last_ids,
+            render_rgbs, render_depths,
+            render2_rgbs, render2_depths,
         ) = ctx.saved_tensors
         width = ctx.width
         height = ctx.height
@@ -497,10 +522,12 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
             (pos_sizes, None, densities, colors),
             viewmats, Ks, ctx.camera_model, dist_coeffs,
             backgrounds, masks,
-            width, height, tile_size, isect_offsets, flatten_ids,
-            render_Ts, last_ids, None, None,
+            width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids,
+            (render_rgbs, render_depths),
+            (render2_rgbs, render2_depths),
             (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
-            v_render_alphas.contiguous(), None
+            v_render_alphas.contiguous(),
+            (v_distortion_rgbs.contiguous(), v_distortion_depths.contiguous()),
         )
         assert v_pos_sizes is None
         assert v_depths is None

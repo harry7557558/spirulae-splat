@@ -377,10 +377,10 @@ struct VoxelPrimitive::Screen {
             return rgbs.options();
         }
         bool isPacked() const {
-            return rgbs.dim() == 3;
+            return rgbs.dim() == 2;
         }
         long size() const {
-            return rgbs.size(-3);
+            return rgbs.size(-2);
         }
         long batchSize() const {
             return rgbs.numel() / (3*size());

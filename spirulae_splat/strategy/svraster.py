@@ -89,6 +89,7 @@ class SVRasterStrategy(Strategy):
         packed: bool = False,
     ):
         """Callback function to be executed after the `loss.backward()` call."""
+        return svhash, voxels, voxel_indices
 
         self._update_state(voxel_indices, params, state, info, packed=packed)
 

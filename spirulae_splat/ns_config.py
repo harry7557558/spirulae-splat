@@ -315,7 +315,9 @@ spirulae_voxel = MethodSpecification(
                 erank_reg=0.0,
                 erank_reg_s3=0.0,
                 depth_supervision_weight=0.0,
-                supervision_warmup=0
+                supervision_warmup=0,
+                reg_warmup_length=100,
+                distortion_reg_warmup=100,
             ),
         ),
         optimizers={

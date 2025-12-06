@@ -385,8 +385,9 @@ class SpirulaeModel(Model):
             self.voxels, self.voxel_indices = svhash_get_voxels(self.svhash)
             num_verts = int(len(self.svhash[0]))
             num_points = int(len(self.voxels))
-            densities = opacity_init * torch.ones(num_verts) / np.cbrt(np.prod(means_std.detach().cpu().numpy()))
-            densities = torch.log(densities)
+            density_init = 1.0 * opacity_init / np.cbrt(np.prod(means_std.detach().cpu().numpy()))
+            densities = density_init * torch.ones(num_verts)
+            # densities = torch.where(densities > 1.1, densities, 1.1 * (torch.log(densities) + 0.904689820196))
 
         elif self.config.primitive in ["3dgs", "mip", "3dgut"] or True:
             distances, indices = self.k_nearest_sklearn(means.data, 4)
@@ -914,7 +915,7 @@ class SpirulaeModel(Model):
             # print(voxel_indices)
             # exit(0)
             splat_params = (
-                self.voxels, torch.exp(self.densities)[self.voxel_indices],
+                self.voxels, self.densities[self.voxel_indices],
                 self.features_dc, self.features_sh
             )
             # print([x.shape for x in splat_params])

@@ -20,7 +20,8 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     std::optional<Vanilla3DGUT::RenderOutput::TensorTuple>,
-    std::optional<Vanilla3DGUT::RenderOutput::TensorTuple>
+    std::optional<Vanilla3DGUT::RenderOutput::TensorTuple>,
+    std::optional<at::Tensor>
 > rasterize_to_pixels_3dgut_fwd(
     // Gaussian parameters
     Vanilla3DGUT::Screen::TensorTuple splats_tuple,
@@ -45,7 +46,8 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     std::optional<OpaqueTriangle::RenderOutput::TensorTuple>,
-    std::optional<OpaqueTriangle::RenderOutput::TensorTuple>
+    std::optional<OpaqueTriangle::RenderOutput::TensorTuple>,
+    std::optional<at::Tensor>
 > rasterize_to_pixels_opaque_triangle_eval3d_fwd(
     // Gaussian parameters
     OpaqueTriangle::Screen::TensorTuple splats_tuple,
@@ -70,7 +72,8 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     std::optional<VoxelPrimitive::RenderOutput::TensorTuple>,
-    std::optional<VoxelPrimitive::RenderOutput::TensorTuple>
+    std::optional<VoxelPrimitive::RenderOutput::TensorTuple>,
+    std::optional<at::Tensor>
 > rasterize_to_pixels_voxel_eval3d_fwd(
     // Gaussian parameters
     VoxelPrimitive::Screen::TensorTuple splats_tuple,

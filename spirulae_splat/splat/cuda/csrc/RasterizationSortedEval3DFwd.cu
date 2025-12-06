@@ -60,7 +60,7 @@ struct MinPriorityQueue {
 };
 
 
-template <typename SplatPrimitive, gsplat::CameraModelType camera_model, bool output_distortion>
+template <typename SplatPrimitive, gsplat::CameraModelType camera_model, bool output_distortion, bool output_max_blending>
 __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     const uint32_t I,
     const uint32_t N,
@@ -98,7 +98,7 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     last_ids += image_id * image_height * image_width;
     if (backgrounds != nullptr)
         backgrounds += image_id;
-    if (max_blending_masks != nullptr)
+    if (output_max_blending && max_blending_masks != nullptr)
         max_blending_masks += image_id * image_height * image_width;
 
     // arrange 16x16 tile into 8x4 subtiles (one per warp)
@@ -155,7 +155,8 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     // index of most recent gaussian to write to this thread's pixel
     uint32_t cur_idx = 0;
 
-    bool max_blending_mask = max_blending_masks ? max_blending_masks[pix_id] : true;
+    bool max_blending_mask = (output_max_blending && max_blending_masks) ?
+        max_blending_masks[pix_id] : true;
 
     typename SplatPrimitive::RenderOutput pix_out = SplatPrimitive::RenderOutput::zero();
     typename SplatPrimitive::RenderOutput pix2_out = SplatPrimitive::RenderOutput::zero();
@@ -230,8 +231,7 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
 
                 T = next_T;
 
-                // TODO: mask
-                if (out_max_blending != nullptr && max_blending_mask)
+                if (output_max_blending && out_max_blending != nullptr && max_blending_mask && vis > 0.0)
                     atomicMax(out_max_blending + (N == 0 ? splat_idx : splat_idx % N), vis);
             }
         }
@@ -256,7 +256,7 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     }
 }
 
-template <typename SplatPrimitive, bool output_distortion>
+template <typename SplatPrimitive, bool output_distortion, bool output_max_blending>
 inline void launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     // Gaussian parameters
     typename SplatPrimitive::Screen::Tensor splats,
@@ -297,21 +297,21 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel(
             splats.buffer(), \
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
             backgrounds.has_value() ? (float3*)backgrounds.value().data_ptr<float>() : nullptr, \
-            max_blending_masks.has_value() ? max_blending_masks.value().data_ptr<bool>() : nullptr, \
+            (output_max_blending && max_blending_masks.has_value()) ? max_blending_masks.value().data_ptr<bool>() : nullptr, \
             image_width, image_height, tile_width, tile_height, \
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(), \
             renders, transmittances.data_ptr<float>(), last_ids.data_ptr<int32_t>(), \
             output_distortion ? renders2->buffer() : typename SplatPrimitive::RenderOutput::Buffer(), \
             output_distortion ? distortions->buffer() : typename SplatPrimitive::RenderOutput::Buffer(), \
-            out_max_blending.has_value() ? out_max_blending.value().data_ptr<float>() : nullptr \
+            (output_max_blending && out_max_blending.has_value()) ? out_max_blending.value().data_ptr<float>() : nullptr \
         )
 
     if (camera_model == gsplat::CameraModelType::PINHOLE)
         rasterize_to_pixels_sorted_eval3d_fwd_kernel<SplatPrimitive,
-            gsplat::CameraModelType::PINHOLE, output_distortion> _LAUNCH_ARGS;
+            gsplat::CameraModelType::PINHOLE, output_distortion, output_max_blending> _LAUNCH_ARGS;
     else if (camera_model == gsplat::CameraModelType::FISHEYE)
         rasterize_to_pixels_sorted_eval3d_fwd_kernel<SplatPrimitive,
-            gsplat::CameraModelType::FISHEYE, output_distortion> _LAUNCH_ARGS;
+            gsplat::CameraModelType::FISHEYE, output_distortion, output_max_blending> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -320,7 +320,7 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel(
 }
 
 
-template <typename SplatPrimitive, bool output_distortion>
+template <typename SplatPrimitive, bool output_distortion, bool output_max_blending>
 inline std::tuple<
     typename SplatPrimitive::RenderOutput::TensorTuple,
     at::Tensor,
@@ -351,7 +351,7 @@ inline std::tuple<
     CHECK_INPUT(Ks);
     if (backgrounds.has_value())
         CHECK_INPUT(backgrounds.value());
-    if (max_blending_masks.has_value())
+    if (output_max_blending && max_blending_masks.has_value())
         CHECK_INPUT(max_blending_masks.value());
     
     typename SplatPrimitive::Screen::Tensor splats(splats_tuple);
@@ -379,9 +379,11 @@ inline std::tuple<
     last_ids_dims.append({image_height, image_width});
     at::Tensor last_ids = at::empty(last_ids_dims, opt.dtype(at::kInt));
 
-    std::optional<at::Tensor> out_max_blending = at::zeros({splats.size()}, opt);
+    std::optional<at::Tensor> out_max_blending;
+    if (output_max_blending)
+        out_max_blending = at::zeros({splats.size()}, opt);
 
-    launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel<SplatPrimitive, output_distortion>(
+    launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel<SplatPrimitive, output_distortion, output_max_blending>(
         splats,
         viewmats, Ks, camera_model, dist_coeffs,
         backgrounds, max_blending_masks,
@@ -427,7 +429,7 @@ std::tuple<
 ) {
     if (tile_size != TILE_SIZE)
         AT_ERROR("Tile size must be " + std::to_string(TILE_SIZE));
-    return rasterize_to_pixels_sorted_eval3d_fwd_tensor<OpaqueTriangle, true>(
+    return rasterize_to_pixels_sorted_eval3d_fwd_tensor<OpaqueTriangle, true, true>(
         splats_tuple,
         viewmats, Ks, camera_model, dist_coeffs,
         backgrounds, max_blending_masks,

@@ -199,25 +199,25 @@ bool ray_aabb_intersection(
     return t0 < t1;
 }
 
+[ForceInline]
 [Differentiable]
-void evaluate_density_coefficients(
-    float size, float[8] densities,
-    float3 ro, float3 rd,
-    out float c3, out float c2, out float c1, out float c0
-) {
-    float a000 = densities[0], a001 = densities[1], a010 = densities[2], a011 = densities[3],
-          a100 = densities[4], a101 = densities[5], a110 = densities[6], a111 = densities[7];
-    float a0 = (a111 - a110 - a101 + a100 - a011 + a010 + a001 - a000) / (size * size * size);
-    float a1 = (a110 - a100 - a010 + a000) / (size * size);
-    float a2 = (a101 - a100 - a001 + a000) / (size * size);
-    float a3 = (a011 - a010 - a001 + a000) / (size * size);
-    float3 a4 = float3(a001 - a000, a010 - a000, a100 - a000) / size;
-    float3 rd2 = float3(rd.y * rd.z, rd.x * rd.z, rd.x * rd.y);
-    float3 ro2 = float3(ro.y * ro.z, ro.x * ro.z, ro.x * ro.y);
-    c3 = a0 * rd.x * rd.y * rd.z;
-    c2 = dot(rd2, a0 * ro + float3(a1, a2, a3));
-    c1 = dot(rd, a0 * ro2 + float3(a3 * ro.y + a2 * ro.z, a3 * ro.x + a1 * ro.z, a2 * ro.x + a1 * ro.y) + a4);
-    c0 = a0 * ro.x * ro.y * ro.z + dot(float3(a1, a2, a3), ro2) + dot(a4, ro) + a000;
+float explin(float x) {
+    return x > 1.1f ? x :
+        exp(0.909090909091f*x - 0.904689820196f);
+}
+
+[Differentiable]
+float interp(const float[8] densities, float3 w) {
+    float w0 = (1.0f - w.z) * (1.0f - w.y) * (1.0f - w.x);
+    float w1 = (1.0f - w.z) * (1.0f - w.y) * w.x;
+    float w2 = (1.0f - w.z) * w.y * (1.0f - w.x);
+    float w3 = (1.0f - w.z) * w.y * w.x;
+    float w4 = w.z * (1.0f - w.y) * (1.0f - w.x);
+    float w5 = w.z * (1.0f - w.y) * w.x;
+    float w6 = w.z * w.y * (1.0f - w.x);
+    float w7 = w.z * w.y * w.x;
+    return w0 * densities[0] + w1 * densities[1] + w2 * densities[2] + w3 * densities[3] +
+           w4 * densities[4] + w5 * densities[5] + w6 * densities[6] + w7 * densities[7];
 }
 
 [CudaDeviceExport]
@@ -229,17 +229,16 @@ float evaluate_alpha_voxel(
     float3 ray_o, float3 ray_d
 ) {
     float t0, t1;
-    if (!ray_aabb_intersection(ray_o, ray_d, pos + 0.5 * size, 0.5 * size, t0, t1)) 
+    if (!ray_aabb_intersection(ray_o, ray_d, pos + 0.5 * size, 0.5 * size, t0, t1))
         return 0.0f;
-    float c3, c2, c1, c0;
-    evaluate_density_coefficients(
-        size, densities,
-        ray_o + ray_d * t0 - pos, ray_d,
-        c3, c2, c1, c0
-    );
-    float dt = t1 - t0;
-    float accum = (((c3/4 * dt + c2/3) * dt + c1/2) * dt + c0) * dt;
-    return min(1.0 - exp(-max(accum, 0.0)), 0.999);
+    const int K = 8;
+    float accum = 0.0f;
+    for (int i = 0; i < K; i++) {
+        float t = lerp(t0, t1, ((float)i + 0.5f) / (float)K);
+        float a = interp(densities, (ray_o + ray_d * t - pos) / size);
+        accum += explin(a);
+    }
+    return min(1.0 - exp(-(t1 - t0) / K * accum), 0.999f);
 }
 
 [CudaDeviceExport]
@@ -274,25 +273,19 @@ void evaluate_color_voxel(
     out float3 out_rgb, out float depth
 ) {
     out_rgb = rgb;
-    // TODO: analytical solution with density
     float t0, t1;
     ray_aabb_intersection(ray_o, ray_d, pos + 0.5 * size, 0.5 * size, t0, t1);
-#if 1
-    // depth = 0.5 * (t0 + t1);
-    depth = t0;
-#else
-    float c3, c2, c1, c0;
-    evaluate_density_coefficients(
-        size, densities,
-        ray_o + ray_d * t0 - pos, ray_d,
-        c3, c2, c1, c0
-    );
-    float dt = t1 - t0;
-    depth = t0 +
-        (((c3/5 * dt + c2/4) * dt + c1/3) * dt + c0/2) * dt /
-        (((c3/4 * dt + c2/3) * dt + c1/2) * dt + c0);
-#endif
-    depth = log(max(depth, 0.0) + 1e-6);
+
+    const int K = 8;
+    float accum = 0.0f, depth_accum = 0.0f;
+    for (int i = 0; i < K; i++) {
+        float t = lerp(t0, t1, ((float)i + 0.5f) / (float)K);
+        float a = interp(densities, (ray_o + ray_d * t - pos) / size);
+        a = explin(a);
+        accum += a;
+        depth_accum += t * a;
+    }
+    depth = log(max(depth_accum / accum, 0.0) + 1e-6);
 }
 
 [CudaDeviceExport]
