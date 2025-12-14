@@ -211,7 +211,7 @@ class SplatModel:
         pipeline = checkpoint['pipeline']
 
         def get_param_group(key):
-            param = checkpoint['pipeline'][f'_model.gauss_params.{key}']
+            param = checkpoint['pipeline'].get(f'_model.gauss_params.{key}', torch.tensor([]))
             try:
                 weight = checkpoint['optimizers'][key]['state'][0]['exp_avg_sq']
                 param.weight = torch.sqrt(weight)
@@ -295,7 +295,7 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
         m.background_color, m.background_sh)
 
     num_sh = features_sh.shape[1]
-    num_ch = features_ch.shape[1]
+    num_ch = 0 if features_ch.numel() == 0 else features_ch.shape[1]
     sh_degree = {
         1: 0, 4: 1, 9: 2, 16: 3, 25: 4
     }[num_sh+1]
@@ -319,7 +319,7 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
 
     n_splat = len(means)
     n_floats = sum([
-        x.numel() for x in [
+        (0 if x is None else x.numel()) for x in [
             features_dc, features_sh, features_ch,
             means, opacities, quats, scales]
     ])
@@ -331,6 +331,8 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
     def apply_mask(mask):
         nonlocal features_dc, features_sh, features_ch, means, opacities, quats, scales
         def apply_mask_inner(x):
+            if x.numel() == 0:
+                return x
             if not hasattr(x, 'weight'):
                 return x[mask]
             x1 = x[mask]
@@ -342,11 +344,13 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
             means, opacities, quats, scales)]
 
     # normalize quaterions
-    quats_w0 = quats.weight
+    if hasattr(quats, 'weight'):
+        quats_w0 = quats.weight
     quats_norm = torch.norm(quats, dim=1, keepdim=True)
     quats = quats / quats_norm
     quats *= torch.sign(quats[..., -1:])
-    quats.weight = (quats_w0 - quats * (quats * quats_w0).sum(-1, True)) / quats_norm
+    if hasattr(quats, 'weight'):
+        quats.weight = (quats_w0 - quats * (quats * quats_w0).sum(-1, True)) / quats_norm
 
     # filter INF/NaN
     mask = torch.isfinite(means.sum(-1) + quats.sum(-1) + scales.sum(-1) + opacities.sum(-1) + features_dc.sum(-1))
@@ -375,8 +379,9 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
             apply_mask(mask)
         print()
 
-    means_w0 = means.weight
-    scales_w0 = scales.weight
+    if hasattr(means, 'weight') and hasattr(scales, 'weight'):
+        means_w0 = means.weight
+        scales_w0 = scales.weight
     # normalize position
     means -= torch.mean(means, axis=0)
     # normalize scale
@@ -384,13 +389,16 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
     means = means * scale
     scales = scales + np.log(scale)
     # apply to weight
-    means.weight = means_w0 * scale
-    scales.weight = scales_w0
+    if hasattr(means, 'weight') and hasattr(scales, 'weight'):
+        means.weight = means_w0 * scale
+        scales.weight = scales_w0
 
     # sigmoid opacities
-    opacities_w0 = opacities.weight
+    if hasattr(opacities, 'weight'):
+        opacities_w0 = opacities.weight
     opacities = torch.sigmoid(opacities)
-    opacities.weight = opacities_w0 * opacities*(1-opacities)
+    if hasattr(opacities, 'weight'):
+        opacities.weight = opacities_w0 * opacities*(1-opacities)
 
     weight = torch.exp(scales[:,0].sum(-1)) * opacities[:,0]
 
@@ -462,7 +470,8 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
         quats_bins, quats_q = quantize_tensor('quats', quats, bit_quat)
         opacities_bins, opacities_q = quantize_tensor('opacs', opacities, bit_opac)
         features_dc_bins, features_dc_q = quantize_tensor('color', features_dc, bit_dc)
-        features_ch_bins, features_ch_q = quantize_tensor('ch', features_ch, bit_ch, 100)
+        features_ch_bins, features_ch_q = quantize_tensor('ch', features_ch, bit_ch, 100) \
+            if num_ch > 0 else (torch.tensor([]), torch.tensor([]))
         features_sh_bins, features_sh_q = quantize_tensor('sh', features_sh, bit_sh, 100)
     time1 = perf_counter()
     print()
@@ -473,9 +482,10 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
         { "byteLength": 4*len(quats_bins) },
         { "byteLength": 4*len(opacities_bins) },
         { "byteLength": 4*len(features_dc_bins) },
-        { "byteLength": 4*len(features_ch_bins) },
         { "byteLength": 4*len(features_sh_bins) },
-    ]
+    ] + [
+        { "byteLength": 4*len(features_ch_bins) }
+    ] * (num_ch > 0)
 
     print("Packing base...")
     n_scale = scales.shape[-1]
@@ -501,7 +511,7 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
     componentViews, componentLength = component_view_psa([
             { "key": "features_ch", "type": f"quat{3*num_ch}", "bitLength": 3*num_ch*bit_ch, "quatBufferView": 5 },
     ] * (num_ch > 0) + [
-            { "key": "features_sh", "type": f"quat{3*num_sh}", "bitLength": 3*num_sh*bit_sh, "quatBufferView": 6 },
+            { "key": "features_sh", "type": f"quat{3*num_sh}", "bitLength": 3*num_sh*bit_sh, "quatBufferView": 5+int(num_ch > 0) },
     ] * (num_sh > 0))
     harmonics_config = {
         "bufferView": len(buffer_views)+1,
@@ -510,7 +520,7 @@ def process_ckpt_to_ssplat(file_path, meta={}, cull_th=float('inf'), cull_n=1, e
         "componentViews": componentViews
     }
     harmonics_buffer = pack_components(harmonics_config, [
-        features_ch_q.reshape((len(features_ch), -1))
+        features_ch_q.reshape((len(features_ch), -1)) if features_ch_q.numel() > 0 else features_ch_q
     ] * (num_ch > 0) + [
         features_sh_q.reshape((len(features_sh), -1))
     ] * (num_sh > 0))
@@ -601,7 +611,7 @@ if __name__ == "__main__":
 
     # 14|15 bytes
     bit_pos = 14  # x3, 64KB
-    bit_sc = 8  # x2|3
+    bit_sc = 8  # x3
     bit_quat = 7  # x4
     bit_opac = 5  # x1
     bit_dc = 7  # x3

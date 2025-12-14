@@ -88,6 +88,7 @@ def rasterize_to_pixels(
         _RasterizeToPixels = _RasterizeToPixels3DGUT
     elif primitive in ["opaque_triangle"]:
         _RasterizeToPixels = _RasterizeToPixelsOpaqueTriangle
+        print([x.shape for x in splats])
     elif primitive in ["voxel"]:
         _RasterizeToPixels = _RasterizeToPixelsVoxelEval3D
 
@@ -245,7 +246,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
             f"CameraModelType.{camera_model.upper()}"
         )
 
-        (render_rgbs, render_depths), render_Ts, last_ids = _make_lazy_cuda_func(
+        (render_rgbs, render_depths), render_Ts, last_ids, _1, _2, _3 = _make_lazy_cuda_func(
             "rasterization_3dgut_forward"
         )(
             (means, quats, depths, proj_scales, proj_opacities, colors),

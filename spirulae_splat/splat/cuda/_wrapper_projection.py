@@ -364,7 +364,7 @@ class _FullyFusedProjectionVoxel(torch.autograd.Function):
 
 
 def fully_fused_projection_hetero(
-    primitive: Literal["3dgs", "mip", "opaque_triangle"],
+    primitive: Literal["3dgs", "mip", "3dgut", "opaque_triangle"],
     splats: tuple[Tensor],  # means, quats, scales, opacities
     viewmats: Tensor,  # [..., C, 4, 4]
     Ks: Tensor,  # [..., C, 3, 3]
@@ -381,8 +381,8 @@ def fully_fused_projection_hetero(
     dist_coeffs: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     # if primitive in ["3dgs", "mip"]:
-    if primitive in ["3dgs", "mip", "opaque_triangle"]:
-        if primitive in ["3dgs", "mip"]:
+    if primitive in ["3dgs", "mip", "3dgut", "opaque_triangle"]:
+        if primitive in ["3dgs", "mip", "3dgut"]:
             means, quats, scales, opacities, features_dc, features_sh = splats
         else:
             means, quats, scales, opacities, features_dc, features_sh, features_ch = splats
@@ -393,7 +393,7 @@ def fully_fused_projection_hetero(
         assert means.shape == batch_dims + (N, 3), means.shape
         assert quats.shape == batch_dims + (N, 4), quats.shape
         assert scales.shape == batch_dims + (N, 3), scales.shape
-        if primitive in ["3dgs", "mip"]:
+        if primitive in ["3dgs", "mip", "3dgut"]:
             assert opacities.shape == batch_dims + (N,), opacities.shape
         else:
             assert opacities.shape == batch_dims + (N, 2), opacities.shape
@@ -405,7 +405,7 @@ def fully_fused_projection_hetero(
         assert batch_dims == (), "sparse_grad does not support batch dimensions"
 
     additional_args = []
-    if primitive in ["3dgs", "mip"]:
+    if primitive in ["3dgs", "mip", "3dgut"]:
         _FullyFusedProjection = _FullyFusedProjection3DGSHetero
     elif primitive in ["opaque_triangle"]:
         _FullyFusedProjection = _FullyFusedProjectionOpaqueTriangleHetero
