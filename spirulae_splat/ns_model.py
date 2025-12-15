@@ -370,8 +370,8 @@ class SpirulaeModel(Model):
         opacity_init = 0.5 if self.config.use_mcmc else 0.1  # per original papers
         if self.config.use_mcmc and self.config.mcmc_max_screen_size < 1.0:
             scale_init, opacity_init = 0.5, 0.1
-        # if self.config.train_background_color:
-        #     scale_init, opacity_init = 1.0, 0.1
+        if self.config.train_background_color or self.config.randomize_background:
+            scale_init, opacity_init = 1.0, 0.1
 
         if self.config.primitive in ["voxel"]:
             means_mean, means_std = torch.mean(means, 0), torch.std(means, 0)

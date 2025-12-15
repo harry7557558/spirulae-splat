@@ -91,6 +91,24 @@ __device__ bool getAABB(
     return isfinite(dot(aabb_min, aabb_max));
 }
 
+template<bool remap>
+__device__ bool getAABB(
+    const VoxelPrimitive::World::Buffer& splatBuffer, long idx,
+    float3 &aabb_min, float3 &aabb_max, float rel_scale = 1.0f
+) {
+    float4 pos_size = splatBuffer.pos_size[idx];
+    float x = pos_size.x, y = pos_size.y, z = pos_size.z, s = pos_size.w;
+
+    aabb_min = { x, y, z };
+    aabb_max = { x+s, y+s, z+s };
+
+    if (remap) {
+        aabb_min = remapAABB(aabb_min, rel_scale);
+        aabb_max = remapAABB(aabb_max, rel_scale);
+    }
+    return isfinite(dot(aabb_min, aabb_max));
+}
+
 
 template<gsplat::CameraModelType camera_model>
 struct Tile {
@@ -173,6 +191,18 @@ struct Tile {
 
     __device__ __forceinline__ float isOverlap(const OpaqueTriangle::World::Buffer& splatBuffer, long idx) const {
         // TODO: primitive aware version with less false positives
+        float3 aabb_min, aabb_max;
+        bool valid_aabb = getAABB<false>(splatBuffer, idx, aabb_min, aabb_max);
+        if (!valid_aabb || !isOverlap(aabb_min, aabb_max))
+            return -1.0f;
+        float3 mean_ = 0.5f * (aabb_min + aabb_max);
+        glm::vec3 mean(mean_.x, mean_.y, mean_.z);
+        return camera_model != gsplat::CameraModelType::PINHOLE ?
+            glm::length(mean - ro) :
+            glm::dot(mean - ro, rd);  // negative if center is behind
+    }
+
+    __device__ __forceinline__ float isOverlap(const VoxelPrimitive::World::Buffer& splatBuffer, long idx) const {
         float3 aabb_min, aabb_max;
         bool valid_aabb = getAABB<false>(splatBuffer, idx, aabb_min, aabb_max);
         if (!valid_aabb || !isOverlap(aabb_min, aabb_max))
@@ -1527,7 +1557,6 @@ intersect_splat_tile_3dgs(
     }
     else
         throw std::runtime_error("Unsupported camera model");
-
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
@@ -1557,5 +1586,33 @@ intersect_splat_tile_opaque_triangle(
     }
     else
         throw std::runtime_error("Unsupported camera model");
+}
 
+std::tuple<torch::Tensor, torch::Tensor>
+intersect_splat_tile_voxel(
+    VoxelPrimitive::World::TensorTuple splats_tuple,
+    unsigned width,
+    unsigned height,
+    const torch::Tensor& viewmats,
+    const torch::Tensor& Ks,
+    const gsplat::CameraModelType& camera_model,
+    const CameraDistortionCoeffsTensor& dist_coeffs,
+    float rel_scale
+) {
+    VoxelPrimitive::World::Tensor splats_tensor(splats_tuple);
+
+    if (camera_model == gsplat::CameraModelType::PINHOLE) {
+        TileBuffers<gsplat::CameraModelType::PINHOLE> tile_buffers =
+            {width, height, viewmats, Ks, dist_coeffs};
+        return SplatTileIntersector<VoxelPrimitive, gsplat::CameraModelType::PINHOLE>
+            (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
+    }
+    else if (camera_model == gsplat::CameraModelType::FISHEYE) {
+        TileBuffers<gsplat::CameraModelType::FISHEYE> tile_buffers =
+            {width, height, viewmats, Ks, dist_coeffs};
+        return SplatTileIntersector<VoxelPrimitive, gsplat::CameraModelType::FISHEYE>
+            (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
+    }
+    else
+        throw std::runtime_error("Unsupported camera model");
 }

@@ -348,16 +348,27 @@ struct VoxelPrimitive::Screen {
             return std::make_tuple(depths, rgbs);
         }
 
+        TensorTuple tupleProjFwdPacked() const {
+            return std::make_tuple(pos_size, depths, densities, rgbs);
+        }
+
         TensorTuple tupleRasterBwd() const {
             return std::make_tuple(pos_size, depths, densities, rgbs);
         }
 
-        static Tensor allocProjFwd(long C, long N, c10::TensorOptions opt) {
+        static TensorTupleProj allocProjFwd(long C, long N, c10::TensorOptions opt) {
+            return std::make_tuple(
+                (std::optional<at::Tensor>)at::empty({C, N}, opt),
+                at::empty({C, N, 3}, opt)
+            );
+        }
+
+        static TensorTuple allocProjFwdPacked(long N, c10::TensorOptions opt) {
             return std::make_tuple(
                 (std::optional<at::Tensor>)at::empty({N, 4}, opt),
-                (std::optional<at::Tensor>)(C == -1 ? at::empty({N}, opt) : at::empty({C, N}, opt)),
+                (std::optional<at::Tensor>)at::empty({N}, opt),
                 (std::optional<at::Tensor>)at::empty({N, 8}, opt),
-                C == -1 ? at::empty({N, 3}, opt) : at::empty({C, N, 3}, opt)
+                at::empty({N, 3}, opt)
             );
         }
 
@@ -421,8 +432,8 @@ struct VoxelPrimitive::Screen {
     static __device__ Screen load(const Buffer &buffer, long idx) {
         long idx0 = idx % buffer.size;
         float4 pos_size = buffer.pos_size ? buffer.pos_size[idx0] : make_float4(0, 0, 0, 0);
-        float4 d0 = buffer.densities[2*idx0],
-            d1 = buffer.densities[2*idx0+1];
+        float4 d0 = buffer.densities ? buffer.densities[2*idx0] : make_float4(0, 0, 0, 0),
+            d1 = buffer.densities ? buffer.densities[2*idx0+1] : make_float4(0, 0, 0, 0);
         return {
             {pos_size.x, pos_size.y, pos_size.z},
             pos_size.w,
@@ -540,6 +551,7 @@ inline __device__ void VoxelPrimitive::project_persp(
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &proj.depth, &proj.rgb
     );
+    proj.pos = world.pos, proj.size = world.size, proj.densities = world.densities;
 }
 
 inline __device__ void VoxelPrimitive::project_fisheye(
@@ -552,6 +564,7 @@ inline __device__ void VoxelPrimitive::project_fisheye(
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &proj.depth, &proj.rgb
     );
+    proj.pos = world.pos, proj.size = world.size, proj.densities = world.densities;
 }
 
 inline __device__ void VoxelPrimitive::project_persp_vjp(
@@ -567,6 +580,7 @@ inline __device__ void VoxelPrimitive::project_persp_vjp(
         &v_world.densities, &v_world.sh_coeffs,
         &v_R, &v_t
     );
+    v_world.pos = v_proj.pos, v_world.size = v_proj.size, v_world.densities = v_proj.densities;
 }
 
 inline __device__ void VoxelPrimitive::project_fisheye_vjp(
@@ -582,6 +596,7 @@ inline __device__ void VoxelPrimitive::project_fisheye_vjp(
         &v_world.densities, &v_world.sh_coeffs,
         &v_R, &v_t
     );
+    v_world.pos = v_proj.pos, v_world.size = v_proj.size, v_world.densities = v_proj.densities;
 }
 
 #endif  // #ifdef __CUDACC__

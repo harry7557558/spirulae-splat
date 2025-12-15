@@ -513,34 +513,54 @@ bool unproject_point(
 [CudaDeviceExport]
 [Differentiable]
 bool generate_ray(
-    float3x3 R, float3 t, no_diff float2 uv, bool is_fisheye,
+    no_diff float2 uv, bool is_fisheye,
     no_diff float[10] dist_coeffs,
-    out float3 ray_o, out float3 ray_d
+    out float3 raydir
 ) {
-    ray_o = -mul(t, R);
-
     if (!no_diff undistort_point(uv, dist_coeffs, 8, uv))
-        return false;
-    float3 raydir = is_fisheye ? fisheye_unproj(uv) : float3(uv, 1.0);
-    ray_d = normalize(mul(raydir, R));
+        { raydir = float3(0); return false; }
+    raydir = is_fisheye ? fisheye_unproj(uv) : float3(uv, 1.0);
+    raydir = normalize(raydir);
     return true;
 }
 
 [CudaDeviceExport]
-void generate_ray_vjp(
-    float3x3 R, float3 t, no_diff float2 uv, bool is_fisheye,
-    no_diff float[10] dist_coeffs,
-    float3 v_ray_o, float3 v_ray_d,
+[Differentiable]
+float3 transform_ray_o(float3x3 R, float3 t) {
+    return -mul(t, R);
+}
+
+[CudaDeviceExport]
+[Differentiable]
+float3 transform_ray_d(float3x3 R, float3 raydir) {
+    return mul(raydir, R);
+}
+
+[CudaDeviceExport]
+void transform_ray_o_vjp(
+    float3x3 R, float3 t, float3 v_ray_o,
     out float3x3 v_R, out float3 v_t
 ) {
     DifferentialPair<float3x3> dp_R = diffPair(R);
     DifferentialPair<float3> dp_t = diffPair(t);
-    bwd_diff(generate_ray)(
-        dp_R, dp_t, uv, is_fisheye, dist_coeffs,
-        v_ray_o, v_ray_d
-    );
+    bwd_diff(transform_ray_o)(dp_R, dp_t, v_ray_o);
     v_R = dp_R.d;
     v_t = dp_t.d;
+}
+
+[CudaDeviceExport]
+void transform_ray_d_vjp(
+    float3x3 R, float3 raydir, float3 v_ray_d,
+    out float3x3 v_R, out float3 v_raydir
+) {
+    DifferentialPair<float3x3> dp_R = diffPair(R);
+    DifferentialPair<float3> dp_raydir = diffPair(raydir);
+    bwd_diff(transform_ray_d)(
+        dp_R, dp_raydir,
+        v_ray_d
+    );
+    v_R = dp_R.d;
+    v_raydir = dp_raydir.d;
 }
 
 [CudaDeviceExport]

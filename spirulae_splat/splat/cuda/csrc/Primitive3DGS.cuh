@@ -375,18 +375,35 @@ struct _Base3DGS<antialiased>::Screen {
             return std::make_tuple(means2d, depths, conics, opacities, rgbs);
         }
 
+        TensorTuple tupleProjFwdPacked() const {
+            return std::make_tuple(
+                means2d, depths, conics, opacities, rgbs,
+                (std::optional<at::Tensor>)at::nullopt
+            );
+        }
+
         TensorTuple tupleRasterBwd() const {
             return std::make_tuple(means2d, depths, conics, opacities, rgbs, absgrad);
         }
 
-        static Tensor allocProjFwd(long C, long N, c10::TensorOptions opt) {
+        static TensorTupleProj allocProjFwd(long C, long N, c10::TensorOptions opt) {
             return std::make_tuple(
                 at::empty({C, N, 2}, opt),
                 at::empty({C, N}, opt),
                 at::empty({C, N, 3}, opt),
                 at::empty({C, N}, opt),
-                at::empty({C, N, 3}, opt),
-                (std::optional<at::Tensor>)std::nullopt
+                at::empty({C, N, 3}, opt)
+            );
+        }
+
+        static TensorTuple allocProjFwdPacked(long N, c10::TensorOptions opt) {
+            return std::make_tuple(
+                at::empty({N, 2}, opt),
+                at::empty({N}, opt),
+                at::empty({N, 3}, opt),
+                at::empty({N}, opt),
+                at::empty({N, 3}, opt),
+                (std::optional<at::Tensor>)at::nullopt
             );
         }
 

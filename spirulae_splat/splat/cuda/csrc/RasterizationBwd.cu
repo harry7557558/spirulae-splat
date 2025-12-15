@@ -19,7 +19,6 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const uint32_t I,
     const uint32_t N,
     const uint32_t n_isects,
-    const bool packed,
     // fwd inputs
     typename SplatPrimitive::Screen::Buffer splat_buffer,
     const float *__restrict__ backgrounds, // [..., CDIM] or [nnz, CDIM]
@@ -272,7 +271,6 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
             I,
             N,
             n_isects,
-            packed,
             splats.buffer(),
             backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
                                     : nullptr,

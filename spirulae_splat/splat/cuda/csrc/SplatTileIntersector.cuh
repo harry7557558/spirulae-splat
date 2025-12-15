@@ -7,6 +7,7 @@
 
 #include "Primitive3DGS.cuh"
 #include "PrimitiveOpaqueTriangle.cuh"
+#include "PrimitiveVoxel.cuh"
 
 #include "common.cuh"
 #include "types.cuh"
@@ -81,6 +82,18 @@ intersect_splat_tile_3dgs(
 std::tuple<torch::Tensor, torch::Tensor>
 intersect_splat_tile_opaque_triangle(
     OpaqueTriangle::World::TensorTuple splats_tuple,
+    unsigned width,
+    unsigned height,
+    const torch::Tensor& viewmats,
+    const torch::Tensor& Ks,
+    const gsplat::CameraModelType& camera_model,
+    const CameraDistortionCoeffsTensor& dist_coeffs,
+    float rel_scale
+);
+
+std::tuple<torch::Tensor, torch::Tensor>
+intersect_splat_tile_voxel(
+    VoxelPrimitive::World::TensorTuple splats_tuple,
     unsigned width,
     unsigned height,
     const torch::Tensor& viewmats,

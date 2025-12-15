@@ -88,7 +88,6 @@ def rasterize_to_pixels(
         _RasterizeToPixels = _RasterizeToPixels3DGUT
     elif primitive in ["opaque_triangle"]:
         _RasterizeToPixels = _RasterizeToPixelsOpaqueTriangle
-        print([x.shape for x in splats])
     elif primitive in ["voxel"]:
         _RasterizeToPixels = _RasterizeToPixelsVoxelEval3D
 

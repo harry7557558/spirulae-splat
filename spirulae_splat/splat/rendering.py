@@ -379,18 +379,7 @@ def rasterization(
         (camera_ids, gaussian_ids, aabb_xyxy, depths, proj_splats) = proj_results
         batch_ids, image_ids = 0, camera_ids
     elif packed:
-        # The results are packed into shape [nnz, ...]. All elements are valid.
-        (
-            batch_ids,
-            camera_ids,
-            gaussian_ids,
-            radii,
-            means2d,
-            depths,
-            conics,
-            proj_opacities,
-        ) = proj_results
-        image_ids = batch_ids * C + camera_ids
+        raise NotImplementedError()
     else:
         # The results are with shape [..., C, N, ...]. Only the elements with radii > 0 are valid.
         aabb_xyxy, depths, proj_splats = proj_results

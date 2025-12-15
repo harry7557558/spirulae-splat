@@ -418,17 +418,30 @@ struct OpaqueTriangle::Screen {
             return std::make_tuple(depths, verts, rgbs, normals);
         }
 
+        TensorTuple tupleProjFwdPacked() const {
+            return std::make_tuple(hardness, depths, verts, rgbs, normals);
+        }
+
         TensorTuple tupleRasterBwd() const {
             return std::make_tuple(hardness, depths, verts, rgbs, normals);
         }
 
-        static Tensor allocProjFwd(long C, long N, c10::TensorOptions opt) {
+        static TensorTupleProj allocProjFwd(long C, long N, c10::TensorOptions opt) {
+            return std::make_tuple(
+                at::empty({C, N}, opt),
+                at::empty({C, N, 3, 3}, opt),
+                at::empty({C, N, 3, 3}, opt),
+                at::empty({C, N, 3}, opt)
+            );
+        }
+
+        static TensorTuple allocProjFwdPacked(long N, c10::TensorOptions opt) {
             return std::make_tuple(
                 at::empty({N, 2}, opt),
-                C == -1 ? at::empty({N}, opt) : at::empty({C, N}, opt),
-                C == -1 ? at::empty({N, 3, 3}, opt) : at::empty({C, N, 3, 3}, opt),
-                C == -1 ? at::empty({N, 3, 3}, opt) : at::empty({C, N, 3, 3}, opt),
-                C == -1 ? at::empty({N, 3}, opt) : at::empty({C, N, 3}, opt)
+                at::empty({N}, opt),
+                at::empty({N, 3, 3}, opt),
+                at::empty({N, 3, 3}, opt),
+                at::empty({N, 3}, opt)
             );
         }
 
@@ -613,6 +626,7 @@ inline __device__ void OpaqueTriangle::project_persp(
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &proj.depth, &proj.verts, &proj.rgbs, &proj.normal
     );
+    proj.hardness = world.hardness;
 }
 
 inline __device__ void OpaqueTriangle::project_fisheye(
@@ -625,6 +639,7 @@ inline __device__ void OpaqueTriangle::project_fisheye(
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &proj.depth, &proj.verts, &proj.rgbs, &proj.normal
     );
+    proj.hardness = world.hardness;
 }
 
 inline __device__ void OpaqueTriangle::project_persp_vjp(
@@ -640,6 +655,7 @@ inline __device__ void OpaqueTriangle::project_persp_vjp(
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.hardness, &v_world.sh_coeffs, &v_world.ch_coeffs,
         &v_R, &v_t
     );
+    v_world.hardness = v_proj.hardness;
 }
 
 inline __device__ void OpaqueTriangle::project_fisheye_vjp(
@@ -655,6 +671,7 @@ inline __device__ void OpaqueTriangle::project_fisheye_vjp(
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.hardness, &v_world.sh_coeffs, &v_world.ch_coeffs,
         &v_R, &v_t
     );
+    v_world.hardness = v_proj.hardness;
 }
 
 #endif  // #ifdef __CUDACC__

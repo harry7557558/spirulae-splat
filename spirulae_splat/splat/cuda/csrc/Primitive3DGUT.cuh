@@ -367,18 +367,31 @@ struct Vanilla3DGUT::Screen {
             return std::make_tuple(depths, scales, opacities, rgbs);
         }
 
+        TensorTuple tupleProjFwdPacked() const {
+            return std::make_tuple(means, quats, depths, scales, opacities, rgbs);
+        }
+
         TensorTuple tupleRasterBwd() const {
             return std::make_tuple(means, quats, depths, scales, opacities, rgbs);
         }
 
-        static Tensor allocProjFwd(long C, long N, c10::TensorOptions opt) {
+        static TensorTupleProj allocProjFwd(long C, long N, c10::TensorOptions opt) {
             return std::make_tuple(
-                at::empty({N, 3}, opt),
-                at::empty({N, 4}, opt),
-                C == -1 ? at::empty({N}, opt) : at::empty({C, N}, opt),
-                C == -1 ? at::empty({N, 3}, opt) : at::empty({C, N, 3}, opt),
-                C == -1 ? at::empty({N}, opt) : at::empty({C, N}, opt),
-                C == -1 ? at::empty({N, 3}, opt) : at::empty({C, N, 3}, opt)
+                at::empty({C, N}, opt),
+                at::empty({C, N, 3}, opt),
+                at::empty({C, N}, opt),
+                at::empty({C, N, 3}, opt)
+            );
+        }
+
+        static TensorTuple allocProjFwdPacked(long nnz, c10::TensorOptions opt) {
+            return std::make_tuple(
+                at::empty({nnz, 3}, opt),
+                at::empty({nnz, 4}, opt),
+                at::empty({nnz}, opt),
+                at::empty({nnz, 3}, opt),
+                at::empty({nnz}, opt),
+                at::empty({nnz, 3}, opt)
             );
         }
 
@@ -403,15 +416,15 @@ struct Vanilla3DGUT::Screen {
             return rgbs.dim() == 2;
         }
         long size() const {
-            return rgbs.numel() / 3;
+            return rgbs.size(-2);
         }
 
         Buffer buffer() { return Buffer(*this); }
     };
 
     struct Buffer {
-        float3* __restrict__ means = nullptr;
-        float4* __restrict__ quats = nullptr;
+        float3* __restrict__ means;
+        float4* __restrict__ quats;
         float* __restrict__ depths;
         float3* __restrict__ scales;
         float* __restrict__ opacities;
@@ -425,7 +438,7 @@ struct Vanilla3DGUT::Screen {
                 CHECK_INPUT(tensors.quats);
                 means = (float3*)tensors.means.data_ptr<float>();
                 quats = (float4*)tensors.quats.data_ptr<float>();
-            }
+            } else { means = nullptr; quats = nullptr; };
             CHECK_INPUT(tensors.depths);
             CHECK_INPUT(tensors.scales);
             CHECK_INPUT(tensors.opacities);
@@ -561,6 +574,7 @@ inline __device__ void Vanilla3DGUT::project_persp(
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &xy, &proj.depth, &proj.scale, &proj.opacity, &proj.rgb
     );
+    proj.mean = world.mean, proj.quat = world.quat;
 }
 
 inline __device__ void Vanilla3DGUT::project_fisheye(
@@ -575,6 +589,7 @@ inline __device__ void Vanilla3DGUT::project_fisheye(
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &xy, &proj.depth, &proj.scale, &proj.opacity, &proj.rgb
     );
+    proj.mean = world.mean, proj.quat = world.quat;
 }
 
 inline __device__ void Vanilla3DGUT::project_persp_vjp(
@@ -591,6 +606,7 @@ inline __device__ void Vanilla3DGUT::project_persp_vjp(
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
         &v_R, &v_t
     );
+    v_world.mean = v_proj.mean, v_world.quat = v_proj.quat;
 }
 
 inline __device__ void Vanilla3DGUT::project_fisheye_vjp(
@@ -607,6 +623,7 @@ inline __device__ void Vanilla3DGUT::project_fisheye_vjp(
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
         &v_R, &v_t
     );
+    v_world.mean = v_proj.mean, v_world.quat = v_proj.quat;
 }
 
 #endif  // #ifdef __CUDACC__

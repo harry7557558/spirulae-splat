@@ -131,6 +131,17 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
     uint pix_id_image_global = image_id * image_height * image_width + pix_id_global;
     bool inside = (pix_x < image_width && pix_y < image_height);
 
+    const float px = (float)pix_x + 0.5f;
+    const float py = (float)pix_y + 0.5f;
+    float3 raydir;
+    inside &= generate_ray(
+        {(px-cx)/fx, (py-cy)/fy},
+        camera_model == gsplat::CameraModelType::FISHEYE, &dist_coeffs,
+        &raydir
+    );
+    float3 ray_o = transform_ray_o(R, t);
+    float3 ray_d = transform_ray_d(R, raydir);
+
     float2 pix_Ts_with_grad = {
         (inside ? render_Ts[pix_id_global] : 0.0f),
         (inside ? -v_render_alphas[pix_id_global] : 0.0f)
@@ -139,15 +150,6 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
             SplatPrimitive::RenderOutput::load(v_render_output_buffer, pix_id_image_global)
              : SplatPrimitive::RenderOutput::zero());
     // float pix_background[CDIM];  // TODO
-
-    const float px = (float)pix_x + 0.5f;
-    const float py = (float)pix_y + 0.5f;
-    float3 ray_o, ray_d;
-    generate_ray(
-        R, t, {(px-cx)/fx, (py-cy)/fy},
-        camera_model == gsplat::CameraModelType::FISHEYE, &dist_coeffs,
-        &ray_o, &ray_d
-    );
 
     typename SplatPrimitive::RenderOutput pix_colors;
     typename SplatPrimitive::RenderOutput pix2_colors;

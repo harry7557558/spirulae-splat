@@ -64,6 +64,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // SplatTileIntersector.cuh
     m.def("intersect_splat_tile_3dgs", &intersect_splat_tile_3dgs);
     m.def("intersect_splat_tile_opaque_triangle", &intersect_splat_tile_opaque_triangle);
+    m.def("intersect_splat_tile_voxel", &intersect_splat_tile_voxel);
 
     // SVHash.cuh
     m.def("svhash_create_initial_volume", &svhashCreateInitialVolume);
@@ -85,6 +86,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // ProjectionEWA3DGSHetero.cuh
     m.def("projection_3dgs_hetero_forward", &projection_3dgs_hetero_forward_tensor);
     m.def("projection_3dgs_hetero_backward", &projection_3dgs_hetero_backward_tensor);
+    m.def("projection_mip_hetero_forward", &projection_mip_hetero_forward_tensor);
+    m.def("projection_mip_hetero_backward", &projection_mip_hetero_backward_tensor);
+    m.def("projection_3dgut_hetero_forward", &projection_3dgut_hetero_forward_tensor);
+    m.def("projection_3dgut_hetero_backward", &projection_3dgut_hetero_backward_tensor);
     m.def("projection_opaque_triangle_hetero_forward", &projection_opaque_triangle_hetero_forward_tensor);
     m.def("projection_opaque_triangle_hetero_backward", &projection_opaque_triangle_hetero_backward_tensor);
 

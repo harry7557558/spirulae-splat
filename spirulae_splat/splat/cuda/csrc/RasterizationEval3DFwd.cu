@@ -70,17 +70,17 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
     CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(image_id);
 
-    float3 ray_o; float3 ray_d;
-    generate_ray(
-        R, t, {(px-cx)/fx, (py-cy)/fy},
-        camera_model == gsplat::CameraModelType::FISHEYE, &dist_coeffs,
-        &ray_o, &ray_d
-    );
+    bool inside = (i < image_height && j < image_width);
 
-    // return if out of bounds
-    // keep not rasterizing threads around for reading data
-    bool inside = (i < image_height && j < image_width)
-        && dot(ray_d, ray_d) > 0.0f;
+    float3 raydir;
+    inside &= generate_ray(
+        {(px-cx)/fx, (py-cy)/fy},
+        camera_model == gsplat::CameraModelType::FISHEYE, &dist_coeffs,
+        &raydir
+    );
+    float3 ray_o = transform_ray_o(R, t);
+    float3 ray_d = transform_ray_d(R, raydir);
+
     bool done = !inside;
 
     // have all threads in tile process the same gaussians in batches

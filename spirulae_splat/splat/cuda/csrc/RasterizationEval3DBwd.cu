@@ -91,7 +91,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     __shared__ typename SplatPrimitive::RenderOutput pix2_colors[output_distortion ? BLOCK_SIZE : 1];
     __shared__ typename SplatPrimitive::RenderOutput v_distortion_out[output_distortion ? BLOCK_SIZE : 1];
 
-    float3 ray_o;
+    float3 ray_o = transform_ray_o(R, t);
 
     constexpr uint SPLAT_BATCH_SIZE = output_distortion ?
         SPLAT_BATCH_SIZE_WITH_DISTORTION : SPLAT_BATCH_SIZE_NO_DISTORTION;
@@ -117,12 +117,13 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
 
         const float px = (float)pix_x + 0.5f;
         const float py = (float)pix_y + 0.5f;
-        float3 ray_d;
-        generate_ray(
-            R, t, {(px-cx)/fx, (py-cy)/fy},
+        float3 raydir;
+        inside &= generate_ray(
+            {(px-cx)/fx, (py-cy)/fy},
             camera_model == gsplat::CameraModelType::FISHEYE, &dist_coeffs,
-            &ray_o, &ray_d
+            &raydir
         );
+        float3 ray_d = transform_ray_d(R, raydir);
         shared_ray_d_pix_bin_final[pix_id_local] =
             {ray_d.x, ray_d.y, ray_d.z, __int_as_float(bin_final)};
 

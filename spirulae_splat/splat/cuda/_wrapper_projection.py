@@ -380,37 +380,21 @@ def fully_fused_projection_hetero(
     camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
     dist_coeffs: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-    # if primitive in ["3dgs", "mip"]:
-    if primitive in ["3dgs", "mip", "3dgut", "opaque_triangle"]:
-        if primitive in ["3dgs", "mip", "3dgut"]:
-            means, quats, scales, opacities, features_dc, features_sh = splats
-        else:
-            means, quats, scales, opacities, features_dc, features_sh, features_ch = splats
-        batch_dims = means.shape[:-2]
-        batch_dims = means.shape[:-2]
-        N = means.shape[-2]
-        C = viewmats.shape[-3]
-        assert means.shape == batch_dims + (N, 3), means.shape
-        assert quats.shape == batch_dims + (N, 4), quats.shape
-        assert scales.shape == batch_dims + (N, 3), scales.shape
-        if primitive in ["3dgs", "mip", "3dgut"]:
-            assert opacities.shape == batch_dims + (N,), opacities.shape
-        else:
-            assert opacities.shape == batch_dims + (N, 2), opacities.shape
-            assert features_ch.shape == batch_dims + (N, 2, 3), features_ch.shape
-        assert features_dc.shape == batch_dims + (N, 3), features_dc.shape
+    batch_dims = splats[0].shape[:-2]
+    C = viewmats.shape[-3]
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
     if sparse_grad:
         assert batch_dims == (), "sparse_grad does not support batch dimensions"
 
+    in_splats = [x.contiguous() for x in splats]
     additional_args = []
     if primitive in ["3dgs", "mip", "3dgut"]:
         _FullyFusedProjection = _FullyFusedProjection3DGSHetero
+        in_splats = [primitive] + in_splats
     elif primitive in ["opaque_triangle"]:
         _FullyFusedProjection = _FullyFusedProjectionOpaqueTriangleHetero
-    in_splats = [x.contiguous() for x in splats]
-    proj_return = _FullyFusedProjection.apply(
+    proj_returns = _FullyFusedProjection.apply(
         *in_splats,
         viewmats.contiguous(), Ks.contiguous(),
         image_width, image_height, tile_width, tile_height,
@@ -419,17 +403,22 @@ def fully_fused_projection_hetero(
         intersection_count_map.contiguous(), intersection_splat_id.contiguous(),
         *additional_args
     )
-    splat_ids = proj_return[1]
-    depths = proj_return[3]
-    # out_splats = (*in_splats, *proj_return[3:])
-    out_splats = (*[x[splat_ids] for x in in_splats], *proj_return[3:])
-    return (
-        proj_return[0],  # camera_ids
-        splat_ids,  # splat_ids
-        proj_return[2],  # aabb
-        depths,  # depth
-        out_splats
-    )
+
+    if primitive in ["3dgs", "mip"]:
+        means2d, depths, conics, opacities, rgbs, absgrad = proj_returns[3:]
+        return *proj_returns[:3], depths, (means2d, depths, conics, opacities, rgbs)
+    elif primitive in ['3dgut']:
+        means, quats, depths, scales, opacities, rgbs = proj_returns[3:]
+        return *proj_returns[:3], depths, (means, quats, depths, scales, opacities, rgbs)
+    elif primitive in ['opaque_triangle']:
+        hardness, depths, verts, rgbs, normals = proj_returns[3:]
+        return *proj_returns[:3], depths, (hardness, depths, verts, rgbs, normals)
+    elif primitive in ['voxel']:
+        pos_sizes, densities, features_dc, features_sh = splats
+        depths, rgbs = proj_returns[3:]
+        return *proj_returns[:3], depths, (pos_sizes, densities, rgbs)
+    else:
+        raise NotImplementedError()
 
 
 class _FullyFusedProjection3DGSHetero(torch.autograd.Function):
@@ -438,6 +427,7 @@ class _FullyFusedProjection3DGSHetero(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
+        primitive: Literal["3dgs", "mip", "3dgut"],
         means: Tensor,  # [..., N, 3]
         quats: Tensor,  # [..., N, 4]
         scales: Tensor,  # [..., N, 3]
@@ -462,9 +452,8 @@ class _FullyFusedProjection3DGSHetero(torch.autograd.Function):
         )
 
         (
-            camera_ids, gaussian_ids, aabb,
-            (depths, proj_scales, proj_opacities, proj_rgbs)
-        ) = _make_lazy_cuda_func("projection_3dgs_hetero_forward")(
+            camera_ids, gaussian_ids, aabb, proj_returns
+        ) = _make_lazy_cuda_func(f"projection_{primitive}_hetero_forward")(
             (means, quats, scales, opacities, features_dc, features_sh),
             viewmats, Ks, image_width, image_height, tile_width, tile_height,
             near_plane, far_plane, camera_model_type, dist_coeffs,
@@ -475,9 +464,10 @@ class _FullyFusedProjection3DGSHetero(torch.autograd.Function):
             viewmats, Ks, dist_coeffs, aabb,
             camera_ids, gaussian_ids
         )
+        ctx.primitive = primitive
         ctx.camera = (image_width, image_height, tile_width, tile_height, camera_model_type)
 
-        return camera_ids, gaussian_ids, aabb, depths, proj_scales, proj_opacities, proj_rgbs
+        return camera_ids, gaussian_ids, aabb, *proj_returns
 
     @staticmethod
     def backward(
@@ -485,10 +475,7 @@ class _FullyFusedProjection3DGSHetero(torch.autograd.Function):
         v_camera_ids,
         v_gaussian_ids,
         v_aabb,
-        v_depths,
-        v_proj_scales,
-        v_proj_opacities,
-        v_proj_rgbs,
+        *v_proj_returns,
     ):
         (
             means, quats, scales, opacities, features_dc, features_sh,
@@ -496,38 +483,22 @@ class _FullyFusedProjection3DGSHetero(torch.autograd.Function):
             camera_ids, gaussian_ids
         ) = ctx.saved_tensors
         (image_width, image_height, tile_width, tile_height, camera_model_type) = ctx.camera
-        sparse_grad = False
 
         (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh), v_viewmats = _make_lazy_cuda_func(
-            "projection_3dgs_hetero_backward"
+            f"projection_{ctx.primitive}_hetero_backward"
         )(
             (means, quats, scales, opacities, features_dc, features_sh),
             viewmats, Ks, image_width, image_height, tile_width, tile_height, camera_model_type, dist_coeffs,
             camera_ids, gaussian_ids, aabb,
-            tuple([x.contiguous() for x in (v_depths, v_proj_scales, v_proj_opacities, v_proj_rgbs)]),
-            ctx.needs_input_grad[6], sparse_grad,
+            tuple([(x.contiguous() if isinstance(x, torch.Tensor) else None) for x in v_proj_returns]),
+            ctx.needs_input_grad[7], False,
         )
 
-        if sparse_grad:
-            batch_dims = means.shape[:-2]
-            B = math.prod(batch_dims)
-            N = means.shape[-2]
-        if ctx.needs_input_grad[0] and sparse_grad:
-            # TODO: gaussian_ids is duplicated so not ideal.
-            # An idea is to directly set the attribute (e.g., .sparse_grad) of
-            # the tensor but this requires the tensor to be leaf node only. And
-            # a customized optimizer would be needed in this case.
-            v_means = torch.sparse_coo_tensor(
-                indices=gaussian_ids[None],
-                values=v_means,  # [nnz, 3]
-                size=means.shape,
-                is_coalesced=len(viewmats) == 1,
-            )
-
         return (
+            None,
             v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh,
             v_viewmats,
-            *([None]*(len(ctx.needs_input_grad)-7))
+            *([None]*(len(ctx.needs_input_grad)-8))
         )
 
 
@@ -563,8 +534,7 @@ class _FullyFusedProjectionOpaqueTriangleHetero(torch.autograd.Function):
         )
 
         (
-            camera_ids, gaussian_ids, aabb,
-            (depths, verts, rgbs, normals)
+            camera_ids, gaussian_ids, aabb, proj_returns
         ) = _make_lazy_cuda_func(
             "projection_opaque_triangle_hetero_forward"
         )(
@@ -580,13 +550,13 @@ class _FullyFusedProjectionOpaqueTriangleHetero(torch.autograd.Function):
         )
         ctx.camera = (image_width, image_height, tile_width, tile_height, camera_model_type)
 
-        return camera_ids, gaussian_ids, aabb, depths, verts, rgbs, normals
+        return camera_ids, gaussian_ids, aabb, *proj_returns
 
     @staticmethod
-    def backward(ctx, v_camera_ids, v_gaussian_ids, v_aabb, v_depths, v_verts, v_rgbs, v_normals):
+    def backward(ctx, v_camera_ids, v_gaussian_ids, v_aabb, *v_proj_returns):
         (
             means, quats, scales, hardness, features_dc, features_sh, features_ch,
-            viewmats, Ks, dist_coeffs, aabb, 
+            viewmats, Ks, dist_coeffs, aabb,
             camera_ids, gaussian_ids
         ) = ctx.saved_tensors
         (image_width, image_height, tile_width, tile_height, camera_model_type) = ctx.camera
@@ -598,7 +568,7 @@ class _FullyFusedProjectionOpaqueTriangleHetero(torch.autograd.Function):
             (means, quats, scales, hardness, features_dc, features_sh, features_ch),
             viewmats, Ks, image_width, image_height, tile_width, tile_height, camera_model_type, dist_coeffs,
             camera_ids, gaussian_ids, aabb,
-            tuple([x.contiguous() for x in (v_depths, v_verts, v_rgbs, v_normals)]),
+            tuple([(x.contiguous() if isinstance(x, torch.Tensor) else None) for x in v_proj_returns]),
             ctx.needs_input_grad[7], sparse_grad,
         )
         if not ctx.needs_input_grad[7]:
@@ -613,7 +583,7 @@ class _FullyFusedProjectionOpaqueTriangleHetero(torch.autograd.Function):
 
 @torch.no_grad()
 def intersect_splat_tile(
-    primitive: Literal["3dgs", "mip", "3dgut", "opaque_triangle"],
+    primitive: Literal["3dgs", "mip", "3dgut", "opaque_triangle", "voxel"],
     splats: Tuple,
     width: int,
     height: int,
@@ -632,6 +602,7 @@ def intersect_splat_tile(
             'mip': '3dgs',
             '3dgut': '3dgs',
             'opaque_triangle': 'opaque_triangle',
+            'voxel': 'voxel',
         }[primitive]
     )(
         splats,
