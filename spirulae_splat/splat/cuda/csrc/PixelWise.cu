@@ -83,10 +83,10 @@ __global__ void blend_background_backward_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-torch::Tensor blend_background_forward_tensor(
-    torch::Tensor &rgb,  // [B, H, W, 3]
-    torch::Tensor &alpha,  // [B, H, W, 1]
-    torch::Tensor &background  // [B, H, W, 3]
+at::Tensor blend_background_forward_tensor(
+    at::Tensor &rgb,  // [B, H, W, 3]
+    at::Tensor &alpha,  // [B, H, W, 1]
+    at::Tensor &background  // [B, H, W, 3]
 ) {
     DEVICE_GUARD(rgb);
     CHECK_CUDA(rgb);
@@ -101,7 +101,7 @@ torch::Tensor blend_background_forward_tensor(
     if (background.ndimension() != 4 || background.size(0) != b || background.size(1) != h || background.size(2) != w || background.size(3) != 3)
         AT_ERROR("background shape must be (b, h, w, 3)");
 
-    torch::Tensor out_rgb = torch::empty({b, h, w, 3}, rgb.options());
+    at::Tensor out_rgb = at::empty({b, h, w, 3}, rgb.options());
 
     blend_background_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
         tensor2view<float, 4>(rgb), tensor2view<float, 4>(alpha), tensor2view<float, 4>(background),
@@ -114,12 +114,12 @@ torch::Tensor blend_background_forward_tensor(
 
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor>
 blend_background_backward_tensor(
-    torch::Tensor &rgb,  // [B, H, W, 3]
-    torch::Tensor &alpha,  // [B, H, W, 1]
-    torch::Tensor &background,  // [B, H, W, 3]
-    torch::Tensor &v_out_rgb  // [B, H, W, 3]
+    at::Tensor &rgb,  // [B, H, W, 3]
+    at::Tensor &alpha,  // [B, H, W, 1]
+    at::Tensor &background,  // [B, H, W, 3]
+    at::Tensor &v_out_rgb  // [B, H, W, 3]
 ) {
     DEVICE_GUARD(rgb);
     CHECK_CUDA(rgb);
@@ -129,9 +129,9 @@ blend_background_backward_tensor(
 
     long b = rgb.size(0), h = rgb.size(1), w = rgb.size(2);
 
-    torch::Tensor v_rgb = torch::empty({b, h, w, 3}, rgb.options());
-    torch::Tensor v_alpha = torch::empty({b, h, w, 1}, alpha.options());
-    torch::Tensor v_background = torch::empty({b, h, w, 3}, background.options());
+    at::Tensor v_rgb = at::empty({b, h, w, 3}, rgb.options());
+    at::Tensor v_alpha = at::empty({b, h, w, 1}, alpha.options());
+    at::Tensor v_background = at::empty({b, h, w, 3}, background.options());
 
     blend_background_backward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
         tensor2view<float, 4>(rgb), tensor2view<float, 4>(alpha), tensor2view<float, 4>(background),
@@ -195,8 +195,8 @@ __global__ void log_map_image_backward_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-torch::Tensor log_map_image_forward_tensor(
-    torch::Tensor &rgb,  // [B, H, W, 3]
+at::Tensor log_map_image_forward_tensor(
+    at::Tensor &rgb,  // [B, H, W, 3]
     float t
 ) {
     DEVICE_GUARD(rgb);
@@ -206,7 +206,7 @@ torch::Tensor log_map_image_forward_tensor(
         AT_ERROR("rgb shape must be (b, h, w, 3)");
     long b = rgb.size(0), h = rgb.size(1), w = rgb.size(2);
 
-    torch::Tensor out_rgb = torch::empty({b, h, w, 3}, rgb.options());
+    at::Tensor out_rgb = at::empty({b, h, w, 3}, rgb.options());
 
     log_map_image_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
         tensor2view<float, 4>(rgb), t,
@@ -219,10 +219,10 @@ torch::Tensor log_map_image_forward_tensor(
 
 
 /*[AutoHeaderGeneratorExport]*/
-torch::Tensor log_map_image_backward_tensor(
-    torch::Tensor &rgb,  // [B, H, W, 3]
+at::Tensor log_map_image_backward_tensor(
+    at::Tensor &rgb,  // [B, H, W, 3]
     float t,
-    torch::Tensor &v_out_rgb  // [B, H, W, 3]
+    at::Tensor &v_out_rgb  // [B, H, W, 3]
 ) {
     DEVICE_GUARD(rgb);
     CHECK_CUDA(rgb);
@@ -230,7 +230,7 @@ torch::Tensor log_map_image_backward_tensor(
 
     long b = rgb.size(0), h = rgb.size(1), w = rgb.size(2);
 
-    torch::Tensor v_rgb = torch::empty({b, h, w, 3}, rgb.options());
+    at::Tensor v_rgb = at::empty({b, h, w, 3}, rgb.options());
 
     log_map_image_backward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
         tensor2view<float, 4>(rgb), t,
@@ -349,12 +349,12 @@ __global__ void depth_to_normal_backward_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-torch::Tensor depth_to_normal_forward_tensor(
+at::Tensor depth_to_normal_forward_tensor(
     gsplat::CameraModelType camera_model,
-    torch::Tensor Ks,  // [B, 3, 3]
+    at::Tensor Ks,  // [B, 3, 3]
     CameraDistortionCoeffsTensor dist_coeffs,
     bool is_ray_depth,
-    torch::Tensor depths  // [B, H, W, 1]
+    at::Tensor depths  // [B, H, W, 1]
 ) {
     DEVICE_GUARD(depths);
     CHECK_CUDA(depths);
@@ -368,7 +368,7 @@ torch::Tensor depth_to_normal_forward_tensor(
         AT_ERROR("depths and Ks batch dimension mismatch");
 
     uint b = depths.size(0), h = depths.size(1), w = depths.size(2);
-    torch::Tensor normals = torch::empty({b, h, w, 3}, depths.options());
+    at::Tensor normals = at::empty({b, h, w, 3}, depths.options());
 
     depth_to_normal_forward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
         camera_model, Ks.data_ptr<float>(), dist_coeffs,
@@ -380,13 +380,13 @@ torch::Tensor depth_to_normal_forward_tensor(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-torch::Tensor depth_to_normal_backward_tensor(
+at::Tensor depth_to_normal_backward_tensor(
     gsplat::CameraModelType camera_model,
-    torch::Tensor Ks,  // [B, 3, 3]
+    at::Tensor Ks,  // [B, 3, 3]
     CameraDistortionCoeffsTensor dist_coeffs,
     bool is_ray_depth,
-    torch::Tensor depths,  // [B, H, W, 1]
-    torch::Tensor v_normals  // [B, H, W, 3]
+    at::Tensor depths,  // [B, H, W, 1]
+    at::Tensor v_normals  // [B, H, W, 3]
 ) {
     DEVICE_GUARD(depths);
     CHECK_CUDA(depths);
@@ -394,7 +394,7 @@ torch::Tensor depth_to_normal_backward_tensor(
     CHECK_CUDA(v_normals);
 
     uint b = depths.size(0), h = depths.size(1), w = depths.size(2);
-    torch::Tensor v_depths = torch::zeros_like(depths);
+    at::Tensor v_depths = at::zeros_like(depths);
 
     depth_to_normal_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
         camera_model, Ks.data_ptr<float>(), dist_coeffs,
@@ -477,11 +477,11 @@ __global__ void ray_depth_to_linear_depth_backward_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-torch::Tensor ray_depth_to_linear_depth_forward_tensor(
+at::Tensor ray_depth_to_linear_depth_forward_tensor(
     gsplat::CameraModelType camera_model,
-    torch::Tensor Ks,  // [B, 3, 3]
+    at::Tensor Ks,  // [B, 3, 3]
     CameraDistortionCoeffsTensor dist_coeffs,
-    torch::Tensor depths  // [B, H, W, 1]
+    at::Tensor depths  // [B, H, W, 1]
 ) {
     DEVICE_GUARD(depths);
     CHECK_CUDA(depths);
@@ -495,7 +495,7 @@ torch::Tensor ray_depth_to_linear_depth_forward_tensor(
         AT_ERROR("depths and Ks batch dimension mismatch");
 
     uint b = depths.size(0), h = depths.size(1), w = depths.size(2);
-    torch::Tensor out_depths = torch::empty_like(depths);
+    at::Tensor out_depths = at::empty_like(depths);
 
     ray_depth_to_linear_depth_forward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
         camera_model, Ks.data_ptr<float>(), dist_coeffs,
@@ -507,11 +507,11 @@ torch::Tensor ray_depth_to_linear_depth_forward_tensor(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-torch::Tensor ray_depth_to_linear_depth_backward_tensor(
+at::Tensor ray_depth_to_linear_depth_backward_tensor(
     gsplat::CameraModelType camera_model,
-    torch::Tensor Ks,  // [B, 3, 3]
+    at::Tensor Ks,  // [B, 3, 3]
     CameraDistortionCoeffsTensor dist_coeffs,
-    torch::Tensor v_out_depths  // [B, H, W, 1]
+    at::Tensor v_out_depths  // [B, H, W, 1]
 ) {
     DEVICE_GUARD(v_out_depths);
     CHECK_CUDA(v_out_depths);
@@ -525,7 +525,7 @@ torch::Tensor ray_depth_to_linear_depth_backward_tensor(
         AT_ERROR("v_out_depths and Ks batch dimension mismatch");
 
     uint b = v_out_depths.size(0), h = v_out_depths.size(1), w = v_out_depths.size(2);
-    torch::Tensor v_in_depths = torch::empty_like(v_out_depths);
+    at::Tensor v_in_depths = at::empty_like(v_out_depths);
 
     ray_depth_to_linear_depth_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
         camera_model, Ks.data_ptr<float>(), dist_coeffs,
@@ -585,11 +585,11 @@ __global__ void distort_image_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-torch::Tensor distort_image_tensor(
+at::Tensor distort_image_tensor(
     gsplat::CameraModelType camera_model,
-    torch::Tensor Ks,  // [B, 3, 3]
+    at::Tensor Ks,  // [B, 3, 3]
     CameraDistortionCoeffsTensor dist_coeffs,
-    torch::Tensor in_image  // [B, H, W, C]
+    at::Tensor in_image  // [B, H, W, C]
 ) {
     DEVICE_GUARD(in_image);
     CHECK_CUDA(in_image);
@@ -601,7 +601,7 @@ torch::Tensor distort_image_tensor(
         AT_ERROR("in_image shape must be (B, H, W, C) where B is consistent with Ks");
 
     uint b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
-    torch::Tensor out_image = torch::zeros_like(in_image);
+    at::Tensor out_image = at::zeros_like(in_image);
 
     distort_image_kernel<false><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
         camera_model, Ks.data_ptr<float>(), dist_coeffs,
@@ -613,11 +613,11 @@ torch::Tensor distort_image_tensor(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-torch::Tensor undistort_image_tensor(
+at::Tensor undistort_image_tensor(
     gsplat::CameraModelType camera_model,
-    torch::Tensor Ks,  // [B, 3, 3]
+    at::Tensor Ks,  // [B, 3, 3]
     CameraDistortionCoeffsTensor dist_coeffs,
-    torch::Tensor in_image  // [B, H, W, C]
+    at::Tensor in_image  // [B, H, W, C]
 ) {
     DEVICE_GUARD(in_image);
     CHECK_CUDA(in_image);
@@ -629,7 +629,7 @@ torch::Tensor undistort_image_tensor(
         AT_ERROR("in_image shape must be (B, H, W, C) where B is consistent with Ks");
 
     uint b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
-    torch::Tensor out_image = torch::zeros_like(in_image);
+    at::Tensor out_image = at::zeros_like(in_image);
 
     distort_image_kernel<true><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
         camera_model, Ks.data_ptr<float>(), dist_coeffs,

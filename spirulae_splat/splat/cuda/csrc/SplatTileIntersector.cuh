@@ -1,7 +1,8 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include <torch/types.h>
+
+#include <ATen/Tensor.h>
 
 #include <gsplat/Common.h>
 
@@ -25,8 +26,8 @@ struct TileBuffers {
     TileBuffers(
         unsigned width,
         unsigned height,
-        const torch::Tensor& viewmats,  // [B, 4, 4]
-        const torch::Tensor& Ks,  // [B, 3, 3]
+        const at::Tensor& viewmats,  // [B, 4, 4]
+        const at::Tensor& Ks,  // [B, 3, 3]
         const CameraDistortionCoeffsTensor& dist_coeffs
     ) : width((float)width), height((float)height), dist_coeffs(dist_coeffs) {
         DEVICE_GUARD(viewmats);
@@ -60,44 +61,44 @@ struct SplatTileIntersector {
         float rel_scale
     );
 
-    std::tuple<torch::Tensor, torch::Tensor> getIntersections_brute();
+    std::tuple<at::Tensor, at::Tensor> getIntersections_brute();
 
-    std::tuple<torch::Tensor, torch::Tensor> getIntersections_lbvh();
+    std::tuple<at::Tensor, at::Tensor> getIntersections_lbvh();
 
 };
 
 
-std::tuple<torch::Tensor, torch::Tensor>
+std::tuple<at::Tensor, at::Tensor>
 intersect_splat_tile_3dgs(
     Vanilla3DGS::World::TensorTuple splats_tuple,
     unsigned width,
     unsigned height,
-    const torch::Tensor& viewmats,
-    const torch::Tensor& Ks,
+    const at::Tensor& viewmats,
+    const at::Tensor& Ks,
     const gsplat::CameraModelType& camera_model,
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale
 );
 
-std::tuple<torch::Tensor, torch::Tensor>
+std::tuple<at::Tensor, at::Tensor>
 intersect_splat_tile_opaque_triangle(
     OpaqueTriangle::World::TensorTuple splats_tuple,
     unsigned width,
     unsigned height,
-    const torch::Tensor& viewmats,
-    const torch::Tensor& Ks,
+    const at::Tensor& viewmats,
+    const at::Tensor& Ks,
     const gsplat::CameraModelType& camera_model,
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale
 );
 
-std::tuple<torch::Tensor, torch::Tensor>
+std::tuple<at::Tensor, at::Tensor>
 intersect_splat_tile_voxel(
     VoxelPrimitive::World::TensorTuple splats_tuple,
     unsigned width,
     unsigned height,
-    const torch::Tensor& viewmats,
-    const torch::Tensor& Ks,
+    const at::Tensor& viewmats,
+    const at::Tensor& Ks,
     const gsplat::CameraModelType& camera_model,
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale

@@ -10,6 +10,10 @@ namespace cg = cooperative_groups;
 
 #include "common.cuh"
 
+#include <ATen/DeviceGuard.h>
+#include <ATen/ops/empty_like.h>
+#include <ATen/ops/zeros.h>
+
 __global__ void per_splat_losses_forward_kernel(
     bool is_3dgs,
     const size_t num_points,
@@ -124,10 +128,10 @@ __global__ void per_splat_losses_backward_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-torch::Tensor compute_per_splat_losses_forward_tensor(
-    torch::Tensor &scales,  // [N, 3] or [N, 2]
-    torch::Tensor &opacities,  // [N, 1]
-    torch::Tensor &quats,  // [N, 4]
+at::Tensor compute_per_splat_losses_forward_tensor(
+    at::Tensor &scales,  // [N, 3] or [N, 2]
+    at::Tensor &opacities,  // [N, 1]
+    at::Tensor &quats,  // [N, 4]
     float mcmc_opacity_reg_weight,
     float mcmc_scale_reg_weight,
     float max_gauss_ratio,
@@ -152,7 +156,7 @@ torch::Tensor compute_per_splat_losses_forward_tensor(
     if (quats.ndimension() != 2 || quats.size(0) != num_points || quats.size(1) != 4)
         AT_ERROR("quats shape must be (n, 4)");
 
-    torch::Tensor loss = torch::zeros({kNumPerSplatLosses}, opacities.options());
+    at::Tensor loss = at::zeros({kNumPerSplatLosses}, opacities.options());
 
     per_splat_losses_forward_kernel<<<_LAUNCH_ARGS_1D(num_points, 256)>>>(
         is_3dgs,
@@ -176,12 +180,12 @@ torch::Tensor compute_per_splat_losses_forward_tensor(
 
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor>
 compute_per_splat_losses_backward_tensor(
-    torch::Tensor &scales,  // [N, 3] or [N, 2]
-    torch::Tensor &opacities,  // [N, 1]
-    torch::Tensor &quats,  // [N, 4]
-    torch::Tensor &v_losses,  // [kNumPerSplatLosses]
+    at::Tensor &scales,  // [N, 3] or [N, 2]
+    at::Tensor &opacities,  // [N, 1]
+    at::Tensor &quats,  // [N, 4]
+    at::Tensor &v_losses,  // [kNumPerSplatLosses]
     float mcmc_opacity_reg_weight,
     float mcmc_scale_reg_weight,
     float max_gauss_ratio,
@@ -209,9 +213,9 @@ compute_per_splat_losses_backward_tensor(
     if (v_losses.ndimension() != 1 || v_losses.size(0) != kNumPerSplatLosses)
         AT_ERROR("v_losses shape must be (kNumPerSplatLosses,)");
 
-    torch::Tensor v_scales = torch::empty_like(scales);
-    torch::Tensor v_opacities = torch::empty_like(opacities);
-    torch::Tensor v_quats = torch::empty_like(quats);
+    at::Tensor v_scales = at::empty_like(scales);
+    at::Tensor v_opacities = at::empty_like(opacities);
+    at::Tensor v_quats = at::empty_like(quats);
 
     per_splat_losses_backward_kernel<<<_LAUNCH_ARGS_1D(num_points, 256)>>>(
         is_3dgs,
@@ -278,10 +282,10 @@ __global__ void mcmc_add_noise_triangle_kernel(
 void mcmc_add_noise_3dgs_tensor(
     std::string primitive,
     float scaler, float min_opacity,
-    torch::Tensor &means,
-    torch::Tensor &scales,
-    torch::Tensor &quats,
-    torch::Tensor &opacs
+    at::Tensor &means,
+    at::Tensor &scales,
+    at::Tensor &quats,
+    at::Tensor &opacs
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);

@@ -4,6 +4,9 @@
 
 #include "common.cuh"
 
+#include <ATen/ops/empty_like.h>
+
+
 // TODO: gradient to viewdir; masks;
 
 namespace cg = cooperative_groups;
@@ -463,12 +466,12 @@ __global__ void compute_sh_backward_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-torch::Tensor compute_sh_forward_tensor(
+at::Tensor compute_sh_forward_tensor(
     const unsigned degree,
     const unsigned degrees_to_use,
-    torch::Tensor &viewdirs,  // [..., 3]
-    torch::Tensor &coeffs0,   // [..., 3]
-    torch::Tensor &coeffs   // [..., K, 3]
+    at::Tensor &viewdirs,  // [..., 3]
+    at::Tensor &coeffs0,   // [..., 3]
+    at::Tensor &coeffs   // [..., K, 3]
 ) {
     DEVICE_GUARD(viewdirs);
     CHECK_INPUT(viewdirs);
@@ -483,7 +486,7 @@ torch::Tensor compute_sh_forward_tensor(
     if (coeffs.ndimension() < 3 || coeffs.size(-1) != 3 || coeffs.size(-2) != num_bases-1) {
         AT_ERROR("coeffs must have dimensions (..., D, 3)");
     }
-    torch::Tensor colors = torch::empty_like(coeffs0);
+    at::Tensor colors = at::empty_like(coeffs0);
 
     compute_sh_forward_kernel <<<_LAUNCH_ARGS_1D(num_points, 256)>>>(
         num_points, degree, degrees_to_use,
@@ -500,14 +503,14 @@ torch::Tensor compute_sh_forward_tensor(
 
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor>
 compute_sh_backward_tensor(
     const unsigned degree,
     const unsigned degrees_to_use,
-    torch::Tensor &viewdirs,  // [..., 3]
-    torch::Tensor &coeffs,  // [..., 3]
-    torch::Tensor &colors,  // [..., 3]
-    torch::Tensor &v_colors  // [..., 3]
+    at::Tensor &viewdirs,  // [..., 3]
+    at::Tensor &coeffs,  // [..., 3]
+    at::Tensor &colors,  // [..., 3]
+    at::Tensor &v_colors  // [..., 3]
 ) {
     DEVICE_GUARD(viewdirs);
     CHECK_INPUT(viewdirs);
@@ -526,9 +529,9 @@ compute_sh_backward_tensor(
     if (v_colors.ndimension() < 2 || v_colors.size(-1) != 3) {
         AT_ERROR("v_colors must have dimensions (..., 3)");
     }
-    torch::Tensor v_coeffs0 = torch::empty_like(colors);
-    torch::Tensor v_coeffs = torch::empty_like(coeffs);
-    torch::Tensor v_viewdirs = torch::empty_like(viewdirs);
+    at::Tensor v_coeffs0 = at::empty_like(colors);
+    at::Tensor v_coeffs = at::empty_like(coeffs);
+    at::Tensor v_viewdirs = at::empty_like(viewdirs);
 
     compute_sh_backward_kernel<<<_LAUNCH_ARGS_1D(num_points, 256)>>>(
         num_points, degree, degrees_to_use,

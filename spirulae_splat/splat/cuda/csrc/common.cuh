@@ -8,7 +8,8 @@ inline constexpr float ALPHA_THRESHOLD = (1.f/255.f);
 
 
 #include <c10/cuda/CUDAGuard.h>
-#include <torch/types.h>
+#include <ATen/Tensor.h>
+#include <ATen/DeviceGuard.h>
 
 #define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) \
@@ -60,7 +61,7 @@ inline __host__ dim3 tuple2dim3(std::tuple<unsigned, unsigned, unsigned> v) {
 #include "common_utils.cuh"
 
 template<typename T, int ndim>
-TensorView<T, ndim> tensor2view(torch::Tensor& tensor) {
+TensorView<T, ndim> tensor2view(at::Tensor& tensor) {
     TensorView<T, ndim> view;
     view.data = tensor.data_ptr<T>();
     for (int i = 0; i < ndim; i++) {

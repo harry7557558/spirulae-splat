@@ -7,6 +7,9 @@
 
 #include <algorithm>
 
+#include <ATen/ops/empty.h>
+#include <ATen/ops/zeros.h>
+
 
 
 template<gsplat::CameraModelType CAMERA_MODEL>
@@ -469,14 +472,14 @@ __global__ void render_background_sh_backward_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-torch::Tensor render_background_sh_forward_tensor(
+at::Tensor render_background_sh_forward_tensor(
     const unsigned w,
     const unsigned h,
     std::string camera_model,
-    const torch::Tensor &Ks,  // row major 3x3
-    const torch::Tensor &rotation,  // row major 3x3
+    const at::Tensor &Ks,  // row major 3x3
+    const at::Tensor &rotation,  // row major 3x3
     const unsigned sh_degree,
-    const torch::Tensor &sh_coeffs
+    const at::Tensor &sh_coeffs
 ) {
     DEVICE_GUARD(sh_coeffs);
     CHECK_INPUT(sh_coeffs);
@@ -501,7 +504,7 @@ torch::Tensor render_background_sh_forward_tensor(
     const dim3 img_size = {w, h, b};
 
     auto options = sh_coeffs.options();
-    torch::Tensor out_color = torch::empty({b, h, w, 3}, options);
+    at::Tensor out_color = at::empty({b, h, w, 3}, options);
 
     if (camera_model == "fisheye") {
         render_background_sh_forward_kernel<gsplat::CameraModelType::FISHEYE>
@@ -532,18 +535,18 @@ torch::Tensor render_background_sh_forward_tensor(
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<
-    torch::Tensor,  // v_rotation
-    torch::Tensor  // v_sh_coeffs
+    at::Tensor,  // v_rotation
+    at::Tensor  // v_sh_coeffs
 > render_background_sh_backward_tensor(
     const unsigned w,
     const unsigned h,
     const std::string camera_model,
-    const torch::Tensor &Ks,  // row major 3x3
-    const torch::Tensor &rotation,  // row major 3x3
+    const at::Tensor &Ks,  // row major 3x3
+    const at::Tensor &rotation,  // row major 3x3
     const unsigned sh_degree,
-    const torch::Tensor &sh_coeffs,
-    const torch::Tensor &out_color,
-    const torch::Tensor &v_out_color
+    const at::Tensor &sh_coeffs,
+    const at::Tensor &out_color,
+    const at::Tensor &v_out_color
 ) {
     DEVICE_GUARD(sh_coeffs);
     CHECK_INPUT(sh_coeffs);
@@ -579,8 +582,8 @@ std::tuple<
     const dim3 img_size = {w, h, b};
 
     auto options = sh_coeffs.options();
-    torch::Tensor v_rotation = torch::zeros({b, 3, 3}, options);
-    torch::Tensor v_sh_coeffs = torch::zeros({sh_degree*sh_degree, 3}, options);
+    at::Tensor v_rotation = at::zeros({b, 3, 3}, options);
+    at::Tensor v_sh_coeffs = at::zeros({sh_degree*sh_degree, 3}, options);
 
     if (camera_model == "fisheye") {
         render_background_sh_backward_kernel<gsplat::CameraModelType::FISHEYE>

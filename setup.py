@@ -131,6 +131,8 @@ def get_extensions():
     # disable compile warnings for Slang generated code
     extra_compile_args["nvcc"] += ['-Xcudafe=--diag_suppress=550']
 
+    extra_compile_args["nvcc"] += ['--threads', '0']
+
     extension = CUDAExtension(
         f"spirulae_splat.csrc",
         sources,
@@ -156,20 +158,24 @@ no_fused_ssim = (importlib.util.find_spec('fused_ssim') is None)
 no_fused_bilagrid = (importlib.util.find_spec('fused_bilagrid') is None)
 
 path = "spirulae_splat/splat/cuda/csrc/"
-generate_header(path+"SphericalHarmonics.cu", path+"SphericalHarmonics.cuh")
-generate_header(path+"BackgroundSphericalHarmonics.cu", path+"BackgroundSphericalHarmonics.cuh")
-generate_header(path+"PerSplatLoss.cu", path+"PerSplatLoss.cuh")
-generate_header(path+"PerPixelLoss.cu", path+"PerPixelLoss.cuh")
-generate_header(path+"PixelWise.cu", path+"PixelWise.cuh")
-generate_header(path+"Projection.cu", path+"Projection.cuh")
-# generate_header(path+"ProjectionEval3D.cu", path+"ProjectionEval3D.cuh")
-generate_header(path+"ProjectionEWA3DGSHetero.cu", path+"ProjectionEWA3DGSHetero.cuh")
-generate_header(path+"RasterizationFwd.cu", path+"RasterizationFwd.cuh")
-generate_header(path+"RasterizationBwd.cu", path+"RasterizationBwd.cuh")
-generate_header(path+"RasterizationEval3DFwd.cu", path+"RasterizationEval3DFwd.cuh")
-generate_header(path+"RasterizationEval3DBwd.cu", path+"RasterizationEval3DBwd.cuh")
-generate_header(path+"RasterizationSortedEval3DFwd.cu", path+"RasterizationSortedEval3DFwd.cuh")
-generate_header(path+"RasterizationSortedEval3DBwd.cu", path+"RasterizationSortedEval3DBwd.cuh")
+for filename in [
+    'SphericalHarmonics',
+    'BackgroundSphericalHarmonics',
+    'PerSplatLoss',
+    'PerPixelLoss',
+    'PixelWise',
+    'ProjectionFwd',
+    'ProjectionBwd',
+    'ProjectionHeteroFwd',
+    'ProjectionHeteroBwd',
+    'RasterizationFwd',
+    'RasterizationBwd',
+    'RasterizationEval3DFwd',
+    'RasterizationEval3DBwd',
+    'RasterizationSortedEval3DFwd',
+    'RasterizationSortedEval3DBwd',
+]:
+    generate_header(path+f"{filename}.cu", path+f"{filename}.cuh")
 
 setup(
     name="spirulae_splat",

@@ -1029,14 +1029,14 @@ __global__ void getTileSplatIntersections_lbvh_warp(
 }
 
 
-__forceinline__ torch::Tensor exclusiveScan(torch::Tensor &tensor) {
-    torch::Tensor result = torch::empty_like(tensor);
+__forceinline__ at::Tensor exclusiveScan(at::Tensor &tensor) {
+    at::Tensor result = at::empty_like(tensor);
     size_t temp_storage_bytes = 0;
     cub::DeviceScan::ExclusiveSum(nullptr, temp_storage_bytes,
         (unsigned*)tensor.data_ptr<int32_t>(),
         (unsigned*)result.data_ptr<int32_t>(),
         tensor.size(0));
-    torch::Tensor temp_storage = torch::empty({(long)temp_storage_bytes}, tensor.options().dtype(torch::kUInt8));
+    at::Tensor temp_storage = at::empty({(long)temp_storage_bytes}, tensor.options().dtype(at::kByte));
     cub::DeviceScan::ExclusiveSum(temp_storage.data_ptr<uint8_t>(), temp_storage_bytes,
         (unsigned*)tensor.data_ptr<int32_t>(),
         (unsigned*)result.data_ptr<int32_t>(),
@@ -1044,9 +1044,9 @@ __forceinline__ torch::Tensor exclusiveScan(torch::Tensor &tensor) {
     return result;
 }
 
-__forceinline__ torch::Tensor invertPermutation(torch::Tensor &tensor) {
+__forceinline__ at::Tensor invertPermutation(at::Tensor &tensor) {
     constexpr uint block = 256;
-    torch::Tensor result = torch::empty_like(tensor);
+    at::Tensor result = at::empty_like(tensor);
     invertPermutation<int32_t><<<_LAUNCH_ARGS_1D(tensor.size(0), block)>>>(
         tensor.size(0),
         tensor.data_ptr<int32_t>(),
@@ -1057,7 +1057,7 @@ __forceinline__ torch::Tensor invertPermutation(torch::Tensor &tensor) {
 }
 
 template<typename T>
-void _print_tensor(std::string name, torch::Tensor tensor) {
+void _print_tensor(std::string name, at::Tensor tensor) {
     printf("%s ", name.c_str());
     // printf("\n"); return;
     tensor = tensor.cpu();
@@ -1096,7 +1096,7 @@ void printTile(glm::vec3 ro, glm::vec3 rd) {
         ro.x, ro.y, ro.z, rd.x, rd.y, rd.z);
 }
 
-void printCells(torch::Tensor cell_keys, torch::Tensor splat_ids, torch::Tensor subcell_masks, torch::Tensor subcell_ids) {
+void printCells(at::Tensor cell_keys, at::Tensor splat_ids, at::Tensor subcell_masks, at::Tensor subcell_ids) {
     int num_cells = cell_keys.size(0);
     printf("%d overlaps\n", num_cells);
     for (int i = 0; i < num_cells; i++) {
@@ -1108,12 +1108,12 @@ void printCells(torch::Tensor cell_keys, torch::Tensor splat_ids, torch::Tensor 
     }
 }
 
-void checkMatch(std::string name, const torch::Tensor &a, const torch::Tensor &b) {
+void checkMatch(std::string name, const at::Tensor &a, const at::Tensor &b) {
     if (a.size(0) != b.size(0)) {
         printf("%s: shape mismatch (%d != %d)\n", name.c_str(), (int)a.size(0), (int)b.size(0));
         return;
     }
-    int numdiff = torch::abs(a - b).clip(0, 1).sum().item<int>();
+    int numdiff = at::abs(a - b).clip(0, 1).sum().item<int>();
     printf("%s: %d / %d mismatch\n", name.c_str(), numdiff, (int)a.size(0));
 }
 
@@ -1138,11 +1138,11 @@ SplatTileIntersector<Primitive, camera_model>::SplatTileIntersector(
         AT_ERROR("Patched mode only supports splat batch size 1");
     this->numSplats = splats.size();
     
-    this->tensorF32 = splats.options().dtype(torch::kFloat32);
-    this->tensorI32 = splats.options().dtype(torch::kInt32);
-    this->tensorI16 = splats.options().dtype(torch::kInt16);
-    this->tensorI64 = splats.options().dtype(torch::kInt64);
-    this->tensorU8 = splats.options().dtype(torch::kUInt8);
+    this->tensorF32 = splats.options().dtype(at::kFloat);
+    this->tensorI32 = splats.options().dtype(at::kInt);
+    this->tensorI16 = splats.options().dtype(at::kShort);
+    this->tensorI64 = splats.options().dtype(at::kLong);
+    this->tensorU8 = splats.options().dtype(at::kByte);
 
     #ifdef DEBUG
     std::chrono::system_clock::time_point t0, t1;
@@ -1183,10 +1183,10 @@ SplatTileIntersector<Primitive, camera_model>::SplatTileIntersector(
 }
 
 template<typename Primitive, gsplat::CameraModelType camera_model>
-std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_model>::getIntersections_brute() {
+std::tuple<at::Tensor, at::Tensor> SplatTileIntersector<Primitive, camera_model>::getIntersections_brute() {
     constexpr unsigned warp = 32;
 
-    torch::Tensor intersection_count = torch::zeros({tiles.size+1}, tensorI32);
+    at::Tensor intersection_count = at::zeros({tiles.size+1}, tensorI32);
     getTileSplatIntersections_brute<<<_LAUNCH_ARGS_1D(tiles.size, warp)>>>(
         tiles, splats,
         (uint32_t*)intersection_count.data_ptr<int32_t>(),
@@ -1195,11 +1195,11 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_
     CHECK_DEVICE_ERROR(cudaGetLastError());
     print_tensor(int, intersection_count);
 
-    torch::Tensor intersection_count_map = exclusiveScan(intersection_count);
+    at::Tensor intersection_count_map = exclusiveScan(intersection_count);
     print_tensor(int, intersection_count_map);
     unsigned total_intersections = (unsigned)intersection_count_map[(long)tiles.size].item<int32_t>();
 
-    torch::Tensor intersectionSplatID = torch::empty({total_intersections}, tensorI32);
+    at::Tensor intersectionSplatID = at::empty({total_intersections}, tensorI32);
     getTileSplatIntersections_brute<<<_LAUNCH_ARGS_1D(tiles.size, warp)>>>(
         tiles, splats,
         (uint32_t*)intersection_count_map.data_ptr<int32_t>(),
@@ -1213,7 +1213,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_
 
 
 template<typename Primitive, gsplat::CameraModelType camera_model>
-std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_model>::getIntersections_lbvh() {
+std::tuple<at::Tensor, at::Tensor> SplatTileIntersector<Primitive, camera_model>::getIntersections_lbvh() {
     // TODO: use a separate rotated AABB aligned with (1,1,1) for thin off-diagnoal Gaussians?
     constexpr uint MAX_NUM_LEVELS = 28;
     constexpr float BRANCH_FACTOR = 2.0f;
@@ -1227,8 +1227,8 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_
     // cudaDeviceSynchronize();
 
     // find splat AABB
-    torch::Tensor splat_aabb = torch::empty({numSplats, 2, 3}, tensorF32);
-    torch::Tensor root_aabb_tensor = torch::empty({2, 3}, tensorF32);
+    at::Tensor splat_aabb = at::empty({numSplats, 2, 3}, tensorF32);
+    at::Tensor root_aabb_tensor = at::empty({2, 3}, tensorF32);
     cudaMemset(root_aabb_tensor.data_ptr<float>()+0, kFloatPInfByte, 3*sizeof(float));
     cudaMemset(root_aabb_tensor.data_ptr<float>()+3, kFloatNInfByte, 3*sizeof(float));
     computeSplatAABB<Primitive><<<_LAUNCH_ARGS_1D(numSplats, block)>>>(
@@ -1239,7 +1239,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_
     CHECK_DEVICE_ERROR(cudaGetLastError());
     #ifdef DEBUG
     if (0) {
-        torch::Tensor splat_aabb_cpu = splat_aabb.cpu();
+        at::Tensor splat_aabb_cpu = splat_aabb.cpu();
         for (int i = 0; i < numSplats; i++) {
             float3* ps = (float3*)splat_aabb_cpu.data_ptr<float>() + 2*i;
             printAABB(ps[0], ps[1]);
@@ -1264,7 +1264,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_
     // printAABB_wireframe(rootAABBMin, rootAABBMax);
 
     // compute sorting keys (level and Morton code)
-    torch::Tensor morton = torch::empty({numSplats}, tensorI64);
+    at::Tensor morton = at::empty({numSplats}, tensorI64);
     fillSplatSortingKeys<Primitive><<<_LAUNCH_ARGS_1D(numSplats, block)>>>(
         numSplats, splats,
         *(float3*)&rootAABBMin, *(float3*)&rootAABBMax, MAX_NUM_LEVELS, BRANCH_FACTOR, rel_scale,
@@ -1272,10 +1272,10 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    auto [sorted_morton, splat_argsort] = torch::sort(morton);
-    splat_argsort = splat_argsort.to(torch::kInt32);
+    auto [sorted_morton, splat_argsort] = at::sort(morton);
+    splat_argsort = splat_argsort.to(at::kInt);
 
-    torch::Tensor tree_ranges = torch::empty({MAX_NUM_LEVELS, 2}, tensorI32);
+    at::Tensor tree_ranges = at::empty({MAX_NUM_LEVELS, 2}, tensorI32);
     cudaMemset(tree_ranges.data_ptr<int32_t>(), 0xff, (2*MAX_NUM_LEVELS)*sizeof(int32_t));
     fillLbvhTreeRanges<<<_LAUNCH_ARGS_1D(numSplats, block)>>>(
         MAX_NUM_LEVELS, numSplats,
@@ -1295,9 +1295,9 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_
 
     #ifdef DEBUG
     if (0) {
-        splat_aabb = torch::index(splat_aabb, {splat_argsort});
-        // torch::Tensor splat_idx = invertPermutation(splat_argsort);
-        torch::Tensor splat_aabb_cpu = splat_aabb.cpu();
+        splat_aabb = at::index(splat_aabb, {splat_argsort});
+        // at::Tensor splat_idx = invertPermutation(splat_argsort);
+        at::Tensor splat_aabb_cpu = splat_aabb.cpu();
         float3* aabb = (float3*)splat_aabb_cpu.data_ptr<float>();
         printf("\\left[");
         for (int i = 0; i < numSplats; i++) {
@@ -1308,14 +1308,14 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_
     }
     #endif
 
-    // auto uniques = torch::unique_consecutive(sorted_morton, true, true);
+    // auto uniques = at::unique_consecutive(sorted_morton, true, true);
     // int64_t num_unique = std::get<0>(uniques).numel();
     // int64_t max_collision_count = std::get<2>(uniques).amax().item<int64_t>();
     // printf("%d/%d collisions, %d max\n", (int)(numSplats-num_unique), (int)numSplats, (int)max_collision_count);
 
     // Build tree
-    torch::Tensor internal_nodes = torch::empty({numSplats-1, 2}, tensorI32);
-    torch::Tensor parent_nodes = torch::empty({numSplats-1}, tensorI32);
+    at::Tensor internal_nodes = at::empty({numSplats-1, 2}, tensorI32);
+    at::Tensor parent_nodes = at::empty({numSplats-1}, tensorI32);
     cudaMemset(parent_nodes.data_ptr<int32_t>(), 0xff, (numSplats-1)*sizeof(int32_t));
     CHECK_DEVICE_ERROR(cudaGetLastError());
     fillLbvhInternalNodes<<<_LAUNCH_ARGS_1D(numSplats-1, block)>>>(
@@ -1331,7 +1331,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_
     print_tensor(int, parent_nodes);
 
     // Compute AABB
-    torch::Tensor treeAABB = torch::empty({numSplats, 2, 3}, tensorF32);
+    at::Tensor treeAABB = at::empty({numSplats, 2, 3}, tensorF32);
     fillTreeSubcells_initAABB<<<_LAUNCH_ARGS_1D(numSplats-1, block)>>>(
         numSplats-1,
         (float3*)treeAABB.data_ptr<float>()
@@ -1347,7 +1347,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_
     CHECK_DEVICE_ERROR(cudaGetLastError());
     #ifdef DEBUG
     if (0) {
-        torch::Tensor treeAABB_cpu = treeAABB.cpu();
+        at::Tensor treeAABB_cpu = treeAABB.cpu();
         for (int i = 0; i < numSplats-1; i++) {
             float3* p = (float3*)treeAABB_cpu.data_ptr<float>() + 2*i;
             printAABB_wireframe(p[0], p[1]);
@@ -1356,7 +1356,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_
     #endif
 
     // Traverse to find intersections
-    torch::Tensor intersection_count = torch::zeros({tiles.size+1}, tensorI32);
+    at::Tensor intersection_count = at::zeros({tiles.size+1}, tensorI32);
     // cudaDeviceSynchronize();
     // getTileSplatIntersections_lbvh<<<(tiles.size+warp-1)/warp, warp>>>(
     getTileSplatIntersections_lbvh_warp<Primitive, camera_model><<<tiles.size, warp, 0, at::cuda::getCurrentCUDAStream()>>>(
@@ -1370,11 +1370,11 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_
     CHECK_DEVICE_ERROR(cudaGetLastError());
     print_tensor(int, intersection_count);
 
-    torch::Tensor intersection_count_map = exclusiveScan(intersection_count);
+    at::Tensor intersection_count_map = exclusiveScan(intersection_count);
     print_tensor(int, intersection_count_map);
     unsigned total_intersections = (unsigned)intersection_count_map[(long)tiles.size].item<int32_t>();
 
-    torch::Tensor intersectionSplatID = torch::empty({total_intersections}, tensorI32);
+    at::Tensor intersectionSplatID = at::empty({total_intersections}, tensorI32);
     // getTileSplatIntersections_lbvh<<<(tiles.size+warp-1)/warp, warp>>>(
     getTileSplatIntersections_lbvh_warp<Primitive, camera_model><<<tiles.size, warp, 0, at::cuda::getCurrentCUDAStream()>>>(
         tiles, splats, MAX_NUM_LEVELS,
@@ -1400,7 +1400,7 @@ std::tuple<torch::Tensor, torch::Tensor> SplatTileIntersector<Primitive, camera_
 #include <filesystem>
 #include <fstream>
 
-torch::Tensor loadBinaryToTensor(const std::string& filepath) {
+at::Tensor loadBinaryToTensor(const std::string& filepath) {
     namespace fs = std::filesystem;
     
     // Extract filename from path
@@ -1476,44 +1476,44 @@ torch::Tensor loadBinaryToTensor(const std::string& filepath) {
     }
     
     // Create torch tensor on CUDA device
-    torch::Tensor tensor = torch::from_blob(
+    at::Tensor tensor = at::from_blob(
         buffer.get(),
         shape,
-        torch::kFloat32
+        at::kFloat
     ).clone();
     
-    return tensor.to(torch::kCUDA);
+    return tensor.to(at::kCUDA);
 }
 
 int main(int argc, char** argv) {
     // auto seed = std::stoll(argv[3]);
-    // torch::manual_seed(seed);
+    // at::manual_seed(seed);
 
     // unsigned num_splat = std::stod(argv[1]);
-    // torch::Tensor means = torch::randn({num_splat, 3}).cuda();
-    // torch::Tensor scales = 0.2*torch::randn({num_splat, 3}).cuda() - 0.4f*logf(num_splat) - 0.0f;
-    // torch::Tensor opacs = torch::randn({num_splat, 1}).cuda();
-    // torch::Tensor quats = torch::randn({num_splat, 4}).cuda();
+    // at::Tensor means = at::randn({num_splat, 3}).cuda();
+    // at::Tensor scales = 0.2*at::randn({num_splat, 3}).cuda() - 0.4f*logf(num_splat) - 0.0f;
+    // at::Tensor opacs = at::randn({num_splat, 1}).cuda();
+    // at::Tensor quats = at::randn({num_splat, 4}).cuda();
     // unsigned num_tiles = std::stod(argv[2]);
     // auto [viewmats, Ks] = generate_random_camera_poses(num_tiles, seed);
 
     // if (0) {
-    //     torch::Tensor tile_ro_cpu = tile_apex.cpu();
-    //     torch::Tensor tile_rd_cpu = tile_dirs.cpu();
+    //     at::Tensor tile_ro_cpu = tile_apex.cpu();
+    //     at::Tensor tile_rd_cpu = tile_dirs.cpu();
     //     for (unsigned i = 0; i < num_tiles; i++)
     //         printTile(((glm::vec3*)tile_ro_cpu.data_ptr<float>())[i],
     //         ((glm::vec3*)tile_rd_cpu.data_ptr<float>())[i]);
     // }
 
-    // scales = torch::exp(scales);
-    // opacs = torch::sigmoid(opacs);
+    // scales = at::exp(scales);
+    // opacs = at::sigmoid(opacs);
 
-    torch::Tensor means = loadBinaryToTensor("means_1000000_3.bin");
-    torch::Tensor scales = loadBinaryToTensor("scales_1000000_3.bin");
-    torch::Tensor opacs = loadBinaryToTensor("opacities_1000000.bin");
-    torch::Tensor quats = loadBinaryToTensor("quats_1000000_4.bin");
-    torch::Tensor viewmats = loadBinaryToTensor("viewmats_256_4_4.bin");
-    torch::Tensor Ks = loadBinaryToTensor("Ks_256_3_3.bin");
+    at::Tensor means = loadBinaryToTensor("means_1000000_3.bin");
+    at::Tensor scales = loadBinaryToTensor("scales_1000000_3.bin");
+    at::Tensor opacs = loadBinaryToTensor("opacities_1000000.bin");
+    at::Tensor quats = loadBinaryToTensor("quats_1000000_4.bin");
+    at::Tensor viewmats = loadBinaryToTensor("viewmats_256_4_4.bin");
+    at::Tensor Ks = loadBinaryToTensor("Ks_256_3_3.bin");
 
     SplatTileIntersector::intersect_splat_tile(
         means, scales, opacs, quats,
@@ -1530,13 +1530,13 @@ int main(int argc, char** argv) {
 
 
 
-std::tuple<torch::Tensor, torch::Tensor>
+std::tuple<at::Tensor, at::Tensor>
 intersect_splat_tile_3dgs(
     Vanilla3DGS::World::TensorTuple splats_tuple,
     unsigned width,
     unsigned height,
-    const torch::Tensor& viewmats,
-    const torch::Tensor& Ks,
+    const at::Tensor& viewmats,
+    const at::Tensor& Ks,
     const gsplat::CameraModelType& camera_model,
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale
@@ -1559,13 +1559,13 @@ intersect_splat_tile_3dgs(
         throw std::runtime_error("Unsupported camera model");
 }
 
-std::tuple<torch::Tensor, torch::Tensor>
+std::tuple<at::Tensor, at::Tensor>
 intersect_splat_tile_opaque_triangle(
     OpaqueTriangle::World::TensorTuple splats_tuple,
     unsigned width,
     unsigned height,
-    const torch::Tensor& viewmats,
-    const torch::Tensor& Ks,
+    const at::Tensor& viewmats,
+    const at::Tensor& Ks,
     const gsplat::CameraModelType& camera_model,
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale
@@ -1588,13 +1588,13 @@ intersect_splat_tile_opaque_triangle(
         throw std::runtime_error("Unsupported camera model");
 }
 
-std::tuple<torch::Tensor, torch::Tensor>
+std::tuple<at::Tensor, at::Tensor>
 intersect_splat_tile_voxel(
     VoxelPrimitive::World::TensorTuple splats_tuple,
     unsigned width,
     unsigned height,
-    const torch::Tensor& viewmats,
-    const torch::Tensor& Ks,
+    const at::Tensor& viewmats,
+    const at::Tensor& Ks,
     const gsplat::CameraModelType& camera_model,
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale

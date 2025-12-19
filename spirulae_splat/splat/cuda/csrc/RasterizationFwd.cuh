@@ -2,7 +2,7 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
-#include <torch/types.h>
+#include <ATen/Tensor.h>
 
 #include "Primitive3DGS.cuh"
 #include "PrimitiveOpaqueTriangle.cuh"

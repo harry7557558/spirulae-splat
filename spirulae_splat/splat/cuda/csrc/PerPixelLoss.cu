@@ -10,6 +10,10 @@ namespace cg = cooperative_groups;
 
 #include "common.cuh"
 
+#include <ATen/ops/empty.h>
+#include <ATen/ops/empty_like.h>
+#include <ATen/ops/zeros.h>
+
 
 template<typename T, uint size>
 inline __device__ FixedArray<T, size> loadFixedArray(const T* p, long idx) {
@@ -312,7 +316,7 @@ __global__ void per_pixel_losses_reduce_backward_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<torch::Tensor, torch::Tensor>
+std::tuple<at::Tensor, at::Tensor>
 compute_per_pixel_losses_forward_tensor(
     std::optional<at::Tensor> render_rgb,
     std::optional<at::Tensor> ref_rgb,
@@ -378,8 +382,8 @@ compute_per_pixel_losses_forward_tensor(
 
     if (!camera_indices.has_value())
         num_train_images = B;
-    torch::Tensor raw_losses = torch::zeros({num_train_images+1, (uint)RawLossIndex::length}, render_rgb.value().options());
-    torch::Tensor losses = torch::zeros({(uint)LossIndex::length}, render_rgb.value().options());
+    at::Tensor raw_losses = at::zeros({num_train_images+1, (uint)RawLossIndex::length}, render_rgb.value().options());
+    at::Tensor losses = at::zeros({(uint)LossIndex::length}, render_rgb.value().options());
 
     per_pixel_losses_forward_kernel<<<_LAUNCH_ARGS_2D(pixels_per_image, B, WARP_SIZE*WARP_SIZE, 1)>>>(
         B, pixels_per_image,
@@ -474,7 +478,7 @@ std::tuple<
 
     if (!camera_indices.has_value())
         num_train_images = B;
-    torch::Tensor v_raw_losses = torch::empty({num_train_images+1, (uint)RawLossIndex::length}, render_rgb.value().options());
+    at::Tensor v_raw_losses = at::empty({num_train_images+1, (uint)RawLossIndex::length}, render_rgb.value().options());
 
     per_pixel_losses_reduce_backward_kernel<<<_LAUNCH_ARGS_1D(num_train_images+1, WARP_SIZE)>>>(
         num_train_images,

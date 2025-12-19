@@ -1,6 +1,8 @@
 #pragma once
 
-#include <torch/types.h>
+#include <ATen/Tensor.h>
+#include <c10/core/TensorOptions.h>
+#include <ATen/Device.h>
 
 
 enum class RawLossIndex {
@@ -64,7 +66,7 @@ enum class LossIndex {
 
 
 
-std::tuple<torch::Tensor, torch::Tensor>
+std::tuple<at::Tensor, at::Tensor>
 compute_per_pixel_losses_forward_tensor(
     std::optional<at::Tensor> render_rgb,
     std::optional<at::Tensor> ref_rgb,

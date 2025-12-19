@@ -1,6 +1,6 @@
 #pragma once
 
-#include <torch/types.h>
+#include <ATen/Tensor.h>
 
 
 static constexpr uint kNumPerSplatLosses = 5;
@@ -10,10 +10,10 @@ static constexpr uint kNumPerSplatLosses = 5;
 
 
 
-torch::Tensor compute_per_splat_losses_forward_tensor(
-    torch::Tensor &scales,  // [N, 3] or [N, 2]
-    torch::Tensor &opacities,  // [N, 1]
-    torch::Tensor &quats,  // [N, 4]
+at::Tensor compute_per_splat_losses_forward_tensor(
+    at::Tensor &scales,  // [N, 3] or [N, 2]
+    at::Tensor &opacities,  // [N, 1]
+    at::Tensor &quats,  // [N, 4]
     float mcmc_opacity_reg_weight,
     float mcmc_scale_reg_weight,
     float max_gauss_ratio,
@@ -24,12 +24,12 @@ torch::Tensor compute_per_splat_losses_forward_tensor(
 );
 
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor>
 compute_per_splat_losses_backward_tensor(
-    torch::Tensor &scales,  // [N, 3] or [N, 2]
-    torch::Tensor &opacities,  // [N, 1]
-    torch::Tensor &quats,  // [N, 4]
-    torch::Tensor &v_losses,  // [kNumPerSplatLosses]
+    at::Tensor &scales,  // [N, 3] or [N, 2]
+    at::Tensor &opacities,  // [N, 1]
+    at::Tensor &quats,  // [N, 4]
+    at::Tensor &v_losses,  // [kNumPerSplatLosses]
     float mcmc_opacity_reg_weight,
     float mcmc_scale_reg_weight,
     float max_gauss_ratio,
@@ -43,8 +43,8 @@ compute_per_splat_losses_backward_tensor(
 void mcmc_add_noise_3dgs_tensor(
     std::string primitive,
     float scaler, float min_opacity,
-    torch::Tensor &means,
-    torch::Tensor &scales,
-    torch::Tensor &quats,
-    torch::Tensor &opacs
+    at::Tensor &means,
+    at::Tensor &scales,
+    at::Tensor &quats,
+    at::Tensor &opacs
 );
