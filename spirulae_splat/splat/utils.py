@@ -207,3 +207,194 @@ def resize_image(image: torch.Tensor, d: int):
     reshaped = image[:, :H//d*d, :W//d*d, :].view(B, H//d, d, W//d, d, C)
     blocks = reshaped.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H//d, W//d, d*d, C)
     return blocks.float().mean(dim=-2)
+
+
+def rot_to_quat(R):
+    """
+    Convert rotation matrices to quaternions.
+    R: (B,3,3)
+    Returns q: (B,4) as (w,x,y,z)
+    """
+    B = R.shape[0]
+    q = torch.zeros(B, 4, device=R.device, dtype=R.dtype)
+
+    trace = R[:,0,0] + R[:,1,1] + R[:,2,2]
+    pos = trace > 0
+
+    # Case 1: trace positive → stable branch
+    s = torch.sqrt(trace[pos] + 1.0) * 2
+    q[pos, 0] = 0.25 * s
+    q[pos, 1] = (R[pos, 2, 1] - R[pos, 1, 2]) / s
+    q[pos, 2] = (R[pos, 0, 2] - R[pos, 2, 0]) / s
+    q[pos, 3] = (R[pos, 1, 0] - R[pos, 0, 1]) / s
+
+    # Case 2: diagonal branch
+    neg = ~pos
+    if neg.any():
+        Rn = R[neg]
+        diag = torch.stack([Rn[:,0,0],Rn[:,1,1],Rn[:,2,2]], dim=1)
+        idx = diag.argmax(1)
+
+        for k in range(3):
+            mask = (idx == k)
+            if not mask.any(): continue
+            i,j,l = k, (k+1)%3, (k+2)%3
+            Rm = Rn[mask]
+            t = 1.0 + Rm[:,i,i] - Rm[:,j,j] - Rm[:,l,l]
+            s = torch.sqrt(t + 1.0) * 2
+            qc = q[neg][mask]
+            qc[:,0] = (Rm[:,l,j] - Rm[:,j,l]) / s
+            qc[:,1+i] = 0.25 * s
+            qc[:,1+j] = (Rm[:,j,i] + Rm[:,i,j]) / s
+            qc[:,1+l] = (Rm[:,l,i] + Rm[:,i,l]) / s
+            q[neg][mask] = qc
+
+    return torch.nn.functional.normalize(q, dim=1)
+
+
+def quat_to_rot(q):
+    """Quaternion → rotation matrix. q: (B,4)"""
+    q = torch.nn.functional.normalize(q, dim=1)
+    w, x, y, z = q[:,0], q[:,1], q[:,2], q[:,3]
+
+    R = torch.stack([
+        torch.stack([1-2*(y*y+z*z),   2*(x*y - z*w),   2*(x*z + y*w)], dim=1),
+        torch.stack([2*(x*y + z*w),   1-2*(x*x+z*z),   2*(y*z - x*w)], dim=1),
+        torch.stack([2*(x*z - y*w),   2*(y*z + x*w),   1-2*(x*x+y*y)], dim=1)
+    ], dim=1)
+    return R
+
+
+def slerp(q0, q1, t):
+    """
+    Quaternion SLERP.
+    q0, q1: (B,4)
+    t: (B,)
+    """
+    q0 = torch.nn.functional.normalize(q0, dim=1)
+    q1 = torch.nn.functional.normalize(q1, dim=1)
+
+    dot = (q0 * q1).sum(1)
+    flip = dot < 0
+    q1 = q1.clone()
+    q1[flip] *= -1
+    dot = (q0 * q1).sum(1).clamp(-1, 1)
+
+    theta = torch.acos(dot)
+    sin_theta = torch.sin(theta)
+
+    eps = 1e-6
+    mask = sin_theta < eps
+
+    # SLERP proper
+    w1 = torch.sin((1 - t) * theta) / sin_theta
+    w2 = torch.sin(t * theta) / sin_theta
+    out = (q0 * w1.unsqueeze(1) + q1 * w2.unsqueeze(1))
+
+    # LERP fallback (for near-parallel)
+    out[mask] = q0[mask] * (1 - t[mask]).unsqueeze(1) + q1[mask] * t[mask].unsqueeze(1)
+    return torch.nn.functional.normalize(out, dim=1)
+
+
+def interpolate_se3(T0, T1, t):
+    """
+    Interpolate two SE3 transforms.
+    T0,T1: (B,3,4) or (B,4,4)
+    t: (B,) in [0,1]
+    Returns: (B,4,4) valid SE3
+    """
+    if T0.shape[-2:] == (3,4):
+        R0, t0 = T0[:,:3,:3], T0[:,:,3]
+        R1, t1 = T1[:,:3,:3], T1[:,:,3]
+    else:
+        R0, t0 = T0[:,:3,:3], T0[:,:3,3]
+        R1, t1 = T1[:,:3,:3], T1[:,:3,3]
+
+    # Rotation: convert to quat → SLERP → convert back
+    q0 = rot_to_quat(R0)
+    q1 = rot_to_quat(R1)
+    q = slerp(q0, q1, t)
+    R = quat_to_rot(q)
+
+    # Translation: simple lerp
+    trans = (1 - t).unsqueeze(1) * t0 + t.unsqueeze(1) * t1
+
+    # Assemble SE3
+    B = t.shape[0]
+    T = torch.zeros(B, 4, 4, device=T0.device, dtype=T0.dtype)
+    T[:, :3, :3] = R
+    T[:, :3, 3] = trans
+    T[:, 3, 3] = 1.0
+    return T
+
+
+def random_c2w_on_unit_sphere(B, device="cpu", dtype=torch.float32):
+    """
+    Generate B random SE3 camera-to-world matrices.
+    - camera center on unit sphere
+    - z > 0 hemisphere
+    - camera looks at origin (forward dir = -c)
+    Returns: (B,4,4)
+    """
+    # Random points on S2 with positive z
+    c = torch.randn(B, 3, device=device, dtype=dtype)
+    # c[:,2].abs_()  # make z positive
+    c = c / c.norm(dim=-1, keepdim=True)
+
+    # Forward direction (camera looks at origin)
+    # Convention: camera forward is +z axis in camera coords → use f = +c
+    f = +c
+    f = f / f.norm(dim=-1, keepdim=True)
+
+    # Random world-up that isn't parallel to f
+    up = torch.randn(B, 3, device=device, dtype=dtype)
+    # Remove projection onto f (Gram-Schmidt)
+    up = up - (up * f).sum(-1, keepdim=True) * f
+    up = up / up.norm(dim=-1, keepdim=True)
+
+    # Right = up × forward
+    r = torch.cross(up, f, dim=1)
+    r = r / r.norm(dim=-1, keepdim=True)
+
+    # Recompute true orthonormal up = f × r
+    u = torch.cross(f, r, dim=1)
+
+    # Assemble rotation (R = [r u f])
+    R = torch.stack([r, u, f], dim=2)   # (B,3,3)
+
+    # Assemble final camera-to-world SE3
+    T = torch.zeros(B, 4, 4, device=device, dtype=dtype)
+    T[:, :3, :3] = R
+    T[:, :3, 3] = c
+    T[:, 3, 3] = 1.0
+    return T
+
+
+def ls_camera_intersection(T):
+    """
+    Compute the least-squares intersection point of camera view axes.
+    
+    T: (B,4,4) camera-to-world matrices
+       - camera center = T[:, :3, 3]
+       - camera view axis = T[:, :3, 2]   (world-space +z axis)
+    
+    Returns: (3,) tensor for the best point
+    """
+    B = T.shape[0]
+    c = T[:, :3, 3]         # (B,3)
+    d = T[:, :3, 2]         # (B,3), assumed unit or nearly unit
+    d = d / d.norm(dim=1, keepdim=True)
+
+    I = torch.eye(3, device=T.device, dtype=T.dtype)
+    
+    # A_i = I - d_i d_i^T
+    outer = d.unsqueeze(2) @ d.unsqueeze(1)      # (B,3,3)
+    A = I - outer                                 # (B,3,3)
+
+    # Solve: (sum A_i) p = (sum A_i c_i)
+    M = A.sum(dim=0)                              # (3,3)
+    b = (A @ c.unsqueeze(2)).sum(dim=0).squeeze() # (3,)
+
+    # Solve M p = b
+    p = torch.linalg.solve(M, b)
+    return p

@@ -30,10 +30,12 @@ from nerfstudio.cameras.cameras import Cameras, CameraType
 
 from spirulae_splat.ns_dataset import SpirulaeDataset
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
-
+from spirulae_splat.splat.utils import interpolate_se3, random_c2w_on_unit_sphere, ls_camera_intersection
 
 from concurrent.futures import ThreadPoolExecutor
 from torch.nn.parallel import DataParallel
+
+from tqdm import tqdm
 
 
 @dataclass
@@ -62,6 +64,9 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
     """Whether to cache images in memory. If "cpu", caches on cpu. If "gpu", caches on device."""
     cache_images_type: Literal["uint8", "float32"] = "uint8"
     """The image type returned from manager, caching images in uint8 saves memory"""
+
+    deblur_training_images: bool = False
+    """Whether to use a custom trained deep learning model to deblur images before training"""
 
     compute_visibility_masks: bool = False
 
@@ -136,6 +141,19 @@ class SpirulaeDataManager(FullImageDatamanager):
                     total=len(dataset),
                 )
             )
+
+        if self.config.deblur_training_images:
+            from spirulae_splat.modules.enhancer import infer
+            for idx, data in enumerate(tqdm(undistorted_images, "Deblurring images")):
+                original_shape = data['image'].shape
+                data['image'] = infer(data['image'][None])[0]
+                H, W, _ = data['image'].shape
+                for key in data.keys():
+                    if key != 'image' and isinstance(data[key], torch.Tensor) \
+                            and data[key].shape[:2] == original_shape[:2]:
+                        data[key] = data[key][:H, :W]
+                dataset.cameras.width[idx] = W
+                dataset.cameras.height[idx] = H
 
         # Move to device.
         if cache_images_device == "gpu":
@@ -250,6 +268,46 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         self.camera_split_weights = np.array([len(s) for s in self.train_cameras_splits]) / len(self.train_dataset)
 
+    def random_cameras(self, batch_size: int):
+        """Generate random cameras by interpolating existing cameras"""
+        num_cameras = len(self.train_dataset.cameras)
+        device = self.train_dataset.cameras.device
+        if False:
+            # interpolate between training cameras
+            i0 = torch.randint(0, num_cameras, (batch_size,), device=device)
+            i1 = torch.randint(0, num_cameras, (batch_size,), device=device)
+            camera_0 = self.train_dataset.cameras[i0]
+            camera_1 = self.train_dataset.cameras[i1]
+            t = torch.rand(batch_size, device=device)
+            camera = Cameras(
+                camera_to_worlds=interpolate_se3(camera_0.camera_to_worlds, camera_1.camera_to_worlds, t),
+                fx=torch.lerp(camera_0.fx, camera_1.fx, t),
+                fy=torch.lerp(camera_0.fy, camera_1.fy, t),
+                cx=torch.lerp(camera_0.cx, camera_1.cx, t),
+                cy=torch.lerp(camera_0.cy, camera_1.cy, t),
+                width=int(torch.lerp(camera_0.width.float(), camera_1.width.float(), t).mean().item()+0.5),
+                height=int(torch.lerp(camera_0.height.float(), camera_1.height.float(), t).mean().item()+0.5),
+                camera_type=random.choice([camera_0.camera_type, camera_1.camera_type]),
+            )
+        else:
+            # random camera-to-world on unit sphere, useful for object centric scenes
+            if not hasattr(self, 'camera_center'):
+                self.camera_center = ls_camera_intersection(self.train_dataset.cameras.camera_to_worlds).reshape(1, 3)
+            camera_to_worlds = random_c2w_on_unit_sphere(batch_size, device=device)[:, :3, :]
+            idx = torch.randint(0, num_cameras, (batch_size,), device=device)
+            camera = self.train_dataset.cameras[idx]
+            dist = torch.norm(camera.camera_to_worlds[:, :3, 3] - self.camera_center, dim=-1, keepdim=True)
+            camera_to_worlds[:, :3, 3] *= dist
+            camera_to_worlds[:, :3, 3] += self.camera_center
+            camera = Cameras(
+                camera_to_worlds=camera_to_worlds,
+                fx=camera.fx, fy=camera.fy, cx=camera.cx, cy=camera.cy,
+                width=camera.width, height=camera.height,
+                camera_type=camera.camera_type, #distortion_params=camera.distortion_params
+            )
+        camera.metadata = {}
+        return camera
+
     def next_train(self, step: int) -> Tuple[Cameras, Dict]:
         """Returns the next training batch
 
@@ -263,7 +321,10 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         train_batch_size = (len(self.train_dataset) + self.config.max_batch_per_epoch - 1) \
             // self.config.max_batch_per_epoch
-        # train_batch_size = 4
+
+        # TODO
+        if random.random() < (step - 10000) / (30000 - 10000) and False:
+            return self.random_cameras(train_batch_size), {}
 
         if len(self.train_cameras_splits) == 0:
             self.setup_batches()

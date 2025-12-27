@@ -22,6 +22,8 @@ from fused_bilagrid import BilateralGrid, slice, total_variation_loss
 
 from typing import List, Optional
 
+import spirulae_splat.modules.enhancer
+
 
 class _MaskGradient(torch.autograd.Function):
     @staticmethod
@@ -279,6 +281,22 @@ class SplatTrainingLosses(torch.nn.Module):
         device = outputs['rgb'].device
         camera = outputs["camera"]
 
+        # If reference image is empty, AI generate from rendered image
+        if "image" not in batch:
+            image_shape = outputs["rgb"].shape
+            batch["image"] = spirulae_splat.modules.enhancer.infer(outputs["rgb"].detach()).detach()
+            # batch["image"] = outputs["rgb"].detach()
+            B, H, W, C = batch["image"].shape
+            for key, value in outputs.items():
+                if isinstance(value, torch.Tensor) and value.shape[:3] == image_shape[:3]:
+                    outputs[key] = value[:, :H, :W, :]
+            camera.height = H * torch.ones_like(camera.height)
+            camera.width = W * torch.ones_like(camera.width)
+            if random.random() < 0.1:
+                from PIL import Image
+                Image.fromarray((255*torch.clip(batch["image"].detach()[0,:,:,:3],0,1)).byte().cpu().numpy()).save("/mnt/d/temp.png")
+
+        # Load rendering outputs
         pred_rgb = outputs["rgb"]
         pred_depth = outputs["depth"] if 'depth' in outputs else None
         pred_normal = outputs["normal"] if 'normal' in outputs else None
