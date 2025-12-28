@@ -28,12 +28,13 @@ from nerfstudio.data.datamanagers.full_images_datamanager import (
 )
 from nerfstudio.cameras.cameras import Cameras, CameraType
 
-from spirulae_splat.ns_dataset import SpirulaeDataset
+from spirulae_splat.ns_dataset import SpirulaeDataset, IndexedDatasetWrapper
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
 from spirulae_splat.splat.utils import interpolate_se3, random_c2w_on_unit_sphere, ls_camera_intersection
 
 from concurrent.futures import ThreadPoolExecutor
 from torch.nn.parallel import DataParallel
+from torch.utils.data import DataLoader
 
 from tqdm import tqdm
 
@@ -60,8 +61,10 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
         Too small may lead to suboptimal performance in SSIM, as well as increasing VRAM usage / floating point issues
         """
 
-    cache_images: Literal["cpu-pageable", "cpu", "gpu"] = "cpu-pageable"
-    """Whether to cache images in memory. If "cpu", caches on cpu. If "gpu", caches on device."""
+    cache_images: Literal["cpu-pageable", "cpu", "gpu", "disk"] = "cpu-pageable"
+    """Image cache location. If "cpu", caches on cpu. If "gpu", caches on device.
+        If "cpu-pageable", cache on cpu pageable memory (saves RAM but may cause error if spill to swap memory).
+        If "disk", cache on disk (limited support). """
     cache_images_type: Literal["uint8", "float32"] = "uint8"
     """The image type returned from manager, caching images in uint8 saves memory"""
 
@@ -96,6 +99,32 @@ class SpirulaeDataManager(FullImageDatamanager):
         self.train_cameras_splits = []  # type: list[list]
         self.train_unseen_cameras = []  # type: list[deque]
 
+    def _undistort_idx(self, dataset, idx: int, return_idx=False) -> Dict[str, torch.Tensor]:
+        data = dataset.get_data(idx, image_type=self.config.cache_images_type, _is_viewer=False)
+        dataset.cameras.width[idx] = data["image"].shape[1]
+        dataset.cameras.height[idx] = data["image"].shape[0]
+        camera = dataset.cameras[idx].reshape(())
+        assert data["image"].shape[1] == camera.width.item() and data["image"].shape[0] == camera.height.item(), (
+            f'The size of image ({data["image"].shape[1]}, {data["image"].shape[0]}) loaded '
+            f'does not match the camera parameters ({camera.width.item(), camera.height.item()})'
+        )
+        if self.config.patch_batch_size is not None:
+            for key in ['mask', 'depth', 'normal']:
+                if key not in data or data['image'].shape[:2] == data[key].shape[:2]:
+                    continue
+                data[key] = torch.nn.functional.interpolate(
+                    data[key].float().permute(2, 0, 1)[None],
+                    size=data['image'].shape[:2], mode='bilinear', align_corners=False
+                )[0].permute(1, 2, 0).to(data[key].dtype)
+        if return_idx:
+            return idx, data
+        return data
+
+    @property
+    def train_batch_size(self):
+        return (len(self.train_dataset) + self.config.max_batch_per_epoch - 1) \
+            // self.config.max_batch_per_epoch
+
     def _load_images(
         self, split: Literal["train", "eval"], cache_images_device: Literal["cpu-pageable", "cpu", "gpu"]
     ) -> List[Dict[str, torch.Tensor]]:
@@ -109,34 +138,44 @@ class SpirulaeDataManager(FullImageDatamanager):
         else:
             assert_never(split)
 
-        def undistort_idx(idx: int) -> Dict[str, torch.Tensor]:
-            data = dataset.get_data(idx, image_type=self.config.cache_images_type, _is_viewer=False)
-            dataset.cameras.width[idx] = data["image"].shape[1]
-            dataset.cameras.height[idx] = data["image"].shape[0]
-            camera = dataset.cameras[idx].reshape(())
-            assert data["image"].shape[1] == camera.width.item() and data["image"].shape[0] == camera.height.item(), (
-                f'The size of image ({data["image"].shape[1]}, {data["image"].shape[0]}) loaded '
-                f'does not match the camera parameters ({camera.width.item(), camera.height.item()})'
-            )
-            if self.config.patch_batch_size is not None:
-                for key in ['mask', 'depth', 'normal']:
-                    if key not in data or data['image'].shape[:2] == data[key].shape[:2]:
-                        continue
-                    data[key] = torch.nn.functional.interpolate(
-                        data[key].float().permute(2, 0, 1)[None],
-                        size=data['image'].shape[:2], mode='bilinear', align_corners=False
-                    )[0].permute(1, 2, 0).to(data[key].dtype)
-            return data
+        if self.config.cache_images == "disk":
+            if split == "train":
+                max_num_workers = min(max(os.cpu_count()-2,1), self.train_batch_size)
+                self.setup_batches()
+                self.train_dataloaders = []
+                for split in self.train_cameras_splits:
+                    dataloader = DataLoader(
+                        IndexedDatasetWrapper(
+                            self._undistort_idx,
+                            [(dataset, idx, True) for idx in split]
+                        ),
+                        batch_size=min(self.train_batch_size, len(split)),
+                        num_workers=min(max_num_workers, len(split)),
+                        shuffle=True
+                    )
+                    self.train_dataloaders.append([dataloader, iter(dataloader)])
+            elif split == "eval":
+                self.eval_dataloader = DataLoader(
+                    IndexedDatasetWrapper(
+                        self._undistort_idx,
+                        [(dataset, idx, True) for idx in range(len(dataset))]
+                    ),
+                    batch_size=1,
+                    num_workers=0,
+                    shuffle=False
+                )
+            return []
 
-        CONSOLE.log(f"Caching/undistorting {split} images")
+        CONSOLE.log(f"Caching {split} images")
         with ThreadPoolExecutor() as executor:
             undistorted_images = list(
                 track(
                     executor.map(
-                        undistort_idx,
+                        self._undistort_idx,
+                        [dataset]*len(dataset),
                         range(len(dataset)),
                     ),
-                    description=f"Caching/undistorting {split} images",
+                    description=f"Caching {split} images",
                     transient=True,
                     total=len(dataset),
                 )
@@ -317,54 +356,78 @@ class SpirulaeDataManager(FullImageDatamanager):
             self.cached_train = self._load_images("train", cache_images_device=self.config.cache_images)
 
         if self.config.patch_batch_size is not None:
+            assert self.config.cache_images != "disk", "Disk caching not supported in patch batching mode"
             return self.get_tiles(self.config.patch_batch_size)
-
-        train_batch_size = (len(self.train_dataset) + self.config.max_batch_per_epoch - 1) \
-            // self.config.max_batch_per_epoch
 
         # TODO
         if random.random() < (step - 10000) / (30000 - 10000) and False:
-            return self.random_cameras(train_batch_size), {}
+            return self.random_cameras(self.train_batch_size), {}
 
         if len(self.train_cameras_splits) == 0:
             self.setup_batches()
 
-        image_indices = []
+        # pick random split with same camera resolution and model type (required for batching)
         split = np.random.choice(range(len(self.train_cameras_splits)), p=self.camera_split_weights)
-        train_batch_size = min(train_batch_size, len(self.train_cameras_splits[split]))
-        for i in range(train_batch_size):
-            if len(self.train_unseen_cameras[split]) == 0:
-                perm = self.train_cameras_splits[split][:]
-                random.shuffle(perm)
-                self.train_unseen_cameras[split].extend(perm)
-            image_idx = self.train_unseen_cameras[split].popleft()
-            image_indices.append(image_idx)
-        image_indices = list(set(image_indices))  # TODO: better way for this
 
-        batch = {}
-        for image_idx in image_indices:
-            # TODO: handle cases where different img has different set of auxiliary buffers
-            img = self.cached_train[image_idx]
-            for key, value in img.items():
-                if key not in batch:
-                    batch[key] = []
-                if isinstance(value, torch.Tensor):
-                    value = value.clone().cuda()
-                batch[key].append(value)
-            assert 'image' in img
-            h, w, _ = batch['image'][-1].shape
+        # disk caching
+        if self.config.cache_images == "disk":
+            try:
+                image_indices, batch = next(self.train_dataloaders[split][1])
+            except StopIteration:
+                self.train_dataloaders[split][1] = iter(self.train_dataloaders[split][0])
+                image_indices, batch = next(self.train_dataloaders[split][1])
+
+            assert 'image' in batch
+            b, h, w, _ = batch['image'].shape
             for key in ['depth', 'normal', 'mask']:
                 if key not in batch:
                     continue
-                if len(batch[key][-1].shape) == 2:
-                    batch[key][-1] = batch[key][-1].unsqueeze(-1)
-                batch[key][-1] = torch.nn.functional.interpolate(
-                    batch[key][-1].float().permute(2, 0, 1)[None],
+                if len(batch[key].shape) == 3:
+                    batch[key] = batch[key].unsqueeze(-1)
+                if True: batch[key] = batch[key].cuda()
+                batch[key] = torch.nn.functional.interpolate(
+                    batch[key].float().permute(0, 3, 1, 2),
                     size=(h, w), mode='bilinear', align_corners=False
-                )[0].permute(1, 2, 0).to(batch[key][-1].dtype)
-        for key in batch:
-            if isinstance(batch[key][0], torch.Tensor):
-                batch[key] = torch.stack(batch[key]).to(self.device)
+                ).permute(0, 2, 3, 1).to(batch[key].dtype)
+
+        # memory caching
+        else:
+            image_indices = []
+            train_batch_size = min(self.train_batch_size, len(self.train_cameras_splits[split]))
+            for i in range(train_batch_size):
+                if len(self.train_unseen_cameras[split]) == 0:
+                    perm = self.train_cameras_splits[split][:]
+                    random.shuffle(perm)
+                    self.train_unseen_cameras[split].extend(perm)
+                image_idx = self.train_unseen_cameras[split].popleft()
+                image_indices.append(image_idx)
+            image_indices = list(set(image_indices))  # TODO: better way for this
+            images = [self.cached_train[idx] for idx in image_indices]
+
+            batch = {}
+            for image_idx, img in zip(image_indices, images):
+                # TODO: handle cases where different img has different set of auxiliary buffers
+                for key, value in img.items():
+                    if key not in batch:
+                        batch[key] = []
+                    if isinstance(value, torch.Tensor):
+                        value = value.clone().cuda()
+                    batch[key].append(value)
+                assert 'image' in img
+                h, w, _ = batch['image'][-1].shape
+                for key in ['depth', 'normal', 'mask']:
+                    if key not in batch:
+                        continue
+                    if len(batch[key][-1].shape) == 2:
+                        batch[key][-1] = batch[key][-1].unsqueeze(-1)
+                    if True: batch[key][-1] = batch[key][-1].cuda()
+                    batch[key][-1] = torch.nn.functional.interpolate(
+                        batch[key][-1].float().permute(2, 0, 1)[None],
+                        size=(h, w), mode='bilinear', align_corners=False
+                    )[0].permute(1, 2, 0).to(batch[key][-1].dtype)
+            for key in batch:
+                if isinstance(batch[key][0], torch.Tensor):
+                    batch[key] = torch.stack(batch[key]).to(self.device)
 
         camera = self.train_dataset.cameras[torch.tensor(image_indices)].to(self.device)
         if camera.metadata is None:

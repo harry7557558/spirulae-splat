@@ -14,6 +14,7 @@
 
 
 from nerfstudio.data.datasets.base_dataset import *
+from typing import Callable, Optional
 import cv2
 
 
@@ -285,3 +286,22 @@ class SpirulaeDataset(InputDataset):
         """
 
         return self._dataparser_outputs.image_filenames
+
+
+class IndexedDatasetWrapper(Dataset):
+
+    def __init__(
+            self,
+            getitem: Callable,
+            getitem_args: List,
+            *args, **kwargs
+        ):
+        super().__init__(*args, **kwargs)
+        self.getitem = getitem
+        self.getitem_args = getitem_args
+
+    def __len__(self):
+        return len(self.getitem_args)
+
+    def __getitem__(self, idx):
+        return self.getitem(*self.getitem_args[idx])
