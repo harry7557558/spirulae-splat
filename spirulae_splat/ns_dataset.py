@@ -122,6 +122,7 @@ class SpirulaeDataset(InputDataset):
         self.cameras.rescale_output_resolution(scaling_factor=scale_factor)
         self.mask_color = dataparser_outputs.metadata.get("mask_color", None)
         self.mask_overexposure = dataparser_outputs.metadata.get("mask_overexposure", False)
+        self.val_indices = set(dataparser_outputs.metadata.get("val_indices", []))
 
     def __len__(self):
         return len(self._dataparser_outputs.image_filenames)
@@ -196,6 +197,8 @@ class SpirulaeDataset(InputDataset):
                         background = torch.ones_like(data['image']) * torch.tensor([(0,0,1), (0,0,255)][image_type == 'uint8']).to(data['image'])
                         data['image'] = torch.where(data['mask'], data['image'], background)
                     data['image'] = resize_image(data['image'][None], 2**int(max(0.5*math.log2(data['image'].numel()/10000), 0.0)))[0]
+                    if idx in self.val_indices:
+                        data['image'][..., 1] = (255 if image_type == 'uint8' else 1.0)
                     return {
                         'image_idx': data['image_idx'],
                         'image': data['image'],

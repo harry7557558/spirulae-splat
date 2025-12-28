@@ -120,10 +120,21 @@ class SpirulaeDataManager(FullImageDatamanager):
             return idx, data
         return data
 
-    @property
-    def train_batch_size(self):
-        return (len(self.train_dataset) + self.config.max_batch_per_epoch - 1) \
-            // self.config.max_batch_per_epoch
+    def train_batch_size(self, stochastic=True):
+        n = (len(self.train_dataset) - len(self.train_dataset.val_indices)) / self.config.max_batch_per_epoch
+        n = max(n, 1.0)
+        if stochastic:
+            return int(n) + int(random.random() < n-int(n))
+        return int(n+0.5)
+
+    def val_batch_size(self, stochastic=True):
+        num_val = len(self.train_dataset.val_indices)
+        num_train = len(self.train_dataset) - num_val
+        n_train = max(num_train / self.config.max_batch_per_epoch, 1.0)
+        n = n_train * num_val / num_train
+        if stochastic:
+            return int(n) + int(random.random() < n-int(n))
+        return max(int(n+0.5), 1)
 
     def _load_images(
         self, split: Literal["train", "eval"], cache_images_device: Literal["cpu-pageable", "cpu", "gpu"]
@@ -140,20 +151,34 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         if self.config.cache_images == "disk":
             if split == "train":
-                max_num_workers = min(max(os.cpu_count()-2,1), self.train_batch_size)
                 self.setup_batches()
                 self.train_dataloaders = []
+                max_num_workers = min(max(os.cpu_count()-2,1), self.train_batch_size(False))
                 for split in self.train_cameras_splits:
                     dataloader = DataLoader(
                         IndexedDatasetWrapper(
                             self._undistort_idx,
                             [(dataset, idx, True) for idx in split]
                         ),
-                        batch_size=min(self.train_batch_size, len(split)),
+                        batch_size=min(self.train_batch_size(False), len(split)),
                         num_workers=min(max_num_workers, len(split)),
                         shuffle=True
                     )
                     self.train_dataloaders.append([dataloader, iter(dataloader)])
+                self.val_dataloaders = []
+                if len(self.val_camera_splits) > 0:
+                    max_num_workers = min(max(os.cpu_count()-2,1), self.val_batch_size(False))
+                    for split in self.val_camera_splits:
+                        dataloader = DataLoader(
+                            IndexedDatasetWrapper(
+                                self._undistort_idx,
+                                [(dataset, idx, True) for idx in split]
+                            ),
+                            batch_size=min(self.val_batch_size(False), len(split)),
+                            num_workers=min(max_num_workers, len(split)),
+                            shuffle=True
+                        )
+                        self.val_dataloaders.append([dataloader, iter(dataloader)])
             elif split == "eval":
                 self.eval_dataloader = DataLoader(
                     IndexedDatasetWrapper(
@@ -290,22 +315,36 @@ class SpirulaeDataManager(FullImageDatamanager):
 
     def setup_batches(self):
         """Make separate lists for images with different shapes and camera models"""
-        key_map = {}
+        train_key_map = {}
+        val_key_map = {}
         self.train_cameras_splits = []
         self.train_unseen_cameras = []
-        for cam_idx in range(len(self.train_dataset)):
+        self.val_camera_splits = []
+        self.val_unseen_cameras = []
+
+        def add_idx(key_map, camera_splits, unseen_cameras, cam_idx):
             cam = self.train_dataset.cameras[cam_idx]
             w, h = cam.width.item(), cam.height.item()
             model = cam.camera_type.item()
             key = (w, h, model)
             if key not in key_map:
-                key_map[key] = len(self.train_cameras_splits)
-                self.train_cameras_splits.append([])
-                self.train_unseen_cameras.append(deque())
+                key_map[key] = len(camera_splits)
+                camera_splits.append([])
+                unseen_cameras.append(deque())
             key = key_map[key]
-            self.train_cameras_splits[key].append(cam_idx)
+            camera_splits[key].append(cam_idx)
 
-        self.camera_split_weights = np.array([len(s) for s in self.train_cameras_splits]) / len(self.train_dataset)
+        for cam_idx in range(len(self.train_dataset)):
+            if cam_idx in self.train_dataset.val_indices:
+                add_idx(val_key_map, self.val_camera_splits, self.val_unseen_cameras, cam_idx)
+            else:
+                add_idx(train_key_map, self.train_cameras_splits, self.train_unseen_cameras, cam_idx)
+
+        self.train_split_weights = np.array([float(len(s)) for s in self.train_cameras_splits])
+        self.val_split_weights = np.array([float(len(s)) for s in self.val_camera_splits])
+        self.train_split_weights /= sum(self.train_split_weights)
+        if len(self.val_split_weights) > 0:
+            self.val_split_weights /= sum(self.val_split_weights)
 
     def random_cameras(self, batch_size: int):
         """Generate random cameras by interpolating existing cameras"""
@@ -347,35 +386,25 @@ class SpirulaeDataManager(FullImageDatamanager):
         camera.metadata = {}
         return camera
 
-    def next_train(self, step: int) -> Tuple[Cameras, Dict]:
-        """Returns the next training batch
-
-        Returns a Camera instead of raybundle"""
-
-        if not hasattr(self, 'cached_train'):
-            self.cached_train = self._load_images("train", cache_images_device=self.config.cache_images)
-
-        if self.config.patch_batch_size is not None:
-            assert self.config.cache_images != "disk", "Disk caching not supported in patch batching mode"
-            return self.get_tiles(self.config.patch_batch_size)
-
-        # TODO
-        if random.random() < (step - 10000) / (30000 - 10000) and False:
-            return self.random_cameras(self.train_batch_size), {}
-
-        if len(self.train_cameras_splits) == 0:
-            self.setup_batches()
+    def get_batch(self, val: bool):
+        camera_splits = self.val_camera_splits if val else self.train_cameras_splits
+        batch_size = self.val_batch_size() if val else self.train_batch_size()
+        if batch_size == 0:
+            return None, None
 
         # pick random split with same camera resolution and model type (required for batching)
-        split = np.random.choice(range(len(self.train_cameras_splits)), p=self.camera_split_weights)
+        split = np.random.choice(range(len(camera_splits)), p=self.train_split_weights)
 
         # disk caching
         if self.config.cache_images == "disk":
+            dataloaders = self.val_dataloaders if val else self.train_dataloaders
+
+            # TODO: stochastic batch_size
             try:
-                image_indices, batch = next(self.train_dataloaders[split][1])
+                image_indices, batch = next(dataloaders[split][1])
             except StopIteration:
-                self.train_dataloaders[split][1] = iter(self.train_dataloaders[split][0])
-                image_indices, batch = next(self.train_dataloaders[split][1])
+                dataloaders[split][1] = iter(dataloaders[split][0])
+                image_indices, batch = next(dataloaders[split][1])
 
             assert 'image' in batch
             b, h, w, _ = batch['image'].shape
@@ -392,14 +421,15 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         # memory caching
         else:
+            unseen_cameras = self.val_unseen_cameras if val else self.train_unseen_cameras
+
             image_indices = []
-            train_batch_size = min(self.train_batch_size, len(self.train_cameras_splits[split]))
-            for i in range(train_batch_size):
-                if len(self.train_unseen_cameras[split]) == 0:
-                    perm = self.train_cameras_splits[split][:]
+            for i in range(min(batch_size, len(camera_splits[split]))):
+                if len(unseen_cameras[split]) == 0:
+                    perm = camera_splits[split][:]
                     random.shuffle(perm)
-                    self.train_unseen_cameras[split].extend(perm)
-                image_idx = self.train_unseen_cameras[split].popleft()
+                    unseen_cameras[split].extend(perm)
+                image_idx = unseen_cameras[split].popleft()
                 image_indices.append(image_idx)
             image_indices = list(set(image_indices))  # TODO: better way for this
             images = [self.cached_train[idx] for idx in image_indices]
@@ -433,9 +463,39 @@ class SpirulaeDataManager(FullImageDatamanager):
         if camera.metadata is None:
             camera.metadata = {}
         camera.metadata["cam_idx"] = image_indices
+        # print(val, image_indices)
 
         if self.config.compute_visibility_masks:
             camera.metadata['visibility_masks'] = SplatTrainingLosses.get_visibility_masks(batch, self.device)
+
+        return camera, batch
+
+    def next_train(self, step: int) -> Tuple[Cameras, Dict]:
+        """Returns the next training batch
+
+        Returns a Camera instead of raybundle"""
+
+        if not hasattr(self, 'cached_train'):
+            self.cached_train = self._load_images("train", cache_images_device=self.config.cache_images)
+
+        if self.config.patch_batch_size is not None:
+            assert self.config.cache_images != "disk", "Disk caching not supported in patch batching mode"
+            assert len(self.train_dataset.val_indices) == 0, "Validation is not supported in patch batching mode"
+            return self.get_tiles(self.config.patch_batch_size)
+
+        # TODO
+        if random.random() < (step - 10000) / (30000 - 10000) and False:
+            return self.random_cameras(self.train_batch_size()), {}
+
+        if len(self.train_cameras_splits) == 0:
+            self.setup_batches()
+
+        camera, batch = self.get_batch(val=False)
+
+        if len(self.val_camera_splits) > 0:
+            val_camera, val_batch = self.get_batch(val=True)
+            if val_camera is not None and val_batch is not None:
+                return (camera, val_camera), (batch, val_batch)
 
         return camera, batch
 

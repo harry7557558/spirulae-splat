@@ -60,7 +60,7 @@ class Nerfstudio2DataParserConfig(NerfstudioDataParserConfig):
     """How much to scale the region of interest by."""
     orientation_method: Literal["pca", "up", "vertical", "none"] = "up"
     """The method to use for orientation."""
-    center_method: Literal["poses", "focus", "none"] = "poses"
+    center_method: Literal["poses", "focus", "none"] = "focus"
     """The method to use to center the poses."""
     auto_scale_poses: bool = True
     """Whether to automatically scale the poses to fit in +/- 1 bounding box."""
@@ -85,6 +85,8 @@ class Nerfstudio2DataParserConfig(NerfstudioDataParserConfig):
 
     mask_overexposure: bool = False
     """Whether to mask over exposure"""
+    validation_fraction: float = 0.0
+    """Use this fraction of training images for validation. Stop training when performance on validation images start to drop."""
 
 
 @dataclass
@@ -438,6 +440,8 @@ class Nerfstudio2(Nerfstudio):
                 "normal_filenames": normal_filenames if len(normal_filenames) > 0 else None,
                 "mask_color": self.config.mask_color,
                 "mask_overexposure": self.config.mask_overexposure,
+                "val_indices": get_train_eval_split_fraction(cameras, 1-self.config.validation_fraction)[1].tolist(),
+                # "val_indices": [i for i in range(len(cameras)) if i < len(cameras)//2],  # for testing overfitting
                 **metadata,
             },
         )

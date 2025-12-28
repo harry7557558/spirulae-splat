@@ -24,6 +24,9 @@ from typing import List, Optional
 
 import spirulae_splat.modules.enhancer
 
+# from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+from spirulae_splat.modules.lpips import LearnedPerceptualImagePatchSimilarity
+
 
 class _MaskGradient(torch.autograd.Function):
     @staticmethod
@@ -191,10 +194,9 @@ class SplatTrainingLosses(torch.nn.Module):
                 grid_W=self.config.bilagrid_shape_geometry[2],
             )
 
+        self.lpips_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32
+        # self.lpips_dtype = torch.float32
         if self.config.lpips_lambda > 0.0:
-            from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-            # self.lpips_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32
-            self.lpips_dtype = torch.float32
             self.lpips = LearnedPerceptualImagePatchSimilarity(
                 net_type="vgg", normalize=True
                 # net_type="alex", normalize=True
@@ -275,7 +277,7 @@ class SplatTrainingLosses(torch.nn.Module):
         return self.config.alpha_reg_weight * \
             min(self.step / max(self.config.alpha_reg_warmup, 1), 1)
 
-    def forward(self, step: int, batch, outputs, meta={}):
+    def forward(self, step: int, batch, outputs, meta={}, val=False):
         self.step = step
 
         device = outputs['rgb'].device
@@ -417,7 +419,7 @@ class SplatTrainingLosses(torch.nn.Module):
             if none_sky_mask is not None:
                 background = torch.where(none_sky_mask, torch.rand_like(background), background)
 
-        # do this to make SSIM happier + encourage sky transparency
+        # do this to make SSIM/LPIPS happier + encourage sky transparency
         if gt_rgb_mask is not None and False:
             gt_rgb = torch.where(gt_rgb_mask, gt_rgb, background)
         if gt_rgb_mask is not None or none_sky_mask is not None:
@@ -510,12 +512,27 @@ class SplatTrainingLosses(torch.nn.Module):
 
         image_loss = rgb_l1 + self.config.ssim_lambda * (1.0 - ssim)
 
+        # LPIPS for training
         if self.config.lpips_lambda > 0.0:
             lpips = self.lpips(
                 pred_rgb.permute(0, 3, 1, 2).clip(0, 1).to(self.lpips_dtype),
                 gt_rgb.permute(0, 3, 1, 2).clip(0, 1).to(self.lpips_dtype)
             ).float()
             image_loss = torch.lerp(image_loss, lpips, self.config.lpips_lambda)
+
+        # LPIPS for validation
+        if val:
+            if not hasattr(self, 'lpips_val'):
+                self.lpips_val = LearnedPerceptualImagePatchSimilarity(
+                    net_type="alex", normalize=True
+                ).to(dtype=self.lpips_dtype, device=pred_rgb.device)
+                # .to(memory_format=torch.channels_last)
+            with torch.no_grad():
+                # .contiguous(memory_format=torch.channels_last)
+                lpips_val = self.lpips_val(
+                    pred_rgb.permute(0, 3, 1, 2).clip(0, 1).to(self.lpips_dtype),
+                    gt_rgb.permute(0, 3, 1, 2).clip(0, 1).to(self.lpips_dtype)
+                ).float()
 
         # metrics, readable from console during training
         with torch.no_grad():
@@ -564,6 +581,8 @@ class SplatTrainingLosses(torch.nn.Module):
         }
         if self.config.lpips_lambda > 0.0:
             loss_dict['lpips'] = float(lpips)
+        if val:
+            loss_dict['lpips_val'] = float(lpips_val)
 
         return loss_dict
 

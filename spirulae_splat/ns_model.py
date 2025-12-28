@@ -339,6 +339,14 @@ class SpirulaeModelConfig(ModelConfig):
     normal_supervision_weight: float = 0.01
     """Weight for normal supervision by comparing normal from rendered depth with normal from depth predicted by a foundation model"""
 
+    validation_loss_average_window: int = 500
+    """Window to calculate moving average validation loss for early stop"""
+    early_stop_patience: int = 1000
+    """Stop training if overfitting score remains positive for this number of iterations"""
+    early_stop_warmup: int = 12000
+    """Warmup steps for early stop, will not early stop before this number of steps
+        Recommend setting this number no less than regularization warmups"""
+
 class SpirulaeModel(Model):
     """Template Model."""
 
@@ -799,6 +807,13 @@ class SpirulaeModel(Model):
 
     def get_outputs(self, camera: Cameras) -> Dict[str, Union[torch.Tensor, List]]:
         """Takes in a camera and returns a dictionary of outputs."""
+
+        if isinstance(camera, Tuple) and len(camera) == 2:
+            train_outputs = self.get_outputs(camera[0])
+            with torch.no_grad():
+                val_outputs = self.get_outputs(camera[1])
+            return train_outputs, val_outputs
+
         if not isinstance(camera, Cameras):
             print("Called get_outputs with not a camera")
             return {}
@@ -1111,9 +1126,39 @@ class SpirulaeModel(Model):
 
         # Per-image losses
         self.info['num_train_data'] = self.num_train_data
-        loss_dict = self.training_losses(self.step, batch, outputs, self.info)
 
-        # Per-splat losses
+        # Outputs and batch are tuples if eval data is provided
+        # self.training_losses will call CUDA functions to compute training loss
+        total_val_loss = None
+        if isinstance(outputs, tuple) and isinstance(batch, tuple):
+            loss_dict = self.training_losses(self.step, batch[0], outputs[0], self.info)
+            for key, value in outputs[1].items():
+                if isinstance(value, torch.Tensor):
+                    outputs[1][key] = value.detach()
+            val_loss_dict = self.training_losses(self.step, batch[1], outputs[1], self.info, True)
+            total_val_loss = torch.stack([
+                x for x in val_loss_dict.values() if isinstance(x, torch.Tensor)
+            ]).sum()
+        else:
+            loss_dict = self.training_losses(self.step, batch, outputs, self.info)
+
+        # Total train and validation losses
+        with torch.no_grad():
+            total_train_loss = torch.stack([
+                x for x in loss_dict.values() if isinstance(x, torch.Tensor)
+            ]).sum()
+            # prevent double backward
+            if isinstance(total_train_loss, torch.Tensor):
+                total_train_loss = total_train_loss.item()
+
+        if total_val_loss is not None:
+            # will have gradient to e.g. bilagrid, camera poses, but not Gaussian params
+            loss_dict['val'] = total_val_loss
+            # prevent double backward
+            if isinstance(total_val_loss, torch.Tensor):
+                total_val_loss = total_val_loss.item()
+
+        # Per-splat losses (CUDA)
         self.training_losses.get_static_losses(
             self.step,
             self.quats, self.scales, self.opacities,
@@ -1124,7 +1169,63 @@ class SpirulaeModel(Model):
         if self.training and self.config.use_camera_optimizer:
             self.camera_optimizer.get_loss_dict(loss_dict)
 
+        # Store train/val loss running stats
+        # TODO: possibly do the following async? GPU is stuck after previous .item() that synchronizes CPU/GPU
+        if not hasattr(self, 'train_loss_history'):
+            self.train_loss_history = []
+        self.train_loss_history.append(total_train_loss)
+        if not hasattr(self, 'val_loss_history'):
+            self.val_loss_history = []
+        if not hasattr(self, 'val_lpips_history'):
+            self.val_lpips_history = []
+        if total_val_loss is not None:
+            while len(self.val_loss_history) < len(self.train_loss_history):
+                self.val_loss_history.append(total_val_loss)
+            while len(self.val_lpips_history) < len(self.train_loss_history):
+                self.val_lpips_history.append(val_loss_dict['lpips_val'])
+            # TODO: possbily linear interpolation?
+        sw_width = self.config.validation_loss_average_window
+        if len(self.val_loss_history) >= sw_width:
+            # TODO: O(1) moving average update
+            self.total_train_loss = sum(self.train_loss_history[-sw_width:]) / sw_width
+            self.total_val_loss = sum(self.val_loss_history[-sw_width:]) / sw_width
+            self.total_val_lpips = sum(self.val_lpips_history[-sw_width:]) / sw_width
+
+        # Compute overfitting score
+        if not hasattr(self, 'overfit_count'):
+            self.overfit_count = 0
+        if len(self.val_loss_history) >= 2*sw_width:
+            # note that training loss can increase at e.g. regularization weight scheduling
+            prev_total_train_loss = sum(self.train_loss_history[-2*sw_width:-sw_width]) / sw_width
+            prev_total_val_loss = sum(self.val_loss_history[-2*sw_width:-sw_width]) / sw_width
+            prev_total_val_lpips = sum(self.val_lpips_history[-2*sw_width:-sw_width]) / sw_width
+            train_loss_increase = self.total_train_loss - prev_total_train_loss
+            val_loss_increase = self.total_val_loss - prev_total_val_loss
+            val_lpips_increase = self.total_val_lpips - prev_total_val_lpips
+            overfit_score = max(val_loss_increase - max(train_loss_increase, 0), val_lpips_increase)
+            # overfit_score = min(val_loss_increase - max(train_loss_increase, 0), val_lpips_increase)
+            if not hasattr(self, 'overfit_score_history'):
+                self.overfit_score_history = []
+            self.overfit_score_history.append(overfit_score)
+            # Early stop of overfits
+            if len(self.overfit_score_history) >= sw_width:
+                self.overfit_score = sum(self.overfit_score_history[-sw_width:]) / sw_width
+                if self.overfit_score > 0.0:
+                    self.overfit_count += 1
+                    if self.overfit_count > self.config.early_stop_patience and \
+                            self.step > self.config.early_stop_warmup + self.config.early_stop_patience//2:
+                        print("\n\n\n\n\n\nOverfitting detected. Quality is becoming worse with more training. Quitting.\n")
+                        exit(0)
+                else:
+                    self.overfit_count = 0
+
         self.print_loss_dict(loss_dict)
+
+        # Reduce before return -
+        # nerfstudio will later use functools.reduce(torch.add, ...), which is slow
+        loss_dict = {'total': torch.stack([
+            x for x in loss_dict.values() if isinstance(x, torch.Tensor)
+        ]).sum()}
         return loss_dict
 
     def print_loss_dict(self, losses: Dict[str, torch.Tensor], _max_vals={}):
@@ -1134,6 +1235,15 @@ class SpirulaeModel(Model):
         used = (total - free) / 1024**3
         used_percentage = (1 - free/total)*100
         mem_stats = f"{used:.2f}\N{ZERO WIDTH SPACE}GB {used_percentage:.0f}%"
+
+        if hasattr(self, 'total_val_loss'):
+            losses['val_total'] = self.total_val_loss
+        if hasattr(self, 'total_train_loss'):
+            losses['train_total'] = self.total_train_loss
+        if hasattr(self, 'total_val_lpips'):
+            losses['lpips_val'] = self.total_val_lpips
+        if hasattr(self, 'overfit_score'):
+            losses['overfit_score'] = self.overfit_score
 
         def fmt(key: str, s: float, decimals=None) -> str:
             if s == 0.0 or key not in losses:
@@ -1190,6 +1300,11 @@ class SpirulaeModel(Model):
             f"[BilagridTVLoss] rgb={fmt('tv_loss', 10.0)} "
             f"depth={fmt('tv_loss_depth', 10.0)} "
             f"normal={fmt('tv_loss_normal', 10.0)}",
+            "                \n",
+            f"[Validation] train={fmt('train_total', 1.0)} "
+            f"val={fmt('val_total', 1.0)} "
+            f"lpips={fmt('lpips_val', 1.0)} "
+            f"overfit={fmt('overfit_score', 1.0)} {self.overfit_count}/{self.config.early_stop_patience}"
         ]
         additional_chunks = []
         if len(opacity_floor) > 0:
