@@ -35,12 +35,14 @@ def process(predictor, dataset_dir: str, image_dir: str, mask_dir: str):
         except:
             continue
         with redirect_stdout(StringIO()):
-            outputs = predictor([image])
+            outputs = predictor(image)
         result_mask = None
         for output in outputs:
-            labels = output['labels']
-            # print(labels)
             masks = output['masks']
+            if len(masks) == 0:
+                continue
+            if not isinstance(masks, np.ndarray):
+                masks = np.any(masks.cpu().numpy(), axis=0)
             if not np.any(masks):
                 continue
             masks = ~np.any(masks, axis=0)
@@ -74,38 +76,56 @@ if __name__ == "__main__":
     parser.add_argument("--images", default="images", help="Subfolder containing images. Default: images")
     parser.add_argument("--masks", default="masks", help="Subfolder to save masks. Default: masks")
     parser.add_argument("--max_image_size", type=int, default=1600, help="Maximum image size. Default: 1600")
-    parser.add_argument("--sam_type", default="sam2.1_hiera_large", help="SAM model to use.")
+    parser.add_argument("--model", default="sam2.1_hiera_large", help="SAM model to use.")
     parser.add_argument("--box_threshold", type=float, default=0.4, help="Box threshold for lang-sam model.")
     parser.add_argument("--text_threshold", type=float, default=0.25, help="Text threshold for lang-sam model.")
     args = parser.parse_args()
 
-    try:
-        from lang_sam.lang_sam import LangSAM
-    except ImportError:
-        print("lang-sam not found. Please install https://github.com/luca-medeiros/lang-segment-anything")
-        exit(0)
-    model = LangSAM(args.sam_type, device="cuda")
+    # lang-sam
+    if args.model != "sam3":
+        try:
+            from lang_sam.lang_sam import LangSAM
+        except ImportError:
+            print("lang-sam not found or not installed properly. Please install https://github.com/luca-medeiros/lang-segment-anything")
+            exit(0)
+        model = LangSAM(args.model, device="cuda")
 
-    def map_image(image: Image.Image):
-        sc = args.max_image_size / max(image.size[0], image.size[1])
-        if sc < 1.0:
-            image = image.resize((int(image.size[0]*sc), int(image.size[1]*sc)))
-        return image
+        def map_image(image: Image.Image):
+            sc = args.max_image_size / max(image.size[0], image.size[1])
+            if sc < 1.0:
+                image = image.resize((int(image.size[0]*sc), int(image.size[1]*sc)))
+            return image
 
-    prompts = [s.strip() for s in args.prompt.split(';') if s.strip() != ""]
-    # prompts = ["fisheye circle"]
-    def predict(images_pil: list[Image.Image]):
-        images_pil = [map_image(im) for im in images_pil]
+        prompts = [s.strip() for s in args.prompt.split(';') if s.strip() != ""]
+        # prompts = ["fisheye circle"]
+        def predict(images_pil: Image.Image):
+            images_pil = [map_image(images_pil)]
 
-        results = model.predict(images_pil*len(prompts), prompts, args.box_threshold, args.text_threshold)
-        return results
+            results = model.predict(images_pil*len(prompts), prompts, args.box_threshold, args.text_threshold)
+            return results
 
-        results = []
-        for prompt in prompts:
-            pred = model.predict(images_pil, [prompt], args.box_threshold, args.text_threshold)
-            results.extend(pred)
-        print(results)
-        return results
+            results = []
+            for prompt in prompts:
+                pred = model.predict(images_pil, [prompt], args.box_threshold, args.text_threshold)
+                results.extend(pred)
+            print(results)
+            return results
+
+    # SAM-3 (better in quality, need to request access)
+    else:
+        try:
+            from sam3.model_builder import build_sam3_image_model
+            from sam3.model.sam3_image_processor import Sam3Processor
+        except ImportError:
+            print("SAM-3 not found or not installed properly. Please install https://github.com/facebookresearch/sam3.git")
+            exit(0)
+        model = build_sam3_image_model()
+        processor = Sam3Processor(model)
+
+        def predict(image: list[Image.Image]):
+            inference_state = processor.set_image(image)
+            output = processor.set_text_prompt(state=inference_state, prompt=args.prompt.strip())
+            return [output]
 
     process(
         predict,
