@@ -575,9 +575,6 @@ class SplatTrainingLosses(torch.nn.Module):
             "depth_dist_reg": depth_dist_reg,
             "normal_dist_reg": normal_dist_reg,
             "rgb_dist_reg": rgb_dist_reg,
-            # [E] exposure
-            "tv_loss": 0.0,  # see get_per_splat_losses()
-            # "exposure_param_reg": exposure_param_reg,
         }
         if self.config.lpips_lambda > 0.0:
             loss_dict['lpips'] = float(lpips)

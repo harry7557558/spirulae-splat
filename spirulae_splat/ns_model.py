@@ -1124,7 +1124,19 @@ class SpirulaeModel(Model):
             metrics_dict: dictionary of metrics, some of which we can use for loss
         """
 
-        # Per-image losses
+        # Per-splat losses (CUDA async)
+        static_losses = {}
+        self.training_losses.get_static_losses(
+            self.step,
+            self.quats, self.scales, self.opacities,
+            static_losses
+        )
+
+        # Camera optimizer loss (depends on nerfstudio, usually CPU)
+        if self.training and self.config.use_camera_optimizer:
+            self.camera_optimizer.get_loss_dict(static_losses)
+
+        # Per-image losses (CUDA with .item() that involves GPU-CPU sync)
         self.info['num_train_data'] = self.num_train_data
 
         # Outputs and batch are tuples if eval data is provided
@@ -1158,19 +1170,10 @@ class SpirulaeModel(Model):
             if isinstance(total_val_loss, torch.Tensor):
                 total_val_loss = total_val_loss.item()
 
-        # Per-splat losses (CUDA)
-        self.training_losses.get_static_losses(
-            self.step,
-            self.quats, self.scales, self.opacities,
-            loss_dict
-        )
-
-        # Camera optimizer loss
-        if self.training and self.config.use_camera_optimizer:
-            self.camera_optimizer.get_loss_dict(loss_dict)
+        # Add static losses
+        loss_dict.update(static_losses)
 
         # Store train/val loss running stats
-        # TODO: possibly do the following async? GPU is stuck after previous .item() that synchronizes CPU/GPU
         if not hasattr(self, 'train_loss_history'):
             self.train_loss_history = []
         self.train_loss_history.append(total_train_loss)
@@ -1228,13 +1231,57 @@ class SpirulaeModel(Model):
         ]).sum()}
         return loss_dict
 
-    def print_loss_dict(self, losses: Dict[str, torch.Tensor], _max_vals={}):
+    def print_loss_dict(self, losses: Dict[str, torch.Tensor], _storage={}):
+
+        # print can take a few ms depending on system, do in a separate thread
+        if 'print_queue' not in _storage:
+            import threading
+            import queue
+            import sys
+            import time
+
+            print_queue = queue.Queue()
+
+            def printer():
+                while True:
+                    msg = print_queue.get()
+                    if msg is None:
+                        break
+                    sys.stdout.write(msg)
+                    sys.stdout.flush()
+                    time.sleep(0.1)
+
+            threading.Thread(target=printer, daemon=True).start()
+
+            _storage['print_queue'] = print_queue
+
+        # caching
+        skip = 10
+        if self.step % skip != 0 and 'chunks' in _storage:
+            chunks = _storage['chunks']
+            # CONSOLE.print(chunks, end='')  # slow
+            # print(chunks, end='')
+            _storage['print_queue'].put(chunks)
+            return
+
+        # text formatting (instead of using rich.CONSOLE that's slow)
+        def bracket(s: str):
+            return f"\033[1m[\033[m{s}\033[1m]\033[m"
+
+        def orange(s: str):
+            return f"\033[33m{s}\033[m"
+
+        def boldcyan(s: str):
+            return f"\033[1;36m{s}\033[m"
+
+        def redbkg(s: str, threshold: float = 1.0):
+            return f"\033[1;41m{s.replace('\033[m', '')}\033[m" if threshold >= 1.0 else s
 
         # get VRAM usage (only supports single GPU at this time)
         free, total = torch.cuda.mem_get_info(self.features_dc.device)
         used = (total - free) / 1024**3
         used_percentage = (1 - free/total)*100
-        mem_stats = f"{used:.2f}\N{ZERO WIDTH SPACE}GB {used_percentage:.0f}%"
+        mem_stats = boldcyan(f"{used:.2f}") + f"\N{ZERO WIDTH SPACE}GB " + boldcyan(f"{used_percentage:.0f}") + "%"
 
         if hasattr(self, 'total_val_loss'):
             losses['val_total'] = self.total_val_loss
@@ -1256,10 +1303,10 @@ class SpirulaeModel(Model):
             if not math.isfinite(l):  # not finite
                 return str(l)
 
-            if key not in _max_vals or self.step % 1000 == 0:
-                _max_vals[key] = abs(l)
-            _max_vals[key] = max(_max_vals[key], abs(l))
-            if _max_vals[key] == 0.0:
+            if key not in _storage or self.step % 1000 == 0:
+                _storage[key] = abs(l)
+            _storage[key] = max(_storage[key], abs(l))
+            if _storage[key] == 0.0:
                 return '~'
 
             if decimals is None:  # 3 sig figs
@@ -1267,57 +1314,63 @@ class SpirulaeModel(Model):
             s = f"{{:.{decimals}f}}".format(l)
             if s.startswith('0.'):
                 s = s[1:]
-            return s
+            return boldcyan(s)
 
-        mcmc_reg = (self.config.use_mcmc and self.step < self.config.stop_refine_at)
+        reg_mcmc = (self.config.use_mcmc and self.step < self.config.stop_refine_at)
+        reg_2dgs = self.training_losses.get_2dgs_reg_weights()
         opacity_floor = (
-            f"[OpacFloor] {self.strategy.get_opacity_floor(self.step):.3f} "
-            f"[Hardness] {self.strategy.get_hardness(self.step):.3f}"
+            f"{bracket('OpacFloor')} {self.strategy.get_opacity_floor(self.step):.3f} "
+            f"{bracket('Hardness')} {self.strategy.get_hardness(self.step):.3f}"
         ).replace('0.', '.') \
             if self.config.primitive == "opaque_triangle" else ""
         chunks = [
-            f"[N] {self.num_points}",
-            f"[Mem] {mem_stats}",
-            f"[Train] loss={fmt('image_loss', 1.0)} "
-            f"psnr={fmt('psnr', 1.0, 2)} "
-            f"ssim={fmt('ssim', 1.0, 3)}" + \
+            f"{bracket('N')} {boldcyan(self.num_points)}",
+            f"{redbkg(bracket('Mem'), used_percentage/90)} {mem_stats}",
+            f"{bracket('Train')} {orange('loss')}={fmt('image_loss', 1.0)} "
+            f"{orange('psnr')}={fmt('psnr', 1.0, 2)} "
+            f"{orange('ssim')}={fmt('ssim', 1.0, 3)}" + \
                 f" lpips={fmt('lpips', 1.0, 3)}" * ('lpips' in losses),
             "                \n",
-            f"[RefLoss] depth={fmt('depth_ref_loss', self.config.depth_supervision_weight, 3)} "
-            f"normal={fmt('normal_ref_loss', self.config.normal_supervision_weight, 3)} "
-            f"alpha={fmt('alpha_ref_loss', 0.5*(self.config.alpha_loss_weight+self.config.alpha_loss_weight_under), 4)}",
-            f"[DistLoss] depth={fmt('depth_dist_reg', self.training_losses.get_2dgs_reg_weights()[0][0], 3)} "
-            f"normal={fmt('normal_dist_reg', self.training_losses.get_2dgs_reg_weights()[0][1], 3)} "
-            f"rgb={fmt('rgb_dist_reg', self.training_losses.get_2dgs_reg_weights()[0][2], 3)}",
+            f"{bracket('RefLoss')} {orange('depth')}={fmt('depth_ref_loss', self.config.depth_supervision_weight, 3)} "
+            f"{orange('normal')}={fmt('normal_ref_loss', self.config.normal_supervision_weight, 3)} "
+            f"{orange('alpha')}={fmt('alpha_ref_loss', 0.5*(self.config.alpha_loss_weight+self.config.alpha_loss_weight_under), 4)}",
+            f"{bracket('DistLoss')} {orange('depth')}={fmt('depth_dist_reg', reg_2dgs[0][0], 3)} "
+            f"{orange('normal')}={fmt('normal_dist_reg', reg_2dgs[0][1], 3)} "
+            f"{orange('rgb')}={fmt('rgb_dist_reg', reg_2dgs[0][2], 3)}",
             "                \n",
-            f"[ImReg] normal={fmt('normal_reg', self.training_losses.get_2dgs_reg_weights()[1], 3)} "
-            f"alpha={fmt('alpha_reg', self.training_losses.get_alpha_reg_weight(), 3)}",
-            f"[SplatReg] opac={fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg * mcmc_reg, 3)} "
-            f"scale={fmt('mcmc_scale_reg', self.config.mcmc_scale_reg * mcmc_reg, 4)} "
-            f"erank={fmt('erank_reg', max(self.config.erank_reg_s3, self.config.erank_reg, 3))} "
-            f"aniso={fmt('scale_reg', self.config.scale_regularization_weight, 3)}",
+            f"{bracket('ImReg')} {orange('normal')}={fmt('normal_reg', reg_2dgs[1], 3)} "
+            f"{orange('alpha')}={fmt('alpha_reg', self.training_losses.get_alpha_reg_weight(), 3)}",
+            f"{bracket('SplatReg')} {orange('opac')}={fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg * reg_mcmc, 3)} "
+            f"{orange('scale')}={fmt('mcmc_scale_reg', self.config.mcmc_scale_reg * reg_mcmc, 4)} "
+            f"{orange('erank')}={fmt('erank_reg', max(self.config.erank_reg_s3, self.config.erank_reg, 3))} "
+            f"{orange('aniso')}={fmt('scale_reg', self.config.scale_regularization_weight, 3)}",
             "                \n",
-            f"[BilagridTVLoss] rgb={fmt('tv_loss', 10.0)} "
-            f"depth={fmt('tv_loss_depth', 10.0)} "
-            f"normal={fmt('tv_loss_normal', 10.0)}",
+            f"{bracket('BilagridTVLoss')} {orange('rgb')}={fmt('tv_loss', 10.0)} "
+            f"{orange('depth')}={fmt('tv_loss_depth', 10.0)} "
+            f"{orange('normal')}={fmt('tv_loss_normal', 10.0)}",
             "                \n",
-            f"[Validation] train={fmt('train_total', 1.0)} "
-            f"val={fmt('val_total', 1.0)} "
-            f"lpips={fmt('lpips_val', 1.0)} "
-            f"overfit={fmt('overfit_score', 1.0)} {self.overfit_count}/{self.config.early_stop_patience}"
+            f"{bracket('Validation')} {orange('train')}={fmt('train_total', 1.0)} "
+            f"{orange('val')}={fmt('val_total', 1.0)} "
+            f"{orange('lpips')}={fmt('lpips_val', 1.0)} "
+            f"{orange('overfit')}={fmt('overfit_score', 1.0)} "
+            f"{redbkg(f'{self.overfit_count}/{self.config.early_stop_patience}',
+                self.overfit_count/(0.8*self.config.early_stop_patience))}"
         ]
         additional_chunks = []
         if len(opacity_floor) > 0:
             additional_chunks.append(opacity_floor)
         if 'bvh_time' in self.info:
             losses['bvh_time'] = self.info['bvh_time']
-            additional_chunks.append(f"[BvhTime] {fmt('bvh_time', 1.0, 1)} ms")
+            additional_chunks.append(f"{bracket('BvhTime')} {fmt('bvh_time', 1.0, 1)} ms")
         if len(additional_chunks) > 0:
             chunks.append("                \n")
             chunks.extend(additional_chunks)
         chunks.append("                \n")
         chunks = ' '.join(chunks).replace('\n ', '\n')
-        CONSOLE.print(chunks, end="\033[F"*(chunks.count('\n')))
+        chunks += "\033[F"*(chunks.count('\n'))
+        # print(chunks, end='')
+        _storage['print_queue'].put(chunks)
+        _storage['chunks'] = chunks
 
     @torch.no_grad()
     def get_outputs_for_camera(self, camera: Cameras, obb_box: Optional[OrientedBox] = None) -> Dict[str, torch.Tensor]:
