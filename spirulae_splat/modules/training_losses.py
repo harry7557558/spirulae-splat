@@ -11,12 +11,11 @@ from spirulae_splat.splat.utils import resize_image, _TORCH_COMPILE_ARGS
 
 from spirulae_splat.splat.cuda import (
     _C,
+    _make_lazy_cuda_func,
     ray_depth_to_linear_depth
 )
 
 from spirulae_splat.splat.cuda._wrapper_per_pixel import log_map_image
-
-from fused_ssim import fused_ssim
 
 from fused_bilagrid import BilateralGrid, slice, total_variation_loss
 
@@ -36,6 +35,23 @@ class _MaskGradient(torch.autograd.Function):
     @staticmethod
     def backward(ctx, v_x):
         return v_x * ctx.mask, None
+
+
+class FusedSSIM(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, img1, img2, train=True):
+        ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = \
+            _make_lazy_cuda_func("fused_ssim_forward")(img1, img2, train)
+
+        ctx.save_for_backward(img1.detach(), img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
+
+        return ssim_map
+
+    @staticmethod
+    def backward(ctx, dL_dmap):
+        img1, img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = ctx.saved_tensors
+        grad = _make_lazy_cuda_func("fused_ssim_backward")(img1, img2, dL_dmap, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
+        return grad, None, None, None
 
 
 class _ComputePerSplatLosses(torch.autograd.Function):
@@ -447,11 +463,10 @@ class SplatTrainingLosses(torch.nn.Module):
         # ssim loss
         pred_rgb_mapped = log_map_image(pred_rgb, self.config.log_map_factor)
         gt_rgb_mapped = log_map_image(gt_rgb, self.config.log_map_factor)
-        ssim = fused_ssim(
-            pred_rgb_mapped.permute(0, 3, 1, 2).contiguous(),
-            gt_rgb_mapped.permute(0, 3, 1, 2).contiguous(),
-            padding="same",
-            train=True
+        ssim = FusedSSIM.apply(
+            pred_rgb_mapped.contiguous(),
+            gt_rgb_mapped.contiguous(),
+            True  # TODO: detect torch.no_grad()
         )
 
         # call fused kernel to compute loss
@@ -510,7 +525,7 @@ class SplatTrainingLosses(torch.nn.Module):
             rgb_dist_reg, depth_dist_reg, normal_dist_reg
         ) = losses
 
-        image_loss = rgb_l1 + self.config.ssim_lambda * (1.0 - ssim)
+        image_loss = (1.0 - self.config.ssim_lambda) * rgb_l1 + self.config.ssim_lambda * (1.0 - ssim)
 
         # LPIPS for training
         if self.config.lpips_lambda > 0.0:

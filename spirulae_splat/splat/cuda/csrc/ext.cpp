@@ -7,6 +7,7 @@
 #include "PerSplatLoss.cuh"
 #include "PerPixelLoss.cuh"
 #include "PixelWise.cuh"
+#include "FusedSSIM.cuh"
 #include "SplatTileIntersector.cuh"
 #include "SVHash.cuh"
 #include "ProjectionFwd.cuh"
@@ -62,6 +63,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("ray_depth_to_linear_depth_backward", &ray_depth_to_linear_depth_backward_tensor);
     m.def("distort_image", &distort_image_tensor);
     m.def("undistort_image", &undistort_image_tensor);
+
+    // FusedSSIM.cuh
+    m.def("fused_ssim_forward", &fused_ssim_forward);
+    m.def("fused_ssim_backward", &fused_ssim_backward);
 
     // SplatTileIntersector.cuh
     m.def("intersect_splat_tile_3dgs", &intersect_splat_tile_3dgs);
