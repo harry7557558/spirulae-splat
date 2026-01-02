@@ -11,6 +11,8 @@ import os
 import hashlib
 import re
 import json
+import time
+import threading
 
 import torch
 import numpy as np
@@ -470,7 +472,7 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         return camera, batch
 
-    def next_train(self, step: int) -> Tuple[Cameras, Dict]:
+    def _next_train(self, step: int) -> Tuple[Cameras, Dict]:
         """Returns the next training batch
 
         Returns a Camera instead of raybundle"""
@@ -497,6 +499,31 @@ class SpirulaeDataManager(FullImageDatamanager):
             if val_camera is not None and val_batch is not None:
                 return (camera, val_camera), (batch, val_batch)
 
+        return camera, batch
+
+    def next_train(self, step: int) -> Tuple[Cameras, Dict]:
+        """wrapper of _next_train with improved concurrency"""
+
+        polling_delay = 0.001  # 1ms should be a fraction of reasonable train iteration time
+
+        self.step = step
+
+        if not hasattr(self, '_next_train_queue'):
+            self._next_train_queue = []
+
+            def dataloader():
+                while True:
+                    if len(self._next_train_queue) == 0:
+                        self._next_train_queue.append(self._next_train(self.step+1))
+                    time.sleep(polling_delay)
+
+            threading.Thread(target=dataloader, daemon=True).start()
+
+        while len(self._next_train_queue) == 0:
+            time.sleep(polling_delay)
+
+        camera, batch = self._next_train_queue[0]
+        self._next_train_queue = self._next_train_queue[1:]
         return camera, batch
 
     @cached_property
