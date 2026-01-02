@@ -260,17 +260,17 @@ __global__ void depth_to_normal_forward_kernel(
     const uint B = depths.shape[0],
         H = depths.shape[1],
         W = depths.shape[2];
-    uint32_t bid = blockIdx.z * blockDim.z + threadIdx.z;
-    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    uint32_t j = blockIdx.y * blockDim.y + threadIdx.y;
-    if (bid >= B || i >= W || j >= H)
-        return;
+    constexpr int TILE = 16;  // blockDim.x and blockDim.y; blockDim.z should be 1
+    uint32_t bid = blockIdx.z;
+    uint32_t i = blockIdx.x * TILE + threadIdx.x;
+    uint32_t j = blockIdx.y * TILE + threadIdx.y;
 
-    // Zero for border pixels (consistent with Python)
-    // TODO: possibly do a finite difference?
+    bool inside = (bid < B && i < W && j < H);
+
+    // Zero for border pixels (consistent with PyTorch implementation)
     if (i == 0 || i == W-1 || j == 0 || j == H-1) {
         normals.store3(bid, j, i, make_float3(0.0f));
-        return;
+        inside = false;
     }
 
     // Load camera
@@ -279,19 +279,48 @@ __global__ void depth_to_normal_forward_kernel(
     CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
 
     // Process
+#if 0
+    if (!inside) return;
     float4 depth = {
         depths.load1(bid, j, i-1),
         depths.load1(bid, j, i+1),
         depths.load1(bid, j-1, i),
         depths.load1(bid, j+1, i),
     };
-    float3 normal;
-    depth_to_normal(
-        W, H, {(float)i+0.5f, (float)j+0.5f},
+    float3 normal = depth_to_normal(
+        {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, &dist_coeffs,
         camera_model == gsplat::CameraModelType::FISHEYE, is_ray_depth,
-        depth, &normal
+        depth
     );
+#else
+    __shared__ float3 shared_points[TILE+2][TILE+2];
+    #pragma unroll 2
+    for (int k = threadIdx.y * blockDim.x + threadIdx.x;
+            k < (TILE+2)*(TILE+2); k += TILE*TILE) {
+        int it = k % (TILE+2), jt = k / (TILE+2);
+        int ig = int(blockIdx.x * TILE) + it - 1;
+        int jg = int(blockIdx.y * TILE) + jt - 1;
+        float depth = (ig >= 0 && ig < W && jg >= 0 && jg < H) ?
+            depths.load1(bid, jg, ig) : 0.0f;
+        float3 ray = generate_ray_d2n(
+            {(float)ig+0.5f, (float)jg+0.5f},
+            {fx, fy, cx, cy}, &dist_coeffs,
+            camera_model == gsplat::CameraModelType::FISHEYE, is_ray_depth
+        );
+        shared_points[jt][it] = ray * depth;
+    }
+    __syncthreads();
+    if (!inside) return;
+
+    FixedArray<float3, 4> points;
+    int it = threadIdx.x+1, jt = threadIdx.y+1;
+    points[0] = shared_points[jt][it-1];
+    points[1] = shared_points[jt][it+1];
+    points[2] = shared_points[jt-1][it];
+    points[3] = shared_points[jt+1][it];
+    float3 normal = points_to_normal(&points);
+#endif
     normals.store3(bid, j, i, normal);
 
 }
@@ -309,16 +338,16 @@ __global__ void depth_to_normal_backward_kernel(
     const uint B = depths.shape[0],
         H = depths.shape[1],
         W = depths.shape[2];
-    uint32_t bid = blockIdx.z * blockDim.z + threadIdx.z;
-    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    uint32_t j = blockIdx.y * blockDim.y + threadIdx.y;
-    if (bid >= B || i >= W || j >= H)
-        return;
+    constexpr int TILE = 16;  // blockDim.x and blockDim.y; blockDim.z should be 1
+    uint32_t bid = blockIdx.z;
+    uint32_t i = blockIdx.x * TILE + threadIdx.x;
+    uint32_t j = blockIdx.y * TILE + threadIdx.y;
 
-    // Zero for border pixels (consistent with Python)
-    // TODO: possibly do a finite difference?
+    bool inside = (bid < B && i < W && j < H);
+
+    // Zero for border pixels (consistent with PyTorch implementation)
     if (i == 0 || i == W-1 || j == 0 || j == H-1) {
-        return;
+        inside = false;
     }
 
     // Load camera
@@ -327,6 +356,8 @@ __global__ void depth_to_normal_backward_kernel(
     CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
 
     // Process
+#if 0
+    if (!inside) return;
     float4 depth = {
         depths.load1(bid, j, i-1),
         depths.load1(bid, j, i+1),
@@ -336,7 +367,7 @@ __global__ void depth_to_normal_backward_kernel(
     float3 v_normal = v_normals.load3(bid, j, i);
     float4 v_depth;
     depth_to_normal_vjp(
-        W, H, {(float)i+0.5f, (float)j+0.5f},
+        {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, &dist_coeffs,
         camera_model == gsplat::CameraModelType::FISHEYE, is_ray_depth,
         depth, v_normal, &v_depth
@@ -345,6 +376,44 @@ __global__ void depth_to_normal_backward_kernel(
     v_depths.atomicStore1(bid, j, i+1, v_depth.y);
     v_depths.atomicStore1(bid, j-1, i, v_depth.z);
     v_depths.atomicStore1(bid, j+1, i, v_depth.w);
+#else
+    __shared__ float4 shared_points[TILE+2][TILE+2];
+    #pragma unroll 2
+    for (int k = threadIdx.y * blockDim.x + threadIdx.x;
+            k < (TILE+2)*(TILE+2); k += TILE*TILE) {
+        int it = k % (TILE+2), jt = k / (TILE+2);
+        int ig = int(blockIdx.x * TILE) + it - 1;
+        int jg = int(blockIdx.y * TILE) + jt - 1;
+        float depth = (ig >= 0 && ig < W && jg >= 0 && jg < H) ?
+            depths.load1(bid, jg, ig) : 0.0f;
+        float3 ray = generate_ray_d2n(
+            {(float)ig+0.5f, (float)jg+0.5f},
+            {fx, fy, cx, cy}, &dist_coeffs,
+            camera_model == gsplat::CameraModelType::FISHEYE, is_ray_depth
+        );
+        shared_points[jt][it] = make_float4(ray.x, ray.y, ray.z, depth);
+    }
+    __syncthreads();
+    if (!inside) return;
+
+    float3 v_normal = v_normals.load3(bid, j, i);
+
+    FixedArray<float3, 4> rays;
+    FixedArray<float3, 4> points;
+    int it = threadIdx.x+1, jt = threadIdx.y+1;
+    float4 t;
+    t = shared_points[jt][it-1]; rays[0] = {t.x, t.y, t.z}; points[0] = rays[0] * t.w;
+    t = shared_points[jt][it+1]; rays[1] = {t.x, t.y, t.z}; points[1] = rays[1] * t.w;
+    t = shared_points[jt-1][it]; rays[2] = {t.x, t.y, t.z}; points[2] = rays[2] * t.w;
+    t = shared_points[jt+1][it]; rays[3] = {t.x, t.y, t.z}; points[3] = rays[3] * t.w;
+    FixedArray<float3, 4> v_points;
+    points_to_normal_vjp(&points, v_normal, &v_points);
+
+    v_depths.atomicStore1(bid, j, i-1, dot(v_points[0], rays[0]));
+    v_depths.atomicStore1(bid, j, i+1, dot(v_points[1], rays[1]));
+    v_depths.atomicStore1(bid, j-1, i, dot(v_points[2], rays[2]));
+    v_depths.atomicStore1(bid, j+1, i, dot(v_points[3], rays[3]));
+#endif
 }
 
 
@@ -437,7 +506,7 @@ __global__ void ray_depth_to_linear_depth_forward_kernel(
     // Process
     float in_depth = in_depths.load1(bid, j, i);
     float out_depth = in_depth * ray_depth_to_linear_depth_factor(
-        W, H, {(float)i+0.5f, (float)j+0.5f},
+        {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, &dist_coeffs,
         camera_model == gsplat::CameraModelType::FISHEYE
     );
@@ -468,7 +537,7 @@ __global__ void ray_depth_to_linear_depth_backward_kernel(
     // Process
     float v_out_depth = v_out_depths.load1(bid, j, i);
     float factor = ray_depth_to_linear_depth_factor(
-        W, H, {(float)i+0.5f, (float)j+0.5f},
+        {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, &dist_coeffs,
         camera_model == gsplat::CameraModelType::FISHEYE
     );

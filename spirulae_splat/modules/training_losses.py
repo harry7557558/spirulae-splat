@@ -530,8 +530,8 @@ class SplatTrainingLosses(torch.nn.Module):
         # LPIPS for training
         if self.config.lpips_lambda > 0.0:
             lpips = self.lpips(
-                pred_rgb.permute(0, 3, 1, 2).clip(0, 1).to(self.lpips_dtype),
-                gt_rgb.permute(0, 3, 1, 2).clip(0, 1).to(self.lpips_dtype)
+                pred_rgb.permute(0, 3, 1, 2).to(self.lpips_dtype).clip(0, 1),
+                gt_rgb.permute(0, 3, 1, 2).to(self.lpips_dtype).clip(0, 1)
             ).float()
             image_loss = torch.lerp(image_loss, lpips, self.config.lpips_lambda)
 
@@ -545,8 +545,8 @@ class SplatTrainingLosses(torch.nn.Module):
             with torch.no_grad():
                 # .contiguous(memory_format=torch.channels_last)
                 lpips_val = self.lpips_val(
-                    pred_rgb.permute(0, 3, 1, 2).clip(0, 1).to(self.lpips_dtype),
-                    gt_rgb.permute(0, 3, 1, 2).clip(0, 1).to(self.lpips_dtype)
+                    pred_rgb.permute(0, 3, 1, 2).to(self.lpips_dtype).clip(0, 1),
+                    gt_rgb.permute(0, 3, 1, 2).to(self.lpips_dtype).clip(0, 1)
                 ).float()
 
         # metrics, readable from console during training

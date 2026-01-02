@@ -564,9 +564,15 @@ def render_background_sh(
         norm = torch.linalg.norm(coord, dim=-1, keepdims=True)
         directions = coord / norm @ rotation.T
 
-    # TODO: deprecated in recent nerfstudio versions
-    from nerfstudio.utils.spherical_harmonics import components_from_spherical_harmonics
-    sh_components = components_from_spherical_harmonics(sh_degree, directions)  # [w*h, deg^2]
+    if False:
+        # TODO: deprecated in recent nerfstudio versions
+        from nerfstudio.utils.spherical_harmonics import components_from_spherical_harmonics
+        sh_components = components_from_spherical_harmonics(sh_degree, directions)  # [w*h, deg^2]
+    else:
+        # TODO: currently degree 4 only
+        from spirulae_splat.viewer.utils import generate_sh_basis
+        sh_components = generate_sh_basis(directions, "nerfstudio")
+
     bg_flat = torch.matmul(sh_components, sh_coeffs)  # [w*h, 3]
     bg_flat = torch.relu(bg_flat+0.5)
 

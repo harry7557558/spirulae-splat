@@ -129,11 +129,17 @@ __global__ void render_background_sh_backward_kernel(
     glm::vec3* __restrict__ v_rotation,
     glm::vec3* __restrict__ v_sh_coeffs
 ) {
+    #if 0
     unsigned camera_id = blockIdx.z * blockDim.z + threadIdx.z;
-
     unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
     unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
     int32_t pix_id = (camera_id * img_size.y + i) * img_size.x + j;
+    #else
+    unsigned camera_id = blockIdx.y * blockDim.y + threadIdx.y;
+    int32_t pix_id = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned j = pix_id % img_size.x, i = pix_id / img_size.x;
+    pix_id += camera_id * img_size.y * img_size.x;
+    #endif
 
     bool inside = (i < img_size.y && j < img_size.x && camera_id < img_size.z);
 
@@ -177,19 +183,17 @@ __global__ void render_background_sh_backward_kernel(
     cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
 
     unsigned thread_idx = block.thread_rank();
-    unsigned warp_idx = thread_idx/WARP_SIZE;
+    // unsigned warp_idx = thread_idx/WARP_SIZE;
     unsigned lane_idx = thread_idx%WARP_SIZE;
 
     {
-        __shared__ int inside_count[1024/WARP_SIZE];
-        int count = __syncthreads_count(inside);
-        if (warp.thread_rank() == 0)
-            inside_count[warp_idx] = count;
-        __syncthreads();
-        count = lane_idx < blockDim.x*blockDim.y/WARP_SIZE ?
-            inside_count[lane_idx] : 0;
-        warpSum(count, warp);
-        if (count == 0) return;
+        #if 0
+        if (__syncthreads_count(inside) == 0)
+            return;
+        #else
+        if (__ballot_sync(~0u, inside) == 0)
+            return;
+        #endif
     }
 
     // backward
@@ -207,7 +211,7 @@ __global__ void render_background_sh_backward_kernel(
     float v_x = 0.0f, v_y = 0.0f, v_z = 0.0f;
     float v_xx = 0.0f, v_yy = 0.0f, v_zz = 0.0f;
 
-    __shared__ glm::vec3 atomic_reduce[WARP_SIZE];  // assume WARP_SIZE^2 >= block_size
+    // __shared__ glm::vec3 atomic_reduce[WARP_SIZE];  // assume WARP_SIZE^2 >= block_size
 
     glm::vec3 temp3;
     float temp;
@@ -225,6 +229,14 @@ __global__ void render_background_sh_backward_kernel(
         _BLOCK_REDUCE_VEC3(); \
         if (warp_idx < 3 && lane_idx == 0) \
             atomicAdd((float*)address + (3*idx+warp_idx), temp);
+
+    #undef _ATOMIC_ADD
+    #define _ATOMIC_ADD(address, idx) \
+        warpSum(temp3, warp); \
+        if (lane_idx < 3) { \
+            temp = lane_idx == 0 ? temp3.x : lane_idx == 1 ? temp3.y : temp3.z; \
+            if (temp != 0.0) atomicAdd((float*)address + (3*idx+lane_idx), temp); \
+        }
 
     // #define _ATOMIC_ADD(address, idx) \
     //     if (inside) { \
@@ -578,7 +590,7 @@ std::tuple<
     unsigned b = Ks.numel() / 9;
 
     // unsigned block_width = TILE_SIZE;
-    unsigned block_width = 32;  // 1024 threads
+    // unsigned block_width = 32;  // 1024 threads
     const dim3 img_size = {w, h, b};
 
     auto options = sh_coeffs.options();
@@ -587,7 +599,8 @@ std::tuple<
 
     if (camera_model == "fisheye") {
         render_background_sh_backward_kernel<gsplat::CameraModelType::FISHEYE>
-        <<<_LAUNCH_ARGS_3D(w, h, b, block_width, block_width, 1)>>>(
+        // <<<_LAUNCH_ARGS_3D(w, h, b, block_width, block_width, 1)>>>(
+        <<<_LAUNCH_ARGS_2D(w*h, b, 256, 1)>>>(
             img_size,
             Ks.data_ptr<float>(),
             rotation.data_ptr<float>(),
@@ -600,7 +613,8 @@ std::tuple<
         );
     } else {
         render_background_sh_backward_kernel<gsplat::CameraModelType::PINHOLE>
-        <<<_LAUNCH_ARGS_3D(w, h, b, block_width, block_width, 1)>>>(
+        // <<<_LAUNCH_ARGS_3D(w, h, b, block_width, block_width, 1)>>>(
+        <<<_LAUNCH_ARGS_2D(w*h, b, 256, 1)>>>(
             img_size,
             Ks.data_ptr<float>(),
             rotation.data_ptr<float>(),

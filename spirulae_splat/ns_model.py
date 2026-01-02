@@ -64,24 +64,6 @@ from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.rich_utils import CONSOLE
 
 
-def random_quat_tensor(N):
-    """
-    Defines a random quaternion tensor of shape (N, 4)
-    """
-    u = torch.rand(N)
-    v = torch.rand(N)
-    w = torch.rand(N)
-    return torch.stack(
-        [
-            torch.sqrt(1 - u) * torch.sin(2 * math.pi * v),
-            torch.sqrt(1 - u) * torch.cos(2 * math.pi * v),
-            torch.sqrt(u) * torch.sin(2 * math.pi * w),
-            torch.sqrt(u) * torch.cos(2 * math.pi * w),
-        ],
-        dim=-1,
-    )
-
-
 def RGB2SH(rgb):
     """
     Converts from RGB values [0,1] to the 0th spherical harmonic coefficient
@@ -402,7 +384,7 @@ class SpirulaeModel(Model):
             num_points = means.shape[0]
             scales = torch.sqrt(torch.from_numpy(distances**2).mean(-1, keepdim=True)).repeat(1, 3).float()
             scales = torch.log(scale_init * scales / (self.config.kernel_radius/3.0) + 1e-8)
-            quats = F.normalize(torch.randn((num_points, 4)))
+            quats = F.normalize(torch.randn((num_points, 4)), dim=-1)
             opacities = torch.logit(opacity_init * torch.ones(num_points, 1))
 
         else:
@@ -417,7 +399,6 @@ class SpirulaeModel(Model):
             scales = S
             scales = np.log(1.5*scales/self.config.kernel_radius+1e-8)
             scales = torch.from_numpy(scales.astype(np.float32))
-            # quats = random_quat_tensor(num_points)
             quats = torch.from_numpy(np.array(
                 Rotation.from_matrix(np.transpose(Vt, axes=(0, 2, 1))).as_quat(),
                 dtype=np.float32))

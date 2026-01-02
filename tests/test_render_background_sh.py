@@ -75,14 +75,15 @@ def test_render_background_sh():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def profile_render_background_sh():
 
-    B, H, W = 1, 1440, 1080
+    # B, H, W = 1, 1440, 1080
+    B, H, W = 3, 1920, 1440
     cx, cy = 0.45*W, 0.55*H
     fx, fy = 1.5*W, 1.6*W
 
     Ks = torch.tensor([[[fx, 0, cx], [0, fy, cy], [0, 0, 1]]]).repeat(B, 1, 1).to(device)
     Ks *= torch.exp(0.2*torch.randn_like(Ks))
 
-    rotation = torch.randn(4).to(device)
+    rotation = torch.randn(B, 4).to(device)
     rotation /= torch.linalg.norm(rotation)
     rotation = _torch_impl.quat_to_rotmat(rotation)
     rotation = rotation.detach().contiguous()
@@ -98,17 +99,17 @@ def profile_render_background_sh():
 
     output = render_background_sh(
         W, H, MODEL,
-        Ks[None], rotation[None], sh_degree, sh_coeffs
+        Ks, rotation, sh_degree, sh_coeffs
     )[0]
-    _output = _torch_impl.render_background_sh(
-        W, H, (fx, fy, cx, cy),
-        _rotation, sh_degree, _sh_coeffs,
-    )
+    # _output = _torch_impl.render_background_sh(
+    #     W, H, (fx, fy, cx, cy),
+    #     _rotation, sh_degree, _sh_coeffs,
+    # )
 
-    timeit(lambda: _torch_impl.render_background_sh(
-        W, H, (fx, fy, cx, cy),
-        _rotation, sh_degree, _sh_coeffs,
-    ), "forward torch")
+    # timeit(lambda: _torch_impl.render_background_sh(
+    #     W, H, (fx, fy, cx, cy),
+    #     _rotation, sh_degree, _sh_coeffs,
+    # ), "forward torch")
     timeit(lambda: render_background_sh(
         W, H, MODEL,
         Ks[None], rotation[None], sh_degree, sh_coeffs
@@ -120,14 +121,14 @@ def profile_render_background_sh():
 
     weights = torch.randn_like(output)
     loss= (weights * output).sum()
-    _loss = (weights * _output).sum()
+    # _loss = (weights * _output).sum()
     output.retain_grad()
-    _output.retain_grad()
+    # _output.retain_grad()
     loss.backward(retain_graph=True)
-    _loss.backward(retain_graph=True)
+    # _loss.backward(retain_graph=True)
 
     timeit(lambda: _loss.backward(retain_graph=True), "backward torch")
-    timeit(lambda: loss.backward(retain_graph=True), "backward fused")
+    # timeit(lambda: loss.backward(retain_graph=True), "backward fused", 1000)
 
     print()
 
