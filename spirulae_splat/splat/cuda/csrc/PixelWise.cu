@@ -268,7 +268,7 @@ __global__ void depth_to_normal_forward_kernel(
     bool inside = (bid < B && i < W && j < H);
 
     // Zero for border pixels (consistent with PyTorch implementation)
-    if (i == 0 || i == W-1 || j == 0 || j == H-1) {
+    if (inside && (i == 0 || i == W-1 || j == 0 || j == H-1)) {
         normals.store3(bid, j, i, make_float3(0.0f));
         inside = false;
     }

@@ -517,6 +517,8 @@ at::Tensor render_background_sh_forward_tensor(
 
     auto options = sh_coeffs.options();
     at::Tensor out_color = at::empty({b, h, w, 3}, options);
+    if (b * h * w == 0)
+        return out_color;
 
     if (camera_model == "fisheye") {
         render_background_sh_forward_kernel<gsplat::CameraModelType::FISHEYE>
@@ -596,6 +598,8 @@ std::tuple<
     auto options = sh_coeffs.options();
     at::Tensor v_rotation = at::zeros({b, 3, 3}, options);
     at::Tensor v_sh_coeffs = at::zeros({sh_degree*sh_degree, 3}, options);
+    if (b * h * w == 0)
+        return std::make_tuple(v_rotation, v_sh_coeffs);
 
     if (camera_model == "fisheye") {
         render_background_sh_backward_kernel<gsplat::CameraModelType::FISHEYE>
