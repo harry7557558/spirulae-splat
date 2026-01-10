@@ -37,7 +37,8 @@ std::tuple<
     const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids   // [n_isects]
+    const at::Tensor flatten_ids,   // [n_isects]
+    bool output_distortion
 );
 
 

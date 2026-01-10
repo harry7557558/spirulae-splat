@@ -200,7 +200,7 @@ class SpirulaeModelConfig(ModelConfig):
     """if a gaussian is more than this fraction of screen space, relocate it
         Useful for fisheye with 3DGUT, may drop PSNR for conventional cameras
         For likely better quality, use mcmc_max_screen_size instead"""
-    mcmc_max_screen_size: float = float('inf')
+    mcmc_max_screen_size: float = 0.15
     """if a gaussian is more than this fraction of screen space, clip scale and increase opacity
         Intended to be an MCMC-friendly alternative of relocate_screen_size"""
     mcmc_max_screen_size_clip_hardness: float = 1.1
@@ -345,6 +345,9 @@ class SpirulaeModel(Model):
 
     def populate_modules(self):
         if self.seed_points is not None and not self.config.random_init:
+            if len(self.seed_points[0]) > self.config.mcmc_cap_max:
+                indices = torch.randperm(len(self.seed_points[0]))[:self.config.mcmc_cap_max]
+                self.seed_points = [t[indices] for t in self.seed_points]
             means = self.seed_points[0]
             if self.config.relative_scale is not None:
                 means *= self.config.relative_scale
@@ -937,6 +940,7 @@ class SpirulaeModel(Model):
             distributed=False,
             camera_model=["pinhole", "fisheye"][is_fisheye],
             render_mode="RGB+D" if self.config.primitive in ['3dgs', 'mip', '3dgut'] else "RGB+D+N",
+            output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
             **kwargs,
         )
         if self.config.supersampling != 1:
@@ -1217,17 +1221,17 @@ class SpirulaeModel(Model):
         # print can take a few ms depending on system, do in a separate thread
         if 'print_queue' not in _storage:
             import threading
-            import queue
             import sys
             import time
 
-            print_queue = queue.Queue()
+            print_queue = []
 
             def printer():
                 while True:
-                    msg = print_queue.get()
-                    if msg is None:
-                        break
+                    if len(print_queue) == 0:
+                        continue
+                    msg = print_queue[0]
+                    print_queue.clear()
                     sys.stdout.write(msg)
                     sys.stdout.flush()
                     time.sleep(0.1)
@@ -1242,7 +1246,7 @@ class SpirulaeModel(Model):
             chunks = _storage['chunks']
             # CONSOLE.print(chunks, end='')  # slow
             # print(chunks, end='')
-            _storage['print_queue'].put(chunks)
+            _storage['print_queue'].append(chunks)
             return
 
         # text formatting (instead of using rich.CONSOLE that's slow)
@@ -1350,7 +1354,7 @@ class SpirulaeModel(Model):
         chunks = ' '.join(chunks).replace('\n ', '\n')
         chunks += "\033[F"*(chunks.count('\n'))
         # print(chunks, end='')
-        _storage['print_queue'].put(chunks)
+        _storage['print_queue'].append(chunks)
         _storage['chunks'] = chunks
 
     @torch.no_grad()

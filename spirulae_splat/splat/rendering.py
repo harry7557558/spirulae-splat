@@ -41,6 +41,7 @@ def rasterization(
     far_plane: float = 1e10,
     packed: bool = True,
     use_bvh: bool = False,
+    output_distortion: bool = False,
     relative_scale: Optional[float] = None,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
@@ -550,6 +551,7 @@ def rasterization(
         backgrounds=backgrounds,
         masks=masks,
         packed=packed,
+        output_distortion=output_distortion,
         **kwargs
     )
     meta.update(render_meta)

@@ -363,8 +363,17 @@ std::tuple<
     const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids   // [n_isects]
+    const at::Tensor flatten_ids,   // [n_isects]
+    bool output_distortion
 ) {
+    if (output_distortion)
+        return rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, true, false>(
+            splats_tuple,
+            viewmats, Ks, camera_model, dist_coeffs,
+            backgrounds, masks,
+            image_width, image_height, tile_size,
+            tile_offsets, flatten_ids
+        );
     return rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, false, false>(
         splats_tuple,
         viewmats, Ks, camera_model, dist_coeffs,

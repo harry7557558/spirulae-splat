@@ -3,11 +3,13 @@
 # Batch data processing script, for small object-centered scenes with masks
 # Assume you already have the `scripts` folder added to path
 
-extract_frame_skip=20
+extract_frame_skip=10
 
 camera_model=OPENCV
 max_num_features=8192
 vocab_tree_path="../vocab_tree_flickr100K_words32K.bin"
+
+extension="*.mov"
 
 # process data
 
@@ -16,7 +18,7 @@ if false; then
 mapfile -t files < <(ls)
 sam2_cmd=""
 for file in "${files[@]}"; do
-  if [[ "$file" == *.mp4 ]]; then
+  if [[ "$file" == $extension ]]; then
     echo "* Processing $file"
 
     extract_frames.py $file -s $extract_frame_skip --mask 1
@@ -49,12 +51,12 @@ if true; then
 mapfile -t files < <(ls)
 sam2_cmd=""
 for file in "${files[@]}"; do
-  if [[ "$file" == *.mp4 ]]; then
+  if [[ "$file" == $extension ]]; then
     echo "* Training $file"
 
     dirname=${file%.*}
 
-    num_gs=50000
+    num_gs=100000
     sh_degree=3
 
     ns-train spirulae --data $dirname \

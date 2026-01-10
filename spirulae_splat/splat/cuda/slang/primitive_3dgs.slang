@@ -561,8 +561,11 @@ void evaluate_color_3dgs(
     out float3 out_rgb, out float depth
 ) {
     out_rgb = rgb;
-    // depth = length(mean - ray_o);  // TODO: more accurate depth for large splats
-    depth = 0.5*log(dot(mean-ray_o, mean-ray_o) + 1e-6);
+    // depth = 0.5 * log(dot(mean - ray_o, mean - ray_o) + 1e-6);
+    float3 gro = mul(iscl_rot, (ray_o - mean));
+    float3 grd = mul(iscl_rot, ray_d);
+    depth = -dot(gro, grd) / dot(grd, grd);
+    depth = log(max(depth, 1e-6));
 }
 
 [CudaDeviceExport]

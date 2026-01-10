@@ -455,6 +455,15 @@ std::tuple<
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
     std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> v_distortion_outputs
 ) {
+    if (v_distortion_outputs.has_value())
+        return rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, true>(
+            splats_tuple,
+            viewmats, Ks, camera_model, dist_coeffs,
+            backgrounds, masks,
+            image_width, image_height, tile_size, tile_offsets, flatten_ids,
+            render_Ts, last_ids, render_outputs, render2_outputs,
+            v_render_outputs, v_render_alphas, v_distortion_outputs
+        );
     return rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, false>(
         splats_tuple,
         viewmats, Ks, camera_model, dist_coeffs,

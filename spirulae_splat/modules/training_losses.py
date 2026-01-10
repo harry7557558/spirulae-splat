@@ -183,6 +183,7 @@ class SplatTrainingLosses(torch.nn.Module):
     def __init__(self, config, num_training_data):
         super().__init__()
 
+        self.step = 0
         self.config = config
         self.num_train_data = num_training_data
 

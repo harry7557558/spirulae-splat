@@ -45,6 +45,7 @@ def rasterize_to_pixels(
     masks: Optional[Tensor] = None,  # [..., image_height, image_width]
     packed: bool = False,
     absgrad: bool = False,
+    output_distortion: bool = False,
     **kwargs
 ) -> Tuple[Tensor, Tensor]:
     # TODO
@@ -86,6 +87,7 @@ def rasterize_to_pixels(
         additional_args = [primitive == "mip"]
     if primitive in ["3dgut"]:
         _RasterizeToPixels = _RasterizeToPixels3DGUT
+        additional_args += [output_distortion]
     elif primitive in ["opaque_triangle"]:
         _RasterizeToPixels = _RasterizeToPixelsOpaqueTriangle
     elif primitive in ["voxel"]:
@@ -103,8 +105,19 @@ def rasterize_to_pixels(
         *additional_args
     )
 
-    if primitive in ["3dgs", "mip", "3dgut"]:
+    if primitive in ["3dgs", "mip"]:
         render_rgbs, render_depths, render_alphas = render_outputs
+        return (render_rgbs, render_depths), render_alphas, {}
+    elif primitive in ["3dgut"]:
+        (
+            render_rgbs, render_depths, render_alphas,
+            distortion_rgbs, distortion_depths
+        ) = render_outputs
+        if output_distortion:
+            return (render_rgbs, render_depths), render_alphas, {
+                'rgb_distortion': distortion_rgbs,
+                'depth_distortion': distortion_depths,
+            }
         return (render_rgbs, render_depths), render_alphas, {}
     elif primitive in ["opaque_triangle"]:
         (
@@ -239,34 +252,51 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         Ks: Tensor,
         camera_model: Literal["pinhole", "fisheye"],
         dist_coeffs: Optional[Tensor],
+        output_distortion: bool = False
     ) -> Tuple[Tensor, Tensor]:
 
         camera_model = gsplat.cuda._wrapper._make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )
 
-        (render_rgbs, render_depths), render_Ts, last_ids, _1, _2, _3 = _make_lazy_cuda_func(
+        (
+            (render_rgbs, render_depths), render_Ts, last_ids, 
+            render2_outputs, distortion_outputs, max_blending
+        ) = _make_lazy_cuda_func(
             "rasterization_3dgut_forward"
         )(
             (means, quats, depths, proj_scales, proj_opacities, colors),
             viewmats, Ks, camera_model, dist_coeffs,
             backgrounds, masks,
             width, height, tile_size, isect_offsets, flatten_ids,
+            output_distortion
         )
+
+        if output_distortion:
+            render2_rgbs, render2_depths = render2_outputs
+            distortion_rgbs, distortion_depths = distortion_outputs
+        else:
+            render2_rgbs, render2_depths, distortion_rgbs, distortion_depths = None, None, None, None
+        assert max_blending is None
 
         ctx.save_for_backward(
             means, quats, depths, proj_scales, proj_opacities, colors,
             viewmats, Ks, dist_coeffs,
             backgrounds, masks,
             isect_offsets, flatten_ids, render_Ts, last_ids,
+            *(
+                [render_rgbs, render_depths, render2_rgbs, render2_depths]
+                if output_distortion else [None]*4
+            )
         )
         ctx.width = width
         ctx.height = height
         ctx.camera_model = camera_model
         ctx.tile_size = tile_size
+        ctx.output_distortion = output_distortion
 
         render_alphas = 1.0 - render_Ts
-        return render_rgbs, render_depths, render_alphas
+        return render_rgbs, render_depths, render_alphas, distortion_rgbs, distortion_depths
 
     @staticmethod
     def backward(
@@ -274,12 +304,15 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         v_render_rgbs: Tensor,  # [..., H, W, 3]
         v_render_depths: Tensor,  # [..., H, W, 1]
         v_render_alphas: Tensor,  # [..., H, W, 1]
+        v_distortion_rgbs: Tensor,  # [..., H, W, 3]
+        v_distortion_depths: Tensor,  # [..., H, W, 1]
     ):
         (
             means, quats, depths, proj_scales, proj_opacities, colors,
             viewmats, Ks, dist_coeffs,
             backgrounds, masks,
             isect_offsets, flatten_ids, render_Ts, last_ids,
+            render_rgbs, render_depths, render2_rgbs, render2_depths,
         ) = ctx.saved_tensors
         width = ctx.width
         height = ctx.height
@@ -292,9 +325,12 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
             (means, quats, depths, proj_scales, proj_opacities, colors),
             viewmats, Ks, ctx.camera_model, dist_coeffs,
             backgrounds, masks,
-            width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids, None, None,
+            width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids,
+            (render_rgbs, render_depths) if ctx.output_distortion else None,
+            (render2_rgbs, render2_depths) if ctx.output_distortion else None,
             (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
-            v_render_alphas.contiguous(), None
+            v_render_alphas.contiguous(),
+            (v_distortion_rgbs.contiguous(), v_distortion_depths.contiguous()) if ctx.output_distortion else None,
         )
 
         v_backgrounds = None
