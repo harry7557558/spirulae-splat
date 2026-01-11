@@ -951,7 +951,7 @@ class SpirulaeModel(Model):
             distributed=False,
             camera_model=["pinhole", "fisheye"][is_fisheye],
             render_mode="RGB+D" if self.config.primitive in ['3dgs', 'mip', '3dgut', '3dgut_sv'] else "RGB+D+N",
-            # output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
+            output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
             **kwargs,
         )
         if self.config.supersampling != 1:

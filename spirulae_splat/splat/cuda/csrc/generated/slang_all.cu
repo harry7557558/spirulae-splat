@@ -1,5 +1,15 @@
 #pragma once
 
+// #if defined(CUDART_VERSION) && CUDART_VERSION >= 12000
+// typedef double4_32a my_double4;
+// typedef longlong4_32a my_longlong4;
+// typedef ulonglong4_32a my_ulonglong4;
+// #else
+// typedef double4 my_double4;
+// typedef longlong4 my_longlong4;
+// typedef ulonglong4 my_ulonglong4;
+// #endif
+
 #include "slang.cuh"
 
 struct DiffPair_float_0
