@@ -97,7 +97,7 @@ class _SphericalHarmonics(torch.autograd.Function):
 
 
 def fully_fused_projection(
-    primitive: Literal["3dgs", "mip", "3dgut", "opaque_triangle"],
+    primitive: Literal["3dgs", "mip", "3dgut", "3dgut_sv", "opaque_triangle"],
     splats: tuple[Tensor],  # means, quats, scales, opacities
     viewmats: Tensor,  # [..., C, 4, 4]
     Ks: Tensor,  # [..., C, 3, 3]
@@ -130,7 +130,7 @@ def fully_fused_projection(
         splats = [x.contiguous() for x in splats]
 
         in_splats = splats[:]
-        if primitive in ["3dgs", "mip", "3dgut"]:
+        if primitive in ["3dgs", "mip", "3dgut", "3dgut_sv"]:
             _FullyFusedProjection = _FullyFusedProjection3DGS
             in_splats = [primitive] + in_splats
         elif primitive in ["opaque_triangle"]:
@@ -152,7 +152,7 @@ def fully_fused_projection(
         if primitive in ["3dgs", "mip"]:
             aabb, means2d, depths, conics, opacities, rgbs = proj_returns
             return aabb, depths, (means2d, depths, conics, opacities, rgbs)
-        elif primitive in ['3dgut']:
+        elif primitive in ['3dgut', '3dgut_sv']:
             means, quats, scales, opacities, features_dc, features_sh = splats
             aabb, depths, scales, opacities, rgbs = proj_returns
             return aabb, depths, (means, quats, depths, scales, opacities, rgbs)
@@ -174,7 +174,7 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        primitive: Literal["3dgs", "mip", "3dgut"],
+        primitive: Literal["3dgs", "mip", "3dgut", "3dgut_sv"],
         means: Tensor,  # [..., N, 3]
         quats: Tensor,  # [..., N, 4]
         scales: Tensor,  # [..., N, 3]

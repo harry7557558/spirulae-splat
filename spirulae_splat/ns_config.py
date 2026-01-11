@@ -63,6 +63,14 @@ _DEFAULT_OPTIMIZERS = {
         "optimizer": AdamOptimizerConfig(lr=0.0025 / 5, eps=1e-15),
         "scheduler": None,
     },
+    "sv_sites": {
+        "optimizer": AdamOptimizerConfig(lr=0.01, eps=1e-15),
+        "scheduler": None,
+    },
+    "sv_colors": {
+        "optimizer": AdamOptimizerConfig(lr=0.0005, eps=1e-15),
+        "scheduler": None,
+    },
     "opacities": {
         "optimizer": AdamOptimizerConfig(lr=0.05, eps=1e-15),
         "scheduler": None,

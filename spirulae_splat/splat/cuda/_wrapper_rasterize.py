@@ -85,7 +85,7 @@ def rasterize_to_pixels(
     if primitive in ["3dgs", "mip"]:
         _RasterizeToPixels = _RasterizeToPixels3DGS
         additional_args = [primitive == "mip"]
-    if primitive in ["3dgut"]:
+    if primitive in ["3dgut", "3dgut_sv"]:
         _RasterizeToPixels = _RasterizeToPixels3DGUT
         additional_args += [output_distortion]
     elif primitive in ["opaque_triangle"]:
@@ -108,7 +108,7 @@ def rasterize_to_pixels(
     if primitive in ["3dgs", "mip"]:
         render_rgbs, render_depths, render_alphas = render_outputs
         return (render_rgbs, render_depths), render_alphas, {}
-    elif primitive in ["3dgut"]:
+    elif primitive in ["3dgut", "3dgut_sv"]:
         (
             render_rgbs, render_depths, render_alphas,
             distortion_rgbs, distortion_depths

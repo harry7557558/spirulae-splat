@@ -215,6 +215,31 @@ void sh_coeffs_to_color(
     // colors = max(colors+0.5f, 0.0f);
 }
 
+[ForceInline]
+[Differentiable]
+void sv_coeffs_to_color<let num_sv : int>(
+    float3 viewdir,
+    const float3 sv_sites[num_sv],
+    const float3 sv_colors[num_sv],
+    out float3 color
+) {
+    viewdir *= rsqrt(dot(viewdir, viewdir));
+
+    float maxdot = dot(sv_sites[0], viewdir);
+    [ForceUnroll] for (int i = 1; i < num_sv; i++) {
+        maxdot = dot(sv_sites[i], viewdir);
+    }
+
+    float total_w = 0.0;
+    float3 total_c = float3(0.0);
+    [ForceUnroll] for (int i = 0; i < num_sv; i++) {
+        float w = exp(dot(sv_sites[i], viewdir) - maxdot);
+        total_w += w;
+        total_c += w * sv_colors[i];
+    }
+
+    color = total_c / total_w;
+}
 
 [ForceInline]
 [Differentiable]

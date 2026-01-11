@@ -64,22 +64,6 @@ from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.rich_utils import CONSOLE
 
 
-def RGB2SH(rgb):
-    """
-    Converts from RGB values [0,1] to the 0th spherical harmonic coefficient
-    """
-    C0 = 0.28209479177387814
-    return (rgb - 0.5) / C0
-
-
-def SH2RGB(sh):
-    """
-    Converts from the 0th spherical harmonic coefficient to RGB values [0,1]
-    """
-    C0 = 0.28209479177387814
-    return sh * C0 + 0.5
-
-
 
 class SaturateKeepGradient(torch.autograd.Function):
     @staticmethod
@@ -99,7 +83,7 @@ class SpirulaeModelConfig(ModelConfig):
 
     _target: Type = field(default_factory=lambda: SpirulaeModel)
 
-    primitive: Literal["3dgs", "mip", "3dgut", "opaque_triangle", "voxel"] = "3dgut"
+    primitive: Literal["3dgs", "mip", "3dgut", "3dgut_sv", "opaque_triangle", "voxel"] = "3dgut"
     """Splat primitive to use"""
     fit: Literal["rgb", "depth", "normal"] = "rgb"
     """Fit RGB image by default, fit depth/normal for geometry reconstruction
@@ -213,7 +197,9 @@ class SpirulaeModelConfig(ModelConfig):
     sh_degree: int = 3
     """maximum degree of spherical harmonics to use"""
     sh_degree_interval: int = 1000
-    """every n intervals turn on another sh degree"""
+    """every n intervals turn on another sh degree; TODO: deprecated?"""
+    num_sv: int = 4  # 8
+    """number of spherical voronoi to use"""
     train_background_color: bool = True
     """make background color trainable"""
     background_sh_degree: int = 4
@@ -415,7 +401,7 @@ class SpirulaeModel(Model):
             ]]).to(M).repeat(len(M), 1, 1))
 
         gauss_params = {}
-        if self.config.primitive in ["3dgs", "mip", "3dgut", "opaque_triangle"]:
+        if self.config.primitive in ["3dgs", "mip", "3dgut", "3dgut_sv", "opaque_triangle"]:
             gauss_params['means'] = torch.nn.Parameter(means)
             gauss_params['quats'] = torch.nn.Parameter(quats)
             gauss_params['scales'] = torch.nn.Parameter(scales)
@@ -432,21 +418,25 @@ class SpirulaeModel(Model):
             # We can have colors without points.
             and self.seed_points[1].shape[0] > 0
         ):
-            shs = torch.zeros((num_points, dim_sh, 3)).float()
             seed_color = self.seed_points[1] / 255
             if len(seed_color) != num_points:
                 seed_color = seed_color.mean(0, True).repeat(num_points, 1)
+        else:
+            seed_color = torch.rand(num_points, 3)
+
+        if self.config.primitive in ["3dgs", "mip", "3dgut", "opaque_triangle", "voxel"]:
+            shs = torch.zeros((num_points, dim_sh, 3)).float()
+            shs[:, 0, :3] = (seed_color - 0.5) / 0.28209479177387814
             if self.config.sh_degree > 0:
-                shs[:, 0, :3] = RGB2SH(seed_color)
                 shs[:, 1:, 3:] = 0.0
-            else:
-                # shs[:, 0, :3] = seed_color
-                shs[:, 0, :3] = RGB2SH(seed_color)
             gauss_params['features_dc'] = torch.nn.Parameter(shs[:, 0, :].contiguous())
             gauss_params['features_sh'] = torch.nn.Parameter(shs[:, 1:, :].contiguous())
-        else:
-            gauss_params['features_dc'] = torch.nn.Parameter(torch.rand(num_points, 3))
-            gauss_params['features_sh'] = torch.nn.Parameter(torch.zeros((num_points, dim_sh-1, 3)))
+
+        elif self.config.primitive in ["3dgut_sv"]:
+            sv_colors = seed_color.unsqueeze(1).repeat(1, self.config.num_sv, 1)
+            sv_sites = torch.zeros_like(sv_colors)
+            gauss_params['sv_colors'] = torch.nn.Parameter(sv_colors.contiguous())
+            gauss_params['sv_sites'] = torch.nn.Parameter(sv_sites.contiguous())
 
         if self.config.primitive == "opaque_triangle":
             gauss_params['features_ch'] = torch.nn.Parameter(torch.zeros((num_points, 2, 3)))
@@ -573,10 +563,15 @@ class SpirulaeModel(Model):
 
     @property
     def colors(self):
-        return SH2RGB(self.features_dc)
+        if self.config.primitive == "3dgut_sv":
+            return self.sv_colors.mean(-2) + 0.5
+        C0 = 0.28209479177387814
+        return self.features_dc * C0 + 0.5
 
     @property
     def num_points(self):
+        if self.means is not None:
+            return self.means.shape[0]
         return self.features_dc.shape[0]
 
     @property
@@ -604,6 +599,14 @@ class SpirulaeModel(Model):
         return self.gauss_params.get("features_ch", None)
 
     @property
+    def sv_sites(self):
+        return self.gauss_params.get("sv_sites", None)
+
+    @property
+    def sv_colors(self):
+        return self.gauss_params.get("sv_colors", None)
+
+    @property
     def opacities(self):
         return self.gauss_params.get("opacities", None)
 
@@ -616,6 +619,7 @@ class SpirulaeModel(Model):
         self.step = self.config.num_iterations
         for p in ["means", "scales", "quats",
                     "features_dc", "features_sh", "features_ch",
+                    "sv_sites", "sv_colors",
                     "opacities", "densities"]:
             if p in dict:
                 dict[f"gauss_params.{p}"] = dict[p]
@@ -721,6 +725,7 @@ class SpirulaeModel(Model):
             for name in [
                 "means", "scales", "quats",
                 "features_dc", "features_sh", "features_ch",
+                "sv_sites", "sv_colors",
                 "opacities", "densities"
             ] if name in self.gauss_params
         }
@@ -802,7 +807,7 @@ class SpirulaeModel(Model):
             print("Called get_outputs with not a camera")
             return {}
 
-        device = self.features_dc.device
+        device = self.means.device if self.means is not None else self.features_dc.device
 
         if self.training and self.config.use_camera_optimizer:
             optimized_camera_to_world = self.camera_optimizer.apply_to_camera(camera)
@@ -892,6 +897,12 @@ class SpirulaeModel(Model):
                 self.opacities.squeeze(-1),
                 self.features_dc, self.features_sh
             )
+        if self.config.primitive in ['3dgut_sv']:
+            splat_params = (
+                self.means, F.normalize(self.quats, dim=-1), self.scales,
+                self.opacities.squeeze(-1),
+                self.sv_sites, self.sv_colors
+            )
         elif self.config.primitive in ['opaque_triangle']:
             # hardness = min(max(self.step / self.config.stop_refine_at, 0.1), 1.0)
             opacity_floor = self.strategy.get_opacity_floor(self.step)
@@ -939,8 +950,8 @@ class SpirulaeModel(Model):
             sparse_grad=False,
             distributed=False,
             camera_model=["pinhole", "fisheye"][is_fisheye],
-            render_mode="RGB+D" if self.config.primitive in ['3dgs', 'mip', '3dgut'] else "RGB+D+N",
-            output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
+            render_mode="RGB+D" if self.config.primitive in ['3dgs', 'mip', '3dgut', '3dgut_sv'] else "RGB+D+N",
+            # output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
             **kwargs,
         )
         if self.config.supersampling != 1:
@@ -1263,7 +1274,8 @@ class SpirulaeModel(Model):
             return f"\033[1;41m{s.replace('\033[m', '')}\033[m" if threshold >= 1.0 else s
 
         # get VRAM usage (only supports single GPU at this time)
-        free, total = torch.cuda.mem_get_info(self.features_dc.device)
+        device = self.means.device if self.means is not None else self.features_dc.device
+        free, total = torch.cuda.mem_get_info(device)
         used = (total - free) / 1024**3
         used_percentage = (1 - free/total)*100
         mem_stats = boldcyan(f"{used:.2f}") + f"\N{ZERO WIDTH SPACE}GB " + boldcyan(f"{used_percentage:.0f}") + "%"

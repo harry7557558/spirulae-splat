@@ -56,7 +56,7 @@ for file in "${files[@]}"; do
 
     dirname=${file%.*}
 
-    num_gs=100000
+    num_gs=80000
     sh_degree=3
 
     ns-train spirulae --data $dirname \

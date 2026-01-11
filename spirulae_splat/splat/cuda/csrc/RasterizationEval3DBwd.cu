@@ -476,6 +476,55 @@ std::tuple<
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<
+    SphericalVoronoi3DGUT_Default::Screen::TensorTuple,
+    std::optional<at::Tensor>  // v_viewmats
+> rasterize_to_pixels_3dgut_sv_bwd(
+    // Gaussian parameters
+    SphericalVoronoi3DGUT_Default::Screen::TensorTuple splats_tuple,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
+    const std::optional<at::Tensor> backgrounds, // [..., channels]
+    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    // forward outputs
+    const at::Tensor render_Ts, // [..., image_height, image_width, 1]
+    const at::Tensor last_ids,      // [..., image_height, image_width]
+    std::optional<typename SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple> render_outputs,
+    std::optional<typename SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple> render2_outputs,
+    // gradients of outputs
+    SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple v_render_outputs,
+    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    std::optional<typename SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple> v_distortion_outputs
+) {
+    if (v_distortion_outputs.has_value())
+        return rasterize_to_pixels_eval3d_bwd_tensor<SphericalVoronoi3DGUT_Default, true>(
+            splats_tuple,
+            viewmats, Ks, camera_model, dist_coeffs,
+            backgrounds, masks,
+            image_width, image_height, tile_size, tile_offsets, flatten_ids,
+            render_Ts, last_ids, render_outputs, render2_outputs,
+            v_render_outputs, v_render_alphas, v_distortion_outputs
+        );
+    return rasterize_to_pixels_eval3d_bwd_tensor<SphericalVoronoi3DGUT_Default, false>(
+        splats_tuple,
+        viewmats, Ks, camera_model, dist_coeffs,
+        backgrounds, masks,
+        image_width, image_height, tile_size, tile_offsets, flatten_ids,
+        render_Ts, last_ids, render_outputs, render2_outputs,
+        v_render_outputs, v_render_alphas, v_distortion_outputs
+    );
+}
+
+/*[AutoHeaderGeneratorExport]*/
+std::tuple<
     OpaqueTriangle::Screen::TensorTuple,
     std::optional<at::Tensor>  // v_viewmats
 > rasterize_to_pixels_opaque_triangle_eval3d_bwd(

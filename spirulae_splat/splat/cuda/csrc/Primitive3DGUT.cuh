@@ -12,7 +12,7 @@
 #include <tuple>
 
 
-struct Vanilla3DGUT {
+struct Base3DGUT {
     struct World;
     struct Screen;
     struct RenderOutput;
@@ -28,16 +28,6 @@ struct Vanilla3DGUT {
         CameraDistortionCoeffs dist_coeffs;
     };
 
-    inline static __device__ void project_persp(
-        World world, FwdProjCamera cam,
-        Screen& proj, int4& aabb
-    );
-
-    inline static __device__ void project_fisheye(
-        World world, FwdProjCamera cam,
-        Screen& proj, int4& aabb
-    );
-
     struct BwdProjCamera {
         float3x3 R;
         float3 t;
@@ -46,170 +36,19 @@ struct Vanilla3DGUT {
         CameraDistortionCoeffs dist_coeffs;
     };
 
-    inline static __device__ void project_persp_vjp(
-        World world, BwdProjCamera cam,
-        Screen v_proj,
-        World& v_world, float3x3 &v_R, float3 &v_t
-    );
-
-    inline static __device__ void project_fisheye_vjp(
-        World world, BwdProjCamera cam,
-        Screen v_proj,
-        World& v_world, float3x3 &v_R, float3 &v_t
-    );
-
 #endif  // #ifdef __CUDACC__
 
-    static constexpr float eps2d = 0.3f;
 };
 
-struct Vanilla3DGUT::World {
-
+struct Base3DGUT::World {
     float3 mean;
     float4 quat;
     float3 scale;
     float opacity;
-    FixedArray<float3, 16> sh_coeffs;
-
-    typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTuple;
-
-    struct Buffer;
-
-    struct Tensor {
-        at::Tensor means;
-        at::Tensor quats;
-        at::Tensor scales;
-        at::Tensor opacities;
-        at::Tensor features_dc;
-        at::Tensor features_sh;
-
-        Tensor(const TensorTuple& splats) {
-            means = std::get<0>(splats);
-            quats = std::get<1>(splats);
-            scales = std::get<2>(splats);
-            opacities = std::get<3>(splats);
-            features_dc = std::get<4>(splats);
-            features_sh = std::get<5>(splats);
-        }
-
-        TensorTuple tuple() const {
-            return std::make_tuple(means, quats, scales, opacities, features_dc, features_sh);
-        }
-
-        Tensor zeros_like() const {
-            return Tensor(std::make_tuple(
-                at::zeros_like(means),
-                at::zeros_like(quats),
-                at::zeros_like(scales),
-                at::zeros_like(opacities),
-                at::zeros_like(features_dc),
-                at::zeros_like(features_sh)
-            ));
-        }
-
-        auto options() const {
-            return means.options();
-        }
-        long size() const {
-            return quats.size(-2);
-        }
-        long batchSize() const {
-            return quats.numel() / (4*size());
-        }
-
-        Buffer buffer() { return Buffer(*this); }
-    };
-
-    struct Buffer {
-        float3* __restrict__ means;
-        float4* __restrict__ quats;
-        float3* __restrict__ scales;
-        float* __restrict__ opacities;
-        float3* __restrict__ features_dc;
-        float3* __restrict__ features_sh;
-        uint num_sh;
-
-        Buffer(const Tensor& tensors) {
-            DEVICE_GUARD(tensors.means);
-            CHECK_INPUT(tensors.means);
-            CHECK_INPUT(tensors.quats);
-            CHECK_INPUT(tensors.scales);
-            CHECK_INPUT(tensors.opacities);
-            CHECK_INPUT(tensors.features_dc);
-            CHECK_INPUT(tensors.features_sh);
-            means = (float3*)tensors.means.data_ptr<float>();
-            quats = (float4*)tensors.quats.data_ptr<float>();
-            scales = (float3*)tensors.scales.data_ptr<float>();
-            opacities = tensors.opacities.data_ptr<float>();
-            features_dc = (float3*)tensors.features_dc.data_ptr<float>();
-            features_sh = (float3*)tensors.features_sh.data_ptr<float>();
-            num_sh = tensors.features_sh.size(-2);
-        }
-    };
-
-#ifdef __CUDACC__
-
-    static __device__ World load(const Buffer &buffer, long idx) {
-        World world = {
-            buffer.means[idx],
-            buffer.quats[idx],
-            buffer.scales[idx],
-            buffer.opacities[idx]
-        };
-        world.sh_coeffs[0] = buffer.features_dc[idx];
-        for (int i = 0; i < 15; i++)
-            world.sh_coeffs[i+1] = i < buffer.num_sh ?
-                buffer.features_sh[idx*buffer.num_sh+i] : make_float3(0);
-        return world;
-    }
-
-    static __device__ __forceinline__ World zero() {
-        World world = {
-            {0.f, 0.f, 0.f},
-            {0.f, 0.f, 0.f, 0.f},
-            {0.f, 0.f, 0.f},
-            0.f,
-        };
-        for (int i = 0; i < 16; i++)
-            world.sh_coeffs[i] = make_float3(0);
-        return world;
-    }
-
-    template<typename Partition>
-    __device__ void reduce(Partition& partition) {
-        warpSum(mean, partition);
-        warpSum(quat, partition);
-        warpSum(scale, partition);
-        warpSum(opacity, partition);
-        for (int i = 0; i < 16; i++)
-            warpSum(sh_coeffs[i], partition);
-    }
-    
-    __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
-        buffer.means[idx] = mean;
-        buffer.quats[idx] = quat;
-        buffer.scales[idx] = scale;
-        buffer.opacities[idx] = opacity;
-        buffer.features_dc[idx] = sh_coeffs[0];
-        for (int i = 0; i < buffer.num_sh; i++)
-            buffer.features_sh[idx*buffer.num_sh + i] = sh_coeffs[i+1];
-    }
-
-    __device__ void atomicAddGradientToBuffer(Buffer &buffer, long idx) {
-        atomicAddFVec(buffer.means + idx, mean);
-        atomicAddFVec(buffer.quats + idx, quat);
-        atomicAddFVec(buffer.scales + idx, scale);
-        atomicAddFVec(buffer.opacities + idx, opacity);
-        atomicAddFVec(buffer.features_dc + idx, sh_coeffs[0]);
-        for (int i = 0; i < buffer.num_sh; i++)
-            atomicAddFVec(buffer.features_sh + idx*buffer.num_sh + i, sh_coeffs[i+1]);
-    }
-
-#endif  // #ifdef __CUDACC__
 };
 
 
-struct Vanilla3DGUT::RenderOutput {
+struct Base3DGUT::RenderOutput {
 
     float3 rgb;
     float depth;
@@ -318,7 +157,7 @@ struct Vanilla3DGUT::RenderOutput {
 };
 
 
-struct Vanilla3DGUT::Screen {
+struct Base3DGUT::Screen {
 
     // from world
     float3 mean;
@@ -541,12 +380,12 @@ struct Vanilla3DGUT::Screen {
         return v_splat;
     }
 
-    __device__ __forceinline__ Vanilla3DGUT::RenderOutput evaluate_color(float3 ray_o, float3 ray_d) {
+    __device__ __forceinline__ Base3DGUT::RenderOutput evaluate_color(float3 ray_o, float3 ray_d) {
         return {rgb, depth};
     }
 
     __device__ __forceinline__ Screen evaluate_color_vjp(
-        float3 ray_o, float3 ray_d, Vanilla3DGUT::RenderOutput v_render,
+        float3 ray_o, float3 ray_d, Base3DGUT::RenderOutput v_render,
         float3 &v_ray_o, float3 &v_ray_d
     ) {
         Screen v_splat = Screen::zero();
@@ -560,6 +399,190 @@ struct Vanilla3DGUT::Screen {
 };
 
 
+
+struct Vanilla3DGUT : public Base3DGUT {
+    struct World;
+
+#ifdef __CUDACC__
+
+    inline static __device__ void project_persp(
+        World world, FwdProjCamera cam,
+        Screen& proj, int4& aabb
+    );
+
+    inline static __device__ void project_fisheye(
+        World world, FwdProjCamera cam,
+        Screen& proj, int4& aabb
+    );
+
+    struct BwdProjCamera {
+        float3x3 R;
+        float3 t;
+        float fx, fy, cx, cy;
+        uint width, height;
+        CameraDistortionCoeffs dist_coeffs;
+    };
+
+    inline static __device__ void project_persp_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t
+    );
+
+    inline static __device__ void project_fisheye_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t
+    );
+
+#endif  // #ifdef __CUDACC__
+
+};
+
+
+struct Vanilla3DGUT::World : public Base3DGUT::World {
+
+#ifdef __CUDACC__
+    FixedArray<float3, 16> sh_coeffs;
+#endif
+
+    typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTuple;
+
+    struct Buffer;
+
+    struct Tensor {
+        at::Tensor means;
+        at::Tensor quats;
+        at::Tensor scales;
+        at::Tensor opacities;
+        at::Tensor features_dc;
+        at::Tensor features_sh;
+
+        Tensor(const TensorTuple& splats) {
+            means = std::get<0>(splats);
+            quats = std::get<1>(splats);
+            scales = std::get<2>(splats);
+            opacities = std::get<3>(splats);
+            features_dc = std::get<4>(splats);
+            features_sh = std::get<5>(splats);
+        }
+
+        TensorTuple tuple() const {
+            return std::make_tuple(means, quats, scales, opacities, features_dc, features_sh);
+        }
+
+        Tensor zeros_like() const {
+            return Tensor(std::make_tuple(
+                at::zeros_like(means),
+                at::zeros_like(quats),
+                at::zeros_like(scales),
+                at::zeros_like(opacities),
+                at::zeros_like(features_dc),
+                at::zeros_like(features_sh)
+            ));
+        }
+
+        auto options() const {
+            return means.options();
+        }
+        long size() const {
+            return quats.size(-2);
+        }
+        long batchSize() const {
+            return quats.numel() / (4*size());
+        }
+
+        Buffer buffer() { return Buffer(*this); }
+    };
+
+    struct Buffer {
+        float3* __restrict__ means;
+        float4* __restrict__ quats;
+        float3* __restrict__ scales;
+        float* __restrict__ opacities;
+        float3* __restrict__ features_dc;
+        float3* __restrict__ features_sh;
+        uint num_sh;
+
+        Buffer(const Tensor& tensors) {
+            DEVICE_GUARD(tensors.means);
+            CHECK_INPUT(tensors.means);
+            CHECK_INPUT(tensors.quats);
+            CHECK_INPUT(tensors.scales);
+            CHECK_INPUT(tensors.opacities);
+            CHECK_INPUT(tensors.features_dc);
+            CHECK_INPUT(tensors.features_sh);
+            means = (float3*)tensors.means.data_ptr<float>();
+            quats = (float4*)tensors.quats.data_ptr<float>();
+            scales = (float3*)tensors.scales.data_ptr<float>();
+            opacities = tensors.opacities.data_ptr<float>();
+            features_dc = (float3*)tensors.features_dc.data_ptr<float>();
+            features_sh = (float3*)tensors.features_sh.data_ptr<float>();
+            num_sh = tensors.features_sh.size(-2);
+        }
+    };
+
+#ifdef __CUDACC__
+
+    static __device__ World load(const Buffer &buffer, long idx) {
+        World world = {
+            buffer.means[idx],
+            buffer.quats[idx],
+            buffer.scales[idx],
+            buffer.opacities[idx]
+        };
+        world.sh_coeffs[0] = buffer.features_dc[idx];
+        for (int i = 0; i < 15; i++)
+            world.sh_coeffs[i+1] = i < buffer.num_sh ?
+                buffer.features_sh[idx*buffer.num_sh+i] : make_float3(0);
+        return world;
+    }
+
+    static __device__ __forceinline__ World zero() {
+        World world;
+        world.mean = {0.f, 0.f, 0.f};
+        world.quat = {0.f, 0.f, 0.f, 0.f};
+        world.scale = {0.f, 0.f, 0.f};
+        world.opacity = 0.f;
+        for (int i = 0; i < 16; i++)
+            world.sh_coeffs[i] = make_float3(0);
+        return world;
+    }
+
+    template<typename Partition>
+    __device__ void reduce(Partition& partition) {
+        warpSum(mean, partition);
+        warpSum(quat, partition);
+        warpSum(scale, partition);
+        warpSum(opacity, partition);
+        for (int i = 0; i < 16; i++)
+            warpSum(sh_coeffs[i], partition);
+    }
+    
+    __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
+        buffer.means[idx] = mean;
+        buffer.quats[idx] = quat;
+        buffer.scales[idx] = scale;
+        buffer.opacities[idx] = opacity;
+        buffer.features_dc[idx] = sh_coeffs[0];
+        for (int i = 0; i < buffer.num_sh; i++)
+            buffer.features_sh[idx*buffer.num_sh + i] = sh_coeffs[i+1];
+    }
+
+    __device__ void atomicAddGradientToBuffer(Buffer &buffer, long idx) {
+        atomicAddFVec(buffer.means + idx, mean);
+        atomicAddFVec(buffer.quats + idx, quat);
+        atomicAddFVec(buffer.scales + idx, scale);
+        atomicAddFVec(buffer.opacities + idx, opacity);
+        atomicAddFVec(buffer.features_dc + idx, sh_coeffs[0]);
+        for (int i = 0; i < buffer.num_sh; i++)
+            atomicAddFVec(buffer.features_sh + idx*buffer.num_sh + i, sh_coeffs[i+1]);
+    }
+
+#endif  // #ifdef __CUDACC__
+};
+
+
 #ifdef __CUDACC__
 
 inline __device__ void Vanilla3DGUT::project_persp(
@@ -567,7 +590,7 @@ inline __device__ void Vanilla3DGUT::project_persp(
     Vanilla3DGUT::Screen& proj, int4& aabb
 ) {
     float2 xy;
-    projection_3dgs_eval3d_persp(
+    projection_3dgut_persp(
         false,
         world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
@@ -582,7 +605,7 @@ inline __device__ void Vanilla3DGUT::project_fisheye(
     Vanilla3DGUT::Screen& proj, int4& aabb
 ) {
     float2 xy;
-    projection_3dgs_eval3d_fisheye(
+    projection_3dgut_fisheye(
         false,
         world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
@@ -597,7 +620,7 @@ inline __device__ void Vanilla3DGUT::project_persp_vjp(
     Vanilla3DGUT::Screen v_proj,
     Vanilla3DGUT::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
-    projection_3dgs_eval3d_persp_vjp(
+    projection_3dgut_persp_vjp(
         false,
         world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
@@ -614,7 +637,7 @@ inline __device__ void Vanilla3DGUT::project_fisheye_vjp(
     Vanilla3DGUT::Screen v_proj,
     Vanilla3DGUT::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
-    projection_3dgs_eval3d_fisheye_vjp(
+    projection_3dgut_fisheye_vjp(
         false,
         world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
@@ -627,3 +650,271 @@ inline __device__ void Vanilla3DGUT::project_fisheye_vjp(
 }
 
 #endif  // #ifdef __CUDACC__
+
+
+
+
+template<int num_sv>
+struct SphericalVoronoi3DGUT : public Base3DGUT {
+    struct World;
+
+#ifdef __CUDACC__
+
+    inline static __device__ void project_persp(
+        World world, FwdProjCamera cam,
+        Screen& proj, int4& aabb
+    );
+
+    inline static __device__ void project_fisheye(
+        World world, FwdProjCamera cam,
+        Screen& proj, int4& aabb
+    );
+
+    struct BwdProjCamera {
+        float3x3 R;
+        float3 t;
+        float fx, fy, cx, cy;
+        uint width, height;
+        CameraDistortionCoeffs dist_coeffs;
+    };
+
+    inline static __device__ void project_persp_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t
+    );
+
+    inline static __device__ void project_fisheye_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t
+    );
+
+#endif  // #ifdef __CUDACC__
+
+};
+
+
+template<int num_sv>
+struct SphericalVoronoi3DGUT<num_sv>::World : public Base3DGUT::World {
+
+#ifdef __CUDACC__
+    FixedArray<float3, num_sv> sv_sites;
+    FixedArray<float3, num_sv> sv_colors;
+#endif
+
+    typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTuple;
+
+    struct Buffer;
+
+    struct Tensor {
+        at::Tensor means;
+        at::Tensor quats;
+        at::Tensor scales;
+        at::Tensor opacities;
+        at::Tensor sv_sites;
+        at::Tensor sv_colors;
+
+        Tensor(const TensorTuple& splats) {
+            means = std::get<0>(splats);
+            quats = std::get<1>(splats);
+            scales = std::get<2>(splats);
+            opacities = std::get<3>(splats);
+            sv_sites = std::get<4>(splats);
+            sv_colors = std::get<5>(splats);
+        }
+
+        TensorTuple tuple() const {
+            return std::make_tuple(means, quats, scales, opacities, sv_sites, sv_colors);
+        }
+
+        Tensor zeros_like() const {
+            return Tensor(std::make_tuple(
+                at::zeros_like(means),
+                at::zeros_like(quats),
+                at::zeros_like(scales),
+                at::zeros_like(opacities),
+                at::zeros_like(sv_sites),
+                at::zeros_like(sv_colors)
+            ));
+        }
+
+        auto options() const {
+            return means.options();
+        }
+        long size() const {
+            return quats.size(-2);
+        }
+        long batchSize() const {
+            return quats.numel() / (4*size());
+        }
+
+        Buffer buffer() { return Buffer(*this); }
+    };
+
+    struct Buffer {
+        float3* __restrict__ means;
+        float4* __restrict__ quats;
+        float3* __restrict__ scales;
+        float* __restrict__ opacities;
+        float3* __restrict__ sv_sites;
+        float3* __restrict__ sv_colors;
+
+        Buffer(const Tensor& tensors) {
+            DEVICE_GUARD(tensors.means);
+            CHECK_INPUT(tensors.means);
+            CHECK_INPUT(tensors.quats);
+            CHECK_INPUT(tensors.scales);
+            CHECK_INPUT(tensors.opacities);
+            CHECK_INPUT(tensors.sv_sites);
+            CHECK_INPUT(tensors.sv_colors);
+            means = (float3*)tensors.means.template data_ptr<float>();
+            quats = (float4*)tensors.quats.template data_ptr<float>();
+            scales = (float3*)tensors.scales.template data_ptr<float>();
+            opacities = tensors.opacities.template data_ptr<float>();
+            sv_sites = (float3*)tensors.sv_sites.template data_ptr<float>();
+            sv_colors = (float3*)tensors.sv_colors.template data_ptr<float>();
+        }
+    };
+
+#ifdef __CUDACC__
+
+    static __device__ World load(const Buffer &buffer, long idx) {
+        World world = {
+            buffer.means[idx],
+            buffer.quats[idx],
+            buffer.scales[idx],
+            buffer.opacities[idx]
+        };
+        for (int i = 0; i < num_sv; i++) {
+            world.sv_sites[i] = buffer.sv_sites[idx*num_sv+i];
+            world.sv_colors[i] = buffer.sv_colors[idx*num_sv+i];
+        }
+        return world;
+    }
+
+    static __device__ __forceinline__ World zero() {
+        World world;
+        world.mean = {0.f, 0.f, 0.f};
+        world.quat = {0.f, 0.f, 0.f, 0.f};
+        world.scale = {0.f, 0.f, 0.f};
+        world.opacity = 0.f;
+        for (int i = 0; i < num_sv; i++) {
+            world.sv_sites[i] = make_float3(0);
+            world.sv_colors[i] = make_float3(0);
+        }
+        return world;
+    }
+
+    template<typename Partition>
+    __device__ void reduce(Partition& partition) {
+        warpSum(mean, partition);
+        warpSum(quat, partition);
+        warpSum(scale, partition);
+        warpSum(opacity, partition);
+        for (int i = 0; i < num_sv; i++) {
+            warpSum(sv_sites[i], partition);
+            warpSum(sv_colors[i], partition);
+        }
+    }
+
+    __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
+        buffer.means[idx] = mean;
+        buffer.quats[idx] = quat;
+        buffer.scales[idx] = scale;
+        buffer.opacities[idx] = opacity;
+        for (int i = 0; i < num_sv; i++) {
+            buffer.sv_sites[idx*num_sv+i] = sv_sites[i];
+            buffer.sv_colors[idx*num_sv+i] = sv_colors[i];
+        }
+    }
+
+    __device__ void atomicAddGradientToBuffer(Buffer &buffer, long idx) {
+        atomicAddFVec(buffer.means + idx, mean);
+        atomicAddFVec(buffer.quats + idx, quat);
+        atomicAddFVec(buffer.scales + idx, scale);
+        atomicAddFVec(buffer.opacities + idx, opacity);
+        for (int i = 0; i < num_sv; i++) {
+            atomicAddFVec(buffer.sv_sites + idx*num_sv + i, sv_sites[i]);
+            atomicAddFVec(buffer.sv_colors + idx*num_sv + i, sv_colors[i]);
+        }
+    }
+
+#endif  // #ifdef __CUDACC__
+};
+
+
+#ifdef __CUDACC__
+
+template<int num_sv>
+inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_persp(
+    SphericalVoronoi3DGUT<num_sv>::World world, SphericalVoronoi3DGUT<num_sv>::FwdProjCamera cam,
+    SphericalVoronoi3DGUT<num_sv>::Screen& proj, int4& aabb
+) {
+    float2 xy;
+    projection_3dgut_sv_persp(
+        false,
+        world.mean, world.quat, world.scale, world.opacity, &world.sv_sites, &world.sv_colors,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        cam.width, cam.height, cam.near_plane, cam.far_plane,
+        &aabb, &xy, &proj.depth, &proj.scale, &proj.opacity, &proj.rgb
+    );
+    proj.mean = world.mean, proj.quat = world.quat;
+}
+
+template<int num_sv>
+inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_fisheye(
+    SphericalVoronoi3DGUT<num_sv>::World world, SphericalVoronoi3DGUT<num_sv>::FwdProjCamera cam,
+    SphericalVoronoi3DGUT<num_sv>::Screen& proj, int4& aabb
+) {
+    float2 xy;
+    projection_3dgut_sv_fisheye(
+        false,
+        world.mean, world.quat, world.scale, world.opacity, &world.sv_sites, &world.sv_colors,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        cam.width, cam.height, cam.near_plane, cam.far_plane,
+        &aabb, &xy, &proj.depth, &proj.scale, &proj.opacity, &proj.rgb
+    );
+    proj.mean = world.mean, proj.quat = world.quat;
+}
+
+template<int num_sv>
+inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_persp_vjp(
+    SphericalVoronoi3DGUT<num_sv>::World world, SphericalVoronoi3DGUT<num_sv>::BwdProjCamera cam,
+    SphericalVoronoi3DGUT<num_sv>::Screen v_proj,
+    SphericalVoronoi3DGUT<num_sv>::World& v_world, float3x3 &v_R, float3 &v_t
+) {
+    projection_3dgut_sv_persp_vjp(
+        false,
+        world.mean, world.quat, world.scale, world.opacity, &world.sv_sites, &world.sv_colors,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        cam.width, cam.height,
+        make_float2(0), v_proj.depth, v_proj.scale, v_proj.opacity, v_proj.rgb,
+        &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sv_sites, &v_world.sv_colors,
+        &v_R, &v_t
+    );
+    v_world.mean = v_proj.mean, v_world.quat = v_proj.quat;
+}
+
+template<int num_sv>
+inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_fisheye_vjp(
+    SphericalVoronoi3DGUT<num_sv>::World world, SphericalVoronoi3DGUT<num_sv>::BwdProjCamera cam,
+    SphericalVoronoi3DGUT<num_sv>::Screen v_proj,
+    SphericalVoronoi3DGUT<num_sv>::World& v_world, float3x3 &v_R, float3 &v_t
+) {
+    projection_3dgut_sv_fisheye_vjp(
+        false,
+        world.mean, world.quat, world.scale, world.opacity, &world.sv_sites, &world.sv_colors,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        cam.width, cam.height,
+        make_float2(0), v_proj.depth, v_proj.scale, v_proj.opacity, v_proj.rgb,
+        &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sv_sites, &v_world.sv_colors,
+        &v_R, &v_t
+    );
+    v_world.mean = v_proj.mean, v_world.quat = v_proj.quat;
+}
+
+#endif  // #ifdef __CUDACC__
+
+typedef SphericalVoronoi3DGUT<2> SphericalVoronoi3DGUT_Default;
+

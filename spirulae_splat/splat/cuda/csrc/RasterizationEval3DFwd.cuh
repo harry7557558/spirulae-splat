@@ -43,6 +43,33 @@ std::tuple<
 
 
 std::tuple<
+    SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple,
+    at::Tensor,
+    at::Tensor,
+    std::optional<SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple>,
+    std::optional<SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple>,
+    std::optional<at::Tensor>
+> rasterize_to_pixels_3dgut_sv_fwd(
+    // Gaussian parameters
+    SphericalVoronoi3DGUT_Default::Screen::TensorTuple splats_tuple,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
+    const std::optional<at::Tensor> backgrounds, // [..., channels]
+    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids,   // [n_isects]
+    bool output_distortion
+);
+
+
+std::tuple<
     OpaqueTriangle::RenderOutput::TensorTuple,
     at::Tensor,
     at::Tensor,

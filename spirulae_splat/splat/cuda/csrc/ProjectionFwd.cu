@@ -198,6 +198,31 @@ std::tuple<
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<
     at::Tensor,  // aabb
+    SphericalVoronoi3DGUT_Default::Screen::TensorTupleProj  // out splats
+> projection_3dgut_sv_forward_tensor(
+    // inputs
+    const SphericalVoronoi3DGUT_Default::World::TensorTuple &in_splats,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float near_plane,
+    const float far_plane,
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs
+) {
+    int num_sv = std::get<5>(in_splats).size(-2);
+    #define _CASE(n) \
+        if (num_sv == n) return launch_projection_fused_fwd_kernel<SphericalVoronoi3DGUT<n>>( \
+            in_splats, viewmats, Ks, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs); \
+    _CASE(2) _CASE(3) _CASE(4) _CASE(5) _CASE(6) _CASE(7) _CASE(8)
+    #undef _CASE
+    throw std::invalid_argument("Unsupported num_sv");
+}
+
+/*[AutoHeaderGeneratorExport]*/
+std::tuple<
+    at::Tensor,  // aabb
     OpaqueTriangle::Screen::TensorTupleProj  // out splats
 > projection_opaque_triangle_forward_tensor(
     // inputs

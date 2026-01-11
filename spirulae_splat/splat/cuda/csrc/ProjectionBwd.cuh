@@ -78,6 +78,26 @@ std::tuple<
 
 
 std::tuple<
+    SphericalVoronoi3DGUT_Default::World::TensorTuple,  // v_splats
+    at::Tensor  // v_viewmats
+> projection_3dgut_sv_backward_tensor(
+    // fwd inputs
+    const SphericalVoronoi3DGUT_Default::World::TensorTuple &splats_world,
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
+    // fwd outputs
+    const at::Tensor aabb,                       // [..., C, N, 2]
+    // grad outputs
+    const SphericalVoronoi3DGUT_Default::Screen::TensorTupleProj &v_splats_screen,
+    const bool viewmats_requires_grad
+);
+
+
+std::tuple<
     OpaqueTriangle::World::TensorTuple,  // v_splats
     at::Tensor  // v_viewmats
 > projection_opaque_triangle_backward_tensor(

@@ -1,4 +1,5 @@
 #include "primitive_3dgs.slang"
+#include "primitive_3dgs_sv.slang"
 #include "primitive_opaque_triangle.slang"
 #include "primitive_opaque_triangle_eval3d.slang"
 #include "primitive_voxel.slang"

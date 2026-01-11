@@ -1,3 +1,4 @@
+#pragma once
 #include "projection_utils.slang"
 
 struct SigmaPoints {
@@ -415,8 +416,8 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
 _DEF_projection_3dgs(projection_3dgs_persp, CameraModelType::PINHOLE, false, false)
 _DEF_projection_3dgs(projection_3dgs_fisheye, CameraModelType::FISHEYE, false, false)
 _DEF_projection_3dgs(projection_3dgs_ortho, CameraModelType::ORTHO, false, false)
-_DEF_projection_3dgs(projection_3dgs_eval3d_persp, CameraModelType::PINHOLE, false, true)
-_DEF_projection_3dgs(projection_3dgs_eval3d_fisheye, CameraModelType::FISHEYE, false, true)
+_DEF_projection_3dgs(projection_3dgut_persp, CameraModelType::PINHOLE, false, true)
+_DEF_projection_3dgs(projection_3dgut_fisheye, CameraModelType::FISHEYE, false, true)
 
 
 #define _projection_3dgs_vjp_ARGS \
@@ -451,8 +452,8 @@ _DEF_projection_3dgs(projection_3dgs_eval3d_fisheye, CameraModelType::FISHEYE, f
 _DEF_projection_3dgs(_projection_3dgs_persp_differentiable, CameraModelType::PINHOLE, true, false)
 _DEF_projection_3dgs(_projection_3dgs_fisheye_differentiable, CameraModelType::FISHEYE, true, false)
 _DEF_projection_3dgs(_projection_3dgs_ortho_differentiable, CameraModelType::ORTHO, true, false)
-_DEF_projection_3dgs(_projection_3dgs_eval3d_persp_differentiable, CameraModelType::PINHOLE, true, true)
-_DEF_projection_3dgs(_projection_3dgs_eval3d_fisheye_differentiable, CameraModelType::FISHEYE, true, true)
+_DEF_projection_3dgs(_projection_3dgut_persp_differentiable, CameraModelType::PINHOLE, true, true)
+_DEF_projection_3dgs(_projection_3dgut_fisheye_differentiable, CameraModelType::FISHEYE, true, true)
 
 
 #define _DEF_projection_3dgs_vjp(funname, fwd_funname, ...) \
@@ -486,8 +487,8 @@ _DEF_projection_3dgs(_projection_3dgs_eval3d_fisheye_differentiable, CameraModel
 _DEF_projection_3dgs_vjp(projection_3dgs_persp_vjp, _projection_3dgs_persp_differentiable)
 _DEF_projection_3dgs_vjp(projection_3dgs_fisheye_vjp, _projection_3dgs_fisheye_differentiable)
 _DEF_projection_3dgs_vjp(projection_3dgs_ortho_vjp, _projection_3dgs_ortho_differentiable)
-_DEF_projection_3dgs_vjp(projection_3dgs_eval3d_persp_vjp, _projection_3dgs_eval3d_persp_differentiable)
-_DEF_projection_3dgs_vjp(projection_3dgs_eval3d_fisheye_vjp, _projection_3dgs_eval3d_fisheye_differentiable)
+_DEF_projection_3dgs_vjp(projection_3dgut_persp_vjp, _projection_3dgut_persp_differentiable)
+_DEF_projection_3dgs_vjp(projection_3dgut_fisheye_vjp, _projection_3dgut_fisheye_differentiable)
 
 
 [CudaDeviceExport]

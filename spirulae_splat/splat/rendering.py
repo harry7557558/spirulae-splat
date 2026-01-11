@@ -31,7 +31,7 @@ from .utils import depth_to_normal
 # from gsplat
 
 def rasterization(
-    primitive: Literal["3dgs", "mip", "3dgut", "opaque_triangle", "voxel"],
+    primitive: Literal["3dgs", "mip", "3dgut", "3dgut_sv", "opaque_triangle", "voxel"],
     splat_params: tuple[Tensor],  # means, quats, scales, opacities
     viewmats: Tensor,  # [..., C, 4, 4]
     Ks: Tensor,  # [..., C, 3, 3]
@@ -213,11 +213,14 @@ def rasterization(
 
     splat_params = [tensor.contiguous() for tensor in splat_params]
 
-    features_dc, features_sh = None, None
-    if primitive in ["3dgs", "mip", "3dgut", "opaque_triangle"]:
+    features_dc, features_sh, sv_sites, sv_colors = None, None, None, None
+    if primitive in ["3dgs", "mip", "3dgut", "3dgut_sv", "opaque_triangle"]:
         if primitive in ["3dgs", "mip", "3dgut"]:
             assert len(splat_params) == 6, "3DGS requires 6 params (means, quats, scales, opacities, color, sh)"
             means, quats, scales, opacities, features_dc, features_sh = splat_params
+        elif primitive in ["3dgut_sv"]:
+            assert len(splat_params) == 6, "3DGS SV requires 6 params (means, quats, scales, opacities, sv_dir, sv_color)"
+            means, quats, scales, opacities, sv_sites, sv_colors = splat_params
         else:
             assert len(splat_params) == 7, "Opaque triangle requires 4 params (means, quats, scales, opacities, color, ch, sh)"
             means, quats, scales, opacities, features_dc, features_sh, features_ch = splat_params
@@ -228,7 +231,7 @@ def rasterization(
         assert means.shape == batch_dims + (N, 3), means.shape
         assert quats.shape == batch_dims + (N, 4), quats.shape
         assert scales.shape == batch_dims + (N, 3), scales.shape
-        if primitive in ["3dgs", "mip", "3dgut"]:
+        if primitive in ["3dgs", "mip", "3dgut", "3dgut_sv"]:
             assert opacities.shape == batch_dims + (N,), opacities.shape
         else:
             assert opacities.shape == batch_dims + (N, 2), opacities.shape
@@ -249,6 +252,10 @@ def rasterization(
             features_sh.shape == batch_dims + (N, 3, 3) or \
             features_sh.shape == batch_dims + (N, 8, 3) or \
             features_sh.shape == batch_dims + (N, 15, 3), features_sh.shape
+    if sv_sites is not None and sv_colors is not None:
+        num_sv = sv_sites.shape[-2]
+        assert sv_sites.shape == batch_dims + (N, num_sv, 3)
+        assert sv_colors.shape == batch_dims + (N, num_sv, 3)
 
     B = math.prod(batch_dims)
     C = viewmats.shape[-3]
