@@ -3,7 +3,7 @@ Template DataManager
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Literal, List, Tuple, Type, Union, Optional, TypeVar, Generic
+from typing import Dict, Literal, List, Tuple, Type, Union, Optional, Callable
 from copy import deepcopy
 import random
 import math
@@ -12,7 +12,6 @@ import hashlib
 import re
 import json
 import time
-import threading
 
 import torch
 import numpy as np
@@ -37,6 +36,7 @@ from spirulae_splat.splat.utils import interpolate_se3, random_c2w_on_unit_spher
 from concurrent.futures import ThreadPoolExecutor
 from torch.nn.parallel import DataParallel
 from torch.utils.data import DataLoader
+from torch.utils.data._utils.collate import default_collate
 
 from tqdm import tqdm
 
@@ -76,6 +76,82 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
     compute_visibility_masks: bool = False
 
 
+class IndexGroup:
+    def __init__(self, indices: List[int]):
+        self.indices = indices[:]
+        self.ptr = len(indices)
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __next__(self):
+        if self.ptr >= len(self.indices):
+            random.shuffle(self.indices)
+            self.ptr = 0
+        idx = self.indices[self.ptr]
+        self.ptr += 1
+        return idx
+
+
+class IndexGroups:
+    def __init__(self, indices: List[int], keys: List):
+        groups = {}
+        for idx, key in zip(indices, keys):
+            if key not in groups:
+                groups[key] = []
+            groups[key].append(idx)
+        self.groups = []  # type: List[IndexGroup]
+        for key, idxs in groups.items():
+            self.groups.append(IndexGroup(idxs))
+        self.probs = np.array([float(len(g)) for g in self.groups])
+        self.probs /= np.sum(self.probs)
+
+    def random_idx(self) -> int:
+        return np.random.choice(range(len(self.groups)), p=self.probs)
+
+
+class IndexGroupsWithDataLoader(IndexGroups):
+    def __init__(self, indices: List[int], keys: List, getitem: Callable, batch_size: int, parallel: bool):
+        super().__init__(indices, keys)
+        self.batch_size = batch_size
+        self.getitem = getitem
+        self.parallel = parallel
+
+        if not self.parallel:
+            return
+
+        self.dataloaders = []
+        max_num_workers = min(max(os.cpu_count()-2,1), batch_size)
+        for group in self.groups:
+            dataset = IndexedDatasetWrapper(getitem, [[i] for i in group.indices])
+            dataloader = DataLoader(
+                dataset,
+                batch_size=min(batch_size, len(group)),
+                num_workers=min(max_num_workers, len(group)),
+                persistent_workers=True,
+                shuffle=True
+            )
+            self.dataloaders.append([dataloader, iter(dataloader)])
+
+    def get_batch_pytorch(self):
+        dataloader = self.dataloaders[self.random_idx()]
+        try:
+            return next(dataloader[1])
+        except StopIteration:
+            dataloader[1] = iter(dataloader[0])
+            return next(dataloader[1])
+
+    def get_batch(self):
+        if self.parallel:
+            return self.get_batch_pytorch()
+        group = self.groups[self.random_idx()]
+        batch = []
+        for i in range(min(self.batch_size, len(group))):
+            batch.append(self.getitem(next(group)))
+        return default_collate(batch)
+
+
+
 class SpirulaeDataManager(FullImageDatamanager):
     """Template DataManager
 
@@ -94,12 +170,13 @@ class SpirulaeDataManager(FullImageDatamanager):
         local_rank: int = 0,
         **kwargs,  # pylint: disable=unused-argument
     ):
+        cache_images = config.cache_images
         super().__init__(
             config=config, device=device, test_mode=test_mode, world_size=world_size, local_rank=local_rank, **kwargs
         )
+        self.config.cache_images = cache_images
 
-        self.train_cameras_splits = []  # type: list[list]
-        self.train_unseen_cameras = []  # type: list[deque]
+        self.train_index_group_loader = None  # type: Optional[IndexGroupsWithDataLoader]
 
     def _undistort_idx(self, dataset, idx: int, return_idx=False) -> Dict[str, torch.Tensor]:
         data = dataset.get_data(idx, image_type=self.config.cache_images_type, _is_viewer=False)
@@ -139,7 +216,7 @@ class SpirulaeDataManager(FullImageDatamanager):
         return max(int(n+0.5), 1)
 
     def _load_images(
-        self, split: Literal["train", "eval"], cache_images_device: Literal["cpu-pageable", "cpu", "gpu"]
+        self, split: Literal["train", "eval"], cache_images_device: Literal["cpu-pageable", "cpu", "gpu", "disk"]
     ) -> List[Dict[str, torch.Tensor]]:
         undistorted_images: List[Dict[str, torch.Tensor]] = []
 
@@ -151,46 +228,7 @@ class SpirulaeDataManager(FullImageDatamanager):
         else:
             assert_never(split)
 
-        if self.config.cache_images == "disk":
-            if split == "train":
-                self.setup_batches()
-                self.train_dataloaders = []
-                max_num_workers = min(max(os.cpu_count()-2,1), self.train_batch_size(False))
-                for split in self.train_cameras_splits:
-                    dataloader = DataLoader(
-                        IndexedDatasetWrapper(
-                            self._undistort_idx,
-                            [(dataset, idx, True) for idx in split]
-                        ),
-                        batch_size=min(self.train_batch_size(False), len(split)),
-                        num_workers=min(max_num_workers, len(split)),
-                        shuffle=True
-                    )
-                    self.train_dataloaders.append([dataloader, iter(dataloader)])
-                self.val_dataloaders = []
-                if len(self.val_camera_splits) > 0:
-                    max_num_workers = min(max(os.cpu_count()-2,1), self.val_batch_size(False))
-                    for split in self.val_camera_splits:
-                        dataloader = DataLoader(
-                            IndexedDatasetWrapper(
-                                self._undistort_idx,
-                                [(dataset, idx, True) for idx in split]
-                            ),
-                            batch_size=min(self.val_batch_size(False), len(split)),
-                            num_workers=min(max_num_workers, len(split)),
-                            shuffle=True
-                        )
-                        self.val_dataloaders.append([dataloader, iter(dataloader)])
-            elif split == "eval":
-                self.eval_dataloader = DataLoader(
-                    IndexedDatasetWrapper(
-                        self._undistort_idx,
-                        [(dataset, idx, True) for idx in range(len(dataset))]
-                    ),
-                    batch_size=1,
-                    num_workers=0,
-                    shuffle=False
-                )
+        if cache_images_device == "disk":
             return []
 
         CONSOLE.log(f"Caching {split} images")
@@ -248,10 +286,44 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         return undistorted_images
 
+    def get_train_image(self, idx: int):
+        if self.config.cache_images == "disk":
+            batch = self._undistort_idx(self.train_dataset, idx)
+        else:
+            batch = self.cached_train[idx]
+
+        assert 'image' in batch
+        for key in ['mask', 'depth', 'normal']:
+            if key not in batch or batch['image'].shape[:2] == batch[key].shape[:2]:
+                continue
+            batch[key] = torch.nn.functional.interpolate(
+                batch[key].float().permute(2, 0, 1)[None],
+                size=batch['image'].shape[:2], mode='bilinear', align_corners=False
+            )[0].permute(1, 2, 0).to(batch[key].dtype)
+
+        camera = self.train_dataset.cameras[idx]
+        if camera.metadata is None:
+            camera.metadata = {}
+        camera.metadata["cam_idx"] = idx
+
+        if self.config.compute_visibility_masks:
+            camera.metadata['visibility_masks'] = SplatTrainingLosses.get_visibility_masks(batch, self.device)
+
+        camera_flattened = {}
+        for key in ['camera_to_worlds', 'fx', 'fy', 'cx', 'cy', 'width', 'height', 'distortion_params', 'camera_type', 'times', 'metadata']:
+            value = getattr(camera, key)
+            if value is None:
+                value = torch.empty((0,))
+            camera_flattened[key] = value
+        return camera_flattened, batch
+
     def get_tiles(self, batch_size: int):
+        # TODO: multithread with pytorch data loader
+
         TILE_SIZE = 16
         assert self.config.patch_size > 0 and self.config.patch_size % TILE_SIZE == 0, "Patch size must be a multiple of tile size"
 
+        # TODO: use IndexGroups with camera type support
         if not hasattr(self, 'image_shapes'):
             # self.image_shapes = torch.stack([self.train_dataset.cameras.height, self.train_dataset.cameras.width], dim=-1)
             self.image_shapes = torch.tensor([im['image'].shape[:2] for im in self.cached_train])
@@ -315,38 +387,24 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         return camera, batch
 
-    def setup_batches(self):
+    def setup_index_group_loaders(self):
         """Make separate lists for images with different shapes and camera models"""
-        train_key_map = {}
-        val_key_map = {}
-        self.train_cameras_splits = []
-        self.train_unseen_cameras = []
-        self.val_camera_splits = []
-        self.val_unseen_cameras = []
 
-        def add_idx(key_map, camera_splits, unseen_cameras, cam_idx):
-            cam = self.train_dataset.cameras[cam_idx]
-            w, h = cam.width.item(), cam.height.item()
-            model = cam.camera_type.item()
-            key = (w, h, model)
-            if key not in key_map:
-                key_map[key] = len(camera_splits)
-                camera_splits.append([])
-                unseen_cameras.append(deque())
-            key = key_map[key]
-            camera_splits[key].append(cam_idx)
+        def get_key(idx):
+            cam = self.train_dataset.cameras[idx]
+            w, h, camera_type = cam.width.item(), cam.height.item(), cam.camera_type.item()
+            additional_params = []
+            for key in ['camera_to_worlds', 'fx', 'fy', 'cx', 'cy', 'distortion_params', 'times']:
+                value = getattr(cam, key)  # type: Optional[torch.Tensor]
+                additional_params.append(value if value is None else tuple(value.shape))
+            return (w, h, camera_type, *additional_params)
 
-        for cam_idx in range(len(self.train_dataset)):
-            if cam_idx in self.train_dataset.val_indices:
-                add_idx(val_key_map, self.val_camera_splits, self.val_unseen_cameras, cam_idx)
-            else:
-                add_idx(train_key_map, self.train_cameras_splits, self.train_unseen_cameras, cam_idx)
-
-        self.train_split_weights = np.array([float(len(s)) for s in self.train_cameras_splits])
-        self.val_split_weights = np.array([float(len(s)) for s in self.val_camera_splits])
-        self.train_split_weights /= sum(self.train_split_weights)
-        if len(self.val_split_weights) > 0:
-            self.val_split_weights /= sum(self.val_split_weights)
+        val_indices = self.train_dataset.val_indices
+        train_indices = sorted(set(range(len(self.train_dataset))).difference(val_indices))
+        self.train_index_group_loader = IndexGroupsWithDataLoader(
+            train_indices, [get_key(idx) for idx in train_indices],
+            self.get_train_image, self.train_batch_size(False), self.config.cache_images != "gpu"
+        )
 
     def random_cameras(self, batch_size: int):
         """Generate random cameras by interpolating existing cameras"""
@@ -388,96 +446,12 @@ class SpirulaeDataManager(FullImageDatamanager):
         camera.metadata = {}
         return camera
 
-    def get_batch(self, val: bool):
-        camera_splits = self.val_camera_splits if val else self.train_cameras_splits
-        batch_size = self.val_batch_size() if val else self.train_batch_size()
-        if batch_size == 0:
-            return None, None
-
-        # pick random split with same camera resolution and model type (required for batching)
-        split = np.random.choice(range(len(camera_splits)), p=self.train_split_weights)
-
-        # disk caching
-        if self.config.cache_images == "disk":
-            dataloaders = self.val_dataloaders if val else self.train_dataloaders
-
-            # TODO: stochastic batch_size
-            try:
-                image_indices, batch = next(dataloaders[split][1])
-            except StopIteration:
-                dataloaders[split][1] = iter(dataloaders[split][0])
-                image_indices, batch = next(dataloaders[split][1])
-
-            assert 'image' in batch
-            b, h, w, _ = batch['image'].shape
-            for key in ['depth', 'normal', 'mask']:
-                if key not in batch:
-                    continue
-                if len(batch[key].shape) == 3:
-                    batch[key] = batch[key].unsqueeze(-1)
-                if True: batch[key] = batch[key].cuda()
-                batch[key] = torch.nn.functional.interpolate(
-                    batch[key].float().permute(0, 3, 1, 2),
-                    size=(h, w), mode='bilinear', align_corners=False
-                ).permute(0, 2, 3, 1).to(batch[key].dtype)
-
-        # memory caching
-        else:
-            unseen_cameras = self.val_unseen_cameras if val else self.train_unseen_cameras
-
-            image_indices = []
-            for i in range(min(batch_size, len(camera_splits[split]))):
-                if len(unseen_cameras[split]) == 0:
-                    perm = camera_splits[split][:]
-                    random.shuffle(perm)
-                    unseen_cameras[split].extend(perm)
-                image_idx = unseen_cameras[split].popleft()
-                image_indices.append(image_idx)
-            image_indices = list(set(image_indices))  # TODO: better way for this
-            images = [self.cached_train[idx] for idx in image_indices]
-
-            batch = {}
-            for image_idx, img in zip(image_indices, images):
-                # TODO: handle cases where different img has different set of auxiliary buffers
-                for key, value in img.items():
-                    if key not in batch:
-                        batch[key] = []
-                    if isinstance(value, torch.Tensor):
-                        value = value.clone().cuda()
-                    batch[key].append(value)
-                assert 'image' in img
-                h, w, _ = batch['image'][-1].shape
-                for key in ['depth', 'normal', 'mask']:
-                    if key not in batch:
-                        continue
-                    if len(batch[key][-1].shape) == 2:
-                        batch[key][-1] = batch[key][-1].unsqueeze(-1)
-                    if True: batch[key][-1] = batch[key][-1].cuda()
-                    batch[key][-1] = torch.nn.functional.interpolate(
-                        batch[key][-1].float().permute(2, 0, 1)[None],
-                        size=(h, w), mode='bilinear', align_corners=False
-                    )[0].permute(1, 2, 0).to(batch[key][-1].dtype)
-            for key in batch:
-                if isinstance(batch[key][0], torch.Tensor):
-                    batch[key] = torch.stack(batch[key]).to(self.device)
-
-        camera = self.train_dataset.cameras[torch.tensor(image_indices)].to(self.device)
-        if camera.metadata is None:
-            camera.metadata = {}
-        camera.metadata["cam_idx"] = image_indices
-        # print(val, image_indices)
-
-        if self.config.compute_visibility_masks:
-            camera.metadata['visibility_masks'] = SplatTrainingLosses.get_visibility_masks(batch, self.device)
-
-        return camera, batch
-
-    def _next_train(self, step: int) -> Tuple[Cameras, Dict]:
+    def next_train(self, step: int) -> Tuple[Cameras, Dict]:
         """Returns the next training batch
 
         Returns a Camera instead of raybundle"""
 
-        if not hasattr(self, 'cached_train'):
+        if not hasattr(self, 'cached_train') and self.config.cache_images != "disk":
             self.cached_train = self._load_images("train", cache_images_device=self.config.cache_images)
 
         if self.config.patch_batch_size is not None:
@@ -489,41 +463,19 @@ class SpirulaeDataManager(FullImageDatamanager):
         if random.random() < (step - 10000) / (30000 - 10000) and False:
             return self.random_cameras(self.train_batch_size()), {}
 
-        if len(self.train_cameras_splits) == 0:
-            self.setup_batches()
+        if self.train_index_group_loader is None:
+            self.setup_index_group_loaders()
 
-        camera, batch = self.get_batch(val=False)
+        camera, batch = self.train_index_group_loader.get_batch()
+        for key, value in camera.items():
+            if isinstance(value, torch.Tensor) and value.numel() == 0:
+                camera[key] = None
+        camera = Cameras(**camera)
 
-        if len(self.val_camera_splits) > 0:
-            val_camera, val_batch = self.get_batch(val=True)
-            if val_camera is not None and val_batch is not None:
-                return (camera, val_camera), (batch, val_batch)
-
-        return camera, batch
-
-    def next_train(self, step: int) -> Tuple[Cameras, Dict]:
-        """wrapper of _next_train with improved concurrency"""
-
-        polling_delay = 0.001  # 1ms should be a fraction of reasonable train iteration time
-
-        self.step = step
-
-        if not hasattr(self, '_next_train_queue'):
-            self._next_train_queue = []
-
-            def dataloader():
-                while True:
-                    if len(self._next_train_queue) == 0:
-                        self._next_train_queue.append(self._next_train(self.step+1))
-                    time.sleep(polling_delay)
-
-            threading.Thread(target=dataloader, daemon=True).start()
-
-        while len(self._next_train_queue) == 0:
-            time.sleep(polling_delay)
-
-        camera, batch = self._next_train_queue[0]
-        self._next_train_queue = self._next_train_queue[1:]
+        camera = camera.to(self.device)
+        for key, value in batch.items():
+            if isinstance(value, torch.Tensor):
+                batch[key] = value.to(self.device)
         return camera, batch
 
     @cached_property

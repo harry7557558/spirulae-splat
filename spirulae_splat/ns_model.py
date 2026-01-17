@@ -951,7 +951,7 @@ class SpirulaeModel(Model):
             distributed=False,
             camera_model=["pinhole", "fisheye"][is_fisheye],
             render_mode="RGB+D" if self.config.primitive in ['3dgs', 'mip', '3dgut', '3dgut_sv'] else "RGB+D+N",
-            output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
+            # output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
             **kwargs,
         )
         if self.config.supersampling != 1:
@@ -1230,7 +1230,7 @@ class SpirulaeModel(Model):
     def print_loss_dict(self, losses: Dict[str, torch.Tensor], _storage={}):
 
         # print can take a few ms depending on system, do in a separate thread
-        if 'print_queue' not in _storage:
+        if 'print_queue' not in _storage and False:
             import threading
             import sys
             import time
@@ -1256,8 +1256,8 @@ class SpirulaeModel(Model):
         if self.step % skip != 0 and 'chunks' in _storage:
             chunks = _storage['chunks']
             # CONSOLE.print(chunks, end='')  # slow
-            # print(chunks, end='')
-            _storage['print_queue'].append(chunks)
+            print(chunks, end='')
+            # _storage['print_queue'].append(chunks)
             return
 
         # text formatting (instead of using rich.CONSOLE that's slow)
@@ -1365,8 +1365,8 @@ class SpirulaeModel(Model):
         chunks.append("                \n")
         chunks = ' '.join(chunks).replace('\n ', '\n')
         chunks += "\033[F"*(chunks.count('\n'))
-        # print(chunks, end='')
-        _storage['print_queue'].append(chunks)
+        print(chunks, end='')
+        # _storage['print_queue'].append(chunks)
         _storage['chunks'] = chunks
 
     @torch.no_grad()

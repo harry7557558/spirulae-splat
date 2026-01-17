@@ -134,12 +134,12 @@ class SpirulaeDataset(InputDataset):
             image_idx: The image index in the dataset.
         """
         image_filename = self._dataparser_outputs.image_filenames[image_idx]
-        pil_image = Image.open(image_filename)
+        image = cv2.cvtColor(cv2.imread(image_filename), cv2.COLOR_BGR2RGB)
         if self.scale_factor != 1.0:
-            width, height = pil_image.size
+            width, height, _ = image.shape
             newsize = (int(width * self.scale_factor), int(height * self.scale_factor))
-            pil_image = pil_image.resize(newsize, resample=Image.Resampling.BILINEAR)
-        image = np.array(pil_image, dtype="uint8")  # shape is (h, w) or (h, w, 3 or 4)
+            image = cv2.resize(image, newsize, cv2.INTER_LINEAR)
+        image = np.array(image, dtype="uint8")  # shape is (h, w) or (h, w, 3 or 4)
         if len(image.shape) == 2:
             image = image[:, :, None].repeat(3, axis=2)
         assert len(image.shape) == 3
