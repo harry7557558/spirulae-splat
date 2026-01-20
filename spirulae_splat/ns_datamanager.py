@@ -213,7 +213,7 @@ class SpirulaeDataManager(FullImageDatamanager):
         n = n_train * num_val / num_train
         if stochastic:
             return int(n) + int(random.random() < n-int(n))
-        return max(int(n+0.5), 1)
+        return int(math.ceil(n))
 
     def _load_images(
         self, split: Literal["train", "eval"], cache_images_device: Literal["cpu-pageable", "cpu", "gpu", "disk"]
@@ -405,6 +405,10 @@ class SpirulaeDataManager(FullImageDatamanager):
             train_indices, [get_key(idx) for idx in train_indices],
             self.get_train_image, self.train_batch_size(False), self.config.cache_images != "gpu"
         )
+        self.val_index_group_loader = IndexGroupsWithDataLoader(
+            val_indices, [get_key(idx) for idx in val_indices],
+            self.get_train_image, self.val_batch_size(False), self.config.cache_images != "gpu"
+        )
 
     def random_cameras(self, batch_size: int):
         """Generate random cameras by interpolating existing cameras"""
@@ -476,6 +480,22 @@ class SpirulaeDataManager(FullImageDatamanager):
         for key, value in batch.items():
             if isinstance(value, torch.Tensor):
                 batch[key] = value.to(self.device)
+
+        val_batch_size = self.val_batch_size(True)
+        if len(self.train_dataset.val_indices) > 0 and val_batch_size > 0:
+            val_camera, val_batch = self.val_index_group_loader.get_batch()
+            for key, value in val_camera.items():
+                if isinstance(value, torch.Tensor):
+                    if value.numel() == 0:
+                        val_camera[key] = None
+                    else:
+                        val_camera[key] = value[:val_batch_size, ...].to(self.device)
+            val_camera = Cameras(**val_camera)
+            for key, value in val_batch.items():
+                if isinstance(value, torch.Tensor):
+                    val_batch[key] = value[:val_batch_size].to(self.device)
+            return (camera, val_camera), (batch, val_batch)
+
         return camera, batch
 
     @cached_property

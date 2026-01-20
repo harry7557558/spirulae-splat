@@ -222,7 +222,7 @@ class SpirulaeModelConfig(ModelConfig):
     use_bilateral_grid: bool = True
     """If True, use bilateral grid to handle the ISP changes in the image space.
         This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/)."""
-    bilagrid_shape: Tuple[int, int, int] = (8, 8, 4)
+    bilagrid_shape: Tuple[int, int, int] = (16, 16, 8)
     """Shape of the bilateral grid (X, Y, W)"""
     use_bilateral_grid_for_geometry: bool = True
     """If True, use bilateral grid for depth and normal (e.g. AI generated biased ones)"""
@@ -350,7 +350,8 @@ class SpirulaeModel(Model):
         if self.config.use_mcmc and self.config.mcmc_max_screen_size < 1.0:
             scale_init, opacity_init = 0.5, 0.1
         if self.config.train_background_color or self.config.randomize_background:
-            scale_init, opacity_init = 1.0, 0.1
+            # scale_init, opacity_init = 1.0, 0.1
+            scale_init, opacity_init = 0.5, 0.1
 
         if self.config.primitive in ["voxel"]:
             means_mean, means_std = torch.mean(means, 0), torch.std(means, 0)
