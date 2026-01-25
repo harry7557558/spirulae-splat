@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import transforms
+import numpy as np
 
 import math
 
@@ -26,13 +27,14 @@ def _size_map(x, height):
     return sizes
 
 
-class ConvBnRelu(nn.Module):
+class ConvRelu(nn.Module):
     def __init__(self, c_in, c_out, dilate=1):
-        super(ConvBnRelu, self).__init__()
+        super(ConvRelu, self).__init__()
 
+        # batch norm is fused into conv2d in checkpoint for inference speed
         self.main = nn.Sequential(
             nn.Conv2d(c_in, c_out, 3, padding=dilate, dilation=dilate),
-            nn.BatchNorm2d(c_out),
+            # nn.BatchNorm2d(c_out),
             nn.ReLU(inplace=True),
         )
 
@@ -71,19 +73,19 @@ class RSU(nn.Module):
         return x + unet(x)
 
     def _make_layers(self, height, in_ch, mid_ch, out_ch, dilated=False):
-        self.add_module('rebnconvin', ConvBnRelu(in_ch, out_ch))
+        self.add_module('rebnconvin', ConvRelu(in_ch, out_ch))
         self.add_module('downsample', nn.MaxPool2d(2, stride=2, ceil_mode=True))
 
-        self.add_module(f'rebnconv1', ConvBnRelu(out_ch, mid_ch))
-        self.add_module(f'rebnconv1d', ConvBnRelu(mid_ch*2, out_ch))
+        self.add_module(f'rebnconv1', ConvRelu(out_ch, mid_ch))
+        self.add_module(f'rebnconv1d', ConvRelu(mid_ch*2, out_ch))
 
         for i in range(2, height):
             dilate = 1 if not dilated else 2 ** (i - 1)
-            self.add_module(f'rebnconv{i}', ConvBnRelu(mid_ch, mid_ch, dilate=dilate))
-            self.add_module(f'rebnconv{i}d', ConvBnRelu(mid_ch*2, mid_ch if dilated else mid_ch*4, dilate=dilate))
+            self.add_module(f'rebnconv{i}', ConvRelu(mid_ch, mid_ch, dilate=dilate))
+            self.add_module(f'rebnconv{i}d', ConvRelu(mid_ch*2, mid_ch if dilated else mid_ch*4, dilate=dilate))
 
         dilate = 2 if not dilated else 2 ** (height - 1)
-        self.add_module(f'rebnconv{height}', ConvBnRelu(mid_ch, mid_ch, dilate=dilate))
+        self.add_module(f'rebnconv{height}', ConvRelu(mid_ch, mid_ch, dilate=dilate))
 
 
 class U2Net(nn.Module):
@@ -169,15 +171,27 @@ model = None
 dtype = torch.bfloat16
 
 def infer(batch):
+    input_dim = len(batch.shape)
+    is_numpy = False
+    if isinstance(batch, np.ndarray):
+        is_numpy = True
+        batch = torch.from_numpy(batch)
+        if input_dim == 3:
+            batch = batch.unsqueeze(0)
     batch = batch.contiguous(memory_format=torch.channels_last)
 
     batch_dtype = batch.dtype
     if batch_dtype == torch.uint8:
         batch = batch.float() / 255.0
+    batch = batch.permute(0, 3, 1, 2)
 
-    B, H, W, C = batch.shape
+    B, C, H, W = batch.shape
     s = 32
-    batch = batch.permute(0, 3, 1, 2)[:, :, :s*(H//s), :s*(W//s)]
+    # pad to multiple of s with reflect mode
+    H_pad = (s - (H % s)) % s
+    W_pad = (s - (W % s)) % s
+    if H_pad > 0 or W_pad > 0:
+        batch = F.pad(batch, (0, W_pad, 0, H_pad), mode='reflect')
 
     global model
     if model is None:
@@ -193,6 +207,13 @@ def infer(batch):
         with torch.autocast(device_type="cuda", dtype=dtype):
             pred = model(batch.cuda().to(dtype)).to(device=batch.device, dtype=batch.dtype)
 
+    if H_pad > 0 or W_pad > 0:
+        pred = pred[:, :, :H, :W]
     if batch_dtype == torch.uint8:
         pred = (255.0 * pred).to(batch_dtype)
-    return pred.permute(0, 2, 3, 1)
+    pred = pred.permute(0, 2, 3, 1)
+    if input_dim == 3:
+        pred = pred[0]
+    if is_numpy:
+        pred = pred.cpu().numpy()
+    return pred

@@ -33,6 +33,8 @@ for file in "${files[@]}"; do
     cp transforms.json transforms_no_masks.json
     sed -E 's/"file_path": "images\/(.*?\.jpg)",/"file_path": "images\/\1", "mask_path": "masks\/\1.png",/g' transforms_no_masks.json > transforms.json
 
+    enhance_images.py ./ --max_tile_size 1024
+
     sam2_cmd+=$(cat "run_sam2.bash" | grep python3)
     sam2_cmd+=$'\\n'
     cd ..
@@ -56,8 +58,8 @@ for file in "${files[@]}"; do
 
     dirname=${file%.*}
 
-    num_gs=80000
-    sh_degree=3
+    num_gs=40000
+    sh_degree=2
 
     ns-train spirulae --data $dirname \
       --max_num_iterations 30000 \
