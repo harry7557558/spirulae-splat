@@ -444,9 +444,10 @@ class SpirulaeModel(Model):
 
         self.gauss_params = torch.nn.ParameterDict(gauss_params)
 
-        self.camera_optimizer: CameraOptimizer = self.config.camera_optimizer.setup(
-            num_cameras=self.num_train_data, device="cpu"
-        )
+        if self.config.use_camera_optimizer:
+            self.camera_optimizer: CameraOptimizer = self.config.camera_optimizer.setup(
+                num_cameras=self.num_train_data, device="cpu"
+            )
 
         self.training_losses = SplatTrainingLosses(self.config, self.num_train_data)
 
@@ -795,13 +796,13 @@ class SpirulaeModel(Model):
     def get_empty_outputs(width: int, height: int, background: torch.Tensor) -> Dict[str, Union[torch.Tensor, List]]:
         return {}
 
-    def get_outputs(self, camera: Cameras) -> Dict[str, Union[torch.Tensor, List]]:
+    def get_outputs(self, camera: Cameras, val: bool=False) -> Dict[str, Union[torch.Tensor, List]]:
         """Takes in a camera and returns a dictionary of outputs."""
 
         if isinstance(camera, Tuple) and len(camera) == 2:
             train_outputs = self.get_outputs(camera[0])
-            with torch.no_grad():
-                val_outputs = self.get_outputs(camera[1])
+            # with torch.no_grad():
+            val_outputs = self.get_outputs(camera[1], val=True)
             return train_outputs, val_outputs
 
         if not isinstance(camera, Cameras):
@@ -811,6 +812,7 @@ class SpirulaeModel(Model):
         device = self.means.device if self.means is not None else self.features_dc.device
 
         if self.training and self.config.use_camera_optimizer:
+            camera.metadata['cam_idx'] = camera.metadata['cam_idx'].flatten()
             optimized_camera_to_world = self.camera_optimizer.apply_to_camera(camera)
         else:
             optimized_camera_to_world = camera.camera_to_worlds
@@ -930,7 +932,10 @@ class SpirulaeModel(Model):
                 self.features_dc, self.features_sh
             )
             # print([x.shape for x in splat_params])
+        if val:
+            splat_params = tuple([(p.detach() if isinstance(p, torch.Tensor) else p) for p in splat_params])
 
+        use_bvh = self.config.use_bvh and self.training and not val
         rgbd, alpha, meta = rasterization(
             self.config.primitive,
             splat_params,
@@ -943,8 +948,8 @@ class SpirulaeModel(Model):
             Ks=Ks * self.config.supersampling,  # [C, 3, 3]
             width=W * self.config.supersampling,
             height=H * self.config.supersampling,
-            packed=((self.config.packed or self.config.use_bvh) and self.training),
-            use_bvh=(self.config.use_bvh and self.training),
+            packed=(self.config.packed or use_bvh),
+            use_bvh=(use_bvh),
             # packed=True,
             # use_bvh=True,
             relative_scale=self.config.relative_scale,
@@ -1141,9 +1146,9 @@ class SpirulaeModel(Model):
         total_val_loss = None
         if isinstance(outputs, tuple) and isinstance(batch, tuple):
             loss_dict = self.training_losses(self.step, batch[0], outputs[0], self.info)
-            for key, value in outputs[1].items():
-                if isinstance(value, torch.Tensor):
-                    outputs[1][key] = value.detach()
+            # for key, value in outputs[1].items():
+            #     if isinstance(value, torch.Tensor):
+            #         outputs[1][key] = value.detach()
             val_loss_dict = self.training_losses(self.step, batch[1], outputs[1], self.info, True)
             total_val_loss = torch.stack([
                 x for x in val_loss_dict.values() if isinstance(x, torch.Tensor)

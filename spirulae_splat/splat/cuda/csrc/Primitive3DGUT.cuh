@@ -381,7 +381,13 @@ struct Base3DGUT::Screen {
     }
 
     __device__ __forceinline__ Base3DGUT::RenderOutput evaluate_color(float3 ray_o, float3 ray_d) {
-        return {rgb, depth};
+        // return {rgb, depth};
+        float3 out_rgb; float out_depth;
+        evaluate_color_3dgs(
+            mean, iscl_rot, opacity, rgb,
+            ray_o, ray_d, &out_rgb, &out_depth
+        );
+        return {out_rgb, out_depth};
     }
 
     __device__ __forceinline__ Screen evaluate_color_vjp(
@@ -389,8 +395,20 @@ struct Base3DGUT::Screen {
         float3 &v_ray_o, float3 &v_ray_d
     ) {
         Screen v_splat = Screen::zero();
+    #if 0
         v_splat.rgb = v_render.rgb;
         v_splat.depth = v_render.depth;
+        v_ray_o = make_float3(0.f);
+        v_ray_d = make_float3(0.f);
+    #else
+        evaluate_color_3dgs_vjp(
+            mean, iscl_rot, opacity, rgb,
+            ray_o, ray_d,
+            v_render.rgb, v_render.depth,
+            &v_splat.mean, &v_splat.iscl_rot, &v_splat.opacity, &v_splat.rgb,
+            &v_ray_o, &v_ray_d
+        );
+    #endif
         return v_splat;
     }
 

@@ -562,6 +562,11 @@ float3 transform_ray_d(float3x3 R, float3 raydir) {
 }
 
 [CudaDeviceExport]
+float3 undo_transform_ray_d(float3x3 R, float3 raydir) {
+    return mul(raydir, transpose(R));
+}
+
+[CudaDeviceExport]
 void transform_ray_o_vjp(
     float3x3 R, float3 t, float3 v_ray_o,
     out float3x3 v_R, out float3 v_t

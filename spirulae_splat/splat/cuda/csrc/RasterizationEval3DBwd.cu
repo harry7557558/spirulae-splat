@@ -15,7 +15,7 @@ constexpr uint SPLAT_BATCH_SIZE_NO_DISTORTION = WARP_SIZE;
 constexpr uint SPLAT_BATCH_SIZE_WITH_DISTORTION = 128;
 
 
-template <typename SplatPrimitive, gsplat::CameraModelType camera_model, bool output_distortion>
+template <typename SplatPrimitive, gsplat::CameraModelType camera_model, bool output_distortion, bool output_viewmat_grad>
 __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     const uint32_t I,
     const uint32_t N,
@@ -44,7 +44,8 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     const float *__restrict__ v_render_alphas, // [..., image_height, image_width, 1]
     typename SplatPrimitive::RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
-    typename SplatPrimitive::Screen::Buffer v_splat_buffer
+    typename SplatPrimitive::Screen::Buffer v_splat_buffer,
+    float *__restrict__ v_viewmats // [B, C, 4, 4]
 ) {
     auto block = cg::this_thread_block();
     cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
@@ -70,9 +71,9 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     }
 
     // Load camera
-    viewmats += image_id * 16;
+    viewmats += image_id * 16;  // world to camera
     Ks += image_id * 9;
-    float3x3 R = {
+    float3x3 R = {  // row major
         viewmats[0], viewmats[1], viewmats[2],  // 1st row
         viewmats[4], viewmats[5], viewmats[6],  // 2nd row
         viewmats[8], viewmats[9], viewmats[10],  // 3rd row
@@ -92,6 +93,9 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     __shared__ typename SplatPrimitive::RenderOutput v_distortion_out[output_distortion ? BLOCK_SIZE : 1];
 
     float3 ray_o = transform_ray_o(R, t);
+    float3 total_v_ray_o = make_float3(0.0f, 0.0f, 0.0f);
+
+    __shared__ float3 shared_v_ray_d[output_viewmat_grad ? BLOCK_SIZE : 1];
 
     constexpr uint SPLAT_BATCH_SIZE = output_distortion ?
         SPLAT_BATCH_SIZE_WITH_DISTORTION : SPLAT_BATCH_SIZE_NO_DISTORTION;
@@ -123,7 +127,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
             camera_model == gsplat::CameraModelType::FISHEYE, &dist_coeffs,
             &raydir
         );
-        float3 ray_d = transform_ray_d(R, raydir);
+        float3 ray_d = transform_ray_d(R, raydir);  // mul(raydir, R);
         shared_ray_d_pix_bin_final[pix_id_local] =
             {ray_d.x, ray_d.y, ray_d.z, __int_as_float(bin_final)};
 
@@ -137,6 +141,10 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
             v_distortion_out[pix_id_local] = (inside ?
                 SplatPrimitive::RenderOutput::load(v_distortions_output_buffer, pix_id_image_global)
                 : SplatPrimitive::RenderOutput::zero());
+        }
+
+        if (output_viewmat_grad) {
+            shared_v_ray_d[pix_id_local] = make_float3(0.0f, 0.0f, 0.0f);
         }
     }
     block.sync();
@@ -254,9 +262,15 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
             }
 
             // backward diff splat
-            float3 v_ray_o, v_ray_d;  // TODO
-            v_splat += splat.evaluate_alpha_vjp(ray_o, ray_d, v_alpha, v_ray_o, v_ray_d);
-            v_splat += splat.evaluate_color_vjp(ray_o, ray_d, v_color, v_ray_o, v_ray_d);
+            float3 v_ray_o_alpha, v_ray_d_alpha;
+            v_splat += splat.evaluate_alpha_vjp(ray_o, ray_d, v_alpha, v_ray_o_alpha, v_ray_d_alpha);
+            float3 v_ray_o_color, v_ray_d_color;
+            v_splat += splat.evaluate_color_vjp(ray_o, ray_d, v_color, v_ray_o_color, v_ray_d_color);
+
+            if (output_viewmat_grad) {
+                total_v_ray_o += v_ray_o_alpha + v_ray_o_color;
+                shared_v_ray_d[pix_id] += v_ray_d_alpha + v_ray_d_color;
+            }
 
             // update pixel states
             pix_Ts_with_grad[pix_id] = { T0, v_T0 };
@@ -268,7 +282,55 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         if (splat_idx >= range_start)
             splat.atomicAddGradientToBuffer(v_splat, v_splat_buffer, splat_gid);
     }
-    // TODO: gradient to viewmat
+    if (output_viewmat_grad) {
+        // accumulate to viewmat gradient
+        float3x3 v_R;
+        float3 v_t;
+        // gradient from ray_o (will fill v_R and v_t)
+        transform_ray_o_vjp(R, t, total_v_ray_o, &v_R, &v_t);
+        // gradient from ray_d
+        #pragma unroll
+        for (uint pix_id0 = 0; pix_id0 < BLOCK_SIZE; pix_id0 += SPLAT_BATCH_SIZE) {
+            uint pix_id_local = pix_id0 + thread_id;
+            float4 ray_d_pix_bin_final = shared_ray_d_pix_bin_final[pix_id_local];
+            float3 raydir = undo_transform_ray_d(R,
+                make_float3(
+                    ray_d_pix_bin_final.x,
+                    ray_d_pix_bin_final.y,
+                    ray_d_pix_bin_final.z
+                )
+            );
+            float3 v_ray_d = shared_v_ray_d[pix_id_local];
+            float3x3 v_R_delta;
+            float3 temp;
+            transform_ray_d_vjp(R, raydir, v_ray_d, &v_R_delta, &temp);
+            v_R = v_R + v_R_delta;
+        }
+        // atomic add to global viewmat gradient
+        if (v_viewmats != nullptr) {
+            float *v_viewmat = v_viewmats + image_id * 16;
+            float temp;
+            #define _ATOMIC_ADD(ptr, offset, value) do { \
+                temp = isfinite(value) ? value : 0.0f; \
+                warpSum(temp, warp); \
+                if (warp.thread_rank() == 0 && temp != 0.0f) \
+                    atomicAdd((ptr) + (offset), (temp)); \
+            } while(0)
+            _ATOMIC_ADD(v_viewmat, 0, v_R[0].x);
+            _ATOMIC_ADD(v_viewmat, 1, v_R[0].y);
+            _ATOMIC_ADD(v_viewmat, 2, v_R[0].z);
+            _ATOMIC_ADD(v_viewmat, 3, v_t.x);
+            _ATOMIC_ADD(v_viewmat, 4, v_R[1].x);
+            _ATOMIC_ADD(v_viewmat, 5, v_R[1].y);
+            _ATOMIC_ADD(v_viewmat, 6, v_R[1].z);
+            _ATOMIC_ADD(v_viewmat, 7, v_t.y);
+            _ATOMIC_ADD(v_viewmat, 8, v_R[2].x);
+            _ATOMIC_ADD(v_viewmat, 9, v_R[2].y);
+            _ATOMIC_ADD(v_viewmat, 10, v_R[2].z);
+            _ATOMIC_ADD(v_viewmat, 11, v_t.z);
+            #undef _ATOMIC_ADD
+        }
+    }
 }
 
 
@@ -298,7 +360,8 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
     typename SplatPrimitive::RenderOutput::Tensor *v_distortion_outputs,
     // outputs
-    typename SplatPrimitive::Screen::Tensor v_splats
+    typename SplatPrimitive::Screen::Tensor v_splats,
+    std::optional<at::Tensor> v_viewmats
 ) {
     bool packed = splats.isPacked();
     uint32_t N = packed ? 0 : splats.size(); // number of gaussians
@@ -332,15 +395,26 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
             output_distortion ? render2_outputs->buffer() : typename SplatPrimitive::RenderOutput::Buffer(), \
             v_render_outputs.buffer(), v_render_alphas.data_ptr<float>(), \
             output_distortion ? v_distortion_outputs->buffer() : typename SplatPrimitive::RenderOutput::Buffer(), \
-            v_splats.buffer() \
+            v_splats.buffer(), \
+            v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr \
         )
 
-    if (camera_model == gsplat::CameraModelType::PINHOLE)
-        rasterize_to_pixels_eval3d_bwd_kernel<SplatPrimitive,
-            gsplat::CameraModelType::PINHOLE, output_distortion> _LAUNCH_ARGS;
-    else if (camera_model == gsplat::CameraModelType::FISHEYE)
-        rasterize_to_pixels_eval3d_bwd_kernel<SplatPrimitive,
-            gsplat::CameraModelType::FISHEYE, output_distortion> _LAUNCH_ARGS;
+    if (camera_model == gsplat::CameraModelType::PINHOLE) {
+        if (v_viewmats.has_value())
+            rasterize_to_pixels_eval3d_bwd_kernel<SplatPrimitive,
+                gsplat::CameraModelType::PINHOLE, output_distortion, true> _LAUNCH_ARGS;
+        else
+            rasterize_to_pixels_eval3d_bwd_kernel<SplatPrimitive,
+                gsplat::CameraModelType::PINHOLE, output_distortion, false> _LAUNCH_ARGS;
+    }
+    else if (camera_model == gsplat::CameraModelType::FISHEYE) {
+        if (v_viewmats.has_value())
+            rasterize_to_pixels_eval3d_bwd_kernel<SplatPrimitive,
+                gsplat::CameraModelType::FISHEYE, output_distortion, true> _LAUNCH_ARGS;
+        else
+            rasterize_to_pixels_eval3d_bwd_kernel<SplatPrimitive,
+                gsplat::CameraModelType::FISHEYE, output_distortion, false> _LAUNCH_ARGS;
+    }
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -377,7 +451,8 @@ inline std::tuple<
     // gradients of outputs
     typename SplatPrimitive::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
-    std::optional<typename SplatPrimitive::RenderOutput::TensorTuple> v_distortion_outputs_tuple
+    std::optional<typename SplatPrimitive::RenderOutput::TensorTuple> v_distortion_outputs_tuple,
+    bool need_viewmat_grad
 ) {
     DEVICE_GUARD(tile_offsets);
     CHECK_INPUT(tile_offsets);
@@ -398,7 +473,8 @@ inline std::tuple<
     typename SplatPrimitive::Screen::Tensor splats(splats_tuple);
     typename SplatPrimitive::Screen::Tensor v_splats = splats.allocRasterBwd();
 
-    at::Tensor v_viewmats = at::zeros_like(viewmats);  // TODO
+    std::optional<at::Tensor> v_viewmats = need_viewmat_grad ?
+        (std::optional<at::Tensor>)at::zeros_like(viewmats) : (std::optional<at::Tensor>)std::nullopt;
 
     std::optional<typename SplatPrimitive::RenderOutput::Tensor> render_outputs = std::nullopt;
     std::optional<typename SplatPrimitive::RenderOutput::Tensor> render2_outputs = std::nullopt;
@@ -419,7 +495,7 @@ inline std::tuple<
         output_distortion ? &render2_outputs.value() : nullptr,
         v_render_outputs, v_render_alphas,
         output_distortion ? &v_distortion_outputs.value() : nullptr,
-        v_splats
+        v_splats, v_viewmats
     );
 
     return std::make_tuple(v_splats.tupleRasterBwd(), v_viewmats);
@@ -453,7 +529,8 @@ std::tuple<
     // gradients of outputs
     Vanilla3DGUT::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
-    std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> v_distortion_outputs
+    std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> v_distortion_outputs,
+    bool need_viewmat_grad
 ) {
     if (v_distortion_outputs.has_value())
         return rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, true>(
@@ -462,7 +539,8 @@ std::tuple<
             backgrounds, masks,
             image_width, image_height, tile_size, tile_offsets, flatten_ids,
             render_Ts, last_ids, render_outputs, render2_outputs,
-            v_render_outputs, v_render_alphas, v_distortion_outputs
+            v_render_outputs, v_render_alphas, v_distortion_outputs,
+            need_viewmat_grad
         );
     return rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, false>(
         splats_tuple,
@@ -470,7 +548,8 @@ std::tuple<
         backgrounds, masks,
         image_width, image_height, tile_size, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs,
-        v_render_outputs, v_render_alphas, v_distortion_outputs
+        v_render_outputs, v_render_alphas, v_distortion_outputs,
+        need_viewmat_grad
     );
 }
 
@@ -502,7 +581,8 @@ std::tuple<
     // gradients of outputs
     SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
-    std::optional<typename SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple> v_distortion_outputs
+    std::optional<typename SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple> v_distortion_outputs,
+    bool need_viewmat_grad
 ) {
     if (v_distortion_outputs.has_value())
         return rasterize_to_pixels_eval3d_bwd_tensor<SphericalVoronoi3DGUT_Default, true>(
@@ -511,7 +591,8 @@ std::tuple<
             backgrounds, masks,
             image_width, image_height, tile_size, tile_offsets, flatten_ids,
             render_Ts, last_ids, render_outputs, render2_outputs,
-            v_render_outputs, v_render_alphas, v_distortion_outputs
+            v_render_outputs, v_render_alphas, v_distortion_outputs,
+            need_viewmat_grad
         );
     return rasterize_to_pixels_eval3d_bwd_tensor<SphericalVoronoi3DGUT_Default, false>(
         splats_tuple,
@@ -519,7 +600,8 @@ std::tuple<
         backgrounds, masks,
         image_width, image_height, tile_size, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs,
-        v_render_outputs, v_render_alphas, v_distortion_outputs
+        v_render_outputs, v_render_alphas, v_distortion_outputs,
+        need_viewmat_grad
     );
 }
 
@@ -551,7 +633,8 @@ std::tuple<
     // gradients of outputs
     OpaqueTriangle::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
-    std::optional<typename OpaqueTriangle::RenderOutput::TensorTuple> v_distortion_outputs
+    std::optional<typename OpaqueTriangle::RenderOutput::TensorTuple> v_distortion_outputs,
+    bool need_viewmat_grad
 ) {
     return rasterize_to_pixels_eval3d_bwd_tensor<OpaqueTriangle, true>(
         splats_tuple,
@@ -559,7 +642,8 @@ std::tuple<
         backgrounds, masks,
         image_width, image_height, tile_size, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs,
-        v_render_outputs, v_render_alphas, v_distortion_outputs
+        v_render_outputs, v_render_alphas, v_distortion_outputs,
+        need_viewmat_grad
     );
 }
 
@@ -591,7 +675,8 @@ std::tuple<
     // gradients of outputs
     VoxelPrimitive::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
-    std::optional<typename VoxelPrimitive::RenderOutput::TensorTuple> v_distortion_outputs
+    std::optional<typename VoxelPrimitive::RenderOutput::TensorTuple> v_distortion_outputs,
+    bool need_viewmat_grad
 ) {
     return rasterize_to_pixels_eval3d_bwd_tensor<VoxelPrimitive, false>(
         splats_tuple,
@@ -599,6 +684,7 @@ std::tuple<
         backgrounds, masks,
         image_width, image_height, tile_size, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs,
-        v_render_outputs, v_render_alphas, v_distortion_outputs
+        v_render_outputs, v_render_alphas, v_distortion_outputs,
+        need_viewmat_grad
     );
 }

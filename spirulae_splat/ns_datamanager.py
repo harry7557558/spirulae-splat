@@ -304,7 +304,7 @@ class SpirulaeDataManager(FullImageDatamanager):
         camera = self.train_dataset.cameras[idx]
         if camera.metadata is None:
             camera.metadata = {}
-        camera.metadata["cam_idx"] = idx
+        camera.metadata["cam_idx"] = int(idx)
 
         if self.config.compute_visibility_masks:
             camera.metadata['visibility_masks'] = SplatTrainingLosses.get_visibility_masks(batch, self.device)
@@ -317,7 +317,7 @@ class SpirulaeDataManager(FullImageDatamanager):
             camera_flattened[key] = value
         return camera_flattened, batch
 
-    def get_tiles(self, batch_size: int):
+    def get_tiles(self, batch_size: int, indices: List[int]):
         # TODO: multithread with pytorch data loader
 
         TILE_SIZE = 16
@@ -338,7 +338,7 @@ class SpirulaeDataManager(FullImageDatamanager):
             pixels_per_patch = self.config.patch_size**2
             batch_size = max(int(pixels_per_batch // pixels_per_patch), 1)
 
-        image_indices = torch.randint(0, len(self.cached_train), (batch_size,))
+        image_indices = torch.Tensor(indices)[torch.randint(0, len(indices), (batch_size,))].long()
         offsets = (torch.rand([batch_size, 2]) * self.effective_offsets[image_indices] + 0.5).long()
         batch = { 'image': [] }
         patch_offsets = []
@@ -399,14 +399,12 @@ class SpirulaeDataManager(FullImageDatamanager):
                 additional_params.append(value if value is None else tuple(value.shape))
             return (w, h, camera_type, *additional_params)
 
-        val_indices = self.train_dataset.val_indices
-        train_indices = sorted(set(range(len(self.train_dataset))).difference(val_indices))
         self.train_index_group_loader = IndexGroupsWithDataLoader(
-            train_indices, [get_key(idx) for idx in train_indices],
+            self.train_indices, [get_key(idx) for idx in self.train_indices],
             self.get_train_image, self.train_batch_size(False), self.config.cache_images != "gpu"
         )
         self.val_index_group_loader = IndexGroupsWithDataLoader(
-            val_indices, [get_key(idx) for idx in val_indices],
+            self.val_indices, [get_key(idx) for idx in self.val_indices],
             self.get_train_image, self.val_batch_size(False), self.config.cache_images != "gpu"
         )
 
@@ -458,28 +456,27 @@ class SpirulaeDataManager(FullImageDatamanager):
         if not hasattr(self, 'cached_train') and self.config.cache_images != "disk":
             self.cached_train = self._load_images("train", cache_images_device=self.config.cache_images)
 
+        self.val_indices = sorted(self.train_dataset.val_indices)
+        self.train_indices = sorted(set(range(len(self.train_dataset))).difference(self.train_dataset.val_indices))
+        if self.train_index_group_loader is None:
+            self.setup_index_group_loaders()
+
         if self.config.patch_batch_size is not None:
             assert self.config.cache_images != "disk", "Disk caching not supported in patch batching mode"
-            assert len(self.train_dataset.val_indices) == 0, "Validation is not supported in patch batching mode"
-            return self.get_tiles(self.config.patch_batch_size)
+            camera, batch = self.get_tiles(self.config.patch_batch_size, self.train_indices)
+        else:
+            camera, batch = self.train_index_group_loader.get_batch()
+            for key, value in camera.items():
+                if isinstance(value, torch.Tensor) and value.numel() == 0:
+                    camera[key] = None
+            camera = Cameras(**camera).to(self.device)
+            for key, value in batch.items():
+                if isinstance(value, torch.Tensor):
+                    batch[key] = value.to(self.device)
 
         # TODO
         if random.random() < (step - 10000) / (30000 - 10000) and False:
             return self.random_cameras(self.train_batch_size()), {}
-
-        if self.train_index_group_loader is None:
-            self.setup_index_group_loaders()
-
-        camera, batch = self.train_index_group_loader.get_batch()
-        for key, value in camera.items():
-            if isinstance(value, torch.Tensor) and value.numel() == 0:
-                camera[key] = None
-        camera = Cameras(**camera)
-
-        camera = camera.to(self.device)
-        for key, value in batch.items():
-            if isinstance(value, torch.Tensor):
-                batch[key] = value.to(self.device)
 
         val_batch_size = self.val_batch_size(True)
         if len(self.train_dataset.val_indices) > 0 and val_batch_size > 0:
@@ -489,7 +486,7 @@ class SpirulaeDataManager(FullImageDatamanager):
                     if value.numel() == 0:
                         val_camera[key] = None
                     else:
-                        val_camera[key] = value[:val_batch_size, ...].to(self.device)
+                        val_camera[key] = value[:val_batch_size].to(self.device)
             val_camera = Cameras(**val_camera)
             for key, value in val_batch.items():
                 if isinstance(value, torch.Tensor):

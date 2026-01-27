@@ -176,7 +176,7 @@ spirulae_patched = MethodSpecification(
                 max_batch_per_epoch=512,
             ),
             model=SpirulaeModelConfig(
-                packed=True,
+                # packed=True,
                 use_bvh=True,
                 use_camera_optimizer=False,
                 # use_bilateral_grid=False,
@@ -276,7 +276,7 @@ spirulae_triangle_patched = MethodSpecification(
                 ssim_lambda=0.4,
                 reg_warmup_length=1000,
 
-                packed=True,
+                # packed=True,
                 use_bvh=True,
                 use_camera_optimizer=False,
                 # use_bilateral_grid=False,

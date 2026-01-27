@@ -42,7 +42,8 @@ std::tuple<
     // gradients of outputs
     Vanilla3DGUT::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
-    std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> v_distortion_outputs
+    std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> v_distortion_outputs,
+    bool need_viewmat_grad
 );
 
 
@@ -73,7 +74,8 @@ std::tuple<
     // gradients of outputs
     SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
-    std::optional<typename SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple> v_distortion_outputs
+    std::optional<typename SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple> v_distortion_outputs,
+    bool need_viewmat_grad
 );
 
 
@@ -104,7 +106,8 @@ std::tuple<
     // gradients of outputs
     OpaqueTriangle::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
-    std::optional<typename OpaqueTriangle::RenderOutput::TensorTuple> v_distortion_outputs
+    std::optional<typename OpaqueTriangle::RenderOutput::TensorTuple> v_distortion_outputs,
+    bool need_viewmat_grad
 );
 
 
@@ -135,5 +138,6 @@ std::tuple<
     // gradients of outputs
     VoxelPrimitive::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
-    std::optional<typename VoxelPrimitive::RenderOutput::TensorTuple> v_distortion_outputs
+    std::optional<typename VoxelPrimitive::RenderOutput::TensorTuple> v_distortion_outputs,
+    bool need_viewmat_grad
 );

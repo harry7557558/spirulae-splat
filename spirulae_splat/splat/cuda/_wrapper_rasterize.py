@@ -331,6 +331,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
             (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
             v_render_alphas.contiguous(),
             (v_distortion_rgbs.contiguous(), v_distortion_depths.contiguous()) if ctx.output_distortion else None,
+            ctx.needs_input_grad[13]
         )
 
         v_backgrounds = None
@@ -340,7 +341,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
 
         return (
             v_means, v_quats, v_depths, v_proj_scales, v_proj_opacities, v_colors, v_backgrounds,
-            *([None]*(len(ctx.needs_input_grad)-7))
+            None, None, None, None, None, None, v_viewmats, None, None, None, None
         )
 
 
@@ -453,6 +454,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
             (v_render_rgbs.contiguous(), v_render_depths.contiguous(), v_render_normals.contiguous()),
             v_render_alphas.contiguous(),
             (v_distortion_rgbs.contiguous(), v_distortion_depths.contiguous(), v_distortion_normals.contiguous()),
+            ctx.needs_input_grad[12]
         )
         # torch.cuda.synchronize()
         # time1 = perf_counter()
@@ -465,7 +467,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
 
         return (
             v_hardness, v_depths, v_verts, v_rgbs, v_normals, v_backgrounds,
-            *([None]*(len(ctx.needs_input_grad)-6))
+            None, None, None, None, None, None, v_viewmats, None, None, None
         )
 
 class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
@@ -564,6 +566,7 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
             (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
             v_render_alphas.contiguous(),
             (v_distortion_rgbs.contiguous(), v_distortion_depths.contiguous()),
+            ctx.needs_input_grad[10]
         )
         assert v_pos_sizes is None
         assert v_depths is None
@@ -578,6 +581,6 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         return (
             v_pos_sizes, v_densities,
             v_colors, v_backgrounds,
-            *([None]*(len(ctx.needs_input_grad)-4))
+            None, None, None, None, None, None, v_viewmats, None, None, None
         )
 
