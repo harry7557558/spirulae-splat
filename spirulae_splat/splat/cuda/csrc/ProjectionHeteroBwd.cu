@@ -18,7 +18,7 @@ __global__ void projection_3dgs_hetero_backward_kernel(
     const uint32_t nnz,
     const typename SplatPrimitive::World::Buffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
-    const float *__restrict__ Ks,       // [C, 3, 3]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
@@ -53,14 +53,14 @@ __global__ void projection_3dgs_hetero_backward_kernel(
 
     // Load camera
     viewmats += camera_idx * 16;
-    Ks += camera_idx * 9;
+    float4 intrin = intrins[camera_idx];
     float3x3 R = {
         viewmats[0], viewmats[1], viewmats[2],  // 1st row
         viewmats[4], viewmats[5], viewmats[6],  // 2nd row
         viewmats[8], viewmats[9], viewmats[10],  // 3rd row
     };
     float3 t = { viewmats[3], viewmats[7], viewmats[11] };
-    float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
+    float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
     typename SplatPrimitive::BwdProjCamera cam = {
         R, t, fx, fy, cx, cy,
         image_width, image_height,
@@ -126,7 +126,7 @@ std::tuple<
     // fwd inputs
     const Vanilla3DGS::World::TensorTuple &splats_world_tuple,
     const at::Tensor viewmats, // [..., C, 4, 4]
-    const at::Tensor Ks, // [..., C, 3, 3]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,
@@ -161,7 +161,7 @@ std::tuple<
     #define _LAUNCH_ARGS \
         <<<_LAUNCH_ARGS_1D(nnz, block)>>>( \
             C, N, nnz, \
-            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
+            splats_world.buffer(), viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, tile_width, tile_height, \
             camera_ids.data_ptr<int64_t>(), gaussian_ids.data_ptr<int64_t>(), (int4*)aabb.data_ptr<int32_t>(), \
             v_splats_proj.buffer(), sparse_grad, v_splats_world.buffer(),  \
@@ -192,7 +192,7 @@ std::tuple<
     // fwd inputs
     const MipSplatting::World::TensorTuple &splats_world_tuple,
     const at::Tensor viewmats, // [..., C, 4, 4]
-    const at::Tensor Ks, // [..., C, 3, 3]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,
@@ -227,7 +227,7 @@ std::tuple<
     #define _LAUNCH_ARGS \
         <<<_LAUNCH_ARGS_1D(nnz, block)>>>( \
             C, N, nnz, \
-            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
+            splats_world.buffer(), viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, tile_width, tile_height, \
             camera_ids.data_ptr<int64_t>(), gaussian_ids.data_ptr<int64_t>(), (int4*)aabb.data_ptr<int32_t>(), \
             v_splats_proj.buffer(), sparse_grad, v_splats_world.buffer(),  \
@@ -258,7 +258,7 @@ std::tuple<
     // fwd inputs
     const Vanilla3DGUT::World::TensorTuple &splats_world_tuple,
     const at::Tensor viewmats, // [..., C, 4, 4]
-    const at::Tensor Ks, // [..., C, 3, 3]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,
@@ -293,7 +293,7 @@ std::tuple<
     #define _LAUNCH_ARGS \
         <<<_LAUNCH_ARGS_1D(nnz, block)>>>( \
             C, N, nnz, \
-            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
+            splats_world.buffer(), viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, tile_width, tile_height, \
             camera_ids.data_ptr<int64_t>(), gaussian_ids.data_ptr<int64_t>(), (int4*)aabb.data_ptr<int32_t>(), \
             v_splats_proj.buffer(), sparse_grad, v_splats_world.buffer(),  \
@@ -324,7 +324,7 @@ std::tuple<
     // fwd inputs
     const OpaqueTriangle::World::TensorTuple &splats_world_tuple,
     const at::Tensor viewmats, // [..., C, 4, 4]
-    const at::Tensor Ks, // [..., C, 3, 3]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,
@@ -357,7 +357,7 @@ std::tuple<
     #define _LAUNCH_ARGS \
         <<<_LAUNCH_ARGS_1D(nnz, block)>>>( \
             C, N, nnz, \
-            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
+            splats_world.buffer(), viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, tile_width, tile_height, \
             camera_ids.data_ptr<int64_t>(), gaussian_ids.data_ptr<int64_t>(), (int4*)aabb.data_ptr<int32_t>(), \
             v_splats_proj.buffer(), sparse_grad, v_splats_world.buffer(),  \

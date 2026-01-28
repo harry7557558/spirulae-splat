@@ -25,8 +25,8 @@ std::tuple<
 > rasterize_to_pixels_3dgut_fwd(
     // Gaussian parameters
     Vanilla3DGUT::Screen::TensorTuple splats_tuple,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
@@ -52,8 +52,8 @@ std::tuple<
 > rasterize_to_pixels_3dgut_sv_fwd(
     // Gaussian parameters
     SphericalVoronoi3DGUT_Default::Screen::TensorTuple splats_tuple,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
@@ -79,8 +79,8 @@ std::tuple<
 > rasterize_to_pixels_opaque_triangle_eval3d_fwd(
     // Gaussian parameters
     OpaqueTriangle::Screen::TensorTuple splats_tuple,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,      // [..., C, 4, 4]
+    const at::Tensor intrins,       // [..., C, 4], fx, fy, cx, cy
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
@@ -105,8 +105,8 @@ std::tuple<
 > rasterize_to_pixels_voxel_eval3d_fwd(
     // Gaussian parameters
     VoxelPrimitive::Screen::TensorTuple splats_tuple,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,      // [..., C, 4, 4]
+    const at::Tensor intrins,       // [..., C, 4], fx, fy, cx, cy
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]

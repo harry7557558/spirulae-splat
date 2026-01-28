@@ -70,17 +70,18 @@ WITH_UT = False
 def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
     camera_model = ["pinhole", "fisheye"][IS_FISHEYE]
     quats = torch.nn.functional.normalize(quats, dim=-1)
+    intrins = torch.stack([Ks[..., 0, 0], Ks[..., 1, 1], Ks[..., 0, 2], Ks[..., 1, 2]], dim=-1)  # fx, fy, cx, cy
     rgbd, alpha, meta = ssplat_rasterization(
-        # primitive="3dgut" if WITH_UT else ["3dgs", "mip"][IS_ANTIALIASED],
-        # splat_params=(means, quats, scales, opacities, features_dc, features_sh),
+        primitive="3dgut" if WITH_UT else ["3dgs", "mip"][IS_ANTIALIASED],
+        splat_params=(means, quats, scales, opacities, features_dc, features_sh),
         # primitive="opaque_triangle",
         # splat_params=(means, quats, scales+1.8, opacities.unsqueeze(-1).repeat(1, 2), features_dc, features_sh, features_dc.unsqueeze(-2).repeat(1, 2, 1)),
-        primitive="voxel",
-        splat_params=(torch.cat((means, 5.0*torch.exp(scales.mean(-1, True))), dim=-1), 2.0*torch.exp(opacities).unsqueeze(-1).repeat(1, 8), features_dc, features_sh),
+        # primitive="voxel",
+        # splat_params=(torch.cat((means, 5.0*torch.exp(scales.mean(-1, True))), dim=-1), 2.0*torch.exp(opacities).unsqueeze(-1).repeat(1, 8), features_dc, features_sh),
         # splat_params=(voxels, 10.0*torch.exp(opacities)[voxel_indices], features_dc[:len(voxels)], features_sh[:len(voxels)]),
         # splat_params=(voxels, densities_0[voxel_indices], features_dc_0, features_sh_0),
         viewmats=viewmats,  # [C, 4, 4]
-        Ks=Ks,  # [C, 3, 3]
+        intrins=intrins,  # [C, 4]
         width=W,
         height=H,
         packed=PACKED,
@@ -93,7 +94,7 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
         # render_mode="RGB+D+N",
     )
     rgbd = [*rgbd[:2]]
-    rgbd[1] = ray_depth_to_linear_depth(rgbd[1], camera_model, Ks)  # TODO: f(E[X]) != E[f(X)]
+    rgbd[1] = ray_depth_to_linear_depth(rgbd[1], camera_model, intrins)  # TODO: f(E[X]) != E[f(X)]
     return *rgbd, alpha
 
 def rasterize_gsplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):

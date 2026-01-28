@@ -68,7 +68,7 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     const bool packed,
     const typename SplatPrimitive::Screen::Buffer splat_buffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float *__restrict__ Ks,       // [B, C, 3, 3]
+    const float4 *__restrict__ intrins,       // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const float3 *__restrict__ backgrounds, // [I, 3]
     const bool *__restrict__ max_blending_masks,  // [B, C, image_width, image_height]
@@ -116,14 +116,14 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
 
     // Load camera
     viewmats += image_id * 16;
-    Ks += image_id * 9;
+    float4 intrin = intrins[image_id];
     float3x3 R = {
         viewmats[0], viewmats[1], viewmats[2],  // 1st row
         viewmats[4], viewmats[5], viewmats[6],  // 2nd row
         viewmats[8], viewmats[9], viewmats[10],  // 3rd row
     };
     float3 t = { viewmats[3], viewmats[7], viewmats[11] };
-    float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
+    float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
     CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(image_id);
 
     bool inside = (i < image_height && j < image_width);
@@ -261,8 +261,8 @@ template <typename SplatPrimitive, bool output_distortion, bool output_max_blend
 inline void launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     // Gaussian parameters
     typename SplatPrimitive::Screen::Tensor splats,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
@@ -296,7 +296,7 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     #define _LAUNCH_ARGS <<<grid, threads, 0, at::cuda::getCurrentCUDAStream()>>>( \
             I, N, n_isects, packed, \
             splats.buffer(), \
-            viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
+            viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             backgrounds.has_value() ? (float3*)backgrounds.value().data_ptr<float>() : nullptr, \
             (output_max_blending && max_blending_masks.has_value()) ? max_blending_masks.value().data_ptr<bool>() : nullptr, \
             image_width, image_height, tile_width, tile_height, \
@@ -332,8 +332,8 @@ inline std::tuple<
 > rasterize_to_pixels_sorted_eval3d_fwd_tensor(
     // Gaussian parameters
     typename SplatPrimitive::Screen::TensorTuple splats_tuple,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
@@ -349,7 +349,7 @@ inline std::tuple<
     CHECK_INPUT(tile_offsets);
     CHECK_INPUT(flatten_ids);
     CHECK_INPUT(viewmats);
-    CHECK_INPUT(Ks);
+    CHECK_INPUT(intrins);
     if (backgrounds.has_value())
         CHECK_INPUT(backgrounds.value());
     if (output_max_blending && max_blending_masks.has_value())
@@ -386,7 +386,7 @@ inline std::tuple<
 
     launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel<SplatPrimitive, output_distortion, output_max_blending>(
         splats,
-        viewmats, Ks, camera_model, dist_coeffs,
+        viewmats, intrins, camera_model, dist_coeffs,
         backgrounds, max_blending_masks,
         image_width, image_height, tile_offsets, flatten_ids,
         renders, transmittances, last_ids,
@@ -414,8 +414,8 @@ std::tuple<
 > rasterize_to_pixels_opaque_triangle_sorted_fwd(
     // Gaussian parameters
     OpaqueTriangle::Screen::TensorTuple splats_tuple,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
@@ -432,7 +432,7 @@ std::tuple<
         AT_ERROR("Tile size must be " + std::to_string(TILE_SIZE));
     return rasterize_to_pixels_sorted_eval3d_fwd_tensor<OpaqueTriangle, true, true>(
         splats_tuple,
-        viewmats, Ks, camera_model, dist_coeffs,
+        viewmats, intrins, camera_model, dist_coeffs,
         backgrounds, max_blending_masks,
         image_width, image_height,
         tile_offsets, flatten_ids

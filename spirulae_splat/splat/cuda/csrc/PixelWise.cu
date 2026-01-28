@@ -251,7 +251,7 @@ at::Tensor log_map_image_backward_tensor(
 
 __global__ void depth_to_normal_forward_kernel(
     gsplat::CameraModelType camera_model,
-    const float *__restrict__ Ks,  // [B, 3, 3]
+    const float4 *__restrict__ intrins,  // fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const bool is_ray_depth,
     const TensorView<float, 4> depths,  // [B, H, W, 1]
@@ -274,8 +274,8 @@ __global__ void depth_to_normal_forward_kernel(
     }
 
     // Load camera
-    Ks += bid * 9;
-    float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
+    float4 intrin = intrins[bid];
+    float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
     CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
 
     // Process
@@ -328,7 +328,7 @@ __global__ void depth_to_normal_forward_kernel(
 
 __global__ void depth_to_normal_backward_kernel(
     gsplat::CameraModelType camera_model,
-    const float *__restrict__ Ks,  // [B, 3, 3]
+    const float4 *__restrict__ intrins,  // fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const bool is_ray_depth,
     const TensorView<float, 4> depths,  // [B, H, W, 1]
@@ -351,8 +351,8 @@ __global__ void depth_to_normal_backward_kernel(
     }
 
     // Load camera
-    Ks += bid * 9;
-    float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
+    float4 intrin = intrins[bid];
+    float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
     CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
 
     // Process
@@ -420,27 +420,27 @@ __global__ void depth_to_normal_backward_kernel(
 /*[AutoHeaderGeneratorExport]*/
 at::Tensor depth_to_normal_forward_tensor(
     gsplat::CameraModelType camera_model,
-    at::Tensor Ks,  // [B, 3, 3]
+    at::Tensor intrins,  // fx, fy, cx, cy
     CameraDistortionCoeffsTensor dist_coeffs,
     bool is_ray_depth,
     at::Tensor depths  // [B, H, W, 1]
 ) {
     DEVICE_GUARD(depths);
     CHECK_CUDA(depths);
-    CHECK_INPUT(Ks);
+    CHECK_INPUT(intrins);
 
-    if (Ks.ndimension() != 3 || Ks.size(-1) != 3 || Ks.size(-2) != 3)
-        AT_ERROR("Ks shape must be (B, 3, 3)");
+    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
+        AT_ERROR("intrins shape must be (B, 4)");
     if (depths.ndimension() != 4 || depths.size(-1) != 1)
         AT_ERROR("depths shape must be (B, H, W, 1)");
-    if (depths.size(0) != Ks.size(0))
-        AT_ERROR("depths and Ks batch dimension mismatch");
+    if (depths.size(0) != intrins.size(0))
+        AT_ERROR("depths and intrins batch dimension mismatch");
 
     uint b = depths.size(0), h = depths.size(1), w = depths.size(2);
     at::Tensor normals = at::empty({b, h, w, 3}, depths.options());
 
     depth_to_normal_forward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        camera_model, Ks.data_ptr<float>(), dist_coeffs,
+        camera_model, (float4*)intrins.data_ptr<float>(), dist_coeffs,
         is_ray_depth, tensor2view<float, 4>(depths), tensor2view<float, 4>(normals)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -451,7 +451,7 @@ at::Tensor depth_to_normal_forward_tensor(
 /*[AutoHeaderGeneratorExport]*/
 at::Tensor depth_to_normal_backward_tensor(
     gsplat::CameraModelType camera_model,
-    at::Tensor Ks,  // [B, 3, 3]
+    at::Tensor intrins,  // fx, fy, cx, cy
     CameraDistortionCoeffsTensor dist_coeffs,
     bool is_ray_depth,
     at::Tensor depths,  // [B, H, W, 1]
@@ -459,14 +459,14 @@ at::Tensor depth_to_normal_backward_tensor(
 ) {
     DEVICE_GUARD(depths);
     CHECK_CUDA(depths);
-    CHECK_INPUT(Ks);
+    CHECK_INPUT(intrins);
     CHECK_CUDA(v_normals);
 
     uint b = depths.size(0), h = depths.size(1), w = depths.size(2);
     at::Tensor v_depths = at::zeros_like(depths);
 
     depth_to_normal_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        camera_model, Ks.data_ptr<float>(), dist_coeffs,
+        camera_model, (float4*)intrins.data_ptr<float>(), dist_coeffs,
         is_ray_depth, tensor2view<float, 4>(depths),
         tensor2view<float, 4>(v_normals),
         tensor2view<float, 4>(v_depths)
@@ -484,7 +484,7 @@ at::Tensor depth_to_normal_backward_tensor(
 
 __global__ void ray_depth_to_linear_depth_forward_kernel(
     gsplat::CameraModelType camera_model,
-    const float *__restrict__ Ks,  // [B, 3, 3]
+    const float4 *__restrict__ intrins,  // fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const TensorView<float, 4> in_depths,  // [B, H, W, 1]
     TensorView<float, 4> out_depths  // [B, H, W, 1]
@@ -499,8 +499,8 @@ __global__ void ray_depth_to_linear_depth_forward_kernel(
         return;
 
     // Load camera
-    Ks += bid * 9;
-    float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
+    float4 intrin = intrins[bid];
+    float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
     CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
 
     // Process
@@ -515,7 +515,7 @@ __global__ void ray_depth_to_linear_depth_forward_kernel(
 
 __global__ void ray_depth_to_linear_depth_backward_kernel(
     gsplat::CameraModelType camera_model,
-    const float *__restrict__ Ks,  // [B, 3, 3]
+    const float4 *__restrict__ intrins,  // fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const TensorView<float, 4> v_out_depths,  // [B, H, W, 1]
     TensorView<float, 4> v_in_depths  // [B, H, W, 1]
@@ -530,8 +530,8 @@ __global__ void ray_depth_to_linear_depth_backward_kernel(
         return;
 
     // Load camera
-    Ks += bid * 9;
-    float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
+    float4 intrin = intrins[bid];
+    float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
     CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
 
     // Process
@@ -548,26 +548,26 @@ __global__ void ray_depth_to_linear_depth_backward_kernel(
 /*[AutoHeaderGeneratorExport]*/
 at::Tensor ray_depth_to_linear_depth_forward_tensor(
     gsplat::CameraModelType camera_model,
-    at::Tensor Ks,  // [B, 3, 3]
+    at::Tensor intrins,  // fx, fy, cx, cy
     CameraDistortionCoeffsTensor dist_coeffs,
     at::Tensor depths  // [B, H, W, 1]
 ) {
     DEVICE_GUARD(depths);
     CHECK_CUDA(depths);
-    CHECK_INPUT(Ks);
+    CHECK_INPUT(intrins);
 
-    if (Ks.ndimension() != 3 || Ks.size(-1) != 3 || Ks.size(-2) != 3)
-        AT_ERROR("Ks shape must be (B, 3, 3)");
+    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
+        AT_ERROR("intrins shape must be (B, 4)");
     if (depths.ndimension() != 4 || depths.size(-1) != 1)
         AT_ERROR("depths shape must be (B, H, W, 1)");
-    if (depths.size(0) != Ks.size(0))
-        AT_ERROR("depths and Ks batch dimension mismatch");
+    if (depths.size(0) != intrins.size(0))
+        AT_ERROR("depths and intrins batch dimension mismatch");
 
     uint b = depths.size(0), h = depths.size(1), w = depths.size(2);
     at::Tensor out_depths = at::empty_like(depths);
 
     ray_depth_to_linear_depth_forward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        camera_model, Ks.data_ptr<float>(), dist_coeffs,
+        camera_model, (float4*)intrins.data_ptr<float>(), dist_coeffs,
         tensor2view<float, 4>(depths), tensor2view<float, 4>(out_depths)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -578,26 +578,26 @@ at::Tensor ray_depth_to_linear_depth_forward_tensor(
 /*[AutoHeaderGeneratorExport]*/
 at::Tensor ray_depth_to_linear_depth_backward_tensor(
     gsplat::CameraModelType camera_model,
-    at::Tensor Ks,  // [B, 3, 3]
+    at::Tensor intrins,  // fx, fy, cx, cy
     CameraDistortionCoeffsTensor dist_coeffs,
     at::Tensor v_out_depths  // [B, H, W, 1]
 ) {
     DEVICE_GUARD(v_out_depths);
     CHECK_CUDA(v_out_depths);
-    CHECK_INPUT(Ks);
+    CHECK_INPUT(intrins);
 
-    if (Ks.ndimension() != 3 || Ks.size(-1) != 3 || Ks.size(-2) != 3)
-        AT_ERROR("Ks shape must be (B, 3, 3)");
+    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
+        AT_ERROR("intrins shape must be (B, 4)");
     if (v_out_depths.ndimension() != 4 || v_out_depths.size(-1) != 1)
         AT_ERROR("v_out_depths shape must be (B, H, W, 1)");
-    if (v_out_depths.size(0) != Ks.size(0))
-        AT_ERROR("v_out_depths and Ks batch dimension mismatch");
+    if (v_out_depths.size(0) != intrins.size(0))
+        AT_ERROR("v_out_depths and intrins batch dimension mismatch");
 
     uint b = v_out_depths.size(0), h = v_out_depths.size(1), w = v_out_depths.size(2);
     at::Tensor v_in_depths = at::empty_like(v_out_depths);
 
     ray_depth_to_linear_depth_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        camera_model, Ks.data_ptr<float>(), dist_coeffs,
+        camera_model, (float4*)intrins.data_ptr<float>(), dist_coeffs,
         tensor2view<float, 4>(v_out_depths), tensor2view<float, 4>(v_in_depths)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -613,7 +613,7 @@ at::Tensor ray_depth_to_linear_depth_backward_tensor(
 template<bool is_undistort>
 __global__ void distort_image_kernel(
     gsplat::CameraModelType camera_model,
-    const float *__restrict__ Ks,  // [B, 3, 3]
+    const float4 *__restrict__ intrins,  // [B, 4]
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const TensorView<float, 4> in_image,  // [B, H, W, C]
     TensorView<float, 4> out_image  // [B, H, W, C]
@@ -629,8 +629,8 @@ __global__ void distort_image_kernel(
         return;
 
     // Load camera
-    Ks += bid * 9;
-    float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
+    float4 intrin = intrins[bid];
+    float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
     CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
 
     // Undistort point
@@ -656,24 +656,24 @@ __global__ void distort_image_kernel(
 /*[AutoHeaderGeneratorExport]*/
 at::Tensor distort_image_tensor(
     gsplat::CameraModelType camera_model,
-    at::Tensor Ks,  // [B, 3, 3]
+    at::Tensor intrins,  // fx, fy, cx, cy
     CameraDistortionCoeffsTensor dist_coeffs,
     at::Tensor in_image  // [B, H, W, C]
 ) {
     DEVICE_GUARD(in_image);
     CHECK_CUDA(in_image);
-    CHECK_INPUT(Ks);
+    CHECK_INPUT(intrins);
 
-    if (Ks.ndimension() != 3 || Ks.size(-1) != 3 || Ks.size(-2) != 3)
-        AT_ERROR("Ks shape must be (B, 3, 3)");
-    if (in_image.ndimension() != 4 || in_image.size(0) != Ks.size(0))
-        AT_ERROR("in_image shape must be (B, H, W, C) where B is consistent with Ks");
+    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
+        AT_ERROR("intrins shape must be (B, 4)");
+    if (in_image.ndimension() != 4 || in_image.size(0) != intrins.size(0))
+        AT_ERROR("in_image shape must be (B, H, W, C) where B is consistent with intrins");
 
     uint b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
     at::Tensor out_image = at::zeros_like(in_image);
 
     distort_image_kernel<false><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        camera_model, Ks.data_ptr<float>(), dist_coeffs,
+        camera_model, (float4*)intrins.data_ptr<float>(), dist_coeffs,
         tensor2view<float, 4>(in_image), tensor2view<float, 4>(out_image)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -684,24 +684,24 @@ at::Tensor distort_image_tensor(
 /*[AutoHeaderGeneratorExport]*/
 at::Tensor undistort_image_tensor(
     gsplat::CameraModelType camera_model,
-    at::Tensor Ks,  // [B, 3, 3]
+    at::Tensor intrins,  // fx, fy, cx, cy
     CameraDistortionCoeffsTensor dist_coeffs,
     at::Tensor in_image  // [B, H, W, C]
 ) {
     DEVICE_GUARD(in_image);
     CHECK_CUDA(in_image);
-    CHECK_INPUT(Ks);
+    CHECK_INPUT(intrins);
 
-    if (Ks.ndimension() != 3 || Ks.size(-1) != 3 || Ks.size(-2) != 3)
-        AT_ERROR("Ks shape must be (B, 3, 3)");
-    if (in_image.ndimension() != 4 || in_image.size(0) != Ks.size(0))
-        AT_ERROR("in_image shape must be (B, H, W, C) where B is consistent with Ks");
+    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
+        AT_ERROR("intrins shape must be (B, 4)");
+    if (in_image.ndimension() != 4 || in_image.size(0) != intrins.size(0))
+        AT_ERROR("in_image shape must be (B, H, W, C) where B is consistent with intrins");
 
     uint b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
     at::Tensor out_image = at::zeros_like(in_image);
 
     distort_image_kernel<true><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        camera_model, Ks.data_ptr<float>(), dist_coeffs,
+        camera_model, (float4*)intrins.data_ptr<float>(), dist_coeffs,
         tensor2view<float, 4>(in_image), tensor2view<float, 4>(out_image)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());

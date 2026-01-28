@@ -13,7 +13,7 @@ at::Tensor render_background_sh_forward_tensor(
     const unsigned w,
     const unsigned h,
     std::string camera_model,
-    const at::Tensor &Ks,  // row major 3x3
+    const at::Tensor &intrins,  // fx, fy, cx, cy
     const at::Tensor &rotation,  // row major 3x3
     const unsigned sh_degree,
     const at::Tensor &sh_coeffs
@@ -27,7 +27,7 @@ std::tuple<
     const unsigned w,
     const unsigned h,
     const std::string camera_model,
-    const at::Tensor &Ks,  // row major 3x3
+    const at::Tensor &intrins,  // fx, fy, cx, cy
     const at::Tensor &rotation,  // row major 3x3
     const unsigned sh_degree,
     const at::Tensor &sh_coeffs,

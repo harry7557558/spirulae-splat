@@ -22,8 +22,8 @@ std::tuple<
 > projection_3dgs_hetero_forward_tensor(
     // inputs
     const Vanilla3DGS::World::TensorTuple &in_splats_tensor,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,
@@ -45,8 +45,8 @@ std::tuple<
 > projection_mip_hetero_forward_tensor(
     // inputs
     const MipSplatting::World::TensorTuple &in_splats_tensor,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,
@@ -68,8 +68,8 @@ std::tuple<
 > projection_3dgut_hetero_forward_tensor(
     // inputs
     const Vanilla3DGUT::World::TensorTuple &in_splats_tensor,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,
@@ -91,8 +91,8 @@ std::tuple<
 > projection_opaque_triangle_hetero_forward_tensor(
     // inputs
     const OpaqueTriangle::World::TensorTuple &in_splats_tensor,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,

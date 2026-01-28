@@ -224,12 +224,12 @@ loadTile(unsigned tileIdx, const TileBuffers<camera_model> buffers, bool& isActi
     static_assert(sizeof(glm::mat3) == 9*sizeof(float));
 
     glm::mat4 view = glm::transpose(buffers.viewmats[tileIdx]);
-    glm::mat3 intrins = buffers.Ks[tileIdx];  // take it as row major
+    float4 intrin = buffers.intrins[tileIdx];  // fx, fy, cx, cy
 
-    float fx = intrins[0][0];
-    float fy = intrins[1][1];
-    float cx = intrins[0][2];
-    float cy = intrins[1][2];
+    float fx = intrin.x;
+    float fy = intrin.y;
+    float cx = intrin.z;
+    float cy = intrin.w;
     // printf("%f %f %f %f\n", fx, fy, cx, cy);
 
     Tile<camera_model> res;
@@ -1495,7 +1495,7 @@ int main(int argc, char** argv) {
     // at::Tensor opacs = at::randn({num_splat, 1}).cuda();
     // at::Tensor quats = at::randn({num_splat, 4}).cuda();
     // unsigned num_tiles = std::stod(argv[2]);
-    // auto [viewmats, Ks] = generate_random_camera_poses(num_tiles, seed);
+    // auto [viewmats, intrins] = generate_random_camera_poses(num_tiles, seed);
 
     // if (0) {
     //     at::Tensor tile_ro_cpu = tile_apex.cpu();
@@ -1513,12 +1513,12 @@ int main(int argc, char** argv) {
     at::Tensor opacs = loadBinaryToTensor("opacities_1000000.bin");
     at::Tensor quats = loadBinaryToTensor("quats_1000000_4.bin");
     at::Tensor viewmats = loadBinaryToTensor("viewmats_256_4_4.bin");
-    at::Tensor Ks = loadBinaryToTensor("Ks_256_3_3.bin");
+    at::Tensor intrins = loadBinaryToTensor("intrins_256_4.bin");
 
     SplatTileIntersector::intersect_splat_tile(
         means, scales, opacs, quats,
         64, 64,
-        viewmats, Ks
+        viewmats, intrins
     );
     return 0;
 }
@@ -1536,7 +1536,7 @@ intersect_splat_tile_3dgs(
     unsigned width,
     unsigned height,
     const at::Tensor& viewmats,
-    const at::Tensor& Ks,
+    const at::Tensor& intrins,
     const gsplat::CameraModelType& camera_model,
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale
@@ -1545,13 +1545,13 @@ intersect_splat_tile_3dgs(
 
     if (camera_model == gsplat::CameraModelType::PINHOLE) {
         TileBuffers<gsplat::CameraModelType::PINHOLE> tile_buffers =
-            {width, height, viewmats, Ks, dist_coeffs};
+            {width, height, viewmats, intrins, dist_coeffs};
         return SplatTileIntersector<Vanilla3DGS, gsplat::CameraModelType::PINHOLE>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
     else if (camera_model == gsplat::CameraModelType::FISHEYE) {
         TileBuffers<gsplat::CameraModelType::FISHEYE> tile_buffers =
-            {width, height, viewmats, Ks, dist_coeffs};
+            {width, height, viewmats, intrins, dist_coeffs};
         return SplatTileIntersector<Vanilla3DGS, gsplat::CameraModelType::FISHEYE>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
@@ -1565,7 +1565,7 @@ intersect_splat_tile_opaque_triangle(
     unsigned width,
     unsigned height,
     const at::Tensor& viewmats,
-    const at::Tensor& Ks,
+    const at::Tensor& intrins,
     const gsplat::CameraModelType& camera_model,
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale
@@ -1574,13 +1574,13 @@ intersect_splat_tile_opaque_triangle(
 
     if (camera_model == gsplat::CameraModelType::PINHOLE) {
         TileBuffers<gsplat::CameraModelType::PINHOLE> tile_buffers =
-            {width, height, viewmats, Ks, dist_coeffs};
+            {width, height, viewmats, intrins, dist_coeffs};
         return SplatTileIntersector<OpaqueTriangle, gsplat::CameraModelType::PINHOLE>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
     else if (camera_model == gsplat::CameraModelType::FISHEYE) {
         TileBuffers<gsplat::CameraModelType::FISHEYE> tile_buffers =
-            {width, height, viewmats, Ks, dist_coeffs};
+            {width, height, viewmats, intrins, dist_coeffs};
         return SplatTileIntersector<OpaqueTriangle, gsplat::CameraModelType::FISHEYE>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
@@ -1594,7 +1594,7 @@ intersect_splat_tile_voxel(
     unsigned width,
     unsigned height,
     const at::Tensor& viewmats,
-    const at::Tensor& Ks,
+    const at::Tensor& intrins,
     const gsplat::CameraModelType& camera_model,
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale
@@ -1603,13 +1603,13 @@ intersect_splat_tile_voxel(
 
     if (camera_model == gsplat::CameraModelType::PINHOLE) {
         TileBuffers<gsplat::CameraModelType::PINHOLE> tile_buffers =
-            {width, height, viewmats, Ks, dist_coeffs};
+            {width, height, viewmats, intrins, dist_coeffs};
         return SplatTileIntersector<VoxelPrimitive, gsplat::CameraModelType::PINHOLE>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
     else if (camera_model == gsplat::CameraModelType::FISHEYE) {
         TileBuffers<gsplat::CameraModelType::FISHEYE> tile_buffers =
-            {width, height, viewmats, Ks, dist_coeffs};
+            {width, height, viewmats, intrins, dist_coeffs};
         return SplatTileIntersector<VoxelPrimitive, gsplat::CameraModelType::FISHEYE>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }

@@ -34,7 +34,7 @@ def rasterization(
     primitive: Literal["3dgs", "mip", "3dgut", "3dgut_sv", "opaque_triangle", "voxel"],
     splat_params: tuple[Tensor],  # means, quats, scales, opacities
     viewmats: Tensor,  # [..., C, 4, 4]
-    Ks: Tensor,  # [..., C, 3, 3]
+    intrins: Tensor,  # [..., C, 4]
     width: int,
     height: int,
     near_plane: float = 0.01,
@@ -82,7 +82,7 @@ def rasterization(
 
     .. note::
         **Batch Rasterization**: This function allows for rasterizing a set of 3D Gaussians
-        to a batch of images in one go, by simplly providing the batched `viewmats` and `Ks`.
+        to a batch of images in one go, by simplly providing the batched `viewmats` and `intrins`.
 
     .. note::
         **Depth Rendering**: This function supports colors or/and depths via `render_mode`.
@@ -132,7 +132,7 @@ def rasterization(
         <https://arxiv.org/abs/2412.12507>`_.
 
     .. warning::
-        This function is currently not differentiable w.r.t. the camera intrinsics `Ks`.
+        This function is currently not differentiable w.r.t. the camera intrinsics `intrins`.
 
     Args:
         means: The 3D centers of the Gaussians. [..., N, 3]
@@ -141,7 +141,7 @@ def rasterization(
         opacities: The opacities of the Gaussians. [..., N]
         colors: The colors of the Gaussians. [..., (C,) N, D] or [..., (C,) N, K, 3] for SH coefficients.
         viewmats: The world-to-cam transformation of the cameras. [..., C, 4, 4]
-        Ks: The camera intrinsics. [..., C, 3, 3]
+        intrins: The camera intrinsics. [..., C, 4] (fx, fy, cx, cy)
         width: The width of the image.
         height: The height of the image.
         near_plane: The near plane for clipping. Default is 0.01.
@@ -194,12 +194,12 @@ def rasterization(
         >>> opacities = torch.rand((100,), device=device)
         >>> # define cameras
         >>> viewmats = torch.eye(4, device=device)[None, :, :]
-        >>> Ks = torch.tensor([
-        >>>    [300., 0., 150.], [0., 300., 100.], [0., 0., 1.]], device=device)[None, :, :]
+        >>> intrins = torch.tensor([
+        >>>    [300., 300., 150., 100.]], device=device)[None, :, :]
         >>> width, height = 300, 200
         >>> # render
         >>> colors, alphas, meta = rasterization(
-        >>>    means, quats, scales, opacities, colors, viewmats, Ks, width, height
+        >>>    means, quats, scales, opacities, colors, viewmats, intrins, width, height
         >>> )
         >>> print (colors.shape, alphas.shape)
         torch.Size([1, 200, 300, 3]) torch.Size([1, 200, 300, 1])
@@ -261,7 +261,7 @@ def rasterization(
     C = viewmats.shape[-3]
     I = B * C
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
-    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
+    assert intrins.shape == batch_dims + (C, 4), intrins.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED", "RGB+D+N", "RGB+ED+N"], render_mode
 
     def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
@@ -301,7 +301,7 @@ def rasterization(
 
         # Enforce that the number of cameras is the same across all ranks.
         C_world = [C] * world_size
-        viewmats, Ks = all_gather_tensor_list(world_size, [viewmats, Ks])
+        viewmats, intrins = all_gather_tensor_list(world_size, [viewmats, intrins])
         if viewmats_rs is not None:
             (viewmats_rs,) = all_gather_tensor_list(world_size, [viewmats_rs])
 
@@ -324,7 +324,7 @@ def rasterization(
             dump('opacities', opacities)
             dump('quats', quats)
             dump('viewmats', viewmats)
-            dump('Ks', Ks)
+            dump('intrins', intrins)
             # exit(0)
         from time import perf_counter
         torch.cuda.synchronize()
@@ -336,7 +336,7 @@ def rasterization(
             width,
             height,
             viewmats.contiguous(),
-            Ks.contiguous(),
+            intrins.contiguous(),
             camera_model,
             dist_coeffs.contiguous() if dist_coeffs is not None else None,
             1.0 if relative_scale is None else relative_scale
@@ -352,7 +352,7 @@ def rasterization(
             primitive,
             splat_params,
             viewmats,
-            Ks,
+            intrins,
             actual_width,
             actual_height,
             width,
@@ -372,7 +372,7 @@ def rasterization(
             primitive,
             splat_params,
             viewmats,
-            Ks,
+            intrins,
             width,
             height,
             packed=packed,
@@ -543,7 +543,7 @@ def rasterization(
     # print("rank", world_rank, "Before rasterize_to_pixels")
     kwargs = {
         "viewmats": viewmats,
-        "Ks": Ks,
+        "intrins": intrins,
         "camera_model": camera_model,
         "dist_coeffs": dist_coeffs,
     }

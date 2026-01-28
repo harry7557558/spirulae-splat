@@ -13,7 +13,7 @@ def render_background_sh(
     width: int,
     height: int,
     camera_model: Literal['pinhole', 'fisheye'],
-    Ks: Float[Tensor, "3 3"],
+    intrins: Float[Tensor, "4"],
     rotation: Float[Tensor, "3 3"],
     sh_degree: int,
     sh_coeffs: Float[Tensor, "(sh_degree+1)**2 3"],
@@ -21,7 +21,7 @@ def render_background_sh(
 
     return _RenderBackgroundSH.apply(
         width, height, camera_model,
-        Ks.contiguous(), rotation.contiguous(),
+        intrins.contiguous(), rotation.contiguous(),
         sh_degree, sh_coeffs.contiguous(),
     )
 
@@ -34,7 +34,7 @@ class _RenderBackgroundSH(Function):
         width: int,
         height: int,
         camera_model: Literal['pinhole', 'fisheye'],
-        Ks: Float[Tensor, "3 3"],
+        intrins: Float[Tensor, "4"],
         rotation: Float[Tensor, "3 3"],
         sh_degree: int,
         sh_coeffs: Float[Tensor, "(sh_degree+1)**2 3"],
@@ -42,12 +42,12 @@ class _RenderBackgroundSH(Function):
         
         out_color = _C.render_background_sh_forward(
             width, height, camera_model,
-            Ks, rotation,
+            intrins, rotation,
             sh_degree+1, sh_coeffs
         )
 
         ctx.meta = (width, height, camera_model, sh_degree)
-        ctx.save_for_backward(Ks, rotation, sh_coeffs, out_color)
+        ctx.save_for_backward(intrins, rotation, sh_coeffs, out_color)
 
         return out_color
 
@@ -55,11 +55,11 @@ class _RenderBackgroundSH(Function):
     def backward(ctx, v_out_color):
 
         (width, height, camera_model, sh_degree) = ctx.meta
-        Ks, rotation, sh_coeffs, out_color = ctx.saved_tensors
+        intrins, rotation, sh_coeffs, out_color = ctx.saved_tensors
 
         v_rotation, v_sh_coeffs = _C.render_background_sh_backward(
             width, height, camera_model,
-            Ks, rotation,
+            intrins, rotation,
             sh_degree+1, sh_coeffs,
             out_color, v_out_color.contiguous()
         )

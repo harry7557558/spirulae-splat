@@ -24,8 +24,8 @@ def test_render_background_sh():
     cx, cy = 0.45*W, 0.55*H
     fx, fy = 1.5*W, 1.6*W
 
-    Ks = torch.tensor([[[fx, 0, cx], [0, fy, cy], [0, 0, 1]]]).repeat(B, 1, 1).to(device)
-    Ks *= torch.exp(0.2*torch.randn_like(Ks))
+    intrins = torch.tensor([[fx, fy, cx, cy]]).repeat(B, 1).to(device)
+    intrins *= torch.exp(0.2*torch.randn_like(intrins))
 
     rotation = torch.randn(B, 4).to(device)
     rotation /= torch.norm(rotation, dim=-1, keepdim=True)
@@ -41,14 +41,14 @@ def test_render_background_sh():
 
     output = render_background_sh(
         W, H, MODEL,
-        Ks, rotation, sh_degree, sh_coeffs
+        intrins, rotation, sh_degree, sh_coeffs
     )
     _output = torch.stack([
         _torch_impl.render_background_sh(
             W, H,
-            (Ks_i[0][0].item(), Ks_i[1][1].item(), Ks_i[0][2].item(), Ks_i[1][2].item()),
+            (intrins_i[0].item(), intrins_i[1].item(), intrins_i[2].item(), intrins_i[3].item()),
             rotation_i, sh_degree, _sh_coeffs,
-        ) for (Ks_i, rotation_i) in zip(Ks, _rotation)
+        ) for (intrins_i, rotation_i) in zip(intrins, _rotation)
     ])
 
     print("test forward")
@@ -80,8 +80,8 @@ def profile_render_background_sh():
     cx, cy = 0.45*W, 0.55*H
     fx, fy = 1.5*W, 1.6*W
 
-    Ks = torch.tensor([[[fx, 0, cx], [0, fy, cy], [0, 0, 1]]]).repeat(B, 1, 1).to(device)
-    Ks *= torch.exp(0.2*torch.randn_like(Ks))
+    intrins = torch.tensor([[fx, fy, cx, cy]]).repeat(B, 1).to(device)
+    intrins *= torch.exp(0.2*torch.randn_like(intrins))
 
     rotation = torch.randn(B, 4).to(device)
     rotation /= torch.linalg.norm(rotation)
@@ -99,7 +99,7 @@ def profile_render_background_sh():
 
     output = render_background_sh(
         W, H, MODEL,
-        Ks, rotation, sh_degree, sh_coeffs
+        intrins, rotation, sh_degree, sh_coeffs
     )[0]
     # _output = _torch_impl.render_background_sh(
     #     W, H, (fx, fy, cx, cy),
@@ -112,7 +112,7 @@ def profile_render_background_sh():
     # ), "forward torch")
     timeit(lambda: render_background_sh(
         W, H, MODEL,
-        Ks[None], rotation[None], sh_degree, sh_coeffs
+        intrins[None], rotation[None], sh_degree, sh_coeffs
     )[0], "forward fused")
 
     print()
@@ -127,8 +127,8 @@ def profile_render_background_sh():
     loss.backward(retain_graph=True)
     # _loss.backward(retain_graph=True)
 
-    timeit(lambda: _loss.backward(retain_graph=True), "backward torch")
-    # timeit(lambda: loss.backward(retain_graph=True), "backward fused", 1000)
+    # timeit(lambda: _loss.backward(retain_graph=True), "backward torch")
+    timeit(lambda: loss.backward(retain_graph=True), "backward fused", 20)
 
     print()
 

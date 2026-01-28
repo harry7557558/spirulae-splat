@@ -770,7 +770,7 @@ class SpirulaeModel(Model):
             return resize_image(image, d)
         return image
 
-    def get_background_image(self, camera: Cameras, c2w: torch.Tensor, Ks: torch.Tensor):
+    def get_background_image(self, camera: Cameras, c2w: torch.Tensor, intrins: torch.Tensor):
         if not isinstance(camera, Cameras):
             print("Called get_background_image with not a camera")
             return {}
@@ -789,7 +789,7 @@ class SpirulaeModel(Model):
         return render_background_sh(
             camera.width[0].item(), camera.height[0].item(),
             ['pinhole', 'fisheye'][camera.camera_type[0].item() == CameraType.FISHEYE.value],
-            Ks, c2w[..., :3, :3], sh_degree, sh_coeffs
+            intrins, c2w[..., :3, :3], sh_degree, sh_coeffs
         )
 
     @staticmethod
@@ -841,7 +841,7 @@ class SpirulaeModel(Model):
         assert self.config.use_3dgs, "2DGS is deprecated"
 
         # Call GSplat for 3DGS rendering
-        Ks = camera.get_intrinsics_matrices()
+        intrins = torch.concatenate((camera.fx, camera.fy, camera.cx, camera.cy), dim=1)
         
         kwargs = {'actual_width': W, 'actual_height': H}
         if 'actual_width' in camera.metadata:
@@ -869,17 +869,17 @@ class SpirulaeModel(Model):
 
         optimized_camera_to_world = optimized_camera_to_world.to(device)
         viewmats = viewmats.to(device)
-        Ks = Ks.to(device)
+        intrins = intrins.to(device)
 
         TILE_SIZE = 64
         gh, gw = (H+TILE_SIZE-1) // TILE_SIZE, (W+TILE_SIZE-1) // TILE_SIZE
-        def split_into_tiles(viewmat, Ks):
+        def split_into_tiles(viewmat, intrins):
             dh, dw = torch.meshgrid(torch.arange(gh)*TILE_SIZE, torch.arange(gw)*TILE_SIZE)
-            Ks = Ks.clone().repeat(gh*gw, 1, 1)
+            intrins = intrins.clone().repeat(gh*gw, 1)
             viewmat = viewmat.clone().repeat(gh*gw, 1, 1)
-            Ks[:, 0, 2] -= dw.flatten().to(Ks)
-            Ks[:, 1, 2] -= dh.flatten().to(Ks)
-            return viewmat, Ks
+            intrins[:, 2] -= dw.flatten().to(intrins)
+            intrins[:, 3] -= dh.flatten().to(intrins)
+            return viewmat, intrins
 
         def merge_tiles(im):
             im = im.reshape(gh, gw, TILE_SIZE, TILE_SIZE, -1).permute(0, 2, 1, 3, 4).reshape(1, gh*TILE_SIZE, gw*TILE_SIZE, -1)
@@ -887,8 +887,8 @@ class SpirulaeModel(Model):
             return im
 
         # if not self.training:
-        #     viewmats_0, Ks_0 = viewmats, Ks
-        #     viewmats, Ks = split_into_tiles(viewmats, Ks)
+        #     viewmats_0, intrins_0 = viewmats, intrins
+        #     viewmats, intrins = split_into_tiles(viewmats, intrins)
         #     if 'dist_coeffs' in kwargs:
         #         kwargs['dist_coeffs'] = kwargs['dist_coeffs'].repeat(gh*gw, 1, 1)
         #     W = TILE_SIZE
@@ -945,7 +945,7 @@ class SpirulaeModel(Model):
 
             # (self.means, hardness * torch.ones_like(self.opacities.squeeze(-1))),
             viewmats=viewmats,  # [C, 4, 4]
-            Ks=Ks * self.config.supersampling,  # [C, 3, 3]
+            intrins=intrins * self.config.supersampling,  # [C, 4]
             width=W * self.config.supersampling,
             height=H * self.config.supersampling,
             packed=(self.config.packed or use_bvh),
@@ -974,7 +974,7 @@ class SpirulaeModel(Model):
         #         if key in meta:
         #             meta[key] = merge_tiles(meta[key])
         #     W, H = camera.width[0].item(), camera.height[0].item()
-        #     viewmats, Ks = viewmats_0, Ks_0
+        #     viewmats, intrins = viewmats_0, intrins_0
         #     if 'dist_coeffs' in kwargs:
         #         kwargs['dist_coeffs'] = kwargs['dist_coeffs'][:1]
 
@@ -994,7 +994,7 @@ class SpirulaeModel(Model):
         depth_normal = None
         if self.config.compute_depth_normal or self.config.fit == "depth_normal" or not self.training:
             depth_normal = depth_to_normal(
-                depth_im_ref, ["pinhole", "fisheye"][is_fisheye], Ks, **kwargs
+                depth_im_ref, ["pinhole", "fisheye"][is_fisheye], intrins, **kwargs
             )
 
         if self.config.fit == "rgb":
@@ -1040,7 +1040,7 @@ class SpirulaeModel(Model):
 
         # blend with background
         if self.config.fit == "rgb":
-            background = self.get_background_image(camera, optimized_camera_to_world, Ks)
+            background = self.get_background_image(camera, optimized_camera_to_world, intrins)
             # rgb = torch.clip(rgb + (1.0 - alpha) * background, 0.0, 1.0)
             rgb = blend_background(rgb, alpha, background)
         else:
@@ -1089,7 +1089,7 @@ class SpirulaeModel(Model):
                 outputs[key] = outputs[key].squeeze(0)
 
         if self.training:
-            kwargs["Ks"] = Ks
+            kwargs["intrins"] = intrins
             kwargs["camera_model"] = ["pinhole", "fisheye"][is_fisheye]
             outputs["camera"] = camera
             outputs["camera_intrins"] = kwargs

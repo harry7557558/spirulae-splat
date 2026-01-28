@@ -23,8 +23,8 @@ std::tuple<
 > projection_3dgs_forward_tensor(
     // inputs
     const Vanilla3DGS::World::TensorTuple &in_splats,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
@@ -40,8 +40,8 @@ std::tuple<
 > projection_mip_forward_tensor(
     // inputs
     const MipSplatting::World::TensorTuple &in_splats,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
@@ -57,8 +57,8 @@ std::tuple<
 > projection_3dgut_forward_tensor(
     // inputs
     const Vanilla3DGUT::World::TensorTuple &in_splats,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
@@ -74,8 +74,8 @@ std::tuple<
 > projection_3dgut_sv_forward_tensor(
     // inputs
     const SphericalVoronoi3DGUT_Default::World::TensorTuple &in_splats,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
@@ -91,8 +91,8 @@ std::tuple<
 > projection_opaque_triangle_forward_tensor(
     // inputs
     const OpaqueTriangle::World::TensorTuple &in_splats,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,   // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
@@ -108,8 +108,8 @@ std::tuple<
 > projection_voxel_forward_tensor(
     // inputs
     const VoxelPrimitive::World::TensorTuple &in_splats,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,   // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,

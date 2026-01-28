@@ -98,9 +98,9 @@ def process_image(
 
     sw = image.shape[2] / intrins['w']
     sh = image.shape[1] / intrins['h']
-    Ks = (intrins['fl_x']*sw, intrins['fl_y']*sh, intrins['cx']*sw, intrins['cy']*sh)
+    intrins = (intrins['fl_x']*sw, intrins['fl_y']*sh, intrins['cx']*sw, intrins['cy']*sh)
     dist_coeffs = tuple(intrins.get(key, 0.0) for key in "k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2".split())
-    intrins = (intrins['camera_model'], Ks, dist_coeffs)
+    intrins = (intrins['camera_model'], intrins, dist_coeffs)
     image = undistort_image(image, *intrins)
 
     # pred_depth and pred_normal are distorted, pred_sky is original

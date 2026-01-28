@@ -20,19 +20,19 @@ struct TileBuffers {
     long size;
     float width, height;
     const glm::mat4* __restrict__ viewmats;
-    const glm::mat3* __restrict__ Ks;  // TODO: make aligned
+    const float4* __restrict__ intrins;  // fx, fy, cx, cy
     CameraDistortionCoeffsBuffer dist_coeffs;
 
     TileBuffers(
         unsigned width,
         unsigned height,
         const at::Tensor& viewmats,  // [B, 4, 4]
-        const at::Tensor& Ks,  // [B, 3, 3]
+        const at::Tensor& intrins,  // [B, 4], fx, fy, cx, cy
         const CameraDistortionCoeffsTensor& dist_coeffs
     ) : width((float)width), height((float)height), dist_coeffs(dist_coeffs) {
         DEVICE_GUARD(viewmats);
         CHECK_INPUT(viewmats);
-        CHECK_INPUT(Ks);
+        CHECK_INPUT(intrins);
         // TODO: check dimension and shape
 
         static_assert(sizeof(glm::mat4) == 16*sizeof(float));
@@ -40,7 +40,7 @@ struct TileBuffers {
 
         this->size = viewmats.size(0);
         this->viewmats = (glm::mat4*)viewmats.data_ptr<float>();
-        this->Ks = (glm::mat3*)Ks.data_ptr<float>();
+        this->intrins = (float4*)intrins.data_ptr<float>();
     }
 };
 
@@ -74,7 +74,7 @@ intersect_splat_tile_3dgs(
     unsigned width,
     unsigned height,
     const at::Tensor& viewmats,
-    const at::Tensor& Ks,
+    const at::Tensor& intrins,
     const gsplat::CameraModelType& camera_model,
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale
@@ -86,7 +86,7 @@ intersect_splat_tile_opaque_triangle(
     unsigned width,
     unsigned height,
     const at::Tensor& viewmats,
-    const at::Tensor& Ks,
+    const at::Tensor& intrins,
     const gsplat::CameraModelType& camera_model,
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale
@@ -98,7 +98,7 @@ intersect_splat_tile_voxel(
     unsigned width,
     unsigned height,
     const at::Tensor& viewmats,
-    const at::Tensor& Ks,
+    const at::Tensor& intrins,
     const gsplat::CameraModelType& camera_model,
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale

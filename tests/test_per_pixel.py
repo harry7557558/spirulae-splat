@@ -20,11 +20,11 @@ def _torch_blend_background(rgb, alpha, background):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_blend_background():
-    w, h = 1440, 1080
+    b, w, h = 3, 1440, 1080
 
-    rgb = torch.randn((h, 4, w), device=device).transpose(-1, -2)[..., :3]
-    alpha = torch.randn((h, w+100, 1), device=device)[:, :w, :]
-    background = torch.randn((h, w+100, 3), device=device)[:, -w:, :]
+    rgb = torch.randn((b, h, 4, w), device=device).transpose(-1, -2)[..., :3]
+    alpha = torch.randn((b, h, w+100, 1), device=device)[:, :, :w, :]
+    background = torch.randn((b, h, w+100, 3), device=device)[:, :, -w:, :]
     # rgb, alpha, background = rgb.contiguous(), alpha.contiguous(), background.contiguous()
 
     _rgb = torch.nn.Parameter(rgb.clone())
@@ -89,15 +89,15 @@ def test_depth_to_normal():
     import spirulae_splat.splat.utils
 
     depths = torch.exp(0.1*torch.randn((b, h, w, 1), device=device))
-    Ks = 0.5*(w*h)**0.5 * torch.exp(0.2*torch.randn((b, 3, 3), device=device))
+    intrins = 0.5*(w*h)**0.5 * torch.exp(0.2*torch.randn((b, 4), device=device))
 
     _depths = torch.nn.Parameter(depths.clone())
     depths = torch.nn.Parameter(depths)
 
-    forward = lambda: module.depth_to_normal(depths, "pinhole", Ks)
+    forward = lambda: module.depth_to_normal(depths, "pinhole", intrins)
     _forward = lambda: torch.stack([
         spirulae_splat.splat.utils.depth_to_normal(_depths[i],
-        spirulae_splat.splat.utils._Camera(h, w, "OPENCV", (Ks[i,0,0], Ks[i,1,1], Ks[i,0,2], Ks[i,1,2])),
+        spirulae_splat.splat.utils._Camera(h, w, "OPENCV", (intrins[i,0], intrins[i,1], intrins[i,2], intrins[i,3])),
         z_depth=False)
         for i in range(b)])
     output = forward()

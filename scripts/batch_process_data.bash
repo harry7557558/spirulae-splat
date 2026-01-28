@@ -61,8 +61,18 @@ for file in "${files[@]}"; do
     num_gs=40000
     sh_degree=2
 
-    ns-train spirulae --data $dirname \
+    # ns-train spirulae --data $dirname \
+    #   --max_num_iterations 30000 \
+    #   --pipeline.model.apply-loss-for-mask True \
+    #   --pipeline.model.randomize_background False \
+    #   --pipeline.model.mcmc_cap_max $num_gs \
+    #   --pipeline.model.sh-degree $sh_degree \
+    #   --viewer.quit_on_train_completion True \
+    #   nerfstudio-data --validation_fraction 0.1
+
+    ns-train spirulae-patched --data $dirname \
       --max_num_iterations 30000 \
+      --pipeline.model.use_camera_optimizer True \
       --pipeline.model.apply-loss-for-mask True \
       --pipeline.model.randomize_background False \
       --pipeline.model.mcmc_cap_max $num_gs \

@@ -15,7 +15,7 @@
 template<gsplat::CameraModelType CAMERA_MODEL>
 __global__ void render_background_sh_forward_kernel(
     const dim3 img_size,
-    const float* Ks,  // row major 3x3
+    const float4* intrins,  // fx, fy, cx, cy
     const float* rotation,  // row major 3x3
     const unsigned sh_degree,
     const glm::vec3* __restrict__ sh_coeffs,
@@ -30,8 +30,8 @@ __global__ void render_background_sh_forward_kernel(
     if (i >= img_size.y || j >= img_size.x || camera_id >= img_size.z)
         return;
 
-    Ks += 9 * camera_id;
-    float fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
+    intrins += camera_id;
+    float fx = intrins[0].x, fy = intrins[0].y, cx = intrins[0].z, cy = intrins[0].w;
 
     glm::vec2 pos_2d(j+0.5f, i+0.5f);
     CameraRay camera_ray;
@@ -120,7 +120,7 @@ __global__ void render_background_sh_forward_kernel(
 template<gsplat::CameraModelType CAMERA_MODEL>
 __global__ void render_background_sh_backward_kernel(
     const dim3 img_size,
-    const float* Ks,  // row major 3x3
+    const float4* intrins,  // fx, fy, cx, cy
     const float* rotation,  // row major 3x3
     const unsigned sh_degree,
     const glm::vec3* __restrict__ sh_coeffs,
@@ -154,8 +154,8 @@ __global__ void render_background_sh_backward_kernel(
     }
 
     // undistort
-    Ks += 9 * camera_id;
-    float fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
+    intrins += camera_id;
+    float fx = intrins[0].x, fy = intrins[0].y, cx = intrins[0].z, cy = intrins[0].w;
 
     glm::vec2 pos_2d(j+0.5f, i+0.5f);
     CameraRay camera_ray;
@@ -488,18 +488,18 @@ at::Tensor render_background_sh_forward_tensor(
     const unsigned w,
     const unsigned h,
     std::string camera_model,
-    const at::Tensor &Ks,  // row major 3x3
+    const at::Tensor &intrins,  // fx, fy, cx, cy
     const at::Tensor &rotation,  // row major 3x3
     const unsigned sh_degree,
     const at::Tensor &sh_coeffs
 ) {
     DEVICE_GUARD(sh_coeffs);
     CHECK_INPUT(sh_coeffs);
-    CHECK_INPUT(Ks);
+    CHECK_INPUT(intrins);
     CHECK_INPUT(rotation);
 
-    if (Ks.size(-1) != 3 || Ks.size(-2) != 3) {
-        AT_ERROR("Ks must be (..., 3, 3)");
+    if (intrins.size(-1) != 4) {
+        AT_ERROR("intrins must be (..., 4)");
     }
     if (rotation.size(-1) != 3 || rotation.size(-2) != 3) {
         AT_ERROR("rotation must be (..., 3, 3)");
@@ -509,9 +509,9 @@ at::Tensor render_background_sh_forward_tensor(
         AT_ERROR("sh_coeffs shape must be (..., sh_regree**2, 3)");
     }
 
-    unsigned b = Ks.numel() / 9;
+    unsigned b = intrins.numel() / 4;
     if (b != rotation.numel() / 9)
-        AT_ERROR("Ks and rotation must have same batch dimension");
+        AT_ERROR("intrins and rotation must have same batch dimension");
 
     const dim3 img_size = {w, h, b};
 
@@ -524,7 +524,7 @@ at::Tensor render_background_sh_forward_tensor(
         render_background_sh_forward_kernel<gsplat::CameraModelType::FISHEYE>
         <<<_LAUNCH_ARGS_3D(w, h, b, TILE_SIZE, TILE_SIZE, 1)>>>(
             img_size,
-            Ks.data_ptr<float>(),
+            (float4*)intrins.data_ptr<float>(),
             rotation.data_ptr<float>(),
             sh_degree,
             (glm::vec3*)sh_coeffs.contiguous().data_ptr<float>(),
@@ -534,7 +534,7 @@ at::Tensor render_background_sh_forward_tensor(
         render_background_sh_forward_kernel<gsplat::CameraModelType::PINHOLE>
         <<<_LAUNCH_ARGS_3D(w, h, b, TILE_SIZE, TILE_SIZE, 1)>>>(
             img_size,
-            Ks.data_ptr<float>(),
+            (float4*)intrins.data_ptr<float>(),
             rotation.data_ptr<float>(),
             sh_degree,
             (glm::vec3*)sh_coeffs.contiguous().data_ptr<float>(),
@@ -555,7 +555,7 @@ std::tuple<
     const unsigned w,
     const unsigned h,
     const std::string camera_model,
-    const at::Tensor &Ks,  // row major 3x3
+    const at::Tensor &intrins,  // fx, fy, cx, cy
     const at::Tensor &rotation,  // row major 3x3
     const unsigned sh_degree,
     const at::Tensor &sh_coeffs,
@@ -564,13 +564,13 @@ std::tuple<
 ) {
     DEVICE_GUARD(sh_coeffs);
     CHECK_INPUT(sh_coeffs);
-    CHECK_INPUT(Ks);
+    CHECK_INPUT(intrins);
     CHECK_INPUT(rotation);
     CHECK_INPUT(out_color);
     CHECK_INPUT(v_out_color);
 
-    if (Ks.size(-1) != 3 || Ks.size(-2) != 3) {
-        AT_ERROR("Ks must be (..., 3, 3)");
+    if (intrins.size(-1) != 4) {
+        AT_ERROR("intrins must be (..., 4)");
     }
     if (rotation.size(-1) != 3 || rotation.size(-2) != 3) {
         AT_ERROR("rotation must be (..., 3, 3)");
@@ -589,7 +589,7 @@ std::tuple<
         v_out_color.size(-1) != 3) {
         AT_ERROR("v_out_color shape must be (... h, w, 3)");
     }
-    unsigned b = Ks.numel() / 9;
+    unsigned b = intrins.numel() / 4;
 
     // unsigned block_width = TILE_SIZE;
     // unsigned block_width = 32;  // 1024 threads
@@ -606,7 +606,7 @@ std::tuple<
         // <<<_LAUNCH_ARGS_3D(w, h, b, block_width, block_width, 1)>>>(
         <<<_LAUNCH_ARGS_2D(w*h, b, 256, 1)>>>(
             img_size,
-            Ks.data_ptr<float>(),
+            (float4*)intrins.data_ptr<float>(),
             rotation.data_ptr<float>(),
             sh_degree,
             (glm::vec3*)sh_coeffs.contiguous().data_ptr<float>(),
@@ -620,7 +620,7 @@ std::tuple<
         // <<<_LAUNCH_ARGS_3D(w, h, b, block_width, block_width, 1)>>>(
         <<<_LAUNCH_ARGS_2D(w*h, b, 256, 1)>>>(
             img_size,
-            Ks.data_ptr<float>(),
+            (float4*)intrins.data_ptr<float>(),
             rotation.data_ptr<float>(),
             sh_degree,
             (glm::vec3*)sh_coeffs.contiguous().data_ptr<float>(),

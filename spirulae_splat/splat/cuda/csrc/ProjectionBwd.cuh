@@ -23,14 +23,14 @@ std::tuple<
 > projection_3dgs_backward_tensor(
     // fwd inputs
     const Vanilla3DGS::World::TensorTuple &splats_world,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
-    const at::Tensor aabb,                       // [..., C, N, 2]
+    const at::Tensor aabb,  // [..., C, N, 2]
     // grad outputs
     const Vanilla3DGS::Screen::TensorTupleProj &v_splats_screen,
     const bool viewmats_requires_grad
@@ -43,8 +43,8 @@ std::tuple<
 > projection_mip_backward_tensor(
     // fwd inputs
     const MipSplatting::World::TensorTuple &splats_world,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const gsplat::CameraModelType camera_model,
@@ -63,8 +63,8 @@ std::tuple<
 > projection_3dgut_backward_tensor(
     // fwd inputs
     const Vanilla3DGUT::World::TensorTuple &splats_world,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const gsplat::CameraModelType camera_model,
@@ -83,8 +83,8 @@ std::tuple<
 > projection_3dgut_sv_backward_tensor(
     // fwd inputs
     const SphericalVoronoi3DGUT_Default::World::TensorTuple &splats_world,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const gsplat::CameraModelType camera_model,
@@ -103,8 +103,8 @@ std::tuple<
 > projection_opaque_triangle_backward_tensor(
     // fwd inputs
     const OpaqueTriangle::World::TensorTuple &splats_world,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const gsplat::CameraModelType camera_model,
@@ -123,8 +123,8 @@ std::tuple<
 > projection_voxel_backward_tensor(
     // fwd inputs
     const VoxelPrimitive::World::TensorTuple &splats_world,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const gsplat::CameraModelType camera_model,

@@ -201,11 +201,11 @@ class SplatModel:
         c2w = torch.from_numpy(c2w).to(sh_coeffs)
 
         fx, fy, cx, cy = camera.intrins
-        Ks = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).float().to(c2w)
+        intrins = torch.tensor([fx, fy, cx, cy]).float().to(c2w)
         return render_background_sh(
             camera.w, camera.h,
             ['pinhole', 'fisheye'][camera.model == "OPENCV_FISHEYE"],
-            Ks, c2w, sh_degree, sh_coeffs
+            intrins, c2w, sh_degree, sh_coeffs
         )[0]
 
     @torch.inference_mode()
@@ -231,7 +231,7 @@ class SplatModel:
         if self.scales.shape[-1] == 3:
             fx, fy, cx, cy = ssplat_camera.intrins
             w, h = int(ssplat_camera.w), int(ssplat_camera.h)
-            Ks = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).float().to(viewmat)
+            intrins = torch.tensor([fx, fy, cx, cy]).float().to(viewmat)
 
             kwargs = {}
             dist_coeffs = torch.tensor([*ssplat_camera.dist_coeffs]).float().to(viewmat)
@@ -259,7 +259,7 @@ class SplatModel:
                     self.features_dc, self.features_sh, self.features_ch
                 ),
                 viewmats=viewmat[None].contiguous(),  # [C, 4, 4]
-                Ks=Ks[None].contiguous(),  # [C, 3, 3]
+                intrins=intrins[None].contiguous(),  # [C, 4]
                 width=w,
                 height=h,
                 packed=False,
@@ -282,7 +282,7 @@ class SplatModel:
                 depth = ray_depth_to_linear_depth(
                     depth,
                     ["pinhole", "fisheye"][is_fisheye],
-                    Ks[None].contiguous(),
+                    intrins[None].contiguous(),
                     **kwargs
                 )
                 depth = torch.where(

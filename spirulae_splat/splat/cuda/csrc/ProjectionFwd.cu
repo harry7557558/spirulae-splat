@@ -17,7 +17,7 @@ __global__ void projection_fused_fwd_kernel(
     const uint32_t N,
     const typename SplatPrimitive::World::Buffer splats_world,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float *__restrict__ Ks,       // [B, C, 3, 3]
+    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
@@ -38,14 +38,14 @@ __global__ void projection_fused_fwd_kernel(
 
     // Load camera
     viewmats += bid * C * 16 + cid * 16;
-    Ks += bid * C * 9 + cid * 9;
+    float4 intrin = intrins[bid * C + cid];
     float3x3 R = {
         viewmats[0], viewmats[1], viewmats[2],  // 1st row
         viewmats[4], viewmats[5], viewmats[6],  // 2nd row
         viewmats[8], viewmats[9], viewmats[10],  // 3rd row
     };
     float3 t = { viewmats[3], viewmats[7], viewmats[11] };
-    float fx = Ks[0], fy = Ks[4], cx = Ks[2], cy = Ks[5];
+    float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
     typename SplatPrimitive::FwdProjCamera cam = {
         R, t, fx, fy, cx, cy,
         image_width, image_height,
@@ -93,8 +93,8 @@ std::tuple<
     typename SplatPrimitive::Screen::TensorTupleProj  // out splats
 > launch_projection_fused_fwd_kernel(
     const typename SplatPrimitive::World::TensorTuple &in_splats,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
@@ -116,7 +116,7 @@ std::tuple<
     #define _LAUNCH_ARGS \
         <<<_LAUNCH_ARGS_1D(B*C*N, block)>>>( \
             B, C, N, \
-            splats_world.buffer(), viewmats.data_ptr<float>(), Ks.data_ptr<float>(), dist_coeffs, \
+            splats_world.buffer(), viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, near_plane, far_plane, \
             (int4*)aabb.data_ptr<int32_t>(), splats_screen.buffer() \
         )
@@ -142,8 +142,8 @@ std::tuple<
 > projection_3dgs_forward_tensor(
     // inputs
     const Vanilla3DGS::World::TensorTuple &in_splats,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
@@ -152,7 +152,7 @@ std::tuple<
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return launch_projection_fused_fwd_kernel<Vanilla3DGS>(
-        in_splats, viewmats, Ks, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs);
+        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs);
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -162,8 +162,8 @@ std::tuple<
 > projection_mip_forward_tensor(
     // inputs
     const MipSplatting::World::TensorTuple &in_splats,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
@@ -172,7 +172,7 @@ std::tuple<
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return launch_projection_fused_fwd_kernel<MipSplatting>(
-        in_splats, viewmats, Ks, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs);
+        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs);
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -182,8 +182,8 @@ std::tuple<
 > projection_3dgut_forward_tensor(
     // inputs
     const Vanilla3DGUT::World::TensorTuple &in_splats,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
@@ -192,7 +192,7 @@ std::tuple<
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return launch_projection_fused_fwd_kernel<Vanilla3DGUT>(
-        in_splats, viewmats, Ks, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs);
+        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs);
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -202,8 +202,8 @@ std::tuple<
 > projection_3dgut_sv_forward_tensor(
     // inputs
     const SphericalVoronoi3DGUT_Default::World::TensorTuple &in_splats,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
@@ -214,7 +214,7 @@ std::tuple<
     int num_sv = std::get<5>(in_splats).size(-2);
     #define _CASE(n) \
         if (num_sv == n) return launch_projection_fused_fwd_kernel<SphericalVoronoi3DGUT<n>>( \
-            in_splats, viewmats, Ks, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs); \
+            in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs); \
     _CASE(2) _CASE(3) _CASE(4) _CASE(5) _CASE(6) _CASE(7) _CASE(8)
     #undef _CASE
     throw std::invalid_argument("Unsupported num_sv");
@@ -227,8 +227,8 @@ std::tuple<
 > projection_opaque_triangle_forward_tensor(
     // inputs
     const OpaqueTriangle::World::TensorTuple &in_splats,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,   // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
@@ -237,7 +237,7 @@ std::tuple<
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return launch_projection_fused_fwd_kernel<OpaqueTriangle>(
-        in_splats, viewmats, Ks, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs);
+        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs);
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -247,8 +247,8 @@ std::tuple<
 > projection_voxel_forward_tensor(
     // inputs
     const VoxelPrimitive::World::TensorTuple &in_splats,
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,   // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
@@ -257,5 +257,5 @@ std::tuple<
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return launch_projection_fused_fwd_kernel<VoxelPrimitive>(
-        in_splats, viewmats, Ks, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs);
+        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs);
 }

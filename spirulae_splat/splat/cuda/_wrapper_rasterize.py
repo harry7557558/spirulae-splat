@@ -81,7 +81,7 @@ def rasterize_to_pixels(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    additional_args = [kwargs['viewmats'], kwargs['Ks'], kwargs['camera_model'], kwargs['dist_coeffs']]
+    additional_args = [kwargs['viewmats'], kwargs['intrins'], kwargs['camera_model'], kwargs['dist_coeffs']]
     if primitive in ["3dgs", "mip"]:
         _RasterizeToPixels = _RasterizeToPixels3DGS
         additional_args = [primitive == "mip"]
@@ -249,7 +249,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         isect_offsets: Tensor,  # [..., tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
         viewmats: Tensor,
-        Ks: Tensor,
+        intrins: Tensor,
         camera_model: Literal["pinhole", "fisheye"],
         dist_coeffs: Optional[Tensor],
         output_distortion: bool = False
@@ -266,7 +266,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
             "rasterization_3dgut_forward"
         )(
             (means, quats, depths, proj_scales, proj_opacities, colors),
-            viewmats, Ks, camera_model, dist_coeffs,
+            viewmats, intrins, camera_model, dist_coeffs,
             backgrounds, masks,
             width, height, tile_size, isect_offsets, flatten_ids,
             output_distortion
@@ -281,7 +281,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
 
         ctx.save_for_backward(
             means, quats, depths, proj_scales, proj_opacities, colors,
-            viewmats, Ks, dist_coeffs,
+            viewmats, intrins, dist_coeffs,
             backgrounds, masks,
             isect_offsets, flatten_ids, render_Ts, last_ids,
             *(
@@ -309,7 +309,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
     ):
         (
             means, quats, depths, proj_scales, proj_opacities, colors,
-            viewmats, Ks, dist_coeffs,
+            viewmats, intrins, dist_coeffs,
             backgrounds, masks,
             isect_offsets, flatten_ids, render_Ts, last_ids,
             render_rgbs, render_depths, render2_rgbs, render2_depths,
@@ -323,7 +323,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
             v_viewmats,
         ) = _make_lazy_cuda_func("rasterization_3dgut_backward")(
             (means, quats, depths, proj_scales, proj_opacities, colors),
-            viewmats, Ks, ctx.camera_model, dist_coeffs,
+            viewmats, intrins, ctx.camera_model, dist_coeffs,
             backgrounds, masks,
             width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids,
             (render_rgbs, render_depths) if ctx.output_distortion else None,
@@ -366,7 +366,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
         isect_offsets: Tensor,  # [..., tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
         viewmats: Tensor,
-        Ks: Tensor,
+        intrins: Tensor,
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
         dist_coeffs: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor]:
@@ -386,7 +386,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
             max_blending
         ) = _make_lazy_cuda_func("rasterization_opaque_triangle_forward")(
             (hardness, depths, verts, rgbs, normals),
-            viewmats, Ks, camera_model, dist_coeffs,
+            viewmats, intrins, camera_model, dist_coeffs,
             backgrounds, max_blending_masks,
             width, height, tile_size, isect_offsets, flatten_ids,
         )
@@ -396,7 +396,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
 
         ctx.save_for_backward(
             hardness, depths, verts, rgbs, normals,
-            viewmats, Ks, dist_coeffs,
+            viewmats, intrins, dist_coeffs,
             backgrounds,
             isect_offsets, flatten_ids, render_Ts, last_ids,
             render_rgbs, render_depths, render_normals,
@@ -428,7 +428,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
         # assert v_max_blending is None, "max_blending does not support gradient"
         (
             hardness, depths, verts, rgbs, normals,
-            viewmats, Ks, dist_coeffs,
+            viewmats, intrins, dist_coeffs,
             backgrounds,
             isect_offsets, flatten_ids, render_Ts, last_ids,
             render_rgbs, render_depths, render_normals,
@@ -446,7 +446,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
             v_viewmats,
         ) = _make_lazy_cuda_func("rasterization_opaque_triangle_backward")(
             (hardness, depths, verts, rgbs, normals),
-            viewmats, Ks, ctx.camera_model, dist_coeffs,
+            viewmats, intrins, ctx.camera_model, dist_coeffs,
             backgrounds,
             width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids,
             (render_rgbs, render_depths, render_normals),
@@ -490,7 +490,7 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         isect_offsets: Tensor,  # [..., tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
         viewmats: Tensor,
-        Ks: Tensor,
+        intrins: Tensor,
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
         dist_coeffs: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor]:
@@ -506,14 +506,14 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
             max_blending
         ) = _make_lazy_cuda_func("rasterization_voxel_forward")(
             (pos_sizes, None, densities, colors),
-            viewmats, Ks, camera_model, dist_coeffs,
+            viewmats, intrins, camera_model, dist_coeffs,
             backgrounds, masks,
             width, height, tile_size, isect_offsets, flatten_ids,
         )
 
         ctx.save_for_backward(
             pos_sizes, densities, colors,
-            viewmats, Ks, dist_coeffs,
+            viewmats, intrins, dist_coeffs,
             backgrounds, masks,
             isect_offsets, flatten_ids, render_Ts, last_ids,
             render_rgbs, render_depths,
@@ -543,7 +543,7 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         # assert v_max_blending is None, "max_blending does not support gradient"
         (
             pos_sizes, densities, colors,
-            viewmats, Ks, dist_coeffs,
+            viewmats, intrins, dist_coeffs,
             backgrounds, masks,
             isect_offsets, flatten_ids, render_Ts, last_ids,
             render_rgbs, render_depths,
@@ -558,7 +558,7 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
             v_viewmats,
         ) = _make_lazy_cuda_func("rasterization_voxel_backward")(
             (pos_sizes, None, densities, colors),
-            viewmats, Ks, ctx.camera_model, dist_coeffs,
+            viewmats, intrins, ctx.camera_model, dist_coeffs,
             backgrounds, masks,
             width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids,
             (render_rgbs, render_depths),

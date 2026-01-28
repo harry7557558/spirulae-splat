@@ -21,7 +21,7 @@ std::tuple<
     // fwd inputs
     const Vanilla3DGS::World::TensorTuple &splats_world_tuple,
     const at::Tensor viewmats, // [..., C, 4, 4]
-    const at::Tensor Ks, // [..., C, 3, 3]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,
@@ -46,7 +46,7 @@ std::tuple<
     // fwd inputs
     const MipSplatting::World::TensorTuple &splats_world_tuple,
     const at::Tensor viewmats, // [..., C, 4, 4]
-    const at::Tensor Ks, // [..., C, 3, 3]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,
@@ -71,7 +71,7 @@ std::tuple<
     // fwd inputs
     const Vanilla3DGUT::World::TensorTuple &splats_world_tuple,
     const at::Tensor viewmats, // [..., C, 4, 4]
-    const at::Tensor Ks, // [..., C, 3, 3]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,
@@ -96,7 +96,7 @@ std::tuple<
     // fwd inputs
     const OpaqueTriangle::World::TensorTuple &splats_world_tuple,
     const at::Tensor viewmats, // [..., C, 4, 4]
-    const at::Tensor Ks, // [..., C, 3, 3]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,
