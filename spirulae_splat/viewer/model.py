@@ -32,7 +32,7 @@ class SplatModel:
         self.flip_yz = False
         self.return_torch = False
         
-        self.primitive = "3dgs"  # type: Literal["3dgs", "mip", "opaque_triangle"]
+        self.primitive = "3dgut"  # type: Literal["3dgs", "mip", "opaque_triangle"]
 
         self.dataparser_transform = np.eye(4)
         self.dataparser_scale = 1.0
