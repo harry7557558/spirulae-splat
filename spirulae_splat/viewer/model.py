@@ -48,8 +48,10 @@ class SplatModel:
             self.load_ckpt(file_path)
         elif file_path.endswith('config.yml'):
             self.load_config(file_path)
+        elif file_path.endswith('.ply'):
+            self.load_ply(file_path) 
         else:
-            raise ValueError("Must be .ckpt or config.yml")
+            raise ValueError("Must be .ckpt, config.yml, or .ply")
 
     def load_ckpt(self, file_path, _from_load_config=False):
         if not _from_load_config:
@@ -104,6 +106,42 @@ class SplatModel:
             dtr = json.load(fp)
         self.dataparser_transform = np.concatenate((dtr['transform'], [[0, 0, 0, 1]]))
         self.dataparser_scale = dtr['scale']
+
+    def load_ply(self, file_path):
+        from plyfile import PlyData
+        plydata = PlyData.read(file_path)
+
+        v = plydata["vertex"][0]
+        sh_keys = []
+        for i in range(72):
+            key = f"f_rest_{i}"
+            try:
+                v[key]
+                sh_keys.append(key)
+            except ValueError:
+                break
+
+        vertex = plydata['vertex']
+        means = np.array([vertex["x"], vertex["y"], vertex["z"]])
+        scales = np.array([vertex["scale_0"], vertex["scale_1"], vertex["scale_2"]])
+        quats = np.array([vertex["rot_0"], vertex["rot_1"], vertex["rot_2"], vertex["rot_3"]])
+        features_dc = np.array([vertex["f_dc_0"], vertex["f_dc_1"], vertex["f_dc_2"]])
+        opacities = np.array([vertex["opacity"]])
+        features_sh = np.array([vertex[key] for key in sh_keys])
+
+        n = len(means[0])
+        self.gauss_params = {}
+        self.gauss_params['means'] = torch.tensor(means, dtype=torch.float).T
+        self.gauss_params['opacities'] = torch.tensor(opacities, dtype=torch.float).T
+        self.gauss_params['quats'] = torch.tensor(quats, dtype=torch.float).T
+        self.gauss_params['scales'] = torch.tensor(scales, dtype=torch.float).T
+        self.gauss_params['features_dc'] = torch.tensor(features_dc, dtype=torch.float).T
+        self.gauss_params['features_sh'] = torch.tensor(features_sh, dtype=torch.float).T.view(n, 3, -1).transpose(-1, -2)
+        self.background_color = torch.zeros(3).cuda()
+        self.background_sh = torch.zeros((0, 3)).cuda()
+        self.background_sh_degree = 0
+
+        self.gauss_params = {k: v.cuda() for k, v in self.gauss_params.items()}
 
     @torch.no_grad
     def change_frame(self, rot, tr, sc):
@@ -228,7 +266,48 @@ class SplatModel:
         ssplat_camera = camera._to_ssplat_camera()
         timer.mark("pre")
 
-        if self.scales.shape[-1] == 3:
+        # render_fn: function(poses, intrinsics, W, H) -> (B, H, W, 3)
+        def render_fn(poses, intrinsics, W, H):
+            rgbd, alpha, meta = rasterization(
+                self.primitive,
+                (self.means, F.normalize(self.quats, dim=-1), self.scales, self.opacities.squeeze(-1),
+                    self.features_dc, self.features_sh)
+                    if self.primitive in ['3dgs', 'mip', '3dgut'] else
+                (self.means, F.normalize(self.quats, dim=-1), self.scales,
+                    torch.concat([
+                        torch.ones_like(self.opacities),
+                        torch.ones_like(self.opacities)
+                    ], dim=-1),
+                    self.features_dc, self.features_sh, self.features_ch
+                ),
+                viewmats=poses,  # [C, 4, 4]
+                intrins=intrinsics,  # [C, 4]
+                width=W,
+                height=H,
+                packed=False,
+                use_bvh=False,
+                # absgrad=False,
+                sparse_grad=False,
+                distributed=False,
+                camera_model=["pinhole", "fisheye"][is_fisheye],
+                render_mode="RGB+ED",
+                # render_mode="RGB+ED+N",
+                **kwargs,
+            )
+            return rgbd, alpha, meta
+
+        if ssplat_camera.model == "EQUIRECTANGULAR":
+            from spirulae_splat.viewer.render_equirectangular import render_equirectangular
+            is_fisheye = False
+            kwargs = {}
+            rgb = render_equirectangular(
+                viewmat[None], lambda poses, intrinsics, W, H: render_fn(poses, intrinsics, W, H)[0][0],
+                ssplat_camera.w, ssplat_camera.h
+            )
+            # No depth and alpha for equirectangular for now
+            depth = torch.zeros_like(rgb[..., :1])
+            alpha = torch.ones_like(rgb[..., :1])
+        else:
             fx, fy, cx, cy = ssplat_camera.intrins
             w, h = int(ssplat_camera.w), int(ssplat_camera.h)
             intrins = torch.tensor([fx, fy, cx, cy]).float().to(viewmat)
@@ -238,42 +317,15 @@ class SplatModel:
             is_fisheye = ssplat_camera.model == "OPENCV_FISHEYE"
             is_distorted = ssplat_camera.is_distorted() or any([x != 0 for x in dist_coeffs])
             if is_distorted:
-                # TODO
-                raise NotImplementedError()
-                if is_fisheye:
-                    kwargs['radial_coeffs'] = dist_coeffs[None]
+                # dist_coeffs should be k1, k2, k3, k4, p1, p2, sx1, sy1, b1, b2
+                if is_fisheye:  # k1, k2, k3, k4
+                    dist_coeffs = torch.concatenate([dist_coeffs[:4], torch.zeros_like(dist_coeffs[:4])], dim=0)
                 else:
-                    kwargs["radial_coeffs"] = torch.concat((dist_coeffs[:2], 0.0*dist_coeffs[:2]))[None]
-                    kwargs["tangential_coeffs"] = dist_coeffs[2:][None]
+                    dist_coeffs = torch.concatenate([dist_coeffs[:2], torch.zeros_like(dist_coeffs[:2]), dist_coeffs[2:]], dim=0)
+                dist_coeffs = torch.concatenate([dist_coeffs, torch.zeros(10 - len(dist_coeffs), device=dist_coeffs.device)], dim=0)
+                kwargs['dist_coeffs'] = dist_coeffs[None].to(viewmat)
 
-            rgbd, alpha, meta = rasterization(
-                self.primitive,
-                (self.means, F.normalize(self.quats, dim=-1), self.scales, self.opacities.squeeze(-1),
-                    self.features_dc, self.features_sh)
-                    if self.primitive in ['3dgs', 'mip'] else
-                (self.means, F.normalize(self.quats, dim=-1), self.scales,
-                    torch.concat([
-                        torch.ones_like(self.opacities),
-                        torch.ones_like(self.opacities)
-                    ], dim=-1),
-                    self.features_dc, self.features_sh, self.features_ch
-                ),
-                viewmats=viewmat[None].contiguous(),  # [C, 4, 4]
-                intrins=intrins[None].contiguous(),  # [C, 4]
-                width=w,
-                height=h,
-                packed=False,
-                use_bvh=False,
-                absgrad=False,
-                sparse_grad=False,
-                distributed=False,
-                camera_model=["pinhole", "fisheye"][is_fisheye],
-                with_ut=True,
-                with_eval3d=True,
-                render_mode="RGB+ED",
-                # render_mode="RGB+ED+N",
-                **kwargs,
-            )
+            rgbd, alpha, meta = render_fn(viewmat[None].contiguous(), intrins[None].contiguous(), w, h)
             alpha = alpha[0]
 
             rgb = rgbd[0]
@@ -290,8 +342,6 @@ class SplatModel:
                     1.5*torch.amax(depth).detach()
                 ).contiguous()
 
-        else:
-            raise NotImplementedError("2DGS is deprecated")
 
         # print(torch.mean(rgb[...,0]).item()*255.0, torch.mean(rgb[...,1]).item()*255.0, torch.mean(rgb[...,2]).item())
         # print(torch.amax(rgb, dim=(0,1))*255)

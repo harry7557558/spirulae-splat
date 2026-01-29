@@ -242,6 +242,7 @@ if __name__ == "__main__":
 
     # Load camera
     camera_path = os.path.join(os.path.dirname(__file__), "cameras/zipnerf.yaml")
+    # camera_path = os.path.join(os.path.dirname(__file__), "cameras/equirectangular.yaml")
     camera = Camera(camera_path)
 
     # Initialize model
