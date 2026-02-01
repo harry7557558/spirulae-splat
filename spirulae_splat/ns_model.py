@@ -219,7 +219,7 @@ class SpirulaeModelConfig(ModelConfig):
     """
     adaptive_exposure_warmup: int = 1000
     """Start adaptive exposure at this number of steps"""
-    use_bilateral_grid: bool = True
+    use_bilateral_grid: bool = False
     """If True, use bilateral grid to handle the ISP changes in the image space.
         This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/)."""
     bilagrid_shape: Tuple[int, int, int] = (16, 16, 8)
@@ -228,6 +228,20 @@ class SpirulaeModelConfig(ModelConfig):
     """If True, use bilateral grid for depth and normal (e.g. AI generated biased ones)"""
     bilagrid_shape_geometry: Tuple[int, int, int] = (8, 8, 4)
     """Shape of the bilateral grid for depth and normal (X, Y, W)"""
+    use_ppisp: bool = True
+    """If True, use the per-pixel ISP model (PPISP) to handle per-pixel color distortions."""
+    ppisp_reg_exposure_mean: float = 1.0
+    """Encourage exposure mean ~ 0 to resolve SH <-> exposure ambiguity in PPISP."""
+    ppisp_reg_vig_center: float = 0.02
+    """Encourage vignetting optical center near image center in PPISP."""
+    ppisp_reg_vig_non_pos: float = 0.01
+    """Penalize positive vignetting alpha coefficients in PPISP (should be <= 0)."""
+    ppisp_reg_vig_channel_var: float = 0.1
+    """Encourage similar vignetting across RGB channels in PPISP."""
+    ppisp_reg_color_mean: float = 1.0
+    """Encourage color correction mean ~ 0 across frames in PPISP."""
+    ppisp_reg_crf_channel_var: float = 0.1
+    """Encourage similar CRF parameters across RGB channels in PPISP."""
 
     use_3dgs: bool = True
     """Must be True, kept for backward compatibility"""
@@ -750,6 +764,8 @@ class SpirulaeModel(Model):
             gps["bilateral_grid_geometry"] = \
                 list(self.training_losses.bil_grids_depth.parameters()) + \
                 list(self.training_losses.bil_grids_normal.parameters())
+        if self.config.use_ppisp:
+            gps["ppisp"] = [self.training_losses.ppisp_params]
 
         if self.config.use_camera_optimizer:
             self.camera_optimizer.get_param_groups(param_groups=gps)
@@ -1045,6 +1061,13 @@ class SpirulaeModel(Model):
             rgb = blend_background(rgb, alpha, background)
         else:
             background = torch.zeros_like(rgb)
+
+        # visualize PPISP for debugging
+        if not self.training and False:
+            ppisp_param = self.training_losses.ppisp_params[0:1]
+            # ppisp_param = ppisp_param.detach() + math.sin(self.step / 10.0)
+            from spirulae_splat.modules.training_losses import apply_ppisp
+            rgb = apply_ppisp(rgb, ppisp_param, intrins)
 
         # pack outputs
         outputs = {
@@ -1351,6 +1374,13 @@ class SpirulaeModel(Model):
             f"{bracket('BilagridTVLoss')} {orange('rgb')}={fmt('tv_loss', 10.0)} "
             f"{orange('depth')}={fmt('tv_loss_depth', 10.0)} "
             f"{orange('normal')}={fmt('tv_loss_normal', 10.0)}",
+            f"{bracket('PPISPReg')} {orange('eμ')}={fmt('ppisp_reg_exposure_mean', self.config.ppisp_reg_exposure_mean)}"
+            "                \n"
+            f"{orange('vc')}={fmt('ppisp_reg_vig_center', self.config.ppisp_reg_vig_center)} "
+            f"{orange('v+')}={fmt('ppisp_reg_vig_non_pos', self.config.ppisp_reg_vig_non_pos)} "
+            f"{orange('vσ')}={fmt('ppisp_reg_vig_channel_var', self.config.ppisp_reg_vig_channel_var)} "
+            f"{orange('cμ')}={fmt('ppisp_reg_color_mean', self.config.ppisp_reg_color_mean)}",
+            f"{orange('rσ')}={fmt('ppisp_reg_crf_channel_var', self.config.ppisp_reg_crf_channel_var)}",
             "                \n",
             f"{bracket('Validation')} {orange('train')}={fmt('train_total', 1.0)} "
             f"{orange('val')}={fmt('val_total', 1.0)} "

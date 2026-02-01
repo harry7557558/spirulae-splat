@@ -91,6 +91,7 @@ __global__ void projection_hetero_forward_kernel(
     // aabb.y = min(max(aabb.y, 0), tile_height-1);
     // aabb.z = min(max(aabb.z, 0), tile_width-1);
     // aabb.w = min(max(aabb.w, 0), tile_height-1);
+    // TODO: use actual original cx, cy
     int offset_x = (int)roundf(0.5f * image_width - cx);
     int offset_y = (int)roundf(0.5f * image_height - cy);
     aabb.x = min(max(aabb.x + offset_x, 0), image_width-1) - offset_x;

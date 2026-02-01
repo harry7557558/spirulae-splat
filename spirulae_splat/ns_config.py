@@ -102,6 +102,10 @@ _DEFAULT_OPTIMIZERS = {
             lr_final=1e-4, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
         ),
     },
+    "ppisp": {
+        "optimizer": AdamOptimizerConfig(lr=2e-3, eps=1e-15),
+        "scheduler": None
+    },
     "camera_opt": {
         "optimizer": AdamOptimizerConfig(lr=1e-4, eps=1e-15),  # 1e-4
         "scheduler": ExponentialDecaySchedulerConfig(

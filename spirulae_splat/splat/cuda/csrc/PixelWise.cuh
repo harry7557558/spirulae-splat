@@ -10,6 +10,47 @@
 
 #include "types.cuh"
 
+enum class RawPPISPRegLossIndex {
+    SumExposure,
+    SumVignettingCx_0,
+    SumVignettingCy_0,
+    SumVignettingCx_1,
+    SumVignettingCy_1,
+    SumVignettingCx_2,
+    SumVignettingCy_2,
+    SumVignettingAlpha0Relu,
+    SumVignettingAlpha1Relu,
+    SumVignettingAlpha2Relu,
+    SumVignettingCxChannelVariance,
+    SumVignettingCyChannelVariance,
+    SumVignettingAlpha0ChannelVariance,
+    SumVignettingAlpha1ChannelVariance,
+    SumVignettingAlpha2ChannelVariance,
+    SumColorBx,
+    SumColorBy,
+    SumColorRx,
+    SumColorRy,
+    SumColorGx,
+    SumColorGy,
+    SumColorNx,
+    SumColorNy,
+    SumCRFToeChannelVariance,
+    SumCRFShoulderChannelVariance,
+    SumCRFGammaChannelVariance,
+    SumCRFCenterChannelVariance,
+    length
+};
+
+enum class PPISPRegLossIndex {
+    ExposureMean,
+    VignettingCenter,
+    VignettingNonPositivity,
+    VignettingChannelVariance,
+    ColorMean,
+    CRFChannelVariance,
+    length
+};
+
 
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */
 
@@ -92,4 +133,38 @@ at::Tensor undistort_image_tensor(
     at::Tensor intrins,  // fx, fy, cx, cy
     CameraDistortionCoeffsTensor dist_coeffs,
     at::Tensor in_image  // [B, H, W, C]
+);
+
+
+at::Tensor ppisp_forward_tensor(
+    at::Tensor &in_image,  // [B, H, W, C]
+    at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
+    at::Tensor &intrins,  // [B, 4]
+    const float actual_image_width,
+    const float actual_image_height
+);
+
+
+std::tuple<at::Tensor, at::Tensor> ppisp_backward_tensor(
+    at::Tensor &in_image,  // [B, H, W, C]
+    at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
+    at::Tensor &intrins,  // [B, 4]
+    const float actual_image_width,
+    const float actual_image_height,
+    at::Tensor &v_out_image  // [B, H, W, C]
+);
+
+
+std::tuple<at::Tensor, at::Tensor>
+compute_ppsip_regularization_forward_tensor(
+    at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
+    const std::array<float, (uint)PPISPRegLossIndex::length> loss_weights_0
+);
+
+
+at::Tensor compute_ppsip_regularization_backward_tensor(
+    at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
+    const std::array<float, (uint)PPISPRegLossIndex::length> loss_weights_0,
+    at::Tensor &raw_losses,  // [B+1, RawPPISPRegLossIndex::length]
+    at::Tensor &v_losses  // [PPISPRegLossIndex::length]
 );

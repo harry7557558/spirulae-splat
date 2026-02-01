@@ -63,6 +63,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("ray_depth_to_linear_depth_backward", &ray_depth_to_linear_depth_backward_tensor);
     m.def("distort_image", &distort_image_tensor);
     m.def("undistort_image", &undistort_image_tensor);
+    m.def("ppisp_forward", &ppisp_forward_tensor);
+    m.def("ppisp_backward", &ppisp_backward_tensor);
+    m.def("compute_ppsip_regularization_forward", &compute_ppsip_regularization_forward_tensor);
+    m.def("compute_ppsip_regularization_backward", &compute_ppsip_regularization_backward_tensor);
 
     // FusedSSIM.cuh
     m.def("fused_ssim_forward", &fused_ssim_forward);

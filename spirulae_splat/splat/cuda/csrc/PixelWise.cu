@@ -708,3 +708,358 @@ at::Tensor undistort_image_tensor(
 
     return out_image;
 }
+
+
+// ================
+// PPISP
+// ================
+
+static constexpr int kNumPPISPParams = 36;
+
+__global__ void ppisp_forward_kernel(
+    const TensorView<float, 4> in_image,  // [B, H, W, C]
+    const float* __restrict__ ppisp_params,  // [B, PPISP_NUM_PARAMS]
+    const float4 *__restrict__ intrins,  // [B, 4]
+    const float actual_image_width,
+    const float actual_image_height,
+    TensorView<float, 4> out_image  // [B, H, W, C]
+) {
+    unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned B = in_image.shape[0], H = in_image.shape[1], W = in_image.shape[2];
+    if (bid >= B || gid >= H*W)
+        return;
+    unsigned y = gid / W;
+    unsigned x = gid % W;
+
+    FixedArray<float, kNumPPISPParams> params;
+    #pragma unroll
+    for (int i = 0; i < kNumPPISPParams; i++) {
+        params[i] = ppisp_params[bid * kNumPPISPParams + i];
+    }
+
+    float3 pixel = in_image.load3(bid, y, x);
+
+    float3 out_pixel = apply_ppisp(
+        pixel,
+        (float2){(float)x, (float)y},
+        (float2){intrins[bid].z, intrins[bid].w},
+        (float2){actual_image_width, actual_image_height},
+        &params
+    );
+
+    out_image.store3(bid, y, x, out_pixel);
+}
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor ppisp_forward_tensor(
+    at::Tensor &in_image,  // [B, H, W, C]
+    at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
+    at::Tensor &intrins,  // [B, 4]
+    const float actual_image_width,
+    const float actual_image_height
+) {
+    DEVICE_GUARD(in_image);
+    CHECK_CUDA(in_image);
+    CHECK_INPUT(ppisp_params);
+    CHECK_INPUT(intrins);
+    if (in_image.ndimension() != 4 || in_image.size(0) != ppisp_params.size(0))
+        AT_ERROR("in_image shape must be (B, H, W, C) where B is consistent with ppisp_params");
+    if (ppisp_params.ndimension() != 2 || ppisp_params.size(1) != kNumPPISPParams)
+        AT_ERROR("ppisp_params shape must be (B, PPISP_NUM_PARAMS)");
+    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
+        AT_ERROR("intrins shape must be (B, 4)");
+    long b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
+    at::Tensor out_image = at::empty_like(in_image);
+    ppisp_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 128, 1)>>>(
+        tensor2view<float, 4>(in_image),
+        ppisp_params.data_ptr<float>(),
+        (float4*)intrins.data_ptr<float>(),
+        actual_image_width,
+        actual_image_height,
+        tensor2view<float, 4>(out_image)
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+    return out_image;
+}
+
+__global__ void ppisp_backward_kernel(
+    const TensorView<float, 4> in_image,  // [B, H, W, C]
+    const float* __restrict__ ppisp_params,  // [B, PPISP_NUM_PARAMS]
+    const float4 *__restrict__ intrins,  // [B, 4]
+    const float actual_image_width,
+    const float actual_image_height,
+    const TensorView<float, 4> v_out_image,  // [B, H, W, C]
+    TensorView<float, 4> v_in_image,  // [B, H, W, C]
+    float* __restrict__ v_ppisp_params  // [B, PPISP_NUM_PARAMS]
+) {
+    unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned B = in_image.shape[0], H = in_image.shape[1], W = in_image.shape[2];
+    if (bid >= B || gid >= H*W)
+        return;
+    unsigned y = gid / W;
+    unsigned x = gid % W;
+
+    FixedArray<float, kNumPPISPParams> params;
+    #pragma unroll
+    for (int i = 0; i < kNumPPISPParams; i++) {
+        params[i] = ppisp_params[bid * kNumPPISPParams + i];
+    }
+
+    float3 pixel = in_image.load3(bid, y, x);
+    float3 v_out_pixel = v_out_image.load3(bid, y, x);
+
+    float3 v_pixel;
+    FixedArray<float, kNumPPISPParams> v_params;
+    apply_ppisp_vjp(
+        pixel,
+        (float2){(float)x, (float)y},
+        (float2){intrins[bid].z, intrins[bid].w},
+        (float2){actual_image_width, actual_image_height},
+        &params,
+        v_out_pixel,
+        &v_pixel,
+        &v_params
+    );
+
+    v_in_image.store3(bid, y, x, v_pixel);
+
+    auto block = cg::this_thread_block();
+    cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
+    #pragma unroll
+    for (int i = 0; i < kNumPPISPParams; i++) {
+        float param = isfinite(v_params[i]) ? v_params[i] : 0.0f;
+        param = cg::reduce(warp, param, cg::plus<float>());
+        if (threadIdx.x % WARP_SIZE == 0 && param != 0.0f)
+            atomicAdd(&v_ppisp_params[bid * kNumPPISPParams + i], param);
+    }
+}
+
+/*[AutoHeaderGeneratorExport]*/
+std::tuple<at::Tensor, at::Tensor> ppisp_backward_tensor(
+    at::Tensor &in_image,  // [B, H, W, C]
+    at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
+    at::Tensor &intrins,  // [B, 4]
+    const float actual_image_width,
+    const float actual_image_height,
+    at::Tensor &v_out_image  // [B, H, W, C]
+) {
+    DEVICE_GUARD(in_image);
+    CHECK_CUDA(in_image);
+    CHECK_INPUT(ppisp_params);
+    CHECK_INPUT(intrins);
+    CHECK_CUDA(v_out_image);
+    if (in_image.ndimension() != 4 || in_image.size(0) != ppisp_params.size(0))
+        AT_ERROR("in_image shape must be (B, H, W, C) where B is consistent with ppisp_params");
+    if (ppisp_params.ndimension() != 2 || ppisp_params.size(1) != kNumPPISPParams)
+        AT_ERROR("ppisp_params shape must be (B, PPISP_NUM_PARAMS)");
+    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
+        AT_ERROR("intrins shape must be (B, 4)");
+    long b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
+    at::Tensor v_in_image = at::empty_like(in_image);
+    at::Tensor v_ppisp_params = at::zeros_like(ppisp_params);
+    ppisp_backward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 128, 1)>>>(
+        tensor2view<float, 4>(in_image),
+        ppisp_params.data_ptr<float>(),
+        (float4*)intrins.data_ptr<float>(),
+        actual_image_width,
+        actual_image_height,
+        tensor2view<float, 4>(v_out_image),
+        tensor2view<float, 4>(v_in_image),
+        v_ppisp_params.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+    return std::make_tuple(v_in_image, v_ppisp_params);
+}
+
+__global__ void compute_raw_ppisp_regularization_forward_kernel(
+    int B,  // number of images
+    const float* __restrict__ ppisp_params,  // [B, PPISP_NUM_PARAMS]
+    float* __restrict__ raw_losses  // [B+1, RawPPISPRegLossIndex::length]
+) {
+    unsigned bid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (bid >= B)
+        return;
+
+    FixedArray<float, kNumPPISPParams> params;
+    #pragma unroll
+    for (int i = 0; i < kNumPPISPParams; i++) {
+        params[i] = ppisp_params[bid * kNumPPISPParams + i];
+    }
+
+    FixedArray<float, (uint)RawPPISPRegLossIndex::length> losses;
+    compute_raw_ppisp_regularization_loss(&params, &losses);
+
+    auto block = cg::this_thread_block();
+    cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
+    #pragma unroll
+    for (int i = 0; i < (uint)RawPPISPRegLossIndex::length; i++) {
+        float loss = isfinite(losses[i]) ? losses[i] : 0.0f;
+        raw_losses[bid*(uint)RawPPISPRegLossIndex::length + i] = loss;
+        loss = cg::reduce(warp, loss, cg::plus<float>());
+        if (threadIdx.x % WARP_SIZE == 0 && loss != 0.0f)
+            atomicAdd(&raw_losses[B*(uint)RawPPISPRegLossIndex::length + i], loss);
+    }
+}
+
+__global__ void compute_ppisp_regularization_forward_kernel(
+    int num_train_images,
+    const float* __restrict__ raw_losses_buffer,  // [RawPPISPRegLossIndex::length]
+    FixedArray<float, (uint)PPISPRegLossIndex::length> loss_weights,  // [PPISPRegLossIndex::length]
+    float* __restrict__ losses_buffer  // [PPISPRegLossIndex::length]
+) {
+    FixedArray<float, (uint)RawPPISPRegLossIndex::length> raw_losses;
+    #pragma unroll
+    for (int i = 0; i < (uint)RawPPISPRegLossIndex::length; i++) {
+        raw_losses[i] = raw_losses_buffer[i];
+    }
+
+    FixedArray<float, (uint)PPISPRegLossIndex::length> losses;
+
+    compute_ppisp_regularization_loss(
+        &raw_losses, num_train_images, &loss_weights, &losses
+    );
+
+    #pragma unroll
+    for (int i = 0; i < (uint)PPISPRegLossIndex::length; i++) {
+        losses_buffer[i] = losses[i];
+    }
+}
+
+/*[AutoHeaderGeneratorExport]*/
+std::tuple<at::Tensor, at::Tensor>
+compute_ppsip_regularization_forward_tensor(
+    at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
+    const std::array<float, (uint)PPISPRegLossIndex::length> loss_weights_0
+) {
+    DEVICE_GUARD(ppisp_params);
+    CHECK_INPUT(ppisp_params);
+
+    FixedArray<float, (uint)PPISPRegLossIndex::length> loss_weights =
+        *reinterpret_cast<const FixedArray<float, (uint)PPISPRegLossIndex::length>*>(loss_weights_0.data());
+
+    long B = ppisp_params.size(0);
+
+    at::Tensor raw_losses = at::zeros({B+1, (uint)RawPPISPRegLossIndex::length}, ppisp_params.options());
+    at::Tensor losses = at::zeros({(uint)PPISPRegLossIndex::length}, ppisp_params.options());
+
+    compute_raw_ppisp_regularization_forward_kernel<<<_LAUNCH_ARGS_1D(B, WARP_SIZE)>>>(
+        B,
+        ppisp_params.data_ptr<float>(),
+        raw_losses.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    compute_ppisp_regularization_forward_kernel<<<1, 1>>>(
+        B,
+        raw_losses.data_ptr<float>() + B*(uint)RawPPISPRegLossIndex::length,
+        loss_weights,
+        losses.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return std::make_tuple(losses, raw_losses);
+}
+
+__global__ void compute_raw_ppisp_regularization_backward_kernel(
+    int B,  // number of images
+    const float* __restrict__ ppisp_params,  // [B, PPISP_NUM_PARAMS]
+    const float* __restrict__ v_raw_losses,  // [RawPPISPRegLossIndex::length]
+    float* __restrict__ v_ppisp_params  // [B, PPISP_NUM_PARAMS]
+) {
+    unsigned bid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (bid >= B)
+        return;
+
+    FixedArray<float, kNumPPISPParams> params;
+    #pragma unroll
+    for (int i = 0; i < kNumPPISPParams; i++) {
+        params[i] = ppisp_params[bid * kNumPPISPParams + i];
+    }
+
+    FixedArray<float, (uint)RawPPISPRegLossIndex::length> v_losses;
+    #pragma unroll
+    for (int i = 0; i < (uint)RawPPISPRegLossIndex::length; i++) {
+        v_losses[i] = v_raw_losses[i];
+    }
+
+    FixedArray<float, kNumPPISPParams> v_params;
+    compute_raw_ppisp_regularization_loss_vjp(&params, &v_losses, &v_params);
+
+    #pragma unroll
+    for (int i = 0; i < kNumPPISPParams; i++) {
+        float param = isfinite(v_params[i]) ? v_params[i] : 0.0f;
+        v_ppisp_params[bid * kNumPPISPParams + i] = param;
+    }
+}
+
+__global__ void compute_ppisp_regularization_backward_kernel(
+    int num_train_images,
+    const float* __restrict__ raw_losses_buffer,  // [RawPPISPRegLossIndex::length]
+    FixedArray<float, (uint)PPISPRegLossIndex::length> loss_weights,  // [PPISPRegLossIndex::length]
+    const float* __restrict__ v_losses_buffer,  // [PPISPRegLossIndex::length]
+    float* __restrict__ v_raw_losses_buffer  // [RawPPISPRegLossIndex::length]
+) {
+    FixedArray<float, (uint)RawPPISPRegLossIndex::length> raw_losses;
+    #pragma unroll
+    for (int i = 0; i < (uint)RawPPISPRegLossIndex::length; i++) {
+        raw_losses[i] = raw_losses_buffer[i];
+    }
+
+    FixedArray<float, (uint)PPISPRegLossIndex::length> v_losses;
+    #pragma unroll
+    for (int i = 0; i < (uint)PPISPRegLossIndex::length; i++) {
+        v_losses[i] = v_losses_buffer[i];
+    }
+
+    FixedArray<float, (uint)RawPPISPRegLossIndex::length> v_raw_losses;
+    compute_ppisp_regularization_loss_vjp(
+        &raw_losses, num_train_images, &loss_weights, &v_losses, &v_raw_losses
+    );
+
+    #pragma unroll
+    for (int i = 0; i < (uint)RawPPISPRegLossIndex::length; i++) {
+        v_raw_losses_buffer[i] = v_raw_losses[i];
+    }
+}
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor compute_ppsip_regularization_backward_tensor(
+    at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
+    const std::array<float, (uint)PPISPRegLossIndex::length> loss_weights_0,
+    at::Tensor &raw_losses,  // [B+1, RawPPISPRegLossIndex::length]
+    at::Tensor &v_losses  // [PPISPRegLossIndex::length]
+) {
+    DEVICE_GUARD(ppisp_params);
+    CHECK_INPUT(ppisp_params);
+    CHECK_INPUT(raw_losses);
+    CHECK_INPUT(v_losses);
+
+    FixedArray<float, (uint)PPISPRegLossIndex::length> loss_weights =
+        *reinterpret_cast<const FixedArray<float, (uint)PPISPRegLossIndex::length>*>(loss_weights_0.data());
+
+    long B = ppisp_params.size(0);
+
+    at::Tensor v_raw_losses = at::zeros({(uint)RawPPISPRegLossIndex::length}, ppisp_params.options());
+    at::Tensor v_ppisp_params = at::zeros_like(ppisp_params);
+
+    compute_ppisp_regularization_backward_kernel<<<1, 1>>>(
+        B,
+        raw_losses.data_ptr<float>(),
+        loss_weights,
+        v_losses.data_ptr<float>(),
+        v_raw_losses.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    compute_raw_ppisp_regularization_backward_kernel<<<_LAUNCH_ARGS_1D(B, WARP_SIZE)>>>(
+        B,
+        ppisp_params.data_ptr<float>(),
+        v_raw_losses.data_ptr<float>(),
+        v_ppisp_params.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return v_ppisp_params;
+}

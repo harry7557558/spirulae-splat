@@ -473,6 +473,8 @@ class SpirulaeDataManager(FullImageDatamanager):
             for key, value in batch.items():
                 if isinstance(value, torch.Tensor):
                     batch[key] = value.to(self.device)
+            if 'cam_idx' in camera.metadata and camera.metadata['cam_idx'].ndim == 2:
+                camera.metadata['cam_idx'] = camera.metadata['cam_idx'][0]
 
         # TODO
         if random.random() < (step - 10000) / (30000 - 10000) and False:
@@ -491,6 +493,8 @@ class SpirulaeDataManager(FullImageDatamanager):
             for key, value in val_batch.items():
                 if isinstance(value, torch.Tensor):
                     val_batch[key] = value[:val_batch_size].to(self.device)
+            if 'cam_idx' in val_camera.metadata and val_camera.metadata['cam_idx'].ndim == 2:
+                val_camera.metadata['cam_idx'] = val_camera.metadata['cam_idx'][0]
             return (camera, val_camera), (batch, val_batch)
 
         return camera, batch

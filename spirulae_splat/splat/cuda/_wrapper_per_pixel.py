@@ -259,3 +259,64 @@ class _DistortOrUndistortImage(torch.autograd.Function):
     @staticmethod
     def backward(ctx, v_out_image):
         raise NotImplementedError("undistort_image does not support backward")
+
+
+def apply_ppisp(
+    image: Tensor,  # [B, H, W, 3]
+    ppisp_params: Tensor,  # [B, P]
+    intrins: Union[Tensor, Tuple[float, float, float, float]], # [B, 4]
+    actual_image_width: Optional[int] = None,
+    actual_image_height: Optional[int] = None
+) -> Tensor:
+    if isinstance(intrins, tuple):
+        fx, fy, cx, cy = intrins
+        intrins = torch.tensor([[fx, fy, cx, cy]])
+        intrins = intrins.to(image).repeat(len(image), 1)
+    if actual_image_width is None:
+        actual_image_width = image.shape[-2]
+    if actual_image_height is None:
+        actual_image_height = image.shape[-3]
+    return _PPISP.apply(
+        image,
+        ppisp_params.contiguous(),
+        intrins.contiguous(),
+        actual_image_width,
+        actual_image_height
+    )
+
+class _PPISP(torch.autograd.Function):
+    """Applies Per-Pixel Image Signal Processing (PPISP) to images."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        image: Tensor,  # [B, H, W, 3]
+        ppisp_params: Tensor,  # [B, P]
+        intrins: Tensor, # [B, 4]
+        actual_image_width: int,
+        actual_image_height: int
+    ) -> Tensor:
+
+        out_image = _make_lazy_cuda_func("ppisp_forward")(
+            image, ppisp_params,
+            intrins, actual_image_width, actual_image_height
+        )
+
+        ctx.save_for_backward(image, ppisp_params, intrins)
+        ctx.actual_image_width = actual_image_width
+        ctx.actual_image_height = actual_image_height
+
+        return out_image
+
+    @staticmethod
+    def backward(ctx, v_out_image):
+
+        image, ppisp_params, intrins = ctx.saved_tensors
+
+        v_image, v_ppisp_params = _make_lazy_cuda_func("ppisp_backward")(
+            image, ppisp_params,
+            intrins, ctx.actual_image_width, ctx.actual_image_height,
+            v_out_image
+        )
+
+        return v_image, v_ppisp_params, None, None, None

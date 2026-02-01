@@ -15,7 +15,7 @@ from spirulae_splat.splat.cuda import (
     ray_depth_to_linear_depth
 )
 
-from spirulae_splat.splat.cuda._wrapper_per_pixel import log_map_image
+from spirulae_splat.splat.cuda._wrapper_per_pixel import log_map_image, apply_ppisp
 
 from fused_bilagrid import BilateralGrid, slice, total_variation_loss
 
@@ -177,6 +177,36 @@ class _ComputePerPixelLosses(torch.autograd.Function):
         return *grads, *([None]*(len(ctx.needs_input_grad)-len(grads)))
 
 
+class _ComputePPISPRegularization(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        ppisp_params: torch.Tensor,  # [B, PPISP_NUM_PARAMS]
+        loss_weights: List[float],
+    ):
+        losses, raw_losses = _C.compute_ppsip_regularization_forward(
+            ppisp_params,
+            loss_weights
+        )
+
+        ctx.loss_weights = loss_weights
+        ctx.save_for_backward(ppisp_params, raw_losses)
+
+        return losses
+
+    @staticmethod
+    def backward(ctx, v_losses):
+        ppisp_params, raw_losses = ctx.saved_tensors
+
+        v_ppisp_params = _C.compute_ppsip_regularization_backward(
+            ppisp_params,
+            ctx.loss_weights,
+            raw_losses,
+            v_losses
+        )
+
+        return v_ppisp_params, None
+
 
 class SplatTrainingLosses(torch.nn.Module):
 
@@ -210,6 +240,8 @@ class SplatTrainingLosses(torch.nn.Module):
                 grid_Y=self.config.bilagrid_shape_geometry[1],
                 grid_W=self.config.bilagrid_shape_geometry[2],
             )
+        if self.config.use_ppisp:
+            self.ppisp_params = torch.nn.Parameter(torch.zeros(self.num_train_data, 36))
 
         self.lpips_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32
         # self.lpips_dtype = torch.float32
@@ -447,14 +479,24 @@ class SplatTrainingLosses(torch.nn.Module):
             if background_mask is not None:
                 pred_rgb = torch.where(background_mask, pred_rgb, background)
 
-        # apply bilateral grid
+        # apply exposure correction
         if self.config.use_bilateral_grid and self.config.fit == "rgb" and \
-            camera.metadata is not None and "cam_idx" in camera.metadata:
-                pred_rgb = self.apply_bilateral_grid(
-                    self.bil_grids,
-                    pred_rgb, camera.metadata["cam_idx"],
-                    **meta
-                )
+                camera.metadata is not None and "cam_idx" in camera.metadata:
+            pred_rgb = self.apply_bilateral_grid(
+                self.bil_grids,
+                pred_rgb, camera.metadata["cam_idx"],
+                **meta
+            )
+        if self.config.use_ppisp and self.config.fit == "rgb" and \
+                camera.metadata is not None and "cam_idx" in camera.metadata:
+            indices = torch.tensor(camera.metadata["cam_idx"]).flatten().to(device)
+            ppisp_param = self.ppisp_params[indices, :]
+            pred_rgb = apply_ppisp(
+                pred_rgb, ppisp_param,
+                intrins=torch.concatenate((camera.fx, camera.fy, camera.cx, camera.cy), dim=1),
+                actual_image_width=camera.metadata.get('actual_width', None),
+                actual_image_height=camera.metadata.get('actual_height', None),
+            )
 
         # correct exposure (deprecated)
         if self.config.adaptive_exposure_mode is not None and \
@@ -664,6 +706,27 @@ class SplatTrainingLosses(torch.nn.Module):
             if self.config.depth_supervision_weight > 0.0:  # do this because bilagrid backward is expensive, especially in patched mode
                 loss_dict["tv_loss_depth"] = bilagrid_tv_loss_weight * total_variation_loss(self.bil_grids_depth.grids)
             loss_dict["tv_loss_normal"] = bilagrid_tv_loss_weight * total_variation_loss(self.bil_grids_normal.grids)
+
+        # PPISP regularization loss
+        if self.config.use_ppisp:
+            ppisp_loss_weights = [
+                self.config.ppisp_reg_exposure_mean,
+                self.config.ppisp_reg_vig_center,
+                self.config.ppisp_reg_vig_non_pos,
+                self.config.ppisp_reg_vig_channel_var,
+                self.config.ppisp_reg_color_mean,
+                self.config.ppisp_reg_crf_channel_var,
+            ]
+            ppisp_reg_loss = _ComputePPISPRegularization.apply(
+                self.ppisp_params,
+                ppisp_loss_weights
+            )
+            loss_dict['ppisp_reg_exposure_mean'] = ppisp_reg_loss[0]
+            loss_dict['ppisp_reg_vig_center'] = ppisp_reg_loss[1]
+            loss_dict['ppisp_reg_vig_non_pos'] = ppisp_reg_loss[2]
+            loss_dict['ppisp_reg_vig_channel_var'] = ppisp_reg_loss[3]
+            loss_dict['ppisp_reg_color_mean'] = ppisp_reg_loss[4]
+            loss_dict['ppisp_reg_crf_channel_var'] = ppisp_reg_loss[5]
 
         if self.config.primitive == "voxel":
             return loss_dict
