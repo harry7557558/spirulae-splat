@@ -285,7 +285,7 @@ def apply_ppisp(
     )
 
 class _PPISP(torch.autograd.Function):
-    """Applies Per-Pixel Image Signal Processing (PPISP) to images."""
+    """Applies Physically-Plausible Compensation and Control of Photometric Variations (PPISP) to images."""
 
     @staticmethod
     def forward(

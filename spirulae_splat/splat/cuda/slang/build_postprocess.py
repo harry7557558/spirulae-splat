@@ -30,6 +30,7 @@ def process(src: str):
     #     ('ulonglong4', 'my_ulonglong4'),
     # ]:
     #     src = re.sub(r'\b' + re.escape(w0) + r'\b', w1, src)
+    src = src.replace("50.693145751953125", "0.693145751953125")  # slangc compiler bug
     return src
 
 header_filename = os.path.join(cu_dir, 'slang.cuh')

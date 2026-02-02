@@ -771,7 +771,7 @@ at::Tensor ppisp_forward_tensor(
         AT_ERROR("intrins shape must be (B, 4)");
     long b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
     at::Tensor out_image = at::empty_like(in_image);
-    ppisp_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 128, 1)>>>(
+    ppisp_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
         tensor2view<float, 4>(in_image),
         ppisp_params.data_ptr<float>(),
         (float4*)intrins.data_ptr<float>(),
@@ -801,14 +801,30 @@ __global__ void ppisp_backward_kernel(
     unsigned y = gid / W;
     unsigned x = gid % W;
 
+    float3 pixel = in_image.load3(bid, y, x);
+    float3 v_out_pixel = v_out_image.load3(bid, y, x);
+
+#if 0
     FixedArray<float, kNumPPISPParams> params;
     #pragma unroll
     for (int i = 0; i < kNumPPISPParams; i++) {
         params[i] = ppisp_params[bid * kNumPPISPParams + i];
     }
-
-    float3 pixel = in_image.load3(bid, y, x);
-    float3 v_out_pixel = v_out_image.load3(bid, y, x);
+#else
+    __shared__ float params_shared[kNumPPISPParams];
+    if (threadIdx.x < kNumPPISPParams) {  // assume blockDim.x >= kNumPPISPParams
+        float value = ppisp_params[bid * kNumPPISPParams + threadIdx.x];
+        params_shared[threadIdx.x] = value;
+    }
+    __syncthreads();
+    FixedArray<float, kNumPPISPParams> params;
+    #pragma unroll
+    for (int i = 0; i < kNumPPISPParams; i++) {
+        params[i] = params_shared[i];
+        // int j = (i + threadIdx.x) % kNumPPISPParams;
+        // params[j] = params_shared[j];
+    }
+#endif
 
     float3 v_pixel;
     FixedArray<float, kNumPPISPParams> v_params;
@@ -859,7 +875,7 @@ std::tuple<at::Tensor, at::Tensor> ppisp_backward_tensor(
     long b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
     at::Tensor v_in_image = at::empty_like(in_image);
     at::Tensor v_ppisp_params = at::zeros_like(ppisp_params);
-    ppisp_backward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 128, 1)>>>(
+    ppisp_backward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 64, 1)>>>(
         tensor2view<float, 4>(in_image),
         ppisp_params.data_ptr<float>(),
         (float4*)intrins.data_ptr<float>(),
@@ -1046,7 +1062,7 @@ at::Tensor compute_ppsip_regularization_backward_tensor(
 
     compute_ppisp_regularization_backward_kernel<<<1, 1>>>(
         B,
-        raw_losses.data_ptr<float>(),
+        raw_losses.data_ptr<float>() + B*(uint)RawPPISPRegLossIndex::length,
         loss_weights,
         v_losses.data_ptr<float>(),
         v_raw_losses.data_ptr<float>()

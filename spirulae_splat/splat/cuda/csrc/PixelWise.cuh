@@ -12,12 +12,7 @@
 
 enum class RawPPISPRegLossIndex {
     SumExposure,
-    SumVignettingCx_0,
-    SumVignettingCy_0,
-    SumVignettingCx_1,
-    SumVignettingCy_1,
-    SumVignettingCx_2,
-    SumVignettingCy_2,
+    SumVignettingCrSquared,
     SumVignettingAlpha0Relu,
     SumVignettingAlpha1Relu,
     SumVignettingAlpha2Relu,

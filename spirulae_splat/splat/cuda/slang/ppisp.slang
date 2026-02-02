@@ -213,7 +213,7 @@ float3 apply_crf_ppisp(float3 rgb_in, CRFPPISPChannelParams crf_params[3]) {
         float center = clamped_forward(params.center);
 
         // Compute a, b coefficients
-        float lerp_val = fma(shoulder - toe, center, toe);
+        float lerp_val = lerp(toe, shoulder, center);
         float a = (shoulder * center) / lerp_val;
         float b = 1.0f - a;
 
@@ -343,12 +343,7 @@ void apply_ppisp_vjp(
 
 enum RawPPISPRegLossIndex {
     SumExposure,
-    SumVignettingCx_0,
-    SumVignettingCy_0,
-    SumVignettingCx_1,
-    SumVignettingCy_1,
-    SumVignettingCx_2,
-    SumVignettingCy_2,
+    SumVignettingCrSquared,
     SumVignettingAlpha0Relu,
     SumVignettingAlpha1Relu,
     SumVignettingAlpha2Relu,
@@ -393,12 +388,10 @@ float[RawPPISPRegLossIndex::length] compute_raw_ppisp_regularization_loss(
     losses[RawPPISPRegLossIndex::SumExposure] = p.exposure;
 
     // Vignetting
-    losses[RawPPISPRegLossIndex::SumVignettingCx_0] = p.vignette_params[0].cx;
-    losses[RawPPISPRegLossIndex::SumVignettingCy_0] = p.vignette_params[0].cy;
-    losses[RawPPISPRegLossIndex::SumVignettingCx_1] = p.vignette_params[1].cx;
-    losses[RawPPISPRegLossIndex::SumVignettingCy_1] = p.vignette_params[1].cy;
-    losses[RawPPISPRegLossIndex::SumVignettingCx_2] = p.vignette_params[2].cx;
-    losses[RawPPISPRegLossIndex::SumVignettingCy_2] = p.vignette_params[2].cy;
+    losses[RawPPISPRegLossIndex::SumVignettingCrSquared] =
+        p.vignette_params[0].cx * p.vignette_params[0].cx + p.vignette_params[0].cy * p.vignette_params[0].cy +
+        p.vignette_params[1].cx * p.vignette_params[1].cx + p.vignette_params[1].cy * p.vignette_params[1].cy +
+        p.vignette_params[2].cx * p.vignette_params[2].cx + p.vignette_params[2].cy * p.vignette_params[2].cy;
     losses[RawPPISPRegLossIndex::SumVignettingAlpha0Relu] =
         max(0.0f, p.vignette_params[0].alpha0) +
         max(0.0f, p.vignette_params[1].alpha0) +
@@ -500,25 +493,15 @@ float[PPISPRegLossIndex::length] compute_ppisp_regularization_loss(
         smooth_l1_loss(raw_losses[RawPPISPRegLossIndex::SumExposure] / num_cameras, 0.1f);
 
     // Vignetting center (cx, cy close to 0)
-    float3 mean_cx = float3(
-        raw_losses[RawPPISPRegLossIndex::SumVignettingCx_0],
-        raw_losses[RawPPISPRegLossIndex::SumVignettingCx_1],
-        raw_losses[RawPPISPRegLossIndex::SumVignettingCx_2]
-    ) / num_cameras;
-    float3 mean_cy = float3(
-        raw_losses[RawPPISPRegLossIndex::SumVignettingCy_0],
-        raw_losses[RawPPISPRegLossIndex::SumVignettingCy_1],
-        raw_losses[RawPPISPRegLossIndex::SumVignettingCy_2]
-    ) / num_cameras;
     losses[PPISPRegLossIndex::VignettingCenter] =
-        (dot(mean_cx, mean_cx) + dot(mean_cy, mean_cy)) / 3.0f;
+        raw_losses[RawPPISPRegLossIndex::SumVignettingCrSquared] / (3.0f * num_cameras);
 
     // Vignetting non-positivity (alpha0, alpha1, alpha2 <= 0)
     losses[PPISPRegLossIndex::VignettingNonPositivity] = (
         raw_losses[RawPPISPRegLossIndex::SumVignettingAlpha0Relu] +
         raw_losses[RawPPISPRegLossIndex::SumVignettingAlpha1Relu] +
         raw_losses[RawPPISPRegLossIndex::SumVignettingAlpha2Relu]
-    ) / (3.0f * num_cameras);
+    ) / (9.0f * num_cameras);
 
     // Vignetting channel variance
     losses[PPISPRegLossIndex::VignettingChannelVariance] = (

@@ -20922,7 +20922,7 @@ inline __device__ void _d_abs_0(DiffPair_float_0 * dpx_14, float dOut_18)
 
 inline __device__ void _d_exp2_0(DiffPair_float_0 * dpx_15, float dOut_19)
 {
-    float _S7899 = (F32_exp2(((*dpx_15).primal_0))) * 50.693145751953125f * dOut_19;
+    float _S7899 = (F32_exp2(((*dpx_15).primal_0))) * 0.693145751953125f * dOut_19;
     dpx_15->primal_0 = (*dpx_15).primal_0;
     dpx_15->differential_0 = _S7899;
     return;

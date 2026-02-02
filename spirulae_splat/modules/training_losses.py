@@ -202,11 +202,15 @@ class _ComputePPISPRegularization(torch.autograd.Function):
             ppisp_params,
             ctx.loss_weights,
             raw_losses,
-            v_losses
+            v_losses.contiguous()
         )
 
         return v_ppisp_params, None
 
+
+DEFAULT_PPISP_PARAMS = [
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.013658988289535046, 0.013658988289535046, 0.37816452980041504, 0.0, 0.013658988289535046, 0.013658988289535046, 0.37816452980041504, 0.0, 0.013658988289535046, 0.013658988289535046, 0.37816452980041504, 0.0]
+]
 
 class SplatTrainingLosses(torch.nn.Module):
 
@@ -241,7 +245,8 @@ class SplatTrainingLosses(torch.nn.Module):
                 grid_W=self.config.bilagrid_shape_geometry[2],
             )
         if self.config.use_ppisp:
-            self.ppisp_params = torch.nn.Parameter(torch.zeros(self.num_train_data, 36))
+            self.ppisp_params = torch.Tensor(DEFAULT_PPISP_PARAMS).repeat(self.num_train_data, 1)
+            self.ppisp_params = torch.nn.Parameter(self.ppisp_params)
 
         self.lpips_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32
         # self.lpips_dtype = torch.float32
