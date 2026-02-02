@@ -289,7 +289,7 @@ def metashape_to_json(
 
         # Metashape camera is looking towards -Z, +X is to the right and +Y is to the top/up of the first cam
         # Rotate the scene according to nerfstudio convention
-        transform = transform[[2, 0, 1, 3], :]
+        if False: transform = transform[[2, 0, 1, 3], :]
         # Convert from Metashape's camera coordinate system (OpenCV) to ours (OpenGL)
         transform[:, 1:3] *= -1
         frame["transform_matrix"] = transform.tolist()
@@ -298,7 +298,7 @@ def metashape_to_json(
     data = {}
     data["frames"] = frames
     applied_transform = np.eye(4)[:3, :]
-    applied_transform = applied_transform[np.array([2, 0, 1]), :]
+    if False: applied_transform = applied_transform[np.array([2, 0, 1]), :]
     data["applied_transform"] = applied_transform.tolist()
 
     summary = []
