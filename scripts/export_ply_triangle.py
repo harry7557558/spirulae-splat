@@ -109,6 +109,7 @@ if __name__ == "__main__":
         description="Export PLY (and equirectangular map), for triangle only.")
     parser.add_argument("work_dir", nargs=1, help="Path to the work folder (the one named YYYY-MM-DD_hhmmss).")
     parser.add_argument("--dataset_dir", help="Path to dataset folder.")
+    parser.add_argument("--no_convert_to_input_frame", action="store_true", help="Whether to re-orient to match input.")
     # parser.add_argument("--output", "-o", default="splat.ply", help="The output PLY file.")
     args = parser.parse_args()
     work_dir = args.work_dir[0]
@@ -119,8 +120,12 @@ if __name__ == "__main__":
     print("Loading model...")
     model = SplatModel(work_dir)
 
-    print("Orienting model...")
-    model.convert_to_input_frame()
+    if not args.no_convert_to_input_frame:
+        print("Orienting model...")
+        if model.relative_scale is not None:
+            model.gauss_params["means"] /= model.relative_scale
+            model.gauss_params["scales"] -= np.log(model.relative_scale)
+        model.convert_to_input_frame()
 
     if args.dataset_dir is not None and os.path.exists(os.path.join(args.dataset_dir, 'markers.yaml')):
         print()

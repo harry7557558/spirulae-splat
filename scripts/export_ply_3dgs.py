@@ -275,6 +275,9 @@ if __name__ == "__main__":
 
     if not args.no_convert_to_input_frame:
         print("Orienting model...")
+        if model.relative_scale is not None:
+            model.gauss_params["means"] /= model.relative_scale
+            model.gauss_params["scales"] -= np.log(model.relative_scale)
         model.convert_to_input_frame()
 
     if args.dataset_dir is not None and os.path.exists(os.path.join(args.dataset_dir, 'markers.yaml')):
