@@ -3,7 +3,7 @@
 #include <ATen/Tensor.h>
 
 
-static constexpr uint kNumPerSplatLosses = 5;
+static constexpr int kNumPerSplatLosses = 5;
 
 
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */

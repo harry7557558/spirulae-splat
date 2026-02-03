@@ -22,8 +22,8 @@ struct SVHashTensor {
     float3 origin;
     float scale;
 
-    inline long numVerts() const { return vertList.size(-2); }
-    inline long numCells() const { return cellList.size(-2); }
+    inline int64_t numVerts() const { return vertList.size(-2); }
+    inline int64_t numCells() const { return cellList.size(-2); }
 
     typedef std::tuple<
         at::Tensor, at::Tensor,
@@ -56,7 +56,7 @@ struct SVHashTensor {
         scale = std::get<3>(cs);
     };
 
-    SVHashTensor(long num_verts, long num_cells);
+    SVHashTensor(int64_t num_verts, int64_t num_cells);
 
 };
 

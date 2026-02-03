@@ -256,6 +256,6 @@ def test_ppisp_reg():
 
 
 if __name__ == "__main__":
-    # test_ppisp()
-    # benchmark_ppisp()
+    test_ppisp()
+    benchmark_ppisp()
     test_ppisp_reg()

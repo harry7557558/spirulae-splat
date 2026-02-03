@@ -8,6 +8,13 @@
 #include <vector_types.h>
 #include <type_traits>
 
+#ifdef _MSC_VER
+/* Old compatibility names for C types.  */
+typedef unsigned long int ulong;
+typedef unsigned short int ushort;
+typedef unsigned int uint;
+#endif
+
 
 #ifdef __CUDACC__
 

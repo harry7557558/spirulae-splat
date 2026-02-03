@@ -41,10 +41,12 @@ struct _SVHashTable {
         uint64_t key;
         Value value;
     };
+    #ifdef __CUDACC__
     static_assert(sizeof(KeyValue) == sizeof(uint64_t) + sizeof(Value));  // packed
     static_assert(sizeof(KeyValue) % sizeof(uint64_t) == 0);  // required for memory aligned atomic
+    #endif
 
-    long capacity;
+    int64_t capacity;
     KeyValue* __restrict__ data;
 
     _SVHashTable() : capacity(0), data(nullptr) {}
@@ -73,9 +75,7 @@ struct _SVHashTable {
     __device__ bool insert(uint64_t key, Value value) {
         uint64_t slot = _hash(key) % capacity;
         while (true) {
-            typedef unsigned long long ull;
-            static_assert(sizeof(ull) == sizeof(uint64_t));
-            uint64_t prev = atomicCAS((ull*)&data[slot].key, (ull)kEmpty, (ull)key);
+            uint64_t prev = atomicCAS((uint64_t*)&data[slot].key, (uint64_t)kEmpty, (uint64_t)key);
             if (prev == kEmpty || (overwrite && prev == key)) {
                 data[slot].value = value;
                 return true;
@@ -100,14 +100,14 @@ struct SVHash {
         int resolution;  // 0 is unit cube, negative is larger, positive is smaller
     };
 
-    long numVerts;
-    long numCells;
+    int64_t numVerts;
+    int64_t numCells;
 
     int3* __restrict__ vertList;
     int4* __restrict__ cellList;
 
-    _SVHashTable<long> vertIndexMap;  // map xyz to index
-    _SVHashTable<long> cellIndexMap;  // map cell to index
+    _SVHashTable<int64_t> vertIndexMap;  // map xyz to index
+    _SVHashTable<int64_t> cellIndexMap;  // map cell to index
 
     float3 origin;
     float scale;
@@ -143,7 +143,7 @@ struct SVHash {
 };
 
 
-SVHashTensor::SVHashTensor(long num_verts, long num_cells) {
+SVHashTensor::SVHashTensor(int64_t num_verts, int64_t num_cells) {
     auto kOptI32 = at::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA);
     vertList = at::empty({num_verts, 3}, kOptI32);
     cellList = at::empty({num_cells, 4}, kOptI32);
@@ -158,9 +158,9 @@ SVHashTensor::SVHashTensor(long num_verts, long num_cells) {
 
 template<typename dtype>
 __global__ void computeIndexMap_kernel(
-    long num_elements,
+    int64_t num_elements,
     const dtype* __restrict__ list,
-    _SVHashTable<long> indexMap
+    _SVHashTable<int64_t> indexMap
 ) {
     uint tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= num_elements)
@@ -172,15 +172,15 @@ __global__ void computeIndexMap_kernel(
 
 template<typename dtype>
 at::Tensor computeIndexMap(const at::Tensor& list) {
-    long num_elements = list.numel() / (sizeof(dtype) / sizeof(int32_t));
-    long hash_table_capacity = (int)ceil(num_elements * 1.5);
+    int64_t num_elements = list.numel() / (sizeof(dtype) / sizeof(int32_t));
+    int64_t hash_table_capacity = (int)ceil(num_elements * 1.5);
     at::Tensor indexMap = at::empty({hash_table_capacity, 2}, list.options().dtype(torch::kInt64));
     cudaMemset(indexMap.data_ptr<int64_t>(), 0xff, indexMap.numel()*sizeof(int64_t));
 
     computeIndexMap_kernel<<<_LAUNCH_ARGS_1D(num_elements, 256)>>>(
         num_elements,
         (dtype*)list.data_ptr<int32_t>(),
-        _SVHashTable<long>(indexMap)
+        _SVHashTable<int64_t>(indexMap)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
@@ -235,8 +235,8 @@ SVHashTensor::TensorTuple svhashCreateInitialVolume(
     float3 p1 = { std::get<0>(p1_), std::get<1>(p1_), std::get<2>(p1_) };
     uint3 res = { std::get<0>(res_), std::get<1>(res_), std::get<2>(res_) };
 
-    long num_verts = (res.x+1)*(res.y+1)*(res.z+1);
-    long num_cells = res.x*res.y*res.z;
+    int64_t num_verts = (res.x+1)*(res.y+1)*(res.z+1);
+    int64_t num_cells = res.x*res.y*res.z;
 
     SVHashTensor result(num_verts, num_cells);
 
@@ -286,9 +286,9 @@ __global__ void svhashGetVoxels_kernel(
             voxel.y + stride * ((i >> 1) & 1),
             voxel.z + stride * (i >> 2)
         };
-        long vid;
+        int64_t vid;
         if (svhash.vertIndexMap.lookup(svhash.getKey(vi), vid))
-            vert_indices[i] = vid;
+            vert_indices[i] = (int)vid;
     }
     out_vert_indices[tid] = vert_indices;
 
@@ -338,16 +338,16 @@ __global__ void svhashSplitVoxels_expandMask(
 }
 
 __global__ void svhashSplitVoxels_fillNewCells(
-    const long num_cells,
-    const long num_cells_split,
-    const long* __restrict__ split_indices,
+    const int64_t num_cells,
+    const int64_t num_cells_split,
+    const int64_t* __restrict__ split_indices,
     int4* __restrict__ new_cell_list
 ) {
     uint tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= num_cells_split)
         return;
 
-    long src_idx = split_indices[tid];
+    int64_t src_idx = split_indices[tid];
     int4 cell = new_cell_list[src_idx];
     int stride = 1 << (cell.w - 1);
 
@@ -360,19 +360,19 @@ __global__ void svhashSplitVoxels_fillNewCells(
             cell.z + stride * (i >> 2),
             cell.w-1
         };
-        long dst_idx = num_cells + 7 * tid + (i-1);
+        int64_t dst_idx = num_cells + 7 * tid + (i-1);
         new_cell_list[dst_idx] = new_cell;
     }
 }
 
 template<bool isCountingPass>
 __global__ void svhashSplitVoxels_fillNewVerts(
-    const long num_cells_split,
-    const long* __restrict__ split_indices,
+    const int64_t num_cells_split,
+    const int64_t* __restrict__ split_indices,
     const int4* __restrict__ new_cell_list,
-    _SVHashTable<long> verts_set,
+    _SVHashTable<int64_t> verts_set,
     int* __restrict__ counts,  // value or PSA
-    _SVHashTable<long> old_verts_set = _SVHashTable<long>(),
+    _SVHashTable<int64_t> old_verts_set = _SVHashTable<int64_t>(),
     int3* __restrict__ vert_list = nullptr,
     FixedArray<uint32_t, 8>* __restrict__ interpolateIndices = nullptr,
     FixedArray<float, 8>* __restrict__ interpolateWeights = nullptr
@@ -381,7 +381,7 @@ __global__ void svhashSplitVoxels_fillNewVerts(
     if (tid >= num_cells_split)
         return;
 
-    long src_idx = split_indices[tid];
+    int64_t src_idx = split_indices[tid];
     int4 cell = new_cell_list[src_idx];
     int stride = 1 << cell.w;
 
@@ -399,7 +399,7 @@ __global__ void svhashSplitVoxels_fillNewVerts(
                 cell.y + 2 * stride * offset.y,
                 cell.z + 2 * stride * offset.z
             };
-            long idx = -1;
+            int64_t idx = -1;
             old_verts_set.lookup(SVHash::getKey(vert), idx);
             interpIndices[i] = (uint32_t)idx;
         }
@@ -418,12 +418,12 @@ __global__ void svhashSplitVoxels_fillNewVerts(
         };
         
         if (isCountingPass) {
-            bool written = verts_set.insert<false>(SVHash::getKey(new_vert), (long)tid);
+            bool written = verts_set.insert<false>(SVHash::getKey(new_vert), (int64_t)tid);
             count += (int)written;
         }
         else {
-            long written_idx;
-            if (verts_set.lookup(SVHash::getKey(new_vert), written_idx) && written_idx == (long)tid) {
+            int64_t written_idx;
+            if (verts_set.lookup(SVHash::getKey(new_vert), written_idx) && written_idx == (int64_t)tid) {
                 vert_list[count] = new_vert;
                 interpolateIndices[count] = interpIndices;
 
@@ -461,8 +461,8 @@ svhashSplitVoxels(
     if (split_mask.numel() != svhash.numCells())
         AT_ERROR("Mismatch in number of cells between voxel grid and split mask");
 
-    long num_cells = svhash.numCells();
-    long num_verts = svhash.numVerts();
+    int64_t num_cells = svhash.numCells();
+    int64_t num_verts = svhash.numVerts();
 
     auto optI64 = svhash.vertIndexMap.options();
     auto optI32 = optI64.dtype(torch::kInt32);
@@ -479,7 +479,7 @@ svhashSplitVoxels(
 
     // add new cells
     at::Tensor split_indices = at::where(split_mask_expanded)[0];
-    long num_cells_split = split_indices.numel();
+    int64_t num_cells_split = split_indices.numel();
     if (num_cells_split == 0)
         return std::make_tuple(
             svhash.tuple(),
@@ -487,7 +487,7 @@ svhashSplitVoxels(
             at::empty({0, 8}, optI32),
             at::empty({0, 8}, optF32)
         );
-    long new_num_cells = num_cells + 7 * num_cells_split;
+    int64_t new_num_cells = num_cells + 7 * num_cells_split;
     at::Tensor newCellList = at::empty({new_num_cells, 4}, optI32);
     cudaMemcpy(
         newCellList.data_ptr<int32_t>(), svhash.cellList.data_ptr<int32_t>(),
@@ -497,21 +497,21 @@ svhashSplitVoxels(
     svhashSplitVoxels_fillNewCells<<<_LAUNCH_ARGS_1D(num_cells_split, 256)>>>(
         num_cells,
         num_cells_split,
-        split_indices.data_ptr<long>(),
+        split_indices.data_ptr<int64_t>(),
         (int4*)newCellList.data_ptr<int32_t>()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     // add new vertices - counting pass
-    long vert_hash_table_size = 24 * num_cells_split;  // at least 19x for 19 non-corner vertices
+    int64_t vert_hash_table_size = 24 * num_cells_split;  // at least 19x for 19 non-corner vertices
     at::Tensor newVertSet = at::empty({vert_hash_table_size, 2}, optI64);
     cudaMemset(newVertSet.data_ptr<int64_t>(), 0xff, newVertSet.numel()*sizeof(int64_t));
     at::Tensor newVertCounts = at::empty({num_cells_split}, optI32);
     svhashSplitVoxels_fillNewVerts<true><<<_LAUNCH_ARGS_1D(num_cells_split, 256)>>>(
         num_cells_split,
-        split_indices.data_ptr<long>(),
+        split_indices.data_ptr<int64_t>(),
         (int4*)newCellList.data_ptr<int32_t>(),
-        _SVHashTable<long>(newVertSet),
+        _SVHashTable<int64_t>(newVertSet),
         newVertCounts.data_ptr<int32_t>()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -521,8 +521,8 @@ svhashSplitVoxels(
 
     // add new vertices - filling pass
     newVertCounts = at::cumsum(newVertCounts, 0).to(torch::kInt32);
-    long num_verts_added = (long)newVertCounts[-1].item<int>();
-    long new_num_verts = num_verts + num_verts_added;
+    int64_t num_verts_added = (int64_t)newVertCounts[-1].item<int>();
+    int64_t new_num_verts = num_verts + num_verts_added;
     at::Tensor newVertList = at::empty({new_num_verts, 3}, optI32);
     cudaMemcpy(
         newVertList.data_ptr<int32_t>(), svhash.vertList.data_ptr<int32_t>(),
@@ -533,11 +533,11 @@ svhashSplitVoxels(
     at::Tensor newVertInterpWeights = at::empty({num_verts_added, 8}, optF32);
     svhashSplitVoxels_fillNewVerts<false><<<_LAUNCH_ARGS_1D(num_cells_split, 256)>>>(
         num_cells_split,
-        split_indices.data_ptr<long>(),
+        split_indices.data_ptr<int64_t>(),
         (int4*)newCellList.data_ptr<int32_t>(),
-        _SVHashTable<long>(newVertSet),
+        _SVHashTable<int64_t>(newVertSet),
         newVertCounts.data_ptr<int32_t>(),
-        _SVHashTable<long>(svhash.vertIndexMap),
+        _SVHashTable<int64_t>(svhash.vertIndexMap),
         (int3*)newVertList.data_ptr<int32_t>() + num_verts,
         (FixedArray<uint32_t, 8>*)newVertInterpIndices.data_ptr<int32_t>(),
         (FixedArray<float, 8>*)newVertInterpWeights.data_ptr<float>()

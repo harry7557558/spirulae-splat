@@ -742,9 +742,9 @@ __global__ void ppisp_forward_kernel(
 
     float3 out_pixel = apply_ppisp(
         pixel,
-        (float2){(float)x, (float)y},
-        (float2){intrins[bid].z, intrins[bid].w},
-        (float2){actual_image_width, actual_image_height},
+        make_float2((float)x, (float)y),
+        make_float2(intrins[bid].z, intrins[bid].w),
+        make_float2(actual_image_width, actual_image_height),
         &params
     );
 
@@ -830,9 +830,9 @@ __global__ void ppisp_backward_kernel(
     FixedArray<float, kNumPPISPParams> v_params;
     apply_ppisp_vjp(
         pixel,
-        (float2){(float)x, (float)y},
-        (float2){intrins[bid].z, intrins[bid].w},
-        (float2){actual_image_width, actual_image_height},
+        make_float2((float)x, (float)y),
+        make_float2(intrins[bid].z, intrins[bid].w),
+        make_float2(actual_image_width, actual_image_height),
         &params,
         v_out_pixel,
         &v_pixel,
