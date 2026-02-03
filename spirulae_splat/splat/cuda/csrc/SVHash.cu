@@ -75,7 +75,9 @@ struct _SVHashTable {
     __device__ bool insert(uint64_t key, Value value) {
         uint64_t slot = _hash(key) % capacity;
         while (true) {
-            uint64_t prev = atomicCAS((uint64_t*)&data[slot].key, (uint64_t)kEmpty, (uint64_t)key);
+            typedef unsigned long long ull;
+            static_assert(sizeof(ull) == sizeof(uint64_t));
+            uint64_t prev = atomicCAS((ull*)&data[slot].key, (ull)kEmpty, (ull)key);
             if (prev == kEmpty || (overwrite && prev == key)) {
                 data[slot].value = value;
                 return true;
