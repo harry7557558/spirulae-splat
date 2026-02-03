@@ -171,12 +171,12 @@ def metashape_to_json(
         sensor_type = sensor.get("type")
         if sensor_type == "frame":
             s["camera_model"] = CAMERA_MODELS["perspective"].value
-        elif sensor_type == "fisheye":
+        elif sensor_type in ["fisheye", "equidistant_fisheye"]:
             s["camera_model"] = CAMERA_MODELS["fisheye"].value
         elif sensor_type == "spherical":
             s["camera_model"] = CAMERA_MODELS["equirectangular"].value
         else:
-            # Cylindrical and RPC sensor types are not supported
+            # Unsupported: Equisolid fisheye, cylindrical, RPC, etc.
             raise ValueError(f"Unsupported Metashape sensor type '{sensor_type}'")
 
         resolution = sensor.find("resolution")
