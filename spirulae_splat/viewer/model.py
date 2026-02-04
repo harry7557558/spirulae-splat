@@ -318,9 +318,9 @@ class SplatModel:
             is_distorted = ssplat_camera.is_distorted() or any([x != 0 for x in dist_coeffs])
             if is_distorted:
                 # dist_coeffs should be k1, k2, k3, k4, p1, p2, sx1, sy1, b1, b2
-                if is_fisheye:  # k1, k2, k3, k4
+                if is_fisheye and dist_coeffs.shape[0] == 4:  # k1, k2, k3, k4
                     dist_coeffs = torch.concatenate([dist_coeffs[:4], torch.zeros_like(dist_coeffs[:4])], dim=0)
-                else:
+                elif dist_coeffs.shape[0] == 4:  # k1, k2, p1, p2
                     dist_coeffs = torch.concatenate([dist_coeffs[:2], torch.zeros_like(dist_coeffs[:2]), dist_coeffs[2:]], dim=0)
                 dist_coeffs = torch.concatenate([dist_coeffs, torch.zeros(10 - len(dist_coeffs), device=dist_coeffs.device)], dim=0)
                 kwargs['dist_coeffs'] = dist_coeffs[None].to(viewmat)

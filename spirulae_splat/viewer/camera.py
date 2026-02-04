@@ -6,7 +6,7 @@ from typing import Literal, Union
 from spirulae_splat.splat._camera import _Camera
 
 class Camera:
-    def __init__(self, config_path: str, transform_path: str=None):
+    def __init__(self, config_path: Union[str, dict], transform_path: str=None):
         if isinstance(config_path, str) and config_path.split('.')[-1] in ['yaml', 'yml']:
             with open(config_path, "r") as f:
                 data = yaml.safe_load(f)
@@ -18,7 +18,7 @@ class Camera:
             self.cx = data.get("cx", self.w / 2)
             self.cy = data.get("cy", self.h / 2)
             self.model = data.get("model", "OPENCV")  # type: Literal["OPENCV", "OPENCV_FISHEYE"]
-            self.distortion = tuple(data.get("distortion", [0.0, 0.0, 0.0, 0.0]))
+            self.distortion = tuple(data.get("distortion", [0.0]*10))
 
         elif isinstance(config_path, dict) or config_path.endswith("transforms.json"):
             config = config_path
@@ -34,10 +34,7 @@ class Camera:
             self.cx = config['cx']
             self.cy = config['cy']
             self.model = config['camera_model']
-            if self.model == "OPENCV":
-                self.distortion = tuple(config[k] for k in ['k1', 'k2', 'p1', 'p2'])
-            elif self.model == "OPENCV_FISHEYE":
-                self.distortion = tuple(config[k] for k in ['k1', 'k2', 'k3', 'k4'])
+            self.distortion = tuple(config.get(k, 0.0) for k in "k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2".split())
 
         if transform_path is None:
             self.scale = 1.0
