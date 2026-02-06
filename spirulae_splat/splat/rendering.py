@@ -412,7 +412,7 @@ def rasterization(
     # Identify intersecting tiles
     tile_width = math.ceil(width / float(tile_size))
     tile_height = math.ceil(height / float(tile_size))
-    if packed:
+    if packed or True:
         # TODO: add support
         means2d = (aabb_xyxy[..., 2:] + aabb_xyxy[..., :2]).float() / 2
         tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
