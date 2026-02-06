@@ -65,7 +65,7 @@ N, SH_DEGREE = 200000, 3
 PACKED = False
 IS_FISHEYE = False
 IS_ANTIALIASED = False
-WITH_UT = False
+WITH_UT = True
 
 def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
     camera_model = ["pinhole", "fisheye"][IS_FISHEYE]

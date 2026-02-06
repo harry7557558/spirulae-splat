@@ -58,27 +58,27 @@ for file in "${files[@]}"; do
 
     dirname=${file%.*}
 
-    num_gs=40000
-    sh_degree=2
+    num_gs=200000
+    sh_degree=3
 
-    # ns-train spirulae --data $dirname \
-    #   --max_num_iterations 30000 \
-    #   --pipeline.model.apply-loss-for-mask True \
-    #   --pipeline.model.randomize_background False \
-    #   --pipeline.model.mcmc_cap_max $num_gs \
-    #   --pipeline.model.sh-degree $sh_degree \
-    #   --viewer.quit_on_train_completion True \
-    #   nerfstudio-data --validation_fraction 0.1
-
-    ns-train spirulae-patched --data $dirname \
+    ns-train spirulae --data $dirname \
       --max_num_iterations 30000 \
-      --pipeline.model.use_camera_optimizer True \
       --pipeline.model.apply-loss-for-mask True \
       --pipeline.model.randomize_background False \
       --pipeline.model.mcmc_cap_max $num_gs \
       --pipeline.model.sh-degree $sh_degree \
       --viewer.quit_on_train_completion True \
       nerfstudio-data --validation_fraction 0.1
+
+    # ns-train spirulae-patched --data $dirname \
+    #   --max_num_iterations 30000 \
+    #   --pipeline.model.use_camera_optimizer True \
+    #   --pipeline.model.apply-loss-for-mask True \
+    #   --pipeline.model.randomize_background False \
+    #   --pipeline.model.mcmc_cap_max $num_gs \
+    #   --pipeline.model.sh-degree $sh_degree \
+    #   --viewer.quit_on_train_completion True \
+    #   nerfstudio-data --validation_fraction 0.1
 
     outputs=$(find outputs/$dirname | grep config.yml)
     export_ply_3dgs.py $outputs --no_convert_to_input_frame

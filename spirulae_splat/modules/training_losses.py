@@ -15,7 +15,7 @@ from spirulae_splat.splat.cuda import (
     ray_depth_to_linear_depth
 )
 
-from spirulae_splat.splat.cuda._wrapper_per_pixel import log_map_image, apply_ppisp
+from spirulae_splat.splat.cuda._wrapper_per_pixel import depth_to_normal, log_map_image, apply_ppisp
 
 from fused_bilagrid import BilateralGrid, slice, total_variation_loss
 
@@ -25,6 +25,8 @@ import spirulae_splat.modules.enhancer
 
 # from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from spirulae_splat.modules.lpips import LearnedPerceptualImagePatchSimilarity
+
+from nerfstudio.cameras.cameras import Cameras, CameraType
 
 
 class _MaskGradient(torch.autograd.Function):
@@ -336,6 +338,7 @@ class SplatTrainingLosses(torch.nn.Module):
 
         device = outputs['rgb'].device
         camera = outputs["camera"]
+        intrins = torch.concatenate((camera.fx, camera.fy, camera.cx, camera.cy), dim=1)
 
         # If reference image is empty, AI generate from rendered image
         if "image" not in batch:
@@ -498,7 +501,7 @@ class SplatTrainingLosses(torch.nn.Module):
             ppisp_param = self.ppisp_params[indices, :]
             pred_rgb = apply_ppisp(
                 pred_rgb, ppisp_param,
-                intrins=torch.concatenate((camera.fx, camera.fy, camera.cx, camera.cy), dim=1),
+                intrins=intrins,
                 actual_image_width=camera.metadata.get('actual_width', None),
                 actual_image_height=camera.metadata.get('actual_height', None),
             )
@@ -521,6 +524,13 @@ class SplatTrainingLosses(torch.nn.Module):
     
         (weight_depth_dist_reg, weight_normal_dist_reg, weight_rgb_dist_reg), weight_normal_reg = \
             self.get_2dgs_reg_weights()
+
+        if pred_depth_normal is None and pred_depth is not None and (pred_normal is not None or gt_normal is not None):
+            is_fisheye = (camera.camera_type[0].item() == CameraType.FISHEYE.value)
+            pred_depth_normal = depth_to_normal(
+                pred_depth, ["pinhole", "fisheye"][is_fisheye],
+                intrins, camera.distortion_params
+            )
 
         losses = _ComputePerPixelLosses.apply(
             pred_rgb,

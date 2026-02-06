@@ -2,6 +2,7 @@
 #define SSPLAT_HOST_ONLY
 #include "common.cuh"
 
+#include "IntersectTile.cuh"
 #include "SphericalHarmonics.cuh"
 #include "BackgroundSphericalHarmonics.cuh"
 #include "PerSplatLoss.cuh"
@@ -34,6 +35,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     //     .export_values();
 
     m.attr("TILE_SIZE") = py::int_(TILE_SIZE);
+
+    // IntersectTile.cuh
+    m.def("intersect_tile_3dgs", &intersect_tile_3dgs_tensor);
+    m.def("intersect_tile_mip", &intersect_tile_mip_tensor);
+    m.def("intersect_tile_3dgut", &intersect_tile_3dgut_tensor);
+    m.def("intersect_tile_3dgut_sv", &intersect_tile_3dgut_sv_tensor);
+    m.def("intersect_tile_opaque_triangle", &intersect_tile_opaque_triangle_tensor);
+    m.def("intersect_tile_voxel", &intersect_tile_voxel_tensor);
 
     // SphericalHarmonics.cuh
     m.def("compute_sh_forward", &compute_sh_forward_tensor);

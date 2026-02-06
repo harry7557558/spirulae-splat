@@ -158,6 +158,7 @@ no_fused_bilagrid = (importlib.util.find_spec('fused_bilagrid') is None)
 
 path = "spirulae_splat/splat/cuda/csrc/"
 for filename in [
+    'IntersectTile',
     'SphericalHarmonics',
     'BackgroundSphericalHarmonics',
     'PerSplatLoss',

@@ -71,6 +71,7 @@ def load_transforms(transform_path: str):
         file_path = frame.get('file_path', None)
         camera = update_intrins(frame, global_intrins)
         transform_matrix = np.array(frame.get('transform_matrix', np.eye(4).tolist()))
+        transform_matrix = np.linalg.inv(applied_transform) @ transform_matrix
         # transform_matrix = np.linalg.inv(transform_matrix)
         camera['transform_matrix'] = transform_matrix.tolist()
 

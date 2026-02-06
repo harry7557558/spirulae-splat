@@ -973,7 +973,7 @@ class SpirulaeModel(Model):
             distributed=False,
             camera_model=["pinhole", "fisheye"][is_fisheye],
             render_mode="RGB+D" if self.config.primitive in ['3dgs', 'mip', '3dgut', '3dgut_sv'] else "RGB+D+N",
-            # output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
+            output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
             **kwargs,
         )
         if self.config.supersampling != 1:
@@ -1008,7 +1008,7 @@ class SpirulaeModel(Model):
             render_normal = torch.where(alpha > 0.0, F.normalize(rgbd[2], dim=-1), rgbd[2])
 
         depth_normal = None
-        if self.config.compute_depth_normal or self.config.fit == "depth_normal" or not self.training:
+        if self.config.fit == "depth_normal" or not self.training:
             depth_normal = depth_to_normal(
                 depth_im_ref, ["pinhole", "fisheye"][is_fisheye], intrins, **kwargs
             )
@@ -1077,7 +1077,7 @@ class SpirulaeModel(Model):
             outputs["depth"] = depth_im_ref
         if render_normal is not None:
             outputs["normal"] = render_normal
-        if self.config.compute_depth_normal or not self.training:
+        if depth_normal is not None:
             outputs["depth_normal"] = depth_normal
         outputs["alpha"] = alpha
         outputs["background"] = background

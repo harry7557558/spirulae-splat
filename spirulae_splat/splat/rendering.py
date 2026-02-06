@@ -5,9 +5,8 @@ from typing import Dict, Optional, Tuple, Literal
 import math
 
 
-import gsplat.cuda._wrapper
+import gsplat
 from gsplat.cuda._wrapper import (
-    RollingShutterType,
     isect_offset_encode,
     isect_tiles,
 )
@@ -23,6 +22,11 @@ from gsplat.distributed import (
     all_gather_tensor_list,
     all_to_all_int32,
     all_to_all_tensor_list,
+)
+
+from spirulae_splat.splat.cuda import (
+    _C,
+    _make_lazy_cuda_func,
 )
 
 from .utils import depth_to_normal
@@ -55,9 +59,6 @@ def rasterization(
     segmented: bool = False,
     # distortion
     dist_coeffs: Optional[Tensor] = None,  # [..., C, 10]
-    # rolling shutter
-    rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
-    viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
     actual_width: int = None,
     actual_height: int = None,
     patch_offsets: Optional[Tensor] = None,
@@ -166,9 +167,6 @@ def rasterization(
             However, since it requires offset indices as input, additional global memory access is needed, which results
             in slower overall performance in most use cases.
         dist_coeffs: Should be [..., C, 10]. [k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2]
-        rolling_shutter: The rolling shutter type. Default `RollingShutterType.GLOBAL` means
-            global shutter.
-        viewmats_rs: The second viewmat when rolling shutter is used. Default is None.
 
     Returns:
         A tuple:
@@ -273,15 +271,6 @@ def rasterization(
         )
         return torch.stack([torch.cat(l, dim=0) for l in zip(*view_list)], dim=0)
 
-    if rolling_shutter != RollingShutterType.GLOBAL:
-        assert (
-            viewmats_rs is not None
-        ), "Rolling shutter requires to provide viewmats_rs."
-    else:
-        assert (
-            viewmats_rs is None
-        ), "viewmats_rs should be None for global rolling shutter."
-
     if dist_coeffs is not None:
         dist_coeffs = dist_coeffs.contiguous()
 
@@ -302,8 +291,6 @@ def rasterization(
         # Enforce that the number of cameras is the same across all ranks.
         C_world = [C] * world_size
         viewmats, intrins = all_gather_tensor_list(world_size, [viewmats, intrins])
-        if viewmats_rs is not None:
-            (viewmats_rs,) = all_gather_tensor_list(world_size, [viewmats_rs])
 
         # Silently change C from local #Cameras to global #Cameras.
         C = len(viewmats)
@@ -393,7 +380,6 @@ def rasterization(
         aabb_xyxy, depths, proj_splats = proj_results
         batch_ids, camera_ids, gaussian_ids = None, None, None
         image_ids = None
-    means2d = (aabb_xyxy[..., 2:] + aabb_xyxy[..., :2]).float() / 2
     radii = (aabb_xyxy[..., 2:] - aabb_xyxy[..., :2] + 1) // 2
     depths = torch.exp(depths)
 
@@ -422,107 +408,43 @@ def rasterization(
     # stage.
     if distributed:
         raise NotImplementedError()
-        if packed:
-            # count how many elements need to be sent to each rank
-            cnts = torch.bincount(camera_ids, minlength=C)  # all cameras
-            cnts = cnts.split(C_world, dim=0)
-            cnts = [cuts.sum() for cuts in cnts]
-
-            # all to all communication across all ranks. After this step, each rank
-            # would have all the necessary GSs to render its own images.
-            collected_splits = all_to_all_int32(world_size, cnts, device=device)
-            (radii,) = all_to_all_tensor_list(
-                world_size, [radii], cnts, output_splits=collected_splits
-            )
-            (means2d, depths, conics, proj_opacities, colors) = all_to_all_tensor_list(
-                world_size,
-                [means2d, depths, conics, proj_opacities, colors],
-                cnts,
-                output_splits=collected_splits,
-            )
-
-            # before sending the data, we should turn the camera_ids from global to local.
-            # i.e. the camera_ids produced by the projection stage are over all cameras world-wide,
-            # so we need to turn them into camera_ids that are local to each rank.
-            offsets = torch.tensor(
-                [0] + C_world[:-1], device=camera_ids.device, dtype=camera_ids.dtype
-            )
-            offsets = torch.cumsum(offsets, dim=0)
-            offsets = offsets.repeat_interleave(torch.stack(cnts))
-            camera_ids = camera_ids - offsets
-
-            # and turn gaussian ids from local to global.
-            offsets = torch.tensor(
-                [0] + N_world[:-1],
-                device=gaussian_ids.device,
-                dtype=gaussian_ids.dtype,
-            )
-            offsets = torch.cumsum(offsets, dim=0)
-            offsets = offsets.repeat_interleave(torch.stack(cnts))
-            gaussian_ids = gaussian_ids + offsets
-
-            # all to all communication across all ranks.
-            (camera_ids, gaussian_ids) = all_to_all_tensor_list(
-                world_size,
-                [camera_ids, gaussian_ids],
-                cnts,
-                output_splits=collected_splits,
-            )
-
-            # Silently change C from global #Cameras to local #Cameras.
-            C = C_world[world_rank]
-
-        else:
-            # Silently change C from global #Cameras to local #Cameras.
-            C = C_world[world_rank]
-
-            # all to all communication across all ranks. After this step, each rank
-            # would have all the necessary GSs to render its own images.
-            (radii,) = all_to_all_tensor_list(
-                world_size,
-                [radii.flatten(0, 1)],
-                splits=[C_i * N for C_i in C_world],
-                output_splits=[C * N_i for N_i in N_world],
-            )
-            radii = reshape_view(C, radii, N_world)
-
-            (means2d, depths, conics, proj_opacities, colors) = all_to_all_tensor_list(
-                world_size,
-                [
-                    means2d.flatten(0, 1),
-                    depths.flatten(0, 1),
-                    conics.flatten(0, 1),
-                    proj_opacities.flatten(0, 1),
-                    colors.flatten(0, 1),
-                ],
-                splits=[C_i * N for C_i in C_world],
-                output_splits=[C * N_i for N_i in N_world],
-            )
-            means2d = reshape_view(C, means2d, N_world)
-            depths = reshape_view(C, depths, N_world)
-            conics = reshape_view(C, conics, N_world)
-            proj_opacities = reshape_view(C, proj_opacities, N_world)
-            colors = reshape_view(C, colors, N_world)
 
     # Identify intersecting tiles
     tile_width = math.ceil(width / float(tile_size))
     tile_height = math.ceil(height / float(tile_size))
-    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
-        means2d,
-        radii,
-        depths,
-        tile_size,
-        tile_width,
-        tile_height,
-        segmented=segmented,
-        packed=packed,
-        n_images=I,
-        image_ids=image_ids,
-        gaussian_ids=gaussian_ids,
-    )
-    # print("rank", world_rank, "Before isect_offset_encode")
-    isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
-    isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
+    if packed:
+        # TODO: add support
+        means2d = (aabb_xyxy[..., 2:] + aabb_xyxy[..., :2]).float() / 2
+        tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+            means2d,
+            radii,
+            depths,
+            tile_size,
+            tile_width,
+            tile_height,
+            segmented=segmented,
+            packed=packed,
+            n_images=I,
+            image_ids=image_ids,
+            gaussian_ids=gaussian_ids,
+        )
+        isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
+        isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
+    else:
+        isect_ids, flatten_ids, isect_offsets = _make_lazy_cuda_func(f"intersect_tile_{primitive}")(
+            aabb_xyxy,
+            depths,
+            width,
+            height,
+            (*proj_splats, None) if primitive in ["3dgs", "mip"] else proj_splats,
+            viewmats,
+            intrins,
+            gsplat.cuda._wrapper._make_lazy_cuda_obj(
+                f"CameraModelType.{camera_model.upper()}"
+            ),
+            dist_coeffs
+        )
+        isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
 
     meta.update(
         {
