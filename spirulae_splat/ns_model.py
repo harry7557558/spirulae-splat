@@ -255,7 +255,7 @@ class SpirulaeModelConfig(ModelConfig):
     """
     depth_mode: Literal["mean", "median"] = "mean"
     """Depth rendering mode, use mean for stable training and median for high meshing resolution"""
-    depth_reg_weight: float = 0.01
+    depth_reg_weight: float = 0.0
     """Weight for depth distortion regularizer"""
     normal_distortion_reg_weight: float = 0.0
     """Weight for normal distortion regularizer"""
@@ -321,6 +321,9 @@ class SpirulaeModelConfig(ModelConfig):
     normal_supervision_weight: float = 0.01
     """Weight for normal supervision by comparing normal from rendered depth with normal from depth predicted by a foundation model"""
 
+    overfit_score_aggregation_mode: Literal['max', 'min', 'mean'] = 'max'
+    """Mode to aggregate multiple overfitting objectives.
+        Use max for more aggressive early stopping, min for more conservative early stopping, and mean for something in between."""
     validation_loss_average_window: int = 500
     """Window to calculate moving average validation loss for early stop"""
     early_stop_patience: int = 1000
@@ -1230,7 +1233,12 @@ class SpirulaeModel(Model):
             train_loss_increase = self.total_train_loss - prev_total_train_loss
             val_loss_increase = self.total_val_loss - prev_total_val_loss
             val_lpips_increase = self.total_val_lpips - prev_total_val_lpips
-            overfit_score = max(val_loss_increase - max(train_loss_increase, 0), val_lpips_increase)
+            overfit_scores = []
+            overfit_scores.append(val_loss_increase - max(train_loss_increase, 0))
+            overfit_scores.append(val_lpips_increase)
+            overfit_score = max(overfit_scores) if self.config.overfit_score_aggregation_mode == 'max' else \
+                            min(overfit_scores) if self.config.overfit_score_aggregation_mode == 'min' else \
+                            sum(overfit_scores) / len(overfit_scores)
             # overfit_score = min(val_loss_increase - max(train_loss_increase, 0), val_lpips_increase)
             if not hasattr(self, 'overfit_score_history'):
                 self.overfit_score_history = []
