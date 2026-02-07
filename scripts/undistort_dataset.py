@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Nerfstudio Dataset Downscaler
+Nerfstudio Dataset Undistort Script
 
-This script downscales a Nerfstudio dataset by reducing image resolution,
-adjusting camera intrinsics, and optionally downscaling point cloud data.
+This script undistorts a Nerfstudio dataset.
+For pinhole camera, it removes distortion from images and updates camera intrinsics accordingly.
+For fisheye camera, it undistorts to an ideal equidistant fisheye model without distortion parameters, and updates intrinsics to match the new model.
 """
 
 import argparse
@@ -27,15 +28,12 @@ except ImportError:
     print("Error: plyfile library is required. Install with: pip install plyfile")
     sys.exit(1)
 
+import torch
+from spirulae_splat.splat.cuda import undistort_image as ssplat_undistort_image
+
 
 def validate_args(args):
     """Validate command line arguments."""
-    if not (0 < args.image_scale <= 1):
-        raise ValueError("Image scale factor must be in range (0, 1]")
-    
-    if args.ply_scale is not None and not (0 < args.ply_scale <= 1):
-        raise ValueError("PLY scale factor must be in range (0, 1]")
-    
     if args.jpeg_quality is not None and not (1 <= args.jpeg_quality <= 100):
         raise ValueError("JPEG quality must be in range [1, 100]")
     
@@ -66,62 +64,29 @@ def save_transforms(transforms: Dict[str, Any], output_path: str):
         json.dump(transforms, f, indent=2)
 
 
-def get_jpeg_quality(image_path: str) -> Optional[int]:
-    """Get JPEG quality from image file if it's a JPEG."""
-    if not image_path.lower().endswith(('.jpg', '.jpeg')):
-        return None
-    return 95  # Default to high quality if we can't determine it
-    
-    try:
-        # Read JPEG quality using OpenCV (approximation)
-        # This is a rough estimation as OpenCV doesn't directly expose quality
-        img = cv2.imread(image_path)
-        if img is None:
-            return None
-        
-        # Encode with different qualities and find closest match
-        _, original_encoded = cv2.imencode('.jpg', img)
-        original_size = len(original_encoded)
-        
-        for quality in range(95, 50, -5):
-            _, test_encoded = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, quality])
-            if len(test_encoded) <= original_size * 1.1:  # Allow 10% tolerance
-                return quality
-        
-        return 90  # Default fallback
-    except:
-        return 90  # Default fallback
-
-
-def downscale_image(input_path: str, output_path: str, scale_factor: float,
-                    min_num_pixels: Optional[int] = None,
+def undistort_image(input_path: str, output_path: str, intrins: dict, 
                    jpeg_quality: Optional[int] = None):
-    """Downscale an image and save it."""
+    """Undistort an image and save it."""
     # Read image
     img = cv2.imread(input_path, -1)
     if img is None:
         raise ValueError(f"Could not read image: {input_path}")
+    if img.ndim == 2:
+        img = img[..., np.newaxis]  # [H, W, 1]
     
-    # Calculate new dimensions
-    original_height, original_width = img.shape[:2]
-    if min_num_pixels is not None:
-        total_pixels = original_width * original_height
-        scale_factor = min((min_num_pixels / total_pixels) ** 0.5, 1.0)
+    # Undistort image
+    sw = img.shape[1] / intrins['w']
+    sh = img.shape[0] / intrins['h']
+    intrins = (
+        "pinhole",
+        (intrins['fl_x']*sw, intrins['fl_y']*sh, intrins['cx']*sw, intrins['cy']*sh),
+        tuple(intrins.get(key, 0.0) for key in "k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2".split())
+    )
+    dtype = img.dtype
+    img = torch.from_numpy(img).unsqueeze(0).float().cuda()  # [1, H, W, C]
+    img = ssplat_undistort_image(img, *intrins)
+    img = img.squeeze(0).cpu().numpy().astype(dtype)  # [H, W, C]
 
-    if scale_factor == 1.0 and jpeg_quality is None:
-        # Just copy the file
-        shutil.copy2(input_path, output_path)
-        return img.shape[1], img.shape[0]  # width, height
-    
-    new_width = max(int(original_width * scale_factor + 0.5), 1)
-    new_height = max(int(original_height * scale_factor + 0.5), 1)
-    
-    # Downscale image
-    if scale_factor != 1.0:
-        # print(img.shape, img.dtype, end=' -> ')
-        img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_AREA)
-        # print(img.shape, img.dtype)
-    
     # Determine output format and quality
     if jpeg_quality is not None:
         # Force JPEG output
@@ -131,41 +96,43 @@ def downscale_image(input_path: str, output_path: str, scale_factor: float,
         # Keep original format
         if input_path.lower().endswith(('.jpg', '.jpeg')):
             # Try to preserve original JPEG quality
-            original_quality = get_jpeg_quality(input_path)
-            if original_quality:
-                cv2.imwrite(output_path, img, [cv2.IMWRITE_JPEG_QUALITY, original_quality])
-            else:
-                cv2.imwrite(output_path, img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            cv2.imwrite(output_path, img, [cv2.IMWRITE_JPEG_QUALITY, 95])
         else:
             # Non-JPEG format
             if output_path.lower().endswith(('.jpg', '.jpeg')):
                 cv2.imwrite(output_path, img, [cv2.IMWRITE_JPEG_QUALITY, 90])
             else:
                 cv2.imwrite(output_path, img)
-    
-    return new_width, new_height
+
+    # TODO: properly generate from undistort function
+    black_pixel_mask = (img == 0).all(axis=-1)
+    mask = (~black_pixel_mask).astype(np.uint8)  # 1 for valid pixels, 0 for black borders
+    if mask.ndim == 2:
+        mask = mask[..., np.newaxis]  # [H, W, 1]
+    if np.count_nonzero(mask) < mask.size:
+        return mask
+    return None
 
 
-def adjust_intrinsics(intrinsics: Dict[str, Any], scale_factor: float, 
-                     new_width: int, new_height: int) -> Dict[str, Any]:
-    """Adjust camera intrinsics for downscaled image."""
-    adjusted = intrinsics.copy()
+def adjust_intrinsics(intrinsics: Dict[str, Any]) -> None:
+    """Adjust camera intrinsics in place."""
     
-    # Scale focal lengths and principal point
-    if 'fl_x' in adjusted:
-        adjusted['fl_x'] *= scale_factor
-    if 'fl_y' in adjusted:
-        adjusted['fl_y'] *= scale_factor
-    if 'cx' in adjusted:
-        adjusted['cx'] *= scale_factor
-    if 'cy' in adjusted:
-        adjusted['cy'] *= scale_factor
-    
-    # Update image dimensions
-    adjusted['w'] = new_width
-    adjusted['h'] = new_height
+    for dist_coeffs in 'k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2'.split():
+        if dist_coeffs in intrinsics:
+            intrinsics.pop(dist_coeffs)
 
-    return adjusted
+    if 'camera_model' in intrinsics:
+        intrinsics['camera_model'] = {
+            'SIMPLE_PINHOLE': "OPENCV",
+            'PINHOLE': "OPENCV",
+            'SIMPLE_RADIAL': "OPENCV",
+            'SIMPLE_RADIAL_FISHEYE': "OPENCV_FISHEYE",
+            'RADIAL': "OPENCV",
+            'RADIAL_FISHEYE': "OPENCV_FISHEYE",
+            'OPENCV': "OPENCV",
+            'OPENCV_FISHEYE': "OPENCV_FISHEYE",
+            'THIN_PRISM_FISHEYE': "OPENCV_FISHEYE",
+        }[intrinsics['camera_model']]
 
 
 def downscale_ply(input_path: str, output_path: str, scale_factor: float):
@@ -201,12 +168,11 @@ def downscale_ply(input_path: str, output_path: str, scale_factor: float):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Downscale NeRF Studio dataset")
+    parser = argparse.ArgumentParser(description="Undistort Nerfstudio dataset")
     parser.add_argument("input_dir", help="Input dataset directory")
     parser.add_argument("output_dir", help="Output dataset directory (must be empty or non-existing)")
-    parser.add_argument("image_scale", type=float, help="Image downscale factor (0, 1]")
-    parser.add_argument("--ply_scale", type=float, default=1.0, help="PLY downscale factor (0, 1]")
     parser.add_argument("--jpeg_quality", type=int, help="JPEG quality (1-100)")
+    # parser.add_argument("--max_workers", type=Optional[int], default=None, help="Maximum number of worker threads for parallel processing")
     
     args = parser.parse_args()
     
@@ -221,22 +187,14 @@ def main():
     transforms = load_transforms(transforms_path)
     
     print(f"Processing dataset: {args.input_dir} -> {args.output_dir}")
-    print(f"Image scale factor: {args.image_scale}")
-    if args.ply_scale:
-        print(f"PLY scale factor: {args.ply_scale}")
     if args.jpeg_quality:
         print(f"JPEG quality: {args.jpeg_quality}")
     
     # Create output directory structure
     os.makedirs(args.output_dir, exist_ok=True)
     
-    # Check for global intrinsics
-    global_intrinsics = {}
     intrinsics_keys = ['w', 'h', 'fl_x', 'fl_y', 'cx', 'cy', 'k1', 'k2', 'k3', 'k4', 'p1', 'p2', 'camera_model']
-    for key in intrinsics_keys:
-        if key in transforms:
-            global_intrinsics[key] = transforms[key]
-    
+
     # Process images and update frames
     processed_frames = []
 
@@ -245,17 +203,41 @@ def main():
             return_val = None
             for key in ['file_path', 'mask_path', 'depth_file_path', 'normal_file_path'][::-1]:
                 return_val = process_one_frame(frame, key)
+    
+            # handle black borders in undistorted images by generating masks and combining with existing masks if they exist
+            mask = None
+            if 'mask' in return_val:
+                mask = return_val.pop('mask')
+            if mask is not None:
+                if 'mask_path' in return_val:
+                    mask_input_path = os.path.join(args.input_dir, return_val['mask_path'])
+                    loaded_mask = cv2.imread(mask_input_path, cv2.IMREAD_UNCHANGED)
+                    if loaded_mask is not None and loaded_mask.size >= 4:
+                        loaded_mask = cv2.resize(loaded_mask, (mask.shape[1], mask.shape[0]), interpolation=cv2.INTER_NEAREST)
+                        if loaded_mask.ndim == 2:
+                            loaded_mask = loaded_mask[..., np.newaxis]  # [H, W, 1]
+                        if loaded_mask.shape[2] > 1:
+                            loaded_mask = (loaded_mask != 0).all(axis=-1, keepdims=True).astype(np.uint8)
+                        mask = np.logical_and(mask, loaded_mask).astype(np.uint8)
+                if 'mask_path' not in return_val:
+                    # images/cam0/00022.jpg -> masks/cam0/00022.jpg.png
+                    mask_file_path = os.path.join('masks', return_val['file_path'].lstrip('.').lstrip(os.path.sep).lstrip('images').lstrip(os.path.sep) + ".png")
+                    return_val['mask_path'] = mask_file_path
+                mask_output_path = os.path.join(args.output_dir, return_val['mask_path'])
+                os.makedirs(os.path.dirname(mask_output_path), exist_ok=True)
+                cv2.imwrite(mask_output_path, mask.astype(np.uint8) * 255)
+
             return return_val
 
         if key not in frame:
-            return
+            return frame
         file_path = frame[key]
         
         # Ensure file path is within dataset directory
         full_input_path = os.path.join(args.input_dir, file_path)
         if not os.path.exists(full_input_path):
             print(f"Warning: Image not found: {full_input_path}")
-            return
+            return frame
         
         # Create output directory structure
         output_file_path = file_path
@@ -266,75 +248,52 @@ def main():
         full_output_path = os.path.join(args.output_dir, output_file_path)
         os.makedirs(os.path.dirname(full_output_path), exist_ok=True)
         
-        # Downscale image
-        min_num_pixels = None
-        if key != "file_path" and 'w' in frame and 'h' in frame:
-            min_num_pixels = int(frame['w'] * frame['h'] * args.image_scale**2)  # Ensure mask/depth/normal isn't too small
-        new_width, new_height = downscale_image(
-            full_input_path, full_output_path, args.image_scale, min_num_pixels, args.jpeg_quality
-        )
-        
         # Update frame data
         new_frame = frame.copy()
         new_frame[key] = output_file_path
         
         # Adjust intrinsics (frame-specific or use global)
-        frame_intrinsics = {}
+        intrinsics_for_undistortion = {}
         for key in intrinsics_keys:
             if key in frame:
-                frame_intrinsics[key] = frame[key]
-            elif key in global_intrinsics:
-                frame_intrinsics[key] = global_intrinsics[key]
+                intrinsics_for_undistortion[key] = frame[key]
+            elif key in transforms:
+                intrinsics_for_undistortion[key] = transforms[key]
+        
+        # Undistort image
+        mask = undistort_image(
+            full_input_path, full_output_path, intrinsics_for_undistortion, args.jpeg_quality
+        )
+        if mask is not None:
+            if 'mask' not in new_frame:
+                new_frame['mask'] = mask
+            else:
+                new_frame['mask'] = np.logical_and(new_frame['mask'], mask).astype(np.uint8)
         
         # Apply adjustments
-        adjusted_intrinsics = adjust_intrinsics(frame_intrinsics, args.image_scale, new_width, new_height)
-        
-        # Update frame with adjusted intrinsics (only if they were in the original frame)
-        is_non_global = any([k not in global_intrinsics for k in intrinsics_keys[:6]])
-        for key, value in adjusted_intrinsics.items():
-            if key in frame or is_non_global:
-                new_frame[key] = value
+        adjust_intrinsics(new_frame)
         
         return new_frame
     
+    # with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
     with ThreadPoolExecutor() as executor:
         for new_frame in tqdm(
             executor.map(process_one_frame, transforms['frames']),
             total=len(transforms["frames"]),
-            desc="Downscaling images..."
+            desc="Undistorting images..."
         ):
             if new_frame is not None:
                 processed_frames.append(new_frame)
 
     # Update global intrinsics if they exist
-    if global_intrinsics:
-        # Use dimensions from first processed frame as reference
-        if processed_frames:
-            ref_frame = processed_frames[0]
-            ref_width = ref_frame.get('w', global_intrinsics.get('w', 0))
-            ref_height = ref_frame.get('h', global_intrinsics.get('h', 0))
-            new_width = int(ref_width * args.image_scale)
-            new_height = int(ref_height * args.image_scale)
-            
-            adjusted_global = adjust_intrinsics(global_intrinsics, args.image_scale, new_width, new_height)
-            for key, value in adjusted_global.items():
-                transforms[key] = value
+    adjust_intrinsics(transforms)
     
     # Update transforms with processed frames
     transforms['frames'] = processed_frames
     
     # Process PLY file if it exists
-    if 'ply_file_path' in transforms and args.ply_scale is not None:
-        ply_input_path = os.path.join(args.input_dir, transforms['ply_file_path'])
-        ply_output_path = os.path.join(args.output_dir, transforms['ply_file_path'])
-        
-        if os.path.exists(ply_input_path):
-            os.makedirs(os.path.dirname(ply_output_path), exist_ok=True)
-            downscale_ply(ply_input_path, ply_output_path, args.ply_scale)
-        else:
-            print(f"Warning: PLY file not found: {ply_input_path}")
-    elif 'ply_file_path' in transforms:
-        # Copy PLY file without downscaling
+    if 'ply_file_path' in transforms:
+        # Copy PLY file
         ply_input_path = os.path.join(args.input_dir, transforms['ply_file_path'])
         ply_output_path = os.path.join(args.output_dir, transforms['ply_file_path'])
         
@@ -346,7 +305,7 @@ def main():
     output_transforms_path = os.path.join(args.output_dir, "transforms.json")
     save_transforms(transforms, output_transforms_path)
     
-    print(f"Dataset downscaled successfully!")
+    print(f"Dataset undistorted successfully!")
     print(f"Processed {len(processed_frames)} frames")
 
 

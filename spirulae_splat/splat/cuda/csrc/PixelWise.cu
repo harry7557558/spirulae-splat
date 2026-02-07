@@ -635,8 +635,11 @@ __global__ void distort_image_kernel(
 
     // Undistort point
     float2 uv = { (i+0.5f-cx) / fx, (j+0.5f-cy) / fy };
-    if (is_undistort)
+    if (is_undistort) {
+        if (!is_valid_distortion(uv, &dist_coeffs))
+            return;
         uv = distort_point(uv, camera_model == gsplat::CameraModelType::FISHEYE, &dist_coeffs);
+    }
     else {
         if (!undistort_point(uv, camera_model == gsplat::CameraModelType::FISHEYE, &dist_coeffs, &uv))
             return;
