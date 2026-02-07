@@ -381,7 +381,6 @@ def rasterization(
         batch_ids, camera_ids, gaussian_ids = None, None, None
         image_ids = None
     radii = (aabb_xyxy[..., 2:] - aabb_xyxy[..., :2] + 1) // 2
-    depths = torch.exp(depths)
 
     meta.update(
         {
@@ -489,7 +488,7 @@ def rasterization(
     if len(render_colors) > 1:
         render_colors = (
             render_colors[0],
-            torch.exp(render_colors[1] / render_alphas.clamp(min=1e-10)),
+            render_colors[1] / render_alphas.clamp(min=1e-10),
             *render_colors[2:]
         )
 

@@ -94,7 +94,7 @@ void projection_voxel_eval3d<let camera_model : CameraModelType, let assume_vali
     }
 
     aabb_xyxy = { (int)floor(xmin), (int)floor(ymin), (int)ceil(xmax), (int)ceil(ymax) };
-    depth = 0.5 * log(dot(mean_c, mean_c) + 1e-6);  // TODO: morton code
+    depth = get_sorting_depth(mean_c);  // TODO: morton code
 
     float3 campos = -mul(transpose(R), t);
     sh_coeffs_to_color(mean_c - campos, sh_coeffs, rgbs);
@@ -285,7 +285,7 @@ void evaluate_color_voxel(
         accum += a;
         depth_accum += t * a;
     }
-    depth = log(max(depth_accum / accum, 0.0) + 1e-6);
+    depth = max(depth_accum / accum, 0.0);
 }
 
 [CudaDeviceExport]

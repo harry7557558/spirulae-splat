@@ -309,6 +309,8 @@ class SplatTrainingLosses(torch.nn.Module):
 
         if "mask" in batch:
             batch_mask = batch['mask'].to(device)
+            if len(batch_mask.shape) == 3:
+                batch_mask = batch_mask.unsqueeze(-1)
             masks = batch_mask
 
         if 'depth' in batch:

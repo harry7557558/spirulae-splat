@@ -307,7 +307,15 @@ class SpirulaeDataManager(FullImageDatamanager):
         camera.metadata["cam_idx"] = int(idx)
 
         if self.config.compute_visibility_masks:
-            camera.metadata['visibility_masks'] = SplatTrainingLosses.get_visibility_masks(batch, self.device)
+            if 'mask' in batch:
+                batch['mask'] = batch['mask'][None]
+            if 'depth' in batch:
+                batch['depth'] = batch['depth'][None]
+            camera.metadata['visibility_masks'] = SplatTrainingLosses.get_visibility_masks(batch, "cpu")[0]
+            if 'mask' in batch:
+                batch['mask'] = batch['mask'].squeeze(0)
+            if 'depth' in batch:
+                batch['depth'] = batch['depth'].squeeze(0)
 
         camera_flattened = {}
         for key in ['camera_to_worlds', 'fx', 'fy', 'cx', 'cy', 'width', 'height', 'distortion_params', 'camera_type', 'times', 'metadata']:
@@ -469,12 +477,15 @@ class SpirulaeDataManager(FullImageDatamanager):
             for key, value in camera.items():
                 if isinstance(value, torch.Tensor) and value.numel() == 0:
                     camera[key] = None
+            metadata = camera.pop('metadata', {})
             camera = Cameras(**camera).to(self.device)
             for key, value in batch.items():
                 if isinstance(value, torch.Tensor):
                     batch[key] = value.to(self.device)
-            if 'cam_idx' in camera.metadata and camera.metadata['cam_idx'].ndim == 2:
-                camera.metadata['cam_idx'] = camera.metadata['cam_idx'][0]
+            for key, value in metadata.items():
+                if isinstance(value, torch.Tensor):
+                    metadata[key] = value.to(self.device)
+            camera.metadata = metadata
 
         # TODO
         if random.random() < (step - 10000) / (30000 - 10000) and False:
@@ -489,12 +500,15 @@ class SpirulaeDataManager(FullImageDatamanager):
                         val_camera[key] = None
                     else:
                         val_camera[key] = value[:val_batch_size].to(self.device)
+            metadata = val_camera.pop('metadata', {})
             val_camera = Cameras(**val_camera)
             for key, value in val_batch.items():
                 if isinstance(value, torch.Tensor):
                     val_batch[key] = value[:val_batch_size].to(self.device)
-            if 'cam_idx' in val_camera.metadata and val_camera.metadata['cam_idx'].ndim == 2:
-                val_camera.metadata['cam_idx'] = val_camera.metadata['cam_idx'][0]
+            for key, value in metadata.items():
+                if isinstance(value, torch.Tensor):
+                    metadata[key] = value.to(self.device)
+            val_camera.metadata = metadata
             return (camera, val_camera), (batch, val_batch)
 
         return camera, batch

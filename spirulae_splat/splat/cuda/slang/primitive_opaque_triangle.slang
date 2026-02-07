@@ -1,5 +1,7 @@
 #include "projection_utils.slang"
 
+#error "Opaque triangle primitive without eval3d is deprecated"
+
 
     // const float3 vert0, \
     // const float3 vert1, \
@@ -130,7 +132,6 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
     aabb_xyxy = {(int)floor(xmin), (int)floor(ymin), (int)ceil(xmax), (int)ceil(ymax)};
     // depth = float3(vert0_c.z, vert1_c.z, vert2_c.z);
     depth = float3(length(vert0_c), length(vert1_c), length(vert2_c));
-    depth = log(depth + 1e-12);
 
     out_hardness = hardness;
 

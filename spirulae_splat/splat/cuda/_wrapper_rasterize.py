@@ -454,8 +454,10 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
             (v_render_rgbs.contiguous(), v_render_depths.contiguous(), v_render_normals.contiguous()),
             v_render_alphas.contiguous(),
             (v_distortion_rgbs.contiguous(), v_distortion_depths.contiguous(), v_distortion_normals.contiguous()),
-            ctx.needs_input_grad[12]
+            # ctx.needs_input_grad[12]
         )
+        if ctx.needs_input_grad[12]:
+            raise NotImplementedError("Camera optimizer not supported for opaque triangle")
         # torch.cuda.synchronize()
         # time1 = perf_counter()
         # print(f"bwd: {1e3*(time1-time0):.2f} ms")

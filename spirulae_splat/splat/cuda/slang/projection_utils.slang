@@ -614,4 +614,17 @@ float3x3 outerProduct(float3 u) {
     return float3x3(u.x * u, u.y * u, u.z * u);
 }
 
+// linear depth in front for compatibility with conventional viewers
+// continuous near boundary to support >180deg fisheye
+[ForceInline]
+[Differentiable]
+float get_sorting_depth(float3 p_view) {
+    // float z = p_view.z;
+    // float z = max(p_view.z, sqrt(0.5f * dot(p_view, p_view)));
+    // float z = 0.5f * (p_view.z + length(p_view));
+    float z = max(p_view.z, (1.0f / (1.0f + sqrt(2.0f))) * (p_view.z + length(p_view)));
+    // return log(z);
+    return z;
+}
+
 #endif  // _PROJECTION_UTILS_SLANG_INC

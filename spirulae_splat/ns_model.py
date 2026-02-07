@@ -219,7 +219,7 @@ class SpirulaeModelConfig(ModelConfig):
     """
     adaptive_exposure_warmup: int = 1000
     """Start adaptive exposure at this number of steps"""
-    use_bilateral_grid: bool = False
+    use_bilateral_grid: bool = True
     """If True, use bilateral grid to handle the ISP changes in the image space.
         This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/)."""
     bilagrid_shape: Tuple[int, int, int] = (16, 16, 8)

@@ -388,9 +388,10 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
     }
 
     aabb_xyxy = {(int)xmin, (int)ymin, (int)xmax, (int)ymax};
-    // depth = mean_c.z;
-    // depth = length(mean_c);
-    depth = 0.5*log(dot(mean_c, mean_c) + 1e-6);
+    if (eval3d)
+        depth = get_sorting_depth(mean_c);
+    else
+        depth = length(mean_c);  // TODO: this is the same depth used to render depth maps
     conic = eval3d ? exp(-scale) :
         float3(covar2d_inv[0][0], covar2d_inv[0][1], covar2d_inv[1][1]);
 
@@ -562,11 +563,10 @@ void evaluate_color_3dgs(
     out float3 out_rgb, out float depth
 ) {
     out_rgb = rgb;
-    // depth = 0.5 * log(dot(mean - ray_o, mean - ray_o) + 1e-6);
+    // depth = length(mean - ray_o);
     float3 gro = mul(iscl_rot, (ray_o - mean));
     float3 grd = mul(iscl_rot, ray_d);
     depth = -dot(gro, grd) / dot(grd, grd);
-    depth = log(max(depth, 1e-6));
 }
 
 [CudaDeviceExport]

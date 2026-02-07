@@ -143,9 +143,7 @@ void projection_3dgs_sv<let camera_model : CameraModelType, let assume_valid : b
     }
 
     aabb_xyxy = {(int)xmin, (int)ymin, (int)xmax, (int)ymax};
-    // depth = mean_c.z;
-    // depth = length(mean_c);
-    depth = 0.5*log(dot(mean_c, mean_c) + 1e-6);
+    depth = get_sorting_depth(mean_c);
     conic = eval3d ? exp(-scale) :
         float3(covar2d_inv[0][0], covar2d_inv[0][1], covar2d_inv[1][1]);
 
