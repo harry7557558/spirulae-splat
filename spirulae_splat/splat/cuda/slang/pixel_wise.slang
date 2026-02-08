@@ -25,17 +25,21 @@ void blend_background_bwd(
 
 [Differentiable]
 [CudaDeviceExport]
-float3 log_map_image(float3 rgb, no_diff float t) {
-    return rgb * (1.0 - t) + (log(max(rgb, 0.0) + 1.0 / 255.0) + 1.0) * t;
+float3 linear_rgb_to_srgb(float3 rgb) {
+    const float cutoff = 0.0031308f;
+    rgb.x = (rgb.x < cutoff ? rgb.x * 12.92f : 1.055f * pow(rgb.x, 1.0f / 2.4f) - 0.055f);
+    rgb.y = (rgb.y < cutoff ? rgb.y * 12.92f : 1.055f * pow(rgb.y, 1.0f / 2.4f) - 0.055f);
+    rgb.z = (rgb.z < cutoff ? rgb.z * 12.92f : 1.055f * pow(rgb.z, 1.0f / 2.4f) - 0.055f);
+    return rgb;
 }
 
 [CudaDeviceExport]
-float3 log_map_image_bwd(
-    float3 rgb, float t, float3 v_out_rgb
+float3 linear_rgb_to_srgb_bwd(
+    float3 rgb, float3 v_out_rgb
 ) {
     var p_rgb = diffPair(rgb);
-    bwd_diff(log_map_image)(
-        p_rgb, t,
+    bwd_diff(linear_rgb_to_srgb)(
+        p_rgb,
         v_out_rgb
     );
     return p_rgb.d;

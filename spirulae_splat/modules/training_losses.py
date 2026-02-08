@@ -15,7 +15,7 @@ from spirulae_splat.splat.cuda import (
     ray_depth_to_linear_depth
 )
 
-from spirulae_splat.splat.cuda._wrapper_per_pixel import depth_to_normal, log_map_image, apply_ppisp
+from spirulae_splat.splat.cuda._wrapper_per_pixel import depth_to_normal, linear_rgb_to_srgb, apply_ppisp
 
 from fused_bilagrid import BilateralGrid, slice, total_variation_loss
 
@@ -277,10 +277,12 @@ class SplatTrainingLosses(torch.nn.Module):
         """Compute groundtruth image with iteration dependent downscale factor for evaluation purpose
 
         Args:
-            image: tensor.Tensor in type uint8 or float32
+            image: tensor.Tensor in type uint8, uint16, or float32
         """
         if image.dtype == torch.uint8:
             image = image.float() / 255.0
+        elif image.dtype == torch.uint16:
+            image = image.float() / 65535.0
         gt_img = self._downscale_if_required(image)
         return gt_img
 
@@ -489,6 +491,11 @@ class SplatTrainingLosses(torch.nn.Module):
             if background_mask is not None:
                 pred_rgb = torch.where(background_mask, pred_rgb, background)
 
+        # convert linear RGB to sRGB if needed
+        if self.config.use_linear_color_space:
+            pred_rgb = linear_rgb_to_srgb(pred_rgb)
+            gt_rgb = linear_rgb_to_srgb(gt_rgb)
+
         # apply exposure correction
         if self.config.use_bilateral_grid and self.config.fit == "rgb" and \
                 camera.metadata is not None and "cam_idx" in camera.metadata:
@@ -514,11 +521,9 @@ class SplatTrainingLosses(torch.nn.Module):
             raise NotImplementedError("Adaptive exposure is deprecated. Use bilateral grid instead.")
 
         # ssim loss
-        pred_rgb_mapped = log_map_image(pred_rgb, self.config.log_map_factor)
-        gt_rgb_mapped = log_map_image(gt_rgb, self.config.log_map_factor)
         ssim = FusedSSIM.apply(
-            pred_rgb_mapped.contiguous(),
-            gt_rgb_mapped.contiguous(),
+            pred_rgb.contiguous(),
+            gt_rgb.contiguous(),
             True  # TODO: detect torch.no_grad()
         )
 
@@ -553,7 +558,6 @@ class SplatTrainingLosses(torch.nn.Module):
             gt_alpha_mask,
             [
                 # RGB supervision
-                self.config.log_map_factor,
                 (1.0 - self.config.ssim_lambda) * (1.0 - self.config.lpips_lambda),
                 # depth supervison
                 float(self.step > self.config.supervision_warmup) *

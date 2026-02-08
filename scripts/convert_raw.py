@@ -18,8 +18,7 @@ import threading
 try:
     import rawpy
     import numpy as np
-    from PIL import Image, ExifTags
-    from PIL.ExifTags import TAGS
+    import cv2
     import piexif
 except ImportError as e:
     print(f"Required package not installed: {e}")
@@ -39,18 +38,19 @@ def aces_tonemap(x: np.ndarray):
 
 class DNGProcessor:
     def __init__(self, input_folder: str, output_folder: str, 
-                 color_space: str = 'sRGB', max_workers: Optional[int] = None):
+                 color_space: str, save_format: str, max_workers: Optional[int] = None):
         self.input_folder = Path(input_folder)
         self.output_folder = Path(output_folder)
         self.color_space = color_space.lower()
+        self.save_format = save_format.lower()
         self.max_workers = max_workers or os.cpu_count()
         self.lock = threading.Lock()
         self.processed_count = 0
         self.total_files = 0
         
         # Validate color space
-        if self.color_space not in ['srgb', 'aces']:
-            raise ValueError("Color space must be 'sRGB' or 'ACES'")
+        if self.color_space not in ['srgb', 'aces', 'linear-rgb', 'linear-aces']:
+            raise ValueError("Color space must be 'sRGB', 'ACES', 'Linear-RGB', or 'Linear-ACES'")
     
     def setup_output_folders(self) -> None:
         """Setup output folder structure, ensuring it's empty or doesn't exist."""
@@ -80,31 +80,45 @@ class DNGProcessor:
             
             if self.color_space == 'srgb':
                 output_color = rawpy.ColorSpace.sRGB
-            else:
+            elif self.color_space == 'linear-rgb':
+                output_color = rawpy.ColorSpace.sRGB
+            elif self.color_space == 'aces':
+                output_color = rawpy.ColorSpace.ACES  # ACES2065-1
+            elif self.color_space == 'linear-aces':
                 output_color = rawpy.ColorSpace.ACES
-            
+            else:
+                raise ValueError(f"Unknown color space: {self.color_space}")
+
+            kwargs = {}
+            if self.color_space.startswith('linear-'):
+                kwargs['gamma'] = (1.0, 1.0)
+            if self.save_format == 'png16':
+                kwargs['output_bps'] = 16
+            else:
+                kwargs['output_bps'] = 8
+
             rgb_array = raw.postprocess(
                 output_color=output_color,
                 no_auto_bright=True,
                 use_camera_wb=True,
                 use_auto_wb=False,
-                # gamma=(1.0, 1.0),
                 fbdd_noise_reduction=rawpy.FBDDNoiseReductionMode.Full,
                 noise_thr=100,
-                output_bps=16
+                **kwargs
             )
 
             # brightness adjustment
-            target_l = 0.25
             if False:
-                # linear brightness, can lead to over-exposure
-                lut = target_l * np.arange(2**16) / np.mean(rgb_array)
-                lut = (255*aces_tonemap(lut)).astype(np.uint8)
-            else:
-                # gamma, works well for dark area, may reduce contrast
-                k = np.log(target_l) / (np.mean(np.log(np.clip(rgb_array, min=1))) - np.log(2**16))
-                lut = (255*np.linspace(0, 1, 2**16)**k).astype(np.uint8)
-            rgb_array = lut[rgb_array]
+                target_l = 0.25
+                if False:
+                    # linear brightness, can lead to over-exposure
+                    lut = target_l * np.arange(2**16) / np.mean(rgb_array)
+                    lut = (255*aces_tonemap(lut)).astype(np.uint8)
+                else:
+                    # gamma, works well for dark area, may reduce contrast
+                    k = np.log(target_l) / (np.mean(np.log(np.clip(rgb_array, min=1))) - np.log(2**16))
+                    lut = (255*np.linspace(0, 1, 2**16)**k).astype(np.uint8)
+                rgb_array = lut[rgb_array]
             
             metadata = {
                 'camera_wb': raw.camera_whitebalance,
@@ -143,27 +157,21 @@ class DNGProcessor:
                 
                 # Generate EXIF bytes
                 exif_bytes = piexif.dump(exif_dict)
-                
-                # Read the processed image and save with EXIF
-                img = Image.open(target_path)
-                img.save(target_path, "JPEG", quality=85, exif=exif_bytes, optimize=True)
+                piexif.insert(exif_bytes, str(target_path))
                 
         except Exception as e:
             print(f"Warning: Could not copy EXIF data for {source_path.name}: {e}")
             # Continue without EXIF data
     
-    def resize_image(self, image_array: np.ndarray, scale_factor: int) -> np.ndarray:
+    def resize_image(self, image: np.ndarray, scale_factor: int) -> np.ndarray:
         """Resize image by scale factor using high-quality resampling."""
         if scale_factor == 1:
-            return image_array
+            return image
         
-        # Convert to PIL Image for high-quality resizing
-        pil_image = Image.fromarray(image_array)
-        new_size = (pil_image.width // scale_factor, pil_image.height // scale_factor)
+        new_size = (image.shape[1] // scale_factor, image.shape[0] // scale_factor)
         
-        # Use Lanczos for high-quality downsampling
-        resized = pil_image.resize(new_size, Image.Resampling.LANCZOS)
-        return np.array(resized)
+        resized = cv2.resize(image, new_size, interpolation=cv2.INTER_CUBIC)
+        return resized
     
     def save_image_variants(self, image_array: np.ndarray, output_name: str) -> None:
         """Save image in different scales to appropriate subfolders."""
@@ -171,15 +179,16 @@ class DNGProcessor:
         subfolder_names = ['images', 'images_2', 'images_4']
         
         for scale_factor, subfolder in zip(scale_factors, subfolder_names):
-            # Resize image
             scaled_array = self.resize_image(image_array, scale_factor)
             
-            # Convert to PIL Image and save
-            pil_image = Image.fromarray(scaled_array)
-            output_path = self.output_folder / subfolder / f"{output_name}.jpg"
+            extension = 'jpg' if self.save_format == 'jpg' else 'png'
+            output_path = self.output_folder / subfolder / f"{output_name}.{extension}"
             
-            # Save with high quality
-            pil_image.save(output_path, "JPEG", quality=95, optimize=True)
+            scaled_array = cv2.cvtColor(scaled_array, cv2.COLOR_RGB2BGR)
+            if self.save_format == 'jpg':
+                cv2.imwrite(str(output_path), scaled_array, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            else:
+                cv2.imwrite(str(output_path), scaled_array)
     
     def process_single_file(self, dng_path: Path) -> bool:
         """Process a single DNG file."""
@@ -188,9 +197,11 @@ class DNGProcessor:
 
             output_name = dng_path.stem
             self.save_image_variants(rgb_array, output_name)
-
-            full_size_path = self.output_folder / 'images' / f"{output_name}.jpg"
-            self.copy_exif_data(dng_path, full_size_path)
+    
+            if self.save_format == 'jpg':
+                for subfolder in ['images', 'images_2', 'images_4']:
+                    full_size_path = self.output_folder / subfolder / f"{output_name}.jpg"
+                    self.copy_exif_data(dng_path, full_size_path)
             
             with self.lock:
                 self.processed_count += 1
@@ -245,8 +256,10 @@ def main():
     parser = argparse.ArgumentParser(description="Convert DNG files to JPG with multiple scales")
     parser.add_argument("input_folder", help="Input folder containing .dng files")
     parser.add_argument("output_folder", help="Output folder for processed images")
-    parser.add_argument("--color-space", choices=['sRGB', 'ACES'], default='sRGB',
+    parser.add_argument("--color-space", choices=['sRGB', 'ACES', 'linear-RGB', 'linear-ACES'], default='sRGB',
                        help="Color space for processing (default: sRGB)")
+    parser.add_argument("--save-format", choices=['jpg', 'png', 'png16'], default='jpg',
+                       help="Output image format (default: jpg)")
     parser.add_argument("--threads", type=int, default=None,
                        help="Number of processing threads (default: CPU count)")
     
@@ -262,6 +275,7 @@ def main():
         input_folder=args.input_folder,
         output_folder=args.output_folder,
         color_space=args.color_space,
+        save_format=args.save_format,
         max_workers=args.threads
     )
     

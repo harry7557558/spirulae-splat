@@ -2,12 +2,6 @@
 
 [ForceInline]
 [Differentiable]
-float3 log_map_image_1(float3 rgb, no_diff float t) {
-    return rgb * (1.0 - t) + (log(max(rgb, 0.0) + 1.0 / 255.0) + 1.0) * t;
-}
-
-[ForceInline]
-[Differentiable]
 float mean3(float3 a) {
     return (a.x + a.y + a.z) * (1.0 / 3.0);
 }
@@ -85,7 +79,6 @@ enum RawLossIndex {
 };
 
 enum LossWeightIndex {
-    RgbLogMapFactor,
     RgbSup,
     DepthSup,
     NormalSup,
@@ -124,10 +117,7 @@ float[RawLossIndex::length] per_pixel_losses(
 
     // RGB - L1 and L2
     losses[RawLossIndex::RgbL1] = weights[LossWeightIndex::RgbSup] *
-        float(mask) * l1_loss(
-            log_map_image_1(render_rgb, weights[LossWeightIndex::RgbLogMapFactor]),
-            log_map_image_1(ref_rgb, weights[LossWeightIndex::RgbLogMapFactor])
-        );
+        float(mask) * l1_loss(render_rgb, ref_rgb);
     losses[RawLossIndex::RgbL2] = float(mask) *
         clamp(l2_loss(render_rgb, ref_rgb), 0.0f, 1.0f);
 

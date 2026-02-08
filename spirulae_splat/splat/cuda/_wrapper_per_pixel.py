@@ -2,6 +2,7 @@ import torch
 from torch import Tensor
 
 from typing import Any, Callable, Literal, Optional, Union, Tuple
+import functools
 
 import gsplat.cuda._wrapper
 
@@ -54,23 +55,19 @@ class _BlendBackground(torch.autograd.Function):
         )
 
 
-def log_map_image(rgb: Tensor, t: float) -> Tensor:
-    if t <= 0.0:
-        return rgb
-    return _LogMapImage.apply(rgb, t)
+def linear_rgb_to_srgb(rgb: Tensor) -> Tensor:
+    return _LinearRgbToSrgb.apply(rgb)
 
-
-class _LogMapImage(torch.autograd.Function):
+class _LinearRgbToSrgb(torch.autograd.Function):
 
     @staticmethod
     def forward(
         ctx,
-        rgb, t
+        rgb
     ):
-        out_rgb = _make_lazy_cuda_func("log_map_image_forward")(rgb, t)
+        out_rgb = _make_lazy_cuda_func("linear_rgb_to_srgb_forward")(rgb)
 
         ctx.save_for_backward(rgb)
-        ctx.t = t
 
         return out_rgb
 
@@ -79,12 +76,47 @@ class _LogMapImage(torch.autograd.Function):
 
         (rgb,) = ctx.saved_tensors
 
-        return _make_lazy_cuda_func("log_map_image_backward")(
-            rgb, ctx.t,
-            v_out_rgb
+        return _make_lazy_cuda_func("linear_rgb_to_srgb_backward")(
+            rgb, v_out_rgb
         ), None
 
 
+@functools.cache
+def get_color_transform_matrix(in_color_space: str, out_color_space: str = "Rec.709", device="cuda"):
+    if out_color_space != "Rec.709":
+        raise ValueError(f"Unsupported output color space {out_color_space}")
+    # https://www.colour-science.org:8010/apps/rgb_colourspace_transformation_matrix
+    if in_color_space == "ACES2065-1":
+        return torch.tensor([
+            [2.5247180476, -1.1325619434, -0.3921561044],
+            [-0.2776344819, 1.3709123773, -0.0932778953],
+            [-0.0165202369, -0.1479259606, 1.1644461975],
+        ], device=device)
+    if in_color_space == "ACEScg":
+        return torch.tensor([
+            [1.7072552160, -0.6200352595, -0.0872199564],
+            [-0.1311566587, 1.1391010566, -0.0079443978],
+            [-0.0245499075, -0.1248045805, 1.1493544880],
+        ], device=device)
+    if in_color_space == "Rec.2020":
+        return torch.tensor([
+            [1.6604910021, -0.5876411388, -0.0728498633],
+            [-0.1245504745, 1.1328998971, -0.0083494226],
+            [-0.0181507634, -0.1005788980, 1.1187296614],
+        ], device=device)
+    if in_color_space == "AdobeRGB":
+        return torch.tensor([
+            [1.3983671735, -0.3983451225, 0.0000054016],
+            [-0.0000103176, 0.9999916496, -0.0000039459],
+            [-0.0000003709, -0.0429269510, 1.0429319656],
+        ], device=device)
+    if in_color_space == "DCI-P3":
+        return torch.tensor([
+            [1.1548337042, -0.1451763523, -0.0096573518],
+            [-0.0393300117, 1.0378282998, 0.0015017119],
+            [-0.0184786235, -0.0689101110, 1.0873887345],
+        ], device=device)
+    raise ValueError(f"Unsupported input color space {in_color_space}")
 
 
 def depth_to_normal(

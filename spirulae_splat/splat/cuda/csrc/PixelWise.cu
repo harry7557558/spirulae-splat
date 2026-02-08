@@ -148,9 +148,8 @@ blend_background_backward_tensor(
 // Log Map Image
 // ================
 
-__global__ void log_map_image_forward_kernel(
+__global__ void linear_rgb_to_srgb_forward_kernel(
     const TensorView<float, 4> in_rgb,
-    float t,
     TensorView<float, 4> out_rgb
 ) {
     unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -163,15 +162,14 @@ __global__ void log_map_image_forward_kernel(
 
     float3 rgb = in_rgb.load3(bid, y, x);
 
-    rgb = log_map_image(rgb, t);
+    rgb = linear_rgb_to_srgb(rgb);
 
     out_rgb.store3(bid, y, x, rgb);
 }
 
 
-__global__ void log_map_image_backward_kernel(
+__global__ void linear_rgb_to_srgb_backward_kernel(
     const TensorView<float, 4> in_rgb,
-    float t,
     const TensorView<float, 4> v_out_rgb,
     TensorView<float, 4> v_in_rgb
 ) {
@@ -187,7 +185,7 @@ __global__ void log_map_image_backward_kernel(
 
     float3 v_out = v_out_rgb.load3(bid, y, x);
 
-    float3 v_rgb = log_map_image_bwd(rgb, t, v_out);
+    float3 v_rgb = linear_rgb_to_srgb_bwd(rgb, v_out);
 
     v_in_rgb.store3(bid, y, x, v_rgb);
 }
@@ -195,9 +193,8 @@ __global__ void log_map_image_backward_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor log_map_image_forward_tensor(
-    at::Tensor &rgb,  // [B, H, W, 3]
-    float t
+at::Tensor linear_rgb_to_srgb_forward_tensor(
+    at::Tensor &rgb  // [B, H, W, 3]
 ) {
     DEVICE_GUARD(rgb);
     CHECK_CUDA(rgb);
@@ -208,8 +205,8 @@ at::Tensor log_map_image_forward_tensor(
 
     at::Tensor out_rgb = at::empty({b, h, w, 3}, rgb.options());
 
-    log_map_image_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<float, 4>(rgb), t,
+    linear_rgb_to_srgb_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
+        tensor2view<float, 4>(rgb),
         tensor2view<float, 4>(out_rgb)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -219,9 +216,8 @@ at::Tensor log_map_image_forward_tensor(
 
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor log_map_image_backward_tensor(
+at::Tensor linear_rgb_to_srgb_backward_tensor(
     at::Tensor &rgb,  // [B, H, W, 3]
-    float t,
     at::Tensor &v_out_rgb  // [B, H, W, 3]
 ) {
     DEVICE_GUARD(rgb);
@@ -232,8 +228,8 @@ at::Tensor log_map_image_backward_tensor(
 
     at::Tensor v_rgb = at::empty({b, h, w, 3}, rgb.options());
 
-    log_map_image_backward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<float, 4>(rgb), t,
+    linear_rgb_to_srgb_backward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
+        tensor2view<float, 4>(rgb),
         tensor2view<float, 4>(v_out_rgb),
         tensor2view<float, 4>(v_rgb)
     );

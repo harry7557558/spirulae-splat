@@ -43,7 +43,7 @@ from spirulae_splat.strategy import DefaultStrategy, MCMCStrategy, OpaqueStrateg
 from spirulae_splat.splat._camera import _Camera
 
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
-from spirulae_splat.splat.cuda._wrapper_per_pixel import blend_background
+from spirulae_splat.splat.cuda._wrapper_per_pixel import blend_background, linear_rgb_to_srgb, get_color_transform_matrix
 from spirulae_splat.splat.cuda import (
     svhash_create_initial_volume,
     svhash_get_voxels
@@ -120,8 +120,6 @@ class SpirulaeModelConfig(ModelConfig):
     """Weight of ssim loss; 0.2 for optimal PSNR, higher for better visual quality"""
     lpips_lambda: float = 0.0
     """Weight of lpips loss for better perceptual quality; Note that this can make training much slower"""
-    log_map_factor: float = 0.0
-    """Weight of logarithm map for image loss (L1 and SSIM); may give more details on dark areas for night/HDR captures"""
     use_camera_optimizer: bool = False
     """Whether to use camera optimizer
         Note: this only works well in patch batching mode"""
@@ -228,7 +226,7 @@ class SpirulaeModelConfig(ModelConfig):
     """If True, use bilateral grid for depth and normal (e.g. AI generated biased ones)"""
     bilagrid_shape_geometry: Tuple[int, int, int] = (8, 8, 4)
     """Shape of the bilateral grid for depth and normal (X, Y, W)"""
-    use_ppisp: bool = True
+    use_ppisp: bool = False
     """If True, use the per-pixel ISP model (PPISP) to handle per-pixel color distortions."""
     ppisp_reg_exposure_mean: float = 1.0
     """Encourage exposure mean ~ 0 to resolve SH <-> exposure ambiguity in PPISP."""
@@ -242,6 +240,11 @@ class SpirulaeModelConfig(ModelConfig):
     """Encourage color correction mean ~ 0 across frames in PPISP."""
     ppisp_reg_crf_channel_var: float = 0.1
     """Encourage similar CRF parameters across RGB channels in PPISP."""
+    use_linear_color_space: bool = False
+    """Whether to assume training images are in linear color space."""
+    image_color_space: Literal[None, "ACES2065-1", "ACEScg", "Rec.2020", "AdobeRGB", "DCI-P3"] = None
+    """Color space of input images. If set, this only affects displayed images during training, not the final output.
+        Note that tonemap is not applied for displayed images."""
 
     use_3dgs: bool = True
     """Must be True, kept for backward compatibility"""
@@ -479,6 +482,8 @@ class SpirulaeModel(Model):
             self.background_color = torch.tensor([0.5, 0.5, 0.5])
         else:
             self.background_color = get_color(self.config.background_color)
+        if self.config.use_linear_color_space:
+            self.background_color = self.background_color ** 2.2
         self.background_color = torch.nn.Parameter(self.background_color)
         if self.config.train_background_color:
             dim_sh = num_sh_bases(self.config.background_sh_degree)
@@ -1111,6 +1116,16 @@ class SpirulaeModel(Model):
                 outputs["normal"] = 0.5+0.5*outputs["normal"]
             if "depth_normal" in outputs:
                 outputs["depth_normal"] = 0.5+0.5*outputs["depth_normal"]
+            if self.config.use_linear_color_space or self.config.image_color_space != None:
+                outputs["rgb_raw"] = outputs["rgb"]
+                for key in ['rgb', 'background']:
+                    if key not in outputs:
+                        continue
+                    if self.config.image_color_space != None:
+                        color_transform = get_color_transform_matrix(self.config.image_color_space)
+                        outputs[key] = torch.matmul(outputs[key], color_transform.T).clip(0, 1)
+                    if self.config.use_linear_color_space:
+                        outputs[key] = linear_rgb_to_srgb(outputs[key])
             for key in outputs:
                 outputs[key] = outputs[key].squeeze(0)
 

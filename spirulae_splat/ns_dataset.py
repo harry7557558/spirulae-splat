@@ -134,16 +134,21 @@ class SpirulaeDataset(InputDataset):
             image_idx: The image index in the dataset.
         """
         image_filename = self._dataparser_outputs.image_filenames[image_idx]
-        image = cv2.cvtColor(cv2.imread(image_filename), cv2.COLOR_BGR2RGB)
+        image = cv2.imread(image_filename, cv2.IMREAD_UNCHANGED)
+        # image = cv2.cvtColor(cv2.imread(image_filename), cv2.COLOR_BGR2RGB)
         if self.scale_factor != 1.0:
             width, height, _ = image.shape
             newsize = (int(width * self.scale_factor), int(height * self.scale_factor))
             image = cv2.resize(image, newsize, cv2.INTER_LINEAR)
-        image = np.array(image, dtype="uint8")  # shape is (h, w) or (h, w, 3 or 4)
         if len(image.shape) == 2:
-            image = image[:, :, None].repeat(3, axis=2)
+            image = image[:, :, None]
+        if image.shape[2] == 1:
+            image = np.repeat(image, 3, axis=2)
         assert len(image.shape) == 3
-        assert image.dtype == np.uint8
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB if image.shape[2] == 3 else cv2.COLOR_BGRA2RGBA)
+        if image.dtype == np.bool_:
+            image = image.astype(np.uint8) * 255
+        assert image.dtype in [np.uint8, np.uint16], f"Unsupported image dtype {image.dtype} for image {image_filename}"
         assert image.shape[2] in [3, 4], f"Image shape of {image.shape} is in correct."
         return image
 
@@ -153,7 +158,9 @@ class SpirulaeDataset(InputDataset):
         Args:
             image_idx: The image index in the dataset.
         """
-        image = torch.from_numpy(self.get_numpy_image(image_idx).astype("float32") / 255.0)
+        image = self.get_numpy_image(image_idx)
+        image = image.astype(np.float32) / (65535.0 if image.dtype == np.uint16 else 255.0)
+        image = torch.from_numpy(image.astype("float32"))
         if self._dataparser_outputs.alpha_color is not None and image.shape[-1] == 4:
             assert (self._dataparser_outputs.alpha_color >= 0).all() and (
                 self._dataparser_outputs.alpha_color <= 1
@@ -162,20 +169,30 @@ class SpirulaeDataset(InputDataset):
         return image
 
     def get_image_uint8(self, image_idx: int) -> UInt8[Tensor, "image_height image_width num_channels"]:
-        """Returns a 3 channel image in uint8 torch.Tensor.
+        """Returns a 3 channel image in torch.Tensor, in original format (uint8 or uint16).
+            Note that this may return a uint16 image if the input is uint16, function name is kept for backward compatibility.
 
         Args:
             image_idx: The image index in the dataset.
         """
-        image = torch.from_numpy(self.get_numpy_image(image_idx))
+        image = self.get_numpy_image(image_idx)
+        if image.dtype == np.uint16:
+            try:
+                # test if torch supports uint16, which was added in PyTorch 2.3
+                torch.tensor([0], dtype=torch.uint16)
+                image_dtype = torch.uint16
+            except:
+                raise NotImplementedError("16-bit images are not supported in this version of PyTorch. Please upgrade to PyTorch 2.3 or later, or convert your images to 8-bit.")
+        image = torch.from_numpy(image)
         if self._dataparser_outputs.alpha_color is not None and image.shape[-1] == 4:
             assert (self._dataparser_outputs.alpha_color >= 0).all() and (
                 self._dataparser_outputs.alpha_color <= 1
             ).all(), "alpha color given is out of range between [0, 1]."
-            image = image[:, :, :3] * (image[:, :, -1:] / 255.0) + 255.0 * self._dataparser_outputs.alpha_color * (
-                1.0 - image[:, :, -1:] / 255.0
+            max_value = 65535.0 if image.dtype == torch.uint16 else 255.0
+            image = image[:, :, :3] * (image[:, :, -1:] / max_value) + max_value * self._dataparser_outputs.alpha_color * (
+                1.0 - image[:, :, -1:] / max_value
             )
-            image = torch.clamp(image, min=0, max=255).to(torch.uint8)
+            image = torch.clamp(image, min=0, max=max_value).to(image.dtype)
         return image
 
     def get_data(self, image_idx: int, image_type: Literal["uint8", "float32"] = "float32", _is_viewer=True, _load_auxiliary=True, _viewer_thumbnail_cache={}) -> Dict:
@@ -192,6 +209,8 @@ class SpirulaeDataset(InputDataset):
                 _viewer_thumbnail_cache_1 = []
                 def load_data(idx):
                     data = self.get_data(idx, image_type, _is_viewer=False, _load_auxiliary=False)
+                    if data["image"].dtype == torch.uint16:
+                        data["image"] = (data["image"] / 256).to(torch.uint8)
                     if 'mask' in data:
                         # background = torch.ones_like(data['image']) * [0.125, 32][image_type == 'uint8']
                         background = torch.ones_like(data['image']) * torch.tensor([(0,0,1), (0,0,255)][image_type == 'uint8']).to(data['image'])

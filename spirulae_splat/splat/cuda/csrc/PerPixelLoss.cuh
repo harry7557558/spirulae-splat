@@ -33,7 +33,6 @@ enum class RawLossIndex {
 };
 
 enum class LossWeightIndex {
-    RgbLogMapFactor,
     RgbSup,
     DepthSup,
     NormalSup,
