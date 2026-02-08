@@ -237,8 +237,8 @@ def metashape_to_json(
                     s = float(scale.text)
 
                 m = np.eye(4)
-                m[:3, :3] = r
-                m[:3, 3] = t / s
+                m[:3, :3] = r * s
+                m[:3, 3] = t
                 component_dict[component.get("id")] = m
 
     image_filename_matcher = StringMatcher(image_filenames)
@@ -286,6 +286,7 @@ def metashape_to_json(
         component_id = camera.get("component_id")
         if component_id in component_dict:
             transform = component_dict[component_id] @ transform
+            transform[:3, :3] /= np.cbrt(np.linalg.det(transform[:3, :3]))
 
         # Metashape camera is looking towards -Z, +X is to the right and +Y is to the top/up of the first cam
         # Rotate the scene according to nerfstudio convention
