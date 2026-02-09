@@ -109,6 +109,8 @@ def undistort_image(input_path: str, output_path: str, intrins: dict,
     mask = (~black_pixel_mask).astype(np.uint8)  # 1 for valid pixels, 0 for black borders
     if mask.ndim == 2:
         mask = mask[..., np.newaxis]  # [H, W, 1]
+    # return None
+    return mask  # TODO: Nerfstudio requires masks to either exist for all frames or none
     if np.count_nonzero(mask) < mask.size:
         return mask
     return None
@@ -172,7 +174,7 @@ def main():
     parser.add_argument("input_dir", help="Input dataset directory")
     parser.add_argument("output_dir", help="Output dataset directory (must be empty or non-existing)")
     parser.add_argument("--jpeg_quality", type=int, help="JPEG quality (1-100)")
-    # parser.add_argument("--max_workers", type=Optional[int], default=None, help="Maximum number of worker threads for parallel processing")
+    parser.add_argument("--max_workers", type=int, help="Maximum number of worker threads for parallel processing")
     
     args = parser.parse_args()
     
@@ -275,8 +277,8 @@ def main():
         
         return new_frame
     
-    # with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
-    with ThreadPoolExecutor() as executor:
+    with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+    # with ThreadPoolExecutor() as executor:
         for new_frame in tqdm(
             executor.map(process_one_frame, transforms['frames']),
             total=len(transforms["frames"]),

@@ -606,6 +606,41 @@ at::Tensor ray_depth_to_linear_depth_backward_tensor(
 // Distort / Undistort
 // ================
 
+__device__ float get_pixel_bilinear(
+    const TensorView<float, 4> image,  // [B, H, W, C]
+    uint32_t bid,
+    uint32_t cid,
+    float x,
+    float y
+) {
+    const uint W = image.shape[2],
+        H = image.shape[1];
+    int x0 = (int)floorf(x);
+    int x1 = x0 + 1;
+    int y0 = (int)floorf(y);
+    int y1 = y0 + 1;
+    float wx1 = x - x0;
+    float wx0 = 1.0f - wx1;
+    float wy1 = y - y0;
+    float wy0 = 1.0f - wy1;
+
+    float c00 = (x0 >= 0 && x0 < W && y0 >= 0 && y0 < H) ?
+        image.at(bid, y0, x0, cid) : 0.0f;
+    float c10 = (x1 >= 0 && x1 < W && y0 >= 0 && y0 < H) ?
+        image.at(bid, y0, x1, cid) : 0.0f;
+    float c01 = (x0 >= 0 && x0 < W && y1 >= 0 && y1 < H) ?
+        image.at(bid, y1, x0, cid) : 0.0f;
+    float c11 = (x1 >= 0 && x1 < W && y1 >= 0 && y1 < H) ?
+        image.at(bid, y1, x1, cid) : 0.0f;
+
+    float c = 0.0f;
+    c += c00 * (wx0 * wy0);
+    c += c10 * (wx1 * wy0);
+    c += c01 * (wx0 * wy1);
+    c += c11 * (wx1 * wy1);
+    return c;
+}
+
 template<bool is_undistort>
 __global__ void distort_image_kernel(
     gsplat::CameraModelType camera_model,
@@ -640,15 +675,10 @@ __global__ void distort_image_kernel(
         if (!undistort_point(uv, camera_model == gsplat::CameraModelType::FISHEYE, &dist_coeffs, &uv))
             return;
     }
-    int i1 = (int)floor(uv.x*fx+cx);
-    int j1 = (int)floor(uv.y*fy+cy);
 
     // Process
-    if (i1 < 0 || i1 >= W || j1 < 0 || j1 >= H)
-        return;
     for (int c = 0; c < C; c++) {
-        // TODO: bilinear/bicubic interpolation
-        out_image.at(bid, j, i, c) = in_image.at(bid, j1, i1, c);
+        out_image.at(bid, j, i, c) = get_pixel_bilinear(in_image, bid, c, uv.x*fx+cx, uv.y*fy+cy);
     }
 }
 
