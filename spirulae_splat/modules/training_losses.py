@@ -183,16 +183,19 @@ class _ComputePPISPRegularization(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
+        param_type: str,
         ppisp_params: torch.Tensor,  # [B, PPISP_NUM_PARAMS]
         loss_weights: List[float],
     ):
         losses, raw_losses = _C.compute_ppsip_regularization_forward(
             ppisp_params,
-            loss_weights
+            loss_weights,
+            param_type
         )
 
         ctx.loss_weights = loss_weights
         ctx.save_for_backward(ppisp_params, raw_losses)
+        ctx.param_type = param_type
 
         return losses
 
@@ -204,14 +207,19 @@ class _ComputePPISPRegularization(torch.autograd.Function):
             ppisp_params,
             ctx.loss_weights,
             raw_losses,
-            v_losses.contiguous()
+            v_losses.contiguous(),
+            ctx.param_type
         )
 
-        return v_ppisp_params, None
+        return None, v_ppisp_params, None
 
 
 DEFAULT_PPISP_PARAMS = [
     [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.013658988289535046, 0.013658988289535046, 0.37816452980041504, 0.0, 0.013658988289535046, 0.013658988289535046, 0.37816452980041504, 0.0, 0.013658988289535046, 0.013658988289535046, 0.37816452980041504, 0.0]
+]
+
+DEFAULT_PPISP_PARAMS_RQS = [
+    [0.0] * 39
 ]
 
 class SplatTrainingLosses(torch.nn.Module):
@@ -247,7 +255,9 @@ class SplatTrainingLosses(torch.nn.Module):
                 grid_W=self.config.bilagrid_shape_geometry[2],
             )
         if self.config.use_ppisp:
-            self.ppisp_params = torch.Tensor(DEFAULT_PPISP_PARAMS).repeat(self.num_train_data, 1)
+            self.ppisp_params = torch.Tensor(
+                DEFAULT_PPISP_PARAMS_RQS if self.config.ppisp_param_type == "rqs" else DEFAULT_PPISP_PARAMS
+            ).repeat(self.num_train_data, 1)
             self.ppisp_params = torch.nn.Parameter(self.ppisp_params)
 
         self.lpips_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32
@@ -509,6 +519,7 @@ class SplatTrainingLosses(torch.nn.Module):
             indices = torch.tensor(camera.metadata["cam_idx"]).flatten().to(device)
             ppisp_param = self.ppisp_params[indices, :]
             pred_rgb = apply_ppisp(
+                self.config.ppisp_param_type,
                 pred_rgb, ppisp_param,
                 intrins=intrins,
                 actual_image_width=camera.metadata.get('actual_width', None),
@@ -739,6 +750,7 @@ class SplatTrainingLosses(torch.nn.Module):
                 self.config.ppisp_reg_crf_channel_var,
             ]
             ppisp_reg_loss = _ComputePPISPRegularization.apply(
+                self.config.ppisp_param_type,
                 self.ppisp_params,
                 ppisp_loss_weights
             )

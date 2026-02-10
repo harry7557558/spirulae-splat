@@ -39,6 +39,13 @@ struct CRFPPISPChannelParams : IDifferentiable {
     float center;   // Center point (before sigmoid)
 };
 
+struct RQSCRFPPISPChannelParams : IDifferentiable {
+    float g0;  // gradient at x=0 (before exp)
+    float g1;  // gradient at x=1 (before exp)
+    float x0;  // x0 (before sigmoid)
+    float y0;  // y0 (before sigmoid)
+    float gc;  // gradient at x=x0 (before exp)
+};
 
 // ----------------------------------------------------------------------------
 // Exposure Compensation
@@ -232,6 +239,43 @@ float3 apply_crf_ppisp(float3 rgb_in, CRFPPISPChannelParams crf_params[3]) {
     return rgb_out;
 }
 
+[ForceInline]
+[Differentiable]
+float3 apply_rqs_crf_ppisp(float3 rgb_in, RQSCRFPPISPChannelParams crf_params[3]) {
+    float3 rgb_clamped = clamp(rgb_in, 0.0f, 1.0f);
+    float3 rgb_out;
+
+    [ForceUnroll]
+    for (int i = 0; i < 3; i++) {
+        float x = (i == 0) ? rgb_clamped.x : (i == 1) ? rgb_clamped.y : rgb_clamped.z;
+        const RQSCRFPPISPChannelParams params = crf_params[i];
+
+        // Transform parameters
+        float g0 = exp(params.g0);
+        float g1 = exp(params.g1);
+        float x0 = 1.0f / (1.0f + exp(-params.x0));
+        float y0 = 1.0f / (1.0f + exp(-params.y0));
+        float gc = exp(params.gc);
+
+        // piecewise RQS
+        float y;
+        if (x < x0) {
+            float s0 = y0 / x0;
+            float t0 = x / x0;
+            y = y0 * (s0 * t0 * t0 + g0 * t0 * (1.0f - t0)) /
+                (s0 + (g0 + gc - 2.0f * s0) * t0 * (1.0f - t0));
+        } else {
+            float s1 = (1.0f - y0) / (1.0f - x0);
+            float t1 = (x - x0) / (1.0f - x0);
+            y = y0 + (1.0f - y0) * (s1 * t1 * t1 + gc * t1 * (1.0f - t1)) /
+                (s1 + (gc + g1 - 2.0f * s1) * t1 * (1.0f - t1));
+        }
+
+        rgb_out[i] = y;
+    }
+
+    return rgb_out;
+}
 
 // Put together
 
@@ -243,6 +287,15 @@ struct PPISPParams : IDifferentiable {
 };
 
 static const int PPISP_NUM_PARAMS = 1 + 5 * 3 + 8 + 4 * 3;
+
+struct PPISPParamsRQS : IDifferentiable {
+    float exposure;
+    VignettingChannelParams vignette_params[3]; // 5 x 3 params
+    ColorPPISPParams color_params;  // 8 params
+    RQSCRFPPISPChannelParams crf_params[3];  // 5 x 3 params
+};
+
+static const int PPISP_RQS_NUM_PARAMS = 1 + 5 * 3 + 8 + 5 * 3;
 
 [ForceInline]
 [Differentiable]
@@ -272,6 +325,39 @@ PPISPParams get_ppisp_params(float[PPISP_NUM_PARAMS] params) {
         p.crf_params[i].shoulder = params[idx++];
         p.crf_params[i].gamma = params[idx++];
         p.crf_params[i].center = params[idx++];
+    }
+    return p;
+}
+
+[ForceInline]
+[Differentiable]
+PPISPParamsRQS get_ppisp_rqs_params(float[PPISP_RQS_NUM_PARAMS] params) {
+    PPISPParamsRQS p;
+    int idx = 0;
+    p.exposure = params[idx++];
+    [ForceUnroll]
+    for (int i = 0; i < 3; i++) {
+        p.vignette_params[i].cx = params[idx++];
+        p.vignette_params[i].cy = params[idx++];
+        p.vignette_params[i].alpha0 = params[idx++];
+        p.vignette_params[i].alpha1 = params[idx++];
+        p.vignette_params[i].alpha2 = params[idx++];
+    }
+    p.color_params.b.x = params[idx++];
+    p.color_params.b.y = params[idx++];
+    p.color_params.r.x = params[idx++];
+    p.color_params.r.y = params[idx++];
+    p.color_params.g.x = params[idx++];
+    p.color_params.g.y = params[idx++];
+    p.color_params.n.x = params[idx++];
+    p.color_params.n.y = params[idx++];
+    [ForceUnroll]
+    for (int i = 0; i < 3; i++) {
+        p.crf_params[i].g0 = params[idx++];
+        p.crf_params[i].g1 = params[idx++];
+        p.crf_params[i].x0 = params[idx++];
+        p.crf_params[i].y0 = params[idx++];
+        p.crf_params[i].gc = params[idx++];
     }
     return p;
 }
@@ -308,6 +394,39 @@ float[PPISP_NUM_PARAMS] from_ppisp_params(PPISPParams p) {
     return params;
 }
 
+[ForceInline]
+[Differentiable]
+float[PPISP_RQS_NUM_PARAMS] from_ppisp_rqs_params(PPISPParamsRQS p) {
+    float params[PPISP_RQS_NUM_PARAMS];
+    int idx = 0;
+    params[idx++] = p.exposure;
+    [ForceUnroll]
+    for (int i = 0; i < 3; i++) {
+        params[idx++] = p.vignette_params[i].cx;
+        params[idx++] = p.vignette_params[i].cy;
+        params[idx++] = p.vignette_params[i].alpha0;
+        params[idx++] = p.vignette_params[i].alpha1;
+        params[idx++] = p.vignette_params[i].alpha2;
+    }
+    params[idx++] = p.color_params.b.x;
+    params[idx++] = p.color_params.b.y;
+    params[idx++] = p.color_params.r.x;
+    params[idx++] = p.color_params.r.y;
+    params[idx++] = p.color_params.g.x;
+    params[idx++] = p.color_params.g.y;
+    params[idx++] = p.color_params.n.x;
+    params[idx++] = p.color_params.n.y;
+    [ForceUnroll]
+    for (int i = 0; i < 3; i++) {
+        params[idx++] = p.crf_params[i].g0;
+        params[idx++] = p.crf_params[i].g1;
+        params[idx++] = p.crf_params[i].x0;
+        params[idx++] = p.crf_params[i].y0;
+        params[idx++] = p.crf_params[i].gc;
+    }
+    return params;
+}
+
 [CudaDeviceExport]
 [Differentiable]
 float3 apply_ppisp(float3 rgb_in, no_diff float2 pix_coord, no_diff float2 image_center, no_diff float2 img_size, float[PPISP_NUM_PARAMS] params) {
@@ -317,6 +436,18 @@ float3 apply_ppisp(float3 rgb_in, no_diff float2 pix_coord, no_diff float2 image
     rgb = apply_vignetting(rgb, p.vignette_params, pix_coord, image_center, img_size);
     rgb = apply_color_correction_ppisp(rgb, p.color_params);
     rgb = apply_crf_ppisp(rgb, p.crf_params);
+    return rgb;
+}
+
+[CudaDeviceExport]
+[Differentiable]
+float3 apply_ppisp_rqs(float3 rgb_in, no_diff float2 pix_coord, no_diff float2 image_center, no_diff float2 img_size, float[PPISP_RQS_NUM_PARAMS] params) {
+    PPISPParamsRQS p = get_ppisp_rqs_params(params);
+    float3 rgb = rgb_in;
+    rgb = apply_exposure(rgb, p.exposure);
+    rgb = apply_vignetting(rgb, p.vignette_params, pix_coord, image_center, img_size);
+    rgb = apply_color_correction_ppisp(rgb, p.color_params);
+    rgb = apply_rqs_crf_ppisp(rgb, p.crf_params);
     return rgb;
 }
 
@@ -338,6 +469,23 @@ void apply_ppisp_vjp(
     grad_params = dp_params.d;
 }
 
+[CudaDeviceExport]
+void apply_ppisp_rqs_vjp(
+    float3 rgb_in, float2 pix_coord, float2 image_center, float2 img_size,
+    float[PPISP_RQS_NUM_PARAMS] params,
+    float3 grad_out,
+    out float3 grad_rgb_in,
+    out float[PPISP_RQS_NUM_PARAMS] grad_params
+) {
+    DifferentialPair<float3> dp_rgb_in = diffPair(rgb_in);
+    DifferentialPair<float[PPISP_RQS_NUM_PARAMS]> dp_params = diffPair(params);
+    bwd_diff(apply_ppisp_rqs)(
+        dp_rgb_in, pix_coord, image_center, img_size, dp_params,
+        grad_out
+    );
+    grad_rgb_in = dp_rgb_in.d;
+    grad_params = dp_params.d;
+}
 
 // Regularization
 
@@ -364,6 +512,33 @@ enum RawPPISPRegLossIndex {
     SumCRFShoulderChannelVariance,
     SumCRFGammaChannelVariance,
     SumCRFCenterChannelVariance,
+    length
+};
+
+enum RawPPISPRegLossIndexRQS {
+    SumExposure,
+    SumVignettingCrSquared,
+    SumVignettingAlpha0Relu,
+    SumVignettingAlpha1Relu,
+    SumVignettingAlpha2Relu,
+    SumVignettingCxChannelVariance,
+    SumVignettingCyChannelVariance,
+    SumVignettingAlpha0ChannelVariance,
+    SumVignettingAlpha1ChannelVariance,
+    SumVignettingAlpha2ChannelVariance,
+    SumColorBx,
+    SumColorBy,
+    SumColorRx,
+    SumColorRy,
+    SumColorGx,
+    SumColorGy,
+    SumColorNx,
+    SumColorNy,
+    SumCRFG0ChannelVariance,
+    SumCRFG1ChannelVariance,
+    SumCRFX0ChannelVariance,
+    SumCRFY0ChannelVariance,
+    SumCRFGcChannelVariance,
     length
 };
 
@@ -447,6 +622,77 @@ float[RawPPISPRegLossIndex::length] compute_raw_ppisp_regularization_loss(
 }
 
 [CudaDeviceExport]
+[Differentiable]
+float[RawPPISPRegLossIndexRQS::length] compute_raw_ppisp_rqs_regularization_loss(
+    float[PPISP_RQS_NUM_PARAMS] params
+) {
+    PPISPParamsRQS p = get_ppisp_rqs_params(params);
+    float losses[RawPPISPRegLossIndexRQS::length] = { 0.0f };
+    // Exposure
+    losses[RawPPISPRegLossIndexRQS::SumExposure] = p.exposure;
+
+    // Vignetting
+    losses[RawPPISPRegLossIndexRQS::SumVignettingCrSquared] =
+        p.vignette_params[0].cx * p.vignette_params[0].cx + p.vignette_params[0].cy * p.vignette_params[0].cy +
+        p.vignette_params[1].cx * p.vignette_params[1].cx + p.vignette_params[1].cy * p.vignette_params[1].cy +
+        p.vignette_params[2].cx * p.vignette_params[2].cx + p.vignette_params[2].cy * p.vignette_params[2].cy;
+    losses[RawPPISPRegLossIndexRQS::SumVignettingAlpha0Relu] =
+        max(0.0f, p.vignette_params[0].alpha0) +
+        max(0.0f, p.vignette_params[1].alpha0) +
+        max(0.0f, p.vignette_params[2].alpha0);
+    losses[RawPPISPRegLossIndexRQS::SumVignettingAlpha1Relu] =
+        max(0.0f, p.vignette_params[0].alpha1) +
+        max(0.0f, p.vignette_params[1].alpha1) +
+        max(0.0f, p.vignette_params[2].alpha1);
+    losses[RawPPISPRegLossIndexRQS::SumVignettingAlpha2Relu] =
+        max(0.0f, p.vignette_params[0].alpha2) +
+        max(0.0f, p.vignette_params[1].alpha2) +
+        max(0.0f, p.vignette_params[2].alpha2);
+    losses[RawPPISPRegLossIndexRQS::SumVignettingCxChannelVariance] =
+        varp_of_3(p.vignette_params[0].cx, p.vignette_params[1].cx, p.vignette_params[2].cx);
+    losses[RawPPISPRegLossIndexRQS::SumVignettingCyChannelVariance] =
+        varp_of_3(p.vignette_params[0].cy, p.vignette_params[1].cy, p.vignette_params[2].cy);
+    losses[RawPPISPRegLossIndexRQS::SumVignettingAlpha0ChannelVariance] =
+        varp_of_3(p.vignette_params[0].alpha0, p.vignette_params[1].alpha0, p.vignette_params[2].alpha0);
+    losses[RawPPISPRegLossIndexRQS::SumVignettingAlpha1ChannelVariance] =
+        varp_of_3(p.vignette_params[0].alpha1, p.vignette_params[1].alpha1, p.vignette_params[2].alpha1);
+    losses[RawPPISPRegLossIndexRQS::SumVignettingAlpha2ChannelVariance] =
+        varp_of_3(p.vignette_params[0].alpha2, p.vignette_params[1].alpha2, p.vignette_params[2].alpha2);
+
+    // Color
+    const static float2x2 zca_b = float2x2(0.0480542f, -0.0043631f, -0.0043631f, 0.0481283f);
+    const static float2x2 zca_r = float2x2(0.0580570f, -0.0179872f, -0.0179872f, 0.0431061f);
+    const static float2x2 zca_g = float2x2(0.0433336f, -0.0180537f, -0.0180537f, 0.0580500f);
+    const static float2x2 zca_n = float2x2(0.0128369f, -0.0034654f, -0.0034654f, 0.0128158f);
+    float2 bd = mul(zca_b, p.color_params.b);
+    float2 rd = mul(zca_r, p.color_params.r);
+    float2 gd = mul(zca_g, p.color_params.g);
+    float2 nd = mul(zca_n, p.color_params.n);
+    losses[RawPPISPRegLossIndexRQS::SumColorBx] = bd.x;
+    losses[RawPPISPRegLossIndexRQS::SumColorBy] = bd.y;
+    losses[RawPPISPRegLossIndexRQS::SumColorRx] = rd.x;
+    losses[RawPPISPRegLossIndexRQS::SumColorRy] = rd.y;
+    losses[RawPPISPRegLossIndexRQS::SumColorGx] = gd.x;
+    losses[RawPPISPRegLossIndexRQS::SumColorGy] = gd.y;
+    losses[RawPPISPRegLossIndexRQS::SumColorNx] = nd.x;
+    losses[RawPPISPRegLossIndexRQS::SumColorNy] = nd.y;
+
+    // CRF
+    losses[RawPPISPRegLossIndexRQS::SumCRFG0ChannelVariance] =
+        varp_of_3(p.crf_params[0].g0, p.crf_params[1].g0, p.crf_params[2].g0);
+    losses[RawPPISPRegLossIndexRQS::SumCRFG1ChannelVariance] =
+        varp_of_3(p.crf_params[0].g1, p.crf_params[1].g1, p.crf_params[2].g1);
+    losses[RawPPISPRegLossIndexRQS::SumCRFX0ChannelVariance] =
+        varp_of_3(p.crf_params[0].x0, p.crf_params[1].x0, p.crf_params[2].x0);
+    losses[RawPPISPRegLossIndexRQS::SumCRFY0ChannelVariance] =
+        varp_of_3(p.crf_params[0].y0, p.crf_params[1].y0, p.crf_params[2].y0);
+    losses[RawPPISPRegLossIndexRQS::SumCRFGcChannelVariance] =
+        varp_of_3(p.crf_params[0].gc, p.crf_params[1].gc, p.crf_params[2].gc);
+
+    return losses;
+}
+
+[CudaDeviceExport]
 float[PPISP_NUM_PARAMS] compute_raw_ppisp_regularization_loss_vjp(
     float[PPISP_NUM_PARAMS] params,
     float[RawPPISPRegLossIndex::length] grad_out
@@ -458,6 +704,17 @@ float[PPISP_NUM_PARAMS] compute_raw_ppisp_regularization_loss_vjp(
     return dp_params.d;
 }
 
+[CudaDeviceExport]
+float[PPISP_RQS_NUM_PARAMS] compute_raw_ppisp_rqs_regularization_loss_vjp(
+    float[PPISP_RQS_NUM_PARAMS] params,
+    float[RawPPISPRegLossIndexRQS::length] grad_out
+) {
+    DifferentialPair<float[PPISP_RQS_NUM_PARAMS]> dp_params = diffPair(params);
+    bwd_diff(compute_raw_ppisp_rqs_regularization_loss)(
+        dp_params, grad_out
+    );
+    return dp_params.d;
+}
 
 enum PPISPRegLossIndex {
     ExposureMean,
@@ -550,6 +807,76 @@ float[PPISPRegLossIndex::length] compute_ppisp_regularization_loss(
 }
 
 [CudaDeviceExport]
+[Differentiable]
+float[PPISPRegLossIndex::length] compute_ppisp_rqs_regularization_loss(
+    float[RawPPISPRegLossIndexRQS::length] raw_losses,
+    int num_cameras,
+    no_diff float[PPISPRegLossIndex::length] loss_weights
+) {
+    float losses[PPISPRegLossIndex::length];
+
+    // Exposure mean
+    losses[PPISPRegLossIndex::ExposureMean] =
+        smooth_l1_loss(raw_losses[RawPPISPRegLossIndexRQS::SumExposure] / num_cameras, 0.1f);
+
+    // Vignetting center (cx, cy close to 0)
+    losses[PPISPRegLossIndex::VignettingCenter] =
+        raw_losses[RawPPISPRegLossIndexRQS::SumVignettingCrSquared] / (3.0f * num_cameras);
+    // Vignetting non-positivity (alpha0, alpha1, alpha2 <= 0)
+    losses[PPISPRegLossIndex::VignettingNonPositivity] = (
+        raw_losses[RawPPISPRegLossIndexRQS::SumVignettingAlpha0Relu] +
+        raw_losses[RawPPISPRegLossIndexRQS::SumVignettingAlpha1Relu] +
+        raw_losses[RawPPISPRegLossIndexRQS::SumVignettingAlpha2Relu]
+    ) / (9.0f * num_cameras);
+
+    // Vignetting channel variance
+    losses[PPISPRegLossIndex::VignettingChannelVariance] = (
+        raw_losses[RawPPISPRegLossIndexRQS::SumVignettingCxChannelVariance] +
+        raw_losses[RawPPISPRegLossIndexRQS::SumVignettingCyChannelVariance] +
+        raw_losses[RawPPISPRegLossIndexRQS::SumVignettingAlpha0ChannelVariance] +
+        raw_losses[RawPPISPRegLossIndexRQS::SumVignettingAlpha1ChannelVariance] +
+        raw_losses[RawPPISPRegLossIndexRQS::SumVignettingAlpha2ChannelVariance]
+    ) / (5.0f * num_cameras);
+
+    // Color mean (latent offsets close to 0)
+    losses[PPISPRegLossIndex::ColorMean] = (
+        smooth_l1_loss(raw_losses[RawPPISPRegLossIndexRQS::SumColorBx] / num_cameras, 0.005f) +
+        smooth_l1_loss(raw_losses[RawPPISPRegLossIndexRQS::SumColorBy] / num_cameras, 0.005f) +
+        smooth_l1_loss(raw_losses[RawPPISPRegLossIndexRQS::SumColorRx] / num_cameras, 0.005f) +
+        smooth_l1_loss(raw_losses[RawPPISPRegLossIndexRQS::SumColorRy] / num_cameras, 0.005f) +
+        smooth_l1_loss(raw_losses[RawPPISPRegLossIndexRQS::SumColorGx] / num_cameras, 0.005f) +
+        smooth_l1_loss(raw_losses[RawPPISPRegLossIndexRQS::SumColorGy] / num_cameras, 0.005f) +
+        smooth_l1_loss(raw_losses[RawPPISPRegLossIndexRQS::SumColorNx] / num_cameras, 0.005f) +
+        smooth_l1_loss(raw_losses[RawPPISPRegLossIndexRQS::SumColorNy] / num_cameras, 0.005f)
+    ) / 8.0f;
+
+    // CRF channel variance
+    losses[PPISPRegLossIndex::CRFChannelVariance] = (
+        raw_losses[RawPPISPRegLossIndexRQS::SumCRFG0ChannelVariance] +
+        raw_losses[RawPPISPRegLossIndexRQS::SumCRFG1ChannelVariance] +
+        raw_losses[RawPPISPRegLossIndexRQS::SumCRFX0ChannelVariance] +
+        raw_losses[RawPPISPRegLossIndexRQS::SumCRFY0ChannelVariance] +
+        raw_losses[RawPPISPRegLossIndexRQS::SumCRFGcChannelVariance]
+    ) / (5.0f * num_cameras);
+
+    // Apply weights
+    losses[PPISPRegLossIndex::ExposureMean] *=
+        loss_weights[PPISPRegLossIndex::ExposureMean];
+    losses[PPISPRegLossIndex::VignettingCenter] *=
+        loss_weights[PPISPRegLossIndex::VignettingCenter];
+    losses[PPISPRegLossIndex::VignettingNonPositivity] *=
+        loss_weights[PPISPRegLossIndex::VignettingNonPositivity];
+    losses[PPISPRegLossIndex::VignettingChannelVariance] *=
+        loss_weights[PPISPRegLossIndex::VignettingChannelVariance];
+    losses[PPISPRegLossIndex::ColorMean] *=
+        loss_weights[PPISPRegLossIndex::ColorMean];
+    losses[PPISPRegLossIndex::CRFChannelVariance] *=
+        loss_weights[PPISPRegLossIndex::CRFChannelVariance];
+
+    return losses;
+}
+
+[CudaDeviceExport]
 float[RawPPISPRegLossIndex::length] compute_ppisp_regularization_loss_vjp(
     float[RawPPISPRegLossIndex::length] raw_losses,
     int num_cameras,
@@ -558,6 +885,20 @@ float[RawPPISPRegLossIndex::length] compute_ppisp_regularization_loss_vjp(
 ) {
     DifferentialPair<float[RawPPISPRegLossIndex::length]> dp_raw_losses = diffPair(raw_losses);
     bwd_diff(compute_ppisp_regularization_loss)(
+        dp_raw_losses, num_cameras, loss_weights, grad_out
+    );
+    return dp_raw_losses.d;
+}
+
+[CudaDeviceExport]
+float[RawPPISPRegLossIndexRQS::length] compute_ppisp_rqs_regularization_loss_vjp(
+    float[RawPPISPRegLossIndexRQS::length] raw_losses,
+    int num_cameras,
+    float[PPISPRegLossIndex::length] loss_weights,
+    float[PPISPRegLossIndex::length] grad_out
+) {
+    DifferentialPair<float[RawPPISPRegLossIndexRQS::length]> dp_raw_losses = diffPair(raw_losses);
+    bwd_diff(compute_ppisp_rqs_regularization_loss)(
         dp_raw_losses, num_cameras, loss_weights, grad_out
     );
     return dp_raw_losses.d;

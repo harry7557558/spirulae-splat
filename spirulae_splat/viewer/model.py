@@ -39,6 +39,8 @@ class SplatModel:
 
         self.relative_scale = None
 
+        self.ppisp_params = None
+
         if os.path.isdir(file_path):
             for fn in os.listdir(file_path):
                 if fn.endswith('.ckpt') or fn == 'config.yml':
@@ -69,6 +71,9 @@ class SplatModel:
         self.background_color = pipeline['_model.background_color'].to(torch.float32).cuda()
         self.background_sh = pipeline['_model.background_sh'].to(torch.float32).cuda() \
             if '_model.background_sh' in pipeline else torch.zeros((0, 3))
+
+        if '_model.training_losses.ppisp_params' in pipeline:
+            self.ppisp_params = pipeline['_model.training_losses.ppisp_params'].to(torch.float32).cuda()
 
         self.num_sh = self.features_sh.shape[1]
         self.sh_degree = {

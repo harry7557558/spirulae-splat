@@ -56,7 +56,7 @@ def test_ppisp():
         ])
 
     def my_forward_ppisp(image):
-        return apply_ppisp(image, ppisp_params[:len(image)], intrins, w, h)#.clamp(0.0, 1.0)
+        return apply_ppisp("", image, ppisp_params[:len(image)], intrins, w, h)#.clamp(0.0, 1.0)
 
     image1 = torch.nn.Parameter(image.clone())
     image2 = torch.nn.Parameter(image.clone())
@@ -136,7 +136,7 @@ def benchmark_ppisp():
         )[None]
 
     def my_forward_ppisp(image):
-        return apply_ppisp(image, ppisp_params[:len(image)], intrins, w, h)#.clamp(0.0, 1.0)
+        return apply_ppisp("", image, ppisp_params[:len(image)], intrins, w, h)#.clamp(0.0, 1.0)
 
     def backward_ppisp(image, out):
         (out * weight_out).sum().backward(retain_graph=True)
@@ -213,6 +213,7 @@ def test_ppisp_reg():
             ppisp.config.crf_channel,
         ]
         return _ComputePPISPRegularization.apply(
+            "",
             ppisp_params,
             ppisp_loss_weights
         ).sum()

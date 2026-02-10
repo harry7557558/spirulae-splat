@@ -294,6 +294,7 @@ class _DistortOrUndistortImage(torch.autograd.Function):
 
 
 def apply_ppisp(
+    param_type: str,
     image: Tensor,  # [B, H, W, 3]
     ppisp_params: Tensor,  # [B, P]
     intrins: Union[Tensor, Tuple[float, float, float, float]], # [B, 4]
@@ -309,6 +310,7 @@ def apply_ppisp(
     if actual_image_height is None:
         actual_image_height = image.shape[-3]
     return _PPISP.apply(
+        param_type,
         image,
         ppisp_params.contiguous(),
         intrins.contiguous(),
@@ -322,6 +324,7 @@ class _PPISP(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
+        param_type: str,
         image: Tensor,  # [B, H, W, 3]
         ppisp_params: Tensor,  # [B, P]
         intrins: Tensor, # [B, 4]
@@ -331,12 +334,14 @@ class _PPISP(torch.autograd.Function):
 
         out_image = _make_lazy_cuda_func("ppisp_forward")(
             image, ppisp_params,
-            intrins, actual_image_width, actual_image_height
+            intrins, actual_image_width, actual_image_height,
+            param_type
         )
 
         ctx.save_for_backward(image, ppisp_params, intrins)
         ctx.actual_image_width = actual_image_width
         ctx.actual_image_height = actual_image_height
+        ctx.param_type = param_type
 
         return out_image
 
@@ -348,7 +353,7 @@ class _PPISP(torch.autograd.Function):
         v_image, v_ppisp_params = _make_lazy_cuda_func("ppisp_backward")(
             image, ppisp_params,
             intrins, ctx.actual_image_width, ctx.actual_image_height,
-            v_out_image
+            v_out_image, ctx.param_type
         )
 
-        return v_image, v_ppisp_params, None, None, None
+        return None, v_image, v_ppisp_params, None, None, None

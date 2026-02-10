@@ -36,6 +36,33 @@ enum class RawPPISPRegLossIndex {
     length
 };
 
+enum class RawPPISPRegLossIndexRQS {
+    SumExposure,
+    SumVignettingCrSquared,
+    SumVignettingAlpha0Relu,
+    SumVignettingAlpha1Relu,
+    SumVignettingAlpha2Relu,
+    SumVignettingCxChannelVariance,
+    SumVignettingCyChannelVariance,
+    SumVignettingAlpha0ChannelVariance,
+    SumVignettingAlpha1ChannelVariance,
+    SumVignettingAlpha2ChannelVariance,
+    SumColorBx,
+    SumColorBy,
+    SumColorRx,
+    SumColorRy,
+    SumColorGx,
+    SumColorGy,
+    SumColorNx,
+    SumColorNy,
+    SumCRFG0ChannelVariance,
+    SumCRFG1ChannelVariance,
+    SumCRFX0ChannelVariance,
+    SumCRFY0ChannelVariance,
+    SumCRFGcChannelVariance,
+    length
+};
+
 enum class PPISPRegLossIndex {
     ExposureMean,
     VignettingCenter,
@@ -134,7 +161,8 @@ at::Tensor ppisp_forward_tensor(
     at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
     at::Tensor &intrins,  // [B, 4]
     const float actual_image_width,
-    const float actual_image_height
+    const float actual_image_height,
+    std::string param_type
 );
 
 
@@ -144,20 +172,23 @@ std::tuple<at::Tensor, at::Tensor> ppisp_backward_tensor(
     at::Tensor &intrins,  // [B, 4]
     const float actual_image_width,
     const float actual_image_height,
-    at::Tensor &v_out_image  // [B, H, W, C]
+    at::Tensor &v_out_image,  // [B, H, W, C]
+    std::string param_type
 );
 
 
 std::tuple<at::Tensor, at::Tensor>
 compute_ppsip_regularization_forward_tensor(
     at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
-    const std::array<float, (uint)PPISPRegLossIndex::length> loss_weights_0
+    const std::array<float, (int)PPISPRegLossIndex::length> loss_weights_0,
+    std::string param_type
 );
 
 
 at::Tensor compute_ppsip_regularization_backward_tensor(
     at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
-    const std::array<float, (uint)PPISPRegLossIndex::length> loss_weights_0,
+    const std::array<float, (int)PPISPRegLossIndex::length> loss_weights_0,
     at::Tensor &raw_losses,  // [B+1, RawPPISPRegLossIndex::length]
-    at::Tensor &v_losses  // [PPISPRegLossIndex::length]
+    at::Tensor &v_losses,  // [PPISPRegLossIndex::length]
+    std::string param_type
 );
