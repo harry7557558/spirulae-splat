@@ -15,7 +15,12 @@ from spirulae_splat.splat.cuda import (
     ray_depth_to_linear_depth
 )
 
-from spirulae_splat.splat.cuda._wrapper_per_pixel import depth_to_normal, linear_rgb_to_srgb, apply_ppisp
+from spirulae_splat.splat.cuda._wrapper_per_pixel import (
+    depth_to_normal,
+    linear_rgb_to_srgb,
+    get_color_transform_matrix,
+    apply_ppisp
+)
 
 from fused_bilagrid import BilateralGrid, slice, total_variation_loss
 
@@ -502,6 +507,11 @@ class SplatTrainingLosses(torch.nn.Module):
                 pred_rgb = torch.where(background_mask, pred_rgb, background)
 
         # convert linear RGB to sRGB if needed
+        if self.config.image_color_space != None:
+            color_transform = get_color_transform_matrix(self.config.image_color_space)
+            pred_rgb = torch.matmul(pred_rgb, color_transform.T)
+            gt_rgb = torch.matmul(gt_rgb, color_transform.T)
+            # don't clip; exposure correction and loss should ideally handle out-of-gamut colors
         if self.config.use_linear_color_space:
             pred_rgb = linear_rgb_to_srgb(pred_rgb)
             gt_rgb = linear_rgb_to_srgb(gt_rgb)

@@ -226,7 +226,7 @@ class SpirulaeModelConfig(ModelConfig):
     """If True, use bilateral grid for depth and normal (e.g. AI generated biased ones)"""
     bilagrid_shape_geometry: Tuple[int, int, int] = (8, 8, 4)
     """Shape of the bilateral grid for depth and normal (X, Y, W)"""
-    use_ppisp: bool = True
+    use_ppisp: bool = False
     """If True, use the PPISP model (https://research.nvidia.com/labs/sil/projects/ppisp/) to handle per-pixel color distortions."""
     ppisp_param_type: Literal["original", "rqs"] = "rqs"
     """Parameterization for PPISP. "original" implements the original paper,
@@ -246,8 +246,7 @@ class SpirulaeModelConfig(ModelConfig):
     use_linear_color_space: bool = False
     """Whether to assume training images are in linear color space."""
     image_color_space: Literal[None, "ACES2065-1", "ACEScg", "Rec.2020", "AdobeRGB", "DCI-P3"] = None
-    """Color space of input images. If set, this only affects displayed images during training, not the final output.
-        Note that tonemap is not applied for displayed images."""
+    """Color space of input images. Note that tonemap is not applied."""
 
     use_3dgs: bool = True
     """Must be True, kept for backward compatibility"""
