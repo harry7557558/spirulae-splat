@@ -50,6 +50,7 @@ SigmaPoints world_gaussian_sigma_points(
     return ret;
 }
 
+#if 0
 [CudaDeviceExport]
 [ForceInline]
 [Differentiable]
@@ -106,6 +107,46 @@ bool persp_proj_3dgs<let assume_valid : bool>(
         return false;
 
     float2x3 J = persp_proj_jac(mean3d, intrins, dist_coeffs);
+    cov2d = mul(mul(J, cov3d), transpose(J));
+    return true;
+}
+#endif
+
+[CudaDeviceExport]
+[Differentiable]
+bool persp_proj_3dgs<let assume_valid : bool>(
+    // inputs
+    const float3 mean3d,
+    const float3x3 cov3d,
+    const float4 intrins,
+    const float[10] dist_coeffs,
+    const uint width,
+    const uint height,
+    // outputs
+    out float2x2 cov2d,
+    out float2 mean2d
+) {
+    float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
+
+    bool valid = persp_proj<assume_valid>(mean3d, intrins, dist_coeffs, mean2d);
+    if (!assume_valid && !valid)
+        return false;
+
+    float2x3 J = persp_proj_jac(mean3d, intrins, dist_coeffs);
+
+    float lim_x_pos = width + 0.3f * (0.5f * width);
+    float lim_x_neg = 0.3f * (0.5f * width);
+    float lim_y_pos = height + 0.3f * (0.5f * height);
+    float lim_y_neg = 0.3f * (0.5f * height);
+
+    float rz = 1.f / mean3d.z;
+    float max_Jxz = -(-lim_x_neg - cx) * rz;
+    float min_Jxz = -(lim_x_pos - cx) * rz;
+    float max_Jyz = -(-lim_x_neg - cy) * rz;
+    float min_Jyz = -(lim_x_pos - cy) * rz;
+    J[0][2] = clamp(J[0][2], min_Jxz, max_Jxz);
+    J[1][2] = clamp(J[1][2], min_Jyz, max_Jyz);
+
     cov2d = mul(mul(J, cov3d), transpose(J));
     return true;
 }
@@ -320,10 +361,9 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
         covarW2C(R, covar, covar_c);
 
         if (camera_model == CameraModelType::PINHOLE)
-            // does not support dist_coeffs - asserted on Python side
-            persp_proj_3dgs(
+            is_valid &= persp_proj_3dgs<assume_valid>(
                 mean_c, covar_c,
-                fx, fy, cx, cy, image_width, image_height,
+                intrins, dist_coeffs, image_width, image_height,
                 covar2d, mean2d
             );
         else if (camera_model == CameraModelType::FISHEYE)

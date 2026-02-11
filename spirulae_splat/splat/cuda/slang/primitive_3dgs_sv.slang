@@ -76,9 +76,9 @@ void projection_3dgs_sv<let camera_model : CameraModelType, let assume_valid : b
 
         if (camera_model == CameraModelType::PINHOLE)
             // does not support dist_coeffs - asserted on Python side
-            persp_proj_3dgs(
+            is_valid &= persp_proj_3dgs<assume_valid>(
                 mean_c, covar_c,
-                fx, fy, cx, cy, image_width, image_height,
+                intrins, dist_coeffs, image_width, image_height,
                 covar2d, mean2d
             );
         else if (camera_model == CameraModelType::FISHEYE)
