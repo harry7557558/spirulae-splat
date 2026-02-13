@@ -21,6 +21,7 @@
 #include "RasterizationEval3DBwd.cuh"
 #include "RasterizationSortedEval3DFwd.cuh"
 #include "RasterizationSortedEval3DBwd.cuh"
+#include "Optimizer.cuh"
 
 #define TORCH_INDUCTOR_CPP_WRAPPER
 #include <torch/extension.h>
@@ -135,4 +136,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("rasterization_voxel_forward", &rasterize_to_pixels_voxel_eval3d_fwd);
     m.def("rasterization_voxel_backward", &rasterize_to_pixels_voxel_eval3d_bwd);
 
+    // Optimizer.cuh
+    m.def("fused_adam", &fused_adam);
+    m.def("fused_adam_multi", &fused_adam_multi);
 }

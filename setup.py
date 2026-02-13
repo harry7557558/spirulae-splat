@@ -174,6 +174,7 @@ for filename in [
     'RasterizationEval3DBwd',
     'RasterizationSortedEval3DFwd',
     'RasterizationSortedEval3DBwd',
+    'Optimizer',
 ]:
     generate_header(path+f"{filename}.cu", path+f"{filename}.cuh")
 

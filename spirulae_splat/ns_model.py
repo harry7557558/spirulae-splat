@@ -1332,7 +1332,7 @@ class SpirulaeModel(Model):
         free, total = torch.cuda.mem_get_info(device)
         used = (total - free) / 1024**3
         used_percentage = (1 - free/total)*100
-        mem_stats = boldcyan(f"{used:.2f}") + f"\N{ZERO WIDTH SPACE}GB " + boldcyan(f"{used_percentage:.0f}") + "%"
+        mem_stats = boldcyan(f"{used:.2f}") + f"\N{ZERO WIDTH SPACE}GiB " + boldcyan(f"{used_percentage:.0f}") + "%"
 
         if hasattr(self, 'total_val_loss'):
             losses['val_total'] = self.total_val_loss

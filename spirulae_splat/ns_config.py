@@ -13,10 +13,11 @@ from spirulae_splat.ns_model import SpirulaeModelConfig
 from spirulae_splat.ns_pipeline import (
     SpirulaePipelineConfig, VanillaPipelineConfig
 )
+from spirulae_splat.modules.optimizer import FusedAdamOptimizerConfig
+
 from spirulae_splat.ns_dataset import SpirulaeDataset
 from spirulae_splat.ns_dataparser import Nerfstudio2DataParserConfig
 from nerfstudio.configs.base_config import ViewerConfig
-from nerfstudio.engine.optimizers import AdamOptimizerConfig, RAdamOptimizerConfig
 from nerfstudio.engine.schedulers import (
     ExponentialDecaySchedulerConfig,
 )
@@ -38,76 +39,76 @@ _DEFAULT_DATAMANAGER_CONFIG = {
 
 _DEFAULT_OPTIMIZERS = {
     "means": {
-        "optimizer": AdamOptimizerConfig(lr=1.0e-4, eps=1e-15),
+        "optimizer": FusedAdamOptimizerConfig(lr=1.0e-4, eps=1e-15),
         "scheduler": ExponentialDecaySchedulerConfig(
             lr_final=1.0e-6, max_steps=30000,
         ),
     },
     "scales": {
-        "optimizer": AdamOptimizerConfig(lr=0.005, eps=1e-15),
+        "optimizer": FusedAdamOptimizerConfig(lr=0.005, eps=1e-15),
         "scheduler": None,
     },
     "quats": {
-        "optimizer": AdamOptimizerConfig(lr=0.0005, eps=1e-15),
+        "optimizer": FusedAdamOptimizerConfig(lr=0.0005, eps=1e-15),
         "scheduler": None,
     },
     "features_dc": {
-        "optimizer": AdamOptimizerConfig(lr=0.0025, eps=1e-15),
+        "optimizer": FusedAdamOptimizerConfig(lr=0.0025, eps=1e-15),
         "scheduler": None,
     },
     "features_sh": {
-        "optimizer": AdamOptimizerConfig(lr=0.0025 / 20, eps=1e-15),
+        "optimizer": FusedAdamOptimizerConfig(lr=0.0025 / 20, eps=1e-15),
         "scheduler": None,
     },
     "features_ch": {
-        "optimizer": AdamOptimizerConfig(lr=0.0025 / 5, eps=1e-15),
+        "optimizer": FusedAdamOptimizerConfig(lr=0.0025 / 5, eps=1e-15),
         "scheduler": None,
     },
     "sv_sites": {
-        "optimizer": AdamOptimizerConfig(lr=0.01, eps=1e-15),
+        "optimizer": FusedAdamOptimizerConfig(lr=0.01, eps=1e-15),
         "scheduler": None,
     },
     "sv_colors": {
-        "optimizer": AdamOptimizerConfig(lr=0.0005, eps=1e-15),
+        "optimizer": FusedAdamOptimizerConfig(lr=0.0005, eps=1e-15),
         "scheduler": None,
     },
     "opacities": {
-        "optimizer": AdamOptimizerConfig(lr=0.05, eps=1e-15),
+        "optimizer": FusedAdamOptimizerConfig(lr=0.05, eps=1e-15),
         "scheduler": None,
     },
     "densities": {
-        "optimizer": AdamOptimizerConfig(lr=0.05, eps=1e-15),
+        "optimizer": FusedAdamOptimizerConfig(lr=0.05, eps=1e-15),
         "scheduler": ExponentialDecaySchedulerConfig(
             lr_final=0.0005, max_steps=30000,
         ),
     },
     "background_color": {
-        "optimizer": AdamOptimizerConfig(lr=0.0025, eps=1e-15),
+        "optimizer": FusedAdamOptimizerConfig(lr=0.0025, eps=1e-15),
         "scheduler": None
     },
     "background_sh": {
-        "optimizer": AdamOptimizerConfig(lr=0.0025 / 5, eps=1e-15),
+        "optimizer": FusedAdamOptimizerConfig(lr=0.0025 / 5, eps=1e-15),
         "scheduler": None
     },
     "bilateral_grid": {
-        "optimizer": AdamOptimizerConfig(lr=2e-3, eps=1e-15),
+        "optimizer": FusedAdamOptimizerConfig(lr=2e-3, eps=1e-15),
         "scheduler": ExponentialDecaySchedulerConfig(
             lr_final=1e-4, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
         ),
     },
     "bilateral_grid_geometry": {
-        # "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
-        "optimizer": AdamOptimizerConfig(lr=2e-3, eps=1e-15),
+        # "optimizer": FusedAdamOptimizerConfig(lr=1e-2, eps=1e-15),
+        "optimizer": FusedAdamOptimizerConfig(lr=2e-3, eps=1e-15),
         "scheduler": ExponentialDecaySchedulerConfig(
             lr_final=1e-4, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
         ),
     },
     "ppisp": {
-        "optimizer": AdamOptimizerConfig(lr=2e-3, eps=1e-15),
+        "optimizer": FusedAdamOptimizerConfig(lr=2e-3, eps=1e-15),
         "scheduler": None
     },
     "camera_opt": {
-        "optimizer": AdamOptimizerConfig(lr=1e-4, eps=1e-15),  # 1e-4
+        "optimizer": FusedAdamOptimizerConfig(lr=1e-4, eps=1e-15),  # 1e-4
         "scheduler": ExponentialDecaySchedulerConfig(
             lr_final=5e-7, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
         ),
@@ -116,25 +117,25 @@ _DEFAULT_OPTIMIZERS = {
 
 _TRIANGLE_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS}
 _TRIANGLE_OPTIMIZERS["means"] = {
-    "optimizer": AdamOptimizerConfig(lr=1.0e-4, eps=1e-15),
+    "optimizer": FusedAdamOptimizerConfig(lr=1.0e-4, eps=1e-15),
     "scheduler": ExponentialDecaySchedulerConfig(
         lr_final=1.0e-6, max_steps=30000,
     ),
 }
 # _TRIANGLE_OPTIMIZERS["scales"] = {
-#     "optimizer": AdamOptimizerConfig(lr=0.005, eps=1e-15),
+#     "optimizer": FusedAdamOptimizerConfig(lr=0.005, eps=1e-15),
 #     "scheduler": ExponentialDecaySchedulerConfig(
 #         lr_final=0.0002, max_steps=30000,
 #     ),
 # }
 # _TRIANGLE_OPTIMIZERS["quats"] = {
-#     "optimizer": AdamOptimizerConfig(lr=0.0005, eps=1e-15),
+#     "optimizer": FusedAdamOptimizerConfig(lr=0.0005, eps=1e-15),
 #     "scheduler": ExponentialDecaySchedulerConfig(
 #         lr_final=0.0001, max_steps=30000
 #     ),
 # }
 _TRIANGLE_OPTIMIZERS["bilateral_grid"] = {
-    "optimizer": AdamOptimizerConfig(lr=5e-4, eps=1e-15),
+    "optimizer": FusedAdamOptimizerConfig(lr=5e-4, eps=1e-15),
     "scheduler": ExponentialDecaySchedulerConfig(
         lr_final=1e-6, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
     ),

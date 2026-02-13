@@ -478,9 +478,9 @@ class SplatTrainingLosses(torch.nn.Module):
         # update alpha if image is RGBA
         if gt_img_rgba.shape[-1] == 4 and self.config.alpha_loss_weight > 0.0:
             alpha = gt_img_rgba[..., -1].unsqueeze(-1)
-            gt_rgb_mask = gt_rgb_mask & alpha if gt_rgb_mask is None else alpha
+            gt_rgb_mask = gt_rgb_mask & alpha if gt_rgb_mask is not None else alpha
             if self.config.apply_loss_for_mask:
-                gt_alpha = gt_alpha & alpha if gt_alpha is None else alpha
+                gt_alpha = gt_alpha & alpha if gt_alpha is not None else alpha
 
         # replace parts of background with random noise to discourage transparency
         background = outputs["background"]
