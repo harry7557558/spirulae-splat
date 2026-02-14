@@ -41,11 +41,12 @@ def rasterization(
     intrins: Tensor,  # [..., C, 4]
     width: int,
     height: int,
-    near_plane: float = 0.01,
+    near_plane: float = 0.0,
     far_plane: float = 1e10,
     packed: bool = True,
     use_bvh: bool = False,
     output_distortion: bool = False,
+    compute_hessian_diagonal: bool = False,
     relative_scale: Optional[float] = None,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
@@ -57,7 +58,6 @@ def rasterization(
     # camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     segmented: bool = False,
-    # distortion
     dist_coeffs: Optional[Tensor] = None,  # [..., C, 10]
     actual_width: int = None,
     actual_height: int = None,
@@ -480,6 +480,7 @@ def rasterization(
         masks=masks,
         packed=packed,
         output_distortion=output_distortion,
+        compute_hessian_diagonal=compute_hessian_diagonal,
         **kwargs
     )
     meta.update(render_meta)

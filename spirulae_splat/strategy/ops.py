@@ -100,7 +100,7 @@ def _update_param_with_optimizer(
             param_state = optimizer.state[param]
             del optimizer.state[param]
             for key in param_state.keys():
-                if key != "step":
+                if key not in ["step", "step1", "step2"]:
                     v = param_state[key]
                     param_state[key] = optimizer_fn(key, v)
             optimizer.param_groups[i]["params"] = [new_param]

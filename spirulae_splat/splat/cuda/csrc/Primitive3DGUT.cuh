@@ -61,6 +61,8 @@ struct Base3DGUT::RenderOutput {
         at::Tensor rgbs;
         at::Tensor depths;
 
+        Tensor() {}
+
         Tensor(const TensorTuple& images) {
             rgbs = std::get<0>(images);
             depths = std::get<1>(images);
@@ -186,6 +188,8 @@ struct Base3DGUT::Screen {
         at::Tensor opacities;
         at::Tensor rgbs;
 
+        Tensor() {}
+
         Tensor(const TensorTuple& splats) : hasWorld(true) {
             means = std::get<0>(splats);
             quats = std::get<1>(splats);
@@ -270,6 +274,8 @@ struct Base3DGUT::Screen {
         float3* __restrict__ rgbs;
         long size;
 
+        Buffer() {}  // uninitialized
+
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.depths);
             if (tensors.hasWorld) {
@@ -322,14 +328,27 @@ struct Base3DGUT::Screen {
         };
     }
 
-    __device__ __forceinline__ void operator+=(const Screen &other) {
-        mean += other.mean;
-        quat += other.quat;
-        depth += other.depth;
-        scale += other.scale;
-        opacity += other.opacity;
-        rgb += other.rgb;
-        iscl_rot = iscl_rot + other.iscl_rot;
+    __device__ __forceinline__ void addGradient(const Screen &grad, float weight=1.0f) {
+        mean += grad.mean * weight;
+        quat += grad.quat * weight;
+        depth += grad.depth * weight;
+        scale += grad.scale * weight;
+        opacity += grad.opacity * weight;
+        rgb += grad.rgb * weight;
+        #pragma unroll
+        for (int i = 0; i < 3; ++i)
+            iscl_rot[i] = iscl_rot[i] + grad.iscl_rot[i] * weight;
+    }
+
+    __device__ __forceinline__ void addGaussNewtonHessianDiagonal(const Screen &grad, float weight=1.0f) {
+        float4 v_quat; float3 v_scale;
+        compute_3dgut_iscl_rot_vjp(quat, scale, grad.iscl_rot, &v_quat, &v_scale);
+        mean += grad.mean * grad.mean * weight;
+        quat += (grad.quat + v_quat) * (grad.quat + v_quat) * weight;
+        depth += grad.depth * grad.depth * weight;
+        scale += (grad.scale + v_scale) * (grad.scale + v_scale) * weight;
+        opacity += grad.opacity * grad.opacity * weight;
+        rgb += grad.rgb * grad.rgb * weight;
     }
 
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
@@ -351,6 +370,15 @@ struct Base3DGUT::Screen {
         atomicAddFVec(buffer.scales + idx, grad.scale + v_scale);
         atomicAddFVec(buffer.opacities + idx, grad.opacity);
         atomicAddFVec(buffer.rgbs + idx, grad.rgb);
+    }
+
+    __device__ void atomicAddHessianDiagonalToBuffer(const Screen &grad2, Buffer &buffer, long idx) const {
+        atomicAddFVec(buffer.means + idx % buffer.size, grad2.mean);
+        atomicAddFVec(buffer.quats + idx % buffer.size, grad2.quat);
+        atomicAddFVec(buffer.depths + idx, grad2.depth);
+        atomicAddFVec(buffer.scales + idx, grad2.scale);
+        atomicAddFVec(buffer.opacities + idx, grad2.opacity);
+        atomicAddFVec(buffer.rgbs + idx, grad2.rgb);
     }
 
     __device__ __forceinline__ float evaluate_alpha(float3 ray_o, float3 ray_d) {
@@ -447,10 +475,24 @@ struct Vanilla3DGUT : public Base3DGUT {
         World& v_world, float3x3 &v_R, float3 &v_t
     );
 
+    inline static __device__ void project_persp_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_proj, Screen h_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t,
+        float3 &h_world_pos
+    );
+
     inline static __device__ void project_fisheye_vjp(
         World world, BwdProjCamera cam,
         Screen v_proj,
         World& v_world, float3x3 &v_R, float3 &v_t
+    );
+
+    inline static __device__ void project_fisheye_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_proj, Screen h_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t,
+        float3 &h_world_pos
     );
 
 #endif  // #ifdef __CUDACC__
@@ -475,6 +517,8 @@ struct Vanilla3DGUT::World : public Base3DGUT::World {
         at::Tensor opacities;
         at::Tensor features_dc;
         at::Tensor features_sh;
+
+        Tensor() {}
 
         Tensor(const TensorTuple& splats) {
             means = std::get<0>(splats);
@@ -521,6 +565,8 @@ struct Vanilla3DGUT::World : public Base3DGUT::World {
         float3* __restrict__ features_dc;
         float3* __restrict__ features_sh;
         uint num_sh;
+
+        Buffer() {}
 
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.means);
@@ -650,6 +696,25 @@ inline __device__ void Vanilla3DGUT::project_persp_vjp(
     v_world.mean = v_proj.mean, v_world.quat = v_proj.quat;
 }
 
+inline __device__ void Vanilla3DGUT::project_persp_vjp(
+    Vanilla3DGUT::World world, Vanilla3DGUT::BwdProjCamera cam,
+    Vanilla3DGUT::Screen v_proj, Vanilla3DGUT::Screen h_proj,
+    Vanilla3DGUT::World& v_world, float3x3 &v_R, float3 &v_t,
+    float3& h_world_pos
+) {
+    projection_3dgut_persp_vjp(
+        false,
+        world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        cam.width, cam.height,
+        make_float2(0), v_proj.depth, v_proj.scale, v_proj.opacity, v_proj.rgb,
+        make_float2(0), h_proj.depth, h_proj.scale, h_proj.opacity, h_proj.rgb,
+        &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
+        &v_R, &v_t, &h_world_pos
+    );
+    v_world.mean = v_proj.mean, v_world.quat = v_proj.quat;
+}
+
 inline __device__ void Vanilla3DGUT::project_fisheye_vjp(
     Vanilla3DGUT::World world, Vanilla3DGUT::BwdProjCamera cam,
     Vanilla3DGUT::Screen v_proj,
@@ -663,6 +728,25 @@ inline __device__ void Vanilla3DGUT::project_fisheye_vjp(
         make_float2(0), v_proj.depth, v_proj.scale, v_proj.opacity, v_proj.rgb,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
         &v_R, &v_t
+    );
+    v_world.mean = v_proj.mean, v_world.quat = v_proj.quat;
+}
+
+inline __device__ void Vanilla3DGUT::project_fisheye_vjp(
+    Vanilla3DGUT::World world, Vanilla3DGUT::BwdProjCamera cam,
+    Vanilla3DGUT::Screen v_proj, Vanilla3DGUT::Screen h_proj,
+    Vanilla3DGUT::World& v_world, float3x3 &v_R, float3 &v_t,
+    float3& h_world_pos
+) {
+    projection_3dgut_fisheye_vjp(
+        false,
+        world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        cam.width, cam.height,
+        make_float2(0), v_proj.depth, v_proj.scale, v_proj.opacity, v_proj.rgb,
+        make_float2(0), h_proj.depth, h_proj.scale, h_proj.opacity, h_proj.rgb,
+        &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
+        &v_R, &v_t, &h_world_pos
     );
     v_world.mean = v_proj.mean, v_world.quat = v_proj.quat;
 }
@@ -702,10 +786,24 @@ struct SphericalVoronoi3DGUT : public Base3DGUT {
         World& v_world, float3x3 &v_R, float3 &v_t
     );
 
+    inline static __device__ void project_persp_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_proj, Screen h_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t,
+        float3 &h_world_pos
+    );
+
     inline static __device__ void project_fisheye_vjp(
         World world, BwdProjCamera cam,
         Screen v_proj,
         World& v_world, float3x3 &v_R, float3 &v_t
+    );
+
+    inline static __device__ void project_fisheye_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_proj, Screen h_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t,
+        float3 &h_world_pos
     );
 
 #endif  // #ifdef __CUDACC__
@@ -732,6 +830,8 @@ struct SphericalVoronoi3DGUT<num_sv>::World : public Base3DGUT::World {
         at::Tensor opacities;
         at::Tensor sv_sites;
         at::Tensor sv_colors;
+
+        Tensor() {}
 
         Tensor(const TensorTuple& splats) {
             means = std::get<0>(splats);
@@ -777,6 +877,8 @@ struct SphericalVoronoi3DGUT<num_sv>::World : public Base3DGUT::World {
         float* __restrict__ opacities;
         float3* __restrict__ sv_sites;
         float3* __restrict__ sv_colors;
+
+        Buffer() {}
 
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.means);
@@ -915,6 +1017,14 @@ inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_persp_vjp(
 }
 
 template<int num_sv>
+inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_persp_vjp(
+    SphericalVoronoi3DGUT<num_sv>::World world, SphericalVoronoi3DGUT<num_sv>::BwdProjCamera cam,
+    SphericalVoronoi3DGUT<num_sv>::Screen v_proj, SphericalVoronoi3DGUT<num_sv>::Screen h_proj,
+    SphericalVoronoi3DGUT<num_sv>::World& v_world, float3x3 &v_R, float3 &v_t,
+    float3 &h_world_pos
+) {}  // TODO
+
+template<int num_sv>
 inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_fisheye_vjp(
     SphericalVoronoi3DGUT<num_sv>::World world, SphericalVoronoi3DGUT<num_sv>::BwdProjCamera cam,
     SphericalVoronoi3DGUT<num_sv>::Screen v_proj,
@@ -931,6 +1041,14 @@ inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_fisheye_vjp(
     );
     v_world.mean = v_proj.mean, v_world.quat = v_proj.quat;
 }
+
+template<int num_sv>
+inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_fisheye_vjp(
+    SphericalVoronoi3DGUT<num_sv>::World world, SphericalVoronoi3DGUT<num_sv>::BwdProjCamera cam,
+    SphericalVoronoi3DGUT<num_sv>::Screen v_proj, SphericalVoronoi3DGUT<num_sv>::Screen h_proj,
+    SphericalVoronoi3DGUT<num_sv>::World& v_world, float3x3 &v_R, float3 &v_t,
+    float3 &h_world_pos
+) {}  // TODO
 
 #endif  // #ifdef __CUDACC__
 

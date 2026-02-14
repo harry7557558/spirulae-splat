@@ -13,7 +13,7 @@ from spirulae_splat.ns_model import SpirulaeModelConfig
 from spirulae_splat.ns_pipeline import (
     SpirulaePipelineConfig, VanillaPipelineConfig
 )
-from spirulae_splat.modules.optimizer import FusedAdamOptimizerConfig
+from spirulae_splat.modules.optimizer import FusedAdamOptimizerConfig, FusedNewtonOptimizerConfig
 
 from spirulae_splat.ns_dataset import SpirulaeDataset
 from spirulae_splat.ns_dataparser import Nerfstudio2DataParserConfig
@@ -39,9 +39,9 @@ _DEFAULT_DATAMANAGER_CONFIG = {
 
 _DEFAULT_OPTIMIZERS = {
     "means": {
-        "optimizer": FusedAdamOptimizerConfig(lr=1.0e-4, eps=1e-15),
+        "optimizer": FusedAdamOptimizerConfig(lr=1.6e-4, eps=1e-15),
         "scheduler": ExponentialDecaySchedulerConfig(
-            lr_final=1.0e-6, max_steps=30000,
+            lr_final=1.6e-6, max_steps=30000,
         ),
     },
     "scales": {
@@ -117,9 +117,9 @@ _DEFAULT_OPTIMIZERS = {
 
 _TRIANGLE_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS}
 _TRIANGLE_OPTIMIZERS["means"] = {
-    "optimizer": FusedAdamOptimizerConfig(lr=1.0e-4, eps=1e-15),
+    "optimizer": FusedAdamOptimizerConfig(lr=1.6e-4, eps=1e-15),
     "scheduler": ExponentialDecaySchedulerConfig(
-        lr_final=1.0e-6, max_steps=30000,
+        lr_final=1.6e-6, max_steps=30000,
     ),
 }
 # _TRIANGLE_OPTIMIZERS["scales"] = {
@@ -141,6 +141,15 @@ _TRIANGLE_OPTIMIZERS["bilateral_grid"] = {
     ),
 }
 
+_SECOND_ORDER_MEAN_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS}
+_SECOND_ORDER_MEAN_OPTIMIZERS["means"] = {
+    # lr should ideally approximate square root of loss
+    "optimizer": FusedNewtonOptimizerConfig(lr=1.6e-1, eps=1e-15),
+    "scheduler": ExponentialDecaySchedulerConfig(
+        lr_final=1.6e-2, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
+    ),
+}
+
 
 spirulae = MethodSpecification(
     config=TrainerConfig(
@@ -159,6 +168,30 @@ spirulae = MethodSpecification(
         ),
         optimizers={
             **_DEFAULT_OPTIMIZERS
+        },
+        viewer=ViewerConfig(),
+        vis="viewer",
+    ),
+    description="Spirulae 3DGS Default.",
+)
+
+spirulae_squared = MethodSpecification(
+    config=TrainerConfig(
+        method_name="spirulae^2",
+        steps_per_eval_batch=0,
+        steps_per_save=2000,
+        max_num_iterations=30000,
+        mixed_precision=False,
+        pipeline=SpirulaePipelineConfig(
+            datamanager=SpirulaeDataManagerConfig(
+                **_DEFAULT_DATAMANAGER_CONFIG
+            ),
+            model=SpirulaeModelConfig(
+                compute_hessian_diagonal=True,
+            ),
+        ),
+        optimizers={
+            **_SECOND_ORDER_MEAN_OPTIMIZERS
         },
         viewer=ViewerConfig(),
         vis="viewer",

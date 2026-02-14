@@ -210,6 +210,7 @@ setup(
     entry_points={
         "nerfstudio.method_configs": [
             "spirulae = spirulae_splat.ns_config:spirulae",
+            "spirulae^2 = spirulae_splat.ns_config:spirulae_squared",
             "spirulae-patched = spirulae_splat.ns_config:spirulae_patched",
             "spirulae-triangle = spirulae_splat.ns_config:spirulae_triangle",
             "spirulae-triangle-patched = spirulae_splat.ns_config:spirulae_triangle_patched",

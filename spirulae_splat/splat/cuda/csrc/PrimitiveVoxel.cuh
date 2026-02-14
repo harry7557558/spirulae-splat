@@ -53,10 +53,24 @@ struct VoxelPrimitive {
         World& v_world, float3x3 &v_R, float3 &v_t
     );
 
+    inline static __device__ void project_persp_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_proj, Screen h_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t,
+        float3 &h_world_pos
+    );
+
     inline static __device__ void project_fisheye_vjp(
         World world, BwdProjCamera cam,
         Screen v_proj,
         World& v_world, float3x3 &v_R, float3 &v_t
+    );
+
+    inline static __device__ void project_fisheye_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_proj, Screen h_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t,
+        float3 &h_world_pos
     );
 
 #endif  // #ifdef __CUDACC__
@@ -79,6 +93,8 @@ struct VoxelPrimitive::World {
         std::optional<at::Tensor> densities;
         at::Tensor features_dc;
         at::Tensor features_sh;
+
+        Tensor() {}
 
         Tensor(const TensorTuple& splats) {
             pos_size = std::get<0>(splats);
@@ -119,6 +135,8 @@ struct VoxelPrimitive::World {
         float3* __restrict__ features_dc;
         float3* __restrict__ features_sh;
         uint num_sh;
+
+        Buffer() {}
 
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.features_dc);
@@ -212,6 +230,8 @@ struct VoxelPrimitive::RenderOutput {
     struct Tensor {
         at::Tensor rgbs;
         at::Tensor depths;
+
+        Tensor() {}
 
         Tensor(const TensorTuple& images) {
             rgbs = std::get<0>(images);
@@ -332,6 +352,8 @@ struct VoxelPrimitive::Screen {
         at::Tensor rgbs;
         std::optional<at::Tensor> absgrad;
 
+        Tensor() {}
+
         Tensor(const TensorTuple& splats) : hasWorld(true) {
             pos_size = std::get<0>(splats);
             depths = std::get<1>(splats);
@@ -407,6 +429,8 @@ struct VoxelPrimitive::Screen {
         float3* __restrict__ rgbs;
         long size;
 
+        Buffer() {}
+
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.rgbs);
             if (tensors.pos_size.has_value()) {
@@ -457,14 +481,24 @@ struct VoxelPrimitive::Screen {
         };
     }
 
-    __device__ __forceinline__ void operator+=(const Screen &other) {
-        pos += other.pos;
-        size += other.size;
-        depth += other.depth;
+    __device__ __forceinline__ void addGradient(const Screen &grad, float weight=1.0f) {
+        pos += grad.pos * weight;
+        size += grad.size * weight;
+        depth += grad.depth * weight;
         #pragma unroll
         for (int i = 0; i < 8; i++)
-            densities[i] += other.densities[i];
-        rgb += other.rgb;
+            densities[i] += grad.densities[i] * weight;
+        rgb += grad.rgb * weight;
+    }
+
+    __device__ __forceinline__ void addGaussNewtonHessianDiagonal(const Screen &grad, float weight=1.0f) {
+        pos += grad.pos * grad.pos * weight;
+        size += grad.size * grad.size * weight;
+        depth += grad.depth * grad.depth * weight;
+        #pragma unroll
+        for (int i = 0; i < 8; i++)
+            densities[i] += grad.densities[i] * grad.densities[i] * weight;
+        rgb += grad.rgb * grad.rgb * weight;
     }
 
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
@@ -491,6 +525,10 @@ struct VoxelPrimitive::Screen {
             atomicAddFVec(buffer.densities + 2*idx0+1, {grad.densities[4], grad.densities[5], grad.densities[6], grad.densities[7]});
         }
         atomicAddFVec(buffer.rgbs + idx, grad.rgb);
+    }
+
+    static __device__ __forceinline__ void atomicAddHessianDiagonalToBuffer(const Screen &grad2, Buffer &buffer, long idx) {
+        atomicAddGradientToBuffer(grad2, buffer, idx);
     }
 
     __device__ __forceinline__ float evaluate_alpha(float3 ray_o, float3 ray_d) {
@@ -583,6 +621,13 @@ inline __device__ void VoxelPrimitive::project_persp_vjp(
     v_world.pos = v_proj.pos, v_world.size = v_proj.size, v_world.densities = v_proj.densities;
 }
 
+inline __device__ void VoxelPrimitive::project_persp_vjp(
+    VoxelPrimitive::World world, VoxelPrimitive::BwdProjCamera cam,
+    VoxelPrimitive::Screen v_proj, VoxelPrimitive::Screen h_proj,
+    VoxelPrimitive::World& v_world, float3x3 &v_R, float3 &v_t,
+    float3 &h_world_pos
+) {}  // TODO
+
 inline __device__ void VoxelPrimitive::project_fisheye_vjp(
     VoxelPrimitive::World world, VoxelPrimitive::BwdProjCamera cam,
     VoxelPrimitive::Screen v_proj,
@@ -598,5 +643,12 @@ inline __device__ void VoxelPrimitive::project_fisheye_vjp(
     );
     v_world.pos = v_proj.pos, v_world.size = v_proj.size, v_world.densities = v_proj.densities;
 }
+
+inline __device__ void VoxelPrimitive::project_fisheye_vjp(
+    VoxelPrimitive::World world, VoxelPrimitive::BwdProjCamera cam,
+    VoxelPrimitive::Screen v_proj, VoxelPrimitive::Screen h_proj,
+    VoxelPrimitive::World& v_world, float3x3 &v_R, float3 &v_t,
+    float3 &h_world_pos
+) {}  // TODO
 
 #endif  // #ifdef __CUDACC__

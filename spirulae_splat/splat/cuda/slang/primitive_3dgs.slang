@@ -532,6 +532,80 @@ _DEF_projection_3dgs_vjp(projection_3dgut_persp_vjp, _projection_3dgut_persp_dif
 _DEF_projection_3dgs_vjp(projection_3dgut_fisheye_vjp, _projection_3dgut_fisheye_differentiable)
 
 
+#undef _DEF_projection_3dgs_vjp
+#define _DEF_projection_3dgs_vjp(funname, fwd_funname, ...) \
+    [CudaDeviceExport] \
+    void funname(  \
+        const bool antialiased,  \
+        const float3 mean, const float4 quat, const float3 scale, const float in_opacity, const float3 sh_coeffs[16],  \
+        const float3x3 R, const float3 t, const float fx, const float fy, const float cx, const float cy, const float[10] dist_coeffs,  \
+        const uint image_width, const uint image_height,  \
+        const float2 v_mean2d, const float v_depth, const float3 v_conic, const float v_opacity, const float3 v_rgb,  \
+        const float2 h_mean2d, const float h_depth, const float3 h_conic, const float h_opacity, const float3 h_rgb,  \
+        out float3 v_mean, out float4 v_quat, out float3 v_scale, out float v_in_opacity, out float3 v_sh_coeffs[16],  \
+        out float3x3 v_R, out float3 v_t,  \
+        out float3 h_mean  \
+    ) {  \
+        DifferentialPair<float3> dp_mean = diffPair(mean);  \
+        DifferentialPair<float4> dp_quat = diffPair(quat);  \
+        DifferentialPair<float3> dp_scale = diffPair(scale);  \
+        DifferentialPair<float> dp_in_opacity = diffPair(in_opacity);  \
+        DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);  \
+        DifferentialPair<float3x3> dp_R = diffPair(R);  \
+        DifferentialPair<float3> dp_t = diffPair(t);  \
+        bwd_diff(fwd_funname)(  \
+            antialiased,  \
+            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,  \
+            fx, fy, cx, cy, dist_coeffs,  \
+            image_width, image_height, 0.0f, 1e30f,  \
+            v_mean2d, v_depth, v_conic, v_opacity, v_rgb  \
+        );  \
+        v_mean = dp_mean.d;  \
+        v_quat = dp_quat.d;  \
+        v_scale = dp_scale.d;  \
+        v_in_opacity = dp_in_opacity.d;  \
+        v_sh_coeffs = dp_sh_coeffs.d;  \
+        v_R = dp_R.d;  \
+        v_t = dp_t.d;  \
+  \
+        [ForceUnroll]  \
+        for (int i = 0; i < 3; ++i) {  \
+            DifferentialPair<float3> dp_mean = diffPair(  \
+                mean, float3(float(i == 0), float(i == 1), float(i == 2)) );  \
+            DifferentialPair<float4> dp_quat = diffPair(quat, float4(0));  \
+            DifferentialPair<float3> dp_scale = diffPair(scale, float3(0));  \
+            DifferentialPair<float> dp_in_opacity = diffPair(in_opacity, 0.0f);  \
+            DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs, float3[16]( { float3(0) }));  \
+            DifferentialPair<float3x3> dp_R = diffPair(R, float3x3(0));  \
+            DifferentialPair<float3> dp_t = diffPair(t, float3(0));  \
+            DifferentialPair<float2> dp_mean2d;  \
+            DifferentialPair<float> dp_depth;  \
+            DifferentialPair<float3> dp_conic;  \
+            DifferentialPair<float> dp_opacity;  \
+            DifferentialPair<float3> dp_rgb;  \
+            int4 aabb_xyxy;  \
+            fwd_diff(fwd_funname)(  \
+                antialiased,  \
+                dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,  \
+                fx, fy, cx, cy, dist_coeffs,  \
+                image_width, image_height, 0.0f, 1e30f,  \
+                aabb_xyxy, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb  \
+            );  \
+            h_mean[i] =  \
+                dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +  \
+                h_depth * dp_depth.d * dp_depth.d +  \
+                dot(h_conic, dp_conic.d * dp_conic.d) +  \
+                h_opacity * dp_opacity.d * dp_opacity.d +  \
+                dot(h_rgb, dp_rgb.d * dp_rgb.d);  \
+        }  \
+    }
+
+// _DEF_projection_3dgs_vjp(projection_3dgs_persp_vjp, _projection_3dgs_persp_differentiable)
+// _DEF_projection_3dgs_vjp(projection_3dgs_fisheye_vjp, _projection_3dgs_fisheye_differentiable)
+_DEF_projection_3dgs_vjp(projection_3dgut_persp_vjp, _projection_3dgut_persp_differentiable)
+_DEF_projection_3dgs_vjp(projection_3dgut_fisheye_vjp, _projection_3dgut_fisheye_differentiable)
+
+
 [CudaDeviceExport]
 [Differentiable]
 float3x3 compute_3dgut_iscl_rot(float4 quat, float3 scale) {

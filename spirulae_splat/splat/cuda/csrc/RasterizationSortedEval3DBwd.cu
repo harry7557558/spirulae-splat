@@ -284,8 +284,8 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
             // backward diff splat
             float3 v_ray_o, v_ray_d;  // TODO
             typename SplatPrimitive::Screen v_splat = SplatPrimitive::Screen::zero();
-            v_splat += splat.evaluate_alpha_vjp(ray_o, ray_d, v_alpha, v_ray_o, v_ray_d);
-            v_splat += splat.evaluate_color_vjp(ray_o, ray_d, v_color, v_ray_o, v_ray_d);
+            v_splat.addGradient(splat.evaluate_alpha_vjp(ray_o, ray_d, v_alpha, v_ray_o, v_ray_d));
+            v_splat.addGradient(splat.evaluate_color_vjp(ray_o, ray_d, v_color, v_ray_o, v_ray_d));
 
             // update pixel states
             pix_Ts_with_grad = { T0, v_T0 };

@@ -136,6 +136,8 @@ class SpirulaeModelConfig(ModelConfig):
     """Pack projection outputs, reduce VRAM usage at large batch size but can be slightly slower"""
     use_bvh: bool = False
     """Use BVH for splat-patch intersection test, may be faster when batching large number of small patches"""
+    compute_hessian_diagonal: bool = False
+    """Whether to compute an approximation of Hessian diagonal in backward pass. Required for second-order optimizer."""
     supersampling: int = 1
     """Antialiasing by rendering at higher resolution and downsampling to a lower resolution, as per triangle splatting +"""
 
@@ -984,6 +986,7 @@ class SpirulaeModel(Model):
             camera_model=["pinhole", "fisheye"][is_fisheye],
             render_mode="RGB+D" if self.config.primitive in ['3dgs', 'mip', '3dgut', '3dgut_sv'] else "RGB+D+N",
             output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
+            compute_hessian_diagonal=self.config.compute_hessian_diagonal,
             **kwargs,
         )
         if self.config.supersampling != 1:

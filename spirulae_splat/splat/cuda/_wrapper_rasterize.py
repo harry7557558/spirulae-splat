@@ -46,6 +46,7 @@ def rasterize_to_pixels(
     packed: bool = False,
     absgrad: bool = False,
     output_distortion: bool = False,
+    compute_hessian_diagonal: bool = False,
     **kwargs
 ) -> Tuple[Tensor, Tensor]:
     # TODO
@@ -87,7 +88,7 @@ def rasterize_to_pixels(
         additional_args = [primitive == "mip"]
     if primitive in ["3dgut", "3dgut_sv"]:
         _RasterizeToPixels = _RasterizeToPixels3DGUT
-        additional_args += [output_distortion]
+        additional_args += [output_distortion, compute_hessian_diagonal]
     elif primitive in ["opaque_triangle"]:
         _RasterizeToPixels = _RasterizeToPixelsOpaqueTriangle
     elif primitive in ["voxel"]:
@@ -252,7 +253,8 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         intrins: Tensor,
         camera_model: Literal["pinhole", "fisheye"],
         dist_coeffs: Optional[Tensor],
-        output_distortion: bool = False
+        output_distortion: bool = False,
+        compute_hessian_diagonal: bool = False
     ) -> Tuple[Tensor, Tensor]:
 
         camera_model = gsplat.cuda._wrapper._make_lazy_cuda_obj(
@@ -294,6 +296,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         ctx.camera_model = camera_model
         ctx.tile_size = tile_size
         ctx.output_distortion = output_distortion
+        ctx.compute_hessian_diagonal = compute_hessian_diagonal
 
         render_alphas = 1.0 - render_Ts
         return render_rgbs, render_depths, render_alphas, distortion_rgbs, distortion_depths
@@ -318,10 +321,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         height = ctx.height
         tile_size = ctx.tile_size
 
-        (
-            (v_means, v_quats, v_depths, v_proj_scales, v_proj_opacities, v_colors),
-            v_viewmats,
-        ) = _make_lazy_cuda_func("rasterization_3dgut_backward")(
+        cuda_return = _make_lazy_cuda_func("rasterization_3dgut_backward" + "_with_hessian_diagonal"*ctx.compute_hessian_diagonal)(
             (means, quats, depths, proj_scales, proj_opacities, colors),
             viewmats, intrins, ctx.camera_model, dist_coeffs,
             backgrounds, masks,
@@ -334,6 +334,17 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
             ctx.needs_input_grad[13]
         )
 
+        h_splats = None
+        if ctx.compute_hessian_diagonal:
+            v_splats, v_viewmats, h_splats = cuda_return
+        else:
+            v_splats, v_viewmats = cuda_return
+        (v_means, v_quats, v_depths, v_proj_scales, v_proj_opacities, v_colors) = v_splats
+
+        if h_splats is not None:
+            for v, h in zip(v_splats, h_splats):
+                v.hess = h
+
         v_backgrounds = None
         if ctx.needs_input_grad[6]:
             v_backgrounds = (torch.cat([v_render_rgbs, v_render_depths], dim=-1) * \
@@ -341,7 +352,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
 
         return (
             v_means, v_quats, v_depths, v_proj_scales, v_proj_opacities, v_colors, v_backgrounds,
-            None, None, None, None, None, None, v_viewmats, None, None, None, None
+            None, None, None, None, None, None, v_viewmats, None, None, None, None, None
         )
 
 

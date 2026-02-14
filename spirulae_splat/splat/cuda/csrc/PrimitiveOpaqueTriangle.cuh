@@ -53,10 +53,24 @@ struct OpaqueTriangle {
         World& v_world, float3x3 &v_R, float3 &v_t
     );
 
+    inline static __device__ void project_persp_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_proj, Screen h_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t,
+        float3 &h_world_pos
+    );
+
     inline static __device__ void project_fisheye_vjp(
         World world, BwdProjCamera cam,
         Screen v_proj,
         World& v_world, float3x3 &v_R, float3 &v_t
+    );
+
+    inline static __device__ void project_fisheye_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_proj, Screen h_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t,
+        float3 &h_world_pos
     );
 
 #endif  // #ifdef __CUDACC__
@@ -87,6 +101,8 @@ struct OpaqueTriangle::World {
         at::Tensor features_dc;
         at::Tensor features_sh;
         at::Tensor features_ch;
+
+        Tensor() {}
 
         Tensor(const TensorTuple& splats) {
             means = std::get<0>(splats);
@@ -144,6 +160,8 @@ struct OpaqueTriangle::World {
         float3* __restrict__ features_sh;
         float3* __restrict__ features_ch;
         uint num_sh;
+
+        Buffer() {}
 
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.means);
@@ -266,6 +284,8 @@ struct OpaqueTriangle::RenderOutput {
         at::Tensor rgbs;
         at::Tensor depths;
         at::Tensor normals;
+
+        Tensor() {}
 
         Tensor(const TensorTuple& images) {
             rgbs = std::get<0>(images);
@@ -399,6 +419,8 @@ struct OpaqueTriangle::Screen {
         at::Tensor rgbs;
         at::Tensor normals;
 
+        Tensor() {}
+
         Tensor(const TensorTuple& splats) : hasWorld(true) {
             hardness = std::get<0>(splats);
             depths = std::get<1>(splats);
@@ -482,6 +504,8 @@ struct OpaqueTriangle::Screen {
         float3* __restrict__ normals;
         long size;
 
+        Buffer() {}
+
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.verts);
             if (tensors.hasWorld) {
@@ -526,15 +550,26 @@ struct OpaqueTriangle::Screen {
         };
     }
 
-    __device__ __forceinline__ void operator+=(const Screen &other) {
-        hardness += other.hardness;
-        depth += other.depth;
+    __device__ __forceinline__ void addGradient(const Screen &grad, float weight=1.0f) {
+        hardness += grad.hardness * weight;
+        depth += grad.depth * weight;
         #pragma unroll
         for (int i = 0; i < 3; i++) {
-            verts[i] += other.verts[i];
-            rgbs[i] += other.rgbs[i];
+            verts[i] += grad.verts[i] * weight;
+            rgbs[i] += grad.rgbs[i] * weight;
         }
-        normal += other.normal;
+        normal += grad.normal * weight;
+    }
+
+    __device__ __forceinline__ void addGaussNewtonHessianDiagonal(const Screen &grad, float weight=1.0f) {
+        hardness += grad.hardness * grad.hardness * weight;
+        depth += grad.depth * grad.depth * weight;
+        #pragma unroll
+        for (int i = 0; i < 3; i++) {
+            verts[i] += grad.verts[i] * grad.verts[i] * weight;
+            rgbs[i] += grad.rgbs[i] * grad.rgbs[i] * weight;
+        }
+        normal += grad.normal * grad.normal * weight;
     }
 
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
@@ -559,6 +594,10 @@ struct OpaqueTriangle::Screen {
             atomicAddFVec(buffer.rgbs + 3*idx+i, grad.rgbs[i]);
         }
         atomicAddFVec(buffer.normals + idx, grad.normal);
+    }
+
+    static __device__ __forceinline__ void atomicAddHessianDiagonalToBuffer(const Screen &grad2, Buffer &buffer, long idx) {
+        atomicAddGradientToBuffer(grad2, buffer, idx);
     }
 
     __device__ __forceinline__ float evaluate_alpha(float3 ray_o, float3 ray_d) {
@@ -658,6 +697,13 @@ inline __device__ void OpaqueTriangle::project_persp_vjp(
     v_world.hardness = v_proj.hardness;
 }
 
+inline __device__ void OpaqueTriangle::project_persp_vjp(
+    OpaqueTriangle::World world, OpaqueTriangle::BwdProjCamera cam,
+    OpaqueTriangle::Screen v_proj, OpaqueTriangle::Screen h_proj,
+    OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t,
+    float3 &h_world_pos
+) {}  // TODO
+
 inline __device__ void OpaqueTriangle::project_fisheye_vjp(
     OpaqueTriangle::World world, OpaqueTriangle::BwdProjCamera cam,
     OpaqueTriangle::Screen v_proj,
@@ -673,5 +719,12 @@ inline __device__ void OpaqueTriangle::project_fisheye_vjp(
     );
     v_world.hardness = v_proj.hardness;
 }
+
+inline __device__ void OpaqueTriangle::project_fisheye_vjp(
+    OpaqueTriangle::World world, OpaqueTriangle::BwdProjCamera cam,
+    OpaqueTriangle::Screen v_proj, OpaqueTriangle::Screen h_proj,
+    OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t,
+    float3 &h_world_pos
+) {}  // TODO
 
 #endif  // #ifdef __CUDACC__

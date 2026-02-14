@@ -104,6 +104,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("projection_3dgs_backward", &projection_3dgs_backward_tensor);
     m.def("projection_mip_backward", &projection_mip_backward_tensor);
     m.def("projection_3dgut_backward", &projection_3dgut_backward_tensor);
+    m.def("projection_3dgut_backward_with_position_hessian_diagonal", &projection_3dgut_backward_with_position_hessian_diagonal_tensor);
     m.def("projection_3dgut_sv_backward", &projection_3dgut_backward_tensor);
     m.def("projection_opaque_triangle_backward", &projection_opaque_triangle_backward_tensor);
     m.def("projection_voxel_backward", &projection_voxel_backward_tensor);
@@ -129,6 +130,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // RasterizationEval3DFwd.cuh and RasterizationEval3DBwd.cuh
     m.def("rasterization_3dgut_forward", &rasterize_to_pixels_3dgut_fwd);
     m.def("rasterization_3dgut_backward", &rasterize_to_pixels_3dgut_bwd);
+    m.def("rasterization_3dgut_backward_with_hessian_diagonal", &rasterize_to_pixels_3dgut_bwd_with_hessian_diagonal);
     m.def("rasterization_3dgut_sv_forward", &rasterize_to_pixels_3dgut_fwd);
     m.def("rasterization_3dgut_sv_backward", &rasterize_to_pixels_3dgut_bwd);
     m.def("rasterization_opaque_triangle_forward", &rasterize_to_pixels_opaque_triangle_sorted_fwd);
@@ -139,4 +141,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // Optimizer.cuh
     m.def("fused_adam", &fused_adam);
     m.def("fused_adam_multi", &fused_adam_multi);
+    m.def("fused_newton", &fused_newton);
+    m.def("fused_newton_multi", &fused_newton_multi);
+    m.def("fused_3dgs2tr_mean_optim", &fused_3dgs2tr_mean_optim);
 }

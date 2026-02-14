@@ -103,7 +103,7 @@ def fully_fused_projection(
     intrins: Tensor,  # [..., C, 4]
     width: int,
     height: int,
-    near_plane: float = 0.01,
+    near_plane: float = 0.0,
     far_plane: float = 1e10,
     packed: bool = False,
     sparse_grad: bool = False,
@@ -214,15 +214,34 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, v_aabb, *v_proj_returns):
+        with_hessian_diagonal = all([hasattr(v, 'hess') for v in v_proj_returns])
+
         means, quats, scales, opacities, features_dc, features_sh, viewmats, intrins, aabb = ctx.saved_tensors
-        (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh), v_viewmats = _make_lazy_cuda_func(
-            f"projection_{ctx.primitive}_backward"
-        )(
-            (means, quats, scales, opacities, features_dc, features_sh),
-            viewmats, intrins, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs, aabb,
-            [x.contiguous() for x in v_proj_returns],
-            ctx.needs_input_grad[7],  # viewmats_requires_grad
-        )
+        if with_hessian_diagonal:
+            (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh), v_viewmats, h_means = _make_lazy_cuda_func(
+                f"projection_{ctx.primitive}_backward_with_position_hessian_diagonal"
+            )(
+                (means, quats, scales, opacities, features_dc, features_sh),
+                viewmats, intrins, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs, aabb,
+                [x.contiguous() for x in v_proj_returns],
+                [x.hess for x in v_proj_returns],
+                ctx.needs_input_grad[7],  # viewmats_requires_grad
+            )
+            if h_means is not None:
+                means.hess = h_means.view(v_means.shape)
+                # v_means /= means.hess + 1e-8
+                means.scales = scales
+                means.quats = quats
+                means.opacities = opacities
+        else:
+            (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh), v_viewmats = _make_lazy_cuda_func(
+                f"projection_{ctx.primitive}_backward"
+            )(
+                (means, quats, scales, opacities, features_dc, features_sh),
+                viewmats, intrins, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs, aabb,
+                [x.contiguous() for x in v_proj_returns],
+                ctx.needs_input_grad[7],  # viewmats_requires_grad
+            )
         if not ctx.needs_input_grad[7]:
             v_viewmats = None
         return (
@@ -374,7 +393,7 @@ def fully_fused_projection_hetero(
     tile_height: int,
     intersection_count_map: Tensor,  # [C+1]
     intersection_splat_id: Tensor,  # [nnz]
-    near_plane: float = 0.01,
+    near_plane: float = 0.0,
     far_plane: float = 1e10,
     sparse_grad: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
