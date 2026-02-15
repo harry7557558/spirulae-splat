@@ -527,8 +527,22 @@ struct VoxelPrimitive::Screen {
         atomicAddFVec(buffer.rgbs + idx, grad.rgb);
     }
 
-    static __device__ __forceinline__ void atomicAddHessianDiagonalToBuffer(const Screen &grad2, Buffer &buffer, long idx) {
-        atomicAddGradientToBuffer(grad2, buffer, idx);
+    static __device__ __forceinline__ void atomicAddGaussNewtonHessianDiagonalToBuffer(const Screen &grad, Buffer &buffer, long idx, float weight=1.0f) {
+        long idx0 = idx % buffer.size;
+        if (buffer.pos_size != nullptr) {
+            float4 temp = {grad.pos.x, grad.pos.y, grad.pos.z, grad.size};
+            atomicAddFVec(buffer.pos_size + idx0, temp * temp * weight);
+        }
+        if (buffer.depths != nullptr)
+            atomicAddFVec(buffer.depths + idx, grad.depth * grad.depth * weight);
+        // if (buffer.densities != nullptr) {
+        if (true) {  // should not be nullptr, spot bug if crash
+            float4 temp = {grad.densities[0], grad.densities[1], grad.densities[2], grad.densities[3]};
+            atomicAddFVec(buffer.densities + 2*idx0, temp * temp * weight);
+            temp = {grad.densities[4], grad.densities[5], grad.densities[6], grad.densities[7]};
+            atomicAddFVec(buffer.densities + 2*idx0+1, temp * temp * weight);
+        }
+        atomicAddFVec(buffer.rgbs + idx, grad.rgb * grad.rgb * weight);
     }
 
     __device__ __forceinline__ float evaluate_alpha(float3 ray_o, float3 ray_d) {

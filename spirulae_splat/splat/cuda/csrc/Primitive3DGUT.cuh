@@ -372,13 +372,15 @@ struct Base3DGUT::Screen {
         atomicAddFVec(buffer.rgbs + idx, grad.rgb);
     }
 
-    __device__ void atomicAddHessianDiagonalToBuffer(const Screen &grad2, Buffer &buffer, long idx) const {
-        atomicAddFVec(buffer.means + idx % buffer.size, grad2.mean);
-        atomicAddFVec(buffer.quats + idx % buffer.size, grad2.quat);
-        atomicAddFVec(buffer.depths + idx, grad2.depth);
-        atomicAddFVec(buffer.scales + idx, grad2.scale);
-        atomicAddFVec(buffer.opacities + idx, grad2.opacity);
-        atomicAddFVec(buffer.rgbs + idx, grad2.rgb);
+    __device__ void atomicAddGaussNewtonHessianDiagonalToBuffer(const Screen &grad, Buffer &buffer, long idx, float weight=1.0f) const {
+        float4 v_quat; float3 v_scale;
+        compute_3dgut_iscl_rot_vjp(quat, scale, grad.iscl_rot, &v_quat, &v_scale);
+        atomicAddFVec(buffer.means + idx % buffer.size, grad.mean * grad.mean * weight);
+        atomicAddFVec(buffer.quats + idx % buffer.size, (grad.quat + v_quat) * (grad.quat + v_quat) * weight);
+        atomicAddFVec(buffer.depths + idx, grad.depth * grad.depth * weight);
+        atomicAddFVec(buffer.scales + idx, (grad.scale + v_scale) * (grad.scale + v_scale) * weight);
+        atomicAddFVec(buffer.opacities + idx, grad.opacity * grad.opacity * weight);
+        atomicAddFVec(buffer.rgbs + idx, grad.rgb * grad.rgb * weight);
     }
 
     __device__ __forceinline__ float evaluate_alpha(float3 ray_o, float3 ray_d) {

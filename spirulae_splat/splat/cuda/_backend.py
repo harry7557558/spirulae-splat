@@ -48,7 +48,7 @@ try:
     from spirulae_splat import csrc as _C
 except ImportError as error:
     print(error)
-    assert False
+    exit(0)
 
     # if failed, try with JIT compilation
     if cuda_toolkit_available():

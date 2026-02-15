@@ -6,6 +6,7 @@
 std::tuple<
     Vanilla3DGUT::Screen::TensorTuple,
     std::optional<at::Tensor>,  // v_viewmats
+    std::optional<Vanilla3DGUT::Screen::TensorTuple>,  // jacobian residual product
     std::optional<Vanilla3DGUT::Screen::TensorTuple>  // hessian diagonal
 > rasterize_to_pixels_3dgut_bwd_with_hessian_diagonal(
     // Gaussian parameters
@@ -28,6 +29,7 @@ std::tuple<
     const at::Tensor last_ids,      // [..., image_height, image_width]
     std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> render_outputs,
     std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> render2_outputs,
+    std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     Vanilla3DGUT::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
@@ -40,7 +42,7 @@ std::tuple<
             viewmats, intrins, camera_model, dist_coeffs,
             backgrounds, masks,
             image_width, image_height, tile_size, tile_offsets, flatten_ids,
-            render_Ts, last_ids, render_outputs, render2_outputs,
+            render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
             v_render_outputs, v_render_alphas, v_distortion_outputs,
             need_viewmat_grad
         );
@@ -49,7 +51,7 @@ std::tuple<
         viewmats, intrins, camera_model, dist_coeffs,
         backgrounds, masks,
         image_width, image_height, tile_size, tile_offsets, flatten_ids,
-        render_Ts, last_ids, render_outputs, render2_outputs,
+        render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
         v_render_outputs, v_render_alphas, v_distortion_outputs,
         need_viewmat_grad
     );

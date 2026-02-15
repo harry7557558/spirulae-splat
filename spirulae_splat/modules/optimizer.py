@@ -169,14 +169,7 @@ class Fused3DGS2TrMean(Optimizer):
                 if p.grad is None:
                     continue
                 
-                # params_with_grad.append(p)
-                # grads.append(p.grad)
-                # if hasattr(p, 'hess'):
-                #     hess_diags.append(p.hess)
-                #     # hess_diags.append(torch.ones_like(p.hess) * p.hess.mean())
-                #     print(torch.mean(p.grad), torch.mean(p.hess), torch.mean(torch.where(p.hess > 0.0, p.grad, p.grad / (p.hess+1e-30))))
-                # else:
-                #     raise NotImplementedError()
+                # print(p.grad.mean().item(), p.gradr.mean().item(), p.hess.mean().item())
                 
                 state = self.state[p]
                 
@@ -194,7 +187,8 @@ class Fused3DGS2TrMean(Optimizer):
 
                 _make_lazy_cuda_func("fused_3dgs2tr_mean_optim")(
                     p,
-                    p.grad,
+                    # p.grad,
+                    p.gradr,  # gradient residual product
                     p.hess,
                     p.scales,
                     p.quats,
@@ -209,7 +203,9 @@ class Fused3DGS2TrMean(Optimizer):
                     state['step1'],
                     state['step2']
                 )
-                del p.hess  # zero_grad
+                # zero_grad
+                del p.gradr
+                del p.hess
 
         return loss
 

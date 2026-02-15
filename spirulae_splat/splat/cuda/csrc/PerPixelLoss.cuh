@@ -65,7 +65,7 @@ enum class LossIndex {
 
 
 
-std::tuple<at::Tensor, at::Tensor>
+std::tuple<at::Tensor, at::Tensor, std::optional<at::Tensor>>
 compute_per_pixel_losses_forward_tensor(
     std::optional<at::Tensor> render_rgb,
     std::optional<at::Tensor> ref_rgb,
@@ -85,7 +85,8 @@ compute_per_pixel_losses_forward_tensor(
     std::optional<at::Tensor> alpha_mask,
     const std::array<float, (int)LossWeightIndex::length> loss_weights_0,
     long num_train_images,
-    std::optional<at::Tensor> camera_indices
+    std::optional<at::Tensor> camera_indices,
+    bool return_loss_map
 );
 
 

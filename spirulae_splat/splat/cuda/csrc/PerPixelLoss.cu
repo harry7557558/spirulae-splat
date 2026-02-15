@@ -72,6 +72,7 @@ __global__ void per_pixel_losses_forward_kernel(
     const bool* __restrict__ normal_mask,
     const bool* __restrict__ alpha_mask,
     FixedArray<float, (uint)LossWeightIndex::length> loss_weights,
+    float* __restrict__ out_loss_map,  // non differentiable
     float* __restrict__ out_losses
 ) {
     size_t pixel_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -104,6 +105,21 @@ __global__ void per_pixel_losses_forward_kernel(
             &loss_weights,
             &losses
         );
+
+        if (out_loss_map != nullptr) {
+            out_loss_map[idx] =
+                losses[(int)RawLossIndex::RgbL1] +
+                losses[(int)RawLossIndex::RenderNormalSup] +
+                losses[(int)RawLossIndex::DepthNormalSup] +
+                losses[(int)RawLossIndex::AlphaSup] +
+                losses[(int)RawLossIndex::AlphaSupUnder] +
+                losses[(int)RawLossIndex::NormalReg] +
+                losses[(int)RawLossIndex::AlphaReg] +
+                losses[(int)RawLossIndex::RgbDistReg] +
+                losses[(int)RawLossIndex::DepthDistReg] +
+                losses[(int)RawLossIndex::NormalDistReg];
+            // TODO: more accurate version
+        }
     }
 
     auto block = cg::this_thread_block();
@@ -316,7 +332,7 @@ __global__ void per_pixel_losses_reduce_backward_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<at::Tensor, at::Tensor>
+std::tuple<at::Tensor, at::Tensor, std::optional<at::Tensor>>
 compute_per_pixel_losses_forward_tensor(
     std::optional<at::Tensor> render_rgb,
     std::optional<at::Tensor> ref_rgb,
@@ -336,7 +352,8 @@ compute_per_pixel_losses_forward_tensor(
     std::optional<at::Tensor> alpha_mask,
     const std::array<float, (int)LossWeightIndex::length> loss_weights_0,
     long num_train_images,
-    std::optional<at::Tensor> camera_indices
+    std::optional<at::Tensor> camera_indices,
+    bool return_loss_map
 ) {
     long B = -1, H = -1, W = -1;
     auto check_generic = [&](std::string name, const at::Tensor& tensor) {
@@ -384,6 +401,9 @@ compute_per_pixel_losses_forward_tensor(
         num_train_images = B;
     at::Tensor raw_losses = at::zeros({num_train_images+1, (uint)RawLossIndex::length}, render_rgb.value().options());
     at::Tensor losses = at::zeros({(uint)LossIndex::length}, render_rgb.value().options());
+    std::optional<at::Tensor> loss_map;
+    if (return_loss_map)
+        loss_map = at::zeros({B, H, W, 1}, render_rgb.value().options());
 
     per_pixel_losses_forward_kernel<<<_LAUNCH_ARGS_2D(pixels_per_image, B, WARP_SIZE*WARP_SIZE, 1)>>>(
         B, pixels_per_image,
@@ -405,6 +425,7 @@ compute_per_pixel_losses_forward_tensor(
         normal_mask.has_value() ? (bool*)normal_mask.value().contiguous().data_ptr<bool>() : nullptr,
         alpha_mask.has_value() ? (bool*)alpha_mask.value().contiguous().data_ptr<bool>() : nullptr,
         loss_weights,
+        return_loss_map ? loss_map.value().data_ptr<float>() : nullptr,
         raw_losses.data_ptr<float>()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -418,7 +439,7 @@ compute_per_pixel_losses_forward_tensor(
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    return std::make_tuple(losses, raw_losses);
+    return std::make_tuple(losses, raw_losses, loss_map);
 }
 
 

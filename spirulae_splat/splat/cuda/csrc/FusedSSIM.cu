@@ -76,6 +76,7 @@ __global__ void fusedssimCUDA(
     int B, int H, int W,
     const float3* __restrict__ img1,
     const float3* __restrict__ img2,
+    float* __restrict__ ssim,
     float* __restrict__ ssim_map,
     float3* __restrict__ dm_dmu1,
     float3* __restrict__ dm_dsigma1_sq,
@@ -283,6 +284,8 @@ __global__ void fusedssimCUDA(
                 dm_dmu1[global_idx]       = d_m_dmu1;
                 dm_dsigma1_sq[global_idx] = d_m_dsigma1_sq;
                 dm_dsigma12[global_idx]   = d_m_dsigma12;
+                if (ssim_map != nullptr)
+                    ssim_map[global_idx] = val;
             }
         }
 
@@ -291,7 +294,7 @@ __global__ void fusedssimCUDA(
         cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
         val = cg::reduce(warp, val, cg::plus<float>());
         if (warp.thread_rank() == 0)
-            atomicAdd(ssim_map, val/(B*W*H));
+            atomicAdd(ssim, val/(B*W*H));
     }
 
 }
@@ -442,14 +445,15 @@ __global__ void fusedssim_backwardCUDA(
 
 // ------------------------------------------
 // PyTorch Interface (Forward)
-//   Returns (ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12).
+//   Returns (ssim, ssim_map (single channel non differentiable), dm_dmu1, dm_dsigma1_sq, dm_dsigma12).
 //   If train=false, derivative Tensors are empty.
 // ------------------------------------------
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+std::tuple<at::Tensor, std::optional<at::Tensor>, at::Tensor, at::Tensor, at::Tensor>
 fused_ssim_forward(
     at::Tensor &img1,
     at::Tensor &img2,
-    bool train
+    bool train,
+    bool return_ssim_map
 ) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
     int B  = img1.size(0);
@@ -466,26 +470,28 @@ fused_ssim_forward(
     dim3 block(BLOCK_X, BLOCK_Y);
 
     // Output SSIM map
-    // auto ssim_map = at::empty_like(img1, img1.options());
-    auto ssim_map = at::zeros({}, img1.options());
+    at::Tensor ssim = at::zeros({}, img1.options());
+    std::optional<at::Tensor> ssim_map;
+    if (return_ssim_map)
+        ssim_map = at::zeros({B, H, W, 1}, img1.options());
 
     // Optionally allocate derivative Tensors
-    auto dm_dmu1       = train ? at::empty_like(img1) : at::empty({0}, img1.options());
-    auto dm_dsigma1_sq = train ? at::empty_like(img1) : at::empty({0}, img1.options());
-    auto dm_dsigma12   = train ? at::empty_like(img1) : at::empty({0}, img1.options());
+    at::Tensor dm_dmu1       = train ? at::empty_like(img1) : at::empty({0}, img1.options());
+    at::Tensor dm_dsigma1_sq = train ? at::empty_like(img1) : at::empty({0}, img1.options());
+    at::Tensor dm_dsigma12   = train ? at::empty_like(img1) : at::empty({0}, img1.options());
 
     fusedssimCUDA<<<grid, block>>>(
         B, H, W,
         (float3*)img1.data_ptr<float>(),
         (float3*)img2.data_ptr<float>(),
-        // (float3*)ssim_map.data_ptr<float>(),
-        ssim_map.data_ptr<float>(),
+        ssim.data_ptr<float>(),
+        return_ssim_map ? ssim_map.value().data_ptr<float>() : nullptr,
         train ? (float3*)dm_dmu1.data_ptr<float>()       : nullptr,
         train ? (float3*)dm_dsigma1_sq.data_ptr<float>() : nullptr,
         train ? (float3*)dm_dsigma12.data_ptr<float>()   : nullptr
     );
 
-    return std::make_tuple(ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12);
+    return std::make_tuple(ssim, ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12);
 }
 
 // ------------------------------------------

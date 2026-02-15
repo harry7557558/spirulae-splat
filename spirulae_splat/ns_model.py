@@ -42,7 +42,7 @@ from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
 from spirulae_splat.strategy import DefaultStrategy, MCMCStrategy, OpaqueStrategy, SVRasterStrategy
 from spirulae_splat.splat._camera import _Camera
 
-from spirulae_splat.modules.training_losses import SplatTrainingLosses
+from spirulae_splat.modules.training_losses import SplatTrainingLosses, _BackwardMetadataInjector
 from spirulae_splat.splat.cuda._wrapper_per_pixel import blend_background, linear_rgb_to_srgb, get_color_transform_matrix
 from spirulae_splat.splat.cuda import (
     svhash_create_initial_volume,
@@ -116,8 +116,8 @@ class SpirulaeModelConfig(ModelConfig):
     """Number of gaussians to initialize if random init is used"""
     random_scale: float = 1.0
     """Position standard deviation to initialize random gaussians"""
-    ssim_lambda: float = 0.4
-    """Weight of ssim loss; 0.2 for optimal PSNR, higher for better visual quality"""
+    ssim_lambda: float = 0.2
+    """Weight of ssim loss; 0.2 for academic baseline, higher for potentially more high-frequency details, lower for less blurry background in outdoor scenes"""
     lpips_lambda: float = 0.0
     """Weight of lpips loss for better perceptual quality; Note that this can make training much slower"""
     use_camera_optimizer: bool = False
@@ -989,6 +989,9 @@ class SpirulaeModel(Model):
             compute_hessian_diagonal=self.config.compute_hessian_diagonal,
             **kwargs,
         )
+        if self.config.compute_hessian_diagonal:
+            rgbd = list(rgbd)
+            rgbd[0], backward_metadata_injector = _BackwardMetadataInjector.apply(rgbd[0])
         if self.config.supersampling != 1:
             rgbd = [resize_image(im, self.config.supersampling) for im in rgbd]
             alpha = resize_image(alpha, self.config.supersampling)
@@ -1086,6 +1089,8 @@ class SpirulaeModel(Model):
         outputs = {
             "rgb": rgb,
         }
+        if self.config.compute_hessian_diagonal and self.training:
+            outputs["backward_metadata_injector"] = backward_metadata_injector
         if depth_im_ref is not None:
             outputs["depth"] = depth_im_ref
         if render_normal is not None:

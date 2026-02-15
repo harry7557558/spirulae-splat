@@ -52,12 +52,14 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
     typename SplatPrimitive::RenderOutput::Buffer render_output_buffer,
     typename SplatPrimitive::RenderOutput::Buffer render2_output_buffer,
+    const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
     typename SplatPrimitive::RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_alphas, // [..., image_height, image_width, 1]
     typename SplatPrimitive::RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     typename SplatPrimitive::Screen::Buffer v_splat_buffer,
+    typename SplatPrimitive::Screen::Buffer vr_splat_buffer,
     typename SplatPrimitive::Screen::Buffer h_splat_buffer,
     float *__restrict__ v_viewmats // [B, C, 4, 4]
 ) {
@@ -105,6 +107,8 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     __shared__ typename SplatPrimitive::RenderOutput pix_colors[output_distortion ? BLOCK_SIZE : 1];
     __shared__ typename SplatPrimitive::RenderOutput pix2_colors[output_distortion ? BLOCK_SIZE : 1];
     __shared__ typename SplatPrimitive::RenderOutput v_distortion_out[output_distortion ? BLOCK_SIZE : 1];
+
+    __shared__ float residual_map[output_hessian_diagonal ? BLOCK_SIZE : 1];
 
     float3 ray_o = transform_ray_o(R, t);
     float3 total_v_ray_o = make_float3(0.0f, 0.0f, 0.0f);
@@ -160,6 +164,11 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         if (output_viewmat_grad) {
             shared_v_ray_d[pix_id_local] = make_float3(0.0f, 0.0f, 0.0f);
         }
+
+        if (output_hessian_diagonal) {
+            residual_map[pix_id_local] = loss_map_buffer ?
+                sqrtf(fmaxf(loss_map_buffer[pix_id_image_global], 0.0f)) : 1.0f;
+        }
     }
     block.sync();
 
@@ -193,7 +202,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
 
         // accumulate gradient
         typename SplatPrimitive::Screen v_splat = SplatPrimitive::Screen::zero();
-        typename SplatPrimitive::Screen h_splat = SplatPrimitive::Screen::zero();
+        typename SplatPrimitive::Screen vr_splat = SplatPrimitive::Screen::zero();
 
         // thread 0 takes last splat, 1 takes second last, etc.
         // at t=0, thread 0 (splat -1) undo pixel 0
@@ -281,33 +290,14 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
             // backward diff splat
             float3 v_ray_o_alpha, v_ray_d_alpha;
             float3 v_ray_o_color, v_ray_d_color;
-            // if (output_hessian_diagonal) {
-            if (false) {
-                // Ideally output 1) Jacobian-residual product 2) Hessian diagonal
-                // Hessian diagonal can be estimated with Gauss-Newton method
-                // Estimate per-pixel residual by loss divided by pixel count
-                // Estimate per-term residual by per-pixel residual divided by number of intersections
-                // TODO: actually provide per-pixel loss map?
-                float intersection_rate = 0.7f;  // rough estimate, adjust if needed
-                float estimated_residual_count = 2.0f * intersection_rate * (float)(__float_as_int(ray_d_pix_bin_final.w) - range_start) * total_num_pixels;
-              #if 0
-                float residual = 1.0f / estimated_residual_count;  // compensate by setting learning rate to loss
-                auto v_splat_i = splat.evaluate_alpha_vjp(ray_o, ray_d, v_alpha, v_ray_o_alpha, v_ray_d_alpha);
-                v_splat.addGradient(v_splat_i, residual);
-                h_splat.addGaussNewtonHessianDiagonal(v_splat_i);
-                v_splat_i = splat.evaluate_color_vjp(ray_o, ray_d, v_color, v_ray_o_color, v_ray_d_color);
-                v_splat.addGradient(v_splat_i, residual);
-                h_splat.addGaussNewtonHessianDiagonal(v_splat_i);
-              #else
-                // add to Hessian to keep gradient needed for downstream tasks
-                // may still make good approximation without introducing much latency
+            if (output_hessian_diagonal) {
+                float weight = residual_map[pix_id] / sqrtf(fmaxf(v_c.dot(v_c) / 3.0f, 1e-30f));
                 auto v_splat_i = splat.evaluate_alpha_vjp(ray_o, ray_d, v_alpha, v_ray_o_alpha, v_ray_d_alpha);
                 v_splat.addGradient(v_splat_i);
-                h_splat.addGaussNewtonHessianDiagonal(v_splat_i, estimated_residual_count);
+                vr_splat.addGradient(v_splat_i, weight);
                 v_splat_i = splat.evaluate_color_vjp(ray_o, ray_d, v_color, v_ray_o_color, v_ray_d_color);
                 v_splat.addGradient(v_splat_i);
-                h_splat.addGaussNewtonHessianDiagonal(v_splat_i, estimated_residual_count);
-              #endif
+                vr_splat.addGradient(v_splat_i, weight);
             } else {
                 v_splat.addGradient(splat.evaluate_alpha_vjp(ray_o, ray_d, v_alpha, v_ray_o_alpha, v_ray_d_alpha));
                 v_splat.addGradient(splat.evaluate_color_vjp(ray_o, ray_d, v_color, v_ray_o_color, v_ray_d_color));
@@ -328,8 +318,8 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         if (splat_idx >= range_start) {
             splat.atomicAddGradientToBuffer(v_splat, v_splat_buffer, splat_gid);
             if (output_hessian_diagonal) {
-                h_splat.addGaussNewtonHessianDiagonal(v_splat, total_num_pixels);
-                splat.atomicAddHessianDiagonalToBuffer(h_splat, h_splat_buffer, splat_gid);
+                splat.atomicAddGradientToBuffer(vr_splat, vr_splat_buffer, splat_gid);
+                splat.atomicAddGaussNewtonHessianDiagonalToBuffer(v_splat, h_splat_buffer, splat_gid, total_num_pixels);
             }
         }
     }
@@ -406,12 +396,14 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     const at::Tensor last_ids,      // [..., image_height, image_width]
     typename SplatPrimitive::RenderOutput::Tensor *render_outputs,
     typename SplatPrimitive::RenderOutput::Tensor *render2_outputs,
+    const at::Tensor *loss_map,           // [..., image_height, image_width, 1]
     // gradients of outputs
     typename SplatPrimitive::RenderOutput::Tensor v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
     typename SplatPrimitive::RenderOutput::Tensor *v_distortion_outputs,
     // outputs
     typename SplatPrimitive::Screen::Tensor v_splats,
+    typename SplatPrimitive::Screen::Tensor *vr_splats,
     typename SplatPrimitive::Screen::Tensor *h_splats,
     std::optional<at::Tensor> v_viewmats
 ) {
@@ -434,9 +426,12 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
         return;
     }
 
+    typename SplatPrimitive::Screen::Buffer vr_splats_buffer;
     typename SplatPrimitive::Screen::Buffer h_splats_buffer;
-    if (output_hessian_diagonal)
+    if (output_hessian_diagonal) {
+        vr_splats_buffer = vr_splats->buffer();
         h_splats_buffer = h_splats->buffer();
+    }
 
     #define _LAUNCH_ARGS <<<grid, threads, 0, at::cuda::getCurrentCUDAStream()>>>( \
             I, N, n_isects, packed, \
@@ -449,9 +444,10 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
             render_Ts.data_ptr<float>(), last_ids.data_ptr<int32_t>(), \
             output_distortion ? render_outputs->buffer() : typename SplatPrimitive::RenderOutput::Buffer(), \
             output_distortion ? render2_outputs->buffer() : typename SplatPrimitive::RenderOutput::Buffer(), \
+            output_hessian_diagonal ? loss_map->data_ptr<float>() : nullptr, \
             v_render_outputs.buffer(), v_render_alphas.data_ptr<float>(), \
             output_distortion ? v_distortion_outputs->buffer() : typename SplatPrimitive::RenderOutput::Buffer(), \
-            v_splats.buffer(), h_splats_buffer, \
+            v_splats.buffer(), vr_splats_buffer, h_splats_buffer, \
             v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr \
         )
 
@@ -483,6 +479,7 @@ template<typename SplatPrimitive, bool output_distortion, bool output_hessian_di
 inline std::tuple<
     typename SplatPrimitive::Screen::TensorTuple,
     std::optional<at::Tensor>,  // v_viewmats
+    std::optional<typename SplatPrimitive::Screen::TensorTuple>,  // jacobian residual product
     std::optional<typename SplatPrimitive::Screen::TensorTuple>  // hessian diagonal
 > _rasterize_to_pixels_eval3d_bwd_tensor(
     // Gaussian parameters
@@ -505,6 +502,7 @@ inline std::tuple<
     const at::Tensor last_ids,      // [..., image_height, image_width]
     std::optional<typename SplatPrimitive::RenderOutput::TensorTuple> render_outputs_tuple,
     std::optional<typename SplatPrimitive::RenderOutput::TensorTuple> render2_outputs_tuple,
+    std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     typename SplatPrimitive::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
@@ -541,8 +539,10 @@ inline std::tuple<
         render2_outputs = render2_outputs_tuple;
         v_distortion_outputs = v_distortion_outputs_tuple;
     }
+    std::optional<typename SplatPrimitive::Screen::Tensor> vr_splats = std::nullopt;
     std::optional<typename SplatPrimitive::Screen::Tensor> h_splats = std::nullopt;
     if (output_hessian_diagonal) {
+        vr_splats = splats.allocRasterBwd();
         h_splats = splats.allocRasterBwd();
     }
 
@@ -554,17 +554,21 @@ inline std::tuple<
         render_Ts, last_ids,
         output_distortion ? &render_outputs.value() : nullptr,
         output_distortion ? &render2_outputs.value() : nullptr,
+        output_hessian_diagonal ? &loss_map.value() : nullptr,
         v_render_outputs, v_render_alphas,
         output_distortion ? &v_distortion_outputs.value() : nullptr,
         v_splats,
+        output_hessian_diagonal ? &vr_splats.value() : nullptr,
         output_hessian_diagonal ? &h_splats.value() : nullptr,
         v_viewmats
     );
 
     if (output_hessian_diagonal)
         return std::make_tuple(v_splats.tupleRasterBwd(), v_viewmats,
+            (std::optional<typename SplatPrimitive::Screen::TensorTuple>)vr_splats.value().tupleRasterBwd(),
             (std::optional<typename SplatPrimitive::Screen::TensorTuple>)h_splats.value().tupleRasterBwd());
     return std::make_tuple(v_splats.tupleRasterBwd(), v_viewmats,
+        (std::optional<typename SplatPrimitive::Screen::TensorTuple>)std::nullopt,
         (std::optional<typename SplatPrimitive::Screen::TensorTuple>)std::nullopt);
 }
 
@@ -594,20 +598,21 @@ inline std::tuple<
     const at::Tensor &last_ids,      // [..., image_height, image_width]
     std::optional<typename SplatPrimitive::RenderOutput::TensorTuple> &render_outputs,
     std::optional<typename SplatPrimitive::RenderOutput::TensorTuple> &render2_outputs,
+    std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     typename SplatPrimitive::RenderOutput::TensorTuple &v_render_outputs,
     const at::Tensor &v_render_alphas, // [..., image_height, image_width, 1]
     std::optional<typename SplatPrimitive::RenderOutput::TensorTuple> &v_distortion_outputs,
     bool need_viewmat_grad
 ) {
-    auto [v_splats, v_viewmat, h_splats] =
+    auto [v_splats, v_viewmat, vr_splats, h_splats] =
         _rasterize_to_pixels_eval3d_bwd_tensor<SplatPrimitive, output_distortion, false>
     (
         splats_tuple,
         viewmats, intrins, camera_model, dist_coeffs,
         backgrounds, masks,
         image_width, image_height, tile_size, tile_offsets, flatten_ids,
-        render_Ts, last_ids, render_outputs, render2_outputs,
+        render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
         v_render_outputs, v_render_alphas, v_distortion_outputs,
         need_viewmat_grad
     );

@@ -34,6 +34,22 @@ from spirulae_splat.modules.lpips import LearnedPerceptualImagePatchSimilarity
 from nerfstudio.cameras.cameras import Cameras, CameraType
 
 
+class _BackwardMetadataInjector(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        ctx.meta = {}
+        def set_meta(key, meta):
+            nonlocal ctx
+            ctx.meta[key] = meta
+        return x, set_meta
+    @staticmethod
+    def backward(ctx, v_x, *kwargs):
+        for key, value in ctx.meta.items():
+            setattr(v_x, key, value)
+        del ctx.meta
+        return v_x
+
+
 class _MaskGradient(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, mask):
@@ -46,18 +62,18 @@ class _MaskGradient(torch.autograd.Function):
 
 class FusedSSIM(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, img1, img2, train=True):
-        ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = \
-            _make_lazy_cuda_func("fused_ssim_forward")(img1, img2, train)
+    def forward(ctx, img1, img2, train=True, return_ssim_map=False):
+        ssim, ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = \
+            _make_lazy_cuda_func("fused_ssim_forward")(img1, img2, train, return_ssim_map)
 
         ctx.save_for_backward(img1.detach(), img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
 
-        return ssim_map
+        return ssim, ssim_map
 
     @staticmethod
-    def backward(ctx, dL_dmap):
+    def backward(ctx, dL_dssim, dL_dmap):
         img1, img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = ctx.saved_tensors
-        grad = _make_lazy_cuda_func("fused_ssim_backward")(img1, img2, dL_dmap, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
+        grad = _make_lazy_cuda_func("fused_ssim_backward")(img1, img2, dL_dssim, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
         return grad, None, None, None
 
 
@@ -134,6 +150,7 @@ class _ComputePerPixelLosses(torch.autograd.Function):
         weights: List[float],
         num_train_images: int = -1,
         camera_indices: Optional[torch.Tensor] = None,
+        return_loss_map: bool = False
     ):
         if not isinstance(camera_indices, torch.Tensor):
             num_train_images = -1
@@ -158,9 +175,10 @@ class _ComputePerPixelLosses(torch.autograd.Function):
             alpha_mask
         )
 
-        losses, raw_losses = _C.compute_per_pixel_losses_forward(
+        losses, raw_losses, loss_map = _C.compute_per_pixel_losses_forward(
             *tensors, weights,
-            num_train_images, camera_indices
+            num_train_images, camera_indices,
+            return_loss_map
         )
         # print(losses)
         # print(raw_losses[0].detach().cpu().numpy().tolist())
@@ -170,10 +188,11 @@ class _ComputePerPixelLosses(torch.autograd.Function):
         ctx.num_train_images = num_train_images
         ctx.save_for_backward(*tensors, raw_losses, camera_indices)
 
-        return losses
+        return losses, loss_map
 
     @staticmethod
-    def backward(ctx, v_losses):
+    def backward(ctx, v_losses, v_loss_map):
+        # warn that loss map is not differentiable
         grads = _C.compute_per_pixel_losses_backward(
             *ctx.saved_tensors[:-1],
             ctx.weights,
@@ -542,10 +561,11 @@ class SplatTrainingLosses(torch.nn.Module):
             raise NotImplementedError("Adaptive exposure is deprecated. Use bilateral grid instead.")
 
         # ssim loss
-        ssim = FusedSSIM.apply(
+        ssim, ssim_map = FusedSSIM.apply(
             pred_rgb.contiguous(),
             gt_rgb.contiguous(),
-            True  # TODO: detect torch.no_grad()
+            True,  # TODO: detect torch.no_grad()
+            self.config.compute_hessian_diagonal
         )
 
         # call fused kernel to compute loss
@@ -560,7 +580,7 @@ class SplatTrainingLosses(torch.nn.Module):
                 intrins, camera.distortion_params
             )
 
-        losses = _ComputePerPixelLosses.apply(
+        losses, loss_map = _ComputePerPixelLosses.apply(
             pred_rgb,
             gt_rgb,
             pred_depth,
@@ -602,6 +622,7 @@ class SplatTrainingLosses(torch.nn.Module):
             ],
             meta.get("num_train_data", -1),
             camera.metadata.get('cam_idx', None),
+            self.config.compute_hessian_diagonal
         )
         (
             rgb_l1, rgb_psnr,
@@ -609,6 +630,15 @@ class SplatTrainingLosses(torch.nn.Module):
             normal_reg, alpha_reg,
             rgb_dist_reg, depth_dist_reg, normal_dist_reg
         ) = losses
+        if loss_map is not None and ssim_map is not None:
+            w_ssim = 1.0 - (1.0 - self.config.ssim_lambda) * (1.0 - self.config.lpips_lambda)
+            loss_map += w_ssim * ssim_map
+            if 'backward_metadata_injector' in outputs:
+                outputs['backward_metadata_injector']("loss_map", loss_map)  # to be able to get it in backward
+        # if loss_map is not None and self.step % 100 == 0:
+        #     import matplotlib.pyplot as plt
+        #     plt.imshow(loss_map[0].detach().cpu().numpy())
+        #     plt.show()
 
         image_loss = (1.0 - self.config.ssim_lambda) * rgb_l1 + self.config.ssim_lambda * (1.0 - ssim)
 

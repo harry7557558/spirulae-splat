@@ -77,6 +77,7 @@ std::tuple<
     const at::Tensor last_ids,      // [..., image_height, image_width]
     std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> render_outputs,
     std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> render2_outputs,
+    std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     Vanilla3DGUT::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
@@ -88,6 +89,7 @@ std::tuple<
 std::tuple<
     Vanilla3DGUT::Screen::TensorTuple,
     std::optional<at::Tensor>,  // v_viewmats
+    std::optional<Vanilla3DGUT::Screen::TensorTuple>,  // jacobian residual product
     std::optional<Vanilla3DGUT::Screen::TensorTuple>  // hessian diagonal
 > rasterize_to_pixels_3dgut_bwd_with_hessian_diagonal(
     // Gaussian parameters
@@ -110,6 +112,7 @@ std::tuple<
     const at::Tensor last_ids,      // [..., image_height, image_width]
     std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> render_outputs,
     std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> render2_outputs,
+    std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     Vanilla3DGUT::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
@@ -169,6 +172,7 @@ std::tuple<
     const at::Tensor last_ids,      // [..., image_height, image_width]
     std::optional<typename SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple> render_outputs,
     std::optional<typename SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple> render2_outputs,
+    std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
@@ -264,6 +268,7 @@ std::tuple<
     const at::Tensor last_ids,      // [..., image_height, image_width]
     std::optional<typename VoxelPrimitive::RenderOutput::TensorTuple> render_outputs,
     std::optional<typename VoxelPrimitive::RenderOutput::TensorTuple> render2_outputs,
+    std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     VoxelPrimitive::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]

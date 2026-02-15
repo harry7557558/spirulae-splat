@@ -596,8 +596,16 @@ struct OpaqueTriangle::Screen {
         atomicAddFVec(buffer.normals + idx, grad.normal);
     }
 
-    static __device__ __forceinline__ void atomicAddHessianDiagonalToBuffer(const Screen &grad2, Buffer &buffer, long idx) {
-        atomicAddGradientToBuffer(grad2, buffer, idx);
+    static __device__ __forceinline__ void atomicAddGaussNewtonHessianDiagonalToBuffer(const Screen &grad, Buffer &buffer, long idx, float weight=1.0f) {
+        if (buffer.hardness != nullptr)
+            atomicAddFVec(buffer.hardness + idx % buffer.size, grad.hardness * grad.hardness * weight);
+        atomicAddFVec(buffer.depths + idx, grad.depth * grad.depth * weight);
+        #pragma unroll
+        for (int i = 0; i < 3; i++) {
+            atomicAddFVec(buffer.verts + 3*idx+i, grad.verts[i] * grad.verts[i] * weight);
+            atomicAddFVec(buffer.rgbs + 3*idx+i, grad.rgbs[i] * grad.rgbs[i] * weight);
+        }
+        atomicAddFVec(buffer.normals + idx, grad.normal * grad.normal * weight);
     }
 
     __device__ __forceinline__ float evaluate_alpha(float3 ray_o, float3 ray_d) {

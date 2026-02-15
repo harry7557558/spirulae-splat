@@ -144,9 +144,9 @@ _TRIANGLE_OPTIMIZERS["bilateral_grid"] = {
 _SECOND_ORDER_MEAN_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS}
 _SECOND_ORDER_MEAN_OPTIMIZERS["means"] = {
     # lr should ideally approximate square root of loss
-    "optimizer": FusedNewtonOptimizerConfig(lr=1.6e-1, eps=1e-15),
+    "optimizer": FusedNewtonOptimizerConfig(lr=1.0, eps=1e-15),
     "scheduler": ExponentialDecaySchedulerConfig(
-        lr_final=1.6e-2, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
+        lr_final=1.0, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
     ),
 }
 

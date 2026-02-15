@@ -71,6 +71,7 @@ std::tuple<
     const at::Tensor last_ids,      // [..., image_height, image_width]
     std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> render_outputs,
     std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> render2_outputs,
+    std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     Vanilla3DGUT::RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
@@ -83,7 +84,7 @@ std::tuple<
             viewmats, intrins, camera_model, dist_coeffs,
             backgrounds, masks,
             image_width, image_height, tile_size, tile_offsets, flatten_ids,
-            render_Ts, last_ids, render_outputs, render2_outputs,
+            render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
             v_render_outputs, v_render_alphas, v_distortion_outputs,
             need_viewmat_grad
         );
@@ -92,7 +93,7 @@ std::tuple<
         viewmats, intrins, camera_model, dist_coeffs,
         backgrounds, masks,
         image_width, image_height, tile_size, tile_offsets, flatten_ids,
-        render_Ts, last_ids, render_outputs, render2_outputs,
+        render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
         v_render_outputs, v_render_alphas, v_distortion_outputs,
         need_viewmat_grad
     );

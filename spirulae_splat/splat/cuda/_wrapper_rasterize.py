@@ -320,6 +320,8 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         width = ctx.width
         height = ctx.height
         tile_size = ctx.tile_size
+        if ctx.compute_hessian_diagonal:
+            assert hasattr(v_render_rgbs, 'loss_map')
 
         cuda_return = _make_lazy_cuda_func("rasterization_3dgut_backward" + "_with_hessian_diagonal"*ctx.compute_hessian_diagonal)(
             (means, quats, depths, proj_scales, proj_opacities, colors),
@@ -328,6 +330,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
             width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids,
             (render_rgbs, render_depths) if ctx.output_distortion else None,
             (render2_rgbs, render2_depths) if ctx.output_distortion else None,
+            v_render_rgbs.loss_map if ctx.compute_hessian_diagonal else None,
             (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
             v_render_alphas.contiguous(),
             (v_distortion_rgbs.contiguous(), v_distortion_depths.contiguous()) if ctx.output_distortion else None,
@@ -336,14 +339,16 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
 
         h_splats = None
         if ctx.compute_hessian_diagonal:
-            v_splats, v_viewmats, h_splats = cuda_return
+            v_splats, v_viewmats, vr_splats, h_splats = cuda_return
         else:
             v_splats, v_viewmats = cuda_return
         (v_means, v_quats, v_depths, v_proj_scales, v_proj_opacities, v_colors) = v_splats
+        # print(v_means.mean().item())
 
         if h_splats is not None:
             for v, h in zip(v_splats, h_splats):
                 v.hess = h
+                v.gradr_all = vr_splats
                 v.hess_all = h_splats  # so we can get all hess from projection backward pass
 
         v_backgrounds = None

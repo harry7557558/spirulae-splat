@@ -6,11 +6,12 @@
 #include "common.cuh"
 
 
-std::tuple<at::Tensor,at::Tensor,at::Tensor,at::Tensor>
+std::tuple<at::Tensor, std::optional<at::Tensor>, at::Tensor, at::Tensor, at::Tensor>
 fused_ssim_forward(
     at::Tensor &img1,
     at::Tensor &img2,
-    bool train
+    bool train,
+    bool return_ssim_map
 );
 
 at::Tensor

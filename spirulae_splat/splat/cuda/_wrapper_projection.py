@@ -236,6 +236,10 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
             assert h_means_from_proj is not None
             h_means, h_quats, h_depths, h_proj_scales, h_proj_opacities, h_colors = v_proj_returns[0].hess_all
             # print(h_means_from_proj.view(v_means.shape).mean(), h_means.mean())
+            # print(v_proj_returns[0].gradr_all[0].mean().item())
+            # print(v_means.mean().item())
+            # TODO: for 3DGUT gradient from rasterization is multiple magnitudes larger than from projection (from SH view direction); This isn't the case for other primitives
+            means.gradr = v_proj_returns[0].gradr_all[0]
             means.hess = h_means_from_proj.view(v_means.shape) + h_means
             means.scales = scales
             means.quats = quats
