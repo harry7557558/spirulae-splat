@@ -281,7 +281,8 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
             // backward diff splat
             float3 v_ray_o_alpha, v_ray_d_alpha;
             float3 v_ray_o_color, v_ray_d_color;
-            if (output_hessian_diagonal) {
+            // if (output_hessian_diagonal) {
+            if (false) {
                 // Ideally output 1) Jacobian-residual product 2) Hessian diagonal
                 // Hessian diagonal can be estimated with Gauss-Newton method
                 // Estimate per-pixel residual by loss divided by pixel count
@@ -326,8 +327,10 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         // accumulate gradient
         if (splat_idx >= range_start) {
             splat.atomicAddGradientToBuffer(v_splat, v_splat_buffer, splat_gid);
-            if (output_hessian_diagonal)
+            if (output_hessian_diagonal) {
+                h_splat.addGaussNewtonHessianDiagonal(v_splat, total_num_pixels);
                 splat.atomicAddHessianDiagonalToBuffer(h_splat, h_splat_buffer, splat_gid);
+            }
         }
     }
     if (output_viewmat_grad) {

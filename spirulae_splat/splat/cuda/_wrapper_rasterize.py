@@ -344,6 +344,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         if h_splats is not None:
             for v, h in zip(v_splats, h_splats):
                 v.hess = h
+                v.hess_all = h_splats  # so we can get all hess from projection backward pass
 
         v_backgrounds = None
         if ctx.needs_input_grad[6]:

@@ -209,6 +209,7 @@ class Fused3DGS2TrMean(Optimizer):
                     state['step1'],
                     state['step2']
                 )
+                del p.hess  # zero_grad
 
         return loss
 

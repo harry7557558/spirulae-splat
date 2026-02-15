@@ -218,7 +218,13 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
 
         means, quats, scales, opacities, features_dc, features_sh, viewmats, intrins, aabb = ctx.saved_tensors
         if with_hessian_diagonal:
-            (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh), v_viewmats, h_means = _make_lazy_cuda_func(
+            if ctx.primitive != "3dgut":
+                raise NotImplementedError()
+            (
+                (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh),
+                v_viewmats,
+                h_means_from_proj
+            ) = _make_lazy_cuda_func(
                 f"projection_{ctx.primitive}_backward_with_position_hessian_diagonal"
             )(
                 (means, quats, scales, opacities, features_dc, features_sh),
@@ -227,12 +233,13 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
                 [x.hess for x in v_proj_returns],
                 ctx.needs_input_grad[7],  # viewmats_requires_grad
             )
-            if h_means is not None:
-                means.hess = h_means.view(v_means.shape)
-                # v_means /= means.hess + 1e-8
-                means.scales = scales
-                means.quats = quats
-                means.opacities = opacities
+            assert h_means_from_proj is not None
+            h_means, h_quats, h_depths, h_proj_scales, h_proj_opacities, h_colors = v_proj_returns[0].hess_all
+            # print(h_means_from_proj.view(v_means.shape).mean(), h_means.mean())
+            means.hess = h_means_from_proj.view(v_means.shape) + h_means
+            means.scales = scales
+            means.quats = quats
+            means.opacities = opacities
         else:
             (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh), v_viewmats = _make_lazy_cuda_func(
                 f"projection_{ctx.primitive}_backward"
@@ -406,7 +413,6 @@ def fully_fused_projection_hetero(
     if sparse_grad:
         assert batch_dims == (), "sparse_grad does not support batch dimensions"
 
-    in_splats = [x.contiguous() for x in splats]
     additional_args = []
     if primitive in ["3dgs", "mip", "3dgut"]:
         _FullyFusedProjection = _FullyFusedProjection3DGSHetero
