@@ -142,7 +142,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         float3 raydir;
         inside &= generate_ray(
             {(px-cx)/fx, (py-cy)/fy},
-            camera_model == gsplat::CameraModelType::FISHEYE, &dist_coeffs,
+            camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs,
             &raydir
         );
         float3 ray_d = transform_ray_d(R, raydir);  // mul(raydir, R);
@@ -583,7 +583,7 @@ inline std::tuple<
     const at::Tensor &viewmats,  // [..., C, 4, 4]
     const at::Tensor &intrins,  // [..., C, 4], fx, fy, cx, cy
     const gsplat::CameraModelType &camera_model,
-    const CameraDistortionCoeffsTensor &dist_coeffs,
+    const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> &backgrounds, // [..., channels]
     const std::optional<at::Tensor> &masks,       // [..., tile_height, tile_width]
     // image size

@@ -285,7 +285,7 @@ __global__ void depth_to_normal_forward_kernel(
     };
     float3 normal = depth_to_normal(
         {(float)i+0.5f, (float)j+0.5f},
-        {fx, fy, cx, cy}, &dist_coeffs,
+        {fx, fy, cx, cy}, dist_coeffs,
         camera_model == gsplat::CameraModelType::FISHEYE, is_ray_depth,
         depth
     );
@@ -301,7 +301,7 @@ __global__ void depth_to_normal_forward_kernel(
             depths.load1(bid, jg, ig) : 0.0f;
         float3 ray = generate_ray_d2n(
             {(float)ig+0.5f, (float)jg+0.5f},
-            {fx, fy, cx, cy}, &dist_coeffs,
+            {fx, fy, cx, cy}, dist_coeffs,
             camera_model == gsplat::CameraModelType::FISHEYE, is_ray_depth
         );
         shared_points[jt][it] = ray * depth;
@@ -315,7 +315,7 @@ __global__ void depth_to_normal_forward_kernel(
     points[1] = shared_points[jt][it+1];
     points[2] = shared_points[jt-1][it];
     points[3] = shared_points[jt+1][it];
-    float3 normal = points_to_normal(&points);
+    float3 normal = points_to_normal(points);
 #endif
     normals.store3(bid, j, i, normal);
 
@@ -364,7 +364,7 @@ __global__ void depth_to_normal_backward_kernel(
     float4 v_depth;
     depth_to_normal_vjp(
         {(float)i+0.5f, (float)j+0.5f},
-        {fx, fy, cx, cy}, &dist_coeffs,
+        {fx, fy, cx, cy}, dist_coeffs,
         camera_model == gsplat::CameraModelType::FISHEYE, is_ray_depth,
         depth, v_normal, &v_depth
     );
@@ -384,7 +384,7 @@ __global__ void depth_to_normal_backward_kernel(
             depths.load1(bid, jg, ig) : 0.0f;
         float3 ray = generate_ray_d2n(
             {(float)ig+0.5f, (float)jg+0.5f},
-            {fx, fy, cx, cy}, &dist_coeffs,
+            {fx, fy, cx, cy}, dist_coeffs,
             camera_model == gsplat::CameraModelType::FISHEYE, is_ray_depth
         );
         shared_points[jt][it] = make_float4(ray.x, ray.y, ray.z, depth);
@@ -403,7 +403,7 @@ __global__ void depth_to_normal_backward_kernel(
     t = shared_points[jt-1][it]; rays[2] = {t.x, t.y, t.z}; points[2] = rays[2] * t.w;
     t = shared_points[jt+1][it]; rays[3] = {t.x, t.y, t.z}; points[3] = rays[3] * t.w;
     FixedArray<float3, 4> v_points;
-    points_to_normal_vjp(&points, v_normal, &v_points);
+    points_to_normal_vjp(points, v_normal, &v_points);
 
     v_depths.atomicStore1(bid, j, i-1, dot(v_points[0], rays[0]));
     v_depths.atomicStore1(bid, j, i+1, dot(v_points[1], rays[1]));
@@ -503,7 +503,7 @@ __global__ void ray_depth_to_linear_depth_forward_kernel(
     float in_depth = in_depths.load1(bid, j, i);
     float out_depth = in_depth * ray_depth_to_linear_depth_factor(
         {(float)i+0.5f, (float)j+0.5f},
-        {fx, fy, cx, cy}, &dist_coeffs,
+        {fx, fy, cx, cy}, dist_coeffs,
         camera_model == gsplat::CameraModelType::FISHEYE
     );
     out_depths.store1(bid, j, i, out_depth);
@@ -534,7 +534,7 @@ __global__ void ray_depth_to_linear_depth_backward_kernel(
     float v_out_depth = v_out_depths.load1(bid, j, i);
     float factor = ray_depth_to_linear_depth_factor(
         {(float)i+0.5f, (float)j+0.5f},
-        {fx, fy, cx, cy}, &dist_coeffs,
+        {fx, fy, cx, cy}, dist_coeffs,
         camera_model == gsplat::CameraModelType::FISHEYE
     );
     float v_in_depth = factor * v_out_depth;
@@ -667,12 +667,12 @@ __global__ void distort_image_kernel(
     // Undistort point
     float2 uv = { (i+0.5f-cx) / fx, (j+0.5f-cy) / fy };
     if (is_undistort) {
-        if (!is_valid_distortion(uv, &dist_coeffs))
+        if (!is_valid_distortion(uv, dist_coeffs))
             return;
-        uv = distort_point(uv, camera_model == gsplat::CameraModelType::FISHEYE, &dist_coeffs);
+        uv = distort_point(uv, camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs);
     }
     else {
-        if (!undistort_point(uv, camera_model == gsplat::CameraModelType::FISHEYE, &dist_coeffs, &uv))
+        if (!undistort_point(uv, camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs, &uv))
             return;
     }
 
@@ -785,7 +785,7 @@ __global__ void ppisp_forward_kernel(
             make_float2((float)x, (float)y),
             make_float2(intrins[bid].z, intrins[bid].w),
             make_float2(actual_image_width, actual_image_height),
-            reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&params)
+            *reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&params)
         );
     else
         out_pixel = apply_ppisp_rqs(
@@ -793,7 +793,7 @@ __global__ void ppisp_forward_kernel(
             make_float2((float)x, (float)y),
             make_float2(intrins[bid].z, intrins[bid].w),
             make_float2(actual_image_width, actual_image_height),
-            reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&params)
+            *reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&params)
         );
 
     out_image.store3(bid, y, x, out_pixel);
@@ -903,7 +903,7 @@ __global__ void ppisp_backward_kernel(
             make_float2((float)x, (float)y),
             make_float2(intrins[bid].z, intrins[bid].w),
             make_float2(actual_image_width, actual_image_height),
-            reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&params),
+            *reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&params),
             v_out_pixel,
             &v_pixel,
             reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&v_params)
@@ -914,7 +914,7 @@ __global__ void ppisp_backward_kernel(
             make_float2((float)x, (float)y),
             make_float2(intrins[bid].z, intrins[bid].w),
             make_float2(actual_image_width, actual_image_height),
-            reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&params),
+            *reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&params),
             v_out_pixel,
             &v_pixel,
             reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&v_params)
@@ -1014,12 +1014,12 @@ __global__ void compute_raw_ppisp_regularization_forward_kernel(
     FixedArray<float, kNumRawLosses> losses;
     if (param_type == PPISPParamType::Original)
         compute_raw_ppisp_regularization_loss(
-            reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&params),
+            *reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&params),
             reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndex::length>*>(&losses)
         );
     else
         compute_raw_ppisp_rqs_regularization_loss(
-            reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&params),
+            *reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&params),
             reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndexRQS::length>*>(&losses)
         );
 
@@ -1055,13 +1055,13 @@ __global__ void compute_ppisp_regularization_forward_kernel(
 
     if (param_type == PPISPParamType::Original)
         compute_ppisp_regularization_loss(
-            reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndex::length>*>(&raw_losses),
-            num_train_images, &loss_weights, &losses
+            *reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndex::length>*>(&raw_losses),
+            num_train_images, loss_weights, &losses
         );
     else
         compute_ppisp_rqs_regularization_loss(
-            reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndexRQS::length>*>(&raw_losses),
-            num_train_images, &loss_weights, &losses
+            *reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndexRQS::length>*>(&raw_losses),
+            num_train_images, loss_weights, &losses
         );
 
     #pragma unroll
@@ -1164,14 +1164,14 @@ __global__ void compute_raw_ppisp_regularization_backward_kernel(
     FixedArray<float, kNumParams> v_params;
     if (param_type == PPISPParamType::Original)
         compute_raw_ppisp_regularization_loss_vjp(
-            reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&params),
-            reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndex::length>*>(&v_losses),
+            *reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&params),
+            *reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndex::length>*>(&v_losses),
             reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&v_params)
         );
     else
         compute_raw_ppisp_rqs_regularization_loss_vjp(
-            reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&params),
-            reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndexRQS::length>*>(&v_losses),
+            *reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&params),
+            *reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndexRQS::length>*>(&v_losses),
             reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&v_params)
         );
 
@@ -1208,14 +1208,14 @@ __global__ void compute_ppisp_regularization_backward_kernel(
     FixedArray<float, kNumRawLosses> v_raw_losses;
     if (param_type == PPISPParamType::Original)
         compute_ppisp_regularization_loss_vjp(
-            reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndex::length>*>(&raw_losses),
-            num_train_images, &loss_weights, &v_losses,
+            *reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndex::length>*>(&raw_losses),
+            num_train_images, loss_weights, v_losses,
             reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndex::length>*>(&v_raw_losses)
         );
     else
         compute_ppisp_rqs_regularization_loss_vjp(
-            reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndexRQS::length>*>(&raw_losses),
-            num_train_images, &loss_weights, &v_losses,
+            *reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndexRQS::length>*>(&raw_losses),
+            num_train_images, loss_weights, v_losses,
             reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndexRQS::length>*>(&v_raw_losses)
         );
 

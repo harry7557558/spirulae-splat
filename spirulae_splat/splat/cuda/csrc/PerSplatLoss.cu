@@ -108,7 +108,7 @@ __global__ void per_splat_losses_backward_kernel(
     per_splat_losses_bwd(
         is_3dgs,
         scale, opacity, quat,
-        &v_losses,
+        v_losses,
         &v_scale, &v_opacity, &v_quat,
         max_gauss_ratio,
         scale_regularization_weight,

@@ -129,10 +129,10 @@ struct Tile {
         // TODO: better way to handle this in nonlinear and partially invalid case
         // May not matter in training with small tiles, but obvious artifact when rendering >180deg fisheye
         float3 e0_, e1_, e2_, e3_;
-        bool valid0 = unproject_point({x0, y0}, is_fisheye, &dist_coeffs, &e0_);
-        bool valid1 = unproject_point({x0, y1}, is_fisheye, &dist_coeffs, &e1_);
-        bool valid2 = unproject_point({x1, y1}, is_fisheye, &dist_coeffs, &e2_);
-        bool valid3 = unproject_point({x1, y0}, is_fisheye, &dist_coeffs, &e3_);
+        bool valid0 = unproject_point({x0, y0}, is_fisheye, dist_coeffs, &e0_);
+        bool valid1 = unproject_point({x0, y1}, is_fisheye, dist_coeffs, &e1_);
+        bool valid2 = unproject_point({x1, y1}, is_fisheye, dist_coeffs, &e2_);
+        bool valid3 = unproject_point({x1, y0}, is_fisheye, dist_coeffs, &e3_);
         if (!valid0 && valid3 && valid1 && valid2)
             e0_ = e3_ + e1_ - e2_, valid0 = true;
         if (!valid1 && valid0 && valid2 && valid3)

@@ -138,5 +138,5 @@ def test_depth_to_normal():
 
 
 if __name__ == "__main__":
-    # test_blend_background()
+    test_blend_background()
     test_depth_to_normal()

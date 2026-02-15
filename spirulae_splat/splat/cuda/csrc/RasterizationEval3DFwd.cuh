@@ -86,7 +86,7 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     float3 raydir;
     inside &= generate_ray(
         {(px-cx)/fx, (py-cy)/fy},
-        camera_model == gsplat::CameraModelType::FISHEYE, &dist_coeffs,
+        camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs,
         &raydir
     );
     float3 ray_o = transform_ray_o(R, t);

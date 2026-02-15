@@ -23,8 +23,12 @@ class Config:
     erank_reg_s3 = 1.5
     quat_norm_reg_weight = 0.01
 
+    primitive = "3dgut"
     use_3dgs = False
     use_bilateral_grid = False
+    use_bilateral_grid_for_geometry = False
+    use_ppisp = False
+    lpips_lambda = 0.0
     use_mcmc = True
     erank_reg_warmup = 0
     

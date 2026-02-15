@@ -658,8 +658,8 @@ inline __device__ void Vanilla3DGUT::project_persp(
     float2 xy;
     projection_3dgut_persp(
         false,
-        world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &xy, &proj.depth, &proj.scale, &proj.opacity, &proj.rgb
     );
@@ -673,8 +673,8 @@ inline __device__ void Vanilla3DGUT::project_fisheye(
     float2 xy;
     projection_3dgut_fisheye(
         false,
-        world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &xy, &proj.depth, &proj.scale, &proj.opacity, &proj.rgb
     );
@@ -688,8 +688,8 @@ inline __device__ void Vanilla3DGUT::project_persp_vjp(
 ) {
     projection_3dgut_persp_vjp(
         false,
-        world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
         make_float2(0), v_proj.depth, v_proj.scale, v_proj.opacity, v_proj.rgb,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
@@ -706,8 +706,8 @@ inline __device__ void Vanilla3DGUT::project_persp_vjp(
 ) {
     projection_3dgut_persp_vjp(
         false,
-        world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
         make_float2(0), v_proj.depth, v_proj.scale, v_proj.opacity, v_proj.rgb,
         make_float2(0), h_proj.depth, h_proj.scale, h_proj.opacity, h_proj.rgb,
@@ -724,8 +724,8 @@ inline __device__ void Vanilla3DGUT::project_fisheye_vjp(
 ) {
     projection_3dgut_fisheye_vjp(
         false,
-        world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
         make_float2(0), v_proj.depth, v_proj.scale, v_proj.opacity, v_proj.rgb,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
@@ -742,8 +742,8 @@ inline __device__ void Vanilla3DGUT::project_fisheye_vjp(
 ) {
     projection_3dgut_fisheye_vjp(
         false,
-        world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
         make_float2(0), v_proj.depth, v_proj.scale, v_proj.opacity, v_proj.rgb,
         make_float2(0), h_proj.depth, h_proj.scale, h_proj.opacity, h_proj.rgb,
@@ -976,8 +976,8 @@ inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_persp(
     float2 xy;
     projection_3dgut_sv_persp(
         false,
-        world.mean, world.quat, world.scale, world.opacity, &world.sv_sites, &world.sv_colors,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.opacity, world.sv_sites, world.sv_colors,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &xy, &proj.depth, &proj.scale, &proj.opacity, &proj.rgb
     );
@@ -992,8 +992,8 @@ inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_fisheye(
     float2 xy;
     projection_3dgut_sv_fisheye(
         false,
-        world.mean, world.quat, world.scale, world.opacity, &world.sv_sites, &world.sv_colors,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.opacity, world.sv_sites, world.sv_colors,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &xy, &proj.depth, &proj.scale, &proj.opacity, &proj.rgb
     );
@@ -1008,8 +1008,8 @@ inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_persp_vjp(
 ) {
     projection_3dgut_sv_persp_vjp(
         false,
-        world.mean, world.quat, world.scale, world.opacity, &world.sv_sites, &world.sv_colors,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.opacity, world.sv_sites, world.sv_colors,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
         make_float2(0), v_proj.depth, v_proj.scale, v_proj.opacity, v_proj.rgb,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sv_sites, &v_world.sv_colors,
@@ -1034,8 +1034,8 @@ inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_fisheye_vjp(
 ) {
     projection_3dgut_sv_fisheye_vjp(
         false,
-        world.mean, world.quat, world.scale, world.opacity, &world.sv_sites, &world.sv_colors,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.opacity, world.sv_sites, world.sv_colors,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
         make_float2(0), v_proj.depth, v_proj.scale, v_proj.opacity, v_proj.rgb,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sv_sites, &v_world.sv_colors,

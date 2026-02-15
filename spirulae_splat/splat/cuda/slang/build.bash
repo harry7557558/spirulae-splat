@@ -1,6 +1,6 @@
 # run this from the `cuda` folder
 
-# tested with slang-2025.19.1-linux-x86_64
+# tested with slang-2026.2.1-linux-x86_64
 
 compile_args="-ignore-capabilities -line-directive-mode none"
 # compile_args="-ignore-capabilities"  # for debugging

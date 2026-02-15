@@ -13,15 +13,15 @@ def process(src: str):
             # line = '__forceinline__ ' + line  # why?
         if line.strip().startswith("static_assert(false,"):
             line = "//" + line
-        for w in ['double', 'longlong', 'ulonglong']:
-            if f"({w})" in line or f', {w}, ' in line:
-                line = "//" + line
-                break
-            if w in line and src[i-1] == 'template<>' and src[i+1] == '{' and src[i+3] == '};':
-                for j in range(i-1, i+4):
-                    src[j] = '//' + src[j]
-                line = "//" + line
-                break
+        # for w in ['double', 'longlong', 'ulonglong']:
+        #     if f"({w})" in line or f', {w}, ' in line:
+        #         line = "//" + line
+        #         break
+        #     if w in line and src[i-1] == 'template<>' and src[i+1] == '{' and src[i+3] == '};':
+        #         for j in range(i-1, i+4):
+        #             src[j] = '//' + src[j]
+        #         line = "//" + line
+        #         break
         src[i] = line
     src = '\n'.join(src)
     # for (w0, w1) in [

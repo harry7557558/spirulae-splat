@@ -600,9 +600,9 @@ inline __device__ void _Base3DGS<antialiased>::project_persp(
 ) {
     projection_3dgs_persp(
         antialiased,
-        world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
+        world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
-        &cam.dist_coeffs,
+        cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
     );
@@ -615,8 +615,8 @@ inline __device__ void _Base3DGS<antialiased>::project_ortho(
 ) {
     projection_3dgs_ortho(
         antialiased,
-        world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
     );
@@ -629,8 +629,8 @@ inline __device__ void _Base3DGS<antialiased>::project_fisheye(
 ) {
     projection_3dgs_fisheye(
         antialiased,
-        world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
     );
@@ -645,8 +645,8 @@ inline __device__ void _Base3DGS<antialiased>::project_persp_vjp(
 ) {
     projection_3dgs_persp_vjp(
         antialiased,
-        world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
         v_screen.xy, v_screen.depth, v_screen.conic, v_screen.opac, v_screen.rgb,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
@@ -670,8 +670,8 @@ inline __device__ void _Base3DGS<antialiased>::project_ortho_vjp(
 ) {
     projection_3dgs_ortho_vjp(
         antialiased,
-        world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
         v_screen.xy, v_screen.depth, v_screen.conic, v_screen.opac, v_screen.rgb,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
@@ -687,8 +687,8 @@ inline __device__ void _Base3DGS<antialiased>::project_fisheye_vjp(
 ) {
     projection_3dgs_fisheye_vjp(
         antialiased,
-        world.mean, world.quat, world.scale, world.opacity, &world.sh_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
         v_screen.xy, v_screen.depth, v_screen.conic, v_screen.opac, v_screen.rgb,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,

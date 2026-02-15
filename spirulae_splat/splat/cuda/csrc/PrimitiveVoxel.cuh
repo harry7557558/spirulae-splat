@@ -546,7 +546,7 @@ struct VoxelPrimitive::Screen {
     }
 
     __device__ __forceinline__ float evaluate_alpha(float3 ray_o, float3 ray_d) {
-        return evaluate_alpha_voxel(pos, size, &densities, ray_o, ray_d);
+        return evaluate_alpha_voxel(pos, size, densities, ray_o, ray_d);
     }
 
     __device__ __forceinline__ Screen evaluate_alpha_vjp(
@@ -555,7 +555,7 @@ struct VoxelPrimitive::Screen {
     ) {
         Screen v_splat = Screen::zero();
         evaluate_alpha_voxel_vjp(
-            pos, size, &densities,
+            pos, size, densities,
             ray_o, ray_d, v_alpha,
             &v_splat.densities,
             &v_ray_o, &v_ray_d
@@ -566,7 +566,7 @@ struct VoxelPrimitive::Screen {
     __device__ __forceinline__ VoxelPrimitive::RenderOutput evaluate_color(float3 ray_o, float3 ray_d) {
         float3 out_rgb; float out_depth;
         evaluate_color_voxel(
-            pos, size, &densities, rgb, ray_o, ray_d,
+            pos, size, densities, rgb, ray_o, ray_d,
             &out_rgb, &out_depth
         );
         return {out_rgb, out_depth};
@@ -578,7 +578,7 @@ struct VoxelPrimitive::Screen {
     ) {
         Screen v_splat = Screen::zero();
         evaluate_color_voxel_vjp(
-            pos, size, &densities, rgb, ray_o, ray_d,
+            pos, size, densities, rgb, ray_o, ray_d,
             v_render.rgb, v_render.depth,
             &v_splat.densities, &v_splat.rgb,
             &v_ray_o, &v_ray_d
@@ -598,8 +598,8 @@ inline __device__ void VoxelPrimitive::project_persp(
     VoxelPrimitive::Screen& proj, int4& aabb
 ) {
     projection_voxel_eval3d_persp(
-        world.pos, world.size, &world.densities, &world.sh_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.pos, world.size, world.densities, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &proj.depth, &proj.rgb
     );
@@ -611,8 +611,8 @@ inline __device__ void VoxelPrimitive::project_fisheye(
     VoxelPrimitive::Screen& proj, int4& aabb
 ) {
     projection_voxel_eval3d_fisheye(
-        world.pos, world.size, &world.densities, &world.sh_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.pos, world.size, world.densities, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &proj.depth, &proj.rgb
     );
@@ -625,8 +625,8 @@ inline __device__ void VoxelPrimitive::project_persp_vjp(
     VoxelPrimitive::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
     projection_voxel_eval3d_persp_vjp(
-        world.pos, world.size, &world.densities, &world.sh_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.pos, world.size, world.densities, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
         v_proj.rgb,
         &v_world.densities, &v_world.sh_coeffs,
@@ -648,8 +648,8 @@ inline __device__ void VoxelPrimitive::project_fisheye_vjp(
     VoxelPrimitive::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
     projection_voxel_eval3d_fisheye_vjp(
-        world.pos, world.size, &world.densities, &world.sh_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.pos, world.size, world.densities, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
         v_proj.rgb,
         &v_world.densities, &v_world.sh_coeffs,

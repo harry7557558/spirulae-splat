@@ -609,7 +609,7 @@ struct OpaqueTriangle::Screen {
     }
 
     __device__ __forceinline__ float evaluate_alpha(float3 ray_o, float3 ray_d) {
-        return evaluate_alpha_opaque_triangle(&verts, hardness, ray_o, ray_d);
+        return evaluate_alpha_opaque_triangle(verts, hardness, ray_o, ray_d);
     }
 
     __device__ __forceinline__ Screen evaluate_alpha_vjp(
@@ -618,7 +618,7 @@ struct OpaqueTriangle::Screen {
     ) {
         Screen v_splat = Screen::zero();
         evaluate_alpha_opaque_triangle_vjp(
-            &verts, hardness,
+            verts, hardness,
             ray_o, ray_d, v_alpha,
             &v_splat.verts, &v_splat.hardness,
             &v_ray_o, &v_ray_d
@@ -628,14 +628,14 @@ struct OpaqueTriangle::Screen {
 
     __device__ __forceinline__ float evaluate_sorting_depth(float3 ray_o, float3 ray_d) {
         return evaluate_sorting_depth_opaque_triangle(
-            &verts, &rgbs, ray_o, ray_d
+            verts, rgbs, ray_o, ray_d
         );
     }
 
     __device__ __forceinline__ OpaqueTriangle::RenderOutput evaluate_color(float3 ray_o, float3 ray_d) {
         float3 out_rgb; float out_depth;
         evaluate_color_opaque_triangle(
-            &verts, &rgbs, ray_o, ray_d,
+            verts, rgbs, ray_o, ray_d,
             &out_rgb, &out_depth
         );
         return {out_rgb, out_depth, normal};
@@ -647,7 +647,7 @@ struct OpaqueTriangle::Screen {
     ) {
         Screen v_splat = Screen::zero();
         evaluate_color_opaque_triangle_vjp(
-            &verts, &rgbs, ray_o, ray_d,
+            verts, rgbs, ray_o, ray_d,
             v_render.rgb, v_render.depth,
             &v_splat.verts, &v_splat.rgbs,
             &v_ray_o, &v_ray_d
@@ -668,8 +668,8 @@ inline __device__ void OpaqueTriangle::project_persp(
     OpaqueTriangle::Screen& proj, int4& aabb
 ) {
     projection_opaque_triangle_eval3d_persp(
-        world.mean, world.quat, world.scale, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.hardness, world.sh_coeffs, world.ch_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &proj.depth, &proj.verts, &proj.rgbs, &proj.normal
     );
@@ -681,8 +681,8 @@ inline __device__ void OpaqueTriangle::project_fisheye(
     OpaqueTriangle::Screen& proj, int4& aabb
 ) {
     projection_opaque_triangle_eval3d_fisheye(
-        world.mean, world.quat, world.scale, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.hardness, world.sh_coeffs, world.ch_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
         &aabb, &proj.depth, &proj.verts, &proj.rgbs, &proj.normal
     );
@@ -695,10 +695,10 @@ inline __device__ void OpaqueTriangle::project_persp_vjp(
     OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
     projection_opaque_triangle_eval3d_persp_vjp(
-        world.mean, world.quat, world.scale, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.hardness, world.sh_coeffs, world.ch_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
-        v_proj.depth, &v_proj.verts, &v_proj.rgbs, v_proj.normal,
+        v_proj.depth, v_proj.verts, v_proj.rgbs, v_proj.normal,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.hardness, &v_world.sh_coeffs, &v_world.ch_coeffs,
         &v_R, &v_t
     );
@@ -718,10 +718,10 @@ inline __device__ void OpaqueTriangle::project_fisheye_vjp(
     OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
     projection_opaque_triangle_eval3d_fisheye_vjp(
-        world.mean, world.quat, world.scale, world.hardness, &world.sh_coeffs, &world.ch_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, &cam.dist_coeffs,
+        world.mean, world.quat, world.scale, world.hardness, world.sh_coeffs, world.ch_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
-        v_proj.depth, &v_proj.verts, &v_proj.rgbs, v_proj.normal,
+        v_proj.depth, v_proj.verts, v_proj.rgbs, v_proj.normal,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.hardness, &v_world.sh_coeffs, &v_world.ch_coeffs,
         &v_R, &v_t
     );

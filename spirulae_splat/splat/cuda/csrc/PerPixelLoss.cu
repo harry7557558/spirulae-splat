@@ -102,7 +102,7 @@ __global__ void per_pixel_losses_forward_kernel(
             depth_mask ? depth_mask[idx] : true,
             normal_mask ? normal_mask[idx] : true,
             alpha_mask ? alpha_mask[idx] : true,
-            &loss_weights,
+            loss_weights,
             &losses
         );
 
@@ -236,8 +236,8 @@ __global__ void per_pixel_losses_backward_kernel(
         depth_mask ? depth_mask[idx] : true,
         normal_mask ? normal_mask[idx] : true,
         alpha_mask ? alpha_mask[idx] : true,
-        &loss_weights,
-        &v_losses,
+        loss_weights,
+        v_losses,
         &temp_v_render_rgb,
         &temp_v_ref_rgb,
         &temp_v_render_depth,
@@ -279,7 +279,7 @@ __global__ void per_pixel_losses_reduce_forward_kernel(
 
     FixedArray<float, (uint)LossIndex::length> local_losses;
     per_pixel_losses_reduce(
-        &local_raw_losses, &loss_weights,
+        local_raw_losses, loss_weights,
         &local_losses
     );
     #pragma unroll
@@ -323,8 +323,8 @@ __global__ void per_pixel_losses_reduce_backward_kernel(
     FixedArray<float, (uint)RawLossIndex::length> local_v_raw_losses;
 
     per_pixel_losses_reduce_bwd(
-        &local_raw_losses, &loss_weights,
-        &local_v_losses, &local_v_raw_losses
+        local_raw_losses, loss_weights,
+        local_v_losses, &local_v_raw_losses
     );
 
     saveFixedArray<float, (uint)RawLossIndex::length>(v_raw_losses, batch_idx, local_v_raw_losses);
