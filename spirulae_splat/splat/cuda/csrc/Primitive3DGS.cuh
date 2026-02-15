@@ -2,7 +2,7 @@
 
 #ifdef __CUDACC__
 #define TensorView _Slang_TensorView
-#include "generated/primitive.cu"
+#include "generated/primitive.cuh"
 #undef TensorView
 #endif
 

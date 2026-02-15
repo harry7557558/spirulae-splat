@@ -12,3 +12,6 @@ slangc slang/all.slang -target cuda -o csrc/generated/slang_all.cu $compile_args
 slangc slang/primitive.slang -target cuda -o csrc/generated/primitive.cu $compile_args
 
 python3 slang/build_postprocess.py
+
+mv csrc/generated/slang_all.cu csrc/generated/slang_all.cuh
+mv csrc/generated/primitive.cu csrc/generated/primitive.cuh

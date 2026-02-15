@@ -1,6 +1,6 @@
 // Modified from https://github.com/nerfstudio-project/gsplat/blob/main/gsplat/cuda/csrc/RasterizeToPixels3DGSBwd.cu
 
-#include "RasterizationEval3DBwd.cuh"
+#include "RasterizationSortedEval3DBwd.cuh"
 
 #include "common.cuh"
 

@@ -29,16 +29,21 @@ def extract_function_declarations(code):
     return decls
 
 
-def generate_header(source_filename, header_filename):
-    code = open(source_filename).read()
+def generate_header(filename):
+    path = "spirulae_splat/splat/cuda/csrc/"
+
+    code = ""
+    for source_filename in os.listdir(path):
+        if source_filename.startswith(filename+"."):
+            code += open(path+source_filename).read()
     decls = extract_function_declarations(code)
 
     splitter = "/* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */\n"
-    include = open(header_filename).read()
+    include = open(path + f"{filename}.cuh").read()
     include = include.split(splitter)[0].strip()
 
     header = '\n\n\n'.join([include, splitter]+decls)
-    open(header_filename, "w").write(header+'\n')
+    open(path + f"{filename}.cuh", "w").write(header+'\n')
 
 
 def get_ext():
@@ -156,7 +161,6 @@ if importlib.util.find_spec('torch') is None:
     raise ValueError("Please make sure you have PyTorch installed.")
 no_fused_bilagrid = (importlib.util.find_spec('fused_bilagrid') is None)
 
-path = "spirulae_splat/splat/cuda/csrc/"
 for filename in [
     'IntersectTile',
     'SphericalHarmonics',
@@ -164,19 +168,15 @@ for filename in [
     'PerSplatLoss',
     'PerPixelLoss',
     'PixelWise',
-    'ProjectionFwd',
-    'ProjectionBwd',
+    'Projection',
     'ProjectionHeteroFwd',
     'ProjectionHeteroBwd',
-    'RasterizationFwd',
-    'RasterizationBwd',
-    'RasterizationEval3DFwd',
-    'RasterizationEval3DBwd',
+    'Rasterization',
     'RasterizationSortedEval3DFwd',
     'RasterizationSortedEval3DBwd',
     'Optimizer',
 ]:
-    generate_header(path+f"{filename}.cu", path+f"{filename}.cuh")
+    generate_header(filename)
 
 setup(
     name="spirulae_splat",

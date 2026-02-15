@@ -11,14 +11,8 @@
 #include "FusedSSIM.cuh"
 #include "SplatTileIntersector.cuh"
 #include "SVHash.cuh"
-#include "ProjectionFwd.cuh"
-#include "ProjectionBwd.cuh"
-#include "ProjectionHeteroFwd.cuh"
-#include "ProjectionHeteroBwd.cuh"
-#include "RasterizationFwd.cuh"
-#include "RasterizationBwd.cuh"
-#include "RasterizationEval3DFwd.cuh"
-#include "RasterizationEval3DBwd.cuh"
+#include "Projection.cuh"
+#include "Rasterization.cuh"
 #include "RasterizationSortedEval3DFwd.cuh"
 #include "RasterizationSortedEval3DBwd.cuh"
 #include "Optimizer.cuh"
@@ -92,7 +86,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("svhash_get_voxels", &svhashGetVoxels);
     m.def("svhash_split_voxels", &svhashSplitVoxels);
     
-    // ProjectionFwd.cuh
+    // Projection.cuh, forward
     m.def("projection_3dgs_forward", &projection_3dgs_forward_tensor);
     m.def("projection_mip_forward", &projection_mip_forward_tensor);
     m.def("projection_3dgut_forward", &projection_3dgut_forward_tensor);
@@ -100,7 +94,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("projection_opaque_triangle_forward", &projection_opaque_triangle_forward_tensor);
     m.def("projection_voxel_forward", &projection_voxel_forward_tensor);
 
-    // ProjectionBwd.cuh
+    // Projection.cuh, backward
     m.def("projection_3dgs_backward", &projection_3dgs_backward_tensor);
     m.def("projection_mip_backward", &projection_mip_backward_tensor);
     m.def("projection_3dgut_backward", &projection_3dgut_backward_tensor);
@@ -109,13 +103,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("projection_opaque_triangle_backward", &projection_opaque_triangle_backward_tensor);
     m.def("projection_voxel_backward", &projection_voxel_backward_tensor);
 
-    // ProjectionHeteroFwd.cuh
+    // Projection.cuh, hetero, forward
     m.def("projection_3dgs_hetero_forward", &projection_3dgs_hetero_forward_tensor);
     m.def("projection_mip_hetero_forward", &projection_mip_hetero_forward_tensor);
     m.def("projection_3dgut_hetero_forward", &projection_3dgut_hetero_forward_tensor);
     m.def("projection_opaque_triangle_hetero_forward", &projection_opaque_triangle_hetero_forward_tensor);
 
-    // ProjectionHeteroBwd.cuh
+    // Projection.cuh, hetero, backward
     m.def("projection_3dgs_hetero_backward", &projection_3dgs_hetero_backward_tensor);
     m.def("projection_mip_hetero_backward", &projection_mip_hetero_backward_tensor);
     m.def("projection_3dgut_hetero_backward", &projection_3dgut_hetero_backward_tensor);

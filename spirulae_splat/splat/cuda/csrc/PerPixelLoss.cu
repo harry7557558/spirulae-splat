@@ -5,7 +5,7 @@
 namespace cg = cooperative_groups;
 
 #define TensorView _Slang_TensorView
-#include "generated/slang_all.cu"
+#include "generated/slang_all.cuh"
 #undef TensorView
 
 #include "common.cuh"
