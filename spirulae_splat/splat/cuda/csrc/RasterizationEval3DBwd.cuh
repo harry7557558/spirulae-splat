@@ -166,7 +166,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         }
 
         if (output_hessian_diagonal) {
-            residual_map[pix_id_local] = loss_map_buffer ?
+            residual_map[pix_id_local] = (loss_map_buffer != nullptr && inside) ?
                 sqrtf(fmaxf(loss_map_buffer[pix_id_image_global], 0.0f)) : 1.0f;
         }
     }
