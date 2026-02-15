@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Helper utils for processing metashape data into the nerfstudio format."""
+"""Script to convert Metashape data into Nerfstudio format."""
 
 import json
 import zipfile
@@ -341,7 +341,7 @@ class ProcessMetashape():
     """
 
     work_dir: Path
-    """Path to the work directory."""
+    """Path to the dataset directory."""
 
     xml: Optional[Path] = None
     """Path to the Metashape xml file. Will automatically find in work_dir if not specified."""
