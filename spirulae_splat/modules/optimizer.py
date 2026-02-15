@@ -124,18 +124,18 @@ class Fused3DGS2TrMean(Optimizer):
     def __init__(
         self,
         params,
-        lr: float = 1e-1,
+        lr: float = 1e-6,
         betas: tuple = (0.9, 0.999),
         eps: float = 1e-8,
-        eps_tr: float = 1e-6,
+        # eps_tr: float = 1e-6,
         **kwargs
     ):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
         if eps < 0.0:
             raise ValueError(f"Invalid epsilon value: {eps}")
-        if eps_tr < 0.0:
-            raise ValueError(f"Invalid epsilon value: {eps_tr}")
+        # if eps_tr < 0.0:
+        #     raise ValueError(f"Invalid epsilon value: {eps_tr}")
         if not 0.0 <= betas[0] < 1.0:
             raise ValueError(f"Invalid beta parameter at index 0: {betas[0]}")
         if not 0.0 <= betas[1] < 1.0:
@@ -144,7 +144,8 @@ class Fused3DGS2TrMean(Optimizer):
         if 'weight_decay' in kwargs and kwargs['weight_decay'] != 0.0:
             raise NotImplementedError("Fused3DGS2TrMean currently only supports weight_decay=0")
         
-        defaults = dict(lr=lr, betas=betas, eps=eps, eps_tr=eps_tr)
+        # defaults = dict(lr=lr, betas=betas, eps=eps, eps_tr=eps_tr)
+        defaults = dict(lr=lr, betas=betas, eps=eps)
         super(Fused3DGS2TrMean, self).__init__(params, defaults)
     
     @torch.no_grad()
@@ -163,7 +164,7 @@ class Fused3DGS2TrMean(Optimizer):
             beta1, beta2 = group['betas']
             lr = group['lr']
             eps = group['eps']
-            eps_tr = group['eps_tr']
+            # eps_tr = group['eps_tr']
             
             for p in group['params']:
                 if p.grad is None:
@@ -195,11 +196,13 @@ class Fused3DGS2TrMean(Optimizer):
                     p.opacities,
                     state['exp_avg'],
                     state['exp_avg_sq'],
-                    lr,
+                    # lr,
+                    1.0,
                     beta1,
                     beta2,
                     eps,
-                    eps_tr,
+                    # eps_tr,
+                    lr,
                     state['step1'],
                     state['step2']
                 )
