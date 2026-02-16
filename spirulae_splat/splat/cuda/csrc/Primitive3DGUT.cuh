@@ -479,9 +479,9 @@ struct Vanilla3DGUT : public Base3DGUT {
 
     inline static __device__ void project_persp_vjp(
         World world, BwdProjCamera cam,
-        Screen v_proj, Screen h_proj,
+        Screen v_proj, Screen vr_proj, Screen h_proj,
         World& v_world, float3x3 &v_R, float3 &v_t,
-        float3 &h_world_pos
+        float3 &vr_world_pos, float3 &h_world_pos
     );
 
     inline static __device__ void project_fisheye_vjp(
@@ -492,9 +492,9 @@ struct Vanilla3DGUT : public Base3DGUT {
 
     inline static __device__ void project_fisheye_vjp(
         World world, BwdProjCamera cam,
-        Screen v_proj, Screen h_proj,
+        Screen v_proj, Screen vr_proj, Screen h_proj,
         World& v_world, float3x3 &v_R, float3 &v_t,
-        float3 &h_world_pos
+        float3 &vr_world_pos, float3 &h_world_pos
     );
 
 #endif  // #ifdef __CUDACC__
@@ -700,9 +700,9 @@ inline __device__ void Vanilla3DGUT::project_persp_vjp(
 
 inline __device__ void Vanilla3DGUT::project_persp_vjp(
     Vanilla3DGUT::World world, Vanilla3DGUT::BwdProjCamera cam,
-    Vanilla3DGUT::Screen v_proj, Vanilla3DGUT::Screen h_proj,
+    Vanilla3DGUT::Screen v_proj, Vanilla3DGUT::Screen vr_proj, Vanilla3DGUT::Screen h_proj,
     Vanilla3DGUT::World& v_world, float3x3 &v_R, float3 &v_t,
-    float3& h_world_pos
+    float3& vr_world_pos, float3& h_world_pos
 ) {
     projection_3dgut_persp_vjp(
         false,
@@ -710,9 +710,10 @@ inline __device__ void Vanilla3DGUT::project_persp_vjp(
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
         make_float2(0), v_proj.depth, v_proj.scale, v_proj.opacity, v_proj.rgb,
+        make_float2(0), vr_proj.depth, vr_proj.scale, vr_proj.opacity, vr_proj.rgb,
         make_float2(0), h_proj.depth, h_proj.scale, h_proj.opacity, h_proj.rgb,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
-        &v_R, &v_t, &h_world_pos
+        &v_R, &v_t, &vr_world_pos, &h_world_pos
     );
     v_world.mean = v_proj.mean, v_world.quat = v_proj.quat;
 }
@@ -736,9 +737,9 @@ inline __device__ void Vanilla3DGUT::project_fisheye_vjp(
 
 inline __device__ void Vanilla3DGUT::project_fisheye_vjp(
     Vanilla3DGUT::World world, Vanilla3DGUT::BwdProjCamera cam,
-    Vanilla3DGUT::Screen v_proj, Vanilla3DGUT::Screen h_proj,
+    Vanilla3DGUT::Screen v_proj, Vanilla3DGUT::Screen vr_proj, Vanilla3DGUT::Screen h_proj,
     Vanilla3DGUT::World& v_world, float3x3 &v_R, float3 &v_t,
-    float3& h_world_pos
+    float3& vr_world_pos, float3& h_world_pos
 ) {
     projection_3dgut_fisheye_vjp(
         false,
@@ -746,9 +747,10 @@ inline __device__ void Vanilla3DGUT::project_fisheye_vjp(
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
         make_float2(0), v_proj.depth, v_proj.scale, v_proj.opacity, v_proj.rgb,
+        make_float2(0), vr_proj.depth, vr_proj.scale, vr_proj.opacity, vr_proj.rgb,
         make_float2(0), h_proj.depth, h_proj.scale, h_proj.opacity, h_proj.rgb,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
-        &v_R, &v_t, &h_world_pos
+        &v_R, &v_t, &vr_world_pos, &h_world_pos
     );
     v_world.mean = v_proj.mean, v_world.quat = v_proj.quat;
 }
@@ -790,9 +792,9 @@ struct SphericalVoronoi3DGUT : public Base3DGUT {
 
     inline static __device__ void project_persp_vjp(
         World world, BwdProjCamera cam,
-        Screen v_proj, Screen h_proj,
+        Screen v_proj, Screen vr_proj, Screen h_proj,
         World& v_world, float3x3 &v_R, float3 &v_t,
-        float3 &h_world_pos
+        float3 &vr_world_pos, float3 &h_world_pos
     );
 
     inline static __device__ void project_fisheye_vjp(
@@ -803,9 +805,9 @@ struct SphericalVoronoi3DGUT : public Base3DGUT {
 
     inline static __device__ void project_fisheye_vjp(
         World world, BwdProjCamera cam,
-        Screen v_proj, Screen h_proj,
+        Screen v_proj, Screen vr_proj, Screen h_proj,
         World& v_world, float3x3 &v_R, float3 &v_t,
-        float3 &h_world_pos
+        float3 &vr_world_pos, float3 &h_world_pos
     );
 
 #endif  // #ifdef __CUDACC__
@@ -1021,9 +1023,9 @@ inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_persp_vjp(
 template<int num_sv>
 inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_persp_vjp(
     SphericalVoronoi3DGUT<num_sv>::World world, SphericalVoronoi3DGUT<num_sv>::BwdProjCamera cam,
-    SphericalVoronoi3DGUT<num_sv>::Screen v_proj, SphericalVoronoi3DGUT<num_sv>::Screen h_proj,
+    SphericalVoronoi3DGUT<num_sv>::Screen v_proj, SphericalVoronoi3DGUT<num_sv>::Screen vr_proj, SphericalVoronoi3DGUT<num_sv>::Screen h_proj,
     SphericalVoronoi3DGUT<num_sv>::World& v_world, float3x3 &v_R, float3 &v_t,
-    float3 &h_world_pos
+    float3 &vr_world_pos, float3 &h_world_pos
 ) {}  // TODO
 
 template<int num_sv>
@@ -1047,9 +1049,9 @@ inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_fisheye_vjp(
 template<int num_sv>
 inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_fisheye_vjp(
     SphericalVoronoi3DGUT<num_sv>::World world, SphericalVoronoi3DGUT<num_sv>::BwdProjCamera cam,
-    SphericalVoronoi3DGUT<num_sv>::Screen v_proj, SphericalVoronoi3DGUT<num_sv>::Screen h_proj,
+    SphericalVoronoi3DGUT<num_sv>::Screen v_proj, SphericalVoronoi3DGUT<num_sv>::Screen vr_proj, SphericalVoronoi3DGUT<num_sv>::Screen h_proj,
     SphericalVoronoi3DGUT<num_sv>::World& v_world, float3x3 &v_R, float3 &v_t,
-    float3 &h_world_pos
+    float3 &vr_world_pos, float3 &h_world_pos
 ) {}  // TODO
 
 #endif  // #ifdef __CUDACC__

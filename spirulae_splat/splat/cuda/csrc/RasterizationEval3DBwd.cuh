@@ -31,9 +31,7 @@ template <
 >
 __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     const uint32_t I,
-    const uint32_t N,
     const uint32_t n_isects,
-    const bool packed,
     // fwd inputs
     typename SplatPrimitive::Screen::Buffer splat_buffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
@@ -434,7 +432,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     }
 
     #define _LAUNCH_ARGS <<<grid, threads, 0, at::cuda::getCurrentCUDAStream()>>>( \
-            I, N, n_isects, packed, \
+            I, n_isects, \
             splats.buffer(), \
             viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr, \
@@ -493,7 +491,6 @@ inline std::tuple<
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
-    const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -521,9 +518,8 @@ inline std::tuple<
         CHECK_INPUT(backgrounds.value());
     if (masks.has_value())
         CHECK_INPUT(masks.value());
-
-    if (tile_size != TILE_SIZE)
-        AT_ERROR("Unsupported tile size");
+    if (loss_map.has_value())
+        CHECK_INPUT(loss_map.value());
 
     typename SplatPrimitive::Screen::Tensor splats(splats_tuple);
     typename SplatPrimitive::Screen::Tensor v_splats = splats.allocRasterBwd();
@@ -589,7 +585,6 @@ inline std::tuple<
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
-    const uint32_t tile_size,
     // intersections
     const at::Tensor &tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor &flatten_ids,  // [n_isects]
@@ -611,7 +606,7 @@ inline std::tuple<
         splats_tuple,
         viewmats, intrins, camera_model, dist_coeffs,
         backgrounds, masks,
-        image_width, image_height, tile_size, tile_offsets, flatten_ids,
+        image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
         v_render_outputs, v_render_alphas, v_distortion_outputs,
         need_viewmat_grad

@@ -86,7 +86,6 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
         height=H,
         packed=PACKED,
         use_bvh=False,
-        tile_size=16,
         sparse_grad=False,
         distributed=False,
         camera_model=camera_model,
@@ -110,7 +109,6 @@ def rasterize_gsplat(means, quats, scales, opacities, features_dc, features_sh, 
         height=H,
         sh_degree=SH_DEGREE,
         packed=PACKED,
-        tile_size=16,
         absgrad=False,
         sparse_grad=False,
         rasterize_mode=["classic", "antialiased"][IS_ANTIALIASED],
@@ -174,7 +172,7 @@ def test_rasterization():
 
     if False:
         import matplotlib.pyplot as plt
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2)
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 10))
         rgb = outputs[0].detach().cpu().numpy()
         _rgb = _outputs[0].detach().cpu().numpy()
         alpha = outputs[2].detach().cpu().numpy()

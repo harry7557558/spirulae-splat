@@ -55,9 +55,9 @@ struct VoxelPrimitive {
 
     inline static __device__ void project_persp_vjp(
         World world, BwdProjCamera cam,
-        Screen v_proj, Screen h_proj,
+        Screen v_proj, Screen vr_proj, Screen h_proj,
         World& v_world, float3x3 &v_R, float3 &v_t,
-        float3 &h_world_pos
+        float3 &vr_world_pos, float3 &h_world_pos
     );
 
     inline static __device__ void project_fisheye_vjp(
@@ -68,9 +68,9 @@ struct VoxelPrimitive {
 
     inline static __device__ void project_fisheye_vjp(
         World world, BwdProjCamera cam,
-        Screen v_proj, Screen h_proj,
+        Screen v_proj, Screen vr_proj, Screen h_proj,
         World& v_world, float3x3 &v_R, float3 &v_t,
-        float3 &h_world_pos
+        float3 &vr_world_pos, float3 &h_world_pos
     );
 
 #endif  // #ifdef __CUDACC__
@@ -637,9 +637,9 @@ inline __device__ void VoxelPrimitive::project_persp_vjp(
 
 inline __device__ void VoxelPrimitive::project_persp_vjp(
     VoxelPrimitive::World world, VoxelPrimitive::BwdProjCamera cam,
-    VoxelPrimitive::Screen v_proj, VoxelPrimitive::Screen h_proj,
+    VoxelPrimitive::Screen v_proj, VoxelPrimitive::Screen vr_proj, VoxelPrimitive::Screen h_proj,
     VoxelPrimitive::World& v_world, float3x3 &v_R, float3 &v_t,
-    float3 &h_world_pos
+    float3 &vr_world_pos, float3 &h_world_pos
 ) {}  // TODO
 
 inline __device__ void VoxelPrimitive::project_fisheye_vjp(
@@ -660,9 +660,9 @@ inline __device__ void VoxelPrimitive::project_fisheye_vjp(
 
 inline __device__ void VoxelPrimitive::project_fisheye_vjp(
     VoxelPrimitive::World world, VoxelPrimitive::BwdProjCamera cam,
-    VoxelPrimitive::Screen v_proj, VoxelPrimitive::Screen h_proj,
+    VoxelPrimitive::Screen v_proj, VoxelPrimitive::Screen vr_proj, VoxelPrimitive::Screen h_proj,
     VoxelPrimitive::World& v_world, float3x3 &v_R, float3 &v_t,
-    float3 &h_world_pos
+    float3 &vr_world_pos, float3 &h_world_pos
 ) {}  // TODO
 
 #endif  // #ifdef __CUDACC__

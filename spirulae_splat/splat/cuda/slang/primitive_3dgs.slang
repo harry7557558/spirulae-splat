@@ -136,7 +136,7 @@ bool persp_proj_3dgs_ut<let assume_valid : bool>(
     return true;
 }
 
-// [ForceInline]
+[ForceInline]
 [Differentiable]
 bool fisheye_proj_3dgs<let assume_valid : bool>(
     // inputs
@@ -234,7 +234,7 @@ float add_blur(const float eps2d, inout float2x2 covar, out float compensation) 
     no_diff const float near_plane, no_diff const float far_plane, \
     out int4 aabb_xyxy, out float2 mean2d, out float depth, out float3 conic, out float opacity, out float3 rgb
 
-// [ForceInline]
+[ForceInline]
 [Differentiable]
 void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, let eval3d: bool>(
     _projection_3dgs_ARGS
@@ -383,12 +383,14 @@ _DEF_projection_3dgs(projection_3dgut_fisheye, CameraModelType::FISHEYE, false, 
 
 interface _DiffProjection3DGS
 {
+    [ForceInline]
     [Differentiable]
     static void projection(_projection_3dgs_ARGS);
 };
 
 #define _DEF_projection_3dgs_interface(_InterfaceName, ...) \
     struct _InterfaceName : _DiffProjection3DGS { \
+        [ForceInline] \
         [Differentiable] \
         static void projection(_projection_3dgs_ARGS) { \
             return projection_3dgs<__VA_ARGS__>( \
@@ -474,38 +476,62 @@ _DEF_projection_3dgs_vjp(projection_3dgut_fisheye_vjp, _DiffProjection3DGS_3dgut
     const float3x3 R, const float3 t, const float fx, const float fy, const float cx, const float cy, \
     const float[10] dist_coeffs, const uint image_width, const uint image_height, \
     const float2 v_mean2d, const float v_depth, const float3 v_conic, const float v_opacity, const float3 v_rgb, \
+    const float2 vr_mean2d, const float vr_depth, const float3 vr_conic, const float vr_opacity, const float3 vr_rgb, \
     const float2 h_mean2d, const float h_depth, const float3 h_conic, const float h_opacity, const float3 h_rgb, \
     out float3 v_mean, out float4 v_quat, out float3 v_scale, out float v_in_opacity, out float3 v_sh_coeffs[16], \
     out float3x3 v_R, out float3 v_t, \
-    out float3 h_mean
+    out float3 vr_mean, out float3 h_mean
 
 [ForceInline]
 void _projection_3dgs_vjp(
     _DiffProjection3DGS projectionInterface,
     _projection_3dgs_vjp_ARGS
 ) {
-    DifferentialPair<float3> dp_mean = diffPair(mean);
-    DifferentialPair<float4> dp_quat = diffPair(quat);
-    DifferentialPair<float3> dp_scale = diffPair(scale);
-    DifferentialPair<float> dp_in_opacity = diffPair(in_opacity);
-    DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);
-    DifferentialPair<float3x3> dp_R = diffPair(R);
-    DifferentialPair<float3> dp_t = diffPair(t);
-    bwd_diff(projectionInterface.projection)(
-        antialiased,
-        dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
-        fx, fy, cx, cy, dist_coeffs,
-        image_width, image_height, 0.0f, 1e30f,
-        v_mean2d, v_depth, v_conic, v_opacity, v_rgb
-    );
-    v_mean = dp_mean.d;
-    v_quat = dp_quat.d;
-    v_scale = dp_scale.d;
-    v_in_opacity = dp_in_opacity.d;
-    v_sh_coeffs = dp_sh_coeffs.d;
-    v_R = dp_R.d;
-    v_t = dp_t.d;
+    // gradient
+    {
+        DifferentialPair<float3> dp_mean = diffPair(mean);
+        DifferentialPair<float4> dp_quat = diffPair(quat);
+        DifferentialPair<float3> dp_scale = diffPair(scale);
+        DifferentialPair<float> dp_in_opacity = diffPair(in_opacity);
+        DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);
+        DifferentialPair<float3x3> dp_R = diffPair(R);
+        DifferentialPair<float3> dp_t = diffPair(t);
+        bwd_diff(projectionInterface.projection)(
+            antialiased,
+            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
+            fx, fy, cx, cy, dist_coeffs,
+            image_width, image_height, 0.0f, 1e30f,
+            v_mean2d, v_depth, v_conic, v_opacity, v_rgb
+        );
+        v_mean = dp_mean.d;
+        v_quat = dp_quat.d;
+        v_scale = dp_scale.d;
+        v_in_opacity = dp_in_opacity.d;
+        v_sh_coeffs = dp_sh_coeffs.d;
+        v_R = dp_R.d;
+        v_t = dp_t.d;
+    }
 
+    // jacobian residual product
+    {
+        DifferentialPair<float3> dp_mean = diffPair(mean);
+        DifferentialPair<float4> dp_quat = diffPair(quat);
+        DifferentialPair<float3> dp_scale = diffPair(scale);
+        DifferentialPair<float> dp_in_opacity = diffPair(in_opacity);
+        DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);
+        DifferentialPair<float3x3> dp_R = diffPair(R);
+        DifferentialPair<float3> dp_t = diffPair(t);
+        bwd_diff(projectionInterface.projection)(
+            antialiased,
+            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
+            fx, fy, cx, cy, dist_coeffs,
+            image_width, image_height, 0.0f, 1e30f,
+            vr_mean2d, vr_depth, vr_conic, vr_opacity, vr_rgb
+        );
+        vr_mean = dp_mean.d;
+    }
+
+    // hessian diagonal (mean)
     [ForceUnroll]
     for (int i = 0; i < 3; ++i) {
         DifferentialPair<float3> dp_mean = diffPair(
@@ -551,13 +577,15 @@ void _projection_3dgs_vjp(
             fx, fy, cx, cy, dist_coeffs, \
             image_width, image_height, \
             v_mean2d, v_depth, v_conic, v_opacity, v_rgb, \
+            vr_mean2d, vr_depth, vr_conic, vr_opacity, vr_rgb, \
             h_mean2d, h_depth, h_conic, h_opacity, h_rgb, \
-            v_mean, v_quat, v_scale, v_in_opacity, v_sh_coeffs, v_R, v_t, h_mean \
+            v_mean, v_quat, v_scale, v_in_opacity, v_sh_coeffs, v_R, v_t, \
+            vr_mean, h_mean \
         ); \
     }
 
-// _DEF_projection_3dgs_vjp(projection_3dgs_persp_vjp, _DiffProjection3DGS_3dgs_persp)
-// _DEF_projection_3dgs_vjp(projection_3dgs_fisheye_vjp, _DiffProjection3DGS_3dgs_fisheye)
+_DEF_projection_3dgs_vjp(projection_3dgs_persp_vjp, _DiffProjection3DGS_3dgs_persp)
+_DEF_projection_3dgs_vjp(projection_3dgs_fisheye_vjp, _DiffProjection3DGS_3dgs_fisheye)
 // _DEF_projection_3dgs_vjp(projection_3dgs_ortho_vjp, _DiffProjection3DGS_3dgs_ortho)
 _DEF_projection_3dgs_vjp(projection_3dgut_persp_vjp, _DiffProjection3DGS_3dgut_persp)
 _DEF_projection_3dgs_vjp(projection_3dgut_fisheye_vjp, _DiffProjection3DGS_3dgut_fisheye)

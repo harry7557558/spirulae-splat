@@ -423,13 +423,10 @@ std::tuple<
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
-    const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids   // [n_isects]
 ) {
-    if (tile_size != TILE_SIZE)
-        AT_ERROR("Tile size must be " + std::to_string(TILE_SIZE));
     return rasterize_to_pixels_sorted_eval3d_fwd_tensor<OpaqueTriangle, true, true>(
         splats_tuple,
         viewmats, intrins, camera_model, dist_coeffs,

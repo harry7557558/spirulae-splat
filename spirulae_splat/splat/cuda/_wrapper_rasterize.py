@@ -38,7 +38,6 @@ def rasterize_to_pixels(
     # colors: Tensor,  # [..., N, channels] or [nnz, channels]
     image_width: int,
     image_height: int,
-    tile_size: int,
     isect_offsets: Tensor,  # [..., tile_height, tile_width]
     flatten_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [..., channels]
@@ -74,18 +73,10 @@ def rasterize_to_pixels(
 
     assert backgrounds is None, "TODO"
 
-    tile_height, tile_width = isect_offsets.shape[-2:]
-    assert (
-        tile_height * tile_size >= image_height
-    ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
-    assert (
-        tile_width * tile_size >= image_width
-    ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
-
     additional_args = [kwargs['viewmats'], kwargs['intrins'], kwargs['camera_model'], kwargs['dist_coeffs']]
     if primitive in ["3dgs", "mip"]:
         _RasterizeToPixels = _RasterizeToPixels3DGS
-        additional_args = [primitive == "mip"]
+        additional_args = [primitive == "mip", compute_hessian_diagonal]
     if primitive in ["3dgut", "3dgut_sv"]:
         _RasterizeToPixels = _RasterizeToPixels3DGUT
         additional_args += [output_distortion, compute_hessian_diagonal]
@@ -100,7 +91,6 @@ def rasterize_to_pixels(
         masks,
         image_width,
         image_height,
-        tile_size,
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
         *additional_args
@@ -166,16 +156,16 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
         masks: Tensor,  # [..., tile_height, tile_width], Optional
         width: int,
         height: int,
-        tile_size: int,
         isect_offsets: Tensor,  # [..., tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
         antialiased: bool,
+        compute_hessian_diagonal: bool = False
     ) -> Tuple[Tensor, Tensor]:
         (render_rgbs, render_depths), render_Ts, last_ids = _make_lazy_cuda_func(
             f"rasterization_{['3dgs', 'mip'][antialiased]}_forward"
         )(
             (means2d, depths, conics, opacities, colors, None), backgrounds, masks,
-            width, height, tile_size, isect_offsets, flatten_ids,
+            width, height, isect_offsets, flatten_ids,
         )
 
         ctx.save_for_backward(
@@ -184,8 +174,8 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
         )
         ctx.width = width
         ctx.height = height
-        ctx.tile_size = tile_size
         ctx.antialiased = antialiased
+        ctx.compute_hessian_diagonal = compute_hessian_diagonal
 
         render_alphas = 1.0 - render_Ts
         return render_rgbs, render_depths, render_alphas
@@ -203,18 +193,36 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
         ) = ctx.saved_tensors
         width = ctx.width
         height = ctx.height
-        tile_size = ctx.tile_size
+        if ctx.compute_hessian_diagonal:
+            assert hasattr(v_render_rgbs, 'loss_map')
 
-        (
-            v_means2d, v_depths, v_conics, v_opacities, v_colors, v_means2d_abs
-        ) = _make_lazy_cuda_func(
-            f"rasterization_{['3dgs', 'mip'][ctx.antialiased]}_backward"
-        )(
-            (means2d, depths, conics, opacities, colors, None), backgrounds, masks,
-            width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids,
-            (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
-            v_render_alphas.contiguous(),
-        )
+        if ctx.compute_hessian_diagonal:
+            v_splats, vr_splats, h_splats = _make_lazy_cuda_func(
+                f"rasterization_{['3dgs', 'mip'][ctx.antialiased]}_backward_with_hessian_diagonal"
+            )(
+                (means2d, depths, conics, opacities, colors, None), backgrounds, masks,
+                width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
+                None, None,
+                v_render_rgbs.loss_map if ctx.compute_hessian_diagonal else None,
+                (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
+                v_render_alphas.contiguous(),
+                None
+            )
+            v_means2d, v_depths, v_conics, v_opacities, v_colors, v_means2d_abs = v_splats
+            for v, vr, h in zip(v_splats, vr_splats, h_splats):
+                v.gradr = vr
+                v.hess = h
+        else:
+            (
+                v_means2d, v_depths, v_conics, v_opacities, v_colors, v_means2d_abs
+            ) = _make_lazy_cuda_func(
+                f"rasterization_{['3dgs', 'mip'][ctx.antialiased]}_backward"
+            )(
+                (means2d, depths, conics, opacities, colors, None), backgrounds, masks,
+                width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
+                (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
+                v_render_alphas.contiguous(),
+            )
         if v_means2d_abs is not None:
             means2d.absgrad = v_means2d_abs
 
@@ -246,7 +254,6 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         masks: Tensor,  # [..., tile_height, tile_width], Optional
         width: int,
         height: int,
-        tile_size: int,
         isect_offsets: Tensor,  # [..., tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
         viewmats: Tensor,
@@ -270,7 +277,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
             (means, quats, depths, proj_scales, proj_opacities, colors),
             viewmats, intrins, camera_model, dist_coeffs,
             backgrounds, masks,
-            width, height, tile_size, isect_offsets, flatten_ids,
+            width, height, isect_offsets, flatten_ids,
             output_distortion
         )
 
@@ -294,7 +301,6 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         ctx.width = width
         ctx.height = height
         ctx.camera_model = camera_model
-        ctx.tile_size = tile_size
         ctx.output_distortion = output_distortion
         ctx.compute_hessian_diagonal = compute_hessian_diagonal
 
@@ -319,7 +325,6 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         ) = ctx.saved_tensors
         width = ctx.width
         height = ctx.height
-        tile_size = ctx.tile_size
         if ctx.compute_hessian_diagonal:
             assert hasattr(v_render_rgbs, 'loss_map')
 
@@ -327,7 +332,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
             (means, quats, depths, proj_scales, proj_opacities, colors),
             viewmats, intrins, ctx.camera_model, dist_coeffs,
             backgrounds, masks,
-            width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids,
+            width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
             (render_rgbs, render_depths) if ctx.output_distortion else None,
             (render2_rgbs, render2_depths) if ctx.output_distortion else None,
             v_render_rgbs.loss_map if ctx.compute_hessian_diagonal else None,
@@ -346,7 +351,8 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         # print(v_means.mean().item())
 
         if h_splats is not None:
-            for v, h in zip(v_splats, h_splats):
+            for v, vr, h in zip(v_splats, vr_splats, h_splats):
+                v.gradr = vr
                 v.hess = h
                 v.gradr_all = vr_splats
                 v.hess_all = h_splats  # so we can get all hess from projection backward pass
@@ -379,7 +385,6 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
         max_blending_masks: Optional[Tensor],  # [..., image_height, image_width]
         width: int,
         height: int,
-        tile_size: int,
         isect_offsets: Tensor,  # [..., tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
         viewmats: Tensor,
@@ -405,7 +410,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
             (hardness, depths, verts, rgbs, normals),
             viewmats, intrins, camera_model, dist_coeffs,
             backgrounds, max_blending_masks,
-            width, height, tile_size, isect_offsets, flatten_ids,
+            width, height, isect_offsets, flatten_ids,
         )
         # torch.cuda.synchronize()
         # time1 = perf_counter()
@@ -422,7 +427,6 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
         ctx.width = width
         ctx.height = height
         ctx.camera_model = camera_model
-        ctx.tile_size = tile_size
 
         render_alphas = 1.0 - render_Ts
         return (
@@ -453,7 +457,6 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
         ) = ctx.saved_tensors
         width = ctx.width
         height = ctx.height
-        tile_size = ctx.tile_size
 
         # from time import perf_counter
         # torch.cuda.synchronize()
@@ -465,7 +468,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
             (hardness, depths, verts, rgbs, normals),
             viewmats, intrins, ctx.camera_model, dist_coeffs,
             backgrounds,
-            width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids,
+            width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
             (render_rgbs, render_depths, render_normals),
             (render2_rgbs, render2_depths, render2_normals),
             (v_render_rgbs.contiguous(), v_render_depths.contiguous(), v_render_normals.contiguous()),
@@ -505,7 +508,6 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         masks: Tensor,  # [..., tile_height, tile_width], Optional
         width: int,
         height: int,
-        tile_size: int,
         isect_offsets: Tensor,  # [..., tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
         viewmats: Tensor,
@@ -527,7 +529,7 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
             (pos_sizes, None, densities, colors),
             viewmats, intrins, camera_model, dist_coeffs,
             backgrounds, masks,
-            width, height, tile_size, isect_offsets, flatten_ids,
+            width, height, isect_offsets, flatten_ids,
         )
 
         ctx.save_for_backward(
@@ -541,7 +543,6 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         ctx.width = width
         ctx.height = height
         ctx.camera_model = camera_model
-        ctx.tile_size = tile_size
 
         render_alphas = 1.0 - render_Ts
         return (
@@ -570,7 +571,6 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         ) = ctx.saved_tensors
         width = ctx.width
         height = ctx.height
-        tile_size = ctx.tile_size
 
         (
             (v_pos_sizes, v_depths, v_densities, v_colors),
@@ -579,7 +579,7 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
             (pos_sizes, None, densities, colors),
             viewmats, intrins, ctx.camera_model, dist_coeffs,
             backgrounds, masks,
-            width, height, tile_size, isect_offsets, flatten_ids, render_Ts, last_ids,
+            width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
             (render_rgbs, render_depths),
             (render2_rgbs, render2_depths),
             (v_render_rgbs.contiguous(), v_render_depths.contiguous()),

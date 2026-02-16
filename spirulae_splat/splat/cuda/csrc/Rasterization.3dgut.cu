@@ -22,7 +22,6 @@ std::tuple<
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
-    const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,   // [n_isects]
@@ -33,14 +32,14 @@ std::tuple<
             splats_tuple,
             viewmats, intrins, camera_model, dist_coeffs,
             backgrounds, masks,
-            image_width, image_height, tile_size,
+            image_width, image_height,
             tile_offsets, flatten_ids
         );
     return rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, false, false>(
         splats_tuple,
         viewmats, intrins, camera_model, dist_coeffs,
         backgrounds, masks,
-        image_width, image_height, tile_size,
+        image_width, image_height,
         tile_offsets, flatten_ids
     );
 }
@@ -62,7 +61,6 @@ std::tuple<
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
-    const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -83,7 +81,7 @@ std::tuple<
             splats_tuple,
             viewmats, intrins, camera_model, dist_coeffs,
             backgrounds, masks,
-            image_width, image_height, tile_size, tile_offsets, flatten_ids,
+            image_width, image_height, tile_offsets, flatten_ids,
             render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
             v_render_outputs, v_render_alphas, v_distortion_outputs,
             need_viewmat_grad
@@ -92,7 +90,7 @@ std::tuple<
         splats_tuple,
         viewmats, intrins, camera_model, dist_coeffs,
         backgrounds, masks,
-        image_width, image_height, tile_size, tile_offsets, flatten_ids,
+        image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
         v_render_outputs, v_render_alphas, v_distortion_outputs,
         need_viewmat_grad

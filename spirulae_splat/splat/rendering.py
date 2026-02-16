@@ -48,7 +48,6 @@ def rasterization(
     output_distortion: bool = False,
     compute_hessian_diagonal: bool = False,
     relative_scale: Optional[float] = None,
-    tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
     masks: Optional[Tensor] = None,
     render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
@@ -149,8 +148,6 @@ def rasterization(
         far_plane: The far plane for clipping. Default is 1e10.
         packed: Whether to use packed mode which is more memory efficient but might or
             might not be as fast. Default is True.
-        tile_size: The size of the tiles for rasterization. Default is 16.
-            (Note: other values are not tested)
         backgrounds: The background colors. [..., C, D]. Default is None.
         render_mode: The rendering mode. Supported modes are "RGB", "D", "ED", "RGB+D",
             and "RGB+ED". "RGB" renders the colored image, "D" renders the accumulated depth, and
@@ -204,7 +201,7 @@ def rasterization(
         >>> print (meta.keys())
         dict_keys(['camera_ids', 'gaussian_ids', 'radii', 'means2d', 'depths', 'conics',
         'opacities', 'tile_width', 'tile_height', 'tiles_per_gauss', 'isect_ids',
-        'flatten_ids', 'isect_offsets', 'width', 'height', 'tile_size'])
+        'flatten_ids', 'isect_offsets', 'width', 'height'])
 
     """
     meta = {}
@@ -409,8 +406,9 @@ def rasterization(
         raise NotImplementedError()
 
     # Identify intersecting tiles
-    tile_width = math.ceil(width / float(tile_size))
-    tile_height = math.ceil(height / float(tile_size))
+    TILE_SIZE = 16
+    tile_width = math.ceil(width / float(TILE_SIZE))
+    tile_height = math.ceil(height / float(TILE_SIZE))
     if packed or True:
         # TODO: add support
         means2d = (aabb_xyxy[..., 2:] + aabb_xyxy[..., :2]).float() / 2
@@ -418,7 +416,7 @@ def rasterization(
             means2d,
             radii,
             depths,
-            tile_size,
+            TILE_SIZE,
             tile_width,
             tile_height,
             segmented=segmented,
@@ -455,7 +453,7 @@ def rasterization(
             "isect_offsets": isect_offsets,
             "width": width,
             "height": height,
-            "tile_size": tile_size,
+            "tile_size": TILE_SIZE,
             "n_batches": B,
             "n_cameras": C,
         }
@@ -473,7 +471,6 @@ def rasterization(
         proj_splats,
         width,
         height,
-        tile_size,
         isect_offsets,
         flatten_ids,
         backgrounds=backgrounds,

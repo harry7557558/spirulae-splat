@@ -26,7 +26,6 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const bool *__restrict__ masks,           // [I, tile_height, tile_width]
     const uint32_t image_width,
     const uint32_t image_height,
-    const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [I, tile_height, tile_width]
@@ -42,8 +41,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     int32_t image_id = block.group_index().x;
     int32_t tile_id =
         block.group_index().y * tile_width + block.group_index().z;
-    uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
-    uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
+    uint32_t i = block.group_index().y * TILE_SIZE + block.thread_index().y;
+    uint32_t j = block.group_index().z * TILE_SIZE + block.thread_index().x;
 
     tile_offsets += image_id * tile_height * tile_width;
     render_Ts += image_id * image_height * image_width;
@@ -167,7 +166,6 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
-    const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -185,11 +183,11 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
 
     // Each block covers a tile on the image. In total there are
     // I * tile_height * tile_width blocks.
-    dim3 threads = {tile_size, tile_size, 1};
+    dim3 threads = {TILE_SIZE, TILE_SIZE, 1};
     dim3 grid = {I, tile_height, tile_width};
 
     int64_t shmem_size =
-        tile_size * tile_size * (sizeof(int32_t) + sizeof(typename SplatPrimitive::Screen));
+        TILE_SIZE * TILE_SIZE * (sizeof(int32_t) + sizeof(typename SplatPrimitive::Screen));
 
     // TODO: an optimization can be done by passing the actual number of
     // channels into the kernel functions and avoid necessary global memory
@@ -218,7 +216,6 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
             masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
             image_width,
             image_height,
-            tile_size,
             tile_width,
             tile_height,
             tile_offsets.data_ptr<int32_t>(),
@@ -241,7 +238,6 @@ rasterize_to_pixels_fwd_tensor(
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
-    const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids   // [n_isects]
@@ -278,7 +274,6 @@ rasterize_to_pixels_fwd_tensor(
         masks,
         image_width,
         image_height,
-        tile_size,
         tile_offsets,
         flatten_ids,
         renders,

@@ -391,7 +391,6 @@ inline std::tuple<
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
-    const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -415,9 +414,6 @@ inline std::tuple<
     CHECK_INPUT(v_render_alphas);
     if (backgrounds.has_value())
         CHECK_INPUT(backgrounds.value());
-
-    if (tile_size != TILE_SIZE)
-        AT_ERROR("Unsupported tile size");
 
     typename SplatPrimitive::Screen::Tensor splats(splats_tuple);
     typename SplatPrimitive::Screen::Tensor v_splats = splats.allocRasterBwd();
@@ -464,7 +460,6 @@ std::tuple<
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
-    const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -482,7 +477,7 @@ std::tuple<
         splats_tuple,
         viewmats, intrins, camera_model, dist_coeffs,
         backgrounds,
-        image_width, image_height, tile_size, tile_offsets, flatten_ids,
+        image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs,
         v_render_outputs, v_render_alphas, v_distortion_outputs
     );

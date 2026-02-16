@@ -218,29 +218,32 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
 
         means, quats, scales, opacities, features_dc, features_sh, viewmats, intrins, aabb = ctx.saved_tensors
         if with_hessian_diagonal:
-            if ctx.primitive != "3dgut":
+            if ctx.primitive not in ["3dgs", "mip", "3dgut"]:
                 raise NotImplementedError()
             (
                 (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh),
                 v_viewmats,
-                h_means_from_proj
+                vr_means_from_proj, h_means_from_proj
             ) = _make_lazy_cuda_func(
                 f"projection_{ctx.primitive}_backward_with_position_hessian_diagonal"
             )(
                 (means, quats, scales, opacities, features_dc, features_sh),
                 viewmats, intrins, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs, aabb,
                 [x.contiguous() for x in v_proj_returns],
+                [x.gradr for x in v_proj_returns],
                 [x.hess for x in v_proj_returns],
                 ctx.needs_input_grad[7],  # viewmats_requires_grad
             )
+            assert vr_means_from_proj is not None
             assert h_means_from_proj is not None
-            h_means, h_quats, h_depths, h_proj_scales, h_proj_opacities, h_colors = v_proj_returns[0].hess_all
             # print(h_means_from_proj.view(v_means.shape).mean(), h_means.mean())
             # print(v_proj_returns[0].gradr_all[0].mean().item())
             # print(v_means.mean().item())
-            # TODO: for 3DGUT gradient from rasterization is multiple magnitudes larger than from projection (from SH view direction); This isn't the case for other primitives
-            means.gradr = v_proj_returns[0].gradr_all[0]
-            means.hess = h_means_from_proj.view(v_means.shape) + h_means
+            means.gradr = vr_means_from_proj.view(v_means.shape)
+            means.hess = h_means_from_proj.view(v_means.shape)
+            if ctx.primitive == "3dgut":
+                means.gradr += v_proj_returns[0].gradr_all[0]
+                means.hess += v_proj_returns[0].hess_all[0]
             means.scales = scales
             means.quats = quats
             means.opacities = opacities

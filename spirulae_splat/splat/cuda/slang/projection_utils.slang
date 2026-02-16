@@ -263,14 +263,22 @@ float2 camera_distortion(float2 uv, no_diff float[10] dist_coeffs) {
     return uv + float2(b1 * uv.x + b2 * uv.y, 0.0);
 }
 
-// [ForceInline]
+[ForceInline]
 [Differentiable]
 float2x2 camera_distortion_jac(float2 uv, no_diff float[10] dist_coeffs) {
+#if 0
     DifferentialPair<float2> dp_uv_x = diffPair(uv);
     bwd_diff(camera_distortion)(dp_uv_x, dist_coeffs, float2(1, 0));
     DifferentialPair<float2> dp_uv_y = diffPair(uv);
     bwd_diff(camera_distortion)(dp_uv_y, dist_coeffs, float2(0, 1));
     return float2x2(dp_uv_x.d, dp_uv_y.d);
+#else
+    DifferentialPair<float2> dp_uv_x = diffPair(uv, float2(1, 0));
+    float2 j_x = fwd_diff(camera_distortion)(dp_uv_x, dist_coeffs).d;
+    DifferentialPair<float2> dp_uv_y = diffPair(uv, float2(0, 1));
+    float2 j_y = fwd_diff(camera_distortion)(dp_uv_y, dist_coeffs).d;
+    return transpose(float2x2(j_x, j_y));
+#endif
 }
 
 [ForceInline]
@@ -290,6 +298,7 @@ float valid_distortion_log_barrier(float2 uv, no_diff float[10] dist_coeffs) {
     return -log(val0);
 }
 
+#if 0
 [ForceInline]
 [Differentiable]
 float2 valid_distortion_log_barrier_grad(float2 uv, no_diff float[10] dist_coeffs) {
@@ -307,6 +316,7 @@ float2x2 valid_distortion_log_barrier_hess(float2 uv, no_diff float[10] dist_coe
     bwd_diff(valid_distortion_log_barrier_grad)(dp_uv_y, dist_coeffs, float2(0.0f, 1.0f));
     return float2x2(dp_uv_x.d, dp_uv_y.d);
 }
+#endif
 
 [ForceInline]
 [Differentiable]
@@ -330,6 +340,7 @@ bool persp_proj<let assume_valid : bool>(
 [Differentiable]
 float2x3 persp_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs) {
     float2x3 J;
+#if 0
     [ForceUnroll]
     for (int i = 0; i < 2; ++i) {
         float2 seed = 0.0; seed[i] = 1.0;
@@ -337,6 +348,17 @@ float2x3 persp_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[10]
         bwd_diff(persp_proj<true>)(dp_p_view, intrins, dist_coeffs, seed);
         J[i] = dp_p_view.d;
     }
+#else
+    [ForceUnroll]
+    for (int i = 0; i < 3; ++i) {
+        DifferentialPair<float3> dp_p_view = diffPair(p_view,
+            float3(float(i == 0), float(i == 1), float(i == 2)));
+        DifferentialPair<float2> dp_uv;
+        fwd_diff(persp_proj<true>)(dp_p_view, intrins, dist_coeffs, dp_uv);
+        J[0][i] = dp_uv.d.x;
+        J[1][i] = dp_uv.d.y;
+    }
+#endif
     return J;
 }
 
@@ -371,6 +393,7 @@ bool fisheye_proj<let assume_valid : bool>(
 [Differentiable]
 float2x3 fisheye_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs) {
     float2x3 J;
+#if 0
     [ForceUnroll]
     for (int i = 0; i < 2; ++i) {
         float2 seed = 0.0; seed[i] = 1.0;
@@ -378,6 +401,17 @@ float2x3 fisheye_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[1
         bwd_diff(fisheye_proj<true>)(dp_p_view, intrins, dist_coeffs, seed);
         J[i] = dp_p_view.d;
     }
+#else
+    [ForceUnroll]
+    for (int i = 0; i < 3; ++i) {
+        DifferentialPair<float3> dp_p_view = diffPair(p_view,
+            float3(float(i == 0), float(i == 1), float(i == 2)));
+        DifferentialPair<float2> dp_uv;
+        fwd_diff(fisheye_proj<true>)(dp_p_view, intrins, dist_coeffs, dp_uv);
+        J[0][i] = dp_uv.d.x;
+        J[1][i] = dp_uv.d.y;
+    }
+#endif
     return J;
 }
 
@@ -436,6 +470,7 @@ bool undistort_point(
            length(camera_distortion(uv_undist, dist_coeffs) - uv) < 1e-2;
 }
 
+#if 0
 // find uv' that minimizes (distort(uv') - uv)^2 s.t. is_valid_distortion_func(uv') < 0
 bool undistort_point_clipped(
     no_diff float2 uv, no_diff float[10] dist_coeffs,
@@ -492,6 +527,7 @@ bool undistort_point_clipped(
     return true;
     // return length(camera_distortion(q, dist_coeffs) - uv) < 1e-2;
 }
+#endif
 
 [CudaDeviceExport]
 [Differentiable]

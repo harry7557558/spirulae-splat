@@ -12,14 +12,13 @@ rasterize_to_pixels_mip_fwd(
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
-    const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids   // [n_isects]
 ) {
     return rasterize_to_pixels_fwd_tensor<MipSplatting>(
         splats_tuple, backgrounds, masks,
-        image_width, image_height, tile_size,
+        image_width, image_height,
         tile_offsets, flatten_ids
     );
 }
@@ -33,7 +32,6 @@ MipSplatting::Screen::TensorTuple rasterize_to_pixels_mip_bwd(
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
-    const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -46,7 +44,7 @@ MipSplatting::Screen::TensorTuple rasterize_to_pixels_mip_bwd(
 ) {
     return rasterize_to_pixels_bwd_tensor<MipSplatting>(
         splats_tuple, backgrounds, masks,
-        image_width, image_height, tile_size, tile_offsets, flatten_ids,
+        image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, v_render_outputs, v_render_alphas
     );
 }

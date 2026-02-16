@@ -103,6 +103,30 @@ std::tuple<
 
 
 std::tuple<
+    Vanilla3DGS::World::TensorTuple,  // v_splats
+    at::Tensor,  // v_viewmats
+    at::Tensor,  // vr_world_pos
+    at::Tensor  // h_world_pos
+> projection_3dgs_backward_with_position_hessian_diagonal_tensor(
+    // fwd inputs
+    const Vanilla3DGS::World::TensorTuple &splats_world,
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
+    // fwd outputs
+    const at::Tensor aabb,                       // [..., C, N, 2]
+    // grad outputs
+    const Vanilla3DGS::Screen::TensorTupleProj &v_splats_screen,
+    const Vanilla3DGS::Screen::TensorTupleProj &vr_splats_screen,
+    const Vanilla3DGS::Screen::TensorTupleProj &h_splats_screen,
+    const bool viewmats_requires_grad
+);
+
+
+std::tuple<
     at::Tensor,  // aabb
     Vanilla3DGUT::Screen::TensorTupleProj  // out splats
 > projection_3dgut_forward_tensor(
@@ -190,6 +214,7 @@ std::tuple<
 std::tuple<
     Vanilla3DGUT::World::TensorTuple,  // v_splats
     at::Tensor,  // v_viewmats
+    at::Tensor,  // vr_world_pos
     at::Tensor  // h_world_pos
 > projection_3dgut_backward_with_position_hessian_diagonal_tensor(
     // fwd inputs
@@ -204,6 +229,7 @@ std::tuple<
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const Vanilla3DGUT::Screen::TensorTupleProj &v_splats_screen,
+    const Vanilla3DGUT::Screen::TensorTupleProj &vr_splats_screen,
     const Vanilla3DGUT::Screen::TensorTupleProj &h_splats_screen,
     const bool viewmats_requires_grad
 );
@@ -328,6 +354,30 @@ std::tuple<
     const MipSplatting::Screen::TensorTuple &v_splats_proj_tuple,
     const bool viewmats_requires_grad,
     const bool sparse_grad
+);
+
+
+std::tuple<
+    MipSplatting::World::TensorTuple,  // v_splats
+    at::Tensor,  // v_viewmats
+    at::Tensor,  // vr_world_pos
+    at::Tensor  // h_world_pos
+> projection_mip_backward_with_position_hessian_diagonal_tensor(
+    // fwd inputs
+    const MipSplatting::World::TensorTuple &splats_world,
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
+    // fwd outputs
+    const at::Tensor aabb,                       // [..., C, N, 2]
+    // grad outputs
+    const MipSplatting::Screen::TensorTupleProj &v_splats_screen,
+    const MipSplatting::Screen::TensorTupleProj &vr_splats_screen,
+    const MipSplatting::Screen::TensorTupleProj &h_splats_screen,
+    const bool viewmats_requires_grad
 );
 
 

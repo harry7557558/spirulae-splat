@@ -60,9 +60,9 @@ struct _Base3DGS {
 
     inline static __device__ void project_persp_vjp(
         World world, BwdProjCamera cam,
-        Screen v_proj, Screen h_proj,
+        Screen v_proj, Screen vr_proj, Screen h_proj,
         World& v_world, float3x3 &v_R, float3 &v_t,
-        float3 &h_world_pos
+        float3 &vr_world_pos, float3 &h_world_pos
     );
 
     inline static __device__ void project_ortho_vjp(
@@ -79,9 +79,9 @@ struct _Base3DGS {
 
     inline static __device__ void project_fisheye_vjp(
         World world, BwdProjCamera cam,
-        Screen v_proj, Screen h_proj,
+        Screen v_proj, Screen vr_proj, Screen h_proj,
         World& v_world, float3x3 &v_R, float3 &v_t,
-        float3 &h_world_pos
+        float3 &vr_world_pos, float3 &h_world_pos
     );
 
 #endif  // #ifdef __CUDACC__
@@ -511,13 +511,13 @@ struct _Base3DGS<antialiased>::Screen {
         };
     }
 
-    __device__ __forceinline__ void operator+=(const Screen &other) {
-        xy += other.xy;
-        depth += other.depth;
-        conic += other.conic;
-        opac += other.opac;
-        rgb += other.rgb;
-        xy_abs += fabs(other.xy);
+    __device__ __forceinline__ void addGradient(const Screen &grad, float weight=1.0f) {
+        xy += grad.xy * weight;
+        depth += grad.depth * weight;
+        conic += grad.conic * weight;
+        opac += grad.opac * weight;
+        rgb += grad.rgb * weight;
+        xy_abs += fabs(grad.xy) * weight;
     }
 
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
@@ -538,6 +538,14 @@ struct _Base3DGS<antialiased>::Screen {
         atomicAddFVec(buffer.rgbs + idx, rgb);
         if (buffer.absgrad != nullptr)
             atomicAddFVec(buffer.absgrad + idx, xy_abs);
+    }
+
+    __device__ void atomicAddGaussNewtonHessianDiagonalToBuffer(Buffer &buffer, long idx, float weight=1.0f) const {
+        atomicAddFVec(buffer.means2d + idx, xy * xy * weight);
+        atomicAddFVec(buffer.depths + idx, depth * depth * weight);
+        atomicAddFVec(buffer.conics + idx, conic * conic * weight);
+        atomicAddFVec(buffer.opacities + idx, opac * opac * weight);
+        atomicAddFVec(buffer.rgbs + idx, rgb * rgb * weight);
     }
 
     __device__ __forceinline__ float evaluate_alpha(float px, float py) {
@@ -657,10 +665,22 @@ inline __device__ void _Base3DGS<antialiased>::project_persp_vjp(
 template<bool antialiased>
 inline __device__ void _Base3DGS<antialiased>::project_persp_vjp(
     _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::BwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen v_proj, _Base3DGS<antialiased>::Screen h_proj,
+    _Base3DGS<antialiased>::Screen v_proj, _Base3DGS<antialiased>::Screen vr_proj, _Base3DGS<antialiased>::Screen h_proj,
     _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t,
-    float3 &h_world_pos
-) {}  // TODO
+    float3 &vr_world_pos, float3 &h_world_pos
+) {
+    projection_3dgs_persp_vjp(
+        antialiased,
+        world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
+        cam.width, cam.height,
+        v_proj.xy, v_proj.depth, v_proj.conic, v_proj.opac, v_proj.rgb,
+        vr_proj.xy, vr_proj.depth, vr_proj.conic, vr_proj.opac, vr_proj.rgb,
+        h_proj.xy, h_proj.depth, h_proj.conic, h_proj.opac, h_proj.rgb,
+        &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
+        &v_R, &v_t, &vr_world_pos, &h_world_pos
+    );
+}
 
 template<bool antialiased>
 inline __device__ void _Base3DGS<antialiased>::project_ortho_vjp(
@@ -699,10 +719,22 @@ inline __device__ void _Base3DGS<antialiased>::project_fisheye_vjp(
 template<bool antialiased>
 inline __device__ void _Base3DGS<antialiased>::project_fisheye_vjp(
     _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::BwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen v_proj, _Base3DGS<antialiased>::Screen h_proj,
+    _Base3DGS<antialiased>::Screen v_proj, _Base3DGS<antialiased>::Screen vr_proj, _Base3DGS<antialiased>::Screen h_proj,
     _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t,
-    float3 &h_world_pos
-) {}  // TODO
+    float3 &vr_world_pos, float3 &h_world_pos
+) {
+    projection_3dgs_fisheye_vjp(
+        antialiased,
+        world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
+        cam.width, cam.height,
+        v_proj.xy, v_proj.depth, v_proj.conic, v_proj.opac, v_proj.rgb,
+        vr_proj.xy, vr_proj.depth, vr_proj.conic, vr_proj.opac, vr_proj.rgb,
+        h_proj.xy, h_proj.depth, h_proj.conic, h_proj.opac, h_proj.rgb,
+        &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
+        &v_R, &v_t, &vr_world_pos, &h_world_pos
+    );
+}
 
 #endif  // #ifdef __CUDACC__
 

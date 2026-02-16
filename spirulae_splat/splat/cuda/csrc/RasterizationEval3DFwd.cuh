@@ -34,7 +34,6 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     const bool *__restrict__ max_blending_masks,  // [B, C, image_width, image_height]
     const uint32_t image_width,
     const uint32_t image_height,
-    const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [I, tile_height, tile_width]
@@ -53,8 +52,8 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     int32_t image_id = block.group_index().x;
     int32_t tile_id =
         block.group_index().y * tile_width + block.group_index().z;
-    uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
-    uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
+    uint32_t i = block.group_index().y * TILE_SIZE + block.thread_index().y;
+    uint32_t j = block.group_index().z * TILE_SIZE + block.thread_index().x;
 
     tile_offsets += image_id * tile_height * tile_width;
     render_Ts += image_id * image_height * image_width;
@@ -216,7 +215,6 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
-    const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -237,7 +235,7 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
 
     // Each block covers a tile on the image. In total there are
     // I * tile_height * tile_width blocks.
-    dim3 threads = {tile_size, tile_size, 1};
+    dim3 threads = {TILE_SIZE, TILE_SIZE, 1};
     dim3 grid = {I, tile_height, tile_width};
 
     #define _LAUNCH_ARGS <<<grid, threads, 0, at::cuda::getCurrentCUDAStream()>>>( \
@@ -246,7 +244,7 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
             viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             backgrounds.has_value() ? (float3*)backgrounds.value().data_ptr<float>() : nullptr, \
             (output_max_blending && max_blending_masks.has_value()) ? max_blending_masks.value().data_ptr<bool>() : nullptr, \
-            image_width, image_height, tile_size, tile_width, tile_height, \
+            image_width, image_height, tile_width, tile_height, \
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(), \
             renders, transmittances.data_ptr<float>(), last_ids.data_ptr<int32_t>(), \
             output_distortion ? renders2->buffer() : typename SplatPrimitive::RenderOutput::Buffer(), \
@@ -288,7 +286,6 @@ inline std::tuple<
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
-    const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids   // [n_isects]
@@ -336,7 +333,7 @@ inline std::tuple<
         splats,
         viewmats, intrins, camera_model, dist_coeffs,
         backgrounds, max_blending_masks,
-        image_width, image_height, tile_size, tile_offsets, flatten_ids,
+        image_width, image_height, tile_offsets, flatten_ids,
         renders, transmittances, last_ids,
         output_distortion ? &renders2.value() : nullptr,
         output_distortion ? &distortions.value() : nullptr,
