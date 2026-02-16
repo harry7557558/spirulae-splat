@@ -8,11 +8,15 @@
 
 #include <ATen/Tensor.h>
 
-#include "Primitive3DGUT.cuh"
-#include "PrimitiveVoxel.cuh"
+#ifdef __CUDACC__
+#include "generated/slang.cuh"
+namespace SlangProjectionUtils {
+#include "generated/set_namespace.cuh"
+#include "generated/projection_utils.cuh"
+}
+#endif
 
 #include "types.cuh"
-
 #include "common.cuh"
 
 #include <gsplat/Common.h>
@@ -20,6 +24,9 @@
 
 #include <cub/cub.cuh>
 
+
+constexpr uint SPLAT_BATCH_SIZE_NO_DISTORTION = WARP_SIZE;
+constexpr uint SPLAT_BATCH_SIZE_WITH_DISTORTION = 128;
 
 
 template <
@@ -96,6 +103,8 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
     CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(image_id);
 
+    constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
+
     // load pixels
     __shared__ float4 shared_ray_d_pix_bin_final[BLOCK_SIZE];
     __shared__ float2 pix_Ts_with_grad[BLOCK_SIZE];
@@ -108,7 +117,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
 
     __shared__ float residual_map[output_hessian_diagonal ? BLOCK_SIZE : 1];
 
-    float3 ray_o = transform_ray_o(R, t);
+    float3 ray_o = SlangProjectionUtils::transform_ray_o(R, t);
     float3 total_v_ray_o = make_float3(0.0f, 0.0f, 0.0f);
 
     __shared__ float3 shared_v_ray_d[output_viewmat_grad ? BLOCK_SIZE : 1];
@@ -138,12 +147,12 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         const float px = (float)pix_x + 0.5f;
         const float py = (float)pix_y + 0.5f;
         float3 raydir;
-        inside &= generate_ray(
+        inside &= SlangProjectionUtils::generate_ray(
             {(px-cx)/fx, (py-cy)/fy},
             camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs,
             &raydir
         );
-        float3 ray_d = transform_ray_d(R, raydir);  // mul(raydir, R);
+        float3 ray_d = SlangProjectionUtils::transform_ray_d(R, raydir);  // mul(raydir, R);
         shared_ray_d_pix_bin_final[pix_id_local] =
             {ray_d.x, ray_d.y, ray_d.z, __int_as_float(bin_final)};
 
@@ -326,13 +335,13 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         float3x3 v_R;
         float3 v_t;
         // gradient from ray_o (will fill v_R and v_t)
-        transform_ray_o_vjp(R, t, total_v_ray_o, &v_R, &v_t);
+        SlangProjectionUtils::transform_ray_o_vjp(R, t, total_v_ray_o, &v_R, &v_t);
         // gradient from ray_d
         #pragma unroll
         for (uint pix_id0 = 0; pix_id0 < BLOCK_SIZE; pix_id0 += SPLAT_BATCH_SIZE) {
             uint pix_id_local = pix_id0 + thread_id;
             float4 ray_d_pix_bin_final = shared_ray_d_pix_bin_final[pix_id_local];
-            float3 raydir = undo_transform_ray_d(R,
+            float3 raydir = SlangProjectionUtils::undo_transform_ray_d(R,
                 make_float3(
                     ray_d_pix_bin_final.x,
                     ray_d_pix_bin_final.y,
@@ -342,7 +351,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
             float3 v_ray_d = shared_v_ray_d[pix_id_local];
             float3x3 v_R_delta;
             float3 temp;
-            transform_ray_d_vjp(R, raydir, v_ray_d, &v_R_delta, &temp);
+            SlangProjectionUtils::transform_ray_d_vjp(R, raydir, v_ray_d, &v_R_delta, &temp);
             v_R = v_R + v_R_delta;
         }
         // atomic add to global viewmat gradient

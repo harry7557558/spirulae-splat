@@ -1,4 +1,7 @@
+// suppress CudaDeviceExport to reduce code size
+#define CudaDeviceExport Differentiable
 #include "projection_utils.slang"
+#undef CudaDeviceExport
 
 #define _projection_opaque_triangle_eval3d_ARGS \
     const float3 mean, \

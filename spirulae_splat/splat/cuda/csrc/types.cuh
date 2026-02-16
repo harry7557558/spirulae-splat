@@ -5,6 +5,10 @@
 #include <gsplat/Common.h>
 
 
+#ifdef __CUDACC__
+#include "generated/slang.cuh"
+#endif
+
 #ifndef __CUDACC__
 
 template<typename T, size_t SIZE>

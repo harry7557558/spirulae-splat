@@ -1,4 +1,7 @@
+// suppress CudaDeviceExport to reduce code size
+#define CudaDeviceExport Differentiable
 #include "projection_utils.slang"
+#undef CudaDeviceExport
 
 #error "Opaque triangle primitive without eval3d is deprecated"
 

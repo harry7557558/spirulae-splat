@@ -8,6 +8,12 @@
 
 #include <c10/cuda/CUDAGuard.h>
 
+#include "generated/slang.cuh"
+namespace SlangProjectionUtils {
+#include "generated/set_namespace.cuh"
+#include "generated/projection_utils.cuh"
+}
+
 #include <gsplat/Utils.cuh>
 
 #include "helpers.cuh"
@@ -44,7 +50,7 @@ __device__ bool getAABB(
     quat = normalize(quat);
 
     float3x3 covar;
-    quat_scale_to_covar(quat, scales, &covar);
+    SlangProjectionUtils::quat_scale_to_covar(quat, scales, &covar);
 
     float extend = fmin(3.33f, sqrt(2.0f * __logf(fmaxf(opac / ALPHA_THRESHOLD, 1.0f))));
 
@@ -71,7 +77,7 @@ __device__ bool getAABB(
     float4 quat = splatBuffer.quats[idx];
 
     float3 vert0, vert1, vert2;
-    map_opaque_triangle(mean, quat, scales, &vert0, &vert1, &vert2);
+    SlangProjectionUtils::map_opaque_triangle(mean, quat, scales, &vert0, &vert1, &vert2);
 
     aabb_min = {
         fmin(fmin(vert0.x, vert1.x), vert2.x),
@@ -129,10 +135,10 @@ struct Tile {
         // TODO: better way to handle this in nonlinear and partially invalid case
         // May not matter in training with small tiles, but obvious artifact when rendering >180deg fisheye
         float3 e0_, e1_, e2_, e3_;
-        bool valid0 = unproject_point({x0, y0}, is_fisheye, dist_coeffs, &e0_);
-        bool valid1 = unproject_point({x0, y1}, is_fisheye, dist_coeffs, &e1_);
-        bool valid2 = unproject_point({x1, y1}, is_fisheye, dist_coeffs, &e2_);
-        bool valid3 = unproject_point({x1, y0}, is_fisheye, dist_coeffs, &e3_);
+        bool valid0 = SlangProjectionUtils::unproject_point({x0, y0}, is_fisheye, dist_coeffs, &e0_);
+        bool valid1 = SlangProjectionUtils::unproject_point({x0, y1}, is_fisheye, dist_coeffs, &e1_);
+        bool valid2 = SlangProjectionUtils::unproject_point({x1, y1}, is_fisheye, dist_coeffs, &e2_);
+        bool valid3 = SlangProjectionUtils::unproject_point({x1, y0}, is_fisheye, dist_coeffs, &e3_);
         if (!valid0 && valid3 && valid1 && valid2)
             e0_ = e3_ + e1_ - e2_, valid0 = true;
         if (!valid1 && valid0 && valid2 && valid3)

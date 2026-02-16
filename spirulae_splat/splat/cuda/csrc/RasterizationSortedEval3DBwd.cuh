@@ -4,7 +4,6 @@
 
 #include <ATen/Tensor.h>
 
-#include "Primitive3DGS.cuh"
 #include "PrimitiveOpaqueTriangle.cuh"
 
 #include "types.cuh"

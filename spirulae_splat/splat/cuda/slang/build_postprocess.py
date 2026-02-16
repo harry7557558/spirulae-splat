@@ -13,6 +13,10 @@ def process(src: str):
             # line = '__forceinline__ ' + line  # why?
         if line.strip().startswith("static_assert(false,"):
             line = "//" + line
+        # if line.strip().startswith("#define SLANG_CUDA_PRELUDE_H"):
+        #     line = "//" + line
+        if line.strip() == "struct TensorView":
+            line = "struct _Slang_TensorView"
         # for w in ['double', 'longlong', 'ulonglong']:
         #     if f"({w})" in line or f', {w}, ' in line:
         #         line = "//" + line
@@ -37,16 +41,6 @@ header_filename = os.path.join(cu_dir, 'slang.cuh')
 header = open(header_filename).read()
 
 replace_header = """#pragma once
-
-// #if defined(CUDART_VERSION) && CUDART_VERSION >= 12000
-// typedef double4_32a my_double4;
-// typedef longlong4_32a my_longlong4;
-// typedef ulonglong4_32a my_ulonglong4;
-// #else
-// typedef double4 my_double4;
-// typedef longlong4 my_longlong4;
-// typedef ulonglong4 my_ulonglong4;
-// #endif
 
 #include "slang.cuh"
 

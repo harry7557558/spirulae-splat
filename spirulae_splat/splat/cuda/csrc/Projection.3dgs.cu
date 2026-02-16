@@ -3,6 +3,8 @@
 #include "ProjectionHeteroFwd.cuh"
 #include "ProjectionHeteroBwd.cuh"
 
+#include "Primitive3DGS.cuh"
+
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<
@@ -144,7 +146,7 @@ std::tuple<
 
     Vanilla3DGS::Screen::Tensor v_splats_proj(v_splats_proj_tuple);
 
-    Vanilla3DGS::World::Tensor v_splats_world = splats_world.zeros_like();
+    Vanilla3DGS::World::Tensor v_splats_world = splats_world.allocProjBwd(false);
 
     auto opt = splats_world.options();
     at::Tensor v_viewmats;

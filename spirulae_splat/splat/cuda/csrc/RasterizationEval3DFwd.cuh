@@ -8,17 +8,20 @@
 
 #include <ATen/Tensor.h>
 
-#include "Primitive3DGUT.cuh"
-#include "PrimitiveVoxel.cuh"
+#ifdef __CUDACC__
+#include "generated/slang.cuh"
+namespace SlangProjectionUtils {
+#include "generated/set_namespace.cuh"
+#include "generated/projection_utils.cuh"
+}
+#endif
 
 #include "types.cuh"
-
 #include "common.cuh"
 
 #include <gsplat/Common.h>
 #include <gsplat/Utils.cuh>
 
-#include "Rasterization.cuh"
 
 template <typename SplatPrimitive, gsplat::CameraModelType camera_model, bool output_distortion, bool output_max_blending>
 __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
@@ -83,13 +86,13 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     bool inside = (i < image_height && j < image_width);
 
     float3 raydir;
-    inside &= generate_ray(
+    inside &= SlangProjectionUtils::generate_ray(
         {(px-cx)/fx, (py-cy)/fy},
         camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs,
         &raydir
     );
-    float3 ray_o = transform_ray_o(R, t);
-    float3 ray_d = transform_ray_d(R, raydir);
+    float3 ray_o = SlangProjectionUtils::transform_ray_o(R, t);
+    float3 ray_d = SlangProjectionUtils::transform_ray_d(R, raydir);
 
     bool done = !inside;
 
@@ -104,6 +107,8 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     const uint32_t block_size = block.size();
     uint32_t num_batches =
         (range_end - range_start + block_size - 1) / block_size;
+
+    constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
 
     __shared__ typename SplatPrimitive::Screen splat_batch[BLOCK_SIZE];
     __shared__ uint32_t splat_idx_batch[output_max_blending ? BLOCK_SIZE : 1];

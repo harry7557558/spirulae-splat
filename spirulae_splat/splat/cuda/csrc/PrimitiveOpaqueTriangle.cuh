@@ -1,9 +1,11 @@
 #pragma once
 
 #ifdef __CUDACC__
-#define TensorView _Slang_TensorView
-#include "generated/primitive.cuh"
-#undef TensorView
+#include "generated/slang.cuh"
+namespace SlangOpaqueTriangle {
+#include "generated/set_namespace.cuh"
+#include "generated/primitive_opaque_triangle_eval3d.cuh"
+}
 #endif
 
 #include "types.cuh"
@@ -60,6 +62,13 @@ struct OpaqueTriangle {
         float3 &vr_world_pos, float3 &h_world_pos
     );
 
+    inline static __device__ void project_persp_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_proj, Screen vr_proj, Screen h_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t,
+        World& vr_world, World& h_world
+    );
+
     inline static __device__ void project_fisheye_vjp(
         World world, BwdProjCamera cam,
         Screen v_proj,
@@ -71,6 +80,13 @@ struct OpaqueTriangle {
         Screen v_proj, Screen vr_proj, Screen h_proj,
         World& v_world, float3x3 &v_R, float3 &v_t,
         float3 &vr_world_pos, float3 &h_world_pos
+    );
+
+    inline static __device__ void project_fisheye_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_proj, Screen vr_proj, Screen h_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t,
+        World& vr_world, World& h_world
     );
 
 #endif  // #ifdef __CUDACC__
@@ -121,7 +137,7 @@ struct OpaqueTriangle::World {
             // return std::make_tuple(verts, hardness, features_dc, features_sh, features_ch);
         }
 
-        Tensor zeros_like() const {
+        Tensor allocProjBwd(bool is_hess_diag) const {
             return Tensor(std::make_tuple(
                 at::zeros_like(means),
                 at::zeros_like(quats),
@@ -129,7 +145,7 @@ struct OpaqueTriangle::World {
                 // at::zeros_like(verts),
                 at::zeros_like(hardness),
                 at::zeros_like(features_dc),
-                at::zeros_like(features_sh),
+                at::zeros_like(features_sh),  // TODO: exclude when is_hess_diag
                 at::zeros_like(features_ch)
             ));
         }
@@ -609,7 +625,7 @@ struct OpaqueTriangle::Screen {
     }
 
     __device__ __forceinline__ float evaluate_alpha(float3 ray_o, float3 ray_d) {
-        return evaluate_alpha_opaque_triangle(verts, hardness, ray_o, ray_d);
+        return SlangOpaqueTriangle::evaluate_alpha_opaque_triangle(verts, hardness, ray_o, ray_d);
     }
 
     __device__ __forceinline__ Screen evaluate_alpha_vjp(
@@ -617,7 +633,7 @@ struct OpaqueTriangle::Screen {
         float3 &v_ray_o, float3 &v_ray_d
     ) {
         Screen v_splat = Screen::zero();
-        evaluate_alpha_opaque_triangle_vjp(
+        SlangOpaqueTriangle::evaluate_alpha_opaque_triangle_vjp(
             verts, hardness,
             ray_o, ray_d, v_alpha,
             &v_splat.verts, &v_splat.hardness,
@@ -627,14 +643,14 @@ struct OpaqueTriangle::Screen {
     }
 
     __device__ __forceinline__ float evaluate_sorting_depth(float3 ray_o, float3 ray_d) {
-        return evaluate_sorting_depth_opaque_triangle(
+        return SlangOpaqueTriangle::evaluate_sorting_depth_opaque_triangle(
             verts, rgbs, ray_o, ray_d
         );
     }
 
     __device__ __forceinline__ OpaqueTriangle::RenderOutput evaluate_color(float3 ray_o, float3 ray_d) {
         float3 out_rgb; float out_depth;
-        evaluate_color_opaque_triangle(
+        SlangOpaqueTriangle::evaluate_color_opaque_triangle(
             verts, rgbs, ray_o, ray_d,
             &out_rgb, &out_depth
         );
@@ -646,7 +662,7 @@ struct OpaqueTriangle::Screen {
         float3 &v_ray_o, float3 &v_ray_d
     ) {
         Screen v_splat = Screen::zero();
-        evaluate_color_opaque_triangle_vjp(
+        SlangOpaqueTriangle::evaluate_color_opaque_triangle_vjp(
             verts, rgbs, ray_o, ray_d,
             v_render.rgb, v_render.depth,
             &v_splat.verts, &v_splat.rgbs,
@@ -667,7 +683,7 @@ inline __device__ void OpaqueTriangle::project_persp(
     OpaqueTriangle::World world, OpaqueTriangle::FwdProjCamera cam,
     OpaqueTriangle::Screen& proj, int4& aabb
 ) {
-    projection_opaque_triangle_eval3d_persp(
+    SlangOpaqueTriangle::projection_opaque_triangle_eval3d_persp(
         world.mean, world.quat, world.scale, world.hardness, world.sh_coeffs, world.ch_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
@@ -680,7 +696,7 @@ inline __device__ void OpaqueTriangle::project_fisheye(
     OpaqueTriangle::World world, OpaqueTriangle::FwdProjCamera cam,
     OpaqueTriangle::Screen& proj, int4& aabb
 ) {
-    projection_opaque_triangle_eval3d_fisheye(
+    SlangOpaqueTriangle::projection_opaque_triangle_eval3d_fisheye(
         world.mean, world.quat, world.scale, world.hardness, world.sh_coeffs, world.ch_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
@@ -694,7 +710,7 @@ inline __device__ void OpaqueTriangle::project_persp_vjp(
     OpaqueTriangle::Screen v_proj,
     OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
-    projection_opaque_triangle_eval3d_persp_vjp(
+    SlangOpaqueTriangle::projection_opaque_triangle_eval3d_persp_vjp(
         world.mean, world.quat, world.scale, world.hardness, world.sh_coeffs, world.ch_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
@@ -712,12 +728,19 @@ inline __device__ void OpaqueTriangle::project_persp_vjp(
     float3 &vr_world_pos, float3 &h_world_pos
 ) {}  // TODO
 
+inline __device__ void OpaqueTriangle::project_persp_vjp(
+    OpaqueTriangle::World world, OpaqueTriangle::BwdProjCamera cam,
+    OpaqueTriangle::Screen v_proj, OpaqueTriangle::Screen vr_proj, OpaqueTriangle::Screen h_proj,
+    OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t,
+    OpaqueTriangle::World& vr_world, OpaqueTriangle::World& h_world
+) {}  // TODO
+
 inline __device__ void OpaqueTriangle::project_fisheye_vjp(
     OpaqueTriangle::World world, OpaqueTriangle::BwdProjCamera cam,
     OpaqueTriangle::Screen v_proj,
     OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
-    projection_opaque_triangle_eval3d_fisheye_vjp(
+    SlangOpaqueTriangle::projection_opaque_triangle_eval3d_fisheye_vjp(
         world.mean, world.quat, world.scale, world.hardness, world.sh_coeffs, world.ch_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
@@ -733,6 +756,13 @@ inline __device__ void OpaqueTriangle::project_fisheye_vjp(
     OpaqueTriangle::Screen v_proj, OpaqueTriangle::Screen vr_proj, OpaqueTriangle::Screen h_proj,
     OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t,
     float3 &vr_world_pos, float3 &h_world_pos
+) {}  // TODO
+
+inline __device__ void OpaqueTriangle::project_fisheye_vjp(
+    OpaqueTriangle::World world, OpaqueTriangle::BwdProjCamera cam,
+    OpaqueTriangle::Screen v_proj, OpaqueTriangle::Screen vr_proj, OpaqueTriangle::Screen h_proj,
+    OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t,
+    OpaqueTriangle::World& vr_world, OpaqueTriangle::World& h_world
 ) {}  // TODO
 
 #endif  // #ifdef __CUDACC__

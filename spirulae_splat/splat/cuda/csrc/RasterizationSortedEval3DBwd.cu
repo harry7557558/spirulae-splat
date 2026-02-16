@@ -2,15 +2,18 @@
 
 #include "RasterizationSortedEval3DBwd.cuh"
 
+#include "generated/slang.cuh"
+namespace SlangProjectionUtils {
+#include "generated/set_namespace.cuh"
+#include "generated/projection_utils.cuh"
+}
+
 #include "common.cuh"
 
 #include <gsplat/Common.h>
 #include <gsplat/Utils.cuh>
 
 #include <cub/cub.cuh>
-
-
-constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
 
 
 template<uint MAX_SIZE>
@@ -134,13 +137,13 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
     const float px = (float)pix_x + 0.5f;
     const float py = (float)pix_y + 0.5f;
     float3 raydir;
-    inside &= generate_ray(
+    inside &= SlangProjectionUtils::generate_ray(
         {(px-cx)/fx, (py-cy)/fy},
         camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs,
         &raydir
     );
-    float3 ray_o = transform_ray_o(R, t);
-    float3 ray_d = transform_ray_d(R, raydir);
+    float3 ray_o = SlangProjectionUtils::transform_ray_o(R, t);
+    float3 ray_d = SlangProjectionUtils::transform_ray_d(R, raydir);
 
     float2 pix_Ts_with_grad = {
         (inside ? render_Ts[pix_id_global] : 0.0f),
@@ -176,6 +179,8 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
     static constexpr uint MAX_PQUEUE_SIZE = 32;
     MaxPriorityQueue<MAX_PQUEUE_SIZE> pqueue;
     uint pqueue_size = 0;
+
+    constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
 
     __shared__ typename SplatPrimitive::Screen splat_batch[BLOCK_SIZE];
 

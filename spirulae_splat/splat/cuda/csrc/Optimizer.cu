@@ -1,6 +1,10 @@
-#define TensorView _Slang_TensorView
+#include "types.cuh"
+
+#include "generated/slang.cuh"
+namespace SlangAll {
+#include "generated/set_namespace.cuh"
 #include "generated/slang_all.cuh"
-#undef TensorView
+}
 
 #include "common.cuh"
 
@@ -294,7 +298,7 @@ __global__ void fused_3dgs2tr_mean_optim_kernel(
         quat = normalize(quat);
         opac = 1.0f / (1.0f + __expf(-opac));
         Matrix<float, 3, 3> covar;
-        quat_scale_to_covar(quat, scale, &covar);
+        SlangAll::quat_scale_to_covar(quat, scale, &covar);
         float k = -8.0f * __logf(1.0f - eps_tr / fmaxf(opac, 1e-12f));
         float3 clip = {
             sqrtf(fmaxf(k * covar[0].x, 0.0f)),

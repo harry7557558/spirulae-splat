@@ -3,9 +3,11 @@
 #include <ATen/Tensor.h>
 
 #ifdef __CUDACC__
-#define TensorView _Slang_TensorView
+#include "generated/slang.cuh"
+namespace SlangAll {
+#include "generated/set_namespace.cuh"
 #include "generated/slang_all.cuh"
-#undef TensorView
+}
 #endif
 
 #include "types.cuh"

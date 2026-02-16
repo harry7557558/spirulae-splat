@@ -8,11 +8,6 @@
 #include <gsplat/Common.h>
 #include <gsplat/Utils.cuh>
 
-#include "Primitive3DGS.cuh"
-#include "Primitive3DGUT.cuh"
-#include "PrimitiveOpaqueTriangle.cuh"
-#include "PrimitiveVoxel.cuh"
-
 #include "types.cuh"
 
 #include <c10/cuda/CUDAStream.h>

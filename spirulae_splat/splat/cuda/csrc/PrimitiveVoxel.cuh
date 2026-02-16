@@ -1,9 +1,11 @@
 #pragma once
 
 #ifdef __CUDACC__
-#define TensorView _Slang_TensorView
-#include "generated/primitive.cuh"
-#undef TensorView
+#include "generated/slang.cuh"
+namespace SlangVoxel {
+#include "generated/set_namespace.cuh"
+#include "generated/primitive_voxel.cuh"
+}
 #endif
 
 #include "types.cuh"
@@ -60,6 +62,13 @@ struct VoxelPrimitive {
         float3 &vr_world_pos, float3 &h_world_pos
     );
 
+    inline static __device__ void project_persp_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_proj, Screen vr_proj, Screen h_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t,
+        World& vr_world, World& h_world
+    );
+
     inline static __device__ void project_fisheye_vjp(
         World world, BwdProjCamera cam,
         Screen v_proj,
@@ -71,6 +80,13 @@ struct VoxelPrimitive {
         Screen v_proj, Screen vr_proj, Screen h_proj,
         World& v_world, float3x3 &v_R, float3 &v_t,
         float3 &vr_world_pos, float3 &h_world_pos
+    );
+
+    inline static __device__ void project_fisheye_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_proj, Screen vr_proj, Screen h_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t,
+        World& vr_world, World& h_world
     );
 
 #endif  // #ifdef __CUDACC__
@@ -107,12 +123,12 @@ struct VoxelPrimitive::World {
             return std::make_tuple(pos_size, densities, features_dc, features_sh);
         }
 
-        Tensor zeros_like() const {
+        Tensor allocProjBwd(bool is_hess_diag) const {
             return Tensor(std::make_tuple(
                 (std::optional<at::Tensor>)at::nullopt,
                 (std::optional<at::Tensor>)at::nullopt,
                 at::zeros_like(features_dc),
-                at::zeros_like(features_sh)
+                at::zeros_like(features_sh)  // TODO: exclude SH when is_hess_diag
             ));
         }
 
@@ -546,7 +562,7 @@ struct VoxelPrimitive::Screen {
     }
 
     __device__ __forceinline__ float evaluate_alpha(float3 ray_o, float3 ray_d) {
-        return evaluate_alpha_voxel(pos, size, densities, ray_o, ray_d);
+        return SlangVoxel::evaluate_alpha_voxel(pos, size, densities, ray_o, ray_d);
     }
 
     __device__ __forceinline__ Screen evaluate_alpha_vjp(
@@ -554,7 +570,7 @@ struct VoxelPrimitive::Screen {
         float3 &v_ray_o, float3 &v_ray_d
     ) {
         Screen v_splat = Screen::zero();
-        evaluate_alpha_voxel_vjp(
+        SlangVoxel::evaluate_alpha_voxel_vjp(
             pos, size, densities,
             ray_o, ray_d, v_alpha,
             &v_splat.densities,
@@ -565,7 +581,7 @@ struct VoxelPrimitive::Screen {
 
     __device__ __forceinline__ VoxelPrimitive::RenderOutput evaluate_color(float3 ray_o, float3 ray_d) {
         float3 out_rgb; float out_depth;
-        evaluate_color_voxel(
+        SlangVoxel::evaluate_color_voxel(
             pos, size, densities, rgb, ray_o, ray_d,
             &out_rgb, &out_depth
         );
@@ -577,7 +593,7 @@ struct VoxelPrimitive::Screen {
         float3 &v_ray_o, float3 &v_ray_d
     ) {
         Screen v_splat = Screen::zero();
-        evaluate_color_voxel_vjp(
+        SlangVoxel::evaluate_color_voxel_vjp(
             pos, size, densities, rgb, ray_o, ray_d,
             v_render.rgb, v_render.depth,
             &v_splat.densities, &v_splat.rgb,
@@ -597,7 +613,7 @@ inline __device__ void VoxelPrimitive::project_persp(
     VoxelPrimitive::World world, VoxelPrimitive::FwdProjCamera cam,
     VoxelPrimitive::Screen& proj, int4& aabb
 ) {
-    projection_voxel_eval3d_persp(
+    SlangVoxel::projection_voxel_eval3d_persp(
         world.pos, world.size, world.densities, world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
@@ -610,7 +626,7 @@ inline __device__ void VoxelPrimitive::project_fisheye(
     VoxelPrimitive::World world, VoxelPrimitive::FwdProjCamera cam,
     VoxelPrimitive::Screen& proj, int4& aabb
 ) {
-    projection_voxel_eval3d_fisheye(
+    SlangVoxel::projection_voxel_eval3d_fisheye(
         world.pos, world.size, world.densities, world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height, cam.near_plane, cam.far_plane,
@@ -624,7 +640,7 @@ inline __device__ void VoxelPrimitive::project_persp_vjp(
     VoxelPrimitive::Screen v_proj,
     VoxelPrimitive::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
-    projection_voxel_eval3d_persp_vjp(
+    SlangVoxel::projection_voxel_eval3d_persp_vjp(
         world.pos, world.size, world.densities, world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
@@ -642,12 +658,19 @@ inline __device__ void VoxelPrimitive::project_persp_vjp(
     float3 &vr_world_pos, float3 &h_world_pos
 ) {}  // TODO
 
+inline __device__ void VoxelPrimitive::project_persp_vjp(
+    VoxelPrimitive::World world, VoxelPrimitive::BwdProjCamera cam,
+    VoxelPrimitive::Screen v_proj, VoxelPrimitive::Screen vr_proj, VoxelPrimitive::Screen h_proj,
+    VoxelPrimitive::World& v_world, float3x3 &v_R, float3 &v_t,
+    VoxelPrimitive::World& vr_world, VoxelPrimitive::World& h_world
+) {}  // TODO
+
 inline __device__ void VoxelPrimitive::project_fisheye_vjp(
     VoxelPrimitive::World world, VoxelPrimitive::BwdProjCamera cam,
     VoxelPrimitive::Screen v_proj,
     VoxelPrimitive::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
-    projection_voxel_eval3d_fisheye_vjp(
+    SlangVoxel::projection_voxel_eval3d_fisheye_vjp(
         world.pos, world.size, world.densities, world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
         cam.width, cam.height,
@@ -663,6 +686,13 @@ inline __device__ void VoxelPrimitive::project_fisheye_vjp(
     VoxelPrimitive::Screen v_proj, VoxelPrimitive::Screen vr_proj, VoxelPrimitive::Screen h_proj,
     VoxelPrimitive::World& v_world, float3x3 &v_R, float3 &v_t,
     float3 &vr_world_pos, float3 &h_world_pos
+) {}  // TODO
+
+inline __device__ void VoxelPrimitive::project_fisheye_vjp(
+    VoxelPrimitive::World world, VoxelPrimitive::BwdProjCamera cam,
+    VoxelPrimitive::Screen v_proj, VoxelPrimitive::Screen vr_proj, VoxelPrimitive::Screen h_proj,
+    VoxelPrimitive::World& v_world, float3x3 &v_R, float3 &v_t,
+    VoxelPrimitive::World& vr_world, VoxelPrimitive::World& h_world
 ) {}  // TODO
 
 #endif  // #ifdef __CUDACC__

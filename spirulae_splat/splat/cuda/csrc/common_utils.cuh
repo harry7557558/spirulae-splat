@@ -17,6 +17,11 @@ typedef unsigned int uint;
 
 
 #ifdef __CUDACC__
+#include "generated/slang.cuh"
+#endif
+
+
+#ifdef __CUDACC__
 
 inline __device__ float atomicMin(float* p, float v) {
     return (__float_as_int(v) >= 0) ?

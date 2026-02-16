@@ -8,11 +8,6 @@
 #include <gsplat/Common.h>
 #include <gsplat/Utils.cuh>
 
-#include "Primitive3DGS.cuh"
-#include "Primitive3DGUT.cuh"
-#include "PrimitiveOpaqueTriangle.cuh"
-#include "PrimitiveVoxel.cuh"
-
 #include "types.cuh"
 
 #include <c10/cuda/CUDAStream.h>
@@ -22,7 +17,18 @@ namespace cg = cooperative_groups;
 #include "common.cuh"
 
 
-template<typename SplatPrimitive, gsplat::CameraModelType camera_model, bool output_position_hessian_diagonal>
+enum class HessianDiagonalOutputMode {
+    None,
+    Position,
+    AllReasonable
+};
+
+
+template<
+    typename SplatPrimitive,
+    gsplat::CameraModelType camera_model,
+    HessianDiagonalOutputMode hessian_diagonal_output_mode
+>
 __global__ void projection_fused_bwd_kernel(
     // fwd inputs
     const uint32_t B,
@@ -44,6 +50,8 @@ __global__ void projection_fused_bwd_kernel(
     typename SplatPrimitive::World::Buffer v_splats_world,
     float3* vr_world_pos_buffer,
     float3* h_world_pos_buffer,
+    typename SplatPrimitive::World::Buffer vr_splats_world,
+    typename SplatPrimitive::World::Buffer h_splats_world,
     float *__restrict__ v_viewmats // [B, C, 4, 4] optional
 ) {
     // parallelize over B * C * N.
@@ -78,7 +86,7 @@ __global__ void projection_fused_bwd_kernel(
         SplatPrimitive::Screen::load(v_splats_screen, idx);
     typename SplatPrimitive::Screen vr_splat_screen;
     typename SplatPrimitive::Screen h_splat_screen;
-    if (output_position_hessian_diagonal) {
+    if (hessian_diagonal_output_mode != HessianDiagonalOutputMode::None) {
         vr_splat_screen = SplatPrimitive::Screen::load(vr_splats_screen, idx);
         h_splat_screen = SplatPrimitive::Screen::load(h_splats_screen, idx);
     }
@@ -89,18 +97,9 @@ __global__ void projection_fused_bwd_kernel(
     float3 v_t = {0.f, 0.f, 0.f};
     float3 vr_world_pos = {0.f, 0.f, 0.f};
     float3 h_world_pos = {0.f, 0.f, 0.f};
-    if (output_position_hessian_diagonal) {
-        switch (camera_model) {
-        case gsplat::CameraModelType::PINHOLE: // perspective projection
-            SplatPrimitive::project_persp_vjp(splat_world, cam, v_splat_screen,
-                vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_world_pos, h_world_pos);
-            break;
-        case gsplat::CameraModelType::FISHEYE: // fisheye projection
-            SplatPrimitive::project_fisheye_vjp(splat_world, cam, v_splat_screen,
-                vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_world_pos, h_world_pos);
-            break;
-        }
-    } else {
+    typename SplatPrimitive::World vr_splat_world = SplatPrimitive::World::zero();
+    typename SplatPrimitive::World h_splat_world = SplatPrimitive::World::zero();
+    if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::None) {
         switch (camera_model) {
         case gsplat::CameraModelType::PINHOLE: // perspective projection
             SplatPrimitive::project_persp_vjp(splat_world, cam, v_splat_screen, v_splat_world, v_R, v_t);
@@ -112,13 +111,38 @@ __global__ void projection_fused_bwd_kernel(
             SplatPrimitive::project_fisheye_vjp(splat_world, cam, v_splat_screen, v_splat_world, v_R, v_t);
             break;
         }
+    } else if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
+        switch (camera_model) {
+        case gsplat::CameraModelType::PINHOLE: // perspective projection
+            SplatPrimitive::project_persp_vjp(splat_world, cam, v_splat_screen,
+                vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_world_pos, h_world_pos);
+            break;
+        case gsplat::CameraModelType::FISHEYE: // fisheye projection
+            SplatPrimitive::project_fisheye_vjp(splat_world, cam, v_splat_screen,
+                vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_world_pos, h_world_pos);
+            break;
+        }
+    } else if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable) {
+        switch (camera_model) {
+        case gsplat::CameraModelType::PINHOLE: // perspective projection
+            SplatPrimitive::project_persp_vjp(splat_world, cam, v_splat_screen,
+                vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_splat_world, h_splat_world);
+            break;
+        case gsplat::CameraModelType::FISHEYE: // fisheye projection
+            SplatPrimitive::project_fisheye_vjp(splat_world, cam, v_splat_screen,
+                vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_splat_world, h_splat_world);
+            break;
+        }
     }
 
     // Save results
     v_splat_world.atomicAddGradientToBuffer(v_splats_world, bid * N + gid);
-    if (output_position_hessian_diagonal) {
+    if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
         atomicAddFVec(&vr_world_pos_buffer[bid * N + gid], vr_world_pos);
         atomicAddFVec(&h_world_pos_buffer[bid * N + gid], h_world_pos);
+    } else if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable) {
+        vr_splat_world.atomicAddGradientToBuffer(vr_splats_world, bid * N + gid);
+        h_splat_world.atomicAddGradientToBuffer(h_splats_world, bid * N + gid);
     }
 
     if (v_viewmats != nullptr) {
@@ -146,12 +170,12 @@ __global__ void projection_fused_bwd_kernel(
 
 
 
-template<typename SplatPrimitive, bool output_position_hessian_diagonal>
+template<typename SplatPrimitive, HessianDiagonalOutputMode hessian_diagonal_output_mode>
 inline std::tuple<
     typename SplatPrimitive::World::TensorTuple,  // v_splats
     at::Tensor,  // v_viewmats
-    at::Tensor,  // vr_world_pos
-    at::Tensor  // h_world_pos
+    std::variant<at::Tensor, typename SplatPrimitive::World::TensorTuple>,  // vr_world_pos or vr_splats
+    std::variant<at::Tensor, typename SplatPrimitive::World::TensorTuple>  // h_world_pos or h_splats
 > _launch_projection_projection_fused_bwd_kernel(
     // fwd inputs
     const typename SplatPrimitive::World::TensorTuple &splats_world_tuple,
@@ -176,11 +200,11 @@ inline std::tuple<
 
     typename SplatPrimitive::Screen::Tensor v_splats_screen(v_splats_screen_tuple);
 
-    typename SplatPrimitive::World::Tensor v_splats_world = splats_world.zeros_like();
+    typename SplatPrimitive::World::Tensor v_splats_world = splats_world.allocProjBwd(false);
 
     typename SplatPrimitive::Screen::Tensor vr_splats_screen;
     typename SplatPrimitive::Screen::Tensor h_splats_screen;
-    if (output_position_hessian_diagonal) {
+    if (hessian_diagonal_output_mode != HessianDiagonalOutputMode::None) {
         vr_splats_screen = *vr_splats_screen_tuple;
         h_splats_screen = *h_splats_screen_tuple;
     }
@@ -192,9 +216,15 @@ inline std::tuple<
 
     at::Tensor vr_world_pos;
     at::Tensor h_world_pos;
-    if (output_position_hessian_diagonal) {
+    if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
         vr_world_pos = at::zeros({B, N, 3}, opt);
         h_world_pos = at::zeros({B, N, 3}, opt);
+    }
+    typename SplatPrimitive::World::Tensor vr_splats_world;
+    typename SplatPrimitive::World::Tensor h_splats_world;
+    if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable) {
+        vr_splats_world = vr_splats_world.allocProjBwd(true);
+        h_splats_world = h_splats_world.allocProjBwd(true);
     }
 
     #define _LAUNCH_ARGS \
@@ -203,21 +233,23 @@ inline std::tuple<
             splats_world.buffer(), viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, (int4*)aabb.data_ptr<int32_t>(), \
             v_splats_screen.buffer(), \
-            output_position_hessian_diagonal ? vr_splats_screen.buffer() : typename SplatPrimitive::Screen::Buffer{}, \
-            output_position_hessian_diagonal ? h_splats_screen.buffer() : typename SplatPrimitive::Screen::Buffer{}, \
+            hessian_diagonal_output_mode != HessianDiagonalOutputMode::None ? vr_splats_screen.buffer() : typename SplatPrimitive::Screen::Buffer{}, \
+            hessian_diagonal_output_mode != HessianDiagonalOutputMode::None ? h_splats_screen.buffer() : typename SplatPrimitive::Screen::Buffer{}, \
             v_splats_world.buffer(), \
-            output_position_hessian_diagonal ? (float3*)vr_world_pos.data_ptr<float>() : nullptr, \
-            output_position_hessian_diagonal ? (float3*)h_world_pos.data_ptr<float>() : nullptr, \
+            hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position ? (float3*)vr_world_pos.data_ptr<float>() : nullptr, \
+            hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position ? (float3*)h_world_pos.data_ptr<float>() : nullptr, \
+            hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable ? vr_splats_world.buffer() : typename SplatPrimitive::World::Buffer{}, \
+            hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable ? h_splats_world.buffer() : typename SplatPrimitive::World::Buffer{}, \
             viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr \
         )
 
     constexpr uint block = 256;
     if (camera_model == gsplat::CameraModelType::PINHOLE)
-        projection_fused_bwd_kernel<SplatPrimitive, gsplat::CameraModelType::PINHOLE, output_position_hessian_diagonal> _LAUNCH_ARGS;
+        projection_fused_bwd_kernel<SplatPrimitive, gsplat::CameraModelType::PINHOLE, hessian_diagonal_output_mode> _LAUNCH_ARGS;
     // else if (camera_model == gsplat::CameraModelType::ORTHO)
     //     projection_fused_bwd_kernel<SplatPrimitive, gsplat::CameraModelType::ORTHO> _LAUNCH_ARGS;
     else if (camera_model == gsplat::CameraModelType::FISHEYE)
-        projection_fused_bwd_kernel<SplatPrimitive, gsplat::CameraModelType::FISHEYE, output_position_hessian_diagonal> _LAUNCH_ARGS;
+        projection_fused_bwd_kernel<SplatPrimitive, gsplat::CameraModelType::FISHEYE, hessian_diagonal_output_mode> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -246,8 +278,9 @@ inline std::tuple<
     const typename SplatPrimitive::Screen::TensorTupleProj &v_splats_screen_tuple,
     const bool viewmats_requires_grad
 ) {
-    auto [v_splats, v_viewmats, vr_world_pos, h_world_pos] =
-        _launch_projection_projection_fused_bwd_kernel<SplatPrimitive, false>
+    auto [v_splats, v_viewmats, vr_splats, h_splats] =
+        _launch_projection_projection_fused_bwd_kernel
+        <SplatPrimitive, HessianDiagonalOutputMode::None>
     (
         splats_world_tuple,
         viewmats,

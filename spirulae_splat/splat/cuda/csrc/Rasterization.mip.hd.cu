@@ -1,5 +1,6 @@
-#include "RasterizationFwd.cuh"
 #include "RasterizationBwd.cuh"
+
+#include "Primitive3DGS.cuh"
 
 
 /*[AutoHeaderGeneratorExport]*/

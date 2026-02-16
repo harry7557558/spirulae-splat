@@ -3,6 +3,7 @@
 #include "ProjectionHeteroFwd.cuh"
 #include "ProjectionHeteroBwd.cuh"
 
+#include "PrimitiveOpaqueTriangle.cuh"
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<
@@ -142,7 +143,7 @@ std::tuple<
 
     OpaqueTriangle::Screen::Tensor v_splats_proj(v_splats_proj_tuple);
 
-    OpaqueTriangle::World::Tensor v_splats_world = splats_world.zeros_like();
+    OpaqueTriangle::World::Tensor v_splats_world = splats_world.allocProjBwd(false);
 
     auto opt = splats_world.options();
     at::Tensor v_viewmats;

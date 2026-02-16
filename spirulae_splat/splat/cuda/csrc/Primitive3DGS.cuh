@@ -1,9 +1,11 @@
 #pragma once
 
 #ifdef __CUDACC__
-#define TensorView _Slang_TensorView
-#include "generated/primitive.cuh"
-#undef TensorView
+#include "generated/slang.cuh"
+namespace Slang3DGS {
+#include "generated/set_namespace.cuh"
+#include "generated/primitive_3dgs.cuh"
+}
 #endif
 
 #include "types.cuh"
@@ -62,7 +64,14 @@ struct _Base3DGS {
         World world, BwdProjCamera cam,
         Screen v_proj, Screen vr_proj, Screen h_proj,
         World& v_world, float3x3 &v_R, float3 &v_t,
-        float3 &vr_world_pos, float3 &h_world_pos
+        float3 &vr_world, float3 &h_world
+    );
+
+    inline static __device__ void project_persp_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_proj, Screen vr_proj, Screen h_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t,
+        World& vr_world, World& h_world
     );
 
     inline static __device__ void project_ortho_vjp(
@@ -84,6 +93,13 @@ struct _Base3DGS {
         float3 &vr_world_pos, float3 &h_world_pos
     );
 
+    inline static __device__ void project_fisheye_vjp(
+        World world, BwdProjCamera cam,
+        Screen v_proj, Screen vr_proj, Screen h_proj,
+        World& v_world, float3x3 &v_R, float3 &v_t,
+        World& vr_world, World& h_world
+    );
+
 #endif  // #ifdef __CUDACC__
 
 };
@@ -97,7 +113,7 @@ struct _Base3DGS<antialiased>::World {
     float opacity;
     FixedArray<float3, 16> sh_coeffs;
 
-    typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTuple;
+    typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, std::optional<at::Tensor>> TensorTuple;
 
     struct Buffer;
 
@@ -107,7 +123,7 @@ struct _Base3DGS<antialiased>::World {
         at::Tensor scales;
         at::Tensor opacities;
         at::Tensor features_dc;
-        at::Tensor features_sh;
+        std::optional<at::Tensor> features_sh;
 
         Tensor() {}
 
@@ -124,14 +140,16 @@ struct _Base3DGS<antialiased>::World {
             return std::make_tuple(means, quats, scales, opacities, features_dc, features_sh);
         }
 
-        Tensor zeros_like() const {
+        Tensor allocProjBwd(bool is_hess_diag) const {
             return Tensor(std::make_tuple(
                 at::zeros_like(means),
                 at::zeros_like(quats),
                 at::zeros_like(scales),
                 at::zeros_like(opacities),
                 at::zeros_like(features_dc),
-                at::zeros_like(features_sh)
+                features_sh.has_value() && !is_hess_diag ?
+                    (std::optional<at::Tensor>)at::zeros_like(features_sh.value()) :
+                    (std::optional<at::Tensor>)std::nullopt
             ));
         }
 
@@ -166,14 +184,17 @@ struct _Base3DGS<antialiased>::World {
             CHECK_INPUT(tensors.scales);
             CHECK_INPUT(tensors.opacities);
             CHECK_INPUT(tensors.features_dc);
-            CHECK_INPUT(tensors.features_sh);
+            if (tensors.features_sh.has_value())
+                CHECK_INPUT(tensors.features_sh.value());
             means = (float3*)tensors.means.template data_ptr<float>();
             quats = (float4*)tensors.quats.template data_ptr<float>();
             scales = (float3*)tensors.scales.template data_ptr<float>();
             opacities = tensors.opacities.template data_ptr<float>();
             features_dc = (float3*)tensors.features_dc.template data_ptr<float>();
-            features_sh = (float3*)tensors.features_sh.template data_ptr<float>();
-            num_sh = tensors.features_sh.size(-2);
+            features_sh = tensors.features_sh.has_value() ?
+                (float3*)tensors.features_sh.value().template data_ptr<float>() : nullptr;
+            num_sh = tensors.features_sh.has_value() ?
+                tensors.features_sh.value().size(-2) : 0;
         }
     };
 
@@ -606,7 +627,7 @@ inline __device__ void _Base3DGS<antialiased>::project_persp(
     _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::FwdProjCamera cam,
     _Base3DGS<antialiased>::Screen& screen, int4& aabb
 ) {
-    projection_3dgs_persp(
+    Slang3DGS::projection_3dgs_persp(
         antialiased,
         world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
@@ -621,7 +642,7 @@ inline __device__ void _Base3DGS<antialiased>::project_ortho(
     _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::FwdProjCamera cam,
     _Base3DGS<antialiased>::Screen& screen, int4& aabb
 ) {
-    projection_3dgs_ortho(
+    Slang3DGS::projection_3dgs_ortho(
         antialiased,
         world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
@@ -635,7 +656,7 @@ inline __device__ void _Base3DGS<antialiased>::project_fisheye(
     _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::FwdProjCamera cam,
     _Base3DGS<antialiased>::Screen& screen, int4& aabb
 ) {
-    projection_3dgs_fisheye(
+    Slang3DGS::projection_3dgs_fisheye(
         antialiased,
         world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
@@ -651,7 +672,7 @@ inline __device__ void _Base3DGS<antialiased>::project_persp_vjp(
     _Base3DGS<antialiased>::Screen v_screen,
     _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
-    projection_3dgs_persp_vjp(
+    Slang3DGS::projection_3dgs_persp_vjp(
         antialiased,
         world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
@@ -669,7 +690,7 @@ inline __device__ void _Base3DGS<antialiased>::project_persp_vjp(
     _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t,
     float3 &vr_world_pos, float3 &h_world_pos
 ) {
-    projection_3dgs_persp_vjp(
+    Slang3DGS::projection_3dgs_persp_vjp(
         antialiased,
         world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
@@ -683,12 +704,34 @@ inline __device__ void _Base3DGS<antialiased>::project_persp_vjp(
 }
 
 template<bool antialiased>
+inline __device__ void _Base3DGS<antialiased>::project_persp_vjp(
+    _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::BwdProjCamera cam,
+    _Base3DGS<antialiased>::Screen v_proj, _Base3DGS<antialiased>::Screen vr_proj, _Base3DGS<antialiased>::Screen h_proj,
+    _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t,
+    _Base3DGS<antialiased>::World& vr_world, _Base3DGS<antialiased>::World& h_world
+) {
+    Slang3DGS::projection_3dgs_persp_vjp(
+        antialiased,
+        world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
+        cam.width, cam.height,
+        v_proj.xy, v_proj.depth, v_proj.conic, v_proj.opac, v_proj.rgb,
+        vr_proj.xy, vr_proj.depth, vr_proj.conic, vr_proj.opac, vr_proj.rgb,
+        h_proj.xy, h_proj.depth, h_proj.conic, h_proj.opac, h_proj.rgb,
+        &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
+        &v_R, &v_t,
+        &vr_world.mean, &vr_world.quat, &vr_world.scale, &vr_world.opacity,
+        &h_world.mean, &h_world.quat, &h_world.scale, &h_world.opacity
+    );
+}
+
+template<bool antialiased>
 inline __device__ void _Base3DGS<antialiased>::project_ortho_vjp(
     _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::BwdProjCamera cam,
     _Base3DGS<antialiased>::Screen v_screen,
     _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
-    projection_3dgs_ortho_vjp(
+    Slang3DGS::projection_3dgs_ortho_vjp(
         antialiased,
         world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
@@ -705,7 +748,7 @@ inline __device__ void _Base3DGS<antialiased>::project_fisheye_vjp(
     _Base3DGS<antialiased>::Screen v_screen,
     _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
-    projection_3dgs_fisheye_vjp(
+    Slang3DGS::projection_3dgs_fisheye_vjp(
         antialiased,
         world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
@@ -723,7 +766,7 @@ inline __device__ void _Base3DGS<antialiased>::project_fisheye_vjp(
     _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t,
     float3 &vr_world_pos, float3 &h_world_pos
 ) {
-    projection_3dgs_fisheye_vjp(
+    Slang3DGS::projection_3dgs_fisheye_vjp(
         antialiased,
         world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
@@ -733,6 +776,28 @@ inline __device__ void _Base3DGS<antialiased>::project_fisheye_vjp(
         h_proj.xy, h_proj.depth, h_proj.conic, h_proj.opac, h_proj.rgb,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
         &v_R, &v_t, &vr_world_pos, &h_world_pos
+    );
+}
+
+template<bool antialiased>
+inline __device__ void _Base3DGS<antialiased>::project_fisheye_vjp(
+    _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::BwdProjCamera cam,
+    _Base3DGS<antialiased>::Screen v_proj, _Base3DGS<antialiased>::Screen vr_proj, _Base3DGS<antialiased>::Screen h_proj,
+    _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t,
+    _Base3DGS<antialiased>::World& vr_world, _Base3DGS<antialiased>::World& h_world
+) {
+    Slang3DGS::projection_3dgs_fisheye_vjp(
+        antialiased,
+        world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
+        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
+        cam.width, cam.height,
+        v_proj.xy, v_proj.depth, v_proj.conic, v_proj.opac, v_proj.rgb,
+        vr_proj.xy, vr_proj.depth, vr_proj.conic, vr_proj.opac, vr_proj.rgb,
+        h_proj.xy, h_proj.depth, h_proj.conic, h_proj.opac, h_proj.rgb,
+        &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
+        &v_R, &v_t,
+        &vr_world.mean, &vr_world.quat, &vr_world.scale, &vr_world.opacity,
+        &h_world.mean, &h_world.quat, &h_world.scale, &h_world.opacity
     );
 }
 

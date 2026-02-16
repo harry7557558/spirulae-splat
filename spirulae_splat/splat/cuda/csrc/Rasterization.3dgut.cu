@@ -1,6 +1,7 @@
 #include "RasterizationEval3DFwd.cuh"
 #include "RasterizationEval3DBwd.cuh"
 
+#include "Primitive3DGUT.cuh"
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<

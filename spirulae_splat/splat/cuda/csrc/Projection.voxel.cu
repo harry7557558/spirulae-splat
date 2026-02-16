@@ -1,6 +1,7 @@
 #include "ProjectionFwd.cuh"
 #include "ProjectionBwd.cuh"
 
+#include "PrimitiveVoxel.cuh"
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<

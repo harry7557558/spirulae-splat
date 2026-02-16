@@ -8,8 +8,6 @@
 
 #include <ATen/Tensor.h>
 
-#include "Primitive3DGS.cuh"
-
 #include "common.cuh"
 
 #include <gsplat/Common.h>
@@ -17,7 +15,9 @@
 
 #include <cub/cub.cuh>
 
-#include "Rasterization.cuh"
+
+constexpr uint SPLAT_BATCH_SIZE_NO_DISTORTION = WARP_SIZE;
+constexpr uint SPLAT_BATCH_SIZE_WITH_DISTORTION = 128;
 
 
 template <
@@ -76,6 +76,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     if (masks != nullptr && !masks[tile_id]) {
         return;
     }
+
+    constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
 
     // load pixels
     __shared__ int32_t pix_bin_final[BLOCK_SIZE];

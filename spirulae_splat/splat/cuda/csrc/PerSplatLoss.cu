@@ -4,9 +4,11 @@
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
 
-#define TensorView _Slang_TensorView
+#include "generated/slang.cuh"
+namespace SlangAll {
+#include "generated/set_namespace.cuh"
 #include "generated/slang_all.cuh"
-#undef TensorView
+}
 
 #include "common.cuh"
 
@@ -29,6 +31,8 @@ __global__ void per_splat_losses_forward_kernel(
     float erank_reg_weight_s3,
     float quat_norm_reg_weight
 ) {
+    using namespace SlangAll;
+
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     FixedArray<float, kNumPerSplatLosses> losses;
@@ -86,6 +90,8 @@ __global__ void per_splat_losses_backward_kernel(
     float erank_reg_weight_s3,
     float quat_norm_reg_weight
 ) {
+    using namespace SlangAll;
+
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     bool inside = idx < num_points;
@@ -254,7 +260,7 @@ __global__ void mcmc_add_noise_3dgs_kernel(
     if (idx >= num_splats)
         return;
 
-    mcmc_add_noise_3dgs(
+    SlangAll::mcmc_add_noise_3dgs(
         scaler, min_opacity,
         &means[idx], scales[idx], quats[idx], opacs[idx]
     );
@@ -272,7 +278,7 @@ __global__ void mcmc_add_noise_triangle_kernel(
     if (idx >= num_splats)
         return;
 
-    mcmc_add_noise_triangle(
+    SlangAll::mcmc_add_noise_triangle(
         scaler, min_opacity,
         &means[idx], scales[idx], quats[idx], opacs[idx]
     );

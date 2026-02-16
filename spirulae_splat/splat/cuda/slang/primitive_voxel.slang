@@ -1,4 +1,7 @@
+// suppress CudaDeviceExport to reduce code size
+#define CudaDeviceExport Differentiable
 #include "projection_utils.slang"
+#undef CudaDeviceExport
 
 #define _projection_voxel_eval3d_ARGS \
     const no_diff float3 pos, \

@@ -1,5 +1,11 @@
 #include "IntersectTile.cuh"
 
+#include "generated/slang.cuh"
+namespace SlangProjectionUtils {
+#include "generated/set_namespace.cuh"
+#include "generated/projection_utils.cuh"
+}
+
 #include "common.cuh"
 
 #include <gsplat/Common.h>
@@ -125,13 +131,13 @@ __global__ void intersect_mask_eval3d_kernel(
     bool inside = (py < image_height && px < image_width);
 
     float3 raydir;
-    inside &= generate_ray(
+    inside &= SlangProjectionUtils::generate_ray(
         {(px-cx)/fx, (py-cy)/fy},
         camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs,
         &raydir
     );
-    float3 ray_o = transform_ray_o(R, t);
-    float3 ray_d = transform_ray_d(R, raydir);
+    float3 ray_o = SlangProjectionUtils::transform_ray_o(R, t);
+    float3 ray_d = SlangProjectionUtils::transform_ray_d(R, raydir);
 
     // have all threads in tile process the same gaussians in batches
     // bool done = !inside;

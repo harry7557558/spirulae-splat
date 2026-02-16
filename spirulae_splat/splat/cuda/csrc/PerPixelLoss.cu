@@ -4,9 +4,11 @@
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
 
-#define TensorView _Slang_TensorView
+#include "generated/slang.cuh"
+namespace SlangAll {
+#include "generated/set_namespace.cuh"
 #include "generated/slang_all.cuh"
-#undef TensorView
+}
 
 #include "common.cuh"
 
@@ -75,6 +77,8 @@ __global__ void per_pixel_losses_forward_kernel(
     float* __restrict__ out_loss_map,  // non differentiable
     float* __restrict__ out_losses
 ) {
+    using namespace SlangAll;
+
     size_t pixel_idx = blockIdx.x * blockDim.x + threadIdx.x;
     size_t batch_idx = blockIdx.y * blockDim.y + threadIdx.y;
     if (batch_idx >= batch_size)
@@ -185,6 +189,8 @@ __global__ void per_pixel_losses_backward_kernel(
     float* __restrict__ v_depth_dist,
     float3* __restrict__ v_normal_dist
 ) {
+    using namespace SlangAll;
+
     size_t pixel_idx = blockIdx.x * blockDim.x + threadIdx.x;
     size_t batch_idx = blockIdx.y * blockDim.y + threadIdx.y;
     if (batch_idx >= batch_size)
@@ -270,6 +276,8 @@ __global__ void per_pixel_losses_reduce_forward_kernel(
     FixedArray<float, (uint)LossWeightIndex::length> loss_weights,
     float* __restrict__ losses  // [LossIndex::length]
 ) {
+    using namespace SlangAll;
+
     size_t batch_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (batch_idx > batch_size)
         return;
@@ -301,6 +309,8 @@ __global__ void per_pixel_losses_reduce_backward_kernel(
     const float* __restrict__ v_losses,  // [LossIndex::length]
     float* __restrict__ v_raw_losses  // [B, RawLossIndex::length]
 ) {
+    using namespace SlangAll;
+
     size_t batch_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (batch_idx > batch_size)
         return;

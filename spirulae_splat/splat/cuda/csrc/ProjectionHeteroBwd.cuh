@@ -7,10 +7,6 @@
 
 #include <gsplat/Common.h>
 
-#include "Primitive3DGS.cuh"
-#include "Primitive3DGUT.cuh"
-#include "PrimitiveOpaqueTriangle.cuh"
-
 #include "helpers.cuh"
 #include <algorithm>
 #include <cooperative_groups.h>

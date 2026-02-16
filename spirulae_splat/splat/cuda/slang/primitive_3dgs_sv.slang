@@ -1,5 +1,9 @@
 #pragma once
+
+// suppress CudaDeviceExport to reduce code size
+#define CudaDeviceExport Differentiable
 #include "primitive_3dgs.slang"
+#undef CudaDeviceExport
 
 
 #define _projection_3dgs_sv_ARGS(num_sv) \

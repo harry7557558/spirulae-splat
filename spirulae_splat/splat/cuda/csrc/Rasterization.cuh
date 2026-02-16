@@ -9,17 +9,11 @@
 
 #include "Primitive3DGS.cuh"
 #include "Primitive3DGUT.cuh"
+#include "Primitive3DGUT_SV.cuh"
 #include "PrimitiveOpaqueTriangle.cuh"
 #include "PrimitiveVoxel.cuh"
 
 #include "types.cuh"
-
-
-constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
-constexpr uint SPLAT_BATCH_SIZE = 128;
-// for eval3d
-constexpr uint SPLAT_BATCH_SIZE_NO_DISTORTION = WARP_SIZE;
-constexpr uint SPLAT_BATCH_SIZE_WITH_DISTORTION = 128;
 
 
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */

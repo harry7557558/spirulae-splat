@@ -106,6 +106,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("projection_3dgs_backward_with_position_hessian_diagonal", &projection_3dgs_backward_with_position_hessian_diagonal_tensor);
     m.def("projection_mip_backward_with_position_hessian_diagonal", &projection_mip_backward_with_position_hessian_diagonal_tensor);
     m.def("projection_3dgut_backward_with_position_hessian_diagonal", &projection_3dgut_backward_with_position_hessian_diagonal_tensor);
+    m.def("projection_3dgs_backward_with_hessian_diagonal", &projection_3dgs_backward_with_position_hessian_diagonal_tensor);
+    m.def("projection_mip_backward_with_hessian_diagonal", &projection_mip_backward_with_position_hessian_diagonal_tensor);
+    m.def("projection_3dgut_backward_with_hessian_diagonal", &projection_3dgut_backward_with_position_hessian_diagonal_tensor);
 
     // Projection.cuh, hetero, forward
     m.def("projection_3dgs_hetero_forward", &projection_3dgs_hetero_forward_tensor);

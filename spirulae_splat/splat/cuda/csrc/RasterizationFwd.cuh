@@ -7,8 +7,7 @@
 #include <cstdint>
 
 #include <ATen/Tensor.h>
-
-#include "Primitive3DGS.cuh"
+#include <ATen/ops/empty.h>
 
 #include "common.cuh"
 
