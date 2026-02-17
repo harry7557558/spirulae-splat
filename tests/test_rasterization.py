@@ -69,11 +69,11 @@ WITH_UT = True
 
 def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
     camera_model = ["pinhole", "fisheye"][IS_FISHEYE]
-    quats = torch.nn.functional.normalize(quats, dim=-1)
+    # quats = torch.nn.functional.normalize(quats, dim=-1)
     intrins = torch.stack([Ks[..., 0, 0], Ks[..., 1, 1], Ks[..., 0, 2], Ks[..., 1, 2]], dim=-1)  # fx, fy, cx, cy
     rgbd, alpha, meta = ssplat_rasterization(
         primitive="3dgut" if WITH_UT else ["3dgs", "mip"][IS_ANTIALIASED],
-        splat_params=(means, quats, scales, opacities, features_dc, features_sh),
+        splat_params=(means, quats, scales, opacities.unsqueeze(-1), features_dc, features_sh),
         # primitive="opaque_triangle",
         # splat_params=(means, quats, scales+1.8, opacities.unsqueeze(-1).repeat(1, 2), features_dc, features_sh, features_dc.unsqueeze(-2).repeat(1, 2, 1)),
         # primitive="voxel",

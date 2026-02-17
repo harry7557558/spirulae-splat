@@ -50,6 +50,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // PerSplatLoss.cuh
     m.def("compute_per_splat_losses_forward", &compute_per_splat_losses_forward_tensor);
     m.def("compute_per_splat_losses_backward", &compute_per_splat_losses_backward_tensor);
+    m.def("compute_per_splat_losses_backward_with_hessian_diagonal", &compute_per_splat_losses_backward_with_hessian_diagonal_tensor);
     m.def("mcmc_add_noise_3dgs", &mcmc_add_noise_3dgs_tensor);
 
     // PerPixelLoss.cuh
@@ -106,9 +107,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("projection_3dgs_backward_with_position_hessian_diagonal", &projection_3dgs_backward_with_position_hessian_diagonal_tensor);
     m.def("projection_mip_backward_with_position_hessian_diagonal", &projection_mip_backward_with_position_hessian_diagonal_tensor);
     m.def("projection_3dgut_backward_with_position_hessian_diagonal", &projection_3dgut_backward_with_position_hessian_diagonal_tensor);
-    m.def("projection_3dgs_backward_with_hessian_diagonal", &projection_3dgs_backward_with_position_hessian_diagonal_tensor);
-    m.def("projection_mip_backward_with_hessian_diagonal", &projection_mip_backward_with_position_hessian_diagonal_tensor);
-    m.def("projection_3dgut_backward_with_hessian_diagonal", &projection_3dgut_backward_with_position_hessian_diagonal_tensor);
+    m.def("projection_3dgs_backward_with_hessian_diagonal", &projection_3dgs_backward_with_hessian_diagonal_tensor);
+    m.def("projection_mip_backward_with_hessian_diagonal", &projection_mip_backward_with_hessian_diagonal_tensor);
+    m.def("projection_3dgut_backward_with_hessian_diagonal", &projection_3dgut_backward_with_hessian_diagonal_tensor);
 
     // Projection.cuh, hetero, forward
     m.def("projection_3dgs_hetero_forward", &projection_3dgs_hetero_forward_tensor);
@@ -147,4 +148,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fused_newton", &fused_newton);
     m.def("fused_newton_multi", &fused_newton_multi);
     m.def("fused_3dgs2tr_mean_optim", &fused_3dgs2tr_mean_optim);
+    m.def("fused_3dgs2tr_scale_optim", &fused_3dgs2tr_scale_optim);
+    m.def("fused_3dgs2tr_opacity_optim", &fused_3dgs2tr_opacity_optim);
+    m.def("fused_3dgs2tr_quat_optim", &fused_3dgs2tr_quat_optim);
 }

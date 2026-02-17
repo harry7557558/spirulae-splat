@@ -720,8 +720,8 @@ inline __device__ void _Base3DGS<antialiased>::project_persp_vjp(
         h_proj.xy, h_proj.depth, h_proj.conic, h_proj.opac, h_proj.rgb,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
         &v_R, &v_t,
-        &vr_world.mean, &vr_world.quat, &vr_world.scale, &vr_world.opacity,
-        &h_world.mean, &h_world.quat, &h_world.scale, &h_world.opacity
+        &vr_world.mean, &vr_world.quat, &vr_world.scale, &vr_world.opacity, &vr_world.sh_coeffs[0],
+        &h_world.mean, &h_world.quat, &h_world.scale, &h_world.opacity, &h_world.sh_coeffs[0]
     );
 }
 
@@ -796,8 +796,8 @@ inline __device__ void _Base3DGS<antialiased>::project_fisheye_vjp(
         h_proj.xy, h_proj.depth, h_proj.conic, h_proj.opac, h_proj.rgb,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
         &v_R, &v_t,
-        &vr_world.mean, &vr_world.quat, &vr_world.scale, &vr_world.opacity,
-        &h_world.mean, &h_world.quat, &h_world.scale, &h_world.opacity
+        &vr_world.mean, &vr_world.quat, &vr_world.scale, &vr_world.opacity, &vr_world.sh_coeffs[0],
+        &h_world.mean, &h_world.quat, &h_world.scale, &h_world.opacity, &h_world.sh_coeffs[0]
     );
 }
 

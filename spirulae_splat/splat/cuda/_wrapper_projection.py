@@ -30,6 +30,13 @@ def _make_lazy_cuda_func(name: str) -> Callable:
 
     return call_cuda
 
+def add_gradient_component(tensor: Tensor, attr: str, grad: Tensor):
+    grad = grad.view(tensor.shape)
+    if hasattr(tensor, attr):
+        setattr(tensor, attr, getattr(tensor, attr) + grad)
+    else:
+        setattr(tensor, attr, grad)
+
 
 def spherical_harmonics(
     degrees_to_use: int,
@@ -109,6 +116,7 @@ def fully_fused_projection(
     sparse_grad: bool = False,
     camera_model: Literal["pinhole", "fisheye"] = "pinhole",
     dist_coeffs: Optional[Tensor] = None,
+    compute_hessian_diagonal: Literal[None, "position", "all"] = None,
 ) -> Tuple[Tensor, Tensor, Optional[Tensor], Tuple[Tensor]]:
     batch_dims = splats[0].shape[:-2]
     N = splats[0].shape[-2]
@@ -147,6 +155,7 @@ def fully_fused_projection(
             far_plane,
             camera_model,
             dist_coeffs.contiguous() if dist_coeffs is not None else None,
+            *([compute_hessian_diagonal] if primitive in ["3dgs", "mip", "3dgut"] else [])
         )
 
         if primitive in ["3dgs", "mip"]:
@@ -188,7 +197,8 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
         near_plane: float,
         far_plane: float,
         camera_model: Literal["pinhole", "fisheye"],
-        dist_coeffs: Optional[Tensor]
+        dist_coeffs: Optional[Tensor],
+        compute_hessian_diagonal: Literal[None, "position", "all"] = None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
 
         camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
@@ -209,23 +219,26 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
         ctx.height = height
         ctx.camera_model_type = camera_model_type
         ctx.dist_coeffs = dist_coeffs
+        ctx.compute_hessian_diagonal = compute_hessian_diagonal
 
         return aabb, *proj_returns
 
     @staticmethod
     def backward(ctx, v_aabb, *v_proj_returns):
-        with_hessian_diagonal = all([hasattr(v, 'hess') for v in v_proj_returns])
+        if ctx.compute_hessian_diagonal:
+            assert all([hasattr(v, 'hess') for v in v_proj_returns])
 
         means, quats, scales, opacities, features_dc, features_sh, viewmats, intrins, aabb = ctx.saved_tensors
-        if with_hessian_diagonal:
+        if ctx.compute_hessian_diagonal is not None:
             if ctx.primitive not in ["3dgs", "mip", "3dgut"]:
                 raise NotImplementedError()
             (
                 (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh),
                 v_viewmats,
-                vr_means_from_proj, h_means_from_proj
+                vr_proj, h_proj
             ) = _make_lazy_cuda_func(
-                f"projection_{ctx.primitive}_backward_with_position_hessian_diagonal"
+                f"projection_{ctx.primitive}_backward_with_hessian_diagonal" if ctx.compute_hessian_diagonal == "all"
+                else f"projection_{ctx.primitive}_backward_with_position_hessian_diagonal"
             )(
                 (means, quats, scales, opacities, features_dc, features_sh),
                 viewmats, intrins, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs, aabb,
@@ -234,19 +247,62 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
                 [x.hess for x in v_proj_returns],
                 ctx.needs_input_grad[7],  # viewmats_requires_grad
             )
-            assert vr_means_from_proj is not None
-            assert h_means_from_proj is not None
-            # print(h_means_from_proj.view(v_means.shape).mean(), h_means.mean())
-            # print(v_proj_returns[0].gradr_all[0].mean().item())
-            # print(v_means.mean().item())
-            means.gradr = vr_means_from_proj.view(v_means.shape)
-            means.hess = h_means_from_proj.view(v_means.shape)
-            if ctx.primitive == "3dgut":
-                means.gradr += v_proj_returns[0].gradr_all[0]
-                means.hess += v_proj_returns[0].hess_all[0]
-            means.scales = scales
-            means.quats = quats
-            means.opacities = opacities
+            assert vr_proj is not None
+            assert h_proj is not None
+            if ctx.compute_hessian_diagonal == "all":  # all Gaussian parameters except SH
+                # print("\n"*10)
+                # print('v_proj_returns')
+                # for (x, y) in zip(v_proj_returns[0].gradr_all, v_proj_returns[0].hess_all):
+                #     print(x.mean().item(), y.mean().item())
+                # print('vr_proj and h_proj')
+                # for (x, y) in zip(vr_proj[:-1], h_proj[:-1]):
+                #     print(x.mean().item(), y.mean().item())
+                # print("\n"*10)
+                vr_means, vr_quats, vr_scales, vr_opacities, vr_features_dc, vr_features_sh = vr_proj
+                h_means, h_quats, h_scales, h_opacities, h_features_dc, h_features_sh = h_proj
+                # means
+                add_gradient_component(means, 'gradr', vr_means)
+                add_gradient_component(means, 'hess', h_means)
+                if ctx.primitive == "3dgut":
+                    add_gradient_component(means, 'gradr', v_proj_returns[0].gradr_all[0])
+                    add_gradient_component(means, 'hess', v_proj_returns[0].hess_all[0])
+                means.scales = scales
+                means.quats = quats
+                means.opacities = opacities
+                # quats
+                add_gradient_component(quats, 'gradr', vr_quats)
+                add_gradient_component(quats, 'hess', h_quats)
+                if ctx.primitive == "3dgut":
+                    add_gradient_component(quats, 'gradr', v_proj_returns[0].gradr_all[1])
+                    add_gradient_component(quats, 'hess', v_proj_returns[0].hess_all[1])
+                quats.scales = scales
+                quats.opacities = opacities
+                # scales
+                add_gradient_component(scales, 'gradr', vr_scales)
+                add_gradient_component(scales, 'hess', h_scales)
+                scales.opacities = opacities
+                # opacities
+                add_gradient_component(opacities, 'gradr', vr_opacities)
+                add_gradient_component(opacities, 'hess', h_opacities)
+                # features_dc
+                add_gradient_component(features_dc, 'gradr', vr_features_dc)
+                add_gradient_component(features_dc, 'hess', h_features_dc)
+                features_dc.opacities = opacities
+                # features_sh
+                assert vr_features_sh is None
+                assert h_features_sh is None
+            else:  # means only
+                # print(h_means_from_proj.view(v_means.shape).mean(), h_means.mean())
+                # print(v_proj_returns[0].gradr_all[0].mean().item())
+                # print(v_means.mean().item())
+                means.gradr = vr_proj.view(v_means.shape)
+                means.hess = h_proj.view(v_means.shape)
+                if ctx.primitive == "3dgut":
+                    means.gradr += v_proj_returns[0].gradr_all[0]
+                    means.hess += v_proj_returns[0].hess_all[0]
+                means.scales = scales
+                means.quats = quats
+                means.opacities = opacities
         else:
             (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh), v_viewmats = _make_lazy_cuda_func(
                 f"projection_{ctx.primitive}_backward"

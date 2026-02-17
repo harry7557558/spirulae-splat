@@ -17,11 +17,10 @@ namespace SlangAll {
 #include <ATen/ops/zeros.h>
 
 __global__ void per_splat_losses_forward_kernel(
-    bool is_3dgs,
     const size_t num_points,
-    const float* __restrict__ scales_buffer,
+    const float3* __restrict__ scales_buffer,
     const float* __restrict__ opacities_buffer,
-    const float* __restrict__ quats_buffer,
+    const float4* __restrict__ quats_buffer,
     float* __restrict__ out_losses,
     float max_gauss_ratio,
     float scale_regularization_weight,
@@ -31,21 +30,16 @@ __global__ void per_splat_losses_forward_kernel(
     float erank_reg_weight_s3,
     float quat_norm_reg_weight
 ) {
-    using namespace SlangAll;
-
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     FixedArray<float, kNumPerSplatLosses> losses;
 
     bool inside = idx < num_points;
     if (inside) {
-        float3 scale;
-        if (is_3dgs) scale = { scales_buffer[3*idx+0], scales_buffer[3*idx+1], scales_buffer[3*idx+2] };
-        else scale = { scales_buffer[2*idx+0], scales_buffer[2*idx+1], 0.0f };
+        float3 scale = scales_buffer[idx];
         float opacity = opacities_buffer[idx];
-        float4 quat = { quats_buffer[4*idx+0], quats_buffer[4*idx+1], quats_buffer[4*idx+2], quats_buffer[4*idx+3] };
-        per_splat_losses(
-            is_3dgs,
+        float4 quat = quats_buffer[idx];
+        SlangAll::per_splat_losses(
             scale, opacity, quat,
             max_gauss_ratio,
             scale_regularization_weight,
@@ -73,15 +67,14 @@ __global__ void per_splat_losses_forward_kernel(
 
 
 __global__ void per_splat_losses_backward_kernel(
-    bool is_3dgs,
     const size_t num_points,
-    const float* __restrict__ scales_buffer,
+    const float3* __restrict__ scales_buffer,
     const float* __restrict__ opacities_buffer,
-    const float* __restrict__ quats_buffer,
+    const float4* __restrict__ quats_buffer,
     const float* __restrict__ v_out_losses,
-    float* __restrict__ v_scales_buffer,
+    float3* __restrict__ v_scales_buffer,
     float* __restrict__ v_opacities_buffer,
-    float* __restrict__ v_quats_buffer,
+    float4* __restrict__ v_quats_buffer,
     float max_gauss_ratio,
     float scale_regularization_weight,
     float mcmc_opacity_reg_weight,
@@ -90,8 +83,6 @@ __global__ void per_splat_losses_backward_kernel(
     float erank_reg_weight_s3,
     float quat_norm_reg_weight
 ) {
-    using namespace SlangAll;
-
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     bool inside = idx < num_points;
@@ -101,18 +92,15 @@ __global__ void per_splat_losses_backward_kernel(
     for (int i = 0; i < kNumPerSplatLosses; i++)
         v_losses[i] = v_out_losses[i] / (float)num_points;
 
-    float3 scale;
-    if (is_3dgs) scale = { scales_buffer[3*idx+0], scales_buffer[3*idx+1], scales_buffer[3*idx+2] };
-    else scale = { scales_buffer[2*idx+0], scales_buffer[2*idx+1], 0.0f };
+    float3 scale = scales_buffer[idx];
     float opacity = opacities_buffer[idx];
-    float4 quat = { quats_buffer[4*idx+0], quats_buffer[4*idx+1], quats_buffer[4*idx+2], quats_buffer[4*idx+3] };
+    float4 quat = quats_buffer[idx];
 
     float3 v_scale;
     float v_opacity;
     float4 v_quat;
 
-    per_splat_losses_bwd(
-        is_3dgs,
+    SlangAll::per_splat_losses_bwd(
         scale, opacity, quat,
         v_losses,
         &v_scale, &v_opacity, &v_quat,
@@ -125,10 +113,78 @@ __global__ void per_splat_losses_backward_kernel(
         quat_norm_reg_weight
     );
 
-    if (is_3dgs) v_scales_buffer[3*idx+0] = v_scale.x, v_scales_buffer[3*idx+1] = v_scale.y, v_scales_buffer[3*idx+2] = v_scale.z;
-    else v_scales_buffer[2*idx+0] = v_scale.x, v_scales_buffer[2*idx+1] = v_scale.y;
+    v_scales_buffer[idx] = v_scale;
     v_opacities_buffer[idx] = v_opacity;
-    v_quats_buffer[4*idx+0] = v_quat.x, v_quats_buffer[4*idx+1] = v_quat.y, v_quats_buffer[4*idx+2] = v_quat.z, v_quats_buffer[4*idx+3] = v_quat.w;
+    v_quats_buffer[idx] = v_quat;
+}
+
+
+__global__ void per_splat_losses_backward_kernel(
+    const size_t num_points,
+    const float3* __restrict__ scales_buffer,
+    const float* __restrict__ opacities_buffer,
+    const float4* __restrict__ quats_buffer,
+    const float* __restrict__ v_out_losses,
+    float3* __restrict__ v_scales_buffer,
+    float* __restrict__ v_opacities_buffer,
+    float4* __restrict__ v_quats_buffer,
+    float3* __restrict__ vr_scales_buffer,
+    float* __restrict__ vr_opacities_buffer,
+    float4* __restrict__ vr_quats_buffer,
+    float3* __restrict__ h_scales_buffer,
+    float* __restrict__ h_opacities_buffer,
+    float4* __restrict__ h_quats_buffer,
+    float max_gauss_ratio,
+    float scale_regularization_weight,
+    float mcmc_opacity_reg_weight,
+    float mcmc_scale_reg_weight,
+    float erank_reg_weight,
+    float erank_reg_weight_s3,
+    float quat_norm_reg_weight
+) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    bool inside = idx < num_points;
+    if (!inside) return;
+
+    FixedArray<float, kNumPerSplatLosses> v_losses;
+    for (int i = 0; i < kNumPerSplatLosses; i++)
+        v_losses[i] = v_out_losses[i] / (float)num_points;
+
+    float3 scale = scales_buffer[idx];
+    float opacity = opacities_buffer[idx];
+    float4 quat = quats_buffer[idx];
+
+    float3 v_scale, vr_scale, h_scale;
+    float v_opacity, vr_opacity, h_opacity;
+    float4 v_quat, vr_quat, h_quat;
+
+    SlangAll::per_splat_losses_bwd(
+        scale, opacity, quat,
+        v_losses,
+        &v_scale, &v_opacity, &v_quat,
+        &vr_scale, &vr_opacity, &vr_quat,
+        &h_scale, &h_opacity, &h_quat,
+        max_gauss_ratio,
+        scale_regularization_weight,
+        mcmc_opacity_reg_weight,
+        mcmc_scale_reg_weight,
+        erank_reg_weight,
+        erank_reg_weight_s3,
+        quat_norm_reg_weight
+    );
+
+    v_scales_buffer[idx] = v_scale;
+    v_opacities_buffer[idx] = v_opacity;
+    v_quats_buffer[idx] = v_quat;
+
+    vr_scales_buffer[idx] = vr_scale;
+    vr_opacities_buffer[idx] = vr_opacity;
+    vr_quats_buffer[idx] = vr_quat;
+
+    h_scales_buffer[idx] = h_scale;
+    h_opacities_buffer[idx] = h_opacity;
+    h_quats_buffer[idx] = h_quat;
 }
 
 
@@ -152,11 +208,9 @@ at::Tensor compute_per_splat_losses_forward_tensor(
     CHECK_INPUT(quats);
 
     const size_t num_points = opacities.size(0);
-    const bool is_3dgs = (scales.size(-1) == 3);
 
-    if (scales.ndimension() != 2 || scales.size(0) != num_points ||
-        (scales.size(1) != 3 && scales.size(1) != 2))
-        AT_ERROR("scales shape must be (n, 2) or (n, 3)");
+    if (scales.ndimension() != 2 || scales.size(0) != num_points || scales.size(1) != 3)
+        AT_ERROR("scales shape must be (n, 3)");
     if (opacities.ndimension() != 2 || opacities.size(0) != num_points || opacities.size(1) != 1)
         AT_ERROR("opacities shape must be (n, 1)");
     if (quats.ndimension() != 2 || quats.size(0) != num_points || quats.size(1) != 4)
@@ -165,11 +219,10 @@ at::Tensor compute_per_splat_losses_forward_tensor(
     at::Tensor loss = at::zeros({kNumPerSplatLosses}, opacities.options());
 
     per_splat_losses_forward_kernel<<<_LAUNCH_ARGS_1D(num_points, 256)>>>(
-        is_3dgs,
         num_points,
-        scales.contiguous().data_ptr<float>(),
+        (float3*)scales.contiguous().data_ptr<float>(),
         opacities.contiguous().data_ptr<float>(),
-        quats.contiguous().data_ptr<float>(),
+        (float4*)quats.contiguous().data_ptr<float>(),
         loss.data_ptr<float>(),
         mcmc_opacity_reg_weight,
         mcmc_scale_reg_weight,
@@ -207,11 +260,9 @@ compute_per_splat_losses_backward_tensor(
     CHECK_INPUT(v_losses);
 
     const size_t num_points = opacities.size(0);
-    const bool is_3dgs = (scales.size(-1) == 3);
 
-    if (scales.ndimension() != 2 || scales.size(0) != num_points ||
-        (scales.size(1) != 3 && scales.size(1) != 2))
-        AT_ERROR("scales shape must be (n, 2) or (n, 3)");
+    if (scales.ndimension() != 2 || scales.size(0) != num_points || scales.size(1) != 3)
+        AT_ERROR("scales shape must be (n, 3)");
     if (opacities.ndimension() != 2 || opacities.size(0) != num_points || opacities.size(1) != 1)
         AT_ERROR("opacities shape must be (n, 1)");
     if (quats.ndimension() != 2 || quats.size(0) != num_points || quats.size(1) != 4)
@@ -224,15 +275,14 @@ compute_per_splat_losses_backward_tensor(
     at::Tensor v_quats = at::empty_like(quats);
 
     per_splat_losses_backward_kernel<<<_LAUNCH_ARGS_1D(num_points, 256)>>>(
-        is_3dgs,
         num_points,
-        scales.contiguous().data_ptr<float>(),
+        (float3*)scales.contiguous().data_ptr<float>(),
         opacities.contiguous().data_ptr<float>(),
-        quats.contiguous().data_ptr<float>(),
+        (float4*)quats.contiguous().data_ptr<float>(),
         v_losses.data_ptr<float>(),
-        v_scales.contiguous().data_ptr<float>(),
+        (float3*)v_scales.contiguous().data_ptr<float>(),
         v_opacities.contiguous().data_ptr<float>(),
-        v_quats.contiguous().data_ptr<float>(),
+        (float4*)v_quats.contiguous().data_ptr<float>(),
         mcmc_opacity_reg_weight,
         mcmc_scale_reg_weight,
         max_gauss_ratio,
@@ -244,6 +294,87 @@ compute_per_splat_losses_backward_tensor(
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return std::make_tuple(v_scales, v_opacities, v_quats);
+}
+
+
+/*[AutoHeaderGeneratorExport]*/
+std::tuple<
+    std::tuple<at::Tensor, at::Tensor, at::Tensor>,  // v
+    std::tuple<at::Tensor, at::Tensor, at::Tensor>,  // vr
+    std::tuple<at::Tensor, at::Tensor, at::Tensor>  // h
+>
+compute_per_splat_losses_backward_with_hessian_diagonal_tensor(
+    at::Tensor &scales,  // [N, 3] or [N, 2]
+    at::Tensor &opacities,  // [N, 1]
+    at::Tensor &quats,  // [N, 4]
+    at::Tensor &v_losses,  // [kNumPerSplatLosses]
+    float mcmc_opacity_reg_weight,
+    float mcmc_scale_reg_weight,
+    float max_gauss_ratio,
+    float scale_regularization_weight,
+    float erank_reg_weight,
+    float erank_reg_weight_s3,
+    float quat_norm_reg_weight
+) {
+    DEVICE_GUARD(scales);
+    CHECK_INPUT(scales);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(quats);
+    CHECK_INPUT(v_losses);
+
+    const size_t num_points = opacities.size(0);
+
+    if (scales.ndimension() != 2 || scales.size(0) != num_points || scales.size(1) != 3)
+        AT_ERROR("scales shape must be (n, 3)");
+    if (opacities.ndimension() != 2 || opacities.size(0) != num_points || opacities.size(1) != 1)
+        AT_ERROR("opacities shape must be (n, 1)");
+    if (quats.ndimension() != 2 || quats.size(0) != num_points || quats.size(1) != 4)
+        AT_ERROR("quats shape must be (n, 4)");
+    if (v_losses.ndimension() != 1 || v_losses.size(0) != kNumPerSplatLosses)
+        AT_ERROR("v_losses shape must be (kNumPerSplatLosses,)");
+
+    at::Tensor v_scales = at::empty_like(scales);
+    at::Tensor v_opacities = at::empty_like(opacities);
+    at::Tensor v_quats = at::empty_like(quats);
+
+    at::Tensor vr_scales = at::empty_like(scales);
+    at::Tensor vr_opacities = at::empty_like(opacities);
+    at::Tensor vr_quats = at::empty_like(quats);
+
+    at::Tensor h_scales = at::empty_like(scales);
+    at::Tensor h_opacities = at::empty_like(opacities);
+    at::Tensor h_quats = at::empty_like(quats);
+
+    per_splat_losses_backward_kernel<<<_LAUNCH_ARGS_1D(num_points, 256)>>>(
+        num_points,
+        (float3*)scales.contiguous().data_ptr<float>(),
+        opacities.contiguous().data_ptr<float>(),
+        (float4*)quats.contiguous().data_ptr<float>(),
+        v_losses.data_ptr<float>(),
+        (float3*)v_scales.contiguous().data_ptr<float>(),
+        v_opacities.contiguous().data_ptr<float>(),
+        (float4*)v_quats.contiguous().data_ptr<float>(),
+        (float3*)vr_scales.contiguous().data_ptr<float>(),
+        vr_opacities.contiguous().data_ptr<float>(),
+        (float4*)vr_quats.contiguous().data_ptr<float>(),
+        (float3*)h_scales.contiguous().data_ptr<float>(),
+        h_opacities.contiguous().data_ptr<float>(),
+        (float4*)h_quats.contiguous().data_ptr<float>(),
+        mcmc_opacity_reg_weight,
+        mcmc_scale_reg_weight,
+        max_gauss_ratio,
+        scale_regularization_weight,
+        erank_reg_weight,
+        erank_reg_weight_s3,
+        quat_norm_reg_weight
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return std::make_tuple(
+        std::make_tuple(v_scales, v_opacities, v_quats),
+        std::make_tuple(vr_scales, vr_opacities, vr_quats),
+        std::make_tuple(h_scales, h_opacities, h_quats)
+    );
 }
 
 

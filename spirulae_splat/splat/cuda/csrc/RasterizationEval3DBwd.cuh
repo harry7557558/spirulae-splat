@@ -326,7 +326,8 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
             splat.atomicAddGradientToBuffer(v_splat, v_splat_buffer, splat_gid);
             if (output_hessian_diagonal) {
                 splat.atomicAddGradientToBuffer(vr_splat, vr_splat_buffer, splat_gid);
-                splat.atomicAddGaussNewtonHessianDiagonalToBuffer(v_splat, h_splat_buffer, splat_gid, total_num_pixels);
+                // TODO: scale and opacity ideally should be done in log and logit spaces for better gradient
+                splat.atomicAddGaussNewtonHessianDiagonalToBuffer(v_splat, h_splat_buffer, splat_gid, total_num_pixels*total_num_pixels);
             }
         }
     }

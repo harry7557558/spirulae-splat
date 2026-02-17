@@ -141,11 +141,37 @@ _TRIANGLE_OPTIMIZERS["bilateral_grid"] = {
     ),
 }
 
-_SECOND_ORDER_MEAN_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS}
-_SECOND_ORDER_MEAN_OPTIMIZERS["means"] = {
-    "optimizer": FusedNewtonOptimizerConfig(lr=1.0e-6, eps=1e-15),
+_SECOND_ORDER_POSITION_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS}
+_SECOND_ORDER_POSITION_OPTIMIZERS["means"] = {
+    "optimizer": FusedNewtonOptimizerConfig(mode="mean", lr=1.0e-6, eps=1e-15),
     "scheduler": ExponentialDecaySchedulerConfig(
         lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000, lr_pre_warmup=0
+    ),
+}
+
+_SECOND_ORDER_OPTIMIZERS = {**_SECOND_ORDER_POSITION_OPTIMIZERS}
+_SECOND_ORDER_OPTIMIZERS["quats"] = {
+    "optimizer": FusedNewtonOptimizerConfig(mode="quat", lr=1.0e-6, eps=1e-15),
+    "scheduler": ExponentialDecaySchedulerConfig(
+        lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000, lr_pre_warmup=0
+    ),
+}
+_SECOND_ORDER_OPTIMIZERS["scales"] = {
+    "optimizer": FusedNewtonOptimizerConfig(mode="scale", lr=1.0e-6, eps=1e-15),
+    "scheduler": ExponentialDecaySchedulerConfig(
+        lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000, lr_pre_warmup=0
+    ),
+}
+_SECOND_ORDER_OPTIMIZERS["opacities"] = {
+    "optimizer": FusedNewtonOptimizerConfig(mode="opacity", lr=1.0e-6, eps=1e-15),
+    "scheduler": ExponentialDecaySchedulerConfig(
+        lr_final=1.0e-8, max_steps=30000, #warmup_steps=3000, lr_pre_warmup=0
+    ),
+}
+_SECOND_ORDER_OPTIMIZERS["features_dc"] = {
+    "optimizer": FusedNewtonOptimizerConfig(mode="scale", lr=0.282e-6, eps=1e-15),
+    "scheduler": ExponentialDecaySchedulerConfig(
+        lr_final=0.282e-8, max_steps=30000, #warmup_steps=1000, lr_pre_warmup=0
     ),
 }
 
@@ -186,12 +212,37 @@ spirulae_squared = MethodSpecification(
                 **_DEFAULT_DATAMANAGER_CONFIG
             ),
             model=SpirulaeModelConfig(
-                compute_hessian_diagonal=True,
+                compute_hessian_diagonal="all",
                 mcmc_noise_lr=5e5 * (1.6e-4 / 1.0e-6),
             ),
         ),
         optimizers={
-            **_SECOND_ORDER_MEAN_OPTIMIZERS
+            **_SECOND_ORDER_OPTIMIZERS
+        },
+        viewer=ViewerConfig(),
+        vis="viewer",
+    ),
+    description="Spirulae 3DGS Default.",
+)
+
+spirulae_squared_pos = MethodSpecification(
+    config=TrainerConfig(
+        method_name="spirulae^2-pos",
+        steps_per_eval_batch=0,
+        steps_per_save=2000,
+        max_num_iterations=30000,
+        mixed_precision=False,
+        pipeline=SpirulaePipelineConfig(
+            datamanager=SpirulaeDataManagerConfig(
+                **_DEFAULT_DATAMANAGER_CONFIG
+            ),
+            model=SpirulaeModelConfig(
+                compute_hessian_diagonal="position",
+                mcmc_noise_lr=5e5 * (1.6e-4 / 1.0e-6),
+            ),
+        ),
+        optimizers={
+            **_SECOND_ORDER_POSITION_OPTIMIZERS
         },
         viewer=ViewerConfig(),
         vis="viewer",

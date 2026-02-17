@@ -629,7 +629,7 @@ void transform_ray_d_vjp(
 [CudaDeviceExport]
 [Differentiable]
 float3x3 compute_3dgut_iscl_rot(float4 quat, float3 scale) {
-    float3x3 R = normalized_quat_to_rotmat(quat);
+    float3x3 R = normalized_quat_to_rotmat(normalize(quat));
     float3x3 S = float3x3(
         scale.x, 0.f, 0.f,
         0.f, scale.y, 0.f,

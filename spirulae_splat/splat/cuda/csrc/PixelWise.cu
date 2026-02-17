@@ -1,5 +1,17 @@
 #include "PixelWise.cuh"
 
+#ifdef __CUDACC__
+#include "generated/slang.cuh"
+namespace SlangAll {
+#include "generated/set_namespace.cuh"
+#include "generated/slang_all.cuh"
+}
+namespace SlangProjectionUtils {
+#include "generated/set_namespace.cuh"
+#include "generated/projection_utils.cuh"
+}
+#endif
+
 #include "common.cuh"
 
 
@@ -667,12 +679,12 @@ __global__ void distort_image_kernel(
     // Undistort point
     float2 uv = { (i+0.5f-cx) / fx, (j+0.5f-cy) / fy };
     if (is_undistort) {
-        if (!SlangAll::is_valid_distortion(uv, dist_coeffs))
+        if (!SlangProjectionUtils::is_valid_distortion(uv, dist_coeffs))
             return;
-        uv = SlangAll::distort_point(uv, camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs);
+        uv = SlangProjectionUtils::distort_point(uv, camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs);
     }
     else {
-        if (!SlangAll::undistort_point(uv, camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs, &uv))
+        if (!SlangProjectionUtils::undistort_point(uv, camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs, &uv))
             return;
     }
 

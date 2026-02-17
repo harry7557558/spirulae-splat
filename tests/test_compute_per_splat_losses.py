@@ -24,7 +24,7 @@ class Config:
     quat_norm_reg_weight = 0.01
 
     primitive = "3dgut"
-    use_3dgs = False
+    use_3dgs = True
     use_bilateral_grid = False
     use_bilateral_grid_for_geometry = False
     use_ppisp = False
@@ -39,6 +39,7 @@ class Config:
     alpha_loss_weight = 0.0
     alpha_loss_weight_under = 0.0
     adaptive_exposure_mode = ""
+    compute_hessian_diagonal = None
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")

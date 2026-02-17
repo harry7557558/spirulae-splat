@@ -285,7 +285,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             v_splat.atomicAddGradientToBuffer(v_splat_buffer, splat_gid);
             if (output_hessian_diagonal) {
                 vr_splat.atomicAddGradientToBuffer(vr_splat_buffer, splat_gid);
-                v_splat.atomicAddGaussNewtonHessianDiagonalToBuffer(h_splat_buffer, splat_gid, total_num_pixels);
+                v_splat.atomicAddGaussNewtonHessianDiagonalToBuffer(h_splat_buffer, splat_gid, total_num_pixels*total_num_pixels);
             }
         }
     }

@@ -2,14 +2,6 @@
 
 #include <ATen/Tensor.h>
 
-#ifdef __CUDACC__
-#include "generated/slang.cuh"
-namespace SlangAll {
-#include "generated/set_namespace.cuh"
-#include "generated/slang_all.cuh"
-}
-#endif
-
 #include "types.cuh"
 
 enum class RawPPISPRegLossIndex {

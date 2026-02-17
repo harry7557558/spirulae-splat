@@ -211,6 +211,7 @@ setup(
         "nerfstudio.method_configs": [
             "spirulae = spirulae_splat.ns_config:spirulae",
             "spirulae^2 = spirulae_splat.ns_config:spirulae_squared",
+            "spirulae^2-pos = spirulae_splat.ns_config:spirulae_squared_pos",
             "spirulae-patched = spirulae_splat.ns_config:spirulae_patched",
             "spirulae-triangle = spirulae_splat.ns_config:spirulae_triangle",
             "spirulae-triangle-patched = spirulae_splat.ns_config:spirulae_triangle_patched",

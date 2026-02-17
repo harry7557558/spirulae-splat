@@ -136,8 +136,8 @@ class SpirulaeModelConfig(ModelConfig):
     """Pack projection outputs, reduce VRAM usage at large batch size but can be slightly slower"""
     use_bvh: bool = False
     """Use BVH for splat-patch intersection test, may be faster when batching large number of small patches"""
-    compute_hessian_diagonal: bool = False
-    """Whether to compute an approximation of Hessian diagonal in backward pass. Required for second-order optimizer."""
+    compute_hessian_diagonal: Literal[None, "position", "all"] = None
+    """What parameter sets to compute an approximation of Hessian diagonal as well as a Jacobian-residual product in backward pass. Required for second-order optimizer."""
     supersampling: int = 1
     """Antialiasing by rendering at higher resolution and downsampling to a lower resolution, as per triangle splatting +"""
 
@@ -924,14 +924,14 @@ class SpirulaeModel(Model):
 
         if self.config.primitive in ['3dgs', 'mip', '3dgut']:
             splat_params = (
-                self.means, F.normalize(self.quats, dim=-1), self.scales,
-                self.opacities.squeeze(-1),
+                self.means, self.quats, self.scales,
+                self.opacities,
                 self.features_dc, self.features_sh
             )
         if self.config.primitive in ['3dgut_sv']:
             splat_params = (
-                self.means, F.normalize(self.quats, dim=-1), self.scales,
-                self.opacities.squeeze(-1),
+                self.means, self.quats, self.scales,
+                self.opacities,
                 self.sv_sites, self.sv_colors
             )
         elif self.config.primitive in ['opaque_triangle']:
@@ -989,7 +989,7 @@ class SpirulaeModel(Model):
             compute_hessian_diagonal=self.config.compute_hessian_diagonal,
             **kwargs,
         )
-        if self.config.compute_hessian_diagonal:
+        if self.config.compute_hessian_diagonal is not None:
             rgbd = list(rgbd)
             rgbd[0], backward_metadata_injector = _BackwardMetadataInjector.apply(rgbd[0])
         if self.config.supersampling != 1:
@@ -1089,7 +1089,7 @@ class SpirulaeModel(Model):
         outputs = {
             "rgb": rgb,
         }
-        if self.config.compute_hessian_diagonal and self.training:
+        if self.config.compute_hessian_diagonal is not None and self.training:
             outputs["backward_metadata_injector"] = backward_metadata_injector
         if depth_im_ref is not None:
             outputs["depth"] = depth_im_ref

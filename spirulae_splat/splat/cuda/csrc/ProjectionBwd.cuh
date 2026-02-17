@@ -223,8 +223,8 @@ inline std::tuple<
     typename SplatPrimitive::World::Tensor vr_splats_world;
     typename SplatPrimitive::World::Tensor h_splats_world;
     if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable) {
-        vr_splats_world = vr_splats_world.allocProjBwd(true);
-        h_splats_world = h_splats_world.allocProjBwd(true);
+        vr_splats_world = splats_world.allocProjBwd(true);
+        h_splats_world = splats_world.allocProjBwd(true);
     }
 
     #define _LAUNCH_ARGS \
@@ -256,6 +256,8 @@ inline std::tuple<
 
     #undef _LAUNCH_ARGS
 
+    if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable)
+        return std::make_tuple(v_splats_world.tuple(), v_viewmats, vr_splats_world.tuple(), h_splats_world.tuple());
     return std::make_tuple(v_splats_world.tuple(), v_viewmats, vr_world_pos, h_world_pos);
 }
 

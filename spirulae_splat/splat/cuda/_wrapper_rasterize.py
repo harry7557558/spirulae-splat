@@ -30,6 +30,13 @@ def _make_lazy_cuda_func(name: str) -> Callable:
 
     return call_cuda
 
+def add_gradient_component(tensor: Tensor, attr: str, grad: Tensor):
+    grad = grad.view(tensor.shape)
+    if hasattr(tensor, attr):
+        setattr(tensor, attr, getattr(tensor, attr) + grad)
+    else:
+        setattr(tensor, attr, grad)
+
 
 
 def rasterize_to_pixels(
@@ -352,8 +359,8 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
 
         if h_splats is not None:
             for v, vr, h in zip(v_splats, vr_splats, h_splats):
-                v.gradr = vr
-                v.hess = h
+                add_gradient_component(v, 'gradr', vr)
+                add_gradient_component(v, 'hess', h)
                 v.gradr_all = vr_splats
                 v.hess_all = h_splats  # so we can get all hess from projection backward pass
 

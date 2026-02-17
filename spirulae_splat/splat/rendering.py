@@ -46,7 +46,7 @@ def rasterization(
     packed: bool = True,
     use_bvh: bool = False,
     output_distortion: bool = False,
-    compute_hessian_diagonal: bool = False,
+    compute_hessian_diagonal: Literal[None, "position", "all"] = None,
     relative_scale: Optional[float] = None,
     backgrounds: Optional[Tensor] = None,
     masks: Optional[Tensor] = None,
@@ -227,7 +227,7 @@ def rasterization(
         assert quats.shape == batch_dims + (N, 4), quats.shape
         assert scales.shape == batch_dims + (N, 3), scales.shape
         if primitive in ["3dgs", "mip", "3dgut", "3dgut_sv"]:
-            assert opacities.shape == batch_dims + (N,), opacities.shape
+            assert opacities.shape == batch_dims + (N, 1), opacities.shape
         else:
             assert opacities.shape == batch_dims + (N, 2), opacities.shape
             assert features_ch.shape == batch_dims + (N, 2, 3), features_ch.shape
@@ -365,6 +365,7 @@ def rasterization(
             sparse_grad=sparse_grad,
             camera_model=camera_model,
             dist_coeffs=dist_coeffs,
+            compute_hessian_diagonal=compute_hessian_diagonal,
         )
 
     if use_bvh:
@@ -477,7 +478,7 @@ def rasterization(
         masks=masks,
         packed=packed,
         output_distortion=output_distortion,
-        compute_hessian_diagonal=compute_hessian_diagonal,
+        compute_hessian_diagonal=(compute_hessian_diagonal is not None),
         **kwargs
     )
     meta.update(render_meta)

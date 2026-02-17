@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type, Literal
 
 import torch
 from torch.optim.optimizer import Optimizer
@@ -115,7 +115,7 @@ class FusedAdamOptimizerConfig(OptimizerConfig):
 
 
 
-class Fused3DGS2TrMean(Optimizer):
+class Fused3DGS2Tr(Optimizer):
     """
     Fully fused CUDA implementation of 3DGS^2-TR optimizer for Gaussian means.
     https://arxiv.org/abs/2602.00395
@@ -124,12 +124,15 @@ class Fused3DGS2TrMean(Optimizer):
     def __init__(
         self,
         params,
+        mode: Optional[Literal["mean", "scale", "opacity", "quat"]],
         lr: float = 1e-6,
         betas: tuple = (0.9, 0.999),
         eps: float = 1e-8,
         # eps_tr: float = 1e-6,
         **kwargs
     ):
+        if mode is None:
+            raise ValueError("Mode must be set")
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
         if eps < 0.0:
@@ -142,11 +145,11 @@ class Fused3DGS2TrMean(Optimizer):
             raise ValueError(f"Invalid beta parameter at index 1: {betas[1]}")
 
         if 'weight_decay' in kwargs and kwargs['weight_decay'] != 0.0:
-            raise NotImplementedError("Fused3DGS2TrMean currently only supports weight_decay=0")
+            raise NotImplementedError("Fused3DGS2Tr currently only supports weight_decay=0")
         
         # defaults = dict(lr=lr, betas=betas, eps=eps, eps_tr=eps_tr)
-        defaults = dict(lr=lr, betas=betas, eps=eps)
-        super(Fused3DGS2TrMean, self).__init__(params, defaults)
+        defaults = dict(mode=mode, lr=lr, betas=betas, eps=eps)
+        super(Fused3DGS2Tr, self).__init__(params, defaults)
     
     @torch.no_grad()
     def step(self, closure=None):
@@ -161,16 +164,19 @@ class Fused3DGS2TrMean(Optimizer):
                 loss = closure()
         
         for group in self.param_groups:
+            mode = group['mode']
             beta1, beta2 = group['betas']
             lr = group['lr']
             eps = group['eps']
             # eps_tr = group['eps_tr']
+            # lr = 1e10
             
             for p in group['params']:
                 if p.grad is None:
                     continue
                 
-                # print(p.grad.mean().item(), p.gradr.mean().item(), p.hess.mean().item())
+                # if mode == "scale":
+                #     print(p.grad.mean().item(), p.gradr.mean().item(), p.hess.mean().item())
                 
                 state = self.state[p]
                 
@@ -186,18 +192,25 @@ class Fused3DGS2TrMean(Optimizer):
                 state['step1'] += 1
                 state['step2'] += 1
 
-                _make_lazy_cuda_func("fused_3dgs2tr_mean_optim")(
+                additional_params = []
+                if mode == "mean":
+                    additional_params = [p.scales, p.quats, p.opacities]
+                elif mode == "scale":
+                    additional_params = [p.opacities]
+                elif mode == "quat":
+                    additional_params = [p.scales, p.opacities]
+
+                _make_lazy_cuda_func(f"fused_3dgs2tr_{mode}_optim")(
                     p,
                     # p.grad,
                     p.gradr,  # gradient residual product
                     p.hess,
-                    p.scales,
-                    p.quats,
-                    p.opacities,
+                    *additional_params,
                     state['exp_avg'],
                     state['exp_avg_sq'],
                     # lr,
                     1.0,
+                    # min(state['step1'] / 3000.0, 1.0) ** 2,
                     beta1,
                     beta2,
                     eps,
@@ -217,4 +230,6 @@ class Fused3DGS2TrMean(Optimizer):
 class FusedNewtonOptimizerConfig(OptimizerConfig):
     """Basic optimizer config with Newton"""
 
-    _target: Type = Fused3DGS2TrMean
+    _target: Type = Fused3DGS2Tr
+
+    mode: Optional[Literal["mean", "scale", "opacity", "quat"]] = None

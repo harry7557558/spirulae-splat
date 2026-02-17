@@ -316,8 +316,8 @@ inline __device__ void Vanilla3DGUT::project_persp_vjp(
         make_float2(0), h_proj.depth, h_proj.scale, h_proj.opacity, h_proj.rgb,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
         &v_R, &v_t,
-        &vr_world.mean, &vr_world.quat, &vr_world.scale, &vr_world.opacity,
-        &h_world.mean, &h_world.quat, &h_world.scale, &h_world.opacity
+        &vr_world.mean, &vr_world.quat, &vr_world.scale, &vr_world.opacity, &vr_world.sh_coeffs[0],
+        &h_world.mean, &h_world.quat, &h_world.scale, &h_world.opacity, &h_world.sh_coeffs[0]
     );
 }
 
@@ -374,8 +374,8 @@ inline __device__ void Vanilla3DGUT::project_fisheye_vjp(
         make_float2(0), h_proj.depth, h_proj.scale, h_proj.opacity, h_proj.rgb,
         &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
         &v_R, &v_t,
-        &vr_world.mean, &vr_world.quat, &vr_world.scale, &vr_world.opacity,
-        &h_world.mean, &h_world.quat, &h_world.scale, &h_world.opacity
+        &vr_world.mean, &vr_world.quat, &vr_world.scale, &vr_world.opacity, &vr_world.sh_coeffs[0],
+        &h_world.mean, &h_world.quat, &h_world.scale, &h_world.opacity, &h_world.sh_coeffs[0]
     );
 }
 

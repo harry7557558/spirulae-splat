@@ -263,7 +263,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
 
     bool is_valid = true;
     if (eval3d) {
-        SigmaPoints sigmas = world_gaussian_sigma_points(mean, exp(scale), quat, R, t);
+        SigmaPoints sigmas = world_gaussian_sigma_points(mean, exp(scale), normalize(quat), R, t);
 
         if (camera_model == CameraModelType::PINHOLE)
             is_valid &= persp_proj_3dgs_ut<assume_valid>(
@@ -283,7 +283,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
         float3x3 covar;
         {
             // compute from quaternions and scales
-            quat_scale_to_covar(quat, exp(scale), covar);
+            quat_scale_to_covar(normalize(quat), exp(scale), covar);
         }
         float3x3 covar_c;
         covarW2C(R, covar, covar_c);
@@ -619,8 +619,8 @@ _DEF_projection_3dgs_vjp(projection_3dgut_fisheye_vjp, _DiffProjection3DGS_3dgut
     const float2 h_mean2d, const float h_depth, const float3 h_conic, const float h_opacity, const float3 h_rgb, \
     out float3 v_mean, out float4 v_quat, out float3 v_scale, out float v_in_opacity, out float3 v_sh_coeffs[16], \
     out float3x3 v_R, out float3 v_t, \
-    out float3 vr_mean, out float4 vr_quat, out float3 vr_scale, out float vr_in_opacity, \
-    out float3 h_mean, out float4 h_quat, out float3 h_scale, out float h_in_opacity
+    out float3 vr_mean, out float4 vr_quat, out float3 vr_scale, out float vr_in_opacity, out float3 vr_features_dc, \
+    out float3 h_mean, out float4 h_quat, out float3 h_scale, out float h_in_opacity, out float3 h_features_dc
 
 [ForceInline]
 void _projection_3dgs_vjp(
@@ -672,6 +672,7 @@ void _projection_3dgs_vjp(
         vr_quat = dp_quat.d;
         vr_scale = dp_scale.d;
         vr_in_opacity = dp_in_opacity.d;
+        vr_features_dc = dp_sh_coeffs.d[0];
     }
 
     // TODO: some way to refactor this
@@ -801,6 +802,39 @@ void _projection_3dgs_vjp(
             h_opacity * dp_opacity.d * dp_opacity.d +
             dot(h_rgb, dp_rgb.d * dp_rgb.d);
     }
+
+    // hessian diagonal (features_dc)
+    [ForceUnroll]
+    for (int i = 0; i < 3; ++i) {
+        DifferentialPair<float3> dp_mean = diffPair(mean, float3(0));
+        DifferentialPair<float4> dp_quat = diffPair(quat, float4(0));
+        DifferentialPair<float3> dp_scale = diffPair(scale, float3(0));
+        DifferentialPair<float> dp_in_opacity = diffPair(in_opacity, 1.0f);
+        float3[16] d_sh_coeffs = float3[16]( { float3(0) });
+        d_sh_coeffs[0] = float3(float(i == 0), float(i == 1), float(i == 2));
+        DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs, d_sh_coeffs);
+        DifferentialPair<float3x3> dp_R = diffPair(R, float3x3(0));
+        DifferentialPair<float3> dp_t = diffPair(t, float3(0));
+        DifferentialPair<float2> dp_mean2d;
+        DifferentialPair<float> dp_depth;
+        DifferentialPair<float3> dp_conic;
+        DifferentialPair<float> dp_opacity;
+        DifferentialPair<float3> dp_rgb;
+        int4 aabb_xyxy;
+        fwd_diff(projectionInterface.projection)(
+            antialiased,
+            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
+            fx, fy, cx, cy, dist_coeffs,
+            image_width, image_height, 0.0f, 1e30f,
+            aabb_xyxy, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
+        );
+        h_features_dc[i] =
+            dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
+            h_depth * dp_depth.d * dp_depth.d +
+            dot(h_conic, dp_conic.d * dp_conic.d) +
+            h_opacity * dp_opacity.d * dp_opacity.d +
+            dot(h_rgb, dp_rgb.d * dp_rgb.d);
+    }
 }
 
 #undef _DEF_projection_3dgs_vjp
@@ -819,8 +853,8 @@ void _projection_3dgs_vjp(
             vr_mean2d, vr_depth, vr_conic, vr_opacity, vr_rgb, \
             h_mean2d, h_depth, h_conic, h_opacity, h_rgb, \
             v_mean, v_quat, v_scale, v_in_opacity, v_sh_coeffs, v_R, v_t, \
-            vr_mean, vr_quat, vr_scale, vr_in_opacity, \
-            h_mean, h_quat, h_scale, h_in_opacity, \
+            vr_mean, vr_quat, vr_scale, vr_in_opacity, vr_features_dc, \
+            h_mean, h_quat, h_scale, h_in_opacity, h_features_dc \
         ); \
     }
 

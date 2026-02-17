@@ -22,9 +22,11 @@ from spirulae_splat.splat.cuda._wrapper_per_pixel import (
     apply_ppisp
 )
 
+from spirulae_splat.splat.cuda._wrapper_projection import add_gradient_component
+
 from fused_bilagrid import BilateralGrid, slice, total_variation_loss
 
-from typing import List, Optional
+from typing import List, Optional, Literal
 
 import spirulae_splat.modules.enhancer
 
@@ -89,7 +91,8 @@ class _ComputePerSplatLosses(torch.autograd.Function):
         scale_regularization_weight: float,
         erank_reg: float,
         erank_reg_s3: float,
-        quat_norm_reg_weight: float
+        quat_norm_reg_weight: float,
+        compute_hessian_diagonal: Literal[None, "position", "all"] = None
     ):
 
         hyperparams = (
@@ -102,13 +105,14 @@ class _ComputePerSplatLosses(torch.autograd.Function):
             quat_norm_reg_weight
         )
 
-        losses = _C.compute_per_splat_losses_forward(
+        losses = _make_lazy_cuda_func("compute_per_splat_losses_forward")(
             scales, opacities, quats,
             *hyperparams
         )
 
         ctx.hyperparams = hyperparams
         ctx.save_for_backward(scales, opacities, quats)
+        ctx.compute_hessian_diagonal = (compute_hessian_diagonal == "all")
 
         return losses
 
@@ -118,12 +122,24 @@ class _ComputePerSplatLosses(torch.autograd.Function):
         hyperparams = ctx.hyperparams
         scales, opacities, quats = ctx.saved_tensors
 
-        v_inputs = _C.compute_per_splat_losses_backward(
-            scales, opacities, quats,
-            v_losses,
-            *hyperparams
-        )
-        return (*v_inputs, *([None]*len(hyperparams)))
+        if ctx.compute_hessian_diagonal:
+            v_inputs, vr_inputs, h_inputs = \
+            _make_lazy_cuda_func("compute_per_splat_losses_backward_with_hessian_diagonal")(
+                scales, opacities, quats,
+                v_losses,
+                *hyperparams
+            )
+            for v, vr, h in zip(v_inputs, vr_inputs, h_inputs):
+                add_gradient_component(v, 'gradr', vr)
+                add_gradient_component(v, 'hess', h)
+                # print(v.shape, torch.isfinite(h).float().mean().item(), torch.nan_to_num(v, 0, 0, 0).mean().item(), torch.nan_to_num(vr, 0, 0, 0).mean().item(), torch.nan_to_num(h, 0, 0, 0).mean().item())
+        else:
+            v_inputs = _make_lazy_cuda_func("compute_per_splat_losses_backward")(
+                scales, opacities, quats,
+                v_losses,
+                *hyperparams
+            )
+        return (*v_inputs, *([None]*len(hyperparams)), None)
 
 
 class _ComputePerPixelLosses(torch.autograd.Function):
@@ -565,7 +581,7 @@ class SplatTrainingLosses(torch.nn.Module):
             pred_rgb.contiguous(),
             gt_rgb.contiguous(),
             True,  # TODO: detect torch.no_grad()
-            self.config.compute_hessian_diagonal
+            self.config.compute_hessian_diagonal is not None
         )
 
         # call fused kernel to compute loss
@@ -622,7 +638,7 @@ class SplatTrainingLosses(torch.nn.Module):
             ],
             meta.get("num_train_data", -1),
             camera.metadata.get('cam_idx', None),
-            self.config.compute_hessian_diagonal
+            self.config.compute_hessian_diagonal is not None
         )
         (
             rgb_l1, rgb_psnr,
@@ -813,7 +829,8 @@ class SplatTrainingLosses(torch.nn.Module):
                 self.config.scale_regularization_weight,
                 self.config.erank_reg * float(self.step >= self.config.erank_reg_warmup),
                 self.config.erank_reg_s3 * float(self.step >= self.config.erank_reg_warmup),
-                0.01
+                0.01,
+                self.config.compute_hessian_diagonal
             )
             loss_dict['mcmc_opacity_reg'] = losses[0]
             loss_dict['mcmc_scale_reg'] = losses[1]

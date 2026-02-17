@@ -77,10 +77,10 @@ float quat_norm_reg(float4 quat, float quat_norm_reg_weight) {
 }
 
 
+[ForceInline]
 [Differentiable]
 [CudaDeviceExport]
 float[5] per_splat_losses(
-    bool is_3dgs,
     float3 scales, float opacity, float4 quat,
     no_diff float mcmc_opacity_reg_weight,
     no_diff float mcmc_scale_reg_weight,
@@ -90,6 +90,7 @@ float[5] per_splat_losses(
     no_diff float erank_reg_weight_s3,
     no_diff float quat_norm_reg_weight
 ) {
+    constexpr bool is_3dgs = true;
     float losses[5];
     losses[0] = mcmc_opacity_reg(opacity, mcmc_opacity_reg_weight);
     losses[4] = quat_norm_reg(quat, quat_norm_reg_weight);
@@ -107,24 +108,23 @@ float[5] per_splat_losses(
 
 
 [CudaDeviceExport]
+[Differentiable]
 void per_splat_losses_bwd(
-    bool is_3dgs,
     float3 scales, float opacity, float4 quat,
-    float[5] v_loss,
+    no_diff float[5] v_loss,
     out float3 v_scales, out float v_opacity, out float4 v_quat,
-    float mcmc_opacity_reg_weight,
-    float mcmc_scale_reg_weight,
-    float max_gauss_ratio,
-    float scale_regularization_weight,
-    float erank_reg_weight,
-    float erank_reg_weight_s3,
-    float quat_norm_reg_weight
+    no_diff float mcmc_opacity_reg_weight,
+    no_diff float mcmc_scale_reg_weight,
+    no_diff float max_gauss_ratio,
+    no_diff float scale_regularization_weight,
+    no_diff float erank_reg_weight,
+    no_diff float erank_reg_weight_s3,
+    no_diff float quat_norm_reg_weight
 ) {
     var p_scales = diffPair(scales);
     var p_opacity = diffPair(opacity);
     var p_quat = diffPair(quat);
     bwd_diff(per_splat_losses)(
-        is_3dgs,
         p_scales, p_opacity, p_quat,
         mcmc_opacity_reg_weight,
         mcmc_scale_reg_weight,
@@ -140,8 +140,151 @@ void per_splat_losses_bwd(
     v_quat = p_quat.d;
 }
 
+[CudaDeviceExport]
+void per_splat_losses_bwd(
+    float3 scales, float opacity, float4 quat,
+    float[5] v_loss,
+    out float3 v_scales, out float v_opacity, out float4 v_quat,
+    out float3 vr_scales, out float vr_opacity, out float4 vr_quat,
+    out float3 h_scales, out float h_opacity, out float4 h_quat,
+    float mcmc_opacity_reg_weight,
+    float mcmc_scale_reg_weight,
+    float max_gauss_ratio,
+    float scale_regularization_weight,
+    float erank_reg_weight,
+    float erank_reg_weight_s3,
+    float quat_norm_reg_weight
+) {
+    // gradient
+    {
+        var p_scales = diffPair(scales);
+        var p_opacity = diffPair(opacity);
+        var p_quat = diffPair(quat);
+        bwd_diff(per_splat_losses)(
+            p_scales, p_opacity, p_quat,
+            mcmc_opacity_reg_weight,
+            mcmc_scale_reg_weight,
+            max_gauss_ratio,
+            scale_regularization_weight,
+            erank_reg_weight,
+            erank_reg_weight_s3,
+            quat_norm_reg_weight,
+            v_loss
+        );
+        v_scales = p_scales.d;
+        v_opacity = p_opacity.d;
+        v_quat = p_quat.d;
+    }
 
-#include "projection_utils.slang"
+    // gradient residual product
+    {
+        float[5] losses = per_splat_losses(
+            scales, opacity, quat,
+            mcmc_opacity_reg_weight,
+            mcmc_scale_reg_weight,
+            max_gauss_ratio,
+            scale_regularization_weight,
+            erank_reg_weight,
+            erank_reg_weight_s3,
+            quat_norm_reg_weight
+        );
+        float[5] residuals;
+        [ForceUnroll]
+        for (int i = 0; i < 5; i++)
+            residuals[i] = sqrt(max(losses[i], 0.0));
+        var p_scales = diffPair(scales);
+        var p_opacity = diffPair(opacity);
+        var p_quat = diffPair(quat);
+        bwd_diff(per_splat_losses)(
+            p_scales, p_opacity, p_quat,
+            mcmc_opacity_reg_weight,
+            mcmc_scale_reg_weight,
+            max_gauss_ratio,
+            scale_regularization_weight,
+            erank_reg_weight,
+            erank_reg_weight_s3,
+            quat_norm_reg_weight,
+            residuals
+        );
+        vr_scales = p_scales.d;
+        vr_opacity = p_opacity.d;
+        vr_quat = p_quat.d;
+    }
+
+    // hessian diagonal
+    constexpr float[5] loss_weights = { 1, 1, 1, 1, 1 };
+    [ForceUnroll]
+    for (int i = 0; i < 3; ++i) {
+        var dp_scales = diffPair(scales, float3(float(i == 0), float(i == 1), float(i == 2)));
+        var dp_opacity = diffPair(opacity, 0.0);
+        var dp_quat = diffPair(quat, float4(0));
+        DifferentialPair<float3> dp_v_scales;
+        DifferentialPair<float> dp_v_opacity;
+        DifferentialPair<float4> dp_v_quat;
+        fwd_diff(per_splat_losses_bwd)(
+            dp_scales, dp_opacity, dp_quat,
+            loss_weights,
+            dp_v_scales, dp_v_opacity, dp_v_quat,
+            mcmc_opacity_reg_weight,
+            mcmc_scale_reg_weight,
+            max_gauss_ratio,
+            scale_regularization_weight,
+            erank_reg_weight,
+            erank_reg_weight_s3,
+            quat_norm_reg_weight
+        );
+        h_scales[i] = dp_v_scales.d[i];
+    }
+    {
+        var dp_scales = diffPair(scales, float3(0));
+        var dp_opacity = diffPair(opacity, 1.0);
+        var dp_quat = diffPair(quat, float4(0));
+        DifferentialPair<float3> dp_v_scales;
+        DifferentialPair<float> dp_v_opacity;
+        DifferentialPair<float4> dp_v_quat;
+        fwd_diff(per_splat_losses_bwd)(
+            dp_scales, dp_opacity, dp_quat,
+            loss_weights,
+            dp_v_scales, dp_v_opacity, dp_v_quat,
+            mcmc_opacity_reg_weight,
+            mcmc_scale_reg_weight,
+            max_gauss_ratio,
+            scale_regularization_weight,
+            erank_reg_weight,
+            erank_reg_weight_s3,
+            quat_norm_reg_weight
+        );
+        h_opacity = dp_v_opacity.d;
+    }
+    [ForceUnroll]
+    for (int i = 0; i < 4; ++i) {
+        var dp_scales = diffPair(scales, float3(0));
+        var dp_opacity = diffPair(opacity, 0.0);
+        var dp_quat = diffPair(quat, float4(float(i == 0), float(i == 1), float(i == 2), float(i == 3)));
+        DifferentialPair<float3> dp_v_scales;
+        DifferentialPair<float> dp_v_opacity;
+        DifferentialPair<float4> dp_v_quat;
+        fwd_diff(per_splat_losses_bwd)(
+            dp_scales, dp_opacity, dp_quat,
+            loss_weights,
+            dp_v_scales, dp_v_opacity, dp_v_quat,
+            mcmc_opacity_reg_weight,
+            mcmc_scale_reg_weight,
+            max_gauss_ratio,
+            scale_regularization_weight,
+            erank_reg_weight,
+            erank_reg_weight_s3,
+            quat_norm_reg_weight
+        );
+        h_quat[i] = dp_v_quat.d[i];
+    }
+}
+
+
+// suppress CudaDeviceExport to reduce code size
+#define CudaDeviceExport Differentiable
+#include "primitive_3dgs.slang"
+#undef CudaDeviceExport
 
 [CudaDeviceExport]
 void mcmc_add_noise_3dgs(
