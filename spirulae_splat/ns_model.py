@@ -97,7 +97,7 @@ class SpirulaeModelConfig(ModelConfig):
     """number of training iterations, should be consistent with --max_num_iterations"""
     warmup_length: int = 500
     """period of steps where refinement is turned off"""
-    stop_refine_at: int = 27000
+    stop_refine_at: int = 25000
     """period of steps where refinement is turned off"""
     refine_every: int = 100
     """period of steps where gaussians are culled and densified"""
@@ -228,6 +228,12 @@ class SpirulaeModelConfig(ModelConfig):
     """If True, use bilateral grid for depth and normal (e.g. AI generated biased ones)"""
     bilagrid_shape_geometry: Tuple[int, int, int] = (8, 8, 4)
     """Shape of the bilateral grid for depth and normal (X, Y, W)"""
+    bilagrid_tv_loss_weight: float = 10.0
+    """Total variation loss weight for bilateral grid used for radiance"""
+    bilagrid_mean_reg_weight: float = 10.0
+    """Regularization to discourage bilateral grid color shift"""
+    bilagrid_tv_loss_weight_geometry: float = 10.0
+    """Total variation loss weight for bilateral grid used for geometry"""
     use_ppisp: bool = False
     """If True, use the PPISP model (https://research.nvidia.com/labs/sil/projects/ppisp/) to handle per-pixel color distortions."""
     ppisp_param_type: Literal["original", "rqs"] = "rqs"
@@ -1368,9 +1374,12 @@ class SpirulaeModel(Model):
             if _storage[key] == 0.0:
                 return '~'
 
-            if decimals is None:  # 3 sig figs
-                decimals = int(max(-math.log10(0.001*abs(l)), 0)) if l != 0.0 else 0
-            s = f"{{:.{decimals}f}}".format(l)
+            if abs(l) < 1e-4 and decimals is None:
+                s = f"{l:.3g}"
+            else:
+                if decimals is None:  # 3 sig figs
+                    decimals = int(max(-math.log10(0.001*abs(l)), 0)) if l != 0.0 else 0
+                s = f"{{:.{decimals}f}}".format(l)
             if s.startswith('0.'):
                 s = s[1:]
             return boldcyan(s)
@@ -1401,14 +1410,15 @@ class SpirulaeModel(Model):
             f"{orange('alpha')}={fmt('alpha_reg', self.training_losses.get_alpha_reg_weight(), 3)}",
             f"{bracket('SplatReg')} {orange('opac')}={fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg * reg_mcmc, 3)} "
             f"{orange('scale')}={fmt('mcmc_scale_reg', self.config.mcmc_scale_reg * reg_mcmc, 4)} "
-            f"{orange('erank')}={fmt('erank_reg', max(self.config.erank_reg_s3, self.config.erank_reg, 3))} "
-            f"{orange('aniso')}={fmt('scale_reg', self.config.scale_regularization_weight, 3)}",
+            f"{orange('erank')}={fmt('erank_reg', max(self.config.erank_reg_s3, self.config.erank_reg))} "
+            f"{orange('aniso')}={fmt('scale_reg', self.config.scale_regularization_weight)}",
             "                \n",
-            f"{bracket('BilagridTVLoss')} {orange('rgb')}={fmt('tv_loss', 10.0)} "
-            f"{orange('depth')}={fmt('tv_loss_depth', 10.0)} "
-            f"{orange('normal')}={fmt('tv_loss_normal', 10.0)}",
-            f"{bracket('PPISPReg')} {orange('eμ')}={fmt('ppisp_reg_exposure_mean', self.config.ppisp_reg_exposure_mean)}"
-            "                \n"
+            f"{bracket('Bilagrid')} {orange('reg')}={fmt('bilagrid_mean_reg', self.config.bilagrid_mean_reg_weight)} "
+            f"{orange('tv.rgb')}={fmt('tv_loss', self.config.bilagrid_tv_loss_weight)} "
+            f"{orange('depth')}={fmt('tv_loss_depth', self.config.bilagrid_tv_loss_weight_geometry)} "
+            f"{orange('normal')}={fmt('tv_loss_normal', self.config.bilagrid_tv_loss_weight_geometry)}"
+            "                \n",
+            f"{bracket('PPISP')} {orange('eμ')}={fmt('ppisp_reg_exposure_mean', self.config.ppisp_reg_exposure_mean)} "
             f"{orange('vc')}={fmt('ppisp_reg_vig_center', self.config.ppisp_reg_vig_center)} "
             f"{orange('v+')}={fmt('ppisp_reg_vig_non_pos', self.config.ppisp_reg_vig_non_pos)} "
             f"{orange('vσ')}={fmt('ppisp_reg_vig_channel_var', self.config.ppisp_reg_vig_channel_var)} "

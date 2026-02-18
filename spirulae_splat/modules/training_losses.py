@@ -256,6 +256,12 @@ class _ComputePPISPRegularization(torch.autograd.Function):
         return None, v_ppisp_params, None
 
 
+DEFAULT_BILAGRID_PARAMS = torch.Tensor([
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0
+]).float().cuda()
+
 DEFAULT_PPISP_PARAMS = [
     [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.013658988289535046, 0.013658988289535046, 0.37816452980041504, 0.0, 0.013658988289535046, 0.013658988289535046, 0.37816452980041504, 0.0, 0.013658988289535046, 0.013658988289535046, 0.37816452980041504, 0.0]
 ]
@@ -789,13 +795,18 @@ class SplatTrainingLosses(torch.nn.Module):
         self.step = step
 
         # bilagrid total variation loss
-        bilagrid_tv_loss_weight = 10.0
         if self.config.use_bilateral_grid:
-            loss_dict["tv_loss"] = bilagrid_tv_loss_weight * total_variation_loss(self.bil_grids.grids)
+            loss_dict["tv_loss"] = self.config.bilagrid_tv_loss_weight * total_variation_loss(self.bil_grids.grids)
         if self.config.use_bilateral_grid_for_geometry:
             if self.config.depth_supervision_weight > 0.0:  # do this because bilagrid backward is expensive, especially in patched mode
-                loss_dict["tv_loss_depth"] = bilagrid_tv_loss_weight * total_variation_loss(self.bil_grids_depth.grids)
-            loss_dict["tv_loss_normal"] = bilagrid_tv_loss_weight * total_variation_loss(self.bil_grids_normal.grids)
+                loss_dict["tv_loss_depth"] = self.config.bilagrid_tv_loss_weight_geometry * total_variation_loss(self.bil_grids_depth.grids)
+            loss_dict["tv_loss_normal"] = self.config.bilagrid_tv_loss_weight_geometry * total_variation_loss(self.bil_grids_normal.grids)
+
+        # bilagrid regularization loss
+        if self.config.use_bilateral_grid:
+            bilagrid_mean = torch.mean(self.bil_grids.grids, dim=(0, 2, 3, 4))
+            bilagrid_mean_reg = F.mse_loss(bilagrid_mean, DEFAULT_BILAGRID_PARAMS)
+            loss_dict['bilagrid_mean_reg'] = self.config.bilagrid_mean_reg_weight * bilagrid_mean_reg
 
         # PPISP regularization loss
         if self.config.use_ppisp:
