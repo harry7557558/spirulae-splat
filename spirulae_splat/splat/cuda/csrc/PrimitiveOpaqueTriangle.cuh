@@ -577,15 +577,15 @@ struct OpaqueTriangle::Screen {
         normal += grad.normal * weight;
     }
 
-    __device__ __forceinline__ void addGaussNewtonHessianDiagonal(const Screen &grad, float weight=1.0f) {
-        hardness += grad.hardness * grad.hardness * weight;
-        depth += grad.depth * grad.depth * weight;
+    __device__ __forceinline__ void addGaussNewtonHessianDiagonal(Screen &result, const Screen &grad, float weight=1.0f) const {
+        result.hardness += grad.hardness * grad.hardness * weight;
+        result.depth += grad.depth * grad.depth * weight;
         #pragma unroll
         for (int i = 0; i < 3; i++) {
-            verts[i] += grad.verts[i] * grad.verts[i] * weight;
-            rgbs[i] += grad.rgbs[i] * grad.rgbs[i] * weight;
+            result.verts[i] += grad.verts[i] * grad.verts[i] * weight;
+            result.rgbs[i] += grad.rgbs[i] * grad.rgbs[i] * weight;
         }
-        normal += grad.normal * grad.normal * weight;
+        result.normal += grad.normal * grad.normal * weight;
     }
 
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
@@ -610,6 +610,10 @@ struct OpaqueTriangle::Screen {
             atomicAddFVec(buffer.rgbs + 3*idx+i, grad.rgbs[i]);
         }
         atomicAddFVec(buffer.normals + idx, grad.normal);
+    }
+
+    static __device__ void atomicAddAccumulatedGradientToBuffer(const Screen &grad, Buffer &buffer, long idx) {
+        atomicAddGradientToBuffer(grad, buffer, idx);
     }
 
     static __device__ __forceinline__ void atomicAddGaussNewtonHessianDiagonalToBuffer(const Screen &grad, Buffer &buffer, long idx, float weight=1.0f) {

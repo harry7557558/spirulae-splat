@@ -335,6 +335,10 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         if ctx.compute_hessian_diagonal:
             assert hasattr(v_render_rgbs, 'loss_map')
 
+        # print(v_render_rgbs.mean() * v_render_rgbs.numel(),
+        #       v_render_rgbs.loss_map.mean(),
+        #       torch.sqrt(torch.relu(v_render_rgbs.loss_map)).mean()
+        #     )
         cuda_return = _make_lazy_cuda_func("rasterization_3dgut_backward" + "_with_hessian_diagonal"*ctx.compute_hessian_diagonal)(
             (means, quats, depths, proj_scales, proj_opacities, colors),
             viewmats, intrins, ctx.camera_model, dist_coeffs,

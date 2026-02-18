@@ -115,7 +115,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     __shared__ typename SplatPrimitive::RenderOutput pix2_colors[output_distortion ? BLOCK_SIZE : 1];
     __shared__ typename SplatPrimitive::RenderOutput v_distortion_out[output_distortion ? BLOCK_SIZE : 1];
 
-    __shared__ float residual_map[output_hessian_diagonal ? BLOCK_SIZE : 1];
+    __shared__ float hess_weight_map[output_hessian_diagonal ? BLOCK_SIZE : 1];
 
     float3 ray_o = SlangProjectionUtils::transform_ray_o(R, t);
     float3 total_v_ray_o = make_float3(0.0f, 0.0f, 0.0f);
@@ -173,8 +173,9 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         }
 
         if (output_hessian_diagonal) {
-            residual_map[pix_id_local] = (loss_map_buffer != nullptr && inside) ?
-                sqrtf(fmaxf(loss_map_buffer[pix_id_image_global], 0.0f)) : 1.0f;
+            // https://www.desmos.com/calculator/ld9wg7cuxz
+            hess_weight_map[pix_id_local] = (loss_map_buffer != nullptr && inside) ?
+                0.5f / fmaxf(loss_map_buffer[pix_id_image_global], 1e-6f) : 0.0f;
         }
     }
     block.sync();
@@ -189,8 +190,6 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
             : tile_offsets[tile_id + 1];
     const uint32_t num_splat_batches =
         _CEIL_DIV(range_end - range_start, SPLAT_BATCH_SIZE);
-
-    const float total_num_pixels = (float)(I * image_width * image_height);
 
     // if (warp.thread_rank() == 0)
     //     printf("range_start=%d range_end=%d num_splat_batches=%u\n", range_start, range_end, num_splat_batches);
@@ -210,6 +209,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         // accumulate gradient
         typename SplatPrimitive::Screen v_splat = SplatPrimitive::Screen::zero();
         typename SplatPrimitive::Screen vr_splat = SplatPrimitive::Screen::zero();
+        typename SplatPrimitive::Screen h_splat = SplatPrimitive::Screen::zero();
 
         // thread 0 takes last splat, 1 takes second last, etc.
         // at t=0, thread 0 (splat -1) undo pixel 0
@@ -298,13 +298,15 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
             float3 v_ray_o_alpha, v_ray_d_alpha;
             float3 v_ray_o_color, v_ray_d_color;
             if (output_hessian_diagonal) {
-                float weight = residual_map[pix_id] / sqrtf(fmaxf(v_c.dot(v_c) / 3.0f, 1e-30f));
-                auto v_splat_i = splat.evaluate_alpha_vjp(ray_o, ray_d, v_alpha, v_ray_o_alpha, v_ray_d_alpha);
-                v_splat.addGradient(v_splat_i);
-                vr_splat.addGradient(v_splat_i, weight);
-                v_splat_i = splat.evaluate_color_vjp(ray_o, ray_d, v_color, v_ray_o_color, v_ray_d_color);
-                v_splat.addGradient(v_splat_i);
-                vr_splat.addGradient(v_splat_i, weight);
+                typename SplatPrimitive::Screen v_splat_temp = SplatPrimitive::Screen::zero();
+                v_splat_temp.addGradient(splat.evaluate_alpha_vjp(ray_o, ray_d, v_alpha, v_ray_o_alpha, v_ray_d_alpha));
+                v_splat_temp.addGradient(splat.evaluate_color_vjp(ray_o, ray_d, v_color, v_ray_o_color, v_ray_d_color));
+                v_splat.addGradient(v_splat_temp);
+                // https://www.desmos.com/calculator/ld9wg7cuxz
+                float weight = 1.0f / sqrtf(fmaxf(v_c.dot(v_c) / 3.0f, 1e-30f));
+                vr_splat.addGradient(v_splat_temp, weight);
+                weight = hess_weight_map[pix_id] * weight * weight;
+                splat.addGaussNewtonHessianDiagonal(h_splat, v_splat_temp, weight);
             } else {
                 v_splat.addGradient(splat.evaluate_alpha_vjp(ray_o, ray_d, v_alpha, v_ray_o_alpha, v_ray_d_alpha));
                 v_splat.addGradient(splat.evaluate_color_vjp(ray_o, ray_d, v_color, v_ray_o_color, v_ray_d_color));
@@ -326,8 +328,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
             splat.atomicAddGradientToBuffer(v_splat, v_splat_buffer, splat_gid);
             if (output_hessian_diagonal) {
                 splat.atomicAddGradientToBuffer(vr_splat, vr_splat_buffer, splat_gid);
-                // TODO: scale and opacity ideally should be done in log and logit spaces for better gradient
-                splat.atomicAddGaussNewtonHessianDiagonalToBuffer(v_splat, h_splat_buffer, splat_gid, total_num_pixels*total_num_pixels);
+                splat.atomicAddAccumulatedGradientToBuffer(h_splat, h_splat_buffer, splat_gid);
             }
         }
     }

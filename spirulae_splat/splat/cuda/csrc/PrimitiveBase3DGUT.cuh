@@ -342,15 +342,15 @@ struct Base3DGUT::Screen {
             iscl_rot[i] = iscl_rot[i] + grad.iscl_rot[i] * weight;
     }
 
-    __device__ __forceinline__ void addGaussNewtonHessianDiagonal(const Screen &grad, float weight=1.0f) {
+    __device__ __forceinline__ void addGaussNewtonHessianDiagonal(Screen &result, const Screen &grad, float weight=1.0f) const {
         float4 v_quat; float3 v_scale;
-        SlangProjectionUtils::compute_3dgut_iscl_rot_vjp(quat, scale, grad.iscl_rot, &v_quat, &v_scale);
-        mean += grad.mean * grad.mean * weight;
-        quat += (grad.quat + v_quat) * (grad.quat + v_quat) * weight;
-        depth += grad.depth * grad.depth * weight;
-        scale += (grad.scale + v_scale) * (grad.scale + v_scale) * weight;
-        opacity += grad.opacity * grad.opacity * weight;
-        rgb += grad.rgb * grad.rgb * weight;
+        SlangProjectionUtils::compute_3dgut_iscl_rot_vjp(this->quat, this->scale, grad.iscl_rot, &v_quat, &v_scale);
+        result.mean += fmul_axa(grad.mean, weight);
+        result.quat += fmul_axa(grad.quat + v_quat, weight);
+        result.depth += fmul_axa(grad.depth, weight);
+        result.scale += fmul_axa(grad.scale + v_scale, weight);
+        result.opacity += fmul_axa(grad.opacity, weight);
+        result.rgb += fmul_axa(grad.rgb, weight);
     }
 
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
@@ -370,6 +370,15 @@ struct Base3DGUT::Screen {
         atomicAddFVec(buffer.quats + idx % buffer.size, grad.quat + v_quat);
         atomicAddFVec(buffer.depths + idx, grad.depth);
         atomicAddFVec(buffer.scales + idx, grad.scale + v_scale);
+        atomicAddFVec(buffer.opacities + idx, grad.opacity);
+        atomicAddFVec(buffer.rgbs + idx, grad.rgb);
+    }
+
+    __device__ void atomicAddAccumulatedGradientToBuffer(const Screen &grad, Buffer &buffer, long idx) const {
+        atomicAddFVec(buffer.means + idx % buffer.size, grad.mean);
+        atomicAddFVec(buffer.quats + idx % buffer.size, grad.quat);
+        atomicAddFVec(buffer.depths + idx, grad.depth);
+        atomicAddFVec(buffer.scales + idx, grad.scale);
         atomicAddFVec(buffer.opacities + idx, grad.opacity);
         atomicAddFVec(buffer.rgbs + idx, grad.rgb);
     }

@@ -507,14 +507,14 @@ struct VoxelPrimitive::Screen {
         rgb += grad.rgb * weight;
     }
 
-    __device__ __forceinline__ void addGaussNewtonHessianDiagonal(const Screen &grad, float weight=1.0f) {
-        pos += grad.pos * grad.pos * weight;
-        size += grad.size * grad.size * weight;
-        depth += grad.depth * grad.depth * weight;
+    __device__ __forceinline__ void addGaussNewtonHessianDiagonal(Screen &result, const Screen &grad, float weight=1.0f) const {
+        result.pos += grad.pos * grad.pos * weight;
+        result.size += grad.size * grad.size * weight;
+        result.depth += grad.depth * grad.depth * weight;
         #pragma unroll
         for (int i = 0; i < 8; i++)
-            densities[i] += grad.densities[i] * grad.densities[i] * weight;
-        rgb += grad.rgb * grad.rgb * weight;
+            result.densities[i] += grad.densities[i] * grad.densities[i] * weight;
+        result.rgb += grad.rgb * grad.rgb * weight;
     }
 
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
@@ -541,6 +541,10 @@ struct VoxelPrimitive::Screen {
             atomicAddFVec(buffer.densities + 2*idx0+1, {grad.densities[4], grad.densities[5], grad.densities[6], grad.densities[7]});
         }
         atomicAddFVec(buffer.rgbs + idx, grad.rgb);
+    }
+
+    static __device__ void atomicAddAccumulatedGradientToBuffer(const Screen &grad, Buffer &buffer, long idx) {
+        atomicAddGradientToBuffer(grad, buffer, idx);
     }
 
     static __device__ __forceinline__ void atomicAddGaussNewtonHessianDiagonalToBuffer(const Screen &grad, Buffer &buffer, long idx, float weight=1.0f) {

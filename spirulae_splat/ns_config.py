@@ -162,6 +162,7 @@ _SECOND_ORDER_OPTIMIZERS["scales"] = {
         lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000, lr_pre_warmup=0
     ),
 }
+# TODO: investigate whether this messes up MCMC densification
 _SECOND_ORDER_OPTIMIZERS["opacities"] = {
     "optimizer": FusedNewtonOptimizerConfig(mode="opacity", lr=1.0e-6, eps=1e-15),
     "scheduler": ExponentialDecaySchedulerConfig(

@@ -360,6 +360,38 @@ template <typename WarpT> inline __device__ void warpSum(int &val, WarpT &warp) 
 
 
 
+#ifdef __CUDACC__
+
+// compute a*x*a where a is tiny number and x is large number, without underflowing floating points
+__forceinline__ __device__ float fmul_axa(float a, float x) {
+    return __fmul_rn(__fmul_rn(a, x), a);
+}
+__forceinline__ __device__ float2 fmul_axa(float2 a, float x) {
+    return {
+        fmul_axa(a.x, x),
+        fmul_axa(a.y, x)
+    };
+}
+__forceinline__ __device__ float3 fmul_axa(float3 a, float x) {
+    return {
+        fmul_axa(a.x, x),
+        fmul_axa(a.y, x),
+        fmul_axa(a.z, x)
+    };
+}
+__forceinline__ __device__ float4 fmul_axa(float4 a, float x) {
+    return {
+        fmul_axa(a.x, x),
+        fmul_axa(a.y, x),
+        fmul_axa(a.z, x),
+        fmul_axa(a.w, x)
+    };
+}
+
+#endif
+
+
+
 ///////////////////////////////
 // Non-Contiguous Tensor
 ///////////////////////////////

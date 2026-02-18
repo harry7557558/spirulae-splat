@@ -252,12 +252,19 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
             if ctx.compute_hessian_diagonal == "all":  # all Gaussian parameters except SH
                 # print("\n"*10)
                 # print('v_proj_returns')
-                # for (x, y) in zip(v_proj_returns[0].gradr_all, v_proj_returns[0].hess_all):
-                #     print(x.mean().item(), y.mean().item())
+                # for (v, vr, h) in zip([None, None, *v_proj_returns], v_proj_returns[0].gradr_all, v_proj_returns[0].hess_all):
+                #     # print(x.mean().item(), y.mean().item())
+                #     if (h != 0).any():
+                #         print(h.shape, (vr / h)[h != 0].median())
+                #     else:
+                #         print(h.shape, vr.mean(), h.mean())
                 # print('vr_proj and h_proj')
-                # for (x, y) in zip(vr_proj[:-1], h_proj[:-1]):
-                #     print(x.mean().item(), y.mean().item())
-                # print("\n"*10)
+                # for (v, vr, h) in zip(vr_proj, vr_proj[:-1], h_proj[:-1]):
+                #     # print(x.mean().item(), y.mean().item())
+                #     if (h != 0).any():
+                #         print(h.shape, (vr / h)[h != 0].median())
+                #     else:
+                #         print(h.shape, vr.mean(), h.mean())
                 vr_means, vr_quats, vr_scales, vr_opacities, vr_features_dc, vr_features_sh = vr_proj
                 h_means, h_quats, h_scales, h_opacities, h_features_dc, h_features_sh = h_proj
                 # means
@@ -291,6 +298,13 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
                 # features_sh
                 assert vr_features_sh is None
                 assert h_features_sh is None
+                # print('total')
+                # for x in (means, quats, scales, opacities, features_dc):
+                #     if (x.hess != 0).any():
+                #         print(x.shape, (x.gradr / x.hess)[x.hess != 0].median().item())
+                #     else:
+                #         print(x.shape)
+                # print("\n"*10)
             else:  # means only
                 # print(h_means_from_proj.view(v_means.shape).mean(), h_means.mean())
                 # print(v_proj_returns[0].gradr_all[0].mean().item())

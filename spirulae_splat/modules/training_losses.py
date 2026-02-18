@@ -204,6 +204,8 @@ class _ComputePerPixelLosses(torch.autograd.Function):
         ctx.num_train_images = num_train_images
         ctx.save_for_backward(*tensors, raw_losses, camera_indices)
 
+        # print('loss_map:', loss_map.mean().item(), loss_map.median().item())
+
         return losses, loss_map
 
     @staticmethod
