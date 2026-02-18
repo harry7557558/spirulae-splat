@@ -409,11 +409,15 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         self.train_index_group_loader = IndexGroupsWithDataLoader(
             self.train_indices, [get_key(idx) for idx in self.train_indices],
-            self.get_train_image, self.train_batch_size(False), self.config.cache_images != "gpu"
+            self.get_train_image, self.train_batch_size(False),
+            #self.config.cache_images != "gpu"
+            self.config.cache_images == "disk"
         )
         self.val_index_group_loader = IndexGroupsWithDataLoader(
             self.val_indices, [get_key(idx) for idx in self.val_indices],
-            self.get_train_image, self.val_batch_size(False), self.config.cache_images != "gpu"
+            self.get_train_image, self.val_batch_size(False),
+            #self.config.cache_images != "gpu"
+            self.config.cache_images == "disk"
         )
 
     def random_cameras(self, batch_size: int):
@@ -518,3 +522,8 @@ class SpirulaeDataManager(FullImageDatamanager):
         """Returns the dataset type passed as the generic argument"""
         return SpirulaeDataset
 
+    @property
+    def fixed_indices_eval_dataloader(self):
+        if self.config.cache_images == "disk":
+            return []  # TODO
+        return super().fixed_indices_eval_dataloader
