@@ -179,7 +179,7 @@ float3 apply_color_correction_ppisp(float3 rgb_in, ColorPPISPParams color_params
     float3 rgi_out = mul(H, rgi_in);
 
     // Normalize and convert back to RGB
-    float norm_factor = intensity / (rgi_out.z + 1.0e-5f);
+    float norm_factor = intensity / (max(rgi_out.z, 0.0f) + 1.0e-5f);
     rgi_out = rgi_out * norm_factor;
 
     return float3(rgi_out.x, rgi_out.y, rgi_out.z - rgi_out.x - rgi_out.y);

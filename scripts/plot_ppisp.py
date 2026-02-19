@@ -136,7 +136,7 @@ def plot_ppisp_params(ppisp_params: PPISPParams):
     axs[0, 2].set_ylim(-0.5, 0.5)
     axs[0, 2].grid(True, linestyle='--', alpha=0.5)
     axs[0, 2].set_title("Vignetting Centers")
-    axs[0, 2].legend()
+    # axs[0, 2].legend()
 
     # Color correction parameters
     cos_60 = 0.5
@@ -148,7 +148,7 @@ def plot_ppisp_params(ppisp_params: PPISPParams):
     axs[1, 0].scatter(ppisp_params.color.n[:, 0], ppisp_params.color.n[:, 1], color='k', marker='.', label='Neutral')
     axs[1, 0].set_aspect('equal')
     axs[1, 0].set_title("Color Correction Parameters")
-    axs[1, 0].legend()
+    # axs[1, 0].legend()
 
     # CRF curves
     def bounded_positive_forward(raw, min_value):
