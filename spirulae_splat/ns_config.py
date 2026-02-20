@@ -105,7 +105,9 @@ _DEFAULT_OPTIMIZERS = {
     },
     "ppisp": {
         "optimizer": FusedAdamOptimizerConfig(lr=2e-3, eps=1e-15),
-        "scheduler": None
+        "scheduler": ExponentialDecaySchedulerConfig(
+            lr_final=2e-5, max_steps=30000, warmup_steps=500, lr_pre_warmup=2e-5
+        ),
     },
     "camera_opt": {
         "optimizer": FusedAdamOptimizerConfig(lr=1e-4, eps=1e-15),  # 1e-4
@@ -163,18 +165,18 @@ _SECOND_ORDER_OPTIMIZERS["scales"] = {
     ),
 }
 # TODO: investigate whether this messes up MCMC densification
-_SECOND_ORDER_OPTIMIZERS["opacities"] = {
-    "optimizer": FusedNewtonOptimizerConfig(mode="opacity", lr=1.0e-6, eps=1e-15),
-    "scheduler": ExponentialDecaySchedulerConfig(
-        lr_final=1.0e-8, max_steps=30000, #warmup_steps=3000, lr_pre_warmup=0
-    ),
-}
-_SECOND_ORDER_OPTIMIZERS["features_dc"] = {
-    "optimizer": FusedNewtonOptimizerConfig(mode="scale", lr=0.282e-6, eps=1e-15),
-    "scheduler": ExponentialDecaySchedulerConfig(
-        lr_final=0.282e-8, max_steps=30000, #warmup_steps=1000, lr_pre_warmup=0
-    ),
-}
+# _SECOND_ORDER_OPTIMIZERS["opacities"] = {
+#     "optimizer": FusedNewtonOptimizerConfig(mode="opacity", lr=1.0e-6, eps=1e-15),
+#     "scheduler": ExponentialDecaySchedulerConfig(
+#         lr_final=1.0e-8, max_steps=30000, #warmup_steps=3000, lr_pre_warmup=0
+#     ),
+# }
+# _SECOND_ORDER_OPTIMIZERS["features_dc"] = {
+#     "optimizer": FusedNewtonOptimizerConfig(mode="scale", lr=0.282e-6, eps=1e-15),
+#     "scheduler": ExponentialDecaySchedulerConfig(
+#         lr_final=0.282e-8, max_steps=30000, #warmup_steps=1000, lr_pre_warmup=0
+#     ),
+# }
 
 
 spirulae = MethodSpecification(
@@ -215,6 +217,8 @@ spirulae_squared = MethodSpecification(
             model=SpirulaeModelConfig(
                 compute_hessian_diagonal="all",
                 mcmc_noise_lr=5e5 * (1.6e-4 / 1.0e-6),
+                # erank_reg=0.0,
+                # erank_reg_s3=0.0,
             ),
         ),
         optimizers={
