@@ -16,6 +16,7 @@
 #include "RasterizationSortedEval3DFwd.cuh"
 #include "RasterizationSortedEval3DBwd.cuh"
 #include "Optimizer.cuh"
+#include "BilagridUtils.cuh"
 
 #define TORCH_INDUCTOR_CPP_WRAPPER
 #include <torch/extension.h>
@@ -151,4 +152,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fused_3dgs2tr_scale_optim", &fused_3dgs2tr_scale_optim);
     m.def("fused_3dgs2tr_opacity_optim", &fused_3dgs2tr_opacity_optim);
     m.def("fused_3dgs2tr_quat_optim", &fused_3dgs2tr_quat_optim);
+
+    // BilagridUtils.cuh
+    m.def("dct3d_type1_ortho", &dct3d_type1_ortho_tensor);
 }

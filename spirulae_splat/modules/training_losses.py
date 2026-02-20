@@ -24,7 +24,7 @@ from spirulae_splat.splat.cuda._wrapper_per_pixel import (
 
 from spirulae_splat.splat.cuda._wrapper_projection import add_gradient_component
 
-from fused_bilagrid import BilateralGrid, slice, total_variation_loss
+from fused_bilagrid import BilateralGrid, fused_bilagrid_sample, total_variation_loss
 
 from typing import List, Optional, Literal
 
@@ -77,6 +77,18 @@ class FusedSSIM(torch.autograd.Function):
         img1, img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = ctx.saved_tensors
         grad = _make_lazy_cuda_func("fused_ssim_backward")(img1, img2, dL_dssim, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
         return grad, None, None, None
+
+
+class Dct3D(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, data: torch.Tensor, norm: Literal[None, "ortho"]="ortho", type: int=1):
+        if norm != "ortho" or type != 1:
+            raise NotImplementedError()
+        return _make_lazy_cuda_func("dct3d_type1_ortho")(data)
+
+    @staticmethod
+    def backward(ctx, v_data: torch.Tensor):
+        return _make_lazy_cuda_func("dct3d_type1_ortho")(v_data)
 
 
 class _ComputePerSplatLosses(torch.autograd.Function):
@@ -289,6 +301,9 @@ class SplatTrainingLosses(torch.nn.Module):
                 grid_Y=self.config.bilagrid_shape[1],
                 grid_W=self.config.bilagrid_shape[2],
             )
+            if self.config.optimize_bilagrid_frequencies:
+                self.bil_grids.grids.data = \
+                    Dct3D.apply(self.bil_grids.grids.data.cuda()).to(self.bil_grids.grids.data.device)
         if self.config.use_bilateral_grid_for_geometry:
             self.bil_grids_depth = BilateralGrid(
                 num=self.num_train_data,
@@ -347,13 +362,16 @@ class SplatTrainingLosses(torch.nn.Module):
     def apply_bilateral_grid(self, bilagrid, rgb: torch.Tensor, cam_idx: int, **kwargs) -> torch.Tensor:
         """rgb must be clamped to 0-1"""
         try:
-            out = slice(
-                bil_grids=bilagrid, rgb=rgb, xy=None,
-                grid_idx=torch.tensor(cam_idx, device=rgb.device, dtype=torch.long)[:,None],
+            grid_idx = torch.tensor(cam_idx, device=rgb.device, dtype=torch.long).flatten()
+            grids = bilagrid.grids[grid_idx]
+            if self.config.optimize_bilagrid_frequencies:
+                grids = Dct3D.apply(grids)
+            out = fused_bilagrid_sample(
+                grids, coords=None, rgb=rgb.unsqueeze(1),
                 actual_width=kwargs.get('actual_width', None),
                 actual_height=kwargs.get('actual_height', None),
                 patch_offsets=kwargs.get('patch_offsets', None),
-            )
+            ).squeeze(1)
         except TypeError:
             raise RuntimeError(
                 "\033[93m"
@@ -361,7 +379,7 @@ class SplatTrainingLosses(torch.nn.Module):
                 "Please update to latest fused_bilagrid from https://github.com/harry7557558/fused-bilagrid"
                 "\033[0m"
             )
-        return out["rgb"]
+        return out
 
     @staticmethod
     def get_visibility_masks(batch, device=torch.device("cuda")):
@@ -796,7 +814,11 @@ class SplatTrainingLosses(torch.nn.Module):
 
         # bilagrid total variation loss
         if self.config.use_bilateral_grid:
-            loss_dict["tv_loss"] = self.config.bilagrid_tv_loss_weight * total_variation_loss(self.bil_grids.grids)
+            bilagrid = self.bil_grids.grids
+            if self.config.optimize_bilagrid_frequencies:
+                bilagrid = Dct3D.apply(bilagrid)
+        if self.config.use_bilateral_grid:
+            loss_dict["tv_loss"] = self.config.bilagrid_tv_loss_weight * total_variation_loss(bilagrid)
         if self.config.use_bilateral_grid_for_geometry:
             if self.config.depth_supervision_weight > 0.0:  # do this because bilagrid backward is expensive, especially in patched mode
                 loss_dict["tv_loss_depth"] = self.config.bilagrid_tv_loss_weight_geometry * total_variation_loss(self.bil_grids_depth.grids)
@@ -804,7 +826,7 @@ class SplatTrainingLosses(torch.nn.Module):
 
         # bilagrid regularization loss
         if self.config.use_bilateral_grid:
-            bilagrid_mean = torch.mean(self.bil_grids.grids, dim=(0, 2, 3, 4))
+            bilagrid_mean = torch.mean(bilagrid, dim=(0, 2, 3, 4))
             bilagrid_mean_reg = F.mse_loss(bilagrid_mean, DEFAULT_BILAGRID_PARAMS)
             loss_dict['bilagrid_mean_reg'] = self.config.bilagrid_mean_reg_weight * bilagrid_mean_reg
 

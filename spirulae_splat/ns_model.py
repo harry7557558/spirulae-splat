@@ -232,6 +232,8 @@ class SpirulaeModelConfig(ModelConfig):
     """Total variation loss weight for bilateral grid used for radiance"""
     bilagrid_mean_reg_weight: float = 10.0
     """Regularization to discourage bilateral grid color shift"""
+    optimize_bilagrid_frequencies: bool = False
+    """Whether to optimize bilagrid parameters in frequency domain instead of time domain"""
     bilagrid_tv_loss_weight_geometry: float = 10.0
     """Total variation loss weight for bilateral grid used for geometry"""
     use_ppisp: bool = False
