@@ -191,7 +191,7 @@ setup(
         "rich>=12",
         "typing_extensions",
     ] + [
-        "fused_bilagrid @ git+https://github.com/harry7557558/fused-bilagrid.git",
+        "fused_bilagrid @ git+https://github.com/harry7557558/fused-bilagrid.git@dev",
     ] * no_fused_bilagrid,
     extras_require={
         # dev dependencies. Install them by `pip install gsplat[dev]`

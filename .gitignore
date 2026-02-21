@@ -1,4 +1,5 @@
 .vscode/
+.fuse_hidden*
 
 outputs/
 

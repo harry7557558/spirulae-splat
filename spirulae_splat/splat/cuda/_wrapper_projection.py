@@ -468,7 +468,7 @@ class _FullyFusedProjectionVoxel(torch.autograd.Function):
 
 def fully_fused_projection_hetero(
     primitive: Literal["3dgs", "mip", "3dgut", "opaque_triangle"],
-    splats: tuple[Tensor],  # means, quats, scales, opacities
+    in_splats: tuple[Tensor],  # means, quats, scales, opacities
     viewmats: Tensor,  # [..., C, 4, 4]
     intrins: Tensor,  # [..., C, 4]
     image_width: int,
@@ -483,7 +483,7 @@ def fully_fused_projection_hetero(
     camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
     dist_coeffs: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-    batch_dims = splats[0].shape[:-2]
+    batch_dims = in_splats[0].shape[:-2]
     C = viewmats.shape[-3]
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert intrins.shape == batch_dims + (C, 4), intrins.shape

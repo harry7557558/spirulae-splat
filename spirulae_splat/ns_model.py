@@ -224,6 +224,8 @@ class SpirulaeModelConfig(ModelConfig):
         This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/)."""
     bilagrid_shape: Tuple[int, int, int] = (16, 16, 8)
     """Shape of the bilateral grid (X, Y, W)"""
+    bilagrid_type: Literal["affine", "ppisp"] = "affine"
+    """What the bilateral grid predicts (affine transform matrix or PPISP parameters)"""
     use_bilateral_grid_for_geometry: bool = True
     """If True, use bilateral grid for depth and normal (e.g. AI generated biased ones)"""
     bilagrid_shape_geometry: Tuple[int, int, int] = (8, 8, 4)

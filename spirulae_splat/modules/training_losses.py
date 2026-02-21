@@ -24,7 +24,21 @@ from spirulae_splat.splat.cuda._wrapper_per_pixel import (
 
 from spirulae_splat.splat.cuda._wrapper_projection import add_gradient_component
 
-from fused_bilagrid import BilateralGrid, fused_bilagrid_sample, total_variation_loss
+try:
+    from fused_bilagrid import (
+        BilateralGrid,
+        BilateralGridPPISP,
+        fused_bilagrid_sample,
+        fused_bilagrid_ppisp_sample,
+        total_variation_loss
+    )
+except:
+    raise RuntimeError(
+        "\033[93m"
+        "You are likely using an incompatible version of fused_bilagrid. "
+        "Please install latest fused_bilagrid from https://github.com/harry7557558/fused-bilagrid, branch `dev`."
+        "\033[0m"
+    )
 
 from typing import List, Optional, Literal
 
@@ -295,7 +309,10 @@ class SplatTrainingLosses(torch.nn.Module):
         self.exposure_correction = ExposureCorrection(config)
 
         if self.config.use_bilateral_grid:
-            self.bil_grids = BilateralGrid(
+            self.bil_grids = {
+                'affine': BilateralGrid,
+                'ppisp': BilateralGridPPISP
+            }[self.config.bilagrid_type](
                 num=self.num_train_data,
                 grid_X=self.config.bilagrid_shape[0],
                 grid_Y=self.config.bilagrid_shape[1],
@@ -359,26 +376,35 @@ class SplatTrainingLosses(torch.nn.Module):
         gt_img = self._downscale_if_required(image)
         return gt_img
 
-    def apply_bilateral_grid(self, bilagrid, rgb: torch.Tensor, cam_idx: int, **kwargs) -> torch.Tensor:
+    def apply_bilateral_grid(self, bilagrid, rgb: torch.Tensor, cam_idx: int, is_geometry: bool, **kwargs) -> torch.Tensor:
         """rgb must be clamped to 0-1"""
         try:
             grid_idx = torch.tensor(cam_idx, device=rgb.device, dtype=torch.long).flatten()
             grids = bilagrid.grids[grid_idx]
             if self.config.optimize_bilagrid_frequencies:
                 grids = Dct3D.apply(grids)
-            out = fused_bilagrid_sample(
+            out = {
+                'affine': fused_bilagrid_sample,
+                'ppisp': fused_bilagrid_sample if is_geometry else fused_bilagrid_ppisp_sample
+            }[self.config.bilagrid_type](
                 grids, coords=None, rgb=rgb.unsqueeze(1),
-                actual_width=kwargs.get('actual_width', None),
-                actual_height=kwargs.get('actual_height', None),
+                actual_width=kwargs.get('width', None),
+                actual_height=kwargs.get('height', None),
                 patch_offsets=kwargs.get('patch_offsets', None),
             ).squeeze(1)
         except TypeError:
             raise RuntimeError(
                 "\033[93m"
-                "You are likely using an outdated version of fused_bilagrid. "
-                "Please update to latest fused_bilagrid from https://github.com/harry7557558/fused-bilagrid"
+                "You are likely using an incompatible version of fused_bilagrid. "
+                "Please install latest fused_bilagrid from https://github.com/harry7557558/fused-bilagrid, branch `dev`."
                 "\033[0m"
             )
+        # if (self.step+1) % 100 == 0 and grids.shape[1] == 9:
+        #     import matplotlib.pyplot as plt
+        #     print(grids.shape)
+        #     print(torch.std(grids))
+        #     plt.imshow(out[0].detach().cpu().numpy())
+        #     plt.show()
         return out
 
     @staticmethod
@@ -479,6 +505,7 @@ class SplatTrainingLosses(torch.nn.Module):
                 gt_depth = self.apply_bilateral_grid(
                     self.bil_grids_depth,
                     gt_depth.repeat(1, 1, 1, 3), camera.metadata["cam_idx"],
+                    is_geometry=True,
                     **meta
                 )[..., :1]
                 gt_depth = gt_depth / (1.0 - gt_depth).clip(max=0.999)
@@ -500,6 +527,7 @@ class SplatTrainingLosses(torch.nn.Module):
                 gt_normal = self.apply_bilateral_grid(
                     self.bil_grids_normal,
                     0.5+0.5*gt_normal, camera.metadata["cam_idx"],
+                    is_geometry=True,
                     **meta
                 ) * 2.0 - 1.0
 
@@ -583,6 +611,7 @@ class SplatTrainingLosses(torch.nn.Module):
             pred_rgb = self.apply_bilateral_grid(
                 self.bil_grids,
                 pred_rgb, camera.metadata["cam_idx"],
+                is_geometry=False,
                 **meta
             )
         if self.config.use_ppisp and self.config.fit == "rgb" and \
@@ -827,7 +856,10 @@ class SplatTrainingLosses(torch.nn.Module):
         # bilagrid regularization loss
         if self.config.use_bilateral_grid:
             bilagrid_mean = torch.mean(bilagrid, dim=(0, 2, 3, 4))
-            bilagrid_mean_reg = F.mse_loss(bilagrid_mean, DEFAULT_BILAGRID_PARAMS)
+            if self.config.bilagrid_type == "affine":
+                bilagrid_mean_reg = F.mse_loss(bilagrid_mean, DEFAULT_BILAGRID_PARAMS)
+            elif self.config.bilagrid_type == "ppisp":
+                bilagrid_mean_reg = F.mse_loss(bilagrid_mean, torch.zeros_like(bilagrid_mean))
             loss_dict['bilagrid_mean_reg'] = self.config.bilagrid_mean_reg_weight * bilagrid_mean_reg
 
         # PPISP regularization loss
