@@ -19,6 +19,33 @@
 
 namespace cg = cooperative_groups;
 
+__forceinline__ __device__ float3 fmaxf(float3 v, float k) {
+    return {
+        fmaxf(v.x, k),
+        fmaxf(v.y, k),
+        fmaxf(v.z, k)
+    };
+}
+__forceinline__ __device__ float3 sqrtf(float3 v) {
+    return {
+        sqrtf(fmaxf(v.x, 0.0f)),
+        sqrtf(fmaxf(v.y, 0.0f)),
+        sqrtf(fmaxf(v.z, 0.0f))
+    };
+}
+__forceinline__ __device__ float3 fabsf(float3 v) {
+    return {
+        fabsf(v.x), fabsf(v.y), fabsf(v.z)
+    };
+}
+__forceinline__ __device__ float3 fsignf(float3 v) {
+    return {
+        copysignf(1.0f, v.x),
+        copysignf(1.0f, v.y),
+        copysignf(1.0f, v.z)
+    };
+}
+
 // ------------------------------------------
 // Constant Memory for Gaussian Coefficients
 // ------------------------------------------
@@ -72,6 +99,7 @@ __device__ __forceinline__ float3 get_pix_value(
 //  - Optionally writes partial derivatives
 //    to dm_dmu1, dm_dsigma1_sq, dm_dsigma12
 // ------------------------------------------
+template<bool is_l1>
 __global__ void fusedssimCUDA(
     int B, int H, int W,
     const float3* __restrict__ img1,
@@ -262,6 +290,9 @@ __global__ void fusedssimCUDA(
             float3 sigma2_sq = out3 - mu2_sq;
             float3 sigma12   = out4 - mu1 * mu2;
 
+        if (!is_l1) {
+            // standard SSIM
+
             float3 A = mu1_sq + mu2_sq + kC1;
             float3 B = sigma1_sq + sigma2_sq + kC2;
             float3 C_ = 2.f * mu1 * mu2 + kC1;
@@ -286,6 +317,93 @@ __global__ void fusedssimCUDA(
                 dm_dsigma12[global_idx]   = d_m_dsigma12;
                 if (ssim_map != nullptr)
                     ssim_map[global_idx] = val;
+            }
+
+        } else {
+            // L1 version of SSIM
+        #if 1
+
+            float3 A = mu1_sq + mu2_sq + kC1;
+            float3 B = sigma1_sq + sigma2_sq + kC2;
+            float3 C_ = 2.f * mu1 * mu2 + kC1;
+            float3 D_ = 2.f * sigma12 + kC2;
+
+            float3 val3 = (C_ * D_) / (A * B);
+            val3 = 1.0f - sqrtf(1.0f - val3);
+            val = (val3.x + val3.y + val3.z) * (1.0f/3.0f);
+
+            if (dm_dmu1) {
+                // partial derivatives
+                float3 d_m_dmu1 = (
+                    (mu2 * 2.f * D_) / (A * B)
+                    - (mu2 * 2.f * C_) / (A * B)
+                    - (mu1 * 2.f * C_ * D_) / (A * A * B)
+                    + (mu1 * 2.f * C_ * D_) / (A * B * B)
+                );
+                float3 d_m_dsigma1_sq = (-C_ * D_) / (A * B * B);
+                float3 d_m_dsigma12   = (2.f * C_) / (A * B);
+
+                float3 grad_val3 = 0.5f / fmaxf(1.0f - val3, 1e-5f);
+
+                dm_dmu1[global_idx]       = d_m_dmu1 * grad_val3;
+                dm_dsigma1_sq[global_idx] = d_m_dsigma1_sq * grad_val3;
+                dm_dsigma12[global_idx]   = d_m_dsigma12 * grad_val3;
+                if (ssim_map != nullptr)
+                    ssim_map[global_idx] = val;
+            }
+        #else
+            static constexpr float kC3 = 0.5f * kC2;
+
+            float3 sigma1 = sqrtf(sigma1_sq);
+            float3 sigma2 = sqrtf(sigma2_sq);
+            float3 hypot_mu1_mu2 = sqrtf(mu1_sq + mu2_sq + kC1);
+            float3 hypot_sigma1_sigma2 = sqrtf(sigma1_sq + sigma2_sq + kC2);
+            float3 val_mu_n = (hypot_mu1_mu2 - fabsf(mu1 - mu2));
+            float3 val_sigma_n = (hypot_sigma1_sigma2 - fabsf(sigma1 - sigma2));
+            float3 val_struct_n = (sigma12 + kC3);
+            float3 val_struct_m = sqrtf(sigma1_sq * sigma2_sq + kC3*kC3);
+            float3 val_mu = val_mu_n / hypot_mu1_mu2;
+            float3 val_sigma = val_sigma_n / hypot_sigma1_sigma2;
+            float3 val_struct = val_struct_n / val_struct_m;
+
+            float3 val3 = val_mu * val_sigma * val_struct;
+            val = (val3.x + val3.y + val3.z) * (1.0f/3.0f);
+
+            if (dm_dmu1) {
+                // partial derivatives
+                float3 d_m_dmu1 = (
+                    - (mu2 * val_mu_n * val_sigma_n) /
+                        (val_struct_m * hypot_sigma1_sigma2 * hypot_mu1_mu2)
+                    + (sigma2 * sigma2 * mu1 * val_struct_n * val_mu_n * val_sigma_n) /
+                        (val_struct_m * val_struct_m * val_struct_m * hypot_sigma1_sigma2 * hypot_mu1_mu2)
+                    + (mu1 * val_struct_n * val_mu_n * val_sigma_n) /
+                        (val_struct_m * hypot_sigma1_sigma2 * hypot_sigma1_sigma2 * hypot_sigma1_sigma2 * hypot_mu1_mu2)
+                    - (mu1 * val_struct_n * val_mu_n * val_sigma_n) /
+                        (val_struct_m * hypot_sigma1_sigma2 * hypot_mu1_mu2 * hypot_mu1_mu2 * hypot_mu1_mu2)
+                    + (val_struct_n * (mu1 / hypot_mu1_mu2 - fsignf(mu1 - mu2)) * val_sigma_n) /
+                        (val_struct_m * hypot_sigma1_sigma2 * hypot_mu1_mu2)
+                    + (val_struct_n * val_mu_n * (mu1 / hypot_sigma1_sigma2 - mu1 / sigma1 * fsignf(sigma1 - sigma2))) /
+                        (val_struct_m * hypot_sigma1_sigma2 * hypot_mu1_mu2)
+                );
+                float3 d_m_dsigma1_sq = (
+                    - (val_struct_n * val_mu_n * val_sigma_n) /
+                        (2.0f * hypot_mu1_mu2 * hypot_sigma1_sigma2 * hypot_sigma1_sigma2 * hypot_sigma1_sigma2 * val_struct_m)
+                    - (val_struct_n * sigma2_sq * val_mu_n * val_sigma_n) /
+                        (2.0f * hypot_mu1_mu2 * hypot_sigma1_sigma2 * val_struct_m * val_struct_m * val_struct_m)
+                    + (val_struct_n * val_mu_n * (0.5f / hypot_sigma1_sigma2 - 0.5f / sigma1 * fsignf(sigma1 - sigma2))) /
+                        (hypot_mu1_mu2 * hypot_sigma1_sigma2 * val_struct_m)
+                );
+                float3 d_m_dsigma12   = (
+                    val_mu_n * val_sigma_n / (val_struct_m * hypot_sigma1_sigma2 * hypot_mu1_mu2)
+                );
+
+                dm_dmu1[global_idx]       = d_m_dmu1;
+                dm_dsigma1_sq[global_idx] = d_m_dsigma1_sq;
+                dm_dsigma12[global_idx]   = d_m_dsigma12;
+                if (ssim_map != nullptr)
+                    ssim_map[global_idx] = val;
+            }
+        #endif
             }
         }
 
@@ -453,7 +571,8 @@ fused_ssim_forward(
     at::Tensor &img1,
     at::Tensor &img2,
     bool train,
-    bool return_ssim_map
+    bool return_ssim_map,
+    bool is_l1
 ) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
     int B  = img1.size(0);
@@ -480,7 +599,7 @@ fused_ssim_forward(
     at::Tensor dm_dsigma1_sq = train ? at::empty_like(img1) : at::empty({0}, img1.options());
     at::Tensor dm_dsigma12   = train ? at::empty_like(img1) : at::empty({0}, img1.options());
 
-    fusedssimCUDA<<<grid, block>>>(
+    (is_l1 ? fusedssimCUDA<true> : fusedssimCUDA<false>)<<<grid, block>>>(
         B, H, W,
         (float3*)img1.data_ptr<float>(),
         (float3*)img2.data_ptr<float>(),

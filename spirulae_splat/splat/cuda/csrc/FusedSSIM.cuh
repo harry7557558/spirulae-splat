@@ -11,7 +11,8 @@ fused_ssim_forward(
     at::Tensor &img1,
     at::Tensor &img2,
     bool train,
-    bool return_ssim_map
+    bool return_ssim_map,
+    bool is_l1
 );
 
 at::Tensor

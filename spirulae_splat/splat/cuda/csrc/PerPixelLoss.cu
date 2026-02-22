@@ -112,7 +112,7 @@ __global__ void per_pixel_losses_forward_kernel(
 
         if (out_loss_map != nullptr) {
             out_loss_map[idx] =
-                losses[(int)RawLossIndex::RgbL1] +
+                losses[(int)RawLossIndex::RgbLoss] +
                 losses[(int)RawLossIndex::RenderNormalSup] +
                 losses[(int)RawLossIndex::DepthNormalSup] +
                 losses[(int)RawLossIndex::AlphaSup] +

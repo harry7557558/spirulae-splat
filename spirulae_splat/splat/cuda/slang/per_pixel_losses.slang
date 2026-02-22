@@ -52,7 +52,7 @@ float alpha_loss(float x, float y) {
 }
 
 enum RawLossIndex {
-    RgbL1,
+    RgbLoss,
     RgbL2,
     DepthSupX,
     DepthSupY,
@@ -79,7 +79,8 @@ enum RawLossIndex {
 };
 
 enum LossWeightIndex {
-    RgbSup,
+    RgbSupL1,
+    RgbSupL2,
     DepthSup,
     NormalSup,
     AlphaSup,
@@ -115,9 +116,11 @@ float[RawLossIndex::length] per_pixel_losses(
 ) {
     float[RawLossIndex::length] losses;
 
-    // RGB - L1 and L2
-    losses[RawLossIndex::RgbL1] = weights[LossWeightIndex::RgbSup] *
-        float(mask) * l1_loss(render_rgb, ref_rgb);
+    // RGB - L1 and L2, for training and for PSNR calculation
+    losses[RawLossIndex::RgbLoss] = float(mask) * (
+        weights[LossWeightIndex::RgbSupL1] * l1_loss(render_rgb, ref_rgb) +
+        weights[LossWeightIndex::RgbSupL2] * l2_loss(render_rgb, ref_rgb)
+    );
     losses[RawLossIndex::RgbL2] = float(mask) *
         clamp(l2_loss(render_rgb, ref_rgb), 0.0f, 1.0f);
 
@@ -251,7 +254,7 @@ void per_pixel_losses_bwd(
 }
 
 enum LossIndex {
-    RgbL1,
+    RgbLoss,
     RgbPSNR,
     DepthSup,
     NormalSup,
@@ -273,8 +276,8 @@ float[LossIndex::length] per_pixel_losses_reduce(
     float[LossIndex::length] losses;
 
     // image loss
-    losses[LossIndex::RgbL1] = 
-        raw_losses[RawLossIndex::RgbL1] / max(raw_losses[RawLossIndex::MaskTotal], 1);
+    losses[LossIndex::RgbLoss] = 
+        raw_losses[RawLossIndex::RgbLoss] / max(raw_losses[RawLossIndex::MaskTotal], 1);
     losses[LossIndex::RgbPSNR] = -10.0 * log10(
         raw_losses[RawLossIndex::RgbL2] / max(raw_losses[RawLossIndex::MaskTotal], 1));
 

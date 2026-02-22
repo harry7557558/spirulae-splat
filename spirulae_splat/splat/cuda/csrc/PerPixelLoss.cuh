@@ -6,7 +6,7 @@
 
 
 enum class RawLossIndex {
-    RgbL1,
+    RgbLoss,
     RgbL2,
     DepthSupX,
     DepthSupY,
@@ -33,7 +33,8 @@ enum class RawLossIndex {
 };
 
 enum class LossWeightIndex {
-    RgbSup,
+    RgbSupL1,
+    RgbSupL2,
     DepthSup,
     NormalSup,
     AlphaSup,
@@ -47,7 +48,7 @@ enum class LossWeightIndex {
 };
 
 enum class LossIndex {
-    RgbL1,
+    RgbLoss,
     RgbPSNR,
     DepthSup,
     NormalSup,

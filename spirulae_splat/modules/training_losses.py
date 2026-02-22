@@ -78,9 +78,9 @@ class _MaskGradient(torch.autograd.Function):
 
 class FusedSSIM(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, img1, img2, train=True, return_ssim_map=False):
+    def forward(ctx, img1, img2, train=True, return_ssim_map=False, is_l1=False):
         ssim, ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = \
-            _make_lazy_cuda_func("fused_ssim_forward")(img1, img2, train, return_ssim_map)
+            _make_lazy_cuda_func("fused_ssim_forward")(img1, img2, train, return_ssim_map, is_l1)
 
         ctx.save_for_backward(img1.detach(), img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
 
@@ -90,7 +90,7 @@ class FusedSSIM(torch.autograd.Function):
     def backward(ctx, dL_dssim, dL_dmap):
         img1, img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = ctx.saved_tensors
         grad = _make_lazy_cuda_func("fused_ssim_backward")(img1, img2, dL_dssim, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
-        return grad, None, None, None
+        return grad, None, None, None, None
 
 
 class Dct3D(torch.autograd.Function):
@@ -376,6 +376,41 @@ class SplatTrainingLosses(torch.nn.Module):
         gt_img = self._downscale_if_required(image)
         return gt_img
 
+    def get_ssim_loss(self, pred_rgb: torch.Tensor, gt_rgb: torch.Tensor):
+        ssim, ssim_map = FusedSSIM.apply(
+            pred_rgb.contiguous(),
+            gt_rgb.contiguous(),
+            True,  # TODO: detect torch.no_grad()
+            self.config.compute_hessian_diagonal is not None,
+            self.config.use_l1_ssim
+        )
+        if self.config.g_ssim_lambda > 0.0:
+            g_ssim_y, g_ssim_y_map = FusedSSIM.apply(
+                (0.5 + 0.5 * (pred_rgb[:, 1:, :, :] - pred_rgb[:, :-1, :, :])).contiguous(),
+                (0.5 + 0.5 * (gt_rgb[:, 1:, :, :] - gt_rgb[:, :-1, :, :])).contiguous(),
+                True,  # TODO: detect torch.no_grad()
+                self.config.compute_hessian_diagonal is not None,
+                self.config.use_l1_ssim
+            )
+            g_ssim_x, g_ssim_x_map = FusedSSIM.apply(
+                (0.5 + 0.5 * (pred_rgb[:, :, 1:, :] - pred_rgb[:, :, :-1, :])).contiguous(),
+                (0.5 + 0.5 * (gt_rgb[:, :, 1:, :] - gt_rgb[:, :, :-1, :])).contiguous(),
+                True,  # TODO: detect torch.no_grad()
+                self.config.compute_hessian_diagonal is not None,
+                self.config.use_l1_ssim
+            )
+            ssim_loss = 1.0 - torch.lerp(ssim, 0.5*(g_ssim_x+g_ssim_y), self.config.g_ssim_lambda)
+            if self.config.compute_hessian_diagonal is not None:
+                ssim_map *= (1.0 - self.config.g_ssim_lambda)
+                ssim_map[:, :-1, :, :] += 0.25 * self.config.g_ssim_lambda * g_ssim_y_map
+                ssim_map[:, 1:, :, :] += 0.25 * self.config.g_ssim_lambda * g_ssim_y_map
+                ssim_map[:, :, :-1, :] += 0.25 * self.config.g_ssim_lambda * g_ssim_x_map
+                ssim_map[:, :, 1:, :] += 0.25 * self.config.g_ssim_lambda * g_ssim_x_map
+        else:
+            ssim_loss = 1.0 - ssim
+
+        return ssim, ssim_loss, ssim_map
+
     def apply_bilateral_grid(self, bilagrid, rgb: torch.Tensor, cam_idx: int, is_geometry: bool, **kwargs) -> torch.Tensor:
         """rgb must be clamped to 0-1"""
         try:
@@ -631,18 +666,7 @@ class SplatTrainingLosses(torch.nn.Module):
             self.step > self.config.adaptive_exposure_warmup:
             raise NotImplementedError("Adaptive exposure is deprecated. Use bilateral grid instead.")
 
-        # ssim loss
-        ssim, ssim_map = FusedSSIM.apply(
-            pred_rgb.contiguous(),
-            gt_rgb.contiguous(),
-            True,  # TODO: detect torch.no_grad()
-            self.config.compute_hessian_diagonal is not None
-        )
-
-        # call fused kernel to compute loss
-    
-        (weight_depth_dist_reg, weight_normal_dist_reg, weight_rgb_dist_reg), weight_normal_reg = \
-            self.get_2dgs_reg_weights()
+        # handle multi-resolution loss
 
         if pred_depth_normal is None and pred_depth is not None and (pred_normal is not None or gt_normal is not None):
             is_fisheye = (camera.camera_type[0].item() == CameraType.FISHEYE.value)
@@ -651,7 +675,7 @@ class SplatTrainingLosses(torch.nn.Module):
                 intrins, camera.distortion_params
             )
 
-        losses, loss_map = _ComputePerPixelLosses.apply(
+        all_images = [[
             pred_rgb,
             gt_rgb,
             pred_depth,
@@ -668,35 +692,96 @@ class SplatTrainingLosses(torch.nn.Module):
             gt_depth_mask,
             gt_normal_mask,
             gt_alpha_mask,
-            [
-                # RGB supervision
-                (1.0 - self.config.ssim_lambda) * (1.0 - self.config.lpips_lambda),
-                # depth supervison
-                float(self.step > self.config.supervision_warmup) *
-                    self.config.depth_supervision_weight,
-                # normal supervision
-                float(self.step > self.config.supervision_warmup) *
-                    self.config.normal_supervision_weight,
-                # alpha supervision (over and under)
-                self.config.alpha_loss_weight,
-                0.0 if gt_alpha is None else self.config.alpha_loss_weight_under,
-                # normal regularization
-                float(self.step > self.config.reg_warmup_length) *
-                    weight_normal_reg,
-                # alpha regularization
-                float(self.step >= self.config.reg_warmup_length) *
-                    self.get_alpha_reg_weight(),
-                # distortion regularizations (RGB, depth, normal)
-                float(self.step >= self.config.reg_warmup_length) * weight_rgb_dist_reg,
-                float(self.step >= self.config.reg_warmup_length) * weight_depth_dist_reg,
-                float(self.step >= self.config.reg_warmup_length) * weight_normal_dist_reg,
-            ],
-            meta.get("num_train_data", -1),
-            camera.metadata.get('cam_idx', None),
-            self.config.compute_hessian_diagonal is not None
-        )
+        ]]
+
+        for scale in range(1, self.config.num_loss_scales+1):
+            pooled = []
+            for image in all_images[-1]:
+                if not isinstance(image, torch.Tensor):
+                    pooled.append(image)
+                elif image.dtype == torch.float32:
+                    image = image.permute(0, 3, 1, 2).to(memory_format=torch.channels_last)
+                    pooled.append(F.avg_pool2d(image, 2).permute(0, 2, 3, 1))
+                elif image.dtype == torch.bool:
+                    image = image.permute(0, 3, 1, 2).to(memory_format=torch.channels_last)
+                    # TODO: fused kernel
+                    pooled.append(~F.max_pool2d((~image).float(), 2).bool().permute(0, 2, 3, 1))
+                else:
+                    raise NotImplementedError()
+            all_images.append(pooled)
+
+        # ssim loss
+        ssim, ssim_loss, ssim_map = self.get_ssim_loss(pred_rgb, gt_rgb)
+        for scale in range(1, self.config.num_loss_scales+1):
+            pred_rgb_pooled, gt_rgb_pooled = all_images[scale][:2]
+            _, ssim_loss_pooled, ssim_map_pooled = self.get_ssim_loss(pred_rgb_pooled, gt_rgb_pooled)
+            ssim_loss = ssim_loss + ssim_loss_pooled
+            if self.config.compute_hessian_diagonal is not None:
+                ssim_map_pooled = ssim_map_pooled.permute(0, 3, 1, 2).to(memory_format=torch.channels_last)
+                ssim_map_pooled = F.upsample(ssim_map_pooled, scale_factor=2**scale, mode='nearest').permute(0, 2, 3, 1)
+                ssim_map[:, :ssim_map_pooled.shape[1], :ssim_map_pooled.shape[2], :] += ssim_map_pooled
+        if self.config.num_loss_scales > 0:
+            multiplier = 1.0 / (self.config.num_loss_scales + 1)
+            ssim_loss = ssim_loss * multiplier
+            if self.config.compute_hessian_diagonal is not None:
+                ssim_map *= multiplier
+
+        # call fused kernel to compute loss
+    
+        (weight_depth_dist_reg, weight_normal_dist_reg, weight_rgb_dist_reg), weight_normal_reg = \
+            self.get_2dgs_reg_weights()
+
+        loss_weights = [
+            # RGB supervision
+            (1.0 - self.config.l2_lambda) * (1.0 - self.config.ssim_lambda) * (1.0 - self.config.lpips_lambda),
+            self.config.l2_lambda * (1.0 - self.config.ssim_lambda) * (1.0 - self.config.lpips_lambda),
+            # depth supervison
+            float(self.step > self.config.supervision_warmup) *
+                self.config.depth_supervision_weight,
+            # normal supervision
+            float(self.step > self.config.supervision_warmup) *
+                self.config.normal_supervision_weight,
+            # alpha supervision (over and under)
+            self.config.alpha_loss_weight,
+            0.0 if gt_alpha is None else self.config.alpha_loss_weight_under,
+            # normal regularization
+            float(self.step > self.config.reg_warmup_length) *
+                weight_normal_reg,
+            # alpha regularization
+            float(self.step >= self.config.reg_warmup_length) *
+                self.get_alpha_reg_weight(),
+            # distortion regularizations (RGB, depth, normal)
+            float(self.step >= self.config.reg_warmup_length) * weight_rgb_dist_reg,
+            float(self.step >= self.config.reg_warmup_length) * weight_depth_dist_reg,
+            float(self.step >= self.config.reg_warmup_length) * weight_normal_dist_reg,
+        ]
+        for scale in range(0, self.config.num_loss_scales+1):
+            losses_pooled, loss_map_pooled = _ComputePerPixelLosses.apply(
+                *all_images[scale],
+                loss_weights,
+                meta.get("num_train_data", -1),
+                camera.metadata.get('cam_idx', None),
+                self.config.compute_hessian_diagonal is not None
+            )
+            if scale == 0:
+                losses = losses_pooled
+                loss_map = loss_map_pooled
+                psnr = losses[1]
+            else:
+                losses = losses + losses_pooled
+                if self.config.compute_hessian_diagonal is not None:
+                    loss_map_pooled = loss_map_pooled.permute(0, 3, 1, 2).to(memory_format=torch.channels_last)
+                    loss_map_pooled = F.upsample(loss_map_pooled, scale_factor=2**scale, mode='nearest').permute(0, 2, 3, 1)
+                    loss_map[:, :loss_map_pooled.shape[1], :loss_map_pooled.shape[2], :] += loss_map_pooled
+        if self.config.num_loss_scales > 0:
+            multiplier = 1.0 / (self.config.num_loss_scales + 1)
+            # multiplier = 1.0 / (2.0 - 0.5 ** self.config.num_loss_scales)
+            losses = losses * multiplier
+            if self.config.compute_hessian_diagonal is not None:
+                loss_map *= multiplier
+
         (
-            rgb_l1, rgb_psnr,
+            rgb_loss, rgb_psnr,
             depth_supervision_loss, normal_supervision_loss, alpha_supervision_loss,
             normal_reg, alpha_reg,
             rgb_dist_reg, depth_dist_reg, normal_dist_reg
@@ -711,10 +796,15 @@ class SplatTrainingLosses(torch.nn.Module):
         #     plt.imshow(loss_map[0].detach().cpu().numpy())
         #     plt.show()
 
-        image_loss = (1.0 - self.config.ssim_lambda) * rgb_l1 + self.config.ssim_lambda * (1.0 - ssim)
+        # note that rgb_loss is already multipled by (1.0 - self.config.ssim_lambda) * (1.0 - self.config.lpips_lambda)
+        image_loss = rgb_loss + self.config.ssim_lambda * ssim_loss
 
         # LPIPS for training
         if self.config.lpips_lambda > 0.0:
+            if self.config.compute_hessian_diagonal is not None:
+                raise NotImplementedError()
+            if self.config.num_loss_scales != 0:
+                raise NotImplementedError()
             lpips = self.lpips(
                 pred_rgb.permute(0, 3, 1, 2).to(self.lpips_dtype).clip(0, 1),
                 gt_rgb.permute(0, 3, 1, 2).to(self.lpips_dtype).clip(0, 1)
@@ -743,7 +833,7 @@ class SplatTrainingLosses(torch.nn.Module):
                 self._running_metrics = { 'psnr': [], 'ssim': [], 'lpips': [] }
             psnr_list = self._running_metrics['psnr']
             ssim_list = self._running_metrics['ssim']
-            psnr = rgb_psnr.item()
+            psnr = psnr.item()
             ssim = ssim.item()
             psnr_list.append(psnr)
             ssim_list.append(ssim)

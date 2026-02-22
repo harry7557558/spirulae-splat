@@ -116,10 +116,18 @@ class SpirulaeModelConfig(ModelConfig):
     """Number of gaussians to initialize if random init is used"""
     random_scale: float = 1.0
     """Position standard deviation to initialize random gaussians"""
+    l2_lambda: float = 0.0
+    """Weight of L2 loss, default 0.0"""
     ssim_lambda: float = 0.2
     """Weight of ssim loss; 0.2 for academic baseline, higher for potentially more high-frequency details, lower for less blurry background in outdoor scenes"""
+    use_l1_ssim: bool = False
+    """Whether to use a modified version of SSIM that attempts to combine advantages of L1 loss"""
+    g_ssim_lambda: float = 0.0
+    """Weight of SSIM on image gradient, useful for encouraging sharpness but may not be ideal for noisy and high-resolution images."""
     lpips_lambda: float = 0.0
     """Weight of lpips loss for better perceptual quality; Note that this can make training much slower"""
+    num_loss_scales: int = 0
+    """Number of scales for image loss. For multi-scale loss, image is downscaled by 2 this number of times, and losses are averaged across scales. Improves convergence for high-resolution images."""
     use_camera_optimizer: bool = False
     """Whether to use camera optimizer
         Note: this only works well in patch batching mode"""
