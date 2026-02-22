@@ -305,7 +305,7 @@ def process_dir(dataset_dir: str, include_normal: bool, include_sky: bool):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(
-        description="Export PLY (and equirectangular map), for 3DGS only.")
+        description="Generate depth and normal maps.")
     parser.add_argument("dataset_dir", nargs=1, help="Path to the dataset folder.")
     # parser.add_argument("--normal", action="store_true", help="Whether to predict normal in addition to depth.")
     parser.add_argument("--sky", action="store_true", help="Whether to predict sky for full images. Useful for highly distorted fisheye images.")

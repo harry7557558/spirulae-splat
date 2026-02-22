@@ -10,6 +10,13 @@ from torchvision import transforms
 import numpy as np
 
 import math
+import os
+from pathlib import Path
+
+try:
+    import gdown
+except ImportError:
+    gdown = None
 
 from typing import Optional
 
@@ -170,6 +177,31 @@ torch.backends.cudnn.benchmark = False
 model = None
 dtype = torch.bfloat16
 
+
+def _get_checkpoint_path():
+    """Get cross-platform cache path for checkpoint."""
+    cache_dir = Path.home() / ".cache" / "spirulae_splat"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / "checkpoint-HQ50k-20251227.pth"
+
+
+def _download_checkpoint(save_path: Path):
+    """Download checkpoint from Google Drive."""
+    if gdown is None:
+        raise ImportError("gdown is required to download the checkpoint. Install it with: pip install gdown")
+    
+    drive_id = "1h0gfCjEXRZa-pTzrmRkBoynGSbzZqGO9"
+    url = f"https://drive.google.com/uc?id={drive_id}"
+    
+    print(f"Downloading checkpoint from Google Drive...")
+    try:
+        gdown.download(url, str(save_path), quiet=False)
+        print(f"Checkpoint saved to {save_path}")
+    except Exception as e:
+        print(f"Error downloading checkpoint: {e}")
+        raise
+
+
 def infer(batch):
     input_dim = len(batch.shape)
     is_numpy = False
@@ -195,10 +227,14 @@ def infer(batch):
 
     global model
     if model is None:
-        # TODO: load from URL when shipping this code out
-        path = "/mnt/d/gs/ssplat-image-enhance/checkpoint.pth"
+        checkpoint_path = _get_checkpoint_path()
+        
+        # Download checkpoint if not cached
+        if not checkpoint_path.exists():
+            _download_checkpoint(checkpoint_path)
+        
         model = Model(32, 64)
-        model.load_state_dict(torch.load(path, weights_only=False, map_location="cpu"))
+        model.load_state_dict(torch.load(checkpoint_path, weights_only=False, map_location="cpu"))
         model = model.to(memory_format=torch.channels_last)
         model = model.cuda().to(dtype)
         torch.cuda.empty_cache()

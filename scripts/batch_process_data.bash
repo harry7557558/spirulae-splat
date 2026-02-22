@@ -3,17 +3,17 @@
 # Batch data processing script, for small object-centered scenes with masks
 # Assume you already have the `scripts` folder added to path
 
-extract_frame_skip=10
+extract_frame_skip=50
 
 camera_model=OPENCV
 max_num_features=8192
-vocab_tree_path="../vocab_tree_flickr100K_words32K.bin"
+vocab_tree_path="/mnt/d/gs/data/vocab_tree_flickr100K_words32K.bin"
 
-extension="*.mov"
+extension="*.mp4"
 
 # process data
 
-if false; then
+if true; then
 
 mapfile -t files < <(ls)
 sam2_cmd=""
@@ -25,13 +25,14 @@ for file in "${files[@]}"; do
     cd ${file%.*}
 
     colmap feature_extractor --database_path database.db --image_path ./images --ImageReader.single_camera 1 --ImageReader.camera_model $camera_model --SiftExtraction.max_num_features $max_num_features
-    colmap exhaustive_matcher --database_path database.db
+    # colmap exhaustive_matcher --database_path database.db
+    colmap vocab_tree_matcher --database_path database.db --VocabTreeMatching.vocab_tree_path $vocab_tree_path
     mkdir -p sparse
     colmap mapper --database_path database.db --image_path ./images --output_path sparse
     colmap bundle_adjuster --input_path sparse/0 --output_path sparse/0 --BundleAdjustment.refine_principal_point 1
     ns-process-data images --data ./$image_path --output-dir . --skip-image-processing --skip-colmap --colmap-model-path sparse/0/
-    cp transforms.json transforms_no_masks.json
-    sed -E 's/"file_path": "images\/(.*?\.jpg)",/"file_path": "images\/\1", "mask_path": "masks\/\1.png",/g' transforms_no_masks.json > transforms.json
+    #cp transforms.json transforms_no_masks.json
+    #sed -E 's/"file_path": "images\/(.*?\.jpg)",/"file_path": "images\/\1", "mask_path": "masks\/\1.png",/g' transforms_no_masks.json > transforms.json
 
     enhance_images.py ./ --max_tile_size 1024
 
@@ -58,17 +59,17 @@ for file in "${files[@]}"; do
 
     dirname=${file%.*}
 
-    num_gs=200000
+    num_gs=1000000
     sh_degree=3
 
-    ns-train spirulae --data $dirname \
-      --max_num_iterations 30000 \
-      --pipeline.model.apply-loss-for-mask True \
-      --pipeline.model.randomize_background False \
-      --pipeline.model.mcmc_cap_max $num_gs \
-      --pipeline.model.sh-degree $sh_degree \
-      --viewer.quit_on_train_completion True \
-      nerfstudio-data --validation_fraction 0.1
+    # ns-train spirulae --data $dirname \
+    #   --max_num_iterations 30000 \
+    #   --pipeline.model.apply-loss-for-mask True \
+    #   --pipeline.model.randomize_background False \
+    #   --pipeline.model.mcmc_cap_max $num_gs \
+    #   --pipeline.model.sh-degree $sh_degree \
+    #   --viewer.quit_on_train_completion True \
+    #   nerfstudio-data --validation_fraction 0.1
 
     # ns-train spirulae-patched --data $dirname \
     #   --max_num_iterations 30000 \
@@ -79,6 +80,14 @@ for file in "${files[@]}"; do
     #   --pipeline.model.sh-degree $sh_degree \
     #   --viewer.quit_on_train_completion True \
     #   nerfstudio-data --validation_fraction 0.1
+
+    ns-train spirulae --data $dirname \
+      --max_num_iterations 30000 \
+      --pipeline.model.randomize_background True \
+      --pipeline.model.mcmc_cap_max $num_gs \
+      --pipeline.model.sh-degree $sh_degree \
+      --pipeline.model.num_loss_scales 2 \
+      --viewer.quit_on_train_completion True
 
     outputs=$(find outputs/$dirname | grep config.yml)
     export_ply_3dgs.py $outputs --no_convert_to_input_frame
