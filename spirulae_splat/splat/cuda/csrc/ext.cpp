@@ -16,6 +16,7 @@
 #include "RasterizationSortedEval3DFwd.cuh"
 #include "RasterizationSortedEval3DBwd.cuh"
 #include "Optimizer.cuh"
+#include "Densify.cuh"
 #include "BilagridUtils.cuh"
 
 #define TORCH_INDUCTOR_CPP_WRAPPER
@@ -52,7 +53,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("compute_per_splat_losses_forward", &compute_per_splat_losses_forward_tensor);
     m.def("compute_per_splat_losses_backward", &compute_per_splat_losses_backward_tensor);
     m.def("compute_per_splat_losses_backward_with_hessian_diagonal", &compute_per_splat_losses_backward_with_hessian_diagonal_tensor);
-    m.def("mcmc_add_noise_3dgs", &mcmc_add_noise_3dgs_tensor);
 
     // PerPixelLoss.cuh
     m.def("compute_per_pixel_losses_forward", &compute_per_pixel_losses_forward_tensor);
@@ -152,6 +152,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fused_3dgs2tr_scale_optim", &fused_3dgs2tr_scale_optim);
     m.def("fused_3dgs2tr_opacity_optim", &fused_3dgs2tr_opacity_optim);
     m.def("fused_3dgs2tr_quat_optim", &fused_3dgs2tr_quat_optim);
+
+    // Densify.cuh
+    m.def("mcmc_add_noise", &mcmc_add_noise_tensor);
+    m.def("compute_relocation", &compute_relocation_tensor);
+    m.def("long_axis_split", &long_axis_split_tensor);
 
     // BilagridUtils.cuh
     m.def("dct3d_type1_ortho", &dct3d_type1_ortho_tensor);

@@ -7,7 +7,13 @@ import torch
 from torch import Tensor
 
 from .base import Strategy
-from .ops import inject_noise_to_position, relocate, sample_add
+from .ops import (
+    inject_noise_to_position,
+    relocate,
+    relocate_long_axis_split,
+    sample_add,
+    sample_add_long_axis_split
+)
 
 
 @dataclass
@@ -59,14 +65,14 @@ class MCMCStrategy(Strategy):
     max_scale2d_clip_hardness: float = 1.1
     max_scale3d: float = float('inf')
     prob_grad_weight: float = 0.0
+    use_long_axis_split: bool = False
     is_3dgs: bool = False
     verbose: bool = False
-    key_for_gradient: Literal["means2d", "gradient_2dgs"] = "means2d"
 
     def initialize_state(self) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy."""
         if self.prob_grad_weight > 0.0:
-            return { "grad2d": None, "count": None, "radii": None }
+            return { "grad3d": None, "count": None, "radii": None }
         return { "radii": None }
 
     @torch.no_grad()
@@ -82,37 +88,34 @@ class MCMCStrategy(Strategy):
             "height",
             "n_cameras",
             "radii",
-            self.key_for_gradient,
             "depths",
         ] + ["gaussian_ids"] * packed:
             assert key in info, f"{key} is required but missing."
 
-        grad_info = info[self.key_for_gradient]
-
         # initialize state on the first run
         n_gaussian = len(list(params.values())[0])
 
+        device = params['means'].device
         if self.prob_grad_weight > 0.0:
-            if state["grad2d"] is None:
-                state["grad2d"] = torch.zeros(n_gaussian, device=grad_info.device)
+            if state["grad3d"] is None:
+                state["grad3d"] = torch.zeros(n_gaussian, device=device)
             if state["count"] is None:
-                state["count"] = torch.zeros(n_gaussian, device=grad_info.device)
+                state["count"] = torch.zeros(n_gaussian, device=device)
         if state["radii"] is None:
             assert "radii" in info, "radii is required but missing."
-            state["radii"] = torch.zeros(n_gaussian, device=grad_info.device)
+            state["radii"] = torch.zeros(n_gaussian, device=device)
 
         # update the running state
         if packed:
             # grads is [nnz, 2]
             gs_ids = info["gaussian_ids"]  # [nnz]
-            radii = info["radii"]  # [nnz] or [nnz, 2]
-            if radii.shape[-1] == 2:
-                radii = torch.amax(radii, dim=-1)
+            radii = torch.fmax(info["radii"][:, 0], info["radii"][:, 1])  # [nnz]
         else:
             # grads is [C, N, 2]
-            sel = info["radii"] > 0.0  # [C, N]
-            gs_ids = torch.where(sel)[1]  # [nnz]
-            radii = info["radii"][sel]  # [nnz]
+            radii = torch.fmax(info["radii"][:, :, 0], info["radii"][:, :, 1])  # [C, N]
+            sel = radii > 0  # [C, N]
+            gs_ids = torch.where((radii > 0).any(dim=0, keepdim=True))[1]  # [<N]
+            radii = radii[sel]  # [nnz]
 
         # Should be ideally using scatter max
         normalized_radii = radii / float(max(info["width"], info["height"]))
@@ -142,39 +145,28 @@ class MCMCStrategy(Strategy):
             return
 
         # normalize grads to [-1, 1] screen space
-        if not hasattr(grad_info, 'grad') or grad_info.grad is None:
+        if not hasattr(params['means'], 'grad'):
             print("Error: grad not found")
             return
-        grads = grad_info.grad.clone()
-        if grads.shape[-1] == 3:  # world space, the 3DGUT case
-            sel = sel[..., :1] & (info["depths"] > 0.01).unsqueeze(-1)  # [C, N]
-            gs_ids = torch.where(sel)[1]  # [nnz]
-            grads = grads.norm(dim=-1, keepdim=True)
-            grads = grads * info["depths"].unsqueeze(-1)  # to screen space
-        else:
-            grads[..., 0] *= info["width"] / 2.0 * info["n_cameras"]
-            grads[..., 1] *= info["height"] / 2.0 * info["n_cameras"]
-        if len(grads.shape) == 2:
-            assert info["n_cameras"] == 1
-            grads = grads.unsqueeze(0)
+        grads = params['means'].grad.norm(dim=-1) * torch.exp(params['scales'].mean(dim=-1))  # TODO: transform by actual covariance
 
         # update the running state
-        if not packed:
-            grads = grads[sel]  # [nnz, 2]
-        if len(grads.shape) == 2:
-            grads = grads.norm(dim=-1)
-        state["grad2d"].index_add_(0, gs_ids, torch.relu(grads))
-        state["count"].index_add_(
-            0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)
-        )
+        grads = grads[gs_ids]
+        state["grad3d"].index_add_(0, gs_ids, torch.relu(grads))
+        state["count"].index_add_(0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32))
+        # state["grad3d"][gs_ids] = torch.fmax(state["grad3d"][gs_ids], grads)
+        # state["count"][gs_ids] = 1
+        # state["grad3d"][gs_ids] = grads
+        # state["count"][gs_ids] = 1
 
     def _get_probs(self, state, params):
         if not (self.prob_grad_weight > 0.0):
             return None
         opacs = torch.sigmoid(params["opacities"])
-        grads = state["grad2d"] / state["count"].clamp_min(1)
-        grads = ((0.5+torch.sort(grads)[1]) / len(grads)).unsqueeze(-1)
-        return opacs * (1.0-self.prob_grad_weight) + grads * self.prob_grad_weight
+        grads = state["grad3d"] / state["count"].clamp_min(1)
+        # grad_opacs = torch.sort(opacs.flatten())[0][torch.argsort(torch.argsort(grads))].unsqueeze(-1)
+        grad_opacs = torch.sort(opacs.flatten())[0][torch.argsort(torch.argsort(opacs.flatten() * grads))].unsqueeze(-1)
+        return torch.lerp(opacs, grad_opacs, self.prob_grad_weight)
 
     def check_sanity(
         self,
@@ -254,7 +246,7 @@ class MCMCStrategy(Strategy):
                 )
 
             if self.prob_grad_weight > 0.0:
-                state["grad2d"] *= 0.0
+                state["grad3d"] *= 0.0
                 state["count"] *= 0.0
             torch.cuda.empty_cache()
 
@@ -289,15 +281,24 @@ class MCMCStrategy(Strategy):
 
         n_gs = relocate_mask.sum().item()
         if n_gs > 0:
-            relocate(
-                params=params,
-                optimizers=optimizers,
-                state=state,
-                mask=relocate_mask,
-                is_3dgs=self.is_3dgs,
-                probs=self._get_probs(state, params),
-                min_opacity=self.min_opacity,
-            )
+            if self.use_long_axis_split:
+                relocate_long_axis_split(
+                    params=params,
+                    optimizers=optimizers,
+                    state=state,
+                    mask=relocate_mask,
+                    probs=self._get_probs(state, params),
+                )
+            else:
+                relocate(
+                    params=params,
+                    optimizers=optimizers,
+                    state=state,
+                    mask=relocate_mask,
+                    is_3dgs=self.is_3dgs,
+                    probs=self._get_probs(state, params),
+                    min_opacity=self.min_opacity,
+                )
         return n_gs
 
     @torch.no_grad()
@@ -311,12 +312,21 @@ class MCMCStrategy(Strategy):
         n_target = min(self.cap_max, int(self.grow_factor * current_n_points))
         n_gs = max(0, n_target - current_n_points)
         if n_gs > 0:
-            sample_add(
-                params=params,
-                optimizers=optimizers,
-                state=state,
-                n=n_gs,
-                probs=self._get_probs(state, params),
-                min_opacity=self.min_opacity,
-            )
+            if self.use_long_axis_split:
+                sample_add_long_axis_split(
+                    params=params,
+                    optimizers=optimizers,
+                    state=state,
+                    n=n_gs,
+                    probs=self._get_probs(state, params)
+                )
+            else:
+                sample_add(
+                    params=params,
+                    optimizers=optimizers,
+                    state=state,
+                    n=n_gs,
+                    probs=self._get_probs(state, params),
+                    min_opacity=self.min_opacity,
+                )
         return n_gs

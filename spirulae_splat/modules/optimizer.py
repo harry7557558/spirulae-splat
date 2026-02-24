@@ -79,6 +79,8 @@ class FusedAdam(Optimizer):
                     state['exp_avg'] = torch.zeros_like(p, memory_format=torch.contiguous_format)
                     # Exponential moving average of squared gradient values
                     state['exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.contiguous_format)
+                p.exp_avg = state['exp_avg']
+                p.exp_avg_sq = state['exp_avg_sq']
                 
                 exp_avgs.append(state['exp_avg'])
                 exp_avg_sqs.append(state['exp_avg_sq'])
@@ -188,6 +190,8 @@ class Fused3DGS2Tr(Optimizer):
                     state['exp_avg'] = torch.zeros_like(p, memory_format=torch.contiguous_format)
                     # Exponential moving average of squared gradient values
                     state['exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.contiguous_format)
+                p.exp_avg = state['exp_avg']
+                p.exp_avg_sq = state['exp_avg_sq']
                 
                 state['step1'] += 1
                 state['step2'] += 1

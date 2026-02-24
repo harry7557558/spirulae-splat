@@ -58,13 +58,3 @@ compute_per_splat_losses_backward_with_hessian_diagonal_tensor(
     float erank_reg_weight_s3,
     float quat_norm_reg_weight
 );
-
-
-void mcmc_add_noise_3dgs_tensor(
-    std::string primitive,
-    float scaler, float min_opacity,
-    at::Tensor &means,
-    at::Tensor &scales,
-    at::Tensor &quats,
-    at::Tensor &opacs
-);

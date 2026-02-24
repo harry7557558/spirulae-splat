@@ -2,13 +2,17 @@
 
 #ifdef __CUDACC__
 #include "generated/slang.cuh"
-namespace SlangAll {
+namespace SlangPixelWise {
 #include "generated/set_namespace.cuh"
-#include "generated/slang_all.cuh"
+#include "generated/pixel_wise.cuh"
 }
 namespace SlangProjectionUtils {
 #include "generated/set_namespace.cuh"
 #include "generated/projection_utils.cuh"
+}
+namespace SlangPPISP {
+#include "generated/set_namespace.cuh"
+#include "generated/ppisp.cuh"
 }
 #endif
 
@@ -50,7 +54,7 @@ __global__ void blend_background_forward_kernel(
     float alpha = in_alpha.load1(bid, y, x);
     float3 background = in_background.load3(bid, y, x);
 
-    rgb = SlangAll::blend_background(rgb, alpha, background);
+    rgb = SlangPixelWise::blend_background(rgb, alpha, background);
 
     out_rgb.store3(bid, y, x, rgb);
 }
@@ -80,7 +84,7 @@ __global__ void blend_background_backward_kernel(
     float3 v_out = v_out_rgb.load3(bid, y, x);
 
     float3 v_rgb; float v_alpha; float3 v_background;
-    SlangAll::blend_background_bwd(
+    SlangPixelWise::blend_background_bwd(
         rgb, alpha, background,
         v_out,
         &v_rgb, &v_alpha, &v_background
@@ -174,7 +178,7 @@ __global__ void linear_rgb_to_srgb_forward_kernel(
 
     float3 rgb = in_rgb.load3(bid, y, x);
 
-    rgb = SlangAll::linear_rgb_to_srgb(rgb);
+    rgb = SlangPixelWise::linear_rgb_to_srgb(rgb);
 
     out_rgb.store3(bid, y, x, rgb);
 }
@@ -197,7 +201,7 @@ __global__ void linear_rgb_to_srgb_backward_kernel(
 
     float3 v_out = v_out_rgb.load3(bid, y, x);
 
-    float3 v_rgb = SlangAll::linear_rgb_to_srgb_bwd(rgb, v_out);
+    float3 v_rgb = SlangPixelWise::linear_rgb_to_srgb_bwd(rgb, v_out);
 
     v_in_rgb.store3(bid, y, x, v_rgb);
 }
@@ -311,7 +315,7 @@ __global__ void depth_to_normal_forward_kernel(
         int jg = int(blockIdx.y * TILE) + jt - 1;
         float depth = (ig >= 0 && ig < W && jg >= 0 && jg < H) ?
             depths.load1(bid, jg, ig) : 0.0f;
-        float3 ray = SlangAll::generate_ray_d2n(
+        float3 ray = SlangPixelWise::generate_ray_d2n(
             {(float)ig+0.5f, (float)jg+0.5f},
             {fx, fy, cx, cy}, dist_coeffs,
             camera_model == gsplat::CameraModelType::FISHEYE, is_ray_depth
@@ -327,7 +331,7 @@ __global__ void depth_to_normal_forward_kernel(
     points[1] = shared_points[jt][it+1];
     points[2] = shared_points[jt-1][it];
     points[3] = shared_points[jt+1][it];
-    float3 normal = SlangAll::points_to_normal(points);
+    float3 normal = SlangPixelWise::points_to_normal(points);
 #endif
     normals.store3(bid, j, i, normal);
 
@@ -394,7 +398,7 @@ __global__ void depth_to_normal_backward_kernel(
         int jg = int(blockIdx.y * TILE) + jt - 1;
         float depth = (ig >= 0 && ig < W && jg >= 0 && jg < H) ?
             depths.load1(bid, jg, ig) : 0.0f;
-        float3 ray = SlangAll::generate_ray_d2n(
+        float3 ray = SlangPixelWise::generate_ray_d2n(
             {(float)ig+0.5f, (float)jg+0.5f},
             {fx, fy, cx, cy}, dist_coeffs,
             camera_model == gsplat::CameraModelType::FISHEYE, is_ray_depth
@@ -415,7 +419,7 @@ __global__ void depth_to_normal_backward_kernel(
     t = shared_points[jt-1][it]; rays[2] = {t.x, t.y, t.z}; points[2] = rays[2] * t.w;
     t = shared_points[jt+1][it]; rays[3] = {t.x, t.y, t.z}; points[3] = rays[3] * t.w;
     FixedArray<float3, 4> v_points;
-    SlangAll::points_to_normal_vjp(points, v_normal, &v_points);
+    SlangPixelWise::points_to_normal_vjp(points, v_normal, &v_points);
 
     v_depths.atomicStore1(bid, j, i-1, dot(v_points[0], rays[0]));
     v_depths.atomicStore1(bid, j, i+1, dot(v_points[1], rays[1]));
@@ -513,7 +517,7 @@ __global__ void ray_depth_to_linear_depth_forward_kernel(
 
     // Process
     float in_depth = in_depths.load1(bid, j, i);
-    float out_depth = in_depth * SlangAll::ray_depth_to_linear_depth_factor(
+    float out_depth = in_depth * SlangPixelWise::ray_depth_to_linear_depth_factor(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
         camera_model == gsplat::CameraModelType::FISHEYE
@@ -544,7 +548,7 @@ __global__ void ray_depth_to_linear_depth_backward_kernel(
 
     // Process
     float v_out_depth = v_out_depths.load1(bid, j, i);
-    float factor = SlangAll::ray_depth_to_linear_depth_factor(
+    float factor = SlangPixelWise::ray_depth_to_linear_depth_factor(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
         camera_model == gsplat::CameraModelType::FISHEYE
@@ -792,7 +796,7 @@ __global__ void ppisp_forward_kernel(
 
     float3 out_pixel;
     if (param_type == PPISPParamType::Original)
-        out_pixel = SlangAll::apply_ppisp(
+        out_pixel = SlangPPISP::apply_ppisp(
             pixel,
             make_float2((float)x, (float)y),
             make_float2(intrins[bid].z, intrins[bid].w),
@@ -800,7 +804,7 @@ __global__ void ppisp_forward_kernel(
             *reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&params)
         );
     else
-        out_pixel = SlangAll::apply_ppisp_rqs(
+        out_pixel = SlangPPISP::apply_ppisp_rqs(
             pixel,
             make_float2((float)x, (float)y),
             make_float2(intrins[bid].z, intrins[bid].w),
@@ -910,7 +914,7 @@ __global__ void ppisp_backward_kernel(
     float3 v_pixel;
     FixedArray<float, kNumParams> v_params;
     if (param_type == PPISPParamType::Original)
-        SlangAll::apply_ppisp_vjp(
+        SlangPPISP::apply_ppisp_vjp(
             pixel,
             make_float2((float)x, (float)y),
             make_float2(intrins[bid].z, intrins[bid].w),
@@ -921,7 +925,7 @@ __global__ void ppisp_backward_kernel(
             reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&v_params)
         );
     else
-        SlangAll::apply_ppisp_rqs_vjp(
+        SlangPPISP::apply_ppisp_rqs_vjp(
             pixel,
             make_float2((float)x, (float)y),
             make_float2(intrins[bid].z, intrins[bid].w),
@@ -1025,12 +1029,12 @@ __global__ void compute_raw_ppisp_regularization_forward_kernel(
 
     FixedArray<float, kNumRawLosses> losses;
     if (param_type == PPISPParamType::Original)
-        SlangAll::compute_raw_ppisp_regularization_loss(
+        SlangPPISP::compute_raw_ppisp_regularization_loss(
             *reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&params),
             reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndex::length>*>(&losses)
         );
     else
-        SlangAll::compute_raw_ppisp_rqs_regularization_loss(
+        SlangPPISP::compute_raw_ppisp_rqs_regularization_loss(
             *reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&params),
             reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndexRQS::length>*>(&losses)
         );
@@ -1066,12 +1070,12 @@ __global__ void compute_ppisp_regularization_forward_kernel(
     FixedArray<float, (int)PPISPRegLossIndex::length> losses;
 
     if (param_type == PPISPParamType::Original)
-        SlangAll::compute_ppisp_regularization_loss(
+        SlangPPISP::compute_ppisp_regularization_loss(
             *reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndex::length>*>(&raw_losses),
             num_train_images, loss_weights, &losses
         );
     else
-        SlangAll::compute_ppisp_rqs_regularization_loss(
+        SlangPPISP::compute_ppisp_rqs_regularization_loss(
             *reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndexRQS::length>*>(&raw_losses),
             num_train_images, loss_weights, &losses
         );
@@ -1175,13 +1179,13 @@ __global__ void compute_raw_ppisp_regularization_backward_kernel(
 
     FixedArray<float, kNumParams> v_params;
     if (param_type == PPISPParamType::Original)
-        SlangAll::compute_raw_ppisp_regularization_loss_vjp(
+        SlangPPISP::compute_raw_ppisp_regularization_loss_vjp(
             *reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&params),
             *reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndex::length>*>(&v_losses),
             reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&v_params)
         );
     else
-        SlangAll::compute_raw_ppisp_rqs_regularization_loss_vjp(
+        SlangPPISP::compute_raw_ppisp_rqs_regularization_loss_vjp(
             *reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&params),
             *reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndexRQS::length>*>(&v_losses),
             reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&v_params)
@@ -1219,13 +1223,13 @@ __global__ void compute_ppisp_regularization_backward_kernel(
 
     FixedArray<float, kNumRawLosses> v_raw_losses;
     if (param_type == PPISPParamType::Original)
-        SlangAll::compute_ppisp_regularization_loss_vjp(
+        SlangPPISP::compute_ppisp_regularization_loss_vjp(
             *reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndex::length>*>(&raw_losses),
             num_train_images, loss_weights, v_losses,
             reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndex::length>*>(&v_raw_losses)
         );
     else
-        SlangAll::compute_ppisp_rqs_regularization_loss_vjp(
+        SlangPPISP::compute_ppisp_rqs_regularization_loss_vjp(
             *reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndexRQS::length>*>(&raw_losses),
             num_train_images, loss_weights, v_losses,
             reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndexRQS::length>*>(&v_raw_losses)

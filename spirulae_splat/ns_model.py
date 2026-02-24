@@ -30,7 +30,7 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 from pytorch_msssim import SSIM
 
-from spirulae_splat.splat._torch_impl import quat_to_rotmat
+from spirulae_splat.splat._torch_impl import quat_to_rotmat, quat_scale_to_covar_preci
 from spirulae_splat.splat import (
     rasterization,
     depth_to_normal,
@@ -187,7 +187,11 @@ class SpirulaeModelConfig(ModelConfig):
     mcmc_growth_factor: float = 1.05
     """multiply number of splats by this number at every refinement"""
     mcmc_prob_grad_weight: float = 0.0
-    """weight of position gradient used in sampling Gaussians to relocate/add to, uses only opacity if 0 and only gradient of 1"""
+    """Weight of position gradient used in sampling Gaussians to relocate/add to.
+        If 0.0, use only opacity; If 1.0, use a heuristic based on position gradient measures impact of adding or relocating to a Gaussian."""
+    mcmc_use_long_axis_split: bool = False
+    """whether to use long-axis split described in https://arxiv.org/abs/2508.12313 for relocation and sample add.
+        When combined with mcmc_prob_grad_weight=1.0, this can give significantly less blurry background details for unbounded outdoor scenes."""
     relocate_screen_size: float = float('inf')
     """if a gaussian is more than this fraction of screen space, relocate it
         Useful for fisheye with 3DGUT, may drop PSNR for conventional cameras
@@ -268,9 +272,6 @@ class SpirulaeModelConfig(ModelConfig):
     image_color_space: Literal[None, "ACES2065-1", "ACEScg", "Rec.2020", "AdobeRGB", "DCI-P3"] = None
     """Color space of input images. Note that tonemap is not applied."""
 
-    use_3dgs: bool = True
-    """Must be True, kept for backward compatibility"""
-
     # regularization
     scale_regularization_weight: float = 0.0
     """If enabled, a scale regularization introduced in PhysGauss (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians."""
@@ -321,6 +322,8 @@ class SpirulaeModelConfig(ModelConfig):
     """erank regularization weight for smallest dimension, for 3DGS only"""
     erank_reg_warmup: int = 1000
     """only apply erank regularization after this many steps"""
+    quat_norm_reg: float = 0.01
+    """Weight to regularize quaternion norm to identity"""
     exposure_reg_image: float = 0.1
     """Between 0 and 1; For exposure regularization, include this fraction of L1 loss between GT image and image before exposure adjustment"""
     exposure_reg_param: float = 0.002
@@ -569,7 +572,8 @@ class SpirulaeModel(Model):
                 grow_factor=self.config.mcmc_growth_factor,
                 min_opacity=self.config.mcmc_min_opacity,
                 prob_grad_weight=self.config.mcmc_prob_grad_weight,
-                is_3dgs=self.config.use_3dgs,
+                use_long_axis_split=self.config.mcmc_use_long_axis_split,
+                is_3dgs=True,
                 relocate_scale2d=self.config.relocate_screen_size,
                 max_scale2d=self.config.mcmc_max_screen_size,
                 max_scale2d_clip_hardness=self.config.mcmc_max_screen_size_clip_hardness,
@@ -601,7 +605,7 @@ class SpirulaeModel(Model):
             refine_every=self.config.refine_every,
             pause_refine_after_reset=pause_refine_after_reset,
             kernel_radius=self.config.kernel_radius,
-            absgrad=True,
+            absgrad=False,
             revised_opacity=False,
             verbose=True,
         )
@@ -884,8 +888,6 @@ class SpirulaeModel(Model):
 
         max_depth_scale = 2.0 if self.training else 1.0
 
-        assert self.config.use_3dgs, "2DGS is deprecated"
-
         # Call GSplat for 3DGS rendering
         intrins = torch.concatenate((camera.fx, camera.fy, camera.cx, camera.cy), dim=1)
         
@@ -1164,6 +1166,59 @@ class SpirulaeModel(Model):
             outputs["camera_intrins"] = kwargs
         # if not self.training and True:
         #     outputs['ray'] = merge_tiles(meta['intersection_count'].float().reshape(-1, 1, 1, 1).repeat(1, TILE_SIZE, TILE_SIZE, 1))
+
+        return outputs
+
+        # Debug densification
+        if not self.training and self.step > 1:
+        # if self.step > 1:
+
+            # # covars = quat_scale_to_covar_preci(F.normalize(self.quats, dim=-1), torch.exp(self.scales), True, False)[0]
+            # sqrt_covars = quat_scale_to_covar_preci(F.normalize(self.quats, dim=-1), torch.exp(0.5*self.scales), True, False)[0]
+            # # param_to_vis = torch.sqrt((self.means.exp_avg_sq.unsqueeze(-2) @ covars).squeeze(-2))
+            # # param_to_vis = torch.abs(self.means.exp_avg)**0.1
+            # param_to_vis = torch.abs((self.means.exp_avg.unsqueeze(-2) @ sqrt_covars).squeeze(-2))**0.1
+            # # param_to_vis = torch.sqrt(self.means.exp_avg / torch.sqrt(self.means.exp_avg_sq))
+            # param_to_vis = param_to_vis / torch.median(param_to_vis[param_to_vis > 0.0])
+
+            opacities = torch.sigmoid(self.opacities)
+            param_to_vis = (torch.sort(opacities.flatten())[0][torch.argsort(torch.argsort(self.strategy_state['grad3d'] / self.strategy_state['count'].clamp_min(1)))]).unsqueeze(-1).repeat(1, 3)
+            # param_to_vis = (opacities * (torch.sort(opacities.flatten())[0][torch.argsort(torch.argsort(self.strategy_state['grad3d'] / self.strategy_state['count'].clamp_min(1)))]).unsqueeze(-1)).repeat(1, 3)
+            # param_to_vis = (torch.sort(opacities)[0][torch.argsort(torch.argsort(self.strategy_state['grad3d']))]).repeat(1, 3)
+            # param_to_vis = (opacities).repeat(1, 3)
+            # param_to_vis = (torch.argsort(torch.argsort(self.strategy_state['grad3d'] / self.strategy_state['count'].clamp_min(1))).unsqueeze(-1).repeat(1, 3) / len(self.means))**2
+
+            # param_to_vis = self.strategy_state['grad3d'] / self.strategy_state['count'].clamp_min(1)
+            # print(param_to_vis)
+            # param_to_vis = torch.tanh(1e8*param_to_vis).unsqueeze(-1).repeat(1, 3)
+
+            param_to_vis = (param_to_vis - 0.5) / 0.28
+            rgbd, alpha, meta = rasterization(
+                self.config.primitive,
+                splat_params = (
+                    self.means, self.quats, self.scales,
+                    self.opacities,
+                    param_to_vis, torch.zeros_like(self.features_sh)
+                ),
+                viewmats=viewmats,  # [C, 4, 4]
+                intrins=intrins * self.config.supersampling,  # [C, 4]
+                width=W * self.config.supersampling,
+                height=H * self.config.supersampling,
+                packed=(self.config.packed or use_bvh),
+                use_bvh=(use_bvh),
+                # packed=True,
+                # use_bvh=True,
+                relative_scale=self.config.relative_scale,
+                sparse_grad=False,
+                distributed=False,
+                camera_model=["pinhole", "fisheye"][is_fisheye],
+                render_mode="RGB+D" if self.config.primitive in ['3dgs', 'mip', '3dgut', '3dgut_sv'] else "RGB+D+N",
+                output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
+                compute_hessian_diagonal=self.config.compute_hessian_diagonal,
+                **kwargs,
+            )
+            outputs['param_to_vis'] = rgbd[0][0, :, :, :].mean(dim=-1, keepdim=True)
+            # outputs['param_to_vis'] = torch.clip(rgbd[0][0, :, :, :], 0.0, 1.0)
 
         return outputs
 

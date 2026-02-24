@@ -175,6 +175,7 @@ for filename in [
     'RasterizationSortedEval3DFwd',
     'RasterizationSortedEval3DBwd',
     'Optimizer',
+    'Densify',
     'BilagridUtils',
 ]:
     generate_header(filename)

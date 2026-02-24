@@ -1,12 +1,11 @@
 import numpy as np
-from typing import Callable, Dict, List, Union, Optional, Literal
+from typing import Callable, Dict, List, Tuple, Union, Optional, Literal
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor
 
 from spirulae_splat.splat._torch_impl import quat_to_rotmat, quat_scale_to_covar_preci
-from gsplat.relocation import compute_relocation
 
 from spirulae_splat.splat.cuda._wrapper_projection import _make_lazy_cuda_func
 
@@ -290,6 +289,8 @@ def relocate(
     dead_indices = mask.nonzero(as_tuple=True)[0]
     alive_indices = (~mask).nonzero(as_tuple=True)[0]
     n = len(dead_indices)
+    if n == 0:
+        return
 
     # Sample for new GSs
     eps = torch.finfo(torch.float32).eps
@@ -298,11 +299,12 @@ def relocate(
     probs = probs[alive_indices].flatten()  # ensure its shape is [N,]
     sampled_idxs = _multinomial_sample(probs, n, replacement=True)
     sampled_idxs = alive_indices[sampled_idxs]
-    new_opacities, new_scales = compute_relocation(
-        opacities=opacities[sampled_idxs],
-        scales=torch.exp(params["scales"])[sampled_idxs],
-        ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
-        binoms=BINOMS.to(opacities.device)
+    new_opacities, new_scales = _make_lazy_cuda_func("compute_relocation")(
+        opacities[sampled_idxs],
+        torch.exp(params["scales"])[sampled_idxs],
+        torch.bincount(sampled_idxs).to(torch.int32)[sampled_idxs] + 1,
+        BINOMS.to(opacities.device),
+        len(BINOMS)
     )
     new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
 
@@ -312,6 +314,65 @@ def relocate(
         elif name == "scales":
             p[sampled_idxs] = torch.log(new_scales)
         p[dead_indices] = p[sampled_idxs]
+        return torch.nn.Parameter(p, requires_grad=p.requires_grad)
+
+    def optimizer_fn(key: str, v: Tensor) -> Tensor:
+        v[sampled_idxs] = 0
+        return v
+
+    # update the parameters and the state in the optimizers
+    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
+    # update the extra running state
+    for k, v in state.items():
+        if isinstance(v, torch.Tensor):
+            v[sampled_idxs] = 0
+
+
+@torch.no_grad()
+def relocate_long_axis_split(
+    params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+    optimizers: Dict[str, torch.optim.Optimizer],
+    state: Dict[str, Tensor],
+    mask: Tensor,
+    probs: Optional[Tensor]=None,
+):
+    """Inplace relocate some dead Gaussians to the lives ones.
+
+    Args:
+        params: A dictionary of parameters.
+        optimizers: A dictionary of optimizers, each corresponding to a parameter.
+        mask: A boolean mask to indicates which Gaussians are dead.
+    """
+    opacities = torch.sigmoid(params["opacities"])
+
+    dead_indices = mask.nonzero(as_tuple=True)[0]
+    alive_indices = (~mask).nonzero(as_tuple=True)[0]
+    n = len(dead_indices)
+    if n == 0:
+        return
+
+    # Sample for new GSs
+    if probs is None:
+        probs = opacities
+    probs = probs[alive_indices].flatten()  # ensure its shape is [N,]
+    # sampled_idxs = _multinomial_sample(probs, n, replacement=False)
+    sampled_idxs = torch.argsort(probs)[-n:]
+    sampled_idxs = alive_indices[sampled_idxs]
+    new_scales, mean_offsets = _make_lazy_cuda_func("long_axis_split")(
+        "3dgs",
+        torch.exp(params["scales"])[sampled_idxs],
+        params["quats"][sampled_idxs]
+    )
+
+    def param_fn(name: str, p: Tensor) -> Tensor:
+        if name == "means":
+            p[dead_indices] = p[sampled_idxs] + mean_offsets
+            p[sampled_idxs] -= mean_offsets
+        elif name == "scales":
+            p[sampled_idxs] = torch.log(new_scales)
+            p[dead_indices] = torch.log(new_scales)
+        else:
+            p[dead_indices] = p[sampled_idxs]
         return torch.nn.Parameter(p, requires_grad=p.requires_grad)
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
@@ -398,7 +459,7 @@ def sample_add(
     state: Dict[str, Tensor],
     n: int,
     probs: Optional[Tensor]=None,
-    min_opacity: float = 0.005,
+    min_opacity: float = 0.005
 ):
     # TODO: get this right for opaque triangle splatting
     opacities = torch.sigmoid(params["opacities"])
@@ -407,12 +468,14 @@ def sample_add(
     if probs is None:
         probs = opacities
     probs = probs.flatten()
+
     sampled_idxs = _multinomial_sample(probs, n, replacement=True)
-    new_opacities, new_scales = compute_relocation(
-        opacities=opacities[sampled_idxs],
-        scales=torch.exp(params["scales"])[sampled_idxs],
-        ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
-        binoms=BINOMS.to(opacities.device)
+    new_opacities, new_scales = _make_lazy_cuda_func("compute_relocation")(
+        opacities[sampled_idxs],
+        torch.exp(params["scales"])[sampled_idxs],
+        torch.bincount(sampled_idxs).to(torch.int32)[sampled_idxs] + 1,
+        BINOMS.to(opacities.device),
+        len(BINOMS)
     )
     new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
 
@@ -422,6 +485,64 @@ def sample_add(
         elif name == "scales":
             p[sampled_idxs] = torch.log(new_scales)
         p_new = torch.cat([p, p[sampled_idxs]])
+        return torch.nn.Parameter(p_new, requires_grad=p.requires_grad)
+
+    def optimizer_fn(key: str, v: Tensor) -> Tensor:
+        v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
+        return torch.cat([v, v_new])
+
+    # update the parameters and the state in the optimizers
+    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
+    # update the extra running state
+    for k, v in state.items():
+        v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
+        if isinstance(v, torch.Tensor):
+            state[k] = torch.cat((v, v_new))
+
+
+@torch.no_grad()
+def sample_add_long_axis_split(
+    params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+    optimizers: Dict[str, torch.optim.Optimizer],
+    state: Dict[str, Tensor],
+    n: int,
+    probs: Optional[Tensor]=None
+):
+    # TODO: get this right for opaque triangle splatting
+    opacities = torch.sigmoid(params["opacities"])
+
+    if probs is None:
+        probs = opacities
+    probs = probs.flatten()
+
+    if False:
+        split(
+            params=params,
+            optimizers=optimizers,
+            state=state,
+            mask=(probs > torch.sort(probs.flatten(), descending=True)[0][n]),
+            std_scale=1.0,
+            revised_opacity=False,
+        )
+        return
+
+    # sampled_idxs = _multinomial_sample(probs, n, replacement=False)
+    sampled_idxs = torch.argsort(probs)[-n:]
+    new_scales, mean_offsets = _make_lazy_cuda_func("long_axis_split")(
+        "3dgs",
+        torch.exp(params["scales"])[sampled_idxs],
+        params["quats"][sampled_idxs]
+    )
+
+    def param_fn(name: str, p: Tensor) -> Tensor:
+        if name == "means":
+            p_new = torch.cat([p, p[sampled_idxs] + mean_offsets])
+            p_new[sampled_idxs] -= mean_offsets
+        elif name == "scales":
+            p[sampled_idxs] = torch.log(new_scales)
+            p_new = torch.cat([p, p[sampled_idxs]])
+        else:
+            p_new = torch.cat([p, p[sampled_idxs]])
         return torch.nn.Parameter(p_new, requires_grad=p.requires_grad)
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
@@ -491,7 +612,7 @@ def sample_add_opaque_triangles(
 
 @torch.no_grad()
 def inject_noise_to_position(
-    primitive: Literal["3dgs", "mip", "opaque_triangle"],
+    primitive: Literal["3dgs", "mip", "3dgut", "opaque_triangle"],
     params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
@@ -505,7 +626,7 @@ def inject_noise_to_position(
     if opacities is None:
         opacities = torch.sigmoid(params["opacities"].flatten())
 
-    _make_lazy_cuda_func("mcmc_add_noise_3dgs")(
+    _make_lazy_cuda_func("mcmc_add_noise")(
         primitive,
         scaler,
         min_opacity,

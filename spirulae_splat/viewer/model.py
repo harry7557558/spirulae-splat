@@ -275,7 +275,7 @@ class SplatModel:
         def render_fn(poses, intrinsics, W, H):
             rgbd, alpha, meta = rasterization(
                 self.primitive,
-                (self.means, F.normalize(self.quats, dim=-1), self.scales, self.opacities.squeeze(-1),
+                (self.means, F.normalize(self.quats, dim=-1), self.scales, self.opacities,
                     self.features_dc, self.features_sh)
                     if self.primitive in ['3dgs', 'mip', '3dgut'] else
                 (self.means, F.normalize(self.quats, dim=-1), self.scales,

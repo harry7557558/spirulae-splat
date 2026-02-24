@@ -601,7 +601,7 @@ class SplatTrainingLosses(torch.nn.Module):
 
         # update alpha if image is RGBA
         if gt_img_rgba.shape[-1] == 4 and self.config.alpha_loss_weight > 0.0:
-            alpha = gt_img_rgba[..., -1].unsqueeze(-1)
+            alpha = (gt_img_rgba[..., -1].unsqueeze(-1) > 0.5)
             gt_rgb_mask = gt_rgb_mask & alpha if gt_rgb_mask is not None else alpha
             if self.config.apply_loss_for_mask:
                 gt_alpha = gt_alpha & alpha if gt_alpha is not None else alpha
@@ -986,7 +986,7 @@ class SplatTrainingLosses(torch.nn.Module):
                 self.config.scale_regularization_weight,
                 self.config.erank_reg * float(self.step >= self.config.erank_reg_warmup),
                 self.config.erank_reg_s3 * float(self.step >= self.config.erank_reg_warmup),
-                0.01,
+                self.config.quat_norm_reg,
                 self.config.compute_hessian_diagonal
             )
             loss_dict['mcmc_opacity_reg'] = losses[0]

@@ -5,9 +5,9 @@
 namespace cg = cooperative_groups;
 
 #include "generated/slang.cuh"
-namespace SlangAll {
+namespace SlangPerSplatLosses {
 #include "generated/set_namespace.cuh"
-#include "generated/slang_all.cuh"
+#include "generated/per_splat_losses.cuh"
 }
 
 #include "common.cuh"
@@ -39,7 +39,7 @@ __global__ void per_splat_losses_forward_kernel(
         float3 scale = scales_buffer[idx];
         float opacity = opacities_buffer[idx];
         float4 quat = quats_buffer[idx];
-        SlangAll::per_splat_losses(
+        SlangPerSplatLosses::per_splat_losses(
             scale, opacity, quat,
             max_gauss_ratio,
             scale_regularization_weight,
@@ -100,7 +100,7 @@ __global__ void per_splat_losses_backward_kernel(
     float v_opacity;
     float4 v_quat;
 
-    SlangAll::per_splat_losses_bwd(
+    SlangPerSplatLosses::per_splat_losses_bwd(
         scale, opacity, quat,
         v_losses,
         &v_scale, &v_opacity, &v_quat,
@@ -159,7 +159,7 @@ __global__ void per_splat_losses_backward_kernel(
     float v_opacity, vr_opacity, h_opacity;
     float4 v_quat, vr_quat, h_quat;
 
-    SlangAll::per_splat_losses_bwd(
+    SlangPerSplatLosses::per_splat_losses_bwd(
         scale, opacity, quat,
         v_losses,
         &v_scale, &v_opacity, &v_quat,
@@ -375,81 +375,6 @@ compute_per_splat_losses_backward_with_hessian_diagonal_tensor(
         std::make_tuple(vr_scales, vr_opacities, vr_quats),
         std::make_tuple(h_scales, h_opacities, h_quats)
     );
-}
-
-
-
-__global__ void mcmc_add_noise_3dgs_kernel(
-    long num_splats,
-    float scaler, float min_opacity,
-    float3* __restrict__ means,
-    const float3* __restrict__ scales,
-    const float4* __restrict__ quats,
-    const float* __restrict__ opacs
-) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= num_splats)
-        return;
-
-    SlangAll::mcmc_add_noise_3dgs(
-        scaler, min_opacity,
-        &means[idx], scales[idx], quats[idx], opacs[idx]
-    );
-}
-
-__global__ void mcmc_add_noise_triangle_kernel(
-    long num_splats,
-    float scaler, float min_opacity,
-    float3* __restrict__ means,
-    const float3* __restrict__ scales,
-    const float4* __restrict__ quats,
-    const float* __restrict__ opacs
-) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= num_splats)
-        return;
-
-    SlangAll::mcmc_add_noise_triangle(
-        scaler, min_opacity,
-        &means[idx], scales[idx], quats[idx], opacs[idx]
-    );
-}
-
-/*[AutoHeaderGeneratorExport]*/
-void mcmc_add_noise_3dgs_tensor(
-    std::string primitive,
-    float scaler, float min_opacity,
-    at::Tensor &means,
-    at::Tensor &scales,
-    at::Tensor &quats,
-    at::Tensor &opacs
-) {
-    DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    CHECK_INPUT(scales);
-    CHECK_INPUT(quats);
-    CHECK_INPUT(opacs);
-
-    const size_t num_splats = opacs.numel();
-
-    if (primitive == "3dgs" || primitive == "mip")
-        mcmc_add_noise_3dgs_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
-            num_splats, scaler, min_opacity,
-            (float3*)means.data_ptr<float>(),
-            (float3*)scales.data_ptr<float>(),
-            (float4*)quats.data_ptr<float>(),
-            opacs.data_ptr<float>()
-        );
-    else if (primitive == "opaque_triangle")
-        mcmc_add_noise_triangle_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
-            num_splats, scaler, min_opacity,
-            (float3*)means.data_ptr<float>(),
-            (float3*)scales.data_ptr<float>(),
-            (float4*)quats.data_ptr<float>(),
-            opacs.data_ptr<float>()
-        );
-    else throw std::runtime_error("Unknown primitive: " + primitive);
-    CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 

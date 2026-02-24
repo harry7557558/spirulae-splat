@@ -238,18 +238,19 @@ class DefaultStrategy(Strategy):
         if packed:
             # grads is [nnz, 2]
             gs_ids = info["gaussian_ids"]  # [nnz]
-            radii = info["radii"]  # [nnz]
+            radii = torch.fmax(info["radii"][:, 0], info["radii"][:, 1])  # [nnz]
         else:
             # grads is [C, N, 2]
-            sel = info["radii"] > 0.0  # [C, N]
-            gs_ids = torch.where(sel)[1]  # [nnz]
-            radii = info["radii"][sel]  # [nnz]
+            radii = torch.fmax(info["radii"][:, :, 0], info["radii"][:, :, 1])  # [C, N]
+            sel = radii > 0.0  # [C, N]
+            gs_ids = torch.where(sel)[0]  # [nnz]
+            radii = radii[sel]  # [nnz]
 
         # update the running state
         if self.refine_scale2d_stop_iter > 0:
             # Should be ideally using scatter max
             state["radii"][gs_ids] = torch.maximum(
-                state["radii"][gs_ids],
+                radii[gs_ids],
                 # normalize radii to [0, 1] screen space
                 radii / float(max(info["width"], info["height"])),
             )
