@@ -463,19 +463,29 @@ class Nerfstudio2(Nerfstudio):
             A dictionary of points: points3D_xyz and colors: points3D_rgb
         """
         from time import perf_counter
+        import numpy as np
+        import torch
+
         time0 = perf_counter()
-        import open3d as o3d  # Importing open3d is slow, so we only do it if we need it.
+        from plyfile import PlyData
         time1 = perf_counter()
-        # print("Import open3d:", time1-time0)
+        # print("Import plyfile:", time1 - time0)
 
         time0 = perf_counter()
-        pcd = o3d.io.read_point_cloud(str(ply_file_path))
+        plydata = PlyData.read(str(ply_file_path))
 
-        # if no points found don't read in an initial point cloud
-        if len(pcd.points) == 0:
+        # Extract vertex data
+        v = plydata['vertex']
+        
+        # Check if points exist
+        if v.count == 0:
             return None
 
-        points3D = torch.from_numpy(np.asarray(pcd.points, dtype=np.float32))
+        # Stack x, y, z into a (N, 3) float32 array
+        points_np = np.stack([v['x'], v['y'], v['z']], axis=-1).astype(np.float32)
+        points3D = torch.from_numpy(points_np)
+
+        # Apply transformation and scale
         points3D = (
             torch.cat(
                 (
@@ -487,7 +497,10 @@ class Nerfstudio2(Nerfstudio):
             @ transform_matrix.T
         )
         points3D *= scale_factor
-        points3D_rgb = torch.from_numpy((np.asarray(pcd.colors) * 255).astype(np.uint8))
+
+        # Stack r, g, b into a (N, 3) uint8 array
+        colors_np = np.stack([v['red'], v['green'], v['blue']], axis=-1).astype(np.uint8)
+        points3D_rgb = torch.from_numpy(colors_np)
 
         out = {
             "points3D_xyz": points3D,

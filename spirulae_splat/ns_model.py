@@ -415,7 +415,11 @@ class SpirulaeModel(Model):
             # densities = torch.where(densities > 1.1, densities, 1.1 * (torch.log(densities) + 0.904689820196))
 
         elif self.config.primitive in ["3dgs", "mip", "3dgut"] or True:
-            distances, indices = self.k_nearest_sklearn(means.data, 4)
+            from time import perf_counter
+            time0 = perf_counter()
+            distances, indices = self.k_nearest_neighbor(means.data, 4)
+            time1 = perf_counter()
+            # print("k_nearest_neighbor time:", time1-time0)
             num_points = means.shape[0]
             scales = torch.sqrt(torch.from_numpy(distances**2).mean(-1, keepdim=True)).repeat(1, 3).float()
             scales = torch.log(scale_init * scales / (self.config.kernel_radius/3.0) + 1e-8)
@@ -423,7 +427,7 @@ class SpirulaeModel(Model):
             opacities = torch.logit(opacity_init * torch.ones(num_points, 1))
 
         else:
-            distances, indices = self.k_nearest_sklearn(means.data, 6)
+            distances, indices = self.k_nearest_neighbor(means.data, 6)
             distances = torch.from_numpy(distances)
             # avg_dist = distances.mean(dim=-1, keepdim=True)
             points = means.data[indices] - means.data[:, None, :]
@@ -680,25 +684,24 @@ class SpirulaeModel(Model):
             self.gauss_params[name] = torch.nn.Parameter(torch.zeros(new_shape, device=self.device))
         super().load_state_dict(dict, **kwargs)
 
-    def k_nearest_sklearn(self, x: torch.Tensor, k: int):
+    def k_nearest_neighbor(self, x: torch.Tensor, k: int):
         """
-            Find k-nearest neighbors using sklearn's NearestNeighbors.
-        x: The data tensor of shape [num_samples, num_features]
-        k: The number of neighbors to retrieve
+        Find k-nearest neighbors using scipy.spatial.cKDTree.
+        Uses all available CPU cores.
         """
-        # Convert tensor to numpy array
-        x_np = x.cpu().numpy()
+        x_np = x.detach().cpu().numpy()
 
-        # Build the nearest neighbors model
-        from sklearn.neighbors import NearestNeighbors
+        # Build the tree
+        # balanced_tree=False can speed up build time for large datasets
+        from scipy.spatial import cKDTree
+        tree = cKDTree(x_np, balanced_tree=False)
 
-        nn_model = NearestNeighbors(n_neighbors=k + 1, algorithm="auto", metric="euclidean").fit(x_np)
+        # Query the tree
+        # workers=-1 uses all available CPU cores
+        distances, indices = tree.query(x_np, k=k+1, workers=-1)
 
-        # Find the k-nearest neighbors
-        distances, indices = nn_model.kneighbors(x_np)
-
-        # Exclude the point itself from the result and return
-        return distances[:, 1:].astype(np.float32), indices[:, 1:].astype(np.float32)
+        # Exclude the point itself (first column)
+        return distances[:, 1:].astype(np.float32), indices[:, 1:].astype(np.int64)
 
     def set_crop(self, crop_box: Optional[OrientedBox]):
         self.crop_box = crop_box
