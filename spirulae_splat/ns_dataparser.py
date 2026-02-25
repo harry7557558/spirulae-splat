@@ -83,6 +83,9 @@ class Nerfstudio2DataParserConfig(NerfstudioDataParserConfig):
     load_3D_points: bool = True
     """Whether to load the 3D points from the colmap reconstruction."""
 
+    load_thumbnails: bool = True
+    """Whether to load thumbnails for viewer. If False, this can significantly speed up data loading for large datasets."""
+
     mask_overexposure: bool = False
     """Whether to mask over exposure"""
     validation_fraction: float = 0.0
@@ -439,6 +442,7 @@ class Nerfstudio2(Nerfstudio):
                 "depth_unit_scale_factor": self.config.depth_unit_scale_factor,
                 "normal_filenames": normal_filenames if len(normal_filenames) > 0 else None,
                 "mask_color": self.config.mask_color,
+                "load_thumbnails": self.config.load_thumbnails,
                 "mask_overexposure": self.config.mask_overexposure,
                 "val_indices": get_train_eval_split_fraction(cameras, 1-self.config.validation_fraction)[1].tolist(),
                 # "val_indices": [i for i in range(len(cameras)) if i < len(cameras)//2],  # for testing overfitting

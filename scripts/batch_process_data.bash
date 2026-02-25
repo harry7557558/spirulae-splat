@@ -9,11 +9,11 @@ camera_model=OPENCV
 max_num_features=8192
 vocab_tree_path="/mnt/d/gs/data/vocab_tree_flickr100K_words32K.bin"
 
-extension="*.mp4"
+extension="*.mov"
 
 # process data
 
-if true; then
+if false; then
 
 mapfile -t files < <(ls)
 sam2_cmd=""
@@ -62,6 +62,19 @@ for file in "${files[@]}"; do
     num_gs=1000000
     sh_degree=3
 
+    ns-train spirulae --data $dirname \
+      --max_num_iterations 30000 \
+      --pipeline.model.apply-loss-for-mask True \
+      --pipeline.model.randomize_background False \
+      --pipeline.model.mcmc_cap_max $num_gs \
+      --pipeline.model.sh-degree $sh_degree \
+      --pipeline.model.use-bilateral-grid False \
+      --pipeline.model.use-ppisp True \
+      --pipeline.model.mcmc_prob_grad_weight 1.0 \
+      --pipeline.model.mcmc_use_long_axis_split True \
+      --viewer.quit_on_train_completion True \
+      nerfstudio-data --validation_fraction 0.1
+
     # ns-train spirulae --data $dirname \
     #   --max_num_iterations 30000 \
     #   --pipeline.model.apply-loss-for-mask True \
@@ -81,13 +94,13 @@ for file in "${files[@]}"; do
     #   --viewer.quit_on_train_completion True \
     #   nerfstudio-data --validation_fraction 0.1
 
-    ns-train spirulae --data $dirname \
-      --max_num_iterations 30000 \
-      --pipeline.model.randomize_background True \
-      --pipeline.model.mcmc_cap_max $num_gs \
-      --pipeline.model.sh-degree $sh_degree \
-      --pipeline.model.num_loss_scales 2 \
-      --viewer.quit_on_train_completion True
+    # ns-train spirulae --data $dirname \
+    #   --max_num_iterations 30000 \
+    #   --pipeline.model.randomize_background True \
+    #   --pipeline.model.mcmc_cap_max $num_gs \
+    #   --pipeline.model.sh-degree $sh_degree \
+    #   --pipeline.model.num_loss_scales 2 \
+    #   --viewer.quit_on_train_completion True
 
     outputs=$(find outputs/$dirname | grep config.yml)
     export_ply_3dgs.py $outputs --no_convert_to_input_frame

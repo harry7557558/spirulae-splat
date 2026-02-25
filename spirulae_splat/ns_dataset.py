@@ -121,6 +121,7 @@ class SpirulaeDataset(InputDataset):
         self.cameras = deepcopy(dataparser_outputs.cameras)
         self.cameras.rescale_output_resolution(scaling_factor=scale_factor)
         self.mask_color = dataparser_outputs.metadata.get("mask_color", None)
+        self.load_thumbnails = dataparser_outputs.metadata.get("load_thumbnails", True)
         self.mask_overexposure = dataparser_outputs.metadata.get("mask_overexposure", False)
         self.val_indices = set(dataparser_outputs.metadata.get("val_indices", []))
 
@@ -208,6 +209,15 @@ class SpirulaeDataset(InputDataset):
             if len(_viewer_thumbnail_cache) == 0:
                 _viewer_thumbnail_cache_1 = []
                 def load_data(idx):
+                    if not self.load_thumbnails:
+                        image = 128 * torch.ones(2, 2, 3, dtype=torch.uint8) if image_type == "uint8" else \
+                            0.5 * torch.ones(2, 2, 3, dtype=torch.float32)
+                        if idx in self.val_indices:
+                            image[..., 1] = (255 if image_type == 'uint8' else 1.0)
+                        return {
+                            'image_idx': idx,
+                            'image': image
+                        }
                     data = self.get_data(idx, image_type, _is_viewer=False, _load_auxiliary=False)
                     if data["image"].dtype == torch.uint16:
                         data["image"] = (data["image"] / 256).to(torch.uint8)
