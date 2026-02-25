@@ -110,11 +110,13 @@ class MCMCStrategy(Strategy):
             # grads is [nnz, 2]
             gs_ids = info["gaussian_ids"]  # [nnz]
             radii = torch.fmax(info["radii"][:, 0], info["radii"][:, 1])  # [nnz]
+            # TODO: scatter reduce
         else:
             # grads is [C, N, 2]
             radii = torch.fmax(info["radii"][:, :, 0], info["radii"][:, :, 1])  # [C, N]
-            sel = radii > 0  # [C, N]
-            gs_ids = torch.where((radii > 0).any(dim=0, keepdim=True))[1]  # [<N]
+            radii = torch.amax(radii, dim=0, keepdim=True)
+            sel = radii > 0  # [1, N]
+            gs_ids = torch.where(sel)[1]  # [nnz]
             radii = radii[sel]  # [nnz]
 
         # Should be ideally using scatter max
