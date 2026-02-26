@@ -192,7 +192,7 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
         }
     }
 
-    if (inside) {
+    if (i < image_height && j < image_width) {
         render_Ts[pix_id] = T;
         int pix_id_global = image_id * image_height * image_width + pix_id;
         // TODO: blend background
