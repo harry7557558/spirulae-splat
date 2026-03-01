@@ -38,11 +38,13 @@ def aces_tonemap(x: np.ndarray):
 
 class DNGProcessor:
     def __init__(self, input_folder: str, output_folder: str, 
-                 color_space: str, save_format: str, max_workers: Optional[int] = None):
+                 color_space: str, save_format: str, half_size: bool,
+                 max_workers: Optional[int] = None):
         self.input_folder = Path(input_folder)
         self.output_folder = Path(output_folder)
         self.color_space = color_space.lower()
         self.save_format = save_format.lower()
+        self.half_size = half_size
         self.max_workers = max_workers or os.cpu_count()
         self.lock = threading.Lock()
         self.processed_count = 0
@@ -92,18 +94,28 @@ class DNGProcessor:
             kwargs = {}
             if self.color_space.startswith('linear-'):
                 kwargs['gamma'] = (1.0, 1.0)
+            else:
+                # kwargs['gamma'] = (2.222, 4.5)
+                kwargs['gamma'] = (2.4, 12.92)
             if self.save_format == 'png16':
                 kwargs['output_bps'] = 16
             else:
                 kwargs['output_bps'] = 8
 
+            # matching https://github.com/GNOME/shotwell/blob/b7c5957b4400664f255a6a8c8a63daf2d72958c6/src/photos/GRaw.vala
             rgb_array = raw.postprocess(
                 output_color=output_color,
+                half_size=self.half_size,
                 no_auto_bright=True,
+                bright=1.0,
+                auto_bright_thr=0.01,
                 use_camera_wb=True,
-                use_auto_wb=False,
-                fbdd_noise_reduction=rawpy.FBDDNoiseReductionMode.Full,
-                noise_thr=100,
+                use_auto_wb=True,
+                # use_camera_matrix=1,
+                highlight_mode=rawpy.HighlightMode.Clip,
+                demosaic_algorithm=rawpy.DemosaicAlgorithm.PPG,
+                # fbdd_noise_reduction=rawpy.FBDDNoiseReductionMode.Full,
+                # noise_thr=100,
                 **kwargs
             )
 
@@ -170,7 +182,7 @@ class DNGProcessor:
         
         new_size = (image.shape[1] // scale_factor, image.shape[0] // scale_factor)
         
-        resized = cv2.resize(image, new_size, interpolation=cv2.INTER_CUBIC)
+        resized = cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
         return resized
     
     def save_image_variants(self, image_array: np.ndarray, output_name: str) -> None:
@@ -260,6 +272,8 @@ def main():
                        help="Color space for processing (default: sRGB)")
     parser.add_argument("--save-format", choices=['jpg', 'png', 'png16'], default='jpg',
                        help="Output image format (default: jpg)")
+    parser.add_argument("--no-half-size", action="store_true",
+                       help="Whether to interpolate instead of downscale by 2.")
     parser.add_argument("--threads", type=int, default=None,
                        help="Number of processing threads (default: CPU count)")
     
@@ -276,6 +290,7 @@ def main():
         output_folder=args.output_folder,
         color_space=args.color_space,
         save_format=args.save_format,
+        half_size=not args.no_half_size,
         max_workers=args.threads
     )
     
