@@ -436,3 +436,203 @@ spirulae_voxel = MethodSpecification(
     ),
     description="Spirulae sparse voxel grid with patch batching.",
 )
+
+
+
+_MODEL_PRESET_CONFINED = dict(
+    randomize_background=True,
+    train_background_color=False,
+)
+_MODEL_PRESET_3DGS2TR = dict(
+    compute_hessian_diagonal="position",
+    mcmc_noise_lr=5e5 * (1.6e-4 / 1.0e-6),
+)
+_MODEL_PRESET_RICH_TEXTURE = dict(
+    mcmc_prob_grad_weight=1.0,
+    mcmc_use_long_axis_split=True,
+    mcmc_max_screen_size=0.10,
+)
+_MODEL_PRESET_NO_COLOR_SHIFT = dict(
+    use_bilateral_grid=True,
+    bilagrid_shape=(8, 8, 4),
+    bilagrid_type="ppisp",
+)
+
+
+spirulae_preset_confined_low_texture = MethodSpecification(
+    config=TrainerConfig(
+        method_name="spirulae-preset-confined-low-texture",
+        steps_per_eval_batch=0,
+        steps_per_save=2000,
+        max_num_iterations=30000,
+        mixed_precision=False,
+        pipeline=SpirulaePipelineConfig(
+            datamanager=SpirulaeDataManagerConfig(
+                **_DEFAULT_DATAMANAGER_CONFIG
+            ),
+            model=SpirulaeModelConfig(
+                **_MODEL_PRESET_CONFINED,
+                **_MODEL_PRESET_NO_COLOR_SHIFT,
+            ),
+        ),
+        optimizers={
+            **_DEFAULT_OPTIMIZERS
+        },
+        viewer=ViewerConfig(),
+        vis="viewer",
+    ),
+    description="Spirulae-Splat 3DGS preset for visually confined low-texture environments (e.g. indoor or ground-level city capture with largely textureless surfaces).",
+)
+
+spirulae_preset_confined = MethodSpecification(
+    config=TrainerConfig(
+        method_name="spirulae-preset-confined",
+        steps_per_eval_batch=0,
+        steps_per_save=2000,
+        max_num_iterations=30000,
+        mixed_precision=False,
+        pipeline=SpirulaePipelineConfig(
+            datamanager=SpirulaeDataManagerConfig(
+                **_DEFAULT_DATAMANAGER_CONFIG
+            ),
+            model=SpirulaeModelConfig(
+                **_MODEL_PRESET_3DGS2TR,
+                **_MODEL_PRESET_CONFINED,
+                **_MODEL_PRESET_RICH_TEXTURE,
+            ),
+        ),
+        optimizers={
+            **_SECOND_ORDER_POSITION_OPTIMIZERS
+        },
+        viewer=ViewerConfig(),
+        vis="viewer",
+    ),
+    description="Spirulae-Splat 3DGS preset for visually confined environments with moderate to rich texture (e.g. rich-texture indoor environments, ground-level city or foliage captures without much sky visible in input images).",
+)
+
+spirulae_preset_open_low_texture = MethodSpecification(
+    config=TrainerConfig(
+        method_name="spirulae-preset-open-low-texture",
+        steps_per_eval_batch=0,
+        steps_per_save=2000,
+        max_num_iterations=30000,
+        mixed_precision=False,
+        pipeline=SpirulaePipelineConfig(
+            datamanager=SpirulaeDataManagerConfig(
+                **_DEFAULT_DATAMANAGER_CONFIG
+            ),
+            model=SpirulaeModelConfig(
+                **_MODEL_PRESET_NO_COLOR_SHIFT,
+                relative_scale=10.0,
+            ),
+        ),
+        optimizers={
+            **_DEFAULT_OPTIMIZERS
+        },
+        viewer=ViewerConfig(),
+        vis="viewer",
+    ),
+    description="Spirulae-Splat 3DGS preset for open low-texture environments (e.g. outdoor scenes containing large textureless concrete, water, sand, or snow surface).",
+)
+
+spirulae_preset_open = MethodSpecification(
+    config=TrainerConfig(
+        method_name="spirulae-preset-open",
+        steps_per_eval_batch=0,
+        steps_per_save=2000,
+        max_num_iterations=30000,
+        mixed_precision=False,
+        pipeline=SpirulaePipelineConfig(
+            datamanager=SpirulaeDataManagerConfig(
+                **_DEFAULT_DATAMANAGER_CONFIG
+            ),
+            model=SpirulaeModelConfig(
+                **_MODEL_PRESET_3DGS2TR,
+                **_MODEL_PRESET_RICH_TEXTURE,
+                # relative_scale=10.0,
+            ),
+        ),
+        optimizers={
+            **_SECOND_ORDER_POSITION_OPTIMIZERS
+        },
+        viewer=ViewerConfig(),
+        vis="viewer",
+    ),
+    description="Spirulae-Splat 3DGS preset for open environments with moderate to rich texture (e.g. outdoor landscapes, drone capture).",
+)
+
+spirulae_preset_centered_object = MethodSpecification(
+    config=TrainerConfig(
+        method_name="spirulae-preset-centered-object",
+        steps_per_eval_batch=0,
+        steps_per_save=2000,
+        max_num_iterations=30000,
+        mixed_precision=False,
+        pipeline=SpirulaePipelineConfig(
+            datamanager=SpirulaeDataManagerConfig(
+                dataparser=Nerfstudio2DataParserConfig(
+                    eval_mode="fraction",
+                    train_split_fraction=1.0,
+                    center_method="focus",
+                ),
+            ),
+            model=SpirulaeModelConfig(
+                **_MODEL_PRESET_RICH_TEXTURE,
+                **_MODEL_PRESET_NO_COLOR_SHIFT,
+                apply_loss_for_mask=True,
+                mcmc_cap_max=100000,
+            ),
+        ),
+        optimizers={
+            **_DEFAULT_OPTIMIZERS
+        },
+        viewer=ViewerConfig(),
+        vis="viewer",
+    ),
+    description="Spirulae-Splat 3DGS preset for small centered objects (e.g. small item on turntable, human avatar).",
+)
+
+spirulae_preset_academic_baseline = MethodSpecification(
+    config=TrainerConfig(
+        method_name="spirulae-preset-academic-baseline",
+        steps_per_eval_batch=0,
+        steps_per_save=2000,
+        max_num_iterations=30000,
+        mixed_precision=False,
+        pipeline=SpirulaePipelineConfig(
+            datamanager=SpirulaeDataManagerConfig(
+                dataparser=Nerfstudio2DataParserConfig(
+                    eval_mode="interval",
+                    eval_interval=8,
+                ),
+                max_batch_per_epoch=9**9,
+            ),
+            model=SpirulaeModelConfig(
+                primitive="3dgs",
+                background_color="black",
+                train_background_color=False,
+                compute_depth_normal=False,
+                use_bilateral_grid=False,
+                use_bilateral_grid_for_geometry=False,
+                use_ppisp=False,
+                mcmc_max_screen_size=float('inf'),
+                depth_reg_weight=0.0,
+                normal_reg_weight=0.0,
+                alpha_reg_weight=0.0,
+                alpha_loss_weight=0.0,
+                alpha_loss_weight_under=0.0,
+                erank_reg=0.0,
+                erank_reg_s3=0.0,
+                quat_norm_reg=0.0,
+                randomize_background=0.0,
+                normal_supervision_weight=0.0
+            ),
+        ),
+        optimizers={
+            **_DEFAULT_OPTIMIZERS
+        },
+        viewer=ViewerConfig(),
+        vis="viewer",
+    ),
+    description="Spirulae-Splat 3DGS preset that replicates academic baseline (3DGS MCMC) as faithful as possible. Use this to reproduce metrics on academic benchmark datasets (e.g. Mip-NeRF 360).",
+)

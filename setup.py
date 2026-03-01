@@ -218,6 +218,12 @@ setup(
             "spirulae-triangle = spirulae_splat.ns_config:spirulae_triangle",
             "spirulae-triangle-patched = spirulae_splat.ns_config:spirulae_triangle_patched",
             "spirulae-voxel = spirulae_splat.ns_config:spirulae_voxel",
+            "spirulae-preset-confined-low-texture = spirulae_splat.ns_config:spirulae_preset_confined_low_texture",
+            "spirulae-preset-confined = spirulae_splat.ns_config:spirulae_preset_confined",
+            "spirulae-preset-open-low-texture = spirulae_splat.ns_config:spirulae_preset_open_low_texture",
+            "spirulae-preset-open = spirulae_splat.ns_config:spirulae_preset_open",
+            "spirulae-preset-centered-object = spirulae_splat.ns_config:spirulae_preset_centered_object",
+            "spirulae-preset-academic-baseline = spirulae_splat.ns_config:spirulae_preset_academic_baseline",
         ]
     },
     cmdclass={"build_ext": get_ext()} if not BUILD_NO_CUDA else {},

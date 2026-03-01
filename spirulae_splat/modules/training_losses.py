@@ -322,6 +322,7 @@ class SplatTrainingLosses(torch.nn.Module):
                 self.bil_grids.grids.data = \
                     Dct3D.apply(self.bil_grids.grids.data.cuda()).to(self.bil_grids.grids.data.device)
         if self.config.use_bilateral_grid_for_geometry:
+            # TODO: some way to avoid introducing VRAM overhead when geometry is not provided
             self.bil_grids_depth = BilateralGrid(
                 num=self.num_train_data,
                 grid_X=self.config.bilagrid_shape_geometry[0],
