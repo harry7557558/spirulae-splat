@@ -32,15 +32,29 @@ void blend_background_bwd(
     v_background = p_background.d;
 }
 
+[ForceInline]
+[Differentiable]
+[CudaDeviceExport]
+float linear_rgb_to_srgb(float x) {
+    const float cutoff = 0.0031308f;
+    return (x < cutoff ? x * 12.92f : 1.055f * pow(x, 1.0f / 2.4f) - 0.055f);
+}
+
+[CudaDeviceExport]
+float linear_rgb_to_srgb_grad(float x) {
+    var dp_x = diffPair(x, 1.0);
+    var dp_y = fwd_diff(linear_rgb_to_srgb)(dp_x);
+    return dp_y.d;
+}
 
 [Differentiable]
 [CudaDeviceExport]
 float3 linear_rgb_to_srgb(float3 rgb) {
-    const float cutoff = 0.0031308f;
-    rgb.x = (rgb.x < cutoff ? rgb.x * 12.92f : 1.055f * pow(rgb.x, 1.0f / 2.4f) - 0.055f);
-    rgb.y = (rgb.y < cutoff ? rgb.y * 12.92f : 1.055f * pow(rgb.y, 1.0f / 2.4f) - 0.055f);
-    rgb.z = (rgb.z < cutoff ? rgb.z * 12.92f : 1.055f * pow(rgb.z, 1.0f / 2.4f) - 0.055f);
-    return rgb;
+    return float3(
+        linear_rgb_to_srgb(rgb.x),
+        linear_rgb_to_srgb(rgb.y),
+        linear_rgb_to_srgb(rgb.z)
+    );
 }
 
 [CudaDeviceExport]

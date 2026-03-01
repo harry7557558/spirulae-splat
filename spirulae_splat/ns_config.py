@@ -57,7 +57,10 @@ _DEFAULT_OPTIMIZERS = {
         "scheduler": None,
     },
     "features_sh": {
-        "optimizer": FusedAdamOptimizerConfig(lr=0.0025 / 20, eps=1e-15),
+        "optimizer": FusedAdamOptimizerConfig(
+            lr=0.0025 / 20, eps=1e-15,
+            tr=1.0e-6 / 20, tr_final=1.0e-8 / 20, tr_max_steps=30000
+        ),
         "scheduler": None,
     },
     "features_ch": {
@@ -172,9 +175,9 @@ _SECOND_ORDER_OPTIMIZERS["scales"] = {
 #     ),
 # }
 # _SECOND_ORDER_OPTIMIZERS["features_dc"] = {
-#     "optimizer": FusedNewtonOptimizerConfig(mode="scale", lr=0.282e-6, eps=1e-15),
+#     "optimizer": FusedNewtonOptimizerConfig(mode="color", lr=1.0e-6, eps=1e-15),
 #     "scheduler": ExponentialDecaySchedulerConfig(
-#         lr_final=0.282e-8, max_steps=30000, #warmup_steps=1000, lr_pre_warmup=0
+#         lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000, lr_pre_warmup=0
 #     ),
 # }
 

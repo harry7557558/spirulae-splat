@@ -5,8 +5,30 @@ namespace SlangProjectionUtils {
 #include "generated/set_namespace.cuh"
 #include "generated/projection_utils.cuh"
 }
+namespace SlangPixelWise {
+#include "generated/set_namespace.cuh"
+#include "generated/pixel_wise.cuh"
+}
 
 #include "common.cuh"
+
+
+inline constexpr float kSh0 = 0.28209479177387814f;
+
+__forceinline__ __device__ float3 fmaxf(float3 v, float k) {
+    return {
+        fmaxf(v.x, k),
+        fmaxf(v.y, k),
+        fmaxf(v.z, k)
+    };
+}
+__forceinline__ __device__ float3 sqrtf(float3 v) {
+    return {
+        sqrtf(fmaxf(v.x, 0.0f)),
+        sqrtf(fmaxf(v.y, 0.0f)),
+        sqrtf(fmaxf(v.z, 0.0f))
+    };
+}
 
 
 /* "Standard" Adam */
@@ -74,10 +96,10 @@ void fused_adam(
     CHECK_INPUT(exp_avg_sq);
 
     const int numel = param.numel();
-    const int threads = 256;
-    const int blocks = (numel + threads - 1) / threads;
+    if (numel == 0)
+        return;
     
-    fused_adam_kernel<float><<<blocks, threads>>>(
+    fused_adam_kernel<float><<<_LAUNCH_ARGS_1D(numel, 256)>>>(
         param.data_ptr<float>(),
         grad.data_ptr<float>(),
         exp_avg.data_ptr<float>(),
@@ -192,10 +214,10 @@ void fused_newton(
     CHECK_INPUT(exp_avg_sq);
 
     const int numel = param.numel();
-    const int threads = 256;
-    const int blocks = (numel + threads - 1) / threads;
+    if (numel == 0)
+        return;
     
-    fused_newton_kernel<float><<<blocks, threads>>>(
+    fused_newton_kernel<float><<<_LAUNCH_ARGS_1D(numel, 256)>>>(
         param.data_ptr<float>(),
         grad.data_ptr<float>(),
         hess_diag.data_ptr<float>(),
@@ -344,10 +366,10 @@ void fused_3dgs2tr_mean_optim(
     CHECK_INPUT(exp_avg_sq_means);
 
     const int num_gs = means.numel() / 3;
-    const int threads = 256;
-    const int blocks = (num_gs + threads - 1) / threads;
+    if (num_gs == 0)
+        return;
     
-    fused_3dgs2tr_mean_optim_kernel<<<blocks, threads>>>(
+    fused_3dgs2tr_mean_optim_kernel<<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
         num_gs,
         (float3*)means.data_ptr<float>(),
         (float3*)vr_means.data_ptr<float>(),
@@ -451,10 +473,10 @@ void fused_3dgs2tr_scale_optim(
     CHECK_INPUT(exp_avg_sq_scales);
 
     const int num_gs = scales.numel() / 3;
-    const int threads = 256;
-    const int blocks = (num_gs + threads - 1) / threads;
+    if (num_gs == 0)
+        return;
     
-    fused_3dgs2tr_scale_optim_kernel<<<blocks, threads>>>(
+    fused_3dgs2tr_scale_optim_kernel<<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
         num_gs,
         (float3*)scales.data_ptr<float>(),
         (float3*)vr_scales.data_ptr<float>(),
@@ -462,6 +484,111 @@ void fused_3dgs2tr_scale_optim(
         opacities.data_ptr<float>(),
         (float3*)exp_avg_scales.data_ptr<float>(),
         (float3*)exp_avg_sq_scales.data_ptr<float>(),
+        lr,
+        beta1,
+        beta2,
+        eps,
+        eps_tr,
+        step1,
+        step2
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+/* 3DGS^2-TR Color - https://arxiv.org/abs/2602.00395 */
+
+__global__ void fused_3dgs2tr_color_optim_kernel(
+    const int num_gs,
+    float3* __restrict__ colors,  // [N, 3]
+    const float3* __restrict__ vr_colors,  // [N, 3]
+    const float3* __restrict__ h_colors,  // [N, 3]
+    const float* __restrict__ opacities,  // [N, 1], logit space
+    float3* __restrict__ exp_avg_colors,  // [N, 3]
+    float3* __restrict__ exp_avg_sq_colors,  // [N, 3]
+    const float lr,
+    const float beta1,
+    const float beta2,
+    const float eps,
+    const float eps_tr,
+    const int step1,
+    const int step2
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < num_gs) {
+        // Bias correction terms
+        // TODO: proper bias correction after densification
+        const float bias_correction1 = 1.0f - powf(beta1, step1);
+        const float bias_correction2 = 1.0f - powf(beta2, step2);
+        const float step_size = lr / bias_correction1;
+
+        // Update momentum
+        float3 vr_color = vr_colors[idx];
+        float3 h_color = h_colors[idx];
+        float3 exp_avg_color = exp_avg_colors[idx];
+        float3 exp_avg_sq_color = exp_avg_sq_colors[idx];
+        exp_avg_color = beta1 * exp_avg_color + (1.0f - beta1) * vr_color;
+        exp_avg_sq_color = beta2 * exp_avg_sq_color + (1.0f - beta2) * h_color;
+        exp_avg_colors[idx] = exp_avg_color;
+        exp_avg_sq_colors[idx] = exp_avg_sq_color;
+
+        // Compute delta
+        float3 delta = -step_size * exp_avg_color / (exp_avg_sq_color / bias_correction2 + eps);
+
+        // Compute trust region
+        float opac = opacities[idx];
+        opac = 1.0f / (1.0f + __expf(-opac));
+        float3 color = fmaxf(kSh0 * colors[idx] + 0.5f, (0.5f/255.0f)*(0.5f/255.0f));
+        float3 clip = kSh0 * sqrtf(4.0f * eps_tr * color / fmaxf(opac, 1e-12f));
+
+        // clip and update
+        delta.x = fminf(fmaxf(delta.x, -clip.x), clip.x);
+        delta.y = fminf(fmaxf(delta.y, -clip.y), clip.y);
+        delta.z = fminf(fmaxf(delta.z, -clip.z), clip.z);
+        delta.x = isfinite(delta.x) ? delta.x : 0.0f;
+        delta.y = isfinite(delta.y) ? delta.y : 0.0f;
+        delta.z = isfinite(delta.z) ? delta.z : 0.0f;
+        colors[idx] += delta;
+    }
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void fused_3dgs2tr_color_optim(
+    at::Tensor colors,
+    at::Tensor vr_colors,
+    at::Tensor h_colors,
+    at::Tensor opacities,
+    at::Tensor exp_avg_colors,
+    at::Tensor exp_avg_sq_colors,
+    float lr,
+    float beta1,
+    float beta2,
+    float eps,
+    float eps_tr,
+    int step1,
+    int step2
+) {
+    DEVICE_GUARD(colors);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(vr_colors);
+    CHECK_INPUT(h_colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(exp_avg_colors);
+    CHECK_INPUT(exp_avg_sq_colors);
+
+    const int num_gs = colors.numel() / 3;
+    if (num_gs == 0)
+        return;
+    
+    fused_3dgs2tr_color_optim_kernel<<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
+        num_gs,
+        (float3*)colors.data_ptr<float>(),
+        (float3*)vr_colors.data_ptr<float>(),
+        (float3*)h_colors.data_ptr<float>(),
+        opacities.data_ptr<float>(),
+        (float3*)exp_avg_colors.data_ptr<float>(),
+        (float3*)exp_avg_sq_colors.data_ptr<float>(),
         lr,
         beta1,
         beta2,
@@ -548,10 +675,10 @@ void fused_3dgs2tr_opacity_optim(
     CHECK_INPUT(exp_avg_sq_opacities);
 
     const int num_gs = opacities.numel();
-    const int threads = 256;
-    const int blocks = (num_gs + threads - 1) / threads;
+    if (num_gs == 0)
+        return;
     
-    fused_3dgs2tr_opacity_optim_kernel<<<blocks, threads>>>(
+    fused_3dgs2tr_opacity_optim_kernel<<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
         num_gs,
         opacities.data_ptr<float>(),
         vr_opacities.data_ptr<float>(),
@@ -754,10 +881,10 @@ void fused_3dgs2tr_quat_optim(
     CHECK_INPUT(exp_avg_sq_quats);
 
     const int num_gs = quats.numel() / 4;
-    const int threads = 256;
-    const int blocks = (num_gs + threads - 1) / threads;
+    if (num_gs == 0)
+        return;
     
-    fused_3dgs2tr_quat_optim_kernel<<<blocks, threads>>>(
+    fused_3dgs2tr_quat_optim_kernel<<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
         num_gs,
         (float4*)quats.data_ptr<float>(),
         (float4*)vr_quats.data_ptr<float>(),
@@ -777,3 +904,300 @@ void fused_3dgs2tr_quat_optim(
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
+
+
+/* Adam for linear RGB */
+
+__global__ void fused_adam_linear_rgb_optim_kernel(
+    const int numel,
+    float* __restrict__ rgbs,  // [N]
+    const float* __restrict__ grad,  // [N]
+    float* __restrict__ exp_avg,  // [N]
+    float* __restrict__ exp_avg_sq,  // [N]
+    const float lr,
+    const float beta1,
+    const float beta2,
+    const float eps,
+    const int step
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < numel) {
+        // Bias correction terms
+        // TODO: proper bias correction after densification
+        const float bias_correction1 = 1.0f - powf(beta1, step);
+        const float bias_correction2 = 1.0f - powf(beta2, step);
+        const float step_size = lr / bias_correction1;
+        
+        // Load values
+        float x = rgbs[idx];
+        float v = grad[idx];
+        float m_val = exp_avg[idx];
+        float v_val = exp_avg_sq[idx];
+
+        // Convert gradient to linear color space
+        v /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * x + 0.5f);
+        
+        // Update biased first moment estimate: m_t = beta1 * m_{t-1} + (1 - beta1) * g_t
+        m_val = beta1 * m_val + (1.0f - beta1) * v;
+        
+        // Update biased second raw moment estimate: v_t = beta2 * v_{t-1} + (1 - beta2) * g_t^2
+        v_val = beta2 * v_val + (1.0f - beta2) * v * v;
+        
+        // Compute update: theta_t = theta_{t-1} - step_size * m_t / (sqrt(v_t / bias_correction2) + eps)
+        float denom = sqrtf(v_val / bias_correction2) + eps;
+        x = x - step_size * (m_val / denom);
+        
+        // Write back
+        rgbs[idx] = x;
+        exp_avg[idx] = m_val;
+        exp_avg_sq[idx] = v_val;
+    }
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void fused_adam_linear_rgb_optim(
+    at::Tensor param,
+    at::Tensor grad,
+    at::Tensor exp_avg,
+    at::Tensor exp_avg_sq,
+    float lr,
+    float beta1,
+    float beta2,
+    float eps,
+    int step
+) {
+    DEVICE_GUARD(param);
+    CHECK_INPUT(param);
+    CHECK_INPUT(grad);
+    CHECK_INPUT(exp_avg);
+    CHECK_INPUT(exp_avg_sq);
+
+    const int numel = param.numel();
+    if (numel == 0)
+        return;
+    
+    fused_adam_linear_rgb_optim_kernel<<<_LAUNCH_ARGS_1D(numel, 256)>>>(
+        numel,
+        param.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        exp_avg.data_ptr<float>(),
+        exp_avg_sq.data_ptr<float>(),
+        lr,
+        beta1,
+        beta2,
+        eps,
+        step
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+/* Trust Region Adam for linear RGB */
+
+__global__ void fused_adamtr_linear_rgb_optim_kernel(
+    const int num_gs,
+    float3* __restrict__ rgbs,  // [N, 3]
+    const float3* __restrict__ grad,  // [N, 3]
+    float3* __restrict__ exp_avg,  // [N, 3]
+    float3* __restrict__ exp_avg_sq,  // [N, 3]
+    float* __restrict__ opacities,  // [N]
+    const float lr,
+    const float beta1,
+    const float beta2,
+    const float eps,
+    const float eps_tr,
+    const int step
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < num_gs) {
+        // Bias correction terms
+        // TODO: proper bias correction after densification
+        const float bias_correction1 = 1.0f - powf(beta1, step);
+        const float bias_correction2 = 1.0f - powf(beta2, step);
+        const float step_size = lr / bias_correction1;
+        
+        // Load values
+        float3 x = rgbs[idx];
+        float3 v = grad[idx];
+        float3 m_val = exp_avg[idx];
+        float3 v_val = exp_avg_sq[idx];
+
+        // Convert gradient to linear color space
+        v.x /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * x.x + 0.5f);
+        v.y /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * x.y + 0.5f);
+        v.z /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * x.z + 0.5f);
+        
+        // Update momentum
+        m_val = beta1 * m_val + (1.0f - beta1) * v;
+        v_val = beta2 * v_val + (1.0f - beta2) * v * v;
+
+        // Compute delta
+        float3 denom = sqrtf(v_val / bias_correction2) + eps;
+        float3 delta = -step_size * (m_val / denom);
+
+        // Compute trust region
+        float opac = opacities[idx];
+        opac = 1.0f / (1.0f + __expf(-opac));
+        float3 rgb = fmaxf(kSh0 * x + 0.5f, (0.5f/255.0f)*(0.5f/255.0f));
+        float3 clip = kSh0 * sqrtf(4.0f * eps_tr * rgb / fmaxf(opac, 1e-12f));
+
+        // clip and update
+        delta.x = fminf(fmaxf(delta.x, -clip.x), clip.x);
+        delta.y = fminf(fmaxf(delta.y, -clip.y), clip.y);
+        delta.z = fminf(fmaxf(delta.z, -clip.z), clip.z);
+        delta.x = isfinite(delta.x) ? delta.x : 0.0f;
+        delta.y = isfinite(delta.y) ? delta.y : 0.0f;
+        delta.z = isfinite(delta.z) ? delta.z : 0.0f;
+        rgbs[idx] += delta;
+    }
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void fused_adamtr_linear_rgb_optim(
+    at::Tensor param,
+    at::Tensor grad,
+    at::Tensor exp_avg,
+    at::Tensor exp_avg_sq,
+    at::Tensor opacities,
+    float lr,
+    float beta1,
+    float beta2,
+    float eps,
+    float eps_tr,
+    int step
+) {
+    DEVICE_GUARD(param);
+    CHECK_INPUT(param);
+    CHECK_INPUT(grad);
+    CHECK_INPUT(exp_avg);
+    CHECK_INPUT(exp_avg_sq);
+    CHECK_INPUT(opacities);
+
+    const int num_gs = param.numel() / 3;
+    if (num_gs == 0)
+        return;
+    
+    fused_adamtr_linear_rgb_optim_kernel<<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
+        num_gs,
+        (float3*)param.data_ptr<float>(),
+        (float3*)grad.data_ptr<float>(),
+        (float3*)exp_avg.data_ptr<float>(),
+        (float3*)exp_avg_sq.data_ptr<float>(),
+        opacities.data_ptr<float>(),
+        lr,
+        beta1,
+        beta2,
+        eps,
+        eps_tr,
+        step
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+/* Trust Region Adam for linear RGB, SH coefficients */
+
+__global__ void fused_adamtr_linear_rgb_sh_optim_kernel(
+    const int num_params,
+    const int num_sh,
+    float* __restrict__ param,  // [N, K, 3]
+    const float* __restrict__ grad,  // [N, K, 3]
+    float* __restrict__ exp_avg,  // [N, K, 3]
+    float* __restrict__ exp_avg_sq,  // [N, K, 3]
+    float* __restrict__ rgbs,  // [N, 3]
+    float* __restrict__ opacities,  // [N]
+    const float lr,
+    const float beta1,
+    const float beta2,
+    const float eps,
+    const float eps_tr,
+    const int step
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < num_params) {
+        // Bias correction terms
+        // TODO: proper bias correction after densification
+        const float bias_correction1 = 1.0f - powf(beta1, step);
+        const float bias_correction2 = 1.0f - powf(beta2, step);
+        const float step_size = lr / bias_correction1;
+        
+        // Load values
+        // float x = param[idx];
+        float v = grad[idx];
+        float m_val = exp_avg[idx];
+        float v_val = exp_avg_sq[idx];
+
+        // Convert gradient to linear color space
+        float c = rgbs[(idx / (3*num_sh)) * 3 + (idx % 3)] * kSh0 + 0.5f;
+        v /= SlangPixelWise::linear_rgb_to_srgb_grad(c);
+        
+        // Update momentum
+        m_val = beta1 * m_val + (1.0f - beta1) * v;
+        v_val = beta2 * v_val + (1.0f - beta2) * v * v;
+
+        // Compute delta
+        float denom = sqrtf(v_val / bias_correction2) + eps;
+        float delta = -step_size * (m_val / denom);
+
+        // Compute trust region
+        float opac = opacities[idx / (3*num_sh)];
+        opac = 1.0f / (1.0f + __expf(-opac));
+        c = fmaxf(c, (0.5f/255.0f)*(0.5f/255.0f));
+        float clip = kSh0 * sqrtf(4.0f * eps_tr * c / fmaxf(opac, 1e-12f));
+
+        // clip and update
+        delta = fminf(fmaxf(delta, -clip), clip);
+        param[idx] += delta;
+    }
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void fused_adamtr_linear_rgb_sh_optim(
+    at::Tensor param,
+    at::Tensor grad,
+    at::Tensor exp_avg,
+    at::Tensor exp_avg_sq,
+    at::Tensor colors,
+    at::Tensor opacities,
+    float lr,
+    float beta1,
+    float beta2,
+    float eps,
+    float eps_tr,
+    int step
+) {
+    DEVICE_GUARD(param);
+    CHECK_INPUT(param);
+    CHECK_INPUT(grad);
+    CHECK_INPUT(exp_avg);
+    CHECK_INPUT(exp_avg_sq);
+    CHECK_INPUT(opacities);
+
+    const int num_gs = colors.numel() / 3;
+    if (num_gs == 0)
+        return;
+    const int num_sh = param.numel() / colors.numel();
+    if (num_sh == 0)
+        return;
+    
+    fused_adamtr_linear_rgb_sh_optim_kernel<<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
+        num_gs,
+        num_sh,
+        param.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        exp_avg.data_ptr<float>(),
+        exp_avg_sq.data_ptr<float>(),
+        colors.data_ptr<float>(),
+        opacities.data_ptr<float>(),
+        lr,
+        beta1,
+        beta2,
+        eps,
+        eps_tr,
+        step
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}

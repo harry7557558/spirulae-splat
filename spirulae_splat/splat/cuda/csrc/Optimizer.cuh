@@ -104,6 +104,23 @@ void fused_3dgs2tr_scale_optim(
 );
 
 
+void fused_3dgs2tr_color_optim(
+    at::Tensor colors,
+    at::Tensor vr_colors,
+    at::Tensor h_colors,
+    at::Tensor opacities,
+    at::Tensor exp_avg_colors,
+    at::Tensor exp_avg_sq_colors,
+    float lr,
+    float beta1,
+    float beta2,
+    float eps,
+    float eps_tr,
+    int step1,
+    int step2
+);
+
+
 void fused_3dgs2tr_opacity_optim(
     at::Tensor opacities,
     at::Tensor vr_opacities,
@@ -135,4 +152,48 @@ void fused_3dgs2tr_quat_optim(
     float eps_tr,
     int step1,
     int step2
+);
+
+
+void fused_adam_linear_rgb_optim(
+    at::Tensor param,
+    at::Tensor grad,
+    at::Tensor exp_avg,
+    at::Tensor exp_avg_sq,
+    float lr,
+    float beta1,
+    float beta2,
+    float eps,
+    int step
+);
+
+
+void fused_adamtr_linear_rgb_optim(
+    at::Tensor param,
+    at::Tensor grad,
+    at::Tensor exp_avg,
+    at::Tensor exp_avg_sq,
+    at::Tensor opacities,
+    float lr,
+    float beta1,
+    float beta2,
+    float eps,
+    float eps_tr,
+    int step
+);
+
+
+void fused_adamtr_linear_rgb_sh_optim(
+    at::Tensor param,
+    at::Tensor grad,
+    at::Tensor exp_avg,
+    at::Tensor exp_avg_sq,
+    at::Tensor colors,
+    at::Tensor opacities,
+    float lr,
+    float beta1,
+    float beta2,
+    float eps,
+    float eps_tr,
+    int step
 );

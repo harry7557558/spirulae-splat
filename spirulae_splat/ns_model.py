@@ -237,7 +237,7 @@ class SpirulaeModelConfig(ModelConfig):
     bilagrid_shape: Tuple[int, int, int] = (16, 16, 8)
     """Shape of the bilateral grid (X, Y, W)"""
     bilagrid_type: Literal["affine", "ppisp"] = "affine"
-    """What the bilateral grid predicts (affine transform matrix or PPISP parameters)"""
+    """What the bilateral grid predicts (affine transform matrix or PPISP parameters). PPISP generally gives less color shift but can be less numerically stable."""
     use_bilateral_grid_for_geometry: bool = True
     """If True, use bilateral grid for depth and normal (e.g. AI generated biased ones)"""
     bilagrid_shape_geometry: Tuple[int, int, int] = (8, 8, 4)
@@ -985,6 +985,16 @@ class SpirulaeModel(Model):
             # print([x.shape for x in splat_params])
         if val:
             splat_params = tuple([(p.detach() if isinstance(p, torch.Tensor) else p) for p in splat_params])
+
+        if self.config.use_linear_color_space:
+            if "features_dc" in self.gauss_params and 'opacities' in self.gauss_params:
+                # self.features_dc.optimizer_override = "fused_adam_linear_rgb_optim"
+                self.features_dc.optimizer_override = "fused_adamtr_linear_rgb_optim"
+                self.features_dc.opacities = self.opacities
+            if "features_sh" in self.gauss_params and "features_dc" in self.gauss_params and 'opacities' in self.gauss_params:
+                self.features_sh.optimizer_override = "fused_adamtr_linear_rgb_sh_optim"
+                self.features_sh.features_dc = self.features_dc
+                self.features_sh.opacities = self.opacities
 
         use_bvh = self.config.use_bvh and self.training and not val
         rgbd, alpha, meta = rasterization(

@@ -22,6 +22,9 @@ class FusedAdam(Optimizer):
         lr: float = 1e-3,
         betas: tuple = (0.9, 0.999),
         eps: float = 1e-8,
+        tr: Optional[float] = 1e-6,
+        tr_final: Optional[float] = 1e-8,
+        tr_max_steps: Optional[int] = 30000,
         **kwargs
     ):
         if lr < 0.0:
@@ -37,7 +40,7 @@ class FusedAdam(Optimizer):
         if 'weight_decay' in kwargs and kwargs['weight_decay'] != 0.0:
             raise NotImplementedError("FusedAdam currently only supports weight_decay=0")
         
-        defaults = dict(lr=lr, betas=betas, eps=eps)
+        defaults = dict(lr=lr, betas=betas, eps=eps, tr=tr, tr_final=tr_final, tr_max_steps=tr_max_steps)
         super(FusedAdam, self).__init__(params, defaults)
     
     @torch.no_grad()
@@ -56,19 +59,21 @@ class FusedAdam(Optimizer):
             beta1, beta2 = group['betas']
             lr = group['lr']
             eps = group['eps']
+
+            tr = group['tr']
+            tr_final = group['tr_final']
+            tr_max_steps = group['tr_max_steps']
             
             # Collect all tensors for this group
             params_with_grad = []
             grads = []
             exp_avgs = []
             exp_avg_sqs = []
+            steps = []
             
             for p in group['params']:
                 if p.grad is None:
                     continue
-                
-                params_with_grad.append(p)
-                grads.append(p.grad)
                 
                 state = self.state[p]
                 
@@ -82,16 +87,47 @@ class FusedAdam(Optimizer):
                 p.exp_avg = state['exp_avg']
                 p.exp_avg_sq = state['exp_avg_sq']
                 
-                exp_avgs.append(state['exp_avg'])
-                exp_avg_sqs.append(state['exp_avg_sq'])
-                
                 state['step'] += 1
-            
+
+                if not hasattr(p, "optimizer_override"):
+                    # Use default Adam
+                    params_with_grad.append(p)
+                    grads.append(p.grad)
+                    exp_avgs.append(state['exp_avg'])
+                    exp_avg_sqs.append(state['exp_avg_sq'])
+                    steps.append(state['step'])
+                    continue
+
+                additional_params = []
+                eps_params = [eps]
+                eps_tr = tr * (tr_final / tr) ** min(state['step'] / tr_max_steps, 1.0)
+                if p.optimizer_override == "fused_adam_linear_rgb_optim":
+                    pass
+                elif p.optimizer_override == "fused_adamtr_linear_rgb_optim":
+                    additional_params = [p.opacities]
+                    eps_params.append(eps_tr)
+                elif p.optimizer_override == "fused_adamtr_linear_rgb_sh_optim":
+                    additional_params = [p.features_dc, p.opacities]
+                    eps_params.append(eps_tr)
+
+                _make_lazy_cuda_func(p.optimizer_override)(
+                    p,
+                    p.grad,
+                    state['exp_avg'],
+                    state['exp_avg_sq'],
+                    *additional_params,
+                    lr,
+                    beta1,
+                    beta2,
+                    *eps_params,
+                    state['step']
+                )
+
             if len(params_with_grad) == 0:
                 continue
             
             # Use the step count from the first parameter (all should be the same)
-            step = self.state[params_with_grad[0]]['step']
+            step = steps[0]
             
             # Launch fused CUDA kernel for all tensors
             _make_lazy_cuda_func("fused_adam_multi")(
@@ -114,6 +150,10 @@ class FusedAdamOptimizerConfig(OptimizerConfig):
     """Basic optimizer config with Adam"""
 
     _target: Type = FusedAdam
+
+    tr: Optional[float] = 1e-6
+    tr_final: Optional[float] = 1e-8
+    tr_max_steps: Optional[int] = 30000
 
 
 
@@ -200,6 +240,8 @@ class Fused3DGS2Tr(Optimizer):
                 if mode == "mean":
                     additional_params = [p.scales, p.quats, p.opacities]
                 elif mode == "scale":
+                    additional_params = [p.opacities]
+                elif mode == "color":
                     additional_params = [p.opacities]
                 elif mode == "quat":
                     additional_params = [p.scales, p.opacities]
