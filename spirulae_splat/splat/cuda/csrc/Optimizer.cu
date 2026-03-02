@@ -539,7 +539,9 @@ __global__ void fused_3dgs2tr_color_optim_kernel(
         // Compute trust region
         float opac = opacities[idx];
         opac = 1.0f / (1.0f + __expf(-opac));
-        float3 color = fmaxf(kSh0 * colors[idx] + 0.5f, (0.5f/255.0f)*(0.5f/255.0f));
+        // float3 color = fmaxf(kSh0 * colors[idx] + 0.5f, (0.5f/255.0f)*(0.5f/255.0f));
+        // float3 color = fmaxf(kSh0 * colors[idx] + 0.5f, 0.5f/255.0f);
+        float3 color = fmaxf(kSh0 * colors[idx] + 0.5f, (1.0f/255.0f)*(1.0f/255.0f));
         float3 clip = kSh0 * sqrtf(4.0f * eps_tr * color / fmaxf(opac, 1e-12f));
 
         // clip and update
@@ -1040,7 +1042,9 @@ __global__ void fused_adamtr_linear_rgb_optim_kernel(
         // Compute trust region
         float opac = opacities[idx];
         opac = 1.0f / (1.0f + __expf(-opac));
-        float3 rgb = fmaxf(kSh0 * x + 0.5f, (0.5f/255.0f)*(0.5f/255.0f));
+        // float3 rgb = fmaxf(kSh0 * x + 0.5f, (0.5f/255.0f)*(0.5f/255.0f));
+        // float3 rgb = fmaxf(kSh0 * x + 0.5f, 0.5f/255.0f);
+        float3 rgb = fmaxf(kSh0 * x + 0.5f, (1.0f/255.0f)*(1.0f/255.0f));
         float3 clip = kSh0 * sqrtf(4.0f * eps_tr * rgb / fmaxf(opac, 1e-12f));
 
         // clip and update
@@ -1145,7 +1149,9 @@ __global__ void fused_adamtr_linear_rgb_sh_optim_kernel(
         // Compute trust region
         float opac = opacities[idx / (3*num_sh)];
         opac = 1.0f / (1.0f + __expf(-opac));
-        c = fmaxf(c, (0.5f/255.0f)*(0.5f/255.0f));
+        // c = fmaxf(c, (0.5f/255.0f)*(0.5f/255.0f));
+        // c = fmaxf(c, 0.5f/255.0f);
+        c = fmaxf(c, (1.0f/255.0f)*(1.0f/255.0f));
         float clip = kSh0 * sqrtf(4.0f * eps_tr * c / fmaxf(opac, 1e-12f));
 
         // clip and update

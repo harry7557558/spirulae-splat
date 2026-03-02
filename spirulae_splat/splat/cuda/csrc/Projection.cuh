@@ -19,6 +19,30 @@
 
 
 std::tuple<
+    Vanilla3DGS::World::TensorTuple,  // v_splats
+    at::Tensor,  // v_viewmats
+    std::variant<at::Tensor, Vanilla3DGS::World::TensorTuple>,  // vr_world_pos or vr_splats
+    std::variant<at::Tensor, Vanilla3DGS::World::TensorTuple>  // h_world_pos or h_splats
+> projection_3dgs_backward_with_position_hessian_diagonal_tensor(
+    // fwd inputs
+    const Vanilla3DGS::World::TensorTuple &splats_world,
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const gsplat::CameraModelType camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
+    // fwd outputs
+    const at::Tensor aabb,                       // [..., C, N, 2]
+    // grad outputs
+    const Vanilla3DGS::Screen::TensorTupleProj &v_splats_screen,
+    const Vanilla3DGS::Screen::TensorTupleProj &vr_splats_screen,
+    const Vanilla3DGS::Screen::TensorTupleProj &h_splats_screen,
+    const bool viewmats_requires_grad
+);
+
+
+std::tuple<
     at::Tensor,  // aabb
     Vanilla3DGS::Screen::TensorTupleProj  // out splats
 > projection_3dgs_forward_tensor(
@@ -109,30 +133,6 @@ std::tuple<
     std::variant<at::Tensor, Vanilla3DGS::World::TensorTuple>,  // vr_world_pos or vr_splats
     std::variant<at::Tensor, Vanilla3DGS::World::TensorTuple>  // h_world_pos or h_splats
 > projection_3dgs_backward_with_hessian_diagonal_tensor(
-    // fwd inputs
-    const Vanilla3DGS::World::TensorTuple &splats_world,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
-    // fwd outputs
-    const at::Tensor aabb,                       // [..., C, N, 2]
-    // grad outputs
-    const Vanilla3DGS::Screen::TensorTupleProj &v_splats_screen,
-    const Vanilla3DGS::Screen::TensorTupleProj &vr_splats_screen,
-    const Vanilla3DGS::Screen::TensorTupleProj &h_splats_screen,
-    const bool viewmats_requires_grad
-);
-
-
-std::tuple<
-    Vanilla3DGS::World::TensorTuple,  // v_splats
-    at::Tensor,  // v_viewmats
-    std::variant<at::Tensor, Vanilla3DGS::World::TensorTuple>,  // vr_world_pos or vr_splats
-    std::variant<at::Tensor, Vanilla3DGS::World::TensorTuple>  // h_world_pos or h_splats
-> projection_3dgs_backward_with_position_hessian_diagonal_tensor(
     // fwd inputs
     const Vanilla3DGS::World::TensorTuple &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]

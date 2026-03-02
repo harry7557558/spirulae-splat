@@ -220,8 +220,10 @@ setup(
             "spirulae-voxel = spirulae_splat.ns_config:spirulae_voxel",
             "spirulae-preset-confined-low-texture = spirulae_splat.ns_config:spirulae_preset_confined_low_texture",
             "spirulae-preset-confined = spirulae_splat.ns_config:spirulae_preset_confined",
+            "spirulae^2-preset-confined = spirulae_splat.ns_config:spirulae_squared_preset_confined",
             "spirulae-preset-open-low-texture = spirulae_splat.ns_config:spirulae_preset_open_low_texture",
             "spirulae-preset-open = spirulae_splat.ns_config:spirulae_preset_open",
+            "spirulae^2-preset-open = spirulae_splat.ns_config:spirulae_squared_preset_open",
             "spirulae-preset-centered-object = spirulae_splat.ns_config:spirulae_preset_centered_object",
             "spirulae-preset-academic-baseline = spirulae_splat.ns_config:spirulae_preset_academic_baseline",
         ]

@@ -28,8 +28,10 @@ try:
     from fused_bilagrid import (
         BilateralGrid,
         BilateralGridPPISP,
+        BilateralGridLoglinear,
         fused_bilagrid_sample,
         fused_bilagrid_ppisp_sample,
+        fused_bilagrid_loglinear_sample,
         total_variation_loss
     )
 except:
@@ -311,7 +313,8 @@ class SplatTrainingLosses(torch.nn.Module):
         if self.config.use_bilateral_grid:
             self.bil_grids = {
                 'affine': BilateralGrid,
-                'ppisp': BilateralGridPPISP
+                'ppisp': BilateralGridPPISP,
+                'loglinear': BilateralGridLoglinear
             }[self.config.bilagrid_type](
                 num=self.num_train_data,
                 grid_X=self.config.bilagrid_shape[0],
@@ -421,7 +424,8 @@ class SplatTrainingLosses(torch.nn.Module):
                 grids = Dct3D.apply(grids)
             out = {
                 'affine': fused_bilagrid_sample,
-                'ppisp': fused_bilagrid_sample if is_geometry else fused_bilagrid_ppisp_sample
+                'ppisp': fused_bilagrid_sample if is_geometry else fused_bilagrid_ppisp_sample,
+                'loglinear': fused_bilagrid_sample if is_geometry else fused_bilagrid_loglinear_sample
             }[self.config.bilagrid_type](
                 grids, coords=None, rgb=rgb.unsqueeze(1),
                 actual_width=kwargs.get('width', None),
@@ -949,7 +953,7 @@ class SplatTrainingLosses(torch.nn.Module):
             bilagrid_mean = torch.mean(bilagrid, dim=(0, 2, 3, 4))
             if self.config.bilagrid_type == "affine":
                 bilagrid_mean_reg = F.mse_loss(bilagrid_mean, DEFAULT_BILAGRID_PARAMS)
-            elif self.config.bilagrid_type == "ppisp":
+            elif self.config.bilagrid_type in ["ppisp", "loglinear"]:
                 bilagrid_mean_reg = F.mse_loss(bilagrid_mean, torch.zeros_like(bilagrid_mean))
             loss_dict['bilagrid_mean_reg'] = self.config.bilagrid_mean_reg_weight * bilagrid_mean_reg
 

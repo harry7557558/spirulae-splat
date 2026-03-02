@@ -443,8 +443,12 @@ _MODEL_PRESET_CONFINED = dict(
     randomize_background=True,
     train_background_color=False,
 )
-_MODEL_PRESET_3DGS2TR = dict(
+_MODEL_PRESET_3DGS2TR_POS = dict(
     compute_hessian_diagonal="position",
+    mcmc_noise_lr=5e5 * (1.6e-4 / 1.0e-6),
+)
+_MODEL_PRESET_3DGS2TR = dict(
+    compute_hessian_diagonal="all",
     mcmc_noise_lr=5e5 * (1.6e-4 / 1.0e-6),
 )
 _MODEL_PRESET_RICH_TEXTURE = dict(
@@ -496,13 +500,39 @@ spirulae_preset_confined = MethodSpecification(
                 **_DEFAULT_DATAMANAGER_CONFIG
             ),
             model=SpirulaeModelConfig(
-                **_MODEL_PRESET_3DGS2TR,
+                **_MODEL_PRESET_3DGS2TR_POS,
                 **_MODEL_PRESET_CONFINED,
                 **_MODEL_PRESET_RICH_TEXTURE,
             ),
         ),
         optimizers={
             **_SECOND_ORDER_POSITION_OPTIMIZERS
+        },
+        viewer=ViewerConfig(),
+        vis="viewer",
+    ),
+    description="Spirulae-Splat 3DGS preset for visually confined environments with moderate to rich texture (e.g. rich-texture indoor environments, ground-level city or foliage captures without much sky visible in input images).",
+)
+
+spirulae_squared_preset_confined = MethodSpecification(
+    config=TrainerConfig(
+        method_name="spirulae^2-preset-confined",
+        steps_per_eval_batch=0,
+        steps_per_save=2000,
+        max_num_iterations=30000,
+        mixed_precision=False,
+        pipeline=SpirulaePipelineConfig(
+            datamanager=SpirulaeDataManagerConfig(
+                **_DEFAULT_DATAMANAGER_CONFIG
+            ),
+            model=SpirulaeModelConfig(
+                **_MODEL_PRESET_3DGS2TR,
+                **_MODEL_PRESET_CONFINED,
+                # **_MODEL_PRESET_RICH_TEXTURE,
+            ),
+        ),
+        optimizers={
+            **_SECOND_ORDER_OPTIMIZERS
         },
         viewer=ViewerConfig(),
         vis="viewer",
@@ -547,13 +577,37 @@ spirulae_preset_open = MethodSpecification(
                 **_DEFAULT_DATAMANAGER_CONFIG
             ),
             model=SpirulaeModelConfig(
-                **_MODEL_PRESET_3DGS2TR,
+                **_MODEL_PRESET_3DGS2TR_POS,
                 **_MODEL_PRESET_RICH_TEXTURE,
-                # relative_scale=10.0,
             ),
         ),
         optimizers={
             **_SECOND_ORDER_POSITION_OPTIMIZERS
+        },
+        viewer=ViewerConfig(),
+        vis="viewer",
+    ),
+    description="Spirulae-Splat 3DGS preset for open environments with moderate to rich texture (e.g. outdoor landscapes, drone capture).",
+)
+
+spirulae_squared_preset_open = MethodSpecification(
+    config=TrainerConfig(
+        method_name="spirulae^2-preset-open",
+        steps_per_eval_batch=0,
+        steps_per_save=2000,
+        max_num_iterations=30000,
+        mixed_precision=False,
+        pipeline=SpirulaePipelineConfig(
+            datamanager=SpirulaeDataManagerConfig(
+                **_DEFAULT_DATAMANAGER_CONFIG
+            ),
+            model=SpirulaeModelConfig(
+                **_MODEL_PRESET_3DGS2TR,
+                **_MODEL_PRESET_RICH_TEXTURE,
+            ),
+        ),
+        optimizers={
+            **_SECOND_ORDER_OPTIMIZERS
         },
         viewer=ViewerConfig(),
         vis="viewer",
