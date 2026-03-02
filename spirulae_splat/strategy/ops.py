@@ -350,6 +350,8 @@ def relocate_long_axis_split(
     n = len(dead_indices)
     if n == 0:
         return
+    if n >= len(alive_indices):
+        return  # training likely has become unstable
 
     # Sample for new GSs
     if probs is None:

@@ -528,7 +528,7 @@ spirulae_squared_preset_confined = MethodSpecification(
             model=SpirulaeModelConfig(
                 **_MODEL_PRESET_3DGS2TR,
                 **_MODEL_PRESET_CONFINED,
-                # **_MODEL_PRESET_RICH_TEXTURE,
+                **_MODEL_PRESET_RICH_TEXTURE,
             ),
         ),
         optimizers={
