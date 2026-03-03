@@ -1258,7 +1258,7 @@ class SpirulaeModel(Model):
             self.camera_optimizer.get_metrics_dict(metrics_dict)
         return metrics_dict
 
-    def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
+    def get_loss_dict(self, outputs, batch, metrics_dict=None, no_static_losses=False) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict.
 
         Args:
@@ -1267,17 +1267,19 @@ class SpirulaeModel(Model):
             metrics_dict: dictionary of metrics, some of which we can use for loss
         """
 
-        # Per-splat losses (CUDA async)
         static_losses = {}
-        self.training_losses.get_static_losses(
-            self.step,
-            self.quats, self.scales, self.opacities,
-            static_losses
-        )
+        if not no_static_losses:
 
-        # Camera optimizer loss (depends on nerfstudio, usually CPU)
-        if self.training and self.config.use_camera_optimizer:
-            self.camera_optimizer.get_loss_dict(static_losses)
+            # Per-splat losses (CUDA async)
+            self.training_losses.get_static_losses(
+                self.step,
+                self.quats, self.scales, self.opacities,
+                static_losses
+            )
+
+            # Camera optimizer loss (depends on nerfstudio, usually CPU)
+            if self.training and self.config.use_camera_optimizer:
+                self.camera_optimizer.get_loss_dict(static_losses)
 
         # Per-image losses (CUDA with .item() that involves GPU-CPU sync)
         self.info['num_train_data'] = self.num_train_data
@@ -1370,7 +1372,9 @@ class SpirulaeModel(Model):
                 else:
                     self.overfit_count = 0
 
-        self.print_loss_dict(loss_dict)
+        if not no_static_losses:
+            # TODO: print averaged loss dict in split_batch mode
+            self.print_loss_dict(loss_dict)
 
         # Reduce before return -
         # nerfstudio will later use functools.reduce(torch.add, ...), which is slow
@@ -1531,6 +1535,16 @@ class SpirulaeModel(Model):
         print(chunks, end='')
         # _storage['print_queue'].append(chunks)
         _storage['chunks'] = chunks
+
+    def set_gradient_accumulation_steps(self, gradient_accumulation_step: int, _trainer=[]):
+        if len(trainer) == 0:
+            # TODO: some less hacky way?
+            import inspect
+            trainer = inspect.stack()[4].frame.f_locals['self']
+            _trainer.append(trainer)
+        else:
+            trainer = _trainer[0]
+        trainer.gradient_accumulation_steps  # type: dict[str, int]
 
     @torch.no_grad()
     def get_outputs_for_camera(self, camera: Cameras, obb_box: Optional[OrientedBox] = None) -> Dict[str, torch.Tensor]:

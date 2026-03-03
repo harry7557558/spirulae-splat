@@ -49,8 +49,10 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
     """
     _target: Type = field(default_factory=lambda: SpirulaeDataManager)
 
-    max_batch_per_epoch: int = 768
+    max_batch_per_epoch: int = 800
     """Maximum number of batches per epoch, used for configuring batch size"""
+    split_batch: bool = False
+    """Whether to one large batch into many small batches to avoid OOM, at cost of slower training"""
 
     patch_batch_size: Optional[int] = None  # 256
     """If not None, batch patches instead of full images
@@ -460,7 +462,7 @@ class SpirulaeDataManager(FullImageDatamanager):
         camera.metadata = {}
         return camera
 
-    def next_train(self, step: int) -> Tuple[Cameras, Dict]:
+    def next_train(self, step: int) -> List[Tuple[Cameras, Dict]]:
         """Returns the next training batch
 
         Returns a Camera instead of raybundle"""
@@ -473,14 +475,30 @@ class SpirulaeDataManager(FullImageDatamanager):
         if self.train_index_group_loader is None:
             self.setup_index_group_loaders()
 
-        if self.config.patch_batch_size is not None:
-            assert self.config.cache_images != "disk", "Disk caching not supported in patch batching mode"
-            camera, batch = self.get_tiles(self.config.patch_batch_size, self.train_indices)
-        else:
-            camera, batch = self.train_index_group_loader.get_batch()
+        def pack_batch(camera, batch, max_batch_size=None, _no_split_batch=False) -> List[Tuple[Cameras, Dict]]:
+            if self.config.split_batch and not _no_split_batch:
+                n = len(batch['image'])
+                results = []
+                for i in range(n):
+                    camera_i = {}
+                    for key, value in camera.items():
+                        camera_i[key] = value[i:i+1] if isinstance(value, torch.Tensor) and len(value) == n else value
+                    camera_i['metadata'] = {}
+                    for key, value in camera.get('metadata', '').items():
+                        camera_i['metadata'][key] = value[i:i+1] if isinstance(value, torch.Tensor) and len(value) == n else value
+                    batch_i = {}
+                    for key, value in batch.items():
+                        batch_i[key] = value[i:i+1] if isinstance(value, torch.Tensor) and len(value) == n else value
+                    results.extend(pack_batch(camera_i, batch_i, max_batch_size, _no_split_batch=True))
+                return results
+
             for key, value in camera.items():
                 if isinstance(value, torch.Tensor) and value.numel() == 0:
                     camera[key] = None
+                elif isinstance(value, torch.Tensor):
+                    camera[key] = value[:max_batch_size].to(self.device)
+                else:
+                    camera[key] = value
             metadata = camera.pop('metadata', {})
             camera = Cameras(**camera).to(self.device)
             for key, value in batch.items():
@@ -490,32 +508,27 @@ class SpirulaeDataManager(FullImageDatamanager):
                 if isinstance(value, torch.Tensor):
                     metadata[key] = value.to(self.device)
             camera.metadata = metadata
+            return [(camera, batch)]
+
+        if self.config.patch_batch_size is not None:
+            assert self.config.cache_images != "disk", "Disk caching not supported in patch batching mode"
+            assert not self.config.split_batch, "split_batch not supported in patch batching mode"  # TODO
+            results = [self.get_tiles(self.config.patch_batch_size, self.train_indices)]
+        else:
+            camera, batch = self.train_index_group_loader.get_batch()
+            results = pack_batch(camera, batch)
 
         # TODO
         if random.random() < (step - 10000) / (30000 - 10000) and False:
-            return self.random_cameras(self.train_batch_size()), {}
+            return [self.random_cameras(self.train_batch_size()), {}]
 
         val_batch_size = self.val_batch_size(True)
         if len(self.train_dataset.val_indices) > 0 and val_batch_size > 0:
             val_camera, val_batch = self.val_index_group_loader.get_batch()
-            for key, value in val_camera.items():
-                if isinstance(value, torch.Tensor):
-                    if value.numel() == 0:
-                        val_camera[key] = None
-                    else:
-                        val_camera[key] = value[:val_batch_size].to(self.device)
-            metadata = val_camera.pop('metadata', {})
-            val_camera = Cameras(**val_camera)
-            for key, value in val_batch.items():
-                if isinstance(value, torch.Tensor):
-                    val_batch[key] = value[:val_batch_size].to(self.device)
-            for key, value in metadata.items():
-                if isinstance(value, torch.Tensor):
-                    metadata[key] = value.to(self.device)
-            val_camera.metadata = metadata
-            return (camera, val_camera), (batch, val_batch)
+            val_results = pack_batch(val_camera, val_batch, val_batch_size)
+            return results, val_results
 
-        return camera, batch
+        return results
 
     @cached_property
     def dataset_type(self) -> Type[TDataset]:

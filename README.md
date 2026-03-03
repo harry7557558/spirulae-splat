@@ -111,8 +111,9 @@ Background control
 Training very large-scale scenes
 - Cache images on disk for large datasets (instead of loading everything into RAM): `--pipeline.model.cache_images disk` (default: `cpu-pageable`)
 - If you notice "splat blobs" with a `low-texture` preset, increase `--pipeline.model.relative_scale` aggressively (default 10.0 for open and 1.0 otherwise)
-- Batching is enabled by default for scenes with large number of images, can be configured with `--pipeline.datamanager.max_batch_per_epoch` (default 768)
-- If you are not using depth and normal supervision, setting `--pipeline.model.use_bilateral_grid_for_geometry False` may save VRAM slightly
+- Batching for scenes with large number of images can be configured with `--pipeline.datamanager.max_batch_per_epoch` (default 800), which automatically enables batching when number of input images is above this number.
+- In batching mode, all images are processed in a single batch by default. Set `--pipeline.datamanager.split_batch True` to process one image at once, which can save VRAM a lot if you have large number of high-resolution images.
+- If you are not using depth and normal supervision, setting `--pipeline.model.use_bilateral_grid_for_geometry False` may save VRAM slightly.
 
 Unstable features
 - Training on images in linear color spaces: `--pipeline.model.use_linear_color_space True`; Wide-gamut color spaces: `--pipeline.model.image_color_space ACEScg` (supports `ACES2065-1`, `ACEScg`, `Rec.2020`, `AdobeRGB`)

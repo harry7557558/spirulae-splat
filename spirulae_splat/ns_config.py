@@ -270,7 +270,7 @@ spirulae_patched = MethodSpecification(
                 **_DEFAULT_DATAMANAGER_CONFIG,
                 patch_batch_size=-1,
                 patch_size=64,
-                max_batch_per_epoch=512,
+                max_batch_per_epoch=800,
             ),
             model=SpirulaeModelConfig(
                 # packed=True,
@@ -351,7 +351,7 @@ spirulae_triangle_patched = MethodSpecification(
                 compute_visibility_masks=True,
                 patch_batch_size=-1,
                 patch_size=64,
-                max_batch_per_epoch=512,
+                max_batch_per_epoch=800,
             ),
             model=SpirulaeModelConfig(
                 primitive="opaque_triangle",
