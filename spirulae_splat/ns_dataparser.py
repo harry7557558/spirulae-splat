@@ -44,6 +44,44 @@ MAX_AUTO_RESOLUTION = 1600
 DISTORTION_KEYS = "k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2".split()
 
 
+def geometric_median(X, eps=0.0, maxiter=10):
+    """
+    Calculates the geometric median of a set of 3D points.
+
+    Args:
+        X (np.ndarray): A NumPy array of shape (N, 3) where N is the number of points.
+        eps (float): Tolerance for convergence.
+
+    Returns:
+        np.ndarray: The geometric median point (shape 3,).
+    """
+    from scipy.spatial.distance import cdist, euclidean
+    y = np.median(X, 0)
+    for iter in range(maxiter):
+        D = cdist(X, [y])
+        nonzeros = (D != 0)[:, 0]
+        Dinv = 1 / D[nonzeros]
+        Dinvs = np.sum(Dinv)
+        W = Dinv / Dinvs
+        T = np.sum(W * X[nonzeros], 0)
+        num_zeros = len(X) - np.sum(nonzeros)
+
+        if num_zeros == 0:
+            y1 = T
+        elif num_zeros == len(X):
+            return y
+        else:
+            R = (T - y) * Dinvs
+            r = np.linalg.norm(R)
+            rinv = 0 if r == 0 else num_zeros / r
+            y1 = max(0, 1 - rinv) * T + min(1, rinv) * y
+        
+        if euclidean(y, y1) <= eps:
+            return y1
+        y = y1
+    return y
+
+
 @dataclass
 class Nerfstudio2DataParserConfig(NerfstudioDataParserConfig):
     """Nerfstudio dataset config"""
@@ -64,6 +102,8 @@ class Nerfstudio2DataParserConfig(NerfstudioDataParserConfig):
     """The method to use to center the poses."""
     auto_scale_poses: bool = True
     """Whether to automatically scale the poses to fit in +/- 1 bounding box."""
+    outlier_threshold: float = float('inf')
+    """Threshold to reject outlier camera poses."""
     eval_mode: Literal["fraction", "filename", "interval", "all"] = "interval"
     """
     The method to use for splitting the dataset into train and eval.
@@ -163,6 +203,14 @@ class Nerfstudio2(Nerfstudio):
             fnames.append(fname)
         inds = np.argsort(fnames)
         frames = [meta["frames"][ind] for ind in inds]
+
+        if np.isfinite(self.config.outlier_threshold):
+            camera_positions = np.array([np.array(frame["transform_matrix"])[:3, 3] for frame in frames])
+            med_camera_positions = geometric_median(camera_positions)
+            distances = np.linalg.norm(camera_positions - med_camera_positions[None], axis=-1)
+            mad_camera_positions = np.median(distances)
+            frames = [frame for dist, frame in zip(distances, frames)
+                      if dist <= self.config.outlier_threshold * mad_camera_positions]
 
         for frame in frames:
             filepath = Path(frame["file_path"])
