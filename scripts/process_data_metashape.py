@@ -33,43 +33,95 @@ import open3d as o3d
 from nerfstudio.process_data.process_data_utils import CAMERA_MODELS
 from nerfstudio.utils.rich_utils import CONSOLE
 
-from difflib import SequenceMatcher
-
+import bisect
 
 class StringMatcher:
-    """Brute force solution
-    TODO: prefix/suffix tree, O(N^2) takes a few minutes for 6000 images"""
-
     def __init__(self, strings):
-        self.strings = strings
-        # Precompute reversed strings for faster suffix matching
-        self.reversed = [s[::-1] for s in strings]
+        self.orig_strings = strings
+        self.sep = '\0'
+        self.corpus = self.sep.join(strings) + self.sep
+        
+        # Map corpus indices to original string index
+        self.idx_map = []
+        for i, s in enumerate(strings):
+            self.idx_map.extend([i] * (len(s) + 1))
+            
+        self.sa = self._build_suffix_array(self.corpus)
+        
+        # Pre-sort reversed strings for suffix queries
+        self.rev_sorted = sorted((s[::-1], i) for i, s in enumerate(strings))
+        self.rev_keys = [x[0] for x in self.rev_sorted]
+
+    def _build_suffix_array(self, s):
+        n = len(s)
+        # Initial rank based on single characters
+        sa = list(range(n))
+        rank = [ord(s[i]) for i in range(n)]
+        k = 1
+        while k < n:
+            # Key for sorting: (current rank, rank of suffix k positions ahead)
+            key = lambda x: (rank[x], rank[x + k] if x + k < n else -1)
+            sa.sort(key=key)
+            
+            # Generate new ranks based on the sorted order
+            new_rank = [0] * n
+            for i in range(1, n):
+                new_rank[sa[i]] = new_rank[sa[i-1]] + (1 if key(sa[i]) > key(sa[i-1]) else 0)
+            rank = new_rank
+            if rank[sa[n-1]] == n - 1: break # Optimization: all ranks unique
+            k *= 2
+        return sa
+
+    def _get_lcp_len(self, s1, s2_start):
+        # Efficiently compare query string to corpus slice without creating new strings
+        match_len = 0
+        n1, n2 = len(s1), len(self.corpus)
+        while match_len < n1 and s2_start + match_len < n2:
+            if s1[match_len] != self.corpus[s2_start + match_len]:
+                break
+            match_len += 1
+        return match_len
 
     def query_suffix(self, s):
-        """Find all strings with the longest common suffix with s."""
         rs = s[::-1]
-        best_len, best_matches = 0, []
-        for orig, rev in zip(self.strings, self.reversed):
-            # find length of common prefix of reversed strings (i.e. suffix of original)
-            i = 0
-            while i < len(rs) and i < len(rev) and rs[i] == rev[i]:
-                i += 1
-            if i > best_len:
-                best_len, best_matches = i, [orig]
-            elif i == best_len and i > 0:
-                best_matches.append(orig)
-        return best_matches, best_len
+        idx = bisect.bisect_left(self.rev_keys, rs)
+        best_len, matches = 0, []
+        for i in [idx - 1, idx]:
+            if 0 <= i < len(self.rev_keys):
+                # Simple prefix match on reversed strings
+                lcp = 0
+                r_match = self.rev_keys[i]
+                for c1, c2 in zip(rs, r_match):
+                    if c1 != c2: break
+                    lcp += 1
+                if lcp > best_len:
+                    best_len, matches = lcp, [self.orig_strings[self.rev_sorted[i][1]]]
+                elif lcp == len(rs) and lcp == best_len: # Handle multiple exact matches
+                    matches.append(self.orig_strings[self.rev_sorted[i][1]])
+        return list(set(matches)), best_len
 
     def query_substring(self, s):
-        """Find all strings with the longest common substring with s."""
-        best_len, best_matches = 0, []
-        for orig in self.strings:
-            match_len = SequenceMatcher(None, s, orig).find_longest_match(0, len(s), 0, len(orig)).size
-            if match_len > best_len:
-                best_len, best_matches = match_len, [orig]
-            elif match_len == best_len and match_len > 0:
-                best_matches.append(orig)
-        return best_matches, best_len
+        best_len, matches = 0, set()
+        # Binary search for the query string in the Suffix Array
+        low, high = 0, len(self.sa) - 1
+        while low <= high:
+            mid = (low + high) // 2
+            # Compare query to corpus starting at sa[mid]
+            suffix_start = self.sa[mid]
+            current_lcp = self._get_lcp_len(s, suffix_start)
+            
+            if current_lcp > best_len:
+                best_len = current_lcp
+                matches = {self.orig_strings[self.idx_map[suffix_start]]}
+            elif current_lcp == best_len and current_lcp > 0:
+                matches.add(self.orig_strings[self.idx_map[suffix_start]])
+
+            # Decide which way to move in binary search
+            if s > self.corpus[suffix_start : suffix_start + len(s)]:
+                low = mid + 1
+            else:
+                high = mid - 1
+        return list(matches), best_len
 
 
 def find_cameras_dict(root_dir):
@@ -212,7 +264,8 @@ def metashape_to_json(
         sensor_dict[sensor.get("id")] = s
 
     components = chunk.find("components")
-    component_dict = {}
+    component_camera_ids_dict = {}
+    component_transform_dict = {}
     if components is not None:
         for component in components.iter("component"):
             transform = component.find("transform")
@@ -239,18 +292,24 @@ def metashape_to_json(
                 m = np.eye(4)
                 m[:3, :3] = r * s
                 m[:3, 3] = t
-                component_dict[component.get("id")] = m
+                component_transform_dict[component.get("id")] = m
+            camera_ids = []
+            for comp in component.iter("camera_ids"):
+                camera_ids.extend(comp.text.strip().split())
+            if len(camera_ids) > 0:
+                component_camera_ids_dict[component.get("id")] = camera_ids
 
     image_filename_matcher = StringMatcher(image_filenames)
 
-    frames = []
     cameras = chunk.find("cameras")
     assert cameras is not None, "Cameras not found in Metashape xml"
     num_skipped = 0
+    valid_cameras = {}
     for camera in cameras.iter("camera"):
         frame = {}
+        camera_id = camera.get("id")
         if camera_dict is not None:
-            image_filename = camera_dict[camera.get("id")]
+            image_filename = camera_dict[camera_id]
             matches = image_filename_matcher.query_suffix(image_filename)[0]
             if len(matches) != 1:
                 CONSOLE.log("WARNING: ambiguous filenames", matches, ", Skipping")
@@ -281,26 +340,51 @@ def metashape_to_json(
             CONSOLE.print(f"Missing transforms data for {camera.get('label')}, Skipping")
             num_skipped += 1
             continue
-        transform = np.array([float(x) for x in camera.find("transform").text.split()]).reshape((4, 4))  # type: ignore
 
-        component_id = camera.get("component_id")
-        if component_id in component_dict:
-            transform = component_dict[component_id] @ transform
-            transform[:3, :3] /= np.cbrt(np.linalg.det(transform[:3, :3]))
+        valid_cameras[camera_id] = (camera, frame)
 
-        # Metashape camera is looking towards -Z, +X is to the right and +Y is to the top/up of the first cam
-        # Rotate the scene according to nerfstudio convention
-        if False: transform = transform[[2, 0, 1, 3], :]
-        # Convert from Metashape's camera coordinate system (OpenCV) to ours (OpenGL)
-        transform[:, 1:3] *= -1
-        frame["transform_matrix"] = transform.tolist()
-        frames.append(frame)
+    for key, value in component_camera_ids_dict.items():
+        value = [id for id in value if id in valid_cameras]
+        component_camera_ids_dict[key] = value
 
-    data = {}
-    data["frames"] = frames
-    applied_transform = np.eye(4)[:3, :]
-    if False: applied_transform = applied_transform[np.array([2, 0, 1]), :]
-    data["applied_transform"] = applied_transform.tolist()
+    components = [*component_camera_ids_dict.items()]
+    components.sort(key=lambda x: -len(x[1]))
+    components = [set(c[1]) for c in components]
+    for component_index, component_camera_ids in [*enumerate(components)][::-1]:
+
+        frames = []
+
+        for camera_id, (camera, frame) in valid_cameras.items():
+            if camera_id not in component_camera_ids:
+                continue
+
+            transform = np.array([float(x) for x in camera.find("transform").text.split()]).reshape((4, 4))  # type: ignore
+
+            component_id = camera.get("component_id")
+            if component_id in component_transform_dict:
+                transform = component_transform_dict[component_id] @ transform
+                transform[:3, :3] /= np.cbrt(np.linalg.det(transform[:3, :3]))
+
+            # Metashape camera is looking towards -Z, +X is to the right and +Y is to the top/up of the first cam
+            # Rotate the scene according to nerfstudio convention
+            if False: transform = transform[[2, 0, 1, 3], :]
+            # Convert from Metashape's camera coordinate system (OpenCV) to ours (OpenGL)
+            transform[:, 1:3] *= -1
+            frame["transform_matrix"] = transform.tolist()
+            frames.append(frame)
+
+        data = {}
+        data["frames"] = frames
+        applied_transform = np.eye(4)[:3, :]
+        if False: applied_transform = applied_transform[np.array([2, 0, 1]), :]
+        data["applied_transform"] = applied_transform.tolist()
+
+        if ply_filename is not None:
+            data["ply_file_path"] = "sparse_pc.ply"
+
+        transforms_filename = "transforms.json" if component_index == 0 else f"transforms_{component_index}.json"
+        with open(output_dir / transforms_filename, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
 
     summary = []
 
@@ -314,9 +398,6 @@ def metashape_to_json(
         o3d.io.write_point_cloud(str(output_dir / "sparse_pc.ply"), pc)
         data["ply_file_path"] = "sparse_pc.ply"
         summary.append(f"Imported {ply_filename} as starting points")
-
-    with open(output_dir / "transforms.json", "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
 
     if num_skipped == 1:
         summary.append(f"{num_skipped} image skipped.")

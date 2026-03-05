@@ -535,10 +535,12 @@ def parse_colmap_camera_params(camera) -> Dict[str, Any]:
         out["p1"] = float(camera_params[6])
         out["p2"] = float(camera_params[7])
         out["k3"] = float(camera_params[8])
-        out["k4"] = float(camera_params[9])
-        out["k5"] = float(camera_params[10])
-        out["k6"] = float(camera_params[11])
-        raise NotImplementedError(f"{camera.model} camera model is not supported yet!")
+        k4 = float(camera_params[9])
+        k5 = float(camera_params[10])
+        k6 = float(camera_params[11])
+        if k4 != 0.0 or k5 != 0.0 or k6 != 0.0:
+            raise NotImplementedError(f"{camera.model} camera model is not supported yet!")
+        camera_model = "OPENCV"
     elif camera.model == "FOV":
         # fx, fy, cx, cy, omega
         out["fl_x"] = float(camera_params[0])
