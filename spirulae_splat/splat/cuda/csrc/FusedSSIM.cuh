@@ -24,3 +24,13 @@ fused_ssim_backward(
     at::Tensor &dm_dsigma1_sq,
     at::Tensor &dm_dsigma12
 );
+
+void fused_ssim_backward_inplace(
+    at::Tensor &img1,
+    at::Tensor &img2,
+    at::Tensor &dL_dmap,
+    at::Tensor &dm_dmu1,
+    at::Tensor &dm_dsigma1_sq,
+    at::Tensor &dm_dsigma12,
+    at::Tensor &dL_dimg1
+);

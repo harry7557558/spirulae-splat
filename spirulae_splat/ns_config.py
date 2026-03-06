@@ -38,6 +38,10 @@ _DEFAULT_DATAMANAGER_CONFIG = {
 }
 
 _DEFAULT_OPTIMIZERS = {
+    "_dummy": {
+        "optimizer": FusedAdamOptimizerConfig(lr=1.0, eps=0.0),
+        "scheduler": None,
+    },
     "means": {
         "optimizer": FusedAdamOptimizerConfig(lr=1.6e-4, eps=1e-15),
         "scheduler": ExponentialDecaySchedulerConfig(

@@ -33,6 +33,244 @@ CameraDistortionCoeffsBuffer::CameraDistortionCoeffsBuffer(
 }
 
 // ================
+// Type Conversion
+// ================
+
+__global__ void uint8_image_to_float_kernel(
+    const TensorView<uint8_t, 4> img_in,
+    TensorView<float, 4> img_out
+) {
+    unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned B = img_in.shape[0], H = img_in.shape[1], W = img_in.shape[2], C = img_in.shape[3];
+    if (bid >= B || gid >= H*W)
+        return;
+    unsigned y = gid / W;
+    unsigned x = gid % W;
+
+    for (int i = 0; i < C; ++i) {
+        uint8_t c_in = img_in.at(bid, y, x, i);
+        float c_out = (float)c_in / 255.0f;
+        img_out.at(bid, y, x, i) = c_out;
+    }
+}
+
+__global__ void uint16_image_to_float_kernel(
+    const TensorView<uint16_t, 4> img_in,
+    TensorView<float, 4> img_out
+) {
+    unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned B = img_in.shape[0], H = img_in.shape[1], W = img_in.shape[2], C = img_in.shape[3];
+    if (bid >= B || gid >= H*W)
+        return;
+    unsigned y = gid / W;
+    unsigned x = gid % W;
+
+    for (int i = 0; i < C; ++i) {
+        uint16_t c_in = img_in.at(bid, y, x, i);
+        float c_out = (float)c_in / 65535.0f;
+        img_out.at(bid, y, x, i) = c_out;
+    }
+}
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor uint8_image_to_float_tensor(
+    at::Tensor &img_in  // [B, H, W, C]
+) {
+    DEVICE_GUARD(img_in);
+    CHECK_CUDA(img_in);
+
+    long b = img_in.size(0), h = img_in.size(1), w = img_in.size(2), c = img_in.size(3);
+
+    at::Tensor img_out = at::empty({b, h, w, c}, img_in.options().dtype(at::kFloat));
+
+    uint8_image_to_float_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
+        tensor2view<uint8_t, 4>(img_in),
+        tensor2view<float, 4>(img_out)
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return img_out;
+}
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor uint16_image_to_float_tensor(
+    at::Tensor &img_in  // [B, H, W, C]
+) {
+    DEVICE_GUARD(img_in);
+    CHECK_CUDA(img_in);
+
+    long b = img_in.size(0), h = img_in.size(1), w = img_in.size(2), c = img_in.size(3);
+
+    at::Tensor img_out = at::empty({b, h, w, c}, img_in.options().dtype(at::kFloat));
+
+    uint16_image_to_float_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
+        tensor2view<uint16_t, 4>(img_in),
+        tensor2view<float, 4>(img_out)
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return img_out;
+}
+
+
+// ================
+// Rendered Depth to Expected Depth
+// ================
+
+__global__ void rendered_depth_to_expected_depth_forward_kernel(
+    const TensorView<float, 4> in_depth,
+    const TensorView<float, 4> in_alpha,
+    TensorView<float, 4> out_depth,
+    float* __restrict__ max_out_depth
+) {
+    unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned B = in_depth.shape[0], H = in_depth.shape[1], W = in_depth.shape[2];
+    if (bid >= B)
+        return;
+    bool inside = (gid < H*W);
+
+    float depth = 0.0f;
+    if (inside) {
+        unsigned y = gid / W;
+        unsigned x = gid % W;
+
+        depth = in_depth.load1(bid, y, x);
+        float alpha = in_alpha.load1(bid, y, x);
+
+        depth = SlangPixelWise::rendered_depth_to_expected_depth(depth, alpha);
+
+        out_depth.store1(bid, y, x, depth);
+    }
+
+    auto block = cg::this_thread_block();
+    cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
+    warpMax(depth, warp);
+    if (warp.thread_rank() == 0) {
+        atomicMax(&max_out_depth[bid], depth);
+    }
+}
+
+__global__ void rendered_depth_to_expected_depth_filter_kernel(
+    const TensorView<float, 4> in_alpha,
+    TensorView<float, 4> depth,
+    const float* __restrict__ max_out_depth
+) {
+    unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned B = depth.shape[0], H = depth.shape[1], W = depth.shape[2];
+    if (bid >= B || gid >= H*W)
+        return;
+    unsigned y = gid / W;
+    unsigned x = gid % W;
+
+    float alpha = in_alpha.load1(bid, y, x);
+    if (alpha == 0.0f) {
+        depth.store1(bid, y, x, max_out_depth[bid]);
+    }
+    // note that in backward, alpha=0 automatically leads to zero output gradient
+}
+
+
+__global__ void rendered_depth_to_expected_depth_backward_kernel(
+    const TensorView<float, 4> in_depth,
+    const TensorView<float, 4> in_alpha,
+    const TensorView<float, 4> v_out_depth,
+    TensorView<float, 4> v_in_depth,
+    TensorView<float, 4> v_in_alpha
+) {
+    unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned B = in_depth.shape[0], H = in_depth.shape[1], W = in_depth.shape[2];
+    if (bid >= B || gid >= H*W)
+        return;
+    unsigned y = gid / W;
+    unsigned x = gid % W;
+
+    float depth = in_depth.load1(bid, y, x);
+    float alpha = in_alpha.load1(bid, y, x);
+
+    float v_out = v_out_depth.load1(bid, y, x);
+
+    float v_depth, v_alpha;
+    SlangPixelWise::rendered_depth_to_expected_depth_bwd(
+        depth, alpha,
+        v_out,
+        &v_depth, &v_alpha
+    );
+
+    v_in_depth.store1(bid, y, x, v_depth);
+    v_in_alpha.store1(bid, y, x, v_alpha);
+}
+
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor rendered_depth_to_expected_depth_forward_tensor(
+    at::Tensor &depth,  // [B, H, W, 1]
+    at::Tensor &alpha  // [B, H, W, 1]
+) {
+    DEVICE_GUARD(depth);
+    CHECK_CUDA(depth);
+    CHECK_CUDA(alpha);
+
+    if (depth.ndimension() != 4 || depth.size(-1) != 1)
+        AT_ERROR("depth shape must be (b, h, w, 1)");
+    long b = depth.size(0), h = depth.size(1), w = depth.size(2);
+    if (alpha.ndimension() != 4 || alpha.size(0) != b || alpha.size(1) != h || alpha.size(2) != w || alpha.size(3) != 1)
+        AT_ERROR("alpha shape must be (b, h, w, 1)");
+
+    at::Tensor out_depth = at::empty_like(depth);
+    at::Tensor max_depth = at::zeros({b,}, depth.options());
+
+    rendered_depth_to_expected_depth_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
+        tensor2view<float, 4>(depth), tensor2view<float, 4>(alpha),
+        tensor2view<float, 4>(out_depth), max_depth.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    rendered_depth_to_expected_depth_filter_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
+        tensor2view<float, 4>(alpha),
+        tensor2view<float, 4>(out_depth),
+        max_depth.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return out_depth;
+}
+
+
+/*[AutoHeaderGeneratorExport]*/
+std::tuple<at::Tensor, at::Tensor>
+rendered_depth_to_expected_depth_backward_tensor(
+    at::Tensor &depth,  // [B, H, W, 1]
+    at::Tensor &alpha,  // [B, H, W, 1]
+    at::Tensor &v_out_depth  // [B, H, W, 1]
+) {
+    DEVICE_GUARD(depth);
+    CHECK_CUDA(depth);
+    CHECK_CUDA(alpha);
+    CHECK_CUDA(v_out_depth);
+
+    long b = depth.size(0), h = depth.size(1), w = depth.size(2);
+
+    at::Tensor v_depth = at::empty_like(depth);
+    at::Tensor v_alpha = at::empty_like(alpha);
+
+    rendered_depth_to_expected_depth_backward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
+        tensor2view<float, 4>(depth), tensor2view<float, 4>(alpha),
+        tensor2view<float, 4>(v_out_depth),
+        tensor2view<float, 4>(v_depth), tensor2view<float, 4>(v_alpha)
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return std::make_tuple(v_depth, v_alpha);
+}
+
+
+
+// ================
 // Blend Background
 // ================
 
@@ -475,7 +713,7 @@ at::Tensor depth_to_normal_backward_tensor(
     CHECK_CUDA(v_normals);
 
     int b = depths.size(0), h = depths.size(1), w = depths.size(2);
-    at::Tensor v_depths = at::zeros_like(depths);
+    at::Tensor v_depths = zeros_like<float>(depths);
 
     depth_to_normal_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
         camera_model, (float4*)intrins.data_ptr<float>(), dist_coeffs,
@@ -715,7 +953,7 @@ at::Tensor distort_image_tensor(
         AT_ERROR("in_image shape must be (B, H, W, C) where B is consistent with intrins");
 
     int b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
-    at::Tensor out_image = at::zeros_like(in_image);
+    at::Tensor out_image = zeros_like<float>(in_image);
 
     distort_image_kernel<false><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
         camera_model, (float4*)intrins.data_ptr<float>(), dist_coeffs,
@@ -743,7 +981,7 @@ at::Tensor undistort_image_tensor(
         AT_ERROR("in_image shape must be (B, H, W, C) where B is consistent with intrins");
 
     int b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
-    at::Tensor out_image = at::zeros_like(in_image);
+    at::Tensor out_image = zeros_like<float>(in_image);
 
     distort_image_kernel<true><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
         camera_model, (float4*)intrins.data_ptr<float>(), dist_coeffs,
@@ -970,7 +1208,7 @@ std::tuple<at::Tensor, at::Tensor> ppisp_backward_tensor(
         AT_ERROR("intrins shape must be (B, 4)");
     long b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
     at::Tensor v_in_image = at::empty_like(in_image);
-    at::Tensor v_ppisp_params = at::zeros_like(ppisp_params);
+    at::Tensor v_ppisp_params = zeros_like<float>(ppisp_params);
     if (param_type == "original" || param_type == "") {
         if (ppisp_params.ndimension() != 2 || ppisp_params.size(1) != kNumPPISPParams)
             AT_ERROR("ppisp_params shape must be (B, PPISP_NUM_PARAMS)");
@@ -1260,7 +1498,7 @@ at::Tensor compute_ppsip_regularization_backward_tensor(
     long B = ppisp_params.size(0);
 
     at::Tensor v_raw_losses;
-    at::Tensor v_ppisp_params = at::zeros_like(ppisp_params);
+    at::Tensor v_ppisp_params = zeros_like<float>(ppisp_params);
 
     if (param_type == "original" || param_type == "") {
         v_raw_losses = at::zeros({(int)RawPPISPRegLossIndex::length}, ppisp_params.options());

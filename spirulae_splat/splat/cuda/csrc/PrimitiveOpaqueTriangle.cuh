@@ -139,14 +139,14 @@ struct OpaqueTriangle::World {
 
         Tensor allocProjBwd(bool is_hess_diag) const {
             return Tensor(std::make_tuple(
-                at::zeros_like(means),
-                at::zeros_like(quats),
-                at::zeros_like(scales),
-                // at::zeros_like(verts),
-                at::zeros_like(hardness),
-                at::zeros_like(features_dc),
-                at::zeros_like(features_sh),  // TODO: exclude when is_hess_diag
-                at::zeros_like(features_ch)
+                zeros_like<float>(means),
+                zeros_like<float>(quats),
+                zeros_like<float>(scales),
+                // zeros_like<float>(verts),
+                zeros_like<float>(hardness),
+                zeros_like<float>(features_dc),
+                zeros_like<float>(features_sh),  // TODO: exclude when is_hess_diag
+                zeros_like<float>(features_ch)
             ));
         }
 
@@ -487,11 +487,11 @@ struct OpaqueTriangle::Screen {
             if (!hasWorld)
                 throw std::runtime_error("!hasWorld");
             Tensor result = Tensor(std::make_tuple(
-                at::zeros_like(hardness),
-                at::zeros_like(depths),
-                at::zeros_like(verts),
-                at::zeros_like(rgbs),
-                at::zeros_like(normals)
+                zeros_like<float>(hardness),
+                zeros_like<float>(depths),
+                zeros_like<float>(verts),
+                zeros_like<float>(rgbs),
+                zeros_like<float>(normals)
             ));
             return result;
         }

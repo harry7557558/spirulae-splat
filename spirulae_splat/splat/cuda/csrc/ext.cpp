@@ -34,12 +34,15 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.attr("TILE_SIZE") = py::int_(TILE_SIZE);
 
     // IntersectTile.cuh
+    m.def("intersect_tile", &do_intersect_tile_generic);
+#if 0
     m.def("intersect_tile_3dgs", &intersect_tile_3dgs_tensor);
     m.def("intersect_tile_mip", &intersect_tile_mip_tensor);
     m.def("intersect_tile_3dgut", &intersect_tile_3dgut_tensor);
     m.def("intersect_tile_3dgut_sv", &intersect_tile_3dgut_sv_tensor);
     m.def("intersect_tile_opaque_triangle", &intersect_tile_opaque_triangle_tensor);
     m.def("intersect_tile_voxel", &intersect_tile_voxel_tensor);
+#endif
 
     // SphericalHarmonics.cuh
     m.def("compute_sh_forward", &compute_sh_forward_tensor);
@@ -59,6 +62,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("compute_per_pixel_losses_backward", &compute_per_pixel_losses_backward_tensor);
 
     // PixelWise.cuh
+    m.def("uint8_image_to_float", &uint8_image_to_float_tensor);
+    m.def("uint16_image_to_float", &uint16_image_to_float_tensor);
+    m.def("rendered_depth_to_expected_depth_forward", &rendered_depth_to_expected_depth_forward_tensor);
+    m.def("rendered_depth_to_expected_depth_backward", &rendered_depth_to_expected_depth_backward_tensor);
     m.def("blend_background_forward", &blend_background_forward_tensor);
     m.def("blend_background_backward", &blend_background_backward_tensor);
     m.def("linear_rgb_to_srgb_forward", &linear_rgb_to_srgb_forward_tensor);
@@ -77,6 +84,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // FusedSSIM.cuh
     m.def("fused_ssim_forward", &fused_ssim_forward);
     m.def("fused_ssim_backward", &fused_ssim_backward);
+    m.def("fused_ssim_backward_inplace", &fused_ssim_backward_inplace);
 
     // SplatTileIntersector.cuh
     m.def("intersect_splat_tile_3dgs", &intersect_splat_tile_3dgs);

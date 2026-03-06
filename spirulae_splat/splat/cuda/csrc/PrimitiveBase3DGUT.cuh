@@ -244,12 +244,12 @@ struct Base3DGUT::Screen {
             if (!hasWorld)
                 throw std::runtime_error("!hasWorld");
             Tensor result = Tensor(std::make_tuple(
-                at::zeros_like(means),
-                at::zeros_like(quats),
-                at::zeros_like(depths),
-                at::zeros_like(scales),
-                at::zeros_like(opacities),
-                at::zeros_like(rgbs)
+                zeros_like<float>(means),
+                zeros_like<float>(quats),
+                zeros_like<float>(depths),
+                zeros_like<float>(scales),
+                zeros_like<float>(opacities),
+                zeros_like<float>(rgbs)
             ));
             return result;
         }

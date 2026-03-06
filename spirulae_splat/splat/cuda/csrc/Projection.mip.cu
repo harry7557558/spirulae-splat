@@ -149,10 +149,9 @@ std::tuple<
 
     MipSplatting::World::Tensor v_splats_world = splats_world.allocProjBwd(false);
 
-    auto opt = splats_world.options();
     at::Tensor v_viewmats;
     if (viewmats_requires_grad)
-        v_viewmats = at::zeros_like(viewmats, opt);
+        v_viewmats = zeros_like<float>(viewmats);
 
     auto stream = at::cuda::getCurrentCUDAStream();
 

@@ -407,17 +407,23 @@ struct TensorView {
         typename std::conditional<std::is_same<T, float>::value, float2,
         typename std::conditional<std::is_same<T, int>::value, int2,
         typename std::conditional<std::is_same<T, uint>::value, uint2,
-        void>::type>::type>::type;
+        typename std::conditional<std::is_same<T, uint8_t>::value, uchar2,
+        typename std::conditional<std::is_same<T, uint16_t>::value, ushort2,
+        void>::type>::type>::type>::type>::type;
     using vec3_t =
         typename std::conditional<std::is_same<T, float>::value, float3,
         typename std::conditional<std::is_same<T, int>::value, int3,
         typename std::conditional<std::is_same<T, uint>::value, uint3,
-        void>::type>::type>::type;
+        typename std::conditional<std::is_same<T, uint8_t>::value, uchar3,
+        typename std::conditional<std::is_same<T, uint16_t>::value, ushort3,
+        void>::type>::type>::type>::type>::type;
     using vec4_t =
         typename std::conditional<std::is_same<T, float>::value, float4,
         typename std::conditional<std::is_same<T, int>::value, int4,
         typename std::conditional<std::is_same<T, uint>::value, uint4,
-        void>::type>::type>::type;
+        typename std::conditional<std::is_same<T, uint8_t>::value, uchar4,
+        typename std::conditional<std::is_same<T, uint16_t>::value, ushort4,
+        void>::type>::type>::type>::type>::type;
 
     __device__ T at(long i) const
         { static_assert(ndim == 1); return data[i * strides[0]]; }

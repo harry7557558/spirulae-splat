@@ -142,13 +142,13 @@ struct _Base3DGS<antialiased>::World {
 
         Tensor allocProjBwd(bool is_hess_diag) const {
             return Tensor(std::make_tuple(
-                at::zeros_like(means),
-                at::zeros_like(quats),
-                at::zeros_like(scales),
-                at::zeros_like(opacities),
-                at::zeros_like(features_dc),
+                zeros_like<float>(means),
+                zeros_like<float>(quats),
+                zeros_like<float>(scales),
+                zeros_like<float>(opacities),
+                zeros_like<float>(features_dc),
                 features_sh.has_value() && !is_hess_diag ?
-                    (std::optional<at::Tensor>)at::zeros_like(features_sh.value()) :
+                    (std::optional<at::Tensor>)zeros_like<float>(features_sh.value()) :
                     (std::optional<at::Tensor>)std::nullopt
             ));
         }
@@ -452,14 +452,14 @@ struct _Base3DGS<antialiased>::Screen {
 
         Tensor allocRasterBwd() const {
             Tensor result = Tensor(std::make_tuple(
-                at::zeros_like(means2d),
-                at::zeros_like(depths),
-                at::zeros_like(conics),
-                at::zeros_like(opacities),
-                at::zeros_like(rgbs)
+                zeros_like<float>(means2d),
+                zeros_like<float>(depths),
+                zeros_like<float>(conics),
+                zeros_like<float>(opacities),
+                zeros_like<float>(rgbs)
             ));
             if (true)  // TODO: option to not include this
-                result.absgrad = at::zeros_like(means2d);
+                result.absgrad = zeros_like<float>(means2d);
             return result;
         }
 

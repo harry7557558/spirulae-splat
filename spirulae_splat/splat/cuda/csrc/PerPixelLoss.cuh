@@ -123,6 +123,7 @@ std::tuple<
     at::Tensor raw_losses,
     const std::array<float, (int)LossWeightIndex::length> loss_weights_0,
     at::Tensor v_losses,
+    std::vector<bool> needs_input_grad,
     long num_train_images,
     std::optional<at::Tensor> camera_indices
 );

@@ -7,6 +7,27 @@
 #undef CudaDeviceExport
 #endif
 
+[Differentiable]
+[CudaDeviceExport]
+float rendered_depth_to_expected_depth(float depth, float alpha) {
+    return depth / max(alpha, 1e-10f);
+}
+
+[CudaDeviceExport]
+void rendered_depth_to_expected_depth_bwd(
+    float depth, float alpha,
+    float v_out_depth,
+    out float v_depth, out float v_alpha
+) {
+    var p_depth = diffPair(depth);
+    var p_alpha = diffPair(alpha);
+    bwd_diff(rendered_depth_to_expected_depth)(
+        p_depth, p_alpha,
+        v_out_depth
+    );
+    v_depth = p_depth.d;
+    v_alpha = p_alpha.d;
+}
 
 [Differentiable]
 [CudaDeviceExport]

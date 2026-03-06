@@ -32,6 +32,19 @@ from spirulae_splat.splat.cuda import (
 from .utils import depth_to_normal
 
 
+class _RenderedDepthToExpectedDepth(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, depth, alpha):
+        out_depth = _make_lazy_cuda_func("rendered_depth_to_expected_depth_forward")(depth, alpha)
+        ctx.save_for_backward(depth, alpha)
+        return out_depth
+
+    @staticmethod
+    def backward(ctx, v_out_depth):
+        depth, alpha = ctx.saved_tensors
+        return _make_lazy_cuda_func("rendered_depth_to_expected_depth_backward")(depth, alpha, v_out_depth)
+
+
 # from gsplat
 
 def rasterization(
@@ -378,7 +391,6 @@ def rasterization(
         aabb_xyxy, depths, proj_splats = proj_results
         batch_ids, camera_ids, gaussian_ids = None, None, None
         image_ids = None
-    radii = (aabb_xyxy[..., 2:] - aabb_xyxy[..., :2] + 1) // 2
 
     meta.update(
         {
@@ -387,7 +399,7 @@ def rasterization(
             "camera_ids": camera_ids,
             # local gaussian_ids
             "gaussian_ids": gaussian_ids,
-            "radii": radii,
+            # "radii": radii,
             "depths": depths,
             # "normals": normals,
             "means2d": proj_splats[0],  # with grad
@@ -410,8 +422,9 @@ def rasterization(
     TILE_SIZE = 16
     tile_width = math.ceil(width / float(TILE_SIZE))
     tile_height = math.ceil(height / float(TILE_SIZE))
-    if packed or True:
+    if packed:
         # TODO: add support
+        radii = (aabb_xyxy[..., 2:] - aabb_xyxy[..., :2] + 1) // 2
         means2d = (aabb_xyxy[..., 2:] + aabb_xyxy[..., :2]).float() / 2
         tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
             means2d,
@@ -429,23 +442,25 @@ def rasterization(
         isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
         isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
     else:
-        isect_ids, flatten_ids, isect_offsets = _make_lazy_cuda_func(f"intersect_tile_{primitive}")(
+        isect_ids, flatten_ids, isect_offsets, radii = _make_lazy_cuda_func(f"intersect_tile")(
             aabb_xyxy,
             depths,
             width,
             height,
-            (*proj_splats, None) if primitive in ["3dgs", "mip"] else proj_splats,
-            viewmats,
-            intrins,
-            gsplat.cuda._wrapper._make_lazy_cuda_obj(
-                f"CameraModelType.{camera_model.upper()}"
-            ),
-            dist_coeffs
+            # (*proj_splats, None) if primitive in ["3dgs", "mip"] else proj_splats,
+            # viewmats,
+            # intrins,
+            # gsplat.cuda._wrapper._make_lazy_cuda_obj(
+            #     f"CameraModelType.{camera_model.upper()}"
+            # ),
+            # dist_coeffs
         )
         isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
 
+    # TODO: these should be aggregated in split batch mode
     meta.update(
         {
+            "radii": radii,
             "tile_width": tile_width,
             "tile_height": tile_height,
             # "tiles_per_gauss": tiles_per_gauss,
@@ -483,11 +498,12 @@ def rasterization(
     )
     meta.update(render_meta)
 
-    # `rasterize_to_pixels` outputs log ray depth, map it to ray depth
+    # render_colors[1] is depth, map to expected depth
     if len(render_colors) > 1:
         render_colors = (
             render_colors[0],
-            render_colors[1] / render_alphas.clamp(min=1e-10),
+            # TODO: fuse this into rasterization kernels
+            _RenderedDepthToExpectedDepth.apply(render_colors[1], render_alphas),
             *render_colors[2:]
         )
 

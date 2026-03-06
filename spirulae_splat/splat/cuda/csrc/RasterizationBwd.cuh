@@ -16,8 +16,8 @@
 #include <cub/cub.cuh>
 
 
-constexpr uint SPLAT_BATCH_SIZE_NO_DISTORTION = WARP_SIZE;
-constexpr uint SPLAT_BATCH_SIZE_WITH_DISTORTION = 128;
+constexpr uint SPLAT_BATCH_SIZE_NO_DISTORTION = 128;
+constexpr uint SPLAT_BATCH_SIZE_WITH_DISTORTION = WARP_SIZE;
 
 
 template <

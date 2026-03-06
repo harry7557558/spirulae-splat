@@ -120,10 +120,6 @@ class SpirulaeModelConfig(ModelConfig):
     """Weight of L2 loss, default 0.0"""
     ssim_lambda: float = 0.2
     """Weight of ssim loss; 0.2 for academic baseline, higher for potentially more high-frequency details, lower for less blurry background in outdoor scenes"""
-    use_l1_ssim: bool = False
-    """Whether to use a modified version of SSIM that attempts to combine advantages of L1 loss"""
-    g_ssim_lambda: float = 0.0
-    """Weight of SSIM on image gradient, useful for encouraging sharpness but may not be ideal for noisy and high-resolution images."""
     lpips_lambda: float = 0.0
     """Weight of lpips loss for better perceptual quality; Note that this can make training much slower"""
     num_loss_scales: int = 0
@@ -807,6 +803,7 @@ class SpirulaeModel(Model):
                 list(self.training_losses.bil_grids_normal.parameters())
         if self.config.use_ppisp:
             gps["ppisp"] = [self.training_losses.ppisp_params]
+        gps['_dummy'] = [self.training_losses._dummy]
 
         if self.config.use_camera_optimizer:
             self.camera_optimizer.get_param_groups(param_groups=gps)
@@ -827,12 +824,16 @@ class SpirulaeModel(Model):
             return resize_image(image, d)
         return image
 
-    def get_background_image(self, camera: Cameras, c2w: torch.Tensor, intrins: torch.Tensor):
+    def get_background_image(self, camera: Cameras, c2w: torch.Tensor, intrins: torch.Tensor,
+                             W: Optional[int] = None, H: Optional[int] = None, is_fisheye: Optional[bool] = None):
         if not isinstance(camera, Cameras):
             print("Called get_background_image with not a camera")
             return {}
 
-        W, H = int(camera.width[0].item()), int(camera.height[0].item())
+        if W is None or H is None:
+            W, H = int(camera.width[0].item()), int(camera.height[0].item())
+        if is_fisheye is None:
+            is_fisheye = (camera.camera_type[0].item() == CameraType.FISHEYE.value)
 
         if self.config.randomize_background == True:
             # return torch.rand_like(self.background_color).repeat(H, W, 1)
@@ -844,8 +845,8 @@ class SpirulaeModel(Model):
 
         sh_coeffs = torch.cat((self.background_color.unsqueeze(0), self.background_sh), dim=0)  # [(deg+1)^2, 3]
         return render_background_sh(
-            camera.width[0].item(), camera.height[0].item(),
-            ['pinhole', 'fisheye'][camera.camera_type[0].item() == CameraType.FISHEYE.value],
+            W, H,
+            "fisheye" if is_fisheye else "pinhole",
             intrins, c2w[..., :3, :3], sh_degree, sh_coeffs
         )
 
@@ -881,6 +882,7 @@ class SpirulaeModel(Model):
 
         # TODO: separate different sizes/intrins
         W, H = int(camera.width[0].item()), int(camera.height[0].item())
+        is_fisheye = (camera.camera_type[0].item() == CameraType.FISHEYE.value)
 
         R = optimized_camera_to_world[:, :3, :3]  # 3 x 3
         T = optimized_camera_to_world[:, :3, 3:4]  # 3 x 1
@@ -893,8 +895,6 @@ class SpirulaeModel(Model):
         viewmats[:, :3, :3] = R_inv
         viewmats[:, :3, 3:4] = T_inv
 
-        max_depth_scale = 2.0 if self.training else 1.0
-
         # Call GSplat for 3DGS rendering
         intrins = torch.concatenate((camera.fx, camera.fy, camera.cx, camera.cy), dim=1)
         
@@ -905,7 +905,6 @@ class SpirulaeModel(Model):
             kwargs['actual_height'] = int(camera.metadata['actual_height'] + 0.5)
         if 'patch_offsets' in camera.metadata:
             kwargs['patch_offsets'] = camera.metadata['patch_offsets']
-        is_fisheye = (camera.camera_type[0].item() == CameraType.FISHEYE.value)
         if not self.training:
             pass
             # is_fisheye = True
@@ -938,7 +937,7 @@ class SpirulaeModel(Model):
 
         def merge_tiles(im):
             im = im.reshape(gh, gw, TILE_SIZE, TILE_SIZE, -1).permute(0, 2, 1, 3, 4).reshape(1, gh*TILE_SIZE, gw*TILE_SIZE, -1)
-            im = im[:, :camera.height[0].item(), :camera.width[0].item(), :]
+            im = im[:, :H, :W, :]
             return im
 
         # if not self.training:
@@ -1026,6 +1025,7 @@ class SpirulaeModel(Model):
             compute_hessian_diagonal=self.config.compute_hessian_diagonal,
             **kwargs,
         )
+        torch.cuda.empty_cache()
         if self.config.compute_hessian_diagonal is not None:
             rgbd = list(rgbd)
             rgbd[0], backward_metadata_injector = _BackwardMetadataInjector.apply(rgbd[0])
@@ -1042,18 +1042,11 @@ class SpirulaeModel(Model):
         #     for key in ['rgb_distortion', 'depth_distortion', 'normal_distortion']:
         #         if key in meta:
         #             meta[key] = merge_tiles(meta[key])
-        #     W, H = camera.width[0].item(), camera.height[0].item()
         #     viewmats, intrins = viewmats_0, intrins_0
         #     if 'dist_coeffs' in kwargs:
         #         kwargs['dist_coeffs'] = kwargs['dist_coeffs'][:1]
 
-        if self.config.compute_depth_normal or not self.training:
-            depth_im_ref = torch.where(
-                alpha > 0.0, rgbd[1],
-                max_depth_scale*torch.amax(rgbd[1]).detach()
-            ).contiguous()
-        else:
-            depth_im_ref = None
+        depth_im_ref = rgbd[1]
 
         # normals
         render_normal = None
@@ -1109,7 +1102,7 @@ class SpirulaeModel(Model):
 
         # blend with background
         if self.config.fit == "rgb":
-            background = self.get_background_image(camera, optimized_camera_to_world, intrins)
+            background = self.get_background_image(camera, optimized_camera_to_world, intrins, W, H, is_fisheye)
             # rgb = torch.clip(rgb + (1.0 - alpha) * background, 0.0, 1.0)
             rgb = blend_background(rgb, alpha, background)
         else:

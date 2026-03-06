@@ -111,20 +111,20 @@ class MCMCStrategy(Strategy):
             gs_ids = info["gaussian_ids"]  # [nnz]
             radii = torch.fmax(info["radii"][:, 0], info["radii"][:, 1])  # [nnz]
             # TODO: scatter reduce
-        else:
-            # grads is [C, N, 2]
-            radii = torch.fmax(info["radii"][:, :, 0], info["radii"][:, :, 1])  # [C, N]
-            radii = torch.amax(radii, dim=0, keepdim=True)
-            sel = radii > 0  # [1, N]
-            gs_ids = torch.where(sel)[1]  # [nnz]
-            radii = radii[sel]  # [nnz]
 
-        # Should be ideally using scatter max
-        normalized_radii = radii / float(max(info["width"], info["height"]))
-        state["radii"][gs_ids] = torch.maximum(
-            state["radii"][gs_ids],
-            normalized_radii
-        )
+            # Should be ideally using scatter max
+            normalized_radii = radii / float(max(info["width"], info["height"]))
+            state["radii"][gs_ids] = torch.maximum(
+                state["radii"][gs_ids],
+                normalized_radii
+            )
+        else:
+            # grads is [C, N, 2], radii is [N]
+            normalized_radii = info["radii"] / float(max(info["width"], info["height"]))  # [N]
+            state["radii"] = torch.fmax(state["radii"], normalized_radii)
+            sel = normalized_radii > 0  # [N]
+            gs_ids = torch.where(sel)[0]  # [nnz]
+            normalized_radii = normalized_radii[sel]  # [nnz]
 
         # large splats in screen space
         # clip scale while increase opacity to encourage being relocated to

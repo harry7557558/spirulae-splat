@@ -16,8 +16,16 @@ inline constexpr float ALPHA_THRESHOLD = (1.f/255.f);
     TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_INPUT(x) \
     do { CHECK_CUDA(x); CHECK_CONTIGUOUS(x); } while (0)
+#if 0
 #define DEVICE_GUARD(_ten) \
     const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
+#else
+// couldn't get PYTORCH_NO_CUDA_MEMORY_CACHING=1 working when launching from NSight Compute,
+// so use this as an option when profiling VRAM usage
+#define DEVICE_GUARD(_ten) \
+    c10::cuda::CUDACachingAllocator::emptyCache(); \
+    const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
+#endif
 
 #define CHECK_DEVICE_ERROR(call)                                    \
 do {                                                                \
@@ -71,3 +79,11 @@ TensorView<T, ndim> tensor2view(at::Tensor& tensor) {
     return view;
 }
 
+#include <ATen/ops/empty_like.h>
+
+template<typename T>
+at::Tensor zeros_like(const at::Tensor& x) {
+    at::Tensor y = at::empty_like(x);
+    cudaMemset(y.data_ptr<T>(), 0, y.numel() * sizeof(T));
+    return y;
+}

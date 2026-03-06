@@ -478,23 +478,24 @@ std::tuple<
     at::Tensor raw_losses,
     const std::array<float, (int)LossWeightIndex::length> loss_weights_0,
     at::Tensor v_losses,
+    std::vector<bool> needs_input_grad,
     long num_train_images,
     std::optional<at::Tensor> camera_indices
 ) {
     long B = render_rgb.value().size(0);
     size_t pixels_per_image = render_rgb.value().numel() / (3 * B);
 
-    std::optional<at::Tensor> v_render_rgb = render_rgb.has_value() ? (std::optional<at::Tensor>)at::empty_like(render_rgb.value()) : std::nullopt;
-    std::optional<at::Tensor> v_ref_rgb = ref_rgb.has_value() ? (std::optional<at::Tensor>)at::empty_like(ref_rgb.value()) : std::nullopt;
-    std::optional<at::Tensor> v_render_depth = render_depth.has_value() ? (std::optional<at::Tensor>)at::empty_like(render_depth.value()) : std::nullopt;
-    std::optional<at::Tensor> v_ref_depth = ref_depth.has_value() ? (std::optional<at::Tensor>)at::empty_like(ref_depth.value()) : std::nullopt;
-    std::optional<at::Tensor> v_render_normal = render_normal.has_value() ? (std::optional<at::Tensor>)at::empty_like(render_normal.value()) : std::nullopt;
-    std::optional<at::Tensor> v_depth_normal = depth_normal.has_value() ? (std::optional<at::Tensor>)at::empty_like(depth_normal.value()) : std::nullopt;
-    std::optional<at::Tensor> v_ref_normal = ref_normal.has_value() ? (std::optional<at::Tensor>)at::empty_like(ref_normal.value()) : std::nullopt;
-    std::optional<at::Tensor> v_render_alpha = render_alpha.has_value() ? (std::optional<at::Tensor>)at::empty_like(render_alpha.value()) : std::nullopt;
-    std::optional<at::Tensor> v_rgb_dist = rgb_dist.has_value() ? (std::optional<at::Tensor>)at::empty_like(rgb_dist.value()) : std::nullopt;
-    std::optional<at::Tensor> v_depth_dist = depth_dist.has_value() ? (std::optional<at::Tensor>)at::empty_like(depth_dist.value()) : std::nullopt;
-    std::optional<at::Tensor> v_normal_dist = normal_dist.has_value() ? (std::optional<at::Tensor>)at::empty_like(normal_dist.value()) : std::nullopt;
+    std::optional<at::Tensor> v_render_rgb = needs_input_grad[0] && render_rgb.has_value() ? (std::optional<at::Tensor>)at::empty_like(render_rgb.value()) : std::nullopt;
+    std::optional<at::Tensor> v_ref_rgb = needs_input_grad[1] && ref_rgb.has_value() ? (std::optional<at::Tensor>)at::empty_like(ref_rgb.value()) : std::nullopt;
+    std::optional<at::Tensor> v_render_depth = needs_input_grad[2] && render_depth.has_value() ? (std::optional<at::Tensor>)at::empty_like(render_depth.value()) : std::nullopt;
+    std::optional<at::Tensor> v_ref_depth = needs_input_grad[3] && ref_depth.has_value() ? (std::optional<at::Tensor>)at::empty_like(ref_depth.value()) : std::nullopt;
+    std::optional<at::Tensor> v_render_normal = needs_input_grad[4] && render_normal.has_value() ? (std::optional<at::Tensor>)at::empty_like(render_normal.value()) : std::nullopt;
+    std::optional<at::Tensor> v_depth_normal = needs_input_grad[5] && depth_normal.has_value() ? (std::optional<at::Tensor>)at::empty_like(depth_normal.value()) : std::nullopt;
+    std::optional<at::Tensor> v_ref_normal = needs_input_grad[6] && ref_normal.has_value() ? (std::optional<at::Tensor>)at::empty_like(ref_normal.value()) : std::nullopt;
+    std::optional<at::Tensor> v_render_alpha = needs_input_grad[7] && render_alpha.has_value() ? (std::optional<at::Tensor>)at::empty_like(render_alpha.value()) : std::nullopt;
+    std::optional<at::Tensor> v_rgb_dist = needs_input_grad[8] && rgb_dist.has_value() ? (std::optional<at::Tensor>)at::empty_like(rgb_dist.value()) : std::nullopt;
+    std::optional<at::Tensor> v_depth_dist = needs_input_grad[9] && depth_dist.has_value() ? (std::optional<at::Tensor>)at::empty_like(depth_dist.value()) : std::nullopt;
+    std::optional<at::Tensor> v_normal_dist = needs_input_grad[10] && normal_dist.has_value() ? (std::optional<at::Tensor>)at::empty_like(normal_dist.value()) : std::nullopt;
 
     FixedArray<float, (uint)LossWeightIndex::length> loss_weights =
         *reinterpret_cast<const FixedArray<float, (uint)LossWeightIndex::length>*>(loss_weights_0.data());

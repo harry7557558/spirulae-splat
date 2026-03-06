@@ -38,9 +38,10 @@ __global__ void intersect_tile_kernel(
     const int64_t *__restrict__ cum_tiles_per_splat, // [..., N], optional for counting pass
     const uint32_t tile_width,
     const uint32_t tile_height,
-    int32_t *__restrict__ tiles_per_splat, // [..., N]
+    int64_t *__restrict__ tiles_per_splat, // [..., N]
     int64_t *__restrict__ isect_ids,  // [n_isects]
-    int32_t *__restrict__ flatten_ids  // [n_isects]
+    int32_t *__restrict__ flatten_ids,  // [n_isects]
+    float *__restrict__ radii  // [N]
 ) {
     uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= I * N) {
@@ -86,6 +87,10 @@ __global__ void intersect_tile_kernel(
             ++cur_idx;
         }
     }
+
+    // save radii
+    float radius = 0.5f * fmaxf((float)(xmax_i32 - xmin_i32), (float)(ymax_i32 - ymin_i32));
+    atomicMax(&radii[idx % N], radius);
 }
 
 
@@ -304,10 +309,12 @@ __global__ void intersect_offset_kernel(
     }
 }
 
+/*[AutoHeaderGeneratorExport]*/
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor  // offsets, [I * n_tiles], int32
+    at::Tensor,  // offsets, [I * n_tiles], int32
+    at::Tensor  // radii, [N], float32
 > do_intersect_tile_generic(
     at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
@@ -332,24 +339,25 @@ std::tuple<
     /* For each splat, count tiles intersected by its AABB */
     at::Tensor tiles_per_splat = at::empty(
         {depths.numel()},
-        at::TensorOptions().device(aabb.device()).dtype(at::kInt)
+        at::TensorOptions().device(aabb.device()).dtype(at::kLong)
     );
     intersect_tile_kernel<true><<<_LAUNCH_ARGS_1D(I*N, 256)>>>(
         I,
         N,
         reinterpret_cast<const int4 *>(aabb.data_ptr<int32_t>()),
         depths.data_ptr<float>(),
-        nullptr,
+        nullptr,  // cum_tiles_per_splat
         tile_width,
         tile_height,
-        tiles_per_splat.data_ptr<int32_t>(),
-        nullptr,
-        nullptr
+        tiles_per_splat.data_ptr<int64_t>(),
+        nullptr,  // isect_ids
+        nullptr,  // flatten_ids
+        nullptr  // radii
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     /* Prefix sum the count to get offsets */
-    at::Tensor cum_tiles_per_splat = at::cumsum(tiles_per_splat, /*dim=*/-1, /*dtype=*/at::kLong);
+    at::Tensor cum_tiles_per_splat = at::cumsum(tiles_per_splat, /*dim=*/-1);
 
     /* For each splat, write out keys (intersected tile ID in higher bits, and depth in lower bits) at the correct offsets */
     int64_t n_isects = cum_tiles_per_splat[-1].item<int64_t>();
@@ -361,6 +369,21 @@ std::tuple<
         {n_isects},
         at::TensorOptions().device(aabb.device()).dtype(at::kInt)
     );
+    at::Tensor offsets = at::empty(
+        {I, tile_height, tile_width},
+        at::TensorOptions().device(aabb.device()).dtype(at::kInt)
+    );
+    at::Tensor radii = at::zeros(
+        {N,},
+        at::TensorOptions().device(aabb.device()).dtype(at::kFloat)
+    );
+    if (n_isects == 0)
+        return std::make_tuple(
+            isect_ids,
+            flatten_ids,
+            offsets.zero_(),
+            radii
+        );
     intersect_tile_kernel<false><<<_LAUNCH_ARGS_1D(I*N, 256)>>>(
         I,
         N,
@@ -369,9 +392,10 @@ std::tuple<
         reinterpret_cast<const int64_t *>(cum_tiles_per_splat.data_ptr<int64_t>()),
         tile_width,
         tile_height,
-        nullptr,
+        nullptr,  // tiles_per_splat
         reinterpret_cast<int64_t *>(isect_ids.data_ptr<int64_t>()),
-        reinterpret_cast<int32_t *>(flatten_ids.data_ptr<int32_t>())
+        reinterpret_cast<int32_t *>(flatten_ids.data_ptr<int32_t>()),
+        radii.data_ptr<float>()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
@@ -413,10 +437,6 @@ std::tuple<
     }
 
     /* Compute offsets for each tile */
-    at::Tensor offsets = at::empty(
-        {I, tile_height, tile_width},
-        at::TensorOptions().device(aabb.device()).dtype(at::kInt)
-    );
     intersect_offset_kernel<<<_LAUNCH_ARGS_1D(n_isects, 256)>>>(
         n_isects,
         isect_ids.data_ptr<int64_t>(),
@@ -428,9 +448,12 @@ std::tuple<
     return std::make_tuple(
         isect_ids,
         flatten_ids,
-        offsets
+        offsets,
+        radii
     );
 }
+
+#if 0
 
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
@@ -766,3 +789,5 @@ std::tuple<
         dist_coeffs
     );
 }
+
+#endif

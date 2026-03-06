@@ -212,7 +212,7 @@ inline std::tuple<
     auto opt = splats_world.options();
     at::Tensor v_viewmats;
     if (viewmats_requires_grad)
-        v_viewmats = at::zeros_like(viewmats, opt);
+        v_viewmats = zeros_like<float>(viewmats);
 
     at::Tensor vr_world_pos;
     at::Tensor h_world_pos;

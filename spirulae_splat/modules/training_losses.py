@@ -32,8 +32,10 @@ try:
         fused_bilagrid_sample,
         fused_bilagrid_ppisp_sample,
         fused_bilagrid_loglinear_sample,
-        total_variation_loss
+        total_variation_loss,
+        channel_mean
     )
+    from fused_bilagrid import _C as fused_bilagrid_C
 except:
     raise RuntimeError(
         "\033[93m"
@@ -42,7 +44,7 @@ except:
         "\033[0m"
     )
 
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Any
 
 import spirulae_splat.modules.enhancer
 
@@ -78,6 +80,88 @@ class _MaskGradient(torch.autograd.Function):
         return v_x * ctx.mask, None
 
 
+class _MemoryEfficientBilagridFetch(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, dummy: torch.Tensor, bilagrid: List, idx=None):
+        ctx.set_materialize_grads(False)
+        ctx.bilagrid = bilagrid[0]
+        assert ctx.bilagrid.grids.is_leaf
+        ctx.save_for_backward(dummy, idx)
+        if idx is None:
+            return ctx.bilagrid.grids
+        return ctx.bilagrid.grids[idx]
+    @staticmethod
+    def backward(ctx, v_sample):
+        """Accumulate gradient in place"""
+        bilagrid = ctx.bilagrid
+        dummy, idx = ctx.saved_tensors
+        if v_sample is None:
+            return dummy, None, None
+        if idx is None:
+            if bilagrid.grids.grad is None:
+                bilagrid.grids.grad = v_sample
+            else:
+                bilagrid.grids.grad.add_(v_sample)
+        else:
+            if bilagrid.grids.grad is None:
+                bilagrid.grids.grad = torch.zeros_like(bilagrid.grids.data)
+            bilagrid.grids.grad.index_add_(0, idx, v_sample)
+        return dummy, None, None
+
+
+class _BilagridFusedTotalVariationLoss(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, dummy: torch.Tensor, bilagrid: List):
+        ctx.set_materialize_grads(False)
+        ctx.bilagrid = bilagrid[0]
+        assert ctx.bilagrid.grids.is_leaf
+        ctx.save_for_backward(dummy)
+        return fused_bilagrid_C.tv_loss_forward(ctx.bilagrid.grids)
+
+    @staticmethod
+    def backward(ctx, v_output):
+        """Accumulate gradient in place"""
+        bilagrid = ctx.bilagrid
+        (dummy,) = ctx.saved_tensors
+        if v_output is None:
+            return dummy, None, None
+        if bilagrid.grids.grad is None:
+            bilagrid.grids.grad = fused_bilagrid_C.tv_loss_backward(bilagrid.grids, v_output.contiguous())
+        else:
+            fused_bilagrid_C.tv_loss_backward_inplace(bilagrid.grids, v_output.contiguous(), bilagrid.grids.grad)
+        return dummy, None, None
+
+
+class _BilagridFusedRegularization(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, dummy: torch.Tensor, bilagrid: List):
+        ctx.set_materialize_grads(False)
+        ctx.bilagrid = bilagrid[0]
+        assert ctx.bilagrid.grids.is_leaf
+        ctx.save_for_backward(dummy)
+        return (
+            fused_bilagrid_C.tv_loss_forward(ctx.bilagrid.grids),
+            fused_bilagrid_C.channel_mean_forward(ctx.bilagrid.grids)
+        )
+
+    @staticmethod
+    def backward(ctx, v_tv_loss, v_channel_mean):
+        """Accumulate gradient in place"""
+        bilagrid = ctx.bilagrid
+        (dummy,) = ctx.saved_tensors
+        if v_tv_loss is not None:
+            if bilagrid.grids.grad is None:
+                bilagrid.grids.grad = fused_bilagrid_C.tv_loss_backward(bilagrid.grids, v_tv_loss.contiguous())
+            else:
+                fused_bilagrid_C.tv_loss_backward_inplace(bilagrid.grids, v_tv_loss.contiguous(), bilagrid.grids.grad)
+        if v_channel_mean is not None:
+            if bilagrid.grids.grad is None:
+                bilagrid.grids.grad = fused_bilagrid_C.channel_mean_backward(bilagrid.grids, v_channel_mean.contiguous())
+            else:
+                fused_bilagrid_C.channel_mean_backward_inplace(bilagrid.grids, v_channel_mean.contiguous(), bilagrid.grids.grad)
+        return dummy, None, None
+
+
 class FusedSSIM(torch.autograd.Function):
     @staticmethod
     def forward(ctx, img1, img2, train=True, return_ssim_map=False, is_l1=False):
@@ -90,6 +174,7 @@ class FusedSSIM(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, dL_dssim, dL_dmap):
+        # TODO: support gradient to ref_rgb
         img1, img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = ctx.saved_tensors
         grad = _make_lazy_cuda_func("fused_ssim_backward")(img1, img2, dL_dssim, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
         return grad, None, None, None, None
@@ -194,7 +279,8 @@ class _ComputePerPixelLosses(torch.autograd.Function):
         weights: List[float],
         num_train_images: int = -1,
         camera_indices: Optional[torch.Tensor] = None,
-        return_loss_map: bool = False
+        return_loss_map: bool = False,
+        loss_map_ssim_weight: Optional[float] = None
     ):
         if not isinstance(camera_indices, torch.Tensor):
             num_train_images = -1
@@ -228,24 +314,38 @@ class _ComputePerPixelLosses(torch.autograd.Function):
         # print(raw_losses[0].detach().cpu().numpy().tolist())
         # print(raw_losses[1].detach().cpu().numpy().tolist())
 
+        ssim, ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = \
+            _make_lazy_cuda_func("fused_ssim_forward")(render_rgb, ref_rgb, True, return_loss_map, False)
+        if return_loss_map:
+            ssim_map *= loss_map_ssim_weight
+            loss_map.add_(ssim_map)
+
         ctx.weights = weights
         ctx.num_train_images = num_train_images
-        ctx.save_for_backward(*tensors, raw_losses, camera_indices)
+        ctx.save_for_backward(*tensors, raw_losses, camera_indices, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
 
         # print('loss_map:', loss_map.mean().item(), loss_map.median().item())
 
-        return losses, loss_map
+        return losses, ssim, loss_map
 
     @staticmethod
-    def backward(ctx, v_losses, v_loss_map):
+    def backward(ctx, v_losses, v_ssim, v_loss_map):
         # warn that loss map is not differentiable
+
+        camera_indices, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = ctx.saved_tensors[-4:]
+
         grads = _C.compute_per_pixel_losses_backward(
-            *ctx.saved_tensors[:-1],
+            *ctx.saved_tensors[:-4],
             ctx.weights,
             v_losses,
+            ctx.needs_input_grad,
             ctx.num_train_images,
-            ctx.saved_tensors[-1],
+            camera_indices,
         )
+
+        # TODO: support gradient to ref_rgb
+        _make_lazy_cuda_func("fused_ssim_backward_inplace")(*ctx.saved_tensors[:2], v_ssim, dm_dmu1, dm_dsigma1_sq, dm_dsigma12, grads[0])
+
         return *grads, *([None]*(len(ctx.needs_input_grad)-len(grads)))
 
 
@@ -324,6 +424,7 @@ class SplatTrainingLosses(torch.nn.Module):
             if self.config.optimize_bilagrid_frequencies:
                 self.bil_grids.grids.data = \
                     Dct3D.apply(self.bil_grids.grids.data.cuda()).to(self.bil_grids.grids.data.device)
+            self.bilagrid_wrapped = [self.bil_grids]
         if self.config.use_bilateral_grid_for_geometry:
             # TODO: some way to avoid introducing VRAM overhead when geometry is not provided
             self.bil_grids_depth = BilateralGrid(
@@ -343,6 +444,8 @@ class SplatTrainingLosses(torch.nn.Module):
                 DEFAULT_PPISP_PARAMS_RQS if self.config.ppisp_param_type == "rqs" else DEFAULT_PPISP_PARAMS
             ).repeat(self.num_train_data, 1)
             self.ppisp_params = torch.nn.Parameter(self.ppisp_params)
+
+        self._dummy = torch.nn.Parameter(torch.zeros(1, dtype=torch.float32))
 
         self.lpips_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32
         # self.lpips_dtype = torch.float32
@@ -367,6 +470,7 @@ class SplatTrainingLosses(torch.nn.Module):
             return resize_image(image, d)
         return image
 
+    @torch.no_grad()
     def get_gt_img(self, image: torch.Tensor):
         """Compute groundtruth image with iteration dependent downscale factor for evaluation purpose
 
@@ -374,52 +478,20 @@ class SplatTrainingLosses(torch.nn.Module):
             image: tensor.Tensor in type uint8, uint16, or float32
         """
         if image.dtype == torch.uint8:
-            image = image.float() / 255.0
+            # image = image.float() / 255.0
+            image = _make_lazy_cuda_func("uint8_image_to_float")(image)
         elif image.dtype == torch.uint16:
-            image = image.float() / 65535.0
+            # image = image.float() / 65535.0
+            image = _make_lazy_cuda_func("uint16_image_to_float")(image)
         gt_img = self._downscale_if_required(image)
         return gt_img
 
-    def get_ssim_loss(self, pred_rgb: torch.Tensor, gt_rgb: torch.Tensor):
-        ssim, ssim_map = FusedSSIM.apply(
-            pred_rgb.contiguous(),
-            gt_rgb.contiguous(),
-            True,  # TODO: detect torch.no_grad()
-            self.config.compute_hessian_diagonal is not None,
-            self.config.use_l1_ssim
-        )
-        if self.config.g_ssim_lambda > 0.0:
-            g_ssim_y, g_ssim_y_map = FusedSSIM.apply(
-                (0.5 + 0.5 * (pred_rgb[:, 1:, :, :] - pred_rgb[:, :-1, :, :])).contiguous(),
-                (0.5 + 0.5 * (gt_rgb[:, 1:, :, :] - gt_rgb[:, :-1, :, :])).contiguous(),
-                True,  # TODO: detect torch.no_grad()
-                self.config.compute_hessian_diagonal is not None,
-                self.config.use_l1_ssim
-            )
-            g_ssim_x, g_ssim_x_map = FusedSSIM.apply(
-                (0.5 + 0.5 * (pred_rgb[:, :, 1:, :] - pred_rgb[:, :, :-1, :])).contiguous(),
-                (0.5 + 0.5 * (gt_rgb[:, :, 1:, :] - gt_rgb[:, :, :-1, :])).contiguous(),
-                True,  # TODO: detect torch.no_grad()
-                self.config.compute_hessian_diagonal is not None,
-                self.config.use_l1_ssim
-            )
-            ssim_loss = 1.0 - torch.lerp(ssim, 0.5*(g_ssim_x+g_ssim_y), self.config.g_ssim_lambda)
-            if self.config.compute_hessian_diagonal is not None:
-                ssim_map *= (1.0 - self.config.g_ssim_lambda)
-                ssim_map[:, :-1, :, :] += 0.25 * self.config.g_ssim_lambda * g_ssim_y_map
-                ssim_map[:, 1:, :, :] += 0.25 * self.config.g_ssim_lambda * g_ssim_y_map
-                ssim_map[:, :, :-1, :] += 0.25 * self.config.g_ssim_lambda * g_ssim_x_map
-                ssim_map[:, :, 1:, :] += 0.25 * self.config.g_ssim_lambda * g_ssim_x_map
-        else:
-            ssim_loss = 1.0 - ssim
-
-        return ssim, ssim_loss, ssim_map
-
-    def apply_bilateral_grid(self, bilagrid, rgb: torch.Tensor, cam_idx: int, is_geometry: bool, **kwargs) -> torch.Tensor:
+    def apply_bilateral_grid(self, bilagrid_wrapped: List, rgb: torch.Tensor, cam_idx: int, is_geometry: bool, **kwargs) -> torch.Tensor:
         """rgb must be clamped to 0-1"""
         try:
             grid_idx = torch.tensor(cam_idx, device=rgb.device, dtype=torch.long).flatten()
-            grids = bilagrid.grids[grid_idx]
+            # grids = bilagrid.grids[grid_idx]
+            grids = _MemoryEfficientBilagridFetch.apply(self._dummy, bilagrid_wrapped, grid_idx)
             if self.config.optimize_bilagrid_frequencies:
                 grids = Dct3D.apply(grids)
             out = {
@@ -543,7 +615,7 @@ class SplatTrainingLosses(torch.nn.Module):
                 )
                 gt_depth = gt_depth / (gt_depth + 1.0)
                 gt_depth = self.apply_bilateral_grid(
-                    self.bil_grids_depth,
+                    [self.bil_grids_depth],
                     gt_depth.repeat(1, 1, 1, 3), camera.metadata["cam_idx"],
                     is_geometry=True,
                     **meta
@@ -565,7 +637,7 @@ class SplatTrainingLosses(torch.nn.Module):
                 # TODO: might not be the best way to use RGB bilagrid
                 B, H, W, C = gt_normal.shape
                 gt_normal = self.apply_bilateral_grid(
-                    self.bil_grids_normal,
+                    [self.bil_grids_normal],
                     0.5+0.5*gt_normal, camera.metadata["cam_idx"],
                     is_geometry=True,
                     **meta
@@ -602,7 +674,7 @@ class SplatTrainingLosses(torch.nn.Module):
             gt_img_rgba = gt_depth
         elif self.config.fit in ["normal"]:
             gt_img_rgba = 0.5+0.5*F.normalize(gt_normal, dim=-1)
-        gt_rgb = gt_img_rgba[..., :3]
+        gt_rgb = gt_img_rgba if gt_img_rgba.shape[-1] == 3 else gt_img_rgba[..., :3]
 
         # update alpha if image is RGBA
         if gt_img_rgba.shape[-1] == 4 and self.config.alpha_loss_weight > 0.0:
@@ -649,7 +721,7 @@ class SplatTrainingLosses(torch.nn.Module):
         if self.config.use_bilateral_grid and self.config.fit == "rgb" and \
                 camera.metadata is not None and "cam_idx" in camera.metadata:
             pred_rgb = self.apply_bilateral_grid(
-                self.bil_grids,
+                self.bilagrid_wrapped,
                 pred_rgb, camera.metadata["cam_idx"],
                 is_geometry=False,
                 **meta
@@ -715,22 +787,6 @@ class SplatTrainingLosses(torch.nn.Module):
                     raise NotImplementedError()
             all_images.append(pooled)
 
-        # ssim loss
-        ssim, ssim_loss, ssim_map = self.get_ssim_loss(pred_rgb, gt_rgb)
-        for scale in range(1, self.config.num_loss_scales+1):
-            pred_rgb_pooled, gt_rgb_pooled = all_images[scale][:2]
-            _, ssim_loss_pooled, ssim_map_pooled = self.get_ssim_loss(pred_rgb_pooled, gt_rgb_pooled)
-            ssim_loss = ssim_loss + ssim_loss_pooled
-            if self.config.compute_hessian_diagonal is not None:
-                ssim_map_pooled = ssim_map_pooled.permute(0, 3, 1, 2).to(memory_format=torch.channels_last)
-                ssim_map_pooled = F.upsample(ssim_map_pooled, scale_factor=2**scale, mode='nearest').permute(0, 2, 3, 1)
-                ssim_map[:, :ssim_map_pooled.shape[1], :ssim_map_pooled.shape[2], :] += ssim_map_pooled
-        if self.config.num_loss_scales > 0:
-            multiplier = 1.0 / (self.config.num_loss_scales + 1)
-            ssim_loss = ssim_loss * multiplier
-            if self.config.compute_hessian_diagonal is not None:
-                ssim_map *= multiplier
-
         # call fused kernel to compute loss
     
         (weight_depth_dist_reg, weight_normal_dist_reg, weight_rgb_dist_reg), weight_normal_reg = \
@@ -760,30 +816,45 @@ class SplatTrainingLosses(torch.nn.Module):
             float(self.step >= self.config.reg_warmup_length) * weight_depth_dist_reg,
             float(self.step >= self.config.reg_warmup_length) * weight_normal_dist_reg,
         ]
+        w_ssim = self.config.ssim_lambda * (1.0 - self.config.lpips_lambda)
+
         for scale in range(0, self.config.num_loss_scales+1):
-            losses_pooled, loss_map_pooled = _ComputePerPixelLosses.apply(
+
+            # per pixel losses
+            losses_pooled, ssim_pooled, loss_map_pooled = _ComputePerPixelLosses.apply(
                 *all_images[scale],
                 loss_weights,
                 meta.get("num_train_data", -1),
                 camera.metadata.get('cam_idx', None),
-                self.config.compute_hessian_diagonal is not None
+                self.config.compute_hessian_diagonal is not None,
+                w_ssim if self.config.compute_hessian_diagonal else None,
             )
+            ssim_loss_pooled = 1.0 - ssim_pooled
+
+            # original
             if scale == 0:
-                losses = losses_pooled
-                loss_map = loss_map_pooled
+                ssim, ssim_loss = ssim_pooled, ssim_loss_pooled
+                losses, loss_map = losses_pooled, loss_map_pooled
                 psnr = losses[1]
-            else:
-                losses = losses + losses_pooled
-                if self.config.compute_hessian_diagonal is not None:
+                continue
+
+            # downscaled
+            losses = losses + losses_pooled
+            ssim_loss = ssim_loss + ssim_loss_pooled
+            if self.config.compute_hessian_diagonal is not None:
+                with torch.no_grad():
                     loss_map_pooled = loss_map_pooled.permute(0, 3, 1, 2).to(memory_format=torch.channels_last)
                     loss_map_pooled = F.upsample(loss_map_pooled, scale_factor=2**scale, mode='nearest').permute(0, 2, 3, 1)
                     loss_map[:, :loss_map_pooled.shape[1], :loss_map_pooled.shape[2], :] += loss_map_pooled
+
         if self.config.num_loss_scales > 0:
             multiplier = 1.0 / (self.config.num_loss_scales + 1)
             # multiplier = 1.0 / (2.0 - 0.5 ** self.config.num_loss_scales)
             losses = losses * multiplier
+            ssim_loss = ssim_loss * multiplier
             if self.config.compute_hessian_diagonal is not None:
-                loss_map *= multiplier
+                with torch.no_grad():
+                    loss_map *= multiplier
 
         (
             rgb_loss, rgb_psnr,
@@ -791,9 +862,7 @@ class SplatTrainingLosses(torch.nn.Module):
             normal_reg, alpha_reg,
             rgb_dist_reg, depth_dist_reg, normal_dist_reg
         ) = losses
-        if loss_map is not None and ssim_map is not None:
-            w_ssim = 1.0 - (1.0 - self.config.ssim_lambda) * (1.0 - self.config.lpips_lambda)
-            loss_map += w_ssim * ssim_map
+        if loss_map is not None:
             if 'backward_metadata_injector' in outputs:
                 outputs['backward_metadata_injector']("loss_map", loss_map)  # to be able to get it in backward
         # if loss_map is not None and self.step % 100 == 0:
@@ -802,7 +871,7 @@ class SplatTrainingLosses(torch.nn.Module):
         #     plt.show()
 
         # note that rgb_loss is already multipled by (1.0 - self.config.ssim_lambda) * (1.0 - self.config.lpips_lambda)
-        image_loss = rgb_loss + self.config.ssim_lambda * ssim_loss
+        image_loss = rgb_loss + w_ssim * ssim_loss
 
         # LPIPS for training
         if self.config.lpips_lambda > 0.0:
@@ -814,7 +883,7 @@ class SplatTrainingLosses(torch.nn.Module):
                 pred_rgb.permute(0, 3, 1, 2).to(self.lpips_dtype).clip(0, 1),
                 gt_rgb.permute(0, 3, 1, 2).to(self.lpips_dtype).clip(0, 1)
             ).float()
-            image_loss = torch.lerp(image_loss, lpips, self.config.lpips_lambda)
+            image_loss = image_loss + self.config.lpips_lambda * lpips
 
         # LPIPS for validation
         if val:
@@ -830,7 +899,7 @@ class SplatTrainingLosses(torch.nn.Module):
                     gt_rgb.permute(0, 3, 1, 2).to(self.lpips_dtype).clip(0, 1)
                 ).float()
 
-        # metrics, readable from console during training
+        # metrics, readable from terminal during training
         with torch.no_grad():
             # list_cap_max = self.num_train_data
             list_cap_max = self.config.refine_every
@@ -936,26 +1005,29 @@ class SplatTrainingLosses(torch.nn.Module):
         """Separately process losses that are not dependent on images"""
         self.step = step
 
-        # bilagrid total variation loss
-        if self.config.use_bilateral_grid:
-            bilagrid = self.bil_grids.grids
-            if self.config.optimize_bilagrid_frequencies:
-                bilagrid = Dct3D.apply(bilagrid)
-        if self.config.use_bilateral_grid:
-            loss_dict["tv_loss"] = self.config.bilagrid_tv_loss_weight * total_variation_loss(bilagrid)
-        if self.config.use_bilateral_grid_for_geometry:
-            if self.config.depth_supervision_weight > 0.0:  # do this because bilagrid backward is expensive, especially in patched mode
-                loss_dict["tv_loss_depth"] = self.config.bilagrid_tv_loss_weight_geometry * total_variation_loss(self.bil_grids_depth.grids)
-            loss_dict["tv_loss_normal"] = self.config.bilagrid_tv_loss_weight_geometry * total_variation_loss(self.bil_grids_normal.grids)
-
         # bilagrid regularization loss
         if self.config.use_bilateral_grid:
-            bilagrid_mean = torch.mean(bilagrid, dim=(0, 2, 3, 4))
+            if self.config.optimize_bilagrid_frequencies:
+                raise NotImplementedError()
+                bilagrid = Dct3D.apply(bilagrid)
+                tv_loss_fun = total_variation_loss
+            tv_loss, bilagrid_mean = _BilagridFusedRegularization.apply(self._dummy, self.bilagrid_wrapped)
+
+            # total variation loss
+            loss_dict["tv_loss"] = self.config.bilagrid_tv_loss_weight * tv_loss
+
+            # channel mean
             if self.config.bilagrid_type == "affine":
                 bilagrid_mean_reg = F.mse_loss(bilagrid_mean, DEFAULT_BILAGRID_PARAMS)
             elif self.config.bilagrid_type in ["ppisp", "loglinear"]:
                 bilagrid_mean_reg = F.mse_loss(bilagrid_mean, torch.zeros_like(bilagrid_mean))
             loss_dict['bilagrid_mean_reg'] = self.config.bilagrid_mean_reg_weight * bilagrid_mean_reg
+
+        # bilagrid regularization loss for geometry
+        if self.config.use_bilateral_grid_for_geometry:
+            if self.config.depth_supervision_weight > 0.0:  # do this because bilagrid backward is expensive, especially in patched mode
+                loss_dict["tv_loss_depth"] = self.config.bilagrid_tv_loss_weight_geometry * total_variation_loss(self.bil_grids_depth.grids)
+            loss_dict["tv_loss_normal"] = self.config.bilagrid_tv_loss_weight_geometry * total_variation_loss(self.bil_grids_normal.grids)
 
         # PPISP regularization loss
         if self.config.use_ppisp:

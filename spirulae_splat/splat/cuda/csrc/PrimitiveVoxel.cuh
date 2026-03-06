@@ -127,8 +127,8 @@ struct VoxelPrimitive::World {
             return Tensor(std::make_tuple(
                 (std::optional<at::Tensor>)at::nullopt,
                 (std::optional<at::Tensor>)at::nullopt,
-                at::zeros_like(features_dc),
-                at::zeros_like(features_sh)  // TODO: exclude SH when is_hess_diag
+                zeros_like<float>(features_dc),
+                zeros_like<float>(features_sh)  // TODO: exclude SH when is_hess_diag
             ));
         }
 
@@ -416,8 +416,8 @@ struct VoxelPrimitive::Screen {
             Tensor result = Tensor(std::make_tuple(
                 (std::optional<at::Tensor>)at::nullopt,
                 (std::optional<at::Tensor>)at::nullopt,
-                (std::optional<at::Tensor>)at::zeros_like(densities.value()),
-                at::zeros_like(rgbs)
+                (std::optional<at::Tensor>)zeros_like<float>(densities.value()),
+                zeros_like<float>(rgbs)
             ));
             return result;
         }

@@ -95,7 +95,7 @@ __device__ __forceinline__ float3 get_pix_value(
 // Forward Kernel: Fused SSIM
 //  - Two-pass convolution to get mu1, mu2,
 //    sigma1_sq, sigma2_sq, sigma12, etc.
-//  - Writes final SSIM map to ssim_map
+//  - Writes final SSIM map to ssim_loss_map
 //  - Optionally writes partial derivatives
 //    to dm_dmu1, dm_dsigma1_sq, dm_dsigma12
 // ------------------------------------------
@@ -105,7 +105,7 @@ __global__ void fusedssimCUDA(
     const float3* __restrict__ img1,
     const float3* __restrict__ img2,
     float* __restrict__ ssim,
-    float* __restrict__ ssim_map,
+    float* __restrict__ ssim_loss_map,
     float3* __restrict__ dm_dmu1,
     float3* __restrict__ dm_dsigma1_sq,
     float3* __restrict__ dm_dsigma12
@@ -315,8 +315,8 @@ __global__ void fusedssimCUDA(
                 dm_dmu1[global_idx]       = d_m_dmu1;
                 dm_dsigma1_sq[global_idx] = d_m_dsigma1_sq;
                 dm_dsigma12[global_idx]   = d_m_dsigma12;
-                if (ssim_map != nullptr)
-                    ssim_map[global_idx] = val;
+                if (ssim_loss_map != nullptr)
+                    ssim_loss_map[global_idx] = 1.0f - val;
             }
 
         } else {
@@ -348,8 +348,8 @@ __global__ void fusedssimCUDA(
                 dm_dmu1[global_idx]       = d_m_dmu1 * grad_val3;
                 dm_dsigma1_sq[global_idx] = d_m_dsigma1_sq * grad_val3;
                 dm_dsigma12[global_idx]   = d_m_dsigma12 * grad_val3;
-                if (ssim_map != nullptr)
-                    ssim_map[global_idx] = val;
+                if (ssim_loss_map != nullptr)
+                    ssim_loss_map[global_idx] = 1.0f - val;
             }
         #else
             static constexpr float kC3 = 0.5f * kC2;
@@ -400,8 +400,8 @@ __global__ void fusedssimCUDA(
                 dm_dmu1[global_idx]       = d_m_dmu1;
                 dm_dsigma1_sq[global_idx] = d_m_dsigma1_sq;
                 dm_dsigma12[global_idx]   = d_m_dsigma12;
-                if (ssim_map != nullptr)
-                    ssim_map[global_idx] = val;
+                if (ssim_loss_map != nullptr)
+                    ssim_loss_map[global_idx] = 1.0f - val;
             }
         #endif
             }
@@ -423,6 +423,7 @@ __global__ void fusedssimCUDA(
 //    (dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
 //    and dL/dmap (the gradient from above).
 // ------------------------------------------
+template<bool inplace>
 __global__ void fusedssim_backwardCUDA(
     int B, int H, int W,
     const float3* __restrict__ img1,
@@ -556,14 +557,17 @@ __global__ void fusedssim_backwardCUDA(
         float3 dL_dpix = sum0 + (2.f * p1) * sum1 + (p2) * sum2;
 
         int out_idx = bIdx * num_pix + pix_id;
-        dL_dimg1[out_idx] = dL_dpix;
+        if (inplace)
+            dL_dimg1[out_idx] += dL_dpix;
+        else
+            dL_dimg1[out_idx] = dL_dpix;
     }
 
 }
 
 // ------------------------------------------
 // PyTorch Interface (Forward)
-//   Returns (ssim, ssim_map (single channel non differentiable), dm_dmu1, dm_dsigma1_sq, dm_dsigma12).
+//   Returns (ssim, ssim_loss_map (single channel non differentiable), dm_dmu1, dm_dsigma1_sq, dm_dsigma12).
 //   If train=false, derivative Tensors are empty.
 // ------------------------------------------
 std::tuple<at::Tensor, std::optional<at::Tensor>, at::Tensor, at::Tensor, at::Tensor>
@@ -571,7 +575,7 @@ fused_ssim_forward(
     at::Tensor &img1,
     at::Tensor &img2,
     bool train,
-    bool return_ssim_map,
+    bool return_ssim_loss_map,
     bool is_l1
 ) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
@@ -590,9 +594,9 @@ fused_ssim_forward(
 
     // Output SSIM map
     at::Tensor ssim = at::zeros({}, img1.options());
-    std::optional<at::Tensor> ssim_map;
-    if (return_ssim_map)
-        ssim_map = at::zeros({B, H, W, 1}, img1.options());
+    std::optional<at::Tensor> ssim_loss_map;
+    if (return_ssim_loss_map)
+        ssim_loss_map = at::zeros({B, H, W, 1}, img1.options());
 
     // Optionally allocate derivative Tensors
     at::Tensor dm_dmu1       = train ? at::empty_like(img1) : at::empty({0}, img1.options());
@@ -604,13 +608,13 @@ fused_ssim_forward(
         (float3*)img1.data_ptr<float>(),
         (float3*)img2.data_ptr<float>(),
         ssim.data_ptr<float>(),
-        return_ssim_map ? ssim_map.value().data_ptr<float>() : nullptr,
+        return_ssim_loss_map ? ssim_loss_map.value().data_ptr<float>() : nullptr,
         train ? (float3*)dm_dmu1.data_ptr<float>()       : nullptr,
         train ? (float3*)dm_dsigma1_sq.data_ptr<float>() : nullptr,
         train ? (float3*)dm_dsigma12.data_ptr<float>()   : nullptr
     );
 
-    return std::make_tuple(ssim, ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12);
+    return std::make_tuple(ssim, ssim_loss_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12);
 }
 
 // ------------------------------------------
@@ -641,7 +645,7 @@ fused_ssim_backward(
               B);
     dim3 block(BLOCK_X, BLOCK_Y);
 
-    fusedssim_backwardCUDA<<<grid, block>>>(
+    fusedssim_backwardCUDA<false><<<grid, block>>>(
         B, H, W,
         (float3*)img1.data_ptr<float>(),
         (float3*)img2.data_ptr<float>(),
@@ -653,4 +657,37 @@ fused_ssim_backward(
     );
 
     return dL_dimg1;
+}
+
+void fused_ssim_backward_inplace(
+    at::Tensor &img1,
+    at::Tensor &img2,
+    at::Tensor &dL_dmap,
+    at::Tensor &dm_dmu1,
+    at::Tensor &dm_dsigma1_sq,
+    at::Tensor &dm_dsigma12,
+    at::Tensor &dL_dimg1
+) {
+    const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
+    int B  = img1.size(0);
+    int H  = img1.size(1);
+    int W  = img1.size(2);
+    int CH = img1.size(3);
+
+    dim3 grid((W + BLOCK_X - 1) / BLOCK_X,
+              (H + BLOCK_Y - 1) / BLOCK_Y,
+              B);
+    dim3 block(BLOCK_X, BLOCK_Y);
+
+    fusedssim_backwardCUDA<true><<<grid, block>>>(
+        B, H, W,
+        (float3*)img1.data_ptr<float>(),
+        (float3*)img2.data_ptr<float>(),
+        dL_dmap.data_ptr<float>(),
+        (float3*)dL_dimg1.data_ptr<float>(),
+        (float3*)dm_dmu1.data_ptr<float>(),
+        (float3*)dm_dsigma1_sq.data_ptr<float>(),
+        (float3*)dm_dsigma12.data_ptr<float>()
+    );
+
 }

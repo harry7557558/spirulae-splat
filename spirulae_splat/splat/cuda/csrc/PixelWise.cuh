@@ -72,6 +72,30 @@ enum class PPISPRegLossIndex {
 
 
 
+at::Tensor uint8_image_to_float_tensor(
+    at::Tensor &img_in  // [B, H, W, C]
+);
+
+
+at::Tensor uint16_image_to_float_tensor(
+    at::Tensor &img_in  // [B, H, W, C]
+);
+
+
+at::Tensor rendered_depth_to_expected_depth_forward_tensor(
+    at::Tensor &depth,  // [B, H, W, 1]
+    at::Tensor &alpha  // [B, H, W, 1]
+);
+
+
+std::tuple<at::Tensor, at::Tensor>
+rendered_depth_to_expected_depth_backward_tensor(
+    at::Tensor &depth,  // [B, H, W, 1]
+    at::Tensor &alpha,  // [B, H, W, 1]
+    at::Tensor &v_out_depth  // [B, H, W, 1]
+);
+
+
 at::Tensor blend_background_forward_tensor(
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &alpha,  // [B, H, W, 1]
