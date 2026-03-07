@@ -12,6 +12,12 @@ namespace SlangPixelWise {
 
 #include "common.cuh"
 
+#if defined(__INTEL_COMPILER) || defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER)
+#if defined(__AVX2__) || defined(__SSE2__)
+#include <immintrin.h>
+#endif
+#endif
+
 
 inline constexpr float kSh0 = 0.28209479177387814f;
 
@@ -44,9 +50,9 @@ __global__ void fused_adam_kernel(
     const float beta2,
     const float eps,
     const int step,
-    const int numel
+    const int64_t numel
 ) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int64_t idx = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
     
     if (idx < numel) {
         // Bias correction terms
@@ -95,7 +101,7 @@ void fused_adam(
     CHECK_INPUT(exp_avg);
     CHECK_INPUT(exp_avg_sq);
 
-    const int numel = param.numel();
+    const int64_t numel = param.numel();
     if (numel == 0)
         return;
     
@@ -114,6 +120,124 @@ void fused_adam(
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
+void fused_adam_core(float* p, const float* g, float* m, float* v, 
+                      int size, float step_size, float beta1, float beta2, 
+                      float eps, float bias_corr2_sqrt) {
+    int i = 0;
+#if defined(__AVX2__) && 0
+    // will enable once I have supported hardware to verify this vibe code working
+    __m256 v_beta1 = _mm256_set1_ps(beta1);
+    __m256 v_beta2 = _mm256_set1_ps(beta2);
+    __m256 v_one_minus_beta1 = _mm256_set1_ps(1.0f - beta1);
+    __m256 v_one_minus_beta2 = _mm256_set1_ps(1.0f - beta2);
+    __m256 v_step_size = _mm256_set1_ps(step_size);
+    __m256 v_eps = _mm256_set1_ps(eps);
+    __m256 v_bc2_sqrt = _mm256_set1_ps(bias_corr2_sqrt);
+
+    for (; i <= size - 8; i += 8) {
+        __m256 grad = _mm256_loadu_ps(g + i);
+        __m256 m_old = _mm256_loadu_ps(m + i);
+        __m256 v_old = _mm256_loadu_ps(v + i);
+        __m256 param = _mm256_loadu_ps(p + i);
+
+        __m256 m_new = _mm256_add_ps(_mm256_mul_ps(v_beta1, m_old), _mm256_mul_ps(v_one_minus_beta1, grad));
+        __m256 v_new = _mm256_add_ps(_mm256_mul_ps(v_beta2, v_old), _mm256_mul_ps(v_one_minus_beta2, _mm256_mul_ps(grad, grad)));
+        
+        _mm256_storeu_ps(m + i, m_new);
+        _mm256_storeu_ps(v + i, v_new);
+
+        __m256 denom = _mm256_add_ps(_mm256_sqrt_ps(_mm256_div_ps(v_new, v_bc2_sqrt)), v_eps);
+        __m256 update = _mm256_mul_ps(v_step_size, _mm256_div_ps(m_new, denom));
+        
+        _mm256_storeu_ps(p + i, _mm256_sub_ps(param, update));
+    }
+#elif defined(__SSE2__)
+    __m128 v_beta1 = _mm_set1_ps(beta1);
+    __m128 v_beta2 = _mm_set1_ps(beta2);
+    __m128 v_one_m_beta1 = _mm_set1_ps(1.0f - beta1);
+    __m128 v_one_m_beta2 = _mm_set1_ps(1.0f - beta2);
+    __m128 v_step_size = _mm_set1_ps(step_size);
+    __m128 v_eps = _mm_set1_ps(eps);
+    __m128 v_bc2 = _mm_set1_ps(bias_corr2_sqrt);
+
+    for (; i <= size - 4; i += 4) {
+        __m128 grad = _mm_loadu_ps(g + i);
+        __m128 m_val = _mm_add_ps(_mm_mul_ps(v_beta1, _mm_loadu_ps(m + i)), _mm_mul_ps(v_one_m_beta1, grad));
+        __m128 v_val = _mm_add_ps(_mm_mul_ps(v_beta2, _mm_loadu_ps(v + i)), _mm_mul_ps(v_one_m_beta2, _mm_mul_ps(grad, grad)));
+        
+        _mm_storeu_ps(m + i, m_val);
+        _mm_storeu_ps(v + i, v_val);
+
+        __m128 denom = _mm_add_ps(_mm_sqrt_ps(_mm_div_ps(v_val, v_bc2)), v_eps);
+        __m128 p_val = _mm_sub_ps(_mm_loadu_ps(p + i), _mm_mul_ps(v_step_size, _mm_div_ps(m_val, denom)));
+        _mm_storeu_ps(p + i, p_val);
+    }
+#endif
+    for (; i < size; ++i) {
+        m[i] = beta1 * m[i] + (1.0f - beta1) * g[i];
+        v[i] = beta2 * v[i] + (1.0f - beta2) * g[i] * g[i];
+        float denom = std::sqrt(v[i] / bias_corr2_sqrt) + eps;
+        p[i] -= step_size * (m[i] / denom);
+    }
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void offloaded_adam(
+    at::Tensor param,      // Device
+    at::Tensor grad,       // Device
+    at::Tensor exp_avg,    // Host
+    at::Tensor exp_avg_sq, // Host
+    float lr, float beta1, float beta2, float eps, int step
+) {
+    CHECK_INPUT(param);
+    CHECK_INPUT(grad);
+    CHECK_HOST(exp_avg); CHECK_CONTIGUOUS(exp_avg);
+    CHECK_HOST(exp_avg_sq); CHECK_CONTIGUOUS(exp_avg_sq);
+
+    const long numel = param.numel();
+    if (numel == 0) return;
+
+    const float bias_correction1 = 1.0f - std::pow(beta1, step);
+    const float bias_correction2 = 1.0f - std::pow(beta2, step);
+    const float step_size = lr / bias_correction1;
+    const float bc2_sqrt = bias_correction2;
+
+    float* p_ptr = param.data_ptr<float>();
+    float* g_ptr = grad.data_ptr<float>();
+    float* m_ptr = exp_avg.data_ptr<float>();
+    float* v_ptr = exp_avg_sq.data_ptr<float>();
+
+    const int chunk_size = 1024 * 256; // ~1MB per buffer to stay in L3 cache
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
+    float *h_p, *h_g;
+    cudaMallocHost(&h_p, chunk_size * sizeof(float) * 2); // double buffered
+    cudaMallocHost(&h_g, chunk_size * sizeof(float) * 2);
+
+    auto process_chunk = [&](int64_t offset, int size, int buf_idx) {
+        float* curr_h_p = h_p + (buf_idx * chunk_size);
+        float* curr_h_g = h_g + (buf_idx * chunk_size);
+
+        cudaMemcpyAsync(curr_h_p, p_ptr + offset, size * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        cudaMemcpyAsync(curr_h_g, g_ptr + offset, size * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+
+        fused_adam_core(curr_h_p, curr_h_g, m_ptr + offset, v_ptr + offset, 
+                         size, step_size, beta1, beta2, eps, bc2_sqrt);
+
+        cudaMemcpyAsync(p_ptr + offset, curr_h_p, size * sizeof(float), cudaMemcpyHostToDevice, stream);
+        // cudaStreamSynchronize(stream);
+    };
+
+    for (int64_t offset = 0; offset < numel; offset += chunk_size) {
+        int current_chunk = std::min(chunk_size, (int)(numel - offset));
+        process_chunk(offset, current_chunk, (int)offset % 2); 
+    }
+
+    cudaFreeHost(h_p);
+    cudaFreeHost(h_g);
+}
+
 /*[AutoHeaderGeneratorExport]*/
 void fused_adam_multi(
     std::vector<at::Tensor> params,
@@ -129,7 +253,9 @@ void fused_adam_multi(
     const int num_tensors = params.size();
     
     for (int i = 0; i < num_tensors; i++)
-        fused_adam(
+        (exp_avgs[i].is_cuda() && exp_avg_sqs[i].is_cuda() ?
+            fused_adam : offloaded_adam
+        )(
             params[i],
             grads[i],
             exp_avgs[i],

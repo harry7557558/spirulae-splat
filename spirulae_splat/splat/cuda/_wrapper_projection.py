@@ -225,8 +225,6 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, v_aabb, *v_proj_returns):
-        if ctx.compute_hessian_diagonal:
-            assert all([hasattr(v, 'hess') for v in v_proj_returns])
 
         means, quats, scales, opacities, features_dc, features_sh, viewmats, intrins, aabb = ctx.saved_tensors
         if ctx.compute_hessian_diagonal is not None:
@@ -243,8 +241,8 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
                 (means, quats, scales, opacities, features_dc, features_sh),
                 viewmats, intrins, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs, aabb,
                 [x.contiguous() for x in v_proj_returns],
-                [x.gradr for x in v_proj_returns],
-                [x.hess for x in v_proj_returns],
+                [x.gradr if hasattr(x, 'gradr') else torch.empty(0).to(x) for x in v_proj_returns],
+                [x.hess if hasattr(x, 'hess') else torch.empty(0).to(x) for x in v_proj_returns],
                 ctx.needs_input_grad[7],  # viewmats_requires_grad
             )
             assert vr_proj is not None
@@ -271,8 +269,8 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
                 add_gradient_component(means, 'gradr', vr_means)
                 add_gradient_component(means, 'hess', h_means)
                 if ctx.primitive == "3dgut":
-                    add_gradient_component(means, 'gradr', v_proj_returns[0].gradr_all[0])
-                    add_gradient_component(means, 'hess', v_proj_returns[0].hess_all[0])
+                    add_gradient_component(means, 'gradr', v_proj_returns[1].gradr_all[0])
+                    add_gradient_component(means, 'hess', v_proj_returns[1].hess_all[0])
                 means.scales = scales
                 means.quats = quats
                 means.opacities = opacities
@@ -280,8 +278,8 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
                 add_gradient_component(quats, 'gradr', vr_quats)
                 add_gradient_component(quats, 'hess', h_quats)
                 if ctx.primitive == "3dgut":
-                    add_gradient_component(quats, 'gradr', v_proj_returns[0].gradr_all[1])
-                    add_gradient_component(quats, 'hess', v_proj_returns[0].hess_all[1])
+                    add_gradient_component(quats, 'gradr', v_proj_returns[1].gradr_all[1])
+                    add_gradient_component(quats, 'hess', v_proj_returns[1].hess_all[1])
                 quats.scales = scales
                 quats.opacities = opacities
                 # scales
@@ -312,8 +310,8 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
                 means.gradr = vr_proj.view(v_means.shape)
                 means.hess = h_proj.view(v_means.shape)
                 if ctx.primitive == "3dgut":
-                    means.gradr += v_proj_returns[0].gradr_all[0]
-                    means.hess += v_proj_returns[0].hess_all[0]
+                    means.gradr += v_proj_returns[1].gradr_all[0]
+                    means.hess += v_proj_returns[1].hess_all[0]
                 means.scales = scales
                 means.quats = quats
                 means.opacities = opacities

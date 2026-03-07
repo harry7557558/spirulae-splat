@@ -595,8 +595,10 @@ fused_ssim_forward(
     // Output SSIM map
     at::Tensor ssim = at::zeros({}, img1.options());
     std::optional<at::Tensor> ssim_loss_map;
-    if (return_ssim_loss_map)
-        ssim_loss_map = at::zeros({B, H, W, 1}, img1.options());
+    if (return_ssim_loss_map) {
+        ssim_loss_map = at::empty({B, H, W, 1}, img1.options());
+        set_zero<float>(ssim_loss_map.value());
+    }
 
     // Optionally allocate derivative Tensors
     at::Tensor dm_dmu1       = train ? at::empty_like(img1) : at::empty({0}, img1.options());

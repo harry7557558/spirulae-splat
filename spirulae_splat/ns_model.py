@@ -144,6 +144,8 @@ class SpirulaeModelConfig(ModelConfig):
     """What parameter sets to compute an approximation of Hessian diagonal as well as a Jacobian-residual product in backward pass. Required for second-order optimizer."""
     supersampling: int = 1
     """Antialiasing by rendering at higher resolution and downsampling to a lower resolution, as per triangle splatting +"""
+    optimizer_offload: Literal[None, "sh", "all"] = None
+    """Whether to offload optimizer momentum to CPU to save VRAM. This is only supported for Adam optimizer."""
 
     # classial control
     cull_alpha_thresh: float = 0.005
@@ -998,6 +1000,19 @@ class SpirulaeModel(Model):
                 self.features_sh.optimizer_override = "fused_adamtr_linear_rgb_sh_optim"
                 self.features_sh.features_dc = self.features_dc
                 self.features_sh.opacities = self.opacities
+        if self.config.optimizer_offload == "sh" and "features_sh" in self.gauss_params:
+            if hasattr(self.features_sh, "optimizer_override"):
+                raise ValueError("Optimizer offloading is not supported for linear color space")
+            self.features_sh.optimizer_offload = True
+        elif self.config.optimizer_offload == "all":
+            for key, value in self.gauss_params.items():
+                if isinstance(value, torch.Tensor) and not hasattr(value, "optimizer_override"):
+                    value.optimizer_offload = True
+            if self.config.use_bilateral_grid:
+                self.training_losses.bil_grids.grids.optimizer_offload = True
+            if self.config.use_bilateral_grid_for_geometry:
+                self.training_losses.bil_grids_depth.grids.optimizer_offload = True
+                self.training_losses.bil_grids_normal.grids.optimizer_offload = True
 
         use_bvh = self.config.use_bvh and self.training and not val
         rgbd, alpha, meta = rasterization(

@@ -404,8 +404,10 @@ compute_per_pixel_losses_forward_tensor(
     at::Tensor raw_losses = at::zeros({num_train_images+1, (uint)RawLossIndex::length}, render_rgb.value().options());
     at::Tensor losses = at::zeros({(uint)LossIndex::length}, render_rgb.value().options());
     std::optional<at::Tensor> loss_map;
-    if (return_loss_map)
-        loss_map = at::zeros({B, H, W, 1}, render_rgb.value().options());
+    if (return_loss_map) {
+        loss_map = at::empty({B, H, W, 1}, render_rgb.value().options());
+        set_zero<float>(loss_map.value());
+    }
 
     per_pixel_losses_forward_kernel<<<_LAUNCH_ARGS_2D(pixels_per_image, B, WARP_SIZE*WARP_SIZE, 1)>>>(
         B, pixels_per_image,

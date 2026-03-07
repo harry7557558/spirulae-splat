@@ -128,7 +128,7 @@ inline std::tuple<
             (int4*)aabb.data_ptr<int32_t>(), splats_screen.buffer() \
         )
 
-    constexpr uint block = 256;
+    constexpr uint block = 128;
     if (camera_model == gsplat::CameraModelType::PINHOLE)
         projection_fused_fwd_kernel<SplatPrimitive, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
     else if (camera_model == gsplat::CameraModelType::FISHEYE)

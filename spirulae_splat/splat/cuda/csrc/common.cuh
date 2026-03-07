@@ -12,6 +12,7 @@ inline constexpr float ALPHA_THRESHOLD = (1.f/255.f);
 #include <ATen/DeviceGuard.h>
 
 #define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
+#define CHECK_HOST(x) TORCH_CHECK(!x.is_cuda(), #x " must be a CPU tensor")
 #define CHECK_CONTIGUOUS(x) \
     TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_INPUT(x) \
@@ -82,8 +83,13 @@ TensorView<T, ndim> tensor2view(at::Tensor& tensor) {
 #include <ATen/ops/empty_like.h>
 
 template<typename T>
-at::Tensor zeros_like(const at::Tensor& x) {
+inline at::Tensor zeros_like(const at::Tensor& x) {
     at::Tensor y = at::empty_like(x);
     cudaMemset(y.data_ptr<T>(), 0, y.numel() * sizeof(T));
     return y;
+}
+
+template<typename T>
+inline void set_zero(at::Tensor& x) {
+    cudaMemset(x.data_ptr<T>(), 0, x.numel() * sizeof(T));
 }

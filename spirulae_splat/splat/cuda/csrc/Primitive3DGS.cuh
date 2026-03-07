@@ -431,21 +431,21 @@ struct _Base3DGS<antialiased>::Screen {
 
         static TensorTupleProj allocProjFwd(long C, long N, c10::TensorOptions opt) {
             return std::make_tuple(
-                at::empty({C, N, 2}, opt),
-                at::empty({C, N}, opt),
-                at::empty({C, N, 3}, opt),
-                at::empty({C, N}, opt),
-                at::empty({C, N, 3}, opt)
+                at::empty({C, N, 2}, opt),  // means2d
+                at::empty({C, N}, opt),  // depths
+                at::empty({C, N, 3}, opt),  // conics
+                at::empty({C, N}, opt),  // opacities
+                at::empty({C, N, 3}, opt)  // rgbs
             );
         }
 
-        static TensorTuple allocProjFwdPacked(long N, c10::TensorOptions opt) {
+        static TensorTuple allocProjFwdPacked(long nnz, c10::TensorOptions opt) {
             return std::make_tuple(
-                at::empty({N, 2}, opt),
-                at::empty({N}, opt),
-                at::empty({N, 3}, opt),
-                at::empty({N}, opt),
-                at::empty({N, 3}, opt),
+                at::empty({nnz, 2}, opt),
+                at::empty({nnz}, opt),
+                at::empty({nnz, 3}, opt),
+                at::empty({nnz}, opt),
+                at::empty({nnz, 3}, opt),
                 (std::optional<at::Tensor>)at::nullopt
             );
         }

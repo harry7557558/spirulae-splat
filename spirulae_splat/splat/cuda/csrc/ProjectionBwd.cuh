@@ -217,8 +217,10 @@ inline std::tuple<
     at::Tensor vr_world_pos;
     at::Tensor h_world_pos;
     if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
-        vr_world_pos = at::zeros({B, N, 3}, opt);
-        h_world_pos = at::zeros({B, N, 3}, opt);
+        vr_world_pos = at::empty({B, N, 3}, opt);
+        h_world_pos = at::empty({B, N, 3}, opt);
+        set_zero<float>(vr_world_pos);
+        set_zero<float>(h_world_pos);
     }
     typename SplatPrimitive::World::Tensor vr_splats_world;
     typename SplatPrimitive::World::Tensor h_splats_world;
@@ -243,7 +245,7 @@ inline std::tuple<
             viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr \
         )
 
-    constexpr uint block = 256;
+    constexpr uint block = hessian_diagonal_output_mode == HessianDiagonalOutputMode::None ? 128 : 64;
     if (camera_model == gsplat::CameraModelType::PINHOLE)
         projection_fused_bwd_kernel<SplatPrimitive, gsplat::CameraModelType::PINHOLE, hessian_diagonal_output_mode> _LAUNCH_ARGS;
     // else if (camera_model == gsplat::CameraModelType::ORTHO)

@@ -442,6 +442,7 @@ def rasterization(
         isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
         isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
     else:
+        # isect_ids, flatten_ids, isect_offsets, radii = _make_lazy_cuda_func(f"intersect_tile_{primitive}")(
         isect_ids, flatten_ids, isect_offsets, radii = _make_lazy_cuda_func(f"intersect_tile")(
             aabb_xyxy,
             depths,

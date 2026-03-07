@@ -87,7 +87,7 @@ std::tuple<
         Vanilla3DGUT::Screen::Tensor::allocProjFwdPacked(nnz, opt);
 
     #define _LAUNCH_ARGS \
-        <<<_LAUNCH_ARGS_1D(nnz, block)>>>( \
+        <<<_LAUNCH_ARGS_1D(nnz, 128)>>>( \
             C, nnz, \
             in_splats.buffer(), viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, tile_width, tile_height, near_plane, far_plane, \
@@ -97,7 +97,6 @@ std::tuple<
         )
 
     if (nnz != 0) {
-        constexpr uint block = 256;
         if (camera_model == gsplat::CameraModelType::PINHOLE)
             projection_hetero_forward_kernel<Vanilla3DGUT, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
         else if (camera_model == gsplat::CameraModelType::FISHEYE)
@@ -156,7 +155,7 @@ std::tuple<
     auto stream = at::cuda::getCurrentCUDAStream();
 
     #define _LAUNCH_ARGS \
-        <<<_LAUNCH_ARGS_1D(nnz, block)>>>( \
+        <<<_LAUNCH_ARGS_1D(nnz, 128)>>>( \
             C, N, nnz, \
             splats_world.buffer(), viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, tile_width, tile_height, \
@@ -166,7 +165,6 @@ std::tuple<
         )
 
     if (nnz != 0) {
-        constexpr uint block = 256;
         if (camera_model == gsplat::CameraModelType::PINHOLE)
             projection_3dgs_hetero_backward_kernel<Vanilla3DGUT, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
         else if (camera_model == gsplat::CameraModelType::FISHEYE)

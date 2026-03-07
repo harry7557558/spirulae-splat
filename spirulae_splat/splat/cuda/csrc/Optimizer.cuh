@@ -25,6 +25,15 @@ void fused_adam(
 );
 
 
+void offloaded_adam(
+    at::Tensor param,      // Device
+    at::Tensor grad,       // Device
+    at::Tensor exp_avg,    // Host
+    at::Tensor exp_avg_sq, // Host
+    float lr, float beta1, float beta2, float eps, int step
+);
+
+
 void fused_adam_multi(
     std::vector<at::Tensor> params,
     std::vector<at::Tensor> grads,

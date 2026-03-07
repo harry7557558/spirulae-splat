@@ -25,8 +25,12 @@ namespace SlangProjectionUtils {
 namespace cg = cooperative_groups;
 
 
-inline constexpr int SAMPLE_TILE_WIDTH = 8;
-inline constexpr int SAMPLE_TILE_HEIGHT = 4;
+// inline constexpr int SAMPLE_TILE_WIDTH = 8;
+// inline constexpr int SAMPLE_TILE_HEIGHT = 4;
+inline constexpr int SAMPLE_TILE_WIDTH = TILE_SIZE;
+inline constexpr int SAMPLE_TILE_HEIGHT = TILE_SIZE;
+
+inline constexpr float kTransmitThreshold = 1e-4f;
 
 
 template<bool is_counting_pass>
@@ -143,9 +147,11 @@ __global__ void intersect_mask_eval3d_kernel(
     );
     float3 ray_o = SlangProjectionUtils::transform_ray_o(R, t);
     float3 ray_d = SlangProjectionUtils::transform_ray_d(R, raydir);
+    inside &= (dot(ray_d, ray_d) > 0.0f);
 
     // have all threads in tile process the same gaussians in batches
-    // bool done = !inside;
+    bool done = !inside;
+    float T = 1.0f;
     tile_offsets += image_id * tile_height * tile_width;
     int32_t range_start = tile_offsets[tile_id];
     int32_t range_end =
@@ -162,9 +168,10 @@ __global__ void intersect_mask_eval3d_kernel(
     for (uint32_t b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
-        // if (__syncthreads_count(done) >= BLOCK_SIZE) {
-        //     break;
-        // }
+        done |= (T <= kTransmitThreshold);
+        if (__syncthreads_count(done) >= BLOCK_SIZE) {
+            break;
+        }
 
         // each thread fetch 1 gaussian from front to back
         // index of gaussian to load
@@ -180,8 +187,9 @@ __global__ void intersect_mask_eval3d_kernel(
         uint32_t batch_size = min(BLOCK_SIZE, range_end - batch_start);
         for (uint32_t t = 0; t < batch_size; ++t) {
             typename SplatPrimitive::Screen splat = splat_batch[t];
-            bool is_visible = inside &&
-                (splat.evaluate_alpha(ray_o, ray_d) > ALPHA_THRESHOLD);
+            float alpha = splat.evaluate_alpha(ray_o, ray_d);
+            bool is_visible = inside && (alpha > ALPHA_THRESHOLD) &&
+                ((T *= 1.0f - alpha) > kTransmitThreshold);
 
             // atomic OR is_visible to mask[idx]
             uint32_t idx = batch_start + t;
@@ -221,7 +229,8 @@ __global__ void intersect_mask_kernel(
     bool inside = (py < image_height && px < image_width);
 
     // have all threads in tile process the same gaussians in batches
-    // bool done = !inside;
+    bool done = !inside;
+    float T = 1.0f;
     tile_offsets += image_id * tile_height * tile_width;
     int32_t range_start = tile_offsets[tile_id];
     int32_t range_end =
@@ -238,9 +247,10 @@ __global__ void intersect_mask_kernel(
     for (uint32_t b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
-        // if (__syncthreads_count(done) >= BLOCK_SIZE) {
-        //     break;
-        // }
+        done |= (T <= kTransmitThreshold);
+        if (__syncthreads_count(done) >= BLOCK_SIZE) {
+            break;
+        }
 
         // each thread fetch 1 gaussian from front to back
         // index of gaussian to load
@@ -256,8 +266,9 @@ __global__ void intersect_mask_kernel(
         uint32_t batch_size = min(BLOCK_SIZE, range_end - batch_start);
         for (uint32_t t = 0; t < batch_size; ++t) {
             typename SplatPrimitive::Screen splat = splat_batch[t];
-            bool is_visible = inside &&
-                (splat.evaluate_alpha(px, py) > ALPHA_THRESHOLD);
+            float alpha = splat.evaluate_alpha(px, py);
+            bool is_visible = inside && (alpha > ALPHA_THRESHOLD) &&
+                ((T *= 1.0f - alpha) > kTransmitThreshold);
 
             // atomic OR is_visible to mask[idx]
             uint32_t idx = batch_start + t;
@@ -373,10 +384,11 @@ std::tuple<
         {I, tile_height, tile_width},
         at::TensorOptions().device(aabb.device()).dtype(at::kInt)
     );
-    at::Tensor radii = at::zeros(
+    at::Tensor radii = at::empty(
         {N,},
         at::TensorOptions().device(aabb.device()).dtype(at::kFloat)
     );
+    set_zero<float>(radii);
     if (n_isects == 0)
         return std::make_tuple(
             isect_ids,
@@ -453,17 +465,18 @@ std::tuple<
     );
 }
 
-#if 0
 
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor  // offsets, [I * n_tiles], int32
+    at::Tensor,  // offsets, [I * n_tiles], int32
+    at::Tensor  // radii, [N], float32
 > do_intersect_tile_post(
     at::Tensor isect_ids,
     at::Tensor flatten_ids,
     at::Tensor offsets,
     at::Tensor mask,
+    at::Tensor radii,
     const uint32_t I,
     const uint32_t image_width,
     const uint32_t image_height
@@ -492,7 +505,8 @@ std::tuple<
     return std::make_tuple(
         isect_ids,
         flatten_ids,
-        offsets
+        offsets,
+        radii
     );
 }
 
@@ -500,7 +514,8 @@ template <typename SplatPrimitive>
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor  // offsets, [I * n_tiles], int32
+    at::Tensor,  // offsets, [I * n_tiles], int32
+    at::Tensor  // radii, [N], float32
 > do_intersect_tile_eval3d(
     at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
@@ -512,7 +527,7 @@ std::tuple<
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
-    auto [isect_ids, flatten_ids, offsets] = do_intersect_tile_generic(
+    auto [isect_ids, flatten_ids, offsets, radii] = do_intersect_tile_generic(
         aabb,
         depths,
         image_width,
@@ -558,6 +573,7 @@ std::tuple<
         flatten_ids,
         offsets,
         mask,
+        radii,
         I,
         image_width,
         image_height
@@ -568,7 +584,8 @@ template <typename SplatPrimitive>
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor  // offsets, [I * n_tiles], int32
+    at::Tensor,  // offsets, [I * n_tiles], int32
+    at::Tensor  // radii, [N], float32
 > do_intersect_tile(
     at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
@@ -576,7 +593,7 @@ std::tuple<
     const uint32_t image_height,
     typename SplatPrimitive::Screen::TensorTuple splats_tuple
 ) {
-    auto [isect_ids, flatten_ids, offsets] = do_intersect_tile_generic(
+    auto [isect_ids, flatten_ids, offsets, radii] = do_intersect_tile_generic(
         aabb,
         depths,
         image_width,
@@ -618,6 +635,7 @@ std::tuple<
         flatten_ids,
         offsets,
         mask,
+        radii,
         I,
         image_width,
         image_height
@@ -628,7 +646,8 @@ std::tuple<
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor  // offsets, [I * n_tiles], int32
+    at::Tensor,  // offsets, [I * n_tiles], int32
+    at::Tensor  // radii, [N], float32
 > intersect_tile_3dgs_tensor(
     at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
@@ -653,7 +672,8 @@ std::tuple<
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor  // offsets, [I * n_tiles], int32
+    at::Tensor,  // offsets, [I * n_tiles], int32
+    at::Tensor  // radii, [N], float32
 > intersect_tile_mip_tensor(
     at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
@@ -678,7 +698,8 @@ std::tuple<
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor  // offsets, [I * n_tiles], int32
+    at::Tensor,  // offsets, [I * n_tiles], int32
+    at::Tensor  // radii, [N], float32
 > intersect_tile_3dgut_tensor(
     at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
@@ -707,7 +728,8 @@ std::tuple<
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor  // offsets, [I * n_tiles], int32
+    at::Tensor,  // offsets, [I * n_tiles], int32
+    at::Tensor  // radii, [N], float32
 > intersect_tile_3dgut_sv_tensor(
     at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
@@ -736,7 +758,8 @@ std::tuple<
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor  // offsets, [I * n_tiles], int32
+    at::Tensor,  // offsets, [I * n_tiles], int32
+    at::Tensor  // radii, [N], float32
 > intersect_tile_opaque_triangle_tensor(
     at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
@@ -765,7 +788,8 @@ std::tuple<
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor  // offsets, [I * n_tiles], int32
+    at::Tensor,  // offsets, [I * n_tiles], int32
+    at::Tensor  // radii, [N], float32
 > intersect_tile_voxel_tensor(
     at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
@@ -789,5 +813,3 @@ std::tuple<
         dist_coeffs
     );
 }
-
-#endif

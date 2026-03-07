@@ -80,10 +80,12 @@ class FusedAdam(Optimizer):
                 # State initialization
                 if len(state) == 0:
                     state['step'] = 0
-                    # Exponential moving average of gradient values
-                    state['exp_avg'] = torch.zeros_like(p, memory_format=torch.contiguous_format)
-                    # Exponential moving average of squared gradient values
-                    state['exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.contiguous_format)
+                    if hasattr(p, "optimizer_offload") and p.optimizer_offload:
+                        state['exp_avg'] = torch.zeros_like(p, memory_format=torch.contiguous_format, device="cpu")
+                        state['exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.contiguous_format, device="cpu")
+                    else:
+                        state['exp_avg'] = torch.zeros_like(p, memory_format=torch.contiguous_format)
+                        state['exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.contiguous_format)
                 p.exp_avg = state['exp_avg']
                 p.exp_avg_sq = state['exp_avg_sq']
                 

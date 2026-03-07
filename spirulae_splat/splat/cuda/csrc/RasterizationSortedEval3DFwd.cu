@@ -387,8 +387,10 @@ inline std::tuple<
     at::Tensor last_ids = at::empty(last_ids_dims, opt.dtype(at::kInt));
 
     std::optional<at::Tensor> out_max_blending;
-    if (output_max_blending)
-        out_max_blending = at::zeros({splats.size()}, opt);
+    if (output_max_blending) {
+        out_max_blending = at::empty({splats.size()}, opt);
+        set_zero<float>(out_max_blending.value());
+    }
 
     launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel<SplatPrimitive, output_distortion, output_max_blending>(
         splats,

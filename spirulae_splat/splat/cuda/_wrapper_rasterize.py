@@ -360,9 +360,13 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
             v_splats, v_viewmats = cuda_return
         (v_means, v_quats, v_depths, v_proj_scales, v_proj_opacities, v_colors) = v_splats
         # print(v_means.mean().item())
+        # print(torch.amax(torch.abs(v_depths)))  # zero
+        v_depths = None
 
         if h_splats is not None:
             for v, vr, h in zip(v_splats, vr_splats, h_splats):
+                if v.numel() == 0:
+                    continue
                 add_gradient_component(v, 'gradr', vr)
                 add_gradient_component(v, 'hess', h)
                 v.gradr_all = vr_splats

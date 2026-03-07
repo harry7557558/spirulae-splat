@@ -122,12 +122,12 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
 
     __shared__ float3 shared_v_ray_d[output_viewmat_grad ? BLOCK_SIZE : 1];
 
-    constexpr uint SPLAT_BATCH_SIZE = output_distortion ?
+    constexpr uint SPLAT_BATCH_SIZE_CONST = output_distortion ?
         SPLAT_BATCH_SIZE_WITH_DISTORTION : SPLAT_BATCH_SIZE_NO_DISTORTION;
 
     #pragma unroll
-    for (uint pix_id0 = 0; pix_id0 < BLOCK_SIZE; pix_id0 += SPLAT_BATCH_SIZE) {
-        static_assert(BLOCK_SIZE % SPLAT_BATCH_SIZE == 0);
+    for (uint pix_id0 = 0; pix_id0 < BLOCK_SIZE; pix_id0 += SPLAT_BATCH_SIZE_CONST) {
+        static_assert(BLOCK_SIZE % SPLAT_BATCH_SIZE_CONST == 0);
         uint pix_id_local = pix_id0 + thread_id;
         int pix_x = block.group_index().z * TILE_SIZE + pix_id_local % TILE_SIZE;
         int pix_y = block.group_index().y * TILE_SIZE + pix_id_local / TILE_SIZE;
@@ -188,6 +188,12 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         (image_id == I - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
+    uint SPLAT_BATCH_SIZE = SPLAT_BATCH_SIZE_CONST;
+    if (SPLAT_BATCH_SIZE_CONST > WARP_SIZE) {
+        SPLAT_BATCH_SIZE = (uint)sqrtf((float)(range_end - range_start) * (float)BLOCK_SIZE);
+        // SPLAT_BATCH_SIZE = min(SPLAT_BATCH_SIZE_CONST, (SPLAT_BATCH_SIZE + WARP_SIZE) & ~(WARP_SIZE-1));
+        SPLAT_BATCH_SIZE = min(SPLAT_BATCH_SIZE_CONST, max(SPLAT_BATCH_SIZE, 1u));
+    }
     const uint32_t num_splat_batches =
         _CEIL_DIV(range_end - range_start, SPLAT_BATCH_SIZE);
 
@@ -340,7 +346,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         SlangProjectionUtils::transform_ray_o_vjp(R, t, total_v_ray_o, &v_R, &v_t);
         // gradient from ray_d
         #pragma unroll
-        for (uint pix_id0 = 0; pix_id0 < BLOCK_SIZE; pix_id0 += SPLAT_BATCH_SIZE) {
+        for (uint pix_id0 = 0; pix_id0 < BLOCK_SIZE; pix_id0 += SPLAT_BATCH_SIZE_CONST) {
             uint pix_id_local = pix_id0 + thread_id;
             float4 ray_d_pix_bin_final = shared_ray_d_pix_bin_final[pix_id_local];
             float3 raydir = SlangProjectionUtils::undo_transform_ray_d(R,

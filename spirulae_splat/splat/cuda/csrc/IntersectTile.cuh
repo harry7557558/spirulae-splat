@@ -33,7 +33,8 @@ std::tuple<
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor  // offsets, [I * n_tiles], int32
+    at::Tensor,  // offsets, [I * n_tiles], int32
+    at::Tensor  // radii, [N], float32
 > intersect_tile_3dgs_tensor(
     at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
@@ -50,7 +51,8 @@ std::tuple<
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor  // offsets, [I * n_tiles], int32
+    at::Tensor,  // offsets, [I * n_tiles], int32
+    at::Tensor  // radii, [N], float32
 > intersect_tile_mip_tensor(
     at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
@@ -67,7 +69,8 @@ std::tuple<
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor  // offsets, [I * n_tiles], int32
+    at::Tensor,  // offsets, [I * n_tiles], int32
+    at::Tensor  // radii, [N], float32
 > intersect_tile_3dgut_tensor(
     at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
@@ -84,7 +87,8 @@ std::tuple<
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor  // offsets, [I * n_tiles], int32
+    at::Tensor,  // offsets, [I * n_tiles], int32
+    at::Tensor  // radii, [N], float32
 > intersect_tile_3dgut_sv_tensor(
     at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
@@ -101,7 +105,8 @@ std::tuple<
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor  // offsets, [I * n_tiles], int32
+    at::Tensor,  // offsets, [I * n_tiles], int32
+    at::Tensor  // radii, [N], float32
 > intersect_tile_opaque_triangle_tensor(
     at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
@@ -118,7 +123,8 @@ std::tuple<
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor  // offsets, [I * n_tiles], int32
+    at::Tensor,  // offsets, [I * n_tiles], int32
+    at::Tensor  // radii, [N], float32
 > intersect_tile_voxel_tensor(
     at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32

@@ -35,14 +35,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // IntersectTile.cuh
     m.def("intersect_tile", &do_intersect_tile_generic);
-#if 0
     m.def("intersect_tile_3dgs", &intersect_tile_3dgs_tensor);
     m.def("intersect_tile_mip", &intersect_tile_mip_tensor);
     m.def("intersect_tile_3dgut", &intersect_tile_3dgut_tensor);
     m.def("intersect_tile_3dgut_sv", &intersect_tile_3dgut_sv_tensor);
     m.def("intersect_tile_opaque_triangle", &intersect_tile_opaque_triangle_tensor);
     m.def("intersect_tile_voxel", &intersect_tile_voxel_tensor);
-#endif
 
     // SphericalHarmonics.cuh
     m.def("compute_sh_forward", &compute_sh_forward_tensor);
@@ -153,6 +151,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // Optimizer.cuh
     m.def("fused_adam", &fused_adam);
+    m.def("offloaded_adam", &offloaded_adam);
     m.def("fused_adam_multi", &fused_adam_multi);
     m.def("fused_newton", &fused_newton);
     m.def("fused_newton_multi", &fused_newton_multi);

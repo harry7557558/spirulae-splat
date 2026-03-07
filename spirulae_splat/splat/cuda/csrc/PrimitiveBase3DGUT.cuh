@@ -222,21 +222,21 @@ struct Base3DGUT::Screen {
 
         static TensorTupleProj allocProjFwd(long C, long N, c10::TensorOptions opt) {
             return std::make_tuple(
-                at::empty({C, N}, opt),
-                at::empty({C, N, 3}, opt),
-                at::empty({C, N}, opt),
-                at::empty({C, N, 3}, opt)
+                at::empty({C, N}, opt),  // depths
+                at::empty({N, 3}, opt),  // scales
+                at::empty({N,}, opt),  // opacities
+                at::empty({C, N, 3}, opt)  // rgbs
             );
         }
 
         static TensorTuple allocProjFwdPacked(long nnz, c10::TensorOptions opt) {
             return std::make_tuple(
-                at::empty({nnz, 3}, opt),
-                at::empty({nnz, 4}, opt),
-                at::empty({nnz}, opt),
-                at::empty({nnz, 3}, opt),
-                at::empty({nnz}, opt),
-                at::empty({nnz, 3}, opt)
+                at::empty({nnz, 3}, opt),  // means
+                at::empty({nnz, 4}, opt),  // quats
+                at::empty({nnz}, opt),  // depths
+                at::empty({nnz, 3}, opt),  // scales
+                at::empty({nnz}, opt),  // opacities
+                at::empty({nnz, 3}, opt)  // rgbs
             );
         }
 
@@ -246,7 +246,8 @@ struct Base3DGUT::Screen {
             Tensor result = Tensor(std::make_tuple(
                 zeros_like<float>(means),
                 zeros_like<float>(quats),
-                zeros_like<float>(depths),
+                // zeros_like<float>(depths),
+                at::empty({0}, depths.options()),  // gradient is zero
                 zeros_like<float>(scales),
                 zeros_like<float>(opacities),
                 zeros_like<float>(rgbs)
@@ -295,7 +296,7 @@ struct Base3DGUT::Screen {
             opacities = tensors.opacities.data_ptr<float>();
             rgbs = (float3*)tensors.rgbs.data_ptr<float>();
             size = tensors.hasWorld ?
-                tensors.quats.numel() / 4 : tensors.depths.numel();
+                tensors.quats.numel() / 4 : tensors.opacities.numel();
         }
     };
 
@@ -305,9 +306,9 @@ struct Base3DGUT::Screen {
         return {
             buffer.means ? buffer.means[idx % buffer.size] : make_float3(0.f),
             buffer.quats ? buffer.quats[idx % buffer.size] : make_float4(0.f),
-            buffer.depths[idx],
-            buffer.scales[idx],
-            buffer.opacities[idx],
+            buffer.depths ? buffer.depths[idx] : 0.0f,
+            buffer.scales[idx % buffer.size],
+            buffer.opacities[idx % buffer.size],
             buffer.rgbs[idx],
         };
     }
@@ -356,9 +357,9 @@ struct Base3DGUT::Screen {
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
         if (buffer.means) buffer.means[idx % buffer.size] = mean;
         if (buffer.quats) buffer.quats[idx % buffer.size] = quat;
-        buffer.depths[idx] = depth;
-        buffer.scales[idx] = scale;
-        buffer.opacities[idx] = opacity;
+        if (buffer.depths) buffer.depths[idx] = depth;
+        buffer.scales[idx % buffer.size] = scale;
+        buffer.opacities[idx % buffer.size] = opacity;
         buffer.rgbs[idx] = rgb;
         // iscl_rot is not saved
     }
@@ -368,18 +369,18 @@ struct Base3DGUT::Screen {
         SlangProjectionUtils::compute_3dgut_iscl_rot_vjp(quat, scale, grad.iscl_rot, &v_quat, &v_scale);
         atomicAddFVec(buffer.means + idx % buffer.size, grad.mean);
         atomicAddFVec(buffer.quats + idx % buffer.size, grad.quat + v_quat);
-        atomicAddFVec(buffer.depths + idx, grad.depth);
-        atomicAddFVec(buffer.scales + idx, grad.scale + v_scale);
-        atomicAddFVec(buffer.opacities + idx, grad.opacity);
+        // atomicAddFVec(buffer.depths + idx, grad.depth);
+        atomicAddFVec(buffer.scales + idx % buffer.size, grad.scale + v_scale);
+        atomicAddFVec(buffer.opacities + idx % buffer.size, grad.opacity);
         atomicAddFVec(buffer.rgbs + idx, grad.rgb);
     }
 
     __device__ void atomicAddAccumulatedGradientToBuffer(const Screen &grad, Buffer &buffer, long idx) const {
         atomicAddFVec(buffer.means + idx % buffer.size, grad.mean);
         atomicAddFVec(buffer.quats + idx % buffer.size, grad.quat);
-        atomicAddFVec(buffer.depths + idx, grad.depth);
-        atomicAddFVec(buffer.scales + idx, grad.scale);
-        atomicAddFVec(buffer.opacities + idx, grad.opacity);
+        // atomicAddFVec(buffer.depths + idx, grad.depth);
+        atomicAddFVec(buffer.scales + idx % buffer.size, grad.scale);
+        atomicAddFVec(buffer.opacities + idx % buffer.size, grad.opacity);
         atomicAddFVec(buffer.rgbs + idx, grad.rgb);
     }
 
@@ -388,9 +389,9 @@ struct Base3DGUT::Screen {
         SlangProjectionUtils::compute_3dgut_iscl_rot_vjp(quat, scale, grad.iscl_rot, &v_quat, &v_scale);
         atomicAddFVec(buffer.means + idx % buffer.size, grad.mean * grad.mean * weight);
         atomicAddFVec(buffer.quats + idx % buffer.size, (grad.quat + v_quat) * (grad.quat + v_quat) * weight);
-        atomicAddFVec(buffer.depths + idx, grad.depth * grad.depth * weight);
-        atomicAddFVec(buffer.scales + idx, (grad.scale + v_scale) * (grad.scale + v_scale) * weight);
-        atomicAddFVec(buffer.opacities + idx, grad.opacity * grad.opacity * weight);
+        // atomicAddFVec(buffer.depths + idx, grad.depth * grad.depth * weight);
+        atomicAddFVec(buffer.scales + idx % buffer.size, (grad.scale + v_scale) * (grad.scale + v_scale) * weight);
+        atomicAddFVec(buffer.opacities + idx % buffer.size, grad.opacity * grad.opacity * weight);
         atomicAddFVec(buffer.rgbs + idx, grad.rgb * grad.rgb * weight);
     }
 
