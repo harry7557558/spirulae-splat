@@ -118,7 +118,7 @@ __global__ void render_background_sh_forward_kernel(
 
 
 template<gsplat::CameraModelType CAMERA_MODEL>
-__global__ void render_background_sh_backward_kernel(
+__global__ void __launch_bounds__(512) render_background_sh_backward_kernel(
     const dim3 img_size,
     const float4* intrins,  // fx, fy, cx, cy
     const float* rotation,  // row major 3x3
@@ -179,13 +179,6 @@ __global__ void render_background_sh_backward_kernel(
     }
 
     // early termination
-    auto block = cg::this_thread_block();
-    cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
-
-    unsigned thread_idx = block.thread_rank();
-    // unsigned warp_idx = thread_idx/WARP_SIZE;
-    unsigned lane_idx = thread_idx%WARP_SIZE;
-
     {
         #if 0
         if (__syncthreads_count(inside) == 0)
@@ -211,32 +204,9 @@ __global__ void render_background_sh_backward_kernel(
     float v_x = 0.0f, v_y = 0.0f, v_z = 0.0f;
     float v_xx = 0.0f, v_yy = 0.0f, v_zz = 0.0f;
 
-    // __shared__ glm::vec3 atomic_reduce[WARP_SIZE];  // assume WARP_SIZE^2 >= block_size
-
     glm::vec3 temp3;
-    float temp;
-    #define _BLOCK_REDUCE_VEC3() \
-        warpSum(temp3, warp); \
-        if (warp.thread_rank() == 0) \
-            atomic_reduce[warp_idx] = temp3; \
-        __syncthreads(); \
-        temp = 0.0; \
-        if (warp_idx < 3 && lane_idx < (blockDim.x*blockDim.y/WARP_SIZE)) \
-            temp = atomic_reduce[lane_idx][warp_idx]; \
-        warpSum(temp, warp);
-
     #define _ATOMIC_ADD(address, idx) \
-        _BLOCK_REDUCE_VEC3(); \
-        if (warp_idx < 3 && lane_idx == 0) \
-            atomicAdd((float*)address + (3*idx+warp_idx), temp);
-
-    #undef _ATOMIC_ADD
-    #define _ATOMIC_ADD(address, idx) \
-        warpSum(temp3, warp); \
-        if (lane_idx < 3) { \
-            temp = lane_idx == 0 ? temp3.x : lane_idx == 1 ? temp3.y : temp3.z; \
-            if (temp != 0.0) atomicAdd((float*)address + (3*idx+lane_idx), temp); \
-        }
+        blockAtomicAdd<512>(&address[idx], temp3);
 
     // #define _ATOMIC_ADD(address, idx) \
     //     if (inside) { \
@@ -457,27 +427,13 @@ __global__ void render_background_sh_backward_kernel(
     v_p *= (inside ? 1.0f : 0.0f);
 
     v_rotation += 3 * camera_id;
-  #if 0
-    float tmp[9] = {
-        v_p.x * xi, v_p.x * yi, v_p.x * zi,
-        v_p.y * xi, v_p.y * yi, v_p.y * zi,
-        v_p.z * xi, v_p.z * yi, v_p.z * zi
-    };
-    #pragma unroll
-    for (int i = 0; i < 9; i++) {
-        warpSum(tmp[i], warp);
-        if (warp.thread_rank() == i)
-            atomicAdd((float*)v_rotation + i, tmp[i]);
-    }
-  #else
     temp3 = glm::vec3(v_p.x * xi, v_p.x * yi, v_p.x * zi);
     _ATOMIC_ADD(v_rotation, 0);
     temp3 = glm::vec3(v_p.y * xi, v_p.y * yi, v_p.y * zi);
     _ATOMIC_ADD(v_rotation, 1);
     temp3 = glm::vec3(v_p.z * xi, v_p.z * yi, v_p.z * zi);
     _ATOMIC_ADD(v_rotation, 2);
-  #endif
-    #undef _BLOCK_REDUCE_VEC3
+
     #undef _ATOMIC_ADD
 }
 
@@ -604,7 +560,7 @@ std::tuple<
     if (camera_model == "fisheye") {
         render_background_sh_backward_kernel<gsplat::CameraModelType::FISHEYE>
         // <<<_LAUNCH_ARGS_3D(w, h, b, block_width, block_width, 1)>>>(
-        <<<_LAUNCH_ARGS_2D(w*h, b, 256, 1)>>>(
+        <<<_LAUNCH_ARGS_2D(w*h, b, 512, 1)>>>(
             img_size,
             (float4*)intrins.data_ptr<float>(),
             rotation.data_ptr<float>(),
@@ -618,7 +574,7 @@ std::tuple<
     } else {
         render_background_sh_backward_kernel<gsplat::CameraModelType::PINHOLE>
         // <<<_LAUNCH_ARGS_3D(w, h, b, block_width, block_width, 1)>>>(
-        <<<_LAUNCH_ARGS_2D(w*h, b, 256, 1)>>>(
+        <<<_LAUNCH_ARGS_2D(w*h, b, 512, 1)>>>(
             img_size,
             (float4*)intrins.data_ptr<float>(),
             rotation.data_ptr<float>(),

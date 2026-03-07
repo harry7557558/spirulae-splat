@@ -226,16 +226,6 @@ struct _Base3DGS<antialiased>::World {
         return world;
     }
 
-    template<typename Partition>
-    __device__ void reduce(Partition& partition) {
-        warpSum(mean, partition);
-        warpSum(quat, partition);
-        warpSum(scale, partition);
-        warpSum(opacity, partition);
-        for (int i = 0; i < 16; i++)
-            warpSum(sh_coeffs[i], partition);
-    }
-    
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
         buffer.means[idx] = mean;
         buffer.quats[idx] = quat;

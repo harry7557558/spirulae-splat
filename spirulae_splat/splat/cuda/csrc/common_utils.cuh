@@ -356,6 +356,175 @@ template <typename WarpT> inline __device__ void warpSum(int &val, WarpT &warp) 
     val = cg::reduce(warp, val, cg::plus<int>());
 }
 
+
+// warp sum to first lane
+
+inline __device__ void warpSum(float &val) {
+    #pragma unroll
+    for (int offset = WARP_SIZE >> 1; offset > 0; offset >>= 1) {
+        val += __shfl_down_sync(0xFFFFFFFF, val, offset);
+    }
+}
+
+inline __device__ void warpSum(float4 &val) {
+    warpSum(val.x); warpSum(val.y); warpSum(val.z); warpSum(val.w);
+}
+
+inline __device__ void warpSum(float3 &val) {
+    warpSum(val.x); warpSum(val.y); warpSum(val.z);
+}
+
+inline __device__ void warpSum(float2 &val) {
+    warpSum(val.x); warpSum(val.y);
+}
+
+inline __device__ void warpSum(glm::vec4 &val) {
+    warpSum(val.x); warpSum(val.y); warpSum(val.z); warpSum(val.w);
+}
+
+inline __device__ void warpSum(glm::vec3 &val) {
+    warpSum(val.x); warpSum(val.y); warpSum(val.z);
+}
+
+inline __device__ void warpSum(glm::vec2 &val) {
+    warpSum(val.x); warpSum(val.y);
+}
+
+inline __device__ void warpSum(glm::mat4 &val) {
+    warpSum(val[0]); warpSum(val[1]); warpSum(val[2]); warpSum(val[3]);
+}
+
+inline __device__ void warpSum(glm::mat3 &val) {
+    warpSum(val[0]); warpSum(val[1]); warpSum(val[2]);
+}
+
+inline __device__ void warpSum(glm::mat2 &val) {
+    warpSum(val[0]); warpSum(val[1]);
+}
+
+template<int BLOCK_SIZE>
+inline __device__ void blockSum(float& val) {
+    static_assert(BLOCK_SIZE >= WARP_SIZE && BLOCK_SIZE <= WARP_SIZE * WARP_SIZE);
+    static_assert(BLOCK_SIZE % WARP_SIZE == 0);
+
+    static __shared__ float sharedSums[BLOCK_SIZE / WARP_SIZE];
+
+    uint laneId = threadIdx.x % WARP_SIZE;
+    uint warpId = threadIdx.x / WARP_SIZE;
+
+    #pragma unroll
+    for (int stride = WARP_SIZE >> 1; stride > 0; stride >>= 1) {
+        val += __shfl_down_sync(0xFFFFFFFF, val, stride);
+    }
+
+    if (laneId == 0)
+        sharedSums[warpId] = val;
+    __syncthreads();
+
+    if (warpId == 0) {
+        val = laneId < BLOCK_SIZE / WARP_SIZE ?
+            sharedSums[laneId] : 0.0f;
+        #pragma unroll
+        for (int stride = (BLOCK_SIZE / WARP_SIZE) >> 1; stride > 0; stride >>= 1)
+            val += __shfl_down_sync(0xFFFFFFFF, val, stride);
+    }
+    __syncthreads(); // optional
+}
+
+// TODO: optimize to reduce number of synchronization
+
+template<int BLOCK_SIZE>
+inline __device__ void blockSum(float4 &val) {
+    blockSum<BLOCK_SIZE>(val.x);
+    blockSum<BLOCK_SIZE>(val.y);
+    blockSum<BLOCK_SIZE>(val.z);
+    blockSum<BLOCK_SIZE>(val.w);
+}
+
+template<int BLOCK_SIZE>
+inline __device__ void blockSum(float3 &val) {
+    blockSum<BLOCK_SIZE>(val.x);
+    blockSum<BLOCK_SIZE>(val.y);
+    blockSum<BLOCK_SIZE>(val.z);
+}
+
+template<int BLOCK_SIZE>
+inline __device__ void blockSum(float2 &val) {
+    blockSum<BLOCK_SIZE>(val.x);
+    blockSum<BLOCK_SIZE>(val.y);
+}
+
+template<int BLOCK_SIZE>
+inline __device__ void blockSum(glm::vec4 &val) {
+    blockSum<BLOCK_SIZE>(val.x);
+    blockSum<BLOCK_SIZE>(val.y);
+    blockSum<BLOCK_SIZE>(val.z);
+    blockSum<BLOCK_SIZE>(val.w);
+}
+
+template<int BLOCK_SIZE>
+inline __device__ void blockAtomicAdd(glm::vec3* addr, glm::vec3 val) {
+    static_assert(BLOCK_SIZE >= 3 * WARP_SIZE && BLOCK_SIZE <= WARP_SIZE * WARP_SIZE);
+    static_assert(BLOCK_SIZE % WARP_SIZE == 0);
+
+    constexpr int NUM_WARPS = BLOCK_SIZE / WARP_SIZE;
+    static __shared__ float sharedSums[3 * NUM_WARPS];
+
+    uint laneId = threadIdx.x % WARP_SIZE;
+    uint warpId = threadIdx.x / WARP_SIZE;
+
+    #pragma unroll
+    for (int stride = WARP_SIZE >> 1; stride > 0; stride >>= 1) {
+        val.x += __shfl_down_sync(0xFFFFFFFF, val.x, stride);
+        val.y += __shfl_down_sync(0xFFFFFFFF, val.y, stride);
+        val.z += __shfl_down_sync(0xFFFFFFFF, val.z, stride);
+    }
+
+    if (laneId == 0) {
+        sharedSums[warpId + 0 * NUM_WARPS] = val.x;
+        sharedSums[warpId + 1 * NUM_WARPS] = val.y;
+        sharedSums[warpId + 2 * NUM_WARPS] = val.z;
+    }
+    __syncthreads();
+
+    if (warpId < 3) {
+        float val = laneId < NUM_WARPS ?
+            sharedSums[laneId + warpId * NUM_WARPS] : 0.0f;
+        #pragma unroll
+        for (int stride = NUM_WARPS >> 1; stride > 0; stride >>= 1)
+            val += __shfl_down_sync(0xFFFFFFFF, val, stride);
+        if (laneId == 0)
+            atomicAdd((float*)addr + warpId, val);
+    }
+}
+
+template<int BLOCK_SIZE>
+inline __device__ void blockSum(glm::vec2 &val) {
+    blockSum<BLOCK_SIZE>(val.x);
+    blockSum<BLOCK_SIZE>(val.y);
+}
+
+template<int BLOCK_SIZE>
+inline __device__ void blockSum(glm::mat4 &val) {
+    blockSum<BLOCK_SIZE>(val[0]);
+    blockSum<BLOCK_SIZE>(val[1]);
+    blockSum<BLOCK_SIZE>(val[2]);
+    blockSum<BLOCK_SIZE>(val[3]);
+}
+
+template<int BLOCK_SIZE>
+inline __device__ void blockSum(glm::mat3 &val) {
+    blockSum<BLOCK_SIZE>(val[0]);
+    blockSum<BLOCK_SIZE>(val[1]);
+    blockSum<BLOCK_SIZE>(val[2]);
+}
+
+template<int BLOCK_SIZE>
+inline __device__ void blockSum(glm::mat2 &val) {
+    blockSum<BLOCK_SIZE>(val[0]);
+    blockSum<BLOCK_SIZE>(val[1]);
+}
+
 #endif  // #ifndef SSPLAT_HOST_ONLY
 
 

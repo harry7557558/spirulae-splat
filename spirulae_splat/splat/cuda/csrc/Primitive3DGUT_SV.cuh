@@ -195,18 +195,6 @@ struct SphericalVoronoi3DGUT<num_sv>::World : public Base3DGUT::World {
         return world;
     }
 
-    template<typename Partition>
-    __device__ void reduce(Partition& partition) {
-        warpSum(mean, partition);
-        warpSum(quat, partition);
-        warpSum(scale, partition);
-        warpSum(opacity, partition);
-        for (int i = 0; i < num_sv; i++) {
-            warpSum(sv_sites[i], partition);
-            warpSum(sv_colors[i], partition);
-        }
-    }
-
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
         buffer.means[idx] = mean;
         buffer.quats[idx] = quat;

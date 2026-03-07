@@ -201,15 +201,6 @@ struct VoxelPrimitive::World {
         return world;
     }
 
-    template<typename Partition>
-    __device__ void reduce(Partition& partition) {
-        // no need to do this for pos/size in gradient calculation
-        for (int i = 0; i < 8; i++)
-            warpSum(densities[i], partition);
-        for (int i = 0; i < 16; i++)
-            warpSum(sh_coeffs[i], partition);
-    }
-
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
         if (buffer.pos_size != nullptr)
             buffer.pos_size[idx] = {pos.x, pos.y, pos.z, size};

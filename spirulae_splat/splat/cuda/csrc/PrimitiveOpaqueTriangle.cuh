@@ -237,21 +237,6 @@ struct OpaqueTriangle::World {
         return world;
     }
 
-    template<typename Partition>
-    __device__ void reduce(Partition& partition) {
-        warpSum(mean, partition);
-        warpSum(quat, partition);
-        warpSum(scale, partition);
-        // warpSum(vert0, partition);
-        // warpSum(vert1, partition);
-        // warpSum(vert2, partition);
-        warpSum(hardness, partition);
-        for (int i = 0; i < 16; i++)
-            warpSum(sh_coeffs[i], partition);
-        warpSum(ch_coeffs[0], partition);
-        warpSum(ch_coeffs[1], partition);
-    }
-    
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
         buffer.means[idx] = mean;
         buffer.quats[idx] = quat;
