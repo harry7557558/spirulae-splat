@@ -124,8 +124,7 @@ void fused_adam_core(float* p, const float* g, float* m, float* v,
                       int size, float step_size, float beta1, float beta2, 
                       float eps, float bias_corr2_sqrt) {
     int i = 0;
-#if defined(__AVX2__) && 0
-    // will enable once I have supported hardware to verify this vibe code working
+#if defined(__AVX2__)
     __m256 v_beta1 = _mm256_set1_ps(beta1);
     __m256 v_beta2 = _mm256_set1_ps(beta2);
     __m256 v_one_minus_beta1 = _mm256_set1_ps(1.0f - beta1);

@@ -7,7 +7,6 @@
 
 #include <gsplat/Common.h>
 
-#include "helpers.cuh"
 #include <algorithm>
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>

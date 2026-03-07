@@ -113,18 +113,21 @@ __global__ void compute_relocation_kernel(
     float denom_sum = 0.0f;
 
     // compute new opacity
-    new_opacities[idx] = 1.0f - powf(1.0f - opacities[idx], 1.0f / n_idx);
+    float old_opacity = opacities[idx];
+    float new_opacity = 1.0f - powf(1.0f - old_opacity, 1.0f / n_idx);
+    new_opacity = fmaxf(new_opacity, 0.0f);
+    new_opacities[idx] = new_opacity;
 
     // compute new scale
     for (int i = 1; i <= n_idx; ++i) {
         for (int k = 0; k <= (i - 1); ++k) {
             float bin_coeff = binoms[(i - 1) * n_max + k];
-            float term = (pow(-1.0f, k) / sqrt(static_cast<float>(k + 1))) *
-                         pow(new_opacities[idx], k + 1);
+            float term = (((k & 1) ? -1.0f : 1.0f) / sqrtf((float)(k + 1))) *
+                         powf(new_opacity, (float)(k + 1));
             denom_sum += (bin_coeff * term);
         }
     }
-    float coeff = (opacities[idx] / denom_sum);
+    float coeff = (old_opacity / denom_sum);
     new_scales[idx] = coeff * scales[idx];
 }
 

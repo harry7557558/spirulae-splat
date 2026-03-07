@@ -16,7 +16,6 @@ namespace SlangProjectionUtils {
 
 #include <gsplat/Utils.cuh>
 
-#include "helpers.cuh"
 
 // #define DEBUG
 

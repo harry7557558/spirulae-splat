@@ -114,9 +114,15 @@ def get_extensions():
     nvcc_flags = os.getenv("NVCC_FLAGS", "")
     nvcc_flags = [] if nvcc_flags == "" else nvcc_flags.split(" ")
     nvcc_flags += ["-O3", "--use_fast_math"]
+    # nvcc_flags += ["--extra-device-vectorization"]
     if LINE_INFO:
         nvcc_flags += ["-lineinfo", "--generate-line-info", "--source-in-ptx"]
-        # nvcc_flags += ["-Xptxas", "-v", "-Xptxas", "--warn-on-spills"]
+        nvcc_flags += [
+            # "-Xptxas", "-v",
+            "-Xptxas", "--warn-on-double-precision-use",
+            "-Xptxas", "--warn-on-local-memory-usage",
+            "-Xptxas", "--warn-on-spills"
+        ]
     if torch.version.hip:
         # USE_ROCM was added to later versions of PyTorch.
         # Define here to support older PyTorch versions as well:
@@ -137,6 +143,10 @@ def get_extensions():
     extra_compile_args["nvcc"] += ['-Xcudafe=--diag_suppress=550']
 
     extra_compile_args["nvcc"] += ['--threads', '0']
+    extra_compile_args["nvcc"] += ['-arch=native']
+
+    # enable host-side SIMD, etc.
+    extra_compile_args["nvcc"] += ['-Xcompiler', '-O3 -march=native']
 
     extension = CUDAExtension(
         f"spirulae_splat.csrc",
