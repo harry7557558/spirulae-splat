@@ -223,8 +223,10 @@ struct Base3DGUT::Screen {
         static TensorTupleProj allocProjFwd(long C, long N, c10::TensorOptions opt) {
             return std::make_tuple(
                 at::empty({C, N}, opt),  // depths
-                at::empty({N, 3}, opt),  // scales
-                at::empty({N,}, opt),  // opacities
+                at::empty({C, N, 3}, opt),  // scales
+                at::empty({C, N,}, opt),  // opacities
+                // at::empty({N, 3}, opt),  // scales
+                // at::empty({N,}, opt),  // opacities
                 at::empty({C, N, 3}, opt)  // rgbs
             );
         }
@@ -307,8 +309,10 @@ struct Base3DGUT::Screen {
             buffer.means ? buffer.means[idx % buffer.size] : make_float3(0.f),
             buffer.quats ? buffer.quats[idx % buffer.size] : make_float4(0.f),
             buffer.depths ? buffer.depths[idx] : 0.0f,
-            buffer.scales[idx % buffer.size],
-            buffer.opacities[idx % buffer.size],
+            buffer.scales[idx],
+            buffer.opacities[idx],
+            // buffer.scales[idx % buffer.size],
+            // buffer.opacities[idx % buffer.size],
             buffer.rgbs[idx],
         };
     }
@@ -331,7 +335,15 @@ struct Base3DGUT::Screen {
         };
     }
 
+    __device__ __forceinline__ void precomputeBackward(Screen& grad) const {
+        float4 v_quat; float3 v_scale;
+        SlangProjectionUtils::compute_3dgut_iscl_rot_vjp(quat, scale, grad.iscl_rot, &v_quat, &v_scale);
+        grad.quat += v_quat;
+        grad.scale += v_scale;
+    }
+
     __device__ __forceinline__ void addGradient(const Screen &grad, float weight=1.0f) {
+        // optional precomputeBackward
         mean += grad.mean * weight;
         quat += grad.quat * weight;
         depth += grad.depth * weight;
@@ -343,56 +355,39 @@ struct Base3DGUT::Screen {
             iscl_rot[i] = iscl_rot[i] + grad.iscl_rot[i] * weight;
     }
 
-    __device__ __forceinline__ void addGaussNewtonHessianDiagonal(Screen &result, const Screen &grad, float weight=1.0f) const {
-        float4 v_quat; float3 v_scale;
-        SlangProjectionUtils::compute_3dgut_iscl_rot_vjp(this->quat, this->scale, grad.iscl_rot, &v_quat, &v_scale);
-        result.mean += fmul_axa(grad.mean, weight);
-        result.quat += fmul_axa(grad.quat + v_quat, weight);
-        result.depth += fmul_axa(grad.depth, weight);
-        result.scale += fmul_axa(grad.scale + v_scale, weight);
-        result.opacity += fmul_axa(grad.opacity, weight);
-        result.rgb += fmul_axa(grad.rgb, weight);
+    __device__ __forceinline__ void addGaussNewtonHessianDiagonal(const Screen &grad, float weight=1.0f) {
+        // precomputeBackward needed
+        mean += fmul_axa(grad.mean, weight);
+        quat += fmul_axa(grad.quat, weight);
+        depth += fmul_axa(grad.depth, weight);
+        scale += fmul_axa(grad.scale, weight);
+        opacity += fmul_axa(grad.opacity, weight);
+        rgb += fmul_axa(grad.rgb, weight);
     }
 
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
         if (buffer.means) buffer.means[idx % buffer.size] = mean;
         if (buffer.quats) buffer.quats[idx % buffer.size] = quat;
         if (buffer.depths) buffer.depths[idx] = depth;
-        buffer.scales[idx % buffer.size] = scale;
-        buffer.opacities[idx % buffer.size] = opacity;
+        buffer.scales[idx] = scale;
+        buffer.opacities[idx] = opacity;
+        // buffer.scales[idx % buffer.size] = scale;
+        // buffer.opacities[idx % buffer.size] = opacity;
         buffer.rgbs[idx] = rgb;
         // iscl_rot is not saved
     }
 
-    __device__ void atomicAddGradientToBuffer(const Screen &grad, Buffer &buffer, long idx) const {
-        float4 v_quat; float3 v_scale;
-        SlangProjectionUtils::compute_3dgut_iscl_rot_vjp(quat, scale, grad.iscl_rot, &v_quat, &v_scale);
-        atomicAddFVec(buffer.means + idx % buffer.size, grad.mean);
-        atomicAddFVec(buffer.quats + idx % buffer.size, grad.quat + v_quat);
-        // atomicAddFVec(buffer.depths + idx, grad.depth);
-        atomicAddFVec(buffer.scales + idx % buffer.size, grad.scale + v_scale);
-        atomicAddFVec(buffer.opacities + idx % buffer.size, grad.opacity);
-        atomicAddFVec(buffer.rgbs + idx, grad.rgb);
-    }
-
-    __device__ void atomicAddAccumulatedGradientToBuffer(const Screen &grad, Buffer &buffer, long idx) const {
-        atomicAddFVec(buffer.means + idx % buffer.size, grad.mean);
-        atomicAddFVec(buffer.quats + idx % buffer.size, grad.quat);
-        // atomicAddFVec(buffer.depths + idx, grad.depth);
-        atomicAddFVec(buffer.scales + idx % buffer.size, grad.scale);
-        atomicAddFVec(buffer.opacities + idx % buffer.size, grad.opacity);
-        atomicAddFVec(buffer.rgbs + idx, grad.rgb);
-    }
-
-    __device__ void atomicAddGaussNewtonHessianDiagonalToBuffer(const Screen &grad, Buffer &buffer, long idx, float weight=1.0f) const {
-        float4 v_quat; float3 v_scale;
-        SlangProjectionUtils::compute_3dgut_iscl_rot_vjp(quat, scale, grad.iscl_rot, &v_quat, &v_scale);
-        atomicAddFVec(buffer.means + idx % buffer.size, grad.mean * grad.mean * weight);
-        atomicAddFVec(buffer.quats + idx % buffer.size, (grad.quat + v_quat) * (grad.quat + v_quat) * weight);
-        // atomicAddFVec(buffer.depths + idx, grad.depth * grad.depth * weight);
-        atomicAddFVec(buffer.scales + idx % buffer.size, (grad.scale + v_scale) * (grad.scale + v_scale) * weight);
-        atomicAddFVec(buffer.opacities + idx % buffer.size, grad.opacity * grad.opacity * weight);
-        atomicAddFVec(buffer.rgbs + idx, grad.rgb * grad.rgb * weight);
+    template<int reduce = 1>
+    __device__ void atomicAddToBuffer(Buffer &buffer, long idx) const {
+        // precomputeBackward needed
+        atomicAddFVec<reduce>(buffer.means + idx % buffer.size, mean);
+        atomicAddFVec<reduce>(buffer.quats + idx % buffer.size, quat);
+        // atomicAddFVec<reduce>(buffer.depths + idx, depth);
+        atomicAddFVec<reduce>(buffer.scales + idx, scale);
+        atomicAddFVec<reduce>(buffer.opacities + idx, opacity);
+        // atomicAddFVec<reduce>(buffer.scales + idx % buffer.size, scale);
+        // atomicAddFVec<reduce>(buffer.opacities + idx % buffer.size, opacity);
+        atomicAddFVec<reduce>(buffer.rgbs + idx, rgb);
     }
 
     __device__ __forceinline__ float evaluate_alpha(float3 ray_o, float3 ray_d) {

@@ -488,6 +488,9 @@ struct VoxelPrimitive::Screen {
         };
     }
 
+    __device__ __forceinline__ void precomputeBackward(Screen& grad) const {
+    }
+
     __device__ __forceinline__ void addGradient(const Screen &grad, float weight=1.0f) {
         pos += grad.pos * weight;
         size += grad.size * weight;
@@ -498,14 +501,14 @@ struct VoxelPrimitive::Screen {
         rgb += grad.rgb * weight;
     }
 
-    __device__ __forceinline__ void addGaussNewtonHessianDiagonal(Screen &result, const Screen &grad, float weight=1.0f) const {
-        result.pos += grad.pos * grad.pos * weight;
-        result.size += grad.size * grad.size * weight;
-        result.depth += grad.depth * grad.depth * weight;
+    __device__ __forceinline__ void addGaussNewtonHessianDiagonal(const Screen &grad, float weight=1.0f) {
+        pos += grad.pos * grad.pos * weight;
+        size += grad.size * grad.size * weight;
+        depth += grad.depth * grad.depth * weight;
         #pragma unroll
         for (int i = 0; i < 8; i++)
-            result.densities[i] += grad.densities[i] * grad.densities[i] * weight;
-        result.rgb += grad.rgb * grad.rgb * weight;
+            densities[i] += grad.densities[i] * grad.densities[i] * weight;
+        rgb += grad.rgb * grad.rgb * weight;
     }
 
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
@@ -520,40 +523,18 @@ struct VoxelPrimitive::Screen {
         buffer.rgbs[idx] = rgb;
     }
 
-    static __device__ void atomicAddGradientToBuffer(const Screen &grad, Buffer &buffer, long idx) {
+    __device__ void atomicAddToBuffer(Buffer &buffer, long idx) const {
         long idx0 = idx % buffer.size;
         if (buffer.pos_size != nullptr)
-            atomicAddFVec(buffer.pos_size + idx0, {grad.pos.x, grad.pos.y, grad.pos.z, grad.size});
+            atomicAddFVec(buffer.pos_size + idx0, {pos.x, pos.y, pos.z, size});
         if (buffer.depths != nullptr)
-            atomicAddFVec(buffer.depths + idx, grad.depth);
+            atomicAddFVec(buffer.depths + idx, depth);
         // if (buffer.densities != nullptr) {
         if (true) {  // should not be nullptr, spot bug if crash
-            atomicAddFVec(buffer.densities + 2*idx0, {grad.densities[0], grad.densities[1], grad.densities[2], grad.densities[3]});
-            atomicAddFVec(buffer.densities + 2*idx0+1, {grad.densities[4], grad.densities[5], grad.densities[6], grad.densities[7]});
+            atomicAddFVec(buffer.densities + 2*idx0, {densities[0], densities[1], densities[2], densities[3]});
+            atomicAddFVec(buffer.densities + 2*idx0+1, {densities[4], densities[5], densities[6], densities[7]});
         }
-        atomicAddFVec(buffer.rgbs + idx, grad.rgb);
-    }
-
-    static __device__ void atomicAddAccumulatedGradientToBuffer(const Screen &grad, Buffer &buffer, long idx) {
-        atomicAddGradientToBuffer(grad, buffer, idx);
-    }
-
-    static __device__ __forceinline__ void atomicAddGaussNewtonHessianDiagonalToBuffer(const Screen &grad, Buffer &buffer, long idx, float weight=1.0f) {
-        long idx0 = idx % buffer.size;
-        if (buffer.pos_size != nullptr) {
-            float4 temp = {grad.pos.x, grad.pos.y, grad.pos.z, grad.size};
-            atomicAddFVec(buffer.pos_size + idx0, temp * temp * weight);
-        }
-        if (buffer.depths != nullptr)
-            atomicAddFVec(buffer.depths + idx, grad.depth * grad.depth * weight);
-        // if (buffer.densities != nullptr) {
-        if (true) {  // should not be nullptr, spot bug if crash
-            float4 temp = {grad.densities[0], grad.densities[1], grad.densities[2], grad.densities[3]};
-            atomicAddFVec(buffer.densities + 2*idx0, temp * temp * weight);
-            temp = {grad.densities[4], grad.densities[5], grad.densities[6], grad.densities[7]};
-            atomicAddFVec(buffer.densities + 2*idx0+1, temp * temp * weight);
-        }
-        atomicAddFVec(buffer.rgbs + idx, grad.rgb * grad.rgb * weight);
+        atomicAddFVec(buffer.rgbs + idx, rgb);
     }
 
     __device__ __forceinline__ float evaluate_alpha(float3 ray_o, float3 ray_d) {

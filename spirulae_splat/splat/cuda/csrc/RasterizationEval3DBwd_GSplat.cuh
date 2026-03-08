@@ -25,8 +25,12 @@ namespace SlangProjectionUtils {
 #include <cub/cub.cuh>
 
 
-constexpr uint SPLAT_BATCH_SIZE_NO_DISTORTION = 128;
-constexpr uint SPLAT_BATCH_SIZE_WITH_DISTORTION = WARP_SIZE;
+constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
+
+// constexpr uint THREAD_BLOCK_SIZE = BLOCK_SIZE;
+constexpr uint THREAD_BLOCK_SIZE = WARP_SIZE;
+
+constexpr uint ATOMIC_ADD_CACHE_SIZE = 1;
 
 
 template <
@@ -70,9 +74,12 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
 ) {
     auto block = cg::this_thread_block();
     cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
-    uint32_t image_id = block.group_index().x;
-    uint32_t tile_id = block.group_index().y * tile_width + block.group_index().z;
+    uint32_t image_id = blockIdx.x;
+    uint32_t tile_id = (blockIdx.y * THREAD_BLOCK_SIZE / BLOCK_SIZE) * tile_width + blockIdx.z;
     uint32_t thread_id = block.thread_rank();
+    int32_t pix_x = blockIdx.z * TILE_SIZE + threadIdx.x;
+    int32_t pix_y = blockIdx.y * (THREAD_BLOCK_SIZE / TILE_SIZE) + threadIdx.y;
+    int32_t pix_id = min(pix_y * image_width + pix_x, image_width * image_height - 1);
 
     tile_offsets += image_id * tile_height * tile_width;
     render_Ts += image_id * image_height * image_width;
@@ -103,147 +110,125 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
     CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(image_id);
 
-    constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
+    uint pix_id_global = pix_y * image_width + pix_x;
+    uint pix_id_image_global = image_id * image_height * image_width + pix_id_global;
+    
+    bool done = (pix_x < image_width && pix_y < image_height);
 
-    // load pixels
-    __shared__ float4 shared_ray_d_pix_bin_final[BLOCK_SIZE];
-    __shared__ float2 pix_Ts_with_grad[BLOCK_SIZE];
-    __shared__ typename SplatPrimitive::RenderOutput v_pix_colors[BLOCK_SIZE];
-    // __shared__ float pix_background[CDIM];  // TODO
-
-    __shared__ typename SplatPrimitive::RenderOutput pix_colors[output_distortion ? BLOCK_SIZE : 1];
-    __shared__ typename SplatPrimitive::RenderOutput pix2_colors[output_distortion ? BLOCK_SIZE : 1];
-    __shared__ typename SplatPrimitive::RenderOutput v_distortion_out[output_distortion ? BLOCK_SIZE : 1];
-
-    __shared__ float hess_weight_map[output_hessian_diagonal ? BLOCK_SIZE : 1];
-
+    const float px = (float)pix_x + 0.5f;
+    const float py = (float)pix_y + 0.5f;
+    float3 raydir;
+    done &= SlangProjectionUtils::generate_ray(
+        {(px-cx)/fx, (py-cy)/fy},
+        camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs,
+        &raydir
+    );
+    float3 ray_d = SlangProjectionUtils::transform_ray_d(R, raydir);  // mul(raydir, R);
     float3 ray_o = SlangProjectionUtils::transform_ray_o(R, t);
+
     float3 total_v_ray_o = make_float3(0.0f, 0.0f, 0.0f);
-
-    __shared__ float3 shared_v_ray_d[output_viewmat_grad ? BLOCK_SIZE : 1];
-
-    constexpr uint SPLAT_BATCH_SIZE_CONST = output_distortion ?
-        SPLAT_BATCH_SIZE_WITH_DISTORTION : SPLAT_BATCH_SIZE_NO_DISTORTION;
-
-    #pragma unroll
-    for (uint pix_id0 = 0; pix_id0 < BLOCK_SIZE; pix_id0 += SPLAT_BATCH_SIZE_CONST) {
-        static_assert(BLOCK_SIZE % SPLAT_BATCH_SIZE_CONST == 0);
-        uint pix_id_local = pix_id0 + thread_id;
-        int pix_x = block.group_index().z * TILE_SIZE + pix_id_local % TILE_SIZE;
-        int pix_y = block.group_index().y * TILE_SIZE + pix_id_local / TILE_SIZE;
-        uint pix_id_global = pix_y * image_width + pix_x;
-        uint pix_id_image_global = image_id * image_height * image_width + pix_id_global;
-        bool inside = (pix_x < image_width && pix_y < image_height);
-        
-        int32_t bin_final = (inside ? last_ids[pix_id_global] : 0);
-        pix_Ts_with_grad[pix_id_local] = {
-            (inside ? render_Ts[pix_id_global] : 0.0f),
-            (inside ? -v_render_alphas[pix_id_global] : 0.0f)
-        };
-        v_pix_colors[pix_id_local] = (inside ?
-            SplatPrimitive::RenderOutput::load(v_render_output_buffer, pix_id_image_global)
-             : SplatPrimitive::RenderOutput::zero());
-
-        const float px = (float)pix_x + 0.5f;
-        const float py = (float)pix_y + 0.5f;
-        float3 raydir;
-        inside &= SlangProjectionUtils::generate_ray(
-            {(px-cx)/fx, (py-cy)/fy},
-            camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs,
-            &raydir
-        );
-        float3 ray_d = SlangProjectionUtils::transform_ray_d(R, raydir);  // mul(raydir, R);
-        shared_ray_d_pix_bin_final[pix_id_local] =
-            {ray_d.x, ray_d.y, ray_d.z, __int_as_float(bin_final)};
-
-        if (output_distortion) {
-            pix_colors[pix_id_local] = (inside ?
-                SplatPrimitive::RenderOutput::load(render_output_buffer, pix_id_image_global)
-                : SplatPrimitive::RenderOutput::zero());
-            pix2_colors[pix_id_local] = (inside ?
-                SplatPrimitive::RenderOutput::load(render2_output_buffer, pix_id_image_global)
-                : SplatPrimitive::RenderOutput::zero());
-            v_distortion_out[pix_id_local] = (inside ?
-                SplatPrimitive::RenderOutput::load(v_distortions_output_buffer, pix_id_image_global)
-                : SplatPrimitive::RenderOutput::zero());
-        }
-
-        if (output_viewmat_grad) {
-            shared_v_ray_d[pix_id_local] = make_float3(0.0f, 0.0f, 0.0f);
-        }
-
-        if (output_hessian_diagonal) {
-            // https://www.desmos.com/calculator/ld9wg7cuxz
-            hess_weight_map[pix_id_local] = (loss_map_buffer != nullptr && inside) ?
-                0.5f / fmaxf(loss_map_buffer[pix_id_image_global], 1e-6f) : 0.0f;
-        }
-    }
-    block.sync();
-
-    // threads fist load splats, then swept through pixels
-    // do this in batches
+    float3 total_v_ray_d = make_float3(0.0f, 0.0f, 0.0f);
 
     int32_t range_start = tile_offsets[tile_id];
     int32_t range_end =
         (image_id == I - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
-    uint SPLAT_BATCH_SIZE = SPLAT_BATCH_SIZE_CONST;
-    if (SPLAT_BATCH_SIZE_CONST > WARP_SIZE) {
-        SPLAT_BATCH_SIZE = (uint)sqrtf((float)(range_end - range_start) * (float)BLOCK_SIZE);
-        // SPLAT_BATCH_SIZE = min(SPLAT_BATCH_SIZE_CONST, (SPLAT_BATCH_SIZE + WARP_SIZE) & ~(WARP_SIZE-1));
-        SPLAT_BATCH_SIZE = min(SPLAT_BATCH_SIZE_CONST, max(SPLAT_BATCH_SIZE, 1u));
-    }
     const uint32_t num_splat_batches =
-        _CEIL_DIV(range_end - range_start, SPLAT_BATCH_SIZE);
+        _CEIL_DIV(range_end - range_start, THREAD_BLOCK_SIZE);
 
-    // if (warp.thread_rank() == 0)
-    //     printf("range_start=%d range_end=%d num_splat_batches=%u\n", range_start, range_end, num_splat_batches);
+    __shared__ int32_t id_batch[THREAD_BLOCK_SIZE];
+    __shared__ typename SplatPrimitive::Screen splat_batch[THREAD_BLOCK_SIZE];
+
+    typename SplatPrimitive::RenderOutput buffer = SplatPrimitive::RenderOutput::zero();
+
+    const int32_t bin_final = done ? last_ids[pix_id] : 0;
+    float2 pix_Ts_with_grad = {
+        (done ? render_Ts[pix_id_global] : 0.0f),
+        (done ? -v_render_alphas[pix_id_global] : 0.0f)
+    };
+    typename SplatPrimitive::RenderOutput v_pix_colors = (done ?
+        SplatPrimitive::RenderOutput::load(v_render_output_buffer, pix_id_image_global)
+            : SplatPrimitive::RenderOutput::zero());
+    
+    typename SplatPrimitive::RenderOutput pix_colors;
+    typename SplatPrimitive::RenderOutput pix2_colors;
+    typename SplatPrimitive::RenderOutput v_distortion_out;
+    if (output_distortion) {
+        pix_colors = (done ?
+            SplatPrimitive::RenderOutput::load(render_output_buffer, pix_id_image_global)
+            : SplatPrimitive::RenderOutput::zero());
+        pix2_colors = (done ?
+            SplatPrimitive::RenderOutput::load(render2_output_buffer, pix_id_image_global)
+            : SplatPrimitive::RenderOutput::zero());
+        v_distortion_out = (done ?
+            SplatPrimitive::RenderOutput::load(v_distortions_output_buffer, pix_id_image_global)
+            : SplatPrimitive::RenderOutput::zero());
+    }
+
+    float3 v_ray_d;
+    if (output_viewmat_grad) {
+        v_ray_d = make_float3(0.0f, 0.0f, 0.0f);
+    }
+
+    float hess_weight_map;
+    if (output_hessian_diagonal) {
+        // https://www.desmos.com/calculator/ld9wg7cuxz
+        hess_weight_map = (loss_map_buffer != nullptr && done) ?
+            0.5f / fmaxf(loss_map_buffer[pix_id_image_global], 1e-6f) : 0.0f;
+    }
+
+    // TODO: not all parameters are needed, trim to reduce shared memory usage and speed up read/write
+    __shared__ typename SplatPrimitive::Screen v_splat_batch[ATOMIC_ADD_CACHE_SIZE][THREAD_BLOCK_SIZE];
+    __shared__ typename SplatPrimitive::Screen vr_splat_batch[ATOMIC_ADD_CACHE_SIZE][THREAD_BLOCK_SIZE];
+    __shared__ typename SplatPrimitive::Screen h_splat_batch[ATOMIC_ADD_CACHE_SIZE][THREAD_BLOCK_SIZE];
+
+    const int32_t warp_bin_final =
+        cg::reduce(warp, bin_final, cg::greater<int>());
     for (uint32_t splat_b = 0; splat_b < num_splat_batches; ++splat_b) {
-        const int32_t splat_batch_end = range_end - 1 - SPLAT_BATCH_SIZE * splat_b;
-        const int32_t splat_batch_size = min(SPLAT_BATCH_SIZE, splat_batch_end + 1 - range_start);
-        const int32_t splat_idx = splat_batch_end - thread_id;
+        if (THREAD_BLOCK_SIZE > WARP_SIZE)
+            block.sync();
+        else
+            __syncwarp();
 
-        // load splats
-        typename SplatPrimitive::Screen splat;
-        uint32_t splat_gid;
-        if (splat_idx >= range_start) {
-            splat_gid = flatten_ids[splat_idx]; // flatten index in [I * N] or [nnz]
-            splat = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_gid);
+        // load splats into shared memory
+        const int32_t batch_end = range_end - 1 - THREAD_BLOCK_SIZE * splat_b;
+        int32_t batch_size = min(THREAD_BLOCK_SIZE, batch_end + 1 - range_start);
+        int32_t idx = batch_end - thread_id;
+        if (idx >= range_start) {
+            int32_t g = flatten_ids[idx];
+            id_batch[thread_id] = g;
+            splat_batch[thread_id] = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, g);
         }
+        if (THREAD_BLOCK_SIZE > WARP_SIZE)
+            block.sync();
+        else
+            __syncwarp();
 
-        // accumulate gradient
-        typename SplatPrimitive::Screen v_splat = SplatPrimitive::Screen::zero();
-        typename SplatPrimitive::Screen vr_splat = SplatPrimitive::Screen::zero();
-        typename SplatPrimitive::Screen h_splat = SplatPrimitive::Screen::zero();
+        int32_t t_start = max(0, batch_end - warp_bin_final);
+        for (int32_t t = t_start; t < batch_size; ++t) {
+            bool valid = done & (batch_end - t <= bin_final);
 
-        // thread 0 takes last splat, 1 takes second last, etc.
-        // at t=0, thread 0 (splat -1) undo pixel 0
-        // at t=1, thread 0 (splat -1) undo pixel 1, thread 1 (splat -2) undo pixel 0
-        // ......
-
-        // process gaussians in the current batch for this pixel
-        // 0 index is the furthest back gaussian in the batch
-        for (int t = 0; t < splat_batch_size + BLOCK_SIZE - 1; ++t, __syncwarp()) {
-            int pix_id = t - thread_id;
-            if (pix_id < 0 || pix_id >= BLOCK_SIZE || splat_idx < range_start)
-                continue;
-            float4 ray_d_pix_bin_final = shared_ray_d_pix_bin_final[pix_id];
-            if (splat_idx > __float_as_int(ray_d_pix_bin_final.w))
-                continue;
-
-            // evaluate alpha and early skip
-            float3 ray_d = {ray_d_pix_bin_final.x, ray_d_pix_bin_final.y, ray_d_pix_bin_final.z};
-            float alpha = splat.evaluate_alpha(ray_o, ray_d);
-            if (alpha <= ALPHA_THRESHOLD || dot(ray_d, ray_d) == 0.0f)
+            float alpha;
+            typename SplatPrimitive::Screen splat;
+            if (valid) {
+                splat = splat_batch[t];
+                alpha = splat.evaluate_alpha(ray_o, ray_d);
+                if (alpha <= ALPHA_THRESHOLD)
+                    valid = false;
+            }
+            if (ATOMIC_ADD_CACHE_SIZE == 1 && !warp.any(valid))
                 continue;
 
-            // printf("t=%d, thread %u, splat %d (%u), pix_id %d, pix %d %d\n", t, thread_id, splat_idx-range_start, splat_gid, pix_id, pix_global_x, pix_global_y);
+            typename SplatPrimitive::Screen v_splat = SplatPrimitive::Screen::zero();
+            typename SplatPrimitive::Screen vr_splat = SplatPrimitive::Screen::zero();
+            typename SplatPrimitive::Screen h_splat = SplatPrimitive::Screen::zero();
 
+          if (valid) {
             // forward:
             // \left(c_{1},T_{1}\right)=\left(c_{0}+\alpha_{i}T_{0}c_{i},\ T_{0}\left(1-\alpha_{i}\right)\right)
-            float T1 = pix_Ts_with_grad[pix_id].x;
-            float v_T1 = pix_Ts_with_grad[pix_id].y;
+            float T1 = pix_Ts_with_grad.x;
+            float v_T1 = pix_Ts_with_grad.y;
 
             // undo pixel:
             // T_{0}=\frac{T_{1}}{1-\alpha_{i}}
@@ -251,7 +236,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
             float T0 = T1 * ra;
 
             typename SplatPrimitive::RenderOutput color = splat.evaluate_color(ray_o, ray_d);
-            typename SplatPrimitive::RenderOutput v_c = v_pix_colors[pix_id];
+            typename SplatPrimitive::RenderOutput v_c = v_pix_colors;
 
             // gradient to alpha:
             // \frac{dL}{d\alpha_{i}}
@@ -275,11 +260,11 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
             if (output_distortion) {
                 // \left(d_{1},s_{1}\right)=\left(d_{0}+\alpha_{i}T_{0}\left(c_{i}^{2}\left(1-T_{0}\right)-2c_{i}c_{0}+s_{0}\right),\ s_{0}+\alpha_{i}T_{0}c_{i}^{2}\right)
                 // \frac{dL}{ds}=0
-                typename SplatPrimitive::RenderOutput v_dist = v_distortion_out[pix_id];
+                typename SplatPrimitive::RenderOutput v_dist = v_distortion_out;
                 typename SplatPrimitive::RenderOutput c0 =
-                    pix_colors[pix_id] + color * -alpha * T0;
+                    pix_colors + color * -alpha * T0;
                 typename SplatPrimitive::RenderOutput s0 =
-                    pix2_colors[pix_id] + color * color * -alpha * T0;
+                    pix2_colors + color * color * -alpha * T0;
                 // \frac{dL}{d\alpha_{i}}=\frac{dL}{dd_{1}}\frac{dd_{1}}{d\alpha_{i}}=T_{0}\left(c_{i}^{2}\left(1-T_{0}\right)-2c_{i}c_{0}+s_{0}\right)\frac{dL}{dd_{1}}
                 v_alpha += T0 * (
                     color * color * (1.0f-T0) +
@@ -296,8 +281,8 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
                     color * c0 * -2.0f + s0
                 ).dot(v_dist);
                 // undo pixel state
-                pix_colors[pix_id] = c0;
-                pix2_colors[pix_id] = s0;
+                pix_colors = c0;
+                pix2_colors = s0;
             }
 
             // backward diff splat
@@ -311,7 +296,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
                 // https://www.desmos.com/calculator/ld9wg7cuxz
                 float weight = 1.0f / sqrtf(fmaxf(v_c.dot(v_c) / 3.0f, 1e-30f));
                 vr_splat.addGradient(v_splat_temp, weight);
-                weight = hess_weight_map[pix_id] * weight * weight;
+                weight = hess_weight_map * weight * weight;
                 splat.precomputeBackward(v_splat_temp);
                 h_splat.addGaussNewtonHessianDiagonal(v_splat_temp, weight);
             } else {
@@ -321,25 +306,64 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
 
             if (output_viewmat_grad) {
                 total_v_ray_o += v_ray_o_alpha + v_ray_o_color;
-                shared_v_ray_d[pix_id] += v_ray_d_alpha + v_ray_d_color;
+                total_v_ray_d += v_ray_d_alpha + v_ray_d_color;
             }
 
             // update pixel states
-            pix_Ts_with_grad[pix_id] = { T0, v_T0 };
+            pix_Ts_with_grad = { T0, v_T0 };
             // v_pix_colors remains the same
+            
+          }  // if (valid)
 
-        }
-
-        // accumulate gradient
-        if (splat_idx >= range_start) {
+            // accumulate gradient
             splat.precomputeBackward(v_splat);
-            v_splat.atomicAddToBuffer(v_splat_buffer, splat_gid);
-            if (output_hessian_diagonal) {
-                splat.precomputeBackward(vr_splat);
-                vr_splat.atomicAddToBuffer(vr_splat_buffer, splat_gid);
-                h_splat.atomicAddToBuffer(h_splat_buffer, splat_gid);
+            if (ATOMIC_ADD_CACHE_SIZE <= 1) {
+                int32_t splat_gid = id_batch[t];
+                v_splat.atomicAddToBuffer<WARP_SIZE>(v_splat_buffer, splat_gid);
             }
+            else {
+                int32_t cache_idx = (t + batch_size * ATOMIC_ADD_CACHE_SIZE - batch_size) % ATOMIC_ADD_CACHE_SIZE;  // 0... ATOMIC_ADD_CACHE_SIZE-1, higher is latter splat (up to t)
+                v_splat_batch[cache_idx][thread_id] = v_splat;
+                if (output_hessian_diagonal) {
+                    splat.precomputeBackward(vr_splat);
+                    vr_splat_batch[cache_idx][thread_id] = vr_splat;
+                    h_splat_batch[cache_idx][thread_id] = h_splat;
+                }
+                if (cache_idx != ATOMIC_ADD_CACHE_SIZE - 1)
+                    continue;
+                if (THREAD_BLOCK_SIZE > WARP_SIZE)
+                    block.sync();
+                else
+                    __syncwarp();
+                static_assert(ATOMIC_ADD_CACHE_SIZE <= THREAD_BLOCK_SIZE);
+                static_assert(THREAD_BLOCK_SIZE % ATOMIC_ADD_CACHE_SIZE == 0);
+                int32_t splat_id = t - (ATOMIC_ADD_CACHE_SIZE-1) + thread_id % ATOMIC_ADD_CACHE_SIZE;  // 0... THREAD_BLOCK_SIZE-1
+                if (splat_id <= t && splat_id >= t_start) {  // thread_id is 0... ATOMIC_ADD_CACHE_SIZE-1, higher is latter splat (up to t)
+                    v_splat = SplatPrimitive::Screen::zero();
+                    vr_splat = SplatPrimitive::Screen::zero();
+                    h_splat = SplatPrimitive::Screen::zero();
+                    int32_t offset = (thread_id / ATOMIC_ADD_CACHE_SIZE) * ATOMIC_ADD_CACHE_SIZE;
+                    for (int i = 0; i < ATOMIC_ADD_CACHE_SIZE; ++i) {
+                        int32_t cache_idx = thread_id % ATOMIC_ADD_CACHE_SIZE;
+                        // int32_t splat_pix_idx = i + offset;
+                        int32_t splat_pix_idx = (i + cache_idx) % ATOMIC_ADD_CACHE_SIZE + offset;  // reduce bank conflicts
+                        v_splat.addGradient(v_splat_batch[cache_idx][splat_pix_idx]);
+                        if (output_hessian_diagonal) {
+                            vr_splat.addGradient(vr_splat_batch[cache_idx][splat_pix_idx]);
+                            h_splat.addGradient(h_splat_batch[cache_idx][splat_pix_idx]);
+                        }
+                    }
+                    int32_t splat_gid = id_batch[splat_id];
+                    v_splat.atomicAddToBuffer<1>(v_splat_buffer, splat_gid);
+                    if (output_hessian_diagonal) {
+                        vr_splat.atomicAddToBuffer<1>(vr_splat_buffer, splat_gid);
+                        h_splat.atomicAddToBuffer<1>(h_splat_buffer, splat_gid);
+                    }
+                }
+            }
+
         }
+
     }
     if (output_viewmat_grad) {
         // accumulate to viewmat gradient
@@ -348,23 +372,12 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         // gradient from ray_o (will fill v_R and v_t)
         SlangProjectionUtils::transform_ray_o_vjp(R, t, total_v_ray_o, &v_R, &v_t);
         // gradient from ray_d
-        #pragma unroll
-        for (uint pix_id0 = 0; pix_id0 < BLOCK_SIZE; pix_id0 += SPLAT_BATCH_SIZE_CONST) {
-            uint pix_id_local = pix_id0 + thread_id;
-            float4 ray_d_pix_bin_final = shared_ray_d_pix_bin_final[pix_id_local];
-            float3 raydir = SlangProjectionUtils::undo_transform_ray_d(R,
-                make_float3(
-                    ray_d_pix_bin_final.x,
-                    ray_d_pix_bin_final.y,
-                    ray_d_pix_bin_final.z
-                )
-            );
-            float3 v_ray_d = shared_v_ray_d[pix_id_local];
-            float3x3 v_R_delta;
-            float3 temp;
-            SlangProjectionUtils::transform_ray_d_vjp(R, raydir, v_ray_d, &v_R_delta, &temp);
-            v_R = v_R + v_R_delta;
-        }
+        float3 raydir = SlangProjectionUtils::undo_transform_ray_d(R, ray_d);
+        float3 v_ray_d = total_v_ray_d;
+        float3x3 v_R_delta;
+        float3 temp;
+        SlangProjectionUtils::transform_ray_d_vjp(R, raydir, v_ray_d, &v_R_delta, &temp);
+        v_R = v_R + v_R_delta;
         // atomic add to global viewmat gradient
         if (v_viewmats != nullptr) {
             float *v_viewmat = v_viewmats + image_id * 16;
@@ -434,10 +447,8 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
 
     // Each block covers a tile on the image. In total there are
     // I * tile_height * tile_width blocks.
-    dim3 threads = {output_distortion ?
-        SPLAT_BATCH_SIZE_WITH_DISTORTION : SPLAT_BATCH_SIZE_NO_DISTORTION,
-        1, 1};
-    dim3 grid = {I, tile_height, tile_width};
+    dim3 threads = {TILE_SIZE, THREAD_BLOCK_SIZE / TILE_SIZE, 1};
+    dim3 grid = {I, tile_height * BLOCK_SIZE / THREAD_BLOCK_SIZE, tile_width};
 
     if (n_isects == 0) {
         // skip the kernel launch if there are no elements

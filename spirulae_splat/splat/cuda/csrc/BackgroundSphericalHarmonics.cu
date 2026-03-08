@@ -206,7 +206,7 @@ __global__ void __launch_bounds__(512) render_background_sh_backward_kernel(
 
     glm::vec3 temp3;
     #define _ATOMIC_ADD(address, idx) \
-        blockAtomicAdd<512>(&address[idx], temp3);
+        atomicAddFVec<512>((float3*)&address[idx], float3{temp3.x, temp3.y, temp3.z});
 
     // #define _ATOMIC_ADD(address, idx) \
     //     if (inside) { \

@@ -297,7 +297,8 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
             // v_pix_colors remains the same
 
             // accumulate gradient
-            splat.atomicAddGradientToBuffer(v_splat, v_splat_buffer, splat_idx);
+            splat.precomputeBackward(v_splat);
+            v_splat.atomicAddToBuffer(v_splat_buffer, splat_idx);
         }
 
         if (hasSplat) {

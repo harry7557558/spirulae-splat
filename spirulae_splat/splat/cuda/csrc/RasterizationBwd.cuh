@@ -162,7 +162,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         uint32_t splat_gid;
         if (splat_idx >= range_start) {
             splat_gid = flatten_ids[splat_idx]; // flatten index in [I * N] or [nnz]
-            splat = SplatPrimitive::Screen::load(splat_buffer, splat_gid);
+            splat = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_gid);
         }
 
         // accumulate gradient
@@ -268,6 +268,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 float weight = 1.0f / sqrtf(fmaxf(v_c.dot(v_c) / 3.0f, 1e-30f));
                 vr_splat.addGradient(v_splat_temp, weight);
                 weight = hess_weight_map[pix_id] * weight * weight;
+                splat.precomputeBackward(v_splat_temp);
                 h_splat.addGaussNewtonHessianDiagonal(v_splat_temp, weight);
             } else {
                 v_splat.addGradient(splat.evaluate_alpha_vjp(px, py, v_alpha));
@@ -284,10 +285,12 @@ __global__ void rasterize_to_pixels_bwd_kernel(
 
         // accumulate gradient
         if (splat_idx >= range_start) {
-            v_splat.atomicAddGradientToBuffer(v_splat_buffer, splat_gid);
+            splat.precomputeBackward(v_splat);
+            v_splat.atomicAddToBuffer(v_splat_buffer, splat_gid);
             if (output_hessian_diagonal) {
-                vr_splat.atomicAddGradientToBuffer(vr_splat_buffer, splat_gid);
-                h_splat.atomicAddAccumulatedGradientToBuffer(h_splat_buffer, splat_gid);
+                splat.precomputeBackward(vr_splat);
+                vr_splat.atomicAddToBuffer(vr_splat_buffer, splat_gid);
+                h_splat.atomicAddToBuffer(h_splat_buffer, splat_gid);
             }
         }
     }

@@ -1,5 +1,4 @@
 #define SLANG_PRELUDE_EXPORT
-#define SSPLAT_HOST_ONLY
 #include "common.cuh"
 
 #include "IntersectTile.cuh"

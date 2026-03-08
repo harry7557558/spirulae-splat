@@ -21,44 +21,6 @@ typedef unsigned int uint;
 #endif
 
 
-#ifdef __CUDACC__
-
-inline __device__ float atomicMin(float* p, float v) {
-    return (__float_as_int(v) >= 0) ?
-        __int_as_float(atomicMin((int*)p, __float_as_int(v))) :
-        __uint_as_float(atomicMax((unsigned*)p, __float_as_uint(v)));
-}
-inline __device__ float atomicMax(float* p, float v) {
-    return (__float_as_int(v) >= 0) ?
-        __int_as_float(atomicMax((int*)p, __float_as_int(v))) :
-        __uint_as_float(atomicMin((unsigned*)p, __float_as_uint(v)));
-}
-
-inline __device__ void atomicAddFVec(float* p, float v) {
-    if (p == nullptr) return;
-    if (v != 0.0f && isfinite(v)) atomicAdd(p, v);
-}
-inline __device__ void atomicAddFVec(float2* p, float2 v) {
-    if (p == nullptr) return;
-    if (v.x != 0.0f && isfinite(v.x)) atomicAdd(&p->x, v.x);
-    if (v.y != 0.0f && isfinite(v.y)) atomicAdd(&p->y, v.y);
-}
-inline __device__ void atomicAddFVec(float3* p, float3 v) {
-    if (p == nullptr) return;
-    if (v.x != 0.0f && isfinite(v.x)) atomicAdd(&p->x, v.x);
-    if (v.y != 0.0f && isfinite(v.y)) atomicAdd(&p->y, v.y);
-    if (v.z != 0.0f && isfinite(v.z)) atomicAdd(&p->z, v.z);
-}
-inline __device__ void atomicAddFVec(float4* p, float4 v) {
-    if (p == nullptr) return;
-    if (v.x != 0.0f && isfinite(v.x)) atomicAdd(&p->x, v.x);
-    if (v.y != 0.0f && isfinite(v.y)) atomicAdd(&p->y, v.y);
-    if (v.z != 0.0f && isfinite(v.z)) atomicAdd(&p->z, v.z);
-    if (v.w != 0.0f && isfinite(v.w)) atomicAdd(&p->w, v.w);
-}
-
-#endif  // #ifdef __CUDACC__
-
 
 #define _DEF_GENERIC_VEC_FUNCTIONAL_UNARY_OP(dtype, o) \
     __host__ __device__ __forceinline__ dtype##2 operator o(dtype##2 v) \
@@ -272,10 +234,26 @@ typedef Matrix<float, 4, 4> float4x4;
 
 
 ///////////////////////////////
-// Reduce (from gsplat)
+// Reduce / Atomic
 ///////////////////////////////
 
-#ifndef SSPLAT_HOST_ONLY
+#ifdef __CUDACC__
+
+__forceinline__ __device__ uint32_t _warpIdx() {
+    // uint32_t warpId;
+    // asm("mov.u32 %0, %%warpid;" : "=r"(warpId));
+    // return warpId;
+    return (threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z)) / WARP_SIZE;
+}
+__forceinline__ __device__ uint32_t _laneIdx() {
+    uint32_t laneId;
+    asm("mov.u32 %0, %%laneid;" : "=r"(laneId));
+    return laneId;
+}
+
+///////////////////////////////
+// reduce from gsplat, updates values for all threads
+///////////////////////////////
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
@@ -357,7 +335,9 @@ template <typename WarpT> inline __device__ void warpSum(int &val, WarpT &warp) 
 }
 
 
-// warp sum to first lane
+///////////////////////////////
+// warp reduce, update value to first lane
+///////////////////////////////
 
 inline __device__ void warpSum(float &val) {
     #pragma unroll
@@ -402,15 +382,89 @@ inline __device__ void warpSum(glm::mat2 &val) {
     warpSum(val[0]); warpSum(val[1]);
 }
 
+inline __device__ void warpAtomicAdd(float* addr, float val) {
+    #pragma unroll
+    for (int offset = WARP_SIZE >> 1; offset > 0; offset >>= 1) {
+        val += __shfl_down_sync(~0u, val, offset);
+    }
+    if (_laneIdx() == 0 && val != 0.0f)
+        atomicAdd(addr, val);
+}
+
+inline __device__ void warpAtomicAdd(float4* addr, float4 val) {
+#if 0
+    warpAtomicAdd(&addr->x, val.x);
+    warpAtomicAdd(&addr->y, val.y);
+    warpAtomicAdd(&addr->z, val.z);
+    warpAtomicAdd(&addr->w, val.w);
+#else
+    #pragma unroll
+    for (int offset = WARP_SIZE >> 1; offset > 0; offset >>= 1) {
+        val.x += __shfl_down_sync(~0u, val.x, offset);
+        val.y += __shfl_down_sync(~0u, val.y, offset);
+        val.z += __shfl_down_sync(~0u, val.z, offset);
+        val.w += __shfl_down_sync(~0u, val.w, offset);
+    }
+    if (_laneIdx() == 0) {
+        if (val.x) atomicAdd(&addr->x, val.x);
+        if (val.y) atomicAdd(&addr->y, val.y);
+        if (val.z) atomicAdd(&addr->z, val.z);
+        if (val.w) atomicAdd(&addr->w, val.w);
+    }
+#endif
+}
+
+inline __device__ void warpAtomicAdd(float3* addr, float3 val) {
+#if 0
+    warpAtomicAdd(&addr->x, val.x);
+    warpAtomicAdd(&addr->y, val.y);
+    warpAtomicAdd(&addr->z, val.z);
+#else
+    #pragma unroll
+    for (int offset = WARP_SIZE >> 1; offset > 0; offset >>= 1) {
+        val.x += __shfl_down_sync(~0u, val.x, offset);
+        val.y += __shfl_down_sync(~0u, val.y, offset);
+        val.z += __shfl_down_sync(~0u, val.z, offset);
+    }
+    if (_laneIdx() == 0) {
+        if (val.x) atomicAdd(&addr->x, val.x);
+        if (val.y) atomicAdd(&addr->y, val.y);
+        if (val.z) atomicAdd(&addr->z, val.z);
+    }
+#endif
+}
+
+inline __device__ void warpAtomicAdd(float2* addr, float2 &val) {
+#if 0
+    warpAtomicAdd(&addr->x, val.x);
+    warpAtomicAdd(&addr->y, val.y);
+#else
+    #pragma unroll
+    for (int offset = WARP_SIZE >> 1; offset > 0; offset >>= 1) {
+        val.x += __shfl_down_sync(~0u, val.x, offset);
+        val.y += __shfl_down_sync(~0u, val.y, offset);
+    }
+    if (_laneIdx() == 0) {
+        if (val.x) atomicAdd(&addr->x, val.x);
+        if (val.y) atomicAdd(&addr->y, val.y);
+    }
+#endif
+}
+
+
+///////////////////////////////
+// block reduce / atomic
+///////////////////////////////
+
 template<int BLOCK_SIZE>
-inline __device__ void blockSum(float& val) {
-    static_assert(BLOCK_SIZE >= WARP_SIZE && BLOCK_SIZE <= WARP_SIZE * WARP_SIZE);
+inline __device__ void blockAtomicAdd(float* addr, float val) {
+    static_assert(BLOCK_SIZE > WARP_SIZE && BLOCK_SIZE <= WARP_SIZE * WARP_SIZE);
     static_assert(BLOCK_SIZE % WARP_SIZE == 0);
 
     static __shared__ float sharedSums[BLOCK_SIZE / WARP_SIZE];
 
-    uint laneId = threadIdx.x % WARP_SIZE;
-    uint warpId = threadIdx.x / WARP_SIZE;
+    uint laneId = _laneIdx();
+    uint warpId = _warpIdx();
 
     #pragma unroll
     for (int stride = WARP_SIZE >> 1; stride > 0; stride >>= 1) {
@@ -427,51 +481,59 @@ inline __device__ void blockSum(float& val) {
         #pragma unroll
         for (int stride = (BLOCK_SIZE / WARP_SIZE) >> 1; stride > 0; stride >>= 1)
             val += __shfl_down_sync(0xFFFFFFFF, val, stride);
+        if (laneId == 0 && val != 0.0f)
+            atomicAdd(addr, val);
     }
-    __syncthreads(); // optional
-}
-
-// TODO: optimize to reduce number of synchronization
-
-template<int BLOCK_SIZE>
-inline __device__ void blockSum(float4 &val) {
-    blockSum<BLOCK_SIZE>(val.x);
-    blockSum<BLOCK_SIZE>(val.y);
-    blockSum<BLOCK_SIZE>(val.z);
-    blockSum<BLOCK_SIZE>(val.w);
 }
 
 template<int BLOCK_SIZE>
-inline __device__ void blockSum(float3 &val) {
-    blockSum<BLOCK_SIZE>(val.x);
-    blockSum<BLOCK_SIZE>(val.y);
-    blockSum<BLOCK_SIZE>(val.z);
+inline __device__ void blockAtomicAdd(float4* addr, float4 val) {
+    static_assert(BLOCK_SIZE >= 4 * WARP_SIZE && BLOCK_SIZE <= WARP_SIZE * WARP_SIZE);
+    static_assert(BLOCK_SIZE % WARP_SIZE == 0);
+
+    constexpr int NUM_WARPS = BLOCK_SIZE / WARP_SIZE;
+    static __shared__ float sharedSums[4 * NUM_WARPS];
+
+    uint laneId = _laneIdx();
+    uint warpId = _warpIdx();
+
+    #pragma unroll
+    for (int stride = WARP_SIZE >> 1; stride > 0; stride >>= 1) {
+        val.x += __shfl_down_sync(0xFFFFFFFF, val.x, stride);
+        val.y += __shfl_down_sync(0xFFFFFFFF, val.y, stride);
+        val.z += __shfl_down_sync(0xFFFFFFFF, val.z, stride);
+        val.w += __shfl_down_sync(0xFFFFFFFF, val.w, stride);
+    }
+
+    if (laneId == 0) {
+        sharedSums[warpId + 0 * NUM_WARPS] = val.x;
+        sharedSums[warpId + 1 * NUM_WARPS] = val.y;
+        sharedSums[warpId + 2 * NUM_WARPS] = val.z;
+        sharedSums[warpId + 3 * NUM_WARPS] = val.w;
+    }
+    __syncthreads();
+
+    if (warpId < 4) {
+        float val = laneId < NUM_WARPS ?
+            sharedSums[laneId + warpId * NUM_WARPS] : 0.0f;
+        #pragma unroll
+        for (int stride = NUM_WARPS >> 1; stride > 0; stride >>= 1)
+            val += __shfl_down_sync(0xFFFFFFFF, val, stride);
+        if (laneId == 0 && val != 0.0f)
+            atomicAdd((float*)addr + warpId, val);
+    }
 }
 
 template<int BLOCK_SIZE>
-inline __device__ void blockSum(float2 &val) {
-    blockSum<BLOCK_SIZE>(val.x);
-    blockSum<BLOCK_SIZE>(val.y);
-}
-
-template<int BLOCK_SIZE>
-inline __device__ void blockSum(glm::vec4 &val) {
-    blockSum<BLOCK_SIZE>(val.x);
-    blockSum<BLOCK_SIZE>(val.y);
-    blockSum<BLOCK_SIZE>(val.z);
-    blockSum<BLOCK_SIZE>(val.w);
-}
-
-template<int BLOCK_SIZE>
-inline __device__ void blockAtomicAdd(glm::vec3* addr, glm::vec3 val) {
+inline __device__ void blockAtomicAdd(float3* addr, float3 val) {
     static_assert(BLOCK_SIZE >= 3 * WARP_SIZE && BLOCK_SIZE <= WARP_SIZE * WARP_SIZE);
     static_assert(BLOCK_SIZE % WARP_SIZE == 0);
 
     constexpr int NUM_WARPS = BLOCK_SIZE / WARP_SIZE;
     static __shared__ float sharedSums[3 * NUM_WARPS];
 
-    uint laneId = threadIdx.x % WARP_SIZE;
-    uint warpId = threadIdx.x / WARP_SIZE;
+    uint laneId = _laneIdx();
+    uint warpId = _warpIdx();
 
     #pragma unroll
     for (int stride = WARP_SIZE >> 1; stride > 0; stride >>= 1) {
@@ -493,39 +555,129 @@ inline __device__ void blockAtomicAdd(glm::vec3* addr, glm::vec3 val) {
         #pragma unroll
         for (int stride = NUM_WARPS >> 1; stride > 0; stride >>= 1)
             val += __shfl_down_sync(0xFFFFFFFF, val, stride);
-        if (laneId == 0)
+        if (laneId == 0 && val != 0.0f)
             atomicAdd((float*)addr + warpId, val);
     }
 }
 
 template<int BLOCK_SIZE>
-inline __device__ void blockSum(glm::vec2 &val) {
-    blockSum<BLOCK_SIZE>(val.x);
-    blockSum<BLOCK_SIZE>(val.y);
+inline __device__ void blockAtomicAdd(float2* addr, float2 val) {
+    static_assert(BLOCK_SIZE >= 2 * WARP_SIZE && BLOCK_SIZE <= WARP_SIZE * WARP_SIZE);
+    static_assert(BLOCK_SIZE % WARP_SIZE == 0);
+
+    constexpr int NUM_WARPS = BLOCK_SIZE / WARP_SIZE;
+    static __shared__ float sharedSums[2 * NUM_WARPS];
+
+    uint laneId = _laneIdx();
+    uint warpId = _warpIdx();
+
+    #pragma unroll
+    for (int stride = WARP_SIZE >> 1; stride > 0; stride >>= 1) {
+        val.x += __shfl_down_sync(0xFFFFFFFF, val.x, stride);
+        val.y += __shfl_down_sync(0xFFFFFFFF, val.y, stride);
+    }
+
+    if (laneId == 0) {
+        sharedSums[warpId + 0 * NUM_WARPS] = val.x;
+        sharedSums[warpId + 1 * NUM_WARPS] = val.y;
+    }
+    __syncthreads();
+
+    if (warpId < 2) {
+        float val = laneId < NUM_WARPS ?
+            sharedSums[laneId + warpId * NUM_WARPS] : 0.0f;
+        #pragma unroll
+        for (int stride = NUM_WARPS >> 1; stride > 0; stride >>= 1)
+            val += __shfl_down_sync(0xFFFFFFFF, val, stride);
+        if (laneId == 0 && val != 0.0f)
+            atomicAdd((float*)addr + warpId, val);
+    }
 }
 
-template<int BLOCK_SIZE>
-inline __device__ void blockSum(glm::mat4 &val) {
-    blockSum<BLOCK_SIZE>(val[0]);
-    blockSum<BLOCK_SIZE>(val[1]);
-    blockSum<BLOCK_SIZE>(val[2]);
-    blockSum<BLOCK_SIZE>(val[3]);
+
+///////////////////////////////
+// templated reduce / atomic
+///////////////////////////////
+
+inline __device__ float atomicMin(float* p, float v) {
+    return (__float_as_int(v) >= 0) ?
+        __int_as_float(atomicMin((int*)p, __float_as_int(v))) :
+        __uint_as_float(atomicMax((unsigned*)p, __float_as_uint(v)));
+}
+inline __device__ float atomicMax(float* p, float v) {
+    return (__float_as_int(v) >= 0) ?
+        __int_as_float(atomicMax((int*)p, __float_as_int(v))) :
+        __uint_as_float(atomicMin((unsigned*)p, __float_as_uint(v)));
 }
 
-template<int BLOCK_SIZE>
-inline __device__ void blockSum(glm::mat3 &val) {
-    blockSum<BLOCK_SIZE>(val[0]);
-    blockSum<BLOCK_SIZE>(val[1]);
-    blockSum<BLOCK_SIZE>(val[2]);
+template<int reduce = 1>
+inline __device__ void atomicAddFVec(float* p, float v) {
+    static_assert(reduce == 1 || reduce % WARP_SIZE == 0);
+    if (p == nullptr) return;
+    v = isfinite(v) ? v : 0.0f;
+    if (reduce == 1)
+        { if (v != 0.0f) atomicAdd(p, v); }
+    else if (reduce == WARP_SIZE)
+        warpAtomicAdd(p, v);
+    else
+        blockAtomicAdd<reduce == 1 || reduce == WARP_SIZE ? 2 * WARP_SIZE : reduce>(p, v);
 }
 
-template<int BLOCK_SIZE>
-inline __device__ void blockSum(glm::mat2 &val) {
-    blockSum<BLOCK_SIZE>(val[0]);
-    blockSum<BLOCK_SIZE>(val[1]);
+template<int reduce = 1>
+inline __device__ void atomicAddFVec(float2* p, float2 v) {
+    static_assert(reduce == 1 || reduce == WARP_SIZE || reduce >= 2 * WARP_SIZE);
+    if (p == nullptr) return;
+    v.x = isfinite(v.x) ? v.x : 0.0f;
+    v.y = isfinite(v.y) ? v.y : 0.0f;
+    if (reduce == 1) {
+        if (v.x != 0.0f) atomicAdd(&p->x, v.x);
+        if (v.y != 0.0f) atomicAdd(&p->y, v.y);
+    }
+    else if (reduce == WARP_SIZE)
+        warpAtomicAdd(p, v);
+    else
+        blockAtomicAdd<reduce == 1 || reduce == WARP_SIZE ? 2 * WARP_SIZE : reduce>(p, v);
 }
 
-#endif  // #ifndef SSPLAT_HOST_ONLY
+template<int reduce = 1>
+inline __device__ void atomicAddFVec(float3* p, float3 v) {
+    static_assert(reduce == 1 || reduce % WARP_SIZE == 0);
+    if (p == nullptr) return;
+    v.x = isfinite(v.x) ? v.x : 0.0f;
+    v.y = isfinite(v.y) ? v.y : 0.0f;
+    v.z = isfinite(v.z) ? v.z : 0.0f;
+    if (reduce == 1) {
+        if (v.x != 0.0f) atomicAdd(&p->x, v.x);
+        if (v.y != 0.0f) atomicAdd(&p->y, v.y);
+        if (v.z != 0.0f) atomicAdd(&p->z, v.z);
+    }
+    else if (reduce == WARP_SIZE)
+        warpAtomicAdd(p, v);
+    else
+        blockAtomicAdd<reduce == 1 || reduce == WARP_SIZE ? 3 * WARP_SIZE : reduce>(p, v);
+}
+
+template<int reduce = 1>
+inline __device__ void atomicAddFVec(float4* p, float4 v) {
+    static_assert(reduce == 1 || reduce % WARP_SIZE == 0);
+    if (p == nullptr) return;
+    v.x = isfinite(v.x) ? v.x : 0.0f;
+    v.y = isfinite(v.y) ? v.y : 0.0f;
+    v.z = isfinite(v.z) ? v.z : 0.0f;
+    v.w = isfinite(v.w) ? v.w : 0.0f;
+    if (reduce == 1) {
+        if (v.x != 0.0f) atomicAdd(&p->x, v.x);
+        if (v.y != 0.0f) atomicAdd(&p->y, v.y);
+        if (v.z != 0.0f) atomicAdd(&p->z, v.z);
+        if (v.w != 0.0f) atomicAdd(&p->w, v.w);
+    }
+    else if (reduce == WARP_SIZE)
+        warpAtomicAdd(p, v);
+    else
+        blockAtomicAdd<reduce == 1 || reduce == WARP_SIZE ? 4 * WARP_SIZE : reduce>(p, v);
+}
+
+#endif  // #ifdef __CUDACC__
 
 
 
@@ -557,7 +709,7 @@ __forceinline__ __device__ float4 fmul_axa(float4 a, float x) {
     };
 }
 
-#endif
+#endif  // #ifdef __CUDACC__
 
 
 

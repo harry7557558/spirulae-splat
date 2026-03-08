@@ -522,6 +522,9 @@ struct _Base3DGS<antialiased>::Screen {
         };
     }
 
+    __device__ __forceinline__ void precomputeBackward(Screen& grad) const {
+    }
+
     __device__ __forceinline__ void addGradient(const Screen &grad, float weight=1.0f) {
         xy += grad.xy * weight;
         depth += grad.depth * weight;
@@ -550,7 +553,7 @@ struct _Base3DGS<antialiased>::Screen {
             buffer.absgrad[idx] = xy_abs;
     }
 
-    __device__ void atomicAddGradientToBuffer(Buffer &buffer, long idx) const {
+    __device__ void atomicAddToBuffer(Buffer &buffer, long idx) const {
         atomicAddFVec(buffer.means2d + idx, xy);
         atomicAddFVec(buffer.depths + idx, depth);
         atomicAddFVec(buffer.conics + idx, conic);
@@ -558,18 +561,6 @@ struct _Base3DGS<antialiased>::Screen {
         atomicAddFVec(buffer.rgbs + idx, rgb);
         if (buffer.absgrad != nullptr)
             atomicAddFVec(buffer.absgrad + idx, xy_abs);
-    }
-
-    __device__ void atomicAddAccumulatedGradientToBuffer(Buffer &buffer, long idx) const {
-        atomicAddGradientToBuffer(buffer, idx);
-    }
-
-    __device__ void atomicAddGaussNewtonHessianDiagonalToBuffer(Buffer &buffer, long idx, float weight=1.0f) const {
-        atomicAddFVec(buffer.means2d + idx, xy * xy * weight);
-        atomicAddFVec(buffer.depths + idx, depth * depth * weight);
-        atomicAddFVec(buffer.conics + idx, conic * conic * weight);
-        atomicAddFVec(buffer.opacities + idx, opac * opac * weight);
-        atomicAddFVec(buffer.rgbs + idx, rgb * rgb * weight);
     }
 
     __device__ __forceinline__ float evaluate_alpha(float px, float py) {

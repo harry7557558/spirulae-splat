@@ -1,3 +1,4 @@
+// #include "RasterizationEval3DBwd_GSplat.cuh"
 #include "RasterizationEval3DBwd.cuh"
 
 #include "Primitive3DGUT.cuh"
