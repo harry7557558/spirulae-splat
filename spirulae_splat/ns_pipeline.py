@@ -106,18 +106,18 @@ class SpirulaePipeline(VanillaPipeline):
             inputs = [((train_inputs[0], val_inputs[0]), (train_inputs[1], val_inputs[1]))]
 
         for i, (camera, batch) in enumerate(inputs):
-            torch.cuda.empty_cache()
+            # torch.cuda.empty_cache()
             model_outputs = self._model(camera)
-            torch.cuda.empty_cache()
+            # torch.cuda.empty_cache()
             metrics_dict = self.model.get_metrics_dict(model_outputs, batch)
             is_not_last = (i != len(inputs) - 1)
             loss_dict = self.model.get_loss_dict(model_outputs, batch, metrics_dict, no_static_losses=is_not_last)
-            torch.cuda.empty_cache()
+            # torch.cuda.empty_cache()
             if is_not_last:
                 torch.stack([
                     x for x in loss_dict.values() if isinstance(x, torch.Tensor)
                 ]).sum().backward()
-            torch.cuda.empty_cache()
+            # torch.cuda.empty_cache()
 
         return model_outputs, loss_dict, metrics_dict
 

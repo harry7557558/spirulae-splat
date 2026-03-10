@@ -6,10 +6,11 @@ inline constexpr int TILE_SIZE = 16;
 
 inline constexpr float ALPHA_THRESHOLD = (1.f/255.f);
 
-
+#ifndef NO_TORCH
 #include <c10/cuda/CUDAGuard.h>
 #include <ATen/Tensor.h>
 #include <ATen/DeviceGuard.h>
+#endif
 
 #define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_HOST(x) TORCH_CHECK(!x.is_cuda(), #x " must be a CPU tensor")
@@ -17,7 +18,7 @@ inline constexpr float ALPHA_THRESHOLD = (1.f/255.f);
     TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_INPUT(x) \
     do { CHECK_CUDA(x); CHECK_CONTIGUOUS(x); } while (0)
-#if 0
+#if 1
 #define DEVICE_GUARD(_ten) \
     const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
 #else
@@ -69,6 +70,8 @@ inline __host__ dim3 tuple2dim3(std::tuple<unsigned, unsigned, unsigned> v) {
 
 #include "common_utils.cuh"
 
+#ifndef NO_TORCH
+
 template<typename T, int ndim>
 TensorView<T, ndim> tensor2view(at::Tensor& tensor) {
     TensorView<T, ndim> view;
@@ -79,6 +82,10 @@ TensorView<T, ndim> tensor2view(at::Tensor& tensor) {
     }
     return view;
 }
+
+#endif
+
+#ifndef NO_TORCH
 
 #include <ATen/ops/empty_like.h>
 
@@ -93,3 +100,5 @@ template<typename T>
 inline void set_zero(at::Tensor& x) {
     cudaMemset(x.data_ptr<T>(), 0, x.numel() * sizeof(T));
 }
+
+#endif

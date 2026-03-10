@@ -100,10 +100,13 @@ struct VoxelPrimitive::World {
     FixedArray<float, 8> densities;
     FixedArray<float3, 16> sh_coeffs;
 
+    #ifndef NO_TORCH
     typedef std::tuple<std::optional<at::Tensor>, std::optional<at::Tensor>, at::Tensor, at::Tensor> TensorTuple;
+    #endif
 
     struct Buffer;
 
+    #ifndef NO_TORCH
     struct Tensor {
         std::optional<at::Tensor> pos_size;
         std::optional<at::Tensor> densities;
@@ -144,6 +147,7 @@ struct VoxelPrimitive::World {
 
         Buffer buffer() { return Buffer(*this); }
     };
+    #endif
 
     struct Buffer {
         float4* __restrict__ pos_size;
@@ -154,6 +158,7 @@ struct VoxelPrimitive::World {
 
         Buffer() {}
 
+        #ifndef NO_TORCH
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.features_dc);
             if (tensors.pos_size.has_value())
@@ -170,6 +175,7 @@ struct VoxelPrimitive::World {
             features_sh = (float3*)tensors.features_sh.data_ptr<float>();
             num_sh = tensors.features_sh.size(-2);
         }
+        #endif
     };
 
 #ifdef __CUDACC__
@@ -230,10 +236,13 @@ struct VoxelPrimitive::RenderOutput {
     float3 rgb;
     float depth;
 
+    #ifndef NO_TORCH
     typedef std::tuple<at::Tensor, at::Tensor> TensorTuple;
+    #endif
 
     struct Buffer;
 
+    #ifndef NO_TORCH
     struct Tensor {
         at::Tensor rgbs;
         at::Tensor depths;
@@ -273,6 +282,7 @@ struct VoxelPrimitive::RenderOutput {
 
         Buffer buffer() { return Buffer(*this); }
     };
+    #endif
 
     struct Buffer {
         float3* __restrict__ rgbs;
@@ -280,6 +290,7 @@ struct VoxelPrimitive::RenderOutput {
 
         Buffer() : rgbs(nullptr), depths(nullptr) {}
 
+        #ifndef NO_TORCH
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.rgbs);
             CHECK_INPUT(tensors.rgbs);
@@ -287,6 +298,7 @@ struct VoxelPrimitive::RenderOutput {
             rgbs = (float3*)tensors.rgbs.data_ptr<float>();
             depths = tensors.depths.data_ptr<float>();
         }
+        #endif
     };
 
 #ifdef __CUDACC__
@@ -346,11 +358,14 @@ struct VoxelPrimitive::Screen {
     float3 rgb;
     float density_abs;
 
+    #ifndef NO_TORCH
     typedef std::tuple<std::optional<at::Tensor>, at::Tensor> TensorTupleProj;
     typedef std::tuple<std::optional<at::Tensor>, std::optional<at::Tensor>, std::optional<at::Tensor>, at::Tensor> TensorTuple;
+    #endif
 
     struct Buffer;
 
+    #ifndef NO_TORCH
     struct Tensor {
         bool hasWorld;
         std::optional<at::Tensor> pos_size;
@@ -428,6 +443,7 @@ struct VoxelPrimitive::Screen {
 
         Buffer buffer() { return Buffer(*this); }
     };
+    #endif
 
     struct Buffer {
         float4* __restrict__ pos_size = nullptr;
@@ -438,6 +454,7 @@ struct VoxelPrimitive::Screen {
 
         Buffer() {}
 
+        #ifndef NO_TORCH
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.rgbs);
             if (tensors.pos_size.has_value()) {
@@ -456,6 +473,7 @@ struct VoxelPrimitive::Screen {
             rgbs = (float3*)tensors.rgbs.data_ptr<float>();
             size = tensors.rgbs.size(-2);
         }
+        #endif
     };
 
 #ifdef __CUDACC__

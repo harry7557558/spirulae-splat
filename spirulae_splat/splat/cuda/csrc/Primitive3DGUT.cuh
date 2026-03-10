@@ -85,10 +85,13 @@ struct Vanilla3DGUT::World : public Base3DGUT::World {
     FixedArray<float3, 16> sh_coeffs;
 #endif
 
+    #ifndef NO_TORCH
     typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, std::optional<at::Tensor>> TensorTuple;
+    #endif
 
     struct Buffer;
 
+    #ifndef NO_TORCH
     struct Tensor {
         at::Tensor means;
         at::Tensor quats;
@@ -137,6 +140,7 @@ struct Vanilla3DGUT::World : public Base3DGUT::World {
 
         Buffer buffer() { return Buffer(*this); }
     };
+    #endif
 
     struct Buffer {
         float3* __restrict__ means;
@@ -149,6 +153,7 @@ struct Vanilla3DGUT::World : public Base3DGUT::World {
 
         Buffer() {}
 
+        #ifndef NO_TORCH
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.means);
             CHECK_INPUT(tensors.means);
@@ -168,6 +173,7 @@ struct Vanilla3DGUT::World : public Base3DGUT::World {
             num_sh = tensors.features_sh.has_value() ?
                 tensors.features_sh.value().size(-2) : 0;
         }
+        #endif
     };
 
 #ifdef __CUDACC__

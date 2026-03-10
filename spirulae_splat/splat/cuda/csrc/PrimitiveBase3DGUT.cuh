@@ -55,10 +55,13 @@ struct Base3DGUT::RenderOutput {
     float3 rgb;
     float depth;
 
+    #ifndef NO_TORCH
     typedef std::tuple<at::Tensor, at::Tensor> TensorTuple;
+    #endif
 
     struct Buffer;
 
+    #ifndef NO_TORCH
     struct Tensor {
         at::Tensor rgbs;
         at::Tensor depths;
@@ -98,6 +101,7 @@ struct Base3DGUT::RenderOutput {
 
         Buffer buffer() { return Buffer(*this); }
     };
+    #endif
 
     struct Buffer {
         float3* __restrict__ rgbs;
@@ -105,6 +109,7 @@ struct Base3DGUT::RenderOutput {
 
         Buffer() : rgbs(nullptr), depths(nullptr) {}
 
+        #ifndef NO_TORCH
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.rgbs);
             CHECK_INPUT(tensors.rgbs);
@@ -112,6 +117,7 @@ struct Base3DGUT::RenderOutput {
             rgbs = (float3*)tensors.rgbs.data_ptr<float>();
             depths = tensors.depths.data_ptr<float>();
         }
+        #endif
     };
 
 #ifdef __CUDACC__
@@ -176,11 +182,14 @@ struct Base3DGUT::Screen {
     float3x3 iscl_rot;
 #endif
 
+    #ifndef NO_TORCH
     typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTupleProj;
     typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTuple;
+    #endif
 
     struct Buffer;
 
+    #ifndef NO_TORCH
     struct Tensor {
         bool hasWorld;
         at::Tensor means;
@@ -269,6 +278,7 @@ struct Base3DGUT::Screen {
 
         Buffer buffer() { return Buffer(*this); }
     };
+    #endif
 
     struct Buffer {
         float3* __restrict__ means;
@@ -281,6 +291,7 @@ struct Base3DGUT::Screen {
 
         Buffer() {}  // uninitialized
 
+        #ifndef NO_TORCH
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.depths);
             if (tensors.hasWorld) {
@@ -300,6 +311,7 @@ struct Base3DGUT::Screen {
             size = tensors.hasWorld ?
                 tensors.quats.numel() / 4 : tensors.opacities.numel();
         }
+        #endif
     };
 
 #ifdef __CUDACC__

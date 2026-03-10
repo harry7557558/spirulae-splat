@@ -88,10 +88,13 @@ struct SphericalVoronoi3DGUT<num_sv>::World : public Base3DGUT::World {
     FixedArray<float3, num_sv> sv_colors;
 #endif
 
+    #ifndef NO_TORCH
     typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTuple;
+    #endif
 
     struct Buffer;
 
+    #ifndef NO_TORCH
     struct Tensor {
         at::Tensor means;
         at::Tensor quats;
@@ -138,6 +141,7 @@ struct SphericalVoronoi3DGUT<num_sv>::World : public Base3DGUT::World {
 
         Buffer buffer() { return Buffer(*this); }
     };
+    #endif
 
     struct Buffer {
         float3* __restrict__ means;
@@ -149,6 +153,7 @@ struct SphericalVoronoi3DGUT<num_sv>::World : public Base3DGUT::World {
 
         Buffer() {}
 
+        #ifndef NO_TORCH
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.means);
             CHECK_INPUT(tensors.means);
@@ -164,6 +169,7 @@ struct SphericalVoronoi3DGUT<num_sv>::World : public Base3DGUT::World {
             sv_sites = (float3*)tensors.sv_sites.template data_ptr<float>();
             sv_colors = (float3*)tensors.sv_colors.template data_ptr<float>();
         }
+        #endif
     };
 
 #ifdef __CUDACC__

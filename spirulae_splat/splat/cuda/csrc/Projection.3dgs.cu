@@ -6,51 +6,6 @@
 #include "Primitive3DGS.cuh"
 
 
-/*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    at::Tensor,  // aabb
-    Vanilla3DGS::Screen::TensorTupleProj  // out splats
-> projection_3dgs_forward_tensor(
-    // inputs
-    const Vanilla3DGS::World::TensorTuple &in_splats,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
-    const gsplat::CameraModelType camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs
-) {
-    return launch_projection_fused_fwd_kernel<Vanilla3DGS>(
-        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs);
-}
-
-
-/*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    Vanilla3DGS::World::TensorTuple,  // v_splats
-    at::Tensor  // v_viewmats
-> projection_3dgs_backward_tensor(
-    // fwd inputs
-    const Vanilla3DGS::World::TensorTuple &splats_world,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
-    // fwd outputs
-    const at::Tensor aabb,  // [..., C, N, 2]
-    // grad outputs
-    const Vanilla3DGS::Screen::TensorTupleProj &v_splats_screen,
-    const bool viewmats_requires_grad
-) {
-    return launch_projection_projection_fused_bwd_kernel<Vanilla3DGS>(
-        splats_world, viewmats, intrins, image_width, image_height, camera_model, dist_coeffs,
-        aabb, v_splats_screen, viewmats_requires_grad);
-}
-
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<

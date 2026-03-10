@@ -77,7 +77,9 @@ def get_extensions():
     from torch.utils.cpp_extension import CUDAExtension
 
     extensions_dir = os.path.abspath(os.path.join("spirulae_splat", "splat", "cuda", "csrc"))
-    sources = glob.glob(os.path.join(extensions_dir, "*.cu")) + \
+    sources = \
+        glob.glob(os.path.join(os.path.join(extensions_dir, "generated", "kernel_instantiation"), "*.cu")) + \
+        glob.glob(os.path.join(extensions_dir, "*.cu")) + \
         glob.glob(os.path.join(extensions_dir, "*.cpp"))
     sources = [path for path in sources if "hip" not in path]
 
@@ -114,14 +116,15 @@ def get_extensions():
     nvcc_flags = os.getenv("NVCC_FLAGS", "")
     nvcc_flags = [] if nvcc_flags == "" else nvcc_flags.split(" ")
     nvcc_flags += ["-O3", "--use_fast_math"]
+    # nvcc_flags += ["-rdc=true", "-dlto"]
     # nvcc_flags += ["--extra-device-vectorization"]
     if LINE_INFO:
         nvcc_flags += ["-lineinfo", "--generate-line-info", "--source-in-ptx"]
         nvcc_flags += [
             # "-Xptxas", "-v",
             "-Xptxas", "--warn-on-double-precision-use",
-            "-Xptxas", "--warn-on-local-memory-usage",
-            "-Xptxas", "--warn-on-spills"
+            # "-Xptxas", "--warn-on-local-memory-usage",
+            # "-Xptxas", "--warn-on-spills"
         ]
     if torch.version.hip:
         # USE_ROCM was added to later versions of PyTorch.
@@ -159,6 +162,7 @@ def get_extensions():
         undef_macros=undef_macros,
         extra_compile_args=extra_compile_args,
         extra_link_args=extra_link_args,
+        # dlink=True
     )
 
     return [extension]
@@ -179,9 +183,13 @@ for filename in [
     'PerPixelLoss',
     'PixelWise',
     'Projection',
+    'ProjectionFwd',
+    'ProjectionBwd',
     'ProjectionHeteroFwd',
     'ProjectionHeteroBwd',
     'Rasterization',
+    'RasterizationEval3DFwd',
+    'RasterizationEval3DBwd',
     'RasterizationSortedEval3DFwd',
     'RasterizationSortedEval3DBwd',
     'Optimizer',

@@ -1040,7 +1040,7 @@ class SpirulaeModel(Model):
             compute_hessian_diagonal=self.config.compute_hessian_diagonal,
             **kwargs,
         )
-        torch.cuda.empty_cache()
+        # torch.cuda.empty_cache()
         if self.config.compute_hessian_diagonal is not None:
             rgbd = list(rgbd)
             rgbd[0], backward_metadata_injector = _BackwardMetadataInjector.apply(rgbd[0])

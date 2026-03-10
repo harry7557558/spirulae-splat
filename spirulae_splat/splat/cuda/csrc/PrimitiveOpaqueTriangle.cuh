@@ -103,11 +103,14 @@ struct OpaqueTriangle::World {
     FixedArray<float3, 16> sh_coeffs;
     FixedArray<float3, 2> ch_coeffs;
 
+    #ifndef NO_TORCH
     typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTuple;
     // typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTuple;
+    #endif
 
     struct Buffer;
 
+    #ifndef NO_TORCH
     struct Tensor {
         at::Tensor means;
         at::Tensor quats;
@@ -165,6 +168,7 @@ struct OpaqueTriangle::World {
 
         Buffer buffer() { return Buffer(*this); }
     };
+    #endif
 
     struct Buffer {
         float3* __restrict__ means;
@@ -179,6 +183,7 @@ struct OpaqueTriangle::World {
 
         Buffer() {}
 
+        #ifndef NO_TORCH
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.means);
             CHECK_INPUT(tensors.means);
@@ -200,6 +205,7 @@ struct OpaqueTriangle::World {
             num_sh = tensors.features_sh.size(-2);
             features_ch = (float3*)tensors.features_ch.data_ptr<float>();
         }
+        #endif
     };
 
 #ifdef __CUDACC__
@@ -277,10 +283,13 @@ struct OpaqueTriangle::RenderOutput {
     float depth;
     float3 normal;
 
+    #ifndef NO_TORCH
     typedef std::tuple<at::Tensor, at::Tensor, at::Tensor> TensorTuple;
+    #endif
 
     struct Buffer;
 
+    #ifndef NO_TORCH
     struct Tensor {
         at::Tensor rgbs;
         at::Tensor depths;
@@ -323,6 +332,7 @@ struct OpaqueTriangle::RenderOutput {
 
         Buffer buffer() { return Buffer(*this); }
     };
+    #endif
 
     struct Buffer {
         float3* __restrict__ rgbs;
@@ -331,6 +341,7 @@ struct OpaqueTriangle::RenderOutput {
 
         Buffer() : rgbs(nullptr), depths(nullptr), normals(nullptr) {}
 
+        #ifndef NO_TORCH
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.rgbs);
             CHECK_INPUT(tensors.rgbs);
@@ -340,6 +351,7 @@ struct OpaqueTriangle::RenderOutput {
             depths = tensors.depths.data_ptr<float>();
             normals = (float3*)tensors.normals.data_ptr<float>();
         }
+        #endif
     };
 
 #ifdef __CUDACC__
@@ -407,11 +419,14 @@ struct OpaqueTriangle::Screen {
 #endif
     float3 normal;
 
+    #ifndef NO_TORCH
     typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTupleProj;
     typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTuple;
+    #endif
 
     struct Buffer;
 
+    #ifndef NO_TORCH
     struct Tensor {
         bool hasWorld;
         at::Tensor hardness;
@@ -496,6 +511,7 @@ struct OpaqueTriangle::Screen {
 
         Buffer buffer() { return Buffer(*this); }
     };
+    #endif
 
     struct Buffer {
         float2* __restrict__ hardness = nullptr;
@@ -507,6 +523,7 @@ struct OpaqueTriangle::Screen {
 
         Buffer() {}
 
+        #ifndef NO_TORCH
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.verts);
             if (tensors.hasWorld) {
@@ -523,6 +540,7 @@ struct OpaqueTriangle::Screen {
             size = tensors.hasWorld ?
                 tensors.hardness.numel() / 2 : tensors.verts.numel() / 9;
         }
+        #endif
     };
 
 #ifdef __CUDACC__

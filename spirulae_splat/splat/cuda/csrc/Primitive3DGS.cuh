@@ -113,10 +113,13 @@ struct _Base3DGS<antialiased>::World {
     float opacity;
     FixedArray<float3, 16> sh_coeffs;
 
+    #ifndef NO_TORCH
     typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, std::optional<at::Tensor>> TensorTuple;
+    #endif
 
     struct Buffer;
 
+    #ifndef NO_TORCH
     struct Tensor {
         at::Tensor means;
         at::Tensor quats;
@@ -165,6 +168,7 @@ struct _Base3DGS<antialiased>::World {
 
         Buffer buffer() { return Buffer(*this); }
     };
+    #endif
 
     struct Buffer {
         float3* __restrict__ means;
@@ -177,6 +181,7 @@ struct _Base3DGS<antialiased>::World {
 
         Buffer() {}
 
+        #ifndef NO_TORCH
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.means);
             CHECK_INPUT(tensors.means);
@@ -196,6 +201,7 @@ struct _Base3DGS<antialiased>::World {
             num_sh = tensors.features_sh.has_value() ?
                 tensors.features_sh.value().size(-2) : 0;
         }
+        #endif
     };
 
 #ifdef __CUDACC__
@@ -256,10 +262,13 @@ struct _Base3DGS<antialiased>::RenderOutput {
     float3 rgb;
     float depth;
 
+    #ifndef NO_TORCH
     typedef std::tuple<at::Tensor, at::Tensor> TensorTuple;
+    #endif
 
     struct Buffer;
 
+    #ifndef NO_TORCH
     struct Tensor {
         at::Tensor rgbs;
         at::Tensor depths;
@@ -299,6 +308,7 @@ struct _Base3DGS<antialiased>::RenderOutput {
 
         Buffer buffer() { return Buffer(*this); }
     };
+    #endif
 
     struct Buffer {
         float3* __restrict__ rgbs;
@@ -306,6 +316,7 @@ struct _Base3DGS<antialiased>::RenderOutput {
 
         Buffer() : rgbs(nullptr), depths(nullptr) {}
 
+        #ifndef NO_TORCH
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.rgbs);
             CHECK_INPUT(tensors.rgbs);
@@ -313,6 +324,7 @@ struct _Base3DGS<antialiased>::RenderOutput {
             rgbs = (float3*)tensors.rgbs.template data_ptr<float>();
             depths = tensors.depths.template data_ptr<float>();
         }
+        #endif
     };
 
 #ifdef __CUDACC__
@@ -372,11 +384,14 @@ struct _Base3DGS<antialiased>::Screen {
     float3 rgb;
     float2 xy_abs;
 
+    #ifndef NO_TORCH
     typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTupleProj;
     typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, std::optional<at::Tensor>> TensorTuple;
+    #endif
 
     struct Buffer;
 
+    #ifndef NO_TORCH
     struct Tensor {
         at::Tensor means2d;
         at::Tensor depths;
@@ -465,6 +480,7 @@ struct _Base3DGS<antialiased>::Screen {
 
         Buffer buffer() { return Buffer(*this); }
     };
+    #endif
 
     struct Buffer {
         float2* __restrict__ means2d;  // [I, N, 2] or [nnz, 2]
@@ -476,6 +492,7 @@ struct _Base3DGS<antialiased>::Screen {
 
         Buffer() {}
 
+        #ifndef NO_TORCH
         Buffer(const Tensor& tensors) {
             DEVICE_GUARD(tensors.means2d);
             CHECK_INPUT(tensors.means2d);
@@ -492,6 +509,7 @@ struct _Base3DGS<antialiased>::Screen {
                 (float2*)tensors.absgrad.value().template data_ptr<float>()
                 : nullptr;
         }
+        #endif
     };
 
 #ifdef __CUDACC__
