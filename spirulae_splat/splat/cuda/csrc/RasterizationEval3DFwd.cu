@@ -258,14 +258,16 @@ std::tuple<
     bool output_distortion
 ) {
     if (output_distortion)
-        return rasterize_to_pixels_eval3d_fwd_tensor<SphericalVoronoi3DGUT_Default, true, false>(
+        // return rasterize_to_pixels_eval3d_fwd_tensor<SphericalVoronoi3DGUT_Default, true, false>(
+        return rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, true, false>(
             splats_tuple,
             viewmats, intrins, camera_model, dist_coeffs,
             backgrounds, masks,
             image_width, image_height,
             tile_offsets, flatten_ids
         );
-    return rasterize_to_pixels_eval3d_fwd_tensor<SphericalVoronoi3DGUT_Default, false, false>(
+    // return rasterize_to_pixels_eval3d_fwd_tensor<SphericalVoronoi3DGUT_Default, false, false>(
+    return rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, false, false>(
         splats_tuple,
         viewmats, intrins, camera_model, dist_coeffs,
         backgrounds, masks,

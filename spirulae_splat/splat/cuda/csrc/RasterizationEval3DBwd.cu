@@ -401,8 +401,6 @@ std::tuple<
 // SphericalVoronoi3DGUT
 // ================
 
-// TODO: Is this the same as Vanilla3DGUT?
-
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<
@@ -436,7 +434,8 @@ std::tuple<
     bool need_viewmat_grad
 ) {
     if (v_distortion_outputs.has_value())
-        return rasterize_to_pixels_eval3d_bwd_tensor<SphericalVoronoi3DGUT_Default, true>(
+        // return rasterize_to_pixels_eval3d_bwd_tensor<SphericalVoronoi3DGUT_Default, true>(
+        return rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, true>(
             splats_tuple,
             viewmats, intrins, camera_model, dist_coeffs,
             backgrounds, masks,
@@ -445,7 +444,8 @@ std::tuple<
             v_render_outputs, v_render_alphas, v_distortion_outputs,
             need_viewmat_grad
         );
-    return rasterize_to_pixels_eval3d_bwd_tensor<SphericalVoronoi3DGUT_Default, false>(
+    // return rasterize_to_pixels_eval3d_bwd_tensor<SphericalVoronoi3DGUT_Default, false>(
+    return rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, false>(
         splats_tuple,
         viewmats, intrins, camera_model, dist_coeffs,
         backgrounds, masks,

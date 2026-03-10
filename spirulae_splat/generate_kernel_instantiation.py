@@ -150,6 +150,34 @@ def generate_ProjectionBwd():
     generate_kernel_instantiation("ProjectionBwd", definition, map_header, map_body, includes)
 
 
+def generate_RasterizationFwd():
+    definition = extract_kernel_definition("RasterizationFwd.cu", "rasterize_to_pixels_fwd_kernel_wrapper")
+    map_header = ["typename SplatPrimitive"]
+    map_body = [
+        ("Vanilla3DGS",),
+        # ("MipSplatting",),
+    ]
+    includes = [("Primitive3DGS.cuh", "RasterizationFwd_kernel.cuh")] * 1
+
+    generate_kernel_instantiation("RasterizationFwd", definition, map_header, map_body, includes)
+
+
+def generate_RasterizationBwd():
+    definition = extract_kernel_definition("RasterizationBwd.cu", "rasterize_to_pixels_bwd_kernel_wrapper")
+    map_header = ["typename SplatPrimitive", None, None]
+    map_body = [
+        ("Vanilla3DGS", "false", "false"),
+        ("Vanilla3DGS", "false", "true"),
+        ("Vanilla3DGS", "true", "true"),
+        # ("MipSplatting", "false", "false"),
+        # ("MipSplatting", "false", "true"),
+        # ("MipSplatting", "true", "true"),
+    ]
+    includes = [("Primitive3DGS.cuh", "RasterizationBwd_kernel.cuh")] * 3
+
+    generate_kernel_instantiation("RasterizationBwd", definition, map_header, map_body, includes)
+
+
 def generate_RasterizationEval3DFwd():
     definition = extract_kernel_definition("RasterizationEval3DFwd.cu", "rasterize_to_pixels_eval3d_fwd_kernel_wrapper")
     map_header = ["typename SplatPrimitive", None, None, None]
@@ -158,15 +186,15 @@ def generate_RasterizationEval3DFwd():
         ("Vanilla3DGUT", "gsplat::CameraModelType::PINHOLE", "true", "false"),
         ("Vanilla3DGUT", "gsplat::CameraModelType::FISHEYE", "false", "false"),
         ("Vanilla3DGUT", "gsplat::CameraModelType::FISHEYE", "true", "false"),
-        ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::PINHOLE", "false", "false"),
-        ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::PINHOLE", "true", "false"),
-        ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::FISHEYE", "false", "false"),
-        ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::FISHEYE", "true", "false"),
+        # ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::PINHOLE", "false", "false"),
+        # ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::PINHOLE", "true", "false"),
+        # ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::FISHEYE", "false", "false"),
+        # ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::FISHEYE", "true", "false"),
         ("VoxelPrimitive", "gsplat::CameraModelType::PINHOLE", "true", "true"),
         ("VoxelPrimitive", "gsplat::CameraModelType::FISHEYE", "true", "true"),
     ]
     includes = [("Primitive3DGUT.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 4 + \
-        [("Primitive3DGUT_SV.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 4 + \
+        [("Primitive3DGUT_SV.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 0 + \
         [("PrimitiveVoxel.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 2
 
     generate_kernel_instantiation("RasterizationEval3DFwd", definition, map_header, map_body, includes)
@@ -192,21 +220,21 @@ def generate_RasterizationEval3DBwd():
         ("Vanilla3DGUT", "gsplat::CameraModelType::FISHEYE", "false", "true", "true"),
         ("Vanilla3DGUT", "gsplat::CameraModelType::FISHEYE", "true", "false", "true"),
         ("Vanilla3DGUT", "gsplat::CameraModelType::FISHEYE", "true", "true", "true"),
-        ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::PINHOLE", "false", "false", "false"),
-        ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::PINHOLE", "false", "true", "false"),
-        ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::PINHOLE", "true", "false", "false"),
-        ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::PINHOLE", "true", "true", "false"),
-        ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::FISHEYE", "false", "false", "false"),
-        ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::FISHEYE", "false", "true", "false"),
-        ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::FISHEYE", "true", "false", "false"),
-        ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::FISHEYE", "true", "true", "false"),
+        # ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::PINHOLE", "false", "false", "false"),
+        # ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::PINHOLE", "false", "true", "false"),
+        # ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::PINHOLE", "true", "false", "false"),
+        # ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::PINHOLE", "true", "true", "false"),
+        # ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::FISHEYE", "false", "false", "false"),
+        # ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::FISHEYE", "false", "true", "false"),
+        # ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::FISHEYE", "true", "false", "false"),
+        # ("SphericalVoronoi3DGUT_Default", "gsplat::CameraModelType::FISHEYE", "true", "true", "false"),
         ("VoxelPrimitive", "gsplat::CameraModelType::PINHOLE", "false", "false", "false"),
         ("VoxelPrimitive", "gsplat::CameraModelType::PINHOLE", "false", "true", "false"),
         ("VoxelPrimitive", "gsplat::CameraModelType::FISHEYE", "false", "false", "false"),
         ("VoxelPrimitive", "gsplat::CameraModelType::FISHEYE", "false", "true", "false"),
     ]
     includes = [("Primitive3DGUT.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 16 + \
-        [("Primitive3DGUT_SV.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 8 + \
+        [("Primitive3DGUT_SV.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 0 + \
         [("PrimitiveVoxel.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 4
 
     generate_kernel_instantiation("RasterizationEval3DBwd", definition, map_header, map_body, includes)
@@ -214,5 +242,7 @@ def generate_RasterizationEval3DBwd():
 
 generate_ProjectionFwd()
 generate_ProjectionBwd()
+generate_RasterizationFwd()
+generate_RasterizationBwd()
 generate_RasterizationEval3DFwd()
 generate_RasterizationEval3DBwd()
