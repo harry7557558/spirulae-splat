@@ -27,12 +27,7 @@ namespace SlangProjectionUtils {
 #include "common.cuh"
 
 
-// constexpr uint SPLAT_BATCH_SIZE_NO_DISTORTION = 128;
-// ^ TODO: behavior similar to https://github.com/nerfstudio-project/gsplat/issues/872
-// even if this is a different backward implementation?
 constexpr uint SPLAT_BATCH_SIZE_NO_DISTORTION = WARP_SIZE;
-// ^ this one is good
-
 constexpr uint SPLAT_BATCH_SIZE_WITH_DISTORTION = WARP_SIZE;
 
 
@@ -231,7 +226,9 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
 
         // process gaussians in the current batch for this pixel
         // 0 index is the furthest back gaussian in the batch
-        for (int t = 0; t < splat_batch_size + BLOCK_SIZE - 1; ++t, __syncwarp()) {
+        for (int t = 0; t < splat_batch_size + BLOCK_SIZE - 1; ++t,
+                (SPLAT_BATCH_SIZE_CONST <= WARP_SIZE ? __syncwarp() : __syncthreads())
+        ) {
             int pix_id = t - thread_id;
             if (pix_id < 0 || pix_id >= BLOCK_SIZE || splat_idx < range_start)
                 continue;

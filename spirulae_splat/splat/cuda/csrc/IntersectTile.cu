@@ -163,6 +163,7 @@ __global__ void intersect_mask_eval3d_kernel(
         (range_end - range_start + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     __shared__ typename SplatPrimitive::Screen splat_batch[BLOCK_SIZE];
+    __shared__ bool mask_batch[BLOCK_SIZE];
 
     uint32_t tr = block.thread_rank();
     for (uint32_t b = 0; b < num_batches; ++b) {
@@ -180,6 +181,7 @@ __global__ void intersect_mask_eval3d_kernel(
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [I * N] or [nnz]
             splat_batch[tr] = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, g);
+            mask_batch[tr] = false;
         }
         block.sync();
 
@@ -192,13 +194,15 @@ __global__ void intersect_mask_eval3d_kernel(
                 ((T *= 1.0f - alpha) > kTransmitThreshold);
 
             // atomic OR is_visible to mask[idx]
-            uint32_t idx = batch_start + t;
             bool is_any_visible = (__ballot_sync(~0u, is_visible) != 0);
             if (is_any_visible && tr % WARP_SIZE == 0)
-                mask[idx] = true;  // no atomic needed since write same value
+                mask_batch[t] = true;  // no atomic needed since write same value
         }
+        block.sync();
 
-        // TODO: probably easy to implement culling for occluded splats here
+        if (idx < range_end) {
+            mask[idx] = mask_batch[tr];
+        }
     }
 }
 
@@ -242,6 +246,7 @@ __global__ void intersect_mask_kernel(
         (range_end - range_start + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     __shared__ typename SplatPrimitive::Screen splat_batch[BLOCK_SIZE];
+    __shared__ bool mask_batch[BLOCK_SIZE];
 
     uint32_t tr = block.thread_rank();
     for (uint32_t b = 0; b < num_batches; ++b) {
@@ -259,6 +264,7 @@ __global__ void intersect_mask_kernel(
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [I * N] or [nnz]
             splat_batch[tr] = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, g);
+            mask_batch[tr] = false;
         }
         block.sync();
 
@@ -271,13 +277,15 @@ __global__ void intersect_mask_kernel(
                 ((T *= 1.0f - alpha) > kTransmitThreshold);
 
             // atomic OR is_visible to mask[idx]
-            uint32_t idx = batch_start + t;
             bool is_any_visible = (__ballot_sync(~0u, is_visible) != 0);
             if (is_any_visible && tr % WARP_SIZE == 0)
-                mask[idx] = true;  // no atomic needed since write same value
+                mask_batch[t] = true;  // no atomic needed since write same value
         }
+        block.sync();
 
-        // TODO: probably easy to implement culling for occluded splats here
+        if (idx < range_end) {
+            mask[idx] = mask_batch[tr];
+        }
     }
 }
 

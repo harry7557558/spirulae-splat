@@ -19,12 +19,7 @@ namespace cg = cooperative_groups;
 #include "common.cuh"
 
 
-// constexpr uint SPLAT_BATCH_SIZE_NO_DISTORTION = 128;
-// ^ TODO: behavior similar to https://github.com/nerfstudio-project/gsplat/issues/872
-// even if this is a different backward implementation?
 constexpr uint SPLAT_BATCH_SIZE_NO_DISTORTION = WARP_SIZE;
-// ^ this one is good
-
 constexpr uint SPLAT_BATCH_SIZE_WITH_DISTORTION = WARP_SIZE;
 
 
@@ -288,7 +283,11 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             // v_pix_colors remains the same
 
             }}
-            block.sync();
+
+            if (SPLAT_BATCH_SIZE > WARP_SIZE)
+                block.sync();
+            else
+                __syncwarp();
         }
 
         // accumulate gradient
