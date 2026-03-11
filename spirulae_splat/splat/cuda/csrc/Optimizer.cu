@@ -18,6 +18,8 @@ namespace SlangPixelWise {
 #endif
 #endif
 
+#include <ATen/ops/empty.h>
+
 
 inline constexpr float kSh0 = 0.28209479177387814f;
 
@@ -193,7 +195,7 @@ void offloaded_adam(
     CHECK_HOST(exp_avg); CHECK_CONTIGUOUS(exp_avg);
     CHECK_HOST(exp_avg_sq); CHECK_CONTIGUOUS(exp_avg_sq);
 
-    const long numel = param.numel();
+    const int64_t numel = param.numel();
     if (numel == 0) return;
 
     const float bias_correction1 = 1.0f - std::pow(beta1, step);
@@ -225,16 +227,76 @@ void offloaded_adam(
                          size, step_size, beta1, beta2, eps, bc2_sqrt);
 
         cudaMemcpyAsync(p_ptr + offset, curr_h_p, size * sizeof(float), cudaMemcpyHostToDevice, stream);
-        // cudaStreamSynchronize(stream);
     };
 
     for (int64_t offset = 0; offset < numel; offset += chunk_size) {
         int current_chunk = std::min(chunk_size, (int)(numel - offset));
         process_chunk(offset, current_chunk, (int)offset % 2); 
     }
+    cudaStreamSynchronize(stream);
 
     cudaFreeHost(h_p);
     cudaFreeHost(h_g);
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void semi_offloaded_adam(
+    at::Tensor param,      // Device
+    at::Tensor grad,       // Device
+    at::Tensor exp_avg,    // Host
+    at::Tensor exp_avg_sq, // Host
+    float lr, float beta1, float beta2, float eps, int step
+) {
+    CHECK_INPUT(param);
+    CHECK_INPUT(grad);
+    CHECK_HOST(exp_avg); CHECK_CONTIGUOUS(exp_avg);
+    CHECK_HOST(exp_avg_sq); CHECK_CONTIGUOUS(exp_avg_sq);
+
+    const int64_t numel = param.numel();
+    if (numel == 0) return;
+
+    // 64MB VRAM; TODO: reduce this for smaller inputs
+    constexpr int64_t chunk_size = 64 * 0x100000 / (2 * sizeof(float));
+
+    float* p_ptr = param.data_ptr<float>();
+    float* g_ptr = grad.data_ptr<float>();
+    float* m_ptr_host = exp_avg.data_ptr<float>();
+    float* v_ptr_host = exp_avg_sq.data_ptr<float>();
+
+    at::Tensor buffer = at::empty({2, chunk_size}, param.options());
+    float* m_ptr_device = buffer.data_ptr<float>();
+    float* v_ptr_device = buffer.data_ptr<float>() + chunk_size;
+
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
+    auto process_chunk = [&](int64_t offset, size_t size) {
+
+        cudaMemcpyAsync(m_ptr_device, m_ptr_host+offset, size * sizeof(float), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(v_ptr_device, v_ptr_host+offset, size * sizeof(float), cudaMemcpyHostToDevice, stream);
+        cudaStreamSynchronize(stream);
+
+        fused_adam_kernel<float><<<_LAUNCH_ARGS_1D(size, 256)>>>(
+            p_ptr + offset,
+            g_ptr + offset,
+            m_ptr_device,
+            v_ptr_device,
+            lr,
+            beta1,
+            beta2,
+            eps,
+            step,
+            numel
+        );
+
+        cudaMemcpyAsync(m_ptr_host+offset, m_ptr_device, size * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        cudaMemcpyAsync(v_ptr_host+offset, v_ptr_device, size * sizeof(float), cudaMemcpyDeviceToHost, stream);
+    };
+
+    for (int64_t offset = 0; offset < numel; offset += chunk_size) {
+        int64_t current_chunk = std::min(chunk_size, (numel - offset));
+        process_chunk(offset, current_chunk); 
+    }
+    cudaStreamSynchronize(stream);
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -253,7 +315,8 @@ void fused_adam_multi(
     
     for (int i = 0; i < num_tensors; i++)
         (exp_avgs[i].is_cuda() && exp_avg_sqs[i].is_cuda() ?
-            fused_adam : offloaded_adam
+            // fused_adam : offloaded_adam
+            fused_adam : semi_offloaded_adam
         )(
             params[i],
             grads[i],
