@@ -79,8 +79,7 @@ __global__ void intersect_tile_kernel(
 
     int64_t iid = idx / N;
 
-    // depths are in log space, exp(depth) gives ray depth
-    int32_t depth_i32 = __float_as_int(__expf(depths_buffer[idx]));
+    int32_t depth_i32 = __float_as_int(depths_buffer[idx]);
     
     int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_splat[idx - 1];
     for (int32_t i = tile_min.y; i < tile_max.y; ++i) {
