@@ -29,7 +29,7 @@ __global__ void projection_fused_fwd_kernel(
     const float near_plane,
     const float far_plane,
     // outputs
-    int4 *__restrict__ aabbs,         // [B, C, N, 4]
+    float4 *__restrict__ aabbs,         // [B, C, N, 4]
     typename SplatPrimitive::Screen::Buffer splats_screen
 ) {
     // parallelize over B * C * N.
@@ -63,7 +63,7 @@ __global__ void projection_fused_fwd_kernel(
         SplatPrimitive::World::load(splats_world, bid * N + gid);
 
     // Projection
-    int4 aabb;
+    float4 aabb;
     typename SplatPrimitive::Screen splat_screen;
     switch (camera_model) {
     case gsplat::CameraModelType::PINHOLE: // perspective projection
@@ -78,15 +78,15 @@ __global__ void projection_fused_fwd_kernel(
     }
 
     // Save results
-    aabb.x = min(max(aabb.x, 0), image_width-1);
-    aabb.y = min(max(aabb.y, 0), image_height-1);
-    aabb.z = min(max(aabb.z, 0), image_width-1);
-    aabb.w = min(max(aabb.w, 0), image_height-1);
-    if ((aabb.z-aabb.x)*(aabb.w-aabb.y) > 0) {
+    aabb.x = fminf(fmaxf(aabb.x, 0.0f), image_width-1.0f);
+    aabb.y = fminf(fmaxf(aabb.y, 0.0f), image_height-1.0f);
+    aabb.z = fminf(fmaxf(aabb.z, 0.0f), image_width-1.0f);
+    aabb.w = fminf(fmaxf(aabb.w, 0.0f), image_height-1.0f);
+    if (aabb.z - aabb.x > 1e-3f && aabb.w - aabb.y > 1e-3f) {
         splat_screen.saveParamsToBuffer(splats_screen, idx);
         aabbs[idx] = aabb;
     } else {
-        aabbs[idx] = {0, 0, 0, 0};
+        aabbs[idx] = {0.0f, 0.0f, 0.0f, 0.0f};
     }
 }
 
@@ -106,11 +106,11 @@ void projection_fused_fwd_kernel_wrapper(
     const float near_plane,
     const float far_plane,
     // outputs
-    int4 *__restrict__ aabbs,         // [B, C, N, 4]
+    float4 *__restrict__ aabbs,         // [B, C, N, 4]
     typename SplatPrimitive::Screen::Buffer splats_screen
 ) {
     constexpr uint block = 128;
-    projection_fused_fwd_kernel<SplatPrimitive, gsplat::CameraModelType::PINHOLE>
+    projection_fused_fwd_kernel<SplatPrimitive, camera_model>
     <<<_CEIL_DIV(B*C*N, block), block, 0, stream>>>(
         B, C, N,
         splats_world, viewmats, intrins, dist_coeffs_buffer,

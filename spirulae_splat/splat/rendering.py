@@ -424,7 +424,7 @@ def rasterization(
     tile_height = math.ceil(height / float(TILE_SIZE))
     if packed:
         # TODO: add support
-        radii = (aabb_xyxy[..., 2:] - aabb_xyxy[..., :2] + 1) // 2
+        radii = (0.5 * (aabb_xyxy[..., 2:] - aabb_xyxy[..., :2]) + 0.5).int()
         means2d = (aabb_xyxy[..., 2:] + aabb_xyxy[..., :2]).float() / 2
         tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
             means2d,

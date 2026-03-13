@@ -50,7 +50,7 @@ __global__ void projection_hetero_forward_kernel(
     // outputs
     int64_t *__restrict__ camera_ids,    // [nnz]
     int64_t *__restrict__ gaussian_ids,  // [nnz]
-    int4 *__restrict__ aabbs,    // [nnz, 4]
+    float4 *__restrict__ aabbs,    // [nnz, 4]
     typename SplatPrimitive::Screen::Buffer splats_proj
 ) {
     int32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -81,7 +81,7 @@ __global__ void projection_hetero_forward_kernel(
         SplatPrimitive::World::load(splats_world, splat_idx);
 
     // Projection
-    int4 aabb;
+    float4 aabb;
     typename SplatPrimitive::Screen splat_proj;
     switch (camera_model) {
     case gsplat::CameraModelType::PINHOLE: // perspective projection
@@ -100,10 +100,14 @@ __global__ void projection_hetero_forward_kernel(
     // TODO: use actual original cx, cy
     int offset_x = (int)roundf(0.5f * image_width - cx);
     int offset_y = (int)roundf(0.5f * image_height - cy);
-    aabb.x = min(max(aabb.x + offset_x, 0), image_width-1) - offset_x;
-    aabb.y = min(max(aabb.y + offset_y, 0), image_height-1) - offset_y;
-    aabb.z = min(max(aabb.z + offset_x, 0), image_width-1) - offset_x;
-    aabb.w = min(max(aabb.w + offset_y, 0), image_height-1) - offset_y;
+    if (aabb.z - aabb.x > 1e-3f && aabb.w - aabb.y > 1e-3f) {
+        aabb.x = fminf(fmaxf(aabb.x + offset_x, 0.0f), image_width-1.0f) - offset_x;
+        aabb.y = fminf(fmaxf(aabb.y + offset_y, 0.0f), image_height-1.0f) - offset_y;
+        aabb.z = fminf(fmaxf(aabb.z + offset_x, 0.0f), image_width-1.0f) - offset_x;
+        aabb.w = fminf(fmaxf(aabb.w + offset_y, 0.0f), image_height-1.0f) - offset_y;
+    } else {
+        aabb = {0.0f, 0.0f, 0.0f, 0.0f};
+    }
     camera_ids[thread_idx] = camera_idx;
     gaussian_ids[thread_idx] = splat_idx;
     aabbs[thread_idx] = aabb;

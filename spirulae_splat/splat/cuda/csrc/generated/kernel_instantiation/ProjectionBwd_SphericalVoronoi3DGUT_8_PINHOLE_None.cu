@@ -21,7 +21,7 @@ template void projection_fused_bwd_kernel_wrapper<
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
-    const int4 * aabb,          // [B, C, N, 4]
+    const float4 * aabb,          // [B, C, N, 4]
     // grad outputs
     SphericalVoronoi3DGUT<8>::Screen::Buffer v_splats_screen,
     SphericalVoronoi3DGUT<8>::Screen::Buffer vr_splats_screen,

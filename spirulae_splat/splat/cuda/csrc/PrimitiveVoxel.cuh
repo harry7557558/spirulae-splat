@@ -33,12 +33,12 @@ struct VoxelPrimitive {
 
     inline static __device__ void project_persp(
         World world, FwdProjCamera cam,
-        Screen& proj, int4& aabb
+        Screen& proj, float4& aabb
     );
 
     inline static __device__ void project_fisheye(
         World world, FwdProjCamera cam,
-        Screen& proj, int4& aabb
+        Screen& proj, float4& aabb
     );
 
     struct BwdProjCamera {
@@ -605,7 +605,7 @@ struct VoxelPrimitive::Screen {
 
 inline __device__ void VoxelPrimitive::project_persp(
     VoxelPrimitive::World world, VoxelPrimitive::FwdProjCamera cam,
-    VoxelPrimitive::Screen& proj, int4& aabb
+    VoxelPrimitive::Screen& proj, float4& aabb
 ) {
     SlangVoxel::projection_voxel_eval3d_persp(
         world.pos, world.size, world.densities, world.sh_coeffs,
@@ -618,7 +618,7 @@ inline __device__ void VoxelPrimitive::project_persp(
 
 inline __device__ void VoxelPrimitive::project_fisheye(
     VoxelPrimitive::World world, VoxelPrimitive::FwdProjCamera cam,
-    VoxelPrimitive::Screen& proj, int4& aabb
+    VoxelPrimitive::Screen& proj, float4& aabb
 ) {
     SlangVoxel::projection_voxel_eval3d_fisheye(
         world.pos, world.size, world.densities, world.sh_coeffs,

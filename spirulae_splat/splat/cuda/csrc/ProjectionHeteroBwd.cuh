@@ -33,7 +33,7 @@ __global__ void projection_3dgs_hetero_backward_kernel(
     // fwd outputs
     const int64_t *__restrict__ camera_ids,     // [nnz]
     const int64_t *__restrict__ gaussian_ids,   // [nnz]
-    const int4 *__restrict__ aabbs,          // [B, C, N, 4]
+    const float4 *__restrict__ aabbs,          // [B, C, N, 4]
     // grad outputs
     typename SplatPrimitive::Screen::Buffer v_splats_proj,
     const bool sparse_grad, // whether the outputs are in COO format [nnz, ...]
@@ -46,12 +46,12 @@ __global__ void projection_3dgs_hetero_backward_kernel(
     if (thread_idx >= nnz)
         return;
 
-    int4 aabb = aabbs[thread_idx];
-    aabb.x = min(max(aabb.x, 0), tile_width-1);
-    aabb.y = min(max(aabb.y, 0), tile_height-1);
-    aabb.z = min(max(aabb.z, 0), tile_width-1);
-    aabb.w = min(max(aabb.w, 0), tile_height-1);
-    if ((aabb.z-aabb.x) * (aabb.w-aabb.y) <= 0)
+    float4 aabb = aabbs[thread_idx];
+    aabb.x = fminf(fmaxf(aabb.x, 0.0f), tile_width-1.0f);
+    aabb.y = fminf(fmaxf(aabb.y, 0.0f), tile_height-1.0f);
+    aabb.z = fminf(fmaxf(aabb.z, 0.0f), tile_width-1.0f);
+    aabb.w = fminf(fmaxf(aabb.w, 0.0f), tile_height-1.0f);
+    if (aabb.z <= aabb.x || aabb.w <= aabb.y)
         return;
 
     int32_t camera_idx = camera_ids[thread_idx];

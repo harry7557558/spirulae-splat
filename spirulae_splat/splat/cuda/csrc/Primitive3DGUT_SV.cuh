@@ -19,12 +19,12 @@ struct SphericalVoronoi3DGUT : public Base3DGUT {
 
     inline static __device__ void project_persp(
         World world, FwdProjCamera cam,
-        Screen& proj, int4& aabb
+        Screen& proj, float4& aabb
     );
 
     inline static __device__ void project_fisheye(
         World world, FwdProjCamera cam,
-        Screen& proj, int4& aabb
+        Screen& proj, float4& aabb
     );
 
     struct BwdProjCamera {
@@ -232,7 +232,7 @@ struct SphericalVoronoi3DGUT<num_sv>::World : public Base3DGUT::World {
 template<int num_sv>
 inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_persp(
     SphericalVoronoi3DGUT<num_sv>::World world, SphericalVoronoi3DGUT<num_sv>::FwdProjCamera cam,
-    SphericalVoronoi3DGUT<num_sv>::Screen& proj, int4& aabb
+    SphericalVoronoi3DGUT<num_sv>::Screen& proj, float4& aabb
 ) {
     float2 xy;
     Slang3DGSSV::projection_3dgut_sv_persp(
@@ -248,7 +248,7 @@ inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_persp(
 template<int num_sv>
 inline __device__ void SphericalVoronoi3DGUT<num_sv>::project_fisheye(
     SphericalVoronoi3DGUT<num_sv>::World world, SphericalVoronoi3DGUT<num_sv>::FwdProjCamera cam,
-    SphericalVoronoi3DGUT<num_sv>::Screen& proj, int4& aabb
+    SphericalVoronoi3DGUT<num_sv>::Screen& proj, float4& aabb
 ) {
     float2 xy;
     Slang3DGSSV::projection_3dgut_sv_fisheye(

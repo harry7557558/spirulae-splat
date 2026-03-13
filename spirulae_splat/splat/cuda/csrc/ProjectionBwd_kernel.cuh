@@ -31,7 +31,7 @@ __global__ void projection_fused_bwd_kernel(
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
-    const int4 *__restrict__ aabb,          // [B, C, N, 4]
+    const float4 *__restrict__ aabb,          // [B, C, N, 4]
     // grad outputs
     typename SplatPrimitive::Screen::Buffer v_splats_screen,
     typename SplatPrimitive::Screen::Buffer vr_splats_screen,
@@ -46,7 +46,7 @@ __global__ void projection_fused_bwd_kernel(
 ) {
     // parallelize over B * C * N.
     uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= B * C * N || (aabb[idx].z-aabb[idx].x)*(aabb[idx].w-aabb[idx].y) <= 0) {
+    if (idx >= B * C * N || (aabb[idx].z <= aabb[idx].x || aabb[idx].w <= aabb[idx].y)) {
         return;
     }
     const uint32_t bid = idx / (C * N); // batch id
@@ -176,7 +176,7 @@ void projection_fused_bwd_kernel_wrapper(
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
-    const int4 * aabb,          // [B, C, N, 4]
+    const float4 * aabb,          // [B, C, N, 4]
     // grad outputs
     typename SplatPrimitive::Screen::Buffer v_splats_screen,
     typename SplatPrimitive::Screen::Buffer vr_splats_screen,

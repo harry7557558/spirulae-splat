@@ -21,6 +21,6 @@ template void projection_fused_fwd_kernel_wrapper<
     const float near_plane,
     const float far_plane,
     // outputs
-    int4 *__restrict__ aabbs,         // [B, C, N, 4]
+    float4 *__restrict__ aabbs,         // [B, C, N, 4]
     SphericalVoronoi3DGUT<6>::Screen::Buffer splats_screen
 );

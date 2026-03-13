@@ -25,7 +25,7 @@
     const uint image_height, \
     no_diff const float near_plane, \
     no_diff const float far_plane, \
-    out int4 aabb_xyxy, \
+    no_diff out float4 aabb_xyxy, \
     out float2 mean2d, \
     out float depth, \
     out float3 conic, \
@@ -44,7 +44,7 @@ void projection_3dgs_sv<let camera_model : CameraModelType, let assume_valid : b
     float cull_z = (camera_model == CameraModelType::FISHEYE) ?
         length(mean_c) : mean_c.z;
     if (!assume_valid && (cull_z < near_plane || cull_z > far_plane)) {
-        aabb_xyxy = {0, 0, 0, 0};
+        aabb_xyxy = float4(0.0f);
         return;
     }
 
@@ -99,7 +99,7 @@ void projection_3dgs_sv<let camera_model : CameraModelType, let assume_valid : b
             );
     }
     if (!assume_valid && !is_valid) {
-        aabb_xyxy = { 0, 0, 0, 0 };
+        aabb_xyxy = float4(0.0f);
         return;
     }
 
@@ -107,7 +107,7 @@ void projection_3dgs_sv<let camera_model : CameraModelType, let assume_valid : b
     static const float eps2d = 0.3;
     float det = add_blur(eps2d, covar2d, compensation);
     if (!assume_valid && det <= 0.f) {
-        aabb_xyxy = {0, 0, 0, 0};
+        aabb_xyxy = float4(0.0f);
         return;
     }
 
@@ -120,7 +120,7 @@ void projection_3dgs_sv<let camera_model : CameraModelType, let assume_valid : b
         if (antialiased)
             opacity *= compensation;
         if (!assume_valid && opacity < ALPHA_THRESHOLD) {
-            aabb_xyxy = {0, 0, 0, 0};
+            aabb_xyxy = float4(0.0f);
             return;
         }
         // Compute opacity-aware bounding box.
@@ -142,11 +142,11 @@ void projection_3dgs_sv<let camera_model : CameraModelType, let assume_valid : b
         xmax <= 0 || xmin >= image_width ||
         ymax <= 0 || ymin >= image_height
     )) {
-        aabb_xyxy = {0, 0, 0, 0};
+        aabb_xyxy = float4(0.0f);
         return;
     }
 
-    aabb_xyxy = {(int)xmin, (int)ymin, (int)xmax, (int)ymax};
+    aabb_xyxy = {xmin, ymin, xmax, ymax};
     depth = get_sorting_depth(mean_c);
     conic = eval3d ? exp(-scale) :
         float3(covar2d_inv[0][0], covar2d_inv[0][1], covar2d_inv[1][1]);

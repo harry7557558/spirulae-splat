@@ -432,7 +432,7 @@ struct SigmaPoints_0
     FixedArray<float, 7>  w_cov_0;
 };
 
-inline __device__ void projection_3dgut_sv_persp(bool antialiased_0, float3  mean_0, float4  quat_0, float3  scale_0, float in_opacity_0, FixedArray<float3 , 2>  sv_sites_0, FixedArray<float3 , 2>  sv_colors_0, Matrix<float, 3, 3>  R_0, float3  t_0, float fx_0, float fy_0, float cx_0, float cy_0, FixedArray<float, 10>  dist_coeffs_0, uint image_width_0, uint image_height_0, float near_plane_0, float far_plane_0, int4  * aabb_xyxy_0, float2  * mean2d_0, float * depth_0, float3  * conic_0, float * opacity_0, float3  * rgb_0)
+inline __device__ void projection_3dgut_sv_persp(bool antialiased_0, float3  mean_0, float4  quat_0, float3  scale_0, float in_opacity_0, FixedArray<float3 , 2>  sv_sites_0, FixedArray<float3 , 2>  sv_colors_0, Matrix<float, 3, 3>  R_0, float3  t_0, float fx_0, float fy_0, float cx_0, float cy_0, FixedArray<float, 10>  dist_coeffs_0, uint image_width_0, uint image_height_0, float near_plane_0, float far_plane_0, float4  * aabb_xyxy_0, float2  * mean2d_0, float * depth_0, float3  * conic_0, float * opacity_0, float3  * rgb_0)
 {
     float _S15;
     float _S16;
@@ -461,7 +461,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_0, float3  mea
         }
         if(_S28)
         {
-            *aabb_xyxy_0 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_0 = make_float4 (0.0f);
             break;
         }
         Matrix<float, 2, 2>  covar2d_0;
@@ -877,7 +877,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_0, float3  mea
         }
         if(!(true & _S28))
         {
-            *aabb_xyxy_0 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_0 = make_float4 (0.0f);
             break;
         }
         float det_orig_0 = *&(((&covar2d_0)->rows + (int(0)))->x) * *&(((&covar2d_0)->rows + (int(1)))->y) - *&(((&covar2d_0)->rows + (int(0)))->y) * *&(((&covar2d_0)->rows + (int(1)))->x);
@@ -889,7 +889,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_0, float3  mea
         float compensation_0 = (F32_sqrt(((F32_max((0.0f), (det_orig_0 / det_blur_0))))));
         if(det_blur_0 <= 0.0f)
         {
-            *aabb_xyxy_0 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_0 = make_float4 (0.0f);
             break;
         }
         *opacity_0 = 1.0f / (1.0f + (F32_exp((- in_opacity_0))));
@@ -899,7 +899,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_0, float3  mea
         }
         if((*opacity_0) < 0.00392156885936856f)
         {
-            *aabb_xyxy_0 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_0 = make_float4 (0.0f);
             break;
         }
         float _S177 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_0 / 0.00392156885936856f)))))))));
@@ -935,10 +935,10 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_0, float3  mea
         }
         if(_S28)
         {
-            *aabb_xyxy_0 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_0 = make_float4 (0.0f);
             break;
         }
-        *aabb_xyxy_0 = make_int4 (int(xmin_0), int(ymin_0), int(xmax_0), int(ymax_0));
+        *aabb_xyxy_0 = make_float4 (xmin_0, ymin_0, xmax_0, ymax_0);
         *depth_0 = (F32_max((_S27), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S27 + length_1(mean_c_0)))));
         *conic_0 = exp_0(- scale_0);
         float3  _S178 = mean_0 - - mul_0(transpose_1(R_0), t_0);
@@ -951,7 +951,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_0, float3  mea
     return;
 }
 
-inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_1, float3  mean_1, float4  quat_1, float3  scale_1, float in_opacity_1, FixedArray<float3 , 2>  sv_sites_1, FixedArray<float3 , 2>  sv_colors_1, Matrix<float, 3, 3>  R_1, float3  t_1, float fx_1, float fy_1, float cx_1, float cy_1, FixedArray<float, 10>  dist_coeffs_1, uint image_width_1, uint image_height_1, float near_plane_1, float far_plane_1, int4  * aabb_xyxy_1, float2  * mean2d_1, float * depth_1, float3  * conic_1, float * opacity_1, float3  * rgb_1)
+inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_1, float3  mean_1, float4  quat_1, float3  scale_1, float in_opacity_1, FixedArray<float3 , 2>  sv_sites_1, FixedArray<float3 , 2>  sv_colors_1, Matrix<float, 3, 3>  R_1, float3  t_1, float fx_1, float fy_1, float cx_1, float cy_1, FixedArray<float, 10>  dist_coeffs_1, uint image_width_1, uint image_height_1, float near_plane_1, float far_plane_1, float4  * aabb_xyxy_1, float2  * mean2d_1, float * depth_1, float3  * conic_1, float * opacity_1, float3  * rgb_1)
 {
     float2  * _S180;
     float2  _S181;
@@ -999,7 +999,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_1, float3  m
         }
         if(_S212)
         {
-            *aabb_xyxy_1 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_1 = make_float4 (0.0f);
             break;
         }
         Matrix<float, 2, 2>  covar2d_1;
@@ -1455,7 +1455,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_1, float3  m
         }
         if(!(true & _S212))
         {
-            *aabb_xyxy_1 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_1 = make_float4 (0.0f);
             break;
         }
         float det_orig_1 = *&(((&covar2d_1)->rows + (int(0)))->x) * *&(((&covar2d_1)->rows + (int(1)))->y) - *&(((&covar2d_1)->rows + (int(0)))->y) * *&(((&covar2d_1)->rows + (int(1)))->x);
@@ -1467,7 +1467,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_1, float3  m
         float compensation_1 = (F32_sqrt(((F32_max((0.0f), (det_orig_1 / det_blur_1))))));
         if(det_blur_1 <= 0.0f)
         {
-            *aabb_xyxy_1 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_1 = make_float4 (0.0f);
             break;
         }
         *opacity_1 = 1.0f / (1.0f + (F32_exp((- in_opacity_1))));
@@ -1477,7 +1477,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_1, float3  m
         }
         if((*opacity_1) < 0.00392156885936856f)
         {
-            *aabb_xyxy_1 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_1 = make_float4 (0.0f);
             break;
         }
         float _S369 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_1 / 0.00392156885936856f)))))))));
@@ -1513,10 +1513,10 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_1, float3  m
         }
         if(_S212)
         {
-            *aabb_xyxy_1 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_1 = make_float4 (0.0f);
             break;
         }
-        *aabb_xyxy_1 = make_int4 (int(xmin_1), int(ymin_1), int(xmax_1), int(ymax_1));
+        *aabb_xyxy_1 = make_float4 (xmin_1, ymin_1, xmax_1, ymax_1);
         float _S370 = mean_c_1.z;
         *depth_1 = (F32_max((_S370), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S370 + _S211))));
         *conic_1 = exp_0(- scale_1);
@@ -1530,7 +1530,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_1, float3  m
     return;
 }
 
-inline __device__ void projection_3dgut_sv_persp(bool antialiased_2, float3  mean_2, float4  quat_2, float3  scale_2, float in_opacity_2, FixedArray<float3 , 3>  sv_sites_2, FixedArray<float3 , 3>  sv_colors_2, Matrix<float, 3, 3>  R_2, float3  t_2, float fx_2, float fy_2, float cx_2, float cy_2, FixedArray<float, 10>  dist_coeffs_2, uint image_width_2, uint image_height_2, float near_plane_2, float far_plane_2, int4  * aabb_xyxy_2, float2  * mean2d_2, float * depth_2, float3  * conic_2, float * opacity_2, float3  * rgb_2)
+inline __device__ void projection_3dgut_sv_persp(bool antialiased_2, float3  mean_2, float4  quat_2, float3  scale_2, float in_opacity_2, FixedArray<float3 , 3>  sv_sites_2, FixedArray<float3 , 3>  sv_colors_2, Matrix<float, 3, 3>  R_2, float3  t_2, float fx_2, float fy_2, float cx_2, float cy_2, FixedArray<float, 10>  dist_coeffs_2, uint image_width_2, uint image_height_2, float near_plane_2, float far_plane_2, float4  * aabb_xyxy_2, float2  * mean2d_2, float * depth_2, float3  * conic_2, float * opacity_2, float3  * rgb_2)
 {
     float _S373;
     float _S374;
@@ -1559,7 +1559,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_2, float3  mea
         }
         if(_S386)
         {
-            *aabb_xyxy_2 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_2 = make_float4 (0.0f);
             break;
         }
         Matrix<float, 2, 2>  covar2d_2;
@@ -1975,7 +1975,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_2, float3  mea
         }
         if(!(true & _S386))
         {
-            *aabb_xyxy_2 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_2 = make_float4 (0.0f);
             break;
         }
         float det_orig_2 = *&(((&covar2d_2)->rows + (int(0)))->x) * *&(((&covar2d_2)->rows + (int(1)))->y) - *&(((&covar2d_2)->rows + (int(0)))->y) * *&(((&covar2d_2)->rows + (int(1)))->x);
@@ -1987,7 +1987,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_2, float3  mea
         float compensation_2 = (F32_sqrt(((F32_max((0.0f), (det_orig_2 / det_blur_2))))));
         if(det_blur_2 <= 0.0f)
         {
-            *aabb_xyxy_2 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_2 = make_float4 (0.0f);
             break;
         }
         *opacity_2 = 1.0f / (1.0f + (F32_exp((- in_opacity_2))));
@@ -1997,7 +1997,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_2, float3  mea
         }
         if((*opacity_2) < 0.00392156885936856f)
         {
-            *aabb_xyxy_2 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_2 = make_float4 (0.0f);
             break;
         }
         float _S535 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_2 / 0.00392156885936856f)))))))));
@@ -2033,10 +2033,10 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_2, float3  mea
         }
         if(_S386)
         {
-            *aabb_xyxy_2 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_2 = make_float4 (0.0f);
             break;
         }
-        *aabb_xyxy_2 = make_int4 (int(xmin_2), int(ymin_2), int(xmax_2), int(ymax_2));
+        *aabb_xyxy_2 = make_float4 (xmin_2, ymin_2, xmax_2, ymax_2);
         *depth_2 = (F32_max((_S385), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S385 + length_1(mean_c_2)))));
         *conic_2 = exp_0(- scale_2);
         float3  _S536 = mean_2 - - mul_0(transpose_1(R_2), t_2);
@@ -2051,7 +2051,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_2, float3  mea
     return;
 }
 
-inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_3, float3  mean_3, float4  quat_3, float3  scale_3, float in_opacity_3, FixedArray<float3 , 3>  sv_sites_3, FixedArray<float3 , 3>  sv_colors_3, Matrix<float, 3, 3>  R_3, float3  t_3, float fx_3, float fy_3, float cx_3, float cy_3, FixedArray<float, 10>  dist_coeffs_3, uint image_width_3, uint image_height_3, float near_plane_3, float far_plane_3, int4  * aabb_xyxy_3, float2  * mean2d_3, float * depth_3, float3  * conic_3, float * opacity_3, float3  * rgb_3)
+inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_3, float3  mean_3, float4  quat_3, float3  scale_3, float in_opacity_3, FixedArray<float3 , 3>  sv_sites_3, FixedArray<float3 , 3>  sv_colors_3, Matrix<float, 3, 3>  R_3, float3  t_3, float fx_3, float fy_3, float cx_3, float cy_3, FixedArray<float, 10>  dist_coeffs_3, uint image_width_3, uint image_height_3, float near_plane_3, float far_plane_3, float4  * aabb_xyxy_3, float2  * mean2d_3, float * depth_3, float3  * conic_3, float * opacity_3, float3  * rgb_3)
 {
     float2  * _S538;
     float2  _S539;
@@ -2099,7 +2099,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_3, float3  m
         }
         if(_S570)
         {
-            *aabb_xyxy_3 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_3 = make_float4 (0.0f);
             break;
         }
         Matrix<float, 2, 2>  covar2d_3;
@@ -2555,7 +2555,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_3, float3  m
         }
         if(!(true & _S570))
         {
-            *aabb_xyxy_3 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_3 = make_float4 (0.0f);
             break;
         }
         float det_orig_3 = *&(((&covar2d_3)->rows + (int(0)))->x) * *&(((&covar2d_3)->rows + (int(1)))->y) - *&(((&covar2d_3)->rows + (int(0)))->y) * *&(((&covar2d_3)->rows + (int(1)))->x);
@@ -2567,7 +2567,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_3, float3  m
         float compensation_3 = (F32_sqrt(((F32_max((0.0f), (det_orig_3 / det_blur_3))))));
         if(det_blur_3 <= 0.0f)
         {
-            *aabb_xyxy_3 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_3 = make_float4 (0.0f);
             break;
         }
         *opacity_3 = 1.0f / (1.0f + (F32_exp((- in_opacity_3))));
@@ -2577,7 +2577,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_3, float3  m
         }
         if((*opacity_3) < 0.00392156885936856f)
         {
-            *aabb_xyxy_3 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_3 = make_float4 (0.0f);
             break;
         }
         float _S727 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_3 / 0.00392156885936856f)))))))));
@@ -2613,10 +2613,10 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_3, float3  m
         }
         if(_S570)
         {
-            *aabb_xyxy_3 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_3 = make_float4 (0.0f);
             break;
         }
-        *aabb_xyxy_3 = make_int4 (int(xmin_3), int(ymin_3), int(xmax_3), int(ymax_3));
+        *aabb_xyxy_3 = make_float4 (xmin_3, ymin_3, xmax_3, ymax_3);
         float _S728 = mean_c_3.z;
         *depth_3 = (F32_max((_S728), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S728 + _S569))));
         *conic_3 = exp_0(- scale_3);
@@ -2632,7 +2632,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_3, float3  m
     return;
 }
 
-inline __device__ void projection_3dgut_sv_persp(bool antialiased_4, float3  mean_4, float4  quat_4, float3  scale_4, float in_opacity_4, FixedArray<float3 , 4>  sv_sites_4, FixedArray<float3 , 4>  sv_colors_4, Matrix<float, 3, 3>  R_4, float3  t_4, float fx_4, float fy_4, float cx_4, float cy_4, FixedArray<float, 10>  dist_coeffs_4, uint image_width_4, uint image_height_4, float near_plane_4, float far_plane_4, int4  * aabb_xyxy_4, float2  * mean2d_4, float * depth_4, float3  * conic_4, float * opacity_4, float3  * rgb_4)
+inline __device__ void projection_3dgut_sv_persp(bool antialiased_4, float3  mean_4, float4  quat_4, float3  scale_4, float in_opacity_4, FixedArray<float3 , 4>  sv_sites_4, FixedArray<float3 , 4>  sv_colors_4, Matrix<float, 3, 3>  R_4, float3  t_4, float fx_4, float fy_4, float cx_4, float cy_4, FixedArray<float, 10>  dist_coeffs_4, uint image_width_4, uint image_height_4, float near_plane_4, float far_plane_4, float4  * aabb_xyxy_4, float2  * mean2d_4, float * depth_4, float3  * conic_4, float * opacity_4, float3  * rgb_4)
 {
     float _S731;
     float _S732;
@@ -2661,7 +2661,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_4, float3  mea
         }
         if(_S744)
         {
-            *aabb_xyxy_4 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_4 = make_float4 (0.0f);
             break;
         }
         Matrix<float, 2, 2>  covar2d_4;
@@ -3077,7 +3077,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_4, float3  mea
         }
         if(!(true & _S744))
         {
-            *aabb_xyxy_4 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_4 = make_float4 (0.0f);
             break;
         }
         float det_orig_4 = *&(((&covar2d_4)->rows + (int(0)))->x) * *&(((&covar2d_4)->rows + (int(1)))->y) - *&(((&covar2d_4)->rows + (int(0)))->y) * *&(((&covar2d_4)->rows + (int(1)))->x);
@@ -3089,7 +3089,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_4, float3  mea
         float compensation_4 = (F32_sqrt(((F32_max((0.0f), (det_orig_4 / det_blur_4))))));
         if(det_blur_4 <= 0.0f)
         {
-            *aabb_xyxy_4 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_4 = make_float4 (0.0f);
             break;
         }
         *opacity_4 = 1.0f / (1.0f + (F32_exp((- in_opacity_4))));
@@ -3099,7 +3099,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_4, float3  mea
         }
         if((*opacity_4) < 0.00392156885936856f)
         {
-            *aabb_xyxy_4 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_4 = make_float4 (0.0f);
             break;
         }
         float _S893 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_4 / 0.00392156885936856f)))))))));
@@ -3135,10 +3135,10 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_4, float3  mea
         }
         if(_S744)
         {
-            *aabb_xyxy_4 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_4 = make_float4 (0.0f);
             break;
         }
-        *aabb_xyxy_4 = make_int4 (int(xmin_4), int(ymin_4), int(xmax_4), int(ymax_4));
+        *aabb_xyxy_4 = make_float4 (xmin_4, ymin_4, xmax_4, ymax_4);
         *depth_4 = (F32_max((_S743), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S743 + length_1(mean_c_4)))));
         *conic_4 = exp_0(- scale_4);
         float3  _S894 = mean_4 - - mul_0(transpose_1(R_4), t_4);
@@ -3154,7 +3154,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_4, float3  mea
     return;
 }
 
-inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_5, float3  mean_5, float4  quat_5, float3  scale_5, float in_opacity_5, FixedArray<float3 , 4>  sv_sites_5, FixedArray<float3 , 4>  sv_colors_5, Matrix<float, 3, 3>  R_5, float3  t_5, float fx_5, float fy_5, float cx_5, float cy_5, FixedArray<float, 10>  dist_coeffs_5, uint image_width_5, uint image_height_5, float near_plane_5, float far_plane_5, int4  * aabb_xyxy_5, float2  * mean2d_5, float * depth_5, float3  * conic_5, float * opacity_5, float3  * rgb_5)
+inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_5, float3  mean_5, float4  quat_5, float3  scale_5, float in_opacity_5, FixedArray<float3 , 4>  sv_sites_5, FixedArray<float3 , 4>  sv_colors_5, Matrix<float, 3, 3>  R_5, float3  t_5, float fx_5, float fy_5, float cx_5, float cy_5, FixedArray<float, 10>  dist_coeffs_5, uint image_width_5, uint image_height_5, float near_plane_5, float far_plane_5, float4  * aabb_xyxy_5, float2  * mean2d_5, float * depth_5, float3  * conic_5, float * opacity_5, float3  * rgb_5)
 {
     float2  * _S896;
     float2  _S897;
@@ -3202,7 +3202,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_5, float3  m
         }
         if(_S928)
         {
-            *aabb_xyxy_5 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_5 = make_float4 (0.0f);
             break;
         }
         Matrix<float, 2, 2>  covar2d_5;
@@ -3658,7 +3658,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_5, float3  m
         }
         if(!(true & _S928))
         {
-            *aabb_xyxy_5 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_5 = make_float4 (0.0f);
             break;
         }
         float det_orig_5 = *&(((&covar2d_5)->rows + (int(0)))->x) * *&(((&covar2d_5)->rows + (int(1)))->y) - *&(((&covar2d_5)->rows + (int(0)))->y) * *&(((&covar2d_5)->rows + (int(1)))->x);
@@ -3670,7 +3670,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_5, float3  m
         float compensation_5 = (F32_sqrt(((F32_max((0.0f), (det_orig_5 / det_blur_5))))));
         if(det_blur_5 <= 0.0f)
         {
-            *aabb_xyxy_5 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_5 = make_float4 (0.0f);
             break;
         }
         *opacity_5 = 1.0f / (1.0f + (F32_exp((- in_opacity_5))));
@@ -3680,7 +3680,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_5, float3  m
         }
         if((*opacity_5) < 0.00392156885936856f)
         {
-            *aabb_xyxy_5 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_5 = make_float4 (0.0f);
             break;
         }
         float _S1085 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_5 / 0.00392156885936856f)))))))));
@@ -3716,10 +3716,10 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_5, float3  m
         }
         if(_S928)
         {
-            *aabb_xyxy_5 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_5 = make_float4 (0.0f);
             break;
         }
-        *aabb_xyxy_5 = make_int4 (int(xmin_5), int(ymin_5), int(xmax_5), int(ymax_5));
+        *aabb_xyxy_5 = make_float4 (xmin_5, ymin_5, xmax_5, ymax_5);
         float _S1086 = mean_c_5.z;
         *depth_5 = (F32_max((_S1086), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S1086 + _S927))));
         *conic_5 = exp_0(- scale_5);
@@ -3736,7 +3736,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_5, float3  m
     return;
 }
 
-inline __device__ void projection_3dgut_sv_persp(bool antialiased_6, float3  mean_6, float4  quat_6, float3  scale_6, float in_opacity_6, FixedArray<float3 , 5>  sv_sites_6, FixedArray<float3 , 5>  sv_colors_6, Matrix<float, 3, 3>  R_6, float3  t_6, float fx_6, float fy_6, float cx_6, float cy_6, FixedArray<float, 10>  dist_coeffs_6, uint image_width_6, uint image_height_6, float near_plane_6, float far_plane_6, int4  * aabb_xyxy_6, float2  * mean2d_6, float * depth_6, float3  * conic_6, float * opacity_6, float3  * rgb_6)
+inline __device__ void projection_3dgut_sv_persp(bool antialiased_6, float3  mean_6, float4  quat_6, float3  scale_6, float in_opacity_6, FixedArray<float3 , 5>  sv_sites_6, FixedArray<float3 , 5>  sv_colors_6, Matrix<float, 3, 3>  R_6, float3  t_6, float fx_6, float fy_6, float cx_6, float cy_6, FixedArray<float, 10>  dist_coeffs_6, uint image_width_6, uint image_height_6, float near_plane_6, float far_plane_6, float4  * aabb_xyxy_6, float2  * mean2d_6, float * depth_6, float3  * conic_6, float * opacity_6, float3  * rgb_6)
 {
     float _S1089;
     float _S1090;
@@ -3765,7 +3765,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_6, float3  mea
         }
         if(_S1102)
         {
-            *aabb_xyxy_6 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_6 = make_float4 (0.0f);
             break;
         }
         Matrix<float, 2, 2>  covar2d_6;
@@ -4181,7 +4181,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_6, float3  mea
         }
         if(!(true & _S1102))
         {
-            *aabb_xyxy_6 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_6 = make_float4 (0.0f);
             break;
         }
         float det_orig_6 = *&(((&covar2d_6)->rows + (int(0)))->x) * *&(((&covar2d_6)->rows + (int(1)))->y) - *&(((&covar2d_6)->rows + (int(0)))->y) * *&(((&covar2d_6)->rows + (int(1)))->x);
@@ -4193,7 +4193,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_6, float3  mea
         float compensation_6 = (F32_sqrt(((F32_max((0.0f), (det_orig_6 / det_blur_6))))));
         if(det_blur_6 <= 0.0f)
         {
-            *aabb_xyxy_6 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_6 = make_float4 (0.0f);
             break;
         }
         *opacity_6 = 1.0f / (1.0f + (F32_exp((- in_opacity_6))));
@@ -4203,7 +4203,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_6, float3  mea
         }
         if((*opacity_6) < 0.00392156885936856f)
         {
-            *aabb_xyxy_6 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_6 = make_float4 (0.0f);
             break;
         }
         float _S1251 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_6 / 0.00392156885936856f)))))))));
@@ -4239,10 +4239,10 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_6, float3  mea
         }
         if(_S1102)
         {
-            *aabb_xyxy_6 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_6 = make_float4 (0.0f);
             break;
         }
-        *aabb_xyxy_6 = make_int4 (int(xmin_6), int(ymin_6), int(xmax_6), int(ymax_6));
+        *aabb_xyxy_6 = make_float4 (xmin_6, ymin_6, xmax_6, ymax_6);
         *depth_6 = (F32_max((_S1101), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S1101 + length_1(mean_c_6)))));
         *conic_6 = exp_0(- scale_6);
         float3  _S1252 = mean_6 - - mul_0(transpose_1(R_6), t_6);
@@ -4259,7 +4259,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_6, float3  mea
     return;
 }
 
-inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_7, float3  mean_7, float4  quat_7, float3  scale_7, float in_opacity_7, FixedArray<float3 , 5>  sv_sites_7, FixedArray<float3 , 5>  sv_colors_7, Matrix<float, 3, 3>  R_7, float3  t_7, float fx_7, float fy_7, float cx_7, float cy_7, FixedArray<float, 10>  dist_coeffs_7, uint image_width_7, uint image_height_7, float near_plane_7, float far_plane_7, int4  * aabb_xyxy_7, float2  * mean2d_7, float * depth_7, float3  * conic_7, float * opacity_7, float3  * rgb_7)
+inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_7, float3  mean_7, float4  quat_7, float3  scale_7, float in_opacity_7, FixedArray<float3 , 5>  sv_sites_7, FixedArray<float3 , 5>  sv_colors_7, Matrix<float, 3, 3>  R_7, float3  t_7, float fx_7, float fy_7, float cx_7, float cy_7, FixedArray<float, 10>  dist_coeffs_7, uint image_width_7, uint image_height_7, float near_plane_7, float far_plane_7, float4  * aabb_xyxy_7, float2  * mean2d_7, float * depth_7, float3  * conic_7, float * opacity_7, float3  * rgb_7)
 {
     float2  * _S1254;
     float2  _S1255;
@@ -4307,7 +4307,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_7, float3  m
         }
         if(_S1286)
         {
-            *aabb_xyxy_7 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_7 = make_float4 (0.0f);
             break;
         }
         Matrix<float, 2, 2>  covar2d_7;
@@ -4763,7 +4763,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_7, float3  m
         }
         if(!(true & _S1286))
         {
-            *aabb_xyxy_7 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_7 = make_float4 (0.0f);
             break;
         }
         float det_orig_7 = *&(((&covar2d_7)->rows + (int(0)))->x) * *&(((&covar2d_7)->rows + (int(1)))->y) - *&(((&covar2d_7)->rows + (int(0)))->y) * *&(((&covar2d_7)->rows + (int(1)))->x);
@@ -4775,7 +4775,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_7, float3  m
         float compensation_7 = (F32_sqrt(((F32_max((0.0f), (det_orig_7 / det_blur_7))))));
         if(det_blur_7 <= 0.0f)
         {
-            *aabb_xyxy_7 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_7 = make_float4 (0.0f);
             break;
         }
         *opacity_7 = 1.0f / (1.0f + (F32_exp((- in_opacity_7))));
@@ -4785,7 +4785,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_7, float3  m
         }
         if((*opacity_7) < 0.00392156885936856f)
         {
-            *aabb_xyxy_7 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_7 = make_float4 (0.0f);
             break;
         }
         float _S1443 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_7 / 0.00392156885936856f)))))))));
@@ -4821,10 +4821,10 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_7, float3  m
         }
         if(_S1286)
         {
-            *aabb_xyxy_7 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_7 = make_float4 (0.0f);
             break;
         }
-        *aabb_xyxy_7 = make_int4 (int(xmin_7), int(ymin_7), int(xmax_7), int(ymax_7));
+        *aabb_xyxy_7 = make_float4 (xmin_7, ymin_7, xmax_7, ymax_7);
         float _S1444 = mean_c_7.z;
         *depth_7 = (F32_max((_S1444), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S1444 + _S1285))));
         *conic_7 = exp_0(- scale_7);
@@ -4842,7 +4842,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_7, float3  m
     return;
 }
 
-inline __device__ void projection_3dgut_sv_persp(bool antialiased_8, float3  mean_8, float4  quat_8, float3  scale_8, float in_opacity_8, FixedArray<float3 , 6>  sv_sites_8, FixedArray<float3 , 6>  sv_colors_8, Matrix<float, 3, 3>  R_8, float3  t_8, float fx_8, float fy_8, float cx_8, float cy_8, FixedArray<float, 10>  dist_coeffs_8, uint image_width_8, uint image_height_8, float near_plane_8, float far_plane_8, int4  * aabb_xyxy_8, float2  * mean2d_8, float * depth_8, float3  * conic_8, float * opacity_8, float3  * rgb_8)
+inline __device__ void projection_3dgut_sv_persp(bool antialiased_8, float3  mean_8, float4  quat_8, float3  scale_8, float in_opacity_8, FixedArray<float3 , 6>  sv_sites_8, FixedArray<float3 , 6>  sv_colors_8, Matrix<float, 3, 3>  R_8, float3  t_8, float fx_8, float fy_8, float cx_8, float cy_8, FixedArray<float, 10>  dist_coeffs_8, uint image_width_8, uint image_height_8, float near_plane_8, float far_plane_8, float4  * aabb_xyxy_8, float2  * mean2d_8, float * depth_8, float3  * conic_8, float * opacity_8, float3  * rgb_8)
 {
     float _S1447;
     float _S1448;
@@ -4871,7 +4871,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_8, float3  mea
         }
         if(_S1460)
         {
-            *aabb_xyxy_8 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_8 = make_float4 (0.0f);
             break;
         }
         Matrix<float, 2, 2>  covar2d_8;
@@ -5287,7 +5287,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_8, float3  mea
         }
         if(!(true & _S1460))
         {
-            *aabb_xyxy_8 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_8 = make_float4 (0.0f);
             break;
         }
         float det_orig_8 = *&(((&covar2d_8)->rows + (int(0)))->x) * *&(((&covar2d_8)->rows + (int(1)))->y) - *&(((&covar2d_8)->rows + (int(0)))->y) * *&(((&covar2d_8)->rows + (int(1)))->x);
@@ -5299,7 +5299,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_8, float3  mea
         float compensation_8 = (F32_sqrt(((F32_max((0.0f), (det_orig_8 / det_blur_8))))));
         if(det_blur_8 <= 0.0f)
         {
-            *aabb_xyxy_8 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_8 = make_float4 (0.0f);
             break;
         }
         *opacity_8 = 1.0f / (1.0f + (F32_exp((- in_opacity_8))));
@@ -5309,7 +5309,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_8, float3  mea
         }
         if((*opacity_8) < 0.00392156885936856f)
         {
-            *aabb_xyxy_8 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_8 = make_float4 (0.0f);
             break;
         }
         float _S1609 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_8 / 0.00392156885936856f)))))))));
@@ -5345,10 +5345,10 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_8, float3  mea
         }
         if(_S1460)
         {
-            *aabb_xyxy_8 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_8 = make_float4 (0.0f);
             break;
         }
-        *aabb_xyxy_8 = make_int4 (int(xmin_8), int(ymin_8), int(xmax_8), int(ymax_8));
+        *aabb_xyxy_8 = make_float4 (xmin_8, ymin_8, xmax_8, ymax_8);
         *depth_8 = (F32_max((_S1459), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S1459 + length_1(mean_c_8)))));
         *conic_8 = exp_0(- scale_8);
         float3  _S1610 = mean_8 - - mul_0(transpose_1(R_8), t_8);
@@ -5366,7 +5366,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_8, float3  mea
     return;
 }
 
-inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_9, float3  mean_9, float4  quat_9, float3  scale_9, float in_opacity_9, FixedArray<float3 , 6>  sv_sites_9, FixedArray<float3 , 6>  sv_colors_9, Matrix<float, 3, 3>  R_9, float3  t_9, float fx_9, float fy_9, float cx_9, float cy_9, FixedArray<float, 10>  dist_coeffs_9, uint image_width_9, uint image_height_9, float near_plane_9, float far_plane_9, int4  * aabb_xyxy_9, float2  * mean2d_9, float * depth_9, float3  * conic_9, float * opacity_9, float3  * rgb_9)
+inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_9, float3  mean_9, float4  quat_9, float3  scale_9, float in_opacity_9, FixedArray<float3 , 6>  sv_sites_9, FixedArray<float3 , 6>  sv_colors_9, Matrix<float, 3, 3>  R_9, float3  t_9, float fx_9, float fy_9, float cx_9, float cy_9, FixedArray<float, 10>  dist_coeffs_9, uint image_width_9, uint image_height_9, float near_plane_9, float far_plane_9, float4  * aabb_xyxy_9, float2  * mean2d_9, float * depth_9, float3  * conic_9, float * opacity_9, float3  * rgb_9)
 {
     float2  * _S1612;
     float2  _S1613;
@@ -5414,7 +5414,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_9, float3  m
         }
         if(_S1644)
         {
-            *aabb_xyxy_9 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_9 = make_float4 (0.0f);
             break;
         }
         Matrix<float, 2, 2>  covar2d_9;
@@ -5870,7 +5870,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_9, float3  m
         }
         if(!(true & _S1644))
         {
-            *aabb_xyxy_9 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_9 = make_float4 (0.0f);
             break;
         }
         float det_orig_9 = *&(((&covar2d_9)->rows + (int(0)))->x) * *&(((&covar2d_9)->rows + (int(1)))->y) - *&(((&covar2d_9)->rows + (int(0)))->y) * *&(((&covar2d_9)->rows + (int(1)))->x);
@@ -5882,7 +5882,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_9, float3  m
         float compensation_9 = (F32_sqrt(((F32_max((0.0f), (det_orig_9 / det_blur_9))))));
         if(det_blur_9 <= 0.0f)
         {
-            *aabb_xyxy_9 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_9 = make_float4 (0.0f);
             break;
         }
         *opacity_9 = 1.0f / (1.0f + (F32_exp((- in_opacity_9))));
@@ -5892,7 +5892,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_9, float3  m
         }
         if((*opacity_9) < 0.00392156885936856f)
         {
-            *aabb_xyxy_9 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_9 = make_float4 (0.0f);
             break;
         }
         float _S1801 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_9 / 0.00392156885936856f)))))))));
@@ -5928,10 +5928,10 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_9, float3  m
         }
         if(_S1644)
         {
-            *aabb_xyxy_9 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_9 = make_float4 (0.0f);
             break;
         }
-        *aabb_xyxy_9 = make_int4 (int(xmin_9), int(ymin_9), int(xmax_9), int(ymax_9));
+        *aabb_xyxy_9 = make_float4 (xmin_9, ymin_9, xmax_9, ymax_9);
         float _S1802 = mean_c_9.z;
         *depth_9 = (F32_max((_S1802), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S1802 + _S1643))));
         *conic_9 = exp_0(- scale_9);
@@ -5950,7 +5950,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_9, float3  m
     return;
 }
 
-inline __device__ void projection_3dgut_sv_persp(bool antialiased_10, float3  mean_10, float4  quat_10, float3  scale_10, float in_opacity_10, FixedArray<float3 , 7>  sv_sites_10, FixedArray<float3 , 7>  sv_colors_10, Matrix<float, 3, 3>  R_10, float3  t_10, float fx_10, float fy_10, float cx_10, float cy_10, FixedArray<float, 10>  dist_coeffs_10, uint image_width_10, uint image_height_10, float near_plane_10, float far_plane_10, int4  * aabb_xyxy_10, float2  * mean2d_10, float * depth_10, float3  * conic_10, float * opacity_10, float3  * rgb_10)
+inline __device__ void projection_3dgut_sv_persp(bool antialiased_10, float3  mean_10, float4  quat_10, float3  scale_10, float in_opacity_10, FixedArray<float3 , 7>  sv_sites_10, FixedArray<float3 , 7>  sv_colors_10, Matrix<float, 3, 3>  R_10, float3  t_10, float fx_10, float fy_10, float cx_10, float cy_10, FixedArray<float, 10>  dist_coeffs_10, uint image_width_10, uint image_height_10, float near_plane_10, float far_plane_10, float4  * aabb_xyxy_10, float2  * mean2d_10, float * depth_10, float3  * conic_10, float * opacity_10, float3  * rgb_10)
 {
     float _S1805;
     float _S1806;
@@ -5979,7 +5979,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_10, float3  me
         }
         if(_S1818)
         {
-            *aabb_xyxy_10 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_10 = make_float4 (0.0f);
             break;
         }
         Matrix<float, 2, 2>  covar2d_10;
@@ -6395,7 +6395,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_10, float3  me
         }
         if(!(true & _S1818))
         {
-            *aabb_xyxy_10 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_10 = make_float4 (0.0f);
             break;
         }
         float det_orig_10 = *&(((&covar2d_10)->rows + (int(0)))->x) * *&(((&covar2d_10)->rows + (int(1)))->y) - *&(((&covar2d_10)->rows + (int(0)))->y) * *&(((&covar2d_10)->rows + (int(1)))->x);
@@ -6407,7 +6407,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_10, float3  me
         float compensation_10 = (F32_sqrt(((F32_max((0.0f), (det_orig_10 / det_blur_10))))));
         if(det_blur_10 <= 0.0f)
         {
-            *aabb_xyxy_10 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_10 = make_float4 (0.0f);
             break;
         }
         *opacity_10 = 1.0f / (1.0f + (F32_exp((- in_opacity_10))));
@@ -6417,7 +6417,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_10, float3  me
         }
         if((*opacity_10) < 0.00392156885936856f)
         {
-            *aabb_xyxy_10 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_10 = make_float4 (0.0f);
             break;
         }
         float _S1967 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_10 / 0.00392156885936856f)))))))));
@@ -6453,10 +6453,10 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_10, float3  me
         }
         if(_S1818)
         {
-            *aabb_xyxy_10 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_10 = make_float4 (0.0f);
             break;
         }
-        *aabb_xyxy_10 = make_int4 (int(xmin_10), int(ymin_10), int(xmax_10), int(ymax_10));
+        *aabb_xyxy_10 = make_float4 (xmin_10, ymin_10, xmax_10, ymax_10);
         *depth_10 = (F32_max((_S1817), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S1817 + length_1(mean_c_10)))));
         *conic_10 = exp_0(- scale_10);
         float3  _S1968 = mean_10 - - mul_0(transpose_1(R_10), t_10);
@@ -6475,7 +6475,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_10, float3  me
     return;
 }
 
-inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_11, float3  mean_11, float4  quat_11, float3  scale_11, float in_opacity_11, FixedArray<float3 , 7>  sv_sites_11, FixedArray<float3 , 7>  sv_colors_11, Matrix<float, 3, 3>  R_11, float3  t_11, float fx_11, float fy_11, float cx_11, float cy_11, FixedArray<float, 10>  dist_coeffs_11, uint image_width_11, uint image_height_11, float near_plane_11, float far_plane_11, int4  * aabb_xyxy_11, float2  * mean2d_11, float * depth_11, float3  * conic_11, float * opacity_11, float3  * rgb_11)
+inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_11, float3  mean_11, float4  quat_11, float3  scale_11, float in_opacity_11, FixedArray<float3 , 7>  sv_sites_11, FixedArray<float3 , 7>  sv_colors_11, Matrix<float, 3, 3>  R_11, float3  t_11, float fx_11, float fy_11, float cx_11, float cy_11, FixedArray<float, 10>  dist_coeffs_11, uint image_width_11, uint image_height_11, float near_plane_11, float far_plane_11, float4  * aabb_xyxy_11, float2  * mean2d_11, float * depth_11, float3  * conic_11, float * opacity_11, float3  * rgb_11)
 {
     float2  * _S1970;
     float2  _S1971;
@@ -6523,7 +6523,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_11, float3  
         }
         if(_S2002)
         {
-            *aabb_xyxy_11 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_11 = make_float4 (0.0f);
             break;
         }
         Matrix<float, 2, 2>  covar2d_11;
@@ -6979,7 +6979,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_11, float3  
         }
         if(!(true & _S2002))
         {
-            *aabb_xyxy_11 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_11 = make_float4 (0.0f);
             break;
         }
         float det_orig_11 = *&(((&covar2d_11)->rows + (int(0)))->x) * *&(((&covar2d_11)->rows + (int(1)))->y) - *&(((&covar2d_11)->rows + (int(0)))->y) * *&(((&covar2d_11)->rows + (int(1)))->x);
@@ -6991,7 +6991,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_11, float3  
         float compensation_11 = (F32_sqrt(((F32_max((0.0f), (det_orig_11 / det_blur_11))))));
         if(det_blur_11 <= 0.0f)
         {
-            *aabb_xyxy_11 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_11 = make_float4 (0.0f);
             break;
         }
         *opacity_11 = 1.0f / (1.0f + (F32_exp((- in_opacity_11))));
@@ -7001,7 +7001,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_11, float3  
         }
         if((*opacity_11) < 0.00392156885936856f)
         {
-            *aabb_xyxy_11 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_11 = make_float4 (0.0f);
             break;
         }
         float _S2159 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_11 / 0.00392156885936856f)))))))));
@@ -7037,10 +7037,10 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_11, float3  
         }
         if(_S2002)
         {
-            *aabb_xyxy_11 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_11 = make_float4 (0.0f);
             break;
         }
-        *aabb_xyxy_11 = make_int4 (int(xmin_11), int(ymin_11), int(xmax_11), int(ymax_11));
+        *aabb_xyxy_11 = make_float4 (xmin_11, ymin_11, xmax_11, ymax_11);
         float _S2160 = mean_c_11.z;
         *depth_11 = (F32_max((_S2160), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S2160 + _S2001))));
         *conic_11 = exp_0(- scale_11);
@@ -7060,7 +7060,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_11, float3  
     return;
 }
 
-inline __device__ void projection_3dgut_sv_persp(bool antialiased_12, float3  mean_12, float4  quat_12, float3  scale_12, float in_opacity_12, FixedArray<float3 , 8>  sv_sites_12, FixedArray<float3 , 8>  sv_colors_12, Matrix<float, 3, 3>  R_12, float3  t_12, float fx_12, float fy_12, float cx_12, float cy_12, FixedArray<float, 10>  dist_coeffs_12, uint image_width_12, uint image_height_12, float near_plane_12, float far_plane_12, int4  * aabb_xyxy_12, float2  * mean2d_12, float * depth_12, float3  * conic_12, float * opacity_12, float3  * rgb_12)
+inline __device__ void projection_3dgut_sv_persp(bool antialiased_12, float3  mean_12, float4  quat_12, float3  scale_12, float in_opacity_12, FixedArray<float3 , 8>  sv_sites_12, FixedArray<float3 , 8>  sv_colors_12, Matrix<float, 3, 3>  R_12, float3  t_12, float fx_12, float fy_12, float cx_12, float cy_12, FixedArray<float, 10>  dist_coeffs_12, uint image_width_12, uint image_height_12, float near_plane_12, float far_plane_12, float4  * aabb_xyxy_12, float2  * mean2d_12, float * depth_12, float3  * conic_12, float * opacity_12, float3  * rgb_12)
 {
     float _S2163;
     float _S2164;
@@ -7089,7 +7089,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_12, float3  me
         }
         if(_S2176)
         {
-            *aabb_xyxy_12 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_12 = make_float4 (0.0f);
             break;
         }
         Matrix<float, 2, 2>  covar2d_12;
@@ -7505,7 +7505,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_12, float3  me
         }
         if(!(true & _S2176))
         {
-            *aabb_xyxy_12 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_12 = make_float4 (0.0f);
             break;
         }
         float det_orig_12 = *&(((&covar2d_12)->rows + (int(0)))->x) * *&(((&covar2d_12)->rows + (int(1)))->y) - *&(((&covar2d_12)->rows + (int(0)))->y) * *&(((&covar2d_12)->rows + (int(1)))->x);
@@ -7517,7 +7517,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_12, float3  me
         float compensation_12 = (F32_sqrt(((F32_max((0.0f), (det_orig_12 / det_blur_12))))));
         if(det_blur_12 <= 0.0f)
         {
-            *aabb_xyxy_12 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_12 = make_float4 (0.0f);
             break;
         }
         *opacity_12 = 1.0f / (1.0f + (F32_exp((- in_opacity_12))));
@@ -7527,7 +7527,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_12, float3  me
         }
         if((*opacity_12) < 0.00392156885936856f)
         {
-            *aabb_xyxy_12 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_12 = make_float4 (0.0f);
             break;
         }
         float _S2325 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_12 / 0.00392156885936856f)))))))));
@@ -7563,10 +7563,10 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_12, float3  me
         }
         if(_S2176)
         {
-            *aabb_xyxy_12 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_12 = make_float4 (0.0f);
             break;
         }
-        *aabb_xyxy_12 = make_int4 (int(xmin_12), int(ymin_12), int(xmax_12), int(ymax_12));
+        *aabb_xyxy_12 = make_float4 (xmin_12, ymin_12, xmax_12, ymax_12);
         *depth_12 = (F32_max((_S2175), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S2175 + length_1(mean_c_12)))));
         *conic_12 = exp_0(- scale_12);
         float3  _S2326 = mean_12 - - mul_0(transpose_1(R_12), t_12);
@@ -7586,7 +7586,7 @@ inline __device__ void projection_3dgut_sv_persp(bool antialiased_12, float3  me
     return;
 }
 
-inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_13, float3  mean_13, float4  quat_13, float3  scale_13, float in_opacity_13, FixedArray<float3 , 8>  sv_sites_13, FixedArray<float3 , 8>  sv_colors_13, Matrix<float, 3, 3>  R_13, float3  t_13, float fx_13, float fy_13, float cx_13, float cy_13, FixedArray<float, 10>  dist_coeffs_13, uint image_width_13, uint image_height_13, float near_plane_13, float far_plane_13, int4  * aabb_xyxy_13, float2  * mean2d_13, float * depth_13, float3  * conic_13, float * opacity_13, float3  * rgb_13)
+inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_13, float3  mean_13, float4  quat_13, float3  scale_13, float in_opacity_13, FixedArray<float3 , 8>  sv_sites_13, FixedArray<float3 , 8>  sv_colors_13, Matrix<float, 3, 3>  R_13, float3  t_13, float fx_13, float fy_13, float cx_13, float cy_13, FixedArray<float, 10>  dist_coeffs_13, uint image_width_13, uint image_height_13, float near_plane_13, float far_plane_13, float4  * aabb_xyxy_13, float2  * mean2d_13, float * depth_13, float3  * conic_13, float * opacity_13, float3  * rgb_13)
 {
     float2  * _S2328;
     float2  _S2329;
@@ -7634,7 +7634,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_13, float3  
         }
         if(_S2360)
         {
-            *aabb_xyxy_13 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_13 = make_float4 (0.0f);
             break;
         }
         Matrix<float, 2, 2>  covar2d_13;
@@ -8090,7 +8090,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_13, float3  
         }
         if(!(true & _S2360))
         {
-            *aabb_xyxy_13 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_13 = make_float4 (0.0f);
             break;
         }
         float det_orig_13 = *&(((&covar2d_13)->rows + (int(0)))->x) * *&(((&covar2d_13)->rows + (int(1)))->y) - *&(((&covar2d_13)->rows + (int(0)))->y) * *&(((&covar2d_13)->rows + (int(1)))->x);
@@ -8102,7 +8102,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_13, float3  
         float compensation_13 = (F32_sqrt(((F32_max((0.0f), (det_orig_13 / det_blur_13))))));
         if(det_blur_13 <= 0.0f)
         {
-            *aabb_xyxy_13 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_13 = make_float4 (0.0f);
             break;
         }
         *opacity_13 = 1.0f / (1.0f + (F32_exp((- in_opacity_13))));
@@ -8112,7 +8112,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_13, float3  
         }
         if((*opacity_13) < 0.00392156885936856f)
         {
-            *aabb_xyxy_13 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_13 = make_float4 (0.0f);
             break;
         }
         float _S2517 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_13 / 0.00392156885936856f)))))))));
@@ -8148,10 +8148,10 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_13, float3  
         }
         if(_S2360)
         {
-            *aabb_xyxy_13 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_13 = make_float4 (0.0f);
             break;
         }
-        *aabb_xyxy_13 = make_int4 (int(xmin_13), int(ymin_13), int(xmax_13), int(ymax_13));
+        *aabb_xyxy_13 = make_float4 (xmin_13, ymin_13, xmax_13, ymax_13);
         float _S2518 = mean_c_13.z;
         *depth_13 = (F32_max((_S2518), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S2518 + _S2359))));
         *conic_13 = exp_0(- scale_13);
@@ -8172,7 +8172,7 @@ inline __device__ void projection_3dgut_sv_fisheye(bool antialiased_13, float3  
     return;
 }
 
-inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiased_14, float3  mean_14, float4  quat_14, float3  scale_14, float in_opacity_14, FixedArray<float3 , 2>  sv_sites_14, FixedArray<float3 , 2>  sv_colors_14, Matrix<float, 3, 3>  R_14, float3  t_14, float fx_14, float fy_14, float cx_14, float cy_14, FixedArray<float, 10>  dist_coeffs_14, uint image_width_14, uint image_height_14, float near_plane_14, float far_plane_14, int4  * aabb_xyxy_14, float2  * mean2d_14, float * depth_14, float3  * conic_14, float * opacity_14, float3  * rgb_14)
+inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiased_14, float3  mean_14, float4  quat_14, float3  scale_14, float in_opacity_14, FixedArray<float3 , 2>  sv_sites_14, FixedArray<float3 , 2>  sv_colors_14, Matrix<float, 3, 3>  R_14, float3  t_14, float fx_14, float fy_14, float cx_14, float cy_14, FixedArray<float, 10>  dist_coeffs_14, uint image_width_14, uint image_height_14, float near_plane_14, float far_plane_14, float4  * aabb_xyxy_14, float2  * mean2d_14, float * depth_14, float3  * conic_14, float * opacity_14, float3  * rgb_14)
 {
     float3  mean_c_14 = mul_0(R_14, mean_14) + t_14;
     float3  _S2521 = exp_0(scale_14);
@@ -8347,7 +8347,7 @@ inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiase
     float _S2605 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_14 / 0.00392156885936856f)))))))));
     float radius_x_14 = _S2605 * (F32_sqrt((covar2d_14[int(0)].x)));
     float radius_y_14 = _S2605 * (F32_sqrt((covar2d_14[int(1)].y)));
-    *aabb_xyxy_14 = make_int4 (int((F32_floor(((*mean2d_14).x - radius_x_14)))), int((F32_floor(((*mean2d_14).y - radius_y_14)))), int((F32_ceil(((*mean2d_14).x + radius_x_14)))), int((F32_ceil(((*mean2d_14).y + radius_y_14)))));
+    *aabb_xyxy_14 = make_float4 ((F32_floor(((*mean2d_14).x - radius_x_14))), (F32_floor(((*mean2d_14).y - radius_y_14))), (F32_ceil(((*mean2d_14).x + radius_x_14))), (F32_ceil(((*mean2d_14).y + radius_y_14))));
     float _S2606 = mean_c_14.z;
     *depth_14 = (F32_max((_S2606), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S2606 + length_1(mean_c_14)))));
     *conic_14 = exp_0(- scale_14);
@@ -8359,7 +8359,7 @@ inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiase
     return;
 }
 
-inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialiased_15, float3  mean_15, float4  quat_15, float3  scale_15, float in_opacity_15, FixedArray<float3 , 2>  sv_sites_15, FixedArray<float3 , 2>  sv_colors_15, Matrix<float, 3, 3>  R_15, float3  t_15, float fx_15, float fy_15, float cx_15, float cy_15, FixedArray<float, 10>  dist_coeffs_15, uint image_width_15, uint image_height_15, float near_plane_15, float far_plane_15, int4  * aabb_xyxy_15, float2  * mean2d_15, float * depth_15, float3  * conic_15, float * opacity_15, float3  * rgb_15)
+inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialiased_15, float3  mean_15, float4  quat_15, float3  scale_15, float in_opacity_15, FixedArray<float3 , 2>  sv_sites_15, FixedArray<float3 , 2>  sv_colors_15, Matrix<float, 3, 3>  R_15, float3  t_15, float fx_15, float fy_15, float cx_15, float cy_15, FixedArray<float, 10>  dist_coeffs_15, uint image_width_15, uint image_height_15, float near_plane_15, float far_plane_15, float4  * aabb_xyxy_15, float2  * mean2d_15, float * depth_15, float3  * conic_15, float * opacity_15, float3  * rgb_15)
 {
     float3  mean_c_15 = mul_0(R_15, mean_15) + t_15;
     float3  _S2609 = exp_0(scale_15);
@@ -8595,7 +8595,7 @@ inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialia
     float _S2683 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_15 / 0.00392156885936856f)))))))));
     float radius_x_15 = _S2683 * (F32_sqrt((covar2d_15[int(0)].x)));
     float radius_y_15 = _S2683 * (F32_sqrt((covar2d_15[int(1)].y)));
-    *aabb_xyxy_15 = make_int4 (int((F32_floor(((*mean2d_15).x - radius_x_15)))), int((F32_floor(((*mean2d_15).y - radius_y_15)))), int((F32_ceil(((*mean2d_15).x + radius_x_15)))), int((F32_ceil(((*mean2d_15).y + radius_y_15)))));
+    *aabb_xyxy_15 = make_float4 ((F32_floor(((*mean2d_15).x - radius_x_15))), (F32_floor(((*mean2d_15).y - radius_y_15))), (F32_ceil(((*mean2d_15).x + radius_x_15))), (F32_ceil(((*mean2d_15).y + radius_y_15))));
     float _S2684 = mean_c_15.z;
     *depth_15 = (F32_max((_S2684), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S2684 + length_1(mean_c_15)))));
     *conic_15 = exp_0(- scale_15);
@@ -10032,7 +10032,7 @@ inline __device__ void projection_3dgut_sv_fisheye_vjp(bool antialiased_19, floa
     return;
 }
 
-inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiased_20, float3  mean_18, float4  quat_18, float3  scale_18, float in_opacity_18, FixedArray<float3 , 3>  sv_sites_18, FixedArray<float3 , 3>  sv_colors_18, Matrix<float, 3, 3>  R_18, float3  t_18, float fx_20, float fy_20, float cx_20, float cy_20, FixedArray<float, 10>  dist_coeffs_20, uint image_width_20, uint image_height_20, float near_plane_18, float far_plane_18, int4  * aabb_xyxy_16, float2  * mean2d_16, float * depth_16, float3  * conic_16, float * opacity_16, float3  * rgb_16)
+inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiased_20, float3  mean_18, float4  quat_18, float3  scale_18, float in_opacity_18, FixedArray<float3 , 3>  sv_sites_18, FixedArray<float3 , 3>  sv_colors_18, Matrix<float, 3, 3>  R_18, float3  t_18, float fx_20, float fy_20, float cx_20, float cy_20, FixedArray<float, 10>  dist_coeffs_20, uint image_width_20, uint image_height_20, float near_plane_18, float far_plane_18, float4  * aabb_xyxy_16, float2  * mean2d_16, float * depth_16, float3  * conic_16, float * opacity_16, float3  * rgb_16)
 {
     float3  mean_c_18 = mul_0(R_18, mean_18) + t_18;
     float3  _S3384 = exp_0(scale_18);
@@ -10207,7 +10207,7 @@ inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiase
     float _S3468 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_16 / 0.00392156885936856f)))))))));
     float radius_x_16 = _S3468 * (F32_sqrt((covar2d_18[int(0)].x)));
     float radius_y_16 = _S3468 * (F32_sqrt((covar2d_18[int(1)].y)));
-    *aabb_xyxy_16 = make_int4 (int((F32_floor(((*mean2d_16).x - radius_x_16)))), int((F32_floor(((*mean2d_16).y - radius_y_16)))), int((F32_ceil(((*mean2d_16).x + radius_x_16)))), int((F32_ceil(((*mean2d_16).y + radius_y_16)))));
+    *aabb_xyxy_16 = make_float4 ((F32_floor(((*mean2d_16).x - radius_x_16))), (F32_floor(((*mean2d_16).y - radius_y_16))), (F32_ceil(((*mean2d_16).x + radius_x_16))), (F32_ceil(((*mean2d_16).y + radius_y_16))));
     float _S3469 = mean_c_18.z;
     *depth_16 = (F32_max((_S3469), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S3469 + length_1(mean_c_18)))));
     *conic_16 = exp_0(- scale_18);
@@ -10221,7 +10221,7 @@ inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiase
     return;
 }
 
-inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialiased_21, float3  mean_19, float4  quat_19, float3  scale_19, float in_opacity_19, FixedArray<float3 , 3>  sv_sites_19, FixedArray<float3 , 3>  sv_colors_19, Matrix<float, 3, 3>  R_19, float3  t_19, float fx_21, float fy_21, float cx_21, float cy_21, FixedArray<float, 10>  dist_coeffs_21, uint image_width_21, uint image_height_21, float near_plane_19, float far_plane_19, int4  * aabb_xyxy_17, float2  * mean2d_17, float * depth_17, float3  * conic_17, float * opacity_17, float3  * rgb_17)
+inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialiased_21, float3  mean_19, float4  quat_19, float3  scale_19, float in_opacity_19, FixedArray<float3 , 3>  sv_sites_19, FixedArray<float3 , 3>  sv_colors_19, Matrix<float, 3, 3>  R_19, float3  t_19, float fx_21, float fy_21, float cx_21, float cy_21, FixedArray<float, 10>  dist_coeffs_21, uint image_width_21, uint image_height_21, float near_plane_19, float far_plane_19, float4  * aabb_xyxy_17, float2  * mean2d_17, float * depth_17, float3  * conic_17, float * opacity_17, float3  * rgb_17)
 {
     float3  mean_c_19 = mul_0(R_19, mean_19) + t_19;
     float3  _S3472 = exp_0(scale_19);
@@ -10457,7 +10457,7 @@ inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialia
     float _S3546 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_17 / 0.00392156885936856f)))))))));
     float radius_x_17 = _S3546 * (F32_sqrt((covar2d_19[int(0)].x)));
     float radius_y_17 = _S3546 * (F32_sqrt((covar2d_19[int(1)].y)));
-    *aabb_xyxy_17 = make_int4 (int((F32_floor(((*mean2d_17).x - radius_x_17)))), int((F32_floor(((*mean2d_17).y - radius_y_17)))), int((F32_ceil(((*mean2d_17).x + radius_x_17)))), int((F32_ceil(((*mean2d_17).y + radius_y_17)))));
+    *aabb_xyxy_17 = make_float4 ((F32_floor(((*mean2d_17).x - radius_x_17))), (F32_floor(((*mean2d_17).y - radius_y_17))), (F32_ceil(((*mean2d_17).x + radius_x_17))), (F32_ceil(((*mean2d_17).y + radius_y_17))));
     float _S3547 = mean_c_19.z;
     *depth_17 = (F32_max((_S3547), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S3547 + length_1(mean_c_19)))));
     *conic_17 = exp_0(- scale_19);
@@ -11815,7 +11815,7 @@ inline __device__ void projection_3dgut_sv_fisheye_vjp(bool antialiased_25, floa
     return;
 }
 
-inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiased_26, float3  mean_22, float4  quat_22, float3  scale_22, float in_opacity_22, FixedArray<float3 , 4>  sv_sites_22, FixedArray<float3 , 4>  sv_colors_22, Matrix<float, 3, 3>  R_22, float3  t_22, float fx_26, float fy_26, float cx_26, float cy_26, FixedArray<float, 10>  dist_coeffs_26, uint image_width_26, uint image_height_26, float near_plane_22, float far_plane_22, int4  * aabb_xyxy_18, float2  * mean2d_18, float * depth_18, float3  * conic_18, float * opacity_18, float3  * rgb_18)
+inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiased_26, float3  mean_22, float4  quat_22, float3  scale_22, float in_opacity_22, FixedArray<float3 , 4>  sv_sites_22, FixedArray<float3 , 4>  sv_colors_22, Matrix<float, 3, 3>  R_22, float3  t_22, float fx_26, float fy_26, float cx_26, float cy_26, FixedArray<float, 10>  dist_coeffs_26, uint image_width_26, uint image_height_26, float near_plane_22, float far_plane_22, float4  * aabb_xyxy_18, float2  * mean2d_18, float * depth_18, float3  * conic_18, float * opacity_18, float3  * rgb_18)
 {
     float3  mean_c_22 = mul_0(R_22, mean_22) + t_22;
     float3  _S4225 = exp_0(scale_22);
@@ -11990,7 +11990,7 @@ inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiase
     float _S4309 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_18 / 0.00392156885936856f)))))))));
     float radius_x_18 = _S4309 * (F32_sqrt((covar2d_22[int(0)].x)));
     float radius_y_18 = _S4309 * (F32_sqrt((covar2d_22[int(1)].y)));
-    *aabb_xyxy_18 = make_int4 (int((F32_floor(((*mean2d_18).x - radius_x_18)))), int((F32_floor(((*mean2d_18).y - radius_y_18)))), int((F32_ceil(((*mean2d_18).x + radius_x_18)))), int((F32_ceil(((*mean2d_18).y + radius_y_18)))));
+    *aabb_xyxy_18 = make_float4 ((F32_floor(((*mean2d_18).x - radius_x_18))), (F32_floor(((*mean2d_18).y - radius_y_18))), (F32_ceil(((*mean2d_18).x + radius_x_18))), (F32_ceil(((*mean2d_18).y + radius_y_18))));
     float _S4310 = mean_c_22.z;
     *depth_18 = (F32_max((_S4310), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S4310 + length_1(mean_c_22)))));
     *conic_18 = exp_0(- scale_22);
@@ -12005,7 +12005,7 @@ inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiase
     return;
 }
 
-inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialiased_27, float3  mean_23, float4  quat_23, float3  scale_23, float in_opacity_23, FixedArray<float3 , 4>  sv_sites_23, FixedArray<float3 , 4>  sv_colors_23, Matrix<float, 3, 3>  R_23, float3  t_23, float fx_27, float fy_27, float cx_27, float cy_27, FixedArray<float, 10>  dist_coeffs_27, uint image_width_27, uint image_height_27, float near_plane_23, float far_plane_23, int4  * aabb_xyxy_19, float2  * mean2d_19, float * depth_19, float3  * conic_19, float * opacity_19, float3  * rgb_19)
+inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialiased_27, float3  mean_23, float4  quat_23, float3  scale_23, float in_opacity_23, FixedArray<float3 , 4>  sv_sites_23, FixedArray<float3 , 4>  sv_colors_23, Matrix<float, 3, 3>  R_23, float3  t_23, float fx_27, float fy_27, float cx_27, float cy_27, FixedArray<float, 10>  dist_coeffs_27, uint image_width_27, uint image_height_27, float near_plane_23, float far_plane_23, float4  * aabb_xyxy_19, float2  * mean2d_19, float * depth_19, float3  * conic_19, float * opacity_19, float3  * rgb_19)
 {
     float3  mean_c_23 = mul_0(R_23, mean_23) + t_23;
     float3  _S4313 = exp_0(scale_23);
@@ -12241,7 +12241,7 @@ inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialia
     float _S4387 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_19 / 0.00392156885936856f)))))))));
     float radius_x_19 = _S4387 * (F32_sqrt((covar2d_23[int(0)].x)));
     float radius_y_19 = _S4387 * (F32_sqrt((covar2d_23[int(1)].y)));
-    *aabb_xyxy_19 = make_int4 (int((F32_floor(((*mean2d_19).x - radius_x_19)))), int((F32_floor(((*mean2d_19).y - radius_y_19)))), int((F32_ceil(((*mean2d_19).x + radius_x_19)))), int((F32_ceil(((*mean2d_19).y + radius_y_19)))));
+    *aabb_xyxy_19 = make_float4 ((F32_floor(((*mean2d_19).x - radius_x_19))), (F32_floor(((*mean2d_19).y - radius_y_19))), (F32_ceil(((*mean2d_19).x + radius_x_19))), (F32_ceil(((*mean2d_19).y + radius_y_19))));
     float _S4388 = mean_c_23.z;
     *depth_19 = (F32_max((_S4388), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S4388 + length_1(mean_c_23)))));
     *conic_19 = exp_0(- scale_23);
@@ -13644,7 +13644,7 @@ inline __device__ void projection_3dgut_sv_fisheye_vjp(bool antialiased_31, floa
     return;
 }
 
-inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiased_32, float3  mean_26, float4  quat_26, float3  scale_26, float in_opacity_26, FixedArray<float3 , 5>  sv_sites_26, FixedArray<float3 , 5>  sv_colors_26, Matrix<float, 3, 3>  R_26, float3  t_26, float fx_32, float fy_32, float cx_32, float cy_32, FixedArray<float, 10>  dist_coeffs_32, uint image_width_32, uint image_height_32, float near_plane_26, float far_plane_26, int4  * aabb_xyxy_20, float2  * mean2d_20, float * depth_20, float3  * conic_20, float * opacity_20, float3  * rgb_20)
+inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiased_32, float3  mean_26, float4  quat_26, float3  scale_26, float in_opacity_26, FixedArray<float3 , 5>  sv_sites_26, FixedArray<float3 , 5>  sv_colors_26, Matrix<float, 3, 3>  R_26, float3  t_26, float fx_32, float fy_32, float cx_32, float cy_32, FixedArray<float, 10>  dist_coeffs_32, uint image_width_32, uint image_height_32, float near_plane_26, float far_plane_26, float4  * aabb_xyxy_20, float2  * mean2d_20, float * depth_20, float3  * conic_20, float * opacity_20, float3  * rgb_20)
 {
     float3  mean_c_26 = mul_0(R_26, mean_26) + t_26;
     float3  _S5086 = exp_0(scale_26);
@@ -13819,7 +13819,7 @@ inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiase
     float _S5170 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_20 / 0.00392156885936856f)))))))));
     float radius_x_20 = _S5170 * (F32_sqrt((covar2d_26[int(0)].x)));
     float radius_y_20 = _S5170 * (F32_sqrt((covar2d_26[int(1)].y)));
-    *aabb_xyxy_20 = make_int4 (int((F32_floor(((*mean2d_20).x - radius_x_20)))), int((F32_floor(((*mean2d_20).y - radius_y_20)))), int((F32_ceil(((*mean2d_20).x + radius_x_20)))), int((F32_ceil(((*mean2d_20).y + radius_y_20)))));
+    *aabb_xyxy_20 = make_float4 ((F32_floor(((*mean2d_20).x - radius_x_20))), (F32_floor(((*mean2d_20).y - radius_y_20))), (F32_ceil(((*mean2d_20).x + radius_x_20))), (F32_ceil(((*mean2d_20).y + radius_y_20))));
     float _S5171 = mean_c_26.z;
     *depth_20 = (F32_max((_S5171), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S5171 + length_1(mean_c_26)))));
     *conic_20 = exp_0(- scale_26);
@@ -13835,7 +13835,7 @@ inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiase
     return;
 }
 
-inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialiased_33, float3  mean_27, float4  quat_27, float3  scale_27, float in_opacity_27, FixedArray<float3 , 5>  sv_sites_27, FixedArray<float3 , 5>  sv_colors_27, Matrix<float, 3, 3>  R_27, float3  t_27, float fx_33, float fy_33, float cx_33, float cy_33, FixedArray<float, 10>  dist_coeffs_33, uint image_width_33, uint image_height_33, float near_plane_27, float far_plane_27, int4  * aabb_xyxy_21, float2  * mean2d_21, float * depth_21, float3  * conic_21, float * opacity_21, float3  * rgb_21)
+inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialiased_33, float3  mean_27, float4  quat_27, float3  scale_27, float in_opacity_27, FixedArray<float3 , 5>  sv_sites_27, FixedArray<float3 , 5>  sv_colors_27, Matrix<float, 3, 3>  R_27, float3  t_27, float fx_33, float fy_33, float cx_33, float cy_33, FixedArray<float, 10>  dist_coeffs_33, uint image_width_33, uint image_height_33, float near_plane_27, float far_plane_27, float4  * aabb_xyxy_21, float2  * mean2d_21, float * depth_21, float3  * conic_21, float * opacity_21, float3  * rgb_21)
 {
     float3  mean_c_27 = mul_0(R_27, mean_27) + t_27;
     float3  _S5174 = exp_0(scale_27);
@@ -14071,7 +14071,7 @@ inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialia
     float _S5248 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_21 / 0.00392156885936856f)))))))));
     float radius_x_21 = _S5248 * (F32_sqrt((covar2d_27[int(0)].x)));
     float radius_y_21 = _S5248 * (F32_sqrt((covar2d_27[int(1)].y)));
-    *aabb_xyxy_21 = make_int4 (int((F32_floor(((*mean2d_21).x - radius_x_21)))), int((F32_floor(((*mean2d_21).y - radius_y_21)))), int((F32_ceil(((*mean2d_21).x + radius_x_21)))), int((F32_ceil(((*mean2d_21).y + radius_y_21)))));
+    *aabb_xyxy_21 = make_float4 ((F32_floor(((*mean2d_21).x - radius_x_21))), (F32_floor(((*mean2d_21).y - radius_y_21))), (F32_ceil(((*mean2d_21).x + radius_x_21))), (F32_ceil(((*mean2d_21).y + radius_y_21))));
     float _S5249 = mean_c_27.z;
     *depth_21 = (F32_max((_S5249), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S5249 + length_1(mean_c_27)))));
     *conic_21 = exp_0(- scale_27);
@@ -15519,7 +15519,7 @@ inline __device__ void projection_3dgut_sv_fisheye_vjp(bool antialiased_37, floa
     return;
 }
 
-inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiased_38, float3  mean_30, float4  quat_30, float3  scale_30, float in_opacity_30, FixedArray<float3 , 6>  sv_sites_30, FixedArray<float3 , 6>  sv_colors_30, Matrix<float, 3, 3>  R_30, float3  t_30, float fx_38, float fy_38, float cx_38, float cy_38, FixedArray<float, 10>  dist_coeffs_38, uint image_width_38, uint image_height_38, float near_plane_30, float far_plane_30, int4  * aabb_xyxy_22, float2  * mean2d_22, float * depth_22, float3  * conic_22, float * opacity_22, float3  * rgb_22)
+inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiased_38, float3  mean_30, float4  quat_30, float3  scale_30, float in_opacity_30, FixedArray<float3 , 6>  sv_sites_30, FixedArray<float3 , 6>  sv_colors_30, Matrix<float, 3, 3>  R_30, float3  t_30, float fx_38, float fy_38, float cx_38, float cy_38, FixedArray<float, 10>  dist_coeffs_38, uint image_width_38, uint image_height_38, float near_plane_30, float far_plane_30, float4  * aabb_xyxy_22, float2  * mean2d_22, float * depth_22, float3  * conic_22, float * opacity_22, float3  * rgb_22)
 {
     float3  mean_c_30 = mul_0(R_30, mean_30) + t_30;
     float3  _S5967 = exp_0(scale_30);
@@ -15694,7 +15694,7 @@ inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiase
     float _S6051 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_22 / 0.00392156885936856f)))))))));
     float radius_x_22 = _S6051 * (F32_sqrt((covar2d_30[int(0)].x)));
     float radius_y_22 = _S6051 * (F32_sqrt((covar2d_30[int(1)].y)));
-    *aabb_xyxy_22 = make_int4 (int((F32_floor(((*mean2d_22).x - radius_x_22)))), int((F32_floor(((*mean2d_22).y - radius_y_22)))), int((F32_ceil(((*mean2d_22).x + radius_x_22)))), int((F32_ceil(((*mean2d_22).y + radius_y_22)))));
+    *aabb_xyxy_22 = make_float4 ((F32_floor(((*mean2d_22).x - radius_x_22))), (F32_floor(((*mean2d_22).y - radius_y_22))), (F32_ceil(((*mean2d_22).x + radius_x_22))), (F32_ceil(((*mean2d_22).y + radius_y_22))));
     float _S6052 = mean_c_30.z;
     *depth_22 = (F32_max((_S6052), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S6052 + length_1(mean_c_30)))));
     *conic_22 = exp_0(- scale_30);
@@ -15711,7 +15711,7 @@ inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiase
     return;
 }
 
-inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialiased_39, float3  mean_31, float4  quat_31, float3  scale_31, float in_opacity_31, FixedArray<float3 , 6>  sv_sites_31, FixedArray<float3 , 6>  sv_colors_31, Matrix<float, 3, 3>  R_31, float3  t_31, float fx_39, float fy_39, float cx_39, float cy_39, FixedArray<float, 10>  dist_coeffs_39, uint image_width_39, uint image_height_39, float near_plane_31, float far_plane_31, int4  * aabb_xyxy_23, float2  * mean2d_23, float * depth_23, float3  * conic_23, float * opacity_23, float3  * rgb_23)
+inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialiased_39, float3  mean_31, float4  quat_31, float3  scale_31, float in_opacity_31, FixedArray<float3 , 6>  sv_sites_31, FixedArray<float3 , 6>  sv_colors_31, Matrix<float, 3, 3>  R_31, float3  t_31, float fx_39, float fy_39, float cx_39, float cy_39, FixedArray<float, 10>  dist_coeffs_39, uint image_width_39, uint image_height_39, float near_plane_31, float far_plane_31, float4  * aabb_xyxy_23, float2  * mean2d_23, float * depth_23, float3  * conic_23, float * opacity_23, float3  * rgb_23)
 {
     float3  mean_c_31 = mul_0(R_31, mean_31) + t_31;
     float3  _S6055 = exp_0(scale_31);
@@ -15947,7 +15947,7 @@ inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialia
     float _S6129 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_23 / 0.00392156885936856f)))))))));
     float radius_x_23 = _S6129 * (F32_sqrt((covar2d_31[int(0)].x)));
     float radius_y_23 = _S6129 * (F32_sqrt((covar2d_31[int(1)].y)));
-    *aabb_xyxy_23 = make_int4 (int((F32_floor(((*mean2d_23).x - radius_x_23)))), int((F32_floor(((*mean2d_23).y - radius_y_23)))), int((F32_ceil(((*mean2d_23).x + radius_x_23)))), int((F32_ceil(((*mean2d_23).y + radius_y_23)))));
+    *aabb_xyxy_23 = make_float4 ((F32_floor(((*mean2d_23).x - radius_x_23))), (F32_floor(((*mean2d_23).y - radius_y_23))), (F32_ceil(((*mean2d_23).x + radius_x_23))), (F32_ceil(((*mean2d_23).y + radius_y_23))));
     float _S6130 = mean_c_31.z;
     *depth_23 = (F32_max((_S6130), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S6130 + length_1(mean_c_31)))));
     *conic_23 = exp_0(- scale_31);
@@ -17440,7 +17440,7 @@ inline __device__ void projection_3dgut_sv_fisheye_vjp(bool antialiased_43, floa
     return;
 }
 
-inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiased_44, float3  mean_34, float4  quat_34, float3  scale_34, float in_opacity_34, FixedArray<float3 , 7>  sv_sites_34, FixedArray<float3 , 7>  sv_colors_34, Matrix<float, 3, 3>  R_34, float3  t_34, float fx_44, float fy_44, float cx_44, float cy_44, FixedArray<float, 10>  dist_coeffs_44, uint image_width_44, uint image_height_44, float near_plane_34, float far_plane_34, int4  * aabb_xyxy_24, float2  * mean2d_24, float * depth_24, float3  * conic_24, float * opacity_24, float3  * rgb_24)
+inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiased_44, float3  mean_34, float4  quat_34, float3  scale_34, float in_opacity_34, FixedArray<float3 , 7>  sv_sites_34, FixedArray<float3 , 7>  sv_colors_34, Matrix<float, 3, 3>  R_34, float3  t_34, float fx_44, float fy_44, float cx_44, float cy_44, FixedArray<float, 10>  dist_coeffs_44, uint image_width_44, uint image_height_44, float near_plane_34, float far_plane_34, float4  * aabb_xyxy_24, float2  * mean2d_24, float * depth_24, float3  * conic_24, float * opacity_24, float3  * rgb_24)
 {
     float3  mean_c_34 = mul_0(R_34, mean_34) + t_34;
     float3  _S6868 = exp_0(scale_34);
@@ -17615,7 +17615,7 @@ inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiase
     float _S6952 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_24 / 0.00392156885936856f)))))))));
     float radius_x_24 = _S6952 * (F32_sqrt((covar2d_34[int(0)].x)));
     float radius_y_24 = _S6952 * (F32_sqrt((covar2d_34[int(1)].y)));
-    *aabb_xyxy_24 = make_int4 (int((F32_floor(((*mean2d_24).x - radius_x_24)))), int((F32_floor(((*mean2d_24).y - radius_y_24)))), int((F32_ceil(((*mean2d_24).x + radius_x_24)))), int((F32_ceil(((*mean2d_24).y + radius_y_24)))));
+    *aabb_xyxy_24 = make_float4 ((F32_floor(((*mean2d_24).x - radius_x_24))), (F32_floor(((*mean2d_24).y - radius_y_24))), (F32_ceil(((*mean2d_24).x + radius_x_24))), (F32_ceil(((*mean2d_24).y + radius_y_24))));
     float _S6953 = mean_c_34.z;
     *depth_24 = (F32_max((_S6953), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S6953 + length_1(mean_c_34)))));
     *conic_24 = exp_0(- scale_34);
@@ -17633,7 +17633,7 @@ inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiase
     return;
 }
 
-inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialiased_45, float3  mean_35, float4  quat_35, float3  scale_35, float in_opacity_35, FixedArray<float3 , 7>  sv_sites_35, FixedArray<float3 , 7>  sv_colors_35, Matrix<float, 3, 3>  R_35, float3  t_35, float fx_45, float fy_45, float cx_45, float cy_45, FixedArray<float, 10>  dist_coeffs_45, uint image_width_45, uint image_height_45, float near_plane_35, float far_plane_35, int4  * aabb_xyxy_25, float2  * mean2d_25, float * depth_25, float3  * conic_25, float * opacity_25, float3  * rgb_25)
+inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialiased_45, float3  mean_35, float4  quat_35, float3  scale_35, float in_opacity_35, FixedArray<float3 , 7>  sv_sites_35, FixedArray<float3 , 7>  sv_colors_35, Matrix<float, 3, 3>  R_35, float3  t_35, float fx_45, float fy_45, float cx_45, float cy_45, FixedArray<float, 10>  dist_coeffs_45, uint image_width_45, uint image_height_45, float near_plane_35, float far_plane_35, float4  * aabb_xyxy_25, float2  * mean2d_25, float * depth_25, float3  * conic_25, float * opacity_25, float3  * rgb_25)
 {
     float3  mean_c_35 = mul_0(R_35, mean_35) + t_35;
     float3  _S6956 = exp_0(scale_35);
@@ -17869,7 +17869,7 @@ inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialia
     float _S7030 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_25 / 0.00392156885936856f)))))))));
     float radius_x_25 = _S7030 * (F32_sqrt((covar2d_35[int(0)].x)));
     float radius_y_25 = _S7030 * (F32_sqrt((covar2d_35[int(1)].y)));
-    *aabb_xyxy_25 = make_int4 (int((F32_floor(((*mean2d_25).x - radius_x_25)))), int((F32_floor(((*mean2d_25).y - radius_y_25)))), int((F32_ceil(((*mean2d_25).x + radius_x_25)))), int((F32_ceil(((*mean2d_25).y + radius_y_25)))));
+    *aabb_xyxy_25 = make_float4 ((F32_floor(((*mean2d_25).x - radius_x_25))), (F32_floor(((*mean2d_25).y - radius_y_25))), (F32_ceil(((*mean2d_25).x + radius_x_25))), (F32_ceil(((*mean2d_25).y + radius_y_25))));
     float _S7031 = mean_c_35.z;
     *depth_25 = (F32_max((_S7031), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S7031 + length_1(mean_c_35)))));
     *conic_25 = exp_0(- scale_35);
@@ -19407,7 +19407,7 @@ inline __device__ void projection_3dgut_sv_fisheye_vjp(bool antialiased_49, floa
     return;
 }
 
-inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiased_50, float3  mean_38, float4  quat_38, float3  scale_38, float in_opacity_38, FixedArray<float3 , 8>  sv_sites_38, FixedArray<float3 , 8>  sv_colors_38, Matrix<float, 3, 3>  R_38, float3  t_38, float fx_50, float fy_50, float cx_50, float cy_50, FixedArray<float, 10>  dist_coeffs_50, uint image_width_50, uint image_height_50, float near_plane_38, float far_plane_38, int4  * aabb_xyxy_26, float2  * mean2d_26, float * depth_26, float3  * conic_26, float * opacity_26, float3  * rgb_26)
+inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiased_50, float3  mean_38, float4  quat_38, float3  scale_38, float in_opacity_38, FixedArray<float3 , 8>  sv_sites_38, FixedArray<float3 , 8>  sv_colors_38, Matrix<float, 3, 3>  R_38, float3  t_38, float fx_50, float fy_50, float cx_50, float cy_50, FixedArray<float, 10>  dist_coeffs_50, uint image_width_50, uint image_height_50, float near_plane_38, float far_plane_38, float4  * aabb_xyxy_26, float2  * mean2d_26, float * depth_26, float3  * conic_26, float * opacity_26, float3  * rgb_26)
 {
     float3  mean_c_38 = mul_0(R_38, mean_38) + t_38;
     float3  _S7789 = exp_0(scale_38);
@@ -19582,7 +19582,7 @@ inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiase
     float _S7873 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_26 / 0.00392156885936856f)))))))));
     float radius_x_26 = _S7873 * (F32_sqrt((covar2d_38[int(0)].x)));
     float radius_y_26 = _S7873 * (F32_sqrt((covar2d_38[int(1)].y)));
-    *aabb_xyxy_26 = make_int4 (int((F32_floor(((*mean2d_26).x - radius_x_26)))), int((F32_floor(((*mean2d_26).y - radius_y_26)))), int((F32_ceil(((*mean2d_26).x + radius_x_26)))), int((F32_ceil(((*mean2d_26).y + radius_y_26)))));
+    *aabb_xyxy_26 = make_float4 ((F32_floor(((*mean2d_26).x - radius_x_26))), (F32_floor(((*mean2d_26).y - radius_y_26))), (F32_ceil(((*mean2d_26).x + radius_x_26))), (F32_ceil(((*mean2d_26).y + radius_y_26))));
     float _S7874 = mean_c_38.z;
     *depth_26 = (F32_max((_S7874), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S7874 + length_1(mean_c_38)))));
     *conic_26 = exp_0(- scale_38);
@@ -19601,7 +19601,7 @@ inline __device__ void _projection_3dgut_sv_persp_differentiable(bool antialiase
     return;
 }
 
-inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialiased_51, float3  mean_39, float4  quat_39, float3  scale_39, float in_opacity_39, FixedArray<float3 , 8>  sv_sites_39, FixedArray<float3 , 8>  sv_colors_39, Matrix<float, 3, 3>  R_39, float3  t_39, float fx_51, float fy_51, float cx_51, float cy_51, FixedArray<float, 10>  dist_coeffs_51, uint image_width_51, uint image_height_51, float near_plane_39, float far_plane_39, int4  * aabb_xyxy_27, float2  * mean2d_27, float * depth_27, float3  * conic_27, float * opacity_27, float3  * rgb_27)
+inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialiased_51, float3  mean_39, float4  quat_39, float3  scale_39, float in_opacity_39, FixedArray<float3 , 8>  sv_sites_39, FixedArray<float3 , 8>  sv_colors_39, Matrix<float, 3, 3>  R_39, float3  t_39, float fx_51, float fy_51, float cx_51, float cy_51, FixedArray<float, 10>  dist_coeffs_51, uint image_width_51, uint image_height_51, float near_plane_39, float far_plane_39, float4  * aabb_xyxy_27, float2  * mean2d_27, float * depth_27, float3  * conic_27, float * opacity_27, float3  * rgb_27)
 {
     float3  mean_c_39 = mul_0(R_39, mean_39) + t_39;
     float3  _S7877 = exp_0(scale_39);
@@ -19837,7 +19837,7 @@ inline __device__ void _projection_3dgut_sv_fisheye_differentiable(bool antialia
     float _S7951 = (F32_min((3.32999992370605469f), ((F32_sqrt((2.0f * (F32_log((*opacity_27 / 0.00392156885936856f)))))))));
     float radius_x_27 = _S7951 * (F32_sqrt((covar2d_39[int(0)].x)));
     float radius_y_27 = _S7951 * (F32_sqrt((covar2d_39[int(1)].y)));
-    *aabb_xyxy_27 = make_int4 (int((F32_floor(((*mean2d_27).x - radius_x_27)))), int((F32_floor(((*mean2d_27).y - radius_y_27)))), int((F32_ceil(((*mean2d_27).x + radius_x_27)))), int((F32_ceil(((*mean2d_27).y + radius_y_27)))));
+    *aabb_xyxy_27 = make_float4 ((F32_floor(((*mean2d_27).x - radius_x_27))), (F32_floor(((*mean2d_27).y - radius_y_27))), (F32_ceil(((*mean2d_27).x + radius_x_27))), (F32_ceil(((*mean2d_27).y + radius_y_27))));
     float _S7952 = mean_c_39.z;
     *depth_27 = (F32_max((_S7952), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S7952 + length_1(mean_c_39)))));
     *conic_27 = exp_0(- scale_39);

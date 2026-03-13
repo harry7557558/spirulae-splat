@@ -37,7 +37,7 @@ template<bool is_counting_pass>
 __global__ void intersect_tile_kernel(
     const uint32_t I,
     const uint32_t N,
-    const int4 *__restrict__ aabb_buffer,  // [..., N, 4], int32, xyxy in pixels
+    const float4 *__restrict__ aabb_buffer,  // [..., N, 4], int32, xyxy in pixels
     const float *__restrict__ depths_buffer,  // [..., N]
     const int64_t *__restrict__ cum_tiles_per_splat, // [..., N], optional for counting pass
     const uint32_t tile_width,
@@ -52,23 +52,22 @@ __global__ void intersect_tile_kernel(
         return;
     }
 
-    int4 aabb = aabb_buffer[idx];
-    int xmin_i32 = aabb.x, ymin_i32 = aabb.y;
-    int xmax_i32 = aabb.z, ymax_i32 = aabb.w;
+    float4 aabb = aabb_buffer[idx];
+    float xmin = aabb.x, ymin = aabb.y;
+    float xmax = aabb.z, ymax = aabb.w;
 
-    if (xmax_i32 <= xmin_i32 || ymax_i32 <= ymin_i32) {
+    if (xmax <= xmin || ymax <= ymin) {
         if (is_counting_pass) {
             tiles_per_splat[idx] = 0;
         }
         return;
     }
 
-    // tile_min is inclusive, tile_max is exclusive
     uint2 tile_min, tile_max;
-    tile_min.x = min(max(0, (uint32_t)(xmin_i32 / TILE_SIZE)), tile_width);
-    tile_min.y = min(max(0, (uint32_t)(ymin_i32 / TILE_SIZE)), tile_height);
-    tile_max.x = min(max(0, (uint32_t)((xmax_i32 + TILE_SIZE - 1) / TILE_SIZE)), tile_width);
-    tile_max.y = min(max(0, (uint32_t)((ymax_i32 + TILE_SIZE - 1) / TILE_SIZE)), tile_height);
+    tile_min.x = (uint32_t)min(max(0, (int)floorf((xmin + 0.5f) / TILE_SIZE)), (int)tile_width);
+    tile_min.y = (uint32_t)min(max(0, (int)floorf((ymin + 0.5f) / TILE_SIZE)), (int)tile_height);
+    tile_max.x = (uint32_t)min(max(0, (int)ceilf((xmax + 0.5f) / TILE_SIZE)), (int)tile_width);
+    tile_max.y = (uint32_t)min(max(0, (int)ceilf((ymax + 0.5f) / TILE_SIZE)), (int)tile_height);
     if (is_counting_pass) {
         // counting pass only writes out tiles_per_splat
         tiles_per_splat[idx] = static_cast<int32_t>(
@@ -82,17 +81,26 @@ __global__ void intersect_tile_kernel(
     int32_t depth_i32 = __float_as_int(depths_buffer[idx]);
     
     int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_splat[idx - 1];
+    int64_t max_idx = cum_tiles_per_splat[idx];
     for (int32_t i = tile_min.y; i < tile_max.y; ++i) {
         for (int32_t j = tile_min.x; j < tile_max.x; ++j) {
+            if (cur_idx >= max_idx) break;
             int64_t tile_id = iid * tile_width * tile_height + i * tile_width + j;
             isect_ids[cur_idx] = (tile_id << 32) | (int64_t)depth_i32;
             flatten_ids[cur_idx] = static_cast<int32_t>(idx);
             ++cur_idx;
         }
     }
+    // this can happen with floating point optimization, make sure it doesn't introduce invalid ID
+    while (cur_idx < max_idx) {
+        int64_t tile_id = iid * tile_width * tile_height;
+        isect_ids[cur_idx] = (tile_id << 32) | (int64_t)0xffffffff;
+        flatten_ids[cur_idx] = static_cast<int32_t>(idx);
+        ++cur_idx;
+    }
 
     // save radii
-    float radius = 0.5f * fmaxf((float)(xmax_i32 - xmin_i32), (float)(ymax_i32 - ymin_i32));
+    float radius = 0.5f * fmaxf((float)(xmax - xmin), (float)(ymax - ymin));
     atomicMax(&radii[idx % N], radius);
 }
 
@@ -334,7 +342,7 @@ std::tuple<
     at::Tensor,  // offsets, [I * n_tiles], int32
     at::Tensor  // radii, [N], float32
 > do_intersect_tile_generic(
-    at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
+    at::Tensor aabb,  // [..., N, 4], float32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
     const uint32_t image_width,
     const uint32_t image_height
@@ -362,7 +370,7 @@ std::tuple<
     intersect_tile_kernel<true><<<_LAUNCH_ARGS_1D(I*N, 256)>>>(
         I,
         N,
-        reinterpret_cast<const int4 *>(aabb.data_ptr<int32_t>()),
+        reinterpret_cast<const float4 *>(aabb.data_ptr<float>()),
         depths.data_ptr<float>(),
         nullptr,  // cum_tiles_per_splat
         tile_width,
@@ -406,7 +414,7 @@ std::tuple<
     intersect_tile_kernel<false><<<_LAUNCH_ARGS_1D(I*N, 256)>>>(
         I,
         N,
-        reinterpret_cast<const int4 *>(aabb.data_ptr<int32_t>()),
+        reinterpret_cast<const float4 *>(aabb.data_ptr<float>()),
         depths.data_ptr<float>(),
         reinterpret_cast<const int64_t *>(cum_tiles_per_splat.data_ptr<int64_t>()),
         tile_width,
@@ -428,7 +436,7 @@ std::tuple<
         flatten_ids.data_ptr<int32_t>(), flatten_ids_sorted.data_ptr<int32_t>()
     );
     int tile_n_bits = 0;
-    while ((1U << tile_n_bits) < n_tiles)
+    while ((1U << tile_n_bits) <= n_tiles)
         ++tile_n_bits;
     CUB_WRAPPER(
         cub::DeviceRadixSort::SortPairs,
@@ -656,7 +664,7 @@ std::tuple<
     at::Tensor,  // offsets, [I * n_tiles], int32
     at::Tensor  // radii, [N], float32
 > intersect_tile_3dgs_tensor(
-    at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
+    at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
     const uint32_t image_width,
     const uint32_t image_height,
@@ -682,7 +690,7 @@ std::tuple<
     at::Tensor,  // offsets, [I * n_tiles], int32
     at::Tensor  // radii, [N], float32
 > intersect_tile_mip_tensor(
-    at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
+    at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
     const uint32_t image_width,
     const uint32_t image_height,
@@ -708,7 +716,7 @@ std::tuple<
     at::Tensor,  // offsets, [I * n_tiles], int32
     at::Tensor  // radii, [N], float32
 > intersect_tile_3dgut_tensor(
-    at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
+    at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
     const uint32_t image_width,
     const uint32_t image_height,
@@ -738,7 +746,7 @@ std::tuple<
     at::Tensor,  // offsets, [I * n_tiles], int32
     at::Tensor  // radii, [N], float32
 > intersect_tile_3dgut_sv_tensor(
-    at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
+    at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
     const uint32_t image_width,
     const uint32_t image_height,
@@ -768,7 +776,7 @@ std::tuple<
     at::Tensor,  // offsets, [I * n_tiles], int32
     at::Tensor  // radii, [N], float32
 > intersect_tile_opaque_triangle_tensor(
-    at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
+    at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
     const uint32_t image_width,
     const uint32_t image_height,
@@ -798,7 +806,7 @@ std::tuple<
     at::Tensor,  // offsets, [I * n_tiles], int32
     at::Tensor  // radii, [N], float32
 > intersect_tile_voxel_tensor(
-    at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
+    at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
     const uint32_t image_width,
     const uint32_t image_height,

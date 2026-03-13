@@ -438,7 +438,7 @@ inline __device__ float3  normalize_0(float3  x_7)
     return x_7 / make_float3 (length_1(x_7));
 }
 
-inline __device__ void projection_opaque_triangle_eval3d_persp(float3  mean_0, float4  quat_0, float3  scale_0, float2  hardness_0, FixedArray<float3 , 16>  sh_coeffs_0, FixedArray<float3 , 2>  ch_coeffs_0, Matrix<float, 3, 3>  R_0, float3  t_0, float fx_0, float fy_0, float cx_0, float cy_0, FixedArray<float, 10>  dist_coeffs_0, uint image_width_0, uint image_height_0, float near_plane_0, float far_plane_0, int4  * aabb_xyxy_0, float * depth_0, FixedArray<float3 , 3>  * verts_0, FixedArray<float3 , 3>  * rgbs_0, float3  * normal_0)
+inline __device__ void projection_opaque_triangle_eval3d_persp(float3  mean_0, float4  quat_0, float3  scale_0, float2  hardness_0, FixedArray<float3 , 16>  sh_coeffs_0, FixedArray<float3 , 2>  ch_coeffs_0, Matrix<float, 3, 3>  R_0, float3  t_0, float fx_0, float fy_0, float cx_0, float cy_0, FixedArray<float, 10>  dist_coeffs_0, uint image_width_0, uint image_height_0, float near_plane_0, float far_plane_0, float4  * aabb_xyxy_0, float * depth_0, FixedArray<float3 , 3>  * verts_0, FixedArray<float3 , 3>  * rgbs_0, float3  * normal_0)
 {
     for(;;)
     {
@@ -455,7 +455,7 @@ inline __device__ void projection_opaque_triangle_eval3d_persp(float3  mean_0, f
         }
         if(_S32)
         {
-            *aabb_xyxy_0 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_0 = make_float4 (0.0f);
             break;
         }
         float _S33 = scale_0.x;
@@ -525,7 +525,7 @@ inline __device__ void projection_opaque_triangle_eval3d_persp(float3  mean_0, f
         }
         if(_S32)
         {
-            *aabb_xyxy_0 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_0 = make_float4 (0.0f);
             break;
         }
         float2  uv0_0;
@@ -667,7 +667,7 @@ inline __device__ void projection_opaque_triangle_eval3d_persp(float3  mean_0, f
         }
         if(!(all_valid_1 & (!_S32)))
         {
-            *aabb_xyxy_0 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_0 = make_float4 (0.0f);
             break;
         }
         float2  e0_0 = uv1_0 - uv0_0;
@@ -746,10 +746,10 @@ inline __device__ void projection_opaque_triangle_eval3d_persp(float3  mean_0, f
         }
         if(_S32)
         {
-            *aabb_xyxy_0 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_0 = make_float4 (0.0f);
             break;
         }
-        *aabb_xyxy_0 = make_int4 (int((F32_floor((xmin_0)))), int((F32_floor((ymin_0)))), int((F32_ceil((xmax_0)))), int((F32_ceil((ymax_0)))));
+        *aabb_xyxy_0 = make_float4 (xmin_0, ymin_0, xmax_0, ymax_0);
         float3  _S93 = (vert0_c_0 + vert1_c_0 + vert2_c_0) / make_float3 (3.0f);
         float _S94 = _S93.z;
         *depth_0 = (F32_max((_S94), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S94 + length_1(_S93)))));
@@ -784,7 +784,7 @@ inline __device__ void projection_opaque_triangle_eval3d_persp(float3  mean_0, f
     return;
 }
 
-inline __device__ void projection_opaque_triangle_eval3d_fisheye(float3  mean_1, float4  quat_1, float3  scale_1, float2  hardness_1, FixedArray<float3 , 16>  sh_coeffs_1, FixedArray<float3 , 2>  ch_coeffs_1, Matrix<float, 3, 3>  R_1, float3  t_1, float fx_1, float fy_1, float cx_1, float cy_1, FixedArray<float, 10>  dist_coeffs_1, uint image_width_1, uint image_height_1, float near_plane_1, float far_plane_1, int4  * aabb_xyxy_1, float * depth_1, FixedArray<float3 , 3>  * verts_1, FixedArray<float3 , 3>  * rgbs_1, float3  * normal_1)
+inline __device__ void projection_opaque_triangle_eval3d_fisheye(float3  mean_1, float4  quat_1, float3  scale_1, float2  hardness_1, FixedArray<float3 , 16>  sh_coeffs_1, FixedArray<float3 , 2>  ch_coeffs_1, Matrix<float, 3, 3>  R_1, float3  t_1, float fx_1, float fy_1, float cx_1, float cy_1, FixedArray<float, 10>  dist_coeffs_1, uint image_width_1, uint image_height_1, float near_plane_1, float far_plane_1, float4  * aabb_xyxy_1, float * depth_1, FixedArray<float3 , 3>  * verts_1, FixedArray<float3 , 3>  * rgbs_1, float3  * normal_1)
 {
     float2  _S103;
     float _S104;
@@ -820,7 +820,7 @@ inline __device__ void projection_opaque_triangle_eval3d_fisheye(float3  mean_1,
         }
         if(_S123)
         {
-            *aabb_xyxy_1 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_1 = make_float4 (0.0f);
             break;
         }
         float _S124 = scale_1.x;
@@ -890,7 +890,7 @@ inline __device__ void projection_opaque_triangle_eval3d_fisheye(float3  mean_1,
         }
         if(_S123)
         {
-            *aabb_xyxy_1 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_1 = make_float4 (0.0f);
             break;
         }
         float2  uv0_2;
@@ -1063,7 +1063,7 @@ inline __device__ void projection_opaque_triangle_eval3d_fisheye(float3  mean_1,
         }
         if(!(all_valid_3 & (!_S121)))
         {
-            *aabb_xyxy_1 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_1 = make_float4 (0.0f);
             break;
         }
         float2  e0_1 = uv1_2 - uv0_2;
@@ -1142,10 +1142,10 @@ inline __device__ void projection_opaque_triangle_eval3d_fisheye(float3  mean_1,
         }
         if(_S123)
         {
-            *aabb_xyxy_1 = make_int4 (int(0), int(0), int(0), int(0));
+            *aabb_xyxy_1 = make_float4 (0.0f);
             break;
         }
-        *aabb_xyxy_1 = make_int4 (int((F32_floor((xmin_1)))), int((F32_floor((ymin_1)))), int((F32_ceil((xmax_1)))), int((F32_ceil((ymax_1)))));
+        *aabb_xyxy_1 = make_float4 (xmin_1, ymin_1, xmax_1, ymax_1);
         float3  _S196 = (vert0_c_1 + vert1_c_1 + vert2_c_1) / make_float3 (3.0f);
         float _S197 = _S196.z;
         *depth_1 = (F32_max((_S197), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S197 + length_1(_S196)))));
@@ -1180,7 +1180,7 @@ inline __device__ void projection_opaque_triangle_eval3d_fisheye(float3  mean_1,
     return;
 }
 
-inline __device__ void _projection_opaque_triangle_eval3d_persp_differentiable(float3  mean_2, float4  quat_2, float3  scale_2, float2  hardness_2, FixedArray<float3 , 16>  sh_coeffs_2, FixedArray<float3 , 2>  ch_coeffs_2, Matrix<float, 3, 3>  R_2, float3  t_2, float fx_2, float fy_2, float cx_2, float cy_2, FixedArray<float, 10>  dist_coeffs_2, uint image_width_2, uint image_height_2, float near_plane_2, float far_plane_2, int4  * aabb_xyxy_2, float * depth_2, FixedArray<float3 , 3>  * verts_2, FixedArray<float3 , 3>  * rgbs_2, float3  * normal_2)
+inline __device__ void _projection_opaque_triangle_eval3d_persp_differentiable(float3  mean_2, float4  quat_2, float3  scale_2, float2  hardness_2, FixedArray<float3 , 16>  sh_coeffs_2, FixedArray<float3 , 2>  ch_coeffs_2, Matrix<float, 3, 3>  R_2, float3  t_2, float fx_2, float fy_2, float cx_2, float cy_2, FixedArray<float, 10>  dist_coeffs_2, uint image_width_2, uint image_height_2, float near_plane_2, float far_plane_2, float4  * aabb_xyxy_2, float * depth_2, FixedArray<float3 , 3>  * verts_2, FixedArray<float3 , 3>  * rgbs_2, float3  * normal_2)
 {
     float3  mean_c_2 = mul_0(R_2, mean_2) + t_2;
     float _S206 = scale_2.x;
@@ -1237,7 +1237,7 @@ inline __device__ void _projection_opaque_triangle_eval3d_persp_differentiable(f
     float2  e0_2 = uv1_4 - uv0_4;
     float2  e1_2 = uv2_4 - uv1_4;
     float offset_2 = (1.0f / (1.0f - (F32_exp2((-1.0f / (1.0f - hardness_2.y))))) - 1.0f) * ((F32_abs((e0_2.x * e1_2.y - e0_2.y * e1_2.x))) / (length_0(e0_2) + length_0(e1_2) + length_0(uv0_4 - uv2_4)));
-    *aabb_xyxy_2 = make_int4 (int((F32_floor(((F32_min(((F32_min((_S214), (_S219)))), (_S224))) - offset_2)))), int((F32_floor(((F32_min(((F32_min((_S215), (_S220)))), (_S225))) - offset_2)))), int((F32_ceil(((F32_max(((F32_max((_S214), (_S219)))), (_S224))) + offset_2)))), int((F32_ceil(((F32_max(((F32_max((_S215), (_S220)))), (_S225))) + offset_2)))));
+    *aabb_xyxy_2 = make_float4 ((F32_min(((F32_min((_S214), (_S219)))), (_S224))) - offset_2, (F32_min(((F32_min((_S215), (_S220)))), (_S225))) - offset_2, (F32_max(((F32_max((_S214), (_S219)))), (_S224))) + offset_2, (F32_max(((F32_max((_S215), (_S220)))), (_S225))) + offset_2);
     float3  _S226 = (vert0_c_2 + vert1_c_2 + vert2_c_2) / make_float3 (3.0f);
     float _S227 = _S226.z;
     *depth_2 = (F32_max((_S227), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S227 + length_1(_S226)))));
@@ -1270,7 +1270,7 @@ inline __device__ void _projection_opaque_triangle_eval3d_persp_differentiable(f
     return;
 }
 
-inline __device__ void _projection_opaque_triangle_eval3d_fisheye_differentiable(float3  mean_3, float4  quat_3, float3  scale_3, float2  hardness_3, FixedArray<float3 , 16>  sh_coeffs_3, FixedArray<float3 , 2>  ch_coeffs_3, Matrix<float, 3, 3>  R_3, float3  t_3, float fx_3, float fy_3, float cx_3, float cy_3, FixedArray<float, 10>  dist_coeffs_3, uint image_width_3, uint image_height_3, float near_plane_3, float far_plane_3, int4  * aabb_xyxy_3, float * depth_3, FixedArray<float3 , 3>  * verts_3, FixedArray<float3 , 3>  * rgbs_3, float3  * normal_3)
+inline __device__ void _projection_opaque_triangle_eval3d_fisheye_differentiable(float3  mean_3, float4  quat_3, float3  scale_3, float2  hardness_3, FixedArray<float3 , 16>  sh_coeffs_3, FixedArray<float3 , 2>  ch_coeffs_3, Matrix<float, 3, 3>  R_3, float3  t_3, float fx_3, float fy_3, float cx_3, float cy_3, FixedArray<float, 10>  dist_coeffs_3, uint image_width_3, uint image_height_3, float near_plane_3, float far_plane_3, float4  * aabb_xyxy_3, float * depth_3, FixedArray<float3 , 3>  * verts_3, FixedArray<float3 , 3>  * rgbs_3, float3  * normal_3)
 {
     float3  mean_c_3 = mul_0(R_3, mean_3) + t_3;
     float _S236 = scale_3.x;
@@ -1364,7 +1364,7 @@ inline __device__ void _projection_opaque_triangle_eval3d_fisheye_differentiable
     float2  e0_3 = uv1_5 - uv0_5;
     float2  e1_3 = uv2_5 - uv1_5;
     float offset_3 = (1.0f / (1.0f - (F32_exp2((-1.0f / (1.0f - hardness_3.y))))) - 1.0f) * ((F32_abs((e0_3.x * e1_3.y - e0_3.y * e1_3.x))) / (length_0(e0_3) + length_0(e1_3) + length_0(uv0_5 - uv2_5)));
-    *aabb_xyxy_3 = make_int4 (int((F32_floor(((F32_min(((F32_min((_S246), (_S253)))), (_S260))) - offset_3)))), int((F32_floor(((F32_min(((F32_min((_S247), (_S254)))), (_S261))) - offset_3)))), int((F32_ceil(((F32_max(((F32_max((_S246), (_S253)))), (_S260))) + offset_3)))), int((F32_ceil(((F32_max(((F32_max((_S247), (_S254)))), (_S261))) + offset_3)))));
+    *aabb_xyxy_3 = make_float4 ((F32_min(((F32_min((_S246), (_S253)))), (_S260))) - offset_3, (F32_min(((F32_min((_S247), (_S254)))), (_S261))) - offset_3, (F32_max(((F32_max((_S246), (_S253)))), (_S260))) + offset_3, (F32_max(((F32_max((_S247), (_S254)))), (_S261))) + offset_3);
     float3  _S262 = (vert0_c_3 + vert1_c_3 + vert2_c_3) / make_float3 (3.0f);
     float _S263 = _S262.z;
     *depth_3 = (F32_max((_S263), (1.0f / (1.0f + (F32_sqrt((2.0f)))) * (_S263 + length_1(_S262)))));
@@ -1924,25 +1924,25 @@ inline __device__ void projection_opaque_triangle_eval3d_persp_vjp(float3  mean_
     DiffPair_float_0 _S553;
     (&_S553)->primal_0 = _S399;
     (&_S553)->differential_0 = 0.0f;
-    s_bwd_prop_exp2_0(&_S553, 0.0f);
+    s_bwd_prop_exp2_0(&_S553, -0.0f);
     float _S554 = - (-1.0f * - (_S553.differential_0 / _S400));
     float2  _S555 = make_float2 (0.0f);
     DiffPair_vectorx3Cfloatx2C2x3E_0 _S556;
     (&_S556)->primal_0 = e2_0;
     (&_S556)->differential_0 = _S555;
-    s_bwd_length_impl_1(&_S556, -0.0f);
+    s_bwd_length_impl_1(&_S556, 0.0f);
     DiffPair_vectorx3Cfloatx2C2x3E_0 _S557;
     (&_S557)->primal_0 = e1_4;
     (&_S557)->differential_0 = _S555;
-    s_bwd_length_impl_1(&_S557, -0.0f);
+    s_bwd_length_impl_1(&_S557, 0.0f);
     DiffPair_vectorx3Cfloatx2C2x3E_0 _S558;
     (&_S558)->primal_0 = e0_4;
     (&_S558)->differential_0 = _S555;
-    s_bwd_length_impl_1(&_S558, -0.0f);
+    s_bwd_length_impl_1(&_S558, 0.0f);
     DiffPair_float_0 _S559;
     (&_S559)->primal_0 = _S397;
     (&_S559)->differential_0 = 0.0f;
-    s_bwd_prop_abs_0(&_S559, 0.0f);
+    s_bwd_prop_abs_0(&_S559, -0.0f);
     float _S560 = - _S559.differential_0;
     float2  _S561 = _S557.differential_0 + make_float2 (_S395 * _S560, _S393 * _S559.differential_0);
     float2  _S562 = _S558.differential_0 + make_float2 (_S394 * _S559.differential_0, _S396 * _S560);
@@ -2597,25 +2597,25 @@ inline __device__ void projection_opaque_triangle_eval3d_fisheye_vjp(float3  mea
     DiffPair_float_0 _S925;
     (&_S925)->primal_0 = _S769;
     (&_S925)->differential_0 = 0.0f;
-    s_bwd_prop_exp2_0(&_S925, 0.0f);
+    s_bwd_prop_exp2_0(&_S925, -0.0f);
     float _S926 = - (-1.0f * - (_S925.differential_0 / _S770));
     float2  _S927 = make_float2 (0.0f);
     DiffPair_vectorx3Cfloatx2C2x3E_0 _S928;
     (&_S928)->primal_0 = e2_1;
     (&_S928)->differential_0 = _S927;
-    s_bwd_length_impl_1(&_S928, -0.0f);
+    s_bwd_length_impl_1(&_S928, 0.0f);
     DiffPair_vectorx3Cfloatx2C2x3E_0 _S929;
     (&_S929)->primal_0 = e1_5;
     (&_S929)->differential_0 = _S927;
-    s_bwd_length_impl_1(&_S929, -0.0f);
+    s_bwd_length_impl_1(&_S929, 0.0f);
     DiffPair_vectorx3Cfloatx2C2x3E_0 _S930;
     (&_S930)->primal_0 = e0_5;
     (&_S930)->differential_0 = _S927;
-    s_bwd_length_impl_1(&_S930, -0.0f);
+    s_bwd_length_impl_1(&_S930, 0.0f);
     DiffPair_float_0 _S931;
     (&_S931)->primal_0 = _S767;
     (&_S931)->differential_0 = 0.0f;
-    s_bwd_prop_abs_0(&_S931, 0.0f);
+    s_bwd_prop_abs_0(&_S931, -0.0f);
     float _S932 = - _S931.differential_0;
     float2  _S933 = _S929.differential_0 + make_float2 (_S765 * _S932, _S763 * _S931.differential_0);
     float2  _S934 = - _S933;
@@ -2693,12 +2693,12 @@ inline __device__ void projection_opaque_triangle_eval3d_fisheye_vjp(float3  mea
     float3  _S970 = _S956[int(13)];
     float3  _S971 = _S956[int(14)];
     float3  _S972 = _S956[int(15)];
-    float _S973 = _S919.differential_0 + _S923.differential_0;
-    float2  _S974 = _S928.differential_0 + _S936;
-    float _S975 = _S912.differential_0 + _S916.differential_0;
-    float _S976 = _S911.differential_0 + _S915.differential_0;
-    float2  _S977 = _S934 + _S935;
-    float _S978 = _S920.differential_0 + _S924.differential_0;
+    float _S973 = _S912.differential_0 + _S916.differential_0;
+    float _S974 = _S911.differential_0 + _S915.differential_0;
+    float _S975 = _S919.differential_0 + _S923.differential_0;
+    float _S976 = _S920.differential_0 + _S924.differential_0;
+    float2  _S977 = _S928.differential_0 + _S936;
+    float2  _S978 = _S934 + _S935;
     float2  _S979 = make_float2 (0.0f, _S926);
     float2  _S980 = _S739 * _S949;
     float2  _S981 = _S750 * _S949;
@@ -2734,8 +2734,8 @@ inline __device__ void projection_opaque_triangle_eval3d_fisheye_vjp(float3  mea
     (&_S992)->differential_0 = _S927;
     s_bwd_length_impl_1(&_S992, _S991);
     float2  _S993 = _S992.differential_0 + _S981;
-    float _S994 = fx_5 * (_S977.x + _S978);
-    float2  _S995 = make_float2 (_S994, fy_5 * (_S977.y + _S975)) + make_float2 (dist_coeffs_5[int(8)] * _S994, dist_coeffs_5[int(9)] * _S994);
+    float _S994 = fx_5 * (_S978.x + _S976);
+    float2  _S995 = make_float2 (_S994, fy_5 * (_S978.y + _S973)) + make_float2 (dist_coeffs_5[int(8)] * _S994, dist_coeffs_5[int(9)] * _S994);
     float2  _S996 = _S727 * _S995;
     float _S997 = dist_coeffs_5[int(4)] * _S995.y;
     float _S998 = dist_coeffs_5[int(5)] * _S995.x;
@@ -2781,8 +2781,8 @@ inline __device__ void projection_opaque_triangle_eval3d_fisheye_vjp(float3  mea
     (&_S1019)->differential_0 = _S927;
     s_bwd_length_impl_1(&_S1019, _S1018);
     float2  _S1020 = _S1019.differential_0 + _S1008;
-    float _S1021 = fx_5 * (_S974.x + _S973);
-    float2  _S1022 = make_float2 (_S1021, fy_5 * (_S974.y + _S976)) + make_float2 (dist_coeffs_5[int(8)] * _S1021, dist_coeffs_5[int(9)] * _S1021);
+    float _S1021 = fx_5 * (_S977.x + _S975);
+    float2  _S1022 = make_float2 (_S1021, fy_5 * (_S977.y + _S974)) + make_float2 (dist_coeffs_5[int(8)] * _S1021, dist_coeffs_5[int(9)] * _S1021);
     float2  _S1023 = _S701 * _S1022;
     float _S1024 = dist_coeffs_5[int(4)] * _S1022.y;
     float _S1025 = dist_coeffs_5[int(5)] * _S1022.x;

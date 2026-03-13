@@ -240,7 +240,7 @@ float add_blur(const float eps2d, inout float2x2 covar, out float compensation) 
     no_diff const float fx, no_diff const float fy,  no_diff const float cx, no_diff const float cy, \
     no_diff const float[10] dist_coeffs, const uint image_width, const uint image_height, \
     no_diff const float near_plane, no_diff const float far_plane, \
-    out int4 aabb_xyxy, out float2 mean2d, out float depth, out float3 conic, out float opacity, out float3 rgb
+    no_diff out float4 aabb_xyxy, out float2 mean2d, out float depth, out float3 conic, out float opacity, out float3 rgb
 
 [ForceInline]
 [Differentiable]
@@ -254,7 +254,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
     float cull_z = (camera_model == CameraModelType::FISHEYE) ?
         length(mean_c) : mean_c.z;
     if (!assume_valid && (cull_z < near_plane || cull_z > far_plane)) {
-        aabb_xyxy = {0, 0, 0, 0};
+        aabb_xyxy = float4(0.0f);
         return;
     }
 
@@ -308,7 +308,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
             );
     }
     if (!assume_valid && !is_valid) {
-        aabb_xyxy = { 0, 0, 0, 0 };
+        aabb_xyxy = float4(0.0f);
         return;
     }
 
@@ -316,7 +316,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
     static const float eps2d = 0.3;
     float det = add_blur(eps2d, covar2d, compensation);
     if (!assume_valid && det <= 0.f) {
-        aabb_xyxy = {0, 0, 0, 0};
+        aabb_xyxy = float4(0.0f);
         return;
     }
 
@@ -329,7 +329,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
         if (antialiased)
             opacity *= compensation;
         if (!assume_valid && opacity < ALPHA_THRESHOLD) {
-            aabb_xyxy = {0, 0, 0, 0};
+            aabb_xyxy = float4(0.0f);
             return;
         }
         // Compute opacity-aware bounding box.
@@ -351,11 +351,11 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
         xmax <= 0 || xmin >= image_width ||
         ymax <= 0 || ymin >= image_height
     )) {
-        aabb_xyxy = {0, 0, 0, 0};
+        aabb_xyxy = float4(0.0f);
         return;
     }
 
-    aabb_xyxy = {(int)xmin, (int)ymin, (int)xmax, (int)ymax};
+    aabb_xyxy = {xmin, ymin, xmax, ymax};
     if (eval3d)
         depth = get_sorting_depth(mean_c);
     else
@@ -562,7 +562,7 @@ void _projection_3dgs_vjp(
         DifferentialPair<float3> dp_conic;
         DifferentialPair<float> dp_opacity;
         DifferentialPair<float3> dp_rgb;
-        int4 aabb_xyxy;
+        float4 aabb_xyxy;
         fwd_diff(projectionInterface.projection)(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
@@ -693,7 +693,7 @@ void _projection_3dgs_vjp(
         DifferentialPair<float3> dp_conic;
         DifferentialPair<float> dp_opacity;
         DifferentialPair<float3> dp_rgb;
-        int4 aabb_xyxy;
+        float4 aabb_xyxy;
         fwd_diff(projectionInterface.projection)(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
@@ -725,7 +725,7 @@ void _projection_3dgs_vjp(
         DifferentialPair<float3> dp_conic;
         DifferentialPair<float> dp_opacity;
         DifferentialPair<float3> dp_rgb;
-        int4 aabb_xyxy;
+        float4 aabb_xyxy;
         fwd_diff(projectionInterface.projection)(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
@@ -757,7 +757,7 @@ void _projection_3dgs_vjp(
         DifferentialPair<float3> dp_conic;
         DifferentialPair<float> dp_opacity;
         DifferentialPair<float3> dp_rgb;
-        int4 aabb_xyxy;
+        float4 aabb_xyxy;
         fwd_diff(projectionInterface.projection)(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
@@ -787,7 +787,7 @@ void _projection_3dgs_vjp(
         DifferentialPair<float3> dp_conic;
         DifferentialPair<float> dp_opacity;
         DifferentialPair<float3> dp_rgb;
-        int4 aabb_xyxy;
+        float4 aabb_xyxy;
         fwd_diff(projectionInterface.projection)(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
@@ -820,7 +820,7 @@ void _projection_3dgs_vjp(
         DifferentialPair<float3> dp_conic;
         DifferentialPair<float> dp_opacity;
         DifferentialPair<float3> dp_rgb;
-        int4 aabb_xyxy;
+        float4 aabb_xyxy;
         fwd_diff(projectionInterface.projection)(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,

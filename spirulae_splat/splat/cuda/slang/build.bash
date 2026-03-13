@@ -74,6 +74,7 @@ for i in "${!pids[@]}"; do
         echo "  OK: $out"
     else
         echo "  FAILED: $out (see ${out_dir}/$(basename "$out").log)" >&2
+        cat "${out_dir}/$(basename "$out").log"
         failed=1
     fi
 done

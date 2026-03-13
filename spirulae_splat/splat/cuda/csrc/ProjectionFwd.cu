@@ -22,7 +22,7 @@ void projection_fused_fwd_kernel_wrapper(
     const float near_plane,
     const float far_plane,
     // outputs
-    int4 *__restrict__ aabbs,         // [B, C, N, 4]
+    float4 *__restrict__ aabbs,         // [B, C, N, 4]
     typename SplatPrimitive::Screen::Buffer splats_screen
 );
 
@@ -49,7 +49,7 @@ inline std::tuple<
     uint32_t B = splats_world.batchSize();    // number of batches
 
     auto opt = splats_world.options();
-    at::Tensor aabb = at::empty({C, N, 4}, opt.dtype(at::kInt));
+    at::Tensor aabb = at::empty({C, N, 4}, opt.dtype(at::kFloat));
 
     typename SplatPrimitive::Screen::Tensor splats_screen =
         SplatPrimitive::Screen::Tensor::allocProjFwd(C, N, splats_world.options());
@@ -58,7 +58,7 @@ inline std::tuple<
             (cudaStream_t)at::cuda::getCurrentCUDAStream(), B, C, N, \
             splats_world.buffer(), viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, near_plane, far_plane, \
-            (int4*)aabb.data_ptr<int32_t>(), splats_screen.buffer() \
+            (float4*)aabb.data_ptr<float>(), splats_screen.buffer() \
         )
 
     if (camera_model == gsplat::CameraModelType::PINHOLE)

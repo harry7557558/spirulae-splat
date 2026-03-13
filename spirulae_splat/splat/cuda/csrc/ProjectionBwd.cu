@@ -25,7 +25,7 @@ void projection_fused_bwd_kernel_wrapper(
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
-    const int4 * aabb,          // [B, C, N, 4]
+    const float4 * aabb,          // [B, C, N, 4]
     // grad outputs
     typename SplatPrimitive::Screen::Buffer v_splats_screen,
     typename SplatPrimitive::Screen::Buffer vr_splats_screen,
@@ -102,7 +102,7 @@ inline std::tuple<
     #define _LAUNCH_ARGS ( \
             (cudaStream_t)at::cuda::getCurrentCUDAStream(), B, C, N, \
             splats_world.buffer(), viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
-            image_width, image_height, (int4*)aabb.data_ptr<int32_t>(), \
+            image_width, image_height, (float4*)aabb.data_ptr<float>(), \
             v_splats_screen.buffer(), \
             hessian_diagonal_output_mode != HessianDiagonalOutputMode::None ? vr_splats_screen.buffer() : typename SplatPrimitive::Screen::Buffer{}, \
             hessian_diagonal_output_mode != HessianDiagonalOutputMode::None ? h_splats_screen.buffer() : typename SplatPrimitive::Screen::Buffer{}, \

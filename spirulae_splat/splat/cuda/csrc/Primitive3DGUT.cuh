@@ -18,12 +18,12 @@ struct Vanilla3DGUT : public Base3DGUT {
 
     inline static __device__ void project_persp(
         World world, FwdProjCamera cam,
-        Screen& proj, int4& aabb
+        Screen& proj, float4& aabb
     );
 
     inline static __device__ void project_fisheye(
         World world, FwdProjCamera cam,
-        Screen& proj, int4& aabb
+        Screen& proj, float4& aabb
     );
 
     struct BwdProjCamera {
@@ -231,7 +231,7 @@ struct Vanilla3DGUT::World : public Base3DGUT::World {
 
 inline __device__ void Vanilla3DGUT::project_persp(
     Vanilla3DGUT::World world, Vanilla3DGUT::FwdProjCamera cam,
-    Vanilla3DGUT::Screen& proj, int4& aabb
+    Vanilla3DGUT::Screen& proj, float4& aabb
 ) {
     float2 xy;
     Slang3DGS::projection_3dgut_persp(
@@ -246,7 +246,7 @@ inline __device__ void Vanilla3DGUT::project_persp(
 
 inline __device__ void Vanilla3DGUT::project_fisheye(
     Vanilla3DGUT::World world, Vanilla3DGUT::FwdProjCamera cam,
-    Vanilla3DGUT::Screen& proj, int4& aabb
+    Vanilla3DGUT::Screen& proj, float4& aabb
 ) {
     float2 xy;
     Slang3DGS::projection_3dgut_fisheye(

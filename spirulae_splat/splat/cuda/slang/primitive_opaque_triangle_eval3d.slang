@@ -21,7 +21,7 @@
     const uint image_height, \
     no_diff const float near_plane, \
     no_diff const float far_plane, \
-    out int4 aabb_xyxy, \
+    no_diff out float4 aabb_xyxy, \
     out float depth, \
     out float3 verts[3], \
     out float3 rgbs[3], \
@@ -38,7 +38,7 @@ void projection_opaque_triangle_eval3d<let camera_model: CameraModelType, let as
     float cull_zc = (camera_model == CameraModelType::FISHEYE) ?
         length(mean_c) : mean_c.z;
     if (!assume_valid && (cull_zc < near_plane || cull_zc > far_plane)) {
-        aabb_xyxy = {0, 0, 0, 0};
+        aabb_xyxy = float4(0.0f);
         return;
     }
 
@@ -59,7 +59,7 @@ void projection_opaque_triangle_eval3d<let camera_model: CameraModelType, let as
         cull_z.y < near_plane || cull_z.y > far_plane ||
         cull_z.z < near_plane || cull_z.z > far_plane
     )) {
-        aabb_xyxy = {0, 0, 0, 0};
+        aabb_xyxy = float4(0.0f);
         return;
     }
 
@@ -81,7 +81,7 @@ void projection_opaque_triangle_eval3d<let camera_model: CameraModelType, let as
     }
     else if (camera_model == CameraModelType::ORTHO) {} // TODO
     if (!assume_valid && !all_valid) {
-        aabb_xyxy = { 0, 0, 0, 0 };
+        aabb_xyxy = float4(0.0f);
         return;
     }
 
@@ -103,11 +103,11 @@ void projection_opaque_triangle_eval3d<let camera_model: CameraModelType, let as
         ymax <= 0 || ymin >= image_height ||
         (mean_c.z <= 0.0 && ((xmin <= 0 && xmax >= image_width) || (ymin <= 0 && ymax >= image_width)))
     )) {
-        aabb_xyxy = {0, 0, 0, 0};
+        aabb_xyxy = float4(0.0f);
         return;
     }
 
-    aabb_xyxy = {(int)floor(xmin), (int)floor(ymin), (int)ceil(xmax), (int)ceil(ymax)};
+    aabb_xyxy = {xmin, ymin, xmax, ymax};
     depth = get_sorting_depth((vert0_c + vert1_c + vert2_c) / 3.0);
 
     float3 campos = -mul(transpose(R), t);

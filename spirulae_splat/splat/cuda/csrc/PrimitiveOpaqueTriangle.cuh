@@ -33,12 +33,12 @@ struct OpaqueTriangle {
 
     inline static __device__ void project_persp(
         World world, FwdProjCamera cam,
-        Screen& proj, int4& aabb
+        Screen& proj, float4& aabb
     );
 
     inline static __device__ void project_fisheye(
         World world, FwdProjCamera cam,
-        Screen& proj, int4& aabb
+        Screen& proj, float4& aabb
     );
 
     struct BwdProjCamera {
@@ -675,7 +675,7 @@ struct OpaqueTriangle::Screen {
 
 inline __device__ void OpaqueTriangle::project_persp(
     OpaqueTriangle::World world, OpaqueTriangle::FwdProjCamera cam,
-    OpaqueTriangle::Screen& proj, int4& aabb
+    OpaqueTriangle::Screen& proj, float4& aabb
 ) {
     SlangOpaqueTriangle::projection_opaque_triangle_eval3d_persp(
         world.mean, world.quat, world.scale, world.hardness, world.sh_coeffs, world.ch_coeffs,
@@ -688,7 +688,7 @@ inline __device__ void OpaqueTriangle::project_persp(
 
 inline __device__ void OpaqueTriangle::project_fisheye(
     OpaqueTriangle::World world, OpaqueTriangle::FwdProjCamera cam,
-    OpaqueTriangle::Screen& proj, int4& aabb
+    OpaqueTriangle::Screen& proj, float4& aabb
 ) {
     SlangOpaqueTriangle::projection_opaque_triangle_eval3d_fisheye(
         world.mean, world.quat, world.scale, world.hardness, world.sh_coeffs, world.ch_coeffs,

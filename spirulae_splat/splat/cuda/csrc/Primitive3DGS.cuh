@@ -33,17 +33,17 @@ struct _Base3DGS {
 
     inline static __device__ void project_persp(
         World world, FwdProjCamera cam,
-        Screen& screen, int4& aabb
+        Screen& screen, float4& aabb
     );
 
     inline static __device__ void project_ortho(
         World world, FwdProjCamera cam,
-        Screen& screen, int4& aabb
+        Screen& screen, float4& aabb
     );
 
     inline static __device__ void project_fisheye(
         World world, FwdProjCamera cam,
-        Screen& screen, int4& aabb
+        Screen& screen, float4& aabb
     );
 
     struct BwdProjCamera {
@@ -637,7 +637,7 @@ struct _Base3DGS<antialiased>::Screen {
 template<bool antialiased>
 inline __device__ void _Base3DGS<antialiased>::project_persp(
     _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::FwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen& screen, int4& aabb
+    _Base3DGS<antialiased>::Screen& screen, float4& aabb
 ) {
     Slang3DGS::projection_3dgs_persp(
         antialiased,
@@ -652,7 +652,7 @@ inline __device__ void _Base3DGS<antialiased>::project_persp(
 template<bool antialiased>
 inline __device__ void _Base3DGS<antialiased>::project_ortho(
     _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::FwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen& screen, int4& aabb
+    _Base3DGS<antialiased>::Screen& screen, float4& aabb
 ) {
     Slang3DGS::projection_3dgs_ortho(
         antialiased,
@@ -666,7 +666,7 @@ inline __device__ void _Base3DGS<antialiased>::project_ortho(
 template<bool antialiased>
 inline __device__ void _Base3DGS<antialiased>::project_fisheye(
     _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::FwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen& screen, int4& aabb
+    _Base3DGS<antialiased>::Screen& screen, float4& aabb
 ) {
     Slang3DGS::projection_3dgs_fisheye(
         antialiased,

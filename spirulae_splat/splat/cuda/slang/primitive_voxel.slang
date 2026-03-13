@@ -19,7 +19,7 @@
     const uint image_height, \
     no_diff const float near_plane, \
     no_diff const float far_plane, \
-    out int4 aabb_xyxy, \
+    no_diff out float4 aabb_xyxy, \
     out float depth, \
     out float3 rgbs
 
@@ -40,7 +40,7 @@ void projection_voxel_eval3d<let camera_model : CameraModelType, let assume_vali
         max_z = max(max_z, cull_zc);
     }
     if (!assume_valid && (min_z < near_plane || max_z > far_plane)) {
-        aabb_xyxy = {0, 0, 0, 0};
+        aabb_xyxy = float4(0.0f);
         return;
     }
     float3 mean_c;
@@ -58,7 +58,7 @@ void projection_voxel_eval3d<let camera_model : CameraModelType, let assume_vali
             all_valid &= fisheye_proj<assume_valid>(pos_c[i], intrins, dist_coeffs, uv[i]);
     }
     if (!assume_valid && !all_valid) {
-        aabb_xyxy = { 0, 0, 0, 0 };
+        aabb_xyxy = float4(0.0f);
         return;
     }
 
@@ -70,7 +70,7 @@ void projection_voxel_eval3d<let camera_model : CameraModelType, let assume_vali
             maxDensity = max(maxDensity, densities[i]);
         float maxPossibleOpacity = 1.0 - exp(-maxDensity * size * sqrt(3.0));
         if (maxPossibleOpacity <= ALPHA_THRESHOLD) {
-            aabb_xyxy = { 0, 0, 0, 0 };
+            aabb_xyxy = float4(0.0f);
             return;
         }
     }
@@ -92,7 +92,7 @@ void projection_voxel_eval3d<let camera_model : CameraModelType, let assume_vali
         ymax <= 0 || ymin >= image_height ||
         (min_z <= 0.0 && ((xmin <= 0 && xmax >= image_width) || (ymin <= 0 && ymax >= image_width)))
     )) {
-        aabb_xyxy = {0, 0, 0, 0};
+        aabb_xyxy = float4(0.0f);
         return;
     }
 

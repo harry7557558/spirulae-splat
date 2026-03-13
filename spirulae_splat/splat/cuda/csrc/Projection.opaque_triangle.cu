@@ -35,7 +35,7 @@ std::tuple<
     auto opt = in_splats.options();
     at::Tensor camera_ids = at::empty({nnz}, opt.dtype(at::kLong));
     at::Tensor gaussian_ids = at::empty({nnz}, opt.dtype(at::kLong));
-    at::Tensor aabb = at::empty({nnz, 4}, opt.dtype(at::kInt));
+    at::Tensor aabb = at::empty({nnz, 4}, opt.dtype(at::kFloat));
     OpaqueTriangle::Screen::Tensor splats_proj =
         OpaqueTriangle::Screen::Tensor::allocProjFwdPacked(nnz, opt);
 
@@ -46,7 +46,7 @@ std::tuple<
             image_width, image_height, tile_width, tile_height, near_plane, far_plane, \
             intersection_count_map.data_ptr<int32_t>(), intersection_splat_id.data_ptr<int32_t>(), \
             camera_ids.data_ptr<int64_t>(), gaussian_ids.data_ptr<int64_t>(), \
-            (int4*)aabb.data_ptr<int32_t>(), splats_proj.buffer() \
+            (float4*)aabb.data_ptr<float>(), splats_proj.buffer() \
         )
 
     if (nnz != 0) {
@@ -109,7 +109,7 @@ std::tuple<
             C, N, nnz, \
             splats_world.buffer(), viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, tile_width, tile_height, \
-            camera_ids.data_ptr<int64_t>(), gaussian_ids.data_ptr<int64_t>(), (int4*)aabb.data_ptr<int32_t>(), \
+            camera_ids.data_ptr<int64_t>(), gaussian_ids.data_ptr<int64_t>(), (float4*)aabb.data_ptr<float>(), \
             v_splats_proj.buffer(), sparse_grad, v_splats_world.buffer(),  \
             viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr \
         )
