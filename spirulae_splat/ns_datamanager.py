@@ -313,7 +313,8 @@ class SpirulaeDataManager(FullImageDatamanager):
                 batch['mask'] = batch['mask'][None]
             if 'depth' in batch:
                 batch['depth'] = batch['depth'][None]
-            camera.metadata['visibility_masks'] = SplatTrainingLosses.get_visibility_masks(batch, "cpu")[0]
+            visibility_masks = SplatTrainingLosses.get_visibility_masks(batch, "cpu")
+            camera.metadata['visibility_masks'] = visibility_masks[0] if visibility_masks is not None else torch.zeros(0)
             if 'mask' in batch:
                 batch['mask'] = batch['mask'].squeeze(0)
             if 'depth' in batch:
@@ -506,7 +507,7 @@ class SpirulaeDataManager(FullImageDatamanager):
                     batch[key] = value.to(self.device)
             for key, value in metadata.items():
                 if isinstance(value, torch.Tensor):
-                    metadata[key] = value.to(self.device)
+                    metadata[key] = value.to(self.device) if value.numel() != 0 else None
             camera.metadata = metadata
             return [(camera, batch)]
 

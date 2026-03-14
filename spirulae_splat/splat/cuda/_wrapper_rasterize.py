@@ -597,6 +597,7 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
             width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
             (render_rgbs, render_depths),
             (render2_rgbs, render2_depths),
+            None,
             (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
             v_render_alphas.contiguous(),
             (v_distortion_rgbs.contiguous(), v_distortion_depths.contiguous()),

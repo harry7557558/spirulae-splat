@@ -100,19 +100,23 @@ class OpaqueStrategy(Strategy):
             if radii.shape[-1] == 2:
                 radii = torch.amax(radii, dim=-1)
             max_blending = info["max_blending"]
+
+            normalized_radii = radii / float(max(info["width"], info["height"]))
+            # Should be ideally using scatter max
+            state["radii"][gs_ids] = torch.maximum(
+                state["radii"][gs_ids],
+                normalized_radii
+            )
         else:
-            # grads is [C, N, 2]
-            sel = info["radii"] > 0.0  # [C, N]
-            gs_ids = torch.where(sel)[1]  # [nnz]
-            radii = info["radii"][sel]  # [nnz]
+            # grads is [C, N, 2], radii is [N]
+            normalized_radii = info["radii"] / float(max(info["width"], info["height"]))  # [N]
+            state["radii"] = torch.fmax(state["radii"], normalized_radii)
+            sel = normalized_radii > 0  # [N]
+            gs_ids = torch.where(sel)[0]  # [nnz]
+            normalized_radii = normalized_radii[sel]  # [nnz]
             max_blending = info["max_blending"][gs_ids]
 
         # Should be ideally using scatter max
-        normalized_radii = radii / float(max(info["width"], info["height"]))
-        state["radii"][gs_ids] = torch.maximum(
-            state["radii"][gs_ids],
-            normalized_radii
-        )
         state["max_blending"][gs_ids] = torch.maximum(
             state["max_blending"][gs_ids],
             max_blending

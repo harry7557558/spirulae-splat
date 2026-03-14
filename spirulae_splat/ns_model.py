@@ -920,6 +920,8 @@ class SpirulaeModel(Model):
 
         if 'visibility_masks' in camera.metadata:
             visibility_masks = camera.metadata['visibility_masks']
+            if visibility_masks is None:
+                visibility_masks = torch.zeros((len(camera), H, W, 1), dtype=torch.bool, device=device)
             visibility_masks = self._downscale_if_required(visibility_masks)
             kwargs['masks'] = visibility_masks.bool()
 
