@@ -34,6 +34,8 @@ std::tuple<
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
+    const std::optional<at::Tensor> camera_ids,  // [nnz]
+    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
     const at::Tensor aabb,  // [..., C, N, 2]
     // grad outputs
     const Vanilla3DGS::Screen::TensorTupleProj &v_splats_screen,
@@ -56,6 +58,8 @@ std::tuple<
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
+    const std::optional<at::Tensor> camera_ids,  // [nnz]
+    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const Vanilla3DGS::Screen::TensorTupleProj &v_splats_screen,
@@ -80,6 +84,8 @@ std::tuple<
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
+    const std::optional<at::Tensor> camera_ids,  // [nnz]
+    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const Vanilla3DGS::Screen::TensorTupleProj &v_splats_screen,
@@ -102,6 +108,8 @@ std::tuple<
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
+    const std::optional<at::Tensor> camera_ids,  // [nnz]
+    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const MipSplatting::Screen::TensorTupleProj &v_splats_screen,
@@ -124,6 +132,8 @@ std::tuple<
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
+    const std::optional<at::Tensor> camera_ids,  // [nnz]
+    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const MipSplatting::Screen::TensorTupleProj &v_splats_screen,
@@ -148,6 +158,8 @@ std::tuple<
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
+    const std::optional<at::Tensor> camera_ids,  // [nnz]
+    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const MipSplatting::Screen::TensorTupleProj &v_splats_screen,
@@ -170,6 +182,8 @@ std::tuple<
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
+    const std::optional<at::Tensor> camera_ids,  // [nnz]
+    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const Vanilla3DGUT::Screen::TensorTupleProj &v_splats_screen,
@@ -192,6 +206,8 @@ std::tuple<
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
+    const std::optional<at::Tensor> camera_ids,  // [nnz]
+    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const Vanilla3DGUT::Screen::TensorTupleProj &v_splats_screen,
@@ -216,6 +232,8 @@ std::tuple<
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
+    const std::optional<at::Tensor> camera_ids,  // [nnz]
+    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const Vanilla3DGUT::Screen::TensorTupleProj &v_splats_screen,
@@ -238,6 +256,8 @@ std::tuple<
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
+    const std::optional<at::Tensor> camera_ids,  // [nnz]
+    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const SphericalVoronoi3DGUT_Default::Screen::TensorTupleProj &v_splats_screen,
@@ -258,6 +278,8 @@ std::tuple<
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
+    const std::optional<at::Tensor> camera_ids,  // [nnz]
+    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const OpaqueTriangle::Screen::TensorTupleProj &v_splats_screen,
@@ -278,6 +300,8 @@ std::tuple<
     const gsplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
+    const std::optional<at::Tensor> camera_ids,  // [nnz]
+    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const VoxelPrimitive::Screen::TensorTupleProj &v_splats_screen,

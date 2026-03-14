@@ -4,7 +4,7 @@ import math
 import warnings
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple, List
 
 import torch
 from torch import Tensor
@@ -102,6 +102,50 @@ class _SphericalHarmonics(torch.autograd.Function):
         return None, None, v_dirs, v_coeffs_dc, v_coeffs_sh
 
 
+class _Index(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx, tensor: Tensor, indices: Tensor
+    ):
+        ctx.save_for_backward(tensor, indices)
+        return tensor[indices]
+
+    @staticmethod
+    def backward(ctx, v_output: Tensor):
+        tensor, indices = ctx.saved_tensors
+        v_tensor = torch.zeros_like(tensor)
+        _make_lazy_cuda_func("inplace_scatter_add")(
+            indices, v_output, v_tensor
+        )
+
+        # apply to other gradient states
+        # TODO: prevent double apply to same tensor for speed?
+        for comp in ['vr_splats', 'h_splats']:
+            if not hasattr(v_output, comp):
+                continue
+            v_comp = torch.zeros_like(tensor)
+            _make_lazy_cuda_func("inplace_scatter_add")(
+                indices, getattr(v_output, comp), v_comp
+            )
+            setattr(v_tensor, comp, v_comp)
+        
+        for comp in ['gradr_all', 'hess_all']:
+            if not hasattr(v_output, comp):
+                continue
+            comp_list = getattr(v_output, comp)  # type: List
+            if comp_list[-1] == True:  # TODO: thread safety
+                continue
+            comp_list[-1] = True
+            for i in range(len(comp_list)-1):
+                v_comp = torch.zeros(tensor.shape[0], *comp_list[i].shape[1:], device=tensor.device)
+                _make_lazy_cuda_func("inplace_scatter_add")(
+                    indices, comp_list[i], v_comp
+                )
+                comp_list[i] = v_comp
+            setattr(v_tensor, comp, comp_list)
+
+        return v_tensor, None
+
 
 def fully_fused_projection(
     primitive: Literal["3dgs", "mip", "3dgut", "3dgut_sv", "opaque_triangle"],
@@ -131,7 +175,7 @@ def fully_fused_projection(
         assert dist_coeffs.shape == batch_dims + (C, 10), dist_coeffs.shape
         dist_coeffs = dist_coeffs.contiguous().to(viewmats)
 
-    if packed:
+    if packed and False:
         raise NotImplementedError("Packed not supported for fully_fused_projection without use_bvh")
     else:
 
@@ -155,6 +199,7 @@ def fully_fused_projection(
             far_plane,
             camera_model,
             dist_coeffs.contiguous() if dist_coeffs is not None else None,
+            packed,
             *([compute_hessian_diagonal] if primitive in ["3dgs", "mip", "3dgut"] else [])
         )
 
@@ -164,14 +209,22 @@ def fully_fused_projection(
         elif primitive in ['3dgut', '3dgut_sv']:
             means, quats, scales, opacities, features_dc, features_sh = splats
             aabb, depths, scales, opacities, rgbs = proj_returns
+            if packed:
+                means = _Index.apply(means, aabb.gaussian_ids)
+                quats = _Index.apply(quats, aabb.gaussian_ids)
             return aabb, depths, (means, quats, depths, scales, opacities, rgbs)
         elif primitive in ['opaque_triangle']:
             means, quats, scales, hardness, features_dc, features_sh, features_ch = splats
             aabb, depths, verts, rgbs, normals = proj_returns
+            if packed:
+                hardness = _Index.apply(hardness, aabb.gaussian_ids)
             return aabb, depths, (hardness, depths, verts, rgbs, normals)
         elif primitive in ['voxel']:
             pos_sizes, densities, features_dc, features_sh = splats
             aabb, depths, rgbs = proj_returns
+            if packed:
+                pos_sizes = _Index.apply(pos_sizes, aabb.gaussian_ids)
+                densities = _Index.apply(densities, aabb.gaussian_ids)
             return aabb, depths, (pos_sizes, densities, rgbs)
         else:
             raise NotImplementedError()
@@ -198,6 +251,7 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
         far_plane: float,
         camera_model: Literal["pinhole", "fisheye"],
         dist_coeffs: Optional[Tensor],
+        packed: bool,
         compute_hessian_diagonal: Literal[None, "position", "all"] = None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
 
@@ -205,7 +259,8 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
             f"CameraModelType.{camera_model.upper()}"
         )
 
-        aabb, proj_returns = _make_lazy_cuda_func(
+        cuda_returns = _make_lazy_cuda_func(
+            f"projection_{primitive}_packed_forward" if packed else
             f"projection_{primitive}_forward"
         )(
             (means, quats, scales, opacities, features_dc, features_sh),
@@ -213,7 +268,18 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
             near_plane, far_plane,
             camera_model_type, dist_coeffs
         )
-        ctx.save_for_backward(means, quats, scales, opacities, features_dc, features_sh, viewmats, intrins, aabb)
+        if packed:
+            camera_ids, gaussian_ids, aabb, proj_returns = cuda_returns
+            aabb.camera_ids = camera_ids
+            aabb.gaussian_ids = gaussian_ids
+        else:
+            aabb, proj_returns = cuda_returns
+            camera_ids, gaussian_ids = None, None
+
+        ctx.save_for_backward(
+            means, quats, scales, opacities, features_dc, features_sh,
+            viewmats, intrins, camera_ids, gaussian_ids, aabb
+        )
         ctx.primitive = primitive
         ctx.width = width
         ctx.height = height
@@ -226,7 +292,11 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
     @staticmethod
     def backward(ctx, v_aabb, *v_proj_returns):
 
-        means, quats, scales, opacities, features_dc, features_sh, viewmats, intrins, aabb = ctx.saved_tensors
+        (
+            means, quats, scales, opacities, features_dc, features_sh,
+            viewmats, intrins, camera_ids, gaussian_ids, aabb
+        ) = ctx.saved_tensors
+
         if ctx.compute_hessian_diagonal is not None:
             if ctx.primitive not in ["3dgs", "mip", "3dgut"]:
                 raise NotImplementedError()
@@ -239,7 +309,8 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
                 else f"projection_{ctx.primitive}_backward_with_position_hessian_diagonal"
             )(
                 (means, quats, scales, opacities, features_dc, features_sh),
-                viewmats, intrins, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs, aabb,
+                viewmats, intrins, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs,
+                camera_ids, gaussian_ids, aabb,
                 [x.contiguous() for x in v_proj_returns],
                 [x.gradr if hasattr(x, 'gradr') else torch.empty(0).to(x) for x in v_proj_returns],
                 [x.hess if hasattr(x, 'hess') else torch.empty(0).to(x) for x in v_proj_returns],
@@ -320,7 +391,8 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
                 f"projection_{ctx.primitive}_backward"
             )(
                 (means, quats, scales, opacities, features_dc, features_sh),
-                viewmats, intrins, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs, aabb,
+                viewmats, intrins, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs,
+                camera_ids, gaussian_ids, aabb,
                 [x.contiguous() for x in v_proj_returns],
                 ctx.needs_input_grad[7],  # viewmats_requires_grad
             )
@@ -353,14 +425,16 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
         far_plane: float,
         camera_model: Literal["pinhole", "fisheye"],
         dist_coeffs: Optional[Tensor],
+        packed: bool,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
 
         camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )
 
-        aabb, proj_returns = _make_lazy_cuda_func(
-            "projection_opaque_triangle_forward"
+        cuda_returns = _make_lazy_cuda_func(
+            f"projection_opaque_triangle_packed_forward" if packed else
+            f"projection_opaque_triangle_forward"
         )(
             (means, quats, scales, hardness, features_dc, features_sh, features_ch),
             # (means, hardness),
@@ -368,7 +442,18 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
             near_plane, far_plane,
             camera_model_type, dist_coeffs
         )
-        ctx.save_for_backward(means, quats, scales, hardness, features_dc, features_sh, features_ch, viewmats, intrins, aabb)
+        if packed:
+            camera_ids, gaussian_ids, aabb, proj_returns = cuda_returns
+            aabb.camera_ids = camera_ids
+            aabb.gaussian_ids = gaussian_ids
+        else:
+            aabb, proj_returns = cuda_returns
+            camera_ids, gaussian_ids = None, None
+
+        ctx.save_for_backward(
+            means, quats, scales, hardness, features_dc, features_sh, features_ch,
+            viewmats, intrins, camera_ids, gaussian_ids, aabb
+        )
         # ctx.save_for_backward(means, hardness, viewmats, intrins, aabb)
         ctx.width = width
         ctx.height = height
@@ -379,7 +464,10 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, v_aabb, *v_proj_returns):
-        means, quats, scales, hardness, features_dc, features_sh, features_ch, viewmats, intrins, aabb = ctx.saved_tensors
+        (
+            means, quats, scales, hardness, features_dc, features_sh, features_ch,
+            viewmats, intrins, camera_ids, gaussian_ids, aabb
+        ) = ctx.saved_tensors
         (v_means, v_quats, v_scales, v_hardness, v_features_dc, v_features_sh, v_features_ch), v_viewmats = _make_lazy_cuda_func(
         # means, hardness, viewmats, intrins, aabb = ctx.saved_tensors
         # (v_means, v_hardness), v_viewmats = _make_lazy_cuda_func(
@@ -387,7 +475,8 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
         )(
             (means, quats, scales, hardness, features_dc, features_sh, features_ch),
             # (means, hardness),
-            viewmats, intrins, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs, aabb,
+            viewmats, intrins, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs,
+            camera_ids, gaussian_ids, aabb,
             [x.contiguous() for x in v_proj_returns],
             ctx.needs_input_grad[7],  # viewmats_requires_grad
         )
@@ -417,13 +506,15 @@ class _FullyFusedProjectionVoxel(torch.autograd.Function):
         far_plane: float,
         camera_model: Literal["pinhole", "fisheye"],
         dist_coeffs: Optional[Tensor],
+        packed: bool,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
 
         camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )
 
-        aabb, (depths, proj_rgbs) = _make_lazy_cuda_func(
+        cuda_returns = _make_lazy_cuda_func(
+            "projection_voxel_packed_forward" if packed else
             "projection_voxel_forward"
         )(
             (pos_sizes, densities, features_dc, features_sh),
@@ -431,7 +522,18 @@ class _FullyFusedProjectionVoxel(torch.autograd.Function):
             near_plane, far_plane,
             camera_model_type, dist_coeffs
         )
-        ctx.save_for_backward(pos_sizes, densities, features_dc, features_sh, viewmats, intrins, aabb)
+        if packed:
+            camera_ids, gaussian_ids, aabb, (depths, proj_rgbs) = cuda_returns
+            aabb.camera_ids = camera_ids
+            aabb.gaussian_ids = gaussian_ids
+        else:
+            aabb, (depths, proj_rgbs) = cuda_returns
+            camera_ids, gaussian_ids = None, None
+
+        ctx.save_for_backward(
+            pos_sizes, densities, features_dc, features_sh,
+            viewmats, intrins, camera_ids, gaussian_ids, aabb
+        )
         ctx.width = width
         ctx.height = height
         ctx.camera_model_type = camera_model_type
@@ -441,12 +543,17 @@ class _FullyFusedProjectionVoxel(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, v_aabb, v_depths, v_proj_rgbs):
-        pos_sizes, densities, features_dc, features_sh, viewmats, intrins, aabb = ctx.saved_tensors
+        (
+            pos_sizes, densities, features_dc, features_sh,
+            viewmats, intrins, camera_ids, gaussian_ids, aabb
+        ) = ctx.saved_tensors
+
         (v_pos_sizes, v_densities, v_features_dc, v_features_sh), v_viewmats = _make_lazy_cuda_func(
             "projection_voxel_backward"
         )(
             (pos_sizes, densities, features_dc, features_sh),
-            viewmats, intrins, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs, aabb,
+            viewmats, intrins, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs,
+            camera_ids, gaussian_ids, aabb,
             (v_depths, v_proj_rgbs.contiguous()),
             ctx.needs_input_grad[4],  # viewmats_requires_grad
         )

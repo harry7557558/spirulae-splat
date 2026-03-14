@@ -31,6 +31,8 @@ __global__ void projection_fused_bwd_kernel(
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
+    const int32_t *__restrict__ camera_ids,          // [nnz, 4]
+    const int32_t *__restrict__ gaussian_ids,          // [nnz, 4]
     const float4 *__restrict__ aabb,          // [B, C, N, 4]
     // grad outputs
     typename SplatPrimitive::Screen::Buffer v_splats_screen,
@@ -44,18 +46,28 @@ __global__ void projection_fused_bwd_kernel(
     typename SplatPrimitive::World::Buffer h_splats_world,
     float *__restrict__ v_viewmats // [B, C, 4, 4] optional
 ) {
-    // parallelize over B * C * N.
     uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= B * C * N || (aabb[idx].z <= aabb[idx].x || aabb[idx].w <= aabb[idx].y)) {
-        return;
+    uint32_t cid, gid;
+    bool packed = (camera_ids != nullptr && gaussian_ids != nullptr);
+    if (packed) {
+        if (idx >= N) return;
+        cid = camera_ids[idx];
+        gid = gaussian_ids[idx];
+    } else {
+        // parallelize over B * C * N.
+        if (idx >= B * C * N || (aabb[idx].z <= aabb[idx].x || aabb[idx].w <= aabb[idx].y)) {
+            return;
+        }
+        const uint32_t bid = idx / (C * N); // batch id
+        cid = (idx / N) % C; // camera id
+        gid = idx % N; // gaussian id
+        cid = bid * C + cid;
+        gid = bid * N + gid;
     }
-    const uint32_t bid = idx / (C * N); // batch id
-    const uint32_t cid = (idx / N) % C; // camera id
-    const uint32_t gid = idx % N; // gaussian id
 
     // Load camera
-    viewmats += bid * C * 16 + cid * 16;
-    float4 intrin = intrins[bid * C + cid];
+    viewmats += cid * 16;
+    float4 intrin = intrins[cid];
     float3x3 R = {
         viewmats[0], viewmats[1], viewmats[2],  // 1st row
         viewmats[4], viewmats[5], viewmats[6],  // 2nd row
@@ -67,11 +79,11 @@ __global__ void projection_fused_bwd_kernel(
         R, t, fx, fy, cx, cy,
         image_width, image_height,
     };
-    cam.dist_coeffs = dist_coeffs_buffer.load(bid * C + cid);
+    cam.dist_coeffs = dist_coeffs_buffer.load(cid);
 
     // Load splat
     typename SplatPrimitive::World splat_world =
-        SplatPrimitive::World::load(splats_world, bid * N + gid);
+        SplatPrimitive::World::load(splats_world, gid);
     typename SplatPrimitive::Screen v_splat_screen =
         SplatPrimitive::Screen::load(v_splats_screen, idx);
     typename SplatPrimitive::Screen vr_splat_screen;
@@ -126,13 +138,13 @@ __global__ void projection_fused_bwd_kernel(
     }
 
     // Save results
-    v_splat_world.atomicAddGradientToBuffer(v_splats_world, bid * N + gid);
+    v_splat_world.atomicAddGradientToBuffer(v_splats_world, gid);
     if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
-        atomicAddFVec(&vr_world_pos_buffer[bid * N + gid], vr_world_pos);
-        atomicAddFVec(&h_world_pos_buffer[bid * N + gid], h_world_pos);
+        atomicAddFVec(&vr_world_pos_buffer[gid], vr_world_pos);
+        atomicAddFVec(&h_world_pos_buffer[gid], h_world_pos);
     } else if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable) {
-        vr_splat_world.atomicAddGradientToBuffer(vr_splats_world, bid * N + gid);
-        h_splat_world.atomicAddGradientToBuffer(h_splats_world, bid * N + gid);
+        vr_splat_world.atomicAddGradientToBuffer(vr_splats_world, gid);
+        h_splat_world.atomicAddGradientToBuffer(h_splats_world, gid);
     }
 
     if (v_viewmats != nullptr) {
@@ -143,7 +155,7 @@ __global__ void projection_fused_bwd_kernel(
         warpSum(v_R[2], warp_group_c);
         warpSum(v_t, warp_group_c);
         if (warp_group_c.thread_rank() == 0) {
-            v_viewmats += bid * C * 16 + cid * 16;
+            v_viewmats += cid * 16;
             #pragma unroll
             for (uint32_t i = 0; i < 3; i++) { // rows
                 atomicAdd(v_viewmats + i * 4 + 0, v_R[i].x);
@@ -176,6 +188,8 @@ void projection_fused_bwd_kernel_wrapper(
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
+    const int32_t * camera_ids,          // [nnz, 4]
+    const int32_t * gaussian_ids,          // [nnz, 4]
     const float4 * aabb,          // [B, C, N, 4]
     // grad outputs
     typename SplatPrimitive::Screen::Buffer v_splats_screen,
@@ -194,7 +208,7 @@ void projection_fused_bwd_kernel_wrapper(
     <<<_CEIL_DIV(B*C*N, block), block, 0, stream>>>(
         B, C, N,
         splats_world, viewmats, intrins, dist_coeffs_buffer, image_width, image_height,
-        aabb, v_splats_screen, vr_splats_screen, h_splats_screen,
+        camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen,
         v_splats_world, vr_world_pos_buffer, h_world_pos_buffer,
         vr_splats_world, h_splats_world, v_viewmats
     );

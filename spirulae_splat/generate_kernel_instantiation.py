@@ -63,41 +63,46 @@ def generate_kernel_instantiation(
 
 
 def generate_ProjectionFwd():
-    definition = extract_kernel_definition("ProjectionFwd.cu", "projection_fused_fwd_kernel_wrapper")
-    map_header = ["typename SplatPrimitive", None]
-    map_body = [
-        ("Vanilla3DGS", "gsplat::CameraModelType::PINHOLE"),
-        ("Vanilla3DGS", "gsplat::CameraModelType::FISHEYE"),
-        ("MipSplatting", "gsplat::CameraModelType::PINHOLE"),
-        ("MipSplatting", "gsplat::CameraModelType::FISHEYE"),
-        ("Vanilla3DGUT", "gsplat::CameraModelType::PINHOLE"),
-        ("Vanilla3DGUT", "gsplat::CameraModelType::FISHEYE"),
-        ("SphericalVoronoi3DGUT<2>", "gsplat::CameraModelType::PINHOLE"),
-        ("SphericalVoronoi3DGUT<2>", "gsplat::CameraModelType::FISHEYE"),
-        ("SphericalVoronoi3DGUT<3>", "gsplat::CameraModelType::PINHOLE"),
-        ("SphericalVoronoi3DGUT<3>", "gsplat::CameraModelType::FISHEYE"),
-        ("SphericalVoronoi3DGUT<4>", "gsplat::CameraModelType::PINHOLE"),
-        ("SphericalVoronoi3DGUT<4>", "gsplat::CameraModelType::FISHEYE"),
-        ("SphericalVoronoi3DGUT<5>", "gsplat::CameraModelType::PINHOLE"),
-        ("SphericalVoronoi3DGUT<5>", "gsplat::CameraModelType::FISHEYE"),
-        ("SphericalVoronoi3DGUT<6>", "gsplat::CameraModelType::PINHOLE"),
-        ("SphericalVoronoi3DGUT<6>", "gsplat::CameraModelType::FISHEYE"),
-        ("SphericalVoronoi3DGUT<7>", "gsplat::CameraModelType::PINHOLE"),
-        ("SphericalVoronoi3DGUT<7>", "gsplat::CameraModelType::FISHEYE"),
-        ("SphericalVoronoi3DGUT<8>", "gsplat::CameraModelType::PINHOLE"),
-        ("SphericalVoronoi3DGUT<8>", "gsplat::CameraModelType::FISHEYE"),
-        ("OpaqueTriangle", "gsplat::CameraModelType::PINHOLE"),
-        ("OpaqueTriangle", "gsplat::CameraModelType::FISHEYE"),
-        ("VoxelPrimitive", "gsplat::CameraModelType::PINHOLE"),
-        ("VoxelPrimitive", "gsplat::CameraModelType::FISHEYE"),
-    ]
-    includes = [("Primitive3DGS.cuh", "ProjectionFwd_kernel.cuh")] * 4 + \
-        [("Primitive3DGUT.cuh", "ProjectionFwd_kernel.cuh")] * 2 + \
-        [("Primitive3DGUT_SV.cuh", "ProjectionFwd_kernel.cuh")] * 14 + \
-        [("PrimitiveOpaqueTriangle.cuh", "ProjectionFwd_kernel.cuh")] * 2 + \
-        [("PrimitiveVoxel.cuh", "ProjectionFwd_kernel.cuh")] * 2
+    for filename, kernel_filename, prefix, wrapper_name in [
+        ("ProjectionFwd.cu", "ProjectionFwd_kernel.cuh", "ProjectionFwd", "projection_fused_fwd_kernel_wrapper"),
+        ("ProjectionPackedFwd.cu", "ProjectionPackedFwd_kernel.cuh", "ProjectionPackedMask", "projection_packed_mask_kernel_wrapper"),
+        ("ProjectionPackedFwd.cu", "ProjectionPackedFwd_kernel.cuh", "ProjectionPackedFwd", "projection_packed_fwd_kernel_wrapper"),
+    ]:
+        definition = extract_kernel_definition(filename, wrapper_name)
+        map_header = ["typename SplatPrimitive", None]
+        map_body = [
+            ("Vanilla3DGS", "gsplat::CameraModelType::PINHOLE"),
+            ("Vanilla3DGS", "gsplat::CameraModelType::FISHEYE"),
+            ("MipSplatting", "gsplat::CameraModelType::PINHOLE"),
+            ("MipSplatting", "gsplat::CameraModelType::FISHEYE"),
+            ("Vanilla3DGUT", "gsplat::CameraModelType::PINHOLE"),
+            ("Vanilla3DGUT", "gsplat::CameraModelType::FISHEYE"),
+            ("SphericalVoronoi3DGUT<2>", "gsplat::CameraModelType::PINHOLE"),
+            ("SphericalVoronoi3DGUT<2>", "gsplat::CameraModelType::FISHEYE"),
+            ("SphericalVoronoi3DGUT<3>", "gsplat::CameraModelType::PINHOLE"),
+            ("SphericalVoronoi3DGUT<3>", "gsplat::CameraModelType::FISHEYE"),
+            ("SphericalVoronoi3DGUT<4>", "gsplat::CameraModelType::PINHOLE"),
+            ("SphericalVoronoi3DGUT<4>", "gsplat::CameraModelType::FISHEYE"),
+            ("SphericalVoronoi3DGUT<5>", "gsplat::CameraModelType::PINHOLE"),
+            ("SphericalVoronoi3DGUT<5>", "gsplat::CameraModelType::FISHEYE"),
+            ("SphericalVoronoi3DGUT<6>", "gsplat::CameraModelType::PINHOLE"),
+            ("SphericalVoronoi3DGUT<6>", "gsplat::CameraModelType::FISHEYE"),
+            ("SphericalVoronoi3DGUT<7>", "gsplat::CameraModelType::PINHOLE"),
+            ("SphericalVoronoi3DGUT<7>", "gsplat::CameraModelType::FISHEYE"),
+            ("SphericalVoronoi3DGUT<8>", "gsplat::CameraModelType::PINHOLE"),
+            ("SphericalVoronoi3DGUT<8>", "gsplat::CameraModelType::FISHEYE"),
+            ("OpaqueTriangle", "gsplat::CameraModelType::PINHOLE"),
+            ("OpaqueTriangle", "gsplat::CameraModelType::FISHEYE"),
+            ("VoxelPrimitive", "gsplat::CameraModelType::PINHOLE"),
+            ("VoxelPrimitive", "gsplat::CameraModelType::FISHEYE"),
+        ]
+        includes = [("Primitive3DGS.cuh", kernel_filename)] * 4 + \
+            [("Primitive3DGUT.cuh", kernel_filename)] * 2 + \
+            [("Primitive3DGUT_SV.cuh", kernel_filename)] * 14 + \
+            [("PrimitiveOpaqueTriangle.cuh", kernel_filename)] * 2 + \
+            [("PrimitiveVoxel.cuh", kernel_filename)] * 2
 
-    generate_kernel_instantiation("ProjectionFwd", definition, map_header, map_body, includes)
+        generate_kernel_instantiation(prefix, definition, map_header, map_body, includes)
 
 
 def generate_ProjectionBwd():

@@ -364,13 +364,15 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         v_depths = None
 
         if h_splats is not None:
+            vr_splats_mutable = [vr_splats[0], vr_splats[1], False]
+            h_splats_mutable = [h_splats[0], h_splats[1], False]
             for v, vr, h in zip(v_splats, vr_splats, h_splats):
                 if v.numel() == 0:
                     continue
                 add_gradient_component(v, 'gradr', vr)
                 add_gradient_component(v, 'hess', h)
-                v.gradr_all = vr_splats
-                v.hess_all = h_splats  # so we can get all hess from projection backward pass
+                v.gradr_all = vr_splats_mutable
+                v.hess_all = h_splats_mutable  # so we can get all hess from projection backward pass
 
         v_backgrounds = None
         if ctx.needs_input_grad[6]:

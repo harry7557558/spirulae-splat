@@ -136,7 +136,7 @@ class SpirulaeModelConfig(ModelConfig):
         (e.g. Zip-NeRF dataset, very large-scale scenes across multiple street blocks)"""
     compute_depth_normal: bool = True
     """Compute normal from depth. Required for 2DGS and supervision. Disabling this can reduce VRAM usage and speed up training."""
-    packed: bool = False
+    packed: bool = True
     """Pack projection outputs, reduce VRAM usage at large batch size but can be slightly slower"""
     use_bvh: bool = False
     """Use BVH for splat-patch intersection test, may be faster when batching large number of small patches"""

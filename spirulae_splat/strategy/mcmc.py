@@ -109,15 +109,10 @@ class MCMCStrategy(Strategy):
         if packed:
             # grads is [nnz, 2]
             gs_ids = info["gaussian_ids"]  # [nnz]
-            radii = torch.fmax(info["radii"][:, 0], info["radii"][:, 1])  # [nnz]
-            # TODO: scatter reduce
 
-            # Should be ideally using scatter max
-            normalized_radii = radii / float(max(info["width"], info["height"]))
-            state["radii"][gs_ids] = torch.maximum(
-                state["radii"][gs_ids],
-                normalized_radii
-            )
+            normalized_radii = info["radii"] / float(max(info["width"], info["height"]))
+            # TODO: scatter max
+            state["radii"][gs_ids] = torch.fmax(state["radii"][gs_ids], normalized_radii)
         else:
             # grads is [C, N, 2], radii is [N]
             normalized_radii = info["radii"] / float(max(info["width"], info["height"]))  # [N]

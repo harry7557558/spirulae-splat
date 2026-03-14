@@ -185,6 +185,7 @@ for filename in [
     'Projection',
     'ProjectionFwd',
     'ProjectionBwd',
+    'ProjectionPackedFwd',
     'ProjectionHeteroFwd',
     'ProjectionHeteroBwd',
     'RasterizationFwd',

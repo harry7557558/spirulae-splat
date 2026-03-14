@@ -9,6 +9,20 @@
 
 
 
+void inplace_scatter_add_tensor(
+    at::Tensor indices,
+    at::Tensor src,
+    at::Tensor dst
+);
+
+
+void inplace_scatter_max_tensor(
+    at::Tensor indices,
+    at::Tensor src,
+    at::Tensor dst
+);
+
+
 void mcmc_add_noise_tensor(
     std::string primitive,
     float scaler, float min_opacity,

@@ -25,8 +25,10 @@ std::tuple<
 > do_intersect_tile_generic(
     at::Tensor aabb,  // [..., N, 4], float32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
+    const uint32_t I,
     const uint32_t image_width,
-    const uint32_t image_height
+    const uint32_t image_height,
+    std::optional<at::Tensor> image_ids
 );
 
 
@@ -38,6 +40,7 @@ std::tuple<
 > intersect_tile_3dgs_tensor(
     at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
+    const uint32_t I,
     const uint32_t image_width,
     const uint32_t image_height,
     typename Vanilla3DGS::Screen::TensorTuple splats,
@@ -56,6 +59,7 @@ std::tuple<
 > intersect_tile_mip_tensor(
     at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
+    const uint32_t I,
     const uint32_t image_width,
     const uint32_t image_height,
     typename MipSplatting::Screen::TensorTuple splats,
@@ -74,6 +78,7 @@ std::tuple<
 > intersect_tile_3dgut_tensor(
     at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
+    const uint32_t I,
     const uint32_t image_width,
     const uint32_t image_height,
     typename Vanilla3DGUT::Screen::TensorTuple splats,
@@ -92,6 +97,7 @@ std::tuple<
 > intersect_tile_3dgut_sv_tensor(
     at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
+    const uint32_t I,
     const uint32_t image_width,
     const uint32_t image_height,
     typename SphericalVoronoi3DGUT_Default::Screen::TensorTuple splats,
@@ -110,6 +116,7 @@ std::tuple<
 > intersect_tile_opaque_triangle_tensor(
     at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
+    const uint32_t I,
     const uint32_t image_width,
     const uint32_t image_height,
     typename OpaqueTriangle::Screen::TensorTuple splats,
@@ -128,6 +135,7 @@ std::tuple<
 > intersect_tile_voxel_tensor(
     at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
+    const uint32_t I,
     const uint32_t image_width,
     const uint32_t image_height,
     typename VoxelPrimitive::Screen::TensorTuple splats,

@@ -35,8 +35,9 @@ inline constexpr float kTransmitThreshold = 1e-4f;
 
 template<bool is_counting_pass>
 __global__ void intersect_tile_kernel(
-    const uint32_t I,
-    const uint32_t N,
+    const uint32_t I,  // or 1 in packed mode
+    const uint32_t N,  // or nnz in packed mode
+    const int32_t *__restrict__ image_ids,  // [nnz], packed mode only
     const float4 *__restrict__ aabb_buffer,  // [..., N, 4], int32, xyxy in pixels
     const float *__restrict__ depths_buffer,  // [..., N]
     const int64_t *__restrict__ cum_tiles_per_splat, // [..., N], optional for counting pass
@@ -76,7 +77,7 @@ __global__ void intersect_tile_kernel(
         return;
     }
 
-    int64_t iid = idx / N;
+    int64_t iid = (image_ids ? image_ids[idx] : idx / N);
 
     int32_t depth_i32 = __float_as_int(depths_buffer[idx]);
     
@@ -344,18 +345,22 @@ std::tuple<
 > do_intersect_tile_generic(
     at::Tensor aabb,  // [..., N, 4], float32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
+    const uint32_t I,
     const uint32_t image_width,
-    const uint32_t image_height
+    const uint32_t image_height,
+    std::optional<at::Tensor> image_ids
 ) {
     DEVICE_GUARD(aabb);
     CHECK_INPUT(aabb);
     CHECK_INPUT(depths);
+    if (image_ids.has_value())
+        CHECK_INPUT(image_ids.value());
 
     if (aabb.size(-1) != 4)
         AT_ERROR("aabb must be of shape [..., N, 4]");
+    bool packed = image_ids.has_value();
     const uint32_t N = aabb.size(-2);
-    const uint32_t I = aabb.numel() / N / 4;
-    if (depths.numel() != I * N)
+    if (depths.numel() != (packed ? N : I * N))
         AT_ERROR("depths must be of shape [..., N]");
 
     uint32_t tile_width = _CEIL_DIV(image_width, TILE_SIZE);
@@ -364,12 +369,13 @@ std::tuple<
 
     /* For each splat, count tiles intersected by its AABB */
     at::Tensor tiles_per_splat = at::empty(
-        {depths.numel()},
+        {packed ? N : I*N},
         at::TensorOptions().device(aabb.device()).dtype(at::kLong)
     );
     intersect_tile_kernel<true><<<_LAUNCH_ARGS_1D(I*N, 256)>>>(
-        I,
+        packed ? 1 : I,
         N,
+        nullptr,  // image_ids
         reinterpret_cast<const float4 *>(aabb.data_ptr<float>()),
         depths.data_ptr<float>(),
         nullptr,  // cum_tiles_per_splat
@@ -412,8 +418,9 @@ std::tuple<
             radii
         );
     intersect_tile_kernel<false><<<_LAUNCH_ARGS_1D(I*N, 256)>>>(
-        I,
+        packed ? 1 : I,
         N,
+        image_ids.has_value() ? image_ids.value().data_ptr<int32_t>() : nullptr,
         reinterpret_cast<const float4 *>(aabb.data_ptr<float>()),
         depths.data_ptr<float>(),
         reinterpret_cast<const int64_t *>(cum_tiles_per_splat.data_ptr<int64_t>()),
@@ -534,6 +541,7 @@ std::tuple<
 > do_intersect_tile_eval3d(
     at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
+    const uint32_t I,
     const uint32_t image_width,
     const uint32_t image_height,
     typename SplatPrimitive::Screen::TensorTuple splats_tuple,
@@ -545,12 +553,13 @@ std::tuple<
     auto [isect_ids, flatten_ids, offsets, radii] = do_intersect_tile_generic(
         aabb,
         depths,
+        I,
         image_width,
-        image_height
+        image_height,
+        std::nullopt
     );
     uint32_t n_isects = isect_ids.numel();
 
-    uint32_t I = aabb.numel() / aabb.size(-2) / 4;
     uint32_t tile_width = _CEIL_DIV(image_width, TILE_SIZE);
     uint32_t tile_height = _CEIL_DIV(image_height, TILE_SIZE);
     uint32_t N = aabb.size(-2);
@@ -604,6 +613,7 @@ std::tuple<
 > do_intersect_tile(
     at::Tensor aabb,  // [..., N, 4], int32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
+    const uint32_t I,
     const uint32_t image_width,
     const uint32_t image_height,
     typename SplatPrimitive::Screen::TensorTuple splats_tuple
@@ -611,12 +621,13 @@ std::tuple<
     auto [isect_ids, flatten_ids, offsets, radii] = do_intersect_tile_generic(
         aabb,
         depths,
+        I,
         image_width,
-        image_height
+        image_height,
+        std::nullopt
     );
     uint32_t n_isects = isect_ids.numel();
 
-    uint32_t I = aabb.numel() / aabb.size(-2) / 4;
     uint32_t tile_width = _CEIL_DIV(image_width, TILE_SIZE);
     uint32_t tile_height = _CEIL_DIV(image_height, TILE_SIZE);
     uint32_t N = aabb.size(-2);
@@ -666,6 +677,7 @@ std::tuple<
 > intersect_tile_3dgs_tensor(
     at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
+    const uint32_t I,
     const uint32_t image_width,
     const uint32_t image_height,
     typename Vanilla3DGS::Screen::TensorTuple splats,
@@ -677,6 +689,7 @@ std::tuple<
     return do_intersect_tile<Vanilla3DGS>(
         aabb,
         depths,
+        I,
         image_width,
         image_height,
         splats
@@ -692,6 +705,7 @@ std::tuple<
 > intersect_tile_mip_tensor(
     at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
+    const uint32_t I,
     const uint32_t image_width,
     const uint32_t image_height,
     typename MipSplatting::Screen::TensorTuple splats,
@@ -703,6 +717,7 @@ std::tuple<
     return do_intersect_tile<MipSplatting>(
         aabb,
         depths,
+        I,
         image_width,
         image_height,
         splats
@@ -718,6 +733,7 @@ std::tuple<
 > intersect_tile_3dgut_tensor(
     at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
+    const uint32_t I,
     const uint32_t image_width,
     const uint32_t image_height,
     typename Vanilla3DGUT::Screen::TensorTuple splats,
@@ -729,6 +745,7 @@ std::tuple<
     return do_intersect_tile_eval3d<Vanilla3DGUT>(
         aabb,
         depths,
+        I,
         image_width,
         image_height,
         splats,
@@ -748,6 +765,7 @@ std::tuple<
 > intersect_tile_3dgut_sv_tensor(
     at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
+    const uint32_t I,
     const uint32_t image_width,
     const uint32_t image_height,
     typename SphericalVoronoi3DGUT_Default::Screen::TensorTuple splats,
@@ -759,6 +777,7 @@ std::tuple<
     return do_intersect_tile_eval3d<SphericalVoronoi3DGUT_Default>(
         aabb,
         depths,
+        I,
         image_width,
         image_height,
         splats,
@@ -778,6 +797,7 @@ std::tuple<
 > intersect_tile_opaque_triangle_tensor(
     at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
+    const uint32_t I,
     const uint32_t image_width,
     const uint32_t image_height,
     typename OpaqueTriangle::Screen::TensorTuple splats,
@@ -789,6 +809,7 @@ std::tuple<
     return do_intersect_tile_eval3d<OpaqueTriangle>(
         aabb,
         depths,
+        I,
         image_width,
         image_height,
         splats,
@@ -808,6 +829,7 @@ std::tuple<
 > intersect_tile_voxel_tensor(
     at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
+    const uint32_t I,
     const uint32_t image_width,
     const uint32_t image_height,
     typename VoxelPrimitive::Screen::TensorTuple splats,
@@ -819,6 +841,7 @@ std::tuple<
     return do_intersect_tile_eval3d<VoxelPrimitive>(
         aabb,
         depths,
+        I,
         image_width,
         image_height,
         splats,

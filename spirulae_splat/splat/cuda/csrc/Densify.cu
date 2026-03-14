@@ -12,6 +12,87 @@ namespace SlangDensify {
 
 
 // ================
+// Scatter Reduce
+// ================
+
+__global__ void scatter_add_kernel(
+    size_t numel,
+    size_t stride,
+    int32_t* __restrict__ indices,
+    float* __restrict__ src,
+    float* __restrict__ dst
+) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= numel)
+        return;
+
+    size_t bidx = indices[idx / stride] * stride + idx % stride;
+    float x = src[idx];
+    if (x != 0.0f && isfinite(x))
+        atomicAdd(&dst[bidx], src[idx]);
+}
+
+__global__ void scatter_max_kernel(
+    int numel,
+    int stride,
+    int32_t* __restrict__ indices,
+    float* __restrict__ src,
+    float* __restrict__ dst
+) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= numel)
+        return;
+
+    size_t bidx = indices[idx / stride] * stride + idx % stride;
+    float x = src[idx];
+    if (isfinite(x))
+        atomicMax(&dst[bidx], src[idx]);
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void inplace_scatter_add_tensor(
+    at::Tensor indices,
+    at::Tensor src,
+    at::Tensor dst
+) {
+    DEVICE_GUARD(indices);
+    CHECK_INPUT(indices);
+    CHECK_INPUT(src);
+    CHECK_INPUT(dst);
+
+    scatter_add_kernel<<<_LAUNCH_ARGS_1D(src.numel(), 256)>>>(
+        src.numel(),
+        src.numel() / indices.numel(),
+        indices.data_ptr<int32_t>(),
+        src.data_ptr<float>(),
+        dst.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void inplace_scatter_max_tensor(
+    at::Tensor indices,
+    at::Tensor src,
+    at::Tensor dst
+) {
+    DEVICE_GUARD(indices);
+    CHECK_INPUT(indices);
+    CHECK_INPUT(src);
+    CHECK_INPUT(dst);
+
+    scatter_max_kernel<<<_LAUNCH_ARGS_1D(src.numel(), 256)>>>(
+        src.numel(),
+        src.numel() / indices.numel(),
+        indices.data_ptr<int32_t>(),
+        src.data_ptr<float>(),
+        dst.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+// ================
 // MCMC Add Noise
 // ================
 

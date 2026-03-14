@@ -385,9 +385,11 @@ def rasterization(
         (camera_ids, gaussian_ids, aabb_xyxy, depths, proj_splats) = proj_results
         batch_ids, image_ids = 0, camera_ids
     elif packed:
-        raise NotImplementedError()
+        aabb_xyxy, depths, proj_splats = proj_results
+        batch_ids, camera_ids, gaussian_ids = 0, aabb_xyxy.camera_ids, aabb_xyxy.gaussian_ids
+        image_ids = camera_ids
     else:
-        # The results are with shape [..., C, N, ...]. Only the elements with radii > 0 are valid.
+        # The results are with shape [..., C, N, ...]. Only the elements with non-empty AABB are valid.
         aabb_xyxy, depths, proj_splats = proj_results
         batch_ids, camera_ids, gaussian_ids = None, None, None
         image_ids = None
@@ -422,7 +424,7 @@ def rasterization(
     TILE_SIZE = 16
     tile_width = math.ceil(width / float(TILE_SIZE))
     tile_height = math.ceil(height / float(TILE_SIZE))
-    if packed:
+    if packed and False:
         # TODO: add support
         radii = (0.5 * (aabb_xyxy[..., 2:] - aabb_xyxy[..., :2]) + 0.5).int()
         means2d = (aabb_xyxy[..., 2:] + aabb_xyxy[..., :2]).float() / 2
@@ -436,8 +438,8 @@ def rasterization(
             segmented=segmented,
             packed=packed,
             n_images=I,
-            image_ids=image_ids,
-            gaussian_ids=gaussian_ids,
+            image_ids=image_ids.long(),
+            gaussian_ids=gaussian_ids.long(),
         )
         isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
         isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
@@ -446,8 +448,8 @@ def rasterization(
         isect_ids, flatten_ids, isect_offsets, radii = _make_lazy_cuda_func(f"intersect_tile")(
             aabb_xyxy,
             depths,
-            width,
-            height,
+            I, width, height,
+            image_ids if packed else None,
             # (*proj_splats, None) if primitive in ["3dgs", "mip"] else proj_splats,
             # viewmats,
             # intrins,
