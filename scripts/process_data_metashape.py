@@ -238,7 +238,7 @@ def metashape_to_json(
 
         # https://github.com/facebookresearch/EyefulTower/issues/7
         # https://www.agisoft.com/pdf/metashape-pro_2_2_en.pdf Appendix D. Camera Models
-        calib = sensor.find("calibration")
+        calib = sensor.find("calibration[@class!='initial']")
         if calib is None:
             assert sensor_type[0] == "spherical", "Only spherical sensors should have no intrinsics"
             s["fl_x"] = s["w"] / 2.0

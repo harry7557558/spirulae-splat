@@ -81,6 +81,8 @@ if __name__ == "__main__":
     parser.add_argument("--text_threshold", type=float, default=0.25, help="Text threshold for lang-sam model.")
     args = parser.parse_args()
 
+    prompts = [s.strip() for s in args.prompt.split(';') if s.strip() != ""]
+
     # lang-sam
     if args.model != "sam3":
         try:
@@ -96,7 +98,6 @@ if __name__ == "__main__":
                 image = image.resize((int(image.size[0]*sc), int(image.size[1]*sc)))
             return image
 
-        prompts = [s.strip() for s in args.prompt.split(';') if s.strip() != ""]
         # prompts = ["fisheye circle"]
         def predict(images_pil: Image.Image):
             images_pil = [map_image(images_pil)]
@@ -123,9 +124,10 @@ if __name__ == "__main__":
         processor = Sam3Processor(model)
 
         def predict(image: list[Image.Image]):
-            inference_state = processor.set_image(image)
-            output = processor.set_text_prompt(state=inference_state, prompt=args.prompt.strip())
-            return [output]
+            return [
+                processor.set_text_prompt(state=processor.set_image(image), prompt=prompt)
+                for prompt in prompts
+            ]
 
     process(
         predict,

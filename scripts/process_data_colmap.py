@@ -681,15 +681,18 @@ def colmap_to_json(
         name = im_data.name
         if image_rename_map is not None:
             name = image_rename_map[name]
-        name = Path(f"./images/{name}")
 
         frame = {
-            "file_path": name.as_posix(),
+            "file_path": (Path("images") / name).as_posix(),
             "transform_matrix": c2w.tolist(),
             "colmap_im_id": im_id,
         }
         if camera_mask_path is not None:
-            frame["mask_path"] = camera_mask_path.relative_to(camera_mask_path.parent.parent).as_posix()
+            mask_path = camera_mask_path / (name+".png")
+            if mask_path.exists():
+                frame["mask_path"] = mask_path.as_posix()
+            else:
+                print("Warning:", mask_path, "does not exist")
         if image_id_to_depth_path is not None:
             depth_path = image_id_to_depth_path[im_id]
             frame["depth_file_path"] = str(depth_path.relative_to(depth_path.parent.parent))
@@ -810,9 +813,18 @@ class ColmapConverterToNerfstudioDataset():
     """Path of the colmap model, relative to the dataset directory.
     """
 
+    camera_mask_path: Path = Path("masks")
+    """Path of the colmap model, relative to the dataset directory.
+    """
+
     @property
     def absolute_colmap_model_path(self) -> Path:
         return self.work_dir / self.colmap_model_path
+
+    @property
+    def absolute_camera_mask_path(self) -> Optional[Path]:
+        path = self.work_dir / self.camera_mask_path
+        return path if path.exists() else None
 
     @property
     def absolute_colmap_path(self) -> Path:
@@ -832,7 +844,7 @@ class ColmapConverterToNerfstudioDataset():
                     recon_dir=self.absolute_colmap_model_path,
                     output_dir=self.work_dir,
                     image_id_to_depth_path=None,
-                    camera_mask_path=None,
+                    camera_mask_path=self.absolute_camera_mask_path,
                     image_rename_map=None,
                     use_single_camera_mode=True,
                 )
