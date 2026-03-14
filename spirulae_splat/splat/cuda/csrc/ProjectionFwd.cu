@@ -7,7 +7,7 @@
 namespace cg = cooperative_groups;
 
 
-template<typename SplatPrimitive, gsplat::CameraModelType camera_model>
+template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
 void projection_fused_fwd_kernel_wrapper(
     cudaStream_t stream,
     const uint32_t B,
@@ -40,7 +40,7 @@ inline std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model,
+    const ssplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     typename SplatPrimitive::World::Tensor splats_world(in_splats);
@@ -61,10 +61,10 @@ inline std::tuple<
             (float4*)aabb.data_ptr<float>(), splats_screen.buffer() \
         )
 
-    if (camera_model == gsplat::CameraModelType::PINHOLE)
-        projection_fused_fwd_kernel_wrapper<SplatPrimitive, gsplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
-    else if (camera_model == gsplat::CameraModelType::FISHEYE)
-        projection_fused_fwd_kernel_wrapper<SplatPrimitive, gsplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+    if (camera_model == ssplat::CameraModelType::PINHOLE)
+        projection_fused_fwd_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
+    else if (camera_model == ssplat::CameraModelType::FISHEYE)
+        projection_fused_fwd_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -92,11 +92,11 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return launch_projection_fused_fwd_kernel<Vanilla3DGS>(
-        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs);
+        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, cmt(camera_model), dist_coeffs);
 }
 
 
@@ -117,11 +117,11 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return launch_projection_fused_fwd_kernel<MipSplatting>(
-        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs);
+        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, cmt(camera_model), dist_coeffs);
 }
 
 
@@ -143,11 +143,11 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return launch_projection_fused_fwd_kernel<Vanilla3DGUT>(
-        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs);
+        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, cmt(camera_model), dist_coeffs);
 }
 
 
@@ -168,13 +168,13 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     int num_sv = std::get<5>(in_splats).size(-2);
     #define _CASE(n) \
         if (num_sv == n) return launch_projection_fused_fwd_kernel<SphericalVoronoi3DGUT<n>>( \
-            in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs); \
+            in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, cmt(camera_model), dist_coeffs); \
     _CASE(2) _CASE(3) _CASE(4) _CASE(5) _CASE(6) _CASE(7) _CASE(8)
     #undef _CASE
     throw std::invalid_argument("Unsupported num_sv");
@@ -200,11 +200,11 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return launch_projection_fused_fwd_kernel<OpaqueTriangle>(
-        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs);
+        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, cmt(camera_model), dist_coeffs);
 }
 
 
@@ -227,10 +227,10 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return launch_projection_fused_fwd_kernel<VoxelPrimitive>(
-        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, camera_model, dist_coeffs);
+        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, cmt(camera_model), dist_coeffs);
 }
 

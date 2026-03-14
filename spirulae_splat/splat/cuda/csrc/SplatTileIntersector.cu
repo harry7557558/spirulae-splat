@@ -115,7 +115,7 @@ __device__ bool getAABB(
 }
 
 
-template<gsplat::CameraModelType camera_model>
+template<ssplat::CameraModelType camera_model>
 struct Tile {
     glm::vec3 ro, rd;
     glm::vec3 n0, n1, n2, n3;
@@ -125,7 +125,7 @@ struct Tile {
         float x0, float x1, float y0, float y1,
         glm::mat4x3 view
     ) {
-        bool is_fisheye = (camera_model == gsplat::CameraModelType::FISHEYE);
+        bool is_fisheye = (camera_model == ssplat::CameraModelType::FISHEYE);
 
         glm::mat3 R = glm::transpose(glm::mat3(view));
         ro = -R * glm::vec3(view[3]);
@@ -174,7 +174,7 @@ struct Tile {
         float s2 = glm::dot(n2, roc) - glm::dot(r, glm::abs(n2));
         float s3 = glm::dot(n3, roc) - glm::dot(r, glm::abs(n3));
         float s = fmax(fmax(s0, s1), fmax(s2, s3));
-        if (camera_model != gsplat::CameraModelType::PINHOLE)
+        if (camera_model != ssplat::CameraModelType::PINHOLE)
             return s < 0.0f;
         float sz = -glm::dot(rd, roc) - glm::dot(r, glm::abs(rd));
         return fmax(s, sz) < 0.0f;
@@ -189,7 +189,7 @@ struct Tile {
             return -1.0f;
         float3 mean_ = 0.5f * (aabb_min + aabb_max);
         glm::vec3 mean(mean_.x, mean_.y, mean_.z);
-        return camera_model != gsplat::CameraModelType::PINHOLE ?
+        return camera_model != ssplat::CameraModelType::PINHOLE ?
             glm::length(mean - ro) :
             glm::dot(mean - ro, rd);  // negative if center is behind
     }
@@ -202,7 +202,7 @@ struct Tile {
             return -1.0f;
         float3 mean_ = 0.5f * (aabb_min + aabb_max);
         glm::vec3 mean(mean_.x, mean_.y, mean_.z);
-        return camera_model != gsplat::CameraModelType::PINHOLE ?
+        return camera_model != ssplat::CameraModelType::PINHOLE ?
             glm::length(mean - ro) :
             glm::dot(mean - ro, rd);  // negative if center is behind
     }
@@ -214,7 +214,7 @@ struct Tile {
             return -1.0f;
         float3 mean_ = 0.5f * (aabb_min + aabb_max);
         glm::vec3 mean(mean_.x, mean_.y, mean_.z);
-        return camera_model != gsplat::CameraModelType::PINHOLE ?
+        return camera_model != ssplat::CameraModelType::PINHOLE ?
             glm::length(mean - ro) :
             glm::dot(mean - ro, rd);  // negative if center is behind
     }
@@ -222,7 +222,7 @@ struct Tile {
 };
 
 
-template<gsplat::CameraModelType camera_model>
+template<ssplat::CameraModelType camera_model>
 __device__ __forceinline__ Tile<camera_model>
 loadTile(unsigned tileIdx, const TileBuffers<camera_model> buffers, bool& isActive) {
     static_assert(sizeof(glm::mat4) == 16*sizeof(float));
@@ -464,7 +464,7 @@ __global__ void fillTreeSubcells_perOverlap(
 
 
 
-template<typename Primitive, gsplat::CameraModelType camera_model>
+template<typename Primitive, ssplat::CameraModelType camera_model>
 __global__ void getTileSplatIntersections_brute(
     const long numSplats,
     const TileBuffers<camera_model> tiles,
@@ -780,7 +780,7 @@ __global__ void computeLbvhAABB(
 }
 
 
-template<typename Primitive, gsplat::CameraModelType camera_model>
+template<typename Primitive, ssplat::CameraModelType camera_model>
 __global__ void getTileSplatIntersections_lbvh(
     const TileBuffers<camera_model> tiles,
     const typename Primitive::World::Buffer splatBuffer,
@@ -867,7 +867,7 @@ __global__ void getTileSplatIntersections_lbvh(
 }
 
 
-template<typename Primitive, gsplat::CameraModelType camera_model>
+template<typename Primitive, ssplat::CameraModelType camera_model>
 __global__ void getTileSplatIntersections_lbvh_warp(
     const TileBuffers<camera_model> tiles,
     const typename Primitive::World::Buffer splatBuffer,
@@ -1132,7 +1132,7 @@ void clearL2Cache() {
 #endif
 
 
-template<typename Primitive, gsplat::CameraModelType camera_model>
+template<typename Primitive, ssplat::CameraModelType camera_model>
 SplatTileIntersector<Primitive, camera_model>::SplatTileIntersector(
     const typename Primitive::World::Tensor &splats,
     const TileBuffers<camera_model> &tiles,
@@ -1187,7 +1187,7 @@ SplatTileIntersector<Primitive, camera_model>::SplatTileIntersector(
     #endif
 }
 
-template<typename Primitive, gsplat::CameraModelType camera_model>
+template<typename Primitive, ssplat::CameraModelType camera_model>
 std::tuple<at::Tensor, at::Tensor> SplatTileIntersector<Primitive, camera_model>::getIntersections_brute() {
     constexpr unsigned warp = 32;
 
@@ -1217,7 +1217,7 @@ std::tuple<at::Tensor, at::Tensor> SplatTileIntersector<Primitive, camera_model>
 }
 
 
-template<typename Primitive, gsplat::CameraModelType camera_model>
+template<typename Primitive, ssplat::CameraModelType camera_model>
 std::tuple<at::Tensor, at::Tensor> SplatTileIntersector<Primitive, camera_model>::getIntersections_lbvh() {
     // TODO: use a separate rotated AABB aligned with (1,1,1) for thin off-diagnoal Gaussians?
     constexpr uint MAX_NUM_LEVELS = 28;
@@ -1542,22 +1542,22 @@ intersect_splat_tile_3dgs(
     unsigned height,
     const at::Tensor& viewmats,
     const at::Tensor& intrins,
-    const gsplat::CameraModelType& camera_model,
+    const std::string& camera_model,
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale
 ) {
     Vanilla3DGS::World::Tensor splats_tensor(splats_tuple);
 
-    if (camera_model == gsplat::CameraModelType::PINHOLE) {
-        TileBuffers<gsplat::CameraModelType::PINHOLE> tile_buffers =
+    if (cmt(camera_model) == ssplat::CameraModelType::PINHOLE) {
+        TileBuffers<ssplat::CameraModelType::PINHOLE> tile_buffers =
             {width, height, viewmats, intrins, dist_coeffs};
-        return SplatTileIntersector<Vanilla3DGS, gsplat::CameraModelType::PINHOLE>
+        return SplatTileIntersector<Vanilla3DGS, ssplat::CameraModelType::PINHOLE>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
-    else if (camera_model == gsplat::CameraModelType::FISHEYE) {
-        TileBuffers<gsplat::CameraModelType::FISHEYE> tile_buffers =
+    else if (cmt(camera_model) == ssplat::CameraModelType::FISHEYE) {
+        TileBuffers<ssplat::CameraModelType::FISHEYE> tile_buffers =
             {width, height, viewmats, intrins, dist_coeffs};
-        return SplatTileIntersector<Vanilla3DGS, gsplat::CameraModelType::FISHEYE>
+        return SplatTileIntersector<Vanilla3DGS, ssplat::CameraModelType::FISHEYE>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
     else
@@ -1571,22 +1571,22 @@ intersect_splat_tile_opaque_triangle(
     unsigned height,
     const at::Tensor& viewmats,
     const at::Tensor& intrins,
-    const gsplat::CameraModelType& camera_model,
+    const std::string& camera_model,
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale
 ) {
     OpaqueTriangle::World::Tensor splats_tensor(splats_tuple);
 
-    if (camera_model == gsplat::CameraModelType::PINHOLE) {
-        TileBuffers<gsplat::CameraModelType::PINHOLE> tile_buffers =
+    if (cmt(camera_model) == ssplat::CameraModelType::PINHOLE) {
+        TileBuffers<ssplat::CameraModelType::PINHOLE> tile_buffers =
             {width, height, viewmats, intrins, dist_coeffs};
-        return SplatTileIntersector<OpaqueTriangle, gsplat::CameraModelType::PINHOLE>
+        return SplatTileIntersector<OpaqueTriangle, ssplat::CameraModelType::PINHOLE>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
-    else if (camera_model == gsplat::CameraModelType::FISHEYE) {
-        TileBuffers<gsplat::CameraModelType::FISHEYE> tile_buffers =
+    else if (cmt(camera_model) == ssplat::CameraModelType::FISHEYE) {
+        TileBuffers<ssplat::CameraModelType::FISHEYE> tile_buffers =
             {width, height, viewmats, intrins, dist_coeffs};
-        return SplatTileIntersector<OpaqueTriangle, gsplat::CameraModelType::FISHEYE>
+        return SplatTileIntersector<OpaqueTriangle, ssplat::CameraModelType::FISHEYE>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
     else
@@ -1600,22 +1600,22 @@ intersect_splat_tile_voxel(
     unsigned height,
     const at::Tensor& viewmats,
     const at::Tensor& intrins,
-    const gsplat::CameraModelType& camera_model,
+    const std::string& camera_model,
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale
 ) {
     VoxelPrimitive::World::Tensor splats_tensor(splats_tuple);
 
-    if (camera_model == gsplat::CameraModelType::PINHOLE) {
-        TileBuffers<gsplat::CameraModelType::PINHOLE> tile_buffers =
+    if (cmt(camera_model) == ssplat::CameraModelType::PINHOLE) {
+        TileBuffers<ssplat::CameraModelType::PINHOLE> tile_buffers =
             {width, height, viewmats, intrins, dist_coeffs};
-        return SplatTileIntersector<VoxelPrimitive, gsplat::CameraModelType::PINHOLE>
+        return SplatTileIntersector<VoxelPrimitive, ssplat::CameraModelType::PINHOLE>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
-    else if (camera_model == gsplat::CameraModelType::FISHEYE) {
-        TileBuffers<gsplat::CameraModelType::FISHEYE> tile_buffers =
+    else if (cmt(camera_model) == ssplat::CameraModelType::FISHEYE) {
+        TileBuffers<ssplat::CameraModelType::FISHEYE> tile_buffers =
             {width, height, viewmats, intrins, dist_coeffs};
-        return SplatTileIntersector<VoxelPrimitive, gsplat::CameraModelType::FISHEYE>
+        return SplatTileIntersector<VoxelPrimitive, ssplat::CameraModelType::FISHEYE>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
     else

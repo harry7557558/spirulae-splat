@@ -6,7 +6,7 @@
 
 template void projection_fused_bwd_kernel_wrapper<
     VoxelPrimitive,
-    gsplat::CameraModelType::FISHEYE,
+    ssplat::CameraModelType::FISHEYE,
     HessianDiagonalOutputMode::None
 >(
     cudaStream_t stream,

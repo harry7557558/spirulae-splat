@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <glm/gtc/type_ptr.hpp>
 
-namespace gsplat {
+namespace ssplat {
 
 // https://github.com/pytorch/pytorch/blob/233305a852e1cd7f319b15b5137074c9eac455f6/aten/src/ATen/cuda/cub.cuh#L38-L46
 // handle the temporary storage and 'twice' calls for cub API
@@ -41,4 +41,14 @@ enum CameraModelType {
 // #define N_THREADS_PACKED 256
 // #define ALPHA_THRESHOLD (1.f / 255.f)
 
-} // namespace gsplat
+} // namespace ssplat
+
+#include <string>
+
+inline ssplat::CameraModelType cmt(const std::string &s) {
+    return (s == "PINHOLE") ? ssplat::CameraModelType::PINHOLE :
+        (s == "ORTHO") ? ssplat::CameraModelType::ORTHO :
+        (s == "FISHEYE") ? ssplat::CameraModelType::FISHEYE :
+        (s == "FTHETA") ? ssplat::CameraModelType::FTHETA :
+        (ssplat::CameraModelType)-1;
+}

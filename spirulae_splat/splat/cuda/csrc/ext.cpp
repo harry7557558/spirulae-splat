@@ -29,11 +29,11 @@
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
-    // py::enum_<gsplat::CameraModelType>(m, "SSplatCameraModelType")
-    //     .value("PINHOLE", gsplat::CameraModelType::PINHOLE)
-    //     .value("ORTHO", gsplat::CameraModelType::ORTHO)
-    //     .value("FISHEYE", gsplat::CameraModelType::FISHEYE)
-    //     .value("FTHETA", gsplat::CameraModelType::FTHETA)
+    // py::enum_<ssplat::CameraModelType>(m, "SSplatCameraModelType")
+    //     .value("PINHOLE", ssplat::CameraModelType::PINHOLE)
+    //     .value("ORTHO", ssplat::CameraModelType::ORTHO)
+    //     .value("FISHEYE", ssplat::CameraModelType::FISHEYE)
+    //     .value("FTHETA", ssplat::CameraModelType::FTHETA)
     //     .export_values();
 
     m.attr("TILE_SIZE") = py::int_(TILE_SIZE);

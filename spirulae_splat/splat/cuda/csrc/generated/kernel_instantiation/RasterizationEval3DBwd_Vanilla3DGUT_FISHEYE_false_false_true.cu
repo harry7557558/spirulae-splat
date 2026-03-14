@@ -6,7 +6,7 @@
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT,
-    gsplat::CameraModelType::FISHEYE,
+    ssplat::CameraModelType::FISHEYE,
     false,
     false,
     true

@@ -848,7 +848,7 @@ class SpirulaeModel(Model):
         sh_coeffs = torch.cat((self.background_color.unsqueeze(0), self.background_sh), dim=0)  # [(deg+1)^2, 3]
         return render_background_sh(
             W, H,
-            "fisheye" if is_fisheye else "pinhole",
+            "FISHEYE" if is_fisheye else "PINHOLE",
             intrins, c2w[..., :3, :3], sh_degree, sh_coeffs
         )
 

@@ -6,7 +6,7 @@
 
 template void projection_fused_bwd_kernel_wrapper<
     SphericalVoronoi3DGUT<6>,
-    gsplat::CameraModelType::FISHEYE,
+    ssplat::CameraModelType::FISHEYE,
     HessianDiagonalOutputMode::None
 >(
     cudaStream_t stream,

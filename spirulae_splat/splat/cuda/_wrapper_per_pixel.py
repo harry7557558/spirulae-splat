@@ -4,7 +4,7 @@ from torch import Tensor
 from typing import Any, Callable, Literal, Optional, Union, Tuple
 import functools
 
-import gsplat.cuda._wrapper
+# import gsplat.cuda._wrapper
 
 def _make_lazy_cuda_obj(name: str) -> Any:
     # pylint: disable=import-outside-toplevel
@@ -153,9 +153,7 @@ class _DepthToNormal(torch.autograd.Function):
         is_ray_depth: bool
     ) -> Tensor:
 
-        camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
-            f"CameraModelType.{camera_model.upper()}"
-        )
+        camera_model_type = camera_model.upper()
 
         normals = _make_lazy_cuda_func("depth_to_normal_forward")(
             camera_model_type, intrins,
@@ -210,9 +208,7 @@ class _RayDepthToLinearDepth(torch.autograd.Function):
         dist_coeffs: Optional[Tensor],  # [..., C, 10]
     ) -> Tensor:
 
-        camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
-            f"CameraModelType.{camera_model.upper()}"
-        )
+        camera_model_type = camera_model.upper()
 
         out_depths = _make_lazy_cuda_func("ray_depth_to_linear_depth_forward")(
             camera_model_type, intrins, dist_coeffs,
@@ -278,9 +274,7 @@ class _DistortOrUndistortImage(torch.autograd.Function):
         if isinstance(dist_coeffs, tuple):
             dist_coeffs = torch.tensor(dist_coeffs)[None].to(image).repeat(len(image), 1)
 
-        camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
-            f"CameraModelType.{camera_model.upper()}"
-        )
+        camera_model_type = camera_model.upper()
 
         return _make_lazy_cuda_func("un"*int(is_undistort) + "distort_image")(
             camera_model_type, intrins.contiguous(),

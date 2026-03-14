@@ -6,7 +6,7 @@
 
 template void projection_fused_bwd_kernel_wrapper<
     MipSplatting,
-    gsplat::CameraModelType::PINHOLE,
+    ssplat::CameraModelType::PINHOLE,
     HessianDiagonalOutputMode::AllReasonable
 >(
     cudaStream_t stream,

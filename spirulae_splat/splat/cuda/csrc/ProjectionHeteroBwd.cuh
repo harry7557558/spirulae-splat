@@ -16,7 +16,7 @@ namespace cg = cooperative_groups;
 #include <gsplat/Utils.cuh>
 
 
-template<typename SplatPrimitive, gsplat::CameraModelType camera_model>
+template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
 __global__ void projection_3dgs_hetero_backward_kernel(
     // fwd inputs
     const long C,
@@ -31,8 +31,8 @@ __global__ void projection_3dgs_hetero_backward_kernel(
     const uint32_t tile_width,
     const uint32_t tile_height,
     // fwd outputs
-    const int64_t *__restrict__ camera_ids,     // [nnz]
-    const int64_t *__restrict__ gaussian_ids,   // [nnz]
+    const int32_t *__restrict__ camera_ids,     // [nnz]
+    const int32_t *__restrict__ gaussian_ids,   // [nnz]
     const float4 *__restrict__ aabbs,          // [B, C, N, 4]
     // grad outputs
     typename SplatPrimitive::Screen::Buffer v_splats_proj,
@@ -84,10 +84,10 @@ __global__ void projection_3dgs_hetero_backward_kernel(
     float3x3 v_R = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
     float3 v_t = {0.f, 0.f, 0.f};
     switch (camera_model) {
-    case gsplat::CameraModelType::PINHOLE: // perspective projection
+    case ssplat::CameraModelType::PINHOLE: // perspective projection
         SplatPrimitive::project_persp_vjp(splat_world, cam, v_splat_proj, v_splat_world, v_R, v_t);
         break;
-    case gsplat::CameraModelType::FISHEYE: // fisheye projection
+    case ssplat::CameraModelType::FISHEYE: // fisheye projection
         SplatPrimitive::project_fisheye_vjp(splat_world, cam, v_splat_proj, v_splat_world, v_R, v_t);
         break;
     }

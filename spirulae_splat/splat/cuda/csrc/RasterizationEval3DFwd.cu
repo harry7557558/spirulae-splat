@@ -8,7 +8,7 @@
 #include <c10/cuda/CUDAStream.h>
 
 
-template <typename SplatPrimitive, gsplat::CameraModelType camera_model, bool output_distortion, bool output_max_blending>
+template <typename SplatPrimitive, ssplat::CameraModelType camera_model, bool output_distortion, bool output_max_blending>
 void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
     cudaStream_t stream,
     const uint32_t I,
@@ -42,7 +42,7 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     typename SplatPrimitive::Screen::Tensor splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const ssplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> max_blending_masks,  // [..., C, image_width, image_height]
@@ -81,12 +81,12 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
             (output_max_blending && out_max_blending.has_value()) ? out_max_blending.value().data_ptr<float>() : nullptr \
         )
 
-    if (camera_model == gsplat::CameraModelType::PINHOLE)
+    if (camera_model == ssplat::CameraModelType::PINHOLE)
         rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
-            gsplat::CameraModelType::PINHOLE, output_distortion, output_max_blending> _LAUNCH_ARGS;
-    else if (camera_model == gsplat::CameraModelType::FISHEYE)
+            ssplat::CameraModelType::PINHOLE, output_distortion, output_max_blending> _LAUNCH_ARGS;
+    else if (camera_model == ssplat::CameraModelType::FISHEYE)
         rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
-            gsplat::CameraModelType::FISHEYE, output_distortion, output_max_blending> _LAUNCH_ARGS;
+            ssplat::CameraModelType::FISHEYE, output_distortion, output_max_blending> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -108,7 +108,7 @@ inline std::tuple<
     typename SplatPrimitive::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const ssplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> max_blending_masks,       // [..., tile_height, tile_width]
@@ -197,7 +197,7 @@ std::tuple<
     Vanilla3DGUT::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -212,14 +212,14 @@ std::tuple<
     if (output_distortion)
         return rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, true, false>(
             splats_tuple,
-            viewmats, intrins, camera_model, dist_coeffs,
+            viewmats, intrins, cmt(camera_model), dist_coeffs,
             backgrounds, masks,
             image_width, image_height,
             tile_offsets, flatten_ids
         );
     return rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, false, false>(
         splats_tuple,
-        viewmats, intrins, camera_model, dist_coeffs,
+        viewmats, intrins, cmt(camera_model), dist_coeffs,
         backgrounds, masks,
         image_width, image_height,
         tile_offsets, flatten_ids
@@ -245,7 +245,7 @@ std::tuple<
     SphericalVoronoi3DGUT_Default::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -261,7 +261,7 @@ std::tuple<
         // return rasterize_to_pixels_eval3d_fwd_tensor<SphericalVoronoi3DGUT_Default, true, false>(
         return rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, true, false>(
             splats_tuple,
-            viewmats, intrins, camera_model, dist_coeffs,
+            viewmats, intrins, cmt(camera_model), dist_coeffs,
             backgrounds, masks,
             image_width, image_height,
             tile_offsets, flatten_ids
@@ -269,7 +269,7 @@ std::tuple<
     // return rasterize_to_pixels_eval3d_fwd_tensor<SphericalVoronoi3DGUT_Default, false, false>(
     return rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, false, false>(
         splats_tuple,
-        viewmats, intrins, camera_model, dist_coeffs,
+        viewmats, intrins, cmt(camera_model), dist_coeffs,
         backgrounds, masks,
         image_width, image_height,
         tile_offsets, flatten_ids
@@ -294,7 +294,7 @@ std::tuple<
     VoxelPrimitive::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,      // [..., C, 4, 4]
     const at::Tensor intrins,       // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -307,7 +307,7 @@ std::tuple<
 ) {
     return rasterize_to_pixels_eval3d_fwd_tensor<VoxelPrimitive, true, true>(
         splats_tuple,
-        viewmats, intrins, camera_model, dist_coeffs,
+        viewmats, intrins, cmt(camera_model), dist_coeffs,
         backgrounds, masks,
         image_width, image_height,
         tile_offsets, flatten_ids

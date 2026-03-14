@@ -10,7 +10,7 @@
 
 template <
     typename SplatPrimitive,
-    gsplat::CameraModelType camera_model,
+    ssplat::CameraModelType camera_model,
     bool output_distortion,
     bool output_viewmat_grad,
     bool output_hessian_diagonal
@@ -56,7 +56,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     typename SplatPrimitive::Screen::Tensor splats,
     const at::Tensor viewmats,             // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const ssplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., 3]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -119,21 +119,21 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
             v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr \
         )
 
-    if (camera_model == gsplat::CameraModelType::PINHOLE) {
+    if (camera_model == ssplat::CameraModelType::PINHOLE) {
         if (v_viewmats.has_value())
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                gsplat::CameraModelType::PINHOLE, output_distortion, true, output_hessian_diagonal> _LAUNCH_ARGS;
+                ssplat::CameraModelType::PINHOLE, output_distortion, true, output_hessian_diagonal> _LAUNCH_ARGS;
         else
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                gsplat::CameraModelType::PINHOLE, output_distortion, false, output_hessian_diagonal> _LAUNCH_ARGS;
+                ssplat::CameraModelType::PINHOLE, output_distortion, false, output_hessian_diagonal> _LAUNCH_ARGS;
     }
-    else if (camera_model == gsplat::CameraModelType::FISHEYE) {
+    else if (camera_model == ssplat::CameraModelType::FISHEYE) {
         if (v_viewmats.has_value())
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                gsplat::CameraModelType::FISHEYE, output_distortion, true, output_hessian_diagonal> _LAUNCH_ARGS;
+                ssplat::CameraModelType::FISHEYE, output_distortion, true, output_hessian_diagonal> _LAUNCH_ARGS;
         else
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                gsplat::CameraModelType::FISHEYE, output_distortion, false, output_hessian_diagonal> _LAUNCH_ARGS;
+                ssplat::CameraModelType::FISHEYE, output_distortion, false, output_hessian_diagonal> _LAUNCH_ARGS;
     }
     else
         throw std::runtime_error("Unsupported camera model");
@@ -154,7 +154,7 @@ inline std::tuple<
     typename SplatPrimitive::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const ssplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -248,7 +248,7 @@ inline std::tuple<
     typename SplatPrimitive::Screen::TensorTuple &splats_tuple,
     const at::Tensor &viewmats,  // [..., C, 4, 4]
     const at::Tensor &intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType &camera_model,
+    const ssplat::CameraModelType &camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> &backgrounds, // [..., channels]
     const std::optional<at::Tensor> &masks,       // [..., tile_height, tile_width]
@@ -298,7 +298,7 @@ std::tuple<
     Vanilla3DGUT::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -323,7 +323,7 @@ std::tuple<
     if (v_distortion_outputs.has_value())
         return rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, true>(
             splats_tuple,
-            viewmats, intrins, camera_model, dist_coeffs,
+            viewmats, intrins, cmt(camera_model), dist_coeffs,
             backgrounds, masks,
             image_width, image_height, tile_offsets, flatten_ids,
             render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
@@ -332,7 +332,7 @@ std::tuple<
         );
     return rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, false>(
         splats_tuple,
-        viewmats, intrins, camera_model, dist_coeffs,
+        viewmats, intrins, cmt(camera_model), dist_coeffs,
         backgrounds, masks,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
@@ -352,7 +352,7 @@ std::tuple<
     Vanilla3DGUT::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -377,7 +377,7 @@ std::tuple<
     if (v_distortion_outputs.has_value())
         return _rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, true, true>(
             splats_tuple,
-            viewmats, intrins, camera_model, dist_coeffs,
+            viewmats, intrins, cmt(camera_model), dist_coeffs,
             backgrounds, masks,
             image_width, image_height, tile_offsets, flatten_ids,
             render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
@@ -386,7 +386,7 @@ std::tuple<
         );
     return _rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, false, true>(
         splats_tuple,
-        viewmats, intrins, camera_model, dist_coeffs,
+        viewmats, intrins, cmt(camera_model), dist_coeffs,
         backgrounds, masks,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
@@ -411,7 +411,7 @@ std::tuple<
     SphericalVoronoi3DGUT_Default::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -437,7 +437,7 @@ std::tuple<
         // return rasterize_to_pixels_eval3d_bwd_tensor<SphericalVoronoi3DGUT_Default, true>(
         return rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, true>(
             splats_tuple,
-            viewmats, intrins, camera_model, dist_coeffs,
+            viewmats, intrins, cmt(camera_model), dist_coeffs,
             backgrounds, masks,
             image_width, image_height, tile_offsets, flatten_ids,
             render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
@@ -447,7 +447,7 @@ std::tuple<
     // return rasterize_to_pixels_eval3d_bwd_tensor<SphericalVoronoi3DGUT_Default, false>(
     return rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, false>(
         splats_tuple,
-        viewmats, intrins, camera_model, dist_coeffs,
+        viewmats, intrins, cmt(camera_model), dist_coeffs,
         backgrounds, masks,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
@@ -471,7 +471,7 @@ std::tuple<
     VoxelPrimitive::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -495,7 +495,7 @@ std::tuple<
 ) {
     return rasterize_to_pixels_eval3d_bwd_tensor<VoxelPrimitive, false>(
         splats_tuple,
-        viewmats, intrins, camera_model, dist_coeffs,
+        viewmats, intrins, cmt(camera_model), dist_coeffs,
         backgrounds, masks,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs, loss_map,

@@ -15,7 +15,7 @@ namespace cg = cooperative_groups;
 
 
 
-template<typename SplatPrimitive, gsplat::CameraModelType camera_model>
+template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
 __global__ void projection_packed_mask_kernel(
     const uint32_t B,
     const uint32_t C,
@@ -66,10 +66,10 @@ __global__ void projection_packed_mask_kernel(
     float4 aabb;
     typename SplatPrimitive::Screen splat_screen;
     switch (camera_model) {
-    case gsplat::CameraModelType::PINHOLE: // perspective projection
+    case ssplat::CameraModelType::PINHOLE: // perspective projection
         SplatPrimitive::project_persp(splat_world, cam, splat_screen, aabb);
         break;
-    case gsplat::CameraModelType::FISHEYE: // fisheye projection
+    case ssplat::CameraModelType::FISHEYE: // fisheye projection
         SplatPrimitive::project_fisheye(splat_world, cam, splat_screen, aabb);
         break;
     }
@@ -83,7 +83,7 @@ __global__ void projection_packed_mask_kernel(
 }
 
 
-template<typename SplatPrimitive, gsplat::CameraModelType camera_model>
+template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
 __global__ void projection_packed_fwd_kernel(
     const uint32_t B,
     const uint32_t C,
@@ -143,10 +143,10 @@ __global__ void projection_packed_fwd_kernel(
     float4 aabb;
     typename SplatPrimitive::Screen splat_screen;
     switch (camera_model) {
-    case gsplat::CameraModelType::PINHOLE: // perspective projection
+    case ssplat::CameraModelType::PINHOLE: // perspective projection
         SplatPrimitive::project_persp(splat_world, cam, splat_screen, aabb);
         break;
-    case gsplat::CameraModelType::FISHEYE: // fisheye projection
+    case ssplat::CameraModelType::FISHEYE: // fisheye projection
         SplatPrimitive::project_fisheye(splat_world, cam, splat_screen, aabb);
         break;
     }
@@ -163,7 +163,7 @@ __global__ void projection_packed_fwd_kernel(
 }
 
 
-template<typename SplatPrimitive, gsplat::CameraModelType camera_model>
+template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
 void projection_packed_mask_kernel_wrapper(
     cudaStream_t stream,
     const uint32_t B,
@@ -190,7 +190,7 @@ void projection_packed_mask_kernel_wrapper(
     );
 }
 
-template<typename SplatPrimitive, gsplat::CameraModelType camera_model>
+template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
 void projection_packed_fwd_kernel_wrapper(
     cudaStream_t stream,
     const uint32_t B,

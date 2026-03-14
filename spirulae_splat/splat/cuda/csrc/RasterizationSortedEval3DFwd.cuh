@@ -25,7 +25,7 @@ std::tuple<
     OpaqueTriangle::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> max_blending_masks,       // [..., image_height, image_width]

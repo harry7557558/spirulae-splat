@@ -6,7 +6,7 @@
 
 template void projection_fused_bwd_kernel_wrapper<
     Vanilla3DGUT,
-    gsplat::CameraModelType::PINHOLE,
+    ssplat::CameraModelType::PINHOLE,
     HessianDiagonalOutputMode::Position
 >(
     cudaStream_t stream,

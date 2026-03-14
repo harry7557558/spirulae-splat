@@ -31,7 +31,7 @@ __device__ __forceinline__ unsigned upper_bound(
     return left;
 }
 
-template<typename SplatPrimitive, gsplat::CameraModelType camera_model>
+template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
 __global__ void projection_hetero_forward_kernel(
     const uint32_t C,
     const uint32_t nnz,
@@ -48,8 +48,8 @@ __global__ void projection_hetero_forward_kernel(
     const int32_t* __restrict__ intersection_count_map,  // [C+1]
     const int32_t* __restrict__ intersection_splat_id,  // [nnz]
     // outputs
-    int64_t *__restrict__ camera_ids,    // [nnz]
-    int64_t *__restrict__ gaussian_ids,  // [nnz]
+    int32_t *__restrict__ camera_ids,    // [nnz]
+    int32_t *__restrict__ gaussian_ids,  // [nnz]
     float4 *__restrict__ aabbs,    // [nnz, 4]
     typename SplatPrimitive::Screen::Buffer splats_proj
 ) {
@@ -84,10 +84,10 @@ __global__ void projection_hetero_forward_kernel(
     float4 aabb;
     typename SplatPrimitive::Screen splat_proj;
     switch (camera_model) {
-    case gsplat::CameraModelType::PINHOLE: // perspective projection
+    case ssplat::CameraModelType::PINHOLE: // perspective projection
         SplatPrimitive::project_persp(splat_world, cam, splat_proj, aabb);
         break;
-    case gsplat::CameraModelType::FISHEYE: // fisheye projection
+    case ssplat::CameraModelType::FISHEYE: // fisheye projection
         SplatPrimitive::project_fisheye(splat_world, cam, splat_proj, aabb);
         break;
     }

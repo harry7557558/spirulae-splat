@@ -6,7 +6,7 @@
 
 template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     VoxelPrimitive,
-    gsplat::CameraModelType::FISHEYE,
+    ssplat::CameraModelType::FISHEYE,
     true,
     true
 >(

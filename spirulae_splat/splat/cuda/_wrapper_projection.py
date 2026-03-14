@@ -10,7 +10,7 @@ import torch
 from torch import Tensor
 from typing_extensions import Literal
 
-import gsplat.cuda._wrapper
+# import gsplat.cuda._wrapper
 
 def _make_lazy_cuda_obj(name: str) -> Any:
     # pylint: disable=import-outside-toplevel
@@ -255,9 +255,7 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
         compute_hessian_diagonal: Literal[None, "position", "all"] = None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
 
-        camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
-            f"CameraModelType.{camera_model.upper()}"
-        )
+        camera_model_type = camera_model.upper()
 
         cuda_returns = _make_lazy_cuda_func(
             f"projection_{primitive}_packed_forward" if packed else
@@ -428,9 +426,7 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
         packed: bool,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
 
-        camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
-            f"CameraModelType.{camera_model.upper()}"
-        )
+        camera_model_type = camera_model.upper()
 
         cuda_returns = _make_lazy_cuda_func(
             f"projection_opaque_triangle_packed_forward" if packed else
@@ -509,9 +505,7 @@ class _FullyFusedProjectionVoxel(torch.autograd.Function):
         packed: bool,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
 
-        camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
-            f"CameraModelType.{camera_model.upper()}"
-        )
+        camera_model_type = camera_model.upper()
 
         cuda_returns = _make_lazy_cuda_func(
             "projection_voxel_packed_forward" if packed else
@@ -654,9 +648,7 @@ class _FullyFusedProjection3DGSHetero(torch.autograd.Function):
         intersection_count_map: Tensor,  # [C+1]
         intersection_splat_id: Tensor,  # [nnz]
     ):
-        camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
-            f"CameraModelType.{camera_model.upper()}"
-        )
+        camera_model_type = camera_model.upper()
 
         (
             camera_ids, gaussian_ids, aabb, proj_returns
@@ -736,9 +728,7 @@ class _FullyFusedProjectionOpaqueTriangleHetero(torch.autograd.Function):
         intersection_splat_id: Tensor,  # [nnz]
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
 
-        camera_model_type = gsplat.cuda._wrapper._make_lazy_cuda_obj(
-            f"CameraModelType.{camera_model.upper()}"
-        )
+        camera_model_type = camera_model.upper()
 
         (
             camera_ids, gaussian_ids, aabb, proj_returns
@@ -800,9 +790,7 @@ def intersect_splat_tile(
     dist_coeffs: Optional[Tensor] = None,
     relative_scale: float = 1.0
 ) -> Tuple[Tensor, Tensor]:
-    camera_model = gsplat.cuda._wrapper._make_lazy_cuda_obj(
-        f"CameraModelType.{camera_model.upper()}"
-    )
+    camera_model = camera_model.upper()
     return _make_lazy_cuda_func(
         "intersect_splat_tile_" + {
             '3dgs': '3dgs',

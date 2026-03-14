@@ -35,7 +35,7 @@ constexpr uint ATOMIC_ADD_CACHE_SIZE = 1;
 
 template <
     typename SplatPrimitive,
-    gsplat::CameraModelType camera_model,
+    ssplat::CameraModelType camera_model,
     bool output_distortion,
     bool output_viewmat_grad,
     bool output_hessian_diagonal
@@ -120,7 +120,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     float3 raydir;
     done &= SlangProjectionUtils::generate_ray(
         {(px-cx)/fx, (py-cy)/fy},
-        camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs,
+        camera_model == ssplat::CameraModelType::FISHEYE, dist_coeffs,
         &raydir
     );
     float3 ray_d = SlangProjectionUtils::transform_ray_d(R, raydir);  // mul(raydir, R);
@@ -412,7 +412,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     typename SplatPrimitive::Screen::Tensor splats,
     const at::Tensor viewmats,             // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const ssplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., 3]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -480,21 +480,21 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
             v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr \
         )
 
-    if (camera_model == gsplat::CameraModelType::PINHOLE) {
+    if (camera_model == ssplat::CameraModelType::PINHOLE) {
         if (v_viewmats.has_value())
             rasterize_to_pixels_eval3d_bwd_kernel<SplatPrimitive,
-                gsplat::CameraModelType::PINHOLE, output_distortion, true, output_hessian_diagonal> _LAUNCH_ARGS;
+                ssplat::CameraModelType::PINHOLE, output_distortion, true, output_hessian_diagonal> _LAUNCH_ARGS;
         else
             rasterize_to_pixels_eval3d_bwd_kernel<SplatPrimitive,
-                gsplat::CameraModelType::PINHOLE, output_distortion, false, output_hessian_diagonal> _LAUNCH_ARGS;
+                ssplat::CameraModelType::PINHOLE, output_distortion, false, output_hessian_diagonal> _LAUNCH_ARGS;
     }
-    else if (camera_model == gsplat::CameraModelType::FISHEYE) {
+    else if (camera_model == ssplat::CameraModelType::FISHEYE) {
         if (v_viewmats.has_value())
             rasterize_to_pixels_eval3d_bwd_kernel<SplatPrimitive,
-                gsplat::CameraModelType::FISHEYE, output_distortion, true, output_hessian_diagonal> _LAUNCH_ARGS;
+                ssplat::CameraModelType::FISHEYE, output_distortion, true, output_hessian_diagonal> _LAUNCH_ARGS;
         else
             rasterize_to_pixels_eval3d_bwd_kernel<SplatPrimitive,
-                gsplat::CameraModelType::FISHEYE, output_distortion, false, output_hessian_diagonal> _LAUNCH_ARGS;
+                ssplat::CameraModelType::FISHEYE, output_distortion, false, output_hessian_diagonal> _LAUNCH_ARGS;
     }
     else
         throw std::runtime_error("Unsupported camera model");
@@ -515,7 +515,7 @@ inline std::tuple<
     typename SplatPrimitive::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const ssplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -609,7 +609,7 @@ inline std::tuple<
     typename SplatPrimitive::Screen::TensorTuple &splats_tuple,
     const at::Tensor &viewmats,  // [..., C, 4, 4]
     const at::Tensor &intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType &camera_model,
+    const ssplat::CameraModelType &camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> &backgrounds, // [..., channels]
     const std::optional<at::Tensor> &masks,       // [..., tile_height, tile_width]

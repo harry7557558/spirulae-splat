@@ -5,11 +5,6 @@ from typing import Dict, Optional, Tuple, Literal
 import math
 
 
-import gsplat
-from gsplat.cuda._wrapper import (
-    isect_offset_encode,
-    isect_tiles,
-)
 from spirulae_splat.splat.cuda._wrapper import (
     intersect_splat_tile,
     fully_fused_projection,
@@ -17,12 +12,12 @@ from spirulae_splat.splat.cuda._wrapper import (
     rasterize_to_pixels,
     spherical_harmonics,
 )
-from gsplat.distributed import (
-    all_gather_int32,
-    all_gather_tensor_list,
-    all_to_all_int32,
-    all_to_all_tensor_list,
-)
+# from gsplat.distributed import (
+#     all_gather_int32,
+#     all_gather_tensor_list,
+#     all_to_all_int32,
+#     all_to_all_tensor_list,
+# )
 
 from spirulae_splat.splat.cuda import (
     _C,
@@ -424,41 +419,19 @@ def rasterization(
     TILE_SIZE = 16
     tile_width = math.ceil(width / float(TILE_SIZE))
     tile_height = math.ceil(height / float(TILE_SIZE))
-    if packed and False:
-        # TODO: add support
-        radii = (0.5 * (aabb_xyxy[..., 2:] - aabb_xyxy[..., :2]) + 0.5).int()
-        means2d = (aabb_xyxy[..., 2:] + aabb_xyxy[..., :2]).float() / 2
-        tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
-            means2d,
-            radii,
-            depths,
-            TILE_SIZE,
-            tile_width,
-            tile_height,
-            segmented=segmented,
-            packed=packed,
-            n_images=I,
-            image_ids=image_ids.long(),
-            gaussian_ids=gaussian_ids.long(),
-        )
-        isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
-        isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
-    else:
-        # isect_ids, flatten_ids, isect_offsets, radii = _make_lazy_cuda_func(f"intersect_tile_{primitive}")(
-        isect_ids, flatten_ids, isect_offsets, radii = _make_lazy_cuda_func(f"intersect_tile")(
-            aabb_xyxy,
-            depths,
-            I, width, height,
-            image_ids if packed else None,
-            # (*proj_splats, None) if primitive in ["3dgs", "mip"] else proj_splats,
-            # viewmats,
-            # intrins,
-            # gsplat.cuda._wrapper._make_lazy_cuda_obj(
-            #     f"CameraModelType.{camera_model.upper()}"
-            # ),
-            # dist_coeffs
-        )
-        isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
+    # isect_ids, flatten_ids, isect_offsets, radii = _make_lazy_cuda_func(f"intersect_tile_{primitive}")(
+    isect_ids, flatten_ids, isect_offsets, radii = _make_lazy_cuda_func(f"intersect_tile")(
+        aabb_xyxy,
+        depths,
+        I, width, height,
+        image_ids if packed else None,
+        # (*proj_splats, None) if primitive in ["3dgs", "mip"] else proj_splats,
+        # viewmats,
+        # intrins,
+        # camera_model.upper(),
+        # dist_coeffs
+    )
+    isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
 
     # TODO: these should be aggregated in split batch mode
     meta.update(

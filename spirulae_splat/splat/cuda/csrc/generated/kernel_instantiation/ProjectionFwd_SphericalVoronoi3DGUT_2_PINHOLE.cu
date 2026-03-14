@@ -6,7 +6,7 @@
 
 template void projection_fused_fwd_kernel_wrapper<
     SphericalVoronoi3DGUT<2>,
-    gsplat::CameraModelType::PINHOLE
+    ssplat::CameraModelType::PINHOLE
 >(
     cudaStream_t stream,
     const uint32_t B,

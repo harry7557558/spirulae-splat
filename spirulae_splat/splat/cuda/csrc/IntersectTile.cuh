@@ -46,7 +46,7 @@ std::tuple<
     typename Vanilla3DGS::Screen::TensorTuple splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 );
 
@@ -65,7 +65,7 @@ std::tuple<
     typename MipSplatting::Screen::TensorTuple splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 );
 
@@ -84,7 +84,7 @@ std::tuple<
     typename Vanilla3DGUT::Screen::TensorTuple splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 );
 
@@ -103,7 +103,7 @@ std::tuple<
     typename SphericalVoronoi3DGUT_Default::Screen::TensorTuple splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 );
 
@@ -122,7 +122,7 @@ std::tuple<
     typename OpaqueTriangle::Screen::TensorTuple splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 );
 
@@ -141,6 +141,6 @@ std::tuple<
     typename VoxelPrimitive::Screen::TensorTuple splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 );

@@ -31,7 +31,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -55,7 +55,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -81,7 +81,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -105,7 +105,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -129,7 +129,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -155,7 +155,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -179,7 +179,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -203,7 +203,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -229,7 +229,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -253,7 +253,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -275,7 +275,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -297,7 +297,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]

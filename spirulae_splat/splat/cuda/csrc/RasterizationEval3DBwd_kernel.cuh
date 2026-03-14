@@ -33,7 +33,7 @@ constexpr uint SPLAT_BATCH_SIZE_WITH_DISTORTION = WARP_SIZE;
 
 template <
     typename SplatPrimitive,
-    gsplat::CameraModelType camera_model,
+    ssplat::CameraModelType camera_model,
     bool output_distortion,
     bool output_viewmat_grad,
     bool output_hessian_diagonal
@@ -151,7 +151,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         float3 raydir;
         inside &= SlangProjectionUtils::generate_ray(
             {(px-cx)/fx, (py-cy)/fy},
-            camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs,
+            camera_model == ssplat::CameraModelType::FISHEYE, dist_coeffs,
             &raydir
         );
         float3 ray_d = SlangProjectionUtils::transform_ray_d(R, raydir);  // mul(raydir, R);
@@ -399,7 +399,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
 
 template <
     typename SplatPrimitive,
-    gsplat::CameraModelType camera_model,
+    ssplat::CameraModelType camera_model,
     bool output_distortion,
     bool output_viewmat_grad,
     bool output_hessian_diagonal

@@ -6,7 +6,7 @@
 
 template void projection_fused_fwd_kernel_wrapper<
     Vanilla3DGUT,
-    gsplat::CameraModelType::PINHOLE
+    ssplat::CameraModelType::PINHOLE
 >(
     cudaStream_t stream,
     const uint32_t B,

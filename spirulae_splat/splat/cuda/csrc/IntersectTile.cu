@@ -120,7 +120,7 @@ __global__ void intersect_mask_eval3d_kernel(
     const typename SplatPrimitive::Screen::Buffer splat_buffer,
     const float *__restrict__ viewmats, // [B, I, 4, 4]
     const float4 *__restrict__ intrins,  // [B, I, 4], fx, fy, cx, cy
-    gsplat::CameraModelType camera_model,
+    ssplat::CameraModelType camera_model,
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     bool *__restrict__ mask  // [n_isects]
 ) {
@@ -150,7 +150,7 @@ __global__ void intersect_mask_eval3d_kernel(
     float3 raydir;
     inside &= SlangProjectionUtils::generate_ray(
         {(px-cx)/fx, (py-cy)/fy},
-        camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs,
+        camera_model == ssplat::CameraModelType::FISHEYE, dist_coeffs,
         &raydir
     );
     float3 ray_o = SlangProjectionUtils::transform_ray_o(R, t);
@@ -547,7 +547,7 @@ std::tuple<
     typename SplatPrimitive::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     auto [isect_ids, flatten_ids, offsets, radii] = do_intersect_tile_generic(
@@ -586,7 +586,7 @@ std::tuple<
         splats.buffer(),
         viewmats.data_ptr<float>(),
         reinterpret_cast<const float4 *>(intrins.data_ptr<float>()),
-        camera_model,
+        cmt(camera_model),
         dist_coeffs,
         mask.data_ptr<bool>()
     );
@@ -683,7 +683,7 @@ std::tuple<
     typename Vanilla3DGS::Screen::TensorTuple splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return do_intersect_tile<Vanilla3DGS>(
@@ -711,7 +711,7 @@ std::tuple<
     typename MipSplatting::Screen::TensorTuple splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return do_intersect_tile<MipSplatting>(
@@ -739,7 +739,7 @@ std::tuple<
     typename Vanilla3DGUT::Screen::TensorTuple splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return do_intersect_tile_eval3d<Vanilla3DGUT>(
@@ -771,7 +771,7 @@ std::tuple<
     typename SphericalVoronoi3DGUT_Default::Screen::TensorTuple splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return do_intersect_tile_eval3d<SphericalVoronoi3DGUT_Default>(
@@ -803,7 +803,7 @@ std::tuple<
     typename OpaqueTriangle::Screen::TensorTuple splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return do_intersect_tile_eval3d<OpaqueTriangle>(
@@ -835,7 +835,7 @@ std::tuple<
     typename VoxelPrimitive::Screen::TensorTuple splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return do_intersect_tile_eval3d<VoxelPrimitive>(

@@ -32,7 +32,7 @@ std::tuple<
     Vanilla3DGUT::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -58,7 +58,7 @@ std::tuple<
     SphericalVoronoi3DGUT_Default::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -84,7 +84,7 @@ std::tuple<
     VoxelPrimitive::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,      // [..., C, 4, 4]
     const at::Tensor intrins,       // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]

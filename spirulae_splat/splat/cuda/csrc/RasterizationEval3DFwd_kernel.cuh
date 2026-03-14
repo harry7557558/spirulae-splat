@@ -24,7 +24,7 @@ namespace SlangProjectionUtils {
 #include <gsplat/Utils.cuh>
 
 
-template <typename SplatPrimitive, gsplat::CameraModelType camera_model, bool output_distortion, bool output_max_blending>
+template <typename SplatPrimitive, ssplat::CameraModelType camera_model, bool output_distortion, bool output_max_blending>
 __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     const uint32_t I,
     const uint32_t N,
@@ -89,7 +89,7 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     float3 raydir;
     inside &= SlangProjectionUtils::generate_ray(
         {(px-cx)/fx, (py-cy)/fy},
-        camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs,
+        camera_model == ssplat::CameraModelType::FISHEYE, dist_coeffs,
         &raydir
     );
     float3 ray_o = SlangProjectionUtils::transform_ray_o(R, t);
@@ -208,7 +208,7 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     }
 }
 
-template <typename SplatPrimitive, gsplat::CameraModelType camera_model, bool output_distortion, bool output_max_blending>
+template <typename SplatPrimitive, ssplat::CameraModelType camera_model, bool output_distortion, bool output_max_blending>
 void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
     cudaStream_t stream,
     const uint32_t I,

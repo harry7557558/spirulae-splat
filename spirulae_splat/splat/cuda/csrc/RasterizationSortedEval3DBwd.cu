@@ -65,7 +65,7 @@ struct MaxPriorityQueue {
 };
 
 
-template <typename SplatPrimitive, gsplat::CameraModelType camera_model, bool output_distortion>
+template <typename SplatPrimitive, ssplat::CameraModelType camera_model, bool output_distortion>
 __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
     const uint32_t I,
     const uint32_t N,
@@ -139,7 +139,7 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
     float3 raydir;
     inside &= SlangProjectionUtils::generate_ray(
         {(px-cx)/fx, (py-cy)/fy},
-        camera_model == gsplat::CameraModelType::FISHEYE, dist_coeffs,
+        camera_model == ssplat::CameraModelType::FISHEYE, dist_coeffs,
         &raydir
     );
     float3 ray_o = SlangProjectionUtils::transform_ray_o(R, t);
@@ -315,7 +315,7 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_bwd_kernel(
     typename SplatPrimitive::Screen::Tensor splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const ssplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., 3]
     // image size
@@ -368,12 +368,12 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_bwd_kernel(
             v_splats.buffer() \
         )
 
-    if (camera_model == gsplat::CameraModelType::PINHOLE)
+    if (camera_model == ssplat::CameraModelType::PINHOLE)
         rasterize_to_pixels_sorted_eval3d_bwd_kernel<SplatPrimitive,
-            gsplat::CameraModelType::PINHOLE, output_distortion> _LAUNCH_ARGS;
-    else if (camera_model == gsplat::CameraModelType::FISHEYE)
+            ssplat::CameraModelType::PINHOLE, output_distortion> _LAUNCH_ARGS;
+    else if (camera_model == ssplat::CameraModelType::FISHEYE)
         rasterize_to_pixels_sorted_eval3d_bwd_kernel<SplatPrimitive,
-            gsplat::CameraModelType::FISHEYE, output_distortion> _LAUNCH_ARGS;
+            ssplat::CameraModelType::FISHEYE, output_distortion> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -391,7 +391,7 @@ inline std::tuple<
     typename SplatPrimitive::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const ssplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     // image size
@@ -460,7 +460,7 @@ std::tuple<
     OpaqueTriangle::Screen::TensorTuple splats_tuple,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     // image size
@@ -481,7 +481,7 @@ std::tuple<
 ) {
     return rasterize_to_pixels_sorted_eval3d_bwd_tensor<OpaqueTriangle, true>(
         splats_tuple,
-        viewmats, intrins, camera_model, dist_coeffs,
+        viewmats, intrins, cmt(camera_model), dist_coeffs,
         backgrounds,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs,

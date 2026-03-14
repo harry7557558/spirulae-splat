@@ -5,7 +5,7 @@
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 
-namespace gsplat {
+namespace ssplat {
 
 namespace cg = cooperative_groups;
 
@@ -835,4 +835,4 @@ inline __device__ vec3 safe_normalize_bw(const vec3 &v, const vec3 &d_out) {
     return d_out;
 }
 
-} // namespace gsplat
+} // namespace ssplat

@@ -12,7 +12,7 @@
 
 
 
-template<gsplat::CameraModelType CAMERA_MODEL>
+template<ssplat::CameraModelType CAMERA_MODEL>
 __global__ void render_background_sh_forward_kernel(
     const dim3 img_size,
     const float4* intrins,  // fx, fy, cx, cy
@@ -38,12 +38,12 @@ __global__ void render_background_sh_forward_kernel(
     camera_ray.valid_flag = false;
 
     switch (CAMERA_MODEL) {
-    case gsplat::CameraModelType::PINHOLE:
+    case ssplat::CameraModelType::PINHOLE:
         camera_ray = PerfectPinholeCameraModel(
             { {{img_size.x, img_size.y}, ShutterType::GLOBAL}, {cx, cy}, {fx, fy} }
         ).image_point_to_camera_ray(pos_2d);
         break;
-    case gsplat::CameraModelType::FISHEYE:
+    case ssplat::CameraModelType::FISHEYE:
         camera_ray = OpenCVFisheyeCameraModel(
             { {{img_size.x, img_size.y}, ShutterType::GLOBAL}, {cx, cy}, {fx, fy} }
         ).image_point_to_camera_ray(pos_2d);
@@ -117,7 +117,7 @@ __global__ void render_background_sh_forward_kernel(
 }
 
 
-template<gsplat::CameraModelType CAMERA_MODEL>
+template<ssplat::CameraModelType CAMERA_MODEL>
 __global__ void __launch_bounds__(512) render_background_sh_backward_kernel(
     const dim3 img_size,
     const float4* intrins,  // fx, fy, cx, cy
@@ -162,12 +162,12 @@ __global__ void __launch_bounds__(512) render_background_sh_backward_kernel(
     camera_ray.valid_flag = false;
 
     switch (CAMERA_MODEL) {
-    case gsplat::CameraModelType::PINHOLE:
+    case ssplat::CameraModelType::PINHOLE:
         camera_ray = PerfectPinholeCameraModel(
             { {{img_size.x, img_size.y}, ShutterType::GLOBAL}, {cx, cy}, {fx, fy} }
         ).image_point_to_camera_ray(pos_2d);
         break;
-    case gsplat::CameraModelType::FISHEYE:
+    case ssplat::CameraModelType::FISHEYE:
         camera_ray = OpenCVFisheyeCameraModel(
             { {{img_size.x, img_size.y}, ShutterType::GLOBAL}, {cx, cy}, {fx, fy} }
         ).image_point_to_camera_ray(pos_2d);
@@ -476,8 +476,8 @@ at::Tensor render_background_sh_forward_tensor(
     if (b * h * w == 0)
         return out_color;
 
-    if (camera_model == "fisheye") {
-        render_background_sh_forward_kernel<gsplat::CameraModelType::FISHEYE>
+    if (cmt(camera_model) == ssplat::CameraModelType::FISHEYE) {
+        render_background_sh_forward_kernel<ssplat::CameraModelType::FISHEYE>
         <<<_LAUNCH_ARGS_3D(w, h, b, TILE_SIZE, TILE_SIZE, 1)>>>(
             img_size,
             (float4*)intrins.data_ptr<float>(),
@@ -487,7 +487,7 @@ at::Tensor render_background_sh_forward_tensor(
             (glm::vec3*)out_color.contiguous().data_ptr<float>()
         );
     } else {
-        render_background_sh_forward_kernel<gsplat::CameraModelType::PINHOLE>
+        render_background_sh_forward_kernel<ssplat::CameraModelType::PINHOLE>
         <<<_LAUNCH_ARGS_3D(w, h, b, TILE_SIZE, TILE_SIZE, 1)>>>(
             img_size,
             (float4*)intrins.data_ptr<float>(),
@@ -557,8 +557,8 @@ std::tuple<
     if (b * h * w == 0)
         return std::make_tuple(v_rotation, v_sh_coeffs);
 
-    if (camera_model == "fisheye") {
-        render_background_sh_backward_kernel<gsplat::CameraModelType::FISHEYE>
+    if (cmt(camera_model) == ssplat::CameraModelType::FISHEYE) {
+        render_background_sh_backward_kernel<ssplat::CameraModelType::FISHEYE>
         // <<<_LAUNCH_ARGS_3D(w, h, b, block_width, block_width, 1)>>>(
         <<<_LAUNCH_ARGS_2D(w*h, b, 512, 1)>>>(
             img_size,
@@ -572,7 +572,7 @@ std::tuple<
             (glm::vec3*)v_sh_coeffs.data_ptr<float>()
         );
     } else {
-        render_background_sh_backward_kernel<gsplat::CameraModelType::PINHOLE>
+        render_background_sh_backward_kernel<ssplat::CameraModelType::PINHOLE>
         // <<<_LAUNCH_ARGS_3D(w, h, b, block_width, block_width, 1)>>>(
         <<<_LAUNCH_ARGS_2D(w*h, b, 512, 1)>>>(
             img_size,

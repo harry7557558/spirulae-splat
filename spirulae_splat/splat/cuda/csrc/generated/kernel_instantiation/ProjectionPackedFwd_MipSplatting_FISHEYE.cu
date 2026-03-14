@@ -6,7 +6,7 @@
 
 template void projection_packed_fwd_kernel_wrapper<
     MipSplatting,
-    gsplat::CameraModelType::FISHEYE
+    ssplat::CameraModelType::FISHEYE
 >(
     cudaStream_t stream,
     const uint32_t B,

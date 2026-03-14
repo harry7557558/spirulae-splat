@@ -10,7 +10,7 @@ import torch
 from torch import Tensor
 from typing_extensions import Literal
 
-import gsplat.cuda._wrapper
+# import gsplat.cuda._wrapper
 
 def _make_lazy_cuda_obj(name: str) -> Any:
     # pylint: disable=import-outside-toplevel
@@ -271,9 +271,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         compute_hessian_diagonal: bool = False
     ) -> Tuple[Tensor, Tensor]:
 
-        camera_model = gsplat.cuda._wrapper._make_lazy_cuda_obj(
-            f"CameraModelType.{camera_model.upper()}"
-        )
+        camera_model = camera_model.upper()
 
         (
             (render_rgbs, render_depths), render_Ts, last_ids, 
@@ -410,9 +408,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
         dist_coeffs: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor]:
 
-        camera_model = gsplat.cuda._wrapper._make_lazy_cuda_obj(
-            f"CameraModelType.{camera_model.upper()}"
-        )
+        camera_model = camera_model.upper()
 
         # from time import perf_counter
         # torch.cuda.synchronize()
@@ -533,9 +529,7 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         dist_coeffs: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor]:
 
-        camera_model = gsplat.cuda._wrapper._make_lazy_cuda_obj(
-            f"CameraModelType.{camera_model.upper()}"
-        )
+        camera_model = camera_model.upper()
 
         (
             (render_rgbs, render_depths), render_Ts, last_ids,

@@ -34,7 +34,7 @@ std::tuple<
     const uint32_t tile_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const at::Tensor intersection_count_map,  // [C+1]
     const at::Tensor intersection_splat_id  // [nnz]
@@ -53,7 +53,7 @@ std::tuple<
     const uint32_t image_height,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const at::Tensor camera_ids, // [nnz]
@@ -82,7 +82,7 @@ std::tuple<
     const uint32_t tile_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const at::Tensor intersection_count_map,  // [C+1]
     const at::Tensor intersection_splat_id  // [nnz]
@@ -101,7 +101,7 @@ std::tuple<
     const uint32_t image_height,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const at::Tensor camera_ids, // [nnz]
@@ -130,7 +130,7 @@ std::tuple<
     const uint32_t tile_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const at::Tensor intersection_count_map,  // [C+1]
     const at::Tensor intersection_splat_id  // [nnz]
@@ -149,7 +149,7 @@ std::tuple<
     const uint32_t image_height,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const at::Tensor camera_ids, // [nnz]
@@ -178,7 +178,7 @@ std::tuple<
     const uint32_t tile_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const at::Tensor intersection_count_map,  // [C+1]
     const at::Tensor intersection_splat_id  // [nnz]
@@ -197,7 +197,7 @@ std::tuple<
     const uint32_t image_height,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const at::Tensor camera_ids, // [nnz]

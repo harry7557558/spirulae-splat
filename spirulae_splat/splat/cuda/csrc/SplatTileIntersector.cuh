@@ -15,7 +15,7 @@
 
 
 
-template<gsplat::CameraModelType camera_model>
+template<ssplat::CameraModelType camera_model>
 struct TileBuffers {
     long size;
     float width, height;
@@ -45,7 +45,7 @@ struct TileBuffers {
 };
 
 
-template<typename Primitive, gsplat::CameraModelType camera_model>
+template<typename Primitive, ssplat::CameraModelType camera_model>
 struct SplatTileIntersector {
 
     c10::TensorOptions tensorF32;
@@ -75,7 +75,7 @@ intersect_splat_tile_3dgs(
     unsigned height,
     const at::Tensor& viewmats,
     const at::Tensor& intrins,
-    const gsplat::CameraModelType& camera_model,
+    const std::string& camera_model,
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale
 );
@@ -87,7 +87,7 @@ intersect_splat_tile_opaque_triangle(
     unsigned height,
     const at::Tensor& viewmats,
     const at::Tensor& intrins,
-    const gsplat::CameraModelType& camera_model,
+    const std::string& camera_model,
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale
 );
@@ -99,7 +99,7 @@ intersect_splat_tile_voxel(
     unsigned height,
     const at::Tensor& viewmats,
     const at::Tensor& intrins,
-    const gsplat::CameraModelType& camera_model,
+    const std::string& camera_model,
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale
 );

@@ -6,7 +6,7 @@
 
 template void projection_fused_fwd_kernel_wrapper<
     OpaqueTriangle,
-    gsplat::CameraModelType::FISHEYE
+    ssplat::CameraModelType::FISHEYE
 >(
     cudaStream_t stream,
     const uint32_t B,

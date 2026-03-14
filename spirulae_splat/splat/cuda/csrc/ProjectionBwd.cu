@@ -9,7 +9,7 @@ namespace cg = cooperative_groups;
 
 template<
     typename SplatPrimitive,
-    gsplat::CameraModelType camera_model,
+    ssplat::CameraModelType camera_model,
     HessianDiagonalOutputMode hessian_diagonal_output_mode
 >
 void projection_fused_bwd_kernel_wrapper(
@@ -55,7 +55,7 @@ inline std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const ssplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,          // [nnz, 4]
@@ -126,10 +126,10 @@ inline std::tuple<
             viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr \
         )
 
-    if (camera_model == gsplat::CameraModelType::PINHOLE)
-        projection_fused_bwd_kernel_wrapper<SplatPrimitive, gsplat::CameraModelType::PINHOLE, hessian_diagonal_output_mode> _LAUNCH_ARGS;
-    else if (camera_model == gsplat::CameraModelType::FISHEYE)
-        projection_fused_bwd_kernel_wrapper<SplatPrimitive, gsplat::CameraModelType::FISHEYE, hessian_diagonal_output_mode> _LAUNCH_ARGS;
+    if (camera_model == ssplat::CameraModelType::PINHOLE)
+        projection_fused_bwd_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::PINHOLE, hessian_diagonal_output_mode> _LAUNCH_ARGS;
+    else if (camera_model == ssplat::CameraModelType::FISHEYE)
+        projection_fused_bwd_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::FISHEYE, hessian_diagonal_output_mode> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -152,7 +152,7 @@ inline std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const ssplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -201,7 +201,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -212,7 +212,7 @@ std::tuple<
     const bool viewmats_requires_grad
 ) {
     return launch_projection_projection_fused_bwd_kernel<Vanilla3DGS>(
-        splats_world, viewmats, intrins, image_width, image_height, camera_model, dist_coeffs,
+        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
         camera_ids, gaussian_ids, aabb, v_splats_screen, viewmats_requires_grad);
 }
 
@@ -229,7 +229,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -242,7 +242,7 @@ std::tuple<
     const bool viewmats_requires_grad
 ) {
     return _launch_projection_projection_fused_bwd_kernel<Vanilla3DGS, HessianDiagonalOutputMode::AllReasonable>(
-        splats_world, viewmats, intrins, image_width, image_height, camera_model, dist_coeffs,
+        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
         camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen, viewmats_requires_grad);
 }
 
@@ -259,7 +259,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -272,7 +272,7 @@ std::tuple<
     const bool viewmats_requires_grad
 ) {
     return _launch_projection_projection_fused_bwd_kernel<Vanilla3DGS, HessianDiagonalOutputMode::Position>(
-        splats_world, viewmats, intrins, image_width, image_height, camera_model, dist_coeffs,
+        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
         camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen, viewmats_requires_grad);
 }
 
@@ -293,7 +293,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -304,7 +304,7 @@ std::tuple<
     const bool viewmats_requires_grad
 ) {
     return launch_projection_projection_fused_bwd_kernel<MipSplatting>(
-        splats_world, viewmats, intrins, image_width, image_height, camera_model, dist_coeffs,
+        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
         camera_ids, gaussian_ids, aabb, v_splats_screen, viewmats_requires_grad);
 }
 
@@ -321,7 +321,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -334,7 +334,7 @@ std::tuple<
     const bool viewmats_requires_grad
 ) {
     return _launch_projection_projection_fused_bwd_kernel<MipSplatting, HessianDiagonalOutputMode::AllReasonable>(
-        splats_world, viewmats, intrins, image_width, image_height, camera_model, dist_coeffs,
+        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
         camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen, viewmats_requires_grad);
 }
 
@@ -351,7 +351,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -364,7 +364,7 @@ std::tuple<
     const bool viewmats_requires_grad
 ) {
     return _launch_projection_projection_fused_bwd_kernel<MipSplatting, HessianDiagonalOutputMode::Position>(
-        splats_world, viewmats, intrins, image_width, image_height, camera_model, dist_coeffs,
+        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
         camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen, viewmats_requires_grad);
 }
 
@@ -385,7 +385,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -396,7 +396,7 @@ std::tuple<
     const bool viewmats_requires_grad
 ) {
     return launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT>(
-        splats_world, viewmats, intrins, image_width, image_height, camera_model, dist_coeffs,
+        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
         camera_ids, gaussian_ids, aabb, v_splats_screen, viewmats_requires_grad);
 }
 
@@ -413,7 +413,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -426,7 +426,7 @@ std::tuple<
     const bool viewmats_requires_grad
 ) {
     return _launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT, HessianDiagonalOutputMode::AllReasonable>(
-        splats_world, viewmats, intrins, image_width, image_height, camera_model, dist_coeffs,
+        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
         camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen, viewmats_requires_grad);
 }
 
@@ -443,7 +443,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -456,7 +456,7 @@ std::tuple<
     const bool viewmats_requires_grad
 ) {
     return _launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT, HessianDiagonalOutputMode::Position>(
-        splats_world, viewmats, intrins, image_width, image_height, camera_model, dist_coeffs,
+        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
         camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen, viewmats_requires_grad);
 }
 
@@ -477,7 +477,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -490,7 +490,7 @@ std::tuple<
     int num_sv = std::get<5>(splats_world).size(-2);
     #define _CASE(n) \
         if (num_sv == n) return launch_projection_projection_fused_bwd_kernel<SphericalVoronoi3DGUT<n>>( \
-            splats_world, viewmats, intrins, image_width, image_height, camera_model, dist_coeffs, \
+            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, viewmats_requires_grad);
     _CASE(2) _CASE(3) _CASE(4) _CASE(5) _CASE(6) _CASE(7) _CASE(8)
     #undef _CASE
@@ -515,7 +515,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -526,7 +526,7 @@ std::tuple<
     const bool viewmats_requires_grad
 ) {
     return launch_projection_projection_fused_bwd_kernel<OpaqueTriangle>(
-        splats_world, viewmats, intrins, image_width, image_height, camera_model, dist_coeffs,
+        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
         camera_ids, gaussian_ids, aabb, v_splats_screen, viewmats_requires_grad);
 }
 
@@ -547,7 +547,7 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
     const std::optional<at::Tensor> camera_ids,  // [nnz]
@@ -558,7 +558,7 @@ std::tuple<
     const bool viewmats_requires_grad
 ) {
     return launch_projection_projection_fused_bwd_kernel<VoxelPrimitive>(
-        splats_world, viewmats, intrins, image_width, image_height, camera_model, dist_coeffs,
+        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
         camera_ids, gaussian_ids, aabb, v_splats_screen, viewmats_requires_grad);
 }
 

@@ -35,7 +35,7 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 );
 
@@ -54,7 +54,7 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 );
 
@@ -73,7 +73,7 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 );
 
@@ -92,7 +92,7 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 );
 
@@ -111,7 +111,7 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 );
 
@@ -130,6 +130,6 @@ std::tuple<
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const gsplat::CameraModelType camera_model,
+    const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 );

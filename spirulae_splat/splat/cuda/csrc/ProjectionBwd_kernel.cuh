@@ -16,7 +16,7 @@ namespace cg = cooperative_groups;
 
 template<
     typename SplatPrimitive,
-    gsplat::CameraModelType camera_model,
+    ssplat::CameraModelType camera_model,
     HessianDiagonalOutputMode hessian_diagonal_output_mode
 >
 __global__ void projection_fused_bwd_kernel(
@@ -103,34 +103,34 @@ __global__ void projection_fused_bwd_kernel(
     typename SplatPrimitive::World h_splat_world = SplatPrimitive::World::zero();
     if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::None) {
         switch (camera_model) {
-        case gsplat::CameraModelType::PINHOLE: // perspective projection
+        case ssplat::CameraModelType::PINHOLE: // perspective projection
             SplatPrimitive::project_persp_vjp(splat_world, cam, v_splat_screen, v_splat_world, v_R, v_t);
             break;
-        // case gsplat::CameraModelType::ORTHO: // orthographic projection
+        // case ssplat::CameraModelType::ORTHO: // orthographic projection
         //     SplatPrimitive::project_ortho_vjp(splat_world, cam, v_splat_screen, v_splat_world, v_R, v_t);
         //     break;
-        case gsplat::CameraModelType::FISHEYE: // fisheye projection
+        case ssplat::CameraModelType::FISHEYE: // fisheye projection
             SplatPrimitive::project_fisheye_vjp(splat_world, cam, v_splat_screen, v_splat_world, v_R, v_t);
             break;
         }
     } else if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
         switch (camera_model) {
-        case gsplat::CameraModelType::PINHOLE: // perspective projection
+        case ssplat::CameraModelType::PINHOLE: // perspective projection
             SplatPrimitive::project_persp_vjp(splat_world, cam, v_splat_screen,
                 vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_world_pos, h_world_pos);
             break;
-        case gsplat::CameraModelType::FISHEYE: // fisheye projection
+        case ssplat::CameraModelType::FISHEYE: // fisheye projection
             SplatPrimitive::project_fisheye_vjp(splat_world, cam, v_splat_screen,
                 vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_world_pos, h_world_pos);
             break;
         }
     } else if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable) {
         switch (camera_model) {
-        case gsplat::CameraModelType::PINHOLE: // perspective projection
+        case ssplat::CameraModelType::PINHOLE: // perspective projection
             SplatPrimitive::project_persp_vjp(splat_world, cam, v_splat_screen,
                 vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_splat_world, h_splat_world);
             break;
-        case gsplat::CameraModelType::FISHEYE: // fisheye projection
+        case ssplat::CameraModelType::FISHEYE: // fisheye projection
             SplatPrimitive::project_fisheye_vjp(splat_world, cam, v_splat_screen,
                 vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_splat_world, h_splat_world);
             break;
@@ -172,7 +172,7 @@ __global__ void projection_fused_bwd_kernel(
 
 template<
     typename SplatPrimitive,
-    gsplat::CameraModelType camera_model,
+    ssplat::CameraModelType camera_model,
     HessianDiagonalOutputMode hessian_diagonal_output_mode
 >
 void projection_fused_bwd_kernel_wrapper(
