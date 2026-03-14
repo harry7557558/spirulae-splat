@@ -114,16 +114,18 @@ Training very large-scale scenes
 - If you notice "splat blobs" with a `low-texture` preset, increase `--pipeline.model.relative_scale` aggressively (default 10.0 for open and 1.0 otherwise)
 - Experimental multi-resolution loss that helps with convergence with high-resolution images: `--pipeline.model.num_loss_scales 2` (default 0)
 - Batching for scenes with large number of images can be configured with `--pipeline.datamanager.max_batch_per_epoch` (default 800), which automatically enables batching when number of input images is above this number.
-- In batching mode, all images are processed in a single batch by default. Set `--pipeline.datamanager.split_batch True` to process one image at once, which can save VRAM a lot if you have a large number of high-resolution images.
-- If you are not using depth and normal supervision, setting `--pipeline.model.use_bilateral_grid_for_geometry False` may save VRAM slightly.
-- On some platforms, setting environment variable `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` can reduce VRAM usage by 10%-20% and allow you training more splats with limited VRAM.
+- Tips for training with limited VRAM
+    - In batching mode, all images are processed in a single batch by default. Set `--pipeline.datamanager.split_batch True` to process one image at once, which can save VRAM a lot if you have a large number of high-resolution images.
+    - Use `--pipeline.model.optimizer_offload all` to offload Adam optimizer momentum to CPU, can save VRAM significantly at cost of slower training.
+    - On some platforms, setting environment variable `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` can reduce VRAM usage by 10%-20% with minimum speed overhead. Setting `PYTORCH_NO_CUDA_MEMORY_CACHING=1` can reduce peak VRAM even more but with slight speed overhead.
+    - If you are not using depth and normal supervision, setting `--pipeline.model.use_bilateral_grid_for_geometry False` may save VRAM slightly.
 - To skip viewer thumbnail loading (if it takes too long in the beginning of training), append `nerfstudio-data --load_thumbnails False` to the end of training command.
 
 Unstable features
 - Training on images in linear color spaces: `--pipeline.model.use_linear_color_space True`; Wide-gamut color spaces: `--pipeline.model.image_color_space ACEScg` (supports `ACES2065-1`, `ACEScg`, `Rec.2020`, `AdobeRGB`)
 - Batch many tiny tiles instead of whole images: `ns-train spirulae-patched ...` instead of `ns-train spirulae`
 - Validation (early stop training if loss on validation images start to increase): append `nerfstudio-data --validation_fraction 0.1` to the end of training command
-- Second-order optimizer using Jacobian-residual product and Hessian diagonal: `ns-train spirulae^2-pos` or `spirulae^2` instead of `spirulae`
+- Second-order optimizer using Jacobian-residual product and Hessian diagonal: `ns-train spirulae^2-pos` or `spirulae^2` instead of `spirulae`. We also provide presets `spirulae^2-preset-confined` and `spirulae^2-preset-open` for the corresponding presets with `spirulae^2` methods.
 
 Scripts
 - Use `scripts/export_ply_3dgs.py` to export PLY
