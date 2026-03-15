@@ -17,14 +17,6 @@ import torch
 
 # TODO(1480) use pycolmap instead of colmap_parsing_utils
 # import pycolmap
-from nerfstudio.data.utils.colmap_parsing_utils import (
-    qvec2rotmat,
-    read_cameras_binary,
-    read_images_binary,
-    read_points3D_binary,
-    read_points3D_text,
-)
-from nerfstudio.utils import colormaps
 from nerfstudio.utils.rich_utils import CONSOLE
 
 from dataclasses import dataclass
@@ -69,6 +61,29 @@ CameraModel = collections.namedtuple("CameraModel", ["model_id", "model_name", "
 Camera = collections.namedtuple("Camera", ["id", "model", "width", "height", "params"])
 BaseImage = collections.namedtuple("Image", ["id", "qvec", "tvec", "camera_id", "name", "xys", "point3D_ids"])
 Point3D = collections.namedtuple("Point3D", ["id", "xyz", "rgb", "error", "image_ids", "point2D_idxs"])
+
+
+def qvec2rotmat(qvec):
+    return np.array(
+        [
+            [
+                1 - 2 * qvec[2] ** 2 - 2 * qvec[3] ** 2,
+                2 * qvec[1] * qvec[2] - 2 * qvec[0] * qvec[3],
+                2 * qvec[3] * qvec[1] + 2 * qvec[0] * qvec[2],
+            ],
+            [
+                2 * qvec[1] * qvec[2] + 2 * qvec[0] * qvec[3],
+                1 - 2 * qvec[1] ** 2 - 2 * qvec[3] ** 2,
+                2 * qvec[2] * qvec[3] - 2 * qvec[0] * qvec[1],
+            ],
+            [
+                2 * qvec[3] * qvec[1] - 2 * qvec[0] * qvec[2],
+                2 * qvec[2] * qvec[3] + 2 * qvec[0] * qvec[1],
+                1 - 2 * qvec[1] ** 2 - 2 * qvec[2] ** 2,
+            ],
+        ]
+    )
+
 
 class Image(BaseImage):
     def qvec2rotmat(self):
@@ -651,7 +666,6 @@ def colmap_to_json(
     im_id_to_image = read_images_binary(recon_dir / "images.bin")
     if set(cam_id_to_camera.keys()) != {1}:
         CONSOLE.print(f"[bold yellow]Warning: More than one camera is found in {recon_dir}")
-        print(cam_id_to_camera)
         use_single_camera_mode = False  # update bool: one camera per frame
         out = {}  # out = {"camera_model": parse_colmap_camera_params(cam_id_to_camera[1])["camera_model"]}
     else:  # one camera for all frames
@@ -801,6 +815,136 @@ def get_matching_summary(num_initial_frames: int, num_matched_frames: int) -> st
     return f"[bold green]COLMAP found poses for {num_matched_frames / num_initial_frames * 100:.2f}% of the images."
 
 
+def generate_report(
+    recon_dir: Path
+):
+    print("Loading points3D")
+    if (recon_dir / "points3D.bin").exists():
+        colmap_points = read_points3D_binary(recon_dir / "points3D.bin")
+    elif (recon_dir / "points3D.txt").exists():
+        colmap_points = read_points3D_text(recon_dir / "points3D.txt")
+    else:
+        raise ValueError(f"Could not find points3D.txt or points3D.bin in {recon_dir}")
+
+    print("Loading cameras")
+    cam_id_to_camera = read_cameras_binary(recon_dir / "cameras.bin")
+    print("Loading images")
+    im_id_to_image = read_images_binary(recon_dir / "images.bin")
+
+    camera_points = {}
+
+    from tqdm import tqdm
+    for im_id, im in tqdm(im_id_to_image.items(), "Processing"):
+
+        camera = cam_id_to_camera[im.camera_id]
+        camera_params = parse_colmap_camera_params(camera)
+
+        (w, h, fx, fy, cx, cy, k1, k2, k3, k4, p1, p2, sx1, sy1) = \
+            [camera_params.get(x, 0.0) for x in 'w h fl_x fl_y cx cy k1 k2 k3 k4 p1 p2 sx1 sy1'.split()]
+
+        rotation = qvec2rotmat(im.qvec)
+        translation = im.tvec.reshape(3, 1)
+
+        xy_batch = im.xys[im.point3D_ids != -1]
+        im_pids = im.point3D_ids[im.point3D_ids != -1]
+        xyz_batch = np.stack([colmap_points[pid].xyz for pid in im_pids])    
+
+        proj = xyz_batch @ rotation.T + translation.T
+
+        x, y, z = proj.T
+        if 'FISHEYE' in camera_params['camera_model']:
+            r = np.hypot(x, y)
+            theta = np.arctan2(r, z)
+            x *= theta / (r + 1e-8)
+            y *= theta / (r + 1e-8)
+        else:
+            x, y, z = x[z > 0], y[z > 0], z[z > 0]
+            x, y = x / z, y / z
+            xy_batch = xy_batch[np.where(z > 0)]
+
+        r2 = x * x + y * y
+        radial = 1.0 + r2*(k1 + r2*(k2 + r2*(k3 + r2*k4)))
+        dx = 2.0*p1*x*y + p2*(r2+2.0*x*x) + sx1*r2
+        dy = 2.0*p2*x*y + p1*(r2+2.0*y*y) + sy1*r2
+        x = x * radial + dx
+        y = y * radial + dy
+
+        x = fx * x + cx
+        y = fy * y + cy
+
+        residual = np.stack((x, y), axis=-1) - xy_batch
+
+        if im.camera_id not in camera_points:
+            camera_points[im.camera_id] = {
+                'gt_points': [],
+                'residuals': [],
+                'w': w,
+                'h': h,
+            }
+        camera_points[im.camera_id]['gt_points'].append(xy_batch)
+        camera_points[im.camera_id]['residuals'].append(residual)
+
+    num_cameras = len(camera_points)
+    print(num_cameras, "cameras")
+
+    import matplotlib.pyplot as plt
+    ncols = int(np.ceil(np.sqrt(num_cameras)))
+    nrows = int(np.ceil(num_cameras / ncols))
+    fig, axs = plt.subplots(nrows, ncols, figsize=(16, 12))
+    if num_cameras == 1:
+        axs = [axs]
+    if nrows != 1 and nrows != 1:
+        axs = sum([[*ax] for ax in axs], [])
+
+    for axs_id, (camera_id, camera_point) in enumerate(sorted(camera_points.items())):
+        print(f"Plotting camera {camera_id}")
+
+        gt_points = camera_point['gt_points']
+        residuals = camera_point['residuals']
+        w, h = camera_point['w'], camera_point['h']
+
+        gt_points = np.concatenate(gt_points)
+        residuals = np.concatenate(residuals)
+
+        sc = np.sqrt(w * h) / 64
+        gw, gh = int(np.ceil(w / sc)), int(np.ceil(h / sc))
+        # grid = np.zeros([gh, gw, 2])
+        grid = np.zeros([gh, gw, 3])
+
+        for (x, y), (dx, dy) in zip(gt_points, residuals):
+            x, y = int(round(x / w * gw)), int(round(y / h * gh))
+            if x < 0 or x >= gw or y < 0 or y >= gh:
+                continue
+            # if np.hypot(grid[y][x][0], grid[y][x][1]) < np.hypot(dx, dy):
+            #     grid[y][x][0] = dx
+            #     grid[y][x][1] = dy
+            grid[y][x][0] += dx
+            grid[y][x][1] += dy
+            grid[y][x][2] += 1
+
+        cnt = grid[:, :, 2].flatten()
+        x, y = np.meshgrid(np.arange(gw), np.arange(gh))
+        y = y.flatten()[cnt > 0] * (h / gh)
+        x = x.flatten()[cnt > 0] * (w / gw)
+        dy = grid[:, :, 1].flatten()[cnt > 0] / cnt[cnt > 0]
+        dx = grid[:, :, 0].flatten()[cnt > 0] / cnt[cnt > 0]
+
+        mean_res = np.hypot(residuals[:, 0], residuals[:, 1]).mean()
+
+        ax = axs[axs_id]
+        ax.quiver(x, y, dx, dy, np.log10(np.hypot(dx, dy)+0.01),
+                  headaxislength=0, headlength=0, headwidth=0)
+
+        ax.invert_yaxis()
+        ax.set_aspect('equal')
+        ax.set_xlim([0, w])
+        ax.set_ylim([0, h])
+        ax.set_title(f"Camera {camera_id}, mean res = {mean_res:.2f} px")
+
+    plt.tight_layout()
+    plt.show()
+
+
 
 @dataclass
 class ColmapConverterToNerfstudioDataset():
@@ -815,6 +959,11 @@ class ColmapConverterToNerfstudioDataset():
 
     camera_mask_path: Path = Path("masks")
     """Path of the colmap model, relative to the dataset directory.
+    """
+
+    report: bool = False
+    """Whether to generate report. If True, display report and exit.
+    Currently the report contains distortion plots for each camera.
     """
 
     @property
@@ -837,6 +986,10 @@ class ColmapConverterToNerfstudioDataset():
             image_id_to_depth_path: When including sfm-based depth, embed these depth file paths in the exported json
             image_rename_map: Use these image names instead of the names embedded in the COLMAP db
         """
+        if self.report:
+            generate_report(self.absolute_colmap_model_path)
+            return
+
         summary_log = []
         if (self.absolute_colmap_model_path / "cameras.bin").exists():
             with CONSOLE.status("[bold yellow]Saving results to transforms.json", spinner="balloon"):
