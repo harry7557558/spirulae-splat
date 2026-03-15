@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
 
-"""Script to convert COLMAP data into Nerfstudio format."""
+"""Script to generate report for COLMAP dataset. (Distortion plot currently)"""
 
 # Largely copied from:
 # - https://github.com/nerfstudio-project/nerfstudio/blob/main/nerfstudio/process_data/colmap_utils.py
 # - https://github.com/nerfstudio-project/nerfstudio/blob/main/nerfstudio/process_data/colmap_converter_to_nerfstudio_dataset.py
 # - https://github.com/nerfstudio-project/nerfstudio/blob/main/nerfstudio/data/utils/colmap_parsing_utils.py
-# Added support for THIN_PRISM_FISHEYE
 
-import json
+# This script is self-contained.
+# You should not need nerfstudio and spirulae-splat dependencies in order to run it.
+
+
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional, Union
 
 import numpy as np
-import torch
+import matplotlib.pyplot as plt
 
 # TODO(1480) use pycolmap instead of colmap_parsing_utils
 # import pycolmap
-from nerfstudio.utils.rich_utils import CONSOLE
-
-from dataclasses import dataclass
 
 import collections
 import struct
@@ -579,12 +578,10 @@ def parse_colmap_camera_params(camera) -> Dict[str, Any]:
         out["p1"] = float(camera_params[6])
         out["p2"] = float(camera_params[7])
         out["k3"] = float(camera_params[8])
-        k4 = float(camera_params[9])
-        k5 = float(camera_params[10])
-        k6 = float(camera_params[11])
-        if k4 != 0.0 or k5 != 0.0 or k6 != 0.0:
-            raise NotImplementedError(f"{camera.model} camera model is not supported yet!")
-        camera_model = "OPENCV"
+        out["k4"] = float(camera_params[9])
+        out["k5"] = float(camera_params[10])
+        out["k6"] = float(camera_params[11])
+        camera_model = "FULL_OPENCV"
     elif camera.model == "FOV":
         # fx, fy, cx, cy, omega
         out["fl_x"] = float(camera_params[0])
@@ -660,254 +657,151 @@ def parse_colmap_camera_params(camera) -> Dict[str, Any]:
     return out
 
 
-def colmap_to_json(
+def generate_report(
     recon_dir: Path,
-    output_dir: Path,
-    camera_mask_path: Optional[Path] = None,
-    image_id_to_depth_path: Optional[Dict[int, Path]] = None,
-    image_rename_map: Optional[Dict[str, str]] = None,
-    ply_filename="sparse_pc.ply",
-    keep_original_world_coordinate: bool = False,
-    use_single_camera_mode: bool = True,
-) -> Tuple[int, int]:
-    """Converts COLMAP's cameras.bin and images.bin to a JSON file.
+    save_path: Optional[Path] = None
+):
+    print("Recon dir:", recon_dir)
+    if not recon_dir.exists() and recon_dir.is_dir():
+        print(f"Error: Directory {recon_dir} does not exist.")
+        exit(0)
 
-    Args:
-        recon_dir: Path to the reconstruction directory, e.g. "sparse/0"
-        output_dir: Path to the output directory.
-        camera_model: Camera model used.
-        camera_mask_path: Path to the camera mask.
-        image_id_to_depth_path: When including sfm-based depth, embed these depth file paths in the exported json
-        image_rename_map: Use these image names instead of the names embedded in the COLMAP db
-        keep_original_world_coordinate: If True, no extra transform will be applied to world coordinate.
-                    Colmap optimized world often have y direction of the first camera pointing towards down direction,
-                    while nerfstudio world set z direction to be up direction for viewer.
-    Returns:
-        The number of total images.
-        The number of registered images.
-    """
-
-    # TODO(1480) use pycolmap
-    # recon = pycolmap.Reconstruction(recon_dir)
-    # cam_id_to_camera = recon.cameras
-    # im_id_to_image = recon.images
+    colmap_points = load_points3D(recon_dir)
     cam_id_to_camera = load_cameras(recon_dir)
     im_id_to_image = load_images(recon_dir)
-    if len(set(cam_id_to_camera.keys())) > 1:
-        CONSOLE.print(f"[bold yellow]Warning: More than one camera is found in {recon_dir}")
-        use_single_camera_mode = False  # update bool: one camera per frame
-        out = {}  # out = {"camera_model": parse_colmap_camera_params(cam_id_to_camera[1])["camera_model"]}
-    else:  # one camera for all frames
-        camera_id = [*cam_id_to_camera.keys()][0]
-        out = parse_colmap_camera_params(cam_id_to_camera[camera_id])
 
-    frames = []
-    for im_id, im_data in im_id_to_image.items():
-        # NB: COLMAP uses Eigen / scalar-first quaternions
-        # * https://colmap.github.io/format.html
-        # * https://github.com/colmap/colmap/blob/bf3e19140f491c3042bfd85b7192ef7d249808ec/src/base/pose.cc#L75
-        # the `rotation_matrix()` handles that format for us.
+    camera_points = {}
 
-        # TODO(1480) BEGIN use pycolmap API
-        # rotation = im_data.rotation_matrix()
-        rotation = qvec2rotmat(im_data.qvec)
+    from tqdm import tqdm
+    for im_id, im in tqdm(im_id_to_image.items(), "Processing"):
 
-        translation = im_data.tvec.reshape(3, 1)
-        w2c = np.concatenate([rotation, translation], 1)
-        w2c = np.concatenate([w2c, np.array([[0, 0, 0, 1]])], 0)
-        c2w = np.linalg.inv(w2c)
-        # Convert from COLMAP's camera coordinate system (OpenCV) to ours (OpenGL)
-        c2w[0:3, 1:3] *= -1
-        if not keep_original_world_coordinate:
-            c2w = c2w[np.array([0, 2, 1, 3]), :]
-            c2w[2, :] *= -1
+        camera = cam_id_to_camera[im.camera_id]
+        camera_params = parse_colmap_camera_params(camera)
 
-        name = im_data.name
-        if image_rename_map is not None:
-            name = image_rename_map[name]
+        (w, h, fx, fy, cx, cy, k1, k2, k3, k4, k5, k6, p1, p2, sx1, sy1) = \
+            [camera_params.get(x, 0.0) for x in 'w h fl_x fl_y cx cy k1 k2 k3 k4 k5 k6 p1 p2 sx1 sy1'.split()]
 
-        frame = {
-            "file_path": (Path("images") / name).as_posix(),
-            "transform_matrix": c2w.tolist(),
-            "colmap_im_id": im_id,
-        }
-        if camera_mask_path is not None:
-            mask_path = camera_mask_path / (name+".png")
-            if mask_path.exists():
-                frame["mask_path"] = mask_path.as_posix()
-            else:
-                print("Warning:", mask_path, "does not exist")
-        if image_id_to_depth_path is not None:
-            depth_path = image_id_to_depth_path[im_id]
-            frame["depth_file_path"] = str(depth_path.relative_to(depth_path.parent.parent))
+        rotation = qvec2rotmat(im.qvec)
+        translation = im.tvec.reshape(3, 1)
 
-        if not use_single_camera_mode:  # add the camera parameters for this frame
-            frame.update(parse_colmap_camera_params(cam_id_to_camera[im_data.camera_id]))
+        xy_batch = im.xys[im.point3D_ids != -1]
+        im_pids = im.point3D_ids[im.point3D_ids != -1]
+        xyz_batch = np.stack([colmap_points[pid].xyz for pid in im_pids])    
 
-        frames.append(frame)
+        proj = xyz_batch @ rotation.T + translation.T
 
-    out["frames"] = frames
-
-    applied_transform = None
-    if not keep_original_world_coordinate:
-        applied_transform = np.eye(4)[:3, :]
-        applied_transform = applied_transform[np.array([0, 2, 1]), :]
-        applied_transform[2, :] *= -1
-        out["applied_transform"] = applied_transform.tolist()
-
-    # create ply from colmap
-    assert ply_filename.endswith(".ply"), f"ply_filename: {ply_filename} does not end with '.ply'"
-    create_ply_from_colmap(
-        ply_filename,
-        recon_dir,
-        output_dir,
-        torch.from_numpy(applied_transform).float() if applied_transform is not None else None,
-    )
-    out["ply_file_path"] = ply_filename
-
-    with open(output_dir / "transforms.json", "w", encoding="utf-8") as f:
-        json.dump(out, f, indent=4)
-
-    return len(im_id_to_image), len(frames)
-
-
-
-def create_ply_from_colmap(
-    filename: str, recon_dir: Path, output_dir: Path, applied_transform: Union[torch.Tensor, None]
-) -> None:
-    """Writes a ply file from colmap.
-
-    Args:
-        filename: file name for .ply
-        recon_dir: Directory to grab colmap points
-        output_dir: Directory to output .ply
-    """
-    colmap_points = load_points3D(recon_dir)
-
-    # Load point Positions
-    points3D = torch.from_numpy(np.array([p.xyz for p in colmap_points.values()], dtype=np.float32))
-    if applied_transform is not None:
-        assert applied_transform.shape == (3, 4)
-        points3D = torch.einsum("ij,bj->bi", applied_transform[:3, :3], points3D) + applied_transform[:3, 3]
-
-    # Load point colours
-    points3D_rgb = torch.from_numpy(np.array([p.rgb for p in colmap_points.values()], dtype=np.uint8))
-
-    # write ply
-    with open(output_dir / filename, "w") as f:
-        # Header
-        f.write("ply\n")
-        f.write("format ascii 1.0\n")
-        f.write(f"element vertex {len(points3D)}\n")
-        f.write("property float x\n")
-        f.write("property float y\n")
-        f.write("property float z\n")
-        f.write("property uint8 red\n")
-        f.write("property uint8 green\n")
-        f.write("property uint8 blue\n")
-        f.write("end_header\n")
-
-        for coord, color in zip(points3D, points3D_rgb):
-            x, y, z = coord
-            r, g, b = color
-            f.write(f"{x:8f} {y:8f} {z:8f} {r} {g} {b}\n")
-
-
-def get_matching_summary(num_initial_frames: int, num_matched_frames: int) -> str:
-    """Returns a summary of the matching results.
-
-    Args:
-        num_initial_frames: The number of initial frames.
-        num_matched_frames: The number of matched frames.
-
-    Returns:
-        A summary of the matching results.
-    """
-    match_ratio = num_matched_frames / num_initial_frames
-    if match_ratio == 1:
-        return "[bold green]COLMAP found poses for all images, CONGRATS!"
-    if match_ratio < 0.4:
-        result = f"[bold red]COLMAP only found poses for {num_matched_frames / num_initial_frames * 100:.2f}%"
-        result += " of the images. This is low.\nThis can be caused by a variety of reasons,"
-        result += " such poor scene coverage, blurry images, or large exposure changes."
-        return result
-    if match_ratio < 0.8:
-        result = f"[bold yellow]COLMAP only found poses for {num_matched_frames / num_initial_frames * 100:.2f}%"
-        result += " of the images.\nThis isn't great, but may be ok."
-        result += "\nMissing poses can be caused by a variety of reasons, such poor scene coverage, blurry images,"
-        result += " or large exposure changes."
-        return result
-    return f"[bold green]COLMAP found poses for {num_matched_frames / num_initial_frames * 100:.2f}% of the images."
-
-
-@dataclass
-class ColmapConverterToNerfstudioDataset():
-    """Base class to process images or video into a nerfstudio dataset using colmap"""
-
-    work_dir: Path
-    """Path to the dataset directory."""
-
-    colmap_model_path: Path = Path("sparse/0")
-    """Path of the colmap model, relative to the dataset directory.
-    """
-
-    camera_mask_path: Path = Path("masks")
-    """Path of the colmap model, relative to the dataset directory.
-    """
-
-    @property
-    def absolute_colmap_model_path(self) -> Path:
-        return self.work_dir / self.colmap_model_path
-
-    @property
-    def absolute_camera_mask_path(self) -> Optional[Path]:
-        path = self.work_dir / self.camera_mask_path
-        return path if path.exists() else None
-
-    @property
-    def absolute_colmap_path(self) -> Path:
-        return self.work_dir / "colmap"
-
-    def main(self) -> List[str]:
-        """Save colmap transforms into the output folder
-
-        Args:
-            image_id_to_depth_path: When including sfm-based depth, embed these depth file paths in the exported json
-            image_rename_map: Use these image names instead of the names embedded in the COLMAP db
-        """
-        summary_log = []
-        if (self.absolute_colmap_model_path / "cameras.bin").exists() \
-                or (self.absolute_colmap_model_path / "cameras.txt").exists():
-            with CONSOLE.status("[bold yellow]Saving results to transforms.json", spinner="balloon"):
-                num_frames, num_matched_frames = colmap_to_json(
-                    recon_dir=self.absolute_colmap_model_path,
-                    output_dir=self.work_dir,
-                    image_id_to_depth_path=None,
-                    camera_mask_path=self.absolute_camera_mask_path,
-                    image_rename_map=None,
-                    use_single_camera_mode=True,
-                )
-                summary_log.append(f"Colmap matched {num_matched_frames} images")
-            summary_log.append(get_matching_summary(num_frames, num_matched_frames))
-
+        x, y, z = proj.T
+        if 'FISHEYE' in camera_params['camera_model']:
+            r = np.hypot(x, y)
+            theta = np.arctan2(r, z)
+            x *= theta / (r + 1e-8)
+            y *= theta / (r + 1e-8)
         else:
-            CONSOLE.log(
-                "[bold yellow]Warning: Could not find existing COLMAP results. " "Not generating transforms.json" + \
-                "If needed, specify `--colmap_model_path` (default is `sparse/0`)."
-            )
-        for log in summary_log:
-            CONSOLE.log(log)
+            x, y, z = x[z > 0], y[z > 0], z[z > 0]
+            x, y = x / z, y / z
+            xy_batch = xy_batch[np.where(z > 0)]
 
+        r2 = x * x + y * y
+        if camera_params['camera_model'] == "FULL_OPENCV":
+            radial = (1+r2*(k1+r2*(k2+r2*k3))) / (1+r2*(k4+r2*(k5+r2*k6)))
+        else:
+            radial = 1.0 + r2*(k1 + r2*(k2 + r2*(k3 + r2*k4)))
+        dx = 2.0*p1*x*y + p2*(r2+2.0*x*x) + sx1*r2
+        dy = 2.0*p2*x*y + p1*(r2+2.0*y*y) + sy1*r2
+        x = x * radial + dx
+        y = y * radial + dy
 
-def entrypoint():
-    """Entrypoint for use with pyproject scripts."""
-    import tyro
-    tyro.extras.set_accent_color("bright_yellow")
-    try:
-        tyro.cli(ColmapConverterToNerfstudioDataset).main()
-    except (RuntimeError, ValueError) as e:
-        CONSOLE.log("[bold red]" + e.args[0])
+        x = fx * x + cx
+        y = fy * y + cy
+
+        residual = np.stack((x, y), axis=-1) - xy_batch
+
+        if im.camera_id not in camera_points:
+            camera_points[im.camera_id] = {
+                'gt_points': [],
+                'residuals': [],
+                'w': w,
+                'h': h,
+            }
+        camera_points[im.camera_id]['gt_points'].append(xy_batch)
+        camera_points[im.camera_id]['residuals'].append(residual)
+
+    num_cameras = len(camera_points)
+    print(num_cameras, "cameras")
+
+    ncols = int(np.ceil(np.sqrt(num_cameras)))
+    nrows = int(np.ceil(num_cameras / ncols))
+    fig, axs = plt.subplots(nrows, ncols, figsize=(16, 12))
+    if num_cameras == 1:
+        axs = [axs]
+    if nrows != 1 and nrows != 1:
+        axs = sum([[*ax] for ax in axs], [])
+
+    for axs_id, (camera_id, camera_point) in enumerate(sorted(camera_points.items())):
+        print(f"Plotting camera {camera_id}")
+
+        gt_points = camera_point['gt_points']
+        residuals = camera_point['residuals']
+        w, h = camera_point['w'], camera_point['h']
+
+        gt_points = np.concatenate(gt_points)
+        residuals = np.concatenate(residuals)
+
+        sc = np.sqrt(w * h) / 64
+        gw, gh = int(np.ceil(w / sc)), int(np.ceil(h / sc))
+        # grid = np.zeros([gh, gw, 2])
+        grid = np.zeros([gh, gw, 3])
+
+        for (x, y), (dx, dy) in zip(gt_points, residuals):
+            x, y = int(round(x / w * gw)), int(round(y / h * gh))
+            if x < 0 or x >= gw or y < 0 or y >= gh:
+                continue
+            # if np.hypot(grid[y][x][0], grid[y][x][1]) < np.hypot(dx, dy):
+            #     grid[y][x][0] = dx
+            #     grid[y][x][1] = dy
+            grid[y][x][0] += dx
+            grid[y][x][1] += dy
+            grid[y][x][2] += 1
+
+        cnt = grid[:, :, 2].flatten()
+        x, y = np.meshgrid(np.arange(gw), np.arange(gh))
+        y = y.flatten()[cnt > 0] * (h / gh)
+        x = x.flatten()[cnt > 0] * (w / gw)
+        dy = grid[:, :, 1].flatten()[cnt > 0] / cnt[cnt > 0]
+        dx = grid[:, :, 0].flatten()[cnt > 0] / cnt[cnt > 0]
+
+        rms = (residuals[:, 0]**2 + residuals[:, 1]**2).mean()**0.5
+
+        ax = axs[axs_id]
+        ax.quiver(x, y, dx, dy, np.log10(np.hypot(dx, dy)+0.01),
+                  headaxislength=0, headlength=0, headwidth=0)
+
+        ax.set_aspect('equal')
+        ax.set_xlim([0, w])
+        ax.set_ylim([0, h])
+        ax.invert_yaxis()
+        ax.set_title(f"Camera {camera_id}, rms = {rms:.2f} px")
+
+    plt.suptitle(f"Distortion plots for {recon_dir}")
+    plt.tight_layout()
+
+    if save_path is None:
+        plt.show()
+    else:
+        plt.savefig(save_path)
+        print(f"Report saved to {save_path}")
 
 
 if __name__ == "__main__":
-    entrypoint()
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Generate report for COLMAP matching.")
+    parser.add_argument("--dataset_dir", type=Path, required=True, help="Path to the dataset folder.")
+    parser.add_argument("--colmap_model_path", type=Path, default="sparse/0", help="Path to the COLMAP reconstruction.")
+    parser.add_argument("--save_report", help="If a path is specified, save report instead of display a window.")
+    args = parser.parse_args()
+
+    generate_report(
+        (args.dataset_dir / args.colmap_model_path).absolute(),
+        None if args.save_report is None else (args.dataset_dir / args.save_report).absolute()
+    )
