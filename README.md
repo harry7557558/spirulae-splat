@@ -13,6 +13,7 @@ My custom 3D Gaussian Splatting method for Nerfstudio. Modified the `splatfacto`
 - Select a subset of images for validation, early stop training when validation loss starts to increase
 - [PhyGaussian](https://arxiv.org/abs/2311.12198) and [erank](https://arxiv.org/abs/2406.11672) regularization to reduce spiky Gaussians
 - Batching for very large scenes
+- Display number of Gaussians and training loss/PSNR/SSIM in terminal during training
 
 ### Partially supports
 - Training on images in linear and various wide-gamut color spaces
@@ -27,11 +28,6 @@ My custom 3D Gaussian Splatting method for Nerfstudio. Modified the `splatfacto`
 - Better camera pose/intrinsics optimizer
 - Faster training (Stop-the-pop tile culling, Morton sort Gaussians, etc.)
 - Multi-GPU training
-
-### Additional features
-- Display number of Gaussians and training loss/PSNR/SSIM in terminal during training
-- Reduced system RAM usage for data loader when cached on CPU (up to 2x)
-- Fast backward implementation based on Taming-3DGS
 
 <!--### WebGL viewer features (see `webgl`)
 - Fisheye distortion (supports >180deg fisheye)
@@ -55,7 +51,7 @@ pip install -e . --no-build-isolation -v
 ns-install-cli
 ```
 
-If you are running out of system resources in the `pip install` step, set environment variable `MAX_JOBS` to a lower number (default is max number of concurrent CPU threads).
+The `pip install` step may take a few minutes. If you are running out of system resources during installation, set environment variable `MAX_JOBS` to a lower number (default is max number of concurrent CPU threads).
 
 Use default (master) branch for a stable version. Use `dev` branch if you want to try some more recent features.
 
@@ -84,7 +80,8 @@ Presets
 - Notes:
     - `spirulae-preset-academic-baseline` is generally the fastest and most memory efficient option and the one that achieves the highest PSNR and SSIM on standard benchmarks (e.g. Mip-NeRF 360). For better visual quality on real-world datasets and compatibility across different viewers, choose a different preset.
         - Note that this does not 100% replicate academic baseline. Known mismatches: sorting using ray depth instead of linear depth, no SH degree warm up, quaternion initialization. When benchmarked on Mip-NeRF 360, it generally achieves better SSIM and LPIPS for outdoor scenes but worse PSNR for indoor scenes.
-    - `low-texture` modes are for large surfaces with nearly no texture (e.g. full white wall). For scenes with moderate texture, you can likely get better visual results without `low-texture`.
+    - `low-texture` presets are for large surfaces with nearly no texture (e.g. full white wall). For scenes with moderate texture, you can likely get better visual results without `low-texture`.
+    - `open` presets will train a sky box, and the PLY export script will export it to an equirectangular map. Choose a `confined` preset if you wish to keep sky as splats.
 
 Gaussian representation
 - Change number of Gaussians: `--pipeline.model.mcmc_cap_max 6000000` (default 1000000)
@@ -110,7 +107,7 @@ Background control
 - If mask is provided, set `--pipeline.model.apply_loss_for_mask` to True to mask e.g. sky, background, and False to mask e.g. people and cars.
 
 Training very large-scale scenes
-- Cache images on disk for large datasets (instead of loading everything into RAM): `--pipeline.model.cache_images disk` (default: `cpu-pageable`)
+- Cache images on disk for large datasets (instead of loading everything into RAM that cause OOM): `--pipeline.model.cache_images disk` (default: `cpu-pageable`)
 - If you notice "splat blobs" with a `low-texture` preset, increase `--pipeline.model.relative_scale` aggressively (default 10.0 for open and 1.0 otherwise)
 - Experimental multi-resolution loss that helps with convergence with high-resolution images: `--pipeline.model.num_loss_scales 2` (default 0)
 - Batching for scenes with large number of images can be configured with `--pipeline.datamanager.max_batch_per_epoch` (default 800), which automatically enables batching when number of input images is above this number.
@@ -125,14 +122,15 @@ Unstable features
 - Training on images in linear color spaces: `--pipeline.model.use_linear_color_space True`; Wide-gamut color spaces: `--pipeline.model.image_color_space ACEScg` (supports `ACES2065-1`, `ACEScg`, `Rec.2020`, `AdobeRGB`)
 - Batch many tiny tiles instead of whole images: `ns-train spirulae-patched ...` instead of `ns-train spirulae`
 - Validation (early stop training if loss on validation images start to increase): append `nerfstudio-data --validation_fraction 0.1` to the end of training command
-- Second-order optimizer using Jacobian-residual product and Hessian diagonal: `ns-train spirulae^2-pos` or `spirulae^2` instead of `spirulae`. We also provide presets `spirulae^2-preset-confined` and `spirulae^2-preset-open` for the corresponding presets with `spirulae^2` methods.
+- Second-order optimizer using Jacobian-residual product and Hessian diagonal: `ns-train spirulae^2-pos` (more stable) or `spirulae^2` (less stable) instead of `spirulae`. We also provide presets `spirulae^2-preset-confined` and `spirulae^2-preset-open` for the corresponding presets with `spirulae^2` methods, which otherwise run on `spirulae^2-pos`.
+- 2DGS-like depth regularization to discourage floaters: `--pipeline.model.depth_reg_weight 0.01`. Similar regularization can also be applied to RGB by setting `--pipeline.model.rgb_distortion_reg_weight` to a positive value.
 
 Scripts
 - Use `scripts/export_ply_3dgs.py` to export PLY
 - To process data, use `scripts/process_data_colmap.py` and `scripts/process_data_metashape.py`, will bypass `ns-process-data` limitations (e.g. `THIN_PRISM_FISHEYE`)
-- Use `scripts/mask.py` to generate masks (Example usage: `python3 scripts/mask.py path/to/dataset --prompt "person; car; fisheye border"`)
-- Use `scripts/predict_geometry.py` to generate depth and normal maps, and optionally sky segmentation maps
-- Use `scripts/extract_frames.py` to extract frames from a video, while skipping blurry frames
+- Use `scripts/mask.py` to generate masks (Example usage: `python3 scripts/mask.py path/to/dataset --prompt "person; car; fisheye border"`). By default, this runs on [lang-sam](https://github.com/luca-medeiros/lang-segment-anything) model. Use `--model sam3` to switch to [SAM 3](https://github.com/facebookresearch/sam3) model for often better results (may require applying for access and logging in to Huggingface).
+- Use `scripts/predict_geometry.py` to generate depth and normal maps using [Metric3D v2](https://github.com/YvanYin/Metric3D) model, and optionally sky segmentation maps with various model options.
+- Use `scripts/extract_frames.py` to extract frames from a video, while skipping blurry frames. Supports various video formats, including most `.mp4`, `.mov`, and `.insv` videos.
 - `scripts/downscale_dataset.py`, `scripts/undistort_dataset.py`: self-explanatory
 
 <!-- ## Trivia

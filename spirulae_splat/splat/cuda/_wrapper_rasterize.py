@@ -356,7 +356,8 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
             (v_distortion_rgbs.contiguous(), v_distortion_depths.contiguous()) if ctx.output_distortion else None,
             ctx.needs_input_grad[13]
         )
-        del ctx.backward_info['loss_map']
+        if 'loss_map' in ctx.backward_info:
+            del ctx.backward_info['loss_map']
 
         h_splats = None
         if ctx.compute_hessian_diagonal:
