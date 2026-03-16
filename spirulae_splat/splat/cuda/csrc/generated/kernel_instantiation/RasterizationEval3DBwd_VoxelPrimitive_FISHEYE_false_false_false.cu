@@ -35,7 +35,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
     VoxelPrimitive::RenderOutput::Buffer v_render_output_buffer,
-    const float *__restrict__ v_render_alphas, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
     VoxelPrimitive::RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     VoxelPrimitive::Screen::Buffer v_splat_buffer,

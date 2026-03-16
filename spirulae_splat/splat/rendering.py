@@ -29,15 +29,15 @@ from .utils import depth_to_normal
 
 class _RenderedDepthToExpectedDepth(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, depth, alpha):
-        out_depth = _make_lazy_cuda_func("rendered_depth_to_expected_depth_forward")(depth, alpha)
-        ctx.save_for_backward(depth, alpha)
+    def forward(ctx, depth, transmittance):
+        out_depth = _make_lazy_cuda_func("rendered_depth_to_expected_depth_forward")(depth, transmittance)
+        ctx.save_for_backward(depth, transmittance)
         return out_depth
 
     @staticmethod
     def backward(ctx, v_out_depth):
-        depth, alpha = ctx.saved_tensors
-        return _make_lazy_cuda_func("rendered_depth_to_expected_depth_backward")(depth, alpha, v_out_depth)
+        depth, transmittance = ctx.saved_tensors
+        return _make_lazy_cuda_func("rendered_depth_to_expected_depth_backward")(depth, transmittance, v_out_depth)
 
 
 # from gsplat
@@ -181,7 +181,7 @@ def rasterization(
         X is D; if `render_mode` is "D" or "ED", X is 1; if `render_mode` is "RGB+D" or
         "RGB+ED", X is D+1.
 
-        **render_alphas**: The rendered alphas. [..., C, height, width, 1].
+        **render_Ts**: The rendered transmittances. [..., C, height, width, 1].
 
         **meta**: A dictionary of intermediate results of the rasterization.
 
@@ -201,10 +201,10 @@ def rasterization(
         >>>    [300., 300., 150., 100.]], device=device)[None, :, :]
         >>> width, height = 300, 200
         >>> # render
-        >>> colors, alphas, meta = rasterization(
+        >>> colors, Ts, meta = rasterization(
         >>>    means, quats, scales, opacities, colors, viewmats, intrins, width, height
         >>> )
-        >>> print (colors.shape, alphas.shape)
+        >>> print (colors.shape, Ts.shape)
         torch.Size([1, 200, 300, 3]) torch.Size([1, 200, 300, 1])
         >>> print (meta.keys())
         dict_keys(['camera_ids', 'gaussian_ids', 'radii', 'means2d', 'depths', 'conics',
@@ -458,7 +458,8 @@ def rasterization(
         "camera_model": camera_model,
         "dist_coeffs": dist_coeffs,
     }
-    render_colors, render_alphas, render_meta = rasterize_to_pixels(
+    backward_info = {}
+    render_colors, render_Ts, render_meta = rasterize_to_pixels(
         primitive,
         proj_splats,
         width,
@@ -470,6 +471,7 @@ def rasterization(
         packed=packed,
         output_distortion=output_distortion,
         compute_hessian_diagonal=(compute_hessian_diagonal is not None),
+        backward_info=backward_info,
         **kwargs
     )
     meta.update(render_meta)
@@ -479,29 +481,10 @@ def rasterization(
         render_colors = (
             render_colors[0],
             # TODO: fuse this into rasterization kernels
-            _RenderedDepthToExpectedDepth.apply(render_colors[1], render_alphas),
+            _RenderedDepthToExpectedDepth.apply(render_colors[1], render_Ts),
             *render_colors[2:]
         )
 
-    # if "ED" in render_mode:
-    #     # normalize the accumulated depth to get the expected depth
-    #     depth_idx = 3 if "RGB" in render_mode else 0
-    #     render_colors = torch.cat(
-    #         [
-    #             render_colors[..., :depth_idx],
-    #             render_colors[..., depth_idx:depth_idx+1] / render_alphas.clamp(min=1e-10),
-    #             render_colors[..., depth_idx+1:],
-    #         ],
-    #         dim=-1,
-    #     )
-    # if "N" in render_mode:
-    #     render_colors = torch.cat(
-    #         [
-    #             render_colors[..., :-3],
-    #             render_colors[..., -3:] / render_colors[..., -3:].norm(dim=-1, keepdim=True).clamp(min=1e-10),
-    #         ],
-    #         dim=-1,
-    #     )
-
-    return render_colors, render_alphas, meta
+    meta['backward_info'] = backward_info
+    return render_colors, render_Ts, meta
 

@@ -71,7 +71,7 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
     camera_model = ["pinhole", "fisheye"][IS_FISHEYE]
     # quats = torch.nn.functional.normalize(quats, dim=-1)
     intrins = torch.stack([Ks[..., 0, 0], Ks[..., 1, 1], Ks[..., 0, 2], Ks[..., 1, 2]], dim=-1)  # fx, fy, cx, cy
-    rgbd, alpha, meta = ssplat_rasterization(
+    rgbd, Ts, meta = ssplat_rasterization(
         primitive="3dgut" if WITH_UT else ["3dgs", "mip"][IS_ANTIALIASED],
         splat_params=(means, quats, scales, opacities.unsqueeze(-1), features_dc, features_sh),
         # primitive="opaque_triangle",
@@ -94,7 +94,7 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
     )
     rgbd = [*rgbd[:2]]
     rgbd[1] = ray_depth_to_linear_depth(rgbd[1], camera_model, intrins)  # TODO: f(E[X]) != E[f(X)]
-    return *rgbd, alpha
+    return *rgbd, 1.0 - Ts
 
 def rasterize_gsplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
     rgbd, alpha, meta = gsplat_rasterization(

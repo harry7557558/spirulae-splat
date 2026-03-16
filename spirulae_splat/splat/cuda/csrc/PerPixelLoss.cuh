@@ -75,7 +75,7 @@ compute_per_pixel_losses_forward_tensor(
     std::optional<at::Tensor> render_normal,
     std::optional<at::Tensor> depth_normal,
     std::optional<at::Tensor> ref_normal,
-    std::optional<at::Tensor> render_alpha,
+    std::optional<at::Tensor> render_Ts,
     std::optional<at::Tensor> rgb_dist,
     std::optional<at::Tensor> depth_dist,
     std::optional<at::Tensor> normal_dist,
@@ -99,7 +99,7 @@ std::tuple<
     std::optional<at::Tensor>, // render_normal
     std::optional<at::Tensor>, // depth_normal
     std::optional<at::Tensor>, // ref_normal
-    std::optional<at::Tensor>, // render_alpha
+    std::optional<at::Tensor>, // render_Ts
     std::optional<at::Tensor>, // rgb_dist
     std::optional<at::Tensor>, // depth_dist
     std::optional<at::Tensor> // normal_dist
@@ -111,7 +111,7 @@ std::tuple<
     std::optional<at::Tensor> render_normal,
     std::optional<at::Tensor> depth_normal,
     std::optional<at::Tensor> ref_normal,
-    std::optional<at::Tensor> render_alpha,
+    std::optional<at::Tensor> render_Ts,
     std::optional<at::Tensor> rgb_dist,
     std::optional<at::Tensor> depth_dist,
     std::optional<at::Tensor> normal_dist,

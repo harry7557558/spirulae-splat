@@ -99,12 +99,13 @@ __device__ __forceinline__ float3 get_pix_value(
 //  - Optionally writes partial derivatives
 //    to dm_dmu1, dm_dsigma1_sq, dm_dsigma12
 // ------------------------------------------
-template<bool is_l1>
+template<bool is_l1, bool inplace>
 __global__ void fusedssimCUDA(
     int B, int H, int W,
     const float3* __restrict__ img1,
     const float3* __restrict__ img2,
     float* __restrict__ ssim,
+    float ssim_loss_map_weight,
     float* __restrict__ ssim_loss_map,
     float3* __restrict__ dm_dmu1,
     float3* __restrict__ dm_dsigma1_sq,
@@ -315,8 +316,12 @@ __global__ void fusedssimCUDA(
                 dm_dmu1[global_idx]       = d_m_dmu1;
                 dm_dsigma1_sq[global_idx] = d_m_dsigma1_sq;
                 dm_dsigma12[global_idx]   = d_m_dsigma12;
-                if (ssim_loss_map != nullptr)
-                    ssim_loss_map[global_idx] = 1.0f - val;
+                if (ssim_loss_map != nullptr) {
+                    if (inplace)
+                        ssim_loss_map[global_idx] += ssim_loss_map_weight * (1.0f - val);
+                    else
+                        ssim_loss_map[global_idx] = 1.0f - val;
+                }
             }
 
         } else {
@@ -348,8 +353,12 @@ __global__ void fusedssimCUDA(
                 dm_dmu1[global_idx]       = d_m_dmu1 * grad_val3;
                 dm_dsigma1_sq[global_idx] = d_m_dsigma1_sq * grad_val3;
                 dm_dsigma12[global_idx]   = d_m_dsigma12 * grad_val3;
-                if (ssim_loss_map != nullptr)
-                    ssim_loss_map[global_idx] = 1.0f - val;
+                if (ssim_loss_map != nullptr) {
+                    if (inplace)
+                        ssim_loss_map[global_idx] += ssim_loss_map_weight * (1.0f - val);
+                    else
+                        ssim_loss_map[global_idx] = 1.0f - val;
+                }
             }
         #else
             static constexpr float kC3 = 0.5f * kC2;
@@ -400,8 +409,12 @@ __global__ void fusedssimCUDA(
                 dm_dmu1[global_idx]       = d_m_dmu1;
                 dm_dsigma1_sq[global_idx] = d_m_dsigma1_sq;
                 dm_dsigma12[global_idx]   = d_m_dsigma12;
-                if (ssim_loss_map != nullptr)
-                    ssim_loss_map[global_idx] = 1.0f - val;
+                if (ssim_loss_map != nullptr) {
+                    if (inplace)
+                        ssim_loss_map[global_idx] += ssim_loss_map_weight * (1.0f - val);
+                    else
+                        ssim_loss_map[global_idx] = 1.0f - val;
+                }
             }
         #endif
             }
@@ -605,11 +618,12 @@ fused_ssim_forward(
     at::Tensor dm_dsigma1_sq = train ? at::empty_like(img1) : at::empty({0}, img1.options());
     at::Tensor dm_dsigma12   = train ? at::empty_like(img1) : at::empty({0}, img1.options());
 
-    (is_l1 ? fusedssimCUDA<true> : fusedssimCUDA<false>)<<<grid, block>>>(
+    (is_l1 ? fusedssimCUDA<true, false> : fusedssimCUDA<false, false>)<<<grid, block>>>(
         B, H, W,
         (float3*)img1.data_ptr<float>(),
         (float3*)img2.data_ptr<float>(),
         ssim.data_ptr<float>(),
+        1.0f,
         return_ssim_loss_map ? ssim_loss_map.value().data_ptr<float>() : nullptr,
         train ? (float3*)dm_dmu1.data_ptr<float>()       : nullptr,
         train ? (float3*)dm_dsigma1_sq.data_ptr<float>() : nullptr,
@@ -617,6 +631,52 @@ fused_ssim_forward(
     );
 
     return std::make_tuple(ssim, ssim_loss_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12);
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+fused_ssim_forward_inplace(
+    at::Tensor &img1,
+    at::Tensor &img2,
+    bool train,
+    float ssim_loss_map_weight,
+    at::Tensor &ssim_loss_map,
+    bool is_l1
+) {
+    const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
+    int B  = img1.size(0);
+    int H  = img1.size(1);
+    int W  = img1.size(2);
+    int CH = img1.size(3);
+    if (CH != 3)
+        throw std::runtime_error("Image must be (B, H, W, 3)");
+
+    // Launch config
+    dim3 grid((W + BLOCK_X - 1) / BLOCK_X,
+              (H + BLOCK_Y - 1) / BLOCK_Y,
+              B);
+    dim3 block(BLOCK_X, BLOCK_Y);
+
+    // Output SSIM map
+    at::Tensor ssim = at::zeros({}, img1.options());
+
+    // Optionally allocate derivative Tensors
+    at::Tensor dm_dmu1       = train ? at::empty_like(img1) : at::empty({0}, img1.options());
+    at::Tensor dm_dsigma1_sq = train ? at::empty_like(img1) : at::empty({0}, img1.options());
+    at::Tensor dm_dsigma12   = train ? at::empty_like(img1) : at::empty({0}, img1.options());
+
+    (is_l1 ? fusedssimCUDA<true, true> : fusedssimCUDA<false, true>)<<<grid, block>>>(
+        B, H, W,
+        (float3*)img1.data_ptr<float>(),
+        (float3*)img2.data_ptr<float>(),
+        ssim.data_ptr<float>(),
+        ssim_loss_map_weight,
+        ssim_loss_map.data_ptr<float>(),
+        train ? (float3*)dm_dmu1.data_ptr<float>()       : nullptr,
+        train ? (float3*)dm_dsigma1_sq.data_ptr<float>() : nullptr,
+        train ? (float3*)dm_dsigma12.data_ptr<float>()   : nullptr
+    );
+
+    return std::make_tuple(ssim, dm_dmu1, dm_dsigma1_sq, dm_dsigma12);
 }
 
 // ------------------------------------------

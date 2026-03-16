@@ -50,7 +50,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
     typename SplatPrimitive::RenderOutput::Buffer v_render_output_buffer,
-    const float *__restrict__ v_render_alphas, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
     typename SplatPrimitive::RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     typename SplatPrimitive::Screen::Buffer v_splat_buffer,
@@ -66,7 +66,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     tile_offsets += image_id * tile_height * tile_width;
     render_Ts += image_id * image_height * image_width;
     last_ids += image_id * image_height * image_width;
-    v_render_alphas += image_id * image_height * image_width;
+    v_render_Ts += image_id * image_height * image_width;
     if (backgrounds != nullptr) {
         backgrounds += image_id;
     }
@@ -110,7 +110,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         pix_bin_final[pix_id_local] = bin_final;
         pix_Ts_with_grad[pix_id_local] = {
             (inside ? render_Ts[pix_id_global] : 0.0f),
-            (inside ? -v_render_alphas[pix_id_global] : 0.0f)
+            // (inside ? -v_render_alphas[pix_id_global] : 0.0f)
+            (inside ? v_render_Ts[pix_id_global] : 0.0f)
         };
 
         auto pix_id_image_global = image_id * image_height * image_width + pix_id_global;
@@ -331,7 +332,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
     typename SplatPrimitive::RenderOutput::Buffer v_render_output_buffer,
-    const float *__restrict__ v_render_alphas, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
     typename SplatPrimitive::RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     typename SplatPrimitive::Screen::Buffer v_splat_buffer,
@@ -353,7 +354,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
         image_width, image_height, tile_width, tile_height, tile_offsets,
         flatten_ids, render_Ts, last_ids,
         render_output_buffer, render2_output_buffer, loss_map_buffer,
-        v_render_output_buffer, v_render_alphas, v_distortions_output_buffer,
+        v_render_output_buffer, v_render_Ts, v_distortions_output_buffer,
         v_splat_buffer, vr_splat_buffer, h_splat_buffer
     );
 

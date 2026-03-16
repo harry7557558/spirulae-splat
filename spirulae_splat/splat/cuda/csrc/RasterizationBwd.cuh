@@ -35,7 +35,7 @@ Vanilla3DGS::Screen::TensorTuple rasterize_to_pixels_3dgs_bwd(
     const at::Tensor last_ids,      // [..., image_height, image_width]
     // gradients of outputs
     Vanilla3DGS::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts // [..., image_height, image_width, 1]
 );
 
 
@@ -62,7 +62,7 @@ std::tuple<
     std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     Vanilla3DGS::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<typename Vanilla3DGS::RenderOutput::TensorTuple> v_distortion_outputs
 );
 
@@ -83,7 +83,7 @@ MipSplatting::Screen::TensorTuple rasterize_to_pixels_mip_bwd(
     const at::Tensor last_ids,      // [..., image_height, image_width]
     // gradients of outputs
     MipSplatting::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts // [..., image_height, image_width, 1]
 );
 
 
@@ -110,6 +110,6 @@ std::tuple<
     std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     MipSplatting::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<typename MipSplatting::RenderOutput::TensorTuple> v_distortion_outputs
 );

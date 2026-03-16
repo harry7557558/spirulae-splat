@@ -53,6 +53,7 @@ def rasterize_to_pixels(
     absgrad: bool = False,
     output_distortion: bool = False,
     compute_hessian_diagonal: bool = False,
+    backward_info: Optional[dict] = None,
     **kwargs
 ) -> Tuple[Tensor, Tensor]:
     # TODO
@@ -83,10 +84,10 @@ def rasterize_to_pixels(
     additional_args = [kwargs['viewmats'], kwargs['intrins'], kwargs['camera_model'], kwargs['dist_coeffs']]
     if primitive in ["3dgs", "mip"]:
         _RasterizeToPixels = _RasterizeToPixels3DGS
-        additional_args = [primitive == "mip", compute_hessian_diagonal]
+        additional_args = [primitive == "mip", compute_hessian_diagonal, backward_info]
     if primitive in ["3dgut", "3dgut_sv"]:
         _RasterizeToPixels = _RasterizeToPixels3DGUT
-        additional_args += [output_distortion, compute_hessian_diagonal]
+        additional_args += [output_distortion, compute_hessian_diagonal, backward_info]
     elif primitive in ["opaque_triangle"]:
         _RasterizeToPixels = _RasterizeToPixelsOpaqueTriangle
     elif primitive in ["voxel"]:
@@ -104,26 +105,26 @@ def rasterize_to_pixels(
     )
 
     if primitive in ["3dgs", "mip"]:
-        render_rgbs, render_depths, render_alphas = render_outputs
-        return (render_rgbs, render_depths), render_alphas, {}
+        render_rgbs, render_depths, render_Ts = render_outputs
+        return (render_rgbs, render_depths), render_Ts, {}
     elif primitive in ["3dgut", "3dgut_sv"]:
         (
-            render_rgbs, render_depths, render_alphas,
+            render_rgbs, render_depths, render_Ts,
             distortion_rgbs, distortion_depths
         ) = render_outputs
         if output_distortion:
-            return (render_rgbs, render_depths), render_alphas, {
+            return (render_rgbs, render_depths), render_Ts, {
                 'rgb_distortion': distortion_rgbs,
                 'depth_distortion': distortion_depths,
             }
-        return (render_rgbs, render_depths), render_alphas, {}
+        return (render_rgbs, render_depths), render_Ts, {}
     elif primitive in ["opaque_triangle"]:
         (
-            render_rgbs, render_depths, render_normals, render_alphas,
+            render_rgbs, render_depths, render_normals, render_Ts,
             distortion_rgbs, distortion_depths, distortion_normals, max_blending
         ) = render_outputs
         return (
-            (render_rgbs, render_depths, render_normals), render_alphas,
+            (render_rgbs, render_depths, render_normals), render_Ts,
             {
                 'max_blending': max_blending,
                 'rgb_distortion': distortion_rgbs,
@@ -133,11 +134,11 @@ def rasterize_to_pixels(
         )
     elif primitive in ["voxel"]:
         (
-            render_rgbs, render_depths, render_alphas,
+            render_rgbs, render_depths, render_Ts,
             distortion_rgbs, distortion_depths, max_blending
         ) = render_outputs
         return (
-            (render_rgbs, render_depths), render_alphas,
+            (render_rgbs, render_depths), render_Ts,
             {
                 'max_blending': max_blending,
                 'rgb_distortion': distortion_rgbs,
@@ -166,7 +167,8 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
         isect_offsets: Tensor,  # [..., tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
         antialiased: bool,
-        compute_hessian_diagonal: bool = False
+        compute_hessian_diagonal: bool = False,
+        backward_info: Optional[dict] = None
     ) -> Tuple[Tensor, Tensor]:
         (render_rgbs, render_depths), render_Ts, last_ids = _make_lazy_cuda_func(
             f"rasterization_{['3dgs', 'mip'][antialiased]}_forward"
@@ -183,16 +185,18 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
         ctx.height = height
         ctx.antialiased = antialiased
         ctx.compute_hessian_diagonal = compute_hessian_diagonal
+        ctx.backward_info = backward_info
 
-        render_alphas = 1.0 - render_Ts
-        return render_rgbs, render_depths, render_alphas
+        # render_alphas = 1.0 - render_Ts
+        # return render_rgbs, render_depths, render_alphas
+        return render_rgbs, render_depths, render_Ts
 
     @staticmethod
     def backward(
         ctx,
         v_render_rgbs: Tensor,  # [..., H, W, 3]
         v_render_depths: Tensor,  # [..., H, W, 1]
-        v_render_alphas: Tensor,  # [..., H, W, 1]
+        v_render_Ts: Tensor,  # [..., H, W, 1]
     ):
         (
             means2d, depths, conics, colors, opacities, backgrounds, masks,
@@ -201,7 +205,8 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
         width = ctx.width
         height = ctx.height
         if ctx.compute_hessian_diagonal:
-            assert hasattr(v_render_rgbs, 'loss_map')
+            assert ctx.backward_info is not None
+            assert 'loss_map' in ctx.backward_info
 
         if ctx.compute_hessian_diagonal:
             v_splats, vr_splats, h_splats = _make_lazy_cuda_func(
@@ -210,11 +215,12 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
                 (means2d, depths, conics, opacities, colors, None), backgrounds, masks,
                 width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
                 None, None,
-                v_render_rgbs.loss_map if ctx.compute_hessian_diagonal else None,
+                ctx.backward_info['loss_map'] if ctx.compute_hessian_diagonal else None,
                 (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
-                v_render_alphas.contiguous(),
+                v_render_Ts.contiguous(),
                 None
             )
+            del ctx.backward_info['loss_map']
             v_means2d, v_depths, v_conics, v_opacities, v_colors, v_means2d_abs = v_splats
             for v, vr, h in zip(v_splats, vr_splats, h_splats):
                 v.gradr = vr
@@ -228,7 +234,7 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
                 (means2d, depths, conics, opacities, colors, None), backgrounds, masks,
                 width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
                 (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
-                v_render_alphas.contiguous(),
+                v_render_Ts.contiguous(),
             )
         if v_means2d_abs is not None:
             means2d.absgrad = v_means2d_abs
@@ -268,7 +274,8 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         camera_model: Literal["pinhole", "fisheye"],
         dist_coeffs: Optional[Tensor],
         output_distortion: bool = False,
-        compute_hessian_diagonal: bool = False
+        compute_hessian_diagonal: bool = False,
+        backward_info: Optional[dict] = None
     ) -> Tuple[Tensor, Tensor]:
 
         camera_model = camera_model.upper()
@@ -308,16 +315,18 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         ctx.camera_model = camera_model
         ctx.output_distortion = output_distortion
         ctx.compute_hessian_diagonal = compute_hessian_diagonal
+        ctx.backward_info = backward_info
 
-        render_alphas = 1.0 - render_Ts
-        return render_rgbs, render_depths, render_alphas, distortion_rgbs, distortion_depths
+        # render_alphas = 1.0 - render_Ts
+        # return render_rgbs, render_depths, render_alphas, distortion_rgbs, distortion_depths
+        return render_rgbs, render_depths, render_Ts, distortion_rgbs, distortion_depths
 
     @staticmethod
     def backward(
         ctx,
         v_render_rgbs: Tensor,  # [..., H, W, 3]
         v_render_depths: Tensor,  # [..., H, W, 1]
-        v_render_alphas: Tensor,  # [..., H, W, 1]
+        v_render_Ts: Tensor,  # [..., H, W, 1]
         v_distortion_rgbs: Tensor,  # [..., H, W, 3]
         v_distortion_depths: Tensor,  # [..., H, W, 1]
     ):
@@ -331,12 +340,9 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         width = ctx.width
         height = ctx.height
         if ctx.compute_hessian_diagonal:
-            assert hasattr(v_render_rgbs, 'loss_map')
+            assert ctx.backward_info is not None
+            assert 'loss_map' in ctx.backward_info
 
-        # print(v_render_rgbs.mean() * v_render_rgbs.numel(),
-        #       v_render_rgbs.loss_map.mean(),
-        #       torch.sqrt(torch.relu(v_render_rgbs.loss_map)).mean()
-        #     )
         cuda_return = _make_lazy_cuda_func("rasterization_3dgut_backward" + "_with_hessian_diagonal"*ctx.compute_hessian_diagonal)(
             (means, quats, depths, proj_scales, proj_opacities, colors),
             viewmats, intrins, ctx.camera_model, dist_coeffs,
@@ -344,12 +350,13 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
             width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
             (render_rgbs, render_depths) if ctx.output_distortion else None,
             (render2_rgbs, render2_depths) if ctx.output_distortion else None,
-            v_render_rgbs.loss_map if ctx.compute_hessian_diagonal else None,
+            ctx.backward_info['loss_map'] if ctx.compute_hessian_diagonal else None,
             (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
-            v_render_alphas.contiguous(),
+            v_render_Ts.contiguous(),
             (v_distortion_rgbs.contiguous(), v_distortion_depths.contiguous()) if ctx.output_distortion else None,
             ctx.needs_input_grad[13]
         )
+        del ctx.backward_info['loss_map']
 
         h_splats = None
         if ctx.compute_hessian_diagonal:
@@ -441,9 +448,10 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
         ctx.height = height
         ctx.camera_model = camera_model
 
-        render_alphas = 1.0 - render_Ts
+        # render_alphas = 1.0 - render_Ts
         return (
-            render_rgbs, render_depths, render_normals, render_alphas,
+            # render_rgbs, render_depths, render_normals, render_alphas,
+            render_rgbs, render_depths, render_normals, render_Ts,
             distortion_rgbs, distortion_depths, distortion_normals, max_blending
         )
 
@@ -453,7 +461,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
         v_render_rgbs: Tensor,  # [..., H, W, 3]
         v_render_depths: Tensor,  # [..., H, W, 1]
         v_render_normals: Tensor,  # [..., H, W, 3]
-        v_render_alphas: Tensor,  # [..., H, W, 1]
+        v_render_Ts: Tensor,  # [..., H, W, 1]
         v_distortion_rgbs: Tensor,  # [..., H, W, 3]
         v_distortion_depths: Tensor,  # [..., H, W, 1]
         v_distortion_normals: Tensor,  # [..., H, W, 3]
@@ -485,7 +493,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
             (render_rgbs, render_depths, render_normals),
             (render2_rgbs, render2_depths, render2_normals),
             (v_render_rgbs.contiguous(), v_render_depths.contiguous(), v_render_normals.contiguous()),
-            v_render_alphas.contiguous(),
+            v_render_Ts.contiguous(),
             (v_distortion_rgbs.contiguous(), v_distortion_depths.contiguous(), v_distortion_normals.contiguous()),
             # ctx.needs_input_grad[12]
         )
@@ -555,9 +563,10 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         ctx.height = height
         ctx.camera_model = camera_model
 
-        render_alphas = 1.0 - render_Ts
+        # render_alphas = 1.0 - render_Ts
         return (
-            render_rgbs, render_depths, render_alphas,
+            # render_rgbs, render_depths, render_alphas,
+            render_rgbs, render_depths, render_Ts,
             distortion_rgbs, distortion_depths, max_blending
         )
 
@@ -566,7 +575,7 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         ctx,
         v_render_rgbs: Tensor,  # [..., H, W, 3]
         v_render_depths: Tensor,  # [..., H, W, 1]
-        v_render_alphas: Tensor,  # [..., H, W, 1]
+        v_render_Ts: Tensor,  # [..., H, W, 1]
         v_distortion_rgbs: Tensor,  # [..., H, W, 3]
         v_distortion_depths: Tensor,  # [..., H, W, 1]
         v_max_blending = None
@@ -595,7 +604,7 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
             (render2_rgbs, render2_depths),
             None,
             (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
-            v_render_alphas.contiguous(),
+            v_render_Ts.contiguous(),
             (v_distortion_rgbs.contiguous(), v_distortion_depths.contiguous()),
             ctx.needs_input_grad[10]
         )

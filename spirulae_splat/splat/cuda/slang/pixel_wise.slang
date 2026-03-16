@@ -9,47 +9,47 @@
 
 [Differentiable]
 [CudaDeviceExport]
-float rendered_depth_to_expected_depth(float depth, float alpha) {
-    return depth / max(alpha, 1e-10f);
+float rendered_depth_to_expected_depth(float depth, float transmittance) {
+    return depth / max(1.0f - transmittance, 1e-10f);
 }
 
 [CudaDeviceExport]
 void rendered_depth_to_expected_depth_bwd(
-    float depth, float alpha,
+    float depth, float transmittance,
     float v_out_depth,
-    out float v_depth, out float v_alpha
+    out float v_depth, out float v_transmittance
 ) {
     var p_depth = diffPair(depth);
-    var p_alpha = diffPair(alpha);
+    var p_transmittance = diffPair(transmittance);
     bwd_diff(rendered_depth_to_expected_depth)(
-        p_depth, p_alpha,
+        p_depth, p_transmittance,
         v_out_depth
     );
     v_depth = p_depth.d;
-    v_alpha = p_alpha.d;
+    v_transmittance = p_transmittance.d;
 }
 
 [Differentiable]
 [CudaDeviceExport]
-float3 blend_background(float3 rgb, float alpha, float3 background) {
-    return clamp(rgb + (1.0 - alpha) * background, 0.0, 1.0);
+float3 blend_background(float3 rgb, float transmittance, float3 background) {
+    return clamp(rgb + transmittance * background, 0.0, 1.0);
 }
 
 [CudaDeviceExport]
 void blend_background_bwd(
-    float3 rgb, float alpha, float3 background,
+    float3 rgb, float transmittance, float3 background,
     float3 v_out_rgb,
-    out float3 v_rgb, out float v_alpha, out float3 v_background
+    out float3 v_rgb, out float v_transmittance, out float3 v_background
 ) {
     var p_rgb = diffPair(rgb);
-    var p_alpha = diffPair(alpha);
+    var p_transmittance = diffPair(transmittance);
     var p_background = diffPair(background);
     bwd_diff(blend_background)(
-        p_rgb, p_alpha, p_background,
+        p_rgb, p_transmittance, p_background,
         v_out_rgb
     );
     v_rgb = p_rgb.d;
-    v_alpha = p_alpha.d;
+    v_transmittance = p_transmittance.d;
     v_background = p_background.d;
 }
 

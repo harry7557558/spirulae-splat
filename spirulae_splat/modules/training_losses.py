@@ -54,22 +54,6 @@ from spirulae_splat.modules.lpips import LearnedPerceptualImagePatchSimilarity
 from nerfstudio.cameras.cameras import Cameras, CameraType
 
 
-class _BackwardMetadataInjector(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x):
-        ctx.meta = {}
-        def set_meta(key, meta):
-            nonlocal ctx
-            ctx.meta[key] = meta
-        return x, set_meta
-    @staticmethod
-    def backward(ctx, v_x, *kwargs):
-        for key, value in ctx.meta.items():
-            setattr(v_x, key, value)
-        del ctx.meta
-        return v_x
-
-
 class _MaskGradient(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, mask):
@@ -267,7 +251,7 @@ class _ComputePerPixelLosses(torch.autograd.Function):
         render_normal: Optional[torch.Tensor],
         depth_normal: Optional[torch.Tensor],
         ref_normal: Optional[torch.Tensor],
-        render_alpha: Optional[torch.Tensor],
+        render_Ts: Optional[torch.Tensor],
         rgb_dist: Optional[torch.Tensor],
         depth_dist: Optional[torch.Tensor],
         normal_dist: Optional[torch.Tensor],
@@ -294,7 +278,7 @@ class _ComputePerPixelLosses(torch.autograd.Function):
             render_normal,
             depth_normal,
             ref_normal,
-            render_alpha,
+            render_Ts,
             rgb_dist,
             depth_dist,
             normal_dist,
@@ -314,11 +298,12 @@ class _ComputePerPixelLosses(torch.autograd.Function):
         # print(raw_losses[0].detach().cpu().numpy().tolist())
         # print(raw_losses[1].detach().cpu().numpy().tolist())
 
-        ssim, ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = \
-            _make_lazy_cuda_func("fused_ssim_forward")(render_rgb, ref_rgb, True, return_loss_map, False)
-        if return_loss_map:
-            ssim_map *= loss_map_ssim_weight
-            loss_map.add_(ssim_map)
+        if loss_map is not None:
+            ssim, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = \
+                _make_lazy_cuda_func("fused_ssim_forward_inplace")(render_rgb, ref_rgb, True, loss_map_ssim_weight, loss_map, False)
+        else:
+            ssim, _, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = \
+                _make_lazy_cuda_func("fused_ssim_forward")(render_rgb, ref_rgb, True, False, False)
 
         ctx.weights = weights
         ctx.num_train_images = num_train_images
@@ -578,7 +563,7 @@ class SplatTrainingLosses(torch.nn.Module):
         pred_depth = outputs["depth"] if 'depth' in outputs else None
         pred_normal = outputs["normal"] if 'normal' in outputs else None
         pred_depth_normal = outputs["depth_normal"] if 'depth_normal' in outputs else None
-        pred_alpha = outputs["alpha"] if 'alpha' in outputs else None
+        pred_transmittance = outputs["transmittance"] if 'transmittance' in outputs else None
 
         gt_rgb, gt_depth, gt_normal, gt_alpha = None, None, None, None  # for loss
         gt_rgb_mask, gt_depth_mask, gt_normal_mask, gt_alpha_mask = None, None, None, None  # for masking
@@ -684,7 +669,7 @@ class SplatTrainingLosses(torch.nn.Module):
                 gt_alpha = gt_alpha & alpha if gt_alpha is not None else alpha
 
         # replace parts of background with random noise to discourage transparency
-        background = outputs["background"]
+        background = outputs["background"] if 'background' in outputs else pred_rgb
         if self.config.randomize_background == "opaque-only":
             background_mask = gt_rgb_mask
             if none_sky_mask is not None:
@@ -760,7 +745,7 @@ class SplatTrainingLosses(torch.nn.Module):
             pred_normal,
             pred_depth_normal,
             gt_normal,
-            pred_alpha,
+            pred_transmittance,
             outputs['rgb_distortion'] if 'rgb_distortion' in outputs else None,
             outputs['depth_distortion'] if 'depth_distortion' in outputs else None,
             outputs['normal_distortion'] if 'normal_distortion' in outputs else None,
@@ -863,8 +848,8 @@ class SplatTrainingLosses(torch.nn.Module):
             rgb_dist_reg, depth_dist_reg, normal_dist_reg
         ) = losses
         if loss_map is not None:
-            if 'backward_metadata_injector' in outputs:
-                outputs['backward_metadata_injector']("loss_map", loss_map)  # to be able to get it in backward
+            if 'backward_info' in outputs:
+                outputs['backward_info']['loss_map'] = loss_map  # to be able to get it in backward
         # if loss_map is not None and self.step % 100 == 0:
         #     import matplotlib.pyplot as plt
         #     plt.imshow(loss_map[0].detach().cpu().numpy())

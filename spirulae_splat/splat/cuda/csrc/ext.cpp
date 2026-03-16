@@ -69,6 +69,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("uint16_image_to_float", &uint16_image_to_float_tensor);
     m.def("rendered_depth_to_expected_depth_forward", &rendered_depth_to_expected_depth_forward_tensor);
     m.def("rendered_depth_to_expected_depth_backward", &rendered_depth_to_expected_depth_backward_tensor);
+    m.def("blend_background_noise_forward", &blend_background_noise_forward_tensor);
+    m.def("blend_background_noise_backward", &blend_background_noise_backward_tensor);
     m.def("blend_background_forward", &blend_background_forward_tensor);
     m.def("blend_background_backward", &blend_background_backward_tensor);
     m.def("linear_rgb_to_srgb_forward", &linear_rgb_to_srgb_forward_tensor);
@@ -87,6 +89,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // FusedSSIM.cuh
     m.def("fused_ssim_forward", &fused_ssim_forward);
     m.def("fused_ssim_backward", &fused_ssim_backward);
+    m.def("fused_ssim_forward_inplace", &fused_ssim_forward_inplace);
     m.def("fused_ssim_backward_inplace", &fused_ssim_backward_inplace);
 
     // SplatTileIntersector.cuh
@@ -178,6 +181,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fused_adamtr_linear_rgb_sh_optim", &fused_adamtr_linear_rgb_sh_optim);
 
     // Densify.cuh
+    m.def("inplace_index", &inplace_index_tensor);
     m.def("inplace_scatter_add", &inplace_scatter_add_tensor);
     m.def("inplace_scatter_max", &inplace_scatter_max_tensor);
     m.def("mcmc_add_noise", &mcmc_add_noise_tensor);

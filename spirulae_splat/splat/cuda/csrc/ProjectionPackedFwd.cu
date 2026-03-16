@@ -6,6 +6,8 @@
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;
 
+#include <cub/cub.cuh>
+
 
 template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
 void projection_packed_mask_kernel_wrapper(
@@ -94,7 +96,27 @@ inline std::tuple<
     #undef _LAUNCH_ARGS
 
     // prefix sum
+    #if 0
     at::Tensor intersection_mask_scan = at::cumsum(intersection_mask, -1);
+    #else
+    at::Tensor intersection_mask_scan = at::empty({B*C*N}, opt.dtype(at::kLong));
+    {
+        size_t temp_storage_bytes = 0;
+        cub::DeviceScan::InclusiveSum(
+            nullptr, temp_storage_bytes,
+            intersection_mask.data_ptr<bool>(),
+            intersection_mask_scan.data_ptr<int64_t>(),
+            B*C*N);
+
+        at::Tensor temp_storage = at::empty({(int64_t)temp_storage_bytes}, opt.dtype(at::kByte));
+
+        cub::DeviceScan::InclusiveSum(
+            temp_storage.data_ptr<uint8_t>(), temp_storage_bytes,
+            intersection_mask.data_ptr<bool>(),
+            intersection_mask_scan.data_ptr<int64_t>(),
+            B*C*N);
+    }
+    #endif
     int64_t nnz = intersection_mask_scan[-1].item<int64_t>();
 
     // projection

@@ -42,8 +42,13 @@ from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
 from spirulae_splat.strategy import DefaultStrategy, MCMCStrategy, OpaqueStrategy, SVRasterStrategy
 from spirulae_splat.splat._camera import _Camera
 
-from spirulae_splat.modules.training_losses import SplatTrainingLosses, _BackwardMetadataInjector
-from spirulae_splat.splat.cuda._wrapper_per_pixel import blend_background, linear_rgb_to_srgb, get_color_transform_matrix
+from spirulae_splat.modules.training_losses import SplatTrainingLosses
+from spirulae_splat.splat.cuda._wrapper_per_pixel import (
+    blend_background,
+    blend_background_noise,
+    linear_rgb_to_srgb,
+    get_color_transform_matrix
+)
 from spirulae_splat.splat.cuda import (
     svhash_create_initial_volume,
     svhash_get_voxels
@@ -826,31 +831,46 @@ class SpirulaeModel(Model):
             return resize_image(image, d)
         return image
 
-    def get_background_image(self, camera: Cameras, c2w: torch.Tensor, intrins: torch.Tensor,
-                             W: Optional[int] = None, H: Optional[int] = None, is_fisheye: Optional[bool] = None):
+    def blend_background(
+            self, camera: Cameras, c2w: torch.Tensor, intrins: torch.Tensor,
+            W: Optional[int] = None, H: Optional[int] = None, is_fisheye: Optional[bool] = None,
+            rgb: Optional[torch.Tensor] = None, transmittance: Optional[torch.Tensor] = None
+        ):
         if not isinstance(camera, Cameras):
-            print("Called get_background_image with not a camera")
+            print("Called blend_background with not a camera")
             return {}
 
         if W is None or H is None:
             W, H = int(camera.width[0].item()), int(camera.height[0].item())
         if is_fisheye is None:
             is_fisheye = (camera.camera_type[0].item() == CameraType.FISHEYE.value)
+        sh_degree = self.config.background_sh_degree
 
         if self.config.randomize_background == True:
             # return torch.rand_like(self.background_color).repeat(H, W, 1)
-            return torch.rand((len(camera), H, W, 3), device=self.background_color.device)
+            if rgb is None or transmittance is None:
+                return torch.rand((len(camera), H, W, 3), device=self.background_color.device)
+            return blend_background_noise(rgb, transmittance)
 
-        sh_degree = self.config.background_sh_degree
-        if not self.config.train_background_color or not (sh_degree > 0):
-            return self.background_color[None].repeat(len(camera), H, W, 1)
+        elif not self.config.train_background_color and self.config.background_color == "black":
+            if rgb is None or transmittance is None:
+                return torch.zeros((len(camera), H, W, 3), device=self.background_color.device)
+            return rgb.clip_(0.0, 1.0)
 
-        sh_coeffs = torch.cat((self.background_color.unsqueeze(0), self.background_sh), dim=0)  # [(deg+1)^2, 3]
-        return render_background_sh(
-            W, H,
-            "FISHEYE" if is_fisheye else "PINHOLE",
-            intrins, c2w[..., :3, :3], sh_degree, sh_coeffs
-        )
+        elif not self.config.train_background_color or not (sh_degree > 0):
+            background = self.background_color[None].repeat(len(camera), H, W, 1)
+
+        else:
+            sh_coeffs = torch.cat((self.background_color.unsqueeze(0), self.background_sh), dim=0)  # [(deg+1)^2, 3]
+            background = render_background_sh(
+                W, H,
+                "FISHEYE" if is_fisheye else "PINHOLE",
+                intrins, c2w[..., :3, :3], sh_degree, sh_coeffs
+            )
+
+        if rgb is None or transmittance is None:
+            return background
+        return blend_background(rgb, transmittance, background)
 
     @staticmethod
     def get_empty_outputs(width: int, height: int, background: torch.Tensor) -> Dict[str, Union[torch.Tensor, List]]:
@@ -1017,7 +1037,7 @@ class SpirulaeModel(Model):
                 self.training_losses.bil_grids_normal.grids.optimizer_offload = True
 
         use_bvh = self.config.use_bvh and self.training and not val
-        rgbd, alpha, meta = rasterization(
+        rgbd, Ts, meta = rasterization(
             self.config.primitive,
             splat_params,
             # "voxel",
@@ -1043,19 +1063,16 @@ class SpirulaeModel(Model):
             **kwargs,
         )
         # torch.cuda.empty_cache()
-        if self.config.compute_hessian_diagonal is not None:
-            rgbd = list(rgbd)
-            rgbd[0], backward_metadata_injector = _BackwardMetadataInjector.apply(rgbd[0])
         if self.config.supersampling != 1:
             rgbd = [resize_image(im, self.config.supersampling) for im in rgbd]
-            alpha = resize_image(alpha, self.config.supersampling)
+            Ts = resize_image(Ts, self.config.supersampling)
 
         # if not self.training:
         #     W = gw*TILE_SIZE
         #     H = gh*TILE_SIZE
-        #     # print(rgbd.shape, alpha.shape)
+        #     # print(rgbd.shape, Ts.shape)
         #     rgbd = [merge_tiles(comp) for comp in rgbd]
-        #     alpha = merge_tiles(alpha)
+        #     Ts = merge_tiles(Ts)
         #     for key in ['rgb_distortion', 'depth_distortion', 'normal_distortion']:
         #         if key in meta:
         #             meta[key] = merge_tiles(meta[key])
@@ -1068,7 +1085,7 @@ class SpirulaeModel(Model):
         # normals
         render_normal = None
         if len(rgbd) > 2:
-            render_normal = torch.where(alpha > 0.0, F.normalize(rgbd[2], dim=-1), rgbd[2])
+            render_normal = torch.where(Ts < 1.0, F.normalize(rgbd[2], dim=-1), rgbd[2])
 
         depth_normal = None
         if self.config.fit == "depth_normal" or not self.training:
@@ -1119,11 +1136,7 @@ class SpirulaeModel(Model):
 
         # blend with background
         if self.config.fit == "rgb":
-            background = self.get_background_image(camera, optimized_camera_to_world, intrins, W, H, is_fisheye)
-            # rgb = torch.clip(rgb + (1.0 - alpha) * background, 0.0, 1.0)
-            rgb = blend_background(rgb, alpha, background)
-        else:
-            background = torch.zeros_like(rgb)
+            rgb = self.blend_background(camera, optimized_camera_to_world, intrins, W, H, is_fisheye, rgb, Ts)
 
         # visualize PPISP for debugging
         if not self.training and False:
@@ -1137,15 +1150,13 @@ class SpirulaeModel(Model):
             "rgb": rgb,
         }
         if self.config.compute_hessian_diagonal is not None and self.training:
-            outputs["backward_metadata_injector"] = backward_metadata_injector
+            outputs["backward_info"] = meta['backward_info']
         if depth_im_ref is not None:
             outputs["depth"] = depth_im_ref
         if render_normal is not None:
             outputs["normal"] = render_normal
         if depth_normal is not None:
             outputs["depth_normal"] = depth_normal
-        outputs["alpha"] = alpha
-        outputs["background"] = background
 
         for key in ['rgb_distortion', 'depth_distortion', 'normal_distortion']:
             if key in meta:
@@ -1158,8 +1169,11 @@ class SpirulaeModel(Model):
                     outputs[key] = value
 
         if not self.training:
-            outputs["alpha"] = outputs["alpha"].reshape((H, W, 1)).repeat(1, 1, 3)
-            outputs["background"] = torch.clip(outputs["background"], min=0.0, max=1.0)
+            outputs["alpha"] = (1.0 - Ts).reshape((H, W, 1)).repeat(1, 1, 3)
+            background = self.blend_background(camera, optimized_camera_to_world, intrins, W, H, is_fisheye)
+            outputs["background"] = torch.clip(background, min=0.0, max=1.0)
+        else:
+            outputs["transmittance"] = Ts
 
         # convert linear depth to ray depth, for correct gl_z_buf_depth in Viser
         if not self.training:
@@ -1220,7 +1234,7 @@ class SpirulaeModel(Model):
             # param_to_vis = torch.tanh(1e8*param_to_vis).unsqueeze(-1).repeat(1, 3)
 
             param_to_vis = (param_to_vis - 0.5) / 0.28
-            rgbd, alpha, meta = rasterization(
+            rgbd, Ts, meta = rasterization(
                 self.config.primitive,
                 splat_params = (
                     self.means, self.quats, self.scales,

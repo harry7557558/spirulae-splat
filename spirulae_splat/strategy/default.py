@@ -68,7 +68,7 @@ class DefaultStrategy(Strategy):
         >>> strategy.check_sanity(params, optimizers)
         >>> strategy_state = strategy.initialize_state()
         >>> for step in range(1000):
-        ...     render_image, render_alpha, info = rasterization(...)
+        ...     render_image, render_Ts, info = rasterization(...)
         ...     strategy.step_pre_backward(params, optimizers, strategy_state, step, info)
         ...     loss = ...
         ...     loss.backward()

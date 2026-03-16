@@ -37,6 +37,6 @@ std::tuple<
     std::optional<typename OpaqueTriangle::RenderOutput::TensorTuple> render2_outputs,
     // gradients of outputs
     OpaqueTriangle::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<typename OpaqueTriangle::RenderOutput::TensorTuple> v_distortion_outputs
 );

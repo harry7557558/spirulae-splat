@@ -64,7 +64,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
     typename SplatPrimitive::RenderOutput::Buffer v_render_output_buffer,
-    const float *__restrict__ v_render_alphas, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
     typename SplatPrimitive::RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     typename SplatPrimitive::Screen::Buffer v_splat_buffer,
@@ -84,7 +84,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     tile_offsets += image_id * tile_height * tile_width;
     render_Ts += image_id * image_height * image_width;
     last_ids += image_id * image_height * image_width;
-    v_render_alphas += image_id * image_height * image_width;
+    v_render_Ts += image_id * image_height * image_width;
     if (backgrounds != nullptr) {
         backgrounds += image_id;
     }
@@ -145,7 +145,8 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     const int32_t bin_final = done ? last_ids[pix_id] : 0;
     float2 pix_Ts_with_grad = {
         (done ? render_Ts[pix_id_global] : 0.0f),
-        (done ? -v_render_alphas[pix_id_global] : 0.0f)
+        // (inside ? -v_render_alphas[pix_id_global] : 0.0f)
+        (inside ? v_render_Ts[pix_id_global] : 0.0f)
     };
     typename SplatPrimitive::RenderOutput v_pix_colors = (done ?
         SplatPrimitive::RenderOutput::load(v_render_output_buffer, pix_id_image_global)
@@ -430,7 +431,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     const at::Tensor *loss_map,           // [..., image_height, image_width, 1]
     // gradients of outputs
     typename SplatPrimitive::RenderOutput::Tensor v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     typename SplatPrimitive::RenderOutput::Tensor *v_distortion_outputs,
     // outputs
     typename SplatPrimitive::Screen::Tensor v_splats,
@@ -474,7 +475,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
             output_distortion ? render_outputs->buffer() : typename SplatPrimitive::RenderOutput::Buffer(), \
             output_distortion ? render2_outputs->buffer() : typename SplatPrimitive::RenderOutput::Buffer(), \
             output_hessian_diagonal ? loss_map->data_ptr<float>() : nullptr, \
-            v_render_outputs.buffer(), v_render_alphas.data_ptr<float>(), \
+            v_render_outputs.buffer(), v_render_Ts.data_ptr<float>(), \
             output_distortion ? v_distortion_outputs->buffer() : typename SplatPrimitive::RenderOutput::Buffer(), \
             v_splats.buffer(), vr_splats_buffer, h_splats_buffer, \
             v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr \
@@ -533,7 +534,7 @@ inline std::tuple<
     std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     typename SplatPrimitive::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<typename SplatPrimitive::RenderOutput::TensorTuple> v_distortion_outputs_tuple,
     bool need_viewmat_grad
 ) {
@@ -544,7 +545,7 @@ inline std::tuple<
     CHECK_INPUT(intrins);
     CHECK_INPUT(render_Ts);
     CHECK_INPUT(last_ids);
-    CHECK_INPUT(v_render_alphas);
+    CHECK_INPUT(v_render_Ts);
     if (backgrounds.has_value())
         CHECK_INPUT(backgrounds.value());
     if (masks.has_value())
@@ -582,7 +583,7 @@ inline std::tuple<
         output_distortion ? &render_outputs.value() : nullptr,
         output_distortion ? &render2_outputs.value() : nullptr,
         output_hessian_diagonal ? &loss_map.value() : nullptr,
-        v_render_outputs, v_render_alphas,
+        v_render_outputs, v_render_Ts,
         output_distortion ? &v_distortion_outputs.value() : nullptr,
         v_splats,
         output_hessian_diagonal ? &vr_splats.value() : nullptr,
@@ -627,7 +628,7 @@ inline std::tuple<
     std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     typename SplatPrimitive::RenderOutput::TensorTuple &v_render_outputs,
-    const at::Tensor &v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor &v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<typename SplatPrimitive::RenderOutput::TensorTuple> &v_distortion_outputs,
     bool need_viewmat_grad
 ) {
@@ -639,7 +640,7 @@ inline std::tuple<
         backgrounds, masks,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
-        v_render_outputs, v_render_alphas, v_distortion_outputs,
+        v_render_outputs, v_render_Ts, v_distortion_outputs,
         need_viewmat_grad
     );
     return std::make_tuple(v_splats, v_viewmat);

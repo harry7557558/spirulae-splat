@@ -273,7 +273,7 @@ class SplatModel:
 
         # render_fn: function(poses, intrinsics, W, H) -> (B, H, W, 3)
         def render_fn(poses, intrinsics, W, H):
-            rgbd, alpha, meta = rasterization(
+            rgbd, Ts, meta = rasterization(
                 self.primitive,
                 (self.means, F.normalize(self.quats, dim=-1), self.scales, self.opacities,
                     self.features_dc, self.features_sh)
@@ -299,7 +299,7 @@ class SplatModel:
                 # render_mode="RGB+ED+N",
                 **kwargs,
             )
-            return rgbd, alpha, meta
+            return rgbd, 1.0-Ts, meta
 
         if ssplat_camera.model == "EQUIRECTANGULAR":
             from spirulae_splat.viewer.render_equirectangular import render_equirectangular

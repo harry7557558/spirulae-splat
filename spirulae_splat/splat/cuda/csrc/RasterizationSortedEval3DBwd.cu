@@ -90,7 +90,7 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
     typename SplatPrimitive::RenderOutput::Buffer render2_output_buffer,
     // grad outputs
     typename SplatPrimitive::RenderOutput::Buffer v_render_output_buffer,
-    const float *__restrict__ v_render_alphas, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
     typename SplatPrimitive::RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     typename SplatPrimitive::Screen::Buffer v_splat_buffer
@@ -104,7 +104,7 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
     tile_offsets += image_id * tile_height * tile_width;
     render_Ts += image_id * image_height * image_width;
     last_ids += image_id * image_height * image_width;
-    v_render_alphas += image_id * image_height * image_width;
+    v_render_Ts += image_id * image_height * image_width;
     if (backgrounds != nullptr) {
         backgrounds += image_id;
     }
@@ -147,7 +147,8 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
 
     float2 pix_Ts_with_grad = {
         (inside ? render_Ts[pix_id_global] : 0.0f),
-        (inside ? -v_render_alphas[pix_id_global] : 0.0f)
+        // (inside ? -v_render_alphas[pix_id_global] : 0.0f)
+        (inside ? v_render_Ts[pix_id_global] : 0.0f)
     };
     typename SplatPrimitive::RenderOutput v_pix_colors = (inside ?
             SplatPrimitive::RenderOutput::load(v_render_output_buffer, pix_id_image_global)
@@ -331,7 +332,7 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_bwd_kernel(
     typename SplatPrimitive::RenderOutput::Tensor *render2_outputs,
     // gradients of outputs
     typename SplatPrimitive::RenderOutput::Tensor v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     typename SplatPrimitive::RenderOutput::Tensor *v_distortion_outputs,
     // outputs
     typename SplatPrimitive::Screen::Tensor v_splats
@@ -363,7 +364,7 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_bwd_kernel(
             render_Ts.data_ptr<float>(), last_ids.data_ptr<int32_t>(), \
             output_distortion ? render_outputs->buffer() : typename SplatPrimitive::RenderOutput::Buffer(), \
             output_distortion ? render2_outputs->buffer() : typename SplatPrimitive::RenderOutput::Buffer(), \
-            v_render_outputs.buffer(), v_render_alphas.data_ptr<float>(), \
+            v_render_outputs.buffer(), v_render_Ts.data_ptr<float>(), \
             output_distortion ? v_distortion_outputs->buffer() : typename SplatPrimitive::RenderOutput::Buffer(), \
             v_splats.buffer() \
         )
@@ -407,7 +408,7 @@ inline std::tuple<
     std::optional<typename SplatPrimitive::RenderOutput::TensorTuple> render2_outputs_tuple,
     // gradients of outputs
     typename SplatPrimitive::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<typename SplatPrimitive::RenderOutput::TensorTuple> v_distortion_outputs_tuple
 ) {
     DEVICE_GUARD(tile_offsets);
@@ -417,7 +418,7 @@ inline std::tuple<
     CHECK_INPUT(intrins);
     CHECK_INPUT(render_Ts);
     CHECK_INPUT(last_ids);
-    CHECK_INPUT(v_render_alphas);
+    CHECK_INPUT(v_render_Ts);
     if (backgrounds.has_value())
         CHECK_INPUT(backgrounds.value());
 
@@ -443,7 +444,7 @@ inline std::tuple<
         render_Ts, last_ids,
         output_distortion ? &render_outputs.value() : nullptr,
         output_distortion ? &render2_outputs.value() : nullptr,
-        v_render_outputs, v_render_alphas,
+        v_render_outputs, v_render_Ts,
         output_distortion ? &v_distortion_outputs.value() : nullptr,
         v_splats
     );
@@ -476,7 +477,7 @@ std::tuple<
     std::optional<typename OpaqueTriangle::RenderOutput::TensorTuple> render2_outputs,
     // gradients of outputs
     OpaqueTriangle::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<typename OpaqueTriangle::RenderOutput::TensorTuple> v_distortion_outputs
 ) {
     return rasterize_to_pixels_sorted_eval3d_bwd_tensor<OpaqueTriangle, true>(
@@ -485,6 +486,6 @@ std::tuple<
         backgrounds,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs,
-        v_render_outputs, v_render_alphas, v_distortion_outputs
+        v_render_outputs, v_render_Ts, v_distortion_outputs
     );
 }

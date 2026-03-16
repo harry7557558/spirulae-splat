@@ -103,7 +103,7 @@ float[RawLossIndex::length] per_pixel_losses(
     float3 render_normal,
     float3 depth_normal,
     float3 ref_normal,
-    float render_alpha,
+    float render_Ts,
     float3 rgb_dist,
     float depth_dist,
     float3 normal_dist,
@@ -149,7 +149,7 @@ float[RawLossIndex::length] per_pixel_losses(
         float(render_normal_mask & depth_normal_mask) * normal_loss(render_normal, depth_normal);
 
     // Alpha - loss with mask + regularization to go to 0 or 1
-    render_alpha = clamp(render_alpha, 0.0f, 1.0f);
+    float render_alpha = clamp(1.0f-render_Ts, 0.0f, 1.0f);
     losses[RawLossIndex::AlphaSup] = weights[LossWeightIndex::AlphaSup] *
         float(alpha_mask) * alpha_loss(render_alpha, float(ref_alpha));
     losses[RawLossIndex::AlphaSupUnder] = weights[LossWeightIndex::AlphaSupUnder] *
@@ -186,7 +186,7 @@ void per_pixel_losses_bwd(
     float3 render_normal,
     float3 depth_normal,
     float3 ref_normal,
-    float render_alpha,
+    float render_Ts,
     float3 rgb_dist,
     float depth_dist,
     float3 normal_dist,
@@ -204,7 +204,7 @@ void per_pixel_losses_bwd(
     out float3 v_render_normal,
     out float3 v_depth_normal,
     out float3 v_ref_normal,
-    out float v_render_alpha,
+    out float v_render_Ts,
     out float3 v_rgb_dist,
     out float v_depth_dist,
     out float3 v_normal_dist
@@ -216,7 +216,7 @@ void per_pixel_losses_bwd(
     DifferentialPair<float3> dp_render_normal = diffPair(render_normal);
     DifferentialPair<float3> dp_depth_normal = diffPair(depth_normal);
     DifferentialPair<float3> dp_ref_normal = diffPair(ref_normal);
-    DifferentialPair<float> dp_render_alpha = diffPair(render_alpha);
+    DifferentialPair<float> dp_render_Ts = diffPair(render_Ts);
     DifferentialPair<float3> dp_rgb_dist = diffPair(rgb_dist);
     DifferentialPair<float> dp_depth_dist = diffPair(depth_dist);
     DifferentialPair<float3> dp_normal_dist = diffPair(normal_dist);
@@ -228,7 +228,7 @@ void per_pixel_losses_bwd(
         dp_render_normal,
         dp_depth_normal,
         dp_ref_normal,
-        dp_render_alpha,
+        dp_render_Ts,
         dp_rgb_dist,
         dp_depth_dist,
         dp_normal_dist,
@@ -247,7 +247,7 @@ void per_pixel_losses_bwd(
     v_render_normal = dp_render_normal.d;
     v_depth_normal = dp_depth_normal.d;
     v_ref_normal = dp_ref_normal.d;
-    v_render_alpha = dp_render_alpha.d;
+    v_render_Ts = dp_render_Ts.d;
     v_rgb_dist = dp_rgb_dist.d;
     v_depth_dist = dp_depth_dist.d;
     v_normal_dist = dp_normal_dist.d;

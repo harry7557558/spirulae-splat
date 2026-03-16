@@ -64,7 +64,7 @@ __global__ void per_pixel_losses_forward_kernel(
     const float3* __restrict__ render_normal,
     const float3* __restrict__ depth_normal,
     const float3* __restrict__ ref_normal,
-    const float* __restrict__ render_alpha,
+    const float* __restrict__ render_Ts,
     const float3* __restrict__ rgb_dist,
     const float* __restrict__ depth_dist,
     const float3* __restrict__ normal_dist,
@@ -95,7 +95,7 @@ __global__ void per_pixel_losses_forward_kernel(
             render_normal ? render_normal[idx] : make_float3(0),
             depth_normal ? depth_normal[idx] : make_float3(0),
             ref_normal ? ref_normal[idx] : make_float3(0),
-            render_alpha ? render_alpha[idx] : 0.f,
+            render_Ts ? render_Ts[idx] : 1.f,
             rgb_dist ? rgb_dist[idx] : make_float3(0),
             depth_dist ? depth_dist[idx] : 0.f,
             normal_dist ? normal_dist[idx] : make_float3(0),
@@ -164,7 +164,7 @@ __global__ void per_pixel_losses_backward_kernel(
     const float3* __restrict__ render_normal,
     const float3* __restrict__ depth_normal,
     const float3* __restrict__ ref_normal,
-    const float* __restrict__ render_alpha,
+    const float* __restrict__ render_Ts,
     const float3* __restrict__ rgb_dist,
     const float* __restrict__ depth_dist,
     const float3* __restrict__ normal_dist,
@@ -182,7 +182,7 @@ __global__ void per_pixel_losses_backward_kernel(
     float3* __restrict__ v_render_normal,
     float3* __restrict__ v_depth_normal,
     float3* __restrict__ v_ref_normal,
-    float* __restrict__ v_render_alpha,
+    float* __restrict__ v_render_Ts,
     float3* __restrict__ v_rgb_dist,
     float* __restrict__ v_depth_dist,
     float3* __restrict__ v_normal_dist
@@ -216,7 +216,7 @@ __global__ void per_pixel_losses_backward_kernel(
     float3 temp_v_render_normal;
     float3 temp_v_depth_normal;
     float3 temp_v_ref_normal;
-    float temp_v_render_alpha;
+    float temp_v_render_Ts;
     float3 temp_v_rgb_dist;
     float temp_v_depth_dist;
     float3 temp_v_normal_dist;
@@ -229,7 +229,7 @@ __global__ void per_pixel_losses_backward_kernel(
         render_normal ? render_normal[idx] : make_float3(0),
         depth_normal ? depth_normal[idx] : make_float3(0),
         ref_normal ? ref_normal[idx] : make_float3(0),
-        render_alpha ? render_alpha[idx] : 0.f,
+        render_Ts ? render_Ts[idx] : 1.f,
         rgb_dist ? rgb_dist[idx] : make_float3(0),
         depth_dist ? depth_dist[idx] : 0.f,
         normal_dist ? normal_dist[idx] : make_float3(0),
@@ -247,7 +247,7 @@ __global__ void per_pixel_losses_backward_kernel(
         &temp_v_render_normal,
         &temp_v_depth_normal,
         &temp_v_ref_normal,
-        &temp_v_render_alpha,
+        &temp_v_render_Ts,
         &temp_v_rgb_dist,
         &temp_v_depth_dist,
         &temp_v_normal_dist
@@ -260,7 +260,7 @@ __global__ void per_pixel_losses_backward_kernel(
     if (v_render_normal) v_render_normal[idx] = temp_v_render_normal;
     if (v_depth_normal) v_depth_normal[idx] = temp_v_depth_normal;
     if (v_ref_normal) v_ref_normal[idx] = temp_v_ref_normal;
-    if (v_render_alpha) v_render_alpha[idx] = temp_v_render_alpha;
+    if (v_render_Ts) v_render_Ts[idx] = temp_v_render_Ts;
     if (v_rgb_dist) v_rgb_dist[idx] = temp_v_rgb_dist;
     if (v_depth_dist) v_depth_dist[idx] = temp_v_depth_dist;
     if (v_normal_dist) v_normal_dist[idx] = temp_v_normal_dist;
@@ -343,7 +343,7 @@ compute_per_pixel_losses_forward_tensor(
     std::optional<at::Tensor> render_normal,
     std::optional<at::Tensor> depth_normal,
     std::optional<at::Tensor> ref_normal,
-    std::optional<at::Tensor> render_alpha,
+    std::optional<at::Tensor> render_Ts,
     std::optional<at::Tensor> rgb_dist,
     std::optional<at::Tensor> depth_dist,
     std::optional<at::Tensor> normal_dist,
@@ -384,7 +384,7 @@ compute_per_pixel_losses_forward_tensor(
     check_float("render_normal", render_normal, 3);
     check_float("depth_normal", depth_normal, 3);
     check_float("ref_normal", ref_normal, 3);
-    check_float("render_alpha", render_alpha, 1);
+    check_float("render_Ts", render_Ts, 1);
     check_float("rgb_dist", rgb_dist, 3);
     check_float("depth_dist", depth_dist, 1);
     check_float("normal_dist", normal_dist, 3);
@@ -419,7 +419,7 @@ compute_per_pixel_losses_forward_tensor(
         render_normal.has_value() ? (float3*)render_normal.value().contiguous().data_ptr<float>() : nullptr,
         depth_normal.has_value() ? (float3*)depth_normal.value().contiguous().data_ptr<float>() : nullptr,
         ref_normal.has_value() ? (float3*)ref_normal.value().contiguous().data_ptr<float>() : nullptr,
-        render_alpha.has_value() ? (float*)render_alpha.value().contiguous().data_ptr<float>() : nullptr,
+        render_Ts.has_value() ? (float*)render_Ts.value().contiguous().data_ptr<float>() : nullptr,
         rgb_dist.has_value() ? (float3*)rgb_dist.value().contiguous().data_ptr<float>() : nullptr,
         depth_dist.has_value() ? (float*)depth_dist.value().contiguous().data_ptr<float>() : nullptr,
         normal_dist.has_value() ? (float3*)normal_dist.value().contiguous().data_ptr<float>() : nullptr,
@@ -456,7 +456,7 @@ std::tuple<
     std::optional<at::Tensor>, // render_normal
     std::optional<at::Tensor>, // depth_normal
     std::optional<at::Tensor>, // ref_normal
-    std::optional<at::Tensor>, // render_alpha
+    std::optional<at::Tensor>, // render_Ts
     std::optional<at::Tensor>, // rgb_dist
     std::optional<at::Tensor>, // depth_dist
     std::optional<at::Tensor> // normal_dist
@@ -468,7 +468,7 @@ std::tuple<
     std::optional<at::Tensor> render_normal,
     std::optional<at::Tensor> depth_normal,
     std::optional<at::Tensor> ref_normal,
-    std::optional<at::Tensor> render_alpha,
+    std::optional<at::Tensor> render_Ts,
     std::optional<at::Tensor> rgb_dist,
     std::optional<at::Tensor> depth_dist,
     std::optional<at::Tensor> normal_dist,
@@ -494,7 +494,7 @@ std::tuple<
     std::optional<at::Tensor> v_render_normal = needs_input_grad[4] && render_normal.has_value() ? (std::optional<at::Tensor>)at::empty_like(render_normal.value()) : std::nullopt;
     std::optional<at::Tensor> v_depth_normal = needs_input_grad[5] && depth_normal.has_value() ? (std::optional<at::Tensor>)at::empty_like(depth_normal.value()) : std::nullopt;
     std::optional<at::Tensor> v_ref_normal = needs_input_grad[6] && ref_normal.has_value() ? (std::optional<at::Tensor>)at::empty_like(ref_normal.value()) : std::nullopt;
-    std::optional<at::Tensor> v_render_alpha = needs_input_grad[7] && render_alpha.has_value() ? (std::optional<at::Tensor>)at::empty_like(render_alpha.value()) : std::nullopt;
+    std::optional<at::Tensor> v_render_Ts = needs_input_grad[7] && render_Ts.has_value() ? (std::optional<at::Tensor>)at::empty_like(render_Ts.value()) : std::nullopt;
     std::optional<at::Tensor> v_rgb_dist = needs_input_grad[8] && rgb_dist.has_value() ? (std::optional<at::Tensor>)at::empty_like(rgb_dist.value()) : std::nullopt;
     std::optional<at::Tensor> v_depth_dist = needs_input_grad[9] && depth_dist.has_value() ? (std::optional<at::Tensor>)at::empty_like(depth_dist.value()) : std::nullopt;
     std::optional<at::Tensor> v_normal_dist = needs_input_grad[10] && normal_dist.has_value() ? (std::optional<at::Tensor>)at::empty_like(normal_dist.value()) : std::nullopt;
@@ -525,7 +525,7 @@ std::tuple<
         render_normal.has_value() ? (float3*)render_normal.value().contiguous().data_ptr<float>() : nullptr,
         depth_normal.has_value() ? (float3*)depth_normal.value().contiguous().data_ptr<float>() : nullptr,
         ref_normal.has_value() ? (float3*)ref_normal.value().contiguous().data_ptr<float>() : nullptr,
-        render_alpha.has_value() ? (float*)render_alpha.value().contiguous().data_ptr<float>() : nullptr,
+        render_Ts.has_value() ? (float*)render_Ts.value().contiguous().data_ptr<float>() : nullptr,
         rgb_dist.has_value() ? (float3*)rgb_dist.value().contiguous().data_ptr<float>() : nullptr,
         depth_dist.has_value() ? (float*)depth_dist.value().contiguous().data_ptr<float>() : nullptr,
         normal_dist.has_value() ? (float3*)normal_dist.value().contiguous().data_ptr<float>() : nullptr,
@@ -543,7 +543,7 @@ std::tuple<
         v_render_normal.has_value() ? (float3*)v_render_normal.value().contiguous().data_ptr<float>() : nullptr,
         v_depth_normal.has_value() ? (float3*)v_depth_normal.value().contiguous().data_ptr<float>() : nullptr,
         v_ref_normal.has_value() ? (float3*)v_ref_normal.value().contiguous().data_ptr<float>() : nullptr,
-        v_render_alpha.has_value() ? (float*)v_render_alpha.value().contiguous().data_ptr<float>() : nullptr,
+        v_render_Ts.has_value() ? (float*)v_render_Ts.value().contiguous().data_ptr<float>() : nullptr,
         v_rgb_dist.has_value() ? (float3*)v_rgb_dist.value().contiguous().data_ptr<float>() : nullptr,
         v_depth_dist.has_value() ? (float*)v_depth_dist.value().contiguous().data_ptr<float>() : nullptr,
         v_normal_dist.has_value() ? (float3*)v_normal_dist.value().contiguous().data_ptr<float>() : nullptr
@@ -562,7 +562,7 @@ std::tuple<
         v_render_normal,
         v_depth_normal,
         v_ref_normal,
-        v_render_alpha,
+        v_render_Ts,
         v_rgb_dist,
         v_depth_dist,
         v_normal_dist

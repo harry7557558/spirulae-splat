@@ -12,6 +12,47 @@ namespace SlangDensify {
 
 
 // ================
+// Indexing
+// ================
+
+__global__ void index_kernel(
+    size_t numel,
+    size_t stride,
+    int32_t* __restrict__ indices,
+    float* __restrict__ src,
+    float* __restrict__ dst
+) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= numel)
+        return;
+
+    size_t bidx = indices[idx / stride] * stride + idx % stride;
+    dst[idx] = src[bidx];
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void inplace_index_tensor(
+    at::Tensor indices,
+    at::Tensor src,
+    at::Tensor dst
+) {
+    DEVICE_GUARD(indices);
+    CHECK_INPUT(indices);
+    CHECK_INPUT(src);
+    CHECK_INPUT(dst);
+
+    index_kernel<<<_LAUNCH_ARGS_1D(dst.numel(), 256)>>>(
+        dst.numel(),
+        dst.numel() / indices.numel(),
+        indices.data_ptr<int32_t>(),
+        src.data_ptr<float>(),
+        dst.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+// ================
 // Scatter Reduce
 // ================
 

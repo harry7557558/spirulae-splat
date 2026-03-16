@@ -121,7 +121,7 @@ at::Tensor uint16_image_to_float_tensor(
 
 __global__ void rendered_depth_to_expected_depth_forward_kernel(
     const TensorView<float, 4> in_depth,
-    const TensorView<float, 4> in_alpha,
+    const TensorView<float, 4> in_transmittance,
     TensorView<float, 4> out_depth,
     float* __restrict__ max_out_depth
 ) {
@@ -138,9 +138,9 @@ __global__ void rendered_depth_to_expected_depth_forward_kernel(
         unsigned x = gid % W;
 
         depth = in_depth.load1(bid, y, x);
-        float alpha = in_alpha.load1(bid, y, x);
+        float transmittance = in_transmittance.load1(bid, y, x);
 
-        depth = SlangPixelWise::rendered_depth_to_expected_depth(depth, alpha);
+        depth = SlangPixelWise::rendered_depth_to_expected_depth(depth, transmittance);
 
         out_depth.store1(bid, y, x, depth);
     }
@@ -154,7 +154,7 @@ __global__ void rendered_depth_to_expected_depth_forward_kernel(
 }
 
 __global__ void rendered_depth_to_expected_depth_filter_kernel(
-    const TensorView<float, 4> in_alpha,
+    const TensorView<float, 4> in_transmittance,
     TensorView<float, 4> depth,
     const float* __restrict__ max_out_depth
 ) {
@@ -166,20 +166,20 @@ __global__ void rendered_depth_to_expected_depth_filter_kernel(
     unsigned y = gid / W;
     unsigned x = gid % W;
 
-    float alpha = in_alpha.load1(bid, y, x);
-    if (alpha == 0.0f) {
+    float transmittance = in_transmittance.load1(bid, y, x);
+    if (transmittance == 1.0f) {
         depth.store1(bid, y, x, max_out_depth[bid]);
     }
-    // note that in backward, alpha=0 automatically leads to zero output gradient
+    // note that in backward, transmittance=1 automatically leads to zero output gradient
 }
 
 
 __global__ void rendered_depth_to_expected_depth_backward_kernel(
     const TensorView<float, 4> in_depth,
-    const TensorView<float, 4> in_alpha,
+    const TensorView<float, 4> in_transmittance,
     const TensorView<float, 4> v_out_depth,
     TensorView<float, 4> v_in_depth,
-    TensorView<float, 4> v_in_alpha
+    TensorView<float, 4> v_in_transmittance
 ) {
     unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
     unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
@@ -190,48 +190,48 @@ __global__ void rendered_depth_to_expected_depth_backward_kernel(
     unsigned x = gid % W;
 
     float depth = in_depth.load1(bid, y, x);
-    float alpha = in_alpha.load1(bid, y, x);
+    float transmittance = in_transmittance.load1(bid, y, x);
 
     float v_out = v_out_depth.load1(bid, y, x);
 
-    float v_depth, v_alpha;
+    float v_depth, v_transmittance;
     SlangPixelWise::rendered_depth_to_expected_depth_bwd(
-        depth, alpha,
+        depth, transmittance,
         v_out,
-        &v_depth, &v_alpha
+        &v_depth, &v_transmittance
     );
 
     v_in_depth.store1(bid, y, x, v_depth);
-    v_in_alpha.store1(bid, y, x, v_alpha);
+    v_in_transmittance.store1(bid, y, x, v_transmittance);
 }
 
 
 /*[AutoHeaderGeneratorExport]*/
 at::Tensor rendered_depth_to_expected_depth_forward_tensor(
     at::Tensor &depth,  // [B, H, W, 1]
-    at::Tensor &alpha  // [B, H, W, 1]
+    at::Tensor &transmittance  // [B, H, W, 1]
 ) {
     DEVICE_GUARD(depth);
     CHECK_CUDA(depth);
-    CHECK_CUDA(alpha);
+    CHECK_CUDA(transmittance);
 
     if (depth.ndimension() != 4 || depth.size(-1) != 1)
         AT_ERROR("depth shape must be (b, h, w, 1)");
     long b = depth.size(0), h = depth.size(1), w = depth.size(2);
-    if (alpha.ndimension() != 4 || alpha.size(0) != b || alpha.size(1) != h || alpha.size(2) != w || alpha.size(3) != 1)
-        AT_ERROR("alpha shape must be (b, h, w, 1)");
+    if (transmittance.ndimension() != 4 || transmittance.size(0) != b || transmittance.size(1) != h || transmittance.size(2) != w || transmittance.size(3) != 1)
+        AT_ERROR("transmittance shape must be (b, h, w, 1)");
 
     at::Tensor out_depth = at::empty_like(depth);
     at::Tensor max_depth = at::zeros({b,}, depth.options());
 
     rendered_depth_to_expected_depth_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<float, 4>(depth), tensor2view<float, 4>(alpha),
+        tensor2view<float, 4>(depth), tensor2view<float, 4>(transmittance),
         tensor2view<float, 4>(out_depth), max_depth.data_ptr<float>()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     rendered_depth_to_expected_depth_filter_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<float, 4>(alpha),
+        tensor2view<float, 4>(transmittance),
         tensor2view<float, 4>(out_depth),
         max_depth.data_ptr<float>()
     );
@@ -245,27 +245,27 @@ at::Tensor rendered_depth_to_expected_depth_forward_tensor(
 std::tuple<at::Tensor, at::Tensor>
 rendered_depth_to_expected_depth_backward_tensor(
     at::Tensor &depth,  // [B, H, W, 1]
-    at::Tensor &alpha,  // [B, H, W, 1]
+    at::Tensor &transmittance,  // [B, H, W, 1]
     at::Tensor &v_out_depth  // [B, H, W, 1]
 ) {
     DEVICE_GUARD(depth);
     CHECK_CUDA(depth);
-    CHECK_CUDA(alpha);
+    CHECK_CUDA(transmittance);
     CHECK_CUDA(v_out_depth);
 
     long b = depth.size(0), h = depth.size(1), w = depth.size(2);
 
     at::Tensor v_depth = at::empty_like(depth);
-    at::Tensor v_alpha = at::empty_like(alpha);
+    at::Tensor v_transmittance = at::empty_like(transmittance);
 
     rendered_depth_to_expected_depth_backward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<float, 4>(depth), tensor2view<float, 4>(alpha),
+        tensor2view<float, 4>(depth), tensor2view<float, 4>(transmittance),
         tensor2view<float, 4>(v_out_depth),
-        tensor2view<float, 4>(v_depth), tensor2view<float, 4>(v_alpha)
+        tensor2view<float, 4>(v_depth), tensor2view<float, 4>(v_transmittance)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    return std::make_tuple(v_depth, v_alpha);
+    return std::make_tuple(v_depth, v_transmittance);
 }
 
 
@@ -276,7 +276,7 @@ rendered_depth_to_expected_depth_backward_tensor(
 
 __global__ void blend_background_forward_kernel(
     const TensorView<float, 4> in_rgb,
-    const TensorView<float, 4> in_alpha,
+    const TensorView<float, 4> in_transmittance,
     const TensorView<float, 4> in_background,
     TensorView<float, 4> out_rgb
 ) {
@@ -289,22 +289,21 @@ __global__ void blend_background_forward_kernel(
     unsigned x = gid % W;
 
     float3 rgb = in_rgb.load3(bid, y, x);
-    float alpha = in_alpha.load1(bid, y, x);
+    float transmittance = in_transmittance.load1(bid, y, x);
     float3 background = in_background.load3(bid, y, x);
 
-    rgb = SlangPixelWise::blend_background(rgb, alpha, background);
+    rgb = SlangPixelWise::blend_background(rgb, transmittance, background);
 
     out_rgb.store3(bid, y, x, rgb);
 }
 
-
 __global__ void blend_background_backward_kernel(
     const TensorView<float, 4> in_rgb,
-    const TensorView<float, 4> in_alpha,
+    const TensorView<float, 4> in_transmittance,
     const TensorView<float, 4> in_background,
     const TensorView<float, 4> v_out_rgb,
     TensorView<float, 4> v_in_rgb,
-    TensorView<float, 4> v_in_alpha,
+    TensorView<float, 4> v_in_transmittance,
     TensorView<float, 4> v_in_background
 ) {
     unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -316,49 +315,47 @@ __global__ void blend_background_backward_kernel(
     unsigned x = gid % W;
 
     float3 rgb = in_rgb.load3(bid, y, x);
-    float alpha = in_alpha.load1(bid, y, x);
+    float transmittance = in_transmittance.load1(bid, y, x);
     float3 background = in_background.load3(bid, y, x);
 
     float3 v_out = v_out_rgb.load3(bid, y, x);
 
-    float3 v_rgb; float v_alpha; float3 v_background;
+    float3 v_rgb; float v_transmittance; float3 v_background;
     SlangPixelWise::blend_background_bwd(
-        rgb, alpha, background,
+        rgb, transmittance, background,
         v_out,
-        &v_rgb, &v_alpha, &v_background
+        &v_rgb, &v_transmittance, &v_background
     );
 
     v_in_rgb.store3(bid, y, x, v_rgb);
-    v_in_alpha.store1(bid, y, x, v_alpha);
+    v_in_transmittance.store1(bid, y, x, v_transmittance);
     v_in_background.store3(bid, y, x, v_background);
 
 }
 
-
-
 /*[AutoHeaderGeneratorExport]*/
 at::Tensor blend_background_forward_tensor(
     at::Tensor &rgb,  // [B, H, W, 3]
-    at::Tensor &alpha,  // [B, H, W, 1]
+    at::Tensor &transmittance,  // [B, H, W, 1]
     at::Tensor &background  // [B, H, W, 3]
 ) {
     DEVICE_GUARD(rgb);
     CHECK_CUDA(rgb);
-    CHECK_CUDA(alpha);
+    CHECK_CUDA(transmittance);
     CHECK_CUDA(background);
 
     if (rgb.ndimension() != 4 || rgb.size(-1) != 3)
         AT_ERROR("rgb shape must be (b, h, w, 3)");
     long b = rgb.size(0), h = rgb.size(1), w = rgb.size(2);
-    if (alpha.ndimension() != 4 || alpha.size(0) != b || alpha.size(1) != h || alpha.size(2) != w || alpha.size(3) != 1)
-        AT_ERROR("alpha shape must be (b, h, w, 1)");
+    if (transmittance.ndimension() != 4 || transmittance.size(0) != b || transmittance.size(1) != h || transmittance.size(2) != w || transmittance.size(3) != 1)
+        AT_ERROR("transmittance shape must be (b, h, w, 1)");
     if (background.ndimension() != 4 || background.size(0) != b || background.size(1) != h || background.size(2) != w || background.size(3) != 3)
         AT_ERROR("background shape must be (b, h, w, 3)");
 
     at::Tensor out_rgb = at::empty({b, h, w, 3}, rgb.options());
 
     blend_background_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<float, 4>(rgb), tensor2view<float, 4>(alpha), tensor2view<float, 4>(background),
+        tensor2view<float, 4>(rgb), tensor2view<float, 4>(transmittance), tensor2view<float, 4>(background),
         tensor2view<float, 4>(out_rgb)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -366,35 +363,180 @@ at::Tensor blend_background_forward_tensor(
     return out_rgb;
 }
 
-
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<at::Tensor, at::Tensor, at::Tensor>
 blend_background_backward_tensor(
     at::Tensor &rgb,  // [B, H, W, 3]
-    at::Tensor &alpha,  // [B, H, W, 1]
+    at::Tensor &transmittance,  // [B, H, W, 1]
     at::Tensor &background,  // [B, H, W, 3]
     at::Tensor &v_out_rgb  // [B, H, W, 3]
 ) {
     DEVICE_GUARD(rgb);
     CHECK_CUDA(rgb);
-    CHECK_CUDA(alpha);
+    CHECK_CUDA(transmittance);
     CHECK_CUDA(background);
     CHECK_CUDA(v_out_rgb);
 
     long b = rgb.size(0), h = rgb.size(1), w = rgb.size(2);
 
     at::Tensor v_rgb = at::empty({b, h, w, 3}, rgb.options());
-    at::Tensor v_alpha = at::empty({b, h, w, 1}, alpha.options());
+    at::Tensor v_transmittance = at::empty({b, h, w, 1}, transmittance.options());
     at::Tensor v_background = at::empty({b, h, w, 3}, background.options());
 
     blend_background_backward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<float, 4>(rgb), tensor2view<float, 4>(alpha), tensor2view<float, 4>(background),
+        tensor2view<float, 4>(rgb), tensor2view<float, 4>(transmittance), tensor2view<float, 4>(background),
         tensor2view<float, 4>(v_out_rgb),
-        tensor2view<float, 4>(v_rgb), tensor2view<float, 4>(v_alpha), tensor2view<float, 4>(v_background)
+        tensor2view<float, 4>(v_rgb), tensor2view<float, 4>(v_transmittance), tensor2view<float, 4>(v_background)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    return std::make_tuple(v_rgb, v_alpha, v_background);
+    return std::make_tuple(v_rgb, v_transmittance, v_background);
+}
+
+
+// ================
+// Blend Background with Random Noise
+// ================
+
+__forceinline__ __device__ uint32_t hash_uint3(uint32_t a, uint32_t b, uint32_t c) {
+    uint32_t hash = a;
+
+    hash *= 0x01000193;
+    hash = (hash << 16) | (hash >> 16);
+
+    hash ^= b;
+    hash *= 0x01000193;
+    hash = (hash << 16) | (hash >> 16);
+
+    hash ^= c;
+    hash *= 0x01000193;
+
+    hash ^= hash >> 15;
+    hash *= 0x85ebca6b;
+    hash ^= hash >> 13;
+    hash *= 0xc2b2ae35;
+    hash ^= hash >> 16;
+
+    return hash;
+}
+
+__global__ void blend_background_noise_forward_kernel(
+    const TensorView<float, 4> in_rgb,
+    const TensorView<float, 4> in_transmittance,
+    const uint32_t seed,
+    TensorView<float, 4> out_rgb
+) {
+    unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned B = in_rgb.shape[0], H = in_rgb.shape[1], W = in_rgb.shape[2];
+    if (bid >= B || gid >= H*W)
+        return;
+    unsigned y = gid / W;
+    unsigned x = gid % W;
+
+    float3 rgb = in_rgb.load3(bid, y, x);
+    float transmittance = in_transmittance.load1(bid, y, x);
+
+    float3 background;
+    background.x = (float)hash_uint3(seed + 0, gid, bid) * exp2f(-32.0f);
+    background.y = (float)hash_uint3(seed + 1, gid, bid) * exp2f(-32.0f);
+    background.z = (float)hash_uint3(seed + 2, gid, bid) * exp2f(-32.0f);
+
+    rgb = SlangPixelWise::blend_background(rgb, transmittance, background);
+
+    out_rgb.store3(bid, y, x, rgb);
+}
+
+__global__ void blend_background_noise_backward_kernel(
+    const TensorView<float, 4> in_rgb,
+    const TensorView<float, 4> in_transmittance,
+    const uint32_t seed,
+    const TensorView<float, 4> v_out_rgb,
+    TensorView<float, 4> v_in_rgb,
+    TensorView<float, 4> v_in_transmittance
+) {
+    unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned B = in_rgb.shape[0], H = in_rgb.shape[1], W = in_rgb.shape[2];
+    if (bid >= B || gid >= H*W)
+        return;
+    unsigned y = gid / W;
+    unsigned x = gid % W;
+
+    float3 rgb = in_rgb.load3(bid, y, x);
+    float transmittance = in_transmittance.load1(bid, y, x);
+
+    float3 background;
+    background.x = (float)hash_uint3(seed + 0, gid, bid) * exp2f(-32.0f);
+    background.y = (float)hash_uint3(seed + 1, gid, bid) * exp2f(-32.0f);
+    background.z = (float)hash_uint3(seed + 2, gid, bid) * exp2f(-32.0f);
+
+    float3 v_out = v_out_rgb.load3(bid, y, x);
+
+    float3 v_rgb; float v_transmittance; float3 v_background;
+    SlangPixelWise::blend_background_bwd(
+        rgb, transmittance, background,
+        v_out,
+        &v_rgb, &v_transmittance, &v_background
+    );
+
+    v_in_rgb.store3(bid, y, x, v_rgb);
+    v_in_transmittance.store1(bid, y, x, v_transmittance);
+}
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor blend_background_noise_forward_tensor(
+    at::Tensor &rgb,  // [B, H, W, 3]
+    at::Tensor &transmittance,  // [B, H, W, 1]
+    uint32_t seed
+) {
+    DEVICE_GUARD(rgb);
+    CHECK_CUDA(rgb);
+    CHECK_CUDA(transmittance);
+
+    if (rgb.ndimension() != 4 || rgb.size(-1) != 3)
+        AT_ERROR("rgb shape must be (b, h, w, 3)");
+    long b = rgb.size(0), h = rgb.size(1), w = rgb.size(2);
+    if (transmittance.ndimension() != 4 || transmittance.size(0) != b || transmittance.size(1) != h || transmittance.size(2) != w || transmittance.size(3) != 1)
+        AT_ERROR("transmittance shape must be (b, h, w, 1)");
+
+    at::Tensor out_rgb = at::empty({b, h, w, 3}, rgb.options());
+
+    blend_background_noise_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
+        tensor2view<float, 4>(rgb), tensor2view<float, 4>(transmittance), seed,
+        tensor2view<float, 4>(out_rgb)
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return out_rgb;
+}
+
+/*[AutoHeaderGeneratorExport]*/
+std::tuple<at::Tensor, at::Tensor>
+blend_background_noise_backward_tensor(
+    at::Tensor &rgb,  // [B, H, W, 3]
+    at::Tensor &transmittance,  // [B, H, W, 1]
+    uint32_t seed,
+    at::Tensor &v_out_rgb  // [B, H, W, 3]
+) {
+    DEVICE_GUARD(rgb);
+    CHECK_CUDA(rgb);
+    CHECK_CUDA(transmittance);
+    CHECK_CUDA(v_out_rgb);
+
+    long b = rgb.size(0), h = rgb.size(1), w = rgb.size(2);
+
+    at::Tensor v_rgb = at::empty({b, h, w, 3}, rgb.options());
+    at::Tensor v_transmittance = at::empty({b, h, w, 1}, transmittance.options());
+
+    blend_background_noise_backward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
+        tensor2view<float, 4>(rgb), tensor2view<float, 4>(transmittance), seed,
+        tensor2view<float, 4>(v_out_rgb),
+        tensor2view<float, 4>(v_rgb), tensor2view<float, 4>(v_transmittance)
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return std::make_tuple(v_rgb, v_transmittance);
 }
 
 

@@ -36,7 +36,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
     typename SplatPrimitive::RenderOutput::Buffer v_render_output_buffer,
-    const float *__restrict__ v_render_alphas, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
     typename SplatPrimitive::RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     typename SplatPrimitive::Screen::Buffer v_splat_buffer,
@@ -64,7 +64,7 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
     const at::Tensor *loss_map,           // [..., image_height, image_width, 1]
     // gradients of outputs
     typename SplatPrimitive::RenderOutput::Tensor v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     typename SplatPrimitive::RenderOutput::Tensor *v_distortion_outputs,
     // outputs
     typename SplatPrimitive::Screen::Tensor v_splats,
@@ -101,7 +101,7 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
         output_distortion ? render_outputs->buffer() : typename SplatPrimitive::RenderOutput::Buffer(),
         output_distortion ? render2_outputs->buffer() : typename SplatPrimitive::RenderOutput::Buffer(),
         output_hessian_diagonal ? loss_map->data_ptr<float>() : nullptr,
-        v_render_outputs.buffer(), v_render_alphas.data_ptr<float>(),
+        v_render_outputs.buffer(), v_render_Ts.data_ptr<float>(),
         output_distortion ? v_distortion_outputs->buffer() : typename SplatPrimitive::RenderOutput::Buffer(),
         v_splats.buffer(), vr_splats_buffer, h_splats_buffer
     );
@@ -133,7 +133,7 @@ inline std::tuple<
     std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     typename SplatPrimitive::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<typename SplatPrimitive::RenderOutput::TensorTuple> v_distortion_outputs_tuple
 ) {
     DEVICE_GUARD(tile_offsets);
@@ -141,7 +141,7 @@ inline std::tuple<
     CHECK_INPUT(flatten_ids);
     CHECK_INPUT(render_Ts);
     CHECK_INPUT(last_ids);
-    CHECK_INPUT(v_render_alphas);
+    CHECK_INPUT(v_render_Ts);
     if (backgrounds.has_value())
         CHECK_INPUT(backgrounds.value());
     if (masks.has_value())
@@ -176,7 +176,7 @@ inline std::tuple<
         output_distortion ? &render_outputs.value() : nullptr,
         output_distortion ? &render2_outputs.value() : nullptr,
         output_hessian_diagonal ? &loss_map.value() : nullptr,
-        v_render_outputs, v_render_alphas,
+        v_render_outputs, v_render_Ts,
         output_distortion ? &v_distortion_outputs.value() : nullptr,
         v_splats,
         output_hessian_diagonal ? &vr_splats.value() : nullptr,
@@ -210,7 +210,7 @@ inline rasterize_to_pixels_bwd_tensor(
     const at::Tensor last_ids,      // [..., image_height, image_width]
     // gradients of outputs
     typename SplatPrimitive::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts // [..., image_height, image_width, 1]
 ) {
     // TODO: add interface for output_distortion
     auto [v_splats, vr_splats, h_splats] =
@@ -220,7 +220,7 @@ inline rasterize_to_pixels_bwd_tensor(
         backgrounds, masks,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, std::nullopt, std::nullopt, std::nullopt,
-        v_render_outputs, v_render_alphas, std::nullopt
+        v_render_outputs, v_render_Ts, std::nullopt
     );
     return v_splats;
 }
@@ -248,12 +248,12 @@ Vanilla3DGS::Screen::TensorTuple rasterize_to_pixels_3dgs_bwd(
     const at::Tensor last_ids,      // [..., image_height, image_width]
     // gradients of outputs
     Vanilla3DGS::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts // [..., image_height, image_width, 1]
 ) {
     return rasterize_to_pixels_bwd_tensor<Vanilla3DGS>(
         splats_tuple, backgrounds, masks,
         image_width, image_height, tile_offsets, flatten_ids,
-        render_Ts, last_ids, v_render_outputs, v_render_alphas
+        render_Ts, last_ids, v_render_outputs, v_render_Ts
     );
 }
 
@@ -282,7 +282,7 @@ std::tuple<
     std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     Vanilla3DGS::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<typename Vanilla3DGS::RenderOutput::TensorTuple> v_distortion_outputs
 ) {
     if (v_distortion_outputs.has_value())
@@ -290,13 +290,13 @@ std::tuple<
             splats_tuple, backgrounds, masks,
             image_width, image_height, tile_offsets, flatten_ids,
             render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
-            v_render_outputs, v_render_alphas, v_distortion_outputs
+            v_render_outputs, v_render_Ts, v_distortion_outputs
         );
     return _rasterize_to_pixels_bwd_tensor<Vanilla3DGS, false, true>(
         splats_tuple, backgrounds, masks,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
-        v_render_outputs, v_render_alphas, v_distortion_outputs
+        v_render_outputs, v_render_Ts, v_distortion_outputs
     );
 }
 
@@ -323,13 +323,13 @@ MipSplatting::Screen::TensorTuple rasterize_to_pixels_mip_bwd(
     const at::Tensor last_ids,      // [..., image_height, image_width]
     // gradients of outputs
     MipSplatting::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts // [..., image_height, image_width, 1]
 ) {
     // return rasterize_to_pixels_bwd_tensor<MipSplatting>(
     return rasterize_to_pixels_bwd_tensor<Vanilla3DGS>(
         splats_tuple, backgrounds, masks,
         image_width, image_height, tile_offsets, flatten_ids,
-        render_Ts, last_ids, v_render_outputs, v_render_alphas
+        render_Ts, last_ids, v_render_outputs, v_render_Ts
     );
 }
 
@@ -357,7 +357,7 @@ std::tuple<
     std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     MipSplatting::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<typename MipSplatting::RenderOutput::TensorTuple> v_distortion_outputs
 ) {
     if (v_distortion_outputs.has_value())
@@ -366,13 +366,13 @@ std::tuple<
             splats_tuple, backgrounds, masks,
             image_width, image_height, tile_offsets, flatten_ids,
             render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
-            v_render_outputs, v_render_alphas, v_distortion_outputs
+            v_render_outputs, v_render_Ts, v_distortion_outputs
         );
     // return _rasterize_to_pixels_bwd_tensor<MipSplatting, false, true>(
     return _rasterize_to_pixels_bwd_tensor<Vanilla3DGS, false, true>(
         splats_tuple, backgrounds, masks,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs, loss_map,
-        v_render_outputs, v_render_alphas, v_distortion_outputs
+        v_render_outputs, v_render_Ts, v_distortion_outputs
     );
 }

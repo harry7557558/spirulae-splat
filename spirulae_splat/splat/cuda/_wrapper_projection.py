@@ -108,7 +108,12 @@ class _Index(torch.autograd.Function):
         ctx, tensor: Tensor, indices: Tensor
     ):
         ctx.save_for_backward(tensor, indices)
-        return tensor[indices]
+        # return tensor[indices]
+        result = torch.empty(indices.shape[0], *tensor.shape[1:], device=tensor.device, dtype=tensor.dtype)
+        _make_lazy_cuda_func("inplace_index")(
+            indices, tensor, result
+        )
+        return result
 
     @staticmethod
     def backward(ctx, v_output: Tensor):

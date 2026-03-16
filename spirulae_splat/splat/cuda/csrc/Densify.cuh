@@ -9,6 +9,13 @@
 
 
 
+void inplace_index_tensor(
+    at::Tensor indices,
+    at::Tensor src,
+    at::Tensor dst
+);
+
+
 void inplace_scatter_add_tensor(
     at::Tensor indices,
     at::Tensor src,

@@ -46,7 +46,7 @@ std::tuple<
     std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     Vanilla3DGUT::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> v_distortion_outputs,
     bool need_viewmat_grad
 );
@@ -80,7 +80,7 @@ std::tuple<
     std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     Vanilla3DGUT::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<typename Vanilla3DGUT::RenderOutput::TensorTuple> v_distortion_outputs,
     bool need_viewmat_grad
 );
@@ -112,7 +112,7 @@ std::tuple<
     std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<typename SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple> v_distortion_outputs,
     bool need_viewmat_grad
 );
@@ -144,7 +144,7 @@ std::tuple<
     std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     VoxelPrimitive::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<typename VoxelPrimitive::RenderOutput::TensorTuple> v_distortion_outputs,
     bool need_viewmat_grad
 );

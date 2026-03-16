@@ -4,6 +4,8 @@ from torch import Tensor
 from typing import Any, Callable, Literal, Optional, Union, Tuple
 import functools
 
+import random
+
 # import gsplat.cuda._wrapper
 
 def _make_lazy_cuda_obj(name: str) -> Any:
@@ -27,30 +29,54 @@ def _make_lazy_cuda_func(name: str) -> Callable:
 
 
 
-def blend_background(rgb, alpha, background) -> Tensor:
-    return _BlendBackground.apply(rgb, alpha, background)
+def blend_background(rgb, transmittance, background) -> Tensor:
+    return _BlendBackground.apply(rgb, transmittance, background)
 
 
 class _BlendBackground(torch.autograd.Function):
 
     @staticmethod
-    def forward(
-        ctx,
-        rgb, alpha, background
-    ):
-        out_rgb = _make_lazy_cuda_func("blend_background_forward")(rgb, alpha, background)
+    def forward(ctx, rgb, transmittance, background):
+        out_rgb = _make_lazy_cuda_func("blend_background_forward")(rgb, transmittance, background)
 
-        ctx.save_for_backward(rgb, alpha, background)
+        ctx.save_for_backward(rgb, transmittance, background)
 
         return out_rgb
 
     @staticmethod
     def backward(ctx, v_out_rgb):
 
-        rgb, alpha, background = ctx.saved_tensors
+        rgb, transmittance, background = ctx.saved_tensors
 
         return _make_lazy_cuda_func("blend_background_backward")(
-            rgb, alpha, background,
+            rgb, transmittance, background,
+            v_out_rgb
+        )
+
+
+def blend_background_noise(rgb, transmittance) -> Tensor:
+    return _BlendBackgroundNoise.apply(rgb, transmittance)
+
+
+class _BlendBackgroundNoise(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, rgb, transmittance):
+        seed = random.randint(1, 2**32-1)
+        out_rgb = _make_lazy_cuda_func("blend_background_noise_forward")(rgb, transmittance, seed)
+
+        ctx.save_for_backward(rgb, transmittance)
+        ctx.seed = seed
+
+        return out_rgb
+
+    @staticmethod
+    def backward(ctx, v_out_rgb):
+
+        rgb, transmittance = ctx.saved_tensors
+
+        return _make_lazy_cuda_func("blend_background_noise_backward")(
+            rgb, transmittance, ctx.seed,
             v_out_rgb
         )
 

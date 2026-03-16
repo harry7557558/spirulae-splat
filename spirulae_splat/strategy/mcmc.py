@@ -46,7 +46,7 @@ class MCMCStrategy(Strategy):
         >>> strategy.check_sanity(params, optimizers)
         >>> strategy_state = strategy.initialize_state()
         >>> for step in range(1000):
-        ...     render_image, render_alpha, info = rasterization(...)
+        ...     render_image, render_Ts, info = rasterization(...)
         ...     loss = ...
         ...     loss.backward()
         ...     strategy.step_post_backward(params, optimizers, strategy_state, step, info, lr=1e-3)

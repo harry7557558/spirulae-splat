@@ -15,6 +15,16 @@ fused_ssim_forward(
     bool is_l1
 );
 
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+fused_ssim_forward_inplace(
+    at::Tensor &img1,
+    at::Tensor &img2,
+    bool train,
+    float ssim_loss_map_weight,
+    at::Tensor &ssim_loss_map,
+    bool is_l1
+);
+
 at::Tensor
 fused_ssim_backward(
     at::Tensor &img1,
