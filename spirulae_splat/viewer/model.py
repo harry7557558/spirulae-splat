@@ -32,7 +32,7 @@ class SplatModel:
         self.flip_yz = False
         self.return_torch = False
         
-        self.primitive = "3dgut"  # type: Literal["3dgs", "mip", "opaque_triangle"]
+        self.primitive = "3dgut"  # type: Literal["3dgs", "mip", "3dgut", "opaque_triangle"]
 
         self.dataparser_transform = np.eye(4)
         self.dataparser_scale = 1.0
@@ -336,12 +336,13 @@ class SplatModel:
             rgb = rgbd[0]
             if return_depth:
                 depth = rgbd[1]
-                depth = ray_depth_to_linear_depth(
-                    depth,
-                    ["pinhole", "fisheye"][is_fisheye],
-                    intrins[None].contiguous(),
-                    **kwargs
-                )
+                if self.primitive not in ["3dgs", "mip"] or is_fisheye:
+                    depth = ray_depth_to_linear_depth(
+                        depth,
+                        ["pinhole", "fisheye"][is_fisheye],
+                        intrins[None].contiguous(),
+                        **kwargs
+                    )
                 depth = torch.where(
                     alpha > 0.0, depth,
                     1.5*torch.amax(depth).detach()

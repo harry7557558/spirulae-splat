@@ -754,7 +754,9 @@ float3x3 outerProduct(float3 u) {
 // continuous near boundary to support >180deg fisheye
 [ForceInline]
 [Differentiable]
-float get_sorting_depth(float3 p_view) {
+float get_sorting_depth(CameraModelType camera_model, float3 p_view) {
+    if (camera_model != CameraModelType::FISHEYE)
+        return p_view.z;
     // float z = p_view.z;
     // float z = max(p_view.z, sqrt(0.5f * dot(p_view, p_view)));
     // float z = 0.5f * (p_view.z + length(p_view));

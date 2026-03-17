@@ -93,7 +93,8 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
         # render_mode="RGB+D+N",
     )
     rgbd = [*rgbd[:2]]
-    rgbd[1] = ray_depth_to_linear_depth(rgbd[1], camera_model, intrins)  # TODO: f(E[X]) != E[f(X)]
+    if IS_FISHEYE or WITH_UT:
+        rgbd[1] = ray_depth_to_linear_depth(rgbd[1], camera_model, intrins)  # TODO: f(E[X]) != E[f(X)]
     return *rgbd, 1.0 - Ts
 
 def rasterize_gsplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
@@ -118,7 +119,9 @@ def rasterize_gsplat(means, quats, scales, opacities, features_dc, features_sh, 
         with_eval3d=WITH_UT,
         render_mode="RGB+ED",
     )
-    return rgbd[..., :3], rgbd[..., 3:], alpha
+    rgb, depth = rgbd[..., :3], rgbd[..., 3:]
+    depth = torch.where(alpha == 0.0, depth.amax(), depth)
+    return rgb, depth, alpha
 
 
 def get_inputs():

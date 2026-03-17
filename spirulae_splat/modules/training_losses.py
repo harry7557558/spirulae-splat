@@ -3,8 +3,8 @@ import torch.nn.functional as F
 import math
 import random
 
-from spirulae_splat.modules.supervision import SupervisionLosses
-from spirulae_splat.modules.exposure_correction import ExposureCorrection
+# from spirulae_splat.modules.supervision import SupervisionLosses
+# from spirulae_splat.modules.exposure_correction import ExposureCorrection
 
 from spirulae_splat.splat._camera import _Camera
 from spirulae_splat.splat.utils import resize_image, _TORCH_COMPILE_ARGS
@@ -392,8 +392,8 @@ class SplatTrainingLosses(torch.nn.Module):
         self.config = config
         self.num_train_data = num_training_data
 
-        self.supervision_losses = SupervisionLosses(config)
-        self.exposure_correction = ExposureCorrection(config)
+        # self.supervision_losses = SupervisionLosses(config)
+        # self.exposure_correction = ExposureCorrection(config)
 
         if self.config.use_bilateral_grid:
             self.bil_grids = {
@@ -734,7 +734,8 @@ class SplatTrainingLosses(torch.nn.Module):
             is_fisheye = (camera.camera_type[0].item() == CameraType.FISHEYE.value)
             pred_depth_normal = depth_to_normal(
                 pred_depth, ["pinhole", "fisheye"][is_fisheye],
-                intrins, camera.distortion_params
+                intrins, camera.distortion_params,
+                is_ray_depth=(self.config.primitive not in ['3dgs', 'mip'] or is_fisheye)
             )
 
         all_images = [[

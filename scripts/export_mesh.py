@@ -358,7 +358,7 @@ class DepthAndNormalMapsPoisson(GSMeshExporter):
                 mask=indices,
             )
 
-            # normals to OPENGL
+            # normals to OPENGL; TODO: is_ray_depth
             normal_map = depth_to_normal(depth_map, "pinhole", (camera.fx, camera.fy, camera.cx, camera.cy))
 
             # normals to World
