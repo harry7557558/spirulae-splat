@@ -30,12 +30,13 @@ def _make_lazy_cuda_func(name: str) -> Callable:
 
     return call_cuda
 
-def add_gradient_component(tensor: Tensor, attr: str, grad: Tensor):
+def add_gradient_component(tensor: Tensor, key: str, grad: Tensor):
     grad = grad.view(tensor.shape)
-    if hasattr(tensor, attr):
-        setattr(tensor, attr, getattr(tensor, attr) + grad)
+    assert hasattr(tensor, 'optim_info')
+    if key in tensor.optim_info:
+        tensor.optim_info[key] += grad
     else:
-        setattr(tensor, attr, grad)
+        tensor.optim_info[key] = grad
 
 
 def spherical_harmonics(
@@ -345,28 +346,21 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
                 if ctx.primitive == "3dgut":
                     add_gradient_component(means, 'gradr', v_proj_returns[1].gradr_all[0])
                     add_gradient_component(means, 'hess', v_proj_returns[1].hess_all[0])
-                means.scales = scales
-                means.quats = quats
-                means.opacities = opacities
                 # quats
                 add_gradient_component(quats, 'gradr', vr_quats)
                 add_gradient_component(quats, 'hess', h_quats)
                 if ctx.primitive == "3dgut":
                     add_gradient_component(quats, 'gradr', v_proj_returns[1].gradr_all[1])
                     add_gradient_component(quats, 'hess', v_proj_returns[1].hess_all[1])
-                quats.scales = scales
-                quats.opacities = opacities
                 # scales
                 add_gradient_component(scales, 'gradr', vr_scales)
                 add_gradient_component(scales, 'hess', h_scales)
-                scales.opacities = opacities
                 # opacities
                 add_gradient_component(opacities, 'gradr', vr_opacities)
                 add_gradient_component(opacities, 'hess', h_opacities)
                 # features_dc
                 add_gradient_component(features_dc, 'gradr', vr_features_dc)
                 add_gradient_component(features_dc, 'hess', h_features_dc)
-                features_dc.opacities = opacities
                 # features_sh
                 assert vr_features_sh is None
                 assert h_features_sh is None
@@ -381,14 +375,11 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
                 # print(h_means_from_proj.view(v_means.shape).mean(), h_means.mean())
                 # print(v_proj_returns[0].gradr_all[0].mean().item())
                 # print(v_means.mean().item())
-                means.gradr = vr_proj.view(v_means.shape)
-                means.hess = h_proj.view(v_means.shape)
+                add_gradient_component(means, 'gradr', vr_proj.view(v_means.shape))
+                add_gradient_component(means, 'hess', h_proj.view(v_means.shape))
                 if ctx.primitive == "3dgut":
-                    means.gradr += v_proj_returns[1].gradr_all[0]
-                    means.hess += v_proj_returns[1].hess_all[0]
-                means.scales = scales
-                means.quats = quats
-                means.opacities = opacities
+                    add_gradient_component(means, 'gradr', v_proj_returns[1].gradr_all[0])
+                    add_gradient_component(means, 'hess', v_proj_returns[1].hess_all[0])
         else:
             (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh), v_viewmats = _make_lazy_cuda_func(
                 f"projection_{ctx.primitive}_backward"

@@ -8,6 +8,8 @@ from torch import Tensor
 
 from .base import Strategy
 from .ops import (
+    get_param_attr,
+    get_param_grad,
     inject_noise_to_position,
     relocate,
     relocate_long_axis_split,
@@ -93,7 +95,7 @@ class MCMCStrategy(Strategy):
             assert key in info, f"{key} is required but missing."
 
         # initialize state on the first run
-        n_gaussian = len(list(params.values())[0])
+        n_gaussian = len(get_param_attr(params, 'means'))
 
         device = params['means'].device
         if self.prob_grad_weight > 0.0:
@@ -127,7 +129,7 @@ class MCMCStrategy(Strategy):
             # TODO: optionally, actually do anisotropic scale in 3d
             oversize_factor = torch.clip(normalized_radii / self.max_scale2d, min=1.0, max=self.max_scale2d_clip_hardness)
             oversize_factor = torch.log(oversize_factor).unsqueeze(-1)
-            scales, opacities = params['scales'].data, params['opacities'].data
+            scales, opacities = get_param_attr(params, 'scales'), get_param_attr(params, 'opacities')
             scales[gs_ids] -= oversize_factor
             opacities[gs_ids] += scales.shape[-1] * oversize_factor
             opacities[gs_ids] = torch.clip(opacities[gs_ids], max=5.0)  # sigmoid(5.0)=0.993
@@ -136,7 +138,7 @@ class MCMCStrategy(Strategy):
         # large splats in world space
         # clip scale, without increasing opacity (which causes problems with background removal)
         if np.isfinite(self.max_scale3d):
-            params['scales'].data.clip_(max=math.log(self.max_scale3d))
+            get_param_attr(params, 'scales').clip_(max=math.log(self.max_scale3d))
 
         if not (self.prob_grad_weight > 0.0):
             return
@@ -145,7 +147,7 @@ class MCMCStrategy(Strategy):
         if not hasattr(params['means'], 'grad'):
             print("Error: grad not found")
             return
-        grads = params['means'].grad.norm(dim=-1) * torch.exp(params['scales'].mean(dim=-1))  # TODO: transform by actual covariance
+        grads = get_param_grad(params, 'means').norm(dim=-1) * torch.exp(get_param_attr(params, 'scales').mean(dim=-1))  # TODO: transform by actual covariance
 
         # update the running state
         grads = grads[gs_ids]
@@ -159,7 +161,7 @@ class MCMCStrategy(Strategy):
     def _get_probs(self, state, params):
         if not (self.prob_grad_weight > 0.0):
             return None
-        opacs = torch.sigmoid(params["opacities"])
+        opacs = torch.sigmoid(get_param_attr(params, 'opacities'))
         grads = state["grad3d"] / state["count"].clamp_min(1)
         # grad_opacs = torch.sort(opacs.flatten())[0][torch.argsort(torch.argsort(grads))].unsqueeze(-1)
         grad_opacs = torch.sort(opacs.flatten())[0][torch.argsort(torch.argsort(opacs.flatten() * grads))].unsqueeze(-1)
@@ -239,7 +241,7 @@ class MCMCStrategy(Strategy):
             if self.verbose:
                 print(
                     f"Step {step}: Added {n_new_gs} GSs. "
-                    f"Now having {len(params['means'])} GSs."
+                    f"Now having {get_param_attr(params, 'means')} GSs."
                 )
 
             if self.prob_grad_weight > 0.0:
@@ -263,7 +265,7 @@ class MCMCStrategy(Strategy):
         state: Dict[str, Any],
         step: int
     ) -> int:
-        opacities = torch.sigmoid(params["opacities"].flatten())
+        opacities = torch.sigmoid(get_param_attr(params, 'opacities').flatten())
         relocate_mask = ~(torch.isfinite(opacities))
 
         # relocate huge splats
@@ -305,7 +307,7 @@ class MCMCStrategy(Strategy):
         optimizers: Dict[str, torch.optim.Optimizer],
         state: Dict[str, Any],
     ) -> int:
-        current_n_points = len(params["means"])
+        current_n_points = len(get_param_attr(params, 'means'))
         n_target = min(self.cap_max, int(self.grow_factor * current_n_points))
         n_gs = max(0, n_target - current_n_points)
         if n_gs > 0:
@@ -326,4 +328,7 @@ class MCMCStrategy(Strategy):
                     probs=self._get_probs(state, params),
                     min_opacity=self.min_opacity,
                 )
+            for value in params.values():
+                if hasattr(value, 'optim_info'):
+                    value.optim_info['num_splats'] += n_gs
         return n_gs

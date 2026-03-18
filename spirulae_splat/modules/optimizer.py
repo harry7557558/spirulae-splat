@@ -80,7 +80,7 @@ class FusedAdam(Optimizer):
                 # State initialization
                 if len(state) == 0:
                     state['step'] = 0
-                    if hasattr(p, "optimizer_offload") and p.optimizer_offload:
+                    if hasattr(p, "optim_info") and p.optim_info.get("optimizer_offload", False):
                         state['exp_avg'] = torch.zeros_like(p, memory_format=torch.contiguous_format, device="cpu")
                         state['exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.contiguous_format, device="cpu")
                     else:
@@ -91,9 +91,11 @@ class FusedAdam(Optimizer):
                 
                 state['step'] += 1
 
-                if not hasattr(p, "optimizer_override"):
+                if not (hasattr(p, "optim_info") and "optimizer_override" in p.optim_info):
                     # Use default Adam
-                    params_with_grad.append(p)
+                    params_with_grad.append(
+                        p[:p.optim_info['num_splats']] if hasattr(p, 'optim_info') and 'num_splats' in p.optim_info else p
+                    )
                     grads.append(p.grad)
                     exp_avgs.append(state['exp_avg'])
                     exp_avg_sqs.append(state['exp_avg_sq'])
@@ -103,17 +105,17 @@ class FusedAdam(Optimizer):
                 additional_params = []
                 eps_params = [eps]
                 eps_tr = tr * (tr_final / tr) ** min(state['step'] / tr_max_steps, 1.0)
-                if p.optimizer_override == "fused_adam_linear_rgb_optim":
+                if p.optim_info['optimizer_override'] == "fused_adam_linear_rgb_optim":
                     pass
-                elif p.optimizer_override == "fused_adamtr_linear_rgb_optim":
-                    additional_params = [p.opacities]
+                elif p.optim_info['optimizer_override'] == "fused_adamtr_linear_rgb_optim":
+                    additional_params = [p.optim_info['opacities']]
                     eps_params.append(eps_tr)
-                elif p.optimizer_override == "fused_adamtr_linear_rgb_sh_optim":
-                    additional_params = [p.features_dc, p.opacities]
+                elif p.optim_info['optimizer_override'] == "fused_adamtr_linear_rgb_sh_optim":
+                    additional_params = [p.optim_info['features_dc'], p.optim_info['opacities']]
                     eps_params.append(eps_tr)
 
-                _make_lazy_cuda_func(p.optimizer_override)(
-                    p,
+                _make_lazy_cuda_func(p.optim_info['optimizer_override'])(
+                    p[:p.optim_info['num_splats']] if hasattr(p, 'optim_info') else p,
                     p.grad,
                     state['exp_avg'],
                     state['exp_avg_sq'],
@@ -240,19 +242,19 @@ class Fused3DGS2Tr(Optimizer):
 
                 additional_params = []
                 if mode == "mean":
-                    additional_params = [p.scales, p.quats, p.opacities]
+                    additional_params = [p.optim_info['scales'], p.optim_info['quats'], p.optim_info['opacities']]
                 elif mode == "scale":
-                    additional_params = [p.opacities]
+                    additional_params = [p.optim_info['opacities']]
                 elif mode == "color":
-                    additional_params = [p.opacities]
+                    additional_params = [p.optim_info['opacities']]
                 elif mode == "quat":
-                    additional_params = [p.scales, p.opacities]
+                    additional_params = [p.optim_info['scales'], p.optim_info['opacities']]
 
                 _make_lazy_cuda_func(f"fused_3dgs2tr_{mode}_optim")(
-                    p,
+                    p[:p.optim_info['num_splats']] if hasattr(p, 'optim_info') else p,
                     # p.grad,
-                    p.gradr,  # gradient residual product
-                    p.hess,
+                    p.optim_info['gradr'],  # gradient residual product
+                    p.optim_info['hess'],
                     *additional_params,
                     state['exp_avg'],
                     state['exp_avg_sq'],
@@ -268,8 +270,8 @@ class Fused3DGS2Tr(Optimizer):
                     state['step2']
                 )
                 # zero_grad
-                del p.gradr
-                del p.hess
+                del p.optim_info['gradr']
+                del p.optim_info['hess']
 
         return loss
 

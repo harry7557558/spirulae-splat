@@ -8,6 +8,7 @@ from torch import Tensor
 
 from .base import Strategy
 from .ops import (
+    get_param_attr, get_param_grad,
     inject_noise_to_position, relocate, sample_add, remove, split, _multinomial_sample,
     relocate_opaque_triangles, sample_add_opaque_triangles
 )
@@ -80,7 +81,7 @@ class OpaqueStrategy(Strategy):
         grad_info = info[self.key_for_gradient]
 
         # initialize state on the first run
-        n_gaussian = len(list(params.values())[0])
+        n_gaussian = len(get_param_attr(params, "means"))
 
         if state["radii"] is None:
             assert "radii" in info, "radii is required but missing."
@@ -128,7 +129,7 @@ class OpaqueStrategy(Strategy):
             # TODO: optionally, actually do anisotropic scale in 3d
             oversize_factor = torch.clip(normalized_radii / self.max_scale2d, min=1.0, max=self.max_scale2d_clip_hardness)
             oversize_factor = torch.log(oversize_factor).unsqueeze(-1)
-            scales, opacities = params['scales'].data, params['opacities'].data
+            scales, opacities = get_param_attr(params, "scales").data, get_param_attr(params, "opacities").data
             scales[gs_ids] -= oversize_factor
             opacities[gs_ids] += scales.shape[-1] * oversize_factor
             opacities[gs_ids] = torch.clip(opacities[gs_ids], max=5.0)  # sigmoid(5.0)=0.993
@@ -137,13 +138,13 @@ class OpaqueStrategy(Strategy):
         # large splats in world space
         # clip scale, without increasing opacity (which causes problems with background removal)
         if np.isfinite(self.max_scale3d):
-            params['scales'].data.clip_(max=math.log(self.max_scale3d))
+            get_param_attr(params, "scales").data.clip_(max=math.log(self.max_scale3d))
 
     def _get_probs(self, state, params, step):
         # opacs = self.map_opacities(step, params["opacities"].flatten())
-        opacs = torch.sigmoid(params["opacities"].flatten())
+        opacs = torch.sigmoid(get_param_attr(params, "opacities").flatten())
         return opacs
-        # scales = torch.exp(params["scales"][..., :2].mean(-1))
+        # scales = torch.exp(get_param_attr(params, "scales")[..., :2].mean(-1))
         scales = torch.nan_to_num(state["radii"], 0.0, 0.0, 0.0).clip(min=self.max_scale2d/2)
         return opacs * scales
         # return opacs * scales**0.5
@@ -234,7 +235,7 @@ class OpaqueStrategy(Strategy):
             if self.verbose:
                 print(
                     f"Step {step}: Added {n_new_gs} GSs. "
-                    f"Now having {len(params['means'])} GSs."
+                    f"Now having {len(get_param_attr(params, "means"))} GSs."
                 )
 
             torch.cuda.empty_cache()
@@ -246,8 +247,8 @@ class OpaqueStrategy(Strategy):
             "opaque_triangle",
             params=params, optimizers=optimizers, state={}, scaler=scalar*sc,
             min_opacity=self.min_opacity*sc,
-            # opacities=self.map_opacities(step, params["opacities"].flatten())
-            opacities=self.map_opacities(0, params["opacities"].flatten())
+            # opacities=self.map_opacities(step, get_param_attr(params, "opacities").flatten())
+            opacities=self.map_opacities(0, get_param_attr(params, "opacities").flatten())
         )
 
     @torch.no_grad()
@@ -259,7 +260,7 @@ class OpaqueStrategy(Strategy):
         step: int
     ) -> int:
         opacity_floor = self.get_opacity_floor(step)
-        opacities = self.map_opacities(step, params["opacities"].flatten())
+        opacities = self.map_opacities(step, get_param_attr(params, "opacities").flatten())
         relocate_mask = ~(torch.isfinite(opacities))
 
         # relocate huge splats
@@ -307,9 +308,9 @@ class OpaqueStrategy(Strategy):
         state: Dict[str, Any],
         step: int
     ) -> int:
-        current_n_points = len(params["means"])
+        current_n_points = len(get_param_attr(params, "means"))
         n_target = min(self.cap_max, int(self.grow_factor * current_n_points))
-        n_gs = max(0, n_target - current_n_points)
+        n_gs = max(0, n_target - current_n_points) // 3
         if not (n_gs > 0):
             return 0
         
@@ -317,10 +318,13 @@ class OpaqueStrategy(Strategy):
             params=params,
             optimizers=optimizers,
             state=state,
-            n=(n_gs+2)//3,
+            n=n_gs,
             probs=self._get_probs(state, params, step),
         )
-        return n_gs
+        for value in params.values():
+            if hasattr(value, 'optim_info'):
+                value.optim_info['num_splats'] += 3*n_gs
+        return 3*n_gs
 
     @torch.no_grad()
     def _relocate_gs_max_blending(

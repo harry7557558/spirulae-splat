@@ -16,6 +16,21 @@ from spirulae_splat.viewer.utils import (
     triangle_verts_to_quat_scale_mean
 )
 
+
+def get_param_attr(params, attr):
+    param = params[attr]
+    if hasattr(param, 'optim_info'):
+        param = param[:param.optim_info['num_splats']]
+    return param
+
+
+def get_param_grad(params, attr):
+    param = params[attr]
+    if hasattr(param, 'optim_info'):
+        return param.grad[:param.optim_info['num_splats']]
+    return param.grad
+
+
 import math
 
 N_BINOMS = 51
@@ -101,6 +116,8 @@ def _update_param_with_optimizer(
             for key in param_state.keys():
                 if key not in ["step", "step1", "step2"]:
                     v = param_state[key]
+                    if hasattr(param, 'optim_info'):
+                        v.optim_info = param.optim_info
                     param_state[key] = optimizer_fn(key, v)
             optimizer.param_groups[i]["params"] = [new_param]
             optimizer.state[new_param] = param_state
@@ -124,14 +141,16 @@ def duplicate(
     sel = torch.where(mask)[0]
 
     def param_fn(name: str, p: Tensor) -> Tensor:
-        return torch.nn.Parameter(torch.cat([p, p[sel]]))
+        p_new = torch.nn.Parameter(torch.cat([p, p[sel]]))
+        if hasattr(p, 'optim_info'):
+            p_new.optim_info = p.optim_info
+        return p_new
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
-        return torch.cat([v, torch.zeros((len(sel), *v.shape[1:]), device=device)])
-        return torch.cat([
-            v * (~mask).float().reshape((len(v), *([1]*(len(v.shape)-1)))),
-            torch.zeros((len(sel), *v.shape[1:]), device=device)
-        ])
+        v_new = torch.cat([v, torch.zeros((len(sel), *v.shape[1:]), device=device)])
+        if hasattr(v, 'optim_info'):
+            v_new.optim_info = v.optim_info
+        return v_new
 
     # update the parameters and the state in the optimizers
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
@@ -163,12 +182,12 @@ def split(
     sel = torch.where(mask)[0]
     rest = torch.where(~mask)[0]
 
-    scales = torch.exp(params["scales"][sel])
+    scales = torch.exp(get_param_attr(params, "scales")[sel])
     scales_3d = scales
     if scales.shape[-1] == 2:
         sz = 0.1*torch.fmin(scales[...,0:1], scales[...,1:2])
         scales_3d = torch.cat((scales, sz), dim=-1) / 3.0
-    quats = F.normalize(params["quats"][sel], dim=-1)
+    quats = F.normalize(get_param_attr(params, "quats")[sel], dim=-1)
     rotmats = quat_to_rotmat(quats)  # [N, 3, 3]
     samples = std_scale * torch.einsum(
         "nij,nj,bnj->bni",
@@ -188,13 +207,17 @@ def split(
             p_split = torch.logit(new_opacities).repeat(repeats)  # [2N]
         else:
             p_split = p[sel].repeat(repeats)
-        p_new = torch.cat([p[rest], p_split])
-        p_new = torch.nn.Parameter(p_new)
+        p_new = torch.nn.Parameter(torch.cat([p[rest], p_split]))
+        if hasattr(p, 'optim_info'):
+            p_new.optim_info = p.optim_info
         return p_new
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
         v_split = torch.zeros((2 * len(sel), *v.shape[1:]), device=device)
-        return torch.cat([v[rest], v_split])
+        v_new = torch.cat([v[rest], v_split])
+        if hasattr(v, 'optim_info'):
+            v_new.optim_info = v.optim_info
+        return v_new
 
     # update the parameters and the state in the optimizers
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
@@ -223,10 +246,16 @@ def remove(
     sel = torch.where(~mask)[0]
 
     def param_fn(name: str, p: Tensor) -> Tensor:
-        return torch.nn.Parameter(p[sel], requires_grad=p.requires_grad)
+        p_new = torch.nn.Parameter(p[sel], requires_grad=p.requires_grad)
+        if hasattr(p, 'optim_info'):
+            p_new.optim_info = p.optim_info
+        return p_new
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
-        return v[sel]
+        v_new = v[sel]
+        if hasattr(v, 'optim_info'):
+            v_new.optim_info = v.optim_info
+        return v_new
 
     # update the parameters and the state in the optimizers
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
@@ -253,13 +282,19 @@ def reset_opa(
 
     def param_fn(name: str, p: Tensor) -> Tensor:
         if name == "opacities":
-            opacities = torch.clamp(p, max=torch.logit(torch.tensor(value)).item())
-            return torch.nn.Parameter(opacities, requires_grad=p.requires_grad)
+            p_new = torch.clamp(p, max=torch.logit(torch.tensor(value)).item())
+            p_new = torch.nn.Parameter(p_new, requires_grad=p.requires_grad)
+            if hasattr(p, 'optim_info'):
+                p_new.optim_info = p.optim_info
+            return p_new
         else:
             raise ValueError(f"Unexpected parameter name: {name}")
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
-        return torch.zeros_like(v)
+        v_new = torch.zeros_like(v)
+        if hasattr(v, 'optim_info'):
+            v_new.optim_info = v.optim_info
+        return v_new
 
     # update the parameters and the state in the optimizers
     _update_param_with_optimizer(
@@ -284,7 +319,7 @@ def relocate(
         optimizers: A dictionary of optimizers, each corresponding to a parameter.
         mask: A boolean mask to indicates which Gaussians are dead.
     """
-    opacities = torch.sigmoid(params["opacities"])
+    opacities = torch.sigmoid(get_param_attr(params, "opacities"))
 
     dead_indices = mask.nonzero(as_tuple=True)[0]
     alive_indices = (~mask).nonzero(as_tuple=True)[0]
@@ -301,7 +336,7 @@ def relocate(
     sampled_idxs = alive_indices[sampled_idxs]
     new_opacities, new_scales = _make_lazy_cuda_func("compute_relocation")(
         opacities[sampled_idxs],
-        torch.exp(params["scales"])[sampled_idxs],
+        torch.exp(get_param_attr(params, "scales"))[sampled_idxs],
         torch.bincount(sampled_idxs).to(torch.int32)[sampled_idxs] + 1,
         BINOMS.to(opacities.device),
         len(BINOMS)
@@ -314,7 +349,7 @@ def relocate(
         elif name == "scales":
             p[sampled_idxs] = torch.log(new_scales)
         p[dead_indices] = p[sampled_idxs]
-        return torch.nn.Parameter(p, requires_grad=p.requires_grad)
+        return p
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
         v[sampled_idxs] = 0
@@ -343,7 +378,7 @@ def relocate_long_axis_split(
         optimizers: A dictionary of optimizers, each corresponding to a parameter.
         mask: A boolean mask to indicates which Gaussians are dead.
     """
-    opacities = torch.sigmoid(params["opacities"])
+    opacities = torch.sigmoid(get_param_attr(params, "opacities"))
 
     dead_indices = mask.nonzero(as_tuple=True)[0]
     alive_indices = (~mask).nonzero(as_tuple=True)[0]
@@ -362,8 +397,8 @@ def relocate_long_axis_split(
     sampled_idxs = alive_indices[sampled_idxs]
     new_scales, mean_offsets = _make_lazy_cuda_func("long_axis_split")(
         "3dgs",
-        torch.exp(params["scales"])[sampled_idxs],
-        params["quats"][sampled_idxs]
+        torch.exp(get_param_attr(params, "scales"))[sampled_idxs],
+        get_param_attr(params, "quats")[sampled_idxs]
     )
 
     def param_fn(name: str, p: Tensor) -> Tensor:
@@ -375,7 +410,7 @@ def relocate_long_axis_split(
             p[dead_indices] = torch.log(new_scales)
         else:
             p[dead_indices] = p[sampled_idxs]
-        return torch.nn.Parameter(p, requires_grad=p.requires_grad)
+        return p
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
         v[sampled_idxs] = 0
@@ -416,9 +451,9 @@ def relocate_opaque_triangles(
     sampled_idxs = alive_indices[sampled_idxs]
 
     triangles = quat_scale_to_triangle_verts(
-        params["quats"][sampled_idxs],
-        params["scales"][sampled_idxs],
-        params["means"][sampled_idxs]
+        get_param_attr(params, "quats")[sampled_idxs],
+        get_param_attr(params, "scales")[sampled_idxs],
+        get_param_attr(params, "means")[sampled_idxs]
     )
     # TODO: better way to handle triangles sampled >2 times?
     # split_1, split_2 = split_triangles(triangles)  # TODO: doesn't look nice, possibly bug?
@@ -438,7 +473,7 @@ def relocate_opaque_triangles(
             p[sampled_idxs] = means2
         else:
             p[dead_indices] = p[sampled_idxs.repeat(3)[:n]]
-        return torch.nn.Parameter(p, requires_grad=p.requires_grad)
+        return p
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
         v[dead_indices] = 0
@@ -464,7 +499,7 @@ def sample_add(
     min_opacity: float = 0.005
 ):
     # TODO: get this right for opaque triangle splatting
-    opacities = torch.sigmoid(params["opacities"])
+    opacities = torch.sigmoid(get_param_attr(params, "opacities"))
 
     eps = torch.finfo(torch.float32).eps
     if probs is None:
@@ -474,7 +509,7 @@ def sample_add(
     sampled_idxs = _multinomial_sample(probs, n, replacement=True)
     new_opacities, new_scales = _make_lazy_cuda_func("compute_relocation")(
         opacities[sampled_idxs],
-        torch.exp(params["scales"])[sampled_idxs],
+        torch.exp(get_param_attr(params, "scales"))[sampled_idxs],
         torch.bincount(sampled_idxs).to(torch.int32)[sampled_idxs] + 1,
         BINOMS.to(opacities.device),
         len(BINOMS)
@@ -486,10 +521,20 @@ def sample_add(
             p[sampled_idxs] = torch.logit(new_opacities)
         elif name == "scales":
             p[sampled_idxs] = torch.log(new_scales)
+        if hasattr(p, 'optim_info'):
+            num_splats = p.optim_info['num_splats']
+            assert num_splats + len(sampled_idxs) <= len(p)
+            p[num_splats:num_splats+len(sampled_idxs)] = p[sampled_idxs]
+            return p
         p_new = torch.cat([p, p[sampled_idxs]])
         return torch.nn.Parameter(p_new, requires_grad=p.requires_grad)
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
+        if hasattr(v, 'optim_info'):
+            num_splats = v.optim_info['num_splats']
+            assert num_splats <= len(v)
+            v[num_splats:].zero_()
+            return v
         v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
         return torch.cat([v, v_new])
 
@@ -511,7 +556,7 @@ def sample_add_long_axis_split(
     probs: Optional[Tensor]=None
 ):
     # TODO: get this right for opaque triangle splatting
-    opacities = torch.sigmoid(params["opacities"])
+    opacities = torch.sigmoid(get_param_attr(params, "opacities"))
 
     if probs is None:
         probs = opacities
@@ -532,22 +577,32 @@ def sample_add_long_axis_split(
     sampled_idxs = torch.argsort(probs)[-n:]
     new_scales, mean_offsets = _make_lazy_cuda_func("long_axis_split")(
         "3dgs",
-        torch.exp(params["scales"])[sampled_idxs],
-        params["quats"][sampled_idxs]
+        torch.exp(get_param_attr(params, "scales"))[sampled_idxs],
+        get_param_attr(params, "quats")[sampled_idxs]
     )
 
     def param_fn(name: str, p: Tensor) -> Tensor:
         if name == "means":
-            p_new = torch.cat([p, p[sampled_idxs] + mean_offsets])
-            p_new[sampled_idxs] -= mean_offsets
+            p[sampled_idxs] -= mean_offsets
+            p_cat = p[sampled_idxs] + 2 * mean_offsets
         elif name == "scales":
             p[sampled_idxs] = torch.log(new_scales)
-            p_new = torch.cat([p, p[sampled_idxs]])
+            p_cat = p[sampled_idxs]
         else:
-            p_new = torch.cat([p, p[sampled_idxs]])
-        return torch.nn.Parameter(p_new, requires_grad=p.requires_grad)
+            p_cat = p[sampled_idxs]
+        if hasattr(p, 'optim_info'):
+            num_splats = p.optim_info['num_splats']
+            assert num_splats + len(p_cat) <= len(p)
+            p[num_splats:num_splats+len(p_cat)] = p_cat
+            return p
+        return torch.nn.Parameter(torch.cat([p, p_cat]), requires_grad=p.requires_grad)
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
+        if hasattr(v, 'optim_info'):
+            num_splats = v.optim_info['num_splats']
+            assert num_splats <= len(v)
+            v[num_splats:].zero_()
+            return v
         v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
         return torch.cat([v, v_new])
 
@@ -573,9 +628,9 @@ def sample_add_opaque_triangles(
     sampled_idxs = _multinomial_sample(probs, n, replacement=True)
 
     triangles = quat_scale_to_triangle_verts(
-        params["quats"][sampled_idxs],
-        params["scales"][sampled_idxs],
-        params["means"][sampled_idxs]
+        get_param_attr(params, "quats")[sampled_idxs],
+        get_param_attr(params, "scales")[sampled_idxs],
+        get_param_attr(params, "means")[sampled_idxs]
     )
     # TODO: better way to handle triangles sampled >2 times?
     # split_1, split_2 = split_triangles(triangles)  # TODO: doesn't look nice, possibly bug?
@@ -586,18 +641,28 @@ def sample_add_opaque_triangles(
     def param_fn(name: str, p: Tensor) -> Tensor:
         if name == "quats":
             p[sampled_idxs] = quats1
-            p_new = torch.cat([p, quats2])
+            p_cat = quats2
         elif name == "scales":
             p[sampled_idxs] = scales1
-            p_new = torch.cat([p, scales2])
+            p_cat = scales2
         elif name == "means":
             p[sampled_idxs] = means1
-            p_new = torch.cat([p, means2])
+            p_cat = means2
         else:
-            p_new = torch.cat([p, p[sampled_idxs].repeat(3, *([1]*(len(p.shape)-1)))])
-        return torch.nn.Parameter(p_new, requires_grad=p.requires_grad)
+            p_cat = p[sampled_idxs].repeat(3, *([1]*(len(p.shape)-1)))
+        if hasattr(p, 'optim_info'):
+            num_splats = p.optim_info['num_splats']
+            assert num_splats + len(p_cat) <= len(p)
+            p[num_splats:num_splats+len(p_cat)] = p_cat
+            return p
+        return torch.nn.Parameter(torch.cat([p, p_cat]), requires_grad=p.requires_grad)
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
+        if hasattr(v, 'optim_info'):
+            num_splats = v.optim_info['num_splats']
+            assert num_splats <= len(v)
+            v[num_splats:].zero_()
+            return v
         v[sampled_idxs] = 0
         v_new = torch.zeros((3*len(sampled_idxs), *v.shape[1:]), device=v.device)
         return torch.cat([v, v_new])
@@ -626,14 +691,14 @@ def inject_noise_to_position(
         return
 
     if opacities is None:
-        opacities = torch.sigmoid(params["opacities"].flatten())
+        opacities = torch.sigmoid(get_param_attr(params, "opacities").flatten())
 
     _make_lazy_cuda_func("mcmc_add_noise")(
         primitive,
         scaler,
         min_opacity,
-        params["means"].data,
-        params["scales"].data,
-        params['quats'].data,
+        get_param_attr(params, "means"),
+        get_param_attr(params, "scales"),
+        get_param_attr(params, "quats"),
         opacities
     )

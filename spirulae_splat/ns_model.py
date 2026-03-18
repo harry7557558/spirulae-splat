@@ -113,8 +113,7 @@ class SpirulaeModelConfig(ModelConfig):
     num_downscales: int = 0
     """at the beginning, resolution is 1/2^d, where d is this number"""
     use_mcmc: bool = True
-    """use Markov-Chain Monte Carlo for gaussian control
-        Disable per-pixel sorting if you use this"""
+    """use Markov-Chain Monte Carlo for gaussian control"""
     random_init: bool = False
     """whether to initialize the positions uniformly randomly (not SFM points)"""
     num_random: int = 200000
@@ -179,6 +178,8 @@ class SpirulaeModelConfig(ModelConfig):
     """stop culling/splitting at this step WRT screen size of gaussians"""
 
     # MCMC control
+    preallocate_splat_tensors: bool = True
+    """Whether to pre-allocate Gaussian attribute tensors to avoid OOM during densification"""
     mcmc_warmup_length: int = 500
     """start MCMC refinement at this number of steps"""
     mcmc_cap_max: int = 1_000_000
@@ -498,7 +499,29 @@ class SpirulaeModel(Model):
         if self.config.primitive == "opaque_triangle":
             gauss_params['features_ch'] = torch.nn.Parameter(torch.zeros((num_points, 2, 3)))
 
+        new_num_points = num_points
+        if self.config.use_mcmc and self.config.preallocate_splat_tensors:
+            new_num_points = max(num_points, self.config.mcmc_cap_max)
+            for key, value in gauss_params.items():
+                if not isinstance(value, torch.Tensor) or value.shape[0] != num_points:
+                    continue
+                if (value == 0).all():
+                    value = torch.zeros(new_num_points, *value.shape[1:], device=value.device, dtype=value.dtype)
+                else:
+                    value = torch.concat((value, torch.zeros(new_num_points-num_points, *value.shape[1:], device=value.device, dtype=value.dtype)))
+                gauss_params[key] = torch.nn.Parameter(value)
+
         self.gauss_params = torch.nn.ParameterDict(gauss_params)
+
+        optim_info = {
+            'num_splats': num_points,
+        }
+        for key, value in self.gauss_params.items():
+            if isinstance(value, torch.Tensor) and value.shape[0] == new_num_points:
+                optim_info[key] = value
+        for key, value in self.gauss_params.items():
+            if isinstance(value, torch.Tensor) and value.shape[0] == new_num_points:
+                value.optim_info = {**optim_info}
 
         if self.config.use_camera_optimizer:
             self.camera_optimizer: CameraOptimizer = self.config.camera_optimizer.setup(
@@ -622,6 +645,15 @@ class SpirulaeModel(Model):
         )
         self.strategy_state = self.strategy.initialize_state(scene_scale=1.0)
 
+    def _get_gauss_param(self, key: str):
+        tensor = self.gauss_params.get(key, None)
+        if hasattr(tensor, "optim_info") and 'num_splats' in tensor.optim_info:
+            result = tensor[:tensor.optim_info['num_splats']]
+            if hasattr(tensor, 'optim_info'):
+                result.optim_info = tensor.optim_info
+            return result
+        return tensor
+
     @property
     def colors(self):
         if self.config.primitive == "3dgut_sv":
@@ -637,43 +669,43 @@ class SpirulaeModel(Model):
 
     @property
     def means(self):
-        return self.gauss_params.get("means", None)
+        return self._get_gauss_param("means")
 
     @property
     def scales(self):
-        return self.gauss_params.get("scales", None)
+        return self._get_gauss_param("scales")
     
     @property
     def quats(self):
-        return self.gauss_params.get("quats", None)
+        return self._get_gauss_param("quats")
 
     @property
     def features_dc(self):
-        return self.gauss_params.get("features_dc", None)
+        return self._get_gauss_param("features_dc")
 
     @property
     def features_sh(self):
-        return self.gauss_params.get("features_sh", None)
+        return self._get_gauss_param("features_sh")
 
     @property
     def features_ch(self):
-        return self.gauss_params.get("features_ch", None)
+        return self._get_gauss_param("features_ch")
 
     @property
     def sv_sites(self):
-        return self.gauss_params.get("sv_sites", None)
+        return self._get_gauss_param("sv_sites")
 
     @property
     def sv_colors(self):
-        return self.gauss_params.get("sv_colors", None)
+        return self._get_gauss_param("sv_colors")
 
     @property
     def opacities(self):
-        return self.gauss_params.get("opacities", None)
+        return self._get_gauss_param("opacities")
 
     @property
     def densities(self):
-        return self.gauss_params.get("densities", None)
+        return self._get_gauss_param("densities")
 
     def load_state_dict(self, dict, **kwargs):  # type: ignore
         # resize the parameters to match the new number of points
@@ -1016,29 +1048,26 @@ class SpirulaeModel(Model):
         # setup optimizer override
         # TODO: more reliable way than setattr tensor?
         if "quats" in self.gauss_params:
-            self.quats.optimizer_override = "fused_adam_riemannian_quat"
+            self.quats.optim_info['optimizer_override'] = "fused_adam_riemannian_quat"
         if self.config.use_linear_color_space:
             if "features_dc" in self.gauss_params and 'opacities' in self.gauss_params:
-                # self.features_dc.optimizer_override = "fused_adam_linear_rgb_optim"
-                self.features_dc.optimizer_override = "fused_adamtr_linear_rgb_optim"
-                self.features_dc.opacities = self.opacities
+                # self.features_dc.optim_info['optimizer_override'] = "fused_adam_linear_rgb_optim"
+                self.features_dc.optim_info['optimizer_override'] = "fused_adamtr_linear_rgb_optim"
             if "features_sh" in self.gauss_params and "features_dc" in self.gauss_params and 'opacities' in self.gauss_params:
-                self.features_sh.optimizer_override = "fused_adamtr_linear_rgb_sh_optim"
-                self.features_sh.features_dc = self.features_dc
-                self.features_sh.opacities = self.opacities
+                self.features_sh.optim_info['optimizer_override'] = "fused_adamtr_linear_rgb_sh_optim"
         if self.config.optimizer_offload == "sh" and "features_sh" in self.gauss_params:
             if hasattr(self.features_sh, "optimizer_override"):
                 raise ValueError("Optimizer offloading is not supported for linear color space")
-            self.features_sh.optimizer_offload = True
+            self.features_sh.optim_info['optimizer_offload'] = True
         elif self.config.optimizer_offload == "all":
             for key, value in self.gauss_params.items():
-                if isinstance(value, torch.Tensor) and not hasattr(value, "optimizer_override"):
-                    value.optimizer_offload = True
+                if isinstance(value, torch.Tensor) and not (hasattr(value, 'optim_info') and "optimizer_override" in value.optim_info):
+                    value.optim_info['optimizer_offload'] = True
             if self.config.use_bilateral_grid:
-                self.training_losses.bil_grids.grids.optimizer_offload = True
+                self.training_losses.bil_grids.grids.optim_info = {'optimizer_offload': True}
             if self.config.use_bilateral_grid_for_geometry:
-                self.training_losses.bil_grids_depth.grids.optimizer_offload = True
-                self.training_losses.bil_grids_normal.grids.optimizer_offload = True
+                self.training_losses.bil_grids_depth.grids.optim_info = {'optimizer_offload': True}
+                self.training_losses.bil_grids_normal.grids.optim_info = {'optimizer_offload': True}
 
         use_bvh = self.config.use_bvh and self.training and not val
         rgbd, Ts, meta = rasterization(

@@ -4,7 +4,11 @@ from typing import Any, Dict, Tuple, Union
 import torch
 
 from .base import Strategy
-from .ops import duplicate, remove, reset_opa, split
+from .ops import (
+    get_param_attr,
+    get_param_grad,
+    duplicate, remove, reset_opa, split
+)
 from typing_extensions import Literal
 
 
@@ -178,7 +182,7 @@ class DefaultStrategy(Strategy):
                 if self.verbose:
                     print(
                         f"Step {step}: {n_dupli} GSs duplicated, {n_split} GSs split. "
-                        f"Now having {len(params['means'])} GSs."
+                        f"Now having {len(get_param_attr(params, "means"))} GSs."
                     )
 
             # prune GSs
@@ -186,7 +190,7 @@ class DefaultStrategy(Strategy):
             if self.verbose:
                 print(
                     f"Step {step}: {n_prune} GSs pruned. "
-                    f"Now having {len(params['means'])} GSs."
+                    f"Now having {len(get_param_attr(params, "means"))} GSs."
                 )
 
             # reset running stats
@@ -224,7 +228,7 @@ class DefaultStrategy(Strategy):
         grad_info = info[self.key_for_gradient]
 
         # initialize state on the first run
-        n_gaussian = len(list(params.values())[0])
+        n_gaussian = len(get_param_attr(params, "means"))
 
         if state["grad2d"] is None:
             state["grad2d"] = torch.zeros(n_gaussian, device=grad_info.device)
@@ -238,10 +242,10 @@ class DefaultStrategy(Strategy):
         if packed:
             # grads is [nnz, 2]
             gs_ids = info["gaussian_ids"]  # [nnz]
-            radii = torch.fmax(info["radii"][:, 0], info["radii"][:, 1])  # [nnz]
+            radii = info["radii"]  # [nnz]
         else:
-            # grads is [C, N, 2]
-            radii = torch.fmax(info["radii"][:, :, 0], info["radii"][:, :, 1])  # [C, N]
+            # grads is [C, N, 2], radii is [N]
+            radii = info["radii"]  # [N]
             sel = radii > 0.0  # [C, N]
             gs_ids = torch.where(sel)[0]  # [nnz]
             radii = radii[sel]  # [nnz]
@@ -250,7 +254,7 @@ class DefaultStrategy(Strategy):
         if self.refine_scale2d_stop_iter > 0:
             # Should be ideally using scatter max
             state["radii"][gs_ids] = torch.maximum(
-                radii[gs_ids],
+                state["radii"][gs_ids],
                 # normalize radii to [0, 1] screen space
                 radii / float(max(info["width"], info["height"])),
             )
@@ -296,7 +300,7 @@ class DefaultStrategy(Strategy):
         # grads = state["grad2d"] / count.clamp_min(1).float().mean()
         device = grads.device
 
-        scale = torch.exp(params["scales"]).max(dim=-1).values
+        scale = torch.exp(get_param_attr(params, "scales")).max(dim=-1).values
 
         # TODO: handle 2DGS, triangle splatting, etc. with bad gradient
         if False:
@@ -351,7 +355,7 @@ class DefaultStrategy(Strategy):
         step: int,
     ) -> int:
         # prune low opacity
-        is_prune = torch.sigmoid(params["opacities"].flatten()) < self.prune_opa
+        is_prune = torch.sigmoid(get_param_attr(params, "opacities").flatten()) < self.prune_opa
 
         if step > self.reset_every:
 
@@ -364,7 +368,7 @@ class DefaultStrategy(Strategy):
 
             # too big
             is_too_big = (
-                torch.exp(params["scales"]).max(dim=-1).values
+                torch.exp(get_param_attr(params, "scales")).max(dim=-1).values
                 > self.prune_scale3d * state["scene_scale"]
             )
             # The official code also implements sreen-size pruning but
