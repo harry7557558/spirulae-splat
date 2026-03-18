@@ -38,8 +38,19 @@ __forceinline__ __device__ float3 sqrtf(float3 v) {
     };
 }
 
+__forceinline__ __device__ float4 sqrtf(float4 v) {
+    return {
+        sqrtf(fmaxf(v.x, 0.0f)),
+        sqrtf(fmaxf(v.y, 0.0f)),
+        sqrtf(fmaxf(v.z, 0.0f)),
+        sqrtf(fmaxf(v.w, 0.0f))
+    };
+}
 
-/* "Standard" Adam */
+
+// ================
+// "Standard" Adam
+// ================
 
 template <typename scalar_t>
 __global__ void fused_adam_kernel(
@@ -50,8 +61,9 @@ __global__ void fused_adam_kernel(
     const float lr,
     const float beta1,
     const float beta2,
+    const float bias_correction1,
+    const float bias_correction2,
     const float eps,
-    const int step,
     const int64_t numel
 ) {
     const int64_t idx = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
@@ -59,8 +71,6 @@ __global__ void fused_adam_kernel(
     if (idx < numel) {
         // Bias correction terms
         // TODO: proper bias correction after densification
-        const float bias_correction1 = 1.0f - powf(beta1, step);
-        const float bias_correction2 = 1.0f - powf(beta2, step);
         const float step_size = lr / bias_correction1;
         
         // Load values
@@ -115,8 +125,9 @@ void fused_adam(
         lr,
         beta1,
         beta2,
+        1.0f - powf(beta1, step),
+        1.0f - powf(beta2, step),
         eps,
-        step,
         numel
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -198,8 +209,8 @@ void offloaded_adam(
     const int64_t numel = param.numel();
     if (numel == 0) return;
 
-    const float bias_correction1 = 1.0f - std::pow(beta1, step);
-    const float bias_correction2 = 1.0f - std::pow(beta2, step);
+    const float bias_correction1 = 1.0f - powf(beta1, step);
+    const float bias_correction2 = 1.0f - powf(beta2, step);
     const float step_size = lr / bias_correction1;
     const float bc2_sqrt = bias_correction2;
 
@@ -269,6 +280,9 @@ void semi_offloaded_adam(
 
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
+    const float bias_correction1 = 1.0f - powf(beta1, step);
+    const float bias_correction2 = 1.0f - powf(beta2, step);
+
     auto process_chunk = [&](int64_t offset, size_t size) {
 
         cudaMemcpyAsync(m_ptr_device, m_ptr_host+offset, size * sizeof(float), cudaMemcpyHostToDevice, stream);
@@ -283,9 +297,10 @@ void semi_offloaded_adam(
             lr,
             beta1,
             beta2,
+            bias_correction1,
+            bias_correction2,
             eps,
-            step,
-            numel
+            size
         );
 
         cudaMemcpyAsync(m_ptr_host+offset, m_ptr_device, size * sizeof(float), cudaMemcpyDeviceToHost, stream);
@@ -331,7 +346,88 @@ void fused_adam_multi(
 }
 
 
-/* Newton */
+
+// ================
+// Adam for quaternions
+// ================
+
+__global__ void fused_adam_riemannian_quat_kernel(
+    float4* __restrict__ param,
+    const float4* __restrict__ grad,
+    float4* __restrict__ exp_avg,
+    float4* __restrict__ exp_avg_sq,
+    const float lr,
+    const float beta1,
+    const float beta2,
+    const float bias_correction1,
+    const float bias_correction2,
+    const float eps,
+    const int64_t numel
+) {
+    const int64_t qid = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    if (qid >= numel) return;
+
+    float4 q = param[qid];
+    float4 g = grad[qid];
+    float4 m = exp_avg[qid];
+    float4 v = exp_avg_sq[qid];
+
+    float dot_qg = dot(q, g);
+    g -= q * dot_qg;
+
+    m = beta1 * m + (1.f - beta1) * g;
+    v = beta2 * v + (1.f - beta2) * g*g;
+
+    const float step_size = lr / bias_correction1;
+    float4 d = -step_size * m / (sqrtf(v / bias_correction2) + eps);
+
+    param[qid] = normalize(q + d);
+    exp_avg[qid] = m;
+    exp_avg_sq[qid] = v;
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void fused_adam_riemannian_quat(
+    at::Tensor param,
+    at::Tensor grad,
+    at::Tensor exp_avg,
+    at::Tensor exp_avg_sq,
+    float lr,
+    float beta1,
+    float beta2,
+    float eps,
+    int step
+) {
+    DEVICE_GUARD(param);
+    CHECK_INPUT(param);
+    CHECK_INPUT(grad);
+    CHECK_INPUT(exp_avg);
+    CHECK_INPUT(exp_avg_sq);
+
+    const int64_t numel = param.numel() / 4;
+    if (numel == 0)
+        return;
+    
+    fused_adam_riemannian_quat_kernel<<<_LAUNCH_ARGS_1D(numel, 256)>>>(
+        (float4*)param.data_ptr<float>(),
+        (float4*)grad.data_ptr<float>(),
+        (float4*)exp_avg.data_ptr<float>(),
+        (float4*)exp_avg_sq.data_ptr<float>(),
+        lr,
+        beta1,
+        beta2,
+        1.0f - powf(beta1, step),
+        1.0f - powf(beta2, step),
+        eps,
+        numel
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+// ================
+// Newton
+// ================
 
 template <typename scalar_t>
 __global__ void fused_newton_kernel(
@@ -343,9 +439,9 @@ __global__ void fused_newton_kernel(
     const float lr,
     const float beta1,
     const float beta2,
+    const float bias_correction1,
+    const float bias_correction2,
     const float eps,
-    const int step1,
-    const int step2,
     const int numel
 ) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -353,8 +449,6 @@ __global__ void fused_newton_kernel(
     if (idx < numel) {
         // Bias correction terms
         // TODO: proper bias correction after densification
-        const float bias_correction1 = 1.0f - powf(beta1, step1);
-        const float bias_correction2 = 1.0f - powf(beta2, step2);
         const float step_size = lr / bias_correction1;
         
         // Load values
@@ -414,9 +508,9 @@ void fused_newton(
         lr,
         beta1,
         beta2,
+        1.0f - powf(beta1, step1),
+        1.0f - powf(beta2, step2),
         eps,
-        step1,
-        step2,
         numel
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -456,7 +550,9 @@ void fused_newton_multi(
 
 
 
-/* 3DGS^2-TR Mean - https://arxiv.org/abs/2602.00395 */
+// ================
+// 3DGS^2-TR Mean - https://arxiv.org/abs/2602.00395
+// ================
 
 __global__ void fused_3dgs2tr_mean_optim_kernel(
     const int num_gs,
@@ -471,18 +567,16 @@ __global__ void fused_3dgs2tr_mean_optim_kernel(
     const float lr,
     const float beta1,
     const float beta2,
+    const float bias_correction1,
+    const float bias_correction2,
     const float eps,
-    const float eps_tr,
-    const int step1,
-    const int step2
+    const float eps_tr
 ) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     if (idx < num_gs) {
         // Bias correction terms
         // TODO: proper bias correction after densification
-        const float bias_correction1 = 1.0f - powf(beta1, step1);
-        const float bias_correction2 = 1.0f - powf(beta2, step2);
         const float step_size = lr / bias_correction1;
 
         // Update momentum
@@ -570,17 +664,18 @@ void fused_3dgs2tr_mean_optim(
         lr,
         beta1,
         beta2,
+        1.0f - powf(beta1, step1),
+        1.0f - powf(beta2, step2),
         eps,
-        eps_tr,
-        step1,
-        step2
+        eps_tr
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 
-/* 3DGS^2-TR Scale - https://arxiv.org/abs/2602.00395 */
-/* This can also be used for colors (equivalent to with c=0.5, otherwise adjust eps_tr accordingly) */
+// ================
+// 3DGS^2-TR Scale - https://arxiv.org/abs/2602.00395
+// ================
 
 __global__ void fused_3dgs2tr_scale_optim_kernel(
     const int num_gs,
@@ -593,18 +688,16 @@ __global__ void fused_3dgs2tr_scale_optim_kernel(
     const float lr,
     const float beta1,
     const float beta2,
+    const float bias_correction1,
+    const float bias_correction2,
     const float eps,
-    const float eps_tr,
-    const int step1,
-    const int step2
+    const float eps_tr
 ) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     if (idx < num_gs) {
         // Bias correction terms
         // TODO: proper bias correction after densification
-        const float bias_correction1 = 1.0f - powf(beta1, step1);
-        const float bias_correction2 = 1.0f - powf(beta2, step2);
         const float step_size = lr / bias_correction1;
 
         // Update momentum
@@ -675,16 +768,18 @@ void fused_3dgs2tr_scale_optim(
         lr,
         beta1,
         beta2,
+        1.0f - powf(beta1, step1),
+        1.0f - powf(beta2, step2),
         eps,
-        eps_tr,
-        step1,
-        step2
+        eps_tr
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 
-/* 3DGS^2-TR Color - https://arxiv.org/abs/2602.00395 */
+// ================
+// 3DGS^2-TR Color - https://arxiv.org/abs/2602.00395
+// ================
 
 __global__ void fused_3dgs2tr_color_optim_kernel(
     const int num_gs,
@@ -697,18 +792,16 @@ __global__ void fused_3dgs2tr_color_optim_kernel(
     const float lr,
     const float beta1,
     const float beta2,
+    const float bias_correction1,
+    const float bias_correction2,
     const float eps,
-    const float eps_tr,
-    const int step1,
-    const int step2
+    const float eps_tr
 ) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     if (idx < num_gs) {
         // Bias correction terms
         // TODO: proper bias correction after densification
-        const float bias_correction1 = 1.0f - powf(beta1, step1);
-        const float bias_correction2 = 1.0f - powf(beta2, step2);
         const float step_size = lr / bias_correction1;
 
         // Update momentum
@@ -782,16 +875,18 @@ void fused_3dgs2tr_color_optim(
         lr,
         beta1,
         beta2,
+        1.0f - powf(beta1, step1),
+        1.0f - powf(beta2, step2),
         eps,
-        eps_tr,
-        step1,
-        step2
+        eps_tr
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 
-/* 3DGS^2-TR Opacity - https://arxiv.org/abs/2602.00395 */
+// ================
+// 3DGS^2-TR Opacity - https://arxiv.org/abs/2602.00395
+// ================
 
 __global__ void fused_3dgs2tr_opacity_optim_kernel(
     const int num_gs,
@@ -803,18 +898,16 @@ __global__ void fused_3dgs2tr_opacity_optim_kernel(
     const float lr,
     const float beta1,
     const float beta2,
+    const float bias_correction1,
+    const float bias_correction2,
     const float eps,
-    const float eps_tr,
-    const int step1,
-    const int step2
+    const float eps_tr
 ) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     if (idx < num_gs) {
         // Bias correction terms
         // TODO: proper bias correction after densification
-        const float bias_correction1 = 1.0f - powf(beta1, step1);
-        const float bias_correction2 = 1.0f - powf(beta2, step2);
         const float step_size = lr / bias_correction1;
 
         // Update momentum
@@ -878,16 +971,18 @@ void fused_3dgs2tr_opacity_optim(
         lr,
         beta1,
         beta2,
+        1.0f - powf(beta1, step1),
+        1.0f - powf(beta2, step2),
         eps,
-        eps_tr,
-        step1,
-        step2
+        eps_tr
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 
-/* 3DGS^2-TR Quaternion - https://arxiv.org/abs/2602.00395 */
+// ================
+// 3DGS^2-TR Quaternion - https://arxiv.org/abs/2602.00395
+// ================
 
 __device__ __forceinline__ float3x3 operator*(float3x3 A, float k) {
     return {A[0]*k, A[1]*k, A[2]*k};
@@ -996,18 +1091,16 @@ __global__ void fused_3dgs2tr_quat_optim_kernel(
     const float lr,
     const float beta1,
     const float beta2,
+    const float bias_correction1,
+    const float bias_correction2,
     const float eps,
-    const float eps_tr,
-    const int step1,
-    const int step2
+    const float eps_tr
 ) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     if (idx < num_gs) {
         // Bias correction terms
         // TODO: proper bias correction after densification
-        const float bias_correction1 = 1.0f - powf(beta1, step1);
-        const float bias_correction2 = 1.0f - powf(beta2, step2);
         const float step_size = lr / bias_correction1;
 
         // Update momentum
@@ -1040,7 +1133,8 @@ __global__ void fused_3dgs2tr_quat_optim_kernel(
         delta.y = isfinite(delta.y) ? delta.y : 0.0f;
         delta.z = isfinite(delta.z) ? delta.z : 0.0f;
         delta.w = isfinite(delta.w) ? delta.w : 0.0f;
-        quats[idx] += delta;
+        // quats[idx] += delta;
+        quats[idx] = normalize(quats[idx] + delta);
     }
 }
 
@@ -1086,17 +1180,19 @@ void fused_3dgs2tr_quat_optim(
         lr,
         beta1,
         beta2,
+        1.0f - powf(beta1, step1),
+        1.0f - powf(beta2, step2),
         eps,
-        eps_tr,
-        step1,
-        step2
+        eps_tr
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 
 
-/* Adam for linear RGB */
+// ================
+// Adam for linear RGB
+// ================
 
 __global__ void fused_adam_linear_rgb_optim_kernel(
     const int numel,
@@ -1107,16 +1203,15 @@ __global__ void fused_adam_linear_rgb_optim_kernel(
     const float lr,
     const float beta1,
     const float beta2,
-    const float eps,
-    const int step
+    const float bias_correction1,
+    const float bias_correction2,
+    const float eps
 ) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     if (idx < numel) {
         // Bias correction terms
         // TODO: proper bias correction after densification
-        const float bias_correction1 = 1.0f - powf(beta1, step);
-        const float bias_correction2 = 1.0f - powf(beta2, step);
         const float step_size = lr / bias_correction1;
         
         // Load values
@@ -1176,14 +1271,17 @@ void fused_adam_linear_rgb_optim(
         lr,
         beta1,
         beta2,
-        eps,
-        step
+        1.0f - powf(beta1, step),
+        1.0f - powf(beta2, step),
+        eps
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 
-/* Trust Region Adam for linear RGB */
+// ================
+// Trust Region Adam for linear RGB
+// ================
 
 __global__ void fused_adamtr_linear_rgb_optim_kernel(
     const int num_gs,
@@ -1195,6 +1293,8 @@ __global__ void fused_adamtr_linear_rgb_optim_kernel(
     const float lr,
     const float beta1,
     const float beta2,
+    const float bias_correction1,
+    const float bias_correction2,
     const float eps,
     const float eps_tr,
     const int step
@@ -1204,8 +1304,6 @@ __global__ void fused_adamtr_linear_rgb_optim_kernel(
     if (idx < num_gs) {
         // Bias correction terms
         // TODO: proper bias correction after densification
-        const float bias_correction1 = 1.0f - powf(beta1, step);
-        const float bias_correction2 = 1.0f - powf(beta2, step);
         const float step_size = lr / bias_correction1;
         
         // Load values
@@ -1281,6 +1379,8 @@ void fused_adamtr_linear_rgb_optim(
         lr,
         beta1,
         beta2,
+        1.0f - powf(beta1, step),
+        1.0f - powf(beta2, step),
         eps,
         eps_tr,
         step
@@ -1289,7 +1389,9 @@ void fused_adamtr_linear_rgb_optim(
 }
 
 
-/* Trust Region Adam for linear RGB, SH coefficients */
+// ================
+// Trust Region Adam for linear RGB, SH coefficients
+// ================
 
 __global__ void fused_adamtr_linear_rgb_sh_optim_kernel(
     const int num_params,
@@ -1303,6 +1405,8 @@ __global__ void fused_adamtr_linear_rgb_sh_optim_kernel(
     const float lr,
     const float beta1,
     const float beta2,
+    const float bias_correction1,
+    const float bias_correction2,
     const float eps,
     const float eps_tr,
     const int step
@@ -1312,8 +1416,6 @@ __global__ void fused_adamtr_linear_rgb_sh_optim_kernel(
     if (idx < num_params) {
         // Bias correction terms
         // TODO: proper bias correction after densification
-        const float bias_correction1 = 1.0f - powf(beta1, step);
-        const float bias_correction2 = 1.0f - powf(beta2, step);
         const float step_size = lr / bias_correction1;
         
         // Load values
@@ -1389,6 +1491,8 @@ void fused_adamtr_linear_rgb_sh_optim(
         lr,
         beta1,
         beta2,
+        1.0f - powf(beta1, step),
+        1.0f - powf(beta2, step),
         eps,
         eps_tr,
         step

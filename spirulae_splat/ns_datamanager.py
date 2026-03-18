@@ -496,7 +496,7 @@ class SpirulaeDataManager(FullImageDatamanager):
             for key, value in camera.items():
                 if isinstance(value, torch.Tensor) and value.numel() == 0:
                     camera[key] = None
-                elif isinstance(value, torch.Tensor):
+                elif isinstance(value, torch.Tensor) and max_batch_size is not None:
                     camera[key] = value[:max_batch_size].to(self.device)
                 else:
                     camera[key] = value

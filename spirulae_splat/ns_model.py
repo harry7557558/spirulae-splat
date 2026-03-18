@@ -1013,6 +1013,10 @@ class SpirulaeModel(Model):
         if val:
             splat_params = tuple([(p.detach() if isinstance(p, torch.Tensor) else p) for p in splat_params])
 
+        # setup optimizer override
+        # TODO: more reliable way than setattr tensor?
+        if "quats" in self.gauss_params:
+            self.quats.optimizer_override = "fused_adam_riemannian_quat"
         if self.config.use_linear_color_space:
             if "features_dc" in self.gauss_params and 'opacities' in self.gauss_params:
                 # self.features_dc.optimizer_override = "fused_adam_linear_rgb_optim"
@@ -1470,7 +1474,7 @@ class SpirulaeModel(Model):
         if hasattr(self, 'overfit_score'):
             losses['overfit_score'] = self.overfit_score
 
-        def fmt(key: str, s: float, decimals=None) -> str:
+        def fmt(key: str, s: float, decimals=None, sigfigs=3) -> str:
             if s == 0.0 or key not in losses:
                 return '~'
 
@@ -1487,14 +1491,16 @@ class SpirulaeModel(Model):
             if _storage[key] == 0.0:
                 return '~'
 
-            if abs(l) < 1e-4 and decimals is None:
-                s = f"{l:.3g}"
+            if (abs(l) < 0.1**(sigfigs+1) or abs(l) >= 1.0-(0.1**sigfigs)) and decimals is None:
+                s = f"{{:.{sigfigs}g}}".format(l)
             else:
                 if decimals is None:  # 3 sig figs
-                    decimals = int(max(-math.log10(0.001*abs(l)), 0)) if l != 0.0 else 0
+                    decimals = int(max(-math.log10((0.1**sigfigs)*abs(l)), 0)) if l != 0.0 else 0
                 s = f"{{:.{decimals}f}}".format(l)
             if s.startswith('0.'):
                 s = s[1:]
+            if s.startswith('-0.'):
+                s = '-' + s[2:]
             return boldcyan(s)
 
         reg_mcmc = (self.config.use_mcmc and self.step < self.config.stop_refine_at)
@@ -1521,8 +1527,9 @@ class SpirulaeModel(Model):
             "                \n",
             f"{bracket('ImReg')} {orange('normal')}={fmt('normal_reg', reg_2dgs[1], 3)} "
             f"{orange('alpha')}={fmt('alpha_reg', self.training_losses.get_alpha_reg_weight(), 3)}",
-            f"{bracket('SplatReg')} {orange('opac')}={fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg * reg_mcmc, 3)} "
-            f"{orange('scale')}={fmt('mcmc_scale_reg', self.config.mcmc_scale_reg * reg_mcmc, 4)} "
+            f"{bracket('SplatReg')} {orange('o')}={fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg * reg_mcmc, 3)} "
+            f"{orange('s')}={fmt('mcmc_scale_reg', self.config.mcmc_scale_reg * reg_mcmc, 4)} "
+            f"{orange('q')}={fmt('quat_norm_reg', self.config.quat_norm_reg, sigfigs=1)} "
             f"{orange('erank')}={fmt('erank_reg', max(self.config.erank_reg_s3, self.config.erank_reg))} "
             f"{orange('aniso')}={fmt('scale_reg', self.config.scale_regularization_weight)}",
             "                \n",

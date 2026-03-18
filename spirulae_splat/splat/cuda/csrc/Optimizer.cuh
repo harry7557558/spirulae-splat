@@ -56,6 +56,19 @@ void fused_adam_multi(
 );
 
 
+void fused_adam_riemannian_quat(
+    at::Tensor param,
+    at::Tensor grad,
+    at::Tensor exp_avg,
+    at::Tensor exp_avg_sq,
+    float lr,
+    float beta1,
+    float beta2,
+    float eps,
+    int step
+);
+
+
 void fused_newton(
     at::Tensor param,
     at::Tensor grad,

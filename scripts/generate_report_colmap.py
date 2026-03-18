@@ -686,6 +686,8 @@ def generate_report(
 
         xy_batch = im.xys[im.point3D_ids != -1]
         im_pids = im.point3D_ids[im.point3D_ids != -1]
+        if len(im_pids) == 0:
+            continue
         xyz_batch = np.stack([colmap_points[pid].xyz for pid in im_pids])    
 
         proj = xyz_batch @ rotation.T + translation.T

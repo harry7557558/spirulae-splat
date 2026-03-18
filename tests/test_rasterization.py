@@ -135,6 +135,8 @@ def get_inputs():
     features_dc = torch.rand((N, 3)).to(device)
     features_sh = 0.2 * torch.randn((N, (SH_DEGREE+1)**2-1, 3)).to(device)
 
+    quats = torch.nn.functional.normalize(quats)
+
     viewmats = torch.eye(4)[None].repeat(B, 1, 1)
     viewmats[:, :3, 3] = 1.0 * torch.randn((B, 3))
     viewmats[:, 2, 3] = torch.abs(viewmats[:, 2, 3])
