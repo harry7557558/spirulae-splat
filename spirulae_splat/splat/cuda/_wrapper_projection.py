@@ -4,7 +4,7 @@ import math
 import warnings
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Optional, Tuple, List
+from typing import Any, Callable, Optional, Tuple, List, Union
 
 import torch
 from torch import Tensor
@@ -30,13 +30,13 @@ def _make_lazy_cuda_func(name: str) -> Callable:
 
     return call_cuda
 
-def add_gradient_component(tensor: Tensor, key: str, grad: Tensor):
-    grad = grad.view(tensor.shape)
-    assert hasattr(tensor, 'optim_info')
-    if key in tensor.optim_info:
-        tensor.optim_info[key] += grad
+def add_gradient_component(obj: Union[Tensor, dict], key: str, grad: Tensor):
+    if isinstance(obj, torch.Tensor):
+        assert False, "add_gradient_component called with a tensor instead of backward_info"
+    if key in obj:
+        obj[key] += grad
     else:
-        tensor.optim_info[key] = grad
+        obj[key] = grad
 
 
 def spherical_harmonics(
@@ -103,6 +103,14 @@ class _SphericalHarmonics(torch.autograd.Function):
         return None, None, v_dirs, v_coeffs_dc, v_coeffs_sh
 
 
+def scatter_add(ref_tensor: Tensor, tensor: Tensor, indices: Tensor):
+    v_tensor = torch.zeros_like(ref_tensor)
+    _make_lazy_cuda_func("inplace_scatter_add")(
+        indices, tensor, v_tensor
+    )
+    return v_tensor
+
+
 class _Index(torch.autograd.Function):
     @staticmethod
     def forward(
@@ -119,37 +127,7 @@ class _Index(torch.autograd.Function):
     @staticmethod
     def backward(ctx, v_output: Tensor):
         tensor, indices = ctx.saved_tensors
-        v_tensor = torch.zeros_like(tensor)
-        _make_lazy_cuda_func("inplace_scatter_add")(
-            indices, v_output, v_tensor
-        )
-
-        # apply to other gradient states
-        # TODO: prevent double apply to same tensor for speed?
-        for comp in ['vr_splats', 'h_splats']:
-            if not hasattr(v_output, comp):
-                continue
-            v_comp = torch.zeros_like(tensor)
-            _make_lazy_cuda_func("inplace_scatter_add")(
-                indices, getattr(v_output, comp), v_comp
-            )
-            setattr(v_tensor, comp, v_comp)
-        
-        for comp in ['gradr_all', 'hess_all']:
-            if not hasattr(v_output, comp):
-                continue
-            comp_list = getattr(v_output, comp)  # type: List
-            if comp_list[-1] == True:  # TODO: thread safety
-                continue
-            comp_list[-1] = True
-            for i in range(len(comp_list)-1):
-                v_comp = torch.zeros(tensor.shape[0], *comp_list[i].shape[1:], device=tensor.device)
-                _make_lazy_cuda_func("inplace_scatter_add")(
-                    indices, comp_list[i], v_comp
-                )
-                comp_list[i] = v_comp
-            setattr(v_tensor, comp, comp_list)
-
+        v_tensor = scatter_add(tensor, v_output, indices)
         return v_tensor, None
 
 
@@ -167,6 +145,7 @@ def fully_fused_projection(
     camera_model: Literal["pinhole", "fisheye"] = "pinhole",
     dist_coeffs: Optional[Tensor] = None,
     compute_hessian_diagonal: Literal[None, "position", "all"] = None,
+    backward_info: Optional[dict] = None,
 ) -> Tuple[Tensor, Tensor, Optional[Tensor], Tuple[Tensor]]:
     batch_dims = splats[0].shape[:-2]
     N = splats[0].shape[-2]
@@ -206,7 +185,7 @@ def fully_fused_projection(
             camera_model,
             dist_coeffs.contiguous() if dist_coeffs is not None else None,
             packed,
-            *([compute_hessian_diagonal] if primitive in ["3dgs", "mip", "3dgut"] else [])
+            *([compute_hessian_diagonal, backward_info] if primitive in ["3dgs", "mip", "3dgut"] else [])
         )
 
         if primitive in ["3dgs", "mip"]:
@@ -259,6 +238,7 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
         dist_coeffs: Optional[Tensor],
         packed: bool,
         compute_hessian_diagonal: Literal[None, "position", "all"] = None,
+        backward_info: Optional[dict] = None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
 
         camera_model_type = camera_model.upper()
@@ -290,6 +270,7 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
         ctx.camera_model_type = camera_model_type
         ctx.dist_coeffs = dist_coeffs
         ctx.compute_hessian_diagonal = compute_hessian_diagonal
+        ctx.backward_info = backward_info
 
         return aabb, *proj_returns
 
@@ -302,8 +283,14 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
         ) = ctx.saved_tensors
 
         if ctx.compute_hessian_diagonal is not None:
+            assert ctx.backward_info is not None
             if ctx.primitive not in ["3dgs", "mip", "3dgut"]:
                 raise NotImplementedError()
+            raster_return_keys = 'means2d depths conics proj_opacities colors'.split() \
+                if ctx.primitive in ['3dgs', 'mip'] else 'depths proj_scales proj_opacities colors'.split()
+            assert len(v_proj_returns) == len(raster_return_keys), ([x.shape for x in v_proj_returns], raster_return_keys)
+            proj_return_keys = 'means quats scales opacities features_dc'.split() \
+                if ctx.compute_hessian_diagonal == "all" else ['means']
             (
                 (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh),
                 v_viewmats,
@@ -316,70 +303,36 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
                 viewmats, intrins, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs,
                 camera_ids, gaussian_ids, aabb,
                 [x.contiguous() for x in v_proj_returns],
-                [x.gradr if hasattr(x, 'gradr') else torch.empty(0).to(x) for x in v_proj_returns],
-                [x.hess if hasattr(x, 'hess') else torch.empty(0).to(x) for x in v_proj_returns],
+                [ctx.backward_info[key+'.gradr'] for key in raster_return_keys],
+                [ctx.backward_info[key+'.hess'] for key in raster_return_keys],
                 ctx.needs_input_grad[7],  # viewmats_requires_grad
             )
+            for key in raster_return_keys:
+                if key not in proj_return_keys:
+                    del ctx.backward_info[key+'.gradr']
+                    del ctx.backward_info[key+'.hess']
+            for key in proj_return_keys:
+                if 'proj_'+key+'.gradr' not in ctx.backward_info and 'proj_'+key+'.hess' not in ctx.backward_info:
+                    continue
+                assert 'proj_'+key+'.gradr' in ctx.backward_info
+                assert 'proj_'+key+'.hess' in ctx.backward_info
+                if gaussian_ids is not None:  # packed
+                    assert ctx.primitive in ["3dgut"]
+                    ref_tensor = {"means": means, "quats": quats}[key]
+                    ctx.backward_info[key+'.gradr'] = scatter_add(ref_tensor, ctx.backward_info['proj_'+key+'.gradr'], gaussian_ids)
+                    ctx.backward_info[key+'.hess'] = scatter_add(ref_tensor, ctx.backward_info['proj_'+key+'.hess'], gaussian_ids)
+                    del ctx.backward_info['proj_'+key+'.gradr']
+                    del ctx.backward_info['proj_'+key+'.hess']
             assert vr_proj is not None
             assert h_proj is not None
-            if ctx.compute_hessian_diagonal == "all":  # all Gaussian parameters except SH
-                # print("\n"*10)
-                # print('v_proj_returns')
-                # for (v, vr, h) in zip([None, None, *v_proj_returns], v_proj_returns[0].gradr_all, v_proj_returns[0].hess_all):
-                #     # print(x.mean().item(), y.mean().item())
-                #     if (h != 0).any():
-                #         print(h.shape, (vr / h)[h != 0].median())
-                #     else:
-                #         print(h.shape, vr.mean(), h.mean())
-                # print('vr_proj and h_proj')
-                # for (v, vr, h) in zip(vr_proj, vr_proj[:-1], h_proj[:-1]):
-                #     # print(x.mean().item(), y.mean().item())
-                #     if (h != 0).any():
-                #         print(h.shape, (vr / h)[h != 0].median())
-                #     else:
-                #         print(h.shape, vr.mean(), h.mean())
-                vr_means, vr_quats, vr_scales, vr_opacities, vr_features_dc, vr_features_sh = vr_proj
-                h_means, h_quats, h_scales, h_opacities, h_features_dc, h_features_sh = h_proj
-                # means
-                add_gradient_component(means, 'gradr', vr_means)
-                add_gradient_component(means, 'hess', h_means)
-                if ctx.primitive == "3dgut":
-                    add_gradient_component(means, 'gradr', v_proj_returns[1].gradr_all[0])
-                    add_gradient_component(means, 'hess', v_proj_returns[1].hess_all[0])
-                # quats
-                add_gradient_component(quats, 'gradr', vr_quats)
-                add_gradient_component(quats, 'hess', h_quats)
-                if ctx.primitive == "3dgut":
-                    add_gradient_component(quats, 'gradr', v_proj_returns[1].gradr_all[1])
-                    add_gradient_component(quats, 'hess', v_proj_returns[1].hess_all[1])
-                # scales
-                add_gradient_component(scales, 'gradr', vr_scales)
-                add_gradient_component(scales, 'hess', h_scales)
-                # opacities
-                add_gradient_component(opacities, 'gradr', vr_opacities)
-                add_gradient_component(opacities, 'hess', h_opacities)
-                # features_dc
-                add_gradient_component(features_dc, 'gradr', vr_features_dc)
-                add_gradient_component(features_dc, 'hess', h_features_dc)
-                # features_sh
-                assert vr_features_sh is None
-                assert h_features_sh is None
-                # print('total')
-                # for x in (means, quats, scales, opacities, features_dc):
-                #     if (x.hess != 0).any():
-                #         print(x.shape, (x.gradr / x.hess)[x.hess != 0].median().item())
-                #     else:
-                #         print(x.shape)
-                # print("\n"*10)
-            else:  # means only
-                # print(h_means_from_proj.view(v_means.shape).mean(), h_means.mean())
-                # print(v_proj_returns[0].gradr_all[0].mean().item())
-                # print(v_means.mean().item())
-                add_gradient_component(means, 'gradr', vr_proj.view(v_means.shape))
-                add_gradient_component(means, 'hess', h_proj.view(v_means.shape))
-                if ctx.primitive == "3dgut":
-                    add_gradient_component(means, 'gradr', v_proj_returns[1].gradr_all[0])
-                    add_gradient_component(means, 'hess', v_proj_returns[1].hess_all[0])
+            for key, x, vr, h in zip(proj_return_keys, ctx.saved_tensors, vr_proj, h_proj):
+                add_gradient_component(ctx.backward_info, key+'.gradr', vr)
+                add_gradient_component(ctx.backward_info, key+'.hess', h)
+                assert hasattr(x, 'optim_info')
+                x.optim_info['gradr'] = ctx.backward_info[key+'.gradr']
+                x.optim_info['hess'] = ctx.backward_info[key+'.hess']
+                del ctx.backward_info[key+'.gradr']
+                del ctx.backward_info[key+'.hess']
         else:
             (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh), v_viewmats = _make_lazy_cuda_func(
                 f"projection_{ctx.primitive}_backward"

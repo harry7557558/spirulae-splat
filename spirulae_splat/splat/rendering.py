@@ -300,6 +300,7 @@ def rasterization(
         # Silently change C from local #Cameras to global #Cameras.
         C = len(viewmats)
 
+    backward_info = {}
     if use_bvh:
         # raise NotImplementedError()
         assert packed, "BVH must be packed"
@@ -374,6 +375,7 @@ def rasterization(
             camera_model=camera_model,
             dist_coeffs=dist_coeffs,
             compute_hessian_diagonal=compute_hessian_diagonal,
+            backward_info=backward_info,
         )
 
     if use_bvh:
@@ -458,7 +460,6 @@ def rasterization(
         "camera_model": camera_model,
         "dist_coeffs": dist_coeffs,
     }
-    backward_info = {}
     render_colors, render_Ts, render_meta = rasterize_to_pixels(
         primitive,
         proj_splats,

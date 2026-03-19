@@ -115,7 +115,7 @@ class FusedAdam(Optimizer):
                     eps_params.append(eps_tr)
 
                 _make_lazy_cuda_func(p.optim_info['optimizer_override'])(
-                    p[:p.optim_info['num_splats']] if hasattr(p, 'optim_info') else p,
+                    p[:p.optim_info['num_splats']] if hasattr(p, 'optim_info') and 'num_splats' in p.optim_info else p,
                     p.grad,
                     state['exp_avg'],
                     state['exp_avg_sq'],
@@ -251,7 +251,7 @@ class Fused3DGS2Tr(Optimizer):
                     additional_params = [p.optim_info['scales'], p.optim_info['opacities']]
 
                 _make_lazy_cuda_func(f"fused_3dgs2tr_{mode}_optim")(
-                    p[:p.optim_info['num_splats']] if hasattr(p, 'optim_info') else p,
+                    p[:p.optim_info['num_splats']] if hasattr(p, 'optim_info') and 'num_splats' in p.optim_info else p,
                     # p.grad,
                     p.optim_info['gradr'],  # gradient residual product
                     p.optim_info['hess'],

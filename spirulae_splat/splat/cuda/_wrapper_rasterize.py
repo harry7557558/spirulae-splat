@@ -30,13 +30,7 @@ def _make_lazy_cuda_func(name: str) -> Callable:
 
     return call_cuda
 
-def add_gradient_component(tensor: Tensor, attr: str, grad: Tensor):
-    grad = grad.view(tensor.shape)
-    if hasattr(tensor, attr):
-        setattr(tensor, attr, getattr(tensor, attr) + grad)
-    else:
-        setattr(tensor, attr, grad)
-
+from spirulae_splat.splat.cuda._wrapper_projection import add_gradient_component
 
 
 def rasterize_to_pixels(
@@ -222,9 +216,9 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
             )
             del ctx.backward_info['loss_map']
             v_means2d, v_depths, v_conics, v_opacities, v_colors, v_means2d_abs = v_splats
-            for v, vr, h in zip(v_splats, vr_splats, h_splats):
-                v.gradr = vr
-                v.hess = h
+            for key, v, vr, h in zip('means2d depths conics proj_opacities colors'.split(), v_splats, vr_splats, h_splats):
+                add_gradient_component(ctx.backward_info, key+'.gradr', vr)
+                add_gradient_component(ctx.backward_info, key+'.hess', h)
         else:
             (
                 v_means2d, v_depths, v_conics, v_opacities, v_colors, v_means2d_abs
@@ -370,15 +364,9 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         v_depths = None
 
         if h_splats is not None:
-            vr_splats_mutable = [vr_splats[0], vr_splats[1], False]
-            h_splats_mutable = [h_splats[0], h_splats[1], False]
-            for v, vr, h in zip(v_splats, vr_splats, h_splats):
-                if v.numel() == 0:
-                    continue
-                add_gradient_component(v, 'gradr', vr)
-                add_gradient_component(v, 'hess', h)
-                v.gradr_all = vr_splats_mutable
-                v.hess_all = h_splats_mutable  # so we can get all hess from projection backward pass
+            for key, v, vr, h in zip('proj_means proj_quats depths proj_scales proj_opacities colors'.split(), v_splats, vr_splats, h_splats):
+                add_gradient_component(ctx.backward_info, key+'.gradr', vr)
+                add_gradient_component(ctx.backward_info, key+'.hess', h)
 
         v_backgrounds = None
         if ctx.needs_input_grad[6]:

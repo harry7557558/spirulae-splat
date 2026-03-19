@@ -322,7 +322,7 @@ class OpaqueStrategy(Strategy):
             probs=self._get_probs(state, params, step),
         )
         for value in params.values():
-            if hasattr(value, 'optim_info'):
+            if hasattr(value, 'optim_info') and 'num_splats' in value.optim_info:
                 value.optim_info['num_splats'] += 3*n_gs
         return 3*n_gs
 

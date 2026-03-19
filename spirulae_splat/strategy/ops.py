@@ -19,14 +19,14 @@ from spirulae_splat.viewer.utils import (
 
 def get_param_attr(params, attr):
     param = params[attr]
-    if hasattr(param, 'optim_info'):
+    if hasattr(param, 'optim_info') and 'num_splats' in param.optim_info:
         param = param[:param.optim_info['num_splats']]
     return param
 
 
 def get_param_grad(params, attr):
     param = params[attr]
-    if hasattr(param, 'optim_info'):
+    if hasattr(param, 'optim_info') and 'num_splats' in param.optim_info:
         return param.grad[:param.optim_info['num_splats']]
     return param.grad
 
@@ -521,22 +521,26 @@ def sample_add(
             p[sampled_idxs] = torch.logit(new_opacities)
         elif name == "scales":
             p[sampled_idxs] = torch.log(new_scales)
-        if hasattr(p, 'optim_info'):
+        if hasattr(p, 'optim_info') and 'num_splats' in p.optim_info:
             num_splats = p.optim_info['num_splats']
             assert num_splats + len(sampled_idxs) <= len(p)
             p[num_splats:num_splats+len(sampled_idxs)] = p[sampled_idxs]
             return p
-        p_new = torch.cat([p, p[sampled_idxs]])
-        return torch.nn.Parameter(p_new, requires_grad=p.requires_grad)
+        p_new = torch.nn.Parameter(torch.cat([p, p[sampled_idxs]]), requires_grad=p.requires_grad)
+        if hasattr(p, 'optim_info'):
+            p_new.optim_info = p.optim_info
+        return p_new
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
-        if hasattr(v, 'optim_info'):
+        if hasattr(v, 'optim_info') and 'num_splats' in v.optim_info:
             num_splats = v.optim_info['num_splats']
             assert num_splats <= len(v)
             v[num_splats:].zero_()
             return v
-        v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
-        return torch.cat([v, v_new])
+        v_new = torch.cat([v, torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)])
+        if hasattr(v, 'optim_info'):
+            v_new.optim_info = v.optim_info
+        return v_new
 
     # update the parameters and the state in the optimizers
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
@@ -590,21 +594,26 @@ def sample_add_long_axis_split(
             p_cat = p[sampled_idxs]
         else:
             p_cat = p[sampled_idxs]
-        if hasattr(p, 'optim_info'):
+        if hasattr(p, 'optim_info') and 'num_splats' in p.optim_info:
             num_splats = p.optim_info['num_splats']
             assert num_splats + len(p_cat) <= len(p)
             p[num_splats:num_splats+len(p_cat)] = p_cat
             return p
-        return torch.nn.Parameter(torch.cat([p, p_cat]), requires_grad=p.requires_grad)
+        p_new = torch.nn.Parameter(torch.cat([p, p_cat]), requires_grad=p.requires_grad)
+        if hasattr(p, 'optim_info'):
+            p_new.optim_info = p.optim_info
+        return p_new
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
-        if hasattr(v, 'optim_info'):
+        if hasattr(v, 'optim_info') and 'num_splats' in v.optim_info:
             num_splats = v.optim_info['num_splats']
             assert num_splats <= len(v)
             v[num_splats:].zero_()
             return v
-        v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
-        return torch.cat([v, v_new])
+        v_new = torch.cat([v, torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)])
+        if hasattr(v, 'optim_info'):
+            v_new.optim_info = v.optim_info
+        return v_new
 
     # update the parameters and the state in the optimizers
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
@@ -650,22 +659,27 @@ def sample_add_opaque_triangles(
             p_cat = means2
         else:
             p_cat = p[sampled_idxs].repeat(3, *([1]*(len(p.shape)-1)))
-        if hasattr(p, 'optim_info'):
+        if hasattr(p, 'optim_info') and 'num_splats' in p.optim_info:
             num_splats = p.optim_info['num_splats']
             assert num_splats + len(p_cat) <= len(p)
             p[num_splats:num_splats+len(p_cat)] = p_cat
             return p
-        return torch.nn.Parameter(torch.cat([p, p_cat]), requires_grad=p.requires_grad)
+        p_new = torch.nn.Parameter(torch.cat([p, p_cat]), requires_grad=p.requires_grad)
+        if hasattr(p, 'optim_info'):
+            p_new.optim_info = p.optim_info
+        return p_new
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
-        if hasattr(v, 'optim_info'):
+        if hasattr(v, 'optim_info') and 'num_splats' in v.optim_info:
             num_splats = v.optim_info['num_splats']
             assert num_splats <= len(v)
             v[num_splats:].zero_()
             return v
         v[sampled_idxs] = 0
-        v_new = torch.zeros((3*len(sampled_idxs), *v.shape[1:]), device=v.device)
-        return torch.cat([v, v_new])
+        v_new = torch.cat([v, torch.zeros((3*len(sampled_idxs), *v.shape[1:]), device=v.device)])
+        if hasattr(v, 'optim_info'):
+            v_new.optim_info = v.optim_info
+        return v_new
 
     # update the parameters and the state in the optimizers
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)

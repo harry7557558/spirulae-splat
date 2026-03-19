@@ -329,6 +329,6 @@ class MCMCStrategy(Strategy):
                     min_opacity=self.min_opacity,
                 )
             for value in params.values():
-                if hasattr(value, 'optim_info'):
+                if hasattr(value, 'optim_info') and 'num_splats' in value.optim_info:
                     value.optim_info['num_splats'] += n_gs
         return n_gs

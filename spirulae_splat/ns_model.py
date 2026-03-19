@@ -178,7 +178,7 @@ class SpirulaeModelConfig(ModelConfig):
     """stop culling/splitting at this step WRT screen size of gaussians"""
 
     # MCMC control
-    preallocate_splat_tensors: bool = True
+    preallocate_splat_tensors: bool = False
     """Whether to pre-allocate Gaussian attribute tensors to avoid OOM during densification"""
     mcmc_warmup_length: int = 500
     """start MCMC refinement at this number of steps"""
@@ -513,12 +513,9 @@ class SpirulaeModel(Model):
 
         self.gauss_params = torch.nn.ParameterDict(gauss_params)
 
-        optim_info = {
-            'num_splats': num_points,
-        }
-        for key, value in self.gauss_params.items():
-            if isinstance(value, torch.Tensor) and value.shape[0] == new_num_points:
-                optim_info[key] = value
+        optim_info = {}
+        if self.config.use_mcmc and self.config.preallocate_splat_tensors:
+            optim_info['num_splats'] = num_points
         for key, value in self.gauss_params.items():
             if isinstance(value, torch.Tensor) and value.shape[0] == new_num_points:
                 value.optim_info = {**optim_info}
@@ -648,6 +645,8 @@ class SpirulaeModel(Model):
     def _get_gauss_param(self, key: str):
         tensor = self.gauss_params.get(key, None)
         if hasattr(tensor, "optim_info") and 'num_splats' in tensor.optim_info:
+            if len(tensor) <= tensor.optim_info['num_splats']:
+                return tensor
             result = tensor[:tensor.optim_info['num_splats']]
             if hasattr(tensor, 'optim_info'):
                 result.optim_info = tensor.optim_info
@@ -1045,8 +1044,16 @@ class SpirulaeModel(Model):
         if val:
             splat_params = tuple([(p.detach() if isinstance(p, torch.Tensor) else p) for p in splat_params])
 
-        # setup optimizer override
+        # setup override required for optimizers
         # TODO: more reliable way than setattr tensor?
+        optim_info = {}
+        for key, value in self.gauss_params.items():
+            if isinstance(value, torch.Tensor) and value.shape[0] == self.num_points:
+                optim_info[key] = value
+        for key, value in self.gauss_params.items():
+            if isinstance(value, torch.Tensor) and value.shape[0] == self.num_points:
+                value.optim_info.update(optim_info)
+
         if "quats" in self.gauss_params:
             self.quats.optim_info['optimizer_override'] = "fused_adam_riemannian_quat"
         if self.config.use_linear_color_space:
@@ -1069,6 +1076,7 @@ class SpirulaeModel(Model):
                 self.training_losses.bil_grids_depth.grids.optim_info = {'optimizer_offload': True}
                 self.training_losses.bil_grids_normal.grids.optim_info = {'optimizer_offload': True}
 
+        # rendering
         use_bvh = self.config.use_bvh and self.training and not val
         rgbd, Ts, meta = rasterization(
             self.config.primitive,
@@ -1159,6 +1167,7 @@ class SpirulaeModel(Model):
                 "radii": radii,
                 "means2d": means2d,
                 "depths": depths,
+                "backward_info": meta['backward_info'],
             }
             if 'patch_offsets' in camera.metadata:
                 self.info['patch_offsets'] = camera.metadata['patch_offsets']
@@ -1332,7 +1341,8 @@ class SpirulaeModel(Model):
             self.training_losses.get_static_losses(
                 self.step,
                 self.quats, self.scales, self.opacities,
-                static_losses
+                static_losses,
+                self.info['backward_info']
             )
 
             # Camera optimizer loss (depends on nerfstudio, usually CPU)

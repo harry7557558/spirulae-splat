@@ -189,7 +189,8 @@ class _ComputePerSplatLosses(torch.autograd.Function):
         erank_reg: float,
         erank_reg_s3: float,
         quat_norm_reg_weight: float,
-        compute_hessian_diagonal: Literal[None, "position", "all"] = None
+        compute_hessian_diagonal: Literal[None, "position", "all"] = None,
+        backward_info: Optional[dict] = None,
     ):
 
         hyperparams = (
@@ -210,6 +211,7 @@ class _ComputePerSplatLosses(torch.autograd.Function):
         ctx.hyperparams = hyperparams
         ctx.save_for_backward(scales, opacities, quats)
         ctx.compute_hessian_diagonal = (compute_hessian_diagonal == "all")
+        ctx.backward_info = backward_info
 
         return losses
 
@@ -220,15 +222,16 @@ class _ComputePerSplatLosses(torch.autograd.Function):
         scales, opacities, quats = ctx.saved_tensors
 
         if ctx.compute_hessian_diagonal:
+            assert ctx.backward_info is not None
             v_inputs, vr_inputs, h_inputs = \
             _make_lazy_cuda_func("compute_per_splat_losses_backward_with_hessian_diagonal")(
                 scales, opacities, quats,
                 v_losses,
                 *hyperparams
             )
-            for v, vr, h in zip(v_inputs, vr_inputs, h_inputs):
-                add_gradient_component(v, 'gradr', vr)
-                add_gradient_component(v, 'hess', h)
+            for key, v, vr, h in zip('scales opacities quats'.split(), v_inputs, vr_inputs, h_inputs):
+                add_gradient_component(ctx.backward_info, key+'.gradr', vr)
+                add_gradient_component(ctx.backward_info, key+'.hess', h)
                 # print(v.shape, torch.isfinite(h).float().mean().item(), torch.nan_to_num(v, 0, 0, 0).mean().item(), torch.nan_to_num(vr, 0, 0, 0).mean().item(), torch.nan_to_num(h, 0, 0, 0).mean().item())
         else:
             v_inputs = _make_lazy_cuda_func("compute_per_splat_losses_backward")(
@@ -236,7 +239,7 @@ class _ComputePerSplatLosses(torch.autograd.Function):
                 v_losses,
                 *hyperparams
             )
-        return (*v_inputs, *([None]*len(hyperparams)), None)
+        return (*v_inputs, *([None]*len(hyperparams)), None, None)
 
 
 class _ComputePerPixelLosses(torch.autograd.Function):
@@ -987,7 +990,7 @@ class SplatTrainingLosses(torch.nn.Module):
         quat_norm_reg = 0.01 * (quat_norm-1.0-torch.log(quat_norm)).mean()
         return quat_norm_reg
 
-    def get_static_losses(self, step: int, gauss_quats, gauss_scales, gauss_opacities, loss_dict, _use_torch_impl=False):
+    def get_static_losses(self, step: int, gauss_quats, gauss_scales, gauss_opacities, loss_dict, backward_info: Optional[dict] = None, _use_torch_impl=False):
         """Separately process losses that are not dependent on images"""
         self.step = step
 
@@ -1050,7 +1053,8 @@ class SplatTrainingLosses(torch.nn.Module):
                 self.config.erank_reg * float(self.step >= self.config.erank_reg_warmup),
                 self.config.erank_reg_s3 * float(self.step >= self.config.erank_reg_warmup),
                 self.config.quat_norm_reg,
-                self.config.compute_hessian_diagonal
+                self.config.compute_hessian_diagonal,
+                backward_info,
             )
             loss_dict['mcmc_opacity_reg'] = losses[0]
             loss_dict['mcmc_scale_reg'] = losses[1]
