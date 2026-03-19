@@ -316,10 +316,11 @@ struct Base3DGUT::Screen {
 
 #ifdef __CUDACC__
 
-    static __device__ Screen load(const Buffer &buffer, long idx) {
+    static __device__ Screen load(const Buffer &buffer, long idx, const uint32_t* gaussian_ids) {
+        uint32_t idx0 = gaussian_ids ? gaussian_ids[idx] : idx % buffer.size;
         return {
-            buffer.means ? buffer.means[idx % buffer.size] : make_float3(0.f),
-            buffer.quats ? buffer.quats[idx % buffer.size] : make_float4(0.f),
+            buffer.means ? buffer.means[idx0] : make_float3(0.f),
+            buffer.quats ? buffer.quats[idx0] : make_float4(0.f),
             buffer.depths ? buffer.depths[idx] : 0.0f,
             buffer.scales[idx],
             buffer.opacities[idx],
@@ -329,8 +330,8 @@ struct Base3DGUT::Screen {
         };
     }
 
-    static __device__ Screen loadWithPrecompute(const Buffer &buffer, long idx) {
-        Screen splat = Screen::load(buffer, idx);
+    static __device__ Screen loadWithPrecompute(const Buffer &buffer, long idx, const uint32_t* gaussian_ids) {
+        Screen splat = Screen::load(buffer, idx, gaussian_ids);
         splat.iscl_rot = SlangProjectionUtils::compute_3dgut_iscl_rot(splat.quat, splat.scale);
         return splat;
     }
@@ -377,9 +378,10 @@ struct Base3DGUT::Screen {
         rgb += fmul_axa(grad.rgb, weight);
     }
 
-    __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
-        if (buffer.means) buffer.means[idx % buffer.size] = mean;
-        if (buffer.quats) buffer.quats[idx % buffer.size] = quat;
+    __device__ void saveParamsToBuffer(Buffer &buffer, long idx, const uint32_t* gaussian_ids) {
+        uint32_t idx0 = gaussian_ids ? gaussian_ids[idx] : idx % buffer.size;
+        if (buffer.means) buffer.means[idx0] = mean;
+        if (buffer.quats) buffer.quats[idx0] = quat;
         if (buffer.depths) buffer.depths[idx] = depth;
         buffer.scales[idx] = scale;
         buffer.opacities[idx] = opacity;
@@ -390,10 +392,11 @@ struct Base3DGUT::Screen {
     }
 
     template<int reduce = 1>
-    __device__ void atomicAddToBuffer(Buffer &buffer, long idx) const {
+    __device__ void atomicAddToBuffer(Buffer &buffer, long idx, const uint32_t* gaussian_ids) const {
+        uint32_t idx0 = gaussian_ids ? gaussian_ids[idx] : idx % buffer.size;
         // precomputeBackward needed
-        atomicAddFVec<reduce>(buffer.means + idx % buffer.size, mean);
-        atomicAddFVec<reduce>(buffer.quats + idx % buffer.size, quat);
+        atomicAddFVec<reduce>(buffer.means + idx0, mean);
+        atomicAddFVec<reduce>(buffer.quats + idx0, quat);
         // atomicAddFVec<reduce>(buffer.depths + idx, depth);
         atomicAddFVec<reduce>(buffer.scales + idx, scale);
         atomicAddFVec<reduce>(buffer.opacities + idx, opacity);

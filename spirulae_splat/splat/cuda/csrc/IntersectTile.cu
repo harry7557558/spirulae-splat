@@ -188,7 +188,7 @@ __global__ void intersect_mask_eval3d_kernel(
         uint32_t idx = batch_start + tr;
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [I * N] or [nnz]
-            splat_batch[tr] = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, g);
+            splat_batch[tr] = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, g, nullptr);
             mask_batch[tr] = false;
         }
         block.sync();
@@ -271,7 +271,7 @@ __global__ void intersect_mask_kernel(
         uint32_t idx = batch_start + tr;
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [I * N] or [nnz]
-            splat_batch[tr] = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, g);
+            splat_batch[tr] = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, g, nullptr);
             mask_batch[tr] = false;
         }
         block.sync();

@@ -84,8 +84,10 @@ def rasterize_to_pixels(
         additional_args += [output_distortion, compute_hessian_diagonal, backward_info]
     elif primitive in ["opaque_triangle"]:
         _RasterizeToPixels = _RasterizeToPixelsOpaqueTriangle
+        additional_args += [backward_info]
     elif primitive in ["voxel"]:
         _RasterizeToPixels = _RasterizeToPixelsVoxelEval3D
+        additional_args += [backward_info]
 
     render_outputs = _RasterizeToPixels.apply(
         *[(x.contiguous() if x is not None else None) for x in splats],
@@ -162,12 +164,14 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
         flatten_ids: Tensor,  # [n_isects]
         antialiased: bool,
         compute_hessian_diagonal: bool = False,
-        backward_info: Optional[dict] = None
+        backward_info: Optional[dict] = None,
     ) -> Tuple[Tensor, Tensor]:
         (render_rgbs, render_depths), render_Ts, last_ids = _make_lazy_cuda_func(
             f"rasterization_{['3dgs', 'mip'][antialiased]}_forward"
         )(
-            (means2d, depths, conics, opacities, colors, None), backgrounds, masks,
+            (means2d, depths, conics, opacities, colors, None),
+            # backward_info.get('gaussian_ids', None),
+            backgrounds, masks,
             width, height, isect_offsets, flatten_ids,
         )
 
@@ -206,7 +210,9 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
             v_splats, vr_splats, h_splats = _make_lazy_cuda_func(
                 f"rasterization_{['3dgs', 'mip'][ctx.antialiased]}_backward_with_hessian_diagonal"
             )(
-                (means2d, depths, conics, opacities, colors, None), backgrounds, masks,
+                (means2d, depths, conics, opacities, colors, None),
+                # ctx.backward_info.get('gaussian_ids', None),
+                backgrounds, masks,
                 width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
                 None, None,
                 ctx.backward_info['loss_map'] if ctx.compute_hessian_diagonal else None,
@@ -225,7 +231,9 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
             ) = _make_lazy_cuda_func(
                 f"rasterization_{['3dgs', 'mip'][ctx.antialiased]}_backward"
             )(
-                (means2d, depths, conics, opacities, colors, None), backgrounds, masks,
+                (means2d, depths, conics, opacities, colors, None),
+                # ctx.backward_info.get('gaussian_ids', None),
+                backgrounds, masks,
                 width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
                 (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
                 v_render_Ts.contiguous(),
@@ -269,7 +277,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         dist_coeffs: Optional[Tensor],
         output_distortion: bool = False,
         compute_hessian_diagonal: bool = False,
-        backward_info: Optional[dict] = None
+        backward_info: Optional[dict] = None,
     ) -> Tuple[Tensor, Tensor]:
 
         camera_model = camera_model.upper()
@@ -281,6 +289,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
             "rasterization_3dgut_forward"
         )(
             (means, quats, depths, proj_scales, proj_opacities, colors),
+            backward_info.get('gaussian_ids', None),
             viewmats, intrins, camera_model, dist_coeffs,
             backgrounds, masks,
             width, height, isect_offsets, flatten_ids,
@@ -339,6 +348,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
 
         cuda_return = _make_lazy_cuda_func("rasterization_3dgut_backward" + "_with_hessian_diagonal"*ctx.compute_hessian_diagonal)(
             (means, quats, depths, proj_scales, proj_opacities, colors),
+            ctx.backward_info.get('gaussian_ids', None),
             viewmats, intrins, ctx.camera_model, dist_coeffs,
             backgrounds, masks,
             width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
@@ -402,6 +412,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
         intrins: Tensor,
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
         dist_coeffs: Optional[Tensor],
+        backward_info: Optional[dict] = None,
     ) -> Tuple[Tensor, Tensor]:
 
         camera_model = camera_model.upper()
@@ -417,6 +428,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
             max_blending
         ) = _make_lazy_cuda_func("rasterization_opaque_triangle_forward")(
             (hardness, depths, verts, rgbs, normals),
+            backward_info.get('gaussian_ids', None),
             viewmats, intrins, camera_model, dist_coeffs,
             backgrounds, max_blending_masks,
             width, height, isect_offsets, flatten_ids,
@@ -436,6 +448,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
         ctx.width = width
         ctx.height = height
         ctx.camera_model = camera_model
+        ctx.backward_info = backward_info
 
         # render_alphas = 1.0 - render_Ts
         return (
@@ -476,6 +489,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
             v_viewmats,
         ) = _make_lazy_cuda_func("rasterization_opaque_triangle_backward")(
             (hardness, depths, verts, rgbs, normals),
+            ctx.backward_info.get('gaussian_ids', None),
             viewmats, intrins, ctx.camera_model, dist_coeffs,
             backgrounds,
             width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
@@ -499,7 +513,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
 
         return (
             v_hardness, v_depths, v_verts, v_rgbs, v_normals, v_backgrounds,
-            None, None, None, None, None, None, v_viewmats, None, None, None
+            None, None, None, None, None, None, v_viewmats, None, None, None, None
         )
 
 class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
@@ -524,6 +538,7 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         intrins: Tensor,
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
         dist_coeffs: Optional[Tensor],
+        backward_info: Optional[dict] = None,
     ) -> Tuple[Tensor, Tensor]:
 
         camera_model = camera_model.upper()
@@ -535,6 +550,7 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
             max_blending
         ) = _make_lazy_cuda_func("rasterization_voxel_forward")(
             (pos_sizes, None, densities, colors),
+            backward_info.get('gaussian_ids', None),
             viewmats, intrins, camera_model, dist_coeffs,
             backgrounds, masks,
             width, height, isect_offsets, flatten_ids,
@@ -551,6 +567,7 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         ctx.width = width
         ctx.height = height
         ctx.camera_model = camera_model
+        ctx.backward_info = backward_info
 
         # render_alphas = 1.0 - render_Ts
         return (
@@ -586,6 +603,7 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
             v_viewmats,
         ) = _make_lazy_cuda_func("rasterization_voxel_backward")(
             (pos_sizes, None, densities, colors),
+            ctx.backward_info.get('gaussian_ids', None),
             viewmats, intrins, ctx.camera_model, dist_coeffs,
             backgrounds, masks,
             width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
@@ -610,6 +628,6 @@ class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
         return (
             v_pos_sizes, v_densities,
             v_colors, v_backgrounds,
-            None, None, None, None, None, None, v_viewmats, None, None, None
+            None, None, None, None, None, None, v_viewmats, None, None, None, None
         )
 

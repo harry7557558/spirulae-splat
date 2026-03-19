@@ -14,7 +14,7 @@ void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
     const uint32_t I,
     const uint32_t N,
     const uint32_t n_isects,
-    const bool packed,
+    const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
     const typename SplatPrimitive::Screen::Buffer splat_buffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
@@ -40,6 +40,7 @@ template <typename SplatPrimitive, bool output_distortion, bool output_max_blend
 inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     // Gaussian parameters
     typename SplatPrimitive::Screen::Tensor splats,
+    std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const ssplat::CameraModelType camera_model,
@@ -68,8 +69,8 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     uint32_t n_isects = flatten_ids.size(0);
 
     #define _LAUNCH_ARGS ( \
-            (cudaStream_t)at::cuda::getCurrentCUDAStream(), I, N, n_isects, packed, \
-            splats.buffer(), \
+            (cudaStream_t)at::cuda::getCurrentCUDAStream(), I, N, n_isects, \
+            gaussian_ids.has_value() ? (uint32_t*)gaussian_ids.value().data_ptr<int32_t>() : nullptr, splats.buffer(), \
             viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             backgrounds.has_value() ? (float3*)backgrounds.value().data_ptr<float>() : nullptr, \
             (output_max_blending && max_blending_masks.has_value()) ? max_blending_masks.value().data_ptr<bool>() : nullptr, \
@@ -106,6 +107,7 @@ inline std::tuple<
 > rasterize_to_pixels_eval3d_fwd_tensor(
     // Gaussian parameters
     typename SplatPrimitive::Screen::TensorTuple splats_tuple,
+    std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const ssplat::CameraModelType camera_model,
@@ -161,7 +163,7 @@ inline std::tuple<
     }
 
     launch_rasterize_to_pixels_eval3d_fwd_kernel<SplatPrimitive, output_distortion, output_max_blending>(
-        splats,
+        splats, gaussian_ids,
         viewmats, intrins, camera_model, dist_coeffs,
         backgrounds, max_blending_masks,
         image_width, image_height, tile_offsets, flatten_ids,
@@ -195,6 +197,7 @@ std::tuple<
 > rasterize_to_pixels_3dgut_fwd(
     // Gaussian parameters
     Vanilla3DGUT::Screen::TensorTuple splats_tuple,
+    std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
@@ -211,14 +214,14 @@ std::tuple<
 ) {
     if (output_distortion)
         return rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, true, false>(
-            splats_tuple,
+            splats_tuple, gaussian_ids,
             viewmats, intrins, cmt(camera_model), dist_coeffs,
             backgrounds, masks,
             image_width, image_height,
             tile_offsets, flatten_ids
         );
     return rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, false, false>(
-        splats_tuple,
+        splats_tuple, gaussian_ids,
         viewmats, intrins, cmt(camera_model), dist_coeffs,
         backgrounds, masks,
         image_width, image_height,
@@ -243,6 +246,7 @@ std::tuple<
 > rasterize_to_pixels_3dgut_sv_fwd(
     // Gaussian parameters
     SphericalVoronoi3DGUT_Default::Screen::TensorTuple splats_tuple,
+    std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
@@ -260,7 +264,7 @@ std::tuple<
     if (output_distortion)
         // return rasterize_to_pixels_eval3d_fwd_tensor<SphericalVoronoi3DGUT_Default, true, false>(
         return rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, true, false>(
-            splats_tuple,
+            splats_tuple, gaussian_ids,
             viewmats, intrins, cmt(camera_model), dist_coeffs,
             backgrounds, masks,
             image_width, image_height,
@@ -268,7 +272,7 @@ std::tuple<
         );
     // return rasterize_to_pixels_eval3d_fwd_tensor<SphericalVoronoi3DGUT_Default, false, false>(
     return rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, false, false>(
-        splats_tuple,
+        splats_tuple, gaussian_ids,
         viewmats, intrins, cmt(camera_model), dist_coeffs,
         backgrounds, masks,
         image_width, image_height,
@@ -292,6 +296,7 @@ std::tuple<
 > rasterize_to_pixels_voxel_eval3d_fwd(
     // Gaussian parameters
     VoxelPrimitive::Screen::TensorTuple splats_tuple,
+    std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,      // [..., C, 4, 4]
     const at::Tensor intrins,       // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
@@ -306,7 +311,7 @@ std::tuple<
     const at::Tensor flatten_ids   // [n_isects]
 ) {
     return rasterize_to_pixels_eval3d_fwd_tensor<VoxelPrimitive, true, true>(
-        splats_tuple,
+        splats_tuple, gaussian_ids,
         viewmats, intrins, cmt(camera_model), dist_coeffs,
         backgrounds, masks,
         image_width, image_height,

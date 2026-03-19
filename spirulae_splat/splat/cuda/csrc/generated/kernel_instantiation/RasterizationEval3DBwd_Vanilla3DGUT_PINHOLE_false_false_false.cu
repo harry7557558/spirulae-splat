@@ -15,6 +15,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     const uint32_t I,
     const uint32_t n_isects,
     // fwd inputs
+    const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
     Vanilla3DGUT::Screen::Buffer splat_buffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy

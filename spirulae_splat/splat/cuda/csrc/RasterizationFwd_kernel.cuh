@@ -118,7 +118,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         uint32_t idx = batch_start + tr;
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [I * N] or [nnz]
-            splat_batch[tr] = SplatPrimitive::Screen::load(splat_buffer, g);
+            splat_batch[tr] = SplatPrimitive::Screen::load(splat_buffer, g, nullptr);
         }
 
         // wait for other threads to collect the gaussians in batch

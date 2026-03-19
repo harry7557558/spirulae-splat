@@ -5,6 +5,8 @@ from torch.func import vjp  # type: ignore
 from spirulae_splat.splat._torch_impl import quat_to_rotmat
 
 from spirulae_splat.splat.rendering import rasterization as ssplat_rasterization
+
+# commit 48df61993fed8e4742d0758b6c8c2b4e599c4124
 from gsplat.rendering import rasterization as gsplat_rasterization
 
 from spirulae_splat.splat.cuda import (
@@ -65,7 +67,7 @@ N, SH_DEGREE = 200000, 3
 PACKED = True
 IS_FISHEYE = False
 IS_ANTIALIASED = True
-WITH_UT = False
+WITH_UT = True
 
 def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
     camera_model = ["pinhole", "fisheye"][IS_FISHEYE]

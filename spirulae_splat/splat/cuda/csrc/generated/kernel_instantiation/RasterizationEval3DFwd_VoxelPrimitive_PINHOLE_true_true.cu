@@ -14,7 +14,7 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     const uint32_t I,
     const uint32_t N,
     const uint32_t n_isects,
-    const bool packed,
+    const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
     const VoxelPrimitive::Screen::Buffer splat_buffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy

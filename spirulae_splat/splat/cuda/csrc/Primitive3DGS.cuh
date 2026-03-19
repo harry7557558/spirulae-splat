@@ -514,7 +514,7 @@ struct _Base3DGS<antialiased>::Screen {
 
 #ifdef __CUDACC__
 
-    static __device__ Screen load(const Buffer &buffer, long idx) {
+    static __device__ Screen load(const Buffer &buffer, long idx, const uint32_t* gaussian_ids) {
         return {
             buffer.means2d[idx],
             buffer.depths[idx],
@@ -525,8 +525,8 @@ struct _Base3DGS<antialiased>::Screen {
         };
     }
 
-    static __device__ Screen loadWithPrecompute(const Buffer &buffer, long idx) {
-        return load(buffer, idx);
+    static __device__ Screen loadWithPrecompute(const Buffer &buffer, long idx, const uint32_t* gaussian_ids) {
+        return load(buffer, idx, gaussian_ids);
     }
 
     static __device__ __forceinline__ Screen zero() {
@@ -561,7 +561,7 @@ struct _Base3DGS<antialiased>::Screen {
         xy_abs += fmul_axa(grad.xy, weight);
     }
 
-    __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
+    __device__ void saveParamsToBuffer(Buffer &buffer, long idx, const uint32_t* gaussian_ids) {
         buffer.means2d[idx] = xy;
         buffer.depths[idx] = depth;
         buffer.conics[idx] = conic;
@@ -571,7 +571,7 @@ struct _Base3DGS<antialiased>::Screen {
             buffer.absgrad[idx] = xy_abs;
     }
 
-    __device__ void atomicAddToBuffer(Buffer &buffer, long idx) const {
+    __device__ void atomicAddToBuffer(Buffer &buffer, long idx, const uint32_t* gaussian_ids) const {
         atomicAddFVec(buffer.means2d + idx, xy);
         atomicAddFVec(buffer.depths + idx, depth);
         atomicAddFVec(buffer.conics + idx, conic);

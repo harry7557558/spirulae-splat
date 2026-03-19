@@ -30,6 +30,7 @@ std::tuple<
 > rasterize_to_pixels_3dgut_fwd(
     // Gaussian parameters
     Vanilla3DGUT::Screen::TensorTuple splats_tuple,
+    std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
@@ -56,6 +57,7 @@ std::tuple<
 > rasterize_to_pixels_3dgut_sv_fwd(
     // Gaussian parameters
     SphericalVoronoi3DGUT_Default::Screen::TensorTuple splats_tuple,
+    std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
@@ -82,6 +84,7 @@ std::tuple<
 > rasterize_to_pixels_voxel_eval3d_fwd(
     // Gaussian parameters
     VoxelPrimitive::Screen::TensorTuple splats_tuple,
+    std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,      // [..., C, 4, 4]
     const at::Tensor intrins,       // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,

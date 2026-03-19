@@ -166,7 +166,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         uint32_t splat_gid;
         if (splat_idx >= range_start) {
             splat_gid = flatten_ids[splat_idx]; // flatten index in [I * N] or [nnz]
-            splat = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_gid);
+            splat = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_gid, nullptr);
         }
 
         // accumulate gradient
@@ -294,11 +294,11 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         // accumulate gradient
         if (splat_idx >= range_start) {
             splat.precomputeBackward(v_splat);
-            v_splat.atomicAddToBuffer(v_splat_buffer, splat_gid);
+            v_splat.atomicAddToBuffer(v_splat_buffer, splat_gid, nullptr);
             if (output_hessian_diagonal) {
                 splat.precomputeBackward(vr_splat);
-                vr_splat.atomicAddToBuffer(vr_splat_buffer, splat_gid);
-                h_splat.atomicAddToBuffer(h_splat_buffer, splat_gid);
+                vr_splat.atomicAddToBuffer(vr_splat_buffer, splat_gid, nullptr);
+                h_splat.atomicAddToBuffer(h_splat_buffer, splat_gid, nullptr);
             }
         }
     }

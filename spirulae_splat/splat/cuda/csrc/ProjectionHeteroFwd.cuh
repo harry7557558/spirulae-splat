@@ -111,7 +111,7 @@ __global__ void projection_hetero_forward_kernel(
     camera_ids[thread_idx] = camera_idx;
     gaussian_ids[thread_idx] = splat_idx;
     aabbs[thread_idx] = aabb;
-    splat_proj.saveParamsToBuffer(splats_proj, thread_idx);
+    splat_proj.saveParamsToBuffer(splats_proj, thread_idx, nullptr);
 }
 
 

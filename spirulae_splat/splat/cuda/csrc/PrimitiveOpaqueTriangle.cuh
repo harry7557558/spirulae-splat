@@ -545,9 +545,10 @@ struct OpaqueTriangle::Screen {
 
 #ifdef __CUDACC__
 
-    static __device__ Screen load(const Buffer &buffer, long idx) {
+    static __device__ Screen load(const Buffer &buffer, long idx, const uint32_t* gaussian_ids) {
+        uint32_t idx0 = gaussian_ids ? gaussian_ids[idx] : idx % buffer.size;
         return {
-            buffer.hardness ? buffer.hardness[idx % buffer.size] : make_float2(0.f),
+            buffer.hardness ? buffer.hardness[idx0] : make_float2(0.f),
             buffer.depths[idx],
             { buffer.verts[3*idx+0], buffer.verts[3*idx+1], buffer.verts[3*idx+2] },
             { buffer.rgbs[3*idx+0], buffer.rgbs[3*idx+1], buffer.rgbs[3*idx+2] },
@@ -555,8 +556,8 @@ struct OpaqueTriangle::Screen {
         };
     }
 
-    static __device__ __forceinline__ Screen loadWithPrecompute(const Buffer &buffer, long idx) {
-        return Screen::load(buffer, idx);
+    static __device__ __forceinline__ Screen loadWithPrecompute(const Buffer &buffer, long idx, const uint32_t* gaussian_ids) {
+        return Screen::load(buffer, idx, gaussian_ids);
     }
 
     static __device__ __forceinline__ Screen zero() {
@@ -594,7 +595,7 @@ struct OpaqueTriangle::Screen {
         normal += grad.normal * grad.normal * weight;
     }
 
-    __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
+    __device__ void saveParamsToBuffer(Buffer &buffer, long idx, const uint32_t* gaussian_ids) {
         if (buffer.hardness != nullptr && idx < buffer.size)
             buffer.hardness[idx] = hardness;
         buffer.depths[idx] = depth;
@@ -606,9 +607,10 @@ struct OpaqueTriangle::Screen {
         buffer.normals[idx] = normal;
     }
 
-    __device__ void atomicAddToBuffer(Buffer &buffer, long idx) const {
+    __device__ void atomicAddToBuffer(Buffer &buffer, long idx, const uint32_t* gaussian_ids) const {
+        uint32_t idx0 = gaussian_ids ? gaussian_ids[idx] : idx % buffer.size;
         if (buffer.hardness != nullptr)
-            atomicAddFVec(buffer.hardness + idx % buffer.size, hardness);
+            atomicAddFVec(buffer.hardness + idx0, hardness);
         atomicAddFVec(buffer.depths + idx, depth);
         #pragma unroll
         for (int i = 0; i < 3; i++) {

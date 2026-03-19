@@ -42,6 +42,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     const uint32_t I,
     const uint32_t n_isects,
     // fwd inputs
+    const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
     typename SplatPrimitive::Screen::Buffer splat_buffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
@@ -212,7 +213,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         uint32_t splat_gid;
         if (splat_idx >= range_start) {
             splat_gid = flatten_ids[splat_idx]; // flatten index in [I * N] or [nnz]
-            splat = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_gid);
+            splat = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_gid, gaussian_ids);
         }
 
         // accumulate gradient
@@ -338,11 +339,11 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
         // accumulate gradient
         if (splat_idx >= range_start) {
             splat.precomputeBackward(v_splat);
-            v_splat.atomicAddToBuffer(v_splat_buffer, splat_gid);
+            v_splat.atomicAddToBuffer(v_splat_buffer, splat_gid, gaussian_ids);
             if (output_hessian_diagonal) {
                 splat.precomputeBackward(vr_splat);
-                vr_splat.atomicAddToBuffer(vr_splat_buffer, splat_gid);
-                h_splat.atomicAddToBuffer(h_splat_buffer, splat_gid);
+                vr_splat.atomicAddToBuffer(vr_splat_buffer, splat_gid, gaussian_ids);
+                h_splat.atomicAddToBuffer(h_splat_buffer, splat_gid, gaussian_ids);
             }
         }
     }
@@ -410,6 +411,7 @@ void rasterize_to_pixels_eval3d_bwd_kernel_wrapper(
     const uint32_t I,
     const uint32_t n_isects,
     // fwd inputs
+    const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
     typename SplatPrimitive::Screen::Buffer splat_buffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
@@ -447,7 +449,7 @@ void rasterize_to_pixels_eval3d_bwd_kernel_wrapper(
         SplatPrimitive, camera_model, output_distortion, output_viewmat_grad, output_hessian_diagonal
     ><<<grid, threads, 0, stream>>>(
         I, n_isects,
-        splat_buffer,
+        gaussian_ids, splat_buffer,
         viewmats, intrins, dist_coeffs_buffer, backgrounds, masks,
         image_width, image_height, tile_width, tile_height,
         tile_offsets, flatten_ids,

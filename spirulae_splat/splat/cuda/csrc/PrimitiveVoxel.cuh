@@ -478,8 +478,8 @@ struct VoxelPrimitive::Screen {
 
 #ifdef __CUDACC__
 
-    static __device__ Screen load(const Buffer &buffer, long idx) {
-        long idx0 = idx % buffer.size;
+    static __device__ Screen load(const Buffer &buffer, long idx, const uint32_t* gaussian_ids) {
+        uint32_t idx0 = gaussian_ids ? gaussian_ids[idx] : idx % buffer.size;
         float4 pos_size = buffer.pos_size ? buffer.pos_size[idx0] : make_float4(0, 0, 0, 0);
         float4 d0 = buffer.densities ? buffer.densities[2*idx0] : make_float4(0, 0, 0, 0),
             d1 = buffer.densities ? buffer.densities[2*idx0+1] : make_float4(0, 0, 0, 0);
@@ -492,8 +492,8 @@ struct VoxelPrimitive::Screen {
         };
     }
 
-    static __device__ __forceinline__ Screen loadWithPrecompute(const Buffer &buffer, long idx) {
-        return Screen::load(buffer, idx);
+    static __device__ __forceinline__ Screen loadWithPrecompute(const Buffer &buffer, long idx, const uint32_t* gaussian_ids) {
+        return Screen::load(buffer, idx, gaussian_ids);
     }
 
     static __device__ __forceinline__ Screen zero() {
@@ -529,7 +529,7 @@ struct VoxelPrimitive::Screen {
         rgb += grad.rgb * grad.rgb * weight;
     }
 
-    __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
+    __device__ void saveParamsToBuffer(Buffer &buffer, long idx, const uint32_t* gaussian_ids) {
         if (buffer.pos_size != nullptr && idx < buffer.size)
             buffer.pos_size[idx] = {pos.x, pos.y, pos.z, size};
         if (buffer.depths != nullptr)
@@ -541,8 +541,8 @@ struct VoxelPrimitive::Screen {
         buffer.rgbs[idx] = rgb;
     }
 
-    __device__ void atomicAddToBuffer(Buffer &buffer, long idx) const {
-        long idx0 = idx % buffer.size;
+    __device__ void atomicAddToBuffer(Buffer &buffer, long idx, const uint32_t* gaussian_ids) const {
+        uint32_t idx0 = gaussian_ids ? gaussian_ids[idx] : idx % buffer.size;
         if (buffer.pos_size != nullptr)
             atomicAddFVec(buffer.pos_size + idx0, {pos.x, pos.y, pos.z, size});
         if (buffer.depths != nullptr)

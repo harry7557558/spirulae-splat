@@ -69,7 +69,7 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     const uint32_t I,
     const uint32_t N,
     const uint32_t n_isects,
-    const bool packed,
+    const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
     const typename SplatPrimitive::Screen::Buffer splat_buffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,       // [B, C, 4], fx, fy, cx, cy
@@ -184,7 +184,7 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
             if (t1 < range_end) {
                 uint32_t splat_idx = flatten_ids[t1];
                 typename SplatPrimitive::Screen splat =
-                    SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_idx);
+                    SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_idx, gaussian_ids);
                 splat_batch[block.thread_rank()] = splat;
             }
             block.sync();
@@ -200,7 +200,7 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
         if (!done && t < range_end) {
             // uint32_t splat_idx = flatten_ids[t];
             // typename SplatPrimitive::Screen splat =
-            //     SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_idx);
+            //     SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_idx, gaussian_ids);
             typename SplatPrimitive::Screen splat =
                 splat_batch[(t - range_start) % BLOCK_SIZE];
             float alpha = splat.evaluate_alpha(ray_o, ray_d);
@@ -213,7 +213,7 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
             uint32_t t = pqueue.pop(pqueue_size).x;
             uint32_t splat_idx = flatten_ids[t];
             typename SplatPrimitive::Screen splat =
-                SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_idx);
+                SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_idx, gaussian_ids);
             float alpha = splat.evaluate_alpha(ray_o, ray_d);
 
             const float next_T = T * (1.0f - alpha);
@@ -267,6 +267,7 @@ template <typename SplatPrimitive, bool output_distortion, bool output_max_blend
 inline void launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     // Gaussian parameters
     typename SplatPrimitive::Screen::Tensor splats,
+    std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const ssplat::CameraModelType camera_model,
@@ -300,8 +301,8 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     dim3 grid = {I, tile_height, tile_width};
 
     #define _LAUNCH_ARGS <<<grid, threads, 0, at::cuda::getCurrentCUDAStream()>>>( \
-            I, N, n_isects, packed, \
-            splats.buffer(), \
+            I, N, n_isects, \
+            gaussian_ids.has_value() ? (uint32_t*)gaussian_ids.value().data_ptr<int32_t>() : nullptr, splats.buffer(), \
             viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             backgrounds.has_value() ? (float3*)backgrounds.value().data_ptr<float>() : nullptr, \
             (output_max_blending && max_blending_masks.has_value()) ? max_blending_masks.value().data_ptr<bool>() : nullptr, \
@@ -338,6 +339,7 @@ inline std::tuple<
 > rasterize_to_pixels_sorted_eval3d_fwd_tensor(
     // Gaussian parameters
     typename SplatPrimitive::Screen::TensorTuple splats_tuple,
+    std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const ssplat::CameraModelType camera_model,
@@ -356,6 +358,8 @@ inline std::tuple<
     CHECK_INPUT(flatten_ids);
     CHECK_INPUT(viewmats);
     CHECK_INPUT(intrins);
+    if (gaussian_ids.has_value())
+        CHECK_INPUT(gaussian_ids.value());
     if (backgrounds.has_value())
         CHECK_INPUT(backgrounds.value());
     if (output_max_blending && max_blending_masks.has_value())
@@ -393,7 +397,7 @@ inline std::tuple<
     }
 
     launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel<SplatPrimitive, output_distortion, output_max_blending>(
-        splats,
+        splats, gaussian_ids,
         viewmats, intrins, camera_model, dist_coeffs,
         backgrounds, max_blending_masks,
         image_width, image_height, tile_offsets, flatten_ids,
@@ -422,6 +426,7 @@ std::tuple<
 > rasterize_to_pixels_opaque_triangle_sorted_fwd(
     // Gaussian parameters
     OpaqueTriangle::Screen::TensorTuple splats_tuple,
+    std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
@@ -436,7 +441,7 @@ std::tuple<
     const at::Tensor flatten_ids   // [n_isects]
 ) {
     return rasterize_to_pixels_sorted_eval3d_fwd_tensor<OpaqueTriangle, true, true>(
-        splats_tuple,
+        splats_tuple, gaussian_ids,
         viewmats, intrins, cmt(camera_model), dist_coeffs,
         backgrounds, max_blending_masks,
         image_width, image_height,

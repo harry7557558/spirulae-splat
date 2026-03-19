@@ -77,7 +77,7 @@ __global__ void projection_3dgs_hetero_backward_kernel(
     typename SplatPrimitive::World splat_world =
         SplatPrimitive::World::load(splats_world, splat_idx);
     typename SplatPrimitive::Screen v_splat_proj =
-        SplatPrimitive::Screen::load(v_splats_proj, thread_idx);
+        SplatPrimitive::Screen::load(v_splats_proj, thread_idx, nullptr);
 
     // Projection
     typename SplatPrimitive::World v_splat_world = SplatPrimitive::World::zero();

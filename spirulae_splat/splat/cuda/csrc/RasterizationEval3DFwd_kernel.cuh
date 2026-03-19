@@ -29,7 +29,7 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     const uint32_t I,
     const uint32_t N,
     const uint32_t n_isects,
-    const bool packed,
+    const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
     const typename SplatPrimitive::Screen::Buffer splat_buffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
@@ -147,7 +147,7 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
         uint32_t idx = batch_start + tr;
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [I * N] or [nnz]
-            splat_batch[tr] = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, g);
+            splat_batch[tr] = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, g, gaussian_ids);
             if (output_max_blending)
                 splat_idx_batch[tr] = g;
         }
@@ -214,7 +214,7 @@ void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
     const uint32_t I,
     const uint32_t N,
     const uint32_t n_isects,
-    const bool packed,
+    const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
     const typename SplatPrimitive::Screen::Buffer splat_buffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
@@ -242,8 +242,8 @@ void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
     rasterize_to_pixels_eval3d_fwd_kernel<
         SplatPrimitive, camera_model, output_distortion, output_max_blending
     ><<<grid, threads, 0, stream>>>(
-        I, N, n_isects, packed,
-        splat_buffer, viewmats, intrins, dist_coeffs_buffer, backgrounds, max_blending_masks,
+        I, N, n_isects,
+        gaussian_ids, splat_buffer, viewmats, intrins, dist_coeffs_buffer, backgrounds, max_blending_masks,
         image_width, image_height, tile_width, tile_height, tile_offsets, flatten_ids,
         render_colors, render_Ts, last_ids,
         render_colors2, render_distortions, out_max_blending

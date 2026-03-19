@@ -159,7 +159,7 @@ __global__ void projection_packed_fwd_kernel(
     aabb.z = fminf(fmaxf(aabb.z, 0.0f), image_width-1.0f);
     aabb.w = fminf(fmaxf(aabb.w, 0.0f), image_height-1.0f);
     aabbs[out_idx] = aabb;
-    splat_screen.saveParamsToBuffer(splats_screen, out_idx);
+    splat_screen.saveParamsToBuffer(splats_screen, out_idx, nullptr);
 }
 
 

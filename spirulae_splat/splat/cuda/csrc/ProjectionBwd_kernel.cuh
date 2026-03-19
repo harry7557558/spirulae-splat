@@ -85,12 +85,12 @@ __global__ void projection_fused_bwd_kernel(
     typename SplatPrimitive::World splat_world =
         SplatPrimitive::World::load(splats_world, gid);
     typename SplatPrimitive::Screen v_splat_screen =
-        SplatPrimitive::Screen::load(v_splats_screen, idx);
+        SplatPrimitive::Screen::load(v_splats_screen, idx, nullptr);
     typename SplatPrimitive::Screen vr_splat_screen;
     typename SplatPrimitive::Screen h_splat_screen;
     if (hessian_diagonal_output_mode != HessianDiagonalOutputMode::None) {
-        vr_splat_screen = SplatPrimitive::Screen::load(vr_splats_screen, idx);
-        h_splat_screen = SplatPrimitive::Screen::load(h_splats_screen, idx);
+        vr_splat_screen = SplatPrimitive::Screen::load(vr_splats_screen, idx, nullptr);
+        h_splat_screen = SplatPrimitive::Screen::load(h_splats_screen, idx, nullptr);
     }
 
     // Projection

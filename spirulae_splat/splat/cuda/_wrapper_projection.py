@@ -194,9 +194,10 @@ def fully_fused_projection(
         elif primitive in ['3dgut', '3dgut_sv']:
             means, quats, scales, opacities, features_dc, features_sh = splats
             aabb, depths, scales, opacities, rgbs = proj_returns
-            if packed:
-                means = _Index.apply(means, aabb.gaussian_ids)
-                quats = _Index.apply(quats, aabb.gaussian_ids)
+            # if packed:
+            #     means = _Index.apply(means, aabb.gaussian_ids)
+            #     quats = _Index.apply(quats, aabb.gaussian_ids)
+            backward_info['gaussian_ids'] = aabb.gaussian_ids
             return aabb, depths, (means, quats, depths, scales, opacities, rgbs)
         elif primitive in ['opaque_triangle']:
             means, quats, scales, hardness, features_dc, features_sh, features_ch = splats
@@ -318,9 +319,11 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
                 assert 'proj_'+key+'.hess' in ctx.backward_info
                 if gaussian_ids is not None:  # packed
                     assert ctx.primitive in ["3dgut"]
-                    ref_tensor = {"means": means, "quats": quats}[key]
-                    ctx.backward_info[key+'.gradr'] = scatter_add(ref_tensor, ctx.backward_info['proj_'+key+'.gradr'], gaussian_ids)
-                    ctx.backward_info[key+'.hess'] = scatter_add(ref_tensor, ctx.backward_info['proj_'+key+'.hess'], gaussian_ids)
+                    # ref_tensor = {"means": means, "quats": quats}[key]
+                    # ctx.backward_info[key+'.gradr'] = scatter_add(ref_tensor, ctx.backward_info['proj_'+key+'.gradr'], gaussian_ids)
+                    # ctx.backward_info[key+'.hess'] = scatter_add(ref_tensor, ctx.backward_info['proj_'+key+'.hess'], gaussian_ids)
+                    ctx.backward_info[key+'.gradr'] = ctx.backward_info['proj_'+key+'.gradr']
+                    ctx.backward_info[key+'.hess'] = ctx.backward_info['proj_'+key+'.hess']
                     del ctx.backward_info['proj_'+key+'.gradr']
                     del ctx.backward_info['proj_'+key+'.hess']
             assert vr_proj is not None
@@ -373,6 +376,7 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
         camera_model: Literal["pinhole", "fisheye"],
         dist_coeffs: Optional[Tensor],
         packed: bool,
+        backward_info: Optional[dict] = None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
 
         camera_model_type = camera_model.upper()
@@ -404,6 +408,7 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
         ctx.height = height
         ctx.camera_model_type = camera_model_type
         ctx.dist_coeffs = dist_coeffs
+        ctx.backward_info = backward_info
 
         return aabb, *proj_returns
 
@@ -452,6 +457,7 @@ class _FullyFusedProjectionVoxel(torch.autograd.Function):
         camera_model: Literal["pinhole", "fisheye"],
         dist_coeffs: Optional[Tensor],
         packed: bool,
+        backward_info: Optional[dict] = None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
 
         camera_model_type = camera_model.upper()
@@ -481,6 +487,7 @@ class _FullyFusedProjectionVoxel(torch.autograd.Function):
         ctx.height = height
         ctx.camera_model_type = camera_model_type
         ctx.dist_coeffs = dist_coeffs
+        ctx.backward_info = backward_info
 
         return aabb, depths, proj_rgbs
 
