@@ -159,12 +159,12 @@ _SECOND_ORDER_POSITION_OPTIMIZERS["means"] = {
 }
 
 _SECOND_ORDER_OPTIMIZERS = {**_SECOND_ORDER_POSITION_OPTIMIZERS}
-_SECOND_ORDER_OPTIMIZERS["quats"] = {
-    "optimizer": FusedNewtonOptimizerConfig(mode="quat", lr=1.0e-6, eps=1e-15),
-    "scheduler": ExponentialDecaySchedulerConfig(
-        lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000, lr_pre_warmup=0
-    ),
-}
+# _SECOND_ORDER_OPTIMIZERS["quats"] = {
+#     "optimizer": FusedNewtonOptimizerConfig(mode="quat", lr=1.0e-6, eps=1e-15),
+#     "scheduler": ExponentialDecaySchedulerConfig(
+#         lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000, lr_pre_warmup=0
+#     ),
+# }
 _SECOND_ORDER_OPTIMIZERS["scales"] = {
     "optimizer": FusedNewtonOptimizerConfig(mode="scale", lr=1.0e-6, eps=1e-15),
     "scheduler": ExponentialDecaySchedulerConfig(

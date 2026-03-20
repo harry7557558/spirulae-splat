@@ -702,7 +702,7 @@ class SplatTrainingLosses(torch.nn.Module):
                 gt_alpha = gt_alpha & alpha if gt_alpha is not None else alpha
 
         # replace parts of background with random noise to discourage transparency
-        background = outputs["background"] if 'background' in outputs else pred_rgb
+        background = outputs["background"] if 'background' in outputs else gt_rgb
         if self.config.randomize_background == "opaque-only":
             background_mask = gt_rgb_mask
             if none_sky_mask is not None:
