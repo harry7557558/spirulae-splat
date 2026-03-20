@@ -566,6 +566,8 @@ class Nerfstudio2(Nerfstudio):
         data_dir: the directory of the data that contains the transform file
         downsample_folder_prefix: prefix of the newly generated downsampled images
         """
+        self.downscale_factor = 1
+        return data_dir / filepath  # TODO
 
         if self.downscale_factor is None:
             if self.config.downscale_factor is None:

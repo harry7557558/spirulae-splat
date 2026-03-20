@@ -491,7 +491,7 @@ class SplatTrainingLosses(torch.nn.Module):
         """Compute groundtruth image with iteration dependent downscale factor for evaluation purpose
 
         Args:
-            image: tensor.Tensor in type uint8, uint16, or float32
+            image: tensor.Tensor in type uint8, uint16, float16, or float32
         """
         if image.dtype == torch.uint8:
             # image = image.float() / 255.0
@@ -499,6 +499,8 @@ class SplatTrainingLosses(torch.nn.Module):
         elif image.dtype == torch.uint16:
             # image = image.float() / 65535.0
             image = _make_lazy_cuda_func("uint16_image_to_float")(image)
+        elif image.dtype == torch.float16:
+            image = image.float()
         gt_img = self._downscale_if_required(image)
         return gt_img
 

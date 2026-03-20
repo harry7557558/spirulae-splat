@@ -499,7 +499,7 @@ class ProcessMetashape():
 
         image_dir = self.work_dir / self.images
         if not image_dir.exists():
-            raise ValueError(f"Image directory {image_dir} does not exist")
+            raise ValueError(f"Image directory `{image_dir}` does not exist")
 
         summary_log = []
 

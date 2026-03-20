@@ -31,6 +31,44 @@ def get_image_mask_tensor_from_path(filepath: Path, height: int, width: int) -> 
     return mask_tensor
 
 
+def get_image_from_path(
+    filename: Path,
+    scale_factor: float,
+):
+    is_exr = filename.suffix.lower() == ".exr"
+    if is_exr:
+        try:
+            import OpenEXR
+        except ImportError:
+            print("OpenEXR not properly installed. Please install using `pip install OpenEXR`.")
+            exit(0)
+        exr_file = OpenEXR.File(str(filename))
+        exr_channels = exr_file.channels()
+        if 'RGBA' in exr_channels:
+            image = exr_channels['RGBA'].pixels
+        elif 'RGB' in exr_channels:
+            image = exr_channels['RGB'].pixels
+        else:
+            raise ValueError("Unsupported EXR file. Make sure it contains channel `RGB` or `RGBA`.")
+    else:
+        image = cv2.imread(filename, cv2.IMREAD_UNCHANGED)
+    # image = cv2.cvtColor(cv2.imread(image_filename), cv2.COLOR_BGR2RGB)
+    if scale_factor != 1.0:
+        width, height, _ = image.shape
+        newsize = (int(width * scale_factor), int(height * scale_factor))
+        image = cv2.resize(image, newsize, cv2.INTER_LINEAR)
+    if len(image.shape) == 2:
+        image = image[:, :, None]
+    if image.shape[2] == 1:
+        image = np.repeat(image, 3, axis=2)
+    assert len(image.shape) == 3
+    if not is_exr:
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB if image.shape[2] == 3 else cv2.COLOR_BGRA2RGBA)
+    if image.dtype == np.bool_:
+        image = image.astype(np.uint8) * 255
+    return image
+
+
 def get_depth_image_from_path(
     filepath: Path,
     height: int,
@@ -135,21 +173,8 @@ class SpirulaeDataset(InputDataset):
             image_idx: The image index in the dataset.
         """
         image_filename = self._dataparser_outputs.image_filenames[image_idx]
-        image = cv2.imread(image_filename, cv2.IMREAD_UNCHANGED)
-        # image = cv2.cvtColor(cv2.imread(image_filename), cv2.COLOR_BGR2RGB)
-        if self.scale_factor != 1.0:
-            width, height, _ = image.shape
-            newsize = (int(width * self.scale_factor), int(height * self.scale_factor))
-            image = cv2.resize(image, newsize, cv2.INTER_LINEAR)
-        if len(image.shape) == 2:
-            image = image[:, :, None]
-        if image.shape[2] == 1:
-            image = np.repeat(image, 3, axis=2)
-        assert len(image.shape) == 3
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB if image.shape[2] == 3 else cv2.COLOR_BGRA2RGBA)
-        if image.dtype == np.bool_:
-            image = image.astype(np.uint8) * 255
-        assert image.dtype in [np.uint8, np.uint16], f"Unsupported image dtype {image.dtype} for image {image_filename}"
+        image = get_image_from_path(image_filename, self.scale_factor)
+        assert image.dtype in [np.uint8, np.uint16, np.float16, np.float32], f"Unsupported image dtype {image.dtype} for image {image_filename}"
         assert image.shape[2] in [3, 4], f"Image shape of {image.shape} is in correct."
         return image
 
@@ -160,7 +185,10 @@ class SpirulaeDataset(InputDataset):
             image_idx: The image index in the dataset.
         """
         image = self.get_numpy_image(image_idx)
-        image = image.astype(np.float32) / (65535.0 if image.dtype == np.uint16 else 255.0)
+        if image.dtype in [np.uint8, np.uint16]:
+            image = image.astype(np.float32) / (65535.0 if image.dtype == np.uint16 else 255.0)
+        elif image.dtype not in [np.float32]:
+            image = np.maximum(image.astype(np.float32), 0.0)
         image = torch.from_numpy(image.astype("float32"))
         if self._dataparser_outputs.alpha_color is not None and image.shape[-1] == 4:
             assert (self._dataparser_outputs.alpha_color >= 0).all() and (
@@ -170,8 +198,8 @@ class SpirulaeDataset(InputDataset):
         return image
 
     def get_image_uint8(self, image_idx: int) -> UInt8[Tensor, "image_height image_width num_channels"]:
-        """Returns a 3 channel image in torch.Tensor, in original format (uint8 or uint16).
-            Note that this may return a uint16 image if the input is uint16, function name is kept for backward compatibility.
+        """Returns a 3 channel image in torch.Tensor, in original format (uint8, uint16, float16, float32).
+            Note that this may return a different types if input is a different type, function name is kept for backward compatibility.
 
         Args:
             image_idx: The image index in the dataset.
@@ -185,11 +213,11 @@ class SpirulaeDataset(InputDataset):
             except:
                 raise NotImplementedError("16-bit images are not supported in this version of PyTorch. Please upgrade to PyTorch 2.3 or later, or convert your images to 8-bit.")
         image = torch.from_numpy(image)
-        if self._dataparser_outputs.alpha_color is not None and image.shape[-1] == 4:
+        if self._dataparser_outputs.alpha_color is not None and image.shape[-1] == 4:  # RGBA
             assert (self._dataparser_outputs.alpha_color >= 0).all() and (
                 self._dataparser_outputs.alpha_color <= 1
             ).all(), "alpha color given is out of range between [0, 1]."
-            max_value = 65535.0 if image.dtype == torch.uint16 else 255.0
+            max_value = 65535.0 if image.dtype == torch.uint16 else 255.0 if image.dtype == torch.uint8 else 1.0
             image = image[:, :, :3] * (image[:, :, -1:] / max_value) + max_value * self._dataparser_outputs.alpha_color * (
                 1.0 - image[:, :, -1:] / max_value
             )
@@ -221,6 +249,8 @@ class SpirulaeDataset(InputDataset):
                     data = self.get_data(idx, image_type, _is_viewer=False, _load_auxiliary=False)
                     if data["image"].dtype == torch.uint16:
                         data["image"] = (data["image"] / 256).to(torch.uint8)
+                    elif data["image"].dtype in [torch.float16, torch.float32]:
+                        data["image"] = (255 * torch.clip(data["image"], 0.0, 1.0)).to(torch.uint8)
                     if 'mask' in data:
                         # background = torch.ones_like(data['image']) * [0.125, 32][image_type == 'uint8']
                         background = torch.ones_like(data['image']) * torch.tensor([(0,0,1), (0,0,255)][image_type == 'uint8']).to(data['image'])
