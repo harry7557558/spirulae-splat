@@ -1009,12 +1009,12 @@ __device__ float get_pixel_bilinear(
     float x,
     float y
 ) {
-    const int W = image.shape[2],
+    const long W = image.shape[2],
         H = image.shape[1];
-    int x0 = (int)floorf(x);
-    int x1 = x0 + 1;
-    int y0 = (int)floorf(y);
-    int y1 = y0 + 1;
+    long x0 = (long)floorf(x);
+    long x1 = x0 + 1;
+    long y0 = (long)floorf(y);
+    long y1 = y0 + 1;
     float wx1 = x - x0;
     float wx0 = 1.0f - wx1;
     float wy1 = y - y0;

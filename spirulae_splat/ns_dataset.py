@@ -217,7 +217,7 @@ class SpirulaeDataset(InputDataset):
             assert (self._dataparser_outputs.alpha_color >= 0).all() and (
                 self._dataparser_outputs.alpha_color <= 1
             ).all(), "alpha color given is out of range between [0, 1]."
-            max_value = 65535.0 if image.dtype == torch.uint16 else 255.0 if image.dtype == torch.uint8 else 1.0
+            max_value = (65535.0 if image.dtype == torch.uint16 else 255.0) if image.dtype in [torch.uint16, torch.uint8] else 1.0
             image = image[:, :, :3] * (image[:, :, -1:] / max_value) + max_value * self._dataparser_outputs.alpha_color * (
                 1.0 - image[:, :, -1:] / max_value
             )
@@ -249,8 +249,8 @@ class SpirulaeDataset(InputDataset):
                     data = self.get_data(idx, image_type, _is_viewer=False, _load_auxiliary=False)
                     if data["image"].dtype == torch.uint16:
                         data["image"] = (data["image"] / 256).to(torch.uint8)
-                    elif data["image"].dtype in [torch.float16, torch.float32]:
-                        data["image"] = (255 * torch.clip(data["image"], 0.0, 1.0)).to(torch.uint8)
+                    elif data["image"].dtype == torch.float16:
+                        data["image"] = data["image"].float()
                     if 'mask' in data:
                         # background = torch.ones_like(data['image']) * [0.125, 32][image_type == 'uint8']
                         background = torch.ones_like(data['image']) * torch.tensor([(0,0,1), (0,0,255)][image_type == 'uint8']).to(data['image'])
