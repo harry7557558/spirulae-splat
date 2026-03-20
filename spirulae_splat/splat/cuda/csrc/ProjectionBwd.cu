@@ -43,12 +43,7 @@ void projection_fused_bwd_kernel_wrapper(
 
 
 template<typename SplatPrimitive, HessianDiagonalOutputMode hessian_diagonal_output_mode>
-inline std::tuple<
-    typename SplatPrimitive::World::TensorTuple,  // v_splats
-    at::Tensor,  // v_viewmats
-    std::variant<at::Tensor, typename SplatPrimitive::World::TensorTuple>,  // vr_world_pos or vr_splats
-    std::variant<at::Tensor, typename SplatPrimitive::World::TensorTuple>  // h_world_pos or h_splats
-> _launch_projection_projection_fused_bwd_kernel(
+inline void launch_projection_projection_fused_bwd_kernel(
     // fwd inputs
     const typename SplatPrimitive::World::TensorTuple &splats_world_tuple,
     const at::Tensor viewmats,  // [..., C, 4, 4]
@@ -65,7 +60,11 @@ inline std::tuple<
     const typename SplatPrimitive::Screen::TensorTupleProj &v_splats_screen_tuple,
     const typename SplatPrimitive::Screen::TensorTupleProj *vr_splats_screen_tuple,
     const typename SplatPrimitive::Screen::TensorTupleProj *h_splats_screen_tuple,
-    const bool viewmats_requires_grad
+    // returns
+    typename SplatPrimitive::World::TensorTuple v_splats_world_tuple,
+    const std::optional<at::Tensor> v_viewmats,
+    const std::optional<std::variant<at::Tensor, typename SplatPrimitive::World::TensorTuple>> vr_splats_world_tuple,
+    const std::optional<std::variant<at::Tensor, typename SplatPrimitive::World::TensorTuple>> h_splats_world_tuple
 ) {
     typename SplatPrimitive::World::Tensor splats_world(splats_world_tuple);
     uint32_t N = splats_world.size();    // number of gaussians
@@ -74,7 +73,7 @@ inline std::tuple<
 
     typename SplatPrimitive::Screen::Tensor v_splats_screen(v_splats_screen_tuple);
 
-    typename SplatPrimitive::World::Tensor v_splats_world = splats_world.allocProjBwd(false);
+    typename SplatPrimitive::World::Tensor v_splats_world(v_splats_world_tuple);
 
     typename SplatPrimitive::Screen::Tensor vr_splats_screen;
     typename SplatPrimitive::Screen::Tensor h_splats_screen;
@@ -83,24 +82,17 @@ inline std::tuple<
         h_splats_screen = *h_splats_screen_tuple;
     }
 
-    auto opt = splats_world.options();
-    at::Tensor v_viewmats;
-    if (viewmats_requires_grad)
-        v_viewmats = zeros_like<float>(viewmats);
-
     at::Tensor vr_world_pos;
     at::Tensor h_world_pos;
     if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
-        vr_world_pos = at::empty({B, N, 3}, opt);
-        h_world_pos = at::empty({B, N, 3}, opt);
-        set_zero<float>(vr_world_pos);
-        set_zero<float>(h_world_pos);
+        vr_world_pos = std::get<0>(vr_splats_world_tuple.value());
+        h_world_pos = std::get<0>(h_splats_world_tuple.value());
     }
     typename SplatPrimitive::World::Tensor vr_splats_world;
     typename SplatPrimitive::World::Tensor h_splats_world;
     if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable) {
-        vr_splats_world = splats_world.allocProjBwd(true);
-        h_splats_world = splats_world.allocProjBwd(true);
+        vr_splats_world = std::get<1>(vr_splats_world_tuple.value());
+        h_splats_world = std::get<1>(h_splats_world_tuple.value());
     }
 
     if (camera_ids.has_value() && gaussian_ids.has_value()) {  // packed
@@ -123,7 +115,7 @@ inline std::tuple<
             hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position ? (float3*)h_world_pos.data_ptr<float>() : nullptr, \
             hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable ? vr_splats_world.buffer() : typename SplatPrimitive::World::Buffer{}, \
             hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable ? h_splats_world.buffer() : typename SplatPrimitive::World::Buffer{}, \
-            viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr \
+            v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr \
         )
 
     if (camera_model == ssplat::CameraModelType::PINHOLE)
@@ -136,53 +128,8 @@ inline std::tuple<
 
     #undef _LAUNCH_ARGS
 
-    if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable)
-        return std::make_tuple(v_splats_world.tuple(), v_viewmats, vr_splats_world.tuple(), h_splats_world.tuple());
-    return std::make_tuple(v_splats_world.tuple(), v_viewmats, vr_world_pos, h_world_pos);
 }
 
-template<typename SplatPrimitive>
-inline std::tuple<
-    typename SplatPrimitive::World::TensorTuple,  // v_splats
-    at::Tensor  // v_viewmats
-> launch_projection_projection_fused_bwd_kernel(
-    // fwd inputs
-    const typename SplatPrimitive::World::TensorTuple &splats_world_tuple,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const ssplat::CameraModelType camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
-    // fwd outputs
-    const std::optional<at::Tensor> camera_ids,  // [nnz]
-    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-    const at::Tensor aabb,  // [..., C, N, 2]
-    // grad outputs
-    const typename SplatPrimitive::Screen::TensorTupleProj &v_splats_screen_tuple,
-    const bool viewmats_requires_grad
-) {
-    auto [v_splats, v_viewmats, vr_splats, h_splats] =
-        _launch_projection_projection_fused_bwd_kernel
-        <SplatPrimitive, HessianDiagonalOutputMode::None>
-    (
-        splats_world_tuple,
-        viewmats,
-        intrins,
-        image_width,
-        image_height,
-        camera_model,
-        dist_coeffs,
-        camera_ids,
-        gaussian_ids,
-        aabb,
-        v_splats_screen_tuple,
-        nullptr,
-        nullptr,
-        viewmats_requires_grad
-    );
-    return std::make_tuple(v_splats, v_viewmats);
-}
 
 
 // ================
@@ -191,10 +138,7 @@ inline std::tuple<
 
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    Vanilla3DGS::World::TensorTuple,  // v_splats
-    at::Tensor  // v_viewmats
-> projection_3dgs_backward_tensor(
+void projection_3dgs_backward_tensor(
     // fwd inputs
     const Vanilla3DGS::World::TensorTuple &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
@@ -209,20 +153,18 @@ std::tuple<
     const at::Tensor aabb,  // [..., C, N, 2]
     // grad outputs
     const Vanilla3DGS::Screen::TensorTupleProj &v_splats_screen,
-    const bool viewmats_requires_grad
+    // returns
+    const Vanilla3DGS::World::TensorTuple &v_splats_world,
+    const std::optional<at::Tensor> &v_viewmats
 ) {
-    return launch_projection_projection_fused_bwd_kernel<Vanilla3DGS>(
+    launch_projection_projection_fused_bwd_kernel<Vanilla3DGS, HessianDiagonalOutputMode::None>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, viewmats_requires_grad);
+        camera_ids, gaussian_ids, aabb, v_splats_screen, nullptr, nullptr,
+        v_splats_world, v_viewmats, std::nullopt, std::nullopt);
 }
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    Vanilla3DGS::World::TensorTuple,  // v_splats
-    at::Tensor,  // v_viewmats
-    std::variant<at::Tensor, Vanilla3DGS::World::TensorTuple>,  // vr_world_pos or vr_splats
-    std::variant<at::Tensor, Vanilla3DGS::World::TensorTuple>  // h_world_pos or h_splats
-> projection_3dgs_backward_with_hessian_diagonal_tensor(
+void projection_3dgs_backward_with_hessian_diagonal_tensor(
     // fwd inputs
     const Vanilla3DGS::World::TensorTuple &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
@@ -239,20 +181,20 @@ std::tuple<
     const Vanilla3DGS::Screen::TensorTupleProj &v_splats_screen,
     const Vanilla3DGS::Screen::TensorTupleProj &vr_splats_screen,
     const Vanilla3DGS::Screen::TensorTupleProj &h_splats_screen,
-    const bool viewmats_requires_grad
+    // returns
+    const Vanilla3DGS::World::TensorTuple &v_splats_world,
+    const std::optional<at::Tensor> &v_viewmats,
+    const Vanilla3DGS::World::TensorTuple &vr_splats_world,
+    const Vanilla3DGS::World::TensorTuple &h_splats_world
 ) {
-    return _launch_projection_projection_fused_bwd_kernel<Vanilla3DGS, HessianDiagonalOutputMode::AllReasonable>(
+    launch_projection_projection_fused_bwd_kernel<Vanilla3DGS, HessianDiagonalOutputMode::AllReasonable>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen, viewmats_requires_grad);
+        camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen,
+        v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
 }
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    Vanilla3DGS::World::TensorTuple,  // v_splats
-    at::Tensor,  // v_viewmats
-    std::variant<at::Tensor, Vanilla3DGS::World::TensorTuple>,  // vr_world_pos or vr_splats
-    std::variant<at::Tensor, Vanilla3DGS::World::TensorTuple>  // h_world_pos or h_splats
-> projection_3dgs_backward_with_position_hessian_diagonal_tensor(
+void projection_3dgs_backward_with_position_hessian_diagonal_tensor(
     // fwd inputs
     const Vanilla3DGS::World::TensorTuple &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
@@ -269,11 +211,16 @@ std::tuple<
     const Vanilla3DGS::Screen::TensorTupleProj &v_splats_screen,
     const Vanilla3DGS::Screen::TensorTupleProj &vr_splats_screen,
     const Vanilla3DGS::Screen::TensorTupleProj &h_splats_screen,
-    const bool viewmats_requires_grad
+    // returns
+    const Vanilla3DGS::World::TensorTuple &v_splats_world,
+    const std::optional<at::Tensor> &v_viewmats,
+    const at::Tensor &vr_splats_world,
+    const at::Tensor &h_splats_world
 ) {
-    return _launch_projection_projection_fused_bwd_kernel<Vanilla3DGS, HessianDiagonalOutputMode::Position>(
+    launch_projection_projection_fused_bwd_kernel<Vanilla3DGS, HessianDiagonalOutputMode::Position>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen, viewmats_requires_grad);
+        camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen,
+        v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
 }
 
 
@@ -283,10 +230,7 @@ std::tuple<
 // ================
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    MipSplatting::World::TensorTuple,  // v_splats
-    at::Tensor  // v_viewmats
-> projection_mip_backward_tensor(
+void projection_mip_backward_tensor(
     // fwd inputs
     const MipSplatting::World::TensorTuple &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
@@ -301,20 +245,18 @@ std::tuple<
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const MipSplatting::Screen::TensorTupleProj &v_splats_screen,
-    const bool viewmats_requires_grad
+    // returns
+    const Vanilla3DGS::World::TensorTuple &v_splats_world,
+    const std::optional<at::Tensor> &v_viewmats
 ) {
-    return launch_projection_projection_fused_bwd_kernel<MipSplatting>(
+    launch_projection_projection_fused_bwd_kernel<MipSplatting, HessianDiagonalOutputMode::None>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, viewmats_requires_grad);
+        camera_ids, gaussian_ids, aabb, v_splats_screen, nullptr, nullptr,
+        v_splats_world, v_viewmats, std::nullopt, std::nullopt);
 }
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    MipSplatting::World::TensorTuple,  // v_splats
-    at::Tensor,  // v_viewmats
-    std::variant<at::Tensor, MipSplatting::World::TensorTuple>,  // vr_world_pos or vr_splats
-    std::variant<at::Tensor, MipSplatting::World::TensorTuple>  // h_world_pos or h_splats
-> projection_mip_backward_with_hessian_diagonal_tensor(
+void projection_mip_backward_with_hessian_diagonal_tensor(
     // fwd inputs
     const MipSplatting::World::TensorTuple &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
@@ -331,20 +273,20 @@ std::tuple<
     const MipSplatting::Screen::TensorTupleProj &v_splats_screen,
     const MipSplatting::Screen::TensorTupleProj &vr_splats_screen,
     const MipSplatting::Screen::TensorTupleProj &h_splats_screen,
-    const bool viewmats_requires_grad
+    // returns
+    const MipSplatting::World::TensorTuple &v_splats_world,
+    const std::optional<at::Tensor> &v_viewmats,
+    const MipSplatting::World::TensorTuple &vr_splats_world,
+    const MipSplatting::World::TensorTuple &h_splats_world
 ) {
-    return _launch_projection_projection_fused_bwd_kernel<MipSplatting, HessianDiagonalOutputMode::AllReasonable>(
+    launch_projection_projection_fused_bwd_kernel<MipSplatting, HessianDiagonalOutputMode::AllReasonable>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen, viewmats_requires_grad);
+        camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen,
+        v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
 }
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    MipSplatting::World::TensorTuple,  // v_splats
-    at::Tensor,  // v_viewmats
-    std::variant<at::Tensor, MipSplatting::World::TensorTuple>,  // vr_world_pos or vr_splats
-    std::variant<at::Tensor, MipSplatting::World::TensorTuple>  // h_world_pos or h_splats
-> projection_mip_backward_with_position_hessian_diagonal_tensor(
+void projection_mip_backward_with_position_hessian_diagonal_tensor(
     // fwd inputs
     const MipSplatting::World::TensorTuple &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
@@ -361,11 +303,16 @@ std::tuple<
     const MipSplatting::Screen::TensorTupleProj &v_splats_screen,
     const MipSplatting::Screen::TensorTupleProj &vr_splats_screen,
     const MipSplatting::Screen::TensorTupleProj &h_splats_screen,
-    const bool viewmats_requires_grad
+    // returns
+    const MipSplatting::World::TensorTuple &v_splats_world,
+    const std::optional<at::Tensor> &v_viewmats,
+    const at::Tensor &vr_splats_world,
+    const at::Tensor &h_splats_world
 ) {
-    return _launch_projection_projection_fused_bwd_kernel<MipSplatting, HessianDiagonalOutputMode::Position>(
+    launch_projection_projection_fused_bwd_kernel<MipSplatting, HessianDiagonalOutputMode::Position>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen, viewmats_requires_grad);
+        camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen,
+        v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
 }
 
 
@@ -375,10 +322,7 @@ std::tuple<
 // ================
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    Vanilla3DGUT::World::TensorTuple,  // v_splats
-    at::Tensor  // v_viewmats
-> projection_3dgut_backward_tensor(
+void projection_3dgut_backward_tensor(
     // fwd inputs
     const Vanilla3DGUT::World::TensorTuple &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
@@ -393,20 +337,18 @@ std::tuple<
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const Vanilla3DGUT::Screen::TensorTupleProj &v_splats_screen,
-    const bool viewmats_requires_grad
+    // returns
+    const Vanilla3DGUT::World::TensorTuple &v_splats_world,
+    const std::optional<at::Tensor> &v_viewmats
 ) {
-    return launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT>(
+    launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT, HessianDiagonalOutputMode::None>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, viewmats_requires_grad);
+        camera_ids, gaussian_ids, aabb, v_splats_screen, nullptr, nullptr,
+        v_splats_world, v_viewmats, std::nullopt, std::nullopt);
 }
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    Vanilla3DGUT::World::TensorTuple,  // v_splats
-    at::Tensor,  // v_viewmats
-    std::variant<at::Tensor, Vanilla3DGUT::World::TensorTuple>,  // vr_world_pos or vr_splats
-    std::variant<at::Tensor, Vanilla3DGUT::World::TensorTuple>  // h_world_pos or h_splats
-> projection_3dgut_backward_with_hessian_diagonal_tensor(
+void projection_3dgut_backward_with_hessian_diagonal_tensor(
     // fwd inputs
     const Vanilla3DGUT::World::TensorTuple &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
@@ -423,20 +365,20 @@ std::tuple<
     const Vanilla3DGUT::Screen::TensorTupleProj &v_splats_screen,
     const Vanilla3DGUT::Screen::TensorTupleProj &vr_splats_screen,
     const Vanilla3DGUT::Screen::TensorTupleProj &h_splats_screen,
-    const bool viewmats_requires_grad
+    // returns
+    const Vanilla3DGUT::World::TensorTuple &v_splats_world,
+    const std::optional<at::Tensor> &v_viewmats,
+    const Vanilla3DGUT::World::TensorTuple &vr_splats_world,
+    const Vanilla3DGUT::World::TensorTuple &h_splats_world
 ) {
-    return _launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT, HessianDiagonalOutputMode::AllReasonable>(
+    launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT, HessianDiagonalOutputMode::AllReasonable>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen, viewmats_requires_grad);
+        camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen,
+        v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
 }
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    Vanilla3DGUT::World::TensorTuple,  // v_splats
-    at::Tensor,  // v_viewmats
-    std::variant<at::Tensor, Vanilla3DGUT::World::TensorTuple>,  // vr_world_pos or vr_splats
-    std::variant<at::Tensor, Vanilla3DGUT::World::TensorTuple>  // h_world_pos or h_splats
-> projection_3dgut_backward_with_position_hessian_diagonal_tensor(
+void projection_3dgut_backward_with_position_hessian_diagonal_tensor(
     // fwd inputs
     const Vanilla3DGUT::World::TensorTuple &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
@@ -453,11 +395,16 @@ std::tuple<
     const Vanilla3DGUT::Screen::TensorTupleProj &v_splats_screen,
     const Vanilla3DGUT::Screen::TensorTupleProj &vr_splats_screen,
     const Vanilla3DGUT::Screen::TensorTupleProj &h_splats_screen,
-    const bool viewmats_requires_grad
+    // returns
+    const Vanilla3DGUT::World::TensorTuple &v_splats_world,
+    const std::optional<at::Tensor> &v_viewmats,
+    const at::Tensor &vr_splats_world,
+    const at::Tensor &h_splats_world
 ) {
-    return _launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT, HessianDiagonalOutputMode::Position>(
+    launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT, HessianDiagonalOutputMode::Position>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen, viewmats_requires_grad);
+        camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen,
+        v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
 }
 
 
@@ -467,10 +414,7 @@ std::tuple<
 // ================
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    SphericalVoronoi3DGUT_Default::World::TensorTuple,  // v_splats
-    at::Tensor  // v_viewmats
-> projection_3dgut_sv_backward_tensor(
+void projection_3dgut_sv_backward_tensor(
     // fwd inputs
     const SphericalVoronoi3DGUT_Default::World::TensorTuple &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
@@ -485,13 +429,16 @@ std::tuple<
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const SphericalVoronoi3DGUT_Default::Screen::TensorTupleProj &v_splats_screen,
-    const bool viewmats_requires_grad
+    // returns
+    const SphericalVoronoi3DGUT_Default::World::TensorTuple &v_splats_world,
+    const std::optional<at::Tensor> &v_viewmats
 ) {
     int num_sv = std::get<5>(splats_world).size(-2);
     #define _CASE(n) \
-        if (num_sv == n) return launch_projection_projection_fused_bwd_kernel<SphericalVoronoi3DGUT<n>>( \
+        if (num_sv == n) launch_projection_projection_fused_bwd_kernel<SphericalVoronoi3DGUT<n>, HessianDiagonalOutputMode::None>( \
             splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
-            camera_ids, gaussian_ids, aabb, v_splats_screen, viewmats_requires_grad);
+            camera_ids, gaussian_ids, aabb, v_splats_screen, nullptr, nullptr, \
+            v_splats_world, v_viewmats, std::nullopt, std::nullopt);
     _CASE(2) _CASE(3) _CASE(4) _CASE(5) _CASE(6) _CASE(7) _CASE(8)
     #undef _CASE
     throw std::invalid_argument("Unsupported num_sv");
@@ -505,10 +452,7 @@ std::tuple<
 
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    OpaqueTriangle::World::TensorTuple,  // v_splats
-    at::Tensor  // v_viewmats
-> projection_opaque_triangle_backward_tensor(
+void projection_opaque_triangle_backward_tensor(
     // fwd inputs
     const OpaqueTriangle::World::TensorTuple &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
@@ -523,11 +467,14 @@ std::tuple<
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const OpaqueTriangle::Screen::TensorTupleProj &v_splats_screen,
-    const bool viewmats_requires_grad
+    // returns
+    const OpaqueTriangle::World::TensorTuple &v_splats_world,
+    const std::optional<at::Tensor> &v_viewmats
 ) {
-    return launch_projection_projection_fused_bwd_kernel<OpaqueTriangle>(
+    launch_projection_projection_fused_bwd_kernel<OpaqueTriangle, HessianDiagonalOutputMode::None>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, viewmats_requires_grad);
+        camera_ids, gaussian_ids, aabb, v_splats_screen, nullptr, nullptr,
+        v_splats_world, v_viewmats, std::nullopt, std::nullopt);
 }
 
 
@@ -537,10 +484,7 @@ std::tuple<
 
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    VoxelPrimitive::World::TensorTuple,  // v_splats
-    at::Tensor  // v_viewmats
-> projection_voxel_backward_tensor(
+void projection_voxel_backward_tensor(
     // fwd inputs
     const VoxelPrimitive::World::TensorTuple &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
@@ -555,10 +499,13 @@ std::tuple<
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
     const VoxelPrimitive::Screen::TensorTupleProj &v_splats_screen,
-    const bool viewmats_requires_grad
+    // returns
+    const VoxelPrimitive::World::TensorTuple &v_splats_world,
+    const std::optional<at::Tensor> &v_viewmats
 ) {
-    return launch_projection_projection_fused_bwd_kernel<VoxelPrimitive>(
+    launch_projection_projection_fused_bwd_kernel<VoxelPrimitive, HessianDiagonalOutputMode::None>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, viewmats_requires_grad);
+        camera_ids, gaussian_ids, aabb, v_splats_screen, nullptr, nullptr,
+        v_splats_world, v_viewmats, std::nullopt, std::nullopt);
 }
 

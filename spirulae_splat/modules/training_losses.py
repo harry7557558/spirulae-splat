@@ -64,6 +64,28 @@ class _MaskGradient(torch.autograd.Function):
         return v_x * ctx.mask, None
 
 
+class _Dummy:
+    def __init__(self):
+        pass
+
+class _SoftDetach(torch.autograd.Function):
+    """Detach from PyTorch autograd pipeline to allow managing gradient manually"""
+    @staticmethod
+    def forward(ctx, dummy: torch.Tensor, tensors: _Dummy):
+        ctx.set_materialize_grads(False)
+        for tensor in tensors.tensors:
+            if isinstance(tensor, torch.Tensor):
+                assert tensor.is_leaf
+            else:
+                assert tensor is None
+        ctx.save_for_backward(dummy)
+        return tensors
+    @staticmethod
+    def backward(ctx, v_tensors):
+        print(v_tensors)
+        return ctx.saved_tensors[0], None
+
+
 class _MemoryEfficientBilagridFetch(torch.autograd.Function):
     @staticmethod
     def forward(ctx, dummy: torch.Tensor, bilagrid: List, idx=None):
@@ -442,6 +464,12 @@ class SplatTrainingLosses(torch.nn.Module):
                 net_type="vgg", normalize=True
                 # net_type="alex", normalize=True
             ).to(self.lpips_dtype)
+
+    def soft_detach(self, tensors):
+        dummy = _Dummy()
+        dummy.tensors = tensors
+        dummy = _SoftDetach.apply(self._dummy, dummy)
+        return dummy.tensors
 
     def _get_downscale_factor(self):
         if self.training:

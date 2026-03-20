@@ -1052,6 +1052,8 @@ class SpirulaeModel(Model):
                 optim_info[key] = value
         for key, value in self.gauss_params.items():
             if isinstance(value, torch.Tensor) and value.shape[0] == self.num_points:
+                if not hasattr(value, 'optim_info'):  # can happen during eval
+                    value.optim_info = {}
                 value.optim_info.update(optim_info)
 
         if "quats" in self.gauss_params:

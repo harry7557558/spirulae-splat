@@ -283,8 +283,31 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
             viewmats, intrins, camera_ids, gaussian_ids, aabb
         ) = ctx.saved_tensors
 
-        if ctx.compute_hessian_diagonal is not None:
+        grad_accum_mask = [
+            x.is_leaf and hasattr(x, 'grad') and x.grad is not None
+            for x in (means, quats, scales, opacities, features_dc, features_sh)
+        ]
+        v_proj = (*[
+            x.grad if is_accum else torch.zeros_like(x)
+            for is_accum, x in zip(grad_accum_mask, (means, quats, scales, opacities, features_dc, features_sh))
+        ],)
+        if ctx.compute_hessian_diagonal == "all":
+            # TODO: in place gradient accumulation
             assert ctx.backward_info is not None
+            vr_proj = (*[
+                torch.zeros_like(x)
+                for x in (means, quats, scales, opacities, features_dc)
+            ], None)
+            h_proj = (*[
+                torch.zeros_like(x)
+                for x in (means, quats, scales, opacities, features_dc)
+            ], None)
+        elif ctx.compute_hessian_diagonal == "position":
+            vr_proj = torch.zeros_like(means)
+            h_proj = torch.zeros_like(means)
+        v_viewmats = torch.zeros_like(viewmats) if ctx.needs_input_grad[7] else None
+
+        if ctx.compute_hessian_diagonal is not None:
             if ctx.primitive not in ["3dgs", "mip", "3dgut"]:
                 raise NotImplementedError()
             raster_return_keys = 'means2d depths conics proj_opacities colors'.split() \
@@ -292,11 +315,7 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
             assert len(v_proj_returns) == len(raster_return_keys), ([x.shape for x in v_proj_returns], raster_return_keys)
             proj_return_keys = 'means quats scales opacities features_dc'.split() \
                 if ctx.compute_hessian_diagonal == "all" else ['means']
-            (
-                (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh),
-                v_viewmats,
-                vr_proj, h_proj
-            ) = _make_lazy_cuda_func(
+            _make_lazy_cuda_func(
                 f"projection_{ctx.primitive}_backward_with_hessian_diagonal" if ctx.compute_hessian_diagonal == "all"
                 else f"projection_{ctx.primitive}_backward_with_position_hessian_diagonal"
             )(
@@ -306,7 +325,7 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
                 [x.contiguous() for x in v_proj_returns],
                 [ctx.backward_info[key+'.gradr'] for key in raster_return_keys],
                 [ctx.backward_info[key+'.hess'] for key in raster_return_keys],
-                ctx.needs_input_grad[7],  # viewmats_requires_grad
+                v_proj, v_viewmats, vr_proj, h_proj,
             )
             for key in raster_return_keys:
                 if key not in proj_return_keys:
@@ -326,8 +345,8 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
                     ctx.backward_info[key+'.hess'] = ctx.backward_info['proj_'+key+'.hess']
                     del ctx.backward_info['proj_'+key+'.gradr']
                     del ctx.backward_info['proj_'+key+'.hess']
-            assert vr_proj is not None
-            assert h_proj is not None
+            if ctx.compute_hessian_diagonal == "position":
+                vr_proj, h_proj = [vr_proj], [h_proj]
             for key, x, vr, h in zip(proj_return_keys, ctx.saved_tensors, vr_proj, h_proj):
                 add_gradient_component(ctx.backward_info, key+'.gradr', vr)
                 add_gradient_component(ctx.backward_info, key+'.hess', h)
@@ -337,19 +356,20 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
                 del ctx.backward_info[key+'.gradr']
                 del ctx.backward_info[key+'.hess']
         else:
-            (v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh), v_viewmats = _make_lazy_cuda_func(
-                f"projection_{ctx.primitive}_backward"
-            )(
+            _make_lazy_cuda_func(f"projection_{ctx.primitive}_backward")(
                 (means, quats, scales, opacities, features_dc, features_sh),
                 viewmats, intrins, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs,
                 camera_ids, gaussian_ids, aabb,
                 [x.contiguous() for x in v_proj_returns],
-                ctx.needs_input_grad[7],  # viewmats_requires_grad
+                v_proj, v_viewmats,
             )
         if not ctx.needs_input_grad[7]:
             v_viewmats = None
+
         return (
-            None, v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh, v_viewmats,
+            None,
+            *[None if is_accum else v for is_accum, v in zip(grad_accum_mask, v_proj)],
+            v_viewmats,
             *([None]*(len(ctx.needs_input_grad)-8))
         )
 
@@ -418,22 +438,31 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
             means, quats, scales, hardness, features_dc, features_sh, features_ch,
             viewmats, intrins, camera_ids, gaussian_ids, aabb
         ) = ctx.saved_tensors
-        (v_means, v_quats, v_scales, v_hardness, v_features_dc, v_features_sh, v_features_ch), v_viewmats = _make_lazy_cuda_func(
-        # means, hardness, viewmats, intrins, aabb = ctx.saved_tensors
-        # (v_means, v_hardness), v_viewmats = _make_lazy_cuda_func(
-            "projection_opaque_triangle_backward"
-        )(
-            (means, quats, scales, hardness, features_dc, features_sh, features_ch),
+
+        params = (means, quats, scales, hardness, features_dc, features_sh, features_ch)
+        grad_accum_mask = [
+            x.is_leaf and hasattr(x, 'grad') and x.grad is not None
+            for x in params
+        ]
+        v_proj = (*[
+            x.grad if is_accum else torch.zeros_like(x)
+            for is_accum, x in zip(grad_accum_mask, params)
+        ],)
+        v_viewmats = torch.zeros_like(viewmats) if ctx.needs_input_grad[7] else None
+
+        _make_lazy_cuda_func("projection_opaque_triangle_backward")(
+            params,
             # (means, hardness),
             viewmats, intrins, ctx.width, ctx.height, ctx.camera_model_type, ctx.dist_coeffs,
             camera_ids, gaussian_ids, aabb,
             [x.contiguous() for x in v_proj_returns],
-            ctx.needs_input_grad[7],  # viewmats_requires_grad
+            v_proj, v_viewmats,
         )
         if not ctx.needs_input_grad[7]:
             v_viewmats = None
         return (
-            v_means, v_quats, v_scales, v_hardness, v_features_dc, v_features_sh, v_features_ch, v_viewmats,
+            *[None if is_accum else v for is_accum, v in zip(grad_accum_mask, v_proj)],
+            v_viewmats,
             # v_means, v_hardness, v_viewmats,
             *([None]*(len(ctx.needs_input_grad)-8))
         )
