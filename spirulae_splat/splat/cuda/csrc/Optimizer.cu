@@ -74,7 +74,9 @@ __global__ void fused_adam_kernel(
         const float step_size = lr / bias_correction1;
         
         // Load values
-        const float grad_val = static_cast<float>(grad[idx]);
+        float grad_val = static_cast<float>(grad[idx]);
+        if (!isfinite(grad_val))  // TODO: gradient clipping
+            grad_val = 0.0f;
         float m_val = static_cast<float>(exp_avg[idx]);
         float v_val = static_cast<float>(exp_avg_sq[idx]);
         

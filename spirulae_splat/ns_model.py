@@ -836,9 +836,8 @@ class SpirulaeModel(Model):
         if self.config.use_bilateral_grid:
             gps["bilateral_grid"] = list(self.training_losses.bil_grids.parameters())
         if self.config.use_bilateral_grid_for_geometry:
-            gps["bilateral_grid_geometry"] = \
-                list(self.training_losses.bil_grids_depth.parameters()) + \
-                list(self.training_losses.bil_grids_normal.parameters())
+            gps["bilateral_grid_depth"] = list(self.training_losses.bil_grids_depth.parameters())
+            gps["bilateral_grid_normal"] = list(self.training_losses.bil_grids_normal.parameters())
         if self.config.use_ppisp:
             gps["ppisp"] = [self.training_losses.ppisp_params]
         gps['_dummy'] = [self.training_losses._dummy]

@@ -29,9 +29,13 @@ try:
         BilateralGrid,
         BilateralGridPPISP,
         BilateralGridLoglinear,
+        BilateralGridDepth,
+        BilateralGridNormal,
         fused_bilagrid_sample,
         fused_bilagrid_ppisp_sample,
         fused_bilagrid_loglinear_sample,
+        fused_bilagrid_depth_sample,
+        fused_bilagrid_normal_sample,
         total_variation_loss,
         channel_mean
     )
@@ -437,13 +441,13 @@ class SplatTrainingLosses(torch.nn.Module):
             self.bilagrid_wrapped = [self.bil_grids]
         if self.config.use_bilateral_grid_for_geometry:
             # TODO: some way to avoid introducing VRAM overhead when geometry is not provided
-            self.bil_grids_depth = BilateralGrid(
+            self.bil_grids_depth = BilateralGridDepth(
                 num=self.num_train_data,
                 grid_X=self.config.bilagrid_shape_geometry[0],
                 grid_Y=self.config.bilagrid_shape_geometry[1],
                 grid_W=self.config.bilagrid_shape_geometry[2],
             )
-            self.bil_grids_normal = BilateralGrid(
+            self.bil_grids_normal = BilateralGridNormal(
                 num=self.num_train_data,
                 grid_X=self.config.bilagrid_shape_geometry[0],
                 grid_Y=self.config.bilagrid_shape_geometry[1],
@@ -504,7 +508,7 @@ class SplatTrainingLosses(torch.nn.Module):
         gt_img = self._downscale_if_required(image)
         return gt_img
 
-    def apply_bilateral_grid(self, bilagrid_wrapped: List, rgb: torch.Tensor, cam_idx: int, is_geometry: bool, **kwargs) -> torch.Tensor:
+    def apply_bilateral_grid(self, bilagrid_wrapped: List, rgb: torch.Tensor, cam_idx: int, bilagrid_type: Optional[str] = None, **kwargs) -> torch.Tensor:
         """rgb must be clamped to 0-1"""
         try:
             grid_idx = torch.tensor(cam_idx, device=rgb.device, dtype=torch.long).flatten()
@@ -514,10 +518,12 @@ class SplatTrainingLosses(torch.nn.Module):
                 grids = Dct3D.apply(grids)
             out = {
                 'affine': fused_bilagrid_sample,
-                'ppisp': fused_bilagrid_sample if is_geometry else fused_bilagrid_ppisp_sample,
-                'loglinear': fused_bilagrid_sample if is_geometry else fused_bilagrid_loglinear_sample
-            }[self.config.bilagrid_type](
-                grids, coords=None, rgb=rgb.unsqueeze(1),
+                'ppisp': fused_bilagrid_ppisp_sample,
+                'loglinear': fused_bilagrid_loglinear_sample,
+                'depth': fused_bilagrid_depth_sample,
+                'normal': fused_bilagrid_normal_sample,
+            }[self.config.bilagrid_type if bilagrid_type is None else bilagrid_type](
+                grids, None, rgb.unsqueeze(1),
                 actual_width=kwargs.get('width', None),
                 actual_height=kwargs.get('height', None),
                 patch_offsets=kwargs.get('patch_offsets', None),
@@ -624,21 +630,12 @@ class SplatTrainingLosses(torch.nn.Module):
             # apply bilagrid
             if self.config.use_bilateral_grid_for_geometry and \
                     (camera.metadata is not None and "cam_idx" in camera.metadata):
-                # TODO: fused kernel
-                # TODO: might not be the best way to use RGB bilagrid
-                B, H, W, C = gt_depth.shape
-                gt_depth = gt_depth * (
-                    gt_depth_mask.float().sum(dim=(1, 2, 3), keepdims=True) /
-                    (gt_depth * gt_depth_mask.float()).sum(dim=(1, 2, 3), keepdims=True)  # TODO: fix zero division
-                )
-                gt_depth = gt_depth / (gt_depth + 1.0)
                 gt_depth = self.apply_bilateral_grid(
                     [self.bil_grids_depth],
-                    gt_depth.repeat(1, 1, 1, 3), camera.metadata["cam_idx"],
-                    is_geometry=True,
+                    gt_depth, camera.metadata["cam_idx"],
+                    bilagrid_type="depth",
                     **meta
-                )[..., :1]
-                gt_depth = gt_depth / (1.0 - gt_depth).clip(max=0.999)
+                )
 
         # load normal
         if 'normal' in batch:
@@ -651,15 +648,12 @@ class SplatTrainingLosses(torch.nn.Module):
             # apply bilagrid
             if self.config.use_bilateral_grid_for_geometry and \
                     (camera.metadata is not None and "cam_idx" in camera.metadata):
-                # TODO: fused kernel
-                # TODO: might not be the best way to use RGB bilagrid
-                B, H, W, C = gt_normal.shape
                 gt_normal = self.apply_bilateral_grid(
                     [self.bil_grids_normal],
-                    0.5+0.5*gt_normal, camera.metadata["cam_idx"],
-                    is_geometry=True,
+                    gt_normal, camera.metadata["cam_idx"],
+                    bilagrid_type="normal",
                     **meta
-                ) * 2.0 - 1.0
+                )
 
         # mask sky
         if none_sky_mask is not None:
@@ -741,7 +735,7 @@ class SplatTrainingLosses(torch.nn.Module):
             pred_rgb = self.apply_bilateral_grid(
                 self.bilagrid_wrapped,
                 pred_rgb, camera.metadata["cam_idx"],
-                is_geometry=False,
+                bilagrid_typ=self.config.bilagrid_type,
                 **meta
             )
         if self.config.use_ppisp and self.config.fit == "rgb" and \
