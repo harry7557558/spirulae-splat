@@ -47,23 +47,6 @@ __forceinline__ __device__ float3 fsignf(float3 v) {
 }
 
 // ------------------------------------------
-// Constant Memory for Gaussian Coefficients
-// ------------------------------------------
-__constant__ float cGauss[11] = {
-    0.001028380123898387f,
-    0.0075987582094967365f,
-    0.036000773310661316f,
-    0.10936068743467331f,
-    0.21300552785396576f,
-    0.26601171493530273f,
-    0.21300552785396576f,
-    0.10936068743467331f,
-    0.036000773310661316f,
-    0.0075987582094967365f,
-    0.001028380123898387f
-};
-
-// ------------------------------------------
 // Block and Shared Memory Dimensions
 // ------------------------------------------
 #define BLOCK_X 16
@@ -76,6 +59,23 @@ __constant__ float cGauss[11] = {
 // For partial results after horizontal pass
 #define CONV_X BLOCK_X
 #define CONV_Y SHARED_Y
+
+// ------------------------------------------
+// Constant Memory for Gaussian Coefficients
+// ------------------------------------------
+__constant__ float cGauss[HALO+1] = {
+    0.001028380123898387f,
+    0.0075987582094967365f,
+    0.036000773310661316f,
+    0.10936068743467331f,
+    0.21300552785396576f,
+    0.26601171493530273f,
+    // 0.21300552785396576f,
+    // 0.10936068743467331f,
+    // 0.036000773310661316f,
+    // 0.0075987582094967365f,
+    // 0.001028380123898387f
+};
 
 // ------------------------------------------
 // Utility: Safe pixel fetch w/ zero padding
@@ -91,6 +91,17 @@ __device__ __forceinline__ float3 get_pix_value(
     return img[b * H * W + y * W + x];
 }
 
+__device__ __forceinline__ float get_pix_value(
+    const float3* img, 
+    int b, int y, int x, int c,
+    int H, int W
+) {
+    if (x < 0 || x >= W || y < 0 || y >= H) {
+        return 0.0f;
+    }
+    return ((float*)img)[(b * H * W + y * W + x) * 3 + c];
+}
+
 // ------------------------------------------
 // Forward Kernel: Fused SSIM
 //  - Two-pass convolution to get mu1, mu2,
@@ -100,7 +111,7 @@ __device__ __forceinline__ float3 get_pix_value(
 //    to dm_dmu1, dm_dsigma1_sq, dm_dsigma12
 // ------------------------------------------
 template<bool is_l1, bool inplace>
-__global__ void fusedssimCUDA(
+__global__ void ssim_forward_kernel(
     int B, int H, int W,
     const float3* __restrict__ img1,
     const float3* __restrict__ img2,
@@ -326,8 +337,6 @@ __global__ void fusedssimCUDA(
 
         } else {
             // L1 version of SSIM
-        #if 1
-
             float3 A = mu1_sq + mu2_sq + kC1;
             float3 B = sigma1_sq + sigma2_sq + kC2;
             float3 C_ = 2.f * mu1 * mu2 + kC1;
@@ -360,63 +369,6 @@ __global__ void fusedssimCUDA(
                         ssim_loss_map[global_idx] = 1.0f - val;
                 }
             }
-        #else
-            static constexpr float kC3 = 0.5f * kC2;
-
-            float3 sigma1 = sqrtf(sigma1_sq);
-            float3 sigma2 = sqrtf(sigma2_sq);
-            float3 hypot_mu1_mu2 = sqrtf(mu1_sq + mu2_sq + kC1);
-            float3 hypot_sigma1_sigma2 = sqrtf(sigma1_sq + sigma2_sq + kC2);
-            float3 val_mu_n = (hypot_mu1_mu2 - fabsf(mu1 - mu2));
-            float3 val_sigma_n = (hypot_sigma1_sigma2 - fabsf(sigma1 - sigma2));
-            float3 val_struct_n = (sigma12 + kC3);
-            float3 val_struct_m = sqrtf(sigma1_sq * sigma2_sq + kC3*kC3);
-            float3 val_mu = val_mu_n / hypot_mu1_mu2;
-            float3 val_sigma = val_sigma_n / hypot_sigma1_sigma2;
-            float3 val_struct = val_struct_n / val_struct_m;
-
-            float3 val3 = val_mu * val_sigma * val_struct;
-            val = (val3.x + val3.y + val3.z) * (1.0f/3.0f);
-
-            if (dm_dmu1) {
-                // partial derivatives
-                float3 d_m_dmu1 = (
-                    - (mu2 * val_mu_n * val_sigma_n) /
-                        (val_struct_m * hypot_sigma1_sigma2 * hypot_mu1_mu2)
-                    + (sigma2 * sigma2 * mu1 * val_struct_n * val_mu_n * val_sigma_n) /
-                        (val_struct_m * val_struct_m * val_struct_m * hypot_sigma1_sigma2 * hypot_mu1_mu2)
-                    + (mu1 * val_struct_n * val_mu_n * val_sigma_n) /
-                        (val_struct_m * hypot_sigma1_sigma2 * hypot_sigma1_sigma2 * hypot_sigma1_sigma2 * hypot_mu1_mu2)
-                    - (mu1 * val_struct_n * val_mu_n * val_sigma_n) /
-                        (val_struct_m * hypot_sigma1_sigma2 * hypot_mu1_mu2 * hypot_mu1_mu2 * hypot_mu1_mu2)
-                    + (val_struct_n * (mu1 / hypot_mu1_mu2 - fsignf(mu1 - mu2)) * val_sigma_n) /
-                        (val_struct_m * hypot_sigma1_sigma2 * hypot_mu1_mu2)
-                    + (val_struct_n * val_mu_n * (mu1 / hypot_sigma1_sigma2 - mu1 / sigma1 * fsignf(sigma1 - sigma2))) /
-                        (val_struct_m * hypot_sigma1_sigma2 * hypot_mu1_mu2)
-                );
-                float3 d_m_dsigma1_sq = (
-                    - (val_struct_n * val_mu_n * val_sigma_n) /
-                        (2.0f * hypot_mu1_mu2 * hypot_sigma1_sigma2 * hypot_sigma1_sigma2 * hypot_sigma1_sigma2 * val_struct_m)
-                    - (val_struct_n * sigma2_sq * val_mu_n * val_sigma_n) /
-                        (2.0f * hypot_mu1_mu2 * hypot_sigma1_sigma2 * val_struct_m * val_struct_m * val_struct_m)
-                    + (val_struct_n * val_mu_n * (0.5f / hypot_sigma1_sigma2 - 0.5f / sigma1 * fsignf(sigma1 - sigma2))) /
-                        (hypot_mu1_mu2 * hypot_sigma1_sigma2 * val_struct_m)
-                );
-                float3 d_m_dsigma12   = (
-                    val_mu_n * val_sigma_n / (val_struct_m * hypot_sigma1_sigma2 * hypot_mu1_mu2)
-                );
-
-                dm_dmu1[global_idx]       = d_m_dmu1;
-                dm_dsigma1_sq[global_idx] = d_m_dsigma1_sq;
-                dm_dsigma12[global_idx]   = d_m_dsigma12;
-                if (ssim_loss_map != nullptr) {
-                    if (inplace)
-                        ssim_loss_map[global_idx] += ssim_loss_map_weight * (1.0f - val);
-                    else
-                        ssim_loss_map[global_idx] = 1.0f - val;
-                }
-            }
-        #endif
             }
         }
 
@@ -437,7 +389,7 @@ __global__ void fusedssimCUDA(
 //    and dL/dmap (the gradient from above).
 // ------------------------------------------
 template<bool inplace>
-__global__ void fusedssim_backwardCUDA(
+__global__ void ssim_backward_kernel(
     int B, int H, int W,
     const float3* __restrict__ img1,
     const float3* __restrict__ img2,
@@ -578,6 +530,303 @@ __global__ void fusedssim_backwardCUDA(
 
 }
 
+#define BLOCK_X_ME 24
+#define BLOCK_Y_ME 24
+
+#define SHARED_X_ME (BLOCK_X_ME + 2 * HALO)
+#define SHARED_Y_ME (BLOCK_Y_ME + 2 * HALO)
+
+#define CONV_X_ME BLOCK_X_ME
+#define CONV_Y_ME SHARED_Y_ME
+
+#define LOAD_X_ME (BLOCK_X_ME + 4 * HALO)
+#define LOAD_Y_ME (BLOCK_Y_ME + 4 * HALO)
+
+template<bool inplace>
+__global__ void memory_efficient_ssim_backward_kernel(
+    int B, int H, int W,
+    const float3* __restrict__ img1,   // [B, H, W, 3]
+    const float3* __restrict__ img2,   // [B, H, W, 3]
+    const float*  __restrict__ dL_dmap,// [1]
+    float3* __restrict__ dL_dimg1      // [B, H, W, 3]
+) {
+    auto block = cg::this_thread_block();
+
+    const int bIdx   = block.group_index().z;
+    const int pix_y  = block.group_index().y * BLOCK_Y_ME + block.thread_index().y;
+    const int pix_x  = block.group_index().x * BLOCK_X_ME + block.thread_index().x;
+    const int pix_id = pix_y * W + pix_x;
+    const int num_pix = H * W;
+
+    const float grad = dL_dmap[0] / (3.0f * B * W * H);
+
+    // __shared__ float sTile[LOAD_Y][LOAD_X][2];
+    // __shared__ float xconv[LOAD_Y][SHARED_X][5];
+    // __shared__ float sData[3][SHARED_Y][SHARED_X];
+    // __shared__ float sScratch[CONV_Y][CONV_X][3];
+
+    static constexpr int sTile_size = LOAD_Y_ME*LOAD_X_ME*2;
+    static constexpr int xconv_size = LOAD_Y_ME*SHARED_X_ME*5;
+    static constexpr int sData_size = 3*SHARED_Y_ME*SHARED_X_ME;
+    static constexpr int sScratch_size = CONV_Y_ME*CONV_X_ME*3;
+    __shared__ float _shared_buffer1[sTile_size>sData_size?sTile_size:sData_size];
+    __shared__ float _shared_buffer2[xconv_size>sScratch_size?xconv_size:sScratch_size];
+    #define sTile(i, j, k) _shared_buffer1[((i)*LOAD_X_ME+(j))*2+(k)]
+    #define xconv(i, j, k) _shared_buffer2[((i)*SHARED_X_ME+(j))*5+(k)]
+    #define sData(i, j, k) _shared_buffer1[((i)*SHARED_Y_ME+(j))*SHARED_X_ME+(k)]
+    #define sScratch(i, j, k) _shared_buffer2[((i)*CONV_X_ME+(j))*3+(k)]
+
+    // TODO: some shared memory can be reused to improve occupancy
+
+    #pragma unroll
+    for (int ci = 0; ci < 3; ci++) {
+        if (ci != 0)
+            block.sync();
+
+    // ------------------------------------------------------------------
+    // 1) Load (img1, img2) tile + halo into shared memory
+    // ------------------------------------------------------------------
+    {
+        const int tileSize = LOAD_X_ME * LOAD_Y_ME;
+        const int threads = BLOCK_X_ME * BLOCK_Y_ME;
+        const int steps = (tileSize + threads - 1) / threads;
+
+        const int tileStartY = block.group_index().y * BLOCK_Y_ME;
+        const int tileStartX = block.group_index().x * BLOCK_X_ME;
+
+        for (int s = 0; s < steps; ++s) {
+            int tid = s * threads + block.thread_rank();
+            if (tid < tileSize) {
+                int local_y = tid / LOAD_X_ME;
+                int local_x = tid % LOAD_X_ME;
+                int gy = tileStartY + local_y - 2 * HALO;
+                int gx = tileStartX + local_x - 2 * HALO;
+
+                float X = get_pix_value(img1, bIdx, gy, gx, ci, H, W);
+                float Y = get_pix_value(img2, bIdx, gy, gx, ci, H, W);
+
+                sTile(local_y, local_x, 0) = X;
+                sTile(local_y, local_x, 1) = Y;
+            }
+        }
+    }
+    block.sync();
+
+    // ------------------------------------------------------------------
+    // 2) Horizontal convolution (11x1) in shared memory
+    //    We'll accumulate symmetrical pairs around center.
+    // ------------------------------------------------------------------
+    #if 0
+    for (int ly = threadIdx.y; ly < LOAD_Y_ME; ly += BLOCK_Y_ME)
+    for (int lx = threadIdx.x + HALO; lx + HALO < LOAD_X_ME; lx += BLOCK_X_ME) {
+    #else
+    for (int l = block.thread_rank(); l < SHARED_X_ME*LOAD_Y_ME; l += BLOCK_X_ME*BLOCK_Y_ME) {
+        int lx = l % SHARED_X_ME + HALO;
+        int ly = l / SHARED_Y_ME;
+    #endif
+
+        float sumX   = 0.0f;
+        float sumX2  = 0.0f;
+        float sumY   = 0.0f;
+        float sumY2  = 0.0f;
+        float sumXY  = 0.0f;
+
+        // #pragma unroll for those 5 pairs
+        #pragma unroll
+        for (int d = 1; d <= HALO; ++d) {
+            float w = cGauss[HALO - d];
+            float Xleft  = sTile(ly, lx - d, 0);
+            float Yleft  = sTile(ly, lx - d, 1);
+            float Xright = sTile(ly, lx + d, 0);
+            float Yright = sTile(ly, lx + d, 1);
+
+            sumX  += (Xleft + Xright) * w;
+            sumX2 += ((Xleft * Xleft) + (Xright * Xright)) * w;
+            sumY  += (Yleft + Yright) * w;
+            sumY2 += ((Yleft * Yleft) + (Yright * Yright)) * w;
+            sumXY += ((Xleft * Yleft) + (Xright * Yright)) * w;
+        }
+        // center
+        {
+            float centerX = sTile(ly, lx, 0);
+            float centerY = sTile(ly, lx, 1);
+            float wc = cGauss[HALO];
+            sumX  += centerX * wc;
+            sumX2 += (centerX * centerX) * wc;
+            sumY  += centerY * wc;
+            sumY2 += (centerY * centerY) * wc;
+            sumXY += (centerX * centerY) * wc;
+        }
+
+        // Write out partial sums
+        xconv(ly, lx-HALO, 0) = sumX;
+        xconv(ly, lx-HALO, 1) = sumX2;
+        xconv(ly, lx-HALO, 2) = sumY;
+        xconv(ly, lx-HALO, 3) = sumY2;
+        xconv(ly, lx-HALO, 4) = sumXY;
+
+    }
+    block.sync();
+
+    // ------------------------------------------------------------
+    // 3) Vertical convolution (1x11) + final SSIM
+    // ------------------------------------------------------------
+    #if 0
+    for (int ly = threadIdx.y + HALO; ly + HALO < LOAD_Y_ME; ly += BLOCK_Y_ME)
+    for (int lx = threadIdx.x; lx < SHARED_X_ME; lx += BLOCK_X_ME) {
+    #else
+    for (int l = block.thread_rank(); l < SHARED_X_ME*SHARED_Y_ME; l += BLOCK_X_ME*BLOCK_Y_ME) {
+        int lx = l % SHARED_X_ME;
+        int ly = l / SHARED_Y_ME + HALO;
+    #endif
+
+        float out0 = 0.0f, out1 = 0.0f, out2 = 0.0f, out3 = 0.0f, out4 = 0.0f;
+
+        #pragma unroll
+        for (int d = 1; d <= HALO; ++d) {
+            float w = cGauss[HALO - d];
+
+            out0 += (xconv(ly-d, lx, 0) + xconv(ly+d, lx, 0)) * w;
+            out1 += (xconv(ly-d, lx, 1) + xconv(ly+d, lx, 1)) * w;
+            out2 += (xconv(ly-d, lx, 2) + xconv(ly+d, lx, 2)) * w;
+            out3 += (xconv(ly-d, lx, 3) + xconv(ly+d, lx, 3)) * w;
+            out4 += (xconv(ly-d, lx, 4) + xconv(ly+d, lx, 4)) * w;
+        }
+        // center
+        {
+            float wC = cGauss[HALO];
+            out0 += xconv(ly, lx, 0) * wC;
+            out1 += xconv(ly, lx, 1) * wC;
+            out2 += xconv(ly, lx, 2) * wC;
+            out3 += xconv(ly, lx, 3) * wC;
+            out4 += xconv(ly, lx, 4) * wC;
+        }
+
+        static constexpr float kC1 = 0.01f * 0.01f;
+        static constexpr float kC2 = 0.03f * 0.03f;
+
+        float mu1 = out0;
+        float mu2 = out2;
+        float mu1_sq = mu1 * mu1;
+        float mu2_sq = mu2 * mu2;
+
+        float sigma1_sq = out1 - mu1_sq;
+        float sigma2_sq = out3 - mu2_sq;
+        float sigma12   = out4 - mu1 * mu2;
+
+        float A = mu1_sq + mu2_sq + kC1;
+        float B = sigma1_sq + sigma2_sq + kC2;
+        float C_ = 2.f * mu1 * mu2 + kC1;
+        float D_ = 2.f * sigma12 + kC2;
+
+        // partial derivatives
+        float d_m_dmu1 = (
+            (mu2 * 2.f * D_) / (A * B)
+            - (mu2 * 2.f * C_) / (A * B)
+            - (mu1 * 2.f * C_ * D_) / (A * A * B)
+            + (mu1 * 2.f * C_ * D_) / (A * B * B)
+        );
+        float d_m_dsigma1_sq = (-C_ * D_) / (A * B * B);
+        float d_m_dsigma12   = (2.f * C_) / (A * B);
+
+        const int pix_y  = block.group_index().y * BLOCK_Y_ME + ly-HALO;
+        const int pix_x  = block.group_index().x * BLOCK_X_ME + lx;
+        float masked_grad = grad * float(
+            pix_x >= HALO && pix_y >= HALO && pix_x < W+HALO && pix_y < H+HALO
+        );
+
+        sData(0, ly-HALO, lx) = d_m_dmu1 * masked_grad;
+        sData(1, ly-HALO, lx) = d_m_dsigma1_sq * masked_grad;
+        sData(2, ly-HALO, lx) = d_m_dsigma12 * masked_grad;
+    }
+    block.sync();
+
+    // (2) Horizontal pass
+    {
+        int ly = threadIdx.y;
+        int lx = threadIdx.x + HALO;
+
+        for (int pass = 0; pass < 2; ++pass) {
+            int yy = ly + pass * BLOCK_Y_ME;
+            if (yy < CONV_Y_ME) {
+                float accum0 = 0.0f, accum1 = 0.0f, accum2 = 0.0f;
+
+                #pragma unroll
+                for (int d = 1; d <= HALO; ++d) {
+                    float w = cGauss[HALO - d];
+                    float left0  = sData(0, yy, lx - d);
+                    float left1  = sData(1, yy, lx - d);
+                    float left2  = sData(2, yy, lx - d);
+
+                    float right0 = sData(0, yy, lx + d);
+                    float right1 = sData(1, yy, lx + d);
+                    float right2 = sData(2, yy, lx + d);
+
+                    accum0 += (left0 + right0) * w;
+                    accum1 += (left1 + right1) * w;
+                    accum2 += (left2 + right2) * w;
+                }
+                // center
+                {
+                    float wc = cGauss[HALO];
+                    float c0 = sData(0, yy, lx);
+                    float c1 = sData(1, yy, lx);
+                    float c2 = sData(2, yy, lx);
+                    accum0 += c0 * wc;
+                    accum1 += c1 * wc;
+                    accum2 += c2 * wc;
+                }
+
+                sScratch(yy, threadIdx.x, 0) = accum0;
+                sScratch(yy, threadIdx.x, 1) = accum1;
+                sScratch(yy, threadIdx.x, 2) = accum2;
+            }
+        }
+    }
+    block.sync();
+
+    // (3) Vertical pass -> finalize dL/d(img1)
+    if (pix_x < W && pix_y < H) {
+        int ly = threadIdx.y + HALO;
+        int lx = threadIdx.x;
+
+        float sum0 = 0.0f, sum1 = 0.0f, sum2 = 0.0f;
+
+        #pragma unroll
+        for (int d = 1; d <= HALO; ++d) {
+            float w = cGauss[HALO - d];
+            sum0 += (sScratch(ly - d, lx, 0) + sScratch(ly + d, lx, 0)) * w;
+            sum1 += (sScratch(ly - d, lx, 1) + sScratch(ly + d, lx, 1)) * w;
+            sum2 += (sScratch(ly - d, lx, 2) + sScratch(ly + d, lx, 2)) * w;
+        }
+        // center
+        {
+            float wc = cGauss[HALO];
+            sum0 += sScratch(ly, lx, 0) * wc;
+            sum1 += sScratch(ly, lx, 1) * wc;
+            sum2 += sScratch(ly, lx, 2) * wc;
+        }
+
+        // final accumulation
+        float p1 = get_pix_value(img1, bIdx, pix_y, pix_x, ci, H, W);
+        float p2 = get_pix_value(img2, bIdx, pix_y, pix_x, ci, H, W);
+        float dL_dpix = sum0 + (2.f * p1) * sum1 + (p2) * sum2;
+
+        int out_idx = bIdx * num_pix + pix_id;
+        if (inplace)
+            ((float*)dL_dimg1)[out_idx*3+ci] += dL_dpix;
+        else
+            ((float*)dL_dimg1)[out_idx*3+ci] = dL_dpix;
+    }
+
+    }  // for (int ci = 0; ci < 3; ci++)
+
+    #undef sTile
+    #undef xconv
+    #undef sData
+    #undef sScratch
+}
+
 // ------------------------------------------
 // PyTorch Interface (Forward)
 //   Returns (ssim, ssim_loss_map (single channel non differentiable), dm_dmu1, dm_dsigma1_sq, dm_dsigma12).
@@ -618,7 +867,7 @@ fused_ssim_forward(
     at::Tensor dm_dsigma1_sq = train ? at::empty_like(img1) : at::empty({0}, img1.options());
     at::Tensor dm_dsigma12   = train ? at::empty_like(img1) : at::empty({0}, img1.options());
 
-    (is_l1 ? fusedssimCUDA<true, false> : fusedssimCUDA<false, false>)<<<grid, block>>>(
+    (is_l1 ? ssim_forward_kernel<true, false> : ssim_forward_kernel<false, false>)<<<grid, block>>>(
         B, H, W,
         (float3*)img1.data_ptr<float>(),
         (float3*)img2.data_ptr<float>(),
@@ -664,7 +913,7 @@ fused_ssim_forward_inplace(
     at::Tensor dm_dsigma1_sq = train ? at::empty_like(img1) : at::empty({0}, img1.options());
     at::Tensor dm_dsigma12   = train ? at::empty_like(img1) : at::empty({0}, img1.options());
 
-    (is_l1 ? fusedssimCUDA<true, true> : fusedssimCUDA<false, true>)<<<grid, block>>>(
+    (is_l1 ? ssim_forward_kernel<true, true> : ssim_forward_kernel<false, true>)<<<grid, block>>>(
         B, H, W,
         (float3*)img1.data_ptr<float>(),
         (float3*)img2.data_ptr<float>(),
@@ -690,9 +939,9 @@ fused_ssim_backward(
     at::Tensor &img1,
     at::Tensor &img2,
     at::Tensor &dL_dmap,
-    at::Tensor &dm_dmu1,
-    at::Tensor &dm_dsigma1_sq,
-    at::Tensor &dm_dsigma12
+    std::optional<at::Tensor> &dm_dmu1,
+    std::optional<at::Tensor> &dm_dsigma1_sq,
+    std::optional<at::Tensor> &dm_dsigma12
 ) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
     int B  = img1.size(0);
@@ -702,21 +951,31 @@ fused_ssim_backward(
 
     auto dL_dimg1 = at::empty_like(img1);
 
-    dim3 grid((W + BLOCK_X - 1) / BLOCK_X,
-              (H + BLOCK_Y - 1) / BLOCK_Y,
-              B);
-    dim3 block(BLOCK_X, BLOCK_Y);
-
-    fusedssim_backwardCUDA<false><<<grid, block>>>(
-        B, H, W,
-        (float3*)img1.data_ptr<float>(),
-        (float3*)img2.data_ptr<float>(),
-        dL_dmap.data_ptr<float>(),
-        (float3*)dL_dimg1.data_ptr<float>(),
-        (float3*)dm_dmu1.data_ptr<float>(),
-        (float3*)dm_dsigma1_sq.data_ptr<float>(),
-        (float3*)dm_dsigma12.data_ptr<float>()
-    );
+    if (dm_dmu1.has_value() && dm_dsigma1_sq.has_value() && dm_dsigma12.has_value()) {
+        dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, B);
+        dim3 block(BLOCK_X, BLOCK_Y);
+        ssim_backward_kernel<false><<<grid, block>>>(
+            B, H, W,
+            (float3*)img1.data_ptr<float>(),
+            (float3*)img2.data_ptr<float>(),
+            dL_dmap.data_ptr<float>(),
+            (float3*)dL_dimg1.data_ptr<float>(),
+            (float3*)dm_dmu1.value().data_ptr<float>(),
+            (float3*)dm_dsigma1_sq.value().data_ptr<float>(),
+            (float3*)dm_dsigma12.value().data_ptr<float>()
+        );
+    }
+    else {
+        dim3 grid((W + BLOCK_X_ME - 1) / BLOCK_X_ME, (H + BLOCK_Y_ME - 1) / BLOCK_Y_ME, B);
+        dim3 block(BLOCK_X_ME, BLOCK_Y_ME);
+        memory_efficient_ssim_backward_kernel<false><<<grid, block>>>(
+            B, H, W,
+            (float3*)img1.data_ptr<float>(),
+            (float3*)img2.data_ptr<float>(),
+            dL_dmap.data_ptr<float>(),
+            (float3*)dL_dimg1.data_ptr<float>()
+        );
+    }
 
     return dL_dimg1;
 }
@@ -725,9 +984,9 @@ void fused_ssim_backward_inplace(
     at::Tensor &img1,
     at::Tensor &img2,
     at::Tensor &dL_dmap,
-    at::Tensor &dm_dmu1,
-    at::Tensor &dm_dsigma1_sq,
-    at::Tensor &dm_dsigma12,
+    std::optional<at::Tensor> &dm_dmu1,
+    std::optional<at::Tensor> &dm_dsigma1_sq,
+    std::optional<at::Tensor> &dm_dsigma12,
     at::Tensor &dL_dimg1
 ) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
@@ -736,20 +995,30 @@ void fused_ssim_backward_inplace(
     int W  = img1.size(2);
     int CH = img1.size(3);
 
-    dim3 grid((W + BLOCK_X - 1) / BLOCK_X,
-              (H + BLOCK_Y - 1) / BLOCK_Y,
-              B);
-    dim3 block(BLOCK_X, BLOCK_Y);
-
-    fusedssim_backwardCUDA<true><<<grid, block>>>(
-        B, H, W,
-        (float3*)img1.data_ptr<float>(),
-        (float3*)img2.data_ptr<float>(),
-        dL_dmap.data_ptr<float>(),
-        (float3*)dL_dimg1.data_ptr<float>(),
-        (float3*)dm_dmu1.data_ptr<float>(),
-        (float3*)dm_dsigma1_sq.data_ptr<float>(),
-        (float3*)dm_dsigma12.data_ptr<float>()
-    );
+    if (dm_dmu1.has_value() && dm_dsigma1_sq.has_value() && dm_dsigma12.has_value()) {
+        dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, B);
+        dim3 block(BLOCK_X, BLOCK_Y);
+        ssim_backward_kernel<true><<<grid, block>>>(
+            B, H, W,
+            (float3*)img1.data_ptr<float>(),
+            (float3*)img2.data_ptr<float>(),
+            dL_dmap.data_ptr<float>(),
+            (float3*)dL_dimg1.data_ptr<float>(),
+            (float3*)dm_dmu1.value().data_ptr<float>(),
+            (float3*)dm_dsigma1_sq.value().data_ptr<float>(),
+            (float3*)dm_dsigma12.value().data_ptr<float>()
+        );
+    }
+    else {
+        dim3 grid((W + BLOCK_X_ME - 1) / BLOCK_X_ME, (H + BLOCK_Y_ME - 1) / BLOCK_Y_ME, B);
+        dim3 block(BLOCK_X_ME, BLOCK_Y_ME);
+        memory_efficient_ssim_backward_kernel<true><<<grid, block>>>(
+            B, H, W,
+            (float3*)img1.data_ptr<float>(),
+            (float3*)img2.data_ptr<float>(),
+            dL_dmap.data_ptr<float>(),
+            (float3*)dL_dimg1.data_ptr<float>()
+        );
+    }
 
 }

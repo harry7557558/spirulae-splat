@@ -177,6 +177,10 @@ class FusedSSIM(torch.autograd.Function):
     def forward(ctx, img1, img2, train=True, return_ssim_map=False, is_l1=False):
         ssim, ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = \
             _make_lazy_cuda_func("fused_ssim_forward")(img1, img2, train, return_ssim_map, is_l1)
+        if not train:
+            dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = None, None, None
+            if is_l1:
+                raise NotImplementedError()
 
         ctx.save_for_backward(img1.detach(), img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
 
@@ -327,12 +331,16 @@ class _ComputePerPixelLosses(torch.autograd.Function):
         # print(raw_losses[0].detach().cpu().numpy().tolist())
         # print(raw_losses[1].detach().cpu().numpy().tolist())
 
+        USE_MEMORY_EFFICIENT_SSIM = True
+
         if loss_map is not None:
-            ssim, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = \
-                _make_lazy_cuda_func("fused_ssim_forward_inplace")(render_rgb, ref_rgb, True, loss_map_ssim_weight, loss_map, False)
+            ssim, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = _make_lazy_cuda_func("fused_ssim_forward_inplace")(
+                render_rgb, ref_rgb, not USE_MEMORY_EFFICIENT_SSIM, loss_map_ssim_weight, loss_map, False)
         else:
-            ssim, _, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = \
-                _make_lazy_cuda_func("fused_ssim_forward")(render_rgb, ref_rgb, True, False, False)
+            ssim, _, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = _make_lazy_cuda_func("fused_ssim_forward")(
+                render_rgb, ref_rgb, not USE_MEMORY_EFFICIENT_SSIM, False, False)
+        if USE_MEMORY_EFFICIENT_SSIM:
+            dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = None, None, None
 
         ctx.weights = weights
         ctx.num_train_images = num_train_images
