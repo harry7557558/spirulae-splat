@@ -70,7 +70,8 @@ float linear_rgb_to_srgb_grad(float x) {
 
 [Differentiable]
 [CudaDeviceExport]
-float3 linear_rgb_to_srgb(float3 rgb) {
+float3 linear_rgb_to_srgb(float3 rgb, no_diff float3x3 color_matrix) {
+    rgb = mul(color_matrix, rgb);
     return float3(
         linear_rgb_to_srgb(rgb.x),
         linear_rgb_to_srgb(rgb.y),
@@ -80,11 +81,11 @@ float3 linear_rgb_to_srgb(float3 rgb) {
 
 [CudaDeviceExport]
 float3 linear_rgb_to_srgb_bwd(
-    float3 rgb, float3 v_out_rgb
+    float3 rgb, float3x3 color_matrix, float3 v_out_rgb
 ) {
     var p_rgb = diffPair(rgb);
     bwd_diff(linear_rgb_to_srgb)(
-        p_rgb,
+        p_rgb, color_matrix,
         v_out_rgb
     );
     return p_rgb.d;

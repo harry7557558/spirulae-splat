@@ -26,6 +26,7 @@ inline constexpr float ALPHA_THRESHOLD = (1.f/255.f);
 // so use this as an option when profiling VRAM usage
 #define DEVICE_GUARD(_ten) \
     c10::cuda::CUDACachingAllocator::emptyCache(); \
+    cudaStreamSynchronize(at::cuda::getCurrentCUDAStream()); \
     const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
 #endif
 

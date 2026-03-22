@@ -840,19 +840,16 @@ fused_ssim_forward(
     bool return_ssim_loss_map,
     bool is_l1
 ) {
-    const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
+    DEVICE_GUARD(img1);
+    CHECK_INPUT(img1);
+    CHECK_INPUT(img2);
+
     int B  = img1.size(0);
     int H  = img1.size(1);
     int W  = img1.size(2);
     int CH = img1.size(3);
     if (CH != 3)
         throw std::runtime_error("Image must be (B, H, W, 3)");
-
-    // Launch config
-    dim3 grid((W + BLOCK_X - 1) / BLOCK_X,
-              (H + BLOCK_Y - 1) / BLOCK_Y,
-              B);
-    dim3 block(BLOCK_X, BLOCK_Y);
 
     // Output SSIM map
     at::Tensor ssim = at::zeros({}, img1.options());
@@ -867,7 +864,8 @@ fused_ssim_forward(
     at::Tensor dm_dsigma1_sq = train ? at::empty_like(img1) : at::empty({0}, img1.options());
     at::Tensor dm_dsigma12   = train ? at::empty_like(img1) : at::empty({0}, img1.options());
 
-    (is_l1 ? ssim_forward_kernel<true, false> : ssim_forward_kernel<false, false>)<<<grid, block>>>(
+    (is_l1 ? ssim_forward_kernel<true, false> : ssim_forward_kernel<false, false>)
+    <<<_LAUNCH_ARGS_2D(W, H, BLOCK_X, BLOCK_Y)>>>(
         B, H, W,
         (float3*)img1.data_ptr<float>(),
         (float3*)img2.data_ptr<float>(),
@@ -891,19 +889,17 @@ fused_ssim_forward_inplace(
     at::Tensor &ssim_loss_map,
     bool is_l1
 ) {
-    const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
+    DEVICE_GUARD(img1);
+    CHECK_INPUT(img1);
+    CHECK_INPUT(img2);
+    CHECK_INPUT(ssim_loss_map);
+
     int B  = img1.size(0);
     int H  = img1.size(1);
     int W  = img1.size(2);
     int CH = img1.size(3);
     if (CH != 3)
         throw std::runtime_error("Image must be (B, H, W, 3)");
-
-    // Launch config
-    dim3 grid((W + BLOCK_X - 1) / BLOCK_X,
-              (H + BLOCK_Y - 1) / BLOCK_Y,
-              B);
-    dim3 block(BLOCK_X, BLOCK_Y);
 
     // Output SSIM map
     at::Tensor ssim = at::zeros({}, img1.options());
@@ -913,7 +909,8 @@ fused_ssim_forward_inplace(
     at::Tensor dm_dsigma1_sq = train ? at::empty_like(img1) : at::empty({0}, img1.options());
     at::Tensor dm_dsigma12   = train ? at::empty_like(img1) : at::empty({0}, img1.options());
 
-    (is_l1 ? ssim_forward_kernel<true, true> : ssim_forward_kernel<false, true>)<<<grid, block>>>(
+    (is_l1 ? ssim_forward_kernel<true, true> : ssim_forward_kernel<false, true>)
+    <<<_LAUNCH_ARGS_2D(W, H, BLOCK_X, BLOCK_Y)>>>(
         B, H, W,
         (float3*)img1.data_ptr<float>(),
         (float3*)img2.data_ptr<float>(),
@@ -943,7 +940,11 @@ fused_ssim_backward(
     std::optional<at::Tensor> &dm_dsigma1_sq,
     std::optional<at::Tensor> &dm_dsigma12
 ) {
-    const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
+    DEVICE_GUARD(img1);
+    CHECK_INPUT(img1);
+    CHECK_INPUT(img2);
+    CHECK_INPUT(dL_dmap);
+
     int B  = img1.size(0);
     int H  = img1.size(1);
     int W  = img1.size(2);
@@ -952,9 +953,10 @@ fused_ssim_backward(
     auto dL_dimg1 = at::empty_like(img1);
 
     if (dm_dmu1.has_value() && dm_dsigma1_sq.has_value() && dm_dsigma12.has_value()) {
-        dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, B);
-        dim3 block(BLOCK_X, BLOCK_Y);
-        ssim_backward_kernel<false><<<grid, block>>>(
+        CHECK_INPUT(dm_dmu1.value());
+        CHECK_INPUT(dm_dsigma1_sq.value());
+        CHECK_INPUT(dm_dsigma12.value());
+        ssim_backward_kernel<false><<<_LAUNCH_ARGS_2D(W, H, BLOCK_X, BLOCK_Y)>>>(
             B, H, W,
             (float3*)img1.data_ptr<float>(),
             (float3*)img2.data_ptr<float>(),
@@ -966,9 +968,7 @@ fused_ssim_backward(
         );
     }
     else {
-        dim3 grid((W + BLOCK_X_ME - 1) / BLOCK_X_ME, (H + BLOCK_Y_ME - 1) / BLOCK_Y_ME, B);
-        dim3 block(BLOCK_X_ME, BLOCK_Y_ME);
-        memory_efficient_ssim_backward_kernel<false><<<grid, block>>>(
+        memory_efficient_ssim_backward_kernel<false><<<_LAUNCH_ARGS_2D(W, H, BLOCK_X_ME, BLOCK_Y_ME)>>>(
             B, H, W,
             (float3*)img1.data_ptr<float>(),
             (float3*)img2.data_ptr<float>(),
@@ -989,16 +989,22 @@ void fused_ssim_backward_inplace(
     std::optional<at::Tensor> &dm_dsigma12,
     at::Tensor &dL_dimg1
 ) {
-    const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
+    DEVICE_GUARD(img1);
+    CHECK_INPUT(img1);
+    CHECK_INPUT(img2);
+    CHECK_INPUT(dL_dmap);
+    CHECK_INPUT(dL_dimg1);
+
     int B  = img1.size(0);
     int H  = img1.size(1);
     int W  = img1.size(2);
     int CH = img1.size(3);
 
     if (dm_dmu1.has_value() && dm_dsigma1_sq.has_value() && dm_dsigma12.has_value()) {
-        dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, B);
-        dim3 block(BLOCK_X, BLOCK_Y);
-        ssim_backward_kernel<true><<<grid, block>>>(
+        CHECK_INPUT(dm_dmu1.value());
+        CHECK_INPUT(dm_dsigma1_sq.value());
+        CHECK_INPUT(dm_dsigma12.value());
+        ssim_backward_kernel<true><<<_LAUNCH_ARGS_2D(W, H, BLOCK_X, BLOCK_Y)>>>(
             B, H, W,
             (float3*)img1.data_ptr<float>(),
             (float3*)img2.data_ptr<float>(),
@@ -1010,9 +1016,7 @@ void fused_ssim_backward_inplace(
         );
     }
     else {
-        dim3 grid((W + BLOCK_X_ME - 1) / BLOCK_X_ME, (H + BLOCK_Y_ME - 1) / BLOCK_Y_ME, B);
-        dim3 block(BLOCK_X_ME, BLOCK_Y_ME);
-        memory_efficient_ssim_backward_kernel<true><<<grid, block>>>(
+        memory_efficient_ssim_backward_kernel<true><<<_LAUNCH_ARGS_2D(W, H, BLOCK_X_ME, BLOCK_Y_ME)>>>(
             B, H, W,
             (float3*)img1.data_ptr<float>(),
             (float3*)img2.data_ptr<float>(),

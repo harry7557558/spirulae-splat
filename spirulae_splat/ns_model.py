@@ -1245,11 +1245,13 @@ class SpirulaeModel(Model):
                 for key in ['rgb', 'background']:
                     if key not in outputs:
                         continue
-                    if self.config.image_color_gamut != None:
-                        color_transform = get_color_transform_matrix(self.config.image_color_gamut)
-                        outputs[key] = torch.matmul(outputs[key], color_transform.T).clip(0, 1)
                     if self.config.use_linear_color_space:
-                        outputs[key] = linear_rgb_to_srgb(outputs[key])
+                        color_matrix = get_color_transform_matrix(self.config.image_color_gamut)
+                        outputs[key] = linear_rgb_to_srgb(outputs[key], color_matrix).clip(0, 1)
+                    elif self.config.image_color_gamut != None:
+                        raise NotImplementedError("image_color_gamut is only supported for linear color space")
+                        color_matrix = get_color_transform_matrix(self.config.image_color_gamut)
+                        outputs[key] = torch.matmul(outputs[key], color_matrix.T).clip(0, 1)
             for key in outputs:
                 outputs[key] = outputs[key].squeeze(0)
 

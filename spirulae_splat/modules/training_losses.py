@@ -728,14 +728,16 @@ class SplatTrainingLosses(torch.nn.Module):
                 pred_rgb = torch.where(background_mask, pred_rgb, background)
 
         # convert linear RGB to sRGB if needed
-        if self.config.image_color_gamut != None:
-            color_transform = get_color_transform_matrix(self.config.image_color_gamut)
-            pred_rgb = torch.matmul(pred_rgb, color_transform.T)
-            gt_rgb = torch.matmul(gt_rgb, color_transform.T)
-            # don't clip; exposure correction and loss should ideally handle out-of-gamut colors
+        # don't clip; exposure correction and loss should ideally handle out-of-gamut colors
         if self.config.use_linear_color_space:
-            pred_rgb = linear_rgb_to_srgb(pred_rgb)
-            gt_rgb = linear_rgb_to_srgb(gt_rgb)
+            color_matrix = get_color_transform_matrix(self.config.image_color_gamut)
+            pred_rgb = linear_rgb_to_srgb(pred_rgb, color_matrix)
+            gt_rgb = linear_rgb_to_srgb(gt_rgb, color_matrix)
+        elif self.config.image_color_gamut != None:
+            raise NotImplementedError("image_color_gamut is only supported for linear color space")
+            color_matrix = get_color_transform_matrix(self.config.image_color_gamut)
+            pred_rgb = torch.matmul(pred_rgb, color_matrix.T)  # TODO: slow for small 3x3 matrices?
+            gt_rgb = torch.matmul(gt_rgb, color_matrix.T)
 
         # apply exposure correction
         if self.config.use_bilateral_grid and self.config.fit == "rgb" and \

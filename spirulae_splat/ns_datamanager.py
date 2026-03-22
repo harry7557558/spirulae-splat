@@ -123,13 +123,14 @@ class IndexGroupsWithDataLoader(IndexGroups):
             return
 
         self.dataloaders = []
-        max_num_workers = min(max(os.cpu_count()-2,1), batch_size)
+        min_num_workers = 4
+        max_num_workers = min(max(os.cpu_count()-2,1), max(batch_size, min_num_workers))
         for group in self.groups:
             dataset = IndexedDatasetWrapper(getitem, [[i] for i in group.indices])
             dataloader = DataLoader(
                 dataset,
                 batch_size=min(batch_size, len(group)),
-                num_workers=min(max_num_workers, len(group)),
+                num_workers=min(max_num_workers, max(len(group), (min_num_workers+len(self.groups)-1)//len(self.groups))),
                 persistent_workers=True,
                 shuffle=True
             )

@@ -357,6 +357,8 @@ compute_per_pixel_losses_forward_tensor(
     std::optional<at::Tensor> camera_indices,
     bool return_loss_map
 ) {
+    DEVICE_GUARD(render_rgb.value());
+
     long B = -1, H = -1, W = -1;
     auto check_generic = [&](std::string name, const at::Tensor& tensor) {
         CHECK_CUDA(tensor);
@@ -484,6 +486,8 @@ std::tuple<
     long num_train_images,
     std::optional<at::Tensor> camera_indices
 ) {
+    DEVICE_GUARD(render_rgb.value());
+
     long B = render_rgb.value().size(0);
     size_t pixels_per_image = render_rgb.value().numel() / (3 * B);
 

@@ -546,6 +546,7 @@ blend_background_noise_backward_tensor(
 
 __global__ void linear_rgb_to_srgb_forward_kernel(
     const TensorView<float, 4> in_rgb,
+    const float* __restrict__ color_matrix_buffer,
     TensorView<float, 4> out_rgb
 ) {
     unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -558,7 +559,18 @@ __global__ void linear_rgb_to_srgb_forward_kernel(
 
     float3 rgb = in_rgb.load3(bid, y, x);
 
-    rgb = SlangPixelWise::linear_rgb_to_srgb(rgb);
+    float3x3 color_matrix;
+    color_matrix[0].x = color_matrix_buffer[0];
+    color_matrix[0].y = color_matrix_buffer[1];
+    color_matrix[0].z = color_matrix_buffer[2];
+    color_matrix[1].x = color_matrix_buffer[3];
+    color_matrix[1].y = color_matrix_buffer[4];
+    color_matrix[1].z = color_matrix_buffer[5];
+    color_matrix[2].x = color_matrix_buffer[6];
+    color_matrix[2].y = color_matrix_buffer[7];
+    color_matrix[2].z = color_matrix_buffer[8];
+
+    rgb = SlangPixelWise::linear_rgb_to_srgb(rgb, color_matrix);
 
     out_rgb.store3(bid, y, x, rgb);
 }
@@ -566,6 +578,7 @@ __global__ void linear_rgb_to_srgb_forward_kernel(
 
 __global__ void linear_rgb_to_srgb_backward_kernel(
     const TensorView<float, 4> in_rgb,
+    const float* __restrict__ color_matrix_buffer,
     const TensorView<float, 4> v_out_rgb,
     TensorView<float, 4> v_in_rgb
 ) {
@@ -579,9 +592,20 @@ __global__ void linear_rgb_to_srgb_backward_kernel(
 
     float3 rgb = in_rgb.load3(bid, y, x);
 
+    float3x3 color_matrix;
+    color_matrix[0].x = color_matrix_buffer[0];
+    color_matrix[0].y = color_matrix_buffer[1];
+    color_matrix[0].z = color_matrix_buffer[2];
+    color_matrix[1].x = color_matrix_buffer[3];
+    color_matrix[1].y = color_matrix_buffer[4];
+    color_matrix[1].z = color_matrix_buffer[5];
+    color_matrix[2].x = color_matrix_buffer[6];
+    color_matrix[2].y = color_matrix_buffer[7];
+    color_matrix[2].z = color_matrix_buffer[8];
+
     float3 v_out = v_out_rgb.load3(bid, y, x);
 
-    float3 v_rgb = SlangPixelWise::linear_rgb_to_srgb_bwd(rgb, v_out);
+    float3 v_rgb = SlangPixelWise::linear_rgb_to_srgb_bwd(rgb, color_matrix, v_out);
 
     v_in_rgb.store3(bid, y, x, v_rgb);
 }
@@ -590,10 +614,12 @@ __global__ void linear_rgb_to_srgb_backward_kernel(
 
 /*[AutoHeaderGeneratorExport]*/
 at::Tensor linear_rgb_to_srgb_forward_tensor(
-    at::Tensor &rgb  // [B, H, W, 3]
+    at::Tensor &rgb,  // [B, H, W, 3]
+    at::Tensor &color_matrix   // [3, 3]
 ) {
     DEVICE_GUARD(rgb);
     CHECK_CUDA(rgb);
+    CHECK_INPUT(color_matrix);
 
     if (rgb.ndimension() != 4 || rgb.size(-1) != 3)
         AT_ERROR("rgb shape must be (b, h, w, 3)");
@@ -603,6 +629,7 @@ at::Tensor linear_rgb_to_srgb_forward_tensor(
 
     linear_rgb_to_srgb_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
         tensor2view<float, 4>(rgb),
+        color_matrix.data_ptr<float>(),
         tensor2view<float, 4>(out_rgb)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -614,6 +641,7 @@ at::Tensor linear_rgb_to_srgb_forward_tensor(
 /*[AutoHeaderGeneratorExport]*/
 at::Tensor linear_rgb_to_srgb_backward_tensor(
     at::Tensor &rgb,  // [B, H, W, 3]
+    at::Tensor &color_matrix,   // [3, 3]
     at::Tensor &v_out_rgb  // [B, H, W, 3]
 ) {
     DEVICE_GUARD(rgb);
@@ -626,6 +654,7 @@ at::Tensor linear_rgb_to_srgb_backward_tensor(
 
     linear_rgb_to_srgb_backward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
         tensor2view<float, 4>(rgb),
+        color_matrix.data_ptr<float>(),
         tensor2view<float, 4>(v_out_rgb),
         tensor2view<float, 4>(v_rgb)
     );

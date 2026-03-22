@@ -81,37 +81,40 @@ class _BlendBackgroundNoise(torch.autograd.Function):
         )
 
 
-def linear_rgb_to_srgb(rgb: Tensor) -> Tensor:
-    return _LinearRgbToSrgb.apply(rgb)
+def linear_rgb_to_srgb(rgb: Tensor, color_matrix: Tensor) -> Tensor:
+    return _LinearRgbToSrgb.apply(rgb, color_matrix)
 
 class _LinearRgbToSrgb(torch.autograd.Function):
 
     @staticmethod
-    def forward(
-        ctx,
-        rgb
-    ):
-        out_rgb = _make_lazy_cuda_func("linear_rgb_to_srgb_forward")(rgb)
+    def forward(ctx, rgb, color_matrix):
+        out_rgb = _make_lazy_cuda_func("linear_rgb_to_srgb_forward")(rgb, color_matrix)
 
-        ctx.save_for_backward(rgb)
+        ctx.save_for_backward(rgb, color_matrix)
 
         return out_rgb
 
     @staticmethod
     def backward(ctx, v_out_rgb):
 
-        (rgb,) = ctx.saved_tensors
+        (rgb, color_matrix) = ctx.saved_tensors
 
         return _make_lazy_cuda_func("linear_rgb_to_srgb_backward")(
-            rgb, v_out_rgb
+            rgb, color_matrix, v_out_rgb
         ), None
 
 
 @functools.cache
-def get_color_transform_matrix(in_color_space: str, out_color_space: str = "Rec.709", device="cuda"):
+def get_color_transform_matrix(in_color_space: Optional[str], out_color_space: str = "Rec.709", device="cuda"):
     if out_color_space != "Rec.709":
         raise ValueError(f"Unsupported output color space {out_color_space}")
     # https://www.colour-science.org:8010/apps/rgb_colourspace_transformation_matrix
+    if in_color_space is None:
+        return torch.tensor([
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ], device=device)
     if in_color_space == "ACES2065-1":
         return torch.tensor([
             [2.5247180476, -1.1325619434, -0.3921561044],

@@ -129,12 +129,14 @@ blend_background_noise_backward_tensor(
 
 
 at::Tensor linear_rgb_to_srgb_forward_tensor(
-    at::Tensor &rgb  // [B, H, W, 3]
+    at::Tensor &rgb,  // [B, H, W, 3]
+    at::Tensor &color_matrix   // [3, 3]
 );
 
 
 at::Tensor linear_rgb_to_srgb_backward_tensor(
     at::Tensor &rgb,  // [B, H, W, 3]
+    at::Tensor &color_matrix,   // [3, 3]
     at::Tensor &v_out_rgb  // [B, H, W, 3]
 );
 
