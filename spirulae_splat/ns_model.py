@@ -277,7 +277,7 @@ class SpirulaeModelConfig(ModelConfig):
     """Encourage similar CRF parameters across RGB channels in PPISP."""
     use_linear_color_space: bool = False
     """Whether to assume training images are in linear color space."""
-    image_color_space: Literal[None, "ACES2065-1", "ACEScg", "Rec.2020", "AdobeRGB", "DCI-P3"] = None
+    image_color_gamut: Literal[None, "ACES2065-1", "ACEScg", "Rec.2020", "AdobeRGB", "DCI-P3"] = None
     """Color space of input images. Note that tonemap is not applied."""
 
     # regularization
@@ -1231,13 +1231,13 @@ class SpirulaeModel(Model):
                 outputs["normal"] = 0.5+0.5*outputs["normal"]
             if "depth_normal" in outputs:
                 outputs["depth_normal"] = 0.5+0.5*outputs["depth_normal"]
-            if self.config.use_linear_color_space or self.config.image_color_space != None:
+            if self.config.use_linear_color_space or self.config.image_color_gamut != None:
                 outputs["rgb_raw"] = outputs["rgb"]
                 for key in ['rgb', 'background']:
                     if key not in outputs:
                         continue
-                    if self.config.image_color_space != None:
-                        color_transform = get_color_transform_matrix(self.config.image_color_space)
+                    if self.config.image_color_gamut != None:
+                        color_transform = get_color_transform_matrix(self.config.image_color_gamut)
                         outputs[key] = torch.matmul(outputs[key], color_transform.T).clip(0, 1)
                     if self.config.use_linear_color_space:
                         outputs[key] = linear_rgb_to_srgb(outputs[key])

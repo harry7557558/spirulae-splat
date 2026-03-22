@@ -728,8 +728,8 @@ class SplatTrainingLosses(torch.nn.Module):
                 pred_rgb = torch.where(background_mask, pred_rgb, background)
 
         # convert linear RGB to sRGB if needed
-        if self.config.image_color_space != None:
-            color_transform = get_color_transform_matrix(self.config.image_color_space)
+        if self.config.image_color_gamut != None:
+            color_transform = get_color_transform_matrix(self.config.image_color_gamut)
             pred_rgb = torch.matmul(pred_rgb, color_transform.T)
             gt_rgb = torch.matmul(gt_rgb, color_transform.T)
             # don't clip; exposure correction and loss should ideally handle out-of-gamut colors

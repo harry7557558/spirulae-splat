@@ -16,7 +16,7 @@ My custom 3D Gaussian Splatting method for Nerfstudio. Modified the `splatfacto`
 - Display number of Gaussians and training loss/PSNR/SSIM in terminal during training
 
 ### Partially supports
-- Training on images in linear and various wide-gamut color spaces
+- Training on images in linear and various wide-gamut color spaces, with EXR or 16-bit PNG images as input
 - Second-order optimizer (loosely based on [this paper](https://arxiv.org/abs/2602.00395))
 - 2DGS-like depth regularization to discourage floaters
 - Batch tiles instead of full images (via `spirulae-patched` method)
@@ -79,7 +79,7 @@ Presets
     - `spirulae-preset-academic-baseline`: Use this to replicate academic baseline (3DGS MCMC) as faithful as it can be
 - Notes:
     - `spirulae-preset-academic-baseline` is generally the fastest and most memory efficient option and the one that achieves the highest PSNR and SSIM on standard benchmarks (e.g. Mip-NeRF 360). For better visual quality on real-world datasets and compatibility across different viewers, choose a different preset.
-        - Note that this does not 100% replicate academic baseline. Known mismatches: sorting using ray depth instead of linear depth, no SH degree warm up, quaternion initialization. When benchmarked on Mip-NeRF 360, it generally achieves better SSIM and LPIPS for outdoor scenes but worse PSNR for indoor scenes.
+        - Note that this does not 100% replicate academic baseline. Known mismatches: no SH degree warm up, quaternion optimizer and initialization. When benchmarked on Mip-NeRF 360, it generally achieves better SSIM and LPIPS for outdoor scenes but worse PSNR for indoor scenes.
     - `low-texture` presets are for large surfaces with nearly no texture (e.g. full white wall). For scenes with moderate texture, you can likely get better visual results without `low-texture`.
     - `open` presets will train a sky box, and the PLY export script will export it to an equirectangular map. Choose a `confined` preset if you wish to keep sky as splats.
 
@@ -119,7 +119,7 @@ Training very large-scale scenes
 - To skip viewer thumbnail loading (if it takes too long in the beginning of training), append `nerfstudio-data --load_thumbnails False` to the end of training command.
 
 Unstable features
-- Training on images in linear color spaces: `--pipeline.model.use_linear_color_space True`; Wide-gamut color spaces: `--pipeline.model.image_color_space ACEScg` (supports `ACES2065-1`, `ACEScg`, `Rec.2020`, `AdobeRGB`)
+- Training on images in linear color spaces: `--pipeline.model.use_linear_color_space True`; Wide-gamut color spaces: `--pipeline.model.image_color_gamut ACEScg` (supports `ACES2065-1`, `ACEScg`, `Rec.2020`, `AdobeRGB`)
 - Batch many tiny tiles instead of whole images: `ns-train spirulae-patched ...` instead of `ns-train spirulae`
 - Validation (early stop training if loss on validation images start to increase): append `nerfstudio-data --validation_fraction 0.1` to the end of training command
 - Second-order optimizer using Jacobian-residual product and Hessian diagonal: `ns-train spirulae^2-pos` (more stable) or `spirulae^2` (less stable) instead of `spirulae`. We also provide presets `spirulae^2-preset-confined` and `spirulae^2-preset-open` for the corresponding presets with `spirulae^2` methods, which otherwise run on `spirulae^2-pos`.
