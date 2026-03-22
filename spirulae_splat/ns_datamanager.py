@@ -537,7 +537,7 @@ class SpirulaeDataManager(FullImageDatamanager):
         """Returns the dataset type passed as the generic argument"""
         return SpirulaeDataset
 
-    @property
+    @cached_property
     def fixed_indices_eval_dataloader(self):
         if self.config.cache_images == "disk":
             return []  # TODO

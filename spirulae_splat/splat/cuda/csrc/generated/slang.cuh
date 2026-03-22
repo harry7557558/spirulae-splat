@@ -437,10 +437,10 @@ SLANG_VECTOR_GET_ELEMENT(short)
 SLANG_VECTOR_GET_ELEMENT(ushort)
 SLANG_VECTOR_GET_ELEMENT(char)
 SLANG_VECTOR_GET_ELEMENT(uchar)
-SLANG_VECTOR_GET_ELEMENT(longlong)
-SLANG_VECTOR_GET_ELEMENT(ulonglong)
+//SLANG_VECTOR_GET_ELEMENT(longlong)
+//SLANG_VECTOR_GET_ELEMENT(ulonglong)
 SLANG_VECTOR_GET_ELEMENT(float)
-SLANG_VECTOR_GET_ELEMENT(double)
+//SLANG_VECTOR_GET_ELEMENT(double)
 
 #define SLANG_VECTOR_GET_ELEMENT_PTR(T)                                                            \
     SLANG_FORCE_INLINE SLANG_CUDA_CALL T* _slang_vector_get_element_ptr(const T##1 * x, int index) \
@@ -466,10 +466,10 @@ SLANG_VECTOR_GET_ELEMENT_PTR(short)
 SLANG_VECTOR_GET_ELEMENT_PTR(ushort)
 SLANG_VECTOR_GET_ELEMENT_PTR(char)
 SLANG_VECTOR_GET_ELEMENT_PTR(uchar)
-SLANG_VECTOR_GET_ELEMENT_PTR(longlong)
-SLANG_VECTOR_GET_ELEMENT_PTR(ulonglong)
+//SLANG_VECTOR_GET_ELEMENT_PTR(longlong)
+//SLANG_VECTOR_GET_ELEMENT_PTR(ulonglong)
 SLANG_VECTOR_GET_ELEMENT_PTR(float)
-SLANG_VECTOR_GET_ELEMENT_PTR(double)
+//SLANG_VECTOR_GET_ELEMENT_PTR(double)
 
 #if SLANG_CUDA_ENABLE_HALF
 SLANG_VECTOR_GET_ELEMENT(__half)
@@ -581,8 +581,8 @@ SLANG_CUDA_VECTOR_INT_OPS(ushort)
 SLANG_CUDA_VECTOR_INT_OPS(short)
 SLANG_CUDA_VECTOR_INT_OPS(char)
 SLANG_CUDA_VECTOR_INT_OPS(uchar)
-SLANG_CUDA_VECTOR_INT_OPS(longlong)
-SLANG_CUDA_VECTOR_INT_OPS(ulonglong)
+//SLANG_CUDA_VECTOR_INT_OPS(longlong)
+//SLANG_CUDA_VECTOR_INT_OPS(ulonglong)
 
 #define SLANG_CUDA_VECTOR_FLOAT_OP(T, n)          \
     SLANG_CUDA_VECTOR_BINARY_OP(T, n, +)          \
@@ -604,7 +604,7 @@ SLANG_CUDA_VECTOR_INT_OPS(ulonglong)
     SLANG_CUDA_VECTOR_FLOAT_OP(T, 4)
 
 SLANG_CUDA_VECTOR_FLOAT_OPS(float)
-SLANG_CUDA_VECTOR_FLOAT_OPS(double)
+//SLANG_CUDA_VECTOR_FLOAT_OPS(double)
 #if SLANG_CUDA_ENABLE_HALF
 SLANG_CUDA_VECTOR_FLOAT_OPS(__half)
 #endif
@@ -624,7 +624,7 @@ SLANG_CUDA_VECTOR_FLOAT_OPS(__half)
     SLANG_CUDA_FLOAT_VECTOR_MOD_IMPL(T, 4)
 
 SLANG_CUDA_FLOAT_VECTOR_MOD(float)
-SLANG_CUDA_FLOAT_VECTOR_MOD(double)
+//SLANG_CUDA_FLOAT_VECTOR_MOD(double)
 
 #if SLANG_CUDA_RTC || SLANG_CUDA_ENABLE_HALF
 #define SLANG_MAKE_VECTOR(T)                                                \
@@ -650,9 +650,9 @@ SLANG_MAKE_VECTOR(ushort)
 SLANG_MAKE_VECTOR(char)
 SLANG_MAKE_VECTOR(uchar)
 SLANG_MAKE_VECTOR(float)
-SLANG_MAKE_VECTOR(double)
-SLANG_MAKE_VECTOR(longlong)
-SLANG_MAKE_VECTOR(ulonglong)
+//SLANG_MAKE_VECTOR(double)
+//SLANG_MAKE_VECTOR(longlong)
+//SLANG_MAKE_VECTOR(ulonglong)
 #endif
 
 #if SLANG_CUDA_ENABLE_HALF
@@ -736,10 +736,10 @@ SLANG_MAKE_VECTOR_FROM_SCALAR(short)
 SLANG_MAKE_VECTOR_FROM_SCALAR(ushort)
 SLANG_MAKE_VECTOR_FROM_SCALAR(char)
 SLANG_MAKE_VECTOR_FROM_SCALAR(uchar)
-SLANG_MAKE_VECTOR_FROM_SCALAR(longlong)
-SLANG_MAKE_VECTOR_FROM_SCALAR(ulonglong)
+//SLANG_MAKE_VECTOR_FROM_SCALAR(longlong)
+//SLANG_MAKE_VECTOR_FROM_SCALAR(ulonglong)
 SLANG_MAKE_VECTOR_FROM_SCALAR(float)
-SLANG_MAKE_VECTOR_FROM_SCALAR(double)
+//SLANG_MAKE_VECTOR_FROM_SCALAR(double)
 #if SLANG_CUDA_ENABLE_HALF
 SLANG_MAKE_VECTOR_FROM_SCALAR(__half)
 #if !SLANG_CUDA_RTC
@@ -799,9 +799,9 @@ SLANG_CUDA_VECTOR_ATOMIC_BINARY_IMPL(atomicAdd, int, 4)
 SLANG_CUDA_VECTOR_ATOMIC_BINARY_IMPL(atomicAdd, uint, 2)
 SLANG_CUDA_VECTOR_ATOMIC_BINARY_IMPL(atomicAdd, uint, 3)
 SLANG_CUDA_VECTOR_ATOMIC_BINARY_IMPL(atomicAdd, uint, 4)
-SLANG_CUDA_VECTOR_ATOMIC_BINARY_IMPL(atomicAdd, ulonglong, 2)
-SLANG_CUDA_VECTOR_ATOMIC_BINARY_IMPL(atomicAdd, ulonglong, 3)
-SLANG_CUDA_VECTOR_ATOMIC_BINARY_IMPL(atomicAdd, ulonglong, 4)
+//SLANG_CUDA_VECTOR_ATOMIC_BINARY_IMPL(atomicAdd, ulonglong, 2)
+//SLANG_CUDA_VECTOR_ATOMIC_BINARY_IMPL(atomicAdd, ulonglong, 3)
+//SLANG_CUDA_VECTOR_ATOMIC_BINARY_IMPL(atomicAdd, ulonglong, 4)
 
 template<typename T, int n>
 struct GetVectorTypeImpl
@@ -831,10 +831,10 @@ GET_VECTOR_TYPE_IMPL_N(short)
 GET_VECTOR_TYPE_IMPL_N(ushort)
 GET_VECTOR_TYPE_IMPL_N(char)
 GET_VECTOR_TYPE_IMPL_N(uchar)
-GET_VECTOR_TYPE_IMPL_N(longlong)
-GET_VECTOR_TYPE_IMPL_N(ulonglong)
+//GET_VECTOR_TYPE_IMPL_N(longlong)
+//GET_VECTOR_TYPE_IMPL_N(ulonglong)
 GET_VECTOR_TYPE_IMPL_N(float)
-GET_VECTOR_TYPE_IMPL_N(double)
+//GET_VECTOR_TYPE_IMPL_N(double)
 #if SLANG_CUDA_ENABLE_HALF
 GET_VECTOR_TYPE_IMPL_N(__half)
 #endif
@@ -1196,10 +1196,10 @@ SLANG_INT_MATRIX_OPS(short)
 SLANG_INT_MATRIX_OPS(ushort)
 SLANG_INT_MATRIX_OPS(char)
 SLANG_INT_MATRIX_OPS(uchar)
-SLANG_INT_MATRIX_OPS(longlong)
-SLANG_INT_MATRIX_OPS(ulonglong)
+//SLANG_INT_MATRIX_OPS(longlong)
+//SLANG_INT_MATRIX_OPS(ulonglong)
 SLANG_FLOAT_MATRIX_OPS(float)
-SLANG_FLOAT_MATRIX_OPS(double)
+//SLANG_FLOAT_MATRIX_OPS(double)
 #if SLANG_CUDA_ENABLE_HALF
 SLANG_FLOAT_MATRIX_OPS(__half)
 #endif
@@ -1220,8 +1220,8 @@ SLANG_MATRIX_INT_NEG_OP(short)
 SLANG_MATRIX_INT_NEG_OP(ushort)
 SLANG_MATRIX_INT_NEG_OP(char)
 SLANG_MATRIX_INT_NEG_OP(uchar)
-SLANG_MATRIX_INT_NEG_OP(longlong)
-SLANG_MATRIX_INT_NEG_OP(ulonglong)
+//SLANG_MATRIX_INT_NEG_OP(longlong)
+//SLANG_MATRIX_INT_NEG_OP(ulonglong)
 
 #define SLANG_FLOAT_MATRIX_MOD(T)                                                 \
     template<int R, int C>                                                        \
@@ -1239,7 +1239,7 @@ SLANG_MATRIX_INT_NEG_OP(ulonglong)
     }
 
 SLANG_FLOAT_MATRIX_MOD(float)
-SLANG_FLOAT_MATRIX_MOD(double)
+//SLANG_FLOAT_MATRIX_MOD(double)
 #if SLANG_CUDA_ENABLE_HALF
 template<int R, int C>
 SLANG_FORCE_INLINE SLANG_CUDA_CALL Matrix<__half, R, C> operator%(
@@ -1291,7 +1291,7 @@ SLANG_SELECT_T(ushort)
 SLANG_SELECT_T(char)
 SLANG_SELECT_T(uchar)
 SLANG_SELECT_T(float)
-SLANG_SELECT_T(double)
+//SLANG_SELECT_T(double)
 
 template<typename T>
 SLANG_FORCE_INLINE SLANG_CUDA_CALL T _slang_select(bool condition, T v0, T v1)
@@ -3245,11 +3245,11 @@ struct ElementTypeTrait<float>
 {
     typedef float Type;
 };
-template<>
-struct ElementTypeTrait<double>
-{
-    typedef double Type;
-};
+//template<>
+//struct ElementTypeTrait<double>
+//{
+//    typedef double Type;
+//};
 template<>
 struct ElementTypeTrait<uint64_t>
 {
@@ -3352,26 +3352,26 @@ struct ElementTypeTrait<float4>
     typedef float Type;
 };
 
-template<>
-struct ElementTypeTrait<double1>
-{
-    typedef double Type;
-};
-template<>
-struct ElementTypeTrait<double2>
-{
-    typedef double Type;
-};
-template<>
-struct ElementTypeTrait<double3>
-{
-    typedef double Type;
-};
-template<>
-struct ElementTypeTrait<double4>
-{
-    typedef double Type;
-};
+//template<>
+//struct ElementTypeTrait<double1>
+//{
+//    typedef double Type;
+//};
+//template<>
+//struct ElementTypeTrait<double2>
+//{
+//    typedef double Type;
+//};
+//template<>
+//struct ElementTypeTrait<double3>
+//{
+//    typedef double Type;
+//};
+//template<>
+//struct ElementTypeTrait<my_double4>
+//{
+//    typedef double Type;
+//};
 
 // Additional vector types
 template<>
@@ -3434,36 +3434,36 @@ struct ElementTypeTrait<ushort4>
 {
     typedef ushort Type;
 };
-template<>
-struct ElementTypeTrait<longlong2>
-{
-    typedef int64_t Type;
-};
-template<>
-struct ElementTypeTrait<longlong3>
-{
-    typedef int64_t Type;
-};
-template<>
-struct ElementTypeTrait<longlong4>
-{
-    typedef int64_t Type;
-};
-template<>
-struct ElementTypeTrait<ulonglong2>
-{
-    typedef uint64_t Type;
-};
-template<>
-struct ElementTypeTrait<ulonglong3>
-{
-    typedef uint64_t Type;
-};
-template<>
-struct ElementTypeTrait<ulonglong4>
-{
-    typedef uint64_t Type;
-};
+//template<>
+//struct ElementTypeTrait<longlong2>
+//{
+//    typedef int64_t Type;
+//};
+//template<>
+//struct ElementTypeTrait<longlong3>
+//{
+//    typedef int64_t Type;
+//};
+//template<>
+//struct ElementTypeTrait<my_longlong4>
+//{
+//    typedef int64_t Type;
+//};
+//template<>
+//struct ElementTypeTrait<ulonglong2>
+//{
+//    typedef uint64_t Type;
+//};
+//template<>
+//struct ElementTypeTrait<ulonglong3>
+//{
+//    typedef uint64_t Type;
+//};
+//template<>
+//struct ElementTypeTrait<my_ulonglong4>
+//{
+//    typedef uint64_t Type;
+//};
 #if SLANG_CUDA_ENABLE_HALF
 template<>
 struct ElementTypeTrait<__half2>
@@ -6247,8 +6247,8 @@ SLANG_WAVE_ROTATE_IMPL(short)
 SLANG_WAVE_ROTATE_IMPL(ushort)
 SLANG_WAVE_ROTATE_IMPL(char)
 SLANG_WAVE_ROTATE_IMPL(uchar)
-SLANG_WAVE_ROTATE_IMPL(longlong)
-SLANG_WAVE_ROTATE_IMPL(ulonglong)
+//SLANG_WAVE_ROTATE_IMPL(longlong)
+//SLANG_WAVE_ROTATE_IMPL(ulonglong)
 
 #ifdef SLANG_CUDA_ENABLE_HALF
 SLANG_WAVE_ROTATE_IMPL(__half)
@@ -6352,8 +6352,8 @@ SLANG_WAVE_CLUSTERED_ROTATE_IMPL(short)
 SLANG_WAVE_CLUSTERED_ROTATE_IMPL(ushort)
 SLANG_WAVE_CLUSTERED_ROTATE_IMPL(char)
 SLANG_WAVE_CLUSTERED_ROTATE_IMPL(uchar)
-SLANG_WAVE_CLUSTERED_ROTATE_IMPL(longlong)
-SLANG_WAVE_CLUSTERED_ROTATE_IMPL(ulonglong)
+//SLANG_WAVE_CLUSTERED_ROTATE_IMPL(longlong)
+//SLANG_WAVE_CLUSTERED_ROTATE_IMPL(ulonglong)
 
 #ifdef SLANG_CUDA_ENABLE_HALF
 SLANG_WAVE_CLUSTERED_ROTATE_IMPL(__half)

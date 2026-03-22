@@ -865,7 +865,7 @@ fused_ssim_forward(
     at::Tensor dm_dsigma12   = train ? at::empty_like(img1) : at::empty({0}, img1.options());
 
     (is_l1 ? ssim_forward_kernel<true, false> : ssim_forward_kernel<false, false>)
-    <<<_LAUNCH_ARGS_2D(W, H, BLOCK_X, BLOCK_Y)>>>(
+    <<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X, BLOCK_Y, 1)>>>(
         B, H, W,
         (float3*)img1.data_ptr<float>(),
         (float3*)img2.data_ptr<float>(),
@@ -910,7 +910,7 @@ fused_ssim_forward_inplace(
     at::Tensor dm_dsigma12   = train ? at::empty_like(img1) : at::empty({0}, img1.options());
 
     (is_l1 ? ssim_forward_kernel<true, true> : ssim_forward_kernel<false, true>)
-    <<<_LAUNCH_ARGS_2D(W, H, BLOCK_X, BLOCK_Y)>>>(
+    <<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X, BLOCK_Y, 1)>>>(
         B, H, W,
         (float3*)img1.data_ptr<float>(),
         (float3*)img2.data_ptr<float>(),
@@ -956,7 +956,7 @@ fused_ssim_backward(
         CHECK_INPUT(dm_dmu1.value());
         CHECK_INPUT(dm_dsigma1_sq.value());
         CHECK_INPUT(dm_dsigma12.value());
-        ssim_backward_kernel<false><<<_LAUNCH_ARGS_2D(W, H, BLOCK_X, BLOCK_Y)>>>(
+        ssim_backward_kernel<false><<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X, BLOCK_Y, 1)>>>(
             B, H, W,
             (float3*)img1.data_ptr<float>(),
             (float3*)img2.data_ptr<float>(),
@@ -968,7 +968,7 @@ fused_ssim_backward(
         );
     }
     else {
-        memory_efficient_ssim_backward_kernel<false><<<_LAUNCH_ARGS_2D(W, H, BLOCK_X_ME, BLOCK_Y_ME)>>>(
+        memory_efficient_ssim_backward_kernel<false><<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X_ME, BLOCK_Y_ME, 1)>>>(
             B, H, W,
             (float3*)img1.data_ptr<float>(),
             (float3*)img2.data_ptr<float>(),
@@ -1004,7 +1004,7 @@ void fused_ssim_backward_inplace(
         CHECK_INPUT(dm_dmu1.value());
         CHECK_INPUT(dm_dsigma1_sq.value());
         CHECK_INPUT(dm_dsigma12.value());
-        ssim_backward_kernel<true><<<_LAUNCH_ARGS_2D(W, H, BLOCK_X, BLOCK_Y)>>>(
+        ssim_backward_kernel<true><<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X, BLOCK_Y, 1)>>>(
             B, H, W,
             (float3*)img1.data_ptr<float>(),
             (float3*)img2.data_ptr<float>(),
@@ -1016,7 +1016,7 @@ void fused_ssim_backward_inplace(
         );
     }
     else {
-        memory_efficient_ssim_backward_kernel<true><<<_LAUNCH_ARGS_2D(W, H, BLOCK_X_ME, BLOCK_Y_ME)>>>(
+        memory_efficient_ssim_backward_kernel<true><<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X_ME, BLOCK_Y_ME, 1)>>>(
             B, H, W,
             (float3*)img1.data_ptr<float>(),
             (float3*)img2.data_ptr<float>(),

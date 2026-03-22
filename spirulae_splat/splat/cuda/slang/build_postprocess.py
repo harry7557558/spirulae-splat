@@ -6,6 +6,7 @@ cu_dir = "csrc/generated"
 cu_files = [os.path.join(cu_dir, f) for f in os.listdir(cu_dir) if f.endswith(".cu")]
 
 def process(src: str):
+    """TODO: this must be updated for different Slang versions"""
     src = src.split('\n')
     for i, line in enumerate(src):
         if line.startswith('__device__') and 'inline' not in line:
@@ -17,23 +18,23 @@ def process(src: str):
         #     line = "//" + line
         if line.strip() == "struct TensorView":
             line = "struct _Slang_TensorView"
-        # for w in ['double', 'longlong', 'ulonglong']:
-        #     if f"({w})" in line or f', {w}, ' in line:
-        #         line = "//" + line
-        #         break
-        #     if w in line and src[i-1] == 'template<>' and src[i+1] == '{' and src[i+3] == '};':
-        #         for j in range(i-1, i+4):
-        #             src[j] = '//' + src[j]
-        #         line = "//" + line
-        #         break
+        for w in ['double', 'longlong', 'ulonglong']:
+            if (f"({w})" in line and f"({w})atomic" not in line) or f', {w}, ' in line:
+                line = "//" + line
+                break
+            if w in line and src[i-1] == 'template<>' and src[i+1] == '{' and src[i+3] == '};':
+                for j in range(i-1, i+4):
+                    src[j] = '//' + src[j]
+                line = "//" + line
+                break
         src[i] = line
     src = '\n'.join(src)
-    # for (w0, w1) in [
-    #     ('double4', 'my_double4'),
-    #     ('longlong4', 'my_longlong4'),
-    #     ('ulonglong4', 'my_ulonglong4'),
-    # ]:
-    #     src = re.sub(r'\b' + re.escape(w0) + r'\b', w1, src)
+    for (w0, w1) in [
+        ('double4', 'my_double4'),
+        ('longlong4', 'my_longlong4'),
+        ('ulonglong4', 'my_ulonglong4'),
+    ]:
+        src = re.sub(r'\b' + re.escape(w0) + r'\b', w1, src)
     src = src.replace("50.693145751953125", "0.693145751953125")  # slangc compiler bug
     return src
 

@@ -35,6 +35,7 @@ def get_image_from_path(
     filename: Path,
     scale_factor: float,
 ):
+    filename = Path(filename)
     is_exr = filename.suffix.lower() == ".exr"
     if is_exr:
         try:
