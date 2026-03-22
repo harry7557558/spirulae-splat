@@ -119,7 +119,7 @@ Training very large-scale scenes
 - To skip viewer thumbnail loading (if it takes too long in the beginning of training), append `nerfstudio-data --load_thumbnails False` to the end of training command.
 
 Unstable features
-- Training on images in linear color spaces: `--pipeline.model.use_linear_color_space True`; Wide-gamut color spaces: `--pipeline.model.image_color_gamut ACEScg` (supports `ACES2065-1`, `ACEScg`, `Rec.2020`, `AdobeRGB`)
+- Training on images in linear color spaces: `--pipeline.model.use_linear_color_space True`; Wide-gamut color spaces: `--pipeline.model.image_color_gamut ACEScg` (supports `ACES2065-1`, `ACEScg`, `Rec.2020`, `AdobeRGB`); Specify `--pipeline.model.convert_initial_point_cloud_color True` if colors in initial point cloud is in sRGB.
 - Batch many tiny tiles instead of whole images: `ns-train spirulae-patched ...` instead of `ns-train spirulae`
 - Validation (early stop training if loss on validation images start to increase): append `nerfstudio-data --validation_fraction 0.1` to the end of training command
 - Second-order optimizer using Jacobian-residual product and Hessian diagonal: `ns-train spirulae^2-pos` (more stable) or `spirulae^2` (less stable) instead of `spirulae`. We also provide presets `spirulae^2-preset-confined` and `spirulae^2-preset-open` for the corresponding presets with `spirulae^2` methods, which otherwise run on `spirulae^2-pos`.

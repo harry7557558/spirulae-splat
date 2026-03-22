@@ -279,6 +279,8 @@ class SpirulaeModelConfig(ModelConfig):
     """Whether to assume training images are in linear color space."""
     image_color_gamut: Literal[None, "ACES2065-1", "ACEScg", "Rec.2020", "AdobeRGB", "DCI-P3"] = None
     """Color space of input images. Note that tonemap is not applied."""
+    convert_initial_point_cloud_color: bool = False
+    """If True, this will assume color in initial point cloud is sRGB, and convert if images are in a linear or wide-gamut color space."""
 
     # regularization
     scale_regularization_weight: float = 0.0
@@ -481,6 +483,13 @@ class SpirulaeModel(Model):
                 seed_color = seed_color.mean(0, True).repeat(num_points, 1)
         else:
             seed_color = torch.rand(num_points, 3)
+
+        if self.config.convert_initial_point_cloud_color:
+            if self.config.use_linear_color_space:
+                seed_color = torch.relu(seed_color) ** 2.2
+            if self.config.image_color_gamut is not None:
+                color_transform = get_color_transform_matrix(self.config.image_color_gamut, device=seed_color.device)
+                seed_color = seed_color @ torch.linalg.inv(color_transform).T
 
         if self.config.primitive in ["3dgs", "mip", "3dgut", "opaque_triangle", "voxel"]:
             shs = torch.zeros((num_points, dim_sh, 3)).float()
