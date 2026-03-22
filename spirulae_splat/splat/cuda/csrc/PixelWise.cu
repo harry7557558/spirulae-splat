@@ -1092,7 +1092,11 @@ __global__ void distort_image_kernel(
     // Undistort point
     float2 uv = { (i+0.5f-cx) / fx, (j+0.5f-cy) / fy };
     if (is_undistort) {
-        if (!SlangProjectionUtils::is_valid_distortion(uv, dist_coeffs))
+        if (dot(uv, uv) > 0.0f && !SlangProjectionUtils::is_valid_distortion(
+            camera_model == ssplat::CameraModelType::FISHEYE ?
+                normalize(uv) * atanf(length(uv)) : uv,
+            dist_coeffs
+        ))
             return;
         uv = SlangProjectionUtils::distort_point(uv, camera_model == ssplat::CameraModelType::FISHEYE, dist_coeffs);
     }
