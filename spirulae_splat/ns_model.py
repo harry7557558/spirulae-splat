@@ -178,7 +178,7 @@ class SpirulaeModelConfig(ModelConfig):
     """stop culling/splitting at this step WRT screen size of gaussians"""
 
     # MCMC control
-    preallocate_splat_tensors: bool = False
+    preallocate_splat_tensors: bool = True
     """Whether to pre-allocate Gaussian attribute tensors to avoid OOM during densification"""
     mcmc_warmup_length: int = 500
     """start MCMC refinement at this number of steps"""
@@ -345,7 +345,7 @@ class SpirulaeModelConfig(ModelConfig):
 
     # supervision using a foundation depth model
     # enable these by setting `depth_model` in data manager config
-    supervision_warmup: int = 1000
+    supervision_warmup: int = 0
     """Start using foundation model depth at this number of steps"""
     depth_distortion_depth_degree: int = -1  # 3
     """Hyperparameter for depth distortion model, controls depth embedding, see code for details
@@ -653,6 +653,7 @@ class SpirulaeModel(Model):
 
     def _get_gauss_param(self, key: str):
         tensor = self.gauss_params.get(key, None)
+        return tensor
         if hasattr(tensor, "optim_info") and 'num_splats' in tensor.optim_info:
             if len(tensor) <= tensor.optim_info['num_splats']:
                 return tensor
@@ -671,9 +672,10 @@ class SpirulaeModel(Model):
 
     @property
     def num_points(self):
-        if self.means is not None:
-            return self.means.shape[0]
-        return self.features_dc.shape[0]
+        param = self.means if self.means is not None else self.features_dc
+        if hasattr(param, 'optim_info') and 'num_splats' in param.optim_info:
+            return param.optim_info['num_splats']
+        return param.shape[0]
 
     @property
     def means(self):
@@ -709,10 +711,17 @@ class SpirulaeModel(Model):
 
     @property
     def opacities(self):
-        return self._get_gauss_param("opacities")
+        param = self._get_gauss_param("opacities")
+        # TODO: properly do this in projection
+        if hasattr(param, 'optim_info') and 'num_splats' in param.optim_info:
+            num_splats = param.optim_info['num_splats']
+            if num_splats < param.shape[0]:
+                param.data[num_splats:] = -10.0  # logit(1/255) ~ -5.54
+        return param
 
     @property
     def densities(self):
+        # TODO: num_splats
         return self._get_gauss_param("densities")
 
     def load_state_dict(self, dict, **kwargs):  # type: ignore
@@ -1056,10 +1065,10 @@ class SpirulaeModel(Model):
         # TODO: more reliable way than setattr tensor?
         optim_info = {}
         for key, value in self.gauss_params.items():
-            if isinstance(value, torch.Tensor) and value.shape[0] == self.num_points:
+            if isinstance(value, torch.Tensor) and key in self.gauss_params:
                 optim_info[key] = value
         for key, value in self.gauss_params.items():
-            if isinstance(value, torch.Tensor) and value.shape[0] == self.num_points:
+            if isinstance(value, torch.Tensor) and key in self.gauss_params:
                 if not hasattr(value, 'optim_info'):  # can happen during eval
                     value.optim_info = {}
                 value.optim_info.update(optim_info)

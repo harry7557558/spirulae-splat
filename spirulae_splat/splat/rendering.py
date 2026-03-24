@@ -214,7 +214,12 @@ def rasterization(
     """
     meta = {}
 
-    splat_params = [tensor.contiguous() for tensor in splat_params]
+    for tensor in splat_params:
+        assert tensor.is_contiguous(), "Tensor must be contiguous"
+    if hasattr(splat_params[0], 'optim_info') and 'num_splats' in splat_params[0].optim_info:
+        num_splats = splat_params[0].optim_info['num_splats']
+    else:
+        num_splats = len(splat_params[0])
 
     features_dc, features_sh, sv_sites, sv_colors = None, None, None, None
     if primitive in ["3dgs", "mip", "3dgut", "3dgut_sv", "opaque_triangle"]:

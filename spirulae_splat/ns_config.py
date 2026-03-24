@@ -336,6 +336,7 @@ spirulae_triangle = MethodSpecification(
                 normal_distortion_reg_weight=0.005,
                 rgb_distortion_reg_weight=0.01,
                 ssim_lambda=0.4,
+                preallocate_splat_tensors=False,  # TODO
             ),
             
         ),
@@ -384,6 +385,7 @@ spirulae_triangle_patched = MethodSpecification(
                 rgb_distortion_reg_weight=0.01,
                 ssim_lambda=0.4,
                 reg_warmup_length=1000,
+                preallocate_splat_tensors=False,  # TODO
 
                 # packed=True,
                 use_bvh=True,
@@ -436,6 +438,7 @@ spirulae_voxel = MethodSpecification(
                 depth_reg_weight=0.01,
                 reg_warmup_length=100,
                 distortion_reg_warmup=100,
+                preallocate_splat_tensors=False,  # TODO
             ),
         ),
         optimizers={

@@ -577,7 +577,7 @@ def fully_fused_projection_hetero(
     additional_args = []
     if primitive in ["3dgs", "mip", "3dgut"]:
         _FullyFusedProjection = _FullyFusedProjection3DGSHetero
-        in_splats = [primitive] + in_splats
+        in_splats = [primitive, *in_splats]
     elif primitive in ["opaque_triangle"]:
         _FullyFusedProjection = _FullyFusedProjectionOpaqueTriangleHetero
     proj_returns = _FullyFusedProjection.apply(
