@@ -325,10 +325,10 @@ class SpirulaeModelConfig(ModelConfig):
        Lower usually gives more accurate geometry"""
     mcmc_scale_reg: float = 0.01  # 0.01 in original paper
     """Scale regularization from MCMC"""
-    erank_reg: float = 0.01
+    erank_reg: float = 0.0
     """erank regularization weight, for 3DGS only -
         see *Effective Rank Analysis and Regularization for Enhanced 3D Gaussian Splatting, Hyung et al.*"""
-    erank_reg_s3: float = 0.01
+    erank_reg_s3: float = 0.0
     """erank regularization weight for smallest dimension, for 3DGS only"""
     erank_reg_warmup: int = 1000
     """only apply erank regularization after this many steps"""

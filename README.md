@@ -107,7 +107,7 @@ Background control
 - If mask is provided, set `--pipeline.model.apply_loss_for_mask` to True to mask e.g. sky, background, and False to mask e.g. people and cars.
 
 Training very large-scale scenes
-- Cache images on disk for large datasets (instead of loading everything into RAM that cause OOM): `--pipeline.model.cache_images disk` (default: `cpu-pageable`)
+- Cache images on disk for large datasets (instead of loading everything into RAM that cause OOM): `--pipeline.datamanager.cache_images disk` (default: `cpu-pageable`)
 - If you notice "splat blobs" with a `low-texture` preset, increase `--pipeline.model.relative_scale` aggressively (default 10.0 for open and 1.0 otherwise)
 - Experimental multi-resolution loss that helps with convergence with high-resolution images: `--pipeline.model.num_loss_scales 2` (default 0)
 - Batching for scenes with large number of images can be configured with `--pipeline.datamanager.max_batch_per_epoch` (default 800), which automatically enables batching when number of input images is above this number.
