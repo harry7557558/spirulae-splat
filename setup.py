@@ -76,11 +76,11 @@ def get_extensions():
     from torch.__config__ import parallel_info
     from torch.utils.cpp_extension import CUDAExtension
 
-    extensions_dir = os.path.abspath(os.path.join("spirulae_splat", "splat", "cuda", "csrc"))
+    extensions_dir = os.path.abspath(os.path.join("spirulae_splat", "splat", "cuda"))
     sources = \
-        glob.glob(os.path.join(os.path.join(extensions_dir, "generated", "kernel_instantiation"), "*.cu")) + \
-        glob.glob(os.path.join(extensions_dir, "*.cu")) + \
-        glob.glob(os.path.join(extensions_dir, "*.cpp"))
+        glob.glob(os.path.join(extensions_dir, "ins", "*.cu")) + \
+        glob.glob(os.path.join(extensions_dir, "csrc", "*.cu")) + \
+        glob.glob(os.path.join(extensions_dir, "csrc", "*.cpp"))
     sources = [path for path in sources if "hip" not in path]
 
     undef_macros = []
@@ -149,14 +149,15 @@ def get_extensions():
     extra_compile_args["nvcc"] += ['-arch=native']
 
     # enable host-side SIMD, etc.
-    extra_compile_args["nvcc"] += ['-Xcompiler', '-O3 -march=native']
+    if sys.platform != "win32":
+        extra_compile_args["nvcc"] += ['-Xcompiler', '-O3 -march=native']
 
     extension = CUDAExtension(
         f"spirulae_splat.csrc",
         sources,
         include_dirs=[
-            extensions_dir,
-            os.path.join(extensions_dir, "glm"),
+            os.path.join(extensions_dir, "csrc"),
+            os.path.join(extensions_dir, "csrc", "glm"),
         ],
         define_macros=define_macros,
         undef_macros=undef_macros,

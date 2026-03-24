@@ -29,7 +29,7 @@ __global__ void dct3d_type1_ortho_kernel(
     float y = 0.0f;
     #pragma unroll
     for (int n = 0; n < nz; ++n) {
-        y += __shfl_sync(~0u, x, n, nz) * cosf(M_PIf * zid * n * inv_nz_1);
+        y += __shfl_sync(~0u, x, n, nz) * cosf((float)M_PI * zid * n * inv_nz_1);
     }
 
     s = (zid == 0 || zid == actual_nz-1) ? sqrtf(inv_nz_1) : sqrtf(2.0f * inv_nz_1);
