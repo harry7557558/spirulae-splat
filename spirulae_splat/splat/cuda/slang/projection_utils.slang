@@ -758,10 +758,10 @@ float3x3 outerProduct(float3 u) {
 float get_sorting_depth(CameraModelType camera_model, float3 p_view) {
     if (camera_model != CameraModelType::FISHEYE)
         return p_view.z;
-    // float z = p_view.z;
+    float z = p_view.z;
     // float z = max(p_view.z, sqrt(0.5f * dot(p_view, p_view)));
     // float z = 0.5f * (p_view.z + length(p_view));
-    float z = max(p_view.z, (1.0f / (1.0f + sqrt(2.0f))) * (p_view.z + length(p_view)));
+    // float z = max(p_view.z, (1.0f / (1.0f + sqrt(2.0f))) * (p_view.z + length(p_view)));
     // return log(z);
     return z;
 }

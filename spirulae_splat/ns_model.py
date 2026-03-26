@@ -1151,7 +1151,7 @@ class SpirulaeModel(Model):
         if self.config.fit == "depth_normal" or not self.training:
             depth_normal = depth_to_normal(
                 depth_im_ref, ["pinhole", "fisheye"][is_fisheye], intrins, **kwargs,
-                is_ray_depth=(self.config.primitive not in ['3dgs', 'mip'] or is_fisheye)
+                is_ray_depth=(self.config.primitive not in ['3dgs', 'mip'])
             )
 
         if self.config.fit == "rgb":

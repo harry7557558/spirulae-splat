@@ -95,7 +95,7 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
         # render_mode="RGB+D+N",
     )
     rgbd = [*rgbd[:2]]
-    if IS_FISHEYE or WITH_UT:
+    if WITH_UT:
         rgbd[1] = ray_depth_to_linear_depth(rgbd[1], camera_model, intrins)  # TODO: f(E[X]) != E[f(X)]
     return *rgbd, 1.0 - Ts
 

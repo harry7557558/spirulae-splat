@@ -362,7 +362,8 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
         depth = get_sorting_depth(camera_model, mean_c);
     else
         // TODO: this is the same depth used to render depth maps
-        depth = (camera_model == CameraModelType::FISHEYE ? length(mean_c) : mean_c.z);
+        // depth = (camera_model == CameraModelType::FISHEYE ? length(mean_c) : mean_c.z);
+        depth = mean_c.z;
     conic = eval3d ? exp(-scale) :
         float3(covar2d_inv[0][0], covar2d_inv[0][1], covar2d_inv[1][1]);
 

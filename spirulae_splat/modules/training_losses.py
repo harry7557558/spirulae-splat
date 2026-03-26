@@ -772,7 +772,7 @@ class SplatTrainingLosses(torch.nn.Module):
             pred_depth_normal = depth_to_normal(
                 pred_depth, ["pinhole", "fisheye"][is_fisheye],
                 intrins, camera.distortion_params,
-                is_ray_depth=(self.config.primitive not in ['3dgs', 'mip'] or is_fisheye)
+                is_ray_depth=(self.config.primitive not in ['3dgs', 'mip'])
             )
 
         all_images = [[

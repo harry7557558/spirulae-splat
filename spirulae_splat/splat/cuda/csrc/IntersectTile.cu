@@ -79,7 +79,12 @@ __global__ void intersect_tile_kernel(
 
     int64_t iid = (image_ids ? image_ids[idx] : idx / N);
 
-    int32_t depth_i32 = __float_as_int(depths_buffer[idx]);
+    float depth_f32 = depths_buffer[idx];
+    uint32_t depth_u32 = __float_as_uint(depth_f32);
+    if (depth_u32 >> 31)  // negative
+        depth_u32 = ~depth_u32;
+    else  // positive
+        depth_u32 ^= (1u << 31u);
     
     int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_splat[idx - 1];
     int64_t max_idx = cum_tiles_per_splat[idx];
@@ -87,7 +92,7 @@ __global__ void intersect_tile_kernel(
         for (int32_t j = tile_min.x; j < tile_max.x; ++j) {
             if (cur_idx >= max_idx) break;
             int64_t tile_id = iid * tile_width * tile_height + i * tile_width + j;
-            isect_ids[cur_idx] = (tile_id << 32) | (int64_t)depth_i32;
+            isect_ids[cur_idx] = (tile_id << 32) | (int64_t)depth_u32;
             flatten_ids[cur_idx] = static_cast<int32_t>(idx);
             ++cur_idx;
         }

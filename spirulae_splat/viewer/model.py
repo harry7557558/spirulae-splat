@@ -336,7 +336,7 @@ class SplatModel:
             rgb = rgbd[0]
             if return_depth:
                 depth = rgbd[1]
-                if self.primitive not in ["3dgs", "mip"] or is_fisheye:
+                if self.primitive not in ["3dgs", "mip"]:
                     depth = ray_depth_to_linear_depth(
                         depth,
                         ["pinhole", "fisheye"][is_fisheye],
