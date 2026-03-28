@@ -73,8 +73,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("blend_background_noise_backward", &blend_background_noise_backward_tensor);
     m.def("blend_background_forward", &blend_background_forward_tensor);
     m.def("blend_background_backward", &blend_background_backward_tensor);
-    m.def("linear_rgb_to_srgb_forward", &linear_rgb_to_srgb_forward_tensor);
-    m.def("linear_rgb_to_srgb_backward", &linear_rgb_to_srgb_backward_tensor);
+    m.def("rgb_to_srgb_forward", &rgb_to_srgb_forward_tensor);
+    m.def("rgb_to_srgb_backward", &rgb_to_srgb_backward_tensor);
     m.def("depth_to_normal_forward", &depth_to_normal_forward_tensor);
     m.def("depth_to_normal_backward", &depth_to_normal_backward_tensor);
     m.def("ray_depth_to_linear_depth_forward", &ray_depth_to_linear_depth_forward_tensor);
@@ -178,7 +178,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fused_3dgs2tr_opacity_optim", &fused_3dgs2tr_opacity_optim);
     m.def("fused_3dgs2tr_quat_optim", &fused_3dgs2tr_quat_optim);
     m.def("fused_adam_linear_rgb_optim", &fused_adam_linear_rgb_optim);
+    m.def("fused_adamtr_rgb_optim", &fused_adamtr_rgb_optim);
     m.def("fused_adamtr_linear_rgb_optim", &fused_adamtr_linear_rgb_optim);
+    m.def("fused_adamtr_rgb_sh_optim", &fused_adamtr_rgb_sh_optim);
     m.def("fused_adamtr_linear_rgb_sh_optim", &fused_adamtr_linear_rgb_sh_optim);
 
     // Densify.cuh

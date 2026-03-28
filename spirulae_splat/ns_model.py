@@ -46,7 +46,7 @@ from spirulae_splat.modules.training_losses import SplatTrainingLosses
 from spirulae_splat.splat.cuda._wrapper_per_pixel import (
     blend_background,
     blend_background_noise,
-    linear_rgb_to_srgb,
+    rgb_to_srgb,
     get_color_transform_matrix
 )
 from spirulae_splat.splat.cuda import (
@@ -275,11 +275,15 @@ class SpirulaeModelConfig(ModelConfig):
     """Encourage color correction mean ~ 0 across frames in PPISP."""
     ppisp_reg_crf_channel_var: float = 0.1
     """Encourage similar CRF parameters across RGB channels in PPISP."""
-    use_linear_color_space: bool = False
+    image_color_is_linear: bool = False
     """Whether to assume training images are in linear color space."""
     image_color_gamut: Literal[None, "ACES2065-1", "ACEScg", "Rec.2020", "AdobeRGB", "DCI-P3"] = None
-    """Color space of input images. Note that tonemap is not applied."""
-    convert_initial_point_cloud_color: bool = False
+    """Color gamut of input images. If None, Rec.709 will be used. Note that tonemap is not applied."""
+    splat_color_is_linear: Literal[True, False, None] = None
+    """Whether to train splats in linear color space. If None, will use same as images."""
+    splat_color_gamut: Literal["Rec.709", "ACES2065-1", "ACEScg", "Rec.2020", "AdobeRGB", "DCI-P3", None] = None
+    """Color gamut of trained splats. If None, will use same as images. Note that tonemap is not applied."""
+    convert_initial_point_cloud_color: Literal[True, False, None] = None
     """If True, this will assume color in initial point cloud is sRGB, and convert if images are in a linear or wide-gamut color space."""
 
     # regularization
@@ -484,12 +488,26 @@ class SpirulaeModel(Model):
         else:
             seed_color = torch.rand(num_points, 3)
 
+        if self.config.splat_color_gamut is None:
+            self.config.splat_color_gamut = self.config.image_color_gamut
+        elif self.config.convert_initial_point_cloud_color is None:
+            self.config.convert_initial_point_cloud_color = True
+        if self.config.splat_color_gamut == "Rec.709":
+            self.config.splat_color_gamut = None
+        if self.config.splat_color_is_linear is None:
+            self.config.splat_color_is_linear = self.config.image_color_is_linear
+        elif self.config.convert_initial_point_cloud_color is None:
+            self.config.convert_initial_point_cloud_color = True
+        if self.config.convert_initial_point_cloud_color is None:
+            self.config.convert_initial_point_cloud_color = False
         if self.config.convert_initial_point_cloud_color:
-            if self.config.use_linear_color_space:
-                seed_color = torch.relu(seed_color) ** 2.2
-            if self.config.image_color_gamut is not None:
+            if self.config.splat_color_is_linear or self.config.splat_color_gamut is not None:
+                seed_color = torch.where(seed_color < 0.055, seed_color / 12.92, torch.relu((seed_color + 0.055) / 1.055) ** 2.4)
+            if self.config.splat_color_gamut is not None:
                 color_transform = get_color_transform_matrix(self.config.image_color_gamut, device=seed_color.device)
                 seed_color = seed_color @ torch.linalg.inv(color_transform).T
+                if not self.config.splat_color_is_linear:
+                    seed_color = torch.where(seed_color < 0.0031308, 12.92 * seed_color, 1.055 * torch.relu(seed_color) ** (1/2.4) - 0.055)
 
         if self.config.primitive in ["3dgs", "mip", "3dgut", "opaque_triangle", "voxel"]:
             shs = torch.zeros((num_points, dim_sh, 3)).float()
@@ -547,7 +565,7 @@ class SpirulaeModel(Model):
             self.background_color = torch.tensor([0.5, 0.5, 0.5])
         else:
             self.background_color = get_color(self.config.background_color)
-        if self.config.use_linear_color_space:
+        if self.config.splat_color_is_linear:
             self.background_color = self.background_color ** 2.2
         self.background_color = torch.nn.Parameter(self.background_color)
         if self.config.train_background_color:
@@ -897,8 +915,8 @@ class SpirulaeModel(Model):
         if self.config.randomize_background == True:
             # return torch.rand_like(self.background_color).repeat(H, W, 1)
             if rgb is None or transmittance is None:
-                return torch.rand((len(camera), H, W, 3), device=self.background_color.device)
-            return blend_background_noise(rgb, transmittance)
+                return None
+            return blend_background_noise(self.config.splat_color_is_linear, rgb, transmittance)
 
         elif not self.config.train_background_color and self.config.background_color == "black":
             if rgb is None or transmittance is None:
@@ -1075,12 +1093,17 @@ class SpirulaeModel(Model):
 
         if "quats" in self.gauss_params:
             self.quats.optim_info['optimizer_override'] = "fused_adam_riemannian_quat"
-        if self.config.use_linear_color_space:
+        if self.config.splat_color_is_linear:
             if "features_dc" in self.gauss_params and 'opacities' in self.gauss_params:
                 # self.features_dc.optim_info['optimizer_override'] = "fused_adam_linear_rgb_optim"
                 self.features_dc.optim_info['optimizer_override'] = "fused_adamtr_linear_rgb_optim"
             if "features_sh" in self.gauss_params and "features_dc" in self.gauss_params and 'opacities' in self.gauss_params:
                 self.features_sh.optim_info['optimizer_override'] = "fused_adamtr_linear_rgb_sh_optim"
+        elif self.config.splat_color_gamut is not None:
+            if "features_dc" in self.gauss_params and 'opacities' in self.gauss_params:
+                self.features_dc.optim_info['optimizer_override'] = "fused_adamtr_rgb_optim"
+            if "features_sh" in self.gauss_params and "features_dc" in self.gauss_params and 'opacities' in self.gauss_params:
+                self.features_sh.optim_info['optimizer_override'] = "fused_adamtr_rgb_sh_optim"
         if self.config.optimizer_offload == "sh" and "features_sh" in self.gauss_params:
             if hasattr(self.features_sh, "optimizer_override"):
                 raise ValueError("Optimizer offloading is not supported for linear color space")
@@ -1233,7 +1256,8 @@ class SpirulaeModel(Model):
         if not self.training:
             outputs["alpha"] = (1.0 - Ts).reshape((H, W, 1)).repeat(1, 1, 3)
             background = self.blend_background(camera, optimized_camera_to_world, intrins, W, H, is_fisheye)
-            outputs["background"] = torch.clip(background, min=0.0, max=1.0)
+            if background is not None:
+                outputs["background"] = torch.clip(background, min=0.0, max=1.0)
         else:
             outputs["transmittance"] = Ts
 
@@ -1249,18 +1273,14 @@ class SpirulaeModel(Model):
                 outputs["normal"] = 0.5+0.5*outputs["normal"]
             if "depth_normal" in outputs:
                 outputs["depth_normal"] = 0.5+0.5*outputs["depth_normal"]
-            if self.config.use_linear_color_space or self.config.image_color_gamut != None:
+            if self.config.splat_color_is_linear or self.config.splat_color_gamut != None:
                 outputs["rgb_raw"] = outputs["rgb"]
                 for key in ['rgb', 'background']:
                     if key not in outputs:
                         continue
-                    if self.config.use_linear_color_space:
-                        color_matrix = get_color_transform_matrix(self.config.image_color_gamut)
-                        outputs[key] = linear_rgb_to_srgb(outputs[key], color_matrix).clip(0, 1)
-                    elif self.config.image_color_gamut != None:
-                        raise NotImplementedError("image_color_gamut is only supported for linear color space")
-                        color_matrix = get_color_transform_matrix(self.config.image_color_gamut)
-                        outputs[key] = torch.matmul(outputs[key], color_matrix.T).clip(0, 1)
+                    if self.config.splat_color_is_linear or self.config.splat_color_gamut != None:
+                        color_matrix = get_color_transform_matrix(self.config.splat_color_gamut)
+                        outputs[key] = rgb_to_srgb(outputs[key], self.config.splat_color_is_linear, color_matrix).clip(0, 1)
             for key in outputs:
                 outputs[key] = outputs[key].squeeze(0)
 

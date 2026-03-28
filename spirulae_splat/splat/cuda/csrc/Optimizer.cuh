@@ -214,7 +214,38 @@ void fused_adamtr_linear_rgb_optim(
 );
 
 
+void fused_adamtr_rgb_optim(
+    at::Tensor param,
+    at::Tensor grad,
+    at::Tensor exp_avg,
+    at::Tensor exp_avg_sq,
+    at::Tensor opacities,
+    float lr,
+    float beta1,
+    float beta2,
+    float eps,
+    float eps_tr,
+    int step
+);
+
+
 void fused_adamtr_linear_rgb_sh_optim(
+    at::Tensor param,
+    at::Tensor grad,
+    at::Tensor exp_avg,
+    at::Tensor exp_avg_sq,
+    at::Tensor colors,
+    at::Tensor opacities,
+    float lr,
+    float beta1,
+    float beta2,
+    float eps,
+    float eps_tr,
+    int step
+);
+
+
+void fused_adamtr_rgb_sh_optim(
     at::Tensor param,
     at::Tensor grad,
     at::Tensor exp_avg,

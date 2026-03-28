@@ -420,6 +420,7 @@ __forceinline__ __device__ uint32_t hash_uint3(uint32_t a, uint32_t b, uint32_t 
     return hash;
 }
 
+template<bool is_linear>
 __global__ void blend_background_noise_forward_kernel(
     const TensorView<float, 4> in_rgb,
     const TensorView<float, 4> in_transmittance,
@@ -441,12 +442,18 @@ __global__ void blend_background_noise_forward_kernel(
     background.x = (float)hash_uint3(seed + 0, gid, bid) * exp2f(-32.0f);
     background.y = (float)hash_uint3(seed + 1, gid, bid) * exp2f(-32.0f);
     background.z = (float)hash_uint3(seed + 2, gid, bid) * exp2f(-32.0f);
+    if (is_linear) {
+        background.x = SlangPixelWise::srgb_to_linear_rgb(background.x);
+        background.y = SlangPixelWise::srgb_to_linear_rgb(background.y);
+        background.z = SlangPixelWise::srgb_to_linear_rgb(background.z);
+    }
 
     rgb = SlangPixelWise::blend_background(rgb, transmittance, background);
 
     out_rgb.store3(bid, y, x, rgb);
 }
 
+template<bool is_linear>
 __global__ void blend_background_noise_backward_kernel(
     const TensorView<float, 4> in_rgb,
     const TensorView<float, 4> in_transmittance,
@@ -470,6 +477,11 @@ __global__ void blend_background_noise_backward_kernel(
     background.x = (float)hash_uint3(seed + 0, gid, bid) * exp2f(-32.0f);
     background.y = (float)hash_uint3(seed + 1, gid, bid) * exp2f(-32.0f);
     background.z = (float)hash_uint3(seed + 2, gid, bid) * exp2f(-32.0f);
+    if (is_linear) {
+        background.x = SlangPixelWise::srgb_to_linear_rgb(background.x);
+        background.y = SlangPixelWise::srgb_to_linear_rgb(background.y);
+        background.z = SlangPixelWise::srgb_to_linear_rgb(background.z);
+    }
 
     float3 v_out = v_out_rgb.load3(bid, y, x);
 
@@ -486,6 +498,7 @@ __global__ void blend_background_noise_backward_kernel(
 
 /*[AutoHeaderGeneratorExport]*/
 at::Tensor blend_background_noise_forward_tensor(
+    bool is_linear,
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &transmittance,  // [B, H, W, 1]
     uint32_t seed
@@ -502,7 +515,8 @@ at::Tensor blend_background_noise_forward_tensor(
 
     at::Tensor out_rgb = at::empty({b, h, w, 3}, rgb.options());
 
-    blend_background_noise_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
+    (is_linear ? blend_background_noise_forward_kernel<true> : blend_background_noise_forward_kernel<false>)
+    <<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
         tensor2view<float, 4>(rgb), tensor2view<float, 4>(transmittance), seed,
         tensor2view<float, 4>(out_rgb)
     );
@@ -514,6 +528,7 @@ at::Tensor blend_background_noise_forward_tensor(
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<at::Tensor, at::Tensor>
 blend_background_noise_backward_tensor(
+    bool is_linear,
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &transmittance,  // [B, H, W, 1]
     uint32_t seed,
@@ -529,7 +544,8 @@ blend_background_noise_backward_tensor(
     at::Tensor v_rgb = at::empty({b, h, w, 3}, rgb.options());
     at::Tensor v_transmittance = at::empty({b, h, w, 1}, transmittance.options());
 
-    blend_background_noise_backward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
+    (is_linear ? blend_background_noise_backward_kernel<true> : blend_background_noise_backward_kernel<false>)
+    <<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
         tensor2view<float, 4>(rgb), tensor2view<float, 4>(transmittance), seed,
         tensor2view<float, 4>(v_out_rgb),
         tensor2view<float, 4>(v_rgb), tensor2view<float, 4>(v_transmittance)
@@ -544,7 +560,8 @@ blend_background_noise_backward_tensor(
 // Log Map Image
 // ================
 
-__global__ void linear_rgb_to_srgb_forward_kernel(
+template<bool is_input_linear>
+__global__ void rgb_to_srgb_forward_kernel(
     const TensorView<float, 4> in_rgb,
     const float* __restrict__ color_matrix_buffer,
     TensorView<float, 4> out_rgb
@@ -570,13 +587,16 @@ __global__ void linear_rgb_to_srgb_forward_kernel(
     color_matrix[2].y = color_matrix_buffer[7];
     color_matrix[2].z = color_matrix_buffer[8];
 
-    rgb = SlangPixelWise::linear_rgb_to_srgb(rgb, color_matrix);
+    if (is_input_linear)
+        rgb = SlangPixelWise::linear_rgb_to_srgb(rgb, color_matrix);
+    else
+        rgb = SlangPixelWise::rgb_to_srgb(rgb, color_matrix);
 
     out_rgb.store3(bid, y, x, rgb);
 }
 
-
-__global__ void linear_rgb_to_srgb_backward_kernel(
+template<bool is_input_linear>
+__global__ void rgb_to_srgb_backward_kernel(
     const TensorView<float, 4> in_rgb,
     const float* __restrict__ color_matrix_buffer,
     const TensorView<float, 4> v_out_rgb,
@@ -605,15 +625,18 @@ __global__ void linear_rgb_to_srgb_backward_kernel(
 
     float3 v_out = v_out_rgb.load3(bid, y, x);
 
-    float3 v_rgb = SlangPixelWise::linear_rgb_to_srgb_bwd(rgb, color_matrix, v_out);
+    float3 v_rgb;
+    if (is_input_linear)
+        v_rgb = SlangPixelWise::linear_rgb_to_srgb_bwd(rgb, color_matrix, v_out);
+    else
+        v_rgb = SlangPixelWise::rgb_to_srgb_bwd(rgb, color_matrix, v_out);
 
     v_in_rgb.store3(bid, y, x, v_rgb);
 }
 
-
-
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor linear_rgb_to_srgb_forward_tensor(
+at::Tensor rgb_to_srgb_forward_tensor(
+    bool is_input_linear,
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &color_matrix   // [3, 3]
 ) {
@@ -627,7 +650,8 @@ at::Tensor linear_rgb_to_srgb_forward_tensor(
 
     at::Tensor out_rgb = at::empty({b, h, w, 3}, rgb.options());
 
-    linear_rgb_to_srgb_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
+    (is_input_linear ? rgb_to_srgb_forward_kernel<true> : rgb_to_srgb_forward_kernel<false>)
+    <<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
         tensor2view<float, 4>(rgb),
         color_matrix.data_ptr<float>(),
         tensor2view<float, 4>(out_rgb)
@@ -637,9 +661,9 @@ at::Tensor linear_rgb_to_srgb_forward_tensor(
     return out_rgb;
 }
 
-
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor linear_rgb_to_srgb_backward_tensor(
+at::Tensor rgb_to_srgb_backward_tensor(
+    bool is_input_linear,
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &color_matrix,   // [3, 3]
     at::Tensor &v_out_rgb  // [B, H, W, 3]
@@ -652,7 +676,8 @@ at::Tensor linear_rgb_to_srgb_backward_tensor(
 
     at::Tensor v_rgb = at::empty({b, h, w, 3}, rgb.options());
 
-    linear_rgb_to_srgb_backward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
+    (is_input_linear ? rgb_to_srgb_backward_kernel<true> : rgb_to_srgb_backward_kernel<false>)
+    <<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
         tensor2view<float, 4>(rgb),
         color_matrix.data_ptr<float>(),
         tensor2view<float, 4>(v_out_rgb),

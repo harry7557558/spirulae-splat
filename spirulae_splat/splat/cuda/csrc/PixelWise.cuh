@@ -113,6 +113,7 @@ blend_background_backward_tensor(
 
 
 at::Tensor blend_background_noise_forward_tensor(
+    bool is_linear,
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &transmittance,  // [B, H, W, 1]
     uint32_t seed
@@ -121,6 +122,7 @@ at::Tensor blend_background_noise_forward_tensor(
 
 std::tuple<at::Tensor, at::Tensor>
 blend_background_noise_backward_tensor(
+    bool is_linear,
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &transmittance,  // [B, H, W, 1]
     uint32_t seed,
@@ -128,13 +130,15 @@ blend_background_noise_backward_tensor(
 );
 
 
-at::Tensor linear_rgb_to_srgb_forward_tensor(
+at::Tensor rgb_to_srgb_forward_tensor(
+    bool is_input_linear,
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &color_matrix   // [3, 3]
 );
 
 
-at::Tensor linear_rgb_to_srgb_backward_tensor(
+at::Tensor rgb_to_srgb_backward_tensor(
+    bool is_input_linear,
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &color_matrix,   // [3, 3]
     at::Tensor &v_out_rgb  // [B, H, W, 3]

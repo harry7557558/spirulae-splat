@@ -17,7 +17,7 @@ from spirulae_splat.splat.cuda import (
 
 from spirulae_splat.splat.cuda._wrapper_per_pixel import (
     depth_to_normal,
-    linear_rgb_to_srgb,
+    rgb_to_srgb,
     get_color_transform_matrix,
     apply_ppisp
 )
@@ -729,15 +729,12 @@ class SplatTrainingLosses(torch.nn.Module):
 
         # convert linear RGB to sRGB if needed
         # don't clip; exposure correction and loss should ideally handle out-of-gamut colors
-        if self.config.use_linear_color_space:
+        if self.config.image_color_is_linear or self.config.image_color_gamut != None:
             color_matrix = get_color_transform_matrix(self.config.image_color_gamut)
-            pred_rgb = linear_rgb_to_srgb(pred_rgb, color_matrix)
-            gt_rgb = linear_rgb_to_srgb(gt_rgb, color_matrix)
-        elif self.config.image_color_gamut != None:
-            raise NotImplementedError("image_color_gamut is only supported for linear color space")
-            color_matrix = get_color_transform_matrix(self.config.image_color_gamut)
-            pred_rgb = torch.matmul(pred_rgb, color_matrix.T)  # TODO: slow for small 3x3 matrices?
-            gt_rgb = torch.matmul(gt_rgb, color_matrix.T)
+            gt_rgb = rgb_to_srgb(gt_rgb, self.config.image_color_is_linear, color_matrix)
+        if self.config.splat_color_is_linear or self.config.splat_color_gamut != None:
+            color_matrix = get_color_transform_matrix(self.config.splat_color_gamut)
+            pred_rgb = rgb_to_srgb(pred_rgb, self.config.splat_color_is_linear, color_matrix)
 
         # apply exposure correction
         if self.config.use_bilateral_grid and self.config.fit == "rgb" and \

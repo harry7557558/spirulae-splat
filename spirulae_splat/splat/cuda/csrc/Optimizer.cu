@@ -1282,10 +1282,11 @@ void fused_adam_linear_rgb_optim(
 
 
 // ================
-// Trust Region Adam for linear RGB
+// Trust Region Adam for RGB
 // ================
 
-__global__ void fused_adamtr_linear_rgb_optim_kernel(
+template<bool is_linear>
+__global__ void fused_adamtr_rgb_optim_kernel(
     const int num_gs,
     float3* __restrict__ rgbs,  // [N, 3]
     const float3* __restrict__ grad,  // [N, 3]
@@ -1315,9 +1316,11 @@ __global__ void fused_adamtr_linear_rgb_optim_kernel(
         float3 v_val = exp_avg_sq[idx];
 
         // Convert gradient to linear color space
-        v.x /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * x.x + 0.5f);
-        v.y /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * x.y + 0.5f);
-        v.z /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * x.z + 0.5f);
+        if (is_linear) {
+            v.x /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * x.x + 0.5f);
+            v.y /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * x.y + 0.5f);
+            v.z /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * x.z + 0.5f);
+        }
         
         // Update momentum
         m_val = beta1 * m_val + (1.0f - beta1) * v;
@@ -1371,7 +1374,51 @@ void fused_adamtr_linear_rgb_optim(
     if (num_gs == 0)
         return;
     
-    fused_adamtr_linear_rgb_optim_kernel<<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
+    fused_adamtr_rgb_optim_kernel<true><<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
+        num_gs,
+        (float3*)param.data_ptr<float>(),
+        (float3*)grad.data_ptr<float>(),
+        (float3*)exp_avg.data_ptr<float>(),
+        (float3*)exp_avg_sq.data_ptr<float>(),
+        opacities.data_ptr<float>(),
+        lr,
+        beta1,
+        beta2,
+        1.0f - powf(beta1, step),
+        1.0f - powf(beta2, step),
+        eps,
+        eps_tr,
+        step
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void fused_adamtr_rgb_optim(
+    at::Tensor param,
+    at::Tensor grad,
+    at::Tensor exp_avg,
+    at::Tensor exp_avg_sq,
+    at::Tensor opacities,
+    float lr,
+    float beta1,
+    float beta2,
+    float eps,
+    float eps_tr,
+    int step
+) {
+    DEVICE_GUARD(param);
+    CHECK_INPUT(param);
+    CHECK_INPUT(grad);
+    CHECK_INPUT(exp_avg);
+    CHECK_INPUT(exp_avg_sq);
+    CHECK_INPUT(opacities);
+
+    const int num_gs = param.numel() / 3;
+    if (num_gs == 0)
+        return;
+    
+    fused_adamtr_rgb_optim_kernel<false><<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
         num_gs,
         (float3*)param.data_ptr<float>(),
         (float3*)grad.data_ptr<float>(),
@@ -1395,7 +1442,8 @@ void fused_adamtr_linear_rgb_optim(
 // Trust Region Adam for linear RGB, SH coefficients
 // ================
 
-__global__ void fused_adamtr_linear_rgb_sh_optim_kernel(
+template<bool is_linear>
+__global__ void fused_adamtr_rgb_sh_optim_kernel(
     const int num_params,
     const int num_sh,
     float* __restrict__ param,  // [N, K, 3]
@@ -1428,7 +1476,8 @@ __global__ void fused_adamtr_linear_rgb_sh_optim_kernel(
 
         // Convert gradient to linear color space
         float c = rgbs[(idx / (3*num_sh)) * 3 + (idx % 3)] * kSh0 + 0.5f;
-        v /= SlangPixelWise::linear_rgb_to_srgb_grad(c);
+        if (is_linear)
+            v /= SlangPixelWise::linear_rgb_to_srgb_grad(c);
         
         // Update momentum
         m_val = beta1 * m_val + (1.0f - beta1) * v;
@@ -1481,7 +1530,57 @@ void fused_adamtr_linear_rgb_sh_optim(
     if (num_sh == 0)
         return;
     
-    fused_adamtr_linear_rgb_sh_optim_kernel<<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
+    fused_adamtr_rgb_sh_optim_kernel<true><<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
+        num_gs,
+        num_sh,
+        param.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        exp_avg.data_ptr<float>(),
+        exp_avg_sq.data_ptr<float>(),
+        colors.data_ptr<float>(),
+        opacities.data_ptr<float>(),
+        lr,
+        beta1,
+        beta2,
+        1.0f - powf(beta1, step),
+        1.0f - powf(beta2, step),
+        eps,
+        eps_tr,
+        step
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void fused_adamtr_rgb_sh_optim(
+    at::Tensor param,
+    at::Tensor grad,
+    at::Tensor exp_avg,
+    at::Tensor exp_avg_sq,
+    at::Tensor colors,
+    at::Tensor opacities,
+    float lr,
+    float beta1,
+    float beta2,
+    float eps,
+    float eps_tr,
+    int step
+) {
+    DEVICE_GUARD(param);
+    CHECK_INPUT(param);
+    CHECK_INPUT(grad);
+    CHECK_INPUT(exp_avg);
+    CHECK_INPUT(exp_avg_sq);
+    CHECK_INPUT(opacities);
+
+    const int num_gs = colors.numel() / 3;
+    if (num_gs == 0)
+        return;
+    const int num_sh = param.numel() / colors.numel();
+    if (num_sh == 0)
+        return;
+    
+    fused_adamtr_rgb_sh_optim_kernel<false><<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
         num_gs,
         num_sh,
         param.data_ptr<float>(),

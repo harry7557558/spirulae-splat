@@ -107,10 +107,10 @@ class FusedAdam(Optimizer):
                 eps_tr = tr * (tr_final / tr) ** min(state['step'] / tr_max_steps, 1.0)
                 if p.optim_info['optimizer_override'] == "fused_adam_linear_rgb_optim":
                     pass
-                elif p.optim_info['optimizer_override'] == "fused_adamtr_linear_rgb_optim":
+                elif p.optim_info['optimizer_override'] in ["fused_adamtr_linear_rgb_optim", "fused_adamtr_rgb_optim"]:
                     additional_params = [p.optim_info['opacities']]
                     eps_params.append(eps_tr)
-                elif p.optim_info['optimizer_override'] == "fused_adamtr_linear_rgb_sh_optim":
+                elif p.optim_info['optimizer_override'] in ["fused_adamtr_linear_rgb_sh_optim", "fused_adamtr_rgb_sh_optim"]:
                     additional_params = [p.optim_info['features_dc'], p.optim_info['opacities']]
                     eps_params.append(eps_tr)
 

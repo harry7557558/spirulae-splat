@@ -54,17 +54,18 @@ class _BlendBackground(torch.autograd.Function):
         )
 
 
-def blend_background_noise(rgb, transmittance) -> Tensor:
-    return _BlendBackgroundNoise.apply(rgb, transmittance)
+def blend_background_noise(is_linear, rgb, transmittance) -> Tensor:
+    return _BlendBackgroundNoise.apply(is_linear, rgb, transmittance)
 
 
 class _BlendBackgroundNoise(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, rgb, transmittance):
+    def forward(ctx, is_linear, rgb, transmittance):
         seed = random.randint(1, 2**32-1)
-        out_rgb = _make_lazy_cuda_func("blend_background_noise_forward")(rgb, transmittance, seed)
+        out_rgb = _make_lazy_cuda_func("blend_background_noise_forward")(is_linear, rgb, transmittance, seed)
 
+        ctx.is_linear = is_linear
         ctx.save_for_backward(rgb, transmittance)
         ctx.seed = seed
 
@@ -75,21 +76,21 @@ class _BlendBackgroundNoise(torch.autograd.Function):
 
         rgb, transmittance = ctx.saved_tensors
 
-        return _make_lazy_cuda_func("blend_background_noise_backward")(
-            rgb, transmittance, ctx.seed,
-            v_out_rgb
+        return None, *_make_lazy_cuda_func("blend_background_noise_backward")(
+            ctx.is_linear, rgb, transmittance, ctx.seed, v_out_rgb
         )
 
 
-def linear_rgb_to_srgb(rgb: Tensor, color_matrix: Tensor) -> Tensor:
-    return _LinearRgbToSrgb.apply(rgb, color_matrix)
+def rgb_to_srgb(rgb: Tensor, is_input_linear: bool, color_matrix: Tensor) -> Tensor:
+    return _LinearRgbToSrgb.apply(rgb, is_input_linear, color_matrix)
 
 class _LinearRgbToSrgb(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, rgb, color_matrix):
-        out_rgb = _make_lazy_cuda_func("linear_rgb_to_srgb_forward")(rgb, color_matrix)
+    def forward(ctx, rgb, is_input_linear, color_matrix):
+        out_rgb = _make_lazy_cuda_func("rgb_to_srgb_forward")(is_input_linear, rgb, color_matrix)
 
+        ctx.is_input_linear = is_input_linear
         ctx.save_for_backward(rgb, color_matrix)
 
         return out_rgb
@@ -99,9 +100,9 @@ class _LinearRgbToSrgb(torch.autograd.Function):
 
         (rgb, color_matrix) = ctx.saved_tensors
 
-        return _make_lazy_cuda_func("linear_rgb_to_srgb_backward")(
-            rgb, color_matrix, v_out_rgb
-        ), None
+        return _make_lazy_cuda_func("rgb_to_srgb_backward")(
+            ctx.is_input_linear, rgb, color_matrix, v_out_rgb
+        ), None, None
 
 
 @functools.cache

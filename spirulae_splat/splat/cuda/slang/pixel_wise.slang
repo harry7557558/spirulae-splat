@@ -68,6 +68,22 @@ float linear_rgb_to_srgb_grad(float x) {
     return dp_y.d;
 }
 
+[ForceInline]
+[Differentiable]
+[CudaDeviceExport]
+float srgb_to_linear_rgb(float x) {
+    return x < 0.055f ?
+        x * (1.0f / 12.92f) :
+        pow((1.0f / 1.055f) * (x + 0.055f), 2.4f);
+}
+
+[CudaDeviceExport]
+float srgb_to_linear_rgb_grad(float x) {
+    var dp_x = diffPair(x, 1.0);
+    var dp_y = fwd_diff(srgb_to_linear_rgb)(dp_x);
+    return dp_y.d;
+}
+
 [Differentiable]
 [CudaDeviceExport]
 float3 linear_rgb_to_srgb(float3 rgb, no_diff float3x3 color_matrix) {
@@ -91,7 +107,33 @@ float3 linear_rgb_to_srgb_bwd(
     return p_rgb.d;
 }
 
+[Differentiable]
+[CudaDeviceExport]
+float3 rgb_to_srgb(float3 rgb, no_diff float3x3 color_matrix) {
+    rgb = float3(
+        srgb_to_linear_rgb(rgb.x),
+        srgb_to_linear_rgb(rgb.y),
+        srgb_to_linear_rgb(rgb.z)
+    );
+    rgb = mul(color_matrix, rgb);
+    return float3(
+        linear_rgb_to_srgb(rgb.x),
+        linear_rgb_to_srgb(rgb.y),
+        linear_rgb_to_srgb(rgb.z)
+    );
+}
 
+[CudaDeviceExport]
+float3 rgb_to_srgb_bwd(
+    float3 rgb, float3x3 color_matrix, float3 v_out_rgb
+) {
+    var p_rgb = diffPair(rgb);
+    bwd_diff(rgb_to_srgb)(
+        p_rgb, color_matrix,
+        v_out_rgb
+    );
+    return p_rgb.d;
+}
 
 [CudaDeviceExport]
 float3 generate_ray_d2n(
