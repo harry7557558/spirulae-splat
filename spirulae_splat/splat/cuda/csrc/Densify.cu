@@ -6,6 +6,11 @@ namespace SlangDensify {
 #include "generated/set_namespace.cuh"
 #include "generated/densify.cuh"
 }
+namespace SlangProjectionUtils {
+#include "generated/set_namespace.cuh"
+// #include "generated/projection_utils.cuh"
+#include "generated/primitive_3dgs.cuh"
+}
 #endif
 
 #include "common.cuh"
@@ -131,6 +136,121 @@ void inplace_scatter_max_tensor(
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
+
+
+
+// ================
+// Covariance-Based Scale Initialization
+// ================
+
+__global__ void cov_scale_init_kernel(
+    int64_t num_points,
+    int32_t num_cameras,
+    const float3* __restrict__ points,  // [N, 3]
+    const bool* __restrict__ is_fisheye,  // [C]
+    const int2* __restrict__ sizes,  // [C, 2]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
+    const float4 *__restrict__ viewmats,  // [C, 4, 4]
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer, // [C]
+    float* __restrict__ log_scales  // [N]
+) {
+    int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_points)
+        return;
+
+    float3 p_world = points[idx];
+    float max_log_scale = __logf(1e-30f);
+
+    for (int32_t i = 0; i < num_cameras; ++i) {
+        float4 intrin = intrins[i];
+        int width = sizes[i].x, height = sizes[i].y;
+        CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(i);
+
+        float4 p_wh = {p_world.x, p_world.y, p_world.z, 1.0f};
+        float3 p_view = {
+            dot(viewmats[4*i], p_wh),
+            dot(viewmats[4*i+1], p_wh),
+            dot(viewmats[4*i+2], p_wh),
+        };
+
+        bool valid = false;
+        constexpr float eps = 1e-6f;
+        float3x3 cov3d = {eps, 0, 0, 0, eps, 0, 0, 0, eps};
+        float2x2 cov2d;
+        float2 mean2d;
+        if (is_fisheye[i]) {
+            valid = SlangProjectionUtils::fisheye_proj_3dgs_nav(
+                p_view, cov3d, intrin, dist_coeffs, &cov2d, &mean2d
+            );
+        }
+        else {
+            valid = SlangProjectionUtils::persp_proj_3dgs_nav(
+                p_view, cov3d, intrin, dist_coeffs, width, height, &cov2d, &mean2d
+            );
+        }
+
+        #pragma unroll
+        for (int i = 0; i < 2; ++i) {
+            cov2d[i].x = __fmul_rn(cov2d[i].x, 1.0f/eps);
+            cov2d[i].y = __fmul_rn(cov2d[i].y, 1.0f/eps);
+        }
+
+        float det = cov2d[0].x * cov2d[1].y - cov2d[0].y * cov2d[1].x;
+        if (valid && det > 0.0f) {
+            float sc = 0.5f * __logf((float)(width * height) / det);
+            max_log_scale = fmaxf(max_log_scale, sc);
+        }
+    }
+
+    log_scales[idx] = max_log_scale;
+}
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor cov_scale_init_tensor(
+    at::Tensor points,  // [N, 3]
+    at::Tensor is_fisheye,  // [C], bool
+    at::Tensor sizes,  // [C, 2], int32
+    at::Tensor intrins,  // [C, 4]
+    at::Tensor viewmats,  // [C, 4, 4]
+    CameraDistortionCoeffsTensor dist_coeffs // [C]
+) {
+    DEVICE_GUARD(points);
+    CHECK_INPUT(points);
+    CHECK_INPUT(is_fisheye);
+    CHECK_INPUT(sizes);
+    CHECK_INPUT(intrins);
+    CHECK_INPUT(viewmats);
+
+    int64_t N = points.size(0);
+    int64_t C = intrins.size(0);
+    if (points.numel() != 3*N || points.size(-1) != 3)
+        AT_ERROR("points shape must be (N, 3)");
+    if (intrins.numel() != 4*C || intrins.size(-1) != 4)
+        AT_ERROR("intrins shape must be (C, 4)");
+    if (is_fisheye.numel() != C)
+        AT_ERROR("is_fisheye shape must be (C,)");
+    if (sizes.numel() != 2*C || sizes.size(-1) != 2)
+        AT_ERROR("sizes shape must be (C, 2)");
+    if (viewmats.numel() != C*4*4)
+        AT_ERROR("viewmats shape must be (C, 4, 4)");
+
+    at::Tensor log_scales = at::empty({N, 1}, points.options());
+
+    cov_scale_init_kernel<<<_LAUNCH_ARGS_1D(N, 256)>>>(
+        N, C,
+        (float3*)points.data_ptr<float>(),
+        is_fisheye.data_ptr<bool>(),
+        (int2*)sizes.data_ptr<int32_t>(),
+        (float4*)intrins.data_ptr<float>(),
+        (float4*)viewmats.data_ptr<float>(),
+        dist_coeffs,
+        log_scales.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return log_scales;
+}
+
 
 
 // ================

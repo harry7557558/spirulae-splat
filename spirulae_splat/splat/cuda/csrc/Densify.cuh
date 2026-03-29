@@ -30,6 +30,16 @@ void inplace_scatter_max_tensor(
 );
 
 
+at::Tensor cov_scale_init_tensor(
+    at::Tensor points,  // [N, 3]
+    at::Tensor is_fisheye,  // [C], bool
+    at::Tensor sizes,  // [C, 2], int32
+    at::Tensor intrins,  // [C, 4]
+    at::Tensor viewmats,  // [C, 4, 4]
+    CameraDistortionCoeffsTensor dist_coeffs // [C]
+);
+
+
 void mcmc_add_noise_tensor(
     std::string primitive,
     float scaler, float min_opacity,

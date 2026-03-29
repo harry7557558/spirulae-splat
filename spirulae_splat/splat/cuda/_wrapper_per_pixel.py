@@ -54,18 +54,20 @@ class _BlendBackground(torch.autograd.Function):
         )
 
 
-def blend_background_noise(is_linear, rgb, transmittance) -> Tensor:
-    return _BlendBackgroundNoise.apply(is_linear, rgb, transmittance)
+def blend_background_noise(is_linear, rgb, transmittance, randomize_weight) -> Tensor:
+    return _BlendBackgroundNoise.apply(is_linear, rgb, transmittance, randomize_weight)
 
 
 class _BlendBackgroundNoise(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, is_linear, rgb, transmittance):
+    def forward(ctx, is_linear, rgb, transmittance, randomize_weight):
         seed = random.randint(1, 2**32-1)
-        out_rgb = _make_lazy_cuda_func("blend_background_noise_forward")(is_linear, rgb, transmittance, seed)
+        out_rgb = _make_lazy_cuda_func("blend_background_noise_forward")(
+            is_linear, rgb, transmittance, randomize_weight, seed)
 
         ctx.is_linear = is_linear
+        ctx.randomize_weight = randomize_weight
         ctx.save_for_backward(rgb, transmittance)
         ctx.seed = seed
 
@@ -77,8 +79,8 @@ class _BlendBackgroundNoise(torch.autograd.Function):
         rgb, transmittance = ctx.saved_tensors
 
         return None, *_make_lazy_cuda_func("blend_background_noise_backward")(
-            ctx.is_linear, rgb, transmittance, ctx.seed, v_out_rgb
-        )
+            ctx.is_linear, rgb, transmittance, ctx.randomize_weight, ctx.seed, v_out_rgb
+        ), None
 
 
 def rgb_to_srgb(rgb: Tensor, is_input_linear: bool, color_matrix: Tensor) -> Tensor:

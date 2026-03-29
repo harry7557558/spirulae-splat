@@ -107,13 +107,13 @@ _DEFAULT_OPTIMIZERS = {
         # "optimizer": FusedAdamOptimizerConfig(lr=1e-2, eps=1e-15),
         "optimizer": FusedAdamOptimizerConfig(lr=2e-3, eps=1e-15),
         "scheduler": ExponentialDecaySchedulerConfig(
-            lr_final=1e-4, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
+            lr_final=1e-4, max_steps=30000, warmup_steps=2000, lr_pre_warmup=0, ramp="linear"
         ),
     },
     "bilateral_grid_normal": {
         "optimizer": FusedAdamOptimizerConfig(lr=5e-4, eps=1e-15),
         "scheduler": ExponentialDecaySchedulerConfig(
-            lr_final=4e-5, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
+            lr_final=4e-5, max_steps=30000, warmup_steps=2000, lr_pre_warmup=0, ramp="linear"
         ),
     },
     "ppisp": {
@@ -683,6 +683,7 @@ spirulae_preset_academic_baseline = MethodSpecification(
                 use_bilateral_grid_for_geometry=False,
                 use_ppisp=False,
                 mcmc_max_screen_size=float('inf'),
+                suppress_initial_scales=False,
                 depth_reg_weight=0.0,
                 normal_reg_weight=0.0,
                 alpha_reg_weight=0.0,

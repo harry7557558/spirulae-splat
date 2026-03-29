@@ -36,7 +36,9 @@ def get_image_from_path(
     scale_factor: float,
 ):
     filename = Path(filename)
+    assert filename.exists(), f"File `{filename}` does not exist"
     is_exr = filename.suffix.lower() == ".exr"
+    is_dng = filename.suffix.lower() == ".dng"
     if is_exr:
         try:
             import OpenEXR
@@ -51,6 +53,29 @@ def get_image_from_path(
             image = exr_channels['RGB'].pixels
         else:
             raise ValueError("Unsupported EXR file. Make sure it contains channel `RGB` or `RGBA`.")
+    elif is_dng:
+        try:
+            import rawpy
+        except ImportError:
+            print("rawpy not properly installed (required for DNG). Please install using `pip install rawpy`.")
+            exit(0)
+        with rawpy.imread(str(filename)) as raw:
+            # matching https://github.com/GNOME/shotwell/blob/b7c5957b4400664f255a6a8c8a63daf2d72958c6/src/photos/GRaw.vala
+            image = raw.postprocess(
+                half_size=False,
+                no_auto_bright=True,
+                bright=1.0,
+                auto_bright_thr=0.01,
+                use_camera_wb=True,
+                use_auto_wb=True,
+                # output_color=rawpy.ColorSpace.ACES,  # ACES2065-1
+                # gamma=(1.0, 1.0),
+                # output_bps=16,
+                output_color=rawpy.ColorSpace.sRGB,  # ACES2065-1
+                output_bps=8,
+                highlight_mode=rawpy.HighlightMode.Clip,
+                demosaic_algorithm=rawpy.DemosaicAlgorithm.PPG,
+            )
     else:
         image = cv2.imread(filename, cv2.IMREAD_UNCHANGED)
     # image = cv2.cvtColor(cv2.imread(image_filename), cv2.COLOR_BGR2RGB)
@@ -63,7 +88,7 @@ def get_image_from_path(
     if image.shape[2] == 1:
         image = np.repeat(image, 3, axis=2)
     assert len(image.shape) == 3
-    if not is_exr:
+    if not (is_exr or is_dng):
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB if image.shape[2] == 3 else cv2.COLOR_BGRA2RGBA)
     if image.dtype == np.bool_:
         image = image.astype(np.uint8) * 255
@@ -90,6 +115,8 @@ def get_depth_image_from_path(
     Returns:
         Depth image torch tensor with shape [height, width, 1].
     """
+    filepath = Path(filepath)
+    assert filepath.exists(), f"File `{filepath}` does not exist"
     if filepath.suffix == ".npy":
         image = np.load(filepath).astype(np.float32) * scale_factor
         # image = cv2.resize(image, (width, height), interpolation=interpolation)
@@ -106,6 +133,8 @@ def get_normal_image_from_path(
     width: int,
     interpolation: int = cv2.INTER_NEAREST,
 ) -> torch.Tensor:
+    filepath = Path(filepath)
+    assert filepath.exists(), f"File `{filepath}` does not exist"
     if filepath.suffix == ".npy":
         image = np.load(filepath).astype(np.float32)
         # image = cv2.resize(image, (width, height), interpolation=interpolation)
@@ -225,7 +254,7 @@ class SpirulaeDataset(InputDataset):
             image = torch.clamp(image, min=0, max=max_value).to(image.dtype)
         return image
 
-    def get_data(self, image_idx: int, image_type: Literal["uint8", "float32"] = "float32", _is_viewer=True, _load_auxiliary=True, _viewer_thumbnail_cache={}) -> Dict:
+    def get_data(self, image_idx: int, image_type: Literal["uint8", "float32"] = "float32", _is_viewer=True, load_depths=True, load_normals=True, _viewer_thumbnail_cache={}) -> Dict:
         """Returns the ImageDataset data as a dictionary.
 
         Args:
@@ -247,7 +276,7 @@ class SpirulaeDataset(InputDataset):
                             'image_idx': idx,
                             'image': image
                         }
-                    data = self.get_data(idx, image_type, _is_viewer=False, _load_auxiliary=False)
+                    data = self.get_data(idx, image_type, _is_viewer=False, load_depths=False, load_normals=False)
                     if data["image"].dtype == torch.uint16:
                         data["image"] = (data["image"] / 256).to(torch.uint8)
                     elif data["image"].dtype == torch.float16:
@@ -299,7 +328,7 @@ class SpirulaeDataset(InputDataset):
             assert (
                 data["mask"].shape[:2] == data["image"].shape[:2]
             ), f"Mask and image have different shapes. Got {data['mask'].shape[:2]} and {data['image'].shape[:2]}"
-        if _load_auxiliary:
+        if load_depths:
             if self._dataparser_outputs.metadata.get("depth_filenames", None) is not None:
                 depth_filepath = self._dataparser_outputs.metadata["depth_filenames"][image_idx]
                 data["depth"] = get_depth_image_from_path(
@@ -307,6 +336,7 @@ class SpirulaeDataset(InputDataset):
                     width=data["image"].shape[1], height=data["image"].shape[0]
                 )
                 # assert data["depth"].shape[:2] == data["image"].shape[:2]
+        if load_normals:
             if self._dataparser_outputs.metadata.get("normal_filenames", None) is not None:
                 normal_filepath = self._dataparser_outputs.metadata["normal_filenames"][image_idx]
                 data["normal"] = get_normal_image_from_path(

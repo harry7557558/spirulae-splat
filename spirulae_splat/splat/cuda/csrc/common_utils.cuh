@@ -223,6 +223,14 @@ _DEF_FLOAT_VEC_FUN(float)
 _DEF_INTEGRAL_VEC_FUN(int)
 _DEF_INTEGRAL_VEC_FUN(uint)
 
+__host__ __device__ __forceinline__ float3 cross(float3 a, float3 b) {
+    return {
+        a.y*b.z-a.z*b.y,
+        a.z*b.x-a.x*b.z,
+        a.x*b.y-a.y*b.x
+    };
+}
+
 
 #ifdef __CUDACC__
 #ifdef SLANG_PRELUDE_EXPORT

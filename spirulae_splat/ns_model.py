@@ -47,7 +47,8 @@ from spirulae_splat.splat.cuda._wrapper_per_pixel import (
     blend_background,
     blend_background_noise,
     rgb_to_srgb,
-    get_color_transform_matrix
+    get_color_transform_matrix,
+    _make_lazy_cuda_func
 )
 from spirulae_splat.splat.cuda import (
     svhash_create_initial_volume,
@@ -287,6 +288,8 @@ class SpirulaeModelConfig(ModelConfig):
     """If True, this will assume color in initial point cloud is sRGB, and convert if images are in a linear or wide-gamut color space."""
 
     # regularization
+    suppress_initial_scales: bool = True
+    """Whether to suppress scales during initialization to discourage large floaters in vacant areas"""
     scale_regularization_weight: float = 0.0
     """If enabled, a scale regularization introduced in PhysGauss (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians."""
     max_gauss_ratio: float = 10.0
@@ -346,6 +349,10 @@ class SpirulaeModelConfig(ModelConfig):
        (may be summed/averaged across a batch)"""
     randomize_background: Literal[True, False, "opaque-only", "non-sky-only"] = False
     """Use random noise for background color during training to discourage transparency."""
+    randomize_background_warmup: int = 2000
+    """Number of steps to warmup background randomization. This applies when randomize_background is True"""
+    randomize_background_pre_warmup: float = 0.25
+    """Weight of randomization at start of training (0 to 1). Higher value reduce the chance of washing away splat opacities near the beginning of training."""
 
     # supervision using a foundation depth model
     # enable these by setting `depth_model` in data manager config
@@ -383,9 +390,11 @@ class SpirulaeModel(Model):
         self,
         *args,
         seed_points: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        cameras: Optional[Cameras] = None,
         **kwargs,
     ):
         self.seed_points = seed_points
+        self.cameras = cameras
         super().__init__(*args, **kwargs)
 
     def populate_modules(self):
@@ -437,6 +446,8 @@ class SpirulaeModel(Model):
             num_points = means.shape[0]
             scales = torch.sqrt(torch.from_numpy(distances**2).mean(-1, keepdim=True)).repeat(1, 3).float()
             scales = torch.log(scale_init * scales / (self.config.kernel_radius/3.0) + 1e-8)
+            if self.config.suppress_initial_scales:
+                scales = self.suppress_initial_scales(means, scales)
             quats = F.normalize(torch.randn((num_points, 4)), dim=-1)
             opacities = torch.logit(opacity_init * torch.ones(num_points, 1))
 
@@ -777,6 +788,41 @@ class SpirulaeModel(Model):
         # Exclude the point itself (first column)
         return distances[:, 1:].astype(np.float32), indices[:, 1:].astype(np.int64)
 
+    def suppress_initial_scales(self, means: torch.Tensor, scales: torch.Tensor):
+
+        R = self.cameras.camera_to_worlds[:, :3, :3]  # 3 x 3
+        T = self.cameras.camera_to_worlds[:, :3, 3:4]  # 3 x 1
+        if self.config.relative_scale is not None:
+            T = T * self.config.relative_scale
+        R = R * torch.tensor([[[1.0, -1.0, -1.0]]])
+        R_inv = R.transpose(-1, -2)
+        T_inv = -torch.bmm(R_inv, T)
+        viewmats = torch.eye(4, dtype=self.cameras.camera_to_worlds.dtype)[None].repeat(len(self.cameras), 1, 1)
+        viewmats[:, :3, :3] = R_inv
+        viewmats[:, :3, 3:4] = T_inv
+
+        log_scales = -_make_lazy_cuda_func("cov_scale_init")(
+            *[x.cuda() if x is not None else x for x in (
+                means,
+                self.cameras.camera_type == CameraType.FISHEYE.value,
+                torch.concatenate((self.cameras.width, self.cameras.height), dim=-1).int(),
+                torch.concatenate((self.cameras.fx, self.cameras.fy, self.cameras.cx, self.cameras.cy), dim=1),
+                viewmats,
+                self.cameras.distortion_params
+            )]
+        )
+
+        original_mean = scales.mean().item()
+
+        log_scales += (original_mean - log_scales.mean().item())
+        log_scales = log_scales.repeat(1, 3)
+        # return log_scales
+
+        scales = torch.fmin(log_scales, scales.cuda())
+        scales += (original_mean - scales.mean().item())
+        return scales
+
+
     def set_crop(self, crop_box: Optional[OrientedBox]):
         self.crop_box = crop_box
 
@@ -916,7 +962,9 @@ class SpirulaeModel(Model):
             # return torch.rand_like(self.background_color).repeat(H, W, 1)
             if rgb is None or transmittance is None:
                 return None
-            return blend_background_noise(self.config.splat_color_is_linear, rgb, transmittance)
+            randomize_weight = min(self.step / max(self.config.randomize_background_warmup, 1), 1)
+            randomize_weight = 1.0 - (1.0 - self.config.randomize_background_pre_warmup) * (1.0 - randomize_weight)
+            return blend_background_noise(self.config.splat_color_is_linear, rgb, transmittance, randomize_weight)
 
         elif not self.config.train_background_color and self.config.background_color == "black":
             if rgb is None or transmittance is None:

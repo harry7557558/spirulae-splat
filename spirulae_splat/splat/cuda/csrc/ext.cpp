@@ -187,6 +187,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("inplace_index", &inplace_index_tensor);
     m.def("inplace_scatter_add", &inplace_scatter_add_tensor);
     m.def("inplace_scatter_max", &inplace_scatter_max_tensor);
+    m.def("cov_scale_init", &cov_scale_init_tensor);
     m.def("mcmc_add_noise", &mcmc_add_noise_tensor);
     m.def("compute_relocation", &compute_relocation_tensor);
     m.def("long_axis_split", &long_axis_split_tensor);

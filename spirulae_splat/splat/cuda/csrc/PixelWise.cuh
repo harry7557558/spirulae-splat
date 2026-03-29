@@ -116,6 +116,7 @@ at::Tensor blend_background_noise_forward_tensor(
     bool is_linear,
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &transmittance,  // [B, H, W, 1]
+    float randomize_weight,
     uint32_t seed
 );
 
@@ -125,6 +126,7 @@ blend_background_noise_backward_tensor(
     bool is_linear,
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &transmittance,  // [B, H, W, 1]
+    float randomize_weight,
     uint32_t seed,
     at::Tensor &v_out_rgb  // [B, H, W, 3]
 );

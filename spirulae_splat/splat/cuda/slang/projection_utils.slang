@@ -334,6 +334,7 @@ bool persp_proj<let assume_valid : bool>(
 
 [ForceInline]
 [Differentiable]
+[CudaDeviceExport]
 float2x3 persp_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs) {
     float2x3 J;
 #if 0
@@ -387,6 +388,7 @@ bool fisheye_proj<let assume_valid : bool>(
 
 [ForceInline]
 [Differentiable]
+[CudaDeviceExport]
 float2x3 fisheye_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs) {
     float2x3 J;
 #if 0

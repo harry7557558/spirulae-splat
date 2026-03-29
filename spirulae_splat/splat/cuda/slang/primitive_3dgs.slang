@@ -97,6 +97,20 @@ bool persp_proj_3dgs<let assume_valid : bool>(
     return true;
 }
 
+[CudaDeviceExport]
+bool persp_proj_3dgs_nav(
+    const float3 mean3d,
+    const float3x3 cov3d,
+    const float4 intrins,
+    const float[10] dist_coeffs,
+    const uint width,
+    const uint height,
+    out float2x2 cov2d,
+    out float2 mean2d
+) {
+    return persp_proj_3dgs<false>(mean3d, cov3d, intrins, dist_coeffs, width, height, cov2d, mean2d);
+}
+
 [ForceInline]
 bool persp_proj_3dgs_ut<let assume_valid : bool>(
     // inputs
@@ -163,6 +177,18 @@ bool fisheye_proj_3dgs<let assume_valid : bool>(
     float2x3 J = fisheye_proj_jac(mean3d, intrins, dist_coeffs);
     cov2d = mul(mul(J, cov3d), transpose(J));
     return true;
+}
+
+[CudaDeviceExport]
+bool fisheye_proj_3dgs_nav(
+    const float3 mean3d,
+    const float3x3 cov3d,
+    const float4 intrins,
+    const float[10] dist_coeffs,
+    out float2x2 cov2d,
+    out float2 mean2d
+) {
+    return fisheye_proj_3dgs<false>(mean3d, cov3d, intrins, dist_coeffs, cov2d, mean2d);
 }
 
 [ForceInline]

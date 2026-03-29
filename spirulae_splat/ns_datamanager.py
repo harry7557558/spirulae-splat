@@ -72,6 +72,11 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
     cache_images_type: Literal["uint8", "float32"] = "uint8"
     """The image type returned from manager, caching images in uint8 saves memory"""
 
+    load_depths: bool = True
+    """Whether to load depth maps, if exist"""
+    load_normals: bool = True
+    """Whether to load normal maps, if exist"""
+
     deblur_training_images: bool = False
     """Whether to use a custom trained deep learning model to deblur images before training"""
 
@@ -182,7 +187,8 @@ class SpirulaeDataManager(FullImageDatamanager):
         self.train_index_group_loader = None  # type: Optional[IndexGroupsWithDataLoader]
 
     def _undistort_idx(self, dataset, idx: int, return_idx=False) -> Dict[str, torch.Tensor]:
-        data = dataset.get_data(idx, image_type=self.config.cache_images_type, _is_viewer=False)
+        data = dataset.get_data(idx, image_type=self.config.cache_images_type, _is_viewer=False,
+                                load_depths=self.config.load_depths, load_normals=self.config.load_normals)
         dataset.cameras.width[idx] = data["image"].shape[1]
         dataset.cameras.height[idx] = data["image"].shape[0]
         camera = dataset.cameras[idx].reshape(())

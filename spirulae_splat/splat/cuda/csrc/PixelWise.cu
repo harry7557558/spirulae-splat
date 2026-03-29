@@ -424,6 +424,7 @@ template<bool is_linear>
 __global__ void blend_background_noise_forward_kernel(
     const TensorView<float, 4> in_rgb,
     const TensorView<float, 4> in_transmittance,
+    const float randomize_weight,
     const uint32_t seed,
     TensorView<float, 4> out_rgb
 ) {
@@ -442,6 +443,7 @@ __global__ void blend_background_noise_forward_kernel(
     background.x = (float)hash_uint3(seed + 0, gid, bid) * exp2f(-32.0f);
     background.y = (float)hash_uint3(seed + 1, gid, bid) * exp2f(-32.0f);
     background.z = (float)hash_uint3(seed + 2, gid, bid) * exp2f(-32.0f);
+    background = 0.5 + 0.5*randomize_weight * background;
     if (is_linear) {
         background.x = SlangPixelWise::srgb_to_linear_rgb(background.x);
         background.y = SlangPixelWise::srgb_to_linear_rgb(background.y);
@@ -457,6 +459,7 @@ template<bool is_linear>
 __global__ void blend_background_noise_backward_kernel(
     const TensorView<float, 4> in_rgb,
     const TensorView<float, 4> in_transmittance,
+    const float randomize_weight,
     const uint32_t seed,
     const TensorView<float, 4> v_out_rgb,
     TensorView<float, 4> v_in_rgb,
@@ -477,6 +480,7 @@ __global__ void blend_background_noise_backward_kernel(
     background.x = (float)hash_uint3(seed + 0, gid, bid) * exp2f(-32.0f);
     background.y = (float)hash_uint3(seed + 1, gid, bid) * exp2f(-32.0f);
     background.z = (float)hash_uint3(seed + 2, gid, bid) * exp2f(-32.0f);
+    background = 0.5 + 0.5*randomize_weight * background;
     if (is_linear) {
         background.x = SlangPixelWise::srgb_to_linear_rgb(background.x);
         background.y = SlangPixelWise::srgb_to_linear_rgb(background.y);
@@ -501,6 +505,7 @@ at::Tensor blend_background_noise_forward_tensor(
     bool is_linear,
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &transmittance,  // [B, H, W, 1]
+    float randomize_weight,
     uint32_t seed
 ) {
     DEVICE_GUARD(rgb);
@@ -517,7 +522,8 @@ at::Tensor blend_background_noise_forward_tensor(
 
     (is_linear ? blend_background_noise_forward_kernel<true> : blend_background_noise_forward_kernel<false>)
     <<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<float, 4>(rgb), tensor2view<float, 4>(transmittance), seed,
+        tensor2view<float, 4>(rgb), tensor2view<float, 4>(transmittance),
+        randomize_weight, seed,
         tensor2view<float, 4>(out_rgb)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -531,6 +537,7 @@ blend_background_noise_backward_tensor(
     bool is_linear,
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &transmittance,  // [B, H, W, 1]
+    float randomize_weight,
     uint32_t seed,
     at::Tensor &v_out_rgb  // [B, H, W, 3]
 ) {
@@ -546,7 +553,8 @@ blend_background_noise_backward_tensor(
 
     (is_linear ? blend_background_noise_backward_kernel<true> : blend_background_noise_backward_kernel<false>)
     <<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<float, 4>(rgb), tensor2view<float, 4>(transmittance), seed,
+        tensor2view<float, 4>(rgb), tensor2view<float, 4>(transmittance),
+        randomize_weight, seed,
         tensor2view<float, 4>(v_out_rgb),
         tensor2view<float, 4>(v_rgb), tensor2view<float, 4>(v_transmittance)
     );
