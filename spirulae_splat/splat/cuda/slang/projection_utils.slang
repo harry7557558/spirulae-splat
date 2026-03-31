@@ -332,6 +332,14 @@ bool persp_proj<let assume_valid : bool>(
     return true;
 }
 
+[CudaDeviceExport]
+bool persp_proj_nav(
+    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
+    out float2 uv
+) {
+    return persp_proj<false>(p_view, intrins, dist_coeffs, uv);
+}
+
 [ForceInline]
 [Differentiable]
 [CudaDeviceExport]
@@ -384,6 +392,14 @@ bool fisheye_proj<let assume_valid : bool>(
         fy * uv.y + cy
     );
     return true;
+}
+
+[CudaDeviceExport]
+bool fisheye_proj_nav(
+    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
+    out float2 uv
+) {
+    return fisheye_proj<false>(p_view, intrins, dist_coeffs, uv);
 }
 
 [ForceInline]

@@ -225,9 +225,9 @@ _DEF_INTEGRAL_VEC_FUN(uint)
 
 __host__ __device__ __forceinline__ float3 cross(float3 a, float3 b) {
     return {
-        a.y*b.z-a.z*b.y,
-        a.z*b.x-a.x*b.z,
-        a.x*b.y-a.y*b.x
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
     };
 }
 
@@ -773,6 +773,11 @@ struct TensorView {
         { static_assert(ndim == 4); return data[i0 * strides[0] + i1 * strides[1] + i2 * strides[2] + i3 * strides[3]]; }
     __device__ T& at(long i0, long i1, long i2, long i3)
         { static_assert(ndim == 4); return data[i0 * strides[0] + i1 * strides[1] + i2 * strides[2] + i3 * strides[3]]; }
+
+    __device__ T at(long i0, long i1, long i2, long i3, long i4) const
+        { static_assert(ndim == 5); return data[i0 * strides[0] + i1 * strides[1] + i2 * strides[2] + i3 * strides[3] + i4 * strides[4]]; }
+    __device__ T& at(long i0, long i1, long i2, long i3, long i4)
+        { static_assert(ndim == 5); return data[i0 * strides[0] + i1 * strides[1] + i2 * strides[2] + i3 * strides[3] + i4 * strides[4]]; }
 
     __device__ T load1(long i) const
         { static_assert(ndim == 2); return at(i, 0); }

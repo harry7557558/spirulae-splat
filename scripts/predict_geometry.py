@@ -13,7 +13,14 @@ import os
 from tqdm import tqdm
 import json
 
-from spirulae_splat.splat.cuda import undistort_image, distort_image
+from spirulae_splat.splat.cuda import (
+    undistort_image,
+    distort_image,
+    warp_image_wide_to_pinhole,
+    warp_image_pinhole_to_wide,
+    warp_linear_depth_pinhole_to_wide,
+    warp_points_pinhole_to_wide,
+)
 
 from typing import Tuple, Literal
 
@@ -103,7 +110,49 @@ def process_image(
         (intrins['fl_x']*sw, intrins['fl_y']*sh, intrins['cx']*sw, intrins['cy']*sh),
         tuple(intrins.get(key, 0.0) for key in "k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2".split())
     )
-    image = undistort_image(image, *intrins)
+
+    axes = None
+    if distort_image(torch.ones_like(image[..., :1]), *intrins).mean().item() > 0.75 \
+            or model_type != "metric3d":  # TODO: add support for other models
+        image = undistort_image(image, *intrins)
+    else:
+        # split into multiple images for very wide fisheye, to minimize loss of fov
+        r2, r3, r6 = 2**0.5, 3**0.5, 6**0.5
+        a0 = [1/r2, 1/r6, 1/r3]
+        a1 = [-1/r2, 1/r6, 1/r3]
+        a2 = [0, -2/r6, 1/r3]
+        axes = torch.Tensor([
+            # [a0, a1, a2],
+            # [a1, a2, a0],
+            # [a2, a0, a1],
+            [[1,0,0],[0,1,0],[0,0,1]],
+            [[0,1,0],[0,0,1],[1,0,0]],
+            [[-1,0,0],[0,0,1],[0,1,0]],
+            [[0,-1,0],[0,0,1],[-1,0,0]],
+            [[1,0,0],[0,0,1],[0,-1,0]],
+        ]).float().cuda()
+        axes[:, 0:2] *= 1.2
+
+        i2 = 0.5**0.5
+        a = 1.25  # in radians
+        sa, ca = np.sin(a), np.cos(a)
+        axes = torch.Tensor([
+            [[1,0,0],[0,1,0],[0,0,1]],
+            [[0,1,0],[-ca,0,sa],[sa,0,ca]],
+            [[-1,0,0],[0,-ca,sa],[0,sa,ca]],
+            [[0,-1,0],[ca,0,sa],[-sa,0,ca]],
+            [[1,0,0],[0,ca,sa],[0,-sa,ca]],
+            # [[-i2,i2,0],[-i2*ca,-i2*ca,sa],[i2*sa,i2*sa,ca]],
+            # [[-i2,-i2,0],[i2*ca,-i2*ca,sa],[-i2*sa,i2*sa,ca]],
+            # [[i2,-i2,0],[i2*ca,i2*ca,sa],[-i2*sa,-i2*sa,ca]],
+            # [[i2,i2,0],[-i2*ca,i2*ca,sa],[i2*sa,-i2*sa,ca]],
+        ]).float().cuda()
+        axes[:, 0:2] *= 1.2
+
+    if axes is not None:
+        original_shape = image.shape
+        target_size = int(np.sqrt(original_shape[1]*original_shape[2]/len(axes)))
+        image = warp_image_wide_to_pinhole(image, *intrins, axes, target_size, target_size)[0]
 
     # pred_depth and pred_normal are distorted, pred_sky is original
     pred_depth, pred_normal, pred_sky = None, None, None
@@ -112,7 +161,11 @@ def process_image(
         model = models[model_type.split('+').index("metric3d")]
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             pred_depth, _, output_dict = model.inference({'input': image.permute((0, 3, 1, 2))})
-        pred_normal = output_dict['prediction_normal']
+        pred_normal = output_dict['prediction_normal'][:, :3]
+
+        if axes is not None:
+            pred_depth = warp_linear_depth_pinhole_to_wide(pred_depth.permute(0, 2, 3, 1)[None], *intrins, axes, *original_shape[1:3]).permute(0, 3, 1, 2)
+            pred_normal = warp_points_pinhole_to_wide(pred_normal.permute(0, 2, 3, 1)[None], *intrins, axes, *original_shape[1:3]).permute(0, 3, 1, 2)
 
         pred_depth = torch.nn.functional.interpolate(
             pred_depth, size=(h, w), mode='bilinear', align_corners=False
@@ -170,7 +223,9 @@ def process_image(
 
     if depth_save_path is not None:
         pred_depth /= sky_depth
-        pred_depth = distort_image(pred_depth, *intrins)[0]
+        if axes is None:
+            pred_depth = distort_image(pred_depth, *intrins)
+        pred_depth = pred_depth[0]
         if pred_sky is not None:
             pred_depth = torch.where(
                 pred_sky & (pred_depth == 0.0),
@@ -184,7 +239,9 @@ def process_image(
     if normal_save_path is not None:
         # TODO: probably also need to distort values of normals
         pred_normal = 0.5 + 0.5 * pred_normal / torch.norm(pred_normal, dim=-1, keepdim=True)
-        pred_normal = distort_image(pred_normal, *intrins)[0]
+        if axes is None:
+            pred_normal = distort_image(pred_normal, *intrins)  # TODO: normalize?
+        pred_normal = pred_normal[0]
         pred_normal = torch.clip(255*pred_normal, 0, 255).to(torch.uint8).cpu().numpy()
         os.makedirs(Path(normal_save_path).parent, exist_ok=True)
         Image.fromarray(pred_normal).save(normal_save_path)

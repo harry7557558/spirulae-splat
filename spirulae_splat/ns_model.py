@@ -288,7 +288,7 @@ class SpirulaeModelConfig(ModelConfig):
     """If True, this will assume color in initial point cloud is sRGB, and convert if images are in a linear or wide-gamut color space."""
 
     # regularization
-    suppress_initial_scales: bool = True
+    suppress_initial_scales: bool = False
     """Whether to suppress scales during initialization to discourage large floaters in vacant areas"""
     scale_regularization_weight: float = 0.0
     """If enabled, a scale regularization introduced in PhysGauss (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians."""

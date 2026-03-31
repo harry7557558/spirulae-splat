@@ -81,6 +81,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("ray_depth_to_linear_depth_backward", &ray_depth_to_linear_depth_backward_tensor);
     m.def("distort_image", &distort_image_tensor);
     m.def("undistort_image", &undistort_image_tensor);
+    m.def("warp_image_wide_to_pinhole", &warp_image_wide_to_pinhole_tensor);
+    m.def("warp_image_pinhole_to_wide", &warp_image_pinhole_to_wide_tensor);
+    m.def("warp_linear_depth_pinhole_to_wide", &warp_linear_depth_pinhole_to_wide_tensor);
+    m.def("warp_points_pinhole_to_wide", &warp_points_pinhole_to_wide_tensor);
     m.def("ppisp_forward", &ppisp_forward_tensor);
     m.def("ppisp_backward", &ppisp_backward_tensor);
     m.def("compute_ppsip_regularization_forward", &compute_ppsip_regularization_forward_tensor);

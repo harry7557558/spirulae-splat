@@ -198,6 +198,46 @@ at::Tensor undistort_image_tensor(
 );
 
 
+at::Tensor warp_image_wide_to_pinhole_tensor(
+    std::string camera_model,
+    at::Tensor intrins,  // fx, fy, cx, cy
+    CameraDistortionCoeffsTensor dist_coeffs,
+    at::Tensor wide_image,  // [B, H, W, C]
+    at::Tensor axes,  // [K, 3, 3]
+    int out_w, int out_h
+);
+
+
+at::Tensor warp_image_pinhole_to_wide_tensor(
+    std::string camera_model,
+    at::Tensor intrins,  // fx, fy, cx, cy
+    CameraDistortionCoeffsTensor dist_coeffs,
+    at::Tensor pinhole_images,  // [B, K, H, W, C]
+    at::Tensor axes,  // [K, 3, 3]
+    int out_w, int out_h
+);
+
+
+at::Tensor warp_linear_depth_pinhole_to_wide_tensor(
+    std::string camera_model,
+    at::Tensor intrins,  // fx, fy, cx, cy
+    CameraDistortionCoeffsTensor dist_coeffs,
+    at::Tensor pinhole_images,  // [B, K, H, W, C]
+    at::Tensor axes,  // [K, 3, 3]
+    int out_w, int out_h
+);
+
+
+at::Tensor warp_points_pinhole_to_wide_tensor(
+    std::string camera_model,
+    at::Tensor intrins,  // fx, fy, cx, cy
+    CameraDistortionCoeffsTensor dist_coeffs,
+    at::Tensor pinhole_images,  // [B, K, H, W, C]
+    at::Tensor axes,  // [K, 3, 3]
+    int out_w, int out_h
+);
+
+
 at::Tensor ppisp_forward_tensor(
     at::Tensor &in_image,  // [B, H, W, C]
     at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]

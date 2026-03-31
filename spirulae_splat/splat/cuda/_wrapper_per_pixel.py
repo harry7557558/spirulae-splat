@@ -285,6 +285,58 @@ def undistort_image(
         True, image, camera_model, intrins, dist_coeffs
     )
 
+def warp_image_wide_to_pinhole(
+    image: Tensor,  # [B, H, W, C]
+    camera_model: Literal["pinhole", "fisheye"],
+    intrins: Union[Tensor, Tuple[float, float, float, float]],
+    dist_coeffs: Optional[Tensor],  # [..., C, 10]
+    axes: Tensor,  # [K, 3, 3]
+    width: int,
+    height: int,
+) -> Tensor:
+    return _DistortOrUndistortImage.apply(
+        True, image, camera_model, intrins, dist_coeffs, axes, width, height
+    )
+
+def warp_image_pinhole_to_wide(
+    image: Tensor,  # [B, H, W, C]
+    camera_model: Literal["pinhole", "fisheye"],
+    intrins: Union[Tensor, Tuple[float, float, float, float]],
+    dist_coeffs: Optional[Tensor],  # [..., C, 10]
+    axes: Tensor,  # [K, 3, 3]
+    width: int,
+    height: int,
+) -> Tensor:
+    return _DistortOrUndistortImage.apply(
+        False, image, camera_model, intrins, dist_coeffs, axes, width, height
+    )
+
+def warp_linear_depth_pinhole_to_wide(
+    image: Tensor,  # [B, H, W, C]
+    camera_model: Literal["pinhole", "fisheye"],
+    intrins: Union[Tensor, Tuple[float, float, float, float]],
+    dist_coeffs: Optional[Tensor],  # [..., C, 10]
+    axes: Tensor,  # [K, 3, 3]
+    width: int,
+    height: int,
+) -> Tensor:
+    return _DistortOrUndistortImage.apply(
+        "linear_depth", image, camera_model, intrins, dist_coeffs, axes, width, height
+    )
+
+def warp_points_pinhole_to_wide(
+    image: Tensor,  # [B, H, W, C]
+    camera_model: Literal["pinhole", "fisheye"],
+    intrins: Union[Tensor, Tuple[float, float, float, float]],
+    dist_coeffs: Optional[Tensor],  # [..., C, 10]
+    axes: Tensor,  # [K, 3, 3]
+    width: int,
+    height: int,
+) -> Tensor:
+    return _DistortOrUndistortImage.apply(
+        "points", image, camera_model, intrins, dist_coeffs, axes, width, height
+    )
+
 
 class _DistortOrUndistortImage(torch.autograd.Function):
     """Projects Gaussians to 2D."""
@@ -292,11 +344,14 @@ class _DistortOrUndistortImage(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        is_undistort: bool,
+        is_undistort: Literal[True, False, "linear_depth", "points"],
         image: Tensor,  # [B, H, W, C]
         camera_model: Literal["pinhole", "fisheye"],
         intrins: Tensor,
-        dist_coeffs: Optional[Tensor],  # [..., C, 10]
+        dist_coeffs: Optional[Tensor],  # [..., C, 10],
+        axes: Optional[Tensor] = None,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
     ) -> Tensor:
 
         if isinstance(intrins, tuple):
@@ -307,6 +362,18 @@ class _DistortOrUndistortImage(torch.autograd.Function):
             dist_coeffs = torch.tensor(dist_coeffs)[None].to(image).repeat(len(image), 1)
 
         camera_model_type = camera_model.upper()
+
+        if axes is not None:
+            return _make_lazy_cuda_func({
+               True: "warp_image_wide_to_pinhole",
+               False: "warp_image_pinhole_to_wide",
+               "linear_depth": "warp_linear_depth_pinhole_to_wide",
+               "points": "warp_points_pinhole_to_wide",
+            }[is_undistort])(
+                camera_model_type, intrins.contiguous(),
+                dist_coeffs.contiguous() if dist_coeffs is not None else None,
+                image.contiguous(), axes.contiguous(), width, height
+            )
 
         return _make_lazy_cuda_func("un"*int(is_undistort) + "distort_image")(
             camera_model_type, intrins.contiguous(),
