@@ -1,49 +1,16 @@
-import glob
 import os
-import platform
-import sys
 import re
-
-from setuptools import find_packages, setup
+import glob
+import sys
+import platform
+from pathlib import Path
+from setuptools import setup, find_packages
 
 
 BUILD_NO_CUDA = os.getenv("BUILD_NO_CUDA", "0") == "1"
 WITH_SYMBOLS = os.getenv("WITH_SYMBOLS", "0") == "1"
 # LINE_INFO = os.getenv("LINE_INFO", "0") == "1"
 LINE_INFO = True
-
-
-def extract_function_declarations(code):
-    # Regex to match non-inline function declarations
-    function_decl_pattern = re.compile(r"""
-        \/\*\[AutoHeaderGeneratorExport\]\*\/\s*
-        (.*?\))\s*\{
-    """, re.MULTILINE | re.VERBOSE | re.DOTALL)
-    
-    matches = function_decl_pattern.findall(code)
-    decls = []
-
-    for m in matches:
-        decls.append(m.strip()+';')
-    
-    return decls
-
-
-def generate_header(filename):
-    path = "spirulae_splat/splat/cuda/csrc/"
-
-    code = ""
-    for source_filename in os.listdir(path):
-        if source_filename.startswith(filename+"."):
-            code += open(path+source_filename).read()
-    decls = extract_function_declarations(code)
-
-    splitter = "/* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */\n"
-    include = open(path + f"{filename}.cuh").read()
-    include = include.split(splitter)[0].strip()
-
-    header = '\n\n\n'.join([include, splitter]+decls)
-    open(path + f"{filename}.cuh", "w").write(header+'\n')
 
 
 def get_ext():
@@ -73,15 +40,23 @@ def get_ext():
 
 def get_extensions():
     import torch
-    from torch.__config__ import parallel_info
     from torch.utils.cpp_extension import CUDAExtension
 
-    extensions_dir = os.path.abspath(os.path.join("spirulae_splat", "splat", "cuda"))
-    sources = \
-        glob.glob(os.path.join(extensions_dir, "ins", "*.cu")) + \
-        glob.glob(os.path.join(extensions_dir, "csrc", "*.cu")) + \
-        glob.glob(os.path.join(extensions_dir, "csrc", "*.cpp"))
-    sources = [path for path in sources if "hip" not in path]
+    cuda_arch_list = []
+    if torch.cuda.is_available():
+        for i in range(torch.cuda.device_count()):
+            compute_capability = torch.cuda.get_device_capability(i)
+            cuda_arch_list.append(f"{compute_capability[0]}{compute_capability[1]}")
+    else:
+        raise RuntimeError("CUDA is required for this extension.")
+
+    extensions_dir = Path("spirulae_splat/splat/cuda").absolute()
+    sources = (
+        glob.glob(str(extensions_dir / "ins" / "*.cu")) +
+        glob.glob(str(extensions_dir / "csrc" / "*.cu")) +
+        glob.glob(str(extensions_dir / "csrc" / "*.cpp"))
+    )
+    sources = [s for s in sources if "hip" not in s]
 
     undef_macros = []
     define_macros = []
@@ -94,7 +69,7 @@ def get_extensions():
         extra_compile_args["cxx"] += ["-Wno-sign-compare"]
     extra_link_args = [] if WITH_SYMBOLS else ["-s"]
 
-    info = parallel_info()
+    info = torch.__config__.parallel_info()
     if (
         "backend: OpenMP" in info
         and "OpenMP not found" not in info
@@ -146,18 +121,23 @@ def get_extensions():
     extra_compile_args["nvcc"] += ['-Xcudafe=--diag_suppress=550']
 
     extra_compile_args["nvcc"] += ['--threads', '0']
-    extra_compile_args["nvcc"] += ['-arch=native']
+
+    # extra_compile_args["nvcc"] += ['-arch=native']
+    for arch in cuda_arch_list:
+        extra_compile_args["nvcc"] += [
+            "-gencode", f"arch=compute_{arch},code=sm_{arch}"
+        ]
 
     # enable host-side SIMD, etc.
     if sys.platform != "win32":
         extra_compile_args["nvcc"] += ['-Xcompiler', '-O3 -march=native']
 
     extension = CUDAExtension(
-        f"spirulae_splat.csrc",
+        "spirulae_splat.csrc",
         sources,
         include_dirs=[
-            os.path.join(extensions_dir, "csrc"),
-            os.path.join(extensions_dir, "csrc", "glm"),
+            str(extensions_dir / "csrc"),
+            str(extensions_dir / "csrc" / "glm"),
         ],
         define_macros=define_macros,
         undef_macros=undef_macros,
@@ -176,30 +156,6 @@ if importlib.util.find_spec('torch') is None:
     raise ValueError("Please make sure you have PyTorch installed.")
 no_fused_bilagrid = (importlib.util.find_spec('fused_bilagrid') is None)
 
-for filename in [
-    'IntersectTile',
-    'SphericalHarmonics',
-    'BackgroundSphericalHarmonics',
-    'PerSplatLoss',
-    'PerPixelLoss',
-    'PixelWise',
-    'Projection',
-    'ProjectionFwd',
-    'ProjectionBwd',
-    'ProjectionPackedFwd',
-    'ProjectionHeteroFwd',
-    'ProjectionHeteroBwd',
-    'RasterizationFwd',
-    'RasterizationBwd',
-    'RasterizationEval3DFwd',
-    'RasterizationEval3DBwd',
-    'RasterizationSortedEval3DFwd',
-    'RasterizationSortedEval3DBwd',
-    'Optimizer',
-    'Densify',
-    'BilagridUtils',
-]:
-    generate_header(filename)
 
 setup(
     name="spirulae_splat",

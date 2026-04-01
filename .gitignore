@@ -1,5 +1,6 @@
 .vscode/
 .fuse_hidden*
+.torch_extensions/*
 
 outputs/
 
