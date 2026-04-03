@@ -75,8 +75,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("blend_background_backward", &blend_background_backward_tensor);
     m.def("rgb_to_srgb_forward", &rgb_to_srgb_forward_tensor);
     m.def("rgb_to_srgb_backward", &rgb_to_srgb_backward_tensor);
+    m.def("depth_to_points_forward", &depth_to_points_forward_tensor);
+    m.def("depth_to_points_backward", &depth_to_points_backward_tensor);
     m.def("depth_to_normal_forward", &depth_to_normal_forward_tensor);
     m.def("depth_to_normal_backward", &depth_to_normal_backward_tensor);
+    m.def("depth_normal_loss_forward", &depth_normal_loss_forward_tensor);
+    m.def("depth_normal_loss_backward", &depth_normal_loss_backward_tensor);
     m.def("ray_depth_to_linear_depth_forward", &ray_depth_to_linear_depth_forward_tensor);
     m.def("ray_depth_to_linear_depth_backward", &ray_depth_to_linear_depth_backward_tensor);
     m.def("distort_image", &distort_image_tensor);
@@ -84,7 +88,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("warp_image_wide_to_pinhole", &warp_image_wide_to_pinhole_tensor);
     m.def("warp_image_pinhole_to_wide", &warp_image_pinhole_to_wide_tensor);
     m.def("warp_linear_depth_pinhole_to_wide", &warp_linear_depth_pinhole_to_wide_tensor);
+    m.def("warp_ray_depth_pinhole_to_wide", &warp_ray_depth_pinhole_to_wide_tensor);
     m.def("warp_points_pinhole_to_wide", &warp_points_pinhole_to_wide_tensor);
+    m.def("warp_depth_pinhole_to_wide_scale_matrix", &warp_depth_pinhole_to_wide_scale_matrix_tensor);
     m.def("ppisp_forward", &ppisp_forward_tensor);
     m.def("ppisp_backward", &ppisp_backward_tensor);
     m.def("compute_ppsip_regularization_forward", &compute_ppsip_regularization_forward_tensor);

@@ -166,6 +166,57 @@ float3 generate_ray_d2n(
 
 [CudaDeviceExport]
 [Differentiable]
+float3 depth_to_point(
+    const no_diff float2 pix_pos,
+    const no_diff float4 intrins,  // fx, fy, cx, cy
+    const no_diff float[10] dist_coeffs,
+    const bool is_fisheye,
+    const bool is_ray_depth,
+    const float depth
+) {
+    float2 uv = (pix_pos - intrins.zw) / intrins.xy;
+    if (!no_diff undistort_point(uv, dist_coeffs, 12, uv)) {
+        return float3(0.0f);
+    }
+
+    float3 raydir;
+    if (is_fisheye) {
+        float theta = length(uv);
+        raydir = float3(uv/max(theta,1e-7f)*sin(theta), cos(theta));
+        if (!is_ray_depth)
+            raydir /= raydir.z;
+    }
+    else {
+        raydir = float3(uv.x, uv.y, 1.0f);
+        if (is_ray_depth)
+            raydir = normalize(raydir);
+    }
+
+    return depth * raydir;
+}
+
+[CudaDeviceExport]
+float depth_to_point_vjp(
+    const no_diff float2 pix_pos,
+    const no_diff float4 intrins,  // fx, fy, cx, cy
+    const no_diff float[10] dist_coeffs,
+    const bool is_fisheye,
+    const bool is_ray_depth,
+    const float depth,
+    const float3 v_point
+) {
+    DifferentialPair<float> dp_depth = diffPair(depth);
+    bwd_diff(depth_to_point)(
+        pix_pos,
+        intrins, dist_coeffs,
+        is_fisheye, is_ray_depth,
+        dp_depth, v_point
+    );
+    return dp_depth.d;
+}
+
+[CudaDeviceExport]
+[Differentiable]
 float3 points_to_normal(
     const float3 points[4] // x-, x+, y-, y+
 ) {
@@ -286,4 +337,84 @@ float ray_depth_to_linear_depth_factor(
     }
 
     return sign(raydir.z) / length(raydir);
+}
+
+[CudaDeviceExport]
+[Differentiable]
+float depth_normal_loss(
+    const no_diff float2 pix_center,
+    const no_diff float4 intrins, // fx, fy, cx, cy
+    const no_diff float[10] dist_coeffs,
+    const bool is_fisheye,
+    const bool is_ray_depth,
+    const float4 depths, // x-, x+, y-, y+
+    float3 gt_normal
+) {
+    float3 points[5];
+    float3 raydir;
+
+    [ForceUnroll]
+    for (int i = 0; i <= 4; i++) {
+        float2 pix_pos = pix_center + float(i != 4) * float2(
+            (2 * i - 1) * float(i < 2), (2 * (i - 2) - 1) * float(i >= 2)
+        );
+
+        float2 uv = (pix_pos - intrins.zw) / intrins.xy;
+        if (!no_diff undistort_point(uv, dist_coeffs, 12, uv)) {
+            return 0.0f;
+        }
+
+        if (is_fisheye) {
+            float theta = length(uv);
+            raydir = float3(uv / max(theta, 1e-7f) * sin(theta), cos(theta));
+            if (!is_ray_depth)
+                raydir /= raydir.z;
+        }
+        else {
+            raydir = float3(uv.x, uv.y, 1.0f);
+            if (is_ray_depth)
+                raydir = normalize(raydir);
+        }
+
+        if (i != 4)
+            points[i] = depths[i] * raydir;
+    }
+
+    float3 dx = points[1] - points[0];
+    float3 dy = points[3] - points[2];
+    float3 normal = cross(dx, -dy);
+    if (dot(normal, normal) != 0.0)
+        normal = normalize(normal);
+    if (dot(gt_normal, gt_normal) != 0.0)
+        gt_normal = normalize(gt_normal);
+
+    float num = 1.0 - dot(normal, gt_normal);
+    float den = dot(normal, -normalize(raydir));
+    constexpr float eps = 1e-3;
+    return (num + eps) / (max(den, 0.0f) + eps);
+}
+
+[CudaDeviceExport]
+void depth_normal_loss_vjp(
+    const no_diff float2 pix_center,
+    const no_diff float4 intrins, // fx, fy, cx, cy
+    const no_diff float[10] dist_coeffs,
+    const bool is_fisheye,
+    const bool is_ray_depth,
+    const float4 depths, // x-, x+, y-, y+
+    const float3 gt_normal,
+    const float v_loss,
+    out float4 v_depths,
+    out float3 v_gt_normal
+) {
+    DifferentialPair<float4> dp_depths = diffPair(depths);
+    DifferentialPair<float3> dp_gt_normal = diffPair(gt_normal);
+    bwd_diff(depth_normal_loss)(
+        pix_center,
+        intrins, dist_coeffs,
+        is_fisheye, is_ray_depth,
+        dp_depths, dp_gt_normal, v_loss
+    );
+    v_depths = dp_depths.d;
+    v_gt_normal = dp_gt_normal.d;
 }

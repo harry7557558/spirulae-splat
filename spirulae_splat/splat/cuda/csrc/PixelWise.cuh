@@ -147,6 +147,25 @@ at::Tensor rgb_to_srgb_backward_tensor(
 );
 
 
+at::Tensor depth_to_points_forward_tensor(
+    std::string camera_model,
+    at::Tensor intrins,  // fx, fy, cx, cy
+    CameraDistortionCoeffsTensor dist_coeffs,
+    bool is_ray_depth,
+    at::Tensor depths  // [B, H, W, 1]
+);
+
+
+at::Tensor depth_to_points_backward_tensor(
+    std::string camera_model,
+    at::Tensor intrins,  // fx, fy, cx, cy
+    CameraDistortionCoeffsTensor dist_coeffs,
+    bool is_ray_depth,
+    at::Tensor in_depths,  // [B, H, W, 1]
+    at::Tensor v_out_points  // [B, H, W, 3]
+);
+
+
 at::Tensor depth_to_normal_forward_tensor(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
@@ -163,6 +182,27 @@ at::Tensor depth_to_normal_backward_tensor(
     bool is_ray_depth,
     at::Tensor depths,  // [B, H, W, 1]
     at::Tensor v_normals  // [B, H, W, 3]
+);
+
+
+at::Tensor depth_normal_loss_forward_tensor(
+    std::string camera_model,
+    at::Tensor intrins,  // fx, fy, cx, cy
+    CameraDistortionCoeffsTensor dist_coeffs,
+    bool is_ray_depth,
+    at::Tensor depths,  // [B, H, W, 1]
+    at::Tensor gt_normals  // [B, H, W, 3]
+);
+
+
+std::tuple<at::Tensor, at::Tensor> depth_normal_loss_backward_tensor(
+    std::string camera_model,
+    at::Tensor intrins,  // fx, fy, cx, cy
+    CameraDistortionCoeffsTensor dist_coeffs,
+    bool is_ray_depth,
+    at::Tensor depths,  // [B, H, W, 1]
+    at::Tensor gt_normals,  // [B, H, W, 3]
+    at::Tensor v_losses  // [B, H, W, 1]
 );
 
 
@@ -228,7 +268,27 @@ at::Tensor warp_linear_depth_pinhole_to_wide_tensor(
 );
 
 
+at::Tensor warp_ray_depth_pinhole_to_wide_tensor(
+    std::string camera_model,
+    at::Tensor intrins,  // fx, fy, cx, cy
+    CameraDistortionCoeffsTensor dist_coeffs,
+    at::Tensor pinhole_images,  // [B, K, H, W, C]
+    at::Tensor axes,  // [K, 3, 3]
+    int out_w, int out_h
+);
+
+
 at::Tensor warp_points_pinhole_to_wide_tensor(
+    std::string camera_model,
+    at::Tensor intrins,  // fx, fy, cx, cy
+    CameraDistortionCoeffsTensor dist_coeffs,
+    at::Tensor pinhole_images,  // [B, K, H, W, C]
+    at::Tensor axes,  // [K, 3, 3]
+    int out_w, int out_h
+);
+
+
+at::Tensor warp_depth_pinhole_to_wide_scale_matrix_tensor(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
     CameraDistortionCoeffsTensor dist_coeffs,

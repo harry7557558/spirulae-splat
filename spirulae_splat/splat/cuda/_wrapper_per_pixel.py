@@ -151,6 +151,63 @@ def get_color_transform_matrix(in_color_space: Optional[str], out_color_space: s
     raise ValueError(f"Unsupported input color space {in_color_space}")
 
 
+def depth_to_points(
+    depths: Tensor,  # [B, H, W, 1]
+    camera_model: Literal["pinhole", "fisheye"],
+    intrins: Union[Tensor, Tuple[float, float, float, float]],
+    dist_coeffs: Optional[Tensor] = None,  # [..., C, 10]
+    is_ray_depth: bool = True,
+    **kwargs
+) -> Tensor:
+    if isinstance(intrins, tuple):
+        fx, fy, cx, cy = intrins
+        intrins = torch.tensor([[fx, fy, cx, cy]])
+        intrins = intrins.to(depths).repeat(len(depths), 1)
+    return _DepthToPoints.apply(
+        depths,
+        camera_model,
+        intrins.contiguous(),
+        dist_coeffs.contiguous() if dist_coeffs is not None else None,
+        is_ray_depth
+    )
+
+
+class _DepthToPoints(torch.autograd.Function):
+
+    @staticmethod
+    def forward(
+        ctx,
+        depths: Tensor,  # [B, H, W, 1]
+        camera_model: Literal["pinhole", "fisheye"],
+        intrins: Tensor,
+        dist_coeffs: Optional[Tensor],  # [..., C, 10]
+        is_ray_depth: bool
+    ) -> Tensor:
+
+        camera_model_type = camera_model.upper()
+
+        points = _make_lazy_cuda_func("depth_to_points_forward")(
+            camera_model_type, intrins,
+            dist_coeffs,
+            is_ray_depth, depths
+        )
+        ctx.save_for_backward(depths, intrins, dist_coeffs)
+        ctx.camera_model_type = camera_model_type
+        ctx.is_ray_depth = is_ray_depth
+
+        return points
+
+    @staticmethod
+    def backward(ctx, v_points):
+        depths, intrins, dist_coeffs = ctx.saved_tensors
+        v_depths = _make_lazy_cuda_func("depth_to_points_backward")(
+            ctx.camera_model_type, intrins,
+            dist_coeffs,
+            ctx.is_ray_depth, depths, v_points
+        )
+        return (v_depths, *([None]*(len(ctx.needs_input_grad)-1)))
+
+
 def depth_to_normal(
     depths: Tensor,  # [B, H, W, 1]
     camera_model: Literal["pinhole", "fisheye"],
@@ -173,7 +230,6 @@ def depth_to_normal(
 
 
 class _DepthToNormal(torch.autograd.Function):
-    """Projects Gaussians to 2D."""
 
     @staticmethod
     def forward(
@@ -207,6 +263,67 @@ class _DepthToNormal(torch.autograd.Function):
             ctx.is_ray_depth, depths, v_normals
         )
         return (v_depths, *([None]*(len(ctx.needs_input_grad)-1)))
+
+
+def depth_normal_loss(
+    depths: Tensor,  # [B, H, W, 1]
+    gt_normals: Tensor,  # [B, H, W, 3]
+    camera_model: Literal["pinhole", "fisheye"],
+    intrins: Union[Tensor, Tuple[float, float, float, float]],
+    dist_coeffs: Optional[Tensor] = None,  # [..., C, 10]
+    is_ray_depth: bool = True,
+    **kwargs
+) -> Tensor:
+    if isinstance(intrins, tuple):
+        fx, fy, cx, cy = intrins
+        intrins = torch.tensor([[fx, fy, cx, cy]])
+        intrins = intrins.to(depths).repeat(len(depths), 1)
+    assert depths.shape[:3] == gt_normals.shape[:3]
+    return _DepthNormalLoss.apply(
+        depths,
+        gt_normals,
+        camera_model,
+        intrins.contiguous(),
+        dist_coeffs.contiguous() if dist_coeffs is not None else None,
+        is_ray_depth
+    )
+
+
+class _DepthNormalLoss(torch.autograd.Function):
+
+    @staticmethod
+    def forward(
+        ctx,
+        depths: Tensor,  # [B, H, W, 1]
+        gt_normals: Tensor,  # [B, H, W, 3]
+        camera_model: Literal["pinhole", "fisheye"],
+        intrins: Tensor,
+        dist_coeffs: Optional[Tensor],  # [..., C, 10]
+        is_ray_depth: bool
+    ) -> Tensor:
+
+        camera_model_type = camera_model.upper()
+
+        losses = _make_lazy_cuda_func("depth_normal_loss_forward")(
+            camera_model_type, intrins,
+            dist_coeffs,
+            is_ray_depth, depths, gt_normals
+        )
+        ctx.save_for_backward(depths, gt_normals, intrins, dist_coeffs)
+        ctx.camera_model_type = camera_model_type
+        ctx.is_ray_depth = is_ray_depth
+
+        return losses
+
+    @staticmethod
+    def backward(ctx, v_losses):
+        depths, gt_normals, intrins, dist_coeffs = ctx.saved_tensors
+        v_depths, v_gt_normals = _make_lazy_cuda_func("depth_normal_loss_backward")(
+            ctx.camera_model_type, intrins,
+            dist_coeffs,
+            ctx.is_ray_depth, depths, gt_normals, v_losses
+        )
+        return (v_depths, v_gt_normals, *([None]*(len(ctx.needs_input_grad)-2)))
 
 
 
@@ -311,7 +428,7 @@ def warp_image_pinhole_to_wide(
         False, image, camera_model, intrins, dist_coeffs, axes, width, height
     )
 
-def warp_linear_depth_pinhole_to_wide(
+def warp_depth_pinhole_to_wide(
     image: Tensor,  # [B, H, W, C]
     camera_model: Literal["pinhole", "fisheye"],
     intrins: Union[Tensor, Tuple[float, float, float, float]],
@@ -319,9 +436,20 @@ def warp_linear_depth_pinhole_to_wide(
     axes: Tensor,  # [K, 3, 3]
     width: int,
     height: int,
+    is_ray_depth: bool,
 ) -> Tensor:
+    depth_matrix = _DistortOrUndistortImage.apply(
+        "depth_scale_matrix", image, camera_model, intrins, dist_coeffs, axes, width, height
+    )  # type: Tensor
+    eigvals, eigvecs = torch.linalg.eigh(depth_matrix)
+    scales = eigvecs[:, :, 0]
+    scales = torch.exp(scales)
+    scales /= scales.mean()
+    # print(scales)
+    image = image * scales[:, :, None, None, None]
     return _DistortOrUndistortImage.apply(
-        "linear_depth", image, camera_model, intrins, dist_coeffs, axes, width, height
+        "ray_depth" if is_ray_depth else "linear_depth",
+        image, camera_model, intrins, dist_coeffs, axes, width, height
     )
 
 def warp_points_pinhole_to_wide(
@@ -344,7 +472,7 @@ class _DistortOrUndistortImage(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        is_undistort: Literal[True, False, "linear_depth", "points"],
+        is_undistort: Literal[True, False, "linear_depth", "points", "depth_scale_matrix"],
         image: Tensor,  # [B, H, W, C]
         camera_model: Literal["pinhole", "fisheye"],
         intrins: Tensor,
@@ -368,7 +496,9 @@ class _DistortOrUndistortImage(torch.autograd.Function):
                True: "warp_image_wide_to_pinhole",
                False: "warp_image_pinhole_to_wide",
                "linear_depth": "warp_linear_depth_pinhole_to_wide",
+               "ray_depth": "warp_ray_depth_pinhole_to_wide",
                "points": "warp_points_pinhole_to_wide",
+               "depth_scale_matrix": "warp_depth_pinhole_to_wide_scale_matrix",
             }[is_undistort])(
                 camera_model_type, intrins.contiguous(),
                 dist_coeffs.contiguous() if dist_coeffs is not None else None,

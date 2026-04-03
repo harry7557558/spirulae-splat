@@ -12,11 +12,13 @@ from spirulae_splat.splat.utils import resize_image, _TORCH_COMPILE_ARGS
 from spirulae_splat.splat.cuda import (
     _C,
     _make_lazy_cuda_func,
-    ray_depth_to_linear_depth
+    ray_depth_to_linear_depth,
+    depth_normal_loss,
 )
 
 from spirulae_splat.splat.cuda._wrapper_per_pixel import (
     depth_to_normal,
+    depth_normal_loss,
     rgb_to_srgb,
     get_color_transform_matrix,
     apply_ppisp
@@ -771,6 +773,10 @@ class SplatTrainingLosses(torch.nn.Module):
                 intrins, camera.distortion_params,
                 is_ray_depth=(self.config.primitive not in ['3dgs', 'mip'])
             )
+
+        # TODO: fix depth supervision
+        # pred_depth is linear depth for 3dgs and mip primitives and ray depth otherwise
+        # gt_depth is linear depth for perspective cameras and ray depth for fisheye cameras
 
         all_images = [[
             pred_rgb,

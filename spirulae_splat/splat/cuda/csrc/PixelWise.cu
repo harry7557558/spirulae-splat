@@ -697,6 +697,143 @@ at::Tensor rgb_to_srgb_backward_tensor(
 }
 
 
+// ================
+// Depth to Points
+// ================
+
+
+__global__ void depth_to_points_forward_kernel(
+    ssplat::CameraModelType camera_model,
+    const float4 *__restrict__ intrins,  // fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const bool is_ray_depth,
+    const TensorView<float, 4> in_depths,  // [B, H, W, 1]
+    TensorView<float, 4> out_points  // [B, H, W, 3]
+) {
+    const int B = in_depths.shape[0],
+        H = in_depths.shape[1],
+        W = in_depths.shape[2];
+    uint32_t bid = blockIdx.z * blockDim.z + threadIdx.z;
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (bid >= B || i >= W || j >= H)
+        return;
+
+    // Load camera
+    float4 intrin = intrins[bid];
+    float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
+    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+
+    // Process
+    float in_depth = in_depths.load1(bid, j, i);
+    float3 out_point = SlangPixelWise::depth_to_point(
+        {(float)i+0.5f, (float)j+0.5f},
+        {fx, fy, cx, cy}, dist_coeffs,
+        camera_model == ssplat::CameraModelType::FISHEYE,
+        is_ray_depth,
+        in_depth
+    );
+    out_points.store3(bid, j, i, out_point);
+}
+
+__global__ void depth_to_points_backward_kernel(
+    ssplat::CameraModelType camera_model,
+    const float4 *__restrict__ intrins,  // fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const bool is_ray_depth,
+    const TensorView<float, 4> in_depths,  // [B, H, W, 1]
+    const TensorView<float, 4> v_out_points,  // [B, H, W, 3]
+    TensorView<float, 4> v_in_depths  // [B, H, W, 1]
+) {
+    const int B = v_out_points.shape[0],
+        H = v_out_points.shape[1],
+        W = v_out_points.shape[2];
+    uint32_t bid = blockIdx.z * blockDim.z + threadIdx.z;
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (bid >= B || i >= W || j >= H)
+        return;
+
+    // Load camera
+    float4 intrin = intrins[bid];
+    float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
+    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+
+    // Process
+    float in_depth = in_depths.load1(bid, j, i);
+    float3 v_out_point = v_out_points.load3(bid, j, i);
+    float v_in_depth = SlangPixelWise::depth_to_point_vjp(
+        {(float)i+0.5f, (float)j+0.5f},
+        {fx, fy, cx, cy}, dist_coeffs,
+        camera_model == ssplat::CameraModelType::FISHEYE,
+        is_ray_depth,
+        in_depth, v_out_point
+    );
+    v_in_depths.store1(bid, j, i, v_in_depth);
+}
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor depth_to_points_forward_tensor(
+    std::string camera_model,
+    at::Tensor intrins,  // fx, fy, cx, cy
+    CameraDistortionCoeffsTensor dist_coeffs,
+    bool is_ray_depth,
+    at::Tensor depths  // [B, H, W, 1]
+) {
+    DEVICE_GUARD(depths);
+    CHECK_CUDA(depths);
+    CHECK_INPUT(intrins);
+
+    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
+        AT_ERROR("intrins shape must be (B, 4)");
+    if (depths.ndimension() != 4 || depths.size(-1) != 1)
+        AT_ERROR("depths shape must be (B, H, W, 1)");
+    if (depths.size(0) != intrins.size(0))
+        AT_ERROR("depths and intrins batch dimension mismatch");
+
+    int b = depths.size(0), h = depths.size(1), w = depths.size(2);
+    at::Tensor out_points = at::empty({b, h, w, 3}, depths.options());
+
+    depth_to_points_forward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
+        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs, is_ray_depth,
+        tensor2view<float, 4>(depths), tensor2view<float, 4>(out_points)
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return out_points;
+}
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor depth_to_points_backward_tensor(
+    std::string camera_model,
+    at::Tensor intrins,  // fx, fy, cx, cy
+    CameraDistortionCoeffsTensor dist_coeffs,
+    bool is_ray_depth,
+    at::Tensor in_depths,  // [B, H, W, 1]
+    at::Tensor v_out_points  // [B, H, W, 3]
+) {
+    DEVICE_GUARD(in_depths);
+    CHECK_CUDA(in_depths);
+    CHECK_CUDA(v_out_points);
+    CHECK_INPUT(intrins);
+
+    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
+        AT_ERROR("intrins shape must be (B, 4)");
+
+    int b = in_depths.size(0), h = in_depths.size(1), w = in_depths.size(2);
+    at::Tensor v_in_depths = at::empty_like(in_depths);
+
+    depth_to_points_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
+        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs, is_ray_depth,
+        tensor2view<float, 4>(in_depths), tensor2view<float, 4>(v_out_points),
+        tensor2view<float, 4>(v_in_depths)
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return v_in_depths;
+}
+
+
 
 // ================
 // Depth to Normal
@@ -928,6 +1065,199 @@ at::Tensor depth_to_normal_backward_tensor(
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return v_depths;
+}
+
+
+
+// ================
+// Loss between Depth and Normal
+// ================
+
+
+__global__ void depth_normal_loss_forward_kernel(
+    ssplat::CameraModelType camera_model,
+    const float4 *__restrict__ intrins,  // fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const bool is_ray_depth,
+    const TensorView<float, 4> depths,  // [B, H, W, 1]
+    const TensorView<float, 4> gt_normals,  // [B, H, W, 3]
+    TensorView<float, 4> losses  // [B, H, W, 1]
+) {
+    const int B = depths.shape[0],
+        H = depths.shape[1],
+        W = depths.shape[2];
+    constexpr int TILE = 16;  // blockDim.x and blockDim.y; blockDim.z should be 1
+    uint32_t bid = blockIdx.z;
+    uint32_t i = blockIdx.x * TILE + threadIdx.x;
+    uint32_t j = blockIdx.y * TILE + threadIdx.y;
+
+    bool inside = (bid < B && i < W && j < H);
+
+    // Zero for border pixels (consistent with PyTorch implementation)
+    if (inside && (i == 0 || i == W-1 || j == 0 || j == H-1)) {
+        losses.store1(bid, j, i, 0.0f);
+        inside = false;
+    }
+
+    // Load camera
+    float4 intrin = intrins[bid];
+    float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
+    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+
+    // Process
+#if 1
+    if (!inside) return;
+    float4 depth = {
+        depths.load1(bid, j, i-1),
+        depths.load1(bid, j, i+1),
+        depths.load1(bid, j-1, i),
+        depths.load1(bid, j+1, i),
+    };
+    float3 gt_normal = gt_normals.load3(bid, j, i);
+    float loss = SlangPixelWise::depth_normal_loss(
+        {(float)i+0.5f, (float)j+0.5f},
+        {fx, fy, cx, cy}, dist_coeffs,
+        camera_model == ssplat::CameraModelType::FISHEYE, is_ray_depth,
+        depth, gt_normal
+    );
+#else
+    // TODO: pre-undistort and store in shared memory
+#endif
+    losses.store1(bid, j, i, loss);
+}
+
+
+__global__ void depth_normal_loss_backward_kernel(
+    ssplat::CameraModelType camera_model,
+    const float4 *__restrict__ intrins,  // fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const bool is_ray_depth,
+    const TensorView<float, 4> depths,  // [B, H, W, 1]
+    const TensorView<float, 4> gt_normals,  // [B, H, W, 3]
+    const TensorView<float, 4> v_losses,  // [B, H, W, 1]
+    TensorView<float, 4> v_depths,  // [B, H, W, 1]
+    TensorView<float, 4> v_gt_normals  // [B, H, W, 3]
+) {
+    const int B = depths.shape[0],
+        H = depths.shape[1],
+        W = depths.shape[2];
+    constexpr int TILE = 16;  // blockDim.x and blockDim.y; blockDim.z should be 1
+    uint32_t bid = blockIdx.z;
+    uint32_t i = blockIdx.x * TILE + threadIdx.x;
+    uint32_t j = blockIdx.y * TILE + threadIdx.y;
+
+    bool inside = (bid < B && i < W && j < H);
+
+    // Zero for border pixels (consistent with PyTorch implementation)
+    if (i == 0 || i == W-1 || j == 0 || j == H-1) {
+        inside = false;
+    }
+
+    // Load camera
+    float4 intrin = intrins[bid];
+    float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
+    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+
+    // Process
+#if 1
+    if (!inside) {
+        v_gt_normals.store3(bid, j, i, float3{0.0f, 0.0f, 0.0f});
+        return;
+    }
+    float4 depth = {
+        depths.load1(bid, j, i-1),
+        depths.load1(bid, j, i+1),
+        depths.load1(bid, j-1, i),
+        depths.load1(bid, j+1, i),
+    };
+    float3 gt_normal = gt_normals.load3(bid, j, i);
+    float v_loss = v_losses.load1(bid, j, i);
+    float4 v_depth = {0.0f, 0.0f, 0.0f, 0.0f};
+    float3 v_gt_normal = float3{0.0f, 0.0f, 0.0f};
+    SlangPixelWise::depth_normal_loss_vjp(
+        {(float)i+0.5f, (float)j+0.5f},
+        {fx, fy, cx, cy}, dist_coeffs,
+        camera_model == ssplat::CameraModelType::FISHEYE, is_ray_depth,
+        depth, gt_normal, v_loss, &v_depth, &v_gt_normal
+    );
+    v_depths.atomicStore1(bid, j, i-1, v_depth.x);
+    v_depths.atomicStore1(bid, j, i+1, v_depth.y);
+    v_depths.atomicStore1(bid, j-1, i, v_depth.z);
+    v_depths.atomicStore1(bid, j+1, i, v_depth.w);
+    v_gt_normals.store3(bid, j, i, v_gt_normal);
+#else
+    // TODO: pre-undistort and store in shared memory
+#endif
+}
+
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor depth_normal_loss_forward_tensor(
+    std::string camera_model,
+    at::Tensor intrins,  // fx, fy, cx, cy
+    CameraDistortionCoeffsTensor dist_coeffs,
+    bool is_ray_depth,
+    at::Tensor depths,  // [B, H, W, 1]
+    at::Tensor gt_normals  // [B, H, W, 3]
+) {
+    DEVICE_GUARD(depths);
+    CHECK_CUDA(depths);
+    CHECK_CUDA(gt_normals);
+    CHECK_INPUT(intrins);
+
+    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
+        AT_ERROR("intrins shape must be (B, 4)");
+    if (depths.ndimension() != 4 || depths.size(-1) != 1)
+        AT_ERROR("depths shape must be (B, H, W, 1)");
+    if (depths.size(0) != intrins.size(0))
+        AT_ERROR("depths and intrins batch dimension mismatch");
+    if (gt_normals.ndimension() != 4 || gt_normals.size(-1) != 3)
+        AT_ERROR("gt_normals shape must be (B, H, W, 3)");
+    if (gt_normals.size(0) != intrins.size(0))
+        AT_ERROR("gt_normals and intrins batch dimension mismatch");
+
+    int b = depths.size(0), h = depths.size(1), w = depths.size(2);
+    at::Tensor losses = at::empty_like(depths);
+
+    depth_normal_loss_forward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
+        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
+        is_ray_depth, tensor2view<float, 4>(depths), tensor2view<float, 4>(gt_normals),
+        tensor2view<float, 4>(losses)
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return losses;
+}
+
+/*[AutoHeaderGeneratorExport]*/
+std::tuple<at::Tensor, at::Tensor> depth_normal_loss_backward_tensor(
+    std::string camera_model,
+    at::Tensor intrins,  // fx, fy, cx, cy
+    CameraDistortionCoeffsTensor dist_coeffs,
+    bool is_ray_depth,
+    at::Tensor depths,  // [B, H, W, 1]
+    at::Tensor gt_normals,  // [B, H, W, 3]
+    at::Tensor v_losses  // [B, H, W, 1]
+) {
+    DEVICE_GUARD(depths);
+    CHECK_CUDA(depths);
+    CHECK_CUDA(gt_normals);
+    CHECK_CUDA(v_losses);
+    CHECK_INPUT(intrins);
+
+    int b = depths.size(0), h = depths.size(1), w = depths.size(2);
+    at::Tensor v_depths = zeros_like<float>(depths);
+    at::Tensor v_gt_normals = at::empty_like(gt_normals);
+
+    depth_normal_loss_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
+        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
+        is_ray_depth, tensor2view<float, 4>(depths), tensor2view<float, 4>(gt_normals),
+        tensor2view<float, 4>(v_losses),
+        tensor2view<float, 4>(v_depths), tensor2view<float, 4>(v_gt_normals)
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return std::make_tuple(v_depths, v_gt_normals);
 }
 
 
@@ -1328,6 +1658,7 @@ at::Tensor warp_image_wide_to_pinhole_tensor(
 enum class WarpImageType {
     Default,
     LinearDepth,
+    RayDepth,
     Points,
 };
 
@@ -1395,7 +1726,7 @@ __global__ void warp_image_pinhole_to_wide_kernel(
         if (fabsf(tx) >= 1.0f || fabsf(ty) >= 1.0f || t < 0.0f)
             continue;
 
-        float2 uv = {(0.5f+0.5f*tx)*Wp, (0.5f+0.5f*ty)*Hp};
+        float2 xy = {(0.5f+0.5f*tx)*Wp, (0.5f+0.5f*ty)*Hp};
 
         float weight = 1.0f;
         float wx = length(axis_z) / length(axis_x);
@@ -1406,20 +1737,23 @@ __global__ void warp_image_pinhole_to_wide_kernel(
             weight = fmaxf(fminf(fminf(ux, uy), 1.0f), 0.0f);
         }
 
-        if (type == WarpImageType::LinearDepth) {
+        if (type == WarpImageType::LinearDepth || type == WarpImageType::RayDepth) {
             weight = weight*weight*(3.0f-2.0f*weight); // smoothstep
+            // weight = weight*weight*weight*(weight*(6.0f*weight-15.0f)+10.0f);
+            // constexpr float k = 3.0f;
+            // weight = powf(weight, k) / (powf(weight, k) + powf(1.0f-weight, k));
             // TODO: this assums multi view consistent depth; Handle relative depth?
-            float depth = get_pixel_bilinear(pinhole_images, bid, ki, 0, uv.x, uv.y);
-            float3 point = normalize(raydir) * length(float3{uv.x, uv.y, 1.0}) * depth;
-            total[0] += weight * point.z;
+            float depth = get_pixel_bilinear(pinhole_images, bid, ki, 0, xy.x, xy.y);
+            float3 point = normalize(raydir) * length(float3{uv.x, uv.y, 1.0f}) * depth;
+            total[0] += weight * (type == WarpImageType::LinearDepth ? point.z : length(point));
         }
         else if (type == WarpImageType::Points) {
             // assums axes are orthogonal
             float3 ax = normalize(axis_x), ay = normalize(axis_y), az = normalize(axis_z);
             float3 point = float3{
-                get_pixel_bilinear(pinhole_images, bid, ki, 0, uv.x, uv.y),
-                get_pixel_bilinear(pinhole_images, bid, ki, 1, uv.x, uv.y),
-                get_pixel_bilinear(pinhole_images, bid, ki, 2, uv.x, uv.y)
+                get_pixel_bilinear(pinhole_images, bid, ki, 0, xy.x, xy.y),
+                get_pixel_bilinear(pinhole_images, bid, ki, 1, xy.x, xy.y),
+                get_pixel_bilinear(pinhole_images, bid, ki, 2, xy.x, xy.y)
             };
             point = weight * float3{
                 // dot(ax, point), dot(ay, point), dot(az, point)
@@ -1458,7 +1792,7 @@ at::Tensor warp_image_pinhole_to_wide_tensor(
     if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
         AT_ERROR("intrins shape must be (B, 4)");
     if (pinhole_images.ndimension() != 5 || pinhole_images.size(0) != intrins.size(0))
-        AT_ERROR("wide_image shape must be (B, K, H, W, C) where B is consistent with intrins");
+        AT_ERROR("pinhole_images shape must be (B, K, H, W, C) where B is consistent with intrins");
     if (axes.ndimension() != 3 || axes.size(1) != 3 || axes.size(2) != 3 || axes.size(0) != pinhole_images.size(1))
         AT_ERROR("axes shape must be (K, 3, 3)");
 
@@ -1494,7 +1828,7 @@ at::Tensor warp_linear_depth_pinhole_to_wide_tensor(
     if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
         AT_ERROR("intrins shape must be (B, 4)");
     if (pinhole_images.ndimension() != 5 || pinhole_images.size(0) != intrins.size(0))
-        AT_ERROR("wide_image shape must be (B, K, H, W, C) where B is consistent with intrins");
+        AT_ERROR("pinhole_images shape must be (B, K, H, W, C) where B is consistent with intrins");
     if (axes.ndimension() != 3 || axes.size(1) != 3 || axes.size(2) != 3 || axes.size(0) != pinhole_images.size(1))
         AT_ERROR("axes shape must be (K, 3, 3)");
 
@@ -1504,6 +1838,42 @@ at::Tensor warp_linear_depth_pinhole_to_wide_tensor(
     at::Tensor wide_image = at::empty({b, out_h, out_w, c}, pinhole_images.options());
 
     warp_image_pinhole_to_wide_kernel<WarpImageType::LinearDepth><<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
+        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
+        tensor2view<float, 4>(wide_image), tensor2view<float, 5>(pinhole_images),
+        axes.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return wide_image;
+}
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor warp_ray_depth_pinhole_to_wide_tensor(
+    std::string camera_model,
+    at::Tensor intrins,  // fx, fy, cx, cy
+    CameraDistortionCoeffsTensor dist_coeffs,
+    at::Tensor pinhole_images,  // [B, K, H, W, C]
+    at::Tensor axes,  // [K, 3, 3]
+    int out_w, int out_h
+) {
+    DEVICE_GUARD(pinhole_images);
+    CHECK_CUDA(pinhole_images);
+    CHECK_INPUT(intrins);
+    CHECK_INPUT(axes);
+
+    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
+        AT_ERROR("intrins shape must be (B, 4)");
+    if (pinhole_images.ndimension() != 5 || pinhole_images.size(0) != intrins.size(0))
+        AT_ERROR("pinhole_images shape must be (B, K, H, W, C) where B is consistent with intrins");
+    if (axes.ndimension() != 3 || axes.size(1) != 3 || axes.size(2) != 3 || axes.size(0) != pinhole_images.size(1))
+        AT_ERROR("axes shape must be (K, 3, 3)");
+
+    int b = pinhole_images.size(0), k = pinhole_images.size(1), c = pinhole_images.size(4);
+    if (c != 1)
+        AT_ERROR("depth map must have 1 channel");
+    at::Tensor wide_image = at::empty({b, out_h, out_w, c}, pinhole_images.options());
+
+    warp_image_pinhole_to_wide_kernel<WarpImageType::RayDepth><<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
         cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
         tensor2view<float, 4>(wide_image), tensor2view<float, 5>(pinhole_images),
         axes.data_ptr<float>()
@@ -1530,7 +1900,7 @@ at::Tensor warp_points_pinhole_to_wide_tensor(
     if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
         AT_ERROR("intrins shape must be (B, 4)");
     if (pinhole_images.ndimension() != 5 || pinhole_images.size(0) != intrins.size(0))
-        AT_ERROR("wide_image shape must be (B, K, H, W, C) where B is consistent with intrins");
+        AT_ERROR("pinhole_images shape must be (B, K, H, W, C) where B is consistent with intrins");
     if (axes.ndimension() != 3 || axes.size(1) != 3 || axes.size(2) != 3 || axes.size(0) != pinhole_images.size(1))
         AT_ERROR("axes shape must be (K, 3, 3)");
 
@@ -1547,6 +1917,120 @@ at::Tensor warp_points_pinhole_to_wide_tensor(
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return wide_image;
+}
+
+
+// Resolve scale in relative depth -
+// The eigenvector corresponding to the smallest eigenvalue of this matrix tells how much depth maps need to be scaled
+__global__ void warp_depth_pinhole_to_wide_scale_matrix_kernel(
+    ssplat::CameraModelType camera_model,
+    const float4 *__restrict__ intrins,  // [B, 4]
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const int out_w, const int out_h,
+    const TensorView<float, 5> pinhole_images,  // [B, K, H, W, C]
+    const float* __restrict__ axes,  // [K, 3, 3]
+    float* __restrict__ out_matrix  // [B, K, K]
+) {
+    const int B = pinhole_images.shape[0],
+        K = pinhole_images.shape[1],
+        Hw = out_h,
+        Ww = out_w,
+        Hp = pinhole_images.shape[2],
+        Wp = pinhole_images.shape[3];
+
+    uint32_t bid = blockIdx.z * blockDim.z + threadIdx.z;
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (bid >= B || i >= Ww || j >= Hw)
+        return;
+
+    float4 intrin = intrins[bid];
+    float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
+    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+
+    float2 uv = { (i+0.5f-cx) / fx, (j+0.5f-cy) / fy };
+    float3 raydir;
+    if (!SlangProjectionUtils::unproject_point(uv, camera_model == ssplat::CameraModelType::FISHEYE, dist_coeffs, &raydir))
+        return;
+
+    constexpr int MAX_K = 12;
+    float depths[MAX_K];
+
+    #pragma unroll MAX_K
+    for (int ki = 0; ki < K; ++ki) {
+        const float* axis_i = axes + 9 * ki;
+        float3 axis_x = {axis_i[0], axis_i[1], axis_i[2]};
+        float3 axis_y = {axis_i[3], axis_i[4], axis_i[5]};
+        float3 axis_z = {axis_i[6], axis_i[7], axis_i[8]};
+
+        // axis_z + axis_x * tx + axis_y * ty = raydir * t
+        // [axis_x axis_y raydir] [tx ty -t] = -axis_z
+        float invdet = 1.0f / dot(cross(axis_x, axis_y), raydir);
+        float tx = dot(cross(raydir, axis_y), axis_z) * invdet;
+        float ty = dot(cross(axis_x, raydir), axis_z) * invdet;
+        float t = dot(cross(axis_x, axis_y), axis_z) * invdet;
+
+        if (fabsf(tx) >= 1.0f || fabsf(ty) >= 1.0f || t < 0.0f) {
+            depths[ki] = 0.0f;
+        } else {
+            float2 xy = {(0.5f+0.5f*tx)*Wp, (0.5f+0.5f*ty)*Hp};
+            float depth = get_pixel_bilinear(pinhole_images, bid, ki, 0, xy.x, xy.y);
+            // depths[ki] = depth;
+            depths[ki] = __logf(fmaxf(depth, 1e-10f));
+        }
+    }
+
+    out_matrix += bid * K*K;
+
+    #pragma unroll MAX_K
+    for (int i = 0; i < K; ++i)
+        #pragma unroll MAX_K
+        for (int j = 0; j < K; ++j) {
+            float zi = depths[i], zj = depths[j];
+            float w = (i == j ? 1.0f : -1.0f) * (zi * zj);
+            atomicAddFVec<WARP_SIZE>(&out_matrix[K*i+j], w / (Ww*Hw));
+        }
+}
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor warp_depth_pinhole_to_wide_scale_matrix_tensor(
+    std::string camera_model,
+    at::Tensor intrins,  // fx, fy, cx, cy
+    CameraDistortionCoeffsTensor dist_coeffs,
+    at::Tensor pinhole_images,  // [B, K, H, W, C]
+    at::Tensor axes,  // [K, 3, 3]
+    int out_w, int out_h
+) {
+    DEVICE_GUARD(pinhole_images);
+    CHECK_CUDA(pinhole_images);
+    CHECK_INPUT(intrins);
+    CHECK_INPUT(axes);
+
+    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
+        AT_ERROR("intrins shape must be (B, 4)");
+    if (pinhole_images.ndimension() != 5 || pinhole_images.size(0) != intrins.size(0))
+        AT_ERROR("pinhole_images shape must be (B, K, H, W, C) where B is consistent with intrins");
+    if (axes.ndimension() != 3 || axes.size(1) != 3 || axes.size(2) != 3 || axes.size(0) != pinhole_images.size(1))
+        AT_ERROR("axes shape must be (K, 3, 3)");
+
+    int b = pinhole_images.size(0), k = pinhole_images.size(1), c = pinhole_images.size(4);
+    if (c != 1)
+        AT_ERROR("depth map must have 1 channel");
+    constexpr int MAX_K = 12;
+    if (k > MAX_K)
+        AT_ERROR("k is too large, max " + std::to_string(MAX_K));
+    at::Tensor matrix = at::zeros({b, k, k}, pinhole_images.options());
+
+    warp_depth_pinhole_to_wide_scale_matrix_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
+        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
+        out_w, out_h,
+        tensor2view<float, 5>(pinhole_images),
+        axes.data_ptr<float>(),
+        matrix.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return matrix;
 }
 
 

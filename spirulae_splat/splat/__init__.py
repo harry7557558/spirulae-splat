@@ -6,6 +6,7 @@ from .sh import spherical_harmonics
 from .cuda import (
     BLOCK_WIDTH,
     depth_to_normal,
+    depth_to_points,
 )
 from .rendering import rasterization
 
@@ -21,5 +22,6 @@ __all__ = [
     "compute_cumulative_intersects",
     "map_gaussian_to_intersects",
     "depth_to_normal",
+    "depth_to_points",
     "BLOCK_WIDTH",
 ]

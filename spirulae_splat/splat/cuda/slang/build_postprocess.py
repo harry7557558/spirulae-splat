@@ -5,6 +5,15 @@ cu_dir = "csrc/generated"
 
 cu_files = [os.path.join(cu_dir, f) for f in os.listdir(cu_dir) if f.endswith(".cu")]
 
+def safe_write(path: str, new_content: str):
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            old = f.read()
+        if old == new_content:
+            return
+    with open(path, "w") as f:
+        f.write(new_content)
+
 def process(src: str):
     """TODO: this must be updated for different Slang versions"""
     src = src.split('\n')
@@ -38,7 +47,7 @@ def process(src: str):
     src = src.replace("50.693145751953125", "0.693145751953125")  # slangc compiler bug
     return src
 
-header_filename = os.path.join(cu_dir, 'slang.cuh')
+header_filename = os.path.join(cu_dir, 'slang.cu')
 header = open(header_filename).read()
 
 replace_header = """#pragma once
@@ -53,11 +62,11 @@ for filename in cu_files:
         src = src[len(header):]
         src = process(src)
         src = replace_header + src
-    open(filename, 'w').write(src)
+    safe_write(filename, src)
 
 match = re.match(r'\#include "(.*?slang-cuda-prelude.h)"', header)
 if match:
     header = header.replace(match[0], open(match[1]).read())
 
 header = process(header)
-open(header_filename, 'w').write(header)
+safe_write(header_filename, header)

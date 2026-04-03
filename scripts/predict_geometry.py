@@ -18,8 +18,11 @@ from spirulae_splat.splat.cuda import (
     distort_image,
     warp_image_wide_to_pinhole,
     warp_image_pinhole_to_wide,
-    warp_linear_depth_pinhole_to_wide,
+    warp_depth_pinhole_to_wide,
     warp_points_pinhole_to_wide,
+    depth_to_normal,
+    depth_normal_loss,
+    depth_to_points,
 )
 
 from typing import Tuple, Literal
@@ -32,6 +35,69 @@ from contextlib import redirect_stdout
 class Config:
     dataset_dir: str
     max_size: int = 1600  # result not always better at high res
+
+
+def refine_depth_with_normal(depth: torch.Tensor, normal: torch.Tensor, intrins, is_ray_depth: bool):
+    depth /= depth[depth > 0.0].mean()
+    # depth = torch.ones_like(depth)
+    # depth = torch.rand_like(depth)
+    depth = depth.permute(0, 3, 1, 2).contiguous()
+    shape = depth.shape
+    depth = torch.nn.Parameter(depth.flatten())
+    optimizer = torch.optim.LBFGS(
+        [depth],
+        lr=1,
+        max_iter=1,
+        history_size=5,
+        # line_search_fn="strong_wolfe"
+    )
+    # optimizer = torch.optim.Adam(
+    #     [depth],
+    #     lr=1e-3,
+    # )
+    camera_model, intrins, dist_coeffs = intrins
+    intrins = torch.Tensor(intrins).flatten()[None].repeat(shape[0], 1).cuda()
+    dist_coeffs = torch.Tensor(dist_coeffs).flatten()[None].repeat(shape[0], 1).cuda()
+    normal = F.normalize(normal, dim=-1)
+
+    num_res = 3
+    normals = [normal]
+    for i in range(num_res):
+        normals.append(F.avg_pool2d(normals[-1].permute(0, 3, 1, 2), 2).permute(0, 2, 3, 1))
+
+    depth_i = None
+    normal_i = None
+    def closure():
+        nonlocal depth_i
+        nonlocal normal_i
+        optimizer.zero_grad()
+
+        loss = 0.0
+        depth_i = depth.reshape(shape)
+        for i in range(num_res+1):
+            loss_map = depth_normal_loss(
+                depth_i.permute(0, 2, 3, 1).contiguous(), normals[i],
+                camera_model, intrins*2**-i, dist_coeffs, is_ray_depth
+            )
+            loss_i = loss_map.mean()
+            loss = loss + loss_i * (1/(num_res+1))
+            if i != num_res:
+                depth_i = F.avg_pool2d(depth_i, 2)
+        loss.backward()
+        print(loss.item())
+        return loss
+    for iter in range(1000):
+        print(iter)
+        optimizer.step(closure)
+        # closure()
+        # optimizer.step()
+    depth = torch.clip(depth, torch.quantile(depth, 0.001), torch.quantile(depth, 0.999))
+    depth = depth.data.reshape(shape)
+    return depth.permute(0, 2, 3, 1).contiguous()
+    return 0.5+0.5*depth_to_normal(
+        depth.permute(0, 2, 3, 1).contiguous(),
+        camera_model, intrins, dist_coeffs, is_ray_depth=is_ray_depth
+    )
 
 
 def expand_white_area(boolean_image, offset):
@@ -110,11 +176,14 @@ def process_image(
         (intrins['fl_x']*sw, intrins['fl_y']*sh, intrins['cx']*sw, intrins['cy']*sh),
         tuple(intrins.get(key, 0.0) for key in "k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2".split())
     )
+    # is_ray_depth = (intrins[0].lower() == "fisheye")
 
     axes = None
-    if distort_image(torch.ones_like(image[..., :1]), *intrins).mean().item() > 0.75 \
+    if intrins[0].lower() == "fisheye" and \
+        distort_image(torch.ones_like(image[..., :1]), *intrins).mean().item() > 0.75 \
             or model_type != "metric3d":  # TODO: add support for other models
         image = undistort_image(image, *intrins)
+        is_ray_depth = False
     else:
         # split into multiple images for very wide fisheye, to minimize loss of fov
         r2, r3, r6 = 2**0.5, 3**0.5, 6**0.5
@@ -134,7 +203,7 @@ def process_image(
         axes[:, 0:2] *= 1.2
 
         i2 = 0.5**0.5
-        a = 1.25  # in radians
+        a = 1.27  # in radians
         sa, ca = np.sin(a), np.cos(a)
         axes = torch.Tensor([
             [[1,0,0],[0,1,0],[0,0,1]],
@@ -147,7 +216,9 @@ def process_image(
             # [[i2,-i2,0],[i2*ca,i2*ca,sa],[-i2*sa,-i2*sa,ca]],
             # [[i2,i2,0],[-i2*ca,i2*ca,sa],[i2*sa,-i2*sa,ca]],
         ]).float().cuda()
-        axes[:, 0:2] *= 1.2
+        axes[:, 0:2] *= 1.25
+
+        is_ray_depth = True
 
     if axes is not None:
         original_shape = image.shape
@@ -164,8 +235,15 @@ def process_image(
         pred_normal = output_dict['prediction_normal'][:, :3]
 
         if axes is not None:
-            pred_depth = warp_linear_depth_pinhole_to_wide(pred_depth.permute(0, 2, 3, 1)[None], *intrins, axes, *original_shape[1:3]).permute(0, 3, 1, 2)
-            pred_normal = warp_points_pinhole_to_wide(pred_normal.permute(0, 2, 3, 1)[None], *intrins, axes, *original_shape[1:3]).permute(0, 3, 1, 2)
+            pred_depth = warp_depth_pinhole_to_wide(pred_depth.permute(0, 2, 3, 1)[None], *intrins, axes, *original_shape[1:3], is_ray_depth=is_ray_depth)
+            pred_normal = warp_points_pinhole_to_wide(pred_normal.permute(0, 2, 3, 1)[None], *intrins, axes, *original_shape[1:3])
+            # pred_depth = refine_depth_with_normal(pred_depth, pred_normal, intrins, is_ray_depth)
+            # import matplotlib.pyplot as plt
+            # plt.imshow((pred_depth)[0].cpu().numpy())
+            # plt.show()
+            # exit(0)
+            pred_depth = pred_depth.permute(0, 3, 1, 2)
+            pred_normal = pred_normal.permute(0, 3, 1, 2)
 
         pred_depth = torch.nn.functional.interpolate(
             pred_depth, size=(h, w), mode='bilinear', align_corners=False

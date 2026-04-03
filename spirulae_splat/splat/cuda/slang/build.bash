@@ -13,7 +13,7 @@ mkdir -p "$out_dir"
 # Define source:output mappings. Add new entries here to build additional slang files.
 # Format: "<source_path>:<output_path>"
 shaders=(
-    "slang/.slang:${out_dir}/slang.cuh"
+    "slang/.slang:${out_dir}/slang.cu"
     "slang/projection_utils.slang:${out_dir}/projection_utils.cu"
     "slang/per_pixel_losses.slang:${out_dir}/per_pixel_losses.cu"
     "slang/per_splat_losses.slang:${out_dir}/per_splat_losses.cu"
@@ -28,6 +28,7 @@ shaders=(
 
 # Files to rename from .cu -> .cuh after postprocessing
 mv_targets=(
+    "${out_dir}/slang.cu"
     "${out_dir}/projection_utils.cu"
     "${out_dir}/per_pixel_losses.cu"
     "${out_dir}/per_splat_losses.cu"
@@ -91,12 +92,33 @@ python3 slang/build_postprocess.py
 
 echo ""
 
+safe_write() {
+    local target="$1"
+    local tmp
+    tmp="$(mktemp)"
+
+    # read stdin into temporary file
+    cat > "$tmp"
+
+    if [ -f "$target" ] && cmp -s "$tmp" "$target"; then
+        # identical → do not overwrite → keep timestamp unchanged
+        rm "$tmp"
+    else
+        mv "$tmp" "$target"
+    fi
+}
+
 echo "Renaming generated .cu files to .cuh..."
 for f in "${mv_targets[@]}"; do
     if [ -f "$f" ]; then
         target="${f%.cu}.cuh"
-        echo "  mv $f -> $target"
-        mv "$f" "$target"
+        if [ -f "$target" ] && cmp -s "$f" "$target"; then
+            echo "  skip (unchanged): $f"
+            rm "$f"
+        else
+            echo "  mv $f -> $target"
+            mv "$f" "$target"
+        fi
     else
         echo "  skip (not found): $f"
     fi
@@ -131,6 +153,6 @@ _IMPORT_GLOBAL_FUNC(double)
 #undef _IMPORT_GLOBAL_FUNC
 EOF
 )
-echo "$content" > ${out_dir}/set_namespace.cuh
+echo "$content" | safe_write "${out_dir}/set_namespace.cuh"
 
 echo "Done." 
