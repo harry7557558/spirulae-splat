@@ -179,7 +179,7 @@ def process_image(
     # is_ray_depth = (intrins[0].lower() == "fisheye")
 
     axes = None
-    if intrins[0].lower() == "fisheye" and \
+    if intrins[0].lower() != "fisheye" or \
         distort_image(torch.ones_like(image[..., :1]), *intrins).mean().item() > 0.75 \
             or model_type != "metric3d":  # TODO: add support for other models
         image = undistort_image(image, *intrins)
