@@ -62,6 +62,8 @@ if(NOT DEFINED TORCH_CUDA_ARCH_LIST)
     if(TORCH_CUDA_ARCH_LIST STREQUAL "")
         message(FATAL_ERROR "CUDA is required for this extension.")
     endif()
+else()
+    string(REGEX REPLACE "\\." "" TORCH_CUDA_ARCH_LIST "${TORCH_CUDA_ARCH_LIST}")
 endif()
 
 message(STATUS "CUDA architecture(s): ${TORCH_CUDA_ARCH_LIST}")
