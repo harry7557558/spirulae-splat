@@ -26,6 +26,7 @@ std::tuple<
     at::Tensor,
     std::optional<Vanilla3DGUT::RenderOutput::TensorTuple>,
     std::optional<Vanilla3DGUT::RenderOutput::TensorTuple>,
+    std::optional<at::Tensor>,
     std::optional<at::Tensor>
 > rasterize_to_pixels_3dgut_fwd(
     // Gaussian parameters
@@ -36,7 +37,8 @@ std::tuple<
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    const std::optional<at::Tensor> accum_weight_map,       // [..., tile_height, tile_width]
+    const std::optional<at::Tensor> max_blending_masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -53,6 +55,7 @@ std::tuple<
     at::Tensor,
     std::optional<SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple>,
     std::optional<SphericalVoronoi3DGUT_Default::RenderOutput::TensorTuple>,
+    std::optional<at::Tensor>,
     std::optional<at::Tensor>
 > rasterize_to_pixels_3dgut_sv_fwd(
     // Gaussian parameters
@@ -63,7 +66,8 @@ std::tuple<
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    const std::optional<at::Tensor> accum_weight_map,       // [..., tile_height, tile_width]
+    const std::optional<at::Tensor> max_blending_masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -80,6 +84,7 @@ std::tuple<
     at::Tensor,
     std::optional<VoxelPrimitive::RenderOutput::TensorTuple>,
     std::optional<VoxelPrimitive::RenderOutput::TensorTuple>,
+    std::optional<at::Tensor>,
     std::optional<at::Tensor>
 > rasterize_to_pixels_voxel_eval3d_fwd(
     // Gaussian parameters
@@ -90,7 +95,8 @@ std::tuple<
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    const std::optional<at::Tensor> accum_weight_map,       // [..., tile_height, tile_width]
+    const std::optional<at::Tensor> max_blending_masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,

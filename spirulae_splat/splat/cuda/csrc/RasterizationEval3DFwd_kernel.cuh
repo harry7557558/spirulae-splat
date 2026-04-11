@@ -24,7 +24,13 @@ namespace SlangProjectionUtils {
 #include <gsplat/Utils.cuh>
 
 
-template <typename SplatPrimitive, ssplat::CameraModelType camera_model, bool output_distortion, bool output_max_blending>
+template<
+    typename SplatPrimitive,
+    ssplat::CameraModelType camera_model,
+    bool output_distortion,
+    bool output_accum_weight,
+    bool output_max_blending
+>
 __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     const uint32_t I,
     const uint32_t N,
@@ -35,6 +41,7 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const float3 *__restrict__ backgrounds, // [I, 3]
+    const float *__restrict__ accum_weight_map,  // [B, C, image_width, image_height]
     const bool *__restrict__ max_blending_masks,  // [B, C, image_width, image_height]
     const uint32_t image_width,
     const uint32_t image_height,
@@ -47,6 +54,7 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
     typename SplatPrimitive::RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
     typename SplatPrimitive::RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
+    float* __restrict__ out_accum_weight,
     float* __restrict__ out_max_blending
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
@@ -65,8 +73,10 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     if (backgrounds != nullptr) {
         backgrounds += image_id;
     }
-    if (output_max_blending && max_blending_masks != nullptr)
+    if (max_blending_masks != nullptr)
         max_blending_masks += image_id * image_height * image_width;
+    if (accum_weight_map != nullptr)
+        accum_weight_map += image_id * image_height * image_width;
 
     float px = (float)j + 0.5f;
     float py = (float)i + 0.5f;
@@ -112,7 +122,7 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
 
     __shared__ typename SplatPrimitive::Screen splat_batch[BLOCK_SIZE];
-    __shared__ uint32_t splat_idx_batch[output_max_blending ? BLOCK_SIZE : 1];
+    __shared__ uint32_t splat_idx_batch[(output_max_blending || output_accum_weight) ? BLOCK_SIZE : 1];
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
@@ -128,7 +138,9 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     uint32_t tr = block.thread_rank();
 
     bool max_blending_mask = (output_max_blending && max_blending_masks) ?
-        max_blending_masks[pix_id] : true;
+        (inside ? max_blending_masks[pix_id] : false) : inside;
+    bool accum_weight = (output_accum_weight && accum_weight_map && inside) ?
+        accum_weight_map[pix_id] : 0.0f;
 
     typename SplatPrimitive::RenderOutput pix_out = SplatPrimitive::RenderOutput::zero();
     typename SplatPrimitive::RenderOutput pix2_out = SplatPrimitive::RenderOutput::zero();
@@ -148,7 +160,7 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [I * N] or [nnz]
             splat_batch[tr] = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, g, gaussian_ids);
-            if (output_max_blending)
+            if (output_max_blending || output_accum_weight)
                 splat_idx_batch[tr] = g;
         }
 
@@ -190,6 +202,13 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
                 uint32_t splat_idx = splat_idx_batch[t];
                 atomicMax(out_max_blending + (N == 0 ? splat_idx : splat_idx % N), vis);
             }
+            if (output_accum_weight && max_blending_mask) {
+                uint32_t splat_idx = splat_idx_batch[t];
+                if (out_max_blending != nullptr)
+                    atomicAdd(out_max_blending + (N == 0 ? splat_idx : splat_idx % N), vis);
+                if (out_accum_weight != nullptr)
+                    atomicAdd(out_accum_weight + (N == 0 ? splat_idx : splat_idx % N), vis * accum_weight);
+            }
         }
     }
 
@@ -208,7 +227,13 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     }
 }
 
-template <typename SplatPrimitive, ssplat::CameraModelType camera_model, bool output_distortion, bool output_max_blending>
+template<
+    typename SplatPrimitive,
+    ssplat::CameraModelType camera_model,
+    bool output_distortion,
+    bool output_accum_weight,
+    bool output_max_blending
+>
 void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
     cudaStream_t stream,
     const uint32_t I,
@@ -220,6 +245,7 @@ void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const float3 *__restrict__ backgrounds, // [I, 3]
+    const float *__restrict__ accum_weight_map,  // [B, C, image_width, image_height]
     const bool *__restrict__ max_blending_masks,  // [B, C, image_width, image_height]
     const uint32_t image_width,
     const uint32_t image_height,
@@ -232,6 +258,7 @@ void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
     typename SplatPrimitive::RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
     typename SplatPrimitive::RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
+    float* __restrict__ out_accum_weight,
     float* __restrict__ out_max_blending
 ) {
     // Each block covers a tile on the image. In total there are
@@ -240,12 +267,12 @@ void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
     dim3 grid = {I, tile_height, tile_width};
 
     rasterize_to_pixels_eval3d_fwd_kernel<
-        SplatPrimitive, camera_model, output_distortion, output_max_blending
+        SplatPrimitive, camera_model, output_distortion, output_accum_weight, output_max_blending
     ><<<grid, threads, 0, stream>>>(
         I, N, n_isects,
-        gaussian_ids, splat_buffer, viewmats, intrins, dist_coeffs_buffer, backgrounds, max_blending_masks,
+        gaussian_ids, splat_buffer, viewmats, intrins, dist_coeffs_buffer, backgrounds, accum_weight_map, max_blending_masks,
         image_width, image_height, tile_width, tile_height, tile_offsets, flatten_ids,
         render_colors, render_Ts, last_ids,
-        render_colors2, render_distortions, out_max_blending
+        render_colors2, render_distortions, out_accum_weight, out_max_blending
     );
 }

@@ -204,7 +204,7 @@ class SpirulaeModelConfig(ModelConfig):
     mcmc_max_screen_size: float = 0.15
     """if a gaussian is more than this fraction of screen space, clip scale and increase opacity
         Intended to be an MCMC-friendly alternative of relocate_screen_size"""
-    mcmc_max_screen_size_clip_hardness: float = 1.1
+    mcmc_max_screen_size_clip_hardness: float = 1.5
     """clip hardness for Gaussians with large screen space size, between 1 and infinity, larger is harder"""
     mcmc_max_world_size: float = float('inf')
     """if a gaussian is more than this of world space, clip scale
@@ -327,7 +327,7 @@ class SpirulaeModelConfig(ModelConfig):
     """Loss weight for alpha, applies when rendered alpha is above reference alpha"""
     alpha_loss_weight_under: float = 0.005
     """Loss weight for alpha, applies when rendered alpha is below reference alpha"""
-    mcmc_opacity_reg: float = 0.01  # 0.01 in original paper
+    mcmc_opacity_reg: float = 0.001  # 0.01 in original paper
     """Opacity regularization from MCMC
        Lower usually gives more accurate geometry"""
     mcmc_scale_reg: float = 0.01  # 0.01 in original paper
@@ -1059,6 +1059,12 @@ class SpirulaeModel(Model):
             visibility_masks = self._downscale_if_required(visibility_masks)
             kwargs['masks'] = visibility_masks.bool()
 
+        if 'accum_weight_map' in camera.metadata:
+            accum_weight_map = camera.metadata['accum_weight_map']
+            if accum_weight_map is not None:
+                accum_weight_map = self._downscale_if_required(accum_weight_map)
+                kwargs['accum_weight_map'] = accum_weight_map
+
         optimized_camera_to_world = optimized_camera_to_world.to(device)
         viewmats = viewmats.to(device)
         intrins = intrins.to(device)
@@ -1340,32 +1346,21 @@ class SpirulaeModel(Model):
         # if not self.training and True:
         #     outputs['ray'] = merge_tiles(meta['intersection_count'].float().reshape(-1, 1, 1, 1).repeat(1, TILE_SIZE, TILE_SIZE, 1))
 
-        return outputs
+        # return outputs
 
         # Debug densification
         if not self.training and self.step > 1:
         # if self.step > 1:
 
-            # # covars = quat_scale_to_covar_preci(F.normalize(self.quats, dim=-1), torch.exp(self.scales), True, False)[0]
-            # sqrt_covars = quat_scale_to_covar_preci(F.normalize(self.quats, dim=-1), torch.exp(0.5*self.scales), True, False)[0]
-            # # param_to_vis = torch.sqrt((self.means.exp_avg_sq.unsqueeze(-2) @ covars).squeeze(-2))
-            # # param_to_vis = torch.abs(self.means.exp_avg)**0.1
-            # param_to_vis = torch.abs((self.means.exp_avg.unsqueeze(-2) @ sqrt_covars).squeeze(-2))**0.1
-            # # param_to_vis = torch.sqrt(self.means.exp_avg / torch.sqrt(self.means.exp_avg_sq))
-            # param_to_vis = param_to_vis / torch.median(param_to_vis[param_to_vis > 0.0])
+            if 'grad3d' not in self.strategy_state or 'count' not in self.strategy_state:
+                return outputs
 
-            opacities = torch.sigmoid(self.opacities)
-            param_to_vis = (torch.sort(opacities.flatten())[0][torch.argsort(torch.argsort(self.strategy_state['grad3d'] / self.strategy_state['count'].clamp_min(1)))]).unsqueeze(-1).repeat(1, 3)
-            # param_to_vis = (opacities * (torch.sort(opacities.flatten())[0][torch.argsort(torch.argsort(self.strategy_state['grad3d'] / self.strategy_state['count'].clamp_min(1)))]).unsqueeze(-1)).repeat(1, 3)
-            # param_to_vis = (torch.sort(opacities)[0][torch.argsort(torch.argsort(self.strategy_state['grad3d']))]).repeat(1, 3)
-            # param_to_vis = (opacities).repeat(1, 3)
-            # param_to_vis = (torch.argsort(torch.argsort(self.strategy_state['grad3d'] / self.strategy_state['count'].clamp_min(1))).unsqueeze(-1).repeat(1, 3) / len(self.means))**2
-
-            # param_to_vis = self.strategy_state['grad3d'] / self.strategy_state['count'].clamp_min(1)
-            # print(param_to_vis)
-            # param_to_vis = torch.tanh(1e8*param_to_vis).unsqueeze(-1).repeat(1, 3)
+            param_to_vis = self.strategy_state['grad3d'] / self.strategy_state["count"].clamp_min(1)
+            param_to_vis = torch.argsort(torch.argsort(param_to_vis)) / len(param_to_vis)
 
             param_to_vis = (param_to_vis - 0.5) / 0.28
+            param_to_vis = param_to_vis.unsqueeze(-1).repeat(1, 3)
+            param_to_vis = torch.concatenate((param_to_vis, torch.zeros_like(self.means[len(param_to_vis):])), 0)
             rgbd, Ts, meta = rasterization(
                 self.config.primitive,
                 splat_params = (

@@ -130,7 +130,17 @@ _DEFAULT_OPTIMIZERS = {
     },
 }
 
-_TRIANGLE_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS}
+_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER = {**_DEFAULT_OPTIMIZERS}
+_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER["scales"] = {
+    # https://arxiv.org/abs/2603.08661
+    "optimizer": FusedAdamOptimizerConfig(lr=0.02, eps=1e-15),
+    # "optimizer": FusedAdamOptimizerConfig(lr=0.005, eps=1e-15),
+    "scheduler": ExponentialDecaySchedulerConfig(
+        lr_final=0.005, max_steps=10000, warmup_steps=1000, ramp="linear", lr_pre_warmup=0.0
+    ),
+}
+
+_TRIANGLE_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER}
 _TRIANGLE_OPTIMIZERS["means"] = {
     "optimizer": FusedAdamOptimizerConfig(lr=1.6e-4, eps=1e-15),
     "scheduler": ExponentialDecaySchedulerConfig(
@@ -156,7 +166,7 @@ _TRIANGLE_OPTIMIZERS["bilateral_grid"] = {
     ),
 }
 
-_SECOND_ORDER_POSITION_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS}
+_SECOND_ORDER_POSITION_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER}
 _SECOND_ORDER_POSITION_OPTIMIZERS["means"] = {
     "optimizer": FusedNewtonOptimizerConfig(mode="mean", lr=1.0e-6, eps=1e-15),
     "scheduler": ExponentialDecaySchedulerConfig(
@@ -208,7 +218,7 @@ spirulae = MethodSpecification(
             
         ),
         optimizers={
-            **_DEFAULT_OPTIMIZERS
+            **_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER
         },
         viewer=ViewerConfig(),
         vis="viewer",
@@ -295,7 +305,7 @@ spirulae_patched = MethodSpecification(
             ),
         ),
         optimizers={
-            **_DEFAULT_OPTIMIZERS
+            **_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER
         },
         viewer=ViewerConfig(),
         vis="viewer",
@@ -493,7 +503,7 @@ spirulae_preset_confined_low_texture = MethodSpecification(
             ),
         ),
         optimizers={
-            **_DEFAULT_OPTIMIZERS
+            **_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER
         },
         viewer=ViewerConfig(),
         vis="viewer",
@@ -570,7 +580,7 @@ spirulae_preset_open_low_texture = MethodSpecification(
             ),
         ),
         optimizers={
-            **_DEFAULT_OPTIMIZERS
+            **_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER
         },
         viewer=ViewerConfig(),
         vis="viewer",
@@ -651,7 +661,8 @@ spirulae_preset_centered_object = MethodSpecification(
             ),
         ),
         optimizers={
-            **_DEFAULT_OPTIMIZERS
+            # **_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER
+            **_SECOND_ORDER_POSITION_OPTIMIZERS
         },
         viewer=ViewerConfig(),
         vis="viewer",
@@ -673,6 +684,7 @@ spirulae_preset_academic_baseline = MethodSpecification(
                     eval_interval=8,
                 ),
                 max_batch_per_epoch=9**9,
+                compute_edge_maps=False,
             ),
             model=SpirulaeModelConfig(
                 primitive="3dgs",
@@ -693,7 +705,9 @@ spirulae_preset_academic_baseline = MethodSpecification(
                 erank_reg_s3=0.0,
                 quat_norm_reg=0.0,
                 randomize_background=0.0,
-                normal_supervision_weight=0.0
+                normal_supervision_weight=0.0,
+                mcmc_opacity_reg=0.01,
+                mcmc_scale_reg=0.01,
             ),
         ),
         optimizers={

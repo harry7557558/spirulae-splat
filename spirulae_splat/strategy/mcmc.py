@@ -10,6 +10,7 @@ from .base import Strategy
 from .ops import (
     get_param_attr,
     get_param_grad,
+    get_param_gradr,
     inject_noise_to_position,
     relocate,
     relocate_long_axis_split,
@@ -83,6 +84,7 @@ class MCMCStrategy(Strategy):
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         state: Dict[str, Any],
         info: Dict[str, Any],
+        step: int,
         packed: bool = False,
     ):
         for key in [
@@ -125,7 +127,7 @@ class MCMCStrategy(Strategy):
 
         # large splats in screen space
         # clip scale while increase opacity to encourage being relocated to
-        if np.isfinite(self.max_scale2d):
+        if np.isfinite(self.max_scale2d) and gs_ids.numel() > 0:
             # TODO: optionally, actually do anisotropic scale in 3d
             oversize_factor = torch.clip(normalized_radii / self.max_scale2d, min=1.0, max=self.max_scale2d_clip_hardness)
             oversize_factor = torch.log(oversize_factor).unsqueeze(-1)
@@ -142,21 +144,39 @@ class MCMCStrategy(Strategy):
 
         if not (self.prob_grad_weight > 0.0):
             return
+        if gs_ids.numel() == 0:
+            return
 
         # normalize grads to [-1, 1] screen space
         if not hasattr(params['means'], 'grad'):
             print("Error: grad not found")
             return
-        grads = get_param_grad(params, 'means').norm(dim=-1) * torch.exp(get_param_attr(params, 'scales').mean(dim=-1))  # TODO: transform by actual covariance
+        # grads = get_param_grad(params, 'means').norm(dim=-1) * torch.exp(get_param_attr(params, 'scales').mean(dim=-1))  # TODO: transform by actual covariance
+        # grads = (get_param_gradr(params, 'means') or get_param_grad(params, 'means')).norm(dim=-1)
 
-        # update the running state
-        grads = grads[gs_ids]
-        state["grad3d"].index_add_(0, gs_ids, torch.relu(grads))
-        state["count"].index_add_(0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32))
-        # state["grad3d"][gs_ids] = torch.fmax(state["grad3d"][gs_ids], grads)
-        # state["count"][gs_ids] = 1
-        # state["grad3d"][gs_ids] = grads
-        # state["count"][gs_ids] = 1
+        backward_info = info.get('backward_info', {})
+        if 'accum_weight' in backward_info and 'max_blending' in backward_info:
+            grads = backward_info['accum_weight']
+            count = backward_info['max_blending']
+            state["grad3d"][gs_ids] = torch.fmax(state["grad3d"][gs_ids], grads)
+            # state["count"].index_add_(0, gs_ids, count)
+        else:
+            # key = 'means'
+            key = 'opacities'
+            grads = get_param_gradr(params, key)
+            if grads is None:
+                grads = get_param_grad(params, key)
+            if grads.shape[-1] == 1:
+                grads = torch.abs(grads).squeeze(-1)
+            else:
+                grads = grads.norm(dim=-1)
+            grads = grads[gs_ids]
+            count = torch.ones_like(gs_ids, dtype=torch.float32)
+
+            if grads.numel() > 0:
+                grads /= grads.mean()
+            state["grad3d"].index_add_(0, gs_ids, grads)
+            state["count"].index_add_(0, gs_ids, count)
 
     def _get_probs(self, state, params):
         if not (self.prob_grad_weight > 0.0):
@@ -219,7 +239,7 @@ class MCMCStrategy(Strategy):
         Args:
             lr (float): Learning rate for "means" attribute of the GS.
         """
-        self._update_state(params, state, info, packed)
+        self._update_state(params, state, info, step, packed)
 
         # move to the correct device
         if (

@@ -32,6 +32,7 @@ from nerfstudio.cameras.cameras import Cameras, CameraType
 from spirulae_splat.ns_dataset import SpirulaeDataset, IndexedDatasetWrapper
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
 from spirulae_splat.splat.utils import interpolate_se3, random_c2w_on_unit_sphere, ls_camera_intersection
+from spirulae_splat.modules.edge_detector import detect_edge_laplacian, detect_edge_laplacian_ms
 
 from concurrent.futures import ThreadPoolExecutor
 from torch.nn.parallel import DataParallel
@@ -80,6 +81,7 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
     deblur_training_images: bool = False
     """Whether to use a custom trained deep learning model to deblur images before training"""
 
+    compute_edge_maps: bool = True
     compute_visibility_masks: bool = False
 
 
@@ -522,8 +524,17 @@ class SpirulaeDataManager(FullImageDatamanager):
             assert self.config.cache_images != "disk", "Disk caching not supported in patch batching mode"
             assert not self.config.split_batch, "split_batch not supported in patch batching mode"  # TODO
             results = [self.get_tiles(self.config.patch_batch_size, self.train_indices)]
+            # TODO: edge map
         else:
             camera, batch = self.train_index_group_loader.get_batch()
+            if self.config.compute_edge_maps:
+                if 'metadata' not in camera:
+                    camera['metadata'] = {}
+                accum_weight_map = detect_edge_laplacian(batch['image'])  # TODO: mask
+                # import matplotlib.pyplot as plt
+                # plt.imshow(accum_weight_map[0].detach().cpu().numpy())
+                # plt.show()
+                camera['metadata']['accum_weight_map'] = accum_weight_map
             results = pack_batch(camera, batch)
 
         # TODO

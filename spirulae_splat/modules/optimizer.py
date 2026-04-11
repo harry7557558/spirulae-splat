@@ -270,8 +270,8 @@ class Fused3DGS2Tr(Optimizer):
                     state['step2']
                 )
                 # zero_grad
-                del p.optim_info['gradr']
-                del p.optim_info['hess']
+                p.optim_info['gradr'].zero_()
+                p.optim_info['hess'].zero_()
 
         return loss
 

@@ -31,6 +31,16 @@ def get_param_grad(params, attr):
     return param.grad
 
 
+def get_param_gradr(params, attr):
+    param = params[attr]
+    if not hasattr(param, 'optim_info') or 'gradr' not in param.optim_info:
+        return None
+    gradr = param.optim_info['gradr']
+    if 'num_splats' in param.optim_info:
+        return gradr[:param.optim_info['num_splats']]
+    return gradr
+
+
 import math
 
 N_BINOMS = 51
