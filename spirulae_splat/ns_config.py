@@ -136,7 +136,7 @@ _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER["scales"] = {
     "optimizer": FusedAdamOptimizerConfig(lr=0.02, eps=1e-15),
     # "optimizer": FusedAdamOptimizerConfig(lr=0.005, eps=1e-15),
     "scheduler": ExponentialDecaySchedulerConfig(
-        lr_final=0.005, max_steps=10000, warmup_steps=1000, ramp="linear", lr_pre_warmup=0.0
+        lr_final=0.005, max_steps=10000, warmup_steps=1000, ramp="linear", lr_pre_warmup=0.005
     ),
 }
 

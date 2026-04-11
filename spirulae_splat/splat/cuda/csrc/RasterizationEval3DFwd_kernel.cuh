@@ -115,11 +115,9 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
         (image_id == I - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
-    const uint32_t block_size = block.size();
-    uint32_t num_batches =
-        (range_end - range_start + block_size - 1) / block_size;
-
     constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
+    uint32_t num_batches =
+        (range_end - range_start + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     __shared__ typename SplatPrimitive::Screen splat_batch[BLOCK_SIZE];
     __shared__ uint32_t splat_idx_batch[(output_max_blending || output_accum_weight) ? BLOCK_SIZE : 1];
@@ -149,13 +147,13 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     for (uint32_t b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
-        if (__syncthreads_count(done) >= block_size) {
+        if (__syncthreads_count(done) >= BLOCK_SIZE) {
             break;
         }
 
         // each thread fetch 1 gaussian from front to back
         // index of gaussian to load
-        uint32_t batch_start = range_start + block_size * b;
+        uint32_t batch_start = range_start + BLOCK_SIZE * b;
         uint32_t idx = batch_start + tr;
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [I * N] or [nnz]
@@ -168,46 +166,43 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
         block.sync();
 
         // process gaussians in the current batch for this pixel
-        uint32_t batch_size = min(block_size, range_end - batch_start);
-        for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
-            typename SplatPrimitive::Screen splat = splat_batch[t];
-            float alpha = splat.evaluate_alpha(ray_o, ray_d);
-            if (alpha < ALPHA_THRESHOLD) {
-                continue;
+        uint32_t batch_size = min(BLOCK_SIZE, range_end - batch_start);
+        for (uint32_t t = 0; t < batch_size; ++t) {
+            float vis = 0.0f;
+            if (!done) {
+                typename SplatPrimitive::Screen splat = splat_batch[t];
+                float alpha = splat.evaluate_alpha(ray_o, ray_d);
+                if (alpha > ALPHA_THRESHOLD) {
+                    const float next_T = T * (1.0f - alpha);
+                    if (next_T > 1e-4f) {
+                        vis = alpha * T;
+                        const typename SplatPrimitive::RenderOutput color = splat.evaluate_color(ray_o, ray_d);
+                        if (output_distortion) {
+                            distortion_out += (
+                                color * color * (1.0f - T)
+                                + color * pix_out * -2.0f
+                                + pix2_out 
+                            ) * vis;
+                            pix2_out += color * color * vis;
+                        }
+                        pix_out += color * vis;
+                        cur_idx = batch_start + t;
+                        T = next_T;
+                    }
+                    else done = true;
+                }
             }
 
-            const float next_T = T * (1.0f - alpha);
-            if (next_T <= 1e-4f) { // this pixel is done: exclusive
-                done = true;
-                break;
-            }
-
-            const float vis = alpha * T;
-            const typename SplatPrimitive::RenderOutput color = splat.evaluate_color(ray_o, ray_d);
-
-            if (output_distortion) {
-                distortion_out += (
-                    color * color * (1.0f - T)
-                    + color * pix_out * -2.0f
-                    + pix2_out 
-                ) * vis;
-                pix2_out += color * color * vis;
-            }
-            pix_out += color * vis;
-            cur_idx = batch_start + t;
-
-            T = next_T;
-
-            if (output_max_blending && out_max_blending != nullptr && max_blending_mask) {
+            if (!max_blending_mask)
+                vis = 0.0f;
+            if (output_max_blending && out_max_blending != nullptr) {
                 uint32_t splat_idx = splat_idx_batch[t];
-                atomicMax(out_max_blending + (N == 0 ? splat_idx : splat_idx % N), vis);
+                atomicMax(out_max_blending + (N == 0 ? splat_idx : splat_idx % N), vis);  // TODO: reduce
             }
-            if (output_accum_weight && max_blending_mask) {
+            if (output_accum_weight) {
                 uint32_t splat_idx = splat_idx_batch[t];
-                if (out_max_blending != nullptr)
-                    atomicAdd(out_max_blending + (N == 0 ? splat_idx : splat_idx % N), vis);
                 if (out_accum_weight != nullptr)
-                    atomicAdd(out_accum_weight + (N == 0 ? splat_idx : splat_idx % N), vis * accum_weight);
+                    atomicAddFVec<WARP_SIZE>(out_accum_weight + (N == 0 ? splat_idx : splat_idx % N), vis * accum_weight);
             }
         }
     }

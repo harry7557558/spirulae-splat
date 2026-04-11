@@ -67,3 +67,18 @@ long_axis_split_tensor(
     at::Tensor &scales,
     at::Tensor &quats
 );
+
+
+at::Tensor laplacian_edge_filter_tensor(
+    at::Tensor &img_in
+);
+
+
+at::Tensor smoothed_laplacian_edge_filter_tensor(
+    at::Tensor &img_in
+);
+
+
+at::Tensor canny_edge_filter_tensor(
+    at::Tensor &img_in
+);

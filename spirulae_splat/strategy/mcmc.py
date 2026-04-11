@@ -147,7 +147,6 @@ class MCMCStrategy(Strategy):
         if gs_ids.numel() == 0:
             return
 
-        # normalize grads to [-1, 1] screen space
         if not hasattr(params['means'], 'grad'):
             print("Error: grad not found")
             return
@@ -155,9 +154,8 @@ class MCMCStrategy(Strategy):
         # grads = (get_param_gradr(params, 'means') or get_param_grad(params, 'means')).norm(dim=-1)
 
         backward_info = info.get('backward_info', {})
-        if 'accum_weight' in backward_info and 'max_blending' in backward_info:
-            grads = backward_info['accum_weight']
-            count = backward_info['max_blending']
+        if 'accum_weight' in backward_info:
+            grads = backward_info['accum_weight']  # TODO: normalize
             state["grad3d"][gs_ids] = torch.fmax(state["grad3d"][gs_ids], grads)
             # state["count"].index_add_(0, gs_ids, count)
         else:

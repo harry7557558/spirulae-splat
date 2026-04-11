@@ -32,7 +32,7 @@ from nerfstudio.cameras.cameras import Cameras, CameraType
 from spirulae_splat.ns_dataset import SpirulaeDataset, IndexedDatasetWrapper
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
 from spirulae_splat.splat.utils import interpolate_se3, random_c2w_on_unit_sphere, ls_camera_intersection
-from spirulae_splat.modules.edge_detector import detect_edge_laplacian, detect_edge_laplacian_ms
+from spirulae_splat.modules.edge_detector import detect_edge, detect_edge_ms
 
 from concurrent.futures import ThreadPoolExecutor
 from torch.nn.parallel import DataParallel
@@ -530,7 +530,7 @@ class SpirulaeDataManager(FullImageDatamanager):
             if self.config.compute_edge_maps:
                 if 'metadata' not in camera:
                     camera['metadata'] = {}
-                accum_weight_map = detect_edge_laplacian(batch['image'])  # TODO: mask
+                accum_weight_map = detect_edge(batch['image'].cuda())  # TODO: mask
                 # import matplotlib.pyplot as plt
                 # plt.imshow(accum_weight_map[0].detach().cpu().numpy())
                 # plt.show()

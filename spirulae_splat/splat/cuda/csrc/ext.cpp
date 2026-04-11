@@ -201,6 +201,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("mcmc_add_noise", &mcmc_add_noise_tensor);
     m.def("compute_relocation", &compute_relocation_tensor);
     m.def("long_axis_split", &long_axis_split_tensor);
+    m.def("laplacian_edge_filter", &laplacian_edge_filter_tensor);
+    m.def("smoothed_laplacian_edge_filter", &smoothed_laplacian_edge_filter_tensor);
+    m.def("canny_edge_filter", &canny_edge_filter_tensor);
 
     // BilagridUtils.cuh
     m.def("dct3d_type1_ortho", &dct3d_type1_ortho_tensor);

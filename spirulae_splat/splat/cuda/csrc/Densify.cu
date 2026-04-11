@@ -468,3 +468,292 @@ long_axis_split_tensor(
     return std::make_tuple(new_scales, mean_deltas);
 }
 
+
+
+// ================
+// Image filter (https://arxiv.org/abs/2508.12313, https://arxiv.org/abs/2603.08661)
+// ================
+
+__constant__ float blur_filter_5x5[5][5] = {
+    { 2.f/159.f,  4.f/159.f,  5.f/159.f,  4.f/159.f, 2.f/159.f },
+    { 4.f/159.f,  9.f/159.f, 12.f/159.f,  9.f/159.f, 4.f/159.f },
+    { 5.f/159.f, 12.f/159.f, 15.f/159.f, 12.f/159.f, 5.f/159.f },
+    { 4.f/159.f,  9.f/159.f, 12.f/159.f,  9.f/159.f, 4.f/159.f },
+    { 2.f/159.f,  4.f/159.f,  5.f/159.f,  4.f/159.f, 2.f/159.f },
+};
+
+__constant__ float laplacian_filter_3x3[3][3] = {
+    { 1.f/6.f,  4.f/6.f, 1.f/6.f },
+    { 4.f/6.f,-20.f/6.f, 4.f/6.f },
+    { 1.f/6.f,  4.f/6.f, 1.f/6.f },
+};
+
+__constant__ float canny_filter_3x3[3][3] = {
+    { -1.0f, 0.0f, 1.0f },
+    { -2.0f, 0.0f, 2.0f },
+    { -1.0f, 0.0f, 1.0f },
+};
+
+__global__ void laplacian_edge_filter_kernel(
+    const TensorView<float, 4> img_in,
+    TensorView<float, 4> img_out
+) {
+    constexpr int BLOCK = 32;
+    constexpr int HALO = 1;
+
+    const int32_t xid = blockIdx.x * BLOCK + threadIdx.x;
+    const int32_t yid = blockIdx.y * BLOCK + threadIdx.y;
+    const int32_t bid = blockIdx.z;
+    const uint32_t H = img_in.shape[1], W = img_in.shape[2];
+
+    // load pixels
+    __shared__ float shared_pixels[BLOCK+2*HALO][BLOCK+2*HALO];
+    #pragma unroll
+    for (int batch = 0; batch < (BLOCK+2*HALO)*(BLOCK+2*HALO); batch += BLOCK*BLOCK) {
+        int tid = batch + threadIdx.y * BLOCK + threadIdx.x;
+        int y = tid / (BLOCK+2*HALO);
+        int x = tid % (BLOCK+2*HALO);
+        if (y < BLOCK+2*HALO) {
+            int yi = min(max((int)(blockIdx.y * BLOCK) + y - HALO, 0), H-1);
+            int xi = min(max((int)(blockIdx.x * BLOCK) + x - HALO, 0), W-1);
+            shared_pixels[y][x] = dot(img_in.load3(bid, yi, xi), float3{0.299f, 0.587f, 0.114f});
+        }
+    }
+    __syncthreads();
+
+    // 3x3 Laplacian
+    float total = 0.0f;
+    for (int cy = -HALO; cy <= HALO; ++cy)
+        for (int cx = -HALO; cx <= HALO; ++cx) {
+            float conv_weight = laplacian_filter_3x3[cy+HALO][cx+HALO];
+            int yi = threadIdx.y + cy;
+            int xi = threadIdx.x + cx;
+            total += conv_weight * shared_pixels[yi+HALO][xi+HALO];
+        }
+    total = fabsf(total);
+    if (yid < H && xid < W)
+        img_out.store1(bid, yid, xid, total);
+}
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor laplacian_edge_filter_tensor(
+    at::Tensor &img_in
+) {
+    DEVICE_GUARD(img_in);
+    CHECK_INPUT(img_in);
+
+    if (img_in.ndimension() != 4 || img_in.size(-1) != 3)
+        AT_ERROR("img must be [B, H, W, 3]");
+    int B  = img_in.size(0);
+    int H  = img_in.size(1);
+    int W  = img_in.size(2);
+
+    auto img_out = at::empty({B, H, W, 1}, img_in.options());
+
+    laplacian_edge_filter_kernel<<<_LAUNCH_ARGS_3D(W, H, B, 32, 32, 1)>>>(
+        tensor2view<float, 4>(img_in),
+        tensor2view<float, 4>(img_out)
+    );
+
+    return img_out;
+}
+
+__global__ void smoothed_laplacian_edge_filter_kernel(
+    const TensorView<float, 4> img_in,
+    TensorView<float, 4> img_out
+) {
+    constexpr int BLOCK = 32;
+    constexpr int HALO = 3;
+    constexpr int HALO1 = 1;
+
+    const int32_t xid = blockIdx.x * BLOCK + threadIdx.x;
+    const int32_t yid = blockIdx.y * BLOCK + threadIdx.y;
+    const int32_t bid = blockIdx.z;
+    const uint32_t H = img_in.shape[1], W = img_in.shape[2];
+
+    // load pixels
+    __shared__ float shared_pixels[BLOCK+2*HALO][BLOCK+2*HALO];
+    #pragma unroll
+    for (int batch = 0; batch < (BLOCK+2*HALO)*(BLOCK+2*HALO); batch += BLOCK*BLOCK) {
+        int tid = batch + threadIdx.y * BLOCK + threadIdx.x;
+        int y = tid / (BLOCK+2*HALO);
+        int x = tid % (BLOCK+2*HALO);
+        if (y < BLOCK+2*HALO) {
+            int yi = min(max((int)(blockIdx.y * BLOCK) + y - HALO, 0), H-1);
+            int xi = min(max((int)(blockIdx.x * BLOCK) + x - HALO, 0), W-1);
+            shared_pixels[y][x] = dot(img_in.load3(bid, yi, xi), float3{0.299f, 0.587f, 0.114f});
+        }
+    }
+    __syncthreads();
+
+    // TODO: optimize into 7x7 horizontal + vertical convolution?
+
+    // 5x5 blur
+    __shared__ float shared_blurred[BLOCK+2*HALO1][BLOCK+2*HALO1];
+    #pragma unroll
+    for (int batch = 0; batch < (BLOCK+2*HALO1)*(BLOCK+2*HALO1); batch += BLOCK*BLOCK) {
+        int tid = batch + threadIdx.y * BLOCK + threadIdx.x;
+        int y = tid / (BLOCK+2*HALO1);
+        int x = tid % (BLOCK+2*HALO1);
+        if (y >= BLOCK+2*HALO1)
+            continue;
+        float total = 0.0f;
+        for (int cy = -2; cy <= 2; ++cy)
+            for (int cx = -2; cx <= 2; ++cx) {
+                float conv_weight = blur_filter_5x5[cy+2][cx+2];
+                int yi = y - HALO1 + cy;
+                int xi = x - HALO1 + cx;
+                total += conv_weight * shared_pixels[yi+HALO][xi+HALO];
+            }
+        shared_blurred[y][x] = total;
+    }
+    __syncthreads();
+
+    // 3x3 Laplacian
+    float total = 0.0f;
+    for (int cy = -HALO1; cy <= HALO1; ++cy)
+        for (int cx = -HALO1; cx <= HALO1; ++cx) {
+            float conv_weight = laplacian_filter_3x3[cy+HALO1][cx+HALO1];
+            int yi = threadIdx.y + cy;
+            int xi = threadIdx.x + cx;
+            total += conv_weight * shared_blurred[yi+HALO1][xi+HALO1];
+        }
+    total = fabsf(total);
+    if (yid < H && xid < W)
+        img_out.store1(bid, yid, xid, total);
+}
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor smoothed_laplacian_edge_filter_tensor(
+    at::Tensor &img_in
+) {
+    DEVICE_GUARD(img_in);
+    CHECK_INPUT(img_in);
+
+    if (img_in.ndimension() != 4 || img_in.size(-1) != 3)
+        AT_ERROR("img must be [B, H, W, 3]");
+    int B  = img_in.size(0);
+    int H  = img_in.size(1);
+    int W  = img_in.size(2);
+
+    auto img_out = at::empty({B, H, W, 1}, img_in.options());
+
+    smoothed_laplacian_edge_filter_kernel<<<_LAUNCH_ARGS_3D(W, H, B, 32, 32, 1)>>>(
+        tensor2view<float, 4>(img_in),
+        tensor2view<float, 4>(img_out)
+    );
+
+    return img_out;
+}
+
+__global__ void canny_edge_filter_kernel(
+    const TensorView<float, 4> img_in,
+    TensorView<float, 4> img_out
+) {
+    constexpr int BLOCK = 32;
+    constexpr int HALO = 4;
+    constexpr int HALO1 = 2;
+    constexpr int HALO2 = 1;
+
+    const int32_t xid = blockIdx.x * BLOCK + threadIdx.x;
+    const int32_t yid = blockIdx.y * BLOCK + threadIdx.y;
+    const int32_t bid = blockIdx.z;
+    const uint32_t H = img_in.shape[1], W = img_in.shape[2];
+
+    // load pixels
+    __shared__ float shared_pixels[BLOCK+2*HALO][BLOCK+2*HALO];
+    #pragma unroll
+    for (int batch = 0; batch < (BLOCK+2*HALO)*(BLOCK+2*HALO); batch += BLOCK*BLOCK) {
+        int tid = batch + threadIdx.y * BLOCK + threadIdx.x;
+        int y = tid / (BLOCK+2*HALO);
+        int x = tid % (BLOCK+2*HALO);
+        if (y < BLOCK+2*HALO) {
+            int yi = min(max((int)(blockIdx.y * BLOCK) + y - HALO, 0), H-1);
+            int xi = min(max((int)(blockIdx.x * BLOCK) + x - HALO, 0), W-1);
+            shared_pixels[y][x] = dot(img_in.load3(bid, yi, xi), float3{0.299f, 0.587f, 0.114f});
+        }
+    }
+    __syncthreads();
+
+    // 5x5 blur
+    __shared__ float shared_blurred[BLOCK+2*HALO1][BLOCK+2*HALO1];
+    #pragma unroll
+    for (int batch = 0; batch < (BLOCK+2*HALO1)*(BLOCK+2*HALO1); batch += BLOCK*BLOCK) {
+        int tid = batch + threadIdx.y * BLOCK + threadIdx.x;
+        int y = tid / (BLOCK+2*HALO1);
+        int x = tid % (BLOCK+2*HALO1);
+        if (y >= BLOCK+2*HALO1)
+            continue;
+        float total = 0.0f;
+        for (int cy = -2; cy <= 2; ++cy)
+            for (int cx = -2; cx <= 2; ++cx) {
+                float conv_weight = blur_filter_5x5[cy+2][cx+2];
+                int yi = y - HALO1 + cy;
+                int xi = x - HALO1 + cx;
+                total += conv_weight * shared_pixels[yi+HALO][xi+HALO];
+            }
+        shared_blurred[y][x] = total;
+    }
+    __syncthreads();
+
+    // 3x3 canny
+    __shared__ float2 shared_filtered[BLOCK+2*HALO2][BLOCK+2*HALO2];
+    #pragma unroll
+    for (int batch = 0; batch < (BLOCK+2*HALO2)*(BLOCK+2*HALO2); batch += BLOCK*BLOCK) {
+        int tid = batch + threadIdx.y * BLOCK + threadIdx.x;
+        int y = tid / (BLOCK+2*HALO2);
+        int x = tid % (BLOCK+2*HALO2);
+        if (y >= BLOCK+2*HALO2)
+            continue;
+        float total1 = 0.0f, total2 = 0.0f;
+        for (int cy = -1; cy <= 1; ++cy)
+            for (int cx = -1; cx <= 1; ++cx) {
+                float conv_weight_1 = canny_filter_3x3[cy+1][cx+1];
+                float conv_weight_2 = canny_filter_3x3[cx+1][cy+1];
+                int yi = y - HALO2 + cy;
+                int xi = x - HALO2 + cx;
+                float value = shared_blurred[yi+HALO1][xi+HALO1];
+                total1 += conv_weight_1 * value;
+                total2 += conv_weight_2 * value;
+            }
+        shared_filtered[y][x] = {total1, total2};
+    }
+    __syncthreads();
+
+    // non-maximum suppression
+    float2 total = shared_filtered[threadIdx.y+HALO2][threadIdx.x+HALO2];
+    float mag = length(total);
+    if (mag > 0.0f) {
+        int dx = min(max((int)roundf(total.x / mag), -HALO2), HALO2);
+        int dy = min(max((int)roundf(total.y / mag), -HALO2), HALO2);
+        float total1 = length(shared_filtered[(int)threadIdx.y+dy+HALO2][(int)threadIdx.x+dx+HALO2]);
+        float total2 = length(shared_filtered[(int)threadIdx.y-dy+HALO2][(int)threadIdx.x-dx+HALO2]);
+        if (mag < total1 || mag < total2)
+            mag = 0.0f;
+    }
+    if (yid < H && xid < W)
+        img_out.store1(bid, yid, xid, mag);
+}
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor canny_edge_filter_tensor(
+    at::Tensor &img_in
+) {
+    DEVICE_GUARD(img_in);
+    CHECK_INPUT(img_in);
+
+    if (img_in.ndimension() != 4 || img_in.size(-1) != 3)
+        AT_ERROR("img must be [B, H, W, 3]");
+    int B  = img_in.size(0);
+    int H  = img_in.size(1);
+    int W  = img_in.size(2);
+
+    auto img_out = at::empty({B, H, W, 1}, img_in.options());
+
+    canny_edge_filter_kernel<<<_LAUNCH_ARGS_3D(W, H, B, 32, 32, 1)>>>(
+        tensor2view<float, 4>(img_in),
+        tensor2view<float, 4>(img_out)
+    );
+
+    return img_out;
+}

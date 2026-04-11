@@ -173,7 +173,7 @@ inline std::tuple<
     at::Tensor last_ids = at::empty(last_ids_dims, opt.dtype(at::kInt));
 
     std::optional<at::Tensor> out_max_blending, out_accum_weight;
-    if (output_max_blending || accum_weight_map.has_value()) {
+    if (output_max_blending) {
         out_max_blending = at::empty({splats.size()}, opt);
         set_zero<float>(out_max_blending.value());
     }
