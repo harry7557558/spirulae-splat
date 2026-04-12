@@ -8,6 +8,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     VoxelPrimitive,
     ssplat::CameraModelType::FISHEYE,
     false,
+    true,
     false,
     false
 >(
@@ -34,6 +35,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     VoxelPrimitive::RenderOutput::Buffer render_output_buffer,
     VoxelPrimitive::RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
+    const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
     VoxelPrimitive::RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
@@ -42,5 +44,6 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     VoxelPrimitive::Screen::Buffer v_splat_buffer,
     VoxelPrimitive::Screen::Buffer vr_splat_buffer,
     VoxelPrimitive::Screen::Buffer h_splat_buffer,
+    float *__restrict__ o_accum_weight,
     float *__restrict__ v_viewmats // [B, C, 4, 4]
 );

@@ -156,7 +156,7 @@ class MCMCStrategy(Strategy):
         backward_info = info.get('backward_info', {})
         if 'accum_weight' in backward_info:
             grads = backward_info['accum_weight']  # TODO: normalize
-            state["grad3d"][gs_ids] = torch.fmax(state["grad3d"][gs_ids], grads)
+            state["grad3d"] = torch.fmax(state["grad3d"], grads[:len(state["grad3d"])])
             # state["count"].index_add_(0, gs_ids, count)
         else:
             # key = 'means'

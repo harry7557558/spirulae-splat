@@ -81,7 +81,7 @@ class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
     deblur_training_images: bool = False
     """Whether to use a custom trained deep learning model to deblur images before training"""
 
-    compute_edge_maps: bool = True
+    compute_edge_maps: bool = False
     compute_visibility_masks: bool = False
 
 
@@ -527,15 +527,12 @@ class SpirulaeDataManager(FullImageDatamanager):
             # TODO: edge map
         else:
             camera, batch = self.train_index_group_loader.get_batch()
-            if self.config.compute_edge_maps:
-                if 'metadata' not in camera:
-                    camera['metadata'] = {}
-                accum_weight_map = detect_edge(batch['image'].cuda())  # TODO: mask
-                # import matplotlib.pyplot as plt
-                # plt.imshow(accum_weight_map[0].detach().cpu().numpy())
-                # plt.show()
-                camera['metadata']['accum_weight_map'] = accum_weight_map
             results = pack_batch(camera, batch)
+
+        if self.config.compute_edge_maps:
+            for camera, batch in results:
+                accum_weight_map = detect_edge(batch['image'])  # TODO: mask
+                camera.metadata['accum_weight_map'] = accum_weight_map
 
         # TODO
         if random.random() < (step - 10000) / (30000 - 10000) and False:

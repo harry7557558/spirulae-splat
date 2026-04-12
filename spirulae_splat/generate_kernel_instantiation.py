@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Tuple, List, Dict, Optional
 
 import re
+import itertools
 
 
 CSRC_DIR = Path("spirulae_splat", "splat", "cuda", "csrc")
@@ -240,38 +241,18 @@ def generate_RasterizationEval3DFwd():
 
 def generate_RasterizationEval3DBwd():
     definition = extract_kernel_definition("RasterizationEval3DBwd.cu", "rasterize_to_pixels_eval3d_bwd_kernel_wrapper")
-    map_header = ["typename SplatPrimitive", None, None, None, None]
+    map_header = ["typename SplatPrimitive", None, None, None, None, None]
     map_body = [
-        ("Vanilla3DGUT", "ssplat::CameraModelType::PINHOLE", "false", "false", "false"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::PINHOLE", "false", "true", "false"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::PINHOLE", "true", "false", "false"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::PINHOLE", "true", "true", "false"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE", "false", "false", "false"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE", "false", "true", "false"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE", "true", "false", "false"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE", "true", "true", "false"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::PINHOLE", "false", "false", "true"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::PINHOLE", "false", "true", "true"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::PINHOLE", "true", "false", "true"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::PINHOLE", "true", "true", "true"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE", "false", "false", "true"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE", "false", "true", "true"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE", "true", "false", "true"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE", "true", "true", "true"),
-        # ("SphericalVoronoi3DGUT_Default", "ssplat::CameraModelType::PINHOLE", "false", "false", "false"),
-        # ("SphericalVoronoi3DGUT_Default", "ssplat::CameraModelType::PINHOLE", "false", "true", "false"),
-        # ("SphericalVoronoi3DGUT_Default", "ssplat::CameraModelType::PINHOLE", "true", "false", "false"),
-        # ("SphericalVoronoi3DGUT_Default", "ssplat::CameraModelType::PINHOLE", "true", "true", "false"),
-        # ("SphericalVoronoi3DGUT_Default", "ssplat::CameraModelType::FISHEYE", "false", "false", "false"),
-        # ("SphericalVoronoi3DGUT_Default", "ssplat::CameraModelType::FISHEYE", "false", "true", "false"),
-        # ("SphericalVoronoi3DGUT_Default", "ssplat::CameraModelType::FISHEYE", "true", "false", "false"),
-        # ("SphericalVoronoi3DGUT_Default", "ssplat::CameraModelType::FISHEYE", "true", "true", "false"),
-        ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "false", "false", "false"),
-        ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "false", "true", "false"),
-        ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "false", "false", "false"),
-        ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "false", "true", "false"),
+        *[("Vanilla3DGUT", *args) for args in itertools.product(
+            ["ssplat::CameraModelType::PINHOLE", "ssplat::CameraModelType::FISHEYE"],
+            ['true', 'false'], ['true', 'false'], ['true', 'false'], ['true', 'false'],
+        )],
+        ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "false", "false", "false", "false"),
+        ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "false", "true", "false", "false"),
+        ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "false", "false", "false", "false"),
+        ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "false", "true", "false", "false"),
     ]
-    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 16 + \
+    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 32 + \
         [("Primitive3DGUT_SV.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 0 + \
         [("PrimitiveVoxel.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 4
 

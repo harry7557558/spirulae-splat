@@ -108,7 +108,7 @@ class SpirulaePipeline(VanillaPipeline):
 
         for i, (camera, batch) in enumerate(inputs):
             # torch.cuda.empty_cache()
-            model_outputs = self._model(camera)
+            model_outputs = self.model.get_outputs(camera)
             # torch.cuda.empty_cache()
             metrics_dict = self.model.get_metrics_dict(model_outputs, batch)
             is_not_last = (i != len(inputs) - 1)

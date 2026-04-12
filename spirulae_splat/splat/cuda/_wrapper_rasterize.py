@@ -42,7 +42,6 @@ def rasterize_to_pixels(
     isect_offsets: Tensor,  # [..., tile_height, tile_width]
     flatten_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [..., channels]
-    accum_weight_map: Optional[Tensor] = None,  # [..., image_height, image_width]
     max_blending_masks: Optional[Tensor] = None,  # [..., image_height, image_width]
     packed: bool = False,
     absgrad: bool = False,
@@ -70,7 +69,6 @@ def rasterize_to_pixels(
     render_outputs = _RasterizeToPixels.apply(
         *[(x.contiguous() if x is not None else None) for x in splats],
         backgrounds,
-        accum_weight_map,
         max_blending_masks,
         image_width,
         image_height,
@@ -245,7 +243,6 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         colors: Tensor,  # [..., N, channels] or [nnz, channels]
         # rest
         backgrounds: Tensor,  # [..., channels], Optional
-        accum_weight_map: Tensor,  # [..., tile_height, tile_width], Optional
         max_blending_masks: Tensor,  # [..., tile_height, tile_width], Optional
         width: int,
         height: int,
@@ -271,7 +268,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
             (means, quats, depths, proj_scales, proj_opacities, colors),
             backward_info.get('gaussian_ids', None),
             viewmats, intrins, camera_model, dist_coeffs,
-            backgrounds, accum_weight_map, max_blending_masks,
+            backgrounds, None, max_blending_masks,
             width, height, isect_offsets, flatten_ids,
             output_distortion
         )
@@ -338,6 +335,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
             (render_rgbs, render_depths) if ctx.output_distortion else None,
             (render2_rgbs, render2_depths) if ctx.output_distortion else None,
             ctx.backward_info['loss_map'] if ctx.compute_hessian_diagonal else None,
+            ctx.backward_info.get('accum_weight_map', None),
             (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
             v_render_Ts.contiguous(),
             (v_distortion_rgbs.contiguous(), v_distortion_depths.contiguous()) if ctx.output_distortion else None,
@@ -348,9 +346,9 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
 
         h_splats = None
         if ctx.compute_hessian_diagonal:
-            v_splats, v_viewmats, vr_splats, h_splats = cuda_return
+            v_splats, v_viewmats, vr_splats, h_splats, accum_weight = cuda_return
         else:
-            v_splats, v_viewmats = cuda_return
+            v_splats, v_viewmats, accum_weight = cuda_return
         (v_means, v_quats, v_depths, v_proj_scales, v_proj_opacities, v_colors) = v_splats
         # print(v_means.mean().item())
         # print(torch.amax(torch.abs(v_depths)))  # zero
@@ -360,6 +358,8 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
             for key, v, vr, h in zip('proj_means proj_quats depths proj_scales proj_opacities colors'.split(), v_splats, vr_splats, h_splats):
                 add_gradient_component(ctx.backward_info, key+'.gradr', vr)
                 add_gradient_component(ctx.backward_info, key+'.hess', h)
+        if accum_weight is not None:
+            ctx.backward_info['accum_weight'] = accum_weight
 
         v_backgrounds = None
         if ctx.needs_input_grad[6]:

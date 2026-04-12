@@ -23,6 +23,7 @@ from spirulae_splat.splat.cuda._wrapper_per_pixel import (
     get_color_transform_matrix,
     apply_ppisp
 )
+from spirulae_splat.modules.edge_detector import detect_edge
 
 from spirulae_splat.splat.cuda._wrapper_projection import add_gradient_component
 
@@ -424,7 +425,7 @@ DEFAULT_PPISP_PARAMS_RQS = [
 
 class SplatTrainingLosses(torch.nn.Module):
 
-    def __init__(self, config, num_training_data):
+    def __init__(self, config: 'spirulae_splat.ns_model.SpirulaeModelConfig', num_training_data):
         super().__init__()
 
         self.step = 0
@@ -738,6 +739,11 @@ class SplatTrainingLosses(torch.nn.Module):
             color_matrix = get_color_transform_matrix(self.config.splat_color_gamut)
             pred_rgb = rgb_to_srgb(pred_rgb, self.config.splat_color_is_linear, color_matrix)
 
+        # edge detector to guide densification
+        accum_weight_map = None
+        if self.config.use_edge_aware_score and self.config.mcmc_prob_grad_weight != 0.0:
+            accum_weight_map = detect_edge(gt_rgb)
+
         # apply exposure correction
         if self.config.use_bilateral_grid and self.config.fit == "rgb" and \
                 camera.metadata is not None and "cam_idx" in camera.metadata:
@@ -891,6 +897,9 @@ class SplatTrainingLosses(torch.nn.Module):
         if loss_map is not None:
             if 'backward_info' in outputs:
                 outputs['backward_info']['loss_map'] = loss_map  # to be able to get it in backward
+        if accum_weight_map is not None:
+            if 'backward_info' in outputs:
+                outputs['backward_info']['accum_weight_map'] = accum_weight_map
         # if loss_map is not None and self.step % 100 == 0:
         #     import matplotlib.pyplot as plt
         #     plt.imshow(loss_map[0].detach().cpu().numpy())

@@ -192,8 +192,12 @@ class SpirulaeModelConfig(ModelConfig):
     mcmc_growth_factor: float = 1.05
     """multiply number of splats by this number at every refinement"""
     mcmc_prob_grad_weight: float = 0.0
-    """Weight of position gradient used in sampling Gaussians to relocate/add to.
-        If 0.0, use only opacity; If 1.0, use a heuristic based on position gradient measures impact of adding or relocating to a Gaussian."""
+    """Weight of gradient used in sampling Gaussians to relocate/add to.
+        If 0.0, use only opacity; If 1.0, use other heuristics (see strategy/mcmc.py for details)."""
+    use_edge_aware_score: bool = True
+    """Whether to use edge aware score to guide densification.
+        If True, it computes edge aware score following https://arxiv.org/abs/2603.08661
+        Note that this is only active when mcmc_prob_grad_weight is nonzero"""
     mcmc_use_long_axis_split: bool = False
     """whether to use long-axis split described in https://arxiv.org/abs/2508.12313 for relocation and sample add.
         When combined with mcmc_prob_grad_weight=1.0, this can give significantly less blurry background details for unbounded outdoor scenes."""
