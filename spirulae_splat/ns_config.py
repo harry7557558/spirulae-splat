@@ -708,6 +708,7 @@ spirulae_preset_academic_baseline = MethodSpecification(
                 normal_supervision_weight=0.0,
                 mcmc_opacity_reg=0.01,
                 mcmc_scale_reg=0.01,
+                use_edge_aware_score=False,
             ),
         ),
         optimizers={

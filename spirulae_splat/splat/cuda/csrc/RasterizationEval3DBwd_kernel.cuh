@@ -30,6 +30,12 @@ namespace SlangProjectionUtils {
 constexpr uint SPLAT_BATCH_SIZE_NO_DISTORTION = WARP_SIZE;
 constexpr uint SPLAT_BATCH_SIZE_WITH_DISTORTION = WARP_SIZE;
 
+constexpr uint TILE_SIZE_DX = 16;
+static_assert(TILE_SIZE_DX > 0 && TILE_SIZE_DX <= TILE_SIZE && TILE_SIZE % TILE_SIZE_DX == 0);
+
+constexpr uint TILE_SIZE_DY = 8;
+static_assert(TILE_SIZE_DY > 0 && TILE_SIZE_DY <= TILE_SIZE && TILE_SIZE % TILE_SIZE_DY == 0);
+
 
 template <
     typename SplatPrimitive,
@@ -77,7 +83,8 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     auto block = cg::this_thread_block();
     cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
     uint32_t image_id = block.group_index().x;
-    uint32_t tile_id = block.group_index().y * tile_width + block.group_index().z;
+    uint32_t tile_id = (block.group_index().y * TILE_SIZE_DY / TILE_SIZE) * tile_width +
+        (block.group_index().z * TILE_SIZE_DX / TILE_SIZE);
     uint32_t thread_id = block.thread_rank();
 
     tile_offsets += image_id * tile_height * tile_width;
@@ -109,7 +116,7 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
     CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(image_id);
 
-    constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
+    constexpr uint BLOCK_SIZE = TILE_SIZE_DX * TILE_SIZE_DY;
 
     // load pixels
     __shared__ float4 shared_ray_d_pix_bin_final[BLOCK_SIZE];
@@ -136,8 +143,8 @@ __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
     for (uint pix_id0 = 0; pix_id0 < BLOCK_SIZE; pix_id0 += SPLAT_BATCH_SIZE_CONST) {
         static_assert(BLOCK_SIZE % SPLAT_BATCH_SIZE_CONST == 0);
         uint pix_id_local = pix_id0 + thread_id;
-        int pix_x = block.group_index().z * TILE_SIZE + pix_id_local % TILE_SIZE;
-        int pix_y = block.group_index().y * TILE_SIZE + pix_id_local / TILE_SIZE;
+        int pix_x = block.group_index().z * TILE_SIZE_DX + pix_id_local % TILE_SIZE_DX;
+        int pix_y = block.group_index().y * TILE_SIZE_DY + pix_id_local / TILE_SIZE_DX;
         uint pix_id_global = pix_y * image_width + pix_x;
         uint pix_id_image_global = image_id * image_height * image_width + pix_id_global;
         bool inside = (pix_x < image_width && pix_y < image_height);
@@ -463,7 +470,7 @@ void rasterize_to_pixels_eval3d_bwd_kernel_wrapper(
     dim3 threads = {output_distortion ?
         SPLAT_BATCH_SIZE_WITH_DISTORTION : SPLAT_BATCH_SIZE_NO_DISTORTION,
         1, 1};
-    dim3 grid = {I, tile_height, tile_width};
+    dim3 grid = {I, tile_height * (TILE_SIZE / TILE_SIZE_DY), tile_width * (TILE_SIZE / TILE_SIZE_DX)};
 
     rasterize_to_pixels_eval3d_bwd_kernel<
         SplatPrimitive, camera_model, output_distortion, output_viewmat_grad, output_hessian_diagonal, output_accum_weight
