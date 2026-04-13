@@ -150,8 +150,6 @@ def get_extensions():
 
 
 import importlib.util
-if importlib.util.find_spec('nerfstudio') is None and False:
-    raise ValueError("Please make sure you have nerfstudio installed.")
 if importlib.util.find_spec('torch') is None:
     raise ValueError("Please make sure you have PyTorch installed.")
 no_fused_bilagrid = (importlib.util.find_spec('fused_bilagrid') is None)
@@ -163,9 +161,10 @@ setup(
     version="0.1.0",
     packages=find_packages(include=["spirulae_splat*"]),
     install_requires=[
-        # "nerfstudio",
         # "torch",
         "jaxtyping",
+        "tyro",
+        "viser",
         "rich>=12",
         "typing_extensions",
     ] + [
@@ -205,6 +204,6 @@ setup(
             "spirulae-preset-academic-baseline = spirulae_splat.ns_config:spirulae_preset_academic_baseline",
         ]
     },
-    cmdclass={"build_ext": get_ext()} if not BUILD_NO_CUDA else {},
-    ext_modules=get_extensions() if not BUILD_NO_CUDA else [],
+    # cmdclass={"build_ext": get_ext()} if not BUILD_NO_CUDA else {},
+    # ext_modules=get_extensions() if not BUILD_NO_CUDA else [],
 )

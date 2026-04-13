@@ -6,17 +6,17 @@ Define your custom method here that registers with Nerfstudio CLI.
 
 from __future__ import annotations
 
-from spirulae_splat.ns_datamanager import (
-    SpirulaeDataManagerConfig, SpirulaeDataManager
+from spirulae_splat.modules.datamanager import (
+    SpirulaeSplatDataManagerConfig, SpirulaeSplatDataManager
 )
-from spirulae_splat.ns_model import SpirulaeModelConfig
+from spirulae_splat.modules.model import SpirulaeSplatModelConfig
 from spirulae_splat.ns_pipeline import (
     SpirulaePipelineConfig, VanillaPipelineConfig
 )
 from spirulae_splat.modules.optimizer import FusedAdamOptimizerConfig, FusedNewtonOptimizerConfig
 
-from spirulae_splat.ns_dataset import SpirulaeDataset
-from spirulae_splat.ns_dataparser import Nerfstudio2DataParserConfig
+from spirulae_splat.modules.dataset import SpirulaeDataset
+from spirulae_splat.modules.dataparser import SpirualeSplatDataParserConfig
 from nerfstudio.configs.base_config import ViewerConfig
 from nerfstudio.engine.schedulers import (
     ExponentialDecaySchedulerConfig,
@@ -26,8 +26,8 @@ from nerfstudio.plugins.types import MethodSpecification
 
 
 _DEFAULT_DATAMANAGER_CONFIG = {
-    '_target': SpirulaeDataManager,
-    'dataparser': Nerfstudio2DataParserConfig(
+    '_target': SpirulaeSplatDataManager,
+    'dataparser': SpirualeSplatDataParserConfig(
         eval_mode="fraction", train_split_fraction=1.0,  # use all for training
         # eval_mode="interval", eval_interval=8,  # consistent with academic benchmarks
     ),
@@ -210,10 +210,10 @@ spirulae = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
-            datamanager=SpirulaeDataManagerConfig(
+            datamanager=SpirulaeSplatDataManagerConfig(
                 **_DEFAULT_DATAMANAGER_CONFIG
             ),
-            model=SpirulaeModelConfig(
+            model=SpirulaeSplatModelConfig(
             ),
             
         ),
@@ -234,10 +234,10 @@ spirulae_squared = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
-            datamanager=SpirulaeDataManagerConfig(
+            datamanager=SpirulaeSplatDataManagerConfig(
                 **_DEFAULT_DATAMANAGER_CONFIG
             ),
-            model=SpirulaeModelConfig(
+            model=SpirulaeSplatModelConfig(
                 compute_hessian_diagonal="all",
                 mcmc_noise_lr=5e5 * (1.6e-4 / 1.0e-6),
                 # erank_reg=0.0,
@@ -261,10 +261,10 @@ spirulae_squared_pos = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
-            datamanager=SpirulaeDataManagerConfig(
+            datamanager=SpirulaeSplatDataManagerConfig(
                 **_DEFAULT_DATAMANAGER_CONFIG
             ),
-            model=SpirulaeModelConfig(
+            model=SpirulaeSplatModelConfig(
                 compute_hessian_diagonal="position",
                 mcmc_noise_lr=5e5 * (1.6e-4 / 1.0e-6),
             ),
@@ -286,13 +286,13 @@ spirulae_patched = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
-            datamanager=SpirulaeDataManagerConfig(
+            datamanager=SpirulaeSplatDataManagerConfig(
                 **_DEFAULT_DATAMANAGER_CONFIG,
                 patch_batch_size=-1,
                 patch_size=64,
                 max_batch_per_epoch=800,
             ),
-            model=SpirulaeModelConfig(
+            model=SpirulaeSplatModelConfig(
                 # packed=True,
                 use_bvh=True,
                 use_camera_optimizer=False,
@@ -321,11 +321,11 @@ spirulae_triangle = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
-            datamanager=SpirulaeDataManagerConfig(
+            datamanager=SpirulaeSplatDataManagerConfig(
                 **_DEFAULT_DATAMANAGER_CONFIG,
                 compute_visibility_masks=True,
             ),
-            model=SpirulaeModelConfig(
+            model=SpirulaeSplatModelConfig(
                 primitive="opaque_triangle",
                 kernel_radius=0.5,
                 compute_depth_normal=True,
@@ -367,14 +367,14 @@ spirulae_triangle_patched = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
-            datamanager=SpirulaeDataManagerConfig(
+            datamanager=SpirulaeSplatDataManagerConfig(
                 **_DEFAULT_DATAMANAGER_CONFIG,
                 compute_visibility_masks=True,
                 patch_batch_size=-1,
                 patch_size=64,
                 max_batch_per_epoch=800,
             ),
-            model=SpirulaeModelConfig(
+            model=SpirulaeSplatModelConfig(
                 primitive="opaque_triangle",
                 kernel_radius=0.5,
                 compute_depth_normal=True,
@@ -425,10 +425,10 @@ spirulae_voxel = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
-            datamanager=SpirulaeDataManagerConfig(
+            datamanager=SpirulaeSplatDataManagerConfig(
                 **_DEFAULT_DATAMANAGER_CONFIG,
             ),
-            model=SpirulaeModelConfig(
+            model=SpirulaeSplatModelConfig(
                 primitive="voxel",
                 use_mcmc=False,
                 sh_degree=0,
@@ -494,10 +494,10 @@ spirulae_preset_confined_low_texture = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
-            datamanager=SpirulaeDataManagerConfig(
+            datamanager=SpirulaeSplatDataManagerConfig(
                 **_DEFAULT_DATAMANAGER_CONFIG
             ),
-            model=SpirulaeModelConfig(
+            model=SpirulaeSplatModelConfig(
                 **_MODEL_PRESET_CONFINED,
                 **_MODEL_PRESET_NO_COLOR_SHIFT,
             ),
@@ -519,10 +519,10 @@ spirulae_preset_confined = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
-            datamanager=SpirulaeDataManagerConfig(
+            datamanager=SpirulaeSplatDataManagerConfig(
                 **_DEFAULT_DATAMANAGER_CONFIG
             ),
-            model=SpirulaeModelConfig(
+            model=SpirulaeSplatModelConfig(
                 **_MODEL_PRESET_3DGS2TR_POS,
                 **_MODEL_PRESET_CONFINED,
                 **_MODEL_PRESET_RICH_TEXTURE,
@@ -545,10 +545,10 @@ spirulae_squared_preset_confined = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
-            datamanager=SpirulaeDataManagerConfig(
+            datamanager=SpirulaeSplatDataManagerConfig(
                 **_DEFAULT_DATAMANAGER_CONFIG
             ),
-            model=SpirulaeModelConfig(
+            model=SpirulaeSplatModelConfig(
                 **_MODEL_PRESET_3DGS2TR,
                 **_MODEL_PRESET_CONFINED,
                 **_MODEL_PRESET_RICH_TEXTURE,
@@ -571,10 +571,10 @@ spirulae_preset_open_low_texture = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
-            datamanager=SpirulaeDataManagerConfig(
+            datamanager=SpirulaeSplatDataManagerConfig(
                 **_DEFAULT_DATAMANAGER_CONFIG
             ),
-            model=SpirulaeModelConfig(
+            model=SpirulaeSplatModelConfig(
                 **_MODEL_PRESET_NO_COLOR_SHIFT,
                 relative_scale=10.0,
             ),
@@ -596,10 +596,10 @@ spirulae_preset_open = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
-            datamanager=SpirulaeDataManagerConfig(
+            datamanager=SpirulaeSplatDataManagerConfig(
                 **_DEFAULT_DATAMANAGER_CONFIG
             ),
-            model=SpirulaeModelConfig(
+            model=SpirulaeSplatModelConfig(
                 **_MODEL_PRESET_3DGS2TR_POS,
                 **_MODEL_PRESET_RICH_TEXTURE,
             ),
@@ -621,10 +621,10 @@ spirulae_squared_preset_open = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
-            datamanager=SpirulaeDataManagerConfig(
+            datamanager=SpirulaeSplatDataManagerConfig(
                 **_DEFAULT_DATAMANAGER_CONFIG
             ),
-            model=SpirulaeModelConfig(
+            model=SpirulaeSplatModelConfig(
                 **_MODEL_PRESET_3DGS2TR,
                 **_MODEL_PRESET_RICH_TEXTURE,
             ),
@@ -646,14 +646,14 @@ spirulae_preset_centered_object = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
-            datamanager=SpirulaeDataManagerConfig(
-                dataparser=Nerfstudio2DataParserConfig(
+            datamanager=SpirulaeSplatDataManagerConfig(
+                dataparser=SpirualeSplatDataParserConfig(
                     eval_mode="fraction",
                     train_split_fraction=1.0,
                     center_method="focus",
                 ),
             ),
-            model=SpirulaeModelConfig(
+            model=SpirulaeSplatModelConfig(
                 **_MODEL_PRESET_RICH_TEXTURE,
                 **_MODEL_PRESET_NO_COLOR_SHIFT,
                 apply_loss_for_mask=True,
@@ -678,15 +678,15 @@ spirulae_preset_academic_baseline = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
-            datamanager=SpirulaeDataManagerConfig(
-                dataparser=Nerfstudio2DataParserConfig(
+            datamanager=SpirulaeSplatDataManagerConfig(
+                dataparser=SpirualeSplatDataParserConfig(
                     eval_mode="interval",
                     eval_interval=8,
                 ),
                 max_batch_per_epoch=9**9,
                 compute_edge_maps=False,
             ),
-            model=SpirulaeModelConfig(
+            model=SpirulaeSplatModelConfig(
                 primitive="3dgs",
                 background_color="black",
                 train_background_color=False,

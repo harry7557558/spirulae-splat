@@ -11,8 +11,8 @@ import torch.distributed as dist
 from torch.cuda.amp.grad_scaler import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from spirulae_splat.ns_datamanager import SpirulaeDataManagerConfig
-from spirulae_splat.ns_model import SpirulaeModel, SpirulaeModelConfig
+from spirulae_splat.modules.datamanager import SpirulaeSplatDataManagerConfig
+from spirulae_splat.modules.model import SpirulaeSplatModel, SpirulaeSplatModelConfig
 from nerfstudio.data.datamanagers.base_datamanager import (
     DataManager,
     DataManagerConfig,
@@ -32,9 +32,9 @@ class SpirulaePipelineConfig(VanillaPipelineConfig):
 
     _target: Type = field(default_factory=lambda: SpirulaePipeline)
     """target class to instantiate"""
-    datamanager: DataManagerConfig = field(default_factory=SpirulaeDataManagerConfig)
+    datamanager: DataManagerConfig = field(default_factory=SpirulaeSplatDataManagerConfig)
     """specifies the datamanager config"""
-    model: ModelConfig = field(default_factory=SpirulaeModelConfig)
+    model: ModelConfig = field(default_factory=SpirulaeSplatModelConfig)
     """specifies the model config"""
 
 
@@ -85,7 +85,7 @@ class SpirulaePipeline(VanillaPipeline):
         self.world_size = world_size
         if world_size > 1:
             self._model = typing.cast(
-                SpirulaeModel, DDP(self._model, device_ids=[local_rank], find_unused_parameters=True)
+                SpirulaeSplatModel, DDP(self._model, device_ids=[local_rank], find_unused_parameters=True)
             )
             dist.barrier(device_ids=[local_rank])
 

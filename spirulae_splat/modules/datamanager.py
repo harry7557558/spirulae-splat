@@ -19,17 +19,14 @@ import numpy as np
 from collections import deque
 from functools import cached_property
 
-from nerfstudio.cameras.rays import RayBundle
-from nerfstudio.data.datamanagers.full_images_datamanager import (
-    DataManagerConfig,
-    FullImageDatamanager,
-    FullImageDatamanagerConfig,
-    _undistort_image,
-    CONSOLE, track, TDataset
-)
-from nerfstudio.cameras.cameras import Cameras, CameraType
+# from nerfstudio.data.datamanagers.full_images_datamanager import (
+#     FullImageDatamanager,
+#     FullImageDatamanagerConfig,
+#     CONSOLE, track, TDataset
+# )
+from spirulae_splat.modules.camera import Cameras
 
-from spirulae_splat.ns_dataset import SpirulaeDataset, IndexedDatasetWrapper
+from spirulae_splat.modules.dataset import SpirulaeSplatDataset, IndexedDatasetWrapper
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
 from spirulae_splat.splat.utils import interpolate_se3, random_c2w_on_unit_sphere, ls_camera_intersection
 from spirulae_splat.modules.edge_detector import detect_edge, detect_edge_ms
@@ -43,12 +40,8 @@ from tqdm import tqdm
 
 
 @dataclass
-class SpirulaeDataManagerConfig(FullImageDatamanagerConfig):
-    """Template DataManager Config
-
-    Add your custom datamanager config parameters here.
-    """
-    _target: Type = field(default_factory=lambda: SpirulaeDataManager)
+class SpirulaeSplatDataManagerConfig:
+    """Configuration for Spirulae-Splat data manager."""
 
     max_batch_per_epoch: int = 800
     """Maximum number of batches per epoch, used for configuring batch size"""
@@ -162,29 +155,25 @@ class IndexGroupsWithDataLoader(IndexGroups):
 
 
 
-class SpirulaeDataManager(FullImageDatamanager):
-    """Template DataManager
+class SpirulaeSplatDataManager:
+    """Data manager for spirulae-splat"""
 
-    Args:
-        config: the DataManagerConfig used to instantiate class
-    """
-
-    config: SpirulaeDataManagerConfig
+    config: SpirulaeSplatDataManagerConfig
 
     def __init__(
         self,
-        config: SpirulaeDataManagerConfig,
+        config: SpirulaeSplatDataManagerConfig,
         device: Union[torch.device, str] = "cpu",
         test_mode: Literal["test", "val", "inference"] = "val",
         world_size: int = 1,
         local_rank: int = 0,
         **kwargs,  # pylint: disable=unused-argument
     ):
-        cache_images = config.cache_images
-        super().__init__(
-            config=config, device=device, test_mode=test_mode, world_size=world_size, local_rank=local_rank, **kwargs
-        )
-        self.config.cache_images = cache_images
+        self.config = config
+        self.device = device
+
+        self.train_dataset = None
+        self.eval_dataset = None
 
         self.train_index_group_loader = None  # type: Optional[IndexGroupsWithDataLoader]
 
@@ -193,7 +182,7 @@ class SpirulaeDataManager(FullImageDatamanager):
                                 load_depths=self.config.load_depths, load_normals=self.config.load_normals)
         dataset.cameras.width[idx] = data["image"].shape[1]
         dataset.cameras.height[idx] = data["image"].shape[0]
-        camera = dataset.cameras[idx].reshape(())
+        camera = dataset.cameras[idx]
         assert data["image"].shape[1] == camera.width.item() and data["image"].shape[0] == camera.height.item(), (
             f'The size of image ({data["image"].shape[1]}, {data["image"].shape[0]}) loaded '
             f'does not match the camera parameters ({camera.width.item(), camera.height.item()})'
@@ -242,20 +231,19 @@ class SpirulaeDataManager(FullImageDatamanager):
         if cache_images_device == "disk":
             return []
 
-        CONSOLE.log(f"Caching {split} images")
+        print(f"Caching {split} images")
         with ThreadPoolExecutor() as executor:
-            undistorted_images = list(
-                track(
+            with ThreadPoolExecutor() as executor:
+                for result in tqdm(
                     executor.map(
                         self._undistort_idx,
                         [dataset]*len(dataset),
                         range(len(dataset)),
                     ),
-                    description=f"Caching {split} images",
-                    transient=True,
+                    f"Caching {split} images",
                     total=len(dataset),
-                )
-            )
+                ):
+                    undistorted_images.append(result)
 
         if self.config.deblur_training_images:
             from spirulae_splat.modules.enhancer import infer
@@ -330,7 +318,7 @@ class SpirulaeDataManager(FullImageDatamanager):
                 batch['depth'] = batch['depth'].squeeze(0)
 
         camera_flattened = {}
-        for key in ['camera_to_worlds', 'fx', 'fy', 'cx', 'cy', 'width', 'height', 'distortion_params', 'camera_type', 'times', 'metadata']:
+        for key in ['camera_to_worlds', 'intrins', 'width', 'height', 'distortion_params', 'camera_type', 'metadata']:
             value = getattr(camera, key)
             if value is None:
                 value = torch.empty((0,))
@@ -412,9 +400,9 @@ class SpirulaeDataManager(FullImageDatamanager):
 
         def get_key(idx):
             cam = self.train_dataset.cameras[idx]
-            w, h, camera_type = cam.width.item(), cam.height.item(), cam.camera_type.item()
+            w, h, camera_type = cam.width.item(), cam.height.item(), cam.camera_type[0]
             additional_params = []
-            for key in ['camera_to_worlds', 'fx', 'fy', 'cx', 'cy', 'distortion_params', 'times']:
+            for key in ['camera_to_worlds', 'intrins', 'distortion_params']:
                 value = getattr(cam, key)  # type: Optional[torch.Tensor]
                 additional_params.append(value if value is None else tuple(value.shape))
             return (w, h, camera_type, *additional_params)
@@ -545,14 +533,3 @@ class SpirulaeDataManager(FullImageDatamanager):
             return results, val_results
 
         return results
-
-    @cached_property
-    def dataset_type(self) -> Type[TDataset]:
-        """Returns the dataset type passed as the generic argument"""
-        return SpirulaeDataset
-
-    @cached_property
-    def fixed_indices_eval_dataloader(self):
-        if self.config.cache_images == "disk":
-            return []  # TODO
-        return super().fixed_indices_eval_dataloader

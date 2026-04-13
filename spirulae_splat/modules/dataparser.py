@@ -22,21 +22,21 @@ from typing import Literal, Optional, Tuple, Type
 
 import numpy as np
 import torch
-from PIL import Image
+
+import json
+
+from spirulae_splat.modules.camera import (
+    colmap_camera_model_to_type,
+    Cameras,
+)
 
 from nerfstudio.cameras import camera_utils
-from nerfstudio.cameras.cameras import CAMERA_MODEL_TO_TYPE, Cameras, CameraType
-from nerfstudio.data.dataparsers.base_dataparser import DataParser, DataParserConfig, DataparserOutputs
-from nerfstudio.data.dataparsers.nerfstudio_dataparser import NerfstudioDataParserConfig, Nerfstudio
-from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.data.utils.dataparsers_utils import (
     get_train_eval_split_all,
     get_train_eval_split_filename,
     get_train_eval_split_fraction,
     get_train_eval_split_interval,
 )
-from nerfstudio.utils.io import load_from_json
-from nerfstudio.utils.rich_utils import CONSOLE
 
 MAX_AUTO_RESOLUTION = 1600
 
@@ -83,13 +83,11 @@ def geometric_median(X, eps=0.0, maxiter=10):
 
 
 @dataclass
-class Nerfstudio2DataParserConfig(NerfstudioDataParserConfig):
-    """Nerfstudio dataset config"""
+class SpirualeSplatDataParserConfig:
+    """Spirulae-Splat dataset config"""
 
-    _target: Type = field(default_factory=lambda: Nerfstudio2)
+    _target: Type = field(default_factory=lambda: SpirulaeSplatDataparser)
     """target class to instantiate"""
-    data: Path = Path()
-    """Directory or explicit json file path specifying location of data."""
     scale_factor: float = 1.0
     """How much to scale the camera origins by."""
     downscale_factor: Optional[int] = None
@@ -120,50 +118,36 @@ class Nerfstudio2DataParserConfig(NerfstudioDataParserConfig):
     """Scales the depth values to meters. Default value is 0.001 for a millimeter to meter conversion."""
     mask_color: Optional[Tuple[float, float, float]] = None
     """Replace the unknown pixels with this color. Relevant if you have a mask but still sample everywhere."""
-    load_3D_points: bool = True
-    """Whether to load the 3D points from the colmap reconstruction."""
 
     load_thumbnails: bool = True
     """Whether to load thumbnails for viewer. If False, this can significantly speed up data loading for large datasets."""
 
-    mask_overexposure: bool = False
-    """Whether to mask over exposure"""
     validation_fraction: float = 0.0
     """Use this fraction of training images for validation. Stop training when performance on validation images start to drop."""
 
 
 @dataclass
-class Nerfstudio2(Nerfstudio):
-    """Nerfstudio DatasetParser"""
+class SpirulaeSplatDataparser:
 
-    config: Nerfstudio2DataParserConfig
-    downscale_factor: Optional[int] = None
+    config: SpirualeSplatDataParserConfig
 
-    def _generate_dataparser_outputs(self, split="train"):
+    def __init__(self, config: SpirualeSplatDataParserConfig, dataset_dir: Path):
+        self.config = config
+        self.dataset_dir = dataset_dir
 
-        # debug code to run ns-viewer without dataset
-        # if not self.config.data.exists() and True:
-        #     n = 88
-        #     return DataparserOutputs(
-        #         image_filenames=["/home/harry/Downloads/1x1.png"]*n,
-        #         cameras=Cameras(camera_to_worlds=torch.eye(4)[None].repeat(n, 1, 1),
-        #                         fx=torch.ones(n), fy=torch.ones(n),
-        #                         cx=torch.zeros(n), cy=torch.zeros(n)),
-        #         scene_box=None,
-        #         mask_filenames=None,
-        #         dataparser_scale=1.0,
-        #         dataparser_transform=torch.eye(4),
-        #         metadata={},
-        #     )
+    def parse(self):
+        return self._parse_nerfstudio_data()
 
-        assert self.config.data.exists(), f"Data directory {self.config.data} does not exist."
+    def _parse_nerfstudio_data(self, split="train"):
 
-        if self.config.data.suffix == ".json":
-            meta = load_from_json(self.config.data)
-            data_dir = self.config.data.parent
-        else:
-            meta = load_from_json(self.config.data / "transforms.json")
-            data_dir = self.config.data
+        assert self.dataset_dir.exists() and self.dataset_dir.is_dir(), \
+            f"Data directory {self.dataset_dir} does not exist."
+
+        transforms_path = self.dataset_dir / "transforms.json"
+        assert transforms_path.exists() and transforms_path.is_file(), \
+            f"File {transforms_path} does not exist."
+        with open(transforms_path, 'r') as fp:
+            meta = json.load(fp)
 
         image_filenames = []
         mask_filenames = []
@@ -177,15 +161,12 @@ class Nerfstudio2(Nerfstudio):
         cy_fixed = "cy" in meta
         height_fixed = "h" in meta
         width_fixed = "w" in meta
-        default_camera_model = CAMERA_MODEL_TO_TYPE[meta.get("camera_model", "OPENCV")].value
+        default_camera_model = colmap_camera_model_to_type(meta.get("camera_model", "OPENCV"))
         distort_fixed = False
         for distort_key in DISTORTION_KEYS:
             if distort_key in meta:
                 distort_fixed = True
                 break
-        fisheye_crop_radius = meta.get("fisheye_crop_radius", None)
-        if fisheye_crop_radius is not None:
-            CONSOLE.print("Warning: fisheye_crop_radius is ignored")
         fx = []
         fy = []
         cx = []
@@ -199,7 +180,7 @@ class Nerfstudio2(Nerfstudio):
         fnames = []
         for frame in meta["frames"]:
             filepath = Path(frame["file_path"])
-            fname = self._get_fname(filepath, data_dir)
+            fname = self._get_fname(filepath)
             fnames.append(fname)
         inds = np.argsort(fnames)
         frames = [meta["frames"][ind] for ind in inds]
@@ -214,7 +195,7 @@ class Nerfstudio2(Nerfstudio):
 
         for frame in frames:
             filepath = Path(frame["file_path"])
-            fname = self._get_fname(filepath, data_dir)
+            fname = self._get_fname(filepath)
 
             if not fx_fixed:
                 assert "fl_x" in frame, "fx not specified in frame"
@@ -235,7 +216,7 @@ class Nerfstudio2(Nerfstudio):
                 assert "w" in frame, "width not specified in frame"
                 width.append(int(frame["w"]))
             camera_type.append(
-                CAMERA_MODEL_TO_TYPE[frame["camera_model"]].value
+                colmap_camera_model_to_type(frame["camera_model"])
                 if 'camera_model' in frame else default_camera_model
             )
             if not distort_fixed:
@@ -249,21 +230,17 @@ class Nerfstudio2(Nerfstudio):
             poses.append(np.array(frame["transform_matrix"]))
             if "mask_path" in frame:
                 mask_filepath = Path(frame["mask_path"])
-                mask_fname = self._get_fname(
-                    mask_filepath,
-                    data_dir,
-                    downsample_folder_prefix="masks_",
-                )
+                mask_fname = self._get_fname(mask_filepath)
                 mask_filenames.append(mask_fname)
 
             if "depth_file_path" in frame:
                 depth_filepath = Path(frame["depth_file_path"])
-                depth_fname = self._get_fname(depth_filepath, data_dir, downsample_folder_prefix="depths_")
+                depth_fname = self._get_fname(depth_filepath)
                 depth_filenames.append(depth_fname)
 
             if "normal_file_path" in frame:
                 normal_filepath = Path(frame["normal_file_path"])
-                normal_fname = self._get_fname(normal_filepath, data_dir, downsample_folder_prefix="normals_")
+                normal_fname = self._get_fname(normal_filepath)
                 normal_filenames.append(normal_fname)
 
         assert len(mask_filenames) == 0 or (len(mask_filenames) == len(image_filenames)), """
@@ -282,13 +259,13 @@ class Nerfstudio2(Nerfstudio):
         has_split_files_spec = any(f"{split}_filenames" in meta for split in ("train", "val", "test"))
         if f"{split}_filenames" in meta:
             # Validate split first
-            split_filenames = set(self._get_fname(Path(x), data_dir) for x in meta[f"{split}_filenames"])
+            split_filenames = set(self._get_fname(Path(x)) for x in meta[f"{split}_filenames"])
             unmatched_filenames = split_filenames.difference(image_filenames)
             if unmatched_filenames:
                 raise RuntimeError(f"Some filenames for split {split} were not found: {unmatched_filenames}.")
 
             indices = [i for i, path in enumerate(image_filenames) if path in split_filenames]
-            CONSOLE.log(f"[yellow] Dataset is overriding {split}_indices to {indices}")
+            print(f"WARNING: Dataset is overriding {split}_indices to {indices}")
             indices = np.array(indices, dtype=np.int32)
         elif has_split_files_spec:
             raise RuntimeError(f"The dataset's list of filenames for split {split} is missing.")
@@ -301,9 +278,6 @@ class Nerfstudio2(Nerfstudio):
             elif self.config.eval_mode == "interval":
                 i_train, i_eval = get_train_eval_split_interval(image_filenames, self.config.eval_interval)
             elif self.config.eval_mode == "all":
-                CONSOLE.log(
-                    "[yellow] Be careful with '--eval-mode=all'. If using camera optimization, the cameras may diverge in the current implementation, giving unpredictable results."
-                )
                 i_train, i_eval = get_train_eval_split_all(image_filenames)
             else:
                 raise ValueError(f"Unknown eval mode {self.config.eval_mode}")
@@ -315,11 +289,7 @@ class Nerfstudio2(Nerfstudio):
             else:
                 raise ValueError(f"Unknown dataparser split {split}")
 
-        if "orientation_override" in meta:
-            orientation_method = meta["orientation_override"]
-            CONSOLE.log(f"[yellow] Dataset is overriding orientation method to {orientation_method}")
-        else:
-            orientation_method = self.config.orientation_method
+        orientation_method = self.config.orientation_method
 
         poses = torch.from_numpy(np.array(poses).astype(np.float32))
         poses, transform_matrix = camera_utils.auto_orient_and_center_poses(
@@ -345,22 +315,13 @@ class Nerfstudio2(Nerfstudio):
         idx_tensor = torch.tensor(indices, dtype=torch.long)
         poses = poses[idx_tensor]
 
-        # in x,y,z order
-        # assumes that the scene is centered at the origin
-        aabb_scale = self.config.scene_scale
-        scene_box = SceneBox(
-            aabb=torch.tensor(
-                [[-aabb_scale, -aabb_scale, -aabb_scale], [aabb_scale, aabb_scale, aabb_scale]], dtype=torch.float32
-            )
-        )
-
         fx = float(meta["fl_x"]) if fx_fixed else torch.tensor(fx, dtype=torch.float32)[idx_tensor]
         fy = float(meta["fl_y"]) if fy_fixed else torch.tensor(fy, dtype=torch.float32)[idx_tensor]
         cx = float(meta["cx"]) if cx_fixed else torch.tensor(cx, dtype=torch.float32)[idx_tensor]
         cy = float(meta["cy"]) if cy_fixed else torch.tensor(cy, dtype=torch.float32)[idx_tensor]
         height = int(meta["h"]) if height_fixed else torch.tensor(height, dtype=torch.int32)[idx_tensor]
         width = int(meta["w"]) if width_fixed else torch.tensor(width, dtype=torch.int32)[idx_tensor]
-        camera_type = torch.tensor(camera_type, dtype=torch.int32)[idx_tensor]
+        camera_type = [camera_type[i] for i in idx_tensor]
         if distort_fixed:
             distortion_params = torch.tensor([
                 float(meta.get(key, 0.0)) for key in DISTORTION_KEYS
@@ -368,16 +329,10 @@ class Nerfstudio2(Nerfstudio):
         else:
             distortion_params = torch.stack(distort, dim=0)[idx_tensor]
 
-        # Only add fisheye crop radius parameter if the images are actually fisheye, to allow the same config to be used
-        # for both fisheye and non-fisheye datasets.
         metadata = {}
-        # TODO: fisheye_crop_radius
 
         cameras = Cameras(
-            fx=fx,
-            fy=fy,
-            cx=cx,
-            cy=cy,
+            intrins=(fx, fy, cx, cy),
             distortion_params=distortion_params,
             height=height,
             width=width,
@@ -386,15 +341,12 @@ class Nerfstudio2(Nerfstudio):
             metadata=metadata,
         )
 
-        assert self.downscale_factor is not None
-        cameras.rescale_output_resolution(scaling_factor=1.0 / self.downscale_factor)
-
         # The naming is somewhat confusing, but:
         # - transform_matrix contains the transformation to dataparser output coordinates from saved coordinates.
         # - dataparser_transform_matrix contains the transformation to dataparser output coordinates from original data coordinates.
         # - applied_transform contains the transformation to saved coordinates from original data coordinates.
         applied_transform = None
-        colmap_path = self.config.data / "colmap/sparse/0"
+        colmap_path = self.dataset_dir / "colmap/sparse/0"
         if "applied_transform" in meta:
             applied_transform = torch.tensor(meta["applied_transform"], dtype=transform_matrix.dtype)
         elif colmap_path.exists():
@@ -424,64 +376,15 @@ class Nerfstudio2(Nerfstudio):
             self.prompted_user = False
 
         # Load 3D points
-        if self.config.load_3D_points:
-            if "ply_file_path" in meta:
-                ply_file_path = data_dir / meta["ply_file_path"]
+        assert "ply_file_path" in meta, "No initial point cloud found in transforms.json"
+        ply_file_path = self.dataset_dir / meta["ply_file_path"]
+        sparse_points = self._load_3D_points(ply_file_path, transform_matrix, scale_factor)
+        if sparse_points is not None:
+            metadata.update(sparse_points)
 
-            elif colmap_path.exists():
-                from rich.prompt import Confirm
-
-                # check if user wants to make a point cloud from colmap points
-                if not self.prompted_user:
-                    self.create_pc = Confirm.ask(
-                        "load_3D_points is true, but the dataset was processed with an outdated ns-process-data that didn't convert colmap points to .ply! Update the colmap dataset automatically?"
-                    )
-
-                if self.create_pc:
-                    import json
-
-                    from nerfstudio.process_data.colmap_utils import create_ply_from_colmap
-
-                    with open(self.config.data / "transforms.json") as f:
-                        transforms = json.load(f)
-
-                    # Update dataset if missing the applied_transform field.
-                    if "applied_transform" not in transforms:
-                        transforms["applied_transform"] = meta["applied_transform"]
-
-                    ply_filename = "sparse_pc.ply"
-                    create_ply_from_colmap(
-                        filename=ply_filename,
-                        recon_dir=colmap_path,
-                        output_dir=self.config.data,
-                        applied_transform=applied_transform,
-                    )
-                    ply_file_path = data_dir / ply_filename
-                    transforms["ply_file_path"] = ply_filename
-
-                    # This was the applied_transform value
-
-                    with open(self.config.data / "transforms.json", "w", encoding="utf-8") as f:
-                        json.dump(transforms, f, indent=4)
-                else:
-                    ply_file_path = None
-            else:
-                if not self.prompted_user:
-                    CONSOLE.print(
-                        "[bold yellow]Warning: load_3D_points set to true but no point cloud found. splatfacto will use random point cloud initialization."
-                    )
-                ply_file_path = None
-
-            if ply_file_path:
-                sparse_points = self._load_3D_points(ply_file_path, transform_matrix, scale_factor)
-                if sparse_points is not None:
-                    metadata.update(sparse_points)
-            self.prompted_user = True
-
-        dataparser_outputs = DataparserOutputs(
-            image_filenames=image_filenames,
+        dataparser_outputs = dict(
             cameras=cameras,
-            scene_box=scene_box,
+            image_filenames=image_filenames,
             mask_filenames=mask_filenames if len(mask_filenames) > 0 else None,
             dataparser_scale=scale_factor,
             dataparser_transform=dataparser_transform_matrix,
@@ -491,9 +394,7 @@ class Nerfstudio2(Nerfstudio):
                 "normal_filenames": normal_filenames if len(normal_filenames) > 0 else None,
                 "mask_color": self.config.mask_color,
                 "load_thumbnails": self.config.load_thumbnails,
-                "mask_overexposure": self.config.mask_overexposure,
-                "val_indices": get_train_eval_split_fraction(cameras, 1-self.config.validation_fraction)[1].tolist(),
-                # "val_indices": [i for i in range(len(cameras)) if i < len(cameras)//2],  # for testing overfitting
+                "val_indices": get_train_eval_split_fraction(image_filenames, 1-self.config.validation_fraction)[1].tolist(),
                 **metadata,
             },
         )
@@ -558,35 +459,5 @@ class Nerfstudio2(Nerfstudio):
         # print("Load PLY:", time1-time0)
         return out
 
-    def _get_fname(self, filepath: Path, data_dir: Path, downsample_folder_prefix="images_") -> Path:
-        """Get the filename of the image file.
-        downsample_folder_prefix can be used to point to auxiliary image data, e.g. masks
-
-        filepath: the base file name of the transformations.
-        data_dir: the directory of the data that contains the transform file
-        downsample_folder_prefix: prefix of the newly generated downsampled images
-        """
-        self.downscale_factor = 1
-        return data_dir / filepath  # TODO
-
-        if self.downscale_factor is None:
-            if self.config.downscale_factor is None:
-                test_img = Image.open(data_dir / filepath)
-                h, w = test_img.size
-                max_res = max(h, w)
-                df = 0
-                while True:
-                    if (max_res / 2 ** (df)) <= MAX_AUTO_RESOLUTION:
-                        break
-                    if not (data_dir / f"{downsample_folder_prefix}{2**(df+1)}" / filepath.name).exists():
-                        break
-                    df += 1
-
-                self.downscale_factor = 2**df
-                CONSOLE.log(f"Auto image downscale factor of {self.downscale_factor}")
-            else:
-                self.downscale_factor = self.config.downscale_factor
-
-        if self.downscale_factor > 1:
-            return data_dir / f"{downsample_folder_prefix}{self.downscale_factor}" / filepath.name
-        return data_dir / filepath
+    def _get_fname(self, filepath: Path) -> Path:
+        return self.dataset_dir / filepath  # TODO: downscale

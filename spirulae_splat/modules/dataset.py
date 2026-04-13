@@ -13,9 +13,23 @@
 # limitations under the License.
 
 
-from nerfstudio.data.datasets.base_dataset import *
-from typing import Callable, Optional
+import torch
+from torch import Tensor
+import numpy as np
+from pathlib import Path
+from typing import Callable, Optional, Literal, List, Tuple, Dict
+from jaxtyping import Float, UInt8
 import cv2
+from PIL import Image
+
+from concurrent.futures import ThreadPoolExecutor
+from tqdm import tqdm
+
+import math
+
+from spirulae_splat.splat.utils import resize_image
+from spirulae_splat.modules.camera import Cameras
+from copy import deepcopy
 
 
 def get_image_mask_tensor_from_path(filepath: Path, height: int, width: int) -> torch.Tensor:
@@ -147,29 +161,9 @@ def get_normal_image_from_path(
     # return image / torch.norm(image, dim=-1, keepdim=True).clip(min=1e-12)
 
 
-def compute_overexposure_mask(img: torch.Tensor, image_type: Literal['uint8', 'float32']):
-    """Compute over exposure mask, should suffice for most unedited real-world photos"""
-    import cv2
-    img = img.numpy()
-    if image_type == "uint8":
-        img = img.astype(np.float32) / 255.0
-    gray = 0.2126 * img[...,0] + 0.7152 * img[...,1] + 0.0722 * img[...,2]
-    mask = (gray > 0.97) | ((img[...,0] > 0.98) & (img[...,1] > 0.98) & (img[...,2] > 0.98))
-    mask = cv2.GaussianBlur(mask.astype(np.float32), (5,5), 0)
-    mask = (mask < 0.5).astype(np.bool_)
-    return torch.from_numpy(mask).unsqueeze(-1)
 
 
-from concurrent.futures import ThreadPoolExecutor
-from tqdm import tqdm
-
-import math
-
-from spirulae_splat.splat.utils import resize_image
-
-
-
-class SpirulaeDataset(InputDataset):
+class SpirulaeSplatDataset:
     """Dataset that returns images.
 
     Args:
@@ -180,29 +174,26 @@ class SpirulaeDataset(InputDataset):
     exclude_batch_keys_from_device: List[str] = ["image", "mask"]
     cameras: Cameras
 
-    def __init__(self, dataparser_outputs: DataparserOutputs, scale_factor: float = 1.0, *args, **kwargs):
-        super().__init__(dataparser_outputs, scale_factor, *args, **kwargs)
+    def __init__(self, dataparser_outputs: dict, scale_factor: float = 1.0, *args, **kwargs):
         self._dataparser_outputs = dataparser_outputs
         self.scale_factor = scale_factor
-        self.scene_box = deepcopy(dataparser_outputs.scene_box)
-        self.metadata = deepcopy(dataparser_outputs.metadata)
-        self.cameras = deepcopy(dataparser_outputs.cameras)
-        self.cameras.rescale_output_resolution(scaling_factor=scale_factor)
-        self.mask_color = dataparser_outputs.metadata.get("mask_color", None)
-        self.load_thumbnails = dataparser_outputs.metadata.get("load_thumbnails", True)
-        self.mask_overexposure = dataparser_outputs.metadata.get("mask_overexposure", False)
-        self.val_indices = set(dataparser_outputs.metadata.get("val_indices", []))
+        self.metadata = deepcopy(dataparser_outputs['metadata'])
+        self.cameras = deepcopy(dataparser_outputs['cameras'])
+        self.cameras.rescale(scale_factor)
+        self.mask_color = dataparser_outputs['metadata'].get("mask_color", None)
+        self.load_thumbnails = dataparser_outputs['metadata'].get("load_thumbnails", True)
+        self.val_indices = set(dataparser_outputs['metadata'].get("val_indices", []))
 
     def __len__(self):
-        return len(self._dataparser_outputs.image_filenames)
+        return len(self._dataparser_outputs['image_filenames'])
 
-    def get_numpy_image(self, image_idx: int) -> npt.NDArray[np.uint8]:
+    def get_numpy_image(self, image_idx: int):
         """Returns the image of shape (H, W, 3 or 4).
 
         Args:
             image_idx: The image index in the dataset.
         """
-        image_filename = self._dataparser_outputs.image_filenames[image_idx]
+        image_filename = self._dataparser_outputs['image_filenames'][image_idx]
         image = get_image_from_path(image_filename, self.scale_factor)
         assert image.dtype in [np.uint8, np.uint16, np.float16, np.float32], f"Unsupported image dtype {image.dtype} for image {image_filename}"
         assert image.shape[2] in [3, 4], f"Image shape of {image.shape} is in correct."
@@ -220,11 +211,11 @@ class SpirulaeDataset(InputDataset):
         elif image.dtype not in [np.float32]:
             image = np.maximum(image.astype(np.float32), 0.0)
         image = torch.from_numpy(image.astype("float32"))
-        if self._dataparser_outputs.alpha_color is not None and image.shape[-1] == 4:
-            assert (self._dataparser_outputs.alpha_color >= 0).all() and (
-                self._dataparser_outputs.alpha_color <= 1
+        if 'alpha_color' in self._dataparser_outputs and image.shape[-1] == 4:
+            assert (self._dataparser_outputs['alpha_color'] >= 0).all() and (
+                self._dataparser_outputs['alpha_color'] <= 1
             ).all(), "alpha color given is out of range between [0, 1]."
-            image = image[:, :, :3] * image[:, :, -1:] + self._dataparser_outputs.alpha_color * (1.0 - image[:, :, -1:])
+            image = image[:, :, :3] * image[:, :, -1:] + self._dataparser_outputs['alpha_color'] * (1.0 - image[:, :, -1:])
         return image
 
     def get_image_uint8(self, image_idx: int) -> UInt8[Tensor, "image_height image_width num_channels"]:
@@ -243,12 +234,12 @@ class SpirulaeDataset(InputDataset):
             except:
                 raise NotImplementedError("16-bit images are not supported in this version of PyTorch. Please upgrade to PyTorch 2.3 or later, or convert your images to 8-bit.")
         image = torch.from_numpy(image)
-        if self._dataparser_outputs.alpha_color is not None and image.shape[-1] == 4:  # RGBA
-            assert (self._dataparser_outputs.alpha_color >= 0).all() and (
-                self._dataparser_outputs.alpha_color <= 1
+        if 'alpha_color' in self._dataparser_outputs and image.shape[-1] == 4:  # RGBA
+            assert (self._dataparser_outputs['alpha_color'] >= 0).all() and (
+                self._dataparser_outputs['alpha_color'] <= 1
             ).all(), "alpha color given is out of range between [0, 1]."
             max_value = (65535.0 if image.dtype == torch.uint16 else 255.0) if image.dtype in [torch.uint16, torch.uint8] else 1.0
-            image = image[:, :, :3] * (image[:, :, -1:] / max_value) + max_value * self._dataparser_outputs.alpha_color * (
+            image = image[:, :, :3] * (image[:, :, -1:] / max_value) + max_value * self._dataparser_outputs['alpha_color'] * (
                 1.0 - image[:, :, -1:] / max_value
             )
             image = torch.clamp(image, min=0, max=max_value).to(image.dtype)
@@ -319,8 +310,8 @@ class SpirulaeDataset(InputDataset):
             raise NotImplementedError(f"image_type (={image_type}) getter was not implemented, use uint8 or float32")
 
         data = {"image_idx": image_idx, "image": image}
-        if self._dataparser_outputs.mask_filenames is not None:
-            mask_filepath = self._dataparser_outputs.mask_filenames[image_idx]
+        if self._dataparser_outputs['mask_filenames'] is not None:
+            mask_filepath = self._dataparser_outputs['mask_filenames'][image_idx]
             data["mask"] = get_image_mask_tensor_from_path(
                 filepath=mask_filepath,
                 width=data["image"].shape[1], height=data["image"].shape[0]
@@ -329,16 +320,16 @@ class SpirulaeDataset(InputDataset):
                 data["mask"].shape[:2] == data["image"].shape[:2]
             ), f"Mask and image have different shapes. Got {data['mask'].shape[:2]} and {data['image'].shape[:2]}"
         if load_depths:
-            if self._dataparser_outputs.metadata.get("depth_filenames", None) is not None:
-                depth_filepath = self._dataparser_outputs.metadata["depth_filenames"][image_idx]
+            if self._dataparser_outputs['metadata'].get("depth_filenames", None) is not None:
+                depth_filepath = self._dataparser_outputs['metadata']["depth_filenames"][image_idx]
                 data["depth"] = get_depth_image_from_path(
                     filepath=depth_filepath, scale_factor=self.scale_factor,
                     width=data["image"].shape[1], height=data["image"].shape[0]
                 )
                 # assert data["depth"].shape[:2] == data["image"].shape[:2]
         if load_normals:
-            if self._dataparser_outputs.metadata.get("normal_filenames", None) is not None:
-                normal_filepath = self._dataparser_outputs.metadata["normal_filenames"][image_idx]
+            if self._dataparser_outputs['metadata'].get("normal_filenames", None) is not None:
+                normal_filepath = self._dataparser_outputs['metadata']["normal_filenames"][image_idx]
                 data["normal"] = get_normal_image_from_path(
                     filepath=normal_filepath,
                     width=data["image"].shape[1], height=data["image"].shape[0]
@@ -348,12 +339,6 @@ class SpirulaeDataset(InputDataset):
             data["image"] = torch.where(
                 data["mask"] == 1.0, data["image"], torch.ones_like(data["image"]) * torch.tensor(self.mask_color)
             )
-        if self.mask_overexposure:
-            o_mask = compute_overexposure_mask(data["image"], image_type)
-            if "mask" not in data:
-                data['mask'] = o_mask
-            else:
-                data['mask'] = data['mask'] & o_mask
 
         metadata = self.get_metadata(data)
         data.update(metadata)
@@ -378,10 +363,10 @@ class SpirulaeDataset(InputDataset):
         The order of filenames is the same as in the Cameras object for easy mapping.
         """
 
-        return self._dataparser_outputs.image_filenames
+        return self._dataparser_outputs['image_filenames']
 
 
-class IndexedDatasetWrapper(Dataset):
+class IndexedDatasetWrapper(torch.utils.data.Dataset):
 
     def __init__(
             self,

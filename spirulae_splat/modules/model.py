@@ -30,17 +30,15 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 from pytorch_msssim import SSIM
 
-from spirulae_splat.splat._torch_impl import quat_to_rotmat, quat_scale_to_covar_preci
+from spirulae_splat.splat._torch_impl import quat_to_rotmat
 from spirulae_splat.splat import (
     rasterization,
     depth_to_normal,
-    BLOCK_WIDTH,
 )
-from spirulae_splat.splat.utils import resize_image, _TORCH_COMPILE_ARGS
+from spirulae_splat.splat.utils import resize_image
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
 from spirulae_splat.strategy import DefaultStrategy, MCMCStrategy, OpaqueStrategy, SVRasterStrategy
-from spirulae_splat.splat._camera import _Camera
 
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
 from spirulae_splat.splat.cuda._wrapper_per_pixel import (
@@ -57,18 +55,13 @@ from spirulae_splat.splat.cuda import (
 
 from nerfstudio.cameras.camera_optimizers import (CameraOptimizer,
                                                   CameraOptimizerConfig)
-from nerfstudio.cameras.cameras import Cameras, CameraType
-from nerfstudio.data.scene_box import OrientedBox
 from nerfstudio.engine.callbacks import (TrainingCallback,
                                          TrainingCallbackAttributes,
                                          TrainingCallbackLocation)
 from nerfstudio.engine.optimizers import Optimizers
-# need following import for background color override
-from nerfstudio.model_components import renderers
-from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils.colors import get_color
-from nerfstudio.utils.rich_utils import CONSOLE
 
+from spirulae_splat.modules.camera import Cameras
 
 
 class SaturateKeepGradient(torch.autograd.Function):
@@ -85,9 +78,7 @@ def saturate_keep_gradient(x, xmin=None, xmax=None):
 
 
 @dataclass
-class SpirulaeModelConfig(ModelConfig):
-
-    _target: Type = field(default_factory=lambda: SpirulaeModel)
+class SpirulaeSplatModelConfig:
 
     primitive: Literal["3dgs", "mip", "3dgut", "3dgut_sv", "opaque_triangle", "voxel"] = "3dgut"
     """Splat primitive to use"""
@@ -385,21 +376,27 @@ class SpirulaeModelConfig(ModelConfig):
     """Warmup steps for early stop, will not early stop before this number of steps
         Recommend setting this number no less than regularization warmups"""
 
-class SpirulaeModel(Model):
+class SpirulaeSplatModel(torch.nn.Module):
     """Template Model."""
 
-    config: SpirulaeModelConfig
+    config: SpirulaeSplatModelConfig
 
     def __init__(
         self,
-        *args,
+        config: SpirulaeSplatModelConfig,
         seed_points: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         cameras: Optional[Cameras] = None,
-        **kwargs,
     ):
-        self.seed_points = seed_points
+        super().__init__()
+
+        self.config = config
+        self.seed_points = (seed_points['points3D_xyz'], seed_points['points3D_rgb'])
         self.cameras = cameras
-        super().__init__(*args, **kwargs)
+
+        self.num_train_data = len(self.cameras)
+        self.info = {}
+
+        self.populate_modules()
 
     def populate_modules(self):
         if self.seed_points is not None and not self.config.random_init:
@@ -571,7 +568,6 @@ class SpirulaeModel(Model):
 
         self.step = 0
 
-        self.crop_box: Optional[OrientedBox] = None
         if self.config.background_color == "random":
             self.background_color = torch.tensor(
                 [0.1490, 0.1647, 0.2157]
@@ -826,10 +822,6 @@ class SpirulaeModel(Model):
         scales += (original_mean - scales.mean().item())
         return scales
 
-
-    def set_crop(self, crop_box: Optional[OrientedBox]):
-        self.crop_box = crop_box
-
     def set_background(self, background_color: torch.Tensor):
         assert background_color.shape == (3,)
         # self.background_color = background_color
@@ -994,6 +986,9 @@ class SpirulaeModel(Model):
     def get_empty_outputs(width: int, height: int, background: torch.Tensor) -> Dict[str, Union[torch.Tensor, List]]:
         return {}
 
+    def forward(self):
+        raise NotImplementedError()
+
     def get_outputs(self, camera: Cameras, val: bool=False) -> Dict[str, Union[torch.Tensor, List]]:
         """Takes in a camera and returns a dictionary of outputs."""
 
@@ -1022,7 +1017,7 @@ class SpirulaeModel(Model):
 
         # TODO: separate different sizes/intrins
         W, H = int(camera.width[0].item()), int(camera.height[0].item())
-        is_fisheye = (camera.camera_type[0].item() == CameraType.FISHEYE.value)
+        is_fisheye = (camera.camera_type[0] == "FISHEYE")
 
         R = optimized_camera_to_world[:, :3, :3]  # 3 x 3
         T = optimized_camera_to_world[:, :3, 3:4]  # 3 x 1
@@ -1035,8 +1030,7 @@ class SpirulaeModel(Model):
         viewmats[:, :3, :3] = R_inv
         viewmats[:, :3, 3:4] = T_inv
 
-        # Call GSplat for 3DGS rendering
-        intrins = torch.concatenate((camera.fx, camera.fy, camera.cx, camera.cy), dim=1)
+        intrins = camera.intrins
         
         kwargs = {'actual_width': W, 'actual_height': H}
         if 'actual_width' in camera.metadata:
@@ -1262,7 +1256,7 @@ class SpirulaeModel(Model):
             self.info = {
                 "width": kwargs["actual_width"],
                 "height": kwargs["actual_height"],
-                "n_cameras": camera.shape[0],
+                "n_cameras": len(camera),
                 "n_train": self.num_train_data,
                 "radii": radii,
                 "means2d": means2d,
@@ -1706,7 +1700,7 @@ class SpirulaeModel(Model):
         trainer.gradient_accumulation_steps  # type: dict[str, int]
 
     @torch.no_grad()
-    def get_outputs_for_camera(self, camera: Cameras, obb_box: Optional[OrientedBox] = None) -> Dict[str, torch.Tensor]:
+    def get_outputs_for_camera(self, camera: Cameras) -> Dict[str, torch.Tensor]:
         """Takes in a camera, generates the raybundle, and computes the output of the model.
         Overridden for a camera-based gaussian model.
 

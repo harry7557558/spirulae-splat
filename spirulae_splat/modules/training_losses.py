@@ -425,7 +425,7 @@ DEFAULT_PPISP_PARAMS_RQS = [
 
 class SplatTrainingLosses(torch.nn.Module):
 
-    def __init__(self, config: 'spirulae_splat.ns_model.SpirulaeModelConfig', num_training_data):
+    def __init__(self, config: 'spirulae_splat.modules.model.SpirulaeModelConfig', num_training_data):
         super().__init__()
 
         self.step = 0
@@ -522,7 +522,9 @@ class SplatTrainingLosses(torch.nn.Module):
     def apply_bilateral_grid(self, bilagrid_wrapped: List, rgb: torch.Tensor, cam_idx: int, bilagrid_type: Optional[str] = None, **kwargs) -> torch.Tensor:
         """rgb must be clamped to 0-1"""
         try:
-            grid_idx = torch.tensor(cam_idx, device=rgb.device, dtype=torch.long).flatten()
+            grid_idx = cam_idx
+            if isinstance(grid_idx, int):
+                grid_idx = torch.tensor(grid_idx, device=rgb.device, dtype=torch.long).flatten()
             # grids = bilagrid.grids[grid_idx]
             grids = _MemoryEfficientBilagridFetch.apply(self._dummy, bilagrid_wrapped, grid_idx)
             if self.config.optimize_bilagrid_frequencies:
@@ -591,7 +593,7 @@ class SplatTrainingLosses(torch.nn.Module):
 
         device = outputs['rgb'].device
         camera = outputs["camera"]
-        intrins = torch.concatenate((camera.fx, camera.fy, camera.cx, camera.cy), dim=1)
+        intrins = camera.intrins
 
         # If reference image is empty, AI generate from rendered image
         if "image" not in batch:
@@ -773,7 +775,7 @@ class SplatTrainingLosses(torch.nn.Module):
         # handle multi-resolution loss
 
         if pred_depth_normal is None and pred_depth is not None and (pred_normal is not None or gt_normal is not None):
-            is_fisheye = (camera.camera_type[0].item() == CameraType.FISHEYE.value)
+            is_fisheye = (camera.camera_type[0] == "FISHEYE")
             pred_depth_normal = depth_to_normal(
                 pred_depth, ["pinhole", "fisheye"][is_fisheye],
                 intrins, camera.distortion_params,
