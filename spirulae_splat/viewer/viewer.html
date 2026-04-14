@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>3D Renderer Viewer</title>
+<style>
+  :root {
+    --bg: #0d0e12;
+    --panel-bg: #13151c;
+    --panel-border: #252836;
+    --accent: #4f8ef7;
+    --accent2: #7c5af0;
+    --text: #c8cad4;
+    --text-dim: #5a5e72;
+    --text-bright: #e8eaf2;
+    --slider-track: #252836;
+    --slider-thumb: #4f8ef7;
+    --input-bg: #1a1d28;
+    --panel-width: 280px;
+    --header-h: 48px;
+    --font: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 12px;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ── Header ─────────────────────────────────────────── */
+  #header {
+    height: var(--header-h);
+    background: var(--panel-bg);
+    border-bottom: 1px solid var(--panel-border);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 16px;
+    flex-shrink: 0;
+    z-index: 10;
+  }
+  #header .logo {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-bright);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  #header .logo span { color: var(--accent); }
+  #status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #555;
+    transition: background 0.3s;
+    flex-shrink: 0;
+  }
+  #status-dot.connected  { background: #4ecb71; box-shadow: 0 0 6px #4ecb71aa; }
+  #status-dot.rendering  { background: var(--accent); box-shadow: 0 0 6px var(--accent)aa; animation: pulse 0.8s ease-in-out infinite alternate; }
+  #status-dot.error      { background: #e05555; }
+  @keyframes pulse { to { opacity: 0.3; } }
+  #status-text {
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  #fps-counter {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-dim);
+    min-width: 80px;
+    text-align: right;
+  }
+
+  /* ── Main layout ─────────────────────────────────────── */
+  #main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Viewport ────────────────────────────────────────── */
+  #viewport {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background: #080810;
+    cursor: grab;
+    user-select: none;
+    touch-action: none;
+  }
+  #viewport:active { cursor: grabbing; }
+  #canvas-img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    image-rendering: auto;
+  }
+  #overlay-info {
+    position: absolute;
+    bottom: 12px;
+    left: 16px;
+    font-size: 10px;
+    color: var(--text-dim);
+    line-height: 1.6;
+    pointer-events: none;
+  }
+  #nav-hint {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.55);
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-size: 10px;
+    color: var(--text-dim);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.4s;
+    white-space: nowrap;
+  }
+  #nav-hint.visible { opacity: 1; }
+
+  /* ── Control panel ───────────────────────────────────── */
+  #panel {
+    width: var(--panel-width);
+    background: var(--panel-bg);
+    border-left: 1px solid var(--panel-border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+
+  .panel-section {
+    border-bottom: 1px solid var(--panel-border);
+    padding: 14px 14px 16px;
+  }
+  .panel-section-title {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+  }
+
+  /* Controls */
+  .ctrl-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 12px;
+  }
+  .ctrl-row:last-child { margin-bottom: 0; }
+
+  .ctrl-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    color: var(--text);
+  }
+  .ctrl-label .val {
+    font-size: 10px;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  /* Slider */
+  input[type=range] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 4px;
+    background: var(--slider-track);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--slider-thumb);
+    cursor: pointer;
+    box-shadow: 0 0 4px var(--accent)66;
+    transition: transform 0.1s;
+  }
+  input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.2); }
+  input[type=range]::-moz-range-thumb {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--slider-thumb);
+    cursor: pointer;
+    border: none;
+  }
+
+  /* Select */
+  select {
+    width: 100%;
+    background: var(--input-bg);
+    color: var(--text-bright);
+    border: 1px solid var(--panel-border);
+    border-radius: 3px;
+    padding: 5px 8px;
+    font-family: var(--font);
+    font-size: 11px;
+    outline: none;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235a5e72'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    padding-right: 24px;
+  }
+  select:focus { border-color: var(--accent); }
+
+  /* Camera pose display */
+  #pose-display {
+    font-size: 9.5px;
+    color: var(--text-dim);
+    line-height: 1.7;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Reset button */
+  .btn {
+    width: 100%;
+    padding: 7px 0;
+    background: var(--input-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 3px;
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 11px;
+    cursor: pointer;
+    transition: border-color 0.2s, color 0.2s;
+    text-align: center;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--text-bright); }
+
+  /* Scrollbar */
+  #panel::-webkit-scrollbar { width: 4px; }
+  #panel::-webkit-scrollbar-track { background: var(--panel-bg); }
+  #panel::-webkit-scrollbar-thumb { background: var(--panel-border); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────── -->
+<div id="header">
+  <div class="logo"><span>3D</span> VIEWER</div>
+  <div id="status-dot"></div>
+  <div id="status-text">Connecting…</div>
+  <div id="fps-counter">— fps</div>
+</div>
+
+<!-- ── Main ──────────────────────────────────────────── -->
+<div id="main">
+
+  <!-- Viewport -->
+  <div id="viewport">
+    <img id="canvas-img" src="" alt="" draggable="false"/>
+    <div id="nav-hint"></div>
+    <div id="overlay-info"></div>
+  </div>
+
+  <!-- Control panel -->
+  <div id="panel">
+
+    <!-- Navigation mode -->
+    <div class="panel-section">
+      <div class="panel-section-title">Navigation</div>
+      <div class="ctrl-row">
+        <div class="ctrl-label"><span>Mode</span></div>
+        <select id="nav-mode">
+          <option value="orbit">Orbit (Trackball)</option>
+          <option value="turntable">Turntable (Z-up)</option>
+          <option value="fps">First Person</option>
+          <option value="fly">Free Fly</option>
+        </select>
+      </div>
+      <div class="ctrl-row">
+        <div class="ctrl-label">
+          <span>Move Speed</span>
+          <span class="val" id="speed-val">1.0</span>
+        </div>
+        <input type="range" id="move-speed" min="-2" max="2" step="0.1" value="0"/>
+      </div>
+      <button class="btn" id="btn-reset-pose">Reset Camera</button>
+    </div>
+
+    <!-- Camera / render settings -->
+    <div class="panel-section">
+      <div class="panel-section-title">Camera</div>
+
+      <div class="ctrl-row">
+        <div class="ctrl-label"><span>Model</span></div>
+        <select id="camera-model">
+          <option value="PINHOLE">Pinhole</option>
+          <option value="FISHEYE">Fisheye</option>
+        </select>
+      </div>
+
+      <div class="ctrl-row">
+        <div class="ctrl-label">
+          <span>Field of View</span>
+          <span class="val" id="fov-val">60°</span>
+        </div>
+        <input type="range" id="fov-slider" min="10" max="150" step="1" value="60"/>
+      </div>
+
+      <div class="ctrl-row">
+        <div class="ctrl-label">
+          <span>Max Resolution</span>
+          <span class="val" id="res-val">720p</span>
+        </div>
+        <input type="range" id="res-slider" min="1" max="8" step="1" value="4"/>
+      </div>
+    </div>
+
+    <!-- Visualization -->
+    <div class="panel-section">
+      <div class="panel-section-title">Visualize</div>
+      <div class="ctrl-row">
+        <div class="ctrl-label"><span>Buffer</span></div>
+        <select id="buffer-key">
+          <option value="rgb">rgb</option>
+        </select>
+      </div>
+      <!-- Additional dynamic controls injected here -->
+      <div id="extra-controls"></div>
+    </div>
+
+    <!-- Pose readout -->
+    <div class="panel-section">
+      <div class="panel-section-title">Camera Pose</div>
+      <div id="pose-display">—</div>
+    </div>
+
+  </div><!-- /panel -->
+</div><!-- /main -->
+
+<script>
+"use strict";
+
+// ═══════════════════════════════════════════════════════
+// Configuration (injected by server)
+// ═══════════════════════════════════════════════════════
+const CFG = {
+  wsUrl: "ws://WS_HOST:WS_PORT",
+  extraSliders: EXTRA_SLIDERS_JSON,    // [{id, label, min, max, step, value, unit}]
+  extraDropdowns: EXTRA_DROPDOWNS_JSON, // [{id, label, options:[{value,label}], default}]
+};
+
+// ═══════════════════════════════════════════════════════
+// Utilities
+// ═══════════════════════════════════════════════════════
+const $ = id => document.getElementById(id);
+
+function mat4identity() {
+  return new Float64Array([
+    1,0,0,0,
+    0,1,0,0,
+    0,0,1,0,
+    0,0,0,1,
+  ]);
+}
+
+// 3-vector ops
+const v3 = {
+  add: (a,b)  => [a[0]+b[0], a[1]+b[1], a[2]+b[2]],
+  sub: (a,b)  => [a[0]-b[0], a[1]-b[1], a[2]-b[2]],
+  scale: (a,s)=> [a[0]*s, a[1]*s, a[2]*s],
+  dot: (a,b)  => a[0]*b[0]+a[1]*b[1]+a[2]*b[2],
+  cross: (a,b)=> [
+    a[1]*b[2]-a[2]*b[1],
+    a[2]*b[0]-a[0]*b[2],
+    a[0]*b[1]-a[1]*b[0],
+  ],
+  norm: a => { const l=Math.hypot(...a); return l>1e-12?[a[0]/l,a[1]/l,a[2]/l]:[0,0,1]; },
+  len: a => Math.hypot(...a),
+};
+
+// Quaternion: [x,y,z,w]
+const quat = {
+  identity: ()=>[0,0,0,1],
+  mul(a,b){
+    return [
+      a[3]*b[0]+a[0]*b[3]+a[1]*b[2]-a[2]*b[1],
+      a[3]*b[1]-a[0]*b[2]+a[1]*b[3]+a[2]*b[0],
+      a[3]*b[2]+a[0]*b[1]-a[1]*b[0]+a[2]*b[3],
+      a[3]*b[3]-a[0]*b[0]-a[1]*b[1]-a[2]*b[2],
+    ];
+  },
+  fromAxisAngle(axis, angle){
+    const s=Math.sin(angle/2);
+    return [...v3.scale(v3.norm(axis),s), Math.cos(angle/2)];
+  },
+  norm(q){
+    const l=Math.hypot(...q);
+    return l>1e-12?q.map(x=>x/l):[0,0,0,1];
+  },
+  toMatrix3x4(q, t=[0,0,0]){
+    const [x,y,z,w]=q;
+    const x2=x*x,y2=y*y,z2=z*z;
+    return [
+      1-2*(y2+z2), 2*(x*y-z*w), 2*(x*z+y*w), t[0],
+      2*(x*y+z*w), 1-2*(x2+z2), 2*(y*z-x*w), t[1],
+      2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x2+y2), t[2],
+    ];
+  },
+  // Rotate vector by quaternion
+  rotVec(q,[vx,vy,vz]){
+    const [x,y,z,w]=q;
+    const tx=2*(y*vz-z*vy), ty=2*(z*vx-x*vz), tz=2*(x*vy-y*vx);
+    return [vx+w*tx+y*tz-z*ty, vy+w*ty+z*tx-x*tz, vz+w*tz+x*ty-y*tx];
+  },
+};
+
+// ═══════════════════════════════════════════════════════
+// Camera State
+// ═══════════════════════════════════════════════════════
+const cam = {
+  // position of camera in world
+  pos: [0, 0, 5],
+  // orientation as quaternion (camera-to-world rotation)
+  rot: quat.identity(),
+
+  // orbit / turntable target
+  target: [0, 0, 0],
+
+  // build 3×4 c2w matrix (row-major, 12 floats)
+  c2w() {
+    return quat.toMatrix3x4(this.rot, this.pos);
+  },
+
+  // Camera axes in world space
+  right()   { return quat.rotVec(this.rot, [1,0,0]); },
+  up()      { return quat.rotVec(this.rot, [0,1,0]); },
+  forward() { return quat.rotVec(this.rot, [0,0,-1]); },
+
+  reset() {
+    this.pos = [0, 0, 5];
+    this.rot = quat.identity();
+    this.target = [0, 0, 0];
+  },
+};
+
+// ═══════════════════════════════════════════════════════
+// Resolution table
+// ═══════════════════════════════════════════════════════
+const RES_STEPS = [
+  { label: "144p",  h: 144  },
+  { label: "240p",  h: 240  },
+  { label: "360p",  h: 360  },
+  { label: "480p",  h: 480  },
+  { label: "720p",  h: 720  },
+  { label: "1080p", h: 1080 },
+  { label: "1440p", h: 1440 },
+  { label: "4K",    h: 2160 },
+];
+
+function getResolution(sliderVal) {
+  const idx = Math.min(parseInt(sliderVal)-1, RES_STEPS.length-1);
+  const step = RES_STEPS[idx];
+  const vpW = $("viewport").clientWidth;
+  const vpH = $("viewport").clientHeight;
+  const screenMaxH = Math.min(window.screen.height, vpH);
+  const h = Math.min(step.h, screenMaxH);
+  const aspect = vpW / vpH;
+  const w = Math.round(h * aspect);
+  return { w: Math.max(w,64), h: Math.max(h,64), label: step.label };
+}
+
+function fovToIntrinsics(fovDeg, w, h) {
+  const fovRad = fovDeg * Math.PI / 180;
+  const fx = (w / 2) / Math.tan(fovRad / 2);
+  const fy = fx;
+  return { fx, fy, cx: w/2, cy: h/2 };
+}
+
+// ═══════════════════════════════════════════════════════
+// Navigation
+// ═══════════════════════════════════════════════════════
+const Nav = {
+  mode: "orbit",   // orbit | turntable | fps | fly
+
+  // Mouse / touch state
+  _dragging: false,
+  _lastX: 0, _lastY: 0,
+  _touchDist: 0, // for pinch
+  _pointers: {},  // pointerId → {x,y}
+
+  // Keyboard state
+  _keys: {},
+
+  // Speed (1.0 base; multiplied by 10^moveSpeedExp)
+  _speedExp: 0,
+
+  get speed() { return Math.pow(10, this._speedExp); },
+
+  setMode(m) {
+    this.mode = m;
+    showHint(hintFor(m));
+  },
+
+  // ── orbit (trackball) ──────────────────────────────
+  orbit(dx, dy) {
+    const sensitivity = 0.005;
+    const right = cam.right();
+    const up = [0,1,0]; // world up for yaw
+    const qa = quat.fromAxisAngle(up, -dx * sensitivity);
+    const qb = quat.fromAxisAngle(right, -dy * sensitivity);
+    cam.rot = quat.norm(quat.mul(quat.mul(qa, qb), cam.rot));
+    // Keep camera on orbit sphere
+    const dist = v3.len(v3.sub(cam.pos, cam.target));
+    const newFwd = quat.rotVec(cam.rot, [0,0,1]);
+    cam.pos = v3.add(cam.target, v3.scale(newFwd, dist));
+  },
+
+  // ── turntable (z-up azimuth/elevation) ────────────
+  _azimuth: 0, _elevation: 0.4, _radius: 5,
+  turntable(dx, dy) {
+    const s = 0.005;
+    this._azimuth   -= dx * s;
+    this._elevation  = Math.max(-Math.PI/2+0.01,
+                        Math.min(Math.PI/2-0.01, this._elevation - dy * s));
+    this._applyTurntable();
+  },
+  _applyTurntable() {
+    const az = this._azimuth, el = this._elevation, r = this._radius;
+    const cosEl = Math.cos(el);
+    const x = r * cosEl * Math.sin(az);
+    const y = r * cosEl * Math.cos(az);
+    const z = r * Math.sin(el);
+    cam.pos = v3.add(cam.target, [x, y, z]);
+
+    // Orient camera to look at target with z-up
+    const fwd = v3.norm(v3.sub(cam.target, cam.pos));
+    const worldUp = [0, 0, 1];
+    const right = v3.norm(v3.cross(fwd, worldUp));
+    const up = v3.cross(right, fwd);
+    // Build rotation matrix → quaternion
+    const m = [right[0],up[0],-fwd[0],
+               right[1],up[1],-fwd[1],
+               right[2],up[2],-fwd[2]];
+    cam.rot = quat.norm(mat3ToQuat(m));
+  },
+
+  // ── fps / fly ──────────────────────────────────────
+  look(dx, dy) {
+    const s = 0.003;
+    const qa = quat.fromAxisAngle([0,1,0], -dx * s);
+    const qb = quat.fromAxisAngle(cam.right(), -dy * s);
+    if (this.mode === "fps") {
+      // Constrain roll: yaw around world-y, pitch around local-x
+      cam.rot = quat.norm(quat.mul(qa, cam.rot));
+      cam.rot = quat.norm(quat.mul(cam.rot, quat.fromAxisAngle([1,0,0], -dy*s)));
+    } else {
+      cam.rot = quat.norm(quat.mul(quat.mul(qa, qb), cam.rot));
+    }
+  },
+
+  // ── pan ────────────────────────────────────────────
+  pan(dx, dy) {
+    const s = this.speed * 0.004;
+    const right   = cam.right();
+    const up      = cam.up();
+    const delta   = v3.add(v3.scale(right, -dx*s), v3.scale(up, dy*s));
+    cam.pos    = v3.add(cam.pos, delta);
+    cam.target = v3.add(cam.target, delta);
+    if (this.mode === "turntable") this._applyTurntable();
+  },
+
+  // ── zoom / dolly ───────────────────────────────────
+  dolly(delta) {
+    const s = this.speed * 0.5;
+    if (this.mode === "turntable") {
+      this._radius = Math.max(0.05, this._radius * (1 + delta * 0.001 * s));
+      this._applyTurntable();
+    } else {
+      const fwd = cam.forward();
+      cam.pos = v3.add(cam.pos, v3.scale(fwd, -delta * 0.004 * s));
+      cam.target = v3.add(cam.target, v3.scale(fwd, -delta * 0.004 * s));
+    }
+  },
+
+  // ── keyboard walk ─────────────────────────────────
+  keyboardTick(dt) {
+    if (this.mode !== "fps" && this.mode !== "fly") return;
+    const s = this.speed * dt * 3;
+    const k = this._keys;
+    const fwd   = cam.forward();
+    const right = cam.right();
+    const up    = this.mode === "fps" ? [0,1,0] : cam.up();
+    let move = [0,0,0];
+    if (k["w"]||k["arrowup"])    move = v3.add(move, v3.scale(fwd, s));
+    if (k["s"]||k["arrowdown"])  move = v3.add(move, v3.scale(fwd, -s));
+    if (k["a"]||k["arrowleft"])  move = v3.add(move, v3.scale(right, -s));
+    if (k["d"]||k["arrowright"]) move = v3.add(move, v3.scale(right, s));
+    if (k["e"]||k[" "])          move = v3.add(move, v3.scale(up, s));
+    if (k["q"]||k["shift"])      move = v3.add(move, v3.scale(up, -s));
+    if (v3.len(move) > 1e-12) {
+      cam.pos    = v3.add(cam.pos, move);
+      cam.target = v3.add(cam.target, move);
+      Viewer.requestRender();
+    }
+  },
+};
+
+// Build quaternion from 3x3 column-major array
+function mat3ToQuat(m) {
+  const [m00,m10,m20,m01,m11,m21,m02,m12,m22] = m;
+  const trace = m00+m11+m22;
+  if (trace > 0) {
+    const s = 0.5/Math.sqrt(trace+1);
+    return [(m21-m12)*s, (m02-m20)*s, (m10-m01)*s, 0.25/s];
+  } else if (m00>m11 && m00>m22) {
+    const s = 2*Math.sqrt(1+m00-m11-m22);
+    return [0.25*s, (m01+m10)/s, (m02+m20)/s, (m21-m12)/s];
+  } else if (m11>m22) {
+    const s = 2*Math.sqrt(1+m11-m00-m22);
+    return [(m01+m10)/s, 0.25*s, (m12+m21)/s, (m02-m20)/s];
+  } else {
+    const s = 2*Math.sqrt(1+m22-m00-m11);
+    return [(m02+m20)/s, (m12+m21)/s, 0.25*s, (m10-m01)/s];
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// Hint overlay
+// ═══════════════════════════════════════════════════════
+const HINTS = {
+  orbit:      "LMB Drag: Orbit  |  RMB/MMB Drag: Pan  |  Scroll: Zoom",
+  turntable:  "LMB Drag: Rotate (Z-up)  |  MMB Drag: Pan  |  Scroll: Zoom",
+  fps:        "WASD/Arrows: Move  |  E/Q: Up/Down  |  LMB Drag: Look",
+  fly:        "WASD/Arrows: Move  |  E/Q: Up/Down  |  LMB Drag: Look (free roll)",
+};
+function hintFor(m) { return HINTS[m] || ""; }
+let _hintTimer = null;
+function showHint(text) {
+  const el = $("nav-hint");
+  el.textContent = text;
+  el.classList.add("visible");
+  clearTimeout(_hintTimer);
+  _hintTimer = setTimeout(() => el.classList.remove("visible"), 3500);
+}
+
+// ═══════════════════════════════════════════════════════
+// Dynamic control injection (extensibility API)
+// ═══════════════════════════════════════════════════════
+function injectExtraControls() {
+  const container = $("extra-controls");
+  container.innerHTML = "";
+
+  for (const sl of (CFG.extraSliders||[])) {
+    const row = document.createElement("div");
+    row.className = "ctrl-row";
+    row.innerHTML = `
+      <div class="ctrl-label">
+        <span>${sl.label}</span>
+        <span class="val" id="${sl.id}-val">${sl.value}${sl.unit||""}</span>
+      </div>
+      <input type="range" id="${sl.id}" min="${sl.min}" max="${sl.max}"
+             step="${sl.step}" value="${sl.value}"/>
+    `;
+    container.appendChild(row);
+    const input = row.querySelector("input");
+    const valEl = row.querySelector(".val");
+    input.addEventListener("input", () => {
+      valEl.textContent = input.value + (sl.unit||"");
+      Viewer.requestRender();
+    });
+  }
+
+  for (const dd of (CFG.extraDropdowns||[])) {
+    const row = document.createElement("div");
+    row.className = "ctrl-row";
+    const opts = dd.options.map(o=>`<option value="${o.value}"${o.value===dd.default?" selected":""}>${o.label}</option>`).join("");
+    row.innerHTML = `
+      <div class="ctrl-label"><span>${dd.label}</span></div>
+      <select id="${dd.id}">${opts}</select>
+    `;
+    container.appendChild(row);
+    row.querySelector("select").addEventListener("change", () => Viewer.requestRender());
+  }
+}
+
+function getExtraValues() {
+  const result = {};
+  for (const sl of (CFG.extraSliders||[]))    result[sl.id] = parseFloat($(sl.id)?.value ?? sl.value);
+  for (const dd of (CFG.extraDropdowns||[]))  result[dd.id] = $(dd.id)?.value ?? dd.default;
+  return result;
+}
+
+// ═══════════════════════════════════════════════════════
+// WebSocket client
+// ═══════════════════════════════════════════════════════
+let ws = null;
+let _reconnectDelay = 1000;
+let _pendingMetaKey = null;
+
+function wsConnect() {
+  setStatus("connecting");
+  ws = new WebSocket(CFG.wsUrl);
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => {
+    _reconnectDelay = 1000;
+    setStatus("connected");
+    Viewer.requestRender();
+  };
+
+  ws.onclose = () => {
+    setStatus("disconnected");
+    setTimeout(wsConnect, _reconnectDelay);
+    _reconnectDelay = Math.min(_reconnectDelay * 2, 16000);
+  };
+
+  ws.onerror = () => setStatus("error");
+
+  ws.onmessage = (ev) => {
+    if (typeof ev.data === "string") {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === "frame") {
+        _pendingMetaKey = msg.key;
+      } else if (msg.type === "buffer_keys") {
+        updateBufferKeyDropdown(msg.keys);
+      } else if (msg.type === "error" || msg.type === "encode_error") {
+        console.warn("[renderer3d]", msg.message);
+      }
+    } else {
+      // Binary: JPEG payload for _pendingMetaKey
+      if (_pendingMetaKey === null) return;
+      const key = _pendingMetaKey;
+      _pendingMetaKey = null;
+      const currentKey = $("buffer-key").value;
+      if (key === currentKey) {
+        const blob = new Blob([ev.data], {type: "image/jpeg"});
+        const url = URL.createObjectURL(blob);
+        const img = $("canvas-img");
+        const old = img.src;
+        img.onload = () => { URL.revokeObjectURL(old); };
+        img.src = url;
+        Viewer.onFrameReceived();
+        setStatus("connected");
+      }
+    }
+  };
+}
+
+function sendRenderRequest() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const fov = parseInt($("fov-slider").value);
+  const resSlider = $("res-slider").value;
+  const res = getResolution(resSlider);
+  const { fx, fy, cx, cy } = fovToIntrinsics(fov, res.w, res.h);
+  const cameraModel = $("camera-model").value;
+
+  const msg = {
+    type: "render_request",
+    c2w: Array.from(cam.c2w()),
+    fx, fy, cx, cy,
+    width: res.w,
+    height: res.h,
+    camera_model: cameraModel,
+    extra: getExtraValues(),
+  };
+  ws.send(JSON.stringify(msg));
+  setStatus("rendering");
+}
+
+// ═══════════════════════════════════════════════════════
+// Buffer key dropdown
+// ═══════════════════════════════════════════════════════
+function updateBufferKeyDropdown(keys) {
+  const sel = $("buffer-key");
+  const current = sel.value;
+  sel.innerHTML = "";
+  for (const k of keys) {
+    const opt = document.createElement("option");
+    opt.value = k;
+    opt.textContent = k;
+    if (k === current) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  if (!keys.includes(current) && keys.includes("rgb")) {
+    sel.value = "rgb";
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// Status / FPS
+// ═══════════════════════════════════════════════════════
+function setStatus(s) {
+  const dot = $("status-dot");
+  const txt = $("status-text");
+  dot.className = "";
+  if (s === "connecting")    { txt.textContent="Connecting…"; }
+  else if (s === "connected"){ dot.classList.add("connected"); txt.textContent="Connected"; }
+  else if (s === "rendering"){ dot.classList.add("rendering"); txt.textContent="Rendering…"; }
+  else if (s === "disconnected"){ txt.textContent="Disconnected. Retrying…"; }
+  else if (s === "error")    { dot.classList.add("error"); txt.textContent="Error"; }
+}
+
+const FPS = (() => {
+  let frames=[], last=0;
+  return {
+    tick(){
+      const now = performance.now();
+      frames.push(now);
+      frames = frames.filter(t=>now-t<1000);
+      if (now-last > 250) {
+        last=now;
+        $("fps-counter").textContent = frames.length.toFixed(0)+" fps";
+      }
+    }
+  };
+})();
+
+// ═══════════════════════════════════════════════════════
+// Pose display
+// ═══════════════════════════════════════════════════════
+function updatePoseDisplay() {
+  const m = cam.c2w();
+  const rows = [
+    [m[0],m[1],m[2],m[3]],
+    [m[4],m[5],m[6],m[7]],
+    [m[8],m[9],m[10],m[11]],
+  ];
+  $("pose-display").textContent = rows.map(r=>
+    r.map(v=>(v>=0?" ":"")+v.toFixed(3)).join("  ")
+  ).join("\n");
+}
+
+// ═══════════════════════════════════════════════════════
+// Viewer: glue layer + render throttle
+// ═══════════════════════════════════════════════════════
+const Viewer = (() => {
+  let _dirty = false;
+  let _pending = false;
+  let _lastRenderTime = 0;
+  const MIN_INTERVAL = 33; // ~30 fps cap on requests
+
+  function requestRender() {
+    _dirty = true;
+    if (!_pending) {
+      _pending = true;
+      requestAnimationFrame(_flush);
+    }
+  }
+
+  function _flush() {
+    _pending = false;
+    if (!_dirty) return;
+    const now = performance.now();
+    if (now - _lastRenderTime < MIN_INTERVAL) {
+      _pending = true;
+      requestAnimationFrame(_flush);
+      return;
+    }
+    _dirty = false;
+    _lastRenderTime = now;
+    updatePoseDisplay();
+    sendRenderRequest();
+  }
+
+  function onFrameReceived() {
+    FPS.tick();
+  }
+
+  return { requestRender, onFrameReceived };
+})();
+
+// ═══════════════════════════════════════════════════════
+// Event wiring
+// ═══════════════════════════════════════════════════════
+
+// ── Pointer (mouse + touch) ────────────────────────────
+const vp = $("viewport");
+let _button = -1;
+
+vp.addEventListener("pointerdown", e => {
+  vp.setPointerCapture(e.pointerId);
+  Nav._pointers[e.pointerId] = {x: e.clientX, y: e.clientY};
+  Nav._lastX = e.clientX;
+  Nav._lastY = e.clientY;
+  Nav._dragging = true;
+  _button = e.button; // 0=LMB,1=MMB,2=RMB
+  e.preventDefault();
+});
+
+vp.addEventListener("pointermove", e => {
+  Nav._pointers[e.pointerId] = {x: e.clientX, y: e.clientY};
+  const pointerIds = Object.keys(Nav._pointers);
+
+  // Pinch-zoom (two fingers)
+  if (pointerIds.length === 2) {
+    const [p1, p2] = pointerIds.map(id => Nav._pointers[id]);
+    const dist = Math.hypot(p2.x-p1.x, p2.y-p1.y);
+    if (Nav._touchDist > 0) {
+      Nav.dolly((Nav._touchDist - dist) * 4);
+      Viewer.requestRender();
+    }
+    Nav._touchDist = dist;
+    return;
+  }
+
+  if (!Nav._dragging) return;
+  const dx = e.clientX - Nav._lastX;
+  const dy = e.clientY - Nav._lastY;
+  Nav._lastX = e.clientX;
+  Nav._lastY = e.clientY;
+  if (dx===0 && dy===0) return;
+
+  const mode = Nav.mode;
+  const isRMB = _button === 2;
+  const isMMB = _button === 1;
+
+  if (mode === "orbit") {
+    if (isRMB || isMMB) Nav.pan(dx, dy);
+    else                Nav.orbit(dx, dy);
+  } else if (mode === "turntable") {
+    if (isMMB || isRMB) Nav.pan(dx, dy);
+    else                Nav.turntable(dx, dy);
+  } else {
+    // fps / fly
+    Nav.look(dx, dy);
+  }
+  Viewer.requestRender();
+});
+
+vp.addEventListener("pointerup", e => {
+  delete Nav._pointers[e.pointerId];
+  if (Object.keys(Nav._pointers).length === 0) {
+    Nav._dragging = false;
+    Nav._touchDist = 0;
+  }
+});
+vp.addEventListener("pointercancel", e => {
+  delete Nav._pointers[e.pointerId];
+  Nav._dragging = false;
+  Nav._touchDist = 0;
+});
+
+// Disable context menu on right-click in viewport
+vp.addEventListener("contextmenu", e => e.preventDefault());
+
+// Scroll = zoom / dolly
+vp.addEventListener("wheel", e => {
+  e.preventDefault();
+  Nav.dolly(e.deltaY);
+  Viewer.requestRender();
+}, { passive: false });
+
+// ── Keyboard ───────────────────────────────────────────
+window.addEventListener("keydown", e => {
+  Nav._keys[e.key.toLowerCase()] = true;
+});
+window.addEventListener("keyup", e => {
+  Nav._keys[e.key.toLowerCase()] = false;
+});
+
+// Keyboard tick loop
+let _lastTick = performance.now();
+function keyboardLoop() {
+  const now = performance.now();
+  const dt = Math.min((now - _lastTick) / 1000, 0.1);
+  _lastTick = now;
+  Nav.keyboardTick(dt);
+  requestAnimationFrame(keyboardLoop);
+}
+requestAnimationFrame(keyboardLoop);
+
+// ── Controls ───────────────────────────────────────────
+$("nav-mode").addEventListener("change", e => {
+  Nav.setMode(e.target.value);
+  Viewer.requestRender();
+});
+
+$("move-speed").addEventListener("input", e => {
+  Nav._speedExp = parseFloat(e.target.value);
+  $("speed-val").textContent = Nav.speed.toFixed(Nav.speed<0.1?3:Nav.speed<1?2:1)+"×";
+});
+
+$("fov-slider").addEventListener("input", e => {
+  $("fov-val").textContent = e.target.value + "°";
+  Viewer.requestRender();
+});
+
+$("res-slider").addEventListener("input", e => {
+  const res = getResolution(e.target.value);
+  $("res-val").textContent = res.label;
+  Viewer.requestRender();
+});
+
+$("camera-model").addEventListener("change", () => Viewer.requestRender());
+$("buffer-key").addEventListener("change", () => Viewer.requestRender());
+
+$("btn-reset-pose").addEventListener("click", () => {
+  cam.reset();
+  Nav._azimuth = 0; Nav._elevation = 0.4; Nav._radius = 5;
+  if (Nav.mode === "turntable") Nav._applyTurntable();
+  Viewer.requestRender();
+});
+
+// Window resize → re-render
+window.addEventListener("resize", () => {
+  const res = getResolution($("res-slider").value);
+  $("res-val").textContent = res.label;
+  Viewer.requestRender();
+});
+
+// ═══════════════════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════════════════
+(function init() {
+  injectExtraControls();
+  showHint(hintFor("orbit"));
+  wsConnect();
+  // Initial res label
+  const res = getResolution($("res-slider").value);
+  $("res-val").textContent = res.label;
+})();
+</script>
+</body>
+</html>

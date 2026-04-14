@@ -42,7 +42,7 @@ do {                                                                \
 
 #define _CEIL_DIV(n,m) (((n)+(m)-1)/(m))
 
-#define _LAUNCH_ARGS_1D(n,b) _CEIL_DIV(n,b),b,0,at::cuda::getCurrentCUDAStream()
+#define _LAUNCH_ARGS_1D(n,b) ((n)==0?1:_CEIL_DIV(n,b)),b,0,at::cuda::getCurrentCUDAStream()
 #define _LAUNCH_ARGS_2D(nx,ny,bx,by) dim3(_CEIL_DIV(nx,bx),_CEIL_DIV(ny,by),1),dim3(bx,by),0,at::cuda::getCurrentCUDAStream()
 #define _LAUNCH_ARGS_3D(nx,ny,nz,bx,by,bz) dim3(_CEIL_DIV(nx,bx),_CEIL_DIV(ny,by),_CEIL_DIV(nz,bz)),dim3(bx,by,bz),0,at::cuda::getCurrentCUDAStream()
 

@@ -570,7 +570,7 @@ def render_background_sh(
         sh_components = components_from_spherical_harmonics(sh_degree, directions)  # [w*h, deg^2]
     else:
         # TODO: currently degree 4 only
-        from spirulae_splat.viewer.utils import generate_sh_basis
+        from spirulae_splat.viewer_legacy.utils import generate_sh_basis
         sh_components = generate_sh_basis(directions, "nerfstudio")
 
     bg_flat = torch.matmul(sh_components, sh_coeffs)  # [w*h, 3]

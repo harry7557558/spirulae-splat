@@ -6,8 +6,8 @@ import json
 import numpy as np
 import cv2
 
-from spirulae_splat.viewer.model import SplatModel
-from spirulae_splat.viewer.camera import Camera
+from spirulae_splat.viewer_legacy.model import SplatModel
+from spirulae_splat.viewer_legacy.camera import Camera
 
 import threading
 from concurrent.futures import ThreadPoolExecutor

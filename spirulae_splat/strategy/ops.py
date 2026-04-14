@@ -9,7 +9,7 @@ from spirulae_splat.splat._torch_impl import quat_to_rotmat, quat_scale_to_covar
 
 from spirulae_splat.splat.cuda._wrapper_projection import _make_lazy_cuda_func
 
-from spirulae_splat.viewer.utils import (
+from spirulae_splat.viewer_legacy.utils import (
     quat_scale_to_triangle_verts,
     split_triangles,
     split_triangles_4,

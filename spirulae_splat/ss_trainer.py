@@ -11,6 +11,8 @@ from spirulae_splat.modules.datamanager import SpirulaeSplatDataManagerConfig, S
 from spirulae_splat.modules.dataparser import SpirulaeSplatDataparser, SpirualeSplatDataParserConfig
 from spirulae_splat.modules.dataset import SpirulaeSplatDataset
 
+from spirulae_splat.viewer.server import ViewerServer, SliderDef, DropdownDef
+
 
 @dataclass
 class SpirulaeSplatTrainerConfig:
@@ -49,14 +51,12 @@ class SpirulaeSplatTrainer:
             self.dataparser_outputs['cameras']
         ).cuda()
 
-    def get_train_loss_dict(self, step: int):
-        """This function gets your training loss dict. This will be responsible for
-        getting the next batch of data from the DataManager and interfacing with the
-        Model class, feeding the data to the model's forward function.
+    def render(self, c2w, fx, fy, cx, cy, w, h, camera_model):
+        camera = Cameras((fx, fy, cx, cy), [0.0]*10, h, w, torch.from_numpy(c2w), camera_model)
+        self.model.eval()
+        return self.model.get_outputs(camera)
 
-        Args:
-            step: current iteration step to update sampler if using DDP (distributed)
-        """
+    def get_train_loss_dict(self, step: int):
         inputs = self.datamanager.next_train(step)  # type: List[Tuple[Cameras, Dict]]
         if isinstance(inputs, tuple):
             train_inputs, val_inputs = inputs
@@ -66,6 +66,7 @@ class SpirulaeSplatTrainer:
             inputs = [((train_inputs[0], val_inputs[0]), (train_inputs[1], val_inputs[1]))]
 
         for i, (camera, batch) in enumerate(inputs):
+            self.model.train()
             # torch.cuda.empty_cache()
             model_outputs = self.model.get_outputs(camera)
             # torch.cuda.empty_cache()
@@ -88,6 +89,37 @@ def entrypoint():
     config = tyro.cli(SpirulaeSplatTrainerConfig)
     trainer = SpirulaeSplatTrainer(config)
 
+    server = ViewerServer(
+        render_fn=trainer.render,
+        http_host="localhost",
+        http_port=7007,
+        ws_host="localhost",
+        ws_port=8765,
+        jpeg_quality=75,
+        # Example extra controls:
+        # extra_sliders=[
+        #     SliderDef(id="brightness", label="Brightness", min=0.5, max=2.0, step=0.05, value=1.0, unit="×"),
+        #     SliderDef(id="anim_speed", label="Anim Speed", min=0.0, max=5.0, step=0.1, value=1.0, unit="×"),
+        # ],
+        # extra_dropdowns=[
+        #     DropdownDef(
+        #         id="shading_mode",
+        #         label="Shading",
+        #         options=[
+        #             {"value": "full", "label": "Full"},
+        #             {"value": "diffuse", "label": "Diffuse"},
+        #             {"value": "specular", "label": "Specular"},
+        #         ],
+        #         default="full",
+        #     ),
+        # ],
+        open_browser=False,
+    )
+
+    server.start()
+    server.wait()
+
+    return
     for i in range(1000):
         model_outputs, loss_dict, metrics_dict = trainer.get_train_loss_dict(0)
         loss = torch.stack([x for x in loss_dict.values() if isinstance(x, torch.Tensor)]).sum()

@@ -11,14 +11,14 @@ from spirulae_splat.splat.sh import spherical_harmonics
 from spirulae_splat.splat._torch_impl import quat_mult
 from spirulae_splat.splat.cuda import ray_depth_to_linear_depth
 
-from spirulae_splat.viewer.utils import (
+from spirulae_splat.viewer_legacy.utils import (
     quat_to_rotmat,
     rotmat_to_quat,
     quat_scale_to_triangle_verts,
     triangle_verts_to_quat_scale_mean,
 )
 
-from spirulae_splat.viewer.camera import Camera
+from spirulae_splat.viewer_legacy.camera import Camera
 
 from spirulae_splat.perf_timer import PerfTimer
 timer = PerfTimer("render")
@@ -151,7 +151,7 @@ class SplatModel:
     @torch.no_grad
     def change_frame(self, rot, tr, sc):
         from scipy.spatial.transform import Rotation
-        from spirulae_splat.viewer.utils import rotate_sh_coeffs
+        from spirulae_splat.viewer_legacy.utils import rotate_sh_coeffs
 
         if isinstance(rot, np.ndarray):
             rot = torch.from_numpy(rot).to(self.means)
@@ -302,7 +302,7 @@ class SplatModel:
             return rgbd, 1.0-Ts, meta
 
         if ssplat_camera.model == "EQUIRECTANGULAR":
-            from spirulae_splat.viewer.render_equirectangular import render_equirectangular
+            from spirulae_splat.viewer_legacy.render_equirectangular import render_equirectangular
             is_fisheye = False
             kwargs = {}
             rgb = render_equirectangular(

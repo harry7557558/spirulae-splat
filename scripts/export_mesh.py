@@ -22,8 +22,8 @@ from typing_extensions import Annotated
 # from nerfstudio.utils.eval_utils import eval_setup
 from nerfstudio.utils.rich_utils import CONSOLE
 
-from spirulae_splat.viewer.model import SplatModel
-from spirulae_splat.viewer.camera import Camera
+from spirulae_splat.viewer_legacy.model import SplatModel
+from spirulae_splat.viewer_legacy.camera import Camera
 
 from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map
 from spirulae_splat.splat import depth_to_normal

@@ -7,8 +7,8 @@ from plyfile import PlyData, PlyElement
 from typing import Dict
 import os
 
-from spirulae_splat.viewer.model import SplatModel
-from spirulae_splat.viewer.camera import Camera
+from spirulae_splat.viewer_legacy.model import SplatModel
+from spirulae_splat.viewer_legacy.camera import Camera
 
 from scipy.spatial.transform import Rotation
 
@@ -284,7 +284,7 @@ if __name__ == "__main__":
         print()
         print("markers.yaml detected in dataset directory, attempt to align using markers")
         print()
-        from spirulae_splat.viewer.align_apriltag import get_alignment
+        from spirulae_splat.viewer_legacy.align_apriltag import get_alignment
         rot, tr, sc = get_alignment(args.dataset_dir, verbose=True)
         model.change_frame(rot, tr, sc)
         print("Alignment complete.")

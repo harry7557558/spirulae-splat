@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import numpy as np
-from spirulae_splat.viewer.model import SplatModel
+from spirulae_splat.viewer_legacy.model import SplatModel
 
 from dataclasses import dataclass
 from typing import Optional, Tuple

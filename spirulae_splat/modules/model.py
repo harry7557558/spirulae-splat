@@ -951,7 +951,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         if W is None or H is None:
             W, H = int(camera.width[0].item()), int(camera.height[0].item())
         if is_fisheye is None:
-            is_fisheye = (camera.camera_type[0].item() == CameraType.FISHEYE.value)
+            is_fisheye = (camera.camera_type[0] == "FISHEYE")
         sh_degree = self.config.background_sh_degree
 
         if self.config.randomize_background == True:
@@ -1708,7 +1708,6 @@ class SpirulaeSplatModel(torch.nn.Module):
             camera: generates raybundle
         """
         assert camera is not None, "must provide camera to gaussian model"
-        self.set_crop(obb_box)
         outs = self.get_outputs(camera.to(self.device))
         return outs  # type: ignore
 

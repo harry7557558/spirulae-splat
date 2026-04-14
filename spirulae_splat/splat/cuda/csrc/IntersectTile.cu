@@ -397,7 +397,8 @@ std::tuple<
     at::Tensor cum_tiles_per_splat = at::cumsum(tiles_per_splat, /*dim=*/-1);
 
     /* For each splat, write out keys (intersected tile ID in higher bits, and depth in lower bits) at the correct offsets */
-    int64_t n_isects = cum_tiles_per_splat[-1].item<int64_t>();
+    int64_t n_isects = cum_tiles_per_splat.numel() > 0 ?
+        cum_tiles_per_splat[-1].item<int64_t>() : 0;
     at::Tensor isect_ids = at::empty(
         {n_isects},
         at::TensorOptions().device(aabb.device()).dtype(at::kLong)

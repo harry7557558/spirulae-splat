@@ -63,9 +63,21 @@ class Cameras:
         camera_type: Union[str, List[str]],
         metadata: Optional[dict] = {}
     ):
+        # camera to worlds
+        if camera_to_worlds.ndim == 2:
+            camera_to_worlds = camera_to_worlds[None]
+        assert camera_to_worlds.ndim == 3 and \
+            camera_to_worlds.shape[1] == 3 and \
+            camera_to_worlds.shape[2] == 4, \
+            f"camera_to_worlds must be (N, 3, 4), you have {camera_to_worlds.shape}"
+        num_cameras = len(camera_to_worlds)
+
         # intrinsics
         if isinstance(intrins, Tensor):
+            if intrins.ndim == 1:
+                intrins = intrins[None].repeat(num_cameras, 1)
             assert intrins.ndim == 2 and intrins.shape[-1] == 4, f"Intrinsics must be (N, 4), got {intrins.shape}"
+            assert intrins.shape[0] == num_cameras
         elif isinstance(intrins, tuple) or isinstance(intrins, list):
             assert len(intrins) == 4, "Intrinsics must be (N, 4)"
             numel = 1
@@ -73,7 +85,7 @@ class Cameras:
                 if isinstance(x, torch.Tensor):
                     numel = x.numel()
             intrins = [x.float().reshape(numel) if isinstance(x, torch.Tensor)
-                       else torch.Tensor(x).float().repeat(numel)
+                       else torch.full((), x).float().repeat(numel)
                        for x in intrins]
             intrins = torch.stack(intrins, dim=-1)
         else:
@@ -81,14 +93,16 @@ class Cameras:
 
         # distortion parameters
         if isinstance(distortion_params, Tensor):
-            assert distortion_params.ndim == 2 and distortion_params.shape[0] == intrins.shape[0]
+            if distortion_params.ndim == 1:
+                distortion_params = distortion_params[None].repeat(num_cameras, 1)
+            assert distortion_params.ndim == 2 and distortion_params.shape[0] == num_cameras, distortion_params.shape
         elif isinstance(distortion_params, tuple) or isinstance(distortion_params, list):
             numel = 1
             for x in distortion_params:
                 if isinstance(x, torch.Tensor):
                     numel = x.numel()
             distortion_params = [x.float().reshape(numel) if isinstance(x, torch.Tensor)
-                       else torch.Tensor(x).float().repeat(numel)
+                       else torch.full((), x).float().repeat(numel)
                        for x in distortion_params]
             distortion_params = torch.stack(distortion_params, dim=-1)
         else:
@@ -96,27 +110,20 @@ class Cameras:
 
         # height and width
         if isinstance(height, Tensor):
-            assert height.ndim == 1 and len(height) == len(intrins)
+            assert height.ndim == 1 and len(height) == num_cameras
         else:
-            height = torch.Tensor(height).repeat(len(intrins))
+            height = torch.full((), height).repeat(num_cameras)
         if isinstance(width, Tensor):
-            assert width.ndim == 1 and len(width) == len(intrins)
+            assert width.ndim == 1 and len(width) == num_cameras
             width = width.int()
         else:
-            width = torch.Tensor(width).repeat(len(intrins))
-
-        # camera to worlds
-        assert camera_to_worlds.ndim == 3 and \
-            camera_to_worlds.shape[0] == len(intrins) and \
-            camera_to_worlds.shape[1] == 3 and \
-            camera_to_worlds.shape[2] == 4, \
-            f"camera_to_worlds must be (N, 3, 4), you have {camera_to_worlds.shape}"
+            width = torch.full((), width).repeat(num_cameras)
 
         # camera type
         if isinstance(camera_type, str):
-            camera_type = [camera_type] * len(intrins)
+            camera_type = [camera_type] * num_cameras
         else:
-            assert len(camera_type) == len(intrins)
+            assert len(camera_type) == num_cameras
 
         self.intrins = intrins.float()
         self.distortion_params = distortion_params.float()
