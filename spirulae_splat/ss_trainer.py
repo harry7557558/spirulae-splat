@@ -14,6 +14,7 @@ from spirulae_splat.modules.dataparser import SpirulaeSplatDataparser, SpirualeS
 from spirulae_splat.modules.dataset import SpirulaeSplatDataset
 
 from spirulae_splat.viewer.server import ViewerServer, SliderDef, DropdownDef
+from spirulae_splat.viewer.annotation import annotate_train_cameras
 
 
 @dataclass
@@ -57,7 +58,9 @@ class SpirulaeSplatTrainer:
 
     def _render(self, c2w, fx, fy, cx, cy, w, h, camera_model):
         camera = Cameras((fx, fy, cx, cy), [0.0]*10, h, w, torch.from_numpy(c2w), camera_model)
-        return self.model.get_outputs(camera)
+        outputs = self.model.get_outputs(camera)
+        outputs['rgb'] = annotate_train_cameras(outputs['rgb'], outputs['depth'], outputs['alpha'], camera, self.model.cameras)
+        return outputs
 
     def render(self, *args):
         with self.lock:
@@ -129,7 +132,7 @@ async def start_viewer(trainer: SpirulaeSplatTrainer):
 
 def train(trainer: SpirulaeSplatTrainer):
     optim = torch.optim.Adam(trainer.model.parameters(), lr=1e-4, fused=True)
-    for i in range(30000):
+    for i in range(1):
         optim.zero_grad()
         model_outputs, loss_dict, metrics_dict = trainer.get_train_loss_dict(0)
         loss = torch.stack([x for x in loss_dict.values() if isinstance(x, torch.Tensor)]).sum()

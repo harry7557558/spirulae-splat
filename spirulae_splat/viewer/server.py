@@ -122,7 +122,7 @@ class ViewerServer:
         http_port: int = 7007,
         ws_host: str = "localhost",
         ws_port: int = 8765,
-        jpeg_quality: int = 75,
+        jpeg_quality: int = 85,
         extra_sliders: Optional[List[SliderDef]] = None,
         extra_dropdowns: Optional[List[DropdownDef]] = None,
         open_browser: bool = True,

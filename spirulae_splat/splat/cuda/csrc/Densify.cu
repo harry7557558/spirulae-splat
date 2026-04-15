@@ -46,6 +46,8 @@ void inplace_index_tensor(
     CHECK_INPUT(src);
     CHECK_INPUT(dst);
 
+    if (indices.numel() == 0)
+        return;
     index_kernel<<<_LAUNCH_ARGS_1D(dst.numel(), 256)>>>(
         dst.numel(),
         dst.numel() / indices.numel(),
@@ -106,6 +108,8 @@ void inplace_scatter_add_tensor(
     CHECK_INPUT(src);
     CHECK_INPUT(dst);
 
+    if (indices.numel() == 0)
+        return;
     scatter_add_kernel<<<_LAUNCH_ARGS_1D(src.numel(), 256)>>>(
         src.numel(),
         src.numel() / indices.numel(),
@@ -127,6 +131,8 @@ void inplace_scatter_max_tensor(
     CHECK_INPUT(src);
     CHECK_INPUT(dst);
 
+    if (indices.numel() == 0)
+        return;
     scatter_max_kernel<<<_LAUNCH_ARGS_1D(src.numel(), 256)>>>(
         src.numel(),
         src.numel() / indices.numel(),
