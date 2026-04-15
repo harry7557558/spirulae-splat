@@ -283,10 +283,10 @@
     <div class="panel-section">
       <div class="panel-section-title">Navigation</div>
       <div class="ctrl-row">
-        <div class="ctrl-label"><span>Mode</span></div>
+        <div class="ctrl-label"><span>Navigation Mode</span></div>
         <select id="nav-mode">
-          <option value="orbit">Orbit (Trackball)</option>
-          <option value="turntable">Turntable (Z-up)</option>
+          <option value="turntable">Turntable</option>
+          <option value="trackball">Trackball</option>
           <option value="fps">First Person</option>
           <option value="fly">Free Fly</option>
         </select>
@@ -306,7 +306,7 @@
       <div class="panel-section-title">Camera</div>
 
       <div class="ctrl-row">
-        <div class="ctrl-label"><span>Model</span></div>
+        <div class="ctrl-label"><span>Camera Model</span></div>
         <select id="camera-model">
           <option value="PINHOLE">Pinhole</option>
           <option value="FISHEYE">Fisheye</option>
@@ -495,7 +495,7 @@ function fovToIntrinsics(fovDeg, w, h) {
 // Navigation
 // ═══════════════════════════════════════════════════════
 const Nav = {
-  mode: "orbit",   // orbit | turntable | fps | fly
+  mode: "turntable",   // turntable | trackball | fps | fly
 
   // Mouse / touch state
   _dragging: false,
@@ -520,7 +520,7 @@ const Nav = {
   orbit(dx, dy) {
     const sensitivity = 0.005;
     const right = cam.right();
-    const up = [0,1,0]; // world up for yaw
+    const up = this.mode === "trackball" ? cam.up() : [0,0,1];
     const qa = quat.fromAxisAngle(up, -dx * sensitivity);
     const qb = quat.fromAxisAngle(right, -dy * sensitivity);
     cam.rot = quat.norm(quat.mul(quat.mul(qa, qb), cam.rot));
@@ -531,8 +531,8 @@ const Nav = {
   },
 
   // ── turntable (z-up azimuth/elevation) ────────────
-  _azimuth: 0, _elevation: 0.4, _radius: 5,
   turntable(dx, dy) {
+    return;
     const s = 0.005;
     this._azimuth   -= dx * s;
     this._elevation  = Math.max(-Math.PI/2+0.01,
@@ -549,7 +549,7 @@ const Nav = {
 
     // Orient camera to look at target with z-up
     const fwd = v3.norm(v3.sub(cam.target, cam.pos));
-    const worldUp = [0, 0, 1];
+    const worldUp = [0, 1, 0];
     const right = v3.norm(v3.cross(fwd, worldUp));
     const up = v3.cross(right, fwd);
     // Build rotation matrix → quaternion
@@ -562,12 +562,13 @@ const Nav = {
   // ── fps / fly ──────────────────────────────────────
   look(dx, dy) {
     const s = 0.003;
-    const qa = quat.fromAxisAngle([0,1,0], -dx * s);
+    const qa = quat.fromAxisAngle(cam.up(), -dx * s);
     const qb = quat.fromAxisAngle(cam.right(), -dy * s);
     if (this.mode === "fps") {
       // Constrain roll: yaw around world-y, pitch around local-x
-      cam.rot = quat.norm(quat.mul(qa, cam.rot));
-      cam.rot = quat.norm(quat.mul(cam.rot, quat.fromAxisAngle([1,0,0], -dy*s)));
+      // cam.rot = quat.norm(quat.mul(qa, cam.rot));
+      cam.rot = quat.norm(quat.mul(cam.rot, quat.fromAxisAngle([0,1,0], -dx*s)));
+      cam.rot = quat.norm(quat.mul(qb, cam.rot));
     } else {
       cam.rot = quat.norm(quat.mul(quat.mul(qa, qb), cam.rot));
     }
@@ -581,16 +582,17 @@ const Nav = {
     const delta   = v3.add(v3.scale(right, -dx*s), v3.scale(up, dy*s));
     cam.pos    = v3.add(cam.pos, delta);
     cam.target = v3.add(cam.target, delta);
-    if (this.mode === "turntable") this._applyTurntable();
   },
 
   // ── zoom / dolly ───────────────────────────────────
   dolly(delta) {
     const s = this.speed * 0.5;
-    if (this.mode === "turntable") {
-      this._radius = Math.max(0.05, this._radius * (1 + delta * 0.001 * s));
-      this._applyTurntable();
+    if (this.mode == "trackball" || this.mode === "turntable") {
+      // scale around target
+      const fwd = cam.forward();
+      cam.pos = v3.add(v3.scale(v3.sub(cam.pos, cam.target), Math.exp(delta * 0.004 * s)), cam.target);
     } else {
+      // move forward
       const fwd = cam.forward();
       cam.pos = v3.add(cam.pos, v3.scale(fwd, -delta * 0.004 * s));
       cam.target = v3.add(cam.target, v3.scale(fwd, -delta * 0.004 * s));
@@ -599,12 +601,11 @@ const Nav = {
 
   // ── keyboard walk ─────────────────────────────────
   keyboardTick(dt) {
-    if (this.mode !== "fps" && this.mode !== "fly") return;
     const s = this.speed * dt * 3;
     const k = this._keys;
     const fwd   = cam.forward();
     const right = cam.right();
-    const up    = this.mode === "fps" ? [0,1,0] : cam.up();
+    const up    = this.mode === "turntable" || this.mode === "fps" ? [0,0,1] : cam.up();
     let move = [0,0,0];
     if (k["w"]||k["arrowup"])    move = v3.add(move, v3.scale(fwd, s));
     if (k["s"]||k["arrowdown"])  move = v3.add(move, v3.scale(fwd, -s));
@@ -643,10 +644,10 @@ function mat3ToQuat(m) {
 // Hint overlay
 // ═══════════════════════════════════════════════════════
 const HINTS = {
-  orbit:      "LMB Drag: Orbit  |  RMB/MMB Drag: Pan  |  Scroll: Zoom",
-  turntable:  "LMB Drag: Rotate (Z-up)  |  MMB Drag: Pan  |  Scroll: Zoom",
-  fps:        "WASD/Arrows: Move  |  E/Q: Up/Down  |  LMB Drag: Look",
-  fly:        "WASD/Arrows: Move  |  E/Q: Up/Down  |  LMB Drag: Look (free roll)",
+  turntable: "LMB Drag: Orbit  |  MMB Drag: Pan  |  Scroll: Zoom",
+  trackball: "LMB Drag: Rotate  |  RMB/MMB Drag: Pan  |  Scroll: Zoom",
+  fps: "WASD/Arrows: Move  |  E/Q: Up/Down  |  LMB Drag: Look",
+  fly: "WASD/Arrows: Move  |  E/Q: Up/Down  |  LMB Drag: Look (free roll)",
 };
 function hintFor(m) { return HINTS[m] || ""; }
 let _hintTimer = null;
@@ -929,14 +930,11 @@ vp.addEventListener("pointermove", e => {
   const isRMB = _button === 2;
   const isMMB = _button === 1;
 
-  if (mode === "orbit") {
-    if (isRMB || isMMB) Nav.pan(dx, dy);
-    else                Nav.orbit(dx, dy);
-  } else if (mode === "turntable") {
-    if (isMMB || isRMB) Nav.pan(dx, dy);
-    else                Nav.turntable(dx, dy);
+  if (isMMB || isRMB) {
+    Nav.pan(dx, dy);
+  } else if (mode === "trackball" || mode === "turntable") {
+    Nav.orbit(dx, dy);
   } else {
-    // fps / fly
     Nav.look(dx, dy);
   }
   Viewer.requestRender();
@@ -1028,7 +1026,7 @@ window.addEventListener("resize", () => {
 // ═══════════════════════════════════════════════════════
 (function init() {
   injectExtraControls();
-  showHint(hintFor("orbit"));
+  showHint(hintFor("turntable"));
   wsConnect();
   // Initial res label
   const res = getResolution($("res-slider").value);

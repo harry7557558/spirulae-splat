@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Type, List, Tuple, Dict
 from pathlib import Path
+import threading
+import asyncio
 
 import torch
 
@@ -51,12 +53,18 @@ class SpirulaeSplatTrainer:
             self.dataparser_outputs['cameras']
         ).cuda()
 
-    def render(self, c2w, fx, fy, cx, cy, w, h, camera_model):
+        self.lock = threading.Lock()
+
+    def _render(self, c2w, fx, fy, cx, cy, w, h, camera_model):
         camera = Cameras((fx, fy, cx, cy), [0.0]*10, h, w, torch.from_numpy(c2w), camera_model)
-        self.model.eval()
         return self.model.get_outputs(camera)
 
-    def get_train_loss_dict(self, step: int):
+    def render(self, *args):
+        with self.lock:
+            self.model.eval()
+            return self._render(*args)
+
+    def _get_train_loss_dict(self, step: int):
         inputs = self.datamanager.next_train(step)  # type: List[Tuple[Cameras, Dict]]
         if isinstance(inputs, tuple):
             train_inputs, val_inputs = inputs
@@ -66,7 +74,6 @@ class SpirulaeSplatTrainer:
             inputs = [((train_inputs[0], val_inputs[0]), (train_inputs[1], val_inputs[1]))]
 
         for i, (camera, batch) in enumerate(inputs):
-            self.model.train()
             # torch.cuda.empty_cache()
             model_outputs = self.model.get_outputs(camera)
             # torch.cuda.empty_cache()
@@ -82,12 +89,13 @@ class SpirulaeSplatTrainer:
 
         return model_outputs, loss_dict, metrics_dict
 
+    def get_train_loss_dict(self, *args):
+        with self.lock:
+            self.model.train()
+            return self._get_train_loss_dict(*args)
 
 
-def entrypoint():
-    import tyro
-    config = tyro.cli(SpirulaeSplatTrainerConfig)
-    trainer = SpirulaeSplatTrainer(config)
+async def start_viewer(trainer: SpirulaeSplatTrainer):
 
     server = ViewerServer(
         render_fn=trainer.render,
@@ -119,11 +127,29 @@ def entrypoint():
     server.start()
     server.wait()
 
-    return
-    for i in range(1000):
+def train(trainer: SpirulaeSplatTrainer):
+    optim = torch.optim.Adam(trainer.model.parameters(), lr=1e-4, fused=True)
+    for i in range(30000):
+        optim.zero_grad()
         model_outputs, loss_dict, metrics_dict = trainer.get_train_loss_dict(0)
         loss = torch.stack([x for x in loss_dict.values() if isinstance(x, torch.Tensor)]).sum()
         loss.backward()
+        optim.step()
+        trainer.model.quats.data = torch.nn.functional.normalize(trainer.model.quats.data)
+
+async def main(trainer: SpirulaeSplatTrainer):
+    asyncio.create_task(start_viewer(trainer))
+
+
+def entrypoint():
+    import tyro
+    config = tyro.cli(SpirulaeSplatTrainerConfig)
+    trainer = SpirulaeSplatTrainer(config)
+
+    thread = threading.Thread(target=lambda: train(trainer), daemon=True)
+    thread.start()
+
+    asyncio.run(main(trainer))
 
 if __name__ == "__main__":
     entrypoint()

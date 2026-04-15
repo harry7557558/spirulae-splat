@@ -80,12 +80,8 @@ class Cameras:
             assert intrins.shape[0] == num_cameras
         elif isinstance(intrins, tuple) or isinstance(intrins, list):
             assert len(intrins) == 4, "Intrinsics must be (N, 4)"
-            numel = 1
-            for x in intrins:
-                if isinstance(x, torch.Tensor):
-                    numel = x.numel()
-            intrins = [x.float().reshape(numel) if isinstance(x, torch.Tensor)
-                       else torch.full((), x).float().repeat(numel)
+            intrins = [x.float().reshape(num_cameras) if isinstance(x, torch.Tensor)
+                       else torch.full((), x).float().repeat(num_cameras)
                        for x in intrins]
             intrins = torch.stack(intrins, dim=-1)
         else:
@@ -97,12 +93,8 @@ class Cameras:
                 distortion_params = distortion_params[None].repeat(num_cameras, 1)
             assert distortion_params.ndim == 2 and distortion_params.shape[0] == num_cameras, distortion_params.shape
         elif isinstance(distortion_params, tuple) or isinstance(distortion_params, list):
-            numel = 1
-            for x in distortion_params:
-                if isinstance(x, torch.Tensor):
-                    numel = x.numel()
-            distortion_params = [x.float().reshape(numel) if isinstance(x, torch.Tensor)
-                       else torch.full((), x).float().repeat(numel)
+            distortion_params = [x.float().reshape(num_cameras) if isinstance(x, torch.Tensor)
+                       else torch.full((), x).float().repeat(num_cameras)
                        for x in distortion_params]
             distortion_params = torch.stack(distortion_params, dim=-1)
         else:

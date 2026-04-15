@@ -190,7 +190,7 @@ class WebSocketThread:
         render_worker: RenderWorker,
         host: str = "localhost",
         port: int = 8765,
-        jpeg_quality: int = 85,
+        jpeg_quality: int = 75,
     ) -> None:
         self._ws_server = _WSServer(render_worker, host, port, jpeg_quality)
         self._thread: Optional[threading.Thread] = None
