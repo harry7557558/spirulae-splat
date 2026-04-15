@@ -12,6 +12,8 @@ from spirulae_splat.modules.datamanager import SpirulaeSplatDataManagerConfig, S
 
 from spirulae_splat.modules.dataparser import SpirulaeSplatDataparser, SpirualeSplatDataParserConfig
 from spirulae_splat.modules.dataset import SpirulaeSplatDataset
+from spirulae_splat.modules.optimizer import create_optimizers
+from spirulae_splat.ns_config import _DEFAULT_OPTIMIZERS
 
 from spirulae_splat.viewer.server import ViewerServer, SliderDef, DropdownDef
 from spirulae_splat.viewer.annotation import annotate_train_cameras
@@ -131,14 +133,17 @@ async def start_viewer(trainer: SpirulaeSplatTrainer):
     server.wait()
 
 def train(trainer: SpirulaeSplatTrainer):
-    optim = torch.optim.Adam(trainer.model.parameters(), lr=1e-4, fused=True)
-    for i in range(1):
-        optim.zero_grad()
+    optims = create_optimizers(trainer.model, _DEFAULT_OPTIMIZERS)
+    for step in range(30000):
+        for optim in optims.values():
+            optim.zero_grad()
+        trainer.model.step_cb(optims, step)
         model_outputs, loss_dict, metrics_dict = trainer.get_train_loss_dict(0)
         loss = torch.stack([x for x in loss_dict.values() if isinstance(x, torch.Tensor)]).sum()
         loss.backward()
-        optim.step()
-        trainer.model.quats.data = torch.nn.functional.normalize(trainer.model.quats.data)
+        for optim in optims.values():
+            optim.step()
+        trainer.model.step_post_backward(step)
 
 async def main(trainer: SpirulaeSplatTrainer):
     asyncio.create_task(start_viewer(trainer))

@@ -5,6 +5,7 @@ Define your custom method here that registers with Nerfstudio CLI.
 """
 
 from __future__ import annotations
+from dataclasses import dataclass
 
 from spirulae_splat.modules.datamanager import (
     SpirulaeSplatDataManagerConfig, SpirulaeSplatDataManager
@@ -15,26 +16,35 @@ from spirulae_splat.ns_pipeline import (
 )
 from spirulae_splat.modules.optimizer import FusedAdamOptimizerConfig, FusedNewtonOptimizerConfig
 
-from spirulae_splat.modules.dataset import SpirulaeDataset
 from spirulae_splat.modules.dataparser import SpirualeSplatDataParserConfig
 from nerfstudio.configs.base_config import ViewerConfig
 from nerfstudio.engine.schedulers import (
     ExponentialDecaySchedulerConfig,
 )
 from nerfstudio.engine.trainer import TrainerConfig
-from nerfstudio.plugins.types import MethodSpecification
+
+@dataclass
+class MethodSpecification:
+    """
+    Method specification class used to register custom methods with Nerfstudio.
+    The registered methods will be available in commands such as `ns-train`
+    """
+
+    config: TrainerConfig
+    """Trainer configuration"""
+    description: str
+    """Method description shown in `ns-train` help"""
 
 
 _DEFAULT_DATAMANAGER_CONFIG = {
-    '_target': SpirulaeSplatDataManager,
-    'dataparser': SpirualeSplatDataParserConfig(
-        eval_mode="fraction", train_split_fraction=1.0,  # use all for training
-        # eval_mode="interval", eval_interval=8,  # consistent with academic benchmarks
-    ),
-    'camera_res_scale_factor': 1.0,
-    'eval_num_images_to_sample_from': -1,
-    'eval_num_times_to_repeat_images': -1,
-    'max_thread_workers': None
+    # 'dataparser': SpirualeSplatDataParserConfig(
+    #     eval_mode="fraction", train_split_fraction=1.0,  # use all for training
+    #     # eval_mode="interval", eval_interval=8,  # consistent with academic benchmarks
+    # ),
+    # 'camera_res_scale_factor': 1.0,
+    # 'eval_num_images_to_sample_from': -1,
+    # 'eval_num_times_to_repeat_images': -1,
+    # 'max_thread_workers': None
 }
 
 _DEFAULT_OPTIMIZERS = {
@@ -647,11 +657,11 @@ spirulae_preset_centered_object = MethodSpecification(
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
             datamanager=SpirulaeSplatDataManagerConfig(
-                dataparser=SpirualeSplatDataParserConfig(
-                    eval_mode="fraction",
-                    train_split_fraction=1.0,
-                    center_method="focus",
-                ),
+                # dataparser=SpirualeSplatDataParserConfig(
+                #     eval_mode="fraction",
+                #     train_split_fraction=1.0,
+                #     center_method="focus",
+                # ),
             ),
             model=SpirulaeSplatModelConfig(
                 **_MODEL_PRESET_RICH_TEXTURE,
@@ -679,10 +689,10 @@ spirulae_preset_academic_baseline = MethodSpecification(
         mixed_precision=False,
         pipeline=SpirulaePipelineConfig(
             datamanager=SpirulaeSplatDataManagerConfig(
-                dataparser=SpirualeSplatDataParserConfig(
-                    eval_mode="interval",
-                    eval_interval=8,
-                ),
+                # dataparser=SpirualeSplatDataParserConfig(
+                #     eval_mode="interval",
+                #     eval_interval=8,
+                # ),
                 max_batch_per_epoch=9**9,
                 compute_edge_maps=False,
             ),

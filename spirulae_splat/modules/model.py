@@ -58,7 +58,6 @@ from nerfstudio.cameras.camera_optimizers import (CameraOptimizer,
 from nerfstudio.engine.callbacks import (TrainingCallback,
                                          TrainingCallbackAttributes,
                                          TrainingCallbackLocation)
-from nerfstudio.engine.optimizers import Optimizers
 from nerfstudio.utils.colors import get_color
 
 from spirulae_splat.modules.camera import Cameras
@@ -826,9 +825,9 @@ class SpirulaeSplatModel(torch.nn.Module):
         assert background_color.shape == (3,)
         # self.background_color = background_color
 
-    def step_cb(self, optimizers: Optimizers, step):
+    def step_cb(self, optimizers: Dict, step: int):
         self.step = step
-        self.optimizers = optimizers.optimizers
+        self.optimizers = optimizers
 
     def step_post_backward(self, step):
         assert step == self.step
@@ -866,25 +865,6 @@ class SpirulaeSplatModel(torch.nn.Module):
         # for splatfacto: around 1.5 and around 1e-6 @ 1k iters
         print(self.info['radii'].float().mean().item(),
               self.info['means2d'].absgrad.mean().item())
-
-    def get_training_callbacks(
-        self, training_callback_attributes: TrainingCallbackAttributes
-    ) -> List[TrainingCallback]:
-        cbs = []
-        cbs.append(
-            TrainingCallback(
-                [TrainingCallbackLocation.BEFORE_TRAIN_ITERATION],
-                self.step_cb,
-                args=[training_callback_attributes.optimizers],
-            )
-        )
-        cbs.append(
-            TrainingCallback(
-                [TrainingCallbackLocation.AFTER_TRAIN_ITERATION],
-                self.step_post_backward,
-            )
-        )
-        return cbs
 
     def get_gaussian_param_groups(self) -> Dict[str, List[Parameter]]:
         # Here we explicitly use the means, scales as parameters so that the user can override this function and
@@ -1632,6 +1612,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         ).replace('0.', '.') \
             if self.config.primitive == "opaque_triangle" else ""
         chunks = [
+            f"{boldcyan(self.step)} "
             f"{bracket('N')} {boldcyan(self.num_points)}",
             f"{redbkg(bracket('Mem'), used_percentage/90)} {mem_stats}",
             f"{bracket('Train')} {orange('loss')}={fmt('image_loss', 1.0)} "

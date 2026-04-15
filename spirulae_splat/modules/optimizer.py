@@ -1,10 +1,8 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Type, Literal
 
 import torch
 from torch.optim.optimizer import Optimizer
-
-from nerfstudio.engine.optimizers import OptimizerConfig
 
 from spirulae_splat.splat.cuda import (
     _C,
@@ -150,10 +148,14 @@ class FusedAdam(Optimizer):
 
 
 @dataclass
-class FusedAdamOptimizerConfig(OptimizerConfig):
+class FusedAdamOptimizerConfig:
     """Basic optimizer config with Adam"""
 
     _target: Type = FusedAdam
+
+    lr: float = 1e-3
+    betas: tuple = (0.9, 0.999)
+    eps: float = 1e-8
 
     tr: Optional[float] = 1e-6
     tr_final: Optional[float] = 1e-8
@@ -277,9 +279,29 @@ class Fused3DGS2Tr(Optimizer):
 
 
 @dataclass
-class FusedNewtonOptimizerConfig(OptimizerConfig):
+class FusedNewtonOptimizerConfig:
     """Basic optimizer config with Newton"""
 
     _target: Type = Fused3DGS2Tr
 
+    lr: float = 1e-6
+    betas: tuple = (0.9, 0.999)
+    eps: float = 1e-8
+
     mode: Optional[Literal["mean", "scale", "opacity", "quat"]] = None
+
+
+def create_optimizers(model: torch.nn.Module, config: Dict):
+    optimizers = {}
+    for param_key, param in model.get_param_groups().items():
+        for key, optim in config.items():
+            if key != param_key:
+                continue
+            optim = optim['optimizer']._target(param, **asdict(optim['optimizer']))
+            if param_key in optimizers:
+                raise RuntimeError(f"Ambiguous optimizer names for {param_key}")
+            optimizers[param_key] = optim
+            break
+        if param_key not in optimizers:
+            raise RuntimeError(f"No optimizer found for {param_key}")
+    return optimizers
