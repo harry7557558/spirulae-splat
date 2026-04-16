@@ -19,11 +19,6 @@ import numpy as np
 from collections import deque
 from functools import cached_property
 
-# from nerfstudio.data.datamanagers.full_images_datamanager import (
-#     FullImageDatamanager,
-#     FullImageDatamanagerConfig,
-#     CONSOLE, track, TDataset
-# )
 from spirulae_splat.modules.camera import Cameras
 
 from spirulae_splat.modules.dataset import SpirulaeSplatDataset, IndexedDatasetWrapper
@@ -66,9 +61,9 @@ class SpirulaeSplatDataManagerConfig:
     cache_images_type: Literal["uint8", "float32"] = "uint8"
     """The image type returned from manager, caching images in uint8 saves memory"""
 
-    load_depths: bool = True
+    load_depths: bool = False
     """Whether to load depth maps, if exist"""
-    load_normals: bool = True
+    load_normals: bool = False
     """Whether to load normal maps, if exist"""
 
     deblur_training_images: bool = False

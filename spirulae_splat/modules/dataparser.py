@@ -86,8 +86,6 @@ def geometric_median(X, eps=0.0, maxiter=10):
 class SpirualeSplatDataParserConfig:
     """Spirulae-Splat dataset config"""
 
-    _target: Type = field(default_factory=lambda: SpirulaeSplatDataparser)
-    """target class to instantiate"""
     scale_factor: float = 1.0
     """How much to scale the camera origins by."""
     downscale_factor: Optional[int] = None

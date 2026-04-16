@@ -4,7 +4,6 @@ Nerfstudio Template Config
 Define your custom method here that registers with Nerfstudio CLI.
 """
 
-from __future__ import annotations
 from dataclasses import dataclass
 
 from spirulae_splat.modules.datamanager import (
@@ -12,15 +11,10 @@ from spirulae_splat.modules.datamanager import (
 )
 from spirulae_splat.modules.model import SpirulaeSplatModelConfig
 from spirulae_splat.ns_pipeline import (
-    SpirulaePipelineConfig, VanillaPipelineConfig
+    SpirulaePipelineConfig,
 )
 from spirulae_splat.modules.optimizer import FusedAdamOptimizerConfig, FusedNewtonOptimizerConfig
 
-from spirulae_splat.modules.dataparser import SpirualeSplatDataParserConfig
-from nerfstudio.configs.base_config import ViewerConfig
-from nerfstudio.engine.schedulers import (
-    ExponentialDecaySchedulerConfig,
-)
 from nerfstudio.engine.trainer import TrainerConfig
 
 @dataclass
@@ -48,168 +42,96 @@ _DEFAULT_DATAMANAGER_CONFIG = {
 }
 
 _DEFAULT_OPTIMIZERS = {
-    "_dummy": {
-        "optimizer": FusedAdamOptimizerConfig(lr=1.0, eps=0.0),
-        "scheduler": None,
-    },
-    "means": {
-        "optimizer": FusedAdamOptimizerConfig(lr=1.6e-4, eps=1e-15),
-        "scheduler": ExponentialDecaySchedulerConfig(
-            lr_final=1.6e-6, max_steps=30000,
-        ),
-    },
-    "scales": {
-        "optimizer": FusedAdamOptimizerConfig(lr=0.005, eps=1e-15),
-        "scheduler": None,
-    },
-    "quats": {
-        "optimizer": FusedAdamOptimizerConfig(lr=0.0005, eps=1e-15),
-        "scheduler": None,
-    },
-    "features_dc": {
-        "optimizer": FusedAdamOptimizerConfig(lr=0.0025, eps=1e-15),
-        "scheduler": None,
-    },
-    "features_sh": {
-        "optimizer": FusedAdamOptimizerConfig(
-            lr=0.0025 / 20, eps=1e-15,
-            tr=1.0e-6 / 20, tr_final=1.0e-8 / 20, tr_max_steps=30000
-        ),
-        "scheduler": None,
-    },
-    "features_ch": {
-        "optimizer": FusedAdamOptimizerConfig(lr=0.0025 / 5, eps=1e-15),
-        "scheduler": None,
-    },
-    "sv_sites": {
-        "optimizer": FusedAdamOptimizerConfig(lr=0.01, eps=1e-15),
-        "scheduler": None,
-    },
-    "sv_colors": {
-        "optimizer": FusedAdamOptimizerConfig(lr=0.0005, eps=1e-15),
-        "scheduler": None,
-    },
-    "opacities": {
-        "optimizer": FusedAdamOptimizerConfig(lr=0.05, eps=1e-15),
-        "scheduler": None,
-    },
-    "densities": {
-        "optimizer": FusedAdamOptimizerConfig(lr=0.05, eps=1e-15),
-        "scheduler": ExponentialDecaySchedulerConfig(
-            lr_final=0.0005, max_steps=30000,
-        ),
-    },
-    "background_color": {
-        "optimizer": FusedAdamOptimizerConfig(lr=0.0025, eps=1e-15),
-        "scheduler": None
-    },
-    "background_sh": {
-        "optimizer": FusedAdamOptimizerConfig(lr=0.0025 / 5, eps=1e-15),
-        "scheduler": None
-    },
-    "bilateral_grid": {
-        "optimizer": FusedAdamOptimizerConfig(lr=2e-3, eps=1e-15),
-        "scheduler": ExponentialDecaySchedulerConfig(
-            lr_final=1e-4, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
-        ),
-    },
-    "bilateral_grid_depth": {
-        # "optimizer": FusedAdamOptimizerConfig(lr=1e-2, eps=1e-15),
-        "optimizer": FusedAdamOptimizerConfig(lr=2e-3, eps=1e-15),
-        "scheduler": ExponentialDecaySchedulerConfig(
-            lr_final=1e-4, max_steps=30000, warmup_steps=2000, lr_pre_warmup=0, ramp="linear"
-        ),
-    },
-    "bilateral_grid_normal": {
-        "optimizer": FusedAdamOptimizerConfig(lr=5e-4, eps=1e-15),
-        "scheduler": ExponentialDecaySchedulerConfig(
-            lr_final=4e-5, max_steps=30000, warmup_steps=2000, lr_pre_warmup=0, ramp="linear"
-        ),
-    },
-    "ppisp": {
-        "optimizer": FusedAdamOptimizerConfig(lr=2e-3, eps=1e-15),
-        "scheduler": ExponentialDecaySchedulerConfig(
-            lr_final=2e-5, max_steps=30000, warmup_steps=500, lr_pre_warmup=2e-5
-        ),
-    },
-    "camera_opt": {
-        "optimizer": FusedAdamOptimizerConfig(lr=1e-4, eps=1e-15),  # 1e-4
-        "scheduler": ExponentialDecaySchedulerConfig(
-            lr_final=5e-7, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
-        ),
-    },
+    "_dummy": FusedAdamOptimizerConfig(lr=1.0, eps=0.0),
+    "means": FusedAdamOptimizerConfig(
+        lr=1.6e-4, eps=1e-15,
+        lr_final=1.6e-6, max_steps=30000
+    ),
+    "scales": FusedAdamOptimizerConfig(lr=0.005, eps=1e-15),
+    "quats": FusedAdamOptimizerConfig(lr=0.0005, eps=1e-15),
+    "features_dc": FusedAdamOptimizerConfig(lr=0.0025, eps=1e-15),
+    "features_sh": FusedAdamOptimizerConfig(
+        lr=0.0025 / 20, eps=1e-15,
+        tr=1.0e-6 / 20, tr_final=1.0e-8 / 20, max_steps=30000,
+    ),
+    "features_ch": FusedAdamOptimizerConfig(lr=0.0025 / 5, eps=1e-15),
+    "sv_sites": FusedAdamOptimizerConfig(lr=0.01, eps=1e-15),
+    "sv_colors": FusedAdamOptimizerConfig(lr=0.0005, eps=1e-15),
+    "opacities": FusedAdamOptimizerConfig(lr=0.05, eps=1e-15),
+    "densities": FusedAdamOptimizerConfig(
+        lr=0.05, eps=1e-15,
+        lr_final=0.0005, max_steps=30000,
+    ),
+    "background_color": FusedAdamOptimizerConfig(lr=0.0025, eps=1e-15),
+    "background_sh": FusedAdamOptimizerConfig(lr=0.0025 / 5, eps=1e-15),
+    "bilateral_grid": FusedAdamOptimizerConfig(
+        lr=2e-3, eps=1e-15,
+        lr_final=1e-4, max_steps=30000, warmup_steps=1000,
+    ),
+    "bilateral_grid_depth": FusedAdamOptimizerConfig(
+        lr=2e-3, eps=1e-15,
+        lr_final=1e-4, max_steps=30000, warmup_steps=2000,
+    ),
+    "bilateral_grid_normal": FusedAdamOptimizerConfig(
+        lr=5e-4, eps=1e-15,
+        lr_final=4e-5, max_steps=30000, warmup_steps=2000,
+    ),
+    "ppisp": FusedAdamOptimizerConfig(
+        lr=2e-3, eps=1e-15,
+        lr_final=2e-5, max_steps=30000, warmup_steps=500, lr_pre_warmup=2e-5
+    ),
+    "camera_opt": FusedAdamOptimizerConfig(
+        lr=1e-4, eps=1e-15,
+        lr_final=5e-7, max_steps=30000, warmup_steps=1000,
+    ),
 }
 
 _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER = {**_DEFAULT_OPTIMIZERS}
-_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER["scales"] = {
+_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER["scales"] = FusedAdamOptimizerConfig(
     # https://arxiv.org/abs/2603.08661
-    "optimizer": FusedAdamOptimizerConfig(lr=0.02, eps=1e-15),
-    # "optimizer": FusedAdamOptimizerConfig(lr=0.005, eps=1e-15),
-    "scheduler": ExponentialDecaySchedulerConfig(
-        lr_final=0.005, max_steps=10000, warmup_steps=1000, ramp="linear", lr_pre_warmup=0.005
-    ),
-}
+    lr=0.02, eps=1e-15,
+    lr_final=0.005, max_steps=10000, warmup_steps=1000, lr_pre_warmup=0.005
+)
 
 _TRIANGLE_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER}
-_TRIANGLE_OPTIMIZERS["means"] = {
-    "optimizer": FusedAdamOptimizerConfig(lr=1.6e-4, eps=1e-15),
-    "scheduler": ExponentialDecaySchedulerConfig(
-        lr_final=1.6e-6, max_steps=30000,
-    ),
-}
-# _TRIANGLE_OPTIMIZERS["scales"] = {
-#     "optimizer": FusedAdamOptimizerConfig(lr=0.005, eps=1e-15),
-#     "scheduler": ExponentialDecaySchedulerConfig(
-#         lr_final=0.0002, max_steps=30000,
-#     ),
-# }
-# _TRIANGLE_OPTIMIZERS["quats"] = {
-#     "optimizer": FusedAdamOptimizerConfig(lr=0.0005, eps=1e-15),
-#     "scheduler": ExponentialDecaySchedulerConfig(
-#         lr_final=0.0001, max_steps=30000
-#     ),
-# }
-_TRIANGLE_OPTIMIZERS["bilateral_grid"] = {
-    "optimizer": FusedAdamOptimizerConfig(lr=5e-4, eps=1e-15),
-    "scheduler": ExponentialDecaySchedulerConfig(
-        lr_final=1e-6, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
-    ),
-}
+_TRIANGLE_OPTIMIZERS["means"] = FusedAdamOptimizerConfig(
+    lr=1.6e-4, eps=1e-15, lr_final=1.6e-6, max_steps=30000,
+)
+# _TRIANGLE_OPTIMIZERS["scales"] = FusedAdamOptimizerConfig(
+#     lr=0.005, eps=1e-15, lr_final=0.0002, max_steps=30000,
+# )
+# _TRIANGLE_OPTIMIZERS["quats"] = FusedAdamOptimizerConfig(
+#     lr=0.0005, eps=1e-15, lr_final=0.0001, max_steps=30000,
+# )
+_TRIANGLE_OPTIMIZERS["bilateral_grid"] = FusedAdamOptimizerConfig(
+    lr=5e-4, eps=1e-15,
+    lr_final=1e-6, max_steps=30000, warmup_steps=1000,
+)
 
 _SECOND_ORDER_POSITION_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER}
-_SECOND_ORDER_POSITION_OPTIMIZERS["means"] = {
-    "optimizer": FusedNewtonOptimizerConfig(mode="mean", lr=1.0e-6, eps=1e-15),
-    "scheduler": ExponentialDecaySchedulerConfig(
-        lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000, lr_pre_warmup=0
-    ),
-}
+_SECOND_ORDER_POSITION_OPTIMIZERS["means"] = FusedNewtonOptimizerConfig(
+    mode="mean", lr=1.0e-6, eps=1e-15,
+    lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
+)
 
 _SECOND_ORDER_OPTIMIZERS = {**_SECOND_ORDER_POSITION_OPTIMIZERS}
-# _SECOND_ORDER_OPTIMIZERS["quats"] = {
-#     "optimizer": FusedNewtonOptimizerConfig(mode="quat", lr=1.0e-6, eps=1e-15),
-#     "scheduler": ExponentialDecaySchedulerConfig(
-#         lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000, lr_pre_warmup=0
-#     ),
-# }
-_SECOND_ORDER_OPTIMIZERS["scales"] = {
-    "optimizer": FusedNewtonOptimizerConfig(mode="scale", lr=1.0e-6, eps=1e-15),
-    "scheduler": ExponentialDecaySchedulerConfig(
-        lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000, lr_pre_warmup=0
-    ),
-}
+# _SECOND_ORDER_OPTIMIZERS["quats"] = FusedNewtonOptimizerConfig(
+#     mode="quat", lr=1.0e-6, eps=1e-15,
+#     lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
+# )
+_SECOND_ORDER_OPTIMIZERS["scales"] = FusedNewtonOptimizerConfig(
+    mode="scale", lr=1.0e-6, eps=1e-15,
+    lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
+)
 # TODO: investigate whether this messes up MCMC densification
-# _SECOND_ORDER_OPTIMIZERS["opacities"] = {
-#     "optimizer": FusedNewtonOptimizerConfig(mode="opacity", lr=1.0e-6, eps=1e-15),
-#     "scheduler": ExponentialDecaySchedulerConfig(
-#         lr_final=1.0e-8, max_steps=30000, #warmup_steps=3000, lr_pre_warmup=0
-#     ),
-# }
-# _SECOND_ORDER_OPTIMIZERS["features_dc"] = {
-#     "optimizer": FusedNewtonOptimizerConfig(mode="color", lr=1.0e-6, eps=1e-15),
-#     "scheduler": ExponentialDecaySchedulerConfig(
-#         lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000, lr_pre_warmup=0
-#     ),
-# }
+# _SECOND_ORDER_OPTIMIZERS["opacities"] = FusedNewtonOptimizerConfig(
+#     mode="opacity", lr=1.0e-6, eps=1e-15,
+#     lr_final=1.0e-8, max_steps=30000, #warmup_steps=3000,
+# )
+# _SECOND_ORDER_OPTIMIZERS["features_dc"] = FusedNewtonOptimizerConfig(
+#     mode="color", lr=1.0e-6, eps=1e-15,
+#     lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
+# )
 
 
 spirulae = MethodSpecification(
@@ -230,8 +152,6 @@ spirulae = MethodSpecification(
         optimizers={
             **_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER
         },
-        viewer=ViewerConfig(),
-        vis="viewer",
     ),
     description="Spirulae 3DGS Default.",
 )
@@ -257,8 +177,6 @@ spirulae_squared = MethodSpecification(
         optimizers={
             **_SECOND_ORDER_OPTIMIZERS
         },
-        viewer=ViewerConfig(),
-        vis="viewer",
     ),
     description="Spirulae 3DGS Default.",
 )
@@ -282,8 +200,6 @@ spirulae_squared_pos = MethodSpecification(
         optimizers={
             **_SECOND_ORDER_POSITION_OPTIMIZERS
         },
-        viewer=ViewerConfig(),
-        vis="viewer",
     ),
     description="Spirulae 3DGS Default.",
 )
@@ -317,8 +233,6 @@ spirulae_patched = MethodSpecification(
         optimizers={
             **_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER
         },
-        viewer=ViewerConfig(),
-        vis="viewer",
     ),
     description="Spirulae 3DGS with patch batching.",
 )
@@ -363,8 +277,6 @@ spirulae_triangle = MethodSpecification(
         optimizers={
             **_TRIANGLE_OPTIMIZERS
         },
-        viewer=ViewerConfig(),
-        vis="viewer",
     ),
     description="Spirulae opaque triangle splatting.",
 )
@@ -421,8 +333,6 @@ spirulae_triangle_patched = MethodSpecification(
         optimizers={
             **_TRIANGLE_OPTIMIZERS
         },
-        viewer=ViewerConfig(),
-        vis="viewer",
     ),
     description="Spirulae opaque triangle splatting with patched batching.",
 )
@@ -464,8 +374,6 @@ spirulae_voxel = MethodSpecification(
         optimizers={
             **_DEFAULT_OPTIMIZERS
         },
-        viewer=ViewerConfig(),
-        vis="viewer",
     ),
     description="Spirulae sparse voxel grid with patch batching.",
 )
@@ -515,8 +423,6 @@ spirulae_preset_confined_low_texture = MethodSpecification(
         optimizers={
             **_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER
         },
-        viewer=ViewerConfig(),
-        vis="viewer",
     ),
     description="Spirulae-Splat 3DGS preset for visually confined low-texture environments (e.g. indoor or ground-level city capture with largely textureless surfaces).",
 )
@@ -541,8 +447,6 @@ spirulae_preset_confined = MethodSpecification(
         optimizers={
             **_SECOND_ORDER_POSITION_OPTIMIZERS
         },
-        viewer=ViewerConfig(),
-        vis="viewer",
     ),
     description="Spirulae-Splat 3DGS preset for visually confined environments with moderate to rich texture (e.g. rich-texture indoor environments, ground-level city or foliage captures without much sky visible in input images).",
 )
@@ -567,8 +471,6 @@ spirulae_squared_preset_confined = MethodSpecification(
         optimizers={
             **_SECOND_ORDER_OPTIMIZERS
         },
-        viewer=ViewerConfig(),
-        vis="viewer",
     ),
     description="Spirulae-Splat 3DGS preset for visually confined environments with moderate to rich texture (e.g. rich-texture indoor environments, ground-level city or foliage captures without much sky visible in input images).",
 )
@@ -592,8 +494,6 @@ spirulae_preset_open_low_texture = MethodSpecification(
         optimizers={
             **_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER
         },
-        viewer=ViewerConfig(),
-        vis="viewer",
     ),
     description="Spirulae-Splat 3DGS preset for open low-texture environments (e.g. outdoor scenes containing large textureless concrete, water, sand, or snow surface).",
 )
@@ -617,8 +517,6 @@ spirulae_preset_open = MethodSpecification(
         optimizers={
             **_SECOND_ORDER_POSITION_OPTIMIZERS
         },
-        viewer=ViewerConfig(),
-        vis="viewer",
     ),
     description="Spirulae-Splat 3DGS preset for open environments with moderate to rich texture (e.g. outdoor landscapes, drone capture).",
 )
@@ -642,8 +540,6 @@ spirulae_squared_preset_open = MethodSpecification(
         optimizers={
             **_SECOND_ORDER_OPTIMIZERS
         },
-        viewer=ViewerConfig(),
-        vis="viewer",
     ),
     description="Spirulae-Splat 3DGS preset for open environments with moderate to rich texture (e.g. outdoor landscapes, drone capture).",
 )
@@ -674,8 +570,6 @@ spirulae_preset_centered_object = MethodSpecification(
             # **_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER
             **_SECOND_ORDER_POSITION_OPTIMIZERS
         },
-        viewer=ViewerConfig(),
-        vis="viewer",
     ),
     description="Spirulae-Splat 3DGS preset for small centered objects (e.g. small item on turntable, human avatar).",
 )
@@ -724,8 +618,6 @@ spirulae_preset_academic_baseline = MethodSpecification(
         optimizers={
             **_DEFAULT_OPTIMIZERS
         },
-        viewer=ViewerConfig(),
-        vis="viewer",
     ),
     description="Spirulae-Splat 3DGS preset that replicates academic baseline (3DGS MCMC) as faithful as possible. Use this to reproduce metrics on academic benchmark datasets (e.g. Mip-NeRF 360).",
 )

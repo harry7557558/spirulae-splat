@@ -13,6 +13,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from spirulae_splat.modules.datamanager import SpirulaeSplatDataManagerConfig
 from spirulae_splat.modules.model import SpirulaeSplatModel, SpirulaeSplatModelConfig
+from spirulae_splat.modules.camera import Cameras
+
 from nerfstudio.data.datamanagers.base_datamanager import (
     DataManager,
     DataManagerConfig,
@@ -22,8 +24,6 @@ from nerfstudio.pipelines.base_pipeline import (
     VanillaPipeline,
     VanillaPipelineConfig,
 )
-from nerfstudio.utils import profiler
-from nerfstudio.cameras.cameras import Cameras, CameraType
 
 
 @dataclass
@@ -89,7 +89,6 @@ class SpirulaePipeline(VanillaPipeline):
             )
             dist.barrier(device_ids=[local_rank])
 
-    @profiler.time_function
     def get_train_loss_dict(self, step: int):
         """This function gets your training loss dict. This will be responsible for
         getting the next batch of data from the DataManager and interfacing with the

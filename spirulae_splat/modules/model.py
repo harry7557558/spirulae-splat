@@ -55,9 +55,6 @@ from spirulae_splat.splat.cuda import (
 
 from nerfstudio.cameras.camera_optimizers import (CameraOptimizer,
                                                   CameraOptimizerConfig)
-from nerfstudio.engine.callbacks import (TrainingCallback,
-                                         TrainingCallbackAttributes,
-                                         TrainingCallbackLocation)
 from nerfstudio.utils.colors import get_color
 
 from spirulae_splat.modules.camera import Cameras
@@ -99,7 +96,7 @@ class SpirulaeSplatModelConfig:
     """period of steps where gaussians are culled and densified"""
     resolution_schedule: int = 3000
     """training starts at 1/d resolution, every n steps this is doubled"""
-    background_color: Literal["random", "black", "white", "gray"] = "gray"
+    background_color: Literal["random", "black", "white", "gray"] = "black"
     """Whether to randomize the background color."""
     num_downscales: int = 0
     """at the beginning, resolution is 1/2^d, where d is this number"""
@@ -181,14 +178,14 @@ class SpirulaeSplatModelConfig:
     """minimum opacity for MCMC relocation"""
     mcmc_growth_factor: float = 1.05
     """multiply number of splats by this number at every refinement"""
-    mcmc_prob_grad_weight: float = 0.0
+    mcmc_prob_grad_weight: float = 1.0
     """Weight of gradient used in sampling Gaussians to relocate/add to.
         If 0.0, use only opacity; If 1.0, use other heuristics (see strategy/mcmc.py for details)."""
     use_edge_aware_score: bool = True
     """Whether to use edge aware score to guide densification.
         If True, it computes edge aware score following https://arxiv.org/abs/2603.08661
         Note that this is only active when mcmc_prob_grad_weight is nonzero"""
-    mcmc_use_long_axis_split: bool = False
+    mcmc_use_long_axis_split: bool = True
     """whether to use long-axis split described in https://arxiv.org/abs/2508.12313 for relocation and sample add.
         When combined with mcmc_prob_grad_weight=1.0, this can give significantly less blurry background details for unbounded outdoor scenes."""
     relocate_screen_size: float = float('inf')
@@ -211,7 +208,7 @@ class SpirulaeSplatModelConfig:
     """every n intervals turn on another sh degree; TODO: deprecated?"""
     num_sv: int = 4  # 8
     """number of spherical voronoi to use"""
-    train_background_color: bool = True
+    train_background_color: bool = False
     """make background color trainable"""
     background_sh_degree: int = 4
     """enable background model"""
@@ -304,9 +301,8 @@ class SpirulaeSplatModelConfig:
     """Weight for normal regularizer"""
     normal_reg_warmup: int = 6000
     """warmup steps for normal regularizer, regularization weight ramps up"""
-    alpha_reg_weight: float = 0.025
-    """Weight for alpha regularizer (encourage alpha to go to either 0 or 1)
-        Recommend using with --pipeline.model.cull_screen_size for better results"""
+    alpha_reg_weight: float = 0.0
+    """Weight for alpha regularizer (encourage alpha to go to either 0 or 1)"""
     alpha_reg_warmup: int = 12000
     """warmup steps for alpha regularizer, regularization weight ramps up"""
     reg_warmup_length: int = 3000

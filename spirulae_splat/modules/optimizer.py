@@ -18,11 +18,14 @@ class FusedAdam(Optimizer):
         self,
         params,
         lr: float = 1e-3,
+        lr_final: Optional[float] = None,
+        lr_pre_warmup: float = 0.0,
         betas: tuple = (0.9, 0.999),
         eps: float = 1e-8,
         tr: Optional[float] = 1e-6,
         tr_final: Optional[float] = 1e-8,
-        tr_max_steps: Optional[int] = 30000,
+        warmup_steps: Optional[int] = None,
+        max_steps: Optional[int] = 30000,
         **kwargs
     ):
         if lr < 0.0:
@@ -38,7 +41,10 @@ class FusedAdam(Optimizer):
         if 'weight_decay' in kwargs and kwargs['weight_decay'] != 0.0:
             raise NotImplementedError("FusedAdam currently only supports weight_decay=0")
         
-        defaults = dict(lr=lr, betas=betas, eps=eps, tr=tr, tr_final=tr_final, tr_max_steps=tr_max_steps)
+        defaults = dict(
+            lr=lr, lr_final=lr_final, lr_pre_warmup=lr_pre_warmup, betas=betas, eps=eps,
+            tr=tr, tr_final=tr_final, warmup_steps=warmup_steps, max_steps=max_steps
+        )
         super(FusedAdam, self).__init__(params, defaults)
     
     @torch.no_grad()
@@ -56,11 +62,14 @@ class FusedAdam(Optimizer):
         for group in self.param_groups:
             beta1, beta2 = group['betas']
             lr = group['lr']
+            lr_final = group['lr_final']
+            lr_pre_warmup = group['lr_pre_warmup']
             eps = group['eps']
 
             tr = group['tr']
             tr_final = group['tr_final']
-            tr_max_steps = group['tr_max_steps']
+            warmup_steps = group['warmup_steps']
+            max_steps = group['max_steps']
             
             # Collect all tensors for this group
             params_with_grad = []
@@ -88,6 +97,11 @@ class FusedAdam(Optimizer):
                 p.exp_avg_sq = state['exp_avg_sq']
                 
                 state['step'] += 1
+                scheduled_lr = lr
+                if lr_final is not None:
+                    scheduled_lr = lr * (lr_final / lr) ** min(state['step'] / max_steps, 1.0)
+                if warmup_steps is not None:
+                    scheduled_lr = min(scheduled_lr, lr_pre_warmup + (lr - lr_pre_warmup) * min(state['step'] / warmup_steps, 1.0))
 
                 if not (hasattr(p, "optim_info") and "optimizer_override" in p.optim_info):
                     # Use default Adam
@@ -102,7 +116,7 @@ class FusedAdam(Optimizer):
 
                 additional_params = []
                 eps_params = [eps]
-                eps_tr = tr * (tr_final / tr) ** min(state['step'] / tr_max_steps, 1.0)
+                eps_tr = tr * (tr_final / tr) ** min(state['step'] / max_steps, 1.0)
                 if p.optim_info['optimizer_override'] == "fused_adam_linear_rgb_optim":
                     pass
                 elif p.optim_info['optimizer_override'] in ["fused_adamtr_linear_rgb_optim", "fused_adamtr_rgb_optim"]:
@@ -118,7 +132,7 @@ class FusedAdam(Optimizer):
                     state['exp_avg'],
                     state['exp_avg_sq'],
                     *additional_params,
-                    lr,
+                    scheduled_lr,
                     beta1,
                     beta2,
                     *eps_params,
@@ -154,12 +168,16 @@ class FusedAdamOptimizerConfig:
     _target: Type = FusedAdam
 
     lr: float = 1e-3
+    lr_final: Optional[float] = None
+    warmup_steps: Optional[int] = None
+    lr_pre_warmup: float = 0.0
+
     betas: tuple = (0.9, 0.999)
     eps: float = 1e-8
 
     tr: Optional[float] = 1e-6
     tr_final: Optional[float] = 1e-8
-    tr_max_steps: Optional[int] = 30000
+    max_steps: Optional[int] = 30000
 
 
 
@@ -174,8 +192,12 @@ class Fused3DGS2Tr(Optimizer):
         params,
         mode: Optional[Literal["mean", "scale", "opacity", "quat"]],
         lr: float = 1e-6,
+        lr_final: Optional[float] = None,
+        lr_pre_warmup: float = 0.0,
         betas: tuple = (0.9, 0.999),
         eps: float = 1e-8,
+        warmup_steps: Optional[int] = None,
+        max_steps: Optional[int] = 30000,
         # eps_tr: float = 1e-6,
         **kwargs
     ):
@@ -195,8 +217,11 @@ class Fused3DGS2Tr(Optimizer):
         if 'weight_decay' in kwargs and kwargs['weight_decay'] != 0.0:
             raise NotImplementedError("Fused3DGS2Tr currently only supports weight_decay=0")
         
-        # defaults = dict(lr=lr, betas=betas, eps=eps, eps_tr=eps_tr)
-        defaults = dict(mode=mode, lr=lr, betas=betas, eps=eps)
+        defaults = dict(
+            mode=mode,
+            lr=lr, lr_final=lr_final, lr_pre_warmup=lr_pre_warmup, betas=betas, eps=eps,
+            warmup_steps=warmup_steps, max_steps=max_steps
+        )
         super(Fused3DGS2Tr, self).__init__(params, defaults)
     
     @torch.no_grad()
@@ -215,9 +240,11 @@ class Fused3DGS2Tr(Optimizer):
             mode = group['mode']
             beta1, beta2 = group['betas']
             lr = group['lr']
+            lr_final = group['lr_final']
+            lr_pre_warmup = group['lr_pre_warmup']
             eps = group['eps']
-            # eps_tr = group['eps_tr']
-            # lr = 1e10
+            warmup_steps = group['warmup_steps']
+            max_steps = group['max_steps']
             
             for p in group['params']:
                 if p.grad is None:
@@ -241,6 +268,11 @@ class Fused3DGS2Tr(Optimizer):
                 
                 state['step1'] += 1
                 state['step2'] += 1
+                scheduled_lr = lr
+                if lr_final is not None:
+                    scheduled_lr = lr * (lr_final / lr) ** min(state['step1'] / max_steps, 1.0)
+                if warmup_steps is not None:
+                    scheduled_lr = min(scheduled_lr, lr_pre_warmup + (lr - lr_pre_warmup) * min(state['step1'] / warmup_steps, 1.0))
 
                 additional_params = []
                 if mode == "mean":
@@ -260,14 +292,14 @@ class Fused3DGS2Tr(Optimizer):
                     *additional_params,
                     state['exp_avg'],
                     state['exp_avg_sq'],
-                    # lr,
+                    # scheduled_lr,
                     1.0,
                     # min(state['step1'] / 3000.0, 1.0) ** 2,
                     beta1,
                     beta2,
                     eps,
                     # eps_tr,
-                    lr,
+                    scheduled_lr,
                     state['step1'],
                     state['step2']
                 )
@@ -285,6 +317,11 @@ class FusedNewtonOptimizerConfig:
     _target: Type = Fused3DGS2Tr
 
     lr: float = 1e-6
+    lr_final: Optional[float] = None
+    lr_pre_warmup: float = 0.0
+    warmup_steps: Optional[int] = None
+    max_steps: Optional[int] = 30000
+
     betas: tuple = (0.9, 0.999)
     eps: float = 1e-8
 
@@ -297,7 +334,7 @@ def create_optimizers(model: torch.nn.Module, config: Dict):
         for key, optim in config.items():
             if key != param_key:
                 continue
-            optim = optim['optimizer']._target(param, **asdict(optim['optimizer']))
+            optim = optim._target(param, **asdict(optim))
             if param_key in optimizers:
                 raise RuntimeError(f"Ambiguous optimizer names for {param_key}")
             optimizers[param_key] = optim

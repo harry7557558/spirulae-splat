@@ -58,8 +58,6 @@ import spirulae_splat.modules.enhancer
 # from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from spirulae_splat.modules.lpips import LearnedPerceptualImagePatchSimilarity
 
-from nerfstudio.cameras.cameras import Cameras, CameraType
-
 
 class _MaskGradient(torch.autograd.Function):
     @staticmethod
