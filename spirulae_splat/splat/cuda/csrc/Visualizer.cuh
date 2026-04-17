@@ -23,5 +23,8 @@ void blit_train_cameras_tensor(
     const at::Tensor intrins,  // [N, 4]
     const at::Tensor widths,  // [N]
     const at::Tensor heights,  // [N]
-    const at::Tensor camera_to_worlds  // [N, 3, 4]
+    const at::Tensor is_fisheye,  // [N]
+    const CameraDistortionCoeffsTensor dist_coeffs,
+    const at::Tensor camera_to_worlds,  // [N, 3, 4]
+    const float camera_size
 );

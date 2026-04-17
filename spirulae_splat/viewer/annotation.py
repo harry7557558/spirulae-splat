@@ -1,9 +1,24 @@
 import torch
+import numpy as np
 from spirulae_splat.modules.camera import Cameras
 from spirulae_splat.splat.rendering import rasterization
 from spirulae_splat.viewer_legacy.utils import triangle_verts_to_quat_scale_mean
 
 from spirulae_splat.splat.cuda import _make_lazy_cuda_func
+
+
+def knn_dist(x: torch.Tensor, k: int = 4):
+    x_np = x.detach().cpu().numpy()
+
+    from scipy.spatial import cKDTree
+    tree = cKDTree(x_np, balanced_tree=False)
+
+    distances, indices = tree.query(x_np, k=k+1, workers=-1)
+
+    # return distances[:, 1:].mean()
+    # return np.median(distances[:, 1:], axis=-1).mean()
+    return np.median(np.amax(distances[:, 1:], axis=-1))
+
 
 @torch.no_grad()
 def annotate_train_cameras(
@@ -39,6 +54,20 @@ def annotate_train_cameras(
     R = R * torch.tensor([[[1.0, -1.0, -1.0]]]).cuda()
     camera_to_worlds = torch.concat((R, T), dim=-1)
 
+    key = '_annotation_size'
+    if not hasattr(cameras, key):
+        size = 0.2 * knn_dist(T.squeeze(-1))
+        setattr(cameras, key, size)
+    else:
+        size = getattr(cameras, key)
+
+    key = "_is_fisheyes"
+    if not hasattr(cameras, key):
+        is_fisheyes = torch.Tensor([(ctype == "FISHEYE") for ctype in cameras.camera_type]).bool().cuda()
+        setattr(cameras, key, is_fisheyes)
+    else:
+        is_fisheyes = getattr(cameras, key)
+
     from time import perf_counter
     torch.cuda.synchronize()
     time0 = perf_counter()
@@ -51,7 +80,10 @@ def annotate_train_cameras(
         cameras.intrins,
         cameras.width,
         cameras.height,
+        is_fisheyes,
+        cameras.distortion_params,
         camera_to_worlds,
+        size
     )
     torch.cuda.synchronize()
     time1 = perf_counter()
