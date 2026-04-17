@@ -162,7 +162,7 @@ def tensor_to_numpy(tensor: Any) -> np.ndarray:
 def encode_buffer_to_jpeg(
     tensor: Any,
     quality: int = 85,
-    colormap: str = "inferno",
+    colormap: str = "turbo",
 ) -> bytes:
     """
     Encode a rendered buffer tensor to JPEG bytes.

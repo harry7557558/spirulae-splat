@@ -3,15 +3,61 @@ from spirulae_splat.modules.camera import Cameras
 from spirulae_splat.splat.rendering import rasterization
 from spirulae_splat.viewer_legacy.utils import triangle_verts_to_quat_scale_mean
 
+from spirulae_splat.splat.cuda import _make_lazy_cuda_func
 
 @torch.no_grad()
 def annotate_train_cameras(
-        rgb: torch.Tensor,
-        depths: torch.Tensor,
-        alpha: torch.Tensor,
-        view_camera: Cameras,
-        cameras: Cameras
-    ):
+    rgb: torch.Tensor,
+    depths: torch.Tensor,
+    alpha: torch.Tensor,
+    view_camera: Cameras,
+    cameras: Cameras
+):
+    if rgb.ndim == 4:
+        rgb = rgb.squeeze(0)
+    if depths.ndim == 4:
+        depths = depths.squeeze(0)
+    if alpha.ndim == 4:
+        alpha = alpha.squeeze(0)
+
+    R = view_camera.camera_to_worlds[:, :3, :3]  # 3 x 3
+    T = view_camera.camera_to_worlds[:, :3, 3:4]  # 3 x 1
+    # if self.config.relative_scale is not None:
+    #     T = T * self.config.relative_scale  # TODO
+    R = R * torch.tensor([[[1.0, -1.0, -1.0]]])
+    R_inv = R.transpose(-1, -2)
+    T_inv = -torch.bmm(R_inv, T)
+    view_viewmats = torch.eye(4, dtype=view_camera.camera_to_worlds.dtype)[None].repeat(len(view_camera), 1, 1)
+    view_viewmats[:, :3, :3] = R_inv
+    view_viewmats[:, :3, 3:4] = T_inv
+
+    cameras = cameras.to(rgb.device)
+    R = cameras.camera_to_worlds[:, :3, :3]  # 3 x 3
+    T = cameras.camera_to_worlds[:, :3, 3:4]  # 3 x 1
+    # if self.config.relative_scale is not None:
+    #     T = T * self.config.relative_scale  # TODO
+    R = R * torch.tensor([[[1.0, -1.0, -1.0]]]).cuda()
+    camera_to_worlds = torch.concat((R, T), dim=-1)
+
+    from time import perf_counter
+    torch.cuda.synchronize()
+    time0 = perf_counter()
+    _make_lazy_cuda_func("blit_train_cameras")(
+        rgb, depths, alpha,
+        view_camera.camera_type[0] == "FISHEYE",
+        view_camera.intrins.cuda(),
+        view_viewmats.cuda(),
+        view_camera.distortion_params.cuda(),
+        cameras.intrins,
+        cameras.width,
+        cameras.height,
+        camera_to_worlds,
+    )
+    torch.cuda.synchronize()
+    time1 = perf_counter()
+    print(1e3*(time1-time0), 'ms')
+    return rgb
+
     if rgb.ndim == 3:
         rgb = rgb[None]
     if depths.ndim == 3:

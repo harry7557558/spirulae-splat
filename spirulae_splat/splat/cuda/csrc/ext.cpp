@@ -23,6 +23,7 @@
 #include "Optimizer.cuh"
 #include "Densify.cuh"
 #include "BilagridUtils.cuh"
+#include "Visualizer.cuh"
 
 #define TORCH_INDUCTOR_CPP_WRAPPER
 #include <torch/extension.h>
@@ -207,4 +208,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // BilagridUtils.cuh
     m.def("dct3d_type1_ortho", &dct3d_type1_ortho_tensor);
+
+    // Visualizer.cuh
+    m.def("blit_train_cameras", &blit_train_cameras_tensor);
 }

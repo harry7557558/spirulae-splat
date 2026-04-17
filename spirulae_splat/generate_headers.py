@@ -78,6 +78,7 @@ def generate_headers():
         'Optimizer',
         'Densify',
         'BilagridUtils',
+        'Visualizer',
     ]
 
     num_generated = 0

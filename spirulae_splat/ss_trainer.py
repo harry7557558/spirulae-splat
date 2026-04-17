@@ -4,7 +4,6 @@ import asyncio
 from spirulae_splat.modules.trainer import SpirulaeSplatTrainerConfig, SpirulaeSplatTrainer
 
 from spirulae_splat.viewer.server import ViewerServer, SliderDef, DropdownDef
-from spirulae_splat.viewer.annotation import annotate_train_cameras
 
 
 

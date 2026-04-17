@@ -140,7 +140,7 @@ class _WSServer:
 
             # Update known keys
             keys = list(result.buffers.keys())
-            if keys != self._last_buffer_keys:
+            if keys != self._last_buffer_keys or True:
                 self._last_buffer_keys = keys
                 keys_msg = json.dumps({"type": "buffer_keys", "keys": keys})
                 try:
