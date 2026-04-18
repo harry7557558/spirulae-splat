@@ -12,7 +12,7 @@
 
 
 
-void blit_train_cameras_tensor(
+at::Tensor blit_train_cameras_tensor(
     at::Tensor render_rgbs,  // [H, W, 3]
     at::Tensor render_depths,  // [H, W, 1]
     at::Tensor render_alphas,  // [H, W, 1]

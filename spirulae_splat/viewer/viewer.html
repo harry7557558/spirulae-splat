@@ -359,7 +359,7 @@
 // Configuration (injected by server)
 // ═══════════════════════════════════════════════════════
 const CFG = {
-  wsUrl: "ws://WS_HOST:WS_PORT",
+  serverUrl: "http://SERVER_HOST:SERVER_PORT",
   extraSliders: EXTRA_SLIDERS_JSON,    // [{id, label, min, max, step, value, unit}]
   extraDropdowns: EXTRA_DROPDOWNS_JSON, // [{id, label, options:[{value,label}], default}]
 };
@@ -707,79 +707,36 @@ function getExtraValues() {
 }
 
 // ═══════════════════════════════════════════════════════
-// WebSocket client
+// HTTP client
 // ═══════════════════════════════════════════════════════
-let ws = null;
-let _reconnectDelay = 1000;
-let _pendingMetaKey = null;
 
-function wsConnect() {
-  setStatus("connecting");
-  ws = new WebSocket(CFG.wsUrl);
-  ws.binaryType = "arraybuffer";
-
-  ws.onopen = () => {
-    _reconnectDelay = 1000;
-    setStatus("connected");
-    Viewer.requestRender();
-  };
-
-  ws.onclose = () => {
-    setStatus("disconnected");
-    setTimeout(wsConnect, _reconnectDelay);
-    _reconnectDelay = Math.min(_reconnectDelay * 2, 16000);
-  };
-
-  ws.onerror = () => setStatus("error");
-
-  ws.onmessage = (ev) => {
-    if (typeof ev.data === "string") {
-      const msg = JSON.parse(ev.data);
-      if (msg.type === "frame") {
-        _pendingMetaKey = msg.key;
-      } else if (msg.type === "buffer_keys") {
-        updateBufferKeyDropdown(msg.keys);
-      } else if (msg.type === "error" || msg.type === "encode_error") {
-        console.warn("[renderer3d]", msg.message);
-      }
-    } else {
-      // Binary: JPEG payload for _pendingMetaKey
-      if (_pendingMetaKey === null) return;
-      const key = _pendingMetaKey;
-      _pendingMetaKey = null;
-      const currentKey = $("buffer-key").value;
-      if (key === currentKey) {
-        const blob = new Blob([ev.data], {type: "image/jpeg"});
-        const url = URL.createObjectURL(blob);
-        const img = $("canvas-img");
-        const old = img.src;
-        img.onload = () => { URL.revokeObjectURL(old); };
-        img.src = url;
-        Viewer.onFrameReceived();
-        setStatus("connected");
-      }
-    }
-  };
+async function fetchBuffers() {
+  try {
+    const response = await fetch(`${CFG.serverUrl}/buffers`);
+    const keys = await response.json();
+    updateBufferKeyDropdown(keys);
+  } catch (e) {
+    console.error("Failed to fetch buffers:", e);
+  }
 }
 
 function sendRenderRequest() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  const fov = parseInt($("fov-slider").value);
-  const resSlider = $("res-slider").value;
-  const res = getResolution(resSlider);
-  const { fx, fy, cx, cy } = fovToIntrinsics(fov, res.w, res.h);
-  const cameraModel = $("camera-model").value;
-
-  const msg = {
-    type: "render_request",
-    c2w: Array.from(cam.c2w()),
-    fx, fy, cx, cy,
+  const c2w_flat = cam.c2w().flat();
+  const res = getResolution($("res-slider").value);
+  const intrinsics = fovToIntrinsics($("fov-slider").value, res.w, res.h);
+  const params = new URLSearchParams({
+    buffer_key: $("buffer-key").value,
+    c2w: c2w_flat.join(","),
+    fx: intrinsics.fx,
+    fy: intrinsics.fy,
+    cx: res.w / 2,
+    cy: res.h / 2,
     width: res.w,
     height: res.h,
-    camera_model: cameraModel,
-    extra: getExtraValues(),
-  };
-  ws.send(JSON.stringify(msg));
+    camera_model: $("camera-model").value,
+  });
+  const img = $("canvas-img");
+  img.src = `${CFG.serverUrl}/render?${params}`;
   setStatus("rendering");
 }
 
@@ -812,6 +769,7 @@ function setStatus(s) {
   if (s === "connecting")    { txt.textContent="Connecting…"; }
   else if (s === "connected"){ dot.classList.add("connected"); txt.textContent="Connected"; }
   else if (s === "rendering"){ dot.classList.add("rendering"); txt.textContent="Rendering…"; }
+  else if (s === "ready")    { dot.classList.add("connected"); txt.textContent="Ready"; }
   else if (s === "disconnected"){ txt.textContent="Disconnected. Retrying…"; }
   else if (s === "error")    { dot.classList.add("error"); txt.textContent="Error"; }
 }
@@ -864,7 +822,6 @@ const Viewer = (() => {
   }
 
   function _flush() {
-    _pending = false;
     if (!_dirty) return;
     const now = performance.now();
     if (now - _lastRenderTime < MIN_INTERVAL) {
@@ -879,6 +836,7 @@ const Viewer = (() => {
   }
 
   function onFrameReceived() {
+    _pending = false;
     FPS.tick();
   }
 
@@ -1026,8 +984,13 @@ window.addEventListener("resize", () => {
 // ═══════════════════════════════════════════════════════
 (function init() {
   injectExtraControls();
+  setStatus("ready");
   showHint(hintFor("turntable"));
-  wsConnect();
+  fetchBuffers();
+  $("canvas-img").onload = () => {
+    Viewer.onFrameReceived();
+    setStatus("ready");
+  };
   // Initial res label
   const res = getResolution($("res-slider").value);
   $("res-val").textContent = res.label;

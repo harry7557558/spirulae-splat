@@ -592,8 +592,80 @@ __global__ void blit_aabb_bvh_kernel(
     }
 }
 
+
+__constant__ float COEFFS_turbo[3][8] = {
+    { 0.14637796, 2.94711014, -10.15061040, -90.46877071, 550.44382083, -1061.31232675, 874.85901369, -266.03287948 },
+    { 0.08594198, 2.06520532, 9.64581379, -55.09180383, 149.40813531, -245.26823636, 202.98596195, -63.82163439 },
+    { 0.23431523, 6.33792818, 9.26380342, -203.76964931, 604.07329733, -766.82678386, 447.99287080, -97.24397473 },
+};
+
+inline __device__ float3 colormap_turbo(float t) {
+    float3 c{0.0f, 0.0f, 0.0f};
+    #pragma unroll
+    for (int k = 7; k >= 0; --k)
+        c = c * t + float3{COEFFS_turbo[0][k], COEFFS_turbo[1][k], COEFFS_turbo[2][k]};
+    return c;
+}
+
+__constant__ float COEFFS_viridis[3][4] = {
+    { 0.29387218, 0.04824199, -2.14339482, 2.89151588 },
+    { 0.01752027, 1.23905227, -0.16754949, -0.17213704 },
+    { 0.34360395, 1.23133794, -1.71784815, 0.17750210 },
+};
+
+inline __device__ float3 colormap_viridis(float t) {
+    float3 c{0.0f, 0.0f, 0.0f};
+    #pragma unroll
+    for (int k = 3; k >= 0; --k)
+        c = c * t + float3{COEFFS_viridis[0][k], COEFFS_viridis[1][k], COEFFS_viridis[2][k]};
+    return c;
+}
+
+__constant__ float COEFFS_magma[3][5] = {
+    { -0.00157294, 0.45897387, 4.30604404, -5.49016037, 1.69082060 },
+    { -0.01042786, 0.82685306, -2.93736985, 5.48987916, -2.36381252 },
+    { -0.05490989, 3.73227094, -7.52578597, 3.89534203, 0.75796302 },
+};
+
+inline __device__ float3 colormap_magma(float t) {
+    float3 c{0.0f, 0.0f, 0.0f};
+    #pragma unroll
+    for (int k = 4; k >= 0; --k)
+        c = c * t + float3{COEFFS_magma[0][k], COEFFS_magma[1][k], COEFFS_magma[2][k]};
+    return c;
+}
+
+__constant__ float COEFFS_inferno[3][5] = {
+    { -0.01087222, 0.74909880, 3.64171238, -5.11462265, 1.66959821 },
+    { -0.00208239, 0.51010061, -1.86975118, 4.46548484, -2.07978236 },
+    { 0.00011545, 2.59796038, -2.30104808, -6.74156149, 7.14515755 },
+};
+
+inline __device__ float3 colormap_inferno(float t) {
+    float3 c{0.0f, 0.0f, 0.0f};
+    #pragma unroll
+    for (int k = 4; k >= 0; --k)
+        c = c * t + float3{COEFFS_inferno[0][k], COEFFS_inferno[1][k], COEFFS_inferno[2][k]};
+    return c;
+}
+
+__constant__ float COEFFS_cividis[3][4] = {
+    { -0.05784352, 1.43486697, -0.95976947, 0.59905315 },
+    { 0.13417334, 0.69925032, -0.07321042, 0.14530728 },
+    { 0.38674306, 0.05514949, 0.66155846, -0.89703048 },
+};
+
+inline __device__ float3 colormap_cividis(float t) {
+    float3 c{0.0f, 0.0f, 0.0f};
+    #pragma unroll
+    for (int k = 3; k >= 0; --k)
+        c = c * t + float3{COEFFS_cividis[0][k], COEFFS_cividis[1][k], COEFFS_cividis[2][k]};
+    return c;
+}
+
+
 __global__ void blit_with_bvh_kernel(
-    TensorView<float, 3> render_rgbs,  // [H, W, 3]
+    const TensorView<float, 3> render_rgbs,  // [H, W, 3]
     const TensorView<float, 3> render_depths,  // [H, W, 1]
     const TensorView<float, 3> render_alphas,  // [H, W, 1]
     const bool view_is_fisheye,
@@ -608,7 +680,9 @@ __global__ void blit_with_bvh_kernel(
     const float3* __restrict__ lss_aabb,
     const float4* __restrict__ tri_buffer,
     const int2* __restrict__ tri_nodes,
-    const float3* __restrict__ tri_aabb
+    const float3* __restrict__ tri_aabb,
+    const float* __restrict__ min_max,
+    TensorView<uint8_t, 3> out_rgbs
 ) {
     const int pix_x = blockIdx.x * blockDim.x + threadIdx.x;
     const int pix_y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -632,8 +706,6 @@ __global__ void blit_with_bvh_kernel(
 
     float alpha_final = 0.0f;
     float3 rgb_final = {0.0f, 0.0f, 0.0f};
-
-    // auto time_0 = clock();
 
     for (int i = 0; i < MSAA*MSAA; ++i) {
         const float px = (float)pix_x + (i/MSAA + 0.5f) / (float)MSAA;
@@ -760,17 +832,18 @@ __global__ void blit_with_bvh_kernel(
         rgb_final += rgb * a;
     }
 
-    // auto time_1 = clock();
-    // float dt = (float)(time_1 - time_0) * 1e-6f;
-
-    if (alpha_final > 0.0f) {
-        float3 rgb = render_rgbs.load3(pix_y, pix_x);
-        rgb = rgb * (1.0f - alpha_final) + rgb_final;
-        render_rgbs.store3(pix_y, pix_x, rgb);
+    float3 rgb;
+    if (render_rgbs.shape[2] == 1) {
+        float amin = min_max[0], amax = min_max[1];
+        float z = render_rgbs.load1(pix_y, pix_x);
+        z = (z - amin) / (amax - amin);
+        rgb = colormap_turbo(z);
     }
-    // float3 rgb = render_rgbs.load3(pix_y, pix_x);
-    // rgb = rgb * 0.1f + make_float3(dt / (dt + 1.0f)) * 0.9f;
-    // render_rgbs.store3(pix_y, pix_x, rgb);
+    else rgb = render_rgbs.load3(pix_y, pix_x);
+    if (alpha_final > 0.0f)
+        rgb = rgb * (1.0f - alpha_final) + rgb_final;
+    rgb = 255.0f * fmin(fmax(rgb, make_float3(0.0f)), make_float3(1.0f)) + 0.5f;
+    out_rgbs.store3(pix_y, pix_x, {(uint8_t)rgb.x, (uint8_t)rgb.y, (uint8_t)rgb.z});
 }
 
 template<VisPrimitive primitive>
@@ -829,8 +902,33 @@ inline std::tuple<at::Tensor, at::Tensor> build_bvh(
     return std::make_tuple(internal_nodes, treeAABB);
 }
 
+__global__ void compute_min_max_kernel(
+    TensorView<float, 3> depths,
+    float* __restrict__ min_max  // [2]
+) {
+    uint32_t xid = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t yid = blockIdx.y * blockDim.y + threadIdx.y;
+
+    float amin = 1e38f, amax = -1e38f;
+    if (xid < depths.shape[1] && yid < depths.shape[0]) {
+        float z = depths.load1(yid, xid);
+        if (isfinite(z))
+            amin = fminf(amin, z), amax = fmaxf(amax, z);
+    }
+
+    auto block = cg::this_thread_block();
+    cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
+
+    amin = cg::reduce(warp, amin, cg::less<float>());
+    if (warp.thread_rank() == 0) atomicMin(&min_max[0], amin);
+
+    amax = cg::reduce(warp, amax, cg::greater<float>());
+    if (warp.thread_rank() == 0) atomicMax(&min_max[1], amax);
+}
+
+
 /*[AutoHeaderGeneratorExport]*/
-void blit_train_cameras_tensor(
+at::Tensor blit_train_cameras_tensor(
     at::Tensor render_rgbs,  // [H, W, 3]
     at::Tensor render_depths,  // [H, W, 1]
     at::Tensor render_alphas,  // [H, W, 1]
@@ -860,6 +958,7 @@ void blit_train_cameras_tensor(
 
     auto h = render_rgbs.size(-3);
     auto w = render_rgbs.size(-2);
+    auto c = render_rgbs.size(-1);
     auto n = intrins.size(0);
 
     uint32_t num_lss = n*8*kNumFrustumSegments;
@@ -941,6 +1040,20 @@ void blit_train_cameras_tensor(
     // );
     // CHECK_DEVICE_ERROR(cudaGetLastError());
 
+    at::Tensor min_max_tensor;
+    if (c == 1) {
+        min_max_tensor = at::empty({2}, render_rgbs.options());
+        cudaMemset(min_max_tensor.data_ptr<float>()+0, kFloatPInfByte, sizeof(float));
+        cudaMemset(min_max_tensor.data_ptr<float>()+1, kFloatNInfByte, sizeof(float));
+        compute_min_max_kernel<<<_LAUNCH_ARGS_2D(w, h, 16, 16)>>>(
+            tensor2view<float, 3>(render_rgbs),
+            min_max_tensor.data_ptr<float>()
+        );
+        CHECK_DEVICE_ERROR(cudaGetLastError());
+    }
+
+    at::Tensor out_rgb = at::empty({h, w, 3}, render_rgbs.options().dtype(at::kByte));
+
     blit_with_bvh_kernel<<<_LAUNCH_ARGS_2D(w, h, 8, 4)>>>(
         tensor2view<float, 3>(render_rgbs),
         tensor2view<float, 3>(render_depths),
@@ -956,6 +1069,11 @@ void blit_train_cameras_tensor(
         (float3*)lss_aabb.data_ptr<float>(),
         (float4*)tri_buffer.data_ptr<float>(),
         (int2*)tri_nodes.data_ptr<int32_t>(),
-        (float3*)tri_aabb.data_ptr<float>()
+        (float3*)tri_aabb.data_ptr<float>(),
+        c == 1 ? min_max_tensor.data_ptr<float>() : nullptr,
+        tensor2view<uint8_t, 3>(out_rgb)
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return out_rgb;
 }

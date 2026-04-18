@@ -120,9 +120,6 @@ class RenderWorker:
                     req.width, req.height,
                     req.camera_model,
                 )
-                for key, value in buffers.items():
-                    if len(value.shape) == 3:
-                        buffers[key] = value[None]
                 result = RenderResult(request_id=req.request_id, buffers=buffers)
             except Exception as exc:
                 import traceback
@@ -148,19 +145,10 @@ class RenderWorker:
 # Image encoding helpers
 # ------------------------------------------------------------------
 
-def tensor_to_numpy(tensor: Any) -> np.ndarray:
-    """Convert a (1, H, W, C) float32 torch tensor to uint8 numpy HWC."""
-    import torch  # noqa: F401 — only needed at encode time
-    if hasattr(tensor, "detach"):
-        arr = tensor.detach().cpu().float().numpy()
-    else:
-        arr = np.asarray(tensor, dtype=np.float32)
-    arr = arr[0]  # (H, W, C)
-    return arr
-
 
 def encode_buffer_to_jpeg(
     tensor: Any,
+    post_processor: Optional[Callable] = None,
     quality: int = 85,
     colormap: str = "turbo",
 ) -> bytes:
@@ -172,38 +160,11 @@ def encode_buffer_to_jpeg(
     """
     import cv2
 
-    arr = tensor_to_numpy(tensor)  # (H, W, C)
-    c = arr.shape[2]
-
-    if c == 3:
-        rgb = np.clip(arr, 0.0, 1.0)
-        rgb_u8 = (rgb * 255).astype(np.uint8)
-    elif c == 1:
-        mono = arr[:, :, 0]
-        # Normalise ignoring NaN/inf
-        valid = mono[np.isfinite(mono)]
-        if valid.size > 0:
-            lo, hi = valid.min(), valid.max()
-            span = hi - lo
-            if span > 1e-8:
-                mono = (mono - lo) / span
-            else:
-                mono = np.zeros_like(mono)
-        else:
-            mono = np.zeros_like(mono)
-        mono = np.clip(mono, 0.0, 1.0)
-        try:
-            import matplotlib.cm as cm
-            cmap = cm.get_cmap(colormap)
-            rgb_u8 = (cmap(mono)[:, :, :3] * 255).astype(np.uint8)
-        except Exception:
-            mono_u8 = (mono * 255).astype(np.uint8)
-            rgb_u8 = np.stack([mono_u8] * 3, axis=2)
-    else:
-        raise ValueError(f"Unsupported channel count: {c}")
+    assert post_processor is not None, "TODO"
+    tensor = post_processor(tensor).cpu().numpy()
 
     success, buf = cv2.imencode(
-        '.jpg', cv2.cvtColor(rgb_u8, cv2.COLOR_RGB2BGR),
+        '.jpg', cv2.cvtColor(tensor, cv2.COLOR_RGB2BGR),
         [int(cv2.IMWRITE_JPEG_QUALITY), quality]
     )
     if success:

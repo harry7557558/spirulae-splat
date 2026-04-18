@@ -13,8 +13,6 @@ async def start_viewer(trainer: SpirulaeSplatTrainer):
         render_fn=trainer.render,
         http_host="localhost",
         http_port=7007,
-        ws_host="localhost",
-        ws_port=8765,
         jpeg_quality=75,
         # Example extra controls:
         # extra_sliders=[

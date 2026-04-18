@@ -64,7 +64,10 @@ class SpirulaeSplatTrainer:
     def _render(self, c2w, fx, fy, cx, cy, w, h, camera_model):
         camera = Cameras((fx, fy, cx, cy), [0.0]*10, h, w, torch.from_numpy(c2w), camera_model)
         outputs = self.model.get_outputs(camera)
-        outputs['rgb'] = annotate_train_cameras(outputs['rgb'], outputs['depth'], outputs['alpha'], camera, self.model.cameras)
+        outputs['_post_processor'] = lambda tensor: annotate_train_cameras(
+            tensor, outputs['depth'], outputs['alpha'],
+            camera, self.model.cameras
+        )
         return outputs
 
     def render(self, *args):

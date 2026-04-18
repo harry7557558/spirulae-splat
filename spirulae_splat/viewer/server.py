@@ -26,7 +26,6 @@ import webbrowser
 from typing import Any, Callable, Dict, List, Optional
 
 from .render_worker import RenderWorker
-from .ws_server import WebSocketThread
 from .http_server import HTTPThread
 
 
@@ -95,10 +94,7 @@ class ViewerServer:
         The function is always called from a single dedicated thread.
 
     http_host / http_port:
-        Address for the HTTP viewer page.
-
-    ws_host / ws_port:
-        Address for the WebSocket render stream.
+        Address for the HTTP server.
 
     jpeg_quality:
         JPEG encoding quality (1-95, default 85).
@@ -120,8 +116,6 @@ class ViewerServer:
         *,
         http_host: str = "localhost",
         http_port: int = 7007,
-        ws_host: str = "localhost",
-        ws_port: int = 8765,
         jpeg_quality: int = 85,
         extra_sliders: Optional[List[SliderDef]] = None,
         extra_dropdowns: Optional[List[DropdownDef]] = None,
@@ -130,15 +124,12 @@ class ViewerServer:
         self._render_fn = render_fn
         self._http_host = http_host
         self._http_port = http_port
-        self._ws_host = ws_host
-        self._ws_port = ws_port
         self._jpeg_quality = jpeg_quality
         self._extra_sliders = extra_sliders or []
         self._extra_dropdowns = extra_dropdowns or []
         self._open_browser = open_browser
 
         self._render_worker: Optional[RenderWorker] = None
-        self._ws_thread: Optional[WebSocketThread] = None
         self._http_thread: Optional[HTTPThread] = None
 
     # ------------------------------------------------------------------
@@ -154,19 +145,11 @@ class ViewerServer:
         )
         self._render_worker.start()
 
-        # 2. WebSocket server
-        self._ws_thread = WebSocketThread(
-            render_worker=self._render_worker,
-            host=self._ws_host,
-            port=self._ws_port,
-            jpeg_quality=self._jpeg_quality,
-        )
-        self._ws_thread.start()
-
-        # 3. HTTP server
+        # 2. HTTP server
         html = self._build_html()
         self._http_thread = HTTPThread(
             html=html,
+            render_worker=self._render_worker,
             host=self._http_host,
             port=self._http_port,
         )
@@ -174,7 +157,6 @@ class ViewerServer:
 
         url = f"http://{self._http_host}:{self._http_port}/"
         print(f"[renderer3d] Viewer at  {url}")
-        print(f"[renderer3d] WebSocket  ws://{self._ws_host}:{self._ws_port}/")
 
         if self._open_browser:
             threading.Timer(0.5, webbrowser.open, args=[url]).start()
@@ -185,8 +167,6 @@ class ViewerServer:
         """Stop all background threads."""
         if self._render_worker:
             self._render_worker.stop()
-        if self._ws_thread:
-            self._ws_thread.stop()
         if self._http_thread:
             self._http_thread.stop()
 
@@ -217,8 +197,8 @@ class ViewerServer:
         extra_dropdowns_json = json.dumps([d.to_dict() for d in self._extra_dropdowns])
 
         # Inject server-side config into the JS
-        html = html.replace("WS_HOST", self._ws_host)
-        html = html.replace("WS_PORT", str(self._ws_port))
+        html = html.replace("SERVER_HOST", self._http_host)
+        html = html.replace("SERVER_PORT", str(self._http_port))
         html = html.replace("EXTRA_SLIDERS_JSON", extra_sliders_json)
         html = html.replace("EXTRA_DROPDOWNS_JSON", extra_dropdowns_json)
 
