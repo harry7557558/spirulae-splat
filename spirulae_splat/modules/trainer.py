@@ -66,7 +66,7 @@ class SpirulaeSplatTrainer:
         outputs = self.model.get_outputs(camera)
         outputs['_post_processor'] = lambda tensor: annotate_train_cameras(
             tensor, outputs['depth'], outputs['alpha'],
-            camera, self.model.cameras
+            camera, self.model.cameras, self.dataset.thumbnails
         )
         return outputs
 

@@ -117,9 +117,6 @@ class SpirualeSplatDataParserConfig:
     mask_color: Optional[Tuple[float, float, float]] = None
     """Replace the unknown pixels with this color. Relevant if you have a mask but still sample everywhere."""
 
-    load_thumbnails: bool = True
-    """Whether to load thumbnails for viewer. If False, this can significantly speed up data loading for large datasets."""
-
     validation_fraction: float = 0.0
     """Use this fraction of training images for validation. Stop training when performance on validation images start to drop."""
 
@@ -391,7 +388,6 @@ class SpirulaeSplatDataparser:
                 "depth_unit_scale_factor": self.config.depth_unit_scale_factor,
                 "normal_filenames": normal_filenames if len(normal_filenames) > 0 else None,
                 "mask_color": self.config.mask_color,
-                "load_thumbnails": self.config.load_thumbnails,
                 "val_indices": get_train_eval_split_fraction(image_filenames, 1-self.config.validation_fraction)[1].tolist(),
                 **metadata,
             },

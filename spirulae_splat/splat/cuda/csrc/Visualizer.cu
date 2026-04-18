@@ -72,7 +72,7 @@ __global__ void fill_frustum_segments_kernel(
         if (!valid) {
             // binary search for valid
             float t0 = 0.0f, t1 = 1.0f;
-            for (int iter = 0; iter < 6; ++iter) {
+            for (int iter = 0; iter < 12; ++iter) {
                 float t = 0.5f*(t0+t1);
                 float3 temp;
                 if (SlangProjectionUtils::generate_ray(uv*t, is_fisheye, dist_coeffs, &temp))
@@ -142,7 +142,7 @@ __global__ void fill_frustum_segments_kernel(
             if (!valid) {
                 // binary search for valid
                 float t0 = 0.0f, t1 = 1.0f;
-                for (int iter = 0; iter < 6; ++iter) {
+                for (int iter = 0; iter < 12; ++iter) {
                     float t = 0.5f*(t0+t1);
                     float3 temp;
                     if (SlangProjectionUtils::generate_ray(uv*t, is_fisheye, dist_coeffs, &temp))
@@ -443,35 +443,53 @@ inline __device__ float ray_aabb_intersection(
     return intersect ? (tmin > t0 ? tmin : tmax) : -1.0f;
 }
 
-inline __device__ float ray_linear_swept_sphere_intersection(
-    float3 a, float3 b,
-    float r0, float r1,
+inline __device__ float ray_sphere_intersection(
+    float3 c, float r,
     float3 ro, float3 rd,
     float t0, float t1
 ) {
-    float3 q = b-a;
-    float inv_l = rsqrtf(dot(q, q));
-    float3 u = q * inv_l;
-    float k = (r1 - r0) * inv_l;
-    float3 m = ro - a;
-    float alpha = dot(u, m), beta = dot(u, rd);
-    m = m - u * alpha;
-    rd = rd - u * beta;
-    float A = dot(rd, rd) - (k * beta) * (k * beta);
-    float B = dot(m, rd) - (r0 + k * alpha) * (k * beta);
-    float C = dot(m, m) - (r0 + k * alpha) * (r0 + k * alpha);
-    float delta = B*B - A*C;
-    float D = sqrtf(delta);
-    float tmin = ((A > 0.0f ? -D : D) - B) / A;
-    float tmax = ((A > 0.0f ? D : -D) - B) / A;
-    // float topt = (1.0f / inv_l - alpha) / beta;
-    // bool intersect = delta > 0.0f && (tmin - topt) * (tmax - topt) < 0.0f && tmax > t0 && tmin < t1;
-    float l = 1.0f / inv_l;
-    float zmin = alpha + tmin * beta;
-    float zmax = alpha + tmax * beta;
-    float t = zmin > t0 && zmin * (zmin - l) < 0.0f ? tmin : tmax;
-    bool intersect = delta > 0.0f && fminf(zmin * (zmin - l), zmax * (zmax - l)) < 0.0f && t > t0 && t < t1;
-    return intersect ? t : -1.0f;
+    float3 q = ro - c;
+    float b = dot(q, rd);
+    float h = b*b + r*r - dot(q, q);
+    float d = sqrtf(h);
+    float tmin = -b - d, tmax = -b + d;
+    return h > 0.0f ? (tmin > t0 ? tmin : tmax) : -1.0f;
+}
+
+inline __device__ float ray_linear_swept_sphere_intersection(
+    float3 pa, float3 pb,
+    float ra, float rb,
+    float3 ro, float3 rd,
+    float t0, float t1
+) {
+    // https://www.shadertoy.com/view/MlKfzm by Inigo Quilez, MIT license
+    float3 ba = pb - pa, oa = ro - pa, ob = ro - pb;
+    float rr = ra - rb;
+    float m0 = dot(ba,ba), m1 = dot(ba,oa), m2 = dot(ba,rd), m3 = dot(rd,oa),
+        m5 = dot(oa,oa), m6 = dot(ob,rd), m7 = dot(ob,ob);
+    float d2 = m0 - rr*rr;
+	float k2 = d2 - m2*m2;
+    float k1 = d2*m3 - m1*m2 + m2*rr*ra;
+    float k0 = d2*m5 - m1*m1 + m1*rr*ra*2.0f - m0*ra*ra;
+	float h = k1*k1 - k0*k2;
+	if (h < 0.0f)
+        return -1.0f;
+    float t = (-sqrtf(h)-k1)/k2;
+    float y = m1 - ra*rr + t*m2;
+    if (y > 0.0f && y < d2)
+        return (t-t0)*(t-t1) < 0.0f ? t : -1.0f;
+    float h1 = m3*m3 - m5 + ra*ra;
+    float h2 = m6*m6 - m7 + rb*rb;
+    if (fmaxf(h1, h2) < 0.0f)
+        return -1.0f;
+    float r = 1e20f;
+    if (h1 > 0.0f)
+    	r = -m3 - sqrtf(h1);
+	if (h2 > 0.0f) {
+    	float t = -m6 - sqrtf(h2);
+        if ((t-t0)*(t-t1) < 0.0f && t < r) r = t;
+    }
+    return (r-t0)*(r-t1) < 0.0f ? r : -1.0f;
 }
 
 inline __device__ bool ray_triangle_intersection(
@@ -479,12 +497,11 @@ inline __device__ bool ray_triangle_intersection(
     uint32_t idx,
     float3 ro, float3 rd,
     float t0, float t1,
-    float &out_t, float3 &out_rgb
+    float &out_t, uint32_t &out_cam_idx, float2 &out_uv
 ) {
     float3 verts[3];
     float2 uvs[3];
-    uint32_t cam_idx;
-    unpack_triangle(tri_buffer, idx, verts, uvs, cam_idx);
+    unpack_triangle(tri_buffer, idx, verts, uvs, out_cam_idx);
     float3 po = verts[0] - ro;
     float3 a = verts[1] - verts[0];
     float3 b = verts[2] - verts[0];
@@ -496,8 +513,7 @@ inline __device__ bool ray_triangle_intersection(
     bool intersect = (t > t0 && t < t1 && u > 0.0f && v > 0.0f && w > 0.0f);
     if (intersect) {
         out_t = t;
-        float2 uv = uvs[0] * w + uvs[1] * u + uvs[2] * v;
-        out_rgb = float3{uv.x, uv.y, 0.0f};
+        out_uv = uvs[0] * w + uvs[1] * u + uvs[2] * v;
     }
     return intersect;
 }
@@ -664,6 +680,42 @@ inline __device__ float3 colormap_cividis(float t) {
 }
 
 
+inline __device__ float3 get_thumbnail_bilinear(
+    const TensorView<uint8_t, 4> image,  // [B, H, W, 4]
+    uint32_t bid,
+    float2 uv
+) {
+    const int W = image.shape[2],
+        H = image.shape[1];
+    float x = fminf(fmaxf(uv.x * (float)W + 0.5f, 0.0f), (float)(W-1));
+    float y = fminf(fmaxf(uv.y * (float)H + 0.5f, 0.0f), (float)(H-1));
+    int x0 = (long)floorf(x);
+    int x1 = x0 + 1;
+    int y0 = (long)floorf(y);
+    int y1 = y0 + 1;
+    int wx1 = (int)(256 * (x - x0));
+    int wx0 = 256 - wx1;
+    int wy1 = (int)(256 * (y - y0));
+    int wy0 = 256 - wy1;
+
+    auto c00 = image.load4(bid, y0, x0);
+    auto c10 = image.load4(bid, y0, x1);
+    auto c01 = image.load4(bid, y1, x0);
+    auto c11 = image.load4(bid, y1, x1);
+
+    float4 rgba = float4{
+        (float)(c00.x * (wx0 * wy0) + c10.x * (wx1 * wy0) + c01.x * (wx0 * wy1) + c11.x * (wx1 * wy1)),
+        (float)(c00.y * (wx0 * wy0) + c10.y * (wx1 * wy0) + c01.y * (wx0 * wy1) + c11.y * (wx1 * wy1)),
+        (float)(c00.z * (wx0 * wy0) + c10.z * (wx1 * wy0) + c01.z * (wx0 * wy1) + c11.z * (wx1 * wy1)),
+        (float)(c00.w * (wx0 * wy0) + c10.w * (wx1 * wy0) + c01.w * (wx0 * wy1) + c11.w * (wx1 * wy1)),
+    } * (1.0f / (255.0f*256.0f*256.0f));
+    return float3{
+        rgba.x * rgba.w,
+        rgba.y * rgba.w,
+        rgba.z * rgba.w + (1.0f - rgba.w)
+    };
+}
+
 __global__ void blit_with_bvh_kernel(
     const TensorView<float, 3> render_rgbs,  // [H, W, 3]
     const TensorView<float, 3> render_depths,  // [H, W, 1]
@@ -681,13 +733,56 @@ __global__ void blit_with_bvh_kernel(
     const float4* __restrict__ tri_buffer,
     const int2* __restrict__ tri_nodes,
     const float3* __restrict__ tri_aabb,
+    const TensorView<uint8_t, 4> thumbnails,
     const float* __restrict__ min_max,
     TensorView<uint8_t, 3> out_rgbs
 ) {
     const int pix_x = blockIdx.x * blockDim.x + threadIdx.x;
     const int pix_y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    float3 render_rgb;
+    if (render_rgbs.shape[2] == 1) {
+        float amin = min_max[0], amax = min_max[1];
+        float z = render_rgbs.load1(min(pix_y, image_height-1), min(pix_x, image_width-1));
+        z = (z - amin) / (amax - amin);
+        render_rgb = colormap_turbo(z);
+    }
+    else render_rgb = render_rgbs.load3(min(pix_y, image_height-1), min(pix_x, image_width-1));
+
+    // decide whether to render camera border black or white based on background color, with noise reduction
+    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
+    float gray_a, gray_b, gray_c;
+    constexpr float BLOCK_DIM_X = 8;
+    constexpr float BLOCK_DIM_Y = 4;
+    {
+        float gray = dot(render_rgb, float3{0.299f, 0.587f, 0.114f});
+        float x = (float)threadIdx.x * (1.0f / (float)BLOCK_DIM_X);
+        float y = (float)threadIdx.y * (1.0f / (float)BLOCK_DIM_Y);
+        #if 0
+        // re-calibration needed when block size changes
+        // inv([sxx sxy sx; sxy syy sy; sx sy s])
+        float sxx = cg::reduce(warp, x*x, cg::plus<float>());  // TODO: closed form?
+        float sxy = cg::reduce(warp, x*y, cg::plus<float>());  // TODO: closed form?
+        float syy = cg::reduce(warp, y*y, cg::plus<float>());  // TODO: closed form?
+        float sx = cg::reduce(warp, x, cg::plus<float>());  // TODO: closed form?
+        float sy = cg::reduce(warp, y, cg::plus<float>());  // TODO: closed form?
+        float s = WARP_SIZE;
+        if (pix_x == 0 && pix_y == 0) printf("%f %f %f %f %f %f\n", sxx, sxy, syy, sx, sy, s);
+        #endif
+        float sxg = cg::reduce(warp, x*gray, cg::plus<float>());
+        float syg = cg::reduce(warp, y*gray, cg::plus<float>());
+        float sg = cg::reduce(warp, gray, cg::plus<float>());
+        gray_a = 3.809523809523809e-01f * sxg - 1.666666666666667e-01f * sg;
+        gray_b = 3.999999999999999e-01f * syg - 1.500000000000000e-01f * sg;
+        gray_c = -1.666666666666667e-01f * sxg - 1.500000000000000e-01f * syg + 1.604166666666667e-01f * sg;
+    }
+
     if (pix_x >= image_width || pix_y >= image_height)
         return;
+
+    float depth = render_depths.load1(pix_y, pix_x);
+    float opac = render_alphas.load1(pix_y, pix_x);
+    depth /= fminf(fmaxf(opac, 1e-6f) / 0.5f, 1.0f);
 
     constexpr int MSAA = 2;
     float4 intrin = view_intrins[0];
@@ -700,16 +795,14 @@ __global__ void blit_with_bvh_kernel(
     float3 t = { view_viewmat[3], view_viewmat[7], view_viewmat[11] };
     CameraDistortionCoeffs dist_coeffs = view_dist_coeffs.load(0);
 
-    float depth = render_depths.load1(pix_y, pix_x);
-    float opac = render_alphas.load1(pix_y, pix_x);
-    depth /= fminf(fmaxf(opac, 1e-6f) / 0.5f, 1.0f);
-
     float alpha_final = 0.0f;
     float3 rgb_final = {0.0f, 0.0f, 0.0f};
 
     for (int i = 0; i < MSAA*MSAA; ++i) {
         const float px = (float)pix_x + (i/MSAA + 0.5f) / (float)MSAA;
         const float py = (float)pix_y + (i%MSAA + 0.5f) / (float)MSAA;
+        float gray = gray_a * (px * (1.0f / (float)BLOCK_DIM_X) - blockIdx.x) +
+            gray_b * (py * (1.0f / (float)BLOCK_DIM_Y) - blockIdx.y) + gray_c;
         float3 ray_o = SlangProjectionUtils::transform_ray_o(R, t);
         float3 ray_d;
         bool inside = SlangProjectionUtils::generate_ray(
@@ -718,12 +811,13 @@ __global__ void blit_with_bvh_kernel(
             &ray_d
         );
         if (!view_is_fisheye)
-            ray_d = ray_d * (1.0f / ray_d.z);
+            // ray_d = ray_d * (1.0f / ray_d.z);
+            depth *= ray_d.z;
         ray_d = SlangProjectionUtils::transform_ray_d(R, ray_d);
         if (!inside)
             continue;
 
-        float3 rgb = {1.0f, 0.0f, 0.0f};
+        float3 rgb = {0.0f, 0.0f, 0.0f};
         float alpha = 0.0f;
         float tmax = depth;
 
@@ -761,7 +855,7 @@ __global__ void blit_with_bvh_kernel(
                         );
                         if (t_temp > 0.0f) {
                             tmax = t_temp;
-                            rgb = {0.1f, 0.1f, 0.1f};
+                            rgb = gray > 0.2f ? float3{0.1f, 0.1f, 0.1f} : float3{0.9f, 0.9f, 0.9f};
                             alpha = 1.0f;
                         }
                     }
@@ -802,14 +896,15 @@ __global__ void blit_with_bvh_kernel(
                     // leaf
                     if (childIdx < 0) {
                         float t_temp;
-                        float3 rgb_temp;
+                        uint32_t cam_idx;
+                        float2 uv;
                         if (ray_triangle_intersection(
                             tri_buffer, ~childIdx,
                             ray_o, ray_d, 0.0f, tmax,
-                            t_temp, rgb_temp
+                            t_temp, cam_idx, uv
                         )) {
                             tmax = t_temp;
-                            rgb = rgb_temp;
+                            rgb = get_thumbnail_bilinear(thumbnails, cam_idx, uv);
                             alpha = 1.0f;
                         }
                     }
@@ -832,18 +927,10 @@ __global__ void blit_with_bvh_kernel(
         rgb_final += rgb * a;
     }
 
-    float3 rgb;
-    if (render_rgbs.shape[2] == 1) {
-        float amin = min_max[0], amax = min_max[1];
-        float z = render_rgbs.load1(pix_y, pix_x);
-        z = (z - amin) / (amax - amin);
-        rgb = colormap_turbo(z);
-    }
-    else rgb = render_rgbs.load3(pix_y, pix_x);
     if (alpha_final > 0.0f)
-        rgb = rgb * (1.0f - alpha_final) + rgb_final;
-    rgb = 255.0f * fmin(fmax(rgb, make_float3(0.0f)), make_float3(1.0f)) + 0.5f;
-    out_rgbs.store3(pix_y, pix_x, {(uint8_t)rgb.x, (uint8_t)rgb.y, (uint8_t)rgb.z});
+        render_rgb = render_rgb * (1.0f - alpha_final) + rgb_final;
+    render_rgb = 255.0f * fmin(fmax(render_rgb, make_float3(0.0f)), make_float3(1.0f)) + 0.5f;
+    out_rgbs.store3(pix_y, pix_x, {(uint8_t)render_rgb.x, (uint8_t)render_rgb.y, (uint8_t)render_rgb.z});
 }
 
 template<VisPrimitive primitive>
@@ -942,6 +1029,7 @@ at::Tensor blit_train_cameras_tensor(
     const at::Tensor is_fisheye,  // [N]
     const CameraDistortionCoeffsTensor dist_coeffs,
     const at::Tensor camera_to_worlds,  // [N, 3, 4]
+    at::Tensor thumbnails,
     const float camera_size
 ) {
     DEVICE_GUARD(render_rgbs);
@@ -955,6 +1043,7 @@ at::Tensor blit_train_cameras_tensor(
     CHECK_INPUT(heights);
     CHECK_INPUT(is_fisheye);
     CHECK_INPUT(camera_to_worlds);
+    CHECK_INPUT(thumbnails);
 
     auto h = render_rgbs.size(-3);
     auto w = render_rgbs.size(-2);
@@ -1070,6 +1159,7 @@ at::Tensor blit_train_cameras_tensor(
         (float4*)tri_buffer.data_ptr<float>(),
         (int2*)tri_nodes.data_ptr<int32_t>(),
         (float3*)tri_aabb.data_ptr<float>(),
+        tensor2view<uint8_t, 4>(thumbnails),
         c == 1 ? min_max_tensor.data_ptr<float>() : nullptr,
         tensor2view<uint8_t, 3>(out_rgb)
     );

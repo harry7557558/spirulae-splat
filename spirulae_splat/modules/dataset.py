@@ -162,6 +162,8 @@ def get_normal_image_from_path(
 
 
 
+THUMBNAIL_RESOLUTION = 64
+
 
 class SpirulaeSplatDataset:
     """Dataset that returns images.
@@ -181,8 +183,16 @@ class SpirulaeSplatDataset:
         self.cameras = deepcopy(dataparser_outputs['cameras'])
         self.cameras.rescale(scale_factor)
         self.mask_color = dataparser_outputs['metadata'].get("mask_color", None)
-        self.load_thumbnails = dataparser_outputs['metadata'].get("load_thumbnails", True)
         self.val_indices = set(dataparser_outputs['metadata'].get("val_indices", []))
+
+        self.thumbnails = torch.empty(
+            (len(self.cameras), THUMBNAIL_RESOLUTION, THUMBNAIL_RESOLUTION, 4),
+            device="cuda", dtype=torch.uint8
+        )
+        self.thumbnails[..., :3] = 128
+        self.thumbnails[..., 3:] = 255
+        self._thumbnail_loaded = [False] * len(self.cameras)
+        self._mask_thumbnail_loaded = [False] * len(self.cameras)
 
     def __len__(self):
         return len(self._dataparser_outputs['image_filenames'])
@@ -199,33 +209,24 @@ class SpirulaeSplatDataset:
         assert image.shape[2] in [3, 4], f"Image shape of {image.shape} is in correct."
         return image
 
-    def get_image_float32(self, image_idx: int) -> Float[Tensor, "image_height image_width num_channels"]:
-        """Returns a 3 channel image in float32 torch.Tensor.
-
-        Args:
-            image_idx: The image index in the dataset.
-        """
-        image = self.get_numpy_image(image_idx)
-        if image.dtype in [np.uint8, np.uint16]:
-            image = image.astype(np.float32) / (65535.0 if image.dtype == np.uint16 else 255.0)
-        elif image.dtype not in [np.float32]:
-            image = np.maximum(image.astype(np.float32), 0.0)
-        image = torch.from_numpy(image.astype("float32"))
-        if 'alpha_color' in self._dataparser_outputs and image.shape[-1] == 4:
-            assert (self._dataparser_outputs['alpha_color'] >= 0).all() and (
-                self._dataparser_outputs['alpha_color'] <= 1
-            ).all(), "alpha color given is out of range between [0, 1]."
-            image = image[:, :, :3] * image[:, :, -1:] + self._dataparser_outputs['alpha_color'] * (1.0 - image[:, :, -1:])
-        return image
-
-    def get_image_uint8(self, image_idx: int) -> UInt8[Tensor, "image_height image_width num_channels"]:
+    def get_image(self, image_idx: int) -> UInt8[Tensor, "image_height image_width num_channels"]:
         """Returns a 3 channel image in torch.Tensor, in original format (uint8, uint16, float16, float32).
-            Note that this may return a different types if input is a different type, function name is kept for backward compatibility.
 
         Args:
             image_idx: The image index in the dataset.
         """
         image = self.get_numpy_image(image_idx)
+
+        if not self._thumbnail_loaded[image_idx]:
+            thumbnail = image[:, :, :3]  # TODO: RGBA
+            if thumbnail.dtype == np.uint16:
+                thumbnail = thumbnail >> 16
+            elif thumbnail.dtype in [np.float16, np.float32]:
+                thumbnail = (np.clip(thumbnail.astype(np.float32) / 255.0, 0.0, 1.0) * 255).astype(np.uint8)
+            thumbnail = cv2.resize(thumbnail, (THUMBNAIL_RESOLUTION, THUMBNAIL_RESOLUTION))
+            self.thumbnails[image_idx, :, :, :3] = torch.from_numpy(thumbnail).cuda()
+            self._thumbnail_loaded[image_idx] = True
+
         if image.dtype == np.uint16:
             try:
                 # test if torch supports uint16, which was added in PyTorch 2.3
@@ -234,80 +235,16 @@ class SpirulaeSplatDataset:
             except:
                 raise NotImplementedError("16-bit images are not supported in this version of PyTorch. Please upgrade to PyTorch 2.3 or later, or convert your images to 8-bit.")
         image = torch.from_numpy(image)
-        if 'alpha_color' in self._dataparser_outputs and image.shape[-1] == 4:  # RGBA
-            assert (self._dataparser_outputs['alpha_color'] >= 0).all() and (
-                self._dataparser_outputs['alpha_color'] <= 1
-            ).all(), "alpha color given is out of range between [0, 1]."
-            max_value = (65535.0 if image.dtype == torch.uint16 else 255.0) if image.dtype in [torch.uint16, torch.uint8] else 1.0
-            image = image[:, :, :3] * (image[:, :, -1:] / max_value) + max_value * self._dataparser_outputs['alpha_color'] * (
-                1.0 - image[:, :, -1:] / max_value
-            )
-            image = torch.clamp(image, min=0, max=max_value).to(image.dtype)
         return image
 
-    def get_data(self, image_idx: int, image_type: Literal["uint8", "float32"] = "float32", _is_viewer=True, load_depths=True, load_normals=True, _viewer_thumbnail_cache={}) -> Dict:
+    def get_data(self, image_idx: int, load_depths=True, load_normals=True) -> Dict:
         """Returns the ImageDataset data as a dictionary.
 
         Args:
             image_idx: The image index in the dataset.
             image_type: the type of images returned
         """
-        # multithreaded image loading, speed up nerfstudio viewer.py without having to modify nerfstudio
-        # data manager will explicitly pass _is_viewer=False
-        if _is_viewer:
-            if len(_viewer_thumbnail_cache) == 0:
-                _viewer_thumbnail_cache_1 = []
-                def load_data(idx):
-                    if not self.load_thumbnails:
-                        image = 128 * torch.ones(2, 2, 3, dtype=torch.uint8) if image_type == "uint8" else \
-                            0.5 * torch.ones(2, 2, 3, dtype=torch.float32)
-                        if idx in self.val_indices:
-                            image[..., 1] = (255 if image_type == 'uint8' else 1.0)
-                        return {
-                            'image_idx': idx,
-                            'image': image
-                        }
-                    data = self.get_data(idx, image_type, _is_viewer=False, load_depths=False, load_normals=False)
-                    if data["image"].dtype == torch.uint16:
-                        data["image"] = (data["image"] / 256).to(torch.uint8)
-                    elif data["image"].dtype == torch.float16:
-                        data["image"] = data["image"].float()
-                    if 'mask' in data:
-                        # background = torch.ones_like(data['image']) * [0.125, 32][image_type == 'uint8']
-                        background = torch.ones_like(data['image']) * torch.tensor([(0,0,1), (0,0,255)][image_type == 'uint8']).to(data['image'])
-                        data['image'] = torch.where(data['mask'], data['image'], background)
-                    data['image'] = resize_image(data['image'][None], 2**int(max(0.5*math.log2(data['image'].numel()/10000), 0.0)))[0]
-                    if idx in self.val_indices:
-                        data['image'][..., 1] = (255 if image_type == 'uint8' else 1.0)
-                    return {
-                        'image_idx': data['image_idx'],
-                        'image': data['image'],
-                    }
-                with ThreadPoolExecutor() as executor:
-                    for result in tqdm(
-                        executor.map(load_data, range(len(self))),
-                        total=len(self),
-                        desc="Loading images"
-                    ):
-                        _viewer_thumbnail_cache_1.append(result)
-                for i, im in enumerate(_viewer_thumbnail_cache_1):
-                    _viewer_thumbnail_cache[i] = im
-            if image_idx in _viewer_thumbnail_cache:
-                # print('cache hit:', image_idx, image_type)
-                data = _viewer_thumbnail_cache[image_idx]
-                del _viewer_thumbnail_cache[image_idx]
-                return data
-            # print('cache miss:', image_idx, image_type)
-        else:
-            del _viewer_thumbnail_cache
-
-        # regular loading
-        if image_type == "float32":
-            image = self.get_image_float32(image_idx)
-        elif image_type == "uint8":
-            image = self.get_image_uint8(image_idx)
-        else:
-            raise NotImplementedError(f"image_type (={image_type}) getter was not implemented, use uint8 or float32")
+        image = self.get_image(image_idx)
 
         data = {"image_idx": image_idx, "image": image}
         if self._dataparser_outputs['mask_filenames'] is not None:
@@ -319,6 +256,13 @@ class SpirulaeSplatDataset:
             assert (
                 data["mask"].shape[:2] == data["image"].shape[:2]
             ), f"Mask and image have different shapes. Got {data['mask'].shape[:2]} and {data['image'].shape[:2]}"
+            if not self._mask_thumbnail_loaded[image_idx]:
+                thumbnail = data["mask"].numpy().astype(np.uint8) * 255
+                if thumbnail.ndim == 3:
+                    thumbnail = thumbnail[:, :, 0]
+                thumbnail = cv2.resize(thumbnail, (THUMBNAIL_RESOLUTION, THUMBNAIL_RESOLUTION))
+                self.thumbnails[image_idx, :, :, 3] = torch.from_numpy(thumbnail).cuda()
+                self._mask_thumbnail_loaded[image_idx] = True
         if load_depths:
             if self._dataparser_outputs['metadata'].get("depth_filenames", None) is not None:
                 depth_filepath = self._dataparser_outputs['metadata']["depth_filenames"][image_idx]

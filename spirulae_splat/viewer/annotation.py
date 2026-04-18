@@ -26,7 +26,8 @@ def annotate_train_cameras(
     depths: torch.Tensor,
     alpha: torch.Tensor,
     view_camera: Cameras,
-    cameras: Cameras
+    cameras: Cameras,
+    thumbnails: torch.Tensor,
 ):
     if rgb.ndim == 4:
         rgb = rgb.squeeze(0)
@@ -83,6 +84,7 @@ def annotate_train_cameras(
         is_fisheyes,
         cameras.distortion_params,
         camera_to_worlds,
+        thumbnails,
         size
     )
     torch.cuda.synchronize()

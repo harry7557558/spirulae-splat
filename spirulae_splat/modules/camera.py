@@ -130,7 +130,7 @@ class Cameras:
         factor: float, 
         rounding_mode: Literal['floor', 'round', 'ceil'] = "floor"
     ):
-        self.intrins = self.intrins * factor
+        self.intrins = self.intrins * factor  # TODO: consider rounding
 
         assert rounding_mode in ['floor', 'round', 'ceil'], rounding_mode
         if rounding_mode == "floor":

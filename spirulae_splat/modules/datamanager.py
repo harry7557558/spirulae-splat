@@ -58,8 +58,6 @@ class SpirulaeSplatDataManagerConfig:
     """Image cache location. If "cpu", caches on cpu. If "gpu", caches on device.
         If "cpu-pageable", cache on cpu pageable memory (saves RAM but may cause error if spill to swap memory).
         If "disk", cache on disk (limited support). """
-    cache_images_type: Literal["uint8", "float32"] = "uint8"
-    """The image type returned from manager, caching images in uint8 saves memory"""
 
     load_depths: bool = False
     """Whether to load depth maps, if exist"""
@@ -173,8 +171,7 @@ class SpirulaeSplatDataManager:
         self.train_index_group_loader = None  # type: Optional[IndexGroupsWithDataLoader]
 
     def _undistort_idx(self, dataset, idx: int, return_idx=False) -> Dict[str, torch.Tensor]:
-        data = dataset.get_data(idx, image_type=self.config.cache_images_type, _is_viewer=False,
-                                load_depths=self.config.load_depths, load_normals=self.config.load_normals)
+        data = dataset.get_data(idx, load_depths=self.config.load_depths, load_normals=self.config.load_normals)
         dataset.cameras.width[idx] = data["image"].shape[1]
         dataset.cameras.height[idx] = data["image"].shape[0]
         camera = dataset.cameras[idx]
