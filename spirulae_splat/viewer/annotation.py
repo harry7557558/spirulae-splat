@@ -89,5 +89,5 @@ def annotate_train_cameras(
     )
     torch.cuda.synchronize()
     time1 = perf_counter()
-    print(1e3*(time1-time0), 'ms')
+    # print(1e3*(time1-time0), 'ms')
     return rgb

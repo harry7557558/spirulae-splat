@@ -751,11 +751,16 @@ __global__ void blit_with_bvh_kernel(
 
     // decide whether to render camera border black or white based on background color, with noise reduction
     auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
-    float gray_a, gray_b, gray_c;
-    constexpr float BLOCK_DIM_X = 8;
-    constexpr float BLOCK_DIM_Y = 4;
-    {
-        float gray = dot(render_rgb, float3{0.299f, 0.587f, 0.114f});
+    static constexpr float BLOCK_DIM_X = 8;
+    static constexpr float BLOCK_DIM_Y = 4;
+    static constexpr float3 rgb2gray = float3{0.299f, 0.587f, 0.114f};
+    // static constexpr float gray_threshold = 0.5f - 0.5f*dot(rgb2gray, normalize(rgb2gray));
+    static constexpr float gray_threshold = 0.1657f;
+    float gray_a = 0.0f, gray_b = 0.0f, gray_c = dot(render_rgb, rgb2gray);
+    int num_gray = __popc(__ballot_sync(~0u, gray_c >= gray_threshold));
+    // static constexpr int pad_gray = 2;
+    static constexpr int pad_gray = 0;
+    if (num_gray > pad_gray && num_gray < WARP_SIZE-pad_gray) {
         float x = (float)threadIdx.x * (1.0f / (float)BLOCK_DIM_X);
         float y = (float)threadIdx.y * (1.0f / (float)BLOCK_DIM_Y);
         #if 0
@@ -769,9 +774,9 @@ __global__ void blit_with_bvh_kernel(
         float s = WARP_SIZE;
         if (pix_x == 0 && pix_y == 0) printf("%f %f %f %f %f %f\n", sxx, sxy, syy, sx, sy, s);
         #endif
-        float sxg = cg::reduce(warp, x*gray, cg::plus<float>());
-        float syg = cg::reduce(warp, y*gray, cg::plus<float>());
-        float sg = cg::reduce(warp, gray, cg::plus<float>());
+        float sxg = cg::reduce(warp, x*gray_c, cg::plus<float>());
+        float syg = cg::reduce(warp, y*gray_c, cg::plus<float>());
+        float sg = cg::reduce(warp, gray_c, cg::plus<float>());
         gray_a = 3.809523809523809e-01f * sxg - 1.666666666666667e-01f * sg;
         gray_b = 3.999999999999999e-01f * syg - 1.500000000000000e-01f * sg;
         gray_c = -1.666666666666667e-01f * sxg - 1.500000000000000e-01f * syg + 1.604166666666667e-01f * sg;
@@ -855,7 +860,7 @@ __global__ void blit_with_bvh_kernel(
                         );
                         if (t_temp > 0.0f) {
                             tmax = t_temp;
-                            rgb = gray > 0.2f ? float3{0.1f, 0.1f, 0.1f} : float3{0.9f, 0.9f, 0.9f};
+                            rgb = make_float3(gray >= gray_threshold ? 0.1f : 0.85f);
                             alpha = 1.0f;
                         }
                     }

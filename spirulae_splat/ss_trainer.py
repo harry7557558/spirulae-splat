@@ -1,13 +1,14 @@
 import threading
 import asyncio
 
-from spirulae_splat.modules.trainer import SpirulaeSplatTrainerConfig, SpirulaeSplatTrainer
+from spirulae_splat.modules.trainer import *
+from typing import Union, Annotated
 
 from spirulae_splat.viewer.server import ViewerServer, SliderDef, DropdownDef
 
 
 
-async def start_viewer(trainer: SpirulaeSplatTrainer):
+async def start_viewer(trainer: Trainer):
 
     server = ViewerServer(
         render_fn=trainer.render,
@@ -37,14 +38,33 @@ async def start_viewer(trainer: SpirulaeSplatTrainer):
     server.start()
     server.wait()
 
-async def main(trainer: SpirulaeSplatTrainer):
+async def main(trainer: Trainer):
     asyncio.create_task(start_viewer(trainer))
 
 
 def entrypoint():
     import tyro
-    config = tyro.cli(SpirulaeSplatTrainerConfig)
-    trainer = SpirulaeSplatTrainer(config)
+
+    Config = Union[
+        Annotated[TrainerConfig, tyro.conf.subcommand(name="3dgs")],
+        Annotated[TrainerConfigSquaredPos, tyro.conf.subcommand(name="3dgs^2-pos")],
+        Annotated[TrainerConfigSquared, tyro.conf.subcommand(name="3dgs^2")],
+        Annotated[TrainerConfigPatched, tyro.conf.subcommand(name="3dgs-patched")],
+        Annotated[TrainerConfigTriangle, tyro.conf.subcommand(name="triangle")],
+        Annotated[TrainerConfigTrianglePatched, tyro.conf.subcommand(name="triangle-patched")],
+        Annotated[TrainerConfigVoxel, tyro.conf.subcommand(name="voxel")],
+        Annotated[TrainerConfigConfinedLowTexture, tyro.conf.subcommand(name="3dgs-confined-low-texture")],
+        Annotated[TrainerConfigConfined, tyro.conf.subcommand(name="3dgs-confined")],
+        Annotated[TrainerConfigConfinedSquared, tyro.conf.subcommand(name="3dgs^2-confined")],
+        Annotated[TrainerConfigOpenLowTexture, tyro.conf.subcommand(name="3dgs-open-low-texture")],
+        Annotated[TrainerConfigOpen, tyro.conf.subcommand(name="3dgs-open")],
+        Annotated[TrainerConfigOpenSquared, tyro.conf.subcommand(name="3dgs^2-open")],
+        Annotated[TrainerConfigCenteredObject, tyro.conf.subcommand(name="3dgs-centered-object")],
+        Annotated[TrainerConfigAcademicBaseline, tyro.conf.subcommand(name="academic-baseline")],
+    ]
+
+    config = tyro.cli(Config)
+    trainer = Trainer(config)
 
     thread = threading.Thread(target=trainer.train, daemon=True)
     thread.start()

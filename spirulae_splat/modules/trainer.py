@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
-from typing import Type, List, Tuple, Dict
+from pyexpat import model
+from typing import Type, List, Tuple, Dict, Optional
 from pathlib import Path
 
 import threading
@@ -9,24 +10,118 @@ from spirulae_splat.modules.camera import Cameras
 from spirulae_splat.modules.model import SpirulaeSplatModelConfig, SpirulaeSplatModel
 from spirulae_splat.modules.datamanager import SpirulaeSplatDataManagerConfig, SpirulaeSplatDataManager
 
-from spirulae_splat.modules.dataparser import SpirulaeSplatDataparser, SpirualeSplatDataParserConfig
+from spirulae_splat.modules.dataparser import SpirulaeSplatDataparser, SpirulaeSplatDataParserConfig
 from spirulae_splat.modules.dataset import SpirulaeSplatDataset
-
-from spirulae_splat.modules.optimizer import create_optimizers
-
-from spirulae_splat.ns_config import _DEFAULT_OPTIMIZERS, _SECOND_ORDER_OPTIMIZERS, _SECOND_ORDER_POSITION_OPTIMIZERS
+from spirulae_splat.modules.optimizer import create_optimizers, FusedAdamOptimizerConfig, FusedNewtonOptimizerConfig
 
 from spirulae_splat.viewer.annotation import annotate_train_cameras
 
 
+
+_DEFAULT_OPTIMIZERS = {
+    "_dummy": FusedAdamOptimizerConfig(lr=1.0, eps=0.0),
+    "means": FusedAdamOptimizerConfig(
+        lr=1.6e-4, eps=1e-15,
+        lr_final=1.6e-6, max_steps=30000
+    ),
+    "scales": FusedAdamOptimizerConfig(lr=0.005, eps=1e-15),
+    "quats": FusedAdamOptimizerConfig(lr=0.0005, eps=1e-15),
+    "features_dc": FusedAdamOptimizerConfig(lr=0.0025, eps=1e-15),
+    "features_sh": FusedAdamOptimizerConfig(
+        lr=0.0025 / 20, eps=1e-15,
+        tr=1.0e-6 / 20, tr_final=1.0e-8 / 20, max_steps=30000,
+    ),
+    "features_ch": FusedAdamOptimizerConfig(lr=0.0025 / 5, eps=1e-15),
+    "sv_sites": FusedAdamOptimizerConfig(lr=0.01, eps=1e-15),
+    "sv_colors": FusedAdamOptimizerConfig(lr=0.0005, eps=1e-15),
+    "opacities": FusedAdamOptimizerConfig(lr=0.05, eps=1e-15),
+    "densities": FusedAdamOptimizerConfig(
+        lr=0.05, eps=1e-15,
+        lr_final=0.0005, max_steps=30000,
+    ),
+    "background_color": FusedAdamOptimizerConfig(lr=0.0025, eps=1e-15),
+    "background_sh": FusedAdamOptimizerConfig(lr=0.0025 / 5, eps=1e-15),
+    "bilateral_grid": FusedAdamOptimizerConfig(
+        lr=2e-3, eps=1e-15,
+        lr_final=1e-4, max_steps=30000, warmup_steps=1000,
+    ),
+    "bilateral_grid_depth": FusedAdamOptimizerConfig(
+        lr=2e-3, eps=1e-15,
+        lr_final=1e-4, max_steps=30000, warmup_steps=2000,
+    ),
+    "bilateral_grid_normal": FusedAdamOptimizerConfig(
+        lr=5e-4, eps=1e-15,
+        lr_final=4e-5, max_steps=30000, warmup_steps=2000,
+    ),
+    "ppisp": FusedAdamOptimizerConfig(
+        lr=2e-3, eps=1e-15,
+        lr_final=2e-5, max_steps=30000, warmup_steps=500, lr_pre_warmup=2e-5
+    ),
+    "camera_opt": FusedAdamOptimizerConfig(
+        lr=1e-4, eps=1e-15,
+        lr_final=5e-7, max_steps=30000, warmup_steps=1000,
+    ),
+}
+
+_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER = {**_DEFAULT_OPTIMIZERS}
+_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER["scales"] = FusedAdamOptimizerConfig(
+    # https://arxiv.org/abs/2603.08661
+    lr=0.02, eps=1e-15,
+    lr_final=0.005, max_steps=10000, warmup_steps=1000, lr_pre_warmup=0.005
+)
+
+_TRIANGLE_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER}
+_TRIANGLE_OPTIMIZERS["means"] = FusedAdamOptimizerConfig(
+    lr=1.6e-4, eps=1e-15, lr_final=1.6e-6, max_steps=30000,
+)
+# _TRIANGLE_OPTIMIZERS["scales"] = FusedAdamOptimizerConfig(
+#     lr=0.005, eps=1e-15, lr_final=0.0002, max_steps=30000,
+# )
+# _TRIANGLE_OPTIMIZERS["quats"] = FusedAdamOptimizerConfig(
+#     lr=0.0005, eps=1e-15, lr_final=0.0001, max_steps=30000,
+# )
+_TRIANGLE_OPTIMIZERS["bilateral_grid"] = FusedAdamOptimizerConfig(
+    lr=5e-4, eps=1e-15,
+    lr_final=1e-6, max_steps=30000, warmup_steps=1000,
+)
+
+_SECOND_ORDER_POSITION_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER}
+_SECOND_ORDER_POSITION_OPTIMIZERS["means"] = FusedNewtonOptimizerConfig(
+    mode="mean", lr=1.0e-6, eps=1e-15,
+    lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
+)
+
+_SECOND_ORDER_OPTIMIZERS = {**_SECOND_ORDER_POSITION_OPTIMIZERS}
+# _SECOND_ORDER_OPTIMIZERS["quats"] = FusedNewtonOptimizerConfig(
+#     mode="quat", lr=1.0e-6, eps=1e-15,
+#     lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
+# )
+_SECOND_ORDER_OPTIMIZERS["scales"] = FusedNewtonOptimizerConfig(
+    mode="scale", lr=1.0e-6, eps=1e-15,
+    lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
+)
+# TODO: investigate whether this messes up MCMC densification
+# _SECOND_ORDER_OPTIMIZERS["opacities"] = FusedNewtonOptimizerConfig(
+#     mode="opacity", lr=1.0e-6, eps=1e-15,
+#     lr_final=1.0e-8, max_steps=30000, #warmup_steps=3000,
+# )
+# _SECOND_ORDER_OPTIMIZERS["features_dc"] = FusedNewtonOptimizerConfig(
+#     mode="color", lr=1.0e-6, eps=1e-15,
+#     lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
+# )
+
+
 @dataclass
-class SpirulaeSplatTrainerConfig:
-    """🐚 Main training script for spirulae-splat"""
+class TrainerConfig:
+    """Default 3DGS method"""
 
     data: Path
     """Path to dataset. Can be a Nerfstudio or a COLMAP dataset."""
 
-    dataparser: SpirualeSplatDataParserConfig = field(default_factory=SpirualeSplatDataParserConfig)
+    num_iterations: int = 30000
+    """Number of training iterations"""
+
+    dataparser: SpirulaeSplatDataParserConfig = field(default_factory=SpirulaeSplatDataParserConfig)
     """Specifies configurations for data parsing"""
 
     datamanager: SpirulaeSplatDataManagerConfig = field(default_factory=SpirulaeSplatDataManagerConfig)
@@ -35,15 +130,15 @@ class SpirulaeSplatTrainerConfig:
     model: SpirulaeSplatModelConfig = field(default_factory=SpirulaeSplatModelConfig)
     """Specifies configurations for main model, losses, and densification"""
 
-    optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)
+    optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)
     """Specifies configurations for optimization"""
 
 
-class SpirulaeSplatTrainer:
+class Trainer:
 
     def __init__(
         self,
-        config: SpirulaeSplatTrainerConfig
+        config: TrainerConfig
     ):
         self.config = config
         self.dataparser = SpirulaeSplatDataparser(config.dataparser, config.data)
@@ -107,7 +202,7 @@ class SpirulaeSplatTrainer:
 
     def train(self):
         optims = create_optimizers(self.model, self.config.optimizer)
-        for step in range(30000):
+        for step in range(self.config.num_iterations):
             for optim in optims.values():
                 optim.zero_grad()
             self.model.step_cb(optims, step)
@@ -117,3 +212,283 @@ class SpirulaeSplatTrainer:
             for optim in optims.values():
                 optim.step()
             self.model.step_post_backward(step)
+
+
+@dataclass
+class TrainerConfigSquaredPos(TrainerConfig):
+    """Method with second-order optimizer for positions"""
+    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        compute_hessian_diagonal="position",
+        mcmc_noise_lr=5e5 * (1.6e-4 / 1.0e-6),
+    ))
+    optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)
+
+
+@dataclass
+class TrainerConfigSquared(TrainerConfig):
+    """Method with second-order optimizer"""
+    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        compute_hessian_diagonal="all",
+        mcmc_noise_lr=5e5 * (1.6e-4 / 1.0e-6),
+    ))
+    optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_OPTIMIZERS)
+
+
+@dataclass
+class TrainerConfigPatched(TrainerConfig):
+    """Method with patched batching"""
+    datamanager: SpirulaeSplatDataManagerConfig = field(default_factory=lambda: SpirulaeSplatDataManagerConfig(
+        patch_batch_size=-1,
+        patch_size=64,
+        max_batch_per_epoch=800,
+    ))
+    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        # packed=True,
+        use_bvh=True,
+        use_camera_optimizer=False,
+        # use_bilateral_grid=False,
+        # use_bilateral_grid_for_geometry=False,
+        alpha_reg_weight=0.0,
+        mcmc_max_screen_size=0.15,
+        mcmc_max_screen_size_clip_hardness=1.5,
+        # mcmc_max_world_size=1.0,
+    ))
+    optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)
+
+@dataclass
+class TrainerConfigTriangle(TrainerConfig):
+    """Method for triangle splatting"""
+    datamanager: SpirulaeSplatDataManagerConfig = field(default_factory=lambda: SpirulaeSplatDataManagerConfig(
+        compute_visibility_masks=True,
+    ))
+    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        primitive="opaque_triangle",
+        kernel_radius=0.5,
+        compute_depth_normal=True,
+        sh_degree=0,
+        bilagrid_shape=(16, 16, 8),
+        stop_refine_at=30000,
+        # alpha_reg_weight=0.0,
+        mcmc_scale_reg=0.001,
+        # erank_reg=1.0,
+        # supersampling=2,
+        mcmc_min_opacity=0.005,
+        mcmc_noise_lr=5e5,  # or 0.0
+        mcmc_max_screen_size=0.15,
+        supervision_warmup=0,
+        depth_supervision_weight=0.0,
+        normal_supervision_weight=0.04,
+        depth_reg_weight=0.01,
+        normal_distortion_reg_weight=0.005,
+        rgb_distortion_reg_weight=0.01,
+        ssim_lambda=0.4,
+        preallocate_splat_tensors=False,  # TODO
+    ))
+    optimizer: dict = field(default_factory=lambda: _TRIANGLE_OPTIMIZERS)
+
+@dataclass
+class TrainerConfigTrianglePatched(TrainerConfig):
+    """Method for triangle splatting with patched batching"""
+    datamanager: SpirulaeSplatDataManagerConfig = field(default_factory=lambda: SpirulaeSplatDataManagerConfig(
+        compute_visibility_masks=True,
+        patch_batch_size=-1,
+        patch_size=64,
+        max_batch_per_epoch=800,
+    ))
+    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        primitive="opaque_triangle",
+        kernel_radius=0.5,
+        compute_depth_normal=True,
+        sh_degree=0,
+        bilagrid_shape=(16, 16, 8),
+        stop_refine_at=30000,
+        # alpha_reg_weight=0.0,
+        mcmc_scale_reg=0.001,
+        # erank_reg=1.0,
+        # supersampling=2,
+        mcmc_min_opacity=0.005,
+        mcmc_noise_lr=5e5,  # or 0.0
+        supervision_warmup=0,
+        depth_supervision_weight=0.0,
+        normal_supervision_weight=0.04,
+        depth_reg_weight=0.01,
+        normal_distortion_reg_weight=0.005,
+        rgb_distortion_reg_weight=0.01,
+        ssim_lambda=0.4,
+        reg_warmup_length=1000,
+        preallocate_splat_tensors=False,  # TODO
+
+        # packed=True,
+        use_bvh=True,
+        use_camera_optimizer=False,
+        # use_bilateral_grid=False,
+        # use_bilateral_grid_for_geometry=False,
+        alpha_reg_weight=0.0,
+        mcmc_max_screen_size=0.15,
+        mcmc_max_screen_size_clip_hardness=1.5,
+    ))
+    optimizer: dict = field(default_factory=lambda: _TRIANGLE_OPTIMIZERS)
+
+@dataclass
+class TrainerConfigVoxel(TrainerConfig):
+    """[WIP] Does not work at this time, do not use"""
+    # ^ This message will appear in `spirulae-train --help`
+    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        primitive="voxel",
+        use_mcmc=False,
+        sh_degree=0,
+        background_color="black",
+        train_background_color=False,
+        # use_bilateral_grid=False,
+        use_bilateral_grid_for_geometry=False,
+        alpha_reg_weight=0.0,
+        # alpha_loss_weight=0.0,
+        # alpha_loss_weight_under=0.0,
+        mcmc_opacity_reg=0.0001,
+        mcmc_scale_reg=0.0,
+        erank_reg=0.0,
+        erank_reg_s3=0.0,
+        depth_supervision_weight=0.0,
+        supervision_warmup=0,
+        depth_reg_weight=0.01,
+        reg_warmup_length=100,
+        distortion_reg_warmup=100,
+        preallocate_splat_tensors=False,  # TODO
+    ))
+    optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS)
+
+
+_MODEL_PRESET_CONFINED = dict(
+    randomize_background=True,
+    train_background_color=False,
+)
+_MODEL_PRESET_3DGS2TR_POS = dict(
+    compute_hessian_diagonal="position",
+    mcmc_noise_lr=5e5 * (1.6e-4 / 1.0e-6),
+)
+_MODEL_PRESET_3DGS2TR = dict(
+    compute_hessian_diagonal="all",
+    mcmc_noise_lr=5e5 * (1.6e-4 / 1.0e-6),
+)
+_MODEL_PRESET_RICH_TEXTURE = dict(
+    mcmc_prob_grad_weight=1.0,
+    mcmc_use_long_axis_split=True,
+    mcmc_max_screen_size=0.10,
+)
+_MODEL_PRESET_NO_COLOR_SHIFT = dict(
+    use_bilateral_grid=True,
+    bilagrid_shape=(8, 8, 4),
+    bilagrid_type="ppisp",
+)
+
+
+@dataclass
+class TrainerConfigConfinedLowTexture(TrainerConfig):
+    """Preset for visually confined environments with large textureless surfaces."""
+    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        **_MODEL_PRESET_CONFINED,
+        **_MODEL_PRESET_NO_COLOR_SHIFT,
+    ))
+    optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)
+
+@dataclass
+class TrainerConfigConfined(TrainerConfig):
+    """Preset for visually confined environments with moderate to rich texture."""
+    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        **_MODEL_PRESET_CONFINED,
+        **_MODEL_PRESET_3DGS2TR_POS,
+        **_MODEL_PRESET_RICH_TEXTURE,
+    ))
+    optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)
+
+@dataclass
+class TrainerConfigConfinedSquared(TrainerConfig):
+    """[Unstable] Preset for visually confined environments with moderate to rich texture."""
+    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        **_MODEL_PRESET_CONFINED,
+        **_MODEL_PRESET_3DGS2TR,
+        **_MODEL_PRESET_RICH_TEXTURE,
+    ))
+    optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_OPTIMIZERS)
+
+@dataclass
+class TrainerConfigOpenLowTexture(TrainerConfig):
+    """Preset for open environments large textureless surfaces, a sky box will be trained."""
+    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        **_MODEL_PRESET_NO_COLOR_SHIFT,
+        relative_scale=10.0,
+    ))
+    optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)
+
+@dataclass
+class TrainerConfigOpen(TrainerConfig):
+    """Preset for open environments, a sky box will be trained."""
+    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        **_MODEL_PRESET_3DGS2TR_POS,
+        **_MODEL_PRESET_RICH_TEXTURE,
+    ))
+    optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)
+
+@dataclass
+class TrainerConfigOpenSquared(TrainerConfig):
+    """[Unstable] Preset for open environments, a sky box will be trained."""
+    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        **_MODEL_PRESET_3DGS2TR,
+        **_MODEL_PRESET_RICH_TEXTURE,
+    ))
+    optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_OPTIMIZERS)
+
+@dataclass
+class TrainerConfigCenteredObject(TrainerConfig):
+    """Preset for centered objects, can also be used for human avatar."""
+    dataparser: SpirulaeSplatDataParserConfig = field(default_factory=lambda: SpirulaeSplatDataParserConfig(
+        center_method="focus",
+    ))
+    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        **_MODEL_PRESET_3DGS2TR,
+        **_MODEL_PRESET_RICH_TEXTURE,
+        **_MODEL_PRESET_NO_COLOR_SHIFT,
+        apply_loss_for_mask=True,
+        mcmc_cap_max=100000,
+    ))
+    # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)
+    optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)
+
+@dataclass
+class TrainerConfigAcademicBaseline(TrainerConfig):
+    """Preset that replicates 3DGS MCMC as faithful as possible."""
+    dataparser: SpirulaeSplatDataParserConfig = field(default_factory=lambda: SpirulaeSplatDataParserConfig(
+        eval_mode="interval",
+        eval_interval=8,
+    ))
+    datamanager: SpirulaeSplatDataManagerConfig = field(default_factory=lambda: SpirulaeSplatDataManagerConfig(
+        max_batch_per_epoch=9**9,
+        compute_edge_maps=False,
+    ))
+    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        primitive="3dgs",
+        background_color="black",
+        train_background_color=False,
+        compute_depth_normal=False,
+        use_bilateral_grid=False,
+        use_bilateral_grid_for_geometry=False,
+        use_ppisp=False,
+        mcmc_prob_grad_weight=0.0,
+        use_edge_aware_score=False,
+        mcmc_use_long_axis_split=False,
+        mcmc_max_screen_size=float('inf'),
+        suppress_initial_scales=False,
+        depth_reg_weight=0.0,
+        normal_reg_weight=0.0,
+        alpha_reg_weight=0.0,
+        alpha_loss_weight=0.0,
+        alpha_loss_weight_under=0.0,
+        erank_reg=0.0,
+        erank_reg_s3=0.0,
+        quat_norm_reg=0.0,
+        randomize_background=0.0,
+        normal_supervision_weight=0.0,
+        mcmc_opacity_reg=0.01,
+        mcmc_scale_reg=0.01,
+    ))
+    optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS)

@@ -812,6 +812,7 @@ const Viewer = (() => {
   let _pending = false;
   let _lastRenderTime = 0;
   const MIN_INTERVAL = 33; // ~30 fps cap on requests
+  const TARGET_INTERVAL = 200;  // 5 fps on animation
 
   function requestRender() {
     _dirty = true;
@@ -838,6 +839,7 @@ const Viewer = (() => {
   function onFrameReceived() {
     _pending = false;
     FPS.tick();
+    setTimeout(requestRender, TARGET_INTERVAL);
   }
 
   return { requestRender, onFrameReceived };
