@@ -232,7 +232,8 @@ class SplatModel:
 
     def load_config(self, file_path: str):
         save_dir = file_path[:file_path.rfind(os.path.sep)]
-        ckpt_dir = os.path.join(save_dir, 'nerfstudio_models')
+        # ckpt_dir = os.path.join(save_dir, 'nerfstudio_models')
+        ckpt_dir = save_dir
         for f in os.listdir(ckpt_dir):
             if f.endswith('.ckpt'):
                 f = os.path.join(ckpt_dir, f)

@@ -240,7 +240,7 @@ def export_ply(model: SplatModel, output_path: str) -> None:
 
 
 def export_equirectangular(model: SplatModel, output_path: str) -> None:
-    camera_path = os.path.join(os.path.dirname(__file__), "../spirulae_splat/viewer/cameras/s21.yaml")
+    camera_path = os.path.join(os.path.dirname(__file__), "../spirulae_splat/viewer_legacy/cameras/s21.yaml")
     camera = Camera(camera_path)
 
     def render(intrins, c2w):

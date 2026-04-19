@@ -59,15 +59,14 @@ class SpirulaeSplatDataManagerConfig:
         If "cpu-pageable", cache on cpu pageable memory (saves RAM but may cause error if spill to swap memory).
         If "disk", cache on disk (limited support). """
 
-    load_depths: bool = False
+    load_depths: bool = True
     """Whether to load depth maps, if exist"""
-    load_normals: bool = False
+    load_normals: bool = True
     """Whether to load normal maps, if exist"""
 
     deblur_training_images: bool = False
     """Whether to use a custom trained deep learning model to deblur images before training"""
 
-    compute_edge_maps: bool = False
     compute_visibility_masks: bool = False
 
 
@@ -508,11 +507,6 @@ class SpirulaeSplatDataManager:
         else:
             camera, batch = self.train_index_group_loader.get_batch()
             results = pack_batch(camera, batch)
-
-        if self.config.compute_edge_maps:
-            for camera, batch in results:
-                accum_weight_map = detect_edge(batch['image'])  # TODO: mask
-                camera.metadata['accum_weight_map'] = accum_weight_map
 
         # TODO
         if random.random() < (step - 10000) / (30000 - 10000) and False:

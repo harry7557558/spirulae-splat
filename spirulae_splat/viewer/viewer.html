@@ -424,8 +424,6 @@
       <div class="ctrl-row">
         <div class="ctrl-label"><label for="show-training-cameras"><span>Show Training Cameras</span></label><label class="toggle"><input type="checkbox" id="show-training-cameras" /></label></div>
       </div>
-      <!-- Additional dynamic controls injected here -->
-      <div id="extra-controls"></div>
     </div>
 
     <!-- Pose readout -->
@@ -449,8 +447,6 @@
 // ═══════════════════════════════════════════════════════
 const CFG = {
   serverUrl: "http://SERVER_HOST:SERVER_PORT",
-  extraSliders: EXTRA_SLIDERS_JSON,    // [{id, label, min, max, step, value, unit}]
-  extraDropdowns: EXTRA_DROPDOWNS_JSON, // [{id, label, options:[{value,label}], default}]
 };
 
 // ═══════════════════════════════════════════════════════
@@ -523,7 +519,7 @@ const quat = {
 // ═══════════════════════════════════════════════════════
 const cam = {
   // position of camera in world
-  pos: [0, 0, 5],
+  pos: [0, 0, 0],
   // orientation as quaternion (camera-to-world rotation)
   rot: quat.identity(),
 
@@ -541,9 +537,10 @@ const cam = {
   forward() { return quat.rotVec(this.rot, [0,0,-1]); },
 
   reset() {
-    this.pos = [0, 0, 5];
+    this.pos = [0, 0, 1];
     this.rot = quat.identity();
     this.target = [0, 0, 0];
+    Nav.orbit(0, -250);
   },
 };
 
@@ -617,7 +614,7 @@ const Nav = {
     showHint(hintFor(m));
   },
 
-  // ── orbit (trackball) ──────────────────────────────
+  // ── orbit ──────────────────────────────
   orbit(dx, dy) {
     const sensitivity = 0.005;
     const right = cam.right();
@@ -629,35 +626,6 @@ const Nav = {
     const dist = v3.len(v3.sub(cam.pos, cam.target));
     const newFwd = quat.rotVec(cam.rot, [0,0,1]);
     cam.pos = v3.add(cam.target, v3.scale(newFwd, dist));
-  },
-
-  // ── turntable (z-up azimuth/elevation) ────────────
-  turntable(dx, dy) {
-    return;
-    const s = 0.005;
-    this._azimuth   -= dx * s;
-    this._elevation  = Math.max(-Math.PI/2+0.01,
-                        Math.min(Math.PI/2-0.01, this._elevation - dy * s));
-    this._applyTurntable();
-  },
-  _applyTurntable() {
-    const az = this._azimuth, el = this._elevation, r = this._radius;
-    const cosEl = Math.cos(el);
-    const x = r * cosEl * Math.sin(az);
-    const y = r * cosEl * Math.cos(az);
-    const z = r * Math.sin(el);
-    cam.pos = v3.add(cam.target, [x, y, z]);
-
-    // Orient camera to look at target with z-up
-    const fwd = v3.norm(v3.sub(cam.target, cam.pos));
-    const worldUp = [0, 1, 0];
-    const right = v3.norm(v3.cross(fwd, worldUp));
-    const up = v3.cross(right, fwd);
-    // Build rotation matrix → quaternion
-    const m = [right[0],up[0],-fwd[0],
-               right[1],up[1],-fwd[1],
-               right[2],up[2],-fwd[2]];
-    cam.rot = quat.norm(mat3ToQuat(m));
   },
 
   // ── fps / fly ──────────────────────────────────────
@@ -677,7 +645,7 @@ const Nav = {
 
   // ── pan ────────────────────────────────────────────
   pan(dx, dy) {
-    const s = this.speed * 0.004;
+    const s = this.speed * 0.002;
     const right   = cam.right();
     const up      = cam.up();
     const delta   = v3.add(v3.scale(right, -dx*s), v3.scale(up, dy*s));
@@ -687,7 +655,7 @@ const Nav = {
 
   // ── zoom / dolly ───────────────────────────────────
   dolly(delta) {
-    const s = this.speed * 0.5;
+    const s = this.speed * 0.2;
     if (this.mode == "trackball" || this.mode === "turntable") {
       // scale around target
       const fwd = cam.forward();
@@ -702,21 +670,35 @@ const Nav = {
 
   // ── keyboard walk ─────────────────────────────────
   keyboardTick(dt) {
-    const s = this.speed * dt * 3;
+    const s = this.speed * dt * 1.0;  // translate speed
+    const sr = dt * 1.0;  // rotate speed
     const k = this._keys;
     const fwd   = cam.forward();
     const right = cam.right();
     const up    = this.mode === "turntable" || this.mode === "fps" ? [0,0,1] : cam.up();
     let move = [0,0,0];
-    if (k["w"]||k["arrowup"])    move = v3.add(move, v3.scale(fwd, s));
-    if (k["s"]||k["arrowdown"])  move = v3.add(move, v3.scale(fwd, -s));
-    if (k["a"]||k["arrowleft"])  move = v3.add(move, v3.scale(right, -s));
+    let roll = 0.0;
+    if (k["w"]||k["arrowup"]) move = v3.add(move, v3.scale(fwd, s));
+    if (k["s"]||k["arrowdown"]) move = v3.add(move, v3.scale(fwd, -s));
+    if (k["a"]||k["arrowleft"]) move = v3.add(move, v3.scale(right, -s));
     if (k["d"]||k["arrowright"]) move = v3.add(move, v3.scale(right, s));
-    if (k["e"]||k[" "])          move = v3.add(move, v3.scale(up, s));
-    if (k["q"]||k["shift"])      move = v3.add(move, v3.scale(up, -s));
+    if (this.mode == "fly") {
+      if (k["e"]) roll -= sr;
+      if (k["q"]) roll += sr;
+    }
+    else {
+      if (k["e"]) move = v3.add(move, v3.scale(up, s));
+      if (k["q"]) move = v3.add(move, v3.scale(up, -s));
+    }
     if (v3.len(move) > 1e-12) {
-      cam.pos    = v3.add(cam.pos, move);
+      cam.pos = v3.add(cam.pos, move);
       cam.target = v3.add(cam.target, move);
+      Viewer.requestRender();
+    }
+    if (roll != 0.0) {
+      const forward = cam.forward();
+      const q = quat.fromAxisAngle(forward, roll);
+      cam.rot = quat.norm(quat.mul(q, cam.rot));
       Viewer.requestRender();
     }
   },
@@ -758,53 +740,6 @@ function showHint(text) {
   el.classList.add("visible");
   clearTimeout(_hintTimer);
   _hintTimer = setTimeout(() => el.classList.remove("visible"), 3500);
-}
-
-// ═══════════════════════════════════════════════════════
-// Dynamic control injection (extensibility API)
-// ═══════════════════════════════════════════════════════
-function injectExtraControls() {
-  const container = $("extra-controls");
-  container.innerHTML = "";
-
-  for (const sl of (CFG.extraSliders||[])) {
-    const row = document.createElement("div");
-    row.className = "ctrl-row";
-    row.innerHTML = `
-      <div class="ctrl-label">
-        <span>${sl.label}</span>
-        <span class="val" id="${sl.id}-val">${sl.value}${sl.unit||""}</span>
-      </div>
-      <input type="range" id="${sl.id}" min="${sl.min}" max="${sl.max}"
-             step="${sl.step}" value="${sl.value}"/>
-    `;
-    container.appendChild(row);
-    const input = row.querySelector("input");
-    const valEl = row.querySelector(".val");
-    input.addEventListener("input", () => {
-      valEl.textContent = input.value + (sl.unit||"");
-      Viewer.requestRender();
-    });
-  }
-
-  for (const dd of (CFG.extraDropdowns||[])) {
-    const row = document.createElement("div");
-    row.className = "ctrl-row";
-    const opts = dd.options.map(o=>`<option value="${o.value}"${o.value===dd.default?" selected":""}>${o.label}</option>`).join("");
-    row.innerHTML = `
-      <div class="ctrl-label"><span>${dd.label}</span></div>
-      <select id="${dd.id}">${opts}</select>
-    `;
-    container.appendChild(row);
-    row.querySelector("select").addEventListener("change", () => Viewer.requestRender());
-  }
-}
-
-function getExtraValues() {
-  const result = {};
-  for (const sl of (CFG.extraSliders||[]))    result[sl.id] = parseFloat($(sl.id)?.value ?? sl.value);
-  for (const dd of (CFG.extraDropdowns||[]))  result[dd.id] = $(dd.id)?.value ?? dd.default;
-  return result;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1033,10 +968,20 @@ vp.addEventListener("wheel", e => {
 
 // ── Keyboard ───────────────────────────────────────────
 window.addEventListener("keydown", e => {
-  Nav._keys[e.key.toLowerCase()] = true;
+  let key = e.key.toLowerCase();
+  if (key == "w" || key == "arrowup" || key == "s" || key == "arrowdown" ||
+      key == "a" || key == "arrowleft" || key == "d" || key == "arrowright" ||
+      key == "e" || key == "q")
+    e.preventDefault();
+  Nav._keys[key] = true;
 });
 window.addEventListener("keyup", e => {
-  Nav._keys[e.key.toLowerCase()] = false;
+  let key = e.key.toLowerCase();
+  if (key == "w" || key == "arrowup" || key == "s" || key == "arrowdown" ||
+      key == "a" || key == "arrowleft" || key == "d" || key == "arrowright" ||
+      key == "e" || key == "q")
+    e.preventDefault();
+  Nav._keys[key] = false;
 });
 
 // Keyboard tick loop
@@ -1089,8 +1034,6 @@ $("buffer-key").addEventListener("change", () => Viewer.requestRender());
 
 $("btn-reset-pose").addEventListener("click", () => {
   cam.reset();
-  Nav._azimuth = 0; Nav._elevation = 0.4; Nav._radius = 5;
-  if (Nav.mode === "turntable") Nav._applyTurntable();
   Viewer.requestRender();
 });
 
@@ -1105,8 +1048,8 @@ window.addEventListener("resize", () => {
 // Init
 // ═══════════════════════════════════════════════════════
 (function init() {
-  injectExtraControls();
   setStatus("ready");
+  cam.reset();
   showHint(hintFor("turntable"));
   fetchBuffers();
   $("canvas-img").onload = () => {

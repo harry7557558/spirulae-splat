@@ -187,7 +187,7 @@ class SpirulaeSplatDataset:
 
         self.thumbnails = torch.empty(
             (len(self.cameras), THUMBNAIL_RESOLUTION, THUMBNAIL_RESOLUTION, 4),
-            device="cuda", dtype=torch.uint8
+            dtype=torch.uint8
         )
         self.thumbnails[..., :3] = 128
         self.thumbnails[..., 3:] = 255
@@ -217,6 +217,7 @@ class SpirulaeSplatDataset:
         """
         image = self.get_numpy_image(image_idx)
 
+        # TODO: this doesn't work in PyTorch dataloader in disk caching mode
         if not self._thumbnail_loaded[image_idx]:
             thumbnail = image[:, :, :3]  # TODO: RGBA
             if thumbnail.dtype == np.uint16:
@@ -224,7 +225,7 @@ class SpirulaeSplatDataset:
             elif thumbnail.dtype in [np.float16, np.float32]:
                 thumbnail = (np.clip(thumbnail.astype(np.float32) / 255.0, 0.0, 1.0) * 255).astype(np.uint8)
             thumbnail = cv2.resize(thumbnail, (THUMBNAIL_RESOLUTION, THUMBNAIL_RESOLUTION))
-            self.thumbnails[image_idx, :, :, :3] = torch.from_numpy(thumbnail).cuda()
+            self.thumbnails[image_idx, :, :, :3] = torch.from_numpy(thumbnail)
             self._thumbnail_loaded[image_idx] = True
 
         if image.dtype == np.uint16:
@@ -261,7 +262,7 @@ class SpirulaeSplatDataset:
                 if thumbnail.ndim == 3:
                     thumbnail = thumbnail[:, :, 0]
                 thumbnail = cv2.resize(thumbnail, (THUMBNAIL_RESOLUTION, THUMBNAIL_RESOLUTION))
-                self.thumbnails[image_idx, :, :, 3] = torch.from_numpy(thumbnail).cuda()
+                self.thumbnails[image_idx, :, :, 3] = torch.from_numpy(thumbnail)
                 self._mask_thumbnail_loaded[image_idx] = True
         if load_depths:
             if self._dataparser_outputs['metadata'].get("depth_filenames", None) is not None:

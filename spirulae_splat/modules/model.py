@@ -41,6 +41,7 @@ from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
 from spirulae_splat.strategy import DefaultStrategy, MCMCStrategy, OpaqueStrategy, SVRasterStrategy
 
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
+from spirulae_splat.modules.optimizer import get_scheduled_lr
 from spirulae_splat.splat.cuda._wrapper_per_pixel import (
     blend_background,
     blend_background_noise,
@@ -53,11 +54,8 @@ from spirulae_splat.splat.cuda import (
     svhash_get_voxels
 )
 
-from nerfstudio.cameras.camera_optimizers import (CameraOptimizer,
-                                                  CameraOptimizerConfig)
-from nerfstudio.utils.colors import get_color
-
 from spirulae_splat.modules.camera import Cameras
+from spirulae_splat.modules.colors import get_color
 
 
 class SaturateKeepGradient(torch.autograd.Function):
@@ -119,8 +117,8 @@ class SpirulaeSplatModelConfig:
     use_camera_optimizer: bool = False
     """Whether to use camera optimizer
         Note: this only works well in patch batching mode"""
-    camera_optimizer: CameraOptimizerConfig = field(default_factory=lambda: CameraOptimizerConfig(mode="SO3xR3"))
-    """Config of the camera optimizer to use"""
+    # camera_optimizer: CameraOptimizerConfig = field(default_factory=lambda: CameraOptimizerConfig(mode="SO3xR3"))
+    # """Config of the camera optimizer to use"""  # TODO
     kernel_radius: float = 3.0
     """Radius of the splatting kernel, 3.0 for Gaussian and 0.5 for triangle"""
     relative_scale: Optional[float] = None
@@ -555,7 +553,7 @@ class SpirulaeSplatModel(torch.nn.Module):
                 value.optim_info = {**optim_info}
 
         if self.config.use_camera_optimizer:
-            self.camera_optimizer: CameraOptimizer = self.config.camera_optimizer.setup(
+            self.camera_optimizer = self.config.camera_optimizer.setup(
                 num_cameras=self.num_train_data, device="cpu"
             )
 
@@ -845,7 +843,7 @@ class SpirulaeSplatModel(torch.nn.Module):
                 state=self.strategy_state,
                 step=self.step,
                 info=self.info,
-                lr=self.optimizers['means'].param_groups[0]['lr'],
+                lr=get_scheduled_lr(self.optimizers['means'].param_groups[0], self.step+1),
                 packed=(self.config.packed or self.config.use_bvh),
             )
         else:

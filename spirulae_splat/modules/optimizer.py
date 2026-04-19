@@ -9,6 +9,21 @@ from spirulae_splat.splat.cuda import (
     _make_lazy_cuda_func,
 )
 
+
+def get_scheduled_lr(param_group, step):
+    lr = param_group['lr']
+    lr_final = param_group['lr_final']
+    lr_pre_warmup = param_group['lr_pre_warmup']
+    warmup_steps = param_group['warmup_steps']
+    max_steps = param_group['max_steps']
+    scheduled_lr = lr
+    if lr_final is not None:
+        scheduled_lr = lr * (lr_final / lr) ** min(step / max_steps, 1.0)
+    if warmup_steps is not None:
+        scheduled_lr = min(scheduled_lr, lr_pre_warmup + (lr - lr_pre_warmup) * min(step / warmup_steps, 1.0))
+    return scheduled_lr
+
+
 class FusedAdam(Optimizer):
     """
     Fully fused CUDA implementation of Adam optimizer.
@@ -46,7 +61,7 @@ class FusedAdam(Optimizer):
             tr=tr, tr_final=tr_final, warmup_steps=warmup_steps, max_steps=max_steps
         )
         super(FusedAdam, self).__init__(params, defaults)
-    
+
     @torch.no_grad()
     def step(self, closure=None):
         """Performs a single optimization step.
@@ -97,11 +112,7 @@ class FusedAdam(Optimizer):
                 p.exp_avg_sq = state['exp_avg_sq']
                 
                 state['step'] += 1
-                scheduled_lr = lr
-                if lr_final is not None:
-                    scheduled_lr = lr * (lr_final / lr) ** min(state['step'] / max_steps, 1.0)
-                if warmup_steps is not None:
-                    scheduled_lr = min(scheduled_lr, lr_pre_warmup + (lr - lr_pre_warmup) * min(state['step'] / warmup_steps, 1.0))
+                scheduled_lr = get_scheduled_lr(group, state['step'])
 
                 if not (hasattr(p, "optim_info") and "optimizer_override" in p.optim_info):
                     # Use default Adam
@@ -268,11 +279,7 @@ class Fused3DGS2Tr(Optimizer):
                 
                 state['step1'] += 1
                 state['step2'] += 1
-                scheduled_lr = lr
-                if lr_final is not None:
-                    scheduled_lr = lr * (lr_final / lr) ** min(state['step1'] / max_steps, 1.0)
-                if warmup_steps is not None:
-                    scheduled_lr = min(scheduled_lr, lr_pre_warmup + (lr - lr_pre_warmup) * min(state['step1'] / warmup_steps, 1.0))
+                scheduled_lr = get_scheduled_lr(group, state['step1'])
 
                 additional_params = []
                 if mode == "mean":

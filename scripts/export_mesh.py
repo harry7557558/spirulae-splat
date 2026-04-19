@@ -17,11 +17,6 @@ import tyro
 from tqdm import tqdm
 from typing_extensions import Annotated
 
-# from nerfstudio.cameras.cameras import Cameras
-# from nerfstudio.models.splatfacto import SplatfactoModel
-# from nerfstudio.utils.eval_utils import eval_setup
-from nerfstudio.utils.rich_utils import CONSOLE
-
 from spirulae_splat.viewer_legacy.model import SplatModel
 from spirulae_splat.viewer_legacy.camera import Camera
 
@@ -388,25 +383,25 @@ class DepthAndNormalMapsPoisson(GSMeshExporter):
         pcd.colors = o3d.utility.Vector3dVector(colors)
 
         if self.outlier_removal:
-            CONSOLE.print("Removing outliers...")
+            print("Removing outliers...")
             cl, ind = pcd.remove_statistical_outlier(
                 nb_neighbors=20, std_ratio=self.std_ratio
             )
             pcd = pcd.select_by_index(ind)
 
-        CONSOLE.print("Writing point cloud...")
+        print("Writing point cloud...")
         o3d.io.write_point_cloud(
             str(self.get_output_dir() / "DepthAndNormalMapsPoisson_pcd.ply"), pcd
         )
-        CONSOLE.print("Computing Mesh... this may take a while.")
+        print("Computing Mesh... this may take a while.")
         mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
             pcd, depth=self.poisson_depth
         )
         vertices_to_remove = densities < np.quantile(densities, 0.01)
         mesh.remove_vertices_by_mask(vertices_to_remove)
-        CONSOLE.print("[bold green]:white_check_mark: Computing Mesh")
+        print("[bold green]:white_check_mark: Computing Mesh")
 
-        CONSOLE.print(
+        print(
             f"Saving Mesh to {str(self.get_output_dir() / 'DepthAndNormalMapsPoisson_poisson_mesh.ply')}"
         )
         o3d.io.write_triangle_mesh(
@@ -514,7 +509,7 @@ class TSDFFusion(GSMeshExporter):
             str(self.get_output_dir() / "TSDFfusion_mesh.ply"),
             mesh,
         )
-        CONSOLE.print(
+        print(
             f"Finished computing mesh: {str(self.get_output_dir() / 'TSDFfusion.ply')}"
         )
 
@@ -649,7 +644,7 @@ class Open3DTSDFFusion(GSMeshExporter):
             str(self.get_output_dir() / "Open3dTSDFfusion_mesh.ply"),
             mesh,
         )
-        CONSOLE.print(
+        print(
             f"Finished computing mesh: {str(self.get_output_dir() / 'Open3dTSDFfusion.ply')}"
         )
 

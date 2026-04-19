@@ -30,8 +30,7 @@ import os
 import numpy as np
 import open3d as o3d
 
-from nerfstudio.process_data.process_data_utils import CAMERA_MODELS
-from nerfstudio.utils.rich_utils import CONSOLE
+from spirulae_splat.modules.camera import CameraType
 
 import bisect
 
@@ -222,11 +221,11 @@ def metashape_to_json(
 
         sensor_type = sensor.get("type")
         if sensor_type == "frame":
-            s["camera_model"] = CAMERA_MODELS["perspective"].value
+            s["camera_model"] = CameraType.PERSPECTIVE.value
         elif sensor_type in ["fisheye", "equidistant_fisheye"]:
-            s["camera_model"] = CAMERA_MODELS["fisheye"].value
+            s["camera_model"] = CameraType.EQUIDISTANT.value
         elif sensor_type == "spherical":
-            s["camera_model"] = CAMERA_MODELS["equirectangular"].value
+            s["camera_model"] = CameraType.EQUIRECTANGULAR.value
         else:
             # Unsupported: Equisolid fisheye, cylindrical, RPC, etc.
             raise ValueError(f"Unsupported Metashape sensor type '{sensor_type}'")
@@ -312,7 +311,7 @@ def metashape_to_json(
             image_filename = camera_dict[camera_id]
             matches = image_filename_matcher.query_suffix(image_filename)[0]
             if len(matches) != 1:
-                CONSOLE.log("WARNING: ambiguous filenames", matches, ", Skipping")
+                print("WARNING: ambiguous filenames", matches, ", Skipping")
                 num_skipped += 1
                 continue
             frame["file_path"] = matches[0]
@@ -321,7 +320,7 @@ def metashape_to_json(
             matches = image_filename_matcher.query_substring(camera_label)[0]
             assert isinstance(camera_label, str)
             if len(matches) != 1:
-                CONSOLE.log("WARNING: ambiguous filenames", matches, ", Skipping.\n"
+                print("WARNING: ambiguous filenames", matches, ", Skipping.\n"
                             "Specify Metashape .psx file using --psx to attempt resolving ambiguity.")
                 num_skipped += 1
                 continue
@@ -330,14 +329,14 @@ def metashape_to_json(
         sensor_id = camera.get("sensor_id")
         if sensor_id not in sensor_dict:
             # this should only happen when we have a sensor that doesn't have calibration
-            CONSOLE.print(f"Missing sensor calibration for {camera.get('label')}, Skipping")
+            print(f"Missing sensor calibration for {camera.get('label')}, Skipping")
             num_skipped += 1
             continue
         # Add all sensor parameters to this frame.
         frame.update(sensor_dict[sensor_id])
 
         if camera.find("transform") is None:
-            CONSOLE.print(f"Missing transforms data for {camera.get('label')}, Skipping")
+            print(f"Missing transforms data for {camera.get('label')}, Skipping")
             num_skipped += 1
             continue
 
@@ -453,7 +452,7 @@ class ProcessMetashape():
             if len(xml_files) > 1:
                 raise ValueError("Multiple XML file found in work_dir. Please specify using --xml")
             self.xml = xml_files[0]
-            CONSOLE.log("Using XML file found:", self.xml)
+            print("Using XML file found:", self.xml)
         elif not self.xml.exists():
             self.xml = self.work_dir / self.xml
         if not self.xml.exists():
@@ -469,7 +468,7 @@ class ProcessMetashape():
             if len(ply_files) > 1:
                 raise ValueError("Multiple ply file found in work_dir. Please specify using --ply")
             self.ply = ply_files[0]
-            CONSOLE.log("Using PLY file found:", self.ply)
+            print("Using PLY file found:", self.ply)
         elif not self.ply.exists():
             self.ply = self.work_dir / self.ply
         if not self.ply.exists():
@@ -484,7 +483,7 @@ class ProcessMetashape():
                 raise ValueError("Multiple psx file found in work_dir. Please specify using --psx")
             if len(psx_files) != 0:
                 self.psx = psx_files[0]
-                CONSOLE.log("Using PSX file found:", self.psx)
+                print("Using PSX file found:", self.psx)
         if self.psx is not None and not self.psx.exists():
             self.psx = self.work_dir / self.psx
             if not self.psx.exists():
@@ -519,11 +518,10 @@ class ProcessMetashape():
             )
         )
 
-        CONSOLE.rule("[bold green]:tada: :tada: :tada: All DONE :tada: :tada: :tada:")
+        print("All DONE.")
 
         for summary in summary_log:
-            CONSOLE.print(summary, justify="center")
-        CONSOLE.rule()
+            print(summary)
 
 
 def entrypoint():
@@ -532,7 +530,7 @@ def entrypoint():
     try:
         tyro.cli(ProcessMetashape).main()
     except (RuntimeError, ValueError) as e:
-        CONSOLE.log("[bold red]" + e.args[0])
+        print(e.args[0])
 
 
 if __name__ == "__main__":

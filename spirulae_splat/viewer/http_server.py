@@ -1,10 +1,3 @@
-"""
-http_server.py
-~~~~~~~~~~~~~~
-Minimal HTTP server that serves the single-page viewer HTML and handles render requests.
-Uses only the stdlib ``http.server`` module.
-"""
-
 from __future__ import annotations
 
 import json

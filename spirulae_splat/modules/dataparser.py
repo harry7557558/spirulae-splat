@@ -228,18 +228,6 @@ class SpirulaeSplatDataparser:
         normal_filenames = []
         poses = []
 
-        fx_fixed = "fl_x" in meta
-        fy_fixed = "fl_y" in meta
-        cx_fixed = "cx" in meta
-        cy_fixed = "cy" in meta
-        height_fixed = "h" in meta
-        width_fixed = "w" in meta
-        default_camera_model = colmap_camera_model_to_type(meta.get("camera_model", "OPENCV"))
-        distort_fixed = False
-        for distort_key in DISTORTION_KEYS:
-            if distort_key in meta:
-                distort_fixed = True
-                break
         fx = []
         fy = []
         cx = []
@@ -270,34 +258,23 @@ class SpirulaeSplatDataparser:
             filepath = Path(frame["file_path"])
             fname = self._get_fname(filepath)
 
-            if not fx_fixed:
-                assert "fl_x" in frame, "fx not specified in frame"
-                fx.append(float(frame["fl_x"]))
-            if not fy_fixed:
-                assert "fl_y" in frame, "fy not specified in frame"
-                fy.append(float(frame["fl_y"]))
-            if not cx_fixed:
-                assert "cx" in frame, "cx not specified in frame"
-                cx.append(float(frame["cx"]))
-            if not cy_fixed:
-                assert "cy" in frame, "cy not specified in frame"
-                cy.append(float(frame["cy"]))
-            if not height_fixed:
-                assert "h" in frame, "height not specified in frame"
-                height.append(int(frame["h"]))
-            if not width_fixed:
-                assert "w" in frame, "width not specified in frame"
-                width.append(int(frame["w"]))
+            fx.append(float(frame["fl_x"] if 'fl_x' in frame else meta['fl_x']))
+            fy.append(float(frame["fl_y"] if 'fl_y' in frame else meta['fl_y']))
+            cx.append(float(frame["cx"] if 'cx' in frame else meta['cx']))
+            cy.append(float(frame["cy"] if 'cy' in frame else meta['cy']))
+            height.append(int(frame["h"] if 'h' in frame else meta['h']))
+            width.append(int(frame["w"] if 'w' in frame else meta['w']))
             camera_type.append(
-                colmap_camera_model_to_type(frame["camera_model"])
-                if 'camera_model' in frame else default_camera_model
-            )
-            if not distort_fixed:
-                distort.append(
-                    torch.tensor([
-                        float(frame.get(key, 0.0)) for key in DISTORTION_KEYS
-                    ])
+                colmap_camera_model_to_type(
+                    frame["camera_model"]
+                    if "camera_model" in frame else meta.get("camera_model", "OPENCV")
                 )
+            )
+            distort.append(
+                torch.tensor([
+                    float(frame.get(key, meta.get(key, 0.0))) for key in DISTORTION_KEYS
+                ])
+            )
 
             image_filenames.append(fname)
             poses.append(np.array(frame["transform_matrix"]))
@@ -388,19 +365,14 @@ class SpirulaeSplatDataparser:
         idx_tensor = torch.tensor(indices, dtype=torch.long)
         poses = poses[idx_tensor]
 
-        fx = float(meta["fl_x"]) if fx_fixed else torch.tensor(fx, dtype=torch.float32)[idx_tensor]
-        fy = float(meta["fl_y"]) if fy_fixed else torch.tensor(fy, dtype=torch.float32)[idx_tensor]
-        cx = float(meta["cx"]) if cx_fixed else torch.tensor(cx, dtype=torch.float32)[idx_tensor]
-        cy = float(meta["cy"]) if cy_fixed else torch.tensor(cy, dtype=torch.float32)[idx_tensor]
-        height = int(meta["h"]) if height_fixed else torch.tensor(height, dtype=torch.int32)[idx_tensor]
-        width = int(meta["w"]) if width_fixed else torch.tensor(width, dtype=torch.int32)[idx_tensor]
+        fx = torch.tensor(fx, dtype=torch.float32)[idx_tensor]
+        fy = torch.tensor(fy, dtype=torch.float32)[idx_tensor]
+        cx = torch.tensor(cx, dtype=torch.float32)[idx_tensor]
+        cy = torch.tensor(cy, dtype=torch.float32)[idx_tensor]
+        height = torch.tensor(height, dtype=torch.int32)[idx_tensor]
+        width = torch.tensor(width, dtype=torch.int32)[idx_tensor]
         camera_type = [camera_type[i] for i in idx_tensor]
-        if distort_fixed:
-            distortion_params = torch.tensor([
-                float(meta.get(key, 0.0)) for key in DISTORTION_KEYS
-            ])
-        else:
-            distortion_params = torch.stack(distort, dim=0)[idx_tensor]
+        distortion_params = torch.stack(distort, dim=0)[idx_tensor]
 
         metadata = {}
 

@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from pyexpat import model
 from typing import Type, List, Tuple, Dict, Optional
 from pathlib import Path
@@ -118,6 +118,18 @@ class TrainerConfig:
     data: Path
     """Path to dataset. Can be a Nerfstudio or a COLMAP dataset."""
 
+    output_dir_prefix: Path = Path("outputs")
+    """Prefix to output directory"""
+
+    output_dir_name: Optional[Path] = None
+    """Output directory name relative to output_dir_prefix.
+        If not specified, will set a generic combining current timestamp and dataset name."""
+
+    steps_per_save: int = 2000
+    """Save checkpoint every this number of steps"""
+    save_only_latest_checkpoint: bool = True
+    """Whether to save only last checkpoint"""
+
     num_iterations: int = 30000
     """Number of training iterations"""
 
@@ -153,15 +165,55 @@ class Trainer:
             self.dataparser_outputs['metadata'],
             self.dataparser_outputs['cameras']
         ).cuda()
+        self.optimizers = create_optimizers(self.model, self.config.optimizer)
+
+        self.output_dir = self._setup_output_dir()
+        print(f"Output directory: {self.output_dir.absolute()}")
+
+        self._save_config_json()
 
         self.lock = threading.Lock()
+
+    def _setup_output_dir(self):
+        if self.config.output_dir_name is not None:
+            output_dir = self.config.output_dir_prefix / self.config.output_dir_name
+        else:
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            dataset_name = self.config.data.stem
+            output_dir = self.config.output_dir_prefix / f"{dataset_name}_{timestamp}"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
+
+    def _save_config_json(self):
+        import json
+
+        # config
+        config_dict = asdict(
+            self.config, dict_factory=lambda data: {
+                key: (str(value) if isinstance(value, Path)
+                      else value.__name__ if isinstance(value, Type)
+                      else value)
+                for key, value in data
+            })
+        with open(self.output_dir / "config.json", "w") as f:
+            json.dump(config_dict, f, indent=4)
+
+        # dataparser transform
+        dataparser_transform_dict = {
+            'transform': self.dataparser_outputs['dataparser_transform'][:3, :].tolist(),
+            'scale': self.dataparser_outputs['dataparser_scale']
+        }
+        with open(self.output_dir / "dataparser_transforms.json", "w") as f:
+            json.dump(dataparser_transform_dict, f, indent=4)
 
     def _render(self, c2w, fx, fy, cx, cy, w, h, camera_model):
         camera = Cameras((fx, fy, cx, cy), [0.0]*10, h, w, torch.from_numpy(c2w), camera_model)
         outputs = self.model.get_outputs(camera)
         outputs['_post_processor'] = lambda tensor, **kwargs: annotate_train_cameras(
             tensor, outputs['depth'], outputs['alpha'],
-            camera, self.model.cameras, self.dataset.thumbnails, **kwargs
+            camera, self.model.cameras, self.dataset.thumbnails,
+            relative_scale=self.model.config.relative_scale, **kwargs
         )
         return outputs
 
@@ -201,18 +253,35 @@ class Trainer:
             return self._get_train_loss_dict(*args)
 
     def train(self):
-        optims = create_optimizers(self.model, self.config.optimizer)
         for step in range(self.config.num_iterations):
-            for optim in optims.values():
+            if step > 0 and step % self.config.steps_per_save == 0:
+                self.save_checkpoint(step)
+            for optim in self.optimizers.values():
                 optim.zero_grad()
-            self.model.step_cb(optims, step)
+            self.model.step_cb(self.optimizers, step)
             model_outputs, loss_dict, metrics_dict = self.get_train_loss_dict(0)
             loss = torch.stack([x for x in loss_dict.values() if isinstance(x, torch.Tensor)]).sum()
             loss.backward()
-            for optim in optims.values():
+            for optim in self.optimizers.values():
                 optim.step()
             self.model.step_post_backward(step)
+        self.save_checkpoint(step+1)
 
+    def save_checkpoint(self, step: int) -> None:
+        ckpt_path: Path = self.output_dir / f"step-{step:09d}.ckpt"
+        torch.save(
+            {
+                "step": step,
+                "model": self.model.state_dict(),
+                "optimizers": {k: v.state_dict() for (k, v) in self.optimizers.items()},
+            },
+            ckpt_path,
+        )
+        # delete previous checkpoint
+        if self.config.save_only_latest_checkpoint:
+            for f in self.output_dir.glob("*.ckpt"):
+                if f != ckpt_path:
+                    f.unlink()
 
 @dataclass
 class TrainerConfigSquaredPos(TrainerConfig):
@@ -376,7 +445,13 @@ _MODEL_PRESET_3DGS2TR = dict(
     compute_hessian_diagonal="all",
     mcmc_noise_lr=5e5 * (1.6e-4 / 1.0e-6),
 )
+_MODEL_PRESET_LOW_TEXTURE = dict(
+    use_edge_aware_score=False,
+    mcmc_prob_grad_weight=0.0,
+    mcmc_use_long_axis_split=False,
+)
 _MODEL_PRESET_RICH_TEXTURE = dict(
+    use_edge_aware_score=True,
     mcmc_prob_grad_weight=1.0,
     mcmc_use_long_axis_split=True,
     mcmc_max_screen_size=0.10,
@@ -392,6 +467,7 @@ _MODEL_PRESET_NO_COLOR_SHIFT = dict(
 class TrainerConfigConfinedLowTexture(TrainerConfig):
     """Preset for visually confined environments with large textureless surfaces."""
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        **_MODEL_PRESET_LOW_TEXTURE,
         **_MODEL_PRESET_CONFINED,
         **_MODEL_PRESET_NO_COLOR_SHIFT,
     ))
@@ -421,6 +497,7 @@ class TrainerConfigConfinedSquared(TrainerConfig):
 class TrainerConfigOpenLowTexture(TrainerConfig):
     """Preset for open environments large textureless surfaces, a sky box will be trained."""
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        **_MODEL_PRESET_LOW_TEXTURE,
         **_MODEL_PRESET_OPEN,
         **_MODEL_PRESET_NO_COLOR_SHIFT,
         relative_scale=10.0,
@@ -473,7 +550,6 @@ class TrainerConfigAcademicBaseline(TrainerConfig):
     ))
     datamanager: SpirulaeSplatDataManagerConfig = field(default_factory=lambda: SpirulaeSplatDataManagerConfig(
         max_batch_per_epoch=9**9,
-        compute_edge_maps=False,
     ))
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
         primitive="3dgs",

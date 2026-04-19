@@ -1154,19 +1154,21 @@ at::Tensor blit_train_cameras_tensor(
         render_rgbs.options()
     );
 
-    // blit_aabb_bvh_kernel<<<_LAUNCH_ARGS_2D(w, h, 8, 4)>>>(
-    //     tensor2view<float, 3>(render_rgbs),
-    //     tensor2view<float, 3>(render_depths),
-    //     tensor2view<float, 3>(render_alphas),
-    //     view_is_fisheye,
-    //     w, h,
-    //     (float4*)view_intrins.data_ptr<float>(),
-    //     view_viewmat.data_ptr<float>(),
-    //     view_dist_coeffs,
-    //     num_lss-2,
-    //     (float3*)treeAABB.data_ptr<float>()
-    // );
-    // CHECK_DEVICE_ERROR(cudaGetLastError());
+    #if 0
+    blit_aabb_bvh_kernel<<<_LAUNCH_ARGS_2D(w, h, 8, 4)>>>(
+        tensor2view<float, 3>(render_rgbs),
+        tensor2view<float, 3>(render_depths),
+        tensor2view<float, 3>(render_alphas),
+        view_is_fisheye,
+        w, h,
+        (float4*)view_intrins.data_ptr<float>(),
+        view_viewmat.data_ptr<float>(),
+        view_dist_coeffs,
+        num_lss-2,
+        (float3*)lss_aabb.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+    #endif
 
     at::Tensor out_rgb = at::empty({h, w, 3}, render_rgbs.options().dtype(at::kByte));
 

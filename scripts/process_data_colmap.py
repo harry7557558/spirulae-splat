@@ -15,10 +15,6 @@ from typing import Any, Dict, List, Tuple, Optional, Union
 import numpy as np
 import torch
 
-# TODO(1480) use pycolmap instead of colmap_parsing_utils
-# import pycolmap
-from nerfstudio.utils.rich_utils import CONSOLE
-
 from dataclasses import dataclass
 
 import collections
@@ -694,7 +690,7 @@ def colmap_to_json(
     cam_id_to_camera = load_cameras(recon_dir)
     im_id_to_image = load_images(recon_dir)
     if len(set(cam_id_to_camera.keys())) > 1:
-        CONSOLE.print(f"[bold yellow]Warning: More than one camera is found in {recon_dir}")
+        print(f"Warning: More than one camera is found in {recon_dir}")
         use_single_camera_mode = False  # update bool: one camera per frame
         out = {}  # out = {"camera_model": parse_colmap_camera_params(cam_id_to_camera[1])["camera_model"]}
     else:  # one camera for all frames
@@ -878,25 +874,25 @@ class ColmapConverterToNerfstudioDataset():
         summary_log = []
         if (self.absolute_colmap_model_path / "cameras.bin").exists() \
                 or (self.absolute_colmap_model_path / "cameras.txt").exists():
-            with CONSOLE.status("[bold yellow]Saving results to transforms.json", spinner="balloon"):
-                num_frames, num_matched_frames = colmap_to_json(
-                    recon_dir=self.absolute_colmap_model_path,
-                    output_dir=self.work_dir,
-                    image_id_to_depth_path=None,
-                    camera_mask_path=self.absolute_camera_mask_path,
-                    image_rename_map=None,
-                    use_single_camera_mode=True,
-                )
-                summary_log.append(f"Colmap matched {num_matched_frames} images")
+            print("Saving results to transforms.json")
+            num_frames, num_matched_frames = colmap_to_json(
+                recon_dir=self.absolute_colmap_model_path,
+                output_dir=self.work_dir,
+                image_id_to_depth_path=None,
+                camera_mask_path=self.absolute_camera_mask_path,
+                image_rename_map=None,
+                use_single_camera_mode=True,
+            )
+            summary_log.append(f"Colmap matched {num_matched_frames} images")
             summary_log.append(get_matching_summary(num_frames, num_matched_frames))
 
         else:
-            CONSOLE.log(
-                "[bold yellow]Warning: Could not find existing COLMAP results. " "Not generating transforms.json" + \
+            print(
+                "Warning: Could not find existing COLMAP results. " "Not generating transforms.json" + \
                 "If needed, specify `--colmap_model_path` (default is `sparse/0`)."
             )
         for log in summary_log:
-            CONSOLE.log(log)
+            print(log)
 
 
 def entrypoint():
@@ -906,7 +902,7 @@ def entrypoint():
     try:
         tyro.cli(ColmapConverterToNerfstudioDataset).main()
     except (RuntimeError, ValueError) as e:
-        CONSOLE.log("[bold red]" + e.args[0])
+        print(e.args[0])
 
 
 if __name__ == "__main__":

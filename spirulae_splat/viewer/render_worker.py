@@ -1,11 +1,3 @@
-"""
-render_worker.py
-~~~~~~~~~~~~~~~~
-Runs the user-supplied render function in a single dedicated thread so the
-main thread is never blocked and thread-safety is preserved (the render
-function is always called from this one thread, never concurrently).
-"""
-
 from __future__ import annotations
 
 import io
@@ -20,7 +12,6 @@ import numpy as np
 
 @dataclass
 class RenderRequest:
-    """One render job submitted to the worker."""
     c2w: Any                      # 3×4 numpy array
     fx: float
     fy: float
@@ -34,19 +25,12 @@ class RenderRequest:
 
 @dataclass
 class RenderResult:
-    """Result produced by the worker."""
     request_id: int
     buffers: Dict[str, Any]       # dict[str, torch.Tensor] as returned by the render fn
     error: Optional[str] = None
 
 
 class RenderWorker:
-    """
-    Wraps a render function and ensures it is always called from one thread.
-
-    The worker keeps only the *latest* pending request; older ones are
-    discarded so the viewer stays responsive under high load.
-    """
 
     def __init__(
         self,
@@ -65,10 +49,6 @@ class RenderWorker:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._request_counter = 0
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def start(self) -> None:
         self._running = True
@@ -94,10 +74,6 @@ class RenderWorker:
             return self._result_queue.get(timeout=timeout)
         except queue.Empty:
             return None
-
-    # ------------------------------------------------------------------
-    # Internal
-    # ------------------------------------------------------------------
 
     def _loop(self) -> None:
         while self._running:
@@ -139,26 +115,14 @@ class RenderWorker:
                     pass
 
 
-# ------------------------------------------------------------------
-# Image encoding helpers
-# ------------------------------------------------------------------
-
-
 def encode_buffer_to_jpeg(
     tensor: Any,
     post_processor: Callable,
     quality: int,
     post_process_params: dict = {}
 ) -> bytes:
-    """
-    Encode a rendered buffer tensor to JPEG bytes.
-
-    * C==3 → clamp [0,1], convert to uint8 RGB
-    * C==1 → apply matplotlib colormap, convert to uint8 RGB
-    """
     import cv2
 
-    assert post_processor is not None, "TODO"
     tensor = post_processor(tensor, **post_process_params).cpu().numpy()
 
     success, buf = cv2.imencode(

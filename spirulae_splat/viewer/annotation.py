@@ -37,10 +37,20 @@ def annotate_train_cameras(
     if alpha.ndim == 4:
         alpha = alpha.squeeze(0)
 
+    key = '_annotation_size'
+    if not hasattr(cameras, key):
+        T = cameras.camera_to_worlds[:, :3, 3:4]
+        size = 0.2 * knn_dist(T.squeeze(-1))
+        setattr(cameras, key, size)
+    else:
+        size = getattr(cameras, key)
+    # size = size * (kwargs.get("relative_scale", 1.0) or 1.0)
+    # relative_scale = size / 0.05
+    # print(relative_scale)
+
     R = view_camera.camera_to_worlds[:, :3, :3]  # 3 x 3
     T = view_camera.camera_to_worlds[:, :3, 3:4]  # 3 x 1
-    # if self.config.relative_scale is not None:
-    #     T = T * self.config.relative_scale  # TODO
+    # T = T * relative_scale
     R = R * torch.tensor([[[1.0, -1.0, -1.0]]])
     R_inv = R.transpose(-1, -2)
     T_inv = -torch.bmm(R_inv, T)
@@ -51,17 +61,9 @@ def annotate_train_cameras(
     cameras = cameras.to(rgb.device)
     R = cameras.camera_to_worlds[:, :3, :3]  # 3 x 3
     T = cameras.camera_to_worlds[:, :3, 3:4]  # 3 x 1
-    # if self.config.relative_scale is not None:
-    #     T = T * self.config.relative_scale  # TODO
+    # T = T * relative_scale
     R = R * torch.tensor([[[1.0, -1.0, -1.0]]]).cuda()
     camera_to_worlds = torch.concat((R, T), dim=-1)
-
-    key = '_annotation_size'
-    if not hasattr(cameras, key):
-        size = 0.2 * knn_dist(T.squeeze(-1))
-        setattr(cameras, key, size)
-    else:
-        size = getattr(cameras, key)
 
     key = "_is_fisheyes"
     if not hasattr(cameras, key):
@@ -73,6 +75,7 @@ def annotate_train_cameras(
     from time import perf_counter
     torch.cuda.synchronize()
     time0 = perf_counter()
+    # depths = depths * relative_scale
     rgb = _make_lazy_cuda_func("blit_train_cameras")(
         rgb, depths, alpha,
         view_camera.camera_type[0] == "FISHEYE",
@@ -85,7 +88,7 @@ def annotate_train_cameras(
         is_fisheyes,
         cameras.distortion_params,
         camera_to_worlds,
-        thumbnails,
+        thumbnails.cuda(),
         size,
         kwargs.get("show_training_cameras", False),
     )

@@ -56,24 +56,24 @@ class SplatModel:
             raise ValueError("Must be .ckpt, config.yml, or .ply")
 
     def load_ckpt(self, file_path, _from_load_config=False):
-        if not _from_load_config:
-            print("WARNING: ckpt file does not contain information about scene type. Assuming vanilla 3DGS. "
-                "Use config.yml file instead of .ckpt file for more information.")
+        # if not _from_load_config:
+        #     print("WARNING: ckpt file does not contain information about scene type. Assuming vanilla 3DGS. "
+        #         "Use config.yml file instead of .ckpt file for more information.")
         checkpoint = torch.load(file_path, 'cpu', weights_only=False)
-        pipeline = checkpoint['pipeline']
+        model = checkpoint["model"]
 
         self.gauss_params = {}
-        for key in pipeline:
-            if key.startswith("_model.gauss_params."):
-                value = pipeline[key].to(torch.float32).cuda()
+        for key in model:
+            if key.startswith("gauss_params."):
+                value = model[key].to(torch.float32).cuda()
                 key = key.split('.')[-1]
                 self.gauss_params[key] = value
-        self.background_color = pipeline['_model.background_color'].to(torch.float32).cuda()
-        self.background_sh = pipeline['_model.background_sh'].to(torch.float32).cuda() \
-            if '_model.background_sh' in pipeline else torch.zeros((0, 3))
+        self.background_color = model['background_color'].to(torch.float32).cuda()
+        self.background_sh = model['background_sh'].to(torch.float32).cuda() \
+            if 'background_sh' in model else torch.zeros((0, 3))
 
-        if '_model.training_losses.ppisp_params' in pipeline:
-            self.ppisp_params = pipeline['_model.training_losses.ppisp_params'].to(torch.float32).cuda()
+        if 'training_losses.ppisp_params' in model:
+            self.ppisp_params = model['training_losses.ppisp_params'].to(torch.float32).cuda()
 
         self.num_sh = self.features_sh.shape[1]
         self.sh_degree = {
@@ -83,9 +83,30 @@ class SplatModel:
             1: 0, 4: 1, 9: 2, 16: 3, 25: 4
         }[len(self.background_sh)+1]
 
+        try:
+            config_path = os.path.join(os.path.dirname(os.path.abspath(str(file_path))), 'config.json')
+            with open(config_path, 'r') as fp:
+                config = json.load(fp)
+            relative_scale = config["model"]["relative_scale"]
+            if relative_scale is not None:
+                self.relative_scale = relative_scale
+                print("Relative scale:", self.relative_scale)
+        except:
+            print("WARNING: Failed to load dataparser transform. Exported PLY may be in a different frame as input dataset.")
+
+        try:
+            dtr_path = os.path.join(os.path.dirname(os.path.abspath(str(file_path))), 'dataparser_transforms.json')
+            with open(dtr_path, 'r') as fp:
+                dtr = json.load(fp)
+            self.dataparser_transform = np.concatenate((dtr['transform'], [[0, 0, 0, 1]]))
+            self.dataparser_scale = dtr['scale']
+        except:
+            print("WARNING: Failed to load dataparser transform. Exported PLY may be in a different frame as input dataset.")
+
     def load_config(self, file_path: str):
         save_dir = file_path[:file_path.rfind(os.path.sep)]
-        ckpt_dir = os.path.join(save_dir, 'nerfstudio_models')
+        # ckpt_dir = os.path.join(save_dir, 'nerfstudio_models')
+        ckpt_dir = save_dir
         for f in os.listdir(ckpt_dir):
             if f.endswith('.ckpt'):
                 f = os.path.join(ckpt_dir, f)

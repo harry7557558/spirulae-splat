@@ -164,29 +164,20 @@ setup(
         # "torch",
         "jaxtyping",
         "tyro",
-        "viser",
-        "rich>=12",
+        "opencv-python",
+        "open3d",
+        "matplotlib",
+        "Pillow",
+        "rawpy",
+        "pytorch-msssim",
         "typing_extensions",
     ] + [
         "fused_bilagrid @ git+https://github.com/harry7557558/fused-bilagrid.git@dev",
     ] * no_fused_bilagrid,
     extras_require={
-        # dev dependencies. Install them by `pip install gsplat[dev]`
-        "dev": [
-            "black[jupyter]==22.3.0",
-            "isort==5.10.1",
-            "pylint==2.13.4",
-            "pytest==7.1.2",
-            "pytest-xdist==2.5.0",
-            "typeguard>=2.13.3",
-            "pyyaml==6.0",
-            "build",
-            "twine",
-            "ninja",
-        ],
     },
     entry_points={
     },
-    # cmdclass={"build_ext": get_ext()} if not BUILD_NO_CUDA else {},
-    # ext_modules=get_extensions() if not BUILD_NO_CUDA else [],
+    cmdclass={"build_ext": get_ext()} if not BUILD_NO_CUDA else {},
+    ext_modules=get_extensions() if not BUILD_NO_CUDA else [],
 )
