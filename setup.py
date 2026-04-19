@@ -186,23 +186,6 @@ setup(
         ],
     },
     entry_points={
-        "nerfstudio.method_configs": [
-            "spirulae = spirulae_splat.ns_config:spirulae",
-            "spirulae^2 = spirulae_splat.ns_config:spirulae_squared",
-            "spirulae^2-pos = spirulae_splat.ns_config:spirulae_squared_pos",
-            "spirulae-patched = spirulae_splat.ns_config:spirulae_patched",
-            "spirulae-triangle = spirulae_splat.ns_config:spirulae_triangle",
-            "spirulae-triangle-patched = spirulae_splat.ns_config:spirulae_triangle_patched",
-            "spirulae-voxel = spirulae_splat.ns_config:spirulae_voxel",
-            "spirulae-preset-confined-low-texture = spirulae_splat.ns_config:spirulae_preset_confined_low_texture",
-            "spirulae-preset-confined = spirulae_splat.ns_config:spirulae_preset_confined",
-            "spirulae^2-preset-confined = spirulae_splat.ns_config:spirulae_squared_preset_confined",
-            "spirulae-preset-open-low-texture = spirulae_splat.ns_config:spirulae_preset_open_low_texture",
-            "spirulae-preset-open = spirulae_splat.ns_config:spirulae_preset_open",
-            "spirulae^2-preset-open = spirulae_splat.ns_config:spirulae_squared_preset_open",
-            "spirulae-preset-centered-object = spirulae_splat.ns_config:spirulae_preset_centered_object",
-            "spirulae-preset-academic-baseline = spirulae_splat.ns_config:spirulae_preset_academic_baseline",
-        ]
     },
     # cmdclass={"build_ext": get_ext()} if not BUILD_NO_CUDA else {},
     # ext_modules=get_extensions() if not BUILD_NO_CUDA else [],

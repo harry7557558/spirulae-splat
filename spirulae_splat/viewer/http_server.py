@@ -56,6 +56,11 @@ class _Handler(BaseHTTPRequestHandler):
             width = int(query.get("width", ["512"])[0])
             height = int(query.get("height", ["512"])[0])
             camera_model = query.get("camera_model", ["PINHOLE"])[0]
+            jpeg_quality = int(query.get("jpeg_quality", [75])[0])
+            show_training_cameras = query.get("show_training_cameras", ["0"])[0].lower() in ("1", "true", "yes")
+
+            if max(width, height) > 2160:
+                raise ValueError("Image too large")  # prevent OOM
 
             req = RenderRequest(
                 c2w=c2w,
@@ -63,6 +68,9 @@ class _Handler(BaseHTTPRequestHandler):
                 width=width, height=height,
                 camera_model=camera_model,
             )
+            post_process_params = {
+                "show_training_cameras": show_training_cameras,
+            }
             if self.render_worker:
                 self.render_worker.submit(req)
                 # Wait for result
@@ -93,7 +101,8 @@ class _Handler(BaseHTTPRequestHandler):
                 jpeg_bytes = encode_buffer_to_jpeg(
                     result.buffers[buffer_key],
                     result.buffers.get("_post_processor", None),
-                    self.render_worker.jpeg_quality
+                    jpeg_quality,
+                    post_process_params,
                 )
                 if '_post_processor' in result.buffers:
                     del result.buffers['_post_processor']

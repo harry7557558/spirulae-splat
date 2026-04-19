@@ -96,9 +96,6 @@ class ViewerServer:
     http_host / http_port:
         Address for the HTTP server.
 
-    jpeg_quality:
-        JPEG encoding quality (1-95, default 85).
-
     extra_sliders / extra_dropdowns:
         Additional UI controls that appear in the "Visualize" panel section.
         Their current values are forwarded to the render function via the
@@ -116,7 +113,6 @@ class ViewerServer:
         *,
         http_host: str = "localhost",
         http_port: int = 7007,
-        jpeg_quality: int = 85,
         extra_sliders: Optional[List[SliderDef]] = None,
         extra_dropdowns: Optional[List[DropdownDef]] = None,
         open_browser: bool = True,
@@ -124,7 +120,6 @@ class ViewerServer:
         self._render_fn = render_fn
         self._http_host = http_host
         self._http_port = http_port
-        self._jpeg_quality = jpeg_quality
         self._extra_sliders = extra_sliders or []
         self._extra_dropdowns = extra_dropdowns or []
         self._open_browser = open_browser
@@ -141,7 +136,6 @@ class ViewerServer:
         # 1. Render worker
         self._render_worker = RenderWorker(
             render_fn=self._render_fn,
-            jpeg_quality=self._jpeg_quality,
         )
         self._render_worker.start()
 

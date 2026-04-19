@@ -27,5 +27,6 @@ at::Tensor blit_train_cameras_tensor(
     const CameraDistortionCoeffsTensor dist_coeffs,
     const at::Tensor camera_to_worlds,  // [N, 3, 4]
     at::Tensor thumbnails,
-    const float camera_size
+    const float camera_size,
+    const bool show_training_cameras
 );

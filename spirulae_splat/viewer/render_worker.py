@@ -51,10 +51,8 @@ class RenderWorker:
     def __init__(
         self,
         render_fn: Callable,
-        jpeg_quality: int = 85,
     ) -> None:
         self._render_fn = render_fn
-        self.jpeg_quality = jpeg_quality
 
         # Latest pending request (None = idle)
         self._pending: Optional[RenderRequest] = None
@@ -148,9 +146,9 @@ class RenderWorker:
 
 def encode_buffer_to_jpeg(
     tensor: Any,
-    post_processor: Optional[Callable] = None,
-    quality: int = 85,
-    colormap: str = "turbo",
+    post_processor: Callable,
+    quality: int,
+    post_process_params: dict = {}
 ) -> bytes:
     """
     Encode a rendered buffer tensor to JPEG bytes.
@@ -161,7 +159,7 @@ def encode_buffer_to_jpeg(
     import cv2
 
     assert post_processor is not None, "TODO"
-    tensor = post_processor(tensor).cpu().numpy()
+    tensor = post_processor(tensor, **post_process_params).cpu().numpy()
 
     success, buf = cv2.imencode(
         '.jpg', cv2.cvtColor(tensor, cv2.COLOR_RGB2BGR),

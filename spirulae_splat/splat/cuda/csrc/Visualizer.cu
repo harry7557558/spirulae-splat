@@ -726,7 +726,6 @@ __global__ void blit_with_bvh_kernel(
     const float4* __restrict__ view_intrins,  // [4]
     const float* __restrict__ view_viewmat,  // [4, 4]
     const CameraDistortionCoeffsBuffer view_dist_coeffs,
-    const int num_lss,
     const float4* __restrict__ lss_buffer,
     const int2* __restrict__ lss_nodes,
     const float3* __restrict__ lss_aabb,
@@ -831,7 +830,7 @@ __global__ void blit_with_bvh_kernel(
         const int thread_rank = threadIdx.y * blockDim.x + threadIdx.x;
 
         // BVH traversal for linear swept spheres
-        {
+        if (lss_buffer != nullptr) {
             uint stackSize = 0;
             float3 bmin = lss_aabb[0], bmax = lss_aabb[1];
             if (ray_aabb_intersection(
@@ -879,7 +878,7 @@ __global__ void blit_with_bvh_kernel(
         }
 
         // BVH traversal for triangle
-        {
+        if (tri_buffer != nullptr) {
             uint stackSize = 0;
             float3 bmin = tri_aabb[0], bmax = tri_aabb[1];
             if (ray_aabb_intersection(
@@ -1035,7 +1034,8 @@ at::Tensor blit_train_cameras_tensor(
     const CameraDistortionCoeffsTensor dist_coeffs,
     const at::Tensor camera_to_worlds,  // [N, 3, 4]
     at::Tensor thumbnails,
-    const float camera_size
+    const float camera_size,
+    const bool show_training_cameras
 ) {
     DEVICE_GUARD(render_rgbs);
     CHECK_CUDA(render_rgbs);
@@ -1054,6 +1054,42 @@ at::Tensor blit_train_cameras_tensor(
     auto w = render_rgbs.size(-2);
     auto c = render_rgbs.size(-1);
     auto n = intrins.size(0);
+
+    constexpr int kFloatPInfByte = 0x7f;  // 0x7f7f7f7f -> 3.39615e+38
+    constexpr int kFloatNInfByte = 0xfe;  // 0xfefefefe -> -1.69474e+38
+
+    at::Tensor min_max_tensor;
+    if (c == 1) {
+        min_max_tensor = at::empty({2}, render_rgbs.options());
+        cudaMemset(min_max_tensor.data_ptr<float>()+0, kFloatPInfByte, sizeof(float));
+        cudaMemset(min_max_tensor.data_ptr<float>()+1, kFloatNInfByte, sizeof(float));
+        compute_min_max_kernel<<<_LAUNCH_ARGS_2D(w, h, 16, 16)>>>(
+            tensor2view<float, 3>(render_rgbs),
+            min_max_tensor.data_ptr<float>()
+        );
+        CHECK_DEVICE_ERROR(cudaGetLastError());
+    }
+
+    if (!show_training_cameras) {
+        at::Tensor out_rgb = at::empty({h, w, 3}, render_rgbs.options().dtype(at::kByte));
+        blit_with_bvh_kernel<<<_LAUNCH_ARGS_2D(w, h, 8, 4)>>>(
+            tensor2view<float, 3>(render_rgbs),
+            tensor2view<float, 3>(render_depths),
+            tensor2view<float, 3>(render_alphas),
+            view_is_fisheye,
+            w, h,
+            (float4*)view_intrins.data_ptr<float>(),
+            view_viewmat.data_ptr<float>(),
+            view_dist_coeffs,
+            nullptr, nullptr, nullptr,
+            nullptr, nullptr, nullptr,
+            tensor2view<uint8_t, 4>(thumbnails),
+            c == 1 ? min_max_tensor.data_ptr<float>() : nullptr,
+            tensor2view<uint8_t, 3>(out_rgb)
+        );
+        CHECK_DEVICE_ERROR(cudaGetLastError());
+        return out_rgb;
+    }
 
     uint32_t num_lss = n*8*kNumFrustumSegments;
     uint32_t num_tri = n*4*kNumFrustumFaces*kNumFrustumFaces;
@@ -1074,8 +1110,6 @@ at::Tensor blit_train_cameras_tensor(
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     // compute global AABB
-    constexpr int kFloatPInfByte = 0x7f;  // 0x7f7f7f7f -> 3.39615e+38
-    constexpr int kFloatNInfByte = 0xfe;  // 0xfefefefe -> -1.69474e+38
     at::Tensor root_aabb_tensor = at::empty({2, 3}, render_rgbs.options());
     cudaMemset(root_aabb_tensor.data_ptr<float>()+0, kFloatPInfByte, 3*sizeof(float));
     cudaMemset(root_aabb_tensor.data_ptr<float>()+3, kFloatNInfByte, 3*sizeof(float));
@@ -1134,18 +1168,6 @@ at::Tensor blit_train_cameras_tensor(
     // );
     // CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    at::Tensor min_max_tensor;
-    if (c == 1) {
-        min_max_tensor = at::empty({2}, render_rgbs.options());
-        cudaMemset(min_max_tensor.data_ptr<float>()+0, kFloatPInfByte, sizeof(float));
-        cudaMemset(min_max_tensor.data_ptr<float>()+1, kFloatNInfByte, sizeof(float));
-        compute_min_max_kernel<<<_LAUNCH_ARGS_2D(w, h, 16, 16)>>>(
-            tensor2view<float, 3>(render_rgbs),
-            min_max_tensor.data_ptr<float>()
-        );
-        CHECK_DEVICE_ERROR(cudaGetLastError());
-    }
-
     at::Tensor out_rgb = at::empty({h, w, 3}, render_rgbs.options().dtype(at::kByte));
 
     blit_with_bvh_kernel<<<_LAUNCH_ARGS_2D(w, h, 8, 4)>>>(
@@ -1157,7 +1179,6 @@ at::Tensor blit_train_cameras_tensor(
         (float4*)view_intrins.data_ptr<float>(),
         view_viewmat.data_ptr<float>(),
         view_dist_coeffs,
-        num_lss,
         (float4*)lss_buffer.data_ptr<float>(),
         (int2*)lss_nodes.data_ptr<int32_t>(),
         (float3*)lss_aabb.data_ptr<float>(),

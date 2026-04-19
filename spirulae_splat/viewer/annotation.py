@@ -28,6 +28,7 @@ def annotate_train_cameras(
     view_camera: Cameras,
     cameras: Cameras,
     thumbnails: torch.Tensor,
+    **kwargs
 ):
     if rgb.ndim == 4:
         rgb = rgb.squeeze(0)
@@ -85,7 +86,8 @@ def annotate_train_cameras(
         cameras.distortion_params,
         camera_to_worlds,
         thumbnails,
-        size
+        size,
+        kwargs.get("show_training_cameras", False),
     )
     torch.cuda.synchronize()
     time1 = perf_counter()

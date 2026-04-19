@@ -159,9 +159,9 @@ class Trainer:
     def _render(self, c2w, fx, fy, cx, cy, w, h, camera_model):
         camera = Cameras((fx, fy, cx, cy), [0.0]*10, h, w, torch.from_numpy(c2w), camera_model)
         outputs = self.model.get_outputs(camera)
-        outputs['_post_processor'] = lambda tensor: annotate_train_cameras(
+        outputs['_post_processor'] = lambda tensor, **kwargs: annotate_train_cameras(
             tensor, outputs['depth'], outputs['alpha'],
-            camera, self.model.cameras, self.dataset.thumbnails
+            camera, self.model.cameras, self.dataset.thumbnails, **kwargs
         )
         return outputs
 
@@ -362,6 +362,12 @@ _MODEL_PRESET_CONFINED = dict(
     randomize_background=True,
     train_background_color=False,
 )
+_MODEL_PRESET_OPEN = dict(
+    randomize_background=False,
+    train_background_color=True,
+    background_color="gray",
+    background_sh_degree=4,
+)
 _MODEL_PRESET_3DGS2TR_POS = dict(
     compute_hessian_diagonal="position",
     mcmc_noise_lr=5e5 * (1.6e-4 / 1.0e-6),
@@ -415,6 +421,7 @@ class TrainerConfigConfinedSquared(TrainerConfig):
 class TrainerConfigOpenLowTexture(TrainerConfig):
     """Preset for open environments large textureless surfaces, a sky box will be trained."""
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        **_MODEL_PRESET_OPEN,
         **_MODEL_PRESET_NO_COLOR_SHIFT,
         relative_scale=10.0,
     ))
@@ -424,6 +431,7 @@ class TrainerConfigOpenLowTexture(TrainerConfig):
 class TrainerConfigOpen(TrainerConfig):
     """Preset for open environments, a sky box will be trained."""
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        **_MODEL_PRESET_OPEN,
         **_MODEL_PRESET_3DGS2TR_POS,
         **_MODEL_PRESET_RICH_TEXTURE,
     ))
@@ -433,6 +441,7 @@ class TrainerConfigOpen(TrainerConfig):
 class TrainerConfigOpenSquared(TrainerConfig):
     """[Unstable] Preset for open environments, a sky box will be trained."""
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        **_MODEL_PRESET_OPEN,
         **_MODEL_PRESET_3DGS2TR,
         **_MODEL_PRESET_RICH_TEXTURE,
     ))
@@ -445,6 +454,7 @@ class TrainerConfigCenteredObject(TrainerConfig):
         center_method="focus",
     ))
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        **_MODEL_PRESET_OPEN,
         **_MODEL_PRESET_3DGS2TR,
         **_MODEL_PRESET_RICH_TEXTURE,
         **_MODEL_PRESET_NO_COLOR_SHIFT,

@@ -14,7 +14,6 @@ async def start_viewer(trainer: Trainer):
         render_fn=trainer.render,
         http_host="localhost",
         http_port=7007,
-        jpeg_quality=75,
         # Example extra controls:
         # extra_sliders=[
         #     SliderDef(id="brightness", label="Brightness", min=0.5, max=2.0, step=0.05, value=1.0, unit="×"),

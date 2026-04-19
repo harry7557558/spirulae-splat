@@ -3,7 +3,9 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>3D Renderer Viewer</title>
+<title>Spirulae-Splat Viewer</title>
+<link rel="icon" href="https://harry7557558.github.io/favicon.ico"/>
+<meta name="robots" content="noindex, follow"/>
 <style>
   :root {
     --bg: #0d0e12;
@@ -52,7 +54,6 @@
     font-weight: 700;
     color: var(--text-bright);
     letter-spacing: 0.08em;
-    text-transform: uppercase;
   }
   #header .logo span { color: var(--accent); }
   #status-dot {
@@ -205,6 +206,63 @@
     border: none;
   }
 
+  /* ── Toggle Switch ───────────────────────────────────────── */
+  .toggle {
+    position: relative;
+    width: 32px;
+    height: 18px;
+    cursor: pointer;
+    display: inline-block;
+  }
+  .toggle input[type=checkbox] {
+    appearance: none;
+    -webkit-appearance: none;
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    cursor: pointer;
+    outline: none;
+  }
+  .toggle input[type=checkbox]::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--input-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 20px;
+    transition: background 0.25s, border-color 0.25s, box-shadow 0.25s;
+  }
+  .toggle input[type=checkbox]::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    background: var(--slider-thumb);
+    border-radius: 50%;
+    box-shadow: 0 0 4px var(--accent)33;
+    transition: transform 0.25s;
+  }
+  .toggle input[type=checkbox]:hover::before {
+    border-color: var(--accent);
+  }
+  .toggle input[type=checkbox]:checked::before {
+    background: var(--accent);
+    border-color: var(--accent);
+    box-shadow: 0 0 6px var(--accent)66;
+  }
+  .toggle input[type=checkbox]:checked::after {
+    transform: translateX(14px);
+    background-color: var(--text-bright);
+  }
+  .toggle input[type=checkbox]:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+  }
+
   /* Select */
   select {
     width: 100%;
@@ -234,6 +292,13 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* Camera pose display */
+  #footnote, #footnote a {
+    font-size: 10px;
+    color: var(--text-dim);
+    line-height: 1.7;
+  }
+
   /* Reset button */
   .btn {
     width: 100%;
@@ -260,7 +325,7 @@
 
 <!-- ── Header ─────────────────────────────────────────── -->
 <div id="header">
-  <div class="logo"><span>3D</span> VIEWER</div>
+  <div class="logo">🐚 <span>Spirulae-Splat</span> Viewer</div>
   <div id="status-dot"></div>
   <div id="status-text">Connecting…</div>
   <div id="fps-counter">— fps</div>
@@ -328,6 +393,23 @@
         </div>
         <input type="range" id="res-slider" min="1" max="8" step="1" value="4"/>
       </div>
+
+      <div class="ctrl-row">
+        <div class="ctrl-label">
+          <span>JPEG Quality</span>
+          <span class="val" id="quality-val">75</span>
+        </div>
+        <input type="range" id="quality-slider" min="25" max="95" step="1" value="75"/>
+      </div>
+
+      <div class="ctrl-row">
+        <div class="ctrl-label">
+          <span>Update Rate</span>
+          <span class="val" id="update-rate-val">0.5s</span>
+        </div>
+        <input type="range" id="update-rate-slider" min="0.1" max="2.0" step="0.1" value="0.5"/>
+      </div>
+
     </div>
 
     <!-- Visualization -->
@@ -339,6 +421,9 @@
           <option value="rgb">rgb</option>
         </select>
       </div>
+      <div class="ctrl-row">
+        <div class="ctrl-label"><label for="show-training-cameras"><span>Show Training Cameras</span></label><label class="toggle"><input type="checkbox" id="show-training-cameras" /></label></div>
+      </div>
       <!-- Additional dynamic controls injected here -->
       <div id="extra-controls"></div>
     </div>
@@ -347,6 +432,10 @@
     <div class="panel-section">
       <div class="panel-section-title">Camera Pose</div>
       <div id="pose-display">—</div>
+    </div>
+
+    <div class="panel-section">
+      <div id="footnote">Made with 🌊 by <a href="https://github.com/harry7557558/" target="_blank">harry7557558</a></div>
     </div>
 
   </div><!-- /panel -->
@@ -469,7 +558,7 @@ const RES_STEPS = [
   { label: "720p",  h: 720  },
   { label: "1080p", h: 1080 },
   { label: "1440p", h: 1440 },
-  { label: "4K",    h: 2160 },
+  { label: "2160p", h: 2160 },
 ];
 
 function getResolution(sliderVal) {
@@ -482,6 +571,18 @@ function getResolution(sliderVal) {
   const aspect = vpW / vpH;
   const w = Math.round(h * aspect);
   return { w: Math.max(w,64), h: Math.max(h,64), label: step.label };
+}
+
+function getTargetInterval() {
+  return parseFloat($("update-rate-slider").value) * 1000;
+}
+
+function getRenderSettings() {
+  return {
+    jpeg_quality: parseInt($("quality-slider").value, 10),
+    update_rate: parseFloat($("update-rate-slider").value),
+    show_training_cameras: $("show-training-cameras").checked ? "1" : "0",
+  };
 }
 
 function fovToIntrinsics(fovDeg, w, h) {
@@ -724,6 +825,7 @@ function sendRenderRequest() {
   const c2w_flat = cam.c2w().flat();
   const res = getResolution($("res-slider").value);
   const intrinsics = fovToIntrinsics($("fov-slider").value, res.w, res.h);
+  const settings = getRenderSettings();
   const params = new URLSearchParams({
     buffer_key: $("buffer-key").value,
     c2w: c2w_flat.join(","),
@@ -734,6 +836,9 @@ function sendRenderRequest() {
     width: res.w,
     height: res.h,
     camera_model: $("camera-model").value,
+    jpeg_quality: settings.jpeg_quality,
+    update_rate: settings.update_rate,
+    show_training_cameras: settings.show_training_cameras,
   });
   const img = $("canvas-img");
   img.src = `${CFG.serverUrl}/render?${params}`;
@@ -812,7 +917,6 @@ const Viewer = (() => {
   let _pending = false;
   let _lastRenderTime = 0;
   const MIN_INTERVAL = 33; // ~30 fps cap on requests
-  const TARGET_INTERVAL = 200;  // 5 fps on animation
 
   function requestRender() {
     _dirty = true;
@@ -839,10 +943,14 @@ const Viewer = (() => {
   function onFrameReceived() {
     _pending = false;
     FPS.tick();
-    setTimeout(requestRender, TARGET_INTERVAL);
   }
 
-  return { requestRender, onFrameReceived };
+  function loopRender() {
+    requestRender();
+    setTimeout(loopRender, getTargetInterval());
+  }
+
+  return { requestRender, loopRender, onFrameReceived };
 })();
 
 // ═══════════════════════════════════════════════════════
@@ -964,6 +1072,18 @@ $("res-slider").addEventListener("input", e => {
   Viewer.requestRender();
 });
 
+$("quality-slider").addEventListener("input", e => {
+  $("quality-val").textContent = e.target.value;
+  Viewer.requestRender();
+});
+
+$("update-rate-slider").addEventListener("input", e => {
+  $("update-rate-val").textContent = parseFloat(e.target.value).toFixed(1) + "s";
+  Viewer.requestRender();
+});
+
+$("show-training-cameras").addEventListener("change", () => Viewer.requestRender());
+
 $("camera-model").addEventListener("change", () => Viewer.requestRender());
 $("buffer-key").addEventListener("change", () => Viewer.requestRender());
 
@@ -993,9 +1113,12 @@ window.addEventListener("resize", () => {
     Viewer.onFrameReceived();
     setStatus("ready");
   };
+  Viewer.loopRender();
   // Initial res label
   const res = getResolution($("res-slider").value);
   $("res-val").textContent = res.label;
+  $("quality-val").textContent = $("quality-slider").value;
+  $("update-rate-val").textContent = parseFloat($("update-rate-slider").value).toFixed(1) + "s";
 })();
 </script>
 </body>
