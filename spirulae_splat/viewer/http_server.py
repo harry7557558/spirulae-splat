@@ -55,8 +55,9 @@ class _Handler(BaseHTTPRequestHandler):
             jpeg_quality = int(query.get("jpeg_quality", [75])[0])
             show_training_cameras = query.get("show_training_cameras", ["0"])[0].lower() in ("1", "true", "yes")
 
-            if max(width, height) > 2160:
-                raise ValueError("Image too large")  # prevent OOM
+            MAX_DIM = 2160
+            if max(width, height) > 2160:  # prevent OOM
+                raise ValueError(f"Image too large (got {width} x {height}, max {MAX_DIM})")
 
             req = RenderRequest(
                 c2w=c2w,

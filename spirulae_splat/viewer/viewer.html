@@ -321,7 +321,7 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* Camera pose display */
+  /* Footnote */
   #footnote, #footnote a {
     font-size: 10px;
     color: var(--text-dim);
@@ -621,14 +621,14 @@ const cam = {
 // Resolution table
 // ═══════════════════════════════════════════════════════
 const RES_STEPS = [
-  { label: "144p",  h: 144  },
-  { label: "240p",  h: 240  },
-  { label: "360p",  h: 360  },
-  { label: "480p",  h: 480  },
-  { label: "720p",  h: 720  },
-  { label: "1080p", h: 1080 },
-  { label: "1440p", h: 1440 },
-  { label: "2160p", h: 2160 },
+  { label: "144p",  h: 144,  w: 144  },
+  { label: "240p",  h: 240,  w: 240  },
+  { label: "360p",  h: 360,  w: 360  },
+  { label: "480p",  h: 480,  w: 480  },
+  { label: "720p",  h: 720,  w: 720  },
+  { label: "1080p", h: 1080, w: 1080 },
+  { label: "1440p", h: 1440, w: 1440 },
+  { label: "2160p", h: 2160, w: 2160 },
 ];
 
 function getResolution(sliderVal) {
@@ -637,9 +637,11 @@ function getResolution(sliderVal) {
   const vpW = $("viewport").clientWidth;
   const vpH = $("viewport").clientHeight;
   const screenMaxH = Math.min(window.screen.height, vpH);
-  const h = Math.min(step.h, screenMaxH);
+  const screenMaxW = Math.min(window.screen.width, vpW);
   const aspect = vpW / vpH;
-  const w = Math.round(h * aspect);
+  const scale = Math.min(step.h / screenMaxH, step.w / screenMaxW);
+  const h = Math.round(screenMaxH * scale);
+  const w = Math.round(screenMaxW * scale);
   return { w: Math.max(w,64), h: Math.max(h,64), label: step.label };
 }
 
@@ -893,6 +895,7 @@ function sendRenderRequest() {
     jpeg_quality: settings.jpeg_quality,
     update_rate: settings.update_rate,
     show_training_cameras: settings.show_training_cameras,
+    no_cache: performance.now(),
   });
   const img = $("canvas-img");
   const oldSrc = img.src;
@@ -909,8 +912,9 @@ function sendRenderRequest() {
   img.onload = () => {
     if (Nav.disabled) {
       Nav.disabled = false;
-      setStatus("ready");
+      setStatus("disconnected")
     }
+    else setStatus("ready");
     Viewer.onFrameReceived();
   };
   setStatus("rendering");

@@ -8,7 +8,7 @@ from spirulae_splat.viewer.server import ViewerServer
 
 
 
-async def start_viewer(trainer: Trainer):
+async def start_viewer_server(trainer: Trainer):
 
     server = ViewerServer(
         render_fn=trainer.render,
@@ -21,8 +21,8 @@ async def start_viewer(trainer: Trainer):
     server.start()
     server.wait()
 
-async def main(trainer: Trainer):
-    await asyncio.create_task(start_viewer(trainer))
+async def start_viewer(trainer: Trainer):
+    await asyncio.create_task(start_viewer_server(trainer))
 
 
 def entrypoint():
@@ -49,10 +49,13 @@ def entrypoint():
     config = tyro.cli(Config)
     trainer = Trainer(config)
 
-    thread = threading.Thread(target=trainer.train, daemon=True)
+    thread = threading.Thread(
+        target=lambda: asyncio.run(start_viewer(trainer)),
+        daemon=True
+    )
     thread.start()
 
-    asyncio.run(main(trainer))
+    trainer.train()
 
 if __name__ == "__main__":
     entrypoint()
