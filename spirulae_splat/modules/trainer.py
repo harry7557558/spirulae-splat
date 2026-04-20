@@ -5,6 +5,8 @@ from pathlib import Path
 
 import threading
 import torch
+import time
+from tqdm import tqdm
 
 from spirulae_splat.modules.camera import Cameras
 from spirulae_splat.modules.model import SpirulaeSplatModelConfig, SpirulaeSplatModel
@@ -174,6 +176,36 @@ class Trainer:
 
         self.lock = threading.Lock()
 
+        # Progress tracking
+        self.current_step = 0
+        self.start_time = None
+        self.last_step_time = None
+        self.step_latencies = []
+
+    def get_progress(self):
+        if self.start_time is None:
+            return {
+                "step": 0,
+                "total_steps": self.config.num_iterations,
+                "elapsed_time": 0,
+                "eta": None,
+                "latency_ms": None,
+            }
+        elapsed = time.time() - self.start_time
+        avg_latency = sum(self.step_latencies) / len(self.step_latencies) if self.step_latencies else None
+        if avg_latency and self.current_step > 0:
+            remaining_steps = self.config.num_iterations - self.current_step
+            eta = remaining_steps * avg_latency
+        else:
+            eta = None
+        return {
+            "step": self.current_step,
+            "total_steps": self.config.num_iterations,
+            "elapsed_time": elapsed,
+            "eta": eta,
+            "latency_ms": avg_latency * 1000 if avg_latency else None,
+        }
+
     def _setup_output_dir(self):
         if self.config.output_dir_name is not None:
             output_dir = self.config.output_dir_prefix / self.config.output_dir_name
@@ -253,19 +285,38 @@ class Trainer:
             return self._get_train_loss_dict(*args)
 
     def train(self):
-        for step in range(self.config.num_iterations):
-            if step > 0 and step % self.config.steps_per_save == 0:
-                self.save_checkpoint(step)
-            for optim in self.optimizers.values():
-                optim.zero_grad()
-            self.model.step_cb(self.optimizers, step)
-            model_outputs, loss_dict, metrics_dict = self.get_train_loss_dict(0)
-            loss = torch.stack([x for x in loss_dict.values() if isinstance(x, torch.Tensor)]).sum()
-            loss.backward()
-            for optim in self.optimizers.values():
-                optim.step()
-            self.model.step_post_backward(step)
-        self.save_checkpoint(step+1)
+        self.start_time = time.time()
+        self.last_step_time = self.start_time
+        with tqdm(total=self.config.num_iterations, desc="Training", unit="step") as pbar:
+            for step in range(self.config.num_iterations):
+                step_start = time.time()
+                self.current_step = step + 1  # 1-based
+                if step > 0 and step % self.config.steps_per_save == 0:
+                    self.save_checkpoint(step)
+                for optim in self.optimizers.values():
+                    optim.zero_grad()
+                self.model.step_cb(self.optimizers, step)
+                model_outputs, loss_dict, metrics_dict = self.get_train_loss_dict(0)
+                loss = torch.stack([x for x in loss_dict.values() if isinstance(x, torch.Tensor)]).sum()
+                loss.backward()
+                for optim in self.optimizers.values():
+                    optim.step()
+                self.model.step_post_backward(step)
+                step_end = time.time()
+                latency = step_end - step_start
+                self.step_latencies.append(latency)
+                if len(self.step_latencies) > 100:  # keep last 100
+                    self.step_latencies.pop(0)
+                # pbar.update(1)
+                avg_latency = sum(self.step_latencies) / len(self.step_latencies)
+                elapsed = time.time() - self.start_time
+                eta = (self.config.num_iterations - self.current_step) * avg_latency
+                # pbar.set_postfix({
+                #     "latency": f"{avg_latency*1000:.1f}ms",
+                #     "elapsed": f"{elapsed:.1f}s",
+                #     "eta": f"{eta:.1f}s"
+                # })
+        self.save_checkpoint(self.config.num_iterations)
 
     def save_checkpoint(self, step: int) -> None:
         ckpt_path: Path = self.output_dir / f"step-{step:09d}.ckpt"

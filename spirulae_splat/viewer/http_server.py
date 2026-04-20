@@ -15,6 +15,7 @@ from .render_worker import RenderRequest, RenderWorker, encode_buffer_to_jpeg
 class _Handler(BaseHTTPRequestHandler):
     html_content: bytes = b""
     render_worker: Optional[RenderWorker] = None
+    progress_fn: Optional[Callable] = None
     last_keys: list[str] = []
 
     def do_GET(self) -> None:  # noqa: N802
@@ -32,6 +33,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_render(query)
         elif path == "/buffers":
             self._handle_buffers()
+        elif path == "/progress":
+            self._handle_progress()
         else:
             self.send_response(404)
             self.end_headers()
@@ -125,6 +128,22 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(keys).encode("utf-8"))
 
+    def _handle_progress(self) -> None:
+        if self.progress_fn:
+            progress = self.progress_fn()
+        else:
+            progress = {
+                "step": 0,
+                "total_steps": 0,
+                "elapsed_time": 0,
+                "eta": None,
+                "latency_ms": None,
+            }
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(progress).encode("utf-8"))
+
     def _default_render_for_keys(self) -> None:
         # Default params
         c2w = np.eye(3, 4, dtype=np.float32)
@@ -151,9 +170,10 @@ class _Handler(BaseHTTPRequestHandler):
 class HTTPThread:
     """Serves the viewer HTML and handles requests on a background daemon thread."""
 
-    def __init__(self, html: str, render_worker: RenderWorker, host: str = "localhost", port: int = 8080) -> None:
+    def __init__(self, html: str, render_worker: RenderWorker, progress_fn: Optional[Callable], host: str = "localhost", port: int = 8080) -> None:
         _Handler.html_content = html.encode("utf-8")
         _Handler.render_worker = render_worker
+        _Handler.progress_fn = progress_fn
         self._server = HTTPServer((host, port), _Handler)
         self._thread: Optional[threading.Thread] = None
 

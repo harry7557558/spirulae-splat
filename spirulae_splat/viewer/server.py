@@ -17,11 +17,13 @@ class ViewerServer:
         self,
         render_fn: Callable,
         *,
+        progress_fn: Optional[Callable] = None,
         http_host: str = "localhost",
         http_port: int = 7007,
         open_browser: bool = False,
     ) -> None:
         self._render_fn = render_fn
+        self._progress_fn = progress_fn
         self._http_host = http_host
         self._http_port = http_port
         self._open_browser = open_browser
@@ -42,6 +44,7 @@ class ViewerServer:
         self._http_thread = HTTPThread(
             html=html,
             render_worker=self._render_worker,
+            progress_fn=self._progress_fn,
             host=self._http_host,
             port=self._http_port,
         )

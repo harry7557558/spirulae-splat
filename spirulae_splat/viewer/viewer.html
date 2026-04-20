@@ -37,6 +37,11 @@
     overflow: hidden;
   }
 
+  ::selection {
+    background-color: rgba(from var(--accent) r g b / 0.25);
+    /* color: var(--text-bright); */
+  }
+
   /* ── Header ─────────────────────────────────────────── */
   #header {
     height: var(--header-h);
@@ -77,6 +82,30 @@
     color: var(--text-dim);
     min-width: 80px;
     text-align: right;
+  }
+
+  /* ── Progress bar ────────────────────────────────────── */
+  #progress-bar {
+    display: none;
+    width: 100%;
+    height: 4px;
+    background: var(--panel-border);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: 8px;
+  }
+  #progress-bar.visible { display: block; }
+  #progress-fill {
+    height: 100%;
+    background: var(--accent);
+    width: 0%;
+    transition: width 0.3s ease;
+  }
+  #progress-text {
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-top: 4px;
+    text-align: center;
   }
 
   /* ── Main layout ─────────────────────────────────────── */
@@ -319,6 +348,41 @@
   #panel::-webkit-scrollbar { width: 4px; }
   #panel::-webkit-scrollbar-track { background: var(--panel-bg); }
   #panel::-webkit-scrollbar-thumb { background: var(--panel-border); border-radius: 2px; }
+
+  /* Panel toggle button */
+  #panel-toggle {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 16px;
+    cursor: pointer;
+    padding: 0;
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+  }
+  #panel-toggle:hover { color: var(--text); }
+
+  /* Mobile layout */
+  @media (max-width: 768px) {
+    #main {
+      flex-direction: column;
+    }
+    #panel {
+      width: 100%;
+      height: auto;
+      max-height: 50vh;
+      border-left: none;
+      border-top: 1px solid var(--panel-border);
+      display: none; /* hidden by default on mobile */
+    }
+    #panel-toggle {
+      display: block;
+    }
+  }
 </style>
 </head>
 <body>
@@ -328,7 +392,8 @@
   <div class="logo">🐚 <span>Spirulae-Splat</span> Viewer</div>
   <div id="status-dot"></div>
   <div id="status-text">Connecting…</div>
-  <div id="fps-counter">— fps</div>
+  <div id="fps-counter" style="display: none;">— fps</div>
+  <button id="panel-toggle" title="Toggle Control Panel">⚙️</button>
 </div>
 
 <!-- ── Main ──────────────────────────────────────────── -->
@@ -426,8 +491,16 @@
       </div>
     </div>
 
-    <!-- Pose readout -->
+    <!-- Progress Bar -->
     <div class="panel-section">
+      <div id="progress-bar">
+        <div id="progress-fill"></div>
+      </div>
+      <div id="progress-text"></div>
+    </div>
+
+    <!-- Pose readout -->
+    <div class="panel-section" style="display: none;">
       <div class="panel-section-title">Camera Pose</div>
       <div id="pose-display">—</div>
     </div>
@@ -594,6 +667,7 @@ function fovToIntrinsics(fovDeg, w, h) {
 // ═══════════════════════════════════════════════════════
 const Nav = {
   mode: "turntable",   // turntable | trackball | fps | fly
+  disabled: false,     // disable navigation when disconnected
 
   // Mouse / touch state
   _dragging: false,
@@ -616,6 +690,7 @@ const Nav = {
 
   // ── orbit ──────────────────────────────
   orbit(dx, dy) {
+    if (this.disabled) return;
     const sensitivity = 0.005;
     const right = cam.right();
     const up = this.mode === "trackball" ? cam.up() : [0,0,1];
@@ -630,6 +705,7 @@ const Nav = {
 
   // ── fps / fly ──────────────────────────────────────
   look(dx, dy) {
+    if (this.disabled) return;
     const s = 0.003;
     const qa = quat.fromAxisAngle(cam.up(), -dx * s);
     const qb = quat.fromAxisAngle(cam.right(), -dy * s);
@@ -645,6 +721,7 @@ const Nav = {
 
   // ── pan ────────────────────────────────────────────
   pan(dx, dy) {
+    if (this.disabled) return;
     const s = this.speed * 0.002;
     const right   = cam.right();
     const up      = cam.up();
@@ -655,6 +732,7 @@ const Nav = {
 
   // ── zoom / dolly ───────────────────────────────────
   dolly(delta) {
+    if (this.disabled) return;
     const s = this.speed * 0.2;
     if (this.mode == "trackball" || this.mode === "turntable") {
       // scale around target
@@ -670,6 +748,7 @@ const Nav = {
 
   // ── keyboard walk ─────────────────────────────────
   keyboardTick(dt) {
+    if (this.disabled) return;
     const s = this.speed * dt * 1.0;  // translate speed
     const sr = dt * 1.0;  // rotate speed
     const k = this._keys;
@@ -700,6 +779,46 @@ const Nav = {
       const q = quat.fromAxisAngle(forward, roll);
       cam.rot = quat.norm(quat.mul(q, cam.rot));
       Viewer.requestRender();
+    }
+  },
+
+  // ── gamepad ─────────────────────────────────────────
+  gamepadTick(dt) {
+    if (this.disabled) return;
+    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+    for (let gp of gamepads) {
+      if (!gp || !gp.connected) continue;
+      const lx = gp.axes[0] || 0, ly = gp.axes[1] || 0; // left stick
+      const rx = gp.axes[2] || 0, ry = gp.axes[3] || 0; // right stick
+      const rollInput = (gp.buttons[6] ? gp.buttons[6].value : 0) - (gp.buttons[7] ? gp.buttons[7].value : 0);
+      const deadzone = 0.1;
+      // Movement
+      if (Math.abs(lx) > deadzone || Math.abs(ly) > deadzone) {
+        const s = this.speed * dt * 1.0;
+        const fwd = cam.forward();
+        const right = cam.right();
+        const up = [0,0,1];
+        let move = v3.add(v3.scale(right, lx * s), v3.scale(fwd, -ly * s));
+        // Triggers for up/down
+        const lt = gp.buttons[6] ? gp.buttons[6].value : 0;
+        const rt = gp.buttons[7] ? gp.buttons[7].value : 0;
+        move = v3.add(move, v3.scale(up, (rt - lt) * s));
+        cam.pos = v3.add(cam.pos, move);
+        cam.target = v3.add(cam.target, move);
+        Viewer.requestRender();
+      }
+      // Look
+      if (Math.abs(rx) > deadzone || Math.abs(ry) > deadzone) {
+        this.look(rx * dt * 400, ry * dt * 400); // adjust sensitivity
+        Viewer.requestRender();
+      }
+      // Roll
+      if (Math.abs(rollInput) > deadzone) {
+        const sr = dt * 1.0;
+        const q = quat.fromAxisAngle(cam.forward(), rollInput * sr);
+        cam.rot = quat.norm(quat.mul(q, cam.rot));
+        Viewer.requestRender();
+      }
     }
   },
 };
@@ -776,7 +895,24 @@ function sendRenderRequest() {
     show_training_cameras: settings.show_training_cameras,
   });
   const img = $("canvas-img");
+  const oldSrc = img.src;
   img.src = `${CFG.serverUrl}/render?${params}`;
+  img.onerror = () => {
+    setStatus("disconnected");
+    Nav.disabled = true;
+    img.src = oldSrc; // TODO: this isn't always cached
+    // retry after 5 seconds
+    setTimeout(() => {
+      if (Nav.disabled) sendRenderRequest();
+    }, 5000);
+  };
+  img.onload = () => {
+    if (Nav.disabled) {
+      Nav.disabled = false;
+      setStatus("ready");
+    }
+    Viewer.onFrameReceived();
+  };
   setStatus("rendering");
 }
 
@@ -991,6 +1127,7 @@ function keyboardLoop() {
   const dt = Math.min((now - _lastTick) / 1000, 0.1);
   _lastTick = now;
   Nav.keyboardTick(dt);
+  Nav.gamepadTick(dt);
   requestAnimationFrame(keyboardLoop);
 }
 requestAnimationFrame(keyboardLoop);
@@ -1037,12 +1174,51 @@ $("btn-reset-pose").addEventListener("click", () => {
   Viewer.requestRender();
 });
 
+$("panel-toggle").addEventListener("click", () => {
+  const panel = $("panel");
+  panel.style.display = panel.style.display === "none" ? "flex" : "none";
+});
+
 // Window resize → re-render
 window.addEventListener("resize", () => {
   const res = getResolution($("res-slider").value);
   $("res-val").textContent = res.label;
   Viewer.requestRender();
 });
+
+// ═══════════════════════════════════════════════════════
+// Progress
+// ═══════════════════════════════════════════════════════
+async function updateProgress() {
+  try {
+    const response = await fetch('/progress');
+    const progress = await response.json();
+    if (progress.total_steps > 0) {
+      const percent = (progress.step / progress.total_steps) * 100;
+      $('progress-fill').style.width = percent + '%';
+      let text = `${progress.step}/${progress.total_steps}`;
+      if (progress.latency_ms) {
+        text += ` | ${progress.latency_ms.toFixed(1)}ms/step`;
+      }
+      if (progress.elapsed_time) {
+        text += ` <br/> ${progress.elapsed_time.toFixed(1)}s elapsed`;
+      }
+      if (progress.eta) {
+        text += ` | ETA ${progress.eta.toFixed(1)}s`;
+      }
+      $('progress-text').innerHTML = text;
+      $('progress-bar').classList.add('visible');
+    } else {
+      $('progress-bar').classList.remove('visible');
+      $('progress-text').innerHTML = '';
+    }
+  } catch (e) {
+    // Ignore errors
+  }
+}
+
+// Poll progress every 1 second
+setInterval(updateProgress, 1000);
 
 // ═══════════════════════════════════════════════════════
 // Init
@@ -1052,10 +1228,6 @@ window.addEventListener("resize", () => {
   cam.reset();
   showHint(hintFor("turntable"));
   fetchBuffers();
-  $("canvas-img").onload = () => {
-    Viewer.onFrameReceived();
-    setStatus("ready");
-  };
   Viewer.loopRender();
   // Initial res label
   const res = getResolution($("res-slider").value);
