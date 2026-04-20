@@ -48,7 +48,7 @@ class ViewerServer:
         self._http_thread.start()
 
         url = f"http://{self._http_host}:{self._http_port}/"
-        print(f"[renderer3d] Viewer at  {url}")
+        print(f"Viewer at  {url}")
 
         if self._open_browser:
             threading.Timer(0.5, webbrowser.open, args=[url]).start()
@@ -67,7 +67,7 @@ class ViewerServer:
         try:
             threading.Event().wait()
         except KeyboardInterrupt:
-            print("\n[renderer3d] Shutting down…")
+            print("\nShutting down…")
             self.stop()
 
     # Allow use as a context manager
