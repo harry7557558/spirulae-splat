@@ -108,7 +108,7 @@ void projection_opaque_triangle_eval3d<let camera_model: CameraModelType, let as
     }
 
     aabb_xyxy = {xmin, ymin, xmax, ymax};
-    depth = get_sorting_depth(camera_model, (vert0_c + vert1_c + vert2_c) / 3.0);
+    depth = no_diff get_sorting_depth(camera_model, (vert0_c + vert1_c + vert2_c) / 3.0);
 
     float3 campos = -mul(transpose(R), t);
     float3 color;

@@ -601,6 +601,8 @@ class TrainerConfigAcademicBaseline(TrainerConfig):
     ))
     datamanager: SpirulaeSplatDataManagerConfig = field(default_factory=lambda: SpirulaeSplatDataManagerConfig(
         max_batch_per_epoch=9**9,
+        load_depths=False,
+        load_normals=False,
     ))
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
         primitive="3dgs",

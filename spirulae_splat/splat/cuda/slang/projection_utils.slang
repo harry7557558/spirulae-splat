@@ -772,15 +772,18 @@ float3x3 outerProduct(float3 u) {
 // linear depth in front for compatibility with conventional viewers
 // continuous near boundary to support >180deg fisheye
 [ForceInline]
-[Differentiable]
 float get_sorting_depth(CameraModelType camera_model, float3 p_view) {
     if (camera_model != CameraModelType::FISHEYE)
         return p_view.z;
-    float z = p_view.z;
+    // float z = p_view.z;
     // float z = max(p_view.z, sqrt(0.5f * dot(p_view, p_view)));
     // float z = 0.5f * (p_view.z + length(p_view));
     // float z = max(p_view.z, (1.0f / (1.0f + sqrt(2.0f))) * (p_view.z + length(p_view)));
     // return log(z);
+    // float z = max(abs(p_view.z), 0.125*length(p_view));
+    float x = p_view.x, y = p_view.y, z = p_view.z;
+    // z = sqrt(sqrt(z*z*z*z + (1.0f/512.0f) * (x*x+y*y)*(x*x+y*y)));
+    z = z*z*z*z + (1.0f/512.0f) * (x*x+y*y)*(x*x+y*y);  // doesn't matter
     return z;
 }
 

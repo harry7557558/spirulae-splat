@@ -385,7 +385,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
 
     aabb_xyxy = {xmin, ymin, xmax, ymax};
     if (eval3d)
-        depth = get_sorting_depth(camera_model, mean_c);
+        depth = no_diff get_sorting_depth(camera_model, mean_c);
     else
         // TODO: this is the same depth used to render depth maps
         // depth = (camera_model == CameraModelType::FISHEYE ? length(mean_c) : mean_c.z);

@@ -80,6 +80,7 @@ __global__ void intersect_tile_kernel(
     int64_t iid = (image_ids ? image_ids[idx] : idx / N);
 
     float depth_f32 = depths_buffer[idx];
+    depth_f32 = fabsf(depth_f32);
     uint32_t depth_u32 = __float_as_uint(depth_f32);
     if (depth_u32 >> 31)  // negative
         depth_u32 = ~depth_u32;

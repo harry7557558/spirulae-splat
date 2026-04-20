@@ -97,7 +97,7 @@ void projection_voxel_eval3d<let camera_model : CameraModelType, let assume_vali
     }
 
     aabb_xyxy = { (int)floor(xmin), (int)floor(ymin), (int)ceil(xmax), (int)ceil(ymax) };
-    depth = get_sorting_depth(camera_model, mean_c);  // TODO: morton code
+    depth = no_diff get_sorting_depth(camera_model, mean_c);  // TODO: morton code
 
     float3 campos = -mul(transpose(R), t);
     sh_coeffs_to_color(mean_c - campos, sh_coeffs, rgbs);
