@@ -42,7 +42,7 @@
     /* color: var(--text-bright); */
   }
 
-  /* ── Header ─────────────────────────────────────────── */
+  /* Header */
   #header {
     height: var(--header-h);
     background: var(--panel-bg);
@@ -84,7 +84,7 @@
     text-align: right;
   }
 
-  /* ── Progress bar ────────────────────────────────────── */
+  /* Progress bar */
   #progress-bar {
     display: none;
     width: 100%;
@@ -108,14 +108,14 @@
     text-align: center;
   }
 
-  /* ── Main layout ─────────────────────────────────────── */
+  /* Main layout */
   #main {
     display: flex;
     flex: 1;
     overflow: hidden;
   }
 
-  /* ── Viewport ────────────────────────────────────────── */
+  /* Viewport */
   #viewport {
     flex: 1;
     position: relative;
@@ -160,7 +160,7 @@
   }
   #nav-hint.visible { opacity: 1; }
 
-  /* ── Control panel ───────────────────────────────────── */
+  /* Control panel */
   #panel {
     width: var(--panel-width);
     background: var(--panel-bg);
@@ -235,7 +235,7 @@
     border: none;
   }
 
-  /* ── Toggle Switch ───────────────────────────────────────── */
+  /* Toggle Switch */
   .toggle {
     position: relative;
     width: 32px;
@@ -387,7 +387,7 @@
 </head>
 <body>
 
-<!-- ── Header ─────────────────────────────────────────── -->
+<!-- Header -->
 <div id="header">
   <div class="logo">🐚 <span>Spirulae-Splat</span> Viewer</div>
   <div id="status-dot"></div>
@@ -396,7 +396,7 @@
   <button id="panel-toggle" title="Toggle Control Panel">⚙️</button>
 </div>
 
-<!-- ── Main ──────────────────────────────────────────── -->
+<!-- Main -->
 <div id="main">
 
   <!-- Viewport -->
@@ -675,6 +675,8 @@ const Nav = {
   _dragging: false,
   _lastX: 0, _lastY: 0,
   _touchDist: 0, // for pinch
+  _touchCenter: null,  // for pinch
+  _touchAngle: null,  // for pinch
   _pointers: {},  // pointerId → {x,y}
 
   // Keyboard state
@@ -690,7 +692,6 @@ const Nav = {
     showHint(hintFor(m));
   },
 
-  // ── orbit ──────────────────────────────
   orbit(dx, dy) {
     if (this.disabled) return;
     const sensitivity = 0.005;
@@ -705,7 +706,6 @@ const Nav = {
     cam.pos = v3.add(cam.target, v3.scale(newFwd, dist));
   },
 
-  // ── fps / fly ──────────────────────────────────────
   look(dx, dy) {
     if (this.disabled) return;
     const s = 0.003;
@@ -721,7 +721,6 @@ const Nav = {
     }
   },
 
-  // ── pan ────────────────────────────────────────────
   pan(dx, dy) {
     if (this.disabled) return;
     const s = this.speed * 0.002;
@@ -732,7 +731,6 @@ const Nav = {
     cam.target = v3.add(cam.target, delta);
   },
 
-  // ── zoom / dolly ───────────────────────────────────
   dolly(delta) {
     if (this.disabled) return;
     const s = this.speed * 0.2;
@@ -748,24 +746,31 @@ const Nav = {
     }
   },
 
-  // ── keyboard walk ─────────────────────────────────
+  roll(delta) {
+    if (this.disabled) return;
+    const forward = cam.forward();
+    const q = quat.fromAxisAngle(forward, delta);
+    cam.rot = quat.norm(quat.mul(q, cam.rot));
+    Viewer.requestRender();
+  },
+
   keyboardTick(dt) {
     if (this.disabled) return;
     const s = this.speed * dt * 1.0;  // translate speed
     const sr = dt * 1.0;  // rotate speed
     const k = this._keys;
-    const fwd   = cam.forward();
+    const fwd = cam.forward();
     const right = cam.right();
-    const up    = this.mode === "turntable" || this.mode === "fps" ? [0,0,1] : cam.up();
+    const up = this.mode === "turntable" || this.mode === "fps" ? [0,0,1] : cam.up();
     let move = [0,0,0];
-    let roll = 0.0;
+    let rotate = 0.0;
     if (k["w"]||k["arrowup"]) move = v3.add(move, v3.scale(fwd, s));
     if (k["s"]||k["arrowdown"]) move = v3.add(move, v3.scale(fwd, -s));
     if (k["a"]||k["arrowleft"]) move = v3.add(move, v3.scale(right, -s));
     if (k["d"]||k["arrowright"]) move = v3.add(move, v3.scale(right, s));
     if (this.mode == "fly") {
-      if (k["e"]) roll -= sr;
-      if (k["q"]) roll += sr;
+      if (k["e"]) rotate -= sr;
+      if (k["q"]) rotate += sr;
     }
     else {
       if (k["e"]) move = v3.add(move, v3.scale(up, s));
@@ -776,15 +781,11 @@ const Nav = {
       cam.target = v3.add(cam.target, move);
       Viewer.requestRender();
     }
-    if (roll != 0.0) {
-      const forward = cam.forward();
-      const q = quat.fromAxisAngle(forward, roll);
-      cam.rot = quat.norm(quat.mul(q, cam.rot));
-      Viewer.requestRender();
+    if (rotate != 0.0) {
+      Nav.roll(rotate);
     }
   },
 
-  // ── gamepad ─────────────────────────────────────────
   gamepadTick(dt) {
     if (this.disabled) return;
     const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
@@ -856,6 +857,7 @@ const HINTS = {
 function hintFor(m) { return HINTS[m] || ""; }
 let _hintTimer = null;
 function showHint(text) {
+  return;  // TODO
   const el = $("nav-hint");
   el.textContent = text;
   el.classList.add("visible");
@@ -1032,7 +1034,7 @@ const Viewer = (() => {
 // Event wiring
 // ═══════════════════════════════════════════════════════
 
-// ── Pointer (mouse + touch) ────────────────────────────
+// Pointer (mouse + touch)
 const vp = $("viewport");
 let _button = -1;
 
@@ -1047,6 +1049,8 @@ vp.addEventListener("pointerdown", e => {
 });
 
 vp.addEventListener("pointermove", e => {
+  if (!Nav._pointers.hasOwnProperty(e.pointerId))
+    return;
   Nav._pointers[e.pointerId] = {x: e.clientX, y: e.clientY};
   const pointerIds = Object.keys(Nav._pointers);
 
@@ -1059,6 +1063,19 @@ vp.addEventListener("pointermove", e => {
       Viewer.requestRender();
     }
     Nav._touchDist = dist;
+    const center = {x: 0.5*(p1.x+p2.x), y: 0.5*(p1.y+p2.y)};
+    if (Nav._touchCenter !== null) {
+      Nav.pan(center.x-Nav._touchCenter.x, center.y-Nav._touchCenter.y);
+      Viewer.requestRender();
+    }
+    Nav._touchCenter = center;
+    const angle = Math.atan2(p1.x-p2.x, p1.y-p2.y);
+    if (Nav._touchAngle !== null) {
+      let delta = angle - Nav._touchAngle;
+      delta = (delta + Math.PI) % (2.0 * Math.PI) - Math.PI;
+      Nav.roll(delta);
+    }
+    Nav._touchAngle = angle;
     return;
   }
 
@@ -1072,8 +1089,9 @@ vp.addEventListener("pointermove", e => {
   const mode = Nav.mode;
   const isRMB = _button === 2;
   const isMMB = _button === 1;
+  const isShift = Nav._keys["shift"];
 
-  if (isMMB || isRMB) {
+  if (isMMB || isRMB || isShift) {
     Nav.pan(dx, dy);
   } else if (mode === "trackball" || mode === "turntable") {
     Nav.orbit(dx, dy);
@@ -1085,15 +1103,19 @@ vp.addEventListener("pointermove", e => {
 
 vp.addEventListener("pointerup", e => {
   delete Nav._pointers[e.pointerId];
-  if (Object.keys(Nav._pointers).length === 0) {
+  if (Object.keys(Nav._pointers).length === 0 || true) {
     Nav._dragging = false;
     Nav._touchDist = 0;
+    Nav._touchCenter = null;
+    Nav._touchAngle = null;
   }
 });
 vp.addEventListener("pointercancel", e => {
   delete Nav._pointers[e.pointerId];
   Nav._dragging = false;
   Nav._touchDist = 0;
+  Nav._touchCenter = null;
+  Nav._touchAngle = null;
 });
 
 // Disable context menu on right-click in viewport
@@ -1106,7 +1128,7 @@ vp.addEventListener("wheel", e => {
   Viewer.requestRender();
 }, { passive: false });
 
-// ── Keyboard ───────────────────────────────────────────
+// Keyboard
 window.addEventListener("keydown", e => {
   let key = e.key.toLowerCase();
   if (key == "w" || key == "arrowup" || key == "s" || key == "arrowdown" ||
@@ -1136,7 +1158,7 @@ function keyboardLoop() {
 }
 requestAnimationFrame(keyboardLoop);
 
-// ── Controls ───────────────────────────────────────────
+// Controls
 $("nav-mode").addEventListener("change", e => {
   Nav.setMode(e.target.value);
   Viewer.requestRender();
@@ -1181,6 +1203,7 @@ $("btn-reset-pose").addEventListener("click", () => {
 $("panel-toggle").addEventListener("click", () => {
   const panel = $("panel");
   panel.style.display = panel.style.display === "none" ? "flex" : "none";
+  Viewer.requestRender();
 });
 
 // Window resize → re-render

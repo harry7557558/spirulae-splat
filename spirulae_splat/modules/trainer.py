@@ -135,6 +135,9 @@ class TrainerConfig:
     num_iterations: int = 30000
     """Number of training iterations"""
 
+    viewer_port: int = 7007
+    """Port used by the web viewer"""
+
     dataparser: SpirulaeSplatDataParserConfig = field(default_factory=SpirulaeSplatDataParserConfig)
     """Specifies configurations for data parsing"""
 

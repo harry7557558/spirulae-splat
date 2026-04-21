@@ -66,6 +66,7 @@ Presets
 
 Viewer
 - Similar to Nerfstudio and GSplat, you can open the link `http://localhost:7007/` in a web browser to view training progress.
+- To change the port from 7007 to some other value, use `--viewer_port <port number>`.
 
 Gaussian representation
 - Change number of Gaussians: `--model.mcmc_cap_max 6000000` (default 1000000)
