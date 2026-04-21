@@ -211,10 +211,10 @@ inline __device__ float3  mul_1(Matrix<float, 3, 3>  left_1, float3  right_1)
     return result_8;
 }
 
-inline __device__ void mcmc_add_noise_3dgs(float scaler_0, float min_opacity_0, float3  * mean_0, float3  scale_0, float4  quat_0, float opac_0)
+inline __device__ void mcmc_add_noise_3dgs(float scaler_0, float min_opacity_0, float3  * mean_0, float3  log_scale_0, float4  quat_0, float opac_0)
 {
     float4  _S1 = normalize_0(quat_0);
-    float3  _S2 = exp_0(scale_0);
+    float3  _S2 = exp_0(log_scale_0);
     float x_9 = _S1.y;
     float x2_0 = x_9 * x_9;
     float y2_0 = _S1.z * _S1.z;
@@ -226,7 +226,7 @@ inline __device__ void mcmc_add_noise_3dgs(float scaler_0, float min_opacity_0, 
     float wy_0 = _S1.x * _S1.z;
     float wz_0 = _S1.x * _S1.w;
     Matrix<float, 3, 3>  M_0 = mul_0(transpose_0(makeMatrix<float, 3, 3> (1.0f - 2.0f * (y2_0 + z2_0), 2.0f * (xy_0 + wz_0), 2.0f * (xz_0 - wy_0), 2.0f * (xy_0 - wz_0), 1.0f - 2.0f * (x2_0 + z2_0), 2.0f * (yz_0 + wx_0), 2.0f * (xz_0 + wy_0), 2.0f * (yz_0 - wx_0), 1.0f - 2.0f * (x2_0 + y2_0))), makeMatrix<float, 3, 3> (_S2.x, 0.0f, 0.0f, 0.0f, _S2.y, 0.0f, 0.0f, 0.0f, _S2.z));
-    float4  _S3 = make_float4 (dot_0(*mean_0, *mean_0), dot_0(*mean_0, scale_0), dot_0(scale_0, scale_0), dot_1(quat_0, make_float4 (opac_0))) * make_float4 (0.1031000018119812f, 0.10300000011920929f, 0.09730000048875809f, 0.10989999771118164f);
+    float4  _S3 = make_float4 (dot_0(*mean_0, *mean_0), dot_0(*mean_0, log_scale_0), dot_0(log_scale_0, log_scale_0), dot_1(quat_0, make_float4 (opac_0))) * make_float4 (0.1031000018119812f, 0.10300000011920929f, 0.09730000048875809f, 0.10989999771118164f);
     float4  _S4 = _S3 - floor_0(_S3);
     float4  _S5 = _S4 + make_float4 (dot_1(_S4, float4 {_S4.w, _S4.z, _S4.x, _S4.y} + make_float4 (33.3300018310546875f)));
     float4  _S6 = (float4 {_S5.x, _S5.x, _S5.y, _S5.z} + float4 {_S5.y, _S5.z, _S5.z, _S5.w}) * float4 {_S5.z, _S5.y, _S5.w, _S5.x};
@@ -250,14 +250,15 @@ inline __device__ float3  cross_0(float3  left_2, float3  right_2)
     return make_float3 (_S12 * _S13 - _S14 * _S15, _S14 * _S16 - _S17 * _S13, _S17 * _S15 - _S12 * _S16);
 }
 
-inline __device__ void mcmc_add_noise_triangle(float scaler_1, float min_opacity_1, float3  * mean_1, float3  scale_1, float4  quat_1, float opac_1)
+inline __device__ void mcmc_add_noise_triangle(float scaler_1, float min_opacity_1, float3  * mean_1, float3  log_scale_1, float4  quat_1, float opac_1)
 {
     float4  _S18 = normalize_0(quat_1);
-    float _S19 = scale_1.x;
-    float sx_0 = (F32_exp((_S19)));
-    float _S20 = scale_1.y;
-    float sy_0 = (F32_exp((_S20)));
-    float sz_0 = scale_1.z - 0.5f * (_S19 + _S20);
+    float3  _S19 = exp_0(log_scale_1);
+    float _S20 = _S19.x;
+    float sx_0 = (F32_exp((_S20)));
+    float _S21 = _S19.y;
+    float sy_0 = (F32_exp((_S21)));
+    float sz_0 = _S19.z - 0.5f * (_S20 + _S21);
     float x_10 = _S18.y;
     float x2_1 = x_10 * x_10;
     float y2_1 = _S18.z * _S18.z;
@@ -268,41 +269,42 @@ inline __device__ void mcmc_add_noise_triangle(float scaler_1, float min_opacity
     float wx_1 = _S18.x * _S18.y;
     float wy_1 = _S18.x * _S18.z;
     float wz_1 = _S18.x * _S18.w;
-    Matrix<float, 3, 3>  _S21 = transpose_0(makeMatrix<float, 3, 3> (1.0f - 2.0f * (y2_1 + z2_1), 2.0f * (xy_1 + wz_1), 2.0f * (xz_1 - wy_1), 2.0f * (xy_1 - wz_1), 1.0f - 2.0f * (x2_1 + z2_1), 2.0f * (yz_1 + wx_1), 2.0f * (xz_1 + wy_1), 2.0f * (yz_1 - wx_1), 1.0f - 2.0f * (x2_1 + y2_1)));
-    float3  vert0_0 = mul_1(_S21, make_float3 (sx_0, 0.0f, 0.0f)) + *mean_1;
-    float3  vert1_0 = mul_1(_S21, make_float3 (sx_0 * (-0.5f + sz_0), sy_0, 0.0f)) + *mean_1;
-    float3  vert2_0 = mul_1(_S21, make_float3 (sx_0 * (-0.5f - sz_0), - sy_0, 0.0f)) + *mean_1;
+    Matrix<float, 3, 3>  _S22 = transpose_0(makeMatrix<float, 3, 3> (1.0f - 2.0f * (y2_1 + z2_1), 2.0f * (xy_1 + wz_1), 2.0f * (xz_1 - wy_1), 2.0f * (xy_1 - wz_1), 1.0f - 2.0f * (x2_1 + z2_1), 2.0f * (yz_1 + wx_1), 2.0f * (xz_1 + wy_1), 2.0f * (yz_1 - wx_1), 1.0f - 2.0f * (x2_1 + y2_1)));
+    float3  vert0_0 = mul_1(_S22, make_float3 (sx_0, 0.0f, 0.0f)) + *mean_1;
+    float3  vert1_0 = mul_1(_S22, make_float3 (sx_0 * (-0.5f + sz_0), sy_0, 0.0f)) + *mean_1;
+    float3  vert2_0 = mul_1(_S22, make_float3 (sx_0 * (-0.5f - sz_0), - sy_0, 0.0f)) + *mean_1;
     float3  vertc_0 = (vert0_0 + vert1_0 + vert2_0) / make_float3 (3.0f);
     float3  d0_0 = vert0_0 - vertc_0;
     float3  d1_0 = vert1_0 - vertc_0;
     float3  d2_0 = vert2_0 - vertc_0;
     float3  dn_0 = make_float3 (0.5f * (F32_min(((F32_min((length_0(d0_0)), (length_0(d1_0))))), (length_0(d2_0))))) * normalize_1(cross_0(d0_0, d1_0));
-    float4  _S22 = make_float4 (dot_0(*mean_1, *mean_1), dot_0(*mean_1, scale_1), dot_0(scale_1, scale_1), dot_1(quat_1, make_float4 (opac_1))) * make_float4 (0.1031000018119812f, 0.10300000011920929f, 0.09730000048875809f, 0.10989999771118164f);
-    float4  _S23 = _S22 - floor_0(_S22);
-    float4  _S24 = _S23 + make_float4 (dot_1(_S23, float4 {_S23.w, _S23.z, _S23.x, _S23.y} + make_float4 (33.3300018310546875f)));
-    float4  _S25 = (float4 {_S24.x, _S24.x, _S24.y, _S24.z} + float4 {_S24.y, _S24.z, _S24.z, _S24.w}) * float4 {_S24.z, _S24.y, _S24.w, _S24.x};
-    float4  _S26 = _S25 - floor_0(_S25);
-    float2  _S27 = float2 {_S26.x, _S26.z};
-    float _S28 = 6.28318548202514648f * _S27.y;
-    float2  _S29 = float2 {_S26.y, _S26.w};
-    float _S30 = 6.28318548202514648f * _S29.y;
-    *mean_1 = *mean_1 + mul_1(makeMatrix<float, 3, 3> (0.5f) * (makeMatrix<float, 3, 3> (make_float3 (d0_0.x) * d0_0, make_float3 (d0_0.y) * d0_0, make_float3 (d0_0.z) * d0_0) + makeMatrix<float, 3, 3> (make_float3 (d1_0.x) * d1_0, make_float3 (d1_0.y) * d1_0, make_float3 (d1_0.z) * d1_0) + makeMatrix<float, 3, 3> (make_float3 (d2_0.x) * d2_0, make_float3 (d2_0.y) * d2_0, make_float3 (d2_0.z) * d2_0) + makeMatrix<float, 3, 3> (make_float3 (dn_0.x) * dn_0, make_float3 (dn_0.y) * dn_0, make_float3 (dn_0.z) * dn_0)) / makeMatrix<float, 3, 3> (3.5f), make_float3 ((make_float2 ((F32_sqrt((-2.0f * (F32_log((1.0f - _S27.x))))))) * make_float2 ((F32_cos((_S28))), (F32_sin((_S28))))).x, (make_float2 ((F32_sqrt((-2.0f * (F32_log((1.0f - _S27.x))))))) * make_float2 ((F32_cos((_S28))), (F32_sin((_S28))))).y, (make_float2 ((F32_sqrt((-2.0f * (F32_log((1.0f - _S29.x))))))) * make_float2 ((F32_cos((_S30))), (F32_sin((_S30))))).x) * make_float3 (scaler_1) * make_float3 (1.0f / (1.0f + (F32_exp((- (0.5f / min_opacity_1) * (1.0f - opac_1 - (1.0f - min_opacity_1))))))));
+    float4  _S23 = make_float4 (dot_0(*mean_1, *mean_1), dot_0(*mean_1, log_scale_1), dot_0(log_scale_1, log_scale_1), dot_1(quat_1, make_float4 (opac_1))) * make_float4 (0.1031000018119812f, 0.10300000011920929f, 0.09730000048875809f, 0.10989999771118164f);
+    float4  _S24 = _S23 - floor_0(_S23);
+    float4  _S25 = _S24 + make_float4 (dot_1(_S24, float4 {_S24.w, _S24.z, _S24.x, _S24.y} + make_float4 (33.3300018310546875f)));
+    float4  _S26 = (float4 {_S25.x, _S25.x, _S25.y, _S25.z} + float4 {_S25.y, _S25.z, _S25.z, _S25.w}) * float4 {_S25.z, _S25.y, _S25.w, _S25.x};
+    float4  _S27 = _S26 - floor_0(_S26);
+    float2  _S28 = float2 {_S27.x, _S27.z};
+    float _S29 = 6.28318548202514648f * _S28.y;
+    float2  _S30 = float2 {_S27.y, _S27.w};
+    float _S31 = 6.28318548202514648f * _S30.y;
+    *mean_1 = *mean_1 + mul_1(makeMatrix<float, 3, 3> (0.5f) * (makeMatrix<float, 3, 3> (make_float3 (d0_0.x) * d0_0, make_float3 (d0_0.y) * d0_0, make_float3 (d0_0.z) * d0_0) + makeMatrix<float, 3, 3> (make_float3 (d1_0.x) * d1_0, make_float3 (d1_0.y) * d1_0, make_float3 (d1_0.z) * d1_0) + makeMatrix<float, 3, 3> (make_float3 (d2_0.x) * d2_0, make_float3 (d2_0.y) * d2_0, make_float3 (d2_0.z) * d2_0) + makeMatrix<float, 3, 3> (make_float3 (dn_0.x) * dn_0, make_float3 (dn_0.y) * dn_0, make_float3 (dn_0.z) * dn_0)) / makeMatrix<float, 3, 3> (3.5f), make_float3 ((make_float2 ((F32_sqrt((-2.0f * (F32_log((1.0f - _S28.x))))))) * make_float2 ((F32_cos((_S29))), (F32_sin((_S29))))).x, (make_float2 ((F32_sqrt((-2.0f * (F32_log((1.0f - _S28.x))))))) * make_float2 ((F32_cos((_S29))), (F32_sin((_S29))))).y, (make_float2 ((F32_sqrt((-2.0f * (F32_log((1.0f - _S30.x))))))) * make_float2 ((F32_cos((_S31))), (F32_sin((_S31))))).x) * make_float3 (scaler_1) * make_float3 (1.0f / (1.0f + (F32_exp((- (0.5f / min_opacity_1) * (1.0f - opac_1 - (1.0f - min_opacity_1))))))));
     return;
 }
 
-inline __device__ void long_axis_split_3dgs(float3  scale_2, float4  quat_2, float3  * new_scale_0, float3  * mean_delta_0)
+inline __device__ void long_axis_split_3dgs(float3  log_scale_2, float logit_opacity_0, float4  quat_2, float3  * new_log_scale_0, float * new_logit_opacity_0, float3  * mean_delta_0)
 {
-    float _S31 = scale_2.x;
-    float _S32 = scale_2.y;
-    float _S33 = scale_2.z;
-    float _S34 = (F32_max(((F32_max((_S31), (_S32)))), (_S33)));
-    float d_0 = 0.44999998807907104f * _S34;
-    *new_scale_0 = scale_2 * make_float3 ((F32_sqrt((1.0f - d_0 * d_0 / (_S34 * _S34)))));
+    float _S32 = log_scale_2.x;
+    float _S33 = log_scale_2.y;
+    float _S34 = log_scale_2.z;
+    float d_0 = 0.5f * (F32_exp(((F32_max(((F32_max((_S32), (_S33)))), (_S34))))));
+    *new_log_scale_0 = log_scale_2;
     *mean_delta_0 = make_float3 (0.0f, 0.0f, 0.0f);
+    float kl_0 = (F32_log((0.5f)));
+    float ks_0 = (F32_log((0.85000002384185791f)));
     bool _S35;
-    if(_S31 > _S32)
+    if(_S32 > _S33)
     {
-        _S35 = _S31 > _S33;
+        _S35 = _S32 > _S34;
     }
     else
     {
@@ -310,19 +312,19 @@ inline __device__ void long_axis_split_3dgs(float3  scale_2, float4  quat_2, flo
     }
     if(_S35)
     {
-        *&(new_scale_0->x) = _S34 - d_0;
+        *new_log_scale_0 = *new_log_scale_0 + make_float3 (kl_0, ks_0, ks_0);
         *&(mean_delta_0->x) = d_0;
     }
     else
     {
-        if(_S32 > _S33)
+        if(_S33 > _S34)
         {
-            *&(new_scale_0->y) = _S34 - d_0;
+            *new_log_scale_0 = *new_log_scale_0 + make_float3 (ks_0, kl_0, ks_0);
             *&(mean_delta_0->y) = d_0;
         }
         else
         {
-            *&(new_scale_0->z) = _S34 - d_0;
+            *new_log_scale_0 = *new_log_scale_0 + make_float3 (ks_0, ks_0, kl_0);
             *&(mean_delta_0->z) = d_0;
         }
     }
@@ -338,6 +340,7 @@ inline __device__ void long_axis_split_3dgs(float3  scale_2, float4  quat_2, flo
     float wy_2 = _S36.x * _S36.z;
     float wz_2 = _S36.x * _S36.w;
     *mean_delta_0 = mul_1(transpose_0(makeMatrix<float, 3, 3> (1.0f - 2.0f * (y2_2 + z2_2), 2.0f * (xy_2 + wz_2), 2.0f * (xz_2 - wy_2), 2.0f * (xy_2 - wz_2), 1.0f - 2.0f * (x2_2 + z2_2), 2.0f * (yz_2 + wx_2), 2.0f * (xz_2 + wy_2), 2.0f * (yz_2 - wx_2), 1.0f - 2.0f * (x2_2 + y2_2))), *mean_delta_0);
+    *new_logit_opacity_0 = (F32_log((0.60000002384185791f / (1.0f + (F32_exp((- logit_opacity_0))) - 0.60000002384185791f))));
     return;
 }
 

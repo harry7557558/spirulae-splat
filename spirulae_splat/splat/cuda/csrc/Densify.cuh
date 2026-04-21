@@ -44,7 +44,7 @@ void mcmc_add_noise_tensor(
     std::string primitive,
     float scaler, float min_opacity,
     at::Tensor &means,
-    at::Tensor &scales,
+    at::Tensor &log_scales,
     at::Tensor &quats,
     at::Tensor &opacs
 );
@@ -61,10 +61,11 @@ compute_relocation_tensor(
 );
 
 
-std::tuple<at::Tensor, at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor>
 long_axis_split_tensor(
     std::string primitive,
-    at::Tensor &scales,
+    at::Tensor &log_scales,
+    at::Tensor &logit_opacities,
     at::Tensor &quats
 );
 

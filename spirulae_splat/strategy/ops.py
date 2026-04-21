@@ -405,9 +405,10 @@ def relocate_long_axis_split(
     # sampled_idxs = _multinomial_sample(probs, n, replacement=False)
     sampled_idxs = torch.argsort(probs)[-n:]
     sampled_idxs = alive_indices[sampled_idxs]
-    new_scales, mean_offsets = _make_lazy_cuda_func("long_axis_split")(
+    new_scales, new_opacities, mean_offsets = _make_lazy_cuda_func("long_axis_split")(
         "3dgs",
-        torch.exp(get_param_attr(params, "scales"))[sampled_idxs],
+        get_param_attr(params, "scales")[sampled_idxs],
+        get_param_attr(params, "opacities")[sampled_idxs],
         get_param_attr(params, "quats")[sampled_idxs]
     )
 
@@ -416,8 +417,11 @@ def relocate_long_axis_split(
             p[dead_indices] = p[sampled_idxs] + mean_offsets
             p[sampled_idxs] -= mean_offsets
         elif name == "scales":
-            p[sampled_idxs] = torch.log(new_scales)
-            p[dead_indices] = torch.log(new_scales)
+            p[sampled_idxs] = new_scales
+            p[dead_indices] = new_scales
+        elif name == "opacities":
+            p[sampled_idxs] = new_opacities
+            p[dead_indices] = new_opacities
         else:
             p[dead_indices] = p[sampled_idxs]
         return p
@@ -589,19 +593,23 @@ def sample_add_long_axis_split(
 
     # sampled_idxs = _multinomial_sample(probs, n, replacement=False)
     sampled_idxs = torch.argsort(probs)[-n:]
-    new_scales, mean_offsets = _make_lazy_cuda_func("long_axis_split")(
+    new_scales, new_opacities, mean_offsets = _make_lazy_cuda_func("long_axis_split")(
         "3dgs",
-        torch.exp(get_param_attr(params, "scales"))[sampled_idxs],
+        get_param_attr(params, "scales")[sampled_idxs],
+        get_param_attr(params, "opacities")[sampled_idxs],
         get_param_attr(params, "quats")[sampled_idxs]
     )
 
     def param_fn(name: str, p: Tensor) -> Tensor:
         if name == "means":
+            p_cat = p[sampled_idxs] + mean_offsets
             p[sampled_idxs] -= mean_offsets
-            p_cat = p[sampled_idxs] + 2 * mean_offsets
         elif name == "scales":
-            p[sampled_idxs] = torch.log(new_scales)
-            p_cat = p[sampled_idxs]
+            p[sampled_idxs] = new_scales
+            p_cat = new_scales
+        elif name == "opacities":
+            p[sampled_idxs] = new_opacities
+            p_cat = new_opacities
         else:
             p_cat = p[sampled_idxs]
         if hasattr(p, 'optim_info') and 'num_splats' in p.optim_info:

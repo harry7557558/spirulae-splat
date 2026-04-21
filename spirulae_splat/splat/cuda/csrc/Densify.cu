@@ -268,7 +268,7 @@ __global__ void mcmc_add_noise_3dgs_kernel(
     long num_splats,
     float scaler, float min_opacity,
     float3* __restrict__ means,
-    const float3* __restrict__ scales,
+    const float3* __restrict__ log_scales,
     const float4* __restrict__ quats,
     const float* __restrict__ opacs
 ) {
@@ -278,7 +278,7 @@ __global__ void mcmc_add_noise_3dgs_kernel(
 
     SlangDensify::mcmc_add_noise_3dgs(
         scaler, min_opacity,
-        &means[idx], scales[idx], quats[idx], opacs[idx]
+        &means[idx], log_scales[idx], quats[idx], opacs[idx]
     );
 }
 
@@ -286,7 +286,7 @@ __global__ void mcmc_add_noise_triangle_kernel(
     long num_splats,
     float scaler, float min_opacity,
     float3* __restrict__ means,
-    const float3* __restrict__ scales,
+    const float3* __restrict__ log_scales,
     const float4* __restrict__ quats,
     const float* __restrict__ opacs
 ) {
@@ -296,7 +296,7 @@ __global__ void mcmc_add_noise_triangle_kernel(
 
     SlangDensify::mcmc_add_noise_triangle(
         scaler, min_opacity,
-        &means[idx], scales[idx], quats[idx], opacs[idx]
+        &means[idx], log_scales[idx], quats[idx], opacs[idx]
     );
 }
 
@@ -305,13 +305,13 @@ void mcmc_add_noise_tensor(
     std::string primitive,
     float scaler, float min_opacity,
     at::Tensor &means,
-    at::Tensor &scales,
+    at::Tensor &log_scales,
     at::Tensor &quats,
     at::Tensor &opacs
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
-    CHECK_INPUT(scales);
+    CHECK_INPUT(log_scales);
     CHECK_INPUT(quats);
     CHECK_INPUT(opacs);
 
@@ -321,7 +321,7 @@ void mcmc_add_noise_tensor(
         mcmc_add_noise_3dgs_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
             num_splats, scaler, min_opacity,
             (float3*)means.data_ptr<float>(),
-            (float3*)scales.data_ptr<float>(),
+            (float3*)log_scales.data_ptr<float>(),
             (float4*)quats.data_ptr<float>(),
             opacs.data_ptr<float>()
         );
@@ -329,7 +329,7 @@ void mcmc_add_noise_tensor(
         mcmc_add_noise_triangle_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
             num_splats, scaler, min_opacity,
             (float3*)means.data_ptr<float>(),
-            (float3*)scales.data_ptr<float>(),
+            (float3*)log_scales.data_ptr<float>(),
             (float4*)quats.data_ptr<float>(),
             opacs.data_ptr<float>()
         );
@@ -427,9 +427,11 @@ compute_relocation_tensor(
 
 __global__ void long_axis_split_3dgs_kernel(
     long num_splats,
-    const float3* __restrict__ scales,
+    const float3* __restrict__ log_scales,
+    const float* __restrict__ logit_opacities,
     const float4* __restrict__ quats,
-    float3* __restrict__ new_scales,
+    float3* __restrict__ new_log_scales,
+    float* __restrict__ new_logit_opacities,
     float3* __restrict__ mean_deltas
 ) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -437,41 +439,47 @@ __global__ void long_axis_split_3dgs_kernel(
         return;
 
     SlangDensify::long_axis_split_3dgs(
-        scales[idx], quats[idx], &new_scales[idx], &mean_deltas[idx]
+        log_scales[idx], logit_opacities[idx], quats[idx],
+        &new_log_scales[idx], &new_logit_opacities[idx], &mean_deltas[idx]
     );
 }
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<at::Tensor, at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor>
 long_axis_split_tensor(
     std::string primitive,
-    at::Tensor &scales,
+    at::Tensor &log_scales,
+    at::Tensor &logit_opacities,
     at::Tensor &quats
 ) {
-    DEVICE_GUARD(scales);
-    CHECK_INPUT(scales);
+    DEVICE_GUARD(log_scales);
+    CHECK_INPUT(log_scales);
+    CHECK_INPUT(logit_opacities);
     CHECK_INPUT(quats);
 
     const size_t num_splats = quats.numel() / 4;
 
-    at::Tensor new_scales = at::empty_like(scales);
-    at::Tensor mean_deltas = at::empty_like(scales);
+    at::Tensor new_log_scales = at::empty_like(log_scales);
+    at::Tensor new_logit_opacities= at::empty_like(logit_opacities);
+    at::Tensor mean_deltas = at::empty_like(log_scales);
 
     if (num_splats == 0)
-        return std::make_tuple(new_scales, mean_deltas);
+        return std::make_tuple(new_log_scales, new_logit_opacities, mean_deltas);
 
     if (primitive == "3dgs" || primitive == "mip" || primitive == "3dgut")
         long_axis_split_3dgs_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
             num_splats,
-            (float3*)scales.data_ptr<float>(),
+            (float3*)log_scales.data_ptr<float>(),
+            logit_opacities.data_ptr<float>(),
             (float4*)quats.data_ptr<float>(),
-            (float3*)new_scales.data_ptr<float>(),
+            (float3*)new_log_scales.data_ptr<float>(),
+            new_logit_opacities.data_ptr<float>(),
             (float3*)mean_deltas.data_ptr<float>()
         );
     else throw std::runtime_error("Unsupported primitive: " + primitive);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    return std::make_tuple(new_scales, mean_deltas);
+    return std::make_tuple(new_log_scales, new_logit_opacities, mean_deltas);
 }
 
 
