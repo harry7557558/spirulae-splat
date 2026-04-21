@@ -38,7 +38,7 @@ Make sure you have a recent version of CUDA and PyTorch installed. Clone the rep
 ```bash
 cd spirulae-splat/
 git submodule update --init
-pip install . --no-build-isolation  # optionally with -e and/or -v
+pip install -e . --no-build-isolation  # optionally with -v
 ```
 
 The `pip install` step may take a few minutes. If you are running out of system resources during installation, set environment variable `MAX_JOBS` to a lower number (default is max number of concurrent CPU threads).
@@ -108,9 +108,10 @@ Unstable features
 - Training on images in linear color spaces: `--model.image_color_is_linear True`; Wide-gamut color spaces: `--model.image_color_gamut ACEScg` (supports `ACES2065-1`, `ACEScg`, `Rec.2020`, `AdobeRGB`, `DCI-3`)
     - If you want splat and image to be in different color spaces, specify `--model.splat_color_is_linear` and `--model.splat_color_gamut` (supports all options in `--model.image_color_gamut` plus `Rec.709`).
     - Specify `--model.convert_initial_point_cloud_color True` if colors in initial point cloud is in sRGB, and color in initial point cloud will be converted to splat's color space. If you don't specify True or False, it will auto decide based on arguments.
-- Batch many tiny tiles instead of whole images: `ns-train spirulae-patched ...` instead of `ns-train spirulae`
+- Batch many tiny tiles instead of whole images: `spirulae-train 3dgs-patched ...` instead of `spirulae-train 3dgs`
 - Validation (early stop training if loss on validation images start to increase): append `nerfstudio-data --validation_fraction 0.1` to the end of training command
-- Second-order optimizer using Jacobian-residual product and Hessian diagonal: `ns-train spirulae^2-pos` (more stable) or `spirulae^2` (less stable) instead of `spirulae`. We also provide presets `spirulae^2-preset-confined` and `spirulae^2-preset-open` for the corresponding presets with `spirulae^2` methods, which otherwise run on `spirulae^2-pos`.
+- Second-order optimizer using Jacobian-residual product and Hessian diagonal: `spirulae-train 3dgs^2-pos` (more stable) or `3dgs^2` (less stable) instead of `spirulae`. We also provide presets `3dgs^2-confined` and `3dgs^2-open` for the corresponding presets with `3dgs^2` methods, which otherwise run on `3dgs^2-pos`.
+    - Note: on Windows, you may need to wrap parentheses around method name with `^2`. For example, use `spirulae-train "3dgs^2-pos"` instead of `spirulae-train 3dgs^2-pos`.
 - 2DGS-like depth regularization to discourage floaters: `--model.depth_reg_weight 0.01`. Similar regularization can also be applied to RGB by setting `--model.rgb_distortion_reg_weight` to a positive value.
 
 Scripts

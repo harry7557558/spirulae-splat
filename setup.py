@@ -4,7 +4,7 @@ import glob
 import sys
 import platform
 from pathlib import Path
-from setuptools import setup, find_packages
+from setuptools import setup, find_namespace_packages
 
 
 BUILD_NO_CUDA = os.getenv("BUILD_NO_CUDA", "0") == "1"
@@ -50,7 +50,7 @@ def get_extensions():
     else:
         raise RuntimeError("CUDA is required for this extension.")
 
-    extensions_dir = Path("spirulae_splat/splat/cuda").absolute()
+    extensions_dir = Path("spirulae_splat/splat/cuda")
     sources = (
         glob.glob(str(extensions_dir / "ins" / "*.cu")) +
         glob.glob(str(extensions_dir / "csrc" / "*.cu")) +
@@ -136,8 +136,8 @@ def get_extensions():
         "spirulae_splat.csrc",
         sources,
         include_dirs=[
-            str(extensions_dir / "csrc"),
-            str(extensions_dir / "csrc" / "glm"),
+            str((extensions_dir / "csrc").absolute()),
+            str((extensions_dir / "csrc" / "glm").absolute()),
         ],
         define_macros=define_macros,
         undef_macros=undef_macros,
@@ -159,7 +159,7 @@ setup(
     name="spirulae_splat",
     description="TODO",
     version="0.1.0",
-    packages=find_packages(include=["spirulae_splat*"]),
+    packages=find_namespace_packages(include=["spirulae_splat*"]),
     install_requires=[
         # "torch",
         "jaxtyping",

@@ -5,6 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "spirulae-splat"
 version = "2026.4.1"
+dynamic = ["description", "dependencies"]
 
 [project.scripts]
+spirulae-train = "spirulae_splat.ss_trainer:entrypoint"
+
+[tool.poetry.scripts]
 spirulae-train = "spirulae_splat.ss_trainer:entrypoint"
