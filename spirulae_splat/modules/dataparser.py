@@ -31,6 +31,13 @@ from spirulae_splat.modules.camera import (
     colmap_camera_model_to_type,
     Cameras,
 )
+from spirulae_splat.modules.colmap_utils import (
+    qvec2rotmat,
+    load_colmap_cameras,
+    load_colmap_points3D,
+    load_colmap_images,
+    parse_colmap_camera_params,
+)
 
 from spirulae_splat.modules import camera_utils
 
@@ -164,6 +171,19 @@ def geometric_median(X, eps=0.0, maxiter=10):
 class SpirulaeSplatDataParserConfig:
     """Spirulae-Splat dataset config"""
 
+    data_format: Literal["nerfstudio", "colmap", "metashape", None] = None
+    """Data format, leave None to auto detect"""
+    colmap_recon_dir: Optional[Path] = None
+    """Path to COLMAP reconstruction relative to dataset directory (e.g. sparse/0). Will auto detect if not specified."""
+    image_dir: Path = Path("images")
+    """Path to images relative to dataset directory, used for COLMAP and Metashape datasets"""
+    mask_dir: Path = Path("masks")
+    """Path to masks relative to dataset directory, used for COLMAP and Metashape datasets"""
+    depth_dir: Path = Path("depths")
+    """Path to depth maps relative to dataset directory, used for COLMAP and Metashape datasets"""
+    normal_dir: Path = Path("normals")
+    """Path to normal maps relative to dataset directory, used for COLMAP and Metashape datasets"""
+
     scale_factor: float = 1.0
     """How much to scale the camera origins by."""
     downscale_factor: Optional[int] = None
@@ -209,18 +229,38 @@ class SpirulaeSplatDataparser:
         self.dataset_dir = dataset_dir
 
     def parse(self):
-        return self._parse_nerfstudio_data()
+        if self.config.data_format == "nerfstudio":
+            return self._parse_nerfstudio_data()
+        if self.config.data_format == "colmap":
+            return self._parse_colmap_data()
+        if self.config.data_format == "metashape":
+            raise ValueError("TODO")
 
-    def _parse_nerfstudio_data(self, split="train"):
+        try:
+            print("Attempting to parse Nerfstudio data...")
+            return self._parse_nerfstudio_data()
+        except BaseException as e:
+            print("Failed to parse Nerfstudio data:", ' '.join(map(str, e.args)))
+        try:
+            print("Attempting to parse COLMAP data...")
+            return self._parse_colmap_data()
+        except BaseException as e:
+            print("Failed to parse COLMAP data:", ' '.join(map(str, e.args)))
+        raise ValueError("No supported dataset format detected. Make sure you have a supported Nerfstudio, COLMAP, or Metashape dataset.")
 
-        assert self.dataset_dir.exists() and self.dataset_dir.is_dir(), \
-            f"Data directory {self.dataset_dir} does not exist."
+    def _parse_nerfstudio_data(self, split="train", _meta=None, _points3D=None):
 
-        transforms_path = self.dataset_dir / "transforms.json"
-        assert transforms_path.exists() and transforms_path.is_file(), \
-            f"File {transforms_path} does not exist."
-        with open(transforms_path, 'r') as fp:
-            meta = json.load(fp)
+        if not (self.dataset_dir.exists() and self.dataset_dir.is_dir()):
+            raise ValueError(f"Data directory {self.dataset_dir} does not exist.")
+
+        if _meta is None:
+            transforms_path = self.dataset_dir / "transforms.json"
+            if not (transforms_path.exists() and transforms_path.is_file()):
+                raise ValueError(f"File {transforms_path} does not exist.")
+            with open(transforms_path, 'r') as fp:
+                meta = json.load(fp)
+        else:
+            meta = _meta
 
         image_filenames = []
         mask_filenames = []
@@ -293,51 +333,40 @@ class SpirulaeSplatDataparser:
                 normal_fname = self._get_fname(normal_filepath)
                 normal_filenames.append(normal_fname)
 
-        assert len(mask_filenames) == 0 or (len(mask_filenames) == len(image_filenames)), """
+        if not (len(mask_filenames) == 0 or (len(mask_filenames) == len(image_filenames))):
+            raise ValueError("""
         Different number of image and mask filenames.
         You should check that mask_path is specified for every frame (or zero frames) in transforms.json.
-        """
-        assert len(depth_filenames) == 0 or (len(depth_filenames) == len(image_filenames)), """
+        """)
+        if not (len(depth_filenames) == 0 or (len(depth_filenames) == len(image_filenames))):
+            raise ValueError("""
         Different number of image and depth filenames.
         You should check that depth_file_path is specified for every frame (or zero frames) in transforms.json.
-        """
-        assert len(normal_filenames) == 0 or (len(normal_filenames) == len(image_filenames)), """
+        """)
+        if not (len(normal_filenames) == 0 or (len(normal_filenames) == len(image_filenames))):
+            raise ValueError("""
         Different number of image and normal filenames.
         You should check that normal_file_path is specified for every frame (or zero frames) in transforms.json.
-        """
+        """)
 
-        has_split_files_spec = any(f"{split}_filenames" in meta for split in ("train", "val", "test"))
-        if f"{split}_filenames" in meta:
-            # Validate split first
-            split_filenames = set(self._get_fname(Path(x)) for x in meta[f"{split}_filenames"])
-            unmatched_filenames = split_filenames.difference(image_filenames)
-            if unmatched_filenames:
-                raise RuntimeError(f"Some filenames for split {split} were not found: {unmatched_filenames}.")
-
-            indices = [i for i, path in enumerate(image_filenames) if path in split_filenames]
-            print(f"WARNING: Dataset is overriding {split}_indices to {indices}")
-            indices = np.array(indices, dtype=np.int32)
-        elif has_split_files_spec:
-            raise RuntimeError(f"The dataset's list of filenames for split {split} is missing.")
+        # find train and eval indices based on the eval_mode specified
+        if self.config.eval_mode == "fraction":
+            i_train, i_eval = get_train_eval_split_fraction(image_filenames, self.config.train_split_fraction)
+        elif self.config.eval_mode == "filename":
+            i_train, i_eval = get_train_eval_split_filename(image_filenames)
+        elif self.config.eval_mode == "interval":
+            i_train, i_eval = get_train_eval_split_interval(image_filenames, self.config.eval_interval)
+        elif self.config.eval_mode == "all":
+            i_train, i_eval = get_train_eval_split_all(image_filenames)
         else:
-            # find train and eval indices based on the eval_mode specified
-            if self.config.eval_mode == "fraction":
-                i_train, i_eval = get_train_eval_split_fraction(image_filenames, self.config.train_split_fraction)
-            elif self.config.eval_mode == "filename":
-                i_train, i_eval = get_train_eval_split_filename(image_filenames)
-            elif self.config.eval_mode == "interval":
-                i_train, i_eval = get_train_eval_split_interval(image_filenames, self.config.eval_interval)
-            elif self.config.eval_mode == "all":
-                i_train, i_eval = get_train_eval_split_all(image_filenames)
-            else:
-                raise ValueError(f"Unknown eval mode {self.config.eval_mode}")
+            raise ValueError(f"Unknown eval mode {self.config.eval_mode}")
 
-            if split == "train":
-                indices = i_train
-            elif split in ["val", "test"]:
-                indices = i_eval
-            else:
-                raise ValueError(f"Unknown dataparser split {split}")
+        if split == "train":
+            indices = i_train
+        elif split in ["val", "test"]:
+            indices = i_eval
+        else:
+            raise ValueError(f"Unknown dataparser split {split}")
 
         orientation_method = self.config.orientation_method
 
@@ -391,16 +420,8 @@ class SpirulaeSplatDataparser:
         # - dataparser_transform_matrix contains the transformation to dataparser output coordinates from original data coordinates.
         # - applied_transform contains the transformation to saved coordinates from original data coordinates.
         applied_transform = None
-        colmap_path = self.dataset_dir / "colmap/sparse/0"
         if "applied_transform" in meta:
             applied_transform = torch.tensor(meta["applied_transform"], dtype=transform_matrix.dtype)
-        elif colmap_path.exists():
-            # For converting from colmap, this was the effective value of applied_transform that was being
-            # used before we added the applied_transform field to the output dataformat.
-            meta["applied_transform"] = [[0, 1, 0, 0], [1, 0, 0, 0], [0, 0, -1, 0]]
-            applied_transform = torch.tensor(meta["applied_transform"], dtype=transform_matrix.dtype)
-
-        if applied_transform is not None:
             dataparser_transform_matrix = transform_matrix @ torch.cat(
                 [applied_transform, torch.tensor([[0, 0, 0, 1]], dtype=transform_matrix.dtype)], 0
             )
@@ -421,11 +442,27 @@ class SpirulaeSplatDataparser:
             self.prompted_user = False
 
         # Load 3D points
-        assert "ply_file_path" in meta, "No initial point cloud found in transforms.json"
-        ply_file_path = self.dataset_dir / meta["ply_file_path"]
-        sparse_points = self._load_3D_points(ply_file_path, transform_matrix, scale_factor)
-        if sparse_points is not None:
+        if _points3D is None:
+            if "ply_file_path" not in meta:
+                raise ValueError("No initial point cloud found in transforms.json")
+            ply_file_path = self.dataset_dir / meta["ply_file_path"]
+            sparse_points = self._load_3D_points(ply_file_path, transform_matrix, scale_factor)
             metadata.update(sparse_points)
+        else:
+            metadata.update(_points3D)
+
+        # Apply transformation and scale
+        metadata['points3D_xyz'] = (
+            torch.cat(
+                (
+                    metadata['points3D_xyz'],
+                    torch.ones_like(metadata['points3D_xyz'][..., :1]),
+                ),
+                -1,
+            )
+            @ transform_matrix.T
+        )
+        metadata['points3D_xyz'] *= scale_factor
 
         dataparser_outputs = dict(
             cameras=cameras,
@@ -443,6 +480,119 @@ class SpirulaeSplatDataparser:
             },
         )
         return dataparser_outputs
+
+    def _parse_colmap_data(self, split="train"):
+        if self.config.colmap_recon_dir is not None:
+            recon_dir = self.dataset_dir / self.config.colmap_recon_dir
+            colmap_points = load_colmap_points3D(recon_dir)
+            cam_id_to_camera = load_colmap_cameras(recon_dir)
+            im_id_to_image = load_colmap_images(recon_dir)
+        else:
+            for colmap_recon_dir in [
+                Path("sparse/0"),
+                Path("colmap/sparse/0"),
+                Path("sparse"),
+                Path("colmap"),
+                Path("")
+            ]:
+                try:
+                    recon_dir = self.dataset_dir / colmap_recon_dir
+                    colmap_points = load_colmap_points3D(recon_dir)
+                    cam_id_to_camera = load_colmap_cameras(recon_dir)
+                    im_id_to_image = load_colmap_images(recon_dir)
+                except:
+                    continue
+                print(f"Loaded COLMAP reconstruction from {recon_dir}")
+
+        frames = []
+        for im in im_id_to_image.values():
+            # intrinsics
+            camera = cam_id_to_camera[im.camera_id]
+            frame = parse_colmap_camera_params(camera)
+
+            # extrinsics
+            rotation = qvec2rotmat(im.qvec)
+            translation = im.tvec.reshape(3, 1)
+            c2w = np.eye(4)
+            c2w[:3, :3] = rotation.T * [[1, -1, -1]]
+            c2w[:3, 3:] = -rotation.T @ translation
+            frame["transform_matrix"] = c2w
+
+            # images
+            image_filename = self.dataset_dir / self.config.image_dir / Path(im.name)
+            if not image_filename.exists():
+                raise ValueError(f"{image_filename} does not exist. Specify `--dataparser.image_dir` if needed.")
+            frame['file_path'] = str(self.config.image_dir / Path(im.name))
+
+            # masks
+            for mask_filename in [
+                Path(im.name+".png"),
+                Path(im.name).with_suffix(".png"),
+                Path(im.name+".PNG"),
+                Path(im.name).with_suffix(".PNG"),
+                Path(im.name+".jpg"),
+                Path(im.name).with_suffix(".jpg"),
+                Path(im.name+".JPG"),
+                Path(im.name).with_suffix(".JPG"),
+                Path(im.name+".jpeg"),
+                Path(im.name).with_suffix(".jpeg"),
+                Path(im.name+".JPEG"),
+                Path(im.name).with_suffix(".JPEG"),
+            ]:
+                if (self.dataset_dir / self.config.mask_dir / mask_filename).exists():
+                    frame['mask_path'] = self.config.mask_dir / mask_filename
+                    break
+
+            # depths
+            for depth_filename in [
+                Path(im.name).with_suffix(".png"),
+                Path(im.name).with_suffix(".jpg"),
+                Path(im.name).with_suffix(".jpeg"),
+                Path(im.name).with_suffix(".npy"),
+                Path(im.name).with_suffix(".npz"),
+                Path(im.name+".png"),
+                Path(im.name+".jpg"),
+                Path(im.name+".jpeg"),
+                Path(im.name+".npy"),
+                Path(im.name+".npz"),
+                Path(im.name).with_suffix(".PNG"),
+                Path(im.name).with_suffix(".JPG"),
+                Path(im.name).with_suffix(".JPEG"),
+            ]:
+                if (self.dataset_dir / self.config.depth_dir / depth_filename).exists():
+                    frame['depth_file_path'] = self.config.depth_dir / depth_filename
+                    break
+
+            # normals
+            for normal_filename in [
+                Path(im.name).with_suffix(".png"),
+                Path(im.name).with_suffix(".jpg"),
+                Path(im.name).with_suffix(".jpeg"),
+                Path(im.name).with_suffix(".npy"),
+                Path(im.name).with_suffix(".npz"),
+                Path(im.name+".png"),
+                Path(im.name+".jpg"),
+                Path(im.name+".jpeg"),
+                Path(im.name+".npy"),
+                Path(im.name+".npz"),
+                Path(im.name).with_suffix(".PNG"),
+                Path(im.name).with_suffix(".JPG"),
+                Path(im.name).with_suffix(".JPEG"),
+            ]:
+                if (self.dataset_dir / self.config.normal_dir / normal_filename).exists():
+                    frame['normal_file_path'] = self.config.normal_dir / normal_filename
+                    break
+
+            frames.append(frame)
+
+        points = [*colmap_points.values()]
+        xyz = torch.from_numpy(np.stack([p.xyz for p in points])).float()
+        rgb = torch.from_numpy(np.stack([p.rgb for p in points])).byte()
+        return self._parse_nerfstudio_data(
+            split,
+            _meta={'frames': frames},
+            _points3D={'points3D_xyz': xyz, 'points3D_rgb': rgb}
+        )
 
     def _load_3D_points(self, ply_file_path: Path, transform_matrix: torch.Tensor, scale_factor: float):
         """Loads point clouds positions and colors from .ply
@@ -472,24 +622,11 @@ class SpirulaeSplatDataparser:
         
         # Check if points exist
         if v.count == 0:
-            return None
+            raise ValueError(f"Failed to load points from {ply_file_path}.")
 
         # Stack x, y, z into a (N, 3) float32 array
         points_np = np.stack([v['x'], v['y'], v['z']], axis=-1).astype(np.float32)
         points3D = torch.from_numpy(points_np)
-
-        # Apply transformation and scale
-        points3D = (
-            torch.cat(
-                (
-                    points3D,
-                    torch.ones_like(points3D[..., :1]),
-                ),
-                -1,
-            )
-            @ transform_matrix.T
-        )
-        points3D *= scale_factor
 
         # Stack r, g, b into a (N, 3) uint8 array
         colors_np = np.stack([v['red'], v['green'], v['blue']], axis=-1).astype(np.uint8)

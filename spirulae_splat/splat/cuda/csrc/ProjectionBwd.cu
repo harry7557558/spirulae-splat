@@ -100,6 +100,9 @@ inline void launch_projection_projection_fused_bwd_kernel(
         B = C = 1;
     }
 
+    if (B*C*N == 0)
+        return;
+
     #define _LAUNCH_ARGS ( \
             (cudaStream_t)at::cuda::getCurrentCUDAStream(), B, C, N, \
             splats_world.buffer(), viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
