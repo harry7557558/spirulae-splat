@@ -165,6 +165,7 @@ setup(
         "jaxtyping",
         "tyro",
         "opencv-python",
+        "plyfile",
         "open3d",
         "matplotlib",
         "Pillow",
