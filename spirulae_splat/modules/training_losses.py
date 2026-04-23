@@ -576,7 +576,7 @@ class SplatTrainingLosses(torch.nn.Module):
 
     def get_2dgs_reg_weights(self):
         factor = min(self.step / max(self.config.distortion_reg_warmup, 1), 1)
-        weight_depth_reg = self.config.depth_reg_weight * factor
+        weight_depth_reg = self.config.depth_distortion_reg_weight * factor
         weight_normal_dist_reg = self.config.normal_distortion_reg_weight * factor
         weight_rgb_dist_reg = self.config.rgb_distortion_reg_weight * factor
         weight_normal_reg = self.config.normal_reg_weight * factor
@@ -741,7 +741,7 @@ class SplatTrainingLosses(torch.nn.Module):
 
         # edge detector to guide densification
         accum_weight_map = None
-        if self.config.use_edge_aware_score and self.config.mcmc_prob_grad_weight != 0.0:
+        if self.config.use_edge_aware_score and self.config.relocate_heuristic_weight != 0.0:
             accum_weight_map = detect_edge(gt_rgb)
 
         # apply exposure correction
@@ -764,11 +764,6 @@ class SplatTrainingLosses(torch.nn.Module):
                 actual_image_width=camera.metadata.get('actual_width', None),
                 actual_image_height=camera.metadata.get('actual_height', None),
             )
-
-        # correct exposure (deprecated)
-        if self.config.adaptive_exposure_mode is not None and \
-            self.step > self.config.adaptive_exposure_warmup:
-            raise NotImplementedError("Adaptive exposure is deprecated. Use bilateral grid instead.")
 
         # handle multi-resolution loss
 

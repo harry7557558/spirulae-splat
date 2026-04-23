@@ -166,7 +166,7 @@ class Trainer:
         self.datamanager.train_dataset = self.dataset
 
         self.model = SpirulaeSplatModel(
-            self.config.model,
+            self.config,
             self.dataparser_outputs['metadata'],
             self.dataparser_outputs['cameras']
         ).cuda()
@@ -342,7 +342,7 @@ class TrainerConfigSquaredPos(TrainerConfig):
     """Method with second-order optimizer for positions"""
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
         compute_hessian_diagonal="position",
-        mcmc_noise_lr=5e5 * (1.6e-4 / 1.0e-6),
+        noise_lr=5e5 * (1.6e-4 / 1.0e-6),
     ))
     optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)
 
@@ -352,7 +352,7 @@ class TrainerConfigSquared(TrainerConfig):
     """Method with second-order optimizer"""
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
         compute_hessian_diagonal="all",
-        mcmc_noise_lr=5e5 * (1.6e-4 / 1.0e-6),
+        noise_lr=5e5 * (1.6e-4 / 1.0e-6),
     ))
     optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_OPTIMIZERS)
 
@@ -372,9 +372,8 @@ class TrainerConfigPatched(TrainerConfig):
         # use_bilateral_grid=False,
         # use_bilateral_grid_for_geometry=False,
         alpha_reg_weight=0.0,
-        mcmc_max_screen_size=0.15,
-        mcmc_max_screen_size_clip_hardness=1.5,
-        # mcmc_max_world_size=1.0,
+        max_screen_size=0.15,
+        max_screen_size_clip_hardness=1.5,
     ))
     optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)
 
@@ -387,21 +386,20 @@ class TrainerConfigTriangle(TrainerConfig):
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
         primitive="opaque_triangle",
         kernel_radius=0.5,
-        compute_depth_normal=True,
         sh_degree=0,
         bilagrid_shape=(16, 16, 8),
-        stop_refine_at=30000,
+        refine_stop_num_iter=0,
         # alpha_reg_weight=0.0,
         mcmc_scale_reg=0.001,
         # erank_reg=1.0,
         # supersampling=2,
-        mcmc_min_opacity=0.005,
-        mcmc_noise_lr=5e5,  # or 0.0
-        mcmc_max_screen_size=0.15,
+        min_opacity=0.005,
+        noise_lr=5e5,  # or 0.0
+        max_screen_size=0.15,
         supervision_warmup=0,
         depth_supervision_weight=0.0,
         normal_supervision_weight=0.04,
-        depth_reg_weight=0.01,
+        depth_distortion_reg_weight=0.01,
         normal_distortion_reg_weight=0.005,
         rgb_distortion_reg_weight=0.01,
         ssim_lambda=0.4,
@@ -421,20 +419,19 @@ class TrainerConfigTrianglePatched(TrainerConfig):
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
         primitive="opaque_triangle",
         kernel_radius=0.5,
-        compute_depth_normal=True,
         sh_degree=0,
         bilagrid_shape=(16, 16, 8),
-        stop_refine_at=30000,
+        refine_stop_num_iter=0,
         # alpha_reg_weight=0.0,
         mcmc_scale_reg=0.001,
         # erank_reg=1.0,
         # supersampling=2,
-        mcmc_min_opacity=0.005,
-        mcmc_noise_lr=5e5,  # or 0.0
+        min_opacity=0.005,
+        noise_lr=5e5,  # or 0.0
         supervision_warmup=0,
         depth_supervision_weight=0.0,
         normal_supervision_weight=0.04,
-        depth_reg_weight=0.01,
+        depth_distortion_reg_weight=0.01,
         normal_distortion_reg_weight=0.005,
         rgb_distortion_reg_weight=0.01,
         ssim_lambda=0.4,
@@ -447,8 +444,8 @@ class TrainerConfigTrianglePatched(TrainerConfig):
         # use_bilateral_grid=False,
         # use_bilateral_grid_for_geometry=False,
         alpha_reg_weight=0.0,
-        mcmc_max_screen_size=0.15,
-        mcmc_max_screen_size_clip_hardness=1.5,
+        max_screen_size=0.15,
+        max_screen_size_clip_hardness=1.5,
     ))
     optimizer: dict = field(default_factory=lambda: _TRIANGLE_OPTIMIZERS)
 
@@ -473,7 +470,7 @@ class TrainerConfigVoxel(TrainerConfig):
         erank_reg_s3=0.0,
         depth_supervision_weight=0.0,
         supervision_warmup=0,
-        depth_reg_weight=0.01,
+        depth_distortion_reg_weight=0.01,
         reg_warmup_length=100,
         distortion_reg_warmup=100,
         preallocate_splat_tensors=False,  # TODO
@@ -493,22 +490,22 @@ _MODEL_PRESET_OPEN = dict(
 )
 _MODEL_PRESET_3DGS2TR_POS = dict(
     compute_hessian_diagonal="position",
-    mcmc_noise_lr=5e5 * (1.6e-4 / 1.0e-6),
+    noise_lr=5e5 * (1.6e-4 / 1.0e-6),
 )
 _MODEL_PRESET_3DGS2TR = dict(
     compute_hessian_diagonal="all",
-    mcmc_noise_lr=5e5 * (1.6e-4 / 1.0e-6),
+    noise_lr=5e5 * (1.6e-4 / 1.0e-6),
 )
 _MODEL_PRESET_LOW_TEXTURE = dict(
     use_edge_aware_score=False,
-    mcmc_prob_grad_weight=0.0,
-    mcmc_use_long_axis_split=False,
+    relocate_heuristic_weight=0.0,
+    use_long_axis_split=False,
 )
 _MODEL_PRESET_RICH_TEXTURE = dict(
     use_edge_aware_score=True,
-    mcmc_prob_grad_weight=1.0,
-    mcmc_use_long_axis_split=True,
-    mcmc_max_screen_size=0.10,
+    relocate_heuristic_weight=1.0,
+    use_long_axis_split=True,
+    max_screen_size=0.10,
 )
 _MODEL_PRESET_NO_COLOR_SHIFT = dict(
     use_bilateral_grid=True,
@@ -590,7 +587,7 @@ class TrainerConfigCenteredObject(TrainerConfig):
         **_MODEL_PRESET_RICH_TEXTURE,
         **_MODEL_PRESET_NO_COLOR_SHIFT,
         apply_loss_for_mask=True,
-        mcmc_cap_max=100000,
+        cap_max=100000,
     ))
     # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)
     optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)
@@ -611,16 +608,15 @@ class TrainerConfigAcademicBaseline(TrainerConfig):
         primitive="3dgs",
         background_color="black",
         train_background_color=False,
-        compute_depth_normal=False,
         use_bilateral_grid=False,
         use_bilateral_grid_for_geometry=False,
         use_ppisp=False,
-        mcmc_prob_grad_weight=0.0,
+        relocate_heuristic_weight=0.0,
         use_edge_aware_score=False,
-        mcmc_use_long_axis_split=False,
-        mcmc_max_screen_size=float('inf'),
+        use_long_axis_split=False,
+        max_screen_size=float('inf'),
         suppress_initial_scales=False,
-        depth_reg_weight=0.0,
+        depth_distortion_reg_weight=0.0,
         normal_reg_weight=0.0,
         alpha_reg_weight=0.0,
         alpha_loss_weight=0.0,

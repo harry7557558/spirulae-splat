@@ -30,6 +30,7 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 from pytorch_msssim import SSIM
 
+import spirulae_splat
 from spirulae_splat.splat._torch_impl import quat_to_rotmat
 from spirulae_splat.splat import (
     rasterization,
@@ -38,7 +39,7 @@ from spirulae_splat.splat import (
 from spirulae_splat.splat.utils import resize_image
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
-from spirulae_splat.strategy import DefaultStrategy, MCMCStrategy, OpaqueStrategy, SVRasterStrategy
+from spirulae_splat.strategy import MCMCStrategy, OpaqueStrategy, SVRasterStrategy
 
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
 from spirulae_splat.modules.optimizer import get_scheduled_lr
@@ -74,8 +75,6 @@ def saturate_keep_gradient(x, xmin=None, xmax=None):
 @dataclass
 class SpirulaeSplatModelConfig:
 
-    primitive: Literal["3dgs", "mip", "3dgut", "3dgut_sv", "opaque_triangle", "voxel"] = "3dgut"
-    """Splat primitive to use"""
     fit: Literal["rgb", "depth", "normal"] = "rgb"
     """Fit RGB image by default, fit depth/normal for geometry reconstruction
         Will apply the same as RGB for depth and normal (e.g. bilagrid, SSIM, unless you disable them)"""
@@ -84,28 +83,33 @@ class SpirulaeSplatModelConfig:
     fit_normal_depth_warmup_steps: int = 3000
     """Warmup for probability to use depth normal instead of rendered normal in normal fitting mode"""
 
-    num_iterations: int = 30000
-    """number of training iterations, should be consistent with --max_num_iterations"""
-    warmup_length: int = 500
-    """period of steps where refinement is turned off"""
-    stop_refine_at: int = 25000
-    """period of steps where refinement is turned off"""
-    refine_every: int = 100
-    """period of steps where gaussians are culled and densified"""
-    resolution_schedule: int = 3000
-    """training starts at 1/d resolution, every n steps this is doubled"""
-    background_color: Literal["random", "black", "white", "gray"] = "black"
+
+    # Representation
+    primitive: Literal["3dgs", "mip", "3dgut", "3dgut_sv", "opaque_triangle", "voxel"] = "3dgut"
+    """Splat primitive to use"""
+    sh_degree: int = 3
+    """Maximum degree of spherical harmonics to use."""
+    num_sv: int = 4  # 8
+    """Number of spherical voronoi to use."""
+    background_color: Literal["black", "white", "gray"] = "black"
     """Whether to randomize the background color."""
-    num_downscales: int = 0
-    """at the beginning, resolution is 1/2^d, where d is this number"""
-    use_mcmc: bool = True
-    """use Markov-Chain Monte Carlo for gaussian control"""
-    random_init: bool = False
-    """whether to initialize the positions uniformly randomly (not SFM points)"""
-    num_random: int = 200000
-    """Number of gaussians to initialize if random init is used"""
-    random_scale: float = 1.0
-    """Position standard deviation to initialize random gaussians"""
+    train_background_color: bool = False
+    """Whether to train background color."""
+    background_sh_degree: int = 4
+    """SH degree for background color."""
+    randomize_background: Literal[True, False, "opaque-only", "non-sky-only"] = False
+    """Use random noise for background color during training to discourage transparency."""
+    randomize_background_warmup: int = 2000
+    """Number of steps to warmup background randomization. This applies when randomize_background is True"""
+    randomize_background_pre_warmup: float = 0.25
+    """Weight of randomization at start of training (0 to 1). Higher value reduce the chance of washing away splat opacities near the beginning of training."""
+    kernel_radius: float = 3.0
+    """Radius of the splatting kernel, 3.0 for Gaussian and 0.5 for triangle"""
+
+    # Training loss
+    relative_scale: Optional[float] = None
+    """Manually set scale when a scene is poorly scaled, i.e. increase this for large datasets.
+        This does not make difference for presets not labeled "low-texture"."""
     l2_lambda: float = 0.0
     """Weight of L2 loss, default 0.0"""
     ssim_lambda: float = 0.2
@@ -119,117 +123,71 @@ class SpirulaeSplatModelConfig:
         Note: this only works well in patch batching mode"""
     # camera_optimizer: CameraOptimizerConfig = field(default_factory=lambda: CameraOptimizerConfig(mode="SO3xR3"))
     # """Config of the camera optimizer to use"""  # TODO
-    kernel_radius: float = 3.0
-    """Radius of the splatting kernel, 3.0 for Gaussian and 0.5 for triangle"""
-    relative_scale: Optional[float] = None
-    """Manually set scale when a scene is poorly scaled by nerfstudio
-        (e.g. Zip-NeRF dataset, very large-scale scenes across multiple street blocks)"""
-    compute_depth_normal: bool = True
-    """Compute normal from depth. Required for 2DGS and supervision. Disabling this can reduce VRAM usage and speed up training."""
     packed: bool = True
     """Pack projection outputs, reduce VRAM usage at large batch size but can be slightly slower"""
     use_bvh: bool = False
     """Use BVH for splat-patch intersection test, may be faster when batching large number of small patches"""
     compute_hessian_diagonal: Literal[None, "position", "all"] = None
     """What parameter sets to compute an approximation of Hessian diagonal as well as a Jacobian-residual product in backward pass. Required for second-order optimizer."""
-    supersampling: int = 1
-    """Antialiasing by rendering at higher resolution and downsampling to a lower resolution, as per triangle splatting +"""
     optimizer_offload: Literal[None, "sh", "all"] = None
     """Whether to offload optimizer momentum to CPU to save VRAM. This is only supported for Adam optimizer."""
+    supersampling: int = 1
+    """Antialiasing by rendering at higher resolution and downsampling to a lower resolution, as per triangle splatting +"""
+    resolution_schedule: int = 3000
+    """training starts at 1/d resolution, every n steps this is doubled"""
+    num_downscales: int = 0
+    """At the beginning, resolution is 1/2^d, where d is this number"""
 
-    # classial control
-    cull_alpha_thresh: float = 0.005
-    """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
-    cull_scale_thresh: float = 0.15
-    """threshold of world scale for culling huge gaussians"""
-    split_scale_thresh: float = 0.05
-    """threshold of world scale for splitting huge gaussians"""
-    cull_grad_thresh: float = 3e-4  # 3e-4 | 1e-4 | 1e-5 | 0.0
-    """threshold for culling gaussians with low visibility"""
-    continue_cull_post_densification: bool = True
-    """If True, continue to cull gaussians post refinement"""
-    reset_alpha_every: int = 30
-    """Every this many refinement steps, reset the alpha"""
-    densify_xy_grad_thresh: float = 0.005
-    """threshold of positional gradient norm for densifying gaussians"""
-    densify_size_thresh: float = 0.01
-    """below this size, gaussians are *duplicated*, otherwise split"""
-    stop_split_at: int = 15000
-    """stop splitting at this step"""
-    cull_screen_size: float = 0.15
-    """if a gaussian is more than this fraction of screen space, cull it"""
-    split_screen_size: float = 0.05
-    """if a gaussian is more than this fraction of screen space, split it"""
-    stop_screen_size_at: int = 4000
-    """stop culling/splitting at this step WRT screen size of gaussians"""
-
-    # MCMC control
+    # Densification
+    use_mcmc: bool = True
+    """Must be True for 3DGS methods."""
     preallocate_splat_tensors: bool = True
-    """Whether to pre-allocate Gaussian attribute tensors to avoid OOM during densification"""
-    mcmc_warmup_length: int = 500
-    """start MCMC refinement at this number of steps"""
-    mcmc_cap_max: int = 1_000_000
-    """maximum number of splats for MCMC, dataset-specific tuning required"""
-    mcmc_noise_lr: float = 5e5
-    """MCMC sampling noise learning rate"""
-    mcmc_min_opacity: float = 0.005
-    """minimum opacity for MCMC relocation"""
-    mcmc_growth_factor: float = 1.05
-    """multiply number of splats by this number at every refinement"""
-    mcmc_prob_grad_weight: float = 1.0
+    """Whether to pre-allocate Gaussian attribute tensors to cap_max to avoid OOM during densification"""
+    cap_max: int = 1_000_000
+    """maximum number of splats, dataset-specific tuning required"""
+    refine_every: int = 100
+    """Densify every this number of steps"""
+    refine_start_iter: int = 500
+    """Start densification at this number of steps"""
+    refine_stop_num_iter: int = 5000
+    """Stop densification at this number of steps before maximum number of training iterations"""
+    noise_lr: float = 5e5
+    """Scalar for MCMC-style noise injection"""
+    min_opacity: float = 0.005
+    """Minimum Gaussian opacity before relocation"""
+    growth_factor: float = 1.05
+    """Multiply number of splats by this number at each densification step"""
+    relocate_heuristic_weight: float = 1.0
     """Weight of gradient used in sampling Gaussians to relocate/add to.
         If 0.0, use only opacity; If 1.0, use other heuristics (see strategy/mcmc.py for details)."""
     use_edge_aware_score: bool = True
     """Whether to use edge aware score to guide densification.
         If True, it computes edge aware score following https://arxiv.org/abs/2603.08661
-        Note that this is only active when mcmc_prob_grad_weight is nonzero"""
-    mcmc_use_long_axis_split: bool = True
+        Note that this is only active when relocate_heuristic_weight is nonzero"""
+    use_long_axis_split: bool = True
     """whether to use long-axis split described in https://arxiv.org/abs/2508.12313 for relocation and sample add.
-        When combined with mcmc_prob_grad_weight=1.0, this can give significantly less blurry background details for unbounded outdoor scenes."""
+        When combined with relocate_heuristic_weight=1.0, this can give less blurry background details for unbounded outdoor scenes."""
     relocate_screen_size: float = float('inf')
     """if a gaussian is more than this fraction of screen space, relocate it
         Useful for fisheye with 3DGUT, may drop PSNR for conventional cameras
-        For likely better quality, use mcmc_max_screen_size instead"""
-    mcmc_max_screen_size: float = 0.15
+        For likely better quality, use max_screen_size instead"""
+    max_screen_size: float = 0.15
     """if a gaussian is more than this fraction of screen space, clip scale and increase opacity
         Intended to be an MCMC-friendly alternative of relocate_screen_size"""
-    mcmc_max_screen_size_clip_hardness: float = 1.5
+    max_screen_size_clip_hardness: float = 1.5
     """clip hardness for Gaussians with large screen space size, between 1 and infinity, larger is harder"""
-    mcmc_max_world_size: float = float('inf')
+    max_world_size: float = float('inf')
     """if a gaussian is more than this of world space, clip scale
         Useful if you see huge floaters at a distance in large indoor space"""
+    reset_alpha_every: int = 30
+    """Every this many refinement steps, reset the alpha. Only applies for opaque triangle splatting."""
 
-    # representation
-    sh_degree: int = 3
-    """maximum degree of spherical harmonics to use"""
-    sh_degree_interval: int = 1000
-    """every n intervals turn on another sh degree; TODO: deprecated?"""
-    num_sv: int = 4  # 8
-    """number of spherical voronoi to use"""
-    train_background_color: bool = False
-    """make background color trainable"""
-    background_sh_degree: int = 4
-    """enable background model"""
-    adaptive_exposure_mode: Optional[Literal[
-        "linear", "log_linear", "channel", "log_channel", "affine", "log_affine"
-        ]] = None
-    """Adaptive exposure mode
-        linear: gt ~ k * pred, with scalar k
-        log_linear: log(gt) ~ k * log(pred) + b, with scalar k and b
-        channel: linear but per channel
-        log_channel: log_linear but per channel
-        affine: gt ~ A * pred, with 3x3 matrix A
-        log_affine: log(gt) ~ A * log(pred) + b, with 3x3 matrix A and vec3 b
-       Additional coefficients (k,A,b) are optimized online using linear least squares
-       May degrade performance at boundary when segmentation mask supervision is used, at least when tested on SAM2.1
-    """
-    adaptive_exposure_warmup: int = 1000
-    """Start adaptive exposure at this number of steps"""
+    # Exposure/WB correction
     use_bilateral_grid: bool = True
     """If True, use bilateral grid to handle the ISP changes in the image space.
         This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/)."""
     bilagrid_shape: Tuple[int, int, int] = (16, 16, 8)
-    """Shape of the bilateral grid (X, Y, W)"""
+    """Shape of the bilateral grid, typically `16 16 8`, or `8 8 4` for scenes with low-texture surfaces."""
     bilagrid_type: Literal["affine", "ppisp", "loglinear"] = "loglinear"
     """What the bilateral grid predicts.
         affine: 4x3 matrix per original bilateral grid.
@@ -252,7 +210,7 @@ class SpirulaeSplatModelConfig:
     """If True, use the PPISP model (https://research.nvidia.com/labs/sil/projects/ppisp/) to handle per-pixel color distortions."""
     ppisp_param_type: Literal["original", "rqs"] = "rqs"
     """Parameterization for PPISP. "original" implements the original paper,
-        while "rqs" uses a parameterization that is more friendly to optimization and can produce better results in darker areas."""
+        "rqs" uses a parameterization that is more friendly to optimization and can produce better results in darker areas."""
     ppisp_reg_exposure_mean: float = 1.0
     """Encourage exposure mean ~ 0 to resolve SH <-> exposure ambiguity in PPISP."""
     ppisp_reg_vig_center: float = 0.02
@@ -265,6 +223,8 @@ class SpirulaeSplatModelConfig:
     """Encourage color correction mean ~ 0 across frames in PPISP."""
     ppisp_reg_crf_channel_var: float = 0.1
     """Encourage similar CRF parameters across RGB channels in PPISP."""
+
+    # Linear and wide-gamut
     image_color_is_linear: bool = False
     """Whether to assume training images are in linear color space."""
     image_color_gamut: Literal[None, "ACES2065-1", "ACEScg", "Rec.2020", "AdobeRGB", "DCI-P3"] = None
@@ -276,18 +236,14 @@ class SpirulaeSplatModelConfig:
     convert_initial_point_cloud_color: Literal[True, False, None] = None
     """If True, this will assume color in initial point cloud is sRGB, and convert if images are in a linear or wide-gamut color space."""
 
-    # regularization
+    # Regularization
     suppress_initial_scales: bool = False
     """Whether to suppress scales during initialization to discourage large floaters in vacant areas"""
     scale_regularization_weight: float = 0.0
     """If enabled, a scale regularization introduced in PhysGauss (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians."""
     max_gauss_ratio: float = 10.0
-    """threshold of ratio of gaussian max to min scale before applying regularization
-    loss from the PhysGaussian paper
-    """
-    depth_mode: Literal["mean", "median"] = "mean"
-    """Depth rendering mode, use mean for stable training and median for high meshing resolution"""
-    depth_reg_weight: float = 0.0
+    """Threshold of ratio of gaussian max to min scale before applying regularization loss from the PhysGaussian paper"""
+    depth_distortion_reg_weight: float = 0.0
     """Weight for depth distortion regularizer"""
     normal_distortion_reg_weight: float = 0.0
     """Weight for normal distortion regularizer"""
@@ -316,10 +272,9 @@ class SpirulaeSplatModelConfig:
     alpha_loss_weight_under: float = 0.005
     """Loss weight for alpha, applies when rendered alpha is below reference alpha"""
     mcmc_opacity_reg: float = 0.001  # 0.01 in original paper
-    """Opacity regularization from MCMC
-       Lower usually gives more accurate geometry"""
+    """Encourage low opacity to aid densification, per MCMC."""
     mcmc_scale_reg: float = 0.01  # 0.01 in original paper
-    """Scale regularization from MCMC"""
+    """Encourage low scale, per MCMC."""
     erank_reg: float = 0.0
     """erank regularization weight, for 3DGS only -
         see *Effective Rank Analysis and Regularization for Enhanced 3D Gaussian Splatting, Hyung et al.*"""
@@ -329,35 +284,18 @@ class SpirulaeSplatModelConfig:
     """only apply erank regularization after this many steps"""
     quat_norm_reg: float = 0.01
     """Weight to regularize quaternion norm to identity"""
-    exposure_reg_image: float = 0.1
-    """Between 0 and 1; For exposure regularization, include this fraction of L1 loss between GT image and image before exposure adjustment"""
-    exposure_reg_param: float = 0.002
-    """Make sure image look right in auto exposure mode,
-       Use an L2 cost to match exposure parameter to the parameter at no exposure adjustment;
-       (may be summed/averaged across a batch)"""
-    randomize_background: Literal[True, False, "opaque-only", "non-sky-only"] = False
-    """Use random noise for background color during training to discourage transparency."""
-    randomize_background_warmup: int = 2000
-    """Number of steps to warmup background randomization. This applies when randomize_background is True"""
-    randomize_background_pre_warmup: float = 0.25
-    """Weight of randomization at start of training (0 to 1). Higher value reduce the chance of washing away splat opacities near the beginning of training."""
 
     # supervision using a foundation depth model
     # enable these by setting `depth_model` in data manager config
     supervision_warmup: int = 0
     """Start using foundation model depth at this number of steps"""
-    depth_distortion_depth_degree: int = -1  # 3
-    """Hyperparameter for depth distortion model, controls depth embedding, see code for details
-        Larger gives more parameters in depth distortion model, -1 to disable"""
-    depth_distortion_uv_degree: int = -1  # 1
-    """Hyperparameter for depth distortion model, controls image space embedding, see code for details
-        Larger gives more parameters in depth distortion model, -1 to disable"""
     depth_supervision_weight: float = 0.0
     """Weight for depth supervision by comparing rendered depth with depth predicted by a foundation model
         Warn that this can reduce quality if AI generated depth is heavily biased"""
     normal_supervision_weight: float = 0.01
     """Weight for normal supervision by comparing normal from rendered depth with normal from depth predicted by a foundation model"""
 
+    # Validation
     overfit_score_aggregation_mode: Literal['max', 'min', 'mean'] = 'max'
     """Mode to aggregate multiple overfitting objectives.
         Use max for more aggressive early stopping, min for more conservative early stopping, and mean for something in between."""
@@ -369,6 +307,7 @@ class SpirulaeSplatModelConfig:
     """Warmup steps for early stop, will not early stop before this number of steps
         Recommend setting this number no less than regularization warmups"""
 
+
 class SpirulaeSplatModel(torch.nn.Module):
     """Template Model."""
 
@@ -376,13 +315,15 @@ class SpirulaeSplatModel(torch.nn.Module):
 
     def __init__(
         self,
-        config: SpirulaeSplatModelConfig,
+        trainer_config: 'spirulae_splat.modules.trainer.TrainerConfig',
         seed_points: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         cameras: Optional[Cameras] = None,
     ):
         super().__init__()
 
-        self.config = config
+        self.trainer_config = trainer_config
+        self.config = trainer_config.model  # type: SpirulaeSplatModelConfig
+
         self.seed_points = (seed_points['points3D_xyz'], seed_points['points3D_rgb'])
         self.cameras = cameras
 
@@ -392,24 +333,21 @@ class SpirulaeSplatModel(torch.nn.Module):
         self.populate_modules()
 
     def populate_modules(self):
-        if self.seed_points is not None and not self.config.random_init:
-            if len(self.seed_points[0]) > self.config.mcmc_cap_max:
-                indices = torch.randperm(len(self.seed_points[0]))[:self.config.mcmc_cap_max]
+        if self.seed_points is not None:
+            if len(self.seed_points[0]) > self.config.cap_max:
+                indices = torch.randperm(len(self.seed_points[0]))[:self.config.cap_max]
                 self.seed_points = [t[indices] for t in self.seed_points]
             means = self.seed_points[0]
             if self.config.relative_scale is not None:
                 means *= self.config.relative_scale
-            self.random_init = False
         else:
-            means = torch.randn((self.config.num_random, 3)) * self.config.random_scale
-            self.random_init = True
+            raise ValueError("No seed point found")
         self.xys_grad_norm = None
         self.ch_grad_norm = None
         self.max_2Dsize = None
 
-        scale_init = 0.1 if self.config.use_mcmc else 1.0  # per original papers
-        opacity_init = 0.5 if self.config.use_mcmc else 0.1  # per original papers
-        if self.config.use_mcmc and self.config.mcmc_max_screen_size < 1.0:
+        scale_init, opacity_init = 0.1, 0.5  # per MCMC paper
+        if self.config.use_mcmc and self.config.max_screen_size < 1.0:
             scale_init, opacity_init = 0.5, 0.1
         if self.config.train_background_color or self.config.randomize_background:
             # scale_init, opacity_init = 1.0, 0.1
@@ -483,7 +421,6 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         if (
             self.seed_points is not None
-            and not self.config.random_init
             # We can have colors without points.
             and self.seed_points[1].shape[0] > 0
         ):
@@ -533,7 +470,7 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         new_num_points = num_points
         if self.config.use_mcmc and self.config.preallocate_splat_tensors:
-            new_num_points = max(num_points, self.config.mcmc_cap_max)
+            new_num_points = max(num_points, self.config.cap_max)
             for key, value in gauss_params.items():
                 if not isinstance(value, torch.Tensor) or value.shape[0] != num_points:
                     continue
@@ -561,11 +498,7 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         self.step = 0
 
-        if self.config.background_color == "random":
-            self.background_color = torch.tensor(
-                [0.1490, 0.1647, 0.2157]
-            )  # This color is the same as the default background color in Viser. This would only affect the background color when rendering.
-        elif self.config.background_color == "gray":
+        if self.config.background_color == "gray":
             self.background_color = torch.tensor([0.5, 0.5, 0.5])
         else:
             self.background_color = get_color(self.config.background_color)
@@ -592,27 +525,27 @@ class SpirulaeSplatModel(torch.nn.Module):
         # opaque triangle mode
         if self.config.primitive == "opaque_triangle":
             current_num = len(self.means)
-            final_num = self.config.mcmc_cap_max
+            final_num = self.config.cap_max
 
             min_warmup_steps = self.config.refine_every * self.config.reset_alpha_every
-            num_steps_until_full = math.log(max(final_num, current_num) / current_num) / math.log(self.config.mcmc_growth_factor) * \
-                self.config.refine_every + (self.config.warmup_length + self.config.refine_every)
-            warmup_steps_0 = min(2.0*max(min_warmup_steps, num_steps_until_full), self.config.num_iterations/3)
+            num_steps_until_full = math.log(max(final_num, current_num) / current_num) / math.log(self.config.growth_factor) * \
+                self.config.refine_every + (self.config.refine_start_iter + self.config.refine_every)
+            warmup_steps_0 = min(2.0*max(min_warmup_steps, num_steps_until_full), self.trainer_config.num_iterations/3)
 
             self.strategy = OpaqueStrategy(
-                cap_max=self.config.mcmc_cap_max,
-                noise_lr=self.config.mcmc_noise_lr,
-                refine_start_iter=self.config.mcmc_warmup_length,
+                cap_max=self.config.cap_max,
+                noise_lr=self.config.noise_lr,
+                refine_start_iter=self.config.refine_start_iter,
                 warmup_steps=warmup_steps_0,
-                refine_stop_iter=self.config.num_iterations,
+                refine_stop_iter=self.trainer_config.num_iterations,
                 refine_every=self.config.refine_every,
-                grow_factor=self.config.mcmc_growth_factor,
-                min_opacity=self.config.mcmc_min_opacity,
+                grow_factor=self.config.growth_factor,
+                min_opacity=self.config.min_opacity,
                 relocate_scale2d=self.config.relocate_screen_size,
-                max_scale2d=self.config.mcmc_max_screen_size,
-                max_scale2d_clip_hardness=self.config.mcmc_max_screen_size_clip_hardness,
-                max_scale3d=self.config.mcmc_max_world_size,
-                geometry_optimizer_stop_iter=self.config.stop_refine_at
+                max_scale2d=self.config.max_screen_size,
+                max_scale2d_clip_hardness=self.config.max_screen_size_clip_hardness,
+                max_scale3d=self.config.max_world_size,
+                geometry_optimizer_stop_iter=self.trainer_config.num_iterations-self.config.refine_stop_num_iter
             )
             self.strategy_state = self.strategy.initialize_state()
             return
@@ -620,58 +553,29 @@ class SpirulaeSplatModel(torch.nn.Module):
         # MCMC mode
         if self.config.use_mcmc:
             current_num = len(self.means)
-            final_num = self.config.mcmc_cap_max
-            warpup_steps = math.log(max(final_num, current_num) / current_num) / math.log(self.config.mcmc_growth_factor) * \
-                self.config.refine_every + (self.config.warmup_length + self.config.refine_every)
+            final_num = self.config.cap_max
+            warpup_steps = math.log(max(final_num, current_num) / current_num) / math.log(self.config.growth_factor) * \
+                self.config.refine_every + (self.config.refine_start_iter + self.config.refine_every)
             self.mcmc_num_steps_until_full = warpup_steps
 
             self.strategy = MCMCStrategy(
-                cap_max=self.config.mcmc_cap_max,
-                noise_lr=self.config.mcmc_noise_lr,
-                refine_start_iter=self.config.mcmc_warmup_length,
-                refine_stop_iter=self.config.stop_refine_at,
+                cap_max=self.config.cap_max,
+                noise_lr=self.config.noise_lr,
+                refine_start_iter=self.config.refine_start_iter,
+                refine_stop_iter=self.trainer_config.num_iterations-self.config.refine_stop_num_iter,
                 refine_every=self.config.refine_every,
-                grow_factor=self.config.mcmc_growth_factor,
-                min_opacity=self.config.mcmc_min_opacity,
-                prob_grad_weight=self.config.mcmc_prob_grad_weight,
-                use_long_axis_split=self.config.mcmc_use_long_axis_split,
+                grow_factor=self.config.growth_factor,
+                min_opacity=self.config.min_opacity,
+                prob_grad_weight=self.config.relocate_heuristic_weight,
+                use_long_axis_split=self.config.use_long_axis_split,
                 is_3dgs=True,
                 relocate_scale2d=self.config.relocate_screen_size,
-                max_scale2d=self.config.mcmc_max_screen_size,
-                max_scale2d_clip_hardness=self.config.mcmc_max_screen_size_clip_hardness,
-                max_scale3d=self.config.mcmc_max_world_size,
+                max_scale2d=self.config.max_screen_size,
+                max_scale2d_clip_hardness=self.config.max_screen_size_clip_hardness,
+                max_scale3d=self.config.max_world_size,
             )
             self.strategy_state = self.strategy.initialize_state()
             return
-
-        # classical mode
-        reset_every = self.config.reset_alpha_every * self.config.refine_every
-        pause_refine_after_reset = min(
-            self.num_train_data//self._train_batch_size+self.config.refine_every,
-            int(0.8*reset_every)
-        )
-        self.strategy = DefaultStrategy(
-            prune_opa=self.config.cull_alpha_thresh,
-            grow_grad2d=self.config.densify_xy_grad_thresh,
-            prune_grad2d=self.config.cull_grad_thresh,
-            grow_scale3d=self.config.densify_size_thresh,
-            grow_scale2d=self.config.split_screen_size,
-            prune_scale3d=self.config.cull_scale_thresh,
-            prune_scale2d=self.config.cull_screen_size,
-            split_scale3d=self.config.split_scale_thresh,
-            refine_scale2d_stop_iter=self.config.stop_screen_size_at,
-            refine_start_iter=self.config.warmup_length,
-            refine_stop_iter=self.config.stop_refine_at,
-            split_stop_iter=self.config.stop_split_at,
-            reset_every=reset_every,
-            refine_every=self.config.refine_every,
-            pause_refine_after_reset=pause_refine_after_reset,
-            kernel_radius=self.config.kernel_radius,
-            absgrad=False,
-            revised_opacity=False,
-            verbose=True,
-        )
-        self.strategy_state = self.strategy.initialize_state(scene_scale=1.0)
 
     def _get_gauss_param(self, key: str):
         tensor = self.gauss_params.get(key, None)
@@ -748,7 +652,7 @@ class SpirulaeSplatModel(torch.nn.Module):
 
     def load_state_dict(self, dict, **kwargs):  # type: ignore
         # resize the parameters to match the new number of points
-        self.step = self.config.num_iterations
+        self.step = self.trainer_config.num_iterations
         for p in ["means", "scales", "quats",
                     "features_dc", "features_sh", "features_ch",
                     "sv_sites", "sv_colors",
@@ -1598,7 +1502,7 @@ class SpirulaeSplatModel(torch.nn.Module):
                 s = '-' + s[2:]
             return boldcyan(s)
 
-        reg_mcmc = (self.config.use_mcmc and self.step < self.config.stop_refine_at)
+        reg_mcmc = (self.config.use_mcmc and self.step < self.trainer_config.num_iterations-self.config.refine_stop_num_iter)
         reg_2dgs = self.training_losses.get_2dgs_reg_weights()
         opacity_floor = (
             f"{bracket('OpacFloor')} {self.strategy.get_opacity_floor(self.step):.3f} "

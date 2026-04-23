@@ -76,7 +76,7 @@ Viewer
 - To change the port from 7007 to some other value, use `--viewer_port <port number>`.
 
 Gaussian representation
-- Change number of Gaussians: `--model.mcmc_cap_max 6000000` (default 1000000)
+- Change number of Gaussians: `--model.cap_max 6000000` (default 1000000)
 - Change SH degree: `--model.sh_degree 1` (default 3)
 - Set primitive using `--model.primitive` (default `3dgut`, change to `3dgs` or `mip` for potentially better compatibility across viewers and faster training)
 
@@ -88,7 +88,7 @@ Exposure/WB correction
 
 Distorted/Fisheye images
 - Images with equidistant fisheye camera model (as well as general distorted images) are automatically handled using 3DGUT
-- `--model.mcmc_max_screen_size 0.15` is enabled by default for compatibility conventional viewers. Increase it for potentially better quality in built-in viewer, decrease it for better compatibility with other viewers (e.g. SuperSplat viewer, especially if you notice spikes or large floaters)
+- `--model.max_screen_size 0.15` is enabled by default for compatibility conventional viewers. Increase it for potentially better quality in built-in viewer, decrease it for better compatibility with other viewers (e.g. SuperSplat viewer, especially if you notice spikes or large floaters)
 - To fall back to a Fisheye-GS style method: set `--model.primitive` to `3dgs` (not anti-aliased), or `mip` (anti-aliased).
 - Supported camera models: perspective, equidistant fisheye (supports >180° fov); Supported distortion parameters: k1-k4, p1, p2, sx1, sy1, b1, b2. For better reliability, use `scripts/process_data_(colmap|metashape).py` (instead of `ns-process-data`) to process data.
 
@@ -119,7 +119,7 @@ Unstable features
 - Validation (early stop training if loss on validation images start to increase): append `nerfstudio-data --validation_fraction 0.1` to the end of training command
 - Second-order optimizer using Jacobian-residual product and Hessian diagonal: `spirulae-train 3dgs^2-pos` (more stable) or `3dgs^2` (less stable) instead of `spirulae`. We also provide presets `3dgs^2-confined` and `3dgs^2-open` for the corresponding presets with `3dgs^2` methods, which otherwise run on `3dgs^2-pos`.
     - Note: on Windows, you may need to wrap parentheses around method name with `^2`. For example, use `spirulae-train "3dgs^2-pos"` instead of `spirulae-train 3dgs^2-pos`.
-- 2DGS-like depth regularization to discourage floaters: `--model.depth_reg_weight 0.01`. Similar regularization can also be applied to RGB by setting `--model.rgb_distortion_reg_weight` to a positive value.
+- 2DGS-like depth regularization to discourage floaters: `--model.depth_distortion_reg_weight 0.01`. Similar regularization can also be applied to RGB by setting `--model.rgb_distortion_reg_weight` to a positive value.
 
 Scripts
 - Use `scripts/export_ply_3dgs.py` to export PLY
