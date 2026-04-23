@@ -1,4 +1,7 @@
 # spirulae-splat
+
+> **Note:** There has been major changes in `dev` branch, which will be merged in upcoming weeks. The changes include removal of Nerfstudio and GSplat dependencies, updates on command line interface, and latest features (IGS+/MRNF-like densification, faster training, better viewer, etc.). Try that branch ahead of time if needed.
+
 My custom 3D Gaussian Splatting method for Nerfstudio. Modified the `splatfacto` method in official Nerfstudio implementation.
 
 ### Currently supports
