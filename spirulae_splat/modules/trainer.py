@@ -513,7 +513,7 @@ _MODEL_PRESET_RICH_TEXTURE = dict(
 _MODEL_PRESET_NO_COLOR_SHIFT = dict(
     use_bilateral_grid=True,
     bilagrid_shape=(8, 8, 4),
-    bilagrid_type="ppisp",
+    bilagrid_type="loglinear",
 )
 
 

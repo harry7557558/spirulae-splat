@@ -18,7 +18,7 @@ class ViewerServer:
         render_fn: Callable,
         *,
         progress_fn: Optional[Callable] = None,
-        http_host: str = "localhost",
+        http_host: str = "0.0.0.0",
         http_port: int = 7007,
         open_browser: bool = False,
     ) -> None:

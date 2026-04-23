@@ -4,7 +4,7 @@ import json
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Optional
+from typing import Optional, Callable
 from urllib.parse import parse_qs, urlparse
 
 import numpy as np
@@ -171,7 +171,7 @@ class _Handler(BaseHTTPRequestHandler):
 class HTTPThread:
     """Serves the viewer HTML and handles requests on a background daemon thread."""
 
-    def __init__(self, html: str, render_worker: RenderWorker, progress_fn: Optional[Callable], host: str = "localhost", port: int = 8080) -> None:
+    def __init__(self, html: str, render_worker: RenderWorker, progress_fn: Optional[Callable], host: str = "0.0.0.0", port: int = 8080) -> None:
         _Handler.html_content = html.encode("utf-8")
         _Handler.render_worker = render_worker
         _Handler.progress_fn = progress_fn

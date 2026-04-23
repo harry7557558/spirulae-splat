@@ -230,7 +230,7 @@ class SpirulaeSplatModelConfig:
         This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/)."""
     bilagrid_shape: Tuple[int, int, int] = (16, 16, 8)
     """Shape of the bilateral grid (X, Y, W)"""
-    bilagrid_type: Literal["affine", "ppisp", "loglinear"] = "affine"
+    bilagrid_type: Literal["affine", "ppisp", "loglinear"] = "loglinear"
     """What the bilateral grid predicts.
         affine: 4x3 matrix per original bilateral grid.
         ppisp: PPISP exposure and color parameters, generally gives less color shift but can be less numerically stable.
