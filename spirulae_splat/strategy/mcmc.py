@@ -181,6 +181,8 @@ class MCMCStrategy(Strategy):
             return None
         opacs = torch.sigmoid(get_param_attr(params, 'opacities'))
         grads = state["grad3d"] / state["count"].clamp_min(1)
+        if self.prob_grad_weight >= 1.0:
+            return opacs.flatten() * grads
         # grad_opacs = torch.sort(opacs.flatten())[0][torch.argsort(torch.argsort(grads))].unsqueeze(-1)
         grad_opacs = torch.sort(opacs.flatten())[0][torch.argsort(torch.argsort(opacs.flatten() * grads))].unsqueeze(-1)
         return torch.lerp(opacs, grad_opacs, self.prob_grad_weight)

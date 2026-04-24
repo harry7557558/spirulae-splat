@@ -56,7 +56,6 @@ from spirulae_splat.splat.cuda import (
 )
 
 from spirulae_splat.modules.camera import Cameras
-from spirulae_splat.modules.colors import get_color
 
 
 class SaturateKeepGradient(torch.autograd.Function):
@@ -500,8 +499,10 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         if self.config.background_color == "gray":
             self.background_color = torch.tensor([0.5, 0.5, 0.5])
-        else:
-            self.background_color = get_color(self.config.background_color)
+        elif self.config.background_color == "black":
+            self.background_color = torch.tensor([0.0, 0.0, 0.0])
+        elif self.config.background_color == "white":
+            self.background_color = torch.tensor([1.0, 1.0, 1.0])
         if self.config.splat_color_is_linear:
             self.background_color = self.background_color ** 2.2
         self.background_color = torch.nn.Parameter(self.background_color)
@@ -842,7 +843,7 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         elif not self.config.train_background_color and self.config.background_color == "black":
             if rgb is None or transmittance is None:
-                return torch.zeros((len(camera), H, W, 3), device=self.background_color.device)
+                return None
             return rgb.clip_(0.0, 1.0)
 
         elif not self.config.train_background_color or not (sh_degree > 0):
@@ -1231,8 +1232,9 @@ class SpirulaeSplatModel(torch.nn.Module):
             if 'grad3d' not in self.strategy_state or 'count' not in self.strategy_state:
                 return outputs
 
-            param_to_vis = self.strategy_state['grad3d'] / self.strategy_state["count"].clamp_min(1)
-            param_to_vis = torch.argsort(torch.argsort(param_to_vis)) / len(param_to_vis)
+            # param_to_vis = self.strategy_state['grad3d'] / self.strategy_state["count"].clamp_min(1)
+            # param_to_vis = torch.argsort(torch.argsort(param_to_vis)) / len(param_to_vis)
+            param_to_vis = self.strategy._get_probs(self.strategy_state, self.gauss_params)
 
             param_to_vis = (param_to_vis - 0.5) / 0.28
             param_to_vis = param_to_vis.unsqueeze(-1).repeat(1, 3)
@@ -1261,8 +1263,7 @@ class SpirulaeSplatModel(torch.nn.Module):
                 compute_hessian_diagonal=self.config.compute_hessian_diagonal,
                 **kwargs,
             )
-            outputs['param_to_vis'] = rgbd[0][0, :, :, :].mean(dim=-1, keepdim=True)
-            # outputs['param_to_vis'] = torch.clip(rgbd[0][0, :, :, :], 0.0, 1.0)
+            outputs['refinement_score'] = rgbd[0][0, :, :, :].mean(dim=-1, keepdim=True)
 
         return outputs
 

@@ -101,6 +101,8 @@ _SECOND_ORDER_OPTIMIZERS = {**_SECOND_ORDER_POSITION_OPTIMIZERS}
 _SECOND_ORDER_OPTIMIZERS["scales"] = FusedNewtonOptimizerConfig(
     mode="scale", lr=1.0e-6, eps=1e-15,
     lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
+    # mode="scale", lr=1.0e-5, eps=1e-15,
+    # lr_final=1.0e-7, max_steps=30000, #warmup_steps=1000,
 )
 # TODO: investigate whether this messes up MCMC densification
 # _SECOND_ORDER_OPTIMIZERS["opacities"] = FusedNewtonOptimizerConfig(

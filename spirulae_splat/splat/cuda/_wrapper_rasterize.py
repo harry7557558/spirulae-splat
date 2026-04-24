@@ -261,19 +261,17 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
 
         (
             (render_rgbs, render_depths), render_Ts, last_ids, 
-            render2_outputs, distortion_outputs, accum_weight, max_blending
+            render2_outputs, distortion_outputs, max_blending
         ) = _make_lazy_cuda_func(
             "rasterization_3dgut_forward"
         )(
             (means, quats, depths, proj_scales, proj_opacities, colors),
             backward_info.get('gaussian_ids', None),
             viewmats, intrins, camera_model, dist_coeffs,
-            backgrounds, None, max_blending_masks,
+            backgrounds, max_blending_masks,
             width, height, isect_offsets, flatten_ids,
             output_distortion
         )
-        if accum_weight is not None:
-            backward_info['accum_weight'] = accum_weight
         if max_blending is not None:
             backward_info['max_blending'] = max_blending
 

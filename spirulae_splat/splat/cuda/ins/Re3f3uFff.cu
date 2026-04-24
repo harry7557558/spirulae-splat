@@ -7,8 +7,7 @@
 template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     Vanilla3DGUT,
     ssplat::CameraModelType::FISHEYE,
-    true,
-    true,
+    false,
     false
 >(
     cudaStream_t stream,
@@ -21,7 +20,6 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const float3 *__restrict__ backgrounds, // [I, 3]
-    const float *__restrict__ accum_weight_map,  // [B, C, image_width, image_height]
     const bool *__restrict__ max_blending_masks,  // [B, C, image_width, image_height]
     const uint32_t image_width,
     const uint32_t image_height,
@@ -34,6 +32,5 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
     Vanilla3DGUT::RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
     Vanilla3DGUT::RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
-    float* __restrict__ out_accum_weight,
     float* __restrict__ out_max_blending
 );

@@ -402,8 +402,8 @@ def relocate_long_axis_split(
     if probs is None:
         probs = opacities
     probs = probs[alive_indices].flatten()  # ensure its shape is [N,]
-    # sampled_idxs = _multinomial_sample(probs, n, replacement=False)
-    sampled_idxs = torch.argsort(probs)[-n:]
+    sampled_idxs = _multinomial_sample(probs, n, replacement=False)
+    # sampled_idxs = torch.argsort(probs)[-n:]
     sampled_idxs = alive_indices[sampled_idxs]
     new_scales, new_opacities, mean_offsets = _make_lazy_cuda_func("long_axis_split")(
         "3dgs",
@@ -591,8 +591,8 @@ def sample_add_long_axis_split(
         )
         return
 
-    # sampled_idxs = _multinomial_sample(probs, n, replacement=False)
-    sampled_idxs = torch.argsort(probs)[-n:]
+    sampled_idxs = _multinomial_sample(probs, n, replacement=False)
+    # sampled_idxs = torch.argsort(probs)[-n:]
     new_scales, new_opacities, mean_offsets = _make_lazy_cuda_func("long_axis_split")(
         "3dgs",
         get_param_attr(params, "scales")[sampled_idxs],

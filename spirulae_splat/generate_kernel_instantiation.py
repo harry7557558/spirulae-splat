@@ -217,24 +217,18 @@ def generate_RasterizationBwd():
 
 def generate_RasterizationEval3DFwd():
     definition = extract_kernel_definition("RasterizationEval3DFwd.cu", "rasterize_to_pixels_eval3d_fwd_kernel_wrapper")
-    map_header = ["typename SplatPrimitive", None, None, None, None]
+    map_header = ["typename SplatPrimitive", None, None, None]
     map_body = [
-        ("Vanilla3DGUT", "ssplat::CameraModelType::PINHOLE", "false", "false", "false"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::PINHOLE", "true", "false", "false"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE", "false", "false", "false"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE", "true", "false", "false"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::PINHOLE", "false", "true", "false"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::PINHOLE", "true", "true", "false"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE", "false", "true", "false"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE", "true", "true", "false"),
-        ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "true", "false", "true"),
-        ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "true", "false", "true"),
-        ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "true", "true", "true"),
-        ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "true", "true", "true"),
+        ("Vanilla3DGUT", "ssplat::CameraModelType::PINHOLE", "false", "false"),
+        ("Vanilla3DGUT", "ssplat::CameraModelType::PINHOLE", "true", "false"),
+        ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE", "false", "false"),
+        ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE", "true", "false"),
+        ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "true", "true"),
+        ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "true", "true"),
     ]
-    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 8 + \
+    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 4 + \
         [("Primitive3DGUT_SV.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 0 + \
-        [("PrimitiveVoxel.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 4
+        [("PrimitiveVoxel.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 2
 
     generate_kernel_instantiation("RasterizationEval3DFwd", definition, map_header, map_body, includes)
 
