@@ -248,7 +248,7 @@ class SpirulaeSplatDataparser:
             print("Failed to parse COLMAP data:", ' '.join(map(str, e.args)))
         raise ValueError("No supported dataset format detected. Make sure you have a supported Nerfstudio, COLMAP, or Metashape dataset.")
 
-    def _parse_nerfstudio_data(self, split="train", _meta=None, _points3D=None):
+    def _parse_nerfstudio_data(self, _meta=None, _points3D=None):
 
         if not (self.dataset_dir.exists() and self.dataset_dir.is_dir()):
             raise ValueError(f"Data directory {self.dataset_dir} does not exist.")
@@ -361,87 +361,23 @@ class SpirulaeSplatDataparser:
         else:
             raise ValueError(f"Unknown eval mode {self.config.eval_mode}")
 
-        if split == "train":
-            indices = i_train
-        elif split in ["val", "test"]:
-            indices = i_eval
-        else:
-            raise ValueError(f"Unknown dataparser split {split}")
-
-        orientation_method = self.config.orientation_method
-
+        # Auto orient poses
         poses = torch.from_numpy(np.array(poses).astype(np.float32))
         poses, transform_matrix = camera_utils.auto_orient_and_center_poses(
             poses,
-            method=orientation_method,
+            method=self.config.orientation_method,
             center_method=self.config.center_method,
         )
 
-        # Scale poses
+        # Auto scale poses
         scale_factor = 1.0
         if self.config.auto_scale_poses:
             scale_factor /= float(torch.max(torch.abs(poses[:, :3, 3])))
         scale_factor *= self.config.scale_factor
-
         poses[:, :3, 3] *= scale_factor
 
-        # Choose image_filenames and poses based on split, but after auto orient and scaling the poses.
-        image_filenames = [image_filenames[i] for i in indices]
-        mask_filenames = [mask_filenames[i] for i in indices] if len(mask_filenames) > 0 else []
-        depth_filenames = [depth_filenames[i] for i in indices] if len(depth_filenames) > 0 else []
-        normal_filenames = [normal_filenames[i] for i in indices] if len(normal_filenames) > 0 else []
-
-        idx_tensor = torch.tensor(indices, dtype=torch.long)
-        poses = poses[idx_tensor]
-
-        fx = torch.tensor(fx, dtype=torch.float32)[idx_tensor]
-        fy = torch.tensor(fy, dtype=torch.float32)[idx_tensor]
-        cx = torch.tensor(cx, dtype=torch.float32)[idx_tensor]
-        cy = torch.tensor(cy, dtype=torch.float32)[idx_tensor]
-        height = torch.tensor(height, dtype=torch.int32)[idx_tensor]
-        width = torch.tensor(width, dtype=torch.int32)[idx_tensor]
-        camera_type = [camera_type[i] for i in idx_tensor]
-        distortion_params = torch.stack(distort, dim=0)[idx_tensor]
-
-        metadata = {}
-
-        cameras = Cameras(
-            intrins=(fx, fy, cx, cy),
-            distortion_params=distortion_params,
-            height=height,
-            width=width,
-            camera_to_worlds=poses[:, :3, :4],
-            camera_type=camera_type,
-            metadata=metadata,
-        )
-
-        # The naming is somewhat confusing, but:
-        # - transform_matrix contains the transformation to dataparser output coordinates from saved coordinates.
-        # - dataparser_transform_matrix contains the transformation to dataparser output coordinates from original data coordinates.
-        # - applied_transform contains the transformation to saved coordinates from original data coordinates.
-        applied_transform = None
-        if "applied_transform" in meta:
-            applied_transform = torch.tensor(meta["applied_transform"], dtype=transform_matrix.dtype)
-            dataparser_transform_matrix = transform_matrix @ torch.cat(
-                [applied_transform, torch.tensor([[0, 0, 0, 1]], dtype=transform_matrix.dtype)], 0
-            )
-        else:
-            dataparser_transform_matrix = transform_matrix
-
-        if "applied_scale" in meta:
-            applied_scale = float(meta["applied_scale"])
-            scale_factor *= applied_scale
-
-        # reinitialize metadata for dataparser_outputs
-        metadata = {}
-
-        # _generate_dataparser_outputs might be called more than once so we check if we already loaded the point cloud
-        try:
-            self.prompted_user
-        except AttributeError:
-            self.prompted_user = False
-
         # Load 3D points
+        metadata = {}
         if _points3D is None:
             if "ply_file_path" not in meta:
                 raise ValueError("No initial point cloud found in transforms.json")
@@ -451,7 +387,7 @@ class SpirulaeSplatDataparser:
         else:
             metadata.update(_points3D)
 
-        # Apply transformation and scale
+        # Apply transformation to 3D points
         metadata['points3D_xyz'] = (
             torch.cat(
                 (
@@ -464,30 +400,84 @@ class SpirulaeSplatDataparser:
         )
         metadata['points3D_xyz'] *= scale_factor
 
-        dataparser_outputs = dict(
-            cameras=cameras,
-            image_filenames=image_filenames,
-            mask_filenames=mask_filenames if len(mask_filenames) > 0 else None,
-            dataparser_scale=scale_factor,
-            dataparser_transform=dataparser_transform_matrix,
-            metadata={
-                "depth_filenames": depth_filenames if len(depth_filenames) > 0 else None,
-                "depth_unit_scale_factor": self.config.depth_unit_scale_factor,
-                "normal_filenames": normal_filenames if len(normal_filenames) > 0 else None,
-                "mask_color": self.config.mask_color,
-                "val_indices": get_train_eval_split_fraction(image_filenames, 1-self.config.validation_fraction)[1].tolist(),
-                **metadata,
-            },
-        )
-        return dataparser_outputs
+        all_dataparser_outputs = []
+        for split_id, indices in enumerate([i_train, i_eval]):
 
-    def _parse_colmap_data(self, split="train"):
+            # Choose image_filenames and poses based on split, but after auto orient and scaling the poses.
+            image_filenames_split = [image_filenames[i] for i in indices]
+            mask_filenames_split = [mask_filenames[i] for i in indices] if len(mask_filenames) > 0 else []
+            depth_filenames_split = [depth_filenames[i] for i in indices] if len(depth_filenames) > 0 else []
+            normal_filenames_split = [normal_filenames[i] for i in indices] if len(normal_filenames) > 0 else []
+
+            idx_tensor = torch.tensor(indices, dtype=torch.long)
+            poses_split = poses[idx_tensor]
+
+            fx_split = torch.tensor(fx, dtype=torch.float32)[idx_tensor]
+            fy_split = torch.tensor(fy, dtype=torch.float32)[idx_tensor]
+            cx_split = torch.tensor(cx, dtype=torch.float32)[idx_tensor]
+            cy_split = torch.tensor(cy, dtype=torch.float32)[idx_tensor]
+            height_split = torch.tensor(height, dtype=torch.int32)[idx_tensor]
+            width_split = torch.tensor(width, dtype=torch.int32)[idx_tensor]
+            camera_type_split = [camera_type[i] for i in idx_tensor]
+            distortion_params_split = torch.stack(distort, dim=0)[idx_tensor]
+
+            cameras = Cameras(
+                intrins=(fx_split, fy_split, cx_split, cy_split),
+                distortion_params=distortion_params_split,
+                height=height_split,
+                width=width_split,
+                camera_to_worlds=poses_split[:, :3, :4],
+                camera_type=camera_type_split,
+                metadata={},
+            )
+
+            # The naming is somewhat confusing, but:
+            # - transform_matrix contains the transformation to dataparser output coordinates from saved coordinates.
+            # - dataparser_transform_matrix contains the transformation to dataparser output coordinates from original data coordinates.
+            # - applied_transform contains the transformation to saved coordinates from original data coordinates.
+            applied_transform = None
+            if "applied_transform" in meta:
+                applied_transform = torch.tensor(meta["applied_transform"], dtype=transform_matrix.dtype)
+                dataparser_transform_matrix = transform_matrix @ torch.cat(
+                    [applied_transform, torch.tensor([[0, 0, 0, 1]], dtype=transform_matrix.dtype)], 0
+                )
+            else:
+                dataparser_transform_matrix = transform_matrix
+
+            if "applied_scale" in meta:
+                applied_scale = float(meta["applied_scale"])
+                scale_factor *= applied_scale
+
+            dataparser_outputs = dict(
+                cameras=cameras,
+                image_filenames=image_filenames_split,
+                mask_filenames=mask_filenames_split if len(mask_filenames_split) > 0 else None,
+                dataparser_scale=scale_factor,
+                dataparser_transform=dataparser_transform_matrix,
+                metadata={
+                    "depth_filenames": depth_filenames_split if len(depth_filenames_split) > 0 else None,
+                    "depth_unit_scale_factor": self.config.depth_unit_scale_factor,
+                    "normal_filenames": normal_filenames_split if len(normal_filenames_split) > 0 else None,
+                    "mask_color": self.config.mask_color,
+                    **metadata,
+                },
+            )
+            if split_id == 0:
+                dataparser_outputs["metadata"]["val_indices"] = get_train_eval_split_fraction(
+                    image_filenames_split, 1-self.config.validation_fraction)[1].tolist()
+
+            all_dataparser_outputs.append(dataparser_outputs)
+
+        return (*all_dataparser_outputs,)
+
+    def _parse_colmap_data(self):
         if self.config.colmap_recon_dir is not None:
             recon_dir = self.dataset_dir / self.config.colmap_recon_dir
             colmap_points = load_colmap_points3D(recon_dir)
             cam_id_to_camera = load_colmap_cameras(recon_dir)
             im_id_to_image = load_colmap_images(recon_dir)
         else:
+            okay = False
             for colmap_recon_dir in [
                 Path("sparse/0"),
                 Path("colmap/sparse/0"),
@@ -502,7 +492,10 @@ class SpirulaeSplatDataparser:
                     im_id_to_image = load_colmap_images(recon_dir)
                 except:
                     continue
+                okay = True
                 print(f"Loaded COLMAP reconstruction from {recon_dir}")
+            if not okay:
+                raise ValueError("Could not find COLMAP reconstruction dir containing points, cameras, and images files. Specify --dataparser.colmap_recon_dir if needed.")
 
         frames = []
         for im in im_id_to_image.values():
@@ -589,7 +582,6 @@ class SpirulaeSplatDataparser:
         xyz = torch.from_numpy(np.stack([p.xyz for p in points])).float()
         rgb = torch.from_numpy(np.stack([p.rgb for p in points])).byte()
         return self._parse_nerfstudio_data(
-            split,
             _meta={'frames': frames},
             _points3D={'points3D_xyz': xyz, 'points3D_rgb': rgb}
         )

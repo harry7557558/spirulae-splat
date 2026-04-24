@@ -155,6 +155,7 @@ class FusedAdam(Optimizer):
             
             # Use the step count from the first parameter (all should be the same)
             step = steps[0]
+            scheduled_lr = get_scheduled_lr(group, step)
             
             # Launch fused CUDA kernel for all tensors
             _make_lazy_cuda_func("fused_adam_multi")(
@@ -162,7 +163,7 @@ class FusedAdam(Optimizer):
                 grads,
                 exp_avgs,
                 exp_avg_sqs,
-                lr,
+                scheduled_lr,
                 beta1,
                 beta2,
                 eps,

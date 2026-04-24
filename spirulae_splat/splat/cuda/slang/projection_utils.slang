@@ -758,7 +758,7 @@ void map_opaque_triangle(
     float sx = exp(scale.x),
           sy = exp(scale.y),
           sz = scale.z - 0.5 * (scale.x + scale.y);
-    float3x3 M = normalized_quat_to_rotmat(quat);
+    float3x3 M = normalized_quat_to_rotmat(normalize(quat));
     vert0 = mul(M, float3(sx, 0, 0)) + mean;
     vert1 = mul(M, float3(sx * (-0.5 + sz), sy, 0)) + mean;
     vert2 = mul(M, float3(sx * (-0.5 - sz), -sy, 0)) + mean;

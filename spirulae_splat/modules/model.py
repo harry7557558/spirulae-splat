@@ -28,7 +28,6 @@ from scipy.spatial.transform import Rotation
 import torch
 from torch.nn import Parameter
 import torch.nn.functional as F
-from pytorch_msssim import SSIM
 
 import spirulae_splat
 from spirulae_splat.splat._torch_impl import quat_to_rotmat
@@ -1591,6 +1590,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         outs = self.get_outputs(camera.to(self.device))
         return outs  # type: ignore
 
+    @torch.inference_mode()
     def get_image_metrics_and_images(
         self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]
     ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
@@ -1610,7 +1610,12 @@ class SpirulaeSplatModel(torch.nn.Module):
         gt_rgb = batch["image"]  # TODO
         if gt_rgb.dtype == torch.uint8:
             gt_rgb = gt_rgb.float() / 255.0
+        # TODO: linear and wide-gamut color spaces
+        gt_rgb = gt_rgb[..., :3]  # TODO: RGBA
+        gt_rgb = gt_rgb.squeeze(0)
+
         predicted_rgb = outputs["rgb"]
+        predicted_rgb = torch.clip(predicted_rgb, 0.0, 1.0)
 
         combined_rgb = torch.cat([gt_rgb, predicted_rgb], dim=1)
 
@@ -1620,21 +1625,33 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         # metrics
         from torchmetrics.image import PeakSignalNoiseRatio
-        from torchmetrics.image.lpip import \
-            LearnedPerceptualImagePatchSimilarity
+        from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+        from pytorch_msssim import SSIM
+        from torchmetrics.image import StructuralSimilarityIndexMeasure  # used by gsplat, not numerically identical to above
 
-        self.psnr = PeakSignalNoiseRatio(data_range=1.0).to(self.device)
-        self.ssim = SSIM(data_range=1.0, size_average=True, channel=3).to(self.device)
-        self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True).to(self.device)
+        if not hasattr(self, 'psnr'):
+            self.psnr = PeakSignalNoiseRatio(data_range=1.0).cuda()
+            self.ssim = SSIM(data_range=1.0, size_average=True, channel=3).cuda()
+            self.ssim_torchmetrics = StructuralSimilarityIndexMeasure(data_range=1.0).cuda()
+            self.lpips_alex = LearnedPerceptualImagePatchSimilarity(net_type="alex", normalize=True).cuda()
+            self.lpips_vgg = LearnedPerceptualImagePatchSimilarity(net_type="vgg", normalize=False).cuda()
 
+        l1 = torch.abs(gt_rgb - predicted_rgb).mean()
         psnr = self.psnr(gt_rgb, predicted_rgb)
         ssim = self.ssim(gt_rgb, predicted_rgb)
-        lpips = self.lpips(gt_rgb, predicted_rgb)
+        ssim_torchmetrics = self.ssim_torchmetrics(gt_rgb, predicted_rgb)
+        lpips_alex = self.lpips_alex(gt_rgb, predicted_rgb)
+        lpips_vgg = self.lpips_vgg(gt_rgb, predicted_rgb)
 
-        # all of these metrics will be logged as scalars
-        metrics_dict = {"psnr": float(psnr.item()), "ssim": float(ssim)}  # type: ignore
-        metrics_dict["lpips"] = float(lpips)
-        metrics_dict["gaussian_count"] = float(self.num_points)
+        metrics_dict = {
+            "l1": float(l1),
+            "psnr": float(psnr),
+            "ssim_pytorch_msssim": float(ssim),
+            "ssim_torchmetrics": float(ssim_torchmetrics),
+            "lpips_alex": float(lpips_alex),
+            "lpips_vgg": float(lpips_vgg),
+            "gaussian_count": float(self.num_points),
+        }
 
         images_dict = {"img": combined_rgb}
 

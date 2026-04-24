@@ -454,14 +454,39 @@ inline __device__ float dot_1(float2  x_5, float2  y_1)
     return result_5;
 }
 
-inline __device__ float length_0(float2  x_6)
+inline __device__ float dot_2(float4  x_6, float4  y_2)
 {
-    return (F32_sqrt((dot_1(x_6, x_6))));
+    int i_3 = int(0);
+    float result_7 = 0.0f;
+    for(;;)
+    {
+        if(i_3 < int(4))
+        {
+        }
+        else
+        {
+            break;
+        }
+        float result_8 = result_7 + _slang_vector_get_element(x_6, i_3) * _slang_vector_get_element(y_2, i_3);
+        i_3 = i_3 + int(1);
+        result_7 = result_8;
+    }
+    return result_7;
 }
 
-inline __device__ float length_1(float3  x_7)
+inline __device__ float length_0(float2  x_7)
 {
-    return (F32_sqrt((dot_0(x_7, x_7))));
+    return (F32_sqrt((dot_1(x_7, x_7))));
+}
+
+inline __device__ float length_1(float3  x_8)
+{
+    return (F32_sqrt((dot_0(x_8, x_8))));
+}
+
+inline __device__ float length_2(float4  x_9)
+{
+    return (F32_sqrt((dot_2(x_9, x_9))));
 }
 
 inline __device__ DiffPair_float_0 _d_atan2_0(DiffPair_float_0 * dpy_1, DiffPair_float_0 * dpx_2)
@@ -724,11 +749,11 @@ inline __device__ float2  distort_point(float2  uv_3, bool is_fisheye_0, FixedAr
 
 inline __device__ bool undistort_point_0(float2  uv_4, FixedArray<float, 10>  * dist_coeffs_6, int maxiter_0, float2  * uv_undist_0)
 {
-    int i_3 = int(0);
+    int i_4 = int(0);
     float2  q_0 = uv_4;
     for(;;)
     {
-        if(i_3 < maxiter_0)
+        if(i_4 < maxiter_0)
         {
         }
         else
@@ -768,7 +793,7 @@ inline __device__ bool undistort_point_0(float2  uv_4, FixedArray<float, 10>  * 
         float _S187 = r_5.x;
         float _S188 = r_5.y;
         float2  q_1 = q_0 - make_float2 ((_S187 * _S186.rows[int(1)].y - _S188 * _S186.rows[int(0)].y) * inv_det_0, (- _S187 * _S186.rows[int(1)].x + _S188 * _S186.rows[int(0)].x) * inv_det_0);
-        i_3 = i_3 + int(1);
+        i_4 = i_4 + int(1);
         q_0 = q_1;
     }
     *uv_undist_0 = q_0;
@@ -889,9 +914,14 @@ inline __device__ bool unproject_point(float2  uv_6, bool is_fisheye_2, FixedArr
     return true;
 }
 
-inline __device__ float3  normalize_0(float3  x_8)
+inline __device__ float3  normalize_0(float3  x_10)
 {
-    return x_8 / make_float3 (length_1(x_8));
+    return x_10 / make_float3 (length_1(x_10));
+}
+
+inline __device__ float4  normalize_1(float4  x_11)
+{
+    return x_11 / make_float4 (length_2(x_11));
 }
 
 inline __device__ bool generate_ray(float2  uv_7, bool is_fisheye_3, FixedArray<float, 10>  dist_coeffs_9, float3  * raydir_2)
@@ -965,7 +995,7 @@ inline __device__ void _d_mul_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * left_2, DiffP
 
 inline __device__ float3  mul_2(float3  left_3, Matrix<float, 3, 3>  right_3)
 {
-    float3  result_7;
+    float3  result_9;
     int j_0 = int(0);
     for(;;)
     {
@@ -976,25 +1006,25 @@ inline __device__ float3  mul_2(float3  left_3, Matrix<float, 3, 3>  right_3)
         {
             break;
         }
-        int i_4 = int(0);
+        int i_5 = int(0);
         float sum_8 = 0.0f;
         for(;;)
         {
-            if(i_4 < int(3))
+            if(i_5 < int(3))
             {
             }
             else
             {
                 break;
             }
-            float sum_9 = sum_8 + _slang_vector_get_element(left_3, i_4) * _slang_vector_get_element(right_3.rows[i_4], j_0);
-            i_4 = i_4 + int(1);
+            float sum_9 = sum_8 + _slang_vector_get_element(left_3, i_5) * _slang_vector_get_element(right_3.rows[i_5], j_0);
+            i_5 = i_5 + int(1);
             sum_8 = sum_9;
         }
-        *_slang_vector_get_element_ptr(&result_7, j_0) = sum_8;
+        *_slang_vector_get_element_ptr(&result_9, j_0) = sum_8;
         j_0 = j_0 + int(1);
     }
-    return result_7;
+    return result_9;
 }
 
 inline __device__ float3  transform_ray_o(Matrix<float, 3, 3>  R_0, float3  t_0)
@@ -1101,8 +1131,8 @@ inline __device__ void transform_ray_d_vjp(Matrix<float, 3, 3>  R_4, float3  ray
 
 inline __device__ Matrix<float, 3, 3>  compute_3dgut_iscl_rot(float4  quat_2, float3  scale_1)
 {
-    float x_9 = quat_2.y;
-    float x2_2 = x_9 * x_9;
+    float x_12 = quat_2.y;
+    float x2_2 = x_12 * x_12;
     float y2_2 = quat_2.z * quat_2.z;
     float z2_2 = quat_2.w * quat_2.w;
     float xy_2 = quat_2.y * quat_2.z;
@@ -1239,11 +1269,11 @@ inline __device__ void _d_mul_1(DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * left_4, D
 
 inline __device__ float3  mul_3(Matrix<float, 3, 3>  left_5, float3  right_5)
 {
-    float3  result_8;
-    int i_5 = int(0);
+    float3  result_10;
+    int i_6 = int(0);
     for(;;)
     {
-        if(i_5 < int(3))
+        if(i_6 < int(3))
         {
         }
         else
@@ -1261,14 +1291,14 @@ inline __device__ float3  mul_3(Matrix<float, 3, 3>  left_5, float3  right_5)
             {
                 break;
             }
-            float sum_17 = sum_16 + _slang_vector_get_element(left_5.rows[i_5], j_1) * _slang_vector_get_element(right_5, j_1);
+            float sum_17 = sum_16 + _slang_vector_get_element(left_5.rows[i_6], j_1) * _slang_vector_get_element(right_5, j_1);
             j_1 = j_1 + int(1);
             sum_16 = sum_17;
         }
-        *_slang_vector_get_element_ptr(&result_8, i_5) = sum_16;
-        i_5 = i_5 + int(1);
+        *_slang_vector_get_element_ptr(&result_10, i_6) = sum_16;
+        i_6 = i_6 + int(1);
     }
-    return result_8;
+    return result_10;
 }
 
 inline __device__ void _d_cross_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * a_0, DiffPair_vectorx3Cfloatx2C3x3E_0 * b_0, float3  dOut_4)
@@ -1577,20 +1607,21 @@ inline __device__ void map_opaque_triangle(float3  mean_4, float4  quat_4, float
     float _S409 = scale_3.y;
     float sy_0 = (F32_exp((_S409)));
     float sz_0 = scale_3.z - 0.5f * (_S408 + _S409);
-    float x_10 = quat_4.y;
-    float x2_4 = x_10 * x_10;
-    float y2_4 = quat_4.z * quat_4.z;
-    float z2_4 = quat_4.w * quat_4.w;
-    float xy_4 = quat_4.y * quat_4.z;
-    float xz_4 = quat_4.y * quat_4.w;
-    float yz_4 = quat_4.z * quat_4.w;
-    float wx_4 = quat_4.x * quat_4.y;
-    float wy_4 = quat_4.x * quat_4.z;
-    float wz_4 = quat_4.x * quat_4.w;
-    Matrix<float, 3, 3>  _S410 = transpose_0(makeMatrix<float, 3, 3> (1.0f - 2.0f * (y2_4 + z2_4), 2.0f * (xy_4 + wz_4), 2.0f * (xz_4 - wy_4), 2.0f * (xy_4 - wz_4), 1.0f - 2.0f * (x2_4 + z2_4), 2.0f * (yz_4 + wx_4), 2.0f * (xz_4 + wy_4), 2.0f * (yz_4 - wx_4), 1.0f - 2.0f * (x2_4 + y2_4)));
-    *vert0_0 = mul_3(_S410, make_float3 (sx_0, 0.0f, 0.0f)) + mean_4;
-    *vert1_0 = mul_3(_S410, make_float3 (sx_0 * (-0.5f + sz_0), sy_0, 0.0f)) + mean_4;
-    *vert2_0 = mul_3(_S410, make_float3 (sx_0 * (-0.5f - sz_0), - sy_0, 0.0f)) + mean_4;
+    float4  _S410 = normalize_1(quat_4);
+    float x_13 = _S410.y;
+    float x2_4 = x_13 * x_13;
+    float y2_4 = _S410.z * _S410.z;
+    float z2_4 = _S410.w * _S410.w;
+    float xy_4 = _S410.y * _S410.z;
+    float xz_4 = _S410.y * _S410.w;
+    float yz_4 = _S410.z * _S410.w;
+    float wx_4 = _S410.x * _S410.y;
+    float wy_4 = _S410.x * _S410.z;
+    float wz_4 = _S410.x * _S410.w;
+    Matrix<float, 3, 3>  _S411 = transpose_0(makeMatrix<float, 3, 3> (1.0f - 2.0f * (y2_4 + z2_4), 2.0f * (xy_4 + wz_4), 2.0f * (xz_4 - wy_4), 2.0f * (xy_4 - wz_4), 1.0f - 2.0f * (x2_4 + z2_4), 2.0f * (yz_4 + wx_4), 2.0f * (xz_4 + wy_4), 2.0f * (yz_4 - wx_4), 1.0f - 2.0f * (x2_4 + y2_4)));
+    *vert0_0 = mul_3(_S411, make_float3 (sx_0, 0.0f, 0.0f)) + mean_4;
+    *vert1_0 = mul_3(_S411, make_float3 (sx_0 * (-0.5f + sz_0), sy_0, 0.0f)) + mean_4;
+    *vert2_0 = mul_3(_S411, make_float3 (sx_0 * (-0.5f - sz_0), - sy_0, 0.0f)) + mean_4;
     return;
 }
 

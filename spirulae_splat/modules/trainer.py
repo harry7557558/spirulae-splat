@@ -7,6 +7,7 @@ import threading
 import torch
 import time
 from tqdm import tqdm
+from copy import deepcopy
 
 from spirulae_splat.modules.camera import Cameras
 from spirulae_splat.modules.model import SpirulaeSplatModelConfig, SpirulaeSplatModel
@@ -161,16 +162,17 @@ class Trainer:
     ):
         self.config = config
         self.dataparser = SpirulaeSplatDataparser(config.dataparser, config.data)
-        self.dataparser_outputs = self.dataparser.parse()
-        self.dataset = SpirulaeSplatDataset(self.dataparser_outputs)
+        self.dataparser_outputs_train, self.dataparser_outputs_eval = self.dataparser.parse()
+        self.dataset_train = SpirulaeSplatDataset(self.dataparser_outputs_train)
+        self.dataset_eval = SpirulaeSplatDataset(self.dataparser_outputs_eval)
 
         self.datamanager = SpirulaeSplatDataManager(self.config.datamanager, device="cuda")
-        self.datamanager.train_dataset = self.dataset
+        self.datamanager.train_dataset = self.dataset_train
 
         self.model = SpirulaeSplatModel(
             self.config,
-            self.dataparser_outputs['metadata'],
-            self.dataparser_outputs['cameras']
+            self.dataparser_outputs_train['metadata'],
+            self.dataparser_outputs_train['cameras']
         ).cuda()
         self.optimizers = create_optimizers(self.model, self.config.optimizer)
 
@@ -238,8 +240,8 @@ class Trainer:
 
         # dataparser transform
         dataparser_transform_dict = {
-            'transform': self.dataparser_outputs['dataparser_transform'][:3, :].tolist(),
-            'scale': self.dataparser_outputs['dataparser_scale']
+            'transform': self.dataparser_outputs_train['dataparser_transform'][:3, :].tolist(),
+            'scale': self.dataparser_outputs_train['dataparser_scale']
         }
         with open(self.output_dir / "dataparser_transforms.json", "w") as f:
             json.dump(dataparser_transform_dict, f, indent=4)
@@ -249,7 +251,7 @@ class Trainer:
         outputs = self.model.get_outputs(camera)
         outputs['_post_processor'] = lambda tensor, **kwargs: annotate_train_cameras(
             tensor, outputs['depth'], outputs['alpha'],
-            camera, self.model.cameras, self.dataset.thumbnails,
+            camera, self.model.cameras, self.dataset_train.thumbnails,
             relative_scale=self.model.config.relative_scale, **kwargs
         )
         return outputs
@@ -289,6 +291,22 @@ class Trainer:
             self.model.train()
             return self._get_train_loss_dict(*args)
 
+    def _get_eval_metrics_dict(self):
+        inputs = self.datamanager.next_train(0)  # type: List[Tuple[Cameras, Dict]]
+        assert not isinstance(inputs, tuple)
+
+        for i, (camera, batch) in enumerate(inputs):
+            assert i == 0
+            model_outputs = self.model.get_outputs(camera)
+            metrics_dict, img_dict = self.model.get_image_metrics_and_images(model_outputs, batch)
+
+        return metrics_dict
+
+    def get_eval_metrics_dict(self, *args):
+        with self.lock:
+            self.model.eval()
+            return self._get_eval_metrics_dict(*args)
+
     def train(self):
         self.start_time = time.time()
         self.last_step_time = self.start_time
@@ -322,6 +340,38 @@ class Trainer:
                 #     "eta": f"{eta:.1f}s"
                 # })
         self.save_checkpoint(self.config.num_iterations)
+
+    def eval(self):
+        if self.config.dataparser.eval_mode == "all" or len(self.dataset_eval.cameras) == 0:
+            return
+
+        config = deepcopy(self.config.datamanager)
+        config.max_batch_per_epoch = 9**9
+        config.load_depths = False
+        config.load_normals = False
+        config.split_batch = False
+        config.patch_batch_size = None
+        config.deblur_training_images = False
+        config.compute_visibility_masks = False
+        config.cache_images = "disk"
+        self.datamanager = SpirulaeSplatDataManager(config, device="cuda")
+        self.datamanager.train_dataset = self.dataset_eval
+
+        metrics = {}
+        for i in tqdm(range(len(self.dataset_eval.cameras)), desc="Eval", unit="step"):
+            metric_dict = self.get_eval_metrics_dict()
+            for key, value in metric_dict.items():
+                if key not in metrics:
+                    metrics[key] = []
+                metrics[key].append(value)
+        for key, value in [*metrics.items()]:
+            value = sum(value) / len(value)
+            metrics['avg_'+key] = value
+            print(f"{key}: {value}")
+
+        import json
+        with open(self.output_dir / "metrics.json", "w") as f:
+            json.dump(metrics, f, indent=4)
 
     def save_checkpoint(self, step: int) -> None:
         ckpt_path: Path = self.output_dir / f"step-{step:09d}.ckpt"

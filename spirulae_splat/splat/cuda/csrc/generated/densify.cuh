@@ -252,23 +252,23 @@ inline __device__ float3  cross_0(float3  left_2, float3  right_2)
 
 inline __device__ void mcmc_add_noise_triangle(float scaler_1, float min_opacity_1, float3  * mean_1, float3  log_scale_1, float4  quat_1, float opac_1)
 {
-    float4  _S18 = normalize_0(quat_1);
-    float3  _S19 = exp_0(log_scale_1);
-    float _S20 = _S19.x;
-    float sx_0 = (F32_exp((_S20)));
-    float _S21 = _S19.y;
-    float sy_0 = (F32_exp((_S21)));
-    float sz_0 = _S19.z - 0.5f * (_S20 + _S21);
-    float x_10 = _S18.y;
+    float3  _S18 = exp_0(log_scale_1);
+    float _S19 = _S18.x;
+    float sx_0 = (F32_exp((_S19)));
+    float _S20 = _S18.y;
+    float sy_0 = (F32_exp((_S20)));
+    float sz_0 = _S18.z - 0.5f * (_S19 + _S20);
+    float4  _S21 = normalize_0(normalize_0(quat_1));
+    float x_10 = _S21.y;
     float x2_1 = x_10 * x_10;
-    float y2_1 = _S18.z * _S18.z;
-    float z2_1 = _S18.w * _S18.w;
-    float xy_1 = _S18.y * _S18.z;
-    float xz_1 = _S18.y * _S18.w;
-    float yz_1 = _S18.z * _S18.w;
-    float wx_1 = _S18.x * _S18.y;
-    float wy_1 = _S18.x * _S18.z;
-    float wz_1 = _S18.x * _S18.w;
+    float y2_1 = _S21.z * _S21.z;
+    float z2_1 = _S21.w * _S21.w;
+    float xy_1 = _S21.y * _S21.z;
+    float xz_1 = _S21.y * _S21.w;
+    float yz_1 = _S21.z * _S21.w;
+    float wx_1 = _S21.x * _S21.y;
+    float wy_1 = _S21.x * _S21.z;
+    float wz_1 = _S21.x * _S21.w;
     Matrix<float, 3, 3>  _S22 = transpose_0(makeMatrix<float, 3, 3> (1.0f - 2.0f * (y2_1 + z2_1), 2.0f * (xy_1 + wz_1), 2.0f * (xz_1 - wy_1), 2.0f * (xy_1 - wz_1), 1.0f - 2.0f * (x2_1 + z2_1), 2.0f * (yz_1 + wx_1), 2.0f * (xz_1 + wy_1), 2.0f * (yz_1 - wx_1), 1.0f - 2.0f * (x2_1 + y2_1)));
     float3  vert0_0 = mul_1(_S22, make_float3 (sx_0, 0.0f, 0.0f)) + *mean_1;
     float3  vert1_0 = mul_1(_S22, make_float3 (sx_0 * (-0.5f + sz_0), sy_0, 0.0f)) + *mean_1;

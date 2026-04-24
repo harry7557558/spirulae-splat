@@ -56,6 +56,7 @@ def entrypoint():
     thread.start()
 
     trainer.train()
+    trainer.eval()
 
 if __name__ == "__main__":
     entrypoint()

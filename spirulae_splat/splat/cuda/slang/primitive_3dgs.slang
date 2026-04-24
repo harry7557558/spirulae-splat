@@ -289,8 +289,8 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
 
     bool is_valid = true;
     if (eval3d) {
-        // SigmaPoints sigmas = world_gaussian_sigma_points(mean, exp(scale), normalize(quat), R, t);
-        SigmaPoints sigmas = world_gaussian_sigma_points(mean, exp(scale), quat, R, t);
+        SigmaPoints sigmas = world_gaussian_sigma_points(mean, exp(scale), normalize(quat), R, t);
+        // SigmaPoints sigmas = world_gaussian_sigma_points(mean, exp(scale), quat, R, t);
 
         if (camera_model == CameraModelType::PINHOLE)
             is_valid &= persp_proj_3dgs_ut<assume_valid>(
@@ -310,8 +310,8 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
         float3x3 covar;
         {
             // compute from quaternions and scales
-            // quat_scale_to_covar(normalize(quat), exp(scale), covar);
-            quat_scale_to_covar(quat, exp(scale), covar);
+            quat_scale_to_covar(normalize(quat), exp(scale), covar);
+            // quat_scale_to_covar(quat, exp(scale), covar);  // quat is already normalized but can affect gradient
         }
         float3x3 covar_c;
         covarW2C(R, covar, covar_c);
