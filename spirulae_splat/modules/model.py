@@ -295,7 +295,7 @@ class SpirulaeSplatModelConfig:
     """Weight for normal supervision by comparing normal from rendered depth with normal from depth predicted by a foundation model"""
 
     # Validation
-    overfit_score_aggregation_mode: Literal['max', 'min', 'mean'] = 'max'
+    overfit_score_aggregation_mode: Literal['max', 'min', 'mean'] = 'min'
     """Mode to aggregate multiple overfitting objectives.
         Use max for more aggressive early stopping, min for more conservative early stopping, and mean for something in between."""
     validation_loss_average_window: int = 500
@@ -895,7 +895,7 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         camera_downscale = self._get_downscale_factor()
         if camera_downscale > 1:
-            camera.rescale_output_resolution(1 / camera_downscale)
+            camera.rescale(1 / camera_downscale)
 
         # TODO: separate different sizes/intrins
         W, H = int(camera.width[0].item()), int(camera.height[0].item())

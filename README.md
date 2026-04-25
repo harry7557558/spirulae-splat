@@ -88,7 +88,7 @@ Exposure/WB correction
 
 Distorted/Fisheye images
 - Images with equidistant fisheye camera model (as well as general distorted images) are automatically handled using 3DGUT
-- `--model.max_screen_size 0.15` is enabled by default for compatibility conventional viewers. Increase it for potentially better quality in built-in viewer, decrease it for better compatibility with other viewers (e.g. SuperSplat viewer, especially if you notice spikes or large floaters)
+- `--model.max_screen_size 0.3` is enabled by default for compatibility conventional viewers. Increase it for potentially better quality in built-in viewer, decrease it for better compatibility with other viewers (e.g. SuperSplat viewer, especially if you notice spikes or large floaters)
 - To fall back to a Fisheye-GS style method: set `--model.primitive` to `3dgs` (not anti-aliased), or `mip` (anti-aliased).
 - Supported camera models: perspective, equidistant fisheye (supports >180° fov); Supported distortion parameters: k1-k4, p1, p2, sx1, sy1, b1, b2. For better reliability, use `scripts/process_data_(colmap|metashape).py` (instead of `ns-process-data`) to process data.
 
