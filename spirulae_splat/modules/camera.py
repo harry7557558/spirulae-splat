@@ -112,6 +112,8 @@ class Cameras:
             width = torch.full((), width).repeat(num_cameras)
 
         # camera type
+        if (isinstance(camera_type, list) or isinstance(camera_type, tuple)) and len(camera_type) == 1:
+            camera_type = camera_type[0]
         if isinstance(camera_type, str):
             camera_type = [camera_type] * num_cameras
         else:

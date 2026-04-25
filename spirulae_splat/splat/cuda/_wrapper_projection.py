@@ -111,6 +111,14 @@ def scatter_add(ref_tensor: Tensor, tensor: Tensor, indices: Tensor):
     return v_tensor
 
 
+def scatter_max(ref_tensor: Tensor, tensor: Tensor, indices: Tensor):
+    v_tensor = torch.zeros_like(ref_tensor)
+    _make_lazy_cuda_func("inplace_scatter_max")(
+        indices, tensor, v_tensor
+    )
+    return v_tensor
+
+
 class _Index(torch.autograd.Function):
     @staticmethod
     def forward(

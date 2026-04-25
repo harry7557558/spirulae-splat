@@ -38,6 +38,7 @@ __global__ void intersect_tile_kernel(
     const uint32_t I,  // or 1 in packed mode
     const uint32_t N,  // or nnz in packed mode
     const int32_t *__restrict__ image_ids,  // [nnz], packed mode only
+    const float4* __restrict__ intrins,
     const float4 *__restrict__ aabb_buffer,  // [..., N, 4], int32, xyxy in pixels
     const float *__restrict__ depths_buffer,  // [..., N]
     const int64_t *__restrict__ cum_tiles_per_splat, // [..., N], optional for counting pass
@@ -107,7 +108,8 @@ __global__ void intersect_tile_kernel(
     }
 
     // save radii
-    float radius = 0.5f * fmaxf((float)(xmax - xmin), (float)(ymax - ymin));
+    float4 intrin = intrins[iid];
+    float radius = 0.5f * fmaxf((float)(xmax - xmin) / intrin.x, (float)(ymax - ymin) / intrin.y);
     atomicMax(&radii[idx % N], radius);
 }
 
@@ -352,6 +354,7 @@ std::tuple<
     at::Tensor aabb,  // [..., N, 4], float32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
     const uint32_t I,
+    at::Tensor intrins,
     const uint32_t image_width,
     const uint32_t image_height,
     std::optional<at::Tensor> image_ids
@@ -382,6 +385,7 @@ std::tuple<
         packed ? 1 : I,
         N,
         nullptr,  // image_ids
+        nullptr,  // intrins
         reinterpret_cast<const float4 *>(aabb.data_ptr<float>()),
         depths.data_ptr<float>(),
         nullptr,  // cum_tiles_per_splat
@@ -428,6 +432,7 @@ std::tuple<
         packed ? 1 : I,
         N,
         image_ids.has_value() ? image_ids.value().data_ptr<int32_t>() : nullptr,
+        (float4*)intrins.data_ptr<float>(),
         reinterpret_cast<const float4 *>(aabb.data_ptr<float>()),
         depths.data_ptr<float>(),
         reinterpret_cast<const int64_t *>(cum_tiles_per_splat.data_ptr<int64_t>()),
@@ -561,6 +566,7 @@ std::tuple<
         aabb,
         depths,
         I,
+        intrins,
         image_width,
         image_height,
         std::nullopt
@@ -623,12 +629,14 @@ std::tuple<
     const uint32_t I,
     const uint32_t image_width,
     const uint32_t image_height,
-    typename SplatPrimitive::Screen::TensorTuple splats_tuple
+    typename SplatPrimitive::Screen::TensorTuple splats_tuple,
+    const at::Tensor intrins
 ) {
     auto [isect_ids, flatten_ids, offsets, radii] = do_intersect_tile_generic(
         aabb,
         depths,
         I,
+        intrins,
         image_width,
         image_height,
         std::nullopt
@@ -699,7 +707,8 @@ std::tuple<
         I,
         image_width,
         image_height,
-        splats
+        splats,
+        intrins
     );
 }
 
@@ -727,7 +736,8 @@ std::tuple<
         I,
         image_width,
         image_height,
-        splats
+        splats,
+        intrins
     );
 }
 

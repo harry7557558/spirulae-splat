@@ -26,6 +26,7 @@ std::tuple<
     at::Tensor aabb,  // [..., N, 4], float32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
     const uint32_t I,
+    at::Tensor intrins,
     const uint32_t image_width,
     const uint32_t image_height,
     std::optional<at::Tensor> image_ids

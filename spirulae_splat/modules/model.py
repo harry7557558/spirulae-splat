@@ -49,6 +49,7 @@ from spirulae_splat.splat.cuda._wrapper_per_pixel import (
     get_color_transform_matrix,
     _make_lazy_cuda_func
 )
+from spirulae_splat.splat.cuda._wrapper_projection import scatter_max
 from spirulae_splat.splat.cuda import (
     svhash_create_initial_volume,
     svhash_get_voxels
@@ -169,7 +170,7 @@ class SpirulaeSplatModelConfig:
     """if a gaussian is more than this fraction of screen space, relocate it
         Useful for fisheye with 3DGUT, may drop PSNR for conventional cameras
         For likely better quality, use max_screen_size instead"""
-    max_screen_size: float = 0.15
+    max_screen_size: float = 0.3
     """if a gaussian is more than this fraction of screen space, clip scale and increase opacity
         Intended to be an MCMC-friendly alternative of relocate_screen_size"""
     max_screen_size_clip_hardness: float = 1.5
@@ -867,6 +868,9 @@ class SpirulaeSplatModel(torch.nn.Module):
     def forward(self):
         raise NotImplementedError()
 
+    def clear_info(self):
+        self.info = {}
+
     def get_outputs(self, camera: Cameras, val: bool=False) -> Dict[str, Union[torch.Tensor, List]]:
         """Takes in a camera and returns a dictionary of outputs."""
 
@@ -1131,16 +1135,21 @@ class SpirulaeSplatModel(torch.nn.Module):
         depths = meta["depths"]
 
         if self.training:
-            self.info = {
+            radii = scatter_max(self.opacities.flatten(), radii, meta["gaussian_ids"])
+            if 'radii' in self.info:
+                self.info['radii'] = torch.fmax(self.info['radii'], radii)
+            else:
+                self.info['radii'] = radii
+
+            self.info.update({
                 "width": kwargs["actual_width"],
                 "height": kwargs["actual_height"],
                 "n_cameras": len(camera),
                 "n_train": self.num_train_data,
-                "radii": radii,
                 "means2d": means2d,
                 "depths": depths,
                 "backward_info": meta['backward_info'],
-            }
+            })
             if 'patch_offsets' in camera.metadata:
                 self.info['patch_offsets'] = camera.metadata['patch_offsets']
             if 'actual_images_per_batch' in camera.metadata:

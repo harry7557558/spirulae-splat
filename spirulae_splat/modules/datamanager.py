@@ -469,15 +469,16 @@ class SpirulaeSplatDataManager:
                 n = len(batch['image'])
                 results = []
                 for i in range(n):
+                    slice_value = lambda value: value[i:i+1] if (isinstance(value, torch.Tensor) or isinstance(value, list)) and len(value) == n else value
                     camera_i = {}
                     for key, value in camera.items():
-                        camera_i[key] = value[i:i+1] if isinstance(value, torch.Tensor) and len(value) == n else value
+                        camera_i[key] = slice_value(value)
                     camera_i['metadata'] = {}
                     for key, value in camera.get('metadata', '').items():
-                        camera_i['metadata'][key] = value[i:i+1] if isinstance(value, torch.Tensor) and len(value) == n else value
+                        camera_i['metadata'][key] = slice_value(value)
                     batch_i = {}
                     for key, value in batch.items():
-                        batch_i[key] = value[i:i+1] if isinstance(value, torch.Tensor) and len(value) == n else value
+                        batch_i[key] = slice_value(value)
                     results.extend(pack_batch(camera_i, batch_i, max_batch_size, _no_split_batch=True))
                 return results
 

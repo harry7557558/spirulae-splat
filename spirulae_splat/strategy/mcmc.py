@@ -110,32 +110,23 @@ class MCMCStrategy(Strategy):
             state["radii"] = torch.zeros(n_gaussian, device=device)
 
         # update the running state
-        if packed:
-            # grads is [nnz, 2]
-            gs_ids = info["gaussian_ids"]  # [nnz]
-
-            normalized_radii = info["radii"] / float(max(info["width"], info["height"]))
-            # TODO: scatter max
-            state["radii"][gs_ids] = torch.fmax(state["radii"][gs_ids], normalized_radii)
-        else:
-            # grads is [C, N, 2], radii is [N]
-            normalized_radii = info["radii"] / float(max(info["width"], info["height"]))  # [N]
-            state["radii"] = torch.fmax(state["radii"], normalized_radii)
-            sel = normalized_radii > 0  # [N]
-            gs_ids = torch.where(sel)[0]  # [nnz]
-            normalized_radii = normalized_radii[sel]  # [nnz]
+        radii = info["radii"]  # [N]
+        state["radii"] = torch.fmax(state["radii"], radii[:len(state["radii"])])
+        sel = radii > 0  # [N]
+        gs_ids = torch.where(sel)[0]  # [nnz]
+        radii = radii[sel]  # [nnz]
 
         # large splats in screen space
         # clip scale while increase opacity to encourage being relocated to
         if np.isfinite(self.max_scale2d) and gs_ids.numel() > 0:
             # TODO: optionally, actually do anisotropic scale in 3d
-            oversize_factor = torch.clip(normalized_radii / self.max_scale2d, min=1.0, max=self.max_scale2d_clip_hardness)
+            oversize_factor = torch.clip(radii / self.max_scale2d, min=1.0, max=self.max_scale2d_clip_hardness)
             oversize_factor = torch.log(oversize_factor).unsqueeze(-1)
             scales, opacities = get_param_attr(params, 'scales'), get_param_attr(params, 'opacities')
             scales[gs_ids] -= oversize_factor
             opacities[gs_ids] += scales.shape[-1] * oversize_factor
             opacities[gs_ids] = torch.clip(opacities[gs_ids], max=5.0)  # sigmoid(5.0)=0.993
-            state["radii"][gs_ids] *= (normalized_radii <= self.max_scale2d).float()
+            state["radii"][gs_ids] *= (radii <= self.max_scale2d).float()
 
         # large splats in world space
         # clip scale, without increasing opacity (which causes problems with background removal)

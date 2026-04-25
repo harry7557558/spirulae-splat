@@ -270,6 +270,7 @@ class Trainer:
             train_inputs, val_inputs = train_inputs[0], val_inputs[0]
             inputs = [((train_inputs[0], val_inputs[0]), (train_inputs[1], val_inputs[1]))]
 
+        self.model.clear_info()
         for i, (camera, batch) in enumerate(inputs):
             # torch.cuda.empty_cache()
             model_outputs = self.model.get_outputs(camera)
@@ -319,7 +320,7 @@ class Trainer:
                 for optim in self.optimizers.values():
                     optim.zero_grad()
                 self.model.step_cb(self.optimizers, step)
-                model_outputs, loss_dict, metrics_dict = self.get_train_loss_dict(0)
+                model_outputs, loss_dict, metrics_dict = self.get_train_loss_dict(step)
                 loss = torch.stack([x for x in loss_dict.values() if isinstance(x, torch.Tensor)]).sum()
                 loss.backward()
                 for optim in self.optimizers.values():
@@ -424,8 +425,6 @@ class TrainerConfigPatched(TrainerConfig):
         # use_bilateral_grid=False,
         # use_bilateral_grid_for_geometry=False,
         alpha_reg_weight=0.0,
-        max_screen_size=0.15,
-        max_screen_size_clip_hardness=1.5,
     ))
     optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)
 
@@ -447,7 +446,6 @@ class TrainerConfigTriangle(TrainerConfig):
         # supersampling=2,
         min_opacity=0.005,
         noise_lr=5e5,  # or 0.0
-        max_screen_size=0.15,
         supervision_warmup=0,
         depth_supervision_weight=0.0,
         normal_supervision_weight=0.04,
@@ -496,7 +494,6 @@ class TrainerConfigTrianglePatched(TrainerConfig):
         # use_bilateral_grid=False,
         # use_bilateral_grid_for_geometry=False,
         alpha_reg_weight=0.0,
-        max_screen_size=0.15,
         max_screen_size_clip_hardness=1.5,
     ))
     optimizer: dict = field(default_factory=lambda: _TRIANGLE_OPTIMIZERS)
@@ -557,7 +554,7 @@ _MODEL_PRESET_RICH_TEXTURE = dict(
     use_edge_aware_score=True,
     relocate_heuristic_weight=1.0,
     use_long_axis_split=True,
-    max_screen_size=0.10,
+    max_screen_size=0.2,  # default 0.3
 )
 _MODEL_PRESET_NO_COLOR_SHIFT = dict(
     use_bilateral_grid=True,

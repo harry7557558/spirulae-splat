@@ -431,7 +431,7 @@ def rasterization(
     isect_ids, flatten_ids, isect_offsets, radii = _make_lazy_cuda_func(f"intersect_tile")(
         aabb_xyxy,
         depths,
-        I, width, height,
+        I, intrins, width, height,
         image_ids if packed else None,
         # (*proj_splats, None) if primitive in ["3dgs", "mip"] else proj_splats,
         # viewmats,
@@ -441,7 +441,6 @@ def rasterization(
     )
     isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
 
-    # TODO: these should be aggregated in split batch mode
     meta.update(
         {
             "radii": radii,
@@ -449,8 +448,8 @@ def rasterization(
             "tile_height": tile_height,
             # "tiles_per_gauss": tiles_per_gauss,
             # "isect_ids": isect_ids,
-            "flatten_ids": flatten_ids,
-            "isect_offsets": isect_offsets,
+            # "flatten_ids": flatten_ids,
+            # "isect_offsets": isect_offsets,
             "width": width,
             "height": height,
             "tile_size": TILE_SIZE,
