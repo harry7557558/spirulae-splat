@@ -108,7 +108,7 @@ class SpirulaeSplatModelConfig:
     # Training loss
     relative_scale: Optional[float] = None
     """Manually set scale when a scene is poorly scaled, i.e. increase this for large datasets.
-        This does not make difference for presets not labeled "low-texture"."""
+        If not set, will use a scale agnostic optimizer. To prevent this, set it to 1.0."""
     l2_lambda: float = 0.0
     """Weight of L2 loss, default 0.0"""
     ssim_lambda: float = 0.2
@@ -1013,45 +1013,6 @@ class SpirulaeSplatModel(torch.nn.Module):
         if val:
             splat_params = tuple([(p.detach() if isinstance(p, torch.Tensor) else p) for p in splat_params])
 
-        # setup override required for optimizers
-        # TODO: more reliable way than setattr tensor?
-        optim_info = {}
-        for key, value in self.gauss_params.items():
-            if isinstance(value, torch.Tensor) and key in self.gauss_params:
-                optim_info[key] = value
-        for key, value in self.gauss_params.items():
-            if isinstance(value, torch.Tensor) and key in self.gauss_params:
-                if not hasattr(value, 'optim_info'):  # can happen during eval
-                    value.optim_info = {}
-                value.optim_info.update(optim_info)
-
-        if "quats" in self.gauss_params:
-            self.quats.optim_info['optimizer_override'] = "fused_adam_riemannian_quat"
-        if self.config.splat_color_is_linear:
-            if "features_dc" in self.gauss_params and 'opacities' in self.gauss_params:
-                # self.features_dc.optim_info['optimizer_override'] = "fused_adam_linear_rgb_optim"
-                self.features_dc.optim_info['optimizer_override'] = "fused_adamtr_linear_rgb_optim"
-            if "features_sh" in self.gauss_params and "features_dc" in self.gauss_params and 'opacities' in self.gauss_params:
-                self.features_sh.optim_info['optimizer_override'] = "fused_adamtr_linear_rgb_sh_optim"
-        elif self.config.splat_color_gamut is not None:
-            if "features_dc" in self.gauss_params and 'opacities' in self.gauss_params:
-                self.features_dc.optim_info['optimizer_override'] = "fused_adamtr_rgb_optim"
-            if "features_sh" in self.gauss_params and "features_dc" in self.gauss_params and 'opacities' in self.gauss_params:
-                self.features_sh.optim_info['optimizer_override'] = "fused_adamtr_rgb_sh_optim"
-        if self.config.optimizer_offload == "sh" and "features_sh" in self.gauss_params:
-            if hasattr(self.features_sh, "optimizer_override"):
-                raise ValueError("Optimizer offloading is not supported for linear color space")
-            self.features_sh.optim_info['optimizer_offload'] = True
-        elif self.config.optimizer_offload == "all":
-            for key, value in self.gauss_params.items():
-                if isinstance(value, torch.Tensor) and not (hasattr(value, 'optim_info') and "optimizer_override" in value.optim_info):
-                    value.optim_info['optimizer_offload'] = True
-            if self.config.use_bilateral_grid:
-                self.training_losses.bil_grids.grids.optim_info = {'optimizer_offload': True}
-            if self.config.use_bilateral_grid_for_geometry:
-                self.training_losses.bil_grids_depth.grids.optim_info = {'optimizer_offload': True}
-                self.training_losses.bil_grids_normal.grids.optim_info = {'optimizer_offload': True}
-
         # rendering
         use_bvh = self.config.use_bvh and self.training and not val
         rgbd, Ts, meta = rasterization(
@@ -1230,6 +1191,50 @@ class SpirulaeSplatModel(torch.nn.Module):
             outputs["camera_intrins"] = kwargs
         # if not self.training and True:
         #     outputs['ray'] = merge_tiles(meta['intersection_count'].float().reshape(-1, 1, 1, 1).repeat(1, TILE_SIZE, TILE_SIZE, 1))
+
+        # setup override required for optimizers
+        # TODO: more reliable way than setattr tensor?
+        if self.training:
+            optim_info = {
+                'radii': radii,
+            }
+            for key, value in self.gauss_params.items():
+                if isinstance(value, torch.Tensor) and key in self.gauss_params:
+                    optim_info[key] = value
+            for key, value in self.gauss_params.items():
+                if isinstance(value, torch.Tensor) and key in self.gauss_params:
+                    if not hasattr(value, 'optim_info'):  # can happen during eval
+                        value.optim_info = {}
+                    value.optim_info.update(optim_info)
+
+            if self.config.relative_scale is None and "means" in self.gauss_params:
+                self.means.optim_info['optimizer_override'] = "fused_adam_scale_agnostic_mean"
+            if "quats" in self.gauss_params:
+                self.quats.optim_info['optimizer_override'] = "fused_adam_riemannian_quat"
+            if self.config.splat_color_is_linear:
+                if "features_dc" in self.gauss_params and 'opacities' in self.gauss_params:
+                    # self.features_dc.optim_info['optimizer_override'] = "fused_adam_linear_rgb_optim"
+                    self.features_dc.optim_info['optimizer_override'] = "fused_adamtr_linear_rgb_optim"
+                if "features_sh" in self.gauss_params and "features_dc" in self.gauss_params and 'opacities' in self.gauss_params:
+                    self.features_sh.optim_info['optimizer_override'] = "fused_adamtr_linear_rgb_sh_optim"
+            elif self.config.splat_color_gamut is not None:
+                if "features_dc" in self.gauss_params and 'opacities' in self.gauss_params:
+                    self.features_dc.optim_info['optimizer_override'] = "fused_adamtr_rgb_optim"
+                if "features_sh" in self.gauss_params and "features_dc" in self.gauss_params and 'opacities' in self.gauss_params:
+                    self.features_sh.optim_info['optimizer_override'] = "fused_adamtr_rgb_sh_optim"
+            if self.config.optimizer_offload == "sh" and "features_sh" in self.gauss_params:
+                if hasattr(self.features_sh, "optimizer_override"):
+                    raise ValueError("Optimizer offloading is not supported for linear color space")
+                self.features_sh.optim_info['optimizer_offload'] = True
+            elif self.config.optimizer_offload == "all":
+                for key, value in self.gauss_params.items():
+                    if isinstance(value, torch.Tensor) and not (hasattr(value, 'optim_info') and "optimizer_override" in value.optim_info):
+                        value.optim_info['optimizer_offload'] = True
+                if self.config.use_bilateral_grid:
+                    self.training_losses.bil_grids.grids.optim_info = {'optimizer_offload': True}
+                if self.config.use_bilateral_grid_for_geometry:
+                    self.training_losses.bil_grids_depth.grids.optim_info = {'optimizer_offload': True}
+                    self.training_losses.bil_grids_normal.grids.optim_info = {'optimizer_offload': True}
 
         # return outputs
 

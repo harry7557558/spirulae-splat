@@ -600,7 +600,7 @@ class TrainerConfigOpenLowTexture(TrainerConfig):
         **_MODEL_PRESET_LOW_TEXTURE,
         **_MODEL_PRESET_OPEN,
         **_MODEL_PRESET_NO_COLOR_SHIFT,
-        relative_scale=10.0,
+        # relative_scale=10.0,
     ))
     optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)
 
@@ -655,6 +655,7 @@ class TrainerConfigAcademicBaseline(TrainerConfig):
     ))
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
         primitive="3dgs",
+        relative_scale=1.0,
         background_color="black",
         train_background_color=False,
         use_bilateral_grid=False,

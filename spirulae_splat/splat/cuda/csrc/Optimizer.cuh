@@ -99,6 +99,24 @@ void fused_newton_multi(
 );
 
 
+void fused_adam_scale_agnostic_mean(
+    at::Tensor param,
+    at::Tensor grad,
+    at::Tensor exp_avg,
+    at::Tensor exp_avg_sq,
+    at::Tensor scales,
+    at::Tensor quats,
+    at::Tensor opacities,
+    at::Tensor radii,
+    float lr,
+    float beta1,
+    float beta2,
+    float eps,
+    float eps_tr,
+    int step
+);
+
+
 void fused_3dgs2tr_mean_optim(
     at::Tensor means,
     at::Tensor vr_means,

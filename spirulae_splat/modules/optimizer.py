@@ -136,6 +136,16 @@ class FusedAdam(Optimizer):
                 elif p.optim_info['optimizer_override'] in ["fused_adamtr_linear_rgb_sh_optim", "fused_adamtr_rgb_sh_optim"]:
                     additional_params = [p.optim_info['features_dc'], p.optim_info['opacities']]
                     eps_params.append(eps_tr)
+                elif p.optim_info['optimizer_override'] in ["fused_adam_scale_agnostic_mean"]:
+                    scales = p.optim_info['scales']
+                    radii = p.optim_info['radii']
+                    # if hasattr(p, 'optim_info') and 'num_splats' in p.optim_info:
+                    #     scales = scales[:p.optim_info['num_splats']]
+                    #     radii = radii[:p.optim_info['num_splats']]
+                    # additional_params = [scales - scales.mean(), p.optim_info['quats'], p.optim_info['opacities'], radii / radii.mean()]
+                    additional_params = [scales, p.optim_info['quats'], p.optim_info['opacities'], radii]
+                    # print(torch.median((torch.exp(scales)/radii.unsqueeze(-1).repeat(1,3))[radii>0]))  # 0.2-0.3 for Mip-NeRF 360
+                    eps_params.append(eps_tr)
 
                 _make_lazy_cuda_func(p.optim_info['optimizer_override'])(
                     p[:p.optim_info['num_splats']] if hasattr(p, 'optim_info') and 'num_splats' in p.optim_info else p,

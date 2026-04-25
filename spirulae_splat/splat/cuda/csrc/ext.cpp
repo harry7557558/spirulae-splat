@@ -183,6 +183,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fused_adam_riemannian_quat", &fused_adam_riemannian_quat);
     m.def("fused_newton", &fused_newton);
     m.def("fused_newton_multi", &fused_newton_multi);
+    m.def("fused_adam_scale_agnostic_mean", &fused_adam_scale_agnostic_mean);
     m.def("fused_3dgs2tr_mean_optim", &fused_3dgs2tr_mean_optim);
     m.def("fused_3dgs2tr_scale_optim", &fused_3dgs2tr_scale_optim);
     m.def("fused_3dgs2tr_color_optim", &fused_3dgs2tr_color_optim);

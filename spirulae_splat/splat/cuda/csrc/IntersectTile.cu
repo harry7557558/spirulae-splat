@@ -109,7 +109,10 @@ __global__ void intersect_tile_kernel(
 
     // save radii
     float4 intrin = intrins[iid];
-    float radius = 0.5f * fmaxf((float)(xmax - xmin) / intrin.x, (float)(ymax - ymin) / intrin.y);
+    // float radius = 0.5f * fmaxf((float)(xmax - xmin) / intrin.x, (float)(ymax - ymin) / intrin.y);
+    const float image_width = (float)(tile_width*TILE_SIZE);
+    const float image_height = (float)(tile_height*TILE_SIZE);
+    float radius = 0.5f * fmaxf((float)(xmax - xmin) / fminf(intrin.x, image_width), (float)(ymax - ymin) / fminf(intrin.y, image_height));
     atomicMax(&radii[idx % N], radius);
 }
 
