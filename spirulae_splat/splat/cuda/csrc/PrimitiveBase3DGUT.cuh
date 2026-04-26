@@ -406,8 +406,8 @@ struct Base3DGUT::Screen {
     }
 
     __device__ __forceinline__ float evaluate_alpha(float3 ray_o, float3 ray_d) {
-        if (dot(mean-ray_o, ray_d) <= 0.0f)
-            return 0.0;
+        // if (dot(mean-ray_o, ray_d) <= 0.0f)
+        //     return 0.0;
         return SlangProjectionUtils::evaluate_alpha_3dgs(
             mean, iscl_rot, opacity,
             ray_o, ray_d
@@ -419,10 +419,10 @@ struct Base3DGUT::Screen {
         float3 &v_ray_o, float3 &v_ray_d
     ) {
         Screen v_splat = Screen::zero();
-        if (dot(mean-ray_o, ray_d) <= 0.0f) {
-            v_ray_o = v_ray_d = make_float3(0.f);
-            return v_splat;
-        }
+        // if (dot(mean-ray_o, ray_d) <= 0.0f) {
+        //     v_ray_o = v_ray_d = make_float3(0.f);
+        //     return v_splat;
+        // }
         SlangProjectionUtils::evaluate_alpha_3dgs_vjp(
             mean, iscl_rot, opacity,
             ray_o, ray_d, v_alpha,

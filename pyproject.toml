@@ -9,6 +9,8 @@ dynamic = ["description", "dependencies"]
 
 [project.scripts]
 spirulae-train = "spirulae_splat.ss_trainer:entrypoint"
+spirulae-benchmark = "spirulae_splat.ss_benchmark:entrypoint"
 
 [tool.poetry.scripts]
 spirulae-train = "spirulae_splat.ss_trainer:entrypoint"
+spirulae-benchmark = "spirulae_splat.ss_benchmark:entrypoint"

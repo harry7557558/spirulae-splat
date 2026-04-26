@@ -172,6 +172,7 @@ setup(
         "rawpy",
         "pytorch-msssim",
         "typing_extensions",
+        "tabulate",
     ] + [
         "fused_bilagrid @ git+https://github.com/harry7557558/fused-bilagrid.git@dev",
     ] * no_fused_bilagrid,

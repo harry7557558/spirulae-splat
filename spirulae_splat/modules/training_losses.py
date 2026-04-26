@@ -740,6 +740,7 @@ class SplatTrainingLosses(torch.nn.Module):
             pred_rgb = rgb_to_srgb(pred_rgb, self.config.splat_color_is_linear, color_matrix)
 
         # edge detector to guide densification
+        # TODO: multi resolution
         accum_weight_map = None
         if self.config.use_edge_aware_score and self.config.relocate_heuristic_weight != 0.0:
             accum_weight_map = detect_edge(gt_rgb)
@@ -848,13 +849,14 @@ class SplatTrainingLosses(torch.nn.Module):
         for scale in range(0, self.config.num_loss_scales+1):
 
             # per pixel losses
+            compute_loss_map = self.config.use_loss_map or (self.config.compute_hessian_diagonal is not None)
             losses_pooled, ssim_pooled, loss_map_pooled = _ComputePerPixelLosses.apply(
                 *all_images[scale],
                 loss_weights,
                 meta.get("num_train_data", -1),
                 camera.metadata.get('cam_idx', None),
-                self.config.compute_hessian_diagonal is not None,
-                w_ssim if self.config.compute_hessian_diagonal else None,
+                compute_loss_map,
+                w_ssim if compute_loss_map else None,
             )
             ssim_loss_pooled = 1.0 - ssim_pooled
 
@@ -895,6 +897,9 @@ class SplatTrainingLosses(torch.nn.Module):
         if accum_weight_map is not None:
             if 'backward_info' in outputs:
                 outputs['backward_info']['accum_weight_map'] = accum_weight_map
+        elif self.config.relocate_heuristic_weight != 0.0 and loss_map is not None:
+            if 'backward_info' in outputs:
+                outputs['backward_info']['accum_weight_map'] = loss_map
         # if loss_map is not None and self.step % 100 == 0:
         #     import matplotlib.pyplot as plt
         #     plt.imshow(loss_map[0].detach().cpu().numpy())

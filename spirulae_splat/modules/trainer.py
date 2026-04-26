@@ -663,6 +663,7 @@ class TrainerConfigAcademicBaseline(TrainerConfig):
         use_ppisp=False,
         relocate_heuristic_weight=0.0,
         use_edge_aware_score=False,
+        use_loss_map=False,
         use_long_axis_split=False,
         max_screen_size=float('inf'),
         suppress_initial_scales=False,

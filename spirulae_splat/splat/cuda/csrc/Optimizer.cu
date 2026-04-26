@@ -587,7 +587,6 @@ __global__ void fused_adam_scale_agnostic_mean_kernel(
     float3 log_scale = scales[idx];
     float4 quat = quats[idx];
     float opac = opacities[idx];
-    float inv_radius = 4.0f / (radii[idx] + (eps * (float)numel));
     float3 sqrt_scale = float3{expf(0.5f*log_scale.x), expf(0.5f*log_scale.y), expf(0.5f*log_scale.z)};
     quat = normalize(quat);
     opac = 1.0f / (1.0f + __expf(-opac));
@@ -596,14 +595,20 @@ __global__ void fused_adam_scale_agnostic_mean_kernel(
     Matrix<float, 3, 3> covar;
     SlangProjectionUtils::quat_scale_to_covar(quat, sqrt_scale*sqrt_scale, &covar);
 
-    float3 v_mean_scaled = float3{dot(sqrt_covar[0], v_mean), dot(sqrt_covar[1], v_mean), dot(sqrt_covar[2], v_mean)} * inv_radius;
-    g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean_scaled;
-    g2_mean = beta2 * g2_mean + (1.f - beta2) * v_mean*v_mean;
+    float3 v_mean_scaled_num = float3{dot(sqrt_covar[0], v_mean), dot(sqrt_covar[1], v_mean), dot(sqrt_covar[2], v_mean)};
+    float v_mean_scaled_den = radii[idx] * 0.25f;
+    #if 0
+    v_mean_scaled_num = v_mean_scaled_num / (v_mean_scaled_den + (eps * (float)numel));
+    v_mean_scaled_den = 1.0f;
+    #endif
+    g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean_scaled_num;
+    g2_mean = beta2 * g2_mean + (1.f - beta2) * v_mean*v_mean * v_mean_scaled_den*v_mean_scaled_den;
 
     const float step_size = lr / bias_correction1;
     float3 delta = -step_size * g1_mean / (sqrtf(g2_mean / bias_correction2) + eps);
 
     // trust region clip
+    #if 0
     float k = -8.0f * __logf(1.0f - eps_tr / fmaxf(opac, 1e-12f));
     float3 clip = {
         sqrtf(fmaxf(k * covar[0].x, 0.0f)),
@@ -616,6 +621,7 @@ __global__ void fused_adam_scale_agnostic_mean_kernel(
     delta.x = isfinite(delta.x) ? delta.x : 0.0f;
     delta.y = isfinite(delta.y) ? delta.y : 0.0f;
     delta.z = isfinite(delta.z) ? delta.z : 0.0f;
+    #endif
 
     param[idx] = mean + delta;
     exp_avg[idx] = g1_mean;

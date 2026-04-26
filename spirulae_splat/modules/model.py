@@ -163,6 +163,9 @@ class SpirulaeSplatModelConfig:
     """Whether to use edge aware score to guide densification.
         If True, it computes edge aware score following https://arxiv.org/abs/2603.08661
         Note that this is only active when relocate_heuristic_weight is nonzero"""
+    use_loss_map: bool = True
+    """Whether to use loss map to guide densification.
+        Note that this is only active when relocate_heuristic_weight is nonzero."""
     use_long_axis_split: bool = True
     """whether to use long-axis split described in https://arxiv.org/abs/2508.12313 for relocation and sample add.
         When combined with relocate_heuristic_weight=1.0, this can give less blurry background details for unbounded outdoor scenes."""

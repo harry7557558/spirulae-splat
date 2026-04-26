@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Optional, Tuple, Type, List
+from typing import Literal, Optional, Tuple, Type, List, Union
 
 import numpy as np
 import torch
@@ -171,7 +171,7 @@ def geometric_median(X, eps=0.0, maxiter=10):
 class SpirulaeSplatDataParserConfig:
     """Spirulae-Splat dataset config"""
 
-    data_format: Literal["nerfstudio", "colmap", "metashape", None] = None
+    data_format: Literal["colmap", "nerfstudio", "metashape", None] = None
     """Data format, leave None to auto detect"""
     colmap_recon_dir: Optional[Path] = None
     """Path to COLMAP reconstruction relative to dataset directory (e.g. sparse/0). Will auto detect if not specified."""
@@ -183,6 +183,10 @@ class SpirulaeSplatDataParserConfig:
     """Path to depth maps relative to dataset directory, used for COLMAP and Metashape datasets"""
     normal_dir: Path = Path("normals")
     """Path to normal maps relative to dataset directory, used for COLMAP and Metashape datasets"""
+    rescale_camera_to_fit: Union[bool, int] = False
+    """Whether to check if image resolution match camera resolution and scale camera intrinsics accordingly if not.
+        Set this to a number to divide intrinsics by that number, e.g. Mip-NeRF 360 and Zip-NeRF with images_(2|4)
+        Set this to True to detect resolution, e.g. tankt_db"""
 
     scale_factor: float = 1.0
     """How much to scale the camera origins by."""
@@ -229,23 +233,23 @@ class SpirulaeSplatDataparser:
         self.dataset_dir = dataset_dir
 
     def parse(self):
-        if self.config.data_format == "nerfstudio":
-            return self._parse_nerfstudio_data()
         if self.config.data_format == "colmap":
             return self._parse_colmap_data()
+        if self.config.data_format == "nerfstudio":
+            return self._parse_nerfstudio_data()
         if self.config.data_format == "metashape":
             raise ValueError("TODO")
 
-        try:
-            print("Attempting to parse Nerfstudio data...")
-            return self._parse_nerfstudio_data()
-        except BaseException as e:
-            print("Failed to parse Nerfstudio data:", ' '.join(map(str, e.args)))
         try:
             print("Attempting to parse COLMAP data...")
             return self._parse_colmap_data()
         except BaseException as e:
             print("Failed to parse COLMAP data:", ' '.join(map(str, e.args)))
+        try:
+            print("Attempting to parse Nerfstudio data...")
+            return self._parse_nerfstudio_data()
+        except BaseException as e:
+            print("Failed to parse Nerfstudio data:", ' '.join(map(str, e.args)))
         raise ValueError("No supported dataset format detected. Make sure you have a supported Nerfstudio, COLMAP, or Metashape dataset.")
 
     def _parse_nerfstudio_data(self, _meta=None, _points3D=None):
@@ -294,6 +298,9 @@ class SpirulaeSplatDataparser:
             frames = [frame for dist, frame in zip(distances, frames)
                       if dist <= self.config.outlier_threshold * mad_camera_positions]
 
+        if isinstance(self.config.rescale_camera_to_fit, bool) and self.config.rescale_camera_to_fit:
+            from PIL import Image
+
         for frame in frames:
             filepath = Path(frame["file_path"])
             fname = self._get_fname(filepath)
@@ -315,6 +322,24 @@ class SpirulaeSplatDataparser:
                     float(frame.get(key, meta.get(key, 0.0))) for key in DISTORTION_KEYS
                 ])
             )
+
+            if not isinstance(self.config.rescale_camera_to_fit, bool):
+                fx[-1] /= self.config.rescale_camera_to_fit
+                fy[-1] /= self.config.rescale_camera_to_fit
+                cx[-1] /= self.config.rescale_camera_to_fit
+                cy[-1] /= self.config.rescale_camera_to_fit
+                height[-1] //= self.config.rescale_camera_to_fit
+                width[-1] //= self.config.rescale_camera_to_fit
+            elif isinstance(self.config.rescale_camera_to_fit, bool) and self.config.rescale_camera_to_fit:
+                with Image.open(fname) as img:
+                    w, h = img.size
+                sx, sy = w / width[-1], h / height[-1]
+                fx[-1] *= sx
+                fy[-1] *= sy
+                cx[-1] *= sx
+                cy[-1] *= sy
+                width[-1] = w
+                height[-1] = h
 
             image_filenames.append(fname)
             poses.append(np.array(frame["transform_matrix"]))
