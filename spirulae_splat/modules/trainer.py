@@ -262,7 +262,11 @@ class Trainer:
             self.model.eval()
             return self._render(*args)
 
-    def _get_train_loss_dict(self, step: int):
+    def _train_step(self, step: int):
+        for optim in self.optimizers.values():
+            optim.zero_grad()
+        self.model.step_cb(self.optimizers, step)
+
         inputs = self.datamanager.next_train(step)  # type: List[Tuple[Cameras, Dict]]
         if isinstance(inputs, tuple):
             train_inputs, val_inputs = inputs
@@ -276,22 +280,22 @@ class Trainer:
             # torch.cuda.empty_cache()
             model_outputs = self.model.get_outputs(camera)
             # torch.cuda.empty_cache()
-            metrics_dict = self.model.get_metrics_dict(model_outputs, batch)
             is_not_last = (i != len(inputs) - 1)
-            loss_dict = self.model.get_loss_dict(model_outputs, batch, metrics_dict, no_static_losses=is_not_last)
+            loss_dict = self.model.get_loss_dict(model_outputs, batch, len(inputs), no_static_losses=is_not_last)
             # torch.cuda.empty_cache()
-            if is_not_last:
-                torch.stack([
-                    x for x in loss_dict.values() if isinstance(x, torch.Tensor)
-                ]).sum().backward()
+            torch.stack([
+                x for x in loss_dict.values() if isinstance(x, torch.Tensor)
+            ]).sum().backward()
             # torch.cuda.empty_cache()
 
-        return model_outputs, loss_dict, metrics_dict
+        for optim in self.optimizers.values():
+            optim.step()
+        self.model.step_post_backward(step)
 
-    def get_train_loss_dict(self, *args):
+    def train_step(self, *args):
         with self.lock:
             self.model.train()
-            return self._get_train_loss_dict(*args)
+            return self._train_step(*args)
 
     def _get_eval_metrics_dict(self):
         inputs = self.datamanager.next_train(0)  # type: List[Tuple[Cameras, Dict]]
@@ -314,19 +318,11 @@ class Trainer:
         self.last_step_time = self.start_time
         with tqdm(total=self.config.num_iterations, desc="Training", unit="step") as pbar:
             for step in range(self.config.num_iterations):
-                step_start = time.time()
-                self.current_step = step + 1  # 1-based
                 if step > 0 and self.config.steps_per_save > 0 and step % self.config.steps_per_save == 0:
                     self.save_checkpoint(step)
-                for optim in self.optimizers.values():
-                    optim.zero_grad()
-                self.model.step_cb(self.optimizers, step)
-                model_outputs, loss_dict, metrics_dict = self.get_train_loss_dict(step)
-                loss = torch.stack([x for x in loss_dict.values() if isinstance(x, torch.Tensor)]).sum()
-                loss.backward()
-                for optim in self.optimizers.values():
-                    optim.step()
-                self.model.step_post_backward(step)
+                step_start = time.time()
+                self.current_step = step + 1  # 1-based
+                self.train_step(step)
                 step_end = time.time()
                 latency = step_end - step_start
                 self.step_latencies.append(latency)

@@ -1199,7 +1199,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         # TODO: more reliable way than setattr tensor?
         if self.training:
             optim_info = {
-                'radii': radii,
+                'radii': self.info['radii'],
             }
             for key, value in self.gauss_params.items():
                 if isinstance(value, torch.Tensor) and key in self.gauss_params:
@@ -1302,7 +1302,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             self.camera_optimizer.get_metrics_dict(metrics_dict)
         return metrics_dict
 
-    def get_loss_dict(self, outputs, batch, metrics_dict=None, no_static_losses=False) -> Dict[str, torch.Tensor]:
+    def get_loss_dict(self, outputs, batch, batch_size: int, no_static_losses=False) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict.
 
         Args:
@@ -1359,6 +1359,12 @@ class SpirulaeSplatModel(torch.nn.Module):
             # prevent double backward
             if isinstance(total_val_loss, torch.Tensor):
                 total_val_loss = total_val_loss.item()
+
+        # Apply scalar in batching mode
+        if batch_size != 1:
+            for key, value in loss_dict.items():
+                if isinstance(value, torch.Tensor):
+                    loss_dict[key] = value * (1 / batch_size)
 
         # Add static losses
         loss_dict.update(static_losses)
@@ -1421,11 +1427,6 @@ class SpirulaeSplatModel(torch.nn.Module):
             # TODO: print averaged loss dict in split_batch mode
             self.print_loss_dict(loss_dict)
 
-        # Reduce before return -
-        # nerfstudio will later use functools.reduce(torch.add, ...), which is slow
-        loss_dict = {'total': torch.stack([
-            x for x in loss_dict.values() if isinstance(x, torch.Tensor)
-        ]).sum()}
         return loss_dict
 
     def print_loss_dict(self, losses: Dict[str, torch.Tensor], _storage={}):
