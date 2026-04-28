@@ -131,7 +131,8 @@ class TrainerConfig:
         If not specified, will set a generic combining current timestamp and dataset name."""
 
     steps_per_save: int = 2000
-    """Save checkpoint every this number of steps"""
+    """Save checkpoint every this number of steps.
+        If -1, save only at the end. If zero, never save (used in benchmark)."""
     save_only_latest_checkpoint: bool = True
     """Whether to save only last checkpoint"""
 
@@ -315,7 +316,7 @@ class Trainer:
             for step in range(self.config.num_iterations):
                 step_start = time.time()
                 self.current_step = step + 1  # 1-based
-                if step > 0 and step % self.config.steps_per_save == 0:
+                if step > 0 and self.config.steps_per_save > 0 and step % self.config.steps_per_save == 0:
                     self.save_checkpoint(step)
                 for optim in self.optimizers.values():
                     optim.zero_grad()
@@ -340,7 +341,8 @@ class Trainer:
                 #     "elapsed": f"{elapsed:.1f}s",
                 #     "eta": f"{eta:.1f}s"
                 # })
-        self.save_checkpoint(self.config.num_iterations)
+        if self.config.steps_per_save != 0:
+            self.save_checkpoint(self.config.num_iterations)
 
     def eval(self):
         if self.config.dataparser.eval_mode == "all" or len(self.dataset_eval.cameras) == 0:

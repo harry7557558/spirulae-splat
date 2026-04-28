@@ -171,6 +171,7 @@ setup(
         "Pillow",
         "rawpy",
         "pytorch-msssim",
+        "torchmetrics[image]",
         "typing_extensions",
         "tabulate",
     ] + [
