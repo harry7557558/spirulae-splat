@@ -599,7 +599,7 @@ def fully_fused_projection_hetero(
     )
 
     if primitive in ["3dgs", "mip"]:
-        means2d, depths, conics, opacities, rgbs, absgrad = proj_returns[3:]
+        means2d, depths, conics, opacities, rgbs = proj_returns[3:]
         return *proj_returns[:3], depths, (means2d, depths, conics, opacities, rgbs)
     elif primitive in ['3dgut']:
         means, quats, depths, scales, opacities, rgbs = proj_returns[3:]

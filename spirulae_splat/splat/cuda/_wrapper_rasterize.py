@@ -44,7 +44,6 @@ def rasterize_to_pixels(
     backgrounds: Optional[Tensor] = None,  # [..., channels]
     max_blending_masks: Optional[Tensor] = None,  # [..., image_height, image_width]
     packed: bool = False,
-    absgrad: bool = False,
     output_distortion: bool = False,
     compute_hessian_diagonal: bool = False,
     backward_info: Optional[dict] = None,
@@ -146,7 +145,7 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
         (render_rgbs, render_depths), render_Ts, last_ids = _make_lazy_cuda_func(
             f"rasterization_{['3dgs', 'mip'][antialiased]}_forward"
         )(
-            (means2d, depths, conics, opacities, colors, None),
+            (means2d, depths, conics, opacities, colors),
             # backward_info.get('gaussian_ids', None),
             backgrounds, masks,
             width, height, isect_offsets, flatten_ids,
@@ -187,7 +186,7 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
             v_splats, vr_splats, h_splats = _make_lazy_cuda_func(
                 f"rasterization_{['3dgs', 'mip'][ctx.antialiased]}_backward_with_hessian_diagonal"
             )(
-                (means2d, depths, conics, opacities, colors, None),
+                (means2d, depths, conics, opacities, colors),
                 # ctx.backward_info.get('gaussian_ids', None),
                 backgrounds, masks,
                 width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
@@ -198,25 +197,23 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
                 None
             )
             del ctx.backward_info['loss_map']
-            v_means2d, v_depths, v_conics, v_opacities, v_colors, v_means2d_abs = v_splats
+            v_means2d, v_depths, v_conics, v_opacities, v_colors = v_splats
             for key, v, vr, h in zip('means2d depths conics proj_opacities colors'.split(), v_splats, vr_splats, h_splats):
                 add_gradient_component(ctx.backward_info, key+'.gradr', vr)
                 add_gradient_component(ctx.backward_info, key+'.hess', h)
         else:
             (
-                v_means2d, v_depths, v_conics, v_opacities, v_colors, v_means2d_abs
+                v_means2d, v_depths, v_conics, v_opacities, v_colors
             ) = _make_lazy_cuda_func(
                 f"rasterization_{['3dgs', 'mip'][ctx.antialiased]}_backward"
             )(
-                (means2d, depths, conics, opacities, colors, None),
+                (means2d, depths, conics, opacities, colors),
                 # ctx.backward_info.get('gaussian_ids', None),
                 backgrounds, masks,
                 width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
                 (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
                 v_render_Ts.contiguous(),
             )
-        if v_means2d_abs is not None:
-            means2d.absgrad = v_means2d_abs
 
         v_backgrounds = None
         if ctx.needs_input_grad[5]:

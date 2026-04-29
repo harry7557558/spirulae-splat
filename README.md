@@ -52,6 +52,7 @@ If you installed spirulae-splat successfully, there should be command named `spi
 Presets
 - Spirulae-splat provides presets. Run `spirulae-train <preset name> --data [DATASET_PATH] <additional args>` to use a preset.
 - List of presets:
+    - `3dgs`: A general-purpose preset. We recommend trying this one first.
     - `3dgs-confined`: For confined environments (indoor scenes or outdoor scenes without much sky visible)
     - `3dgs-open`: For open environments (outdoor scenes with sky visible)
     - `3dgs-confined-low-texture`: For confined environments with large textureless surfaces

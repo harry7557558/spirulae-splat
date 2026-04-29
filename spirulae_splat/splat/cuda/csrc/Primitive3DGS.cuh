@@ -382,11 +382,10 @@ struct _Base3DGS<antialiased>::Screen {
     float3 conic;
     float opac;
     float3 rgb;
-    float2 xy_abs;
 
     #ifndef NO_TORCH
     typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTupleProj;
-    typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, std::optional<at::Tensor>> TensorTuple;
+    typedef std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> TensorTuple;
     #endif
 
     struct Buffer;
@@ -398,20 +397,10 @@ struct _Base3DGS<antialiased>::Screen {
         at::Tensor conics;
         at::Tensor opacities;
         at::Tensor rgbs;
-        std::optional<at::Tensor> absgrad;
 
         Tensor() {}
 
         Tensor(const TensorTuple& splats) {
-            means2d = std::get<0>(splats);
-            depths = std::get<1>(splats);
-            conics = std::get<2>(splats);
-            opacities = std::get<3>(splats);
-            rgbs = std::get<4>(splats);
-            absgrad = std::get<5>(splats);
-        }
-
-        Tensor(const TensorTupleProj& splats) {
             means2d = std::get<0>(splats);
             depths = std::get<1>(splats);
             conics = std::get<2>(splats);
@@ -425,13 +414,12 @@ struct _Base3DGS<antialiased>::Screen {
 
         TensorTuple tupleProjFwdPacked() const {
             return std::make_tuple(
-                means2d, depths, conics, opacities, rgbs,
-                (std::optional<at::Tensor>)at::nullopt
+                means2d, depths, conics, opacities, rgbs
             );
         }
 
         TensorTuple tupleRasterBwd() const {
-            return std::make_tuple(means2d, depths, conics, opacities, rgbs, absgrad);
+            return std::make_tuple(means2d, depths, conics, opacities, rgbs);
         }
 
         static TensorTupleProj allocProjFwd(long C, long N, c10::TensorOptions opt) {
@@ -450,22 +438,18 @@ struct _Base3DGS<antialiased>::Screen {
                 at::empty({nnz}, opt),
                 at::empty({nnz, 3}, opt),
                 at::empty({nnz}, opt),
-                at::empty({nnz, 3}, opt),
-                (std::optional<at::Tensor>)at::nullopt
+                at::empty({nnz, 3}, opt)
             );
         }
 
         Tensor allocRasterBwd() const {
-            Tensor result = Tensor(std::make_tuple(
+            return std::make_tuple(
                 zeros_like<float>(means2d),
                 zeros_like<float>(depths),
                 zeros_like<float>(conics),
                 zeros_like<float>(opacities),
                 zeros_like<float>(rgbs)
-            ));
-            if (true)  // TODO: option to not include this
-                result.absgrad = zeros_like<float>(means2d);
-            return result;
+            );
         }
 
         auto options() const {
@@ -488,7 +472,6 @@ struct _Base3DGS<antialiased>::Screen {
         float3* __restrict__ conics;  // [I, N, 3] or [nnz, 3]
         float* __restrict__ opacities;  // [I, N] or [nnz]
         float3* __restrict__ rgbs;  // [I, N, 3] or [nnz, 3]
-        float2* __restrict__ absgrad = nullptr;  // [I, N, 2] or [nnz, 2]
 
         Buffer() {}
 
@@ -505,9 +488,6 @@ struct _Base3DGS<antialiased>::Screen {
             conics = (float3*)tensors.conics.template data_ptr<float>();
             opacities = tensors.opacities.template data_ptr<float>();
             rgbs = (float3*)tensors.rgbs.template data_ptr<float>();
-            absgrad = tensors.absgrad.has_value() ?
-                (float2*)tensors.absgrad.value().template data_ptr<float>()
-                : nullptr;
         }
         #endif
     };
@@ -521,7 +501,6 @@ struct _Base3DGS<antialiased>::Screen {
             buffer.conics[idx],
             buffer.opacities[idx],
             buffer.rgbs[idx],
-            buffer.absgrad ? buffer.absgrad[idx] : make_float2(0.0f),
         };
     }
 
@@ -536,7 +515,6 @@ struct _Base3DGS<antialiased>::Screen {
             {0.f, 0.f, 0.f},
             0.0f,
             {0.f, 0.f, 0.f},
-            {0.f, 0.f}
         };
     }
 
@@ -549,7 +527,6 @@ struct _Base3DGS<antialiased>::Screen {
         conic += grad.conic * weight;
         opac += grad.opac * weight;
         rgb += grad.rgb * weight;
-        xy_abs += fabs(grad.xy) * weight;
     }
 
     __device__ __forceinline__ void addGaussNewtonHessianDiagonal(const Screen &grad, float weight=1.0f) {
@@ -558,7 +535,6 @@ struct _Base3DGS<antialiased>::Screen {
         conic += fmul_axa(grad.conic, weight);
         opac += fmul_axa(grad.opac, weight);
         rgb += fmul_axa(grad.rgb, weight);
-        xy_abs += fmul_axa(grad.xy, weight);
     }
 
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx, const uint32_t* gaussian_ids) {
@@ -567,8 +543,6 @@ struct _Base3DGS<antialiased>::Screen {
         buffer.conics[idx] = conic;
         buffer.opacities[idx] = opac;
         buffer.rgbs[idx] = rgb;
-        if (buffer.absgrad != nullptr)
-            buffer.absgrad[idx] = xy_abs;
     }
 
     __device__ void atomicAddToBuffer(Buffer &buffer, long idx, const uint32_t* gaussian_ids) const {
@@ -577,8 +551,6 @@ struct _Base3DGS<antialiased>::Screen {
         atomicAddFVec(buffer.conics + idx, conic);
         atomicAddFVec(buffer.opacities + idx, opac);
         atomicAddFVec(buffer.rgbs + idx, rgb);
-        if (buffer.absgrad != nullptr)
-            atomicAddFVec(buffer.absgrad + idx, xy_abs);
     }
 
     __device__ __forceinline__ float evaluate_alpha(float px, float py) {

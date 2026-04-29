@@ -66,8 +66,8 @@ B, W, H = 4, 1440, 1080
 N, SH_DEGREE = 200000, 3
 PACKED = True
 IS_FISHEYE = False
-IS_ANTIALIASED = True
-WITH_UT = True
+IS_ANTIALIASED = False
+WITH_UT = False
 
 def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
     camera_model = ["pinhole", "fisheye"][IS_FISHEYE]
@@ -112,7 +112,6 @@ def rasterize_gsplat(means, quats, scales, opacities, features_dc, features_sh, 
         height=H,
         sh_degree=SH_DEGREE,
         packed=PACKED and not WITH_UT,
-        absgrad=False,
         sparse_grad=False,
         rasterize_mode=["classic", "antialiased"][IS_ANTIALIASED],
         distributed=False,

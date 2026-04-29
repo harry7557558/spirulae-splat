@@ -312,7 +312,6 @@ class SplatModel:
                 height=H,
                 packed=False,
                 use_bvh=False,
-                # absgrad=False,
                 sparse_grad=False,
                 distributed=False,
                 camera_model=["pinhole", "fisheye"][is_fisheye],

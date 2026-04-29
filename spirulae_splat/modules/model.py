@@ -763,10 +763,6 @@ class SpirulaeSplatModel(torch.nn.Module):
                 info=self.info,
                 packed=(self.config.packed or self.config.use_bvh),
             )
-        return
-        # for splatfacto: around 1.5 and around 1e-6 @ 1k iters
-        print(self.info['radii'].float().mean().item(),
-              self.info['means2d'].absgrad.mean().item())
 
     def get_gaussian_param_groups(self) -> Dict[str, List[Parameter]]:
         # Here we explicitly use the means, scales as parameters so that the user can override this function and

@@ -127,13 +127,6 @@ def rasterization(
     #     the paper `Mip-Splatting: Alias-free 3D Gaussian Splatting <https://arxiv.org/pdf/2311.16493>`_.
 
     .. note::
-        **AbsGrad**: If `absgrad` is True, the absolute gradients of the projected
-        2D means will be computed during the backward pass, which could be accessed by
-        `meta["means2d"].absgrad`. This is an implementation of the paper
-        `AbsGS: Recovering Fine Details for 3D Gaussian Splatting <https://arxiv.org/abs/2404.10484>`_,
-        which is shown to be more effective for splitting Gaussians during training.
-
-    .. note::
         **Camera Distortion and Rolling Shutter**: The function supports rendering with opencv
         distortion formula for pinhole and fisheye cameras (`dist_coeffs`).
         It also supports rolling shutter rendering with the `rolling_shutter` argument. We take
