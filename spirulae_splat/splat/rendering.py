@@ -420,18 +420,26 @@ def rasterization(
     TILE_SIZE = 16
     tile_width = math.ceil(width / float(TILE_SIZE))
     tile_height = math.ceil(height / float(TILE_SIZE))
-    # isect_ids, flatten_ids, isect_offsets, radii = _make_lazy_cuda_func(f"intersect_tile_{primitive}")(
-    isect_ids, flatten_ids, isect_offsets, radii = _make_lazy_cuda_func(f"intersect_tile")(
-        aabb_xyxy,
-        depths,
-        I, intrins, width, height,
-        image_ids if packed else None,
-        # (*proj_splats, None) if primitive in ["3dgs", "mip"] else proj_splats,
-        # viewmats,
-        # intrins,
-        # camera_model.upper(),
-        # dist_coeffs
-    )
+    if False:
+        isect_ids, flatten_ids, isect_offsets, radii = _make_lazy_cuda_func(f"intersect_tile_{primitive}")(
+            aabb_xyxy,
+            depths,
+            I, width, height,
+            image_ids if packed else None,
+            proj_splats,
+            viewmats,
+            intrins,
+            camera_model.upper(),
+            dist_coeffs
+        )
+    else:
+        isect_ids, flatten_ids, isect_offsets, radii = _make_lazy_cuda_func(f"intersect_tile")(
+            aabb_xyxy,
+            depths,
+            (proj_splats[0], proj_splats[2], proj_splats[3]) if primitive in ['3dgs', 'mip'] else None,
+            I, intrins, width, height,
+            image_ids if packed else None,
+        )
     isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
 
     meta.update(
