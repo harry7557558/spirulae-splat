@@ -59,13 +59,9 @@ def rasterization(
     backgrounds: Optional[Tensor] = None,
     accum_weight_map: Optional[Tensor] = None,
     max_blending_masks: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
     sparse_grad: bool = False,
-    # rasterize_mode: Literal["classic", "antialiased"] = "classic",
     distributed: bool = False,
-    # camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
-    segmented: bool = False,
     dist_coeffs: Optional[Tensor] = None,  # [..., C, 10]
     actual_width: int = None,
     actual_height: int = None,
@@ -94,14 +90,6 @@ def rasterization(
         to a batch of images in one go, by simplly providing the batched `viewmats` and `intrins`.
 
     .. note::
-        **Depth Rendering**: This function supports colors or/and depths via `render_mode`.
-        The supported modes are "RGB", "D", "ED", "RGB+D", and "RGB+ED". "RGB" renders the
-        colored image that respects the `colors` argument. "D" renders the accumulated z-depth
-        :math:`\\sum_i w_i z_i`. "ED" renders the expected z-depth
-        :math:`\\frac{\\sum_i w_i z_i}{\\sum_i w_i}`. "RGB+D" and "RGB+ED" render both
-        the colored image and the depth, in which the depth is the last channel of the output.
-
-    .. note::
         **Memory-Speed Trade-off**: The `packed` argument provides a trade-off between
         memory footprint and runtime. If `packed` is True, the intermediate results are
         packed into sparse tensors, which is more memory efficient but might be slightly
@@ -117,14 +105,6 @@ def rasterization(
         of the Gaussians. Usually a sparse optimizer is required to work with sparse gradients,
         such as `torch.optim.SparseAdam <https://pytorch.org/docs/stable/generated/torch.optim.SparseAdam.html#sparseadam>`_.
         This argument is only effective when `packed` is True.
-
-    # .. note::
-    #     **Antialiased Rendering**: If `rasterize_mode` is "antialiased", the function will
-    #     apply a view-dependent compensation factor
-    #     :math:`\\rho=\\sqrt{\\frac{Det(\\Sigma)}{Det(\\Sigma+ \\epsilon I)}}` to Gaussian
-    #     opacities, where :math:`\\Sigma` is the projected 2D covariance matrix and :math:`\\epsilon`
-    #     is the `eps2d`. This will make the rendered image more antialiased, as proposed in
-    #     the paper `Mip-Splatting: Alias-free 3D Gaussian Splatting <https://arxiv.org/pdf/2311.16493>`_.
 
     .. note::
         **Camera Distortion and Rolling Shutter**: The function supports rendering with opencv
@@ -161,10 +141,6 @@ def rasterization(
             the function will collaboratively render the images for all ranks.
         camera_model: The camera model to use. Supported models are "pinhole", "ortho",
             "fisheye", and "ftheta". Default is "pinhole".
-        segmented: Whether to use segmented radix sort. Default is False.
-            Segmented radix sort performs sorting in segments, which is more efficient for the sorting operation itself.
-            However, since it requires offset indices as input, additional global memory access is needed, which results
-            in slower overall performance in most use cases.
         dist_coeffs: Should be [..., C, 10]. [k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2]
 
     Returns:
@@ -264,7 +240,6 @@ def rasterization(
     I = B * C
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert intrins.shape == batch_dims + (C, 4), intrins.shape
-    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED", "RGB+D+N", "RGB+ED+N"], render_mode
 
     def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
         view_list = list(

@@ -67,11 +67,11 @@ N, SH_DEGREE = 200000, 3
 PACKED = True
 IS_FISHEYE = False
 IS_ANTIALIASED = False
-WITH_UT = False
+WITH_UT = True
 
 def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
     camera_model = ["pinhole", "fisheye"][IS_FISHEYE]
-    # quats = torch.nn.functional.normalize(quats, dim=-1)
+    # quats = torch.nn.functional.normalize(quats, dim=-1)  # affects gradient
     intrins = torch.stack([Ks[..., 0, 0], Ks[..., 1, 1], Ks[..., 0, 2], Ks[..., 1, 2]], dim=-1)  # fx, fy, cx, cy
     rgbd, Ts, meta = ssplat_rasterization(
         primitive="3dgut" if WITH_UT else ["3dgs", "mip"][IS_ANTIALIASED],
@@ -91,8 +91,6 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
         sparse_grad=False,
         distributed=False,
         camera_model=camera_model,
-        render_mode="RGB+D",
-        # render_mode="RGB+D+N",
     )
     rgbd = [*rgbd[:2]]
     if WITH_UT:
@@ -178,21 +176,27 @@ def test_rasterization():
 
     if False:
         import matplotlib.pyplot as plt
+        import numpy as np
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 10))
         rgb = outputs[0].detach().cpu().numpy()
         _rgb = _outputs[0].detach().cpu().numpy()
+        depth = outputs[1].detach().cpu().numpy()
+        _depth = _outputs[1].detach().cpu().numpy()
         alpha = outputs[2].detach().cpu().numpy()
         _alpha = _outputs[2].detach().cpu().numpy()
         ax1.imshow(rgb[0])
-        ax2.imshow(alpha[0])
+        # ax2.imshow(alpha[0])
+        # ax2.imshow(depth[0])
+        ax2.imshow(np.log10(np.abs(depth[0]-_depth[0])))
         # ax2.imshow(rgb[1])
         # ax3.imshow(rgb[2])
         # ax4.imshow(rgb[3])
         ax3.imshow(_rgb[0])
-        ax4.imshow(_alpha[0])
+        # ax4.imshow(_alpha[0])
+        ax4.imshow(_depth[0])
         # ax4.imshow(_rgb[1])
-        # plt.show()
-        plt.savefig("/mnt/d/plot.png")
+        plt.show()
+        # plt.savefig("/mnt/d/plot.png")
         exit(0)
 
     weights = [torch.randn_like(x.detach()) for x in _outputs]

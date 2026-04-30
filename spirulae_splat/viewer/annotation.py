@@ -8,6 +8,11 @@ from spirulae_splat.splat.cuda import _make_lazy_cuda_func
 
 
 def knn_dist(x: torch.Tensor, k: int = 4):
+    if len(x) == 1:
+        return 1.0
+    if len(x) <= k:
+        dists = torch.cdist(x, x).flatten()
+        return torch.median(dists[dists > 0.0])
     x_np = x.detach().cpu().numpy()
 
     from scipy.spatial import cKDTree

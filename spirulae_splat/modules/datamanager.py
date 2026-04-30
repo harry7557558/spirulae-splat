@@ -117,6 +117,11 @@ class IndexGroupsWithDataLoader(IndexGroups):
         self.dataloaders = []
         min_num_workers = 4
         max_num_workers = min(max(os.cpu_count()-2,1), max(batch_size, min_num_workers))
+        while max_num_workers * len(self.groups) > 2*os.cpu_count():
+            max_num_workers -= 1
+            if max_num_workers in [0, 1]:
+                self.parallel = False
+                return  # TODO: concurrency
         for group in self.groups:
             dataset = IndexedDatasetWrapper(getitem, [[i] for i in group.indices])
             dataloader = DataLoader(

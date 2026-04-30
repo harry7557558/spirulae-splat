@@ -315,8 +315,6 @@ class SplatModel:
                 sparse_grad=False,
                 distributed=False,
                 camera_model=["pinhole", "fisheye"][is_fisheye],
-                render_mode="RGB+ED",
-                # render_mode="RGB+ED+N",
                 **kwargs,
             )
             return rgbd, 1.0-Ts, meta

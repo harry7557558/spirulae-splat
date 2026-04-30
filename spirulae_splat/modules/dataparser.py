@@ -241,15 +241,15 @@ class SpirulaeSplatDataparser:
             raise ValueError("TODO")
 
         try:
-            print("Attempting to parse COLMAP data...")
-            return self._parse_colmap_data()
-        except BaseException as e:
-            print("Failed to parse COLMAP data:", ' '.join(map(str, e.args)))
-        try:
             print("Attempting to parse Nerfstudio data...")
             return self._parse_nerfstudio_data()
         except BaseException as e:
             print("Failed to parse Nerfstudio data:", ' '.join(map(str, e.args)))
+        try:
+            print("Attempting to parse COLMAP data...")
+            return self._parse_colmap_data()
+        except BaseException as e:
+            print("Failed to parse COLMAP data:", ' '.join(map(str, e.args)))
         raise ValueError("No supported dataset format detected. Make sure you have a supported Nerfstudio, COLMAP, or Metashape dataset.")
 
     def _parse_nerfstudio_data(self, _meta=None, _points3D=None):

@@ -252,7 +252,7 @@ class Trainer:
         outputs = self.model.get_outputs(camera)
         outputs['_post_processor'] = lambda tensor, **kwargs: annotate_train_cameras(
             tensor, outputs['depth'], outputs['alpha'],
-            camera, self.model.cameras, self.dataset_train.thumbnails,
+            camera, self.dataset_train.cameras, self.dataset_train.thumbnails,
             relative_scale=self.model.config.relative_scale, **kwargs
         )
         return outputs
