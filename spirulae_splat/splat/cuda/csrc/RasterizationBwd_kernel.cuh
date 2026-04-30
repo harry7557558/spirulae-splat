@@ -26,12 +26,14 @@ constexpr uint SPLAT_BATCH_SIZE_WITH_DISTORTION = WARP_SIZE;
 template <
     typename SplatPrimitive,
     bool output_distortion,
-    bool output_hessian_diagonal
+    bool output_hessian_diagonal,
+    bool output_accum_weight
 >
 __global__ void rasterize_to_pixels_bwd_kernel(
     const uint32_t I,
     const uint32_t n_isects,
     // fwd inputs
+    const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
     typename SplatPrimitive::Screen::Buffer splat_buffer,
     const float *__restrict__ backgrounds, // [..., CDIM] or [nnz, CDIM]
     const bool *__restrict__ masks,           // [..., tile_height, tile_width]
@@ -48,6 +50,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     typename SplatPrimitive::RenderOutput::Buffer render_output_buffer,
     typename SplatPrimitive::RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
+    const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
     typename SplatPrimitive::RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
@@ -55,7 +58,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     // grad inputs
     typename SplatPrimitive::Screen::Buffer v_splat_buffer,
     typename SplatPrimitive::Screen::Buffer vr_splat_buffer,
-    typename SplatPrimitive::Screen::Buffer h_splat_buffer
+    typename SplatPrimitive::Screen::Buffer h_splat_buffer,
+    float *__restrict__ o_accum_weight
 ) {
     auto block = cg::this_thread_block();
     cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
@@ -93,6 +97,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     __shared__ typename SplatPrimitive::RenderOutput v_distortion_out[output_distortion ? BLOCK_SIZE : 1];
 
     __shared__ float hess_weight_map[output_hessian_diagonal ? BLOCK_SIZE : 1];
+    __shared__ float accum_weight_map[output_accum_weight ? BLOCK_SIZE : 1];
 
     constexpr uint SPLAT_BATCH_SIZE = output_distortion ?
         SPLAT_BATCH_SIZE_WITH_DISTORTION : SPLAT_BATCH_SIZE_NO_DISTORTION;
@@ -132,6 +137,10 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 : SplatPrimitive::RenderOutput::zero());
         }
 
+        if (output_accum_weight) {
+            accum_weight_map[pix_id_local] = (accum_weight_map_buffer != nullptr && inside) ?
+                accum_weight_map_buffer[pix_id_image_global] : 0.0f;
+        }
         if (output_hessian_diagonal) {
             // https://www.desmos.com/calculator/ld9wg7cuxz
             hess_weight_map[pix_id_local] = (loss_map_buffer != nullptr && inside) ?
@@ -166,13 +175,14 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         uint32_t splat_gid;
         if (splat_idx >= range_start) {
             splat_gid = flatten_ids[splat_idx]; // flatten index in [I * N] or [nnz]
-            splat = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_gid, nullptr);
+            splat = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_gid, gaussian_ids);
         }
 
         // accumulate gradient
         typename SplatPrimitive::Screen v_splat = SplatPrimitive::Screen::zero();
         typename SplatPrimitive::Screen vr_splat = SplatPrimitive::Screen::zero();
         typename SplatPrimitive::Screen h_splat = SplatPrimitive::Screen::zero();
+        float accum_weight = 0.0f;
 
         // thread 0 takes last splat, 1 takes second last, etc.
         // at t=0, thread 0 (splat -1) undo pixel 0
@@ -279,6 +289,10 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 v_splat.addGradient(splat.evaluate_color_vjp(px, py, v_color));
             }
 
+            if (output_accum_weight) {
+                accum_weight += accum_weight_map[pix_id] * alpha * T0;
+            }
+
             // update pixel states
             pix_Ts_with_grad[pix_id] = { T0, v_T0 };
             // v_pix_colors remains the same
@@ -294,11 +308,15 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         // accumulate gradient
         if (splat_idx >= range_start) {
             splat.precomputeBackward(v_splat);
-            v_splat.atomicAddToBuffer(v_splat_buffer, splat_gid, nullptr);
+            v_splat.atomicAddToBuffer(v_splat_buffer, splat_gid, gaussian_ids);
             if (output_hessian_diagonal) {
                 splat.precomputeBackward(vr_splat);
-                vr_splat.atomicAddToBuffer(vr_splat_buffer, splat_gid, nullptr);
-                h_splat.atomicAddToBuffer(h_splat_buffer, splat_gid, nullptr);
+                vr_splat.atomicAddToBuffer(vr_splat_buffer, splat_gid, gaussian_ids);
+                h_splat.atomicAddToBuffer(h_splat_buffer, splat_gid, gaussian_ids);
+            }
+            if (output_accum_weight) {
+                uint32_t idx = gaussian_ids ? gaussian_ids[splat_gid] : splat_gid % v_splat_buffer.size;
+                atomicAddFVec(o_accum_weight + idx, accum_weight);
             }
         }
     }
@@ -307,13 +325,15 @@ __global__ void rasterize_to_pixels_bwd_kernel(
 template <
     typename SplatPrimitive,
     bool output_distortion,
-    bool output_hessian_diagonal
+    bool output_hessian_diagonal,
+    bool output_accum_weight
 >
 void rasterize_to_pixels_bwd_kernel_wrapper(
     cudaStream_t stream,
     const uint32_t I,
     const uint32_t n_isects,
     // fwd inputs
+    const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
     typename SplatPrimitive::Screen::Buffer splat_buffer,
     const float *__restrict__ backgrounds, // [..., CDIM] or [nnz, CDIM]
     const bool *__restrict__ masks,           // [..., tile_height, tile_width]
@@ -330,6 +350,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     typename SplatPrimitive::RenderOutput::Buffer render_output_buffer,
     typename SplatPrimitive::RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
+    const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
     typename SplatPrimitive::RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
@@ -337,7 +358,8 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     // grad inputs
     typename SplatPrimitive::Screen::Buffer v_splat_buffer,
     typename SplatPrimitive::Screen::Buffer vr_splat_buffer,
-    typename SplatPrimitive::Screen::Buffer h_splat_buffer
+    typename SplatPrimitive::Screen::Buffer h_splat_buffer,
+    float *__restrict__ o_accum_weight
 ) {
 
     // Each block covers a tile on the image. In total there are
@@ -348,14 +370,15 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     dim3 grid = {I, tile_height, tile_width};
 
     rasterize_to_pixels_bwd_kernel<
-        SplatPrimitive, output_distortion, output_hessian_diagonal
+        SplatPrimitive, output_distortion, output_hessian_diagonal, output_accum_weight
     ><<<grid, threads, 0, stream>>>(
-        I, n_isects, splat_buffer, backgrounds, masks,
+        I, n_isects, gaussian_ids, splat_buffer, backgrounds, masks,
         image_width, image_height, tile_width, tile_height, tile_offsets,
         flatten_ids, render_Ts, last_ids,
-        render_output_buffer, render2_output_buffer, loss_map_buffer,
+        render_output_buffer, render2_output_buffer, loss_map_buffer, accum_weight_map_buffer,
         v_render_output_buffer, v_render_Ts, v_distortions_output_buffer,
-        v_splat_buffer, vr_splat_buffer, h_splat_buffer
+        v_splat_buffer, vr_splat_buffer, h_splat_buffer,
+        o_accum_weight
     );
 
 }

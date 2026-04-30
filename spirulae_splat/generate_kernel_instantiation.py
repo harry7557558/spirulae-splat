@@ -201,16 +201,18 @@ def generate_RasterizationFwd():
 
 def generate_RasterizationBwd():
     definition = extract_kernel_definition("RasterizationBwd.cu", "rasterize_to_pixels_bwd_kernel_wrapper")
-    map_header = ["typename SplatPrimitive", None, None]
+    map_header = ["typename SplatPrimitive", None, None, None]
     map_body = [
-        ("Vanilla3DGS", "false", "false"),
-        ("Vanilla3DGS", "false", "true"),
-        ("Vanilla3DGS", "true", "true"),
-        # ("MipSplatting", "false", "false"),
-        # ("MipSplatting", "false", "true"),
-        # ("MipSplatting", "true", "true"),
+        ("Vanilla3DGS", "false", "false", "false"),
+        ("Vanilla3DGS", "false", "true", "false"),
+        ("Vanilla3DGS", "true", "false", "false"),
+        ("Vanilla3DGS", "true", "true", "false"),
+        ("Vanilla3DGS", "false", "false", "true"),
+        ("Vanilla3DGS", "false", "true", "true"),
+        ("Vanilla3DGS", "true", "false", "true"),
+        ("Vanilla3DGS", "true", "true", "true"),
     ]
-    includes = [("Primitive3DGS.cuh", "RasterizationBwd_kernel.cuh")] * 3
+    includes = [("Primitive3DGS.cuh", "RasterizationBwd_kernel.cuh")] * 8
 
     generate_kernel_instantiation("RasterizationBwd", definition, map_header, map_body, includes)
 

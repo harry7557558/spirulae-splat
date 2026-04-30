@@ -198,6 +198,8 @@ def fully_fused_projection(
 
         if primitive in ["3dgs", "mip"]:
             aabb, means2d, depths, conics, opacities, rgbs = proj_returns
+            backward_info['gaussian_ids'] = aabb.gaussian_ids
+            backward_info['num_splats'] = N
             return aabb, depths, (means2d, depths, conics, opacities, rgbs)
         elif primitive in ['3dgut', '3dgut_sv']:
             means, quats, scales, opacities, features_dc, features_sh = splats

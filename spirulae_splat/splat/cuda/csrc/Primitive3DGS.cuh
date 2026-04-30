@@ -472,6 +472,7 @@ struct _Base3DGS<antialiased>::Screen {
         float3* __restrict__ conics;  // [I, N, 3] or [nnz, 3]
         float* __restrict__ opacities;  // [I, N] or [nnz]
         float3* __restrict__ rgbs;  // [I, N, 3] or [nnz, 3]
+        long size;
 
         Buffer() {}
 
@@ -488,6 +489,7 @@ struct _Base3DGS<antialiased>::Screen {
             conics = (float3*)tensors.conics.template data_ptr<float>();
             opacities = tensors.opacities.template data_ptr<float>();
             rgbs = (float3*)tensors.rgbs.template data_ptr<float>();
+            size = tensors.opacities.numel();
         }
         #endif
     };

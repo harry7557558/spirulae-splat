@@ -162,8 +162,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("rasterization_3dgs_backward", &rasterize_to_pixels_3dgs_bwd);
     m.def("rasterization_3dgs_backward_with_hessian_diagonal", &rasterize_to_pixels_3dgs_bwd_with_hessian_diagonal);
     m.def("rasterization_mip_forward", &rasterize_to_pixels_mip_fwd);
-    m.def("rasterization_mip_backward", &rasterize_to_pixels_mip_bwd);
-    m.def("rasterization_mip_backward_with_hessian_diagonal", &rasterize_to_pixels_mip_bwd_with_hessian_diagonal);
+    m.def("rasterization_mip_backward", &rasterize_to_pixels_3dgs_bwd);
+    m.def("rasterization_mip_backward_with_hessian_diagonal", &rasterize_to_pixels_3dgs_bwd_with_hessian_diagonal);
 
     // RasterizationEval3DFwd.cuh and RasterizationEval3DBwd.cuh
     m.def("rasterization_3dgut_forward", &rasterize_to_pixels_3dgut_fwd);

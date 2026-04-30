@@ -178,42 +178,50 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
         ) = ctx.saved_tensors
         width = ctx.width
         height = ctx.height
+        assert ctx.backward_info is not None
         if ctx.compute_hessian_diagonal:
-            assert ctx.backward_info is not None
             assert 'loss_map' in ctx.backward_info
+        assert 'num_splats' in ctx.backward_info
 
         if ctx.compute_hessian_diagonal:
-            v_splats, vr_splats, h_splats = _make_lazy_cuda_func(
+            v_splats, vr_splats, h_splats, accum_weight = _make_lazy_cuda_func(
                 f"rasterization_{['3dgs', 'mip'][ctx.antialiased]}_backward_with_hessian_diagonal"
             )(
+                ctx.backward_info['num_splats'],
                 (means2d, depths, conics, opacities, colors),
-                # ctx.backward_info.get('gaussian_ids', None),
+                ctx.backward_info.get('gaussian_ids', None),
                 backgrounds, masks,
                 width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
                 None, None,
                 ctx.backward_info['loss_map'] if ctx.compute_hessian_diagonal else None,
+                ctx.backward_info.get('accum_weight_map', None),
                 (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
                 v_render_Ts.contiguous(),
                 None
             )
-            del ctx.backward_info['loss_map']
             v_means2d, v_depths, v_conics, v_opacities, v_colors = v_splats
             for key, v, vr, h in zip('means2d depths conics proj_opacities colors'.split(), v_splats, vr_splats, h_splats):
                 add_gradient_component(ctx.backward_info, key+'.gradr', vr)
                 add_gradient_component(ctx.backward_info, key+'.hess', h)
         else:
-            (
-                v_means2d, v_depths, v_conics, v_opacities, v_colors
-            ) = _make_lazy_cuda_func(
+            (v_means2d, v_depths, v_conics, v_opacities, v_colors), accum_weight = _make_lazy_cuda_func(
                 f"rasterization_{['3dgs', 'mip'][ctx.antialiased]}_backward"
             )(
+                ctx.backward_info['num_splats'],
                 (means2d, depths, conics, opacities, colors),
-                # ctx.backward_info.get('gaussian_ids', None),
+                ctx.backward_info.get('gaussian_ids', None),
                 backgrounds, masks,
                 width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
+                ctx.backward_info.get('accum_weight_map', None),
                 (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
                 v_render_Ts.contiguous(),
             )
+        if accum_weight is not None:
+            ctx.backward_info['accum_weight'] = accum_weight
+        if 'loss_map' in ctx.backward_info:
+            del ctx.backward_info['loss_map']
+        if 'accum_weight_map' in ctx.backward_info:
+            del ctx.backward_info['accum_weight_map']
 
         v_backgrounds = None
         if ctx.needs_input_grad[5]:
@@ -338,6 +346,8 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         )
         if 'loss_map' in ctx.backward_info:
             del ctx.backward_info['loss_map']
+        if 'accum_weight_map' in ctx.backward_info:
+            del ctx.backward_info['accum_weight_map']
 
         h_splats = None
         if ctx.compute_hessian_diagonal:

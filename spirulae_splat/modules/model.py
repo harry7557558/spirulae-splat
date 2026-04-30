@@ -1133,7 +1133,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         outputs = {
             "rgb": rgb,
         }
-        if self.config.compute_hessian_diagonal is not None and self.training:
+        if self.training:
             outputs["backward_info"] = meta['backward_info']
         if depth_im_ref is not None:
             outputs["depth"] = depth_im_ref
