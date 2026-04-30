@@ -211,6 +211,23 @@ bool fisheye_proj_3dgs_ut<let assume_valid : bool>(
     if (!assume_valid && !all_valid)
         return false;
 
+    // We previously did this in rasterization with dot(raydir, pos) < 0, but it slows down rasterization
+    // Here we try a different heuristics
+    if (!assume_valid) {
+        float max_z = sigmas.p[0].z;
+        float2 min_p = proj_points[0], max_p = proj_points[0];
+        [ForceUnroll] for (int i = 1; i < 7; i++) {
+            max_z = max(max_z, sigmas.p[i].z);
+            float2 p = proj_points[0] + (proj_points[i] - proj_points[0]) * 3.329;
+            min_p = min(min_p, p);
+            max_p = max(max_p, p);
+        }
+        min_p -= intrins.zw;
+        max_p -= intrins.zw;
+        if (max_z <= 0.0 && min_p.x * max_p.x < 0.0 && min_p.y * max_p.y < 0.0)
+            return false;
+    }
+
     [ForceUnroll] for (int i = 0; i < 7; i++)
         mean2d += sigmas.w_mean[i] * proj_points[i];
 
@@ -286,6 +303,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
 
     float4 intrins = { fx, fy, cx, cy };
     float2x2 covar2d;
+    opacity = 1.0 / (1.0 + exp(-in_opacity));
 
     bool is_valid = true;
     if (eval3d) {
@@ -334,6 +352,14 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
                 fx, fy, cx, cy,
                 covar2d, mean2d
             );
+
+        // do this since sorting for >180deg fisheye is weird
+        if (!assume_valid && camera_model == CameraModelType::FISHEYE) {
+            float2 mean2d_c = mean2d - float2(cx, cy);
+            float opac = opacity * exp(-0.5f * dot(mul(inverse(covar2d), mean2d_c), mean2d_c));
+            if (mean_c.z < 0.0 && opac > 1.0 / 255.0)
+                is_valid = false;
+        }
     }
     if (!assume_valid && !is_valid) {
         aabb_xyxy = float4(0.0f);
@@ -353,7 +379,6 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
 
     float extend = 3.33f;
     {
-        opacity = 1.0 / (1.0 + exp(-in_opacity));
         if (antialiased)
             opacity *= compensation;
         if (!assume_valid && opacity < ALPHA_THRESHOLD) {
