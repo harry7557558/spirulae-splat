@@ -120,7 +120,7 @@ Unstable features
 - Validation (early stop training if loss on validation images start to increase): append `nerfstudio-data --validation_fraction 0.1` to the end of training command
 - Second-order optimizer using Jacobian-residual product and Hessian diagonal: `spirulae-train 3dgs^2-pos` (more stable) or `3dgs^2` (less stable) instead of `spirulae`. We also provide presets `3dgs^2-confined` and `3dgs^2-open` for the corresponding presets with `3dgs^2` methods, which otherwise run on `3dgs^2-pos`.
     - Note: on Windows, you may need to wrap parentheses around method name with `^2`. For example, use `spirulae-train "3dgs^2-pos"` instead of `spirulae-train 3dgs^2-pos`.
-- 2DGS-like depth regularization to discourage floaters: `--model.depth_distortion_reg_weight 0.01`. Similar regularization can also be applied to RGB by setting `--model.rgb_distortion_reg_weight` to a positive value.
+- 2DGS-like depth regularization to discourage floaters: `--model.depth_distortion_reg 0.01`. Similar regularization can also be applied to RGB by setting `--model.rgb_distortion_reg` to a positive value.
 
 Scripts
 - Use `scripts/export_ply_3dgs.py` to export PLY

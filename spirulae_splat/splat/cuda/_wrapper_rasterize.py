@@ -303,6 +303,9 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         ctx.compute_hessian_diagonal = compute_hessian_diagonal
         ctx.backward_info = backward_info
 
+        if output_distortion:
+            render_rgbs = render_rgbs.clone()
+
         # render_alphas = 1.0 - render_Ts
         # return render_rgbs, render_depths, render_alphas, distortion_rgbs, distortion_depths
         return render_rgbs, render_depths, render_Ts, distortion_rgbs, distortion_depths
@@ -437,6 +440,9 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
         ctx.height = height
         ctx.camera_model = camera_model
         ctx.backward_info = backward_info
+
+        if dist_coeffs is not None:
+            render_rgbs = render_rgbs.clone()  # TODO
 
         # render_alphas = 1.0 - render_Ts
         return (

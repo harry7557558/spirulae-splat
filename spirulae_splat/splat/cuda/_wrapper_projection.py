@@ -576,6 +576,7 @@ def fully_fused_projection_hetero(
     sparse_grad: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
     dist_coeffs: Optional[Tensor] = None,
+    backward_info: Optional[dict] = None,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     batch_dims = in_splats[0].shape[:-2]
     C = viewmats.shape[-3]
@@ -588,6 +589,7 @@ def fully_fused_projection_hetero(
     if primitive in ["3dgs", "mip", "3dgut"]:
         _FullyFusedProjection = _FullyFusedProjection3DGSHetero
         in_splats = [primitive, *in_splats]
+        additional_args.append(backward_info)
     elif primitive in ["opaque_triangle"]:
         _FullyFusedProjection = _FullyFusedProjectionOpaqueTriangleHetero
     proj_returns = _FullyFusedProjection.apply(
@@ -642,6 +644,7 @@ class _FullyFusedProjection3DGSHetero(torch.autograd.Function):
         dist_coeffs: Optional[Tensor],
         intersection_count_map: Tensor,  # [C+1]
         intersection_splat_id: Tensor,  # [nnz]
+        backward_info: Optional[dict] = None,
     ):
         camera_model_type = camera_model.upper()
 
@@ -660,6 +663,10 @@ class _FullyFusedProjection3DGSHetero(torch.autograd.Function):
         )
         ctx.primitive = primitive
         ctx.camera = (image_width, image_height, tile_width, tile_height, camera_model_type)
+
+        if backward_info is not None:
+            backward_info['num_splats'] = len(intersection_splat_id)
+        ctx.backward_info = backward_info
 
         return camera_ids, gaussian_ids, aabb, *proj_returns
 
@@ -687,6 +694,10 @@ class _FullyFusedProjection3DGSHetero(torch.autograd.Function):
             tuple([(x.contiguous() if isinstance(x, torch.Tensor) else None) for x in v_proj_returns]),
             ctx.needs_input_grad[7], False,
         )
+
+        if ctx.backward_info is not None and 'accum_weight' in ctx.backward_info:
+            ctx.backward_info['accum_weight'] = scatter_max(
+                opacities, ctx.backward_info['accum_weight'], gaussian_ids).flatten()
 
         return (
             None,

@@ -113,9 +113,9 @@ __global__ void per_splat_losses_backward_kernel(
         quat_norm_reg_weight
     );
 
-    v_scales_buffer[idx] = v_scale;
-    v_opacities_buffer[idx] = v_opacity;
-    v_quats_buffer[idx] = v_quat;
+    v_scales_buffer[idx] = isfinite(dot(v_scale, v_scale)) ? v_scale : make_float3(0.0f);
+    v_opacities_buffer[idx] = isfinite(v_opacity) ? v_opacity : 0.0f;
+    v_quats_buffer[idx] = isfinite(dot(v_quat, v_quat)) ? v_quat : make_float4(0.0f);
 }
 
 
@@ -174,17 +174,17 @@ __global__ void per_splat_losses_backward_kernel(
         quat_norm_reg_weight
     );
 
-    v_scales_buffer[idx] = v_scale;
-    v_opacities_buffer[idx] = v_opacity;
-    v_quats_buffer[idx] = v_quat;
+    v_scales_buffer[idx] = isfinite(dot(v_scale, v_scale)) ? v_scale : make_float3(0.0f);
+    v_opacities_buffer[idx] = isfinite(v_opacity) ? v_opacity : 0.0f;
+    v_quats_buffer[idx] = isfinite(dot(v_quat, v_quat)) ? v_quat : make_float4(0.0f);
 
-    vr_scales_buffer[idx] = vr_scale;
-    vr_opacities_buffer[idx] = vr_opacity;
-    vr_quats_buffer[idx] = vr_quat;
+    vr_scales_buffer[idx] = isfinite(dot(vr_scale, vr_scale)) ? vr_scale : make_float3(0.0f);
+    vr_opacities_buffer[idx] = isfinite(vr_opacity) ? vr_opacity : 0.0f;
+    vr_quats_buffer[idx] = isfinite(dot(vr_quat, vr_quat)) ? vr_quat : make_float4(0.0f);
 
-    h_scales_buffer[idx] = h_scale;
-    h_opacities_buffer[idx] = h_opacity;
-    h_quats_buffer[idx] = h_quat;
+    h_scales_buffer[idx] = isfinite(dot(h_scale, h_scale)) ? h_scale : make_float3(0.0f);
+    h_opacities_buffer[idx] = isfinite(h_opacity) ? h_opacity : 0.0f;
+    h_quats_buffer[idx] = isfinite(dot(h_quat, h_quat)) ? h_quat : make_float4(0.0f);
 }
 
 

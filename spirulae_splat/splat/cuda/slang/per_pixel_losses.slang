@@ -159,11 +159,11 @@ float[RawLossIndex::length] per_pixel_losses(
 
     // Distortion regularization
     losses[RawLossIndex::RgbDistReg] = weights[LossWeightIndex::RgbDistReg] *
-        mean3(rgb_dist) / max(render_alpha, 1e-12);
+        mean3(rgb_dist);// / max(render_alpha, 1e-12);
     losses[RawLossIndex::DepthDistReg] = weights[LossWeightIndex::DepthDistReg] *
-        depth_dist / max(render_alpha, 1e-12);
+        depth_dist;// / max(render_alpha, 1e-12);
     losses[RawLossIndex::NormalDistReg] = weights[LossWeightIndex::NormalDistReg] *
-        mean3(normal_dist) / max(render_alpha, 1e-12);
+        mean3(normal_dist);// / max(render_alpha, 1e-12);
 
     // Mask total
     losses[RawLossIndex::PixelsTotal] = 1.0f;  // required for patched batching

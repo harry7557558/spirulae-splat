@@ -356,6 +356,7 @@ def rasterization(
             sparse_grad=sparse_grad,
             camera_model=camera_model,
             dist_coeffs=dist_coeffs,
+            backward_info=backward_info,
         )
 
     else:

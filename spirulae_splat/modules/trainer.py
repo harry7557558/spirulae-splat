@@ -420,9 +420,10 @@ class TrainerConfigPatched(TrainerConfig):
         # packed=True,
         use_bvh=True,
         use_camera_optimizer=False,
-        # use_bilateral_grid=False,
-        # use_bilateral_grid_for_geometry=False,
+        use_bilateral_grid=False,
+        use_bilateral_grid_for_geometry=False,  # TODO: slow
         alpha_reg_weight=0.0,
+        primitive="mip", max_screen_size=float('inf'),  # TODO
     ))
     optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)
 
@@ -447,9 +448,9 @@ class TrainerConfigTriangle(TrainerConfig):
         supervision_warmup=0,
         depth_supervision_weight=0.0,
         normal_supervision_weight=0.04,
-        depth_distortion_reg_weight=0.01,
-        normal_distortion_reg_weight=0.005,
-        rgb_distortion_reg_weight=0.01,
+        depth_distortion_reg=0.01,
+        normal_distortion_reg=0.005,
+        rgb_distortion_reg=0.01,
         ssim_lambda=0.4,
         preallocate_splat_tensors=False,  # TODO
     ))
@@ -479,9 +480,9 @@ class TrainerConfigTrianglePatched(TrainerConfig):
         supervision_warmup=0,
         depth_supervision_weight=0.0,
         normal_supervision_weight=0.04,
-        depth_distortion_reg_weight=0.01,
-        normal_distortion_reg_weight=0.005,
-        rgb_distortion_reg_weight=0.01,
+        depth_distortion_reg=0.01,
+        normal_distortion_reg=0.005,
+        rgb_distortion_reg=0.01,
         ssim_lambda=0.4,
         reg_warmup_length=1000,
         preallocate_splat_tensors=False,  # TODO
@@ -517,7 +518,7 @@ class TrainerConfigVoxel(TrainerConfig):
         erank_reg_s3=0.0,
         depth_supervision_weight=0.0,
         supervision_warmup=0,
-        depth_distortion_reg_weight=0.01,
+        depth_distortion_reg=0.01,
         reg_warmup_length=100,
         distortion_reg_warmup=100,
         preallocate_splat_tensors=False,  # TODO
@@ -665,7 +666,7 @@ class TrainerConfigAcademicBaseline(TrainerConfig):
         use_long_axis_split=False,
         max_screen_size=float('inf'),
         suppress_initial_scales=False,
-        depth_distortion_reg_weight=0.0,
+        depth_distortion_reg=0.0,
         normal_reg_weight=0.0,
         alpha_reg_weight=0.0,
         alpha_loss_weight=0.0,

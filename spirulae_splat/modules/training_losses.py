@@ -576,9 +576,9 @@ class SplatTrainingLosses(torch.nn.Module):
 
     def get_2dgs_reg_weights(self):
         factor = min(self.step / max(self.config.distortion_reg_warmup, 1), 1)
-        weight_depth_reg = self.config.depth_distortion_reg_weight * factor
-        weight_normal_dist_reg = self.config.normal_distortion_reg_weight * factor
-        weight_rgb_dist_reg = self.config.rgb_distortion_reg_weight * factor
+        weight_depth_reg = self.config.depth_distortion_reg * factor
+        weight_normal_dist_reg = self.config.normal_distortion_reg * factor
+        weight_rgb_dist_reg = self.config.rgb_distortion_reg * factor
         weight_normal_reg = self.config.normal_reg_weight * factor
         return (weight_depth_reg, weight_normal_dist_reg, weight_rgb_dist_reg), weight_normal_reg
 

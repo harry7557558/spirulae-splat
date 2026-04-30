@@ -245,11 +245,11 @@ class SpirulaeSplatModelConfig:
     """If enabled, a scale regularization introduced in PhysGauss (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians."""
     max_gauss_ratio: float = 10.0
     """Threshold of ratio of gaussian max to min scale before applying regularization loss from the PhysGaussian paper"""
-    depth_distortion_reg_weight: float = 0.0
+    depth_distortion_reg: float = 0.0
     """Weight for depth distortion regularizer"""
-    normal_distortion_reg_weight: float = 0.0
+    normal_distortion_reg: float = 0.0
     """Weight for normal distortion regularizer"""
-    rgb_distortion_reg_weight: float = 0.0
+    rgb_distortion_reg: float = 0.0
     """Weight for rgb distortion regularizer"""
     distortion_reg_warmup: int = 6000
     """warmup steps for depth regularizer, regularization weight ramps up"""
@@ -936,7 +936,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             if visibility_masks is None:
                 visibility_masks = torch.zeros((len(camera), H, W, 1), dtype=torch.bool, device=device)
             visibility_masks = self._downscale_if_required(visibility_masks)
-            kwargs['masks'] = visibility_masks.bool()
+            kwargs['max_blending_masks'] = visibility_masks.bool()
 
         if 'accum_weight_map' in camera.metadata:
             accum_weight_map = camera.metadata['accum_weight_map']
