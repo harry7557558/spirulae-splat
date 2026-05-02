@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from spirulae_splat.modules.camera import Cameras
+from spirulae_splat.modules.camera import Cameras, CameraType
 from spirulae_splat.splat.rendering import rasterization
 from spirulae_splat.viewer_legacy.utils import triangle_verts_to_quat_scale_mean
 
@@ -52,6 +52,16 @@ def annotate_train_cameras(
     # size = size * (kwargs.get("relative_scale", 1.0) or 1.0)
     # relative_scale = size / 0.05
     # print(relative_scale)
+
+    if cameras.camera_type[0] == CameraType.EQUIRECTANGULAR.value:
+        from spirulae_splat.modules.resample import warp_equirectangular_to_pinhole
+        camera_to_worlds, intrins, distortion_params, thumbnails = \
+             warp_equirectangular_to_pinhole(cameras.camera_to_worlds.cuda(), thumbnails.cuda())
+        cameras = Cameras(
+            intrins, distortion_params,
+            thumbnails.shape[-3], thumbnails.shape[-2],
+            camera_to_worlds, "PINHOLE"
+        )
 
     R = view_camera.camera_to_worlds[:, :3, :3]  # 3 x 3
     T = view_camera.camera_to_worlds[:, :3, 3:4]  # 3 x 1

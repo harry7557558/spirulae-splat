@@ -209,7 +209,8 @@ def metashape_to_json(
         raise ValueError("No sensors found")
 
     calibrated_sensors = [
-        sensor for sensor in sensors.iter("sensor") if sensor.get("type") == "spherical" or sensor.find("calibration") is not None
+        sensor for sensor in sensors.iter("sensor")
+        if sensor.get("type") in ["spherical", "cylindrical"] or sensor.find("calibration") is not None
     ]
     sensor_dict = {}
     for sensor in calibrated_sensors:
@@ -222,6 +223,8 @@ def metashape_to_json(
             s["camera_model"] = CameraType.EQUIDISTANT.value
         elif sensor_type == "spherical":
             s["camera_model"] = CameraType.EQUIRECTANGULAR.value
+        elif sensor_type == "cylindrical":
+            s["camera_model"] = CameraType.CYLINDRICAL.value
         else:
             # Unsupported: Equisolid fisheye, cylindrical, RPC, etc.
             raise ValueError(f"Unsupported Metashape sensor type '{sensor_type}'")
@@ -235,7 +238,7 @@ def metashape_to_json(
         # https://www.agisoft.com/pdf/metashape-pro_2_2_en.pdf Appendix D. Camera Models
         calib = sensor.find("calibration[@class!='initial']")
         if calib is None:
-            assert sensor_type[0] == "spherical", "Only spherical sensors should have no intrinsics"
+            assert sensor_type in ["spherical", "cylindrical"], "Only spherical sensors should have no intrinsics"
             s["fl_x"] = s["w"] / 2.0
             s["fl_y"] = s["h"]
             s["cx"] = s["w"] / 2.0

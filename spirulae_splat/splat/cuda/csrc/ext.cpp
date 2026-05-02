@@ -87,6 +87,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("distort_image", &distort_image_tensor);
     m.def("undistort_image", &undistort_image_tensor);
     m.def("warp_image_wide_to_pinhole", &warp_image_wide_to_pinhole_tensor);
+    m.def("warp_image_equirectangular_to_pinhole", &warp_image_equirectangular_to_pinhole_tensor);
     m.def("warp_image_pinhole_to_wide", &warp_image_pinhole_to_wide_tensor);
     m.def("warp_linear_depth_pinhole_to_wide", &warp_linear_depth_pinhole_to_wide_tensor);
     m.def("warp_ray_depth_pinhole_to_wide", &warp_ray_depth_pinhole_to_wide_tensor);

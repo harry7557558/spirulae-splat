@@ -19,7 +19,8 @@ import numpy as np
 from collections import deque
 from functools import cached_property
 
-from spirulae_splat.modules.camera import Cameras
+from spirulae_splat.modules.camera import Cameras, CameraType
+from spirulae_splat.modules.resample import warp_equirectangular_to_pinhole
 
 from spirulae_splat.modules.dataset import SpirulaeSplatDataset, IndexedDatasetWrapper
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
@@ -296,7 +297,7 @@ class SpirulaeSplatDataManager:
                 size=batch['image'].shape[:2], mode='bilinear', align_corners=False
             )[0].permute(1, 2, 0).to(batch[key].dtype)
 
-        camera = self.train_dataset.cameras[idx]
+        camera = self.train_dataset.cameras[idx]  # type: Cameras
         if camera.metadata is None:
             camera.metadata = {}
         camera.metadata["cam_idx"] = int(idx)
@@ -372,6 +373,8 @@ class SpirulaeSplatDataManager:
             batch[key] = torch.stack(batch[key]).to(self.device)
 
         camera = self.train_dataset.cameras[image_indices]
+        if CameraType.EQUIRECTANGULAR.value in camera.camera_type:
+            raise NotImplementedError("Equirectangular is not supported in patched batching mode.")  # TODO
         if camera.metadata is None:
             camera.metadata = {}
         camera.metadata['actual_height'] = camera.height.float().mean().item()
@@ -509,9 +512,15 @@ class SpirulaeSplatDataManager:
             assert self.config.cache_images != "disk", "Disk caching not supported in patch batching mode"
             assert not self.config.split_batch, "split_batch not supported in patch batching mode"  # TODO
             results = [self.get_tiles(self.config.patch_batch_size, self.train_indices)]
-            # TODO: edge map
         else:
             camera, batch = self.train_index_group_loader.get_batch()
+            if camera['camera_type'][0] == CameraType.EQUIRECTANGULAR.value:
+                camera['camera_to_worlds'], camera['intrins'], camera['distortion_params'], batch['image'] = \
+                    warp_equirectangular_to_pinhole(camera['camera_to_worlds'].cuda(), batch['image'].cuda())
+                camera['height'], camera['width'] = batch['image'].shape[-3:-1]
+                if 'cam_idx' in camera.get('metadata', {}):
+                    camera['metadata']['cam_idx'] = torch.stack(sum([[6*i+j for j in range(6)] for i in camera['metadata']['cam_idx']], []))
+                camera['camera_type'] = [CameraType.PERSPECTIVE.value] * len(camera['intrins'])
             results = pack_batch(camera, batch)
 
         # TODO

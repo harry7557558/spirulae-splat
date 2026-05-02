@@ -55,7 +55,7 @@ from spirulae_splat.splat.cuda import (
     svhash_get_voxels
 )
 
-from spirulae_splat.modules.camera import Cameras
+from spirulae_splat.modules.camera import Cameras, CameraType
 
 
 class SaturateKeepGradient(torch.autograd.Function):
@@ -330,6 +330,11 @@ class SpirulaeSplatModel(torch.nn.Module):
         self.cameras = cameras
 
         self.num_train_data = len(self.cameras)
+
+        if CameraType.EQUIRECTANGULAR.value in cameras.camera_type:
+            assert len(set(cameras.camera_type)) == 1, "Mixed equirectangular and pinhole/fisheye is not supported"
+            self.num_train_data *= 6  # TODO
+
         self.info = {}
 
         self.populate_modules()
@@ -690,6 +695,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         return distances[:, 1:].astype(np.float32), indices[:, 1:].astype(np.int64)
 
     def suppress_initial_scales(self, means: torch.Tensor, scales: torch.Tensor):
+        assert CameraType.EQUIRECTANGULAR.value not in self.cameras, "TODO: Not Implemented"
 
         R = self.cameras.camera_to_worlds[:, :3, :3]  # 3 x 3
         T = self.cameras.camera_to_worlds[:, :3, 3:4]  # 3 x 1

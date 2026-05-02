@@ -1,0 +1,55 @@
+import torch
+from torch import Tensor
+import math
+import numpy as np
+
+from spirulae_splat.splat.cuda import _make_lazy_cuda_func
+
+from functools import cache
+
+@cache
+def get_cubemap_faces():
+    return torch.Tensor([
+        [[1,0,0],[0,1,0],[0,0,1]],
+        [[0,0,-1],[0,1,0],[1,0,0]],
+        [[-1,0,0],[0,0,1],[0,1,0]],
+        [[0,-1,0],[0,0,1],[-1,0,0]],
+        [[1,0,0],[0,0,1],[0,-1,0]],
+        [[1,0,0],[0,-1,0],[0,0,-1]],
+    ]).float().cuda()
+
+@torch.no_grad()
+def warp_equirectangular_to_pinhole(
+    camera_to_worlds: Tensor,  # [B, 3, 4],
+    images: Tensor,  # [B, H, W, C]
+):
+    axes = get_cubemap_faces()
+    b, h, w, c = images.shape
+    out_shape = int(math.ceil(math.sqrt(h * w / len(axes))))
+    images = _make_lazy_cuda_func("warp_image_equirectangular_to_pinhole")(
+        images, axes, out_shape, out_shape
+    )
+    # print(torch.linalg.det(axes))
+    # if b == 1:
+    #     import matplotlib.pyplot as plt
+    #     plt.imshow(images[0].reshape(-1, out_shape, c).detach().cpu().numpy())
+    #     plt.show()
+
+    # TODO: fused kernels
+    camera_to_worlds = camera_to_worlds.clone()
+    camera_to_worlds[:, :3, :3] = camera_to_worlds[:, :3, :3] * torch.tensor([[[1.0, -1.0, -1.0]]]).to(camera_to_worlds)
+    camera_to_worlds = torch.cat((
+        torch.einsum('cij,bkj->bcki', axes, camera_to_worlds[:, :3, :3]),
+        camera_to_worlds[:, None, :3, 3:].repeat(1, len(axes), 1, 1)
+    ), dim=-1)
+    camera_to_worlds[:, :, :3, :3] = camera_to_worlds[:, :, :3, :3] * torch.tensor([[[[1.0, -1.0, -1.0]]]]).to(camera_to_worlds)
+    intrins = torch.from_numpy(np.array([
+        [out_shape/2, out_shape/2, out_shape/2, out_shape/2]
+    ]*(b*len(axes)), dtype=np.float32))
+    distortion_params = torch.zeros(b*len(axes), 10).float()
+    return (
+        camera_to_worlds.view(-1, *camera_to_worlds.shape[2:]),
+        intrins,
+        distortion_params,
+        images.view(-1, *images.shape[2:]),
+    )

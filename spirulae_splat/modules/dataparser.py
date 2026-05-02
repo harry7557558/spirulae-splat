@@ -657,11 +657,11 @@ class SpirulaeSplatDataparser:
             if len(ply_files) > 1:
                 raise ValueError("Multiple ply file found in dataset_dir. Please specify using --dataparser.metashape_ply")
             self.config.metashape_ply = ply_files[0]
-            print("Using PLY file found:", self.config.metashape_ply / self.config.metashape_ply)
+            print("Using PLY file found:", self.dataset_dir / self.config.metashape_ply)
         if not (self.dataset_dir / self.config.metashape_ply).exists():
-            raise ValueError(f"ply file {self.config.metashape_ply / self.config.metashape_ply} doesn't exist")
+            raise ValueError(f"ply file {self.dataset_dir / self.config.metashape_ply} doesn't exist")
         if self.config.metashape_ply.suffix.lower() != ".ply":
-            raise ValueError(f"ply file {self.config.metashape_ply / self.config.metashape_ply} must have a .ply extension")
+            raise ValueError(f"ply file {self.dataset_dir / self.config.metashape_ply} must have a .ply extension")
 
         # Load .psx file
         if self.config.metashape_psx is None:

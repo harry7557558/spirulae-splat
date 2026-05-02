@@ -1394,8 +1394,9 @@ at::Tensor ray_depth_to_linear_depth_backward_tensor(
 // Distort / Undistort
 // ================
 
-inline __device__ float get_pixel_bilinear(
-    const TensorView<float, 4> image,  // [B, H, W, C]
+template<typename T>
+inline __device__ T get_pixel_bilinear(
+    const TensorView<T, 4> image,  // [B, H, W, C]
     uint32_t bid,
     uint32_t cid,
     float x,
@@ -1414,24 +1415,25 @@ inline __device__ float get_pixel_bilinear(
     float wy0 = 1.0f - wy1;
 
     float c00 = (x0 >= 0 && x0 < W && y0 >= 0 && y0 < H) ?
-        image.at(bid, y0, x0, cid) : padding;
+        (float)image.at(bid, y0, x0, cid) : padding;
     float c10 = (x1 >= 0 && x1 < W && y0 >= 0 && y0 < H) ?
-        image.at(bid, y0, x1, cid) : padding;
+        (float)image.at(bid, y0, x1, cid) : padding;
     float c01 = (x0 >= 0 && x0 < W && y1 >= 0 && y1 < H) ?
-        image.at(bid, y1, x0, cid) : padding;
+        (float)image.at(bid, y1, x0, cid) : padding;
     float c11 = (x1 >= 0 && x1 < W && y1 >= 0 && y1 < H) ?
-        image.at(bid, y1, x1, cid) : padding;
+        (float)image.at(bid, y1, x1, cid) : padding;
 
     float c = 0.0f;
     c += c00 * (wx0 * wy0);
     c += c10 * (wx1 * wy0);
     c += c01 * (wx0 * wy1);
     c += c11 * (wx1 * wy1);
-    return c;
+    return (T)c;
 }
 
-inline __device__ float get_pixel_bilinear(
-    const TensorView<float, 5> image,  // [B, K, H, W, C]
+template<typename T>
+inline __device__ T get_pixel_bilinear(
+    const TensorView<T, 5> image,  // [B, K, H, W, C]
     uint32_t bid,
     uint32_t kid,
     uint32_t cid,
@@ -1451,20 +1453,20 @@ inline __device__ float get_pixel_bilinear(
     float wy0 = 1.0f - wy1;
 
     float c00 = (x0 >= 0 && x0 < W && y0 >= 0 && y0 < H) ?
-        image.at(bid, kid, y0, x0, cid) : padding;
+        (float)image.at(bid, kid, y0, x0, cid) : padding;
     float c10 = (x1 >= 0 && x1 < W && y0 >= 0 && y0 < H) ?
-        image.at(bid, kid, y0, x1, cid) : padding;
+        (float)image.at(bid, kid, y0, x1, cid) : padding;
     float c01 = (x0 >= 0 && x0 < W && y1 >= 0 && y1 < H) ?
-        image.at(bid, kid, y1, x0, cid) : padding;
+        (float)image.at(bid, kid, y1, x0, cid) : padding;
     float c11 = (x1 >= 0 && x1 < W && y1 >= 0 && y1 < H) ?
-        image.at(bid, kid, y1, x1, cid) : padding;
+        (float)image.at(bid, kid, y1, x1, cid) : padding;
 
     float c = 0.0f;
     c += c00 * (wx0 * wy0);
     c += c10 * (wx1 * wy0);
     c += c01 * (wx0 * wy1);
     c += c11 * (wx1 * wy1);
-    return c;
+    return (T)c;
 }
 
 template<bool is_undistort>
@@ -1650,6 +1652,93 @@ at::Tensor warp_image_wide_to_pinhole_tensor(
         tensor2view<float, 4>(wide_image), tensor2view<float, 5>(pinhole_images),
         axes.data_ptr<float>()
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return pinhole_images;
+}
+
+template<typename T>
+__global__ void warp_image_equirectangular_to_pinhole_kernel(
+    TensorView<T, 4> equirectangular_image,  // [B, H, W, C]
+    TensorView<T, 5> pinhole_images,  // [B*K, H, W, C]
+    const float* __restrict__ axes,  // [K, 3, 3]
+    float padding
+) {
+    const int B = equirectangular_image.shape[0],
+        h = equirectangular_image.shape[1],
+        w = equirectangular_image.shape[2],
+        K = pinhole_images.shape[1],
+        Hp = pinhole_images.shape[2],
+        Wp = pinhole_images.shape[3],
+        C = equirectangular_image.shape[3];
+
+    uint32_t bid = blockIdx.z * blockDim.z + threadIdx.z;
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (bid >= B || i >= Wp || j >= Hp)
+        return;
+    float tx = -1.0f + 2.0f * ((float)i + 0.5f) / (float)Wp;
+    float ty = -1.0f + 2.0f * ((float)j + 0.5f) / (float)Hp;
+
+    const float f = (float)w * (0.5f / (float)M_PI);
+    for (int ki = 0; ki < K; ++ki) {
+        float3 axis_x = {axes[0], axes[1], axes[2]};
+        float3 axis_y = {axes[3], axes[4], axes[5]};
+        float3 axis_z = {axes[6], axes[7], axes[8]};
+        axes += 9;
+
+        float3 raydir = axis_z + tx * axis_x + ty * axis_y;
+        float2 uv = {
+            0.5f * (float)w + f * atan2f(raydir.x, raydir.z),
+            0.5f * (float)h + f * atan2f(raydir.y, hypotf(raydir.x, raydir.z))
+        };
+        for (int c = 0; c < C; c++)
+            pinhole_images.at(bid, ki, j, i, c) = get_pixel_bilinear(
+                equirectangular_image, bid, c, uv.x, uv.y, padding);
+    }
+
+}
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor warp_image_equirectangular_to_pinhole_tensor(
+    at::Tensor equirectangular_image,  // [B, H, W, C]
+    at::Tensor axes,  // [K, 3, 3]
+    int out_w, int out_h
+) {
+    DEVICE_GUARD(equirectangular_image);
+    CHECK_CUDA(equirectangular_image);
+    CHECK_INPUT(axes);
+
+    if (equirectangular_image.ndimension() != 4)
+        AT_ERROR("equirectangular_image shape must be (B, H, W, C)");
+    if (axes.ndimension() != 3 || axes.size(1) != 3 || axes.size(2) != 3)
+        AT_ERROR("axes shape must be (K, 3, 3)");
+
+    int b = equirectangular_image.size(0), c = equirectangular_image.size(3);
+    int k = axes.size(0);
+    at::Tensor pinhole_images = at::empty({b, k, out_h, out_w, c}, equirectangular_image.options());
+
+    if (equirectangular_image.scalar_type() == at::kFloat)
+        warp_image_equirectangular_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
+            tensor2view<float, 4>(equirectangular_image), tensor2view<float, 5>(pinhole_images),
+            axes.data_ptr<float>(), 0.5f
+        );
+    else if (equirectangular_image.scalar_type() == at::kByte)
+        warp_image_equirectangular_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
+            tensor2view<uint8_t, 4>(equirectangular_image), tensor2view<uint8_t, 5>(pinhole_images),
+            axes.data_ptr<float>(), 128.0f
+        );
+    // else if (equirectangular_image.scalar_type() == at::kHalf)
+    //     warp_image_equirectangular_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
+    //         tensor2view<half, 4>(equirectangular_image), tensor2view<half, 5>(pinhole_images),
+    //         axes.data_ptr<float>(), 0.5f
+    //     );
+    else if (equirectangular_image.scalar_type() == at::kUInt16)
+        warp_image_equirectangular_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
+            tensor2view<uint16_t, 4>(equirectangular_image), tensor2view<uint16_t, 5>(pinhole_images),
+            axes.data_ptr<float>(), 32768.0f
+        );
+    else throw std::runtime_error("Unsupported image format for equirectangular");
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return pinhole_images;

@@ -9,7 +9,8 @@ class CameraType(Enum):
     PERSPECTIVE = "PINHOLE"
     EQUIDISTANT = "FISHEYE"
     EQUISOLID = None
-    EQUIRECTANGULAR = None
+    EQUIRECTANGULAR = "EQUIRECTANGULAR"
+    CYLINDRICAL = None
 
 class CameraDistortionType(Enum):
     UNDISTORTED = None
@@ -42,6 +43,10 @@ _COLMAP_CAMERA_MODEL_TO_TYPE = {
     "DIVISION": None,
     "SIMPLE_FISHEYE": CameraType.EQUIDISTANT,
     "FISHEYE": CameraType.EQUIDISTANT,
+    # additional ones
+    "EQUISOLID": None,
+    "EQUIRECTANGULAR": CameraType.EQUIRECTANGULAR,
+    "CYLINDRICAL": None,
 }
 
 def colmap_camera_model_to_type(camera_model: str):

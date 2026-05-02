@@ -248,6 +248,13 @@ at::Tensor warp_image_wide_to_pinhole_tensor(
 );
 
 
+at::Tensor warp_image_equirectangular_to_pinhole_tensor(
+    at::Tensor equirectangular_image,  // [B, H, W, C]
+    at::Tensor axes,  // [K, 3, 3]
+    int out_w, int out_h
+);
+
+
 at::Tensor warp_image_pinhole_to_wide_tensor(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
