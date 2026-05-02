@@ -38,6 +38,11 @@ from spirulae_splat.modules.colmap_utils import (
     load_colmap_images,
     parse_colmap_camera_params,
 )
+from spirulae_splat.modules.metashape_utils import (
+    metashape_to_json,
+    find_metashape_cameras_dict,
+    ET,
+)
 
 from spirulae_splat.modules import camera_utils
 
@@ -183,6 +188,12 @@ class SpirulaeSplatDataParserConfig:
     """Path to depth maps relative to dataset directory, used for COLMAP and Metashape datasets"""
     normal_dir: Path = Path("normals")
     """Path to normal maps relative to dataset directory, used for COLMAP and Metashape datasets"""
+    metashape_xml: Optional[Path] = None
+    """Path to the Metashape xml file. Will automatically detect if not specified."""
+    metashape_ply: Optional[Path] = None
+    """Path to the Metashape point export ply file. Will automatically detect if not specified."""
+    metashape_psx: Optional[Path] = None
+    """Path to Metashape PSX file, used to resolve file name ambiguity when there are multiple images with the same file name"""
     rescale_camera_to_fit: Union[bool, int] = False
     """Whether to check if image resolution match camera resolution and scale camera intrinsics accordingly if not.
         Set this to a number to divide intrinsics by that number, e.g. Mip-NeRF 360 and Zip-NeRF with images_(2|4)
@@ -238,7 +249,7 @@ class SpirulaeSplatDataparser:
         if self.config.data_format == "nerfstudio":
             return self._parse_nerfstudio_data()
         if self.config.data_format == "metashape":
-            raise ValueError("TODO")
+            return self._parser_metashape_data()
 
         try:
             print("Attempting to parse Nerfstudio data...")
@@ -250,6 +261,11 @@ class SpirulaeSplatDataparser:
             return self._parse_colmap_data()
         except BaseException as e:
             print("Failed to parse COLMAP data:", ' '.join(map(str, e.args)))
+        try:
+            print("Attempting to parse Metashape data...")
+            return self._parser_metashape_data()
+        except BaseException as e:
+            print("Failed to parse Metashape data:", ' '.join(map(str, e.args)))
         raise ValueError("No supported dataset format detected. Make sure you have a supported Nerfstudio, COLMAP, or Metashape dataset.")
 
     def _parse_nerfstudio_data(self, _meta=None, _points3D=None):
@@ -610,6 +626,90 @@ class SpirulaeSplatDataparser:
             _meta={'frames': frames},
             _points3D={'points3D_xyz': xyz, 'points3D_rgb': rgb}
         )
+
+    def _parser_metashape_data(self):
+
+        if not os.path.exists(self.dataset_dir):
+            raise ValueError("Work directory " + self.dataset_dir + " not found")
+        dataset_dir_files = [Path(fn) for fn in os.listdir(self.dataset_dir)]
+
+        # Load .xml file
+        if self.config.metashape_xml is None:
+            xml_files = [self.dataset_dir / fn for fn in dataset_dir_files if fn.suffix.lower() == ".xml"]
+            if len(xml_files) == 0:
+                raise ValueError("No XML file found in dataset_dir. Please specify using --dataparser.metashape_xml")
+            if len(xml_files) > 1:
+                raise ValueError("Multiple XML file found in dataset_dir. Please specify using --dataparser.metashape_xml")
+            self.config.metashape_xml = xml_files[0]
+            print("Using XML file found:", self.config.metashape_xml)
+        elif not self.config.metashape_xml.exists():
+            self.config.metashape_xml = self.dataset_dir / self.config.metashape_xml
+        if not self.config.metashape_xml.exists():
+            raise ValueError(f"XML file {self.config.metashape_xml} doesn't exist")
+        if self.config.metashape_xml.suffix.lower() != ".xml":
+            raise ValueError(f"XML file {self.config.metashape_xml} must have a .xml extension")
+
+        # Load .ply file
+        if self.config.metashape_ply is None:
+            ply_files = [fn for fn in dataset_dir_files if fn.suffix.lower() == ".ply"]
+            if len(ply_files) == 0:
+                raise ValueError("No ply file found in dataset_dir. Please specify using --dataparser.metashape_ply")
+            if len(ply_files) > 1:
+                raise ValueError("Multiple ply file found in dataset_dir. Please specify using --dataparser.metashape_ply")
+            self.config.metashape_ply = ply_files[0]
+            print("Using PLY file found:", self.config.metashape_ply / self.config.metashape_ply)
+        if not (self.dataset_dir / self.config.metashape_ply).exists():
+            raise ValueError(f"ply file {self.config.metashape_ply / self.config.metashape_ply} doesn't exist")
+        if self.config.metashape_ply.suffix.lower() != ".ply":
+            raise ValueError(f"ply file {self.config.metashape_ply / self.config.metashape_ply} must have a .ply extension")
+
+        # Load .psx file
+        if self.config.metashape_psx is None:
+            psx_files = [self.dataset_dir / fn for fn in dataset_dir_files if fn.suffix.lower() == ".psx"]
+            if len(psx_files) > 1:
+                raise ValueError("Multiple psx file found in dataset_dir. Please specify using --dataparser.metashape_psx")
+            if len(psx_files) != 0:
+                self.config.metashape_psx = psx_files[0]
+                print("Using PSX file found:", self.config.metashape_psx)
+        if self.config.metashape_psx is not None and not self.config.metashape_psx.exists():
+            self.config.metashape_psx = self.dataset_dir / self.config.metashape_psx
+            if not self.config.metashape_psx.exists():
+                raise ValueError(f"psx file {self.config.metashape_psx} doesn't exist")
+        camera_dict = None
+        if self.config.metashape_psx is not None:
+            if self.config.metashape_psx.suffix.lower() != ".psx":
+                raise ValueError(f"psx file {self.config.metashape_psx} must have a .psx extension")
+            root = ET.parse(self.config.metashape_psx).getroot()
+            metashape_dir = self.config.metashape_psx.parent / root.get("path").replace("{projectname}", self.config.metashape_psx.name.rstrip(".psx"))
+            camera_dict = find_metashape_cameras_dict(metashape_dir.parent)
+
+        image_dir = self.dataset_dir / self.config.image_dir
+        if not image_dir.exists():
+            raise ValueError(f"Image directory `{image_dir}` does not exist. Please specify using --dataparser.image_dir")
+
+        summary_log = []
+
+        image_filenames = []
+        for file_path in image_dir.rglob("*"):
+            if file_path.is_file():
+                file_path = file_path.relative_to(self.dataset_dir)
+                image_filenames.append(str(file_path))
+
+        transforms, summary = metashape_to_json(
+            xml_filename=self.config.metashape_xml,
+            ply_filename=self.config.metashape_ply,
+            image_filenames=image_filenames,
+            camera_dict=camera_dict,
+        )
+        summary_log.extend(summary)
+
+        if len(transforms) > 1:
+            print("WARNING: Multiple components found in Metashape export, which can have unintended effects. Clean up if needed.")
+
+        for summary in summary_log:
+            print(summary)
+
+        return self._parse_nerfstudio_data(transforms[0])
 
     def _load_3D_points(self, ply_file_path: Path, transform_matrix: torch.Tensor, scale_factor: float):
         """Loads point clouds positions and colors from .ply

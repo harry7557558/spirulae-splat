@@ -6,7 +6,7 @@ from spirulae_splat.splat.cuda import _make_lazy_cuda_func
 
 @torch.no_grad()
 def detect_edge(im: torch.Tensor):
-    im = (im.float() / 255.0).cuda()
+    assert im.dtype == torch.float32
     return _make_lazy_cuda_func("canny_edge_filter")(im)
     # return _make_lazy_cuda_func("laplacian_edge_filter")(im)
     # return _make_lazy_cuda_func("smoothed_laplacian_edge_filter")(im)
