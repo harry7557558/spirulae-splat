@@ -18,8 +18,6 @@ template void projection_fused_fwd_kernel_wrapper<
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
     // outputs
     float4 *__restrict__ aabbs,         // [B, C, N, 4]
     Vanilla3DGS::Screen::Buffer splats_screen

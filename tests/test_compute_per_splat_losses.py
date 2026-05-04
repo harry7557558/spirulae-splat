@@ -30,7 +30,6 @@ class Config:
     use_ppisp = False
     lpips_lambda = 0.0
     use_mcmc = True
-    erank_reg_warmup = 0
     
     depth_supervision_weight = 0.0
     normal_supervision_weight = 0.0

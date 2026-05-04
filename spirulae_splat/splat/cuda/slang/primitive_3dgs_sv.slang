@@ -23,8 +23,6 @@
     no_diff const float[10] dist_coeffs, \
     const uint image_width, \
     const uint image_height, \
-    no_diff const float near_plane, \
-    no_diff const float far_plane, \
     no_diff out float4 aabb_xyxy, \
     out float2 mean2d, \
     out float depth, \
@@ -43,7 +41,7 @@ void projection_3dgs_sv<let camera_model : CameraModelType, let assume_valid : b
     posW2C(R, t, mean, mean_c);
     float cull_z = (camera_model == CameraModelType::FISHEYE) ?
         length(mean_c) : mean_c.z;
-    if (!assume_valid && (cull_z < near_plane || cull_z > far_plane)) {
+    if (!assume_valid && cull_z <= 0.0f) {
         aabb_xyxy = float4(0.0f);
         return;
     }
@@ -165,7 +163,7 @@ void projection_3dgs_sv<let camera_model : CameraModelType, let assume_valid : b
             antialiased, \
             mean, quat, scale, in_opacity, sv_sites, sv_colors, R, t, \
             fx, fy, cx, cy, dist_coeffs, \
-            image_width, image_height, near_plane, far_plane, \
+            image_width, image_height, \
             aabb_xyxy, mean2d, depth, conic, opacity, rgb \
         ); \
     }
@@ -239,7 +237,7 @@ _DEF_projection_3dgs_sv_i(8);
             antialiased, \
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sv_dirs, dp_sv_colors, dp_R, dp_t, \
             fx, fy, cx, cy, dist_coeffs, \
-            image_width, image_height, 0.0f, 1e30f, \
+            image_width, image_height, \
             v_mean2d, v_depth, v_conic, v_opacity, v_rgb \
         ); \
         v_mean = dp_mean.d; \

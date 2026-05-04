@@ -393,7 +393,7 @@ __global__ void ssim_backward_kernel(
     int B, int H, int W,
     const float3* __restrict__ img1,
     const float3* __restrict__ img2,
-    const float* __restrict__ dL_dmap,
+    const float dL_dmap,
     float3* __restrict__ dL_dimg1,
     const float3* __restrict__ dm_dmu1,
     const float3* __restrict__ dm_dsigma1_sq,
@@ -401,7 +401,7 @@ __global__ void ssim_backward_kernel(
 ) {
     auto block = cg::this_thread_block();
 
-    float grad = dL_dmap[0] / (3.0f*B*W*H);
+    float grad = dL_dmap / (3.0f*B*W*H);
 
     const int pix_y  = block.group_index().y * BLOCK_Y + block.thread_index().y;
     const int pix_x  = block.group_index().x * BLOCK_X + block.thread_index().x;
@@ -547,7 +547,7 @@ __global__ void memory_efficient_ssim_backward_kernel(
     int B, int H, int W,
     const float3* __restrict__ img1,   // [B, H, W, 3]
     const float3* __restrict__ img2,   // [B, H, W, 3]
-    const float*  __restrict__ dL_dmap,// [1]
+    const float dL_dmap, // [1]
     float3* __restrict__ dL_dimg1      // [B, H, W, 3]
 ) {
     auto block = cg::this_thread_block();
@@ -558,7 +558,7 @@ __global__ void memory_efficient_ssim_backward_kernel(
     const int pix_id = pix_y * W + pix_x;
     const int num_pix = H * W;
 
-    const float grad = dL_dmap[0] / (3.0f * B * W * H);
+    const float grad = dL_dmap / (3.0f * B * W * H);
 
     // __shared__ float sTile[LOAD_Y][LOAD_X][2];
     // __shared__ float xconv[LOAD_Y][SHARED_X][5];
@@ -935,7 +935,7 @@ at::Tensor
 fused_ssim_backward(
     at::Tensor &img1,
     at::Tensor &img2,
-    at::Tensor &dL_dmap,
+    const float dL_dmap,
     std::optional<at::Tensor> &dm_dmu1,
     std::optional<at::Tensor> &dm_dsigma1_sq,
     std::optional<at::Tensor> &dm_dsigma12
@@ -943,7 +943,6 @@ fused_ssim_backward(
     DEVICE_GUARD(img1);
     CHECK_INPUT(img1);
     CHECK_INPUT(img2);
-    CHECK_INPUT(dL_dmap);
 
     int B  = img1.size(0);
     int H  = img1.size(1);
@@ -960,7 +959,7 @@ fused_ssim_backward(
             B, H, W,
             (float3*)img1.data_ptr<float>(),
             (float3*)img2.data_ptr<float>(),
-            dL_dmap.data_ptr<float>(),
+            dL_dmap,
             (float3*)dL_dimg1.data_ptr<float>(),
             (float3*)dm_dmu1.value().data_ptr<float>(),
             (float3*)dm_dsigma1_sq.value().data_ptr<float>(),
@@ -972,7 +971,7 @@ fused_ssim_backward(
             B, H, W,
             (float3*)img1.data_ptr<float>(),
             (float3*)img2.data_ptr<float>(),
-            dL_dmap.data_ptr<float>(),
+            dL_dmap,
             (float3*)dL_dimg1.data_ptr<float>()
         );
     }
@@ -983,7 +982,7 @@ fused_ssim_backward(
 void fused_ssim_backward_inplace(
     at::Tensor &img1,
     at::Tensor &img2,
-    at::Tensor &dL_dmap,
+    const float dL_dmap,
     std::optional<at::Tensor> &dm_dmu1,
     std::optional<at::Tensor> &dm_dsigma1_sq,
     std::optional<at::Tensor> &dm_dsigma12,
@@ -992,7 +991,6 @@ void fused_ssim_backward_inplace(
     DEVICE_GUARD(img1);
     CHECK_INPUT(img1);
     CHECK_INPUT(img2);
-    CHECK_INPUT(dL_dmap);
     CHECK_INPUT(dL_dimg1);
 
     int B  = img1.size(0);
@@ -1008,7 +1006,7 @@ void fused_ssim_backward_inplace(
             B, H, W,
             (float3*)img1.data_ptr<float>(),
             (float3*)img2.data_ptr<float>(),
-            dL_dmap.data_ptr<float>(),
+            dL_dmap,
             (float3*)dL_dimg1.data_ptr<float>(),
             (float3*)dm_dmu1.value().data_ptr<float>(),
             (float3*)dm_dsigma1_sq.value().data_ptr<float>(),
@@ -1020,7 +1018,7 @@ void fused_ssim_backward_inplace(
             B, H, W,
             (float3*)img1.data_ptr<float>(),
             (float3*)img2.data_ptr<float>(),
-            dL_dmap.data_ptr<float>(),
+            dL_dmap,
             (float3*)dL_dimg1.data_ptr<float>()
         );
     }

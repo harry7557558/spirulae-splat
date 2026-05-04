@@ -117,6 +117,39 @@ void fused_adam_scale_agnostic_mean(
 );
 
 
+void fused_optim_3dgs_geometry(
+    at::Tensor means,
+    at::Tensor v_means,
+    at::Tensor g1_means,
+    at::Tensor g2_means,
+    at::Tensor quats,
+    at::Tensor v_quats,
+    at::Tensor g1_quats,
+    at::Tensor g2_quats,
+    at::Tensor scales,
+    at::Tensor v_scales,
+    at::Tensor g1_scales,
+    at::Tensor g2_scales,
+    at::Tensor opacities,
+    at::Tensor v_opacities,
+    at::Tensor g1_opacities,
+    at::Tensor g2_opacities,
+    at::Tensor radii,
+    const float lr_means,
+    const float lr_quats,
+    const float lr_scales,
+    const float lr_opacs,
+    const float max_gauss_ratio,
+    const float scale_regularization_weight,
+    const float mcmc_opacity_reg_weight,
+    const float mcmc_scale_reg_weight,
+    const float erank_reg_weight,
+    const float erank_reg_weight_s3,
+    const float quat_norm_reg_weight,
+    int step
+);
+
+
 void fused_3dgs2tr_mean_optim(
     at::Tensor means,
     at::Tensor vr_means,

@@ -9,6 +9,10 @@ namespace SlangPixelWise {
 #include "generated/set_namespace.cuh"
 #include "generated/pixel_wise.cuh"
 }
+namespace SlangPerSplatLosses {
+#include "generated/set_namespace.cuh"
+#include "generated/per_splat_losses.cuh"
+}
 
 #include "common.cuh"
 
@@ -679,6 +683,221 @@ void fused_adam_scale_agnostic_mean(
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
+
+
+
+// ================
+// Fused geometry optimizer
+// ================
+
+__global__ void fused_optim_3dgs_geometry_kernel(
+    float3* __restrict__ means,
+    const float3* __restrict__ v_means,
+    float3* __restrict__ g1_means,
+    float3* __restrict__ g2_means,
+    float4* __restrict__ quats,
+    const float4* __restrict__ v_quats,
+    float4* __restrict__ g1_quats,
+    float4* __restrict__ g2_quats,
+    float3* __restrict__ scales,
+    const float3* __restrict__ v_scales,
+    float3* __restrict__ g1_scales,
+    float3* __restrict__ g2_scales,
+    float* __restrict__ opacities,
+    const float* __restrict__ v_opacities,
+    float* __restrict__ g1_opacities,
+    float* __restrict__ g2_opacities,
+    const float* __restrict__ radii,
+    const float lr_means,
+    const float lr_quats,
+    const float lr_scales,
+    const float lr_opacs,
+    const float max_gauss_ratio,
+    const float scale_regularization_weight,
+    const float mcmc_opacity_reg_weight,
+    const float mcmc_scale_reg_weight,
+    const float erank_reg_weight,
+    const float erank_reg_weight_s3,
+    const float quat_norm_reg_weight,
+    const float inv_bias_correction2,
+    const int64_t numel
+) {
+    static constexpr float eps = 1e-15f;
+    static constexpr float beta1 = 0.9f;
+    static constexpr float beta2 = 0.999f;
+
+    const int64_t idx = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    if (idx >= numel) return;
+
+    // load params
+    float3 scale = scales[idx];
+    float4 quat = normalize(quats[idx]);
+    float opac = opacities[idx];
+
+    // load gradient, with regularization
+    static constexpr int kNumPerSplatLosses = 5;
+    FixedArray<float, kNumPerSplatLosses> v_losses = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+    float3 v_scale = make_float3(0.0f);
+    float4 v_quat = make_float4(0.0f);
+    float v_opac = 0.0f;
+    SlangPerSplatLosses::per_splat_losses_bwd(
+        scale, opac, quat, v_losses,
+        &v_scale, &v_opac, &v_quat,
+        mcmc_opacity_reg_weight,
+        mcmc_scale_reg_weight,
+        max_gauss_ratio,
+        scale_regularization_weight,
+        erank_reg_weight,
+        erank_reg_weight_s3,
+        quat_norm_reg_weight
+    );
+    v_scale += v_scales[idx];
+    v_quat += v_quats[idx];
+    v_opac += v_opacities[idx];
+
+    // update scales
+    float3 g1_scale = beta1 * g1_scales[idx] + (1.f - beta1) * v_scale;
+    float3 g2_scale = beta2 * g2_scales[idx] + (1.f - beta2) * v_scale*v_scale;
+    scales[idx] = scale - lr_scales * g1_scale / (sqrtf(g2_scale * inv_bias_correction2) + eps);
+    g1_scales[idx] = g1_scale;
+    g2_scales[idx] = g2_scale;
+
+    // update quats (Riemannian)
+    v_quat -= dot(quat, v_quat) * quat;
+    float4 g1_quat = beta1 * g1_quats[idx] + (1.f - beta1) * v_quat;
+    float4 g2_quat = beta2 * g2_quats[idx] + (1.f - beta2) * v_quat*v_quat;
+    quats[idx] = normalize(quat - lr_quats * g1_quat / (sqrtf(g2_quat * inv_bias_correction2) + eps));
+    g1_quats[idx] = g1_quat;
+    g2_quats[idx] = g2_quat;
+
+    // update opacs
+    float g1_opac = beta1 * g1_opacities[idx] + (1.f - beta1) * v_opac;
+    float g2_opac = beta2 * g2_opacities[idx] + (1.f - beta2) * v_opac*v_opac;
+    opacities[idx] = opac - lr_opacs * g1_opac / (sqrtf(g2_opac * inv_bias_correction2) + eps);
+    g1_opacities[idx] = g1_opac;
+    g2_opacities[idx] = g2_opac;
+
+    // update means (scale agnostic)
+    float3 mean = means[idx];
+    float3 v_mean = v_means[idx];
+    float3 g1_mean = g1_means[idx];
+    float3 g2_mean = g2_means[idx];
+
+    float3 sqrt_scale = float3{expf(0.5f*scale.x), expf(0.5f*scale.y), expf(0.5f*scale.z)};
+    opac = 1.0f / (1.0f + __expf(-opac));
+    Matrix<float, 3, 3> sqrt_covar;
+    SlangProjectionUtils::quat_scale_to_covar(quat, sqrt_scale, &sqrt_covar);
+    Matrix<float, 3, 3> covar;
+    SlangProjectionUtils::quat_scale_to_covar(quat, sqrt_scale*sqrt_scale, &covar);
+
+    float3 v_mean_scaled_num = float3{dot(sqrt_covar[0], v_mean), dot(sqrt_covar[1], v_mean), dot(sqrt_covar[2], v_mean)};
+    float v_mean_scaled_den = radii[idx] * 0.25f;
+    #if 0
+    v_mean_scaled_num = v_mean_scaled_num / (v_mean_scaled_den + (eps * (float)numel));
+    v_mean_scaled_den = 1.0f;
+    #endif
+    g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean_scaled_num;
+    g2_mean = beta2 * g2_mean + (1.f - beta2) * v_mean*v_mean * v_mean_scaled_den*v_mean_scaled_den;
+
+    means[idx] = mean - lr_means * g1_mean / (sqrtf(g2_mean * inv_bias_correction2) + eps);;
+    g1_means[idx] = g1_mean;
+    g2_means[idx] = g2_mean;
+}
+
+
+/*[AutoHeaderGeneratorExport]*/
+void fused_optim_3dgs_geometry(
+    at::Tensor means,
+    at::Tensor v_means,
+    at::Tensor g1_means,
+    at::Tensor g2_means,
+    at::Tensor quats,
+    at::Tensor v_quats,
+    at::Tensor g1_quats,
+    at::Tensor g2_quats,
+    at::Tensor scales,
+    at::Tensor v_scales,
+    at::Tensor g1_scales,
+    at::Tensor g2_scales,
+    at::Tensor opacities,
+    at::Tensor v_opacities,
+    at::Tensor g1_opacities,
+    at::Tensor g2_opacities,
+    at::Tensor radii,
+    const float lr_means,
+    const float lr_quats,
+    const float lr_scales,
+    const float lr_opacs,
+    const float max_gauss_ratio,
+    const float scale_regularization_weight,
+    const float mcmc_opacity_reg_weight,
+    const float mcmc_scale_reg_weight,
+    const float erank_reg_weight,
+    const float erank_reg_weight_s3,
+    const float quat_norm_reg_weight,
+    int step
+) {
+    DEVICE_GUARD(means);
+    CHECK_INPUT(means);
+    CHECK_INPUT(v_means);
+    CHECK_INPUT(g1_means);
+    CHECK_INPUT(g2_means);
+    CHECK_INPUT(quats);
+    CHECK_INPUT(v_quats);
+    CHECK_INPUT(g1_quats);
+    CHECK_INPUT(g2_quats);
+    CHECK_INPUT(scales);
+    CHECK_INPUT(v_scales);
+    CHECK_INPUT(g1_scales);
+    CHECK_INPUT(g2_scales);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(v_opacities);
+    CHECK_INPUT(g1_opacities);
+    CHECK_INPUT(g2_opacities);
+    CHECK_INPUT(radii);
+
+    const int64_t numel = means.numel() / 3;
+    if (numel == 0)
+        return;
+    
+    static constexpr float beta1 = 0.9f;
+    static constexpr float beta2 = 0.999f;
+
+    fused_optim_3dgs_geometry_kernel<<<_LAUNCH_ARGS_1D(numel, 256)>>>(
+        (float3*)means.data_ptr<float>(),
+        (const float3*)v_means.data_ptr<float>(),
+        (float3*)g1_means.data_ptr<float>(),
+        (float3*)g2_means.data_ptr<float>(),
+        (float4*)quats.data_ptr<float>(),
+        (const float4*)v_quats.data_ptr<float>(),
+        (float4*)g1_quats.data_ptr<float>(),
+        (float4*)g2_quats.data_ptr<float>(),
+        (float3*)scales.data_ptr<float>(),
+        (const float3*)v_scales.data_ptr<float>(),
+        (float3*)g1_scales.data_ptr<float>(),
+        (float3*)g2_scales.data_ptr<float>(),
+        (float*)opacities.data_ptr<float>(),
+        (const float*)v_opacities.data_ptr<float>(),
+        (float*)g1_opacities.data_ptr<float>(),
+        (float*)g2_opacities.data_ptr<float>(),
+        radii.data_ptr<float>(),
+        lr_means / (1.0f - powf(beta1, step)),
+        lr_quats / (1.0f - powf(beta1, step)),
+        lr_scales / (1.0f - powf(beta1, step)),
+        lr_opacs / (1.0f - powf(beta1, step)),
+        max_gauss_ratio,
+        scale_regularization_weight / (float)numel,
+        mcmc_opacity_reg_weight / (float)numel,
+        mcmc_scale_reg_weight / (float)numel,
+        erank_reg_weight / (float)numel,
+        erank_reg_weight_s3 / (float)numel,
+        quat_norm_reg_weight / (float)numel,
+        1.0f / (1.0f - powf(beta2, step)),
+        numel
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
 
 
 // ================

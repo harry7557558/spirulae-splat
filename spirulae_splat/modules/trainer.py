@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field, asdict
-from pyexpat import model
 from typing import Type, List, Tuple, Dict, Optional
 from pathlib import Path
 
@@ -15,7 +14,7 @@ from spirulae_splat.modules.datamanager import SpirulaeSplatDataManagerConfig, S
 
 from spirulae_splat.modules.dataparser import SpirulaeSplatDataparser, SpirulaeSplatDataParserConfig
 from spirulae_splat.modules.dataset import SpirulaeSplatDataset
-from spirulae_splat.modules.optimizer import create_optimizers, FusedAdamOptimizerConfig, FusedNewtonOptimizerConfig
+from spirulae_splat.modules.optimizer import create_optimizers, FusedAdamOptimizerConfig, FusedNewtonOptimizerConfig, OptimizerConfig
 
 from spirulae_splat.viewer.annotation import annotate_train_cameras
 
@@ -151,7 +150,8 @@ class TrainerConfig:
     model: SpirulaeSplatModelConfig = field(default_factory=SpirulaeSplatModelConfig)
     """Specifies configurations for main model, losses, and densification"""
 
-    optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)
+    # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)
+    optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     """Specifies configurations for optimization"""
 
 
@@ -175,7 +175,7 @@ class Trainer:
             self.dataparser_outputs_train['metadata'],
             self.dataparser_outputs_train['cameras']
         ).cuda()
-        self.optimizers = create_optimizers(self.model, self.config.optimizer)
+        # self.optimizers = create_optimizers(self.model, self.config.optimizer)
 
         self.output_dir = self._setup_output_dir()
         print(f"Output directory: {self.output_dir.absolute()}")
@@ -263,9 +263,10 @@ class Trainer:
             return self._render(*args)
 
     def _train_step(self, step: int):
-        for optim in self.optimizers.values():
-            optim.zero_grad()
-        self.model.step_cb(self.optimizers, step)
+        # for optim in self.optimizers.values():
+        #     optim.zero_grad()
+        # self.model.step_cb(self.optimizers, step)
+        self.model.step_cb(step)
 
         inputs = self.datamanager.next_train(step)  # type: List[Tuple[Cameras, Dict]]
         if isinstance(inputs, tuple):
@@ -275,22 +276,15 @@ class Trainer:
             train_inputs, val_inputs = train_inputs[0], val_inputs[0]
             inputs = [((train_inputs[0], val_inputs[0]), (train_inputs[1], val_inputs[1]))]
 
-        self.model.clear_info()
         for i, (camera, batch) in enumerate(inputs):
-            # torch.cuda.empty_cache()
             model_outputs = self.model.get_outputs(camera)
-            # torch.cuda.empty_cache()
-            is_not_last = (i != len(inputs) - 1)
-            loss_dict = self.model.get_loss_dict(model_outputs, batch, len(inputs), no_static_losses=is_not_last)
-            # torch.cuda.empty_cache()
-            torch.stack([
-                x for x in loss_dict.values() if isinstance(x, torch.Tensor)
-            ]).sum().backward()
-            # torch.cuda.empty_cache()
+            loss_dict, loss_grad = self.model.get_loss_dict(model_outputs, batch, len(inputs))
+            self.model.backward(model_outputs, loss_grad)
+            self.model.optim_step()
 
-        for optim in self.optimizers.values():
-            optim.step()
-        self.model.step_post_backward(step)
+        # for optim in self.optimizers.values():
+        #     optim.step()
+        # self.model.step_post_backward()
 
     def train_step(self, *args):
         with self.lock:
@@ -378,7 +372,7 @@ class Trainer:
             {
                 "step": step,
                 "model": self.model.state_dict(),
-                "optimizers": {k: v.state_dict() for (k, v) in self.optimizers.items()},
+                # "optimizers": {k: v.state_dict() for (k, v) in self.optimizers.items()},
             },
             ckpt_path,
         )
@@ -395,7 +389,7 @@ class TrainerConfigSquaredPos(TrainerConfig):
         compute_hessian_diagonal="position",
         noise_lr=5e5 * (1.6e-4 / 1.0e-6),
     ))
-    optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)
+    # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)  # TODO
 
 
 @dataclass
@@ -405,7 +399,7 @@ class TrainerConfigSquared(TrainerConfig):
         compute_hessian_diagonal="all",
         noise_lr=5e5 * (1.6e-4 / 1.0e-6),
     ))
-    optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_OPTIMIZERS)
+    # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_OPTIMIZERS)  # TODO
 
 
 @dataclass
@@ -425,7 +419,7 @@ class TrainerConfigPatched(TrainerConfig):
         alpha_reg_weight=0.0,
         primitive="mip", max_screen_size=float('inf'),  # TODO
     ))
-    optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)
+    # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)  # TODO
 
 @dataclass
 class TrainerConfigTriangle(TrainerConfig):
@@ -454,7 +448,7 @@ class TrainerConfigTriangle(TrainerConfig):
         ssim_lambda=0.4,
         preallocate_splat_tensors=False,  # TODO
     ))
-    optimizer: dict = field(default_factory=lambda: _TRIANGLE_OPTIMIZERS)
+    # optimizer: dict = field(default_factory=lambda: _TRIANGLE_OPTIMIZERS)  # TODO
 
 @dataclass
 class TrainerConfigTrianglePatched(TrainerConfig):
@@ -495,7 +489,7 @@ class TrainerConfigTrianglePatched(TrainerConfig):
         alpha_reg_weight=0.0,
         max_screen_size_clip_hardness=1.5,
     ))
-    optimizer: dict = field(default_factory=lambda: _TRIANGLE_OPTIMIZERS)
+    # optimizer: dict = field(default_factory=lambda: _TRIANGLE_OPTIMIZERS)  # TODO
 
 @dataclass
 class TrainerConfigVoxel(TrainerConfig):
@@ -523,7 +517,7 @@ class TrainerConfigVoxel(TrainerConfig):
         distortion_reg_warmup=100,
         preallocate_splat_tensors=False,  # TODO
     ))
-    optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS)
+    # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS)  # TODO
 
 
 _MODEL_PRESET_CONFINED = dict(
@@ -570,7 +564,7 @@ class TrainerConfigConfinedLowTexture(TrainerConfig):
         **_MODEL_PRESET_CONFINED,
         **_MODEL_PRESET_NO_COLOR_SHIFT,
     ))
-    optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)
+    # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)  # TODO
 
 @dataclass
 class TrainerConfigConfined(TrainerConfig):
@@ -580,7 +574,7 @@ class TrainerConfigConfined(TrainerConfig):
         **_MODEL_PRESET_3DGS2TR_POS,
         **_MODEL_PRESET_RICH_TEXTURE,
     ))
-    optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)
+    # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)  # TODO
 
 @dataclass
 class TrainerConfigConfinedSquared(TrainerConfig):
@@ -590,7 +584,7 @@ class TrainerConfigConfinedSquared(TrainerConfig):
         **_MODEL_PRESET_3DGS2TR,
         **_MODEL_PRESET_RICH_TEXTURE,
     ))
-    optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_OPTIMIZERS)
+    # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_OPTIMIZERS)  # TODO
 
 @dataclass
 class TrainerConfigOpenLowTexture(TrainerConfig):
@@ -601,7 +595,7 @@ class TrainerConfigOpenLowTexture(TrainerConfig):
         **_MODEL_PRESET_NO_COLOR_SHIFT,
         # relative_scale=10.0,
     ))
-    optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)
+    # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)  # TODO
 
 @dataclass
 class TrainerConfigOpen(TrainerConfig):
@@ -611,7 +605,7 @@ class TrainerConfigOpen(TrainerConfig):
         **_MODEL_PRESET_3DGS2TR_POS,
         **_MODEL_PRESET_RICH_TEXTURE,
     ))
-    optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)
+    # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)  # TODO
 
 @dataclass
 class TrainerConfigOpenSquared(TrainerConfig):
@@ -621,7 +615,7 @@ class TrainerConfigOpenSquared(TrainerConfig):
         **_MODEL_PRESET_3DGS2TR,
         **_MODEL_PRESET_RICH_TEXTURE,
     ))
-    optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_OPTIMIZERS)
+    # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_OPTIMIZERS)  # TODO
 
 @dataclass
 class TrainerConfigCenteredObject(TrainerConfig):
@@ -638,7 +632,7 @@ class TrainerConfigCenteredObject(TrainerConfig):
         cap_max=100000,
     ))
     # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)
-    optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)
+    # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)  # TODO
 
 @dataclass
 class TrainerConfigAcademicBaseline(TrainerConfig):
@@ -679,4 +673,5 @@ class TrainerConfigAcademicBaseline(TrainerConfig):
         mcmc_opacity_reg=0.01,
         mcmc_scale_reg=0.01,
     ))
-    optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS)
+    # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS)
+    optimizer: OptimizerConfig = field(default_factory=lambda: OptimizerConfig())

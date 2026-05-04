@@ -282,7 +282,6 @@ float add_blur(const float eps2d, inout float2x2 covar, out float compensation) 
     const float3x3 R, const float3 t, \
     no_diff const float fx, no_diff const float fy,  no_diff const float cx, no_diff const float cy, \
     no_diff const float[10] dist_coeffs, const uint image_width, const uint image_height, \
-    no_diff const float near_plane, no_diff const float far_plane, \
     no_diff out float4 aabb_xyxy, out float2 mean2d, out float depth, out float3 conic, out float opacity, out float3 rgb
 
 [ForceInline]
@@ -296,7 +295,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
     posW2C(R, t, mean, mean_c);
     float cull_z = (camera_model == CameraModelType::FISHEYE) ?
         length(mean_c) : mean_c.z;
-    if (!assume_valid && (cull_z < near_plane || cull_z > far_plane)) {
+    if (!assume_valid && cull_z <= 0.0f) {
         aabb_xyxy = float4(0.0f);
         return;
     }
@@ -434,7 +433,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
             antialiased, \
             mean, quat, scale, in_opacity, sh_coeffs, R, t, \
             fx, fy, cx, cy, dist_coeffs, \
-            image_width, image_height, near_plane, far_plane, \
+            image_width, image_height, \
             aabb_xyxy, mean2d, depth, conic, opacity, rgb \
         ); \
     }
@@ -464,7 +463,7 @@ interface _DiffProjection3DGS
                 antialiased, \
                 mean, quat, scale, in_opacity, sh_coeffs, R, t, \
                 fx, fy, cx, cy, dist_coeffs, \
-                image_width, image_height, near_plane, far_plane, \
+                image_width, image_height, \
                 aabb_xyxy, mean2d, depth, conic, opacity, rgb \
             ); \
         } \
@@ -502,7 +501,7 @@ void _projection_3dgs_vjp(
         antialiased,
         dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
         fx, fy, cx, cy, dist_coeffs,
-        image_width, image_height, 0.0f, 1e30f,
+        image_width, image_height,
         v_mean2d, v_depth, v_conic, v_opacity, v_rgb
     );
     v_mean = dp_mean.d;
@@ -570,7 +569,7 @@ void _projection_3dgs_vjp(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
-            image_width, image_height, 0.0f, 1e30f,
+            image_width, image_height,
             v_mean2d, v_depth, v_conic, v_opacity, v_rgb
         );
         v_mean = dp_mean.d;
@@ -595,7 +594,7 @@ void _projection_3dgs_vjp(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
-            image_width, image_height, 0.0f, 1e30f,
+            image_width, image_height,
             vr_mean2d, vr_depth, vr_conic, vr_opacity, vr_rgb
         );
         vr_mean = dp_mean.d;
@@ -622,7 +621,7 @@ void _projection_3dgs_vjp(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
-            image_width, image_height, 0.0f, 1e30f,
+            image_width, image_height,
             aabb_xyxy, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
         h_mean[i] =
@@ -695,7 +694,7 @@ void _projection_3dgs_vjp(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
-            image_width, image_height, 0.0f, 1e30f,
+            image_width, image_height,
             v_mean2d, v_depth, v_conic, v_opacity, v_rgb
         );
         v_mean = dp_mean.d;
@@ -720,7 +719,7 @@ void _projection_3dgs_vjp(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
-            image_width, image_height, 0.0f, 1e30f,
+            image_width, image_height,
             vr_mean2d, vr_depth, vr_conic, vr_opacity, vr_rgb
         );
         vr_mean = dp_mean.d;
@@ -753,7 +752,7 @@ void _projection_3dgs_vjp(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
-            image_width, image_height, 0.0f, 1e30f,
+            image_width, image_height,
             aabb_xyxy, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
         h_mean[i] =
@@ -785,7 +784,7 @@ void _projection_3dgs_vjp(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
-            image_width, image_height, 0.0f, 1e30f,
+            image_width, image_height,
             aabb_xyxy, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
         h_quat[i] =
@@ -817,7 +816,7 @@ void _projection_3dgs_vjp(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
-            image_width, image_height, 0.0f, 1e30f,
+            image_width, image_height,
             aabb_xyxy, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
         h_scale[i] =
@@ -847,7 +846,7 @@ void _projection_3dgs_vjp(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
-            image_width, image_height, 0.0f, 1e30f,
+            image_width, image_height,
             aabb_xyxy, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
         h_in_opacity =
@@ -880,7 +879,7 @@ void _projection_3dgs_vjp(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
-            image_width, image_height, 0.0f, 1e30f,
+            image_width, image_height,
             aabb_xyxy, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
         h_features_dc[i] =

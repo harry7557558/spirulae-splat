@@ -27,7 +27,6 @@ struct OpaqueTriangle {
         float3 t;
         float fx, fy, cx, cy;
         uint width, height;
-        float near_plane, far_plane;
         CameraDistortionCoeffs dist_coeffs;
     };
 
@@ -682,7 +681,7 @@ inline __device__ void OpaqueTriangle::project_persp(
     SlangOpaqueTriangle::projection_opaque_triangle_eval3d_persp(
         world.mean, world.quat, world.scale, world.hardness, world.sh_coeffs, world.ch_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-        cam.width, cam.height, cam.near_plane, cam.far_plane,
+        cam.width, cam.height,
         &aabb, &proj.depth, &proj.verts, &proj.rgbs, &proj.normal
     );
     proj.hardness = world.hardness;
@@ -695,7 +694,7 @@ inline __device__ void OpaqueTriangle::project_fisheye(
     SlangOpaqueTriangle::projection_opaque_triangle_eval3d_fisheye(
         world.mean, world.quat, world.scale, world.hardness, world.sh_coeffs, world.ch_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-        cam.width, cam.height, cam.near_plane, cam.far_plane,
+        cam.width, cam.height,
         &aabb, &proj.depth, &proj.verts, &proj.rgbs, &proj.normal
     );
     proj.hardness = world.hardness;

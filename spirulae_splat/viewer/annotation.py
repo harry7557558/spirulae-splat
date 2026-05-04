@@ -1,7 +1,6 @@
 import torch
 import numpy as np
 from spirulae_splat.modules.camera import Cameras, CameraType
-from spirulae_splat.splat.rendering import rasterization
 from spirulae_splat.viewer_legacy.utils import triangle_verts_to_quat_scale_mean
 
 from spirulae_splat.splat.cuda import _make_lazy_cuda_func

@@ -26,7 +26,6 @@ struct Base3DGUT {
         float3 t;
         float fx, fy, cx, cy;
         uint width, height;
-        float near_plane, far_plane;
         CameraDistortionCoeffs dist_coeffs;
     };
 

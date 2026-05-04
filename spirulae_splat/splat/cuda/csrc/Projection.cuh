@@ -32,8 +32,6 @@ std::tuple<
     const uint32_t image_height,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const float near_plane,
-    const float far_plane,
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const at::Tensor intersection_count_map,  // [C+1]
@@ -61,8 +59,7 @@ std::tuple<
     const at::Tensor aabb,  // [nnz, 4]
     // grad outputs
     const Vanilla3DGS::Screen::TensorTuple &v_splats_proj_tuple,
-    const bool viewmats_requires_grad,
-    const bool sparse_grad
+    const bool viewmats_requires_grad
 );
 
 
@@ -80,8 +77,6 @@ std::tuple<
     const uint32_t image_height,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const float near_plane,
-    const float far_plane,
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const at::Tensor intersection_count_map,  // [C+1]
@@ -109,8 +104,7 @@ std::tuple<
     const at::Tensor aabb,  // [nnz, 4]
     // grad outputs
     const Vanilla3DGUT::Screen::TensorTuple &v_splats_proj_tuple,
-    const bool viewmats_requires_grad,
-    const bool sparse_grad
+    const bool viewmats_requires_grad
 );
 
 
@@ -128,8 +122,6 @@ std::tuple<
     const uint32_t image_height,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const float near_plane,
-    const float far_plane,
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const at::Tensor intersection_count_map,  // [C+1]
@@ -157,8 +149,7 @@ std::tuple<
     const at::Tensor aabb,  // [nnz, 4]
     // grad outputs
     const MipSplatting::Screen::TensorTuple &v_splats_proj_tuple,
-    const bool viewmats_requires_grad,
-    const bool sparse_grad
+    const bool viewmats_requires_grad
 );
 
 
@@ -176,8 +167,6 @@ std::tuple<
     const uint32_t image_height,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const float near_plane,
-    const float far_plane,
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const at::Tensor intersection_count_map,  // [C+1]
@@ -205,6 +194,5 @@ std::tuple<
     const at::Tensor aabb,  // [nnz, 4]
     // grad outputs
     const OpaqueTriangle::Screen::TensorTuple &v_splats_proj_tuple,
-    const bool viewmats_requires_grad,
-    const bool sparse_grad
+    const bool viewmats_requires_grad
 );

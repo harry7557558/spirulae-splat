@@ -18,8 +18,6 @@ template void projection_packed_mask_kernel_wrapper<
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
     // outputs
     bool *__restrict__ intersection_mask  // [B, C, N]
 );

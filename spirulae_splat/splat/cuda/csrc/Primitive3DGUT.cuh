@@ -238,7 +238,7 @@ inline __device__ void Vanilla3DGUT::project_persp(
         false,
         world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-        cam.width, cam.height, cam.near_plane, cam.far_plane,
+        cam.width, cam.height,
         &aabb, &xy, &proj.depth, &proj.scale, &proj.opacity, &proj.rgb
     );
     proj.mean = world.mean, proj.quat = world.quat;
@@ -253,7 +253,7 @@ inline __device__ void Vanilla3DGUT::project_fisheye(
         false,
         world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-        cam.width, cam.height, cam.near_plane, cam.far_plane,
+        cam.width, cam.height,
         &aabb, &xy, &proj.depth, &proj.scale, &proj.opacity, &proj.rgb
     );
     proj.mean = world.mean, proj.quat = world.quat;

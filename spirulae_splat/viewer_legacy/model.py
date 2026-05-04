@@ -5,7 +5,7 @@ import os
 import json
 import re
 
-from spirulae_splat.splat.rendering import rasterization
+# from spirulae_splat.splat.rendering import rasterization  # TODO
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import spherical_harmonics
 from spirulae_splat.splat._torch_impl import quat_mult
@@ -312,8 +312,6 @@ class SplatModel:
                 height=H,
                 packed=False,
                 use_bvh=False,
-                sparse_grad=False,
-                distributed=False,
                 camera_model=["pinhole", "fisheye"][is_fisheye],
                 **kwargs,
             )

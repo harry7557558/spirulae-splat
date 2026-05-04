@@ -19,8 +19,6 @@
     no_diff const float[10] dist_coeffs, \
     const uint image_width, \
     const uint image_height, \
-    no_diff const float near_plane, \
-    no_diff const float far_plane, \
     no_diff out float4 aabb_xyxy, \
     out float depth, \
     out float3 verts[3], \
@@ -37,7 +35,7 @@ void projection_opaque_triangle_eval3d<let camera_model: CameraModelType, let as
     posW2C(R, t, mean, mean_c);
     float cull_zc = (camera_model == CameraModelType::FISHEYE) ?
         length(mean_c) : mean_c.z;
-    if (!assume_valid && (cull_zc < near_plane || cull_zc > far_plane)) {
+    if (!assume_valid && cull_zc <= 0.0f) {
         aabb_xyxy = float4(0.0f);
         return;
     }
@@ -55,9 +53,9 @@ void projection_opaque_triangle_eval3d<let camera_model: CameraModelType, let as
         float3(length(vert0_c), length(vert1_c), length(vert2_c)) :
         float3(vert0_c.z, vert1_c.z, vert2_c.z);
     if (!assume_valid && (
-        cull_z.x < near_plane || cull_z.x > far_plane ||
-        cull_z.y < near_plane || cull_z.y > far_plane ||
-        cull_z.z < near_plane || cull_z.z > far_plane
+        cull_z.x <= 0.0f ||
+        cull_z.y <= 0.0f ||
+        cull_z.z <= 0.0f
     )) {
         aabb_xyxy = float4(0.0f);
         return;
@@ -136,7 +134,7 @@ void projection_opaque_triangle_eval3d<let camera_model: CameraModelType, let as
         return projection_opaque_triangle_eval3d<__VA_ARGS__>( \
             mean, quat, scale, hardness, sh_coeffs, ch_coeffs, R, t, \
             fx, fy, cx, cy, dist_coeffs, \
-            image_width, image_height, near_plane, far_plane, \
+            image_width, image_height, \
             aabb_xyxy, depth, verts, rgbs, normal \
         ); \
     }
@@ -192,7 +190,7 @@ void projection_opaque_triangle_eval3d_persp_vjp(
     bwd_diff(_projection_opaque_triangle_eval3d_persp_differentiable)(
         dp_mean, dp_quat, dp_scale, dp_hardness, dp_sh_coeffs, dp_ch_coeffs, dp_R, dp_t,
         fx, fy, cx, cy, dist_coeffs,
-        image_width, image_height, 0.0f, 1e30f,
+        image_width, image_height,
         v_depth, v_verts, v_rgbs, v_normal
     );
     v_mean = dp_mean.d;
@@ -220,7 +218,7 @@ void projection_opaque_triangle_eval3d_fisheye_vjp(
     bwd_diff(_projection_opaque_triangle_eval3d_fisheye_differentiable)(
         dp_mean, dp_quat, dp_scale, dp_hardness, dp_sh_coeffs, dp_ch_coeffs, dp_R, dp_t,
         fx, fy, cx, cy, dist_coeffs,
-        image_width, image_height, 0.0f, 1e30f,
+        image_width, image_height,
         v_depth, v_verts, v_rgbs, v_normal
     );
     v_mean = dp_mean.d;

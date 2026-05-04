@@ -26,8 +26,6 @@ __global__ void projection_fused_fwd_kernel(
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
     // outputs
     float4 *__restrict__ aabbs,         // [B, C, N, 4]
     typename SplatPrimitive::Screen::Buffer splats_screen
@@ -54,7 +52,6 @@ __global__ void projection_fused_fwd_kernel(
     typename SplatPrimitive::FwdProjCamera cam = {
         R, t, fx, fy, cx, cy,
         image_width, image_height,
-        near_plane, far_plane,
     };
     cam.dist_coeffs = dist_coeffs_buffer.load(bid * C + cid);
 
@@ -103,8 +100,6 @@ void projection_fused_fwd_kernel_wrapper(
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
     // outputs
     float4 *__restrict__ aabbs,         // [B, C, N, 4]
     typename SplatPrimitive::Screen::Buffer splats_screen
@@ -114,7 +109,7 @@ void projection_fused_fwd_kernel_wrapper(
     <<<_CEIL_DIV(B*C*N, block), block, 0, stream>>>(
         B, C, N,
         splats_world, viewmats, intrins, dist_coeffs_buffer,
-        image_width, image_height, near_plane, far_plane,
+        image_width, image_height,
         aabbs, splats_screen
     );
 }

@@ -74,12 +74,11 @@ def spherical_harmonics(
     }[coeffs_sh.shape[-2]]
     return _SphericalHarmonics.apply(
         sh_degree, degrees_to_use, dirs.contiguous(), coeffs_dc.contiguous(), coeffs_sh.contiguous()
-    )
+    )[0]
 
-class _SphericalHarmonics(torch.autograd.Function):
+class _SphericalHarmonics:
     """Spherical Harmonics"""
 
-    @staticmethod
     def forward(
         ctx, sh_degree: int, degrees_to_use: int, dirs: Tensor, coeffs_dc: Tensor, coeffs_sh: Tensor
     ) -> Tensor:
@@ -87,11 +86,10 @@ class _SphericalHarmonics(torch.autograd.Function):
             sh_degree, degrees_to_use,
             dirs, coeffs_dc, coeffs_sh
         )
-        ctx.save_for_backward(dirs, coeffs_sh, colors)
+        ctx.saved_tensors = (dirs, coeffs_sh, colors)
         ctx.sh_degree = (sh_degree, degrees_to_use)
         return colors
 
-    @staticmethod
     def backward(ctx, v_colors: Tensor):
         dirs, coeffs_sh, colors = ctx.saved_tensors
         (sh_degree, degrees_to_use) = ctx.sh_degree
@@ -119,12 +117,12 @@ def scatter_max(ref_tensor: Tensor, tensor: Tensor, indices: Tensor):
     return v_tensor
 
 
-class _Index(torch.autograd.Function):
-    @staticmethod
+class _Index:
+
     def forward(
         ctx, tensor: Tensor, indices: Tensor
     ):
-        ctx.save_for_backward(tensor, indices)
+        ctx.saved_tensors = (tensor, indices)
         # return tensor[indices]
         result = torch.empty(indices.shape[0], *tensor.shape[1:], device=tensor.device, dtype=tensor.dtype)
         _make_lazy_cuda_func("inplace_index")(
@@ -132,7 +130,6 @@ class _Index(torch.autograd.Function):
         )
         return result
 
-    @staticmethod
     def backward(ctx, v_output: Tensor):
         tensor, indices = ctx.saved_tensors
         v_tensor = scatter_add(tensor, v_output, indices)
@@ -146,10 +143,7 @@ def fully_fused_projection(
     intrins: Tensor,  # [..., C, 4]
     width: int,
     height: int,
-    near_plane: float = 0.0,
-    far_plane: float = 1e10,
     packed: bool = False,
-    sparse_grad: bool = False,
     camera_model: Literal["pinhole", "fisheye"] = "pinhole",
     dist_coeffs: Optional[Tensor] = None,
     compute_hessian_diagonal: Literal[None, "position", "all"] = None,
@@ -160,73 +154,66 @@ def fully_fused_projection(
     C = viewmats.shape[-3]
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert intrins.shape == batch_dims + (C, 4), intrins.shape
-    if sparse_grad:
-        assert packed, "sparse_grad is only supported when packed is True"
-        assert batch_dims == (), "sparse_grad does not support batch dimensions"
 
     if dist_coeffs is not None:
         assert dist_coeffs.shape == batch_dims + (C, 10), dist_coeffs.shape
         dist_coeffs = dist_coeffs.contiguous().to(viewmats)
 
-    if packed and False:
-        raise NotImplementedError("Packed not supported for fully_fused_projection without use_bvh")
+    splats = [x.contiguous() for x in splats]
+
+    in_splats = splats[:]
+    if primitive in ["3dgs", "mip", "3dgut", "3dgut_sv"]:
+        _FullyFusedProjection = _FullyFusedProjection3DGS
+        in_splats = [primitive] + in_splats
+    elif primitive in ["opaque_triangle"]:
+        _FullyFusedProjection = _FullyFusedProjectionOpaqueTriangle
+    elif primitive in ["voxel"]:
+        _FullyFusedProjection = _FullyFusedProjectionVoxel
+    proj_returns, proj_ctx = _FullyFusedProjection.apply(
+        *in_splats,
+        viewmats.contiguous(),
+        intrins.contiguous(),
+        width,
+        height,
+        camera_model,
+        dist_coeffs.contiguous() if dist_coeffs is not None else None,
+        packed,
+        *([compute_hessian_diagonal, backward_info] if primitive in ["3dgs", "mip", "3dgut"] else [])
+    )
+    if backward_info is not None:
+        backward_info['projection_ctx'] = proj_ctx
+
+    if primitive in ["3dgs", "mip"]:
+        aabb, means2d, depths, conics, opacities, rgbs = proj_returns
+        backward_info['gaussian_ids'] = aabb.gaussian_ids
+        backward_info['num_splats'] = N
+        return aabb, depths, (means2d, depths, conics, opacities, rgbs)
+    elif primitive in ['3dgut', '3dgut_sv']:
+        means, quats, scales, opacities, features_dc, features_sh = splats
+        aabb, depths, scales, opacities, rgbs = proj_returns
+        # if packed:
+        #     means = _Index.apply(means, aabb.gaussian_ids)
+        #     quats = _Index.apply(quats, aabb.gaussian_ids)
+        backward_info['gaussian_ids'] = aabb.gaussian_ids
+        return aabb, depths, (means, quats, depths, scales, opacities, rgbs)
+    elif primitive in ['opaque_triangle']:
+        means, quats, scales, hardness, features_dc, features_sh, features_ch = splats
+        aabb, depths, verts, rgbs, normals = proj_returns
+        if packed:
+            hardness = _Index.apply(hardness, aabb.gaussian_ids)
+        return aabb, depths, (hardness, depths, verts, rgbs, normals)
+    elif primitive in ['voxel']:
+        pos_sizes, densities, features_dc, features_sh = splats
+        aabb, depths, rgbs = proj_returns
+        if packed:
+            pos_sizes = _Index.apply(pos_sizes, aabb.gaussian_ids)
+            densities = _Index.apply(densities, aabb.gaussian_ids)
+        return aabb, depths, (pos_sizes, densities, rgbs)
     else:
-
-        splats = [x.contiguous() for x in splats]
-
-        in_splats = splats[:]
-        if primitive in ["3dgs", "mip", "3dgut", "3dgut_sv"]:
-            _FullyFusedProjection = _FullyFusedProjection3DGS
-            in_splats = [primitive] + in_splats
-        elif primitive in ["opaque_triangle"]:
-            _FullyFusedProjection = _FullyFusedProjectionOpaqueTriangle
-        elif primitive in ["voxel"]:
-            _FullyFusedProjection = _FullyFusedProjectionVoxel
-        proj_returns = _FullyFusedProjection.apply(
-            *in_splats,
-            viewmats.contiguous(),
-            intrins.contiguous(),
-            width,
-            height,
-            near_plane,
-            far_plane,
-            camera_model,
-            dist_coeffs.contiguous() if dist_coeffs is not None else None,
-            packed,
-            *([compute_hessian_diagonal, backward_info] if primitive in ["3dgs", "mip", "3dgut"] else [])
-        )
-
-        if primitive in ["3dgs", "mip"]:
-            aabb, means2d, depths, conics, opacities, rgbs = proj_returns
-            backward_info['gaussian_ids'] = aabb.gaussian_ids
-            backward_info['num_splats'] = N
-            return aabb, depths, (means2d, depths, conics, opacities, rgbs)
-        elif primitive in ['3dgut', '3dgut_sv']:
-            means, quats, scales, opacities, features_dc, features_sh = splats
-            aabb, depths, scales, opacities, rgbs = proj_returns
-            # if packed:
-            #     means = _Index.apply(means, aabb.gaussian_ids)
-            #     quats = _Index.apply(quats, aabb.gaussian_ids)
-            backward_info['gaussian_ids'] = aabb.gaussian_ids
-            return aabb, depths, (means, quats, depths, scales, opacities, rgbs)
-        elif primitive in ['opaque_triangle']:
-            means, quats, scales, hardness, features_dc, features_sh, features_ch = splats
-            aabb, depths, verts, rgbs, normals = proj_returns
-            if packed:
-                hardness = _Index.apply(hardness, aabb.gaussian_ids)
-            return aabb, depths, (hardness, depths, verts, rgbs, normals)
-        elif primitive in ['voxel']:
-            pos_sizes, densities, features_dc, features_sh = splats
-            aabb, depths, rgbs = proj_returns
-            if packed:
-                pos_sizes = _Index.apply(pos_sizes, aabb.gaussian_ids)
-                densities = _Index.apply(densities, aabb.gaussian_ids)
-            return aabb, depths, (pos_sizes, densities, rgbs)
-        else:
-            raise NotImplementedError()
+        raise NotImplementedError()
 
 
-class _FullyFusedProjection3DGS(torch.autograd.Function):
+class _FullyFusedProjection3DGS:
     """Projects Gaussians to 2D."""
 
     @staticmethod
@@ -243,8 +230,6 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
         intrins: Tensor,  # [..., C, 4]
         width: int,
         height: int,
-        near_plane: float,
-        far_plane: float,
         camera_model: Literal["pinhole", "fisheye"],
         dist_coeffs: Optional[Tensor],
         packed: bool,
@@ -260,7 +245,6 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
         )(
             (means, quats, scales, opacities, features_dc, features_sh),
             viewmats, intrins, width, height,
-            near_plane, far_plane,
             camera_model_type, dist_coeffs
         )
         if packed:
@@ -384,7 +368,7 @@ class _FullyFusedProjection3DGS(torch.autograd.Function):
         )
 
 
-class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
+class _FullyFusedProjectionOpaqueTriangle:
     """Projects Gaussians to 2D."""
 
     @staticmethod
@@ -401,8 +385,6 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
         intrins: Tensor,  # [..., C, 4]
         width: int,
         height: int,
-        near_plane: float,
-        far_plane: float,
         camera_model: Literal["pinhole", "fisheye"],
         dist_coeffs: Optional[Tensor],
         packed: bool,
@@ -418,7 +400,6 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
             (means, quats, scales, hardness, features_dc, features_sh, features_ch),
             # (means, hardness),
             viewmats, intrins, width, height,
-            near_plane, far_plane,
             camera_model_type, dist_coeffs
         )
         if packed:
@@ -478,7 +459,7 @@ class _FullyFusedProjectionOpaqueTriangle(torch.autograd.Function):
         )
 
 
-class _FullyFusedProjectionVoxel(torch.autograd.Function):
+class _FullyFusedProjectionVoxel:
 
     @staticmethod
     def forward(
@@ -491,8 +472,6 @@ class _FullyFusedProjectionVoxel(torch.autograd.Function):
         intrins: Tensor,  # [..., C, 4]
         width: int,
         height: int,
-        near_plane: float,
-        far_plane: float,
         camera_model: Literal["pinhole", "fisheye"],
         dist_coeffs: Optional[Tensor],
         packed: bool,
@@ -507,7 +486,6 @@ class _FullyFusedProjectionVoxel(torch.autograd.Function):
         )(
             (pos_sizes, densities, features_dc, features_sh),
             viewmats, intrins, width, height,
-            near_plane, far_plane,
             camera_model_type, dist_coeffs
         )
         if packed:
@@ -571,9 +549,6 @@ def fully_fused_projection_hetero(
     tile_height: int,
     intersection_count_map: Tensor,  # [C+1]
     intersection_splat_id: Tensor,  # [nnz]
-    near_plane: float = 0.0,
-    far_plane: float = 1e10,
-    sparse_grad: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
     dist_coeffs: Optional[Tensor] = None,
     backward_info: Optional[dict] = None,
@@ -582,8 +557,6 @@ def fully_fused_projection_hetero(
     C = viewmats.shape[-3]
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert intrins.shape == batch_dims + (C, 4), intrins.shape
-    if sparse_grad:
-        assert batch_dims == (), "sparse_grad does not support batch dimensions"
 
     additional_args = []
     if primitive in ["3dgs", "mip", "3dgut"]:
@@ -592,15 +565,16 @@ def fully_fused_projection_hetero(
         additional_args.append(backward_info)
     elif primitive in ["opaque_triangle"]:
         _FullyFusedProjection = _FullyFusedProjectionOpaqueTriangleHetero
-    proj_returns = _FullyFusedProjection.apply(
+    proj_returns, proj_ctx = _FullyFusedProjection.apply(
         *in_splats,
         viewmats.contiguous(), intrins.contiguous(),
         image_width, image_height, tile_width, tile_height,
-        near_plane, far_plane,
         camera_model, dist_coeffs.contiguous() if dist_coeffs is not None else None,
         intersection_count_map.contiguous(), intersection_splat_id.contiguous(),
         *additional_args
     )
+    if backward_info is not None:
+        backward_info['projection_ctx'] = proj_ctx
 
     if primitive in ["3dgs", "mip"]:
         means2d, depths, conics, opacities, rgbs = proj_returns[3:]
@@ -611,15 +585,11 @@ def fully_fused_projection_hetero(
     elif primitive in ['opaque_triangle']:
         hardness, depths, verts, rgbs, normals = proj_returns[3:]
         return *proj_returns[:3], depths, (hardness, depths, verts, rgbs, normals)
-    elif primitive in ['voxel']:
-        pos_sizes, densities, features_dc, features_sh = splats
-        depths, rgbs = proj_returns[3:]
-        return *proj_returns[:3], depths, (pos_sizes, densities, rgbs)
     else:
         raise NotImplementedError()
 
 
-class _FullyFusedProjection3DGSHetero(torch.autograd.Function):
+class _FullyFusedProjection3DGSHetero:
     """Projects Gaussians to 2D. Return packed tensors."""
 
     @staticmethod
@@ -638,8 +608,6 @@ class _FullyFusedProjection3DGSHetero(torch.autograd.Function):
         image_height: int,
         tile_width: int,
         tile_height: int,
-        near_plane: float,
-        far_plane: float,
         camera_model: Literal["pinhole", "fisheye"],
         dist_coeffs: Optional[Tensor],
         intersection_count_map: Tensor,  # [C+1]
@@ -653,7 +621,7 @@ class _FullyFusedProjection3DGSHetero(torch.autograd.Function):
         ) = _make_lazy_cuda_func(f"projection_{primitive}_hetero_forward")(
             (means, quats, scales, opacities, features_dc, features_sh),
             viewmats, intrins, image_width, image_height, tile_width, tile_height,
-            near_plane, far_plane, camera_model_type, dist_coeffs,
+            camera_model_type, dist_coeffs,
             intersection_count_map, intersection_splat_id
         )
         ctx.save_for_backward(
@@ -707,7 +675,7 @@ class _FullyFusedProjection3DGSHetero(torch.autograd.Function):
         )
 
 
-class _FullyFusedProjectionOpaqueTriangleHetero(torch.autograd.Function):
+class _FullyFusedProjectionOpaqueTriangleHetero:
     """Projects Gaussians to 2D."""
 
     @staticmethod
@@ -726,8 +694,6 @@ class _FullyFusedProjectionOpaqueTriangleHetero(torch.autograd.Function):
         image_height: int,
         tile_width: int,
         tile_height: int,
-        near_plane: float,
-        far_plane: float,
         camera_model: Literal["pinhole", "fisheye"],
         dist_coeffs: Optional[Tensor],
         intersection_count_map: Tensor,  # [C+1]
@@ -743,7 +709,7 @@ class _FullyFusedProjectionOpaqueTriangleHetero(torch.autograd.Function):
         )(
             (means, quats, scales, hardness, features_dc, features_sh, features_ch),
             viewmats, intrins, image_width, image_height, tile_width, tile_height,
-            near_plane, far_plane, camera_model_type, dist_coeffs,
+            camera_model_type, dist_coeffs,
             intersection_count_map, intersection_splat_id
         )
         ctx.save_for_backward(
@@ -763,7 +729,6 @@ class _FullyFusedProjectionOpaqueTriangleHetero(torch.autograd.Function):
             camera_ids, gaussian_ids
         ) = ctx.saved_tensors
         (image_width, image_height, tile_width, tile_height, camera_model_type) = ctx.camera
-        sparse_grad = False
 
         (v_means, v_quats, v_scales, v_hardness, v_features_dc, v_features_sh, v_features_ch), v_viewmats = _make_lazy_cuda_func(
             "projection_opaque_triangle_hetero_backward"
@@ -772,12 +737,10 @@ class _FullyFusedProjectionOpaqueTriangleHetero(torch.autograd.Function):
             viewmats, intrins, image_width, image_height, tile_width, tile_height, camera_model_type, dist_coeffs,
             camera_ids, gaussian_ids, aabb,
             tuple([(x.contiguous() if isinstance(x, torch.Tensor) else None) for x in v_proj_returns]),
-            ctx.needs_input_grad[7], sparse_grad,
+            ctx.needs_input_grad[7],
         )
         if not ctx.needs_input_grad[7]:
             v_viewmats = None
-        if sparse_grad:
-            raise NotImplementedError()
         return (
             v_means, v_quats, v_scales, v_hardness, v_features_dc, v_features_sh, v_features_ch, v_viewmats,
             *([None]*(len(ctx.needs_input_grad)-8))

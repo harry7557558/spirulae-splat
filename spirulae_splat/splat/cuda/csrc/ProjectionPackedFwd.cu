@@ -21,8 +21,6 @@ void projection_packed_mask_kernel_wrapper(
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
     // outputs
     bool *__restrict__ intersection_mask  // [B, C, N]
 );
@@ -39,8 +37,6 @@ void projection_packed_fwd_kernel_wrapper(
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
     const int64_t* __restrict__ intersection_mask_scan,  // [B, C, N], inclusive scan
     // outputs
     int32_t *__restrict__ camera_ids,    // [nnz]
@@ -62,8 +58,6 @@ inline std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
     const ssplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
@@ -81,7 +75,7 @@ inline std::tuple<
     #define _LAUNCH_ARGS ( \
             (cudaStream_t)at::cuda::getCurrentCUDAStream(), B, C, N, \
             splats_world.buffer(), viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
-            image_width, image_height, near_plane, far_plane, \
+            image_width, image_height, \
             intersection_mask.data_ptr<bool>() \
         )
 
@@ -131,7 +125,7 @@ inline std::tuple<
     #define _LAUNCH_ARGS ( \
             (cudaStream_t)at::cuda::getCurrentCUDAStream(), B, C, N, \
             splats_world.buffer(), viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
-            image_width, image_height, near_plane, far_plane, \
+            image_width, image_height, \
             intersection_mask_scan.data_ptr<int64_t>(), \
             camera_ids.data_ptr<int32_t>(), gaussian_ids.data_ptr<int32_t>(), \
             (float4*)aabb.data_ptr<float>(), splats_screen.buffer() \
@@ -168,13 +162,11 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return launch_projection_packed_fwd_kernel<Vanilla3DGS>(
-        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, cmt(camera_model), dist_coeffs);
+        in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
 }
 
 
@@ -195,13 +187,11 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return launch_projection_packed_fwd_kernel<MipSplatting>(
-        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, cmt(camera_model), dist_coeffs);
+        in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
 }
 
 
@@ -223,13 +213,11 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return launch_projection_packed_fwd_kernel<Vanilla3DGUT>(
-        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, cmt(camera_model), dist_coeffs);
+        in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
 }
 
 
@@ -250,15 +238,13 @@ std::tuple<
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     int num_sv = std::get<5>(in_splats).size(-2);
     #define _CASE(n) \
         if (num_sv == n) return launch_projection_packed_fwd_kernel<SphericalVoronoi3DGUT<n>>( \
-            in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, cmt(camera_model), dist_coeffs); \
+            in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs); \
     _CASE(2) _CASE(3) _CASE(4) _CASE(5) _CASE(6) _CASE(7) _CASE(8)
     #undef _CASE
     throw std::invalid_argument("Unsupported num_sv");
@@ -284,13 +270,11 @@ std::tuple<
     const at::Tensor intrins,   // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return launch_projection_packed_fwd_kernel<OpaqueTriangle>(
-        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, cmt(camera_model), dist_coeffs);
+        in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
 }
 
 
@@ -313,12 +297,10 @@ std::tuple<
     const at::Tensor intrins,   // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     return launch_projection_packed_fwd_kernel<VoxelPrimitive>(
-        in_splats, viewmats, intrins, image_width, image_height, near_plane, far_plane, cmt(camera_model), dist_coeffs);
+        in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
 }
 

@@ -4,7 +4,7 @@ from torch.func import vjp  # type: ignore
 
 from spirulae_splat.splat._torch_impl import quat_to_rotmat
 
-from spirulae_splat.splat.rendering import rasterization as ssplat_rasterization
+from spirulae_splat.modules.core import rasterization as ssplat_rasterization
 
 # commit 48df61993fed8e4742d0758b6c8c2b4e599c4124
 from gsplat.rendering import rasterization as gsplat_rasterization
@@ -88,8 +88,6 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
         height=H,
         packed=PACKED,
         use_bvh=False,
-        sparse_grad=False,
-        distributed=False,
         camera_model=camera_model,
     )
     rgbd = [*rgbd[:2]]

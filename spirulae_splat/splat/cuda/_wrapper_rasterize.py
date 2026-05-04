@@ -30,6 +30,26 @@ def _make_lazy_cuda_func(name: str) -> Callable:
 
     return call_cuda
 
+
+class _ManualContext:
+    def __init__(self):
+        self.saved_tensors = ()
+        self.needs_input_grad = []
+        self.fn = None
+
+    def save_for_backward(self, *tensors):
+        self.saved_tensors = tensors
+
+
+class _ManualFunction:
+    @classmethod
+    def apply(cls, *args, **kwargs):
+        ctx = _ManualContext()
+        ctx.fn = cls
+        ctx.needs_input_grad = [True] * len(args)
+        output = cls.forward(ctx, *args, **kwargs)
+        return output, ctx
+
 from spirulae_splat.splat.cuda._wrapper_projection import add_gradient_component
 
 
@@ -65,7 +85,7 @@ def rasterize_to_pixels(
         _RasterizeToPixels = _RasterizeToPixelsVoxelEval3D
         additional_args += [backward_info]
 
-    render_outputs = _RasterizeToPixels.apply(
+    render_outputs, rasterize_ctx = _RasterizeToPixels.apply(
         *[(x.contiguous() if x is not None else None) for x in splats],
         backgrounds,
         max_blending_masks,
@@ -75,6 +95,11 @@ def rasterize_to_pixels(
         flatten_ids.contiguous(),
         *additional_args
     )
+    render_meta = {}
+    rasterize_ctx.primitive = primitive
+    rasterize_ctx.output_distortion = output_distortion
+    rasterize_ctx.compute_hessian_diagonal = compute_hessian_diagonal
+    render_meta['rasterize_ctx'] = rasterize_ctx
 
     if primitive in ["3dgs", "mip"]:
         render_rgbs, render_depths, render_Ts = render_outputs
@@ -122,7 +147,7 @@ def rasterize_to_pixels(
 
 
 
-class _RasterizeToPixels3DGS(torch.autograd.Function):
+class _RasterizeToPixels3DGS(_ManualFunction):
 
     @staticmethod
     def forward(
@@ -234,7 +259,7 @@ class _RasterizeToPixels3DGS(torch.autograd.Function):
         )
 
 
-class _RasterizeToPixels3DGUT(torch.autograd.Function):
+class _RasterizeToPixels3DGUT(_ManualFunction):
 
     @staticmethod
     def forward(
@@ -380,7 +405,7 @@ class _RasterizeToPixels3DGUT(torch.autograd.Function):
         )
 
 
-class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
+class _RasterizeToPixelsOpaqueTriangle(_ManualFunction):
 
     @staticmethod
     def forward(
@@ -510,7 +535,7 @@ class _RasterizeToPixelsOpaqueTriangle(torch.autograd.Function):
             None, None, None, None, None, None, v_viewmats, None, None, None, None
         )
 
-class _RasterizeToPixelsVoxelEval3D(torch.autograd.Function):
+class _RasterizeToPixelsVoxelEval3D(_ManualFunction):
     """Rasterize gaussians"""
 
     @staticmethod

@@ -27,7 +27,6 @@ struct _Base3DGS {
         float3 t;
         float fx, fy, cx, cy;
         uint width, height;
-        float near_plane, far_plane;
         CameraDistortionCoeffs dist_coeffs;
     };
 
@@ -618,7 +617,7 @@ inline __device__ void _Base3DGS<antialiased>::project_persp(
         world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
         cam.dist_coeffs,
-        cam.width, cam.height, cam.near_plane, cam.far_plane,
+        cam.width, cam.height,
         &aabb, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
     );
 }
@@ -632,7 +631,7 @@ inline __device__ void _Base3DGS<antialiased>::project_ortho(
         antialiased,
         world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-        cam.width, cam.height, cam.near_plane, cam.far_plane,
+        cam.width, cam.height,
         &aabb, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
     );
 }
@@ -646,7 +645,7 @@ inline __device__ void _Base3DGS<antialiased>::project_fisheye(
         antialiased,
         world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
         cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-        cam.width, cam.height, cam.near_plane, cam.far_plane,
+        cam.width, cam.height,
         &aabb, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
     );
 }

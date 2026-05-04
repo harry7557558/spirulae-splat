@@ -8,7 +8,6 @@ from .cuda import (
     depth_to_normal,
     depth_to_points,
 )
-from .rendering import rasterization
 
 from torch import Tensor
 

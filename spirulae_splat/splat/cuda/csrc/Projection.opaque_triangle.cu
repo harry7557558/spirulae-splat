@@ -20,8 +20,6 @@ std::tuple<
     const uint32_t image_height,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const float near_plane,
-    const float far_plane,
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     const at::Tensor intersection_count_map,  // [C+1]
@@ -43,7 +41,7 @@ std::tuple<
         <<<_LAUNCH_ARGS_1D(nnz, 128)>>>( \
             C, nnz, \
             in_splats.buffer(), viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
-            image_width, image_height, tile_width, tile_height, near_plane, far_plane, \
+            image_width, image_height, tile_width, tile_height, \
             intersection_count_map.data_ptr<int32_t>(), intersection_splat_id.data_ptr<int32_t>(), \
             camera_ids.data_ptr<int32_t>(), gaussian_ids.data_ptr<int32_t>(), \
             (float4*)aabb.data_ptr<float>(), splats_proj.buffer() \
@@ -88,8 +86,7 @@ std::tuple<
     const at::Tensor aabb,  // [nnz, 4]
     // grad outputs
     const OpaqueTriangle::Screen::TensorTuple &v_splats_proj_tuple,
-    const bool viewmats_requires_grad,
-    const bool sparse_grad
+    const bool viewmats_requires_grad
 ) {
     OpaqueTriangle::World::Tensor splats_world(splats_world_tuple);
     uint32_t N = splats_world.batchSize() * splats_world.size();  // number of splats
@@ -110,7 +107,7 @@ std::tuple<
             splats_world.buffer(), viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, tile_width, tile_height, \
             camera_ids.data_ptr<int32_t>(), gaussian_ids.data_ptr<int32_t>(), (float4*)aabb.data_ptr<float>(), \
-            v_splats_proj.buffer(), sparse_grad, v_splats_world.buffer(),  \
+            v_splats_proj.buffer(), v_splats_world.buffer(),  \
             viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr \
         )
 

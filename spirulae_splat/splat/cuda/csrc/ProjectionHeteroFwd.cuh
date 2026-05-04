@@ -43,8 +43,6 @@ __global__ void projection_hetero_forward_kernel(
     const uint32_t image_height,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const float near_plane,
-    const float far_plane,
     const int32_t* __restrict__ intersection_count_map,  // [C+1]
     const int32_t* __restrict__ intersection_splat_id,  // [nnz]
     // outputs
@@ -72,7 +70,6 @@ __global__ void projection_hetero_forward_kernel(
     typename SplatPrimitive::FwdProjCamera cam = {
         R, t, fx, fy, cx, cy,
         image_width, image_height,
-        near_plane, far_plane,
     };
     cam.dist_coeffs = dist_coeffs_buffer.load(camera_idx);
 

@@ -273,9 +273,8 @@ class _ComputePerSplatLosses(torch.autograd.Function):
         return (*v_inputs, *([None]*len(hyperparams)), None, None)
 
 
-class _ComputePerPixelLosses(torch.autograd.Function):
+class _ComputePerPixelLosses:
 
-    @staticmethod
     def forward(
         ctx,
         render_rgb: Optional[torch.Tensor],
@@ -345,14 +344,13 @@ class _ComputePerPixelLosses(torch.autograd.Function):
 
         ctx.weights = weights
         ctx.num_train_images = num_train_images
-        ctx.save_for_backward(*tensors, raw_losses, camera_indices, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
+        ctx.saved_tensors = (*tensors, raw_losses, camera_indices, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
 
         # print('loss_map:', loss_map.mean().item(), loss_map.median().item())
 
         return losses, ssim, loss_map
 
-    @staticmethod
-    def backward(ctx, v_losses, v_ssim, v_loss_map):
+    def backward(ctx, v_losses, v_ssim):
         # warn that loss map is not differentiable
 
         camera_indices, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = ctx.saved_tensors[-4:]
@@ -361,7 +359,8 @@ class _ComputePerPixelLosses(torch.autograd.Function):
             *ctx.saved_tensors[:-4],
             ctx.weights,
             v_losses,
-            ctx.needs_input_grad,
+            # ctx.needs_input_grad,
+            [True] * len(ctx.saved_tensors[:-4]),  # TODO
             ctx.num_train_images,
             camera_indices,
         )
@@ -369,7 +368,7 @@ class _ComputePerPixelLosses(torch.autograd.Function):
         # TODO: support gradient to ref_rgb
         _make_lazy_cuda_func("fused_ssim_backward_inplace")(*ctx.saved_tensors[:2], v_ssim, dm_dmu1, dm_dsigma1_sq, dm_dsigma12, grads[0])
 
-        return *grads, *([None]*(len(ctx.needs_input_grad)-len(grads)))
+        return grads
 
 
 class _ComputePPISPRegularization(torch.autograd.Function):
@@ -421,10 +420,9 @@ DEFAULT_PPISP_PARAMS_RQS = [
     [0.0] * 39
 ]
 
-class SplatTrainingLosses(torch.nn.Module):
+class SplatTrainingLosses:
 
     def __init__(self, config: 'spirulae_splat.modules.model.SpirulaeModelConfig', num_training_data):
-        super().__init__()
 
         self.step = 0
         self.config = config
@@ -443,7 +441,7 @@ class SplatTrainingLosses(torch.nn.Module):
                 grid_X=self.config.bilagrid_shape[0],
                 grid_Y=self.config.bilagrid_shape[1],
                 grid_W=self.config.bilagrid_shape[2],
-            )
+            ).cuda()
             if self.config.optimize_bilagrid_frequencies:
                 self.bil_grids.grids.data = \
                     Dct3D.apply(self.bil_grids.grids.data.cuda()).to(self.bil_grids.grids.data.device)
@@ -455,17 +453,17 @@ class SplatTrainingLosses(torch.nn.Module):
                 grid_X=self.config.bilagrid_shape_geometry[0],
                 grid_Y=self.config.bilagrid_shape_geometry[1],
                 grid_W=self.config.bilagrid_shape_geometry[2],
-            )
+            ).cuda()
             self.bil_grids_normal = BilateralGridNormal(
                 num=self.num_train_data,
                 grid_X=self.config.bilagrid_shape_geometry[0],
                 grid_Y=self.config.bilagrid_shape_geometry[1],
                 grid_W=self.config.bilagrid_shape_geometry[2],
-            )
+            ).cuda()
         if self.config.use_ppisp:
             self.ppisp_params = torch.Tensor(
                 DEFAULT_PPISP_PARAMS_RQS if self.config.ppisp_param_type == "rqs" else DEFAULT_PPISP_PARAMS
-            ).repeat(self.num_train_data, 1)
+            ).repeat(self.num_train_data, 1).cuda()
             self.ppisp_params = torch.nn.Parameter(self.ppisp_params)
 
         self._dummy = torch.nn.Parameter(torch.zeros(1, dtype=torch.float32))
@@ -476,7 +474,7 @@ class SplatTrainingLosses(torch.nn.Module):
             self.lpips = LearnedPerceptualImagePatchSimilarity(
                 net_type="vgg", normalize=True
                 # net_type="alex", normalize=True
-            ).to(self.lpips_dtype)
+            ).to(self.lpips_dtype).cuda()
 
     def soft_detach(self, tensors):
         dummy = _Dummy()
@@ -485,6 +483,7 @@ class SplatTrainingLosses(torch.nn.Module):
         return dummy.tensors
 
     def _get_downscale_factor(self):
+        return 1   ## TODO
         if self.training:
             return 2 ** max(
                 (self.config.num_downscales - self.step // self.config.resolution_schedule),
@@ -586,7 +585,7 @@ class SplatTrainingLosses(torch.nn.Module):
         return self.config.alpha_reg_weight * \
             min(self.step / max(self.config.alpha_reg_warmup, 1), 1)
 
-    def forward(self, step: int, batch, outputs, meta={}, val=False):
+    def __call__(self, step: int, batch, outputs, meta={}, val=False, return_grad=True):
         self.step = step
 
         device = outputs['rgb'].device
@@ -619,46 +618,87 @@ class SplatTrainingLosses(torch.nn.Module):
         gt_rgb_mask, gt_depth_mask, gt_normal_mask, gt_alpha_mask = None, None, None, None  # for masking
         none_sky_mask = None
 
-        # load alpha
-        if "mask" in batch:
-            batch_mask = self._downscale_if_required(batch['mask'].to(device).float()) > 0.5
-            gt_rgb_mask = batch_mask
-            if self.config.apply_loss_for_mask:
-                gt_alpha = batch_mask
+        with torch.no_grad():
+            # load alpha
+            if "mask" in batch:
+                batch_mask = self._downscale_if_required(batch['mask'].to(device).float()) > 0.5
+                gt_rgb_mask = batch_mask
+                if self.config.apply_loss_for_mask:
+                    gt_alpha = batch_mask
 
-        # load depth
-        if 'depth' in batch:
-            gt_depth = batch['depth'].to(device)
-            if len(gt_depth.shape) == 3:
-                gt_depth = gt_depth.unsqueeze(-1)
-            gt_depth = self._downscale_if_required(gt_depth)
-            gt_depth_mask = (gt_depth != 0.0)
+            # load depth
+            if 'depth' in batch:
+                gt_depth = batch['depth'].to(device)
+                if len(gt_depth.shape) == 3:
+                    gt_depth = gt_depth.unsqueeze(-1)
+                gt_depth = self._downscale_if_required(gt_depth)
+                gt_depth_mask = (gt_depth != 0.0)
 
-            # sky mask
-            none_sky_mask = gt_depth < torch.amax(gt_depth, dim=(1,2,3), keepdims=True).detach()
-            gt_alpha_mask = gt_depth_mask
+                # sky mask
+                none_sky_mask = gt_depth < torch.amax(gt_depth, dim=(1,2,3), keepdims=True).detach()
+                gt_alpha_mask = gt_depth_mask
 
-            # apply bilagrid
-            if self.config.use_bilateral_grid_for_geometry and \
-                    (camera.metadata is not None and "cam_idx" in camera.metadata):
+            # load normal
+            if 'normal' in batch:
+                gt_normal = batch['normal']
+                if gt_normal.dtype == torch.uint8:
+                    gt_normal = gt_normal.float() / (255/2) - 1.0
+                gt_normal = self._downscale_if_required(gt_normal.to(device))
+                gt_normal_mask = (gt_normal.sum(-1, True) > -2.366)  # background is (-1, -1, -1)
+
+            # mask sky
+            if none_sky_mask is not None:
+                # apply to depth mask (already there if sky mask is there)
+                gt_depth_mask = gt_depth_mask & none_sky_mask
+                # apply to normal desk
+                if gt_normal_mask is None:
+                    gt_normal_mask = none_sky_mask
+                else:
+                    gt_normal_mask = gt_normal_mask & none_sky_mask
+                if not self.config.enable_sky_masking:
+                    none_sky_mask = None
+            if none_sky_mask is not None:
+                # apply loss to discourage opacity
+                if gt_alpha is not None:
+                    gt_alpha = gt_alpha & none_sky_mask
+                else:
+                    gt_alpha = none_sky_mask
+                # apply to rgb mask
+                if not (self.config.apply_loss_for_mask or self.config.train_background_color):
+                    if gt_rgb_mask is not None:
+                        gt_rgb_mask = gt_rgb_mask & none_sky_mask
+                    else:
+                        gt_rgb_mask = none_sky_mask
+
+            # load RGB
+            gt_img_rgba = self.get_gt_img(batch["image"].to(device))
+            gt_rgb = gt_img_rgba if gt_img_rgba.shape[-1] == 3 else gt_img_rgba[..., :3]
+
+            # update alpha if image is RGBA
+            if gt_img_rgba.shape[-1] == 4 and self.config.alpha_loss_weight > 0.0:
+                alpha = (gt_img_rgba[..., -1].unsqueeze(-1) > 0.5)
+                gt_img_rgba = gt_img_rgba[..., :3]
+                gt_rgb_mask = gt_rgb_mask & alpha if gt_rgb_mask is not None else alpha
+                if self.config.apply_loss_for_mask:
+                    gt_alpha = gt_alpha & alpha if gt_alpha is not None else alpha
+
+            # convert to sRGB if needed
+            # don't clip; exposure correction and loss should ideally handle out-of-gamut colors
+            if self.config.image_color_is_linear or self.config.image_color_gamut != None:
+                color_matrix = get_color_transform_matrix(self.config.image_color_gamut)
+                gt_rgb = rgb_to_srgb(gt_rgb, self.config.image_color_is_linear, color_matrix)
+
+        # apply bilagrid for geometry
+        if self.config.use_bilateral_grid_for_geometry and \
+                (camera.metadata is not None and "cam_idx" in camera.metadata):
+            if gt_depth is not None:
                 gt_depth = self.apply_bilateral_grid(
                     [self.bil_grids_depth],
                     gt_depth, camera.metadata["cam_idx"],
                     bilagrid_type="depth",
                     **meta
                 )
-
-        # load normal
-        if 'normal' in batch:
-            gt_normal = batch['normal']
-            if gt_normal.dtype == torch.uint8:
-                gt_normal = gt_normal.float() / (255/2) - 1.0
-            gt_normal = self._downscale_if_required(gt_normal.to(device))
-            gt_normal_mask = (gt_normal.sum(-1, True) > -2.366)  # background is (-1, -1, -1)
-
-            # apply bilagrid
-            if self.config.use_bilateral_grid_for_geometry and \
-                    (camera.metadata is not None and "cam_idx" in camera.metadata):
+            if gt_normal is not None:
                 gt_normal = self.apply_bilateral_grid(
                     [self.bil_grids_normal],
                     gt_normal, camera.metadata["cam_idx"],
@@ -666,49 +706,10 @@ class SplatTrainingLosses(torch.nn.Module):
                     **meta
                 )
 
-        # mask sky
-        if none_sky_mask is not None:
-            # apply to depth mask (already there if sky mask is there)
-            gt_depth_mask = gt_depth_mask & none_sky_mask
-            # apply to normal desk
-            if gt_normal_mask is None:
-                gt_normal_mask = none_sky_mask
-            else:
-                gt_normal_mask = gt_normal_mask & none_sky_mask
-            if not self.config.enable_sky_masking:
-                none_sky_mask = None
-        if none_sky_mask is not None:
-            # apply loss to discourage opacity
-            if gt_alpha is not None:
-                gt_alpha = gt_alpha & none_sky_mask
-            else:
-                gt_alpha = none_sky_mask
-            # apply to rgb mask
-            if not (self.config.apply_loss_for_mask or self.config.train_background_color):
-                if gt_rgb_mask is not None:
-                    gt_rgb_mask = gt_rgb_mask & none_sky_mask
-                else:
-                    gt_rgb_mask = none_sky_mask
-
-        # load RGB
-        if self.config.fit == "rgb":
-            gt_img_rgba = self.get_gt_img(batch["image"].to(device))
-        elif self.config.fit == "depth":
-            gt_img_rgba = gt_depth
-        elif self.config.fit in ["normal"]:
-            gt_img_rgba = 0.5+0.5*F.normalize(gt_normal, dim=-1)
-        gt_rgb = gt_img_rgba if gt_img_rgba.shape[-1] == 3 else gt_img_rgba[..., :3]
-
-        # update alpha if image is RGBA
-        if gt_img_rgba.shape[-1] == 4 and self.config.alpha_loss_weight > 0.0:
-            alpha = (gt_img_rgba[..., -1].unsqueeze(-1) > 0.5)
-            gt_rgb_mask = gt_rgb_mask & alpha if gt_rgb_mask is not None else alpha
-            if self.config.apply_loss_for_mask:
-                gt_alpha = gt_alpha & alpha if gt_alpha is not None else alpha
-
         # replace parts of background with random noise to discourage transparency
         background = outputs["background"] if 'background' in outputs else gt_rgb
         if self.config.randomize_background == "opaque-only":
+            raise NotImplementedError("TODO")
             background_mask = gt_rgb_mask
             if none_sky_mask is not None:
                 background_mask = none_sky_mask if background_mask is None else \
@@ -716,13 +717,13 @@ class SplatTrainingLosses(torch.nn.Module):
             if background_mask is not None:
                 background = torch.where(background_mask, torch.rand_like(background), background)
         if self.config.randomize_background == "non-sky-only":
+            raise NotImplementedError("TODO")
             if none_sky_mask is not None:
                 background = torch.where(none_sky_mask, torch.rand_like(background), background)
 
         # do this to make SSIM/LPIPS happier + encourage sky transparency
-        if gt_rgb_mask is not None and False:
-            gt_rgb = torch.where(gt_rgb_mask, gt_rgb, background)
         if gt_rgb_mask is not None or none_sky_mask is not None:
+            raise NotImplementedError("TODO")
             background_mask = gt_rgb_mask
             if none_sky_mask is not None and ('max_blending' in meta or random.random() < 0.1):
                 background_mask = none_sky_mask if background_mask is None else \
@@ -730,12 +731,10 @@ class SplatTrainingLosses(torch.nn.Module):
             if background_mask is not None:
                 pred_rgb = torch.where(background_mask, pred_rgb, background)
 
-        # convert linear RGB to sRGB if needed
+        # convert to sRGB if needed
         # don't clip; exposure correction and loss should ideally handle out-of-gamut colors
-        if self.config.image_color_is_linear or self.config.image_color_gamut != None:
-            color_matrix = get_color_transform_matrix(self.config.image_color_gamut)
-            gt_rgb = rgb_to_srgb(gt_rgb, self.config.image_color_is_linear, color_matrix)
         if self.config.splat_color_is_linear or self.config.splat_color_gamut != None:
+            raise NotImplementedError("TODO")
             color_matrix = get_color_transform_matrix(self.config.splat_color_gamut)
             pred_rgb = rgb_to_srgb(pred_rgb, self.config.splat_color_is_linear, color_matrix)
 
@@ -743,19 +742,21 @@ class SplatTrainingLosses(torch.nn.Module):
         # TODO: multi resolution
         accum_weight_map = None
         if self.config.use_edge_aware_score and self.config.relocate_heuristic_weight != 0.0:
-            accum_weight_map = detect_edge(gt_rgb)
+            accum_weight_map = detect_edge(gt_rgb)  # no_grad
 
         # apply exposure correction
-        if self.config.use_bilateral_grid and self.config.fit == "rgb" and \
+        if self.config.use_bilateral_grid and \
                 camera.metadata is not None and "cam_idx" in camera.metadata:
+            raise NotImplementedError("TODO")
             pred_rgb = self.apply_bilateral_grid(
                 self.bilagrid_wrapped,
                 pred_rgb, camera.metadata["cam_idx"],
                 bilagrid_typ=self.config.bilagrid_type,
                 **meta
             )
-        if self.config.use_ppisp and self.config.fit == "rgb" and \
+        if self.config.use_ppisp and \
                 camera.metadata is not None and "cam_idx" in camera.metadata:
+            raise NotImplementedError("TODO")
             indices = torch.tensor(camera.metadata["cam_idx"]).flatten().to(device)
             ppisp_param = self.ppisp_params[indices, :]
             pred_rgb = apply_ppisp(
@@ -849,8 +850,9 @@ class SplatTrainingLosses(torch.nn.Module):
         for scale in range(0, self.config.num_loss_scales+1):
 
             # per pixel losses
+            ComputePerPixelLosses = _ComputePerPixelLosses()
             compute_loss_map = self.config.use_loss_map or (self.config.compute_hessian_diagonal is not None)
-            losses_pooled, ssim_pooled, loss_map_pooled = _ComputePerPixelLosses.apply(
+            losses_pooled, ssim_pooled, loss_map_pooled = ComputePerPixelLosses.forward(
                 *all_images[scale],
                 loss_weights,
                 meta.get("num_train_data", -1),
@@ -860,12 +862,24 @@ class SplatTrainingLosses(torch.nn.Module):
             )
             ssim_loss_pooled = 1.0 - ssim_pooled
 
+            if return_grad:
+                v_losses = torch.ones_like(losses_pooled)
+                if v_losses.numel() > 1:
+                    v_losses[1] = 0.0  # psnr
+                grads = ComputePerPixelLosses.backward(
+                    v_losses,
+                    -w_ssim
+                )
+                # print(len(grads), [(x.shape if x is not None else x) for x in grads])
+
             # original
             if scale == 0:
                 ssim, ssim_loss = ssim_pooled, ssim_loss_pooled
                 losses, loss_map = losses_pooled, loss_map_pooled
                 psnr = losses[1]
                 continue
+
+            raise NotImplementedError()
 
             # downscaled
             losses = losses + losses_pooled
@@ -877,6 +891,7 @@ class SplatTrainingLosses(torch.nn.Module):
                     loss_map[:, :loss_map_pooled.shape[1], :loss_map_pooled.shape[2], :] += loss_map_pooled
 
         if self.config.num_loss_scales > 0:
+            raise NotImplementedError()
             multiplier = 1.0 / (self.config.num_loss_scales + 1)
             # multiplier = 1.0 / (2.0 - 0.5 ** self.config.num_loss_scales)
             losses = losses * multiplier
@@ -910,6 +925,7 @@ class SplatTrainingLosses(torch.nn.Module):
 
         # LPIPS for training
         if self.config.lpips_lambda > 0.0:
+            raise NotImplementedError()
             if self.config.compute_hessian_diagonal is not None:
                 raise NotImplementedError()
             if self.config.num_loss_scales != 0:
@@ -922,6 +938,7 @@ class SplatTrainingLosses(torch.nn.Module):
 
         # LPIPS for validation
         if val:
+            raise NotImplementedError()
             if not hasattr(self, 'lpips_val'):
                 self.lpips_val = LearnedPerceptualImagePatchSimilarity(
                     net_type="alex", normalize=True
@@ -979,64 +996,12 @@ class SplatTrainingLosses(torch.nn.Module):
         if self.config.lpips_lambda > 0.0:
             loss_dict['lpips'] = float(lpips)
         if val:
+            raise NotImplementedError()
             loss_dict['lpips_val'] = float(lpips_val)
 
-        return loss_dict
+        return loss_dict, grads
 
-    # @torch.compile(**_TORCH_COMPILE_ARGS)
-    def _erank_reg(self, gauss_scales):
-        scales = torch.exp(2.0*gauss_scales)
-        if self.config.use_3dgs:
-            x, y, z = torch.unbind(scales, -1)
-            s = x + y + z
-            s1 = torch.fmax(torch.fmax(x, y), z) / s
-            s3 = torch.fmin(torch.fmin(x, y), z) / s
-            s2 = 1 - s1 - s3
-            r = torch.exp(-s1*torch.log(s1) - s2*torch.log(s2) - s3*torch.log(s3))
-            reg = torch.relu(-torch.log(r - 0.99999))
-            return self.config.erank_reg * reg.mean() + \
-                self.config.erank_reg_s3 * s3.mean()
-        else:
-            x, y = torch.unbind(scales, -1)
-            s = x + y
-            s1 = torch.fmax(x, y) / s
-            s2 = torch.fmin(x, y) / s
-            r = torch.exp(-s1*torch.log(s1) - s2*torch.log(s2))
-            reg = torch.relu(-torch.log(r - 0.99999))
-            return self.config.erank_reg * reg.mean()
-
-    # @torch.compile(**_TORCH_COMPILE_ARGS)
-    def _scale_reg(self, gauss_scales):
-        scale_exp = torch.exp(gauss_scales)
-        scale_reg = (
-            torch.maximum(
-                scale_exp.amax(dim=-1) / scale_exp.amin(dim=-1),
-                torch.tensor(self.config.max_gauss_ratio),
-            )
-            - self.config.max_gauss_ratio
-        )
-        return self.config.scale_regularization_weight * scale_reg.mean()
-
-    # @torch.compile(**_TORCH_COMPILE_ARGS)
-    def _mcmc_opac_reg(self, gauss_opacities):
-        mcmc_opacity_reg = torch.sigmoid(gauss_opacities).mean()
-        return self.config.mcmc_opacity_reg * mcmc_opacity_reg
-
-    # @torch.compile(**_TORCH_COMPILE_ARGS)
-    def _mcmc_scale_reg(self, gauss_scales):
-        mcmc_scale_reg = torch.exp(gauss_scales).mean()
-        # mcmc_scale_reg = gauss_scales.mean()
-        # mcmc_scale_reg = torch.where(gauss_scales < 0, torch.exp(gauss_scales), gauss_scales+1).mean()
-        return self.config.mcmc_scale_reg * mcmc_scale_reg
-
-    # @torch.compile(**_TORCH_COMPILE_ARGS)
-    def _quat_norm_reg(self, gauss_quats):
-        # quat_norm = gauss_quats.norm(dim=-1)
-        quat_norm = torch.sqrt((gauss_quats**2).sum(dim=-1))
-        quat_norm_reg = 0.01 * (quat_norm-1.0-torch.log(quat_norm)).mean()
-        return quat_norm_reg
-
-    def get_static_losses(self, step: int, gauss_quats, gauss_scales, gauss_opacities, loss_dict, backward_info: Optional[dict] = None, _use_torch_impl=False):
+    def get_static_losses(self, step: int, gauss_quats, gauss_scales, gauss_opacities, loss_dict, backward_info: Optional[dict] = None):
         """Separately process losses that are not dependent on images"""
         self.step = step
 
@@ -1089,51 +1054,21 @@ class SplatTrainingLosses(torch.nn.Module):
         if self.config.primitive == "voxel":
             return loss_dict
 
-        if not _use_torch_impl:
-            losses = _ComputePerSplatLosses.apply(
-                gauss_scales, gauss_opacities, gauss_quats,
-                self.config.mcmc_opacity_reg * float(self.config.use_mcmc),
-                self.config.mcmc_scale_reg * float(self.config.use_mcmc),
-                self.config.max_gauss_ratio,
-                self.config.scale_regularization_weight,
-                self.config.erank_reg * float(self.step >= self.config.erank_reg_warmup),
-                self.config.erank_reg_s3 * float(self.step >= self.config.erank_reg_warmup),
-                self.config.quat_norm_reg,
-                self.config.compute_hessian_diagonal,
-                backward_info,
-            )
-            loss_dict['mcmc_opacity_reg'] = losses[0]
-            loss_dict['mcmc_scale_reg'] = losses[1]
-            loss_dict['scale_reg'] = losses[2]
-            loss_dict['erank_reg'] = losses[3]
-            loss_dict['quat_norm_reg'] = losses[4]
-            return loss_dict
-
-        # MCMC regularizers
-        mcmc_opacity_reg, mcmc_scale_reg = 0.0, 0.0
-        if self.config.use_mcmc:
-            if self.config.mcmc_opacity_reg > 0.0:
-                mcmc_opacity_reg = self._mcmc_opac_reg(gauss_opacities)
-            if self.config.mcmc_scale_reg > 0.0:
-                mcmc_scale_reg = self._mcmc_scale_reg(gauss_scales)
-        loss_dict['mcmc_opacity_reg'] = mcmc_opacity_reg
-        loss_dict['mcmc_scale_reg'] = mcmc_scale_reg
-
-        # scale regularization
-        scale_reg = 0.0
-        if self.config.scale_regularization_weight > 0.0:
-            scale_reg = self._scale_reg(gauss_scales)
-        loss_dict['scale_reg'] = scale_reg
-
-        # erank regularizers
-        erank_reg = 0.0
-        if self.step >= self.config.erank_reg_warmup and (
-            self.config.erank_reg > 0.0 or self.config.erank_reg_s3 > 0.0
-        ):
-            erank_reg = self._erank_reg(gauss_scales)
-        loss_dict['erank_reg'] = erank_reg
-
-        # regularizations for parameters
-        loss_dict['quat_norm_reg'] = self._quat_norm_reg(gauss_quats)
-
+        losses = _ComputePerSplatLosses.apply(
+            gauss_scales, gauss_opacities, gauss_quats,
+            self.config.mcmc_opacity_reg * float(self.config.use_mcmc),
+            self.config.mcmc_scale_reg * float(self.config.use_mcmc),
+            self.config.max_gauss_ratio,
+            self.config.scale_regularization_weight,
+            self.config.erank_reg,
+            self.config.erank_reg_s3,
+            self.config.quat_norm_reg,
+            self.config.compute_hessian_diagonal,
+            backward_info,
+        )
+        loss_dict['mcmc_opacity_reg'] = losses[0]
+        loss_dict['mcmc_scale_reg'] = losses[1]
+        loss_dict['scale_reg'] = losses[2]
+        loss_dict['erank_reg'] = losses[3]
+        loss_dict['quat_norm_reg'] = losses[4]
         return loss_dict

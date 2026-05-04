@@ -36,7 +36,6 @@ __global__ void projection_3dgs_hetero_backward_kernel(
     const float4 *__restrict__ aabbs,          // [B, C, N, 4]
     // grad outputs
     typename SplatPrimitive::Screen::Buffer v_splats_proj,
-    const bool sparse_grad, // whether the outputs are in COO format [nnz, ...]
     // grad inputs
     typename SplatPrimitive::World::Buffer v_splats_world,
     float *__restrict__ v_viewmats // [C, 4, 4]
@@ -94,11 +93,7 @@ __global__ void projection_3dgs_hetero_backward_kernel(
     
     // Save results
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
-    if (sparse_grad) {
-        v_splat_world.saveParamsToBuffer(v_splats_world, thread_idx);
-    } else {
-        v_splat_world.atomicAddGradientToBuffer(v_splats_world, splat_idx);
-    }
+    v_splat_world.atomicAddGradientToBuffer(v_splats_world, splat_idx);
     if (v_viewmats != nullptr) {
         auto warp_group_c = cg::labeled_partition(warp, camera_idx);
         warpSum(v_R[0], warp_group_c);

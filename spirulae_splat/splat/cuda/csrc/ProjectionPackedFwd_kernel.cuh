@@ -26,8 +26,6 @@ __global__ void projection_packed_mask_kernel(
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
     // outputs
     bool *__restrict__ intersection_mask  // [B, C, N]
 ) {
@@ -53,7 +51,6 @@ __global__ void projection_packed_mask_kernel(
     typename SplatPrimitive::FwdProjCamera cam = {
         R, t, fx, fy, cx, cy,
         image_width, image_height,
-        near_plane, far_plane,
     };
     cam.dist_coeffs = dist_coeffs_buffer.load(bid * C + cid);
 
@@ -94,8 +91,6 @@ __global__ void projection_packed_fwd_kernel(
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
     const int64_t* __restrict__ intersection_mask_scan,  // [B, C, N], inclusive scan
     // outputs
     int32_t *__restrict__ camera_ids,    // [nnz]
@@ -131,7 +126,7 @@ __global__ void projection_packed_fwd_kernel(
     typename SplatPrimitive::FwdProjCamera cam = {
         R, t, fx, fy, cx, cy,
         image_width, image_height,
-        near_plane, far_plane,
+       
     };
     cam.dist_coeffs = dist_coeffs_buffer.load(bid * C + cid);
 
@@ -175,8 +170,6 @@ void projection_packed_mask_kernel_wrapper(
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
     // outputs
     bool *__restrict__ intersection_mask  // [B, C, N]
 ) {
@@ -185,7 +178,7 @@ void projection_packed_mask_kernel_wrapper(
     <<<_CEIL_DIV(B*C*N, block), block, 0, stream>>>(
         B, C, N,
         splats_world, viewmats, intrins, dist_coeffs_buffer,
-        image_width, image_height, near_plane, far_plane,
+        image_width, image_height,
         intersection_mask
     );
 }
@@ -202,8 +195,6 @@ void projection_packed_fwd_kernel_wrapper(
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
     const int64_t* __restrict__ intersection_mask_scan,  // [B, C, N], inclusive scan
     // outputs
     int32_t *__restrict__ camera_ids,    // [nnz]
@@ -216,7 +207,7 @@ void projection_packed_fwd_kernel_wrapper(
     <<<_CEIL_DIV(B*C*N, block), block, 0, stream>>>(
         B, C, N,
         splats_world, viewmats, intrins, dist_coeffs_buffer,
-        image_width, image_height, near_plane, far_plane,
+        image_width, image_height,
         intersection_mask_scan,
         camera_ids, gaussian_ids, aabbs, splats_screen
     );

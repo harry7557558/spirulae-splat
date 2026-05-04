@@ -17,8 +17,6 @@
     no_diff const float[10] dist_coeffs, \
     const uint image_width, \
     const uint image_height, \
-    no_diff const float near_plane, \
-    no_diff const float far_plane, \
     no_diff out float4 aabb_xyxy, \
     out float depth, \
     out float3 rgbs
@@ -29,7 +27,7 @@ void projection_voxel_eval3d<let camera_model : CameraModelType, let assume_vali
     _projection_voxel_eval3d_ARGS
 ) {
     float3 pos_c[8];
-    float min_z = far_plane, max_z = near_plane;
+    float min_z = 1e30f, max_z = 0.0f;
     [ForceUnroll]
     for (int i = 0; i < 8; i++) {
         float3 pos_i = pos + size * float3(i & 1, (i >> 1) & 1, i >> 2);
@@ -39,7 +37,7 @@ void projection_voxel_eval3d<let camera_model : CameraModelType, let assume_vali
         min_z = min(min_z, cull_zc);
         max_z = max(max_z, cull_zc);
     }
-    if (!assume_valid && (min_z < near_plane || max_z > far_plane)) {
+    if (!assume_valid && min_z <= 0.0f) {
         aabb_xyxy = float4(0.0f);
         return;
     }
@@ -113,7 +111,7 @@ void projection_voxel_eval3d<let camera_model : CameraModelType, let assume_vali
         return projection_voxel_eval3d<__VA_ARGS__>( \
             pos, size, densities, sh_coeffs, R, t, \
             fx, fy, cx, cy, dist_coeffs, \
-            image_width, image_height, near_plane, far_plane, \
+            image_width, image_height, \
             aabb_xyxy, depth, rgbs \
         ); \
     }
@@ -156,7 +154,7 @@ void projection_voxel_eval3d_persp_vjp(
     bwd_diff(_projection_voxel_eval3d_persp_differentiable)(
         pos, size, dp_densities, dp_sh_coeffs, dp_R, dp_t,
         fx, fy, cx, cy, dist_coeffs,
-        image_width, image_height, 0.0f, 1e30f,
+        image_width, image_height,
         0.0f, v_rgb
     );
     v_densities = dp_densities.d;
@@ -176,7 +174,7 @@ void projection_voxel_eval3d_fisheye_vjp(
     bwd_diff(_projection_voxel_eval3d_fisheye_differentiable)(
         pos, size, dp_densities, dp_sh_coeffs, dp_R, dp_t,
         fx, fy, cx, cy, dist_coeffs,
-        image_width, image_height, 0.0f, 1e30f,
+        image_width, image_height,
         0.0f, v_rgb
     );
     v_densities = dp_densities.d;

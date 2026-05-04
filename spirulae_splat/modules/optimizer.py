@@ -360,3 +360,38 @@ def create_optimizers(model: torch.nn.Module, config: Dict):
         if param_key not in optimizers:
             raise RuntimeError(f"No optimizer found for {param_key}")
     return optimizers
+
+
+@dataclass
+class OptimizerConfig:
+    max_steps: Optional[int] = None
+    means_lr: float = 1e-4
+    means_lr_final: Optional[float] = 1e-6
+    scales_lr: float = 0.005
+    scales_lr_final: Optional[float] = None
+    quats_lr: float = 0.0005
+    opacities_lr: float = 0.05
+    features_dc_lr: float = 0.0025
+    features_sh_lr: float = 0.0025 / 20
+    features_ch_lr: float = 0.0025 / 5
+    sv_sites_lr: float = 0.01
+    sv_colors_lr: float = 0.0005
+    densities_lr: float = 0.05
+    densities_lr_final: Optional[float] = 0.0005
+    background_color_lr: float = 0.0025
+    background_sh_lr: float = 0.0025 / 5
+    bilagrid_lr: float = 2e-3
+    bilagrid_lr_final: Optional[float] = 1e-4
+    bilagrid_lr_warmup: int = 1000
+    bilagrid_depth_lr: float = 2e-3
+    bilagrid_depth_lr_final: Optional[float] = 1e-4
+    bilagrid_depth_lr_warmup: int = 2000
+    bilagrid_normal_lr: float = 5e-4
+    bilagrid_normal_lr_final: Optional[float] = 4e-5
+    bilagrid_normal_lr_warmup: int = 2000
+    ppisp_lr: float = 2e-3
+    ppisp_lr_final: Optional[float] = 2e-5
+    ppisp_lr_warmup: int = 500   # TODO: pre-warmup
+    camera_opt_lr: float = 1e-4
+    camera_opt_lr_final: Optional[float] = 5e-7
+    camera_opt_lr_warmup: int = 1000
