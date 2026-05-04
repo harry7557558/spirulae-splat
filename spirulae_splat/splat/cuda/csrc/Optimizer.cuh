@@ -139,6 +139,8 @@ void fused_optim_3dgs_geometry(
     const float lr_quats,
     const float lr_scales,
     const float lr_opacs,
+    const float mcmc_noise_lr,
+    const float min_opacity,
     const float max_gauss_ratio,
     const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight,

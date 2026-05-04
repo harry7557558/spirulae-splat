@@ -503,10 +503,10 @@ class Renderer:
         #         param.grad = param.grad + grad
 
     def optim_step(
-            self, step: int,
-            model_config: 'spirulae_splat.modules.model.SpirulaeSplatModelConfig',
-            optim_config: OptimizerConfig
-        ):
+        self, step: int,
+        model_config: 'spirulae_splat.modules.model.SpirulaeSplatModelConfig',
+        optim_config: OptimizerConfig
+    ):
 
         if self.primitive not in ["3dgs", "mip", "3dgut", "3dgut_sv"]:
             raise NotImplementedError()
@@ -526,7 +526,7 @@ class Renderer:
                 scheduled_lr = min(scheduled_lr, pre_warmup + (lr - pre_warmup) * min(step / warmup, 1.0))
             return scheduled_lr
 
-        # geometry
+        # geometry, includes regularization and MCMC add noise
         _make_lazy_cuda_func("fused_optim_3dgs_geometry")(
             self.splats_world[0],
             self.v_splats_world[0],
@@ -549,6 +549,8 @@ class Renderer:
             get_scheduled_lr("quats"),
             get_scheduled_lr("scales"),
             get_scheduled_lr("opacities"),
+            model_config.noise_lr,
+            model_config.min_opacity,
             model_config.max_gauss_ratio,
             model_config.scale_regularization_weight,
             model_config.mcmc_opacity_reg,
@@ -578,3 +580,10 @@ class Renderer:
             0.9, 0.999, 1e-15,
             step+1
         )
+
+    def densify_step(
+        self, step: int,
+        model_config: 'spirulae_splat.modules.model.SpirulaeSplatModelConfig',
+        optim_config: OptimizerConfig
+    ):
+        pass

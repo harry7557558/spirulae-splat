@@ -13,6 +13,10 @@ namespace SlangPerSplatLosses {
 #include "generated/set_namespace.cuh"
 #include "generated/per_splat_losses.cuh"
 }
+namespace SlangDensify {
+#include "generated/set_namespace.cuh"
+#include "generated/densify.cuh"
+}
 
 #include "common.cuh"
 
@@ -712,6 +716,8 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     const float lr_quats,
     const float lr_scales,
     const float lr_opacs,
+    const float mcmc_noise_scalar,
+    const float min_opacity,
     const float max_gauss_ratio,
     const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight,
@@ -783,23 +789,29 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     float3 g1_mean = g1_means[idx];
     float3 g2_mean = g2_means[idx];
 
-    float3 sqrt_scale = float3{expf(0.5f*scale.x), expf(0.5f*scale.y), expf(0.5f*scale.z)};
-    opac = 1.0f / (1.0f + __expf(-opac));
-    Matrix<float, 3, 3> sqrt_covar;
-    SlangProjectionUtils::quat_scale_to_covar(quat, sqrt_scale, &sqrt_covar);
-    Matrix<float, 3, 3> covar;
-    SlangProjectionUtils::quat_scale_to_covar(quat, sqrt_scale*sqrt_scale, &covar);
+    float opac_post_sigmoid = 1.0f / (1.0f + __expf(-opac));
 
-    float3 v_mean_scaled_num = float3{dot(sqrt_covar[0], v_mean), dot(sqrt_covar[1], v_mean), dot(sqrt_covar[2], v_mean)};
-    float v_mean_scaled_den = radii[idx] * 0.25f;
+    float3 v_mean_scaled_num = SlangProjectionUtils::apply_covar_to_vec(
+        quat,
+        {expf(0.5f*scale.x), expf(0.5f*scale.y), expf(0.5f*scale.z)},  // unit: L^0.5
+        v_mean  // unit: L^-1
+    ) * sqrtf(2.0f * __logf(fmaxf(255.0f * opac_post_sigmoid, 1.00001f)));  // unit: dimensionless
+    float v_mean_scaled_den = radii[idx] * 0.6f;  // unit: dimensionless
     #if 0
     v_mean_scaled_num = v_mean_scaled_num / (v_mean_scaled_den + (eps * (float)numel));
     v_mean_scaled_den = 1.0f;
     #endif
-    g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean_scaled_num;
-    g2_mean = beta2 * g2_mean + (1.f - beta2) * v_mean*v_mean * v_mean_scaled_den*v_mean_scaled_den;
+    g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean_scaled_num;  // unit: dimensionless
+    g2_mean = beta2 * g2_mean + (1.f - beta2) * v_mean*v_mean * v_mean_scaled_den*v_mean_scaled_den;  // unit: L^-2
 
-    means[idx] = mean - lr_means * g1_mean / (sqrtf(g2_mean * inv_bias_correction2) + eps);;
+    float noise_lr_scalar = length(v_mean_scaled_num) / (length(v_mean) * v_mean_scaled_den + eps);
+    SlangDensify::mcmc_add_noise_3dgs(
+        mcmc_noise_scalar * noise_lr_scalar, min_opacity,
+        &mean, scale, quat, opac_post_sigmoid
+        // official MCMC use scale/quat/opac after optimizer step, shouldn't matter in practice
+    );
+
+    means[idx] = mean - lr_means * g1_mean / (sqrtf(g2_mean * inv_bias_correction2) + eps); // unit: L for dimensionless lr_means
     g1_means[idx] = g1_mean;
     g2_means[idx] = g2_mean;
 }
@@ -828,6 +840,8 @@ void fused_optim_3dgs_geometry(
     const float lr_quats,
     const float lr_scales,
     const float lr_opacs,
+    const float mcmc_noise_lr,
+    const float min_opacity,
     const float max_gauss_ratio,
     const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight,
@@ -885,6 +899,8 @@ void fused_optim_3dgs_geometry(
         lr_quats / (1.0f - powf(beta1, step)),
         lr_scales / (1.0f - powf(beta1, step)),
         lr_opacs / (1.0f - powf(beta1, step)),
+        lr_means * mcmc_noise_lr,
+        min_opacity,
         max_gauss_ratio,
         scale_regularization_weight / (float)numel,
         mcmc_opacity_reg_weight / (float)numel,

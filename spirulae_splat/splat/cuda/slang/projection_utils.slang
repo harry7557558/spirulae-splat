@@ -121,6 +121,7 @@ void quat_scale_to_covar(
     covar = mul(M, transpose(M));
 }
 
+[CudaDeviceExport]
 [ForceInline]
 [Differentiable]
 void quat_scale_to_sqrt_covar(
@@ -131,6 +132,31 @@ void quat_scale_to_sqrt_covar(
     float3x3 R = normalized_quat_to_rotmat(quat);
     float3x3 S = float3x3(scale[0], 0.f, 0.f, 0.f, scale[1], 0.f, 0.f, 0.f, scale[2]);
     M = mul(R, S);
+}
+
+[CudaDeviceExport]
+[ForceInline]
+[Differentiable]
+float3 apply_sqrt_covar_to_vec(
+    const float4 quat,
+    const float3 scale,
+    const float3 vec
+) {
+    float3x3 R = normalized_quat_to_rotmat(quat);
+    return mul(R, scale * vec);
+}
+
+[CudaDeviceExport]
+[ForceInline]
+[Differentiable]
+float3 apply_covar_to_vec(
+    const float4 quat,
+    const float3 scale,
+    const float3 vec
+) {
+    float3x3 M;
+    quat_scale_to_covar(quat, scale, M);
+    return mul(M, vec);
 }
 
 [ForceInline]
