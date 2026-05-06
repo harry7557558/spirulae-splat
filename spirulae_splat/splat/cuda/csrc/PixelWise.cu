@@ -398,28 +398,6 @@ blend_background_backward_tensor(
 // Blend Background with Random Noise
 // ================
 
-__forceinline__ __device__ uint32_t hash_uint3(uint32_t a, uint32_t b, uint32_t c) {
-    uint32_t hash = a;
-
-    hash *= 0x01000193;
-    hash = (hash << 16) | (hash >> 16);
-
-    hash ^= b;
-    hash *= 0x01000193;
-    hash = (hash << 16) | (hash >> 16);
-
-    hash ^= c;
-    hash *= 0x01000193;
-
-    hash ^= hash >> 15;
-    hash *= 0x85ebca6b;
-    hash ^= hash >> 13;
-    hash *= 0xc2b2ae35;
-    hash ^= hash >> 16;
-
-    return hash;
-}
-
 template<bool is_linear>
 __global__ void blend_background_noise_forward_kernel(
     const TensorView<float, 4> in_rgb,

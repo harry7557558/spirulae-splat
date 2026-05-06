@@ -399,6 +399,15 @@ inline __device__ void warpAtomicAdd(float* addr, float val) {
         atomicAdd(addr, val);
 }
 
+inline __device__ void warpAtomicAdd(int* addr, int val) {
+    #pragma unroll
+    for (int offset = WARP_SIZE >> 1; offset > 0; offset >>= 1) {
+        val += __shfl_down_sync(~0u, val, offset);
+    }
+    if (_laneIdx() == 0 && val != 0)
+        atomicAdd(addr, val);
+}
+
 inline __device__ void warpAtomicAdd(float4* addr, float4 val) {
 #if 0
     warpAtomicAdd(&addr->x, val.x);
@@ -843,4 +852,27 @@ struct TensorView {
         { static_assert(ndim == 4); at(i0, i1, i2, 0) = v.x; at(i0, i1, i2, 1) = v.y; at(i0, i1, i2, 2) = v.z; at(i0, i1, i2, 3) = v.w; }
 
 };
+
+
+__forceinline__ __device__ uint32_t hash_uint3(uint32_t a, uint32_t b, uint32_t c) {
+    uint32_t hash = a;
+
+    hash *= 0x01000193;
+    hash = (hash << 16) | (hash >> 16);
+
+    hash ^= b;
+    hash *= 0x01000193;
+    hash = (hash << 16) | (hash >> 16);
+
+    hash ^= c;
+    hash *= 0x01000193;
+
+    hash ^= hash >> 15;
+    hash *= 0x85ebca6b;
+    hash ^= hash >> 13;
+    hash *= 0xc2b2ae35;
+    hash ^= hash >> 16;
+
+    return hash;
+}
 

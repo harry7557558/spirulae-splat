@@ -15,6 +15,55 @@ namespace SlangProjectionUtils {
 
 #include "common.cuh"
 
+#include <cub/cub.cuh>
+
+
+// ================
+// Quantile
+// ================
+
+template<bool invert_quantile>
+cudaError_t batch_quantile_masked_radix_select(
+    const float* d_x,
+    int B,
+    int N,
+    float q,
+    float* d_out,
+    uint32_t* temp,
+    cudaStream_t stream
+);
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor quantile_of_abs_of_finite_elements_tensor(
+    at::Tensor inputs,
+    float q,
+    bool return_reciprocal
+) {
+    DEVICE_GUARD(inputs);
+    CHECK_INPUT(inputs);
+
+    int N = inputs.size(-1);
+    int B = (N == 0 ? 0 : inputs.numel() / N);
+    at::Tensor outputs = at::empty({B}, inputs.options());
+    if (B == 0)
+        return outputs;
+    at::Tensor temp = at::empty({1024*B}, inputs.options());
+
+    (return_reciprocal ? batch_quantile_masked_radix_select<true> :
+        batch_quantile_masked_radix_select<false>
+    )(
+        inputs.data_ptr<float>(),
+        B, N, q,
+        outputs.data_ptr<float>(),
+        (uint32_t*)temp.data_ptr<float>(),
+        at::cuda::getCurrentCUDAStream()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return outputs;
+}
+
+
 
 // ================
 // Indexing
@@ -144,6 +193,124 @@ void inplace_scatter_max_tensor(
 }
 
 
+// ================
+// Multinomial sample
+// ================
+
+__global__ void compute_efraimidis_spirakis_weight_kernel(
+    int64_t numel,
+    int stride,
+    uint32_t seed,
+    const float* weights,
+    const bool* mask,
+    float* out_weights
+) {
+    int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= numel)
+        return;
+
+    float u = (float)hash_uint3(seed, blockIdx.x, threadIdx.x) * exp2f(-32.0f);
+    float w = weights[idx * stride];
+    w = w / __logf(fmaxf(1.0f - u, 1e-30f));  // larger w -> smaller (more negative) value
+    if (mask != nullptr && !mask[idx])
+        w = 0.0f;
+    out_weights[idx] = w;
+}
+
+__global__ void iota_kernel(
+    int64_t numel,
+    int32_t* buffer
+) {
+    int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= numel)
+        return;
+    buffer[idx] = idx;
+}
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor weighted_sample_without_replacement_tensor(
+    int64_t numel,
+    at::Tensor weights,
+    std::optional<at::Tensor> masks,
+    uint32_t num_sample,
+    uint32_t seed
+) {
+    DEVICE_GUARD(weights);
+    CHECK_INPUT(weights);
+    if (masks.has_value())
+        CHECK_INPUT(masks.value());
+
+    if (numel == -1)
+        numel = weights.ndimension() == 1 ?
+            weights.numel() : weights.numel() / weights.size(-1);
+    at::Tensor sorting_values = at::empty({numel}, weights.options());
+
+    compute_efraimidis_spirakis_weight_kernel<<<_LAUNCH_ARGS_1D(numel, 256)>>>(
+        numel,
+        weights.numel() / numel,
+        seed,
+        weights.data_ptr<float>(),
+        masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
+        sorting_values.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    at::Tensor out_idx = at::empty({(long)num_sample}, weights.options().dtype(at::kInt));
+
+    at::Tensor d_keys_in = sorting_values;  // reuse
+    at::Tensor d_keys_out = at::empty_like(d_keys_in);
+
+    at::Tensor d_indices_in  =
+        at::empty({numel}, weights.options().dtype(at::kInt));
+    at::Tensor d_indices_out =
+        at::empty({numel}, weights.options().dtype(at::kInt));
+
+    iota_kernel<<<_LAUNCH_ARGS_1D(numel, 256)>>>(
+        numel,
+        d_indices_in.data_ptr<int>()
+    );
+
+    void* d_temp_storage = nullptr;
+    size_t temp_storage_bytes = 0;
+
+    cub::DeviceRadixSort::SortPairs(
+        d_temp_storage,
+        temp_storage_bytes,
+        d_keys_in.data_ptr<float>(),
+        d_keys_out.data_ptr<float>(),
+        d_indices_in.data_ptr<int>(),
+        d_indices_out.data_ptr<int>(),
+        numel
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    at::Tensor workspace =
+        at::empty({(long)(temp_storage_bytes)},
+                  weights.options().dtype(at::kByte));
+    d_temp_storage = workspace.data_ptr<uint8_t>();
+
+    cub::DeviceRadixSort::SortPairs(
+        d_temp_storage,
+        temp_storage_bytes,
+        d_keys_in.data_ptr<float>(),
+        d_keys_out.data_ptr<float>(),
+        d_indices_in.data_ptr<int>(),
+        d_indices_out.data_ptr<int>(),
+        numel
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    cudaMemcpy(
+        out_idx.data_ptr<int>(),
+        d_indices_out.data_ptr<int>(),
+        sizeof(int) * num_sample,
+        cudaMemcpyDeviceToDevice
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return out_idx;
+}
+
 
 // ================
 // Covariance-Based Scale Initialization
@@ -257,6 +424,362 @@ at::Tensor cov_scale_init_tensor(
     return log_scales;
 }
 
+
+
+// ================
+// Densification Parameter Update
+// ================
+
+__global__ void densify_clip_scale_kernel(
+    long num_splats,
+    float max_scale2d,
+    float clip_hardness,
+    float max_scale3d,
+    const float* __restrict__ radii,
+    float3* __restrict__ log_scales,
+    float* __restrict__ logit_opacs
+) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_splats)
+        return;
+
+    if (isfinite(max_scale2d)) {
+        float oversize_factor = radii[idx] / max_scale2d;
+        if (isfinite(clip_hardness))
+            oversize_factor = fminf(oversize_factor, clip_hardness);
+        if (oversize_factor > 1.0f) {
+            oversize_factor = __logf(oversize_factor);
+            log_scales[idx] = log_scales[idx] - make_float3(oversize_factor);
+            // this encourages being relocated to, may cause unintended effects in non-MCMC
+            if (logit_opacs != nullptr)
+                logit_opacs[idx] = fminf(logit_opacs[idx] + 3.0f * oversize_factor, fmaxf(logit_opacs[idx], 5.0f));
+        }
+    }
+
+    if (isfinite(max_scale3d)) {
+        max_scale3d = __logf(max_scale3d);
+        log_scales[idx].x = fminf(log_scales[idx].x, max_scale3d);
+        log_scales[idx].y = fminf(log_scales[idx].y, max_scale3d);
+        log_scales[idx].z = fminf(log_scales[idx].z, max_scale3d);
+        // don't touch opacity
+    }
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void densify_clip_scale_tensor(
+    int64_t num_splats,
+    at::Tensor radii,
+    at::Tensor log_scales,
+    std::optional<at::Tensor> logit_opacs,
+    float max_scale2d,
+    float clip_hardness,
+    float max_scale3d
+) {
+    DEVICE_GUARD(radii);
+    CHECK_INPUT(radii);
+    CHECK_INPUT(log_scales);
+    if (logit_opacs.has_value())
+        CHECK_INPUT(logit_opacs.value());
+
+    densify_clip_scale_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
+        num_splats, max_scale2d, clip_hardness, max_scale3d,
+        radii.data_ptr<float>(),
+        (float3*)log_scales.data_ptr<float>(),
+        logit_opacs.has_value() ? logit_opacs.value().data_ptr<float>() : nullptr
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+__global__ void densify_update_weight_kernel(
+    long num_splats,
+    bool is_max_mode,
+    const float* __restrict__ radii,  // [N]
+    const float* __restrict__ opacs,  // [1]
+    const float* __restrict__ accum_weight_scalar,  // [1]
+    const float* __restrict__ accum_weight,  // [N]
+    float2* __restrict__ accum_buffer  // [N, 2]
+) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_splats)
+        return;
+
+    if (!(radii[idx] > 0))
+        return;
+
+    float weight = fabsf(accum_weight[idx]) / (1.0f + __expf(-opacs[idx]));
+    if (accum_weight_scalar != nullptr)
+        weight *= accum_weight_scalar[0];
+    float2 accum = accum_buffer[idx];
+    accum.x *= accum.y;
+    if (is_max_mode) {
+        accum.x = fmaxf(accum.x, weight);
+        accum.y = fmaxf(accum.y, 1.0f);
+    } else {
+        accum.x += weight;
+        accum.y += 1.0f;
+    }
+    if (accum.y > 0.0f)
+        accum.x /= accum.y;
+    accum_buffer[idx] = accum;
+}
+
+
+/*[AutoHeaderGeneratorExport]*/
+void densify_update_weight_tensor(
+    int64_t num_splats,
+    at::Tensor radii,
+    at::Tensor opacs,
+    at::Tensor accum_weight,
+    at::Tensor accum_buffer,
+    bool is_max_mode
+) {
+    DEVICE_GUARD(radii);
+    CHECK_INPUT(radii);
+    CHECK_INPUT(accum_weight);
+    CHECK_INPUT(accum_buffer);
+
+    // at::Tensor inv_median = quantile_of_abs_of_finite_elements_tensor(
+    //     accum_weight, 0.5f, true
+    // );
+
+    densify_update_weight_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
+        num_splats, is_max_mode,
+        radii.data_ptr<float>(),
+        opacs.data_ptr<float>(),
+        // inv_median.data_ptr<float>(),
+        nullptr,
+        accum_weight.data_ptr<float>(),
+        (float2*)accum_buffer.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+// ================
+// Relocation
+// ================
+
+__global__ void relocate_with_long_axis_split_kernel(
+    int64_t cur_num_splats,
+    int64_t num_new_splats,
+    int32_t* __restrict__ src_indices,
+    int32_t* __restrict__ dst_indices,
+    float3*__restrict__ means, float3*__restrict__ g1_means, float3*__restrict__ g2_means,
+    float4*__restrict__ quats, float4*__restrict__ g1_quats, float4*__restrict__ g2_quats,
+    float3*__restrict__ scales, float3*__restrict__ g1_scales, float3*__restrict__ g2_scales,
+    float*__restrict__ opacs, float*__restrict__ g1_opacs, float*__restrict__ g2_opacs,
+    float3*__restrict__ features_dc, float3*__restrict__ g1_features_dc, float3*__restrict__ g2_features_dc,
+    int num_sh, float3*__restrict__ features_sh, float3*__restrict__ g1_features_sh, float3*__restrict__ g2_features_sh,
+    float2*__restrict__ densify_accum_buffer
+) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_new_splats)
+        return;
+
+    int64_t idx_src = src_indices[idx];
+    int64_t idx_dst = dst_indices == nullptr ? cur_num_splats + idx : dst_indices[idx];
+
+    // geometry - long axis split
+    float3 mean = means[idx_src], mean_delta;
+    float3 scale = scales[idx_src], new_scale;
+    float4 quat = quats[idx_src];
+    float opac = opacs[idx_src], new_opac;
+    SlangDensify::long_axis_split_3dgs(
+        scale, opac, quat,
+        &new_scale, &new_opac, &mean_delta
+    );
+    means[idx_src] = mean - mean_delta;
+    means[idx_dst] = mean + mean_delta;
+    scales[idx_src] = new_scale;
+    scales[idx_dst] = new_scale;
+    opacs[idx_src] = new_opac;
+    opacs[idx_dst] = new_opac;
+    quats[idx_dst] = quat;
+
+    // appearance - copy
+    features_dc[idx_dst] = features_dc[idx_src];
+    for (int i = 0; i < num_sh; ++i)  // TODO: slow; more cache friendly way to do so?
+        features_sh[num_sh*idx_dst+i] = features_sh[num_sh*idx_src+i];
+
+    // optimizer state - zero
+#if 1
+    // g1_means[idx_src] = make_float3(0.0f);
+    g1_means[idx_dst] = make_float3(0.0f);
+    // g2_means[idx_src] = make_float3(0.0f);
+    g2_means[idx_dst] = make_float3(0.0f);
+    // g1_quats[idx_src] = make_float4(0.0f);
+    g1_quats[idx_dst] = make_float4(0.0f);
+    // g2_quats[idx_src] = make_float4(0.0f);
+    g2_quats[idx_dst] = make_float4(0.0f);
+    // g1_scales[idx_src] = make_float3(0.0f);
+    g1_scales[idx_dst] = make_float3(0.0f);
+    // g2_scales[idx_src] = make_float3(0.0f);
+    g2_scales[idx_dst] = make_float3(0.0f);
+    // g1_opacs[idx_src] = 0.0f;
+    g1_opacs[idx_dst] = 0.0f;
+    // g2_opacs[idx_src] = 0.0f;
+    g2_opacs[idx_dst] = 0.0f;
+    // g1_features_dc[idx_src] = make_float3(0.0f);
+    g1_features_dc[idx_dst] = make_float3(0.0f);
+    // g2_features_dc[idx_src] = make_float3(0.0f);
+    g2_features_dc[idx_dst] = make_float3(0.0f);
+    for (int i = 0; i < num_sh; ++i) {  // TODO: slow; more cache friendly way to do so?
+        // g1_features_sh[num_sh*idx_src+i] = make_float3(0.0f);
+        g1_features_sh[num_sh*idx_dst+i] = make_float3(0.0f);
+        // g2_features_sh[num_sh*idx_src+i] = make_float3(0.0f);
+        g2_features_sh[num_sh*idx_dst+i] = make_float3(0.0f);
+    }
+#else
+    // to avoid messing up Adam bias correction
+    constexpr float k = 1.0f;
+    g1_means[idx_dst] = g1_means[idx_src] = k*g1_means[idx_src];
+    g2_means[idx_dst] = g2_means[idx_src] = k*g2_means[idx_src];
+    g1_quats[idx_dst] = g1_quats[idx_src] = k*g1_quats[idx_src];
+    g2_quats[idx_dst] = g2_quats[idx_src] = k*g2_quats[idx_src];
+    g1_scales[idx_dst] = g1_scales[idx_src] = k*g1_scales[idx_src];
+    g2_scales[idx_dst] = g2_scales[idx_src] = k*g2_scales[idx_src];
+    g1_opacs[idx_dst] = g1_opacs[idx_src] = k*g1_opacs[idx_src];
+    g2_opacs[idx_dst] = g2_opacs[idx_src] = k*g2_opacs[idx_src];
+    g1_features_dc[idx_dst] = g1_features_dc[idx_src] = k*g1_features_dc[idx_src];
+    g2_features_dc[idx_dst] = g2_features_dc[idx_src] = k*g2_features_dc[idx_src];
+    for (int i = 0; i < num_sh; ++i) {  // TODO: slow; more cache friendly way to do so?
+        g1_features_sh[num_sh*idx_dst+i] = g1_features_sh[num_sh*idx_src+i] = k*g1_features_sh[num_sh*idx_src+i];
+        g2_features_sh[num_sh*idx_dst+i] = g2_features_sh[num_sh*idx_src+i] = k*g2_features_sh[num_sh*idx_src+i];
+    }
+#endif
+
+    // will be cleared after densification anyway but doesn't hurt to do so
+    densify_accum_buffer[idx_dst] = densify_accum_buffer[idx_src];
+}
+
+
+__global__ void compute_relocation_mask_kernel(
+    int64_t num_splats,
+    float min_opacity,
+    const float3* __restrict__ means,
+    const float4* __restrict__ quats,
+    const float3* __restrict__ scales,
+    const float* __restrict__ opacities,
+    const float3* __restrict__ features_dc,
+    bool* __restrict__ masks,
+    int32_t* __restrict__ num_relocate,
+    int32_t* __restrict__ relocate_indices
+) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    int num_relocate_delta = 0;
+
+    if (idx < num_splats) {
+
+        float3 mean = means[idx];
+        float4 quat = quats[idx];
+        float3 scale = scales[idx];
+        float opac = opacities[idx];
+        float3 feature_dc = features_dc[idx];
+
+        bool is_low_opac = (1.0f / (1.0f + __expf(-opac))) <= min_opacity;
+
+        bool is_finite = isfinite(
+            dot(mean, mean) / dot(quat, quat) + dot(scale, feature_dc) * opac
+        );
+        bool relocate = is_low_opac || !is_finite;
+
+        masks[idx] = !relocate;
+
+        num_relocate_delta = (int)relocate;
+    }
+
+    // warpAtomicAdd(num_relocate, num_relocate_delta);
+
+    // TODO: faster way to do so
+    if (num_relocate_delta)
+        relocate_indices[atomicAdd(num_relocate, num_relocate_delta)] = (int32_t)idx;
+}
+
+
+/*[AutoHeaderGeneratorExport]*/
+void relocate_splats_with_long_axis_split_tensor(
+    int64_t cur_num_splats,
+    float min_opacity,
+    at::Tensor means, at::Tensor quats, at::Tensor scales, at::Tensor opacs, at::Tensor features_dc, at::Tensor features_sh,
+    at::Tensor g1_means, at::Tensor g1_quats, at::Tensor g1_scales, at::Tensor g1_opacs, at::Tensor g1_features_dc, at::Tensor g1_features_sh,
+    at::Tensor g2_means, at::Tensor g2_quats, at::Tensor g2_scales, at::Tensor g2_opacs, at::Tensor g2_features_dc, at::Tensor g2_features_sh,
+    at::Tensor densify_accum_buffer,
+    uint32_t seed
+) {
+    int num_sh = features_sh.size(-2);
+
+    at::Tensor mask = at::empty({cur_num_splats}, densify_accum_buffer.options().dtype(at::kBool));
+    at::Tensor num_relocate_tensor = at::empty({1}, densify_accum_buffer.options().dtype(at::kInt));
+    set_zero<int32_t>(num_relocate_tensor);
+
+    at::Tensor dst_indices = at::empty({cur_num_splats}, densify_accum_buffer.options().dtype(at::kInt));
+
+    compute_relocation_mask_kernel<<<_LAUNCH_ARGS_1D(cur_num_splats, 256)>>>(
+        cur_num_splats,
+        min_opacity,
+        (float3*)means.data_ptr<float>(),
+        (float4*)quats.data_ptr<float>(),
+        (float3*)scales.data_ptr<float>(),
+        (float*)opacs.data_ptr<float>(),
+        (float3*)features_dc.data_ptr<float>(),
+        mask.data_ptr<bool>(),
+        num_relocate_tensor.data_ptr<int32_t>(),
+        dst_indices.data_ptr<int32_t>()
+    );
+
+    int64_t num_relocate = (int64_t)num_relocate_tensor.item<int32_t>();
+    if (num_relocate == 0)
+        return;
+
+    at::Tensor src_indices = weighted_sample_without_replacement_tensor(
+        cur_num_splats, densify_accum_buffer, mask, num_relocate, seed);
+
+    relocate_with_long_axis_split_kernel<<<_LAUNCH_ARGS_1D(num_relocate, 256)>>>(
+        cur_num_splats,
+        num_relocate,
+        src_indices.data_ptr<int32_t>(),
+        dst_indices.data_ptr<int32_t>(),
+        (float3*)means.data_ptr<float>(), (float3*)g1_means.data_ptr<float>(), (float3*)g2_means.data_ptr<float>(),
+        (float4*)quats.data_ptr<float>(), (float4*)g1_quats.data_ptr<float>(), (float4*)g2_quats.data_ptr<float>(),
+        (float3*)scales.data_ptr<float>(), (float3*)g1_scales.data_ptr<float>(), (float3*)g2_scales.data_ptr<float>(),
+        (float*)opacs.data_ptr<float>(), (float*)g1_opacs.data_ptr<float>(), (float*)g2_opacs.data_ptr<float>(),
+        (float3*)features_dc.data_ptr<float>(), (float3*)g1_features_dc.data_ptr<float>(), (float3*)g2_features_dc.data_ptr<float>(),
+        num_sh, (float3*)features_sh.data_ptr<float>(), (float3*)g1_features_sh.data_ptr<float>(), (float3*)g2_features_sh.data_ptr<float>(),
+        (float2*)densify_accum_buffer.data_ptr<float>()
+    );
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void add_splats_with_long_axis_split_tensor(
+    int64_t cur_num_splats,
+    int64_t num_new_splats,
+    at::Tensor means, at::Tensor quats, at::Tensor scales, at::Tensor opacs, at::Tensor features_dc, at::Tensor features_sh,
+    at::Tensor g1_means, at::Tensor g1_quats, at::Tensor g1_scales, at::Tensor g1_opacs, at::Tensor g1_features_dc, at::Tensor g1_features_sh,
+    at::Tensor g2_means, at::Tensor g2_quats, at::Tensor g2_scales, at::Tensor g2_opacs, at::Tensor g2_features_dc, at::Tensor g2_features_sh,
+    at::Tensor densify_accum_buffer,
+    uint32_t seed
+) {
+    int num_sh = features_sh.size(-2);
+
+    at::Tensor split_indices = weighted_sample_without_replacement_tensor(
+        cur_num_splats, densify_accum_buffer, std::nullopt, num_new_splats, seed);
+
+    relocate_with_long_axis_split_kernel<<<_LAUNCH_ARGS_1D(num_new_splats, 256)>>>(
+        cur_num_splats,
+        num_new_splats,
+        split_indices.data_ptr<int32_t>(),
+        nullptr,
+        (float3*)means.data_ptr<float>(), (float3*)g1_means.data_ptr<float>(), (float3*)g2_means.data_ptr<float>(),
+        (float4*)quats.data_ptr<float>(), (float4*)g1_quats.data_ptr<float>(), (float4*)g2_quats.data_ptr<float>(),
+        (float3*)scales.data_ptr<float>(), (float3*)g1_scales.data_ptr<float>(), (float3*)g2_scales.data_ptr<float>(),
+        (float*)opacs.data_ptr<float>(), (float*)g1_opacs.data_ptr<float>(), (float*)g2_opacs.data_ptr<float>(),
+        (float3*)features_dc.data_ptr<float>(), (float3*)g1_features_dc.data_ptr<float>(), (float3*)g2_features_dc.data_ptr<float>(),
+        num_sh, (float3*)features_sh.data_ptr<float>(), (float3*)g1_features_sh.data_ptr<float>(), (float3*)g2_features_sh.data_ptr<float>(),
+        (float2*)densify_accum_buffer.data_ptr<float>()
+    );
+}
 
 
 // ================

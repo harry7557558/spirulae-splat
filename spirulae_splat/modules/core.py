@@ -29,6 +29,7 @@ class Renderer:
         self,
         primitive: Literal["3dgs", "mip", "3dgut", "3dgut_sv", "opaque_triangle", "voxel"],
         splats_world: tuple[Tensor],  # means, quats, scales, opacities
+        cur_num_splats: int
     ):
         for tensor in splats_world:
             assert tensor.is_contiguous(), "Tensor must be contiguous"
@@ -79,7 +80,8 @@ class Renderer:
 
         self.batch_dims = batch_dims
         self.device = device
-        self.num_splats = N
+        self.cur_num_splats = cur_num_splats
+        self.max_num_splats = N
 
         self.primitive = primitive
         self.splats_world = splats_world
@@ -196,7 +198,7 @@ class Renderer:
             v_splats, vr_splats, h_splats, accum_weight = _make_lazy_cuda_func(
                 f"rasterization_{['3dgs', 'mip'][ctx.antialiased]}_backward_with_hessian_diagonal"
             )(
-                self.num_splats,
+                self.max_num_splats,
                 (means2d, depths, conics, opacities, colors),
                 ctx.backward_info.get('gaussian_ids', None),
                 backgrounds, masks,
@@ -217,7 +219,7 @@ class Renderer:
                 self.v_splats_proj, accum_weight = _make_lazy_cuda_func(
                     f"rasterization_{self.primitive}_backward"
                 )(
-                    self.num_splats,
+                    self.max_num_splats,
                     self.splats_proj,
                     self.gaussian_ids,
                     self.backgrounds, self.max_blending_masks,
@@ -341,12 +343,11 @@ class Renderer:
             )
 
     def forward(self):
-        self.meta = {}
 
-        if hasattr(self.splats_world[0], 'optim_info') and 'num_splats' in self.splats_world[0].optim_info:
-            num_splats = self.splats_world[0].optim_info['num_splats']
-        else:
-            num_splats = len(self.splats_world[0])
+        if self.cur_num_splats < self.max_num_splats:
+            self.splats_world[3].data[self.cur_num_splats:] = -10.0  # TODO
+
+        self.meta = {}
 
         B = math.prod(self.batch_dims)
         C = self.viewmats.shape[-3]
@@ -429,7 +430,7 @@ class Renderer:
         self.flatten_ids = flatten_ids
 
         if not hasattr(self, 'radii'):
-            self.radii = torch.zeros(self.num_splats, dtype=radii.dtype, device=radii.device)
+            self.radii = torch.zeros(self.max_num_splats, dtype=radii.dtype, device=radii.device)
         _make_lazy_cuda_func("inplace_scatter_max")(self.gaussian_ids, radii, self.radii)
         self.meta.update(
             {
@@ -586,4 +587,72 @@ class Renderer:
         model_config: 'spirulae_splat.modules.model.SpirulaeSplatModelConfig',
         optim_config: OptimizerConfig
     ):
-        pass
+        _make_lazy_cuda_func("densify_clip_scale")(
+            self.cur_num_splats,
+            self.radii,
+            self.splats_world[2],  # scales
+            self.splats_world[3],  # opacs
+            model_config.max_screen_size,
+            model_config.max_world_size,
+            model_config.max_screen_size_clip_hardness
+        )
+
+        if not hasattr(self, 'densify_accum_buffer'):
+            self.densify_accum_buffer = torch.zeros(
+                self.max_num_splats, 2, dtype=torch.float32, device=self.radii.device)
+
+        if 'accum_weight' in self.backward_info:
+            is_max_mode = True
+            densify_score = self.backward_info['accum_weight']
+        else:
+            assert False
+            is_max_mode = False
+            densify_score = self.v_splats_world[3] # v_opacs
+        _make_lazy_cuda_func("densify_update_weight")(
+            self.cur_num_splats,
+            self.radii,
+            self.splats_world[3],  # opacs
+            densify_score,
+            self.densify_accum_buffer,
+            is_max_mode
+        )
+        # print(self.densify_accum_buffer[:, 0])
+
+        if step % model_config.refine_every != 0:
+            return
+
+        # relocation
+        if step > model_config.refine_start_iter:
+            _make_lazy_cuda_func("relocate_splats_with_long_axis_split")(
+                self.cur_num_splats,
+                model_config.min_opacity,
+                *self.splats_world,
+                *self.g1_splats_world,
+                *self.g2_splats_world,
+                self.densify_accum_buffer,
+                2*step+0
+            )
+
+        # add more splats
+        if step > model_config.refine_start_iter:
+            n_target = min(self.max_num_splats, int(model_config.growth_factor * self.cur_num_splats))
+            num_add = max(0, n_target - self.cur_num_splats)
+            _make_lazy_cuda_func("add_splats_with_long_axis_split")(
+                self.cur_num_splats,
+                num_add,
+                *self.splats_world,
+                *self.g1_splats_world,
+                *self.g2_splats_world,
+                self.densify_accum_buffer,
+                2*step+1
+            )
+            self.cur_num_splats += num_add
+
+        self.densify_accum_buffer.zero_()
+
+        # quantile = _make_lazy_cuda_func("quantile_of_finite_positive_elements")(
+        #     self.radii,
+        #     0.5,
+        #     False
+        # )
+        # print(quantile)

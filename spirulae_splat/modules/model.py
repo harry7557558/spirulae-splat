@@ -366,7 +366,8 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         self.renderer = Renderer(
             self.config.primitive,
-            splat_params
+            splat_params,
+            self.seed_points[0].shape[0]  # TODO: voxel
         )
 
     def populate_modules(self):
@@ -677,11 +678,11 @@ class SpirulaeSplatModel(torch.nn.Module):
     @property
     def opacities(self):
         param = self._get_gauss_param("opacities")
-        # TODO: properly do this in projection
-        if hasattr(param, 'optim_info') and 'num_splats' in param.optim_info:
-            num_splats = param.optim_info['num_splats']
-            if num_splats < param.shape[0]:
-                param.data[num_splats:] = -10.0  # logit(1/255) ~ -5.54
+        # # TODO: properly do this in projection
+        # if hasattr(param, 'optim_info') and 'num_splats' in param.optim_info:
+        #     num_splats = param.optim_info['num_splats']
+        #     if num_splats < param.shape[0]:
+        #         param.data[num_splats:] = -10.0  # logit(1/255) ~ -5.54
         return param
 
     @property
@@ -1210,43 +1211,50 @@ class SpirulaeSplatModel(torch.nn.Module):
                     self.training_losses.bil_grids_depth.grids.optim_info = {'optimizer_offload': True}
                     self.training_losses.bil_grids_normal.grids.optim_info = {'optimizer_offload': True}
 
-        return outputs
+        # return outputs
 
         # Debug densification
         if not self.training and self.step > 1:
         # if self.step > 1:
 
-            if 'grad3d' not in self.strategy_state or 'count' not in self.strategy_state:
-                return outputs
+            param_to_vis = self.renderer.densify_accum_buffer[:, 0]
+            param_to_vis = param_to_vis / param_to_vis.mean()
+            # param_to_vis = torch.log10(param_to_vis + 1e-30)
 
-            # param_to_vis = self.strategy_state['grad3d'] / self.strategy_state["count"].clamp_min(1)
-            # param_to_vis = torch.argsort(torch.argsort(param_to_vis)) / len(param_to_vis)
-            param_to_vis = self.strategy._get_probs(self.strategy_state, self.gauss_params)
+            indices = _make_lazy_cuda_func("weighted_sample_without_replacement")(
+                -1, self.renderer.densify_accum_buffer, None, len(param_to_vis) // 20, self.step
+            )
+            param_to_vis = torch.zeros_like(param_to_vis)
+            param_to_vis[indices] = 1
 
             param_to_vis = (param_to_vis - 0.5) / 0.28
             param_to_vis = param_to_vis.unsqueeze(-1).repeat(1, 3)
             param_to_vis = torch.concatenate((param_to_vis, torch.zeros_like(self.means[len(param_to_vis):])), 0)
-            rgbd, Ts, meta = rasterization(
-                self.config.primitive,
-                splat_params = (
-                    self.means, self.quats, self.scales,
-                    self.opacities,
-                    param_to_vis, torch.zeros_like(self.features_sh)
-                ),
+
+            old_splats_world = self.renderer.splats_world
+            self.renderer.splats_world = (
+                self.means, self.quats, self.scales,
+                self.opacities,
+                param_to_vis, torch.zeros_like(self.features_sh)
+            )
+            self.renderer.set_params(
                 viewmats=viewmats,  # [C, 4, 4]
                 intrins=intrins * self.config.supersampling,  # [C, 4]
                 width=W * self.config.supersampling,
                 height=H * self.config.supersampling,
                 packed=(self.config.packed or use_bvh),
                 use_bvh=(use_bvh),
-                # packed=True,
-                # use_bvh=True,
                 relative_scale=self.config.relative_scale,
                 camera_model=["pinhole", "fisheye"][is_fisheye],
                 output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
                 compute_hessian_diagonal=self.config.compute_hessian_diagonal,
                 **kwargs,
             )
+            self.renderer.forward()
+            rgbd = self.renderer.render_colors
+            Ts = self.renderer.render_Ts
+            meta = self.renderer.meta
+            self.renderer.splats_world = old_splats_world
             outputs['refinement_score'] = rgbd[0][0, :, :, :].mean(dim=-1, keepdim=True)
 
         return outputs
@@ -1283,7 +1291,9 @@ class SpirulaeSplatModel(torch.nn.Module):
 
     def optim_step(self):
         self.renderer.optim_step(self.step, self.config, self.trainer_config.optimizer)
-        self.step_post_backward()
+        if self.step < self.trainer_config.num_iterations-self.config.refine_stop_num_iter:
+            self.renderer.densify_step(self.step, self.config, None)
+        # self.step_post_backward()
 
     def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
         """Compute and returns metrics.
