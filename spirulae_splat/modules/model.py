@@ -1212,6 +1212,8 @@ class SpirulaeSplatModel(torch.nn.Module):
                     self.training_losses.bil_grids_normal.grids.optim_info = {'optimizer_offload': True}
 
         # return outputs
+        if not hasattr(self.renderer, 'densify_accum_buffer'):
+            return outputs
 
         # Debug densification
         if not self.training and self.step > 1:
@@ -1541,7 +1543,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             if self.config.primitive == "opaque_triangle" else ""
         chunks = [
             f"{boldcyan(self.step)} "
-            f"{bracket('N')} {boldcyan(self.num_points)}",
+            f"{bracket('N')} {boldcyan(self.renderer.cur_num_splats)}",
             f"{redbkg(bracket('Mem'), used_percentage/90)} {mem_stats}",
             f"{bracket('Train')} {orange('loss')}={fmt('image_loss', 1.0)} "
             f"{orange('psnr')}={fmt('psnr', 1.0, 2)} "

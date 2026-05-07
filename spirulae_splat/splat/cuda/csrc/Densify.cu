@@ -19,7 +19,7 @@ namespace SlangProjectionUtils {
 
 
 // ================
-// Quantile
+// Quantile / Median Normalization
 // ================
 
 template<bool invert_quantile>
@@ -42,8 +42,8 @@ at::Tensor quantile_of_abs_of_finite_elements_tensor(
     DEVICE_GUARD(inputs);
     CHECK_INPUT(inputs);
 
-    int N = inputs.size(-1);
-    int B = (N == 0 ? 0 : inputs.numel() / N);
+    int B = inputs.ndimension() > 1 ? inputs.size(0) : 1;
+    int N = inputs.numel() / B;
     at::Tensor outputs = at::empty({B}, inputs.options());
     if (B == 0)
         return outputs;
@@ -61,6 +61,34 @@ at::Tensor quantile_of_abs_of_finite_elements_tensor(
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return outputs;
+}
+
+__global__ void multiply_by_inverse_median_kernel(
+    int B,
+    int N,
+    float* __restrict__ data,
+    const float* __restrict__ quantiles
+) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= B*N)
+        return;
+    data[idx] *= quantiles[idx / N];
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void normalize_by_median_inplace_tensor(
+    at::Tensor data
+) {
+    at::Tensor inv_median = quantile_of_abs_of_finite_elements_tensor(data, 0.5, true);
+
+    int B = data.ndimension() > 1 ? data.size(0) : 1;
+    int N = data.numel() / B;
+
+    multiply_by_inverse_median_kernel<<<_LAUNCH_ARGS_1D(B*N, 256)>>>(
+        B, N,
+        data.data_ptr<float>(),
+        inv_median.data_ptr<float>()
+    );
 }
 
 
@@ -495,7 +523,7 @@ __global__ void densify_update_weight_kernel(
     long num_splats,
     bool is_max_mode,
     const float* __restrict__ radii,  // [N]
-    const float* __restrict__ opacs,  // [1]
+    const float* __restrict__ opacs,  // [N], optional
     const float* __restrict__ accum_weight_scalar,  // [1]
     const float* __restrict__ accum_weight,  // [N]
     float2* __restrict__ accum_buffer  // [N, 2]
@@ -507,7 +535,9 @@ __global__ void densify_update_weight_kernel(
     if (!(radii[idx] > 0))
         return;
 
-    float weight = fabsf(accum_weight[idx]) / (1.0f + __expf(-opacs[idx]));
+    float weight = fabsf(accum_weight[idx]);
+    if (opacs)
+        weight /= 1.0f + __expf(-opacs[idx]);
     if (accum_weight_scalar != nullptr)
         weight *= accum_weight_scalar[0];
     float2 accum = accum_buffer[idx];
@@ -529,7 +559,7 @@ __global__ void densify_update_weight_kernel(
 void densify_update_weight_tensor(
     int64_t num_splats,
     at::Tensor radii,
-    at::Tensor opacs,
+    std::optional<at::Tensor> opacs,
     at::Tensor accum_weight,
     at::Tensor accum_buffer,
     bool is_max_mode
@@ -538,6 +568,8 @@ void densify_update_weight_tensor(
     CHECK_INPUT(radii);
     CHECK_INPUT(accum_weight);
     CHECK_INPUT(accum_buffer);
+    if (opacs.has_value())
+        CHECK_INPUT(opacs.value());
 
     // at::Tensor inv_median = quantile_of_abs_of_finite_elements_tensor(
     //     accum_weight, 0.5f, true
@@ -546,7 +578,7 @@ void densify_update_weight_tensor(
     densify_update_weight_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
         num_splats, is_max_mode,
         radii.data_ptr<float>(),
-        opacs.data_ptr<float>(),
+        opacs.has_value() ? opacs.value().data_ptr<float>() : nullptr,
         // inv_median.data_ptr<float>(),
         nullptr,
         accum_weight.data_ptr<float>(),
@@ -571,7 +603,8 @@ __global__ void relocate_with_long_axis_split_kernel(
     float*__restrict__ opacs, float*__restrict__ g1_opacs, float*__restrict__ g2_opacs,
     float3*__restrict__ features_dc, float3*__restrict__ g1_features_dc, float3*__restrict__ g2_features_dc,
     int num_sh, float3*__restrict__ features_sh, float3*__restrict__ g1_features_sh, float3*__restrict__ g2_features_sh,
-    float2*__restrict__ densify_accum_buffer
+    float2*__restrict__ densify_accum_buffer,
+    int32_t* __restrict__ bias_correction_steps
 ) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_new_splats)
@@ -604,32 +637,40 @@ __global__ void relocate_with_long_axis_split_kernel(
 
     // optimizer state - zero
 #if 1
-    // g1_means[idx_src] = make_float3(0.0f);
     g1_means[idx_dst] = make_float3(0.0f);
-    // g2_means[idx_src] = make_float3(0.0f);
     g2_means[idx_dst] = make_float3(0.0f);
-    // g1_quats[idx_src] = make_float4(0.0f);
     g1_quats[idx_dst] = make_float4(0.0f);
-    // g2_quats[idx_src] = make_float4(0.0f);
     g2_quats[idx_dst] = make_float4(0.0f);
-    // g1_scales[idx_src] = make_float3(0.0f);
     g1_scales[idx_dst] = make_float3(0.0f);
-    // g2_scales[idx_src] = make_float3(0.0f);
     g2_scales[idx_dst] = make_float3(0.0f);
-    // g1_opacs[idx_src] = 0.0f;
     g1_opacs[idx_dst] = 0.0f;
-    // g2_opacs[idx_src] = 0.0f;
     g2_opacs[idx_dst] = 0.0f;
-    // g1_features_dc[idx_src] = make_float3(0.0f);
     g1_features_dc[idx_dst] = make_float3(0.0f);
-    // g2_features_dc[idx_src] = make_float3(0.0f);
     g2_features_dc[idx_dst] = make_float3(0.0f);
     for (int i = 0; i < num_sh; ++i) {  // TODO: slow; more cache friendly way to do so?
-        // g1_features_sh[num_sh*idx_src+i] = make_float3(0.0f);
         g1_features_sh[num_sh*idx_dst+i] = make_float3(0.0f);
-        // g2_features_sh[num_sh*idx_src+i] = make_float3(0.0f);
         g2_features_sh[num_sh*idx_dst+i] = make_float3(0.0f);
     }
+    if (bias_correction_steps)
+        bias_correction_steps[idx_dst] = 0;
+    #if 0
+    g1_means[idx_src] = make_float3(0.0f);
+    g2_means[idx_src] = make_float3(0.0f);
+    g1_quats[idx_src] = make_float4(0.0f);
+    g2_quats[idx_src] = make_float4(0.0f);
+    g1_scales[idx_src] = make_float3(0.0f);
+    g2_scales[idx_src] = make_float3(0.0f);
+    g1_opacs[idx_src] = 0.0f;
+    g2_opacs[idx_src] = 0.0f;
+    g1_features_dc[idx_src] = make_float3(0.0f);
+    g2_features_dc[idx_src] = make_float3(0.0f);
+    for (int i = 0; i < num_sh; ++i) {  // TODO: slow; more cache friendly way to do so?
+        g1_features_sh[num_sh*idx_src+i] = make_float3(0.0f);
+        g2_features_sh[num_sh*idx_src+i] = make_float3(0.0f);
+    }
+    if (bias_correction_steps)
+        bias_correction_steps[idx_src] = 0;
+    #endif
 #else
     // to avoid messing up Adam bias correction
     constexpr float k = 1.0f;
@@ -647,10 +688,13 @@ __global__ void relocate_with_long_axis_split_kernel(
         g1_features_sh[num_sh*idx_dst+i] = g1_features_sh[num_sh*idx_src+i] = k*g1_features_sh[num_sh*idx_src+i];
         g2_features_sh[num_sh*idx_dst+i] = g2_features_sh[num_sh*idx_src+i] = k*g2_features_sh[num_sh*idx_src+i];
     }
+    if (bias_correction_steps)
+        bias_correction_steps[idx_dst] = bias_correction_steps[idx_src];
 #endif
 
     // will be cleared after densification anyway but doesn't hurt to do so
-    densify_accum_buffer[idx_dst] = densify_accum_buffer[idx_src];
+    if (densify_accum_buffer)
+        densify_accum_buffer[idx_dst] = densify_accum_buffer[idx_src];
 }
 
 
@@ -706,6 +750,7 @@ void relocate_splats_with_long_axis_split_tensor(
     at::Tensor g1_means, at::Tensor g1_quats, at::Tensor g1_scales, at::Tensor g1_opacs, at::Tensor g1_features_dc, at::Tensor g1_features_sh,
     at::Tensor g2_means, at::Tensor g2_quats, at::Tensor g2_scales, at::Tensor g2_opacs, at::Tensor g2_features_dc, at::Tensor g2_features_sh,
     at::Tensor densify_accum_buffer,
+    std::optional<at::Tensor> bias_correction_steps,
     uint32_t seed
 ) {
     int num_sh = features_sh.size(-2);
@@ -728,6 +773,7 @@ void relocate_splats_with_long_axis_split_tensor(
         num_relocate_tensor.data_ptr<int32_t>(),
         dst_indices.data_ptr<int32_t>()
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
     int64_t num_relocate = (int64_t)num_relocate_tensor.item<int32_t>();
     if (num_relocate == 0)
@@ -747,8 +793,10 @@ void relocate_splats_with_long_axis_split_tensor(
         (float*)opacs.data_ptr<float>(), (float*)g1_opacs.data_ptr<float>(), (float*)g2_opacs.data_ptr<float>(),
         (float3*)features_dc.data_ptr<float>(), (float3*)g1_features_dc.data_ptr<float>(), (float3*)g2_features_dc.data_ptr<float>(),
         num_sh, (float3*)features_sh.data_ptr<float>(), (float3*)g1_features_sh.data_ptr<float>(), (float3*)g2_features_sh.data_ptr<float>(),
-        (float2*)densify_accum_buffer.data_ptr<float>()
+        (float2*)densify_accum_buffer.data_ptr<float>(),
+        bias_correction_steps.has_value() ? bias_correction_steps.value().data_ptr<int32_t>() : nullptr
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -759,8 +807,12 @@ void add_splats_with_long_axis_split_tensor(
     at::Tensor g1_means, at::Tensor g1_quats, at::Tensor g1_scales, at::Tensor g1_opacs, at::Tensor g1_features_dc, at::Tensor g1_features_sh,
     at::Tensor g2_means, at::Tensor g2_quats, at::Tensor g2_scales, at::Tensor g2_opacs, at::Tensor g2_features_dc, at::Tensor g2_features_sh,
     at::Tensor densify_accum_buffer,
+    std::optional<at::Tensor> bias_correction_steps,
     uint32_t seed
 ) {
+    if (num_new_splats == 0)
+        return;
+
     int num_sh = features_sh.size(-2);
 
     at::Tensor split_indices = weighted_sample_without_replacement_tensor(
@@ -777,8 +829,439 @@ void add_splats_with_long_axis_split_tensor(
         (float*)opacs.data_ptr<float>(), (float*)g1_opacs.data_ptr<float>(), (float*)g2_opacs.data_ptr<float>(),
         (float3*)features_dc.data_ptr<float>(), (float3*)g1_features_dc.data_ptr<float>(), (float3*)g2_features_dc.data_ptr<float>(),
         num_sh, (float3*)features_sh.data_ptr<float>(), (float3*)g1_features_sh.data_ptr<float>(), (float3*)g2_features_sh.data_ptr<float>(),
-        (float2*)densify_accum_buffer.data_ptr<float>()
+        (float2*)densify_accum_buffer.data_ptr<float>(),
+        bias_correction_steps.has_value() ? bias_correction_steps.value().data_ptr<int32_t>() : nullptr
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+// ================
+// MCMC Relocation
+// ================
+
+// largely from https://github.com/harry7557558/vksplat/blob/main/vksplat/slang/mcmc.slang
+
+inline __device__ float log_factorial(float x) {
+    // least squares for x = [0, 1... 50]
+    // absolute error: max 4.6e-5, L1 9.3e-6
+    // notebook: https://www.desmos.com/calculator/mik6cz7h5v
+    static const float kA = 0.996763591291f;
+    static const float kH = 2.73507778369f;
+    static const float kB = 0.978531458767f;
+    static const float kC2 = -0.0400131099548f;
+    static const float kC1 = -0.596969060666f;
+    static const float kD3 = 0.00251628691783f;
+    static const float kD2 = 0.0959712063178f;
+    static const float kD1 = 0.803207449544f;
+    return (kA * __logf(x + kH) - kB +
+        (kC2 * x + kC1) / (((kD3 * x + kD2) * x + kD1) * x + 1.0f)
+    ) * x;
+}
+
+inline __device__ float binom(float n, float k) {
+    return __expf(log_factorial(n) - log_factorial(k) - log_factorial(n-k));
+}
+
+inline __device__ void mcmc_relocation(float& opacity, float3& scale, int n_idx) {
+    n_idx = min(n_idx, 50);  // log_factorial only fits to 50
+
+    opacity = 1.0f / (1.0f + __expf(-opacity));
+    scale = {__expf(scale.x), __expf(scale.y), __expf(scale.z)};
+
+    float new_opacity = 1.0f - powf(1.0f-opacity, 1.0f / n_idx);
+
+    float denom_sum = 0.0f;
+    for (int i = 1; i <= n_idx; ++i) {
+        for (int k = 0; k <= (i - 1); ++k) {
+            denom_sum += binom(i-1, k) * 
+                (cosf((float)M_PI*k) / sqrtf(k+1)) *  // (-1)^k / sqrt(k+1)
+                powf(new_opacity, k+1);
+        }
+    }
+    float coeff = (opacity / denom_sum);
+
+    opacity = new_opacity;
+    scale = coeff * scale;
+
+    opacity = __logf(opacity / (1.0f - opacity));
+    scale = {__logf(scale.x), __logf(scale.y), __logf(scale.z)};
+}
+
+
+__global__ void mcmc_compute_relocation_probabilities_kernel(
+    uint32_t num_splats,
+    float min_opacity,
+    const float* __restrict__ opacs,
+    float* __restrict__ probs
+) {
+    uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= num_splats)
+        return;
+
+    float opac = 1.0f / (1.0f + __expf(-opacs[tid]));
+
+    if (opac <= min_opacity || !isfinite(opac))
+        opac = 0.0f;
+
+    probs[tid] = opac;
+}
+
+
+__global__ void mcmc_compute_relocation_index_map_kernel(
+    float* __restrict__ sample_probs,  // [N]
+    float* __restrict__ sample_probs_cumsum,  // [N]
+    int32_t* __restrict__ index_map,  // [N]
+    int32_t* __restrict__ n_idx_buffer,  // [N]
+    uint32_t numel,
+    uint32_t seed
+) {
+    uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= numel)
+        return;
+    
+    float prob = sample_probs[tid];
+
+    // not relocated, put same ID
+    if (prob != 0.0f) {
+        index_map[tid] = tid;
+        return;
+    }
+
+    // binary search for random index
+    // find the min idx such that sample_probs_cumsum[idx] >= rand
+    float rand_max = sample_probs_cumsum[numel-1];
+    float rand = rand_max * hash_uint3(seed, blockIdx.x, threadIdx.x) * exp2f(-32.0f);
+    uint32_t lo = 0;
+    uint32_t hi = numel - 1;
+    while (lo < hi) {
+        uint32_t mid = lo + ((hi - lo) >> 1);
+        if (sample_probs_cumsum[mid] < rand)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    index_map[tid] = lo;
+
+    atomicAdd(&n_idx_buffer[lo], 1);
+}
+
+
+__global__ void mcmc_compute_relocation_kernel(
+    uint32_t num_splats,
+    float min_opacity,
+    int32_t* __restrict__ n_idx_buffer,  // [N]
+    float3*__restrict__ means, float3*__restrict__ g1_means, float3*__restrict__ g2_means,
+    float4*__restrict__ quats, float4*__restrict__ g1_quats, float4*__restrict__ g2_quats,
+    float3*__restrict__ scales, float3*__restrict__ g1_scales, float3*__restrict__ g2_scales,
+    float*__restrict__ opacs, float*__restrict__ g1_opacs, float*__restrict__ g2_opacs,
+    float3*__restrict__ features_dc, float3*__restrict__ g1_features_dc, float3*__restrict__ g2_features_dc,
+    int num_sh, float3*__restrict__ features_sh, float3*__restrict__ g1_features_sh, float3*__restrict__ g2_features_sh,
+    int32_t* __restrict__ bias_correction_steps
+) {
+    uint32_t cur_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (cur_idx >= num_splats)
+        return;
+
+    // only compute on indices being relocated to
+    uint n_idx = n_idx_buffer[cur_idx] + 1;
+    if (n_idx == 1)
+        return;
+
+    // compute relocation
+    float3 scale = scales[cur_idx];
+    float opac = opacs[cur_idx];
+    mcmc_relocation(opac, scale, int(n_idx));
+    scales[cur_idx] = scale;
+    opacs[cur_idx] = opac;
+
+    // set grad to zero
+    g1_means[cur_idx] = make_float3(0.0f);
+    g2_means[cur_idx] = make_float3(0.0f);
+    g1_quats[cur_idx] = make_float4(0.0f);
+    g2_quats[cur_idx] = make_float4(0.0f);
+    g1_scales[cur_idx] = make_float3(0.0f);
+    g2_scales[cur_idx] = make_float3(0.0f);
+    g1_opacs[cur_idx] = 0.0f;
+    g2_opacs[cur_idx] = 0.0f;
+    g1_features_dc[cur_idx] = make_float3(0.0f);
+    g2_features_dc[cur_idx] = make_float3(0.0f);
+    for (int i = 0; i < num_sh; ++i) {  // TODO: slow; more cache friendly way to do so?
+        g1_features_sh[num_sh*cur_idx+i] = make_float3(0.0f);
+        g2_features_sh[num_sh*cur_idx+i] = make_float3(0.0f);
+    }
+    if (bias_correction_steps)
+        bias_correction_steps[cur_idx] = 0;
+}
+
+
+__global__ void mcmc_update_relocation_kernel(
+    uint32_t num_splats,
+    int32_t* __restrict__ index_map,  // [N]
+    float3*__restrict__ means,
+    float4*__restrict__ quats,
+    float3*__restrict__ scales,
+    float*__restrict__ opacs,
+    float3*__restrict__ features_dc,
+    int num_sh, float3*__restrict__ features_sh
+) {
+    uint32_t id_dst = blockIdx.x * blockDim.x + threadIdx.x;
+    if (id_dst >= num_splats)
+        return;
+
+    // only update on those relocated from
+    uint32_t id_src = index_map[id_dst];
+    if (id_src == id_dst)
+        return;
+
+    // copy components
+    means[id_dst] = means[id_src];
+    quats[id_dst] = quats[id_src];
+    scales[id_dst] = scales[id_src];
+    opacs[id_dst] = opacs[id_src];
+    features_dc[id_dst] = features_dc[id_src];
+    for (int i = 0; i < num_sh; ++i)  // TODO: slow; more cache friendly way to do so?
+        features_sh[num_sh*id_dst+i] = features_sh[num_sh*id_src+i];
+}
+
+
+/*[AutoHeaderGeneratorExport]*/
+void relocate_splats_mcmc_tensor(
+    int64_t cur_num_splats,
+    float min_opacity,
+    at::Tensor means, at::Tensor quats, at::Tensor scales, at::Tensor opacs, at::Tensor features_dc, at::Tensor features_sh,
+    at::Tensor g1_means, at::Tensor g1_quats, at::Tensor g1_scales, at::Tensor g1_opacs, at::Tensor g1_features_dc, at::Tensor g1_features_sh,
+    at::Tensor g2_means, at::Tensor g2_quats, at::Tensor g2_scales, at::Tensor g2_opacs, at::Tensor g2_features_dc, at::Tensor g2_features_sh,
+    std::optional<at::Tensor> bias_correction_steps,
+    uint32_t seed
+) {
+    int num_sh = features_sh.size(-2);
+
+    at::Tensor sample_probs = at::empty_like(opacs);
+    mcmc_compute_relocation_probabilities_kernel<<<_LAUNCH_ARGS_1D(cur_num_splats, 256)>>>(
+        cur_num_splats,
+        min_opacity,
+        opacs.data_ptr<float>(),
+        sample_probs.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+    at::Tensor sample_probs_cumsum = at::cumsum(sample_probs, 0);
+
+    at::Tensor index_map = at::empty({cur_num_splats}, opacs.options().dtype(at::kInt));
+    at::Tensor n_idx_buffer = at::empty_like(index_map);
+    set_zero<int32_t>(n_idx_buffer);
+
+    mcmc_compute_relocation_index_map_kernel<<<_LAUNCH_ARGS_1D(cur_num_splats, 256)>>>(
+        sample_probs.data_ptr<float>(),
+        sample_probs_cumsum.data_ptr<float>(),
+        index_map.data_ptr<int32_t>(),
+        n_idx_buffer.data_ptr<int32_t>(),
+        cur_num_splats,
+        seed
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    // printf("%d relocate\n", n_idx_buffer.sum().item<int32_t>());
+
+    mcmc_compute_relocation_kernel<<<_LAUNCH_ARGS_1D(cur_num_splats, 64)>>>(
+        cur_num_splats,
+        min_opacity,
+        n_idx_buffer.data_ptr<int32_t>(),
+        (float3*)means.data_ptr<float>(), (float3*)g1_means.data_ptr<float>(), (float3*)g2_means.data_ptr<float>(),
+        (float4*)quats.data_ptr<float>(), (float4*)g1_quats.data_ptr<float>(), (float4*)g2_quats.data_ptr<float>(),
+        (float3*)scales.data_ptr<float>(), (float3*)g1_scales.data_ptr<float>(), (float3*)g2_scales.data_ptr<float>(),
+        (float*)opacs.data_ptr<float>(), (float*)g1_opacs.data_ptr<float>(), (float*)g2_opacs.data_ptr<float>(),
+        (float3*)features_dc.data_ptr<float>(), (float3*)g1_features_dc.data_ptr<float>(), (float3*)g2_features_dc.data_ptr<float>(),
+        num_sh, (float3*)features_sh.data_ptr<float>(), (float3*)g1_features_sh.data_ptr<float>(), (float3*)g2_features_sh.data_ptr<float>(),
+        bias_correction_steps.has_value() ? bias_correction_steps.value().data_ptr<int32_t>() : nullptr
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    mcmc_update_relocation_kernel<<<_LAUNCH_ARGS_1D(cur_num_splats, 64)>>>(
+        cur_num_splats,
+        index_map.data_ptr<int32_t>(),
+        (float3*)means.data_ptr<float>(),
+        (float4*)quats.data_ptr<float>(),
+        (float3*)scales.data_ptr<float>(),
+        (float*)opacs.data_ptr<float>(),
+        (float3*)features_dc.data_ptr<float>(),
+        num_sh, (float3*)features_sh.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+
+__global__ void mcmc_compute_add_index_map_kernel(
+    float* __restrict__ sample_probs_cumsum,  // [N]
+    int32_t* __restrict__ index_map,  // [dN]
+    int32_t* __restrict__ n_idx_buffer,  // [N]
+    uint32_t num_splats,
+    uint32_t num_add,
+    uint32_t seed
+) {
+    uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= num_add)
+        return;
+
+    // binary search for random index
+    // find the min idx such that sample_probs_cumsum[idx] >= rand
+    float rand_max = sample_probs_cumsum[num_splats-1];
+    float rand = rand_max * hash_uint3(seed, blockIdx.x, threadIdx.x) * exp2f(-32.0f);
+    uint32_t lo = 0;
+    uint32_t hi = num_splats - 1;
+    while (lo < hi) {
+        uint32_t mid = lo + ((hi - lo) >> 1);
+        if (sample_probs_cumsum[mid] <= rand)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    index_map[tid] = lo;
+
+    atomicAdd(&n_idx_buffer[lo], 1);
+}
+
+
+__global__ void mcmc_compute_add_kernel(
+    uint32_t num_splats,
+    float min_opacity,
+    int32_t* __restrict__ n_idx_buffer,
+    float3*__restrict__ scales,
+    float*__restrict__ opacs
+) {
+    uint32_t cur_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (cur_idx >= num_splats)
+        return;
+
+    // only compute on indices being relocated to
+    uint n_idx = n_idx_buffer[cur_idx] + 1;
+    if (n_idx == 1)
+        return;
+
+    // compute relocation
+    float3 scale = scales[cur_idx];
+    float opac = opacs[cur_idx];
+    mcmc_relocation(opac, scale, int(n_idx));
+    scales[cur_idx] = scale;
+    opacs[cur_idx] = opac;
+
+    // don't change grad
+}
+
+
+__global__ void mcmc_update_add_kernel(
+    uint32_t num_splats,
+    uint32_t num_add,
+    int32_t* __restrict__ index_map,  // [dN]
+    float3*__restrict__ means, float3*__restrict__ g1_means, float3*__restrict__ g2_means,
+    float4*__restrict__ quats, float4*__restrict__ g1_quats, float4*__restrict__ g2_quats,
+    float3*__restrict__ scales, float3*__restrict__ g1_scales, float3*__restrict__ g2_scales,
+    float*__restrict__ opacs, float*__restrict__ g1_opacs, float*__restrict__ g2_opacs,
+    float3*__restrict__ features_dc, float3*__restrict__ g1_features_dc, float3*__restrict__ g2_features_dc,
+    int num_sh, float3*__restrict__ features_sh, float3*__restrict__ g1_features_sh, float3*__restrict__ g2_features_sh,
+    int32_t* __restrict__ bias_correction_steps
+) {
+    uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= num_add)
+        return;
+
+    uint32_t id_dst = tid + num_splats;
+    uint32_t id_src = index_map[tid];
+
+    // copy components
+    means[id_dst] = means[id_src];
+    quats[id_dst] = quats[id_src];
+    scales[id_dst] = scales[id_src];
+    opacs[id_dst] = opacs[id_src];
+    features_dc[id_dst] = features_dc[id_src];
+    for (int i = 0; i < num_sh; ++i)  // TODO: slow; more cache friendly way to do so?
+        features_sh[num_sh*id_dst+i] = features_sh[num_sh*id_src+i];
+
+    // set grad to zero
+    g1_means[id_dst] = make_float3(0.0f);
+    g2_means[id_dst] = make_float3(0.0f);
+    g1_quats[id_dst] = make_float4(0.0f);
+    g2_quats[id_dst] = make_float4(0.0f);
+    g1_scales[id_dst] = make_float3(0.0f);
+    g2_scales[id_dst] = make_float3(0.0f);
+    g1_opacs[id_dst] = 0.0f;
+    g2_opacs[id_dst] = 0.0f;
+    g1_features_dc[id_dst] = make_float3(0.0f);
+    g2_features_dc[id_dst] = make_float3(0.0f);
+    for (int i = 0; i < num_sh; ++i) {  // TODO: slow; more cache friendly way to do so?
+        g1_features_sh[num_sh*id_dst+i] = make_float3(0.0f);
+        g2_features_sh[num_sh*id_dst+i] = make_float3(0.0f);
+    }
+    if (bias_correction_steps)
+        bias_correction_steps[id_dst] = 0;
+}
+
+
+/*[AutoHeaderGeneratorExport]*/
+void add_splats_mcmc_tensor(
+    int64_t cur_num_splats,
+    int64_t num_add,
+    float min_opacity,
+    at::Tensor means, at::Tensor quats, at::Tensor scales, at::Tensor opacs, at::Tensor features_dc, at::Tensor features_sh,
+    at::Tensor g1_means, at::Tensor g1_quats, at::Tensor g1_scales, at::Tensor g1_opacs, at::Tensor g1_features_dc, at::Tensor g1_features_sh,
+    at::Tensor g2_means, at::Tensor g2_quats, at::Tensor g2_scales, at::Tensor g2_opacs, at::Tensor g2_features_dc, at::Tensor g2_features_sh,
+    std::optional<at::Tensor> bias_correction_steps,
+    uint32_t seed
+) {
+    if (num_add == 0)
+        return;
+
+    int num_sh = features_sh.size(-2);
+
+    at::Tensor sample_probs = at::empty_like(opacs);
+    mcmc_compute_relocation_probabilities_kernel<<<_LAUNCH_ARGS_1D(cur_num_splats, 256)>>>(
+        cur_num_splats,
+        min_opacity,
+        opacs.data_ptr<float>(),
+        sample_probs.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+    at::Tensor sample_probs_cumsum = at::cumsum(sample_probs, 0);
+
+    at::Tensor index_map = at::empty({num_add}, opacs.options().dtype(at::kInt));
+    at::Tensor n_idx_buffer = at::empty({cur_num_splats}, opacs.options().dtype(at::kInt));
+    set_zero<int32_t>(n_idx_buffer);
+
+    mcmc_compute_add_index_map_kernel<<<_LAUNCH_ARGS_1D(num_add, 256)>>>(
+        sample_probs_cumsum.data_ptr<float>(),
+        index_map.data_ptr<int32_t>(),
+        n_idx_buffer.data_ptr<int32_t>(),
+        cur_num_splats,
+        num_add,
+        seed
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    // printf("%d/%d add\n", n_idx_buffer.sum().item<int32_t>(), (int)num_add);
+
+    mcmc_compute_add_kernel<<<_LAUNCH_ARGS_1D(cur_num_splats, 64)>>>(
+        cur_num_splats,
+        min_opacity,
+        n_idx_buffer.data_ptr<int32_t>(),
+        (float3*)scales.data_ptr<float>(),
+        (float*)opacs.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    mcmc_update_add_kernel<<<_LAUNCH_ARGS_1D(num_add, 64)>>>(
+        cur_num_splats,
+        num_add,
+        index_map.data_ptr<int32_t>(),
+        (float3*)means.data_ptr<float>(), (float3*)g1_means.data_ptr<float>(), (float3*)g2_means.data_ptr<float>(),
+        (float4*)quats.data_ptr<float>(), (float4*)g1_quats.data_ptr<float>(), (float4*)g2_quats.data_ptr<float>(),
+        (float3*)scales.data_ptr<float>(), (float3*)g1_scales.data_ptr<float>(), (float3*)g2_scales.data_ptr<float>(),
+        (float*)opacs.data_ptr<float>(), (float*)g1_opacs.data_ptr<float>(), (float*)g2_opacs.data_ptr<float>(),
+        (float3*)features_dc.data_ptr<float>(), (float3*)g1_features_dc.data_ptr<float>(), (float3*)g2_features_dc.data_ptr<float>(),
+        num_sh, (float3*)features_sh.data_ptr<float>(), (float3*)g1_features_sh.data_ptr<float>(), (float3*)g2_features_sh.data_ptr<float>(),
+        bias_correction_steps.has_value() ? bias_correction_steps.value().data_ptr<int32_t>() : nullptr
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 
@@ -860,88 +1343,6 @@ void mcmc_add_noise_tensor(
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
-
-
-// ================
-// MCMC Relocation (from GSplat)
-// ================
-
-__global__ void compute_relocation_kernel(
-    int N,
-    float* __restrict__ opacities,
-    float3* __restrict__ scales,
-    int *ratios,
-    float *binoms,
-    int n_max,
-    float *new_opacities,
-    float3 *new_scales
-) {
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if (idx >= N)
-        return;
-
-    int n_idx = ratios[idx];
-    float denom_sum = 0.0f;
-
-    // compute new opacity
-    float old_opacity = opacities[idx];
-    float new_opacity = 1.0f - powf(1.0f - old_opacity, 1.0f / n_idx);
-    new_opacity = fmaxf(new_opacity, 0.0f);
-    new_opacities[idx] = new_opacity;
-
-    // compute new scale
-    for (int i = 1; i <= n_idx; ++i) {
-        for (int k = 0; k <= (i - 1); ++k) {
-            float bin_coeff = binoms[(i - 1) * n_max + k];
-            float term = (((k & 1) ? -1.0f : 1.0f) / sqrtf((float)(k + 1))) *
-                         powf(new_opacity, (float)(k + 1));
-            denom_sum += (bin_coeff * term);
-        }
-    }
-    float coeff = (old_opacity / denom_sum);
-    new_scales[idx] = coeff * scales[idx];
-}
-
-/*[AutoHeaderGeneratorExport]*/
-std::tuple<at::Tensor, at::Tensor>
-compute_relocation_tensor(
-    // inputs
-    at::Tensor opacities, // [N]
-    at::Tensor scales,    // [N, 3]
-    at::Tensor ratios,    // [N]
-    at::Tensor binoms,    // [n_max, n_max]
-    const int n_max
-) {
-    DEVICE_GUARD(opacities);
-    CHECK_INPUT(opacities);
-    CHECK_INPUT(scales);
-    CHECK_INPUT(ratios);
-    CHECK_INPUT(binoms);
-
-    uint32_t N = opacities.size(0);
-
-    int64_t n_elements = N;
-
-    at::Tensor new_opacities = at::empty_like(opacities);
-    at::Tensor new_scales = at::empty_like(scales);
-
-    if (n_elements == 0)
-        return std::make_tuple(new_opacities, new_scales);
-
-    compute_relocation_kernel<<<_LAUNCH_ARGS_1D(N, 256)>>>(
-        N,
-        opacities.data_ptr<float>(),
-        (float3*)scales.data_ptr<float>(),
-        ratios.data_ptr<int>(),
-        binoms.data_ptr<float>(),
-        n_max,
-        new_opacities.data_ptr<float>(),
-        (float3*)new_scales.data_ptr<float>()
-    );
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return std::make_tuple(new_opacities, new_scales);
-}
 
 
 // ================

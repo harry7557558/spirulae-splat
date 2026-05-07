@@ -3,6 +3,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from typing import Dict, Optional, Tuple, Literal
 import math
+import numpy as np
 
 
 import spirulae_splat
@@ -527,6 +528,16 @@ class Renderer:
                 scheduled_lr = min(scheduled_lr, pre_warmup + (lr - pre_warmup) * min(step / warmup, 1.0))
             return scheduled_lr
 
+        if optim_config.use_per_splat_bias_correction:
+            if not hasattr(self, 'optim_bias_correction_step'):
+                self.optim_bias_correction_step = torch.ones(
+                    self.max_num_splats, dtype=torch.int32, device=self.radii.device)
+            else:
+                self.optim_bias_correction_step += 1
+            bias_correction_step = self.optim_bias_correction_step
+        else:
+            bias_correction_step = step + 1
+
         # geometry, includes regularization and MCMC add noise
         _make_lazy_cuda_func("fused_optim_3dgs_geometry")(
             self.splats_world[0],
@@ -559,27 +570,26 @@ class Renderer:
             model_config.erank_reg,
             model_config.erank_reg_s3,
             model_config.quat_norm_reg,
-            step+1
+            optim_config.use_scale_agnostic_mean,
+            bias_correction_step
         )
 
-        _make_lazy_cuda_func("fused_adam")(
+        _make_lazy_cuda_func("fused_adam_with_steps")(
             self.splats_world[4],
             self.v_splats_world[4],
             self.g1_splats_world[4],
             self.g2_splats_world[4],
             get_scheduled_lr("features_dc"),
-            0.9, 0.999, 1e-15,
-            step+1
+            bias_correction_step
         )
 
-        _make_lazy_cuda_func("fused_adam")(
+        _make_lazy_cuda_func("fused_adam_with_steps")(
             self.splats_world[5],
             self.v_splats_world[5],
             self.g1_splats_world[5],
             self.g2_splats_world[5],
             get_scheduled_lr("features_sh"),
-            0.9, 0.999, 1e-15,
-            step+1
+            bias_correction_step
         )
 
     def densify_step(
@@ -587,42 +597,50 @@ class Renderer:
         model_config: 'spirulae_splat.modules.model.SpirulaeSplatModelConfig',
         optim_config: OptimizerConfig
     ):
-        _make_lazy_cuda_func("densify_clip_scale")(
-            self.cur_num_splats,
-            self.radii,
-            self.splats_world[2],  # scales
-            self.splats_world[3],  # opacs
-            model_config.max_screen_size,
-            model_config.max_world_size,
-            model_config.max_screen_size_clip_hardness
-        )
+        # clip large splats
+        if np.isfinite(model_config.max_screen_size) or np.isfinite(model_config.max_world_size):
+            _make_lazy_cuda_func("densify_clip_scale")(
+                self.cur_num_splats,
+                self.radii,
+                self.splats_world[2],  # scales
+                self.splats_world[3],  # opacs
+                model_config.max_screen_size,
+                model_config.max_screen_size_clip_hardness,
+                model_config.max_world_size,
+            )
 
-        if not hasattr(self, 'densify_accum_buffer'):
-            self.densify_accum_buffer = torch.zeros(
-                self.max_num_splats, 2, dtype=torch.float32, device=self.radii.device)
+        # update accumulation weight
+        if model_config.relocate_heuristic_weight >= 1.0:
 
-        if 'accum_weight' in self.backward_info:
-            is_max_mode = True
-            densify_score = self.backward_info['accum_weight']
-        else:
-            assert False
-            is_max_mode = False
-            densify_score = self.v_splats_world[3] # v_opacs
-        _make_lazy_cuda_func("densify_update_weight")(
-            self.cur_num_splats,
-            self.radii,
-            self.splats_world[3],  # opacs
-            densify_score,
-            self.densify_accum_buffer,
-            is_max_mode
-        )
-        # print(self.densify_accum_buffer[:, 0])
+            if not hasattr(self, 'densify_accum_buffer'):
+                self.densify_accum_buffer = torch.zeros(
+                    self.max_num_splats, 2, dtype=torch.float32, device=self.radii.device)
+            if 'accum_weight' in self.backward_info:
+                is_max_mode = True
+                densify_score = self.backward_info['accum_weight']
+                densify_weight = None
+            else:
+                is_max_mode = False
+                densify_score = self.v_splats_world[3] # v_opacs
+                densify_weight = self.splats_world[3] # opacs
+
+            _make_lazy_cuda_func("densify_update_weight")(
+                self.cur_num_splats,
+                self.radii,
+                densify_weight,
+                densify_score,
+                self.densify_accum_buffer,
+                is_max_mode
+            )
 
         if step % model_config.refine_every != 0:
             return
+        if step <= model_config.refine_start_iter:
+            return
 
-        # relocation
-        if step > model_config.refine_start_iter:
+        if model_config.relocate_heuristic_weight >= 1.0:
+
+            # relocation
             _make_lazy_cuda_func("relocate_splats_with_long_axis_split")(
                 self.cur_num_splats,
                 model_config.min_opacity,
@@ -630,11 +648,11 @@ class Renderer:
                 *self.g1_splats_world,
                 *self.g2_splats_world,
                 self.densify_accum_buffer,
+                getattr(self, 'optim_bias_correction_step', None),
                 2*step+0
             )
 
-        # add more splats
-        if step > model_config.refine_start_iter:
+            # add more splats
             n_target = min(self.max_num_splats, int(model_config.growth_factor * self.cur_num_splats))
             num_add = max(0, n_target - self.cur_num_splats)
             _make_lazy_cuda_func("add_splats_with_long_axis_split")(
@@ -644,15 +662,38 @@ class Renderer:
                 *self.g1_splats_world,
                 *self.g2_splats_world,
                 self.densify_accum_buffer,
+                getattr(self, 'optim_bias_correction_step', None),
                 2*step+1
             )
             self.cur_num_splats += num_add
+        
+        else:
 
-        self.densify_accum_buffer.zero_()
+            # mcmc relocation
+            _make_lazy_cuda_func("relocate_splats_mcmc")(
+                self.cur_num_splats,
+                model_config.min_opacity,
+                *self.splats_world,
+                *self.g1_splats_world,
+                *self.g2_splats_world,
+                getattr(self, 'optim_bias_correction_step', None),
+                2*step+0
+            )
 
-        # quantile = _make_lazy_cuda_func("quantile_of_finite_positive_elements")(
-        #     self.radii,
-        #     0.5,
-        #     False
-        # )
-        # print(quantile)
+            # mcmc sample add
+            n_target = min(self.max_num_splats, int(model_config.growth_factor * self.cur_num_splats))
+            num_add = max(0, n_target - self.cur_num_splats)
+            _make_lazy_cuda_func("add_splats_mcmc")(
+                self.cur_num_splats,
+                num_add,
+                model_config.min_opacity,
+                *self.splats_world,
+                *self.g1_splats_world,
+                *self.g2_splats_world,
+                getattr(self, 'optim_bias_correction_step', None),
+                2*step+1
+            )
+            self.cur_num_splats += num_add
+        
+        if hasattr(self, 'densify_accum_buffer'):
+            self.densify_accum_buffer.zero_()

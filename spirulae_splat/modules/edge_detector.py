@@ -7,28 +7,14 @@ from spirulae_splat.splat.cuda import _make_lazy_cuda_func
 @torch.no_grad()
 def detect_edge(im: torch.Tensor):
     assert im.dtype == torch.float32
-    return _make_lazy_cuda_func("canny_edge_filter")(im)
-    # return _make_lazy_cuda_func("laplacian_edge_filter")(im)
-    # return _make_lazy_cuda_func("smoothed_laplacian_edge_filter")(im)
+    edge_map = _make_lazy_cuda_func("canny_edge_filter")(im)
+    # edge_map = _make_lazy_cuda_func("laplacian_edge_filter")(im)
+    # edge_map = _make_lazy_cuda_func("smoothed_laplacian_edge_filter")(im)
 
-    if im.shape[-1] in [3, 4]:
-        im = 0.299 * im[..., 0] + 0.587 * im[..., 1] + 0.114 * im[..., 2]
-        # TODO: mask
-        im = im.unsqueeze(-1)
-    im = im.permute(0, 3, 1, 2).contiguous(memory_format=torch.channels_last)
+    if False:
+        _make_lazy_cuda_func("normalize_by_median_inplace")(edge_map)
 
-    kernel = torch.tensor([
-        [0, 1, 0],
-        [1, -4, 1],
-        [0, 1, 0]
-    ]).to(im).view(1, 1, 3, 3)
-
-    im = F.conv2d(im, kernel, padding=1)
-
-    im = im.permute(0, 2, 3, 1)
-    im = torch.abs(im)
-
-    return im
+    return edge_map
 
 
 @torch.no_grad()

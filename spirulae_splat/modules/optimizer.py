@@ -365,10 +365,14 @@ def create_optimizers(model: torch.nn.Module, config: Dict):
 @dataclass
 class OptimizerConfig:
     max_steps: Optional[int] = None
-    means_lr: float = 1e-4
-    means_lr_final: Optional[float] = 1e-6
+    use_scale_agnostic_mean: bool = True
+    use_per_splat_bias_correction: bool = False
+    means_lr: float = 1.6e-4
+    means_lr_final: Optional[float] = 1.6e-6
     scales_lr: float = 0.005
     scales_lr_final: Optional[float] = None
+    # scales_lr: float = 0.02
+    # scales_lr_final: Optional[float] = 0.005
     quats_lr: float = 0.0005
     opacities_lr: float = 0.05
     features_dc_lr: float = 0.0025

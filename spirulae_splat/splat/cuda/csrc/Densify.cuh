@@ -16,6 +16,11 @@ at::Tensor quantile_of_abs_of_finite_elements_tensor(
 );
 
 
+void normalize_by_median_inplace_tensor(
+    at::Tensor data
+);
+
+
 void inplace_index_tensor(
     at::Tensor indices,
     at::Tensor src,
@@ -70,7 +75,7 @@ void densify_clip_scale_tensor(
 void densify_update_weight_tensor(
     int64_t num_splats,
     at::Tensor radii,
-    at::Tensor opacs,
+    std::optional<at::Tensor> opacs,
     at::Tensor accum_weight,
     at::Tensor accum_buffer,
     bool is_max_mode
@@ -84,6 +89,7 @@ void relocate_splats_with_long_axis_split_tensor(
     at::Tensor g1_means, at::Tensor g1_quats, at::Tensor g1_scales, at::Tensor g1_opacs, at::Tensor g1_features_dc, at::Tensor g1_features_sh,
     at::Tensor g2_means, at::Tensor g2_quats, at::Tensor g2_scales, at::Tensor g2_opacs, at::Tensor g2_features_dc, at::Tensor g2_features_sh,
     at::Tensor densify_accum_buffer,
+    std::optional<at::Tensor> bias_correction_steps,
     uint32_t seed
 );
 
@@ -95,6 +101,30 @@ void add_splats_with_long_axis_split_tensor(
     at::Tensor g1_means, at::Tensor g1_quats, at::Tensor g1_scales, at::Tensor g1_opacs, at::Tensor g1_features_dc, at::Tensor g1_features_sh,
     at::Tensor g2_means, at::Tensor g2_quats, at::Tensor g2_scales, at::Tensor g2_opacs, at::Tensor g2_features_dc, at::Tensor g2_features_sh,
     at::Tensor densify_accum_buffer,
+    std::optional<at::Tensor> bias_correction_steps,
+    uint32_t seed
+);
+
+
+void relocate_splats_mcmc_tensor(
+    int64_t cur_num_splats,
+    float min_opacity,
+    at::Tensor means, at::Tensor quats, at::Tensor scales, at::Tensor opacs, at::Tensor features_dc, at::Tensor features_sh,
+    at::Tensor g1_means, at::Tensor g1_quats, at::Tensor g1_scales, at::Tensor g1_opacs, at::Tensor g1_features_dc, at::Tensor g1_features_sh,
+    at::Tensor g2_means, at::Tensor g2_quats, at::Tensor g2_scales, at::Tensor g2_opacs, at::Tensor g2_features_dc, at::Tensor g2_features_sh,
+    std::optional<at::Tensor> bias_correction_steps,
+    uint32_t seed
+);
+
+
+void add_splats_mcmc_tensor(
+    int64_t cur_num_splats,
+    int64_t num_add,
+    float min_opacity,
+    at::Tensor means, at::Tensor quats, at::Tensor scales, at::Tensor opacs, at::Tensor features_dc, at::Tensor features_sh,
+    at::Tensor g1_means, at::Tensor g1_quats, at::Tensor g1_scales, at::Tensor g1_opacs, at::Tensor g1_features_dc, at::Tensor g1_features_sh,
+    at::Tensor g2_means, at::Tensor g2_quats, at::Tensor g2_scales, at::Tensor g2_opacs, at::Tensor g2_features_dc, at::Tensor g2_features_sh,
+    std::optional<at::Tensor> bias_correction_steps,
     uint32_t seed
 );
 
@@ -106,17 +136,6 @@ void mcmc_add_noise_tensor(
     at::Tensor &log_scales,
     at::Tensor &quats,
     at::Tensor &opacs
-);
-
-
-std::tuple<at::Tensor, at::Tensor>
-compute_relocation_tensor(
-    // inputs
-    at::Tensor opacities, // [N]
-    at::Tensor scales,    // [N, 3]
-    at::Tensor ratios,    // [N]
-    at::Tensor binoms,    // [n_max, n_max]
-    const int n_max
 );
 
 

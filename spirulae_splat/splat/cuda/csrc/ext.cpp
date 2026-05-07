@@ -186,6 +186,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fused_newton_multi", &fused_newton_multi);
     m.def("fused_adam_scale_agnostic_mean", &fused_adam_scale_agnostic_mean);
     m.def("fused_optim_3dgs_geometry", &fused_optim_3dgs_geometry);
+    m.def("fused_adam_with_steps", &fused_adam_with_steps_tensor);
     m.def("fused_3dgs2tr_mean_optim", &fused_3dgs2tr_mean_optim);
     m.def("fused_3dgs2tr_scale_optim", &fused_3dgs2tr_scale_optim);
     m.def("fused_3dgs2tr_color_optim", &fused_3dgs2tr_color_optim);
@@ -199,6 +200,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // Densify.cuh
     m.def("quantile_of_abs_of_finite_elements", &quantile_of_abs_of_finite_elements_tensor);
+    m.def("normalize_by_median_inplace", &normalize_by_median_inplace_tensor);
     m.def("inplace_index", &inplace_index_tensor);
     m.def("inplace_scatter_add", &inplace_scatter_add_tensor);
     m.def("inplace_scatter_max", &inplace_scatter_max_tensor);
@@ -207,9 +209,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("densify_update_weight", &densify_update_weight_tensor);
     m.def("relocate_splats_with_long_axis_split", &relocate_splats_with_long_axis_split_tensor);
     m.def("add_splats_with_long_axis_split", &add_splats_with_long_axis_split_tensor);
+    m.def("relocate_splats_mcmc", &relocate_splats_mcmc_tensor);
+    m.def("add_splats_mcmc", &add_splats_mcmc_tensor);
     m.def("cov_scale_init", &cov_scale_init_tensor);
     m.def("mcmc_add_noise", &mcmc_add_noise_tensor);
-    m.def("compute_relocation", &compute_relocation_tensor);
+    // m.def("compute_relocation", &compute_relocation_tensor);
     m.def("long_axis_split", &long_axis_split_tensor);
     m.def("laplacian_edge_filter", &laplacian_edge_filter_tensor);
     m.def("smoothed_laplacian_edge_filter", &smoothed_laplacian_edge_filter_tensor);

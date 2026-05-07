@@ -148,7 +148,18 @@ void fused_optim_3dgs_geometry(
     const float erank_reg_weight,
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
-    int step
+    bool use_scale_agnostic_mean,
+    std::variant<int32_t, at::Tensor> step
+);
+
+
+void fused_adam_with_steps_tensor(
+    at::Tensor param,
+    at::Tensor grad,
+    at::Tensor exp_avg,
+    at::Tensor exp_avg_sq,
+    float lr,
+    std::variant<int32_t, at::Tensor> step
 );
 
 

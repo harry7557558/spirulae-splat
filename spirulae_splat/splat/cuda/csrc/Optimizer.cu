@@ -694,6 +694,7 @@ void fused_adam_scale_agnostic_mean(
 // Fused geometry optimizer
 // ================
 
+template<bool use_scale_agnostic_mean>
 __global__ void fused_optim_3dgs_geometry_kernel(
     float3* __restrict__ means,
     const float3* __restrict__ v_means,
@@ -712,10 +713,10 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     float* __restrict__ g1_opacities,
     float* __restrict__ g2_opacities,
     const float* __restrict__ radii,
-    const float lr_means,
-    const float lr_quats,
-    const float lr_scales,
-    const float lr_opacs,
+    float lr_means,
+    float lr_quats,
+    float lr_scales,
+    float lr_opacs,
     const float mcmc_noise_scalar,
     const float min_opacity,
     const float max_gauss_ratio,
@@ -725,7 +726,8 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     const float erank_reg_weight,
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
-    const float inv_bias_correction2,
+    const int32_t scalar_step,
+    const int32_t* __restrict__ steps,
     const int64_t numel
 ) {
     static constexpr float eps = 1e-15f;
@@ -734,6 +736,14 @@ __global__ void fused_optim_3dgs_geometry_kernel(
 
     const int64_t idx = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
     if (idx >= numel) return;
+
+    float step = (float)(steps != nullptr ? steps[idx] : scalar_step);
+    float inv_bias_correction1 = 1.0f / (1.0f - powf(beta1, step));
+    float inv_bias_correction2 = 1.0f / (1.0f - powf(beta2, step));
+    lr_means *= inv_bias_correction1;
+    lr_quats *= inv_bias_correction1;
+    lr_scales *= inv_bias_correction1;
+    lr_opacs *= inv_bias_correction1;
 
     // load params
     float3 scale = scales[idx];
@@ -791,27 +801,33 @@ __global__ void fused_optim_3dgs_geometry_kernel(
 
     float opac_post_sigmoid = 1.0f / (1.0f + __expf(-opac));
 
-    float3 v_mean_scaled_num = SlangProjectionUtils::apply_covar_to_vec(
-        quat,
-        {expf(0.5f*scale.x), expf(0.5f*scale.y), expf(0.5f*scale.z)},  // unit: L^0.5
-        v_mean  // unit: L^-1
-    ) * sqrtf(2.0f * __logf(fmaxf(255.0f * opac_post_sigmoid, 1.00001f)));  // unit: dimensionless
-    float v_mean_scaled_den = radii[idx] * 0.6f;  // unit: dimensionless
-    #if 0
-    v_mean_scaled_num = v_mean_scaled_num / (v_mean_scaled_den + (eps * (float)numel));
-    v_mean_scaled_den = 1.0f;
-    #endif
-    g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean_scaled_num;  // unit: dimensionless
-    g2_mean = beta2 * g2_mean + (1.f - beta2) * v_mean*v_mean * v_mean_scaled_den*v_mean_scaled_den;  // unit: L^-2
+    float noise_lr_scalar = 1.0f;
+    if constexpr (use_scale_agnostic_mean) {
+        float3 v_mean_scaled_num = SlangProjectionUtils::apply_covar_to_vec(
+            quat,
+            {expf(0.5f*scale.x), expf(0.5f*scale.y), expf(0.5f*scale.z)},  // unit: L^0.5
+            v_mean  // unit: L^-1
+        ) * sqrtf(2.0f * __logf(fmaxf(255.0f * opac_post_sigmoid, 1.00001f)));  // unit: dimensionless
+        float v_mean_scaled_den = radii[idx] * 0.6f;  // unit: dimensionless
+        #if 0
+        v_mean_scaled_num = v_mean_scaled_num / (v_mean_scaled_den + (eps * (float)numel));
+        v_mean_scaled_den = 1.0f;
+        #endif
+        g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean_scaled_num;  // unit: dimensionless
+        g2_mean = beta2 * g2_mean + (1.f - beta2) * v_mean*v_mean * v_mean_scaled_den*v_mean_scaled_den;  // unit: L^-2
 
-    float noise_lr_scalar = length(v_mean_scaled_num) / (length(v_mean) * v_mean_scaled_den + eps);
+        noise_lr_scalar = length(v_mean_scaled_num) / (length(v_mean) * v_mean_scaled_den + eps);
+    } else {
+        g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean;  // unit: L^-1
+        g2_mean = beta2 * g2_mean + (1.f - beta2) * v_mean*v_mean;  // unit: L^-2
+    }
     SlangDensify::mcmc_add_noise_3dgs(
         mcmc_noise_scalar * noise_lr_scalar, min_opacity,
         &mean, scale, quat, opac_post_sigmoid
-        // official MCMC use scale/quat/opac after optimizer step, shouldn't matter in practice
+        // official MCMC use scale/quat/opac after optimizer step/densification, shouldn't matter in practice
     );
 
-    means[idx] = mean - lr_means * g1_mean / (sqrtf(g2_mean * inv_bias_correction2) + eps); // unit: L for dimensionless lr_means
+    means[idx] = mean - lr_means * g1_mean / (sqrtf(g2_mean * inv_bias_correction2) + eps); // unit: L or dimensionless for dimensionless lr_means
     g1_means[idx] = g1_mean;
     g2_means[idx] = g2_mean;
 }
@@ -849,7 +865,8 @@ void fused_optim_3dgs_geometry(
     const float erank_reg_weight,
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
-    int step
+    bool use_scale_agnostic_mean,
+    std::variant<int32_t, at::Tensor> step
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -869,15 +886,17 @@ void fused_optim_3dgs_geometry(
     CHECK_INPUT(g1_opacities);
     CHECK_INPUT(g2_opacities);
     CHECK_INPUT(radii);
+    if (std::get_if<at::Tensor>(&step))
+        CHECK_INPUT(std::get<at::Tensor>(step));
 
     const int64_t numel = means.numel() / 3;
     if (numel == 0)
         return;
     
-    static constexpr float beta1 = 0.9f;
-    static constexpr float beta2 = 0.999f;
-
-    fused_optim_3dgs_geometry_kernel<<<_LAUNCH_ARGS_1D(numel, 256)>>>(
+    (use_scale_agnostic_mean ?
+        fused_optim_3dgs_geometry_kernel<true> :
+        fused_optim_3dgs_geometry_kernel<false>
+    )<<<_LAUNCH_ARGS_1D(numel, 256)>>>(
         (float3*)means.data_ptr<float>(),
         (const float3*)v_means.data_ptr<float>(),
         (float3*)g1_means.data_ptr<float>(),
@@ -895,10 +914,10 @@ void fused_optim_3dgs_geometry(
         (float*)g1_opacities.data_ptr<float>(),
         (float*)g2_opacities.data_ptr<float>(),
         radii.data_ptr<float>(),
-        lr_means / (1.0f - powf(beta1, step)),
-        lr_quats / (1.0f - powf(beta1, step)),
-        lr_scales / (1.0f - powf(beta1, step)),
-        lr_opacs / (1.0f - powf(beta1, step)),
+        lr_means,
+        lr_quats,
+        lr_scales,
+        lr_opacs,
         lr_means * mcmc_noise_lr,
         min_opacity,
         max_gauss_ratio,
@@ -908,8 +927,96 @@ void fused_optim_3dgs_geometry(
         erank_reg_weight / (float)numel,
         erank_reg_weight_s3 / (float)numel,
         quat_norm_reg_weight / (float)numel,
-        1.0f / (1.0f - powf(beta2, step)),
+        std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1,
+        std::get_if<at::Tensor>(&step) ? std::get<at::Tensor>(step).data_ptr<int32_t>() : nullptr,
         numel
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+
+// ================
+// Fused appearance optimizer
+// ================
+
+__global__ void fused_adam_with_steps_kernel(
+    float* __restrict__ param,
+    const float* __restrict__ grad,
+    float* __restrict__ exp_avg,
+    float* __restrict__ exp_avg_sq,
+    const float lr,
+    const int32_t scalar_step,
+    const int32_t* __restrict__ steps,
+    const int64_t numel,
+    const int stride
+) {
+    static constexpr float eps = 1e-15f;
+    static constexpr float beta1 = 0.9f;
+    static constexpr float beta2 = 0.999f;
+
+    const int64_t idx = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    if (idx >= numel) return;
+
+    float step = (float)(steps ? steps[idx / stride] : scalar_step);
+    float inv_bias_correction1 = 1.0f / (1.0f - powf(beta1, step));
+    float inv_bias_correction2 = 1.0f / (1.0f - powf(beta2, step));
+
+    float x = param[idx];
+    float v = grad[idx];
+    if (!isfinite(v))
+        v = 0.0f;
+    float g1 = exp_avg[idx];
+    float g2 = exp_avg_sq[idx];
+    
+    g1 = beta1 * g1 + (1.0f - beta1) * v;
+    g2 = beta2 * g2 + (1.0f - beta2) * v * v;
+
+    x -= lr * inv_bias_correction1 * g1 / (sqrtf(g2 * inv_bias_correction2) + eps);
+    
+    param[idx] = x;
+    exp_avg[idx] = g1;
+    exp_avg_sq[idx] = g2;
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void fused_adam_with_steps_tensor(
+    at::Tensor param,
+    at::Tensor grad,
+    at::Tensor exp_avg,
+    at::Tensor exp_avg_sq,
+    float lr,
+    std::variant<int32_t, at::Tensor> step
+) {
+    DEVICE_GUARD(param);
+    CHECK_INPUT(param);
+    CHECK_INPUT(grad);
+    CHECK_INPUT(exp_avg);
+    CHECK_INPUT(exp_avg_sq);
+    if (std::get_if<at::Tensor>(&step))
+        CHECK_INPUT(std::get<at::Tensor>(step));
+
+    const int64_t numel = param.numel();
+    if (numel == 0)
+        return;
+    int stride = 0;
+    if (std::get_if<at::Tensor>(&step)) {
+        int n = (int)std::get<at::Tensor>(step).numel();
+        if (n == 0)
+            return;
+        stride = (int)(numel / n);
+    }
+
+    fused_adam_with_steps_kernel<<<_LAUNCH_ARGS_1D(numel, 256)>>>(
+        param.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        exp_avg.data_ptr<float>(),
+        exp_avg_sq.data_ptr<float>(),
+        lr,
+        std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1,
+        std::get_if<at::Tensor>(&step) ? std::get<at::Tensor>(step).data_ptr<int32_t>() : nullptr,
+        numel,
+        stride
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
