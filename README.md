@@ -1,6 +1,6 @@
 # spirulae-splat
 
-> **Note to existing users:** Since mid-April 2026, Nerfstudio and GSplat dependencies are no longer needed. The interface has gone through major change (see "Quick Start" section below). This branch (`dev`) will act as a staging branch for next few weeks to expose any issue, before being merged into the `master` branch. If you see error or significant quality degrade compared to the `master` branch, please let me know via Discord (@spirulae) or email (the one used by almost all of my git commits).
+> **Note to existing users:** Since early May 2026, Nerfstudio and GSplat dependencies are no longer needed. The interface has gone through major change (see "Quick Start" section below). You may find a backup of the original Nerfstudio+GSplat version in `nerfstudio` branch. If you see error or significant quality degrade compared to before, please let me know on Discord (@spirulae) or email (the one used by almost all of my git commits). Additionally, you may find latest features in `dev` branch that is more frequently updated.
 
 This is my personal project that trains 3D Gaussian Splatting (3DGS) models.
 
