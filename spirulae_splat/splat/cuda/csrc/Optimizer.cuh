@@ -148,6 +148,8 @@ void fused_optim_3dgs_geometry(
     const float erank_reg_weight,
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
+    const float mrnf_opacity_decay_factor,
+    const float mrnf_scale_decay_factor,
     bool use_scale_agnostic_mean,
     std::variant<int32_t, at::Tensor> step
 );

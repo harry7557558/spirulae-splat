@@ -495,14 +495,7 @@ class Renderer:
         self.rasterize_backward()
         self.projection_backward()
 
-        # for param, grad in zip(self.splats_world, self.v_splats_world):
-        #     if grad is None:
-        #         continue
-        #     if param.grad is None or True:
-        #         param.grad = grad
-        #     else:
-        #         # already accumulated
-        #         param.grad = param.grad + grad
+        
 
     def optim_step(
         self, step: int,
@@ -513,10 +506,11 @@ class Renderer:
         if self.primitive not in ["3dgs", "mip", "3dgut", "3dgut_sv"]:
             raise NotImplementedError()
 
+        max_steps = optim_config.max_steps
+        if max_steps is None:
+            max_steps = 30000  # TODO
+
         def get_scheduled_lr(name: str):
-            max_steps = optim_config.max_steps
-            if max_steps is None:
-                max_steps = 30000  # TODO
             lr = getattr(optim_config, name+"_lr")
             lr_final = getattr(optim_config, name+"_lr_final", lr)
             warmup = getattr(optim_config, name+"_lr_warmup", None)
@@ -565,11 +559,16 @@ class Renderer:
             model_config.min_opacity,
             model_config.max_gauss_ratio,
             model_config.scale_regularization_weight,
-            model_config.mcmc_opacity_reg,
-            model_config.mcmc_scale_reg,
+            model_config.opacity_reg,
+            model_config.scale_reg,
+            # 0.0, 0.0,  # TODO
             model_config.erank_reg,
             model_config.erank_reg_s3,
             model_config.quat_norm_reg,
+            0.0 if step % model_config.refine_every != 0 else
+                (1.0 - (step+1) / max_steps) * model_config.opacity_decay,
+            1.0 if step % model_config.refine_every != 0 else
+                1.0 - (1.0 - (step+1) / max_steps) * model_config.scale_decay,
             optim_config.use_scale_agnostic_mean,
             bias_correction_step
         )

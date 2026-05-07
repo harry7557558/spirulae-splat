@@ -261,10 +261,14 @@ class SpirulaeSplatModelConfig:
     """Loss weight for alpha, applies when rendered alpha is above reference alpha"""
     alpha_loss_weight_under: float = 0.005
     """Loss weight for alpha, applies when rendered alpha is below reference alpha"""
-    mcmc_opacity_reg: float = 0.001  # 0.01 in original paper
+    opacity_reg: float = 0.001  # 0.01 for MCMC
     """Encourage low opacity to aid densification, per MCMC."""
-    mcmc_scale_reg: float = 0.01  # 0.01 in original paper
+    scale_reg: float = 0.01  # 0.01 for MCMC
     """Encourage low scale, per MCMC."""
+    opacity_decay: float = 0.0  # 0.004 in MRNF
+    """Decay opacity to aid densification, per MRNF."""
+    scale_decay: float = 0.0  # 0.002 in MRNF
+    """Decay scale to aid densification, per MRNF."""
     erank_reg: float = 0.0
     """erank regularization weight, for 3DGS only -
         see *Effective Rank Analysis and Regularization for Enhanced 3D Gaussian Splatting, Hyung et al.*"""
@@ -956,8 +960,8 @@ class SpirulaeSplatModel(torch.nn.Module):
             kwargs['actual_width'] = int(camera.metadata['actual_width'] + 0.5)
         if 'actual_height' in camera.metadata:
             kwargs['actual_height'] = int(camera.metadata['actual_height'] + 0.5)
-        if 'patch_offsets' in camera.metadata:
-            kwargs['patch_offsets'] = camera.metadata['patch_offsets']
+        # if 'patch_offsets' in camera.metadata:
+        #     kwargs['patch_offsets'] = camera.metadata['patch_offsets']
         if not self.training:
             pass
             # is_fisheye = True
@@ -1559,8 +1563,8 @@ class SpirulaeSplatModel(torch.nn.Module):
             "                \n",
             f"{bracket('ImReg')} {orange('normal')}={fmt('normal_reg', reg_2dgs[1], 3)} "
             f"{orange('alpha')}={fmt('alpha_reg', self.training_losses.get_alpha_reg_weight(), 3)}",
-            f"{bracket('SplatReg')} {orange('o')}={fmt('mcmc_opacity_reg', self.config.mcmc_opacity_reg * reg_mcmc, 3)} "
-            f"{orange('s')}={fmt('mcmc_scale_reg', self.config.mcmc_scale_reg * reg_mcmc, 4)} "
+            f"{bracket('SplatReg')} {orange('o')}={fmt('opacity_reg', self.config.opacity_reg * reg_mcmc, 3)} "
+            f"{orange('s')}={fmt('scale_reg', self.config.scale_reg * reg_mcmc, 4)} "
             f"{orange('q')}={fmt('quat_norm_reg', self.config.quat_norm_reg, sigfigs=1)} "
             f"{orange('erank')}={fmt('erank_reg', max(self.config.erank_reg_s3, self.config.erank_reg))} "
             f"{orange('aniso')}={fmt('scale_reg', self.config.scale_regularization_weight)}",

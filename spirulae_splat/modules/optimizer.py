@@ -367,16 +367,27 @@ class OptimizerConfig:
     max_steps: Optional[int] = None
     use_scale_agnostic_mean: bool = True
     use_per_splat_bias_correction: bool = False
+
+    # MCMC
     means_lr: float = 1.6e-4
     means_lr_final: Optional[float] = 1.6e-6
     scales_lr: float = 0.005
     scales_lr_final: Optional[float] = None
-    # scales_lr: float = 0.02
-    # scales_lr_final: Optional[float] = 0.005
     quats_lr: float = 0.0005
     opacities_lr: float = 0.05
     features_dc_lr: float = 0.0025
     features_sh_lr: float = 0.0025 / 20
+
+    # MRNF
+    # means_lr: float = 1.28e-4
+    # means_lr_final: Optional[float] = 1.6e-7
+    # scales_lr: float = 0.02
+    # scales_lr_final: Optional[float] = 0.005
+    # quats_lr: float = 0.0015
+    # opacities_lr: float = 0.025
+    # features_dc_lr: float = 0.005
+    # features_sh_lr: float = 0.005 / 20
+
     features_ch_lr: float = 0.0025 / 5
     sv_sites_lr: float = 0.01
     sv_colors_lr: float = 0.0005

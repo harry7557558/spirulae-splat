@@ -382,8 +382,8 @@ class SpirulaeSplatDataManager:
         camera.metadata['actual_images_per_batch'] = self.images_per_batch
         camera.height = self.config.patch_size * torch.ones_like(camera.height)
         camera.width = self.config.patch_size * torch.ones_like(camera.width)
-        camera.intrins[:, 2:3] -= offsets[:, 1:2]
-        camera.intrins[:, 3:4] -= offsets[:, 0:1]
+        camera.intrins[:, 2:3] -= offsets[:, 1:2].to(camera.intrins)
+        camera.intrins[:, 3:4] -= offsets[:, 0:1].to(camera.intrins)
         camera = camera.to(self.device)
         # camera.metadata["num_unique_cam_idx"] = len(set(*image_indices))
         camera.metadata["cam_idx"] = image_indices.to(self.device)

@@ -213,8 +213,8 @@ class _ComputePerSplatLosses(torch.autograd.Function):
     def forward(
         ctx,
         scales, opacities, quats,
-        mcmc_opacity_reg: float,
-        mcmc_scale_reg: float,
+        opacity_reg: float,
+        scale_reg: float,
         max_gauss_ratio: float,
         scale_regularization_weight: float,
         erank_reg: float,
@@ -225,8 +225,8 @@ class _ComputePerSplatLosses(torch.autograd.Function):
     ):
 
         hyperparams = (
-            mcmc_opacity_reg,
-            mcmc_scale_reg,
+            opacity_reg,
+            scale_reg,
             max_gauss_ratio,
             scale_regularization_weight,
             erank_reg,
@@ -1056,8 +1056,8 @@ class SplatTrainingLosses:
 
         losses = _ComputePerSplatLosses.apply(
             gauss_scales, gauss_opacities, gauss_quats,
-            self.config.mcmc_opacity_reg * float(self.config.use_mcmc),
-            self.config.mcmc_scale_reg * float(self.config.use_mcmc),
+            self.config.opacity_reg * float(self.config.use_mcmc),
+            self.config.scale_reg * float(self.config.use_mcmc),
             self.config.max_gauss_ratio,
             self.config.scale_regularization_weight,
             self.config.erank_reg,
@@ -1066,8 +1066,8 @@ class SplatTrainingLosses:
             self.config.compute_hessian_diagonal,
             backward_info,
         )
-        loss_dict['mcmc_opacity_reg'] = losses[0]
-        loss_dict['mcmc_scale_reg'] = losses[1]
+        loss_dict['opacity_reg'] = losses[0]
+        loss_dict['scale_reg'] = losses[1]
         loss_dict['scale_reg'] = losses[2]
         loss_dict['erank_reg'] = losses[3]
         loss_dict['quat_norm_reg'] = losses[4]

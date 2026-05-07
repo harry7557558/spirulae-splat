@@ -15,8 +15,8 @@ device = torch.device("cuda:0")
 
 @dataclass
 class Config:
-    mcmc_opacity_reg = 1.1
-    mcmc_scale_reg = 1.2
+    opacity_reg = 1.1
+    scale_reg = 1.2
     max_gauss_ratio = 2.0
     scale_regularization_weight = 1.3
     erank_reg = 1.4
@@ -58,7 +58,7 @@ def test_compute_per_splat_losses():
     quats = torch.nn.Parameter(quats)
 
     step = 15000
-    keys = "mcmc_opacity_reg mcmc_scale_reg scale_reg erank_reg quat_norm_reg".split()
+    keys = "opacity_reg scale_reg scale_reg erank_reg quat_norm_reg".split()
 
     output = {}
     torch_impl.get_static_losses(
@@ -126,7 +126,7 @@ def profile_compute_per_splat_losses():
     timeit(forward, "fused forward", repeat=repeat)
     print()
 
-    keys = "mcmc_opacity_reg mcmc_scale_reg scale_reg erank_reg quat_norm_reg".split()
+    keys = "opacity_reg scale_reg scale_reg erank_reg quat_norm_reg".split()
     weights = dict(zip(keys, torch.randn(5).numpy().tolist()))
 
     def fun(output):

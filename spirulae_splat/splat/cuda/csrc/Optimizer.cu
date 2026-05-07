@@ -726,6 +726,8 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     const float erank_reg_weight,
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
+    const float mrnf_opacity_decay_factor,
+    const float mrnf_scale_decay_factor,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps,
     const int64_t numel
@@ -774,7 +776,10 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     // update scales
     float3 g1_scale = beta1 * g1_scales[idx] + (1.f - beta1) * v_scale;
     float3 g2_scale = beta2 * g2_scales[idx] + (1.f - beta2) * v_scale*v_scale;
-    scales[idx] = scale - lr_scales * g1_scale / (sqrtf(g2_scale * inv_bias_correction2) + eps);
+    float3 updated_scale = scale - lr_scales * g1_scale / (sqrtf(g2_scale * inv_bias_correction2) + eps);
+    if (mrnf_scale_decay_factor != 1.0f)
+        updated_scale += make_float3(__logf(mrnf_scale_decay_factor));
+    scales[idx] = updated_scale;
     g1_scales[idx] = g1_scale;
     g2_scales[idx] = g2_scale;
 
@@ -789,7 +794,13 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     // update opacs
     float g1_opac = beta1 * g1_opacities[idx] + (1.f - beta1) * v_opac;
     float g2_opac = beta2 * g2_opacities[idx] + (1.f - beta2) * v_opac*v_opac;
-    opacities[idx] = opac - lr_opacs * g1_opac / (sqrtf(g2_opac * inv_bias_correction2) + eps);
+    float updated_opac = opac - lr_opacs * g1_opac / (sqrtf(g2_opac * inv_bias_correction2) + eps);
+    if (mrnf_opacity_decay_factor != 0.0f) {
+        updated_opac = 1.0f / (1.0f + __expf(-updated_opac));
+        updated_opac = fmaxf(updated_opac + mrnf_opacity_decay_factor, 1e-12f);
+        updated_opac = __logf(updated_opac / (1.0f - updated_opac));
+    }
+    opacities[idx] = updated_opac;
     g1_opacities[idx] = g1_opac;
     g2_opacities[idx] = g2_opac;
 
@@ -865,6 +876,8 @@ void fused_optim_3dgs_geometry(
     const float erank_reg_weight,
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
+    const float mrnf_opacity_decay_factor,
+    const float mrnf_scale_decay_factor,
     bool use_scale_agnostic_mean,
     std::variant<int32_t, at::Tensor> step
 ) {
@@ -927,6 +940,8 @@ void fused_optim_3dgs_geometry(
         erank_reg_weight / (float)numel,
         erank_reg_weight_s3 / (float)numel,
         quat_norm_reg_weight / (float)numel,
+        mrnf_opacity_decay_factor,
+        mrnf_scale_decay_factor,
         std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1,
         std::get_if<at::Tensor>(&step) ? std::get<at::Tensor>(step).data_ptr<int32_t>() : nullptr,
         numel
