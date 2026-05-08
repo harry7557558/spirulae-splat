@@ -273,104 +273,6 @@ class _ComputePerSplatLosses(torch.autograd.Function):
         return (*v_inputs, *([None]*len(hyperparams)), None, None)
 
 
-class _ComputePerPixelLosses:
-
-    def forward(
-        ctx,
-        render_rgb: Optional[torch.Tensor],
-        ref_rgb: Optional[torch.Tensor],
-        render_depth: Optional[torch.Tensor],
-        ref_depth: Optional[torch.Tensor],
-        render_normal: Optional[torch.Tensor],
-        depth_normal: Optional[torch.Tensor],
-        ref_normal: Optional[torch.Tensor],
-        render_Ts: Optional[torch.Tensor],
-        rgb_dist: Optional[torch.Tensor],
-        depth_dist: Optional[torch.Tensor],
-        normal_dist: Optional[torch.Tensor],
-        ref_alpha: Optional[torch.Tensor],
-        mask: Optional[torch.Tensor],
-        depth_mask: Optional[torch.Tensor],
-        normal_mask: Optional[torch.Tensor],
-        alpha_mask: Optional[torch.Tensor],
-        weights: List[float],
-        num_train_images: int = -1,
-        camera_indices: Optional[torch.Tensor] = None,
-        return_loss_map: bool = False,
-        loss_map_ssim_weight: Optional[float] = None
-    ):
-        if not isinstance(camera_indices, torch.Tensor):
-            num_train_images = -1
-            camera_indices = None
-        
-        tensors = (
-            render_rgb,
-            ref_rgb,
-            render_depth,
-            ref_depth,
-            render_normal,
-            depth_normal,
-            ref_normal,
-            render_Ts,
-            rgb_dist,
-            depth_dist,
-            normal_dist,
-            ref_alpha,
-            mask,
-            depth_mask,
-            normal_mask,
-            alpha_mask
-        )
-
-        losses, raw_losses, loss_map = _C.compute_per_pixel_losses_forward(
-            *tensors, weights,
-            num_train_images, camera_indices,
-            return_loss_map
-        )
-        # print(losses)
-        # print(raw_losses[0].detach().cpu().numpy().tolist())
-        # print(raw_losses[1].detach().cpu().numpy().tolist())
-
-        USE_MEMORY_EFFICIENT_SSIM = True
-
-        if loss_map is not None:
-            ssim, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = _make_lazy_cuda_func("fused_ssim_forward_inplace")(
-                render_rgb, ref_rgb, not USE_MEMORY_EFFICIENT_SSIM, loss_map_ssim_weight, loss_map, False)
-        else:
-            ssim, _, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = _make_lazy_cuda_func("fused_ssim_forward")(
-                render_rgb, ref_rgb, not USE_MEMORY_EFFICIENT_SSIM, False, False)
-        if USE_MEMORY_EFFICIENT_SSIM:
-            dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = None, None, None
-
-        ctx.weights = weights
-        ctx.num_train_images = num_train_images
-        ctx.saved_tensors = (*tensors, raw_losses, camera_indices, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
-
-        # print('loss_map:', loss_map.mean().item(), loss_map.median().item())
-
-        return losses, ssim, loss_map
-
-    def backward(ctx, v_losses, v_ssim):
-        # warn that loss map is not differentiable
-
-        camera_indices, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = ctx.saved_tensors[-4:]
-
-        grads = _C.compute_per_pixel_losses_backward(
-            *ctx.saved_tensors[:-4],
-            ctx.weights,
-            v_losses,
-            # ctx.needs_input_grad,
-            [True] * len(ctx.saved_tensors[:-4]),  # TODO
-            ctx.num_train_images,
-            camera_indices,
-        )
-
-        # TODO: support gradient to ref_rgb
-        _make_lazy_cuda_func("fused_ssim_backward_inplace")(*ctx.saved_tensors[:2], v_ssim, dm_dmu1, dm_dsigma1_sq, dm_dsigma12, grads[0])
-
-        return grads
-
-
 class _ComputePPISPRegularization(torch.autograd.Function):
     @staticmethod
     def forward(
@@ -800,24 +702,6 @@ class SplatTrainingLosses:
             gt_alpha_mask,
         ]]
 
-        for scale in range(1, self.config.num_loss_scales+1):
-            pooled = []
-            for image in all_images[-1]:
-                if not isinstance(image, torch.Tensor):
-                    pooled.append(image)
-                elif image.dtype == torch.float32:
-                    image = image.permute(0, 3, 1, 2).to(memory_format=torch.channels_last)
-                    pooled.append(F.avg_pool2d(image, 2).permute(0, 2, 3, 1))
-                elif image.dtype == torch.bool:
-                    image = image.permute(0, 3, 1, 2).to(memory_format=torch.channels_last)
-                    # TODO: fused kernel
-                    pooled.append(~F.max_pool2d((~image).float(), 2).bool().permute(0, 2, 3, 1))
-                else:
-                    raise NotImplementedError()
-            all_images.append(pooled)
-
-        # call fused kernel to compute loss
-    
         (weight_depth_dist_reg, weight_normal_dist_reg, weight_rgb_dist_reg), weight_normal_reg = \
             self.get_2dgs_reg_weights()
 
@@ -847,58 +731,37 @@ class SplatTrainingLosses:
         ]
         w_ssim = self.config.ssim_lambda * (1.0 - self.config.lpips_lambda)
 
-        for scale in range(0, self.config.num_loss_scales+1):
+        needs_input_grad = [
+            True,  # pred_rgb
+            False,  # gt_rgb
+            True,  # pred_depth
+            self.config.use_bilateral_grid_for_geometry,  # gt_depth
+            True,  # pred_normal,
+            True,  # pred_depth_normal,
+            self.config.use_bilateral_grid_for_geometry,  # gt_normal,
+            True,  # pred_transmittance,
+            True, True, True,  # distortion, auto False is None
+        ]
 
-            # per pixel losses
-            ComputePerPixelLosses = _ComputePerPixelLosses()
-            compute_loss_map = self.config.use_loss_map or (self.config.compute_hessian_diagonal is not None)
-            losses_pooled, ssim_pooled, loss_map_pooled = ComputePerPixelLosses.forward(
-                *all_images[scale],
-                loss_weights,
-                meta.get("num_train_data", -1),
-                camera.metadata.get('cam_idx', None),
-                compute_loss_map,
-                w_ssim if compute_loss_map else None,
-            )
-            ssim_loss_pooled = 1.0 - ssim_pooled
+        compute_loss_map = self.config.use_loss_map or (self.config.compute_hessian_diagonal is not None)
 
-            if return_grad:
-                v_losses = torch.ones_like(losses_pooled)
-                if v_losses.numel() > 1:
-                    v_losses[1] = 0.0  # psnr
-                grads = ComputePerPixelLosses.backward(
-                    v_losses,
-                    -w_ssim
-                )
-                # print(len(grads), [(x.shape if x is not None else x) for x in grads])
+        NUM_LOSSES = 10
+        v_losses = torch.ones(NUM_LOSSES, device="cuda", dtype=torch.float32)
+        if v_losses.numel() > 1:
+            v_losses[1] = 0.0  # psnr
 
-            # original
-            if scale == 0:
-                ssim, ssim_loss = ssim_pooled, ssim_loss_pooled
-                losses, loss_map = losses_pooled, loss_map_pooled
-                psnr = losses[1]
-                continue
-
-            raise NotImplementedError()
-
-            # downscaled
-            losses = losses + losses_pooled
-            ssim_loss = ssim_loss + ssim_loss_pooled
-            if self.config.compute_hessian_diagonal is not None:
-                with torch.no_grad():
-                    loss_map_pooled = loss_map_pooled.permute(0, 3, 1, 2).to(memory_format=torch.channels_last)
-                    loss_map_pooled = F.upsample(loss_map_pooled, scale_factor=2**scale, mode='nearest').permute(0, 2, 3, 1)
-                    loss_map[:, :loss_map_pooled.shape[1], :loss_map_pooled.shape[2], :] += loss_map_pooled
-
-        if self.config.num_loss_scales > 0:
-            raise NotImplementedError()
-            multiplier = 1.0 / (self.config.num_loss_scales + 1)
-            # multiplier = 1.0 / (2.0 - 0.5 ** self.config.num_loss_scales)
-            losses = losses * multiplier
-            ssim_loss = ssim_loss * multiplier
-            if self.config.compute_hessian_diagonal is not None:
-                with torch.no_grad():
-                    loss_map *= multiplier
+        losses, loss_map, grads, (psnr, ssim) = _make_lazy_cuda_func("compute_multi_scale_per_pixel_losses")(
+            self.config.num_loss_scales + 1,
+            # 2,
+            *all_images[0],
+            loss_weights,
+            w_ssim,
+            v_losses,
+            needs_input_grad,
+            meta.get("num_train_data", -1),
+            camera.metadata.get('cam_idx', None),
+            compute_loss_map
+        )
 
         (
             rgb_loss, rgb_psnr,
@@ -921,7 +784,7 @@ class SplatTrainingLosses:
         #     plt.show()
 
         # note that rgb_loss is already multipled by (1.0 - self.config.ssim_lambda) * (1.0 - self.config.lpips_lambda)
-        image_loss = rgb_loss + w_ssim * ssim_loss
+        image_loss = rgb_loss.item() + w_ssim * (1.0 - ssim)
 
         # LPIPS for training
         if self.config.lpips_lambda > 0.0:
@@ -959,8 +822,6 @@ class SplatTrainingLosses:
                 self._running_metrics = { 'psnr': [], 'ssim': [], 'lpips': [] }
             psnr_list = self._running_metrics['psnr']
             ssim_list = self._running_metrics['ssim']
-            psnr = psnr.item()
-            ssim = ssim.item()
             psnr_list.append(psnr)
             ssim_list.append(ssim)
             if len(psnr_list) > list_cap_max:

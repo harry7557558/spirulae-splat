@@ -1,4 +1,5 @@
 #include "PerPixelLoss.cuh"
+#include "FusedSSIM.cuh"
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
@@ -450,7 +451,7 @@ compute_per_pixel_losses_forward_tensor(
 
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<
+std::tuple<  // returns gradients
     std::optional<at::Tensor>, // render_rgb
     std::optional<at::Tensor>, // ref_rgb
     std::optional<at::Tensor>, // render_depth
@@ -574,3 +575,329 @@ std::tuple<
 }
 
 
+__global__ void avg_pool_downsample_float_kernel(
+    const TensorView<float, 4> image_hs,
+    TensorView<float, 4> image_ls
+) {
+    uint32_t xid = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t yid = blockIdx.y * blockDim.y + threadIdx.y;
+    uint32_t bid = blockIdx.z * blockDim.z + threadIdx.z;
+    if (yid >= image_ls.shape[1] || xid >= image_ls.shape[2])
+        return;
+    for (int c = 0; c < image_ls.shape[3]; ++c) {
+        float v =
+            image_hs.at(bid, 2*yid+0, 2*xid+0, c) +
+            image_hs.at(bid, 2*yid+0, 2*xid+1, c) +
+            image_hs.at(bid, 2*yid+1, 2*xid+0, c) +
+            image_hs.at(bid, 2*yid+1, 2*xid+1, c);
+        image_ls.at(bid, yid, xid, c) = 0.25f*v;
+    }
+}
+
+__global__ void avg_pool_downsample_bool_kernel(
+    const TensorView<uint8_t, 4> image_hs,
+    TensorView<uint8_t, 4> image_ls
+) {
+    uint32_t xid = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t yid = blockIdx.y * blockDim.y + threadIdx.y;
+    uint32_t bid = blockIdx.z * blockDim.z + threadIdx.z;
+    if (yid >= image_ls.shape[1] || xid >= image_ls.shape[2])
+        return;
+    for (int c = 0; c < image_ls.shape[3]; ++c) {
+        uint8_t v =
+            image_hs.at(bid, 2*yid+0, 2*xid+0, c) +
+            image_hs.at(bid, 2*yid+0, 2*xid+1, c) +
+            image_hs.at(bid, 2*yid+1, 2*xid+0, c) +
+            image_hs.at(bid, 2*yid+1, 2*xid+1, c);
+        image_ls.at(bid, yid, xid, c) = (uint8_t)(v >= 2);
+    }
+}
+
+__global__ void avg_pool_upsample_float_kernel(
+    TensorView<float, 4> image_hs,
+    const TensorView<float, 4> image_ls,
+    int scale,
+    float a, float b
+) {
+    uint32_t xid = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t yid = blockIdx.y * blockDim.y + threadIdx.y;
+    uint32_t bid = blockIdx.z * blockDim.z + threadIdx.z;
+    if (yid >= image_hs.shape[1] || xid >= image_hs.shape[2])
+        return;
+    for (int c = 0; c < image_hs.shape[3]; ++c) {
+        float v = (a == 0.0f) ? 0.0f :
+            a * image_hs.at(bid, yid, xid, c);
+        if (yid/scale < image_ls.shape[1] && xid/scale < image_ls.shape[2])
+            v += b * image_ls.at(bid, yid/scale, xid/scale, c);
+        image_hs.at(bid, yid, xid, c) = v;
+    }
+}
+
+
+/*[AutoHeaderGeneratorExport]*/
+std::tuple<
+    at::Tensor,  // mean losses
+    std::optional<at::Tensor>,  // loss map
+    std::optional<std::tuple<
+        std::optional<at::Tensor>, // render_rgb
+        std::optional<at::Tensor>, // ref_rgb
+        std::optional<at::Tensor>, // render_depth
+        std::optional<at::Tensor>, // ref_depth
+        std::optional<at::Tensor>, // render_normal
+        std::optional<at::Tensor>, // depth_normal
+        std::optional<at::Tensor>, // ref_normal
+        std::optional<at::Tensor>, // render_Ts
+        std::optional<at::Tensor>, // rgb_dist
+        std::optional<at::Tensor>, // depth_dist
+        std::optional<at::Tensor> // normal_dist
+    >>,
+    std::tuple<
+        float,  // psnr value
+        float  // ssim value
+    >
+> compute_multi_scale_per_pixel_losses_tensor(
+    int num_loss_scales,
+    std::optional<at::Tensor> render_rgb,
+    std::optional<at::Tensor> ref_rgb,
+    std::optional<at::Tensor> render_depth,
+    std::optional<at::Tensor> ref_depth,
+    std::optional<at::Tensor> render_normal,
+    std::optional<at::Tensor> depth_normal,
+    std::optional<at::Tensor> ref_normal,
+    std::optional<at::Tensor> render_Ts,
+    std::optional<at::Tensor> rgb_dist,
+    std::optional<at::Tensor> depth_dist,
+    std::optional<at::Tensor> normal_dist,
+    std::optional<at::Tensor> ref_alpha,
+    std::optional<at::Tensor> mask,
+    std::optional<at::Tensor> depth_mask,
+    std::optional<at::Tensor> normal_mask,
+    std::optional<at::Tensor> alpha_mask,
+    const std::array<float, (int)LossWeightIndex::length> loss_weights_0,
+    const float w_ssim,
+    std::optional<at::Tensor> v_losses,
+    std::vector<bool> needs_input_grad,
+    long num_train_images,
+    std::optional<at::Tensor> camera_indices,
+    bool return_loss_map
+) {
+    DEVICE_GUARD(render_rgb.value());
+
+    long B = render_rgb.value().size(0);
+    long H = render_rgb.value().size(1);
+    long W = render_rgb.value().size(2);
+
+    // Create scale tensors
+    std::vector<std::optional<at::Tensor>> render_rgb_scales(num_loss_scales);
+    std::vector<std::optional<at::Tensor>> ref_rgb_scales(num_loss_scales);
+    std::vector<std::optional<at::Tensor>> render_depth_scales(num_loss_scales);
+    std::vector<std::optional<at::Tensor>> ref_depth_scales(num_loss_scales);
+    std::vector<std::optional<at::Tensor>> render_normal_scales(num_loss_scales);
+    std::vector<std::optional<at::Tensor>> depth_normal_scales(num_loss_scales);
+    std::vector<std::optional<at::Tensor>> ref_normal_scales(num_loss_scales);
+    std::vector<std::optional<at::Tensor>> render_Ts_scales(num_loss_scales);
+    std::vector<std::optional<at::Tensor>> rgb_dist_scales(num_loss_scales);
+    std::vector<std::optional<at::Tensor>> depth_dist_scales(num_loss_scales);
+    std::vector<std::optional<at::Tensor>> normal_dist_scales(num_loss_scales);
+    std::vector<std::optional<at::Tensor>> ref_alpha_scales(num_loss_scales);
+    std::vector<std::optional<at::Tensor>> mask_scales(num_loss_scales);
+    std::vector<std::optional<at::Tensor>> depth_mask_scales(num_loss_scales);
+    std::vector<std::optional<at::Tensor>> normal_mask_scales(num_loss_scales);
+    std::vector<std::optional<at::Tensor>> alpha_mask_scales(num_loss_scales);
+
+    render_rgb_scales[0] = render_rgb;
+    ref_rgb_scales[0] = ref_rgb;
+    render_depth_scales[0] = render_depth;
+    ref_depth_scales[0] = ref_depth;
+    render_normal_scales[0] = render_normal;
+    depth_normal_scales[0] = depth_normal;
+    ref_normal_scales[0] = ref_normal;
+    render_Ts_scales[0] = render_Ts;
+    rgb_dist_scales[0] = rgb_dist;
+    depth_dist_scales[0] = depth_dist;
+    normal_dist_scales[0] = normal_dist;
+    ref_alpha_scales[0] = ref_alpha;
+    mask_scales[0] = mask;
+    depth_mask_scales[0] = depth_mask;
+    normal_mask_scales[0] = normal_mask;
+    alpha_mask_scales[0] = alpha_mask;
+
+    // Downsample to create scales
+    for (int scale = 1; scale < num_loss_scales; ++scale) {
+        long H_prev = render_rgb_scales[scale-1].value().size(1);
+        long W_prev = render_rgb_scales[scale-1].value().size(2);
+        long H_new = H_prev / 2;
+        long W_new = W_prev / 2;
+
+        // Float tensors
+        auto downsample_float = [&](std::optional<at::Tensor>& prev, std::optional<at::Tensor>& curr, int C) {
+            if (prev.has_value()) {
+                curr = at::empty({B, H_new, W_new, C}, prev.value().options());
+                dim3 grid((W_new + 15) / 16, (H_new + 15) / 16, B);
+                dim3 block(16, 16, 1);
+                avg_pool_downsample_float_kernel<<<grid, block>>>(
+                    tensor2view<float, 4>(prev.value()),
+                    tensor2view<float, 4>(curr.value())
+                );
+                CHECK_DEVICE_ERROR(cudaGetLastError());
+            }
+        };
+
+        downsample_float(render_rgb_scales[scale-1], render_rgb_scales[scale], 3);
+        downsample_float(ref_rgb_scales[scale-1], ref_rgb_scales[scale], 3);
+        downsample_float(render_depth_scales[scale-1], render_depth_scales[scale], 1);
+        downsample_float(ref_depth_scales[scale-1], ref_depth_scales[scale], 1);
+        downsample_float(render_normal_scales[scale-1], render_normal_scales[scale], 3);
+        downsample_float(depth_normal_scales[scale-1], depth_normal_scales[scale], 3);
+        downsample_float(ref_normal_scales[scale-1], ref_normal_scales[scale], 3);
+        downsample_float(render_Ts_scales[scale-1], render_Ts_scales[scale], 1);
+        downsample_float(rgb_dist_scales[scale-1], rgb_dist_scales[scale], 3);
+        downsample_float(depth_dist_scales[scale-1], depth_dist_scales[scale], 1);
+        downsample_float(normal_dist_scales[scale-1], normal_dist_scales[scale], 3);
+
+        // Bool tensors
+        auto downsample_bool = [&](std::optional<at::Tensor>& prev, std::optional<at::Tensor>& curr) {
+            if (prev.has_value()) {
+                curr = at::empty({B, H_new, W_new, 1}, prev.value().options());
+                dim3 grid((W_new + 15) / 16, (H_new + 15) / 16, B);
+                dim3 block(16, 16, 1);
+                avg_pool_downsample_bool_kernel<<<grid, block>>>(
+                    tensor2view<uint8_t, 4>(prev.value()),
+                    tensor2view<uint8_t, 4>(curr.value())
+                );
+                CHECK_DEVICE_ERROR(cudaGetLastError());
+            }
+        };
+
+        downsample_bool(ref_alpha_scales[scale-1], ref_alpha_scales[scale]);
+        downsample_bool(mask_scales[scale-1], mask_scales[scale]);
+        downsample_bool(depth_mask_scales[scale-1], depth_mask_scales[scale]);
+        downsample_bool(normal_mask_scales[scale-1], normal_mask_scales[scale]);
+        downsample_bool(alpha_mask_scales[scale-1], alpha_mask_scales[scale]);
+    }
+
+    at::Tensor total_losses = at::zeros({(uint)LossIndex::length}, render_rgb.value().options());
+    std::optional<at::Tensor> total_loss_map;
+    float psnr_val = 0.0f;
+    float ssim_val = 0.0f;
+
+    std::optional<at::Tensor> v_render_rgb_acc = needs_input_grad[0] && render_rgb.has_value() ? (std::optional<at::Tensor>)at::empty({0}, render_rgb.value().options()) : std::nullopt;
+    std::optional<at::Tensor> v_ref_rgb_acc = needs_input_grad[1] && ref_rgb.has_value() ? (std::optional<at::Tensor>)at::empty({0}, ref_rgb.value().options()) : std::nullopt;
+    std::optional<at::Tensor> v_render_depth_acc = needs_input_grad[2] && render_depth.has_value() ? (std::optional<at::Tensor>)at::empty({0}, render_depth.value().options()) : std::nullopt;
+    std::optional<at::Tensor> v_ref_depth_acc = needs_input_grad[3] && ref_depth.has_value() ? (std::optional<at::Tensor>)at::empty({0}, ref_depth.value().options()) : std::nullopt;
+    std::optional<at::Tensor> v_render_normal_acc = needs_input_grad[4] && render_normal.has_value() ? (std::optional<at::Tensor>)at::empty({0}, render_normal.value().options()) : std::nullopt;
+    std::optional<at::Tensor> v_depth_normal_acc = needs_input_grad[5] && depth_normal.has_value() ? (std::optional<at::Tensor>)at::empty({0}, depth_normal.value().options()) : std::nullopt;
+    std::optional<at::Tensor> v_ref_normal_acc = needs_input_grad[6] && ref_normal.has_value() ? (std::optional<at::Tensor>)at::empty({0}, ref_normal.value().options()) : std::nullopt;
+    std::optional<at::Tensor> v_render_Ts_acc = needs_input_grad[7] && render_Ts.has_value() ? (std::optional<at::Tensor>)at::empty({0}, render_Ts.value().options()) : std::nullopt;
+    std::optional<at::Tensor> v_rgb_dist_acc = needs_input_grad[8] && rgb_dist.has_value() ? (std::optional<at::Tensor>)at::empty({0}, rgb_dist.value().options()) : std::nullopt;
+    std::optional<at::Tensor> v_depth_dist_acc = needs_input_grad[9] && depth_dist.has_value() ? (std::optional<at::Tensor>)at::empty({0}, depth_dist.value().options()) : std::nullopt;
+    std::optional<at::Tensor> v_normal_dist_acc = needs_input_grad[10] && normal_dist.has_value() ? (std::optional<at::Tensor>)at::empty({0}, normal_dist.value().options()) : std::nullopt;
+
+    std::optional<std::tuple<
+        std::optional<at::Tensor>, std::optional<at::Tensor>, std::optional<at::Tensor>, std::optional<at::Tensor>,
+        std::optional<at::Tensor>, std::optional<at::Tensor>, std::optional<at::Tensor>, std::optional<at::Tensor>,
+        std::optional<at::Tensor>, std::optional<at::Tensor>, std::optional<at::Tensor>
+    >> grads;
+
+    for (int scale = 0; scale < num_loss_scales; ++scale) {
+
+        auto [losses, raw_losses, loss_map] = compute_per_pixel_losses_forward_tensor(
+            render_rgb_scales[scale], ref_rgb_scales[scale], render_depth_scales[scale], ref_depth_scales[scale],
+            render_normal_scales[scale], depth_normal_scales[scale], ref_normal_scales[scale], render_Ts_scales[scale],
+            rgb_dist_scales[scale], depth_dist_scales[scale], normal_dist_scales[scale],
+            ref_alpha_scales[scale], mask_scales[scale], depth_mask_scales[scale], normal_mask_scales[scale], alpha_mask_scales[scale],
+            loss_weights_0, num_train_images, camera_indices, return_loss_map
+        );
+        auto grad_tuple = compute_per_pixel_losses_backward_tensor(
+            render_rgb_scales[scale], ref_rgb_scales[scale], render_depth_scales[scale], ref_depth_scales[scale],
+            render_normal_scales[scale], depth_normal_scales[scale], ref_normal_scales[scale], render_Ts_scales[scale],
+            rgb_dist_scales[scale], depth_dist_scales[scale], normal_dist_scales[scale],
+            ref_alpha_scales[scale], mask_scales[scale], depth_mask_scales[scale], normal_mask_scales[scale], alpha_mask_scales[scale],
+            raw_losses, loss_weights_0, v_losses.value(), needs_input_grad, num_train_images, camera_indices
+        );
+
+        // Backward
+        float ssim = fused_ssim_inplace(
+            render_rgb_scales[scale].value(),
+            ref_rgb_scales[scale].value(),
+            -w_ssim,
+            std::get<0>(grad_tuple).value(),
+            scale == 0,
+            return_loss_map && loss_map.has_value() ?
+                loss_map.value() :
+                (std::optional<at::Tensor>)std::nullopt,
+            w_ssim
+        );
+        if (scale == 0) {
+            psnr_val = losses[1].item<float>();
+            ssim_val = ssim;
+        }
+
+        total_losses += losses;
+        if (return_loss_map && loss_map.has_value()) {
+            if (scale == 0) {
+                total_loss_map = loss_map;
+            } else {
+                long H_scale = loss_map.value().size(1);
+                long W_scale = loss_map.value().size(2);
+                dim3 grid((W + 15) / 16, (H + 15) / 16, B);
+                dim3 block(16, 16, 1);
+                avg_pool_upsample_float_kernel<<<grid, block>>>(
+                    tensor2view<float, 4>(total_loss_map.value()),
+                    tensor2view<float, 4>(loss_map.value()),
+                    1 << scale,
+                    scale == 1 ? 1.0f / num_loss_scales : 1.0f,
+                    1.0f / num_loss_scales
+                );
+                CHECK_DEVICE_ERROR(cudaGetLastError());
+            }
+        }
+
+        auto upsample_grad = [&](std::optional<at::Tensor>& grad_scale, std::optional<at::Tensor>& grad_acc, int C) {
+            if (grad_acc.has_value() && scale == 0) {
+                grad_acc = grad_scale;
+                return;
+            }
+            if (grad_scale.has_value() && grad_acc.has_value()) {
+                long H_scale = grad_scale.value().size(1);
+                long W_scale = grad_scale.value().size(2);
+                dim3 grid((W + 15) / 16, (H + 15) / 16, B);
+                dim3 block(16, 16, 1);
+                float a = (scale == 1 ? 1.0f / num_loss_scales : 1.0f);
+                float b = powf(0.25f, (float)scale) / num_loss_scales;
+                avg_pool_upsample_float_kernel<<<grid, block>>>(
+                    tensor2view<float, 4>(grad_acc.value()),
+                    tensor2view<float, 4>(grad_scale.value()),
+                    1 << scale, a, b
+                );
+                CHECK_DEVICE_ERROR(cudaGetLastError());
+            }
+        };
+
+        upsample_grad(std::get<0>(grad_tuple), v_render_rgb_acc, 3);
+        upsample_grad(std::get<1>(grad_tuple), v_ref_rgb_acc, 3);
+        upsample_grad(std::get<2>(grad_tuple), v_render_depth_acc, 1);
+        upsample_grad(std::get<3>(grad_tuple), v_ref_depth_acc, 1);
+        upsample_grad(std::get<4>(grad_tuple), v_render_normal_acc, 3);
+        upsample_grad(std::get<5>(grad_tuple), v_depth_normal_acc, 3);
+        upsample_grad(std::get<6>(grad_tuple), v_ref_normal_acc, 3);
+        upsample_grad(std::get<7>(grad_tuple), v_render_Ts_acc, 1);
+        upsample_grad(std::get<8>(grad_tuple), v_rgb_dist_acc, 3);
+        upsample_grad(std::get<9>(grad_tuple), v_depth_dist_acc, 1);
+        upsample_grad(std::get<10>(grad_tuple), v_normal_dist_acc, 3);
+
+    }
+    total_losses *= (1.0f / (float)num_loss_scales);
+
+    if (v_losses.has_value())  // TODO: don't do backward when this is False
+        grads = std::make_tuple(
+            v_render_rgb_acc, v_ref_rgb_acc, v_render_depth_acc, v_ref_depth_acc,
+            v_render_normal_acc, v_depth_normal_acc, v_ref_normal_acc, v_render_Ts_acc,
+            v_rgb_dist_acc, v_depth_dist_acc, v_normal_dist_acc
+        );
+
+    return std::make_tuple(
+        total_losses, total_loss_map, grads,
+        std::make_tuple(psnr_val, ssim_val)
+    );
+}

@@ -44,3 +44,13 @@ void fused_ssim_backward_inplace(
     std::optional<at::Tensor> &dm_dsigma12,
     at::Tensor &dL_dimg1
 );
+
+float fused_ssim_inplace(
+    at::Tensor &img1,
+    at::Tensor &img2,
+    const float dL_dmap,
+    at::Tensor &dL_dimg1,
+    bool return_ssim_val,
+    std::optional<at::Tensor> ssim_loss_map,
+    float ssim_loss_map_weight
+);

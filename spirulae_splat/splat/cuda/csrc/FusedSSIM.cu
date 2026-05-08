@@ -548,7 +548,10 @@ __global__ void memory_efficient_ssim_backward_kernel(
     const float3* __restrict__ img1,   // [B, H, W, 3]
     const float3* __restrict__ img2,   // [B, H, W, 3]
     const float dL_dmap, // [1]
-    float3* __restrict__ dL_dimg1      // [B, H, W, 3]
+    float3* __restrict__ dL_dimg1,      // [B, H, W, 3]
+    float* __restrict__ out_ssim_val,
+    float ssim_loss_map_weight,
+    float* __restrict__ ssim_loss_map
 ) {
     auto block = cg::this_thread_block();
 
@@ -577,6 +580,8 @@ __global__ void memory_efficient_ssim_backward_kernel(
     #define sScratch(i, j, k) _shared_buffer2[((i)*CONV_X_ME+(j))*3+(k)]
 
     // TODO: some shared memory can be reused to improve occupancy
+
+    float ssim_val = 0.0f;
 
     #pragma unroll
     for (int ci = 0; ci < 3; ci++) {
@@ -719,6 +724,12 @@ __global__ void memory_efficient_ssim_backward_kernel(
         float C_ = 2.f * mu1 * mu2 + kC1;
         float D_ = 2.f * sigma12 + kC2;
 
+        if ((out_ssim_val || ssim_loss_map)
+                && lx < BLOCK_X_ME && (ly-HALO) < BLOCK_Y_ME
+        ) {
+            ssim_val += (C_ * D_) / (A * B);
+        }
+
         // partial derivatives
         float d_m_dmu1 = (
             (mu2 * 2.f * D_) / (A * B)
@@ -813,7 +824,7 @@ __global__ void memory_efficient_ssim_backward_kernel(
         float dL_dpix = sum0 + (2.f * p1) * sum1 + (p2) * sum2;
 
         int out_idx = bIdx * num_pix + pix_id;
-        if (inplace)
+        if constexpr (inplace)
             ((float*)dL_dimg1)[out_idx*3+ci] += dL_dpix;
         else
             ((float*)dL_dimg1)[out_idx*3+ci] = dL_dpix;
@@ -825,6 +836,19 @@ __global__ void memory_efficient_ssim_backward_kernel(
     #undef xconv
     #undef sData
     #undef sScratch
+
+    ssim_val /= 3.0f;
+    if (ssim_loss_map && pix_x < W && pix_y < H) {
+        int out_idx = bIdx * num_pix + pix_id;
+        if constexpr (inplace)
+            ssim_loss_map[out_idx] += ssim_loss_map_weight * (1.0f - ssim_val);
+        else
+            ssim_loss_map[out_idx] = 1.0f - ssim_val;
+    }
+    if (out_ssim_val) {
+        ssim_val /= B*H*W;
+        atomicAddFVec<BLOCK_X_ME*BLOCK_Y_ME>(out_ssim_val, ssim_val);
+    }
 }
 
 // ------------------------------------------
@@ -972,7 +996,8 @@ fused_ssim_backward(
             (float3*)img1.data_ptr<float>(),
             (float3*)img2.data_ptr<float>(),
             dL_dmap,
-            (float3*)dL_dimg1.data_ptr<float>()
+            (float3*)dL_dimg1.data_ptr<float>(),
+            nullptr, 1.0f, nullptr
         );
     }
 
@@ -1019,8 +1044,61 @@ void fused_ssim_backward_inplace(
             (float3*)img1.data_ptr<float>(),
             (float3*)img2.data_ptr<float>(),
             dL_dmap,
-            (float3*)dL_dimg1.data_ptr<float>()
+            (float3*)dL_dimg1.data_ptr<float>(),
+            nullptr, 1.0f, nullptr
         );
     }
 
+}
+
+
+float fused_ssim_inplace(
+    at::Tensor &img1,
+    at::Tensor &img2,
+    const float dL_dmap,
+    at::Tensor &dL_dimg1,
+    bool return_ssim_val,
+    std::optional<at::Tensor> ssim_loss_map,
+    float ssim_loss_map_weight
+) {
+    DEVICE_GUARD(img1);
+    CHECK_INPUT(img1);
+    CHECK_INPUT(img2);
+    CHECK_INPUT(dL_dimg1);
+    if (ssim_loss_map.has_value())
+        CHECK_INPUT(ssim_loss_map.value());
+
+    int B  = img1.size(0);
+    int H  = img1.size(1);
+    int W  = img1.size(2);
+    int CH = img1.size(3);
+
+    if (ssim_loss_map.has_value()) {
+        if (ssim_loss_map.value().ndimension() != 4 ||
+            ssim_loss_map.value().size(0) != B ||
+            ssim_loss_map.value().size(1) != H ||
+            ssim_loss_map.value().size(2) != W ||
+            ssim_loss_map.value().size(3) != 1
+        ) throw std::runtime_error("img1 and ssim_loss_map size mismatch");
+    }
+
+    at::Tensor ssim_val;
+    if (return_ssim_val) {
+        ssim_val = at::empty({1}, img1.options());
+        set_zero<float>(ssim_val);
+    }
+
+    memory_efficient_ssim_backward_kernel<true><<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X_ME, BLOCK_Y_ME, 1)>>>(
+        B, H, W,
+        (float3*)img1.data_ptr<float>(),
+        (float3*)img2.data_ptr<float>(),
+        dL_dmap,
+        (float3*)dL_dimg1.data_ptr<float>(),
+        return_ssim_val ? ssim_val.data_ptr<float>() : nullptr,
+        ssim_loss_map_weight,
+        ssim_loss_map.has_value() ? ssim_loss_map.value().data_ptr<float>() : nullptr
+    );
+
+    return return_ssim_val ?
+        ssim_val.item<float>() : -1.0f;
 }

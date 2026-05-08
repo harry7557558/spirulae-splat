@@ -876,3 +876,10 @@ __forceinline__ __device__ uint32_t hash_uint3(uint32_t a, uint32_t b, uint32_t 
     return hash;
 }
 
+__forceinline__ __device__ float sigmoid(float x) {
+    return 1.0f / (1.0f + __expf(-x));
+}
+
+__forceinline__ __device__ float logit(float x) {
+    return __logf(x / (1.0f - x));
+}

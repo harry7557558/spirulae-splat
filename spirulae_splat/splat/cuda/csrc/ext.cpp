@@ -64,6 +64,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // PerPixelLoss.cuh
     m.def("compute_per_pixel_losses_forward", &compute_per_pixel_losses_forward_tensor);
     m.def("compute_per_pixel_losses_backward", &compute_per_pixel_losses_backward_tensor);
+    m.def("compute_multi_scale_per_pixel_losses", &compute_multi_scale_per_pixel_losses_tensor);
 
     // PixelWise.cuh
     m.def("uint8_image_to_float", &uint8_image_to_float_tensor);
