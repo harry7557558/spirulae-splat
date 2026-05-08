@@ -1032,7 +1032,7 @@ at::Tensor depth_to_normal_backward_tensor(
     CHECK_CUDA(v_normals);
 
     int b = depths.size(0), h = depths.size(1), w = depths.size(2);
-    at::Tensor v_depths = zeros_like<float>(depths);
+    at::Tensor v_depths = zeros_like_tensor(depths);
 
     depth_to_normal_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
         cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
@@ -1224,7 +1224,7 @@ std::tuple<at::Tensor, at::Tensor> depth_normal_loss_backward_tensor(
     CHECK_INPUT(intrins);
 
     int b = depths.size(0), h = depths.size(1), w = depths.size(2);
-    at::Tensor v_depths = zeros_like<float>(depths);
+    at::Tensor v_depths = zeros_like_tensor(depths);
     at::Tensor v_gt_normals = at::empty_like(gt_normals);
 
     depth_normal_loss_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
@@ -1509,7 +1509,7 @@ at::Tensor distort_image_tensor(
         AT_ERROR("in_image shape must be (B, H, W, C) where B is consistent with intrins");
 
     int b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
-    at::Tensor out_image = zeros_like<float>(in_image);
+    at::Tensor out_image = zeros_like_tensor(in_image);
 
     distort_image_kernel<false><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
         cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
@@ -1537,7 +1537,7 @@ at::Tensor undistort_image_tensor(
         AT_ERROR("in_image shape must be (B, H, W, C) where B is consistent with intrins");
 
     int b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
-    at::Tensor out_image = zeros_like<float>(in_image);
+    at::Tensor out_image = zeros_like_tensor(in_image);
 
     distort_image_kernel<true><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
         cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
@@ -2316,7 +2316,7 @@ std::tuple<at::Tensor, at::Tensor> ppisp_backward_tensor(
         AT_ERROR("intrins shape must be (B, 4)");
     long b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
     at::Tensor v_in_image = at::empty_like(in_image);
-    at::Tensor v_ppisp_params = zeros_like<float>(ppisp_params);
+    at::Tensor v_ppisp_params = zeros_like_tensor(ppisp_params);
     if (param_type == "original" || param_type == "") {
         if (ppisp_params.ndimension() != 2 || ppisp_params.size(1) != kNumPPISPParams)
             AT_ERROR("ppisp_params shape must be (B, PPISP_NUM_PARAMS)");
@@ -2606,7 +2606,7 @@ at::Tensor compute_ppsip_regularization_backward_tensor(
     long B = ppisp_params.size(0);
 
     at::Tensor v_raw_losses;
-    at::Tensor v_ppisp_params = zeros_like<float>(ppisp_params);
+    at::Tensor v_ppisp_params = zeros_like_tensor(ppisp_params);
 
     if (param_type == "original" || param_type == "") {
         v_raw_losses = at::zeros({(int)RawPPISPRegLossIndex::length}, ppisp_params.options());

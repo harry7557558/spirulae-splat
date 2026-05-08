@@ -120,12 +120,12 @@ struct SphericalVoronoi3DGUT<num_sv>::World : public Base3DGUT::World {
 
         Tensor allocProjBwd(bool is_hess_diag) const {
             return Tensor(std::make_tuple(
-                zeros_like<float>(means),
-                zeros_like<float>(quats),
-                zeros_like<float>(scales),
-                zeros_like<float>(opacities),
-                zeros_like<float>(sv_sites),
-                zeros_like<float>(sv_colors)
+                zeros_like_tensor(means),
+                zeros_like_tensor(quats),
+                zeros_like_tensor(scales),
+                zeros_like_tensor(opacities),
+                zeros_like_tensor(sv_sites),
+                zeros_like_tensor(sv_colors)
             ));
         }
 

@@ -279,18 +279,5 @@ def entrypoint():
         print(f"Failed to send notification: {e}")
 
 
-# if __name__ == "__main__":
-#     entrypoint()
-
-
-def plot_results(path_to_report: str):
-    if path_to_report.startswith("http"):
-        import urllib.request
-        with urllib.request.urlopen(path_to_report) as response:
-            content = response.read().decode('utf-8')
-    else:
-        content = open(path_to_report).read()
-    content = content.split('\n----\n')
-    print(content)
-
-plot_results("https://gist.githubusercontent.com/harry7557558/1709047429643a6bcd6a10fd0d76fb6a/raw/0e779a6904c1fb9e0d7a8ededc4b3cfa8d7e410a/260425.md")
+if __name__ == "__main__":
+    entrypoint()

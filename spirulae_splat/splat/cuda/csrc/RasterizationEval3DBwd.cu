@@ -207,7 +207,7 @@ inline std::tuple<
     typename SplatPrimitive::Screen::Tensor v_splats = splats.allocRasterBwd();
 
     std::optional<at::Tensor> v_viewmats = need_viewmat_grad ?
-        (std::optional<at::Tensor>)zeros_like<float>(viewmats) : (std::optional<at::Tensor>)std::nullopt;
+        (std::optional<at::Tensor>)zeros_like_tensor(viewmats) : (std::optional<at::Tensor>)std::nullopt;
 
     std::optional<typename SplatPrimitive::RenderOutput::Tensor> render_outputs = std::nullopt;
     std::optional<typename SplatPrimitive::RenderOutput::Tensor> render2_outputs = std::nullopt;

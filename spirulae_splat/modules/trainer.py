@@ -307,6 +307,7 @@ class Trainer:
             self.model.eval()
             return self._get_eval_metrics_dict(*args)
 
+    @torch.no_grad()
     def train(self):
         self.start_time = time.time()
         self.last_step_time = self.start_time
@@ -334,6 +335,7 @@ class Trainer:
         if self.config.steps_per_save != 0:
             self.save_checkpoint(self.config.num_iterations)
 
+    @torch.no_grad()
     def eval(self):
         if self.config.dataparser.eval_mode == "all" or len(self.dataset_eval.cameras) == 0:
             return

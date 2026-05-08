@@ -55,6 +55,38 @@ __forceinline__ __device__ float4 sqrtf(float4 v) {
     };
 }
 
+__global__ void set_zero_kernel(size_t numel, float* data) {
+    const size_t idx = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    if (idx < numel)
+        data[idx] = 0.0f;
+}
+
+__global__ void set_zero_kernel(size_t numel, float4* data) {
+    const size_t idx = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    if (idx < numel)
+        data[idx] = float4{0.0f, 0.0f, 0.0f, 0.0f};
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void set_zero_tensor(at::Tensor& x) {
+    DEVICE_GUARD(x);
+    CHECK_INPUT(x);
+    // cudaMemset(x.data_ptr<float>(), 0, x.numel() * sizeof(float));
+    if (x.numel() % 4 == 0)
+        set_zero_kernel<<<_LAUNCH_ARGS_1D(x.numel()/4, 512)>>>
+            (x.numel()/4, (float4*)x.data_ptr<float>());
+    else
+        set_zero_kernel<<<_LAUNCH_ARGS_1D(x.numel(), 512)>>>
+            (x.numel(), x.data_ptr<float>());
+}
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor zeros_like_tensor(const at::Tensor& x) {
+    at::Tensor y = at::empty_like(x);
+    set_zero_tensor(y);
+    return y;
+}
+
 
 // ================
 // "Standard" Adam
@@ -597,7 +629,7 @@ __global__ void fused_adam_scale_agnostic_mean_kernel(
     float opac = opacities[idx];
     float3 sqrt_scale = float3{expf(0.5f*log_scale.x), expf(0.5f*log_scale.y), expf(0.5f*log_scale.z)};
     quat = normalize(quat);
-    opac = 1.0f / (1.0f + __expf(-opac));
+    opac = sigmoid(opac);
     Matrix<float, 3, 3> sqrt_covar;
     SlangProjectionUtils::quat_scale_to_covar(quat, sqrt_scale, &sqrt_covar);
     Matrix<float, 3, 3> covar;
@@ -796,9 +828,9 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     float g2_opac = beta2 * g2_opacities[idx] + (1.f - beta2) * v_opac*v_opac;
     float updated_opac = opac - lr_opacs * g1_opac / (sqrtf(g2_opac * inv_bias_correction2) + eps);
     if (mrnf_opacity_decay_factor != 0.0f) {
-        updated_opac = 1.0f / (1.0f + __expf(-updated_opac));
+        updated_opac = sigmoid(updated_opac);
         updated_opac = fmaxf(updated_opac + mrnf_opacity_decay_factor, 1e-12f);
-        updated_opac = __logf(updated_opac / (1.0f - updated_opac));
+        updated_opac = logit(updated_opac);
     }
     opacities[idx] = updated_opac;
     g1_opacities[idx] = g1_opac;
@@ -810,7 +842,7 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     float3 g1_mean = g1_means[idx];
     float3 g2_mean = g2_means[idx];
 
-    float opac_post_sigmoid = 1.0f / (1.0f + __expf(-opac));
+    float opac_post_sigmoid = sigmoid(opac);
 
     float noise_lr_scalar = 1.0f;
     if constexpr (use_scale_agnostic_mean) {
@@ -1086,7 +1118,7 @@ __global__ void fused_3dgs2tr_mean_optim_kernel(
         float opac = opacities[idx];
         scale = {expf(scale.x), expf(scale.y), expf(scale.z)};
         quat = normalize(quat);
-        opac = 1.0f / (1.0f + __expf(-opac));
+        opac = sigmoid(opac);
         Matrix<float, 3, 3> covar;
         SlangProjectionUtils::quat_scale_to_covar(quat, scale, &covar);
         float k = -8.0f * __logf(1.0f - eps_tr / fmaxf(opac, 1e-12f));
@@ -1203,7 +1235,7 @@ __global__ void fused_3dgs2tr_scale_optim_kernel(
 
         // Compute trust region
         float opac = opacities[idx];
-        opac = 1.0f / (1.0f + __expf(-opac));
+        opac = sigmoid(opac);
         float clip = sqrtf(2.0f * eps_tr / fmaxf(opac, 1e-12f));
 
         // clip and update
@@ -1307,7 +1339,7 @@ __global__ void fused_3dgs2tr_color_optim_kernel(
 
         // Compute trust region
         float opac = opacities[idx];
-        opac = 1.0f / (1.0f + __expf(-opac));
+        opac = sigmoid(opac);
         // float3 color = fmaxf(kSh0 * colors[idx] + 0.5f, (0.5f/255.0f)*(0.5f/255.0f));
         // float3 color = fmaxf(kSh0 * colors[idx] + 0.5f, 0.5f/255.0f);
         float3 color = fmaxf(kSh0 * colors[idx] + 0.5f, (1.0f/255.0f)*(1.0f/255.0f));
@@ -1413,7 +1445,7 @@ __global__ void fused_3dgs2tr_opacity_optim_kernel(
 
         // Compute trust region
         float opac = opacities[idx];
-        opac = 1.0f / (1.0f + __expf(-opac));
+        opac = sigmoid(opac);
         float clip = sqrtf(4.0f * eps_tr * opac) / fmaxf(opac * (1.0f - opac), 1e-12f);
 
         // clip and update
@@ -1609,7 +1641,7 @@ __global__ void fused_3dgs2tr_quat_optim_kernel(
         float3 scale = scales[idx];
         float opac = opacities[idx];
         scale = {expf(scale.x), expf(scale.y), expf(scale.z)};
-        opac = 1.0f / (1.0f + __expf(-opac));
+        opac = sigmoid(opac);
         float4 clip = compute_delta_q_bound(quat, scale, opac, eps_tr);
 
         // clip and update
@@ -1818,7 +1850,7 @@ __global__ void fused_adamtr_rgb_optim_kernel(
 
         // Compute trust region
         float opac = opacities[idx];
-        opac = 1.0f / (1.0f + __expf(-opac));
+        opac = sigmoid(opac);
         // float3 rgb = fmaxf(kSh0 * x + 0.5f, (0.5f/255.0f)*(0.5f/255.0f));
         // float3 rgb = fmaxf(kSh0 * x + 0.5f, 0.5f/255.0f);
         float3 rgb = fmaxf(kSh0 * x + 0.5f, (1.0f/255.0f)*(1.0f/255.0f));
@@ -1975,7 +2007,7 @@ __global__ void fused_adamtr_rgb_sh_optim_kernel(
 
         // Compute trust region
         float opac = opacities[idx / (3*num_sh)];
-        opac = 1.0f / (1.0f + __expf(-opac));
+        opac = sigmoid(opac);
         // c = fmaxf(c, (0.5f/255.0f)*(0.5f/255.0f));
         // c = fmaxf(c, 0.5f/255.0f);
         c = fmaxf(c, (1.0f/255.0f)*(1.0f/255.0f));

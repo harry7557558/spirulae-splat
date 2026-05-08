@@ -254,13 +254,13 @@ struct Base3DGUT::Screen {
             if (!hasWorld)
                 throw std::runtime_error("!hasWorld");
             Tensor result = Tensor(std::make_tuple(
-                zeros_like<float>(means),
-                zeros_like<float>(quats),
-                // zeros_like<float>(depths),
+                zeros_like_tensor(means),
+                zeros_like_tensor(quats),
+                // zeros_like_tensor(depths),
                 at::empty({0}, depths.options()),  // gradient is zero
-                zeros_like<float>(scales),
-                zeros_like<float>(opacities),
-                zeros_like<float>(rgbs)
+                zeros_like_tensor(scales),
+                zeros_like_tensor(opacities),
+                zeros_like_tensor(rgbs)
             ));
             return result;
         }

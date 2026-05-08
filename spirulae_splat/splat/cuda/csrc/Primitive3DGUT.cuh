@@ -117,13 +117,13 @@ struct Vanilla3DGUT::World : public Base3DGUT::World {
 
         Tensor allocProjBwd(bool is_hess_diag) const {
             return Tensor(std::make_tuple(
-                zeros_like<float>(means),
-                zeros_like<float>(quats),
-                zeros_like<float>(scales),
-                zeros_like<float>(opacities),
-                zeros_like<float>(features_dc),
+                zeros_like_tensor(means),
+                zeros_like_tensor(quats),
+                zeros_like_tensor(scales),
+                zeros_like_tensor(opacities),
+                zeros_like_tensor(features_dc),
                 features_sh.has_value() && !is_hess_diag ?
-                    (std::optional<at::Tensor>)zeros_like<float>(features_sh.value()) :
+                    (std::optional<at::Tensor>)zeros_like_tensor(features_sh.value()) :
                     (std::optional<at::Tensor>)std::nullopt
             ));
         }

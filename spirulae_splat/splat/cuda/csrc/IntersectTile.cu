@@ -563,7 +563,7 @@ std::tuple<
         {N,},
         at::TensorOptions().device(aabb.device()).dtype(at::kFloat)
     );
-    set_zero<float>(radii);
+    set_zero_tensor(radii);
     if (n_isects == 0)
         return std::make_tuple(
             isect_ids,

@@ -101,7 +101,7 @@ std::tuple<
 
     at::Tensor v_viewmats;
     if (viewmats_requires_grad)
-        v_viewmats = zeros_like<float>(viewmats);
+        v_viewmats = zeros_like_tensor(viewmats);
 
     auto stream = at::cuda::getCurrentCUDAStream();
 

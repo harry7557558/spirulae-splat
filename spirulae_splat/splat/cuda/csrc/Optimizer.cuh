@@ -12,6 +12,12 @@
 
 
 
+void set_zero_tensor(at::Tensor& x);
+
+
+at::Tensor zeros_like_tensor(const at::Tensor& x);
+
+
 void fused_adam(
     at::Tensor param,
     at::Tensor grad,

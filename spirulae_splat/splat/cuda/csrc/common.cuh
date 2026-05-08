@@ -102,4 +102,8 @@ inline void set_zero(at::Tensor& x) {
     cudaMemset(x.data_ptr<T>(), 0, x.numel() * sizeof(T));
 }
 
+at::Tensor zeros_like_tensor(const at::Tensor& x);
+
+void set_zero_tensor(at::Tensor& x);
+
 #endif

@@ -745,10 +745,14 @@ class SplatTrainingLosses:
 
         compute_loss_map = self.config.use_loss_map or (self.config.compute_hessian_diagonal is not None)
 
-        NUM_LOSSES = 10
-        v_losses = torch.ones(NUM_LOSSES, device="cuda", dtype=torch.float32)
-        if v_losses.numel() > 1:
-            v_losses[1] = 0.0  # psnr
+        if not hasattr(self, '_v_losses'):
+            NUM_LOSSES = 10
+            v_losses = torch.ones(NUM_LOSSES, device="cuda", dtype=torch.float32)
+            if v_losses.numel() > 1:
+                v_losses[1] = 0.0  # psnr
+            self._v_losses = v_losses
+        else:
+            v_losses = self._v_losses
 
         losses, loss_map, grads, (psnr, ssim) = _make_lazy_cuda_func("compute_multi_scale_per_pixel_losses")(
             self.config.num_loss_scales + 1,

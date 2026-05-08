@@ -179,6 +179,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("rasterization_voxel_backward", &rasterize_to_pixels_voxel_eval3d_bwd);
 
     // Optimizer.cuh
+    m.def("set_zero", &set_zero_tensor);
+    m.def("zeros_like", &zeros_like_tensor);
     m.def("fused_adam", &fused_adam);
     m.def("offloaded_adam", &offloaded_adam);
     m.def("fused_adam_multi", &fused_adam_multi);

@@ -537,7 +537,7 @@ __global__ void densify_update_weight_kernel(
 
     float weight = fabsf(accum_weight[idx]);
     if (opacs)
-        weight /= 1.0f + __expf(-opacs[idx]);
+        weight /= sigmoid(opacs[idx]);
     if (accum_weight_scalar != nullptr)
         weight *= accum_weight_scalar[0];
     float2 accum = accum_buffer[idx];
@@ -722,7 +722,7 @@ __global__ void compute_relocation_mask_kernel(
         float opac = opacities[idx];
         float3 feature_dc = features_dc[idx];
 
-        bool is_low_opac = (1.0f / (1.0f + __expf(-opac))) <= min_opacity;
+        bool is_low_opac = sigmoid(opac) <= min_opacity;
 
         bool is_finite = isfinite(
             dot(mean, mean) / dot(quat, quat) + dot(scale, feature_dc) * opac
@@ -866,7 +866,7 @@ inline __device__ float binom(float n, float k) {
 inline __device__ void mcmc_relocation(float& opacity, float3& scale, int n_idx) {
     n_idx = min(n_idx, 50);  // log_factorial only fits to 50
 
-    opacity = 1.0f / (1.0f + __expf(-opacity));
+    opacity = sigmoid(opacity);
     scale = {__expf(scale.x), __expf(scale.y), __expf(scale.z)};
 
     float new_opacity = 1.0f - powf(1.0f-opacity, 1.0f / n_idx);
@@ -884,7 +884,7 @@ inline __device__ void mcmc_relocation(float& opacity, float3& scale, int n_idx)
     opacity = new_opacity;
     scale = coeff * scale;
 
-    opacity = __logf(opacity / (1.0f - opacity));
+    opacity = logit(opacity);
     scale = {__logf(scale.x), __logf(scale.y), __logf(scale.z)};
 }
 
@@ -899,7 +899,7 @@ __global__ void mcmc_compute_relocation_probabilities_kernel(
     if (tid >= num_splats)
         return;
 
-    float opac = 1.0f / (1.0f + __expf(-opacs[tid]));
+    float opac = sigmoid(opacs[tid]);
 
     if (opac <= min_opacity || !isfinite(opac))
         opac = 0.0f;

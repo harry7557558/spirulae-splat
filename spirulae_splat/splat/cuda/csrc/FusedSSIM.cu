@@ -880,7 +880,7 @@ fused_ssim_forward(
     std::optional<at::Tensor> ssim_loss_map;
     if (return_ssim_loss_map) {
         ssim_loss_map = at::empty({B, H, W, 1}, img1.options());
-        set_zero<float>(ssim_loss_map.value());
+        set_zero_tensor(ssim_loss_map.value());
     }
 
     // Optionally allocate derivative Tensors
@@ -1085,7 +1085,7 @@ float fused_ssim_inplace(
     at::Tensor ssim_val;
     if (return_ssim_val) {
         ssim_val = at::empty({1}, img1.options());
-        set_zero<float>(ssim_val);
+        set_zero_tensor(ssim_val);
     }
 
     memory_efficient_ssim_backward_kernel<true><<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X_ME, BLOCK_Y_ME, 1)>>>(

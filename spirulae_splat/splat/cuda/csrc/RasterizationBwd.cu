@@ -189,7 +189,7 @@ inline std::tuple<
     std::optional<at::Tensor> o_accum_weight = std::nullopt;
     if (output_accum_weight) {
         o_accum_weight = at::empty({num_splats}, accum_weight_map.value().options());
-        set_zero<float>(o_accum_weight.value());
+        set_zero_tensor(o_accum_weight.value());
     }
 
     launch_rasterize_to_pixels_bwd_kernel

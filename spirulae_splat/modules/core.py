@@ -128,7 +128,7 @@ class Renderer:
     def zero_grad(self):
         if hasattr(self, 'v_splats_world'):
             for tensor in self.v_splats_world:
-                tensor.zero_()
+                _make_lazy_cuda_func("set_zero")(tensor)
         else:
             self.v_splats_world = [
                 torch.zeros_like(x) for x in self.splats_world
@@ -144,7 +144,7 @@ class Renderer:
             ]
 
         if hasattr(self, 'radii'):
-            self.radii.zero_()
+            _make_lazy_cuda_func("set_zero")(self.radii)
 
     def projection_forward(self):
         if self.primitive not in ["3dgs", "mip", "3dgut", "3dgut_sv"]:
@@ -695,4 +695,4 @@ class Renderer:
             self.cur_num_splats += num_add
         
         if hasattr(self, 'densify_accum_buffer'):
-            self.densify_accum_buffer.zero_()
+            _make_lazy_cuda_func("set_zero")(self.densify_accum_buffer)

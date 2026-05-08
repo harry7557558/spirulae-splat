@@ -429,7 +429,7 @@ inline std::tuple<
     typename SplatPrimitive::Screen::Tensor splats(splats_tuple);
     typename SplatPrimitive::Screen::Tensor v_splats = splats.allocRasterBwd();
 
-    at::Tensor v_viewmats = zeros_like<float>(viewmats);  // TODO
+    at::Tensor v_viewmats = zeros_like_tensor(viewmats);  // TODO
 
     std::optional<typename SplatPrimitive::RenderOutput::Tensor> render_outputs = std::nullopt;
     std::optional<typename SplatPrimitive::RenderOutput::Tensor> render2_outputs = std::nullopt;
