@@ -22,7 +22,7 @@ __global__ void projection_3dgs_hetero_backward_kernel(
     const long C,
     const long N,
     const uint32_t nnz,
-    const typename SplatPrimitive::World::Buffer splats_world,
+    const typename SplatPrimitive::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -35,9 +35,9 @@ __global__ void projection_3dgs_hetero_backward_kernel(
     const int32_t *__restrict__ gaussian_ids,   // [nnz]
     const float4 *__restrict__ aabbs,          // [B, C, N, 4]
     // grad outputs
-    typename SplatPrimitive::Screen::Buffer v_splats_proj,
+    typename SplatPrimitive::ScreenBuffer v_splats_proj,
     // grad inputs
-    typename SplatPrimitive::World::Buffer v_splats_world,
+    typename SplatPrimitive::WorldBuffer v_splats_world,
     float *__restrict__ v_viewmats // [C, 4, 4]
 ) {
     // parallelize over nnz.
@@ -66,7 +66,7 @@ __global__ void projection_3dgs_hetero_backward_kernel(
     };
     float3 t = { viewmats[3], viewmats[7], viewmats[11] };
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
-    typename SplatPrimitive::BwdProjCamera cam = {
+    ProjCamera cam = {
         R, t, fx, fy, cx, cy,
         image_width, image_height,
     };

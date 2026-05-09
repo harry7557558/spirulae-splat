@@ -15,7 +15,7 @@ void projection_packed_mask_kernel_wrapper(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const typename SplatPrimitive::World::Buffer splats_world,  // [B, N, ...]
+    const typename SplatPrimitive::WorldBuffer splats_world,  // [B, N, ...]
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -31,7 +31,7 @@ void projection_packed_fwd_kernel_wrapper(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const typename SplatPrimitive::World::Buffer splats_world,  // [B, N, ...]
+    const typename SplatPrimitive::WorldBuffer splats_world,  // [B, N, ...]
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -42,7 +42,7 @@ void projection_packed_fwd_kernel_wrapper(
     int32_t *__restrict__ camera_ids,    // [nnz]
     int32_t *__restrict__ gaussian_ids,  // [nnz]
     float4 *__restrict__ aabbs,         // [nnz, 4]
-    typename SplatPrimitive::Screen::Buffer splats_screen  // [nnz, ...]
+    typename SplatPrimitive::ScreenBuffer splats_screen  // [nnz, ...]
 );
 
 
@@ -51,9 +51,9 @@ inline std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
-    typename SplatPrimitive::Screen::TensorTupleProj  // out splats
+    TensorList  // out splats
 > launch_projection_packed_fwd_kernel(
-    const typename SplatPrimitive::World::TensorTuple &in_splats,
+    const TensorList &in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
@@ -61,20 +61,19 @@ inline std::tuple<
     const ssplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
-    typename SplatPrimitive::World::Tensor splats_world(in_splats);
+    typename SplatPrimitive::WorldBuffer splats_world(in_splats);
     uint32_t N = splats_world.size();    // number of gaussians
     uint32_t C = viewmats.size(-3); // number of cameras
-    uint32_t B = splats_world.batchSize();    // number of batches
-
-    auto opt = splats_world.options();
+    // uint32_t B = splats_world.batchSize();    // number of batches
+    uint32_t B = 1;  // TODO
 
     // mask
 
-    at::Tensor intersection_mask = at::empty({B*C*N}, opt.dtype(at::kBool));
+    at::Tensor intersection_mask = at::empty({B*C*N}, kTensorOptionBool());
 
     #define _LAUNCH_ARGS ( \
             (cudaStream_t)at::cuda::getCurrentCUDAStream(), B, C, N, \
-            splats_world.buffer(), viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
+            splats_world, viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, \
             intersection_mask.data_ptr<bool>() \
         )
@@ -93,7 +92,7 @@ inline std::tuple<
     #if 0
     at::Tensor intersection_mask_scan = at::cumsum(intersection_mask, -1);
     #else
-    at::Tensor intersection_mask_scan = at::empty({B*C*N}, opt.dtype(at::kLong));
+    at::Tensor intersection_mask_scan = at::empty({B*C*N}, kTensorOptionI64());
     {
         size_t temp_storage_bytes = 0;
         cub::DeviceScan::InclusiveSum(
@@ -102,7 +101,7 @@ inline std::tuple<
             intersection_mask_scan.data_ptr<int64_t>(),
             B*C*N);
 
-        at::Tensor temp_storage = at::empty({(int64_t)temp_storage_bytes}, opt.dtype(at::kByte));
+        at::Tensor temp_storage = at::empty({(int64_t)temp_storage_bytes}, kTensorOptionByte());
 
         cub::DeviceScan::InclusiveSum(
             temp_storage.data_ptr<uint8_t>(), temp_storage_bytes,
@@ -115,20 +114,19 @@ inline std::tuple<
 
     // projection
 
-    at::Tensor camera_ids = at::empty({nnz,}, opt.dtype(at::kInt));
-    at::Tensor gaussian_ids = at::empty({nnz,}, opt.dtype(at::kInt));
-    at::Tensor aabb = at::empty({nnz, 4}, opt.dtype(at::kFloat));
+    at::Tensor camera_ids = at::empty({nnz,}, kTensorOptionI32());
+    at::Tensor gaussian_ids = at::empty({nnz,}, kTensorOptionI32());
+    at::Tensor aabb = at::empty({nnz, 4}, kTensorOptionF32());
 
-    typename SplatPrimitive::Screen::Tensor splats_screen =
-        SplatPrimitive::Screen::Tensor::allocProjFwdPacked(nnz, splats_world.options());
+    TensorList splats_screen = SplatPrimitive::ScreenBuffer::empty(nnz);
 
     #define _LAUNCH_ARGS ( \
             (cudaStream_t)at::cuda::getCurrentCUDAStream(), B, C, N, \
-            splats_world.buffer(), viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
+            splats_world, viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, \
             intersection_mask_scan.data_ptr<int64_t>(), \
             camera_ids.data_ptr<int32_t>(), gaussian_ids.data_ptr<int32_t>(), \
-            (float4*)aabb.data_ptr<float>(), splats_screen.buffer() \
+            (float4*)aabb.data_ptr<float>(), splats_screen \
         )
 
     if (camera_model == ssplat::CameraModelType::PINHOLE)
@@ -141,7 +139,7 @@ inline std::tuple<
 
     #undef _LAUNCH_ARGS
 
-    return std::make_tuple(camera_ids, gaussian_ids, aabb, splats_screen.tupleProjFwd());
+    return std::make_tuple(camera_ids, gaussian_ids, aabb, splats_screen);
 }
 
 
@@ -154,10 +152,10 @@ std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
-    typename Vanilla3DGS::Screen::TensorTupleProj  // out splats
+    TensorList  // out splats
 > projection_3dgs_packed_forward_tensor(
     // inputs
-    const Vanilla3DGS::World::TensorTuple &in_splats,
+    const TensorList &in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
@@ -179,10 +177,10 @@ std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
-    MipSplatting::Screen::TensorTupleProj  // out splats
+    TensorList  // out splats
 > projection_mip_packed_forward_tensor(
     // inputs
-    const MipSplatting::World::TensorTuple &in_splats,
+    const TensorList &in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
@@ -205,10 +203,10 @@ std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
-    Vanilla3DGUT::Screen::TensorTupleProj  // out splats
+    TensorList  // out splats
 > projection_3dgut_packed_forward_tensor(
     // inputs
-    const Vanilla3DGUT::World::TensorTuple &in_splats,
+    const TensorList &in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
@@ -221,86 +219,86 @@ std::tuple<
 }
 
 
-// ================
-// SphericalVoronoi3DGUT
-// ================
+// // ================
+// // SphericalVoronoi3DGUT
+// // ================
 
-/*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    at::Tensor,  // camera_ids
-    at::Tensor,  // gaussian_ids
-    at::Tensor,  // aabb
-    SphericalVoronoi3DGUT_Default::Screen::TensorTupleProj  // out splats
-> projection_3dgut_sv_packed_forward_tensor(
-    // inputs
-    const SphericalVoronoi3DGUT_Default::World::TensorTuple &in_splats,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs
-) {
-    int num_sv = std::get<5>(in_splats).size(-2);
-    #define _CASE(n) \
-        if (num_sv == n) return launch_projection_packed_fwd_kernel<SphericalVoronoi3DGUT<n>>( \
-            in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs); \
-    _CASE(2) _CASE(3) _CASE(4) _CASE(5) _CASE(6) _CASE(7) _CASE(8)
-    #undef _CASE
-    throw std::invalid_argument("Unsupported num_sv");
-}
-
-
-
-// ================
-// OpaqueTriangle
-// ================
-
-
-/*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    at::Tensor,  // camera_ids
-    at::Tensor,  // gaussian_ids
-    at::Tensor,  // aabb
-    OpaqueTriangle::Screen::TensorTupleProj  // out splats
-> projection_opaque_triangle_packed_forward_tensor(
-    // inputs
-    const OpaqueTriangle::World::TensorTuple &in_splats,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,   // [..., C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs
-) {
-    return launch_projection_packed_fwd_kernel<OpaqueTriangle>(
-        in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
-}
+// /*[AutoHeaderGeneratorExport]*/
+// std::tuple<
+//     at::Tensor,  // camera_ids
+//     at::Tensor,  // gaussian_ids
+//     at::Tensor,  // aabb
+//     SphericalVoronoi3DGUT_Default::Screen::TensorTupleProj  // out splats
+// > projection_3dgut_sv_packed_forward_tensor(
+//     // inputs
+//     const SphericalVoronoi3DGUT_Default::World::TensorTuple &in_splats,
+//     const at::Tensor viewmats,  // [..., C, 4, 4]
+//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+//     const uint32_t image_width,
+//     const uint32_t image_height,
+//     const std::string camera_model,
+//     const CameraDistortionCoeffsTensor dist_coeffs
+// ) {
+//     int num_sv = std::get<5>(in_splats).size(-2);
+//     #define _CASE(n) \
+//         if (num_sv == n) return launch_projection_packed_fwd_kernel<SphericalVoronoi3DGUT<n>>( \
+//             in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs); \
+//     _CASE(2) _CASE(3) _CASE(4) _CASE(5) _CASE(6) _CASE(7) _CASE(8)
+//     #undef _CASE
+//     throw std::invalid_argument("Unsupported num_sv");
+// }
 
 
 
-// ================
-// VoxelPrimitive
-// ================
+// // ================
+// // OpaqueTriangle
+// // ================
 
 
-/*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    at::Tensor,  // camera_ids
-    at::Tensor,  // gaussian_ids
-    at::Tensor,  // aabb
-    VoxelPrimitive::Screen::TensorTupleProj  // out splats
-> projection_voxel_packed_forward_tensor(
-    // inputs
-    const VoxelPrimitive::World::TensorTuple &in_splats,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,   // [..., C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs
-) {
-    return launch_projection_packed_fwd_kernel<VoxelPrimitive>(
-        in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
-}
+// /*[AutoHeaderGeneratorExport]*/
+// std::tuple<
+//     at::Tensor,  // camera_ids
+//     at::Tensor,  // gaussian_ids
+//     at::Tensor,  // aabb
+//     OpaqueTriangle::Screen::TensorTupleProj  // out splats
+// > projection_opaque_triangle_packed_forward_tensor(
+//     // inputs
+//     const OpaqueTriangle::World::TensorTuple &in_splats,
+//     const at::Tensor viewmats,  // [..., C, 4, 4]
+//     const at::Tensor intrins,   // [..., C, 4], fx, fy, cx, cy
+//     const uint32_t image_width,
+//     const uint32_t image_height,
+//     const std::string camera_model,
+//     const CameraDistortionCoeffsTensor dist_coeffs
+// ) {
+//     return launch_projection_packed_fwd_kernel<OpaqueTriangle>(
+//         in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
+// }
+
+
+
+// // ================
+// // VoxelPrimitive
+// // ================
+
+
+// /*[AutoHeaderGeneratorExport]*/
+// std::tuple<
+//     at::Tensor,  // camera_ids
+//     at::Tensor,  // gaussian_ids
+//     at::Tensor,  // aabb
+//     VoxelPrimitive::Screen::TensorTupleProj  // out splats
+// > projection_voxel_packed_forward_tensor(
+//     // inputs
+//     const VoxelPrimitive::World::TensorTuple &in_splats,
+//     const at::Tensor viewmats,  // [..., C, 4, 4]
+//     const at::Tensor intrins,   // [..., C, 4], fx, fy, cx, cy
+//     const uint32_t image_width,
+//     const uint32_t image_height,
+//     const std::string camera_model,
+//     const CameraDistortionCoeffsTensor dist_coeffs
+// ) {
+//     return launch_projection_packed_fwd_kernel<VoxelPrimitive>(
+//         in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
+// }
 

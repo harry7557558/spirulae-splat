@@ -12,7 +12,7 @@ template void projection_fused_fwd_kernel_wrapper<
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const MipSplatting::World::Buffer splats_world,
+    const MipSplatting::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -20,5 +20,5 @@ template void projection_fused_fwd_kernel_wrapper<
     const uint32_t image_height,
     // outputs
     float4 *__restrict__ aabbs,         // [B, C, N, 4]
-    MipSplatting::Screen::Buffer splats_screen
+    MipSplatting::ScreenBuffer splats_screen
 );

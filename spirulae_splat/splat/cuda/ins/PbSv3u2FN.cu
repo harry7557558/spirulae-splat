@@ -14,7 +14,7 @@ template void projection_fused_bwd_kernel_wrapper<
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const SphericalVoronoi3DGUT<2>::World::Buffer splats_world,
+    const SphericalVoronoi3DGUT<2>::WorldBuffer splats_world,
     const float * viewmats, // [B, C, 4, 4]
     const float4 * intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -25,14 +25,14 @@ template void projection_fused_bwd_kernel_wrapper<
     const int32_t * gaussian_ids,          // [nnz, 4]
     const float4 * aabb,          // [B, C, N, 4]
     // grad outputs
-    SphericalVoronoi3DGUT<2>::Screen::Buffer v_splats_screen,
-    SphericalVoronoi3DGUT<2>::Screen::Buffer vr_splats_screen,
-    SphericalVoronoi3DGUT<2>::Screen::Buffer h_splats_screen,
+    SphericalVoronoi3DGUT<2>::ScreenBuffer v_splats_screen,
+    SphericalVoronoi3DGUT<2>::ScreenBuffer vr_splats_screen,
+    SphericalVoronoi3DGUT<2>::ScreenBuffer h_splats_screen,
     // grad inputs
-    SphericalVoronoi3DGUT<2>::World::Buffer v_splats_world,
+    SphericalVoronoi3DGUT<2>::WorldBuffer v_splats_world,
     float3* vr_world_pos_buffer,
     float3* h_world_pos_buffer,
-    SphericalVoronoi3DGUT<2>::World::Buffer vr_splats_world,
-    SphericalVoronoi3DGUT<2>::World::Buffer h_splats_world,
+    SphericalVoronoi3DGUT<2>::WorldBuffer vr_splats_world,
+    SphericalVoronoi3DGUT<2>::WorldBuffer h_splats_world,
     float * v_viewmats // [B, C, 4, 4] optional
 );

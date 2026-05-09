@@ -14,7 +14,7 @@ template void projection_fused_bwd_kernel_wrapper<
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const Vanilla3DGUT::World::Buffer splats_world,
+    const Vanilla3DGUT::WorldBuffer splats_world,
     const float * viewmats, // [B, C, 4, 4]
     const float4 * intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -25,14 +25,14 @@ template void projection_fused_bwd_kernel_wrapper<
     const int32_t * gaussian_ids,          // [nnz, 4]
     const float4 * aabb,          // [B, C, N, 4]
     // grad outputs
-    Vanilla3DGUT::Screen::Buffer v_splats_screen,
-    Vanilla3DGUT::Screen::Buffer vr_splats_screen,
-    Vanilla3DGUT::Screen::Buffer h_splats_screen,
+    Vanilla3DGUT::ScreenBuffer v_splats_screen,
+    Vanilla3DGUT::ScreenBuffer vr_splats_screen,
+    Vanilla3DGUT::ScreenBuffer h_splats_screen,
     // grad inputs
-    Vanilla3DGUT::World::Buffer v_splats_world,
+    Vanilla3DGUT::WorldBuffer v_splats_world,
     float3* vr_world_pos_buffer,
     float3* h_world_pos_buffer,
-    Vanilla3DGUT::World::Buffer vr_splats_world,
-    Vanilla3DGUT::World::Buffer h_splats_world,
+    Vanilla3DGUT::WorldBuffer vr_splats_world,
+    Vanilla3DGUT::WorldBuffer h_splats_world,
     float * v_viewmats // [B, C, 4, 4] optional
 );

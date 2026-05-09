@@ -34,7 +34,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const uint32_t n_isects,
     // fwd inputs
     const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
-    typename SplatPrimitive::Screen::Buffer splat_buffer,
+    typename SplatPrimitive::ScreenBuffer splat_buffer,
     const float *__restrict__ backgrounds, // [..., CDIM] or [nnz, CDIM]
     const bool *__restrict__ masks,           // [..., tile_height, tile_width]
     const uint32_t image_width,
@@ -47,18 +47,18 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const float
         *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
-    typename SplatPrimitive::RenderOutput::Buffer render_output_buffer,
-    typename SplatPrimitive::RenderOutput::Buffer render2_output_buffer,
+    RenderOutput::Buffer render_output_buffer,
+    RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
-    typename SplatPrimitive::RenderOutput::Buffer v_render_output_buffer,
+    RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
-    typename SplatPrimitive::RenderOutput::Buffer v_distortions_output_buffer,
+    RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
-    typename SplatPrimitive::Screen::Buffer v_splat_buffer,
-    typename SplatPrimitive::Screen::Buffer vr_splat_buffer,
-    typename SplatPrimitive::Screen::Buffer h_splat_buffer,
+    typename SplatPrimitive::ScreenBuffer v_splat_buffer,
+    typename SplatPrimitive::ScreenBuffer vr_splat_buffer,
+    typename SplatPrimitive::ScreenBuffer h_splat_buffer,
     float *__restrict__ o_accum_weight
 ) {
     auto block = cg::this_thread_block();
@@ -89,12 +89,12 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     // load pixels
     __shared__ int32_t pix_bin_final[BLOCK_SIZE];
     __shared__ float2 pix_Ts_with_grad[BLOCK_SIZE];
-    __shared__ typename SplatPrimitive::RenderOutput v_pix_colors[BLOCK_SIZE];
+    __shared__ RenderOutput v_pix_colors[BLOCK_SIZE];
     // __shared__ float pix_background[CDIM];  // TODO
 
-    __shared__ typename SplatPrimitive::RenderOutput pix_colors[output_distortion ? BLOCK_SIZE : 1];
-    __shared__ typename SplatPrimitive::RenderOutput pix2_colors[output_distortion ? BLOCK_SIZE : 1];
-    __shared__ typename SplatPrimitive::RenderOutput v_distortion_out[output_distortion ? BLOCK_SIZE : 1];
+    __shared__ RenderOutput pix_colors[output_distortion ? BLOCK_SIZE : 1];
+    __shared__ RenderOutput pix2_colors[output_distortion ? BLOCK_SIZE : 1];
+    __shared__ RenderOutput v_distortion_out[output_distortion ? BLOCK_SIZE : 1];
 
     __shared__ float hess_weight_map[output_hessian_diagonal ? BLOCK_SIZE : 1];
     __shared__ float accum_weight_map[output_accum_weight ? BLOCK_SIZE : 1];
@@ -122,19 +122,19 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         auto pix_id_image_global = image_id * image_height * image_width + pix_id_global;
 
         v_pix_colors[pix_id_local] = (inside ?
-            SplatPrimitive::RenderOutput::load(v_render_output_buffer, pix_id_image_global)
-             : SplatPrimitive::RenderOutput::zero());
+            v_render_output_buffer.load<SplatPrimitive::pixelType>(pix_id_image_global)
+             : RenderOutput::zero());
 
         if (output_distortion) {
             pix_colors[pix_id_local] = (inside ?
-                SplatPrimitive::RenderOutput::load(render_output_buffer, pix_id_image_global)
-                : SplatPrimitive::RenderOutput::zero());
+                render_output_buffer.load<SplatPrimitive::pixelType>(pix_id_image_global)
+                : RenderOutput::zero());
             pix2_colors[pix_id_local] = (inside ?
-                SplatPrimitive::RenderOutput::load(render2_output_buffer, pix_id_image_global)
-                : SplatPrimitive::RenderOutput::zero());
+                render2_output_buffer.load<SplatPrimitive::pixelType>(pix_id_image_global)
+                : RenderOutput::zero());
             v_distortion_out[pix_id_local] = (inside ?
-                SplatPrimitive::RenderOutput::load(v_distortions_output_buffer, pix_id_image_global)
-                : SplatPrimitive::RenderOutput::zero());
+                v_distortions_output_buffer.load<SplatPrimitive::pixelType>(pix_id_image_global)
+                : RenderOutput::zero());
         }
 
         if (output_accum_weight) {
@@ -222,8 +222,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             float ra = 1.0f / (1.0f - alpha);
             float T0 = T1 * ra;
 
-            typename SplatPrimitive::RenderOutput color = splat.evaluate_color(px, py);
-            typename SplatPrimitive::RenderOutput v_c = v_pix_colors[pix_id];
+            RenderOutput color = splat.evaluate_color(px, py);
+            RenderOutput v_c = v_pix_colors[pix_id];
 
             // gradient to alpha:
             // \frac{dL}{d\alpha_{i}}
@@ -235,7 +235,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             // \frac{dL}{dc_{i}}
             // = \frac{dL}{dc_{1}}\frac{dc_{1}}{dc_{i}}
             // = \alpha_{i}T_{0}\frac{dL}{dc_{1}}
-            typename SplatPrimitive::RenderOutput v_color = v_c * (alpha * T0);
+            RenderOutput v_color = v_c * (alpha * T0);
 
             // update pixel gradient:
             // \frac{dL}{dT_{0}}
@@ -247,10 +247,10 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             if (output_distortion) {
                 // \left(d_{1},s_{1}\right)=\left(d_{0}+\alpha_{i}T_{0}\left(c_{i}^{2}\left(1-T_{0}\right)-2c_{i}c_{0}+s_{0}\right),\ s_{0}+\alpha_{i}T_{0}c_{i}^{2}\right)
                 // \frac{dL}{ds}=0
-                typename SplatPrimitive::RenderOutput v_dist = v_distortion_out[pix_id];
-                typename SplatPrimitive::RenderOutput c0 =
+                RenderOutput v_dist = v_distortion_out[pix_id];
+                RenderOutput c0 =
                     pix_colors[pix_id] + color * -alpha * T0;
-                typename SplatPrimitive::RenderOutput s0 =
+                RenderOutput s0 =
                     pix2_colors[pix_id] + color * color * -alpha * T0;
                 // \frac{dL}{d\alpha_{i}}=\frac{dL}{dd_{1}}\frac{dd_{1}}{d\alpha_{i}}=T_{0}\left(c_{i}^{2}\left(1-T_{0}\right)-2c_{i}c_{0}+s_{0}\right)\frac{dL}{dd_{1}}
                 v_alpha += T0 * (
@@ -334,7 +334,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     const uint32_t n_isects,
     // fwd inputs
     const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
-    typename SplatPrimitive::Screen::Buffer splat_buffer,
+    typename SplatPrimitive::ScreenBuffer splat_buffer,
     const float *__restrict__ backgrounds, // [..., CDIM] or [nnz, CDIM]
     const bool *__restrict__ masks,           // [..., tile_height, tile_width]
     const uint32_t image_width,
@@ -347,18 +347,18 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     const float
         *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
-    typename SplatPrimitive::RenderOutput::Buffer render_output_buffer,
-    typename SplatPrimitive::RenderOutput::Buffer render2_output_buffer,
+    RenderOutput::Buffer render_output_buffer,
+    RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
-    typename SplatPrimitive::RenderOutput::Buffer v_render_output_buffer,
+    RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
-    typename SplatPrimitive::RenderOutput::Buffer v_distortions_output_buffer,
+    RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
-    typename SplatPrimitive::Screen::Buffer v_splat_buffer,
-    typename SplatPrimitive::Screen::Buffer vr_splat_buffer,
-    typename SplatPrimitive::Screen::Buffer h_splat_buffer,
+    typename SplatPrimitive::ScreenBuffer v_splat_buffer,
+    typename SplatPrimitive::ScreenBuffer vr_splat_buffer,
+    typename SplatPrimitive::ScreenBuffer h_splat_buffer,
     float *__restrict__ o_accum_weight
 ) {
 

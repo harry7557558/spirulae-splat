@@ -19,10 +19,10 @@
 
 
 
-std::tuple<Vanilla3DGS::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
+std::tuple<RenderOutput::TensorTuple, at::Tensor, at::Tensor>
 rasterize_to_pixels_3dgs_fwd(
     // Gaussian parameters
-    Vanilla3DGS::Screen::TensorTuple splats_tuple,
+    TensorList splats_tuple,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -34,10 +34,10 @@ rasterize_to_pixels_3dgs_fwd(
 );
 
 
-std::tuple<MipSplatting::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
+std::tuple<RenderOutput::TensorTuple, at::Tensor, at::Tensor>
 rasterize_to_pixels_mip_fwd(
     // Gaussian parameters
-    MipSplatting::Screen::TensorTuple splats_tuple,
+    TensorList splats_tuple,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size

@@ -35,7 +35,8 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     const uint32_t N,
     const uint32_t n_isects,
     const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
-    const typename SplatPrimitive::Screen::Buffer splat_buffer,
+    const typename SplatPrimitive::WorldBuffer splat_world_buffer,
+    const typename SplatPrimitive::ScreenBuffer splat_screen_buffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -47,11 +48,11 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [I, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    typename SplatPrimitive::RenderOutput::Buffer render_colors, // [I, image_height, image_width, ...]
+    RenderOutput::Buffer render_colors, // [I, image_height, image_width, ...]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
-    typename SplatPrimitive::RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
-    typename SplatPrimitive::RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
+    RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
+    RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
     float* __restrict__ out_max_blending
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
@@ -133,9 +134,9 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
     bool max_blending_mask = (output_max_blending && max_blending_masks) ?
         (inside ? max_blending_masks[pix_id] : false) : inside;
 
-    typename SplatPrimitive::RenderOutput pix_out = SplatPrimitive::RenderOutput::zero();
-    typename SplatPrimitive::RenderOutput pix2_out = SplatPrimitive::RenderOutput::zero();
-    typename SplatPrimitive::RenderOutput distortion_out = SplatPrimitive::RenderOutput::zero();
+    RenderOutput pix_out = RenderOutput::zero();
+    RenderOutput pix2_out = RenderOutput::zero();
+    RenderOutput distortion_out = RenderOutput::zero();
 
     for (uint32_t b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
@@ -169,7 +170,7 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
                     const float next_T = T * (1.0f - alpha);
                     if (next_T > 1e-4f) {
                         vis = alpha * T;
-                        const typename SplatPrimitive::RenderOutput color = splat.evaluate_color(ray_o, ray_d);
+                        const RenderOutput color = splat.evaluate_color(ray_o, ray_d);
                         if (output_distortion) {
                             distortion_out += (
                                 color * color * (1.0f - T)
@@ -199,13 +200,13 @@ __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
         render_Ts[pix_id] = T;
         int pix_id_global = image_id * image_height * image_width + pix_id;
         // TODO: blend background
-        pix_out.saveParamsToBuffer(render_colors, pix_id_global);
+        pix_out.saveParamsToBuffer<SplatPrimitive::pixelType>(render_colors, pix_id_global);
         // index in bin of last gaussian in this pixel
         last_ids[pix_id] = static_cast<int32_t>(cur_idx);
         // distortion
         if (output_distortion) {
-            pix2_out.saveParamsToBuffer(render_colors2, pix_id_global);
-            distortion_out.saveParamsToBuffer(render_distortions, pix_id_global);
+            pix2_out.saveParamsToBuffer<SplatPrimitive::pixelType>(render_colors2, pix_id_global);
+            distortion_out.saveParamsToBuffer<SplatPrimitive::pixelType>(render_distortions, pix_id_global);
         }
     }
 }
@@ -222,7 +223,7 @@ void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
     const uint32_t N,
     const uint32_t n_isects,
     const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
-    const typename SplatPrimitive::Screen::Buffer splat_buffer,
+    const typename SplatPrimitive::ScreenBuffer splat_buffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -234,11 +235,11 @@ void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
     const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [I, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    typename SplatPrimitive::RenderOutput::Buffer render_colors, // [I, image_height, image_width, ...]
+    RenderOutput::Buffer render_colors, // [I, image_height, image_width, ...]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
-    typename SplatPrimitive::RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
-    typename SplatPrimitive::RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
+    RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
+    RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
     float* __restrict__ out_max_blending
 ) {
     // Each block covers a tile on the image. In total there are

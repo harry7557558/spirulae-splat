@@ -12,7 +12,7 @@ template void projection_packed_mask_kernel_wrapper<
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const SphericalVoronoi3DGUT<2>::World::Buffer splats_world,  // [B, N, ...]
+    const SphericalVoronoi3DGUT<2>::WorldBuffer splats_world,  // [B, N, ...]
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,

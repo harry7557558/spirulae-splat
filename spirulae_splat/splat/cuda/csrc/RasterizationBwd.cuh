@@ -20,12 +20,12 @@
 
 
 std::tuple<
-    typename Vanilla3DGS::Screen::TensorTuple,
+    TensorList,
     std::optional<at::Tensor>  // accum_weight
 > rasterize_to_pixels_3dgs_bwd(
     // Gaussian parameters
     int64_t num_splats,
-    Vanilla3DGS::Screen::TensorTuple splats_tuple,
+    TensorList splats_tuple,
     std::optional<at::Tensor> gaussian_ids,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -40,20 +40,20 @@ std::tuple<
     const at::Tensor last_ids,      // [..., image_height, image_width]
     std::optional<at::Tensor> accum_weight_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
-    Vanilla3DGS::RenderOutput::TensorTuple v_render_outputs,
+    RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_Ts // [..., image_height, image_width, 1]
 );
 
 
 std::tuple<
-    Vanilla3DGS::Screen::TensorTuple,
-    std::optional<Vanilla3DGS::Screen::TensorTuple>,  // jacobian residual product
-    std::optional<Vanilla3DGS::Screen::TensorTuple>,  // hessian diagonal
+    TensorList,
+    std::optional<TensorList>,  // jacobian residual product
+    std::optional<TensorList>,  // hessian diagonal
     std::optional<at::Tensor>  // accum_weight
 > rasterize_to_pixels_3dgs_bwd_with_hessian_diagonal(
     // Gaussian parameters
     int64_t num_splats,
-    Vanilla3DGS::Screen::TensorTuple splats_tuple,
+    TensorList splats_tuple,
     std::optional<at::Tensor> gaussian_ids,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -66,12 +66,12 @@ std::tuple<
     // forward outputs
     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
-    std::optional<typename Vanilla3DGS::RenderOutput::TensorTuple> render_outputs,
-    std::optional<typename Vanilla3DGS::RenderOutput::TensorTuple> render2_outputs,
+    std::optional<RenderOutput::TensorTuple> render_outputs,
+    std::optional<RenderOutput::TensorTuple> render2_outputs,
     std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     std::optional<at::Tensor> accum_weight_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
-    Vanilla3DGS::RenderOutput::TensorTuple v_render_outputs,
+    RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
-    std::optional<typename Vanilla3DGS::RenderOutput::TensorTuple> v_distortion_outputs
+    std::optional<RenderOutput::TensorTuple> v_distortion_outputs
 );

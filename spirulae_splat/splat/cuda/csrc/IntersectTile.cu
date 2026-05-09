@@ -256,7 +256,7 @@ __global__ void intersect_mask_eval3d_kernel(
     const uint32_t N,
     const int32_t *__restrict__ tile_offsets,  // [I, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    const typename SplatPrimitive::Screen::Buffer splat_buffer,
+    const typename SplatPrimitive::ScreenBuffer splat_buffer,
     const float *__restrict__ viewmats, // [B, I, 4, 4]
     const float4 *__restrict__ intrins,  // [B, I, 4], fx, fy, cx, cy
     ssplat::CameraModelType camera_model,
@@ -365,7 +365,7 @@ __global__ void intersect_mask_kernel(
     const uint32_t N,
     const int32_t *__restrict__ tile_offsets,  // [I, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    const typename SplatPrimitive::Screen::Buffer splat_buffer,
+    const typename SplatPrimitive::ScreenBuffer splat_buffer,
     bool *__restrict__ mask  // [n_isects]
 ) {
     auto block = cg::this_thread_block();
@@ -706,7 +706,7 @@ std::tuple<
     const uint32_t image_width,
     const uint32_t image_height,
     std::optional<at::Tensor> image_ids,
-    typename SplatPrimitive::Screen::TensorTuple splats_tuple,
+    TensorList splats_tuple,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
@@ -729,7 +729,7 @@ std::tuple<
     uint32_t N = aabb.size(-2);
 
     /* Compute mask of tiles intersected by AABB but not by the splat itself */
-    typename SplatPrimitive::Screen::Tensor splats(splats_tuple);
+    typename SplatPrimitive::ScreenBuffer splats(splats_tuple);
     at::Tensor mask = at::zeros(
         {n_isects},
         at::TensorOptions().device(aabb.device()).dtype(at::kBool)
@@ -747,7 +747,7 @@ std::tuple<
         N,
         reinterpret_cast<const int32_t *>(offsets.data_ptr<int32_t>()),
         reinterpret_cast<const int32_t *>(flatten_ids.data_ptr<int32_t>()),
-        splats.buffer(),
+        splats,
         viewmats.data_ptr<float>(),
         reinterpret_cast<const float4 *>(intrins.data_ptr<float>()),
         cmt(camera_model),
@@ -781,7 +781,7 @@ std::tuple<
     const uint32_t image_width,
     const uint32_t image_height,
     std::optional<at::Tensor> image_ids,
-    typename SplatPrimitive::Screen::TensorTuple splats_tuple,
+    TensorList splats_tuple,
     const at::Tensor intrins
 ) {
     auto [isect_ids, flatten_ids, offsets, radii] = do_intersect_tile_generic(
@@ -801,7 +801,7 @@ std::tuple<
     uint32_t N = aabb.size(-2);
 
     /* Compute mask of tiles intersected by AABB but not by the splat itself */
-    typename SplatPrimitive::Screen::Tensor splats(splats_tuple);
+    typename SplatPrimitive::ScreenBuffer splats(splats_tuple);
     at::Tensor mask = at::zeros(
         {n_isects},
         at::TensorOptions().device(aabb.device()).dtype(at::kBool)
@@ -819,7 +819,7 @@ std::tuple<
         N,
         reinterpret_cast<const int32_t *>(offsets.data_ptr<int32_t>()),
         reinterpret_cast<const int32_t *>(flatten_ids.data_ptr<int32_t>()),
-        splats.buffer(),
+        splats,
         mask.data_ptr<bool>()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -849,7 +849,7 @@ std::tuple<
     const uint32_t image_width,
     const uint32_t image_height,
     std::optional<at::Tensor> image_ids,
-    typename Vanilla3DGS::Screen::TensorTuple splats,
+    TensorList splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
@@ -880,7 +880,7 @@ std::tuple<
     const uint32_t image_width,
     const uint32_t image_height,
     std::optional<at::Tensor> image_ids,
-    typename Vanilla3DGUT::Screen::TensorTuple splats,
+    TensorList splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
@@ -901,70 +901,70 @@ std::tuple<
     );
 }
 
-/*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    at::Tensor,  // isect_ids, [n_isects], int64
-    at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor,  // offsets, [I * n_tiles], int32
-    at::Tensor  // radii, [N], float32
-> intersect_tile_opaque_triangle_tensor(
-    at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
-    at::Tensor depths,  // [..., N], float32
-    const uint32_t I,
-    const uint32_t image_width,
-    const uint32_t image_height,
-    std::optional<at::Tensor> image_ids,
-    typename OpaqueTriangle::Screen::TensorTuple splats,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs
-) {
-    return do_intersect_tile_eval3d<OpaqueTriangle>(
-        aabb,
-        depths,
-        I,
-        image_width,
-        image_height,
-        image_ids,
-        splats,
-        viewmats,
-        intrins,
-        camera_model,
-        dist_coeffs
-    );
-}
+// /*[AutoHeaderGeneratorExport]*/
+// std::tuple<
+//     at::Tensor,  // isect_ids, [n_isects], int64
+//     at::Tensor,  // flatten_ids, [n_isects], int32
+//     at::Tensor,  // offsets, [I * n_tiles], int32
+//     at::Tensor  // radii, [N], float32
+// > intersect_tile_opaque_triangle_tensor(
+//     at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
+//     at::Tensor depths,  // [..., N], float32
+//     const uint32_t I,
+//     const uint32_t image_width,
+//     const uint32_t image_height,
+//     std::optional<at::Tensor> image_ids,
+//     typename OpaqueTriangle::Screen::TensorTuple splats,
+//     const at::Tensor viewmats,  // [..., C, 4, 4]
+//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+//     const std::string camera_model,
+//     const CameraDistortionCoeffsTensor dist_coeffs
+// ) {
+//     return do_intersect_tile_eval3d<OpaqueTriangle>(
+//         aabb,
+//         depths,
+//         I,
+//         image_width,
+//         image_height,
+//         image_ids,
+//         splats,
+//         viewmats,
+//         intrins,
+//         camera_model,
+//         dist_coeffs
+//     );
+// }
 
-/*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    at::Tensor,  // isect_ids, [n_isects], int64
-    at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor,  // offsets, [I * n_tiles], int32
-    at::Tensor  // radii, [N], float32
-> intersect_tile_voxel_tensor(
-    at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
-    at::Tensor depths,  // [..., N], float32
-    const uint32_t I,
-    const uint32_t image_width,
-    const uint32_t image_height,
-    std::optional<at::Tensor> image_ids,
-    typename VoxelPrimitive::Screen::TensorTuple splats,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs
-) {
-    return do_intersect_tile_eval3d<VoxelPrimitive>(
-        aabb,
-        depths,
-        I,
-        image_width,
-        image_height,
-        image_ids,
-        splats,
-        viewmats,
-        intrins,
-        camera_model,
-        dist_coeffs
-    );
-}
+// /*[AutoHeaderGeneratorExport]*/
+// std::tuple<
+//     at::Tensor,  // isect_ids, [n_isects], int64
+//     at::Tensor,  // flatten_ids, [n_isects], int32
+//     at::Tensor,  // offsets, [I * n_tiles], int32
+//     at::Tensor  // radii, [N], float32
+// > intersect_tile_voxel_tensor(
+//     at::Tensor aabb,  // [..., N, 4], float, xyxy in pixels
+//     at::Tensor depths,  // [..., N], float32
+//     const uint32_t I,
+//     const uint32_t image_width,
+//     const uint32_t image_height,
+//     std::optional<at::Tensor> image_ids,
+//     typename VoxelPrimitive::Screen::TensorTuple splats,
+//     const at::Tensor viewmats,  // [..., C, 4, 4]
+//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+//     const std::string camera_model,
+//     const CameraDistortionCoeffsTensor dist_coeffs
+// ) {
+//     return do_intersect_tile_eval3d<VoxelPrimitive>(
+//         aabb,
+//         depths,
+//         I,
+//         image_width,
+//         image_height,
+//         image_ids,
+//         splats,
+//         viewmats,
+//         intrins,
+//         camera_model,
+//         dist_coeffs
+//     );
+// }

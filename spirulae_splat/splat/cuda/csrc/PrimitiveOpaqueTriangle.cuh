@@ -8,81 +8,61 @@ namespace SlangOpaqueTriangle {
 }
 #endif
 
-#include "types.cuh"
-#include "common.cuh"
+#include "Primitive.cuh"
 
-#include <tuple>
-
-
-
+#if 0
 struct OpaqueTriangle {
     struct World;
     struct Screen;
-    struct RenderOutput;
+    static constexpr RenderOutputType pixelType = RenderOutputType::RGB_DN;
 
 #ifdef __CUDACC__
 
-    struct FwdProjCamera {
-        float3x3 R;
-        float3 t;
-        float fx, fy, cx, cy;
-        uint width, height;
-        CameraDistortionCoeffs dist_coeffs;
-    };
-
     inline static __device__ void project_persp(
-        World world, FwdProjCamera cam,
+        World world, ProjCamera cam,
         Screen& proj, float4& aabb
     );
 
     inline static __device__ void project_fisheye(
-        World world, FwdProjCamera cam,
+        World world, ProjCamera cam,
         Screen& proj, float4& aabb
     );
 
-    struct BwdProjCamera {
-        float3x3 R;
-        float3 t;
-        float fx, fy, cx, cy;
-        uint width, height;
-        CameraDistortionCoeffs dist_coeffs;
-    };
-
     inline static __device__ void project_persp_vjp(
-        World world, BwdProjCamera cam,
+        World world, ProjCamera cam,
         Screen v_proj,
         World& v_world, float3x3 &v_R, float3 &v_t
     );
 
     inline static __device__ void project_persp_vjp(
-        World world, BwdProjCamera cam,
+        World world, ProjCamera cam,
         Screen v_proj, Screen vr_proj, Screen h_proj,
         World& v_world, float3x3 &v_R, float3 &v_t,
         float3 &vr_world_pos, float3 &h_world_pos
     );
 
     inline static __device__ void project_persp_vjp(
-        World world, BwdProjCamera cam,
+        World world, ProjCamera cam,
         Screen v_proj, Screen vr_proj, Screen h_proj,
         World& v_world, float3x3 &v_R, float3 &v_t,
         World& vr_world, World& h_world
     );
 
     inline static __device__ void project_fisheye_vjp(
-        World world, BwdProjCamera cam,
+        World world, ProjCamera cam,
         Screen v_proj,
         World& v_world, float3x3 &v_R, float3 &v_t
     );
 
     inline static __device__ void project_fisheye_vjp(
-        World world, BwdProjCamera cam,
+        World world, ProjCamera cam,
         Screen v_proj, Screen vr_proj, Screen h_proj,
         World& v_world, float3x3 &v_R, float3 &v_t,
         float3 &vr_world_pos, float3 &h_world_pos
     );
 
     inline static __device__ void project_fisheye_vjp(
-        World world, BwdProjCamera cam,
+        World world, ProjCamera cam,
         Screen v_proj, Screen vr_proj, Screen h_proj,
         World& v_world, float3x3 &v_R, float3 &v_t,
         World& vr_world, World& h_world
@@ -109,101 +89,30 @@ struct OpaqueTriangle::World {
 
     struct Buffer;
 
-    #ifndef NO_TORCH
-    struct Tensor {
-        at::Tensor means;
-        at::Tensor quats;
-        at::Tensor scales;
-        // at::Tensor verts;
-        at::Tensor hardness;
-        at::Tensor features_dc;
-        at::Tensor features_sh;
-        at::Tensor features_ch;
-
-        Tensor() {}
-
-        Tensor(const TensorTuple& splats) {
-            means = std::get<0>(splats);
-            quats = std::get<1>(splats);
-            scales = std::get<2>(splats);
-            hardness = std::get<3>(splats);
-            // verts = std::get<0>(splats);
-            // hardness = std::get<1>(splats);
-            features_dc = std::get<4>(splats);
-            features_sh = std::get<5>(splats);
-            features_ch = std::get<6>(splats);
-        }
-
-        TensorTuple tuple() const {
-            return std::make_tuple(means, quats, scales, hardness, features_dc, features_sh, features_ch);
-            // return std::make_tuple(verts, hardness, features_dc, features_sh, features_ch);
-        }
-
-        Tensor allocProjBwd(bool is_hess_diag) const {
-            return Tensor(std::make_tuple(
-                zeros_like_tensor(means),
-                zeros_like_tensor(quats),
-                zeros_like_tensor(scales),
-                // zeros_like_tensor(verts),
-                zeros_like_tensor(hardness),
-                zeros_like_tensor(features_dc),
-                zeros_like_tensor(features_sh),  // TODO: exclude when is_hess_diag
-                zeros_like_tensor(features_ch)
-            ));
-        }
-
-        auto options() const {
-            return means.options();
-            // return verts.options();
-        }
-        long size() const {
-            return quats.size(-2);
-            // return verts.size(-3);
-        }
-        long batchSize() const {
-            return quats.numel() / (4*size());
-            // return verts.numel() / (3*3*size());
-        }
-
-        Buffer buffer() { return Buffer(*this); }
-    };
-    #endif
-
-    struct Buffer {
-        float3* __restrict__ means;
-        float4* __restrict__ quats;
-        float3* __restrict__ scales;
-        // float3* __restrict__ verts;
-        float2* __restrict__ hardness;
-        float3* __restrict__ features_dc;
-        float3* __restrict__ features_sh;
-        float3* __restrict__ features_ch;
+    struct Buffer : public TensorArray<7> {
+        using TensorArray<7>::TensorArray;
         uint num_sh;
 
-        Buffer() {}
+        Buffer() : num_sh(0) {}
 
         #ifndef NO_TORCH
-        Buffer(const Tensor& tensors) {
-            DEVICE_GUARD(tensors.means);
-            CHECK_INPUT(tensors.means);
-            CHECK_INPUT(tensors.quats);
-            CHECK_INPUT(tensors.scales);
-            // DEVICE_GUARD(tensors.verts);
-            // CHECK_INPUT(tensors.verts);
-            CHECK_INPUT(tensors.hardness);
-            CHECK_INPUT(tensors.features_dc);
-            CHECK_INPUT(tensors.features_sh);
-            CHECK_INPUT(tensors.features_ch);
-            means = (float3*)tensors.means.data_ptr<float>();
-            quats = (float4*)tensors.quats.data_ptr<float>();
-            scales = (float3*)tensors.scales.data_ptr<float>();
-            // verts = (float3*)tensors.verts.data_ptr<float>();
-            hardness = (float2*)tensors.hardness.data_ptr<float>();
-            features_dc = (float3*)tensors.features_dc.data_ptr<float>();
-            features_sh = (float3*)tensors.features_sh.data_ptr<float>();
-            num_sh = tensors.features_sh.size(-2);
-            features_ch = (float3*)tensors.features_ch.data_ptr<float>();
+        Buffer(const Tensor& tensors)
+            : TensorArray<7>(std::vector<std::optional<at::Tensor>>{
+                tensors.means, tensors.quats, tensors.scales,
+                tensors.hardness, tensors.features_dc, tensors.features_sh, tensors.features_ch
+            }) {
+            num_sh = tensors.features_sh.has_value() ?
+                tensors.features_sh.value().size(-2) : 0;
         }
+        #endif
+
+        #ifdef __CUDACC__
+        __forceinline__ __device__ float2& hardness(int64_t i)
+            { return *reinterpret_cast<float2*>(&_data[3][2*i]); }
+        __forceinline__ __device__ float3& features_ch(int64_t i)
+            { return *reinterpret_cast<float3*>(&_data[6][3*i]); }
+        __forceinline__ __device__ float3& features_sh(int64_t i, int64_t j)
+            { return *reinterpret_cast<float3*>(&_data[5][_strides[5]*i+j]); }
         #endif
     };
 
@@ -211,20 +120,17 @@ struct OpaqueTriangle::World {
 
     static __device__ World load(const Buffer &buffer, long idx) {
         World world = {
-            buffer.means[idx],
-            buffer.quats[idx],
-            buffer.scales[idx],
-            // buffer.verts[3*idx+0],
-            // buffer.verts[3*idx+1],
-            // buffer.verts[3*idx+2],
-            buffer.hardness[idx]
+            buffer.means(idx),
+            buffer.quats(idx),
+            buffer.scales(idx),
+            buffer.hardness(idx)
         };
-        world.sh_coeffs[0] = buffer.features_dc[idx];
+        world.sh_coeffs[0] = buffer.features_dc(idx);
         for (int i = 0; i < 15; i++)
             world.sh_coeffs[i+1] = i < buffer.num_sh ?
-                buffer.features_sh[idx*buffer.num_sh+i] : make_float3(0);
-        world.ch_coeffs[0] = buffer.features_ch[2*idx+0];
-        world.ch_coeffs[1] = buffer.features_ch[2*idx+1];
+                buffer.features_sh(idx, i) : make_float3(0);
+        world.ch_coeffs[0] = buffer.features_ch(2*idx+0);
+        world.ch_coeffs[1] = buffer.features_ch(2*idx+1);
         return world;
     }
 
@@ -243,167 +149,32 @@ struct OpaqueTriangle::World {
     }
 
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
-        buffer.means[idx] = mean;
-        buffer.quats[idx] = quat;
-        buffer.scales[idx] = scale;
-        // buffer.verts[3*idx+0] = vert0;
-        // buffer.verts[3*idx+1] = vert1;
-        // buffer.verts[3*idx+2] = vert2;
-        buffer.hardness[idx] = hardness;
-        buffer.features_dc[idx] = sh_coeffs[0];
+        buffer.means(idx) = mean;
+        buffer.quats(idx) = quat;
+        buffer.scales(idx) = scale;
+        buffer.hardness(idx) = hardness;
+        buffer.features_dc(idx) = sh_coeffs[0];
         for (int i = 0; i < buffer.num_sh; i++)
-            buffer.features_sh[idx*buffer.num_sh + i] = sh_coeffs[i+1];
-        buffer.features_ch[2*idx+0] = ch_coeffs[0];
-        buffer.features_ch[2*idx+1] = ch_coeffs[1];
+            buffer.features_sh(idx, i) = sh_coeffs[i+1];
+        buffer.features_ch(2*idx+0) = ch_coeffs[0];
+        buffer.features_ch(2*idx+1) = ch_coeffs[1];
     }
 
     __device__ void atomicAddGradientToBuffer(Buffer &buffer, long idx) {
-        atomicAddFVec(buffer.means + idx, mean);
-        atomicAddFVec(buffer.quats + idx, quat);
-        atomicAddFVec(buffer.scales + idx, scale);
-        // atomicAddFVec(buffer.verts + 3*idx+0, vert0);
-        // atomicAddFVec(buffer.verts + 3*idx+1, vert1);
-        // atomicAddFVec(buffer.verts + 3*idx+2, vert2);
-        atomicAddFVec(buffer.hardness + idx, hardness);
-        atomicAddFVec(buffer.features_dc + idx, sh_coeffs[0]);
+        atomicAddFVec(buffer.means(idx), mean);
+        atomicAddFVec(buffer.quats(idx), quat);
+        atomicAddFVec(buffer.scales(idx), scale);
+        atomicAddFVec(buffer.hardness(idx), hardness);
+        atomicAddFVec(buffer.features_dc(idx), sh_coeffs[0]);
         for (int i = 0; i < buffer.num_sh; i++)
-            atomicAddFVec(buffer.features_sh + idx*buffer.num_sh + i, sh_coeffs[i+1]);
-        atomicAddFVec(buffer.features_ch + 2*idx+0, ch_coeffs[0]);
-        atomicAddFVec(buffer.features_ch + 2*idx+1, ch_coeffs[1]);
+            atomicAddFVec(buffer.features_sh(idx, i), sh_coeffs[i+1]);
+        atomicAddFVec(buffer.features_ch(2*idx+0), ch_coeffs[0]);
+        atomicAddFVec(buffer.features_ch(2*idx+1), ch_coeffs[1]);
     }
 
 #endif  // #ifdef __CUDACC__
 };
 
-
-struct OpaqueTriangle::RenderOutput {
-
-    float3 rgb;
-    float depth;
-    float3 normal;
-
-    #ifndef NO_TORCH
-    typedef std::tuple<at::Tensor, at::Tensor, at::Tensor> TensorTuple;
-    #endif
-
-    struct Buffer;
-
-    #ifndef NO_TORCH
-    struct Tensor {
-        at::Tensor rgbs;
-        at::Tensor depths;
-        at::Tensor normals;
-
-        Tensor() {}
-
-        Tensor(const TensorTuple& images) {
-            rgbs = std::get<0>(images);
-            depths = std::get<1>(images);
-            normals = std::get<2>(images);
-        }
-
-        TensorTuple tuple() const {
-            return std::make_tuple(rgbs, depths, normals);
-        }
-
-        static Tensor empty(at::DimVector dims, at::TensorOptions opt) {
-            at::DimVector rgbs_dims(dims); rgbs_dims.append({3});
-            at::DimVector depths_dims(dims); depths_dims.append({1});
-            return Tensor(std::make_tuple(
-                at::empty(rgbs_dims, opt),
-                at::empty(depths_dims, opt),
-                at::empty(rgbs_dims, opt)
-            ));
-        }
-
-        auto options() const {
-            return rgbs.options();
-        }
-        long width() const {
-            return rgbs.size(-2);
-        }
-        long height() const {
-            return rgbs.size(-3);
-        }
-        long batchSize() const {
-            return rgbs.numel() / (3*width()*height());
-        }
-
-        Buffer buffer() { return Buffer(*this); }
-    };
-    #endif
-
-    struct Buffer {
-        float3* __restrict__ rgbs;
-        float* __restrict__ depths;
-        float3* __restrict__ normals;
-
-        Buffer() : rgbs(nullptr), depths(nullptr), normals(nullptr) {}
-
-        #ifndef NO_TORCH
-        Buffer(const Tensor& tensors) {
-            DEVICE_GUARD(tensors.rgbs);
-            CHECK_INPUT(tensors.rgbs);
-            CHECK_INPUT(tensors.depths);
-            CHECK_INPUT(tensors.normals);
-            rgbs = (float3*)tensors.rgbs.data_ptr<float>();
-            depths = tensors.depths.data_ptr<float>();
-            normals = (float3*)tensors.normals.data_ptr<float>();
-        }
-        #endif
-    };
-
-#ifdef __CUDACC__
-
-
-    static __device__ RenderOutput load(const Buffer &buffer, long idx) {
-        return {
-            buffer.rgbs[idx],
-            buffer.depths[idx],
-            buffer.normals[idx]
-        };
-    }
-
-    static __device__ __forceinline__ RenderOutput zero() {
-        return {
-            {0.f, 0.f, 0.f},
-            0.f,
-            {0.f, 0.f, 0.f},
-        };
-    }
-
-    __device__ __forceinline__ void operator+=(const RenderOutput &other) {
-        rgb += other.rgb;
-        depth += other.depth;
-        normal += other.normal;
-    }
-
-    __device__ __forceinline__ RenderOutput operator*(float k) const {
-        return {rgb * k, depth * k, normal * k};
-    }
-
-    __device__ __forceinline__ RenderOutput operator+(const RenderOutput &other) const {
-        return {rgb + other.rgb, depth + other.depth, normal + other.normal};
-    }
-
-    __device__ __forceinline__ RenderOutput operator*(const RenderOutput &other) const {
-        return {rgb * other.rgb, depth * other.depth, normal * other.normal};
-    }
-
-    __device__ __forceinline__ float dot(const RenderOutput &other) const {
-        return (rgb.x * other.rgb.x + rgb.y * other.rgb.y + rgb.z * other.rgb.z)
-            + depth * other.depth
-            + (normal.x * other.normal.x + normal.y * other.normal.y + normal.z * other.normal.z);
-    }
-
-    __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
-        buffer.rgbs[idx] = rgb;
-        buffer.depths[idx] = depth;
-        buffer.normals[idx] = normal;
-    }
-
-#endif  // #ifdef __CUDACC__
-};
 
 
 struct OpaqueTriangle::Screen {
@@ -512,33 +283,37 @@ struct OpaqueTriangle::Screen {
     };
     #endif
 
-    struct Buffer {
-        float2* __restrict__ hardness = nullptr;
-        float* __restrict__ depths;
-        float3* __restrict__ verts;
-        float3* __restrict__ rgbs;
-        float3* __restrict__ normals;
+    struct Buffer : public TensorArray<5> {
         long size;
 
-        Buffer() {}
+        using TensorArray<5>::TensorArray;
+
+        Buffer() : size(0) {}
 
         #ifndef NO_TORCH
-        Buffer(const Tensor& tensors) {
-            DEVICE_GUARD(tensors.verts);
-            if (tensors.hasWorld) {
-                CHECK_INPUT(tensors.hardness);
-                hardness = (float2*)tensors.hardness.data_ptr<float>();
-            }
-            CHECK_INPUT(tensors.depths);
-            CHECK_INPUT(tensors.verts);
-            CHECK_INPUT(tensors.rgbs);
-            depths = tensors.depths.data_ptr<float>();
-            verts = (float3*)tensors.verts.data_ptr<float>();
-            rgbs = (float3*)tensors.rgbs.data_ptr<float>();
-            normals = (float3*)tensors.normals.data_ptr<float>();
+        Buffer(const Tensor& tensors)
+            : TensorArray<5>(std::vector<std::optional<at::Tensor>>{
+                tensors.hardness, tensors.depths, tensors.verts, tensors.rgbs, tensors.normals
+            }) {
             size = tensors.hasWorld ?
-                tensors.hardness.numel() / 2 : tensors.verts.numel() / 9;
+                tensors.hardness.value().numel() / 2 : tensors.verts.numel() / 9;
         }
+        #endif
+
+        #ifdef __CUDACC__
+        __forceinline__ __device__ bool hasHardness() const {
+            return _data[0] != nullptr;
+        }
+        __forceinline__ __device__ float2& hardness(int64_t i)
+            { return *reinterpret_cast<float2*>(&_data[0][2*i]); }
+        __forceinline__ __device__ float& depths(int64_t i)
+            { return *reinterpret_cast<float*>(&_data[1][i]); }
+        __forceinline__ __device__ float3& verts(int64_t i)
+            { return *reinterpret_cast<float3*>(&_data[2][3*i]); }
+        __forceinline__ __device__ float3& rgbs(int64_t i)
+            { return *reinterpret_cast<float3*>(&_data[3][3*i]); }
+        __forceinline__ __device__ float3& normals(int64_t i)
+            { return *reinterpret_cast<float3*>(&_data[4][3*i]); }
         #endif
     };
 
@@ -547,11 +322,11 @@ struct OpaqueTriangle::Screen {
     static __device__ Screen load(const Buffer &buffer, long idx, const uint32_t* gaussian_ids) {
         uint32_t idx0 = gaussian_ids ? gaussian_ids[idx] : idx % buffer.size;
         return {
-            buffer.hardness ? buffer.hardness[idx0] : make_float2(0.f),
-            buffer.depths[idx],
-            { buffer.verts[3*idx+0], buffer.verts[3*idx+1], buffer.verts[3*idx+2] },
-            { buffer.rgbs[3*idx+0], buffer.rgbs[3*idx+1], buffer.rgbs[3*idx+2] },
-            buffer.normals[idx]
+            buffer.hasHardness() ? buffer.hardness(idx0) : make_float2(0.f),
+            buffer.depths(idx),
+            { buffer.verts(3*idx+0), buffer.verts(3*idx+1), buffer.verts(3*idx+2) },
+            { buffer.rgbs(3*idx+0), buffer.rgbs(3*idx+1), buffer.rgbs(3*idx+2) },
+            buffer.normals(idx)
         };
     }
 
@@ -595,28 +370,28 @@ struct OpaqueTriangle::Screen {
     }
 
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx, const uint32_t* gaussian_ids) {
-        if (buffer.hardness != nullptr && idx < buffer.size)
-            buffer.hardness[idx] = hardness;
-        buffer.depths[idx] = depth;
+        if (buffer.hasHardness() && idx < buffer.size)
+            buffer.hardness(idx) = hardness;
+        buffer.depths(idx) = depth;
         #pragma unroll
         for (int i = 0; i < 3; i++) {
-            buffer.verts[3*idx+i] = verts[i];
-            buffer.rgbs[3*idx+i] = rgbs[i];
+            buffer.verts(3*idx+i) = verts[i];
+            buffer.rgbs(3*idx+i) = rgbs[i];
         }
-        buffer.normals[idx] = normal;
+        buffer.normals(idx) = normal;
     }
 
     __device__ void atomicAddToBuffer(Buffer &buffer, long idx, const uint32_t* gaussian_ids) const {
         uint32_t idx0 = gaussian_ids ? gaussian_ids[idx] : idx % buffer.size;
-        if (buffer.hardness != nullptr)
-            atomicAddFVec(buffer.hardness + idx0, hardness);
-        atomicAddFVec(buffer.depths + idx, depth);
+        if (buffer.hasHardness())
+            atomicAddFVec(buffer.hardness(idx0), hardness);
+        atomicAddFVec(buffer.depths(idx), depth);
         #pragma unroll
         for (int i = 0; i < 3; i++) {
-            atomicAddFVec(buffer.verts + 3*idx+i, verts[i]);
-            atomicAddFVec(buffer.rgbs + 3*idx+i, rgbs[i]);
+            atomicAddFVec(buffer.verts(3*idx+i), verts[i]);
+            atomicAddFVec(buffer.rgbs(3*idx+i), rgbs[i]);
         }
-        atomicAddFVec(buffer.normals + idx, normal);
+        atomicAddFVec(buffer.normals(idx), normal);
     }
 
     __device__ __forceinline__ float evaluate_alpha(float3 ray_o, float3 ray_d) {
@@ -643,7 +418,7 @@ struct OpaqueTriangle::Screen {
         );
     }
 
-    __device__ __forceinline__ OpaqueTriangle::RenderOutput evaluate_color(float3 ray_o, float3 ray_d) {
+    __device__ __forceinline__ RenderOutput evaluate_color(float3 ray_o, float3 ray_d) {
         float3 out_rgb; float out_depth;
         SlangOpaqueTriangle::evaluate_color_opaque_triangle(
             verts, rgbs, ray_o, ray_d,
@@ -653,7 +428,7 @@ struct OpaqueTriangle::Screen {
     }
 
     __device__ __forceinline__ Screen evaluate_color_vjp(
-        float3 ray_o, float3 ray_d, OpaqueTriangle::RenderOutput v_render,
+        float3 ray_o, float3 ray_d, RenderOutput v_render,
         float3 &v_ray_o, float3 &v_ray_d
     ) {
         Screen v_splat = Screen::zero();
@@ -675,7 +450,7 @@ struct OpaqueTriangle::Screen {
 #ifdef __CUDACC__
 
 inline __device__ void OpaqueTriangle::project_persp(
-    OpaqueTriangle::World world, OpaqueTriangle::FwdProjCamera cam,
+    OpaqueTriangle::World world, ProjCamera cam,
     OpaqueTriangle::Screen& proj, float4& aabb
 ) {
     SlangOpaqueTriangle::projection_opaque_triangle_eval3d_persp(
@@ -688,7 +463,7 @@ inline __device__ void OpaqueTriangle::project_persp(
 }
 
 inline __device__ void OpaqueTriangle::project_fisheye(
-    OpaqueTriangle::World world, OpaqueTriangle::FwdProjCamera cam,
+    OpaqueTriangle::World world, ProjCamera cam,
     OpaqueTriangle::Screen& proj, float4& aabb
 ) {
     SlangOpaqueTriangle::projection_opaque_triangle_eval3d_fisheye(
@@ -701,7 +476,7 @@ inline __device__ void OpaqueTriangle::project_fisheye(
 }
 
 inline __device__ void OpaqueTriangle::project_persp_vjp(
-    OpaqueTriangle::World world, OpaqueTriangle::BwdProjCamera cam,
+    OpaqueTriangle::World world, ProjCamera cam,
     OpaqueTriangle::Screen v_proj,
     OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
@@ -717,21 +492,21 @@ inline __device__ void OpaqueTriangle::project_persp_vjp(
 }
 
 inline __device__ void OpaqueTriangle::project_persp_vjp(
-    OpaqueTriangle::World world, OpaqueTriangle::BwdProjCamera cam,
+    OpaqueTriangle::World world, ProjCamera cam,
     OpaqueTriangle::Screen v_proj, OpaqueTriangle::Screen vr_proj, OpaqueTriangle::Screen h_proj,
     OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t,
     float3 &vr_world_pos, float3 &h_world_pos
 ) {}  // TODO
 
 inline __device__ void OpaqueTriangle::project_persp_vjp(
-    OpaqueTriangle::World world, OpaqueTriangle::BwdProjCamera cam,
+    OpaqueTriangle::World world, ProjCamera cam,
     OpaqueTriangle::Screen v_proj, OpaqueTriangle::Screen vr_proj, OpaqueTriangle::Screen h_proj,
     OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t,
     OpaqueTriangle::World& vr_world, OpaqueTriangle::World& h_world
 ) {}  // TODO
 
 inline __device__ void OpaqueTriangle::project_fisheye_vjp(
-    OpaqueTriangle::World world, OpaqueTriangle::BwdProjCamera cam,
+    OpaqueTriangle::World world, ProjCamera cam,
     OpaqueTriangle::Screen v_proj,
     OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
@@ -747,17 +522,18 @@ inline __device__ void OpaqueTriangle::project_fisheye_vjp(
 }
 
 inline __device__ void OpaqueTriangle::project_fisheye_vjp(
-    OpaqueTriangle::World world, OpaqueTriangle::BwdProjCamera cam,
+    OpaqueTriangle::World world, ProjCamera cam,
     OpaqueTriangle::Screen v_proj, OpaqueTriangle::Screen vr_proj, OpaqueTriangle::Screen h_proj,
     OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t,
     float3 &vr_world_pos, float3 &h_world_pos
 ) {}  // TODO
 
 inline __device__ void OpaqueTriangle::project_fisheye_vjp(
-    OpaqueTriangle::World world, OpaqueTriangle::BwdProjCamera cam,
+    OpaqueTriangle::World world, ProjCamera cam,
     OpaqueTriangle::Screen v_proj, OpaqueTriangle::Screen vr_proj, OpaqueTriangle::Screen h_proj,
     OpaqueTriangle::World& v_world, float3x3 &v_R, float3 &v_t,
     OpaqueTriangle::World& vr_world, OpaqueTriangle::World& h_world
 ) {}  // TODO
 
 #endif  // #ifdef __CUDACC__
+#endif

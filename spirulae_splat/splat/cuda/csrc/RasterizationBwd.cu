@@ -20,7 +20,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     const uint32_t n_isects,
     // fwd inputs
     const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
-    typename SplatPrimitive::Screen::Buffer splat_buffer,
+    typename SplatPrimitive::ScreenBuffer splat_buffer,
     const float *__restrict__ backgrounds, // [..., CDIM] or [nnz, CDIM]
     const bool *__restrict__ masks,           // [..., tile_height, tile_width]
     const uint32_t image_width,
@@ -32,18 +32,18 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     // fwd outputs
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
-    typename SplatPrimitive::RenderOutput::Buffer render_output_buffer,
-    typename SplatPrimitive::RenderOutput::Buffer render2_output_buffer,
+    RenderOutput::Buffer render_output_buffer,
+    RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
-    typename SplatPrimitive::RenderOutput::Buffer v_render_output_buffer,
+    RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
-    typename SplatPrimitive::RenderOutput::Buffer v_distortions_output_buffer,
+    RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
-    typename SplatPrimitive::Screen::Buffer v_splat_buffer,
-    typename SplatPrimitive::Screen::Buffer vr_splat_buffer,
-    typename SplatPrimitive::Screen::Buffer h_splat_buffer,
+    typename SplatPrimitive::ScreenBuffer v_splat_buffer,
+    typename SplatPrimitive::ScreenBuffer vr_splat_buffer,
+    typename SplatPrimitive::ScreenBuffer h_splat_buffer,
     float *__restrict__ o_accum_weight
 );
 
@@ -51,7 +51,7 @@ template <typename SplatPrimitive, bool output_distortion, bool output_hessian_d
 inline void launch_rasterize_to_pixels_bwd_kernel(
     // Gaussian parameters
     int64_t num_splats,
-    typename SplatPrimitive::Screen::Tensor splats,
+    typename SplatPrimitive::ScreenBuffer splats,
     std::optional<at::Tensor> gaussian_ids,
     const std::optional<at::Tensor> backgrounds, // [..., 3]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -64,21 +64,22 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
     // forward outputs
     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
-    typename SplatPrimitive::RenderOutput::Tensor *render_outputs,
-    typename SplatPrimitive::RenderOutput::Tensor *render2_outputs,
+    RenderOutput::Tensor *render_outputs,
+    RenderOutput::Tensor *render2_outputs,
     const at::Tensor *loss_map,           // [..., image_height, image_width, 1]
     const at::Tensor *accum_weight_map,           // [..., image_height, image_width, 1]
     // gradients of outputs
-    typename SplatPrimitive::RenderOutput::Tensor v_render_outputs,
+    RenderOutput::Tensor v_render_outputs,
     const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
-    typename SplatPrimitive::RenderOutput::Tensor *v_distortion_outputs,
+    RenderOutput::Tensor *v_distortion_outputs,
     // outputs
-    typename SplatPrimitive::Screen::Tensor v_splats,
-    typename SplatPrimitive::Screen::Tensor *vr_splats,
-    typename SplatPrimitive::Screen::Tensor *h_splats,
+    typename SplatPrimitive::ScreenBuffer v_splats,
+    typename SplatPrimitive::ScreenBuffer *vr_splats,
+    typename SplatPrimitive::ScreenBuffer *h_splats,
     std::optional<at::Tensor> o_accum_weight
 ) {
-    bool packed = splats.isPacked();
+    // bool packed = splats.isPacked();
+    bool packed = true;  // TODO
     uint32_t N = packed ? 0 : splats.size(); // number of gaussians
     uint32_t I = render_Ts.numel() / (image_height * image_width); // number of images
     uint32_t tile_height = tile_offsets.size(-2);
@@ -90,18 +91,18 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
         return;
     }
 
-    typename SplatPrimitive::Screen::Buffer vr_splats_buffer;
-    typename SplatPrimitive::Screen::Buffer h_splats_buffer;
+    typename SplatPrimitive::ScreenBuffer vr_splats_buffer;
+    typename SplatPrimitive::ScreenBuffer h_splats_buffer;
     if (output_hessian_diagonal) {
-        vr_splats_buffer = vr_splats->buffer();
-        h_splats_buffer = h_splats->buffer();
+        vr_splats_buffer = *vr_splats;
+        h_splats_buffer = *h_splats;
     }
-    auto splats_buffer = splats.buffer();
-    auto v_splats_buffer = v_splats.buffer();
-    if (packed) {
-        splats_buffer.size = num_splats;
-        v_splats_buffer.size = num_splats;
-    }
+    auto splats_buffer = splats;
+    auto v_splats_buffer = v_splats;
+    // if (packed) {  // TODO
+    //     splats_buffer.size = num_splats;
+    //     v_splats_buffer.size = num_splats;
+    // }
 
     rasterize_to_pixels_bwd_kernel_wrapper<SplatPrimitive, output_distortion, output_hessian_diagonal, output_accum_weight>(
         (cudaStream_t)at::cuda::getCurrentCUDAStream(), I, n_isects,
@@ -112,12 +113,12 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
         image_width, image_height, tile_width, tile_height,
         tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
         render_Ts.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-        output_distortion ? render_outputs->buffer() : typename SplatPrimitive::RenderOutput::Buffer(),
-        output_distortion ? render2_outputs->buffer() : typename SplatPrimitive::RenderOutput::Buffer(),
+        output_distortion ? *render_outputs : RenderOutput::Buffer(),
+        output_distortion ? *render2_outputs : RenderOutput::Buffer(),
         output_hessian_diagonal ? loss_map->data_ptr<float>() : nullptr,
         output_accum_weight ? accum_weight_map->data_ptr<float>() : nullptr,
-        v_render_outputs.buffer(), v_render_Ts.data_ptr<float>(),
-        output_distortion ? v_distortion_outputs->buffer() : typename SplatPrimitive::RenderOutput::Buffer(),
+        v_render_outputs, v_render_Ts.data_ptr<float>(),
+        output_distortion ? *v_distortion_outputs : RenderOutput::Buffer(),
         v_splats_buffer, vr_splats_buffer, h_splats_buffer,
         output_accum_weight ? o_accum_weight.value().data_ptr<float>() : nullptr
     );
@@ -127,14 +128,14 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
 
 template<typename SplatPrimitive, bool output_distortion, bool output_hessian_diagonal, bool output_accum_weight>
 inline std::tuple<
-    typename SplatPrimitive::Screen::TensorTuple,
-    std::optional<typename SplatPrimitive::Screen::TensorTuple>,  // jacobian residual product
-    std::optional<typename SplatPrimitive::Screen::TensorTuple>,  // hessian diagonal
+    TensorList,
+    std::optional<TensorList>,  // jacobian residual product
+    std::optional<TensorList>,  // hessian diagonal
     std::optional<at::Tensor>  // accum_weight
 > _rasterize_to_pixels_bwd_tensor(
     // Gaussian parameters
     int64_t num_splats,
-    typename SplatPrimitive::Screen::TensorTuple splats_tuple,
+    TensorList splats_tuple,
     std::optional<at::Tensor> gaussian_ids,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -147,14 +148,14 @@ inline std::tuple<
     // forward outputs
     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
-    std::optional<typename SplatPrimitive::RenderOutput::TensorTuple> render_outputs_tuple,
-    std::optional<typename SplatPrimitive::RenderOutput::TensorTuple> render2_outputs_tuple,
+    std::optional<RenderOutput::TensorTuple> render_outputs_tuple,
+    std::optional<RenderOutput::TensorTuple> render2_outputs_tuple,
     std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     std::optional<at::Tensor> accum_weight_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
-    typename SplatPrimitive::RenderOutput::TensorTuple v_render_outputs,
+    RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
-    std::optional<typename SplatPrimitive::RenderOutput::TensorTuple> v_distortion_outputs_tuple
+    std::optional<RenderOutput::TensorTuple> v_distortion_outputs_tuple
 ) {
     DEVICE_GUARD(tile_offsets);
     CHECK_INPUT(tile_offsets);
@@ -169,22 +170,22 @@ inline std::tuple<
     if (loss_map.has_value())
         CHECK_INPUT(loss_map.value());
 
-    typename SplatPrimitive::Screen::Tensor splats(splats_tuple);
-    typename SplatPrimitive::Screen::Tensor v_splats = splats.allocRasterBwd();
+    typename SplatPrimitive::ScreenBuffer splats(splats_tuple);
+    typename SplatPrimitive::ScreenBuffer v_splats = splats.zeros_like();
 
-    std::optional<typename SplatPrimitive::RenderOutput::Tensor> render_outputs = std::nullopt;
-    std::optional<typename SplatPrimitive::RenderOutput::Tensor> render2_outputs = std::nullopt;
-    std::optional<typename SplatPrimitive::RenderOutput::Tensor> v_distortion_outputs = std::nullopt;
+    std::optional<RenderOutput::Tensor> render_outputs = std::nullopt;
+    std::optional<RenderOutput::Tensor> render2_outputs = std::nullopt;
+    std::optional<RenderOutput::Tensor> v_distortion_outputs = std::nullopt;
     if (output_distortion) {
         render_outputs = render_outputs_tuple;
         render2_outputs = render2_outputs_tuple;
         v_distortion_outputs = v_distortion_outputs_tuple;
     }
-    std::optional<typename SplatPrimitive::Screen::Tensor> vr_splats = std::nullopt;
-    std::optional<typename SplatPrimitive::Screen::Tensor> h_splats = std::nullopt;
+    std::optional<typename SplatPrimitive::ScreenBuffer> vr_splats = std::nullopt;
+    std::optional<typename SplatPrimitive::ScreenBuffer> h_splats = std::nullopt;
     if (output_hessian_diagonal) {
-        vr_splats = splats.allocRasterBwd();
-        h_splats = splats.allocRasterBwd();
+        vr_splats = splats.zeros_like();
+        h_splats = splats.zeros_like();
     }
     std::optional<at::Tensor> o_accum_weight = std::nullopt;
     if (output_accum_weight) {
@@ -212,23 +213,23 @@ inline std::tuple<
 
     if (output_hessian_diagonal)
         return std::make_tuple(v_splats.tupleRasterBwd(),
-            (std::optional<typename SplatPrimitive::Screen::TensorTuple>)vr_splats.value().tupleRasterBwd(),
-            (std::optional<typename SplatPrimitive::Screen::TensorTuple>)h_splats.value().tupleRasterBwd(),
+            (std::optional<TensorList>)vr_splats.value().tupleRasterBwd(),
+            (std::optional<TensorList>)h_splats.value().tupleRasterBwd(),
             o_accum_weight);
     return std::make_tuple(v_splats.tupleRasterBwd(),
-        (std::optional<typename SplatPrimitive::Screen::TensorTuple>)std::nullopt,
-        (std::optional<typename SplatPrimitive::Screen::TensorTuple>)std::nullopt,
+        (std::optional<TensorList>)std::nullopt,
+        (std::optional<TensorList>)std::nullopt,
         o_accum_weight);
 }
 
 template<typename SplatPrimitive>
 inline std::tuple<
-    typename SplatPrimitive::Screen::TensorTuple,
+    TensorList,
     std::optional<at::Tensor>  // accum_weight
 > rasterize_to_pixels_bwd_tensor(
     // Gaussian parameters
     int64_t num_splats,
-    typename SplatPrimitive::Screen::TensorTuple splats_tuple,
+    TensorList splats_tuple,
     std::optional<at::Tensor> gaussian_ids,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -243,7 +244,7 @@ inline std::tuple<
     const at::Tensor last_ids,      // [..., image_height, image_width]
     std::optional<at::Tensor> accum_weight_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
-    typename SplatPrimitive::RenderOutput::TensorTuple v_render_outputs,
+    RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_Ts // [..., image_height, image_width, 1]
 ) {
     // TODO: add interface for output_distortion
@@ -269,12 +270,12 @@ inline std::tuple<
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<
-    typename Vanilla3DGS::Screen::TensorTuple,
+    TensorList,
     std::optional<at::Tensor>  // accum_weight
 > rasterize_to_pixels_3dgs_bwd(
     // Gaussian parameters
     int64_t num_splats,
-    Vanilla3DGS::Screen::TensorTuple splats_tuple,
+    TensorList splats_tuple,
     std::optional<at::Tensor> gaussian_ids,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -289,7 +290,7 @@ std::tuple<
     const at::Tensor last_ids,      // [..., image_height, image_width]
     std::optional<at::Tensor> accum_weight_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
-    Vanilla3DGS::RenderOutput::TensorTuple v_render_outputs,
+    RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_Ts // [..., image_height, image_width, 1]
 ) {
     return rasterize_to_pixels_bwd_tensor<Vanilla3DGS>(
@@ -302,14 +303,14 @@ std::tuple<
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<
-    Vanilla3DGS::Screen::TensorTuple,
-    std::optional<Vanilla3DGS::Screen::TensorTuple>,  // jacobian residual product
-    std::optional<Vanilla3DGS::Screen::TensorTuple>,  // hessian diagonal
+    TensorList,
+    std::optional<TensorList>,  // jacobian residual product
+    std::optional<TensorList>,  // hessian diagonal
     std::optional<at::Tensor>  // accum_weight
 > rasterize_to_pixels_3dgs_bwd_with_hessian_diagonal(
     // Gaussian parameters
     int64_t num_splats,
-    Vanilla3DGS::Screen::TensorTuple splats_tuple,
+    TensorList splats_tuple,
     std::optional<at::Tensor> gaussian_ids,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
@@ -322,14 +323,14 @@ std::tuple<
     // forward outputs
     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
-    std::optional<typename Vanilla3DGS::RenderOutput::TensorTuple> render_outputs,
-    std::optional<typename Vanilla3DGS::RenderOutput::TensorTuple> render2_outputs,
+    std::optional<RenderOutput::TensorTuple> render_outputs,
+    std::optional<RenderOutput::TensorTuple> render2_outputs,
     std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
     std::optional<at::Tensor> accum_weight_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
-    Vanilla3DGS::RenderOutput::TensorTuple v_render_outputs,
+    RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
-    std::optional<typename Vanilla3DGS::RenderOutput::TensorTuple> v_distortion_outputs
+    std::optional<RenderOutput::TensorTuple> v_distortion_outputs
 ) {
     using Fn = decltype(&_rasterize_to_pixels_bwd_tensor<Vanilla3DGS, false, true, false>);
     static constexpr Fn funcs[2][2] = { {

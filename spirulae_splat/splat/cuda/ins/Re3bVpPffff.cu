@@ -17,7 +17,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     const uint32_t n_isects,
     // fwd inputs
     const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
-    VoxelPrimitive::Screen::Buffer splat_buffer,
+    VoxelPrimitive::ScreenBuffer splat_buffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -32,18 +32,18 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // fwd outputs
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
-    VoxelPrimitive::RenderOutput::Buffer render_output_buffer,
-    VoxelPrimitive::RenderOutput::Buffer render2_output_buffer,
+    RenderOutput::Buffer render_output_buffer,
+    RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
-    VoxelPrimitive::RenderOutput::Buffer v_render_output_buffer,
+    RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
-    VoxelPrimitive::RenderOutput::Buffer v_distortions_output_buffer,
+    RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
-    VoxelPrimitive::Screen::Buffer v_splat_buffer,
-    VoxelPrimitive::Screen::Buffer vr_splat_buffer,
-    VoxelPrimitive::Screen::Buffer h_splat_buffer,
+    VoxelPrimitive::ScreenBuffer v_splat_buffer,
+    VoxelPrimitive::ScreenBuffer vr_splat_buffer,
+    VoxelPrimitive::ScreenBuffer h_splat_buffer,
     float *__restrict__ o_accum_weight,
     float *__restrict__ v_viewmats // [B, C, 4, 4]
 );

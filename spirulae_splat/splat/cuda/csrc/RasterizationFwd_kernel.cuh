@@ -25,7 +25,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const uint32_t N,
     const uint32_t n_isects,
     const bool packed,
-    typename SplatPrimitive::Screen::Buffer splat_buffer,
+    typename SplatPrimitive::ScreenBuffer splat_buffer,
     const float3 *__restrict__ backgrounds, // [I, 3]
     const bool *__restrict__ masks,           // [I, tile_height, tile_width]
     const uint32_t image_width,
@@ -34,7 +34,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [I, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    typename SplatPrimitive::RenderOutput::Buffer render_colors, // [I, image_height, image_width, 3]
+    RenderOutput::Buffer render_colors, // [I, image_height, image_width, 3]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids        // [I, image_height, image_width]
 ) {
@@ -72,8 +72,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     if (masks != nullptr && inside && !masks[tile_id]) {
         // TODO
         // render_colors[pix_id] = backgrounds == nullptr ?
-        //     SplatPrimitive::RenderOutput(make_float3(0.f)) :
-        //     SplatPrimitive::RenderOutput(*backgrounds);
+        //     RenderOutput(make_float3(0.f)) :
+        //     RenderOutput(*backgrounds);
         return;
     }
 
@@ -104,7 +104,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     // designated pixel
     uint32_t tr = block.thread_rank();
 
-    typename SplatPrimitive::RenderOutput pix_out = SplatPrimitive::RenderOutput::zero();
+    RenderOutput pix_out = RenderOutput::zero();
     for (uint32_t b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
@@ -140,7 +140,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
             }
 
             const float vis = alpha * T;
-            const typename SplatPrimitive::RenderOutput color = splat.evaluate_color(px, py);
+            const RenderOutput color = splat.evaluate_color(px, py);
             pix_out += color * vis;
             cur_idx = batch_start + t;
 
@@ -151,7 +151,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     if (inside) {
         render_Ts[pix_id] = T;
         // TODO: blend background
-        pix_out.saveParamsToBuffer(render_colors, image_id * image_height * image_width + pix_id);
+        pix_out.saveParamsToBuffer<SplatPrimitive::pixelType>(render_colors, image_id * image_height * image_width + pix_id);
         // index in bin of last gaussian in this pixel
         last_ids[pix_id] = static_cast<int32_t>(cur_idx);
     }
@@ -165,7 +165,7 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
     const uint32_t N,
     const uint32_t n_isects,
     const bool packed,
-    typename SplatPrimitive::Screen::Buffer splat_buffer,
+    typename SplatPrimitive::ScreenBuffer splat_buffer,
     const float3 *__restrict__ backgrounds, // [I, 3]
     const bool *__restrict__ masks,           // [I, tile_height, tile_width]
     const uint32_t image_width,
@@ -174,7 +174,7 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
     const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [I, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    typename SplatPrimitive::RenderOutput::Buffer render_colors, // [I, image_height, image_width, 3]
+    RenderOutput::Buffer render_colors, // [I, image_height, image_width, 3]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids        // [I, image_height, image_width]
 ) {

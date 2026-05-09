@@ -13,31 +13,31 @@
 
 
 
-std::tuple<
-    OpaqueTriangle::Screen::TensorTuple,
-    std::optional<at::Tensor>  // v_viewmats
-> rasterize_to_pixels_opaque_triangle_sorted_bwd(
-    // Gaussian parameters
-    OpaqueTriangle::Screen::TensorTuple splats_tuple,
-    std::optional<at::Tensor> gaussian_ids,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
-    const std::optional<at::Tensor> backgrounds, // [..., channels]
-    // image size
-    const uint32_t image_width,
-    const uint32_t image_height,
-    // intersections
-    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids,  // [n_isects]
-    // forward outputs
-    const at::Tensor render_Ts, // [..., image_height, image_width, 1]
-    const at::Tensor last_ids,      // [..., image_height, image_width]
-    std::optional<typename OpaqueTriangle::RenderOutput::TensorTuple> render_outputs,
-    std::optional<typename OpaqueTriangle::RenderOutput::TensorTuple> render2_outputs,
-    // gradients of outputs
-    OpaqueTriangle::RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
-    std::optional<typename OpaqueTriangle::RenderOutput::TensorTuple> v_distortion_outputs
-);
+// std::tuple<
+//     OpaqueTriangle::Screen::TensorTuple,
+//     std::optional<at::Tensor>  // v_viewmats
+// > rasterize_to_pixels_opaque_triangle_sorted_bwd(
+//     // Gaussian parameters
+//     OpaqueTriangle::Screen::TensorTuple splats_tuple,
+//     std::optional<at::Tensor> gaussian_ids,
+//     const at::Tensor viewmats,  // [..., C, 4, 4]
+//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+//     const std::string camera_model,
+//     const CameraDistortionCoeffsTensor dist_coeffs,
+//     const std::optional<at::Tensor> backgrounds, // [..., channels]
+//     // image size
+//     const uint32_t image_width,
+//     const uint32_t image_height,
+//     // intersections
+//     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+//     const at::Tensor flatten_ids,  // [n_isects]
+//     // forward outputs
+//     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
+//     const at::Tensor last_ids,      // [..., image_height, image_width]
+//     std::optional<RenderOutput::TensorTuple> render_outputs,
+//     std::optional<RenderOutput::TensorTuple> render2_outputs,
+//     // gradients of outputs
+//     RenderOutput::TensorTuple v_render_outputs,
+//     const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
+//     std::optional<RenderOutput::TensorTuple> v_distortion_outputs
+// );

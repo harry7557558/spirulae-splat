@@ -20,7 +20,7 @@ __global__ void projection_fused_fwd_kernel(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const typename SplatPrimitive::World::Buffer splats_world,
+    const typename SplatPrimitive::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -28,7 +28,7 @@ __global__ void projection_fused_fwd_kernel(
     const uint32_t image_height,
     // outputs
     float4 *__restrict__ aabbs,         // [B, C, N, 4]
-    typename SplatPrimitive::Screen::Buffer splats_screen
+    typename SplatPrimitive::ScreenBuffer splats_screen
 ) {
     // parallelize over B * C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -49,7 +49,7 @@ __global__ void projection_fused_fwd_kernel(
     };
     float3 t = { viewmats[3], viewmats[7], viewmats[11] };
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
-    typename SplatPrimitive::FwdProjCamera cam = {
+    ProjCamera cam = {
         R, t, fx, fy, cx, cy,
         image_width, image_height,
     };
@@ -94,7 +94,7 @@ void projection_fused_fwd_kernel_wrapper(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const typename SplatPrimitive::World::Buffer splats_world,
+    const typename SplatPrimitive::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -102,7 +102,7 @@ void projection_fused_fwd_kernel_wrapper(
     const uint32_t image_height,
     // outputs
     float4 *__restrict__ aabbs,         // [B, C, N, 4]
-    typename SplatPrimitive::Screen::Buffer splats_screen
+    typename SplatPrimitive::ScreenBuffer splats_screen
 ) {
     constexpr uint block = 128;
     projection_fused_fwd_kernel<SplatPrimitive, camera_model>

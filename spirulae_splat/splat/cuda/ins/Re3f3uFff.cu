@@ -15,7 +15,7 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     const uint32_t N,
     const uint32_t n_isects,
     const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
-    const Vanilla3DGUT::Screen::Buffer splat_buffer,
+    const Vanilla3DGUT::ScreenBuffer splat_buffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -27,10 +27,10 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [I, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    Vanilla3DGUT::RenderOutput::Buffer render_colors, // [I, image_height, image_width, ...]
+    RenderOutput::Buffer render_colors, // [I, image_height, image_width, ...]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
-    Vanilla3DGUT::RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
-    Vanilla3DGUT::RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
+    RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
+    RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
     float* __restrict__ out_max_blending
 );

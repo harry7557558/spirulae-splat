@@ -8,102 +8,32 @@ namespace Slang3DGS {
 }
 #endif
 
-#include "types.cuh"
-#include "common.cuh"
+#include "Primitive.cuh"
+#include "PrimitiveBase3DGS.cuh"
 
-#include <tuple>
+// template<bool antialiased>
+// struct _Base3DGS  {
+//     struct World;
+//     struct Screen;
+//     static constexpr RenderOutputType pixelType = RenderOutputType::RGB_D;
+
+// #ifdef __CUDACC__
+
+// #endif  // #ifdef __CUDACC__
+
+// };
 
 
 template<bool antialiased>
-struct _Base3DGS {
-    struct World;
-    struct Screen;
-    struct RenderOutput;
-
-#ifdef __CUDACC__
-
-    struct FwdProjCamera {
-        float3x3 R;
-        float3 t;
-        float fx, fy, cx, cy;
-        uint width, height;
-        CameraDistortionCoeffs dist_coeffs;
-    };
-
-    inline static __device__ void project_persp(
-        World world, FwdProjCamera cam,
-        Screen& screen, float4& aabb
-    );
-
-    inline static __device__ void project_ortho(
-        World world, FwdProjCamera cam,
-        Screen& screen, float4& aabb
-    );
-
-    inline static __device__ void project_fisheye(
-        World world, FwdProjCamera cam,
-        Screen& screen, float4& aabb
-    );
-
-    struct BwdProjCamera {
-        float3x3 R;
-        float3 t;
-        float fx, fy, cx, cy;
-        uint width, height;
-        CameraDistortionCoeffs dist_coeffs;
-    };
-
-    inline static __device__ void project_persp_vjp(
-        World world, BwdProjCamera cam,
-        Screen v_screen,
-        World& v_world, float3x3 &v_R, float3 &v_t
-    );
-
-    inline static __device__ void project_persp_vjp(
-        World world, BwdProjCamera cam,
-        Screen v_proj, Screen vr_proj, Screen h_proj,
-        World& v_world, float3x3 &v_R, float3 &v_t,
-        float3 &vr_world, float3 &h_world
-    );
-
-    inline static __device__ void project_persp_vjp(
-        World world, BwdProjCamera cam,
-        Screen v_proj, Screen vr_proj, Screen h_proj,
-        World& v_world, float3x3 &v_R, float3 &v_t,
-        World& vr_world, World& h_world
-    );
-
-    inline static __device__ void project_ortho_vjp(
-        World world, BwdProjCamera cam,
-        Screen v_screen,
-        World& v_world, float3x3 &v_R, float3 &v_t
-    );
-
-    inline static __device__ void project_fisheye_vjp(
-        World world, BwdProjCamera cam,
-        Screen v_screen,
-        World& v_world, float3x3 &v_R, float3 &v_t
-    );
-
-    inline static __device__ void project_fisheye_vjp(
-        World world, BwdProjCamera cam,
-        Screen v_proj, Screen vr_proj, Screen h_proj,
-        World& v_world, float3x3 &v_R, float3 &v_t,
-        float3 &vr_world_pos, float3 &h_world_pos
-    );
-
-    inline static __device__ void project_fisheye_vjp(
-        World world, BwdProjCamera cam,
-        Screen v_proj, Screen vr_proj, Screen h_proj,
-        World& v_world, float3x3 &v_R, float3 &v_t,
-        World& vr_world, World& h_world
-    );
-
-#endif  // #ifdef __CUDACC__
-
+struct _Base3DGS : public _BasePrimitive3DGS {
+    static constexpr RenderOutputType pixelType = RenderOutputType::RGB_D;
 };
 
-template<bool antialiased>
+typedef _Base3DGS<false> Vanilla3DGS;
+typedef _Base3DGS<true> MipSplatting;
+
+
+#if 0
 struct _Base3DGS<antialiased>::World {
 
     float3 mean;
@@ -169,32 +99,19 @@ struct _Base3DGS<antialiased>::World {
     };
     #endif
 
-    struct Buffer {
-        float3* __restrict__ means;
-        float4* __restrict__ quats;
-        float3* __restrict__ scales;
-        float* __restrict__ opacities;
-        float3* __restrict__ features_dc;
+    struct Buffer : public TensorArray<5> {
         float3* __restrict__ features_sh;
         uint num_sh;
 
-        Buffer() {}
+        using TensorArray<5>::TensorArray;
+
+        Buffer() : features_sh(nullptr), num_sh(0) {}
 
         #ifndef NO_TORCH
-        Buffer(const Tensor& tensors) {
-            DEVICE_GUARD(tensors.means);
-            CHECK_INPUT(tensors.means);
-            CHECK_INPUT(tensors.quats);
-            CHECK_INPUT(tensors.scales);
-            CHECK_INPUT(tensors.opacities);
-            CHECK_INPUT(tensors.features_dc);
-            if (tensors.features_sh.has_value())
-                CHECK_INPUT(tensors.features_sh.value());
-            means = (float3*)tensors.means.template data_ptr<float>();
-            quats = (float4*)tensors.quats.template data_ptr<float>();
-            scales = (float3*)tensors.scales.template data_ptr<float>();
-            opacities = tensors.opacities.template data_ptr<float>();
-            features_dc = (float3*)tensors.features_dc.template data_ptr<float>();
+        Buffer(const Tensor& tensors)
+            : TensorArray<5>(std::vector<std::optional<at::Tensor>>{
+                tensors.means, tensors.quats, tensors.scales, tensors.opacities, tensors.features_dc
+            }) {
             features_sh = tensors.features_sh.has_value() ?
                 (float3*)tensors.features_sh.value().template data_ptr<float>() : nullptr;
             num_sh = tensors.features_sh.has_value() ?
@@ -253,125 +170,6 @@ struct _Base3DGS<antialiased>::World {
 
 #endif  // #ifdef __CUDACC__
 };
-
-
-template<bool antialiased>
-struct _Base3DGS<antialiased>::RenderOutput {
-
-    float3 rgb;
-    float depth;
-
-    #ifndef NO_TORCH
-    typedef std::tuple<at::Tensor, at::Tensor> TensorTuple;
-    #endif
-
-    struct Buffer;
-
-    #ifndef NO_TORCH
-    struct Tensor {
-        at::Tensor rgbs;
-        at::Tensor depths;
-
-        Tensor() {}
-
-        Tensor(const TensorTuple& images) {
-            rgbs = std::get<0>(images);
-            depths = std::get<1>(images);
-        }
-
-        TensorTuple tuple() const {
-            return std::make_tuple(rgbs, depths);
-        }
-
-        static Tensor empty(at::DimVector dims, at::TensorOptions opt) {
-            at::DimVector rgbs_dims(dims); rgbs_dims.append({3});
-            at::DimVector depths_dims(dims); depths_dims.append({1});
-            return Tensor(std::make_tuple(
-                at::empty(rgbs_dims, opt),
-                at::empty(depths_dims, opt)
-            ));
-        }
-
-        auto options() const {
-            return rgbs.options();
-        }
-        long width() const {
-            return rgbs.size(-2);
-        }
-        long height() const {
-            return rgbs.size(-3);
-        }
-        long batchSize() const {
-            return rgbs.numel() / (3*width()*height());
-        }
-
-        Buffer buffer() { return Buffer(*this); }
-    };
-    #endif
-
-    struct Buffer {
-        float3* __restrict__ rgbs;
-        float* __restrict__ depths;
-
-        Buffer() : rgbs(nullptr), depths(nullptr) {}
-
-        #ifndef NO_TORCH
-        Buffer(const Tensor& tensors) {
-            DEVICE_GUARD(tensors.rgbs);
-            CHECK_INPUT(tensors.rgbs);
-            CHECK_INPUT(tensors.depths);
-            rgbs = (float3*)tensors.rgbs.template data_ptr<float>();
-            depths = tensors.depths.template data_ptr<float>();
-        }
-        #endif
-    };
-
-#ifdef __CUDACC__
-
-
-    static __device__ RenderOutput load(const Buffer &buffer, long idx) {
-        return {
-            buffer.rgbs[idx],
-            buffer.depths[idx]
-        };
-    }
-
-    static __device__ __forceinline__ RenderOutput zero() {
-        return {
-            {0.f, 0.f, 0.f},
-            0.f
-        };
-    }
-
-    __device__ __forceinline__ void operator+=(const RenderOutput &other) {
-        rgb += other.rgb;
-        depth += other.depth;
-    }
-
-    __device__ __forceinline__ RenderOutput operator*(float k) const {
-        return {rgb * k, depth * k};
-    }
-
-    __device__ __forceinline__ RenderOutput operator+(const RenderOutput &other) const {
-        return {rgb + other.rgb, depth + other.depth};
-    }
-
-    __device__ __forceinline__ RenderOutput operator*(const RenderOutput &other) const {
-        return {rgb * other.rgb, depth * other.depth};
-    }
-
-    __device__ __forceinline__ float dot(const RenderOutput &other) const {
-        return (rgb.x * other.rgb.x + rgb.y * other.rgb.y + rgb.z * other.rgb.z) + depth * other.depth;
-    }
-
-    __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
-        buffer.rgbs[idx] = rgb;
-        buffer.depths[idx] = depth;
-    }
-
-#endif  // #ifdef __CUDACC__
-};
-
 
 template<bool antialiased>
 struct _Base3DGS<antialiased>::Screen {
@@ -465,29 +263,18 @@ struct _Base3DGS<antialiased>::Screen {
     };
     #endif
 
-    struct Buffer {
-        float2* __restrict__ means2d;  // [I, N, 2] or [nnz, 2]
-        float* __restrict__ depths;  // [I, N] or [nnz]
-        float3* __restrict__ conics;  // [I, N, 3] or [nnz, 3]
-        float* __restrict__ opacities;  // [I, N] or [nnz]
-        float3* __restrict__ rgbs;  // [I, N, 3] or [nnz, 3]
+    struct Buffer : public TensorArray<5> {
         long size;
 
-        Buffer() {}
+        using TensorArray<5>::TensorArray;
+
+        Buffer() : size(0) {}
 
         #ifndef NO_TORCH
-        Buffer(const Tensor& tensors) {
-            DEVICE_GUARD(tensors.means2d);
-            CHECK_INPUT(tensors.means2d);
-            CHECK_INPUT(tensors.depths);
-            CHECK_INPUT(tensors.conics);
-            CHECK_INPUT(tensors.opacities);
-            CHECK_INPUT(tensors.rgbs);
-            means2d = (float2*)tensors.means2d.template data_ptr<float>();
-            depths = tensors.depths.template data_ptr<float>();
-            conics = (float3*)tensors.conics.template data_ptr<float>();
-            opacities = tensors.opacities.template data_ptr<float>();
-            rgbs = (float3*)tensors.rgbs.template data_ptr<float>();
+        Buffer(const Tensor& tensors)
+            : TensorArray<5>(std::vector<std::optional<at::Tensor>>{
+                tensors.means2d, tensors.depths, tensors.conics, tensors.opacities, tensors.rgbs
+            }) {
             size = tensors.opacities.numel();
         }
         #endif
@@ -589,11 +376,11 @@ struct _Base3DGS<antialiased>::Screen {
         return v_splat;
     }
 
-    __device__ __forceinline__ _Base3DGS::RenderOutput evaluate_color(float px, float py) {
+    __device__ __forceinline__ RenderOutput evaluate_color(float px, float py) {
         return { rgb, depth };
     }
 
-    __device__ __forceinline__ Screen evaluate_color_vjp(float px, float py, _Base3DGS::RenderOutput v_render) {
+    __device__ __forceinline__ Screen evaluate_color_vjp(float px, float py, RenderOutput v_render) {
         Screen v_splat = Screen::zero();
         v_splat.rgb = v_render.rgb;
         v_splat.depth = v_render.depth;
@@ -603,14 +390,15 @@ struct _Base3DGS<antialiased>::Screen {
 #endif  // #ifdef __CUDACC__
 
 };
+#endif
 
 
 #ifdef __CUDACC__
 
 template<bool antialiased>
-inline __device__ void _Base3DGS<antialiased>::project_persp(
-    _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::FwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen& screen, float4& aabb
+inline __device__ void project_persp(
+    typename _Base3DGS<antialiased>::World world, ProjCamera cam,
+    typename _Base3DGS<antialiased>::Screen& screen, float4& aabb
 ) {
     Slang3DGS::projection_3dgs_persp(
         antialiased,
@@ -623,9 +411,9 @@ inline __device__ void _Base3DGS<antialiased>::project_persp(
 }
 
 template<bool antialiased>
-inline __device__ void _Base3DGS<antialiased>::project_ortho(
-    _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::FwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen& screen, float4& aabb
+inline __device__ void project_ortho(
+    typename _Base3DGS<antialiased>::World world, ProjCamera cam,
+    typename _Base3DGS<antialiased>::Screen& screen, float4& aabb
 ) {
     Slang3DGS::projection_3dgs_ortho(
         antialiased,
@@ -637,9 +425,9 @@ inline __device__ void _Base3DGS<antialiased>::project_ortho(
 }
 
 template<bool antialiased>
-inline __device__ void _Base3DGS<antialiased>::project_fisheye(
-    _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::FwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen& screen, float4& aabb
+inline __device__ void project_fisheye(
+    typename _Base3DGS<antialiased>::World world, ProjCamera cam,
+    typename _Base3DGS<antialiased>::Screen& screen, float4& aabb
 ) {
     Slang3DGS::projection_3dgs_fisheye(
         antialiased,
@@ -652,10 +440,10 @@ inline __device__ void _Base3DGS<antialiased>::project_fisheye(
 
 
 template<bool antialiased>
-inline __device__ void _Base3DGS<antialiased>::project_persp_vjp(
-    _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::BwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen v_screen,
-    _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t
+inline __device__ void project_persp_vjp(
+    typename _Base3DGS<antialiased>::World world, ProjCamera cam,
+    typename _Base3DGS<antialiased>::Screen v_screen,
+    typename _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
     Slang3DGS::projection_3dgs_persp_vjp(
         antialiased,
@@ -669,10 +457,10 @@ inline __device__ void _Base3DGS<antialiased>::project_persp_vjp(
 }
 
 template<bool antialiased>
-inline __device__ void _Base3DGS<antialiased>::project_persp_vjp(
-    _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::BwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen v_proj, _Base3DGS<antialiased>::Screen vr_proj, _Base3DGS<antialiased>::Screen h_proj,
-    _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t,
+inline __device__ void project_persp_vjp(
+    typename _Base3DGS<antialiased>::World world, ProjCamera cam,
+    typename _Base3DGS<antialiased>::Screen v_proj, typename _Base3DGS<antialiased>::Screen vr_proj, typename _Base3DGS<antialiased>::Screen h_proj,
+    typename _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t,
     float3 &vr_world_pos, float3 &h_world_pos
 ) {
     Slang3DGS::projection_3dgs_persp_vjp(
@@ -689,11 +477,11 @@ inline __device__ void _Base3DGS<antialiased>::project_persp_vjp(
 }
 
 template<bool antialiased>
-inline __device__ void _Base3DGS<antialiased>::project_persp_vjp(
-    _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::BwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen v_proj, _Base3DGS<antialiased>::Screen vr_proj, _Base3DGS<antialiased>::Screen h_proj,
-    _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t,
-    _Base3DGS<antialiased>::World& vr_world, _Base3DGS<antialiased>::World& h_world
+inline __device__ void project_persp_vjp(
+    typename _Base3DGS<antialiased>::World world, ProjCamera cam,
+    typename _Base3DGS<antialiased>::Screen v_proj, typename _Base3DGS<antialiased>::Screen vr_proj, typename _Base3DGS<antialiased>::Screen h_proj,
+    typename _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t,
+    typename _Base3DGS<antialiased>::World& vr_world, typename _Base3DGS<antialiased>::World& h_world
 ) {
     Slang3DGS::projection_3dgs_persp_vjp(
         antialiased,
@@ -711,27 +499,10 @@ inline __device__ void _Base3DGS<antialiased>::project_persp_vjp(
 }
 
 template<bool antialiased>
-inline __device__ void _Base3DGS<antialiased>::project_ortho_vjp(
-    _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::BwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen v_screen,
-    _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t
-) {
-    Slang3DGS::projection_3dgs_ortho_vjp(
-        antialiased,
-        world.mean, world.quat, world.scale, world.opacity, world.sh_coeffs,
-        cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-        cam.width, cam.height,
-        v_screen.xy, v_screen.depth, v_screen.conic, v_screen.opac, v_screen.rgb,
-        &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
-        &v_R, &v_t
-    );
-}
-
-template<bool antialiased>
-inline __device__ void _Base3DGS<antialiased>::project_fisheye_vjp(
-    _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::BwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen v_screen,
-    _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t
+inline __device__ void project_fisheye_vjp(
+    typename _Base3DGS<antialiased>::World world, ProjCamera cam,
+    typename _Base3DGS<antialiased>::Screen v_screen,
+    typename _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t
 ) {
     Slang3DGS::projection_3dgs_fisheye_vjp(
         antialiased,
@@ -745,10 +516,10 @@ inline __device__ void _Base3DGS<antialiased>::project_fisheye_vjp(
 }
 
 template<bool antialiased>
-inline __device__ void _Base3DGS<antialiased>::project_fisheye_vjp(
-    _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::BwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen v_proj, _Base3DGS<antialiased>::Screen vr_proj, _Base3DGS<antialiased>::Screen h_proj,
-    _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t,
+inline __device__ void project_fisheye_vjp(
+    typename _Base3DGS<antialiased>::World world, ProjCamera cam,
+    typename _Base3DGS<antialiased>::Screen v_proj, typename _Base3DGS<antialiased>::Screen vr_proj, typename _Base3DGS<antialiased>::Screen h_proj,
+    typename _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t,
     float3 &vr_world_pos, float3 &h_world_pos
 ) {
     Slang3DGS::projection_3dgs_fisheye_vjp(
@@ -765,11 +536,11 @@ inline __device__ void _Base3DGS<antialiased>::project_fisheye_vjp(
 }
 
 template<bool antialiased>
-inline __device__ void _Base3DGS<antialiased>::project_fisheye_vjp(
-    _Base3DGS<antialiased>::World world, _Base3DGS<antialiased>::BwdProjCamera cam,
-    _Base3DGS<antialiased>::Screen v_proj, _Base3DGS<antialiased>::Screen vr_proj, _Base3DGS<antialiased>::Screen h_proj,
-    _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t,
-    _Base3DGS<antialiased>::World& vr_world, _Base3DGS<antialiased>::World& h_world
+inline __device__ void project_fisheye_vjp(
+    typename _Base3DGS<antialiased>::World world, ProjCamera cam,
+    typename _Base3DGS<antialiased>::Screen v_proj, typename _Base3DGS<antialiased>::Screen vr_proj, typename _Base3DGS<antialiased>::Screen h_proj,
+    typename _Base3DGS<antialiased>::World& v_world, float3x3 &v_R, float3 &v_t,
+    typename _Base3DGS<antialiased>::World& vr_world, typename _Base3DGS<antialiased>::World& h_world
 ) {
     Slang3DGS::projection_3dgs_fisheye_vjp(
         antialiased,
@@ -788,6 +559,3 @@ inline __device__ void _Base3DGS<antialiased>::project_fisheye_vjp(
 
 #endif  // #ifdef __CUDACC__
 
-
-typedef _Base3DGS<false> Vanilla3DGS;
-typedef _Base3DGS<true> MipSplatting;

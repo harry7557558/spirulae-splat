@@ -50,7 +50,7 @@ struct SplatTileIntersector {
 
     c10::TensorOptions tensorF32;
     c10::TensorOptions tensorI32, tensorI16, tensorI64, tensorU8;
-    typename Primitive::World::Buffer splats;
+    typename Primitive::WorldBuffer splats;
     long numSplats;
     float rel_scale;
     TileBuffers<camera_model> tiles;

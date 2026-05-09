@@ -14,7 +14,7 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
     const uint32_t N,
     const uint32_t n_isects,
     const bool packed,
-    typename SplatPrimitive::Screen::Buffer splat_buffer,
+    typename SplatPrimitive::ScreenBuffer splat_buffer,
     const float3 *__restrict__ backgrounds, // [I, 3]
     const bool *__restrict__ masks,           // [I, tile_height, tile_width]
     const uint32_t image_width,
@@ -23,7 +23,7 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
     const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [I, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    typename SplatPrimitive::RenderOutput::Buffer render_colors, // [I, image_height, image_width, 3]
+    RenderOutput::Buffer render_colors, // [I, image_height, image_width, 3]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids        // [I, image_height, image_width]
 );
@@ -31,7 +31,7 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
 template <typename SplatPrimitive>
 inline void launch_rasterize_to_pixels_fwd_kernel(
     // Gaussian parameters
-    typename SplatPrimitive::Screen::Tensor splats,
+    typename SplatPrimitive::ScreenBuffer splats,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -41,11 +41,12 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     // outputs
-    typename SplatPrimitive::RenderOutput::Tensor renders,
+    RenderOutput::Tensor renders,
     at::Tensor transmittances,  // [..., image_height, image_width]
     at::Tensor last_ids // [..., image_height, image_width]
 ) {
-    bool packed = splats.isPacked();
+    // bool packed = splats.isPacked();
+    bool packed = true;  // TODO
     uint32_t N = packed ? 0 : splats.size(); // number of gaussians
     uint32_t I = transmittances.numel() / (image_height * image_width); // number of images
     uint32_t tile_height = tile_offsets.size(-2);
@@ -56,7 +57,7 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
         (cudaStream_t)at::cuda::getCurrentCUDAStream(),
         I, N, n_isects,
         packed,
-        splats.buffer(),
+        splats,
         backgrounds.has_value() ? (float3*)backgrounds.value().data_ptr<float>()
                                 : nullptr,
         masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
@@ -75,10 +76,10 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
 
 
 template <typename SplatPrimitive>
-inline std::tuple<typename SplatPrimitive::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
+inline std::tuple<RenderOutput::TensorTuple, at::Tensor, at::Tensor>
 rasterize_to_pixels_fwd_tensor(
     // Gaussian parameters
-    typename SplatPrimitive::Screen::TensorTuple splats_tuple,
+    TensorList splats_tuple,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -96,15 +97,15 @@ rasterize_to_pixels_fwd_tensor(
     if (masks.has_value())
         CHECK_INPUT(masks.value());
     
-    typename SplatPrimitive::Screen::Tensor splats(splats_tuple);
+    typename SplatPrimitive::ScreenBuffer splats(splats_tuple);
 
     auto opt = splats.options();
     at::DimVector image_dims(tile_offsets.sizes().slice(0, tile_offsets.dim() - 2));
 
     at::DimVector renders_dims(image_dims);
     renders_dims.append({image_height, image_width});
-    typename SplatPrimitive::RenderOutput::Tensor renders =
-        SplatPrimitive::RenderOutput::Tensor::empty(renders_dims, opt);
+    RenderOutput::Tensor renders =
+        RenderOutput::Tensor::empty<SplatPrimitive::pixelType>(renders_dims, opt);
 
     at::DimVector transmittance_dims(image_dims);
     transmittance_dims.append({image_height, image_width, 1});
@@ -112,7 +113,7 @@ rasterize_to_pixels_fwd_tensor(
 
     at::DimVector last_ids_dims(image_dims);
     last_ids_dims.append({image_height, image_width});
-    at::Tensor last_ids = at::empty(last_ids_dims, opt.dtype(at::kInt));
+    at::Tensor last_ids = at::empty(last_ids_dims, kTensorOptionI32());
 
     launch_rasterize_to_pixels_fwd_kernel<SplatPrimitive>(
         splats,
@@ -127,7 +128,7 @@ rasterize_to_pixels_fwd_tensor(
         last_ids
     );
 
-    return std::make_tuple(renders.tuple(), transmittances, last_ids);
+    return std::make_tuple(renders, transmittances, last_ids);
 }
 
 
@@ -138,10 +139,10 @@ rasterize_to_pixels_fwd_tensor(
 // ================
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<Vanilla3DGS::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
+std::tuple<RenderOutput::TensorTuple, at::Tensor, at::Tensor>
 rasterize_to_pixels_3dgs_fwd(
     // Gaussian parameters
-    Vanilla3DGS::Screen::TensorTuple splats_tuple,
+    TensorList splats_tuple,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
@@ -165,10 +166,10 @@ rasterize_to_pixels_3dgs_fwd(
 // ================
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<MipSplatting::RenderOutput::TensorTuple, at::Tensor, at::Tensor>
+std::tuple<RenderOutput::TensorTuple, at::Tensor, at::Tensor>
 rasterize_to_pixels_mip_fwd(
     // Gaussian parameters
-    MipSplatting::Screen::TensorTuple splats_tuple,
+    TensorList splats_tuple,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size

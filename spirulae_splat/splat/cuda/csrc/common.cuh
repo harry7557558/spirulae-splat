@@ -106,4 +106,19 @@ at::Tensor zeros_like_tensor(const at::Tensor& x);
 
 void set_zero_tensor(at::Tensor& x);
 
+inline at::TensorOptions kTensorOptionF32()
+    { return at::TensorOptions(at::kCUDA).dtype(at::kFloat); }
+
+inline at::TensorOptions kTensorOptionI32()
+    { return at::TensorOptions(at::kCUDA).dtype(at::kInt); }
+
+inline at::TensorOptions kTensorOptionI64()
+    { return at::TensorOptions(at::kCUDA).dtype(at::kLong); }
+
+inline at::TensorOptions kTensorOptionByte()
+    { return at::TensorOptions(at::kCUDA).dtype(at::kByte); }
+
+inline at::TensorOptions kTensorOptionBool()
+    { return at::TensorOptions(at::kCUDA).dtype(at::kBool); }
+
 #endif

@@ -36,7 +36,7 @@ __device__ __forceinline__ float3 remapAABB(float3 b, float rel_scale) {
 
 template<bool remap>
 __device__ bool getAABB(
-    const Vanilla3DGS::World::Buffer& splatBuffer, long idx,
+    const Vanilla3DGS::WorldBuffer& splatBuffer, long idx,
     float3 &aabb_min, float3 &aabb_max, float rel_scale = 1.0f
 ) {
     float3 mean = splatBuffer.means[idx];
@@ -68,7 +68,7 @@ __device__ bool getAABB(
 
 template<bool remap>
 __device__ bool getAABB(
-    const OpaqueTriangle::World::Buffer& splatBuffer, long idx,
+    const OpaqueTriangle::WorldBuffer& splatBuffer, long idx,
     float3 &aabb_min, float3 &aabb_max, float rel_scale = 1.0f
 ) {
     float3 mean = splatBuffer.means[idx];
@@ -96,23 +96,23 @@ __device__ bool getAABB(
     return isfinite(dot(aabb_min, aabb_max));
 }
 
-template<bool remap>
-__device__ bool getAABB(
-    const VoxelPrimitive::World::Buffer& splatBuffer, long idx,
-    float3 &aabb_min, float3 &aabb_max, float rel_scale = 1.0f
-) {
-    float4 pos_size = splatBuffer.pos_size[idx];
-    float x = pos_size.x, y = pos_size.y, z = pos_size.z, s = pos_size.w;
+// template<bool remap>
+// __device__ bool getAABB(
+//     const VoxelPrimitive::WorldBuffer& splatBuffer, long idx,
+//     float3 &aabb_min, float3 &aabb_max, float rel_scale = 1.0f
+// ) {
+//     float4 pos_size = splatBuffer.pos_size[idx];
+//     float x = pos_size.x, y = pos_size.y, z = pos_size.z, s = pos_size.w;
 
-    aabb_min = { x, y, z };
-    aabb_max = { x+s, y+s, z+s };
+//     aabb_min = { x, y, z };
+//     aabb_max = { x+s, y+s, z+s };
 
-    if (remap) {
-        aabb_min = remapAABB(aabb_min, rel_scale);
-        aabb_max = remapAABB(aabb_max, rel_scale);
-    }
-    return isfinite(dot(aabb_min, aabb_max));
-}
+//     if (remap) {
+//         aabb_min = remapAABB(aabb_min, rel_scale);
+//         aabb_max = remapAABB(aabb_max, rel_scale);
+//     }
+//     return isfinite(dot(aabb_min, aabb_max));
+// }
 
 
 template<ssplat::CameraModelType camera_model>
@@ -181,7 +181,7 @@ struct Tile {
     }
 
     // return negative if no overlap, strictly positive for sorting ID
-    __device__ __forceinline__ float isOverlap(const Vanilla3DGS::World::Buffer& splatBuffer, long idx) const {
+    __device__ __forceinline__ float isOverlap(const Vanilla3DGS::WorldBuffer& splatBuffer, long idx) const {
         // TODO: primitive aware version with less false positives
         float3 aabb_min, aabb_max;
         bool valid_aabb = getAABB<false>(splatBuffer, idx, aabb_min, aabb_max);
@@ -194,7 +194,7 @@ struct Tile {
             glm::dot(mean - ro, rd);  // negative if center is behind
     }
 
-    __device__ __forceinline__ float isOverlap(const OpaqueTriangle::World::Buffer& splatBuffer, long idx) const {
+    __device__ __forceinline__ float isOverlap(const OpaqueTriangle::WorldBuffer& splatBuffer, long idx) const {
         // TODO: primitive aware version with less false positives
         float3 aabb_min, aabb_max;
         bool valid_aabb = getAABB<false>(splatBuffer, idx, aabb_min, aabb_max);
@@ -207,7 +207,7 @@ struct Tile {
             glm::dot(mean - ro, rd);  // negative if center is behind
     }
 
-    __device__ __forceinline__ float isOverlap(const VoxelPrimitive::World::Buffer& splatBuffer, long idx) const {
+    __device__ __forceinline__ float isOverlap(const VoxelPrimitive::WorldBuffer& splatBuffer, long idx) const {
         float3 aabb_min, aabb_max;
         bool valid_aabb = getAABB<false>(splatBuffer, idx, aabb_min, aabb_max);
         if (!valid_aabb || !isOverlap(aabb_min, aabb_max))
@@ -251,7 +251,7 @@ loadTile(unsigned tileIdx, const TileBuffers<camera_model> buffers, bool& isActi
 template<typename Primitive>
 __global__ void computeSplatAABB(
     long numSplats,
-    const typename Primitive::World::Buffer splatBuffer,
+    const typename Primitive::WorldBuffer splatBuffer,
     float rel_scale,
     float3* __restrict__ aabb,
     float3* __restrict__ aabb_reduced
@@ -468,7 +468,7 @@ template<typename Primitive, ssplat::CameraModelType camera_model>
 __global__ void getTileSplatIntersections_brute(
     const long numSplats,
     const TileBuffers<camera_model> tiles,
-    const typename Primitive::World::Buffer splatBuffer,
+    const typename Primitive::WorldBuffer splatBuffer,
     uint32_t* __restrict__ intersect_counts,  // to be filled or exclusive scan
     uint32_t* __restrict__ intersectionSplatID  // nullptr or to be filled
 ) {
@@ -536,7 +536,7 @@ __device__ __forceinline__ uint64_t getSplatSortingKey(
 template<typename Primitive>
 __global__ void fillSplatSortingKeys(
     const long numSplats,
-    const typename Primitive::World::Buffer splatBuffer,
+    const typename Primitive::WorldBuffer splatBuffer,
     float3 root_min, float3 root_max,
     unsigned num_levels, float branch_factor,
     float rel_scale,
@@ -710,7 +710,7 @@ __global__ void fillLbvhInternalNodes(
 template<typename Primitive>
 __global__ void computeLbvhAABB(
     const long numSplats,
-    const typename Primitive::World::Buffer splatBuffer,
+    const typename Primitive::WorldBuffer splatBuffer,
     unsigned num_levels,
     const uint2* __restrict__ trees_ranges,
     const int2* __restrict__ internal_nodes,
@@ -783,7 +783,7 @@ __global__ void computeLbvhAABB(
 template<typename Primitive, ssplat::CameraModelType camera_model>
 __global__ void getTileSplatIntersections_lbvh(
     const TileBuffers<camera_model> tiles,
-    const typename Primitive::World::Buffer splatBuffer,
+    const typename Primitive::WorldBuffer splatBuffer,
     const int2* __restrict__ internal_nodes,
     float3* __restrict__ treeAABB,
     uint32_t* __restrict__ intersect_counts,  // to be filled or exclusive scan
@@ -870,7 +870,7 @@ __global__ void getTileSplatIntersections_lbvh(
 template<typename Primitive, ssplat::CameraModelType camera_model>
 __global__ void getTileSplatIntersections_lbvh_warp(
     const TileBuffers<camera_model> tiles,
-    const typename Primitive::World::Buffer splatBuffer,
+    const typename Primitive::WorldBuffer splatBuffer,
     unsigned num_levels,
     const uint2* __restrict__ trees_ranges,
     const int2* __restrict__ internal_nodes_0,
@@ -1134,7 +1134,7 @@ void clearL2Cache() {
 
 template<typename Primitive, ssplat::CameraModelType camera_model>
 SplatTileIntersector<Primitive, camera_model>::SplatTileIntersector(
-    const typename Primitive::World::Tensor &splats,
+    const typename Primitive::WorldBuffer &splats,
     const TileBuffers<camera_model> &tiles,
     float rel_scale
 ) : tiles(tiles), splats(splats), rel_scale(rel_scale)
@@ -1537,7 +1537,7 @@ int main(int argc, char** argv) {
 
 std::tuple<at::Tensor, at::Tensor>
 intersect_splat_tile_3dgs(
-    Vanilla3DGS::World::TensorTuple splats_tuple,
+    TensorList splats_tuple,
     unsigned width,
     unsigned height,
     const at::Tensor& viewmats,
@@ -1546,7 +1546,7 @@ intersect_splat_tile_3dgs(
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale
 ) {
-    Vanilla3DGS::World::Tensor splats_tensor(splats_tuple);
+    Vanilla3DGS::WorldBuffer splats_tensor(splats_tuple);
 
     if (cmt(camera_model) == ssplat::CameraModelType::PINHOLE) {
         TileBuffers<ssplat::CameraModelType::PINHOLE> tile_buffers =
@@ -1564,60 +1564,60 @@ intersect_splat_tile_3dgs(
         throw std::runtime_error("Unsupported camera model");
 }
 
-std::tuple<at::Tensor, at::Tensor>
-intersect_splat_tile_opaque_triangle(
-    OpaqueTriangle::World::TensorTuple splats_tuple,
-    unsigned width,
-    unsigned height,
-    const at::Tensor& viewmats,
-    const at::Tensor& intrins,
-    const std::string& camera_model,
-    const CameraDistortionCoeffsTensor& dist_coeffs,
-    float rel_scale
-) {
-    OpaqueTriangle::World::Tensor splats_tensor(splats_tuple);
+// std::tuple<at::Tensor, at::Tensor>
+// intersect_splat_tile_opaque_triangle(
+//     OpaqueTriangle::World::TensorTuple splats_tuple,
+//     unsigned width,
+//     unsigned height,
+//     const at::Tensor& viewmats,
+//     const at::Tensor& intrins,
+//     const std::string& camera_model,
+//     const CameraDistortionCoeffsTensor& dist_coeffs,
+//     float rel_scale
+// ) {
+//     OpaqueTriangle::WorldBuffer splats_tensor(splats_tuple);
 
-    if (cmt(camera_model) == ssplat::CameraModelType::PINHOLE) {
-        TileBuffers<ssplat::CameraModelType::PINHOLE> tile_buffers =
-            {width, height, viewmats, intrins, dist_coeffs};
-        return SplatTileIntersector<OpaqueTriangle, ssplat::CameraModelType::PINHOLE>
-            (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
-    }
-    else if (cmt(camera_model) == ssplat::CameraModelType::FISHEYE) {
-        TileBuffers<ssplat::CameraModelType::FISHEYE> tile_buffers =
-            {width, height, viewmats, intrins, dist_coeffs};
-        return SplatTileIntersector<OpaqueTriangle, ssplat::CameraModelType::FISHEYE>
-            (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
-    }
-    else
-        throw std::runtime_error("Unsupported camera model");
-}
+//     if (cmt(camera_model) == ssplat::CameraModelType::PINHOLE) {
+//         TileBuffers<ssplat::CameraModelType::PINHOLE> tile_buffers =
+//             {width, height, viewmats, intrins, dist_coeffs};
+//         return SplatTileIntersector<OpaqueTriangle, ssplat::CameraModelType::PINHOLE>
+//             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
+//     }
+//     else if (cmt(camera_model) == ssplat::CameraModelType::FISHEYE) {
+//         TileBuffers<ssplat::CameraModelType::FISHEYE> tile_buffers =
+//             {width, height, viewmats, intrins, dist_coeffs};
+//         return SplatTileIntersector<OpaqueTriangle, ssplat::CameraModelType::FISHEYE>
+//             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
+//     }
+//     else
+//         throw std::runtime_error("Unsupported camera model");
+// }
 
-std::tuple<at::Tensor, at::Tensor>
-intersect_splat_tile_voxel(
-    VoxelPrimitive::World::TensorTuple splats_tuple,
-    unsigned width,
-    unsigned height,
-    const at::Tensor& viewmats,
-    const at::Tensor& intrins,
-    const std::string& camera_model,
-    const CameraDistortionCoeffsTensor& dist_coeffs,
-    float rel_scale
-) {
-    VoxelPrimitive::World::Tensor splats_tensor(splats_tuple);
+// std::tuple<at::Tensor, at::Tensor>
+// intersect_splat_tile_voxel(
+//     VoxelPrimitive::World::TensorTuple splats_tuple,
+//     unsigned width,
+//     unsigned height,
+//     const at::Tensor& viewmats,
+//     const at::Tensor& intrins,
+//     const std::string& camera_model,
+//     const CameraDistortionCoeffsTensor& dist_coeffs,
+//     float rel_scale
+// ) {
+//     VoxelPrimitive::WorldBuffer splats_tensor(splats_tuple);
 
-    if (cmt(camera_model) == ssplat::CameraModelType::PINHOLE) {
-        TileBuffers<ssplat::CameraModelType::PINHOLE> tile_buffers =
-            {width, height, viewmats, intrins, dist_coeffs};
-        return SplatTileIntersector<VoxelPrimitive, ssplat::CameraModelType::PINHOLE>
-            (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
-    }
-    else if (cmt(camera_model) == ssplat::CameraModelType::FISHEYE) {
-        TileBuffers<ssplat::CameraModelType::FISHEYE> tile_buffers =
-            {width, height, viewmats, intrins, dist_coeffs};
-        return SplatTileIntersector<VoxelPrimitive, ssplat::CameraModelType::FISHEYE>
-            (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
-    }
-    else
-        throw std::runtime_error("Unsupported camera model");
-}
+//     if (cmt(camera_model) == ssplat::CameraModelType::PINHOLE) {
+//         TileBuffers<ssplat::CameraModelType::PINHOLE> tile_buffers =
+//             {width, height, viewmats, intrins, dist_coeffs};
+//         return SplatTileIntersector<VoxelPrimitive, ssplat::CameraModelType::PINHOLE>
+//             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
+//     }
+//     else if (cmt(camera_model) == ssplat::CameraModelType::FISHEYE) {
+//         TileBuffers<ssplat::CameraModelType::FISHEYE> tile_buffers =
+//             {width, height, viewmats, intrins, dist_coeffs};
+//         return SplatTileIntersector<VoxelPrimitive, ssplat::CameraModelType::FISHEYE>
+//             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
+//     }
+//     else
+//         throw std::runtime_error("Unsupported camera model");
+// }

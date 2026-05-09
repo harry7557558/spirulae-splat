@@ -24,7 +24,7 @@ __global__ void projection_fused_bwd_kernel(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const typename SplatPrimitive::World::Buffer splats_world,
+    const typename SplatPrimitive::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -35,15 +35,15 @@ __global__ void projection_fused_bwd_kernel(
     const int32_t *__restrict__ gaussian_ids,          // [nnz, 4]
     const float4 *__restrict__ aabb,          // [B, C, N, 4]
     // grad outputs
-    typename SplatPrimitive::Screen::Buffer v_splats_screen,
-    typename SplatPrimitive::Screen::Buffer vr_splats_screen,
-    typename SplatPrimitive::Screen::Buffer h_splats_screen,
+    typename SplatPrimitive::ScreenBuffer v_splats_screen,
+    typename SplatPrimitive::ScreenBuffer vr_splats_screen,
+    typename SplatPrimitive::ScreenBuffer h_splats_screen,
     // grad inputs
-    typename SplatPrimitive::World::Buffer v_splats_world,
+    typename SplatPrimitive::WorldBuffer v_splats_world,
     float3* vr_world_pos_buffer,
     float3* h_world_pos_buffer,
-    typename SplatPrimitive::World::Buffer vr_splats_world,
-    typename SplatPrimitive::World::Buffer h_splats_world,
+    typename SplatPrimitive::WorldBuffer vr_splats_world,
+    typename SplatPrimitive::WorldBuffer h_splats_world,
     float *__restrict__ v_viewmats // [B, C, 4, 4] optional
 ) {
     uint32_t idx = cg::this_grid().thread_rank();
@@ -75,7 +75,7 @@ __global__ void projection_fused_bwd_kernel(
     };
     float3 t = { viewmats[3], viewmats[7], viewmats[11] };
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
-    typename SplatPrimitive::BwdProjCamera cam = {
+    ProjCamera cam = {
         R, t, fx, fy, cx, cy,
         image_width, image_height,
     };
@@ -181,7 +181,7 @@ void projection_fused_bwd_kernel_wrapper(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const typename SplatPrimitive::World::Buffer splats_world,
+    const typename SplatPrimitive::WorldBuffer splats_world,
     const float * viewmats, // [B, C, 4, 4]
     const float4 * intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -192,15 +192,15 @@ void projection_fused_bwd_kernel_wrapper(
     const int32_t * gaussian_ids,          // [nnz, 4]
     const float4 * aabb,          // [B, C, N, 4]
     // grad outputs
-    typename SplatPrimitive::Screen::Buffer v_splats_screen,
-    typename SplatPrimitive::Screen::Buffer vr_splats_screen,
-    typename SplatPrimitive::Screen::Buffer h_splats_screen,
+    typename SplatPrimitive::ScreenBuffer v_splats_screen,
+    typename SplatPrimitive::ScreenBuffer vr_splats_screen,
+    typename SplatPrimitive::ScreenBuffer h_splats_screen,
     // grad inputs
-    typename SplatPrimitive::World::Buffer v_splats_world,
+    typename SplatPrimitive::WorldBuffer v_splats_world,
     float3* vr_world_pos_buffer,
     float3* h_world_pos_buffer,
-    typename SplatPrimitive::World::Buffer vr_splats_world,
-    typename SplatPrimitive::World::Buffer h_splats_world,
+    typename SplatPrimitive::WorldBuffer vr_splats_world,
+    typename SplatPrimitive::WorldBuffer h_splats_world,
     float * v_viewmats // [B, C, 4, 4] optional
 ) {
     constexpr uint block = hessian_diagonal_output_mode == HessianDiagonalOutputMode::None ? 128 : WARP_SIZE;

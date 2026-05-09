@@ -13,27 +13,27 @@
 
 
 
-std::tuple<
-    OpaqueTriangle::RenderOutput::TensorTuple,
-    at::Tensor,
-    at::Tensor,
-    std::optional<OpaqueTriangle::RenderOutput::TensorTuple>,
-    std::optional<OpaqueTriangle::RenderOutput::TensorTuple>,
-    std::optional<at::Tensor>
-> rasterize_to_pixels_opaque_triangle_sorted_fwd(
-    // Gaussian parameters
-    OpaqueTriangle::Screen::TensorTuple splats_tuple,
-    std::optional<at::Tensor> gaussian_ids,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
-    const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> max_blending_masks,       // [..., image_height, image_width]
-    // image size
-    const uint32_t image_width,
-    const uint32_t image_height,
-    // intersections
-    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids   // [n_isects]
-);
+// std::tuple<
+//     RenderOutput::TensorTuple,
+//     at::Tensor,
+//     at::Tensor,
+//     std::optional<RenderOutput::TensorTuple>,
+//     std::optional<RenderOutput::TensorTuple>,
+//     std::optional<at::Tensor>
+// > rasterize_to_pixels_opaque_triangle_sorted_fwd(
+//     // Gaussian parameters
+//     OpaqueTriangle::Screen::TensorTuple splats_tuple,
+//     std::optional<at::Tensor> gaussian_ids,
+//     const at::Tensor viewmats,  // [..., C, 4, 4]
+//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+//     const std::string camera_model,
+//     const CameraDistortionCoeffsTensor dist_coeffs,
+//     const std::optional<at::Tensor> backgrounds, // [..., channels]
+//     const std::optional<at::Tensor> max_blending_masks,       // [..., image_height, image_width]
+//     // image size
+//     const uint32_t image_width,
+//     const uint32_t image_height,
+//     // intersections
+//     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+//     const at::Tensor flatten_ids   // [n_isects]
+// );

@@ -45,8 +45,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("intersect_tile_mip", &intersect_tile_3dgs_tensor);
     m.def("intersect_tile_3dgut", &intersect_tile_3dgut_tensor);
     m.def("intersect_tile_3dgut_sv", &intersect_tile_3dgut_tensor);
-    m.def("intersect_tile_opaque_triangle", &intersect_tile_opaque_triangle_tensor);
-    m.def("intersect_tile_voxel", &intersect_tile_voxel_tensor);
+    // m.def("intersect_tile_opaque_triangle", &intersect_tile_opaque_triangle_tensor);
+    // m.def("intersect_tile_voxel", &intersect_tile_voxel_tensor);
 
     // SphericalHarmonics.cuh
     m.def("compute_sh_forward", &compute_sh_forward_tensor);
@@ -107,8 +107,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // SplatTileIntersector.cuh
     m.def("intersect_splat_tile_3dgs", &intersect_splat_tile_3dgs);
-    m.def("intersect_splat_tile_opaque_triangle", &intersect_splat_tile_opaque_triangle);
-    m.def("intersect_splat_tile_voxel", &intersect_splat_tile_voxel);
+    // m.def("intersect_splat_tile_opaque_triangle", &intersect_splat_tile_opaque_triangle);
+    // m.def("intersect_splat_tile_voxel", &intersect_splat_tile_voxel);
 
     // SVHash.cuh
     m.def("svhash_create_initial_volume", &svhashCreateInitialVolume);
@@ -120,16 +120,16 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("projection_mip_forward", &projection_mip_forward_tensor);
     m.def("projection_3dgut_forward", &projection_3dgut_forward_tensor);
     m.def("projection_3dgut_sv_forward", &projection_3dgut_forward_tensor);
-    m.def("projection_opaque_triangle_forward", &projection_opaque_triangle_forward_tensor);
-    m.def("projection_voxel_forward", &projection_voxel_forward_tensor);
+    // m.def("projection_opaque_triangle_forward", &projection_opaque_triangle_forward_tensor);
+    // m.def("projection_voxel_forward", &projection_voxel_forward_tensor);
 
     // ProjectionBwd.cuh
     m.def("projection_3dgs_backward", &projection_3dgs_backward_tensor);
     m.def("projection_mip_backward", &projection_mip_backward_tensor);
     m.def("projection_3dgut_backward", &projection_3dgut_backward_tensor);
     m.def("projection_3dgut_sv_backward", &projection_3dgut_backward_tensor);
-    m.def("projection_opaque_triangle_backward", &projection_opaque_triangle_backward_tensor);
-    m.def("projection_voxel_backward", &projection_voxel_backward_tensor);
+    // m.def("projection_opaque_triangle_backward", &projection_opaque_triangle_backward_tensor);
+    // m.def("projection_voxel_backward", &projection_voxel_backward_tensor);
 
     // ProjectionBwd.cuh, second order
     m.def("projection_3dgs_backward_with_position_hessian_diagonal", &projection_3dgs_backward_with_position_hessian_diagonal_tensor);
@@ -144,20 +144,20 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("projection_mip_packed_forward", &projection_mip_packed_forward_tensor);
     m.def("projection_3dgut_packed_forward", &projection_3dgut_packed_forward_tensor);
     m.def("projection_3dgut_sv_packed_forward", &projection_3dgut_packed_forward_tensor);
-    m.def("projection_opaque_triangle_packed_forward", &projection_opaque_triangle_packed_forward_tensor);
-    m.def("projection_voxel_packed_forward", &projection_voxel_packed_forward_tensor);
+    // m.def("projection_opaque_triangle_packed_forward", &projection_opaque_triangle_packed_forward_tensor);
+    // m.def("projection_voxel_packed_forward", &projection_voxel_packed_forward_tensor);
 
     // ProjectionHeteroFwd.cuh
     m.def("projection_3dgs_hetero_forward", &projection_3dgs_hetero_forward_tensor);
     m.def("projection_mip_hetero_forward", &projection_mip_hetero_forward_tensor);
     m.def("projection_3dgut_hetero_forward", &projection_3dgut_hetero_forward_tensor);
-    m.def("projection_opaque_triangle_hetero_forward", &projection_opaque_triangle_hetero_forward_tensor);
+    // m.def("projection_opaque_triangle_hetero_forward", &projection_opaque_triangle_hetero_forward_tensor);
 
     // ProjectionHeteroBwd.cuh
     m.def("projection_3dgs_hetero_backward", &projection_3dgs_hetero_backward_tensor);
     m.def("projection_mip_hetero_backward", &projection_mip_hetero_backward_tensor);
     m.def("projection_3dgut_hetero_backward", &projection_3dgut_hetero_backward_tensor);
-    m.def("projection_opaque_triangle_hetero_backward", &projection_opaque_triangle_hetero_backward_tensor);
+    // m.def("projection_opaque_triangle_hetero_backward", &projection_opaque_triangle_hetero_backward_tensor);
 
     // RasterizationFwd.cuh and RasterizationBwd.cuh
     m.def("rasterization_3dgs_forward", &rasterize_to_pixels_3dgs_fwd);
@@ -173,10 +173,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("rasterization_3dgut_backward_with_hessian_diagonal", &rasterize_to_pixels_3dgut_bwd_with_hessian_diagonal);
     m.def("rasterization_3dgut_sv_forward", &rasterize_to_pixels_3dgut_fwd);
     m.def("rasterization_3dgut_sv_backward", &rasterize_to_pixels_3dgut_bwd);
-    m.def("rasterization_opaque_triangle_forward", &rasterize_to_pixels_opaque_triangle_sorted_fwd);
-    m.def("rasterization_opaque_triangle_backward", &rasterize_to_pixels_opaque_triangle_sorted_bwd);
-    m.def("rasterization_voxel_forward", &rasterize_to_pixels_voxel_eval3d_fwd);
-    m.def("rasterization_voxel_backward", &rasterize_to_pixels_voxel_eval3d_bwd);
+    // m.def("rasterization_opaque_triangle_forward", &rasterize_to_pixels_opaque_triangle_sorted_fwd);
+    // m.def("rasterization_opaque_triangle_backward", &rasterize_to_pixels_opaque_triangle_sorted_bwd);
+    // m.def("rasterization_voxel_forward", &rasterize_to_pixels_voxel_eval3d_fwd);
+    // m.def("rasterization_voxel_backward", &rasterize_to_pixels_voxel_eval3d_bwd);
 
     // Optimizer.cuh
     m.def("set_zero", &set_zero_tensor);
