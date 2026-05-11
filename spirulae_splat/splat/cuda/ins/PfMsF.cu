@@ -20,5 +20,6 @@ template void projection_fused_fwd_kernel_wrapper<
     const uint32_t image_height,
     // outputs
     float4 *__restrict__ aabbs,         // [B, C, N, 4]
+    float* __restrict__ sorting_depths,         // [B, C, N, 1]
     MipSplatting::ScreenBuffer splats_screen
 );

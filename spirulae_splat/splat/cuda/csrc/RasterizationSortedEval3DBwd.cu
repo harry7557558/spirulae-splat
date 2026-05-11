@@ -1,5 +1,7 @@
 // Modified from https://github.com/nerfstudio-project/gsplat/blob/main/gsplat/cuda/csrc/RasterizeToPixels3DGSBwd.cu
 
+#if 0  // TODO
+
 #include "RasterizationSortedEval3DBwd.cuh"
 
 #include "generated/slang.cuh"
@@ -193,9 +195,8 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
             int32_t t1 = t - (int)block.thread_rank();
             if (t1 >= range_start) {
                 uint32_t splat_idx = flatten_ids[t1];
-                typename SplatPrimitive::Screen splat =
-                    SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_idx, gaussian_ids);
-                splat_batch[block.thread_rank()] = splat;
+                splat_batch[block.thread_rank()].load(
+                    splat_buffer, gaussian_ids ? gaussian_ids[splat_idx] : splat_idx);
             }
             block.sync();
         }
@@ -223,8 +224,8 @@ __global__ void rasterize_to_pixels_sorted_eval3d_bwd_kernel(
         if (pqueue_size >= MAX_PQUEUE_SIZE || (t < range_start && pqueue_size != 0)) {
             uint32_t t = pqueue.pop(pqueue_size).x;
             uint32_t splat_idx = flatten_ids[t];
-            typename SplatPrimitive::Screen splat =
-                SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_idx, gaussian_ids);
+            typename SplatPrimitive::Screen splat;
+            splat.load(splat_buffer, splat_buffer ? splat_buffer[splat_idx] : splat_idx);
             float alpha = splat.evaluate_alpha(ray_o, ray_d);
 
             // forward:
@@ -454,7 +455,7 @@ inline std::tuple<
         v_splats
     );
 
-    return std::make_tuple(v_splats.tupleRasterBwd(), v_viewmats);
+    return std::make_tuple(v_splats, v_viewmats);
 }
 
 // /*[AutoHeaderGeneratorExport]*/
@@ -495,3 +496,5 @@ inline std::tuple<
 //         v_render_outputs, v_render_Ts, v_distortion_outputs
 //     );
 // }
+
+#endif

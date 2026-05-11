@@ -21,19 +21,19 @@
 
 
 std::tuple<
-    TensorList,
+    TensorList, TensorList,  // gradient
     std::optional<at::Tensor>,  // v_viewmats
     std::optional<at::Tensor>  // accum_weight
 > rasterize_to_pixels_3dgut_bwd(
     // Gaussian parameters
-    TensorList splats_tuple,
+    int64_t num_splats,
+    TensorList splats_w,
+    TensorList splats_s,
     std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
-    const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -56,21 +56,21 @@ std::tuple<
 
 
 std::tuple<
-    TensorList,
+    TensorList, TensorList,  // gradient
     std::optional<at::Tensor>,  // v_viewmats
-    std::optional<TensorList>,  // jacobian residual product
-    std::optional<TensorList>,  // hessian diagonal
+    std::optional<TensorList>, std::optional<TensorList>,  // jacobian residual product
+    std::optional<TensorList>, std::optional<TensorList>,  // hessian diagonal
     std::optional<at::Tensor>  // accum_weight
 > rasterize_to_pixels_3dgut_bwd_with_hessian_diagonal(
     // Gaussian parameters
-    TensorList splats_tuple,
+    int64_t num_splats,
+    TensorList splats_w,
+    TensorList splats_s,
     std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
-    const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -104,8 +104,6 @@ std::tuple<
 //     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
 //     const std::string camera_model,
 //     const CameraDistortionCoeffsTensor dist_coeffs,
-//     const std::optional<at::Tensor> backgrounds, // [..., channels]
-//     const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
 //     // image size
 //     const uint32_t image_width,
 //     const uint32_t image_height,

@@ -31,7 +31,7 @@ using mat3x2 = glm::mat<3, 2, float>;
 //
 // Legacy Camera Types
 //
-enum CameraModelType {
+enum class CameraModelType {
     PINHOLE = 0,
     ORTHO = 1,
     FISHEYE = 2,

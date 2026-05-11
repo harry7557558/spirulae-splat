@@ -19,31 +19,43 @@
 
 
 
-std::tuple<RenderOutput::TensorTuple, at::Tensor, at::Tensor>
-rasterize_to_pixels_3dgs_fwd(
+std::tuple<
+    RenderOutput::TensorTuple,
+    at::Tensor,
+    at::Tensor,
+    std::optional<RenderOutput::TensorTuple>,
+    std::optional<RenderOutput::TensorTuple>
+> rasterize_to_pixels_3dgs_fwd(
     // Gaussian parameters
-    TensorList splats_tuple,
-    const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    TensorList splats_w,
+    TensorList splats_s,
+    std::optional<at::Tensor> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids   // [n_isects]
+    const at::Tensor flatten_ids,   // [n_isects]
+    bool output_distortion
 );
 
 
-std::tuple<RenderOutput::TensorTuple, at::Tensor, at::Tensor>
-rasterize_to_pixels_mip_fwd(
+std::tuple<
+    RenderOutput::TensorTuple,
+    at::Tensor,
+    at::Tensor,
+    std::optional<RenderOutput::TensorTuple>,
+    std::optional<RenderOutput::TensorTuple>
+> rasterize_to_pixels_mip_fwd(
     // Gaussian parameters
-    TensorList splats_tuple,
-    const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    TensorList splats_w,
+    TensorList splats_s,
+    std::optional<at::Tensor> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids   // [n_isects]
+    const at::Tensor flatten_ids,   // [n_isects]
+    bool output_distortion
 );

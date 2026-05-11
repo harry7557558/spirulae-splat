@@ -25,6 +25,7 @@ std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
+    at::Tensor,  // sorting_depths
     TensorList  // out splats
 > projection_3dgs_packed_forward_tensor(
     // inputs
@@ -42,6 +43,7 @@ std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
+    at::Tensor,  // sorting_depths
     TensorList  // out splats
 > projection_mip_packed_forward_tensor(
     // inputs
@@ -59,6 +61,7 @@ std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
+    at::Tensor,  // sorting_depths
     TensorList  // out splats
 > projection_3dgut_packed_forward_tensor(
     // inputs

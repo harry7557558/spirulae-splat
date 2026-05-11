@@ -57,11 +57,11 @@ inline void launch_projection_projection_fused_bwd_kernel(
     const std::optional<at::Tensor> gaussian_ids,          // [nnz, 4]
     const at::Tensor aabb,                       // [..., C, N, 2]
     // grad outputs
-    const TensorList &v_splats_screen_tuple,
-    const TensorList *vr_splats_screen_tuple,
-    const TensorList *h_splats_screen_tuple,
+    const TensorList v_splats_screen,
+    const TensorList vr_splats_screen,
+    const TensorList h_splats_screen,
     // returns
-    TensorList v_splats_world_tuple,
+    TensorList v_splats_world,
     const std::optional<at::Tensor> v_viewmats,
     const std::optional<std::variant<at::Tensor, TensorList>> vr_splats_world_tuple,
     const std::optional<std::variant<at::Tensor, TensorList>> h_splats_world_tuple
@@ -71,17 +71,6 @@ inline void launch_projection_projection_fused_bwd_kernel(
     uint32_t C = viewmats.size(-3); // number of cameras
     // uint32_t B = splats_world.batchSize();    // number of batches
     uint32_t B = 1;  // TODO
-
-    typename SplatPrimitive::ScreenBuffer v_splats_screen(v_splats_screen_tuple);
-
-    typename SplatPrimitive::WorldBuffer v_splats_world(v_splats_world_tuple);
-
-    typename SplatPrimitive::ScreenBuffer vr_splats_screen;
-    typename SplatPrimitive::ScreenBuffer h_splats_screen;
-    if (hessian_diagonal_output_mode != HessianDiagonalOutputMode::None) {
-        vr_splats_screen = *vr_splats_screen_tuple;
-        h_splats_screen = *h_splats_screen_tuple;
-    }
 
     at::Tensor vr_world_pos;
     at::Tensor h_world_pos;
@@ -163,7 +152,7 @@ void projection_3dgs_backward_tensor(
 ) {
     launch_projection_projection_fused_bwd_kernel<Vanilla3DGS, HessianDiagonalOutputMode::None>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, nullptr, nullptr,
+        camera_ids, gaussian_ids, aabb, v_splats_screen, {}, {},
         v_splats_world, v_viewmats, std::nullopt, std::nullopt);
 }
 
@@ -193,7 +182,7 @@ void projection_3dgs_backward_with_hessian_diagonal_tensor(
 ) {
     launch_projection_projection_fused_bwd_kernel<Vanilla3DGS, HessianDiagonalOutputMode::AllReasonable>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen,
+        camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen,
         v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
 }
 
@@ -223,7 +212,7 @@ void projection_3dgs_backward_with_position_hessian_diagonal_tensor(
 ) {
     launch_projection_projection_fused_bwd_kernel<Vanilla3DGS, HessianDiagonalOutputMode::Position>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen,
+        camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen,
         v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
 }
 
@@ -255,7 +244,7 @@ void projection_mip_backward_tensor(
 ) {
     launch_projection_projection_fused_bwd_kernel<MipSplatting, HessianDiagonalOutputMode::None>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, nullptr, nullptr,
+        camera_ids, gaussian_ids, aabb, v_splats_screen, {}, {},
         v_splats_world, v_viewmats, std::nullopt, std::nullopt);
 }
 
@@ -285,7 +274,7 @@ void projection_mip_backward_with_hessian_diagonal_tensor(
 ) {
     launch_projection_projection_fused_bwd_kernel<MipSplatting, HessianDiagonalOutputMode::AllReasonable>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen,
+        camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen,
         v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
 }
 
@@ -315,7 +304,7 @@ void projection_mip_backward_with_position_hessian_diagonal_tensor(
 ) {
     launch_projection_projection_fused_bwd_kernel<MipSplatting, HessianDiagonalOutputMode::Position>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen,
+        camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen,
         v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
 }
 
@@ -347,7 +336,7 @@ void projection_3dgut_backward_tensor(
 ) {
     launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT, HessianDiagonalOutputMode::None>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, nullptr, nullptr,
+        camera_ids, gaussian_ids, aabb, v_splats_screen, {}, {},
         v_splats_world, v_viewmats, std::nullopt, std::nullopt);
 }
 
@@ -377,7 +366,7 @@ void projection_3dgut_backward_with_hessian_diagonal_tensor(
 ) {
     launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT, HessianDiagonalOutputMode::AllReasonable>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen,
+        camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen,
         v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
 }
 
@@ -407,7 +396,7 @@ void projection_3dgut_backward_with_position_hessian_diagonal_tensor(
 ) {
     launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT, HessianDiagonalOutputMode::Position>(
         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, &vr_splats_screen, &h_splats_screen,
+        camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen,
         v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
 }
 

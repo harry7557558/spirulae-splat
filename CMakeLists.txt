@@ -81,7 +81,8 @@ endforeach()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(SPLAT_CXX_FLAGS "-O3")
+# set(SPLAT_CXX_FLAGS "-O3")
+set(SPLAT_CXX_FLAGS "-g")
 if(NOT WIN32)
     list(APPEND SPLAT_CXX_FLAGS "-Wno-sign-compare")
 endif()
@@ -125,7 +126,8 @@ endforeach()
 
 # Host side optimizations
 if(NOT WIN32)
-    list(APPEND SPLAT_NVCC_FLAGS "-Xcompiler=-O3,-march=native")
+    # list(APPEND SPLAT_NVCC_FLAGS "-Xcompiler=-O3,-march=native")
+    list(APPEND SPLAT_NVCC_FLAGS "-Xcompiler=-g")
 endif()
 
 # ---------------------------------------------------------------------------

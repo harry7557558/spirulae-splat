@@ -14,15 +14,15 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 >(
     cudaStream_t stream,
     const uint32_t I,
+    const uint32_t N,   // zero if packed
     const uint32_t n_isects,
     // fwd inputs
     const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
-    Vanilla3DGUT::ScreenBuffer splat_buffer,
+    const Vanilla3DGUT::WorldBuffer splat_wbuffer,
+    const Vanilla3DGUT::ScreenBuffer splat_sbuffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
-    const float *__restrict__ backgrounds, // [..., CDIM] or [nnz, CDIM]
-    const bool *__restrict__ masks,           // [..., tile_height, tile_width]
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,
@@ -41,9 +41,12 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
     RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
-    Vanilla3DGUT::ScreenBuffer v_splat_buffer,
-    Vanilla3DGUT::ScreenBuffer vr_splat_buffer,
-    Vanilla3DGUT::ScreenBuffer h_splat_buffer,
+    Vanilla3DGUT::WorldBuffer v_splat_wbuffer,
+    Vanilla3DGUT::ScreenBuffer v_splat_sbuffer,
+    Vanilla3DGUT::WorldBuffer vr_splat_wbuffer,
+    Vanilla3DGUT::ScreenBuffer vr_splat_sbuffer,
+    Vanilla3DGUT::WorldBuffer h_splat_wbuffer,
+    Vanilla3DGUT::ScreenBuffer h_splat_sbuffer,
     float *__restrict__ o_accum_weight,
     float *__restrict__ v_viewmats // [B, C, 4, 4]
 );

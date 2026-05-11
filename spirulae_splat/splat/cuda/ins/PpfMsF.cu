@@ -23,5 +23,6 @@ template void projection_packed_fwd_kernel_wrapper<
     int32_t *__restrict__ camera_ids,    // [nnz]
     int32_t *__restrict__ gaussian_ids,  // [nnz]
     float4 *__restrict__ aabbs,         // [nnz, 4]
+    float *__restrict__ sorting_depths,         // [nnz]
     MipSplatting::ScreenBuffer splats_screen  // [nnz, ...]
 );

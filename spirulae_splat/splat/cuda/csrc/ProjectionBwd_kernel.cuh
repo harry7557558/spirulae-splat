@@ -82,15 +82,15 @@ __global__ void projection_fused_bwd_kernel(
     cam.dist_coeffs = dist_coeffs_buffer.load(cid);
 
     // Load splat
-    typename SplatPrimitive::World splat_world =
-        SplatPrimitive::World::load(splats_world, gid);
-    typename SplatPrimitive::Screen v_splat_screen =
-        SplatPrimitive::Screen::load(v_splats_screen, idx, nullptr);
+    typename SplatPrimitive::World splat_world;
+    typename SplatPrimitive::Screen v_splat_screen;
     typename SplatPrimitive::Screen vr_splat_screen;
     typename SplatPrimitive::Screen h_splat_screen;
+    splat_world.load(splats_world, gid);
+    v_splat_screen.load(v_splats_screen, idx);
     if (hessian_diagonal_output_mode != HessianDiagonalOutputMode::None) {
-        vr_splat_screen = SplatPrimitive::Screen::load(vr_splats_screen, idx, nullptr);
-        h_splat_screen = SplatPrimitive::Screen::load(h_splats_screen, idx, nullptr);
+        vr_splat_screen.load(vr_splats_screen, idx);
+        h_splat_screen.load(h_splats_screen, idx);
     }
 
     // Projection
@@ -101,50 +101,24 @@ __global__ void projection_fused_bwd_kernel(
     float3 h_world_pos = {0.f, 0.f, 0.f};
     typename SplatPrimitive::World vr_splat_world = SplatPrimitive::World::zero();
     typename SplatPrimitive::World h_splat_world = SplatPrimitive::World::zero();
-    if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::None) {
-        switch (camera_model) {
-        case ssplat::CameraModelType::PINHOLE: // perspective projection
-            SplatPrimitive::project_persp_vjp(splat_world, cam, v_splat_screen, v_splat_world, v_R, v_t);
-            break;
-        // case ssplat::CameraModelType::ORTHO: // orthographic projection
-        //     SplatPrimitive::project_ortho_vjp(splat_world, cam, v_splat_screen, v_splat_world, v_R, v_t);
-        //     break;
-        case ssplat::CameraModelType::FISHEYE: // fisheye projection
-            SplatPrimitive::project_fisheye_vjp(splat_world, cam, v_splat_screen, v_splat_world, v_R, v_t);
-            break;
-        }
-    } else if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
-        switch (camera_model) {
-        case ssplat::CameraModelType::PINHOLE: // perspective projection
-            SplatPrimitive::project_persp_vjp(splat_world, cam, v_splat_screen,
-                vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_world_pos, h_world_pos);
-            break;
-        case ssplat::CameraModelType::FISHEYE: // fisheye projection
-            SplatPrimitive::project_fisheye_vjp(splat_world, cam, v_splat_screen,
-                vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_world_pos, h_world_pos);
-            break;
-        }
-    } else if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable) {
-        switch (camera_model) {
-        case ssplat::CameraModelType::PINHOLE: // perspective projection
-            SplatPrimitive::project_persp_vjp(splat_world, cam, v_splat_screen,
-                vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_splat_world, h_splat_world);
-            break;
-        case ssplat::CameraModelType::FISHEYE: // fisheye projection
-            SplatPrimitive::project_fisheye_vjp(splat_world, cam, v_splat_screen,
-                vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_splat_world, h_splat_world);
-            break;
-        }
+    if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::None) {
+        splat_world.template project_vjp<camera_model>(cam, v_splat_screen, v_splat_world, v_R, v_t);
+    } else if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
+        splat_world.template project_vjp_h_pos<camera_model>(cam, v_splat_screen,
+            vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_world_pos, h_world_pos);
+    } else if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable) {
+        splat_world.template project_vjp_h_all<camera_model>(cam, v_splat_screen,
+            vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_splat_world, h_splat_world);
     }
 
     // Save results
-    v_splat_world.atomicAddGradientToBuffer(v_splats_world, gid);
+    v_splat_world.atomicStore(v_splats_world, gid);
     if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
         atomicAddFVec(&vr_world_pos_buffer[gid], vr_world_pos);
         atomicAddFVec(&h_world_pos_buffer[gid], h_world_pos);
     } else if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable) {
-        vr_splat_world.atomicAddGradientToBuffer(vr_splats_world, gid);
-        h_splat_world.atomicAddGradientToBuffer(h_splats_world, gid);
+        vr_splat_world.atomicStore(vr_splats_world, gid);
+        h_splat_world.atomicStore(h_splats_world, gid);
     }
 
     if (v_viewmats != nullptr) {

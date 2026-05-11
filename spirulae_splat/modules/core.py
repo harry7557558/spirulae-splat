@@ -159,36 +159,37 @@ class Renderer:
             self.camera_model.upper(), self.dist_coeffs
         )
         if self.packed:
-            camera_ids, gaussian_ids, aabb, splats_proj = proj_returns
+            camera_ids, gaussian_ids, aabb, sorting_depths, splats_proj = proj_returns
         else:
-            aabb, splats_proj = proj_returns
+            aabb, sorting_depths, splats_proj = proj_returns
             camera_ids, gaussian_ids = None, None
 
         self.aabb = aabb  # xyxy
-        self.depths = splats_proj[1 if self.primitive in ['3dgs', 'mip'] else 0]  # TODO
+        self.depths = sorting_depths
         self.splats_proj = splats_proj
         self.camera_ids, self.gaussian_ids = camera_ids, gaussian_ids
 
     def rasterize_forward(self):
         if self.primitive in ['3dgs', 'mip']:
-            self.render_colors, self.render_Ts, self.render_last_ids = _make_lazy_cuda_func(
+            (
+                self.render_colors, self.render_Ts, self.render_last_ids,
+                 render2_outputs, distortion_outputs  # TODO
+            ) = _make_lazy_cuda_func(
                 f"rasterization_{self.primitive}_forward"
             )(
-                self.splats_proj,
-                self.backgrounds, self.max_blending_masks,
+                self.splats_world, self.splats_proj, self.gaussian_ids,
                 self.width, self.height, self.isect_offsets, self.flatten_ids,
+                self.output_distortion
             )
         else:
             (
                 self.render_colors, self.render_Ts, self.render_last_ids,
-                render2_outputs, distortion_outputs, max_blending  # TODO
+                render2_outputs, distortion_outputs  # TODO
             ) = _make_lazy_cuda_func(
                 f"rasterization_{self.primitive}_forward"
             )(
-                (*self.splats_world[:2], *self.splats_proj),  # TODO
-                self.gaussian_ids,
+                self.splats_world, self.splats_proj, self.gaussian_ids,
                 self.viewmats, self.intrins, self.camera_model.upper(), self.dist_coeffs,
-                self.backgrounds, self.max_blending_masks,
                 self.width, self.height, self.isect_offsets, self.flatten_ids,
                 self.output_distortion
             )
@@ -217,13 +218,11 @@ class Renderer:
                 add_gradient_component(ctx.backward_info, key+'.hess', h)
         else:
             if self.primitive in ['3dgs', 'mip']:
-                self.v_splats_proj, accum_weight = _make_lazy_cuda_func(
+                v_splats_world, self.v_splats_proj, accum_weight = _make_lazy_cuda_func(
                     f"rasterization_{self.primitive}_backward"
                 )(
                     self.max_num_splats,
-                    self.splats_proj,
-                    self.gaussian_ids,
-                    self.backgrounds, self.max_blending_masks,
+                    self.splats_world, self.splats_proj, self.gaussian_ids,
                     self.width, self.height, self.isect_offsets, self.flatten_ids, self.render_Ts, self.render_last_ids,
                     self.backward_info.get('accum_weight_map', None),
                     self.v_render_colors,
@@ -233,10 +232,9 @@ class Renderer:
                 cuda_return = _make_lazy_cuda_func(
                     f"rasterization_{self.primitive}_backward"
                 )(
-                    (*self.splats_world[:2], *self.splats_proj),  # TODO
-                    self.gaussian_ids,
+                    self.max_num_splats,
+                    self.splats_world, self.splats_proj, self.gaussian_ids,
                     self.viewmats, self.intrins, self.camera_model.upper(), self.dist_coeffs,
-                    self.backgrounds, self.max_blending_masks,
                     self.width, self.height, self.isect_offsets, self.flatten_ids, self.render_Ts, self.render_last_ids,
                     # (render_rgbs, render_depths) if ctx.output_distortion else None,
                     # (render2_rgbs, render2_depths) if ctx.output_distortion else None,
@@ -252,9 +250,13 @@ class Renderer:
                 if self.compute_hessian_diagonal:
                     v_splats, v_viewmats, vr_splats, h_splats, accum_weight = cuda_return
                 else:
-                    v_splats, v_viewmats, accum_weight = cuda_return
-                self.v_splats_proj = v_splats[2:]  # TODO
-                # self.v_splats_world =   # TODO
+                    v_splats_world, self.v_splats_proj, v_viewmats, accum_weight = cuda_return
+            # TODO: fuse
+            if not hasattr(self, 'v_splats_world'):
+                self.v_splats_world = v_splats_world
+            else:
+                for i in range(len(v_splats_world)):
+                    self.v_splats_world[i] += v_splats_world[i].reshape(self.v_splats_world[i].shape)
         if accum_weight is not None:
             self.backward_info['accum_weight'] = accum_weight
 
@@ -335,7 +337,9 @@ class Renderer:
                 del ctx.backward_info[key+'.gradr']
                 del ctx.backward_info[key+'.hess']
         else:
-            _make_lazy_cuda_func(f"projection_{self.primitive}_backward")(
+            _make_lazy_cuda_func(
+                f"projection_{self.primitive}_backward"
+            )(
                 self.splats_world,
                 self.viewmats, self.intrins, self.width, self.height, self.camera_model.upper(), self.dist_coeffs,
                 self.camera_ids, self.gaussian_ids, self.aabb,
@@ -432,7 +436,10 @@ class Renderer:
 
         if not hasattr(self, 'radii'):
             self.radii = torch.zeros(self.max_num_splats, dtype=radii.dtype, device=radii.device)
-        _make_lazy_cuda_func("inplace_scatter_max")(self.gaussian_ids, radii, self.radii)
+        if self.packed:
+            _make_lazy_cuda_func("inplace_scatter_max")(self.gaussian_ids, radii, self.radii)
+        else:
+            self.radii = radii   # TODO: batching
         self.meta.update(
             {
                 "radii": radii,
@@ -467,14 +474,15 @@ class Renderer:
 
     def backward(
         self,
-        v_render_colors: Tuple[torch.Tensor],
+        v_render_colors: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
         v_render_Ts: torch.Tensor,
         v_rgb_distortion: Optional[torch.Tensor] = None,
         v_depth_distortion: Optional[torch.Tensor] = None,
         v_normal_distortion: Optional[torch.Tensor] = None,
     ):
+        assert len(v_render_colors) == 3, "v_render_colors must contain RGB, depth, and normal"
         for tensor in v_render_colors:
-            assert tensor.is_contiguous()
+            assert tensor is None or tensor.is_contiguous()
         assert v_render_Ts.is_contiguous()
 
         if len(self.render_colors) > 1:

@@ -1,5 +1,7 @@
 // Modified from https://github.com/nerfstudio-project/gsplat/blob/main/gsplat/cuda/csrc/RasterizeToPixels3DGSFwd.cu
 
+#if 0  // TODO
+
 #include "RasterizationSortedEval3DFwd.cuh"
 
 #include "generated/slang.cuh"
@@ -183,9 +185,8 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
             int32_t t1 = t + (int)block.thread_rank();
             if (t1 < range_end) {
                 uint32_t splat_idx = flatten_ids[t1];
-                typename SplatPrimitive::Screen splat =
-                    SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_idx, gaussian_ids);
-                splat_batch[block.thread_rank()] = splat;
+                splat_batch[block.thread_rank()].load(
+                    splat_buffer, gaussian_ids ? gaussian_ids[splat_idx] : splat_idx);
             }
             block.sync();
         }
@@ -212,8 +213,8 @@ __global__ void rasterize_to_pixels_sorted_eval3d_fwd_kernel(
         if (pqueue_size >= MAX_PQUEUE_SIZE || (t >= range_end && pqueue_size != 0)) {
             uint32_t t = pqueue.pop(pqueue_size).x;
             uint32_t splat_idx = flatten_ids[t];
-            typename SplatPrimitive::Screen splat =
-                SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_idx, gaussian_ids);
+            typename SplatPrimitive::Screen splat;
+            splat.load(splat_buffer, gaussian_ids ? gaussian_ids[splat_idx] : splat_idx);
             float alpha = splat.evaluate_alpha(ray_o, ray_d);
 
             const float next_T = T * (1.0f - alpha);
@@ -310,8 +311,8 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel(
             image_width, image_height, tile_width, tile_height, \
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(), \
             renders, transmittances.data_ptr<float>(), last_ids.data_ptr<int32_t>(), \
-            output_distortion ? *renders2 : RenderOutput::Buffer(), \
-            output_distortion ? distortions : RenderOutput::Buffer(), \
+            output_distortion ? renders2->buffer() : RenderOutput::Buffer(), \
+            output_distortion ? distortions->buffer() : RenderOutput::Buffer(), \
             (output_max_blending && out_max_blending.has_value()) ? out_max_blending.value().data_ptr<float>() : nullptr \
         )
 
@@ -368,24 +369,23 @@ inline std::tuple<
     
     typename SplatPrimitive::ScreenBuffer splats(splats_tuple);
 
-    auto opt = splats.options();
     at::DimVector image_dims(tile_offsets.sizes().slice(0, tile_offsets.dim() - 2));
 
     at::DimVector renders_dims(image_dims);
     renders_dims.append({image_height, image_width});
     RenderOutput::Tensor renders =
-        RenderOutput::Tensor::empty<SplatPrimitive::pixelType>(renders_dims, opt);
+        RenderOutput::Tensor::empty<SplatPrimitive::pixelType>(renders_dims);
 
     std::optional<RenderOutput::Tensor> renders2 = std::nullopt;
     std::optional<RenderOutput::Tensor> distortions = std::nullopt;
     if (output_distortion) {
-        renders2 = RenderOutput::Tensor::empty<SplatPrimitive::pixelType>(renders_dims, opt);
-        distortions = RenderOutput::Tensor::empty<SplatPrimitive::pixelType>(renders_dims, opt);
+        renders2 = RenderOutput::Tensor::empty<SplatPrimitive::pixelType>(renders_dims);
+        distortions = RenderOutput::Tensor::empty<SplatPrimitive::pixelType>(renders_dims);
     }
 
     at::DimVector transmittance_dims(image_dims);
     transmittance_dims.append({image_height, image_width, 1});
-    at::Tensor transmittances = at::empty(transmittance_dims, opt);
+    at::Tensor transmittances = at::empty(transmittance_dims, kTensorOptionF32());
 
     at::DimVector last_ids_dims(image_dims);
     last_ids_dims.append({image_height, image_width});
@@ -393,7 +393,7 @@ inline std::tuple<
 
     std::optional<at::Tensor> out_max_blending;
     if (output_max_blending) {
-        out_max_blending = at::empty({splats.size()}, opt);
+        out_max_blending = at::empty({splats.size()}, kTensorOptionF32());
         set_zero<float>(out_max_blending.value());
     }
 
@@ -449,3 +449,5 @@ inline std::tuple<
 //         tile_offsets, flatten_ids
 //     );
 // }
+
+#endif

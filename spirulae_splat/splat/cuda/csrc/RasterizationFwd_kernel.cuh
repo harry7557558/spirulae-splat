@@ -1,3 +1,7 @@
+#define IS_EVAL3D 0
+#include "RasterizationEval3DFwd_kernel.cuh"
+
+#if 0
 #pragma once
 
 // Modified from https://github.com/nerfstudio-project/gsplat/blob/main/gsplat/cuda/csrc/RasterizeToPixels3DGSFwd.cu
@@ -18,6 +22,8 @@ namespace cg = cooperative_groups;
 #include "types.cuh"
 #include "common.cuh"
 
+#include "Primitive.cuh"
+
 
 template <typename SplatPrimitive>
 __global__ void rasterize_to_pixels_fwd_kernel(
@@ -25,7 +31,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const uint32_t N,
     const uint32_t n_isects,
     const bool packed,
-    typename SplatPrimitive::ScreenBuffer splat_buffer,
+    typename SplatPrimitive::WorldBuffer splat_wbuffer,
+    typename SplatPrimitive::ScreenBuffer splat_sbuffer,
     const float3 *__restrict__ backgrounds, // [I, 3]
     const bool *__restrict__ masks,           // [I, tile_height, tile_width]
     const uint32_t image_width,
@@ -118,7 +125,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         uint32_t idx = batch_start + tr;
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [I * N] or [nnz]
-            splat_batch[tr] = SplatPrimitive::Screen::load(splat_buffer, g, nullptr);
+            splat_batch[tr].load(splat_buffer, g);
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -190,3 +197,4 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
         render_colors, render_Ts, last_ids
     );
 }
+#endif

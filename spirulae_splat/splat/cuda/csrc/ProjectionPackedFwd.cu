@@ -42,6 +42,7 @@ void projection_packed_fwd_kernel_wrapper(
     int32_t *__restrict__ camera_ids,    // [nnz]
     int32_t *__restrict__ gaussian_ids,  // [nnz]
     float4 *__restrict__ aabbs,         // [nnz, 4]
+    float *__restrict__ sorting_depths,         // [nnz]
     typename SplatPrimitive::ScreenBuffer splats_screen  // [nnz, ...]
 );
 
@@ -51,6 +52,7 @@ inline std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
+    at::Tensor,  // sorting_depths
     TensorList  // out splats
 > launch_projection_packed_fwd_kernel(
     const TensorList &in_splats,
@@ -117,6 +119,7 @@ inline std::tuple<
     at::Tensor camera_ids = at::empty({nnz,}, kTensorOptionI32());
     at::Tensor gaussian_ids = at::empty({nnz,}, kTensorOptionI32());
     at::Tensor aabb = at::empty({nnz, 4}, kTensorOptionF32());
+    at::Tensor sorting_depths = at::empty({nnz,}, kTensorOptionF32());
 
     TensorList splats_screen = SplatPrimitive::ScreenBuffer::empty(nnz);
 
@@ -126,7 +129,7 @@ inline std::tuple<
             image_width, image_height, \
             intersection_mask_scan.data_ptr<int64_t>(), \
             camera_ids.data_ptr<int32_t>(), gaussian_ids.data_ptr<int32_t>(), \
-            (float4*)aabb.data_ptr<float>(), splats_screen \
+            (float4*)aabb.data_ptr<float>(), sorting_depths.data_ptr<float>(), splats_screen \
         )
 
     if (camera_model == ssplat::CameraModelType::PINHOLE)
@@ -139,7 +142,7 @@ inline std::tuple<
 
     #undef _LAUNCH_ARGS
 
-    return std::make_tuple(camera_ids, gaussian_ids, aabb, splats_screen);
+    return std::make_tuple(camera_ids, gaussian_ids, aabb, sorting_depths, splats_screen);
 }
 
 
@@ -152,6 +155,7 @@ std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
+    at::Tensor,  // sorting_depths
     TensorList  // out splats
 > projection_3dgs_packed_forward_tensor(
     // inputs
@@ -177,6 +181,7 @@ std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
+    at::Tensor,  // sorting_depths
     TensorList  // out splats
 > projection_mip_packed_forward_tensor(
     // inputs
@@ -203,6 +208,7 @@ std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
+    at::Tensor,  // sorting_depths
     TensorList  // out splats
 > projection_3dgut_packed_forward_tensor(
     // inputs

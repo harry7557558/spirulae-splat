@@ -4,7 +4,7 @@ from torch.func import vjp  # type: ignore
 
 from spirulae_splat.splat._torch_impl import quat_to_rotmat
 
-from spirulae_splat.modules.core import rasterization as ssplat_rasterization
+from spirulae_splat.modules.core import Renderer
 
 # commit 48df61993fed8e4742d0758b6c8c2b4e599c4124
 from gsplat.rendering import rasterization as gsplat_rasterization
@@ -70,18 +70,21 @@ IS_ANTIALIASED = False
 WITH_UT = True
 
 def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
-    camera_model = ["pinhole", "fisheye"][IS_FISHEYE]
-    # quats = torch.nn.functional.normalize(quats, dim=-1)  # affects gradient
-    intrins = torch.stack([Ks[..., 0, 0], Ks[..., 1, 1], Ks[..., 0, 2], Ks[..., 1, 2]], dim=-1)  # fx, fy, cx, cy
-    rgbd, Ts, meta = ssplat_rasterization(
+    renderer = Renderer(
         primitive="3dgut" if WITH_UT else ["3dgs", "mip"][IS_ANTIALIASED],
-        splat_params=(means, quats, scales, opacities.unsqueeze(-1), features_dc, features_sh),
+        splats_world=(means, quats, scales, opacities.unsqueeze(-1), features_dc, features_sh),
         # primitive="opaque_triangle",
         # splat_params=(means, quats, scales+1.8, opacities.unsqueeze(-1).repeat(1, 2), features_dc, features_sh, features_dc.unsqueeze(-2).repeat(1, 2, 1)),
         # primitive="voxel",
         # splat_params=(torch.cat((means, 5.0*torch.exp(scales.mean(-1, True))), dim=-1), 2.0*torch.exp(opacities).unsqueeze(-1).repeat(1, 8), features_dc, features_sh),
         # splat_params=(voxels, 10.0*torch.exp(opacities)[voxel_indices], features_dc[:len(voxels)], features_sh[:len(voxels)]),
         # splat_params=(voxels, densities_0[voxel_indices], features_dc_0, features_sh_0),
+        cur_num_splats=len(means)
+    )
+    camera_model = ["pinhole", "fisheye"][IS_FISHEYE]
+    # quats = torch.nn.functional.normalize(quats, dim=-1)  # affects gradient
+    intrins = torch.stack([Ks[..., 0, 0], Ks[..., 1, 1], Ks[..., 0, 2], Ks[..., 1, 2]], dim=-1)  # fx, fy, cx, cy
+    renderer.set_params(
         viewmats=viewmats,  # [C, 4, 4]
         intrins=intrins,  # [C, 4]
         width=W,
@@ -90,10 +93,13 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
         use_bvh=False,
         camera_model=camera_model,
     )
+    renderer.forward()
+    rgbd = renderer.render_colors
+    Ts = renderer.render_Ts
     rgbd = [*rgbd[:2]]
     if WITH_UT:
         rgbd[1] = ray_depth_to_linear_depth(rgbd[1], camera_model, intrins)  # TODO: f(E[X]) != E[f(X)]
-    return *rgbd, 1.0 - Ts
+    return (*rgbd, 1.0 - Ts), renderer
 
 def rasterize_gsplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
     rgbd, alpha, meta = gsplat_rasterization(
@@ -162,7 +168,7 @@ def test_rasterization():
     inputs = get_inputs()
     _inputs = get_inputs()
 
-    outputs = rasterize_ssplat(*inputs)
+    outputs, renderer = rasterize_ssplat(*inputs)
     _outputs = rasterize_gsplat(*_inputs)
 
     print("test forward")
@@ -201,20 +207,23 @@ def test_rasterization():
     weights[1] *= 0.0  # depth
     def fun(outputs):
         return sum([(w*o).sum() for w, o in zip(weights, outputs)])
-    fun(outputs).backward()
     fun(_outputs).backward()
+
+    renderer.zero_grad()
+    renderer.backward((*weights[:-1], None), -weights[-1])
+    grads = renderer.v_splats_world
 
     # print(inputs[0].grad)
     # print(_inputs[0].grad)
 
     print("test backward")
     tol = { 'atol': 1e-2, 'rtol': 1e-2 }
-    check_close('means', inputs[0].grad, _inputs[0].grad, **tol)
-    check_close('quats', inputs[1].grad, _inputs[1].grad, **tol)
-    check_close('scales', inputs[2].grad, _inputs[2].grad, **tol)
-    check_close('opacs', inputs[3].grad, _inputs[3].grad, **tol)
-    check_close('features_dc', inputs[4].grad, _inputs[4].grad, **tol)
-    check_close('features_sh', inputs[5].grad, _inputs[5].grad, **tol)
+    check_close('means', grads[0], _inputs[0].grad, **tol)
+    check_close('quats', grads[1], _inputs[1].grad, **tol)
+    check_close('scales', grads[2], _inputs[2].grad, **tol)
+    check_close('opacs', grads[3].squeeze(-1), _inputs[3].grad, **tol)
+    check_close('features_dc', grads[4], _inputs[4].grad, **tol)
+    check_close('features_sh', grads[5].reshape(N, -1, 3), _inputs[5].grad, **tol)
     check_close('viewmats', inputs[6].grad, _inputs[6].grad, **tol)
     print()
 
@@ -230,7 +239,7 @@ def profile_rasterization():
     print()
 
     print("profile backward")
-    outputs = rasterize_ssplat(*inputs)
+    outputs, renderer = rasterize_ssplat(*inputs)
     _outputs = rasterize_gsplat(*_inputs)
 
     weights = [torch.randn_like(x.detach()) for x in _outputs]
@@ -239,7 +248,7 @@ def profile_rasterization():
     loss = fun(outputs)
     _loss = fun(_outputs)
 
-    timeit(lambda: loss.backward(retain_graph=True), "ssplat backward", repeat=20)
+    timeit(lambda: renderer.backward((*weights[:-1], None), -weights[-1]), "ssplat backward", repeat=20)
     timeit(lambda: _loss.backward(retain_graph=True), "gsplat backward")
     print()
 

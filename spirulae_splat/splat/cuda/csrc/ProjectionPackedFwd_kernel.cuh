@@ -56,20 +56,14 @@ __global__ void projection_packed_mask_kernel(
 
     // Load splat
     // TODO: verify that SH is not loaded after compiler optimization
-    typename SplatPrimitive::World splat_world =
-        SplatPrimitive::World::load(splats_world, bid * N + gid);
+    typename SplatPrimitive::World splat_world;
+    splat_world.load(splats_world, bid * N + gid);
 
     // Projection
+    float sorting_depth;
     float4 aabb;
     typename SplatPrimitive::Screen splat_screen;
-    switch (camera_model) {
-    case ssplat::CameraModelType::PINHOLE: // perspective projection
-        SplatPrimitive::project_persp(splat_world, cam, splat_screen, aabb);
-        break;
-    case ssplat::CameraModelType::FISHEYE: // fisheye projection
-        SplatPrimitive::project_fisheye(splat_world, cam, splat_screen, aabb);
-        break;
-    }
+    splat_world.project<camera_model>(cam, splat_screen, aabb, sorting_depth);
 
     // Save results
     aabb.x = fminf(fmaxf(aabb.x, 0.0f), image_width-1.0f);
@@ -96,6 +90,7 @@ __global__ void projection_packed_fwd_kernel(
     int32_t *__restrict__ camera_ids,    // [nnz]
     int32_t *__restrict__ gaussian_ids,  // [nnz]
     float4 *__restrict__ aabbs,         // [nnz, 4]
+    float *__restrict__ sorting_depths,  // [nnz]
     typename SplatPrimitive::ScreenBuffer splats_screen  // [nnz, ...]
 ) {
     // parallelize over B * C * N.
@@ -131,20 +126,14 @@ __global__ void projection_packed_fwd_kernel(
     cam.dist_coeffs = dist_coeffs_buffer.load(bid * C + cid);
 
     // Load splat
-    typename SplatPrimitive::World splat_world =
-        SplatPrimitive::World::load(splats_world, bid * N + gid);
+    typename SplatPrimitive::World splat_world;
+    splat_world.load(splats_world, bid * N + gid);
 
     // Projection
+    float sorting_depth;
     float4 aabb;
     typename SplatPrimitive::Screen splat_screen;
-    switch (camera_model) {
-    case ssplat::CameraModelType::PINHOLE: // perspective projection
-        SplatPrimitive::project_persp(splat_world, cam, splat_screen, aabb);
-        break;
-    case ssplat::CameraModelType::FISHEYE: // fisheye projection
-        SplatPrimitive::project_fisheye(splat_world, cam, splat_screen, aabb);
-        break;
-    }
+    splat_world.project<camera_model>(cam, splat_screen, aabb, sorting_depth);
 
     // Save results
     camera_ids[out_idx] = (int32_t)cid;
@@ -154,7 +143,8 @@ __global__ void projection_packed_fwd_kernel(
     aabb.z = fminf(fmaxf(aabb.z, 0.0f), image_width-1.0f);
     aabb.w = fminf(fmaxf(aabb.w, 0.0f), image_height-1.0f);
     aabbs[out_idx] = aabb;
-    splat_screen.saveParamsToBuffer(splats_screen, out_idx, nullptr);
+    sorting_depths[out_idx] = sorting_depth;
+    splat_screen.store(splats_screen, out_idx);
 }
 
 
@@ -200,6 +190,7 @@ void projection_packed_fwd_kernel_wrapper(
     int32_t *__restrict__ camera_ids,    // [nnz]
     int32_t *__restrict__ gaussian_ids,  // [nnz]
     float4 *__restrict__ aabbs,         // [nnz, 4]
+    float *__restrict__ sorting_depths,         // [nnz]
     typename SplatPrimitive::ScreenBuffer splats_screen  // [nnz, ...]
 ) {
     constexpr uint block = 128;
@@ -209,6 +200,6 @@ void projection_packed_fwd_kernel_wrapper(
         splats_world, viewmats, intrins, dist_coeffs_buffer,
         image_width, image_height,
         intersection_mask_scan,
-        camera_ids, gaussian_ids, aabbs, splats_screen
+        camera_ids, gaussian_ids, aabbs, sorting_depths, splats_screen
     );
 }

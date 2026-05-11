@@ -48,15 +48,13 @@ struct TileBuffers {
 template<typename Primitive, ssplat::CameraModelType camera_model>
 struct SplatTileIntersector {
 
-    c10::TensorOptions tensorF32;
-    c10::TensorOptions tensorI32, tensorI16, tensorI64, tensorU8;
     typename Primitive::WorldBuffer splats;
     long numSplats;
     float rel_scale;
     TileBuffers<camera_model> tiles;
 
     SplatTileIntersector(
-        const typename Primitive::World::Tensor &splats,
+        const typename Primitive::WorldBuffer &splats,
         const TileBuffers<camera_model> &tiles,
         float rel_scale
     );
@@ -70,7 +68,7 @@ struct SplatTileIntersector {
 
 std::tuple<at::Tensor, at::Tensor>
 intersect_splat_tile_3dgs(
-    Vanilla3DGS::World::TensorTuple splats_tuple,
+    TensorList splats_tuple,
     unsigned width,
     unsigned height,
     const at::Tensor& viewmats,
@@ -80,26 +78,26 @@ intersect_splat_tile_3dgs(
     float rel_scale
 );
 
-std::tuple<at::Tensor, at::Tensor>
-intersect_splat_tile_opaque_triangle(
-    OpaqueTriangle::World::TensorTuple splats_tuple,
-    unsigned width,
-    unsigned height,
-    const at::Tensor& viewmats,
-    const at::Tensor& intrins,
-    const std::string& camera_model,
-    const CameraDistortionCoeffsTensor& dist_coeffs,
-    float rel_scale
-);
+// std::tuple<at::Tensor, at::Tensor>
+// intersect_splat_tile_opaque_triangle(
+//     OpaqueTriangle::World::TensorTuple splats_tuple,
+//     unsigned width,
+//     unsigned height,
+//     const at::Tensor& viewmats,
+//     const at::Tensor& intrins,
+//     const std::string& camera_model,
+//     const CameraDistortionCoeffsTensor& dist_coeffs,
+//     float rel_scale
+// );
 
-std::tuple<at::Tensor, at::Tensor>
-intersect_splat_tile_voxel(
-    VoxelPrimitive::World::TensorTuple splats_tuple,
-    unsigned width,
-    unsigned height,
-    const at::Tensor& viewmats,
-    const at::Tensor& intrins,
-    const std::string& camera_model,
-    const CameraDistortionCoeffsTensor& dist_coeffs,
-    float rel_scale
-);
+// std::tuple<at::Tensor, at::Tensor>
+// intersect_splat_tile_voxel(
+//     VoxelPrimitive::World::TensorTuple splats_tuple,
+//     unsigned width,
+//     unsigned height,
+//     const at::Tensor& viewmats,
+//     const at::Tensor& intrins,
+//     const std::string& camera_model,
+//     const CameraDistortionCoeffsTensor& dist_coeffs,
+//     float rel_scale
+// );

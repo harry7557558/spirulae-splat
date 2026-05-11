@@ -109,30 +109,30 @@ def generate_ProjectionFwd():
             ("MipSplatting", "ssplat::CameraModelType::FISHEYE"),
             ("Vanilla3DGUT", "ssplat::CameraModelType::PINHOLE"),
             ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE"),
-            ("SphericalVoronoi3DGUT<2>", "ssplat::CameraModelType::PINHOLE"),
-            ("SphericalVoronoi3DGUT<2>", "ssplat::CameraModelType::FISHEYE"),
-            ("SphericalVoronoi3DGUT<3>", "ssplat::CameraModelType::PINHOLE"),
-            ("SphericalVoronoi3DGUT<3>", "ssplat::CameraModelType::FISHEYE"),
-            ("SphericalVoronoi3DGUT<4>", "ssplat::CameraModelType::PINHOLE"),
-            ("SphericalVoronoi3DGUT<4>", "ssplat::CameraModelType::FISHEYE"),
-            ("SphericalVoronoi3DGUT<5>", "ssplat::CameraModelType::PINHOLE"),
-            ("SphericalVoronoi3DGUT<5>", "ssplat::CameraModelType::FISHEYE"),
-            ("SphericalVoronoi3DGUT<6>", "ssplat::CameraModelType::PINHOLE"),
-            ("SphericalVoronoi3DGUT<6>", "ssplat::CameraModelType::FISHEYE"),
-            ("SphericalVoronoi3DGUT<7>", "ssplat::CameraModelType::PINHOLE"),
-            ("SphericalVoronoi3DGUT<7>", "ssplat::CameraModelType::FISHEYE"),
-            ("SphericalVoronoi3DGUT<8>", "ssplat::CameraModelType::PINHOLE"),
-            ("SphericalVoronoi3DGUT<8>", "ssplat::CameraModelType::FISHEYE"),
-            ("OpaqueTriangle", "ssplat::CameraModelType::PINHOLE"),
-            ("OpaqueTriangle", "ssplat::CameraModelType::FISHEYE"),
-            ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE"),
-            ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE"),
+            # ("SphericalVoronoi3DGUT<2>", "ssplat::CameraModelType::PINHOLE"),
+            # ("SphericalVoronoi3DGUT<2>", "ssplat::CameraModelType::FISHEYE"),
+            # ("SphericalVoronoi3DGUT<3>", "ssplat::CameraModelType::PINHOLE"),
+            # ("SphericalVoronoi3DGUT<3>", "ssplat::CameraModelType::FISHEYE"),
+            # ("SphericalVoronoi3DGUT<4>", "ssplat::CameraModelType::PINHOLE"),
+            # ("SphericalVoronoi3DGUT<4>", "ssplat::CameraModelType::FISHEYE"),
+            # ("SphericalVoronoi3DGUT<5>", "ssplat::CameraModelType::PINHOLE"),
+            # ("SphericalVoronoi3DGUT<5>", "ssplat::CameraModelType::FISHEYE"),
+            # ("SphericalVoronoi3DGUT<6>", "ssplat::CameraModelType::PINHOLE"),
+            # ("SphericalVoronoi3DGUT<6>", "ssplat::CameraModelType::FISHEYE"),
+            # ("SphericalVoronoi3DGUT<7>", "ssplat::CameraModelType::PINHOLE"),
+            # ("SphericalVoronoi3DGUT<7>", "ssplat::CameraModelType::FISHEYE"),
+            # ("SphericalVoronoi3DGUT<8>", "ssplat::CameraModelType::PINHOLE"),
+            # ("SphericalVoronoi3DGUT<8>", "ssplat::CameraModelType::FISHEYE"),
+            # ("OpaqueTriangle", "ssplat::CameraModelType::PINHOLE"),
+            # ("OpaqueTriangle", "ssplat::CameraModelType::FISHEYE"),
+            # ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE"),
+            # ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE"),
         ]
         includes = [("Primitive3DGS.cuh", kernel_filename)] * 4 + \
-            [("Primitive3DGUT.cuh", kernel_filename)] * 2 + \
-            [("Primitive3DGUT_SV.cuh", kernel_filename)] * 14 + \
-            [("PrimitiveOpaqueTriangle.cuh", kernel_filename)] * 2 + \
-            [("PrimitiveVoxel.cuh", kernel_filename)] * 2
+            [("Primitive3DGUT.cuh", kernel_filename)] * 2 #+ \
+            # [("Primitive3DGUT_SV.cuh", kernel_filename)] * 14 + \
+            # [("PrimitiveOpaqueTriangle.cuh", kernel_filename)] * 2 + \
+            # [("PrimitiveVoxel.cuh", kernel_filename)] * 2
 
         generate_kernel_instantiation(prefix, definition, map_header, map_body, includes)
 
@@ -159,42 +159,42 @@ def generate_ProjectionBwd():
         ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::Position"),
         ("Vanilla3DGUT", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::AllReasonable"),
         ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::AllReasonable"),
-        ("SphericalVoronoi3DGUT<2>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
-        ("SphericalVoronoi3DGUT<2>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
-        ("SphericalVoronoi3DGUT<3>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
-        ("SphericalVoronoi3DGUT<3>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
-        ("SphericalVoronoi3DGUT<4>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
-        ("SphericalVoronoi3DGUT<4>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
-        ("SphericalVoronoi3DGUT<5>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
-        ("SphericalVoronoi3DGUT<5>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
-        ("SphericalVoronoi3DGUT<6>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
-        ("SphericalVoronoi3DGUT<6>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
-        ("SphericalVoronoi3DGUT<7>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
-        ("SphericalVoronoi3DGUT<7>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
-        ("SphericalVoronoi3DGUT<8>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
-        ("SphericalVoronoi3DGUT<8>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
-        ("OpaqueTriangle", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
-        ("OpaqueTriangle", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
-        ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
-        ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
+        # ("SphericalVoronoi3DGUT<2>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
+        # ("SphericalVoronoi3DGUT<2>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
+        # ("SphericalVoronoi3DGUT<3>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
+        # ("SphericalVoronoi3DGUT<3>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
+        # ("SphericalVoronoi3DGUT<4>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
+        # ("SphericalVoronoi3DGUT<4>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
+        # ("SphericalVoronoi3DGUT<5>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
+        # ("SphericalVoronoi3DGUT<5>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
+        # ("SphericalVoronoi3DGUT<6>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
+        # ("SphericalVoronoi3DGUT<6>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
+        # ("SphericalVoronoi3DGUT<7>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
+        # ("SphericalVoronoi3DGUT<7>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
+        # ("SphericalVoronoi3DGUT<8>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
+        # ("SphericalVoronoi3DGUT<8>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
+        # ("OpaqueTriangle", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
+        # ("OpaqueTriangle", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
+        # ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
+        # ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
     ]
     includes = [("Primitive3DGS.cuh", "ProjectionBwd_kernel.cuh")] * 12 + \
-        [("Primitive3DGUT.cuh", "ProjectionBwd_kernel.cuh")] * 6 + \
-        [("Primitive3DGUT_SV.cuh", "ProjectionBwd_kernel.cuh")] * 14 + \
-        [("PrimitiveOpaqueTriangle.cuh", "ProjectionBwd_kernel.cuh")] * 2 + \
-        [("PrimitiveVoxel.cuh", "ProjectionBwd_kernel.cuh")] * 2
+        [("Primitive3DGUT.cuh", "ProjectionBwd_kernel.cuh")] * 6 #+ \
+        # [("Primitive3DGUT_SV.cuh", "ProjectionBwd_kernel.cuh")] * 14 + \
+        # [("PrimitiveOpaqueTriangle.cuh", "ProjectionBwd_kernel.cuh")] * 2 + \
+        # [("PrimitiveVoxel.cuh", "ProjectionBwd_kernel.cuh")] * 2
 
     generate_kernel_instantiation("ProjectionBwd", definition, map_header, map_body, includes)
 
 
 def generate_RasterizationFwd():
     definition = extract_kernel_definition("RasterizationFwd.cu", "rasterize_to_pixels_fwd_kernel_wrapper")
-    map_header = ["typename SplatPrimitive"]
-    map_body = [
-        ("Vanilla3DGS",),
-        # ("MipSplatting",),
-    ]
-    includes = [("Primitive3DGS.cuh", "RasterizationFwd_kernel.cuh")] * 1
+    map_header = ["typename SplatPrimitive", None]
+    map_body = [*itertools.product(
+        ["Vanilla3DGS"],
+        ["true", "false"],
+    )]
+    includes = [("Primitive3DGS.cuh", "RasterizationFwd_kernel.cuh")] * 2
 
     generate_kernel_instantiation("RasterizationFwd", definition, map_header, map_body, includes)
 
@@ -202,16 +202,12 @@ def generate_RasterizationFwd():
 def generate_RasterizationBwd():
     definition = extract_kernel_definition("RasterizationBwd.cu", "rasterize_to_pixels_bwd_kernel_wrapper")
     map_header = ["typename SplatPrimitive", None, None, None]
-    map_body = [
-        ("Vanilla3DGS", "false", "false", "false"),
-        ("Vanilla3DGS", "false", "true", "false"),
-        ("Vanilla3DGS", "true", "false", "false"),
-        ("Vanilla3DGS", "true", "true", "false"),
-        ("Vanilla3DGS", "false", "false", "true"),
-        ("Vanilla3DGS", "false", "true", "true"),
-        ("Vanilla3DGS", "true", "false", "true"),
-        ("Vanilla3DGS", "true", "true", "true"),
-    ]
+    map_body = [*itertools.product(
+        ["Vanilla3DGS"],
+        ["true", "false"],
+        ["true", "false"],
+        ["true", "false"],
+    )]
     includes = [("Primitive3DGS.cuh", "RasterizationBwd_kernel.cuh")] * 8
 
     generate_kernel_instantiation("RasterizationBwd", definition, map_header, map_body, includes)
@@ -219,18 +215,19 @@ def generate_RasterizationBwd():
 
 def generate_RasterizationEval3DFwd():
     definition = extract_kernel_definition("RasterizationEval3DFwd.cu", "rasterize_to_pixels_eval3d_fwd_kernel_wrapper")
-    map_header = ["typename SplatPrimitive", None, None, None]
+    map_header = ["typename SplatPrimitive", None, None]
     map_body = [
-        ("Vanilla3DGUT", "ssplat::CameraModelType::PINHOLE", "false", "false"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::PINHOLE", "true", "false"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE", "false", "false"),
-        ("Vanilla3DGUT", "ssplat::CameraModelType::FISHEYE", "true", "false"),
-        ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "true", "true"),
-        ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "true", "true"),
+        *itertools.product(
+            ["Vanilla3DGUT"],
+            ["ssplat::CameraModelType::PINHOLE", "ssplat::CameraModelType::FISHEYE"],
+            ["true", "false"],
+        ),
+        # ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "true", "true"),
+        # ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "true", "true"),
     ]
-    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 4 + \
-        [("Primitive3DGUT_SV.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 0 + \
-        [("PrimitiveVoxel.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 2
+    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 4 #+ \
+        # [("Primitive3DGUT_SV.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 0 + \
+        # [("PrimitiveVoxel.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 2
 
     generate_kernel_instantiation("RasterizationEval3DFwd", definition, map_header, map_body, includes)
 
@@ -239,18 +236,22 @@ def generate_RasterizationEval3DBwd():
     definition = extract_kernel_definition("RasterizationEval3DBwd.cu", "rasterize_to_pixels_eval3d_bwd_kernel_wrapper")
     map_header = ["typename SplatPrimitive", None, None, None, None, None]
     map_body = [
-        *[("Vanilla3DGUT", *args) for args in itertools.product(
+        *itertools.product(
+            ["Vanilla3DGUT"],
             ["ssplat::CameraModelType::PINHOLE", "ssplat::CameraModelType::FISHEYE"],
-            ['true', 'false'], ['true', 'false'], ['true', 'false'], ['true', 'false'],
-        )],
-        ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "false", "false", "false", "false"),
-        ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "false", "true", "false", "false"),
-        ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "false", "false", "false", "false"),
-        ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "false", "true", "false", "false"),
+            ['true', 'false'],
+            ['true', 'false'],
+            ['true', 'false'],
+            ['true', 'false'],
+        ),
+        # ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "false", "false", "false", "false"),
+        # ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "false", "true", "false", "false"),
+        # ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "false", "false", "false", "false"),
+        # ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "false", "true", "false", "false"),
     ]
-    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 32 + \
-        [("Primitive3DGUT_SV.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 0 + \
-        [("PrimitiveVoxel.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 4
+    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 32 #+ \
+        # [("Primitive3DGUT_SV.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 0 + \
+        # [("PrimitiveVoxel.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 4
 
     generate_kernel_instantiation("RasterizationEval3DBwd", definition, map_header, map_body, includes)
 

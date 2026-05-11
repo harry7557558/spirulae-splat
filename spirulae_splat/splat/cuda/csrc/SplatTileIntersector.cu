@@ -39,10 +39,10 @@ __device__ bool getAABB(
     const Vanilla3DGS::WorldBuffer& splatBuffer, long idx,
     float3 &aabb_min, float3 &aabb_max, float rel_scale = 1.0f
 ) {
-    float3 mean = splatBuffer.means[idx];
-    float3 scales = splatBuffer.scales[idx];
-    float opac = splatBuffer.opacities[idx];
-    float4 quat = splatBuffer.quats[idx];
+    float3 mean = splatBuffer.means(idx);
+    float3 scales = splatBuffer.scales(idx);
+    float opac = splatBuffer.opacities(idx);
+    float4 quat = splatBuffer.quats(idx);
 
     opac = 1.0f / (1.0f+__expf(-opac));
     scales = { __expf(scales.x), __expf(scales.y), __expf(scales.z) };
@@ -66,35 +66,35 @@ __device__ bool getAABB(
     return opac > ALPHA_THRESHOLD && isfinite(dot(aabb_min, aabb_max));
 }
 
-template<bool remap>
-__device__ bool getAABB(
-    const OpaqueTriangle::WorldBuffer& splatBuffer, long idx,
-    float3 &aabb_min, float3 &aabb_max, float rel_scale = 1.0f
-) {
-    float3 mean = splatBuffer.means[idx];
-    float3 scales = splatBuffer.scales[idx];
-    float4 quat = splatBuffer.quats[idx];
+// template<bool remap>
+// __device__ bool getAABB(
+//     const OpaqueTriangle::WorldBuffer& splatBuffer, long idx,
+//     float3 &aabb_min, float3 &aabb_max, float rel_scale = 1.0f
+// ) {
+//     float3 mean = splatBuffer.means[idx];
+//     float3 scales = splatBuffer.scales[idx];
+//     float4 quat = splatBuffer.quats[idx];
 
-    float3 vert0, vert1, vert2;
-    SlangProjectionUtils::map_opaque_triangle(mean, quat, scales, &vert0, &vert1, &vert2);
+//     float3 vert0, vert1, vert2;
+//     SlangProjectionUtils::map_opaque_triangle(mean, quat, scales, &vert0, &vert1, &vert2);
 
-    aabb_min = {
-        fmin(fmin(vert0.x, vert1.x), vert2.x),
-        fmin(fmin(vert0.y, vert1.y), vert2.y),
-        fmin(fmin(vert0.z, vert1.z), vert2.z),
-    };
-    aabb_max = {
-        fmax(fmax(vert0.x, vert1.x), vert2.x),
-        fmax(fmax(vert0.y, vert1.y), vert2.y),
-        fmax(fmax(vert0.z, vert1.z), vert2.z),
-    };
+//     aabb_min = {
+//         fmin(fmin(vert0.x, vert1.x), vert2.x),
+//         fmin(fmin(vert0.y, vert1.y), vert2.y),
+//         fmin(fmin(vert0.z, vert1.z), vert2.z),
+//     };
+//     aabb_max = {
+//         fmax(fmax(vert0.x, vert1.x), vert2.x),
+//         fmax(fmax(vert0.y, vert1.y), vert2.y),
+//         fmax(fmax(vert0.z, vert1.z), vert2.z),
+//     };
 
-    if (remap) {
-        aabb_min = remapAABB(aabb_min, rel_scale);
-        aabb_max = remapAABB(aabb_max, rel_scale);
-    }
-    return isfinite(dot(aabb_min, aabb_max));
-}
+//     if (remap) {
+//         aabb_min = remapAABB(aabb_min, rel_scale);
+//         aabb_max = remapAABB(aabb_max, rel_scale);
+//     }
+//     return isfinite(dot(aabb_min, aabb_max));
+// }
 
 // template<bool remap>
 // __device__ bool getAABB(
@@ -194,30 +194,30 @@ struct Tile {
             glm::dot(mean - ro, rd);  // negative if center is behind
     }
 
-    __device__ __forceinline__ float isOverlap(const OpaqueTriangle::WorldBuffer& splatBuffer, long idx) const {
-        // TODO: primitive aware version with less false positives
-        float3 aabb_min, aabb_max;
-        bool valid_aabb = getAABB<false>(splatBuffer, idx, aabb_min, aabb_max);
-        if (!valid_aabb || !isOverlap(aabb_min, aabb_max))
-            return -1.0f;
-        float3 mean_ = 0.5f * (aabb_min + aabb_max);
-        glm::vec3 mean(mean_.x, mean_.y, mean_.z);
-        return camera_model != ssplat::CameraModelType::PINHOLE ?
-            glm::length(mean - ro) :
-            glm::dot(mean - ro, rd);  // negative if center is behind
-    }
+    // __device__ __forceinline__ float isOverlap(const OpaqueTriangle::WorldBuffer& splatBuffer, long idx) const {
+    //     // TODO: primitive aware version with less false positives
+    //     float3 aabb_min, aabb_max;
+    //     bool valid_aabb = getAABB<false>(splatBuffer, idx, aabb_min, aabb_max);
+    //     if (!valid_aabb || !isOverlap(aabb_min, aabb_max))
+    //         return -1.0f;
+    //     float3 mean_ = 0.5f * (aabb_min + aabb_max);
+    //     glm::vec3 mean(mean_.x, mean_.y, mean_.z);
+    //     return camera_model != ssplat::CameraModelType::PINHOLE ?
+    //         glm::length(mean - ro) :
+    //         glm::dot(mean - ro, rd);  // negative if center is behind
+    // }
 
-    __device__ __forceinline__ float isOverlap(const VoxelPrimitive::WorldBuffer& splatBuffer, long idx) const {
-        float3 aabb_min, aabb_max;
-        bool valid_aabb = getAABB<false>(splatBuffer, idx, aabb_min, aabb_max);
-        if (!valid_aabb || !isOverlap(aabb_min, aabb_max))
-            return -1.0f;
-        float3 mean_ = 0.5f * (aabb_min + aabb_max);
-        glm::vec3 mean(mean_.x, mean_.y, mean_.z);
-        return camera_model != ssplat::CameraModelType::PINHOLE ?
-            glm::length(mean - ro) :
-            glm::dot(mean - ro, rd);  // negative if center is behind
-    }
+    // __device__ __forceinline__ float isOverlap(const VoxelPrimitive::WorldBuffer& splatBuffer, long idx) const {
+    //     float3 aabb_min, aabb_max;
+    //     bool valid_aabb = getAABB<false>(splatBuffer, idx, aabb_min, aabb_max);
+    //     if (!valid_aabb || !isOverlap(aabb_min, aabb_max))
+    //         return -1.0f;
+    //     float3 mean_ = 0.5f * (aabb_min + aabb_max);
+    //     glm::vec3 mean(mean_.x, mean_.y, mean_.z);
+    //     return camera_model != ssplat::CameraModelType::PINHOLE ?
+    //         glm::length(mean - ro) :
+    //         glm::dot(mean - ro, rd);  // negative if center is behind
+    // }
 
 };
 
@@ -1139,16 +1139,10 @@ SplatTileIntersector<Primitive, camera_model>::SplatTileIntersector(
     float rel_scale
 ) : tiles(tiles), splats(splats), rel_scale(rel_scale)
 {
-    if (splats.batchSize() != 1)
-        AT_ERROR("Patched mode only supports splat batch size 1");
+    // if (splats.batchSize() != 1)
+    //     AT_ERROR("Patched mode only supports splat batch size 1");
     this->numSplats = splats.size();
     
-    this->tensorF32 = splats.options().dtype(at::kFloat);
-    this->tensorI32 = splats.options().dtype(at::kInt);
-    this->tensorI16 = splats.options().dtype(at::kShort);
-    this->tensorI64 = splats.options().dtype(at::kLong);
-    this->tensorU8 = splats.options().dtype(at::kByte);
-
     #ifdef DEBUG
     std::chrono::system_clock::time_point t0, t1;
 
@@ -1191,7 +1185,7 @@ template<typename Primitive, ssplat::CameraModelType camera_model>
 std::tuple<at::Tensor, at::Tensor> SplatTileIntersector<Primitive, camera_model>::getIntersections_brute() {
     constexpr unsigned warp = 32;
 
-    at::Tensor intersection_count = at::zeros({tiles.size+1}, tensorI32);
+    at::Tensor intersection_count = at::zeros({tiles.size+1}, kTensorOptionI32());
     getTileSplatIntersections_brute<<<_LAUNCH_ARGS_1D(tiles.size, warp)>>>(
         tiles, splats,
         (uint32_t*)intersection_count.data_ptr<int32_t>(),
@@ -1204,7 +1198,7 @@ std::tuple<at::Tensor, at::Tensor> SplatTileIntersector<Primitive, camera_model>
     print_tensor(int, intersection_count_map);
     unsigned total_intersections = (unsigned)intersection_count_map[(long)tiles.size].item<int32_t>();
 
-    at::Tensor intersectionSplatID = at::empty({total_intersections}, tensorI32);
+    at::Tensor intersectionSplatID = at::empty({total_intersections}, kTensorOptionI32());
     getTileSplatIntersections_brute<<<_LAUNCH_ARGS_1D(tiles.size, warp)>>>(
         tiles, splats,
         (uint32_t*)intersection_count_map.data_ptr<int32_t>(),
@@ -1232,8 +1226,8 @@ std::tuple<at::Tensor, at::Tensor> SplatTileIntersector<Primitive, camera_model>
     // cudaDeviceSynchronize();
 
     // find splat AABB
-    at::Tensor splat_aabb = at::empty({numSplats, 2, 3}, tensorF32);
-    at::Tensor root_aabb_tensor = at::empty({2, 3}, tensorF32);
+    at::Tensor splat_aabb = at::empty({numSplats, 2, 3}, kTensorOptionF32());
+    at::Tensor root_aabb_tensor = at::empty({2, 3}, kTensorOptionF32());
     cudaMemset(root_aabb_tensor.data_ptr<float>()+0, kFloatPInfByte, 3*sizeof(float));
     cudaMemset(root_aabb_tensor.data_ptr<float>()+3, kFloatNInfByte, 3*sizeof(float));
     computeSplatAABB<Primitive><<<_LAUNCH_ARGS_1D(numSplats, block)>>>(
@@ -1269,7 +1263,7 @@ std::tuple<at::Tensor, at::Tensor> SplatTileIntersector<Primitive, camera_model>
     // printAABB_wireframe(rootAABBMin, rootAABBMax);
 
     // compute sorting keys (level and Morton code)
-    at::Tensor morton = at::empty({numSplats}, tensorI64);
+    at::Tensor morton = at::empty({numSplats}, kTensorOptionI64());
     fillSplatSortingKeys<Primitive><<<_LAUNCH_ARGS_1D(numSplats, block)>>>(
         numSplats, splats,
         *(float3*)&rootAABBMin, *(float3*)&rootAABBMax, MAX_NUM_LEVELS, BRANCH_FACTOR, rel_scale,
@@ -1280,7 +1274,7 @@ std::tuple<at::Tensor, at::Tensor> SplatTileIntersector<Primitive, camera_model>
     auto [sorted_morton, splat_argsort] = at::sort(morton);
     splat_argsort = splat_argsort.to(at::kInt);
 
-    at::Tensor tree_ranges = at::empty({MAX_NUM_LEVELS, 2}, tensorI32);
+    at::Tensor tree_ranges = at::empty({MAX_NUM_LEVELS, 2}, kTensorOptionI32());
     cudaMemset(tree_ranges.data_ptr<int32_t>(), 0xff, (2*MAX_NUM_LEVELS)*sizeof(int32_t));
     fillLbvhTreeRanges<<<_LAUNCH_ARGS_1D(numSplats, block)>>>(
         MAX_NUM_LEVELS, numSplats,
@@ -1319,8 +1313,8 @@ std::tuple<at::Tensor, at::Tensor> SplatTileIntersector<Primitive, camera_model>
     // printf("%d/%d collisions, %d max\n", (int)(numSplats-num_unique), (int)numSplats, (int)max_collision_count);
 
     // Build tree
-    at::Tensor internal_nodes = at::empty({numSplats-1, 2}, tensorI32);
-    at::Tensor parent_nodes = at::empty({numSplats-1}, tensorI32);
+    at::Tensor internal_nodes = at::empty({numSplats-1, 2}, kTensorOptionI32());
+    at::Tensor parent_nodes = at::empty({numSplats-1}, kTensorOptionI32());
     cudaMemset(parent_nodes.data_ptr<int32_t>(), 0xff, (numSplats-1)*sizeof(int32_t));
     CHECK_DEVICE_ERROR(cudaGetLastError());
     fillLbvhInternalNodes<<<_LAUNCH_ARGS_1D(numSplats-1, block)>>>(
@@ -1336,7 +1330,7 @@ std::tuple<at::Tensor, at::Tensor> SplatTileIntersector<Primitive, camera_model>
     print_tensor(int, parent_nodes);
 
     // Compute AABB
-    at::Tensor treeAABB = at::empty({numSplats, 2, 3}, tensorF32);
+    at::Tensor treeAABB = at::empty({numSplats, 2, 3}, kTensorOptionF32());
     fillTreeSubcells_initAABB<<<_LAUNCH_ARGS_1D(numSplats-1, block)>>>(
         numSplats-1,
         (float3*)treeAABB.data_ptr<float>()
@@ -1361,7 +1355,7 @@ std::tuple<at::Tensor, at::Tensor> SplatTileIntersector<Primitive, camera_model>
     #endif
 
     // Traverse to find intersections
-    at::Tensor intersection_count = at::zeros({tiles.size+1}, tensorI32);
+    at::Tensor intersection_count = at::zeros({tiles.size+1}, kTensorOptionI32());
     // cudaDeviceSynchronize();
     // getTileSplatIntersections_lbvh<<<(tiles.size+warp-1)/warp, warp>>>(
     getTileSplatIntersections_lbvh_warp<Primitive, camera_model><<<tiles.size, warp, 0, at::cuda::getCurrentCUDAStream()>>>(
@@ -1379,7 +1373,7 @@ std::tuple<at::Tensor, at::Tensor> SplatTileIntersector<Primitive, camera_model>
     print_tensor(int, intersection_count_map);
     unsigned total_intersections = (unsigned)intersection_count_map[(long)tiles.size].item<int32_t>();
 
-    at::Tensor intersectionSplatID = at::empty({total_intersections}, tensorI32);
+    at::Tensor intersectionSplatID = at::empty({total_intersections}, kTensorOptionI32());
     // getTileSplatIntersections_lbvh<<<(tiles.size+warp-1)/warp, warp>>>(
     getTileSplatIntersections_lbvh_warp<Primitive, camera_model><<<tiles.size, warp, 0, at::cuda::getCurrentCUDAStream()>>>(
         tiles, splats, MAX_NUM_LEVELS,

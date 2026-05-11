@@ -20,15 +20,14 @@
 
 
 std::tuple<
-    TensorList,
+    TensorList, TensorList,  // gradient
     std::optional<at::Tensor>  // accum_weight
 > rasterize_to_pixels_3dgs_bwd(
     // Gaussian parameters
     int64_t num_splats,
-    TensorList splats_tuple,
+    TensorList splats_w,
+    TensorList splats_s,
     std::optional<at::Tensor> gaussian_ids,
-    const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -46,17 +45,16 @@ std::tuple<
 
 
 std::tuple<
-    TensorList,
-    std::optional<TensorList>,  // jacobian residual product
-    std::optional<TensorList>,  // hessian diagonal
+    TensorList, TensorList,  // gradient
+    std::optional<TensorList>, std::optional<TensorList>,  // jacobian residual product
+    std::optional<TensorList>, std::optional<TensorList>,  // hessian diagonal
     std::optional<at::Tensor>  // accum_weight
 > rasterize_to_pixels_3dgs_bwd_with_hessian_diagonal(
     // Gaussian parameters
     int64_t num_splats,
-    TensorList splats_tuple,
+    TensorList splats_w,
+    TensorList splats_s,
     std::optional<at::Tensor> gaussian_ids,
-    const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,

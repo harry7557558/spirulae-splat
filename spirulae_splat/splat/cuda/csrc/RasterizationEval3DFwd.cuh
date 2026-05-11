@@ -25,18 +25,16 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     std::optional<RenderOutput::TensorTuple>,
-    std::optional<RenderOutput::TensorTuple>,
-    std::optional<at::Tensor>
+    std::optional<RenderOutput::TensorTuple>
 > rasterize_to_pixels_3dgut_fwd(
     // Gaussian parameters
-    TensorList splats_tuple,
+    TensorList splats_w,
+    TensorList splats_s,
     std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
-    const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> max_blending_masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -62,8 +60,6 @@ std::tuple<
 //     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
 //     const std::string camera_model,
 //     const CameraDistortionCoeffsTensor dist_coeffs,
-//     const std::optional<at::Tensor> backgrounds, // [..., channels]
-//     const std::optional<at::Tensor> max_blending_masks,       // [..., tile_height, tile_width]
 //     // image size
 //     const uint32_t image_width,
 //     const uint32_t image_height,
@@ -89,8 +85,6 @@ std::tuple<
 //     const at::Tensor intrins,       // [..., C, 4], fx, fy, cx, cy
 //     const std::string camera_model,
 //     const CameraDistortionCoeffsTensor dist_coeffs,
-//     const std::optional<at::Tensor> backgrounds, // [..., channels]
-//     const std::optional<at::Tensor> max_blending_masks,       // [..., tile_height, tile_width]
 //     // image size
 //     const uint32_t image_width,
 //     const uint32_t image_height,

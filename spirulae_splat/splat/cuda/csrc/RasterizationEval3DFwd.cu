@@ -11,8 +11,7 @@
 template<
     typename SplatPrimitive,
     ssplat::CameraModelType camera_model,
-    bool output_distortion,
-    bool output_max_blending
+    bool output_distortion
 >
 void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
     cudaStream_t stream,
@@ -20,12 +19,11 @@ void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
     const uint32_t N,
     const uint32_t n_isects,
     const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
-    const typename SplatPrimitive::ScreenBuffer splat_buffer,
+    const typename SplatPrimitive::WorldBuffer splat_wbuffer,
+    const typename SplatPrimitive::ScreenBuffer splat_sbuffer,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
-    const float3 *__restrict__ backgrounds, // [I, 3]
-    const bool *__restrict__ max_blending_masks,  // [B, C, image_width, image_height]
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,
@@ -36,22 +34,20 @@ void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
     RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
-    RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
-    float* __restrict__ out_max_blending
+    RenderOutput::Buffer render_distortions // [I, image_height, image_width, ...]
 );
 
 
-template <typename SplatPrimitive, bool output_distortion, bool output_max_blending>
+template <typename SplatPrimitive, bool output_distortion>
 inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     // Gaussian parameters
-    typename SplatPrimitive::ScreenBuffer splats,
+    typename SplatPrimitive::WorldBuffer splats_w,
+    typename SplatPrimitive::ScreenBuffer splats_s,
     std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const ssplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
-    const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> max_blending_masks,  // [..., C, image_width, image_height]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -63,12 +59,9 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     at::Tensor transmittances,  // [..., image_height, image_width]
     at::Tensor last_ids, // [..., image_height, image_width]
     RenderOutput::Tensor *renders2,
-    RenderOutput::Tensor *distortions,
-    std::optional<at::Tensor>& out_max_blending
+    RenderOutput::Tensor *distortions
 ) {
-    // bool packed = splats.isPacked();
-    bool packed = true;  // TODO
-    uint32_t N = packed ? 0 : splats.size(); // number of gaussians
+    uint32_t N = gaussian_ids.has_value() ? 0 : splats_w.size();
     uint32_t I = transmittances.numel() / (image_height * image_width); // number of images
     uint32_t tile_height = tile_offsets.size(-2);
     uint32_t tile_width = tile_offsets.size(-1);
@@ -76,24 +69,22 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
 
     #define _LAUNCH_ARGS ( \
             (cudaStream_t)at::cuda::getCurrentCUDAStream(), I, N, n_isects, \
-            gaussian_ids.has_value() ? (uint32_t*)gaussian_ids.value().data_ptr<int32_t>() : nullptr, splats, \
+            gaussian_ids.has_value() ? (uint32_t*)gaussian_ids.value().data_ptr<int32_t>() : nullptr, \
+            splats_w, splats_s, \
             viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
-            backgrounds.has_value() ? (float3*)backgrounds.value().data_ptr<float>() : nullptr, \
-            (output_max_blending && max_blending_masks.has_value()) ? max_blending_masks.value().data_ptr<bool>() : nullptr, \
             image_width, image_height, tile_width, tile_height, \
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(), \
             renders, transmittances.data_ptr<float>(), last_ids.data_ptr<int32_t>(), \
-            output_distortion ? *renders2 : RenderOutput::Buffer(), \
-            output_distortion ? distortions : RenderOutput::Buffer(), \
-            out_max_blending.has_value() ? out_max_blending.value().data_ptr<float>() : nullptr \
+            output_distortion ? renders2->buffer() : RenderOutput::Buffer(), \
+            output_distortion ? distortions->buffer() : RenderOutput::Buffer() \
         )
 
     if (camera_model == ssplat::CameraModelType::PINHOLE)
         rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
-            ssplat::CameraModelType::PINHOLE, output_distortion, output_max_blending> _LAUNCH_ARGS;
+            ssplat::CameraModelType::PINHOLE, output_distortion> _LAUNCH_ARGS;
     else if (camera_model == ssplat::CameraModelType::FISHEYE)
         rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
-            ssplat::CameraModelType::FISHEYE, output_distortion, output_max_blending> _LAUNCH_ARGS;
+            ssplat::CameraModelType::FISHEYE, output_distortion> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -102,24 +93,22 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
 }
 
 
-template <typename SplatPrimitive, bool output_distortion, bool output_max_blending>
+template <typename SplatPrimitive, bool output_distortion>
 inline std::tuple<
     RenderOutput::TensorTuple,
     at::Tensor,
     at::Tensor,
     std::optional<RenderOutput::TensorTuple>,
-    std::optional<RenderOutput::TensorTuple>,
-    std::optional<at::Tensor>
+    std::optional<RenderOutput::TensorTuple>
 > rasterize_to_pixels_eval3d_fwd_tensor(
     // Gaussian parameters
-    TensorList splats_tuple,
+    TensorList splats_w,
+    TensorList splats_s,
     std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const ssplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
-    const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> max_blending_masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -132,58 +121,49 @@ inline std::tuple<
     CHECK_INPUT(flatten_ids);
     CHECK_INPUT(viewmats);
     CHECK_INPUT(intrins);
-    if (backgrounds.has_value())
-        CHECK_INPUT(backgrounds.value());
-    if (max_blending_masks.has_value())
-        CHECK_INPUT(max_blending_masks.value());
     
-    typename SplatPrimitive::ScreenBuffer splats(splats_tuple);
-
-    auto opt = splats.options();
     at::DimVector image_dims(tile_offsets.sizes().slice(0, tile_offsets.dim() - 2));
 
     at::DimVector renders_dims(image_dims);
     renders_dims.append({image_height, image_width});
     RenderOutput::Tensor renders =
-        RenderOutput::Tensor::empty<SplatPrimitive::pixelType>(renders_dims, opt);
+        RenderOutput::Tensor::empty<SplatPrimitive::pixelType>(renders_dims);
 
     std::optional<RenderOutput::Tensor> renders2 = std::nullopt;
     std::optional<RenderOutput::Tensor> distortions = std::nullopt;
     if (output_distortion) {
-        renders2 = RenderOutput::Tensor::empty<SplatPrimitive::pixelType>(renders_dims, opt);
-        distortions = RenderOutput::Tensor::empty<SplatPrimitive::pixelType>(renders_dims, opt);
+        renders2 = RenderOutput::Tensor::empty<SplatPrimitive::pixelType>(renders_dims);
+        distortions = RenderOutput::Tensor::empty<SplatPrimitive::pixelType>(renders_dims);
     }
 
     at::DimVector transmittance_dims(image_dims);
     transmittance_dims.append({image_height, image_width, 1});
-    at::Tensor transmittances = at::empty(transmittance_dims, opt);
+    at::Tensor transmittances = at::empty(transmittance_dims, kTensorOptionF32());
 
     at::DimVector last_ids_dims(image_dims);
     last_ids_dims.append({image_height, image_width});
     at::Tensor last_ids = at::empty(last_ids_dims, kTensorOptionI32());
 
-    std::optional<at::Tensor> out_max_blending;
-    if (output_max_blending) {
-        out_max_blending = at::empty({splats.size()}, opt);
-        set_zero<float>(out_max_blending.value());
-    }
-
-    launch_rasterize_to_pixels_eval3d_fwd_kernel<SplatPrimitive, output_distortion, output_max_blending>(
-        splats, gaussian_ids,
+    launch_rasterize_to_pixels_eval3d_fwd_kernel<SplatPrimitive, output_distortion>(
+        splats_w, splats_s, gaussian_ids,
         viewmats, intrins, camera_model, dist_coeffs,
-        backgrounds, max_blending_masks,
         image_width, image_height, tile_offsets, flatten_ids,
         renders, transmittances, last_ids,
         output_distortion ? &renders2.value() : nullptr,
-        output_distortion ? &distortions.value() : nullptr,
-        out_max_blending
+        output_distortion ? &distortions.value() : nullptr
     );
 
     if (output_distortion)
-        return std::make_tuple(renders, transmittances, last_ids,
-            renders2.value(), distortions.value(), out_max_blending);
-    return std::make_tuple(renders, transmittances, last_ids,
-        std::nullopt, std::nullopt, out_max_blending);
+        return std::make_tuple(
+            renders.tuple(), transmittances, last_ids,
+            (std::optional<RenderOutput::TensorTuple>)renders2.value().tuple(),
+            (std::optional<RenderOutput::TensorTuple>)distortions.value().tuple()
+        );
+    return std::make_tuple(
+        renders.tuple(), transmittances, last_ids,
+        (std::optional<RenderOutput::TensorTuple>)std::nullopt,
+        (std::optional<RenderOutput::TensorTuple>)std::nullopt
+    );
 }
 
 
@@ -198,18 +178,16 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     std::optional<RenderOutput::TensorTuple>,
-    std::optional<RenderOutput::TensorTuple>,
-    std::optional<at::Tensor>
+    std::optional<RenderOutput::TensorTuple>
 > rasterize_to_pixels_3dgut_fwd(
     // Gaussian parameters
-    TensorList splats_tuple,
+    TensorList splats_w,
+    TensorList splats_s,
     std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
-    const std::optional<at::Tensor> backgrounds, // [..., channels]
-    const std::optional<at::Tensor> max_blending_masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -218,18 +196,12 @@ std::tuple<
     const at::Tensor flatten_ids,   // [n_isects]
     bool output_distortion
 ) {
-    if (output_distortion)
-        return rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, true, false>(
-            splats_tuple, gaussian_ids,
-            viewmats, intrins, cmt(camera_model), dist_coeffs,
-            backgrounds, max_blending_masks,
-            image_width, image_height,
-            tile_offsets, flatten_ids
-        );
-    return rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, false, false>(
-        splats_tuple, gaussian_ids,
+    return (output_distortion ?
+        rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, true> :
+        rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, false>
+    )(
+        splats_w, splats_s, gaussian_ids,
         viewmats, intrins, cmt(camera_model), dist_coeffs,
-        backgrounds, max_blending_masks,
         image_width, image_height,
         tile_offsets, flatten_ids
     );
@@ -257,8 +229,6 @@ std::tuple<
 //     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
 //     const std::string camera_model,
 //     const CameraDistortionCoeffsTensor dist_coeffs,
-//     const std::optional<at::Tensor> backgrounds, // [..., channels]
-//     const std::optional<at::Tensor> max_blending_masks,       // [..., tile_height, tile_width]
 //     // image size
 //     const uint32_t image_width,
 //     const uint32_t image_height,
@@ -272,7 +242,6 @@ std::tuple<
 //         return rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, true, false>(
 //             splats_tuple, gaussian_ids,
 //             viewmats, intrins, cmt(camera_model), dist_coeffs,
-//             backgrounds, max_blending_masks,
 //             image_width, image_height,
 //             tile_offsets, flatten_ids
 //         );
@@ -280,7 +249,6 @@ std::tuple<
 //     return rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, false, false>(
 //         splats_tuple, gaussian_ids,
 //         viewmats, intrins, cmt(camera_model), dist_coeffs,
-//         backgrounds, max_blending_masks,
 //         image_width, image_height,
 //         tile_offsets, flatten_ids
 //     );
@@ -307,8 +275,6 @@ std::tuple<
 //     const at::Tensor intrins,       // [..., C, 4], fx, fy, cx, cy
 //     const std::string camera_model,
 //     const CameraDistortionCoeffsTensor dist_coeffs,
-//     const std::optional<at::Tensor> backgrounds, // [..., channels]
-//     const std::optional<at::Tensor> max_blending_masks,       // [..., tile_height, tile_width]
 //     // image size
 //     const uint32_t image_width,
 //     const uint32_t image_height,
@@ -319,7 +285,6 @@ std::tuple<
 //     return rasterize_to_pixels_eval3d_fwd_tensor<VoxelPrimitive, true, true>(
 //         splats_tuple, gaussian_ids,
 //         viewmats, intrins, cmt(camera_model), dist_coeffs,
-//         backgrounds, max_blending_masks,
 //         image_width, image_height,
 //         tile_offsets, flatten_ids
 //     );

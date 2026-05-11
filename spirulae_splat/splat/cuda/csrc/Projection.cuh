@@ -22,6 +22,7 @@ std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
+    at::Tensor,  // sorting depths
     TensorList  // out splats
 > projection_3dgs_hetero_forward_tensor(
     // inputs
@@ -67,8 +68,9 @@ std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
+    at::Tensor,  // sorting depths
     TensorList  // out splats
-> projection_mip_hetero_forward_tensor(
+> projection_3dgut_hetero_forward_tensor(
     // inputs
     const TensorList &in_splats_tensor,
     const at::Tensor viewmats,  // [..., C, 4, 4]
@@ -87,7 +89,7 @@ std::tuple<
 std::tuple<
     TensorList,  // v_splats
     at::Tensor  // v_viewmats
-> projection_mip_hetero_backward_tensor(
+> projection_3dgut_hetero_backward_tensor(
     // fwd inputs
     const TensorList &splats_world_tuple,
     const at::Tensor viewmats, // [..., C, 4, 4]
@@ -112,8 +114,9 @@ std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
+    at::Tensor,  // sorting_depths
     TensorList  // out splats
-> projection_3dgut_hetero_forward_tensor(
+> projection_mip_hetero_forward_tensor(
     // inputs
     const TensorList &in_splats_tensor,
     const at::Tensor viewmats,  // [..., C, 4, 4]
@@ -132,7 +135,7 @@ std::tuple<
 std::tuple<
     TensorList,  // v_splats
     at::Tensor  // v_viewmats
-> projection_3dgut_hetero_backward_tensor(
+> projection_mip_hetero_backward_tensor(
     // fwd inputs
     const TensorList &splats_world_tuple,
     const at::Tensor viewmats, // [..., C, 4, 4]

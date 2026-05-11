@@ -1040,19 +1040,19 @@ class SpirulaeSplatModel(torch.nn.Module):
             **kwargs,
         )
         self.renderer.forward()
-        rgbd = self.renderer.render_colors
+        rgbdn = self.renderer.render_colors
         Ts = self.renderer.render_Ts
         meta = self.renderer.meta
         # torch.cuda.empty_cache()
         if self.config.supersampling != 1:
-            rgbd = [resize_image(im, self.config.supersampling) for im in rgbd]
+            rgbdn = [resize_image(im, self.config.supersampling) for im in rgbdn]
             Ts = resize_image(Ts, self.config.supersampling)
 
         # if not self.training:
         #     W = gw*TILE_SIZE
         #     H = gh*TILE_SIZE
-        #     # print(rgbd.shape, Ts.shape)
-        #     rgbd = [merge_tiles(comp) for comp in rgbd]
+        #     # print(rgbdn.shape, Ts.shape)
+        #     rgbdn = [merge_tiles(comp) for comp in rgbdn]
         #     Ts = merge_tiles(Ts)
         #     for key in ['rgb_distortion', 'depth_distortion', 'normal_distortion']:
         #         if key in meta:
@@ -1061,16 +1061,13 @@ class SpirulaeSplatModel(torch.nn.Module):
         #     if 'dist_coeffs' in kwargs:
         #         kwargs['dist_coeffs'] = kwargs['dist_coeffs'][:1]
 
-        depth_im_ref = rgbd[1]
+        rgb, depth_im_ref, render_normal = rgbdn
 
         # normals
-        render_normal = None
-        if len(rgbd) > 2:
-            render_normal = torch.where(Ts < 1.0, F.normalize(rgbd[2], dim=-1), rgbd[2])
+        if render_normal is not None:  # TODO: fused kernel
+            render_normal = torch.where(Ts < 1.0, F.normalize(render_normal, dim=-1), render_normal)
 
         depth_normal = None
-
-        rgb = rgbd[0]
 
         radii = meta["radii"]
         depths = meta["depths"]
@@ -1257,11 +1254,11 @@ class SpirulaeSplatModel(torch.nn.Module):
                 **kwargs,
             )
             self.renderer.forward()
-            rgbd = self.renderer.render_colors
+            rgbdn = self.renderer.render_colors
             Ts = self.renderer.render_Ts
             meta = self.renderer.meta
             self.renderer.splats_world = old_splats_world
-            outputs['refinement_score'] = rgbd[0][0, :, :, :].mean(dim=-1, keepdim=True)
+            outputs['refinement_score'] = rgbdn[0][0, :, :, :].mean(dim=-1, keepdim=True)
 
         return outputs
 
@@ -1282,10 +1279,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         if v_render_Ts is None:
             v_render_Ts = torch.zeros_like(outputs['transmittance'])
 
-        if self.config.primitive in ['opaque_triangle']:
-            render_grads = (v_render_rgb, v_render_depth, v_render_normal)
-        else:
-            render_grads = (v_render_rgb, v_render_depth)
+        render_grads = (v_render_rgb, v_render_depth, v_render_normal)
 
         self.renderer.backward(
             render_grads,

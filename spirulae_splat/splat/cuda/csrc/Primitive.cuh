@@ -54,15 +54,15 @@ public:
         }
 
         template<RenderOutputType type>
-        static Tensor empty(at::DimVector dims, at::TensorOptions opt) {
+        static Tensor empty(at::DimVector dims) {
             at::DimVector rgbs_dims(dims); rgbs_dims.append({3});
             at::DimVector depths_dims(dims); depths_dims.append({1});
             at::DimVector normals_dims(dims); normals_dims.append({3});
             return Tensor(std::make_tuple(
-                at::empty(rgbs_dims, opt),
-                _has_depth(type) ? at::empty(depths_dims, opt) :
+                at::empty(rgbs_dims, kTensorOptionF32()),
+                _has_depth(type) ? at::empty(depths_dims, kTensorOptionF32()) :
                     (std::optional<at::Tensor>)std::nullopt,
-                _has_normal(type) ? at::empty(normals_dims, opt) :
+                _has_normal(type) ? at::empty(normals_dims, kTensorOptionF32()) :
                     (std::optional<at::Tensor>)std::nullopt
             ));
         }
@@ -197,7 +197,10 @@ struct ProjCamera {
 #endif
 
 
+#ifndef NO_TORCH
 typedef std::vector<std::optional<at::Tensor>> TensorList;
+#endif
+
 
 template<int N>
 class TensorArray {
@@ -231,6 +234,14 @@ public:
 
 #ifndef NO_TORCH
     TensorArray(std::vector<at::Tensor> tensors) {
+        if (tensors.size() == 0) {
+            _size = 0;
+            for (int i = 0; i < N; ++i) {
+                _data[i] = nullptr;
+                _strides[i] = 0;
+            }
+            return;
+        }
         if (tensors.size() != N)
             throw std::runtime_error("Number of tensors mismatch: Expect "
                 + std::to_string(N) + ", got " + std::to_string(tensors.size()));
@@ -248,6 +259,14 @@ public:
     }
 
     TensorArray(TensorList tensors) {
+        if (tensors.size() == 0) {
+            _size = 0;
+            for (int i = 0; i < N; ++i) {
+                _data[i] = nullptr;
+                _strides[i] = 0;
+            }
+            return;
+        }
         if (tensors.size() != N)
             throw std::runtime_error("Number of tensors mismatch: Expect "
                 + std::to_string(N) + ", got " + std::to_string(tensors.size()));
@@ -273,20 +292,20 @@ public:
             _size = 0;
     }
 
-    TensorList empty_like() const {
+    static TensorList empty_like(const TensorArray& other) {
         TensorList res;
         for (int i = 0; i < N; ++i)
             res.push_back(
-                at::empty({_size, _strides[i]}, kTensorOptionF32())
+                at::empty({other._size, other._strides[i]}, kTensorOptionF32())
             );
         return res;
     }
 
-    TensorList zeros_like() const {
+    static TensorList zeros_like(const TensorArray& other) {
         TensorList res;
         for (int i = 0; i < N; ++i) {
             res.push_back(
-                at::empty({_size, _strides[i]}, kTensorOptionF32())
+                at::empty({other._size, other._strides[i]}, kTensorOptionF32())
             );
             set_zero_tensor(res.back().value());
         }

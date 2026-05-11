@@ -28,6 +28,7 @@ __global__ void projection_fused_fwd_kernel(
     const uint32_t image_height,
     // outputs
     float4 *__restrict__ aabbs,         // [B, C, N, 4]
+    float *__restrict__ sorting_depths,
     typename SplatPrimitive::ScreenBuffer splats_screen
 ) {
     // parallelize over B * C * N.
@@ -56,23 +57,14 @@ __global__ void projection_fused_fwd_kernel(
     cam.dist_coeffs = dist_coeffs_buffer.load(bid * C + cid);
 
     // Load splat
-    typename SplatPrimitive::World splat_world =
-        SplatPrimitive::World::load(splats_world, bid * N + gid);
+    typename SplatPrimitive::World splat_world;
+    splat_world.load(splats_world, bid * N + gid);
 
     // Projection
+    float sorting_depth;
     float4 aabb;
     typename SplatPrimitive::Screen splat_screen;
-    switch (camera_model) {
-    case ssplat::CameraModelType::PINHOLE: // perspective projection
-        SplatPrimitive::project_persp(splat_world, cam, splat_screen, aabb);
-        break;
-    // case ssplat::CameraModelType::ORTHO: // orthographic projection
-    //     SplatPrimitive::project_ortho(splat_world, cam, splat_screen, aabb);
-    //     break;
-    case ssplat::CameraModelType::FISHEYE: // fisheye projection
-        SplatPrimitive::project_fisheye(splat_world, cam, splat_screen, aabb);
-        break;
-    }
+    splat_world.project<camera_model>(cam, splat_screen, aabb, sorting_depth);
 
     // Save results
     aabb.x = fminf(fmaxf(aabb.x, 0.0f), image_width-1.0f);
@@ -80,10 +72,12 @@ __global__ void projection_fused_fwd_kernel(
     aabb.z = fminf(fmaxf(aabb.z, 0.0f), image_width-1.0f);
     aabb.w = fminf(fmaxf(aabb.w, 0.0f), image_height-1.0f);
     if (aabb.z - aabb.x > 1e-3f && aabb.w - aabb.y > 1e-3f) {
-        splat_screen.saveParamsToBuffer(splats_screen, idx, nullptr);
+        splat_screen.store(splats_screen, idx);
         aabbs[idx] = aabb;
+        sorting_depths[idx] = sorting_depth;
     } else {
         aabbs[idx] = {0.0f, 0.0f, 0.0f, 0.0f};
+        sorting_depths[idx] = 0.0f;
     }
 }
 
@@ -102,6 +96,7 @@ void projection_fused_fwd_kernel_wrapper(
     const uint32_t image_height,
     // outputs
     float4 *__restrict__ aabbs,         // [B, C, N, 4]
+    float* __restrict__ sorting_depths,
     typename SplatPrimitive::ScreenBuffer splats_screen
 ) {
     constexpr uint block = 128;
@@ -110,6 +105,6 @@ void projection_fused_fwd_kernel_wrapper(
         B, C, N,
         splats_world, viewmats, intrins, dist_coeffs_buffer,
         image_width, image_height,
-        aabbs, splats_screen
+        aabbs, sorting_depths, splats_screen
     );
 }

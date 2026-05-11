@@ -5,16 +5,16 @@
 #include "RasterizationFwd_kernel.cuh"
 
 template void rasterize_to_pixels_fwd_kernel_wrapper<
-    Vanilla3DGS
+    Vanilla3DGS,
+    false
 >(
     cudaStream_t stream,
     const uint32_t I,
     const uint32_t N,
     const uint32_t n_isects,
-    const bool packed,
-    Vanilla3DGS::ScreenBuffer splat_buffer,
-    const float3 *__restrict__ backgrounds, // [I, 3]
-    const bool *__restrict__ masks,           // [I, tile_height, tile_width]
+    const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
+    const Vanilla3DGS::WorldBuffer splat_wbuffer,
+    const Vanilla3DGS::ScreenBuffer splat_sbuffer,
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,
@@ -23,5 +23,7 @@ template void rasterize_to_pixels_fwd_kernel_wrapper<
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     RenderOutput::Buffer render_colors, // [I, image_height, image_width, 3]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
-    int32_t *__restrict__ last_ids        // [I, image_height, image_width]
+    int32_t *__restrict__ last_ids,        // [I, image_height, image_width]
+    RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
+    RenderOutput::Buffer render_distortions // [I, image_height, image_width, ...]
 );

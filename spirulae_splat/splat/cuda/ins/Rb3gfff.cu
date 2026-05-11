@@ -12,12 +12,12 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
 >(
     cudaStream_t stream,
     const uint32_t I,
+    const uint32_t N,   // zero if packed
     const uint32_t n_isects,
     // fwd inputs
     const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
-    Vanilla3DGS::ScreenBuffer splat_buffer,
-    const float *__restrict__ backgrounds, // [..., CDIM] or [nnz, CDIM]
-    const bool *__restrict__ masks,           // [..., tile_height, tile_width]
+    const Vanilla3DGS::WorldBuffer splat_wbuffer,
+    const Vanilla3DGS::ScreenBuffer splat_sbuffer,
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,
@@ -36,8 +36,11 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
     RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
-    Vanilla3DGS::ScreenBuffer v_splat_buffer,
-    Vanilla3DGS::ScreenBuffer vr_splat_buffer,
-    Vanilla3DGS::ScreenBuffer h_splat_buffer,
+    Vanilla3DGS::WorldBuffer v_splat_wbuffer,
+    Vanilla3DGS::ScreenBuffer v_splat_sbuffer,
+    Vanilla3DGS::WorldBuffer vr_splat_wbuffer,
+    Vanilla3DGS::ScreenBuffer vr_splat_sbuffer,
+    Vanilla3DGS::WorldBuffer h_splat_wbuffer,
+    Vanilla3DGS::ScreenBuffer h_splat_sbuffer,
     float *__restrict__ o_accum_weight
 );

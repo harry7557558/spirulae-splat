@@ -112,7 +112,7 @@ struct OpaqueTriangle::World {
         __forceinline__ __device__ float3& features_ch(int64_t i)
             { return *reinterpret_cast<float3*>(&_data[6][3*i]); }
         __forceinline__ __device__ float3& features_sh(int64_t i, int64_t j)
-            { return *reinterpret_cast<float3*>(&_data[5][_strides[5]*i+j]); }
+            { return *reinterpret_cast<float3*>(&_data[5][_strides[5]*i+3*j]); }
         #endif
     };
 

@@ -49,6 +49,7 @@ __global__ void projection_hetero_forward_kernel(
     int32_t *__restrict__ camera_ids,    // [nnz]
     int32_t *__restrict__ gaussian_ids,  // [nnz]
     float4 *__restrict__ aabbs,    // [nnz, 4]
+    float *__restrict__ sorting_depths,  // [nnz]
     typename SplatPrimitive::ScreenBuffer splats_proj
 ) {
     int32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -74,20 +75,14 @@ __global__ void projection_hetero_forward_kernel(
     cam.dist_coeffs = dist_coeffs_buffer.load(camera_idx);
 
     // Load splat
-    typename SplatPrimitive::World splat_world =
-        SplatPrimitive::World::load(splats_world, splat_idx);
+    typename SplatPrimitive::World splat_world;
+    splat_world.load(splats_world, splat_idx);
 
     // Projection
     float4 aabb;
+    float sorting_depth;
     typename SplatPrimitive::Screen splat_proj;
-    switch (camera_model) {
-    case ssplat::CameraModelType::PINHOLE: // perspective projection
-        SplatPrimitive::project_persp(splat_world, cam, splat_proj, aabb);
-        break;
-    case ssplat::CameraModelType::FISHEYE: // fisheye projection
-        SplatPrimitive::project_fisheye(splat_world, cam, splat_proj, aabb);
-        break;
-    }
+    splat_world.project<camera_model>(cam, splat_proj, aabb, sorting_depth);
 
     // Save results
     // aabb.x = min(max(aabb.x, 0), tile_width-1);
@@ -104,11 +99,13 @@ __global__ void projection_hetero_forward_kernel(
         aabb.w = fminf(fmaxf(aabb.w + offset_y, 0.0f), image_height-1.0f) - offset_y;
     } else {
         aabb = {0.0f, 0.0f, 0.0f, 0.0f};
+        sorting_depth = 0.0f;
     }
     camera_ids[thread_idx] = camera_idx;
     gaussian_ids[thread_idx] = splat_idx;
     aabbs[thread_idx] = aabb;
-    splat_proj.saveParamsToBuffer(splats_proj, thread_idx, nullptr);
+    sorting_depths[thread_idx] = sorting_depth;
+    splat_proj.store(splats_proj, thread_idx);
 }
 
 

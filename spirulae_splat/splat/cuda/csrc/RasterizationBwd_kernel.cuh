@@ -1,3 +1,8 @@
+#define IS_EVAL3D 0
+#include "RasterizationEval3DBwd_kernel.cuh"
+
+#if 0
+
 #pragma once
 
 // Modified from https://github.com/nerfstudio-project/gsplat/blob/main/gsplat/cuda/csrc/RasterizeToPixels3DGSBwd.cu
@@ -90,7 +95,6 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     __shared__ int32_t pix_bin_final[BLOCK_SIZE];
     __shared__ float2 pix_Ts_with_grad[BLOCK_SIZE];
     __shared__ RenderOutput v_pix_colors[BLOCK_SIZE];
-    // __shared__ float pix_background[CDIM];  // TODO
 
     __shared__ RenderOutput pix_colors[output_distortion ? BLOCK_SIZE : 1];
     __shared__ RenderOutput pix2_colors[output_distortion ? BLOCK_SIZE : 1];
@@ -147,9 +151,6 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 0.5f / fmaxf(loss_map_buffer[pix_id_image_global], 1e-6f) : 0.0f;
         }
     }
-    // static_assert(CDIM <= SPLAT_BATCH_SIZE);
-    // if (thread_id < CDIM && backgrounds != nullptr)
-    //     pix_background[thread_id] = backgrounds[thread_id];  // TODO
     block.sync();
 
     // threads fist load splats, then swept through pixels
@@ -175,7 +176,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         uint32_t splat_gid;
         if (splat_idx >= range_start) {
             splat_gid = flatten_ids[splat_idx]; // flatten index in [I * N] or [nnz]
-            splat = SplatPrimitive::Screen::loadWithPrecompute(splat_buffer, splat_gid, gaussian_ids);
+            splat.load(splat_buffer, gaussian_ids ? gaussian_ids[splat_gid] : splat_gid);
         }
 
         // accumulate gradient
@@ -383,3 +384,4 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
 
 }
 
+#endif

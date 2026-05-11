@@ -73,27 +73,20 @@ __global__ void projection_3dgs_hetero_backward_kernel(
     cam.dist_coeffs = dist_coeffs_buffer.load(camera_idx);
 
     // Load splat
-    typename SplatPrimitive::World splat_world =
-        SplatPrimitive::World::load(splats_world, splat_idx);
-    typename SplatPrimitive::Screen v_splat_proj =
-        SplatPrimitive::Screen::load(v_splats_proj, thread_idx, nullptr);
+    typename SplatPrimitive::World splat_world;
+    typename SplatPrimitive::Screen v_splat_proj;
+    splat_world.load(splats_world, splat_idx);
+    v_splat_proj.load(v_splats_proj, thread_idx);
 
     // Projection
     typename SplatPrimitive::World v_splat_world = SplatPrimitive::World::zero();
     float3x3 v_R = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
     float3 v_t = {0.f, 0.f, 0.f};
-    switch (camera_model) {
-    case ssplat::CameraModelType::PINHOLE: // perspective projection
-        SplatPrimitive::project_persp_vjp(splat_world, cam, v_splat_proj, v_splat_world, v_R, v_t);
-        break;
-    case ssplat::CameraModelType::FISHEYE: // fisheye projection
-        SplatPrimitive::project_fisheye_vjp(splat_world, cam, v_splat_proj, v_splat_world, v_R, v_t);
-        break;
-    }
+    splat_world.template project_vjp<camera_model>(cam, v_splat_proj, v_splat_world, v_R, v_t);
     
     // Save results
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
-    v_splat_world.atomicAddGradientToBuffer(v_splats_world, splat_idx);
+    v_splat_world.atomicStore(v_splats_world, splat_idx);
     if (v_viewmats != nullptr) {
         auto warp_group_c = cg::labeled_partition(warp, camera_idx);
         warpSum(v_R[0], warp_group_c);
