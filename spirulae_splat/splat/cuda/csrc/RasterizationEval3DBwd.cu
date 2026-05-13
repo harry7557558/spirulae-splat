@@ -140,6 +140,14 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
                 ssplat::CameraModelType::FISHEYE, output_distortion, false, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
     }
+    else if (camera_model == ssplat::CameraModelType::EQUISOLID) {
+        if (v_viewmats.has_value())
+            rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
+                ssplat::CameraModelType::EQUISOLID, output_distortion, true, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
+        else
+            rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
+                ssplat::CameraModelType::EQUISOLID, output_distortion, false, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
+    }
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());

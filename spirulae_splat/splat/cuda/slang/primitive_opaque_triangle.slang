@@ -102,7 +102,6 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
         all_valid &= fisheye_proj<assume_valid>(vert1_c, intrins, dist_coeffs, uv1);
         all_valid &= fisheye_proj<assume_valid>(vert2_c, intrins, dist_coeffs, uv2);
     }
-    else if (camera_model == CameraModelType::ORTHO) {} // TODO
     if (!assume_valid && !all_valid) {
         aabb_xyxy = float4(0.0f);
         return;

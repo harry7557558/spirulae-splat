@@ -6,7 +6,9 @@ This is my personal project that trains 3D Gaussian Splatting (3DGS) models.
 
 If you find spirulae-splat helpful for your research, please cite corresponding works (see "Acknowledgement" section below).
 
-If you share 3DGS models trained with spirulae-splat, or incorporate any feature, idea, or the software itself into your code, product, or service, a mention of spirulae-splat with a link to this page is highly appreciated.
+If you share 3DGS models trained with spirulae-splat, or incorporate any feature or idea into your code, product, or service, a mention of spirulae-splat with a link to this page is highly appreciated.
+
+Spirulae-splat has changed its license to GPLv3. If you wish to use part of its code in a more permissively licensed open source software, reach out to me and we can figure it out.
 
 I'm also considering adding a few visuals to this README. If you have cool splats made with spirulae-splat and are willing to share either the full splats or some renders publicly, please don't hesitate to reach out.
 
@@ -92,7 +94,7 @@ Distorted/Fisheye/Spherical images
 - Spirulae-splat has been designed for directly operating on distorted images. Better results can be likely achieved by directly training on distorted images rather than converting into pinhole. (This is different from the case for e.g. LichtFeld Studio)
 - By default, spirulae-splat uses `3dgut` primitive. To fall back to a Fisheye-GS style method for potentially better compatibility with conventional viewers (and faster training), set `--model.primitive` to `3dgs` (not anti-aliased), or `mip` (anti-aliased).
 - `--model.max_screen_size 0.3` is enabled by default for compatibility conventional viewers. Increase it for potentially better quality in built-in viewer, decrease it for better compatibility with other viewers (e.g. SuperSplat viewer, especially if you notice spikes or large floaters)
-- Supported camera models: perspective, equidistant fisheye (supports >180° fov); Supported distortion parameters: k1-k4, p1, p2, sx1, sy1, b1, b2. For better reliability, use `scripts/process_data_(colmap|metashape).py` (instead of `ns-process-data`) to process data.
+- Supported camera models: perspective, equidistant and equisolid fisheye (supports >180° fov); Supported distortion parameters: k1-k4, p1, p2, sx1, sy1, b1, b2. For better reliability, use `scripts/process_data_(colmap|metashape).py` (instead of `ns-process-data`) to process data, or directly point to Metashape dataset.
 - There's limited support for training on equirectangular images supported by Nerfstudio and Metashape datasets. Spirulae-splat will internally resampling equirectangular images into 6 pinhole images of a cube face.
 
 Background control

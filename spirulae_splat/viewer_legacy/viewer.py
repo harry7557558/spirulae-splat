@@ -83,12 +83,11 @@ class RenderViewer(tk.Tk):
             depth = depth.cpu().numpy()
             image = self.color_depth(depth)
         elif self.vis_modes[self.vis_mode] == "normal":
-            is_fisheye = (camera.model == "OPENCV_FISHEYE")
             normal = depth_to_normal(
                 depth_inv_map(depth),
-                ["pinhole", "fisheye"][is_fisheye],
+                camera.model.upper(),
                 (camera.fx, camera.fy, camera.cx, camera.cy),
-                ssplat_model.primitive not in ['3dgs', 'mip'] or is_fisheye
+                ssplat_model.primitive not in ['3dgs', 'mip']
             )
             image = (255*(0.5-0.5*normal)).byte().cpu().numpy()
         elif self.vis_modes[self.vis_mode] == "shaded":

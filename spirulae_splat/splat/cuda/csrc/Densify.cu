@@ -348,7 +348,7 @@ __global__ void cov_scale_init_kernel(
     int64_t num_points,
     int32_t num_cameras,
     const float3* __restrict__ points,  // [N, 3]
-    const bool* __restrict__ is_fisheye,  // [C]
+    const bool* __restrict__ is_fisheye,  // [C]; TODO: equisolid
     const int2* __restrict__ sizes,  // [C, 2]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const float4 *__restrict__ viewmats,  // [C, 4, 4]

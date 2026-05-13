@@ -102,6 +102,19 @@ __device__ __forceinline__ float get_pix_value(
     return ((float*)img)[(b * H * W + y * W + x) * 3 + c];
 }
 
+__device__ __forceinline__ bool get_pix_value(
+    const bool* img, 
+    int b, int y, int x,
+    int H, int W
+) {
+    if (img == nullptr)
+        return true;  // not masked
+    if (x < 0 || x >= W || y < 0 || y >= H) {
+        return true;  // to not mess up metrics
+    }
+    return img[b * H * W + y * W + x];
+}
+
 // ------------------------------------------
 // Forward Kernel: Fused SSIM
 //  - Two-pass convolution to get mu1, mu2,
@@ -547,6 +560,7 @@ __global__ void memory_efficient_ssim_backward_kernel(
     int B, int H, int W,
     const float3* __restrict__ img1,   // [B, H, W, 3]
     const float3* __restrict__ img2,   // [B, H, W, 3]
+    const bool* __restrict__ masks,  // [B, H, W, 1]
     const float dL_dmap, // [1]
     float3* __restrict__ dL_dimg1,      // [B, H, W, 3]
     float* __restrict__ out_ssim_val,
@@ -609,6 +623,9 @@ __global__ void memory_efficient_ssim_backward_kernel(
 
                 float X = get_pix_value(img1, bIdx, gy, gx, ci, H, W);
                 float Y = get_pix_value(img2, bIdx, gy, gx, ci, H, W);
+                bool mask = get_pix_value(masks, bIdx, gy, gx, H, W);
+                if (!mask)
+                    X = Y = 0.5f;
 
                 sTile(local_y, local_x, 0) = X;
                 sTile(local_y, local_x, 1) = Y;
@@ -821,7 +838,12 @@ __global__ void memory_efficient_ssim_backward_kernel(
         // final accumulation
         float p1 = get_pix_value(img1, bIdx, pix_y, pix_x, ci, H, W);
         float p2 = get_pix_value(img2, bIdx, pix_y, pix_x, ci, H, W);
+        bool mask = get_pix_value(masks, bIdx, pix_y, pix_x, H, W);
         float dL_dpix = sum0 + (2.f * p1) * sum1 + (p2) * sum2;
+        if (!mask) {
+            p1 = p2 = 0.5f;
+            dL_dpix = 0.0f;
+        }
 
         int out_idx = bIdx * num_pix + pix_id;
         if constexpr (inplace)
@@ -995,6 +1017,7 @@ fused_ssim_backward(
             B, H, W,
             (float3*)img1.data_ptr<float>(),
             (float3*)img2.data_ptr<float>(),
+            nullptr,
             dL_dmap,
             (float3*)dL_dimg1.data_ptr<float>(),
             nullptr, 1.0f, nullptr
@@ -1043,6 +1066,7 @@ void fused_ssim_backward_inplace(
             B, H, W,
             (float3*)img1.data_ptr<float>(),
             (float3*)img2.data_ptr<float>(),
+            nullptr,
             dL_dmap,
             (float3*)dL_dimg1.data_ptr<float>(),
             nullptr, 1.0f, nullptr
@@ -1055,6 +1079,7 @@ void fused_ssim_backward_inplace(
 float fused_ssim_inplace(
     at::Tensor &img1,
     at::Tensor &img2,
+    std::optional<at::Tensor> &mask,
     const float dL_dmap,
     at::Tensor &dL_dimg1,
     bool return_ssim_val,
@@ -1092,6 +1117,7 @@ float fused_ssim_inplace(
         B, H, W,
         (float3*)img1.data_ptr<float>(),
         (float3*)img2.data_ptr<float>(),
+        mask.has_value() ? mask.value().data_ptr<bool>() : nullptr,
         dL_dmap,
         (float3*)dL_dimg1.data_ptr<float>(),
         return_ssim_val ? ssim_val.data_ptr<float>() : nullptr,

@@ -125,7 +125,6 @@ struct Tile {
         float x0, float x1, float y0, float y1,
         glm::mat4x3 view
     ) {
-        bool is_fisheye = (camera_model == ssplat::CameraModelType::FISHEYE);
 
         glm::mat3 R = glm::transpose(glm::mat3(view));
         ro = -R * glm::vec3(view[3]);
@@ -134,10 +133,10 @@ struct Tile {
         // TODO: better way to handle this in nonlinear and partially invalid case
         // May not matter in training with small tiles, but obvious artifact when rendering >180deg fisheye
         float3 e0_, e1_, e2_, e3_;
-        bool valid0 = SlangProjectionUtils::unproject_point({x0, y0}, is_fisheye, dist_coeffs, &e0_);
-        bool valid1 = SlangProjectionUtils::unproject_point({x0, y1}, is_fisheye, dist_coeffs, &e1_);
-        bool valid2 = SlangProjectionUtils::unproject_point({x1, y1}, is_fisheye, dist_coeffs, &e2_);
-        bool valid3 = SlangProjectionUtils::unproject_point({x1, y0}, is_fisheye, dist_coeffs, &e3_);
+        bool valid0 = SlangProjectionUtils::unproject_point({x0, y0}, (int)camera_model, dist_coeffs, &e0_);
+        bool valid1 = SlangProjectionUtils::unproject_point({x0, y1}, (int)camera_model, dist_coeffs, &e1_);
+        bool valid2 = SlangProjectionUtils::unproject_point({x1, y1}, (int)camera_model, dist_coeffs, &e2_);
+        bool valid3 = SlangProjectionUtils::unproject_point({x1, y0}, (int)camera_model, dist_coeffs, &e3_);
         if (!valid0 && valid3 && valid1 && valid2)
             e0_ = e3_ + e1_ - e2_, valid0 = true;
         if (!valid1 && valid0 && valid2 && valid3)
@@ -1554,6 +1553,12 @@ intersect_splat_tile_3dgs(
         return SplatTileIntersector<Vanilla3DGS, ssplat::CameraModelType::FISHEYE>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
+    else if (cmt(camera_model) == ssplat::CameraModelType::EQUISOLID) {
+        TileBuffers<ssplat::CameraModelType::EQUISOLID> tile_buffers =
+            {width, height, viewmats, intrins, dist_coeffs};
+        return SplatTileIntersector<Vanilla3DGS, ssplat::CameraModelType::EQUISOLID>
+            (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
+    }
     else
         throw std::runtime_error("Unsupported camera model");
 }
@@ -1582,7 +1587,7 @@ intersect_splat_tile_3dgs(
 //             {width, height, viewmats, intrins, dist_coeffs};
 //         return SplatTileIntersector<OpaqueTriangle, ssplat::CameraModelType::FISHEYE>
 //             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
-//     }
+//     }  // TODO: equisolid
 //     else
 //         throw std::runtime_error("Unsupported camera model");
 // }
@@ -1611,7 +1616,7 @@ intersect_splat_tile_3dgs(
 //             {width, height, viewmats, intrins, dist_coeffs};
 //         return SplatTileIntersector<VoxelPrimitive, ssplat::CameraModelType::FISHEYE>
 //             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
-//     }
+//     }  // TODO: equisolid
 //     else
 //         throw std::runtime_error("Unsupported camera model");
 // }

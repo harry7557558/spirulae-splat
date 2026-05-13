@@ -486,7 +486,7 @@ at::Tensor render_background_sh_forward_tensor(
             (glm::vec3*)sh_coeffs.contiguous().data_ptr<float>(),
             (glm::vec3*)out_color.contiguous().data_ptr<float>()
         );
-    } else {
+    } else if (cmt(camera_model) == ssplat::CameraModelType::PINHOLE) {
         render_background_sh_forward_kernel<ssplat::CameraModelType::PINHOLE>
         <<<_LAUNCH_ARGS_3D(w, h, b, TILE_SIZE, TILE_SIZE, 1)>>>(
             img_size,
@@ -496,6 +496,8 @@ at::Tensor render_background_sh_forward_tensor(
             (glm::vec3*)sh_coeffs.contiguous().data_ptr<float>(),
             (glm::vec3*)out_color.contiguous().data_ptr<float>()
         );
+    } else {
+        throw std::runtime_error("Camera model " + camera_model + " is not supported for skybox");
     }
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
@@ -571,7 +573,7 @@ std::tuple<
             (glm::vec3*)v_rotation.data_ptr<float>(),
             (glm::vec3*)v_sh_coeffs.data_ptr<float>()
         );
-    } else {
+    } else if (cmt(camera_model) == ssplat::CameraModelType::PINHOLE) {
         render_background_sh_backward_kernel<ssplat::CameraModelType::PINHOLE>
         // <<<_LAUNCH_ARGS_3D(w, h, b, block_width, block_width, 1)>>>(
         <<<_LAUNCH_ARGS_2D(w*h, b, 512, 1)>>>(
@@ -585,6 +587,8 @@ std::tuple<
             (glm::vec3*)v_rotation.data_ptr<float>(),
             (glm::vec3*)v_sh_coeffs.data_ptr<float>()
         );
+    } else {
+        throw std::runtime_error("Camera model " + camera_model + " is not supported for skybox");
     }
     CHECK_DEVICE_ERROR(cudaGetLastError());
 

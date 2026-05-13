@@ -178,7 +178,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         float3 raydir;
         inside &= SlangProjectionUtils::generate_ray(
             {(px-cx)/fx, (py-cy)/fy},
-            camera_model == ssplat::CameraModelType::FISHEYE, dist_coeffs,
+            (int)camera_model, dist_coeffs,
             &raydir
         );
         float3 ray_d = SlangProjectionUtils::transform_ray_d(R, raydir);  // mul(raydir, R);

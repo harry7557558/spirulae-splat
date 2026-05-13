@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from spirulae_splat.modules.camera import Cameras, CameraType
+from spirulae_splat.modules.camera import Cameras, CameraType, _COLMAP_CAMERA_MODEL_TO_TYPE
 from spirulae_splat.viewer_legacy.utils import triangle_verts_to_quat_scale_mean
 
 from spirulae_splat.splat.cuda import _make_lazy_cuda_func
@@ -13,6 +13,8 @@ def knn_dist(x: torch.Tensor, k: int = 4):
         dists = torch.cdist(x, x).flatten()
         return torch.median(dists[dists > 0.0])
     x_np = x.detach().cpu().numpy()
+
+    # TODO: fix cameras at same location, e.g. pinhole converted from equirectangular
 
     from scipy.spatial import cKDTree
     tree = cKDTree(x_np, balanced_tree=False)
@@ -79,12 +81,19 @@ def annotate_train_cameras(
     R = R * torch.tensor([[[1.0, -1.0, -1.0]]]).cuda()
     camera_to_worlds = torch.concat((R, T), dim=-1)
 
-    key = "_is_fisheyes"
+    # must match Common.h and projection_utils.slang
+    camera_model_mapper = {
+        "PINHOLE": 0,
+        "FISHEYE": 1,
+        "EQUISOLID": 2,
+    }
+
+    key = "_camera_models"
     if not hasattr(cameras, key):
-        is_fisheyes = torch.Tensor([(ctype == "FISHEYE") for ctype in cameras.camera_type]).bool().cuda()
-        setattr(cameras, key, is_fisheyes)
+        camera_models = torch.Tensor([camera_model_mapper[ctype.upper()] for ctype in cameras.camera_type]).int().cuda()
+        setattr(cameras, key, camera_models)
     else:
-        is_fisheyes = getattr(cameras, key)
+        camera_models = getattr(cameras, key)
 
     from time import perf_counter
     torch.cuda.synchronize()
@@ -92,14 +101,14 @@ def annotate_train_cameras(
     # depths = depths * relative_scale
     rgb = _make_lazy_cuda_func("blit_train_cameras")(
         rgb, depths, alpha,
-        view_camera.camera_type[0] == "FISHEYE",
+        camera_model_mapper[view_camera.camera_type[0]],
         view_camera.intrins.cuda(),
         view_viewmats.cuda(),
         view_camera.distortion_params.cuda(),
         cameras.intrins,
         cameras.width,
         cameras.height,
-        is_fisheyes,
+        camera_models,
         cameras.distortion_params,
         camera_to_worlds,
         thumbnails.cuda(),

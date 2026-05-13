@@ -820,6 +820,7 @@ std::tuple<
         float ssim = fused_ssim_inplace(
             render_rgb_scales[scale].value(),
             ref_rgb_scales[scale].value(),
+            mask_scales[scale],
             -w_ssim,
             std::get<0>(grad_tuple).value(),
             scale == 0,
@@ -830,7 +831,7 @@ std::tuple<
         );
         if (scale == 0) {
             psnr_val = losses[1].item<float>();
-            ssim_val = ssim;
+            ssim_val = ssim;  // TODO: this isn't accurate in masked mode
         }
 
         total_losses += losses;

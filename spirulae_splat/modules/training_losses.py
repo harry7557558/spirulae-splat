@@ -625,13 +625,14 @@ class SplatTrainingLosses:
 
         # do this to make SSIM/LPIPS happier + encourage sky transparency
         if gt_rgb_mask is not None or none_sky_mask is not None:
-            raise NotImplementedError("TODO")
-            background_mask = gt_rgb_mask
-            if none_sky_mask is not None and ('max_blending' in meta or random.random() < 0.1):
-                background_mask = none_sky_mask if background_mask is None else \
-                    background_mask & none_sky_mask
-            if background_mask is not None:
-                pred_rgb = torch.where(background_mask, pred_rgb, background)
+            # raise NotImplementedError("TODO")
+            # background_mask = gt_rgb_mask
+            # if none_sky_mask is not None and ('max_blending' in meta or random.random() < 0.1):
+            #     background_mask = none_sky_mask if background_mask is None else \
+            #         background_mask & none_sky_mask
+            # if background_mask is not None:
+            #     pred_rgb = torch.where(background_mask, pred_rgb, background)
+            pass
 
         # convert to sRGB if needed
         # don't clip; exposure correction and loss should ideally handle out-of-gamut colors
@@ -672,9 +673,9 @@ class SplatTrainingLosses:
         # handle multi-resolution loss
 
         if pred_depth_normal is None and pred_depth is not None and (pred_normal is not None or gt_normal is not None):
-            is_fisheye = (camera.camera_type[0] == "FISHEYE")
+            camera_model = camera.camera_type[0].upper()
             pred_depth_normal = depth_to_normal(
-                pred_depth, ["pinhole", "fisheye"][is_fisheye],
+                pred_depth, camera_model,
                 intrins, camera.distortion_params,
                 is_ray_depth=(self.config.primitive not in ['3dgs', 'mip'])
             )

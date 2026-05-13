@@ -179,6 +179,27 @@ bool fisheye_proj_3dgs<let assume_valid : bool>(
     return true;
 }
 
+[ForceInline]
+[Differentiable]
+bool equisolid_proj_3dgs<let assume_valid : bool>(
+    // inputs
+    const float3 mean3d,
+    const float3x3 cov3d,
+    const float4 intrins,
+    const float[10] dist_coeffs,
+    // outputs
+    out float2x2 cov2d,
+    out float2 mean2d
+) {
+    bool valid = equisolid_proj<assume_valid>(mean3d, intrins, dist_coeffs, mean2d);
+    if (!assume_valid && !valid)
+        return false;
+
+    float2x3 J = equisolid_proj_jac(mean3d, intrins, dist_coeffs);
+    cov2d = mul(mul(J, cov3d), transpose(J));
+    return true;
+}
+
 [CudaDeviceExport]
 bool fisheye_proj_3dgs_nav(
     const float3 mean3d,
@@ -189,6 +210,18 @@ bool fisheye_proj_3dgs_nav(
     out float2 mean2d
 ) {
     return fisheye_proj_3dgs<false>(mean3d, cov3d, intrins, dist_coeffs, cov2d, mean2d);
+}
+
+[CudaDeviceExport]
+bool equisolid_proj_3dgs_nav(
+    const float3 mean3d,
+    const float3x3 cov3d,
+    const float4 intrins,
+    const float[10] dist_coeffs,
+    out float2x2 cov2d,
+    out float2 mean2d
+) {
+    return equisolid_proj_3dgs<false>(mean3d, cov3d, intrins, dist_coeffs, cov2d, mean2d);
 }
 
 [ForceInline]
@@ -239,27 +272,50 @@ bool fisheye_proj_3dgs_ut<let assume_valid : bool>(
 }
 
 [ForceInline]
-[Differentiable]
-void ortho_proj_3dgs(
+bool equisolid_proj_3dgs_ut<let assume_valid : bool>(
     // inputs
-    const float3 mean3d,
-    const float3x3 cov3d,
-    const float fx,
-    const float fy,
-    const float cx,
-    const float cy,
+    const SigmaPoints sigmas,
+    const float4 intrins,
+    const float[10] dist_coeffs,
     // outputs
     out float2x2 cov2d,
     out float2 mean2d
 ) {
-    float x = mean3d[0], y = mean3d[1], z = mean3d[2];
+    mean2d = float2(0);
+    cov2d = float2x2(0);
 
-    float2x3 J = float2x3(
-        fx, 0.f, 0.f,
-        0.f, fy, 0.f
-    );
-    cov2d = mul(mul(J, cov3d), transpose(J));;
-    mean2d = float2(fx * x + cx, fy * y + cy);
+    float2 proj_points[7];
+    bool all_valid = true;
+    [ForceUnroll] for (int i = 0; i < 7; i++)
+        all_valid &= equisolid_proj<assume_valid>(sigmas.p[i], intrins, dist_coeffs, proj_points[i]);
+    if (!assume_valid && !all_valid)
+        return false;
+
+    // We previously did this in rasterization with dot(raydir, pos) < 0, but it slows down rasterization
+    // Here we try a different heuristics
+    if (!assume_valid) {
+        float max_z = sigmas.p[0].z;
+        float2 min_p = proj_points[0], max_p = proj_points[0];
+        [ForceUnroll] for (int i = 1; i < 7; i++) {
+            max_z = max(max_z, sigmas.p[i].z);
+            float2 p = proj_points[0] + (proj_points[i] - proj_points[0]) * 3.329;
+            min_p = min(min_p, p);
+            max_p = max(max_p, p);
+        }
+        min_p -= intrins.zw;
+        max_p -= intrins.zw;
+        if (max_z <= 0.0 && min_p.x * max_p.x < 0.0 && min_p.y * max_p.y < 0.0)
+            return false;
+    }
+
+    [ForceUnroll] for (int i = 0; i < 7; i++)
+        mean2d += sigmas.w_mean[i] * proj_points[i];
+
+    [ForceUnroll] for (int i = 0; i < 7; i++) {
+        float2 d = proj_points[i] - mean2d;
+        cov2d += sigmas.w_cov[i] * float2x2(d.x * d.x, d.x * d.y, d.x * d.y, d.y * d.y);
+    }
+    return true;
 }
 
 
@@ -282,7 +338,7 @@ float add_blur(const float eps2d, inout float2x2 covar, out float compensation) 
     const float3x3 R, const float3 t, \
     no_diff const float fx, no_diff const float fy,  no_diff const float cx, no_diff const float cy, \
     no_diff const float[10] dist_coeffs, const uint image_width, const uint image_height, \
-    no_diff out float4 aabb_xyxy, out float2 mean2d, out float depth, out float3 conic, out float opacity, out float3 rgb
+    no_diff out float4 aabb_xyxy, no_diff out float sorting_depth, out float2 mean2d, out float depth, out float3 conic, out float opacity, out float3 rgb
 
 [ForceInline]
 [Differentiable]
@@ -293,8 +349,9 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
     // transform Gaussian center to camera space
     float3 mean_c;
     posW2C(R, t, mean, mean_c);
-    float cull_z = (camera_model == CameraModelType::FISHEYE) ?
-        length(mean_c) : mean_c.z;
+    float cull_z = (camera_model == CameraModelType::PINHOLE) ?
+        mean_c.z : length(mean_c);
+    depth = mean_c.z;
     if (!assume_valid && cull_z <= 0.0f) {
         aabb_xyxy = float4(0.0f);
         return;
@@ -317,6 +374,12 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
             );
         else if (camera_model == CameraModelType::FISHEYE)
             is_valid &= fisheye_proj_3dgs_ut<assume_valid>(
+                sigmas,
+                intrins, dist_coeffs,
+                covar2d, mean2d
+            );
+        else if (camera_model == CameraModelType::EQUISOLID)
+            is_valid &= equisolid_proj_3dgs_ut<assume_valid>(
                 sigmas,
                 intrins, dist_coeffs,
                 covar2d, mean2d
@@ -345,15 +408,15 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
                 intrins, dist_coeffs,
                 covar2d, mean2d
             );
-        else if (camera_model == CameraModelType::ORTHO)
-            ortho_proj_3dgs(
+        else if (camera_model == CameraModelType::EQUISOLID)
+            is_valid &= equisolid_proj_3dgs<assume_valid>(
                 mean_c, covar_c,
-                fx, fy, cx, cy,
+                intrins, dist_coeffs,
                 covar2d, mean2d
             );
 
         // do this since sorting for >180deg fisheye is weird
-        if (!assume_valid && camera_model == CameraModelType::FISHEYE) {
+        if (!assume_valid && (camera_model == CameraModelType::FISHEYE || camera_model == CameraModelType::EQUISOLID)) {
             float2 mean2d_c = mean2d - float2(cx, cy);
             float opac = opacity * exp(-0.5f * dot(mul(inverse(covar2d), mean2d_c), mean2d_c));
             if (mean_c.z < 0.0 && opac > 1.0 / 255.0)
@@ -408,12 +471,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
     }
 
     aabb_xyxy = {xmin, ymin, xmax, ymax};
-    if (eval3d)
-        depth = no_diff get_sorting_depth(camera_model, mean_c);
-    else
-        // TODO: this is the same depth used to render depth maps
-        // depth = (camera_model == CameraModelType::FISHEYE ? length(mean_c) : mean_c.z);
-        depth = mean_c.z;
+    sorting_depth = no_diff get_sorting_depth(camera_model, mean_c);
     conic = eval3d ? exp(-scale) :
         float3(covar2d_inv[0][0], covar2d_inv[0][1], covar2d_inv[1][1]);
 
@@ -434,15 +492,16 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
             mean, quat, scale, in_opacity, sh_coeffs, R, t, \
             fx, fy, cx, cy, dist_coeffs, \
             image_width, image_height, \
-            aabb_xyxy, mean2d, depth, conic, opacity, rgb \
+            aabb_xyxy, sorting_depth, mean2d, depth, conic, opacity, rgb \
         ); \
     }
 
 _DEF_projection_3dgs(projection_3dgs_persp, CameraModelType::PINHOLE, false, false)
 _DEF_projection_3dgs(projection_3dgs_fisheye, CameraModelType::FISHEYE, false, false)
-_DEF_projection_3dgs(projection_3dgs_ortho, CameraModelType::ORTHO, false, false)
+_DEF_projection_3dgs(projection_3dgs_equisolid, CameraModelType::EQUISOLID, false, false)
 _DEF_projection_3dgs(projection_3dgut_persp, CameraModelType::PINHOLE, false, true)
 _DEF_projection_3dgs(projection_3dgut_fisheye, CameraModelType::FISHEYE, false, true)
+_DEF_projection_3dgs(projection_3dgut_equisolid, CameraModelType::EQUISOLID, false, true)
 
 
 /* Backward Projection */
@@ -464,16 +523,17 @@ interface _DiffProjection3DGS
                 mean, quat, scale, in_opacity, sh_coeffs, R, t, \
                 fx, fy, cx, cy, dist_coeffs, \
                 image_width, image_height, \
-                aabb_xyxy, mean2d, depth, conic, opacity, rgb \
+                aabb_xyxy, sorting_depth, mean2d, depth, conic, opacity, rgb \
             ); \
         } \
     };
 
 _DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgs_persp, CameraModelType::PINHOLE, true, false)
 _DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgs_fisheye, CameraModelType::FISHEYE, true, false)
-_DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgs_ortho, CameraModelType::ORTHO, true, false)
+_DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgs_equisolid, CameraModelType::EQUISOLID, true, false)
 _DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgut_persp, CameraModelType::PINHOLE, true, true)
 _DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgut_fisheye, CameraModelType::FISHEYE, true, true)
+_DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgut_equisolid, CameraModelType::EQUISOLID, true, true)
 
 
 #define _projection_3dgs_vjp_ARGS \
@@ -531,9 +591,10 @@ void _projection_3dgs_vjp(
 
 _DEF_projection_3dgs_vjp(projection_3dgs_persp_vjp, _DiffProjection3DGS_3dgs_persp)
 _DEF_projection_3dgs_vjp(projection_3dgs_fisheye_vjp, _DiffProjection3DGS_3dgs_fisheye)
-_DEF_projection_3dgs_vjp(projection_3dgs_ortho_vjp, _DiffProjection3DGS_3dgs_ortho)
+_DEF_projection_3dgs_vjp(projection_3dgs_equisolid_vjp, _DiffProjection3DGS_3dgs_equisolid)
 _DEF_projection_3dgs_vjp(projection_3dgut_persp_vjp, _DiffProjection3DGS_3dgut_persp)
 _DEF_projection_3dgs_vjp(projection_3dgut_fisheye_vjp, _DiffProjection3DGS_3dgut_fisheye)
+_DEF_projection_3dgs_vjp(projection_3dgut_equisolid_vjp, _DiffProjection3DGS_3dgut_equisolid)
 
 
 /* Backward Projection with Vector-Residual Product and Hessian Diagonal to Mean */
@@ -617,12 +678,13 @@ void _projection_3dgs_vjp(
         DifferentialPair<float> dp_opacity;
         DifferentialPair<float3> dp_rgb;
         float4 aabb_xyxy;
+        float sorting_depth;
         fwd_diff(projectionInterface.projection)(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            aabb_xyxy, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
+            aabb_xyxy, sorting_depth, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
         h_mean[i] =
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
@@ -655,9 +717,10 @@ void _projection_3dgs_vjp(
 
 _DEF_projection_3dgs_vjp(projection_3dgs_persp_vjp, _DiffProjection3DGS_3dgs_persp)
 _DEF_projection_3dgs_vjp(projection_3dgs_fisheye_vjp, _DiffProjection3DGS_3dgs_fisheye)
-// _DEF_projection_3dgs_vjp(projection_3dgs_ortho_vjp, _DiffProjection3DGS_3dgs_ortho)
+_DEF_projection_3dgs_vjp(projection_3dgs_equisolid_vjp, _DiffProjection3DGS_3dgs_equisolid)
 _DEF_projection_3dgs_vjp(projection_3dgut_persp_vjp, _DiffProjection3DGS_3dgut_persp)
 _DEF_projection_3dgs_vjp(projection_3dgut_fisheye_vjp, _DiffProjection3DGS_3dgut_fisheye)
+_DEF_projection_3dgs_vjp(projection_3dgut_equisolid_vjp, _DiffProjection3DGS_3dgut_equisolid)
 
 
 /* Backward Projection with Vector-Residual Product and Hessian Diagonal to All Parameters except SH */
@@ -748,12 +811,13 @@ void _projection_3dgs_vjp(
         DifferentialPair<float> dp_opacity;
         DifferentialPair<float3> dp_rgb;
         float4 aabb_xyxy;
+        float sorting_depth;
         fwd_diff(projectionInterface.projection)(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            aabb_xyxy, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
+            aabb_xyxy, sorting_depth, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
         h_mean[i] =
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
@@ -780,12 +844,13 @@ void _projection_3dgs_vjp(
         DifferentialPair<float> dp_opacity;
         DifferentialPair<float3> dp_rgb;
         float4 aabb_xyxy;
+        float sorting_depth;
         fwd_diff(projectionInterface.projection)(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            aabb_xyxy, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
+            aabb_xyxy, sorting_depth, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
         h_quat[i] =
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
@@ -812,12 +877,13 @@ void _projection_3dgs_vjp(
         DifferentialPair<float> dp_opacity;
         DifferentialPair<float3> dp_rgb;
         float4 aabb_xyxy;
+        float sorting_depth;
         fwd_diff(projectionInterface.projection)(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            aabb_xyxy, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
+            aabb_xyxy, sorting_depth, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
         h_scale[i] =
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
@@ -842,12 +908,13 @@ void _projection_3dgs_vjp(
         DifferentialPair<float> dp_opacity;
         DifferentialPair<float3> dp_rgb;
         float4 aabb_xyxy;
+        float sorting_depth;
         fwd_diff(projectionInterface.projection)(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            aabb_xyxy, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
+            aabb_xyxy, sorting_depth, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
         h_in_opacity =
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
@@ -875,12 +942,13 @@ void _projection_3dgs_vjp(
         DifferentialPair<float> dp_opacity;
         DifferentialPair<float3> dp_rgb;
         float4 aabb_xyxy;
+        float sorting_depth;
         fwd_diff(projectionInterface.projection)(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            aabb_xyxy, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
+            aabb_xyxy, sorting_depth, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
         h_features_dc[i] =
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
@@ -914,7 +982,8 @@ void _projection_3dgs_vjp(
 
 _DEF_projection_3dgs_vjp(projection_3dgs_persp_vjp, _DiffProjection3DGS_3dgs_persp)
 _DEF_projection_3dgs_vjp(projection_3dgs_fisheye_vjp, _DiffProjection3DGS_3dgs_fisheye)
-// _DEF_projection_3dgs_vjp(projection_3dgs_ortho_vjp, _DiffProjection3DGS_3dgs_ortho)
+_DEF_projection_3dgs_vjp(projection_3dgs_equisolid_vjp, _DiffProjection3DGS_3dgs_equisolid)
 _DEF_projection_3dgs_vjp(projection_3dgut_persp_vjp, _DiffProjection3DGS_3dgut_persp)
 _DEF_projection_3dgs_vjp(projection_3dgut_fisheye_vjp, _DiffProjection3DGS_3dgut_fisheye)
+_DEF_projection_3dgs_vjp(projection_3dgut_equisolid_vjp, _DiffProjection3DGS_3dgut_equisolid)
 

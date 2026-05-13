@@ -864,7 +864,7 @@ class SpirulaeSplatModel(torch.nn.Module):
 
     def blend_background(
             self, camera: Cameras, c2w: torch.Tensor, intrins: torch.Tensor,
-            W: Optional[int] = None, H: Optional[int] = None, is_fisheye: Optional[bool] = None,
+            W: Optional[int] = None, H: Optional[int] = None, camera_model: str = None,
             rgb: Optional[torch.Tensor] = None, transmittance: Optional[torch.Tensor] = None
         ):
         if not isinstance(camera, Cameras):
@@ -873,8 +873,8 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         if W is None or H is None:
             W, H = int(camera.width[0].item()), int(camera.height[0].item())
-        if is_fisheye is None:
-            is_fisheye = (camera.camera_type[0] == "FISHEYE")
+        if camera_model is None:
+            camera_model = camera.camera_type[0]
         sh_degree = self.config.background_sh_degree
 
         if self.config.randomize_background == True:
@@ -897,7 +897,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             sh_coeffs = torch.cat((self.background_color.unsqueeze(0), self.background_sh), dim=0)  # [(deg+1)^2, 3]
             background = render_background_sh(
                 W, H,
-                "FISHEYE" if is_fisheye else "PINHOLE",
+                camera_model.upper(),
                 intrins, c2w[..., :3, :3], sh_degree, sh_coeffs
             )
 
@@ -940,7 +940,7 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         # TODO: separate different sizes/intrins
         W, H = int(camera.width[0].item()), int(camera.height[0].item())
-        is_fisheye = (camera.camera_type[0] == "FISHEYE")
+        camera_model = camera.camera_type[0].upper()
 
         R = optimized_camera_to_world[:, :3, :3]  # 3 x 3
         T = optimized_camera_to_world[:, :3, 3:4]  # 3 x 1
@@ -964,7 +964,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         #     kwargs['patch_offsets'] = camera.metadata['patch_offsets']
         if not self.training:
             pass
-            # is_fisheye = True
+            # camera_model = "FISHEYE"
             # kwargs['dist_coeffs'] = torch.tensor([[0.0259, 0.0082, 0.0002, -0.0013, -0.0012, -0.0008, 0.0000, 0.0000, -0.0006, -0.0001]]).float().cuda()
 
             # TODO: investigate why this uses a ton of VRAM
@@ -1034,7 +1034,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             # packed=True,
             # use_bvh=True,
             relative_scale=self.config.relative_scale,
-            camera_model=["pinhole", "fisheye"][is_fisheye],
+            camera_model=camera_model,
             output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
             compute_hessian_diagonal=self.config.compute_hessian_diagonal,
             **kwargs,
@@ -1097,7 +1097,7 @@ class SpirulaeSplatModel(torch.nn.Module):
                     self.info[key] = meta[key]
 
         # blend with background
-        rgb = self.blend_background(camera, optimized_camera_to_world, intrins, W, H, is_fisheye, rgb, Ts)
+        rgb = self.blend_background(camera, optimized_camera_to_world, intrins, W, H, camera_model, rgb, Ts)
 
         # visualize PPISP for debugging
         if not self.training and False:
@@ -1131,7 +1131,7 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         if not self.training:
             outputs["alpha"] = (1.0 - Ts).reshape((H, W, 1)).repeat(1, 1, 3)
-            background = self.blend_background(camera, optimized_camera_to_world, intrins, W, H, is_fisheye)
+            background = self.blend_background(camera, optimized_camera_to_world, intrins, W, H, camera_model)
             if background is not None:
                 outputs["background"] = torch.clip(background, min=0.0, max=1.0)
         else:
@@ -1162,7 +1162,7 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         if self.training:
             kwargs["intrins"] = intrins
-            kwargs["camera_model"] = ["pinhole", "fisheye"][is_fisheye]
+            kwargs["camera_model"] = camera_model
             outputs["camera"] = camera
             outputs["camera_intrins"] = kwargs
         # if not self.training and True:
@@ -1248,7 +1248,7 @@ class SpirulaeSplatModel(torch.nn.Module):
                 packed=(self.config.packed or use_bvh),
                 use_bvh=(use_bvh),
                 relative_scale=self.config.relative_scale,
-                camera_model=["pinhole", "fisheye"][is_fisheye],
+                camera_model=camera_model,
                 output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
                 compute_hessian_diagonal=self.config.compute_hessian_diagonal,
                 **kwargs,

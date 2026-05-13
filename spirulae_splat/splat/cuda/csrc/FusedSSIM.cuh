@@ -48,6 +48,7 @@ void fused_ssim_backward_inplace(
 float fused_ssim_inplace(
     at::Tensor &img1,
     at::Tensor &img2,
+    std::optional<at::Tensor> &mask,
     const float dL_dmap,
     at::Tensor &dL_dimg1,
     bool return_ssim_val,

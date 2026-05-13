@@ -31,11 +31,12 @@ using mat3x2 = glm::mat<3, 2, float>;
 //
 // Legacy Camera Types
 //
+// This must match projection_utils.slang
 enum class CameraModelType {
     PINHOLE = 0,
-    ORTHO = 1,
-    FISHEYE = 2,
-    FTHETA = 3,
+    FISHEYE = 1,
+    EQUISOLID = 2,
+    EQUIRECTANGULAR = 3,
 };
 
 // #define N_THREADS_PACKED 256
@@ -47,8 +48,7 @@ enum class CameraModelType {
 
 inline ssplat::CameraModelType cmt(const std::string &s) {
     return (s == "PINHOLE") ? ssplat::CameraModelType::PINHOLE :
-        (s == "ORTHO") ? ssplat::CameraModelType::ORTHO :
         (s == "FISHEYE") ? ssplat::CameraModelType::FISHEYE :
-        (s == "FTHETA") ? ssplat::CameraModelType::FTHETA :
+        (s == "EQUISOLID") ? ssplat::CameraModelType::EQUISOLID :
         (ssplat::CameraModelType)-1;
 }

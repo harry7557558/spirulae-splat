@@ -89,12 +89,6 @@ void projection_3dgs_sv<let camera_model : CameraModelType, let assume_valid : b
                 intrins, dist_coeffs,
                 covar2d, mean2d
             );
-        else if (camera_model == CameraModelType::ORTHO)
-            ortho_proj_3dgs(
-                mean_c, covar_c,
-                fx, fy, cx, cy,
-                covar2d, mean2d
-            );
     }
     if (!assume_valid && !is_valid) {
         aabb_xyxy = float4(0.0f);
@@ -171,7 +165,6 @@ void projection_3dgs_sv<let camera_model : CameraModelType, let assume_valid : b
 // #define _DEF_projection_3dgs_sv_i(num_sv) \
 //     _DEF_projection_3dgs_sv(projection_3dgs_sv_persp, num_sv, CameraModelType::PINHOLE, false, false) \
 //     _DEF_projection_3dgs_sv(projection_3dgs_sv_fisheye, num_sv, CameraModelType::FISHEYE, false, false) \
-//     _DEF_projection_3dgs_sv(projection_3dgs_sv_ortho, num_sv, CameraModelType::ORTHO, false, false) \
 //     _DEF_projection_3dgs_sv(projection_3dgut_sv_persp, num_sv, CameraModelType::PINHOLE, false, true) \
 //     _DEF_projection_3dgs_sv(projection_3dgut_sv_fisheye, num_sv, CameraModelType::FISHEYE, false, true)
 
@@ -253,12 +246,10 @@ _DEF_projection_3dgs_sv_i(8);
 // #define _DEF_projection_3dgs_sv_vjp_i(num_sv) \
 //     _DEF_projection_3dgs_sv(_projection_3dgs_sv_persp_differentiable, num_sv, CameraModelType::PINHOLE, true, false) \
 //     _DEF_projection_3dgs_sv(_projection_3dgs_sv_fisheye_differentiable, num_sv, CameraModelType::FISHEYE, true, false) \
-//     _DEF_projection_3dgs_sv(_projection_3dgs_sv_ortho_differentiable, num_sv, CameraModelType::ORTHO, true, false) \
 //     _DEF_projection_3dgs_sv(_projection_3dgut_sv_persp_differentiable, num_sv, CameraModelType::PINHOLE, true, true) \
 //     _DEF_projection_3dgs_sv(_projection_3dgut_sv_fisheye_differentiable, num_sv, CameraModelType::FISHEYE, true, true) \
 //     _DEF_projection_3dgs_sv_vjp(projection_3dgs_sv_persp_vjp, _projection_3dgs_sv_persp_differentiable, num_sv) \
 //     _DEF_projection_3dgs_sv_vjp(projection_3dgs_sv_fisheye_vjp, _projection_3dgs_sv_fisheye_differentiable, num_sv) \
-//     _DEF_projection_3dgs_sv_vjp(projection_3dgs_sv_ortho_vjp, _projection_3dgs_sv_ortho_differentiable, num_sv) \
 //     _DEF_projection_3dgs_sv_vjp(projection_3dgut_sv_persp_vjp, _projection_3dgut_sv_persp_differentiable, num_sv) \
 //     _DEF_projection_3dgs_sv_vjp(projection_3dgut_sv_fisheye_vjp, _projection_3dgut_sv_fisheye_differentiable, num_sv)
 

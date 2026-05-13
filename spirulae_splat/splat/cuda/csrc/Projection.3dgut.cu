@@ -54,6 +54,8 @@ std::tuple<
             projection_hetero_forward_kernel<Vanilla3DGUT, ssplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
         else if (cmt(camera_model) == ssplat::CameraModelType::FISHEYE)
             projection_hetero_forward_kernel<Vanilla3DGUT, ssplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+        else if (cmt(camera_model) == ssplat::CameraModelType::EQUISOLID)
+            projection_hetero_forward_kernel<Vanilla3DGUT, ssplat::CameraModelType::EQUISOLID> _LAUNCH_ARGS;
         else
             throw std::runtime_error("Unsupported camera model");
     }
@@ -122,6 +124,8 @@ std::tuple<
             projection_3dgs_hetero_backward_kernel<Vanilla3DGUT, ssplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
         else if (cmt(camera_model) == ssplat::CameraModelType::FISHEYE)
             projection_3dgs_hetero_backward_kernel<Vanilla3DGUT, ssplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+        else if (cmt(camera_model) == ssplat::CameraModelType::EQUISOLID)
+            projection_3dgs_hetero_backward_kernel<Vanilla3DGUT, ssplat::CameraModelType::EQUISOLID> _LAUNCH_ARGS;
         else
             throw std::runtime_error("Unsupported camera model");
     }

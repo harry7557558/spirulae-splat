@@ -666,204 +666,448 @@ inline __device__ bool fisheye_proj_nav(float3  p_view_2, float4  intrins_2, Fix
     return !_S75;
 }
 
+inline __device__ DiffPair_float_0 _d_sin_0(DiffPair_float_0 * dpx_3)
+{
+    DiffPair_float_0 _S96 = { (F32_sin((dpx_3->primal_0))), (F32_cos((dpx_3->primal_0))) * dpx_3->differential_0 };
+    return _S96;
+}
+
+inline __device__ bool equisolid_proj_nav(float3  p_view_3, float4  intrins_3, FixedArray<float, 10>  dist_coeffs_4, float2  * uv_3)
+{
+    bool _S97;
+    for(;;)
+    {
+        float2  _S98 = float2 {p_view_3.x, p_view_3.y};
+        float r_4 = length_0(_S98);
+        float _S99 = p_view_3.z;
+        float theta_1 = (F32_atan2((r_4), (_S99)));
+        float k_1;
+        if(r_4 < 9.99999997475242708e-07f)
+        {
+            k_1 = (1.0f - theta_1 * theta_1 / 24.0f) / _S99;
+        }
+        else
+        {
+            k_1 = 2.0f * (F32_sin((0.5f * theta_1))) / r_4;
+        }
+        float2  _S100 = _S98 * make_float2 (k_1);
+        *uv_3 = _S100;
+        float u_8 = _S100.x;
+        float v_8 = _S100.y;
+        float _S101 = 0.0f * v_8;
+        float r2_8 = u_8 * u_8 + v_8 * v_8;
+        float s_diff_r2_9 = u_8 + u_8 + (_S101 + _S101);
+        float _S102 = dist_coeffs_4[int(2)] + r2_8 * dist_coeffs_4[int(3)];
+        float _S103 = dist_coeffs_4[int(1)] + r2_8 * _S102;
+        float _S104 = dist_coeffs_4[int(0)] + r2_8 * _S103;
+        float radial_3 = 1.0f + r2_8 * _S104;
+        float _S105 = 2.0f * dist_coeffs_4[int(4)];
+        float _S106 = _S105 * u_8;
+        float _S107 = 2.0f * u_8;
+        float _S108 = 2.0f * dist_coeffs_4[int(5)];
+        float _S109 = _S108 * u_8;
+        float _S110 = 2.0f * v_8;
+        float2  _S111 = make_float2 (1.0f, 0.0f) * make_float2 (radial_3) + make_float2 (s_diff_r2_9 * _S104 + (s_diff_r2_9 * _S103 + (s_diff_r2_9 * _S102 + s_diff_r2_9 * dist_coeffs_4[int(3)] * r2_8) * r2_8) * r2_8) * _S100 + make_float2 (_S105 * v_8 + 0.0f * _S106 + (s_diff_r2_9 + (_S107 + _S107)) * dist_coeffs_4[int(5)] + s_diff_r2_9 * dist_coeffs_4[int(6)], _S108 * v_8 + 0.0f * _S109 + (s_diff_r2_9 + (_S101 + 0.0f * _S110)) * dist_coeffs_4[int(4)] + s_diff_r2_9 * dist_coeffs_4[int(7)]);
+        float _S112 = 0.0f * u_8;
+        float s_diff_r2_10 = _S112 + _S112 + (v_8 + v_8);
+        float2  _S113 = make_float2 (0.0f, 1.0f) * make_float2 (radial_3) + make_float2 (s_diff_r2_10 * _S104 + (s_diff_r2_10 * _S103 + (s_diff_r2_10 * _S102 + s_diff_r2_10 * dist_coeffs_4[int(3)] * r2_8) * r2_8) * r2_8) * _S100 + make_float2 (0.0f * _S105 * v_8 + _S106 + (s_diff_r2_10 + (_S112 + 0.0f * _S107)) * dist_coeffs_4[int(5)] + s_diff_r2_10 * dist_coeffs_4[int(6)], 0.0f * _S108 * v_8 + _S109 + (s_diff_r2_10 + (_S110 + _S110)) * dist_coeffs_4[int(4)] + s_diff_r2_10 * dist_coeffs_4[int(7)]);
+        Matrix<float, 2, 2>  _S114 = transpose_1(makeMatrix<float, 2, 2> (_S111 + make_float2 (_S111.x * dist_coeffs_4[int(8)] + _S111.y * dist_coeffs_4[int(9)], 0.0f), _S113 + make_float2 (_S113.x * dist_coeffs_4[int(8)] + _S113.y * dist_coeffs_4[int(9)], 0.0f)));
+        bool _S115 = !((F32_min((determinant_0(_S114)), ((F32_min((_S114.rows[int(0)].x), (_S114.rows[int(1)].y)))))) > 0.0f);
+        _S97 = _S115;
+        if(_S115)
+        {
+            break;
+        }
+        float u_9 = (*uv_3).x;
+        float v_9 = (*uv_3).y;
+        float r2_9 = u_9 * u_9 + v_9 * v_9;
+        float2  _S116 = *uv_3 * make_float2 (1.0f + r2_9 * (dist_coeffs_4[int(0)] + r2_9 * (dist_coeffs_4[int(1)] + r2_9 * (dist_coeffs_4[int(2)] + r2_9 * dist_coeffs_4[int(3)])))) + make_float2 (_S105 * u_9 * v_9 + dist_coeffs_4[int(5)] * (r2_9 + 2.0f * u_9 * u_9) + dist_coeffs_4[int(6)] * r2_9, _S108 * u_9 * v_9 + dist_coeffs_4[int(4)] * (r2_9 + 2.0f * v_9 * v_9) + dist_coeffs_4[int(7)] * r2_9);
+        float2  _S117 = _S116 + make_float2 (dist_coeffs_4[int(8)] * _S116.x + dist_coeffs_4[int(9)] * _S116.y, 0.0f);
+        *uv_3 = make_float2 (intrins_3.x * _S117.x + intrins_3.z, intrins_3.y * _S117.y + intrins_3.w);
+        break;
+    }
+    return !_S97;
+}
+
 struct DiffPair_vectorx3Cfloatx2C2x3E_0
 {
     float2  primal_0;
     float2  differential_0;
 };
 
-inline __device__ DiffPair_float_0 s_fwd_length_impl_0(DiffPair_vectorx3Cfloatx2C2x3E_0 * dpx_3)
+inline __device__ DiffPair_float_0 s_fwd_length_impl_0(DiffPair_vectorx3Cfloatx2C2x3E_0 * dpx_4)
 {
-    float _S96 = *&((&dpx_3->differential_0)->x) * *&((&dpx_3->primal_0)->x);
-    float _S97 = *&((&dpx_3->differential_0)->y) * *&((&dpx_3->primal_0)->y);
-    float s_diff_len_0 = _S96 + _S96 + (_S97 + _S97);
-    DiffPair_float_0 _S98;
-    (&_S98)->primal_0 = *&((&dpx_3->primal_0)->x) * *&((&dpx_3->primal_0)->x) + *&((&dpx_3->primal_0)->y) * *&((&dpx_3->primal_0)->y);
-    (&_S98)->differential_0 = s_diff_len_0;
-    DiffPair_float_0 _S99 = _d_sqrt_0(&_S98);
-    DiffPair_float_0 _S100 = { _S99.primal_0, _S99.differential_0 };
-    return _S100;
+    float _S118 = *&((&dpx_4->differential_0)->x) * *&((&dpx_4->primal_0)->x);
+    float _S119 = *&((&dpx_4->differential_0)->y) * *&((&dpx_4->primal_0)->y);
+    float s_diff_len_0 = _S118 + _S118 + (_S119 + _S119);
+    DiffPair_float_0 _S120;
+    (&_S120)->primal_0 = *&((&dpx_4->primal_0)->x) * *&((&dpx_4->primal_0)->x) + *&((&dpx_4->primal_0)->y) * *&((&dpx_4->primal_0)->y);
+    (&_S120)->differential_0 = s_diff_len_0;
+    DiffPair_float_0 _S121 = _d_sqrt_0(&_S120);
+    DiffPair_float_0 _S122 = { _S121.primal_0, _S121.differential_0 };
+    return _S122;
 }
 
-inline __device__ Matrix<float, 2, 3>  fisheye_proj_jac(float3  p_view_3, float4  intrins_3, FixedArray<float, 10>  dist_coeffs_4)
+inline __device__ Matrix<float, 2, 3>  fisheye_proj_jac(float3  p_view_4, float4  intrins_4, FixedArray<float, 10>  dist_coeffs_5)
 {
     Matrix<float, 2, 3>  J_1;
-    float2  _S101 = float2 {p_view_3.x, p_view_3.y};
-    float2  _S102 = make_float2 (1.0f, 0.0f);
-    DiffPair_vectorx3Cfloatx2C2x3E_0 _S103;
-    (&_S103)->primal_0 = _S101;
-    (&_S103)->differential_0 = _S102;
-    DiffPair_float_0 _S104 = s_fwd_length_impl_0(&_S103);
-    float _S105 = p_view_3.z;
-    DiffPair_float_0 _S106;
-    (&_S106)->primal_0 = _S104.primal_0;
-    (&_S106)->differential_0 = _S104.differential_0;
-    DiffPair_float_0 _S107;
-    (&_S107)->primal_0 = _S105;
-    (&_S107)->differential_0 = 0.0f;
-    DiffPair_float_0 _S108 = _d_atan2_0(&_S106, &_S107);
-    float k_1;
-    float s_diff_k_0;
-    if((_S108.primal_0) < 0.00100000004749745f)
-    {
-        float _S109 = _S108.differential_0 * _S108.primal_0;
-        float _S110 = 1.0f - _S108.primal_0 * _S108.primal_0 / 3.0f;
-        float _S111 = ((0.0f - (_S109 + _S109) * 0.3333333432674408f) * _S105 - _S110 * 0.0f) / (_S105 * _S105);
-        k_1 = _S110 / _S105;
-        s_diff_k_0 = _S111;
-    }
-    else
-    {
-        float _S112 = (_S108.differential_0 * _S104.primal_0 - _S108.primal_0 * _S104.differential_0) / (_S104.primal_0 * _S104.primal_0);
-        k_1 = _S108.primal_0 / _S104.primal_0;
-        s_diff_k_0 = _S112;
-    }
-    float2  _S113 = _S101 * make_float2 (k_1);
-    float2  _S114 = _S102 * make_float2 (k_1) + make_float2 (s_diff_k_0) * _S101;
-    float u_8 = _S113.x;
-    float s_diff_u_3 = _S114.x;
-    float v_8 = _S113.y;
-    float s_diff_v_3 = _S114.y;
-    float _S115 = s_diff_u_3 * u_8;
-    float _S116 = s_diff_v_3 * v_8;
-    float r2_8 = u_8 * u_8 + v_8 * v_8;
-    float s_diff_r2_9 = _S115 + _S115 + (_S116 + _S116);
-    float _S117 = dist_coeffs_4[int(2)] + r2_8 * dist_coeffs_4[int(3)];
-    float _S118 = dist_coeffs_4[int(1)] + r2_8 * _S117;
-    float _S119 = dist_coeffs_4[int(0)] + r2_8 * _S118;
-    float _S120 = 2.0f * dist_coeffs_4[int(4)];
-    float _S121 = 2.0f * dist_coeffs_4[int(5)];
-    float2  _S122 = _S114 * make_float2 (1.0f + r2_8 * _S119) + make_float2 (s_diff_r2_9 * _S119 + (s_diff_r2_9 * _S118 + (s_diff_r2_9 * _S117 + s_diff_r2_9 * dist_coeffs_4[int(3)] * r2_8) * r2_8) * r2_8) * _S113 + make_float2 (s_diff_u_3 * _S120 * v_8 + s_diff_v_3 * (_S120 * u_8) + (s_diff_r2_9 + (s_diff_u_3 * 2.0f * u_8 + s_diff_u_3 * (2.0f * u_8))) * dist_coeffs_4[int(5)] + s_diff_r2_9 * dist_coeffs_4[int(6)], s_diff_u_3 * _S121 * v_8 + s_diff_v_3 * (_S121 * u_8) + (s_diff_r2_9 + (s_diff_v_3 * 2.0f * v_8 + s_diff_v_3 * (2.0f * v_8))) * dist_coeffs_4[int(4)] + s_diff_r2_9 * dist_coeffs_4[int(7)]);
-    float2  _S123 = _S122 + make_float2 (_S122.x * dist_coeffs_4[int(8)] + _S122.y * dist_coeffs_4[int(9)], 0.0f);
-    float fx_1 = intrins_3.x;
-    float fy_1 = intrins_3.y;
-    float _S124 = _S123.y * fy_1;
-    *&(((&J_1)->rows + (int(0)))->x) = _S123.x * fx_1;
-    *&(((&J_1)->rows + (int(1)))->x) = _S124;
-    float2  _S125 = make_float2 (0.0f, 1.0f);
-    DiffPair_vectorx3Cfloatx2C2x3E_0 _S126;
-    (&_S126)->primal_0 = _S101;
-    (&_S126)->differential_0 = _S125;
-    DiffPair_float_0 _S127 = s_fwd_length_impl_0(&_S126);
+    float2  _S123 = float2 {p_view_4.x, p_view_4.y};
+    float2  _S124 = make_float2 (1.0f, 0.0f);
+    DiffPair_vectorx3Cfloatx2C2x3E_0 _S125;
+    (&_S125)->primal_0 = _S123;
+    (&_S125)->differential_0 = _S124;
+    DiffPair_float_0 _S126 = s_fwd_length_impl_0(&_S125);
+    float _S127 = p_view_4.z;
     DiffPair_float_0 _S128;
-    (&_S128)->primal_0 = _S127.primal_0;
-    (&_S128)->differential_0 = _S127.differential_0;
+    (&_S128)->primal_0 = _S126.primal_0;
+    (&_S128)->differential_0 = _S126.differential_0;
     DiffPair_float_0 _S129;
-    (&_S129)->primal_0 = _S105;
+    (&_S129)->primal_0 = _S127;
     (&_S129)->differential_0 = 0.0f;
     DiffPair_float_0 _S130 = _d_atan2_0(&_S128, &_S129);
+    float k_2;
+    float s_diff_k_0;
     if((_S130.primal_0) < 0.00100000004749745f)
     {
         float _S131 = _S130.differential_0 * _S130.primal_0;
         float _S132 = 1.0f - _S130.primal_0 * _S130.primal_0 / 3.0f;
-        float _S133 = ((0.0f - (_S131 + _S131) * 0.3333333432674408f) * _S105 - _S132 * 0.0f) / (_S105 * _S105);
-        k_1 = _S132 / _S105;
+        float _S133 = ((0.0f - (_S131 + _S131) * 0.3333333432674408f) * _S127 - _S132 * 0.0f) / (_S127 * _S127);
+        k_2 = _S132 / _S127;
         s_diff_k_0 = _S133;
     }
     else
     {
-        float _S134 = (_S130.differential_0 * _S127.primal_0 - _S130.primal_0 * _S127.differential_0) / (_S127.primal_0 * _S127.primal_0);
-        k_1 = _S130.primal_0 / _S127.primal_0;
+        float _S134 = (_S130.differential_0 * _S126.primal_0 - _S130.primal_0 * _S126.differential_0) / (_S126.primal_0 * _S126.primal_0);
+        k_2 = _S130.primal_0 / _S126.primal_0;
         s_diff_k_0 = _S134;
     }
-    float2  _S135 = _S101 * make_float2 (k_1);
-    float2  _S136 = _S125 * make_float2 (k_1) + make_float2 (s_diff_k_0) * _S101;
-    float u_9 = _S135.x;
-    float s_diff_u_4 = _S136.x;
-    float v_9 = _S135.y;
-    float s_diff_v_4 = _S136.y;
-    float _S137 = s_diff_u_4 * u_9;
-    float _S138 = s_diff_v_4 * v_9;
-    float r2_9 = u_9 * u_9 + v_9 * v_9;
-    float s_diff_r2_10 = _S137 + _S137 + (_S138 + _S138);
-    float _S139 = dist_coeffs_4[int(2)] + r2_9 * dist_coeffs_4[int(3)];
-    float _S140 = dist_coeffs_4[int(1)] + r2_9 * _S139;
-    float _S141 = dist_coeffs_4[int(0)] + r2_9 * _S140;
-    float2  _S142 = _S136 * make_float2 (1.0f + r2_9 * _S141) + make_float2 (s_diff_r2_10 * _S141 + (s_diff_r2_10 * _S140 + (s_diff_r2_10 * _S139 + s_diff_r2_10 * dist_coeffs_4[int(3)] * r2_9) * r2_9) * r2_9) * _S135 + make_float2 (s_diff_u_4 * _S120 * v_9 + s_diff_v_4 * (_S120 * u_9) + (s_diff_r2_10 + (s_diff_u_4 * 2.0f * u_9 + s_diff_u_4 * (2.0f * u_9))) * dist_coeffs_4[int(5)] + s_diff_r2_10 * dist_coeffs_4[int(6)], s_diff_u_4 * _S121 * v_9 + s_diff_v_4 * (_S121 * u_9) + (s_diff_r2_10 + (s_diff_v_4 * 2.0f * v_9 + s_diff_v_4 * (2.0f * v_9))) * dist_coeffs_4[int(4)] + s_diff_r2_10 * dist_coeffs_4[int(7)]);
-    float2  _S143 = _S142 + make_float2 (_S142.x * dist_coeffs_4[int(8)] + _S142.y * dist_coeffs_4[int(9)], 0.0f);
-    float _S144 = _S143.y * fy_1;
-    *&(((&J_1)->rows + (int(0)))->y) = _S143.x * fx_1;
-    *&(((&J_1)->rows + (int(1)))->y) = _S144;
-    float2  _S145 = make_float2 (0.0f, 0.0f);
-    DiffPair_vectorx3Cfloatx2C2x3E_0 _S146;
-    (&_S146)->primal_0 = _S101;
-    (&_S146)->differential_0 = _S145;
-    DiffPair_float_0 _S147 = s_fwd_length_impl_0(&_S146);
-    DiffPair_float_0 _S148;
-    (&_S148)->primal_0 = _S147.primal_0;
-    (&_S148)->differential_0 = _S147.differential_0;
-    DiffPair_float_0 _S149;
-    (&_S149)->primal_0 = _S105;
-    (&_S149)->differential_0 = 1.0f;
-    DiffPair_float_0 _S150 = _d_atan2_0(&_S148, &_S149);
-    if((_S150.primal_0) < 0.00100000004749745f)
+    float2  _S135 = _S123 * make_float2 (k_2);
+    float2  _S136 = _S124 * make_float2 (k_2) + make_float2 (s_diff_k_0) * _S123;
+    float u_10 = _S135.x;
+    float s_diff_u_3 = _S136.x;
+    float v_10 = _S135.y;
+    float s_diff_v_3 = _S136.y;
+    float _S137 = s_diff_u_3 * u_10;
+    float _S138 = s_diff_v_3 * v_10;
+    float r2_10 = u_10 * u_10 + v_10 * v_10;
+    float s_diff_r2_11 = _S137 + _S137 + (_S138 + _S138);
+    float _S139 = dist_coeffs_5[int(2)] + r2_10 * dist_coeffs_5[int(3)];
+    float _S140 = dist_coeffs_5[int(1)] + r2_10 * _S139;
+    float _S141 = dist_coeffs_5[int(0)] + r2_10 * _S140;
+    float _S142 = 2.0f * dist_coeffs_5[int(4)];
+    float _S143 = 2.0f * dist_coeffs_5[int(5)];
+    float2  _S144 = _S136 * make_float2 (1.0f + r2_10 * _S141) + make_float2 (s_diff_r2_11 * _S141 + (s_diff_r2_11 * _S140 + (s_diff_r2_11 * _S139 + s_diff_r2_11 * dist_coeffs_5[int(3)] * r2_10) * r2_10) * r2_10) * _S135 + make_float2 (s_diff_u_3 * _S142 * v_10 + s_diff_v_3 * (_S142 * u_10) + (s_diff_r2_11 + (s_diff_u_3 * 2.0f * u_10 + s_diff_u_3 * (2.0f * u_10))) * dist_coeffs_5[int(5)] + s_diff_r2_11 * dist_coeffs_5[int(6)], s_diff_u_3 * _S143 * v_10 + s_diff_v_3 * (_S143 * u_10) + (s_diff_r2_11 + (s_diff_v_3 * 2.0f * v_10 + s_diff_v_3 * (2.0f * v_10))) * dist_coeffs_5[int(4)] + s_diff_r2_11 * dist_coeffs_5[int(7)]);
+    float2  _S145 = _S144 + make_float2 (_S144.x * dist_coeffs_5[int(8)] + _S144.y * dist_coeffs_5[int(9)], 0.0f);
+    float fx_1 = intrins_4.x;
+    float fy_1 = intrins_4.y;
+    float _S146 = _S145.y * fy_1;
+    *&(((&J_1)->rows + (int(0)))->x) = _S145.x * fx_1;
+    *&(((&J_1)->rows + (int(1)))->x) = _S146;
+    float2  _S147 = make_float2 (0.0f, 1.0f);
+    DiffPair_vectorx3Cfloatx2C2x3E_0 _S148;
+    (&_S148)->primal_0 = _S123;
+    (&_S148)->differential_0 = _S147;
+    DiffPair_float_0 _S149 = s_fwd_length_impl_0(&_S148);
+    DiffPair_float_0 _S150;
+    (&_S150)->primal_0 = _S149.primal_0;
+    (&_S150)->differential_0 = _S149.differential_0;
+    DiffPair_float_0 _S151;
+    (&_S151)->primal_0 = _S127;
+    (&_S151)->differential_0 = 0.0f;
+    DiffPair_float_0 _S152 = _d_atan2_0(&_S150, &_S151);
+    if((_S152.primal_0) < 0.00100000004749745f)
     {
-        float _S151 = _S150.differential_0 * _S150.primal_0;
-        float _S152 = 1.0f - _S150.primal_0 * _S150.primal_0 / 3.0f;
-        float _S153 = ((0.0f - (_S151 + _S151) * 0.3333333432674408f) * _S105 - _S152) / (_S105 * _S105);
-        k_1 = _S152 / _S105;
-        s_diff_k_0 = _S153;
+        float _S153 = _S152.differential_0 * _S152.primal_0;
+        float _S154 = 1.0f - _S152.primal_0 * _S152.primal_0 / 3.0f;
+        float _S155 = ((0.0f - (_S153 + _S153) * 0.3333333432674408f) * _S127 - _S154 * 0.0f) / (_S127 * _S127);
+        k_2 = _S154 / _S127;
+        s_diff_k_0 = _S155;
     }
     else
     {
-        float _S154 = (_S150.differential_0 * _S147.primal_0 - _S150.primal_0 * _S147.differential_0) / (_S147.primal_0 * _S147.primal_0);
-        k_1 = _S150.primal_0 / _S147.primal_0;
-        s_diff_k_0 = _S154;
+        float _S156 = (_S152.differential_0 * _S149.primal_0 - _S152.primal_0 * _S149.differential_0) / (_S149.primal_0 * _S149.primal_0);
+        k_2 = _S152.primal_0 / _S149.primal_0;
+        s_diff_k_0 = _S156;
     }
-    float2  _S155 = _S101 * make_float2 (k_1);
-    float2  _S156 = _S145 * make_float2 (k_1) + make_float2 (s_diff_k_0) * _S101;
-    float u_10 = _S155.x;
-    float s_diff_u_5 = _S156.x;
-    float v_10 = _S155.y;
-    float s_diff_v_5 = _S156.y;
-    float _S157 = s_diff_u_5 * u_10;
-    float _S158 = s_diff_v_5 * v_10;
-    float r2_10 = u_10 * u_10 + v_10 * v_10;
-    float s_diff_r2_11 = _S157 + _S157 + (_S158 + _S158);
-    float _S159 = dist_coeffs_4[int(2)] + r2_10 * dist_coeffs_4[int(3)];
-    float _S160 = dist_coeffs_4[int(1)] + r2_10 * _S159;
-    float _S161 = dist_coeffs_4[int(0)] + r2_10 * _S160;
-    float2  _S162 = _S156 * make_float2 (1.0f + r2_10 * _S161) + make_float2 (s_diff_r2_11 * _S161 + (s_diff_r2_11 * _S160 + (s_diff_r2_11 * _S159 + s_diff_r2_11 * dist_coeffs_4[int(3)] * r2_10) * r2_10) * r2_10) * _S155 + make_float2 (s_diff_u_5 * _S120 * v_10 + s_diff_v_5 * (_S120 * u_10) + (s_diff_r2_11 + (s_diff_u_5 * 2.0f * u_10 + s_diff_u_5 * (2.0f * u_10))) * dist_coeffs_4[int(5)] + s_diff_r2_11 * dist_coeffs_4[int(6)], s_diff_u_5 * _S121 * v_10 + s_diff_v_5 * (_S121 * u_10) + (s_diff_r2_11 + (s_diff_v_5 * 2.0f * v_10 + s_diff_v_5 * (2.0f * v_10))) * dist_coeffs_4[int(4)] + s_diff_r2_11 * dist_coeffs_4[int(7)]);
-    float2  _S163 = _S162 + make_float2 (_S162.x * dist_coeffs_4[int(8)] + _S162.y * dist_coeffs_4[int(9)], 0.0f);
-    float _S164 = _S163.y * fy_1;
-    *&(((&J_1)->rows + (int(0)))->z) = _S163.x * fx_1;
-    *&(((&J_1)->rows + (int(1)))->z) = _S164;
+    float2  _S157 = _S123 * make_float2 (k_2);
+    float2  _S158 = _S147 * make_float2 (k_2) + make_float2 (s_diff_k_0) * _S123;
+    float u_11 = _S157.x;
+    float s_diff_u_4 = _S158.x;
+    float v_11 = _S157.y;
+    float s_diff_v_4 = _S158.y;
+    float _S159 = s_diff_u_4 * u_11;
+    float _S160 = s_diff_v_4 * v_11;
+    float r2_11 = u_11 * u_11 + v_11 * v_11;
+    float s_diff_r2_12 = _S159 + _S159 + (_S160 + _S160);
+    float _S161 = dist_coeffs_5[int(2)] + r2_11 * dist_coeffs_5[int(3)];
+    float _S162 = dist_coeffs_5[int(1)] + r2_11 * _S161;
+    float _S163 = dist_coeffs_5[int(0)] + r2_11 * _S162;
+    float2  _S164 = _S158 * make_float2 (1.0f + r2_11 * _S163) + make_float2 (s_diff_r2_12 * _S163 + (s_diff_r2_12 * _S162 + (s_diff_r2_12 * _S161 + s_diff_r2_12 * dist_coeffs_5[int(3)] * r2_11) * r2_11) * r2_11) * _S157 + make_float2 (s_diff_u_4 * _S142 * v_11 + s_diff_v_4 * (_S142 * u_11) + (s_diff_r2_12 + (s_diff_u_4 * 2.0f * u_11 + s_diff_u_4 * (2.0f * u_11))) * dist_coeffs_5[int(5)] + s_diff_r2_12 * dist_coeffs_5[int(6)], s_diff_u_4 * _S143 * v_11 + s_diff_v_4 * (_S143 * u_11) + (s_diff_r2_12 + (s_diff_v_4 * 2.0f * v_11 + s_diff_v_4 * (2.0f * v_11))) * dist_coeffs_5[int(4)] + s_diff_r2_12 * dist_coeffs_5[int(7)]);
+    float2  _S165 = _S164 + make_float2 (_S164.x * dist_coeffs_5[int(8)] + _S164.y * dist_coeffs_5[int(9)], 0.0f);
+    float _S166 = _S165.y * fy_1;
+    *&(((&J_1)->rows + (int(0)))->y) = _S165.x * fx_1;
+    *&(((&J_1)->rows + (int(1)))->y) = _S166;
+    float2  _S167 = make_float2 (0.0f, 0.0f);
+    DiffPair_vectorx3Cfloatx2C2x3E_0 _S168;
+    (&_S168)->primal_0 = _S123;
+    (&_S168)->differential_0 = _S167;
+    DiffPair_float_0 _S169 = s_fwd_length_impl_0(&_S168);
+    DiffPair_float_0 _S170;
+    (&_S170)->primal_0 = _S169.primal_0;
+    (&_S170)->differential_0 = _S169.differential_0;
+    DiffPair_float_0 _S171;
+    (&_S171)->primal_0 = _S127;
+    (&_S171)->differential_0 = 1.0f;
+    DiffPair_float_0 _S172 = _d_atan2_0(&_S170, &_S171);
+    if((_S172.primal_0) < 0.00100000004749745f)
+    {
+        float _S173 = _S172.differential_0 * _S172.primal_0;
+        float _S174 = 1.0f - _S172.primal_0 * _S172.primal_0 / 3.0f;
+        float _S175 = ((0.0f - (_S173 + _S173) * 0.3333333432674408f) * _S127 - _S174) / (_S127 * _S127);
+        k_2 = _S174 / _S127;
+        s_diff_k_0 = _S175;
+    }
+    else
+    {
+        float _S176 = (_S172.differential_0 * _S169.primal_0 - _S172.primal_0 * _S169.differential_0) / (_S169.primal_0 * _S169.primal_0);
+        k_2 = _S172.primal_0 / _S169.primal_0;
+        s_diff_k_0 = _S176;
+    }
+    float2  _S177 = _S123 * make_float2 (k_2);
+    float2  _S178 = _S167 * make_float2 (k_2) + make_float2 (s_diff_k_0) * _S123;
+    float u_12 = _S177.x;
+    float s_diff_u_5 = _S178.x;
+    float v_12 = _S177.y;
+    float s_diff_v_5 = _S178.y;
+    float _S179 = s_diff_u_5 * u_12;
+    float _S180 = s_diff_v_5 * v_12;
+    float r2_12 = u_12 * u_12 + v_12 * v_12;
+    float s_diff_r2_13 = _S179 + _S179 + (_S180 + _S180);
+    float _S181 = dist_coeffs_5[int(2)] + r2_12 * dist_coeffs_5[int(3)];
+    float _S182 = dist_coeffs_5[int(1)] + r2_12 * _S181;
+    float _S183 = dist_coeffs_5[int(0)] + r2_12 * _S182;
+    float2  _S184 = _S178 * make_float2 (1.0f + r2_12 * _S183) + make_float2 (s_diff_r2_13 * _S183 + (s_diff_r2_13 * _S182 + (s_diff_r2_13 * _S181 + s_diff_r2_13 * dist_coeffs_5[int(3)] * r2_12) * r2_12) * r2_12) * _S177 + make_float2 (s_diff_u_5 * _S142 * v_12 + s_diff_v_5 * (_S142 * u_12) + (s_diff_r2_13 + (s_diff_u_5 * 2.0f * u_12 + s_diff_u_5 * (2.0f * u_12))) * dist_coeffs_5[int(5)] + s_diff_r2_13 * dist_coeffs_5[int(6)], s_diff_u_5 * _S143 * v_12 + s_diff_v_5 * (_S143 * u_12) + (s_diff_r2_13 + (s_diff_v_5 * 2.0f * v_12 + s_diff_v_5 * (2.0f * v_12))) * dist_coeffs_5[int(4)] + s_diff_r2_13 * dist_coeffs_5[int(7)]);
+    float2  _S185 = _S184 + make_float2 (_S184.x * dist_coeffs_5[int(8)] + _S184.y * dist_coeffs_5[int(9)], 0.0f);
+    float _S186 = _S185.y * fy_1;
+    *&(((&J_1)->rows + (int(0)))->z) = _S185.x * fx_1;
+    *&(((&J_1)->rows + (int(1)))->z) = _S186;
     return J_1;
 }
 
-inline __device__ float2  distort_point(float2  uv_3, bool is_fisheye_0, FixedArray<float, 10>  dist_coeffs_5)
+inline __device__ Matrix<float, 2, 3>  equisolid_proj_jac(float3  p_view_5, float4  intrins_5, FixedArray<float, 10>  dist_coeffs_6)
 {
-    float2  _S165;
-    if(is_fisheye_0)
+    Matrix<float, 2, 3>  J_2;
+    float2  _S187 = float2 {p_view_5.x, p_view_5.y};
+    float2  _S188 = make_float2 (1.0f, 0.0f);
+    DiffPair_vectorx3Cfloatx2C2x3E_0 _S189;
+    (&_S189)->primal_0 = _S187;
+    (&_S189)->differential_0 = _S188;
+    DiffPair_float_0 _S190 = s_fwd_length_impl_0(&_S189);
+    float _S191 = p_view_5.z;
+    DiffPair_float_0 _S192;
+    (&_S192)->primal_0 = _S190.primal_0;
+    (&_S192)->differential_0 = _S190.differential_0;
+    DiffPair_float_0 _S193;
+    (&_S193)->primal_0 = _S191;
+    (&_S193)->differential_0 = 0.0f;
+    DiffPair_float_0 _S194 = _d_atan2_0(&_S192, &_S193);
+    float k_3;
+    float s_diff_k_1;
+    if((_S190.primal_0) < 9.99999997475242708e-07f)
     {
-        float r_4 = length_0(uv_3);
-        float theta_1 = (F32_atan((r_4)));
-        float _S166;
-        if(r_4 < 0.00100000004749745f)
-        {
-            _S166 = 1.0f - r_4 * r_4 / 3.0f;
-        }
-        else
-        {
-            _S166 = theta_1 / r_4;
-        }
-        _S165 = uv_3 * make_float2 (_S166);
+        float _S195 = _S194.differential_0 * _S194.primal_0;
+        float _S196 = 1.0f - _S194.primal_0 * _S194.primal_0 / 24.0f;
+        float _S197 = ((0.0f - (_S195 + _S195) * 0.0416666679084301f) * _S191 - _S196 * 0.0f) / (_S191 * _S191);
+        k_3 = _S196 / _S191;
+        s_diff_k_1 = _S197;
     }
     else
     {
-        _S165 = uv_3;
+        float _S198 = _S194.differential_0 * 0.5f;
+        DiffPair_float_0 _S199;
+        (&_S199)->primal_0 = 0.5f * _S194.primal_0;
+        (&_S199)->differential_0 = _S198;
+        DiffPair_float_0 _S200 = _d_sin_0(&_S199);
+        float _S201 = 2.0f * _S200.primal_0;
+        float _S202 = (_S200.differential_0 * 2.0f * _S190.primal_0 - _S201 * _S190.differential_0) / (_S190.primal_0 * _S190.primal_0);
+        k_3 = _S201 / _S190.primal_0;
+        s_diff_k_1 = _S202;
     }
-    float u_11 = _S165.x;
-    float v_11 = _S165.y;
-    float r2_11 = u_11 * u_11 + v_11 * v_11;
-    float2  _S167 = _S165 * make_float2 (1.0f + r2_11 * (dist_coeffs_5[int(0)] + r2_11 * (dist_coeffs_5[int(1)] + r2_11 * (dist_coeffs_5[int(2)] + r2_11 * dist_coeffs_5[int(3)])))) + make_float2 (2.0f * dist_coeffs_5[int(4)] * u_11 * v_11 + dist_coeffs_5[int(5)] * (r2_11 + 2.0f * u_11 * u_11) + dist_coeffs_5[int(6)] * r2_11, 2.0f * dist_coeffs_5[int(5)] * u_11 * v_11 + dist_coeffs_5[int(4)] * (r2_11 + 2.0f * v_11 * v_11) + dist_coeffs_5[int(7)] * r2_11);
-    return _S167 + make_float2 (dist_coeffs_5[int(8)] * _S167.x + dist_coeffs_5[int(9)] * _S167.y, 0.0f);
+    float2  _S203 = _S187 * make_float2 (k_3);
+    float2  _S204 = _S188 * make_float2 (k_3) + make_float2 (s_diff_k_1) * _S187;
+    float u_13 = _S203.x;
+    float s_diff_u_6 = _S204.x;
+    float v_13 = _S203.y;
+    float s_diff_v_6 = _S204.y;
+    float _S205 = s_diff_u_6 * u_13;
+    float _S206 = s_diff_v_6 * v_13;
+    float r2_13 = u_13 * u_13 + v_13 * v_13;
+    float s_diff_r2_14 = _S205 + _S205 + (_S206 + _S206);
+    float _S207 = dist_coeffs_6[int(2)] + r2_13 * dist_coeffs_6[int(3)];
+    float _S208 = dist_coeffs_6[int(1)] + r2_13 * _S207;
+    float _S209 = dist_coeffs_6[int(0)] + r2_13 * _S208;
+    float _S210 = 2.0f * dist_coeffs_6[int(4)];
+    float _S211 = 2.0f * dist_coeffs_6[int(5)];
+    float2  _S212 = _S204 * make_float2 (1.0f + r2_13 * _S209) + make_float2 (s_diff_r2_14 * _S209 + (s_diff_r2_14 * _S208 + (s_diff_r2_14 * _S207 + s_diff_r2_14 * dist_coeffs_6[int(3)] * r2_13) * r2_13) * r2_13) * _S203 + make_float2 (s_diff_u_6 * _S210 * v_13 + s_diff_v_6 * (_S210 * u_13) + (s_diff_r2_14 + (s_diff_u_6 * 2.0f * u_13 + s_diff_u_6 * (2.0f * u_13))) * dist_coeffs_6[int(5)] + s_diff_r2_14 * dist_coeffs_6[int(6)], s_diff_u_6 * _S211 * v_13 + s_diff_v_6 * (_S211 * u_13) + (s_diff_r2_14 + (s_diff_v_6 * 2.0f * v_13 + s_diff_v_6 * (2.0f * v_13))) * dist_coeffs_6[int(4)] + s_diff_r2_14 * dist_coeffs_6[int(7)]);
+    float2  _S213 = _S212 + make_float2 (_S212.x * dist_coeffs_6[int(8)] + _S212.y * dist_coeffs_6[int(9)], 0.0f);
+    float fx_2 = intrins_5.x;
+    float fy_2 = intrins_5.y;
+    float _S214 = _S213.y * fy_2;
+    *&(((&J_2)->rows + (int(0)))->x) = _S213.x * fx_2;
+    *&(((&J_2)->rows + (int(1)))->x) = _S214;
+    float2  _S215 = make_float2 (0.0f, 1.0f);
+    DiffPair_vectorx3Cfloatx2C2x3E_0 _S216;
+    (&_S216)->primal_0 = _S187;
+    (&_S216)->differential_0 = _S215;
+    DiffPair_float_0 _S217 = s_fwd_length_impl_0(&_S216);
+    DiffPair_float_0 _S218;
+    (&_S218)->primal_0 = _S217.primal_0;
+    (&_S218)->differential_0 = _S217.differential_0;
+    DiffPair_float_0 _S219;
+    (&_S219)->primal_0 = _S191;
+    (&_S219)->differential_0 = 0.0f;
+    DiffPair_float_0 _S220 = _d_atan2_0(&_S218, &_S219);
+    if((_S217.primal_0) < 9.99999997475242708e-07f)
+    {
+        float _S221 = _S220.differential_0 * _S220.primal_0;
+        float _S222 = 1.0f - _S220.primal_0 * _S220.primal_0 / 24.0f;
+        float _S223 = ((0.0f - (_S221 + _S221) * 0.0416666679084301f) * _S191 - _S222 * 0.0f) / (_S191 * _S191);
+        k_3 = _S222 / _S191;
+        s_diff_k_1 = _S223;
+    }
+    else
+    {
+        float _S224 = _S220.differential_0 * 0.5f;
+        DiffPair_float_0 _S225;
+        (&_S225)->primal_0 = 0.5f * _S220.primal_0;
+        (&_S225)->differential_0 = _S224;
+        DiffPair_float_0 _S226 = _d_sin_0(&_S225);
+        float _S227 = 2.0f * _S226.primal_0;
+        float _S228 = (_S226.differential_0 * 2.0f * _S217.primal_0 - _S227 * _S217.differential_0) / (_S217.primal_0 * _S217.primal_0);
+        k_3 = _S227 / _S217.primal_0;
+        s_diff_k_1 = _S228;
+    }
+    float2  _S229 = _S187 * make_float2 (k_3);
+    float2  _S230 = _S215 * make_float2 (k_3) + make_float2 (s_diff_k_1) * _S187;
+    float u_14 = _S229.x;
+    float s_diff_u_7 = _S230.x;
+    float v_14 = _S229.y;
+    float s_diff_v_7 = _S230.y;
+    float _S231 = s_diff_u_7 * u_14;
+    float _S232 = s_diff_v_7 * v_14;
+    float r2_14 = u_14 * u_14 + v_14 * v_14;
+    float s_diff_r2_15 = _S231 + _S231 + (_S232 + _S232);
+    float _S233 = dist_coeffs_6[int(2)] + r2_14 * dist_coeffs_6[int(3)];
+    float _S234 = dist_coeffs_6[int(1)] + r2_14 * _S233;
+    float _S235 = dist_coeffs_6[int(0)] + r2_14 * _S234;
+    float2  _S236 = _S230 * make_float2 (1.0f + r2_14 * _S235) + make_float2 (s_diff_r2_15 * _S235 + (s_diff_r2_15 * _S234 + (s_diff_r2_15 * _S233 + s_diff_r2_15 * dist_coeffs_6[int(3)] * r2_14) * r2_14) * r2_14) * _S229 + make_float2 (s_diff_u_7 * _S210 * v_14 + s_diff_v_7 * (_S210 * u_14) + (s_diff_r2_15 + (s_diff_u_7 * 2.0f * u_14 + s_diff_u_7 * (2.0f * u_14))) * dist_coeffs_6[int(5)] + s_diff_r2_15 * dist_coeffs_6[int(6)], s_diff_u_7 * _S211 * v_14 + s_diff_v_7 * (_S211 * u_14) + (s_diff_r2_15 + (s_diff_v_7 * 2.0f * v_14 + s_diff_v_7 * (2.0f * v_14))) * dist_coeffs_6[int(4)] + s_diff_r2_15 * dist_coeffs_6[int(7)]);
+    float2  _S237 = _S236 + make_float2 (_S236.x * dist_coeffs_6[int(8)] + _S236.y * dist_coeffs_6[int(9)], 0.0f);
+    float _S238 = _S237.y * fy_2;
+    *&(((&J_2)->rows + (int(0)))->y) = _S237.x * fx_2;
+    *&(((&J_2)->rows + (int(1)))->y) = _S238;
+    float2  _S239 = make_float2 (0.0f, 0.0f);
+    DiffPair_vectorx3Cfloatx2C2x3E_0 _S240;
+    (&_S240)->primal_0 = _S187;
+    (&_S240)->differential_0 = _S239;
+    DiffPair_float_0 _S241 = s_fwd_length_impl_0(&_S240);
+    DiffPair_float_0 _S242;
+    (&_S242)->primal_0 = _S241.primal_0;
+    (&_S242)->differential_0 = _S241.differential_0;
+    DiffPair_float_0 _S243;
+    (&_S243)->primal_0 = _S191;
+    (&_S243)->differential_0 = 1.0f;
+    DiffPair_float_0 _S244 = _d_atan2_0(&_S242, &_S243);
+    if((_S241.primal_0) < 9.99999997475242708e-07f)
+    {
+        float _S245 = _S244.differential_0 * _S244.primal_0;
+        float _S246 = 1.0f - _S244.primal_0 * _S244.primal_0 / 24.0f;
+        float _S247 = ((0.0f - (_S245 + _S245) * 0.0416666679084301f) * _S191 - _S246) / (_S191 * _S191);
+        k_3 = _S246 / _S191;
+        s_diff_k_1 = _S247;
+    }
+    else
+    {
+        float _S248 = _S244.differential_0 * 0.5f;
+        DiffPair_float_0 _S249;
+        (&_S249)->primal_0 = 0.5f * _S244.primal_0;
+        (&_S249)->differential_0 = _S248;
+        DiffPair_float_0 _S250 = _d_sin_0(&_S249);
+        float _S251 = 2.0f * _S250.primal_0;
+        float _S252 = (_S250.differential_0 * 2.0f * _S241.primal_0 - _S251 * _S241.differential_0) / (_S241.primal_0 * _S241.primal_0);
+        k_3 = _S251 / _S241.primal_0;
+        s_diff_k_1 = _S252;
+    }
+    float2  _S253 = _S187 * make_float2 (k_3);
+    float2  _S254 = _S239 * make_float2 (k_3) + make_float2 (s_diff_k_1) * _S187;
+    float u_15 = _S253.x;
+    float s_diff_u_8 = _S254.x;
+    float v_15 = _S253.y;
+    float s_diff_v_8 = _S254.y;
+    float _S255 = s_diff_u_8 * u_15;
+    float _S256 = s_diff_v_8 * v_15;
+    float r2_15 = u_15 * u_15 + v_15 * v_15;
+    float s_diff_r2_16 = _S255 + _S255 + (_S256 + _S256);
+    float _S257 = dist_coeffs_6[int(2)] + r2_15 * dist_coeffs_6[int(3)];
+    float _S258 = dist_coeffs_6[int(1)] + r2_15 * _S257;
+    float _S259 = dist_coeffs_6[int(0)] + r2_15 * _S258;
+    float2  _S260 = _S254 * make_float2 (1.0f + r2_15 * _S259) + make_float2 (s_diff_r2_16 * _S259 + (s_diff_r2_16 * _S258 + (s_diff_r2_16 * _S257 + s_diff_r2_16 * dist_coeffs_6[int(3)] * r2_15) * r2_15) * r2_15) * _S253 + make_float2 (s_diff_u_8 * _S210 * v_15 + s_diff_v_8 * (_S210 * u_15) + (s_diff_r2_16 + (s_diff_u_8 * 2.0f * u_15 + s_diff_u_8 * (2.0f * u_15))) * dist_coeffs_6[int(5)] + s_diff_r2_16 * dist_coeffs_6[int(6)], s_diff_u_8 * _S211 * v_15 + s_diff_v_8 * (_S211 * u_15) + (s_diff_r2_16 + (s_diff_v_8 * 2.0f * v_15 + s_diff_v_8 * (2.0f * v_15))) * dist_coeffs_6[int(4)] + s_diff_r2_16 * dist_coeffs_6[int(7)]);
+    float2  _S261 = _S260 + make_float2 (_S260.x * dist_coeffs_6[int(8)] + _S260.y * dist_coeffs_6[int(9)], 0.0f);
+    float _S262 = _S261.y * fy_2;
+    *&(((&J_2)->rows + (int(0)))->z) = _S261.x * fx_2;
+    *&(((&J_2)->rows + (int(1)))->z) = _S262;
+    return J_2;
 }
 
-inline __device__ bool undistort_point_0(float2  uv_4, FixedArray<float, 10>  * dist_coeffs_6, int maxiter_0, float2  * uv_undist_0)
+inline __device__ float2  distort_point(float2  uv_4, int camera_model_0, FixedArray<float, 10>  dist_coeffs_7)
+{
+    float k_4;
+    float2  _S263;
+    if(camera_model_0 == int(1))
+    {
+        float r_5 = length_0(uv_4);
+        float theta_2 = (F32_atan((r_5)));
+        if(r_5 < 0.00100000004749745f)
+        {
+            k_4 = 1.0f - theta_2 * theta_2 / 6.0f;
+        }
+        else
+        {
+            k_4 = theta_2 / r_5;
+        }
+        _S263 = uv_4 * make_float2 (k_4);
+    }
+    else
+    {
+        if(camera_model_0 == int(2))
+        {
+            float r_6 = length_0(uv_4);
+            float theta_3 = (F32_atan((r_6)));
+            if(r_6 < 0.00100000004749745f)
+            {
+                k_4 = 1.0f - theta_3 * theta_3 / 24.0f;
+            }
+            else
+            {
+                k_4 = 2.0f * (F32_sin((0.5f * theta_3))) / r_6;
+            }
+            _S263 = uv_4 * make_float2 (k_4);
+        }
+        else
+        {
+            _S263 = uv_4;
+        }
+    }
+    float u_16 = _S263.x;
+    float v_16 = _S263.y;
+    float r2_16 = u_16 * u_16 + v_16 * v_16;
+    float2  _S264 = _S263 * make_float2 (1.0f + r2_16 * (dist_coeffs_7[int(0)] + r2_16 * (dist_coeffs_7[int(1)] + r2_16 * (dist_coeffs_7[int(2)] + r2_16 * dist_coeffs_7[int(3)])))) + make_float2 (2.0f * dist_coeffs_7[int(4)] * u_16 * v_16 + dist_coeffs_7[int(5)] * (r2_16 + 2.0f * u_16 * u_16) + dist_coeffs_7[int(6)] * r2_16, 2.0f * dist_coeffs_7[int(5)] * u_16 * v_16 + dist_coeffs_7[int(4)] * (r2_16 + 2.0f * v_16 * v_16) + dist_coeffs_7[int(7)] * r2_16);
+    return _S264 + make_float2 (dist_coeffs_7[int(8)] * _S264.x + dist_coeffs_7[int(9)] * _S264.y, 0.0f);
+}
+
+inline __device__ bool undistort_point_0(float2  uv_5, FixedArray<float, 10>  * dist_coeffs_8, int maxiter_0, float2  * uv_undist_0)
 {
     int i_5 = int(0);
-    float2  q_0 = uv_4;
+    float2  q_0 = uv_5;
     for(;;)
     {
         if(i_5 < maxiter_0)
@@ -873,157 +1117,167 @@ inline __device__ bool undistort_point_0(float2  uv_4, FixedArray<float, 10>  * 
         {
             break;
         }
-        float _S168 = (*dist_coeffs_6)[int(3)];
-        float _S169 = (*dist_coeffs_6)[int(4)];
-        float _S170 = (*dist_coeffs_6)[int(5)];
-        float _S171 = (*dist_coeffs_6)[int(6)];
-        float _S172 = (*dist_coeffs_6)[int(7)];
-        float _S173 = (*dist_coeffs_6)[int(8)];
-        float _S174 = (*dist_coeffs_6)[int(9)];
-        float u_12 = q_0.x;
-        float v_12 = q_0.y;
-        float r2_12 = u_12 * u_12 + v_12 * v_12;
-        float _S175 = (*dist_coeffs_6)[int(2)] + r2_12 * (*dist_coeffs_6)[int(3)];
-        float _S176 = (*dist_coeffs_6)[int(1)] + r2_12 * _S175;
-        float _S177 = (*dist_coeffs_6)[int(0)] + r2_12 * _S176;
-        float radial_3 = 1.0f + r2_12 * _S177;
-        float _S178 = 2.0f * (*dist_coeffs_6)[int(4)];
-        float _S179 = _S178 * u_12;
-        float _S180 = 2.0f * u_12;
-        float _S181 = 2.0f * (*dist_coeffs_6)[int(5)];
-        float _S182 = _S181 * u_12;
-        float _S183 = 2.0f * v_12;
-        float2  _S184 = q_0 * make_float2 (radial_3) + make_float2 (_S179 * v_12 + (*dist_coeffs_6)[int(5)] * (r2_12 + _S180 * u_12) + (*dist_coeffs_6)[int(6)] * r2_12, _S182 * v_12 + (*dist_coeffs_6)[int(4)] * (r2_12 + _S183 * v_12) + (*dist_coeffs_6)[int(7)] * r2_12);
-        float2  r_5 = _S184 + make_float2 ((*dist_coeffs_6)[int(8)] * _S184.x + (*dist_coeffs_6)[int(9)] * _S184.y, 0.0f) - uv_4;
-        float _S185 = 0.0f * v_12;
-        float s_diff_r2_12 = u_12 + u_12 + (_S185 + _S185);
-        float2  _S186 = make_float2 (1.0f, 0.0f) * make_float2 (radial_3) + make_float2 (s_diff_r2_12 * _S177 + (s_diff_r2_12 * _S176 + (s_diff_r2_12 * _S175 + s_diff_r2_12 * _S168 * r2_12) * r2_12) * r2_12) * q_0 + make_float2 (_S178 * v_12 + 0.0f * _S179 + (s_diff_r2_12 + (_S180 + _S180)) * _S170 + s_diff_r2_12 * _S171, _S181 * v_12 + 0.0f * _S182 + (s_diff_r2_12 + (_S185 + 0.0f * _S183)) * _S169 + s_diff_r2_12 * _S172);
-        float _S187 = 0.0f * u_12;
-        float s_diff_r2_13 = _S187 + _S187 + (v_12 + v_12);
-        float2  _S188 = make_float2 (0.0f, 1.0f) * make_float2 (radial_3) + make_float2 (s_diff_r2_13 * _S177 + (s_diff_r2_13 * _S176 + (s_diff_r2_13 * _S175 + s_diff_r2_13 * _S168 * r2_12) * r2_12) * r2_12) * q_0 + make_float2 (0.0f * _S178 * v_12 + _S179 + (s_diff_r2_13 + (_S187 + 0.0f * _S180)) * _S170 + s_diff_r2_13 * _S171, 0.0f * _S181 * v_12 + _S182 + (s_diff_r2_13 + (_S183 + _S183)) * _S169 + s_diff_r2_13 * _S172);
-        Matrix<float, 2, 2>  _S189 = transpose_1(makeMatrix<float, 2, 2> (_S186 + make_float2 (_S186.x * _S173 + _S186.y * _S174, 0.0f), _S188 + make_float2 (_S188.x * _S173 + _S188.y * _S174, 0.0f)));
-        float inv_det_0 = 1.0f / (_S189.rows[int(0)].x * _S189.rows[int(1)].y - _S189.rows[int(0)].y * _S189.rows[int(1)].x);
-        float _S190 = r_5.x;
-        float _S191 = r_5.y;
-        float2  q_1 = q_0 - make_float2 ((_S190 * _S189.rows[int(1)].y - _S191 * _S189.rows[int(0)].y) * inv_det_0, (- _S190 * _S189.rows[int(1)].x + _S191 * _S189.rows[int(0)].x) * inv_det_0);
+        float _S265 = (*dist_coeffs_8)[int(3)];
+        float _S266 = (*dist_coeffs_8)[int(4)];
+        float _S267 = (*dist_coeffs_8)[int(5)];
+        float _S268 = (*dist_coeffs_8)[int(6)];
+        float _S269 = (*dist_coeffs_8)[int(7)];
+        float _S270 = (*dist_coeffs_8)[int(8)];
+        float _S271 = (*dist_coeffs_8)[int(9)];
+        float u_17 = q_0.x;
+        float v_17 = q_0.y;
+        float r2_17 = u_17 * u_17 + v_17 * v_17;
+        float _S272 = (*dist_coeffs_8)[int(2)] + r2_17 * (*dist_coeffs_8)[int(3)];
+        float _S273 = (*dist_coeffs_8)[int(1)] + r2_17 * _S272;
+        float _S274 = (*dist_coeffs_8)[int(0)] + r2_17 * _S273;
+        float radial_4 = 1.0f + r2_17 * _S274;
+        float _S275 = 2.0f * (*dist_coeffs_8)[int(4)];
+        float _S276 = _S275 * u_17;
+        float _S277 = 2.0f * u_17;
+        float _S278 = 2.0f * (*dist_coeffs_8)[int(5)];
+        float _S279 = _S278 * u_17;
+        float _S280 = 2.0f * v_17;
+        float2  _S281 = q_0 * make_float2 (radial_4) + make_float2 (_S276 * v_17 + (*dist_coeffs_8)[int(5)] * (r2_17 + _S277 * u_17) + (*dist_coeffs_8)[int(6)] * r2_17, _S279 * v_17 + (*dist_coeffs_8)[int(4)] * (r2_17 + _S280 * v_17) + (*dist_coeffs_8)[int(7)] * r2_17);
+        float2  r_7 = _S281 + make_float2 ((*dist_coeffs_8)[int(8)] * _S281.x + (*dist_coeffs_8)[int(9)] * _S281.y, 0.0f) - uv_5;
+        float _S282 = 0.0f * v_17;
+        float s_diff_r2_17 = u_17 + u_17 + (_S282 + _S282);
+        float2  _S283 = make_float2 (1.0f, 0.0f) * make_float2 (radial_4) + make_float2 (s_diff_r2_17 * _S274 + (s_diff_r2_17 * _S273 + (s_diff_r2_17 * _S272 + s_diff_r2_17 * _S265 * r2_17) * r2_17) * r2_17) * q_0 + make_float2 (_S275 * v_17 + 0.0f * _S276 + (s_diff_r2_17 + (_S277 + _S277)) * _S267 + s_diff_r2_17 * _S268, _S278 * v_17 + 0.0f * _S279 + (s_diff_r2_17 + (_S282 + 0.0f * _S280)) * _S266 + s_diff_r2_17 * _S269);
+        float _S284 = 0.0f * u_17;
+        float s_diff_r2_18 = _S284 + _S284 + (v_17 + v_17);
+        float2  _S285 = make_float2 (0.0f, 1.0f) * make_float2 (radial_4) + make_float2 (s_diff_r2_18 * _S274 + (s_diff_r2_18 * _S273 + (s_diff_r2_18 * _S272 + s_diff_r2_18 * _S265 * r2_17) * r2_17) * r2_17) * q_0 + make_float2 (0.0f * _S275 * v_17 + _S276 + (s_diff_r2_18 + (_S284 + 0.0f * _S277)) * _S267 + s_diff_r2_18 * _S268, 0.0f * _S278 * v_17 + _S279 + (s_diff_r2_18 + (_S280 + _S280)) * _S266 + s_diff_r2_18 * _S269);
+        Matrix<float, 2, 2>  _S286 = transpose_1(makeMatrix<float, 2, 2> (_S283 + make_float2 (_S283.x * _S270 + _S283.y * _S271, 0.0f), _S285 + make_float2 (_S285.x * _S270 + _S285.y * _S271, 0.0f)));
+        float inv_det_0 = 1.0f / (_S286.rows[int(0)].x * _S286.rows[int(1)].y - _S286.rows[int(0)].y * _S286.rows[int(1)].x);
+        float _S287 = r_7.x;
+        float _S288 = r_7.y;
+        float2  q_1 = q_0 - make_float2 ((_S287 * _S286.rows[int(1)].y - _S288 * _S286.rows[int(0)].y) * inv_det_0, (- _S287 * _S286.rows[int(1)].x + _S288 * _S286.rows[int(0)].x) * inv_det_0);
         i_5 = i_5 + int(1);
         q_0 = q_1;
     }
     *uv_undist_0 = q_0;
-    float _S192 = (*dist_coeffs_6)[int(0)];
-    float _S193 = (*dist_coeffs_6)[int(1)];
-    float _S194 = (*dist_coeffs_6)[int(2)];
-    float _S195 = (*dist_coeffs_6)[int(3)];
-    float _S196 = (*dist_coeffs_6)[int(4)];
-    float _S197 = (*dist_coeffs_6)[int(5)];
-    float _S198 = (*dist_coeffs_6)[int(6)];
-    float _S199 = (*dist_coeffs_6)[int(7)];
-    float _S200 = (*dist_coeffs_6)[int(8)];
-    float _S201 = (*dist_coeffs_6)[int(9)];
-    float u_13 = q_0.x;
-    float v_13 = q_0.y;
-    float _S202 = 0.0f * v_13;
-    float r2_13 = u_13 * u_13 + v_13 * v_13;
-    float s_diff_r2_14 = u_13 + u_13 + (_S202 + _S202);
-    float _S203 = (*dist_coeffs_6)[int(2)] + r2_13 * (*dist_coeffs_6)[int(3)];
-    float _S204 = (*dist_coeffs_6)[int(1)] + r2_13 * _S203;
-    float _S205 = (*dist_coeffs_6)[int(0)] + r2_13 * _S204;
-    float radial_4 = 1.0f + r2_13 * _S205;
-    float _S206 = 2.0f * (*dist_coeffs_6)[int(4)];
-    float _S207 = _S206 * u_13;
-    float _S208 = 2.0f * u_13;
-    float _S209 = 2.0f * (*dist_coeffs_6)[int(5)];
-    float _S210 = _S209 * u_13;
-    float _S211 = 2.0f * v_13;
-    float2  _S212 = make_float2 (1.0f, 0.0f) * make_float2 (radial_4) + make_float2 (s_diff_r2_14 * _S205 + (s_diff_r2_14 * _S204 + (s_diff_r2_14 * _S203 + s_diff_r2_14 * (*dist_coeffs_6)[int(3)] * r2_13) * r2_13) * r2_13) * q_0 + make_float2 (_S206 * v_13 + 0.0f * _S207 + (s_diff_r2_14 + (_S208 + _S208)) * (*dist_coeffs_6)[int(5)] + s_diff_r2_14 * (*dist_coeffs_6)[int(6)], _S209 * v_13 + 0.0f * _S210 + (s_diff_r2_14 + (_S202 + 0.0f * _S211)) * (*dist_coeffs_6)[int(4)] + s_diff_r2_14 * (*dist_coeffs_6)[int(7)]);
-    float _S213 = 0.0f * u_13;
-    float s_diff_r2_15 = _S213 + _S213 + (v_13 + v_13);
-    float2  _S214 = make_float2 (0.0f, 1.0f) * make_float2 (radial_4) + make_float2 (s_diff_r2_15 * _S205 + (s_diff_r2_15 * _S204 + (s_diff_r2_15 * _S203 + s_diff_r2_15 * (*dist_coeffs_6)[int(3)] * r2_13) * r2_13) * r2_13) * q_0 + make_float2 (0.0f * _S206 * v_13 + _S207 + (s_diff_r2_15 + (_S213 + 0.0f * _S208)) * (*dist_coeffs_6)[int(5)] + s_diff_r2_15 * (*dist_coeffs_6)[int(6)], 0.0f * _S209 * v_13 + _S210 + (s_diff_r2_15 + (_S211 + _S211)) * (*dist_coeffs_6)[int(4)] + s_diff_r2_15 * (*dist_coeffs_6)[int(7)]);
-    Matrix<float, 2, 2>  _S215 = transpose_1(makeMatrix<float, 2, 2> (_S212 + make_float2 (_S212.x * (*dist_coeffs_6)[int(8)] + _S212.y * (*dist_coeffs_6)[int(9)], 0.0f), _S214 + make_float2 (_S214.x * (*dist_coeffs_6)[int(8)] + _S214.y * (*dist_coeffs_6)[int(9)], 0.0f)));
-    bool _S216;
-    if((F32_min((determinant_0(_S215)), ((F32_min((_S215.rows[int(0)].x), (_S215.rows[int(1)].y)))))) > 0.0f)
+    float _S289 = (*dist_coeffs_8)[int(0)];
+    float _S290 = (*dist_coeffs_8)[int(1)];
+    float _S291 = (*dist_coeffs_8)[int(2)];
+    float _S292 = (*dist_coeffs_8)[int(3)];
+    float _S293 = (*dist_coeffs_8)[int(4)];
+    float _S294 = (*dist_coeffs_8)[int(5)];
+    float _S295 = (*dist_coeffs_8)[int(6)];
+    float _S296 = (*dist_coeffs_8)[int(7)];
+    float _S297 = (*dist_coeffs_8)[int(8)];
+    float _S298 = (*dist_coeffs_8)[int(9)];
+    float u_18 = q_0.x;
+    float v_18 = q_0.y;
+    float _S299 = 0.0f * v_18;
+    float r2_18 = u_18 * u_18 + v_18 * v_18;
+    float s_diff_r2_19 = u_18 + u_18 + (_S299 + _S299);
+    float _S300 = (*dist_coeffs_8)[int(2)] + r2_18 * (*dist_coeffs_8)[int(3)];
+    float _S301 = (*dist_coeffs_8)[int(1)] + r2_18 * _S300;
+    float _S302 = (*dist_coeffs_8)[int(0)] + r2_18 * _S301;
+    float radial_5 = 1.0f + r2_18 * _S302;
+    float _S303 = 2.0f * (*dist_coeffs_8)[int(4)];
+    float _S304 = _S303 * u_18;
+    float _S305 = 2.0f * u_18;
+    float _S306 = 2.0f * (*dist_coeffs_8)[int(5)];
+    float _S307 = _S306 * u_18;
+    float _S308 = 2.0f * v_18;
+    float2  _S309 = make_float2 (1.0f, 0.0f) * make_float2 (radial_5) + make_float2 (s_diff_r2_19 * _S302 + (s_diff_r2_19 * _S301 + (s_diff_r2_19 * _S300 + s_diff_r2_19 * (*dist_coeffs_8)[int(3)] * r2_18) * r2_18) * r2_18) * q_0 + make_float2 (_S303 * v_18 + 0.0f * _S304 + (s_diff_r2_19 + (_S305 + _S305)) * (*dist_coeffs_8)[int(5)] + s_diff_r2_19 * (*dist_coeffs_8)[int(6)], _S306 * v_18 + 0.0f * _S307 + (s_diff_r2_19 + (_S299 + 0.0f * _S308)) * (*dist_coeffs_8)[int(4)] + s_diff_r2_19 * (*dist_coeffs_8)[int(7)]);
+    float _S310 = 0.0f * u_18;
+    float s_diff_r2_20 = _S310 + _S310 + (v_18 + v_18);
+    float2  _S311 = make_float2 (0.0f, 1.0f) * make_float2 (radial_5) + make_float2 (s_diff_r2_20 * _S302 + (s_diff_r2_20 * _S301 + (s_diff_r2_20 * _S300 + s_diff_r2_20 * (*dist_coeffs_8)[int(3)] * r2_18) * r2_18) * r2_18) * q_0 + make_float2 (0.0f * _S303 * v_18 + _S304 + (s_diff_r2_20 + (_S310 + 0.0f * _S305)) * (*dist_coeffs_8)[int(5)] + s_diff_r2_20 * (*dist_coeffs_8)[int(6)], 0.0f * _S306 * v_18 + _S307 + (s_diff_r2_20 + (_S308 + _S308)) * (*dist_coeffs_8)[int(4)] + s_diff_r2_20 * (*dist_coeffs_8)[int(7)]);
+    Matrix<float, 2, 2>  _S312 = transpose_1(makeMatrix<float, 2, 2> (_S309 + make_float2 (_S309.x * (*dist_coeffs_8)[int(8)] + _S309.y * (*dist_coeffs_8)[int(9)], 0.0f), _S311 + make_float2 (_S311.x * (*dist_coeffs_8)[int(8)] + _S311.y * (*dist_coeffs_8)[int(9)], 0.0f)));
+    bool _S313;
+    if((F32_min((determinant_0(_S312)), ((F32_min((_S312.rows[int(0)].x), (_S312.rows[int(1)].y)))))) > 0.0f)
     {
-        float u_14 = (*uv_undist_0).x;
-        float v_14 = (*uv_undist_0).y;
-        float r2_14 = u_14 * u_14 + v_14 * v_14;
-        float2  _S217 = *uv_undist_0 * make_float2 (1.0f + r2_14 * (_S192 + r2_14 * (_S193 + r2_14 * (_S194 + r2_14 * _S195)))) + make_float2 (_S206 * u_14 * v_14 + _S197 * (r2_14 + 2.0f * u_14 * u_14) + _S198 * r2_14, _S209 * u_14 * v_14 + _S196 * (r2_14 + 2.0f * v_14 * v_14) + _S199 * r2_14);
-        _S216 = (length_0(_S217 + make_float2 (_S200 * _S217.x + _S201 * _S217.y, 0.0f) - uv_4)) < 0.00999999977648258f;
+        float u_19 = (*uv_undist_0).x;
+        float v_19 = (*uv_undist_0).y;
+        float r2_19 = u_19 * u_19 + v_19 * v_19;
+        float2  _S314 = *uv_undist_0 * make_float2 (1.0f + r2_19 * (_S289 + r2_19 * (_S290 + r2_19 * (_S291 + r2_19 * _S292)))) + make_float2 (_S303 * u_19 * v_19 + _S294 * (r2_19 + 2.0f * u_19 * u_19) + _S295 * r2_19, _S306 * u_19 * v_19 + _S293 * (r2_19 + 2.0f * v_19 * v_19) + _S296 * r2_19);
+        _S313 = (length_0(_S314 + make_float2 (_S297 * _S314.x + _S298 * _S314.y, 0.0f) - uv_5)) < 0.00999999977648258f;
     }
     else
     {
-        _S216 = false;
+        _S313 = false;
     }
-    return _S216;
+    return _S313;
 }
 
-inline __device__ bool undistort_point(float2  uv_5, bool is_fisheye_1, FixedArray<float, 10>  dist_coeffs_7, float2  * uv_undist_1)
+inline __device__ bool undistort_point(float2  uv_6, int camera_model_1, FixedArray<float, 10>  dist_coeffs_9, float2  * uv_undist_1)
 {
-    float2  _S218 = uv_5;
-    FixedArray<float, 10>  _S219 = dist_coeffs_7;
-    bool _S220 = undistort_point_0(uv_5, &_S219, int(8), &_S218);
-    if(!_S220)
+    float2  _S315 = uv_6;
+    FixedArray<float, 10>  _S316 = dist_coeffs_9;
+    bool _S317 = undistort_point_0(uv_6, &_S316, int(8), &_S315);
+    if(!_S317)
     {
         return false;
     }
     float3  raydir_0;
-    if(is_fisheye_1)
+    if(camera_model_1 == int(1))
     {
-        float2  _S221 = _S218;
-        float theta_2 = length_0(_S218);
-        float _S222;
-        if(theta_2 < 0.00100000004749745f)
+        float r_8 = length_0(_S315);
+        float s_0;
+        if(r_8 < 0.00100000004749745f)
         {
-            _S222 = 1.0f - theta_2 * theta_2 / 6.0f;
+            s_0 = 1.0f - r_8 * r_8 / 6.0f;
         }
         else
         {
-            _S222 = (F32_sin((theta_2))) / theta_2;
+            s_0 = (F32_sin((r_8))) / r_8;
         }
-        float3  _S223 = make_float3 ((_S221 * make_float2 (_S222)).x, (_S221 * make_float2 (_S222)).y, (F32_cos((theta_2))));
-        raydir_0 = _S223;
+        raydir_0 = make_float3 ((_S315 * make_float2 (s_0)).x, (_S315 * make_float2 (s_0)).y, (F32_cos((r_8))));
     }
     else
     {
-        raydir_0 = make_float3 (_S218.x, _S218.y, 1.0f);
+        if(camera_model_1 == int(2))
+        {
+            float r_9 = length_0(_S315);
+            raydir_0 = make_float3 ((_S315 * make_float2 ((F32_sqrt(((F32_max((0.0f), (1.0f - 0.25f * r_9 * r_9)))))))).x, (_S315 * make_float2 ((F32_sqrt(((F32_max((0.0f), (1.0f - 0.25f * r_9 * r_9)))))))).y, 1.0f - 0.5f * r_9 * r_9);
+        }
+        else
+        {
+            raydir_0 = make_float3 (_S315.x, _S315.y, 1.0f);
+        }
     }
     *uv_undist_1 = float2 {raydir_0.x, raydir_0.y} / make_float2 ((F32_max((raydir_0.z), (9.999999960041972e-13f))));
     return true;
 }
 
-inline __device__ bool unproject_point(float2  uv_6, bool is_fisheye_2, FixedArray<float, 10>  dist_coeffs_8, float3  * raydir_1)
+inline __device__ bool unproject_point(float2  uv_7, int camera_model_2, FixedArray<float, 10>  dist_coeffs_10, float3  * raydir_1)
 {
-    float2  _S224 = uv_6;
-    int3  _S225 = make_int3 (int(0));
-    float3  _S226 = make_float3 ((float)_S225.x, (float)_S225.y, (float)_S225.z);
-    *raydir_1 = _S226;
-    FixedArray<float, 10>  _S227 = dist_coeffs_8;
-    bool _S228 = undistort_point_0(uv_6, &_S227, int(8), &_S224);
-    if(!_S228)
+    float2  _S318 = uv_7;
+    int3  _S319 = make_int3 (int(0));
+    float3  _S320 = make_float3 ((float)_S319.x, (float)_S319.y, (float)_S319.z);
+    *raydir_1 = _S320;
+    FixedArray<float, 10>  _S321 = dist_coeffs_10;
+    bool _S322 = undistort_point_0(uv_7, &_S321, int(8), &_S318);
+    if(!_S322)
     {
         return false;
     }
-    float3  _S229;
-    if(is_fisheye_2)
+    if(camera_model_2 == int(1))
     {
-        float2  _S230 = _S224;
-        float theta_3 = length_0(_S224);
-        float _S231;
-        if(theta_3 < 0.00100000004749745f)
+        float r_10 = length_0(_S318);
+        float s_1;
+        if(r_10 < 0.00100000004749745f)
         {
-            _S231 = 1.0f - theta_3 * theta_3 / 6.0f;
+            s_1 = 1.0f - r_10 * r_10 / 6.0f;
         }
         else
         {
-            _S231 = (F32_sin((theta_3))) / theta_3;
+            s_1 = (F32_sin((r_10))) / r_10;
         }
-        float3  _S232 = make_float3 ((_S230 * make_float2 (_S231)).x, (_S230 * make_float2 (_S231)).y, (F32_cos((theta_3))));
-        _S229 = _S232;
+        *raydir_1 = make_float3 ((_S318 * make_float2 (s_1)).x, (_S318 * make_float2 (s_1)).y, (F32_cos((r_10))));
     }
     else
     {
-        _S229 = make_float3 (_S224.x, _S224.y, 1.0f);
+        if(camera_model_2 == int(2))
+        {
+            float r_11 = length_0(_S318);
+            *raydir_1 = make_float3 ((_S318 * make_float2 ((F32_sqrt(((F32_max((0.0f), (1.0f - 0.25f * r_11 * r_11)))))))).x, (_S318 * make_float2 ((F32_sqrt(((F32_max((0.0f), (1.0f - 0.25f * r_11 * r_11)))))))).y, 1.0f - 0.5f * r_11 * r_11);
+        }
+        else
+        {
+            *raydir_1 = make_float3 (_S318.x, _S318.y, 1.0f);
+        }
     }
-    *raydir_1 = _S229;
     return true;
 }
 
@@ -1037,64 +1291,69 @@ inline __device__ float4  normalize_1(float4  x_14)
     return x_14 / make_float4 (length_2(x_14));
 }
 
-inline __device__ bool generate_ray(float2  uv_7, bool is_fisheye_3, FixedArray<float, 10>  dist_coeffs_9, float3  * raydir_2)
+inline __device__ bool generate_ray(float2  uv_8, int camera_model_3, FixedArray<float, 10>  dist_coeffs_11, float3  * raydir_2)
 {
-    float2  _S233 = uv_7;
-    FixedArray<float, 10>  _S234 = dist_coeffs_9;
-    bool _S235 = undistort_point_0(uv_7, &_S234, int(8), &_S233);
-    if(!_S235)
+    float2  _S323 = uv_8;
+    FixedArray<float, 10>  _S324 = dist_coeffs_11;
+    bool _S325 = undistort_point_0(uv_8, &_S324, int(8), &_S323);
+    if(!_S325)
     {
-        int3  _S236 = make_int3 (int(0));
-        float3  _S237 = make_float3 ((float)_S236.x, (float)_S236.y, (float)_S236.z);
-        *raydir_2 = _S237;
+        int3  _S326 = make_int3 (int(0));
+        float3  _S327 = make_float3 ((float)_S326.x, (float)_S326.y, (float)_S326.z);
+        *raydir_2 = _S327;
         return false;
     }
-    float3  _S238;
-    if(is_fisheye_3)
+    if(camera_model_3 == int(1))
     {
-        float2  _S239 = _S233;
-        float theta_4 = length_0(_S233);
-        float _S240;
-        if(theta_4 < 0.00100000004749745f)
+        float r_12 = length_0(_S323);
+        float s_2;
+        if(r_12 < 0.00100000004749745f)
         {
-            _S240 = 1.0f - theta_4 * theta_4 / 6.0f;
+            s_2 = 1.0f - r_12 * r_12 / 6.0f;
         }
         else
         {
-            _S240 = (F32_sin((theta_4))) / theta_4;
+            s_2 = (F32_sin((r_12))) / r_12;
         }
-        float3  _S241 = make_float3 ((_S239 * make_float2 (_S240)).x, (_S239 * make_float2 (_S240)).y, (F32_cos((theta_4))));
-        _S238 = _S241;
+        *raydir_2 = make_float3 ((_S323 * make_float2 (s_2)).x, (_S323 * make_float2 (s_2)).y, (F32_cos((r_12))));
     }
     else
     {
-        _S238 = make_float3 (_S233.x, _S233.y, 1.0f);
+        if(camera_model_3 == int(2))
+        {
+            float r_13 = length_0(_S323);
+            *raydir_2 = make_float3 ((_S323 * make_float2 ((F32_sqrt(((F32_max((0.0f), (1.0f - 0.25f * r_13 * r_13)))))))).x, (_S323 * make_float2 ((F32_sqrt(((F32_max((0.0f), (1.0f - 0.25f * r_13 * r_13)))))))).y, 1.0f - 0.5f * r_13 * r_13);
+        }
+        else
+        {
+            *raydir_2 = make_float3 (_S323.x, _S323.y, 1.0f);
+        }
     }
-    *raydir_2 = normalize_0(_S238);
+    *raydir_2 = normalize_0(*raydir_2);
     return true;
 }
 
 inline __device__ void _d_mul_1(DiffPair_vectorx3Cfloatx2C3x3E_0 * left_4, DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * right_4, float3  dOut_3)
 {
-    float _S242 = (*right_4).primal_0.rows[int(0)].x * dOut_3.x;
+    float _S328 = (*right_4).primal_0.rows[int(0)].x * dOut_3.x;
     Matrix<float, 3, 3>  right_d_result_2;
     *&(((&right_d_result_2)->rows + (int(0)))->x) = (*left_4).primal_0.x * dOut_3.x;
-    float sum_10 = _S242 + (*right_4).primal_0.rows[int(0)].y * dOut_3.y;
+    float sum_10 = _S328 + (*right_4).primal_0.rows[int(0)].y * dOut_3.y;
     *&(((&right_d_result_2)->rows + (int(0)))->y) = (*left_4).primal_0.x * dOut_3.y;
     float sum_11 = sum_10 + (*right_4).primal_0.rows[int(0)].z * dOut_3.z;
     *&(((&right_d_result_2)->rows + (int(0)))->z) = (*left_4).primal_0.x * dOut_3.z;
     float3  left_d_result_2;
     *&((&left_d_result_2)->x) = sum_11;
-    float _S243 = (*right_4).primal_0.rows[int(1)].x * dOut_3.x;
+    float _S329 = (*right_4).primal_0.rows[int(1)].x * dOut_3.x;
     *&(((&right_d_result_2)->rows + (int(1)))->x) = (*left_4).primal_0.y * dOut_3.x;
-    float sum_12 = _S243 + (*right_4).primal_0.rows[int(1)].y * dOut_3.y;
+    float sum_12 = _S329 + (*right_4).primal_0.rows[int(1)].y * dOut_3.y;
     *&(((&right_d_result_2)->rows + (int(1)))->y) = (*left_4).primal_0.y * dOut_3.y;
     float sum_13 = sum_12 + (*right_4).primal_0.rows[int(1)].z * dOut_3.z;
     *&(((&right_d_result_2)->rows + (int(1)))->z) = (*left_4).primal_0.y * dOut_3.z;
     *&((&left_d_result_2)->y) = sum_13;
-    float _S244 = (*right_4).primal_0.rows[int(2)].x * dOut_3.x;
+    float _S330 = (*right_4).primal_0.rows[int(2)].x * dOut_3.x;
     *&(((&right_d_result_2)->rows + (int(2)))->x) = (*left_4).primal_0.z * dOut_3.x;
-    float sum_14 = _S244 + (*right_4).primal_0.rows[int(2)].y * dOut_3.y;
+    float sum_14 = _S330 + (*right_4).primal_0.rows[int(2)].y * dOut_3.y;
     *&(((&right_d_result_2)->rows + (int(2)))->y) = (*left_4).primal_0.z * dOut_3.y;
     float sum_15 = sum_14 + (*right_4).primal_0.rows[int(2)].z * dOut_3.z;
     *&(((&right_d_result_2)->rows + (int(2)))->z) = (*left_4).primal_0.z * dOut_3.z;
@@ -1155,47 +1414,47 @@ inline __device__ float3  undo_transform_ray_d(Matrix<float, 3, 3>  R_2, float3 
     return mul_3(raydir_4, transpose_0(R_2));
 }
 
-inline __device__ void s_bwd_prop_mul_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * _S245, DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * _S246, float3  _S247)
+inline __device__ void s_bwd_prop_mul_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * _S331, DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * _S332, float3  _S333)
 {
-    _d_mul_1(_S245, _S246, _S247);
+    _d_mul_1(_S331, _S332, _S333);
     return;
 }
 
 inline __device__ void s_bwd_prop_transform_ray_o_0(DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * dpR_0, DiffPair_vectorx3Cfloatx2C3x3E_0 * dpt_0, float3  _s_dOut_0)
 {
-    float3  _S248 = - _s_dOut_0;
-    float3  _S249 = make_float3 (0.0f);
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S250;
-    (&_S250)->primal_0 = (*dpt_0).primal_0;
-    (&_S250)->differential_0 = _S249;
-    Matrix<float, 3, 3>  _S251 = makeMatrix<float, 3, 3> (0.0f);
-    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S252;
-    (&_S252)->primal_0 = (*dpR_0).primal_0;
-    (&_S252)->differential_0 = _S251;
-    s_bwd_prop_mul_0(&_S250, &_S252, _S248);
+    float3  _S334 = - _s_dOut_0;
+    float3  _S335 = make_float3 (0.0f);
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S336;
+    (&_S336)->primal_0 = (*dpt_0).primal_0;
+    (&_S336)->differential_0 = _S335;
+    Matrix<float, 3, 3>  _S337 = makeMatrix<float, 3, 3> (0.0f);
+    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S338;
+    (&_S338)->primal_0 = (*dpR_0).primal_0;
+    (&_S338)->differential_0 = _S337;
+    s_bwd_prop_mul_0(&_S336, &_S338, _S334);
     dpt_0->primal_0 = (*dpt_0).primal_0;
-    dpt_0->differential_0 = _S250.differential_0;
+    dpt_0->differential_0 = _S336.differential_0;
     dpR_0->primal_0 = (*dpR_0).primal_0;
-    dpR_0->differential_0 = _S252.differential_0;
+    dpR_0->differential_0 = _S338.differential_0;
     return;
 }
 
-inline __device__ void s_bwd_transform_ray_o_0(DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * _S253, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S254, float3  _S255)
+inline __device__ void s_bwd_transform_ray_o_0(DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * _S339, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S340, float3  _S341)
 {
-    s_bwd_prop_transform_ray_o_0(_S253, _S254, _S255);
+    s_bwd_prop_transform_ray_o_0(_S339, _S340, _S341);
     return;
 }
 
 inline __device__ void transform_ray_o_vjp(Matrix<float, 3, 3>  R_3, float3  t_1, float3  v_ray_o_0, Matrix<float, 3, 3>  * v_R_0, float3  * v_t_0)
 {
-    Matrix<float, 3, 3>  _S256 = makeMatrix<float, 3, 3> (0.0f);
+    Matrix<float, 3, 3>  _S342 = makeMatrix<float, 3, 3> (0.0f);
     DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 dp_R_0;
     (&dp_R_0)->primal_0 = R_3;
-    (&dp_R_0)->differential_0 = _S256;
-    float3  _S257 = make_float3 (0.0f);
+    (&dp_R_0)->differential_0 = _S342;
+    float3  _S343 = make_float3 (0.0f);
     DiffPair_vectorx3Cfloatx2C3x3E_0 dp_t_0;
     (&dp_t_0)->primal_0 = t_1;
-    (&dp_t_0)->differential_0 = _S257;
+    (&dp_t_0)->differential_0 = _S343;
     s_bwd_transform_ray_o_0(&dp_R_0, &dp_t_0, v_ray_o_0);
     *v_R_0 = dp_R_0.differential_0;
     *v_t_0 = dp_t_0.differential_0;
@@ -1204,38 +1463,38 @@ inline __device__ void transform_ray_o_vjp(Matrix<float, 3, 3>  R_3, float3  t_1
 
 inline __device__ void s_bwd_prop_transform_ray_d_0(DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * dpR_1, DiffPair_vectorx3Cfloatx2C3x3E_0 * dpraydir_0, float3  _s_dOut_1)
 {
-    float3  _S258 = make_float3 (0.0f);
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S259;
-    (&_S259)->primal_0 = (*dpraydir_0).primal_0;
-    (&_S259)->differential_0 = _S258;
-    Matrix<float, 3, 3>  _S260 = makeMatrix<float, 3, 3> (0.0f);
-    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S261;
-    (&_S261)->primal_0 = (*dpR_1).primal_0;
-    (&_S261)->differential_0 = _S260;
-    s_bwd_prop_mul_0(&_S259, &_S261, _s_dOut_1);
+    float3  _S344 = make_float3 (0.0f);
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S345;
+    (&_S345)->primal_0 = (*dpraydir_0).primal_0;
+    (&_S345)->differential_0 = _S344;
+    Matrix<float, 3, 3>  _S346 = makeMatrix<float, 3, 3> (0.0f);
+    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S347;
+    (&_S347)->primal_0 = (*dpR_1).primal_0;
+    (&_S347)->differential_0 = _S346;
+    s_bwd_prop_mul_0(&_S345, &_S347, _s_dOut_1);
     dpraydir_0->primal_0 = (*dpraydir_0).primal_0;
-    dpraydir_0->differential_0 = _S259.differential_0;
+    dpraydir_0->differential_0 = _S345.differential_0;
     dpR_1->primal_0 = (*dpR_1).primal_0;
-    dpR_1->differential_0 = _S261.differential_0;
+    dpR_1->differential_0 = _S347.differential_0;
     return;
 }
 
-inline __device__ void s_bwd_transform_ray_d_0(DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * _S262, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S263, float3  _S264)
+inline __device__ void s_bwd_transform_ray_d_0(DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * _S348, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S349, float3  _S350)
 {
-    s_bwd_prop_transform_ray_d_0(_S262, _S263, _S264);
+    s_bwd_prop_transform_ray_d_0(_S348, _S349, _S350);
     return;
 }
 
 inline __device__ void transform_ray_d_vjp(Matrix<float, 3, 3>  R_4, float3  raydir_5, float3  v_ray_d_0, Matrix<float, 3, 3>  * v_R_1, float3  * v_raydir_0)
 {
-    Matrix<float, 3, 3>  _S265 = makeMatrix<float, 3, 3> (0.0f);
+    Matrix<float, 3, 3>  _S351 = makeMatrix<float, 3, 3> (0.0f);
     DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 dp_R_1;
     (&dp_R_1)->primal_0 = R_4;
-    (&dp_R_1)->differential_0 = _S265;
-    float3  _S266 = make_float3 (0.0f);
+    (&dp_R_1)->differential_0 = _S351;
+    float3  _S352 = make_float3 (0.0f);
     DiffPair_vectorx3Cfloatx2C3x3E_0 dp_raydir_0;
     (&dp_raydir_0)->primal_0 = raydir_5;
-    (&dp_raydir_0)->differential_0 = _S266;
+    (&dp_raydir_0)->differential_0 = _S352;
     s_bwd_transform_ray_d_0(&dp_R_1, &dp_raydir_0, v_ray_d_0);
     *v_R_1 = dp_R_1.differential_0;
     *v_raydir_0 = dp_raydir_0.differential_0;
@@ -1263,16 +1522,16 @@ struct DiffPair_vectorx3Cfloatx2C4x3E_0
     float4  differential_0;
 };
 
-inline __device__ void s_bwd_prop_mul_1(DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * _S267, DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * _S268, Matrix<float, 3, 3>  _S269)
+inline __device__ void s_bwd_prop_mul_1(DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * _S353, DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * _S354, Matrix<float, 3, 3>  _S355)
 {
-    mul_0(_S267, _S268, _S269);
+    mul_0(_S353, _S354, _S355);
     return;
 }
 
 inline __device__ void s_bwd_prop_compute_3dgut_iscl_rot_0(DiffPair_vectorx3Cfloatx2C4x3E_0 * dpquat_0, DiffPair_vectorx3Cfloatx2C3x3E_0 * dpscale_0, Matrix<float, 3, 3>  _s_dOut_2)
 {
-    float _S270 = (*dpquat_0).primal_0.y;
-    float x2_6 = _S270 * _S270;
+    float _S356 = (*dpquat_0).primal_0.y;
+    float x2_6 = _S356 * _S356;
     float y2_6 = (*dpquat_0).primal_0.z * (*dpquat_0).primal_0.z;
     float z2_6 = (*dpquat_0).primal_0.w * (*dpquat_0).primal_0.w;
     float xy_6 = (*dpquat_0).primal_0.y * (*dpquat_0).primal_0.z;
@@ -1281,67 +1540,67 @@ inline __device__ void s_bwd_prop_compute_3dgut_iscl_rot_0(DiffPair_vectorx3Cflo
     float wx_6 = (*dpquat_0).primal_0.x * (*dpquat_0).primal_0.y;
     float wy_6 = (*dpquat_0).primal_0.x * (*dpquat_0).primal_0.z;
     float wz_6 = (*dpquat_0).primal_0.x * (*dpquat_0).primal_0.w;
-    Matrix<float, 3, 3>  _S271 = transpose_0(transpose_0(makeMatrix<float, 3, 3> (1.0f - 2.0f * (y2_6 + z2_6), 2.0f * (xy_6 + wz_6), 2.0f * (xz_6 - wy_6), 2.0f * (xy_6 - wz_6), 1.0f - 2.0f * (x2_6 + z2_6), 2.0f * (yz_6 + wx_6), 2.0f * (xz_6 + wy_6), 2.0f * (yz_6 - wx_6), 1.0f - 2.0f * (x2_6 + y2_6))));
-    Matrix<float, 3, 3>  _S272 = makeMatrix<float, 3, 3> (0.0f);
-    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S273;
-    (&_S273)->primal_0 = makeMatrix<float, 3, 3> ((*dpscale_0).primal_0.x, 0.0f, 0.0f, 0.0f, (*dpscale_0).primal_0.y, 0.0f, 0.0f, 0.0f, (*dpscale_0).primal_0.z);
-    (&_S273)->differential_0 = _S272;
-    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S274;
-    (&_S274)->primal_0 = _S271;
-    (&_S274)->differential_0 = _S272;
-    s_bwd_prop_mul_1(&_S273, &_S274, _s_dOut_2);
-    Matrix<float, 3, 3>  _S275 = transpose_0(transpose_0(_S274.differential_0));
-    float _S276 = 2.0f * - _S275.rows[int(2)].z;
-    float _S277 = 2.0f * _S275.rows[int(2)].y;
-    float _S278 = 2.0f * _S275.rows[int(2)].x;
-    float _S279 = 2.0f * _S275.rows[int(1)].z;
-    float _S280 = 2.0f * - _S275.rows[int(1)].y;
-    float _S281 = 2.0f * _S275.rows[int(1)].x;
-    float _S282 = 2.0f * _S275.rows[int(0)].z;
-    float _S283 = 2.0f * _S275.rows[int(0)].y;
-    float _S284 = 2.0f * - _S275.rows[int(0)].x;
-    float _S285 = - _S281 + _S283;
-    float _S286 = _S278 + - _S282;
-    float _S287 = - _S277 + _S279;
-    float _S288 = _S277 + _S279;
-    float _S289 = _S278 + _S282;
-    float _S290 = _S281 + _S283;
-    float _S291 = (*dpquat_0).primal_0.w * (_S280 + _S284);
-    float _S292 = (*dpquat_0).primal_0.z * (_S276 + _S284);
-    float _S293 = (*dpquat_0).primal_0.y * (_S276 + _S280);
-    float _S294 = (*dpquat_0).primal_0.x * _S285 + (*dpquat_0).primal_0.z * _S288 + (*dpquat_0).primal_0.y * _S289 + _S291 + _S291;
-    float _S295 = (*dpquat_0).primal_0.x * _S286 + (*dpquat_0).primal_0.w * _S288 + (*dpquat_0).primal_0.y * _S290 + _S292 + _S292;
-    float _S296 = (*dpquat_0).primal_0.x * _S287 + (*dpquat_0).primal_0.w * _S289 + (*dpquat_0).primal_0.z * _S290 + _S293 + _S293;
-    float _S297 = (*dpquat_0).primal_0.w * _S285 + (*dpquat_0).primal_0.z * _S286 + (*dpquat_0).primal_0.y * _S287;
-    float3  _S298 = make_float3 (_S273.differential_0.rows[int(0)].x, _S273.differential_0.rows[int(1)].y, _S273.differential_0.rows[int(2)].z);
+    Matrix<float, 3, 3>  _S357 = transpose_0(transpose_0(makeMatrix<float, 3, 3> (1.0f - 2.0f * (y2_6 + z2_6), 2.0f * (xy_6 + wz_6), 2.0f * (xz_6 - wy_6), 2.0f * (xy_6 - wz_6), 1.0f - 2.0f * (x2_6 + z2_6), 2.0f * (yz_6 + wx_6), 2.0f * (xz_6 + wy_6), 2.0f * (yz_6 - wx_6), 1.0f - 2.0f * (x2_6 + y2_6))));
+    Matrix<float, 3, 3>  _S358 = makeMatrix<float, 3, 3> (0.0f);
+    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S359;
+    (&_S359)->primal_0 = makeMatrix<float, 3, 3> ((*dpscale_0).primal_0.x, 0.0f, 0.0f, 0.0f, (*dpscale_0).primal_0.y, 0.0f, 0.0f, 0.0f, (*dpscale_0).primal_0.z);
+    (&_S359)->differential_0 = _S358;
+    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S360;
+    (&_S360)->primal_0 = _S357;
+    (&_S360)->differential_0 = _S358;
+    s_bwd_prop_mul_1(&_S359, &_S360, _s_dOut_2);
+    Matrix<float, 3, 3>  _S361 = transpose_0(transpose_0(_S360.differential_0));
+    float _S362 = 2.0f * - _S361.rows[int(2)].z;
+    float _S363 = 2.0f * _S361.rows[int(2)].y;
+    float _S364 = 2.0f * _S361.rows[int(2)].x;
+    float _S365 = 2.0f * _S361.rows[int(1)].z;
+    float _S366 = 2.0f * - _S361.rows[int(1)].y;
+    float _S367 = 2.0f * _S361.rows[int(1)].x;
+    float _S368 = 2.0f * _S361.rows[int(0)].z;
+    float _S369 = 2.0f * _S361.rows[int(0)].y;
+    float _S370 = 2.0f * - _S361.rows[int(0)].x;
+    float _S371 = - _S367 + _S369;
+    float _S372 = _S364 + - _S368;
+    float _S373 = - _S363 + _S365;
+    float _S374 = _S363 + _S365;
+    float _S375 = _S364 + _S368;
+    float _S376 = _S367 + _S369;
+    float _S377 = (*dpquat_0).primal_0.w * (_S366 + _S370);
+    float _S378 = (*dpquat_0).primal_0.z * (_S362 + _S370);
+    float _S379 = (*dpquat_0).primal_0.y * (_S362 + _S366);
+    float _S380 = (*dpquat_0).primal_0.x * _S371 + (*dpquat_0).primal_0.z * _S374 + (*dpquat_0).primal_0.y * _S375 + _S377 + _S377;
+    float _S381 = (*dpquat_0).primal_0.x * _S372 + (*dpquat_0).primal_0.w * _S374 + (*dpquat_0).primal_0.y * _S376 + _S378 + _S378;
+    float _S382 = (*dpquat_0).primal_0.x * _S373 + (*dpquat_0).primal_0.w * _S375 + (*dpquat_0).primal_0.z * _S376 + _S379 + _S379;
+    float _S383 = (*dpquat_0).primal_0.w * _S371 + (*dpquat_0).primal_0.z * _S372 + (*dpquat_0).primal_0.y * _S373;
+    float3  _S384 = make_float3 (_S359.differential_0.rows[int(0)].x, _S359.differential_0.rows[int(1)].y, _S359.differential_0.rows[int(2)].z);
     dpscale_0->primal_0 = (*dpscale_0).primal_0;
-    dpscale_0->differential_0 = _S298;
-    float4  _S299 = make_float4 (0.0f);
-    *&((&_S299)->w) = _S294;
-    *&((&_S299)->z) = _S295;
-    *&((&_S299)->y) = _S296;
-    *&((&_S299)->x) = _S297;
+    dpscale_0->differential_0 = _S384;
+    float4  _S385 = make_float4 (0.0f);
+    *&((&_S385)->w) = _S380;
+    *&((&_S385)->z) = _S381;
+    *&((&_S385)->y) = _S382;
+    *&((&_S385)->x) = _S383;
     dpquat_0->primal_0 = (*dpquat_0).primal_0;
-    dpquat_0->differential_0 = _S299;
+    dpquat_0->differential_0 = _S385;
     return;
 }
 
-inline __device__ void s_bwd_compute_3dgut_iscl_rot_0(DiffPair_vectorx3Cfloatx2C4x3E_0 * _S300, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S301, Matrix<float, 3, 3>  _S302)
+inline __device__ void s_bwd_compute_3dgut_iscl_rot_0(DiffPair_vectorx3Cfloatx2C4x3E_0 * _S386, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S387, Matrix<float, 3, 3>  _S388)
 {
-    s_bwd_prop_compute_3dgut_iscl_rot_0(_S300, _S301, _S302);
+    s_bwd_prop_compute_3dgut_iscl_rot_0(_S386, _S387, _S388);
     return;
 }
 
 inline __device__ void compute_3dgut_iscl_rot_vjp(float4  quat_6, float3  scale_5, Matrix<float, 3, 3>  v_iscl_rot_0, float4  * v_quat_0, float3  * v_scale_0)
 {
-    float4  _S303 = make_float4 (0.0f);
+    float4  _S389 = make_float4 (0.0f);
     DiffPair_vectorx3Cfloatx2C4x3E_0 dp_quat_0;
     (&dp_quat_0)->primal_0 = quat_6;
-    (&dp_quat_0)->differential_0 = _S303;
-    float3  _S304 = make_float3 (0.0f);
+    (&dp_quat_0)->differential_0 = _S389;
+    float3  _S390 = make_float3 (0.0f);
     DiffPair_vectorx3Cfloatx2C3x3E_0 dp_scale_0;
     (&dp_scale_0)->primal_0 = scale_5;
-    (&dp_scale_0)->differential_0 = _S304;
+    (&dp_scale_0)->differential_0 = _S390;
     s_bwd_compute_3dgut_iscl_rot_0(&dp_quat_0, &dp_scale_0, v_iscl_rot_0);
     *v_quat_0 = dp_quat_0.differential_0;
     *v_scale_0 = dp_scale_0.differential_0;
@@ -1350,37 +1609,37 @@ inline __device__ void compute_3dgut_iscl_rot_vjp(float4  quat_6, float3  scale_
 
 inline __device__ void _d_cross_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * a_0, DiffPair_vectorx3Cfloatx2C3x3E_0 * b_0, float3  dOut_4)
 {
-    float _S305 = dOut_4.y;
-    float _S306 = dOut_4.z;
-    float _S307 = dOut_4.x;
-    float _S308 = (*a_0).primal_0.z * _S305 + - (*a_0).primal_0.y * _S306;
-    float _S309 = - (*a_0).primal_0.z * _S307 + (*a_0).primal_0.x * _S306;
-    float _S310 = (*a_0).primal_0.y * _S307 + - (*a_0).primal_0.x * _S305;
-    float3  _S311 = make_float3 (- (*b_0).primal_0.z * _S305 + (*b_0).primal_0.y * _S306, (*b_0).primal_0.z * _S307 + - (*b_0).primal_0.x * _S306, - (*b_0).primal_0.y * _S307 + (*b_0).primal_0.x * _S305);
+    float _S391 = dOut_4.y;
+    float _S392 = dOut_4.z;
+    float _S393 = dOut_4.x;
+    float _S394 = (*a_0).primal_0.z * _S391 + - (*a_0).primal_0.y * _S392;
+    float _S395 = - (*a_0).primal_0.z * _S393 + (*a_0).primal_0.x * _S392;
+    float _S396 = (*a_0).primal_0.y * _S393 + - (*a_0).primal_0.x * _S391;
+    float3  _S397 = make_float3 (- (*b_0).primal_0.z * _S391 + (*b_0).primal_0.y * _S392, (*b_0).primal_0.z * _S393 + - (*b_0).primal_0.x * _S392, - (*b_0).primal_0.y * _S393 + (*b_0).primal_0.x * _S391);
     a_0->primal_0 = (*a_0).primal_0;
-    a_0->differential_0 = _S311;
-    float3  _S312 = make_float3 (_S308, _S309, _S310);
+    a_0->differential_0 = _S397;
+    float3  _S398 = make_float3 (_S394, _S395, _S396);
     b_0->primal_0 = (*b_0).primal_0;
-    b_0->differential_0 = _S312;
+    b_0->differential_0 = _S398;
     return;
 }
 
 inline __device__ float3  cross_0(float3  left_6, float3  right_6)
 {
-    float _S313 = left_6.y;
-    float _S314 = right_6.z;
-    float _S315 = left_6.z;
-    float _S316 = right_6.y;
-    float _S317 = right_6.x;
-    float _S318 = left_6.x;
-    return make_float3 (_S313 * _S314 - _S315 * _S316, _S315 * _S317 - _S318 * _S314, _S318 * _S316 - _S313 * _S317);
+    float _S399 = left_6.y;
+    float _S400 = right_6.z;
+    float _S401 = left_6.z;
+    float _S402 = right_6.y;
+    float _S403 = right_6.x;
+    float _S404 = left_6.x;
+    return make_float3 (_S399 * _S400 - _S401 * _S402, _S401 * _S403 - _S404 * _S400, _S404 * _S402 - _S399 * _S403);
 }
 
-inline __device__ void _d_exp_0(DiffPair_float_0 * dpx_4, float dOut_5)
+inline __device__ void _d_exp_0(DiffPair_float_0 * dpx_5, float dOut_5)
 {
-    float _S319 = (F32_exp(((*dpx_4).primal_0))) * dOut_5;
-    dpx_4->primal_0 = (*dpx_4).primal_0;
-    dpx_4->differential_0 = _S319;
+    float _S405 = (F32_exp(((*dpx_5).primal_0))) * dOut_5;
+    dpx_5->primal_0 = (*dpx_5).primal_0;
+    dpx_5->differential_0 = _S405;
     return;
 }
 
@@ -1391,149 +1650,149 @@ inline __device__ float evaluate_alpha_3dgs(float3  mean_0, Matrix<float, 3, 3> 
     return opacity_0 * (F32_exp((-0.5f * dot_0(gcrod_0, gcrod_0) / dot_0(grd_0, grd_0))));
 }
 
-inline __device__ float3  s_primal_ctx_mul_0(Matrix<float, 3, 3>  _S320, float3  _S321)
+inline __device__ float3  s_primal_ctx_mul_0(Matrix<float, 3, 3>  _S406, float3  _S407)
 {
-    return mul_2(_S320, _S321);
+    return mul_2(_S406, _S407);
 }
 
-inline __device__ float3  s_primal_ctx_cross_0(float3  _S322, float3  _S323)
+inline __device__ float3  s_primal_ctx_cross_0(float3  _S408, float3  _S409)
 {
-    return cross_0(_S322, _S323);
+    return cross_0(_S408, _S409);
 }
 
-inline __device__ float s_primal_ctx_dot_0(float3  _S324, float3  _S325)
+inline __device__ float s_primal_ctx_dot_0(float3  _S410, float3  _S411)
 {
-    return dot_0(_S324, _S325);
+    return dot_0(_S410, _S411);
 }
 
-inline __device__ float s_primal_ctx_exp_0(float _S326)
+inline __device__ float s_primal_ctx_exp_0(float _S412)
 {
-    return (F32_exp((_S326)));
+    return (F32_exp((_S412)));
 }
 
-inline __device__ void s_bwd_prop_exp_0(DiffPair_float_0 * _S327, float _S328)
+inline __device__ void s_bwd_prop_exp_0(DiffPair_float_0 * _S413, float _S414)
 {
-    _d_exp_0(_S327, _S328);
+    _d_exp_0(_S413, _S414);
     return;
 }
 
-inline __device__ void s_bwd_prop_dot_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * _S329, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S330, float _S331)
+inline __device__ void s_bwd_prop_dot_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * _S415, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S416, float _S417)
 {
-    _d_dot_0(_S329, _S330, _S331);
+    _d_dot_0(_S415, _S416, _S417);
     return;
 }
 
-inline __device__ void s_bwd_prop_cross_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * _S332, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S333, float3  _S334)
+inline __device__ void s_bwd_prop_cross_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * _S418, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S419, float3  _S420)
 {
-    _d_cross_0(_S332, _S333, _S334);
+    _d_cross_0(_S418, _S419, _S420);
     return;
 }
 
-inline __device__ void s_bwd_prop_mul_2(DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * _S335, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S336, float3  _S337)
+inline __device__ void s_bwd_prop_mul_2(DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * _S421, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S422, float3  _S423)
 {
-    _d_mul_0(_S335, _S336, _S337);
+    _d_mul_0(_S421, _S422, _S423);
     return;
 }
 
 inline __device__ void s_bwd_prop_evaluate_alpha_3dgs_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * dpmean_0, DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * dpiscl_rot_0, DiffPair_float_0 * dpopacity_0, DiffPair_vectorx3Cfloatx2C3x3E_0 * dpray_o_0, DiffPair_vectorx3Cfloatx2C3x3E_0 * dpray_d_0, float _s_dOut_3)
 {
-    float3  _S338 = (*dpray_o_0).primal_0 - (*dpmean_0).primal_0;
-    float3  _S339 = s_primal_ctx_mul_0((*dpiscl_rot_0).primal_0, _S338);
-    float3  _S340 = s_primal_ctx_mul_0((*dpiscl_rot_0).primal_0, (*dpray_d_0).primal_0);
-    float3  _S341 = s_primal_ctx_cross_0(_S340, _S339);
-    float _S342 = -0.5f * s_primal_ctx_dot_0(_S341, _S341);
-    float _S343 = s_primal_ctx_dot_0(_S340, _S340);
-    float _S344 = _S342 / _S343;
-    float _S345 = _S343 * _S343;
-    float _S346 = (*dpopacity_0).primal_0 * _s_dOut_3;
-    float _S347 = s_primal_ctx_exp_0(_S344) * _s_dOut_3;
-    DiffPair_float_0 _S348;
-    (&_S348)->primal_0 = _S344;
-    (&_S348)->differential_0 = 0.0f;
-    s_bwd_prop_exp_0(&_S348, _S346);
-    float _S349 = _S348.differential_0 / _S345;
-    float _S350 = _S342 * - _S349;
-    float _S351 = _S343 * _S349;
-    float3  _S352 = make_float3 (0.0f);
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S353;
-    (&_S353)->primal_0 = _S340;
-    (&_S353)->differential_0 = _S352;
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S354;
-    (&_S354)->primal_0 = _S340;
-    (&_S354)->differential_0 = _S352;
-    s_bwd_prop_dot_0(&_S353, &_S354, _S350);
-    float _S355 = -0.5f * _S351;
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S356;
-    (&_S356)->primal_0 = _S341;
-    (&_S356)->differential_0 = _S352;
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S357;
-    (&_S357)->primal_0 = _S341;
-    (&_S357)->differential_0 = _S352;
-    s_bwd_prop_dot_0(&_S356, &_S357, _S355);
-    float3  _S358 = _S357.differential_0 + _S356.differential_0;
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S359;
-    (&_S359)->primal_0 = _S340;
-    (&_S359)->differential_0 = _S352;
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S360;
-    (&_S360)->primal_0 = _S339;
-    (&_S360)->differential_0 = _S352;
-    s_bwd_prop_cross_0(&_S359, &_S360, _S358);
-    float3  _S361 = _S354.differential_0 + _S353.differential_0 + _S359.differential_0;
-    Matrix<float, 3, 3>  _S362 = makeMatrix<float, 3, 3> (0.0f);
-    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S363;
-    (&_S363)->primal_0 = (*dpiscl_rot_0).primal_0;
-    (&_S363)->differential_0 = _S362;
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S364;
-    (&_S364)->primal_0 = (*dpray_d_0).primal_0;
-    (&_S364)->differential_0 = _S352;
-    s_bwd_prop_mul_2(&_S363, &_S364, _S361);
-    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S365;
-    (&_S365)->primal_0 = (*dpiscl_rot_0).primal_0;
-    (&_S365)->differential_0 = _S362;
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S366;
-    (&_S366)->primal_0 = _S338;
-    (&_S366)->differential_0 = _S352;
-    s_bwd_prop_mul_2(&_S365, &_S366, _S360.differential_0);
-    float3  _S367 = - _S366.differential_0;
+    float3  _S424 = (*dpray_o_0).primal_0 - (*dpmean_0).primal_0;
+    float3  _S425 = s_primal_ctx_mul_0((*dpiscl_rot_0).primal_0, _S424);
+    float3  _S426 = s_primal_ctx_mul_0((*dpiscl_rot_0).primal_0, (*dpray_d_0).primal_0);
+    float3  _S427 = s_primal_ctx_cross_0(_S426, _S425);
+    float _S428 = -0.5f * s_primal_ctx_dot_0(_S427, _S427);
+    float _S429 = s_primal_ctx_dot_0(_S426, _S426);
+    float _S430 = _S428 / _S429;
+    float _S431 = _S429 * _S429;
+    float _S432 = (*dpopacity_0).primal_0 * _s_dOut_3;
+    float _S433 = s_primal_ctx_exp_0(_S430) * _s_dOut_3;
+    DiffPair_float_0 _S434;
+    (&_S434)->primal_0 = _S430;
+    (&_S434)->differential_0 = 0.0f;
+    s_bwd_prop_exp_0(&_S434, _S432);
+    float _S435 = _S434.differential_0 / _S431;
+    float _S436 = _S428 * - _S435;
+    float _S437 = _S429 * _S435;
+    float3  _S438 = make_float3 (0.0f);
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S439;
+    (&_S439)->primal_0 = _S426;
+    (&_S439)->differential_0 = _S438;
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S440;
+    (&_S440)->primal_0 = _S426;
+    (&_S440)->differential_0 = _S438;
+    s_bwd_prop_dot_0(&_S439, &_S440, _S436);
+    float _S441 = -0.5f * _S437;
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S442;
+    (&_S442)->primal_0 = _S427;
+    (&_S442)->differential_0 = _S438;
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S443;
+    (&_S443)->primal_0 = _S427;
+    (&_S443)->differential_0 = _S438;
+    s_bwd_prop_dot_0(&_S442, &_S443, _S441);
+    float3  _S444 = _S443.differential_0 + _S442.differential_0;
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S445;
+    (&_S445)->primal_0 = _S426;
+    (&_S445)->differential_0 = _S438;
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S446;
+    (&_S446)->primal_0 = _S425;
+    (&_S446)->differential_0 = _S438;
+    s_bwd_prop_cross_0(&_S445, &_S446, _S444);
+    float3  _S447 = _S440.differential_0 + _S439.differential_0 + _S445.differential_0;
+    Matrix<float, 3, 3>  _S448 = makeMatrix<float, 3, 3> (0.0f);
+    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S449;
+    (&_S449)->primal_0 = (*dpiscl_rot_0).primal_0;
+    (&_S449)->differential_0 = _S448;
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S450;
+    (&_S450)->primal_0 = (*dpray_d_0).primal_0;
+    (&_S450)->differential_0 = _S438;
+    s_bwd_prop_mul_2(&_S449, &_S450, _S447);
+    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S451;
+    (&_S451)->primal_0 = (*dpiscl_rot_0).primal_0;
+    (&_S451)->differential_0 = _S448;
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S452;
+    (&_S452)->primal_0 = _S424;
+    (&_S452)->differential_0 = _S438;
+    s_bwd_prop_mul_2(&_S451, &_S452, _S446.differential_0);
+    float3  _S453 = - _S452.differential_0;
     dpray_d_0->primal_0 = (*dpray_d_0).primal_0;
-    dpray_d_0->differential_0 = _S364.differential_0;
+    dpray_d_0->differential_0 = _S450.differential_0;
     dpray_o_0->primal_0 = (*dpray_o_0).primal_0;
-    dpray_o_0->differential_0 = _S366.differential_0;
+    dpray_o_0->differential_0 = _S452.differential_0;
     dpopacity_0->primal_0 = (*dpopacity_0).primal_0;
-    dpopacity_0->differential_0 = _S347;
-    Matrix<float, 3, 3>  _S368 = _S363.differential_0 + _S365.differential_0;
+    dpopacity_0->differential_0 = _S433;
+    Matrix<float, 3, 3>  _S454 = _S449.differential_0 + _S451.differential_0;
     dpiscl_rot_0->primal_0 = (*dpiscl_rot_0).primal_0;
-    dpiscl_rot_0->differential_0 = _S368;
+    dpiscl_rot_0->differential_0 = _S454;
     dpmean_0->primal_0 = (*dpmean_0).primal_0;
-    dpmean_0->differential_0 = _S367;
+    dpmean_0->differential_0 = _S453;
     return;
 }
 
-inline __device__ void s_bwd_evaluate_alpha_3dgs_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * _S369, DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * _S370, DiffPair_float_0 * _S371, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S372, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S373, float _S374)
+inline __device__ void s_bwd_evaluate_alpha_3dgs_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * _S455, DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * _S456, DiffPair_float_0 * _S457, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S458, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S459, float _S460)
 {
-    s_bwd_prop_evaluate_alpha_3dgs_0(_S369, _S370, _S371, _S372, _S373, _S374);
+    s_bwd_prop_evaluate_alpha_3dgs_0(_S455, _S456, _S457, _S458, _S459, _S460);
     return;
 }
 
 inline __device__ void evaluate_alpha_3dgs_vjp(float3  mean_1, Matrix<float, 3, 3>  iscl_rot_1, float opacity_1, float3  ray_o_1, float3  ray_d_1, float v_alpha_0, float3  * v_mean_0, Matrix<float, 3, 3>  * v_iscl_rot_1, float * v_opacity_0, float3  * v_ray_o_1, float3  * v_ray_d_1)
 {
-    float3  _S375 = make_float3 (0.0f);
+    float3  _S461 = make_float3 (0.0f);
     DiffPair_vectorx3Cfloatx2C3x3E_0 dp_mean_0;
     (&dp_mean_0)->primal_0 = mean_1;
-    (&dp_mean_0)->differential_0 = _S375;
-    Matrix<float, 3, 3>  _S376 = makeMatrix<float, 3, 3> (0.0f);
+    (&dp_mean_0)->differential_0 = _S461;
+    Matrix<float, 3, 3>  _S462 = makeMatrix<float, 3, 3> (0.0f);
     DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 dp_iscl_rot_0;
     (&dp_iscl_rot_0)->primal_0 = iscl_rot_1;
-    (&dp_iscl_rot_0)->differential_0 = _S376;
+    (&dp_iscl_rot_0)->differential_0 = _S462;
     DiffPair_float_0 dp_opacity_0;
     (&dp_opacity_0)->primal_0 = opacity_1;
     (&dp_opacity_0)->differential_0 = 0.0f;
     DiffPair_vectorx3Cfloatx2C3x3E_0 dp_ray_o_0;
     (&dp_ray_o_0)->primal_0 = ray_o_1;
-    (&dp_ray_o_0)->differential_0 = _S375;
+    (&dp_ray_o_0)->differential_0 = _S461;
     DiffPair_vectorx3Cfloatx2C3x3E_0 dp_ray_d_0;
     (&dp_ray_d_0)->primal_0 = ray_d_1;
-    (&dp_ray_d_0)->differential_0 = _S375;
+    (&dp_ray_d_0)->differential_0 = _S461;
     s_bwd_evaluate_alpha_3dgs_0(&dp_mean_0, &dp_iscl_rot_0, &dp_opacity_0, &dp_ray_o_0, &dp_ray_d_0, v_alpha_0);
     *v_mean_0 = dp_mean_0.differential_0;
     *v_iscl_rot_1 = dp_iscl_rot_0.differential_0;
@@ -1553,90 +1812,90 @@ inline __device__ void evaluate_color_3dgs(float3  mean_2, Matrix<float, 3, 3>  
 
 inline __device__ void s_bwd_prop_evaluate_color_3dgs_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * dpmean_1, DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * dpiscl_rot_1, DiffPair_float_0 * dpopacity_1, DiffPair_vectorx3Cfloatx2C3x3E_0 * dprgb_0, DiffPair_vectorx3Cfloatx2C3x3E_0 * dpray_o_1, DiffPair_vectorx3Cfloatx2C3x3E_0 * dpray_d_1, float3  dpout_rgb_0, float dpdepth_0)
 {
-    float3  _S377 = (*dpray_o_1).primal_0 - (*dpmean_1).primal_0;
-    float3  _S378 = s_primal_ctx_mul_0((*dpiscl_rot_1).primal_0, _S377);
-    float3  _S379 = s_primal_ctx_mul_0((*dpiscl_rot_1).primal_0, (*dpray_d_1).primal_0);
-    float _S380 = s_primal_ctx_dot_0(_S379, _S379);
-    float _S381 = dpdepth_0 / (_S380 * _S380);
-    float _S382 = - s_primal_ctx_dot_0(_S378, _S379) * - _S381;
-    float _S383 = _S380 * _S381;
-    float3  _S384 = make_float3 (0.0f);
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S385;
-    (&_S385)->primal_0 = _S379;
-    (&_S385)->differential_0 = _S384;
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S386;
-    (&_S386)->primal_0 = _S379;
-    (&_S386)->differential_0 = _S384;
-    s_bwd_prop_dot_0(&_S385, &_S386, _S382);
-    float _S387 = - _S383;
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S388;
-    (&_S388)->primal_0 = _S378;
-    (&_S388)->differential_0 = _S384;
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S389;
-    (&_S389)->primal_0 = _S379;
-    (&_S389)->differential_0 = _S384;
-    s_bwd_prop_dot_0(&_S388, &_S389, _S387);
-    float3  _S390 = _S386.differential_0 + _S385.differential_0 + _S389.differential_0;
-    Matrix<float, 3, 3>  _S391 = makeMatrix<float, 3, 3> (0.0f);
-    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S392;
-    (&_S392)->primal_0 = (*dpiscl_rot_1).primal_0;
-    (&_S392)->differential_0 = _S391;
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S393;
-    (&_S393)->primal_0 = (*dpray_d_1).primal_0;
-    (&_S393)->differential_0 = _S384;
-    s_bwd_prop_mul_2(&_S392, &_S393, _S390);
-    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S394;
-    (&_S394)->primal_0 = (*dpiscl_rot_1).primal_0;
-    (&_S394)->differential_0 = _S391;
-    DiffPair_vectorx3Cfloatx2C3x3E_0 _S395;
-    (&_S395)->primal_0 = _S377;
-    (&_S395)->differential_0 = _S384;
-    s_bwd_prop_mul_2(&_S394, &_S395, _S388.differential_0);
-    float3  _S396 = - _S395.differential_0;
+    float3  _S463 = (*dpray_o_1).primal_0 - (*dpmean_1).primal_0;
+    float3  _S464 = s_primal_ctx_mul_0((*dpiscl_rot_1).primal_0, _S463);
+    float3  _S465 = s_primal_ctx_mul_0((*dpiscl_rot_1).primal_0, (*dpray_d_1).primal_0);
+    float _S466 = s_primal_ctx_dot_0(_S465, _S465);
+    float _S467 = dpdepth_0 / (_S466 * _S466);
+    float _S468 = - s_primal_ctx_dot_0(_S464, _S465) * - _S467;
+    float _S469 = _S466 * _S467;
+    float3  _S470 = make_float3 (0.0f);
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S471;
+    (&_S471)->primal_0 = _S465;
+    (&_S471)->differential_0 = _S470;
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S472;
+    (&_S472)->primal_0 = _S465;
+    (&_S472)->differential_0 = _S470;
+    s_bwd_prop_dot_0(&_S471, &_S472, _S468);
+    float _S473 = - _S469;
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S474;
+    (&_S474)->primal_0 = _S464;
+    (&_S474)->differential_0 = _S470;
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S475;
+    (&_S475)->primal_0 = _S465;
+    (&_S475)->differential_0 = _S470;
+    s_bwd_prop_dot_0(&_S474, &_S475, _S473);
+    float3  _S476 = _S472.differential_0 + _S471.differential_0 + _S475.differential_0;
+    Matrix<float, 3, 3>  _S477 = makeMatrix<float, 3, 3> (0.0f);
+    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S478;
+    (&_S478)->primal_0 = (*dpiscl_rot_1).primal_0;
+    (&_S478)->differential_0 = _S477;
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S479;
+    (&_S479)->primal_0 = (*dpray_d_1).primal_0;
+    (&_S479)->differential_0 = _S470;
+    s_bwd_prop_mul_2(&_S478, &_S479, _S476);
+    DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 _S480;
+    (&_S480)->primal_0 = (*dpiscl_rot_1).primal_0;
+    (&_S480)->differential_0 = _S477;
+    DiffPair_vectorx3Cfloatx2C3x3E_0 _S481;
+    (&_S481)->primal_0 = _S463;
+    (&_S481)->differential_0 = _S470;
+    s_bwd_prop_mul_2(&_S480, &_S481, _S474.differential_0);
+    float3  _S482 = - _S481.differential_0;
     dpray_d_1->primal_0 = (*dpray_d_1).primal_0;
-    dpray_d_1->differential_0 = _S393.differential_0;
+    dpray_d_1->differential_0 = _S479.differential_0;
     dpray_o_1->primal_0 = (*dpray_o_1).primal_0;
-    dpray_o_1->differential_0 = _S395.differential_0;
+    dpray_o_1->differential_0 = _S481.differential_0;
     dprgb_0->primal_0 = (*dprgb_0).primal_0;
     dprgb_0->differential_0 = dpout_rgb_0;
     dpopacity_1->primal_0 = (*dpopacity_1).primal_0;
     dpopacity_1->differential_0 = 0.0f;
-    Matrix<float, 3, 3>  _S397 = _S392.differential_0 + _S394.differential_0;
+    Matrix<float, 3, 3>  _S483 = _S478.differential_0 + _S480.differential_0;
     dpiscl_rot_1->primal_0 = (*dpiscl_rot_1).primal_0;
-    dpiscl_rot_1->differential_0 = _S397;
+    dpiscl_rot_1->differential_0 = _S483;
     dpmean_1->primal_0 = (*dpmean_1).primal_0;
-    dpmean_1->differential_0 = _S396;
+    dpmean_1->differential_0 = _S482;
     return;
 }
 
-inline __device__ void s_bwd_evaluate_color_3dgs_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * _S398, DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * _S399, DiffPair_float_0 * _S400, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S401, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S402, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S403, float3  _S404, float _S405)
+inline __device__ void s_bwd_evaluate_color_3dgs_0(DiffPair_vectorx3Cfloatx2C3x3E_0 * _S484, DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 * _S485, DiffPair_float_0 * _S486, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S487, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S488, DiffPair_vectorx3Cfloatx2C3x3E_0 * _S489, float3  _S490, float _S491)
 {
-    s_bwd_prop_evaluate_color_3dgs_0(_S398, _S399, _S400, _S401, _S402, _S403, _S404, _S405);
+    s_bwd_prop_evaluate_color_3dgs_0(_S484, _S485, _S486, _S487, _S488, _S489, _S490, _S491);
     return;
 }
 
 inline __device__ void evaluate_color_3dgs_vjp(float3  mean_3, Matrix<float, 3, 3>  iscl_rot_3, float opacity_3, float3  rgb_1, float3  ray_o_3, float3  ray_d_3, float3  v_out_rgb_0, float v_depth_0, float3  * v_mean_1, Matrix<float, 3, 3>  * v_iscl_rot_2, float * v_opacity_1, float3  * v_rgb_0, float3  * v_ray_o_2, float3  * v_ray_d_2)
 {
-    float3  _S406 = make_float3 (0.0f);
+    float3  _S492 = make_float3 (0.0f);
     DiffPair_vectorx3Cfloatx2C3x3E_0 dp_mean_1;
     (&dp_mean_1)->primal_0 = mean_3;
-    (&dp_mean_1)->differential_0 = _S406;
-    Matrix<float, 3, 3>  _S407 = makeMatrix<float, 3, 3> (0.0f);
+    (&dp_mean_1)->differential_0 = _S492;
+    Matrix<float, 3, 3>  _S493 = makeMatrix<float, 3, 3> (0.0f);
     DiffPair_matrixx3Cfloatx2C3x2C3x3E_0 dp_iscl_rot_1;
     (&dp_iscl_rot_1)->primal_0 = iscl_rot_3;
-    (&dp_iscl_rot_1)->differential_0 = _S407;
+    (&dp_iscl_rot_1)->differential_0 = _S493;
     DiffPair_float_0 dp_opacity_1;
     (&dp_opacity_1)->primal_0 = opacity_3;
     (&dp_opacity_1)->differential_0 = 0.0f;
     DiffPair_vectorx3Cfloatx2C3x3E_0 dp_rgb_0;
     (&dp_rgb_0)->primal_0 = rgb_1;
-    (&dp_rgb_0)->differential_0 = _S406;
+    (&dp_rgb_0)->differential_0 = _S492;
     DiffPair_vectorx3Cfloatx2C3x3E_0 dp_ray_o_1;
     (&dp_ray_o_1)->primal_0 = ray_o_3;
-    (&dp_ray_o_1)->differential_0 = _S406;
+    (&dp_ray_o_1)->differential_0 = _S492;
     DiffPair_vectorx3Cfloatx2C3x3E_0 dp_ray_d_1;
     (&dp_ray_d_1)->primal_0 = ray_d_3;
-    (&dp_ray_d_1)->differential_0 = _S406;
+    (&dp_ray_d_1)->differential_0 = _S492;
     s_bwd_evaluate_color_3dgs_0(&dp_mean_1, &dp_iscl_rot_1, &dp_opacity_1, &dp_rgb_0, &dp_ray_o_1, &dp_ray_d_1, v_out_rgb_0, v_depth_0);
     *v_mean_1 = dp_mean_1.differential_0;
     *v_iscl_rot_2 = dp_iscl_rot_1.differential_0;
@@ -1649,26 +1908,26 @@ inline __device__ void evaluate_color_3dgs_vjp(float3  mean_3, Matrix<float, 3, 
 
 inline __device__ void map_opaque_triangle(float3  mean_4, float4  quat_7, float3  scale_6, float3  * vert0_0, float3  * vert1_0, float3  * vert2_0)
 {
-    float _S408 = scale_6.x;
-    float sx_0 = (F32_exp((_S408)));
-    float _S409 = scale_6.y;
-    float sy_0 = (F32_exp((_S409)));
-    float sz_0 = scale_6.z - 0.5f * (_S408 + _S409);
-    float4  _S410 = normalize_1(quat_7);
-    float x_16 = _S410.y;
+    float _S494 = scale_6.x;
+    float sx_0 = (F32_exp((_S494)));
+    float _S495 = scale_6.y;
+    float sy_0 = (F32_exp((_S495)));
+    float sz_0 = scale_6.z - 0.5f * (_S494 + _S495);
+    float4  _S496 = normalize_1(quat_7);
+    float x_16 = _S496.y;
     float x2_7 = x_16 * x_16;
-    float y2_7 = _S410.z * _S410.z;
-    float z2_7 = _S410.w * _S410.w;
-    float xy_7 = _S410.y * _S410.z;
-    float xz_7 = _S410.y * _S410.w;
-    float yz_7 = _S410.z * _S410.w;
-    float wx_7 = _S410.x * _S410.y;
-    float wy_7 = _S410.x * _S410.z;
-    float wz_7 = _S410.x * _S410.w;
-    Matrix<float, 3, 3>  _S411 = transpose_0(makeMatrix<float, 3, 3> (1.0f - 2.0f * (y2_7 + z2_7), 2.0f * (xy_7 + wz_7), 2.0f * (xz_7 - wy_7), 2.0f * (xy_7 - wz_7), 1.0f - 2.0f * (x2_7 + z2_7), 2.0f * (yz_7 + wx_7), 2.0f * (xz_7 + wy_7), 2.0f * (yz_7 - wx_7), 1.0f - 2.0f * (x2_7 + y2_7)));
-    *vert0_0 = mul_2(_S411, make_float3 (sx_0, 0.0f, 0.0f)) + mean_4;
-    *vert1_0 = mul_2(_S411, make_float3 (sx_0 * (-0.5f + sz_0), sy_0, 0.0f)) + mean_4;
-    *vert2_0 = mul_2(_S411, make_float3 (sx_0 * (-0.5f - sz_0), - sy_0, 0.0f)) + mean_4;
+    float y2_7 = _S496.z * _S496.z;
+    float z2_7 = _S496.w * _S496.w;
+    float xy_7 = _S496.y * _S496.z;
+    float xz_7 = _S496.y * _S496.w;
+    float yz_7 = _S496.z * _S496.w;
+    float wx_7 = _S496.x * _S496.y;
+    float wy_7 = _S496.x * _S496.z;
+    float wz_7 = _S496.x * _S496.w;
+    Matrix<float, 3, 3>  _S497 = transpose_0(makeMatrix<float, 3, 3> (1.0f - 2.0f * (y2_7 + z2_7), 2.0f * (xy_7 + wz_7), 2.0f * (xz_7 - wy_7), 2.0f * (xy_7 - wz_7), 1.0f - 2.0f * (x2_7 + z2_7), 2.0f * (yz_7 + wx_7), 2.0f * (xz_7 + wy_7), 2.0f * (yz_7 - wx_7), 1.0f - 2.0f * (x2_7 + y2_7)));
+    *vert0_0 = mul_2(_S497, make_float3 (sx_0, 0.0f, 0.0f)) + mean_4;
+    *vert1_0 = mul_2(_S497, make_float3 (sx_0 * (-0.5f + sz_0), sy_0, 0.0f)) + mean_4;
+    *vert2_0 = mul_2(_S497, make_float3 (sx_0 * (-0.5f - sz_0), - sy_0, 0.0f)) + mean_4;
     return;
 }
 

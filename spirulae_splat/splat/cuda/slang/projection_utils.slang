@@ -8,10 +8,12 @@
 
 static const float ALPHA_THRESHOLD = 1.0f/255.0f;
 
+// This must match Common.h
 enum CameraModelType {
     PINHOLE = 0,
     FISHEYE = 1,
-    ORTHO = 2
+    EQUISOLID = 2,
+    EQUIRECTANGULAR = 3,
 };
 
 // https://www.shadertoy.com/view/4djSRW
@@ -404,11 +406,40 @@ float2 fisheye_proj(float3 p_view) {
 
 [ForceInline]
 [Differentiable]
+float2 equisolid_proj(float3 p_view) {
+    float r = length(p_view.xy);
+    float theta = atan2(r, p_view.z);
+    float k = r < 1e-6
+        ? (1.0 - theta*theta/24.0) / p_view.z
+        : (2.0 * sin(0.5 * theta)) / r;
+    return p_view.xy * k;
+}
+
+[ForceInline]
+[Differentiable]
 bool fisheye_proj<let assume_valid : bool>(
     float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
     out float2 uv
 ) {
     uv = fisheye_proj(p_view);
+    if (!assume_valid && !is_valid_distortion(uv, dist_coeffs))
+        return false;
+    uv = camera_distortion(uv, dist_coeffs);
+    float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
+    uv = float2(
+        fx * uv.x + cx,
+        fy * uv.y + cy
+    );
+    return true;
+}
+
+[ForceInline]
+[Differentiable]
+bool equisolid_proj<let assume_valid : bool>(
+    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
+    out float2 uv
+) {
+    uv = equisolid_proj(p_view);
     if (!assume_valid && !is_valid_distortion(uv, dist_coeffs))
         return false;
     uv = camera_distortion(uv, dist_coeffs);
@@ -426,6 +457,14 @@ bool fisheye_proj_nav(
     out float2 uv
 ) {
     return fisheye_proj<false>(p_view, intrins, dist_coeffs, uv);
+}
+
+[CudaDeviceExport]
+bool equisolid_proj_nav(
+    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
+    out float2 uv
+) {
+    return equisolid_proj<false>(p_view, intrins, dist_coeffs, uv);
 }
 
 [ForceInline]
@@ -457,6 +496,23 @@ float2x3 fisheye_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[1
 
 [ForceInline]
 [Differentiable]
+[CudaDeviceExport]
+float2x3 equisolid_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs) {
+    float2x3 J;
+    [ForceUnroll]
+    for (int i = 0; i < 3; ++i) {
+        DifferentialPair<float3> dp_p_view = diffPair(p_view,
+            float3(float(i == 0), float(i == 1), float(i == 2)));
+        DifferentialPair<float2> dp_uv;
+        fwd_diff(equisolid_proj<true>)(dp_p_view, intrins, dist_coeffs, dp_uv);
+        J[0][i] = dp_uv.d.x;
+        J[1][i] = dp_uv.d.y;
+    }
+    return J;
+}
+
+[ForceInline]
+[Differentiable]
 float3 fisheye_unproj(float2 uv) {
     float theta = length(uv);
     return float3(
@@ -465,6 +521,14 @@ float3 fisheye_unproj(float2 uv) {
     );
 }
 
+[ForceInline]
+[Differentiable]
+float3 equisolid_unproj(float2 uv) {
+    float r = length(uv);
+    float z = 1.0 - 0.5 * r * r;
+    float xy_scale = sqrt(max(0.0, 1.0 - 0.25 * r * r));
+    return float3(uv * xy_scale, z);
+}
 
 [ForceInline]
 [Differentiable]
@@ -569,61 +633,134 @@ bool undistort_point_clipped(
 }
 #endif
 
+
 [CudaDeviceExport]
 [Differentiable]
 float2 distort_point(
-    no_diff float2 uv, bool is_fisheye,
+    no_diff float2 uv,
+    no_diff int camera_model,
     no_diff float[10] dist_coeffs
 ) {
-    if (is_fisheye) {
+    CameraModelType model = (CameraModelType)camera_model;
+
+    if (model == CameraModelType::FISHEYE) {
         float r = length(uv);
         float theta = atan(r);
-        uv *= (r < 1e-3 ? 1.0-r*r/3.0 : theta/r);
+        float k = r < 1e-3 ? (1.0 - theta * theta / 6.0) : (theta / r);
+        uv *= k;
     }
+    else if (model == CameraModelType::EQUISOLID) {
+        float r = length(uv);
+        float theta = atan(r);
+        float k = r < 1e-3 ? (1.0 - theta * theta / 24.0) : (2.0 * sin(0.5 * theta) / r);
+        uv *= k;
+    }
+
     return camera_distortion(uv, dist_coeffs);
 }
 
 [CudaDeviceExport]
 [Differentiable]
 bool undistort_point(
-    no_diff float2 uv, bool is_fisheye,
+    no_diff float2 uv,
+    no_diff int camera_model,
     no_diff float[10] dist_coeffs,
     out float2 uv_undist
 ) {
+    CameraModelType model = (CameraModelType)camera_model;
+
     if (!no_diff undistort_point(uv, dist_coeffs, 8, uv))
         return false;
-    float3 raydir = is_fisheye ? fisheye_unproj(uv) : float3(uv, 1.0);
+
+    float3 raydir;
+    if (model == CameraModelType::FISHEYE) {
+        float r = length(uv);
+        float theta = r;
+        float s = r < 1e-3 ? (1.0 - theta * theta / 6.0) : (sin(theta) / r);
+        raydir = float3(uv * s, cos(theta));
+    }
+    else if (model == CameraModelType::EQUISOLID) {
+        float r = length(uv);
+        float z = 1.0 - 0.5 * r * r;
+        float s = sqrt(max(0.0, 1.0 - 0.25 * r * r));
+        raydir = float3(uv * s, z);
+    }
+    else {
+        raydir = float3(uv, 1.0);
+    }
+
     uv_undist = raydir.xy / max(raydir.z, 1e-12);
     return true;
 }
 
 [CudaDeviceExport]
 bool unproject_point(
-    no_diff float2 uv, bool is_fisheye,
+    no_diff float2 uv,
+    no_diff int camera_model,
     no_diff float[10] dist_coeffs,
     out float3 raydir
 ) {
+    CameraModelType model = (CameraModelType)camera_model;
+
     raydir = float3(0);
-    // if (!undistort_point_clipped(uv, dist_coeffs, 8, uv))
+
     if (!undistort_point(uv, dist_coeffs, 8, uv))
         return false;
-    raydir = is_fisheye ? fisheye_unproj(uv) : float3(uv, 1.0);
+
+    if (model == CameraModelType::FISHEYE) {
+        float r = length(uv);
+        float theta = r;
+        float s = r < 1e-3 ? (1.0 - theta * theta / 6.0) : (sin(theta) / r);
+        raydir = float3(uv * s, cos(theta));
+    }
+    else if (model == CameraModelType::EQUISOLID) {
+        float r = length(uv);
+        float z = 1.0 - 0.5 * r * r;
+        float s = sqrt(max(0.0, 1.0 - 0.25 * r * r));
+        raydir = float3(uv * s, z);
+    }
+    else {
+        raydir = float3(uv, 1.0);
+    }
+
     return true;
 }
 
 [CudaDeviceExport]
 [Differentiable]
 bool generate_ray(
-    no_diff float2 uv, bool is_fisheye,
+    no_diff float2 uv,
+    no_diff int camera_model,
     no_diff float[10] dist_coeffs,
     out float3 raydir
 ) {
-    if (!no_diff undistort_point(uv, dist_coeffs, 8, uv))
-        { raydir = float3(0); return false; }
-    raydir = is_fisheye ? fisheye_unproj(uv) : float3(uv, 1.0);
+    CameraModelType model = (CameraModelType)camera_model;
+
+    if (!no_diff undistort_point(uv, dist_coeffs, 8, uv)) {
+        raydir = float3(0);
+        return false;
+    }
+
+    if (model == CameraModelType::FISHEYE) {
+        float r = length(uv);
+        float theta = r;
+        float s = r < 1e-3 ? (1.0 - theta * theta / 6.0) : (sin(theta) / r);
+        raydir = float3(uv * s, cos(theta));
+    }
+    else if (model == CameraModelType::EQUISOLID) {
+        float r = length(uv);
+        float z = 1.0 - 0.5 * r * r;
+        float s = sqrt(max(0.0, 1.0 - 0.25 * r * r));
+        raydir = float3(uv * s, z);
+    }
+    else {
+        raydir = float3(uv, 1.0);
+    }
+
     raydir = normalize(raydir);
     return true;
 }
+
 
 [CudaDeviceExport]
 [Differentiable]
@@ -799,7 +936,7 @@ float3x3 outerProduct(float3 u) {
 // continuous near boundary to support >180deg fisheye
 [ForceInline]
 float get_sorting_depth(CameraModelType camera_model, float3 p_view) {
-    if (camera_model != CameraModelType::FISHEYE)
+    if (camera_model == CameraModelType::PINHOLE)
         return p_view.z;
     // float z = p_view.z;
     // float z = max(p_view.z, sqrt(0.5f * dot(p_view, p_view)));

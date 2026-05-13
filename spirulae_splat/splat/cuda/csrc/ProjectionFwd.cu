@@ -63,6 +63,8 @@ inline std::tuple<
         projection_fused_fwd_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
     else if (camera_model == ssplat::CameraModelType::FISHEYE)
         projection_fused_fwd_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
+    else if (camera_model == ssplat::CameraModelType::EQUISOLID)
+        projection_fused_fwd_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::EQUISOLID> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());

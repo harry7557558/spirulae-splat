@@ -47,7 +47,7 @@ struct _Base3DGS : public _BasePrimitive3DGS {
                     cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
                     cam.dist_coeffs,
                     cam.width, cam.height,
-                    &aabb, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
+                    &aabb, &sorting_depth, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
                 );
             else if constexpr (camera_model == ssplat::CameraModelType::FISHEYE)
                 Slang3DGS::projection_3dgs_fisheye(
@@ -55,9 +55,16 @@ struct _Base3DGS : public _BasePrimitive3DGS {
                     mean, quat, scale, opacity, sh_coeffs,
                     cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
                     cam.width, cam.height,
-                    &aabb, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
+                    &aabb, &sorting_depth, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
                 );
-            sorting_depth = screen.depth;  // TODO
+            else if constexpr (camera_model == ssplat::CameraModelType::EQUISOLID)
+                Slang3DGS::projection_3dgs_equisolid(
+                    antialiased,
+                    mean, quat, scale, opacity, sh_coeffs,
+                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
+                    cam.width, cam.height,
+                    &aabb, &sorting_depth, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
+                );
         }
 
         template<ssplat::CameraModelType camera_model>
@@ -78,6 +85,16 @@ struct _Base3DGS : public _BasePrimitive3DGS {
                 );
             else if constexpr (camera_model == ssplat::CameraModelType::FISHEYE)
                 Slang3DGS::projection_3dgs_fisheye_vjp(
+                    antialiased,
+                    mean, quat, scale, opacity, sh_coeffs,
+                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
+                    cam.width, cam.height,
+                    v_screen.xy, v_screen.depth, v_screen.conic, v_screen.opac, v_screen.rgb,
+                    &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
+                    &v_R, &v_t
+                );
+            else if constexpr (camera_model == ssplat::CameraModelType::EQUISOLID)
+                Slang3DGS::projection_3dgs_equisolid_vjp(
                     antialiased,
                     mean, quat, scale, opacity, sh_coeffs,
                     cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
@@ -119,6 +136,18 @@ struct _Base3DGS : public _BasePrimitive3DGS {
                     &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
                     &v_R, &v_t, &vr_world_pos, &h_world_pos
                 );
+            else if constexpr (camera_model == ssplat::CameraModelType::EQUISOLID)
+                Slang3DGS::projection_3dgs_equisolid_vjp(
+                    antialiased,
+                    mean, quat, scale, opacity, sh_coeffs,
+                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
+                    cam.width, cam.height,
+                    v_proj.xy, v_proj.depth, v_proj.conic, v_proj.opac, v_proj.rgb,
+                    vr_proj.xy, vr_proj.depth, vr_proj.conic, vr_proj.opac, vr_proj.rgb,
+                    h_proj.xy, h_proj.depth, h_proj.conic, h_proj.opac, h_proj.rgb,
+                    &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
+                    &v_R, &v_t, &vr_world_pos, &h_world_pos
+                );
         }
 
         template<ssplat::CameraModelType camera_model>
@@ -144,6 +173,20 @@ struct _Base3DGS : public _BasePrimitive3DGS {
                 );
             else if constexpr (camera_model == ssplat::CameraModelType::FISHEYE)
                 Slang3DGS::projection_3dgs_fisheye_vjp(
+                    antialiased,
+                    mean, quat, scale, opacity, sh_coeffs,
+                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
+                    cam.width, cam.height,
+                    v_proj.xy, v_proj.depth, v_proj.conic, v_proj.opac, v_proj.rgb,
+                    vr_proj.xy, vr_proj.depth, vr_proj.conic, vr_proj.opac, vr_proj.rgb,
+                    h_proj.xy, h_proj.depth, h_proj.conic, h_proj.opac, h_proj.rgb,
+                    &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity, &v_world.sh_coeffs,
+                    &v_R, &v_t,
+                    &vr_world.mean, &vr_world.quat, &vr_world.scale, &vr_world.opacity, &vr_world.sh_coeffs[0],
+                    &h_world.mean, &h_world.quat, &h_world.scale, &h_world.opacity, &h_world.sh_coeffs[0]
+                );
+            else if constexpr (camera_model == ssplat::CameraModelType::EQUISOLID)
+                Slang3DGS::projection_3dgs_equisolid_vjp(
                     antialiased,
                     mean, quat, scale, opacity, sh_coeffs,
                     cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,

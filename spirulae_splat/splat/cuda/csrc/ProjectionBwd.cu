@@ -115,6 +115,8 @@ inline void launch_projection_projection_fused_bwd_kernel(
         projection_fused_bwd_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::PINHOLE, hessian_diagonal_output_mode> _LAUNCH_ARGS;
     else if (camera_model == ssplat::CameraModelType::FISHEYE)
         projection_fused_bwd_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::FISHEYE, hessian_diagonal_output_mode> _LAUNCH_ARGS;
+    else if (camera_model == ssplat::CameraModelType::EQUISOLID)
+        projection_fused_bwd_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::EQUISOLID, hessian_diagonal_output_mode> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());

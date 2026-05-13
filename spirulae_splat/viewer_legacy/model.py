@@ -312,7 +312,7 @@ class SplatModel:
                 height=H,
                 packed=False,
                 use_bvh=False,
-                camera_model=["pinhole", "fisheye"][is_fisheye],
+                camera_model=["pinhole", "fisheye"][is_fisheye],  # TODO: equisolid
                 **kwargs,
             )
             return rgbd, 1.0-Ts, meta

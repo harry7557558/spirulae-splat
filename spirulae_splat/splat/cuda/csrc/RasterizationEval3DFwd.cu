@@ -85,6 +85,9 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     else if (camera_model == ssplat::CameraModelType::FISHEYE)
         rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
             ssplat::CameraModelType::FISHEYE, output_distortion> _LAUNCH_ARGS;
+    else if (camera_model == ssplat::CameraModelType::EQUISOLID)
+        rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
+            ssplat::CameraModelType::EQUISOLID, output_distortion> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());

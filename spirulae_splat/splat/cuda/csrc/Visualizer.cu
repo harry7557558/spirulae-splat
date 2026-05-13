@@ -14,6 +14,10 @@ namespace SlangProjectionUtils {
 #include "types.cuh"
 #include "common.cuh"
 
+#include "gsplat/Common.h"
+
+using ssplat::CameraModelType;
+
 
 
 inline constexpr int kNumFrustumSegments = 16;
@@ -23,7 +27,7 @@ __global__ void fill_frustum_segments_kernel(
     const float4* __restrict__ intrins, // [N, 4]
     const int32_t* __restrict__ widths, // [N]
     const int32_t* __restrict__ heights, // [N]
-    const bool* __restrict__ is_fisheyes, // [N]
+    const int* __restrict__ camera_models, // [N]
     CameraDistortionCoeffsBuffer dist_coeffs_buffer, // [N, ...]
     const float* __restrict__ camera_to_worlds,  // [N, 3, 4]
     float size,
@@ -38,7 +42,7 @@ __global__ void fill_frustum_segments_kernel(
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
     float width = (float)widths[bid];
     float height = (float)heights[bid];
-    bool is_fisheye = is_fisheyes[bid];
+    CameraModelType camera_model = (CameraModelType)camera_models[bid];
     CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
     float2 corners[4] = {
         {-cx / fx, -cy / fy},
@@ -68,21 +72,21 @@ __global__ void fill_frustum_segments_kernel(
         float2 uv = corners[corner_idx] + (corners[(corner_idx+1)%4] - corners[corner_idx])
              * ((float)(i % kNumFrustumSegments) / kNumFrustumSegments);
         float3 raydir = float3{NAN, NAN, NAN};
-        bool valid = SlangProjectionUtils::generate_ray(uv, is_fisheye, dist_coeffs, &raydir);
+        bool valid = SlangProjectionUtils::generate_ray(uv, (int)camera_model, dist_coeffs, &raydir);
         if (!valid) {
             // binary search for valid
             float t0 = 0.0f, t1 = 1.0f;
             for (int iter = 0; iter < 12; ++iter) {
                 float t = 0.5f*(t0+t1);
                 float3 temp;
-                if (SlangProjectionUtils::generate_ray(uv*t, is_fisheye, dist_coeffs, &temp))
+                if (SlangProjectionUtils::generate_ray(uv*t, (int)camera_model, dist_coeffs, &temp))
                     t0 = t, raydir = temp;
                 else
                     t1 = t;
             }
         }
         float3 p = raydir;
-        if (is_fisheye)
+        if (camera_model == CameraModelType::FISHEYE || camera_model == CameraModelType::EQUISOLID)
             p = normalize(p) * sqrtf((2.0f*sxy*sxy + sz*sz) / 3.0f);
         else
             p = p * float3{sxy, sxy, sz} / p.z;
@@ -138,21 +142,21 @@ __global__ void fill_frustum_segments_kernel(
                 corners[2] * u*v +
                 corners[3] * (1.0f-u)*v;
             float3 raydir = float3{NAN, NAN, NAN};
-            bool valid = SlangProjectionUtils::generate_ray(uv, is_fisheye, dist_coeffs, &raydir);
+            bool valid = SlangProjectionUtils::generate_ray(uv, (int)camera_model, dist_coeffs, &raydir);
             if (!valid) {
                 // binary search for valid
                 float t0 = 0.0f, t1 = 1.0f;
                 for (int iter = 0; iter < 12; ++iter) {
                     float t = 0.5f*(t0+t1);
                     float3 temp;
-                    if (SlangProjectionUtils::generate_ray(uv*t, is_fisheye, dist_coeffs, &temp))
+                    if (SlangProjectionUtils::generate_ray(uv*t, (int)camera_model, dist_coeffs, &temp))
                         t0 = t, raydir = temp;
                     else
                         t1 = t;
                 }
             }
             float3 p = raydir;
-            if (is_fisheye)
+        if (camera_model == CameraModelType::FISHEYE || camera_model == CameraModelType::EQUISOLID)
                 p = normalize(p) * sqrtf((2.0f*sxy*sxy + sz*sz) / 3.0f);
             else
                 p = p * float3{sxy, sxy, sz} / p.z;
@@ -523,7 +527,7 @@ __global__ void blit_aabb_bvh_kernel(
     TensorView<float, 3> render_rgbs,  // [H, W, 3]
     const TensorView<float, 3> render_depths,  // [H, W, 1]
     const TensorView<float, 3> render_alphas,  // [H, W, 1]
-    const bool view_is_fisheye,
+    const int view_camera_model,
     const int image_width,
     const int image_height,
     const float4* __restrict__ view_intrins,  // [4]
@@ -558,10 +562,10 @@ __global__ void blit_aabb_bvh_kernel(
             ray_o[i] = SlangProjectionUtils::transform_ray_o(R, t);
             inside |= SlangProjectionUtils::generate_ray(
                 {(px-cx)/fx, (py-cy)/fy},
-                view_is_fisheye, dist_coeffs,
+                view_camera_model, dist_coeffs,
                 &ray_d[i]
             );
-            if (!view_is_fisheye)
+            if (view_camera_model == (int)CameraModelType::PINHOLE)
                 ray_d[i] = ray_d[i] * (1.0f / ray_d[i].z);
             ray_d[i] = SlangProjectionUtils::transform_ray_d(R, ray_d[i]);
         }
@@ -720,7 +724,7 @@ __global__ void blit_with_bvh_kernel(
     const TensorView<float, 3> render_rgbs,  // [H, W, 3]
     const TensorView<float, 3> render_depths,  // [H, W, 1]
     const TensorView<float, 3> render_alphas,  // [H, W, 1]
-    const bool view_is_fisheye,
+    const int view_camera_model,
     const int image_width,
     const int image_height,
     const float4* __restrict__ view_intrins,  // [4]
@@ -809,12 +813,17 @@ __global__ void blit_with_bvh_kernel(
             gray_b * (py * (1.0f / (float)BLOCK_DIM_Y) - blockIdx.y) + gray_c;
         float3 ray_o = SlangProjectionUtils::transform_ray_o(R, t);
         float3 ray_d;
+        float2 uv = {(px-cx)/fx, (py-cy)/fy};
         bool inside = SlangProjectionUtils::generate_ray(
-            {(px-cx)/fx, (py-cy)/fy},
-            view_is_fisheye, dist_coeffs,
+            uv,
+            view_camera_model, dist_coeffs,
             &ray_d
         );
-        if (!view_is_fisheye)
+        if (view_camera_model == (int)CameraModelType::FISHEYE)
+            inside &= length(uv) < (float)M_PI;
+        if (view_camera_model == (int)CameraModelType::EQUISOLID)
+            inside &= length(uv) < 2.0f;
+        if (view_camera_model == (int)CameraModelType::PINHOLE)
             // ray_d = ray_d * (1.0f / ray_d.z);
             depth *= ray_d.z;
         ray_d = SlangProjectionUtils::transform_ray_d(R, ray_d);
@@ -1023,14 +1032,14 @@ at::Tensor blit_train_cameras_tensor(
     at::Tensor render_rgbs,  // [H, W, 3]
     at::Tensor render_depths,  // [H, W, 1]
     at::Tensor render_alphas,  // [H, W, 1]
-    const bool view_is_fisheye,
+    const int view_camera_model,
     const at::Tensor view_intrins,  // [4]
     const at::Tensor view_viewmat,  // [4, 4]
     const CameraDistortionCoeffsTensor view_dist_coeffs,
     const at::Tensor intrins,  // [N, 4]
     const at::Tensor widths,  // [N]
     const at::Tensor heights,  // [N]
-    const at::Tensor is_fisheye,  // [N]
+    const at::Tensor camera_models,  // [N]
     const CameraDistortionCoeffsTensor dist_coeffs,
     const at::Tensor camera_to_worlds,  // [N, 3, 4]
     at::Tensor thumbnails,
@@ -1046,7 +1055,7 @@ at::Tensor blit_train_cameras_tensor(
     CHECK_INPUT(intrins);
     CHECK_INPUT(widths);
     CHECK_INPUT(heights);
-    CHECK_INPUT(is_fisheye);
+    CHECK_INPUT(camera_models);
     CHECK_INPUT(camera_to_worlds);
     CHECK_INPUT(thumbnails);
 
@@ -1076,7 +1085,7 @@ at::Tensor blit_train_cameras_tensor(
             tensor2view<float, 3>(render_rgbs),
             tensor2view<float, 3>(render_depths),
             tensor2view<float, 3>(render_alphas),
-            view_is_fisheye,
+            view_camera_model,
             w, h,
             (float4*)view_intrins.data_ptr<float>(),
             view_viewmat.data_ptr<float>(),
@@ -1100,7 +1109,7 @@ at::Tensor blit_train_cameras_tensor(
         (float4*)intrins.data_ptr<float>(),
         widths.data_ptr<int32_t>(),
         heights.data_ptr<int32_t>(),
-        is_fisheye.data_ptr<bool>(),
+        camera_models.data_ptr<int32_t>(),
         dist_coeffs,
         camera_to_worlds.data_ptr<float>(),
         camera_size,
@@ -1159,7 +1168,7 @@ at::Tensor blit_train_cameras_tensor(
         tensor2view<float, 3>(render_rgbs),
         tensor2view<float, 3>(render_depths),
         tensor2view<float, 3>(render_alphas),
-        view_is_fisheye,
+        view_camera_model,
         w, h,
         (float4*)view_intrins.data_ptr<float>(),
         view_viewmat.data_ptr<float>(),
@@ -1176,7 +1185,7 @@ at::Tensor blit_train_cameras_tensor(
         tensor2view<float, 3>(render_rgbs),
         tensor2view<float, 3>(render_depths),
         tensor2view<float, 3>(render_alphas),
-        view_is_fisheye,
+        view_camera_model,
         w, h,
         (float4*)view_intrins.data_ptr<float>(),
         view_viewmat.data_ptr<float>(),
