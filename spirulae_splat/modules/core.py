@@ -506,29 +506,18 @@ class Renderer:
         
 
     def optim_step(
-        self, step: int,
+        self,
         model_config: 'spirulae_splat.modules.model.SpirulaeSplatModelConfig',
-        optim_config: OptimizerConfig
+        optim_config: OptimizerConfig,
+        step: int,
+        max_steps: int
     ):
 
         if self.primitive not in ["3dgs", "mip", "3dgut", "3dgut_sv"]:
             raise NotImplementedError()
 
-        max_steps = optim_config.max_steps
-        if max_steps is None:
-            max_steps = 30000  # TODO
-
-        def get_scheduled_lr(name: str):
-            lr = getattr(optim_config, name+"_lr")
-            lr_final = getattr(optim_config, name+"_lr_final", lr)
-            warmup = getattr(optim_config, name+"_lr_warmup", None)
-            pre_warmup = 0.0  # TODO
-            scheduled_lr = lr
-            if lr_final is not None:
-                scheduled_lr = lr * (lr_final / lr) ** min(step / max_steps, 1.0)
-            if warmup is not None:
-                scheduled_lr = min(scheduled_lr, pre_warmup + (lr - pre_warmup) * min(step / warmup, 1.0))
-            return scheduled_lr
+        if optim_config.max_steps is not None:
+            max_steps = optim_config.max_steps
 
         if optim_config.use_per_splat_bias_correction:
             if not hasattr(self, 'optim_bias_correction_step'):
@@ -559,10 +548,10 @@ class Renderer:
             self.g1_splats_world[3],
             self.g2_splats_world[3],
             self.radii,
-            get_scheduled_lr("means"),
-            get_scheduled_lr("quats"),
-            get_scheduled_lr("scales"),
-            get_scheduled_lr("opacities"),
+            optim_config.get_scheduled_lr("means", step, max_steps),
+            optim_config.get_scheduled_lr("quats", step, max_steps),
+            optim_config.get_scheduled_lr("scales", step, max_steps),
+            optim_config.get_scheduled_lr("opacities", step, max_steps),
             model_config.noise_lr,
             model_config.min_opacity,
             model_config.max_gauss_ratio,
@@ -586,7 +575,7 @@ class Renderer:
             self.v_splats_world[4],
             self.g1_splats_world[4],
             self.g2_splats_world[4],
-            get_scheduled_lr("features_dc"),
+            optim_config.get_scheduled_lr("features_dc", step, max_steps),
             bias_correction_step
         )
 
@@ -595,26 +584,33 @@ class Renderer:
             self.v_splats_world[5],
             self.g1_splats_world[5],
             self.g2_splats_world[5],
-            get_scheduled_lr("features_sh"),
+            optim_config.get_scheduled_lr("features_sh", step, max_steps),
             bias_correction_step
         )
 
     def densify_step(
-        self, step: int,
+        self,
+        step: int, 
+        max_steps: int,
         model_config: 'spirulae_splat.modules.model.SpirulaeSplatModelConfig',
         optim_config: OptimizerConfig
     ):
         # clip large splats
+        progress = (step+0.5) / max_steps
         if np.isfinite(model_config.max_screen_size) or np.isfinite(model_config.max_world_size):
             _make_lazy_cuda_func("densify_clip_scale")(
                 self.cur_num_splats,
                 self.radii,
                 self.splats_world[2],  # scales
-                self.splats_world[3],  # opacs
+                # self.splats_world[3],  # opacs
+                None,
                 model_config.max_screen_size,
-                model_config.max_screen_size_clip_hardness,
+                model_config.max_screen_size_clip_hardness ** (progress**2),
                 model_config.max_world_size,
             )
+
+        if step >= max_steps - model_config.refine_stop_num_iter:
+            return
 
         # update accumulation weight
         if model_config.relocate_heuristic_weight >= 1.0:
@@ -623,18 +619,24 @@ class Renderer:
                 self.densify_accum_buffer = torch.zeros(
                     self.max_num_splats, 2, dtype=torch.float32, device=self.radii.device)
             if 'accum_weight' in self.backward_info:
-                is_max_mode = True
+                # is_max_mode = True  # better for clean datasets with uneven coverage
+                is_max_mode = False  # better for noisy/high resolution datasets
                 densify_score = self.backward_info['accum_weight']
-                densify_weight = None
+                # densify_scale = self.splats_world[2]
+                densify_scale = None
+                # densify_opac = None
+                densify_opac = self.splats_world[3]
             else:
                 is_max_mode = False
                 densify_score = self.v_splats_world[3] # v_opacs
-                densify_weight = self.splats_world[3] # opacs
+                densify_scale = None
+                densify_opac = self.splats_world[3]
 
             _make_lazy_cuda_func("densify_update_weight")(
                 self.cur_num_splats,
                 self.radii,
-                densify_weight,
+                densify_scale,
+                densify_opac,
                 densify_score,
                 self.densify_accum_buffer,
                 is_max_mode

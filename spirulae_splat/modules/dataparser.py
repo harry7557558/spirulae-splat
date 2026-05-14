@@ -558,65 +558,7 @@ class SpirulaeSplatDataparser:
                 raise ValueError(f"{image_filename} does not exist. Specify `--dataparser.image_dir` if needed.")
             frame['file_path'] = str(self.config.image_dir / Path(im.name))
 
-            # masks
-            for mask_filename in [
-                Path(im.name+".png"),
-                Path(im.name).with_suffix(".png"),
-                Path(im.name+".PNG"),
-                Path(im.name).with_suffix(".PNG"),
-                Path(im.name+".jpg"),
-                Path(im.name).with_suffix(".jpg"),
-                Path(im.name+".JPG"),
-                Path(im.name).with_suffix(".JPG"),
-                Path(im.name+".jpeg"),
-                Path(im.name).with_suffix(".jpeg"),
-                Path(im.name+".JPEG"),
-                Path(im.name).with_suffix(".JPEG"),
-            ]:
-                if (self.dataset_dir / self.config.mask_dir / mask_filename).exists():
-                    frame['mask_path'] = self.config.mask_dir / mask_filename
-                    break
-
-            # depths
-            for depth_filename in [
-                Path(im.name).with_suffix(".png"),
-                Path(im.name).with_suffix(".jpg"),
-                Path(im.name).with_suffix(".jpeg"),
-                Path(im.name).with_suffix(".npy"),
-                Path(im.name).with_suffix(".npz"),
-                Path(im.name+".png"),
-                Path(im.name+".jpg"),
-                Path(im.name+".jpeg"),
-                Path(im.name+".npy"),
-                Path(im.name+".npz"),
-                Path(im.name).with_suffix(".PNG"),
-                Path(im.name).with_suffix(".JPG"),
-                Path(im.name).with_suffix(".JPEG"),
-            ]:
-                if (self.dataset_dir / self.config.depth_dir / depth_filename).exists():
-                    frame['depth_file_path'] = self.config.depth_dir / depth_filename
-                    break
-
-            # normals
-            for normal_filename in [
-                Path(im.name).with_suffix(".png"),
-                Path(im.name).with_suffix(".jpg"),
-                Path(im.name).with_suffix(".jpeg"),
-                Path(im.name).with_suffix(".npy"),
-                Path(im.name).with_suffix(".npz"),
-                Path(im.name+".png"),
-                Path(im.name+".jpg"),
-                Path(im.name+".jpeg"),
-                Path(im.name+".npy"),
-                Path(im.name+".npz"),
-                Path(im.name).with_suffix(".PNG"),
-                Path(im.name).with_suffix(".JPG"),
-                Path(im.name).with_suffix(".JPEG"),
-            ]:
-                if (self.dataset_dir / self.config.normal_dir / normal_filename).exists():
-                    frame['normal_file_path'] = self.config.normal_dir / normal_filename
-                    break
-
+            self.self._add_auxiliary_buffers(frame)
             frames.append(frame)
 
         points = [*colmap_points.values()]
@@ -709,7 +651,78 @@ class SpirulaeSplatDataparser:
         for summary in summary_log:
             print(summary)
 
+        for frame in transforms[0]['frames']:
+            self._add_auxiliary_buffers(frame)
         return self._parse_nerfstudio_data(transforms[0])
+
+    def _add_auxiliary_buffers(self, frame):
+        name = str(Path(frame['file_path']).name)
+
+        for mask_filename in [
+            Path(name+".png"),
+            Path(name).with_suffix(".png"),
+            Path(name+".PNG"),
+            Path(name).with_suffix(".PNG"),
+            Path(name+".jpg"),
+            Path(name).with_suffix(".jpg"),
+            Path(name+".JPG"),
+            Path(name).with_suffix(".JPG"),
+            Path(name+".jpeg"),
+            Path(name).with_suffix(".jpeg"),
+            Path(name+".JPEG"),
+            Path(name).with_suffix(".JPEG"),
+            Path(name[:name.rfind('.')]+"_mask.png"),
+        ]:
+            if (self.dataset_dir / self.config.mask_dir / mask_filename).exists():
+                frame['mask_path'] = self.config.mask_dir / mask_filename
+                break
+
+        # depths
+        for depth_filename in [
+            Path(name).with_suffix(".png"),
+            Path(name).with_suffix(".jpg"),
+            Path(name).with_suffix(".jpeg"),
+            Path(name).with_suffix(".npy"),
+            Path(name).with_suffix(".npz"),
+            Path(name+".png"),
+            Path(name+".jpg"),
+            Path(name+".jpeg"),
+            Path(name+".npy"),
+            Path(name+".npz"),
+            Path(name).with_suffix(".PNG"),
+            Path(name).with_suffix(".JPG"),
+            Path(name).with_suffix(".JPEG"),
+            Path(name[:name.rfind('.')]+"_depth.png"),
+            Path(name[:name.rfind('.')]+"_depth.jpg"),
+            Path(name[:name.rfind('.')]+"_depth.jpeg"),
+        ]:
+            if (self.dataset_dir / self.config.depth_dir / depth_filename).exists():
+                frame['depth_file_path'] = self.config.depth_dir / depth_filename
+                break
+
+        # normals
+        for normal_filename in [
+            Path(name).with_suffix(".png"),
+            Path(name).with_suffix(".jpg"),
+            Path(name).with_suffix(".jpeg"),
+            Path(name).with_suffix(".npy"),
+            Path(name).with_suffix(".npz"),
+            Path(name+".png"),
+            Path(name+".jpg"),
+            Path(name+".jpeg"),
+            Path(name+".npy"),
+            Path(name+".npz"),
+            Path(name).with_suffix(".PNG"),
+            Path(name).with_suffix(".JPG"),
+            Path(name).with_suffix(".JPEG"),
+            Path(name[:name.rfind('.')]+"_normal.png"),
+            Path(name[:name.rfind('.')]+"_normal.jpg"),
+            Path(name[:name.rfind('.')]+"_normal.jpeg"),
+        ]:
+            if (self.dataset_dir / self.config.normal_dir / normal_filename).exists():
+                frame['normal_file_path'] = self.config.normal_dir / normal_filename
+                break
+
 
     def _load_3D_points(self, ply_file_path: Path, transform_matrix: torch.Tensor, scale_factor: float):
         """Loads point clouds positions and colors from .ply

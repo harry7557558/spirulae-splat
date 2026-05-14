@@ -27,6 +27,8 @@ from spirulae_splat.modules.edge_detector import detect_edge
 
 from spirulae_splat.splat.cuda._wrapper_projection import add_gradient_component
 
+from spirulae_splat.modules.optimizer import OptimizerConfig
+
 try:
     from fused_bilagrid import (
         BilateralGrid,
@@ -51,7 +53,7 @@ except:
         "\033[0m"
     )
 
-from typing import List, Optional, Literal, Any
+from typing import List, Optional, Literal, Any, Union
 
 import spirulae_splat.modules.enhancer
 
@@ -147,7 +149,7 @@ class _BilagridFusedRegularization(torch.autograd.Function):
     @staticmethod
     def forward(ctx, dummy: torch.Tensor, bilagrid: List):
         ctx.set_materialize_grads(False)
-        ctx.bilagrid = bilagrid[0]
+        ctx.bilagrid = bilagrid
         assert ctx.bilagrid.grids.is_leaf
         ctx.save_for_backward(dummy)
         return (
@@ -334,7 +336,7 @@ class SplatTrainingLosses:
         # self.exposure_correction = ExposureCorrection(config)
 
         if self.config.use_bilateral_grid:
-            self.bil_grids = {
+            self.bilagrid = {
                 'affine': BilateralGrid,
                 'ppisp': BilateralGridPPISP,
                 'loglinear': BilateralGridLoglinear
@@ -345,18 +347,18 @@ class SplatTrainingLosses:
                 grid_W=self.config.bilagrid_shape[2],
             ).cuda()
             if self.config.optimize_bilagrid_frequencies:
-                self.bil_grids.grids.data = \
-                    Dct3D.apply(self.bil_grids.grids.data.cuda()).to(self.bil_grids.grids.data.device)
-            self.bilagrid_wrapped = [self.bil_grids]
+                raise NotImplementedError()
+                self.bilagrid.grids.data = \
+                    Dct3D.apply(self.bilagrid.grids.data.cuda()).to(self.bilagrid.grids.data.device)
         if self.config.use_bilateral_grid_for_geometry:
             # TODO: some way to avoid introducing VRAM overhead when geometry is not provided
-            self.bil_grids_depth = BilateralGridDepth(
+            self.bilagrid_depth = BilateralGridDepth(
                 num=self.num_train_data,
                 grid_X=self.config.bilagrid_shape_geometry[0],
                 grid_Y=self.config.bilagrid_shape_geometry[1],
                 grid_W=self.config.bilagrid_shape_geometry[2],
             ).cuda()
-            self.bil_grids_normal = BilateralGridNormal(
+            self.bilagrid_normal = BilateralGridNormal(
                 num=self.num_train_data,
                 grid_X=self.config.bilagrid_shape_geometry[0],
                 grid_Y=self.config.bilagrid_shape_geometry[1],
@@ -418,15 +420,23 @@ class SplatTrainingLosses:
         gt_img = self._downscale_if_required(image)
         return gt_img
 
-    def apply_bilateral_grid(self, bilagrid_wrapped: List, rgb: torch.Tensor, cam_idx: int, bilagrid_type: Optional[str] = None, **kwargs) -> torch.Tensor:
+    def apply_bilateral_grid(
+            self,
+            bilagrid: Union[BilateralGrid, BilateralGridDepth, BilateralGridNormal, BilateralGridLoglinear, BilateralGridPPISP],
+            rgb: torch.Tensor,
+            cam_idx: int,
+            bilagrid_type: Optional[str] = None,
+            **kwargs
+        ) -> torch.Tensor:
         """rgb must be clamped to 0-1"""
         try:
             grid_idx = cam_idx
             if isinstance(grid_idx, int):
+                assert False
                 grid_idx = torch.tensor(grid_idx, device=rgb.device, dtype=torch.long).flatten()
-            # grids = bilagrid.grids[grid_idx]
-            grids = _MemoryEfficientBilagridFetch.apply(self._dummy, bilagrid_wrapped, grid_idx)
+            grids = bilagrid.grids[grid_idx]
             if self.config.optimize_bilagrid_frequencies:
+                raise NotImplementedError()
                 grids = Dct3D.apply(grids)
             out = {
                 'affine': fused_bilagrid_sample,
@@ -496,6 +506,7 @@ class SplatTrainingLosses:
 
         # If reference image is empty, AI generate from rendered image
         if "image" not in batch:
+            raise NotImplementedError()
             image_shape = outputs["rgb"].shape
             batch["image"] = spirulae_splat.modules.enhancer.infer(outputs["rgb"].detach()).detach()
             # batch["image"] = outputs["rgb"].detach()
@@ -595,14 +606,14 @@ class SplatTrainingLosses:
                 (camera.metadata is not None and "cam_idx" in camera.metadata):
             if gt_depth is not None:
                 gt_depth = self.apply_bilateral_grid(
-                    [self.bil_grids_depth],
+                    self.bilagrid_depth,
                     gt_depth, camera.metadata["cam_idx"],
                     bilagrid_type="depth",
                     **meta
                 )
             if gt_normal is not None:
                 gt_normal = self.apply_bilateral_grid(
-                    [self.bil_grids_normal],
+                    self.bilagrid_normal,
                     gt_normal, camera.metadata["cam_idx"],
                     bilagrid_type="normal",
                     **meta
@@ -643,28 +654,30 @@ class SplatTrainingLosses:
 
         # edge detector to guide densification
         # TODO: multi resolution
-        accum_weight_map = None
+        edge_map = None
         if self.config.use_edge_aware_score and self.config.relocate_heuristic_weight != 0.0:
-            accum_weight_map = detect_edge(gt_rgb)  # no_grad
+            edge_map = detect_edge(gt_rgb, gt_rgb_mask)  # no_grad
 
         # apply exposure correction
+        pred_rgb_pre_bilagrid = None
         if self.config.use_bilateral_grid and \
                 camera.metadata is not None and "cam_idx" in camera.metadata:
-            raise NotImplementedError("TODO")
+            pred_rgb_pre_bilagrid = pred_rgb
             pred_rgb = self.apply_bilateral_grid(
-                self.bilagrid_wrapped,
+                self.bilagrid,
                 pred_rgb, camera.metadata["cam_idx"],
-                bilagrid_typ=self.config.bilagrid_type,
+                bilagrid_type=self.config.bilagrid_type,
                 **meta
             )
         if self.config.use_ppisp and \
                 camera.metadata is not None and "cam_idx" in camera.metadata:
-            raise NotImplementedError("TODO")
+            raise NotImplementedError()
+            self.ppisp_applied = True
             indices = torch.tensor(camera.metadata["cam_idx"]).flatten().to(device)
-            ppisp_param = self.ppisp_params[indices, :]
+            self.ppisp_saved = (pred_rgb.clone(), self.ppisp_params[indices, :], self.config.ppisp_param_type, intrins, camera.metadata.get('actual_width', None), camera.metadata.get('actual_height', None), indices)
             pred_rgb = apply_ppisp(
                 self.config.ppisp_param_type,
-                pred_rgb, ppisp_param,
+                pred_rgb, self.ppisp_params[indices, :],
                 intrins=intrins,
                 actual_image_width=camera.metadata.get('actual_width', None),
                 actual_image_height=camera.metadata.get('actual_height', None),
@@ -767,6 +780,42 @@ class SplatTrainingLosses:
             camera.metadata.get('cam_idx', None),
             compute_loss_map
         )
+        grads = [*grads]
+
+        if pred_rgb_pre_bilagrid is not None:
+            for x in [
+                self.bilagrid.grids[camera.metadata["cam_idx"]],
+                pred_rgb_pre_bilagrid, grads[0]
+            ]:
+                assert x.is_contiguous()
+            v_bilagrid, grads[0] = {
+                'affine': fused_bilagrid_C.bilagrid_uniform_sample_backward,
+                'ppisp': fused_bilagrid_C.bilagrid_ppisp_uniform_sample_backward,
+                'loglinear': fused_bilagrid_C.bilagrid_loglinear_uniform_sample_backward,
+            }[self.config.bilagrid_type](
+                self.bilagrid.grids[camera.metadata["cam_idx"]],  # TODO: use pre-computed
+                pred_rgb_pre_bilagrid.unsqueeze(0),
+                grads[0].unsqueeze(0),
+                1, 8, 8, 5  # TODO
+            )
+            if not hasattr(self, 'v_bilagrid') or self.v_bilagrid is None:
+                # TODO: fuse this into optimizer
+                self.v_bilagrid = fused_bilagrid_C.tv_loss_backward(
+                    self.bilagrid.grids, torch.full((1,), self.config.bilagrid_tv_loss_weight)
+                )
+                # TODO
+                # fused_bilagrid_C.channel_mean_backward_inplace(
+                #     self.bilagrid.grids, v_channel_mean.contiguous(), self.v_bilagrid)
+            self.v_bilagrid[camera.metadata["cam_idx"]] += v_bilagrid
+
+        if hasattr(self, 'ppisp_applied') and self.ppisp_applied:
+            raise NotImplementedError()
+            v_pred_rgb = grads[0]
+            v_ppisp_param = _make_lazy_cuda_func("apply_ppisp_backward")(v_pred_rgb, *self.ppisp_saved)
+            if not hasattr(self, 'v_ppisp_params'):
+                self.v_ppisp_params = torch.zeros_like(self.ppisp_params, device=device)
+            indices = self.ppisp_saved[-1]
+            self.v_ppisp_params[indices, :] += v_ppisp_param
 
         (
             rgb_loss, rgb_psnr,
@@ -777,15 +826,17 @@ class SplatTrainingLosses:
         if loss_map is not None:
             if 'backward_info' in outputs:
                 outputs['backward_info']['loss_map'] = loss_map  # to be able to get it in backward
-        if accum_weight_map is not None:
+        if edge_map is not None:
             if 'backward_info' in outputs:
-                outputs['backward_info']['accum_weight_map'] = accum_weight_map
+                outputs['backward_info']['accum_weight_map'] = edge_map
         elif self.config.relocate_heuristic_weight != 0.0 and loss_map is not None:
             if 'backward_info' in outputs:
                 outputs['backward_info']['accum_weight_map'] = loss_map
         # if loss_map is not None and self.step % 100 == 0:
         #     import matplotlib.pyplot as plt
         #     plt.imshow(loss_map[0].detach().cpu().numpy())
+        #     # plt.imshow(edge_map[0].detach().cpu().numpy())
+        #     # plt.imshow(gt_rgb_mask[0].detach().cpu().numpy())
         #     plt.show()
 
         # note that rgb_loss is already multipled by (1.0 - self.config.ssim_lambda) * (1.0 - self.config.lpips_lambda)
@@ -877,7 +928,7 @@ class SplatTrainingLosses:
                 raise NotImplementedError()
                 bilagrid = Dct3D.apply(bilagrid)
                 tv_loss_fun = total_variation_loss
-            tv_loss, bilagrid_mean = _BilagridFusedRegularization.apply(self._dummy, self.bilagrid_wrapped)
+            tv_loss, bilagrid_mean = _BilagridFusedRegularization.apply(self._dummy, self.bilagrid)
 
             # total variation loss
             loss_dict["tv_loss"] = self.config.bilagrid_tv_loss_weight * tv_loss
@@ -892,8 +943,8 @@ class SplatTrainingLosses:
         # bilagrid regularization loss for geometry
         if self.config.use_bilateral_grid_for_geometry:
             if self.config.depth_supervision_weight > 0.0:  # do this because bilagrid backward is expensive, especially in patched mode
-                loss_dict["tv_loss_depth"] = self.config.bilagrid_tv_loss_weight_geometry * total_variation_loss(self.bil_grids_depth.grids)
-            loss_dict["tv_loss_normal"] = self.config.bilagrid_tv_loss_weight_geometry * total_variation_loss(self.bil_grids_normal.grids)
+                loss_dict["tv_loss_depth"] = self.config.bilagrid_tv_loss_weight_geometry * total_variation_loss(self.bilagrid_depth.grids)
+            loss_dict["tv_loss_normal"] = self.config.bilagrid_tv_loss_weight_geometry * total_variation_loss(self.bilagrid_normal.grids)
 
         # PPISP regularization loss
         if self.config.use_ppisp:
@@ -938,3 +989,26 @@ class SplatTrainingLosses:
         loss_dict['erank_reg'] = losses[3]
         loss_dict['quat_norm_reg'] = losses[4]
         return loss_dict
+
+    def optim_step(self, optim_config: OptimizerConfig, step: int, max_steps: int):
+
+        if hasattr(self, 'v_bilagrid') and self.v_bilagrid is not None:
+            assert self.bilagrid.grids.numel() == self.v_bilagrid.numel()
+            if not hasattr(self, 'g1_bilagrid') is None:
+                self.g1_bilagrid = torch.zeros_like(self.bilagrid.grids)
+                self.g2_bilagrid = torch.zeros_like(self.bilagrid.grids)
+            lr = optim_config.get_scheduled_lr("bilagrid", self.step, max_steps)
+            _make_lazy_cuda_func("fused_adam_with_steps")(
+                self.bilagrid.grids, self.v_bilagrid, self.g1_bilagrid, self.g2_bilagrid,
+                lr, step+1
+            )
+            self.v_bilagrid = None
+
+        # if hasattr(self.training_losses, 'v_ppisp_params') and self.training_losses.v_ppisp_params is not None:
+        #     raise NotImplementedError()
+        #     if not hasattr(self, 'g1_ppisp') is None:
+        #         self.g1_ppisp = torch.zeros_like(self.ppisp_params)
+        #         self.g2_ppisp = torch.zeros_like(self.ppisp_params)
+        #     lr = optim_config.get_scheduled_lr("ppisp", self.step, max_steps)
+        #     _make_lazy_cuda_func("fused_adam_with_steps")(self.ppisp_params, self.training_losses.v_ppisp_params, self.g1_ppisp, self.g2_ppisp, lr, step+1)
+        #     self.training_losses.v_ppisp_params = None

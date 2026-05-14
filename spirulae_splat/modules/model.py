@@ -38,7 +38,8 @@ from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
 from spirulae_splat.strategy import MCMCStrategy, OpaqueStrategy, SVRasterStrategy
 
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
-from spirulae_splat.modules.optimizer import get_scheduled_lr
+# from spirulae_splat.modules.optimizer import get_scheduled_lr
+from spirulae_splat.modules.optimizer import OptimizerConfig
 from spirulae_splat.splat.cuda._wrapper_per_pixel import (
     blend_background,
     blend_background_noise,
@@ -326,6 +327,11 @@ class SpirulaeSplatModel(torch.nn.Module):
             self.num_train_data *= 6  # TODO
 
         self.info = {}
+
+        self.g1_bilagrid = None
+        self.g2_bilagrid = None
+        self.g1_ppisp = None
+        self.g2_ppisp = None
 
         self.populate_modules()
 
@@ -1290,9 +1296,10 @@ class SpirulaeSplatModel(torch.nn.Module):
         )
 
     def optim_step(self):
-        self.renderer.optim_step(self.step, self.config, self.trainer_config.optimizer)
-        if self.step < self.trainer_config.num_iterations-self.config.refine_stop_num_iter:
-            self.renderer.densify_step(self.step, self.config, None)
+        max_steps = self.trainer_config.num_iterations
+        self.renderer.optim_step(self.config, self.trainer_config.optimizer, self.step, max_steps)
+        self.training_losses.optim_step(self.trainer_config.optimizer, self.step, max_steps)
+        self.renderer.densify_step(self.step, max_steps, self.config, None)
         # self.step_post_backward()
 
     def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:

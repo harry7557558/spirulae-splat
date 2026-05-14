@@ -851,14 +851,26 @@ __global__ void fused_optim_3dgs_geometry_kernel(
             {expf(0.5f*scale.x), expf(0.5f*scale.y), expf(0.5f*scale.z)},  // unit: L^0.5
             v_mean  // unit: L^-1
         ) * sqrtf(2.0f * __logf(fmaxf(255.0f * opac_post_sigmoid, 1.00001f)));  // unit: dimensionless
+    #if 1
         float v_mean_scaled_den = radii[idx] * 0.6f;  // unit: dimensionless
-        #if 0
+    #else
+        float3 scale_post_exp = float3{__expf(scale.x), __expf(scale.y), __expf(scale.z)};
+        v_mean_scaled_num = v_mean_scaled_num * (
+            fmaxf(scale_post_exp.x, fmaxf(scale_post_exp.y, scale_post_exp.z)) *
+                powf(powf(scale_post_exp.x*scale_post_exp.y, 1.6f) +
+                    powf(scale_post_exp.x*scale_post_exp.z, 1.6f) +
+                    powf(scale_post_exp.y*scale_post_exp.z, 1.6f), -0.5f / 1.6f)  // proportional to longest axis to visible radius ratio
+        );
+        float v_mean_scaled_den = radii[idx] * 0.9f;
+    #endif
+    #if 0
         v_mean_scaled_num = v_mean_scaled_num / (v_mean_scaled_den + (eps * (float)numel));
         v_mean_scaled_den = 1.0f;
-        #endif
+    #endif
         g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean_scaled_num;  // unit: dimensionless
         g2_mean = beta2 * g2_mean + (1.f - beta2) * v_mean*v_mean * v_mean_scaled_den*v_mean_scaled_den;  // unit: L^-2
 
+        // TODO: probably better use a globally consistent one; (MRNF chooses based on median scale)
         noise_lr_scalar = length(v_mean_scaled_num) / (length(v_mean) * v_mean_scaled_den + eps);
     } else {
         g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean;  // unit: L^-1

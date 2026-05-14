@@ -519,10 +519,19 @@ void densify_clip_scale_tensor(
 }
 
 
+inline __device__ float ellpise_surface_area(float3 scale) {
+    return powf(
+        powf(scale.x*scale.y, 1.6f) +
+        powf(scale.x*scale.z, 1.6f) +
+        powf(scale.y*scale.z, 1.6f), 1.0f / 1.6f);
+}
+
+
 __global__ void densify_update_weight_kernel(
     long num_splats,
     bool is_max_mode,
     const float* __restrict__ radii,  // [N]
+    const float3* __restrict__ scales,  // [N, 3], optional
     const float* __restrict__ opacs,  // [N], optional
     const float* __restrict__ accum_weight_scalar,  // [1]
     const float* __restrict__ accum_weight,  // [N]
@@ -537,7 +546,14 @@ __global__ void densify_update_weight_kernel(
 
     float weight = fabsf(accum_weight[idx]);
     if (opacs)
-        weight /= sigmoid(opacs[idx]);
+        weight *= sigmoid(opacs[idx]);
+    if (scales) {
+        float3 scale = scales[idx];
+        scale = {__expf(scale.x), __expf(scale.y), __expf(scale.z)};
+        float sqrt_visible_area_est =
+            radii[idx] / fmaxf(fmaxf(scale.x, scale.y), scale.z) * sqrtf(ellpise_surface_area(scale));
+        weight /= fmaxf(sqrt_visible_area_est, 1e-10f);
+    }
     if (accum_weight_scalar != nullptr)
         weight *= accum_weight_scalar[0];
     float2 accum = accum_buffer[idx];
@@ -559,6 +575,7 @@ __global__ void densify_update_weight_kernel(
 void densify_update_weight_tensor(
     int64_t num_splats,
     at::Tensor radii,
+    std::optional<at::Tensor> scales,
     std::optional<at::Tensor> opacs,
     at::Tensor accum_weight,
     at::Tensor accum_buffer,
@@ -568,6 +585,8 @@ void densify_update_weight_tensor(
     CHECK_INPUT(radii);
     CHECK_INPUT(accum_weight);
     CHECK_INPUT(accum_buffer);
+    if (scales.has_value())
+        CHECK_INPUT(scales.value());
     if (opacs.has_value())
         CHECK_INPUT(opacs.value());
 
@@ -578,6 +597,7 @@ void densify_update_weight_tensor(
     densify_update_weight_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
         num_splats, is_max_mode,
         radii.data_ptr<float>(),
+        scales.has_value() ? (float3*)scales.value().data_ptr<float>() : nullptr,
         opacs.has_value() ? opacs.value().data_ptr<float>() : nullptr,
         // inv_median.data_ptr<float>(),
         nullptr,
@@ -1585,7 +1605,8 @@ at::Tensor smoothed_laplacian_edge_filter_tensor(
 }
 
 __global__ void canny_edge_filter_kernel(
-    const TensorView<float, 4> img_in,
+    TensorView<float, 4> img_in,
+    const bool* __restrict__ mask_in,
     TensorView<float, 4> img_out
 ) {
     constexpr int BLOCK = 32;
@@ -1669,16 +1690,21 @@ __global__ void canny_edge_filter_kernel(
         if (mag < total1 || mag < total2)
             mag = 0.0f;
     }
+    if (mask_in && !mask_in[(&img_in.at(bid, yid, xid, 0) - img_in.data)/3])
+        mag = 0.0f;
     if (yid < H && xid < W)
         img_out.store1(bid, yid, xid, mag);
 }
 
 /*[AutoHeaderGeneratorExport]*/
 at::Tensor canny_edge_filter_tensor(
-    at::Tensor &img_in
+    at::Tensor &img_in,
+    at::optional<at::Tensor> &mask_in
 ) {
     DEVICE_GUARD(img_in);
     CHECK_INPUT(img_in);
+    if (mask_in.has_value())
+        CHECK_INPUT(mask_in.value());
 
     if (img_in.ndimension() != 4 || img_in.size(-1) != 3)
         AT_ERROR("img must be [B, H, W, 3]");
@@ -1690,6 +1716,7 @@ at::Tensor canny_edge_filter_tensor(
 
     canny_edge_filter_kernel<<<_LAUNCH_ARGS_3D(W, H, B, 32, 32, 1)>>>(
         tensor2view<float, 4>(img_in),
+        mask_in.has_value() ? mask_in.value().data_ptr<bool>() : nullptr,
         tensor2view<float, 4>(img_out)
     );
 

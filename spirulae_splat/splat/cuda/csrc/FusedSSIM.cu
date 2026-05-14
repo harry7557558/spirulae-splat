@@ -843,6 +843,7 @@ __global__ void memory_efficient_ssim_backward_kernel(
         if (!mask) {
             p1 = p2 = 0.5f;
             dL_dpix = 0.0f;
+            ssim_val = 3.0f;  // TODO: mask this
         }
 
         int out_idx = bIdx * num_pix + pix_id;

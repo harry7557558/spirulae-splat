@@ -75,6 +75,7 @@ void densify_clip_scale_tensor(
 void densify_update_weight_tensor(
     int64_t num_splats,
     at::Tensor radii,
+    std::optional<at::Tensor> scales,
     std::optional<at::Tensor> opacs,
     at::Tensor accum_weight,
     at::Tensor accum_buffer,
@@ -159,5 +160,6 @@ at::Tensor smoothed_laplacian_edge_filter_tensor(
 
 
 at::Tensor canny_edge_filter_tensor(
-    at::Tensor &img_in
+    at::Tensor &img_in,
+    at::optional<at::Tensor> &mask_in
 );

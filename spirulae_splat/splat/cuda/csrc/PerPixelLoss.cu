@@ -110,7 +110,7 @@ __global__ void per_pixel_losses_forward_kernel(
         );
 
         if (out_loss_map != nullptr) {
-            out_loss_map[idx] =
+            out_loss_map[idx] = fabsf(
                 losses[(int)RawLossIndex::RgbLoss] +
                 losses[(int)RawLossIndex::RenderNormalSup] +
                 losses[(int)RawLossIndex::DepthNormalSup] +
@@ -120,7 +120,8 @@ __global__ void per_pixel_losses_forward_kernel(
                 losses[(int)RawLossIndex::AlphaReg] +
                 losses[(int)RawLossIndex::RgbDistReg] +
                 losses[(int)RawLossIndex::DepthDistReg] +
-                losses[(int)RawLossIndex::NormalDistReg];
+                losses[(int)RawLossIndex::NormalDistReg]
+            );
             // TODO: more accurate version
         }
     }

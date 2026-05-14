@@ -11,6 +11,7 @@ from spirulae_splat.splat.cuda import (
 
 
 def get_scheduled_lr(param_group, step):
+    raise NotImplementedError()
     lr = param_group['lr']
     lr_final = param_group['lr_final']
     lr_pre_warmup = param_group['lr_pre_warmup']
@@ -369,24 +370,24 @@ class OptimizerConfig:
     use_per_splat_bias_correction: bool = False
 
     # MCMC
-    means_lr: float = 1.6e-4
-    means_lr_final: Optional[float] = 1.6e-6
-    scales_lr: float = 0.005
-    scales_lr_final: Optional[float] = None
-    quats_lr: float = 0.0005
-    opacities_lr: float = 0.05
-    features_dc_lr: float = 0.0025
-    features_sh_lr: float = 0.0025 / 20
+    # means_lr: float = 1.6e-4
+    # means_lr_final: Optional[float] = 1.6e-6
+    # scales_lr: float = 0.005
+    # scales_lr_final: Optional[float] = None
+    # quats_lr: float = 0.0005
+    # opacities_lr: float = 0.05
+    # features_dc_lr: float = 0.0025
+    # features_sh_lr: float = 0.0025 / 20
 
     # MRNF
-    # means_lr: float = 1.28e-4
-    # means_lr_final: Optional[float] = 1.6e-7
-    # scales_lr: float = 0.02
-    # scales_lr_final: Optional[float] = 0.005
-    # quats_lr: float = 0.0015
-    # opacities_lr: float = 0.025
-    # features_dc_lr: float = 0.005
-    # features_sh_lr: float = 0.005 / 20
+    means_lr: float = 1.28e-4  # TODO: this affects MCMC add noise
+    means_lr_final: Optional[float] = 1.6e-7
+    scales_lr: float = 0.02
+    scales_lr_final: Optional[float] = 0.005
+    quats_lr: float = 0.0015
+    opacities_lr: float = 0.025
+    features_dc_lr: float = 0.005
+    features_sh_lr: float = 0.005 / 20
 
     features_ch_lr: float = 0.0025 / 5
     sv_sites_lr: float = 0.01
@@ -410,3 +411,15 @@ class OptimizerConfig:
     camera_opt_lr: float = 1e-4
     camera_opt_lr_final: Optional[float] = 5e-7
     camera_opt_lr_warmup: int = 1000
+
+    def get_scheduled_lr(optim_config, name: str, step: int, max_steps: int):
+        lr = getattr(optim_config, name+"_lr")
+        lr_final = getattr(optim_config, name+"_lr_final", lr)
+        warmup = getattr(optim_config, name+"_lr_warmup", None)
+        pre_warmup = 0.0  # TODO
+        scheduled_lr = lr
+        if lr_final is not None:
+            scheduled_lr = lr * (lr_final / lr) ** min(step / max_steps, 1.0)
+        if warmup is not None:
+            scheduled_lr = min(scheduled_lr, pre_warmup + (lr - pre_warmup) * min(step / warmup, 1.0))
+        return scheduled_lr
