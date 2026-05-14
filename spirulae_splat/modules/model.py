@@ -148,7 +148,7 @@ class SpirulaeSplatModelConfig:
     relocate_heuristic_weight: float = 1.0
     """Weight of gradient used in sampling Gaussians to relocate/add to.
         If 0.0, use only opacity; If 1.0, use other heuristics (see strategy/mcmc.py for details)."""
-    use_edge_aware_score: bool = True
+    use_edge_aware_score: bool = False
     """Whether to use edge aware score to guide densification.
         If True, it computes edge aware score following https://arxiv.org/abs/2603.08661
         Note that this is only active when relocate_heuristic_weight is nonzero"""
@@ -262,7 +262,7 @@ class SpirulaeSplatModelConfig:
     """Loss weight for alpha, applies when rendered alpha is above reference alpha"""
     alpha_loss_weight_under: float = 0.005
     """Loss weight for alpha, applies when rendered alpha is below reference alpha"""
-    opacity_reg: float = 0.001  # 0.01 for MCMC
+    opacity_reg: float = 0.01  # 0.01 for MCMC
     """Encourage low opacity to aid densification, per MCMC."""
     scale_reg: float = 0.01  # 0.01 for MCMC
     """Encourage low scale, per MCMC."""
@@ -1230,11 +1230,11 @@ class SpirulaeSplatModel(torch.nn.Module):
             param_to_vis = param_to_vis / param_to_vis.mean()
             # param_to_vis = torch.log10(param_to_vis + 1e-30)
 
-            indices = _make_lazy_cuda_func("weighted_sample_without_replacement")(
-                -1, self.renderer.densify_accum_buffer, None, len(param_to_vis) // 20, self.step
-            )
-            param_to_vis = torch.zeros_like(param_to_vis)
-            param_to_vis[indices] = 1
+            # indices = _make_lazy_cuda_func("weighted_sample_without_replacement")(
+            #     -1, self.renderer.densify_accum_buffer, None, len(param_to_vis) // 20, self.step
+            # )
+            # param_to_vis = torch.zeros_like(param_to_vis)
+            # param_to_vis[indices] = 1
 
             param_to_vis = (param_to_vis - 0.5) / 0.28
             param_to_vis = param_to_vis.unsqueeze(-1).repeat(1, 3)

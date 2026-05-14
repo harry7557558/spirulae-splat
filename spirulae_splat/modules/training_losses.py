@@ -669,12 +669,17 @@ class SplatTrainingLosses:
                 bilagrid_type=self.config.bilagrid_type,
                 **meta
             )
+            # if step >= 1000 and step % 100 == 0:
+            #     import matplotlib.pyplot as plt
+            #     fig, (ax1, ax2) = plt.subplots(1, 2)
+            #     ax1.imshow(pred_rgb_pre_bilagrid[0].detach().cpu().numpy())
+            #     ax2.imshow(pred_rgb[0].detach().cpu().numpy())
+            #     plt.show()
+        pred_rgb_pre_ppisp = None
         if self.config.use_ppisp and \
                 camera.metadata is not None and "cam_idx" in camera.metadata:
-            raise NotImplementedError()
-            self.ppisp_applied = True
+            pred_rgb_pre_ppisp = pred_rgb
             indices = torch.tensor(camera.metadata["cam_idx"]).flatten().to(device)
-            self.ppisp_saved = (pred_rgb.clone(), self.ppisp_params[indices, :], self.config.ppisp_param_type, intrins, camera.metadata.get('actual_width', None), camera.metadata.get('actual_height', None), indices)
             pred_rgb = apply_ppisp(
                 self.config.ppisp_param_type,
                 pred_rgb, self.ppisp_params[indices, :],
@@ -782,6 +787,41 @@ class SplatTrainingLosses:
         )
         grads = [*grads]
 
+        # PPISP backward
+        if pred_rgb_pre_ppisp is not None:
+            indices = torch.tensor(camera.metadata["cam_idx"]).flatten().to(device)  # TODO: use pre-computed
+            grads[0], v_ppisp = _make_lazy_cuda_func("ppisp_backward")(
+                pred_rgb_pre_ppisp, self.ppisp_params[indices, :],
+                intrins,
+                # camera.metadata.get('actual_width', None),
+                # camera.metadata.get('actual_height', None),
+                pred_rgb[0].shape[2], pred_rgb[0].shape[1],  # TODO
+                grads[0], self.config.ppisp_param_type
+            )
+            if not hasattr(self, 'v_ppisp') or self.v_ppisp is None:
+                ppisp_loss_weights = [
+                    self.config.ppisp_reg_exposure_mean,
+                    self.config.ppisp_reg_vig_center,
+                    self.config.ppisp_reg_vig_non_pos,
+                    self.config.ppisp_reg_vig_channel_var,
+                    self.config.ppisp_reg_color_mean,
+                    self.config.ppisp_reg_crf_channel_var,
+                ]
+                ppisp_regs, ppisp_raw_regs = _C.compute_ppsip_regularization_forward(
+                    self.ppisp_params,
+                    ppisp_loss_weights,
+                    self.config.ppisp_param_type
+                )
+                self.v_ppisp = _C.compute_ppsip_regularization_backward(
+                    self.ppisp_params,
+                    ppisp_loss_weights,
+                    ppisp_raw_regs,
+                    torch.ones_like(ppisp_regs),
+                    self.config.ppisp_param_type
+                )
+            self.v_ppisp[camera.metadata["cam_idx"]] += v_ppisp
+
+        # Bilagrid backward
         if pred_rgb_pre_bilagrid is not None:
             for x in [
                 self.bilagrid.grids[camera.metadata["cam_idx"]],
@@ -798,6 +838,7 @@ class SplatTrainingLosses:
                 grads[0].unsqueeze(0),
                 1, 8, 8, 5  # TODO
             )
+            grads[0] = grads[0][0]
             if not hasattr(self, 'v_bilagrid') or self.v_bilagrid is None:
                 # TODO: fuse this into optimizer
                 self.v_bilagrid = fused_bilagrid_C.tv_loss_backward(
@@ -807,15 +848,6 @@ class SplatTrainingLosses:
                 # fused_bilagrid_C.channel_mean_backward_inplace(
                 #     self.bilagrid.grids, v_channel_mean.contiguous(), self.v_bilagrid)
             self.v_bilagrid[camera.metadata["cam_idx"]] += v_bilagrid
-
-        if hasattr(self, 'ppisp_applied') and self.ppisp_applied:
-            raise NotImplementedError()
-            v_pred_rgb = grads[0]
-            v_ppisp_param = _make_lazy_cuda_func("apply_ppisp_backward")(v_pred_rgb, *self.ppisp_saved)
-            if not hasattr(self, 'v_ppisp_params'):
-                self.v_ppisp_params = torch.zeros_like(self.ppisp_params, device=device)
-            indices = self.ppisp_saved[-1]
-            self.v_ppisp_params[indices, :] += v_ppisp_param
 
         (
             rgb_loss, rgb_psnr,
@@ -1004,11 +1036,13 @@ class SplatTrainingLosses:
             )
             self.v_bilagrid = None
 
-        # if hasattr(self.training_losses, 'v_ppisp_params') and self.training_losses.v_ppisp_params is not None:
-        #     raise NotImplementedError()
-        #     if not hasattr(self, 'g1_ppisp') is None:
-        #         self.g1_ppisp = torch.zeros_like(self.ppisp_params)
-        #         self.g2_ppisp = torch.zeros_like(self.ppisp_params)
-        #     lr = optim_config.get_scheduled_lr("ppisp", self.step, max_steps)
-        #     _make_lazy_cuda_func("fused_adam_with_steps")(self.ppisp_params, self.training_losses.v_ppisp_params, self.g1_ppisp, self.g2_ppisp, lr, step+1)
-        #     self.training_losses.v_ppisp_params = None
+        if hasattr(self, 'v_ppisp') and self.v_ppisp is not None:
+            if not hasattr(self, 'g1_ppisp') is None:
+                self.g1_ppisp = torch.zeros_like(self.ppisp_params)
+                self.g2_ppisp = torch.zeros_like(self.ppisp_params)
+            lr = optim_config.get_scheduled_lr("ppisp", self.step, max_steps)
+            _make_lazy_cuda_func("fused_adam_with_steps")(
+                self.ppisp_params, self.v_ppisp, self.g1_ppisp, self.g2_ppisp,
+                lr, step+1
+            )
+            self.v_ppisp = None

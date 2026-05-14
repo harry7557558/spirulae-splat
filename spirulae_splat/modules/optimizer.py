@@ -367,7 +367,7 @@ def create_optimizers(model: torch.nn.Module, config: Dict):
 class OptimizerConfig:
     max_steps: Optional[int] = None
     use_scale_agnostic_mean: bool = True
-    use_per_splat_bias_correction: bool = False
+    use_per_splat_bias_correction: bool = True
 
     # MCMC
     # means_lr: float = 1.6e-4
@@ -380,8 +380,9 @@ class OptimizerConfig:
     # features_sh_lr: float = 0.0025 / 20
 
     # MRNF
-    means_lr: float = 1.28e-4  # TODO: this affects MCMC add noise
-    means_lr_final: Optional[float] = 1.6e-7
+    means_lr: float = 1.28e-4
+    # means_lr_final: Optional[float] = 1.6e-7  # TODO: this affects MCMC add noise
+    means_lr_final: Optional[float] = 1.6e-6
     scales_lr: float = 0.02
     scales_lr_final: Optional[float] = 0.005
     quats_lr: float = 0.0015
@@ -396,7 +397,7 @@ class OptimizerConfig:
     densities_lr_final: Optional[float] = 0.0005
     background_color_lr: float = 0.0025
     background_sh_lr: float = 0.0025 / 5
-    bilagrid_lr: float = 2e-3
+    bilagrid_lr: float = 1e-2  # 2e-3*sqrt(B) in paper
     bilagrid_lr_final: Optional[float] = 1e-4
     bilagrid_lr_warmup: int = 1000
     bilagrid_depth_lr: float = 2e-3

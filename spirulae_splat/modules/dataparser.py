@@ -558,7 +558,7 @@ class SpirulaeSplatDataparser:
                 raise ValueError(f"{image_filename} does not exist. Specify `--dataparser.image_dir` if needed.")
             frame['file_path'] = str(self.config.image_dir / Path(im.name))
 
-            self.self._add_auxiliary_buffers(frame)
+            self._add_auxiliary_buffers(frame)
             frames.append(frame)
 
         points = [*colmap_points.values()]

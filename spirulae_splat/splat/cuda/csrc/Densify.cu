@@ -547,6 +547,9 @@ __global__ void densify_update_weight_kernel(
     float weight = fabsf(accum_weight[idx]);
     if (opacs)
         weight *= sigmoid(opacs[idx]);
+    if (true) // TODO
+        // weight *= rsqrtf(radii[idx]);
+        weight /= fmaxf(radii[idx], 1e-10f);
     if (scales) {
         float3 scale = scales[idx];
         scale = {__expf(scale.x), __expf(scale.y), __expf(scale.z)};
