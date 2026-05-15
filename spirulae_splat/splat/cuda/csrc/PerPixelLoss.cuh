@@ -129,6 +129,11 @@ std::tuple<  // returns gradients
 );
 
 
+at::Tensor avg_pool_downsample_tensor(
+    at::Tensor tensor
+);
+
+
 std::tuple<
     at::Tensor,  // mean losses
     std::optional<at::Tensor>,  // loss map

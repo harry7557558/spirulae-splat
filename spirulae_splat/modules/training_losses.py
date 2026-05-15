@@ -669,11 +669,12 @@ class SplatTrainingLosses:
                 bilagrid_type=self.config.bilagrid_type,
                 **meta
             )
-            # if step >= 1000 and step % 100 == 0:
+            # if step >= 0 and step % 100 == 0:
             #     import matplotlib.pyplot as plt
-            #     fig, (ax1, ax2) = plt.subplots(1, 2)
+            #     fig, (ax1, ax2, ax3) = plt.subplots(1, 3)
             #     ax1.imshow(pred_rgb_pre_bilagrid[0].detach().cpu().numpy())
             #     ax2.imshow(pred_rgb[0].detach().cpu().numpy())
+            #     ax3.imshow(gt_rgb[0].detach().cpu().numpy())
             #     plt.show()
         pred_rgb_pre_ppisp = None
         if self.config.use_ppisp and \
@@ -864,11 +865,17 @@ class SplatTrainingLosses:
         elif self.config.relocate_heuristic_weight != 0.0 and loss_map is not None:
             if 'backward_info' in outputs:
                 outputs['backward_info']['accum_weight_map'] = loss_map
-        # if loss_map is not None and self.step % 100 == 0:
+        # if self.step % 100 == 0:
         #     import matplotlib.pyplot as plt
-        #     plt.imshow(loss_map[0].detach().cpu().numpy())
-        #     # plt.imshow(edge_map[0].detach().cpu().numpy())
-        #     # plt.imshow(gt_rgb_mask[0].detach().cpu().numpy())
+        #     fig, ((ax0, ax1), (ax2, ax3)) = plt.subplots(2, 2)
+        #     ax0.imshow(gt_rgb[0].detach().cpu().numpy())
+        #     if gt_rgb_mask is not None:
+        #         ax1.imshow(gt_rgb_mask[0].detach().cpu().numpy())
+        #     if loss_map is not None:
+        #         ax2.imshow(loss_map[0].detach().cpu().numpy())
+        #     if edge_map is not None:
+        #         ax3.imshow(edge_map[0].detach().cpu().numpy())
+        #     plt.tight_layout()
         #     plt.show()
 
         # note that rgb_loss is already multipled by (1.0 - self.config.ssim_lambda) * (1.0 - self.config.lpips_lambda)

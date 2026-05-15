@@ -32,6 +32,8 @@ from torch.nn.parallel import DataParallel
 from torch.utils.data import DataLoader
 from torch.utils.data._utils.collate import default_collate
 
+from spirulae_splat.splat.cuda import _make_lazy_cuda_func
+
 from tqdm import tqdm
 
 
@@ -64,6 +66,9 @@ class SpirulaeSplatDataManagerConfig:
     """Whether to load depth maps, if exist"""
     load_normals: bool = True
     """Whether to load normal maps, if exist"""
+
+    random_downscales: int = 0
+    """Whether to randomly downscale training images by resolution between 0 and exp2(this number). If 0, don't downscale."""
 
     deblur_training_images: bool = False
     """Whether to use a custom trained deep learning model to deblur images before training"""
@@ -522,6 +527,27 @@ class SpirulaeSplatDataManager:
                     camera['metadata']['cam_idx'] = torch.stack(sum([[6*i+j for j in range(6)] for i in camera['metadata']['cam_idx']], []))
                 camera['camera_type'] = [CameraType.PERSPECTIVE.value] * len(camera['intrins'])
             results = pack_batch(camera, batch)
+
+        if self.config.random_downscales > 0 or True:
+            assert self.config.patch_batch_size is None, "Random downscale is not supported in patched batching mode"
+            for camera, batch in results:
+                downscale = random.randint(0, self.config.random_downscales)
+                if downscale == 0:
+                    continue
+
+                for key, value in batch.items():
+                    if not isinstance(value, torch.Tensor):
+                        continue
+                    if len(value.shape) == 4 and value.shape[1] == camera.height and value.shape[2] == camera.width:
+                        for i in range(downscale):  # TODO: single kernel
+                            value = _make_lazy_cuda_func("avg_pool_downsample")(value)
+                        batch[key] = value
+                    # TODO: metadata
+
+                # camera.rescale(1 / downscale, rounding_mode='floor')
+                camera.width //= 2**downscale
+                camera.height //= 2**downscale
+                camera.intrins /= 2**downscale
 
         # TODO
         if random.random() < (step - 10000) / (30000 - 10000) and False:

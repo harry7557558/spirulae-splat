@@ -40,12 +40,12 @@ namespace SlangProjectionUtils {
 constexpr uint SPLAT_BATCH_SIZE_NO_DISTORTION = WARP_SIZE;
 constexpr uint SPLAT_BATCH_SIZE_WITH_DISTORTION = WARP_SIZE;
 
-// constexpr uint TILE_SIZE_DX = 16;
-constexpr uint TILE_SIZE_DX = TILE_SIZE;
+constexpr uint TILE_SIZE_DX = 16;
+// constexpr uint TILE_SIZE_DX = TILE_SIZE;
 static_assert(TILE_SIZE_DX > 0 && TILE_SIZE_DX <= TILE_SIZE && TILE_SIZE % TILE_SIZE_DX == 0);
 
-// constexpr uint TILE_SIZE_DY = 8;
-constexpr uint TILE_SIZE_DY = TILE_SIZE;
+constexpr uint TILE_SIZE_DY = 8;
+// constexpr uint TILE_SIZE_DY = TILE_SIZE;
 static_assert(TILE_SIZE_DY > 0 && TILE_SIZE_DY <= TILE_SIZE && TILE_SIZE % TILE_SIZE_DY == 0);
 
 

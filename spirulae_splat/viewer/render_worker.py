@@ -96,8 +96,8 @@ class RenderWorker:
                 )
                 result = RenderResult(request_id=req.request_id, buffers=buffers)
             except Exception as exc:
-                import traceback
-                traceback.print_exc()
+                # import traceback
+                # traceback.print_exc()
                 result = RenderResult(request_id=req.request_id, buffers={}, error=str(exc))
 
             # Non-blocking put; drop if sender is backed up

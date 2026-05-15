@@ -586,8 +586,10 @@ __global__ void memory_efficient_ssim_backward_kernel(
     static constexpr int xconv_size = LOAD_Y_ME*SHARED_X_ME*5;
     static constexpr int sData_size = 3*SHARED_Y_ME*SHARED_X_ME;
     static constexpr int sScratch_size = CONV_Y_ME*CONV_X_ME*3;
+    // static constexpr int sSsim_size = BLOCK_X_ME*BLOCK_Y_ME;
     __shared__ float _shared_buffer1[sTile_size>sData_size?sTile_size:sData_size];
     __shared__ float _shared_buffer2[xconv_size>sScratch_size?xconv_size:sScratch_size];
+    __shared__ float sSsim[BLOCK_Y_ME][BLOCK_X_ME];
     #define sTile(i, j, k) _shared_buffer1[((i)*LOAD_X_ME+(j))*2+(k)]
     #define xconv(i, j, k) _shared_buffer2[((i)*SHARED_X_ME+(j))*5+(k)]
     #define sData(i, j, k) _shared_buffer1[((i)*SHARED_Y_ME+(j))*SHARED_X_ME+(k)]
@@ -625,7 +627,8 @@ __global__ void memory_efficient_ssim_backward_kernel(
                 float Y = get_pix_value(img2, bIdx, gy, gx, ci, H, W);
                 bool mask = get_pix_value(masks, bIdx, gy, gx, H, W);
                 if (!mask)
-                    X = Y = 0.5f;
+                    // X = Y = 0.5f;
+                    X = Y;
 
                 sTile(local_y, local_x, 0) = X;
                 sTile(local_y, local_x, 1) = Y;
@@ -744,7 +747,14 @@ __global__ void memory_efficient_ssim_backward_kernel(
         if ((out_ssim_val || ssim_loss_map)
                 && lx < BLOCK_X_ME && (ly-HALO) < BLOCK_Y_ME
         ) {
-            ssim_val += (C_ * D_) / (A * B);
+            float ssim_v = (C_ * D_) / (A * B);
+            if (ssim_loss_map) {
+                if (ci == 0)
+                    sSsim[ly-HALO][lx] = ssim_v;
+                else
+                    sSsim[ly-HALO][lx] += ssim_v;
+            }
+            ssim_val += ssim_v;
         }
 
         // partial derivatives
@@ -841,7 +851,6 @@ __global__ void memory_efficient_ssim_backward_kernel(
         bool mask = get_pix_value(masks, bIdx, pix_y, pix_x, H, W);
         float dL_dpix = sum0 + (2.f * p1) * sum1 + (p2) * sum2;
         if (!mask) {
-            p1 = p2 = 0.5f;
             dL_dpix = 0.0f;
             ssim_val = 3.0f;  // TODO: mask this
         }
@@ -860,16 +869,16 @@ __global__ void memory_efficient_ssim_backward_kernel(
     #undef sData
     #undef sScratch
 
-    ssim_val /= 3.0f;
     if (ssim_loss_map && pix_x < W && pix_y < H) {
+        float ssim_v = sSsim[threadIdx.y][threadIdx.x] / 3.0f;
         int out_idx = bIdx * num_pix + pix_id;
         if constexpr (inplace)
-            ssim_loss_map[out_idx] += ssim_loss_map_weight * (1.0f - ssim_val);
+            ssim_loss_map[out_idx] += ssim_loss_map_weight * (1.0f - ssim_v);
         else
-            ssim_loss_map[out_idx] = 1.0f - ssim_val;
+            ssim_loss_map[out_idx] = 1.0f - ssim_v;
     }
     if (out_ssim_val) {
-        ssim_val /= B*H*W;
+        ssim_val /= 3*B*H*W;
         atomicAddFVec<BLOCK_X_ME*BLOCK_Y_ME>(out_ssim_val, ssim_val);
     }
 }

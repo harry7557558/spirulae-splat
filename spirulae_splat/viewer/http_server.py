@@ -113,8 +113,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self.send_response(500)
                 self.end_headers()
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            # import traceback
+            # traceback.print_exc()
             self.send_response(400)
             self.end_headers()
 

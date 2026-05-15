@@ -595,6 +595,26 @@ __global__ void avg_pool_downsample_float_kernel(
     }
 }
 
+template<typename uintx_t>
+__global__ void avg_pool_downsample_integral_kernel(
+    const TensorView<uintx_t, 4> image_hs,
+    TensorView<uintx_t, 4> image_ls
+) {
+    uint32_t xid = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t yid = blockIdx.y * blockDim.y + threadIdx.y;
+    uint32_t bid = blockIdx.z * blockDim.z + threadIdx.z;
+    if (yid >= image_ls.shape[1] || xid >= image_ls.shape[2])
+        return;
+    for (int c = 0; c < image_ls.shape[3]; ++c) {
+        float v =
+            (float)image_hs.at(bid, 2*yid+0, 2*xid+0, c) +
+            (float)image_hs.at(bid, 2*yid+0, 2*xid+1, c) +
+            (float)image_hs.at(bid, 2*yid+1, 2*xid+0, c) +
+            (float)image_hs.at(bid, 2*yid+1, 2*xid+1, c);
+        image_ls.at(bid, yid, xid, c) = (uintx_t)(0.25f*v + 0.5f);
+    }
+}
+
 __global__ void avg_pool_downsample_bool_kernel(
     const TensorView<uint8_t, 4> image_hs,
     TensorView<uint8_t, 4> image_ls
@@ -613,6 +633,40 @@ __global__ void avg_pool_downsample_bool_kernel(
         image_ls.at(bid, yid, xid, c) = (uint8_t)(v >= 2);
     }
 }
+
+
+/*[AutoHeaderGeneratorExport]*/
+at::Tensor avg_pool_downsample_tensor(
+    at::Tensor tensor
+) {
+    DEVICE_GUARD(tensor);
+    CHECK_INPUT(tensor);
+
+    auto h = tensor.size(1) / 2, w = tensor.size(2) / 2, b = tensor.size(0);
+    at::Tensor result = at::empty({b, h, w, tensor.size(3)}, tensor.options());
+
+    if (tensor.dtype() == at::kFloat)
+        avg_pool_downsample_float_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>
+            (tensor2view<float, 4>(tensor), tensor2view<float, 4>(result));
+    else if (tensor.dtype() == at::kUInt16)
+        avg_pool_downsample_integral_kernel<uint16_t><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>
+            (tensor2view<uint16_t, 4>(tensor), tensor2view<uint16_t, 4>(result));
+    else if (tensor.dtype() == at::kByte)
+        avg_pool_downsample_integral_kernel<uint8_t><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>
+            (tensor2view<uint8_t, 4>(tensor), tensor2view<uint8_t, 4>(result));
+    else if (tensor.dtype() == at::kBool) {
+        auto tensor_byte = tensor.view(at::kByte);
+        auto result_byte = result.view(at::kByte);
+        avg_pool_downsample_bool_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>
+            (tensor2view<uint8_t, 4>(tensor_byte), tensor2view<uint8_t, 4>(result_byte));
+    }
+    else throw std::runtime_error("Unsupported dtype for avg_pool_downsample");
+    
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return result;
+}
+
 
 __global__ void avg_pool_upsample_float_kernel(
     TensorView<float, 4> image_hs,
@@ -734,9 +788,7 @@ std::tuple<
         auto downsample_float = [&](std::optional<at::Tensor>& prev, std::optional<at::Tensor>& curr, int C) {
             if (prev.has_value()) {
                 curr = at::empty({B, H_new, W_new, C}, prev.value().options());
-                dim3 grid((W_new + 15) / 16, (H_new + 15) / 16, B);
-                dim3 block(16, 16, 1);
-                avg_pool_downsample_float_kernel<<<grid, block>>>(
+                avg_pool_downsample_float_kernel<<<_LAUNCH_ARGS_3D(W_new, H_new, B, 16, 16, 1)>>>(
                     tensor2view<float, 4>(prev.value()),
                     tensor2view<float, 4>(curr.value())
                 );
@@ -760,9 +812,7 @@ std::tuple<
         auto downsample_bool = [&](std::optional<at::Tensor>& prev, std::optional<at::Tensor>& curr) {
             if (prev.has_value()) {
                 curr = at::empty({B, H_new, W_new, 1}, prev.value().options());
-                dim3 grid((W_new + 15) / 16, (H_new + 15) / 16, B);
-                dim3 block(16, 16, 1);
-                avg_pool_downsample_bool_kernel<<<grid, block>>>(
+                avg_pool_downsample_bool_kernel<<<_LAUNCH_ARGS_3D(W_new, H_new, B, 16, 16, 1)>>>(
                     tensor2view<uint8_t, 4>(prev.value()),
                     tensor2view<uint8_t, 4>(curr.value())
                 );
@@ -842,9 +892,7 @@ std::tuple<
             } else {
                 long H_scale = loss_map.value().size(1);
                 long W_scale = loss_map.value().size(2);
-                dim3 grid((W + 15) / 16, (H + 15) / 16, B);
-                dim3 block(16, 16, 1);
-                avg_pool_upsample_float_kernel<<<grid, block>>>(
+                avg_pool_upsample_float_kernel<<<_LAUNCH_ARGS_3D(W, H, B, 16, 16, 1)>>>(
                     tensor2view<float, 4>(total_loss_map.value()),
                     tensor2view<float, 4>(loss_map.value()),
                     1 << scale,
@@ -863,11 +911,9 @@ std::tuple<
             if (grad_scale.has_value() && grad_acc.has_value()) {
                 long H_scale = grad_scale.value().size(1);
                 long W_scale = grad_scale.value().size(2);
-                dim3 grid((W + 15) / 16, (H + 15) / 16, B);
-                dim3 block(16, 16, 1);
                 float a = (scale == 1 ? 1.0f / num_loss_scales : 1.0f);
                 float b = powf(0.25f, (float)scale) / num_loss_scales;
-                avg_pool_upsample_float_kernel<<<grid, block>>>(
+                avg_pool_upsample_float_kernel<<<_LAUNCH_ARGS_3D(W, H, B, 16, 16, 1)>>>(
                     tensor2view<float, 4>(grad_acc.value()),
                     tensor2view<float, 4>(grad_scale.value()),
                     1 << scale, a, b
