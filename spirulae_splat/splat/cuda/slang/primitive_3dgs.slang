@@ -472,8 +472,9 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
 
     aabb_xyxy = {xmin, ymin, xmax, ymax};
     sorting_depth = no_diff get_sorting_depth(camera_model, mean_c);
-    conic = eval3d ? exp(-scale) :
-        float3(covar2d_inv[0][0], covar2d_inv[0][1], covar2d_inv[1][1]);
+    // conic = eval3d ? exp(-scale) :
+    //     float3(covar2d_inv[0][0], covar2d_inv[0][1], covar2d_inv[1][1]);
+    conic = float3(covar2d_inv[0][0], covar2d_inv[0][1], covar2d_inv[1][1]);
 
     float3 campos = -mul(transpose(R), t);
     sh_coeffs_to_color(mean - campos, sh_coeffs, rgb);

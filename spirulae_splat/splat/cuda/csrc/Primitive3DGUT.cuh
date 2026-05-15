@@ -221,20 +221,16 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT {
         }
     };
 
-    struct Fragment {
+    struct FragmentFwd {
         float3 mean;
-        // float3x3 iscl_rot;
-        float4 quat;
-        float3 scale;
+        float3x3 iscl_rot;
         float opacity;
         float3 rgb;
 
-        static __device__ __forceinline__ Fragment zero() {
-            Fragment f;
+        static __device__ __forceinline__ FragmentFwd zero() {
+            FragmentFwd f;
             f.mean = make_float3(0.f);
-            // f.iscl_rot = float3x3{0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
-            f.quat = make_float4(0.f);
-            f.scale = make_float3(0.f);
+            f.iscl_rot = float3x3{0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
             f.opacity = 0.f;
             f.rgb = make_float3(0.f);
             return f;
@@ -247,22 +243,64 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT {
         ) {
             mean = wbuffer.means(wi);
             // iscl_rot = SlangProjectionUtils::compute_3dgut_iscl_rot(wbuffer.quats(wi), sbuffer.scales(si));
-            quat = wbuffer.quats(wi);
-            scale = sbuffer.scales(si);
+            iscl_rot = SlangProjectionUtils::compute_3dgut_iscl_rot(wbuffer.quats(wi), wbuffer.scales(wi));
             opacity = sbuffer.opacities(si);
             rgb = sbuffer.colors(si);
         }
 
-        __device__ __forceinline__ void store(
-            WorldBuffer &wbuffer,
-            ScreenBuffer &sbuffer,
-            int64_t wi, int64_t si
+        __device__ __forceinline__ float evaluate_alpha(
+            float3 ray_o, float3 ray_d
         ) const {
-            if (&wbuffer.means(0)) wbuffer.means(wi) = mean;
-            if (&wbuffer.quats(0)) wbuffer.quats(wi) = quat;
-            if (&sbuffer.scales(0)) sbuffer.scales(si) = scale;
-            if (&sbuffer.opacities(0)) sbuffer.opacities(si) = opacity;
-            if (&sbuffer.colors(0)) sbuffer.colors(si) = rgb;
+            return SlangProjectionUtils::evaluate_alpha_3dgs(
+                mean, iscl_rot, opacity,
+                ray_o, ray_d
+            );
+        }
+
+        __device__ __forceinline__ RenderOutput evaluate_color(
+            float3 ray_o, float3 ray_d
+        ) const {
+            float3 out_rgb; float out_depth;
+            SlangProjectionUtils::evaluate_color_3dgs(
+                mean, iscl_rot, opacity, rgb,
+                ray_o, ray_d, &out_rgb, &out_depth
+            );
+            return { out_rgb, out_depth, make_float3(0.0f) };
+        }
+
+    };
+
+    struct FragmentBwd {
+        float3 mean;
+        float4 quat;
+        float3 scale;
+        float3x3 iscl_rot;
+        float opacity;
+        float3 rgb;
+
+        static __device__ __forceinline__ FragmentBwd zero(const FragmentBwd& bwd) {
+            FragmentBwd f;
+            f.mean = make_float3(0.f);
+            f.quat = bwd.quat;
+            f.scale = bwd.scale;
+            f.iscl_rot = float3x3{0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+            f.opacity = 0.f;
+            f.rgb = make_float3(0.f);
+            return f;
+        }
+
+        __device__ __forceinline__ void load(
+            const WorldBuffer &wbuffer,
+            const ScreenBuffer &sbuffer,
+            int64_t wi, int64_t si
+        ) {
+            mean = wbuffer.means(wi);
+            quat = wbuffer.quats(wi);
+            // scale = sbuffer.scales(si);
+            scale = wbuffer.scales(wi);
+            iscl_rot = SlangProjectionUtils::compute_3dgut_iscl_rot(quat, scale);
+            opacity = sbuffer.opacities(si);
+            rgb = sbuffer.colors(si);
         }
 
         __device__ __forceinline__ void atomicStore(
@@ -270,9 +308,12 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT {
             ScreenBuffer &sbuffer,
             int64_t wi, int64_t si
         ) const {
+            float4 v_quat; float3 v_scale;
+            SlangProjectionUtils::compute_3dgut_iscl_rot_vjp(quat, scale, iscl_rot, &v_quat, &v_scale);
             if (&wbuffer.means(0)) atomicAddFVec(&wbuffer.means(wi), mean);
-            if (&wbuffer.quats(0)) atomicAddFVec(&wbuffer.quats(wi), quat);
-            if (&sbuffer.scales(0)) atomicAddFVec(&sbuffer.scales(si), scale);
+            if (&wbuffer.quats(0)) atomicAddFVec(&wbuffer.quats(wi), v_quat);
+            // if (&sbuffer.scales(0)) atomicAddFVec(&sbuffer.scales(si), v_scale);
+            if (&wbuffer.scales(0)) atomicAddFVec(&wbuffer.scales(wi), v_scale);
             if (&sbuffer.opacities(0)) atomicAddFVec(&sbuffer.opacities(si), opacity);
             if (&sbuffer.colors(0)) atomicAddFVec(&sbuffer.colors(si), rgb);
         }
@@ -280,9 +321,6 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT {
         __device__ __forceinline__ float evaluate_alpha(
             float3 ray_o, float3 ray_d
         ) const {
-            // if (dot(mean-ray_o, ray_d) <= 0.0f)
-            //     return 0.0;
-            float3x3 iscl_rot = SlangProjectionUtils::compute_3dgut_iscl_rot(quat, scale);
             return SlangProjectionUtils::evaluate_alpha_3dgs(
                 mean, iscl_rot, opacity,
                 ray_o, ray_d
@@ -291,27 +329,18 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT {
 
         __device__ __forceinline__ void evaluate_alpha_vjp(
             float3 ray_o, float3 ray_d, float v_alpha,
-            Fragment &v_frag, float3 &v_ray_o, float3 &v_ray_d
+            FragmentBwd &v_frag, float3 &v_ray_o, float3 &v_ray_d
         ) const {
-            // if (dot(mean-ray_o, ray_d) <= 0.0f) {
-            //     v_ray_o = v_ray_d = make_float3(0.f);
-            //     return;
-            // }
             float3 v_mean; float3x3 v_iscl_rot; float v_opacity;
             float3 v_ray_o_t, v_ray_d_t;
-            float3x3 iscl_rot = SlangProjectionUtils::compute_3dgut_iscl_rot(quat, scale);
             SlangProjectionUtils::evaluate_alpha_3dgs_vjp(
                 mean, iscl_rot, opacity,
                 ray_o, ray_d, v_alpha,
                 &v_mean, &v_iscl_rot, &v_opacity,
                 &v_ray_o_t, &v_ray_d_t
             );
-            float4 v_quat; float3 v_scale;
-            SlangProjectionUtils::compute_3dgut_iscl_rot_vjp(quat, scale, v_iscl_rot, &v_quat, &v_scale);
             v_frag.mean += v_mean;
-            // v_frag.iscl_rot = v_frag.iscl_rot + v_iscl_rot;
-            v_frag.quat += v_quat;
-            v_frag.scale += v_scale;
+            v_frag.iscl_rot = v_frag.iscl_rot + v_iscl_rot;
             v_frag.opacity += v_opacity;
             v_ray_o += v_ray_o_t;
             v_ray_d += v_ray_d_t;
@@ -321,7 +350,6 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT {
             float3 ray_o, float3 ray_d
         ) const {
             float3 out_rgb; float out_depth;
-            float3x3 iscl_rot = SlangProjectionUtils::compute_3dgut_iscl_rot(quat, scale);
             SlangProjectionUtils::evaluate_color_3dgs(
                 mean, iscl_rot, opacity, rgb,
                 ray_o, ray_d, &out_rgb, &out_depth
@@ -331,11 +359,10 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT {
 
         __device__ __forceinline__ void evaluate_color_vjp(
             float3 ray_o, float3 ray_d, RenderOutput v_render,
-            Fragment &v_frag, float3 &v_ray_o, float3 &v_ray_d
+            FragmentBwd &v_frag, float3 &v_ray_o, float3 &v_ray_d
         ) const {
             float3 v_mean; float3x3 v_iscl_rot; float v_opacity; float3 v_rgb;
             float3 v_ray_o_t, v_ray_d_t;
-            float3x3 iscl_rot = SlangProjectionUtils::compute_3dgut_iscl_rot(quat, scale);
             SlangProjectionUtils::evaluate_color_3dgs_vjp(
                 mean, iscl_rot, opacity, rgb,
                 ray_o, ray_d,
@@ -343,12 +370,8 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT {
                 &v_mean, &v_iscl_rot, &v_opacity, &v_rgb,
                 &v_ray_o_t, &v_ray_d_t
             );
-            float4 v_quat; float3 v_scale;
-            SlangProjectionUtils::compute_3dgut_iscl_rot_vjp(quat, scale, v_iscl_rot, &v_quat, &v_scale);
             v_frag.mean += v_mean;
-            // v_frag.iscl_rot = v_frag.iscl_rot + v_iscl_rot;
-            v_frag.quat += v_quat;
-            v_frag.scale += v_scale;
+            v_frag.iscl_rot = v_frag.iscl_rot + v_iscl_rot;
             v_frag.opacity += v_opacity;
             v_frag.rgb += v_rgb;
             v_ray_o += v_ray_o_t;

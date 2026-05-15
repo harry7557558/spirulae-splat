@@ -424,10 +424,16 @@ class Renderer:
         TILE_SIZE = 16
         tile_width = math.ceil(self.width / float(TILE_SIZE))
         tile_height = math.ceil(self.height / float(TILE_SIZE))
+        intersect_tile_splat_params = None
+        if self.primitive in ['3dgs', 'mip']:
+            intersect_tile_splat_params = (self.splats_proj[0], self.splats_proj[2], self.splats_proj[3])
+        if True:  # Note that GUT is already an approximation
+            if self.primitive in ['3dgut', '3dgut_sv']:
+                intersect_tile_splat_params = (None, self.splats_proj[0], self.splats_proj[1])
         isect_ids, flatten_ids, isect_offsets, radii = _make_lazy_cuda_func(f"intersect_tile")(
             self.aabb,
             self.depths,
-            (self.splats_proj[0], self.splats_proj[2], self.splats_proj[3]) if self.primitive in ['3dgs', 'mip'] else None,
+            intersect_tile_splat_params,
             I, self.intrins, self.width, self.height,
             self.camera_ids if self.packed else None,
         )

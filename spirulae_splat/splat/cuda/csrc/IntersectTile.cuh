@@ -25,7 +25,7 @@ std::tuple<
 > do_intersect_tile_generic(
     at::Tensor aabb,  // [..., N, 4], float32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
-    std::optional<std::tuple<at::Tensor, at::Tensor, at::Tensor>> splats_proj,
+    std::optional<std::tuple<at::optional<at::Tensor>, at::Tensor, at::Tensor>> splats_proj,
     const uint32_t I,
     at::Tensor intrins,
     const uint32_t image_width,

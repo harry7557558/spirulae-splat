@@ -324,6 +324,10 @@ public:
     static TensorList zeros(int64_t size, std::array<int32_t, N> strides) {
         TensorList res;
         for (int i = 0; i < N; ++i) {
+            if (strides[i] < 0) {
+                res.push_back(std::nullopt);
+                continue;
+            }
             res.push_back(
                 at::empty({size, strides[i]}, kTensorOptionF32())
             );

@@ -198,8 +198,8 @@ struct _BasePrimitive3DGS {
     };
 
     #ifdef __CUDACC__
-    struct Fragment {
-        Fragment& operator=(const Fragment&) = default;
+    struct FragmentFwd {
+        FragmentFwd& operator=(const FragmentFwd&) = default;
 
         float2 xy;
         float depth;
@@ -217,6 +217,7 @@ struct _BasePrimitive3DGS {
             return s;
         }
     };
+    using FragmentBwd = FragmentFwd;
     #endif
 
 };
@@ -303,7 +304,9 @@ struct _BasePrimitive3DGUT : _BasePrimitive3DGS {
             return TensorArray<3>::empty(size, {3, 1, 3});
         }
         static TensorList zeros(int64_t size) {
-            return TensorArray<3>::zeros(size, {3, 1, 3});
+            // return TensorArray<3>::zeros(size, {3, 1, 3});
+            // we don't need gradient for scales (alias conics)
+            return TensorArray<3>::zeros(size, {-1, 1, 3});
         }
     #endif  // #ifndef NO_TORCH
     };

@@ -254,7 +254,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         const int32_t splat_idx = splat_batch_end - thread_id;
 
         // load splats
-        typename SplatPrimitive::Fragment splat;
+        typename SplatPrimitive::FragmentBwd splat;
         uint32_t splat_wid, splat_sid;
         if (splat_idx >= range_start) {
             splat_sid = flatten_ids[splat_idx]; // flatten index in [I * N] or [nnz]
@@ -264,9 +264,9 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         }
 
         // accumulate gradient
-        typename SplatPrimitive::Fragment v_splat = SplatPrimitive::Fragment::zero();
-        typename SplatPrimitive::Fragment vr_splat = SplatPrimitive::Fragment::zero();
-        typename SplatPrimitive::Fragment h_splat = SplatPrimitive::Fragment::zero();
+        typename SplatPrimitive::FragmentBwd v_splat = SplatPrimitive::FragmentBwd::zero(splat);
+        typename SplatPrimitive::FragmentBwd vr_splat = SplatPrimitive::FragmentBwd::zero(splat);
+        typename SplatPrimitive::FragmentBwd h_splat = SplatPrimitive::FragmentBwd::zero(splat);
         float accum_weight = 0.0f;
 
         // thread 0 takes last splat, 1 takes second last, etc.
@@ -307,6 +307,14 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 continue;
         #endif
 
+        #if IS_EVAL3D
+            RenderOutput color = splat.evaluate_color(ray_o, ray_d);
+            if (color.depth <= 0.0f)
+                continue;
+        #else
+            RenderOutput color = splat.evaluate_color(px, py);
+        #endif
+
             // printf("t=%d, thread %u, splat %d (%u), pix_id %d, pix %d %d\n", t, thread_id, splat_idx-range_start, splat_gid, pix_id, pix_global_x, pix_global_y);
 
             // forward:
@@ -319,11 +327,6 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             float ra = 1.0f / (1.0f - alpha);
             float T0 = T1 * ra;
 
-        #if IS_EVAL3D
-            RenderOutput color = splat.evaluate_color(ray_o, ray_d);
-        #else
-            RenderOutput color = splat.evaluate_color(px, py);
-        #endif
             RenderOutput v_c = v_pix_colors[pix_id];
 
             // gradient to alpha:

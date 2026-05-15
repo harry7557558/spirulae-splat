@@ -134,7 +134,7 @@ __global__ void intersect_tile_kernel(
         return;
     }
 
-    float2 xy = is_ellipse ? proj_xy[idx] : float2{};
+    float2 xy = is_ellipse ? (proj_xy ? proj_xy[idx] : float2{0.5f*(xmin+xmax), 0.5f*(ymin+ymax)}) : float2{};
     float3 conic = is_ellipse ? proj_conic[idx] : float3{};
     if constexpr (is_ellipse)
         conic = conic * (0.5f / __logf(proj_opac[idx] / ALPHA_THRESHOLD));
@@ -293,7 +293,7 @@ std::tuple<
 > do_intersect_tile_generic(
     at::Tensor aabb,  // [..., N, 4], float32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
-    std::optional<std::tuple<at::Tensor, at::Tensor, at::Tensor>> splats_proj,
+    std::optional<std::tuple<at::optional<at::Tensor>, at::Tensor, at::Tensor>> splats_proj,
     const uint32_t I,
     at::Tensor intrins,
     const uint32_t image_width,
@@ -306,7 +306,8 @@ std::tuple<
     if (image_ids.has_value())
         CHECK_INPUT(image_ids.value());
     if (splats_proj.has_value()) {
-        CHECK_INPUT(std::get<0>(splats_proj.value()));
+        if (std::get<0>(splats_proj.value()).has_value())
+            CHECK_INPUT(std::get<0>(splats_proj.value()).value());
         CHECK_INPUT(std::get<1>(splats_proj.value()));
         CHECK_INPUT(std::get<2>(splats_proj.value()));
     }
@@ -337,7 +338,8 @@ std::tuple<
         nullptr,  // intrins
         reinterpret_cast<const float4 *>(aabb.data_ptr<float>()),
         depths.data_ptr<float>(),
-        splats_proj.has_value() ? (float2*)std::get<0>(splats_proj.value()).data_ptr<float>() : (float2*)nullptr,
+        splats_proj.has_value() &&  std::get<0>(splats_proj.value()).has_value() ?
+            (float2*)std::get<0>(splats_proj.value()).value().data_ptr<float>() : (float2*)nullptr,
         splats_proj.has_value() ? (float3*)std::get<1>(splats_proj.value()).data_ptr<float>() : (float3*)nullptr,
         splats_proj.has_value() ? std::get<2>(splats_proj.value()).data_ptr<float>() : (float*)nullptr,
         nullptr,  // cum_tiles_per_splat
@@ -390,7 +392,8 @@ std::tuple<
         (float4*)intrins.data_ptr<float>(),
         reinterpret_cast<const float4 *>(aabb.data_ptr<float>()),
         depths.data_ptr<float>(),
-        splats_proj.has_value() ? (float2*)std::get<0>(splats_proj.value()).data_ptr<float>() : (float2*)nullptr,
+        splats_proj.has_value() &&  std::get<0>(splats_proj.value()).has_value() ?
+            (float2*)std::get<0>(splats_proj.value()).value().data_ptr<float>() : (float2*)nullptr,
         splats_proj.has_value() ? (float3*)std::get<1>(splats_proj.value()).data_ptr<float>() : (float3*)nullptr,
         splats_proj.has_value() ? std::get<2>(splats_proj.value()).data_ptr<float>() : (float*)nullptr,
         reinterpret_cast<const int64_t *>(cum_tiles_per_splat.data_ptr<int64_t>()),

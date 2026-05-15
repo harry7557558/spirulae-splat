@@ -214,12 +214,12 @@ struct _Base3DGS : public _BasePrimitive3DGS {
         }
     };
 
-    struct Fragment : public _BasePrimitive3DGS::Screen {
-        __device__ Fragment() = default;
-        __device__ Fragment(const _BasePrimitive3DGS::Screen& other) {
+    struct FragmentFwd : public _BasePrimitive3DGS::Screen {
+        __device__ FragmentFwd() = default;
+        __device__ FragmentFwd(const _BasePrimitive3DGS::Screen& other) {
             _BasePrimitive3DGS::Screen::operator=(other);
         }
-        __device__ Fragment& operator=(const _BasePrimitive3DGS::Screen& other) {
+        __device__ FragmentFwd& operator=(const _BasePrimitive3DGS::Screen& other) {
             _BasePrimitive3DGS::Screen::operator=(other);
             return *this;
         }
@@ -262,7 +262,7 @@ struct _Base3DGS : public _BasePrimitive3DGS {
 
         __device__ __forceinline__ void evaluate_alpha_vjp(
             float px, float py, float v_alpha,
-            Fragment& v_frag
+            FragmentFwd& v_frag
         ) const {
             float2 delta = {xy.x - px, xy.y - py};
             float sigma = 0.5f * (conic.x * delta.x * delta.x +
@@ -294,12 +294,27 @@ struct _Base3DGS : public _BasePrimitive3DGS {
 
         __device__ __forceinline__ void evaluate_color_vjp(
             float px, float py, RenderOutput v_render,
-            Fragment& v_frag
+            FragmentFwd& v_frag
         ) const {
             v_frag.rgb += v_render.rgb;
             v_frag.depth += v_render.depth;
         }
 
+    };
+
+    struct FragmentBwd : public FragmentFwd {
+        __device__ FragmentBwd() = default;
+        __device__ FragmentBwd(const _BasePrimitive3DGS::Screen& other) {
+            _BasePrimitive3DGS::Screen::operator=(other);
+        }
+        __device__ FragmentBwd& operator=(const _BasePrimitive3DGS::Screen& other) {
+            _BasePrimitive3DGS::Screen::operator=(other);
+            return *this;
+        }
+
+        static __device__ __forceinline__ FragmentBwd zero(const FragmentBwd& bwd) {
+            return _BasePrimitive3DGS::Screen::zero();
+        }
     };
 
 #endif  // #ifdef __CUDACC__

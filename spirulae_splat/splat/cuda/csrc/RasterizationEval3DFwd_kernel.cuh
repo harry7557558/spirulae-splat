@@ -133,7 +133,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     uint32_t num_batches =
         (range_end - range_start + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
-    __shared__ typename SplatPrimitive::Fragment splat_batch[BLOCK_SIZE];
+    __shared__ typename SplatPrimitive::FragmentFwd splat_batch[BLOCK_SIZE];
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
@@ -177,35 +177,39 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         for (uint32_t t = 0; t < batch_size; ++t) {
             float vis = 0.0f;
             if (!done) {
-                typename SplatPrimitive::Fragment splat = splat_batch[t];
+                typename SplatPrimitive::FragmentFwd splat = splat_batch[t];
             #if IS_EVAL3D
                 float alpha = splat.evaluate_alpha(ray_o, ray_d);
             #else
                 float alpha = splat.evaluate_alpha(px, py);
             #endif
-                if (alpha > ALPHA_THRESHOLD) {
-                    const float next_T = T * (1.0f - alpha);
-                    if (next_T > 1e-4f) {
-                        vis = alpha * T;
-                    #if IS_EVAL3D
-                        const RenderOutput color = splat.evaluate_color(ray_o, ray_d);
-                    #else
-                        const RenderOutput color = splat.evaluate_color(px, py);
-                    #endif
-                        if (output_distortion) {
-                            distortion_out += (
-                                color * color * (1.0f - T)
-                                + color * pix_out * -2.0f
-                                + pix2_out 
-                            ) * vis;
-                            pix2_out += color * color * vis;
-                        }
-                        pix_out += color * vis;
-                        cur_idx = batch_start + t;
-                        T = next_T;
-                    }  // next_T > 1e-4f
-                    else done = true;
-                }  // alpha > ALPHA_THRESHOLD
+                if (alpha <= ALPHA_THRESHOLD)
+                    continue;
+
+            #if IS_EVAL3D
+                const RenderOutput color = splat.evaluate_color(ray_o, ray_d);
+                if (color.depth <= 0.0f)
+                    continue;
+            #else
+                const RenderOutput color = splat.evaluate_color(px, py);
+            #endif
+
+                const float next_T = T * (1.0f - alpha);
+                if (next_T > 1e-4f) {
+                    vis = alpha * T;
+                    if (output_distortion) {
+                        distortion_out += (
+                            color * color * (1.0f - T)
+                            + color * pix_out * -2.0f
+                            + pix2_out 
+                        ) * vis;
+                        pix2_out += color * color * vis;
+                    }
+                    pix_out += color * vis;
+                    cur_idx = batch_start + t;
+                    T = next_T;
+                } else done = true;
+
             }  // !done
 
         }  // for (uint32_t t = 0; t < batch_size; ++t)
