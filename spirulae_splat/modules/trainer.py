@@ -268,7 +268,7 @@ class Trainer:
         # self.model.step_cb(self.optimizers, step)
         self.model.step_cb(step)
 
-        inputs = self.datamanager.next_train(step)  # type: List[Tuple[Cameras, Dict]]
+        inputs = self.datamanager.next_train(step, self.config.num_iterations)  # type: List[Tuple[Cameras, Dict]]
         if isinstance(inputs, tuple):
             train_inputs, val_inputs = inputs
             if len(train_inputs) > 1 or len(val_inputs) > 1:
@@ -292,7 +292,7 @@ class Trainer:
             return self._train_step(*args)
 
     def _get_eval_metrics_dict(self):
-        inputs = self.datamanager.next_train(0)  # type: List[Tuple[Cameras, Dict]]
+        inputs = self.datamanager.next_train(0, None)  # type: List[Tuple[Cameras, Dict]]
         assert not isinstance(inputs, tuple)
 
         for i, (camera, batch) in enumerate(inputs):
@@ -645,6 +645,7 @@ class TrainerConfigAcademicBaseline(TrainerConfig):
     ))
     datamanager: SpirulaeSplatDataManagerConfig = field(default_factory=lambda: SpirulaeSplatDataManagerConfig(
         max_batch_per_epoch=9**9,
+        start_resolution=None,
         load_depths=False,
         load_normals=False,
     ))
@@ -670,10 +671,23 @@ class TrainerConfigAcademicBaseline(TrainerConfig):
         erank_reg=0.0,
         erank_reg_s3=0.0,
         quat_norm_reg=0.0,
+        sh_reg=0.0,
         randomize_background=0.0,
         normal_supervision_weight=0.0,
         opacity_reg=0.01,
         scale_reg=0.01,
     ))
     # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS)
-    optimizer: OptimizerConfig = field(default_factory=lambda: OptimizerConfig())
+    optimizer: OptimizerConfig = field(default_factory=lambda: OptimizerConfig(
+        max_steps=30000,
+        use_scale_agnostic_mean=False,
+        use_per_splat_bias_correction=False,
+        means_lr=1.6e-4,
+        means_lr_final=1.6e-6,
+        scales_lr=0.005,
+        scales_lr_final=None,
+        quats_lr=0.0005,
+        opacities_lr=0.05,
+        features_dc_lr=0.0025,
+        features_sh_lr=0.0025 / 20,
+    ))

@@ -129,7 +129,7 @@ void projection_opaque_triangle<let camera_model: CameraModelType, let assume_va
         return;
     }
 
-    aabb_xyxy = {xmin, ymin, xmax, ymax};
+    aabb_xyxy = detach<float4>(float4(xmin, ymin, xmax, ymax));
     // depth = float3(vert0_c.z, vert1_c.z, vert2_c.z);
     depth = float3(length(vert0_c), length(vert1_c), length(vert2_c));
 

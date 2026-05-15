@@ -519,14 +519,6 @@ void densify_clip_scale_tensor(
 }
 
 
-inline __device__ float ellpise_surface_area(float3 scale) {
-    return powf(
-        powf(scale.x*scale.y, 1.6f) +
-        powf(scale.x*scale.z, 1.6f) +
-        powf(scale.y*scale.z, 1.6f), 1.0f / 1.6f);
-}
-
-
 __global__ void densify_update_weight_kernel(
     long num_splats,
     bool is_max_mode,
@@ -547,16 +539,6 @@ __global__ void densify_update_weight_kernel(
     float weight = fabsf(accum_weight[idx]);
     if (opacs)
         weight *= sigmoid(opacs[idx]);
-    if (true) // TODO
-        // weight *= rsqrtf(radii[idx]);
-        weight /= fmaxf(radii[idx], 1e-10f);
-    if (scales) {
-        float3 scale = scales[idx];
-        scale = {__expf(scale.x), __expf(scale.y), __expf(scale.z)};
-        float sqrt_visible_area_est =
-            radii[idx] / fmaxf(fmaxf(scale.x, scale.y), scale.z) * sqrtf(ellpise_surface_area(scale));
-        weight /= fmaxf(sqrt_visible_area_est, 1e-10f);
-    }
     if (accum_weight_scalar != nullptr)
         weight *= accum_weight_scalar[0];
     float2 accum = accum_buffer[idx];

@@ -1039,7 +1039,7 @@ class SplatTrainingLosses:
             lr = optim_config.get_scheduled_lr("bilagrid", self.step, max_steps)
             _make_lazy_cuda_func("fused_adam_with_steps")(
                 self.bilagrid.grids, self.v_bilagrid, self.g1_bilagrid, self.g2_bilagrid,
-                lr, step+1
+                lr, step+1, 0.0, 0.0
             )
             self.v_bilagrid = None
 
@@ -1050,6 +1050,6 @@ class SplatTrainingLosses:
             lr = optim_config.get_scheduled_lr("ppisp", self.step, max_steps)
             _make_lazy_cuda_func("fused_adam_with_steps")(
                 self.ppisp_params, self.v_ppisp, self.g1_ppisp, self.g2_ppisp,
-                lr, step+1
+                lr, step+1, 0.0, 0.0
             )
             self.v_ppisp = None

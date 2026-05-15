@@ -94,7 +94,7 @@ void projection_voxel_eval3d<let camera_model : CameraModelType, let assume_vali
         return;
     }
 
-    aabb_xyxy = { (int)floor(xmin), (int)floor(ymin), (int)ceil(xmax), (int)ceil(ymax) };
+    aabb_xyxy = detach<float4>(float4(xmin, ymin, xmax, ymax));
     depth = no_diff get_sorting_depth(camera_model, mean_c);  // TODO: morton code
 
     float3 campos = -mul(transpose(R), t);

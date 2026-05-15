@@ -127,16 +127,16 @@ def rasterize_gsplat(means, quats, scales, opacities, features_dc, features_sh, 
     return rgb, depth, alpha
 
 
-def get_inputs():
-    torch.manual_seed(44)
+def get_inputs(seed=44):
+    torch.manual_seed(seed)
 
-    means = torch.randn((N, 3)).to(device)
-    quats = torch.randn((N, 4)).to(device)
-    scales = torch.randn((N, 3)).to(device)*0.7 - 5.0
+    means = torch.randn((N, 3), device=device)
+    quats = torch.randn((N, 4), device=device)
+    scales = torch.randn((N, 3), device=device)*0.7 - 5.0
     # means[0] -= 1e4
-    opacities = torch.randn((N,)).to(device)
-    features_dc = torch.rand((N, 3)).to(device)
-    features_sh = 0.2 * torch.randn((N, (SH_DEGREE+1)**2-1, 3)).to(device)
+    opacities = torch.randn((N,), device=device)
+    features_dc = torch.rand((N, 3), device=device)
+    features_sh = 0.2 * torch.randn((N, (SH_DEGREE+1)**2-1, 3), device=device)
 
     quats = torch.nn.functional.normalize(quats)
 

@@ -1007,6 +1007,8 @@ __global__ void fused_adam_with_steps_kernel(
     const float lr,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps,
+    const float decay,
+    const float decay_offset,
     const int64_t numel,
     const int stride
 ) {
@@ -1025,6 +1027,7 @@ __global__ void fused_adam_with_steps_kernel(
     float v = grad[idx];
     if (!isfinite(v))
         v = 0.0f;
+    v += decay * (fmaxf(x - decay_offset, 0.0f) + fminf(x + decay_offset, 0.0f));
     float g1 = exp_avg[idx];
     float g2 = exp_avg_sq[idx];
     
@@ -1045,7 +1048,9 @@ void fused_adam_with_steps_tensor(
     at::Tensor exp_avg,
     at::Tensor exp_avg_sq,
     float lr,
-    std::variant<int32_t, at::Tensor> step
+    std::variant<int32_t, at::Tensor> step,
+    float l2_reg,
+    float l2_reg_offset
 ) {
     DEVICE_GUARD(param);
     CHECK_INPUT(param);
@@ -1074,6 +1079,8 @@ void fused_adam_with_steps_tensor(
         lr,
         std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1,
         std::get_if<at::Tensor>(&step) ? std::get<at::Tensor>(step).data_ptr<int32_t>() : nullptr,
+        2.0f*l2_reg,
+        l2_reg_offset,
         numel,
         stride
     );

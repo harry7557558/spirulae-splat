@@ -456,10 +456,10 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
     // https://arxiv.org/pdf/2402.00525
     float radius_x = extend * sqrt(covar2d[0].x);
     float radius_y = extend * sqrt(covar2d[1].y);
-    float xmin = floor(mean2d.x - radius_x);
-    float xmax = ceil(mean2d.x + radius_x);
-    float ymin = floor(mean2d.y - radius_y);
-    float ymax = ceil(mean2d.y + radius_y);
+    float xmin = detach<float>(mean2d.x - radius_x);
+    float xmax = detach<float>(mean2d.x + radius_x);
+    float ymin = detach<float>(mean2d.y - radius_y);
+    float ymax = detach<float>(mean2d.y + radius_y);
 
     // mask out gaussians outside the image region
     if (!assume_valid && (
@@ -470,7 +470,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
         return;
     }
 
-    aabb_xyxy = {xmin, ymin, xmax, ymax};
+    aabb_xyxy = float4(xmin, ymin, xmax, ymax);
     sorting_depth = no_diff get_sorting_depth(camera_model, mean_c);
     // conic = eval3d ? exp(-scale) :
     //     float3(covar2d_inv[0][0], covar2d_inv[0][1], covar2d_inv[1][1]);

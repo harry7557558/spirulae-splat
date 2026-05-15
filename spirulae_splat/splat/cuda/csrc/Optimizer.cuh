@@ -167,7 +167,9 @@ void fused_adam_with_steps_tensor(
     at::Tensor exp_avg,
     at::Tensor exp_avg_sq,
     float lr,
-    std::variant<int32_t, at::Tensor> step
+    std::variant<int32_t, at::Tensor> step,
+    float l2_reg,
+    float l2_reg_offset
 );
 
 

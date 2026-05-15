@@ -79,7 +79,7 @@ inline __device__ int count_ellipse_grid_overlaps(
             int x1 = int(ceil((bound.y + xy.x) / TILE_SIZE));
             x0 = clamp(x0, grid_xmin, grid_xmax);
             x1 = clamp(x1, grid_xmin, grid_xmax);
-            n_tiles += x1-x0;
+            n_tiles += max(x1-x0, 0);
         }
     } else {
         inv_cov = {inv_cov.z, inv_cov.y, inv_cov.x};
@@ -91,7 +91,7 @@ inline __device__ int count_ellipse_grid_overlaps(
             int y1 = int(ceil((bound.y + xy.y) / TILE_SIZE));
             y0 = clamp(y0, grid_ymin, grid_ymax);
             y1 = clamp(y1, grid_ymin, grid_ymax);
-            n_tiles += y1-y0;
+            n_tiles += max(y1-y0, 0);
         }
     }
 
@@ -130,6 +130,18 @@ __global__ void intersect_tile_kernel(
     if (xmax <= xmin || ymax <= ymin) {
         if (is_counting_pass) {
             tiles_per_splat[idx] = 0;
+        } else {
+            // cur_idx should equal to max_idx
+            // do this just in case compiler floating point optimization goes wild
+            int64_t iid = (image_ids ? image_ids[idx] : idx / N);
+            int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_splat[idx - 1];
+            int64_t max_idx = cum_tiles_per_splat[idx];
+            while (cur_idx < max_idx) {
+                int64_t tile_id = iid * tile_width * tile_height;
+                isect_ids[cur_idx] = (tile_id << 32) | (int64_t)0xffffffff;
+                flatten_ids[cur_idx] = static_cast<int32_t>(idx);
+                ++cur_idx;
+            }
         }
         return;
     }
@@ -152,9 +164,9 @@ __global__ void intersect_tile_kernel(
                 tile_min.x, tile_max.x, tile_min.y, tile_max.y
             );
         else
-            tiles_per_splat[idx] = static_cast<int32_t>(
+            tiles_per_splat[idx] = max(static_cast<int32_t>(
                 (tile_max.y - tile_min.y) * (tile_max.x - tile_min.x)
-            );
+            ), 0);
         return;
     }
 
@@ -303,6 +315,7 @@ std::tuple<
     DEVICE_GUARD(aabb);
     CHECK_INPUT(aabb);
     CHECK_INPUT(depths);
+    CHECK_INPUT(intrins);
     if (image_ids.has_value())
         CHECK_INPUT(image_ids.value());
     if (splats_proj.has_value()) {
@@ -338,7 +351,7 @@ std::tuple<
         nullptr,  // intrins
         reinterpret_cast<const float4 *>(aabb.data_ptr<float>()),
         depths.data_ptr<float>(),
-        splats_proj.has_value() &&  std::get<0>(splats_proj.value()).has_value() ?
+        splats_proj.has_value() && std::get<0>(splats_proj.value()).has_value() ?
             (float2*)std::get<0>(splats_proj.value()).value().data_ptr<float>() : (float2*)nullptr,
         splats_proj.has_value() ? (float3*)std::get<1>(splats_proj.value()).data_ptr<float>() : (float3*)nullptr,
         splats_proj.has_value() ? std::get<2>(splats_proj.value()).data_ptr<float>() : (float*)nullptr,
@@ -392,7 +405,7 @@ std::tuple<
         (float4*)intrins.data_ptr<float>(),
         reinterpret_cast<const float4 *>(aabb.data_ptr<float>()),
         depths.data_ptr<float>(),
-        splats_proj.has_value() &&  std::get<0>(splats_proj.value()).has_value() ?
+        splats_proj.has_value() && std::get<0>(splats_proj.value()).has_value() ?
             (float2*)std::get<0>(splats_proj.value()).value().data_ptr<float>() : (float2*)nullptr,
         splats_proj.has_value() ? (float3*)std::get<1>(splats_proj.value()).data_ptr<float>() : (float3*)nullptr,
         splats_proj.has_value() ? std::get<2>(splats_proj.value()).data_ptr<float>() : (float*)nullptr,

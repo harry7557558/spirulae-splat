@@ -411,7 +411,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             }
 
             if constexpr (output_accum_weight) {
-                accum_weight += accum_weight_map[pix_id] * alpha * T0;
+                // accum_weight += accum_weight_map[pix_id] * alpha * T0;
+                accum_weight = fmaxf(accum_weight, accum_weight_map[pix_id] * alpha * T0);
             }
 
         #if IS_EVAL3D
@@ -435,7 +436,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 h_splat.atomicStore(h_splat_wbuffer, h_splat_sbuffer, splat_wid, splat_sid);
             }
             if constexpr (output_accum_weight) {
-                atomicAddFVec(o_accum_weight + splat_wid, accum_weight);
+                // atomicAddFVec(o_accum_weight + splat_wid, accum_weight);
+                atomicMax(o_accum_weight + splat_wid, accum_weight);
             }
         }
     }

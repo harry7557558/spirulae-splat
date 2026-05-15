@@ -67,8 +67,8 @@ class SpirulaeSplatDataManagerConfig:
     load_normals: bool = True
     """Whether to load normal maps, if exist"""
 
-    random_downscales: int = 0
-    """Whether to randomly downscale training images by resolution between 0 and exp2(this number). If 0, don't downscale."""
+    start_resolution: Optional[int] = 512
+    """Start training at this resolution and gradually increase resolution to improve convergence."""
 
     deblur_training_images: bool = False
     """Whether to use a custom trained deep learning model to deblur images before training"""
@@ -464,7 +464,7 @@ class SpirulaeSplatDataManager:
         camera.metadata = {}
         return camera
 
-    def next_train(self, step: int) -> List[Tuple[Cameras, Dict]]:
+    def next_train(self, step: int, max_steps: Optional[int]) -> List[Tuple[Cameras, Dict]]:
         """Returns the next training batch
 
         Returns a Camera instead of raybundle"""
@@ -528,10 +528,18 @@ class SpirulaeSplatDataManager:
                 camera['camera_type'] = [CameraType.PERSPECTIVE.value] * len(camera['intrins'])
             results = pack_batch(camera, batch)
 
-        if self.config.random_downscales > 0 or True:
+        # Resolution scheduling
+        if self.config.start_resolution is not None and max_steps is not None:
             assert self.config.patch_batch_size is None, "Random downscale is not supported in patched batching mode"
             for camera, batch in results:
-                downscale = random.randint(0, self.config.random_downscales)
+                h, w = batch['image'].shape[-3:-1]
+                num_pixels_original = h*w
+                num_pixels_target = self.config.start_resolution**2
+                t = (step+0.5) / max_steps
+                target_size = math.sqrt(num_pixels_target * (1-t) + num_pixels_original * t)
+                # target_size = math.sqrt(num_pixels_target) * (1-t) + math.sqrt(num_pixels_original) * t
+                N = max(math.sqrt(num_pixels_original) / target_size, 1)
+                downscale = int(math.log2(1 + (2**N-1) * random.random()))  # https://www.desmos.com/calculator/a0geaz6own
                 if downscale == 0:
                     continue
 

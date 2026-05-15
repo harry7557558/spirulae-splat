@@ -582,7 +582,8 @@ class Renderer:
             self.g1_splats_world[4],
             self.g2_splats_world[4],
             optim_config.get_scheduled_lr("features_dc", step, max_steps),
-            bias_correction_step
+            bias_correction_step,
+            model_config.sh_reg, 0.5 / 0.28209479177387814
         )
 
         _make_lazy_cuda_func("fused_adam_with_steps")(
@@ -591,7 +592,8 @@ class Renderer:
             self.g1_splats_world[5],
             self.g2_splats_world[5],
             optim_config.get_scheduled_lr("features_sh", step, max_steps),
-            bias_correction_step
+            bias_correction_step,
+            model_config.sh_reg, 0.0
         )
 
     def densify_step(

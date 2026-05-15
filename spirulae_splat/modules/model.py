@@ -277,6 +277,8 @@ class SpirulaeSplatModelConfig:
     """erank regularization weight for smallest dimension, for 3DGS only"""
     quat_norm_reg: float = 0.01
     """Weight to regularize quaternion norm to identity"""
+    sh_reg: float = 0.001
+    """Regularize SH magnitude to find a balance between bilagrid/PPISP and improve generalizability."""
 
     # supervision using a foundation depth model
     # enable these by setting `depth_model` in data manager config
@@ -395,7 +397,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         self.max_2Dsize = None
 
         scale_init, opacity_init = 0.1, 0.5  # per MCMC paper
-        if self.config.use_mcmc and self.config.max_screen_size < 1.0:
+        if self.config.use_mcmc and self.config.max_screen_size < 1.0 or True:
             scale_init, opacity_init = 0.5, 0.1
         if self.config.train_background_color or self.config.randomize_background:
             # scale_init, opacity_init = 1.0, 0.1

@@ -846,7 +846,7 @@ inline __device__ void projection_voxel_eval3d_persp(float3  pos_0, float size_0
             *aabb_xyxy_0 = make_float4 (0.0f);
             break;
         }
-        *aabb_xyxy_0 = make_float4 (float(int((F32_floor((_S170))))), float(int((F32_floor((_S172))))), float(int((F32_ceil((_S169))))), float(int((F32_ceil((_S171))))));
+        *aabb_xyxy_0 = make_float4 (_S170, _S172, _S169, _S171);
         *depth_0 = mean_c_0.z;
         float3  _S173 = mean_c_0 - - mul_0(transpose_1(R_0), t_0);
         float _S174 = _S173.x;
@@ -1420,7 +1420,7 @@ inline __device__ void projection_voxel_eval3d_fisheye(float3  pos_1, float size
             *aabb_xyxy_1 = make_float4 (0.0f);
             break;
         }
-        *aabb_xyxy_1 = make_float4 (float(int((F32_floor((_S369))))), float(int((F32_floor((_S371))))), float(int((F32_ceil((_S368))))), float(int((F32_ceil((_S370))))));
+        *aabb_xyxy_1 = make_float4 (_S369, _S371, _S368, _S370);
         float x_8 = mean_c_1.x;
         float y_4 = mean_c_1.y;
         float z_1 = mean_c_1.z;
@@ -1541,7 +1541,7 @@ inline __device__ void _projection_voxel_eval3d_persp_differentiable(float3  pos
     float _S426 = fx_2 * _S425.x + cx_2;
     float _S427 = fy_2 * _S425.y + cy_2;
     uv_2[int(7)] = make_float2 (_S426, _S427);
-    *aabb_xyxy_2 = make_float4 (float(int((F32_floor(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min((_S391), (_S396)))), (_S401)))), (_S406)))), (_S411)))), (_S416)))), (_S421)))), (_S426)))))))), float(int((F32_floor(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min((_S392), (_S397)))), (_S402)))), (_S407)))), (_S412)))), (_S417)))), (_S422)))), (_S427)))))))), float(int((F32_ceil(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max((_S391), (_S396)))), (_S401)))), (_S406)))), (_S411)))), (_S416)))), (_S421)))), (_S426)))))))), float(int((F32_ceil(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max((_S392), (_S397)))), (_S402)))), (_S407)))), (_S412)))), (_S417)))), (_S422)))), (_S427)))))))));
+    *aabb_xyxy_2 = make_float4 ((F32_min(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min((_S391), (_S396)))), (_S401)))), (_S406)))), (_S411)))), (_S416)))), (_S421)))), (_S426))), (F32_min(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min((_S392), (_S397)))), (_S402)))), (_S407)))), (_S412)))), (_S417)))), (_S422)))), (_S427))), (F32_max(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max((_S391), (_S396)))), (_S401)))), (_S406)))), (_S411)))), (_S416)))), (_S421)))), (_S426))), (F32_max(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max((_S392), (_S397)))), (_S402)))), (_S407)))), (_S412)))), (_S417)))), (_S422)))), (_S427))));
     *depth_2 = mean_c_2.z;
     float3  _S428 = mean_c_2 - - mul_0(transpose_1(R_2), t_2);
     float _S429 = _S428.x;
@@ -1732,7 +1732,7 @@ inline __device__ void _projection_voxel_eval3d_fisheye_differentiable(float3  p
     float _S475 = fx_3 * _S474.x + cx_3;
     float _S476 = fy_3 * _S474.y + cy_3;
     uv_3[int(7)] = make_float2 (_S475, _S476);
-    *aabb_xyxy_3 = make_float4 (float(int((F32_floor(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min((uv_3[int(0)].x), (uv_3[int(1)].x)))), (uv_3[int(2)].x)))), (uv_3[int(3)].x)))), (uv_3[int(4)].x)))), (uv_3[int(5)].x)))), (uv_3[int(6)].x)))), (_S475)))))))), float(int((F32_floor(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min((uv_3[int(0)].y), (uv_3[int(1)].y)))), (uv_3[int(2)].y)))), (uv_3[int(3)].y)))), (uv_3[int(4)].y)))), (uv_3[int(5)].y)))), (uv_3[int(6)].y)))), (_S476)))))))), float(int((F32_ceil(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max((uv_3[int(0)].x), (uv_3[int(1)].x)))), (uv_3[int(2)].x)))), (uv_3[int(3)].x)))), (uv_3[int(4)].x)))), (uv_3[int(5)].x)))), (uv_3[int(6)].x)))), (_S475)))))))), float(int((F32_ceil(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max((uv_3[int(0)].y), (uv_3[int(1)].y)))), (uv_3[int(2)].y)))), (uv_3[int(3)].y)))), (uv_3[int(4)].y)))), (uv_3[int(5)].y)))), (uv_3[int(6)].y)))), (_S476)))))))));
+    *aabb_xyxy_3 = make_float4 ((F32_min(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min((uv_3[int(0)].x), (uv_3[int(1)].x)))), (uv_3[int(2)].x)))), (uv_3[int(3)].x)))), (uv_3[int(4)].x)))), (uv_3[int(5)].x)))), (uv_3[int(6)].x)))), (_S475))), (F32_min(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min(((F32_min((uv_3[int(0)].y), (uv_3[int(1)].y)))), (uv_3[int(2)].y)))), (uv_3[int(3)].y)))), (uv_3[int(4)].y)))), (uv_3[int(5)].y)))), (uv_3[int(6)].y)))), (_S476))), (F32_max(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max((uv_3[int(0)].x), (uv_3[int(1)].x)))), (uv_3[int(2)].x)))), (uv_3[int(3)].x)))), (uv_3[int(4)].x)))), (uv_3[int(5)].x)))), (uv_3[int(6)].x)))), (_S475))), (F32_max(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max(((F32_max((uv_3[int(0)].y), (uv_3[int(1)].y)))), (uv_3[int(2)].y)))), (uv_3[int(3)].y)))), (uv_3[int(4)].y)))), (uv_3[int(5)].y)))), (uv_3[int(6)].y)))), (_S476))));
     float x_11 = mean_c_3.x;
     float y_7 = mean_c_3.y;
     float z_4 = mean_c_3.z;
@@ -3535,11 +3535,11 @@ inline __device__ void projection_voxel_eval3d_fisheye_vjp(float3  pos_5, float 
     float3  _S1445 = _S1431[int(13)];
     float3  _S1446 = _S1431[int(14)];
     float3  _S1447 = _S1431[int(15)];
-    float _S1448 = _S1416.differential_0 + _S1418.differential_0;
+    float _S1448 = _S1412.differential_0 + _S1414.differential_0;
     float _S1449 = _S1411.differential_0 + _S1413.differential_0;
-    float _S1450 = _S1412.differential_0 + _S1414.differential_0;
-    float _S1451 = _S1408.differential_0 + _S1410.differential_0;
-    float _S1452 = _S1415.differential_0 + _S1417.differential_0;
+    float _S1450 = _S1415.differential_0 + _S1417.differential_0;
+    float _S1451 = _S1416.differential_0 + _S1418.differential_0;
+    float _S1452 = _S1408.differential_0 + _S1410.differential_0;
     float _S1453 = _S1372.differential_0 + _S1374.differential_0;
     float _S1454 = _S1376.differential_0 + _S1378.differential_0;
     float _S1455 = _S1380.differential_0 + _S1382.differential_0;
@@ -3772,7 +3772,7 @@ inline __device__ void projection_voxel_eval3d_fisheye_vjp(float3  pos_5, float 
     (&_S1583)->differential_0 = _S1474;
     s_bwd_length_impl_0(&_S1583, _S1582);
     float2  _S1584 = _S1583.differential_0 + _S1572;
-    float _S1585 = fx_5 * _S1451;
+    float _S1585 = fx_5 * _S1452;
     float2  _S1586 = make_float2 (_S1585, fy_5 * _S1461) + make_float2 (dist_coeffs_5[int(8)] * _S1585, dist_coeffs_5[int(9)] * _S1585);
     float2  _S1587 = _S1113 * _S1586;
     float _S1588 = dist_coeffs_5[int(4)] * _S1586.y;
@@ -3819,8 +3819,8 @@ inline __device__ void projection_voxel_eval3d_fisheye_vjp(float3  pos_5, float 
     (&_S1610)->differential_0 = _S1474;
     s_bwd_length_impl_0(&_S1610, _S1609);
     float2  _S1611 = _S1610.differential_0 + _S1599;
-    float _S1612 = fx_5 * _S1448;
-    float2  _S1613 = make_float2 (_S1612, fy_5 * _S1450) + make_float2 (dist_coeffs_5[int(8)] * _S1612, dist_coeffs_5[int(9)] * _S1612);
+    float _S1612 = fx_5 * _S1451;
+    float2  _S1613 = make_float2 (_S1612, fy_5 * _S1448) + make_float2 (dist_coeffs_5[int(8)] * _S1612, dist_coeffs_5[int(9)] * _S1612);
     float2  _S1614 = _S1089 * _S1613;
     float _S1615 = dist_coeffs_5[int(4)] * _S1613.y;
     float _S1616 = dist_coeffs_5[int(5)] * _S1613.x;
@@ -3866,7 +3866,7 @@ inline __device__ void projection_voxel_eval3d_fisheye_vjp(float3  pos_5, float 
     (&_S1637)->differential_0 = _S1474;
     s_bwd_length_impl_0(&_S1637, _S1636);
     float2  _S1638 = _S1637.differential_0 + _S1626;
-    float _S1639 = fx_5 * _S1452;
+    float _S1639 = fx_5 * _S1450;
     float2  _S1640 = make_float2 (_S1639, fy_5 * _S1449) + make_float2 (dist_coeffs_5[int(8)] * _S1639, dist_coeffs_5[int(9)] * _S1639);
     float2  _S1641 = _S1063 * _S1640;
     float _S1642 = dist_coeffs_5[int(4)] * _S1640.y;
