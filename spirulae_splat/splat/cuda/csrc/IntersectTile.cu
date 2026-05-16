@@ -115,8 +115,7 @@ __global__ void intersect_tile_kernel(
     const uint32_t tile_height,
     int64_t *__restrict__ tiles_per_splat, // [..., N]
     int64_t *__restrict__ isect_ids,  // [n_isects]
-    int32_t *__restrict__ flatten_ids,  // [n_isects]
-    float *__restrict__ radii  // [N]
+    int32_t *__restrict__ flatten_ids  // [n_isects]
 ) {
     uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= I * N) {
@@ -246,14 +245,6 @@ __global__ void intersect_tile_kernel(
         flatten_ids[cur_idx] = static_cast<int32_t>(idx);
         ++cur_idx;
     }
-
-    // save radii
-    float4 intrin = intrins[iid];
-    // float radius = 0.5f * fmaxf((float)(xmax - xmin) / intrin.x, (float)(ymax - ymin) / intrin.y);
-    const float image_width = (float)(tile_width*TILE_SIZE);
-    const float image_height = (float)(tile_height*TILE_SIZE);
-    float radius = 0.5f * fmaxf((float)(xmax - xmin) / fminf(intrin.x, image_width), (float)(ymax - ymin) / fminf(intrin.y, image_height));
-    atomicMax(&radii[idx % N], radius);
 }
 
 
@@ -300,8 +291,7 @@ __global__ void intersect_offset_kernel(
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor,  // offsets, [I * n_tiles], int32
-    at::Tensor  // radii, [N], float32
+    at::Tensor  // offsets, [I * n_tiles], int32
 > do_intersect_tile_generic(
     at::Tensor aabb,  // [..., N, 4], float32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32
@@ -360,8 +350,7 @@ std::tuple<
         tile_height,
         tiles_per_splat.data_ptr<int64_t>(),
         nullptr,  // isect_ids
-        nullptr,  // flatten_ids
-        nullptr  // radii
+        nullptr  // flatten_ids
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
@@ -383,17 +372,11 @@ std::tuple<
         {I, tile_height, tile_width},
         at::TensorOptions().device(aabb.device()).dtype(at::kInt)
     );
-    at::Tensor radii = at::empty(
-        {N,},
-        at::TensorOptions().device(aabb.device()).dtype(at::kFloat)
-    );
-    set_zero_tensor(radii);
     if (n_isects == 0)
         return std::make_tuple(
             isect_ids,
             flatten_ids,
-            offsets.zero_(),
-            radii
+            offsets.zero_()
         );
     (splats_proj.has_value() ?
         intersect_tile_kernel<false, true> :
@@ -414,8 +397,7 @@ std::tuple<
         tile_height,
         nullptr,  // tiles_per_splat
         reinterpret_cast<int64_t *>(isect_ids.data_ptr<int64_t>()),
-        reinterpret_cast<int32_t *>(flatten_ids.data_ptr<int32_t>()),
-        radii.data_ptr<float>()
+        reinterpret_cast<int32_t *>(flatten_ids.data_ptr<int32_t>())
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
@@ -468,8 +450,7 @@ std::tuple<
     return std::make_tuple(
         isect_ids,
         flatten_ids,
-        offsets,
-        radii
+        offsets
     );
 }
 
@@ -477,14 +458,12 @@ std::tuple<
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor,  // offsets, [I * n_tiles], int32
-    at::Tensor  // radii, [N], float32
+    at::Tensor  // offsets, [I * n_tiles], int32
 > do_intersect_tile_post(
     at::Tensor isect_ids,
     at::Tensor flatten_ids,
     at::Tensor offsets,
     at::Tensor mask,
-    at::Tensor radii,
     const uint32_t I,
     const uint32_t image_width,
     const uint32_t image_height
@@ -513,7 +492,6 @@ std::tuple<
     return std::make_tuple(
         isect_ids,
         flatten_ids,
-        offsets,
-        radii
+        offsets
     );
 }

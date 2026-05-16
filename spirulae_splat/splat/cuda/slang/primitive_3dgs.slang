@@ -338,7 +338,8 @@ float add_blur(const float eps2d, inout float2x2 covar, out float compensation) 
     const float3x3 R, const float3 t, \
     no_diff const float fx, no_diff const float fy,  no_diff const float cx, no_diff const float cy, \
     no_diff const float[10] dist_coeffs, const uint image_width, const uint image_height, \
-    no_diff out float4 aabb_xyxy, no_diff out float sorting_depth, out float2 mean2d, out float depth, out float3 conic, out float opacity, out float3 rgb
+    no_diff out float4 aabb_xyxy, no_diff out float sorting_depth, no_diff out float radius, \
+    out float2 mean2d, out float depth, out float3 conic, out float opacity, out float3 rgb
 
 [ForceInline]
 [Differentiable]
@@ -479,6 +480,8 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
     float3 campos = -mul(transpose(R), t);
     sh_coeffs_to_color(mean - campos, sh_coeffs, rgb);
     rgb = max(rgb+0.5f, 0.0f);
+
+    radius = view_radius_3dgs(mean, scale, in_opacity, campos);
 }
 
 /* Forward Projection */
@@ -493,7 +496,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
             mean, quat, scale, in_opacity, sh_coeffs, R, t, \
             fx, fy, cx, cy, dist_coeffs, \
             image_width, image_height, \
-            aabb_xyxy, sorting_depth, mean2d, depth, conic, opacity, rgb \
+            aabb_xyxy, sorting_depth, radius, mean2d, depth, conic, opacity, rgb \
         ); \
     }
 
@@ -524,7 +527,7 @@ interface _DiffProjection3DGS
                 mean, quat, scale, in_opacity, sh_coeffs, R, t, \
                 fx, fy, cx, cy, dist_coeffs, \
                 image_width, image_height, \
-                aabb_xyxy, sorting_depth, mean2d, depth, conic, opacity, rgb \
+                aabb_xyxy, sorting_depth, radius, mean2d, depth, conic, opacity, rgb \
             ); \
         } \
     };
@@ -680,12 +683,13 @@ void _projection_3dgs_vjp(
         DifferentialPair<float3> dp_rgb;
         float4 aabb_xyxy;
         float sorting_depth;
+        float radius;
         fwd_diff(projectionInterface.projection)(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            aabb_xyxy, sorting_depth, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
+            aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
         h_mean[i] =
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
@@ -813,12 +817,13 @@ void _projection_3dgs_vjp(
         DifferentialPair<float3> dp_rgb;
         float4 aabb_xyxy;
         float sorting_depth;
+        float radius;
         fwd_diff(projectionInterface.projection)(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            aabb_xyxy, sorting_depth, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
+            aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
         h_mean[i] =
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
@@ -846,12 +851,13 @@ void _projection_3dgs_vjp(
         DifferentialPair<float3> dp_rgb;
         float4 aabb_xyxy;
         float sorting_depth;
+        float radius;
         fwd_diff(projectionInterface.projection)(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            aabb_xyxy, sorting_depth, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
+            aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
         h_quat[i] =
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
@@ -879,12 +885,13 @@ void _projection_3dgs_vjp(
         DifferentialPair<float3> dp_rgb;
         float4 aabb_xyxy;
         float sorting_depth;
+        float radius;
         fwd_diff(projectionInterface.projection)(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            aabb_xyxy, sorting_depth, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
+            aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
         h_scale[i] =
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
@@ -910,12 +917,13 @@ void _projection_3dgs_vjp(
         DifferentialPair<float3> dp_rgb;
         float4 aabb_xyxy;
         float sorting_depth;
+        float radius;
         fwd_diff(projectionInterface.projection)(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            aabb_xyxy, sorting_depth, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
+            aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
         h_in_opacity =
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
@@ -944,12 +952,13 @@ void _projection_3dgs_vjp(
         DifferentialPair<float3> dp_rgb;
         float4 aabb_xyxy;
         float sorting_depth;
+        float radius;
         fwd_diff(projectionInterface.projection)(
             antialiased,
             dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            aabb_xyxy, sorting_depth, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
+            aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
         h_features_dc[i] =
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +

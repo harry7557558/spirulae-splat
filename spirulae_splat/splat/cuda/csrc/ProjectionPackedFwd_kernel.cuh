@@ -62,8 +62,9 @@ __global__ void projection_packed_mask_kernel(
     // Projection
     float sorting_depth;
     float4 aabb;
+    float radius;
     typename SplatPrimitive::Screen splat_screen;
-    splat_world.project<camera_model>(cam, splat_screen, aabb, sorting_depth);
+    splat_world.project<camera_model>(cam, splat_screen, aabb, sorting_depth, radius);
 
     // Save results
     aabb.x = fminf(fmaxf(aabb.x, 0.0f), image_width-1.0f);
@@ -91,6 +92,7 @@ __global__ void projection_packed_fwd_kernel(
     int32_t *__restrict__ gaussian_ids,  // [nnz]
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,  // [nnz]
+    float *__restrict__ radii,  // [N]
     typename SplatPrimitive::ScreenBuffer splats_screen  // [nnz, ...]
 ) {
     // parallelize over B * C * N.
@@ -132,8 +134,9 @@ __global__ void projection_packed_fwd_kernel(
     // Projection
     float sorting_depth;
     float4 aabb;
+    float radius = 0.0f;
     typename SplatPrimitive::Screen splat_screen;
-    splat_world.project<camera_model>(cam, splat_screen, aabb, sorting_depth);
+    splat_world.project<camera_model>(cam, splat_screen, aabb, sorting_depth, radius);
 
     // Save results
     camera_ids[out_idx] = (int32_t)cid;
@@ -145,6 +148,7 @@ __global__ void projection_packed_fwd_kernel(
     aabbs[out_idx] = aabb;
     sorting_depths[out_idx] = sorting_depth;
     splat_screen.store(splats_screen, out_idx);
+    atomicMax(&radii[gid], radius);
 }
 
 
@@ -191,6 +195,7 @@ void projection_packed_fwd_kernel_wrapper(
     int32_t *__restrict__ gaussian_ids,  // [nnz]
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
+    float *__restrict__ radii,  // [N]
     typename SplatPrimitive::ScreenBuffer splats_screen  // [nnz, ...]
 ) {
     constexpr uint block = 128;
@@ -200,6 +205,6 @@ void projection_packed_fwd_kernel_wrapper(
         splats_world, viewmats, intrins, dist_coeffs_buffer,
         image_width, image_height,
         intersection_mask_scan,
-        camera_ids, gaussian_ids, aabbs, sorting_depths, splats_screen
+        camera_ids, gaussian_ids, aabbs, sorting_depths, radii, splats_screen
     );
 }

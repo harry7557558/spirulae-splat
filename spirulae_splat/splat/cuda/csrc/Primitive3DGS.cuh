@@ -38,7 +38,7 @@ struct _Base3DGS : public _BasePrimitive3DGS {
         template<ssplat::CameraModelType camera_model>
         inline __device__ void project(
             ProjCamera cam,
-            typename _Base3DGS<antialiased>::Screen& screen, float4& aabb, float& sorting_depth
+            typename _Base3DGS<antialiased>::Screen& screen, float4& aabb, float& sorting_depth, float& radius
         ) const {
             if constexpr (camera_model == ssplat::CameraModelType::PINHOLE)
                 Slang3DGS::projection_3dgs_persp(
@@ -47,7 +47,7 @@ struct _Base3DGS : public _BasePrimitive3DGS {
                     cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
                     cam.dist_coeffs,
                     cam.width, cam.height,
-                    &aabb, &sorting_depth, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
+                    &aabb, &sorting_depth, &radius, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
                 );
             else if constexpr (camera_model == ssplat::CameraModelType::FISHEYE)
                 Slang3DGS::projection_3dgs_fisheye(
@@ -55,7 +55,7 @@ struct _Base3DGS : public _BasePrimitive3DGS {
                     mean, quat, scale, opacity, sh_coeffs,
                     cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
                     cam.width, cam.height,
-                    &aabb, &sorting_depth, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
+                    &aabb, &sorting_depth, &radius, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
                 );
             else if constexpr (camera_model == ssplat::CameraModelType::EQUISOLID)
                 Slang3DGS::projection_3dgs_equisolid(
@@ -63,7 +63,7 @@ struct _Base3DGS : public _BasePrimitive3DGS {
                     mean, quat, scale, opacity, sh_coeffs,
                     cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
                     cam.width, cam.height,
-                    &aabb, &sorting_depth, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
+                    &aabb, &sorting_depth, &radius, &screen.xy, &screen.depth, &screen.conic, &screen.opac, &screen.rgb
                 );
         }
 

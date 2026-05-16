@@ -159,15 +159,19 @@ class Renderer:
             self.camera_model.upper(), self.dist_coeffs
         )
         if self.packed:
-            camera_ids, gaussian_ids, aabb, sorting_depths, splats_proj = proj_returns
+            camera_ids, gaussian_ids, aabb, sorting_depths, radii, splats_proj = proj_returns
         else:
-            aabb, sorting_depths, splats_proj = proj_returns
+            aabb, sorting_depths, radii, splats_proj = proj_returns
             camera_ids, gaussian_ids = None, None
 
         self.aabb = aabb  # xyxy
         self.depths = sorting_depths
         self.splats_proj = splats_proj
         self.camera_ids, self.gaussian_ids = camera_ids, gaussian_ids
+
+        if not hasattr(self, 'radii'):
+            self.radii = radii
+        self.radii = torch.fmax(self.radii, radii)
 
     def rasterize_forward(self):
         if self.primitive in ['3dgs', 'mip']:
@@ -430,7 +434,7 @@ class Renderer:
         if True:  # Note that GUT is already an approximation
             if self.primitive in ['3dgut', '3dgut_sv']:
                 intersect_tile_splat_params = (None, self.splats_proj[0], self.splats_proj[1])
-        isect_ids, flatten_ids, isect_offsets, radii = _make_lazy_cuda_func(f"intersect_tile")(
+        isect_ids, flatten_ids, isect_offsets = _make_lazy_cuda_func(f"intersect_tile")(
             self.aabb,
             self.depths,
             intersect_tile_splat_params,
@@ -440,15 +444,9 @@ class Renderer:
         self.isect_offsets = isect_offsets.reshape(self.batch_dims + (C, tile_height, tile_width))
         self.flatten_ids = flatten_ids
 
-        if not hasattr(self, 'radii'):
-            self.radii = torch.zeros(self.max_num_splats, dtype=radii.dtype, device=radii.device)
-        if self.packed:
-            _make_lazy_cuda_func("inplace_scatter_max")(self.gaussian_ids, radii, self.radii)
-        else:
-            self.radii = radii   # TODO: batching
         self.meta.update(
             {
-                "radii": radii,
+                "radii": self.radii,
                 "tile_width": tile_width,
                 "tile_height": tile_height,
                 # "tiles_per_gauss": tiles_per_gauss,
@@ -613,7 +611,7 @@ class Renderer:
                 # self.splats_world[3],  # opacs
                 None,
                 model_config.max_screen_size,
-                model_config.max_screen_size_clip_hardness ** (progress**2),
+                model_config.max_screen_size_clip_hardness,# ** (progress**2),
                 model_config.max_world_size,
             )
 

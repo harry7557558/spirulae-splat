@@ -44,7 +44,7 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT {
         template<ssplat::CameraModelType camera_model>
         inline __device__ void project(
             ProjCamera cam,
-            Vanilla3DGUT::Screen& proj, float4& aabb, float& sorting_depth
+            Vanilla3DGUT::Screen& proj, float4& aabb, float& sorting_depth, float& radius
         ) const {
             float2 xy;
             float depth;
@@ -54,7 +54,7 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT {
                     mean, quat, scale, opacity, sh_coeffs,
                     cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
                     cam.width, cam.height,
-                    &aabb, &sorting_depth, &xy, &depth, &proj.scale, &proj.opacity, &proj.rgb
+                    &aabb, &sorting_depth, &radius, &xy, &depth, &proj.scale, &proj.opacity, &proj.rgb
                 );
             else if constexpr (camera_model == ssplat::CameraModelType::FISHEYE)
                 Slang3DGS::projection_3dgut_fisheye(
@@ -62,7 +62,7 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT {
                     mean, quat, scale, opacity, sh_coeffs,
                     cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
                     cam.width, cam.height,
-                    &aabb, &sorting_depth, &xy, &depth, &proj.scale, &proj.opacity, &proj.rgb
+                    &aabb, &sorting_depth, &radius, &xy, &depth, &proj.scale, &proj.opacity, &proj.rgb
                 );
             else if constexpr (camera_model == ssplat::CameraModelType::EQUISOLID)
                 Slang3DGS::projection_3dgut_equisolid(
@@ -70,7 +70,7 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT {
                     mean, quat, scale, opacity, sh_coeffs,
                     cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
                     cam.width, cam.height,
-                    &aabb, &sorting_depth, &xy, &depth, &proj.scale, &proj.opacity, &proj.rgb
+                    &aabb, &sorting_depth, &radius, &xy, &depth, &proj.scale, &proj.opacity, &proj.rgb
                 );
         }
 

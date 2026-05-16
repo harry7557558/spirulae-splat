@@ -28,7 +28,8 @@ __global__ void projection_fused_fwd_kernel(
     const uint32_t image_height,
     // outputs
     float4 *__restrict__ aabbs,         // [B, C, N, 4]
-    float *__restrict__ sorting_depths,
+    float *__restrict__ sorting_depths,  // [B, C, N, 1]
+    float *__restrict__ radii,  // [N, 1]
     typename SplatPrimitive::ScreenBuffer splats_screen
 ) {
     // parallelize over B * C * N.
@@ -63,8 +64,9 @@ __global__ void projection_fused_fwd_kernel(
     // Projection
     float sorting_depth;
     float4 aabb;
+    float radius = 0.0f;
     typename SplatPrimitive::Screen splat_screen;
-    splat_world.project<camera_model>(cam, splat_screen, aabb, sorting_depth);
+    splat_world.project<camera_model>(cam, splat_screen, aabb, sorting_depth, radius);
 
     // Save results
     aabb.x = fminf(fmaxf(aabb.x, 0.0f), image_width-1.0f);
@@ -75,6 +77,7 @@ __global__ void projection_fused_fwd_kernel(
         splat_screen.store(splats_screen, idx);
         aabbs[idx] = aabb;
         sorting_depths[idx] = sorting_depth;
+        atomicMax(&radii[idx%N], radius);
     } else {
         aabbs[idx] = {0.0f, 0.0f, 0.0f, 0.0f};
         sorting_depths[idx] = 0.0f;
@@ -96,7 +99,8 @@ void projection_fused_fwd_kernel_wrapper(
     const uint32_t image_height,
     // outputs
     float4 *__restrict__ aabbs,         // [B, C, N, 4]
-    float* __restrict__ sorting_depths,
+    float *__restrict__ sorting_depths,  // [B, C, N, 1]
+    float *__restrict__ radii,  // [N, 1]
     typename SplatPrimitive::ScreenBuffer splats_screen
 ) {
     constexpr uint block = 128;
@@ -105,6 +109,6 @@ void projection_fused_fwd_kernel_wrapper(
         B, C, N,
         splats_world, viewmats, intrins, dist_coeffs_buffer,
         image_width, image_height,
-        aabbs, sorting_depths, splats_screen
+        aabbs, sorting_depths, radii, splats_screen
     );
 }

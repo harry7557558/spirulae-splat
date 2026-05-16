@@ -24,6 +24,7 @@
 std::tuple<
     at::Tensor,  // aabb
     at::Tensor,  // sorting_depths
+    at::Tensor,  // radii
     TensorList  // out splats
 > projection_3dgs_forward_tensor(
     // inputs
@@ -40,6 +41,7 @@ std::tuple<
 std::tuple<
     at::Tensor,  // aabb
     at::Tensor,  // sorting_depths
+    at::Tensor,  // radii
     TensorList  // out splats
 > projection_mip_forward_tensor(
     // inputs
@@ -56,6 +58,7 @@ std::tuple<
 std::tuple<
     at::Tensor,  // aabb
     at::Tensor,  // sorting_depths
+    at::Tensor,  // radii
     TensorList  // out splats
 > projection_3dgut_forward_tensor(
     // inputs

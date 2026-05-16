@@ -50,6 +50,7 @@ __global__ void projection_hetero_forward_kernel(
     int32_t *__restrict__ gaussian_ids,  // [nnz]
     float4 *__restrict__ aabbs,    // [nnz, 4]
     float *__restrict__ sorting_depths,  // [nnz]
+    float *__restrict__ radii,  // [nnz]
     typename SplatPrimitive::ScreenBuffer splats_proj
 ) {
     int32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -81,8 +82,9 @@ __global__ void projection_hetero_forward_kernel(
     // Projection
     float4 aabb;
     float sorting_depth;
+    float radius = 0.0f;
     typename SplatPrimitive::Screen splat_proj;
-    splat_world.project<camera_model>(cam, splat_proj, aabb, sorting_depth);
+    splat_world.project<camera_model>(cam, splat_proj, aabb, sorting_depth, radius);
 
     // Save results
     // aabb.x = min(max(aabb.x, 0), tile_width-1);
@@ -100,11 +102,13 @@ __global__ void projection_hetero_forward_kernel(
     } else {
         aabb = {0.0f, 0.0f, 0.0f, 0.0f};
         sorting_depth = 0.0f;
+        radius = 0.0f;
     }
     camera_ids[thread_idx] = camera_idx;
     gaussian_ids[thread_idx] = splat_idx;
     aabbs[thread_idx] = aabb;
     sorting_depths[thread_idx] = sorting_depth;
+    radii[thread_idx] = radius;
     splat_proj.store(splats_proj, thread_idx);
 }
 

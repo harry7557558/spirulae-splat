@@ -13,6 +13,7 @@ std::tuple<
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
     at::Tensor,  // sorting depths
+    at::Tensor,  // radii
     TensorList  // out splats
 > projection_3dgs_hetero_forward_tensor(
     // inputs
@@ -37,6 +38,7 @@ std::tuple<
     at::Tensor gaussian_ids = at::empty({nnz}, kTensorOptionI32());
     at::Tensor aabb = at::empty({nnz, 4}, kTensorOptionF32());
     at::Tensor sorting_depths = at::empty({nnz}, kTensorOptionF32());
+    at::Tensor radii = at::empty({nnz}, kTensorOptionF32());
     TensorList splats_proj = Vanilla3DGS::ScreenBuffer::empty(nnz);
 
     #define _LAUNCH_ARGS \
@@ -46,7 +48,7 @@ std::tuple<
             image_width, image_height, tile_width, tile_height, \
             intersection_count_map.data_ptr<int32_t>(), intersection_splat_id.data_ptr<int32_t>(), \
             camera_ids.data_ptr<int32_t>(), gaussian_ids.data_ptr<int32_t>(), \
-            (float4*)aabb.data_ptr<float>(), sorting_depths.data_ptr<float>(), splats_proj \
+            (float4*)aabb.data_ptr<float>(), sorting_depths.data_ptr<float>(), radii.data_ptr<float>(), splats_proj \
         )
 
     if (nnz != 0) {
@@ -64,7 +66,7 @@ std::tuple<
     #undef _LAUNCH_ARGS
 
     return std::make_tuple(
-        camera_ids, gaussian_ids, aabb, sorting_depths,
+        camera_ids, gaussian_ids, aabb, sorting_depths, radii,
         splats_proj
     );
 }

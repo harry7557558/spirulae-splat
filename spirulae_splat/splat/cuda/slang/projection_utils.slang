@@ -743,12 +743,20 @@ bool generate_ray(
 
     if (model == CameraModelType::FISHEYE) {
         float r = length(uv);
+        if (r >= 3.14159265358979) {
+            raydir = float3(0);
+            return false;
+        }
         float theta = r;
         float s = r < 1e-3 ? (1.0 - theta * theta / 6.0) : (sin(theta) / r);
         raydir = float3(uv * s, cos(theta));
     }
     else if (model == CameraModelType::EQUISOLID) {
         float r = length(uv);
+        if (r >= 2.0) {
+            raydir = float3(0);
+            return false;
+        }
         float z = 1.0 - 0.5 * r * r;
         float s = sqrt(max(0.0, 1.0 - 0.25 * r * r));
         raydir = float3(uv * s, z);
@@ -950,5 +958,20 @@ float get_sorting_depth(CameraModelType camera_model, float3 p_view) {
     z = z*z*z*z + (1.0f/512.0f) * (x*x+y*y)*(x*x+y*y);  // doesn't matter
     return z;
 }
+
+
+[CudaDeviceExport]
+float view_radius_3dgs(
+    float3 mean,
+    float3 log_scale,
+    float logit_opacity,
+    float3 campos
+) {
+    float extend = sqrt(2.0*log(max(255.0/(1.0+exp(-logit_opacity)), 1.0)));
+    float radius = exp(max(log_scale.x, max(log_scale.y, log_scale.z))) * extend;
+    float dist = length(mean - campos);
+    return radius / (max(dist, radius) + sqrt(max(dist*dist-radius*radius, 0.0)));
+}
+
 
 #endif  // _PROJECTION_UTILS_SLANG_INC

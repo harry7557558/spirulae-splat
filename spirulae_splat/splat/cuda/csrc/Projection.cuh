@@ -23,6 +23,7 @@ std::tuple<
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
     at::Tensor,  // sorting depths
+    at::Tensor,  // radii
     TensorList  // out splats
 > projection_3dgs_hetero_forward_tensor(
     // inputs
@@ -69,6 +70,7 @@ std::tuple<
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
     at::Tensor,  // sorting depths
+    at::Tensor,  // radii
     TensorList  // out splats
 > projection_3dgut_hetero_forward_tensor(
     // inputs
@@ -115,6 +117,7 @@ std::tuple<
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
     at::Tensor,  // sorting_depths
+    at::Tensor,  // radii
     TensorList  // out splats
 > projection_mip_hetero_forward_tensor(
     // inputs

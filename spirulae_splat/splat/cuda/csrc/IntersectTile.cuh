@@ -20,8 +20,7 @@
 std::tuple<
     at::Tensor,  // isect_ids, [n_isects], int64
     at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor,  // offsets, [I * n_tiles], int32
-    at::Tensor  // radii, [N], float32
+    at::Tensor  // offsets, [I * n_tiles], int32
 > do_intersect_tile_generic(
     at::Tensor aabb,  // [..., N, 4], float32, xyxy in pixels
     at::Tensor depths,  // [..., N], float32

@@ -24,5 +24,6 @@ template void projection_packed_fwd_kernel_wrapper<
     int32_t *__restrict__ gaussian_ids,  // [nnz]
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
+    float *__restrict__ radii,  // [N]
     Vanilla3DGS::ScreenBuffer splats_screen  // [nnz, ...]
 );

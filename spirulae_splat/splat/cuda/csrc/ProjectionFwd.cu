@@ -21,7 +21,8 @@ void projection_fused_fwd_kernel_wrapper(
     const uint32_t image_height,
     // outputs
     float4 *__restrict__ aabbs,         // [B, C, N, 4]
-    float* __restrict__ sorting_depths,         // [B, C, N, 1]
+    float *__restrict__ sorting_depths,  // [B, C, N, 1]
+    float *__restrict__ radii,  // [N, 1]
     typename SplatPrimitive::ScreenBuffer splats_screen
 );
 
@@ -31,6 +32,7 @@ template<typename SplatPrimitive>
 inline std::tuple<
     at::Tensor,  // aabb
     at::Tensor,  // sorting_depths
+    at::Tensor,  // radii
     TensorList  // out splats
 > launch_projection_fused_fwd_kernel(
     const TensorList &in_splats,
@@ -49,6 +51,8 @@ inline std::tuple<
 
     at::Tensor aabb = at::empty({C, N, 4}, kTensorOptionF32());
     at::Tensor sorting_depths = at::empty({C, N}, kTensorOptionF32());
+    at::Tensor radii = at::empty({N}, kTensorOptionF32());
+    set_zero_tensor(radii);
 
     TensorList splats_screen = SplatPrimitive::ScreenBuffer::empty(C*N);
 
@@ -56,7 +60,8 @@ inline std::tuple<
             (cudaStream_t)at::cuda::getCurrentCUDAStream(), B, C, N, \
             splats_world, viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, \
-            (float4*)aabb.data_ptr<float>(), sorting_depths.data_ptr<float>(), splats_screen \
+            (float4*)aabb.data_ptr<float>(), sorting_depths.data_ptr<float>(), radii.data_ptr<float>(), \
+            splats_screen \
         )
 
     if (camera_model == ssplat::CameraModelType::PINHOLE)
@@ -71,7 +76,7 @@ inline std::tuple<
 
     #undef _LAUNCH_ARGS
 
-    return std::make_tuple(aabb, sorting_depths, splats_screen);
+    return std::make_tuple(aabb, sorting_depths, radii, splats_screen);
 }
 
 
@@ -83,6 +88,7 @@ inline std::tuple<
 std::tuple<
     at::Tensor,  // aabb
     at::Tensor,  // sorting_depths
+    at::Tensor,  // radii
     TensorList  // out splats
 > projection_3dgs_forward_tensor(
     // inputs
@@ -107,6 +113,7 @@ std::tuple<
 std::tuple<
     at::Tensor,  // aabb
     at::Tensor,  // sorting_depths
+    at::Tensor,  // radii
     TensorList  // out splats
 > projection_mip_forward_tensor(
     // inputs
@@ -132,6 +139,7 @@ std::tuple<
 std::tuple<
     at::Tensor,  // aabb
     at::Tensor,  // sorting_depths
+    at::Tensor,  // radii
     TensorList  // out splats
 > projection_3dgut_forward_tensor(
     // inputs

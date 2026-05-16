@@ -162,7 +162,7 @@ class SpirulaeSplatModelConfig:
     """if a gaussian is more than this fraction of screen space, relocate it
         Useful for fisheye with 3DGUT, may drop PSNR for conventional cameras
         For likely better quality, use max_screen_size instead"""
-    max_screen_size: float = float('inf')
+    max_screen_size: float = 0.3
     """if a gaussian is more than this fraction of screen space, clip scale and increase opacity
         Intended to be an MCMC-friendly alternative of relocate_screen_size"""
     max_screen_size_clip_hardness: float = 1.5
@@ -1081,11 +1081,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         depths = meta["depths"]
 
         if self.training:
-            radii = scatter_max(self.opacities.flatten(), radii, meta["gaussian_ids"])
-            if 'radii' in self.info:
-                self.info['radii'] = torch.fmax(self.info['radii'], radii)
-            else:
-                self.info['radii'] = radii
+            self.info['radii'] = radii
 
             self.info.update({
                 "width": kwargs["actual_width"],
