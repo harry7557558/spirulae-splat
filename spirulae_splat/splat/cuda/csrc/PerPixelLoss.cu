@@ -812,9 +812,11 @@ std::tuple<
         auto downsample_bool = [&](std::optional<at::Tensor>& prev, std::optional<at::Tensor>& curr) {
             if (prev.has_value()) {
                 curr = at::empty({B, H_new, W_new, 1}, prev.value().options());
+                auto prev_byte = prev.value().view(at::kByte);
+                auto curr_byte = curr.value().view(at::kByte);
                 avg_pool_downsample_bool_kernel<<<_LAUNCH_ARGS_3D(W_new, H_new, B, 16, 16, 1)>>>(
-                    tensor2view<uint8_t, 4>(prev.value()),
-                    tensor2view<uint8_t, 4>(curr.value())
+                    tensor2view<uint8_t, 4>(prev_byte),
+                    tensor2view<uint8_t, 4>(curr_byte)
                 );
                 CHECK_DEVICE_ERROR(cudaGetLastError());
             }

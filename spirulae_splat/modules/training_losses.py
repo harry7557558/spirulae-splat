@@ -835,11 +835,11 @@ class SplatTrainingLosses:
                 'loglinear': fused_bilagrid_C.bilagrid_loglinear_uniform_sample_backward,
             }[self.config.bilagrid_type](
                 self.bilagrid.grids[camera.metadata["cam_idx"]],  # TODO: use pre-computed
-                pred_rgb_pre_bilagrid.unsqueeze(0),
-                grads[0].unsqueeze(0),
+                pred_rgb_pre_bilagrid.unsqueeze(1),
+                grads[0].unsqueeze(1),
                 1, 8, 8, 5  # TODO
             )
-            grads[0] = grads[0][0]
+            grads[0] = grads[0].squeeze(1)
             if not hasattr(self, 'v_bilagrid') or self.v_bilagrid is None:
                 # TODO: fuse this into optimizer
                 self.v_bilagrid = fused_bilagrid_C.tv_loss_backward(

@@ -162,7 +162,7 @@ class SpirulaeSplatModelConfig:
     """if a gaussian is more than this fraction of screen space, relocate it
         Useful for fisheye with 3DGUT, may drop PSNR for conventional cameras
         For likely better quality, use max_screen_size instead"""
-    max_screen_size: float = 0.3
+    max_screen_size: float = float('inf')
     """if a gaussian is more than this fraction of screen space, clip scale and increase opacity
         Intended to be an MCMC-friendly alternative of relocate_screen_size"""
     max_screen_size_clip_hardness: float = 1.5

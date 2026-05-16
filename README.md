@@ -93,7 +93,7 @@ Exposure/WB correction
 Distorted/Fisheye/Spherical images
 - Spirulae-splat has been designed for directly operating on distorted images. Better results can be likely achieved by directly training on distorted images rather than converting into pinhole. (This is different from the case for e.g. LichtFeld Studio)
 - By default, spirulae-splat uses `3dgut` primitive. To fall back to a Fisheye-GS style method for potentially better compatibility with conventional viewers (and faster training), set `--model.primitive` to `3dgs` (not anti-aliased), or `mip` (anti-aliased).
-- `--model.max_screen_size 0.3` is enabled by default for compatibility conventional viewers. Increase it for potentially better quality in built-in viewer, decrease it for better compatibility with other viewers (e.g. SuperSplat viewer, especially if you notice spikes or large floaters)
+<!-- - `--model.max_screen_size 0.3` is enabled by default for compatibility conventional viewers. Increase it for potentially better quality in built-in viewer, decrease it for better compatibility with other viewers (e.g. SuperSplat viewer, especially if you notice spikes or large floaters) -->
 - Supported camera models: perspective, equidistant and equisolid fisheye (supports >180° fov); Supported distortion parameters: k1-k4, p1, p2, sx1, sy1, b1, b2. For better reliability, use `scripts/process_data_(colmap|metashape).py` (instead of `ns-process-data`) to process data, or directly point to Metashape dataset.
 - There's limited support for training on equirectangular images supported by Nerfstudio and Metashape datasets. Spirulae-splat will internally resampling equirectangular images into 6 pinhole images of a cube face.
 

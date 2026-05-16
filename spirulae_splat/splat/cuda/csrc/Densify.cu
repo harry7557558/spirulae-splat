@@ -1675,10 +1675,11 @@ __global__ void canny_edge_filter_kernel(
         if (mag < total1 || mag < total2)
             mag = 0.0f;
     }
-    if (mask_in && !mask_in[(&img_in.at(bid, yid, xid, 0) - img_in.data)/3])
-        mag = 0.0f;
-    if (yid < H && xid < W)
+    if (yid < H && xid < W) {
+        if (mask_in && !mask_in[(&img_in.at(bid, yid, xid, 0) - img_in.data)/3])
+            mag = 0.0f;
         img_out.store1(bid, yid, xid, mag);
+    }
 }
 
 /*[AutoHeaderGeneratorExport]*/

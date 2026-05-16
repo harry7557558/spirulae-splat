@@ -8,7 +8,7 @@ from spirulae_splat.splat.cuda import _make_lazy_cuda_func
 from functools import cache
 
 @cache
-def get_cubemap_faces():
+def get_cubemap_faces_equirectangular():
     return torch.Tensor([
         [[1,0,0],[0,1,0],[0,0,1]],
         [[0,0,-1],[0,1,0],[1,0,0]],
@@ -23,7 +23,7 @@ def warp_equirectangular_to_pinhole(
     camera_to_worlds: Tensor,  # [B, 3, 4],
     images: Tensor,  # [B, H, W, C]
 ):
-    axes = get_cubemap_faces()
+    axes = get_cubemap_faces_equirectangular()
     b, h, w, c = images.shape
     out_shape = int(math.ceil(math.sqrt(h * w / len(axes))))
     images = _make_lazy_cuda_func("warp_image_equirectangular_to_pinhole")(
@@ -53,3 +53,29 @@ def warp_equirectangular_to_pinhole(
         distortion_params,
         images.view(-1, *images.shape[2:]),
     )
+
+
+@cache
+def get_cubemap_faces_fisheye5():
+    r2, r3, r6 = 2**0.5, 3**0.5, 6**0.5
+    a0 = [1/r2, 1/r6, 1/r3]
+    a1 = [-1/r2, 1/r6, 1/r3]
+    a2 = [0, -2/r6, 1/r3]
+    return torch.Tensor([
+        # [a0, a1, a2],
+        # [a1, a2, a0],
+        # [a2, a0, a1],
+        [[1,0,0],[0,1,0],[0,0,1]],
+        [[0,1,0],[0,0,1],[1,0,0]],
+        [[-1,0,0],[0,0,1],[0,1,0]],
+        [[0,-1,0],[0,0,1],[-1,0,0]],
+        [[1,0,0],[0,0,1],[0,-1,0]],
+    ]).float().cuda()
+
+@torch.no_grad()
+def warp_to_pinhole(
+    camera_model: str,
+    camera_to_worlds: Tensor,  # [B, 3, 4],
+    images: Tensor,  # [B, H, W, C]
+):
+    raise NotImplementedError()

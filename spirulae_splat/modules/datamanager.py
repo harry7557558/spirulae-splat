@@ -67,7 +67,11 @@ class SpirulaeSplatDataManagerConfig:
     load_normals: bool = True
     """Whether to load normal maps, if exist"""
 
-    start_resolution: Optional[int] = 512
+    warp_to_pinhole: bool = False
+    """Whether to split an image into 5 undistorted pinhole images.
+        Can sometimes give better quality and compatibility for dataset captured by fisheye/360 cameras."""
+
+    start_resolution: Optional[int] = None
     """Start training at this resolution and gradually increase resolution to improve convergence."""
 
     deblur_training_images: bool = False
@@ -380,6 +384,8 @@ class SpirulaeSplatDataManager:
         camera = self.train_dataset.cameras[image_indices]
         if CameraType.EQUIRECTANGULAR.value in camera.camera_type:
             raise NotImplementedError("Equirectangular is not supported in patched batching mode.")  # TODO
+        if self.config.warp_to_pinhole:
+            raise NotImplementedError("warp_to_pinhole is not supported in patched batching mode.")  # TODO
         if camera.metadata is None:
             camera.metadata = {}
         camera.metadata['actual_height'] = camera.height.float().mean().item()
@@ -526,6 +532,8 @@ class SpirulaeSplatDataManager:
                 if 'cam_idx' in camera.get('metadata', {}):
                     camera['metadata']['cam_idx'] = torch.stack(sum([[6*i+j for j in range(6)] for i in camera['metadata']['cam_idx']], []))
                 camera['camera_type'] = [CameraType.PERSPECTIVE.value] * len(camera['intrins'])
+            elif self.config.warp_to_pinhole:
+                pass
             results = pack_batch(camera, batch)
 
         # Resolution scheduling
