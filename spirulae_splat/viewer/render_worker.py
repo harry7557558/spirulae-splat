@@ -95,9 +95,11 @@ class RenderWorker:
                     req.camera_model,
                 )
                 result = RenderResult(request_id=req.request_id, buffers=buffers)
+            except BrokenPipeError as e:
+                result = RenderResult(request_id=req.request_id, buffers={}, error=str(exc))
             except Exception as exc:
-                # import traceback
-                # traceback.print_exc()
+                import traceback
+                traceback.print_exc()
                 result = RenderResult(request_id=req.request_id, buffers={}, error=str(exc))
 
             # Non-blocking put; drop if sender is backed up

@@ -112,6 +112,9 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 self.send_response(500)
                 self.end_headers()
+        except BrokenPipeError as e:
+            self.send_response(400)
+            self.end_headers()
         except Exception as e:
             # import traceback
             # traceback.print_exc()

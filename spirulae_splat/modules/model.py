@@ -54,6 +54,7 @@ from spirulae_splat.splat.cuda import (
 )
 
 from spirulae_splat.modules.camera import Cameras, CameraType
+from spirulae_splat.splat import depth_to_normal
 
 
 class SaturateKeepGradient(torch.autograd.Function):
@@ -1076,6 +1077,12 @@ class SpirulaeSplatModel(torch.nn.Module):
             render_normal = torch.where(Ts < 1.0, F.normalize(render_normal, dim=-1), render_normal)
 
         depth_normal = None
+        if depth_im_ref is not None and not self.training:
+            depth_normal = depth_to_normal(
+                depth_im_ref, camera.camera_type[0].upper(),
+                intrins.cuda(), camera.distortion_params.cuda(),
+                is_ray_depth=(self.config.primitive not in ['3dgs', 'mip'])
+            )
 
         radii = meta["radii"]
         depths = meta["depths"]

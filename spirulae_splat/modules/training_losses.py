@@ -605,6 +605,7 @@ class SplatTrainingLosses:
         if self.config.use_bilateral_grid_for_geometry and \
                 (camera.metadata is not None and "cam_idx" in camera.metadata):
             if gt_depth is not None:
+                gt_depth_pre_bilagrid = gt_depth
                 gt_depth = self.apply_bilateral_grid(
                     self.bilagrid_depth,
                     gt_depth, camera.metadata["cam_idx"],
@@ -612,6 +613,7 @@ class SplatTrainingLosses:
                     **meta
                 )
             if gt_normal is not None:
+                gt_normal_pre_bilagrid = gt_normal
                 gt_normal = self.apply_bilateral_grid(
                     self.bilagrid_normal,
                     gt_normal, camera.metadata["cam_idx"],
@@ -658,7 +660,7 @@ class SplatTrainingLosses:
         if self.config.use_edge_aware_score and self.config.relocate_heuristic_weight != 0.0:
             edge_map = detect_edge(gt_rgb, gt_rgb_mask)  # no_grad
 
-        # apply exposure correction
+        # Apply bilateral grid
         pred_rgb_pre_bilagrid = None
         if self.config.use_bilateral_grid and \
                 camera.metadata is not None and "cam_idx" in camera.metadata:
@@ -676,6 +678,8 @@ class SplatTrainingLosses:
             #     ax2.imshow(pred_rgb[0].detach().cpu().numpy())
             #     ax3.imshow(gt_rgb[0].detach().cpu().numpy())
             #     plt.show()
+
+        # Apply PPISP
         pred_rgb_pre_ppisp = None
         if self.config.use_ppisp and \
                 camera.metadata is not None and "cam_idx" in camera.metadata:
@@ -689,15 +693,18 @@ class SplatTrainingLosses:
                 actual_image_height=camera.metadata.get('actual_height', None),
             )
 
-        # handle multi-resolution loss
-
+        # Depth to normal
+        need_depth_to_normal_grad = False
         if pred_depth_normal is None and pred_depth is not None and (pred_normal is not None or gt_normal is not None):
-            camera_model = camera.camera_type[0].upper()
+            is_ray_depth = (self.config.primitive not in ['3dgs', 'mip'])
             pred_depth_normal = depth_to_normal(
-                pred_depth, camera_model,
+                pred_depth, camera.camera_type[0].upper(),
                 intrins, camera.distortion_params,
-                is_ray_depth=(self.config.primitive not in ['3dgs', 'mip'])
+                is_ray_depth
             )
+            need_depth_to_normal_grad = True
+
+        # handle multi-resolution loss
 
         # TODO: fix depth supervision
         # pred_depth is linear depth for 3dgs and mip primitives and ray depth otherwise
@@ -788,6 +795,13 @@ class SplatTrainingLosses:
         )
         grads = [*grads]
 
+        # Depth to normal backward
+        if need_depth_to_normal_grad:
+            grads[2] += _make_lazy_cuda_func("depth_to_normal_backward")(
+                camera.camera_type[0].upper(), intrins, camera.distortion_params,
+                is_ray_depth, pred_depth, grads[5]
+            )
+
         # PPISP backward
         if pred_rgb_pre_ppisp is not None:
             indices = torch.tensor(camera.metadata["cam_idx"]).flatten().to(device)  # TODO: use pre-computed
@@ -824,11 +838,6 @@ class SplatTrainingLosses:
 
         # Bilagrid backward
         if pred_rgb_pre_bilagrid is not None:
-            for x in [
-                self.bilagrid.grids[camera.metadata["cam_idx"]],
-                pred_rgb_pre_bilagrid, grads[0]
-            ]:
-                assert x.is_contiguous()
             v_bilagrid, grads[0] = {
                 'affine': fused_bilagrid_C.bilagrid_uniform_sample_backward,
                 'ppisp': fused_bilagrid_C.bilagrid_ppisp_uniform_sample_backward,
@@ -839,6 +848,7 @@ class SplatTrainingLosses:
                 grads[0].unsqueeze(1),
                 1, 8, 8, 5  # TODO
             )
+            pred_rgb_pre_bilagrid = None
             grads[0] = grads[0].squeeze(1)
             if not hasattr(self, 'v_bilagrid') or self.v_bilagrid is None:
                 # TODO: fuse this into optimizer
@@ -849,6 +859,41 @@ class SplatTrainingLosses:
                 # fused_bilagrid_C.channel_mean_backward_inplace(
                 #     self.bilagrid.grids, v_channel_mean.contiguous(), self.v_bilagrid)
             self.v_bilagrid[camera.metadata["cam_idx"]] += v_bilagrid
+
+        # Bilagrid geometry backward
+        if self.config.use_bilateral_grid_for_geometry and \
+                (camera.metadata is not None and "cam_idx" in camera.metadata):
+            # TODO: we don't need gradient to gt_geometry
+            if gt_normal is not None:
+                v_bilagrid, v_geom = fused_bilagrid_C.bilagrid_normal_uniform_sample_backward(
+                    self.bilagrid_normal.grids[camera.metadata["cam_idx"]],  # TODO: use pre-computed
+                    gt_normal_pre_bilagrid.unsqueeze(1),
+                    grads[5].unsqueeze(1),
+                    1, 8, 8, 5  # TODO
+                )
+                gt_normal_pre_bilagrid = None
+                if not hasattr(self, 'v_bilagrid_normal') or self.v_bilagrid_normal is None:
+                    # TODO: fuse this into optimizer
+                    self.v_bilagrid_normal = fused_bilagrid_C.tv_loss_backward(
+                        self.bilagrid_normal.grids, torch.full((1,), self.config.bilagrid_tv_loss_weight_geometry)
+                    )
+                self.v_bilagrid_normal[camera.metadata["cam_idx"]] += v_bilagrid
+            if gt_depth is not None:
+                v_bilagrid, v_geom = fused_bilagrid_C.bilagrid_depth_uniform_sample_backward(
+                    self.bilagrid_depth.grids[camera.metadata["cam_idx"]],  # TODO: use pre-computed
+                    gt_depth_pre_bilagrid.unsqueeze(1),
+                    fused_bilagrid_C.compute_depth_scalars(gt_depth_pre_bilagrid, False),  # TODO: use pre-computed
+                    grads[2].unsqueeze(1),
+                    1, 8, 8, 5  # TODO
+                )
+                gt_depth_pre_bilagrid = None
+                if not hasattr(self, 'v_bilagrid_depth') or self.v_bilagrid_depth is None:
+                    # TODO: fuse this into optimizer
+                    self.v_bilagrid_depth = fused_bilagrid_C.tv_loss_backward(
+                        self.bilagrid_depth.grids, torch.full((1,), self.config.bilagrid_tv_loss_weight_geometry)
+                    )
+                self.v_bilagrid_depth[camera.metadata["cam_idx"]] += v_bilagrid
+            v_geom = None
 
         (
             rgb_loss, rgb_psnr,
@@ -1053,3 +1098,27 @@ class SplatTrainingLosses:
                 lr, step+1, 0.0, 0.0
             )
             self.v_ppisp = None
+
+        if hasattr(self, 'v_bilagrid_depth') and self.v_bilagrid_depth is not None:
+            assert self.bilagrid_depth.grids.numel() == self.v_bilagrid_depth.numel()
+            if not hasattr(self, 'g1_bilagrid_depth') is None:
+                self.g1_bilagrid_depth = torch.zeros_like(self.bilagrid_depth.grids)
+                self.g2_bilagrid_depth = torch.zeros_like(self.bilagrid_depth.grids)
+            lr = optim_config.get_scheduled_lr("bilagrid_depth", self.step, max_steps)
+            _make_lazy_cuda_func("fused_adam_with_steps")(
+                self.bilagrid_depth.grids, self.v_bilagrid_depth, self.g1_bilagrid_depth, self.g2_bilagrid_depth,
+                lr, step+1, 0.0, 0.0
+            )
+            self.v_bilagrid_depth = None
+
+        if hasattr(self, 'v_bilagrid_normal') and self.v_bilagrid_normal is not None:
+            assert self.bilagrid_normal.grids.numel() == self.v_bilagrid_normal.numel()
+            if not hasattr(self, 'g1_bilagrid_depth') is None:
+                self.g1_bilagrid_normal = torch.zeros_like(self.bilagrid_normal.grids)
+                self.g2_bilagrid_normal = torch.zeros_like(self.bilagrid_normal.grids)
+            lr = optim_config.get_scheduled_lr("bilagrid_normal", self.step, max_steps)
+            _make_lazy_cuda_func("fused_adam_with_steps")(
+                self.bilagrid_normal.grids, self.v_bilagrid_normal, self.g1_bilagrid_normal, self.g2_bilagrid_normal,
+                lr, step+1, 0.0, 0.0
+            )
+            self.v_bilagrid_normal = None
