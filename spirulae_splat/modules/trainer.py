@@ -253,7 +253,8 @@ class Trainer:
         outputs['_post_processor'] = lambda tensor, **kwargs: annotate_train_cameras(
             tensor, outputs['depth'], outputs['alpha'],
             camera, self.dataset_train.cameras, self.dataset_train.thumbnails,
-            relative_scale=self.model.config.relative_scale, **kwargs
+            relative_scale=self.model.config.relative_scale,
+            warp_to_pinhole=self.datamanager.config.warp_to_pinhole, **kwargs
         )
         return outputs
 

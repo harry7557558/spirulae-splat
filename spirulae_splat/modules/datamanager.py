@@ -20,7 +20,7 @@ from collections import deque
 from functools import cached_property
 
 from spirulae_splat.modules.camera import Cameras, CameraType
-from spirulae_splat.modules.resample import warp_equirectangular_to_pinhole
+from spirulae_splat.modules.resample import warp_equirectangular_to_pinhole, warp_wide_to_pinhole
 
 from spirulae_splat.modules.dataset import SpirulaeSplatDataset, IndexedDatasetWrapper
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
@@ -326,8 +326,10 @@ class SpirulaeSplatDataManager:
         camera_flattened = {}
         for key in ['camera_to_worlds', 'intrins', 'width', 'height', 'distortion_params', 'camera_type', 'metadata']:
             value = getattr(camera, key)
+            if isinstance(value, torch.Tensor):
+                value = value.cpu()
             if value is None:
-                value = torch.empty((0,))
+                value = torch.empty((0,), device="cpu")
             camera_flattened[key] = value
         return camera_flattened, batch
 
@@ -533,7 +535,22 @@ class SpirulaeSplatDataManager:
                     camera['metadata']['cam_idx'] = torch.stack(sum([[6*i+j for j in range(6)] for i in camera['metadata']['cam_idx']], []))
                 camera['camera_type'] = [CameraType.PERSPECTIVE.value] * len(camera['intrins'])
             elif self.config.warp_to_pinhole:
-                pass
+                if 'mask' not in batch:
+                    batch['mask'] = torch.ones((*batch['image'].shape[:3], 1), dtype=torch.bool, device=batch['image'].device)
+                for key in ['image', 'depth', 'normal', 'mask']:
+                    if key not in batch:
+                        continue
+                    elif key in ['depth', 'normal']:  # TODO: add support
+                        raise NotImplementedError("Depth and normal are not supported in warp to pinhole mode. Use --datamanager.no-load-depths and --datamanager.no-load-normals if needed.")
+                    if key in ['depth', 'mask'] and batch[key].ndim == 3:
+                        batch[key] = batch[key].unsqueeze(-1)
+                    returns = warp_wide_to_pinhole(camera['camera_type'][0], camera['intrins'].cuda(), camera['distortion_params'].cuda(), camera['camera_to_worlds'].cuda(), batch[key].cuda())
+                    batch[key] = returns[-1]
+                camera['camera_to_worlds'], camera['intrins'], camera['distortion_params'] = returns[:3]
+                camera['height'], camera['width'] = batch['image'].shape[-3:-1]
+                if 'cam_idx' in camera.get('metadata', {}):
+                    camera['metadata']['cam_idx'] = torch.stack(sum([[5*i+j for j in range(5)] for i in camera['metadata']['cam_idx']], []))
+                camera['camera_type'] = [CameraType.PERSPECTIVE.value] * len(camera['intrins'])
             results = pack_batch(camera, batch)
 
         # Resolution scheduling

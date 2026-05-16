@@ -63,6 +63,19 @@ def annotate_train_cameras(
             thumbnails.shape[-3], thumbnails.shape[-2],
             camera_to_worlds, "PINHOLE"
         )
+    elif kwargs.get("warp_to_pinhole", False):
+        from spirulae_splat.modules.resample import warp_wide_to_pinhole
+        camera_to_worlds, intrins, distortion_params, thumbnails = \
+             warp_wide_to_pinhole(
+                cameras.camera_type[0],  # TODO: mixed fisheye/pinhole
+                cameras.intrins.cuda(), cameras.distortion_params.cuda(), cameras.camera_to_worlds.cuda(),
+                thumbnails.cuda()
+            )
+        cameras = Cameras(
+            intrins, distortion_params,
+            thumbnails.shape[-3], thumbnails.shape[-2],
+            camera_to_worlds, "PINHOLE"
+        )
 
     R = view_camera.camera_to_worlds[:, :3, :3]  # 3 x 3
     T = view_camera.camera_to_worlds[:, :3, 3:4]  # 3 x 1

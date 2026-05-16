@@ -1553,12 +1553,13 @@ at::Tensor undistort_image_tensor(
 // Warp / Unwarp
 // ================
 
+template<typename T>
 __global__ void warp_image_wide_to_pinhole_kernel(
     ssplat::CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // [B, 4]
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
-    TensorView<float, 4> wide_image,  // [B, H, W, C]
-    TensorView<float, 5> pinhole_images,  // [B*K, H, W, C]
+    TensorView<T, 4> wide_image,  // [B, H, W, C]
+    TensorView<T, 5> pinhole_images,  // [B*K, H, W, C]
     const float* __restrict__ axes  // [K, 3, 3]
 ) {
     const int B = wide_image.shape[0],
@@ -1587,11 +1588,13 @@ __global__ void warp_image_wide_to_pinhole_kernel(
         float3 raydir = axis_z + tx * axis_x + ty * axis_y;
         float2 uv;
         bool valid = camera_model == ssplat::CameraModelType::FISHEYE ?
-            SlangProjectionUtils::fisheye_proj_nav(raydir, intrin, dist_coeffs, &uv) :
+                SlangProjectionUtils::fisheye_proj_nav(raydir, intrin, dist_coeffs, &uv) :
+            camera_model == ssplat::CameraModelType::EQUISOLID ?
+                SlangProjectionUtils::equisolid_proj_nav(raydir, intrin, dist_coeffs, &uv) :
             SlangProjectionUtils::persp_proj_nav(raydir, intrin, dist_coeffs, &uv);
         if (valid) {
             for (int c = 0; c < C; c++)
-                pinhole_images.at(bid, ki, j, i, c) = get_pixel_bilinear(wide_image, bid, c, uv.x, uv.y, 0.5f);
+                pinhole_images.at(bid, ki, j, i, c) = get_pixel_bilinear<T>(wide_image, bid, c, uv.x, uv.y, 0.5f);
         } else {
             for (int c = 0; c < C; c++)
                 pinhole_images.at(bid, ki, j, i, c) = 0.5f;
@@ -1625,11 +1628,34 @@ at::Tensor warp_image_wide_to_pinhole_tensor(
     int k = axes.size(0);
     at::Tensor pinhole_images = at::empty({b, k, out_h, out_w, c}, wide_image.options());
 
-    warp_image_wide_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
-        tensor2view<float, 4>(wide_image), tensor2view<float, 5>(pinhole_images),
-        axes.data_ptr<float>()
-    );
+    if (wide_image.dtype() == at::kFloat)
+        warp_image_wide_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
+            cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
+            tensor2view<float, 4>(wide_image), tensor2view<float, 5>(pinhole_images),
+            axes.data_ptr<float>()
+        );
+    else if (wide_image.dtype() == at::kByte)
+        warp_image_wide_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
+            cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
+            tensor2view<uint8_t, 4>(wide_image), tensor2view<uint8_t, 5>(pinhole_images),
+            axes.data_ptr<float>()
+        );
+    else if (wide_image.dtype() == at::kUInt16)
+        warp_image_wide_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
+            cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
+            tensor2view<uint16_t, 4>(wide_image), tensor2view<uint16_t, 5>(pinhole_images),
+            axes.data_ptr<float>()
+        );
+    else if (wide_image.dtype() == at::kBool) {
+        auto wide_image_byte = wide_image.view(at::kByte);
+        auto pinhole_image_byte = pinhole_images.view(at::kByte);
+        warp_image_wide_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
+            cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
+            tensor2view<uint8_t, 4>(wide_image_byte), tensor2view<uint8_t, 5>(pinhole_image_byte),
+            axes.data_ptr<float>()
+        );
+    }
+    else throw std::runtime_error("Unsupported image format");
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     return pinhole_images;

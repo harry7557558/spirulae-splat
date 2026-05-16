@@ -328,6 +328,8 @@ class SpirulaeSplatModel(torch.nn.Module):
         if CameraType.EQUIRECTANGULAR.value in cameras.camera_type:
             assert len(set(cameras.camera_type)) == 1, "Mixed equirectangular and pinhole/fisheye is not supported"
             self.num_train_data *= 6  # TODO
+        elif trainer_config.datamanager.warp_to_pinhole:
+            self.num_train_data *= 5  # TODO
 
         self.info = {}
 
