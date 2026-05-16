@@ -656,7 +656,7 @@ class SpirulaeSplatDataparser:
         return self._parse_nerfstudio_data(transforms[0])
 
     def _add_auxiliary_buffers(self, frame):
-        name = str(Path(frame['file_path']).name)
+        name = str(Path(frame['file_path']).relative_to(self.config.image_dir))
 
         for mask_filename in [
             Path(name+".png"),
