@@ -190,6 +190,8 @@ inline std::tuple<
     RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<RenderOutput::TensorTuple> v_distortion_outputs_tuple,
+    std::optional<TensorList> v_splats_w,
+    std::optional<TensorList> v_splats_s,
     bool need_viewmat_grad
 ) {
     DEVICE_GUARD(tile_offsets);
@@ -203,8 +205,10 @@ inline std::tuple<
     if (loss_map.has_value())
         CHECK_INPUT(loss_map.value());
 
-    TensorList v_splats_w = SplatPrimitive::WorldBuffer::zeros_like(splats_w);
-    TensorList v_splats_s = SplatPrimitive::ScreenBuffer::zeros_like(splats_s);
+    if (!v_splats_w.has_value())
+        v_splats_w = SplatPrimitive::WorldBuffer::zeros_like(splats_w);
+    if (!v_splats_s.has_value())
+        v_splats_s = SplatPrimitive::ScreenBuffer::zeros_like(splats_s);
 
     std::optional<at::Tensor> v_viewmats = need_viewmat_grad ?
         (std::optional<at::Tensor>)zeros_like_tensor(viewmats) : (std::optional<at::Tensor>)std::nullopt;
@@ -244,20 +248,22 @@ inline std::tuple<
         output_accum_weight ? &accum_weight_map.value() : nullptr,
         v_render_outputs, v_render_Ts,
         output_distortion ? &v_distortion_outputs.value() : nullptr,
-        v_splats_w, v_splats_s,
+        v_splats_w.value(), v_splats_s.value(),
         vr_splats_w, vr_splats_s, h_splats_w, h_splats_s,
         o_accum_weight,
         v_viewmats
     );
 
     if (output_hessian_diagonal)
-        return std::make_tuple(v_splats_w, v_splats_s, v_viewmats,
+        return std::make_tuple(
+            v_splats_w.value(), v_splats_s.value(), v_viewmats,
             (std::optional<TensorList>)vr_splats_w,
             (std::optional<TensorList>)vr_splats_s,
             (std::optional<TensorList>)h_splats_w,
             (std::optional<TensorList>)h_splats_s,
             o_accum_weight);
-    return std::make_tuple(v_splats_w, v_splats_s, v_viewmats,
+    return std::make_tuple(
+        v_splats_w.value(), v_splats_s.value(), v_viewmats,
         (std::optional<TensorList>)std::nullopt,
         (std::optional<TensorList>)std::nullopt,
         (std::optional<TensorList>)std::nullopt,
@@ -298,19 +304,21 @@ inline std::tuple<
     RenderOutput::TensorTuple &v_render_outputs,
     const at::Tensor &v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<RenderOutput::TensorTuple> &v_distortion_outputs,
+    std::optional<TensorList> v_splats_w,
+    std::optional<TensorList> v_splats_s,
     bool need_viewmat_grad
 ) {
-    auto [v_splats_w, v_splats_s, v_viewmats, vr_splats_w, vr_splats_s, h_splats_w, h_splats_s, accum_weight] =
+    auto [v_splats_w_1, v_splats_s_1, v_viewmats, vr_splats_w, vr_splats_s, h_splats_w, h_splats_s, accum_weight] =
         _rasterize_to_pixels_eval3d_bwd_tensor<SplatPrimitive, output_distortion, false, output_accum_weight>
     (
         num_splats, splats_w, splats_s, gaussian_ids,
         viewmats, intrins, camera_model, dist_coeffs,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs, loss_map, accum_weight_map,
-        v_render_outputs, v_render_Ts, v_distortion_outputs,
+        v_render_outputs, v_render_Ts, v_distortion_outputs, v_splats_w, v_splats_s,
         need_viewmat_grad
     );
-    return std::make_tuple(v_splats_w, v_splats_s, v_viewmats, accum_weight);
+    return std::make_tuple(v_splats_w_1, v_splats_s_1, v_viewmats, accum_weight);
 }
 
 
@@ -350,6 +358,8 @@ std::tuple<
     RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<RenderOutput::TensorTuple> v_distortion_outputs,
+    std::optional<TensorList> v_splats_w,
+    std::optional<TensorList> v_splats_s,
     bool need_viewmat_grad
 ) {
     using Fn = decltype(&rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, false, false>);
@@ -365,7 +375,7 @@ std::tuple<
         viewmats, intrins, cmt(camera_model), dist_coeffs,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs, loss_map, accum_weight_map,
-        v_render_outputs, v_render_Ts, v_distortion_outputs,
+        v_render_outputs, v_render_Ts, v_distortion_outputs, v_splats_w, v_splats_s,
         need_viewmat_grad
     );
 }
@@ -404,6 +414,8 @@ std::tuple<
     RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<RenderOutput::TensorTuple> v_distortion_outputs,
+    std::optional<TensorList> v_splats_w,
+    std::optional<TensorList> v_splats_s,
     bool need_viewmat_grad
 ) {
     using Fn = decltype(&_rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, false, true, false>);
@@ -419,7 +431,7 @@ std::tuple<
         viewmats, intrins, cmt(camera_model), dist_coeffs,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs, loss_map, accum_weight_map,
-        v_render_outputs, v_render_Ts, v_distortion_outputs,
+        v_render_outputs, v_render_Ts, v_distortion_outputs, v_splats_w, v_splats_s,
         need_viewmat_grad
     );
 }

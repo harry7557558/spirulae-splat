@@ -316,6 +316,8 @@ class Trainer:
             for step in range(self.config.num_iterations):
                 if step > 0 and self.config.steps_per_save > 0 and step % self.config.steps_per_save == 0:
                     self.save_checkpoint(step)
+                # if step % 100 == 50:
+                #     self.print_vram_breakdown()
                 step_start = time.time()
                 self.current_step = step + 1  # 1-based
                 self.train_step(step)
@@ -335,6 +337,27 @@ class Trainer:
                 # })
         if self.config.steps_per_save != 0:
             self.save_checkpoint(self.config.num_iterations)
+
+    def _train_with_profiling(self):
+        def trace_handler(prof: torch.profiler.profile):
+            prof.export_chrome_trace(str(self.output_dir / "memprof.json.gz"))
+            prof.export_memory_timeline(str(self.output_dir / "memprof.html"), device="cuda:0")
+        self.config.num_iterations = 100
+        with torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            schedule=torch.profiler.schedule(wait=0, warmup=0, active=self.config.num_iterations, repeat=1),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True,
+            on_trace_ready=trace_handler,
+        ) as prof:
+            for step in range(self.config.num_iterations):
+                prof.step()
+                with torch.profiler.record_function(str(step)):
+                    self.train_step(step)
 
     @torch.no_grad()
     def eval(self):
@@ -384,6 +407,49 @@ class Trainer:
             for f in self.output_dir.glob("*.ckpt"):
                 if f != ckpt_path:
                     f.unlink()
+
+    def print_vram_breakdown(self):
+        # print(torch.cuda.memory_summary(device=None, abbreviated=False))
+
+        name_map = {}
+        def add_tensor(key, value):
+            if isinstance(value, list) or isinstance(value, tuple):
+                for i, v in enumerate(value):
+                    add_tensor(f"{key}[{i}]", v)
+                return
+            if not isinstance(value, torch.Tensor):
+                return
+            if value.data_ptr() not in name_map:
+                name_map[value.data_ptr()] = []
+            name_map[value.data_ptr()].append(key)
+        for key, value in self.model.core.__dict__.items():
+            add_tensor(f"model.core.{key}", value)
+        for key, value in self.model.__dict__.items():
+            add_tensor(f"model.{key}", value)
+
+        import gc
+        ptr_map = set()
+        breakdown = []
+        for obj in gc.get_objects():
+            try:
+                if isinstance(obj, torch.Tensor):
+                    if obj.is_cuda:
+                        if obj.data_ptr() in ptr_map:
+                            continue
+                        ptr_map.add(obj.data_ptr())
+                        breakdown.append((obj.nbytes, obj.shape, str(obj.dtype), str(obj.device), obj.data_ptr()))
+            except:
+                pass
+        breakdown.sort(reverse=True)
+        total = 0
+        for nbytes, shape, dtype, device, ptr in breakdown:
+            print(f"{nbytes/1024**2:.2f} MiB {shape} {dtype} {device} - {' '.join(name_map.get(ptr, []))}")
+            total += nbytes
+        print(f"total accounted - {total / 1024**2:.2f} MiB")
+        print(f"torch.cuda.memory_allocated - {torch.cuda.memory_allocated() / 1024**2:.2f} MiB")
+        print(f"torch.cuda.memory_reserved - {torch.cuda.memory_reserved() / 1024**2:.2f} MiB")
+        print()
+
 
 @dataclass
 class TrainerConfigSquaredPos(TrainerConfig):

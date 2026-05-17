@@ -379,7 +379,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             )
             # print([x.shape for x in splat_params])
 
-        self.renderer = Renderer(
+        self.core = Renderer(
             self.config.primitive,
             splat_params,
             self.seed_points[0].shape[0]  # TODO: voxel
@@ -783,7 +783,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         self.step = step
 
         self.info = {}
-        self.renderer.zero_grad()
+        self.core.zero_grad()
 
     def step_post_backward(self):
         return  # TODO
@@ -1030,7 +1030,7 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         # rendering
         use_bvh = self.config.use_bvh and self.training and not val
-        self.renderer.set_params(
+        self.core.set_params(
             # "voxel",
             # (torch.cat((self.means, 20.0*torch.exp(self.scales.mean(-1, True))), dim=-1), torch.exp(self.opacities).repeat(1, 8), self.features_dc, self.features_sh),
             # # (torch.cat((self.means, 0.025*torch.ones_like(self.scales.mean(-1, True))), dim=-1), torch.exp(self.opacities).repeat(1, 8), self.features_dc, self.features_sh),
@@ -1050,10 +1050,10 @@ class SpirulaeSplatModel(torch.nn.Module):
             compute_hessian_diagonal=self.config.compute_hessian_diagonal,
             **kwargs,
         )
-        self.renderer.forward()
-        rgbdn = self.renderer.render_colors
-        Ts = self.renderer.render_Ts
-        meta = self.renderer.meta
+        self.core.forward()
+        rgbdn = self.core.render_colors
+        Ts = self.core.render_Ts
+        meta = self.core.meta
         # torch.cuda.empty_cache()
         if self.config.supersampling != 1:
             rgbdn = [resize_image(im, self.config.supersampling) for im in rgbdn]
@@ -1086,20 +1086,18 @@ class SpirulaeSplatModel(torch.nn.Module):
                 is_ray_depth=(self.config.primitive not in ['3dgs', 'mip'])
             )
 
-        radii = meta["radii"]
-        depths = meta["depths"]
+        # radii = meta["radii"]
+        # depths = meta["depths"]
 
         if self.training:
-            self.info['radii'] = radii
+            # self.info['radii'] = radii
 
             self.info.update({
                 "width": kwargs["actual_width"],
                 "height": kwargs["actual_height"],
                 "n_cameras": len(camera),
                 "n_train": self.num_train_data,
-                "means2d": self.means,
-                "depths": depths,
-                "backward_info": self.renderer.backward_info,
+                "backward_info": self.core.backward_info,
             })
             if 'patch_offsets' in camera.metadata:
                 self.info['patch_offsets'] = camera.metadata['patch_offsets']
@@ -1124,7 +1122,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             "rgb": rgb,
         }
         if self.training:
-            outputs["backward_info"] = self.renderer.backward_info
+            outputs["backward_info"] = self.core.backward_info
         if depth_im_ref is not None:
             outputs["depth"] = depth_im_ref
         if render_normal is not None:
@@ -1185,7 +1183,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         # TODO: more reliable way than setattr tensor?
         if self.training:
             optim_info = {
-                'radii': self.info['radii'],
+                # 'radii': self.info['radii'],
             }
             for key, value in self.gauss_params.items():
                 if isinstance(value, torch.Tensor) and key in self.gauss_params:
@@ -1226,14 +1224,14 @@ class SpirulaeSplatModel(torch.nn.Module):
                     self.training_losses.bil_grids_normal.grids.optim_info = {'optimizer_offload': True}
 
         # return outputs
-        if not hasattr(self.renderer, 'densify_accum_buffer'):
+        if not hasattr(self.core, 'densify_accum_buffer'):
             return outputs
 
         # Debug densification
         if not self.training and self.step > 1:
         # if self.step > 1:
 
-            param_to_vis = self.renderer.densify_accum_buffer[:, 0]
+            param_to_vis = self.core.densify_accum_buffer[:, 0]
             param_to_vis = param_to_vis / param_to_vis.mean()
             # param_to_vis = torch.log10(param_to_vis + 1e-30)
 
@@ -1247,13 +1245,13 @@ class SpirulaeSplatModel(torch.nn.Module):
             param_to_vis = param_to_vis.unsqueeze(-1).repeat(1, 3)
             param_to_vis = torch.concatenate((param_to_vis, torch.zeros_like(self.means[len(param_to_vis):])), 0)
 
-            old_splats_world = self.renderer.splats_world
-            self.renderer.splats_world = (
+            old_splats_world = self.core.splats_world
+            self.core.splats_world = (
                 self.means, self.quats, self.scales,
                 self.opacities,
                 param_to_vis, torch.zeros_like(self.features_sh)
             )
-            self.renderer.set_params(
+            self.core.set_params(
                 viewmats=viewmats,  # [C, 4, 4]
                 intrins=intrins * self.config.supersampling,  # [C, 4]
                 width=W * self.config.supersampling,
@@ -1266,11 +1264,11 @@ class SpirulaeSplatModel(torch.nn.Module):
                 compute_hessian_diagonal=self.config.compute_hessian_diagonal,
                 **kwargs,
             )
-            self.renderer.forward()
-            rgbdn = self.renderer.render_colors
-            Ts = self.renderer.render_Ts
-            meta = self.renderer.meta
-            self.renderer.splats_world = old_splats_world
+            self.core.forward()
+            rgbdn = self.core.render_colors
+            Ts = self.core.render_Ts
+            meta = self.core.meta
+            self.core.splats_world = old_splats_world
             outputs['refinement_score'] = rgbdn[0][0, :, :, :].mean(dim=-1, keepdim=True)
 
         return outputs
@@ -1294,7 +1292,7 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         render_grads = (v_render_rgb, v_render_depth, v_render_normal)
 
-        self.renderer.backward(
+        self.core.backward(
             render_grads,
             v_render_Ts,
             v_rgb_distortion,
@@ -1304,9 +1302,9 @@ class SpirulaeSplatModel(torch.nn.Module):
 
     def optim_step(self):
         max_steps = self.trainer_config.num_iterations
-        self.renderer.optim_step(self.config, self.trainer_config.optimizer, self.step, max_steps)
+        self.core.optim_step(self.config, self.trainer_config.optimizer, self.step, max_steps)
         self.training_losses.optim_step(self.trainer_config.optimizer, self.step, max_steps)
-        self.renderer.densify_step(self.step, max_steps, self.config, None)
+        self.core.densify_step(self.step, max_steps, self.config, None)
         # self.step_post_backward()
 
     def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
@@ -1555,7 +1553,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             if self.config.primitive == "opaque_triangle" else ""
         chunks = [
             f"{boldcyan(self.step)} "
-            f"{bracket('N')} {boldcyan(self.renderer.cur_num_splats)}",
+            f"{bracket('N')} {boldcyan(self.core.cur_num_splats)}",
             f"{redbkg(bracket('Mem'), used_percentage/90)} {mem_stats}",
             f"{bracket('Train')} {orange('loss')}={fmt('image_loss', 1.0)} "
             f"{orange('psnr')}={fmt('psnr', 1.0, 2)} "

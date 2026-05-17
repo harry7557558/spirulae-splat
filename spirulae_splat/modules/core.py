@@ -222,7 +222,7 @@ class Renderer:
                 add_gradient_component(ctx.backward_info, key+'.hess', h)
         else:
             if self.primitive in ['3dgs', 'mip']:
-                v_splats_world, self.v_splats_proj, accum_weight = _make_lazy_cuda_func(
+                self.v_splats_world, self.v_splats_proj, accum_weight = _make_lazy_cuda_func(
                     f"rasterization_{self.primitive}_backward"
                 )(
                     self.max_num_splats,
@@ -231,6 +231,8 @@ class Renderer:
                     self.backward_info.get('accum_weight_map', None),
                     self.v_render_colors,
                     self.v_render_Ts,
+                    self.v_splats_world if hasattr(self, 'v_splats_world') else None,
+                    None,
                 )
             else:
                 cuda_return = _make_lazy_cuda_func(
@@ -249,18 +251,15 @@ class Renderer:
                     self.v_render_Ts,
                     # (v_distortion_rgbs.contiguous(), v_distortion_depths.contiguous()) if ctx.output_distortion else None,
                     # ctx.needs_input_grad[13]
-                    None, False  # TODO
+                    None, 
+                    self.v_splats_world if hasattr(self, 'v_splats_world') else None,
+                    None,
+                    False,  # TODO
                 )
                 if self.compute_hessian_diagonal:
                     v_splats, v_viewmats, vr_splats, h_splats, accum_weight = cuda_return
                 else:
-                    v_splats_world, self.v_splats_proj, v_viewmats, accum_weight = cuda_return
-            # TODO: fuse
-            if not hasattr(self, 'v_splats_world'):
-                self.v_splats_world = v_splats_world
-            else:
-                for i in range(len(v_splats_world)):
-                    self.v_splats_world[i] += v_splats_world[i].reshape(self.v_splats_world[i].shape)
+                    self.v_splats_world, self.v_splats_proj, v_viewmats, accum_weight = cuda_return
         if accum_weight is not None:
             self.backward_info['accum_weight'] = accum_weight
 
@@ -653,6 +652,8 @@ class Renderer:
         if step <= model_config.refine_start_iter:
             return
 
+        torch.cuda.empty_cache()
+
         if model_config.relocate_heuristic_weight >= 1.0:
 
             # relocation
@@ -712,3 +713,5 @@ class Renderer:
         
         if hasattr(self, 'densify_accum_buffer'):
             _make_lazy_cuda_func("set_zero")(self.densify_accum_buffer)
+
+        torch.cuda.empty_cache()

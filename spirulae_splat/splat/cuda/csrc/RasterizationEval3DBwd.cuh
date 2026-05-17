@@ -51,6 +51,8 @@ std::tuple<
     RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<RenderOutput::TensorTuple> v_distortion_outputs,
+    std::optional<TensorList> v_splats_w,
+    std::optional<TensorList> v_splats_s,
     bool need_viewmat_grad
 );
 
@@ -88,6 +90,8 @@ std::tuple<
     RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
     std::optional<RenderOutput::TensorTuple> v_distortion_outputs,
+    std::optional<TensorList> v_splats_w,
+    std::optional<TensorList> v_splats_s,
     bool need_viewmat_grad
 );
 

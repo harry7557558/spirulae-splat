@@ -40,7 +40,9 @@ std::tuple<
     std::optional<at::Tensor> accum_weight_map,  // [..., image_height, image_width, 1]
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_Ts // [..., image_height, image_width, 1]
+    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
+    std::optional<TensorList> v_splats_w,
+    std::optional<TensorList> v_splats_s
 );
 
 
@@ -71,5 +73,7 @@ std::tuple<
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
-    std::optional<RenderOutput::TensorTuple> v_distortion_outputs
+    std::optional<RenderOutput::TensorTuple> v_distortion_outputs,
+    std::optional<TensorList> v_splats_w,
+    std::optional<TensorList> v_splats_s
 );

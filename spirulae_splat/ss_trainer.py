@@ -61,6 +61,7 @@ def entrypoint():
     thread.start()
 
     trainer.train()
+    # trainer._train_with_profiling()
     trainer.eval()
 
 if __name__ == "__main__":
