@@ -546,8 +546,8 @@ _DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgut_equisolid, CameraModelT
     const float3x3 R, const float3 t, const float fx, const float fy, const float cx, const float cy, \
     const float[10] dist_coeffs, const uint image_width, const uint image_height, \
     const float2 v_mean2d, const float v_depth, const float3 v_conic, const float v_opacity, const float3 v_rgb, \
-    out float3 v_mean, out float4 v_quat, out float3 v_scale, out float v_in_opacity, out float3 v_sh_coeffs[16], \
-    out float3x3 v_R, out float3 v_t
+    inout float3 v_mean, inout float4 v_quat, inout float3 v_scale, inout float v_in_opacity, inout float3 v_sh_coeffs[16], \
+    inout float3x3 v_R, inout float3 v_t
 
 [ForceInline]
 void _projection_3dgs_vjp(
@@ -568,13 +568,14 @@ void _projection_3dgs_vjp(
         image_width, image_height,
         v_mean2d, v_depth, v_conic, v_opacity, v_rgb
     );
-    v_mean = dp_mean.d;
-    v_quat = dp_quat.d;
-    v_scale = dp_scale.d;
-    v_in_opacity = dp_in_opacity.d;
-    v_sh_coeffs = dp_sh_coeffs.d;
-    v_R = dp_R.d;
-    v_t = dp_t.d;
+    v_mean += dp_mean.d;
+    v_quat += dp_quat.d;
+    v_scale += dp_scale.d;
+    v_in_opacity += dp_in_opacity.d;
+    [ForceUnroll] for (int i = 0; i < 16; ++i)
+        v_sh_coeffs[i] += dp_sh_coeffs.d[i];
+    v_R += dp_R.d;
+    v_t += dp_t.d;
 }
 
 #define _DEF_projection_3dgs_vjp(funname, _InterfaceName, ...) \
@@ -612,9 +613,9 @@ _DEF_projection_3dgs_vjp(projection_3dgut_equisolid_vjp, _DiffProjection3DGS_3dg
     const float2 v_mean2d, const float v_depth, const float3 v_conic, const float v_opacity, const float3 v_rgb, \
     const float2 vr_mean2d, const float vr_depth, const float3 vr_conic, const float vr_opacity, const float3 vr_rgb, \
     const float2 h_mean2d, const float h_depth, const float3 h_conic, const float h_opacity, const float3 h_rgb, \
-    out float3 v_mean, out float4 v_quat, out float3 v_scale, out float v_in_opacity, out float3 v_sh_coeffs[16], \
-    out float3x3 v_R, out float3 v_t, \
-    out float3 vr_mean, out float3 h_mean
+    inout float3 v_mean, inout float4 v_quat, inout float3 v_scale, inout float v_in_opacity, inout float3 v_sh_coeffs[16], \
+    inout float3x3 v_R, inout float3 v_t, \
+    inout float3 vr_mean, inout float3 h_mean
 
 [ForceInline]
 void _projection_3dgs_vjp(
@@ -637,13 +638,14 @@ void _projection_3dgs_vjp(
             image_width, image_height,
             v_mean2d, v_depth, v_conic, v_opacity, v_rgb
         );
-        v_mean = dp_mean.d;
-        v_quat = dp_quat.d;
-        v_scale = dp_scale.d;
-        v_in_opacity = dp_in_opacity.d;
-        v_sh_coeffs = dp_sh_coeffs.d;
-        v_R = dp_R.d;
-        v_t = dp_t.d;
+        v_mean += dp_mean.d;
+        v_quat += dp_quat.d;
+        v_scale += dp_scale.d;
+        v_in_opacity += dp_in_opacity.d;
+        [ForceUnroll] for (int i = 0; i < 16; ++i)
+            v_sh_coeffs[i] += dp_sh_coeffs.d[i];
+        v_R += dp_R.d;
+        v_t += dp_t.d;
     }
 
     // jacobian residual product
@@ -662,7 +664,7 @@ void _projection_3dgs_vjp(
             image_width, image_height,
             vr_mean2d, vr_depth, vr_conic, vr_opacity, vr_rgb
         );
-        vr_mean = dp_mean.d;
+        vr_mean += dp_mean.d;
     }
 
     // hessian diagonal (mean)
@@ -691,7 +693,7 @@ void _projection_3dgs_vjp(
             image_width, image_height,
             aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
-        h_mean[i] =
+        h_mean[i] +=
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
             h_depth * dp_depth.d * dp_depth.d +
             dot(h_conic, dp_conic.d * dp_conic.d) +
@@ -739,10 +741,10 @@ _DEF_projection_3dgs_vjp(projection_3dgut_equisolid_vjp, _DiffProjection3DGS_3dg
     const float2 v_mean2d, const float v_depth, const float3 v_conic, const float v_opacity, const float3 v_rgb, \
     const float2 vr_mean2d, const float vr_depth, const float3 vr_conic, const float vr_opacity, const float3 vr_rgb, \
     const float2 h_mean2d, const float h_depth, const float3 h_conic, const float h_opacity, const float3 h_rgb, \
-    out float3 v_mean, out float4 v_quat, out float3 v_scale, out float v_in_opacity, out float3 v_sh_coeffs[16], \
-    out float3x3 v_R, out float3 v_t, \
-    out float3 vr_mean, out float4 vr_quat, out float3 vr_scale, out float vr_in_opacity, out float3 vr_features_dc, \
-    out float3 h_mean, out float4 h_quat, out float3 h_scale, out float h_in_opacity, out float3 h_features_dc
+    inout float3 v_mean, inout float4 v_quat, inout float3 v_scale, inout float v_in_opacity, inout float3 v_sh_coeffs[16], \
+    inout float3x3 v_R, inout float3 v_t, \
+    inout float3 vr_mean, inout float4 vr_quat, inout float3 vr_scale, inout float vr_in_opacity, inout float3 vr_features_dc, \
+    inout float3 h_mean, inout float4 h_quat, inout float3 h_scale, inout float h_in_opacity, inout float3 h_features_dc
 
 [ForceInline]
 void _projection_3dgs_vjp(
@@ -765,13 +767,14 @@ void _projection_3dgs_vjp(
             image_width, image_height,
             v_mean2d, v_depth, v_conic, v_opacity, v_rgb
         );
-        v_mean = dp_mean.d;
-        v_quat = dp_quat.d;
-        v_scale = dp_scale.d;
-        v_in_opacity = dp_in_opacity.d;
-        v_sh_coeffs = dp_sh_coeffs.d;
-        v_R = dp_R.d;
-        v_t = dp_t.d;
+        v_mean += dp_mean.d;
+        v_quat += dp_quat.d;
+        v_scale += dp_scale.d;
+        v_in_opacity += dp_in_opacity.d;
+        [ForceUnroll] for (int i = 0; i < 16; ++i)
+            v_sh_coeffs[i] += dp_sh_coeffs.d[i];
+        v_R += dp_R.d;
+        v_t += dp_t.d;
     }
 
     // jacobian residual product
@@ -790,11 +793,11 @@ void _projection_3dgs_vjp(
             image_width, image_height,
             vr_mean2d, vr_depth, vr_conic, vr_opacity, vr_rgb
         );
-        vr_mean = dp_mean.d;
-        vr_quat = dp_quat.d;
-        vr_scale = dp_scale.d;
-        vr_in_opacity = dp_in_opacity.d;
-        vr_features_dc = dp_sh_coeffs.d[0];
+        vr_mean += dp_mean.d;
+        vr_quat += dp_quat.d;
+        vr_scale += dp_scale.d;
+        vr_in_opacity += dp_in_opacity.d;
+        vr_features_dc += dp_sh_coeffs.d[0];
     }
 
     // TODO: some way to refactor this
@@ -825,7 +828,7 @@ void _projection_3dgs_vjp(
             image_width, image_height,
             aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
-        h_mean[i] =
+        h_mean[i] +=
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
             h_depth * dp_depth.d * dp_depth.d +
             dot(h_conic, dp_conic.d * dp_conic.d) +
@@ -859,7 +862,7 @@ void _projection_3dgs_vjp(
             image_width, image_height,
             aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
-        h_quat[i] =
+        h_quat[i] +=
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
             h_depth * dp_depth.d * dp_depth.d +
             dot(h_conic, dp_conic.d * dp_conic.d) +
@@ -893,7 +896,7 @@ void _projection_3dgs_vjp(
             image_width, image_height,
             aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
-        h_scale[i] =
+        h_scale[i] +=
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
             h_depth * dp_depth.d * dp_depth.d +
             dot(h_conic, dp_conic.d * dp_conic.d) +
@@ -925,7 +928,7 @@ void _projection_3dgs_vjp(
             image_width, image_height,
             aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
-        h_in_opacity =
+        h_in_opacity +=
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
             h_depth * dp_depth.d * dp_depth.d +
             dot(h_conic, dp_conic.d * dp_conic.d) +
@@ -960,7 +963,7 @@ void _projection_3dgs_vjp(
             image_width, image_height,
             aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
         );
-        h_features_dc[i] =
+        h_features_dc[i] +=
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
             h_depth * dp_depth.d * dp_depth.d +
             dot(h_conic, dp_conic.d * dp_conic.d) +

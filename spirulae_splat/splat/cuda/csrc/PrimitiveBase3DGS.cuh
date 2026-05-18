@@ -47,6 +47,16 @@ struct _BasePrimitive3DGS {
                 sh_coeffs[j+1] = j < buffer.num_sh() ? buffer.features_sh(i, j) : make_float3(0.f);
         }
 
+        __device__ __forceinline__ void atomicLoad(WorldBuffer &buffer, int64_t i) {
+            if (&buffer.means(0)) mean += buffer.means(i);
+            if (&buffer.quats(0)) quat += buffer.quats(i);
+            if (&buffer.scales(0)) scale += buffer.scales(i);
+            if (&buffer.opacities(0)) opacity += buffer.opacities(i);
+            if (&buffer.features_dc(0)) sh_coeffs[0] += buffer.features_dc(i);
+            for (int j = 0; j < buffer.num_sh(); ++j)
+                if (&buffer.features_sh(0, 0)) sh_coeffs[j+1] += buffer.features_sh(i, j);
+        }
+
         __device__ __forceinline__ void store(WorldBuffer &buffer, int64_t i) const {
             if (&buffer.means(0)) buffer.means(i) = mean;
             if (&buffer.quats(0)) buffer.quats(i) = quat;

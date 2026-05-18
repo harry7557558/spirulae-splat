@@ -11,19 +11,18 @@ template void projection_fused_bwd_kernel_wrapper<
 >(
     cudaStream_t stream,
     // fwd inputs
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     const Vanilla3DGS::WorldBuffer splats_world,
-    const float * viewmats, // [B, C, 4, 4]
-    const float4 * intrins,  // [B, C, 4], fx, fy, cx, cy
+    const float * viewmats, // [C, 4, 4]
+    const float4 * intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
     const int32_t * camera_ids,          // [nnz, 4]
     const int32_t * gaussian_ids,          // [nnz, 4]
-    const float4 * aabb,          // [B, C, N, 4]
+    const float4 * aabb,          // [C, N, 4]
     // grad outputs
     Vanilla3DGS::ScreenBuffer v_splats_screen,
     Vanilla3DGS::ScreenBuffer vr_splats_screen,
@@ -34,5 +33,5 @@ template void projection_fused_bwd_kernel_wrapper<
     float3* h_world_pos_buffer,
     Vanilla3DGS::WorldBuffer vr_splats_world,
     Vanilla3DGS::WorldBuffer h_splats_world,
-    float * v_viewmats // [B, C, 4, 4] optional
+    float * v_viewmats // [C, 4, 4] optional
 );

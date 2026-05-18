@@ -946,6 +946,7 @@ void fused_optim_3dgs_geometry(
     if (std::get_if<at::Tensor>(&step))
         CHECK_INPUT(std::get<at::Tensor>(step));
 
+    // TODO: use actual numel when max gaussian count hasn't reached
     const int64_t numel = means.numel() / 3;
     if (numel == 0)
         return;

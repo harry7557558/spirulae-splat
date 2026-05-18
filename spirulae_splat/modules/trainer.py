@@ -318,6 +318,7 @@ class Trainer:
                     self.save_checkpoint(step)
                 # if step % 100 == 50:
                 #     self.print_vram_breakdown()
+                #     # exit(0)
                 step_start = time.time()
                 self.current_step = step + 1  # 1-based
                 self.train_step(step)

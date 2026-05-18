@@ -87,6 +87,8 @@ class Renderer:
         self.primitive = primitive
         self.splats_world = splats_world
 
+        self.use_fused_proj_bwd_optim = False
+
     def set_params(
         self,
         viewmats: Tensor,  # [..., C, 4, 4]
@@ -111,6 +113,8 @@ class Renderer:
         self.width = width
         self.height = height
         self.packed = packed
+        if self.use_fused_proj_bwd_optim:
+            self.packed = False  # TODO
         self.use_bvh = use_bvh
         self.output_distortion = output_distortion
         self.compute_hessian_diagonal = compute_hessian_diagonal
@@ -128,11 +132,27 @@ class Renderer:
     def zero_grad(self):
         if hasattr(self, 'v_splats_world'):
             for tensor in self.v_splats_world:
-                _make_lazy_cuda_func("set_zero")(tensor)
+                if tensor is not None:
+                    _make_lazy_cuda_func("set_zero")(tensor)
         else:
-            self.v_splats_world = [
-                torch.zeros_like(x) for x in self.splats_world
-            ]
+            if self.use_fused_proj_bwd_optim:
+                if self.primitive in ['3dgs', 'mip']:
+                    self.v_splats_world = [None] * len(self.splats_world)
+                elif self.primitive in ['3dgut', '3dgut_sv']:
+                    self.v_splats_world = [
+                        torch.zeros_like(self.splats_world[0]),  # means
+                        torch.zeros_like(self.splats_world[1]),  # quats
+                        torch.zeros_like(self.splats_world[2]),  # scales
+                        None,  # opacities
+                        None,  # features_dc
+                        None,  # features_sh
+                    ]
+                else:
+                    raise NotImplementedError()
+            else:
+                self.v_splats_world = [
+                    torch.zeros_like(x) for x in self.splats_world
+                ]
 
         if not hasattr(self, 'g1_splats_world'):
             self.g1_splats_world = [
@@ -251,7 +271,7 @@ class Renderer:
                     self.v_render_Ts,
                     # (v_distortion_rgbs.contiguous(), v_distortion_depths.contiguous()) if ctx.output_distortion else None,
                     # ctx.needs_input_grad[13]
-                    None, 
+                    None,
                     self.v_splats_world if hasattr(self, 'v_splats_world') else None,
                     None,
                     False,  # TODO
@@ -270,6 +290,8 @@ class Renderer:
         #                      self.v_render_Ts.float()).sum(dim=(-3, -2))
 
     def projection_backward(self):
+        if self.use_fused_proj_bwd_optim:
+            return
 
         if self.compute_hessian_diagonal == "all":
             raise NotImplementedError()
@@ -506,7 +528,61 @@ class Renderer:
         self.rasterize_backward()
         self.projection_backward()
 
-        
+    def fused_proj_bwd_optim_step(
+        self,
+        model_config: 'spirulae_splat.modules.model.SpirulaeSplatModelConfig',
+        optim_config: OptimizerConfig,
+        step: int,
+        max_steps: int
+    ):
+        if self.primitive not in ["3dgs", "mip", "3dgut", "3dgut_sv"]:
+            raise NotImplementedError()
+
+        if optim_config.max_steps is not None:
+            max_steps = optim_config.max_steps
+
+        if optim_config.use_per_splat_bias_correction:
+            if not hasattr(self, 'optim_bias_correction_step'):
+                self.optim_bias_correction_step = torch.ones(
+                    self.max_num_splats, dtype=torch.int32, device=self.radii.device)
+            else:
+                self.optim_bias_correction_step += 1
+            bias_correction_step = self.optim_bias_correction_step
+        else:
+            bias_correction_step = step + 1
+
+        _make_lazy_cuda_func(f"fused_projection_bwd_optimizer_{self.primitive}")(
+            self.splats_world,
+            self.viewmats, self.intrins, self.width, self.height, self.camera_model.upper(), self.dist_coeffs,
+            # self.camera_ids, self.gaussian_ids, self.aabb,
+            None, None, self.aabb,
+            self.v_splats_world, None, None,
+            self.v_splats_proj, None, None,
+            self.g1_splats_world, self.g2_splats_world,
+            self.radii,
+            optim_config.get_scheduled_lr("means", step, max_steps),
+            optim_config.get_scheduled_lr("quats", step, max_steps),
+            optim_config.get_scheduled_lr("scales", step, max_steps),
+            optim_config.get_scheduled_lr("opacities", step, max_steps),
+            optim_config.get_scheduled_lr("features_dc", step, max_steps),
+            optim_config.get_scheduled_lr("features_sh", step, max_steps),
+            model_config.noise_lr,
+            model_config.min_opacity,
+            model_config.max_gauss_ratio,
+            model_config.scale_regularization_weight,
+            model_config.opacity_reg,
+            model_config.scale_reg,
+            # 0.0, 0.0,  # TODO
+            model_config.erank_reg,
+            model_config.erank_reg_s3,
+            model_config.quat_norm_reg,
+            0.0 if step % model_config.refine_every != 0 else
+                (1.0 - (step+1) / max_steps) * model_config.opacity_decay,
+            1.0 if step % model_config.refine_every != 0 else
+                1.0 - (1.0 - (step+1) / max_steps) * model_config.scale_decay,
+            optim_config.use_scale_agnostic_mean,
+            bias_correction_step
+        )
 
     def optim_step(
         self,
@@ -515,6 +591,9 @@ class Renderer:
         step: int,
         max_steps: int
     ):
+        if self.use_fused_proj_bwd_optim:
+            self.fused_proj_bwd_optim_step(model_config, optim_config, step, max_steps)
+            return
 
         if self.primitive not in ["3dgs", "mip", "3dgut", "3dgut_sv"]:
             raise NotImplementedError()

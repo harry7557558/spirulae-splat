@@ -15,19 +15,18 @@ template<
 void projection_fused_bwd_kernel_wrapper(
     cudaStream_t stream,
     // fwd inputs
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     const typename SplatPrimitive::WorldBuffer splats_world,
-    const float * viewmats, // [B, C, 4, 4]
-    const float4 * intrins,  // [B, C, 4], fx, fy, cx, cy
+    const float * viewmats, // [C, 4, 4]
+    const float4 * intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
     const int32_t * camera_ids,          // [nnz, 4]
     const int32_t * gaussian_ids,          // [nnz, 4]
-    const float4 * aabb,          // [B, C, N, 4]
+    const float4 * aabb,          // [C, N, 4]
     // grad outputs
     typename SplatPrimitive::ScreenBuffer v_splats_screen,
     typename SplatPrimitive::ScreenBuffer vr_splats_screen,
@@ -38,7 +37,7 @@ void projection_fused_bwd_kernel_wrapper(
     float3* h_world_pos_buffer,
     typename SplatPrimitive::WorldBuffer vr_splats_world,
     typename SplatPrimitive::WorldBuffer h_splats_world,
-    float * v_viewmats // [B, C, 4, 4] optional
+    float * v_viewmats // [C, 4, 4] optional
 );
 
 
@@ -69,8 +68,6 @@ inline void launch_projection_projection_fused_bwd_kernel(
     typename SplatPrimitive::WorldBuffer splats_world(splats_world_tuple);
     uint32_t N = splats_world.size();    // number of gaussians
     uint32_t C = viewmats.size(-3); // number of cameras
-    // uint32_t B = splats_world.batchSize();    // number of batches
-    uint32_t B = 1;  // TODO
 
     at::Tensor vr_world_pos;
     at::Tensor h_world_pos;
@@ -87,14 +84,14 @@ inline void launch_projection_projection_fused_bwd_kernel(
 
     if (camera_ids.has_value() && gaussian_ids.has_value()) {  // packed
         N = camera_ids.value().numel();
-        B = C = 1;
+        C = 1;
     }
 
-    if (B*C*N == 0)
+    if (C*N == 0)
         return;
 
     #define _LAUNCH_ARGS ( \
-            (cudaStream_t)at::cuda::getCurrentCUDAStream(), B, C, N, \
+            (cudaStream_t)at::cuda::getCurrentCUDAStream(), C, N, \
             splats_world, viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, \
             camera_ids.has_value() ? camera_ids.value().data_ptr<int32_t>() : nullptr, \

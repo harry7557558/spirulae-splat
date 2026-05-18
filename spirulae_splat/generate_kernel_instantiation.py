@@ -174,6 +174,27 @@ def generate_ProjectionBwd():
     generate_kernel_instantiation("ProjectionBwd", definition, map_header, map_body, includes)
 
 
+def generate_FusedProjectionBwdOptim():
+    definition = extract_kernel_definition("FusedProjectionBwdOptim.cu", "fused_projection_bwd_optimizer_3dgs_kernel_wrapper")
+    map_header = ["typename SplatPrimitive", None, None, None]
+    map_body = [
+        *itertools.product(
+            ["Vanilla3DGS", "MipSplatting", "Vanilla3DGUT"],
+            ["ssplat::CameraModelType::PINHOLE", "ssplat::CameraModelType::FISHEYE", "ssplat::CameraModelType::EQUISOLID"],
+            # ["HessianDiagonalOutputMode::None", "HessianDiagonalOutputMode::Position", "HessianDiagonalOutputMode::AllReasonable"],
+            ["HessianDiagonalOutputMode::None"],
+            ["true", "false"],
+        )
+    ]
+    includes = [("Primitive3DGS.cuh", "FusedProjectionBwdOptim_kernel.cuh")] * 12 + \
+        [("Primitive3DGUT.cuh", "FusedProjectionBwdOptim_kernel.cuh")] * 6 #+ \
+        # [("Primitive3DGUT_SV.cuh", "FusedProjectionBwdOptim_kernel.cuh")] * 14 + \
+        # [("PrimitiveOpaqueTriangle.cuh", "FusedProjectionBwdOptim_kernel.cuh")] * 2 + \
+        # [("PrimitiveVoxel.cuh", "FusedProjectionBwdOptim_kernel.cuh")] * 2
+
+    generate_kernel_instantiation("FusedProjectionBwdOptim", definition, map_header, map_body, includes)
+
+
 def generate_RasterizationFwd():
     definition = extract_kernel_definition("RasterizationFwd.cu", "rasterize_to_pixels_fwd_kernel_wrapper")
     map_header = ["typename SplatPrimitive", None]
@@ -245,6 +266,7 @@ def generate_RasterizationEval3DBwd():
 
 generate_ProjectionFwd()
 generate_ProjectionBwd()
+generate_FusedProjectionBwdOptim()
 generate_RasterizationFwd()
 generate_RasterizationBwd()
 generate_RasterizationEval3DFwd()

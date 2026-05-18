@@ -569,6 +569,8 @@ class SpirulaeSplatModel(torch.nn.Module):
         self._train_batch_size = 1
         self._set_strategy()
 
+        torch.cuda.empty_cache()
+
     def _set_strategy(self):
         # Strategy for GS densification
         if self.config.primitive in ['voxel']:

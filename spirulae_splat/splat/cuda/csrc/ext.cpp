@@ -21,6 +21,7 @@
 #include "RasterizationSortedEval3DFwd.cuh"
 #include "RasterizationSortedEval3DBwd.cuh"
 #include "Optimizer.cuh"
+#include "FusedProjectionBwdOptim.cuh"
 #include "Densify.cuh"
 #include "BilagridUtils.cuh"
 #include "Visualizer.cuh"
@@ -201,6 +202,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fused_adamtr_linear_rgb_optim", &fused_adamtr_linear_rgb_optim);
     m.def("fused_adamtr_rgb_sh_optim", &fused_adamtr_rgb_sh_optim);
     m.def("fused_adamtr_linear_rgb_sh_optim", &fused_adamtr_linear_rgb_sh_optim);
+
+    // FusedProjectionBwdOptim.cuh
+    m.def("fused_projection_bwd_optimizer_3dgut", &fused_projection_bwd_optimizer_3dgut_tensor);
 
     // Densify.cuh
     m.def("quantile_of_abs_of_finite_elements", &quantile_of_abs_of_finite_elements_tensor);

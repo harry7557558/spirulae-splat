@@ -21,19 +21,18 @@ template<
 >
 __global__ void projection_fused_bwd_kernel(
     // fwd inputs
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     const typename SplatPrimitive::WorldBuffer splats_world,
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
     const int32_t *__restrict__ camera_ids,          // [nnz, 4]
     const int32_t *__restrict__ gaussian_ids,          // [nnz, 4]
-    const float4 *__restrict__ aabb,          // [B, C, N, 4]
+    const float4 *__restrict__ aabb,          // [C, N, 4]
     // grad outputs
     typename SplatPrimitive::ScreenBuffer v_splats_screen,
     typename SplatPrimitive::ScreenBuffer vr_splats_screen,
@@ -44,7 +43,7 @@ __global__ void projection_fused_bwd_kernel(
     float3* h_world_pos_buffer,
     typename SplatPrimitive::WorldBuffer vr_splats_world,
     typename SplatPrimitive::WorldBuffer h_splats_world,
-    float *__restrict__ v_viewmats // [B, C, 4, 4] optional
+    float *__restrict__ v_viewmats // [C, 4, 4] optional
 ) {
     uint32_t idx = cg::this_grid().thread_rank();
     uint32_t cid, gid;
@@ -54,15 +53,12 @@ __global__ void projection_fused_bwd_kernel(
         cid = camera_ids[idx];
         gid = gaussian_ids[idx];
     } else {
-        // parallelize over B * C * N.
-        if (idx >= B * C * N || (aabb[idx].z <= aabb[idx].x || aabb[idx].w <= aabb[idx].y)) {
+        // parallelize over C * N.
+        if (idx >= C * N || (aabb[idx].z <= aabb[idx].x || aabb[idx].w <= aabb[idx].y)) {
             return;
         }
-        const uint32_t bid = idx / (C * N); // batch id
         cid = (idx / N) % C; // camera id
         gid = idx % N; // gaussian id
-        cid = bid * C + cid;
-        gid = bid * N + gid;
     }
 
     // Load camera
@@ -152,19 +148,18 @@ template<
 void projection_fused_bwd_kernel_wrapper(
     cudaStream_t stream,
     // fwd inputs
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     const typename SplatPrimitive::WorldBuffer splats_world,
-    const float * viewmats, // [B, C, 4, 4]
-    const float4 * intrins,  // [B, C, 4], fx, fy, cx, cy
+    const float * viewmats, // [C, 4, 4]
+    const float4 * intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
     const int32_t * camera_ids,          // [nnz, 4]
     const int32_t * gaussian_ids,          // [nnz, 4]
-    const float4 * aabb,          // [B, C, N, 4]
+    const float4 * aabb,          // [C, N, 4]
     // grad outputs
     typename SplatPrimitive::ScreenBuffer v_splats_screen,
     typename SplatPrimitive::ScreenBuffer vr_splats_screen,
@@ -175,12 +170,12 @@ void projection_fused_bwd_kernel_wrapper(
     float3* h_world_pos_buffer,
     typename SplatPrimitive::WorldBuffer vr_splats_world,
     typename SplatPrimitive::WorldBuffer h_splats_world,
-    float * v_viewmats // [B, C, 4, 4] optional
+    float * v_viewmats // [C, 4, 4] optional
 ) {
     constexpr uint block = hessian_diagonal_output_mode == HessianDiagonalOutputMode::None ? 128 : WARP_SIZE;
     projection_fused_bwd_kernel<SplatPrimitive, camera_model, hessian_diagonal_output_mode>
-    <<<_CEIL_DIV(B*C*N, block), block, 0, stream>>>(
-        B, C, N,
+    <<<_CEIL_DIV(C*N, block), block, 0, stream>>>(
+        C, N,
         splats_world, viewmats, intrins, dist_coeffs_buffer, image_width, image_height,
         camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen,
         v_splats_world, vr_world_pos_buffer, h_world_pos_buffer,

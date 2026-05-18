@@ -76,6 +76,7 @@ def generate_headers():
         'RasterizationSortedEval3DFwd',
         'RasterizationSortedEval3DBwd',
         'Optimizer',
+        'FusedProjectionBwdOptim',
         'Densify',
         'BilagridUtils',
         'Visualizer',
