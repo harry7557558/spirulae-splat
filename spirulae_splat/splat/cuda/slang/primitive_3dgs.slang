@@ -334,12 +334,12 @@ float add_blur(const float eps2d, inout float2x2 covar, out float compensation) 
 
 #define _projection_3dgs_ARGS \
     const bool antialiased, \
-    const float3 mean, const float4 quat, const float3 scale, const float in_opacity, const float3 sh_coeffs[16], \
+    const float3 mean, const float4 quat, const float3 scale, const float in_opacity, \
     const float3x3 R, const float3 t, \
     no_diff const float fx, no_diff const float fy,  no_diff const float cx, no_diff const float cy, \
     no_diff const float[10] dist_coeffs, const uint image_width, const uint image_height, \
     no_diff out float4 aabb_xyxy, no_diff out float sorting_depth, no_diff out float radius, \
-    out float2 mean2d, out float depth, out float3 conic, out float opacity, out float3 rgb
+    out float2 mean2d, out float depth, out float3 conic, out float opacity
 
 [ForceInline]
 [Differentiable]
@@ -477,10 +477,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
     //     float3(covar2d_inv[0][0], covar2d_inv[0][1], covar2d_inv[1][1]);
     conic = float3(covar2d_inv[0][0], covar2d_inv[0][1], covar2d_inv[1][1]);
 
-    float3 campos = -mul(transpose(R), t);
-    sh_coeffs_to_color(mean - campos, sh_coeffs, rgb);
-    rgb = max(rgb+0.5f, 0.0f);
-
+    float3 campos = -mul(transpose(detach<float3x3>(R)), detach<float3>(t));
     radius = view_radius_3dgs(mean, scale, in_opacity, campos);
 }
 
@@ -493,10 +490,10 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
     void funname(_projection_3dgs_ARGS) { \
         return projection_3dgs<__VA_ARGS__>( \
             antialiased, \
-            mean, quat, scale, in_opacity, sh_coeffs, R, t, \
+            mean, quat, scale, in_opacity, R, t, \
             fx, fy, cx, cy, dist_coeffs, \
             image_width, image_height, \
-            aabb_xyxy, sorting_depth, radius, mean2d, depth, conic, opacity, rgb \
+            aabb_xyxy, sorting_depth, radius, mean2d, depth, conic, opacity \
         ); \
     }
 
@@ -524,10 +521,10 @@ interface _DiffProjection3DGS
         static void projection(_projection_3dgs_ARGS) { \
             return projection_3dgs<__VA_ARGS__>( \
                 antialiased, \
-                mean, quat, scale, in_opacity, sh_coeffs, R, t, \
+                mean, quat, scale, in_opacity, R, t, \
                 fx, fy, cx, cy, dist_coeffs, \
                 image_width, image_height, \
-                aabb_xyxy, sorting_depth, radius, mean2d, depth, conic, opacity, rgb \
+                aabb_xyxy, sorting_depth, radius, mean2d, depth, conic, opacity \
             ); \
         } \
     };
@@ -542,11 +539,11 @@ _DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgut_equisolid, CameraModelT
 
 #define _projection_3dgs_vjp_ARGS \
     const bool antialiased, \
-    const float3 mean, const float4 quat, const float3 scale, const float in_opacity, const float3 sh_coeffs[16], \
+    const float3 mean, const float4 quat, const float3 scale, const float in_opacity, \
     const float3x3 R, const float3 t, const float fx, const float fy, const float cx, const float cy, \
     const float[10] dist_coeffs, const uint image_width, const uint image_height, \
-    const float2 v_mean2d, const float v_depth, const float3 v_conic, const float v_opacity, const float3 v_rgb, \
-    inout float3 v_mean, inout float4 v_quat, inout float3 v_scale, inout float v_in_opacity, inout float3 v_sh_coeffs[16], \
+    const float2 v_mean2d, const float v_depth, const float3 v_conic, const float v_opacity, \
+    inout float3 v_mean, inout float4 v_quat, inout float3 v_scale, inout float v_in_opacity, \
     inout float3x3 v_R, inout float3 v_t
 
 [ForceInline]
@@ -558,22 +555,19 @@ void _projection_3dgs_vjp(
     DifferentialPair<float4> dp_quat = diffPair(quat);
     DifferentialPair<float3> dp_scale = diffPair(scale);
     DifferentialPair<float> dp_in_opacity = diffPair(in_opacity);
-    DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);
     DifferentialPair<float3x3> dp_R = diffPair(R);
     DifferentialPair<float3> dp_t = diffPair(t);
     bwd_diff(projectionInterface.projection)(
         antialiased,
-        dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
+        dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_R, dp_t,
         fx, fy, cx, cy, dist_coeffs,
         image_width, image_height,
-        v_mean2d, v_depth, v_conic, v_opacity, v_rgb
+        v_mean2d, v_depth, v_conic, v_opacity
     );
     v_mean += dp_mean.d;
     v_quat += dp_quat.d;
     v_scale += dp_scale.d;
     v_in_opacity += dp_in_opacity.d;
-    [ForceUnroll] for (int i = 0; i < 16; ++i)
-        v_sh_coeffs[i] += dp_sh_coeffs.d[i];
     v_R += dp_R.d;
     v_t += dp_t.d;
 }
@@ -586,11 +580,11 @@ void _projection_3dgs_vjp(
         return _projection_3dgs_vjp( \
             _InterfaceName(), \
             antialiased, \
-            mean, quat, scale, in_opacity, sh_coeffs, R, t, \
+            mean, quat, scale, in_opacity, R, t, \
             fx, fy, cx, cy, dist_coeffs, \
             image_width, image_height, \
-            v_mean2d, v_depth, v_conic, v_opacity, v_rgb, \
-            v_mean, v_quat, v_scale, v_in_opacity, v_sh_coeffs, v_R, v_t \
+            v_mean2d, v_depth, v_conic, v_opacity, \
+            v_mean, v_quat, v_scale, v_in_opacity, v_R, v_t \
         ); \
     }
 
@@ -607,13 +601,13 @@ _DEF_projection_3dgs_vjp(projection_3dgut_equisolid_vjp, _DiffProjection3DGS_3dg
 #undef _projection_3dgs_vjp_ARGS
 #define _projection_3dgs_vjp_ARGS \
     const bool antialiased, \
-    const float3 mean, const float4 quat, const float3 scale, const float in_opacity, const float3 sh_coeffs[16], \
+    const float3 mean, const float4 quat, const float3 scale, const float in_opacity, \
     const float3x3 R, const float3 t, const float fx, const float fy, const float cx, const float cy, \
     const float[10] dist_coeffs, const uint image_width, const uint image_height, \
-    const float2 v_mean2d, const float v_depth, const float3 v_conic, const float v_opacity, const float3 v_rgb, \
-    const float2 vr_mean2d, const float vr_depth, const float3 vr_conic, const float vr_opacity, const float3 vr_rgb, \
-    const float2 h_mean2d, const float h_depth, const float3 h_conic, const float h_opacity, const float3 h_rgb, \
-    inout float3 v_mean, inout float4 v_quat, inout float3 v_scale, inout float v_in_opacity, inout float3 v_sh_coeffs[16], \
+    const float2 v_mean2d, const float v_depth, const float3 v_conic, const float v_opacity, \
+    const float2 vr_mean2d, const float vr_depth, const float3 vr_conic, const float vr_opacity, \
+    const float2 h_mean2d, const float h_depth, const float3 h_conic, const float h_opacity, \
+    inout float3 v_mean, inout float4 v_quat, inout float3 v_scale, inout float v_in_opacity, \
     inout float3x3 v_R, inout float3 v_t, \
     inout float3 vr_mean, inout float3 h_mean
 
@@ -628,22 +622,19 @@ void _projection_3dgs_vjp(
         DifferentialPair<float4> dp_quat = diffPair(quat);
         DifferentialPair<float3> dp_scale = diffPair(scale);
         DifferentialPair<float> dp_in_opacity = diffPair(in_opacity);
-        DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);
         DifferentialPair<float3x3> dp_R = diffPair(R);
         DifferentialPair<float3> dp_t = diffPair(t);
         bwd_diff(projectionInterface.projection)(
             antialiased,
-            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
+            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            v_mean2d, v_depth, v_conic, v_opacity, v_rgb
+            v_mean2d, v_depth, v_conic, v_opacity
         );
         v_mean += dp_mean.d;
         v_quat += dp_quat.d;
         v_scale += dp_scale.d;
         v_in_opacity += dp_in_opacity.d;
-        [ForceUnroll] for (int i = 0; i < 16; ++i)
-            v_sh_coeffs[i] += dp_sh_coeffs.d[i];
         v_R += dp_R.d;
         v_t += dp_t.d;
     }
@@ -654,15 +645,14 @@ void _projection_3dgs_vjp(
         DifferentialPair<float4> dp_quat = diffPair(quat);
         DifferentialPair<float3> dp_scale = diffPair(scale);
         DifferentialPair<float> dp_in_opacity = diffPair(in_opacity);
-        DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);
         DifferentialPair<float3x3> dp_R = diffPair(R);
         DifferentialPair<float3> dp_t = diffPair(t);
         bwd_diff(projectionInterface.projection)(
             antialiased,
-            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
+            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            vr_mean2d, vr_depth, vr_conic, vr_opacity, vr_rgb
+            vr_mean2d, vr_depth, vr_conic, vr_opacity
         );
         vr_mean += dp_mean.d;
     }
@@ -675,30 +665,27 @@ void _projection_3dgs_vjp(
         DifferentialPair<float4> dp_quat = diffPair(quat, float4(0));
         DifferentialPair<float3> dp_scale = diffPair(scale, float3(0));
         DifferentialPair<float> dp_in_opacity = diffPair(in_opacity, 0.0f);
-        DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs, float3[16]( { float3(0) }));
         DifferentialPair<float3x3> dp_R = diffPair(R, float3x3(0));
         DifferentialPair<float3> dp_t = diffPair(t, float3(0));
         DifferentialPair<float2> dp_mean2d;
         DifferentialPair<float> dp_depth;
         DifferentialPair<float3> dp_conic;
         DifferentialPair<float> dp_opacity;
-        DifferentialPair<float3> dp_rgb;
         float4 aabb_xyxy;
         float sorting_depth;
         float radius;
         fwd_diff(projectionInterface.projection)(
             antialiased,
-            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
+            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
+            aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity
         );
         h_mean[i] +=
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
             h_depth * dp_depth.d * dp_depth.d +
             dot(h_conic, dp_conic.d * dp_conic.d) +
-            h_opacity * dp_opacity.d * dp_opacity.d +
-            dot(h_rgb, dp_rgb.d * dp_rgb.d);
+            h_opacity * dp_opacity.d * dp_opacity.d;
     }
 }
 
@@ -711,13 +698,13 @@ void _projection_3dgs_vjp(
         return _projection_3dgs_vjp( \
             _InterfaceName(), \
             antialiased, \
-            mean, quat, scale, in_opacity, sh_coeffs, R, t, \
+            mean, quat, scale, in_opacity, R, t, \
             fx, fy, cx, cy, dist_coeffs, \
             image_width, image_height, \
-            v_mean2d, v_depth, v_conic, v_opacity, v_rgb, \
-            vr_mean2d, vr_depth, vr_conic, vr_opacity, vr_rgb, \
-            h_mean2d, h_depth, h_conic, h_opacity, h_rgb, \
-            v_mean, v_quat, v_scale, v_in_opacity, v_sh_coeffs, v_R, v_t, \
+            v_mean2d, v_depth, v_conic, v_opacity, \
+            vr_mean2d, vr_depth, vr_conic, vr_opacity, \
+            h_mean2d, h_depth, h_conic, h_opacity, \
+            v_mean, v_quat, v_scale, v_in_opacity, v_R, v_t, \
             vr_mean, h_mean \
         ); \
     }
@@ -735,16 +722,16 @@ _DEF_projection_3dgs_vjp(projection_3dgut_equisolid_vjp, _DiffProjection3DGS_3dg
 #undef _projection_3dgs_vjp_ARGS
 #define _projection_3dgs_vjp_ARGS \
     const bool antialiased, \
-    const float3 mean, const float4 quat, const float3 scale, const float in_opacity, const float3 sh_coeffs[16], \
+    const float3 mean, const float4 quat, const float3 scale, const float in_opacity, \
     const float3x3 R, const float3 t, const float fx, const float fy, const float cx, const float cy, \
     const float[10] dist_coeffs, const uint image_width, const uint image_height, \
-    const float2 v_mean2d, const float v_depth, const float3 v_conic, const float v_opacity, const float3 v_rgb, \
-    const float2 vr_mean2d, const float vr_depth, const float3 vr_conic, const float vr_opacity, const float3 vr_rgb, \
-    const float2 h_mean2d, const float h_depth, const float3 h_conic, const float h_opacity, const float3 h_rgb, \
-    inout float3 v_mean, inout float4 v_quat, inout float3 v_scale, inout float v_in_opacity, inout float3 v_sh_coeffs[16], \
+    const float2 v_mean2d, const float v_depth, const float3 v_conic, const float v_opacity, \
+    const float2 vr_mean2d, const float vr_depth, const float3 vr_conic, const float vr_opacity, \
+    const float2 h_mean2d, const float h_depth, const float3 h_conic, const float h_opacity, \
+    inout float3 v_mean, inout float4 v_quat, inout float3 v_scale, inout float v_in_opacity, \
     inout float3x3 v_R, inout float3 v_t, \
-    inout float3 vr_mean, inout float4 vr_quat, inout float3 vr_scale, inout float vr_in_opacity, inout float3 vr_features_dc, \
-    inout float3 h_mean, inout float4 h_quat, inout float3 h_scale, inout float h_in_opacity, inout float3 h_features_dc
+    inout float3 vr_mean, inout float4 vr_quat, inout float3 vr_scale, inout float vr_in_opacity, \
+    inout float3 h_mean, inout float4 h_quat, inout float3 h_scale, inout float h_in_opacity
 
 [ForceInline]
 void _projection_3dgs_vjp(
@@ -757,22 +744,19 @@ void _projection_3dgs_vjp(
         DifferentialPair<float4> dp_quat = diffPair(quat);
         DifferentialPair<float3> dp_scale = diffPair(scale);
         DifferentialPair<float> dp_in_opacity = diffPair(in_opacity);
-        DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);
         DifferentialPair<float3x3> dp_R = diffPair(R);
         DifferentialPair<float3> dp_t = diffPair(t);
         bwd_diff(projectionInterface.projection)(
             antialiased,
-            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
+            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            v_mean2d, v_depth, v_conic, v_opacity, v_rgb
+            v_mean2d, v_depth, v_conic, v_opacity
         );
         v_mean += dp_mean.d;
         v_quat += dp_quat.d;
         v_scale += dp_scale.d;
         v_in_opacity += dp_in_opacity.d;
-        [ForceUnroll] for (int i = 0; i < 16; ++i)
-            v_sh_coeffs[i] += dp_sh_coeffs.d[i];
         v_R += dp_R.d;
         v_t += dp_t.d;
     }
@@ -783,21 +767,19 @@ void _projection_3dgs_vjp(
         DifferentialPair<float4> dp_quat = diffPair(quat);
         DifferentialPair<float3> dp_scale = diffPair(scale);
         DifferentialPair<float> dp_in_opacity = diffPair(in_opacity);
-        DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs);
         DifferentialPair<float3x3> dp_R = diffPair(R);
         DifferentialPair<float3> dp_t = diffPair(t);
         bwd_diff(projectionInterface.projection)(
             antialiased,
-            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
+            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            vr_mean2d, vr_depth, vr_conic, vr_opacity, vr_rgb
+            vr_mean2d, vr_depth, vr_conic, vr_opacity
         );
         vr_mean += dp_mean.d;
         vr_quat += dp_quat.d;
         vr_scale += dp_scale.d;
         vr_in_opacity += dp_in_opacity.d;
-        vr_features_dc += dp_sh_coeffs.d[0];
     }
 
     // TODO: some way to refactor this
@@ -810,30 +792,27 @@ void _projection_3dgs_vjp(
         DifferentialPair<float4> dp_quat = diffPair(quat, float4(0));
         DifferentialPair<float3> dp_scale = diffPair(scale, float3(0));
         DifferentialPair<float> dp_in_opacity = diffPair(in_opacity, 0.0f);
-        DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs, float3[16]( { float3(0) }));
         DifferentialPair<float3x3> dp_R = diffPair(R, float3x3(0));
         DifferentialPair<float3> dp_t = diffPair(t, float3(0));
         DifferentialPair<float2> dp_mean2d;
         DifferentialPair<float> dp_depth;
         DifferentialPair<float3> dp_conic;
         DifferentialPair<float> dp_opacity;
-        DifferentialPair<float3> dp_rgb;
         float4 aabb_xyxy;
         float sorting_depth;
         float radius;
         fwd_diff(projectionInterface.projection)(
             antialiased,
-            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
+            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
+            aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity
         );
         h_mean[i] +=
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
             h_depth * dp_depth.d * dp_depth.d +
             dot(h_conic, dp_conic.d * dp_conic.d) +
-            h_opacity * dp_opacity.d * dp_opacity.d +
-            dot(h_rgb, dp_rgb.d * dp_rgb.d);
+            h_opacity * dp_opacity.d * dp_opacity.d;
     }
 
     // hessian diagonal (quat)
@@ -844,30 +823,27 @@ void _projection_3dgs_vjp(
             quat, float4(float(i == 0), float(i == 1), float(i == 2), float(i == 3)));
         DifferentialPair<float3> dp_scale = diffPair(scale, float3(0));
         DifferentialPair<float> dp_in_opacity = diffPair(in_opacity, 0.0f);
-        DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs, float3[16]( { float3(0) }));
         DifferentialPair<float3x3> dp_R = diffPair(R, float3x3(0));
         DifferentialPair<float3> dp_t = diffPair(t, float3(0));
         DifferentialPair<float2> dp_mean2d;
         DifferentialPair<float> dp_depth;
         DifferentialPair<float3> dp_conic;
         DifferentialPair<float> dp_opacity;
-        DifferentialPair<float3> dp_rgb;
         float4 aabb_xyxy;
         float sorting_depth;
         float radius;
         fwd_diff(projectionInterface.projection)(
             antialiased,
-            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
+            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
+            aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity
         );
         h_quat[i] +=
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
             h_depth * dp_depth.d * dp_depth.d +
             dot(h_conic, dp_conic.d * dp_conic.d) +
-            h_opacity * dp_opacity.d * dp_opacity.d +
-            dot(h_rgb, dp_rgb.d * dp_rgb.d);
+            h_opacity * dp_opacity.d * dp_opacity.d;
     }
 
     // hessian diagonal (scale)
@@ -878,30 +854,27 @@ void _projection_3dgs_vjp(
         DifferentialPair<float3> dp_scale = diffPair(
             scale, float3(float(i == 0), float(i == 1), float(i == 2)));
         DifferentialPair<float> dp_in_opacity = diffPair(in_opacity, 0.0f);
-        DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs, float3[16]( { float3(0) }));
         DifferentialPair<float3x3> dp_R = diffPair(R, float3x3(0));
         DifferentialPair<float3> dp_t = diffPair(t, float3(0));
         DifferentialPair<float2> dp_mean2d;
         DifferentialPair<float> dp_depth;
         DifferentialPair<float3> dp_conic;
         DifferentialPair<float> dp_opacity;
-        DifferentialPair<float3> dp_rgb;
         float4 aabb_xyxy;
         float sorting_depth;
         float radius;
         fwd_diff(projectionInterface.projection)(
             antialiased,
-            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
+            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
+            aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity
         );
         h_scale[i] +=
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
             h_depth * dp_depth.d * dp_depth.d +
             dot(h_conic, dp_conic.d * dp_conic.d) +
-            h_opacity * dp_opacity.d * dp_opacity.d +
-            dot(h_rgb, dp_rgb.d * dp_rgb.d);
+            h_opacity * dp_opacity.d * dp_opacity.d;
     }
 
     // hessian diagonal (in_opacity)
@@ -910,66 +883,29 @@ void _projection_3dgs_vjp(
         DifferentialPair<float4> dp_quat = diffPair(quat, float4(0));
         DifferentialPair<float3> dp_scale = diffPair(scale, float3(0));
         DifferentialPair<float> dp_in_opacity = diffPair(in_opacity, 1.0f);
-        DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs, float3[16]( { float3(0) }));
         DifferentialPair<float3x3> dp_R = diffPair(R, float3x3(0));
         DifferentialPair<float3> dp_t = diffPair(t, float3(0));
         DifferentialPair<float2> dp_mean2d;
         DifferentialPair<float> dp_depth;
         DifferentialPair<float3> dp_conic;
         DifferentialPair<float> dp_opacity;
-        DifferentialPair<float3> dp_rgb;
         float4 aabb_xyxy;
         float sorting_depth;
         float radius;
         fwd_diff(projectionInterface.projection)(
             antialiased,
-            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
+            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_R, dp_t,
             fx, fy, cx, cy, dist_coeffs,
             image_width, image_height,
-            aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
+            aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity
         );
         h_in_opacity +=
             dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
             h_depth * dp_depth.d * dp_depth.d +
             dot(h_conic, dp_conic.d * dp_conic.d) +
-            h_opacity * dp_opacity.d * dp_opacity.d +
-            dot(h_rgb, dp_rgb.d * dp_rgb.d);
+            h_opacity * dp_opacity.d * dp_opacity.d;
     }
 
-    // hessian diagonal (features_dc)
-    [ForceUnroll]
-    for (int i = 0; i < 3; ++i) {
-        DifferentialPair<float3> dp_mean = diffPair(mean, float3(0));
-        DifferentialPair<float4> dp_quat = diffPair(quat, float4(0));
-        DifferentialPair<float3> dp_scale = diffPair(scale, float3(0));
-        DifferentialPair<float> dp_in_opacity = diffPair(in_opacity, 1.0f);
-        float3[16] d_sh_coeffs = float3[16]( { float3(0) });
-        d_sh_coeffs[0] = float3(float(i == 0), float(i == 1), float(i == 2));
-        DifferentialPair<float3[16]> dp_sh_coeffs = diffPair(sh_coeffs, d_sh_coeffs);
-        DifferentialPair<float3x3> dp_R = diffPair(R, float3x3(0));
-        DifferentialPair<float3> dp_t = diffPair(t, float3(0));
-        DifferentialPair<float2> dp_mean2d;
-        DifferentialPair<float> dp_depth;
-        DifferentialPair<float3> dp_conic;
-        DifferentialPair<float> dp_opacity;
-        DifferentialPair<float3> dp_rgb;
-        float4 aabb_xyxy;
-        float sorting_depth;
-        float radius;
-        fwd_diff(projectionInterface.projection)(
-            antialiased,
-            dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_sh_coeffs, dp_R, dp_t,
-            fx, fy, cx, cy, dist_coeffs,
-            image_width, image_height,
-            aabb_xyxy, sorting_depth, radius, dp_mean2d, dp_depth, dp_conic, dp_opacity, dp_rgb
-        );
-        h_features_dc[i] +=
-            dot(h_mean2d, dp_mean2d.d * dp_mean2d.d) +
-            h_depth * dp_depth.d * dp_depth.d +
-            dot(h_conic, dp_conic.d * dp_conic.d) +
-            h_opacity * dp_opacity.d * dp_opacity.d +
-            dot(h_rgb, dp_rgb.d * dp_rgb.d);
-    }
 }
 
 #undef _DEF_projection_3dgs_vjp
@@ -981,15 +917,15 @@ void _projection_3dgs_vjp(
         return _projection_3dgs_vjp( \
             _InterfaceName(), \
             antialiased, \
-            mean, quat, scale, in_opacity, sh_coeffs, R, t, \
+            mean, quat, scale, in_opacity, R, t, \
             fx, fy, cx, cy, dist_coeffs, \
             image_width, image_height, \
-            v_mean2d, v_depth, v_conic, v_opacity, v_rgb, \
-            vr_mean2d, vr_depth, vr_conic, vr_opacity, vr_rgb, \
-            h_mean2d, h_depth, h_conic, h_opacity, h_rgb, \
-            v_mean, v_quat, v_scale, v_in_opacity, v_sh_coeffs, v_R, v_t, \
-            vr_mean, vr_quat, vr_scale, vr_in_opacity, vr_features_dc, \
-            h_mean, h_quat, h_scale, h_in_opacity, h_features_dc \
+            v_mean2d, v_depth, v_conic, v_opacity, \
+            vr_mean2d, vr_depth, vr_conic, vr_opacity, \
+            h_mean2d, h_depth, h_conic, h_opacity, \
+            v_mean, v_quat, v_scale, v_in_opacity, v_R, v_t, \
+            vr_mean, vr_quat, vr_scale, vr_in_opacity, \
+            h_mean, h_quat, h_scale, h_in_opacity \
         ); \
     }
 

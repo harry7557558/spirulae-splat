@@ -13,7 +13,7 @@ void projection_fused_fwd_kernel_wrapper(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const typename SplatPrimitive::WorldBuffer splats_world,
+    typename SplatPrimitive::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -100,8 +100,13 @@ std::tuple<
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
-    return launch_projection_fused_fwd_kernel<Vanilla3DGS>(
-        in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
+    int sh_degree = Vanilla3DGS<0>::WorldBuffer(in_splats).sh_degree();
+    #define LAUNCH(n) if (sh_degree == (n)) \
+        return launch_projection_fused_fwd_kernel<Vanilla3DGS<n>>( \
+            in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
+    LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
+    #undef LAUNCH
+    return {};
 }
 
 
@@ -125,8 +130,13 @@ std::tuple<
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
-    return launch_projection_fused_fwd_kernel<MipSplatting>(
-        in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
+    int sh_degree = MipSplatting<0>::WorldBuffer(in_splats).sh_degree();
+    #define LAUNCH(n) if (sh_degree == (n)) \
+        return launch_projection_fused_fwd_kernel<MipSplatting<n>>( \
+            in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
+    LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
+    #undef LAUNCH
+    return {};
 }
 
 
@@ -151,8 +161,13 @@ std::tuple<
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
-    return launch_projection_fused_fwd_kernel<Vanilla3DGUT>(
-        in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
+    int sh_degree = Vanilla3DGUT<0>::WorldBuffer(in_splats).sh_degree();
+    #define LAUNCH(n) if (sh_degree == (n)) \
+        return launch_projection_fused_fwd_kernel<Vanilla3DGUT<n>>( \
+            in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
+    LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
+    #undef LAUNCH
+    return {};
 }
 
 

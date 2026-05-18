@@ -394,49 +394,55 @@ void fused_projection_bwd_optimizer_3dgut_tensor(
     bool use_scale_agnostic_mean,
     std::variant<int32_t, at::Tensor> step
 ) {
-    (use_scale_agnostic_mean ?
-        launch_fused_projection_bwd_optimizer_3dgs_kernel<Vanilla3DGUT, HessianDiagonalOutputMode::None, true> :
-        launch_fused_projection_bwd_optimizer_3dgs_kernel<Vanilla3DGUT, HessianDiagonalOutputMode::None, false>
-    )(
-        splats_world,
-        viewmats,
-        intrins,
-        image_width,
-        image_height,
-        cmt(camera_model),
-        dist_coeffs,
-        camera_id_bounds,
-        camera_ids,
-        aabb,
-        v_splats_world,
-        vr_splats_world,
-        h_splats_world,
-        v_splats_screen,
-        vr_splats_screen,
-        h_splats_screen,
-        g1_splats_world,
-        g2_splats_world,
-        radii,
-        lr_means,
-        lr_quats,
-        lr_scales,
-        lr_opacs,
-        lr_features_dc,
-        lr_features_sh,
-        mcmc_noise_scalar,
-        min_opacity,
-        max_gauss_ratio,
-        scale_regularization_weight,
-        mcmc_opacity_reg_weight,
-        mcmc_scale_reg_weight,
-        erank_reg_weight,
-        erank_reg_weight_s3,
-        quat_norm_reg_weight,
-        mrnf_opacity_decay_factor,
-        mrnf_scale_decay_factor,
-        std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1,
-        std::get_if<at::Tensor>(&step) ? std::get<at::Tensor>(step) : (std::optional<at::Tensor>)std::nullopt
-    );
+    #define _ARGS ( \
+        splats_world, \
+        viewmats, \
+        intrins, \
+        image_width, \
+        image_height, \
+        cmt(camera_model), \
+        dist_coeffs, \
+        camera_id_bounds, \
+        camera_ids, \
+        aabb, \
+        v_splats_world, \
+        vr_splats_world, \
+        h_splats_world, \
+        v_splats_screen, \
+        vr_splats_screen, \
+        h_splats_screen, \
+        g1_splats_world, \
+        g2_splats_world, \
+        radii, \
+        lr_means, \
+        lr_quats, \
+        lr_scales, \
+        lr_opacs, \
+        lr_features_dc, \
+        lr_features_sh, \
+        mcmc_noise_scalar, \
+        min_opacity, \
+        max_gauss_ratio, \
+        scale_regularization_weight, \
+        mcmc_opacity_reg_weight, \
+        mcmc_scale_reg_weight, \
+        erank_reg_weight, \
+        erank_reg_weight_s3, \
+        quat_norm_reg_weight, \
+        mrnf_opacity_decay_factor, \
+        mrnf_scale_decay_factor, \
+        std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1, \
+        std::get_if<at::Tensor>(&step) ? std::get<at::Tensor>(step) : (std::optional<at::Tensor>)std::nullopt \
+    )
+    int sh_degree = Vanilla3DGUT<0>::WorldBuffer(splats_world).sh_degree();
+    #define LAUNCH(n) if (sh_degree == (n)) \
+        (use_scale_agnostic_mean ? \
+            launch_fused_projection_bwd_optimizer_3dgs_kernel<Vanilla3DGUT<n>, HessianDiagonalOutputMode::None, true> : \
+            launch_fused_projection_bwd_optimizer_3dgs_kernel<Vanilla3DGUT<n>, HessianDiagonalOutputMode::None, false> \
+        ) _ARGS;
+    LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
+    #undef LAUNCH
+    #undef _ARGS
 }
 
 

@@ -20,7 +20,7 @@ __global__ void projection_fused_fwd_kernel(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const typename SplatPrimitive::WorldBuffer splats_world,
+    typename SplatPrimitive::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -91,7 +91,7 @@ void projection_fused_fwd_kernel_wrapper(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const typename SplatPrimitive::WorldBuffer splats_world,
+    typename SplatPrimitive::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,

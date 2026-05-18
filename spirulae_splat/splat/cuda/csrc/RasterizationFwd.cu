@@ -174,8 +174,8 @@ std::tuple<
     bool output_distortion
 ) {
     return (output_distortion ?
-        rasterize_to_pixels_fwd_tensor<Vanilla3DGS, true> :
-        rasterize_to_pixels_fwd_tensor<Vanilla3DGS, false>
+        rasterize_to_pixels_fwd_tensor<Vanilla3DGS<0>, true> :
+        rasterize_to_pixels_fwd_tensor<Vanilla3DGS<0>, false>
     )(
         splats_w, splats_s, gaussian_ids,
         image_width, image_height,
@@ -211,8 +211,8 @@ std::tuple<
 ) {
     // return rasterize_to_pixels_fwd_tensor<MipSplatting>(
     return (output_distortion ?
-        rasterize_to_pixels_fwd_tensor<Vanilla3DGS, true> :
-        rasterize_to_pixels_fwd_tensor<Vanilla3DGS, false>
+        rasterize_to_pixels_fwd_tensor<Vanilla3DGS<0>, true> :
+        rasterize_to_pixels_fwd_tensor<Vanilla3DGS<0>, false>
     )(
         splats_w, splats_s, gaussian_ids,
         image_width, image_height,

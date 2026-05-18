@@ -57,7 +57,12 @@ template<
     HessianDiagonalOutputMode hessian_diagonal_output_mode,
     bool use_scale_agnostic_mean
 >
-__global__ void fused_projection_bwd_optimizer_3dgs_kernel(
+#if 0
+__global__ void __launch_bounds__(512) fused_projection_bwd_optimizer_3dgs_kernel
+#else
+__global__ void fused_projection_bwd_optimizer_3dgs_kernel
+#endif
+(
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
@@ -104,7 +109,9 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel(
     const int32_t scalar_step,
     const int32_t* __restrict__ steps
 ) {
-    uint32_t gid = blockIdx.x * blockDim.x + threadIdx.x;
+    constexpr uint32_t BLOCK_SIZE = WARP_SIZE;
+
+    uint32_t gid = blockIdx.x * BLOCK_SIZE + threadIdx.x;
     if (gid >= N) return;
 
     bool packed = (camera_id_bounds != nullptr && camera_ids != nullptr);
@@ -118,8 +125,20 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel(
     typename SplatPrimitive::World splat_world;
     splat_world.load(splats_world, gid);
 
+    // TODO: put SH degree as a template argument
+    constexpr int num_sh = SplatPrimitive::World::num_sh();
+    // __shared__ float3 v_sh_coeffs[num_sh*BLOCK_SIZE];
+    float3 v_sh_coeffs[num_sh == 0 ? 1 : num_sh];
+
     typename SplatPrimitive::World v_splat_world = SplatPrimitive::World::zero();
     v_splat_world.atomicLoad(v_splats_world, gid);
+    // v_splat_world.sh_degree = splat_world.sh_degree;
+    // v_splat_world.features_sh = &v_sh_coeffs[num_sh*threadIdx.x];
+    v_splat_world.features_sh = &v_sh_coeffs[0];
+    #pragma unroll
+    for (int i = 0; i < num_sh; ++i)
+        v_splat_world.features_sh[i] = make_float3(0.0f);
+
     float3x3 v_R = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
     float3 v_t = {0.f, 0.f, 0.f};
     float3 vr_world_pos = {0.f, 0.f, 0.f};
@@ -302,20 +321,21 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel(
     g2_splats_world.means(gid) = g2_mean;
 
     // update features_dc
-    float3 g1_feature_dc = beta1 * g1_splats_world.features_dc(gid) + (1.f - beta1) * v_splat_world.sh_coeffs[0];
-    float3 g2_feature_dc = beta2 * g2_splats_world.features_dc(gid) + (1.f - beta2) * v_splat_world.sh_coeffs[0]*v_splat_world.sh_coeffs[0];
-    splats_world.features_dc(gid) = splat_world.sh_coeffs[0] - lr_features_dc * inv_bias_correction1
+    float3 g1_feature_dc = beta1 * g1_splats_world.features_dc(gid) + (1.f - beta1) * v_splat_world.features_dc;
+    float3 g2_feature_dc = beta2 * g2_splats_world.features_dc(gid) + (1.f - beta2) * v_splat_world.features_dc*v_splat_world.features_dc;
+    splats_world.features_dc(gid) = splat_world.features_dc - lr_features_dc * inv_bias_correction1
         * g1_feature_dc / (sqrtf(g2_feature_dc * inv_bias_correction2) + eps);
     g1_splats_world.features_dc(gid) = g1_feature_dc;
     g2_splats_world.features_dc(gid) = g2_feature_dc;
 
     // update features_sh
     // TODO: more cache-friendly memory access pattern
-    #pragma unroll 15
-    for (int i = 0; i < splats_world.num_sh(); ++i) {
-        float3 g1_feature_sh = beta1 * g1_splats_world.features_sh(gid, i) + (1.f - beta1) * v_splat_world.sh_coeffs[i+1];
-        float3 g2_feature_sh = beta2 * g2_splats_world.features_sh(gid, i) + (1.f - beta2) * v_splat_world.sh_coeffs[i+1]*v_splat_world.sh_coeffs[i+1];
-        splats_world.features_sh(gid, i) = splat_world.sh_coeffs[i+1] - lr_features_sh * inv_bias_correction1
+    #pragma unroll
+    for (int i = 0; i < num_sh; ++i) {
+        float3 v_sh_coeff = v_splat_world.features_sh[i];
+        float3 g1_feature_sh = beta1 * g1_splats_world.features_sh(gid, i) + (1.f - beta1) * v_sh_coeff;
+        float3 g2_feature_sh = beta2 * g2_splats_world.features_sh(gid, i) + (1.f - beta2) * v_sh_coeff*v_sh_coeff;
+        splats_world.features_sh(gid, i) = splat_world.features_sh[i] - lr_features_sh * inv_bias_correction1
             * g1_feature_sh / (sqrtf(g2_feature_sh * inv_bias_correction2) + eps);
         g1_splats_world.features_sh(gid, i) = g1_feature_sh;
         g2_splats_world.features_sh(gid, i) = g2_feature_sh;
@@ -376,11 +396,10 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     const int32_t scalar_step,
     const int32_t* __restrict__ steps
 ) {
-    constexpr uint block = hessian_diagonal_output_mode == HessianDiagonalOutputMode::None ? 128 : WARP_SIZE;
     fused_projection_bwd_optimizer_3dgs_kernel<
         SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean
     >
-    <<<_CEIL_DIV(N, block), block, 0, stream>>>(
+    <<<_CEIL_DIV(N, WARP_SIZE), WARP_SIZE, 0, stream>>>(
         C, N,
         splats_world, viewmats, intrins, dist_coeffs_buffer, image_width, image_height,
         camera_id_bounds, camera_ids, aabb,

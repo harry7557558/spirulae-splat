@@ -17,7 +17,7 @@ void projection_fused_bwd_kernel_wrapper(
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
-    const typename SplatPrimitive::WorldBuffer splats_world,
+    typename SplatPrimitive::WorldBuffer splats_world,
     const float * viewmats, // [C, 4, 4]
     const float4 * intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -149,10 +149,14 @@ void projection_3dgs_backward_tensor(
     const TensorList &v_splats_world,
     const std::optional<at::Tensor> &v_viewmats
 ) {
-    launch_projection_projection_fused_bwd_kernel<Vanilla3DGS, HessianDiagonalOutputMode::None>(
-        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, {}, {},
-        v_splats_world, v_viewmats, std::nullopt, std::nullopt);
+    int sh_degree = Vanilla3DGS<0>::WorldBuffer(splats_world).sh_degree();
+    #define LAUNCH(n) if (sh_degree == (n)) \
+        return launch_projection_projection_fused_bwd_kernel<Vanilla3DGS<n>, HessianDiagonalOutputMode::None>( \
+            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            camera_ids, gaussian_ids, aabb, v_splats_screen, {}, {}, \
+            v_splats_world, v_viewmats, std::nullopt, std::nullopt);
+    LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
+    #undef LAUNCH
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -179,10 +183,14 @@ void projection_3dgs_backward_with_hessian_diagonal_tensor(
     const TensorList &vr_splats_world,
     const TensorList &h_splats_world
 ) {
-    launch_projection_projection_fused_bwd_kernel<Vanilla3DGS, HessianDiagonalOutputMode::AllReasonable>(
-        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen,
-        v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
+    int sh_degree = Vanilla3DGS<0>::WorldBuffer(splats_world).sh_degree();
+    #define LAUNCH(n) if (sh_degree == (n)) \
+        return launch_projection_projection_fused_bwd_kernel<Vanilla3DGS<n>, HessianDiagonalOutputMode::AllReasonable>( \
+            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen, \
+            v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
+    LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
+    #undef LAUNCH
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -209,10 +217,14 @@ void projection_3dgs_backward_with_position_hessian_diagonal_tensor(
     const at::Tensor &vr_splats_world,
     const at::Tensor &h_splats_world
 ) {
-    launch_projection_projection_fused_bwd_kernel<Vanilla3DGS, HessianDiagonalOutputMode::Position>(
-        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen,
-        v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
+    int sh_degree = Vanilla3DGS<0>::WorldBuffer(splats_world).sh_degree();
+    #define LAUNCH(n) if (sh_degree == (n)) \
+        return launch_projection_projection_fused_bwd_kernel<Vanilla3DGS<n>, HessianDiagonalOutputMode::Position>( \
+            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen, \
+            v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
+    LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
+    #undef LAUNCH
 }
 
 
@@ -241,10 +253,14 @@ void projection_mip_backward_tensor(
     const TensorList &v_splats_world,
     const std::optional<at::Tensor> &v_viewmats
 ) {
-    launch_projection_projection_fused_bwd_kernel<MipSplatting, HessianDiagonalOutputMode::None>(
-        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, {}, {},
-        v_splats_world, v_viewmats, std::nullopt, std::nullopt);
+    int sh_degree = MipSplatting<0>::WorldBuffer(splats_world).sh_degree();
+    #define LAUNCH(n) if (sh_degree == (n)) \
+        return launch_projection_projection_fused_bwd_kernel<MipSplatting<n>, HessianDiagonalOutputMode::None>( \
+            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            camera_ids, gaussian_ids, aabb, v_splats_screen, {}, {}, \
+            v_splats_world, v_viewmats, std::nullopt, std::nullopt);
+    LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
+    #undef LAUNCH
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -271,10 +287,14 @@ void projection_mip_backward_with_hessian_diagonal_tensor(
     const TensorList &vr_splats_world,
     const TensorList &h_splats_world
 ) {
-    launch_projection_projection_fused_bwd_kernel<MipSplatting, HessianDiagonalOutputMode::AllReasonable>(
-        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen,
-        v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
+    int sh_degree = MipSplatting<0>::WorldBuffer(splats_world).sh_degree();
+    #define LAUNCH(n) if (sh_degree == (n)) \
+        return launch_projection_projection_fused_bwd_kernel<MipSplatting<n>, HessianDiagonalOutputMode::AllReasonable>( \
+            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen, \
+            v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
+    LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
+    #undef LAUNCH
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -301,10 +321,14 @@ void projection_mip_backward_with_position_hessian_diagonal_tensor(
     const at::Tensor &vr_splats_world,
     const at::Tensor &h_splats_world
 ) {
-    launch_projection_projection_fused_bwd_kernel<MipSplatting, HessianDiagonalOutputMode::Position>(
-        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen,
-        v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
+    int sh_degree = MipSplatting<0>::WorldBuffer(splats_world).sh_degree();
+    #define LAUNCH(n) if (sh_degree == (n)) \
+        return launch_projection_projection_fused_bwd_kernel<MipSplatting<n>, HessianDiagonalOutputMode::Position>( \
+            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen, \
+            v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
+    LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
+    #undef LAUNCH
 }
 
 
@@ -333,10 +357,14 @@ void projection_3dgut_backward_tensor(
     const TensorList &v_splats_world,
     const std::optional<at::Tensor> &v_viewmats
 ) {
-    launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT, HessianDiagonalOutputMode::None>(
-        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, {}, {},
-        v_splats_world, v_viewmats, std::nullopt, std::nullopt);
+    int sh_degree = Vanilla3DGUT<0>::WorldBuffer(splats_world).sh_degree();
+    #define LAUNCH(n) if (sh_degree == (n)) \
+        return launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT<n>, HessianDiagonalOutputMode::None>( \
+            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            camera_ids, gaussian_ids, aabb, v_splats_screen, {}, {}, \
+            v_splats_world, v_viewmats, std::nullopt, std::nullopt);
+    LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
+    #undef LAUNCH
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -363,10 +391,14 @@ void projection_3dgut_backward_with_hessian_diagonal_tensor(
     const TensorList &vr_splats_world,
     const TensorList &h_splats_world
 ) {
-    launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT, HessianDiagonalOutputMode::AllReasonable>(
-        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen,
-        v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
+    int sh_degree = Vanilla3DGUT<0>::WorldBuffer(splats_world).sh_degree();
+    #define LAUNCH(n) if (sh_degree == (n)) \
+        return launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT<n>, HessianDiagonalOutputMode::AllReasonable>( \
+            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen, \
+            v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
+    LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
+    #undef LAUNCH
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -393,10 +425,14 @@ void projection_3dgut_backward_with_position_hessian_diagonal_tensor(
     const at::Tensor &vr_splats_world,
     const at::Tensor &h_splats_world
 ) {
-    launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT, HessianDiagonalOutputMode::Position>(
-        splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
-        camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen,
-        v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
+    int sh_degree = Vanilla3DGUT<0>::WorldBuffer(splats_world).sh_degree();
+    #define LAUNCH(n) if (sh_degree == (n)) \
+        return launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT<n>, HessianDiagonalOutputMode::Position>( \
+            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen, \
+            v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
+    LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
+    #undef LAUNCH
 }
 
 

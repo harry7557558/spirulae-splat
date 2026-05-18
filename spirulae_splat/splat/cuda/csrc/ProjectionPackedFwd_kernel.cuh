@@ -20,7 +20,7 @@ __global__ void projection_packed_mask_kernel(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const typename SplatPrimitive::WorldBuffer splats_world,  // [B, N, ...]
+    typename SplatPrimitive::WorldBuffer splats_world,  // [B, N, ...]
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -80,7 +80,7 @@ __global__ void projection_packed_fwd_kernel(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const typename SplatPrimitive::WorldBuffer splats_world,  // [B, N, ...]
+    typename SplatPrimitive::WorldBuffer splats_world,  // [B, N, ...]
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -158,7 +158,7 @@ void projection_packed_mask_kernel_wrapper(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const typename SplatPrimitive::WorldBuffer splats_world,  // [B, N, ...]
+    typename SplatPrimitive::WorldBuffer splats_world,  // [B, N, ...]
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -183,7 +183,7 @@ void projection_packed_fwd_kernel_wrapper(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const typename SplatPrimitive::WorldBuffer splats_world,  // [B, N, ...]
+    typename SplatPrimitive::WorldBuffer splats_world,  // [B, N, ...]
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,

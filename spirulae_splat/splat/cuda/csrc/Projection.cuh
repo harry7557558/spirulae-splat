@@ -27,7 +27,7 @@ std::tuple<
     TensorList  // out splats
 > projection_3dgs_hetero_forward_tensor(
     // inputs
-    const TensorList &in_splats_tensor,
+    const TensorList in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
@@ -46,7 +46,7 @@ std::tuple<
     at::Tensor  // v_viewmats
 > projection_3dgs_hetero_backward_tensor(
     // fwd inputs
-    const TensorList &splats_world_tuple,
+    const TensorList splats_world,
     const at::Tensor viewmats, // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
@@ -60,7 +60,7 @@ std::tuple<
     const at::Tensor gaussian_ids, // [nnz]
     const at::Tensor aabb,  // [nnz, 4]
     // grad outputs
-    const TensorList &v_splats_proj_tuple,
+    const TensorList v_splats_proj,
     const bool viewmats_requires_grad
 );
 
@@ -74,7 +74,7 @@ std::tuple<
     TensorList  // out splats
 > projection_3dgut_hetero_forward_tensor(
     // inputs
-    const TensorList &in_splats_tensor,
+    const TensorList in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
@@ -93,7 +93,7 @@ std::tuple<
     at::Tensor  // v_viewmats
 > projection_3dgut_hetero_backward_tensor(
     // fwd inputs
-    const TensorList &splats_world_tuple,
+    const TensorList splats_world,
     const at::Tensor viewmats, // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
@@ -107,7 +107,7 @@ std::tuple<
     const at::Tensor gaussian_ids, // [nnz]
     const at::Tensor aabb,  // [nnz, 4]
     // grad outputs
-    const TensorList &v_splats_proj_tuple,
+    const TensorList v_splats_proj,
     const bool viewmats_requires_grad
 );
 
@@ -121,7 +121,7 @@ std::tuple<
     TensorList  // out splats
 > projection_mip_hetero_forward_tensor(
     // inputs
-    const TensorList &in_splats_tensor,
+    const TensorList in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
@@ -140,7 +140,7 @@ std::tuple<
     at::Tensor  // v_viewmats
 > projection_mip_hetero_backward_tensor(
     // fwd inputs
-    const TensorList &splats_world_tuple,
+    const TensorList splats_world,
     const at::Tensor viewmats, // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
@@ -154,7 +154,7 @@ std::tuple<
     const at::Tensor gaussian_ids, // [nnz]
     const at::Tensor aabb,  // [nnz, 4]
     // grad outputs
-    const TensorList &v_splats_proj_tuple,
+    const TensorList v_splats_proj,
     const bool viewmats_requires_grad
 );
 

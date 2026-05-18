@@ -36,7 +36,7 @@ __device__ __forceinline__ float3 remapAABB(float3 b, float rel_scale) {
 
 template<bool remap>
 __device__ bool getAABB(
-    const Vanilla3DGS::WorldBuffer& splatBuffer, long idx,
+    const Vanilla3DGS<0>::WorldBuffer& splatBuffer, long idx,
     float3 &aabb_min, float3 &aabb_max, float rel_scale = 1.0f
 ) {
     float3 mean = splatBuffer.means(idx);
@@ -180,7 +180,7 @@ struct Tile {
     }
 
     // return negative if no overlap, strictly positive for sorting ID
-    __device__ __forceinline__ float isOverlap(const Vanilla3DGS::WorldBuffer& splatBuffer, long idx) const {
+    __device__ __forceinline__ float isOverlap(const Vanilla3DGS<0>::WorldBuffer& splatBuffer, long idx) const {
         // TODO: primitive aware version with less false positives
         float3 aabb_min, aabb_max;
         bool valid_aabb = getAABB<false>(splatBuffer, idx, aabb_min, aabb_max);
@@ -1539,24 +1539,24 @@ intersect_splat_tile_3dgs(
     const CameraDistortionCoeffsTensor& dist_coeffs,
     float rel_scale
 ) {
-    Vanilla3DGS::WorldBuffer splats_tensor(splats_tuple);
+    Vanilla3DGS<0>::WorldBuffer splats_tensor(splats_tuple);
 
     if (cmt(camera_model) == ssplat::CameraModelType::PINHOLE) {
         TileBuffers<ssplat::CameraModelType::PINHOLE> tile_buffers =
             {width, height, viewmats, intrins, dist_coeffs};
-        return SplatTileIntersector<Vanilla3DGS, ssplat::CameraModelType::PINHOLE>
+        return SplatTileIntersector<Vanilla3DGS<0>, ssplat::CameraModelType::PINHOLE>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
     else if (cmt(camera_model) == ssplat::CameraModelType::FISHEYE) {
         TileBuffers<ssplat::CameraModelType::FISHEYE> tile_buffers =
             {width, height, viewmats, intrins, dist_coeffs};
-        return SplatTileIntersector<Vanilla3DGS, ssplat::CameraModelType::FISHEYE>
+        return SplatTileIntersector<Vanilla3DGS<0>, ssplat::CameraModelType::FISHEYE>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
     else if (cmt(camera_model) == ssplat::CameraModelType::EQUISOLID) {
         TileBuffers<ssplat::CameraModelType::EQUISOLID> tile_buffers =
             {width, height, viewmats, intrins, dist_coeffs};
-        return SplatTileIntersector<Vanilla3DGS, ssplat::CameraModelType::EQUISOLID>
+        return SplatTileIntersector<Vanilla3DGS<0>, ssplat::CameraModelType::EQUISOLID>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
     else

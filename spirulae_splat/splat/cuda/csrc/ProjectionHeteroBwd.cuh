@@ -22,7 +22,7 @@ __global__ void projection_3dgs_hetero_backward_kernel(
     const long C,
     const long N,
     const uint32_t nnz,
-    const typename SplatPrimitive::WorldBuffer splats_world,
+    typename SplatPrimitive::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -79,7 +79,7 @@ __global__ void projection_3dgs_hetero_backward_kernel(
     v_splat_proj.load(v_splats_proj, thread_idx);
 
     // Projection
-    typename SplatPrimitive::World v_splat_world = SplatPrimitive::World::zero();
+    typename SplatPrimitive::World v_splat_world = SplatPrimitive::World::zero(v_splats_world, splat_idx);
     float3x3 v_R = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
     float3 v_t = {0.f, 0.f, 0.f};
     splat_world.template project_vjp<camera_model>(cam, v_splat_proj, v_splat_world, v_R, v_t);

@@ -200,8 +200,8 @@ std::tuple<
     bool output_distortion
 ) {
     return (output_distortion ?
-        rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, true> :
-        rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT, false>
+        rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT<0>, true> :
+        rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT<0>, false>
     )(
         splats_w, splats_s, gaussian_ids,
         viewmats, intrins, cmt(camera_model), dist_coeffs,

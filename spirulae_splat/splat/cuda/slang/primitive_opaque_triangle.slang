@@ -15,7 +15,7 @@
     const float4 quat, \
     const float3 scale, \
     const float2 hardness, \
-    const float3 sh_coeffs[16], \
+    inout float3 sh_coeffs[16], \
     const float3 ch_coeffs[2], \
     const float3x3 R, \
     const float3 t, \
@@ -179,7 +179,7 @@ _DEF_projection_opaque_triangle(projection_opaque_triangle_fisheye, CameraModelT
     const float4 quat, \
     const float3 scale, \
     const float2 hardness, \
-    const float3 sh_coeffs[16], \
+    inout float3 sh_coeffs[16], \
     const float3 ch_coeffs[2], \
     const float3x3 R, \
     const float3 t, \

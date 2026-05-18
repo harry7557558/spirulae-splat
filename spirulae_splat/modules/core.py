@@ -73,7 +73,8 @@ class Renderer:
             assert features_sh.shape == batch_dims + (N, 0, 3) or \
                 features_sh.shape == batch_dims + (N, 3, 3) or \
                 features_sh.shape == batch_dims + (N, 8, 3) or \
-                features_sh.shape == batch_dims + (N, 15, 3), features_sh.shape
+                features_sh.shape == batch_dims + (N, 15, 3) or \
+                features_sh.shape == batch_dims + (N, 24, 3), features_sh.shape
         if sv_sites is not None and sv_colors is not None:
             num_sv = sv_sites.shape[-2]
             assert sv_sites.shape == batch_dims + (N, num_sv, 3)
@@ -87,7 +88,7 @@ class Renderer:
         self.primitive = primitive
         self.splats_world = splats_world
 
-        self.use_fused_proj_bwd_optim = False
+        self.use_fused_proj_bwd_optim = True
 
     def set_params(
         self,

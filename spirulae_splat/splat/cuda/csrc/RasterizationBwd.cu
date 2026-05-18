@@ -289,7 +289,7 @@ std::tuple<
     std::optional<TensorList> v_splats_w,
     std::optional<TensorList> v_splats_s
 ) {
-    return rasterize_to_pixels_bwd_tensor<Vanilla3DGS>(
+    return rasterize_to_pixels_bwd_tensor<Vanilla3DGS<0>>(
         num_splats, splats_w, splats_s, gaussian_ids,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, accum_weight_map, v_render_outputs, v_render_Ts,
@@ -330,13 +330,13 @@ std::tuple<
     std::optional<TensorList> v_splats_w,
     std::optional<TensorList> v_splats_s
 ) {
-    using Fn = decltype(&_rasterize_to_pixels_bwd_tensor<Vanilla3DGS, false, true, false>);
+    using Fn = decltype(&_rasterize_to_pixels_bwd_tensor<Vanilla3DGS<0>, false, true, false>);
     static constexpr Fn funcs[2][2] = { {
-        _rasterize_to_pixels_bwd_tensor<Vanilla3DGS, false, true, false>,
-        _rasterize_to_pixels_bwd_tensor<Vanilla3DGS, false, true, true>,
+        _rasterize_to_pixels_bwd_tensor<Vanilla3DGS<0>, false, true, false>,
+        _rasterize_to_pixels_bwd_tensor<Vanilla3DGS<0>, false, true, true>,
     }, {
-        _rasterize_to_pixels_bwd_tensor<Vanilla3DGS, true, true, false>,
-        _rasterize_to_pixels_bwd_tensor<Vanilla3DGS, true, true, true>,
+        _rasterize_to_pixels_bwd_tensor<Vanilla3DGS<0>, true, true, false>,
+        _rasterize_to_pixels_bwd_tensor<Vanilla3DGS<0>, true, true, true>,
     } };
     return funcs[v_distortion_outputs.has_value()][accum_weight_map.has_value()](
         num_splats, splats_w, splats_s, gaussian_ids,

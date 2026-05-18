@@ -10,10 +10,12 @@ namespace Slang3DGSSV {
 
 #include "PrimitiveBase3DGS.cuh"
 
+#if 0
 template<int num_sv>
 struct SphericalVoronoi3DGUT : public _BasePrimitive3DGS {
     static constexpr RenderOutputType pixelType = RenderOutputType::RGB_D;
 };
+#endif
 
 
 #if 0
@@ -223,7 +225,6 @@ struct SphericalVoronoi3DGUT<num_sv>::World : public Base3DGUT::World {
 
 #endif  // #ifdef __CUDACC__
 };
-#endif
 
 
 #ifdef __CUDACC__
@@ -331,3 +332,5 @@ inline __device__ void project_fisheye_vjp(
 #endif  // #ifdef __CUDACC__
 
 typedef SphericalVoronoi3DGUT<2> SphericalVoronoi3DGUT_Default;
+
+#endif

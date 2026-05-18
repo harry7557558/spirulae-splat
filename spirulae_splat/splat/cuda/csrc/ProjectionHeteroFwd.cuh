@@ -35,7 +35,7 @@ template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
 __global__ void projection_hetero_forward_kernel(
     const uint32_t C,
     const uint32_t nnz,
-    const typename SplatPrimitive::WorldBuffer splats_world,
+    typename SplatPrimitive::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,

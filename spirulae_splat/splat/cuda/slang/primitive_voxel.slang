@@ -6,8 +6,8 @@
 #define _projection_voxel_eval3d_ARGS \
     const no_diff float3 pos, \
     const no_diff float size, \
-    const float[8] densities, \
-    const float3 sh_coeffs[16], \
+    const in float[8] densities, \
+    inout float3 sh_coeffs[16], \
     const float3x3 R, \
     const float3 t, \
     no_diff const float fx, \
@@ -122,8 +122,8 @@ _DEF_projection_voxel_eval3d(projection_voxel_eval3d_fisheye, CameraModelType::F
 #define _projection_voxel_eval3d_vjp_ARGS \
     const no_diff float3 pos, \
     const no_diff float size, \
-    const float[8] densities, \
-    const float3 sh_coeffs[16], \
+    const inout float[8] densities, \
+    inout float3 sh_coeffs[16], \
     const float3x3 R, \
     const float3 t, \
     const float fx, \

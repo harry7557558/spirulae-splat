@@ -23,7 +23,7 @@ __global__ void projection_fused_bwd_kernel(
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
-    const typename SplatPrimitive::WorldBuffer splats_world,
+    typename SplatPrimitive::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -90,13 +90,13 @@ __global__ void projection_fused_bwd_kernel(
     }
 
     // Projection
-    typename SplatPrimitive::World v_splat_world = SplatPrimitive::World::zero();
+    typename SplatPrimitive::World v_splat_world = SplatPrimitive::World::zero(v_splats_world, gid);
     float3x3 v_R = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
     float3 v_t = {0.f, 0.f, 0.f};
     float3 vr_world_pos = {0.f, 0.f, 0.f};
     float3 h_world_pos = {0.f, 0.f, 0.f};
-    typename SplatPrimitive::World vr_splat_world = SplatPrimitive::World::zero();
-    typename SplatPrimitive::World h_splat_world = SplatPrimitive::World::zero();
+    typename SplatPrimitive::World vr_splat_world = SplatPrimitive::World::zero(vr_splats_world, gid);
+    typename SplatPrimitive::World h_splat_world = SplatPrimitive::World::zero(h_splats_world, gid);
     if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::None) {
         splat_world.template project_vjp<camera_model>(cam, v_splat_screen, v_splat_world, v_R, v_t);
     } else if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
@@ -150,7 +150,7 @@ void projection_fused_bwd_kernel_wrapper(
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
-    const typename SplatPrimitive::WorldBuffer splats_world,
+    typename SplatPrimitive::WorldBuffer splats_world,
     const float * viewmats, // [C, 4, 4]
     const float4 * intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,

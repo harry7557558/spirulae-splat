@@ -45,7 +45,7 @@ def generate_kernel_instantiation(
         includes: List[List[str]],
         _names: set = set()
     ):
-    assert len(maps) == len(includes)
+    assert len(maps) == len(includes), (len(maps), len(includes))
     for map, includes in zip(maps, includes):
         definition = "template " + template_definition
         assert len(map) == len(map_header)
@@ -106,7 +106,13 @@ def generate_ProjectionFwd():
         map_header = ["typename SplatPrimitive", None]
         map_body = [
             *itertools.product(
-                ["Vanilla3DGS", "MipSplatting", "Vanilla3DGUT"],
+                [
+                    "Vanilla3DGS<0>", "MipSplatting<0>", "Vanilla3DGUT<0>",
+                    "Vanilla3DGS<1>", "MipSplatting<1>", "Vanilla3DGUT<1>",
+                    "Vanilla3DGS<2>", "MipSplatting<2>", "Vanilla3DGUT<2>",
+                    "Vanilla3DGS<3>", "MipSplatting<3>", "Vanilla3DGUT<3>",
+                    "Vanilla3DGS<4>", "MipSplatting<4>", "Vanilla3DGUT<4>",
+                ],
                 ["ssplat::CameraModelType::PINHOLE", "ssplat::CameraModelType::FISHEYE", "ssplat::CameraModelType::EQUISOLID"],
             )
             # ("SphericalVoronoi3DGUT<2>", "ssplat::CameraModelType::PINHOLE"),
@@ -128,8 +134,10 @@ def generate_ProjectionFwd():
             # ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE"),
             # ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE"),
         ]
-        includes = [("Primitive3DGS.cuh", kernel_filename)] * 6 + \
-            [("Primitive3DGUT.cuh", kernel_filename)] * 3 #+ \
+        includes = [*(
+            [("Primitive3DGS.cuh", kernel_filename)] * 6 +
+            [("Primitive3DGUT.cuh", kernel_filename)] * 3
+        )] * 5 # + \
             # [("Primitive3DGUT_SV.cuh", kernel_filename)] * 14 + \
             # [("PrimitiveOpaqueTriangle.cuh", kernel_filename)] * 2 + \
             # [("PrimitiveVoxel.cuh", kernel_filename)] * 2
@@ -142,7 +150,13 @@ def generate_ProjectionBwd():
     map_header = ["typename SplatPrimitive", None, None]
     map_body = [
         *itertools.product(
-            ["Vanilla3DGS", "MipSplatting", "Vanilla3DGUT"],
+            [
+                "Vanilla3DGS<0>", "MipSplatting<0>", "Vanilla3DGUT<0>",
+                "Vanilla3DGS<1>", "MipSplatting<1>", "Vanilla3DGUT<1>",
+                "Vanilla3DGS<2>", "MipSplatting<2>", "Vanilla3DGUT<2>",
+                "Vanilla3DGS<3>", "MipSplatting<3>", "Vanilla3DGUT<3>",
+                "Vanilla3DGS<4>", "MipSplatting<4>", "Vanilla3DGUT<4>",
+            ],
             ["ssplat::CameraModelType::PINHOLE", "ssplat::CameraModelType::FISHEYE", "ssplat::CameraModelType::EQUISOLID"],
             ["HessianDiagonalOutputMode::None", "HessianDiagonalOutputMode::Position", "HessianDiagonalOutputMode::AllReasonable"],
         )
@@ -165,8 +179,10 @@ def generate_ProjectionBwd():
         # ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
         # ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
     ]
-    includes = [("Primitive3DGS.cuh", "ProjectionBwd_kernel.cuh")] * 18 + \
-        [("Primitive3DGUT.cuh", "ProjectionBwd_kernel.cuh")] * 9 #+ \
+    includes = [*(
+        [("Primitive3DGS.cuh", "ProjectionBwd_kernel.cuh")] * 18 +
+        [("Primitive3DGUT.cuh", "ProjectionBwd_kernel.cuh")] * 9
+    )] * 5 #+ \
         # [("Primitive3DGUT_SV.cuh", "ProjectionBwd_kernel.cuh")] * 14 + \
         # [("PrimitiveOpaqueTriangle.cuh", "ProjectionBwd_kernel.cuh")] * 2 + \
         # [("PrimitiveVoxel.cuh", "ProjectionBwd_kernel.cuh")] * 2
@@ -179,15 +195,23 @@ def generate_FusedProjectionBwdOptim():
     map_header = ["typename SplatPrimitive", None, None, None]
     map_body = [
         *itertools.product(
-            ["Vanilla3DGS", "MipSplatting", "Vanilla3DGUT"],
+            [
+                "Vanilla3DGS<0>", "MipSplatting<0>", "Vanilla3DGUT<0>",
+                "Vanilla3DGS<1>", "MipSplatting<1>", "Vanilla3DGUT<1>",
+                "Vanilla3DGS<2>", "MipSplatting<2>", "Vanilla3DGUT<2>",
+                "Vanilla3DGS<3>", "MipSplatting<3>", "Vanilla3DGUT<3>",
+                "Vanilla3DGS<4>", "MipSplatting<4>", "Vanilla3DGUT<4>",
+            ],
             ["ssplat::CameraModelType::PINHOLE", "ssplat::CameraModelType::FISHEYE", "ssplat::CameraModelType::EQUISOLID"],
             # ["HessianDiagonalOutputMode::None", "HessianDiagonalOutputMode::Position", "HessianDiagonalOutputMode::AllReasonable"],
             ["HessianDiagonalOutputMode::None"],
             ["true", "false"],
         )
     ]
-    includes = [("Primitive3DGS.cuh", "FusedProjectionBwdOptim_kernel.cuh")] * 12 + \
-        [("Primitive3DGUT.cuh", "FusedProjectionBwdOptim_kernel.cuh")] * 6 #+ \
+    includes = [*(
+        [("Primitive3DGS.cuh", "FusedProjectionBwdOptim_kernel.cuh")] * 12 +
+        [("Primitive3DGUT.cuh", "FusedProjectionBwdOptim_kernel.cuh")] * 6
+    )] * 5 #+ \
         # [("Primitive3DGUT_SV.cuh", "FusedProjectionBwdOptim_kernel.cuh")] * 14 + \
         # [("PrimitiveOpaqueTriangle.cuh", "FusedProjectionBwdOptim_kernel.cuh")] * 2 + \
         # [("PrimitiveVoxel.cuh", "FusedProjectionBwdOptim_kernel.cuh")] * 2
@@ -199,7 +223,7 @@ def generate_RasterizationFwd():
     definition = extract_kernel_definition("RasterizationFwd.cu", "rasterize_to_pixels_fwd_kernel_wrapper")
     map_header = ["typename SplatPrimitive", None]
     map_body = [*itertools.product(
-        ["Vanilla3DGS"],
+        ["Vanilla3DGS<0>"],
         ["true", "false"],
     )]
     includes = [("Primitive3DGS.cuh", "RasterizationFwd_kernel.cuh")] * 2
@@ -211,7 +235,7 @@ def generate_RasterizationBwd():
     definition = extract_kernel_definition("RasterizationBwd.cu", "rasterize_to_pixels_bwd_kernel_wrapper")
     map_header = ["typename SplatPrimitive", None, None, None]
     map_body = [*itertools.product(
-        ["Vanilla3DGS"],
+        ["Vanilla3DGS<0>"],
         ["true", "false"],
         ["true", "false"],
         ["true", "false"],
@@ -226,7 +250,7 @@ def generate_RasterizationEval3DFwd():
     map_header = ["typename SplatPrimitive", None, None]
     map_body = [
         *itertools.product(
-            ["Vanilla3DGUT"],
+            ["Vanilla3DGUT<0>"],
             ["ssplat::CameraModelType::PINHOLE", "ssplat::CameraModelType::FISHEYE", "ssplat::CameraModelType::EQUISOLID"],
             ["true", "false"],
         ),
@@ -245,7 +269,7 @@ def generate_RasterizationEval3DBwd():
     map_header = ["typename SplatPrimitive", None, None, None, None, None]
     map_body = [
         *itertools.product(
-            ["Vanilla3DGUT"],
+            ["Vanilla3DGUT<0>"],
             ["ssplat::CameraModelType::PINHOLE", "ssplat::CameraModelType::FISHEYE", "ssplat::CameraModelType::EQUISOLID"],
             ['true', 'false'],
             ['true', 'false'],

@@ -11,6 +11,7 @@ namespace SlangProjectionUtils {
 #include "Primitive.cuh"
 
 
+template<int _sh_degree>
 struct _BasePrimitive3DGS {
     class WorldBuffer;
     class ScreenBuffer;
@@ -23,8 +24,12 @@ struct _BasePrimitive3DGS {
         float4 quat;
         float3 scale;  // log
         float opacity;  // logit
-        // TODO: register pressure
-        FixedArray<float3, 16> sh_coeffs;
+        float3 features_dc;
+        float3* __restrict__ features_sh;  // don't load everything into register
+
+        static constexpr int num_sh() {
+            return _sh_degree * (_sh_degree + 2);
+        }
 
         static __device__ __forceinline__ World zero() {
             World w;
@@ -32,19 +37,29 @@ struct _BasePrimitive3DGS {
             w.quat = make_float4(0.f);
             w.scale = make_float3(0.f);
             w.opacity = 0.f;
-            for (int i = 0; i < 16; ++i)
-                w.sh_coeffs[i] = make_float3(0.f);
+            w.features_dc = make_float3(0.f);
+            w.features_sh = nullptr;
             return w;
         }
 
-        __device__ __forceinline__ void load(const WorldBuffer &buffer, int64_t i) {
+        static __device__ __forceinline__ World zero(WorldBuffer &buffer, int64_t i) {
+            World w;
+            w.mean = make_float3(0.f);
+            w.quat = make_float4(0.f);
+            w.scale = make_float3(0.f);
+            w.opacity = 0.f;
+            w.features_dc = make_float3(0.f);
+            w.features_sh = &buffer.features_sh(i, 0);
+            return w;
+        }
+
+        __device__ __forceinline__ void load(WorldBuffer &buffer, int64_t i) {
             mean = buffer.means(i);
             quat = buffer.quats(i);
             scale = buffer.scales(i);
             opacity = buffer.opacities(i);
-            sh_coeffs[0] = buffer.features_dc(i);
-            for (int j = 0; j < 15; ++j)
-                sh_coeffs[j+1] = j < buffer.num_sh() ? buffer.features_sh(i, j) : make_float3(0.f);
+            features_dc = buffer.features_dc(i);
+            features_sh = &buffer.features_sh(i, 0);
         }
 
         __device__ __forceinline__ void atomicLoad(WorldBuffer &buffer, int64_t i) {
@@ -52,19 +67,9 @@ struct _BasePrimitive3DGS {
             if (&buffer.quats(0)) quat += buffer.quats(i);
             if (&buffer.scales(0)) scale += buffer.scales(i);
             if (&buffer.opacities(0)) opacity += buffer.opacities(i);
-            if (&buffer.features_dc(0)) sh_coeffs[0] += buffer.features_dc(i);
-            for (int j = 0; j < buffer.num_sh(); ++j)
-                if (&buffer.features_sh(0, 0)) sh_coeffs[j+1] += buffer.features_sh(i, j);
-        }
-
-        __device__ __forceinline__ void store(WorldBuffer &buffer, int64_t i) const {
-            if (&buffer.means(0)) buffer.means(i) = mean;
-            if (&buffer.quats(0)) buffer.quats(i) = quat;
-            if (&buffer.scales(0)) buffer.scales(i) = scale;
-            if (&buffer.opacities(0)) buffer.opacities(i) = opacity;
-            if (&buffer.features_dc(0)) buffer.features_dc(i) = sh_coeffs[0];
-            for (int j = 0; j < buffer.num_sh(); ++j)
-                if (&buffer.features_sh(0, 0)) buffer.features_sh(i, j) = sh_coeffs[j+1];
+            if (&buffer.features_dc(0)) features_dc += buffer.features_dc(i);
+            // This function is used in fused projection backwards and optimizer
+            // features_sh must be handled by calling code manually
         }
 
         __device__ __forceinline__ void atomicStore(WorldBuffer &buffer, int64_t i) const {
@@ -72,9 +77,9 @@ struct _BasePrimitive3DGS {
             if (&buffer.quats(0)) atomicAddFVec(&buffer.quats(i), quat);
             if (&buffer.scales(0)) atomicAddFVec(&buffer.scales(i), scale);
             if (&buffer.opacities(0)) atomicAddFVec(&buffer.opacities(i), opacity);
-            if (&buffer.features_dc(0)) atomicAddFVec(&buffer.features_dc(i), sh_coeffs[0]);
-            for (int j = 0; j < buffer.num_sh(); ++j)
-                if (&buffer.features_sh(0, 0)) atomicAddFVec(&buffer.features_sh(i, j), sh_coeffs[j+1]);
+            if (&buffer.features_dc(0)) atomicAddFVec(&buffer.features_dc(i), features_dc);
+            // This function is used in projection backward
+            // features_sh is properly handled by projection function in general
         }
     };
     #endif
@@ -114,6 +119,16 @@ struct _BasePrimitive3DGS {
     #endif  // #ifdef __CUDACC__
 
     #ifndef NO_TORCH
+        int sh_degree() {
+            int num_sh = _strides[5] / 3;
+            return (
+                num_sh == 3 ? 1 :
+                num_sh == 8 ? 2 :
+                num_sh == 15 ? 3 :
+                num_sh == 24 ? 4 :
+                0
+            );
+        }
         static TensorList empty(int64_t size, int num_sh) {
             return TensorArray<6>::empty(size, {3, 4, 3, 1, 3, (int32_t)(3*num_sh)});
         }
@@ -234,20 +249,21 @@ struct _BasePrimitive3DGS {
 
 
 
-struct _BasePrimitive3DGUT : _BasePrimitive3DGS {
+template<int _sh_degree>
+struct _BasePrimitive3DGUT : _BasePrimitive3DGS<_sh_degree> {
 
-    class WorldBuffer : public _BasePrimitive3DGS::WorldBuffer {
-        using _BasePrimitive3DGS::WorldBuffer::WorldBuffer;
+    class WorldBuffer : public _BasePrimitive3DGS<_sh_degree>::WorldBuffer {
+        using _BasePrimitive3DGS<_sh_degree>::WorldBuffer::WorldBuffer;
     };
 
     #ifdef __CUDACC__
-    struct World : public _BasePrimitive3DGS::World {
+    struct World : public _BasePrimitive3DGS<_sh_degree>::World {
         __device__ World() = default;
-        __device__ World(const _BasePrimitive3DGS::World& other) {
-            _BasePrimitive3DGS::World::operator=(other);
+        __device__ World(const typename _BasePrimitive3DGS<_sh_degree>::World& other) {
+            _BasePrimitive3DGS<_sh_degree>::World::operator=(other);
         }
-        __device__ World& operator=(const _BasePrimitive3DGS::World& other) {
-            _BasePrimitive3DGS::World::operator=(other);
+        __device__ World& operator=(const typename _BasePrimitive3DGS<_sh_degree>::World& other) {
+            _BasePrimitive3DGS<_sh_degree>::World::operator=(other);
             return *this;
         }
     };

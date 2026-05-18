@@ -362,13 +362,13 @@ std::tuple<
     std::optional<TensorList> v_splats_s,
     bool need_viewmat_grad
 ) {
-    using Fn = decltype(&rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, false, false>);
+    using Fn = decltype(&rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, false, false>);
     static constexpr Fn funcs[2][2] = { {
-        rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, false, false>,
-        rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, false, true>,
+        rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, false, false>,
+        rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, false, true>,
     }, {
-        rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, true, false>,
-        rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, true, true>,
+        rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, true, false>,
+        rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, true, true>,
     } };
     return funcs[v_distortion_outputs.has_value()][accum_weight_map.has_value()](
         num_splats, splats_w, splats_s, gaussian_ids,
@@ -418,13 +418,13 @@ std::tuple<
     std::optional<TensorList> v_splats_s,
     bool need_viewmat_grad
 ) {
-    using Fn = decltype(&_rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, false, true, false>);
+    using Fn = decltype(&_rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, false, true, false>);
     static constexpr Fn funcs[2][2] = { {
-        _rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, false, true, false>,
-        _rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, false, true, true>,
+        _rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, false, true, false>,
+        _rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, false, true, true>,
     }, {
-        _rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, true, true, false>,
-        _rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT, true, true, true>,
+        _rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, true, true, false>,
+        _rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, true, true, true>,
     } };
     return funcs[v_distortion_outputs.has_value()][accum_weight_map.has_value()](
         num_splats, splats_w, splats_s, gaussian_ids,
