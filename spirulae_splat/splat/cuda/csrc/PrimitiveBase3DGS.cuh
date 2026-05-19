@@ -25,7 +25,7 @@ struct _BasePrimitive3DGS {
         float3 scale;  // log
         float opacity;  // logit
         float3 features_dc;
-        float3* __restrict__ features_sh;  // don't load everything into register
+        float* __restrict__ features_sh;  // don't load everything into register
 
         static constexpr int num_sh() {
             return _sh_degree * (_sh_degree + 2);
@@ -49,7 +49,7 @@ struct _BasePrimitive3DGS {
             w.scale = make_float3(0.f);
             w.opacity = 0.f;
             w.features_dc = make_float3(0.f);
-            w.features_sh = &buffer.features_sh(i, 0);
+            w.features_sh = buffer.features_sh(i);
             return w;
         }
 
@@ -59,7 +59,7 @@ struct _BasePrimitive3DGS {
             scale = buffer.scales(i);
             opacity = buffer.opacities(i);
             features_dc = buffer.features_dc(i);
-            features_sh = &buffer.features_sh(i, 0);
+            features_sh = buffer.features_sh(i);
         }
 
         __device__ __forceinline__ void atomicLoad(WorldBuffer &buffer, int64_t i) {
@@ -98,10 +98,8 @@ struct _BasePrimitive3DGS {
             { return *reinterpret_cast<float*>(&_data[3][i]); }
         __forceinline__ __device__ float3& features_dc(int64_t i)
             { return *reinterpret_cast<float3*>(&_data[4][3*i]); }
-        __forceinline__ __device__ int32_t num_sh() const
-            { return _strides[5] / 3; }
-        __forceinline__ __device__ float3& features_sh(int64_t i, int64_t j)
-            { return *reinterpret_cast<float3*>(&_data[5][_strides[5]*i+3*j]); }
+        __forceinline__ __device__ float* features_sh(int64_t i)
+            { return &_data[5][_strides[5]*i]; }
 
         __forceinline__ __device__ float3 means(int64_t i) const
             { return *reinterpret_cast<float3*>(&_data[0][3*i]); }
@@ -113,8 +111,8 @@ struct _BasePrimitive3DGS {
             { return *reinterpret_cast<float*>(&_data[3][i]); }
         __forceinline__ __device__ float3 features_dc(int64_t i) const
             { return *reinterpret_cast<float3*>(&_data[4][3*i]); }
-        __forceinline__ __device__ float3 features_sh(int64_t i, int64_t j) const
-            { return *reinterpret_cast<float3*>(&_data[5][_strides[5]*i+3*j]); }
+        __forceinline__ __device__ const float* features_sh(int64_t i) const
+            { return &_data[5][_strides[5]*i]; }
 
     #endif  // #ifdef __CUDACC__
 

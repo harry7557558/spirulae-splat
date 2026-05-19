@@ -74,19 +74,19 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
                 //     sh_degree, this->mean, cam.R, cam.t, this->features_dc, this->features_sh
                 // );
                 if constexpr (sh_degree == 0) screen.rgb = SlangHarmonics::sh0_to_color
-                    (this->mean, cam.R, cam.t, this->features_dc, this->features_sh);
+                    (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
                 else if constexpr (sh_degree == 1) screen.rgb = SlangHarmonics::sh1_to_color
-                    (this->mean, cam.R, cam.t, this->features_dc, this->features_sh);
+                    (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
                 else if constexpr (sh_degree == 2) screen.rgb = SlangHarmonics::sh2_to_color
-                    (this->mean, cam.R, cam.t, this->features_dc, this->features_sh);
+                    (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
                 else if constexpr (sh_degree == 3) screen.rgb = SlangHarmonics::sh3_to_color
-                    (this->mean, cam.R, cam.t, this->features_dc, this->features_sh);
+                    (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
                 else if constexpr (sh_degree == 4) screen.rgb = SlangHarmonics::sh4_to_color
-                    (this->mean, cam.R, cam.t, this->features_dc, this->features_sh);
+                    (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
             }
         }
 
-        template<ssplat::CameraModelType camera_model>
+        template<ssplat::CameraModelType camera_model, bool atomic=true>
         inline __device__ void project_vjp(
             ProjCamera cam,
             typename _Base3DGS<sh_degree, antialiased>::Screen v_screen,
@@ -124,11 +124,11 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
                 );
             // SH: atomic for global memory, add for local/shared memory
             #define _ARGS ( \
-                this->mean, cam.R, cam.t, this->features_dc, this->features_sh, \
-                v_screen.rgb, &v_world.features_dc, v_world.features_sh, \
+                this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh, \
+                v_screen.rgb, &v_world.features_dc, (float3*)v_world.features_sh, \
                 &v_world.mean, &v_R, &v_t \
             );
-            if constexpr (std::is_same_v<decltype(v_world.features_sh), decltype(v_world.mean)>) {
+            if constexpr (atomic) {
                 if constexpr (sh_degree == 0) SlangHarmonics::sh0_to_color_vjp_atomic _ARGS
                 else if constexpr (sh_degree == 1) SlangHarmonics::sh1_to_color_vjp_atomic _ARGS
                 else if constexpr (sh_degree == 2) SlangHarmonics::sh2_to_color_vjp_atomic _ARGS
@@ -145,7 +145,7 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
             #undef _ARGS
         }
 
-        template<ssplat::CameraModelType camera_model>
+        template<ssplat::CameraModelType camera_model, bool atomic=true>
         inline __device__ void project_vjp_h_pos(
             ProjCamera cam,
             typename _Base3DGS<sh_degree, antialiased>::Screen v_proj,
@@ -193,7 +193,7 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
             // TODO: features_dc
         }
 
-        template<ssplat::CameraModelType camera_model>
+        template<ssplat::CameraModelType camera_model, bool atomic=true>
         inline __device__ void project_vjp_h_all(
             ProjCamera cam,
             typename _Base3DGS<sh_degree, antialiased>::Screen v_proj,

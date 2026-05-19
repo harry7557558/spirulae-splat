@@ -88,7 +88,7 @@ class Renderer:
         self.primitive = primitive
         self.splats_world = splats_world
 
-        self.use_fused_proj_bwd_optim = True
+        self.use_fused_proj_bwd_optim = False
 
     def set_params(
         self,

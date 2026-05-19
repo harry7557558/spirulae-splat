@@ -57,7 +57,7 @@ template<
     HessianDiagonalOutputMode hessian_diagonal_output_mode,
     bool use_scale_agnostic_mean
 >
-#if 0
+#if 1
 __global__ void __launch_bounds__(512) fused_projection_bwd_optimizer_3dgs_kernel
 #else
 __global__ void fused_projection_bwd_optimizer_3dgs_kernel
@@ -125,19 +125,16 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     typename SplatPrimitive::World splat_world;
     splat_world.load(splats_world, gid);
 
-    // TODO: put SH degree as a template argument
     constexpr int num_sh = SplatPrimitive::World::num_sh();
     // __shared__ float3 v_sh_coeffs[num_sh*BLOCK_SIZE];
-    float3 v_sh_coeffs[num_sh == 0 ? 1 : num_sh];
+    float v_sh_coeffs[num_sh == 0 ? 1 : 3*num_sh];
 
     typename SplatPrimitive::World v_splat_world = SplatPrimitive::World::zero();
     v_splat_world.atomicLoad(v_splats_world, gid);
-    // v_splat_world.sh_degree = splat_world.sh_degree;
-    // v_splat_world.features_sh = &v_sh_coeffs[num_sh*threadIdx.x];
     v_splat_world.features_sh = &v_sh_coeffs[0];
     #pragma unroll
-    for (int i = 0; i < num_sh; ++i)
-        v_splat_world.features_sh[i] = make_float3(0.0f);
+    for (int i = 0; i < 3*num_sh; ++i)
+        v_splat_world.features_sh[i] = 0.0f;
 
     float3x3 v_R = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
     float3 v_t = {0.f, 0.f, 0.f};
@@ -188,12 +185,12 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
 
         // Accumulate gradient
         if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::None) {
-            splat_world.template project_vjp<camera_model>(cam, v_splat_screen, v_splat_world, v_R, v_t);
+            splat_world.template project_vjp<camera_model, false>(cam, v_splat_screen, v_splat_world, v_R, v_t);
         } else if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
-            splat_world.template project_vjp_h_pos<camera_model>(cam, v_splat_screen,
+            splat_world.template project_vjp_h_pos<camera_model, false>(cam, v_splat_screen,
                 vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_world_pos, h_world_pos);
         } else if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable) {
-            splat_world.template project_vjp_h_all<camera_model>(cam, v_splat_screen,
+            splat_world.template project_vjp_h_all<camera_model, false>(cam, v_splat_screen,
                 vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_splat_world, h_splat_world);
         }
 
@@ -330,15 +327,31 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
 
     // update features_sh
     // TODO: more cache-friendly memory access pattern
+    int i = 0;
+    float lr_sh = lr_features_sh * inv_bias_correction1;
+    float* v_sh_ptr = v_splat_world.features_sh;
+    float* g1_sh_ptr = g1_splats_world.features_sh(gid);
+    float* g2_sh_ptr = g2_splats_world.features_sh(gid);
+    float* sh_ptr = splats_world.features_sh(gid);
     #pragma unroll
-    for (int i = 0; i < num_sh; ++i) {
-        float3 v_sh_coeff = v_splat_world.features_sh[i];
-        float3 g1_feature_sh = beta1 * g1_splats_world.features_sh(gid, i) + (1.f - beta1) * v_sh_coeff;
-        float3 g2_feature_sh = beta2 * g2_splats_world.features_sh(gid, i) + (1.f - beta2) * v_sh_coeff*v_sh_coeff;
-        splats_world.features_sh(gid, i) = splat_world.features_sh[i] - lr_features_sh * inv_bias_correction1
-            * g1_feature_sh / (sqrtf(g2_feature_sh * inv_bias_correction2) + eps);
-        g1_splats_world.features_sh(gid, i) = g1_feature_sh;
-        g2_splats_world.features_sh(gid, i) = g2_feature_sh;
+    for (; i+3 < 3*num_sh; i += 4) {
+        float4 v_sh_coeff = {v_sh_ptr[i], v_sh_ptr[i+1], v_sh_ptr[i+2], v_sh_ptr[i+3]};
+        float4 g1_feature_sh = beta1 * float4{g1_sh_ptr[i], g1_sh_ptr[i+1], g1_sh_ptr[i+2], g1_sh_ptr[i+3]} + (1.f - beta1) * v_sh_coeff;
+        float4 g2_feature_sh = beta2 * float4{g2_sh_ptr[i], g2_sh_ptr[i+1], g2_sh_ptr[i+2], g2_sh_ptr[i+3]} + (1.f - beta2) * v_sh_coeff*v_sh_coeff;
+        float4 sh_updated = float4{sh_ptr[i], sh_ptr[i+1], sh_ptr[i+2], sh_ptr[i+3]} -
+            lr_sh * g1_feature_sh / (sqrtf(g2_feature_sh * inv_bias_correction2) + eps);
+        sh_ptr[i] = sh_updated.x; sh_ptr[i+1] = sh_updated.y; sh_ptr[i+2] = sh_updated.z; sh_ptr[i+3] = sh_updated.w;
+        g1_sh_ptr[i] = g1_feature_sh.x; g1_sh_ptr[i+1] = g1_feature_sh.y; g1_sh_ptr[i+2] = g1_feature_sh.z; g1_sh_ptr[i+3] = g1_feature_sh.w;
+        g2_sh_ptr[i] = g2_feature_sh.x; g2_sh_ptr[i+1] = g2_feature_sh.y; g2_sh_ptr[i+2] = g2_feature_sh.z; g2_sh_ptr[i+3] = g2_feature_sh.w;
+    }
+    #pragma unroll
+    for (; i < 3*num_sh; ++i) {
+        float v_sh_coeff = v_sh_ptr[i];
+        float g1_feature_sh = beta1 * g1_sh_ptr[i] + (1.f - beta1) * v_sh_coeff;
+        float g2_feature_sh = beta2 * g2_sh_ptr[i] + (1.f - beta2) * v_sh_coeff*v_sh_coeff;
+        sh_ptr[i] = sh_ptr[i] - lr_sh * g1_feature_sh / (sqrtf(g2_feature_sh * inv_bias_correction2) + eps);
+        g1_sh_ptr[i] = g1_feature_sh;
+        g2_sh_ptr[i] = g2_feature_sh;
     }
 }
 
