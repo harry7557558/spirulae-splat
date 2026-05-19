@@ -1,6 +1,7 @@
 import os
+from collections import OrderedDict
 from pathlib import Path
-from typing import Tuple, List, Dict, Optional
+from typing import Callable, List, Optional, Sequence, Tuple
 
 import re
 import itertools
@@ -37,63 +38,148 @@ def write_if_changed(path, new_text):
     return False
 
 
+def _short_slug(text: str, max_len: int = 8) -> str:
+    """
+    Turn a long identifier / filename stem into a short readable tag.
+    """
+    stem = Path(text).stem
+    stem = stem.replace("3D", "3")
+
+    # Prefer uppercase/digit structure if present.
+    tokens = re.findall(r"[A-Z]+|\d+", stem)
+    if tokens:
+        slug = "".join(tok[0] for tok in tokens if tok)
+    else:
+        slug = re.sub(r"[^A-Za-z0-9]+", "", stem)
+
+    slug = slug or "x"
+    return slug[:max_len]
+
+
+def _stable_hash(text: str, nbytes: int = 2) -> str:
+    # 4 bytes -> 8 hex chars; short but usually plenty for filenames.
+    import hashlib
+    return hashlib.blake2s(text.encode("utf-8"), digest_size=nbytes).hexdigest()
+
+
+def kernel_complexity_score(map_values, include_values):
+    # Tune these weights however you like.
+    # Example: headers are expensive, long template arguments are expensive.
+    return (
+        10.0 * len(include_values) +
+        # 0.25 * sum(len(x) for x in map_values) +
+        2.0 * sum("<" in x or ">" in x for x in map_values) +
+        10.0 * ('HessianDiagonalOutputMode::None' in map_values) +
+        50.0 * ('HessianDiagonalOutputMode::Position' in map_values) +
+        100.0 * ('HessianDiagonalOutputMode::AllReasonable' in map_values)
+    )
+
+
 def generate_kernel_instantiation(
-        predix: str,
-        template_definition: str,
-        map_header: List[Optional[str]],
-        maps: List[List[str]],
-        includes: List[List[str]],
-        _names: set = set()
-    ):
+    prefix: str,
+    template_definition: str,
+    map_header: List[Optional[str]],
+    maps: List[List[str]],
+    includes: List[List[str]],
+    score_fn: Optional[Callable[[Sequence[str], Sequence[str]], float]] = kernel_complexity_score,
+    max_file_score: float = 200.0,
+    _names: Optional[set] = None,
+):
+    """
+    Generate one or more .cu files.
+
+    Behavior:
+      1) Kernels with different include sets are always kept in different files.
+      2) Kernels with the same include set are merged into the same file until
+         the total score reaches max_file_score.
+      3) File names are short and stable, with a hash suffix for uniqueness.
+
+    score_fn(map_values, include_values) should return a tunable "complexity"
+    score for a single kernel instantiation.
+    """
+    if _names is None:
+        _names = set()
+
     assert len(maps) == len(includes), (len(maps), len(includes))
-    for map, includes in zip(maps, includes):
+    assert len(map_header) >= 0
+
+    if score_fn is None:
+        # Conservative default; tune or replace this in the caller.
+        def score_fn(map_values: Sequence[str], include_values: Sequence[str]) -> float:
+            return 1.0 + 0.15 * len(include_values) + 0.01 * sum(len(x) for x in map_values)
+
+    def instantiate_definition(map_values: Sequence[str]) -> str:
         definition = "template " + template_definition
-        assert len(map) == len(map_header)
-        for src, dst in zip(map_header, map):
+        assert len(map_values) == len(map_header), (len(map_values), len(map_header))
+
+        for src, dst in zip(map_header, map_values):
             if src is not None:
                 definition = definition.replace(src, dst)
-        template = "<\n    " + ',\n    '.join(map) + "\n>"
-        definition = definition.replace('(', template + "(", 1)
 
-        filename = [predix]
-        for name in map:
-            if '<' in name:
-                name = name.replace('<', '_').replace('>', '')
-            match = re.search(r'\w+$', name)
-            assert match, name
-            filename.append(match.group(0))
-        filename = '_'.join(filename) + ".cu"
+        template = "<\n    " + ",\n    ".join(map_values) + "\n>"
+        definition = definition.replace("(", template + "(", 1)
+        return definition
 
-        # shorten filename to avoid exceeding 32k command line length when linking on Windows
-        namemap = {
-            'PINHOLE': 'P',
-            'FISHEYE': 'F',
-            'EQUISOLID': 'S',
-            'EQUIRECTANGULAR': 'R',
-            'Vanilla3DGS': '3g',
-            'Vanilla3DGUT': '3u',
-            'SphericalVoronoi3DGUT': 'Sv3u',
-        }
-        filename = ''.join([
-            ''.join([c for c in seg.replace('3D', '3') if c.isupper() or c.isnumeric()]).capitalize() or seg[0]
-            if seg not in namemap else namemap[seg]
-            for seg in filename.rstrip('.cu').split('_')
-        ]) + '.cu'
-        assert filename not in _names, "Duplicate file name"  # TODO: append a hash suffix?
-        _names.add(filename)
-
+    def emit_file(include_key: Tuple[str, ...], batch: List[List[str]], batch_index: int) -> None:
+        # Build file content first so the hash can reflect the exact output.
         content = ""
         content += "// This file is auto generated by `generate_kernel_instantiation.py`\n\n"
         content += "#define NO_TORCH\n"
-        for include in includes:
-            content += f"#include \"{include}\"\n"
+        for inc in include_key:
+            content += f'#include "{inc}"\n'
         content += "\n"
-        content += definition
-        content += "\n"
+
+        for i, map_values in enumerate(batch):
+            if i:
+                content += "\n"
+            content += instantiate_definition(map_values)
+            content += "\n"
+
+        include_tag = _short_slug("_".join(include_key), max_len=10)
+        prefix_tag = _short_slug(prefix, max_len=12)
+        digest = _stable_hash(prefix_tag + "|" + include_tag + "|" + str(batch_index) + "|" + content)
+
+        # filename = f"{prefix_tag}_{include_tag}_{batch_index:02d}_{digest}.cu"
+        filename = f"{prefix_tag}_{include_tag}"
+        if filename in _names:
+            batch_index = 1
+            while f"{filename}_{batch_index}" in _names:
+                batch_index += 1
+            filename = f"{filename}_{batch_index}"
+        assert filename not in _names, f"Duplicate file name: {filename}"
+        _names.add(filename)
+        filename += ".cu"
 
         os.makedirs(DST_DIR, exist_ok=True)
         if write_if_changed(DST_DIR / filename, content):
             print("Generated", filename)
+
+    # Group by exact include list. This keeps kernels with different include
+    # sets in separate files.
+    grouped: "OrderedDict[Tuple[str, ...], List[Tuple[List[str], float]]]" = OrderedDict()
+    for map_values, include_values in zip(maps, includes):
+        include_key = tuple(include_values)
+        grouped.setdefault(include_key, [])
+        grouped[include_key].append((map_values, float(score_fn(map_values, include_values))))
+
+    # Split each include group into multiple files if the score budget would be exceeded.
+    for include_key, items in grouped.items():
+        batch: List[List[str]] = []
+        batch_score = 0.0
+        batch_index = 0
+
+        for map_values, score in items:
+            if batch and (batch_score + score > max_file_score):
+                emit_file(include_key, batch, batch_index)
+                batch = []
+                batch_score = 0.0
+                batch_index += 1
+
+            batch.append(map_values)
+            batch_score += score
+
+        if batch:
+            emit_file(include_key, batch, batch_index)
 
 
 def generate_ProjectionFwd():
