@@ -64,6 +64,7 @@ def bench_360_v2(config_class, path_to_360_v2: Path):
         # TODO: color correct
         config.model.use_bilateral_grid = False
         config.model.use_ppisp = False
+        # config.model.sh_reg = 0.0
         config.datamanager.load_depths = False
         config.datamanager.load_normals = False
         config.model.use_bilateral_grid_for_geometry = False
@@ -74,7 +75,10 @@ def bench_360_v2(config_class, path_to_360_v2: Path):
         try:
             trainer = Trainer(config)
             time0 = perf_counter()
+            torch.cuda.reset_peak_memory_stats()
             trainer.train()
+            peak_allocated = torch.cuda.max_memory_allocated(device=None)
+            peak_reserved = torch.cuda.max_memory_reserved(device=None)
             time1 = perf_counter()
             trainer.eval()
         except:
@@ -86,7 +90,8 @@ def bench_360_v2(config_class, path_to_360_v2: Path):
         with open(trainer.output_dir / "metrics.json", "r") as fp:
             metrics = json.load(fp)
         metrics['training_time'] = time1-time0
-        # TODO: VRAM
+        metrics['peak_allocated'] = peak_allocated / 1024**2
+        metrics['peak_reserved'] = peak_reserved / 1024**2
         all_metrics.append((scene, metrics))
 
         del trainer
@@ -122,6 +127,7 @@ def bench_zipnerf(config_class, path_to_zipnerf: Path):
         # TODO: color correct
         config.model.use_bilateral_grid = False
         config.model.use_ppisp = False
+        # config.model.sh_reg = 0.0
         config.datamanager.load_depths = False
         config.datamanager.load_normals = False
         config.model.use_bilateral_grid_for_geometry = False
@@ -133,7 +139,10 @@ def bench_zipnerf(config_class, path_to_zipnerf: Path):
         try:
             trainer = Trainer(config)
             time0 = perf_counter()
+            torch.cuda.reset_peak_memory_stats()
             trainer.train()
+            peak_allocated = torch.cuda.max_memory_allocated(device=None)
+            peak_reserved = torch.cuda.max_memory_reserved(device=None)
             time1 = perf_counter()
             trainer.eval()
         except:
@@ -145,7 +154,8 @@ def bench_zipnerf(config_class, path_to_zipnerf: Path):
         with open(trainer.output_dir / "metrics.json", "r") as fp:
             metrics = json.load(fp)
         metrics['training_time'] = time1-time0
-        # TODO: VRAM
+        metrics['peak_allocated'] = peak_allocated / 1024**2
+        metrics['peak_reserved'] = peak_reserved / 1024**2
         all_metrics.append((scene, metrics))
 
         del trainer
