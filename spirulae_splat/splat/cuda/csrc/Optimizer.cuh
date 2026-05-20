@@ -173,6 +173,19 @@ void fused_adam_with_steps_tensor(
 );
 
 
+void fused_adam_with_steps_8bit_tensor(
+    at::Tensor param,
+    at::Tensor grad,
+    at::Tensor exp_avg,
+    at::Tensor exp_avg_sq,
+    at::Tensor quant_bounds,
+    float lr,
+    std::variant<int32_t, at::Tensor> step,
+    float l2_reg,
+    float l2_reg_offset
+);
+
+
 void fused_3dgs2tr_mean_optim(
     at::Tensor means,
     at::Tensor vr_means,

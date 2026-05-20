@@ -88,7 +88,12 @@ class Renderer:
         self.primitive = primitive
         self.splats_world = splats_world
 
+        # TODO: make these configurable in command line
         self.use_fused_proj_bwd_optim = False
+
+        self.quantize_sh_optim = False
+        if self.use_fused_proj_bwd_optim:
+            self.quantize_sh_optim = False  # TODO
 
     def set_params(
         self,
@@ -153,14 +158,22 @@ class Renderer:
                     torch.zeros_like(x) for x in self.splats_world
                 ]
 
+        def alloc_optim_state():
+            if self.quantize_sh_optim:
+                return [torch.zeros_like(x) for x in self.splats_world[:-1]] + \
+                    [torch.zeros(self.splats_world[-1].shape, device=self.splats_world[-1].device, dtype=torch.uint8)]
+            return [torch.zeros_like(x) for x in self.splats_world]
+
         if not hasattr(self, 'g1_splats_world'):
-            self.g1_splats_world = [
-                torch.zeros_like(x) for x in self.splats_world
-            ]
+            self.g1_splats_world = alloc_optim_state()
         if not hasattr(self, 'g2_splats_world'):
-            self.g2_splats_world = [
-                torch.zeros_like(x) for x in self.splats_world
-            ]
+            self.g2_splats_world = alloc_optim_state()
+
+        if self.quantize_sh_optim:
+            if not hasattr(self, 'quant_bounds_sh'):
+                BLOCK_SIZE = 256
+                n = (self.splats_world[-1].numel() + BLOCK_SIZE-1) // BLOCK_SIZE
+                self.quant_bounds_sh = torch.zeros((n, 4), dtype=torch.float32, device=self.splats_world[-1].device)
 
         if hasattr(self, 'radii'):
             _make_lazy_cuda_func("set_zero")(self.radii)
@@ -663,15 +676,35 @@ class Renderer:
             model_config.sh_reg, 0.5 / 0.28209479177387814
         )
 
-        _make_lazy_cuda_func("fused_adam_with_steps")(
-            self.splats_world[5],
-            self.v_splats_world[5],
-            self.g1_splats_world[5],
-            self.g2_splats_world[5],
-            optim_config.get_scheduled_lr("features_sh", step, max_steps),
-            bias_correction_step,
-            model_config.sh_reg, 0.0
-        )
+        if self.quantize_sh_optim:
+            # TODO: probably better to use structure of array for SH here
+            _make_lazy_cuda_func("fused_adam_with_steps_8bit")(
+                self.splats_world[5],
+                self.v_splats_world[5],
+                self.g1_splats_world[5],
+                self.g2_splats_world[5],
+                self.quant_bounds_sh,
+                optim_config.get_scheduled_lr("features_sh", step, max_steps),
+                bias_correction_step,
+                model_config.sh_reg, 0.0
+            )
+            # print(self.quant_bounds_sh)
+        else:
+            _make_lazy_cuda_func("fused_adam_with_steps")(
+                self.splats_world[5],
+                self.v_splats_world[5],
+                self.g1_splats_world[5],
+                self.g2_splats_world[5],
+                optim_config.get_scheduled_lr("features_sh", step, max_steps),
+                bias_correction_step,
+                model_config.sh_reg, 0.0
+            )
+
+        return
+        g1_sh = self.g1_splats_world[5][:self.cur_num_splats] * self.cur_num_splats / (1 - 0.9 ** (step+1))
+        g2_sh = self.g2_splats_world[5][:self.cur_num_splats] * self.cur_num_splats**2 / (1 - 0.999 ** (step+1))
+        g2_sh **= 0.5
+        print(g1_sh.std().item(), g2_sh.mean().item(), g2_sh.std().item())
 
     def densify_step(
         self,

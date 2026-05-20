@@ -597,6 +597,7 @@ void densify_update_weight_tensor(
 // Relocation
 // ================
 
+template<typename g_features_sh_t3>
 __global__ void relocate_with_long_axis_split_kernel(
     int64_t cur_num_splats,
     int64_t num_new_splats,
@@ -607,7 +608,7 @@ __global__ void relocate_with_long_axis_split_kernel(
     float3*__restrict__ scales, float3*__restrict__ g1_scales, float3*__restrict__ g2_scales,
     float*__restrict__ opacs, float*__restrict__ g1_opacs, float*__restrict__ g2_opacs,
     float3*__restrict__ features_dc, float3*__restrict__ g1_features_dc, float3*__restrict__ g2_features_dc,
-    int num_sh, float3*__restrict__ features_sh, float3*__restrict__ g1_features_sh, float3*__restrict__ g2_features_sh,
+    int num_sh, float3*__restrict__ features_sh, g_features_sh_t3*__restrict__ g1_features_sh, g_features_sh_t3*__restrict__ g2_features_sh,
     float2*__restrict__ densify_accum_buffer,
     int32_t* __restrict__ bias_correction_steps
 ) {
@@ -653,8 +654,8 @@ __global__ void relocate_with_long_axis_split_kernel(
     g1_features_dc[idx_dst] = make_float3(0.0f);
     g2_features_dc[idx_dst] = make_float3(0.0f);
     for (int i = 0; i < num_sh; ++i) {  // TODO: slow; more cache friendly way to do so?
-        g1_features_sh[num_sh*idx_dst+i] = make_float3(0.0f);
-        g2_features_sh[num_sh*idx_dst+i] = make_float3(0.0f);
+        g1_features_sh[num_sh*idx_dst+i] = g_features_sh_t3{0,0,0};
+        g2_features_sh[num_sh*idx_dst+i] = g_features_sh_t3{0,0,0};
     }
     if (bias_correction_steps)
         bias_correction_steps[idx_dst] = 0;
@@ -670,8 +671,8 @@ __global__ void relocate_with_long_axis_split_kernel(
     g1_features_dc[idx_src] = make_float3(0.0f);
     g2_features_dc[idx_src] = make_float3(0.0f);
     for (int i = 0; i < num_sh; ++i) {  // TODO: slow; more cache friendly way to do so?
-        g1_features_sh[num_sh*idx_src+i] = make_float3(0.0f);
-        g2_features_sh[num_sh*idx_src+i] = make_float3(0.0f);
+        g1_features_sh[num_sh*idx_src+i] = g_features_sh_t3{0,0,0};
+        g2_features_sh[num_sh*idx_src+i] = g_features_sh_t3{0,0,0};
     }
     if (bias_correction_steps)
         bias_correction_steps[idx_src] = 0;
@@ -787,20 +788,36 @@ void relocate_splats_with_long_axis_split_tensor(
     at::Tensor src_indices = weighted_sample_without_replacement_tensor(
         cur_num_splats, densify_accum_buffer, mask, num_relocate, seed);
 
-    relocate_with_long_axis_split_kernel<<<_LAUNCH_ARGS_1D(num_relocate, 256)>>>(
-        cur_num_splats,
-        num_relocate,
-        src_indices.data_ptr<int32_t>(),
-        dst_indices.data_ptr<int32_t>(),
-        (float3*)means.data_ptr<float>(), (float3*)g1_means.data_ptr<float>(), (float3*)g2_means.data_ptr<float>(),
-        (float4*)quats.data_ptr<float>(), (float4*)g1_quats.data_ptr<float>(), (float4*)g2_quats.data_ptr<float>(),
-        (float3*)scales.data_ptr<float>(), (float3*)g1_scales.data_ptr<float>(), (float3*)g2_scales.data_ptr<float>(),
-        (float*)opacs.data_ptr<float>(), (float*)g1_opacs.data_ptr<float>(), (float*)g2_opacs.data_ptr<float>(),
-        (float3*)features_dc.data_ptr<float>(), (float3*)g1_features_dc.data_ptr<float>(), (float3*)g2_features_dc.data_ptr<float>(),
-        num_sh, (float3*)features_sh.data_ptr<float>(), (float3*)g1_features_sh.data_ptr<float>(), (float3*)g2_features_sh.data_ptr<float>(),
-        (float2*)densify_accum_buffer.data_ptr<float>(),
-        bias_correction_steps.has_value() ? bias_correction_steps.value().data_ptr<int32_t>() : nullptr
-    );
+    if (g1_features_sh.dtype() == at::kFloat)
+        relocate_with_long_axis_split_kernel<float3><<<_LAUNCH_ARGS_1D(num_relocate, 256)>>>(
+            cur_num_splats,
+            num_relocate,
+            src_indices.data_ptr<int32_t>(),
+            dst_indices.data_ptr<int32_t>(),
+            (float3*)means.data_ptr<float>(), (float3*)g1_means.data_ptr<float>(), (float3*)g2_means.data_ptr<float>(),
+            (float4*)quats.data_ptr<float>(), (float4*)g1_quats.data_ptr<float>(), (float4*)g2_quats.data_ptr<float>(),
+            (float3*)scales.data_ptr<float>(), (float3*)g1_scales.data_ptr<float>(), (float3*)g2_scales.data_ptr<float>(),
+            (float*)opacs.data_ptr<float>(), (float*)g1_opacs.data_ptr<float>(), (float*)g2_opacs.data_ptr<float>(),
+            (float3*)features_dc.data_ptr<float>(), (float3*)g1_features_dc.data_ptr<float>(), (float3*)g2_features_dc.data_ptr<float>(),
+            num_sh, (float3*)features_sh.data_ptr<float>(), (float3*)g1_features_sh.data_ptr<float>(), (float3*)g2_features_sh.data_ptr<float>(),
+            (float2*)densify_accum_buffer.data_ptr<float>(),
+            bias_correction_steps.has_value() ? bias_correction_steps.value().data_ptr<int32_t>() : nullptr
+        );
+    else
+        relocate_with_long_axis_split_kernel<uchar3><<<_LAUNCH_ARGS_1D(num_relocate, 256)>>>(
+            cur_num_splats,
+            num_relocate,
+            src_indices.data_ptr<int32_t>(),
+            dst_indices.data_ptr<int32_t>(),
+            (float3*)means.data_ptr<float>(), (float3*)g1_means.data_ptr<float>(), (float3*)g2_means.data_ptr<float>(),
+            (float4*)quats.data_ptr<float>(), (float4*)g1_quats.data_ptr<float>(), (float4*)g2_quats.data_ptr<float>(),
+            (float3*)scales.data_ptr<float>(), (float3*)g1_scales.data_ptr<float>(), (float3*)g2_scales.data_ptr<float>(),
+            (float*)opacs.data_ptr<float>(), (float*)g1_opacs.data_ptr<float>(), (float*)g2_opacs.data_ptr<float>(),
+            (float3*)features_dc.data_ptr<float>(), (float3*)g1_features_dc.data_ptr<float>(), (float3*)g2_features_dc.data_ptr<float>(),
+            num_sh, (float3*)features_sh.data_ptr<float>(), (uchar3*)g1_features_sh.data_ptr<uint8_t>(), (uchar3*)g2_features_sh.data_ptr<uint8_t>(),
+            (float2*)densify_accum_buffer.data_ptr<float>(),
+            bias_correction_steps.has_value() ? bias_correction_steps.value().data_ptr<int32_t>() : nullptr
+        );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
@@ -823,20 +840,36 @@ void add_splats_with_long_axis_split_tensor(
     at::Tensor split_indices = weighted_sample_without_replacement_tensor(
         cur_num_splats, densify_accum_buffer, std::nullopt, num_new_splats, seed);
 
-    relocate_with_long_axis_split_kernel<<<_LAUNCH_ARGS_1D(num_new_splats, 256)>>>(
-        cur_num_splats,
-        num_new_splats,
-        split_indices.data_ptr<int32_t>(),
-        nullptr,
-        (float3*)means.data_ptr<float>(), (float3*)g1_means.data_ptr<float>(), (float3*)g2_means.data_ptr<float>(),
-        (float4*)quats.data_ptr<float>(), (float4*)g1_quats.data_ptr<float>(), (float4*)g2_quats.data_ptr<float>(),
-        (float3*)scales.data_ptr<float>(), (float3*)g1_scales.data_ptr<float>(), (float3*)g2_scales.data_ptr<float>(),
-        (float*)opacs.data_ptr<float>(), (float*)g1_opacs.data_ptr<float>(), (float*)g2_opacs.data_ptr<float>(),
-        (float3*)features_dc.data_ptr<float>(), (float3*)g1_features_dc.data_ptr<float>(), (float3*)g2_features_dc.data_ptr<float>(),
-        num_sh, (float3*)features_sh.data_ptr<float>(), (float3*)g1_features_sh.data_ptr<float>(), (float3*)g2_features_sh.data_ptr<float>(),
-        (float2*)densify_accum_buffer.data_ptr<float>(),
-        bias_correction_steps.has_value() ? bias_correction_steps.value().data_ptr<int32_t>() : nullptr
-    );
+    if (g1_features_sh.dtype() == at::kFloat)
+        relocate_with_long_axis_split_kernel<float3><<<_LAUNCH_ARGS_1D(num_new_splats, 256)>>>(
+            cur_num_splats,
+            num_new_splats,
+            split_indices.data_ptr<int32_t>(),
+            nullptr,
+            (float3*)means.data_ptr<float>(), (float3*)g1_means.data_ptr<float>(), (float3*)g2_means.data_ptr<float>(),
+            (float4*)quats.data_ptr<float>(), (float4*)g1_quats.data_ptr<float>(), (float4*)g2_quats.data_ptr<float>(),
+            (float3*)scales.data_ptr<float>(), (float3*)g1_scales.data_ptr<float>(), (float3*)g2_scales.data_ptr<float>(),
+            (float*)opacs.data_ptr<float>(), (float*)g1_opacs.data_ptr<float>(), (float*)g2_opacs.data_ptr<float>(),
+            (float3*)features_dc.data_ptr<float>(), (float3*)g1_features_dc.data_ptr<float>(), (float3*)g2_features_dc.data_ptr<float>(),
+            num_sh, (float3*)features_sh.data_ptr<float>(), (float3*)g1_features_sh.data_ptr<float>(), (float3*)g2_features_sh.data_ptr<float>(),
+            (float2*)densify_accum_buffer.data_ptr<float>(),
+            bias_correction_steps.has_value() ? bias_correction_steps.value().data_ptr<int32_t>() : nullptr
+        );
+    else
+        relocate_with_long_axis_split_kernel<uchar3><<<_LAUNCH_ARGS_1D(num_new_splats, 256)>>>(
+            cur_num_splats,
+            num_new_splats,
+            split_indices.data_ptr<int32_t>(),
+            nullptr,
+            (float3*)means.data_ptr<float>(), (float3*)g1_means.data_ptr<float>(), (float3*)g2_means.data_ptr<float>(),
+            (float4*)quats.data_ptr<float>(), (float4*)g1_quats.data_ptr<float>(), (float4*)g2_quats.data_ptr<float>(),
+            (float3*)scales.data_ptr<float>(), (float3*)g1_scales.data_ptr<float>(), (float3*)g2_scales.data_ptr<float>(),
+            (float*)opacs.data_ptr<float>(), (float*)g1_opacs.data_ptr<float>(), (float*)g2_opacs.data_ptr<float>(),
+            (float3*)features_dc.data_ptr<float>(), (float3*)g1_features_dc.data_ptr<float>(), (float3*)g2_features_dc.data_ptr<float>(),
+            num_sh, (float3*)features_sh.data_ptr<float>(), (uchar3*)g1_features_sh.data_ptr<uint8_t>(), (uchar3*)g2_features_sh.data_ptr<uint8_t>(),
+            (float2*)densify_accum_buffer.data_ptr<float>(),
+            bias_correction_steps.has_value() ? bias_correction_steps.value().data_ptr<int32_t>() : nullptr
+        );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
@@ -952,6 +985,7 @@ __global__ void mcmc_compute_relocation_index_map_kernel(
 }
 
 
+template<typename g_features_sh_t3>
 __global__ void mcmc_compute_relocation_kernel(
     uint32_t num_splats,
     float min_opacity,
@@ -961,7 +995,7 @@ __global__ void mcmc_compute_relocation_kernel(
     float3*__restrict__ scales, float3*__restrict__ g1_scales, float3*__restrict__ g2_scales,
     float*__restrict__ opacs, float*__restrict__ g1_opacs, float*__restrict__ g2_opacs,
     float3*__restrict__ features_dc, float3*__restrict__ g1_features_dc, float3*__restrict__ g2_features_dc,
-    int num_sh, float3*__restrict__ features_sh, float3*__restrict__ g1_features_sh, float3*__restrict__ g2_features_sh,
+    int num_sh, float3*__restrict__ features_sh, g_features_sh_t3*__restrict__ g1_features_sh, g_features_sh_t3*__restrict__ g2_features_sh,
     int32_t* __restrict__ bias_correction_steps
 ) {
     uint32_t cur_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -992,8 +1026,8 @@ __global__ void mcmc_compute_relocation_kernel(
     g1_features_dc[cur_idx] = make_float3(0.0f);
     g2_features_dc[cur_idx] = make_float3(0.0f);
     for (int i = 0; i < num_sh; ++i) {  // TODO: slow; more cache friendly way to do so?
-        g1_features_sh[num_sh*cur_idx+i] = make_float3(0.0f);
-        g2_features_sh[num_sh*cur_idx+i] = make_float3(0.0f);
+        g1_features_sh[num_sh*cur_idx+i] = g_features_sh_t3{0,0,0};
+        g2_features_sh[num_sh*cur_idx+i] = g_features_sh_t3{0,0,0};
     }
     if (bias_correction_steps)
         bias_correction_steps[cur_idx] = 0;
@@ -1068,18 +1102,32 @@ void relocate_splats_mcmc_tensor(
 
     // printf("%d relocate\n", n_idx_buffer.sum().item<int32_t>());
 
-    mcmc_compute_relocation_kernel<<<_LAUNCH_ARGS_1D(cur_num_splats, 64)>>>(
-        cur_num_splats,
-        min_opacity,
-        n_idx_buffer.data_ptr<int32_t>(),
-        (float3*)means.data_ptr<float>(), (float3*)g1_means.data_ptr<float>(), (float3*)g2_means.data_ptr<float>(),
-        (float4*)quats.data_ptr<float>(), (float4*)g1_quats.data_ptr<float>(), (float4*)g2_quats.data_ptr<float>(),
-        (float3*)scales.data_ptr<float>(), (float3*)g1_scales.data_ptr<float>(), (float3*)g2_scales.data_ptr<float>(),
-        (float*)opacs.data_ptr<float>(), (float*)g1_opacs.data_ptr<float>(), (float*)g2_opacs.data_ptr<float>(),
-        (float3*)features_dc.data_ptr<float>(), (float3*)g1_features_dc.data_ptr<float>(), (float3*)g2_features_dc.data_ptr<float>(),
-        num_sh, (float3*)features_sh.data_ptr<float>(), (float3*)g1_features_sh.data_ptr<float>(), (float3*)g2_features_sh.data_ptr<float>(),
-        bias_correction_steps.has_value() ? bias_correction_steps.value().data_ptr<int32_t>() : nullptr
-    );
+    if (g1_features_sh.dtype() == at::kFloat)
+        mcmc_compute_relocation_kernel<float3><<<_LAUNCH_ARGS_1D(cur_num_splats, 64)>>>(
+            cur_num_splats,
+            min_opacity,
+            n_idx_buffer.data_ptr<int32_t>(),
+            (float3*)means.data_ptr<float>(), (float3*)g1_means.data_ptr<float>(), (float3*)g2_means.data_ptr<float>(),
+            (float4*)quats.data_ptr<float>(), (float4*)g1_quats.data_ptr<float>(), (float4*)g2_quats.data_ptr<float>(),
+            (float3*)scales.data_ptr<float>(), (float3*)g1_scales.data_ptr<float>(), (float3*)g2_scales.data_ptr<float>(),
+            (float*)opacs.data_ptr<float>(), (float*)g1_opacs.data_ptr<float>(), (float*)g2_opacs.data_ptr<float>(),
+            (float3*)features_dc.data_ptr<float>(), (float3*)g1_features_dc.data_ptr<float>(), (float3*)g2_features_dc.data_ptr<float>(),
+            num_sh, (float3*)features_sh.data_ptr<float>(), (float3*)g1_features_sh.data_ptr<float>(), (float3*)g2_features_sh.data_ptr<float>(),
+            bias_correction_steps.has_value() ? bias_correction_steps.value().data_ptr<int32_t>() : nullptr
+        );
+    else
+        mcmc_compute_relocation_kernel<uchar3><<<_LAUNCH_ARGS_1D(cur_num_splats, 64)>>>(
+            cur_num_splats,
+            min_opacity,
+            n_idx_buffer.data_ptr<int32_t>(),
+            (float3*)means.data_ptr<float>(), (float3*)g1_means.data_ptr<float>(), (float3*)g2_means.data_ptr<float>(),
+            (float4*)quats.data_ptr<float>(), (float4*)g1_quats.data_ptr<float>(), (float4*)g2_quats.data_ptr<float>(),
+            (float3*)scales.data_ptr<float>(), (float3*)g1_scales.data_ptr<float>(), (float3*)g2_scales.data_ptr<float>(),
+            (float*)opacs.data_ptr<float>(), (float*)g1_opacs.data_ptr<float>(), (float*)g2_opacs.data_ptr<float>(),
+            (float3*)features_dc.data_ptr<float>(), (float3*)g1_features_dc.data_ptr<float>(), (float3*)g2_features_dc.data_ptr<float>(),
+            num_sh, (float3*)features_sh.data_ptr<float>(), (uchar3*)g1_features_sh.data_ptr<uint8_t>(), (uchar3*)g2_features_sh.data_ptr<uint8_t>(),
+            bias_correction_steps.has_value() ? bias_correction_steps.value().data_ptr<int32_t>() : nullptr
+        );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     mcmc_update_relocation_kernel<<<_LAUNCH_ARGS_1D(cur_num_splats, 64)>>>(
@@ -1155,6 +1203,7 @@ __global__ void mcmc_compute_add_kernel(
 }
 
 
+template<typename g_features_sh_t3>
 __global__ void mcmc_update_add_kernel(
     uint32_t num_splats,
     uint32_t num_add,
@@ -1164,7 +1213,7 @@ __global__ void mcmc_update_add_kernel(
     float3*__restrict__ scales, float3*__restrict__ g1_scales, float3*__restrict__ g2_scales,
     float*__restrict__ opacs, float*__restrict__ g1_opacs, float*__restrict__ g2_opacs,
     float3*__restrict__ features_dc, float3*__restrict__ g1_features_dc, float3*__restrict__ g2_features_dc,
-    int num_sh, float3*__restrict__ features_sh, float3*__restrict__ g1_features_sh, float3*__restrict__ g2_features_sh,
+    int num_sh, float3*__restrict__ features_sh, g_features_sh_t3*__restrict__ g1_features_sh, g_features_sh_t3*__restrict__ g2_features_sh,
     int32_t* __restrict__ bias_correction_steps
 ) {
     uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1195,8 +1244,8 @@ __global__ void mcmc_update_add_kernel(
     g1_features_dc[id_dst] = make_float3(0.0f);
     g2_features_dc[id_dst] = make_float3(0.0f);
     for (int i = 0; i < num_sh; ++i) {  // TODO: slow; more cache friendly way to do so?
-        g1_features_sh[num_sh*id_dst+i] = make_float3(0.0f);
-        g2_features_sh[num_sh*id_dst+i] = make_float3(0.0f);
+        g1_features_sh[num_sh*id_dst+i] = g_features_sh_t3{0,0,0};
+        g2_features_sh[num_sh*id_dst+i] = g_features_sh_t3{0,0,0};
     }
     if (bias_correction_steps)
         bias_correction_steps[id_dst] = 0;
@@ -1254,18 +1303,32 @@ void add_splats_mcmc_tensor(
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    mcmc_update_add_kernel<<<_LAUNCH_ARGS_1D(num_add, 64)>>>(
-        cur_num_splats,
-        num_add,
-        index_map.data_ptr<int32_t>(),
-        (float3*)means.data_ptr<float>(), (float3*)g1_means.data_ptr<float>(), (float3*)g2_means.data_ptr<float>(),
-        (float4*)quats.data_ptr<float>(), (float4*)g1_quats.data_ptr<float>(), (float4*)g2_quats.data_ptr<float>(),
-        (float3*)scales.data_ptr<float>(), (float3*)g1_scales.data_ptr<float>(), (float3*)g2_scales.data_ptr<float>(),
-        (float*)opacs.data_ptr<float>(), (float*)g1_opacs.data_ptr<float>(), (float*)g2_opacs.data_ptr<float>(),
-        (float3*)features_dc.data_ptr<float>(), (float3*)g1_features_dc.data_ptr<float>(), (float3*)g2_features_dc.data_ptr<float>(),
-        num_sh, (float3*)features_sh.data_ptr<float>(), (float3*)g1_features_sh.data_ptr<float>(), (float3*)g2_features_sh.data_ptr<float>(),
-        bias_correction_steps.has_value() ? bias_correction_steps.value().data_ptr<int32_t>() : nullptr
-    );
+    if (g1_features_sh.dtype() == at::kFloat)
+        mcmc_update_add_kernel<float3><<<_LAUNCH_ARGS_1D(num_add, 64)>>>(
+            cur_num_splats,
+            num_add,
+            index_map.data_ptr<int32_t>(),
+            (float3*)means.data_ptr<float>(), (float3*)g1_means.data_ptr<float>(), (float3*)g2_means.data_ptr<float>(),
+            (float4*)quats.data_ptr<float>(), (float4*)g1_quats.data_ptr<float>(), (float4*)g2_quats.data_ptr<float>(),
+            (float3*)scales.data_ptr<float>(), (float3*)g1_scales.data_ptr<float>(), (float3*)g2_scales.data_ptr<float>(),
+            (float*)opacs.data_ptr<float>(), (float*)g1_opacs.data_ptr<float>(), (float*)g2_opacs.data_ptr<float>(),
+            (float3*)features_dc.data_ptr<float>(), (float3*)g1_features_dc.data_ptr<float>(), (float3*)g2_features_dc.data_ptr<float>(),
+            num_sh, (float3*)features_sh.data_ptr<float>(), (float3*)g1_features_sh.data_ptr<float>(), (float3*)g2_features_sh.data_ptr<float>(),
+            bias_correction_steps.has_value() ? bias_correction_steps.value().data_ptr<int32_t>() : nullptr
+        );
+    else
+        mcmc_update_add_kernel<uchar3><<<_LAUNCH_ARGS_1D(num_add, 64)>>>(
+            cur_num_splats,
+            num_add,
+            index_map.data_ptr<int32_t>(),
+            (float3*)means.data_ptr<float>(), (float3*)g1_means.data_ptr<float>(), (float3*)g2_means.data_ptr<float>(),
+            (float4*)quats.data_ptr<float>(), (float4*)g1_quats.data_ptr<float>(), (float4*)g2_quats.data_ptr<float>(),
+            (float3*)scales.data_ptr<float>(), (float3*)g1_scales.data_ptr<float>(), (float3*)g2_scales.data_ptr<float>(),
+            (float*)opacs.data_ptr<float>(), (float*)g1_opacs.data_ptr<float>(), (float*)g2_opacs.data_ptr<float>(),
+            (float3*)features_dc.data_ptr<float>(), (float3*)g1_features_dc.data_ptr<float>(), (float3*)g2_features_dc.data_ptr<float>(),
+            num_sh, (float3*)features_sh.data_ptr<float>(), (uchar3*)g1_features_sh.data_ptr<uint8_t>(), (uchar3*)g2_features_sh.data_ptr<uint8_t>(),
+            bias_correction_steps.has_value() ? bias_correction_steps.value().data_ptr<int32_t>() : nullptr
+        );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 

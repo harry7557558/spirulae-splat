@@ -192,6 +192,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fused_adam_scale_agnostic_mean", &fused_adam_scale_agnostic_mean);
     m.def("fused_optim_3dgs_geometry", &fused_optim_3dgs_geometry);
     m.def("fused_adam_with_steps", &fused_adam_with_steps_tensor);
+    m.def("fused_adam_with_steps_8bit", &fused_adam_with_steps_8bit_tensor);
     m.def("fused_3dgs2tr_mean_optim", &fused_3dgs2tr_mean_optim);
     m.def("fused_3dgs2tr_scale_optim", &fused_3dgs2tr_scale_optim);
     m.def("fused_3dgs2tr_color_optim", &fused_3dgs2tr_color_optim);

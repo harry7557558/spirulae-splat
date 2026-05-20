@@ -20,6 +20,9 @@ namespace SlangDensify {
 
 #include "common.cuh"
 
+#include <cooperative_groups.h>
+namespace cg = cooperative_groups;
+
 #if defined(__INTEL_COMPILER) || defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER)
 #if defined(__AVX2__) || defined(__SSE2__)
 #include <immintrin.h>
@@ -1077,6 +1080,132 @@ void fused_adam_with_steps_tensor(
         grad.data_ptr<float>(),
         exp_avg.data_ptr<float>(),
         exp_avg_sq.data_ptr<float>(),
+        lr,
+        std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1,
+        std::get_if<at::Tensor>(&step) ? std::get<at::Tensor>(step).data_ptr<int32_t>() : nullptr,
+        2.0f*l2_reg/(float)numel,
+        l2_reg_offset,
+        numel,
+        stride
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+template<int BLOCK_SIZE>
+__global__ void fused_adam_with_steps_8bit_kernel(
+    float* __restrict__ param,
+    const float* __restrict__ grad,
+    uint8_t* __restrict__ exp_avg,
+    uint8_t* __restrict__ exp_avg_sq,
+    float4* __restrict__ quant_bounds,  // g1 min, g1 max, g2 min, g2 max
+    const float lr,
+    const int32_t scalar_step,
+    const int32_t* __restrict__ steps,
+    const float decay,
+    const float decay_offset,
+    const int64_t numel,
+    const int stride
+) {
+    static constexpr float eps = 1e-15f;
+    static constexpr float beta1 = 0.9f;
+    static constexpr float beta2 = 0.999f;
+
+    const int64_t idx = (int64_t)blockIdx.x * BLOCK_SIZE + (int64_t)threadIdx.x;
+    bool inside = (idx < numel);
+
+    float step = (float)(steps ? steps[idx / stride] : scalar_step);
+    float inv_bias_correction1 = 1.0f / (1.0f - powf(beta1, step));
+    float inv_bias_correction2 = 1.0f / (1.0f - powf(beta2, step));
+
+    float x = inside ? param[idx] : 0.0f;
+    float v = inside ? grad[idx] : 0.0f;
+    if (!isfinite(v))
+        v = 0.0f;
+    v += decay * (fmaxf(x - decay_offset, 0.0f) + fminf(x + decay_offset, 0.0f));
+    float g1 = inside ? ((float)exp_avg[idx] + 0.5f) / 256.0f : 0.0f;
+    float g2 = inside ? ((float)exp_avg_sq[idx] + 0.5f) / 256.0f : 0.0f;
+
+    float4 mm = quant_bounds[blockIdx.x];
+    g1 = mm.x + (mm.y - mm.x) * g1;
+    g2 = mm.z + (mm.w - mm.z) * g2;
+    g2 *= g2;
+
+    g1 = beta1 * g1 + (1.0f - beta1) * v;
+    g2 = beta2 * g2 + (1.0f - beta2) * v*v;
+
+    x -= lr * inv_bias_correction1 * g1 / (sqrtf(g2 * inv_bias_correction2) + eps);
+    param[idx] = x;
+
+    cg::thread_block block = cg::this_thread_block();
+    cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
+    mm = inside ? float4{g1, g1, sqrtf(g2), sqrtf(g2)} : float4{1e30f, -1e30f, 1e30f, -1e30f};
+    mm.x = cg::reduce(warp, mm.x, cg::less<float>());
+    mm.y = cg::reduce(warp, mm.y, cg::greater<float>());
+    mm.z = cg::reduce(warp, mm.z, cg::less<float>());
+    mm.w = cg::reduce(warp, mm.w, cg::greater<float>());
+    __shared__ float4 shared_reduce[BLOCK_SIZE / WARP_SIZE];
+    if (threadIdx.x % WARP_SIZE == 0)
+        shared_reduce[threadIdx.x / WARP_SIZE] = mm;
+    __syncthreads();
+    mm = (threadIdx.x < BLOCK_SIZE / WARP_SIZE) ?
+        shared_reduce[threadIdx.x] : float4{1e30f, -1e30f, 1e30f, -1e30f};
+    mm.x = cg::reduce(warp, mm.x, cg::less<float>());
+    mm.y = cg::reduce(warp, mm.y, cg::greater<float>());
+    mm.z = cg::reduce(warp, mm.z, cg::less<float>());
+    mm.w = cg::reduce(warp, mm.w, cg::greater<float>());
+    __syncthreads();
+    if (threadIdx.x < BLOCK_SIZE / WARP_SIZE)
+        shared_reduce[threadIdx.x / WARP_SIZE] = mm;
+    __syncthreads();
+    mm = shared_reduce[threadIdx.x / WARP_SIZE];
+
+    exp_avg[idx] = (uint8_t)fminf(fmaxf(256.0f * (g1 - mm.x) / (mm.y - mm.x), 0.0f), 255.99f);
+    exp_avg_sq[idx] = (uint8_t)fminf(fmaxf(256.0f * (sqrtf(g2) - mm.z) / (mm.w - mm.z), 0.0f), 255.99f);
+
+    if (threadIdx.x == 0)
+        quant_bounds[blockIdx.x] = mm;
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void fused_adam_with_steps_8bit_tensor(
+    at::Tensor param,
+    at::Tensor grad,
+    at::Tensor exp_avg,
+    at::Tensor exp_avg_sq,
+    at::Tensor quant_bounds,
+    float lr,
+    std::variant<int32_t, at::Tensor> step,
+    float l2_reg,
+    float l2_reg_offset
+) {
+    DEVICE_GUARD(param);
+    CHECK_INPUT(param);
+    CHECK_INPUT(grad);
+    CHECK_INPUT(exp_avg);
+    CHECK_INPUT(exp_avg_sq);
+    CHECK_INPUT(quant_bounds);
+    if (std::get_if<at::Tensor>(&step))
+        CHECK_INPUT(std::get<at::Tensor>(step));
+
+    const int64_t numel = param.numel();
+    if (numel == 0)
+        return;
+    int stride = 0;
+    if (std::get_if<at::Tensor>(&step)) {
+        int n = (int)std::get<at::Tensor>(step).numel();
+        if (n == 0)
+            return;
+        stride = (int)(numel / n);
+    }
+
+    constexpr int BLOCK_SIZE = 256;
+    fused_adam_with_steps_8bit_kernel<BLOCK_SIZE><<<_LAUNCH_ARGS_1D(numel, BLOCK_SIZE)>>>(
+        param.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        exp_avg.data_ptr<uint8_t>(),
+        exp_avg_sq.data_ptr<uint8_t>(),
+        (float4*)quant_bounds.data_ptr<float>(),
         lr,
         std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1,
         std::get_if<at::Tensor>(&step) ? std::get<at::Tensor>(step).data_ptr<int32_t>() : nullptr,

@@ -1229,8 +1229,33 @@ class SpirulaeSplatModel(torch.nn.Module):
         if not hasattr(self.core, 'densify_accum_buffer'):
             return outputs
 
+        # Debug SH
+        if not self.training and False:
+            old_splats_world = self.core.splats_world
+            self.core.splats_world = (
+                self.means, self.quats, self.scales,
+                self.opacities,
+                torch.zeros_like(self.features_dc), self.features_sh
+            )
+            self.core.set_params(
+                viewmats=viewmats,  # [C, 4, 4]
+                intrins=intrins * self.config.supersampling,  # [C, 4]
+                width=W * self.config.supersampling,
+                height=H * self.config.supersampling,
+                packed=(self.config.packed or use_bvh),
+                use_bvh=(use_bvh),
+                relative_scale=self.config.relative_scale,
+                camera_model=camera_model,
+                output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
+                compute_hessian_diagonal=self.config.compute_hessian_diagonal,
+                **kwargs,
+            )
+            self.core.forward()
+            self.core.splats_world = old_splats_world
+            outputs['sh'] = self.core.render_colors[0][0, :, :, :]
+
         # Debug densification
-        if not self.training and self.step > 1:
+        if not self.training and self.step > 1 and False:
         # if self.step > 1:
 
             param_to_vis = self.core.densify_accum_buffer[:, 0]
@@ -1267,11 +1292,8 @@ class SpirulaeSplatModel(torch.nn.Module):
                 **kwargs,
             )
             self.core.forward()
-            rgbdn = self.core.render_colors
-            Ts = self.core.render_Ts
-            meta = self.core.meta
             self.core.splats_world = old_splats_world
-            outputs['refinement_score'] = rgbdn[0][0, :, :, :].mean(dim=-1, keepdim=True)
+            outputs['refinement_score'] = self.core.render_colors[0][0, :, :, :].mean(dim=-1, keepdim=True)
 
         return outputs
 
