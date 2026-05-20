@@ -173,8 +173,8 @@ void fused_projection_bwd_optimizer_3dgut_tensor(
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
-    const std::optional<at::Tensor> camera_id_bounds,
     const std::optional<at::Tensor> camera_ids,
+    const std::optional<at::Tensor> gaussian_ids,
     const at::Tensor aabb,
     // grad outputs
     const TensorList v_splats_world,
@@ -203,6 +203,7 @@ void fused_projection_bwd_optimizer_3dgut_tensor(
     const float erank_reg_weight,
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
+    const float sh_reg_weight,
     const float mrnf_opacity_decay_factor,
     const float mrnf_scale_decay_factor,
     bool use_scale_agnostic_mean,

@@ -114,8 +114,6 @@ class Renderer:
         self.width = width
         self.height = height
         self.packed = packed
-        if self.use_fused_proj_bwd_optim:
-            self.packed = False  # TODO
         self.use_bvh = use_bvh
         self.output_distortion = output_distortion
         self.compute_hessian_diagonal = compute_hessian_diagonal
@@ -555,8 +553,9 @@ class Renderer:
         _make_lazy_cuda_func(f"fused_projection_bwd_optimizer_{self.primitive}")(
             self.splats_world,
             self.viewmats, self.intrins, self.width, self.height, self.camera_model.upper(), self.dist_coeffs,
-            # self.camera_ids, self.gaussian_ids, self.aabb,
-            None, None, self.aabb,
+            self.camera_ids if self.packed else None,
+            self.gaussian_ids if self.packed else None,
+            self.aabb,
             self.v_splats_world, None, None,
             self.v_splats_proj, None, None,
             self.g1_splats_world, self.g2_splats_world,
@@ -577,6 +576,7 @@ class Renderer:
             model_config.erank_reg,
             model_config.erank_reg_s3,
             model_config.quat_norm_reg,
+            model_config.sh_reg,
             0.0 if step % model_config.refine_every != 0 else
                 (1.0 - (step+1) / max_steps) * model_config.opacity_decay,
             1.0 if step % model_config.refine_every != 0 else
@@ -716,6 +716,8 @@ class Renderer:
                 densify_score = self.v_splats_world[3] # v_opacs
                 densify_scale = None
                 densify_opac = self.splats_world[3]
+                if densify_score is None:  # fused backward and optimizer mode
+                    densify_score = densify_opac
 
             _make_lazy_cuda_func("densify_update_weight")(
                 self.cur_num_splats,

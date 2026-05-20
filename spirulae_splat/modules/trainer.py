@@ -446,9 +446,11 @@ class Trainer:
         for nbytes, shape, dtype, device, ptr in breakdown:
             print(f"{nbytes/1024**2:.2f} MiB {shape} {dtype} {device} - {' '.join(name_map.get(ptr, []))}")
             total += nbytes
-        print(f"total accounted - {total / 1024**2:.2f} MiB")
-        print(f"torch.cuda.memory_allocated - {torch.cuda.memory_allocated() / 1024**2:.2f} MiB")
-        print(f"torch.cuda.memory_reserved - {torch.cuda.memory_reserved() / 1024**2:.2f} MiB")
+        print(f"sum of accounted tensor sizes - {total / 1024**2:.2f} MiB")
+        print(f"torch.cuda.memory_allocated() - {torch.cuda.memory_allocated() / 1024**2:.2f} MiB")
+        print(f"torch.cuda.memory_reserved() - {torch.cuda.memory_reserved() / 1024**2:.2f} MiB")
+        free, total = torch.cuda.mem_get_info(device)
+        print(f"torch.cuda.mem_get_info(device) - {(total - free) / 1024**2:.2f} MiB")
         print()
 
 

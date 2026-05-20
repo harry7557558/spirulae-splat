@@ -1080,7 +1080,7 @@ void fused_adam_with_steps_tensor(
         lr,
         std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1,
         std::get_if<at::Tensor>(&step) ? std::get<at::Tensor>(step).data_ptr<int32_t>() : nullptr,
-        2.0f*l2_reg,
+        2.0f*l2_reg/(float)numel,
         l2_reg_offset,
         numel,
         stride

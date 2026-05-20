@@ -1251,7 +1251,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             self.core.splats_world = (
                 self.means, self.quats, self.scales,
                 self.opacities,
-                param_to_vis, torch.zeros_like(self.features_sh)
+                param_to_vis, torch.empty(len(self.means), 0, 3, device=self.means.device)
             )
             self.core.set_params(
                 viewmats=viewmats,  # [C, 4, 4]

@@ -6,6 +6,8 @@
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;
 
+#include <cub/cub.cuh>
+
 
 template<
     typename SplatPrimitive,
@@ -56,11 +58,30 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     const float erank_reg_weight,
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
+    const float sh_reg_weight,
     const float mrnf_opacity_decay_factor,
     const float mrnf_scale_decay_factor,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps
 );
+
+
+__global__ void camera_id_bounds_kernel(
+    int64_t nnz,
+    int64_t N,
+    const int32_t* __restrict__ gaussian_ids,  // [nnz]
+    int32_t* __restrict__ camera_id_bounds  // [N+1]
+) {
+    int64_t gid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (gid > nnz)
+        return;
+
+    int32_t cid = (gid == nnz) ? N : gaussian_ids[gid];
+    int32_t cid_0 = (gid == 0) ? 0 : gaussian_ids[gid-1]+1;
+    for (int32_t i = cid_0; i <= cid; ++i) {
+        camera_id_bounds[i] = gid;
+    }
+}
 
 
 template<
@@ -78,8 +99,8 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     const ssplat::CameraModelType camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
-    const std::optional<at::Tensor> camera_id_bounds,
-    const std::optional<at::Tensor> camera_ids,
+    std::optional<at::Tensor> camera_ids,
+    std::optional<at::Tensor> gaussian_ids,
     const at::Tensor aabb,
     // grad outputs
     const TensorList v_splats_world,
@@ -108,6 +129,7 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     const float erank_reg_weight,
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
+    const float sh_reg_weight,
     const float mrnf_opacity_decay_factor,
     const float mrnf_scale_decay_factor,
     const int32_t scalar_step,
@@ -119,12 +141,62 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     if (N == 0)
         return;
 
+    at::Tensor camera_id_bounds;
+
+    bool packed = camera_ids.has_value() && gaussian_ids.has_value();
+    if (packed) {
+        at::Tensor camera_ids_sorted = at::empty_like(camera_ids.value());
+        at::Tensor gaussian_ids_sorted = at::empty_like(gaussian_ids.value());
+        cub::DoubleBuffer<int32_t> d_keys(
+            gaussian_ids.value().data_ptr<int32_t>(), gaussian_ids_sorted.data_ptr<int32_t>()
+        );
+        cub::DoubleBuffer<int32_t> d_values(
+            camera_ids.value().data_ptr<int32_t>(), camera_ids_sorted.data_ptr<int32_t>()
+        );
+        long nnz = camera_ids.value().numel();
+        int n_bits = 0;
+        while ((1U << n_bits) <= N)
+            ++n_bits;
+        CUB_WRAPPER(
+            cub::DeviceRadixSort::SortPairs,
+            d_keys,
+            d_values,
+            nnz,
+            0,
+            n_bits,
+            at::cuda::getCurrentCUDAStream()
+        );
+        CHECK_DEVICE_ERROR(cudaGetLastError());
+        switch (d_keys.selector) {
+        case 0:
+            break;
+        case 1:
+            gaussian_ids = gaussian_ids_sorted;
+            break;
+        }
+        switch (d_values.selector) {
+        case 0:
+            break;
+        case 1:
+            camera_ids = camera_ids_sorted;
+            break;
+        }
+
+        camera_id_bounds = at::empty({N+1}, kTensorOptionI32());
+        camera_id_bounds_kernel<<<_LAUNCH_ARGS_1D(nnz+1, 256)>>>(
+            nnz, N,
+            gaussian_ids.value().data_ptr<int32_t>(),
+            camera_id_bounds.data_ptr<int32_t>()
+        );
+        CHECK_DEVICE_ERROR(cudaGetLastError());
+    }
+
     #define _LAUNCH_ARGS ( \
             (cudaStream_t)at::cuda::getCurrentCUDAStream(), C, N, \
             splats_world, viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, \
-            camera_id_bounds.has_value() ? camera_id_bounds.value().data_ptr<int32_t>() : nullptr, \
-            camera_ids.has_value() ? camera_ids.value().data_ptr<int32_t>() : nullptr, \
+            packed ? camera_id_bounds.data_ptr<int32_t>() : nullptr, \
+            packed ? camera_ids.value().data_ptr<int32_t>() : nullptr, \
             (float4*)aabb.data_ptr<float>(), \
             v_splats_world, \
             hessian_diagonal_output_mode != HessianDiagonalOutputMode::None ? vr_splats_world.value() : typename SplatPrimitive::WorldBuffer{}, \
@@ -137,7 +209,7 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
             radii.data_ptr<float>(), \
             lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc, lr_features_sh, \
             mcmc_noise_scalar, min_opacity, max_gauss_ratio, scale_regularization_weight, \
-            mcmc_opacity_reg_weight, mcmc_scale_reg_weight, erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight, \
+            mcmc_opacity_reg_weight, mcmc_scale_reg_weight, erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight, sh_reg_weight, \
             mrnf_opacity_decay_factor, mrnf_scale_decay_factor, \
             scalar_step, steps.has_value() ? steps.value().data_ptr<int32_t>() : nullptr \
         )
@@ -359,8 +431,8 @@ void fused_projection_bwd_optimizer_3dgut_tensor(
     const std::string camera_model,
     const CameraDistortionCoeffsTensor dist_coeffs,
     // fwd outputs
-    const std::optional<at::Tensor> camera_id_bounds,
     const std::optional<at::Tensor> camera_ids,
+    const std::optional<at::Tensor> gaussian_ids,
     const at::Tensor aabb,
     // grad outputs
     const TensorList v_splats_world,
@@ -389,6 +461,7 @@ void fused_projection_bwd_optimizer_3dgut_tensor(
     const float erank_reg_weight,
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
+    const float sh_reg_weight,
     const float mrnf_opacity_decay_factor,
     const float mrnf_scale_decay_factor,
     bool use_scale_agnostic_mean,
@@ -402,8 +475,8 @@ void fused_projection_bwd_optimizer_3dgut_tensor(
         image_height, \
         cmt(camera_model), \
         dist_coeffs, \
-        camera_id_bounds, \
         camera_ids, \
+        gaussian_ids, \
         aabb, \
         v_splats_world, \
         vr_splats_world, \
@@ -429,6 +502,7 @@ void fused_projection_bwd_optimizer_3dgut_tensor(
         erank_reg_weight, \
         erank_reg_weight_s3, \
         quat_norm_reg_weight, \
+        sh_reg_weight, \
         mrnf_opacity_decay_factor, \
         mrnf_scale_decay_factor, \
         std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1, \

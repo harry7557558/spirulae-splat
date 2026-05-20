@@ -33,6 +33,13 @@ __forceinline__ __device__ float3 fmaxf(float3 v, float k) {
         fmaxf(v.z, k)
     };
 }
+__forceinline__ __device__ float3 fminf(float3 v, float k) {
+    return {
+        fminf(v.x, k),
+        fminf(v.y, k),
+        fminf(v.z, k)
+    };
+}
 __forceinline__ __device__ float3 sqrtf(float3 v) {
     return {
         sqrtf(fmaxf(v.x, 0.0f)),
@@ -73,7 +80,7 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
-    const int32_t *__restrict__ camera_id_bounds,   // [N]
+    const int32_t *__restrict__ camera_id_bounds,   // [N+1]
     const int32_t *__restrict__ camera_ids,   // [nnz]
     const float4 *__restrict__ aabb,   // [C, N, 4] or [nnz, 4]
     // grad outputs from rasterization
@@ -104,6 +111,7 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     const float erank_reg_weight,
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
+    const float sh_reg_weight,
     const float mrnf_opacity_decay_factor,
     const float mrnf_scale_decay_factor,
     const int32_t scalar_step,
@@ -117,8 +125,8 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     bool packed = (camera_id_bounds != nullptr && camera_ids != nullptr);
     int cid_0 = 0, cid_1 = C;
     if (packed) {
-        cid_0 = (gid == 0 ? 0 : camera_id_bounds[gid-1]);
-        cid_1 = camera_id_bounds[gid];
+        cid_0 = camera_id_bounds[gid];
+        cid_1 = camera_id_bounds[gid+1];
     }
 
     // Load splat
@@ -244,6 +252,10 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     v_splat_world.scale += v_scale_t;
     v_splat_world.quat += v_quat_t;
     v_splat_world.opacity += v_opac_t;
+    v_splat_world.features_dc += sh_reg_weight * (
+        fmaxf(splat_world.features_dc - make_float3(0.5f / 0.28209479177387814f), 0.0f) +
+        fminf(splat_world.features_dc + make_float3(0.5f / 0.28209479177387814f), 0.0f)
+    );
 
     // optimizer for mean/quat/scale
 
@@ -333,23 +345,25 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     float* g1_sh_ptr = g1_splats_world.features_sh(gid);
     float* g2_sh_ptr = g2_splats_world.features_sh(gid);
     float* sh_ptr = splats_world.features_sh(gid);
+    const float reg_weight = sh_reg_weight * (1.0f / (float)num_sh);
     #pragma unroll
     for (; i+3 < 3*num_sh; i += 4) {
-        float4 v_sh_coeff = {v_sh_ptr[i], v_sh_ptr[i+1], v_sh_ptr[i+2], v_sh_ptr[i+3]};
+        float4 sh_coeff = float4{sh_ptr[i], sh_ptr[i+1], sh_ptr[i+2], sh_ptr[i+3]};
+        float4 v_sh_coeff = float4{v_sh_ptr[i], v_sh_ptr[i+1], v_sh_ptr[i+2], v_sh_ptr[i+3]} + reg_weight * sh_coeff;
         float4 g1_feature_sh = beta1 * float4{g1_sh_ptr[i], g1_sh_ptr[i+1], g1_sh_ptr[i+2], g1_sh_ptr[i+3]} + (1.f - beta1) * v_sh_coeff;
         float4 g2_feature_sh = beta2 * float4{g2_sh_ptr[i], g2_sh_ptr[i+1], g2_sh_ptr[i+2], g2_sh_ptr[i+3]} + (1.f - beta2) * v_sh_coeff*v_sh_coeff;
-        float4 sh_updated = float4{sh_ptr[i], sh_ptr[i+1], sh_ptr[i+2], sh_ptr[i+3]} -
-            lr_sh * g1_feature_sh / (sqrtf(g2_feature_sh * inv_bias_correction2) + eps);
-        sh_ptr[i] = sh_updated.x; sh_ptr[i+1] = sh_updated.y; sh_ptr[i+2] = sh_updated.z; sh_ptr[i+3] = sh_updated.w;
+        sh_coeff -= lr_sh * g1_feature_sh / (sqrtf(g2_feature_sh * inv_bias_correction2) + eps);
+        sh_ptr[i] = sh_coeff.x; sh_ptr[i+1] = sh_coeff.y; sh_ptr[i+2] = sh_coeff.z; sh_ptr[i+3] = sh_coeff.w;
         g1_sh_ptr[i] = g1_feature_sh.x; g1_sh_ptr[i+1] = g1_feature_sh.y; g1_sh_ptr[i+2] = g1_feature_sh.z; g1_sh_ptr[i+3] = g1_feature_sh.w;
         g2_sh_ptr[i] = g2_feature_sh.x; g2_sh_ptr[i+1] = g2_feature_sh.y; g2_sh_ptr[i+2] = g2_feature_sh.z; g2_sh_ptr[i+3] = g2_feature_sh.w;
     }
     #pragma unroll
     for (; i < 3*num_sh; ++i) {
-        float v_sh_coeff = v_sh_ptr[i];
+        float sh_coeff = sh_ptr[i];
+        float v_sh_coeff = v_sh_ptr[i] + reg_weight * sh_coeff;
         float g1_feature_sh = beta1 * g1_sh_ptr[i] + (1.f - beta1) * v_sh_coeff;
         float g2_feature_sh = beta2 * g2_sh_ptr[i] + (1.f - beta2) * v_sh_coeff*v_sh_coeff;
-        sh_ptr[i] = sh_ptr[i] - lr_sh * g1_feature_sh / (sqrtf(g2_feature_sh * inv_bias_correction2) + eps);
+        sh_ptr[i] = sh_coeff - lr_sh * g1_feature_sh / (sqrtf(g2_feature_sh * inv_bias_correction2) + eps);
         g1_sh_ptr[i] = g1_feature_sh;
         g2_sh_ptr[i] = g2_feature_sh;
     }
@@ -404,6 +418,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     const float erank_reg_weight,
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
+    const float sh_reg_weight,
     const float mrnf_opacity_decay_factor,
     const float mrnf_scale_decay_factor,
     const int32_t scalar_step,
@@ -428,6 +443,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
         erank_reg_weight / (float)N,
         erank_reg_weight_s3 / (float)N,
         quat_norm_reg_weight / (float)N,
+        2.0f * sh_reg_weight / (float)(3*N),
         mrnf_opacity_decay_factor,
         mrnf_scale_decay_factor,
         scalar_step, steps
