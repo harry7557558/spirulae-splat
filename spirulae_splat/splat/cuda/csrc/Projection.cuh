@@ -27,6 +27,7 @@ std::tuple<
     TensorList  // out splats
 > projection_3dgs_hetero_forward_tensor(
     // inputs
+    const int max_sh_degree,
     const TensorList in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -74,6 +75,7 @@ std::tuple<
     TensorList  // out splats
 > projection_3dgut_hetero_forward_tensor(
     // inputs
+    const int max_sh_degree,
     const TensorList in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -121,6 +123,7 @@ std::tuple<
     TensorList  // out splats
 > projection_mip_hetero_forward_tensor(
     // inputs
+    const int max_sh_degree,
     const TensorList in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy

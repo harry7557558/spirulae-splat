@@ -78,6 +78,8 @@ class SpirulaeSplatModelConfig:
     """Splat primitive to use"""
     sh_degree: int = 3
     """Maximum degree of spherical harmonics to use."""
+    sh_degree_warmup_every: int = 1000
+    """Increase SH degree every this number of iterations"""
     num_sv: int = 4  # 8
     """Number of spherical voronoi to use."""
     background_color: Literal["black", "white", "gray"] = "black"
@@ -1042,6 +1044,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             intrins=intrins * self.config.supersampling,  # [C, 4]
             width=W * self.config.supersampling,
             height=H * self.config.supersampling,
+            sh_degree_to_use=self.step // max(self.config.sh_degree_warmup_every, 1),
             packed=(self.config.packed or use_bvh),
             use_bvh=(use_bvh),
             # packed=True,

@@ -10,18 +10,17 @@ namespace cg = cooperative_groups;
 template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
 void projection_fused_fwd_kernel_wrapper(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     typename SplatPrimitive::WorldBuffer splats_world,
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    float4 *__restrict__ aabbs,         // [B, C, N, 4]
-    float *__restrict__ sorting_depths,  // [B, C, N, 1]
+    float4 *__restrict__ aabbs,         // [C, N, 4]
+    float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
     typename SplatPrimitive::ScreenBuffer splats_screen
 );
@@ -35,6 +34,7 @@ inline std::tuple<
     at::Tensor,  // radii
     TensorList  // out splats
 > launch_projection_fused_fwd_kernel(
+    const int64_t N,
     const TensorList &in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -44,20 +44,17 @@ inline std::tuple<
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     typename SplatPrimitive::WorldBuffer splats_world(in_splats);
-    uint32_t N = splats_world.size();    // number of gaussians
     uint32_t C = viewmats.size(-3); // number of cameras
-    // uint32_t B = splats_world.batchSize();    // number of batches
-    uint32_t B = 1;  // TODO
 
     at::Tensor aabb = at::empty({C, N, 4}, kTensorOptionF32());
     at::Tensor sorting_depths = at::empty({C, N}, kTensorOptionF32());
-    at::Tensor radii = at::empty({N}, kTensorOptionF32());
+    at::Tensor radii = at::empty({splats_world.size()}, kTensorOptionF32());
     set_zero_tensor(radii);
 
-    TensorList splats_screen = SplatPrimitive::ScreenBuffer::empty(C*N);
+    TensorList splats_screen = SplatPrimitive::ScreenBuffer::empty(C*splats_world.size());
 
     #define _LAUNCH_ARGS ( \
-            (cudaStream_t)at::cuda::getCurrentCUDAStream(), B, C, N, \
+            (cudaStream_t)at::cuda::getCurrentCUDAStream(), C, N, \
             splats_world, viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, \
             (float4*)aabb.data_ptr<float>(), sorting_depths.data_ptr<float>(), radii.data_ptr<float>(), \
@@ -92,6 +89,8 @@ std::tuple<
     TensorList  // out splats
 > projection_3dgs_forward_tensor(
     // inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -101,9 +100,10 @@ std::tuple<
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     int sh_degree = Vanilla3DGS<0>::WorldBuffer(in_splats).sh_degree();
+    sh_degree = min(sh_degree, max_sh_degree);
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_fused_fwd_kernel<Vanilla3DGS<n>>( \
-            in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
+            num_splats, in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
     return {};
@@ -122,6 +122,8 @@ std::tuple<
     TensorList  // out splats
 > projection_mip_forward_tensor(
     // inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -131,9 +133,10 @@ std::tuple<
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     int sh_degree = MipSplatting<0>::WorldBuffer(in_splats).sh_degree();
+    sh_degree = min(sh_degree, max_sh_degree);
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_fused_fwd_kernel<MipSplatting<n>>( \
-            in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
+            num_splats, in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
     return {};
@@ -153,6 +156,8 @@ std::tuple<
     TensorList  // out splats
 > projection_3dgut_forward_tensor(
     // inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -162,9 +167,10 @@ std::tuple<
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     int sh_degree = Vanilla3DGUT<0>::WorldBuffer(in_splats).sh_degree();
+    sh_degree = min(sh_degree, max_sh_degree);
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_fused_fwd_kernel<Vanilla3DGUT<n>>( \
-            in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
+            num_splats, in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
     return {};

@@ -124,6 +124,7 @@ void fused_adam_scale_agnostic_mean(
 
 
 void fused_optim_3dgs_geometry(
+    int64_t num_splats,
     at::Tensor means,
     at::Tensor v_means,
     at::Tensor g1_means,
@@ -162,6 +163,7 @@ void fused_optim_3dgs_geometry(
 
 
 void fused_adam_with_steps_tensor(
+    uint64_t num_splats,
     at::Tensor param,
     at::Tensor grad,
     at::Tensor exp_avg,
@@ -174,6 +176,7 @@ void fused_adam_with_steps_tensor(
 
 
 void fused_adam_with_steps_8bit_tensor(
+    uint64_t num_splats,
     at::Tensor param,
     at::Tensor grad,
     at::Tensor exp_avg,

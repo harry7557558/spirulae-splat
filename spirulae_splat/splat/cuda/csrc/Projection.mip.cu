@@ -18,6 +18,7 @@ std::tuple<
     TensorList  // out splats
 > projection_mip_hetero_forward_tensor(
     // inputs
+    const int max_sh_degree,
     const TensorList in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -53,6 +54,7 @@ std::tuple<
 
     if (nnz != 0) {
         int sh_degree = MipSplatting<0>::WorldBuffer(in_splats).sh_degree();
+        sh_degree = min(sh_degree, max_sh_degree);
         constexpr uint block = 128;
         #define LAUNCH(n) if (sh_degree == n) { \
             if (cmt(camera_model) == ssplat::CameraModelType::PINHOLE) \

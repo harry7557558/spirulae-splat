@@ -9,18 +9,17 @@ template void projection_fused_fwd_kernel_wrapper<
     ssplat::CameraModelType::PINHOLE
 >(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     Vanilla3DGUT<3>::WorldBuffer splats_world,
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    float4 *__restrict__ aabbs,         // [B, C, N, 4]
-    float *__restrict__ sorting_depths,  // [B, C, N, 1]
+    float4 *__restrict__ aabbs,         // [C, N, 4]
+    float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
     Vanilla3DGUT<3>::ScreenBuffer splats_screen
 );
@@ -30,18 +29,17 @@ template void projection_fused_fwd_kernel_wrapper<
     ssplat::CameraModelType::FISHEYE
 >(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     Vanilla3DGUT<3>::WorldBuffer splats_world,
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    float4 *__restrict__ aabbs,         // [B, C, N, 4]
-    float *__restrict__ sorting_depths,  // [B, C, N, 1]
+    float4 *__restrict__ aabbs,         // [C, N, 4]
+    float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
     Vanilla3DGUT<3>::ScreenBuffer splats_screen
 );
@@ -51,18 +49,17 @@ template void projection_fused_fwd_kernel_wrapper<
     ssplat::CameraModelType::EQUISOLID
 >(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     Vanilla3DGUT<3>::WorldBuffer splats_world,
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    float4 *__restrict__ aabbs,         // [B, C, N, 4]
-    float *__restrict__ sorting_depths,  // [B, C, N, 1]
+    float4 *__restrict__ aabbs,         // [C, N, 4]
+    float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
     Vanilla3DGUT<3>::ScreenBuffer splats_screen
 );
@@ -72,18 +69,17 @@ template void projection_fused_fwd_kernel_wrapper<
     ssplat::CameraModelType::PINHOLE
 >(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     Vanilla3DGUT<4>::WorldBuffer splats_world,
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    float4 *__restrict__ aabbs,         // [B, C, N, 4]
-    float *__restrict__ sorting_depths,  // [B, C, N, 1]
+    float4 *__restrict__ aabbs,         // [C, N, 4]
+    float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
     Vanilla3DGUT<4>::ScreenBuffer splats_screen
 );
@@ -93,18 +89,17 @@ template void projection_fused_fwd_kernel_wrapper<
     ssplat::CameraModelType::FISHEYE
 >(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     Vanilla3DGUT<4>::WorldBuffer splats_world,
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    float4 *__restrict__ aabbs,         // [B, C, N, 4]
-    float *__restrict__ sorting_depths,  // [B, C, N, 1]
+    float4 *__restrict__ aabbs,         // [C, N, 4]
+    float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
     Vanilla3DGUT<4>::ScreenBuffer splats_screen
 );
@@ -114,18 +109,17 @@ template void projection_fused_fwd_kernel_wrapper<
     ssplat::CameraModelType::EQUISOLID
 >(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     Vanilla3DGUT<4>::WorldBuffer splats_world,
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    float4 *__restrict__ aabbs,         // [B, C, N, 4]
-    float *__restrict__ sorting_depths,  // [B, C, N, 1]
+    float4 *__restrict__ aabbs,         // [C, N, 4]
+    float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
     Vanilla3DGUT<4>::ScreenBuffer splats_screen
 );

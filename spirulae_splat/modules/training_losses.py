@@ -1083,6 +1083,7 @@ class SplatTrainingLosses:
                 self.g2_bilagrid = torch.zeros_like(self.bilagrid.grids)
             lr = optim_config.get_scheduled_lr("bilagrid", self.step, max_steps)
             _make_lazy_cuda_func("fused_adam_with_steps")(
+                self.bilagrid.grids.numel(),
                 self.bilagrid.grids, self.v_bilagrid, self.g1_bilagrid, self.g2_bilagrid,
                 lr, step+1, 0.0, 0.0
             )
@@ -1094,6 +1095,7 @@ class SplatTrainingLosses:
                 self.g2_ppisp = torch.zeros_like(self.ppisp_params)
             lr = optim_config.get_scheduled_lr("ppisp", self.step, max_steps)
             _make_lazy_cuda_func("fused_adam_with_steps")(
+                self.ppisp_params.numel(),
                 self.ppisp_params, self.v_ppisp, self.g1_ppisp, self.g2_ppisp,
                 lr, step+1, 0.0, 0.0
             )
@@ -1106,6 +1108,7 @@ class SplatTrainingLosses:
                 self.g2_bilagrid_depth = torch.zeros_like(self.bilagrid_depth.grids)
             lr = optim_config.get_scheduled_lr("bilagrid_depth", self.step, max_steps)
             _make_lazy_cuda_func("fused_adam_with_steps")(
+                self.bilagrid_depth.grids.numel(),
                 self.bilagrid_depth.grids, self.v_bilagrid_depth, self.g1_bilagrid_depth, self.g2_bilagrid_depth,
                 lr, step+1, 0.0, 0.0
             )
@@ -1118,6 +1121,7 @@ class SplatTrainingLosses:
                 self.g2_bilagrid_normal = torch.zeros_like(self.bilagrid_normal.grids)
             lr = optim_config.get_scheduled_lr("bilagrid_normal", self.step, max_steps)
             _make_lazy_cuda_func("fused_adam_with_steps")(
+                self.bilagrid_normal.grids.numel(),
                 self.bilagrid_normal.grids, self.v_bilagrid_normal, self.g1_bilagrid_normal, self.g2_bilagrid_normal,
                 lr, step+1, 0.0, 0.0
             )

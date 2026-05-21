@@ -12,32 +12,30 @@ namespace cg = cooperative_groups;
 template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
 void projection_packed_mask_kernel_wrapper(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    typename SplatPrimitive::WorldBuffer splats_world,  // [B, N, ...]
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    typename SplatPrimitive::WorldBuffer splats_world,  // [N, ...]
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    bool *__restrict__ intersection_mask  // [B, C, N]
+    bool *__restrict__ intersection_mask  // [C, N]
 );
 
 template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
 void projection_packed_fwd_kernel_wrapper(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    typename SplatPrimitive::WorldBuffer splats_world,  // [B, N, ...]
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    typename SplatPrimitive::WorldBuffer splats_world,  // [N, ...]
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
-    const int64_t* __restrict__ intersection_mask_scan,  // [B, C, N], inclusive scan
+    const int64_t* __restrict__ intersection_mask_scan,  // [C, N], inclusive scan
     // outputs
     int32_t *__restrict__ camera_ids,    // [nnz]
     int32_t *__restrict__ gaussian_ids,  // [nnz]
@@ -57,6 +55,7 @@ inline std::tuple<
     at::Tensor,  // radii
     TensorList  // out splats
 > launch_projection_packed_fwd_kernel(
+    const int64_t N,
     const TensorList &in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -66,17 +65,14 @@ inline std::tuple<
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     typename SplatPrimitive::WorldBuffer splats_world(in_splats);
-    uint32_t N = splats_world.size();    // number of gaussians
     uint32_t C = viewmats.size(-3); // number of cameras
-    // uint32_t B = splats_world.batchSize();    // number of batches
-    uint32_t B = 1;  // TODO
 
     // mask
 
-    at::Tensor intersection_mask = at::empty({B*C*N}, kTensorOptionBool());
+    at::Tensor intersection_mask = at::empty({C*N}, kTensorOptionBool());
 
     #define _LAUNCH_ARGS ( \
-            (cudaStream_t)at::cuda::getCurrentCUDAStream(), B, C, N, \
+            (cudaStream_t)at::cuda::getCurrentCUDAStream(), C, N, \
             splats_world, viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, \
             intersection_mask.data_ptr<bool>() \
@@ -98,14 +94,14 @@ inline std::tuple<
     #if 0
     at::Tensor intersection_mask_scan = at::cumsum(intersection_mask, -1);
     #else
-    at::Tensor intersection_mask_scan = at::empty({B*C*N}, kTensorOptionI64());
+    at::Tensor intersection_mask_scan = at::empty({C*N}, kTensorOptionI64());
     {
         size_t temp_storage_bytes = 0;
         cub::DeviceScan::InclusiveSum(
             nullptr, temp_storage_bytes,
             intersection_mask.data_ptr<bool>(),
             intersection_mask_scan.data_ptr<int64_t>(),
-            B*C*N);
+            C*N);
 
         at::Tensor temp_storage = at::empty({(int64_t)temp_storage_bytes}, kTensorOptionByte());
 
@@ -113,7 +109,7 @@ inline std::tuple<
             temp_storage.data_ptr<uint8_t>(), temp_storage_bytes,
             intersection_mask.data_ptr<bool>(),
             intersection_mask_scan.data_ptr<int64_t>(),
-            B*C*N);
+            C*N);
     }
     #endif
     int64_t nnz = intersection_mask_scan[-1].item<int64_t>();
@@ -124,13 +120,13 @@ inline std::tuple<
     at::Tensor gaussian_ids = at::empty({nnz,}, kTensorOptionI32());
     at::Tensor aabb = at::empty({nnz, 4}, kTensorOptionF32());
     at::Tensor sorting_depths = at::empty({nnz,}, kTensorOptionF32());
-    at::Tensor radii = at::empty({N,}, kTensorOptionF32());
+    at::Tensor radii = at::empty({splats_world.size(),}, kTensorOptionF32());
     set_zero_tensor(radii);
 
     TensorList splats_screen = SplatPrimitive::ScreenBuffer::empty(nnz);
 
     #define _LAUNCH_ARGS ( \
-            (cudaStream_t)at::cuda::getCurrentCUDAStream(), B, C, N, \
+            (cudaStream_t)at::cuda::getCurrentCUDAStream(), C, N, \
             splats_world, viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
             image_width, image_height, \
             intersection_mask_scan.data_ptr<int64_t>(), \
@@ -169,6 +165,8 @@ std::tuple<
     TensorList  // out splats
 > projection_3dgs_packed_forward_tensor(
     // inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -178,9 +176,10 @@ std::tuple<
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     int sh_degree = Vanilla3DGS<0>::WorldBuffer(in_splats).sh_degree();
+    sh_degree = min(sh_degree, max_sh_degree);
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_packed_fwd_kernel<Vanilla3DGS<n>>( \
-            in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
+            num_splats, in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
     return {};
@@ -201,6 +200,8 @@ std::tuple<
     TensorList  // out splats
 > projection_mip_packed_forward_tensor(
     // inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -210,9 +211,10 @@ std::tuple<
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     int sh_degree = MipSplatting<0>::WorldBuffer(in_splats).sh_degree();
+    sh_degree = min(sh_degree, max_sh_degree);
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_packed_fwd_kernel<MipSplatting<n>>( \
-            in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
+            num_splats, in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
     return {};
@@ -234,6 +236,8 @@ std::tuple<
     TensorList  // out splats
 > projection_3dgut_packed_forward_tensor(
     // inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -243,9 +247,10 @@ std::tuple<
     const CameraDistortionCoeffsTensor dist_coeffs
 ) {
     int sh_degree = Vanilla3DGUT<0>::WorldBuffer(in_splats).sh_degree();
+    sh_degree = min(sh_degree, max_sh_degree);
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_packed_fwd_kernel<Vanilla3DGUT<n>>( \
-            in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
+            num_splats, in_splats, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
     return {};

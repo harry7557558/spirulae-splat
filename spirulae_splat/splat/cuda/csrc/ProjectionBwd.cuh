@@ -23,6 +23,8 @@
 
 void projection_3dgs_backward_tensor(
     // fwd inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -44,6 +46,8 @@ void projection_3dgs_backward_tensor(
 
 void projection_3dgs_backward_with_hessian_diagonal_tensor(
     // fwd inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -69,6 +73,8 @@ void projection_3dgs_backward_with_hessian_diagonal_tensor(
 
 void projection_3dgs_backward_with_position_hessian_diagonal_tensor(
     // fwd inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -94,6 +100,8 @@ void projection_3dgs_backward_with_position_hessian_diagonal_tensor(
 
 void projection_mip_backward_tensor(
     // fwd inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -115,6 +123,8 @@ void projection_mip_backward_tensor(
 
 void projection_mip_backward_with_hessian_diagonal_tensor(
     // fwd inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -140,6 +150,8 @@ void projection_mip_backward_with_hessian_diagonal_tensor(
 
 void projection_mip_backward_with_position_hessian_diagonal_tensor(
     // fwd inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -165,6 +177,8 @@ void projection_mip_backward_with_position_hessian_diagonal_tensor(
 
 void projection_3dgut_backward_tensor(
     // fwd inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -186,6 +200,8 @@ void projection_3dgut_backward_tensor(
 
 void projection_3dgut_backward_with_hessian_diagonal_tensor(
     // fwd inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -211,6 +227,8 @@ void projection_3dgut_backward_with_hessian_diagonal_tensor(
 
 void projection_3dgut_backward_with_position_hessian_diagonal_tensor(
     // fwd inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy

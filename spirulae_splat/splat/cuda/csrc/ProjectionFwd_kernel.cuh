@@ -17,33 +17,31 @@ namespace cg = cooperative_groups;
 
 template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
 __global__ void projection_fused_fwd_kernel(
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     typename SplatPrimitive::WorldBuffer splats_world,
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    float4 *__restrict__ aabbs,         // [B, C, N, 4]
-    float *__restrict__ sorting_depths,  // [B, C, N, 1]
+    float4 *__restrict__ aabbs,         // [C, N, 4]
+    float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
     typename SplatPrimitive::ScreenBuffer splats_screen
 ) {
-    // parallelize over B * C * N.
+    // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= B * C * N) {
+    if (idx >= C * N) {
         return;
     }
-    const uint32_t bid = idx / (C * N); // batch id
     const uint32_t cid = (idx / N) % C; // camera id
     const uint32_t gid = idx % N; // gaussian id
 
     // Load camera
-    viewmats += bid * C * 16 + cid * 16;
-    float4 intrin = intrins[bid * C + cid];
+    viewmats += cid * 16;
+    float4 intrin = intrins[cid];
     float3x3 R = {
         viewmats[0], viewmats[1], viewmats[2],  // 1st row
         viewmats[4], viewmats[5], viewmats[6],  // 2nd row
@@ -55,11 +53,11 @@ __global__ void projection_fused_fwd_kernel(
         R, t, fx, fy, cx, cy,
         image_width, image_height,
     };
-    cam.dist_coeffs = dist_coeffs_buffer.load(bid * C + cid);
+    cam.dist_coeffs = dist_coeffs_buffer.load(cid);
 
     // Load splat
     typename SplatPrimitive::World splat_world;
-    splat_world.load(splats_world, bid * N + gid);
+    splat_world.load(splats_world, gid);
 
     // Projection
     float sorting_depth;
@@ -88,25 +86,24 @@ __global__ void projection_fused_fwd_kernel(
 template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
 void projection_fused_fwd_kernel_wrapper(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     typename SplatPrimitive::WorldBuffer splats_world,
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    float4 *__restrict__ aabbs,         // [B, C, N, 4]
-    float *__restrict__ sorting_depths,  // [B, C, N, 1]
+    float4 *__restrict__ aabbs,         // [C, N, 4]
+    float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
     typename SplatPrimitive::ScreenBuffer splats_screen
 ) {
     constexpr uint block = 128;
     projection_fused_fwd_kernel<SplatPrimitive, camera_model>
-    <<<_CEIL_DIV(B*C*N, block), block, 0, stream>>>(
-        B, C, N,
+    <<<_CEIL_DIV(C*N, block), block, 0, stream>>>(
+        C, N,
         splats_world, viewmats, intrins, dist_coeffs_buffer,
         image_width, image_height,
         aabbs, sorting_depths, radii, splats_screen

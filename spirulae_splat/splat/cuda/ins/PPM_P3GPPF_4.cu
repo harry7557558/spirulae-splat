@@ -9,17 +9,16 @@ template void projection_packed_mask_kernel_wrapper<
     ssplat::CameraModelType::PINHOLE
 >(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGUT<0>::WorldBuffer splats_world,  // [B, N, ...]
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    Vanilla3DGUT<0>::WorldBuffer splats_world,  // [N, ...]
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    bool *__restrict__ intersection_mask  // [B, C, N]
+    bool *__restrict__ intersection_mask  // [C, N]
 );
 
 template void projection_packed_mask_kernel_wrapper<
@@ -27,17 +26,16 @@ template void projection_packed_mask_kernel_wrapper<
     ssplat::CameraModelType::FISHEYE
 >(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGUT<0>::WorldBuffer splats_world,  // [B, N, ...]
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    Vanilla3DGUT<0>::WorldBuffer splats_world,  // [N, ...]
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    bool *__restrict__ intersection_mask  // [B, C, N]
+    bool *__restrict__ intersection_mask  // [C, N]
 );
 
 template void projection_packed_mask_kernel_wrapper<
@@ -45,17 +43,16 @@ template void projection_packed_mask_kernel_wrapper<
     ssplat::CameraModelType::EQUISOLID
 >(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGUT<0>::WorldBuffer splats_world,  // [B, N, ...]
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    Vanilla3DGUT<0>::WorldBuffer splats_world,  // [N, ...]
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    bool *__restrict__ intersection_mask  // [B, C, N]
+    bool *__restrict__ intersection_mask  // [C, N]
 );
 
 template void projection_packed_mask_kernel_wrapper<
@@ -63,17 +60,16 @@ template void projection_packed_mask_kernel_wrapper<
     ssplat::CameraModelType::PINHOLE
 >(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGUT<1>::WorldBuffer splats_world,  // [B, N, ...]
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    Vanilla3DGUT<1>::WorldBuffer splats_world,  // [N, ...]
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    bool *__restrict__ intersection_mask  // [B, C, N]
+    bool *__restrict__ intersection_mask  // [C, N]
 );
 
 template void projection_packed_mask_kernel_wrapper<
@@ -81,17 +77,16 @@ template void projection_packed_mask_kernel_wrapper<
     ssplat::CameraModelType::FISHEYE
 >(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGUT<1>::WorldBuffer splats_world,  // [B, N, ...]
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    Vanilla3DGUT<1>::WorldBuffer splats_world,  // [N, ...]
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    bool *__restrict__ intersection_mask  // [B, C, N]
+    bool *__restrict__ intersection_mask  // [C, N]
 );
 
 template void projection_packed_mask_kernel_wrapper<
@@ -99,17 +94,16 @@ template void projection_packed_mask_kernel_wrapper<
     ssplat::CameraModelType::EQUISOLID
 >(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGUT<1>::WorldBuffer splats_world,  // [B, N, ...]
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    Vanilla3DGUT<1>::WorldBuffer splats_world,  // [N, ...]
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    bool *__restrict__ intersection_mask  // [B, C, N]
+    bool *__restrict__ intersection_mask  // [C, N]
 );
 
 template void projection_packed_mask_kernel_wrapper<
@@ -117,17 +111,16 @@ template void projection_packed_mask_kernel_wrapper<
     ssplat::CameraModelType::PINHOLE
 >(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGUT<2>::WorldBuffer splats_world,  // [B, N, ...]
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    Vanilla3DGUT<2>::WorldBuffer splats_world,  // [N, ...]
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    bool *__restrict__ intersection_mask  // [B, C, N]
+    bool *__restrict__ intersection_mask  // [C, N]
 );
 
 template void projection_packed_mask_kernel_wrapper<
@@ -135,17 +128,16 @@ template void projection_packed_mask_kernel_wrapper<
     ssplat::CameraModelType::FISHEYE
 >(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGUT<2>::WorldBuffer splats_world,  // [B, N, ...]
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    Vanilla3DGUT<2>::WorldBuffer splats_world,  // [N, ...]
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    bool *__restrict__ intersection_mask  // [B, C, N]
+    bool *__restrict__ intersection_mask  // [C, N]
 );
 
 template void projection_packed_mask_kernel_wrapper<
@@ -153,15 +145,14 @@ template void projection_packed_mask_kernel_wrapper<
     ssplat::CameraModelType::EQUISOLID
 >(
     cudaStream_t stream,
-    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGUT<2>::WorldBuffer splats_world,  // [B, N, ...]
-    const float *__restrict__ viewmats, // [B, C, 4, 4]
-    const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
+    Vanilla3DGUT<2>::WorldBuffer splats_world,  // [N, ...]
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    bool *__restrict__ intersection_mask  // [B, C, N]
+    bool *__restrict__ intersection_mask  // [C, N]
 );

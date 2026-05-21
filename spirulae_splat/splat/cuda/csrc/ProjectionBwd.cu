@@ -44,6 +44,7 @@ void projection_fused_bwd_kernel_wrapper(
 template<typename SplatPrimitive, HessianDiagonalOutputMode hessian_diagonal_output_mode>
 inline void launch_projection_projection_fused_bwd_kernel(
     // fwd inputs
+    int64_t N,
     const TensorList &splats_world_tuple,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -66,7 +67,6 @@ inline void launch_projection_projection_fused_bwd_kernel(
     const std::optional<std::variant<at::Tensor, TensorList>> h_splats_world_tuple
 ) {
     typename SplatPrimitive::WorldBuffer splats_world(splats_world_tuple);
-    uint32_t N = splats_world.size();    // number of gaussians
     uint32_t C = viewmats.size(-3); // number of cameras
 
     at::Tensor vr_world_pos;
@@ -132,6 +132,8 @@ inline void launch_projection_projection_fused_bwd_kernel(
 /*[AutoHeaderGeneratorExport]*/
 void projection_3dgs_backward_tensor(
     // fwd inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -150,9 +152,10 @@ void projection_3dgs_backward_tensor(
     const std::optional<at::Tensor> &v_viewmats
 ) {
     int sh_degree = Vanilla3DGS<0>::WorldBuffer(splats_world).sh_degree();
+    sh_degree = min(sh_degree, max_sh_degree);
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_projection_fused_bwd_kernel<Vanilla3DGS<n>, HessianDiagonalOutputMode::None>( \
-            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, {}, {}, \
             v_splats_world, v_viewmats, std::nullopt, std::nullopt);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
@@ -162,6 +165,8 @@ void projection_3dgs_backward_tensor(
 /*[AutoHeaderGeneratorExport]*/
 void projection_3dgs_backward_with_hessian_diagonal_tensor(
     // fwd inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -184,9 +189,10 @@ void projection_3dgs_backward_with_hessian_diagonal_tensor(
     const TensorList &h_splats_world
 ) {
     int sh_degree = Vanilla3DGS<0>::WorldBuffer(splats_world).sh_degree();
+    sh_degree = min(sh_degree, max_sh_degree);
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_projection_fused_bwd_kernel<Vanilla3DGS<n>, HessianDiagonalOutputMode::AllReasonable>( \
-            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen, \
             v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
@@ -196,6 +202,8 @@ void projection_3dgs_backward_with_hessian_diagonal_tensor(
 /*[AutoHeaderGeneratorExport]*/
 void projection_3dgs_backward_with_position_hessian_diagonal_tensor(
     // fwd inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -218,9 +226,10 @@ void projection_3dgs_backward_with_position_hessian_diagonal_tensor(
     const at::Tensor &h_splats_world
 ) {
     int sh_degree = Vanilla3DGS<0>::WorldBuffer(splats_world).sh_degree();
+    sh_degree = min(sh_degree, max_sh_degree);
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_projection_fused_bwd_kernel<Vanilla3DGS<n>, HessianDiagonalOutputMode::Position>( \
-            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen, \
             v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
@@ -236,6 +245,8 @@ void projection_3dgs_backward_with_position_hessian_diagonal_tensor(
 /*[AutoHeaderGeneratorExport]*/
 void projection_mip_backward_tensor(
     // fwd inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -254,9 +265,10 @@ void projection_mip_backward_tensor(
     const std::optional<at::Tensor> &v_viewmats
 ) {
     int sh_degree = MipSplatting<0>::WorldBuffer(splats_world).sh_degree();
+    sh_degree = min(sh_degree, max_sh_degree);
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_projection_fused_bwd_kernel<MipSplatting<n>, HessianDiagonalOutputMode::None>( \
-            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, {}, {}, \
             v_splats_world, v_viewmats, std::nullopt, std::nullopt);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
@@ -266,6 +278,8 @@ void projection_mip_backward_tensor(
 /*[AutoHeaderGeneratorExport]*/
 void projection_mip_backward_with_hessian_diagonal_tensor(
     // fwd inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -288,9 +302,10 @@ void projection_mip_backward_with_hessian_diagonal_tensor(
     const TensorList &h_splats_world
 ) {
     int sh_degree = MipSplatting<0>::WorldBuffer(splats_world).sh_degree();
+    sh_degree = min(sh_degree, max_sh_degree);
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_projection_fused_bwd_kernel<MipSplatting<n>, HessianDiagonalOutputMode::AllReasonable>( \
-            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen, \
             v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
@@ -300,6 +315,8 @@ void projection_mip_backward_with_hessian_diagonal_tensor(
 /*[AutoHeaderGeneratorExport]*/
 void projection_mip_backward_with_position_hessian_diagonal_tensor(
     // fwd inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -322,9 +339,10 @@ void projection_mip_backward_with_position_hessian_diagonal_tensor(
     const at::Tensor &h_splats_world
 ) {
     int sh_degree = MipSplatting<0>::WorldBuffer(splats_world).sh_degree();
+    sh_degree = min(sh_degree, max_sh_degree);
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_projection_fused_bwd_kernel<MipSplatting<n>, HessianDiagonalOutputMode::Position>( \
-            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen, \
             v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
@@ -340,6 +358,8 @@ void projection_mip_backward_with_position_hessian_diagonal_tensor(
 /*[AutoHeaderGeneratorExport]*/
 void projection_3dgut_backward_tensor(
     // fwd inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -358,9 +378,10 @@ void projection_3dgut_backward_tensor(
     const std::optional<at::Tensor> &v_viewmats
 ) {
     int sh_degree = Vanilla3DGUT<0>::WorldBuffer(splats_world).sh_degree();
+    sh_degree = min(sh_degree, max_sh_degree);
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT<n>, HessianDiagonalOutputMode::None>( \
-            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, {}, {}, \
             v_splats_world, v_viewmats, std::nullopt, std::nullopt);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
@@ -370,6 +391,8 @@ void projection_3dgut_backward_tensor(
 /*[AutoHeaderGeneratorExport]*/
 void projection_3dgut_backward_with_hessian_diagonal_tensor(
     // fwd inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -392,9 +415,10 @@ void projection_3dgut_backward_with_hessian_diagonal_tensor(
     const TensorList &h_splats_world
 ) {
     int sh_degree = Vanilla3DGUT<0>::WorldBuffer(splats_world).sh_degree();
+    sh_degree = min(sh_degree, max_sh_degree);
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT<n>, HessianDiagonalOutputMode::AllReasonable>( \
-            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen, \
             v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
@@ -404,6 +428,8 @@ void projection_3dgut_backward_with_hessian_diagonal_tensor(
 /*[AutoHeaderGeneratorExport]*/
 void projection_3dgut_backward_with_position_hessian_diagonal_tensor(
     // fwd inputs
+    const int64_t num_splats,
+    const int max_sh_degree,
     const TensorList &splats_world,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -426,9 +452,10 @@ void projection_3dgut_backward_with_position_hessian_diagonal_tensor(
     const at::Tensor &h_splats_world
 ) {
     int sh_degree = Vanilla3DGUT<0>::WorldBuffer(splats_world).sh_degree();
+    sh_degree = min(sh_degree, max_sh_degree);
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT<n>, HessianDiagonalOutputMode::Position>( \
-            splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen, \
             v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)

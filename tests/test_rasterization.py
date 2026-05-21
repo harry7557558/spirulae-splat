@@ -63,7 +63,7 @@ device = torch.device("cuda:0")
 
 
 B, W, H = 4, 1440, 1080
-N, SH_DEGREE = 200000, 3
+N, SH_DEGREE, SH_DEGREE_TO_USE = 200000, 3, 3
 PACKED = True
 IS_FISHEYE = False
 IS_ANTIALIASED = False
@@ -89,6 +89,7 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
         intrins=intrins,  # [C, 4]
         width=W,
         height=H,
+        sh_degree_to_use=SH_DEGREE_TO_USE,
         packed=PACKED,
         use_bvh=False,
         camera_model=camera_model,
@@ -112,7 +113,7 @@ def rasterize_gsplat(means, quats, scales, opacities, features_dc, features_sh, 
         Ks=Ks,  # [C, 3, 3]
         width=W,
         height=H,
-        sh_degree=SH_DEGREE,
+        sh_degree=SH_DEGREE_TO_USE,
         packed=PACKED and not WITH_UT,
         sparse_grad=False,
         rasterize_mode=["classic", "antialiased"][IS_ANTIALIASED],

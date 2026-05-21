@@ -46,41 +46,38 @@ class Renderer:
             else:
                 assert len(splats_world) == 7, "Opaque triangle requires 4 params (means, quats, scales, opacities, color, ch, sh)"
                 means, quats, scales, opacities, features_dc, features_sh, features_ch = splats_world
-            assert len(means.shape) >= 2, "means must have at least 2 dimensions"
-            batch_dims = means.shape[:-2]
+            assert len(means.shape) == 2, "means must have at 2 dimensions"
             N = means.shape[-2]
             device = means.device
-            assert means.shape == batch_dims + (N, 3), means.shape
-            assert quats.shape == batch_dims + (N, 4), quats.shape
-            assert scales.shape == batch_dims + (N, 3), scales.shape
+            assert means.shape == (N, 3), means.shape
+            assert quats.shape == (N, 4), quats.shape
+            assert scales.shape == (N, 3), scales.shape
             if primitive in ["3dgs", "mip", "3dgut", "3dgut_sv"]:
-                assert opacities.shape == batch_dims + (N, 1), opacities.shape
+                assert opacities.shape == (N, 1), opacities.shape
             else:
-                assert opacities.shape == batch_dims + (N, 2), opacities.shape
-                assert features_ch.shape == batch_dims + (N, 2, 3), features_ch.shape
+                assert opacities.shape == (N, 2), opacities.shape
+                assert features_ch.shape == (N, 2, 3), features_ch.shape
         elif primitive in ["voxel"]:
             assert len(splats_world) == 4, "Voxel requires 4 params (pos_sizes, densities, features_dc, features_sh)"
             pos_sizes, densities, features_dc, features_sh = splats_world
-            batch_dims = pos_sizes.shape[:-2]
             N = pos_sizes.shape[-2]
             device = pos_sizes.device
-            assert pos_sizes.shape == batch_dims + (N, 4), pos_sizes.shape
-            assert densities.shape == batch_dims + (N, 8), densities.shape
+            assert pos_sizes.shape == (N, 4), pos_sizes.shape
+            assert densities.shape == (N, 8), densities.shape
         else:
             raise ValueError(f"Invalid primitive ({primitive})")
         if features_dc is not None and features_sh is not None:
-            assert features_dc.shape == batch_dims + (N, 3), features_dc.shape
-            assert features_sh.shape == batch_dims + (N, 0, 3) or \
-                features_sh.shape == batch_dims + (N, 3, 3) or \
-                features_sh.shape == batch_dims + (N, 8, 3) or \
-                features_sh.shape == batch_dims + (N, 15, 3) or \
-                features_sh.shape == batch_dims + (N, 24, 3), features_sh.shape
+            assert features_dc.shape == (N, 3), features_dc.shape
+            assert features_sh.shape == (N, 0, 3) or \
+                features_sh.shape == (N, 3, 3) or \
+                features_sh.shape == (N, 8, 3) or \
+                features_sh.shape == (N, 15, 3) or \
+                features_sh.shape == (N, 24, 3), features_sh.shape
         if sv_sites is not None and sv_colors is not None:
             num_sv = sv_sites.shape[-2]
-            assert sv_sites.shape == batch_dims + (N, num_sv, 3)
-            assert sv_colors.shape == batch_dims + (N, num_sv, 3)
+            assert sv_sites.shape == (N, num_sv, 3)
+            assert sv_colors.shape == (N, num_sv, 3)
 
-        self.batch_dims = batch_dims
         self.device = device
         self.cur_num_splats = cur_num_splats
         self.max_num_splats = N
@@ -101,6 +98,7 @@ class Renderer:
         intrins: Tensor,  # [..., C, 4]
         width: int,
         height: int,
+        sh_degree_to_use: int = 4,
         packed: bool = True,
         use_bvh: bool = False,
         output_distortion: bool = False,
@@ -118,6 +116,7 @@ class Renderer:
         self.intrins = intrins
         self.width = width
         self.height = height
+        self.sh_degree_to_use = sh_degree_to_use
         self.packed = packed
         self.use_bvh = use_bvh
         self.output_distortion = output_distortion
@@ -186,6 +185,8 @@ class Renderer:
             f"projection_{self.primitive}_packed_forward" if self.packed else
             f"projection_{self.primitive}_forward"
         )(
+            self.cur_num_splats,
+            self.sh_degree_to_use,
             self.splats_world,
             self.viewmats, self.intrins, self.width, self.height,
             self.camera_model.upper(), self.dist_coeffs
@@ -377,6 +378,8 @@ class Renderer:
             _make_lazy_cuda_func(
                 f"projection_{self.primitive}_backward"
             )(
+                self.cur_num_splats,
+                self.sh_degree_to_use,
                 self.splats_world,
                 self.viewmats, self.intrins, self.width, self.height, self.camera_model.upper(), self.dist_coeffs,
                 self.camera_ids, self.gaussian_ids, self.aabb,
@@ -386,16 +389,11 @@ class Renderer:
 
     def forward(self):
 
-        if self.cur_num_splats < self.max_num_splats:
-            self.splats_world[3].data[self.cur_num_splats:] = -10.0  # TODO
-
         self.meta = {}
 
-        B = math.prod(self.batch_dims)
         C = self.viewmats.shape[-3]
-        I = B * C
-        assert self.viewmats.shape == self.batch_dims + (C, 4, 4), self.viewmats.shape
-        assert self.intrins.shape == self.batch_dims + (C, 4), self.intrins.shape
+        assert self.viewmats.shape == (C, 4, 4), self.viewmats.shape
+        assert self.intrins.shape == (C, 4), self.intrins.shape
 
         self.backward_info = {}
         if self.use_bvh:
@@ -451,6 +449,7 @@ class Renderer:
             }
         )
         if self.use_bvh:
+            raise NotImplementedError()
             self.meta['bvh_time'] = bvh_time
         # if heterogeneous:
         #     meta.update({
@@ -471,10 +470,10 @@ class Renderer:
             self.aabb,
             self.depths,
             intersect_tile_splat_params,
-            I, self.intrins, self.width, self.height,
+            C, self.intrins, self.width, self.height,
             self.camera_ids if self.packed else None,
         )
-        self.isect_offsets = isect_offsets.reshape(self.batch_dims + (C, tile_height, tile_width))
+        self.isect_offsets = isect_offsets.reshape((C, tile_height, tile_width))
         self.flatten_ids = flatten_ids
 
         self.meta.update(
@@ -489,7 +488,6 @@ class Renderer:
                 "width": self.width,
                 "height": self.height,
                 "tile_size": TILE_SIZE,
-                "n_batches": B,
                 "n_cameras": C,
             }
         )
@@ -564,6 +562,7 @@ class Renderer:
             bias_correction_step = step + 1
 
         _make_lazy_cuda_func(f"fused_projection_bwd_optimizer_{self.primitive}")(
+            self.cur_num_splats,
             self.splats_world,
             self.viewmats, self.intrins, self.width, self.height, self.camera_model.upper(), self.dist_coeffs,
             self.camera_ids if self.packed else None,
@@ -627,6 +626,7 @@ class Renderer:
 
         # geometry, includes regularization and MCMC add noise
         _make_lazy_cuda_func("fused_optim_3dgs_geometry")(
+            self.cur_num_splats,
             self.splats_world[0],
             self.v_splats_world[0],
             self.g1_splats_world[0],
@@ -667,6 +667,7 @@ class Renderer:
         )
 
         _make_lazy_cuda_func("fused_adam_with_steps")(
+            self.cur_num_splats,
             self.splats_world[4],
             self.v_splats_world[4],
             self.g1_splats_world[4],
@@ -679,6 +680,7 @@ class Renderer:
         if self.quantize_sh_optim:
             # TODO: probably better to use structure of array for SH here
             _make_lazy_cuda_func("fused_adam_with_steps_8bit")(
+                self.cur_num_splats,
                 self.splats_world[5],
                 self.v_splats_world[5],
                 self.g1_splats_world[5],
@@ -691,6 +693,7 @@ class Renderer:
             # print(self.quant_bounds_sh)
         else:
             _make_lazy_cuda_func("fused_adam_with_steps")(
+                self.cur_num_splats,
                 self.splats_world[5],
                 self.v_splats_world[5],
                 self.g1_splats_world[5],

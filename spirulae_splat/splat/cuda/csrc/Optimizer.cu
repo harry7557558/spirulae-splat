@@ -893,6 +893,7 @@ __global__ void fused_optim_3dgs_geometry_kernel(
 
 /*[AutoHeaderGeneratorExport]*/
 void fused_optim_3dgs_geometry(
+    int64_t num_splats,
     at::Tensor means,
     at::Tensor v_means,
     at::Tensor g1_means,
@@ -949,15 +950,13 @@ void fused_optim_3dgs_geometry(
     if (std::get_if<at::Tensor>(&step))
         CHECK_INPUT(std::get<at::Tensor>(step));
 
-    // TODO: use actual numel when max gaussian count hasn't reached
-    const int64_t numel = means.numel() / 3;
-    if (numel == 0)
+    if (num_splats == 0)
         return;
     
     (use_scale_agnostic_mean ?
         fused_optim_3dgs_geometry_kernel<true> :
         fused_optim_3dgs_geometry_kernel<false>
-    )<<<_LAUNCH_ARGS_1D(numel, 256)>>>(
+    )<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
         (float3*)means.data_ptr<float>(),
         (const float3*)v_means.data_ptr<float>(),
         (float3*)g1_means.data_ptr<float>(),
@@ -982,17 +981,17 @@ void fused_optim_3dgs_geometry(
         lr_means * mcmc_noise_lr,
         min_opacity,
         max_gauss_ratio,
-        scale_regularization_weight / (float)numel,
-        mcmc_opacity_reg_weight / (float)numel,
-        mcmc_scale_reg_weight / (float)numel,
-        erank_reg_weight / (float)numel,
-        erank_reg_weight_s3 / (float)numel,
-        quat_norm_reg_weight / (float)numel,
+        scale_regularization_weight / (float)num_splats,
+        mcmc_opacity_reg_weight / (float)num_splats,
+        mcmc_scale_reg_weight / (float)num_splats,
+        erank_reg_weight / (float)num_splats,
+        erank_reg_weight_s3 / (float)num_splats,
+        quat_norm_reg_weight / (float)num_splats,
         mrnf_opacity_decay_factor,
         mrnf_scale_decay_factor,
         std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1,
         std::get_if<at::Tensor>(&step) ? std::get<at::Tensor>(step).data_ptr<int32_t>() : nullptr,
-        numel
+        num_splats
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
@@ -1047,6 +1046,7 @@ __global__ void fused_adam_with_steps_kernel(
 
 /*[AutoHeaderGeneratorExport]*/
 void fused_adam_with_steps_tensor(
+    uint64_t num_splats,
     at::Tensor param,
     at::Tensor grad,
     at::Tensor exp_avg,
@@ -1064,18 +1064,17 @@ void fused_adam_with_steps_tensor(
     if (std::get_if<at::Tensor>(&step))
         CHECK_INPUT(std::get<at::Tensor>(step));
 
-    const int64_t numel = param.numel();
-    if (numel == 0)
-        return;
-    int stride = 0;
+    int stride = 1;
     if (std::get_if<at::Tensor>(&step)) {
         int n = (int)std::get<at::Tensor>(step).numel();
-        if (n == 0)
+        if (param.numel() == 0 || n == 0)
             return;
-        stride = (int)(numel / n);
+        stride = (int)(param.numel() / n);
     }
+    if (num_splats * stride == 0)
+        return;
 
-    fused_adam_with_steps_kernel<<<_LAUNCH_ARGS_1D(numel, 256)>>>(
+    fused_adam_with_steps_kernel<<<_LAUNCH_ARGS_1D(num_splats*stride, 256)>>>(
         param.data_ptr<float>(),
         grad.data_ptr<float>(),
         exp_avg.data_ptr<float>(),
@@ -1083,9 +1082,9 @@ void fused_adam_with_steps_tensor(
         lr,
         std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1,
         std::get_if<at::Tensor>(&step) ? std::get<at::Tensor>(step).data_ptr<int32_t>() : nullptr,
-        2.0f*l2_reg/(float)numel,
+        2.0f*l2_reg/(float)num_splats,
         l2_reg_offset,
-        numel,
+        num_splats,
         stride
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -1169,6 +1168,7 @@ __global__ void fused_adam_with_steps_8bit_kernel(
 
 /*[AutoHeaderGeneratorExport]*/
 void fused_adam_with_steps_8bit_tensor(
+    uint64_t num_splats,
     at::Tensor param,
     at::Tensor grad,
     at::Tensor exp_avg,
@@ -1188,19 +1188,18 @@ void fused_adam_with_steps_8bit_tensor(
     if (std::get_if<at::Tensor>(&step))
         CHECK_INPUT(std::get<at::Tensor>(step));
 
-    const int64_t numel = param.numel();
-    if (numel == 0)
-        return;
-    int stride = 0;
+    int stride = 1;
     if (std::get_if<at::Tensor>(&step)) {
         int n = (int)std::get<at::Tensor>(step).numel();
-        if (n == 0)
+        if (param.numel() == 0 || n == 0)
             return;
-        stride = (int)(numel / n);
+        stride = (int)(param.numel() / n);
     }
+    if (num_splats * stride == 0)
+        return;
 
     constexpr int BLOCK_SIZE = 256;
-    fused_adam_with_steps_8bit_kernel<BLOCK_SIZE><<<_LAUNCH_ARGS_1D(numel, BLOCK_SIZE)>>>(
+    fused_adam_with_steps_8bit_kernel<BLOCK_SIZE><<<_LAUNCH_ARGS_1D(num_splats*stride, BLOCK_SIZE)>>>(
         param.data_ptr<float>(),
         grad.data_ptr<float>(),
         exp_avg.data_ptr<uint8_t>(),
@@ -1209,9 +1208,9 @@ void fused_adam_with_steps_8bit_tensor(
         lr,
         std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1,
         std::get_if<at::Tensor>(&step) ? std::get<at::Tensor>(step).data_ptr<int32_t>() : nullptr,
-        2.0f*l2_reg/(float)numel,
+        2.0f*l2_reg/(float)num_splats,
         l2_reg_offset,
-        numel,
+        num_splats,
         stride
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());

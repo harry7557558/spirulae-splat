@@ -21,150 +21,151 @@
 
 
 
-void projection_3dgs_backward_tensor(
-    // fwd inputs
-    const TensorList &splats_world,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
-    // fwd outputs
-    const std::optional<at::Tensor> camera_ids,  // [nnz]
-    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-    const at::Tensor aabb,  // [..., C, N, 2]
-    // grad outputs
-    const TensorList &v_splats_screen,
-    // returns
-    const TensorList &v_splats_world,
-    const std::optional<at::Tensor> &v_viewmats
-);
+// void projection_3dgs_backward_tensor(
+//     // fwd inputs
+//     const TensorList &splats_world,
+//     const at::Tensor viewmats,  // [..., C, 4, 4]
+//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+//     const uint32_t image_width,
+//     const uint32_t image_height,
+//     const std::string camera_model,
+//     const CameraDistortionCoeffsTensor dist_coeffs,
+//     // fwd outputs
+//     const std::optional<at::Tensor> camera_ids,  // [nnz]
+//     const std::optional<at::Tensor> gaussian_ids,  // [nnz]
+//     const at::Tensor aabb,  // [..., C, N, 2]
+//     // grad outputs
+//     const TensorList &v_splats_screen,
+//     // returns
+//     const TensorList &v_splats_world,
+//     const std::optional<at::Tensor> &v_viewmats
+// );
 
 
-void projection_3dgs_backward_with_hessian_diagonal_tensor(
-    // fwd inputs
-    const TensorList &splats_world,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
-    // fwd outputs
-    const std::optional<at::Tensor> camera_ids,  // [nnz]
-    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-    const at::Tensor aabb,                       // [..., C, N, 2]
-    // grad outputs
-    const TensorList &v_splats_screen,
-    const TensorList &vr_splats_screen,
-    const TensorList &h_splats_screen,
-    // returns
-    const TensorList &v_splats_world,
-    const std::optional<at::Tensor> &v_viewmats,
-    const TensorList &vr_splats_world,
-    const TensorList &h_splats_world
-);
+// void projection_3dgs_backward_with_hessian_diagonal_tensor(
+//     // fwd inputs
+//     const TensorList &splats_world,
+//     const at::Tensor viewmats,  // [..., C, 4, 4]
+//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+//     const uint32_t image_width,
+//     const uint32_t image_height,
+//     const std::string camera_model,
+//     const CameraDistortionCoeffsTensor dist_coeffs,
+//     // fwd outputs
+//     const std::optional<at::Tensor> camera_ids,  // [nnz]
+//     const std::optional<at::Tensor> gaussian_ids,  // [nnz]
+//     const at::Tensor aabb,                       // [..., C, N, 2]
+//     // grad outputs
+//     const TensorList &v_splats_screen,
+//     const TensorList &vr_splats_screen,
+//     const TensorList &h_splats_screen,
+//     // returns
+//     const TensorList &v_splats_world,
+//     const std::optional<at::Tensor> &v_viewmats,
+//     const TensorList &vr_splats_world,
+//     const TensorList &h_splats_world
+// );
 
 
-void projection_3dgs_backward_with_position_hessian_diagonal_tensor(
-    // fwd inputs
-    const TensorList &splats_world,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
-    // fwd outputs
-    const std::optional<at::Tensor> camera_ids,  // [nnz]
-    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-    const at::Tensor aabb,                       // [..., C, N, 2]
-    // grad outputs
-    const TensorList &v_splats_screen,
-    const TensorList &vr_splats_screen,
-    const TensorList &h_splats_screen,
-    // returns
-    const TensorList &v_splats_world,
-    const std::optional<at::Tensor> &v_viewmats,
-    const at::Tensor &vr_splats_world,
-    const at::Tensor &h_splats_world
-);
+// void projection_3dgs_backward_with_position_hessian_diagonal_tensor(
+//     // fwd inputs
+//     const TensorList &splats_world,
+//     const at::Tensor viewmats,  // [..., C, 4, 4]
+//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+//     const uint32_t image_width,
+//     const uint32_t image_height,
+//     const std::string camera_model,
+//     const CameraDistortionCoeffsTensor dist_coeffs,
+//     // fwd outputs
+//     const std::optional<at::Tensor> camera_ids,  // [nnz]
+//     const std::optional<at::Tensor> gaussian_ids,  // [nnz]
+//     const at::Tensor aabb,                       // [..., C, N, 2]
+//     // grad outputs
+//     const TensorList &v_splats_screen,
+//     const TensorList &vr_splats_screen,
+//     const TensorList &h_splats_screen,
+//     // returns
+//     const TensorList &v_splats_world,
+//     const std::optional<at::Tensor> &v_viewmats,
+//     const at::Tensor &vr_splats_world,
+//     const at::Tensor &h_splats_world
+// );
 
 
-void projection_mip_backward_tensor(
-    // fwd inputs
-    const TensorList &splats_world,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
-    // fwd outputs
-    const std::optional<at::Tensor> camera_ids,  // [nnz]
-    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-    const at::Tensor aabb,                       // [..., C, N, 2]
-    // grad outputs
-    const TensorList &v_splats_screen,
-    // returns
-    const TensorList &v_splats_world,
-    const std::optional<at::Tensor> &v_viewmats
-);
+// void projection_mip_backward_tensor(
+//     // fwd inputs
+//     const TensorList &splats_world,
+//     const at::Tensor viewmats,  // [..., C, 4, 4]
+//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+//     const uint32_t image_width,
+//     const uint32_t image_height,
+//     const std::string camera_model,
+//     const CameraDistortionCoeffsTensor dist_coeffs,
+//     // fwd outputs
+//     const std::optional<at::Tensor> camera_ids,  // [nnz]
+//     const std::optional<at::Tensor> gaussian_ids,  // [nnz]
+//     const at::Tensor aabb,                       // [..., C, N, 2]
+//     // grad outputs
+//     const TensorList &v_splats_screen,
+//     // returns
+//     const TensorList &v_splats_world,
+//     const std::optional<at::Tensor> &v_viewmats
+// );
 
 
-void projection_mip_backward_with_hessian_diagonal_tensor(
-    // fwd inputs
-    const TensorList &splats_world,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
-    // fwd outputs
-    const std::optional<at::Tensor> camera_ids,  // [nnz]
-    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-    const at::Tensor aabb,                       // [..., C, N, 2]
-    // grad outputs
-    const TensorList &v_splats_screen,
-    const TensorList &vr_splats_screen,
-    const TensorList &h_splats_screen,
-    // returns
-    const TensorList &v_splats_world,
-    const std::optional<at::Tensor> &v_viewmats,
-    const TensorList &vr_splats_world,
-    const TensorList &h_splats_world
-);
+// void projection_mip_backward_with_hessian_diagonal_tensor(
+//     // fwd inputs
+//     const TensorList &splats_world,
+//     const at::Tensor viewmats,  // [..., C, 4, 4]
+//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+//     const uint32_t image_width,
+//     const uint32_t image_height,
+//     const std::string camera_model,
+//     const CameraDistortionCoeffsTensor dist_coeffs,
+//     // fwd outputs
+//     const std::optional<at::Tensor> camera_ids,  // [nnz]
+//     const std::optional<at::Tensor> gaussian_ids,  // [nnz]
+//     const at::Tensor aabb,                       // [..., C, N, 2]
+//     // grad outputs
+//     const TensorList &v_splats_screen,
+//     const TensorList &vr_splats_screen,
+//     const TensorList &h_splats_screen,
+//     // returns
+//     const TensorList &v_splats_world,
+//     const std::optional<at::Tensor> &v_viewmats,
+//     const TensorList &vr_splats_world,
+//     const TensorList &h_splats_world
+// );
 
 
-void projection_mip_backward_with_position_hessian_diagonal_tensor(
-    // fwd inputs
-    const TensorList &splats_world,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
-    // fwd outputs
-    const std::optional<at::Tensor> camera_ids,  // [nnz]
-    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-    const at::Tensor aabb,                       // [..., C, N, 2]
-    // grad outputs
-    const TensorList &v_splats_screen,
-    const TensorList &vr_splats_screen,
-    const TensorList &h_splats_screen,
-    // returns
-    const TensorList &v_splats_world,
-    const std::optional<at::Tensor> &v_viewmats,
-    const at::Tensor &vr_splats_world,
-    const at::Tensor &h_splats_world
-);
+// void projection_mip_backward_with_position_hessian_diagonal_tensor(
+//     // fwd inputs
+//     const TensorList &splats_world,
+//     const at::Tensor viewmats,  // [..., C, 4, 4]
+//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+//     const uint32_t image_width,
+//     const uint32_t image_height,
+//     const std::string camera_model,
+//     const CameraDistortionCoeffsTensor dist_coeffs,
+//     // fwd outputs
+//     const std::optional<at::Tensor> camera_ids,  // [nnz]
+//     const std::optional<at::Tensor> gaussian_ids,  // [nnz]
+//     const at::Tensor aabb,                       // [..., C, N, 2]
+//     // grad outputs
+//     const TensorList &v_splats_screen,
+//     const TensorList &vr_splats_screen,
+//     const TensorList &h_splats_screen,
+//     // returns
+//     const TensorList &v_splats_world,
+//     const std::optional<at::Tensor> &v_viewmats,
+//     const at::Tensor &vr_splats_world,
+//     const at::Tensor &h_splats_world
+// );
 
 
 void fused_projection_bwd_optimizer_3dgut_tensor(
     // fwd inputs
+    const int64_t num_splats,
     TensorList splats_world,
     const at::Tensor viewmats,
     const at::Tensor intrins,
