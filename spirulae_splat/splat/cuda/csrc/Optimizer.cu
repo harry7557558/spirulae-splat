@@ -1082,9 +1082,9 @@ void fused_adam_with_steps_tensor(
         lr,
         std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1,
         std::get_if<at::Tensor>(&step) ? std::get<at::Tensor>(step).data_ptr<int32_t>() : nullptr,
-        2.0f*l2_reg/(float)num_splats,
+        2.0f*l2_reg/(float)(num_splats*stride),
         l2_reg_offset,
-        num_splats,
+        num_splats*stride,
         stride
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -1208,9 +1208,9 @@ void fused_adam_with_steps_8bit_tensor(
         lr,
         std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1,
         std::get_if<at::Tensor>(&step) ? std::get<at::Tensor>(step).data_ptr<int32_t>() : nullptr,
-        2.0f*l2_reg/(float)num_splats,
+        2.0f*l2_reg/(float)(num_splats*stride),
         l2_reg_offset,
-        num_splats,
+        num_splats*stride,
         stride
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());

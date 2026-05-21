@@ -437,7 +437,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
         mcmc_noise_scalar * lr_means,
         min_opacity,
         max_gauss_ratio,
-        scale_regularization_weight / (float)N,  // TODO: use actual N when max gaussian count hasn't reached
+        scale_regularization_weight / (float)N,
         mcmc_opacity_reg_weight / (float)N,
         mcmc_scale_reg_weight / (float)N,
         erank_reg_weight / (float)N,
