@@ -34,6 +34,9 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // optimizer states
     Vanilla3DGS<3>::WorldBuffer g1_splats_world,
     Vanilla3DGS<3>::WorldBuffer g2_splats_world,
+    const uint8_t* __restrict__ g1_features_sh,
+    const uint8_t* __restrict__ g2_features_sh,
+    float4* __restrict__ sh_quant_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -89,6 +92,9 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // optimizer states
     Vanilla3DGS<3>::WorldBuffer g1_splats_world,
     Vanilla3DGS<3>::WorldBuffer g2_splats_world,
+    const uint8_t* __restrict__ g1_features_sh,
+    const uint8_t* __restrict__ g2_features_sh,
+    float4* __restrict__ sh_quant_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -144,6 +150,9 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // optimizer states
     Vanilla3DGS<3>::WorldBuffer g1_splats_world,
     Vanilla3DGS<3>::WorldBuffer g2_splats_world,
+    const uint8_t* __restrict__ g1_features_sh,
+    const uint8_t* __restrict__ g2_features_sh,
+    float4* __restrict__ sh_quant_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -199,6 +208,9 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // optimizer states
     Vanilla3DGS<3>::WorldBuffer g1_splats_world,
     Vanilla3DGS<3>::WorldBuffer g2_splats_world,
+    const uint8_t* __restrict__ g1_features_sh,
+    const uint8_t* __restrict__ g2_features_sh,
+    float4* __restrict__ sh_quant_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -254,6 +266,9 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // optimizer states
     Vanilla3DGS<3>::WorldBuffer g1_splats_world,
     Vanilla3DGS<3>::WorldBuffer g2_splats_world,
+    const uint8_t* __restrict__ g1_features_sh,
+    const uint8_t* __restrict__ g2_features_sh,
+    float4* __restrict__ sh_quant_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -309,6 +324,9 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // optimizer states
     Vanilla3DGS<3>::WorldBuffer g1_splats_world,
     Vanilla3DGS<3>::WorldBuffer g2_splats_world,
+    const uint8_t* __restrict__ g1_features_sh,
+    const uint8_t* __restrict__ g2_features_sh,
+    float4* __restrict__ sh_quant_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,

@@ -62,7 +62,8 @@ template<
     typename SplatPrimitive,
     ssplat::CameraModelType camera_model,
     HessianDiagonalOutputMode hessian_diagonal_output_mode,
-    bool use_scale_agnostic_mean
+    bool use_scale_agnostic_mean,
+    int BLOCK_SIZE
 >
 #if 1
 __global__ void __launch_bounds__(512) fused_projection_bwd_optimizer_3dgs_kernel
@@ -93,6 +94,9 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     // optimizer states
     typename SplatPrimitive::WorldBuffer g1_splats_world,
     typename SplatPrimitive::WorldBuffer g2_splats_world,
+    const uint8_t* __restrict__ g1_features_sh,
+    const uint8_t* __restrict__ g2_features_sh,
+    float4* __restrict__ sh_quant_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -117,28 +121,25 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     const int32_t scalar_step,
     const int32_t* __restrict__ steps
 ) {
-    constexpr uint32_t BLOCK_SIZE = WARP_SIZE;
-
-    uint32_t gid = blockIdx.x * BLOCK_SIZE + threadIdx.x;
-    if (gid >= N) return;
+    uint32_t gid = blockIdx.x * (BLOCK_SIZE == 0 ? blockDim.x : BLOCK_SIZE) + threadIdx.x;
+    bool inside = (gid < N);
 
     bool packed = (camera_id_bounds != nullptr && camera_ids != nullptr);
     int cid_0 = 0, cid_1 = C;
     if (packed) {
-        cid_0 = camera_id_bounds[gid];
-        cid_1 = camera_id_bounds[gid+1];
+        cid_0 = inside ? camera_id_bounds[gid] : 0;
+        cid_1 = inside ? camera_id_bounds[gid+1] : 0;
     }
 
     // Load splat
     typename SplatPrimitive::World splat_world;
-    splat_world.load(splats_world, gid);
+    if (inside) splat_world.load(splats_world, gid);
 
     constexpr int num_sh = SplatPrimitive::World::num_sh();
-    // __shared__ float3 v_sh_coeffs[num_sh*BLOCK_SIZE];
     float v_sh_coeffs[num_sh == 0 ? 1 : 3*num_sh];
 
     typename SplatPrimitive::World v_splat_world = SplatPrimitive::World::zero();
-    v_splat_world.atomicLoad(v_splats_world, gid);
+    if (inside) v_splat_world.atomicLoad(v_splats_world, gid);
     v_splat_world.features_sh = &v_sh_coeffs[0];
     #pragma unroll
     for (int i = 0; i < 3*num_sh; ++i)
@@ -149,14 +150,14 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     float3 vr_world_pos = {0.f, 0.f, 0.f};
     float3 h_world_pos = {0.f, 0.f, 0.f};
     if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
-        vr_world_pos = vr_splats_world.means(gid);
-        h_world_pos = h_splats_world.means(gid);
+        if (inside) vr_world_pos = vr_splats_world.means(gid);
+        if (inside) h_world_pos = h_splats_world.means(gid);
     }
     typename SplatPrimitive::World vr_splat_world = SplatPrimitive::World::zero();
     typename SplatPrimitive::World h_splat_world = SplatPrimitive::World::zero();
     if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable) {
-        vr_splat_world.atomicLoad(vr_splat_world, gid);
-        h_splat_world.atomicLoad(h_splat_world, gid);
+        if (inside) vr_splat_world.atomicLoad(vr_splat_world, gid);
+        if (inside) h_splat_world.atomicLoad(h_splat_world, gid);
     }
 
     // Loop over intersections
@@ -262,110 +263,249 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     static constexpr float eps = 1e-15f;
     static constexpr float beta1 = 0.9f;
     static constexpr float beta2 = 0.999f;
-    float step = (float)(steps != nullptr ? steps[gid] : scalar_step);
+    float step = inside ? (float)(steps != nullptr ? steps[gid] : scalar_step) : 0;
     float inv_bias_correction1 = 1.0f / (1.0f - powf(beta1, step));
     float inv_bias_correction2 = 1.0f / (1.0f - powf(beta2, step));
 
     // update scales
-    float3 g1_scale = beta1 * g1_splats_world.scales(gid) + (1.f - beta1) * v_splat_world.scale;
-    float3 g2_scale = beta2 * g2_splats_world.scales(gid) + (1.f - beta2) * v_splat_world.scale*v_splat_world.scale;
-    float3 new_scale = splat_world.scale - lr_scales * inv_bias_correction1 * g1_scale / (sqrtf(g2_scale * inv_bias_correction2) + eps);
-    if (mrnf_scale_decay_factor != 1.0f)
-        new_scale += make_float3(__logf(mrnf_scale_decay_factor));
-    splats_world.scales(gid) = new_scale;
-    g1_splats_world.scales(gid) = g1_scale;
-    g2_splats_world.scales(gid) = g2_scale;
+    if (inside) {
+        float3 g1_scale = beta1 * g1_splats_world.scales(gid) + (1.f - beta1) * v_splat_world.scale;
+        float3 g2_scale = beta2 * g2_splats_world.scales(gid) + (1.f - beta2) * v_splat_world.scale*v_splat_world.scale;
+        float3 new_scale = splat_world.scale - lr_scales * inv_bias_correction1 * g1_scale / (sqrtf(g2_scale * inv_bias_correction2) + eps);
+        if (mrnf_scale_decay_factor != 1.0f)
+            new_scale += make_float3(__logf(mrnf_scale_decay_factor));
+        splats_world.scales(gid) = new_scale;
+        g1_splats_world.scales(gid) = g1_scale;
+        g2_splats_world.scales(gid) = g2_scale;
+    }
 
     // update quats (Riemannian)
-    float4 new_quat = normalize(splat_world.quat);
-    v_splat_world.quat -= dot(new_quat, v_splat_world.quat) * new_quat;
-    float4 g1_quat = beta1 * g1_splats_world.quats(gid) + (1.f - beta1) * v_splat_world.quat;
-    float4 g2_quat = beta2 * g2_splats_world.quats(gid) + (1.f - beta2) * v_splat_world.quat*v_splat_world.quat;
-    new_quat -= lr_quats * inv_bias_correction1 * g1_quat / (sqrtf(g2_quat * inv_bias_correction2) + eps);
-    splats_world.quats(gid) = normalize(new_quat);
-    g1_splats_world.quats(gid) = g1_quat;
-    g2_splats_world.quats(gid) = g2_quat;
+    if (inside) {
+        float4 new_quat = normalize(splat_world.quat);
+        v_splat_world.quat -= dot(new_quat, v_splat_world.quat) * new_quat;
+        float4 g1_quat = beta1 * g1_splats_world.quats(gid) + (1.f - beta1) * v_splat_world.quat;
+        float4 g2_quat = beta2 * g2_splats_world.quats(gid) + (1.f - beta2) * v_splat_world.quat*v_splat_world.quat;
+        new_quat -= lr_quats * inv_bias_correction1 * g1_quat / (sqrtf(g2_quat * inv_bias_correction2) + eps);
+        splats_world.quats(gid) = normalize(new_quat);
+        g1_splats_world.quats(gid) = g1_quat;
+        g2_splats_world.quats(gid) = g2_quat;
+    }
 
     // update opacs
-    float g1_opac = beta1 * g1_splats_world.opacities(gid) + (1.f - beta1) * v_splat_world.opacity;
-    float g2_opac = beta2 * g2_splats_world.opacities(gid) + (1.f - beta2) * v_splat_world.opacity*v_splat_world.opacity;
-    float new_opac = splat_world.opacity - lr_opacs * inv_bias_correction1 * g1_opac / (sqrtf(g2_opac * inv_bias_correction2) + eps);
-    if (mrnf_opacity_decay_factor != 0.0f) {
-        new_opac = sigmoid(new_opac);
-        new_opac = fmaxf(new_opac + mrnf_opacity_decay_factor, 1e-12f);
-        new_opac = logit(new_opac);
+    if (inside) {
+        float g1_opac = beta1 * g1_splats_world.opacities(gid) + (1.f - beta1) * v_splat_world.opacity;
+        float g2_opac = beta2 * g2_splats_world.opacities(gid) + (1.f - beta2) * v_splat_world.opacity*v_splat_world.opacity;
+        float new_opac = splat_world.opacity - lr_opacs * inv_bias_correction1 * g1_opac / (sqrtf(g2_opac * inv_bias_correction2) + eps);
+        if (mrnf_opacity_decay_factor != 0.0f) {
+            new_opac = sigmoid(new_opac);
+            new_opac = fmaxf(new_opac + mrnf_opacity_decay_factor, 1e-12f);
+            new_opac = logit(new_opac);
+        }
+        splats_world.opacities(gid) = new_opac;
+        g1_splats_world.opacities(gid) = g1_opac;
+        g2_splats_world.opacities(gid) = g2_opac;
     }
-    splats_world.opacities(gid) = new_opac;
-    g1_splats_world.opacities(gid) = g1_opac;
-    g2_splats_world.opacities(gid) = g2_opac;
 
     // update means (scale agnostic)
-    float3 g1_mean = g1_splats_world.means(gid);
-    float3 g2_mean = g2_splats_world.means(gid);
-    float noise_lr_scalar = 1.0f;
-    if constexpr (use_scale_agnostic_mean) {
-        float3 v_mean_scaled_num = SlangProjectionUtils::apply_covar_to_vec(
-            splat_world.quat,
-            {expf(0.5f*splat_world.scale.x), expf(0.5f*splat_world.scale.y), expf(0.5f*splat_world.scale.z)},  // unit: L^0.5
-            v_splat_world.mean  // unit: L^-1
-        ) * sqrtf(2.0f * __logf(fmaxf(255.0f * sigmoid(splat_world.opacity), 1.00001f)));  // unit: dimensionless
-        float v_mean_scaled_den = radii[gid] * 0.6f;  // unit: dimensionless
-        g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean_scaled_num;  // unit: dimensionless
-        g2_mean = beta2 * g2_mean + (1.f - beta2) * v_splat_world.mean*v_splat_world.mean * v_mean_scaled_den*v_mean_scaled_den;  // unit: L^-2
-        // TODO: probably better use a globally consistent one; (MRNF chooses based on median scale)
-        noise_lr_scalar = length(v_mean_scaled_num) / (length(v_splat_world.mean) * v_mean_scaled_den + eps);
-    } else {
-        g1_mean = beta1 * g1_mean + (1.f - beta1) * v_splat_world.mean;  // unit: L^-1
-        g2_mean = beta2 * g2_mean + (1.f - beta2) * v_splat_world.mean*v_splat_world.mean;  // unit: L^-2
+    if (inside) {
+        float3 g1_mean = g1_splats_world.means(gid);
+        float3 g2_mean = g2_splats_world.means(gid);
+        float noise_lr_scalar = 1.0f;
+        if constexpr (use_scale_agnostic_mean) {
+            float3 v_mean_scaled_num = SlangProjectionUtils::apply_covar_to_vec(
+                splat_world.quat,
+                {expf(0.5f*splat_world.scale.x), expf(0.5f*splat_world.scale.y), expf(0.5f*splat_world.scale.z)},  // unit: L^0.5
+                v_splat_world.mean  // unit: L^-1
+            ) * sqrtf(2.0f * __logf(fmaxf(255.0f * sigmoid(splat_world.opacity), 1.00001f)));  // unit: dimensionless
+            float v_mean_scaled_den = radii[gid] * 0.6f;  // unit: dimensionless
+            g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean_scaled_num;  // unit: dimensionless
+            g2_mean = beta2 * g2_mean + (1.f - beta2) * v_splat_world.mean*v_splat_world.mean * v_mean_scaled_den*v_mean_scaled_den;  // unit: L^-2
+            // TODO: probably better use a globally consistent one; (MRNF chooses based on median scale)
+            noise_lr_scalar = length(v_mean_scaled_num) / (length(v_splat_world.mean) * v_mean_scaled_den + eps);
+        } else {
+            g1_mean = beta1 * g1_mean + (1.f - beta1) * v_splat_world.mean;  // unit: L^-1
+            g2_mean = beta2 * g2_mean + (1.f - beta2) * v_splat_world.mean*v_splat_world.mean;  // unit: L^-2
+        }
+        float3 new_mean = splat_world.mean;
+        SlangDensify::mcmc_add_noise_3dgs(
+            mcmc_noise_scalar * noise_lr_scalar, min_opacity,
+            &new_mean, splat_world.scale, splat_world.quat, sigmoid(splat_world.opacity)
+            // official MCMC use scale/quat/opac after optimizer step/densification, shouldn't matter in practice
+        );
+        splats_world.means(gid) = new_mean - lr_means * inv_bias_correction1 * g1_mean /
+            (sqrtf(g2_mean * inv_bias_correction2) + eps); // unit: L or dimensionless for dimensionless lr_means
+        g1_splats_world.means(gid) = g1_mean;
+        g2_splats_world.means(gid) = g2_mean;
     }
-    float3 new_mean = splat_world.mean;
-    SlangDensify::mcmc_add_noise_3dgs(
-        mcmc_noise_scalar * noise_lr_scalar, min_opacity,
-        &new_mean, splat_world.scale, splat_world.quat, sigmoid(splat_world.opacity)
-        // official MCMC use scale/quat/opac after optimizer step/densification, shouldn't matter in practice
-    );
-    splats_world.means(gid) = new_mean - lr_means * inv_bias_correction1 * g1_mean /
-        (sqrtf(g2_mean * inv_bias_correction2) + eps); // unit: L or dimensionless for dimensionless lr_means
-    g1_splats_world.means(gid) = g1_mean;
-    g2_splats_world.means(gid) = g2_mean;
 
     // update features_dc
-    float3 g1_feature_dc = beta1 * g1_splats_world.features_dc(gid) + (1.f - beta1) * v_splat_world.features_dc;
-    float3 g2_feature_dc = beta2 * g2_splats_world.features_dc(gid) + (1.f - beta2) * v_splat_world.features_dc*v_splat_world.features_dc;
-    splats_world.features_dc(gid) = splat_world.features_dc - lr_features_dc * inv_bias_correction1
-        * g1_feature_dc / (sqrtf(g2_feature_dc * inv_bias_correction2) + eps);
-    g1_splats_world.features_dc(gid) = g1_feature_dc;
-    g2_splats_world.features_dc(gid) = g2_feature_dc;
+    if (inside) {
+        float3 g1_feature_dc = beta1 * g1_splats_world.features_dc(gid) + (1.f - beta1) * v_splat_world.features_dc;
+        float3 g2_feature_dc = beta2 * g2_splats_world.features_dc(gid) + (1.f - beta2) * v_splat_world.features_dc*v_splat_world.features_dc;
+        splats_world.features_dc(gid) = splat_world.features_dc - lr_features_dc * inv_bias_correction1
+            * g1_feature_dc / (sqrtf(g2_feature_dc * inv_bias_correction2) + eps);
+        g1_splats_world.features_dc(gid) = g1_feature_dc;
+        g2_splats_world.features_dc(gid) = g2_feature_dc;
+    }
 
     // update features_sh
     // TODO: more cache-friendly memory access pattern
     int i = 0;
     float lr_sh = lr_features_sh * inv_bias_correction1;
     float* v_sh_ptr = v_splat_world.features_sh;
-    float* g1_sh_ptr = g1_splats_world.features_sh(gid);
-    float* g2_sh_ptr = g2_splats_world.features_sh(gid);
     float* sh_ptr = splats_world.features_sh(gid);
     const float reg_weight = sh_reg_weight * (1.0f / (float)num_sh);
-    #pragma unroll
-    for (; i+3 < 3*num_sh; i += 4) {
-        float4 sh_coeff = float4{sh_ptr[i], sh_ptr[i+1], sh_ptr[i+2], sh_ptr[i+3]};
-        float4 v_sh_coeff = float4{v_sh_ptr[i], v_sh_ptr[i+1], v_sh_ptr[i+2], v_sh_ptr[i+3]} + reg_weight * sh_coeff;
-        float4 g1_feature_sh = beta1 * float4{g1_sh_ptr[i], g1_sh_ptr[i+1], g1_sh_ptr[i+2], g1_sh_ptr[i+3]} + (1.f - beta1) * v_sh_coeff;
-        float4 g2_feature_sh = beta2 * float4{g2_sh_ptr[i], g2_sh_ptr[i+1], g2_sh_ptr[i+2], g2_sh_ptr[i+3]} + (1.f - beta2) * v_sh_coeff*v_sh_coeff;
-        sh_coeff -= lr_sh * g1_feature_sh / (sqrtf(g2_feature_sh * inv_bias_correction2) + eps);
-        sh_ptr[i] = sh_coeff.x; sh_ptr[i+1] = sh_coeff.y; sh_ptr[i+2] = sh_coeff.z; sh_ptr[i+3] = sh_coeff.w;
-        g1_sh_ptr[i] = g1_feature_sh.x; g1_sh_ptr[i+1] = g1_feature_sh.y; g1_sh_ptr[i+2] = g1_feature_sh.z; g1_sh_ptr[i+3] = g1_feature_sh.w;
-        g2_sh_ptr[i] = g2_feature_sh.x; g2_sh_ptr[i+1] = g2_feature_sh.y; g2_sh_ptr[i+2] = g2_feature_sh.z; g2_sh_ptr[i+3] = g2_feature_sh.w;
-    }
-    #pragma unroll
-    for (; i < 3*num_sh; ++i) {
-        float sh_coeff = sh_ptr[i];
-        float v_sh_coeff = v_sh_ptr[i] + reg_weight * sh_coeff;
-        float g1_feature_sh = beta1 * g1_sh_ptr[i] + (1.f - beta1) * v_sh_coeff;
-        float g2_feature_sh = beta2 * g2_sh_ptr[i] + (1.f - beta2) * v_sh_coeff*v_sh_coeff;
-        sh_ptr[i] = sh_coeff - lr_sh * g1_feature_sh / (sqrtf(g2_feature_sh * inv_bias_correction2) + eps);
-        g1_sh_ptr[i] = g1_feature_sh;
-        g2_sh_ptr[i] = g2_feature_sh;
+
+    if constexpr (BLOCK_SIZE == 0) {
+        if (!inside) return;
+        float* g1_sh_ptr = g1_splats_world.features_sh(gid);
+        float* g2_sh_ptr = g2_splats_world.features_sh(gid);
+        #pragma unroll
+        for (; i+3 < 3*num_sh; i += 4) {
+            float4 sh_coeff = float4{sh_ptr[i], sh_ptr[i+1], sh_ptr[i+2], sh_ptr[i+3]};
+            float4 v_sh_coeff = float4{v_sh_ptr[i], v_sh_ptr[i+1], v_sh_ptr[i+2], v_sh_ptr[i+3]} + reg_weight * sh_coeff;
+            float4 g1_feature_sh = beta1 * float4{g1_sh_ptr[i], g1_sh_ptr[i+1], g1_sh_ptr[i+2], g1_sh_ptr[i+3]} + (1.f - beta1) * v_sh_coeff;
+            float4 g2_feature_sh = beta2 * float4{g2_sh_ptr[i], g2_sh_ptr[i+1], g2_sh_ptr[i+2], g2_sh_ptr[i+3]} + (1.f - beta2) * v_sh_coeff*v_sh_coeff;
+            sh_coeff -= lr_sh * g1_feature_sh / (sqrtf(g2_feature_sh * inv_bias_correction2) + eps);
+            sh_ptr[i] = sh_coeff.x; sh_ptr[i+1] = sh_coeff.y; sh_ptr[i+2] = sh_coeff.z; sh_ptr[i+3] = sh_coeff.w;
+            g1_sh_ptr[i] = g1_feature_sh.x; g1_sh_ptr[i+1] = g1_feature_sh.y; g1_sh_ptr[i+2] = g1_feature_sh.z; g1_sh_ptr[i+3] = g1_feature_sh.w;
+            g2_sh_ptr[i] = g2_feature_sh.x; g2_sh_ptr[i+1] = g2_feature_sh.y; g2_sh_ptr[i+2] = g2_feature_sh.z; g2_sh_ptr[i+3] = g2_feature_sh.w;
+        }
+        #pragma unroll
+        for (; i < 3*num_sh; ++i) {
+            float sh_coeff = sh_ptr[i];
+            float v_sh_coeff = v_sh_ptr[i] + reg_weight * sh_coeff;
+            float g1_feature_sh = beta1 * g1_sh_ptr[i] + (1.f - beta1) * v_sh_coeff;
+            float g2_feature_sh = beta2 * g2_sh_ptr[i] + (1.f - beta2) * v_sh_coeff*v_sh_coeff;
+            sh_ptr[i] = sh_coeff - lr_sh * g1_feature_sh / (sqrtf(g2_feature_sh * inv_bias_correction2) + eps);
+            g1_sh_ptr[i] = g1_feature_sh;
+            g2_sh_ptr[i] = g2_feature_sh;
+        }
+    } else if constexpr (num_sh > 0) {
+        const uchar3* g1_sh_ptr = reinterpret_cast<const uchar3*>(g1_features_sh + 3 * num_sh * gid);
+        const uchar3* g2_sh_ptr = reinterpret_cast<const uchar3*>(g2_features_sh + 3 * num_sh * gid);
+        uchar3* g1_sh_out_ptr = reinterpret_cast<uchar3*>(const_cast<uint8_t*>(g1_features_sh + 3 * num_sh * gid));
+        uchar3* g2_sh_out_ptr = reinterpret_cast<uchar3*>(const_cast<uint8_t*>(g2_features_sh + 3 * num_sh * gid));
+        float4 quant_bounds = sh_quant_bounds[blockIdx.x];
+        float4 mm = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
+
+        float3 g1_sh_vals[num_sh];
+        float3 g2_sh_vals[num_sh];
+
+    if (inside) {
+        #pragma unroll
+        for (int j = 0; j < num_sh; ++j) {
+            const uchar3 g1_bytes = g1_sh_ptr[j];
+            const uchar3 g2_bytes = g2_sh_ptr[j];
+            float3 g1_feature_sh = make_float3(
+                (g1_bytes.x + 0.5f) * (1.0f / 256.0f),
+                (g1_bytes.y + 0.5f) * (1.0f / 256.0f),
+                (g1_bytes.z + 0.5f) * (1.0f / 256.0f)
+            );
+            g1_feature_sh = make_float3(
+                quant_bounds.x + (quant_bounds.y - quant_bounds.x) * g1_feature_sh.x,
+                quant_bounds.x + (quant_bounds.y - quant_bounds.x) * g1_feature_sh.y,
+                quant_bounds.x + (quant_bounds.y - quant_bounds.x) * g1_feature_sh.z
+            );
+            float3 g2_feature_sh = make_float3(
+                (g2_bytes.x + 0.5f) * (1.0f / 256.0f),
+                (g2_bytes.y + 0.5f) * (1.0f / 256.0f),
+                (g2_bytes.z + 0.5f) * (1.0f / 256.0f)
+            );
+            g2_feature_sh = make_float3(
+                quant_bounds.z + (quant_bounds.w - quant_bounds.z) * g2_feature_sh.x,
+                quant_bounds.z + (quant_bounds.w - quant_bounds.z) * g2_feature_sh.y,
+                quant_bounds.z + (quant_bounds.w - quant_bounds.z) * g2_feature_sh.z
+            );
+            g2_feature_sh = make_float3(
+                g2_feature_sh.x * g2_feature_sh.x,
+                g2_feature_sh.y * g2_feature_sh.y,
+                g2_feature_sh.z * g2_feature_sh.z
+            );
+
+            float3 sh_coeff = make_float3(sh_ptr[3*j], sh_ptr[3*j+1], sh_ptr[3*j+2]);
+            float3 v_sh_coeff = make_float3(
+                v_sh_ptr[3*j] + reg_weight * sh_coeff.x,
+                v_sh_ptr[3*j+1] + reg_weight * sh_coeff.y,
+                v_sh_ptr[3*j+2] + reg_weight * sh_coeff.z
+            );
+            float3 g1_updated = beta1 * g1_feature_sh + (1.f - beta1) * v_sh_coeff;
+            float3 g2_updated = beta2 * g2_feature_sh + (1.f - beta2) * make_float3(v_sh_coeff.x*v_sh_coeff.x, v_sh_coeff.y*v_sh_coeff.y, v_sh_coeff.z*v_sh_coeff.z);
+            float3 denom = sqrtf(g2_updated * inv_bias_correction2) + make_float3(eps);
+            float3 sh_updated = make_float3(
+                sh_coeff.x - lr_sh * g1_updated.x / denom.x,
+                sh_coeff.y - lr_sh * g1_updated.y / denom.y,
+                sh_coeff.z - lr_sh * g1_updated.z / denom.z
+            );
+            sh_ptr[3*j] = sh_updated.x;
+            sh_ptr[3*j+1] = sh_updated.y;
+            sh_ptr[3*j+2] = sh_updated.z;
+
+            g1_sh_vals[j] = g1_updated;
+            g2_sh_vals[j] = g2_updated;
+
+            mm.x = fminf(mm.x, g1_updated.x);
+            mm.y = fmaxf(mm.y, g1_updated.x);
+            mm.x = fminf(mm.x, g1_updated.y);
+            mm.y = fmaxf(mm.y, g1_updated.y);
+            mm.x = fminf(mm.x, g1_updated.z);
+            mm.y = fmaxf(mm.y, g1_updated.z);
+            float3 sqrt_g2 = make_float3(sqrtf(g2_updated.x), sqrtf(g2_updated.y), sqrtf(g2_updated.z));
+            mm.z = fminf(mm.z, sqrt_g2.x);
+            mm.w = fmaxf(mm.w, sqrt_g2.x);
+            mm.z = fminf(mm.z, sqrt_g2.y);
+            mm.w = fmaxf(mm.w, sqrt_g2.y);
+            mm.z = fminf(mm.z, sqrt_g2.z);
+            mm.w = fmaxf(mm.w, sqrt_g2.z);
+        }
+    }  // inside
+
+        auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
+        mm.x = cg::reduce(warp, mm.x, cg::less<float>());
+        mm.y = cg::reduce(warp, mm.y, cg::greater<float>());
+        mm.z = cg::reduce(warp, mm.z, cg::less<float>());
+        mm.w = cg::reduce(warp, mm.w, cg::greater<float>());
+        __shared__ float4 shared_reduce[BLOCK_SIZE / WARP_SIZE];
+        if (threadIdx.x % WARP_SIZE == 0)
+            shared_reduce[threadIdx.x / WARP_SIZE] = mm;
+        __syncthreads();
+        mm = (threadIdx.x < BLOCK_SIZE / WARP_SIZE) ?
+            shared_reduce[threadIdx.x] : make_float4(1e30f, -1e30f, 1e30f, -1e30f);
+        mm.x = cg::reduce(warp, mm.x, cg::less<float>());
+        mm.y = cg::reduce(warp, mm.y, cg::greater<float>());
+        mm.z = cg::reduce(warp, mm.z, cg::less<float>());
+        mm.w = cg::reduce(warp, mm.w, cg::greater<float>());
+        __syncthreads();
+        if (threadIdx.x < BLOCK_SIZE / WARP_SIZE)
+            shared_reduce[threadIdx.x] = mm;
+        __syncthreads();
+        mm = shared_reduce[threadIdx.x / WARP_SIZE];
+
+        float g1_range = fmaxf(mm.y - mm.x, eps);
+        float g2_range = fmaxf(mm.w - mm.z, eps);
+        if (threadIdx.x == 0)
+            sh_quant_bounds[blockIdx.x] = mm;
+
+        if (!inside)
+            return;
+
+        #pragma unroll
+        for (int j = 0; j < num_sh; ++j) {
+            float3 g1_updated = g1_sh_vals[j];
+            float3 sqrt_g2_updated = make_float3(sqrtf(g2_sh_vals[j].x), sqrtf(g2_sh_vals[j].y), sqrtf(g2_sh_vals[j].z));
+            uchar3 g1_bytes = make_uchar3(
+                (uint8_t)fminf(fmaxf(256.0f * (g1_updated.x - mm.x) / g1_range, 0.0f), 255.99f),
+                (uint8_t)fminf(fmaxf(256.0f * (g1_updated.y - mm.x) / g1_range, 0.0f), 255.99f),
+                (uint8_t)fminf(fmaxf(256.0f * (g1_updated.z - mm.x) / g1_range, 0.0f), 255.99f)
+            );
+            uchar3 g2_bytes = make_uchar3(
+                (uint8_t)fminf(fmaxf(256.0f * (sqrt_g2_updated.x - mm.z) / g2_range, 0.0f), 255.99f),
+                (uint8_t)fminf(fmaxf(256.0f * (sqrt_g2_updated.y - mm.z) / g2_range, 0.0f), 255.99f),
+                (uint8_t)fminf(fmaxf(256.0f * (sqrt_g2_updated.z - mm.z) / g2_range, 0.0f), 255.99f)
+            );
+            g1_sh_out_ptr[j] = g1_bytes;
+            g2_sh_out_ptr[j] = g2_bytes;
+        }
     }
 }
 
@@ -400,6 +540,9 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     // optimizer states
     typename SplatPrimitive::WorldBuffer g1_splats_world,
     typename SplatPrimitive::WorldBuffer g2_splats_world,
+    const uint8_t* __restrict__ g1_features_sh,
+    const uint8_t* __restrict__ g2_features_sh,
+    float4* __restrict__ sh_quant_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -424,15 +567,19 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     const int32_t scalar_step,
     const int32_t* __restrict__ steps
 ) {
-    fused_projection_bwd_optimizer_3dgs_kernel<
-        SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean
-    >
-    <<<_CEIL_DIV(N, WARP_SIZE), WARP_SIZE, 0, stream>>>(
+    bool use_quant = (g1_features_sh != nullptr && g2_features_sh != nullptr && sh_quant_bounds != nullptr);
+    constexpr int BLOCK_SIZE = 256;
+
+    (use_quant ? fused_projection_bwd_optimizer_3dgs_kernel<
+        SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean, BLOCK_SIZE
+    > : fused_projection_bwd_optimizer_3dgs_kernel<
+        SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean, 0
+    >)<<<_CEIL_DIV(N, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(
         C, N,
         splats_world, viewmats, intrins, dist_coeffs_buffer, image_width, image_height,
         camera_id_bounds, camera_ids, aabb,
         v_splats_world, vr_splats_world, h_splats_world, v_splats_screen, vr_splats_screen, h_splats_screen,
-        g1_splats_world, g2_splats_world, //v_viewmats,
+        g1_splats_world, g2_splats_world, g1_features_sh, g2_features_sh, sh_quant_bounds, //v_viewmats,
         radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc, lr_features_sh,
         mcmc_noise_scalar * lr_means,
         min_opacity,

@@ -1155,12 +1155,14 @@ __global__ void fused_adam_with_steps_8bit_kernel(
     mm.w = cg::reduce(warp, mm.w, cg::greater<float>());
     __syncthreads();
     if (threadIdx.x < BLOCK_SIZE / WARP_SIZE)
-        shared_reduce[threadIdx.x / WARP_SIZE] = mm;
+        shared_reduce[threadIdx.x] = mm;
     __syncthreads();
     mm = shared_reduce[threadIdx.x / WARP_SIZE];
 
-    exp_avg[idx] = (uint8_t)fminf(fmaxf(256.0f * (g1 - mm.x) / (mm.y - mm.x), 0.0f), 255.99f);
-    exp_avg_sq[idx] = (uint8_t)fminf(fmaxf(256.0f * (sqrtf(g2) - mm.z) / (mm.w - mm.z), 0.0f), 255.99f);
+    float g1_range = fmaxf(mm.y - mm.x, eps);
+    float g2_range = fmaxf(mm.w - mm.z, eps);
+    exp_avg[idx] = (uint8_t)fminf(fmaxf(256.0f * (g1 - mm.x) / g1_range, 0.0f), 255.99f);
+    exp_avg_sq[idx] = (uint8_t)fminf(fmaxf(256.0f * (sqrtf(g2) - mm.z) / g2_range, 0.0f), 255.99f);
 
     if (threadIdx.x == 0)
         quant_bounds[blockIdx.x] = mm;

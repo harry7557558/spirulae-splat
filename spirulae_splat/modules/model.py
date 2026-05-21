@@ -1245,6 +1245,7 @@ class SpirulaeSplatModel(torch.nn.Module):
                 intrins=intrins * self.config.supersampling,  # [C, 4]
                 width=W * self.config.supersampling,
                 height=H * self.config.supersampling,
+                sh_degree_to_use=self.step // max(self.config.sh_degree_warmup_every, 1),
                 packed=(self.config.packed or use_bvh),
                 use_bvh=(use_bvh),
                 relative_scale=self.config.relative_scale,

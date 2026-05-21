@@ -87,10 +87,7 @@ class Renderer:
 
         # TODO: make these configurable in command line
         self.use_fused_proj_bwd_optim = False
-
         self.quantize_sh_optim = False
-        if self.use_fused_proj_bwd_optim:
-            self.quantize_sh_optim = False  # TODO
 
     def set_params(
         self,
@@ -561,6 +558,15 @@ class Renderer:
         else:
             bias_correction_step = step + 1
 
+        g_optim = [
+            [*self.g1_splats_world], [*self.g2_splats_world],
+            None, None, None
+        ]
+        if self.quantize_sh_optim:
+            g_optim[0][-1], g_optim[2] = None, g_optim[0][-1]
+            g_optim[1][-1], g_optim[3] = None, g_optim[1][-1]
+            g_optim[4] = self.quant_bounds_sh  # TODO: we don't need that many elements in this case
+
         _make_lazy_cuda_func(f"fused_projection_bwd_optimizer_{self.primitive}")(
             self.cur_num_splats,
             self.splats_world,
@@ -570,7 +576,7 @@ class Renderer:
             self.aabb,
             self.v_splats_world, None, None,
             self.v_splats_proj, None, None,
-            self.g1_splats_world, self.g2_splats_world,
+            *g_optim,
             self.radii,
             optim_config.get_scheduled_lr("means", step, max_steps),
             optim_config.get_scheduled_lr("quats", step, max_steps),

@@ -40,6 +40,9 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     // optimizer states
     typename SplatPrimitive::WorldBuffer g1_splats_world,
     typename SplatPrimitive::WorldBuffer g2_splats_world,
+    const uint8_t* __restrict__ g1_features_sh,
+    const uint8_t* __restrict__ g2_features_sh,
+    float4* __restrict__ sh_quant_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -113,6 +116,9 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     // optimizer states
     const TensorList g1_splats_world,
     const TensorList g2_splats_world,
+    const std::optional<at::Tensor> g1_features_sh,
+    const std::optional<at::Tensor> g2_features_sh,
+    const std::optional<at::Tensor> sh_quant_bounds,
     // optimizer params
     const at::Tensor radii,
     const float lr_means,
@@ -205,6 +211,9 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
             hessian_diagonal_output_mode != HessianDiagonalOutputMode::None ? vr_splats_screen.value() : typename SplatPrimitive::ScreenBuffer{}, \
             hessian_diagonal_output_mode != HessianDiagonalOutputMode::None ? h_splats_screen.value() : typename SplatPrimitive::ScreenBuffer{}, \
             g1_splats_world, g2_splats_world, \
+            g1_features_sh.has_value() ? g1_features_sh.value().data_ptr<uint8_t>() : nullptr, \
+            g2_features_sh.has_value() ? g2_features_sh.value().data_ptr<uint8_t>() : nullptr, \
+            sh_quant_bounds.has_value() ? (float4*)sh_quant_bounds.value().data_ptr<float>() : nullptr, \
             /*v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr */ \
             radii.data_ptr<float>(), \
             lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc, lr_features_sh, \
@@ -442,6 +451,9 @@ void fused_projection_bwd_optimizer_3dgut_tensor(
     // optimizer states
     const TensorList g1_splats_world,
     const TensorList g2_splats_world,
+    const std::optional<at::Tensor> g1_features_sh,
+    const std::optional<at::Tensor> g2_features_sh,
+    const std::optional<at::Tensor> sh_quant_bounds,
     // optimizer params
     const at::Tensor radii,
     const float lr_means,
@@ -485,6 +497,9 @@ void fused_projection_bwd_optimizer_3dgut_tensor(
         h_splats_screen, \
         g1_splats_world, \
         g2_splats_world, \
+        g1_features_sh, \
+        g2_features_sh, \
+        sh_quant_bounds, \
         radii, \
         lr_means, \
         lr_quats, \

@@ -187,6 +187,9 @@ void fused_projection_bwd_optimizer_3dgut_tensor(
     // optimizer states
     const TensorList g1_splats_world,
     const TensorList g2_splats_world,
+    const std::optional<at::Tensor> g1_features_sh,
+    const std::optional<at::Tensor> g2_features_sh,
+    const std::optional<at::Tensor> sh_quant_bounds,
     // optimizer params
     const at::Tensor radii,
     const float lr_means,
