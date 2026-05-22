@@ -131,8 +131,19 @@ void add_splats_mcmc_tensor(
 
 
 void mcmc_add_noise_tensor(
-    std::string primitive,
-    float scaler, float min_opacity,
+    int64_t num_splats,
+    float scaler,
+    at::Tensor &means,
+    at::Tensor &log_scales,
+    at::Tensor &quats,
+    at::Tensor &opacs
+);
+
+
+void revised_add_noise_tensor(
+    int64_t num_splats,
+    float scaler,
+    at::Tensor &radii,
     at::Tensor &means,
     at::Tensor &log_scales,
     at::Tensor &quats,

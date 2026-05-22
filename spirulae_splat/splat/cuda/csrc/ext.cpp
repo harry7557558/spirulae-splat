@@ -222,6 +222,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("add_splats_mcmc", &add_splats_mcmc_tensor);
     m.def("cov_scale_init", &cov_scale_init_tensor);
     m.def("mcmc_add_noise", &mcmc_add_noise_tensor);
+    m.def("revised_add_noise", &revised_add_noise_tensor);
     // m.def("compute_relocation", &compute_relocation_tensor);
     m.def("long_axis_split", &long_axis_split_tensor);
     m.def("laplacian_edge_filter", &laplacian_edge_filter_tensor);

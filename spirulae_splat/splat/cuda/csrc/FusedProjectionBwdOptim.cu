@@ -52,8 +52,6 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     const float lr_opacs,
     const float lr_features_dc,
     const float lr_features_sh,
-    const float mcmc_noise_scalar,
-    const float min_opacity,
     const float max_gauss_ratio,
     const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight,
@@ -62,8 +60,6 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
-    const float mrnf_opacity_decay_factor,
-    const float mrnf_scale_decay_factor,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps
 );
@@ -127,8 +123,6 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     const float lr_opacs,
     const float lr_features_dc,
     const float lr_features_sh,
-    const float mcmc_noise_scalar,
-    const float min_opacity,
     const float max_gauss_ratio,
     const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight,
@@ -137,8 +131,6 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
-    const float mrnf_opacity_decay_factor,
-    const float mrnf_scale_decay_factor,
     const int32_t scalar_step,
     const std::optional<at::Tensor> steps
 ) {
@@ -217,9 +209,8 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
             /*v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr */ \
             radii.data_ptr<float>(), \
             lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc, lr_features_sh, \
-            mcmc_noise_scalar, min_opacity, max_gauss_ratio, scale_regularization_weight, \
+            max_gauss_ratio, scale_regularization_weight, \
             mcmc_opacity_reg_weight, mcmc_scale_reg_weight, erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight, sh_reg_weight, \
-            mrnf_opacity_decay_factor, mrnf_scale_decay_factor, \
             scalar_step, steps.has_value() ? steps.value().data_ptr<int32_t>() : nullptr \
         )
 
@@ -462,8 +453,6 @@ void fused_projection_bwd_optimizer_3dgut_tensor(
     const float lr_opacs,
     const float lr_features_dc,
     const float lr_features_sh,
-    const float mcmc_noise_scalar,
-    const float min_opacity,
     const float max_gauss_ratio,
     const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight,
@@ -472,8 +461,6 @@ void fused_projection_bwd_optimizer_3dgut_tensor(
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
-    const float mrnf_opacity_decay_factor,
-    const float mrnf_scale_decay_factor,
     bool use_scale_agnostic_mean,
     std::variant<int32_t, at::Tensor> step
 ) {
@@ -507,8 +494,6 @@ void fused_projection_bwd_optimizer_3dgut_tensor(
         lr_opacs, \
         lr_features_dc, \
         lr_features_sh, \
-        mcmc_noise_scalar, \
-        min_opacity, \
         max_gauss_ratio, \
         scale_regularization_weight, \
         mcmc_opacity_reg_weight, \
@@ -517,8 +502,6 @@ void fused_projection_bwd_optimizer_3dgut_tensor(
         erank_reg_weight_s3, \
         quat_norm_reg_weight, \
         sh_reg_weight, \
-        mrnf_opacity_decay_factor, \
-        mrnf_scale_decay_factor, \
         std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1, \
         std::get_if<at::Tensor>(&step) ? std::get<at::Tensor>(step) : (std::optional<at::Tensor>)std::nullopt \
     )

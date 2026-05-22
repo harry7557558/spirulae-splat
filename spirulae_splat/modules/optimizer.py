@@ -381,7 +381,7 @@ class OptimizerConfig:
 
     # MRNF
     means_lr: float = 1.28e-4
-    # means_lr_final: Optional[float] = 1.6e-7  # TODO: this affects MCMC add noise
+    # means_lr_final: Optional[float] = 1.6e-7
     means_lr_final: Optional[float] = 1.6e-6
     scales_lr: float = 0.02
     scales_lr_final: Optional[float] = 0.005

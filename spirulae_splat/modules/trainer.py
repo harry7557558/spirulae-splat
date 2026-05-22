@@ -459,7 +459,6 @@ class TrainerConfigSquaredPos(TrainerConfig):
     """Method with second-order optimizer for positions"""
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
         compute_hessian_diagonal="position",
-        noise_lr=5e5 * (1.6e-4 / 1.0e-6),
     ))
     # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)  # TODO
 
@@ -469,7 +468,6 @@ class TrainerConfigSquared(TrainerConfig):
     """Method with second-order optimizer"""
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
         compute_hessian_diagonal="all",
-        noise_lr=5e5 * (1.6e-4 / 1.0e-6),
     ))
     # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_OPTIMIZERS)  # TODO
 
@@ -510,7 +508,6 @@ class TrainerConfigTriangle(TrainerConfig):
         # erank_reg=1.0,
         # supersampling=2,
         min_opacity=0.005,
-        noise_lr=5e5,  # or 0.0
         supervision_warmup=0,
         depth_supervision_weight=0.0,
         normal_supervision_weight=0.04,
@@ -542,7 +539,6 @@ class TrainerConfigTrianglePatched(TrainerConfig):
         # erank_reg=1.0,
         # supersampling=2,
         min_opacity=0.005,
-        noise_lr=5e5,  # or 0.0
         supervision_warmup=0,
         depth_supervision_weight=0.0,
         normal_supervision_weight=0.04,
@@ -604,11 +600,9 @@ _MODEL_PRESET_OPEN = dict(
 )
 _MODEL_PRESET_3DGS2TR_POS = dict(
     compute_hessian_diagonal="position",
-    noise_lr=5e5 * (1.6e-4 / 1.0e-6),
 )
 _MODEL_PRESET_3DGS2TR = dict(
     compute_hessian_diagonal="all",
-    noise_lr=5e5 * (1.6e-4 / 1.0e-6),
 )
 _MODEL_PRESET_LOW_TEXTURE = dict(
     use_edge_aware_score=False,

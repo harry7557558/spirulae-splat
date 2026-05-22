@@ -118,6 +118,12 @@ class SpirulaeSplatModelConfig:
     """Pack projection outputs, reduce VRAM usage at large batch size but can be slightly slower"""
     use_bvh: bool = False
     """Use BVH for splat-patch intersection test, may be faster when batching large number of small patches"""
+    use_fused_proj_bwd_optim: bool = False
+    """Whether to use fused projection backward and optimizer.
+        More memory efficient for large number of Gaussians, with slight performance hit."""
+    quantize_sh_optim: bool = True
+    """Whether to quantize optimizer momentum for SH.
+        More memory efficient for large number of Gaussians."""
     compute_hessian_diagonal: Literal[None, "position", "all"] = None
     """What parameter sets to compute an approximation of Hessian diagonal as well as a Jacobian-residual product in backward pass. Required for second-order optimizer."""
     optimizer_offload: Literal[None, "sh", "all"] = None
@@ -142,8 +148,10 @@ class SpirulaeSplatModelConfig:
     """Start densification at this number of steps"""
     refine_stop_num_iter: int = 5000
     """Stop densification at this number of steps before maximum number of training iterations"""
-    noise_lr: float = 5e5
-    """Scalar for MCMC-style noise injection"""
+    noise_lr: float = 80.0  # 5e5 * 1.6e-4
+    """MCMC-like noise injection magnitude at start of training"""
+    noise_lr_final: float = 0.8  # 5e5 * 1.6e-6
+    """MCMC-like noise injection magnitude at end of training"""
     min_opacity: float = 0.005
     """Minimum Gaussian opacity before relocation"""
     growth_factor: float = 1.05
@@ -384,7 +392,11 @@ class SpirulaeSplatModel(torch.nn.Module):
         self.core = Renderer(
             self.config.primitive,
             splat_params,
-            self.seed_points[0].shape[0]  # TODO: voxel
+            self.seed_points[0].shape[0],  # TODO: voxel
+            packed=(self.config.packed or self.config.use_bvh),
+            use_bvh=self.config.use_bvh,
+            use_fused_proj_bwd_optim=self.config.use_fused_proj_bwd_optim,
+            quantize_sh_optim=self.config.quantize_sh_optim,
         )
 
     def populate_modules(self):
@@ -1045,8 +1057,6 @@ class SpirulaeSplatModel(torch.nn.Module):
             width=W * self.config.supersampling,
             height=H * self.config.supersampling,
             sh_degree_to_use=self.step // max(self.config.sh_degree_warmup_every, 1),
-            packed=(self.config.packed or use_bvh),
-            use_bvh=(use_bvh),
             # packed=True,
             # use_bvh=True,
             relative_scale=self.config.relative_scale,
@@ -1246,8 +1256,6 @@ class SpirulaeSplatModel(torch.nn.Module):
                 width=W * self.config.supersampling,
                 height=H * self.config.supersampling,
                 sh_degree_to_use=self.step // max(self.config.sh_degree_warmup_every, 1),
-                packed=(self.config.packed or use_bvh),
-                use_bvh=(use_bvh),
                 relative_scale=self.config.relative_scale,
                 camera_model=camera_model,
                 output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
@@ -1287,8 +1295,6 @@ class SpirulaeSplatModel(torch.nn.Module):
                 intrins=intrins * self.config.supersampling,  # [C, 4]
                 width=W * self.config.supersampling,
                 height=H * self.config.supersampling,
-                packed=(self.config.packed or use_bvh),
-                use_bvh=(use_bvh),
                 relative_scale=self.config.relative_scale,
                 camera_model=camera_model,
                 output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),

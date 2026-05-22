@@ -125,8 +125,6 @@ class PlyViewer:
             intrins=intrins,
             width=int(width),
             height=int(height),
-            packed=True,
-            use_bvh=False,
             camera_model=camera_model,
         )
         self.renderer.forward()

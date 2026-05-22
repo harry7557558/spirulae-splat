@@ -13,10 +13,6 @@ namespace SlangPerSplatLosses {
 #include "generated/set_namespace.cuh"
 #include "generated/per_splat_losses.cuh"
 }
-namespace SlangDensify {
-#include "generated/set_namespace.cuh"
-#include "generated/densify.cuh"
-}
 
 #include "common.cuh"
 
@@ -599,8 +595,6 @@ void fused_newton_multi(
 // Adam Mean, scale agnostic
 // ================
 
-// TODO: scale agnostic MCMC add noise for this optimizer (and other scale agnostic optimizers)
-
 __global__ void fused_adam_scale_agnostic_mean_kernel(
     float3* __restrict__ param,
     const float3* __restrict__ grad,
@@ -752,8 +746,6 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     float lr_quats,
     float lr_scales,
     float lr_opacs,
-    const float mcmc_noise_scalar,
-    const float min_opacity,
     const float max_gauss_ratio,
     const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight,
@@ -761,8 +753,6 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     const float erank_reg_weight,
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
-    const float mrnf_opacity_decay_factor,
-    const float mrnf_scale_decay_factor,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps,
     const int64_t numel
@@ -812,8 +802,6 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     float3 g1_scale = beta1 * g1_scales[idx] + (1.f - beta1) * v_scale;
     float3 g2_scale = beta2 * g2_scales[idx] + (1.f - beta2) * v_scale*v_scale;
     float3 updated_scale = scale - lr_scales * g1_scale / (sqrtf(g2_scale * inv_bias_correction2) + eps);
-    if (mrnf_scale_decay_factor != 1.0f)
-        updated_scale += make_float3(__logf(mrnf_scale_decay_factor));
     scales[idx] = updated_scale;
     g1_scales[idx] = g1_scale;
     g2_scales[idx] = g2_scale;
@@ -830,11 +818,6 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     float g1_opac = beta1 * g1_opacities[idx] + (1.f - beta1) * v_opac;
     float g2_opac = beta2 * g2_opacities[idx] + (1.f - beta2) * v_opac*v_opac;
     float updated_opac = opac - lr_opacs * g1_opac / (sqrtf(g2_opac * inv_bias_correction2) + eps);
-    if (mrnf_opacity_decay_factor != 0.0f) {
-        updated_opac = sigmoid(updated_opac);
-        updated_opac = fmaxf(updated_opac + mrnf_opacity_decay_factor, 1e-12f);
-        updated_opac = logit(updated_opac);
-    }
     opacities[idx] = updated_opac;
     g1_opacities[idx] = g1_opac;
     g2_opacities[idx] = g2_opac;
@@ -847,7 +830,6 @@ __global__ void fused_optim_3dgs_geometry_kernel(
 
     float opac_post_sigmoid = sigmoid(opac);
 
-    float noise_lr_scalar = 1.0f;
     if constexpr (use_scale_agnostic_mean) {
         float3 v_mean_scaled_num = SlangProjectionUtils::apply_covar_to_vec(
             quat,
@@ -872,18 +854,10 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     #endif
         g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean_scaled_num;  // unit: dimensionless
         g2_mean = beta2 * g2_mean + (1.f - beta2) * v_mean*v_mean * v_mean_scaled_den*v_mean_scaled_den;  // unit: L^-2
-
-        // TODO: probably better use a globally consistent one; (MRNF chooses based on median scale)
-        noise_lr_scalar = length(v_mean_scaled_num) / (length(v_mean) * v_mean_scaled_den + eps);
     } else {
         g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean;  // unit: L^-1
         g2_mean = beta2 * g2_mean + (1.f - beta2) * v_mean*v_mean;  // unit: L^-2
     }
-    SlangDensify::mcmc_add_noise_3dgs(
-        mcmc_noise_scalar * noise_lr_scalar, min_opacity,
-        &mean, scale, quat, opac_post_sigmoid
-        // official MCMC use scale/quat/opac after optimizer step/densification, shouldn't matter in practice
-    );
 
     means[idx] = mean - lr_means * g1_mean / (sqrtf(g2_mean * inv_bias_correction2) + eps); // unit: L or dimensionless for dimensionless lr_means
     g1_means[idx] = g1_mean;
@@ -915,8 +889,6 @@ void fused_optim_3dgs_geometry(
     const float lr_quats,
     const float lr_scales,
     const float lr_opacs,
-    const float mcmc_noise_lr,
-    const float min_opacity,
     const float max_gauss_ratio,
     const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight,
@@ -924,8 +896,6 @@ void fused_optim_3dgs_geometry(
     const float erank_reg_weight,
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
-    const float mrnf_opacity_decay_factor,
-    const float mrnf_scale_decay_factor,
     bool use_scale_agnostic_mean,
     std::variant<int32_t, at::Tensor> step
 ) {
@@ -978,8 +948,6 @@ void fused_optim_3dgs_geometry(
         lr_quats,
         lr_scales,
         lr_opacs,
-        lr_means * mcmc_noise_lr,
-        min_opacity,
         max_gauss_ratio,
         scale_regularization_weight / (float)num_splats,
         mcmc_opacity_reg_weight / (float)num_splats,
@@ -987,8 +955,6 @@ void fused_optim_3dgs_geometry(
         erank_reg_weight / (float)num_splats,
         erank_reg_weight_s3 / (float)num_splats,
         quat_norm_reg_weight / (float)num_splats,
-        mrnf_opacity_decay_factor,
-        mrnf_scale_decay_factor,
         std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1,
         std::get_if<at::Tensor>(&step) ? std::get<at::Tensor>(step).data_ptr<int32_t>() : nullptr,
         num_splats

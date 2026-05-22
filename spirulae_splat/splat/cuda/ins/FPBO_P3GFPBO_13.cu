@@ -46,8 +46,6 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float lr_opacs,
     const float lr_features_dc,
     const float lr_features_sh,
-    const float mcmc_noise_scalar,
-    const float min_opacity,
     const float max_gauss_ratio,
     const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight,
@@ -56,8 +54,6 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
-    const float mrnf_opacity_decay_factor,
-    const float mrnf_scale_decay_factor,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps
 );
@@ -104,8 +100,6 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float lr_opacs,
     const float lr_features_dc,
     const float lr_features_sh,
-    const float mcmc_noise_scalar,
-    const float min_opacity,
     const float max_gauss_ratio,
     const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight,
@@ -114,8 +108,6 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
-    const float mrnf_opacity_decay_factor,
-    const float mrnf_scale_decay_factor,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps
 );
@@ -162,8 +154,6 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float lr_opacs,
     const float lr_features_dc,
     const float lr_features_sh,
-    const float mcmc_noise_scalar,
-    const float min_opacity,
     const float max_gauss_ratio,
     const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight,
@@ -172,8 +162,6 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
-    const float mrnf_opacity_decay_factor,
-    const float mrnf_scale_decay_factor,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps
 );
@@ -220,8 +208,6 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float lr_opacs,
     const float lr_features_dc,
     const float lr_features_sh,
-    const float mcmc_noise_scalar,
-    const float min_opacity,
     const float max_gauss_ratio,
     const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight,
@@ -230,8 +216,6 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
-    const float mrnf_opacity_decay_factor,
-    const float mrnf_scale_decay_factor,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps
 );
@@ -278,8 +262,6 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float lr_opacs,
     const float lr_features_dc,
     const float lr_features_sh,
-    const float mcmc_noise_scalar,
-    const float min_opacity,
     const float max_gauss_ratio,
     const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight,
@@ -288,8 +270,6 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
-    const float mrnf_opacity_decay_factor,
-    const float mrnf_scale_decay_factor,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps
 );
@@ -336,8 +316,6 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float lr_opacs,
     const float lr_features_dc,
     const float lr_features_sh,
-    const float mcmc_noise_scalar,
-    const float min_opacity,
     const float max_gauss_ratio,
     const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight,
@@ -346,8 +324,6 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
-    const float mrnf_opacity_decay_factor,
-    const float mrnf_scale_decay_factor,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps
 );

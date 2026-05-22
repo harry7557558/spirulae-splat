@@ -79,7 +79,8 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
         # splat_params=(torch.cat((means, 5.0*torch.exp(scales.mean(-1, True))), dim=-1), 2.0*torch.exp(opacities).unsqueeze(-1).repeat(1, 8), features_dc, features_sh),
         # splat_params=(voxels, 10.0*torch.exp(opacities)[voxel_indices], features_dc[:len(voxels)], features_sh[:len(voxels)]),
         # splat_params=(voxels, densities_0[voxel_indices], features_dc_0, features_sh_0),
-        cur_num_splats=len(means)
+        cur_num_splats=len(means),
+        packed=PACKED,
     )
     camera_model = ["pinhole", "fisheye"][IS_FISHEYE]
     # quats = torch.nn.functional.normalize(quats, dim=-1)  # affects gradient
@@ -90,8 +91,6 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
         width=W,
         height=H,
         sh_degree_to_use=SH_DEGREE_TO_USE,
-        packed=PACKED,
-        use_bvh=False,
         camera_model=camera_model,
     )
     renderer.forward()

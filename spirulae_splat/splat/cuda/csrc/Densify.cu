@@ -1340,44 +1340,64 @@ void add_splats_mcmc_tensor(
 
 __global__ void mcmc_add_noise_3dgs_kernel(
     long num_splats,
-    float scaler, float min_opacity,
+    float scaler,
     float3* __restrict__ means,
     const float3* __restrict__ log_scales,
     const float4* __restrict__ quats,
-    const float* __restrict__ opacs
+    const float* __restrict__ logit_opacs
 ) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_splats)
         return;
 
     SlangDensify::mcmc_add_noise_3dgs(
-        scaler, min_opacity,
-        &means[idx], log_scales[idx], quats[idx], opacs[idx]
+        scaler,
+        &means[idx], log_scales[idx], quats[idx], logit_opacs[idx]
     );
 }
 
-__global__ void mcmc_add_noise_triangle_kernel(
+__global__ void revised_add_noise_3dgs_kernel(
     long num_splats,
-    float scaler, float min_opacity,
+    float scaler,
+    const float* __restrict__ radii,
     float3* __restrict__ means,
     const float3* __restrict__ log_scales,
     const float4* __restrict__ quats,
-    const float* __restrict__ opacs
+    const float* __restrict__ logit_opacs
 ) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_splats)
         return;
 
-    SlangDensify::mcmc_add_noise_triangle(
-        scaler, min_opacity,
-        &means[idx], log_scales[idx], quats[idx], opacs[idx]
+    SlangDensify::revised_add_noise_3dgs(
+        scaler, radii[idx],
+        &means[idx], log_scales[idx], quats[idx], logit_opacs[idx]
     );
 }
 
+// __global__ void mcmc_add_noise_triangle_kernel(
+//     long num_splats,
+//     float scaler, float min_opacity,
+//     float3* __restrict__ means,
+//     const float3* __restrict__ log_scales,
+//     const float4* __restrict__ quats,
+//     const float* __restrict__ opacs
+// ) {
+//     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+//     if (idx >= num_splats)
+//         return;
+
+//     SlangDensify::mcmc_add_noise_triangle(
+//         scaler, min_opacity,
+//         &means[idx], log_scales[idx], quats[idx], opacs[idx]
+//     );
+// }
+
+
 /*[AutoHeaderGeneratorExport]*/
 void mcmc_add_noise_tensor(
-    std::string primitive,
-    float scaler, float min_opacity,
+    int64_t num_splats,
+    float scaler,
     at::Tensor &means,
     at::Tensor &log_scales,
     at::Tensor &quats,
@@ -1389,25 +1409,42 @@ void mcmc_add_noise_tensor(
     CHECK_INPUT(quats);
     CHECK_INPUT(opacs);
 
-    const size_t num_splats = opacs.numel();
+    mcmc_add_noise_3dgs_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
+        num_splats, scaler,
+        (float3*)means.data_ptr<float>(),
+        (float3*)log_scales.data_ptr<float>(),
+        (float4*)quats.data_ptr<float>(),
+        opacs.data_ptr<float>()
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
 
-    if (primitive == "3dgs" || primitive == "mip" || primitive == "3dgut")
-        mcmc_add_noise_3dgs_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
-            num_splats, scaler, min_opacity,
-            (float3*)means.data_ptr<float>(),
-            (float3*)log_scales.data_ptr<float>(),
-            (float4*)quats.data_ptr<float>(),
-            opacs.data_ptr<float>()
-        );
-    else if (primitive == "opaque_triangle")
-        mcmc_add_noise_triangle_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
-            num_splats, scaler, min_opacity,
-            (float3*)means.data_ptr<float>(),
-            (float3*)log_scales.data_ptr<float>(),
-            (float4*)quats.data_ptr<float>(),
-            opacs.data_ptr<float>()
-        );
-    else throw std::runtime_error("Unsupported primitive: " + primitive);
+
+/*[AutoHeaderGeneratorExport]*/
+void revised_add_noise_tensor(
+    int64_t num_splats,
+    float scaler,
+    at::Tensor &radii,
+    at::Tensor &means,
+    at::Tensor &log_scales,
+    at::Tensor &quats,
+    at::Tensor &opacs
+) {
+    DEVICE_GUARD(means);
+    CHECK_INPUT(radii);
+    CHECK_INPUT(means);
+    CHECK_INPUT(log_scales);
+    CHECK_INPUT(quats);
+    CHECK_INPUT(opacs);
+
+    revised_add_noise_3dgs_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
+        num_splats, scaler,
+        radii.data_ptr<float>(),
+        (float3*)means.data_ptr<float>(),
+        (float3*)log_scales.data_ptr<float>(),
+        (float4*)quats.data_ptr<float>(),
+        opacs.data_ptr<float>()
+    );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 

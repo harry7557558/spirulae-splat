@@ -30,7 +30,11 @@ class Renderer:
         self,
         primitive: Literal["3dgs", "mip", "3dgut", "3dgut_sv", "opaque_triangle", "voxel"],
         splats_world: tuple[Tensor],  # means, quats, scales, opacities
-        cur_num_splats: int
+        cur_num_splats: int,
+        packed: bool = True,
+        use_bvh: bool = False,
+        use_fused_proj_bwd_optim: bool = False,
+        quantize_sh_optim: bool = True,
     ):
         for tensor in splats_world:
             assert tensor.is_contiguous(), "Tensor must be contiguous"
@@ -85,9 +89,11 @@ class Renderer:
         self.primitive = primitive
         self.splats_world = splats_world
 
-        # TODO: make these configurable in command line
-        self.use_fused_proj_bwd_optim = False
-        self.quantize_sh_optim = False
+
+        self.packed = packed
+        self.use_bvh = use_bvh
+        self.use_fused_proj_bwd_optim = use_fused_proj_bwd_optim
+        self.quantize_sh_optim = quantize_sh_optim
 
     def set_params(
         self,
@@ -96,8 +102,6 @@ class Renderer:
         width: int,
         height: int,
         sh_degree_to_use: int = 4,
-        packed: bool = True,
-        use_bvh: bool = False,
         output_distortion: bool = False,
         compute_hessian_diagonal: Literal[None, "position", "all"] = None,
         relative_scale: Optional[float] = None,
@@ -114,8 +118,6 @@ class Renderer:
         self.width = width
         self.height = height
         self.sh_degree_to_use = sh_degree_to_use
-        self.packed = packed
-        self.use_bvh = use_bvh
         self.output_distortion = output_distortion
         self.compute_hessian_diagonal = compute_hessian_diagonal
         self.relative_scale = relative_scale
@@ -584,8 +586,6 @@ class Renderer:
             optim_config.get_scheduled_lr("opacities", step, max_steps),
             optim_config.get_scheduled_lr("features_dc", step, max_steps),
             optim_config.get_scheduled_lr("features_sh", step, max_steps),
-            model_config.noise_lr,
-            model_config.min_opacity,
             model_config.max_gauss_ratio,
             model_config.scale_regularization_weight,
             model_config.opacity_reg,
@@ -595,10 +595,6 @@ class Renderer:
             model_config.erank_reg_s3,
             model_config.quat_norm_reg,
             model_config.sh_reg,
-            0.0 if step % model_config.refine_every != 0 else
-                (1.0 - (step+1) / max_steps) * model_config.opacity_decay,
-            1.0 if step % model_config.refine_every != 0 else
-                1.0 - (1.0 - (step+1) / max_steps) * model_config.scale_decay,
             optim_config.use_scale_agnostic_mean,
             bias_correction_step
         )
@@ -654,8 +650,6 @@ class Renderer:
             optim_config.get_scheduled_lr("quats", step, max_steps),
             optim_config.get_scheduled_lr("scales", step, max_steps),
             optim_config.get_scheduled_lr("opacities", step, max_steps),
-            model_config.noise_lr,
-            model_config.min_opacity,
             model_config.max_gauss_ratio,
             model_config.scale_regularization_weight,
             model_config.opacity_reg,
@@ -664,10 +658,6 @@ class Renderer:
             model_config.erank_reg,
             model_config.erank_reg_s3,
             model_config.quat_norm_reg,
-            0.0 if step % model_config.refine_every != 0 else
-                (1.0 - (step+1) / max_steps) * model_config.opacity_decay,
-            1.0 if step % model_config.refine_every != 0 else
-                1.0 - (1.0 - (step+1) / max_steps) * model_config.scale_decay,
             optim_config.use_scale_agnostic_mean,
             bias_correction_step
         )
@@ -722,7 +712,10 @@ class Renderer:
         model_config: 'spirulae_splat.modules.model.SpirulaeSplatModelConfig',
         optim_config: OptimizerConfig
     ):
-        # clip large splats
+        densify_ongoing = (step < max_steps - model_config.refine_stop_num_iter)
+        densify_step = densify_ongoing and (step > model_config.refine_start_iter and step % model_config.refine_every == 0)
+
+        # Clip large splats
         progress = (step+0.5) / max_steps
         if np.isfinite(model_config.max_screen_size) or np.isfinite(model_config.max_world_size):
             _make_lazy_cuda_func("densify_clip_scale")(
@@ -736,11 +729,9 @@ class Renderer:
                 model_config.max_world_size,
             )
 
-        if step >= max_steps - model_config.refine_stop_num_iter:
-            return
+        # Update Densification Score
 
-        # update accumulation weight
-        if model_config.relocate_heuristic_weight >= 1.0:
+        if densify_ongoing and model_config.relocate_heuristic_weight >= 1.0:
 
             if not hasattr(self, 'densify_accum_buffer'):
                 self.densify_accum_buffer = torch.zeros(
@@ -771,14 +762,12 @@ class Renderer:
                 is_max_mode
             )
 
-        if step % model_config.refine_every != 0:
-            return
-        if step <= model_config.refine_start_iter:
-            return
+        # Apply Densification
 
-        torch.cuda.empty_cache()
+        if densify_step:
+            torch.cuda.empty_cache()
 
-        if model_config.relocate_heuristic_weight >= 1.0:
+        if densify_step and model_config.relocate_heuristic_weight >= 1.0:
 
             # relocation
             _make_lazy_cuda_func("relocate_splats_with_long_axis_split")(
@@ -806,8 +795,8 @@ class Renderer:
                 2*step+1
             )
             self.cur_num_splats += num_add
-        
-        else:
+
+        elif densify_step:
 
             # mcmc relocation
             _make_lazy_cuda_func("relocate_splats_mcmc")(
@@ -834,8 +823,36 @@ class Renderer:
                 2*step+1
             )
             self.cur_num_splats += num_add
-        
-        if hasattr(self, 'densify_accum_buffer'):
-            _make_lazy_cuda_func("set_zero")(self.densify_accum_buffer)
 
-        torch.cuda.empty_cache()
+        if densify_step:
+            if hasattr(self, 'densify_accum_buffer'):
+                _make_lazy_cuda_func("set_zero")(self.densify_accum_buffer)
+
+            torch.cuda.empty_cache()
+
+        # Add MCMC noise
+
+        if model_config.opacity_decay != 0.0 or model_config.scale_decay != 0.0:
+            raise NotImplementedError()
+
+        noise_scalar = model_config.noise_lr * (model_config.noise_lr_final / model_config.noise_lr) ** progress
+
+        if model_config.relocate_heuristic_weight >= 1.0:
+            _make_lazy_cuda_func("revised_add_noise")(
+                self.cur_num_splats,
+                noise_scalar,
+                self.radii,
+                self.splats_world[0],  # means
+                self.splats_world[2],  # quats
+                self.splats_world[1],  # scales
+                self.splats_world[3],  # opacs
+            )
+        else:
+            _make_lazy_cuda_func("mcmc_add_noise")(
+                self.cur_num_splats,
+                noise_scalar,
+                self.splats_world[0],  # means
+                self.splats_world[2],  # quats
+                self.splats_world[1],  # scales
+                self.splats_world[3],  # opacs
+            )

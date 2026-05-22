@@ -93,58 +93,6 @@ class _SoftDetach(torch.autograd.Function):
         return ctx.saved_tensors[0], None
 
 
-class _MemoryEfficientBilagridFetch(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, dummy: torch.Tensor, bilagrid: List, idx=None):
-        ctx.set_materialize_grads(False)
-        ctx.bilagrid = bilagrid[0]
-        assert ctx.bilagrid.grids.is_leaf
-        ctx.save_for_backward(dummy, idx)
-        if idx is None:
-            return ctx.bilagrid.grids
-        return ctx.bilagrid.grids[idx]
-    @staticmethod
-    def backward(ctx, v_sample):
-        """Accumulate gradient in place"""
-        bilagrid = ctx.bilagrid
-        dummy, idx = ctx.saved_tensors
-        if v_sample is None:
-            return dummy, None, None
-        if idx is None:
-            if bilagrid.grids.grad is None:
-                bilagrid.grids.grad = v_sample
-            else:
-                bilagrid.grids.grad.add_(v_sample)
-        else:
-            if bilagrid.grids.grad is None:
-                bilagrid.grids.grad = torch.zeros_like(bilagrid.grids.data)
-            bilagrid.grids.grad.index_add_(0, idx, v_sample)
-        return dummy, None, None
-
-
-class _BilagridFusedTotalVariationLoss(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, dummy: torch.Tensor, bilagrid: List):
-        ctx.set_materialize_grads(False)
-        ctx.bilagrid = bilagrid[0]
-        assert ctx.bilagrid.grids.is_leaf
-        ctx.save_for_backward(dummy)
-        return fused_bilagrid_C.tv_loss_forward(ctx.bilagrid.grids)
-
-    @staticmethod
-    def backward(ctx, v_output):
-        """Accumulate gradient in place"""
-        bilagrid = ctx.bilagrid
-        (dummy,) = ctx.saved_tensors
-        if v_output is None:
-            return dummy, None, None
-        if bilagrid.grids.grad is None:
-            bilagrid.grids.grad = fused_bilagrid_C.tv_loss_backward(bilagrid.grids, v_output.contiguous())
-        else:
-            fused_bilagrid_C.tv_loss_backward_inplace(bilagrid.grids, v_output.contiguous(), bilagrid.grids.grad)
-        return dummy, None, None
-
-
 class _BilagridFusedRegularization(torch.autograd.Function):
     @staticmethod
     def forward(ctx, dummy: torch.Tensor, bilagrid: List):

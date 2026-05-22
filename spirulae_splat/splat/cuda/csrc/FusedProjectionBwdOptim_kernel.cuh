@@ -13,10 +13,6 @@ namespace SlangPerSplatLosses {
 #include "generated/set_namespace.cuh"
 #include "generated/per_splat_losses.cuh"
 }
-namespace SlangDensify {
-#include "generated/set_namespace.cuh"
-#include "generated/densify.cuh"
-}
 
 #include "types.cuh"
 
@@ -106,8 +102,6 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     const float lr_opacs,
     const float lr_features_dc,
     const float lr_features_sh,
-    const float mcmc_noise_scalar,
-    const float min_opacity,
     const float max_gauss_ratio,
     const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight,
@@ -116,8 +110,6 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
-    const float mrnf_opacity_decay_factor,
-    const float mrnf_scale_decay_factor,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps
 ) {
@@ -272,8 +264,6 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
         float3 g1_scale = beta1 * g1_splats_world.scales(gid) + (1.f - beta1) * v_splat_world.scale;
         float3 g2_scale = beta2 * g2_splats_world.scales(gid) + (1.f - beta2) * v_splat_world.scale*v_splat_world.scale;
         float3 new_scale = splat_world.scale - lr_scales * inv_bias_correction1 * g1_scale / (sqrtf(g2_scale * inv_bias_correction2) + eps);
-        if (mrnf_scale_decay_factor != 1.0f)
-            new_scale += make_float3(__logf(mrnf_scale_decay_factor));
         splats_world.scales(gid) = new_scale;
         g1_splats_world.scales(gid) = g1_scale;
         g2_splats_world.scales(gid) = g2_scale;
@@ -296,11 +286,6 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
         float g1_opac = beta1 * g1_splats_world.opacities(gid) + (1.f - beta1) * v_splat_world.opacity;
         float g2_opac = beta2 * g2_splats_world.opacities(gid) + (1.f - beta2) * v_splat_world.opacity*v_splat_world.opacity;
         float new_opac = splat_world.opacity - lr_opacs * inv_bias_correction1 * g1_opac / (sqrtf(g2_opac * inv_bias_correction2) + eps);
-        if (mrnf_opacity_decay_factor != 0.0f) {
-            new_opac = sigmoid(new_opac);
-            new_opac = fmaxf(new_opac + mrnf_opacity_decay_factor, 1e-12f);
-            new_opac = logit(new_opac);
-        }
         splats_world.opacities(gid) = new_opac;
         g1_splats_world.opacities(gid) = g1_opac;
         g2_splats_world.opacities(gid) = g2_opac;
@@ -310,7 +295,6 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     if (inside) {
         float3 g1_mean = g1_splats_world.means(gid);
         float3 g2_mean = g2_splats_world.means(gid);
-        float noise_lr_scalar = 1.0f;
         if constexpr (use_scale_agnostic_mean) {
             float3 v_mean_scaled_num = SlangProjectionUtils::apply_covar_to_vec(
                 splat_world.quat,
@@ -321,18 +305,11 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
             g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean_scaled_num;  // unit: dimensionless
             g2_mean = beta2 * g2_mean + (1.f - beta2) * v_splat_world.mean*v_splat_world.mean * v_mean_scaled_den*v_mean_scaled_den;  // unit: L^-2
             // TODO: probably better use a globally consistent one; (MRNF chooses based on median scale)
-            noise_lr_scalar = length(v_mean_scaled_num) / (length(v_splat_world.mean) * v_mean_scaled_den + eps);
         } else {
             g1_mean = beta1 * g1_mean + (1.f - beta1) * v_splat_world.mean;  // unit: L^-1
             g2_mean = beta2 * g2_mean + (1.f - beta2) * v_splat_world.mean*v_splat_world.mean;  // unit: L^-2
         }
-        float3 new_mean = splat_world.mean;
-        SlangDensify::mcmc_add_noise_3dgs(
-            mcmc_noise_scalar * noise_lr_scalar, min_opacity,
-            &new_mean, splat_world.scale, splat_world.quat, sigmoid(splat_world.opacity)
-            // official MCMC use scale/quat/opac after optimizer step/densification, shouldn't matter in practice
-        );
-        splats_world.means(gid) = new_mean - lr_means * inv_bias_correction1 * g1_mean /
+        splats_world.means(gid) = splat_world.mean - lr_means * inv_bias_correction1 * g1_mean /
             (sqrtf(g2_mean * inv_bias_correction2) + eps); // unit: L or dimensionless for dimensionless lr_means
         g1_splats_world.means(gid) = g1_mean;
         g2_splats_world.means(gid) = g2_mean;
@@ -552,8 +529,6 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     const float lr_opacs,
     const float lr_features_dc,
     const float lr_features_sh,
-    const float mcmc_noise_scalar,
-    const float min_opacity,
     const float max_gauss_ratio,
     const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight,
@@ -562,8 +537,6 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
-    const float mrnf_opacity_decay_factor,
-    const float mrnf_scale_decay_factor,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps
 ) {
@@ -581,8 +554,6 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
         v_splats_world, vr_splats_world, h_splats_world, v_splats_screen, vr_splats_screen, h_splats_screen,
         g1_splats_world, g2_splats_world, g1_features_sh, g2_features_sh, sh_quant_bounds, //v_viewmats,
         radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc, lr_features_sh,
-        mcmc_noise_scalar * lr_means,
-        min_opacity,
         max_gauss_ratio,
         scale_regularization_weight / (float)N,
         mcmc_opacity_reg_weight / (float)N,
@@ -591,8 +562,6 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
         erank_reg_weight_s3 / (float)N,
         quat_norm_reg_weight / (float)N,
         2.0f * sh_reg_weight / (float)(3*N),
-        mrnf_opacity_decay_factor,
-        mrnf_scale_decay_factor,
         scalar_step, steps
     );
 }
