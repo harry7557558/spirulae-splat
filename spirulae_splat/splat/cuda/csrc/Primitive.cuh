@@ -254,7 +254,7 @@ public:
                 throw std::runtime_error("Tensor size mismatch");
             _data[i] = tensors[i].data_ptr<float>();
             if (_data[i] != nullptr)
-                _strides[i] = tensors[i].numel() / _size;
+                _strides[i] = _size == 0 ? 0 : tensors[i].numel() / _size;
         }
     }
 
@@ -282,7 +282,7 @@ public:
                 }
                 CHECK_INPUT(tensors[i].value());
                 _data[i] = tensors[i].value().data_ptr<float>();
-                _strides[i] = tensors[i].value().numel() / _size;
+                _strides[i] = _size == 0 ? 0 : tensors[i].value().numel() / _size;
             } else {
                 _data[i] = nullptr;
                 _strides[i] = 0;

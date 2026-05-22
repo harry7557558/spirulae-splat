@@ -81,8 +81,11 @@ class SpirulaeSplatDataManagerConfig:
 
 
 class IndexGroup:
-    def __init__(self, indices: List[int]):
+    def __init__(self, indices: List[int], eval: bool):
         self.indices = indices[:]
+        self.eval = eval
+        if not self.eval:
+            random.shuffle(self.indices)
         self.ptr = len(indices)
 
     def __len__(self):
@@ -90,7 +93,8 @@ class IndexGroup:
 
     def __next__(self):
         if self.ptr >= len(self.indices):
-            random.shuffle(self.indices)
+            if self.eval:
+                random.shuffle(self.indices)
             self.ptr = 0
         idx = self.indices[self.ptr]
         self.ptr += 1
@@ -98,7 +102,7 @@ class IndexGroup:
 
 
 class IndexGroups:
-    def __init__(self, indices: List[int], keys: List):
+    def __init__(self, indices: List[int], keys: List, eval: bool):
         groups = {}
         for idx, key in zip(indices, keys):
             if key not in groups:
@@ -106,7 +110,7 @@ class IndexGroups:
             groups[key].append(idx)
         self.groups = []  # type: List[IndexGroup]
         for key, idxs in groups.items():
-            self.groups.append(IndexGroup(idxs))
+            self.groups.append(IndexGroup(idxs, eval))
         self.probs = np.array([float(len(g)) for g in self.groups])
         self.probs /= np.sum(self.probs)
 
@@ -115,8 +119,8 @@ class IndexGroups:
 
 
 class IndexGroupsWithDataLoader(IndexGroups):
-    def __init__(self, indices: List[int], keys: List, getitem: Callable, batch_size: int, parallel: bool):
-        super().__init__(indices, keys)
+    def __init__(self, indices: List[int], keys: List, getitem: Callable, batch_size: int, parallel: bool, eval: bool):
+        super().__init__(indices, keys, eval)
         self.batch_size = batch_size
         self.getitem = getitem
         self.parallel = parallel
@@ -139,7 +143,7 @@ class IndexGroupsWithDataLoader(IndexGroups):
                 batch_size=min(batch_size, len(group)),
                 num_workers=min(max_num_workers, max(len(group), (min_num_workers+len(self.groups)-1)//len(self.groups))),
                 persistent_workers=True,
-                shuffle=True
+                shuffle=(not eval),
             )
             self.dataloaders.append([dataloader, iter(dataloader)])
 
@@ -174,6 +178,7 @@ class SpirulaeSplatDataManager:
         test_mode: Literal["test", "val", "inference"] = "val",
         world_size: int = 1,
         local_rank: int = 0,
+        eval: bool = False,
         **kwargs,  # pylint: disable=unused-argument
     ):
         self.config = config
@@ -181,6 +186,8 @@ class SpirulaeSplatDataManager:
 
         self.train_dataset = None
         self.eval_dataset = None
+
+        self.eval = eval
 
         self.train_index_group_loader = None  # type: Optional[IndexGroupsWithDataLoader]
 
@@ -423,13 +430,15 @@ class SpirulaeSplatDataManager:
             self.train_indices, [get_key(idx) for idx in self.train_indices],
             self.get_train_image, self.train_batch_size(False),
             #self.config.cache_images != "gpu"
-            self.config.cache_images == "disk"
+            self.config.cache_images == "disk",
+            self.eval,
         )
         self.val_index_group_loader = IndexGroupsWithDataLoader(
             self.val_indices, [get_key(idx) for idx in self.val_indices],
             self.get_train_image, self.val_batch_size(False),
             #self.config.cache_images != "gpu"
-            self.config.cache_images == "disk"
+            self.config.cache_images == "disk",
+            self.eval,
         )
 
     def random_cameras(self, batch_size: int):

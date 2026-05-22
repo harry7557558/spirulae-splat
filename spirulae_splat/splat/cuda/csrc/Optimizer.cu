@@ -1036,6 +1036,10 @@ void fused_adam_with_steps_tensor(
         if (param.numel() == 0 || n == 0)
             return;
         stride = (int)(param.numel() / n);
+    } else if (param.numel() != num_splats) {
+        if (param.numel() == 0)
+            return;
+        stride = param.numel() / param.size(0);
     }
     if (num_splats * stride == 0)
         return;
@@ -1162,6 +1166,10 @@ void fused_adam_with_steps_8bit_tensor(
         if (param.numel() == 0 || n == 0)
             return;
         stride = (int)(param.numel() / n);
+    } else if (param.numel() != num_splats) {
+        if (param.numel() == 0)
+            return;
+        stride = param.numel() / param.size(0);
     }
     if (num_splats * stride == 0)
         return;

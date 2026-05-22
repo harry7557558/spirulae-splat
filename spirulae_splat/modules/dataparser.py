@@ -205,9 +205,9 @@ class SpirulaeSplatDataParserConfig:
     """How much to downscale images. If not set, images are chosen such that the max dimension is <1600px."""
     scene_scale: float = 1.0
     """How much to scale the region of interest by."""
-    orientation_method: Literal["pca", "up", "vertical", "none"] = "up"
+    orientation_method: Literal["pca", "up", "vertical", "none", "gsplat"] = "up"
     """The method to use for orientation."""
-    center_method: Literal["poses", "focus", "none"] = "poses"
+    center_method: Literal["poses", "focus", "none", "gsplat"] = "poses"
     """The method to use to center the poses."""
     auto_scale_poses: bool = True
     """Whether to automatically scale the poses to fit in +/- 1 bounding box."""
@@ -402,31 +402,39 @@ class SpirulaeSplatDataparser:
         else:
             raise ValueError(f"Unknown eval mode {self.config.eval_mode}")
 
-        # Auto orient poses
-        poses = torch.from_numpy(np.array(poses).astype(np.float32))
-        poses, transform_matrix = camera_utils.auto_orient_and_center_poses(
-            poses,
-            method=self.config.orientation_method,
-            center_method=self.config.center_method,
-        )
-
-        # Auto scale poses
-        scale_factor = 1.0
-        if self.config.auto_scale_poses:
-            scale_factor /= float(torch.max(torch.abs(poses[:, :3, 3])))
-        scale_factor *= self.config.scale_factor
-        poses[:, :3, 3] *= scale_factor
-
         # Load 3D points
         metadata = {}
         if _points3D is None:
             if "ply_file_path" not in meta:
                 raise ValueError("No initial point cloud found in transforms.json")
             ply_file_path = self.dataset_dir / meta["ply_file_path"]
-            sparse_points = self._load_3D_points(ply_file_path, transform_matrix, scale_factor)
+            sparse_points = self._load_3D_points(ply_file_path)
             metadata.update(sparse_points)
         else:
             metadata.update(_points3D)
+
+        # Auto orient poses
+        poses = torch.from_numpy(np.array(poses).astype(np.float32))
+        if self.config.center_method == "gsplat" or self.config.orientation_method == "gsplat":
+            poses, transform_matrix, scene_scale = camera_utils.orient_and_center_poses_gsplat(
+                poses.numpy(), metadata['points3D_xyz'].numpy()
+            )
+            poses = torch.from_numpy(poses).float()
+            transform_matrix = torch.from_numpy(transform_matrix).float()[:3, :]
+            # TODO: this may mess up MCMC scale regularization
+            scale_factor = 1.0 / scene_scale
+        else:
+            poses, transform_matrix = camera_utils.auto_orient_and_center_poses(
+                poses,
+                method=self.config.orientation_method,
+                center_method=self.config.center_method,
+            )
+            scale_factor = 1.0
+            if self.config.auto_scale_poses:
+                scale_factor /= float(torch.max(torch.abs(poses[:, :3, 3])))
+
+        scale_factor *= self.config.scale_factor
+        poses[:, :3, 3] *= scale_factor
 
         # Apply transformation to 3D points
         metadata['points3D_xyz'] = (
@@ -724,7 +732,7 @@ class SpirulaeSplatDataparser:
                 break
 
 
-    def _load_3D_points(self, ply_file_path: Path, transform_matrix: torch.Tensor, scale_factor: float):
+    def _load_3D_points(self, ply_file_path: Path):
         """Loads point clouds positions and colors from .ply
 
         Args:

@@ -70,54 +70,6 @@ std::tuple<
     at::Tensor,  // camera_ids
     at::Tensor,  // gaussian_ids
     at::Tensor,  // aabb
-    at::Tensor,  // sorting depths
-    at::Tensor,  // radii
-    TensorList  // out splats
-> projection_3dgut_hetero_forward_tensor(
-    // inputs
-    const int max_sh_degree,
-    const TensorList in_splats,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const uint32_t tile_width,
-    const uint32_t tile_height,
-    const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
-    const at::Tensor intersection_count_map,  // [C+1]
-    const at::Tensor intersection_splat_id  // [nnz]
-);
-
-
-std::tuple<
-    TensorList,  // v_splats
-    at::Tensor  // v_viewmats
-> projection_3dgut_hetero_backward_tensor(
-    // fwd inputs
-    const TensorList splats_world,
-    const at::Tensor viewmats, // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const uint32_t tile_width,
-    const uint32_t tile_height,
-    const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
-    // fwd outputs
-    const at::Tensor camera_ids, // [nnz]
-    const at::Tensor gaussian_ids, // [nnz]
-    const at::Tensor aabb,  // [nnz, 4]
-    // grad outputs
-    const TensorList v_splats_proj,
-    const bool viewmats_requires_grad
-);
-
-
-std::tuple<
-    at::Tensor,  // camera_ids
-    at::Tensor,  // gaussian_ids
-    at::Tensor,  // aabb
     at::Tensor,  // sorting_depths
     at::Tensor,  // radii
     TensorList  // out splats
@@ -142,6 +94,54 @@ std::tuple<
     TensorList,  // v_splats
     at::Tensor  // v_viewmats
 > projection_mip_hetero_backward_tensor(
+    // fwd inputs
+    const TensorList splats_world,
+    const at::Tensor viewmats, // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const std::string camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
+    // fwd outputs
+    const at::Tensor camera_ids, // [nnz]
+    const at::Tensor gaussian_ids, // [nnz]
+    const at::Tensor aabb,  // [nnz, 4]
+    // grad outputs
+    const TensorList v_splats_proj,
+    const bool viewmats_requires_grad
+);
+
+
+std::tuple<
+    at::Tensor,  // camera_ids
+    at::Tensor,  // gaussian_ids
+    at::Tensor,  // aabb
+    at::Tensor,  // sorting depths
+    at::Tensor,  // radii
+    TensorList  // out splats
+> projection_3dgut_hetero_forward_tensor(
+    // inputs
+    const int max_sh_degree,
+    const TensorList in_splats,
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const std::string camera_model,
+    const CameraDistortionCoeffsTensor dist_coeffs,
+    const at::Tensor intersection_count_map,  // [C+1]
+    const at::Tensor intersection_splat_id  // [nnz]
+);
+
+
+std::tuple<
+    TensorList,  // v_splats
+    at::Tensor  // v_viewmats
+> projection_3dgut_hetero_backward_tensor(
     // fwd inputs
     const TensorList splats_world,
     const at::Tensor viewmats, // [..., C, 4, 4]

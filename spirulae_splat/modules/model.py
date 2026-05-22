@@ -239,6 +239,10 @@ class SpirulaeSplatModelConfig:
     """If True, this will assume color in initial point cloud is sRGB, and convert if images are in a linear or wide-gamut color space."""
 
     # Regularization
+    scale_init: Optional[float] = None
+    """Initial scale. If not set, auto decide"""
+    opacity_init: Optional[float] = None
+    """Initial opacity. If not set, auto decide"""
     suppress_initial_scales: bool = False
     """Whether to suppress scales during initialization to discourage large floaters in vacant areas"""
     scale_regularization_weight: float = 0.0
@@ -413,12 +417,17 @@ class SpirulaeSplatModel(torch.nn.Module):
         self.ch_grad_norm = None
         self.max_2Dsize = None
 
-        scale_init, opacity_init = 0.1, 0.5  # per MCMC paper
-        if self.config.use_mcmc and self.config.max_screen_size < 1.0 or True:
-            scale_init, opacity_init = 0.5, 0.1
+        scale_init, opacity_init = self.config.scale_init, self.config.opacity_init
+        if (self.config.use_mcmc and self.config.max_screen_size < 1.0) or True:
+            if scale_init is None:
+                scale_init = 0.5
+            if opacity_init is None:
+                opacity_init = 0.1
         if self.config.train_background_color or self.config.randomize_background:
-            # scale_init, opacity_init = 1.0, 0.1
-            scale_init, opacity_init = 0.5, 0.1
+            if scale_init is None:
+                scale_init = 0.5
+            if opacity_init is None:
+                opacity_init = 0.1
 
         if self.config.primitive in ["voxel"]:
             means_mean, means_std = torch.mean(means, 0), torch.std(means, 0)
@@ -1693,7 +1702,8 @@ class SpirulaeSplatModel(torch.nn.Module):
         predicted_rgb = outputs["rgb"]
         predicted_rgb = torch.clip(predicted_rgb, 0.0, 1.0)
 
-        combined_rgb = torch.cat([gt_rgb, predicted_rgb], dim=1)
+        # combined_rgb = torch.cat([gt_rgb, predicted_rgb], dim=1)
+        combined_rgb = predicted_rgb
 
         # Switch images from [H, W, C] to [1, C, H, W] for metrics computations
         gt_rgb = torch.moveaxis(gt_rgb, -1, 0)[None, ...]

@@ -7,6 +7,7 @@ import torch
 import time
 from tqdm import tqdm
 from copy import deepcopy
+import cv2
 
 from spirulae_splat.modules.camera import Cameras
 from spirulae_splat.modules.model import SpirulaeSplatModelConfig, SpirulaeSplatModel
@@ -134,6 +135,8 @@ class TrainerConfig:
         If -1, save only at the end. If zero, never save (used in benchmark)."""
     save_only_latest_checkpoint: bool = True
     """Whether to save only last checkpoint"""
+    save_eval_images: bool = False
+    """Whether to save eval images at end of training"""
 
     num_iterations: int = 30000
     """Number of training iterations"""
@@ -301,7 +304,7 @@ class Trainer:
             model_outputs = self.model.get_outputs(camera)
             metrics_dict, img_dict = self.model.get_image_metrics_and_images(model_outputs, batch)
 
-        return metrics_dict
+        return metrics_dict, img_dict
 
     def get_eval_metrics_dict(self, *args):
         with self.lock:
@@ -374,20 +377,33 @@ class Trainer:
         config.deblur_training_images = False
         config.compute_visibility_masks = False
         config.cache_images = "disk"
-        self.datamanager = SpirulaeSplatDataManager(config, device="cuda")
+        self.datamanager = SpirulaeSplatDataManager(config, device="cuda", eval=True)
         self.datamanager.train_dataset = self.dataset_eval
 
         metrics = {}
+        images = {}
         for i in tqdm(range(len(self.dataset_eval.cameras)), desc="Eval", unit="step"):
-            metric_dict = self.get_eval_metrics_dict()
+            metric_dict, image_dict = self.get_eval_metrics_dict()
             for key, value in metric_dict.items():
                 if key not in metrics:
                     metrics[key] = []
                 metrics[key].append(value)
+            if self.config.save_eval_images:
+                for key, value in image_dict.items():
+                    if key not in images:
+                        images[key] = []
+                    images[key].append(value)
         for key, value in [*metrics.items()]:
             value = sum(value) / len(value)
             metrics['avg_'+key] = value
             print(f"{key}: {value}")
+
+        if self.config.save_eval_images:
+            for key, images in images.items():
+                for idx, image in enumerate(images):
+                    path = self.output_dir / f"eval-{key}-{idx:05d}.png"
+                    image = (torch.clip(image, 0, 1) * 255).to(torch.uint8).cpu().numpy()
+                    cv2.imwrite(str(path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
 
         import json
         with open(self.output_dir / "metrics.json", "w") as f:
@@ -706,6 +722,8 @@ class TrainerConfigAcademicBaseline(TrainerConfig):
     dataparser: SpirulaeSplatDataParserConfig = field(default_factory=lambda: SpirulaeSplatDataParserConfig(
         eval_mode="interval",
         eval_interval=8,
+        center_method="gsplat",
+        orientation_method="gsplat",
     ))
     datamanager: SpirulaeSplatDataManagerConfig = field(default_factory=lambda: SpirulaeSplatDataManagerConfig(
         max_batch_per_epoch=9**9,
@@ -725,8 +743,13 @@ class TrainerConfigAcademicBaseline(TrainerConfig):
         use_edge_aware_score=False,
         use_loss_map=False,
         use_long_axis_split=False,
+        use_fused_proj_bwd_optim=False,
+        quantize_sh_optim=False,
         max_screen_size=float('inf'),
+        max_world_size=float('inf'),
         suppress_initial_scales=False,
+        scale_init=0.1,
+        opacity_init=0.5,
         depth_distortion_reg=0.0,
         normal_reg_weight=0.0,
         alpha_reg_weight=0.0,
@@ -750,7 +773,7 @@ class TrainerConfigAcademicBaseline(TrainerConfig):
         means_lr_final=1.6e-6,
         scales_lr=0.005,
         scales_lr_final=None,
-        quats_lr=0.0005,
+        quats_lr=0.001,
         opacities_lr=0.05,
         features_dc_lr=0.0025,
         features_sh_lr=0.0025 / 20,

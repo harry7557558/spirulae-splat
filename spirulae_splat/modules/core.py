@@ -707,13 +707,14 @@ class Renderer:
 
     def densify_step(
         self,
-        step: int, 
+        step: int,
         max_steps: int,
         model_config: 'spirulae_splat.modules.model.SpirulaeSplatModelConfig',
         optim_config: OptimizerConfig
     ):
         densify_ongoing = (step < max_steps - model_config.refine_stop_num_iter)
         densify_step = densify_ongoing and (step > model_config.refine_start_iter and step % model_config.refine_every == 0)
+        use_revised_densification = (model_config.relocate_heuristic_weight >= 1.0)
 
         # Clip large splats
         progress = (step+0.5) / max_steps
@@ -731,7 +732,7 @@ class Renderer:
 
         # Update Densification Score
 
-        if densify_ongoing and model_config.relocate_heuristic_weight >= 1.0:
+        if densify_ongoing and use_revised_densification:
 
             if not hasattr(self, 'densify_accum_buffer'):
                 self.densify_accum_buffer = torch.zeros(
@@ -767,7 +768,7 @@ class Renderer:
         if densify_step:
             torch.cuda.empty_cache()
 
-        if densify_step and model_config.relocate_heuristic_weight >= 1.0:
+        if densify_step and use_revised_densification:
 
             # relocation
             _make_lazy_cuda_func("relocate_splats_with_long_axis_split")(
@@ -835,24 +836,25 @@ class Renderer:
         if model_config.opacity_decay != 0.0 or model_config.scale_decay != 0.0:
             raise NotImplementedError()
 
-        noise_scalar = model_config.noise_lr * (model_config.noise_lr_final / model_config.noise_lr) ** progress
+        if model_config.noise_lr > 0.0 and model_config.noise_lr_final > 0.0:
+            noise_scalar = model_config.noise_lr * (model_config.noise_lr_final / model_config.noise_lr) ** progress
 
-        if model_config.relocate_heuristic_weight >= 1.0:
-            _make_lazy_cuda_func("revised_add_noise")(
-                self.cur_num_splats,
-                noise_scalar,
-                self.radii,
-                self.splats_world[0],  # means
-                self.splats_world[2],  # quats
-                self.splats_world[1],  # scales
-                self.splats_world[3],  # opacs
-            )
-        else:
-            _make_lazy_cuda_func("mcmc_add_noise")(
-                self.cur_num_splats,
-                noise_scalar,
-                self.splats_world[0],  # means
-                self.splats_world[2],  # quats
-                self.splats_world[1],  # scales
-                self.splats_world[3],  # opacs
-            )
+            if model_config.relocate_heuristic_weight >= 1.0:
+                _make_lazy_cuda_func("revised_add_noise")(
+                    self.cur_num_splats,
+                    noise_scalar,
+                    self.radii,
+                    self.splats_world[0],  # means
+                    self.splats_world[2],  # quats
+                    self.splats_world[1],  # scales
+                    self.splats_world[3],  # opacs
+                )
+            else:
+                _make_lazy_cuda_func("mcmc_add_noise")(
+                    self.cur_num_splats,
+                    noise_scalar,
+                    self.splats_world[0],  # means
+                    self.splats_world[2],  # quats
+                    self.splats_world[1],  # scales
+                    self.splats_world[3],  # opacs
+                )

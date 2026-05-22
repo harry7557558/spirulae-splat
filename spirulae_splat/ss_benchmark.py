@@ -61,6 +61,10 @@ def bench_360_v2(config_class, path_to_360_v2: Path):
         config.dataparser.image_dir = f"images_{downscale}"
         config.dataparser.eval_mode = "interval"
 
+        config.save_eval_images = True
+        # config.num_iterations = 2500
+        # config.model.refine_stop_num_iter = 0
+
         # TODO: color correct
         config.model.use_bilateral_grid = False
         config.model.use_ppisp = False
@@ -123,6 +127,8 @@ def bench_zipnerf(config_class, path_to_zipnerf: Path):
         # config.dataparser.rescale_camera_to_fit = True
         config.dataparser.image_dir = f"images_{downscale}"
         config.dataparser.eval_mode = "interval"
+
+        config.save_eval_images = True
 
         # TODO: color correct
         config.model.use_bilateral_grid = False

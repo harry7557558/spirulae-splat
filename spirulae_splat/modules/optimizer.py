@@ -374,7 +374,7 @@ class OptimizerConfig:
     # means_lr_final: Optional[float] = 1.6e-6
     # scales_lr: float = 0.005
     # scales_lr_final: Optional[float] = None
-    # quats_lr: float = 0.0005
+    # quats_lr: float = 0.001
     # opacities_lr: float = 0.05
     # features_dc_lr: float = 0.0025
     # features_sh_lr: float = 0.0025 / 20
@@ -419,7 +419,7 @@ class OptimizerConfig:
         warmup = getattr(optim_config, name+"_lr_warmup", None)
         pre_warmup = 0.0  # TODO
         scheduled_lr = lr
-        if lr_final is not None:
+        if lr_final is not None and lr != 0.0 and lr_final != 0.0:
             scheduled_lr = lr * (lr_final / lr) ** min(step / max_steps, 1.0)
         if warmup is not None:
             scheduled_lr = min(scheduled_lr, pre_warmup + (lr - pre_warmup) * min(step / warmup, 1.0))
