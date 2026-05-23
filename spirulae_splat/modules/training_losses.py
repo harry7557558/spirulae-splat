@@ -157,70 +157,70 @@ class Dct3D(torch.autograd.Function):
         return _make_lazy_cuda_func("dct3d_type1_ortho")(v_data)
 
 
-class _ComputePerSplatLosses(torch.autograd.Function):
+# class _ComputePerSplatLosses(torch.autograd.Function):
 
-    @staticmethod
-    def forward(
-        ctx,
-        scales, opacities, quats,
-        opacity_reg: float,
-        scale_reg: float,
-        max_gauss_ratio: float,
-        scale_regularization_weight: float,
-        erank_reg: float,
-        erank_reg_s3: float,
-        quat_norm_reg_weight: float,
-        compute_hessian_diagonal: Literal[None, "position", "all"] = None,
-        backward_info: Optional[dict] = None,
-    ):
+#     @staticmethod
+#     def forward(
+#         ctx,
+#         scales, opacities, quats,
+#         opacity_reg: float,
+#         scale_reg: float,
+#         max_gauss_ratio: float,
+#         scale_regularization_weight: float,
+#         erank_reg: float,
+#         erank_reg_s3: float,
+#         quat_norm_reg_weight: float,
+#         compute_hessian_diagonal: Literal[None, "position", "all"] = None,
+#         backward_info: Optional[dict] = None,
+#     ):
 
-        hyperparams = (
-            opacity_reg,
-            scale_reg,
-            max_gauss_ratio,
-            scale_regularization_weight,
-            erank_reg,
-            erank_reg_s3,
-            quat_norm_reg_weight
-        )
+#         hyperparams = (
+#             opacity_reg,
+#             scale_reg,
+#             max_gauss_ratio,
+#             scale_regularization_weight,
+#             erank_reg,
+#             erank_reg_s3,
+#             quat_norm_reg_weight
+#         )
 
-        losses = _make_lazy_cuda_func("compute_per_splat_losses_forward")(
-            scales, opacities, quats,
-            *hyperparams
-        )
+#         losses = _make_lazy_cuda_func("compute_per_splat_losses_forward")(
+#             scales, opacities, quats,
+#             *hyperparams
+#         )
 
-        ctx.hyperparams = hyperparams
-        ctx.save_for_backward(scales, opacities, quats)
-        ctx.compute_hessian_diagonal = (compute_hessian_diagonal == "all")
-        ctx.backward_info = backward_info
+#         ctx.hyperparams = hyperparams
+#         ctx.save_for_backward(scales, opacities, quats)
+#         ctx.compute_hessian_diagonal = (compute_hessian_diagonal == "all")
+#         ctx.backward_info = backward_info
 
-        return losses
+#         return losses
 
-    @staticmethod
-    def backward(ctx, v_losses):
+#     @staticmethod
+#     def backward(ctx, v_losses):
 
-        hyperparams = ctx.hyperparams
-        scales, opacities, quats = ctx.saved_tensors
+#         hyperparams = ctx.hyperparams
+#         scales, opacities, quats = ctx.saved_tensors
 
-        if ctx.compute_hessian_diagonal:
-            assert ctx.backward_info is not None
-            v_inputs, vr_inputs, h_inputs = \
-            _make_lazy_cuda_func("compute_per_splat_losses_backward_with_hessian_diagonal")(
-                scales, opacities, quats,
-                v_losses,
-                *hyperparams
-            )
-            for key, v, vr, h in zip('scales opacities quats'.split(), v_inputs, vr_inputs, h_inputs):
-                add_gradient_component(ctx.backward_info, key+'.gradr', vr)
-                add_gradient_component(ctx.backward_info, key+'.hess', h)
-                # print(v.shape, torch.isfinite(h).float().mean().item(), torch.nan_to_num(v, 0, 0, 0).mean().item(), torch.nan_to_num(vr, 0, 0, 0).mean().item(), torch.nan_to_num(h, 0, 0, 0).mean().item())
-        else:
-            v_inputs = _make_lazy_cuda_func("compute_per_splat_losses_backward")(
-                scales, opacities, quats,
-                v_losses,
-                *hyperparams
-            )
-        return (*v_inputs, *([None]*len(hyperparams)), None, None)
+#         if ctx.compute_hessian_diagonal:
+#             assert ctx.backward_info is not None
+#             v_inputs, vr_inputs, h_inputs = \
+#             _make_lazy_cuda_func("compute_per_splat_losses_backward_with_hessian_diagonal")(
+#                 scales, opacities, quats,
+#                 v_losses,
+#                 *hyperparams
+#             )
+#             for key, v, vr, h in zip('scales opacities quats'.split(), v_inputs, vr_inputs, h_inputs):
+#                 add_gradient_component(ctx.backward_info, key+'.gradr', vr)
+#                 add_gradient_component(ctx.backward_info, key+'.hess', h)
+#                 # print(v.shape, torch.isfinite(h).float().mean().item(), torch.nan_to_num(v, 0, 0, 0).mean().item(), torch.nan_to_num(vr, 0, 0, 0).mean().item(), torch.nan_to_num(h, 0, 0, 0).mean().item())
+#         else:
+#             v_inputs = _make_lazy_cuda_func("compute_per_splat_losses_backward")(
+#                 scales, opacities, quats,
+#                 v_losses,
+#                 *hyperparams
+#             )
+#         return (*v_inputs, *([None]*len(hyperparams)), None, None)
 
 
 class _ComputePPISPRegularization(torch.autograd.Function):
@@ -632,7 +632,7 @@ class SplatTrainingLosses:
         if self.config.use_ppisp and \
                 camera.metadata is not None and "cam_idx" in camera.metadata:
             pred_rgb_pre_ppisp = pred_rgb
-            indices = torch.tensor(camera.metadata["cam_idx"]).flatten().to(device)
+            indices = camera.metadata["cam_idx"].flatten().to(device)
             pred_rgb = apply_ppisp(
                 self.config.ppisp_param_type,
                 pred_rgb, self.ppisp_params[indices, :],
@@ -752,7 +752,7 @@ class SplatTrainingLosses:
 
         # PPISP backward
         if pred_rgb_pre_ppisp is not None:
-            indices = torch.tensor(camera.metadata["cam_idx"]).flatten().to(device)  # TODO: use pre-computed
+            indices = camera.metadata["cam_idx"].flatten().to(device)  # TODO: use pre-computed
             grads[0], v_ppisp = _make_lazy_cuda_func("ppisp_backward")(
                 pred_rgb_pre_ppisp, self.ppisp_params[indices, :],
                 intrins,
@@ -843,12 +843,6 @@ class SplatTrainingLosses:
                 self.v_bilagrid_depth[camera.metadata["cam_idx"]] += v_bilagrid
             v_geom = None
 
-        (
-            rgb_loss, rgb_psnr,
-            depth_supervision_loss, normal_supervision_loss, alpha_supervision_loss,
-            normal_reg, alpha_reg,
-            rgb_dist_reg, depth_dist_reg, normal_dist_reg
-        ) = losses
         if loss_map is not None:
             if 'backward_info' in outputs:
                 outputs['backward_info']['loss_map'] = loss_map  # to be able to get it in backward
@@ -870,9 +864,6 @@ class SplatTrainingLosses:
         #         ax3.imshow(edge_map[0].detach().cpu().numpy())
         #     plt.tight_layout()
         #     plt.show()
-
-        # note that rgb_loss is already multipled by (1.0 - self.config.ssim_lambda) * (1.0 - self.config.lpips_lambda)
-        image_loss = rgb_loss.item() + w_ssim * (1.0 - ssim)
 
         # LPIPS for training
         if self.config.lpips_lambda > 0.0:
@@ -902,57 +893,71 @@ class SplatTrainingLosses:
                     gt_rgb.permute(0, 3, 1, 2).to(self.lpips_dtype).clip(0, 1)
                 ).float()
 
-        # metrics, readable from terminal during training
+        # Metrics for verbose
         with torch.no_grad():
-            # list_cap_max = self.num_train_data
-            list_cap_max = self.config.refine_every
-            if not hasattr(self, '_running_metrics'):
-                self._running_metrics = { 'psnr': [], 'ssim': [], 'lpips': [] }
-            psnr_list = self._running_metrics['psnr']
-            ssim_list = self._running_metrics['ssim']
-            psnr_list.append(psnr)
-            ssim_list.append(ssim)
-            if len(psnr_list) > list_cap_max:
-                del psnr_list[0]
-                del ssim_list[0]
-            psnr = sum(psnr_list) / len(psnr_list)
-            ssim = sum(ssim_list) / len(ssim_list)
+            (
+                rgb_loss, rgb_psnr,
+                depth_supervision_loss, normal_supervision_loss, alpha_supervision_loss,
+                normal_reg, alpha_reg,
+                rgb_dist_reg, depth_dist_reg, normal_dist_reg
+            ) = [x.item() for x in losses.cpu()]
 
+            def sdiv(x, y):
+                return x/y if y!=0 else 0.0
+            loss_dict = {
+                "rgb_loss": rgb_loss + w_ssim * (1.0 - ssim),
+                "psnr": psnr,
+                "ssim": ssim,
+                "depth_loss": sdiv(depth_supervision_loss, loss_weights[2]),
+                "normal_loss": sdiv(normal_supervision_loss, loss_weights[3]),
+                "alpha_loss": sdiv(alpha_supervision_loss, loss_weights[4]+loss_weights[5]),
+                "normal_reg": sdiv(normal_reg, loss_weights[6]),
+                "alpha_reg": sdiv(alpha_reg, loss_weights[7]),
+                "rgb_dist_reg": sdiv(rgb_dist_reg, loss_weights[8]),
+                "normal_dist_reg": sdiv(normal_dist_reg, loss_weights[9]),
+                "depth_dist_reg": sdiv(depth_dist_reg, loss_weights[10]),
+            }
             if self.config.lpips_lambda > 0.0:
-                lpips_list = self._running_metrics['lpips']
-                lpips = lpips.item()
-                lpips_list.append(lpips)
-                if len(lpips_list) > list_cap_max:
-                    del lpips_list[0]
-                lpips = sum(lpips_list) / len(lpips_list)
-
-        loss_dict = {
-            # [C] RGB and alpha
-            "image_loss": image_loss,
-            "psnr": float(psnr),
-            "ssim": float(ssim),
-            # [S] supervision
-            "depth_ref_loss": depth_supervision_loss,
-            "normal_ref_loss": normal_supervision_loss,
-            "alpha_ref_loss": alpha_supervision_loss,
-            # [G] 2DGS
-            "normal_reg": normal_reg,
-            "alpha_reg": alpha_reg,
-            "depth_dist_reg": depth_dist_reg,
-            "normal_dist_reg": normal_dist_reg,
-            "rgb_dist_reg": rgb_dist_reg,
-        }
-        if self.config.lpips_lambda > 0.0:
-            loss_dict['lpips'] = float(lpips)
-        if val:
-            raise NotImplementedError()
-            loss_dict['lpips_val'] = float(lpips_val)
+                raise NotImplementedError()
+                loss_dict['lpips'] = float(lpips)
+            if val:
+                raise NotImplementedError()
+                loss_dict['lpips_val'] = float(lpips_val)
 
         return loss_dict, grads
 
-    def get_static_losses(self, step: int, gauss_quats, gauss_scales, gauss_opacities, loss_dict, backward_info: Optional[dict] = None):
+    # def get_static_losses(self, step: int, gauss_quats, gauss_scales, gauss_opacities, loss_dict, backward_info: Optional[dict] = None):
+    def get_static_losses(self, step: int):
         """Separately process losses that are not dependent on images"""
         self.step = step
+
+        loss_dict = {}
+
+        if self.config.use_bilateral_grid:
+            if self.config.optimize_bilagrid_frequencies:
+                raise NotImplementedError()
+            loss_dict['bilagrid_tv'] = fused_bilagrid_C.tv_loss_forward(self.bilagrid.grids).item()
+            loss_dict['bilagrid_vram'] = self.bilagrid.grids.nbytes / 1024**3 * 4
+        if self.config.use_bilateral_grid_for_geometry:
+            loss_dict["bilagrid_depth_tv"] = fused_bilagrid_C.tv_loss_forward(self.bilagrid_depth.grids).item()
+            loss_dict["bilagrid_normal_tv"] = fused_bilagrid_C.tv_loss_forward(self.bilagrid_normal.grids).item()
+            loss_dict['bilagrid_geom_vram'] = (self.bilagrid_depth.grids.nbytes + self.bilagrid_normal.grids.nbytes) / 1024**3 * 4
+
+        if self.config.use_ppisp:
+            ppisp_reg_loss = _C.compute_ppsip_regularization_forward(
+                self.ppisp_params,
+                [1.0]*6,
+                self.config.ppisp_param_type
+            )[0].cpu().numpy().tolist()
+            loss_dict['ppisp_reg_exposure_mean'] = ppisp_reg_loss[0]
+            loss_dict['ppisp_reg_vig_center'] = ppisp_reg_loss[1]
+            loss_dict['ppisp_reg_vig_non_pos'] = ppisp_reg_loss[2]
+            loss_dict['ppisp_reg_vig_channel_var'] = ppisp_reg_loss[3]
+            loss_dict['ppisp_reg_color_mean'] = ppisp_reg_loss[4]
+            loss_dict['ppisp_reg_crf_channel_var'] = ppisp_reg_loss[5]
+            loss_dict['ppisp_vram'] = self.ppisp_params.nbytes / 1024**3 * 4
+
+        return loss_dict
 
         # bilagrid regularization loss
         if self.config.use_bilateral_grid:
@@ -1017,7 +1022,7 @@ class SplatTrainingLosses:
         )
         loss_dict['opacity_reg'] = losses[0]
         loss_dict['scale_reg'] = losses[1]
-        loss_dict['scale_reg'] = losses[2]
+        loss_dict['phygauss_scale_reg'] = losses[2]
         loss_dict['erank_reg'] = losses[3]
         loss_dict['quat_norm_reg'] = losses[4]
         return loss_dict

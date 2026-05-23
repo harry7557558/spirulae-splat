@@ -280,11 +280,15 @@ class Trainer:
             train_inputs, val_inputs = train_inputs[0], val_inputs[0]
             inputs = [((train_inputs[0], val_inputs[0]), (train_inputs[1], val_inputs[1]))]
 
+        if len(inputs) != 1:
+            raise NotImplementedError()
         for i, (camera, batch) in enumerate(inputs):
             model_outputs = self.model.get_outputs(camera)
-            loss_dict, loss_grad = self.model.get_loss_dict(model_outputs, batch, len(inputs))
+            loss_grad = self.model.get_loss_grad(model_outputs, batch, len(inputs))
             self.model.backward(model_outputs, loss_grad)
             self.model.optim_step()
+
+        self.model.verbose()
 
         # for optim in self.optimizers.values():
         #     optim.step()
@@ -315,32 +319,28 @@ class Trainer:
     def train(self):
         self.start_time = time.time()
         self.last_step_time = self.start_time
-        with tqdm(total=self.config.num_iterations, desc="Training", unit="step") as pbar:
-            for step in range(self.config.num_iterations):
-                if step > 0 and self.config.steps_per_save > 0 and step % self.config.steps_per_save == 0:
-                    self.save_checkpoint(step)
-                # if step % 100 == 50:
-                #     self.print_vram_breakdown()
-                #     # exit(0)
-                step_start = time.time()
-                self.current_step = step + 1  # 1-based
-                self.train_step(step)
-                step_end = time.time()
-                latency = step_end - step_start
-                self.step_latencies.append(latency)
-                if len(self.step_latencies) > 100:  # keep last 100
-                    self.step_latencies.pop(0)
-                # pbar.update(1)
-                avg_latency = sum(self.step_latencies) / len(self.step_latencies)
-                elapsed = time.time() - self.start_time
-                eta = (self.config.num_iterations - self.current_step) * avg_latency
-                # pbar.set_postfix({
-                #     "latency": f"{avg_latency*1000:.1f}ms",
-                #     "elapsed": f"{elapsed:.1f}s",
-                #     "eta": f"{eta:.1f}s"
-                # })
+        for step in range(self.config.num_iterations):
+            if step > 0 and self.config.steps_per_save > 0 and step % self.config.steps_per_save == 0:
+                self.save_checkpoint(step)
+            # if step % 100 == 50:
+            #     self.print_vram_breakdown()
+            #     # exit(0)
+            step_start = time.time()
+            self.current_step = step + 1  # 1-based
+            self.train_step(step)
+            step_end = time.time()
+            latency = step_end - step_start
+            self.step_latencies.append(latency)
+            if len(self.step_latencies) > 100:  # keep last 100
+                self.step_latencies.pop(0)
+            # pbar.update(1)
+            avg_latency = sum(self.step_latencies) / len(self.step_latencies)
+            elapsed = time.time() - self.start_time
+            eta = (self.config.num_iterations - self.current_step) * avg_latency
         if self.config.steps_per_save != 0:
             self.save_checkpoint(self.config.num_iterations)
+        print(f"Checkpoint saved to: {self.output_dir.absolute()}")
+        print()
 
     def _train_with_profiling(self):
         def trace_handler(prof: torch.profiler.profile):

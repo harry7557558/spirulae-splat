@@ -51,7 +51,7 @@ class ViewerServer:
         self._http_thread.start()
 
         url = f"http://{self._http_host}:{self._http_port}/"
-        print(f"Viewer at  {url}")
+        print(f"Viewer at {url}")
 
         if self._open_browser:
             threading.Timer(0.5, webbrowser.open, args=[url]).start()

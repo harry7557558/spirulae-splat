@@ -38,7 +38,7 @@ from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
 from spirulae_splat.strategy import MCMCStrategy, OpaqueStrategy, SVRasterStrategy
 
 from spirulae_splat.modules.training_losses import SplatTrainingLosses
-# from spirulae_splat.modules.optimizer import get_scheduled_lr
+from spirulae_splat.modules.verbose import TrainingVerbose
 from spirulae_splat.modules.optimizer import OptimizerConfig
 from spirulae_splat.splat.cuda._wrapper_per_pixel import (
     blend_background,
@@ -56,17 +56,6 @@ from spirulae_splat.splat.cuda import (
 from spirulae_splat.modules.camera import Cameras, CameraType
 from spirulae_splat.splat import depth_to_normal
 
-
-class SaturateKeepGradient(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x, xmin, xmax):
-        return torch.clip(x, xmin, xmax)
-    @staticmethod
-    def backward(ctx, v_x):
-        return v_x, None, None
-
-def saturate_keep_gradient(x, xmin=None, xmax=None):
-    return SaturateKeepGradient.apply(x, xmin, xmax)
 
 
 
@@ -571,6 +560,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             )
 
         self.training_losses = SplatTrainingLosses(self.config, self.num_train_data)
+        self.training_verboser = TrainingVerbose()
 
         self.step = 0
 
@@ -1350,6 +1340,75 @@ class SpirulaeSplatModel(torch.nn.Module):
         self.core.densify_step(self.step, max_steps, self.config, None)
         # self.step_post_backward()
 
+    def verbose(self):
+
+        if self.step % self.training_verboser.cache_skip == 0:
+
+            # Per splat losses
+            hyperparams = (
+                np.sign(self.config.opacity_reg) ** 0,
+                np.sign(self.config.scale_reg) ** 0,
+                np.sign(self.config.max_gauss_ratio),
+                np.sign(self.config.scale_regularization_weight),
+                np.sign(self.config.erank_reg),
+                np.sign(self.config.erank_reg_s3),
+                np.sign(self.config.quat_norm_reg)
+            )
+            losses = _make_lazy_cuda_func("compute_per_splat_losses_forward")(
+                self.scales, self.opacities, self.quats,
+                *hyperparams
+            )
+            (opac, scale, aniso, erank, quatnorm) = losses.cpu().numpy().tolist()
+            self.training_verboser.add_metric('opac', opac, last_only=True)
+            self.training_verboser.add_metric('scale', scale, last_only=True)
+            if aniso > 0:
+                self.training_verboser.add_metric('aniso', aniso, last_only=True)
+            if erank > 0:
+                self.training_verboser.add_metric('erank', erank, last_only=True)
+
+            # Static losses (mostly bilagrid and PPISP)
+            static_losses = self.training_losses.get_static_losses(self.step)
+            for key, value in static_losses.items():
+                self.training_verboser.add_metric(key, value, last_only=True)
+
+            # VRAM
+            splat_vram, image_vram, splat_x_image_vram = 0.0, 0.0, 0.0
+            for key in ['splats_world', 'v_splats_world', 'g1_splats_world', 'g2_splats_world', 'quant_bounds_sh', 'densify_accum_buffer', 'optim_bias_correction_step']:
+                if hasattr(self.core, key) and getattr(self.core, key) is not None:
+                    attr = getattr(self.core, key)
+                    if isinstance(attr, torch.Tensor):
+                        splat_vram += getattr(self.core, key).nbytes / 1024**3
+                        continue
+                    elif isinstance(attr, list) or isinstance(attr, tuple):
+                        for tensor in attr:
+                            if isinstance(tensor, torch.Tensor):
+                                splat_vram += tensor.nbytes / 1024**3
+            for key in ['splats_proj', 'v_splats_proj', 'radii', 'aabb', 'depths', 'flatten_ids' 'gaussian_ids', 'camera_ids', 'isect_offsets']:
+                if hasattr(self.core, key) and getattr(self.core, key) is not None:
+                    attr = getattr(self.core, key)
+                    if isinstance(attr, torch.Tensor):
+                        splat_x_image_vram += getattr(self.core, key).nbytes / 1024**3
+                        continue
+                    elif isinstance(attr, list) or isinstance(attr, tuple):
+                        for tensor in attr:
+                            if isinstance(tensor, torch.Tensor):
+                                splat_x_image_vram += tensor.nbytes / 1024**3
+            for key in ['render_colors', 'v_render_colors', 'render_Ts', 'v_render_Ts', 'raw_depth']:
+                if hasattr(self.core, key) and getattr(self.core, key) is not None:
+                    attr = getattr(self.core, key)
+                    if isinstance(attr, torch.Tensor):
+                        image_vram += getattr(self.core, key).nbytes / 1024**3
+                        continue
+                    elif isinstance(attr, list) or isinstance(attr, tuple):
+                        for tensor in attr:
+                            if isinstance(tensor, torch.Tensor):
+                                image_vram += tensor.nbytes / 1024**3
+            self.training_verboser.add_metric('splat_vram', splat_vram, last_only=True)
+            self.training_verboser.add_metric('image_vram', image_vram, last_only=True)
+            self.training_verboser.add_metric('splat_x_image_vram', splat_x_image_vram, last_only=True)
+
+        self.training_verboser.verbose(self.step, self.trainer_config.num_iterations)
+
     def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
         """Compute and returns metrics.
 
@@ -1369,7 +1428,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             self.camera_optimizer.get_metrics_dict(metrics_dict)
         return metrics_dict
 
-    def get_loss_dict(self, outputs, batch, batch_size: int, no_static_losses=False) -> Dict[str, torch.Tensor]:
+    def get_loss_grad(self, outputs, batch, batch_size: int, no_static_losses=False) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict.
 
         Args:
@@ -1378,21 +1437,6 @@ class SpirulaeSplatModel(torch.nn.Module):
             metrics_dict: dictionary of metrics, some of which we can use for loss
         """
 
-        static_losses = {}
-        if not no_static_losses:
-
-            # Per-splat losses (CUDA async)
-            self.training_losses.get_static_losses(
-                self.step,
-                self.quats, self.scales, self.opacities,
-                static_losses,
-                self.info['backward_info']
-            )
-
-            # Camera optimizer loss (depends on nerfstudio, usually CPU)
-            if self.training and self.config.use_camera_optimizer:
-                self.camera_optimizer.get_loss_dict(static_losses)
-
         # Per-image losses (CUDA with .item() that involves GPU-CPU sync)
         self.info['num_train_data'] = self.num_train_data
 
@@ -1400,6 +1444,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         # self.training_losses will call CUDA functions to compute training loss
         total_val_loss = None
         if isinstance(outputs, tuple) and isinstance(batch, tuple):
+            raise NotImplementedError()
             loss_dict, loss_grad = self.training_losses(self.step, batch[0], outputs[0], self.info)
             # for key, value in outputs[1].items():
             #     if isinstance(value, torch.Tensor):
@@ -1410,15 +1455,16 @@ class SpirulaeSplatModel(torch.nn.Module):
             ]).sum()
         else:
             loss_dict, loss_grad = self.training_losses(self.step, batch, outputs, self.info)
+            for key, value in loss_dict.items():
+                self.training_verboser.add_metric(key, value)
+        self.training_verboser.add_metric("num_splats", self.core.cur_num_splats, last_only=True)
+        self.training_verboser.add_metric("max_num_splats", self.core.max_num_splats, last_only=True)
+        self.training_verboser.add_metric("num_sh", min(self.core.sh_degree_to_use, self.config.sh_degree), last_only=True)
+        self.training_verboser.add_metric("max_num_sh", self.config.sh_degree, last_only=True)
 
         # Total train and validation losses
         with torch.no_grad():
-            total_train_loss = torch.stack([
-                x for x in loss_dict.values() if isinstance(x, torch.Tensor)
-            ]).sum()
-            # prevent double backward
-            if isinstance(total_train_loss, torch.Tensor):
-                total_train_loss = total_train_loss.item()
+            total_train_loss = sum(loss_dict.values())
 
         if total_val_loss is not None:
             # will have gradient to e.g. bilagrid, camera poses, but not Gaussian params
@@ -1433,9 +1479,6 @@ class SpirulaeSplatModel(torch.nn.Module):
                 if isinstance(value, torch.Tensor):
                     loss_dict[key] = value * (1 / batch_size)
 
-        # Add static losses
-        loss_dict.update(static_losses)
-
         # Store train/val loss running stats
         if not hasattr(self, 'train_loss_history'):
             self.train_loss_history = []
@@ -1445,6 +1488,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         if not hasattr(self, 'val_lpips_history'):
             self.val_lpips_history = []
         if total_val_loss is not None:
+            raise NotImplementedError()
             while len(self.val_loss_history) < len(self.train_loss_history):
                 self.val_loss_history.append(total_val_loss)
             while len(self.val_lpips_history) < len(self.train_loss_history):
@@ -1452,6 +1496,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             # TODO: possbily linear interpolation?
         sw_width = self.config.validation_loss_average_window
         if len(self.val_loss_history) >= sw_width:
+            raise NotImplementedError()
             # TODO: O(1) moving average update
             self.total_train_loss = sum(self.train_loss_history[-sw_width:]) / sw_width
             self.total_val_loss = sum(self.val_loss_history[-sw_width:]) / sw_width
@@ -1461,6 +1506,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         if not hasattr(self, 'overfit_count'):
             self.overfit_count = 0
         if len(self.val_loss_history) >= 2*sw_width:
+            raise NotImplementedError()
             # note that training loss can increase at e.g. regularization weight scheduling
             prev_total_train_loss = sum(self.train_loss_history[-2*sw_width:-sw_width]) / sw_width
             prev_total_val_loss = sum(self.val_loss_history[-2*sw_width:-sw_width]) / sw_width
@@ -1490,168 +1536,7 @@ class SpirulaeSplatModel(torch.nn.Module):
                 else:
                     self.overfit_count = 0
 
-        if not no_static_losses:
-            # TODO: print averaged loss dict in split_batch mode
-            self.print_loss_dict(loss_dict)
-
-        return loss_dict, loss_grad
-
-    def print_loss_dict(self, losses: Dict[str, torch.Tensor], _storage={}):
-
-        # print can take a few ms depending on system, do in a separate thread
-        if 'print_queue' not in _storage and False:
-            import threading
-            import sys
-            import time
-
-            print_queue = []
-
-            def printer():
-                while True:
-                    if len(print_queue) == 0:
-                        continue
-                    msg = print_queue[0]
-                    print_queue.clear()
-                    sys.stdout.write(msg)
-                    sys.stdout.flush()
-                    time.sleep(0.1)
-
-            threading.Thread(target=printer, daemon=True).start()
-
-            _storage['print_queue'] = print_queue
-
-        # caching
-        skip = 10
-        if self.step % skip != 0 and 'chunks' in _storage:
-            chunks = _storage['chunks']
-            # CONSOLE.print(chunks, end='')  # slow
-            print(chunks, end='')
-            # _storage['print_queue'].append(chunks)
-            return
-
-        # text formatting (instead of using rich.CONSOLE that's slow)
-        def bracket(s: str):
-            return f"\033[1m[\033[m{s}\033[1m]\033[m"
-
-        def orange(s: str):
-            return f"\033[33m{s}\033[m"
-
-        def boldcyan(s: str):
-            return f"\033[1;36m{s}\033[m"
-
-        def redbkg(s: str, threshold: float = 1.0):
-            return f"\033[1;41m{s.replace('\033[m', '')}\033[m" if threshold >= 1.0 else s
-
-        # get VRAM usage (only supports single GPU at this time)
-        device = self.means.device if self.means is not None else self.features_dc.device
-        free, total = torch.cuda.mem_get_info(device)
-        used = (total - free) / 1024**3
-        used_percentage = (1 - free/total)*100
-        mem_stats = boldcyan(f"{used:.2f}") + f"\N{ZERO WIDTH SPACE}GiB " + boldcyan(f"{used_percentage:.0f}") + "%"
-
-        if hasattr(self, 'total_val_loss'):
-            losses['val_total'] = self.total_val_loss
-        if hasattr(self, 'total_train_loss'):
-            losses['train_total'] = self.total_train_loss
-        if hasattr(self, 'total_val_lpips'):
-            losses['lpips_val'] = self.total_val_lpips
-        if hasattr(self, 'overfit_score'):
-            losses['overfit_score'] = self.overfit_score
-
-        def fmt(key: str, s: float, decimals=None, sigfigs=3) -> str:
-            if s == 0.0 or key not in losses:
-                return '~'
-
-            l = losses[key]
-            if isinstance(l, torch.Tensor):
-                l = l.detach().item()
-            l = l / s
-            if not math.isfinite(l):  # not finite
-                return str(l)
-
-            if key not in _storage or self.step % 1000 == 0:
-                _storage[key] = abs(l)
-            _storage[key] = max(_storage[key], abs(l))
-            if _storage[key] == 0.0:
-                return '~'
-
-            if (abs(l) < 0.1**(sigfigs+1) or abs(l) >= 1.0-(0.1**sigfigs)) and decimals is None:
-                s = f"{{:.{sigfigs}g}}".format(l)
-            else:
-                if decimals is None:  # 3 sig figs
-                    decimals = int(max(-math.log10((0.1**sigfigs)*abs(l)), 0)) if l != 0.0 else 0
-                s = f"{{:.{decimals}f}}".format(l)
-            if s.startswith('0.'):
-                s = s[1:]
-            if s.startswith('-0.'):
-                s = '-' + s[2:]
-            return boldcyan(s)
-
-        reg_mcmc = (self.config.use_mcmc and self.step < self.trainer_config.num_iterations-self.config.refine_stop_num_iter)
-        reg_2dgs = self.training_losses.get_2dgs_reg_weights()
-        opacity_floor = (
-            f"{bracket('OpacFloor')} {self.strategy.get_opacity_floor(self.step):.3f} "
-            f"{bracket('Hardness')} {self.strategy.get_hardness(self.step):.3f}"
-        ).replace('0.', '.') \
-            if self.config.primitive == "opaque_triangle" else ""
-        chunks = [
-            f"{boldcyan(self.step)} "
-            f"{bracket('N')} {boldcyan(self.core.cur_num_splats)}",
-            f"{redbkg(bracket('Mem'), used_percentage/90)} {mem_stats}",
-            f"{bracket('Train')} {orange('loss')}={fmt('image_loss', 1.0)} "
-            f"{orange('psnr')}={fmt('psnr', 1.0, 2)} "
-            f"{orange('ssim')}={fmt('ssim', 1.0, 3)}" + \
-                f" lpips={fmt('lpips', 1.0, 3)}" * ('lpips' in losses),
-            "                \n",
-            f"{bracket('RefLoss')} {orange('depth')}={fmt('depth_ref_loss', self.config.depth_supervision_weight, 3)} "
-            f"{orange('normal')}={fmt('normal_ref_loss', self.config.normal_supervision_weight, 3)} "
-            f"{orange('alpha')}={fmt('alpha_ref_loss', 0.5*(self.config.alpha_loss_weight+self.config.alpha_loss_weight_under), 4)}",
-            f"{bracket('DistLoss')} {orange('depth')}={fmt('depth_dist_reg', reg_2dgs[0][0], 3)} "
-            f"{orange('normal')}={fmt('normal_dist_reg', reg_2dgs[0][1], 3)} "
-            f"{orange('rgb')}={fmt('rgb_dist_reg', reg_2dgs[0][2], 3)}",
-            "                \n",
-            f"{bracket('ImReg')} {orange('normal')}={fmt('normal_reg', reg_2dgs[1], 3)} "
-            f"{orange('alpha')}={fmt('alpha_reg', self.training_losses.get_alpha_reg_weight(), 3)}",
-            f"{bracket('SplatReg')} {orange('o')}={fmt('opacity_reg', self.config.opacity_reg * reg_mcmc, 3)} "
-            f"{orange('s')}={fmt('scale_reg', self.config.scale_reg * reg_mcmc, 4)} "
-            f"{orange('q')}={fmt('quat_norm_reg', self.config.quat_norm_reg, sigfigs=1)} "
-            f"{orange('erank')}={fmt('erank_reg', max(self.config.erank_reg_s3, self.config.erank_reg))} "
-            f"{orange('aniso')}={fmt('scale_reg', self.config.scale_regularization_weight)}",
-            "                \n",
-            f"{bracket('Bilagrid')} {orange('reg')}={fmt('bilagrid_mean_reg', self.config.bilagrid_mean_reg_weight)} "
-            f"{orange('tv.rgb')}={fmt('tv_loss', self.config.bilagrid_tv_loss_weight)} "
-            f"{orange('depth')}={fmt('tv_loss_depth', self.config.bilagrid_tv_loss_weight_geometry)} "
-            f"{orange('normal')}={fmt('tv_loss_normal', self.config.bilagrid_tv_loss_weight_geometry)}"
-            "                \n",
-            f"{bracket('PPISP')} {orange('eμ')}={fmt('ppisp_reg_exposure_mean', self.config.ppisp_reg_exposure_mean)} "
-            f"{orange('vc')}={fmt('ppisp_reg_vig_center', self.config.ppisp_reg_vig_center)} "
-            f"{orange('v+')}={fmt('ppisp_reg_vig_non_pos', self.config.ppisp_reg_vig_non_pos)} "
-            f"{orange('vσ')}={fmt('ppisp_reg_vig_channel_var', self.config.ppisp_reg_vig_channel_var)} "
-            f"{orange('cμ')}={fmt('ppisp_reg_color_mean', self.config.ppisp_reg_color_mean)}",
-            f"{orange('rσ')}={fmt('ppisp_reg_crf_channel_var', self.config.ppisp_reg_crf_channel_var)}",
-            "                \n",
-            f"{bracket('Validation')} {orange('train')}={fmt('train_total', 1.0)} "
-            f"{orange('val')}={fmt('val_total', 1.0)} "
-            f"{orange('lpips')}={fmt('lpips_val', 1.0)} "
-            f"{orange('overfit')}={fmt('overfit_score', 1.0)} "
-            f"{redbkg(f'{self.overfit_count}/{self.config.early_stop_patience}',
-                self.overfit_count/(0.8*self.config.early_stop_patience))}"
-        ]
-        additional_chunks = []
-        if len(opacity_floor) > 0:
-            additional_chunks.append(opacity_floor)
-        if 'bvh_time' in self.info:
-            losses['bvh_time'] = self.info['bvh_time']
-            additional_chunks.append(f"{bracket('BvhTime')} {fmt('bvh_time', 1.0, 1)} ms")
-        if len(additional_chunks) > 0:
-            chunks.append("                \n")
-            chunks.extend(additional_chunks)
-        chunks.append("                \n")
-        chunks = ' '.join(chunks).replace('\n ', '\n')
-        chunks += "\033[F"*(chunks.count('\n'))
-        print(chunks, end='')
-        # _storage['print_queue'].append(chunks)
-        _storage['chunks'] = chunks
+        return loss_grad
 
     def set_gradient_accumulation_steps(self, gradient_accumulation_step: int, _trainer=[]):
         if len(trainer) == 0:

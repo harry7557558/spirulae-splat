@@ -22,6 +22,7 @@ async def start_viewer_server(trainer: Trainer):
         http_port=trainer.config.viewer_port,
         open_browser=False,
     )
+    print()
 
     server.start()
     server.wait()
