@@ -23,7 +23,11 @@ import tyro
 
 import os
 
-import open3d as o3d
+try:
+    import open3d as o3d
+except ImportError:
+    print("process_data_metashape.py is deprecated. Please directly point `--data` to a Metashape dataset during `spirulae-train`.")
+    exit(0)
 
 from typing import Optional
 

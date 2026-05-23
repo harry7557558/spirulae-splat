@@ -10,7 +10,11 @@ from typing import Literal, Optional, Tuple, Union, List
 from torch import Tensor
 
 import numpy as np
-import open3d as o3d
+try:
+    import open3d as o3d
+except ImportError:
+    print("Failed to import open3d. Please run `pip install open3d` (supports up to Python 3.12)")
+    exit(0)
 import torch
 import torch.nn.functional as F
 import tyro

@@ -166,7 +166,7 @@ setup(
         "tyro",
         "opencv-python",
         "plyfile",
-        "open3d",
+        # "open3d",
         "matplotlib",
         "Pillow",
         "rawpy",
