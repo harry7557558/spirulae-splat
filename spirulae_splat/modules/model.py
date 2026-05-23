@@ -1679,18 +1679,6 @@ class SpirulaeSplatModel(torch.nn.Module):
     def get_image_metrics_and_images(
         self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]
     ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
-        """Writes the test image outputs.
-
-        Args:
-            image_idx: Index of the image.
-            step: Current step.
-            batch: Batch of data.
-            outputs: Outputs of the model.
-
-        Returns:
-            A dictionary of metrics.
-        """
-        # return {}, {}   # TODO
         # gt_rgb = self.composite_with_background(self.get_gt_img(batch["image"]), outputs["background"])
         gt_rgb = batch["image"]  # TODO
         if gt_rgb.dtype == torch.uint8:
@@ -1705,9 +1693,13 @@ class SpirulaeSplatModel(torch.nn.Module):
         # combined_rgb = torch.cat([gt_rgb, predicted_rgb], dim=1)
         combined_rgb = predicted_rgb
 
+        from fused_bilagrid import color_correct
+        corrected_rgb = color_correct(predicted_rgb, gt_rgb)
+
         # Switch images from [H, W, C] to [1, C, H, W] for metrics computations
         gt_rgb = torch.moveaxis(gt_rgb, -1, 0)[None, ...]
         predicted_rgb = torch.moveaxis(predicted_rgb, -1, 0)[None, ...]
+        corrected_rgb = torch.moveaxis(corrected_rgb, -1, 0)[None, ...]
 
         # metrics
         from torchmetrics.image import PeakSignalNoiseRatio
@@ -1729,14 +1721,29 @@ class SpirulaeSplatModel(torch.nn.Module):
         lpips_alex = self.lpips_alex(gt_rgb, predicted_rgb)
         lpips_vgg = self.lpips_vgg(gt_rgb, predicted_rgb)
 
+        cc_l1 = torch.abs(gt_rgb - corrected_rgb).mean()
+        cc_psnr = self.psnr(gt_rgb, corrected_rgb)
+        cc_ssim = self.ssim(gt_rgb, corrected_rgb)
+        cc_ssim_torchmetrics = self.ssim_torchmetrics(gt_rgb, corrected_rgb)
+        cc_lpips_alex = self.lpips_alex(gt_rgb, corrected_rgb)
+        cc_lpips_vgg = self.lpips_vgg(gt_rgb, corrected_rgb)
+
         metrics_dict = {
             "l1": float(l1),
             "psnr": float(psnr),
-            "ssim_pytorch_msssim": float(ssim),
-            "ssim_torchmetrics": float(ssim_torchmetrics),
+            # "ssim_pytorch_msssim": float(ssim),
+            # "ssim_torchmetrics": float(ssim_torchmetrics),
+            "ssim": float(ssim_torchmetrics),
             "lpips_alex": float(lpips_alex),
             "lpips_vgg": float(lpips_vgg),
-            "gaussian_count": float(self.num_points),
+            "cc_l1": float(cc_l1),
+            "cc_psnr": float(cc_psnr),
+            # "cc_ssim_pytorch_msssim": float(cc_ssim),
+            # "cc_ssim_torchmetrics": float(cc_ssim_torchmetrics),
+            "cc_ssim": float(cc_ssim_torchmetrics),
+            "cc_lpips_alex": float(cc_lpips_alex),
+            "cc_lpips_vgg": float(cc_lpips_vgg),
+            "gaussian_count": float(self.core.cur_num_splats),
         }
 
         images_dict = {"img": combined_rgb}

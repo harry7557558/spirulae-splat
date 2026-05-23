@@ -65,10 +65,8 @@ def bench_360_v2(config_class, path_to_360_v2: Path):
         # config.num_iterations = 2500
         # config.model.refine_stop_num_iter = 0
 
-        # TODO: color correct
-        config.model.use_bilateral_grid = False
-        config.model.use_ppisp = False
-        # config.model.sh_reg = 0.0
+        # config.model.use_bilateral_grid = False
+        # config.model.use_ppisp = False
         config.datamanager.load_depths = False
         config.datamanager.load_normals = False
         config.model.use_bilateral_grid_for_geometry = False
@@ -130,10 +128,8 @@ def bench_zipnerf(config_class, path_to_zipnerf: Path):
 
         config.save_eval_images = True
 
-        # TODO: color correct
-        config.model.use_bilateral_grid = False
-        config.model.use_ppisp = False
-        # config.model.sh_reg = 0.0
+        # config.model.use_bilateral_grid = False
+        # config.model.use_ppisp = False
         config.datamanager.load_depths = False
         config.datamanager.load_normals = False
         config.model.use_bilateral_grid_for_geometry = False
@@ -255,7 +251,7 @@ def entrypoint():
             if column == 0:
                 all_data.append([key])
             if isinstance(value, float):
-                value = f"{value:.7g}"
+                value = f"{value:.5g}"
             all_data[row].append(value)
             if key != "test":
                 print(key, value)
