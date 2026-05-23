@@ -16,6 +16,7 @@ class _Handler(BaseHTTPRequestHandler):
     html_content: bytes = b""
     render_worker: Optional[RenderWorker] = None
     progress_fn: Optional[Callable] = None
+    pause_toggle_fn: Optional[Callable] = None
     last_keys: list[str] = []
 
     def do_GET(self) -> None:  # noqa: N802
@@ -35,6 +36,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_buffers()
         elif path == "/progress":
             self._handle_progress()
+        elif path == "/pause-toggle":
+            self._handle_pause_toggle()
         else:
             self.send_response(404)
             self.end_headers()
@@ -148,6 +151,17 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(progress).encode("utf-8"))
 
+    def _handle_pause_toggle(self) -> None:
+        if self.pause_toggle_fn:
+            paused = self.pause_toggle_fn()
+            response = {"paused": paused}
+        else:
+            response = {"paused": False, "error": "pause_toggle_fn not available"}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(response).encode("utf-8"))
+
     def _default_render_for_keys(self) -> None:
         # Default params
         c2w = np.eye(3, 4, dtype=np.float32)
@@ -174,10 +188,11 @@ class _Handler(BaseHTTPRequestHandler):
 class HTTPThread:
     """Serves the viewer HTML and handles requests on a background daemon thread."""
 
-    def __init__(self, html: str, render_worker: RenderWorker, progress_fn: Optional[Callable], host: str = "0.0.0.0", port: int = 8080) -> None:
+    def __init__(self, html: str, render_worker: RenderWorker, progress_fn: Optional[Callable], pause_toggle_fn: Optional[Callable] = None, host: str = "0.0.0.0", port: int = 8080) -> None:
         _Handler.html_content = html.encode("utf-8")
         _Handler.render_worker = render_worker
         _Handler.progress_fn = progress_fn
+        _Handler.pause_toggle_fn = pause_toggle_fn
         self._server = HTTPServer((host, port), _Handler)
         self._thread: Optional[threading.Thread] = None
 

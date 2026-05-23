@@ -344,6 +344,21 @@
   }
   .btn:hover { border-color: var(--accent); color: var(--text-bright); }
 
+  /* Pause button */
+  #btn-pause {
+    display: none;
+    margin-top: 8px;
+    background: var(--input-bg);
+  }
+  #btn-pause.paused {
+    color: #e05555;
+    border-color: #e05555;
+  }
+  #btn-pause.paused:hover {
+    color: #ff7777;
+    border-color: #ff7777;
+  }
+
   /* Scrollbar */
   #panel::-webkit-scrollbar { width: 4px; }
   #panel::-webkit-scrollbar-track { background: var(--panel-bg); }
@@ -498,6 +513,7 @@
         <div id="progress-fill"></div>
       </div>
       <div id="progress-text"></div>
+      <button class="btn" id="btn-pause" title="Pause/Resume Training">Pause Training</button>
     </div>
 
     <!-- Pose readout -->
@@ -1202,6 +1218,22 @@ $("btn-reset-pose").addEventListener("click", () => {
   Viewer.requestRender();
 });
 
+$("btn-pause").addEventListener("click", async () => {
+  try {
+    const response = await fetch('/pause-toggle');
+    const result = await response.json();
+    if (result.paused) {
+      $("btn-pause").textContent = "Resume Training";
+      $("btn-pause").classList.add("paused");
+    } else {
+      $("btn-pause").textContent = "Pause Training";
+      $("btn-pause").classList.remove("paused");
+    }
+  } catch (e) {
+    console.error("Error toggling pause:", e);
+  }
+});
+
 $("panel-toggle").addEventListener("click", () => {
   const panel = $("panel");
   panel.style.display = panel.style.display === "none" ? "flex" : "none";
@@ -1237,6 +1269,18 @@ async function updateProgress() {
       }
       $('progress-text').innerHTML = text;
       $('progress-bar').classList.add('visible');
+      
+      // Show pause button if paused state is available
+      if ('paused' in progress) {
+        $('btn-pause').style.display = 'block';
+        if (progress.paused) {
+          $('btn-pause').textContent = 'Resume Training';
+          $('btn-pause').classList.add('paused');
+        } else {
+          $('btn-pause').textContent = 'Pause Training';
+          $('btn-pause').classList.remove('paused');
+        }
+      }
     } else {
       $('progress-bar').classList.remove('visible');
       $('progress-text').innerHTML = '';

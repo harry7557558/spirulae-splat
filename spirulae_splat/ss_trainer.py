@@ -18,6 +18,7 @@ async def start_viewer_server(trainer: Trainer):
     server = ViewerServer(
         render_fn=trainer.render,
         progress_fn=trainer.get_progress,
+        pause_toggle_fn=trainer.toggle_pause,
         http_host="0.0.0.0",
         http_port=trainer.config.viewer_port,
         open_browser=False,

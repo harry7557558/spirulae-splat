@@ -192,6 +192,26 @@ class Trainer:
         self.start_time = None
         self.last_step_time = None
         self.step_latencies = []
+        
+        # Pause/resume control
+        self._paused = False
+        self._pause_lock = threading.Lock()
+        self._pause_event = threading.Event()
+        self._pause_event.set()  # Initially not paused (set = can proceed)
+
+    def toggle_pause(self) -> bool:
+        """Toggle pause state. Returns True if now paused, False if resumed."""
+        with self._pause_lock:
+            self._paused = not self._paused
+            if self._paused:
+                self._pause_event.clear()  # Paused: block training
+            else:
+                self._pause_event.set()  # Resumed: allow training
+            return self._paused
+    
+    def _check_pause(self):
+        """Wait if training is paused. Called during training loop."""
+        self._pause_event.wait()
 
     def get_progress(self):
         if self.start_time is None:
@@ -201,6 +221,7 @@ class Trainer:
                 "elapsed_time": 0,
                 "eta": None,
                 "latency_ms": None,
+                "paused": False,
             }
         elapsed = time.time() - self.start_time
         avg_latency = sum(self.step_latencies) / len(self.step_latencies) if self.step_latencies else None
@@ -215,6 +236,7 @@ class Trainer:
             "elapsed_time": elapsed,
             "eta": eta,
             "latency_ms": avg_latency * 1000 if avg_latency else None,
+            "paused": self._paused,
         }
 
     def _setup_output_dir(self):
@@ -320,6 +342,7 @@ class Trainer:
         self.start_time = time.time()
         self.last_step_time = self.start_time
         for step in range(self.config.num_iterations):
+            self._check_pause()  # Check if paused and wait if needed
             if step > 0 and self.config.steps_per_save > 0 and step % self.config.steps_per_save == 0:
                 self.save_checkpoint(step)
             # if step % 100 == 50:
