@@ -5,7 +5,6 @@
 #include "types.cuh"
 #include "common.cuh"
 
-#include <c10/cuda/CUDAStream.h>
 
 
 template <
@@ -55,23 +54,23 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
     // Gaussian parameters
     const typename SplatPrimitive::WorldBuffer splat_wbuffer,
     const typename SplatPrimitive::ScreenBuffer splat_sbuffer,
-    std::optional<at::Tensor> gaussian_ids,
+    std::optional<DeviceVector<int32_t>> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     // intersections
-    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids,  // [n_isects]
+    const DeviceTensor3D<int32_t> tile_offsets, // [I, tile_height, tile_width]
+    const DeviceVector<int32_t> flatten_ids,    // [n_isects]
     // forward outputs
-    const at::Tensor render_Ts, // [..., image_height, image_width, 1]
-    const at::Tensor last_ids,      // [..., image_height, image_width]
+    const DeviceTensor3D<float> render_Ts,   // [I, image_height, image_width]
+    const DeviceTensor3D<int32_t> last_ids,  // [I, image_height, image_width]
     RenderOutput::Tensor *render_outputs,
     RenderOutput::Tensor *render2_outputs,
-    const at::Tensor *loss_map,           // [..., image_height, image_width, 1]
-    const at::Tensor *accum_weight_map,           // [..., image_height, image_width, 1]
+    const DeviceTensor3D<float> *loss_map,   // [..., image_height, image_width]
+    const DeviceTensor3D<float> *accum_weight_map,  // [I, H, W]
     // gradients of outputs
     RenderOutput::Tensor v_render_outputs,
-    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
+    const DeviceTensor3D<float> v_render_Ts, // [..., image_height, image_width]
     RenderOutput::Tensor *v_distortion_outputs,
     // outputs
     typename SplatPrimitive::WorldBuffer v_splat_wbuffer,
@@ -80,14 +79,13 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
     typename SplatPrimitive::ScreenBuffer vr_splat_sbuffer,
     typename SplatPrimitive::WorldBuffer h_splat_wbuffer,
     typename SplatPrimitive::ScreenBuffer h_splat_sbuffer,
-    std::optional<at::Tensor> o_accum_weight
+    std::optional<DeviceTensor3D<float>> *o_accum_weight
 ) {
     uint32_t N = gaussian_ids.has_value() ? 0 : splat_wbuffer.size();
-    uint32_t I = render_Ts.numel() / (image_height * image_width); // number of images
-    uint32_t tile_height = tile_offsets.size(-2);
-    uint32_t tile_width = tile_offsets.size(-1);
-    uint32_t n_isects = flatten_ids.size(0);
-    // printf("N=%u I=%u th=%u tw=%u ni=%u\n", N, I, tile_height, tile_width, n_isects);
+    uint32_t I = render_Ts.size<0>(); // number of images
+    uint32_t tile_height = tile_offsets.size<1>();
+    uint32_t tile_width = tile_offsets.size<2>();
+    uint32_t n_isects = flatten_ids.size();
 
     if (n_isects == 0) {
         // skip the kernel launch if there are no elements
@@ -95,20 +93,20 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
     }
 
     rasterize_to_pixels_bwd_kernel_wrapper<SplatPrimitive, output_distortion, output_hessian_diagonal, output_accum_weight>(
-        (cudaStream_t)at::cuda::getCurrentCUDAStream(), I, N, n_isects,
-        gaussian_ids.has_value() ? (uint32_t*)gaussian_ids.value().data_ptr<int32_t>() : nullptr,
+        (cudaStream_t)0, I, N, n_isects,
+        gaussian_ids.has_value() ? (uint32_t*)gaussian_ids.value().data_ptr() : nullptr,
         splat_wbuffer, splat_sbuffer,
         image_width, image_height, tile_width, tile_height,
-        tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-        render_Ts.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+        tile_offsets.data_ptr(), flatten_ids.data_ptr(),
+        render_Ts.data_ptr(), last_ids.data_ptr(),
         output_distortion ? *render_outputs : RenderOutput::Buffer(),
         output_distortion ? *render2_outputs : RenderOutput::Buffer(),
-        output_hessian_diagonal ? loss_map->data_ptr<float>() : nullptr,
-        output_accum_weight ? accum_weight_map->data_ptr<float>() : nullptr,
-        v_render_outputs, v_render_Ts.data_ptr<float>(),
+        output_hessian_diagonal ? loss_map->data_ptr() : nullptr,
+        output_accum_weight ? accum_weight_map->data_ptr() : nullptr,
+        v_render_outputs, v_render_Ts.data_ptr(),
         output_distortion ? *v_distortion_outputs : RenderOutput::Buffer(),
         v_splat_wbuffer, v_splat_sbuffer, vr_splat_wbuffer, vr_splat_sbuffer, h_splat_wbuffer, h_splat_sbuffer,
-        output_accum_weight ? o_accum_weight.value().data_ptr<float>() : nullptr
+        output_accum_weight ? o_accum_weight->value().data_ptr() : nullptr
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
@@ -116,49 +114,40 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
 
 template<typename SplatPrimitive, bool output_distortion, bool output_hessian_diagonal, bool output_accum_weight>
 inline std::tuple<
-    TensorList, TensorList,  // gradient
-    std::optional<TensorList>, std::optional<TensorList>,  // jacobian residual product
-    std::optional<TensorList>, std::optional<TensorList>,  // hessian diagonal
-    std::optional<at::Tensor>  // accum_weight
+    std::vector<DeviceTensorFloatND>, std::vector<DeviceTensorFloatND>,  // gradient
+    std::optional<std::vector<DeviceTensorFloatND>>, std::optional<std::vector<DeviceTensorFloatND>>,  // jacobian residual product
+    std::optional<std::vector<DeviceTensorFloatND>>, std::optional<std::vector<DeviceTensorFloatND>>,  // hessian diagonal
+    std::optional<DeviceTensor3D<float>>  // accum_weight
 > _rasterize_to_pixels_bwd_tensor(
     // Gaussian parameters
     int64_t num_splats,
-    TensorList splats_w,
-    TensorList splats_s,
-    std::optional<at::Tensor> gaussian_ids,
+    std::vector<DeviceTensorFloatND> splats_w,
+    std::vector<DeviceTensorFloatND> splats_s,
+    std::optional<DeviceVector<int32_t>> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     // intersections
-    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids,  // [n_isects]
+    const DeviceTensor3D<int32_t> tile_offsets, // [I, tile_height, tile_width]
+    const DeviceVector<int32_t> flatten_ids,    // [n_isects]
     // forward outputs
-    const at::Tensor render_Ts, // [..., image_height, image_width, 1]
-    const at::Tensor last_ids,      // [..., image_height, image_width]
+    const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
+    const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
     std::optional<RenderOutput::TensorTuple> render_outputs_tuple,
     std::optional<RenderOutput::TensorTuple> render2_outputs_tuple,
-    std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
-    std::optional<at::Tensor> accum_weight_map,  // [..., image_height, image_width, 1]
+    std::optional<DeviceTensor3D<float>> loss_map,
+    std::optional<DeviceTensor3D<float>> accum_weight_map,  // [I, H, W]
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
+    const DeviceTensor3D<float> v_render_Ts,
     std::optional<RenderOutput::TensorTuple> v_distortion_outputs_tuple,
-    std::optional<TensorList> v_splats_w,
-    std::optional<TensorList> v_splats_s
+    std::optional<std::vector<DeviceTensorFloatND>> v_splats_w,
+    std::optional<std::vector<DeviceTensorFloatND>> v_splats_s
 ) {
-    DEVICE_GUARD(tile_offsets);
-    CHECK_INPUT(tile_offsets);
-    CHECK_INPUT(flatten_ids);
-    CHECK_INPUT(render_Ts);
-    CHECK_INPUT(last_ids);
-    CHECK_INPUT(v_render_Ts);
-    if (loss_map.has_value())
-        CHECK_INPUT(loss_map.value());
-
     if (!v_splats_w.has_value())
-        v_splats_w = SplatPrimitive::WorldBuffer::zeros_like(splats_w);
+        v_splats_w = SplatPrimitive::WorldBuffer::zeros_pool(splats_w, "raster_bwd.v_world");
     if (!v_splats_s.has_value())
-        v_splats_s = SplatPrimitive::ScreenBuffer::zeros_like(splats_s);
+        v_splats_s = SplatPrimitive::ScreenBuffer::zeros_pool(splats_s, "raster_bwd.v_screen");
 
     std::optional<RenderOutput::Tensor> render_outputs = std::nullopt;
     std::optional<RenderOutput::Tensor> render2_outputs = std::nullopt;
@@ -168,20 +157,25 @@ inline std::tuple<
         render2_outputs = render2_outputs_tuple;
         v_distortion_outputs = v_distortion_outputs_tuple;
     }
-    TensorList vr_splats_w;
-    TensorList vr_splats_s;
-    TensorList h_splats_w;
-    TensorList h_splats_s;
+    std::vector<DeviceTensorFloatND> vr_splats_w;
+    std::vector<DeviceTensorFloatND> vr_splats_s;
+    std::vector<DeviceTensorFloatND> h_splats_w;
+    std::vector<DeviceTensorFloatND> h_splats_s;
     if (output_hessian_diagonal) {
-        vr_splats_w = SplatPrimitive::WorldBuffer::zeros_like(splats_w);
-        vr_splats_s = SplatPrimitive::ScreenBuffer::zeros_like(splats_s);
-        h_splats_w = SplatPrimitive::WorldBuffer::zeros_like(splats_w);
-        h_splats_s = SplatPrimitive::ScreenBuffer::zeros_like(splats_s);
+        vr_splats_w = SplatPrimitive::WorldBuffer::zeros_pool(splats_w, "raster_bwd.vr_world");
+        vr_splats_s = SplatPrimitive::ScreenBuffer::zeros_pool(splats_s, "raster_bwd.vr_screen");
+        h_splats_w = SplatPrimitive::WorldBuffer::zeros_pool(splats_w, "raster_bwd.h_world");
+        h_splats_s = SplatPrimitive::ScreenBuffer::zeros_pool(splats_s, "raster_bwd.h_screen");
     }
-    std::optional<at::Tensor> o_accum_weight = std::nullopt;
+    std::optional<DeviceTensor3D<float>> o_accum_weight = std::nullopt;
     if (output_accum_weight) {
-        o_accum_weight = at::empty({num_splats}, accum_weight_map.value().options());
-        set_zero_tensor(o_accum_weight.value());
+        DeviceTensor3D<float> _aw;
+        _aw.resize("raster_bwd.accum_weight",
+            accum_weight_map.value().size<0>(),
+            accum_weight_map.value().size<1>(),
+            accum_weight_map.value().size<2>());
+        _aw.zero();
+        o_accum_weight = _aw;
     }
 
     launch_rasterize_to_pixels_bwd_kernel
@@ -197,51 +191,51 @@ inline std::tuple<
         output_distortion ? &v_distortion_outputs.value() : nullptr,
         v_splats_w.value(), v_splats_s.value(),
         vr_splats_w, vr_splats_s, h_splats_w, h_splats_s,
-        o_accum_weight
+        &o_accum_weight
     );
 
     if (output_hessian_diagonal)
         return std::make_tuple(
             v_splats_w.value(), v_splats_s.value(),
-            (std::optional<TensorList>)vr_splats_w,
-            (std::optional<TensorList>)vr_splats_s,
-            (std::optional<TensorList>)h_splats_w,
-            (std::optional<TensorList>)h_splats_s,
+            (std::optional<std::vector<DeviceTensorFloatND>>)vr_splats_w,
+            (std::optional<std::vector<DeviceTensorFloatND>>)vr_splats_s,
+            (std::optional<std::vector<DeviceTensorFloatND>>)h_splats_w,
+            (std::optional<std::vector<DeviceTensorFloatND>>)h_splats_s,
             o_accum_weight);
     return std::make_tuple(
         v_splats_w.value(), v_splats_s.value(),
-        (std::optional<TensorList>)std::nullopt,
-        (std::optional<TensorList>)std::nullopt,
-        (std::optional<TensorList>)std::nullopt,
-        (std::optional<TensorList>)std::nullopt,
+        (std::optional<std::vector<DeviceTensorFloatND>>)std::nullopt,
+        (std::optional<std::vector<DeviceTensorFloatND>>)std::nullopt,
+        (std::optional<std::vector<DeviceTensorFloatND>>)std::nullopt,
+        (std::optional<std::vector<DeviceTensorFloatND>>)std::nullopt,
         o_accum_weight);
 }
 
 template<typename SplatPrimitive>
 inline std::tuple<
-    TensorList, TensorList,
-    std::optional<at::Tensor>  // accum_weight
+    std::vector<DeviceTensorFloatND>, std::vector<DeviceTensorFloatND>,
+    std::optional<DeviceTensor3D<float>>  // accum_weight
 > rasterize_to_pixels_bwd_tensor(
     // Gaussian parameters
     int64_t num_splats,
-    TensorList splats_w,
-    TensorList splats_s,
-    std::optional<at::Tensor> gaussian_ids,
+    std::vector<DeviceTensorFloatND> splats_w,
+    std::vector<DeviceTensorFloatND> splats_s,
+    std::optional<DeviceVector<int32_t>> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     // intersections
-    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids,  // [n_isects]
+    const DeviceTensor3D<int32_t> tile_offsets, // [I, tile_height, tile_width]
+    const DeviceVector<int32_t> flatten_ids,    // [n_isects]
     // forward outputs
-    const at::Tensor render_Ts, // [..., image_height, image_width, 1]
-    const at::Tensor last_ids,      // [..., image_height, image_width]
-    std::optional<at::Tensor> accum_weight_map,  // [..., image_height, image_width, 1]
+    const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
+    const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
+    std::optional<DeviceTensor3D<float>> accum_weight_map,  // [I, H, W]
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
-    std::optional<TensorList> v_splats_w,
-    std::optional<TensorList> v_splats_s
+    const DeviceTensor3D<float> v_render_Ts,
+    std::optional<std::vector<DeviceTensorFloatND>> v_splats_w,
+    std::optional<std::vector<DeviceTensorFloatND>> v_splats_s
 ) {
     // TODO: add interface for output_distortion
     auto [v_splats_w_1, v_splats_s_1, vr_splats_w, vr_splats_s, h_splats_w, h_splats_s, accum_weight] = (
@@ -265,29 +259,29 @@ inline std::tuple<
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<
-    TensorList, TensorList,  // gradient
-    std::optional<at::Tensor>  // accum_weight
+    std::vector<DeviceTensorFloatND>, std::vector<DeviceTensorFloatND>,  // gradient
+    std::optional<DeviceTensor3D<float>>  // accum_weight
 > rasterize_to_pixels_3dgs_bwd(
     // Gaussian parameters
     int64_t num_splats,
-    TensorList splats_w,
-    TensorList splats_s,
-    std::optional<at::Tensor> gaussian_ids,
+    std::vector<DeviceTensorFloatND> splats_w,
+    std::vector<DeviceTensorFloatND> splats_s,
+    std::optional<DeviceVector<int32_t>> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     // intersections
-    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids,  // [n_isects]
+    const DeviceTensor3D<int32_t> tile_offsets, // [I, tile_height, tile_width]
+    const DeviceVector<int32_t> flatten_ids,    // [n_isects]
     // forward outputs
-    const at::Tensor render_Ts, // [..., image_height, image_width, 1]
-    const at::Tensor last_ids,      // [..., image_height, image_width]
-    std::optional<at::Tensor> accum_weight_map,  // [..., image_height, image_width, 1]
+    const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
+    const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
+    std::optional<DeviceTensor3D<float>> accum_weight_map,  // [I, H, W]
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
-    std::optional<TensorList> v_splats_w,
-    std::optional<TensorList> v_splats_s
+    const DeviceTensor3D<float> v_render_Ts,
+    std::optional<std::vector<DeviceTensorFloatND>> v_splats_w,
+    std::optional<std::vector<DeviceTensorFloatND>> v_splats_s
 ) {
     return rasterize_to_pixels_bwd_tensor<Vanilla3DGS<0>>(
         num_splats, splats_w, splats_s, gaussian_ids,
@@ -300,35 +294,35 @@ std::tuple<
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<
-    TensorList, TensorList,  // gradient
-    std::optional<TensorList>, std::optional<TensorList>,  // jacobian residual product
-    std::optional<TensorList>, std::optional<TensorList>,  // hessian diagonal
-    std::optional<at::Tensor>  // accum_weight
+    std::vector<DeviceTensorFloatND>, std::vector<DeviceTensorFloatND>,  // gradient
+    std::optional<std::vector<DeviceTensorFloatND>>, std::optional<std::vector<DeviceTensorFloatND>>,  // jacobian residual product
+    std::optional<std::vector<DeviceTensorFloatND>>, std::optional<std::vector<DeviceTensorFloatND>>,  // hessian diagonal
+    std::optional<DeviceTensor3D<float>>  // accum_weight
 > rasterize_to_pixels_3dgs_bwd_with_hessian_diagonal(
     // Gaussian parameters
     int64_t num_splats,
-    TensorList splats_w,
-    TensorList splats_s,
-    std::optional<at::Tensor> gaussian_ids,
+    std::vector<DeviceTensorFloatND> splats_w,
+    std::vector<DeviceTensorFloatND> splats_s,
+    std::optional<DeviceVector<int32_t>> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     // intersections
-    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids,  // [n_isects]
+    const DeviceTensor3D<int32_t> tile_offsets, // [I, tile_height, tile_width]
+    const DeviceVector<int32_t> flatten_ids,    // [n_isects]
     // forward outputs
-    const at::Tensor render_Ts, // [..., image_height, image_width, 1]
-    const at::Tensor last_ids,      // [..., image_height, image_width]
+    const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
+    const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
     std::optional<RenderOutput::TensorTuple> render_outputs,
     std::optional<RenderOutput::TensorTuple> render2_outputs,
-    std::optional<at::Tensor> loss_map,  // [..., image_height, image_width, 1]
-    std::optional<at::Tensor> accum_weight_map,  // [..., image_height, image_width, 1]
+    std::optional<DeviceTensor3D<float>> loss_map,
+    std::optional<DeviceTensor3D<float>> accum_weight_map,  // [I, H, W]
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
-    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
+    const DeviceTensor3D<float> v_render_Ts,
     std::optional<RenderOutput::TensorTuple> v_distortion_outputs,
-    std::optional<TensorList> v_splats_w,
-    std::optional<TensorList> v_splats_s
+    std::optional<std::vector<DeviceTensorFloatND>> v_splats_w,
+    std::optional<std::vector<DeviceTensorFloatND>> v_splats_s
 ) {
     using Fn = decltype(&_rasterize_to_pixels_bwd_tensor<Vanilla3DGS<0>, false, true, false>);
     static constexpr Fn funcs[2][2] = { {

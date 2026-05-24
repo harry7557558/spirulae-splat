@@ -10,11 +10,9 @@ namespace SlangPerSplatLosses {
 #include "generated/per_splat_losses.cuh"
 }
 
-#include "common.cuh"
+#if 0
 
-#include <ATen/DeviceGuard.h>
-#include <ATen/ops/empty_like.h>
-#include <ATen/ops/zeros.h>
+#include "common.cuh"
 
 __global__ void per_splat_losses_forward_kernel(
     const size_t num_points,
@@ -190,7 +188,7 @@ __global__ void per_splat_losses_backward_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor compute_per_splat_losses_forward_tensor(
+at::Tensor compute_per_splat_losses_forward(
     at::Tensor &scales,  // [N, 3] or [N, 2]
     at::Tensor &opacities,  // [N, 1]
     at::Tensor &quats,  // [N, 4]
@@ -240,7 +238,7 @@ at::Tensor compute_per_splat_losses_forward_tensor(
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<at::Tensor, at::Tensor, at::Tensor>
-compute_per_splat_losses_backward_tensor(
+compute_per_splat_losses_backward(
     at::Tensor &scales,  // [N, 3] or [N, 2]
     at::Tensor &opacities,  // [N, 1]
     at::Tensor &quats,  // [N, 4]
@@ -303,7 +301,7 @@ std::tuple<
     std::tuple<at::Tensor, at::Tensor, at::Tensor>,  // vr
     std::tuple<at::Tensor, at::Tensor, at::Tensor>  // h
 >
-compute_per_splat_losses_backward_with_hessian_diagonal_tensor(
+compute_per_splat_losses_backward_with_hessian_diagonal(
     at::Tensor &scales,  // [N, 3] or [N, 2]
     at::Tensor &opacities,  // [N, 1]
     at::Tensor &quats,  // [N, 4]
@@ -377,4 +375,4 @@ compute_per_splat_losses_backward_with_hessian_diagonal_tensor(
     );
 }
 
-
+#endif

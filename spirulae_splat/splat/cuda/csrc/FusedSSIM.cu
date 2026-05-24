@@ -8,14 +8,12 @@
 
 #include "FusedSSIM.cuh"
 
-#include <ATen/ops/empty.h>
-#include <ATen/ops/empty_like.h>
-#include <ATen/ops/zeros.h>
+#if 0
+
 
 #include <cooperative_groups.h>
 #include <algorithm>
 #include <iostream>
-#include <c10/cuda/CUDAGuard.h>
 
 namespace cg = cooperative_groups;
 
@@ -1138,3 +1136,5 @@ float fused_ssim_inplace(
     return return_ssim_val ?
         ssim_val.item<float>() : -1.0f;
 }
+
+#endif

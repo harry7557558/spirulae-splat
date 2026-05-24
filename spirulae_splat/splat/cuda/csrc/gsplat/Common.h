@@ -4,17 +4,18 @@
 #include <cstdint>
 #include <glm/gtc/type_ptr.hpp>
 
+#include <Tensor.h>
+
 namespace ssplat {
 
-// https://github.com/pytorch/pytorch/blob/233305a852e1cd7f319b15b5137074c9eac455f6/aten/src/ATen/cuda/cub.cuh#L38-L46
-// handle the temporary storage and 'twice' calls for cub API
+// Routes CUB temporary storage through DeviceScratch (monotonically growing,
+// never fragmented) instead of the PyTorch caching allocator.
 #define CUB_WRAPPER(func, ...)                                                 \
     do {                                                                       \
-        size_t temp_storage_bytes = 0;                                         \
-        func(nullptr, temp_storage_bytes, __VA_ARGS__);                        \
-        auto &caching_allocator = *::c10::cuda::CUDACachingAllocator::get();   \
-        auto temp_storage = caching_allocator.allocate(temp_storage_bytes);    \
-        func(temp_storage.get(), temp_storage_bytes, __VA_ARGS__);             \
+        size_t _cub_temp_bytes = 0;                                            \
+        func(nullptr, _cub_temp_bytes, __VA_ARGS__);                           \
+        func(DeviceScratch::global().acquire(_cub_temp_bytes),                 \
+             _cub_temp_bytes, __VA_ARGS__);                                    \
     } while (false)
 
 //

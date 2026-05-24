@@ -1,10 +1,10 @@
 import threading
 import asyncio
 
-# import os
-# os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-# os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-# os.environ["PYTORCH_NO_CUDA_MEMORY_CACHING"] = "1"
+import os
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["PYTORCH_NO_CUDA_MEMORY_CACHING"] = "1"
 
 from spirulae_splat.modules.trainer import *
 from typing import Union, Annotated

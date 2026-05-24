@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include <torch/types.h>
 
 #include <gsplat/Common.h>
 
@@ -9,6 +8,9 @@
 
 #include "common.cuh"
 #include "types.cuh"
+
+
+#if 0
 
 
 struct SVHashTensor {
@@ -75,3 +77,6 @@ svhashSplitVoxels(
     SVHashTensor::TensorTuple tensorTuples,
     at::Tensor split_mask
 );
+
+
+#endif

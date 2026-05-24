@@ -3,7 +3,7 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
-#include <ATen/Tensor.h>
+#include <Tensor.h>
 
 #include <gsplat/Common.h>
 
@@ -22,102 +22,33 @@
 
 
 std::tuple<
-    at::Tensor,  // aabb
-    at::Tensor,  // sorting_depths
-    at::Tensor,  // radii
-    TensorList  // out splats
-> projection_3dgs_forward_tensor(
-    // inputs
-    const int64_t num_splats,
-    const int max_sh_degree,
-    const TensorList &in_splats,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs
+    DeviceTensor2D<float4>, DeviceTensor2D<float>, DeviceVector<float>, std::vector<DeviceTensorFloatND>
+> projection_3dgs_forward(
+    const int64_t num_splats, const int max_sh_degree,
+    const std::vector<DeviceTensorFloatND> &in_splats,
+    TorchTensorView viewmats, TorchTensorView intrins,
+    const uint32_t image_width, const uint32_t image_height,
+    const std::string camera_model, const TorchTensorView dist_coeffs
 );
 
 
 std::tuple<
-    at::Tensor,  // aabb
-    at::Tensor,  // sorting_depths
-    at::Tensor,  // radii
-    TensorList  // out splats
-> projection_mip_forward_tensor(
-    // inputs
-    const int64_t num_splats,
-    const int max_sh_degree,
-    const TensorList &in_splats,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs
+    DeviceTensor2D<float4>, DeviceTensor2D<float>, DeviceVector<float>, std::vector<DeviceTensorFloatND>
+> projection_mip_forward(
+    const int64_t num_splats, const int max_sh_degree,
+    const std::vector<DeviceTensorFloatND> &in_splats,
+    TorchTensorView viewmats, TorchTensorView intrins,
+    const uint32_t image_width, const uint32_t image_height,
+    const std::string camera_model, const TorchTensorView dist_coeffs
 );
 
 
 std::tuple<
-    at::Tensor,  // aabb
-    at::Tensor,  // sorting_depths
-    at::Tensor,  // radii
-    TensorList  // out splats
-> projection_3dgut_forward_tensor(
-    // inputs
-    const int64_t num_splats,
-    const int max_sh_degree,
-    const TensorList &in_splats,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs
+    DeviceTensor2D<float4>, DeviceTensor2D<float>, DeviceVector<float>, std::vector<DeviceTensorFloatND>
+> projection_3dgut_forward(
+    const int64_t num_splats, const int max_sh_degree,
+    const std::vector<DeviceTensorFloatND> &in_splats,
+    TorchTensorView viewmats, TorchTensorView intrins,
+    const uint32_t image_width, const uint32_t image_height,
+    const std::string camera_model, const TorchTensorView dist_coeffs
 );
-
-
-// std::tuple<
-//     at::Tensor,  // aabb
-//     TensorList  // out splats
-// > projection_3dgut_sv_forward_tensor(
-//     // inputs
-//     const TensorList &in_splats,
-//     const at::Tensor viewmats,  // [..., C, 4, 4]
-//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-//     const uint32_t image_width,
-//     const uint32_t image_height,
-//     const std::string camera_model,
-//     const CameraDistortionCoeffsTensor dist_coeffs
-// );
-
-
-// std::tuple<
-//     at::Tensor,  // aabb
-//     OpaqueTriangle::Screen::TensorTupleProj  // out splats
-// > projection_opaque_triangle_forward_tensor(
-//     // inputs
-//     const OpaqueTriangle::World::TensorTuple &in_splats,
-//     const at::Tensor viewmats,  // [..., C, 4, 4]
-//     const at::Tensor intrins,   // [..., C, 4], fx, fy, cx, cy
-//     const uint32_t image_width,
-//     const uint32_t image_height,
-//     const std::string camera_model,
-//     const CameraDistortionCoeffsTensor dist_coeffs
-// );
-
-
-// std::tuple<
-//     at::Tensor,  // aabb
-//     VoxelPrimitive::Screen::TensorTupleProj  // out splats
-// > projection_voxel_forward_tensor(
-//     // inputs
-//     const VoxelPrimitive::World::TensorTuple &in_splats,
-//     const at::Tensor viewmats,  // [..., C, 4, 4]
-//     const at::Tensor intrins,   // [..., C, 4], fx, fy, cx, cy
-//     const uint32_t image_width,
-//     const uint32_t image_height,
-//     const std::string camera_model,
-//     const CameraDistortionCoeffsTensor dist_coeffs
-// );

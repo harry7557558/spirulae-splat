@@ -116,7 +116,6 @@ struct _BasePrimitive3DGS {
 
     #endif  // #ifdef __CUDACC__
 
-    #ifndef NO_TORCH
         int sh_degree() {
             int num_sh = _strides[5] / 3;
             return (
@@ -127,13 +126,16 @@ struct _BasePrimitive3DGS {
                 0
             );
         }
-        static TensorList empty(int64_t size, int num_sh) {
-            return TensorArray<6>::empty(size, {3, 4, 3, 1, 3, (int32_t)(3*num_sh)});
+        static std::vector<DeviceTensorFloatND> empty_pool(int64_t size, int num_sh, const std::string& key_prefix) {
+            return TensorArray<6>::empty_pool(size, {3, 4, 3, 1, 3, (int32_t)(3*num_sh)}, key_prefix);
         }
-        static TensorList zeros(int64_t size, int num_sh) {
-            return TensorArray<6>::zeros(size, {3, 4, 3, 1, 3, (int32_t)(3*num_sh)});
+        static std::vector<DeviceTensorFloatND> zeros_pool(int64_t size, int num_sh, const std::string& key_prefix) {
+            return TensorArray<6>::zeros_pool(size, {3, 4, 3, 1, 3, (int32_t)(3*num_sh)}, key_prefix);
         }
-    #endif  // #ifndef NO_TORCH
+        static std::vector<DeviceTensorFloatND> zeros_pool(
+            const std::vector<DeviceTensorFloatND>& tmpl, const std::string& key_prefix) {
+            return TensorArray<6>::zeros_pool(tmpl, key_prefix);
+        }
     };
 
     #ifdef __CUDACC__
@@ -210,14 +212,16 @@ struct _BasePrimitive3DGS {
 
     #endif  // #ifdef __CUDACC__
 
-    #ifndef NO_TORCH
-        static TensorList empty(int64_t size) {
-            return TensorArray<5>::empty(size, {2, 1, 3, 1, 3});
+        static std::vector<DeviceTensorFloatND> empty_pool(int64_t size, const std::string& key_prefix) {
+            return TensorArray<5>::empty_pool(size, {2, 1, 3, 1, 3}, key_prefix);
         }
-        static TensorList zeros(int64_t size) {
-            return TensorArray<5>::zeros(size, {2, 1, 3, 1, 3});
+        static std::vector<DeviceTensorFloatND> zeros_pool(int64_t size, const std::string& key_prefix) {
+            return TensorArray<5>::zeros_pool(size, {2, 1, 3, 1, 3}, key_prefix);
         }
-    #endif  // #ifndef NO_TORCH
+        static std::vector<DeviceTensorFloatND> zeros_pool(
+            const std::vector<DeviceTensorFloatND>& tmpl, const std::string& key_prefix) {
+            return TensorArray<5>::zeros_pool(tmpl, key_prefix);
+        }
     };
 
     #ifdef __CUDACC__
@@ -323,16 +327,16 @@ struct _BasePrimitive3DGUT : _BasePrimitive3DGS<_sh_degree> {
 
     #endif  // #ifdef __CUDACC__
 
-    #ifndef NO_TORCH
-        static TensorList empty(int64_t size) {
-            return TensorArray<3>::empty(size, {3, 1, 3});
+        static std::vector<DeviceTensorFloatND> empty_pool(int64_t size, const std::string& key_prefix) {
+            return TensorArray<3>::empty_pool(size, {3, 1, 3}, key_prefix);
         }
-        static TensorList zeros(int64_t size) {
-            // return TensorArray<3>::zeros(size, {3, 1, 3});
-            // we don't need gradient for scales (alias conics)
-            return TensorArray<3>::zeros(size, {-1, 1, 3});
+        static std::vector<DeviceTensorFloatND> zeros_pool(int64_t size, const std::string& key_prefix) {
+            return TensorArray<3>::zeros_pool(size, {-1, 1, 3}, key_prefix);
         }
-    #endif  // #ifndef NO_TORCH
+        static std::vector<DeviceTensorFloatND> zeros_pool(
+            const std::vector<DeviceTensorFloatND>& tmpl, const std::string& key_prefix) {
+            return TensorArray<3>::zeros_pool(tmpl, key_prefix);
+        }
     };
 
 };

@@ -18,19 +18,8 @@ namespace SlangPPISP {
 
 #include "common.cuh"
 
+#if 0
 
-CameraDistortionCoeffsBuffer::CameraDistortionCoeffsBuffer(
-    const CameraDistortionCoeffsTensor &tensors
-) {
-    coeffs = nullptr;
-
-    if (tensors.has_value()) {
-        CHECK_INPUT(tensors.value());
-        if (tensors.value().size(-1) != 10)
-            AT_ERROR("dist_coeffs must be (..., 10)");
-        coeffs = (float*)tensors.value().data_ptr<float>();
-    }
-}
 
 // ================
 // Type Conversion
@@ -207,7 +196,7 @@ __global__ void rendered_depth_to_expected_depth_backward_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor rendered_depth_to_expected_depth_forward_tensor(
+at::Tensor rendered_depth_to_expected_depth_forward(
     at::Tensor &depth,  // [B, H, W, 1]
     at::Tensor &transmittance  // [B, H, W, 1]
 ) {
@@ -243,7 +232,7 @@ at::Tensor rendered_depth_to_expected_depth_forward_tensor(
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<at::Tensor, at::Tensor>
-rendered_depth_to_expected_depth_backward_tensor(
+rendered_depth_to_expected_depth_backward(
     at::Tensor &depth,  // [B, H, W, 1]
     at::Tensor &transmittance,  // [B, H, W, 1]
     at::Tensor &v_out_depth  // [B, H, W, 1]
@@ -334,7 +323,7 @@ __global__ void blend_background_backward_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor blend_background_forward_tensor(
+at::Tensor blend_background_forward(
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &transmittance,  // [B, H, W, 1]
     at::Tensor &background  // [B, H, W, 3]
@@ -365,7 +354,7 @@ at::Tensor blend_background_forward_tensor(
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<at::Tensor, at::Tensor, at::Tensor>
-blend_background_backward_tensor(
+blend_background_backward(
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &transmittance,  // [B, H, W, 1]
     at::Tensor &background,  // [B, H, W, 3]
@@ -479,7 +468,7 @@ __global__ void blend_background_noise_backward_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor blend_background_noise_forward_tensor(
+at::Tensor blend_background_noise_forward(
     bool is_linear,
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &transmittance,  // [B, H, W, 1]
@@ -511,7 +500,7 @@ at::Tensor blend_background_noise_forward_tensor(
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<at::Tensor, at::Tensor>
-blend_background_noise_backward_tensor(
+blend_background_noise_backward(
     bool is_linear,
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &transmittance,  // [B, H, W, 1]
@@ -621,7 +610,7 @@ __global__ void rgb_to_srgb_backward_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor rgb_to_srgb_forward_tensor(
+at::Tensor rgb_to_srgb_forward(
     bool is_input_linear,
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &color_matrix   // [3, 3]
@@ -648,7 +637,7 @@ at::Tensor rgb_to_srgb_forward_tensor(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor rgb_to_srgb_backward_tensor(
+at::Tensor rgb_to_srgb_backward(
     bool is_input_linear,
     at::Tensor &rgb,  // [B, H, W, 3]
     at::Tensor &color_matrix,   // [3, 3]
@@ -751,10 +740,10 @@ __global__ void depth_to_points_backward_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor depth_to_points_forward_tensor(
+at::Tensor depth_to_points_forward(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
-    CameraDistortionCoeffsTensor dist_coeffs,
+    TorchTensorView dist_coeffs,
     bool is_ray_depth,
     at::Tensor depths  // [B, H, W, 1]
 ) {
@@ -782,10 +771,10 @@ at::Tensor depth_to_points_forward_tensor(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor depth_to_points_backward_tensor(
+at::Tensor depth_to_points_backward(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
-    CameraDistortionCoeffsTensor dist_coeffs,
+    TorchTensorView dist_coeffs,
     bool is_ray_depth,
     at::Tensor in_depths,  // [B, H, W, 1]
     at::Tensor v_out_points  // [B, H, W, 3]
@@ -987,10 +976,10 @@ __global__ void depth_to_normal_backward_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor depth_to_normal_forward_tensor(
+at::Tensor depth_to_normal_forward(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
-    CameraDistortionCoeffsTensor dist_coeffs,
+    TorchTensorView dist_coeffs,
     bool is_ray_depth,
     at::Tensor depths  // [B, H, W, 1]
 ) {
@@ -1018,10 +1007,10 @@ at::Tensor depth_to_normal_forward_tensor(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor depth_to_normal_backward_tensor(
+at::Tensor depth_to_normal_backward(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
-    CameraDistortionCoeffsTensor dist_coeffs,
+    TorchTensorView dist_coeffs,
     bool is_ray_depth,
     at::Tensor depths,  // [B, H, W, 1]
     at::Tensor v_normals  // [B, H, W, 3]
@@ -1170,10 +1159,10 @@ __global__ void depth_normal_loss_backward_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor depth_normal_loss_forward_tensor(
+at::Tensor depth_normal_loss_forward(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
-    CameraDistortionCoeffsTensor dist_coeffs,
+    TorchTensorView dist_coeffs,
     bool is_ray_depth,
     at::Tensor depths,  // [B, H, W, 1]
     at::Tensor gt_normals  // [B, H, W, 3]
@@ -1208,10 +1197,10 @@ at::Tensor depth_normal_loss_forward_tensor(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<at::Tensor, at::Tensor> depth_normal_loss_backward_tensor(
+std::tuple<at::Tensor, at::Tensor> depth_normal_loss_backward(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
-    CameraDistortionCoeffsTensor dist_coeffs,
+    TorchTensorView dist_coeffs,
     bool is_ray_depth,
     at::Tensor depths,  // [B, H, W, 1]
     at::Tensor gt_normals,  // [B, H, W, 3]
@@ -1308,10 +1297,10 @@ __global__ void ray_depth_to_linear_depth_backward_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor ray_depth_to_linear_depth_forward_tensor(
+at::Tensor ray_depth_to_linear_depth_forward(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
-    CameraDistortionCoeffsTensor dist_coeffs,
+    TorchTensorView dist_coeffs,
     at::Tensor depths  // [B, H, W, 1]
 ) {
     DEVICE_GUARD(depths);
@@ -1338,10 +1327,10 @@ at::Tensor ray_depth_to_linear_depth_forward_tensor(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor ray_depth_to_linear_depth_backward_tensor(
+at::Tensor ray_depth_to_linear_depth_backward(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
-    CameraDistortionCoeffsTensor dist_coeffs,
+    TorchTensorView dist_coeffs,
     at::Tensor v_out_depths  // [B, H, W, 1]
 ) {
     DEVICE_GUARD(v_out_depths);
@@ -1496,7 +1485,7 @@ __global__ void distort_image_kernel(
 at::Tensor distort_image_tensor(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
-    CameraDistortionCoeffsTensor dist_coeffs,
+    TorchTensorView dist_coeffs,
     at::Tensor in_image  // [B, H, W, C]
 ) {
     DEVICE_GUARD(in_image);
@@ -1524,7 +1513,7 @@ at::Tensor distort_image_tensor(
 at::Tensor undistort_image_tensor(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
-    CameraDistortionCoeffsTensor dist_coeffs,
+    TorchTensorView dist_coeffs,
     at::Tensor in_image  // [B, H, W, C]
 ) {
     DEVICE_GUARD(in_image);
@@ -1607,7 +1596,7 @@ __global__ void warp_image_wide_to_pinhole_kernel(
 at::Tensor warp_image_wide_to_pinhole_tensor(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
-    CameraDistortionCoeffsTensor dist_coeffs,
+    TorchTensorView dist_coeffs,
     at::Tensor wide_image,  // [B, H, W, C]
     at::Tensor axes,  // [K, 3, 3]
     int out_w, int out_h
@@ -1872,7 +1861,7 @@ __global__ void warp_image_pinhole_to_wide_kernel(
 at::Tensor warp_image_pinhole_to_wide_tensor(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
-    CameraDistortionCoeffsTensor dist_coeffs,
+    TorchTensorView dist_coeffs,
     at::Tensor pinhole_images,  // [B, K, H, W, C]
     at::Tensor axes,  // [K, 3, 3]
     int out_w, int out_h
@@ -1908,7 +1897,7 @@ at::Tensor warp_image_pinhole_to_wide_tensor(
 at::Tensor warp_linear_depth_pinhole_to_wide_tensor(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
-    CameraDistortionCoeffsTensor dist_coeffs,
+    TorchTensorView dist_coeffs,
     at::Tensor pinhole_images,  // [B, K, H, W, C]
     at::Tensor axes,  // [K, 3, 3]
     int out_w, int out_h
@@ -1944,7 +1933,7 @@ at::Tensor warp_linear_depth_pinhole_to_wide_tensor(
 at::Tensor warp_ray_depth_pinhole_to_wide_tensor(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
-    CameraDistortionCoeffsTensor dist_coeffs,
+    TorchTensorView dist_coeffs,
     at::Tensor pinhole_images,  // [B, K, H, W, C]
     at::Tensor axes,  // [K, 3, 3]
     int out_w, int out_h
@@ -1980,7 +1969,7 @@ at::Tensor warp_ray_depth_pinhole_to_wide_tensor(
 at::Tensor warp_points_pinhole_to_wide_tensor(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
-    CameraDistortionCoeffsTensor dist_coeffs,
+    TorchTensorView dist_coeffs,
     at::Tensor pinhole_images,  // [B, K, H, W, C]
     at::Tensor axes,  // [K, 3, 3]
     int out_w, int out_h
@@ -2089,7 +2078,7 @@ __global__ void warp_depth_pinhole_to_wide_scale_matrix_kernel(
 at::Tensor warp_depth_pinhole_to_wide_scale_matrix_tensor(
     std::string camera_model,
     at::Tensor intrins,  // fx, fy, cx, cy
-    CameraDistortionCoeffsTensor dist_coeffs,
+    TorchTensorView dist_coeffs,
     at::Tensor pinhole_images,  // [B, K, H, W, C]
     at::Tensor axes,  // [K, 3, 3]
     int out_w, int out_h
@@ -2188,7 +2177,7 @@ __global__ void ppisp_forward_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor ppisp_forward_tensor(
+at::Tensor ppisp_forward(
     at::Tensor &in_image,  // [B, H, W, C]
     at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
     at::Tensor &intrins,  // [B, 4]
@@ -2322,7 +2311,7 @@ __global__ void ppisp_backward_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<at::Tensor, at::Tensor> ppisp_backward_tensor(
+std::tuple<at::Tensor, at::Tensor> ppisp_backward(
     at::Tensor &in_image,  // [B, H, W, C]
     at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
     at::Tensor &intrins,  // [B, 4]
@@ -2460,7 +2449,7 @@ __global__ void compute_ppisp_regularization_forward_kernel(
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<at::Tensor, at::Tensor>
-compute_ppsip_regularization_forward_tensor(
+compute_ppsip_regularization_forward(
     at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
     const std::array<float, (int)PPISPRegLossIndex::length> loss_weights_0,
     std::string param_type
@@ -2614,7 +2603,7 @@ __global__ void compute_ppisp_regularization_backward_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor compute_ppsip_regularization_backward_tensor(
+at::Tensor compute_ppsip_regularization_backward(
     at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
     const std::array<float, (int)PPISPRegLossIndex::length> loss_weights_0,
     at::Tensor &raw_losses,  // [B+1, RawPPISPRegLossIndex::length]
@@ -2684,3 +2673,5 @@ at::Tensor compute_ppsip_regularization_backward_tensor(
 
     return v_ppisp_params;
 }
+
+#endif

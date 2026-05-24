@@ -2,7 +2,6 @@
 #include "common.cuh"
 
 #include "IntersectTile.cuh"
-#include "SphericalHarmonics.cuh"
 #include "BackgroundSphericalHarmonics.cuh"
 #include "PerSplatLoss.cuh"
 #include "PerPixelLoss.cuh"
@@ -10,7 +9,7 @@
 #include "FusedSSIM.cuh"
 #include "SplatTileIntersector.cuh"
 #include "SVHash.cuh"
-#include "Projection.cuh"
+// #include "Projection.cuh"
 #include "ProjectionFwd.cuh"
 #include "ProjectionBwd.cuh"
 #include "ProjectionPackedFwd.cuh"
@@ -40,6 +39,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.attr("TILE_SIZE") = py::int_(TILE_SIZE);
 
+    #if 0
+
     // IntersectTile.cuh
     m.def("intersect_tile", &do_intersect_tile_generic);
     // m.def("intersect_tile_3dgs", &intersect_tile_3dgs_tensor);
@@ -49,44 +50,40 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // m.def("intersect_tile_opaque_triangle", &intersect_tile_opaque_triangle_tensor);
     // m.def("intersect_tile_voxel", &intersect_tile_voxel_tensor);
 
-    // SphericalHarmonics.cuh
-    m.def("compute_sh_forward", &compute_sh_forward_tensor);
-    m.def("compute_sh_backward", &compute_sh_backward_tensor);
-
     // BackgroundSphericalHarmonics.cuh
-    m.def("render_background_sh_forward", &render_background_sh_forward_tensor);
-    m.def("render_background_sh_backward", &render_background_sh_backward_tensor);
+    m.def("render_background_sh_forward", &render_background_sh_forward);
+    m.def("render_background_sh_backward", &render_background_sh_backward);
 
     // PerSplatLoss.cuh
-    m.def("compute_per_splat_losses_forward", &compute_per_splat_losses_forward_tensor);
-    m.def("compute_per_splat_losses_backward", &compute_per_splat_losses_backward_tensor);
-    m.def("compute_per_splat_losses_backward_with_hessian_diagonal", &compute_per_splat_losses_backward_with_hessian_diagonal_tensor);
+    m.def("compute_per_splat_losses_forward", &compute_per_splat_losses_forward);
+    m.def("compute_per_splat_losses_backward", &compute_per_splat_losses_backward);
+    m.def("compute_per_splat_losses_backward_with_hessian_diagonal", &compute_per_splat_losses_backward_with_hessian_diagonal);
 
     // PerPixelLoss.cuh
-    m.def("compute_per_pixel_losses_forward", &compute_per_pixel_losses_forward_tensor);
-    m.def("compute_per_pixel_losses_backward", &compute_per_pixel_losses_backward_tensor);
+    m.def("compute_per_pixel_losses_forward", &compute_per_pixel_losses_forward);
+    m.def("compute_per_pixel_losses_backward", &compute_per_pixel_losses_backward);
     m.def("compute_multi_scale_per_pixel_losses", &compute_multi_scale_per_pixel_losses_tensor);
     m.def("avg_pool_downsample", &avg_pool_downsample_tensor);
 
     // PixelWise.cuh
     m.def("uint8_image_to_float", &uint8_image_to_float_tensor);
     m.def("uint16_image_to_float", &uint16_image_to_float_tensor);
-    m.def("rendered_depth_to_expected_depth_forward", &rendered_depth_to_expected_depth_forward_tensor);
-    m.def("rendered_depth_to_expected_depth_backward", &rendered_depth_to_expected_depth_backward_tensor);
-    m.def("blend_background_noise_forward", &blend_background_noise_forward_tensor);
-    m.def("blend_background_noise_backward", &blend_background_noise_backward_tensor);
-    m.def("blend_background_forward", &blend_background_forward_tensor);
-    m.def("blend_background_backward", &blend_background_backward_tensor);
-    m.def("rgb_to_srgb_forward", &rgb_to_srgb_forward_tensor);
-    m.def("rgb_to_srgb_backward", &rgb_to_srgb_backward_tensor);
-    m.def("depth_to_points_forward", &depth_to_points_forward_tensor);
-    m.def("depth_to_points_backward", &depth_to_points_backward_tensor);
-    m.def("depth_to_normal_forward", &depth_to_normal_forward_tensor);
-    m.def("depth_to_normal_backward", &depth_to_normal_backward_tensor);
-    m.def("depth_normal_loss_forward", &depth_normal_loss_forward_tensor);
-    m.def("depth_normal_loss_backward", &depth_normal_loss_backward_tensor);
-    m.def("ray_depth_to_linear_depth_forward", &ray_depth_to_linear_depth_forward_tensor);
-    m.def("ray_depth_to_linear_depth_backward", &ray_depth_to_linear_depth_backward_tensor);
+    m.def("rendered_depth_to_expected_depth_forward", &rendered_depth_to_expected_depth_forward);
+    m.def("rendered_depth_to_expected_depth_backward", &rendered_depth_to_expected_depth_backward);
+    m.def("blend_background_noise_forward", &blend_background_noise_forward);
+    m.def("blend_background_noise_backward", &blend_background_noise_backward);
+    m.def("blend_background_forward", &blend_background_forward);
+    m.def("blend_background_backward", &blend_background_backward);
+    m.def("rgb_to_srgb_forward", &rgb_to_srgb_forward);
+    m.def("rgb_to_srgb_backward", &rgb_to_srgb_backward);
+    m.def("depth_to_points_forward", &depth_to_points_forward);
+    m.def("depth_to_points_backward", &depth_to_points_backward);
+    m.def("depth_to_normal_forward", &depth_to_normal_forward);
+    m.def("depth_to_normal_backward", &depth_to_normal_backward);
+    m.def("depth_normal_loss_forward", &depth_normal_loss_forward);
+    m.def("depth_normal_loss_backward", &depth_normal_loss_backward);
+    m.def("ray_depth_to_linear_depth_forward", &ray_depth_to_linear_depth_forward);
+    m.def("ray_depth_to_linear_depth_backward", &ray_depth_to_linear_depth_backward);
     m.def("distort_image", &distort_image_tensor);
     m.def("undistort_image", &undistort_image_tensor);
     m.def("warp_image_wide_to_pinhole", &warp_image_wide_to_pinhole_tensor);
@@ -96,10 +93,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("warp_ray_depth_pinhole_to_wide", &warp_ray_depth_pinhole_to_wide_tensor);
     m.def("warp_points_pinhole_to_wide", &warp_points_pinhole_to_wide_tensor);
     m.def("warp_depth_pinhole_to_wide_scale_matrix", &warp_depth_pinhole_to_wide_scale_matrix_tensor);
-    m.def("ppisp_forward", &ppisp_forward_tensor);
-    m.def("ppisp_backward", &ppisp_backward_tensor);
-    m.def("compute_ppsip_regularization_forward", &compute_ppsip_regularization_forward_tensor);
-    m.def("compute_ppsip_regularization_backward", &compute_ppsip_regularization_backward_tensor);
+    m.def("ppisp_forward", &ppisp_forward);
+    m.def("ppisp_backward", &ppisp_backward);
+    m.def("compute_ppsip_regularization_forward", &compute_ppsip_regularization_forward);
+    m.def("compute_ppsip_regularization_backward", &compute_ppsip_regularization_backward);
 
     // FusedSSIM.cuh
     m.def("fused_ssim_forward", &fused_ssim_forward);
@@ -116,50 +113,54 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("svhash_create_initial_volume", &svhashCreateInitialVolume);
     m.def("svhash_get_voxels", &svhashGetVoxels);
     m.def("svhash_split_voxels", &svhashSplitVoxels);
+
+    #endif
     
     // ProjectionFwd.cuh
-    m.def("projection_3dgs_forward", &projection_3dgs_forward_tensor);
-    m.def("projection_mip_forward", &projection_mip_forward_tensor);
-    m.def("projection_3dgut_forward", &projection_3dgut_forward_tensor);
-    m.def("projection_3dgut_sv_forward", &projection_3dgut_forward_tensor);
-    // m.def("projection_opaque_triangle_forward", &projection_opaque_triangle_forward_tensor);
-    // m.def("projection_voxel_forward", &projection_voxel_forward_tensor);
+    m.def("projection_3dgs_forward", &projection_3dgs_forward);
+    m.def("projection_mip_forward", &projection_mip_forward);
+    m.def("projection_3dgut_forward", &projection_3dgut_forward);
+    m.def("projection_3dgut_sv_forward", &projection_3dgut_forward);
+    // m.def("projection_opaque_triangle_forward", &projection_opaque_triangle_forward);
+    // m.def("projection_voxel_forward", &projection_voxel_forward);
 
     // ProjectionBwd.cuh
-    m.def("projection_3dgs_backward", &projection_3dgs_backward_tensor);
-    m.def("projection_mip_backward", &projection_mip_backward_tensor);
-    m.def("projection_3dgut_backward", &projection_3dgut_backward_tensor);
-    m.def("projection_3dgut_sv_backward", &projection_3dgut_backward_tensor);
-    // m.def("projection_opaque_triangle_backward", &projection_opaque_triangle_backward_tensor);
-    // m.def("projection_voxel_backward", &projection_voxel_backward_tensor);
+    m.def("projection_3dgs_backward", &projection_3dgs_backward);
+    m.def("projection_mip_backward", &projection_mip_backward);
+    m.def("projection_3dgut_backward", &projection_3dgut_backward);
+    m.def("projection_3dgut_sv_backward", &projection_3dgut_backward);
+    // m.def("projection_opaque_triangle_backward", &projection_opaque_triangle_backward);
+    // m.def("projection_voxel_backward", &projection_voxel_backward);
 
     // ProjectionBwd.cuh, second order
-    m.def("projection_3dgs_backward_with_position_hessian_diagonal", &projection_3dgs_backward_with_position_hessian_diagonal_tensor);
-    m.def("projection_mip_backward_with_position_hessian_diagonal", &projection_mip_backward_with_position_hessian_diagonal_tensor);
-    m.def("projection_3dgut_backward_with_position_hessian_diagonal", &projection_3dgut_backward_with_position_hessian_diagonal_tensor);
-    m.def("projection_3dgs_backward_with_hessian_diagonal", &projection_3dgs_backward_with_hessian_diagonal_tensor);
-    m.def("projection_mip_backward_with_hessian_diagonal", &projection_mip_backward_with_hessian_diagonal_tensor);
-    m.def("projection_3dgut_backward_with_hessian_diagonal", &projection_3dgut_backward_with_hessian_diagonal_tensor);
+    m.def("projection_3dgs_backward_with_position_hessian_diagonal", &projection_3dgs_backward_with_position_hessian_diagonal);
+    m.def("projection_mip_backward_with_position_hessian_diagonal", &projection_mip_backward_with_position_hessian_diagonal);
+    m.def("projection_3dgut_backward_with_position_hessian_diagonal", &projection_3dgut_backward_with_position_hessian_diagonal);
+    m.def("projection_3dgs_backward_with_hessian_diagonal", &projection_3dgs_backward_with_hessian_diagonal);
+    m.def("projection_mip_backward_with_hessian_diagonal", &projection_mip_backward_with_hessian_diagonal);
+    m.def("projection_3dgut_backward_with_hessian_diagonal", &projection_3dgut_backward_with_hessian_diagonal);
 
     // ProjectionPackedFwd.cuh
-    m.def("projection_3dgs_packed_forward", &projection_3dgs_packed_forward_tensor);
-    m.def("projection_mip_packed_forward", &projection_mip_packed_forward_tensor);
-    m.def("projection_3dgut_packed_forward", &projection_3dgut_packed_forward_tensor);
-    m.def("projection_3dgut_sv_packed_forward", &projection_3dgut_packed_forward_tensor);
-    // m.def("projection_opaque_triangle_packed_forward", &projection_opaque_triangle_packed_forward_tensor);
-    // m.def("projection_voxel_packed_forward", &projection_voxel_packed_forward_tensor);
+    m.def("projection_3dgs_packed_forward", &projection_3dgs_packed_forward);
+    m.def("projection_mip_packed_forward", &projection_mip_packed_forward);
+    m.def("projection_3dgut_packed_forward", &projection_3dgut_packed_forward);
+    m.def("projection_3dgut_sv_packed_forward", &projection_3dgut_packed_forward);
+    // m.def("projection_opaque_triangle_packed_forward", &projection_opaque_triangle_packed_forward);
+    // m.def("projection_voxel_packed_forward", &projection_voxel_packed_forward);
 
+#if 0
     // ProjectionHeteroFwd.cuh
-    m.def("projection_3dgs_hetero_forward", &projection_3dgs_hetero_forward_tensor);
-    m.def("projection_mip_hetero_forward", &projection_mip_hetero_forward_tensor);
-    m.def("projection_3dgut_hetero_forward", &projection_3dgut_hetero_forward_tensor);
-    // m.def("projection_opaque_triangle_hetero_forward", &projection_opaque_triangle_hetero_forward_tensor);
+    m.def("projection_3dgs_hetero_forward", &projection_3dgs_hetero_forward);
+    m.def("projection_mip_hetero_forward", &projection_mip_hetero_forward);
+    m.def("projection_3dgut_hetero_forward", &projection_3dgut_hetero_forward);
+    // m.def("projection_opaque_triangle_hetero_forward", &projection_opaque_triangle_hetero_forward);
 
     // ProjectionHeteroBwd.cuh
-    m.def("projection_3dgs_hetero_backward", &projection_3dgs_hetero_backward_tensor);
-    m.def("projection_mip_hetero_backward", &projection_mip_hetero_backward_tensor);
-    m.def("projection_3dgut_hetero_backward", &projection_3dgut_hetero_backward_tensor);
-    // m.def("projection_opaque_triangle_hetero_backward", &projection_opaque_triangle_hetero_backward_tensor);
+    m.def("projection_3dgs_hetero_backward", &projection_3dgs_hetero_backward);
+    m.def("projection_mip_hetero_backward", &projection_mip_hetero_backward);
+    m.def("projection_3dgut_hetero_backward", &projection_3dgut_hetero_backward);
+    // m.def("projection_opaque_triangle_hetero_backward", &projection_opaque_triangle_hetero_backward);
+#endif
 
     // RasterizationFwd.cuh and RasterizationBwd.cuh
     m.def("rasterization_3dgs_forward", &rasterize_to_pixels_3dgs_fwd);
@@ -180,6 +181,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // m.def("rasterization_voxel_forward", &rasterize_to_pixels_voxel_eval3d_fwd);
     // m.def("rasterization_voxel_backward", &rasterize_to_pixels_voxel_eval3d_bwd);
 
+#if 0
     // Optimizer.cuh
     m.def("set_zero", &set_zero_tensor);
     m.def("zeros_like", &zeros_like_tensor);
@@ -203,10 +205,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fused_adamtr_linear_rgb_optim", &fused_adamtr_linear_rgb_optim);
     m.def("fused_adamtr_rgb_sh_optim", &fused_adamtr_rgb_sh_optim);
     m.def("fused_adamtr_linear_rgb_sh_optim", &fused_adamtr_linear_rgb_sh_optim);
+#endif
 
     // FusedProjectionBwdOptim.cuh
-    m.def("fused_projection_bwd_optimizer_3dgut", &fused_projection_bwd_optimizer_3dgut_tensor);
+    m.def("fused_projection_bwd_optimizer_3dgut", &fused_projection_bwd_optimizer_3dgut);
 
+#if 0
     // Densify.cuh
     m.def("quantile_of_abs_of_finite_elements", &quantile_of_abs_of_finite_elements_tensor);
     m.def("normalize_by_median_inplace", &normalize_by_median_inplace_tensor);
@@ -234,4 +238,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // Visualizer.cuh
     m.def("blit_train_cameras", &blit_train_cameras_tensor);
+#endif
 }

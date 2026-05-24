@@ -7,9 +7,8 @@
 
 #include <algorithm>
 
-#include <ATen/ops/empty.h>
-#include <ATen/ops/zeros.h>
 
+#if 0
 
 
 template<ssplat::CameraModelType CAMERA_MODEL>
@@ -440,7 +439,7 @@ __global__ void __launch_bounds__(512) render_background_sh_backward_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor render_background_sh_forward_tensor(
+at::Tensor render_background_sh_forward(
     const unsigned w,
     const unsigned h,
     std::string camera_model,
@@ -509,7 +508,7 @@ at::Tensor render_background_sh_forward_tensor(
 std::tuple<
     at::Tensor,  // v_rotation
     at::Tensor  // v_sh_coeffs
-> render_background_sh_backward_tensor(
+> render_background_sh_backward(
     const unsigned w,
     const unsigned h,
     const std::string camera_model,
@@ -597,3 +596,4 @@ std::tuple<
     return std::make_tuple(v_rotation, v_sh_coeffs);
 }
 
+#endif

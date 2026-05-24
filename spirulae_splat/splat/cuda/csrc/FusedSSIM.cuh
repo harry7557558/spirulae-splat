@@ -1,10 +1,9 @@
 #pragma once
 
-#include <ATen/Tensor.h>
-#include <ATen/Device.h>
-
 #include "common.cuh"
 
+
+#if 0
 
 std::tuple<at::Tensor, std::optional<at::Tensor>, at::Tensor, at::Tensor, at::Tensor>
 fused_ssim_forward(
@@ -55,3 +54,6 @@ float fused_ssim_inplace(
     std::optional<at::Tensor> ssim_loss_map,
     float ssim_loss_map_weight
 );
+
+#endif
+

@@ -8,6 +8,9 @@
 #include <optional>
 #include <vector>
 
+#include <Tensor.h>
+
+
 enum class RenderOutputType {
     RGB, RGB_D, RGB_DN
 };
@@ -28,18 +31,29 @@ public:
 
     struct Buffer;
 
-#ifndef NO_TORCH
-
     typedef std::tuple<
-        at::Tensor,
-        std::optional<at::Tensor>,
-        std::optional<at::Tensor>
+        DeviceTensor3D<float3>,
+        DeviceTensor3D<float>,
+        DeviceTensor3D<float3>
     > TensorTuple;
 
+    template<RenderOutputType type>
+    static void resize(
+        TensorTuple& tensors,
+        int64_t batch, int64_t height, int64_t width,
+        const std::string& key
+    ) {
+        std::get<0>(tensors).resize(key + ".rgb", batch, height, width);
+        if (_has_depth(type))
+            std::get<1>(tensors).resize(key + ".depth", batch, height, width);
+        if (_has_normal(type))
+            std::get<2>(tensors).resize(key + ".normal", batch, height, width);
+    }
+
     struct Tensor {
-        at::Tensor rgbs;
-        std::optional<at::Tensor> depths = std::nullopt;
-        std::optional<at::Tensor> normals = std::nullopt;
+        DeviceTensor3D<float3> rgbs;
+        DeviceTensor3D<float> depths;
+        DeviceTensor3D<float3> normals;
 
         Tensor() {}
 
@@ -53,37 +67,22 @@ public:
             return std::make_tuple(rgbs, depths, normals);
         }
 
-        template<RenderOutputType type>
-        static Tensor empty(at::DimVector dims) {
-            at::DimVector rgbs_dims(dims); rgbs_dims.append({3});
-            at::DimVector depths_dims(dims); depths_dims.append({1});
-            at::DimVector normals_dims(dims); normals_dims.append({3});
-            return Tensor(std::make_tuple(
-                at::empty(rgbs_dims, kTensorOptionF32()),
-                _has_depth(type) ? at::empty(depths_dims, kTensorOptionF32()) :
-                    (std::optional<at::Tensor>)std::nullopt,
-                _has_normal(type) ? at::empty(normals_dims, kTensorOptionF32()) :
-                    (std::optional<at::Tensor>)std::nullopt
-            ));
+        bool has_value() const {
+            return rgbs.data_ptr() != nullptr;
         }
 
-        auto options() const {
-            return rgbs.options();
-        }
         long width() const {
-            return rgbs.size(-2);
+            return rgbs.size<2>();
         }
         long height() const {
-            return rgbs.size(-3);
+            return rgbs.size<1>();
         }
         long batchSize() const {
-            return rgbs.numel() / (3*width()*height());
+            return rgbs.size<0>();
         }
 
         Buffer buffer() { return Buffer(*this); }
     };
-
-#endif  // #ifndef NO_TORCH
 
     struct Buffer {
         float3* __restrict__ rgbs;
@@ -92,21 +91,11 @@ public:
 
         Buffer() : rgbs(nullptr), depths(nullptr), normals(nullptr) {}
 
-        #ifndef NO_TORCH
         Buffer(const Tensor& tensors) {
-            DEVICE_GUARD(tensors.rgbs);
-            CHECK_INPUT(tensors.rgbs);
-            rgbs = (float3*)tensors.rgbs.data_ptr<float>();
-            if (tensors.depths) {
-                CHECK_INPUT(tensors.depths.value());
-                depths = tensors.depths.value().data_ptr<float>();
-            } else depths = nullptr;
-            if (tensors.normals) {
-                CHECK_INPUT(tensors.normals.value());
-                normals = (float3*)tensors.normals.value().data_ptr<float>();
-            }
+            rgbs = tensors.rgbs.data_ptr();
+            depths = tensors.depths.data_ptr();
+            normals = tensors.normals.data_ptr();
         }
-        #endif
 
 #ifdef __CUDACC__
 
@@ -197,10 +186,6 @@ struct ProjCamera {
 #endif
 
 
-#ifndef NO_TORCH
-typedef std::vector<std::optional<at::Tensor>> TensorList;
-#endif
-
 
 template<int N>
 class TensorArray {
@@ -232,8 +217,7 @@ public:
         return _size;
     }
 
-#ifndef NO_TORCH
-    TensorArray(std::vector<at::Tensor> tensors) {
+    TensorArray(std::vector<DeviceTensorFloatND> tensors) {
         if (tensors.size() == 0) {
             _size = 0;
             for (int i = 0; i < N; ++i) {
@@ -245,55 +229,62 @@ public:
         if (tensors.size() != N)
             throw std::runtime_error("Number of tensors mismatch: Expect "
                 + std::to_string(N) + ", got " + std::to_string(tensors.size()));
-        DEVICE_GUARD(tensors[0]);
+        _size = 0;
+        for (int i = 0; i < N; ++i)
+            if (tensors[i].data_ptr() != nullptr) { _size = tensors[i].size(0); break; }
         for (int i = 0; i < N; ++i) {
-            CHECK_INPUT(tensors[i]);
-            if (i == 0)
-                _size = tensors[i].size(0);
-            else if (_size != tensors[i].size(0))
-                throw std::runtime_error("Tensor size mismatch");
-            _data[i] = tensors[i].data_ptr<float>();
-            if (_data[i] != nullptr)
-                _strides[i] = _size == 0 ? 0 : tensors[i].numel() / _size;
-        }
-    }
-
-    TensorArray(TensorList tensors) {
-        if (tensors.size() == 0) {
-            _size = 0;
-            for (int i = 0; i < N; ++i) {
-                _data[i] = nullptr;
-                _strides[i] = 0;
-            }
-            return;
-        }
-        if (tensors.size() != N)
-            throw std::runtime_error("Number of tensors mismatch: Expect "
-                + std::to_string(N) + ", got " + std::to_string(tensors.size()));
-        bool saw_first = false;
-        for (int i = 0; i < N; ++i) {
-            if (tensors[i].has_value()) {
-                if (!saw_first) {
-                    DEVICE_GUARD(tensors[i].value());
-                    _size = tensors[i].value().size(0);
-                    saw_first = true;
-                } else if (_size != tensors[i].value().size(0)) {
+            _data[i] = tensors[i].data_ptr();
+            if (_data[i] != nullptr) {
+                if (tensors[i].size(0) != _size)
                     throw std::runtime_error("Tensor size mismatch");
-                }
-                CHECK_INPUT(tensors[i].value());
-                _data[i] = tensors[i].value().data_ptr<float>();
-                _strides[i] = _size == 0 ? 0 : tensors[i].value().numel() / _size;
+                _strides[i] = _size == 0 ? 0 : (int32_t)(tensors[i].numel() / _size);
             } else {
-                _data[i] = nullptr;
                 _strides[i] = 0;
             }
         }
-        if (!saw_first)
-            _size = 0;
     }
 
-    static TensorList empty_like(const TensorArray& other) {
-        TensorList res;
+    static std::vector<DeviceTensorFloatND> empty_pool(
+        int64_t size, std::array<int32_t, N> strides, const std::string& key_prefix
+    ) {
+        std::vector<DeviceTensorFloatND> res;
+        for (int i = 0; i < N; ++i) {
+            if (strides[i] <= 0) { res.push_back(DeviceTensorFloatND()); continue; }
+            std::string key = key_prefix + "." + std::to_string(i);
+            switch (strides[i]) {
+                case 1: { DeviceVector<float>  b; b.resize(key, size); res.push_back(DeviceTensorFloatND(b)); break; }
+                case 2: { DeviceVector<float2> b; b.resize(key, size); res.push_back(DeviceTensorFloatND(b)); break; }
+                case 3: { DeviceVector<float3> b; b.resize(key, size); res.push_back(DeviceTensorFloatND(b)); break; }
+                case 4: { DeviceVector<float4> b; b.resize(key, size); res.push_back(DeviceTensorFloatND(b)); break; }
+                default: { DeviceTensor2D<float> b; b.resize(key, size, (int64_t)strides[i]); res.push_back(DeviceTensorFloatND(b)); break; }
+            }
+        }
+        return res;
+    }
+
+    static std::vector<DeviceTensorFloatND> zeros_pool(
+        int64_t size, std::array<int32_t, N> strides, const std::string& key_prefix
+    ) {
+        auto res = empty_pool(size, strides, key_prefix);
+        for (auto& t : res)
+            if (t.data_ptr() != nullptr)
+                cudaMemset(t.data_ptr(), 0, (size_t)t.numel() * sizeof(float));
+        return res;
+    }
+
+    static std::vector<DeviceTensorFloatND> zeros_pool(
+        const std::vector<DeviceTensorFloatND>& tmpl_vec, const std::string& key_prefix
+    ) {
+        TensorArray<N> tmpl(tmpl_vec);
+        std::array<int32_t, N> strides_arr;
+        for (int i = 0; i < N; i++) strides_arr[i] = tmpl._strides[i];
+        return zeros_pool(tmpl._size, strides_arr, key_prefix);
+    }
+
+#if 0
+
+    static std::vector<DeviceTensorFloatND> empty_like(const TensorArray& other) {
+        std::vector<DeviceTensorFloatND> res;
         for (int i = 0; i < N; ++i)
             res.push_back(
                 at::empty({other._size, other._strides[i]}, kTensorOptionF32())
@@ -301,8 +292,8 @@ public:
         return res;
     }
 
-    static TensorList zeros_like(const TensorArray& other) {
-        TensorList res;
+    static std::vector<DeviceTensorFloatND> zeros_like(const TensorArray& other) {
+        std::vector<DeviceTensorFloatND> res;
         for (int i = 0; i < N; ++i) {
             res.push_back(
                 at::empty({other._size, other._strides[i]}, kTensorOptionF32())
@@ -312,8 +303,8 @@ public:
         return res;
     }
 
-    static TensorList empty(int64_t size, std::array<int32_t, N> strides) {
-        TensorList res;
+    static std::vector<DeviceTensorFloatND> empty(int64_t size, std::array<int32_t, N> strides) {
+        std::vector<DeviceTensorFloatND> res;
         for (int i = 0; i < N; ++i)
             res.push_back(
                 at::empty({size, strides[i]}, kTensorOptionF32())
@@ -321,8 +312,8 @@ public:
         return res;
     }
 
-    static TensorList zeros(int64_t size, std::array<int32_t, N> strides) {
-        TensorList res;
+    static std::vector<DeviceTensorFloatND> zeros(int64_t size, std::array<int32_t, N> strides) {
+        std::vector<DeviceTensorFloatND> res;
         for (int i = 0; i < N; ++i) {
             if (strides[i] < 0) {
                 res.push_back(std::nullopt);
@@ -338,3 +329,12 @@ public:
 #endif
 
 };
+
+
+namespace GlobalDeviceTensors {
+    inline RenderOutput::TensorTuple renders;
+    inline RenderOutput::TensorTuple renders2;
+    inline RenderOutput::TensorTuple distortions;
+    inline DeviceTensor3D<float> render_Ts;
+    inline DeviceTensor3D<int32_t> render_last_ids;
+}

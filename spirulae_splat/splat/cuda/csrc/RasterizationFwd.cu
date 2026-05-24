@@ -5,7 +5,9 @@
 #include "types.cuh"
 #include "common.cuh"
 
-#include <c10/cuda/CUDAStream.h>
+
+#include <Tensor.h>
+
 
 template <typename SplatPrimitive, bool output_distortion>
 void rasterize_to_pixels_fwd_kernel_wrapper(
@@ -34,42 +36,42 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
     // Gaussian parameters
     typename SplatPrimitive::WorldBuffer splats_w,
     typename SplatPrimitive::ScreenBuffer splats_s,
-    std::optional<at::Tensor> gaussian_ids,
+    std::optional<DeviceVector<int32_t>> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     // intersections
-    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids,  // [n_isects]
+    const DeviceTensor3D<int32_t> tile_offsets, // [I, tile_height, tile_width]
+    const DeviceVector<int32_t> flatten_ids,    // [n_isects]
     // outputs
     RenderOutput::Tensor renders,
-    at::Tensor transmittances,  // [..., image_height, image_width]
-    at::Tensor last_ids, // [..., image_height, image_width]
-    RenderOutput::Tensor *renders2,
-    RenderOutput::Tensor *distortions
+    DeviceTensor3D<float> transmittances,
+    DeviceTensor3D<int32_t> last_ids,
+    RenderOutput::Tensor renders2,
+    RenderOutput::Tensor distortions
 ) {
     uint32_t N = gaussian_ids.has_value() ? 0 : splats_w.size(); // number of gaussians
-    uint32_t I = transmittances.numel() / (image_height * image_width); // number of images
-    uint32_t tile_height = tile_offsets.size(-2);
-    uint32_t tile_width = tile_offsets.size(-1);
-    uint32_t n_isects = flatten_ids.size(0);
+    uint32_t I = transmittances.size<0>();  // number of images
+    uint32_t tile_height = tile_offsets.size<1>();
+    uint32_t tile_width = tile_offsets.size<2>();
+    uint32_t n_isects = flatten_ids.size();
 
     rasterize_to_pixels_fwd_kernel_wrapper<SplatPrimitive, output_distortion>(
-        (cudaStream_t)at::cuda::getCurrentCUDAStream(),
+        (cudaStream_t)0,
         I, N, n_isects,
-        gaussian_ids.has_value() ? (uint32_t*)gaussian_ids.value().data_ptr<int32_t>() : nullptr,
+        gaussian_ids.has_value() ? (uint32_t*)gaussian_ids.value().data_ptr() : nullptr,
         splats_w, splats_s,
         image_width,
         image_height,
         tile_width,
         tile_height,
-        tile_offsets.data_ptr<int32_t>(),
-        flatten_ids.data_ptr<int32_t>(),
+        tile_offsets.data_ptr(),
+        flatten_ids.data_ptr(),
         renders,
-        transmittances.data_ptr<float>(),
-        last_ids.data_ptr<int32_t>(),
-        output_distortion ? renders2->buffer() : RenderOutput::Buffer(),
-        output_distortion ? distortions->buffer() : RenderOutput::Buffer()
+        transmittances.data_ptr(),
+        last_ids.data_ptr(),
+        output_distortion ? renders2.buffer() : RenderOutput::Buffer(),
+        output_distortion ? distortions.buffer() : RenderOutput::Buffer()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
@@ -77,48 +79,38 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
 
 template <typename SplatPrimitive, bool output_distortion>
 inline std::tuple<
-    RenderOutput::TensorTuple,
-    at::Tensor,
-    at::Tensor,
-    std::optional<RenderOutput::TensorTuple>,
-    std::optional<RenderOutput::TensorTuple>
+    RenderOutput::TensorTuple,  // renders
+    DeviceTensor3D<float>,  // transmittances
+    DeviceTensor3D<int32_t>,  // last_ids
+    RenderOutput::TensorTuple,  // renders2, optional
+    RenderOutput::TensorTuple  // distortions, optional
 > rasterize_to_pixels_fwd_tensor(
     // Gaussian parameters
-    TensorList splats_w,
-    TensorList splats_s,
-    std::optional<at::Tensor> gaussian_ids,
+    std::vector<DeviceTensorFloatND> splats_w,
+    std::vector<DeviceTensorFloatND> splats_s,
+    std::optional<DeviceVector<int32_t>> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     // intersections
-    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids   // [n_isects]
+    const DeviceTensor3D<int32_t> tile_offsets, // [I, tile_height, tile_width]
+    const DeviceVector<int32_t> flatten_ids     // [n_isects]
 ) {
-    DEVICE_GUARD(tile_offsets);
-    CHECK_INPUT(tile_offsets);
-    CHECK_INPUT(flatten_ids);
-    
-    at::DimVector image_dims(tile_offsets.sizes().slice(0, tile_offsets.dim() - 2));
+    using namespace GlobalDeviceTensors;
 
-    at::DimVector renders_dims(image_dims);
-    renders_dims.append({image_height, image_width});
-    RenderOutput::Tensor renders =
-        RenderOutput::Tensor::empty<SplatPrimitive::pixelType>(renders_dims);
+    int64_t batch = tile_offsets.size<0>();
 
-    std::optional<RenderOutput::Tensor> renders2 = std::nullopt;
-    std::optional<RenderOutput::Tensor> distortions = std::nullopt;
+    RenderOutput::resize<SplatPrimitive::pixelType>(
+        renders, batch, image_height, image_width, "renders");
     if (output_distortion) {
-        renders2 = RenderOutput::Tensor::empty<SplatPrimitive::pixelType>(renders_dims);
-        distortions = RenderOutput::Tensor::empty<SplatPrimitive::pixelType>(renders_dims);
+        RenderOutput::resize<SplatPrimitive::pixelType>(
+            renders2, batch, image_height, image_width, "renders2");
+        RenderOutput::resize<SplatPrimitive::pixelType>(
+            distortions, batch, image_height, image_width, "distortions");
     }
 
-    at::DimVector transmittance_dims(image_dims);
-    transmittance_dims.append({image_height, image_width, 1});
-    at::Tensor transmittances = at::empty(transmittance_dims, kTensorOptionF32());
-
-    at::DimVector last_ids_dims(image_dims);
-    last_ids_dims.append({image_height, image_width});
-    at::Tensor last_ids = at::empty(last_ids_dims, kTensorOptionI32());
+    render_Ts.resize("render.Ts", batch, image_height, image_width);
+    render_last_ids.resize("render.last_ids", batch, image_height, image_width);
 
     launch_rasterize_to_pixels_fwd_kernel<SplatPrimitive, output_distortion>(
         splats_w, splats_s, gaussian_ids,
@@ -127,22 +119,15 @@ inline std::tuple<
         tile_offsets,
         flatten_ids,
         renders,
-        transmittances,
-        last_ids,
-        output_distortion ? &renders2.value() : nullptr,
-        output_distortion ? &distortions.value() : nullptr
+        render_Ts,
+        render_last_ids,
+        renders2,
+        distortions
     );
 
-    if (output_distortion)
-        return std::make_tuple(
-            renders.tuple(), transmittances, last_ids,
-            (std::optional<RenderOutput::TensorTuple>)renders2.value().tuple(),
-            (std::optional<RenderOutput::TensorTuple>)distortions.value().tuple()
-        );
     return std::make_tuple(
-        renders.tuple(), transmittances, last_ids,
-        (std::optional<RenderOutput::TensorTuple>)std::nullopt,
-        (std::optional<RenderOutput::TensorTuple>)std::nullopt
+        renders, render_Ts, render_last_ids,
+        renders2, distortions
     );
 }
 
@@ -155,22 +140,22 @@ inline std::tuple<
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<
-    RenderOutput::TensorTuple,
-    at::Tensor,
-    at::Tensor,
-    std::optional<RenderOutput::TensorTuple>,
-    std::optional<RenderOutput::TensorTuple>
+    RenderOutput::TensorTuple,  // renders
+    DeviceTensor3D<float>,  // transmittances
+    DeviceTensor3D<int32_t>,  // last_ids
+    RenderOutput::TensorTuple,  // renders2, optional
+    RenderOutput::TensorTuple  // distortions, optional
 > rasterize_to_pixels_3dgs_fwd(
     // Gaussian parameters
-    TensorList splats_w,
-    TensorList splats_s,
-    std::optional<at::Tensor> gaussian_ids,
+    std::vector<DeviceTensorFloatND> splats_w,
+    std::vector<DeviceTensorFloatND> splats_s,
+    std::optional<DeviceVector<int32_t>> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     // intersections
-    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids,   // [n_isects]
+    const DeviceTensor3D<int32_t> tile_offsets,
+    const DeviceVector<int32_t> flatten_ids,
     bool output_distortion
 ) {
     return (output_distortion ?
@@ -191,25 +176,24 @@ std::tuple<
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<
-    RenderOutput::TensorTuple,
-    at::Tensor,
-    at::Tensor,
-    std::optional<RenderOutput::TensorTuple>,
-    std::optional<RenderOutput::TensorTuple>
+    RenderOutput::TensorTuple,  // renders
+    DeviceTensor3D<float>,  // transmittances
+    DeviceTensor3D<int32_t>,  // last_ids
+    RenderOutput::TensorTuple,  // renders2, optional
+    RenderOutput::TensorTuple  // distortions, optional
 > rasterize_to_pixels_mip_fwd(
     // Gaussian parameters
-    TensorList splats_w,
-    TensorList splats_s,
-    std::optional<at::Tensor> gaussian_ids,
+    std::vector<DeviceTensorFloatND> splats_w,
+    std::vector<DeviceTensorFloatND> splats_s,
+    std::optional<DeviceVector<int32_t>> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     // intersections
-    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids,   // [n_isects]
+    const DeviceTensor3D<int32_t> tile_offsets,
+    const DeviceVector<int32_t> flatten_ids,
     bool output_distortion
 ) {
-    // return rasterize_to_pixels_fwd_tensor<MipSplatting>(
     return (output_distortion ?
         rasterize_to_pixels_fwd_tensor<Vanilla3DGS<0>, true> :
         rasterize_to_pixels_fwd_tensor<Vanilla3DGS<0>, false>

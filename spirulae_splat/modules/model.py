@@ -1428,7 +1428,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             self.camera_optimizer.get_metrics_dict(metrics_dict)
         return metrics_dict
 
-    def get_loss_grad(self, outputs, batch, batch_size: int, no_static_losses=False) -> Dict[str, torch.Tensor]:
+    def get_loss_grad(self, outputs, batch, batch_size: int) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict.
 
         Args:

@@ -2,7 +2,6 @@
 
 #include <gsplat/Utils.cuh>
 
-#include <c10/cuda/CUDAStream.h>
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;
 
@@ -45,45 +44,49 @@ template<typename SplatPrimitive, HessianDiagonalOutputMode hessian_diagonal_out
 inline void launch_projection_projection_fused_bwd_kernel(
     // fwd inputs
     int64_t N,
-    const TensorList &splats_world_tuple,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+    const std::vector<DeviceTensorFloatND> &splats_world_tuple,
+    TorchTensorView viewmats,  // [C, 4, 4]
+    TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const ssplat::CameraModelType camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
+    const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<at::Tensor> camera_ids,          // [nnz, 4]
-    const std::optional<at::Tensor> gaussian_ids,          // [nnz, 4]
-    const at::Tensor aabb,                       // [..., C, N, 2]
+    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
+    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
-    const TensorList v_splats_screen,
-    const TensorList vr_splats_screen,
-    const TensorList h_splats_screen,
+    const std::vector<DeviceTensorFloatND> v_splats_screen,
+    const std::vector<DeviceTensorFloatND> vr_splats_screen,
+    const std::vector<DeviceTensorFloatND> h_splats_screen,
     // returns
-    TensorList v_splats_world,
-    const std::optional<at::Tensor> v_viewmats,
-    const std::optional<std::variant<at::Tensor, TensorList>> vr_splats_world_tuple,
-    const std::optional<std::variant<at::Tensor, TensorList>> h_splats_world_tuple
+    std::vector<DeviceTensorFloatND> v_splats_world,
+    DeviceTensor2D<float>* v_viewmats,
+    DeviceVector<float3>* vr_world_pos_arg,
+    const std::vector<DeviceTensorFloatND>* vr_splats_world_arg,
+    DeviceVector<float3>* h_world_pos_arg,
+    const std::vector<DeviceTensorFloatND>* h_splats_world_arg
 ) {
     typename SplatPrimitive::WorldBuffer splats_world(splats_world_tuple);
-    uint32_t C = viewmats.size(-3); // number of cameras
+    uint32_t C = (uint32_t)std::get<2>(viewmats)[0]; // number of cameras
+    const float* viewmats_ptr = (const float*)std::get<0>(viewmats);
+    const float4* intrins_ptr = (const float4*)std::get<0>(intrins);
 
-    at::Tensor vr_world_pos;
-    at::Tensor h_world_pos;
-    if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
-        vr_world_pos = std::get<0>(vr_splats_world_tuple.value());
-        h_world_pos = std::get<0>(h_splats_world_tuple.value());
+    DeviceVector<float3> vr_world_pos;
+    DeviceVector<float3> h_world_pos;
+    if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
+        vr_world_pos = *vr_world_pos_arg;
+        h_world_pos = *h_world_pos_arg;
     }
     typename SplatPrimitive::WorldBuffer vr_splats_world;
     typename SplatPrimitive::WorldBuffer h_splats_world;
-    if (hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable) {
-        vr_splats_world = std::get<1>(vr_splats_world_tuple.value());
-        h_splats_world = std::get<1>(h_splats_world_tuple.value());
+    if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable) {
+        vr_splats_world = typename SplatPrimitive::WorldBuffer(*vr_splats_world_arg);
+        h_splats_world = typename SplatPrimitive::WorldBuffer(*h_splats_world_arg);
     }
 
     if (camera_ids.has_value() && gaussian_ids.has_value()) {  // packed
-        N = camera_ids.value().numel();
+        N = camera_ids.value().size();
         C = 1;
     }
 
@@ -91,21 +94,21 @@ inline void launch_projection_projection_fused_bwd_kernel(
         return;
 
     #define _LAUNCH_ARGS ( \
-            (cudaStream_t)at::cuda::getCurrentCUDAStream(), C, N, \
-            splats_world, viewmats.data_ptr<float>(), (float4*)intrins.data_ptr<float>(), dist_coeffs, \
+            (cudaStream_t)0, C, N, \
+            splats_world, viewmats_ptr, intrins_ptr, dist_coeffs, \
             image_width, image_height, \
-            camera_ids.has_value() ? camera_ids.value().data_ptr<int32_t>() : nullptr, \
-            gaussian_ids.has_value() ? gaussian_ids.value().data_ptr<int32_t>() : nullptr, \
-            (float4*)aabb.data_ptr<float>(), \
+            camera_ids.has_value() ? camera_ids.value().data_ptr() : nullptr, \
+            gaussian_ids.has_value() ? gaussian_ids.value().data_ptr() : nullptr, \
+            aabb.data_ptr(), \
             v_splats_screen, \
             hessian_diagonal_output_mode != HessianDiagonalOutputMode::None ? vr_splats_screen : typename SplatPrimitive::ScreenBuffer{}, \
             hessian_diagonal_output_mode != HessianDiagonalOutputMode::None ? h_splats_screen : typename SplatPrimitive::ScreenBuffer{}, \
             v_splats_world, \
-            hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position ? (float3*)vr_world_pos.data_ptr<float>() : nullptr, \
-            hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position ? (float3*)h_world_pos.data_ptr<float>() : nullptr, \
+            hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position ? vr_world_pos.data_ptr() : nullptr, \
+            hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position ? h_world_pos.data_ptr() : nullptr, \
             hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable ? vr_splats_world : typename SplatPrimitive::WorldBuffer{}, \
             hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable ? h_splats_world : typename SplatPrimitive::WorldBuffer{}, \
-            v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr \
+            v_viewmats != nullptr ? v_viewmats->data_ptr() : nullptr \
         )
 
     if (camera_model == ssplat::CameraModelType::PINHOLE)
@@ -130,26 +133,26 @@ inline void launch_projection_projection_fused_bwd_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-void projection_3dgs_backward_tensor(
+void projection_3dgs_backward(
     // fwd inputs
     const int64_t num_splats,
     const int max_sh_degree,
-    const TensorList &splats_world,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+    const std::vector<DeviceTensorFloatND> &splats_world,
+    TorchTensorView viewmats,  // [C, 4, 4]
+    TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
+    const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<at::Tensor> camera_ids,  // [nnz]
-    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-    const at::Tensor aabb,  // [..., C, N, 2]
+    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
+    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
-    const TensorList &v_splats_screen,
+    const std::vector<DeviceTensorFloatND> &v_splats_screen,
     // returns
-    const TensorList &v_splats_world,
-    const std::optional<at::Tensor> &v_viewmats
+    const std::vector<DeviceTensorFloatND> &v_splats_world,
+    DeviceTensor2D<float>* v_viewmats
 ) {
     int sh_degree = Vanilla3DGS<0>::WorldBuffer(splats_world).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
@@ -157,36 +160,36 @@ void projection_3dgs_backward_tensor(
         return launch_projection_projection_fused_bwd_kernel<Vanilla3DGS<n>, HessianDiagonalOutputMode::None>( \
             num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, {}, {}, \
-            v_splats_world, v_viewmats, std::nullopt, std::nullopt);
+            v_splats_world, v_viewmats, nullptr, nullptr, nullptr, nullptr);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
 }
 
 /*[AutoHeaderGeneratorExport]*/
-void projection_3dgs_backward_with_hessian_diagonal_tensor(
+void projection_3dgs_backward_with_hessian_diagonal(
     // fwd inputs
     const int64_t num_splats,
     const int max_sh_degree,
-    const TensorList &splats_world,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+    const std::vector<DeviceTensorFloatND> &splats_world,
+    TorchTensorView viewmats,  // [C, 4, 4]
+    TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
+    const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<at::Tensor> camera_ids,  // [nnz]
-    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-    const at::Tensor aabb,                       // [..., C, N, 2]
+    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
+    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
-    const TensorList &v_splats_screen,
-    const TensorList &vr_splats_screen,
-    const TensorList &h_splats_screen,
+    const std::vector<DeviceTensorFloatND> &v_splats_screen,
+    const std::vector<DeviceTensorFloatND> &vr_splats_screen,
+    const std::vector<DeviceTensorFloatND> &h_splats_screen,
     // returns
-    const TensorList &v_splats_world,
-    const std::optional<at::Tensor> &v_viewmats,
-    const TensorList &vr_splats_world,
-    const TensorList &h_splats_world
+    const std::vector<DeviceTensorFloatND> &v_splats_world,
+    DeviceTensor2D<float>* v_viewmats,
+    const std::vector<DeviceTensorFloatND> &vr_splats_world,
+    const std::vector<DeviceTensorFloatND> &h_splats_world
 ) {
     int sh_degree = Vanilla3DGS<0>::WorldBuffer(splats_world).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
@@ -194,36 +197,36 @@ void projection_3dgs_backward_with_hessian_diagonal_tensor(
         return launch_projection_projection_fused_bwd_kernel<Vanilla3DGS<n>, HessianDiagonalOutputMode::AllReasonable>( \
             num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen, \
-            v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
+            v_splats_world, v_viewmats, nullptr, &vr_splats_world, nullptr, &h_splats_world);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
 }
 
 /*[AutoHeaderGeneratorExport]*/
-void projection_3dgs_backward_with_position_hessian_diagonal_tensor(
+void projection_3dgs_backward_with_position_hessian_diagonal(
     // fwd inputs
     const int64_t num_splats,
     const int max_sh_degree,
-    const TensorList &splats_world,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+    const std::vector<DeviceTensorFloatND> &splats_world,
+    TorchTensorView viewmats,  // [C, 4, 4]
+    TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
+    const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<at::Tensor> camera_ids,  // [nnz]
-    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-    const at::Tensor aabb,                       // [..., C, N, 2]
+    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
+    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
-    const TensorList &v_splats_screen,
-    const TensorList &vr_splats_screen,
-    const TensorList &h_splats_screen,
+    const std::vector<DeviceTensorFloatND> &v_splats_screen,
+    const std::vector<DeviceTensorFloatND> &vr_splats_screen,
+    const std::vector<DeviceTensorFloatND> &h_splats_screen,
     // returns
-    const TensorList &v_splats_world,
-    const std::optional<at::Tensor> &v_viewmats,
-    const at::Tensor &vr_splats_world,
-    const at::Tensor &h_splats_world
+    const std::vector<DeviceTensorFloatND> &v_splats_world,
+    DeviceTensor2D<float>* v_viewmats,
+    DeviceVector<float3>* vr_world_pos,
+    DeviceVector<float3>* h_world_pos
 ) {
     int sh_degree = Vanilla3DGS<0>::WorldBuffer(splats_world).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
@@ -231,7 +234,7 @@ void projection_3dgs_backward_with_position_hessian_diagonal_tensor(
         return launch_projection_projection_fused_bwd_kernel<Vanilla3DGS<n>, HessianDiagonalOutputMode::Position>( \
             num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen, \
-            v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
+            v_splats_world, v_viewmats, vr_world_pos, nullptr, h_world_pos, nullptr);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
 }
@@ -243,26 +246,26 @@ void projection_3dgs_backward_with_position_hessian_diagonal_tensor(
 // ================
 
 /*[AutoHeaderGeneratorExport]*/
-void projection_mip_backward_tensor(
+void projection_mip_backward(
     // fwd inputs
     const int64_t num_splats,
     const int max_sh_degree,
-    const TensorList &splats_world,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+    const std::vector<DeviceTensorFloatND> &splats_world,
+    TorchTensorView viewmats,  // [C, 4, 4]
+    TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
+    const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<at::Tensor> camera_ids,  // [nnz]
-    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-    const at::Tensor aabb,                       // [..., C, N, 2]
+    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
+    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
-    const TensorList &v_splats_screen,
+    const std::vector<DeviceTensorFloatND> &v_splats_screen,
     // returns
-    const TensorList &v_splats_world,
-    const std::optional<at::Tensor> &v_viewmats
+    const std::vector<DeviceTensorFloatND> &v_splats_world,
+    DeviceTensor2D<float>* v_viewmats
 ) {
     int sh_degree = MipSplatting<0>::WorldBuffer(splats_world).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
@@ -270,36 +273,36 @@ void projection_mip_backward_tensor(
         return launch_projection_projection_fused_bwd_kernel<MipSplatting<n>, HessianDiagonalOutputMode::None>( \
             num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, {}, {}, \
-            v_splats_world, v_viewmats, std::nullopt, std::nullopt);
+            v_splats_world, v_viewmats, nullptr, nullptr, nullptr, nullptr);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
 }
 
 /*[AutoHeaderGeneratorExport]*/
-void projection_mip_backward_with_hessian_diagonal_tensor(
+void projection_mip_backward_with_hessian_diagonal(
     // fwd inputs
     const int64_t num_splats,
     const int max_sh_degree,
-    const TensorList &splats_world,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+    const std::vector<DeviceTensorFloatND> &splats_world,
+    TorchTensorView viewmats,  // [C, 4, 4]
+    TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
+    const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<at::Tensor> camera_ids,  // [nnz]
-    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-    const at::Tensor aabb,                       // [..., C, N, 2]
+    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
+    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
-    const TensorList &v_splats_screen,
-    const TensorList &vr_splats_screen,
-    const TensorList &h_splats_screen,
+    const std::vector<DeviceTensorFloatND> &v_splats_screen,
+    const std::vector<DeviceTensorFloatND> &vr_splats_screen,
+    const std::vector<DeviceTensorFloatND> &h_splats_screen,
     // returns
-    const TensorList &v_splats_world,
-    const std::optional<at::Tensor> &v_viewmats,
-    const TensorList &vr_splats_world,
-    const TensorList &h_splats_world
+    const std::vector<DeviceTensorFloatND> &v_splats_world,
+    DeviceTensor2D<float>* v_viewmats,
+    const std::vector<DeviceTensorFloatND> &vr_splats_world,
+    const std::vector<DeviceTensorFloatND> &h_splats_world
 ) {
     int sh_degree = MipSplatting<0>::WorldBuffer(splats_world).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
@@ -307,36 +310,36 @@ void projection_mip_backward_with_hessian_diagonal_tensor(
         return launch_projection_projection_fused_bwd_kernel<MipSplatting<n>, HessianDiagonalOutputMode::AllReasonable>( \
             num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen, \
-            v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
+            v_splats_world, v_viewmats, nullptr, &vr_splats_world, nullptr, &h_splats_world);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
 }
 
 /*[AutoHeaderGeneratorExport]*/
-void projection_mip_backward_with_position_hessian_diagonal_tensor(
+void projection_mip_backward_with_position_hessian_diagonal(
     // fwd inputs
     const int64_t num_splats,
     const int max_sh_degree,
-    const TensorList &splats_world,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+    const std::vector<DeviceTensorFloatND> &splats_world,
+    TorchTensorView viewmats,  // [C, 4, 4]
+    TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
+    const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<at::Tensor> camera_ids,  // [nnz]
-    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-    const at::Tensor aabb,                       // [..., C, N, 2]
+    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
+    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
-    const TensorList &v_splats_screen,
-    const TensorList &vr_splats_screen,
-    const TensorList &h_splats_screen,
+    const std::vector<DeviceTensorFloatND> &v_splats_screen,
+    const std::vector<DeviceTensorFloatND> &vr_splats_screen,
+    const std::vector<DeviceTensorFloatND> &h_splats_screen,
     // returns
-    const TensorList &v_splats_world,
-    const std::optional<at::Tensor> &v_viewmats,
-    const at::Tensor &vr_splats_world,
-    const at::Tensor &h_splats_world
+    const std::vector<DeviceTensorFloatND> &v_splats_world,
+    DeviceTensor2D<float>* v_viewmats,
+    DeviceVector<float3>* vr_world_pos,
+    DeviceVector<float3>* h_world_pos
 ) {
     int sh_degree = MipSplatting<0>::WorldBuffer(splats_world).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
@@ -344,7 +347,7 @@ void projection_mip_backward_with_position_hessian_diagonal_tensor(
         return launch_projection_projection_fused_bwd_kernel<MipSplatting<n>, HessianDiagonalOutputMode::Position>( \
             num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen, \
-            v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
+            v_splats_world, v_viewmats, vr_world_pos, nullptr, h_world_pos, nullptr);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
 }
@@ -356,26 +359,26 @@ void projection_mip_backward_with_position_hessian_diagonal_tensor(
 // ================
 
 /*[AutoHeaderGeneratorExport]*/
-void projection_3dgut_backward_tensor(
+void projection_3dgut_backward(
     // fwd inputs
     const int64_t num_splats,
     const int max_sh_degree,
-    const TensorList &splats_world,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+    const std::vector<DeviceTensorFloatND> &splats_world,
+    TorchTensorView viewmats,  // [C, 4, 4]
+    TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
+    const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<at::Tensor> camera_ids,  // [nnz]
-    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-    const at::Tensor aabb,                       // [..., C, N, 2]
+    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
+    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
-    const TensorList &v_splats_screen,
+    const std::vector<DeviceTensorFloatND> &v_splats_screen,
     // returns
-    const TensorList &v_splats_world,
-    const std::optional<at::Tensor> &v_viewmats
+    const std::vector<DeviceTensorFloatND> &v_splats_world,
+    DeviceTensor2D<float>* v_viewmats
 ) {
     int sh_degree = Vanilla3DGUT<0>::WorldBuffer(splats_world).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
@@ -383,36 +386,36 @@ void projection_3dgut_backward_tensor(
         return launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT<n>, HessianDiagonalOutputMode::None>( \
             num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, {}, {}, \
-            v_splats_world, v_viewmats, std::nullopt, std::nullopt);
+            v_splats_world, v_viewmats, nullptr, nullptr, nullptr, nullptr);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
 }
 
 /*[AutoHeaderGeneratorExport]*/
-void projection_3dgut_backward_with_hessian_diagonal_tensor(
+void projection_3dgut_backward_with_hessian_diagonal(
     // fwd inputs
     const int64_t num_splats,
     const int max_sh_degree,
-    const TensorList &splats_world,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+    const std::vector<DeviceTensorFloatND> &splats_world,
+    TorchTensorView viewmats,  // [C, 4, 4]
+    TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
+    const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<at::Tensor> camera_ids,  // [nnz]
-    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-    const at::Tensor aabb,                       // [..., C, N, 2]
+    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
+    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
-    const TensorList &v_splats_screen,
-    const TensorList &vr_splats_screen,
-    const TensorList &h_splats_screen,
+    const std::vector<DeviceTensorFloatND> &v_splats_screen,
+    const std::vector<DeviceTensorFloatND> &vr_splats_screen,
+    const std::vector<DeviceTensorFloatND> &h_splats_screen,
     // returns
-    const TensorList &v_splats_world,
-    const std::optional<at::Tensor> &v_viewmats,
-    const TensorList &vr_splats_world,
-    const TensorList &h_splats_world
+    const std::vector<DeviceTensorFloatND> &v_splats_world,
+    DeviceTensor2D<float>* v_viewmats,
+    const std::vector<DeviceTensorFloatND> &vr_splats_world,
+    const std::vector<DeviceTensorFloatND> &h_splats_world
 ) {
     int sh_degree = Vanilla3DGUT<0>::WorldBuffer(splats_world).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
@@ -420,36 +423,36 @@ void projection_3dgut_backward_with_hessian_diagonal_tensor(
         return launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT<n>, HessianDiagonalOutputMode::AllReasonable>( \
             num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen, \
-            v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
+            v_splats_world, v_viewmats, nullptr, &vr_splats_world, nullptr, &h_splats_world);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
 }
 
 /*[AutoHeaderGeneratorExport]*/
-void projection_3dgut_backward_with_position_hessian_diagonal_tensor(
+void projection_3dgut_backward_with_position_hessian_diagonal(
     // fwd inputs
     const int64_t num_splats,
     const int max_sh_degree,
-    const TensorList &splats_world,
-    const at::Tensor viewmats,  // [..., C, 4, 4]
-    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+    const std::vector<DeviceTensorFloatND> &splats_world,
+    TorchTensorView viewmats,  // [C, 4, 4]
+    TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
+    const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<at::Tensor> camera_ids,  // [nnz]
-    const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-    const at::Tensor aabb,                       // [..., C, N, 2]
+    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
+    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
-    const TensorList &v_splats_screen,
-    const TensorList &vr_splats_screen,
-    const TensorList &h_splats_screen,
+    const std::vector<DeviceTensorFloatND> &v_splats_screen,
+    const std::vector<DeviceTensorFloatND> &vr_splats_screen,
+    const std::vector<DeviceTensorFloatND> &h_splats_screen,
     // returns
-    const TensorList &v_splats_world,
-    const std::optional<at::Tensor> &v_viewmats,
-    const at::Tensor &vr_splats_world,
-    const at::Tensor &h_splats_world
+    const std::vector<DeviceTensorFloatND> &v_splats_world,
+    DeviceTensor2D<float>* v_viewmats,
+    DeviceVector<float3>* vr_world_pos,
+    DeviceVector<float3>* h_world_pos
 ) {
     int sh_degree = Vanilla3DGUT<0>::WorldBuffer(splats_world).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
@@ -457,7 +460,7 @@ void projection_3dgut_backward_with_position_hessian_diagonal_tensor(
         return launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT<n>, HessianDiagonalOutputMode::Position>( \
             num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, vr_splats_screen, h_splats_screen, \
-            v_splats_world, v_viewmats, vr_splats_world, h_splats_world);
+            v_splats_world, v_viewmats, vr_world_pos, nullptr, h_world_pos, nullptr);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
 }
@@ -469,19 +472,19 @@ void projection_3dgut_backward_with_position_hessian_diagonal_tensor(
 // // ================
 
 // /*[AutoHeaderGeneratorExport]*/
-// void projection_3dgut_sv_backward_tensor(
+// void projection_3dgut_sv_backward(
 //     // fwd inputs
 //     const SphericalVoronoi3DGUT_Default::World::TensorTuple &splats_world,
-//     const at::Tensor viewmats,  // [..., C, 4, 4]
-//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+//     TorchTensorView viewmats,  // [C, 4, 4]
+//     TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
 //     const uint32_t image_width,
 //     const uint32_t image_height,
 //     const std::string camera_model,
-//     const CameraDistortionCoeffsTensor dist_coeffs,
+//     const TorchTensorView dist_coeffs,
 //     // fwd outputs
-//     const std::optional<at::Tensor> camera_ids,  // [nnz]
-//     const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-//     const at::Tensor aabb,                       // [..., C, N, 2]
+//     const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
+//     const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+//     const DeviceTensor2D<float4> aabb,  // [C, N]
 //     // grad outputs
 //     const SphericalVoronoi3DGUT_Default::Screen::TensorTupleProj &v_splats_screen,
 //     // returns
@@ -493,7 +496,7 @@ void projection_3dgut_backward_with_position_hessian_diagonal_tensor(
 //         if (num_sv == n) launch_projection_projection_fused_bwd_kernel<SphericalVoronoi3DGUT<n>, HessianDiagonalOutputMode::None>( \
 //             splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
 //             camera_ids, gaussian_ids, aabb, v_splats_screen, nullptr, nullptr, \
-//             v_splats_world, v_viewmats, std::nullopt, std::nullopt);
+//             v_splats_world, v_viewmats, nullptr, nullptr, nullptr, nullptr);
 //     _CASE(2) _CASE(3) _CASE(4) _CASE(5) _CASE(6) _CASE(7) _CASE(8)
 //     #undef _CASE
 //     throw std::invalid_argument("Unsupported num_sv");
@@ -507,19 +510,19 @@ void projection_3dgut_backward_with_position_hessian_diagonal_tensor(
 
 
 // /*[AutoHeaderGeneratorExport]*/
-// void projection_opaque_triangle_backward_tensor(
+// void projection_opaque_triangle_backward(
 //     // fwd inputs
 //     const OpaqueTriangle::World::TensorTuple &splats_world,
-//     const at::Tensor viewmats,  // [..., C, 4, 4]
-//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+//     TorchTensorView viewmats,  // [C, 4, 4]
+//     TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
 //     const uint32_t image_width,
 //     const uint32_t image_height,
 //     const std::string camera_model,
-//     const CameraDistortionCoeffsTensor dist_coeffs,
+//     const TorchTensorView dist_coeffs,
 //     // fwd outputs
-//     const std::optional<at::Tensor> camera_ids,  // [nnz]
-//     const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-//     const at::Tensor aabb,                       // [..., C, N, 2]
+//     const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
+//     const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+//     const DeviceTensor2D<float4> aabb,  // [C, N]
 //     // grad outputs
 //     const OpaqueTriangle::Screen::TensorTupleProj &v_splats_screen,
 //     // returns
@@ -529,7 +532,7 @@ void projection_3dgut_backward_with_position_hessian_diagonal_tensor(
 //     launch_projection_projection_fused_bwd_kernel<OpaqueTriangle, HessianDiagonalOutputMode::None>(
 //         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
 //         camera_ids, gaussian_ids, aabb, v_splats_screen, nullptr, nullptr,
-//         v_splats_world, v_viewmats, std::nullopt, std::nullopt);
+//         v_splats_world, v_viewmats, nullptr, nullptr, nullptr, nullptr);
 // }
 
 
@@ -539,19 +542,19 @@ void projection_3dgut_backward_with_position_hessian_diagonal_tensor(
 
 
 // /*[AutoHeaderGeneratorExport]*/
-// void projection_voxel_backward_tensor(
+// void projection_voxel_backward(
 //     // fwd inputs
 //     const VoxelPrimitive::World::TensorTuple &splats_world,
-//     const at::Tensor viewmats,  // [..., C, 4, 4]
-//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+//     TorchTensorView viewmats,  // [C, 4, 4]
+//     TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
 //     const uint32_t image_width,
 //     const uint32_t image_height,
 //     const std::string camera_model,
-//     const CameraDistortionCoeffsTensor dist_coeffs,
+//     const TorchTensorView dist_coeffs,
 //     // fwd outputs
-//     const std::optional<at::Tensor> camera_ids,  // [nnz]
-//     const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-//     const at::Tensor aabb,                       // [..., C, N, 2]
+//     const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
+//     const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+//     const DeviceTensor2D<float4> aabb,  // [C, N]
 //     // grad outputs
 //     const VoxelPrimitive::Screen::TensorTupleProj &v_splats_screen,
 //     // returns
@@ -561,6 +564,6 @@ void projection_3dgut_backward_with_position_hessian_diagonal_tensor(
 //     launch_projection_projection_fused_bwd_kernel<VoxelPrimitive, HessianDiagonalOutputMode::None>(
 //         splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs,
 //         camera_ids, gaussian_ids, aabb, v_splats_screen, nullptr, nullptr,
-//         v_splats_world, v_viewmats, std::nullopt, std::nullopt);
+//         v_splats_world, v_viewmats, nullptr, nullptr, nullptr, nullptr);
 // }
 

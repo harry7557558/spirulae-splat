@@ -3,6 +3,25 @@ import os
 from pathlib import Path
 
 
+def strip_if_zero_blocks(code):
+    lines = code.split('\n')
+    result = []
+    depth = 0  # 0 = active, >0 = inside a #if 0 dead block
+    for line in lines:
+        stripped = line.strip()
+        if depth == 0:
+            if re.match(r'#\s*if\s+0\b', stripped):
+                depth = 1
+            else:
+                result.append(line)
+        else:
+            if re.match(r'#\s*if', stripped):
+                depth += 1
+            elif re.match(r'#\s*endif', stripped):
+                depth -= 1
+    return '\n'.join(result)
+
+
 def extract_function_declarations(code):
     # Regex to match non-inline function declarations
     function_decl_pattern = re.compile(r"""
@@ -38,7 +57,7 @@ def generate_header(filename):
     for source_filename in os.listdir(path):
         if source_filename.startswith(filename+"."):
             code += open(path+source_filename).read()
-    decls = extract_function_declarations(code)
+    decls = extract_function_declarations(strip_if_zero_blocks(code))
 
     splitter = "/* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */\n"
     include = open(path + f"{filename}.cuh").read()
@@ -58,7 +77,6 @@ def generate_headers():
 
     header_names = [
         'IntersectTile',
-        'SphericalHarmonics',
         'BackgroundSphericalHarmonics',
         'PerSplatLoss',
         'PerPixelLoss',

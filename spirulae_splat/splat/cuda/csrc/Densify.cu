@@ -17,6 +17,8 @@ namespace SlangProjectionUtils {
 
 #include <cub/cub.cuh>
 
+#if 0
+
 
 // ================
 // Quantile / Median Normalization
@@ -413,7 +415,7 @@ at::Tensor cov_scale_init_tensor(
     at::Tensor sizes,  // [C, 2], int32
     at::Tensor intrins,  // [C, 4]
     at::Tensor viewmats,  // [C, 4, 4]
-    CameraDistortionCoeffsTensor dist_coeffs // [C]
+    TorchTensorView dist_coeffs // [C]
 ) {
     DEVICE_GUARD(points);
     CHECK_INPUT(points);
@@ -1808,3 +1810,5 @@ at::Tensor canny_edge_filter_tensor(
 
     return img_out;
 }
+
+#endif

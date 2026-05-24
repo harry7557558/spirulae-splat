@@ -25,7 +25,9 @@ namespace cg = cooperative_groups;
 #endif
 #endif
 
-#include <ATen/ops/empty.h>
+
+#if 0
+
 
 
 inline constexpr float kSh0 = 0.28209479177387814f;
@@ -2242,3 +2244,5 @@ void fused_adamtr_rgb_sh_optim(
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
+
+#endif

@@ -13,12 +13,6 @@ namespace SlangProjectionUtils {
 
 #include <cooperative_groups.h>
 
-#include <ATen/ops/empty_like.h>
-#include <ATen/ops/empty.h>
-#include <ATen/ops/zeros.h>
-#include <ATen/ops/cumsum.h>
-
-#include <c10/cuda/CUDACachingAllocator.h>
 #include <cub/cub.cuh>
 
 
@@ -287,211 +281,176 @@ __global__ void intersect_offset_kernel(
     }
 }
 
-/*[AutoHeaderGeneratorExport]*/
 std::tuple<
-    at::Tensor,  // isect_ids, [n_isects], int64
-    at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor  // offsets, [I * n_tiles], int32
+    DeviceVector<int64_t>,    // isect_ids [n_isects]
+    DeviceVector<int32_t>,    // flatten_ids [n_isects]
+    DeviceTensor3D<int32_t>   // offsets [I, tile_h, tile_w]
 > do_intersect_tile_generic(
-    at::Tensor aabb,  // [..., N, 4], float32, xyxy in pixels
-    at::Tensor depths,  // [..., N], float32
-    std::optional<std::tuple<at::optional<at::Tensor>, at::Tensor, at::Tensor>> splats_proj,
+    DeviceTensorFloatND aabb,     // [*N, 4] float32
+    DeviceTensorFloatND depths,   // [*N] float32
+    DeviceTensorFloatND* proj_xy,    // null for AABB mode
+    DeviceTensorFloatND* proj_conic, // non-null enables ellipse mode
+    DeviceTensorFloatND* proj_opac,  // null for AABB mode
     const uint32_t I,
-    at::Tensor intrins,
+    TorchTensorView intrins,      // [I, 4]
     const uint32_t image_width,
     const uint32_t image_height,
-    std::optional<at::Tensor> image_ids
+    DeviceVector<int32_t>* image_ids  // null for non-packed
 ) {
-    DEVICE_GUARD(aabb);
-    CHECK_INPUT(aabb);
-    CHECK_INPUT(depths);
-    CHECK_INPUT(intrins);
-    if (image_ids.has_value())
-        CHECK_INPUT(image_ids.value());
-    if (splats_proj.has_value()) {
-        if (std::get<0>(splats_proj.value()).has_value())
-            CHECK_INPUT(std::get<0>(splats_proj.value()).value());
-        CHECK_INPUT(std::get<1>(splats_proj.value()));
-        CHECK_INPUT(std::get<2>(splats_proj.value()));
-    }
-
-    if (aabb.size(-1) != 4)
-        AT_ERROR("aabb must be of shape [..., N, 4]");
-    bool packed = image_ids.has_value();
-    const uint32_t N = aabb.size(-2);
-    if (depths.numel() != (packed ? N : I * N))
-        AT_ERROR("depths must be of shape [..., N]");
+    bool packed = image_ids != nullptr;
+    const uint32_t total_count = (uint32_t)aabb.numel();
+    const uint32_t N = packed ? total_count : total_count / I;
 
     uint32_t tile_width = _CEIL_DIV(image_width, TILE_SIZE);
     uint32_t tile_height = _CEIL_DIV(image_height, TILE_SIZE);
     uint32_t n_tiles = tile_width * tile_height * I;
 
-    /* For each splat, count tiles intersected by its AABB */
-    at::Tensor tiles_per_splat = at::empty(
-        {packed ? N : I*N},
-        at::TensorOptions().device(aabb.device()).dtype(at::kLong)
-    );
-    (splats_proj.has_value() ?
+    /* Count tiles intersected per splat */
+    DeviceVector<int64_t> tiles_per_splat;
+    tiles_per_splat.resize("isect.tiles_per_splat", total_count);
+    (proj_conic != nullptr ?
         intersect_tile_kernel<true, true> :
         intersect_tile_kernel<true, false>
     )<<<_LAUNCH_ARGS_1D(I*N, 256)>>>(
-        packed ? 1 : I,
-        N,
+        packed ? 1 : I, N,
         nullptr,  // image_ids
         nullptr,  // intrins
-        reinterpret_cast<const float4 *>(aabb.data_ptr<float>()),
-        depths.data_ptr<float>(),
-        splats_proj.has_value() && std::get<0>(splats_proj.value()).has_value() ?
-            (float2*)std::get<0>(splats_proj.value()).value().data_ptr<float>() : (float2*)nullptr,
-        splats_proj.has_value() ? (float3*)std::get<1>(splats_proj.value()).data_ptr<float>() : (float3*)nullptr,
-        splats_proj.has_value() ? std::get<2>(splats_proj.value()).data_ptr<float>() : (float*)nullptr,
+        reinterpret_cast<const float4*>(aabb.data_ptr()),
+        depths.data_ptr(),
+        proj_xy     != nullptr ? (float2*)proj_xy->data_ptr()    : nullptr,
+        proj_conic  != nullptr ? (float3*)proj_conic->data_ptr() : nullptr,
+        proj_opac   != nullptr ? proj_opac->data_ptr()           : nullptr,
         nullptr,  // cum_tiles_per_splat
-        tile_width,
-        tile_height,
-        tiles_per_splat.data_ptr<int64_t>(),
-        nullptr,  // isect_ids
-        nullptr  // flatten_ids
+        tile_width, tile_height,
+        tiles_per_splat.data_ptr(),
+        nullptr, nullptr
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    /* Prefix sum the count to get offsets */
-    at::Tensor cum_tiles_per_splat = at::cumsum(tiles_per_splat, /*dim=*/-1);
+    /* Inclusive prefix sum → cumulative tile counts */
+    DeviceVector<int64_t> cum_tiles_per_splat;
+    cum_tiles_per_splat.resize("isect.cum_tiles", total_count);
+    CUB_WRAPPER(cub::DeviceScan::InclusiveSum,
+        tiles_per_splat.data_ptr(), cum_tiles_per_splat.data_ptr(), (int)total_count);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    /* For each splat, write out keys (intersected tile ID in higher bits, and depth in lower bits) at the correct offsets */
-    int64_t n_isects = cum_tiles_per_splat.numel() > 0 ?
-        cum_tiles_per_splat[-1].item<int64_t>() : 0;
-    at::Tensor isect_ids = at::empty(
-        {n_isects},
-        at::TensorOptions().device(aabb.device()).dtype(at::kLong)
-    );
-    at::Tensor flatten_ids = at::empty(
-        {n_isects},
-        at::TensorOptions().device(aabb.device()).dtype(at::kInt)
-    );
-    at::Tensor offsets = at::empty(
-        {I, tile_height, tile_width},
-        at::TensorOptions().device(aabb.device()).dtype(at::kInt)
-    );
-    if (n_isects == 0)
-        return std::make_tuple(
-            isect_ids,
-            flatten_ids,
-            offsets.zero_()
-        );
-    (splats_proj.has_value() ?
+    /* Read total intersection count from the last element */
+    int64_t n_isects = 0;
+    if (total_count > 0)
+        cudaMemcpy(&n_isects,
+                   cum_tiles_per_splat.data_ptr() + (total_count - 1),
+                   sizeof(int64_t), cudaMemcpyDeviceToHost);
+
+    DeviceTensor3D<int32_t> offsets_out;
+    offsets_out.resize("isect.offsets", I, tile_height, tile_width);
+
+    if (n_isects == 0) {
+        offsets_out.zero();
+        return std::make_tuple(DeviceVector<int64_t>{}, DeviceVector<int32_t>{}, offsets_out);
+    }
+
+    /* Write isect keys into double-buffer pair */
+    DeviceVector<int64_t> isect_ids_a, isect_ids_b;
+    isect_ids_a.resize("isect.ids_a", n_isects);
+    isect_ids_b.resize("isect.ids_b", n_isects);
+    DeviceVector<int32_t> flatten_ids_a, flatten_ids_b;
+    flatten_ids_a.resize("isect.flat_a", n_isects);
+    flatten_ids_b.resize("isect.flat_b", n_isects);
+
+    (proj_conic != nullptr ?
         intersect_tile_kernel<false, true> :
         intersect_tile_kernel<false, false>
     )<<<_LAUNCH_ARGS_1D(I*N, 256)>>>(
-        packed ? 1 : I,
-        N,
-        image_ids.has_value() ? image_ids.value().data_ptr<int32_t>() : nullptr,
-        (float4*)intrins.data_ptr<float>(),
-        reinterpret_cast<const float4 *>(aabb.data_ptr<float>()),
-        depths.data_ptr<float>(),
-        splats_proj.has_value() && std::get<0>(splats_proj.value()).has_value() ?
-            (float2*)std::get<0>(splats_proj.value()).value().data_ptr<float>() : (float2*)nullptr,
-        splats_proj.has_value() ? (float3*)std::get<1>(splats_proj.value()).data_ptr<float>() : (float3*)nullptr,
-        splats_proj.has_value() ? std::get<2>(splats_proj.value()).data_ptr<float>() : (float*)nullptr,
-        reinterpret_cast<const int64_t *>(cum_tiles_per_splat.data_ptr<int64_t>()),
-        tile_width,
-        tile_height,
-        nullptr,  // tiles_per_splat
-        reinterpret_cast<int64_t *>(isect_ids.data_ptr<int64_t>()),
-        reinterpret_cast<int32_t *>(flatten_ids.data_ptr<int32_t>())
+        packed ? 1 : I, N,
+        image_ids != nullptr ? image_ids->data_ptr() : nullptr,
+        (const float4*)std::get<0>(intrins),
+        reinterpret_cast<const float4*>(aabb.data_ptr()),
+        depths.data_ptr(),
+        proj_xy     != nullptr ? (float2*)proj_xy->data_ptr()    : nullptr,
+        proj_conic  != nullptr ? (float3*)proj_conic->data_ptr() : nullptr,
+        proj_opac   != nullptr ? proj_opac->data_ptr()           : nullptr,
+        cum_tiles_per_splat.data_ptr(),
+        tile_width, tile_height,
+        nullptr,
+        isect_ids_a.data_ptr(),
+        flatten_ids_a.data_ptr()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    /* Sort tiles by keys */
-    at::Tensor isect_ids_sorted = at::empty_like(isect_ids);
-    at::Tensor flatten_ids_sorted = at::empty_like(flatten_ids);
-    cub::DoubleBuffer<int64_t> d_keys(
-        isect_ids.data_ptr<int64_t>(), isect_ids_sorted.data_ptr<int64_t>()
-    );
-    cub::DoubleBuffer<int32_t> d_values(
-        flatten_ids.data_ptr<int32_t>(), flatten_ids_sorted.data_ptr<int32_t>()
-    );
+    /* Sort by (tile_id << 32 | depth) key */
+    cub::DoubleBuffer<int64_t> d_keys(isect_ids_a.data_ptr(), isect_ids_b.data_ptr());
+    cub::DoubleBuffer<int32_t> d_values(flatten_ids_a.data_ptr(), flatten_ids_b.data_ptr());
     int tile_n_bits = 0;
-    while ((1U << tile_n_bits) <= n_tiles)
-        ++tile_n_bits;
-    CUB_WRAPPER(
-        cub::DeviceRadixSort::SortPairs,
-        d_keys,
-        d_values,
-        n_isects,
-        0,
-        32 + tile_n_bits,
-        at::cuda::getCurrentCUDAStream()
-    );
+    while ((1U << tile_n_bits) <= n_tiles) ++tile_n_bits;
+    CUB_WRAPPER(cub::DeviceRadixSort::SortPairs,
+        d_keys, d_values, n_isects, 0, 32 + tile_n_bits);
     CHECK_DEVICE_ERROR(cudaGetLastError());
-    switch (d_keys.selector) {
-    case 0: // sorted items are stored in isect_ids
-        break;
-    case 1: // sorted items are stored in isect_ids_sorted
-        isect_ids = isect_ids_sorted;
-        break;
-    }
-    switch (d_values.selector) {
-    case 0: // sorted items are stored in flatten_ids
-        break;
-    case 1: // sorted items are stored in flatten_ids_sorted
-        flatten_ids = flatten_ids_sorted;
-        break;
-    }
 
-    /* Compute offsets for each tile */
+    /* Pick whichever buffer CUB left the sorted result in */
+    DeviceVector<int64_t> isect_ids_out  = d_keys.selector   ? isect_ids_b  : isect_ids_a;
+    DeviceVector<int32_t> flatten_ids_out = d_values.selector ? flatten_ids_b : flatten_ids_a;
+
+    /* Compute per-tile start offsets */
     intersect_offset_kernel<<<_LAUNCH_ARGS_1D(n_isects, 256)>>>(
         n_isects,
-        isect_ids.data_ptr<int64_t>(),
+        isect_ids_out.data_ptr(),
         I, tile_width, tile_height,
-        offsets.data_ptr<int32_t>()
+        offsets_out.data_ptr()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    return std::make_tuple(
-        isect_ids,
-        flatten_ids,
-        offsets
-    );
+    return std::make_tuple(isect_ids_out, flatten_ids_out, offsets_out);
 }
 
 
 std::tuple<
-    at::Tensor,  // isect_ids, [n_isects], int64
-    at::Tensor,  // flatten_ids, [n_isects], int32
-    at::Tensor  // offsets, [I * n_tiles], int32
+    DeviceVector<int64_t>,    // isect_ids [n_isects_out]
+    DeviceVector<int32_t>,    // flatten_ids [n_isects_out]
+    DeviceTensor3D<int32_t>   // offsets [I, tile_h, tile_w]
 > do_intersect_tile_post(
-    at::Tensor isect_ids,
-    at::Tensor flatten_ids,
-    at::Tensor offsets,
-    at::Tensor mask,
+    DeviceVector<int64_t> isect_ids,   // [n_isects]
+    DeviceVector<int32_t> flatten_ids, // [n_isects]
+    DeviceVector<uint8_t> mask,        // [n_isects], non-zero = keep
     const uint32_t I,
     const uint32_t image_width,
     const uint32_t image_height
 ) {
     uint32_t tile_width = _CEIL_DIV(image_width, TILE_SIZE);
     uint32_t tile_height = _CEIL_DIV(image_height, TILE_SIZE);
+    int64_t n_in = isect_ids.size();
 
-    /* Remove not masked tiles */
-    isect_ids = isect_ids.masked_select(mask);
-    flatten_ids = flatten_ids.masked_select(mask);
-    uint32_t n_isects = isect_ids.numel();
+    /* Allocate output at max possible size; CUB writes actual count to d_num_selected */
+    DeviceVector<int64_t> isect_ids_out;
+    isect_ids_out.resize("isect_post.ids", n_in);
+    DeviceVector<int32_t> flatten_ids_out;
+    flatten_ids_out.resize("isect_post.flat", n_in);
+    DeviceVector<int32_t> d_num_selected;
+    d_num_selected.resize("isect_post.num_sel", 1);
 
-    /* Update offsets for each tile */
-    offsets = at::empty(
-        {I, tile_height, tile_width},
-        at::TensorOptions().device(mask.device()).dtype(at::kInt)
-    );
+    CUB_WRAPPER(cub::DeviceSelect::Flagged,
+        isect_ids.data_ptr(), mask.data_ptr(),
+        isect_ids_out.data_ptr(), d_num_selected.data_ptr(), (int)n_in);
+    CUB_WRAPPER(cub::DeviceSelect::Flagged,
+        flatten_ids.data_ptr(), mask.data_ptr(),
+        flatten_ids_out.data_ptr(), d_num_selected.data_ptr(), (int)n_in);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    /* Read back actual count and shrink logical sizes (no realloc — pool only grows) */
+    int32_t n_isects = 0;
+    cudaMemcpy(&n_isects, d_num_selected.data_ptr(), sizeof(int32_t), cudaMemcpyDeviceToHost);
+    isect_ids_out.resize("isect_post.ids", n_isects);
+    flatten_ids_out.resize("isect_post.flat", n_isects);
+
+    /* Recompute per-tile start offsets */
+    DeviceTensor3D<int32_t> offsets_out;
+    offsets_out.resize("isect_post.offsets", I, tile_height, tile_width);
     intersect_offset_kernel<<<_LAUNCH_ARGS_1D(n_isects, 256)>>>(
         n_isects,
-        isect_ids.data_ptr<int64_t>(),
+        isect_ids_out.data_ptr(),
         I, tile_width, tile_height,
-        offsets.data_ptr<int32_t>()
+        offsets_out.data_ptr()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    return std::make_tuple(
-        isect_ids,
-        flatten_ids,
-        offsets
-    );
+    return std::make_tuple(isect_ids_out, flatten_ids_out, offsets_out);
 }

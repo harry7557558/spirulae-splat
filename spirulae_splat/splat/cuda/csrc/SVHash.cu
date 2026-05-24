@@ -1,5 +1,6 @@
 #include "SVHash.cuh"
 
+#if 0
 
 // hash functions - https://github.com/aappleby/smhasher/wiki/MurmurHash3
 
@@ -557,3 +558,5 @@ svhashSplitVoxels(
         newVertInterpWeights
     );
 }
+
+#endif

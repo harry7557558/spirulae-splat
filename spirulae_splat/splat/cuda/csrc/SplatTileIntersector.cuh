@@ -2,7 +2,7 @@
 
 #include <cuda_runtime.h>
 
-#include <ATen/Tensor.h>
+#include <Tensor.h>
 
 #include <gsplat/Common.h>
 
@@ -15,6 +15,8 @@
 
 
 
+#if 0
+
 template<ssplat::CameraModelType camera_model>
 struct TileBuffers {
     long size;
@@ -26,21 +28,18 @@ struct TileBuffers {
     TileBuffers(
         unsigned width,
         unsigned height,
-        const at::Tensor& viewmats,  // [B, 4, 4]
-        const at::Tensor& intrins,  // [B, 4], fx, fy, cx, cy
-        const CameraDistortionCoeffsTensor& dist_coeffs
+        TorchTensorView viewmats,  // [B, 4, 4]
+        TorchTensorView intrins,  // [B, 4], fx, fy, cx, cy
+        const TorchTensorView& dist_coeffs
     ) : width((float)width), height((float)height), dist_coeffs(dist_coeffs) {
-        DEVICE_GUARD(viewmats);
-        CHECK_INPUT(viewmats);
-        CHECK_INPUT(intrins);
         // TODO: check dimension and shape
 
         static_assert(sizeof(glm::mat4) == 16*sizeof(float));
         static_assert(sizeof(glm::mat3) == 9*sizeof(float));
 
-        this->size = viewmats.size(0);
-        this->viewmats = (glm::mat4*)viewmats.data_ptr<float>();
-        this->intrins = (float4*)intrins.data_ptr<float>();
+        this->size = std::get<2>(viewmats)[0];
+        this->viewmats = (const glm::mat4*)std::get<0>(viewmats);
+        this->intrins = (const float4*)std::get<0>(intrins);
     }
 };
 
@@ -68,13 +67,13 @@ struct SplatTileIntersector {
 
 std::tuple<at::Tensor, at::Tensor>
 intersect_splat_tile_3dgs(
-    TensorList splats_tuple,
+    std::vector<DeviceTensorFloatND> splats_tuple,
     unsigned width,
     unsigned height,
-    const at::Tensor& viewmats,
-    const at::Tensor& intrins,
+    TorchTensorView viewmats,
+    TorchTensorView intrins,
     const std::string& camera_model,
-    const CameraDistortionCoeffsTensor& dist_coeffs,
+    const TorchTensorView& dist_coeffs,
     float rel_scale
 );
 
@@ -86,7 +85,7 @@ intersect_splat_tile_3dgs(
 //     const at::Tensor& viewmats,
 //     const at::Tensor& intrins,
 //     const std::string& camera_model,
-//     const CameraDistortionCoeffsTensor& dist_coeffs,
+//     const TorchTensorView& dist_coeffs,
 //     float rel_scale
 // );
 
@@ -98,6 +97,8 @@ intersect_splat_tile_3dgs(
 //     const at::Tensor& viewmats,
 //     const at::Tensor& intrins,
 //     const std::string& camera_model,
-//     const CameraDistortionCoeffsTensor& dist_coeffs,
+//     const TorchTensorView& dist_coeffs,
 //     float rel_scale
 // );
+
+#endif

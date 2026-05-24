@@ -13,9 +13,8 @@ namespace SlangPerPixelLosses {
 
 #include "common.cuh"
 
-#include <ATen/ops/empty.h>
-#include <ATen/ops/empty_like.h>
-#include <ATen/ops/zeros.h>
+
+#if 0
 
 
 template<typename T, uint size>
@@ -337,7 +336,7 @@ __global__ void per_pixel_losses_reduce_backward_kernel(
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<at::Tensor, at::Tensor, std::optional<at::Tensor>>
-compute_per_pixel_losses_forward_tensor(
+compute_per_pixel_losses_forward(
     std::optional<at::Tensor> render_rgb,
     std::optional<at::Tensor> ref_rgb,
     std::optional<at::Tensor> render_depth,
@@ -464,7 +463,7 @@ std::tuple<  // returns gradients
     std::optional<at::Tensor>, // rgb_dist
     std::optional<at::Tensor>, // depth_dist
     std::optional<at::Tensor> // normal_dist
-> compute_per_pixel_losses_backward_tensor(
+> compute_per_pixel_losses_backward(
     std::optional<at::Tensor> render_rgb,
     std::optional<at::Tensor> ref_rgb,
     std::optional<at::Tensor> render_depth,
@@ -854,14 +853,14 @@ std::tuple<
 
     for (int scale = 0; scale < num_loss_scales; ++scale) {
 
-        auto [losses, raw_losses, loss_map] = compute_per_pixel_losses_forward_tensor(
+        auto [losses, raw_losses, loss_map] = compute_per_pixel_losses_forward(
             render_rgb_scales[scale], ref_rgb_scales[scale], render_depth_scales[scale], ref_depth_scales[scale],
             render_normal_scales[scale], depth_normal_scales[scale], ref_normal_scales[scale], render_Ts_scales[scale],
             rgb_dist_scales[scale], depth_dist_scales[scale], normal_dist_scales[scale],
             ref_alpha_scales[scale], mask_scales[scale], depth_mask_scales[scale], normal_mask_scales[scale], alpha_mask_scales[scale],
             loss_weights_0, num_train_images, camera_indices, return_loss_map
         );
-        auto grad_tuple = compute_per_pixel_losses_backward_tensor(
+        auto grad_tuple = compute_per_pixel_losses_backward(
             render_rgb_scales[scale], ref_rgb_scales[scale], render_depth_scales[scale], ref_depth_scales[scale],
             render_normal_scales[scale], depth_normal_scales[scale], ref_normal_scales[scale], render_Ts_scales[scale],
             rgb_dist_scales[scale], depth_dist_scales[scale], normal_dist_scales[scale],
@@ -951,3 +950,5 @@ std::tuple<
         std::make_tuple(psnr_val, ssim_val)
     );
 }
+
+#endif

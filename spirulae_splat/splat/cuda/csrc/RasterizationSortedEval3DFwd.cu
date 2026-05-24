@@ -272,7 +272,7 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_fwd_kernel(
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const ssplat::CameraModelType camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
+    const TorchTensorView dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> max_blending_masks,  // [..., C, image_width, image_height]
     // image size
@@ -343,12 +343,12 @@ inline std::tuple<
     std::optional<at::Tensor>
 > rasterize_to_pixels_sorted_eval3d_fwd_tensor(
     // Gaussian parameters
-    TensorList splats_tuple,
+    std::vector<DeviceTensorFloatND> splats_tuple,
     std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const ssplat::CameraModelType camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
+    const TorchTensorView dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     const std::optional<at::Tensor> max_blending_masks,  // [..., C, image_width, image_height]
     // image size
@@ -419,38 +419,38 @@ inline std::tuple<
 }
 
 
-// /*[AutoHeaderGeneratorExport]*/
-// std::tuple<
-//     RenderOutput::TensorTuple,
-//     at::Tensor,
-//     at::Tensor,
-//     std::optional<RenderOutput::TensorTuple>,
-//     std::optional<RenderOutput::TensorTuple>,
-//     std::optional<at::Tensor>
-// > rasterize_to_pixels_opaque_triangle_sorted_fwd(
-//     // Gaussian parameters
-//     OpaqueTriangle::Screen::TensorTuple splats_tuple,
-//     std::optional<at::Tensor> gaussian_ids,
-//     const at::Tensor viewmats,  // [..., C, 4, 4]
-//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-//     const std::string camera_model,
-//     const CameraDistortionCoeffsTensor dist_coeffs,
-//     const std::optional<at::Tensor> backgrounds, // [..., channels]
-//     const std::optional<at::Tensor> max_blending_masks,       // [..., image_height, image_width]
-//     // image size
-//     const uint32_t image_width,
-//     const uint32_t image_height,
-//     // intersections
-//     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-//     const at::Tensor flatten_ids   // [n_isects]
-// ) {
-//     return rasterize_to_pixels_sorted_eval3d_fwd_tensor<OpaqueTriangle, true, true>(
-//         splats_tuple, gaussian_ids,
-//         viewmats, intrins, cmt(camera_model), dist_coeffs,
-//         backgrounds, max_blending_masks,
-//         image_width, image_height,
-//         tile_offsets, flatten_ids
-//     );
-// }
+/*[AutoHeaderGeneratorExport]*/
+std::tuple<
+    RenderOutput::TensorTuple,
+    at::Tensor,
+    at::Tensor,
+    std::optional<RenderOutput::TensorTuple>,
+    std::optional<RenderOutput::TensorTuple>,
+    std::optional<at::Tensor>
+> rasterize_to_pixels_opaque_triangle_sorted_fwd(
+    // Gaussian parameters
+    OpaqueTriangle::Screen::TensorTuple splats_tuple,
+    std::optional<at::Tensor> gaussian_ids,
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+    const std::string camera_model,
+    const TorchTensorView dist_coeffs,
+    const std::optional<at::Tensor> backgrounds, // [..., channels]
+    const std::optional<at::Tensor> max_blending_masks,       // [..., image_height, image_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // intersections
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids   // [n_isects]
+) {
+    return rasterize_to_pixels_sorted_eval3d_fwd_tensor<OpaqueTriangle, true, true>(
+        splats_tuple, gaussian_ids,
+        viewmats, intrins, cmt(camera_model), dist_coeffs,
+        backgrounds, max_blending_masks,
+        image_width, image_height,
+        tile_offsets, flatten_ids
+    );
+}
 
 #endif

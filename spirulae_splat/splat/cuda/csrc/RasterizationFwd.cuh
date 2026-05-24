@@ -4,7 +4,7 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
-#include <ATen/Tensor.h>
+#include <Tensor.h>
 
 #include "Primitive3DGS.cuh"
 // #include "Primitive3DGUT.cuh"
@@ -20,42 +20,42 @@
 
 
 std::tuple<
-    RenderOutput::TensorTuple,
-    at::Tensor,
-    at::Tensor,
-    std::optional<RenderOutput::TensorTuple>,
-    std::optional<RenderOutput::TensorTuple>
+    RenderOutput::TensorTuple,  // renders
+    DeviceTensor3D<float>,  // transmittances
+    DeviceTensor3D<int32_t>,  // last_ids
+    RenderOutput::TensorTuple,  // renders2, optional
+    RenderOutput::TensorTuple  // distortions, optional
 > rasterize_to_pixels_3dgs_fwd(
     // Gaussian parameters
-    TensorList splats_w,
-    TensorList splats_s,
-    std::optional<at::Tensor> gaussian_ids,
+    std::vector<DeviceTensorFloatND> splats_w,
+    std::vector<DeviceTensorFloatND> splats_s,
+    std::optional<DeviceVector<int32_t>> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     // intersections
-    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids,   // [n_isects]
+    const DeviceTensor3D<int32_t> tile_offsets,
+    const DeviceVector<int32_t> flatten_ids,
     bool output_distortion
 );
 
 
 std::tuple<
-    RenderOutput::TensorTuple,
-    at::Tensor,
-    at::Tensor,
-    std::optional<RenderOutput::TensorTuple>,
-    std::optional<RenderOutput::TensorTuple>
+    RenderOutput::TensorTuple,  // renders
+    DeviceTensor3D<float>,  // transmittances
+    DeviceTensor3D<int32_t>,  // last_ids
+    RenderOutput::TensorTuple,  // renders2, optional
+    RenderOutput::TensorTuple  // distortions, optional
 > rasterize_to_pixels_mip_fwd(
     // Gaussian parameters
-    TensorList splats_w,
-    TensorList splats_s,
-    std::optional<at::Tensor> gaussian_ids,
+    std::vector<DeviceTensorFloatND> splats_w,
+    std::vector<DeviceTensorFloatND> splats_s,
+    std::optional<DeviceVector<int32_t>> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     // intersections
-    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids,   // [n_isects]
+    const DeviceTensor3D<int32_t> tile_offsets,
+    const DeviceVector<int32_t> flatten_ids,
     bool output_distortion
 );

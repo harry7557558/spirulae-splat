@@ -1,5 +1,7 @@
 #include "common.cuh"
 
+#if 0
+
 #define WARP_SIZE 32
 
 template<uint32_t nx, uint32_t ny, uint32_t nz>
@@ -100,3 +102,5 @@ at::Tensor dct3d_type1_ortho_tensor(at::Tensor input) {
 
     return output;
 }
+
+#endif

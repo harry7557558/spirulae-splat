@@ -6,7 +6,6 @@
 #include <thrust/device_ptr.h>
 #include <vector>
 
-#include <c10/cuda/CUDAGuard.h>
 
 #include "generated/slang.cuh"
 namespace SlangProjectionUtils {
@@ -16,6 +15,8 @@ namespace SlangProjectionUtils {
 
 #include <gsplat/Utils.cuh>
 
+
+#if 0
 
 // #define DEBUG
 
@@ -1530,13 +1531,13 @@ int main(int argc, char** argv) {
 
 std::tuple<at::Tensor, at::Tensor>
 intersect_splat_tile_3dgs(
-    TensorList splats_tuple,
+    std::vector<DeviceTensorFloatND> splats_tuple,
     unsigned width,
     unsigned height,
-    const at::Tensor& viewmats,
-    const at::Tensor& intrins,
+    TorchTensorView viewmats,
+    TorchTensorView intrins,
     const std::string& camera_model,
-    const CameraDistortionCoeffsTensor& dist_coeffs,
+    const TorchTensorView& dist_coeffs,
     float rel_scale
 ) {
     Vanilla3DGS<0>::WorldBuffer splats_tensor(splats_tuple);
@@ -1563,60 +1564,4 @@ intersect_splat_tile_3dgs(
         throw std::runtime_error("Unsupported camera model");
 }
 
-// std::tuple<at::Tensor, at::Tensor>
-// intersect_splat_tile_opaque_triangle(
-//     OpaqueTriangle::World::TensorTuple splats_tuple,
-//     unsigned width,
-//     unsigned height,
-//     const at::Tensor& viewmats,
-//     const at::Tensor& intrins,
-//     const std::string& camera_model,
-//     const CameraDistortionCoeffsTensor& dist_coeffs,
-//     float rel_scale
-// ) {
-//     OpaqueTriangle::WorldBuffer splats_tensor(splats_tuple);
-
-//     if (cmt(camera_model) == ssplat::CameraModelType::PINHOLE) {
-//         TileBuffers<ssplat::CameraModelType::PINHOLE> tile_buffers =
-//             {width, height, viewmats, intrins, dist_coeffs};
-//         return SplatTileIntersector<OpaqueTriangle, ssplat::CameraModelType::PINHOLE>
-//             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
-//     }
-//     else if (cmt(camera_model) == ssplat::CameraModelType::FISHEYE) {
-//         TileBuffers<ssplat::CameraModelType::FISHEYE> tile_buffers =
-//             {width, height, viewmats, intrins, dist_coeffs};
-//         return SplatTileIntersector<OpaqueTriangle, ssplat::CameraModelType::FISHEYE>
-//             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
-//     }  // TODO: equisolid
-//     else
-//         throw std::runtime_error("Unsupported camera model");
-// }
-
-// std::tuple<at::Tensor, at::Tensor>
-// intersect_splat_tile_voxel(
-//     VoxelPrimitive::World::TensorTuple splats_tuple,
-//     unsigned width,
-//     unsigned height,
-//     const at::Tensor& viewmats,
-//     const at::Tensor& intrins,
-//     const std::string& camera_model,
-//     const CameraDistortionCoeffsTensor& dist_coeffs,
-//     float rel_scale
-// ) {
-//     VoxelPrimitive::WorldBuffer splats_tensor(splats_tuple);
-
-//     if (cmt(camera_model) == ssplat::CameraModelType::PINHOLE) {
-//         TileBuffers<ssplat::CameraModelType::PINHOLE> tile_buffers =
-//             {width, height, viewmats, intrins, dist_coeffs};
-//         return SplatTileIntersector<VoxelPrimitive, ssplat::CameraModelType::PINHOLE>
-//             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
-//     }
-//     else if (cmt(camera_model) == ssplat::CameraModelType::FISHEYE) {
-//         TileBuffers<ssplat::CameraModelType::FISHEYE> tile_buffers =
-//             {width, height, viewmats, intrins, dist_coeffs};
-//         return SplatTileIntersector<VoxelPrimitive, ssplat::CameraModelType::FISHEYE>
-//             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
-//     }  // TODO: equisolid
-//     else
-//         throw std::runtime_error("Unsupported camera model");
-// }
+#endif

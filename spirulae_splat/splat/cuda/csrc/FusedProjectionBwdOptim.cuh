@@ -3,7 +3,7 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
-#include <ATen/Tensor.h>
+#include <Tensor.h>
 
 #include <gsplat/Common.h>
 
@@ -21,177 +21,35 @@
 
 
 
-// void projection_3dgs_backward_tensor(
-//     // fwd inputs
-//     const TensorList &splats_world,
-//     const at::Tensor viewmats,  // [..., C, 4, 4]
-//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-//     const uint32_t image_width,
-//     const uint32_t image_height,
-//     const std::string camera_model,
-//     const CameraDistortionCoeffsTensor dist_coeffs,
-//     // fwd outputs
-//     const std::optional<at::Tensor> camera_ids,  // [nnz]
-//     const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-//     const at::Tensor aabb,  // [..., C, N, 2]
-//     // grad outputs
-//     const TensorList &v_splats_screen,
-//     // returns
-//     const TensorList &v_splats_world,
-//     const std::optional<at::Tensor> &v_viewmats
-// );
-
-
-// void projection_3dgs_backward_with_hessian_diagonal_tensor(
-//     // fwd inputs
-//     const TensorList &splats_world,
-//     const at::Tensor viewmats,  // [..., C, 4, 4]
-//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-//     const uint32_t image_width,
-//     const uint32_t image_height,
-//     const std::string camera_model,
-//     const CameraDistortionCoeffsTensor dist_coeffs,
-//     // fwd outputs
-//     const std::optional<at::Tensor> camera_ids,  // [nnz]
-//     const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-//     const at::Tensor aabb,                       // [..., C, N, 2]
-//     // grad outputs
-//     const TensorList &v_splats_screen,
-//     const TensorList &vr_splats_screen,
-//     const TensorList &h_splats_screen,
-//     // returns
-//     const TensorList &v_splats_world,
-//     const std::optional<at::Tensor> &v_viewmats,
-//     const TensorList &vr_splats_world,
-//     const TensorList &h_splats_world
-// );
-
-
-// void projection_3dgs_backward_with_position_hessian_diagonal_tensor(
-//     // fwd inputs
-//     const TensorList &splats_world,
-//     const at::Tensor viewmats,  // [..., C, 4, 4]
-//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-//     const uint32_t image_width,
-//     const uint32_t image_height,
-//     const std::string camera_model,
-//     const CameraDistortionCoeffsTensor dist_coeffs,
-//     // fwd outputs
-//     const std::optional<at::Tensor> camera_ids,  // [nnz]
-//     const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-//     const at::Tensor aabb,                       // [..., C, N, 2]
-//     // grad outputs
-//     const TensorList &v_splats_screen,
-//     const TensorList &vr_splats_screen,
-//     const TensorList &h_splats_screen,
-//     // returns
-//     const TensorList &v_splats_world,
-//     const std::optional<at::Tensor> &v_viewmats,
-//     const at::Tensor &vr_splats_world,
-//     const at::Tensor &h_splats_world
-// );
-
-
-// void projection_mip_backward_tensor(
-//     // fwd inputs
-//     const TensorList &splats_world,
-//     const at::Tensor viewmats,  // [..., C, 4, 4]
-//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-//     const uint32_t image_width,
-//     const uint32_t image_height,
-//     const std::string camera_model,
-//     const CameraDistortionCoeffsTensor dist_coeffs,
-//     // fwd outputs
-//     const std::optional<at::Tensor> camera_ids,  // [nnz]
-//     const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-//     const at::Tensor aabb,                       // [..., C, N, 2]
-//     // grad outputs
-//     const TensorList &v_splats_screen,
-//     // returns
-//     const TensorList &v_splats_world,
-//     const std::optional<at::Tensor> &v_viewmats
-// );
-
-
-// void projection_mip_backward_with_hessian_diagonal_tensor(
-//     // fwd inputs
-//     const TensorList &splats_world,
-//     const at::Tensor viewmats,  // [..., C, 4, 4]
-//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-//     const uint32_t image_width,
-//     const uint32_t image_height,
-//     const std::string camera_model,
-//     const CameraDistortionCoeffsTensor dist_coeffs,
-//     // fwd outputs
-//     const std::optional<at::Tensor> camera_ids,  // [nnz]
-//     const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-//     const at::Tensor aabb,                       // [..., C, N, 2]
-//     // grad outputs
-//     const TensorList &v_splats_screen,
-//     const TensorList &vr_splats_screen,
-//     const TensorList &h_splats_screen,
-//     // returns
-//     const TensorList &v_splats_world,
-//     const std::optional<at::Tensor> &v_viewmats,
-//     const TensorList &vr_splats_world,
-//     const TensorList &h_splats_world
-// );
-
-
-// void projection_mip_backward_with_position_hessian_diagonal_tensor(
-//     // fwd inputs
-//     const TensorList &splats_world,
-//     const at::Tensor viewmats,  // [..., C, 4, 4]
-//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-//     const uint32_t image_width,
-//     const uint32_t image_height,
-//     const std::string camera_model,
-//     const CameraDistortionCoeffsTensor dist_coeffs,
-//     // fwd outputs
-//     const std::optional<at::Tensor> camera_ids,  // [nnz]
-//     const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-//     const at::Tensor aabb,                       // [..., C, N, 2]
-//     // grad outputs
-//     const TensorList &v_splats_screen,
-//     const TensorList &vr_splats_screen,
-//     const TensorList &h_splats_screen,
-//     // returns
-//     const TensorList &v_splats_world,
-//     const std::optional<at::Tensor> &v_viewmats,
-//     const at::Tensor &vr_splats_world,
-//     const at::Tensor &h_splats_world
-// );
-
-
-void fused_projection_bwd_optimizer_3dgut_tensor(
+void fused_projection_bwd_optimizer_3dgut(
     // fwd inputs
     const int64_t num_splats,
-    TensorList splats_world,
-    const at::Tensor viewmats,
-    const at::Tensor intrins,
+    std::vector<DeviceTensorFloatND> splats_world,
+    TorchTensorView viewmats,
+    TorchTensorView intrins,
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
+    const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<at::Tensor> camera_ids,
-    const std::optional<at::Tensor> gaussian_ids,
-    const at::Tensor aabb,
+    const std::optional<DeviceVector<int32_t>> camera_ids,
+    const std::optional<DeviceVector<int32_t>> gaussian_ids,
+    DeviceTensorFloatND aabb,
     // grad outputs
-    const TensorList v_splats_world,
-    const std::optional<TensorList> vr_splats_world,
-    const std::optional<TensorList> h_splats_world,
-    const TensorList v_splats_screen,
-    const std::optional<TensorList> vr_splats_screen,
-    const std::optional<TensorList> h_splats_screen,
+    const std::vector<DeviceTensorFloatND> v_splats_world,
+    const std::optional<std::vector<DeviceTensorFloatND>> vr_splats_world,
+    const std::optional<std::vector<DeviceTensorFloatND>> h_splats_world,
+    const std::vector<DeviceTensorFloatND> v_splats_screen,
+    const std::optional<std::vector<DeviceTensorFloatND>> vr_splats_screen,
+    const std::optional<std::vector<DeviceTensorFloatND>> h_splats_screen,
     // optimizer states
-    const TensorList g1_splats_world,
-    const TensorList g2_splats_world,
-    const std::optional<at::Tensor> g1_features_sh,
-    const std::optional<at::Tensor> g2_features_sh,
-    const std::optional<at::Tensor> sh_quant_bounds,
+    const std::vector<DeviceTensorFloatND> g1_splats_world,
+    const std::vector<DeviceTensorFloatND> g2_splats_world,
+    const std::optional<TorchTensorView> g1_features_sh,
+    const std::optional<TorchTensorView> g2_features_sh,
+    const std::optional<TorchTensorView> sh_quant_bounds,
     // optimizer params
-    const at::Tensor radii,
+    DeviceVector<float> radii,
     const float lr_means,
     const float lr_quats,
     const float lr_scales,
@@ -207,68 +65,5 @@ void fused_projection_bwd_optimizer_3dgut_tensor(
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
     bool use_scale_agnostic_mean,
-    std::variant<int32_t, at::Tensor> step
+    std::variant<int32_t, TorchTensorView> step
 );
-
-
-// void projection_3dgut_sv_backward_tensor(
-//     // fwd inputs
-//     const SphericalVoronoi3DGUT_Default::World::TensorTuple &splats_world,
-//     const at::Tensor viewmats,  // [..., C, 4, 4]
-//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-//     const uint32_t image_width,
-//     const uint32_t image_height,
-//     const std::string camera_model,
-//     const CameraDistortionCoeffsTensor dist_coeffs,
-//     // fwd outputs
-//     const std::optional<at::Tensor> camera_ids,  // [nnz]
-//     const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-//     const at::Tensor aabb,                       // [..., C, N, 2]
-//     // grad outputs
-//     const SphericalVoronoi3DGUT_Default::Screen::TensorTupleProj &v_splats_screen,
-//     // returns
-//     const SphericalVoronoi3DGUT_Default::World::TensorTuple &v_splats_world,
-//     const std::optional<at::Tensor> &v_viewmats
-// );
-
-
-// void projection_opaque_triangle_backward_tensor(
-//     // fwd inputs
-//     const OpaqueTriangle::World::TensorTuple &splats_world,
-//     const at::Tensor viewmats,  // [..., C, 4, 4]
-//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-//     const uint32_t image_width,
-//     const uint32_t image_height,
-//     const std::string camera_model,
-//     const CameraDistortionCoeffsTensor dist_coeffs,
-//     // fwd outputs
-//     const std::optional<at::Tensor> camera_ids,  // [nnz]
-//     const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-//     const at::Tensor aabb,                       // [..., C, N, 2]
-//     // grad outputs
-//     const OpaqueTriangle::Screen::TensorTupleProj &v_splats_screen,
-//     // returns
-//     const OpaqueTriangle::World::TensorTuple &v_splats_world,
-//     const std::optional<at::Tensor> &v_viewmats
-// );
-
-
-// void projection_voxel_backward_tensor(
-//     // fwd inputs
-//     const VoxelPrimitive::World::TensorTuple &splats_world,
-//     const at::Tensor viewmats,  // [..., C, 4, 4]
-//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-//     const uint32_t image_width,
-//     const uint32_t image_height,
-//     const std::string camera_model,
-//     const CameraDistortionCoeffsTensor dist_coeffs,
-//     // fwd outputs
-//     const std::optional<at::Tensor> camera_ids,  // [nnz]
-//     const std::optional<at::Tensor> gaussian_ids,  // [nnz]
-//     const at::Tensor aabb,                       // [..., C, N, 2]
-//     // grad outputs
-//     const VoxelPrimitive::Screen::TensorTupleProj &v_splats_screen,
-//     // returns
-//     const VoxelPrimitive::World::TensorTuple &v_splats_world,
-//     const std::optional<at::Tensor> &v_viewmats
-// );

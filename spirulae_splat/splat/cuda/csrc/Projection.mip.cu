@@ -6,6 +6,7 @@
 #include "Primitive3DGS.cuh"
 
 
+#if 0
 
 
 /*[AutoHeaderGeneratorExport]*/
@@ -15,11 +16,11 @@ std::tuple<
     at::Tensor,  // aabb
     at::Tensor,  // sorting_depths
     at::Tensor,  // radii
-    TensorList  // out splats
-> projection_mip_hetero_forward_tensor(
+    std::vector<DeviceTensorFloatND>  // out splats
+> projection_mip_hetero_forward(
     // inputs
     const int max_sh_degree,
-    const TensorList in_splats,
+    const std::vector<DeviceTensorFloatND> in_splats,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
@@ -27,7 +28,7 @@ std::tuple<
     const uint32_t tile_width,
     const uint32_t tile_height,
     const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
+    const TorchTensorView dist_coeffs,
     const at::Tensor intersection_count_map,  // [C+1]
     const at::Tensor intersection_splat_id  // [nnz]
 ) {
@@ -40,7 +41,7 @@ std::tuple<
     at::Tensor aabb = at::empty({nnz, 4}, kTensorOptionF32());
     at::Tensor sorting_depths = at::empty({nnz}, kTensorOptionF32());
     at::Tensor radii = at::empty({nnz}, kTensorOptionF32());
-    TensorList splats_proj = MipSplatting<0>::ScreenBuffer::empty(nnz);
+    std::vector<DeviceTensorFloatND> splats_proj = MipSplatting<0>::ScreenBuffer::empty(nnz);
 
     #define _LAUNCH_ARGS \
         <<<_LAUNCH_ARGS_1D(nnz, block)>>>( \
@@ -87,11 +88,11 @@ std::tuple<
 
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<
-    TensorList,  // v_splats
+    std::vector<DeviceTensorFloatND>,  // v_splats
     at::Tensor  // v_viewmats
-> projection_mip_hetero_backward_tensor(
+> projection_mip_hetero_backward(
     // fwd inputs
-    const TensorList splats_world,
+    const std::vector<DeviceTensorFloatND> splats_world,
     const at::Tensor viewmats, // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
@@ -99,20 +100,20 @@ std::tuple<
     const uint32_t tile_width,
     const uint32_t tile_height,
     const std::string camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
+    const TorchTensorView dist_coeffs,
     // fwd outputs
     const at::Tensor camera_ids, // [nnz]
     const at::Tensor gaussian_ids, // [nnz]
     const at::Tensor aabb,  // [nnz, 4]
     // grad outputs
-    const TensorList v_splats_proj,
+    const std::vector<DeviceTensorFloatND> v_splats_proj,
     const bool viewmats_requires_grad
 ) {
     uint32_t N = MipSplatting<0>::WorldBuffer(splats_world).size();  // number of splats
     uint32_t C = viewmats.size(-3);  // number of cameras
     uint32_t nnz = camera_ids.size(0);  // number of intersections
 
-    TensorList v_splats_world = MipSplatting<0>::WorldBuffer::zeros_like(splats_world);
+    std::vector<DeviceTensorFloatND> v_splats_world = MipSplatting<0>::WorldBuffer::zeros_like(splats_world);
 
     at::Tensor v_viewmats;
     if (viewmats_requires_grad)
@@ -156,3 +157,5 @@ std::tuple<
 
     return std::make_tuple(v_splats_world, v_viewmats);
 }
+
+#endif

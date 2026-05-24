@@ -319,7 +319,7 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_bwd_kernel(
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const ssplat::CameraModelType camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
+    const TorchTensorView dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., 3]
     // image size
     const uint32_t image_width,
@@ -391,16 +391,16 @@ inline void launch_rasterize_to_pixels_sorted_eval3d_bwd_kernel(
 
 template<typename SplatPrimitive, bool output_distortion>
 inline std::tuple<
-    TensorList,
+    std::vector<DeviceTensorFloatND>,
     std::optional<at::Tensor>  // v_viewmats
 > rasterize_to_pixels_sorted_eval3d_bwd_tensor(
     // Gaussian parameters
-    TensorList splats_tuple,
+    std::vector<DeviceTensorFloatND> splats_tuple,
     std::optional<at::Tensor> gaussian_ids,
     const at::Tensor viewmats,  // [..., C, 4, 4]
     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
     const ssplat::CameraModelType camera_model,
-    const CameraDistortionCoeffsTensor dist_coeffs,
+    const TorchTensorView dist_coeffs,
     const std::optional<at::Tensor> backgrounds, // [..., channels]
     // image size
     const uint32_t image_width,
@@ -461,43 +461,43 @@ inline std::tuple<
     return std::make_tuple(v_splats, v_viewmats);
 }
 
-// /*[AutoHeaderGeneratorExport]*/
-// std::tuple<
-//     OpaqueTriangle::Screen::TensorTuple,
-//     std::optional<at::Tensor>  // v_viewmats
-// > rasterize_to_pixels_opaque_triangle_sorted_bwd(
-//     // Gaussian parameters
-//     OpaqueTriangle::Screen::TensorTuple splats_tuple,
-//     std::optional<at::Tensor> gaussian_ids,
-//     const at::Tensor viewmats,  // [..., C, 4, 4]
-//     const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
-//     const std::string camera_model,
-//     const CameraDistortionCoeffsTensor dist_coeffs,
-//     const std::optional<at::Tensor> backgrounds, // [..., channels]
-//     // image size
-//     const uint32_t image_width,
-//     const uint32_t image_height,
-//     // intersections
-//     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-//     const at::Tensor flatten_ids,  // [n_isects]
-//     // forward outputs
-//     const at::Tensor render_Ts, // [..., image_height, image_width, 1]
-//     const at::Tensor last_ids,      // [..., image_height, image_width]
-//     std::optional<RenderOutput::TensorTuple> render_outputs,
-//     std::optional<RenderOutput::TensorTuple> render2_outputs,
-//     // gradients of outputs
-//     RenderOutput::TensorTuple v_render_outputs,
-//     const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
-//     std::optional<RenderOutput::TensorTuple> v_distortion_outputs
-// ) {
-//     return rasterize_to_pixels_sorted_eval3d_bwd_tensor<OpaqueTriangle, true>(
-//         splats_tuple, gaussian_ids,
-//         viewmats, intrins, cmt(camera_model), dist_coeffs,
-//         backgrounds,
-//         image_width, image_height, tile_offsets, flatten_ids,
-//         render_Ts, last_ids, render_outputs, render2_outputs,
-//         v_render_outputs, v_render_Ts, v_distortion_outputs
-//     );
-// }
+/*[AutoHeaderGeneratorExport]*/
+std::tuple<
+    OpaqueTriangle::Screen::TensorTuple,
+    std::optional<at::Tensor>  // v_viewmats
+> rasterize_to_pixels_opaque_triangle_sorted_bwd(
+    // Gaussian parameters
+    OpaqueTriangle::Screen::TensorTuple splats_tuple,
+    std::optional<at::Tensor> gaussian_ids,
+    const at::Tensor viewmats,  // [..., C, 4, 4]
+    const at::Tensor intrins,  // [..., C, 4], fx, fy, cx, cy
+    const std::string camera_model,
+    const TorchTensorView dist_coeffs,
+    const std::optional<at::Tensor> backgrounds, // [..., channels]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // intersections
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    // forward outputs
+    const at::Tensor render_Ts, // [..., image_height, image_width, 1]
+    const at::Tensor last_ids,      // [..., image_height, image_width]
+    std::optional<RenderOutput::TensorTuple> render_outputs,
+    std::optional<RenderOutput::TensorTuple> render2_outputs,
+    // gradients of outputs
+    RenderOutput::TensorTuple v_render_outputs,
+    const at::Tensor v_render_Ts, // [..., image_height, image_width, 1]
+    std::optional<RenderOutput::TensorTuple> v_distortion_outputs
+) {
+    return rasterize_to_pixels_sorted_eval3d_bwd_tensor<OpaqueTriangle, true>(
+        splats_tuple, gaussian_ids,
+        viewmats, intrins, cmt(camera_model), dist_coeffs,
+        backgrounds,
+        image_width, image_height, tile_offsets, flatten_ids,
+        render_Ts, last_ids, render_outputs, render2_outputs,
+        v_render_outputs, v_render_Ts, v_distortion_outputs
+    );
+}
 
 #endif

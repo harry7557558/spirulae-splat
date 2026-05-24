@@ -3,7 +3,6 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
-#include <ATen/Tensor.h>
 
 #include <gsplat/Common.h>
 

@@ -20,6 +20,9 @@ typedef unsigned int uint;
 #include "generated/slang.cuh"
 #endif
 
+using std::max;
+using std::min;
+
 
 
 #define _DEF_GENERIC_VEC_FUNCTIONAL_UNARY_OP(dtype, o) \

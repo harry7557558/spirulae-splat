@@ -1,8 +1,7 @@
 #pragma once
 
-#ifndef NO_TORCH
-#include <torch/types.h>
-#endif
+#include <Tensor.h>
+
 
 #include <gsplat/Common.h>
 
@@ -23,10 +22,6 @@ struct FixedArray
 
 
 
-#ifndef NO_TORCH
-typedef std::optional<at::Tensor> CameraDistortionCoeffsTensor;
-#endif
-
 #ifdef __CUDACC__
 // k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2
 typedef FixedArray<float, 10> CameraDistortionCoeffs;
@@ -35,9 +30,13 @@ typedef FixedArray<float, 10> CameraDistortionCoeffs;
 struct CameraDistortionCoeffsBuffer {
     float* __restrict__ coeffs;
 
-    #ifndef NO_TORCH
-    CameraDistortionCoeffsBuffer(const CameraDistortionCoeffsTensor &tensors);
-    #endif
+    CameraDistortionCoeffsBuffer(const TorchTensorView &tensor) {
+        if (std::get<2>(tensor).size() != 2 || std::get<2>(tensor)[1] != 10)
+            throw std::runtime_error("dist coeffs must have shape (C, 10)");
+        if (std::get<1>(tensor) != sizeof(float))
+            throw std::runtime_error("dist coeffs must be float");
+        coeffs = (float*)std::get<0>(tensor);
+    }
 
     #ifdef __CUDACC__
     __device__ CameraDistortionCoeffs load(long idx) const {
