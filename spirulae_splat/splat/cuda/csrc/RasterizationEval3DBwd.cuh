@@ -43,7 +43,7 @@ std::tuple<
     // forward outputs
     const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
-    std::optional<RenderOutput::TensorTuple> render_outputs,
+    RenderOutput::TensorTuple render_outputs,
     std::optional<RenderOutput::TensorTuple> render2_outputs,
     std::optional<DeviceTensor3D<float>> loss_map,  // [..., image_height, image_width, 1]
     std::optional<DeviceTensor3D<float>> accum_weight_map,  // [I, H, W]
@@ -82,7 +82,7 @@ std::tuple<
     // forward outputs
     const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
-    std::optional<RenderOutput::TensorTuple> render_outputs,
+    RenderOutput::TensorTuple render_outputs,
     std::optional<RenderOutput::TensorTuple> render2_outputs,
     std::optional<DeviceTensor3D<float>> loss_map,  // [..., image_height, image_width, 1]
     std::optional<DeviceTensor3D<float>> accum_weight_map,  // [I, H, W]

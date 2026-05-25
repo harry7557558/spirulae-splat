@@ -16,14 +16,14 @@ enum class RenderOutputType {
 };
 
 class RenderOutput {
-    static constexpr bool _has_depth(RenderOutputType type)
-        { return type == RenderOutputType::RGB_D || type == RenderOutputType::RGB_DN; }
-    static constexpr bool _has_normal(RenderOutputType type)
-        { return type == RenderOutputType::RGB_DN; }
     static constexpr float _default_depth = 0.0f;
     static constexpr float3 _default_normal = {0.0f, 0.0f, 0.0f};
 
 public:
+    static constexpr bool has_depth(RenderOutputType type)
+        { return type == RenderOutputType::RGB_D || type == RenderOutputType::RGB_DN; }
+    static constexpr bool has_normal(RenderOutputType type)
+        { return type == RenderOutputType::RGB_DN; }
 
     float3 rgb;
     float depth;
@@ -44,9 +44,9 @@ public:
         const std::string& key
     ) {
         std::get<0>(tensors).resize(key + ".rgb", batch, height, width);
-        if (_has_depth(type))
+        if (has_depth(type))
             std::get<1>(tensors).resize(key + ".depth", batch, height, width);
-        if (_has_normal(type))
+        if (has_normal(type))
             std::get<2>(tensors).resize(key + ".normal", batch, height, width);
     }
 
@@ -103,8 +103,8 @@ public:
     __device__ RenderOutput load(long idx) const {
         return {
             rgbs[idx],
-            _has_depth(type) ? depths[idx] : _default_depth,
-            _has_normal(type) ? normals[idx] : _default_normal,
+            has_depth(type) ? depths[idx] : _default_depth,
+            has_normal(type) ? normals[idx] : _default_normal,
         };
     }
 
@@ -163,8 +163,8 @@ public:
     template<RenderOutputType type>
     __device__ void saveParamsToBuffer(Buffer &buffer, long idx) {
         buffer.rgbs[idx] = rgb;
-        if (_has_depth(type)) buffer.depths[idx] = depth;
-        if (_has_normal(type)) buffer.normals[idx] = normal;
+        if (has_depth(type)) buffer.depths[idx] = depth;
+        if (has_normal(type)) buffer.normals[idx] = normal;
     }
 
 #endif  // #ifdef __CUDACC__
@@ -331,10 +331,3 @@ public:
 };
 
 
-namespace GlobalDeviceTensors {
-    inline RenderOutput::TensorTuple renders;
-    inline RenderOutput::TensorTuple renders2;
-    inline RenderOutput::TensorTuple distortions;
-    inline DeviceTensor3D<float> render_Ts;
-    inline DeviceTensor3D<int32_t> render_last_ids;
-}

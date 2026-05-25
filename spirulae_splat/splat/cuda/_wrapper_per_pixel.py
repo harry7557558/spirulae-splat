@@ -345,6 +345,12 @@ def ray_depth_to_linear_depth(
     )
 
 
+def _tv(tensor):
+    if tensor is None:
+        return (0, 4, [0])
+    return (tensor.data_ptr(), tensor.element_size(), list(tensor.shape))
+
+
 class _RayDepthToLinearDepth(torch.autograd.Function):
     """Projects Gaussians to 2D."""
 
@@ -358,25 +364,31 @@ class _RayDepthToLinearDepth(torch.autograd.Function):
     ) -> Tensor:
 
         camera_model_type = camera_model.upper()
+        dist_coeffs_tv = _tv(dist_coeffs if dist_coeffs is not None else
+                             torch.zeros(depths.size(0), 10, device=depths.device))
 
-        out_depths = _make_lazy_cuda_func("ray_depth_to_linear_depth_forward")(
-            camera_model_type, intrins, dist_coeffs,
-            depths
+        out_depths = torch.empty_like(depths)
+        _make_lazy_cuda_func("ray_depth_to_linear_depth_forward")(
+            camera_model_type, _tv(intrins), dist_coeffs_tv,
+            _tv(depths), _tv(out_depths)
         )
 
         ctx.save_for_backward(intrins, dist_coeffs)
         ctx.camera_model_type = camera_model_type
-        
+        ctx.dist_coeffs_tv = dist_coeffs_tv
+
         return out_depths
 
     @staticmethod
     def backward(ctx, v_out_depths):
 
         intrins, dist_coeffs = ctx.saved_tensors
-    
-        v_in_depths = _make_lazy_cuda_func("ray_depth_to_linear_depth_backward")(
-            ctx.camera_model_type, intrins, dist_coeffs,
-            v_out_depths
+        dist_coeffs_tv = ctx.dist_coeffs_tv
+
+        v_in_depths = torch.empty_like(v_out_depths)
+        _make_lazy_cuda_func("ray_depth_to_linear_depth_backward")(
+            ctx.camera_model_type, _tv(intrins), dist_coeffs_tv,
+            _tv(v_out_depths.contiguous()), _tv(v_in_depths)
         )
 
         return (v_in_depths, *([None]*(len(ctx.needs_input_grad)-1)))

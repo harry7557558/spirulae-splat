@@ -75,7 +75,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     // forward outputs
     const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
-    RenderOutput::Tensor *render_outputs,
+    RenderOutput::Tensor render_outputs,
     RenderOutput::Tensor *render2_outputs,
     const DeviceTensor3D<float>* loss_map,           // [..., image_height, image_width, 1]
     const DeviceTensor3D<float> *accum_weight_map,  // [I, H, W]
@@ -112,7 +112,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
             image_width, image_height, tile_width, tile_height, \
             tile_offsets.data_ptr(), flatten_ids.data_ptr(), \
             render_Ts.data_ptr(), last_ids.data_ptr(), \
-            output_distortion ? *render_outputs : RenderOutput::Buffer(), \
+            render_outputs, \
             output_distortion ? *render2_outputs : RenderOutput::Buffer(), \
             output_hessian_diagonal ? loss_map->data_ptr() : nullptr, \
             output_accum_weight ? accum_weight_map->data_ptr() : nullptr, \
@@ -181,7 +181,7 @@ inline std::tuple<
     // forward outputs
     const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
-    std::optional<RenderOutput::TensorTuple> render_outputs_tuple,
+    RenderOutput::TensorTuple render_outputs_tuple,
     std::optional<RenderOutput::TensorTuple> render2_outputs_tuple,
     std::optional<DeviceTensor3D<float>> loss_map,  // [..., image_height, image_width, 1]
     std::optional<DeviceTensor3D<float>> accum_weight_map,  // [I, H, W]
@@ -209,11 +209,10 @@ inline std::tuple<
     }
     DeviceTensor2D<float>* v_viewmats = need_viewmat_grad ? &v_viewmats_buf : nullptr;
 
-    std::optional<RenderOutput::Tensor> render_outputs = std::nullopt;
+    RenderOutput::Tensor render_outputs = render_outputs_tuple;
     std::optional<RenderOutput::Tensor> render2_outputs = std::nullopt;
     std::optional<RenderOutput::Tensor> v_distortion_outputs = std::nullopt;
     if (output_distortion) {
-        render_outputs = render_outputs_tuple;
         render2_outputs = render2_outputs_tuple;
         v_distortion_outputs = v_distortion_outputs_tuple;
     }
@@ -239,8 +238,7 @@ inline std::tuple<
         splats_w, splats_s, gaussian_ids,
         viewmats, intrins, camera_model, dist_coeffs,
         image_width, image_height, tile_offsets, flatten_ids,
-        render_Ts, last_ids,
-        output_distortion ? &render_outputs.value() : nullptr,
+        render_Ts, last_ids, render_outputs,
         output_distortion ? &render2_outputs.value() : nullptr,
         output_hessian_diagonal ? &loss_map.value() : nullptr,
         output_accum_weight ? &accum_weight_map.value() : nullptr,
@@ -294,7 +292,7 @@ inline std::tuple<
     // forward outputs
     const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
-    std::optional<RenderOutput::TensorTuple> render_outputs,
+    RenderOutput::TensorTuple render_outputs,
     std::optional<RenderOutput::TensorTuple> render2_outputs,
     std::optional<DeviceTensor3D<float>> loss_map,  // [..., image_height, image_width, 1]
     std::optional<DeviceTensor3D<float>> accum_weight_map,  // [I, H, W]
@@ -348,7 +346,7 @@ std::tuple<
     // forward outputs
     const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
-    std::optional<RenderOutput::TensorTuple> render_outputs,
+    RenderOutput::TensorTuple render_outputs,
     std::optional<RenderOutput::TensorTuple> render2_outputs,
     std::optional<DeviceTensor3D<float>> loss_map,  // [..., image_height, image_width, 1]
     std::optional<DeviceTensor3D<float>> accum_weight_map,  // [I, H, W]
@@ -404,7 +402,7 @@ std::tuple<
     // forward outputs
     const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
-    std::optional<RenderOutput::TensorTuple> render_outputs,
+    RenderOutput::TensorTuple render_outputs,
     std::optional<RenderOutput::TensorTuple> render2_outputs,
     std::optional<DeviceTensor3D<float>> loss_map,  // [..., image_height, image_width, 1]
     std::optional<DeviceTensor3D<float>> accum_weight_map,  // [I, H, W]

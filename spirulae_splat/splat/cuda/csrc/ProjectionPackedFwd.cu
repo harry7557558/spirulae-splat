@@ -71,7 +71,7 @@ inline std::tuple<
     // mask
 
     DeviceVector<bool> intersection_mask;
-    intersection_mask.resize("proj_packed.mask", (int64_t)(C*N));
+    intersection_mask.resize("proj.mask", (int64_t)(C*N));
 
     #define _LAUNCH_ARGS ( \
             (cudaStream_t)0, C, N, \
@@ -94,7 +94,7 @@ inline std::tuple<
 
     // prefix sum
     DeviceVector<int64_t> intersection_mask_scan;
-    intersection_mask_scan.resize("proj_packed.scan", (int64_t)(C*N));
+    intersection_mask_scan.resize("proj.scan", (int64_t)(C*N));
     CUB_WRAPPER(cub::DeviceScan::InclusiveSum,
         intersection_mask.data_ptr(), intersection_mask_scan.data_ptr(), (int)(C*N));
     int64_t nnz = 0;
@@ -103,13 +103,13 @@ inline std::tuple<
 
     // projection
 
-    DeviceVector<int32_t> camera_ids; camera_ids.resize("proj_packed.camera_ids", nnz);
-    DeviceVector<int32_t> gaussian_ids; gaussian_ids.resize("proj_packed.gaussian_ids", nnz);
-    DeviceVector<float4> aabb; aabb.resize("proj_packed.aabb", nnz);
-    DeviceVector<float> sorting_depths; sorting_depths.resize("proj_packed.depths", nnz);
-    DeviceVector<float> radii; radii.resize("proj_packed.radii", splats_world.size()); radii.zero();
+    DeviceVector<int32_t> camera_ids; camera_ids.resize("proj.camera_ids", nnz);
+    DeviceVector<int32_t> gaussian_ids; gaussian_ids.resize("proj.gaussian_ids", nnz);
+    DeviceVector<float4> aabb; aabb.resize("proj.aabb", nnz);
+    DeviceVector<float> sorting_depths; sorting_depths.resize("proj.depths", nnz);
+    DeviceVector<float> radii; radii.resize("proj.radii", splats_world.size()); radii.zero();
 
-    std::vector<DeviceTensorFloatND> splats_screen = SplatPrimitive::ScreenBuffer::empty_pool(nnz, "proj_packed.screen");
+    std::vector<DeviceTensorFloatND> splats_screen = SplatPrimitive::ScreenBuffer::empty_pool(nnz, "proj.screen");
 
     #define _LAUNCH_ARGS ( \
             (cudaStream_t)0, C, N, \

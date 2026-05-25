@@ -123,10 +123,9 @@ inline std::tuple<
     const DeviceTensor3D<int32_t> tile_offsets, // [I, tile_height, tile_width]
     const DeviceVector<int32_t> flatten_ids     // [n_isects]
 ) {
-    using namespace GlobalDeviceTensors;
-
     int64_t batch = tile_offsets.size<0>();
 
+    RenderOutput::TensorTuple renders, renders2, distortions;
     RenderOutput::resize<SplatPrimitive::pixelType>(
         renders, batch, image_height, image_width, "renders");
     if (output_distortion) {
@@ -136,6 +135,8 @@ inline std::tuple<
             distortions, batch, image_height, image_width, "distortions");
     }
 
+    DeviceTensor3D<float> render_Ts;
+    DeviceTensor3D<int32_t> render_last_ids;
     render_Ts.resize("render.Ts", batch, image_height, image_width);
     render_last_ids.resize("render.last_ids", batch, image_height, image_width);
 

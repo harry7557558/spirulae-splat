@@ -187,22 +187,30 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     #else
         pix_bin_final[pix_id_local] = bin_final;
     #endif
-        pix_Ts_with_grad[pix_id_local] = {
-            (inside ? render_Ts[pix_id_global] : 0.0f),
-            // (inside ? -v_render_alphas[pix_id_global] : 0.0f)
-            (inside ? v_render_Ts[pix_id_global] : 0.0f)
-        };
 
         uint pix_id_image_global = image_id * image_height * image_width + pix_id_global;
-
-        v_pix_colors[pix_id_local] = (inside ?
+        float render_Ts_local = (inside ? render_Ts[pix_id_global] : 0.0f);
+        float v_render_Ts_local = (inside ? v_render_Ts[pix_id_global] : 0.0f);
+        RenderOutput v_render_output_local = (inside ?
             v_render_output_buffer.load<SplatPrimitive::pixelType>(pix_id_image_global)
              : RenderOutput::zero());
+        if constexpr (RenderOutput::has_depth(SplatPrimitive::pixelType)) {
+            float inv_alpha = 1.0f / fmaxf(1.0f - render_Ts_local, 1e-10f);
+            float exp_depth = (inside ? render_output_buffer.depths[pix_id_image_global] : 0.0f);
+            v_render_Ts_local += exp_depth * v_render_output_local.depth * inv_alpha;
+            v_render_output_local.depth *= inv_alpha;
+        }
+        pix_Ts_with_grad[pix_id_local] = {render_Ts_local, v_render_Ts_local};
+        v_pix_colors[pix_id_local] = v_render_output_local;
 
         if (output_distortion) {
             pix_colors[pix_id_local] = (inside ?
                 render_output_buffer.load<SplatPrimitive::pixelType>(pix_id_image_global)
                 : RenderOutput::zero());
+            if constexpr (RenderOutput::has_depth(SplatPrimitive::pixelType)) {
+                float alpha = fmaxf(1.0f - render_Ts_local, 1e-10f);
+                pix_colors[pix_id_local].depth *= alpha;
+            }
             pix2_colors[pix_id_local] = (inside ?
                 render2_output_buffer.load<SplatPrimitive::pixelType>(pix_id_image_global)
                 : RenderOutput::zero());

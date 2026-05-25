@@ -281,6 +281,7 @@ __global__ void intersect_offset_kernel(
     }
 }
 
+/*[AutoHeaderGeneratorExport]*/
 std::tuple<
     DeviceVector<int64_t>,    // isect_ids [n_isects]
     DeviceVector<int32_t>,    // flatten_ids [n_isects]
@@ -298,7 +299,9 @@ std::tuple<
     DeviceVector<int32_t>* image_ids  // null for non-packed
 ) {
     bool packed = image_ids != nullptr;
-    const uint32_t total_count = (uint32_t)aabb.numel();
+    // depths is always [*N] float32 (numel = N or nnz), while aabb is [*N, 4]
+    // whose numel() = N*4. Use depths.numel() to get the correct splat count.
+    const uint32_t total_count = (uint32_t)depths.numel();
     const uint32_t N = packed ? total_count : total_count / I;
 
     uint32_t tile_width = _CEIL_DIV(image_width, TILE_SIZE);

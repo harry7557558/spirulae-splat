@@ -1,5 +1,6 @@
 #define SLANG_PRELUDE_EXPORT
 #include "common.cuh"
+#include "Engine.h"
 
 #include "IntersectTile.cuh"
 #include "BackgroundSphericalHarmonics.cuh"
@@ -39,8 +40,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.attr("TILE_SIZE") = py::int_(TILE_SIZE);
 
-    #if 0
-
     // IntersectTile.cuh
     m.def("intersect_tile", &do_intersect_tile_generic);
     // m.def("intersect_tile_3dgs", &intersect_tile_3dgs_tensor);
@@ -50,6 +49,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // m.def("intersect_tile_opaque_triangle", &intersect_tile_opaque_triangle_tensor);
     // m.def("intersect_tile_voxel", &intersect_tile_voxel_tensor);
 
+    #if 0
     // BackgroundSphericalHarmonics.cuh
     m.def("render_background_sh_forward", &render_background_sh_forward);
     m.def("render_background_sh_backward", &render_background_sh_backward);
@@ -115,7 +115,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("svhash_split_voxels", &svhashSplitVoxels);
 
     #endif
-    
+
+#if 0
+    // PixelWise.cuh (partial)
+    m.def("rendered_depth_to_expected_depth_forward", &rendered_depth_to_expected_depth_forward);
+    m.def("rendered_depth_to_expected_depth_backward", &rendered_depth_to_expected_depth_backward);
+    m.def("ray_depth_to_linear_depth_forward", &ray_depth_to_linear_depth_forward);
+    m.def("ray_depth_to_linear_depth_backward", &ray_depth_to_linear_depth_backward);
+
     // ProjectionFwd.cuh
     m.def("projection_3dgs_forward", &projection_3dgs_forward);
     m.def("projection_mip_forward", &projection_mip_forward);
@@ -147,6 +154,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("projection_3dgut_sv_packed_forward", &projection_3dgut_packed_forward);
     // m.def("projection_opaque_triangle_packed_forward", &projection_opaque_triangle_packed_forward);
     // m.def("projection_voxel_packed_forward", &projection_voxel_packed_forward);
+#endif
 
 #if 0
     // ProjectionHeteroFwd.cuh
@@ -162,6 +170,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // m.def("projection_opaque_triangle_hetero_backward", &projection_opaque_triangle_hetero_backward);
 #endif
 
+#if 0
     // RasterizationFwd.cuh and RasterizationBwd.cuh
     m.def("rasterization_3dgs_forward", &rasterize_to_pixels_3dgs_fwd);
     m.def("rasterization_3dgs_backward", &rasterize_to_pixels_3dgs_bwd);
@@ -180,6 +189,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // m.def("rasterization_opaque_triangle_backward", &rasterize_to_pixels_opaque_triangle_sorted_bwd);
     // m.def("rasterization_voxel_forward", &rasterize_to_pixels_voxel_eval3d_fwd);
     // m.def("rasterization_voxel_backward", &rasterize_to_pixels_voxel_eval3d_bwd);
+#endif
 
 #if 0
     // Optimizer.cuh
@@ -209,6 +219,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // FusedProjectionBwdOptim.cuh
     m.def("fused_projection_bwd_optimizer_3dgut", &fused_projection_bwd_optimizer_3dgut);
+
+    // Engine.h - unified forward/backward
+    m.def("set_data_3dgs", &set_data_3dgs);
+    m.def("set_camera_params", &set_camera_params);
+    m.def("forward_3dgs", &forward_3dgs);
+    m.def("backward_3dgs", &backward_3dgs);
 
 #if 0
     // Densify.cuh

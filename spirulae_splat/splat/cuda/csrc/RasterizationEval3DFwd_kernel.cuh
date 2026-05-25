@@ -218,7 +218,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     if (i < image_height && j < image_width) {
         render_Ts[pix_id] = T;
         int pix_id_global = image_id * image_height * image_width + pix_id;
-        // TODO: blend background
+        if constexpr (RenderOutput::has_depth(SplatPrimitive::pixelType))
+            pix_out.depth /= fmaxf(1.0f - T, 1e-10f);
         pix_out.saveParamsToBuffer<SplatPrimitive::pixelType>(render_colors, pix_id_global);
         // index in bin of last gaussian in this pixel
         last_ids[pix_id] = static_cast<int32_t>(cur_idx);

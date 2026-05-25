@@ -18,6 +18,18 @@ namespace SlangPPISP {
 
 #include "common.cuh"
 
+
+static TensorView<float, 4> _bhw1_view(const TorchTensorView& tv) {
+    const auto& s = std::get<2>(tv);
+    int64_t B = s[0], H = s[1], W = s[2];
+    TensorView<float, 4> v;
+    v.data = (float*)std::get<0>(tv);
+    v.shape[0] = B; v.shape[1] = H; v.shape[2] = W; v.shape[3] = 1;
+    v.strides[0] = H*W; v.strides[1] = W; v.strides[2] = 1; v.strides[3] = 1;
+    return v;
+}
+
+
 #if 0
 
 
@@ -103,6 +115,8 @@ at::Tensor uint16_image_to_float_tensor(
     return img_out;
 }
 
+#endif
+
 
 // ================
 // Rendered Depth to Expected Depth
@@ -162,7 +176,6 @@ __global__ void rendered_depth_to_expected_depth_filter_kernel(
     // note that in backward, transmittance=1 automatically leads to zero output gradient
 }
 
-
 __global__ void rendered_depth_to_expected_depth_backward_kernel(
     const TensorView<float, 4> in_depth,
     const TensorView<float, 4> in_transmittance,
@@ -194,70 +207,54 @@ __global__ void rendered_depth_to_expected_depth_backward_kernel(
     v_in_transmittance.store1(bid, y, x, v_transmittance);
 }
 
-
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor rendered_depth_to_expected_depth_forward(
-    at::Tensor &depth,  // [B, H, W, 1]
-    at::Tensor &transmittance  // [B, H, W, 1]
+void rendered_depth_to_expected_depth_forward(
+    TorchTensorView depth,  // [B, H, W, 1]
+    TorchTensorView transmittance,  // [B, H, W, 1]
+    TorchTensorView out_depth  // [B, H, W, 1]
 ) {
-    DEVICE_GUARD(depth);
-    CHECK_CUDA(depth);
-    CHECK_CUDA(transmittance);
+    const auto& s = std::get<2>(depth);
+    int64_t b = s[0], h = s[1], w = s[2];
 
-    if (depth.ndimension() != 4 || depth.size(-1) != 1)
-        AT_ERROR("depth shape must be (b, h, w, 1)");
-    long b = depth.size(0), h = depth.size(1), w = depth.size(2);
-    if (transmittance.ndimension() != 4 || transmittance.size(0) != b || transmittance.size(1) != h || transmittance.size(2) != w || transmittance.size(3) != 1)
-        AT_ERROR("transmittance shape must be (b, h, w, 1)");
-
-    at::Tensor out_depth = at::empty_like(depth);
-    at::Tensor max_depth = at::zeros({b,}, depth.options());
+    float* max_depth = DevicePool::global().acquire<float>("rdted_max_depth", b);
+    cudaMemset(max_depth, 0, b * sizeof(float));
 
     rendered_depth_to_expected_depth_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<float, 4>(depth), tensor2view<float, 4>(transmittance),
-        tensor2view<float, 4>(out_depth), max_depth.data_ptr<float>()
+        _bhw1_view(depth), _bhw1_view(transmittance),
+        _bhw1_view(out_depth), max_depth
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     rendered_depth_to_expected_depth_filter_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<float, 4>(transmittance),
-        tensor2view<float, 4>(out_depth),
-        max_depth.data_ptr<float>()
+        _bhw1_view(transmittance),
+        _bhw1_view(out_depth),
+        max_depth
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return out_depth;
 }
-
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<at::Tensor, at::Tensor>
-rendered_depth_to_expected_depth_backward(
-    at::Tensor &depth,  // [B, H, W, 1]
-    at::Tensor &transmittance,  // [B, H, W, 1]
-    at::Tensor &v_out_depth  // [B, H, W, 1]
+void rendered_depth_to_expected_depth_backward(
+    TorchTensorView depth,  // [B, H, W, 1]
+    TorchTensorView transmittance,  // [B, H, W, 1]
+    TorchTensorView v_out_depth,  // [B, H, W, 1]
+    TorchTensorView v_depth,  // [B, H, W, 1]
+    TorchTensorView v_transmittance  // [B, H, W, 1]
 ) {
-    DEVICE_GUARD(depth);
-    CHECK_CUDA(depth);
-    CHECK_CUDA(transmittance);
-    CHECK_CUDA(v_out_depth);
-
-    long b = depth.size(0), h = depth.size(1), w = depth.size(2);
-
-    at::Tensor v_depth = at::empty_like(depth);
-    at::Tensor v_transmittance = at::empty_like(transmittance);
+    const auto& s = std::get<2>(depth);
+    int64_t b = s[0], h = s[1], w = s[2];
 
     rendered_depth_to_expected_depth_backward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<float, 4>(depth), tensor2view<float, 4>(transmittance),
-        tensor2view<float, 4>(v_out_depth),
-        tensor2view<float, 4>(v_depth), tensor2view<float, 4>(v_transmittance)
+        _bhw1_view(depth), _bhw1_view(transmittance),
+        _bhw1_view(v_out_depth),
+        _bhw1_view(v_depth), _bhw1_view(v_transmittance)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return std::make_tuple(v_depth, v_transmittance);
 }
 
 
+
+#if 0
 
 // ================
 // Blend Background
@@ -1227,6 +1224,8 @@ std::tuple<at::Tensor, at::Tensor> depth_normal_loss_backward(
     return std::make_tuple(v_depths, v_gt_normals);
 }
 
+#endif
+
 
 // ================
 // Ray Depth To Linear Depth
@@ -1297,64 +1296,43 @@ __global__ void ray_depth_to_linear_depth_backward_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor ray_depth_to_linear_depth_forward(
+void ray_depth_to_linear_depth_forward(
     std::string camera_model,
-    at::Tensor intrins,  // fx, fy, cx, cy
-    TorchTensorView dist_coeffs,
-    at::Tensor depths  // [B, H, W, 1]
+    TorchTensorView intrins,  // [B, 4]
+    TorchTensorView dist_coeffs,  // [B, 10]
+    TorchTensorView depths,  // [B, H, W, 1]
+    TorchTensorView out_depths  // [B, H, W, 1]
 ) {
-    DEVICE_GUARD(depths);
-    CHECK_CUDA(depths);
-    CHECK_INPUT(intrins);
-
-    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
-        AT_ERROR("intrins shape must be (B, 4)");
-    if (depths.ndimension() != 4 || depths.size(-1) != 1)
-        AT_ERROR("depths shape must be (B, H, W, 1)");
-    if (depths.size(0) != intrins.size(0))
-        AT_ERROR("depths and intrins batch dimension mismatch");
-
-    int b = depths.size(0), h = depths.size(1), w = depths.size(2);
-    at::Tensor out_depths = at::empty_like(depths);
+    const auto& s = std::get<2>(depths);
+    int64_t b = s[0], h = s[1], w = s[2];
 
     ray_depth_to_linear_depth_forward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
-        tensor2view<float, 4>(depths), tensor2view<float, 4>(out_depths)
+        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
+        _bhw1_view(depths), _bhw1_view(out_depths)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return out_depths;
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor ray_depth_to_linear_depth_backward(
+void ray_depth_to_linear_depth_backward(
     std::string camera_model,
-    at::Tensor intrins,  // fx, fy, cx, cy
-    TorchTensorView dist_coeffs,
-    at::Tensor v_out_depths  // [B, H, W, 1]
+    TorchTensorView intrins,  // [B, 4]
+    TorchTensorView dist_coeffs,  // [B, 10]
+    TorchTensorView v_out_depths,  // [B, H, W, 1]
+    TorchTensorView v_in_depths  // [B, H, W, 1]
 ) {
-    DEVICE_GUARD(v_out_depths);
-    CHECK_CUDA(v_out_depths);
-    CHECK_INPUT(intrins);
-
-    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
-        AT_ERROR("intrins shape must be (B, 4)");
-    if (v_out_depths.ndimension() != 4 || v_out_depths.size(-1) != 1)
-        AT_ERROR("v_out_depths shape must be (B, H, W, 1)");
-    if (v_out_depths.size(0) != intrins.size(0))
-        AT_ERROR("v_out_depths and intrins batch dimension mismatch");
-
-    int b = v_out_depths.size(0), h = v_out_depths.size(1), w = v_out_depths.size(2);
-    at::Tensor v_in_depths = at::empty_like(v_out_depths);
+    const auto& s = std::get<2>(v_out_depths);
+    int64_t b = s[0], h = s[1], w = s[2];
 
     ray_depth_to_linear_depth_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
-        tensor2view<float, 4>(v_out_depths), tensor2view<float, 4>(v_in_depths)
+        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
+        _bhw1_view(v_out_depths), _bhw1_view(v_in_depths)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return v_in_depths;
 }
+
+
+#if 0
 
 
 // ================

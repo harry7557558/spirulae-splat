@@ -131,11 +131,70 @@ class Renderer:
         if self.dist_coeffs is not None:
             self.dist_coeffs = self.dist_coeffs.contiguous()
 
+    @staticmethod
+    def _tv(tensor):
+        """Convert torch.Tensor to (data_ptr, element_size, shape) for C++ Engine calls."""
+        if tensor is None:
+            return (0, 4, [0])
+        assert tensor.is_contiguous()
+        return (tensor.data_ptr(), tensor.element_size(), list(tensor.shape))
+
+    def engine_forward(self):
+        """Runs projection + tile intersection + rasterization via C++ Engine."""
+        C = self.viewmats.shape[0]
+        H, W = self.height, self.width
+
+        rgb = torch.zeros(C, H, W, 3, device=self.device, dtype=torch.float32)
+        depth = torch.zeros(C, H, W, 1, device=self.device, dtype=torch.float32)
+        Ts = torch.zeros(C, H, W, 1, device=self.device, dtype=torch.float32)
+
+        dist_coeffs = self.dist_coeffs
+        if dist_coeffs is None:
+            dist_coeffs = torch.zeros(C, 10, device=self.device, dtype=torch.float32)
+
+        _C.set_data_3dgs(
+            self.cur_num_splats,
+            *[self._tv(t) for t in self.splats_world]
+        )
+        _C.set_camera_params(
+            self.width, self.height,
+            self.camera_model.upper(),
+            self._tv(self.viewmats),
+            self._tv(self.intrins),
+            self._tv(dist_coeffs)
+        )
+        _C.forward_3dgs(
+            self.primitive,
+            self.sh_degree_to_use,
+            self.packed,
+            self._tv(rgb),
+            self._tv(depth),
+            self._tv(Ts)
+        )
+
+        self.render_colors = (rgb, depth)
+        self.render_Ts = Ts
+
+    def engine_backward(self, v_render_colors, v_render_Ts):
+        """Runs rasterization + projection backward via C++ Engine."""
+        C = self.viewmats.shape[0]
+        H, W = self.height, self.width
+
+        v_rgb = v_render_colors[0]
+        v_depth = v_render_colors[1]
+
+        _C.backward_3dgs(
+            self._tv(v_rgb.contiguous()),
+            self._tv(v_depth),
+            self._tv(v_render_Ts.contiguous()),
+            *[self._tv(t) for t in self.v_splats_world]
+        )
+
     def zero_grad(self):
         if hasattr(self, 'v_splats_world'):
             for tensor in self.v_splats_world:
                 if tensor is not None:
-                    _make_lazy_cuda_func("set_zero")(tensor)
+                    tensor.zero_()
         else:
             if self.use_fused_proj_bwd_optim:
                 if self.primitive in ['3dgs', 'mip']:
@@ -395,6 +454,17 @@ class Renderer:
         assert self.intrins.shape == (C, 4), self.intrins.shape
 
         self.backward_info = {}
+
+        # Engine path: unified C++ forward for 3dgs/mip/3dgut
+        if self.primitive in ['3dgs', 'mip', '3dgut'] and not self.use_bvh:
+            self.engine_forward()
+            self.meta.update({
+                "camera_ids": None, "gaussian_ids": None, "depths": None,
+                "width": self.width, "height": self.height, "n_cameras": C,
+            })
+            return
+
+        raise NotImplementedError()
         if self.use_bvh:
             raise NotImplementedError()
             # raise NotImplementedError()
@@ -515,6 +585,13 @@ class Renderer:
         v_normal_distortion: Optional[torch.Tensor] = None,
     ):
         assert len(v_render_colors) == 3, "v_render_colors must contain RGB, depth, and normal"
+
+        # Engine path: unified C++ backward for 3dgs/mip/3dgut
+        if self.primitive in ['3dgs', 'mip', '3dgut'] and not self.use_bvh:
+            self.engine_backward(v_render_colors, v_render_Ts)
+            return
+
+        raise NotImplementedError()
         for tensor in v_render_colors:
             assert tensor is None or tensor.is_contiguous()
         assert v_render_Ts.is_contiguous()
