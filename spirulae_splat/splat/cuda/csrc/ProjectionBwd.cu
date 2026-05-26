@@ -52,8 +52,8 @@ inline void launch_projection_projection_fused_bwd_kernel(
     const ssplat::CameraModelType camera_model,
     const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
-    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceVector<int32_t> camera_ids,  // [nnz] or null
+    const DeviceVector<int32_t> gaussian_ids,  // [nnz] or null
     const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
     const std::vector<DeviceTensorFloatND> v_splats_screen,
@@ -85,8 +85,8 @@ inline void launch_projection_projection_fused_bwd_kernel(
         h_splats_world = typename SplatPrimitive::WorldBuffer(*h_splats_world_arg);
     }
 
-    if (camera_ids.has_value() && gaussian_ids.has_value()) {  // packed
-        N = camera_ids.value().size();
+    if (camera_ids.data_ptr() && gaussian_ids.data_ptr()) {  // packed
+        N = camera_ids.size();
         C = 1;
     }
 
@@ -97,8 +97,8 @@ inline void launch_projection_projection_fused_bwd_kernel(
             (cudaStream_t)0, C, N, \
             splats_world, viewmats_ptr, intrins_ptr, dist_coeffs, \
             image_width, image_height, \
-            camera_ids.has_value() ? camera_ids.value().data_ptr() : nullptr, \
-            gaussian_ids.has_value() ? gaussian_ids.value().data_ptr() : nullptr, \
+            camera_ids.data_ptr(), \
+            gaussian_ids.data_ptr(), \
             aabb.data_ptr(), \
             v_splats_screen, \
             hessian_diagonal_output_mode != HessianDiagonalOutputMode::None ? vr_splats_screen : typename SplatPrimitive::ScreenBuffer{}, \
@@ -145,8 +145,8 @@ void projection_3dgs_backward(
     const std::string camera_model,
     const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
-    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceVector<int32_t> camera_ids,  // [nnz] or null
+    const DeviceVector<int32_t> gaussian_ids,  // [nnz] or null
     const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
     const std::vector<DeviceTensorFloatND> &v_splats_screen,
@@ -178,8 +178,8 @@ void projection_3dgs_backward_with_hessian_diagonal(
     const std::string camera_model,
     const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
-    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceVector<int32_t> camera_ids,  // [nnz] or null
+    const DeviceVector<int32_t> gaussian_ids,  // [nnz] or null
     const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
     const std::vector<DeviceTensorFloatND> &v_splats_screen,
@@ -215,8 +215,8 @@ void projection_3dgs_backward_with_position_hessian_diagonal(
     const std::string camera_model,
     const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
-    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceVector<int32_t> camera_ids,  // [nnz] or null
+    const DeviceVector<int32_t> gaussian_ids,  // [nnz] or null
     const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
     const std::vector<DeviceTensorFloatND> &v_splats_screen,
@@ -258,8 +258,8 @@ void projection_mip_backward(
     const std::string camera_model,
     const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
-    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceVector<int32_t> camera_ids,  // [nnz] or null
+    const DeviceVector<int32_t> gaussian_ids,  // [nnz] or null
     const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
     const std::vector<DeviceTensorFloatND> &v_splats_screen,
@@ -291,8 +291,8 @@ void projection_mip_backward_with_hessian_diagonal(
     const std::string camera_model,
     const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
-    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceVector<int32_t> camera_ids,  // [nnz] or null
+    const DeviceVector<int32_t> gaussian_ids,  // [nnz] or null
     const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
     const std::vector<DeviceTensorFloatND> &v_splats_screen,
@@ -328,8 +328,8 @@ void projection_mip_backward_with_position_hessian_diagonal(
     const std::string camera_model,
     const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
-    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceVector<int32_t> camera_ids,  // [nnz] or null
+    const DeviceVector<int32_t> gaussian_ids,  // [nnz] or null
     const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
     const std::vector<DeviceTensorFloatND> &v_splats_screen,
@@ -371,8 +371,8 @@ void projection_3dgut_backward(
     const std::string camera_model,
     const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
-    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceVector<int32_t> camera_ids,  // [nnz] or null
+    const DeviceVector<int32_t> gaussian_ids,  // [nnz] or null
     const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
     const std::vector<DeviceTensorFloatND> &v_splats_screen,
@@ -404,8 +404,8 @@ void projection_3dgut_backward_with_hessian_diagonal(
     const std::string camera_model,
     const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
-    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceVector<int32_t> camera_ids,  // [nnz] or null
+    const DeviceVector<int32_t> gaussian_ids,  // [nnz] or null
     const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
     const std::vector<DeviceTensorFloatND> &v_splats_screen,
@@ -441,8 +441,8 @@ void projection_3dgut_backward_with_position_hessian_diagonal(
     const std::string camera_model,
     const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<DeviceVector<int32_t>> camera_ids,  // [nnz]
-    const std::optional<DeviceVector<int32_t>> gaussian_ids,  // [nnz]
+    const DeviceVector<int32_t> camera_ids,  // [nnz] or null
+    const DeviceVector<int32_t> gaussian_ids,  // [nnz] or null
     const DeviceTensor2D<float4> aabb,  // [C, N]
     // grad outputs
     const std::vector<DeviceTensorFloatND> &v_splats_screen,

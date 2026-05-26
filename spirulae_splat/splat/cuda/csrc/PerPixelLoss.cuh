@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Tensor.h>
 
 enum class RawLossIndex {
     RgbLoss,
@@ -57,6 +58,42 @@ enum class LossIndex {
     length
 };
 
+struct PerPixelGrads {
+    TorchTensorView v_render_rgb, v_ref_rgb, v_render_depth, v_ref_depth;
+    TorchTensorView v_render_normal, v_depth_normal, v_ref_normal;
+    TorchTensorView v_render_Ts, v_rgb_dist, v_depth_dist, v_normal_dist;
+};
+
 
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */
 
+
+
+std::tuple<float, float> compute_multi_scale_per_pixel_losses(
+    int num_loss_scales,
+    TorchTensorView render_rgb,
+    TorchTensorView ref_rgb,
+    TorchTensorView render_depth,
+    TorchTensorView ref_depth,
+    TorchTensorView render_normal,
+    TorchTensorView depth_normal,
+    TorchTensorView ref_normal,
+    TorchTensorView render_Ts,
+    TorchTensorView rgb_dist,
+    TorchTensorView depth_dist,
+    TorchTensorView normal_dist,
+    TorchTensorView ref_alpha,
+    TorchTensorView mask,
+    TorchTensorView depth_mask,
+    TorchTensorView normal_mask,
+    TorchTensorView alpha_mask,
+    const std::array<float, (int)LossWeightIndex::length> loss_weights_0,
+    const float w_ssim,
+    TorchTensorView v_losses,
+    std::vector<bool> needs_input_grad,
+    long num_train_images,
+    TorchTensorView camera_indices,
+    TorchTensorView loss_map_out,
+    TorchTensorView total_losses_out,
+    PerPixelGrads& grads_out
+);

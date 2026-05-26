@@ -98,8 +98,8 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     const ssplat::CameraModelType camera_model,
     const TorchTensorView dist_coeffs,
     // fwd outputs
-    std::optional<DeviceVector<int32_t>> camera_ids,
-    std::optional<DeviceVector<int32_t>> gaussian_ids,
+    DeviceVector<int32_t> camera_ids,
+    DeviceVector<int32_t> gaussian_ids,
     DeviceTensorFloatND aabb,
     // grad outputs
     const std::vector<DeviceTensorFloatND> v_splats_world,
@@ -139,7 +139,7 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     if (N == 0)
         return;
 
-    bool packed = camera_ids.has_value() && gaussian_ids.has_value();
+    bool packed = camera_ids.data_ptr() && gaussian_ids.data_ptr();
 
     DeviceVector<int32_t> camera_id_bounds;
     DeviceVector<int32_t> gaussian_ids_sorted_buf;
@@ -148,15 +148,15 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     const int32_t* sorted_camera_ids_ptr = nullptr;
 
     if (packed) {
-        long nnz = camera_ids.value().size();
+        long nnz = camera_ids.size();
         gaussian_ids_sorted_buf.resize("fused_proj_bwd.gauss_sorted", nnz);
         camera_ids_sorted_buf.resize("fused_proj_bwd.cam_sorted", nnz);
 
         cub::DoubleBuffer<int32_t> d_keys(
-            gaussian_ids.value().data_ptr(), gaussian_ids_sorted_buf.data_ptr()
+            gaussian_ids.data_ptr(), gaussian_ids_sorted_buf.data_ptr()
         );
         cub::DoubleBuffer<int32_t> d_values(
-            camera_ids.value().data_ptr(), camera_ids_sorted_buf.data_ptr()
+            camera_ids.data_ptr(), camera_ids_sorted_buf.data_ptr()
         );
         int n_bits = 0;
         while ((1U << n_bits) <= N)
@@ -164,8 +164,8 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
         CUB_WRAPPER(cub::DeviceRadixSort::SortPairs, d_keys, d_values, nnz, 0, n_bits);
         CHECK_DEVICE_ERROR(cudaGetLastError());
 
-        sorted_gaussian_ids_ptr = d_keys.selector ? gaussian_ids_sorted_buf.data_ptr() : gaussian_ids.value().data_ptr();
-        sorted_camera_ids_ptr = d_values.selector ? camera_ids_sorted_buf.data_ptr() : camera_ids.value().data_ptr();
+        sorted_gaussian_ids_ptr = d_keys.selector ? gaussian_ids_sorted_buf.data_ptr() : gaussian_ids.data_ptr();
+        sorted_camera_ids_ptr = d_values.selector ? camera_ids_sorted_buf.data_ptr() : camera_ids.data_ptr();
 
         camera_id_bounds.resize("fused_proj_bwd.cam_bounds", (int64_t)(N+1));
         camera_id_bounds_kernel<<<_LAUNCH_ARGS_1D(nnz+1, 256)>>>(
@@ -237,8 +237,8 @@ void fused_projection_bwd_optimizer_3dgut(
     const std::string camera_model,
     const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<DeviceVector<int32_t>> camera_ids,
-    const std::optional<DeviceVector<int32_t>> gaussian_ids,
+    const DeviceVector<int32_t> camera_ids,
+    const DeviceVector<int32_t> gaussian_ids,
     DeviceTensorFloatND aabb,
     // grad outputs
     const std::vector<DeviceTensorFloatND> v_splats_world,

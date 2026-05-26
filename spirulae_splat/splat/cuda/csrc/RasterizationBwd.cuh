@@ -27,7 +27,7 @@ std::tuple<
     int64_t num_splats,
     std::vector<DeviceTensorFloatND> splats_w,
     std::vector<DeviceTensorFloatND> splats_s,
-    std::optional<DeviceVector<int32_t>> gaussian_ids,
+    DeviceVector<int32_t> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -57,7 +57,7 @@ std::tuple<
     int64_t num_splats,
     std::vector<DeviceTensorFloatND> splats_w,
     std::vector<DeviceTensorFloatND> splats_s,
-    std::optional<DeviceVector<int32_t>> gaussian_ids,
+    DeviceVector<int32_t> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,

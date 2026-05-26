@@ -1,59 +1,45 @@
 #pragma once
 
 #include "common.cuh"
+#include <Tensor.h>
 
 
-#if 0
+/* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */
 
-std::tuple<at::Tensor, std::optional<at::Tensor>, at::Tensor, at::Tensor, at::Tensor>
-fused_ssim_forward(
-    at::Tensor &img1,
-    at::Tensor &img2,
-    bool train,
-    bool return_ssim_map,
-    bool is_l1
-);
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-fused_ssim_forward_inplace(
-    at::Tensor &img1,
-    at::Tensor &img2,
-    bool train,
+
+float fused_ssim_forward(
+    TorchTensorView img1,           // [B, H, W, 3]
+    TorchTensorView img2,           // [B, H, W, 3]
+    TorchTensorView dm_dmu1,        // [B, H, W, 3] output, or null
+    TorchTensorView dm_dsigma1_sq,  // [B, H, W, 3] output, or null
+    TorchTensorView dm_dsigma12,    // [B, H, W, 3] output, or null
+    TorchTensorView ssim_loss_map,  // [B, H, W, 1] output, or null
     float ssim_loss_map_weight,
-    at::Tensor &ssim_loss_map,
+    bool inplace,
     bool is_l1
 );
 
-at::Tensor
-fused_ssim_backward(
-    at::Tensor &img1,
-    at::Tensor &img2,
-    const float dL_dmap,
-    std::optional<at::Tensor> &dm_dmu1,
-    std::optional<at::Tensor> &dm_dsigma1_sq,
-    std::optional<at::Tensor> &dm_dsigma12
+
+void fused_ssim_backward(
+    TorchTensorView img1,           // [B, H, W, 3]
+    TorchTensorView img2,           // [B, H, W, 3]
+    float dL_dmap,
+    TorchTensorView dm_dmu1,        // [B, H, W, 3] input, or null
+    TorchTensorView dm_dsigma1_sq,  // [B, H, W, 3] input, or null
+    TorchTensorView dm_dsigma12,    // [B, H, W, 3] input, or null
+    TorchTensorView dL_dimg1,       // [B, H, W, 3] output
+    bool inplace
 );
 
-void fused_ssim_backward_inplace(
-    at::Tensor &img1,
-    at::Tensor &img2,
-    const float dL_dmap,
-    std::optional<at::Tensor> &dm_dmu1,
-    std::optional<at::Tensor> &dm_dsigma1_sq,
-    std::optional<at::Tensor> &dm_dsigma12,
-    at::Tensor &dL_dimg1
-);
 
 float fused_ssim_inplace(
-    at::Tensor &img1,
-    at::Tensor &img2,
-    std::optional<at::Tensor> &mask,
-    const float dL_dmap,
-    at::Tensor &dL_dimg1,
+    TorchTensorView img1,           // [B, H, W, 3]
+    TorchTensorView img2,           // [B, H, W, 3]
+    TorchTensorView mask,           // [B, H, W] bool, or null
+    float dL_dmap,
+    TorchTensorView dL_dimg1,       // [B, H, W, 3] output (accumulated)
     bool return_ssim_val,
-    std::optional<at::Tensor> ssim_loss_map,
+    TorchTensorView ssim_loss_map,  // [B, H, W, 1] output, or null
     float ssim_loss_map_weight
 );
-
-#endif
-

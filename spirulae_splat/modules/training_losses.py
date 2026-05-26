@@ -123,25 +123,50 @@ class _BilagridFusedRegularization(torch.autograd.Function):
         return dummy, None, None
 
 
+def _tv(tensor):
+    if tensor is None:
+        return (0, 4, [0])
+    assert tensor.is_contiguous()
+    return (tensor.data_ptr(), tensor.element_size(), list(tensor.shape))
+
+
 class FusedSSIM(torch.autograd.Function):
     @staticmethod
     def forward(ctx, img1, img2, train=True, return_ssim_map=False, is_l1=False):
-        ssim, ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = \
-            _make_lazy_cuda_func("fused_ssim_forward")(img1, img2, train, return_ssim_map, is_l1)
-        if not train:
-            dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = None, None, None
-            if is_l1:
-                raise NotImplementedError()
+        B, H, W, C = img1.shape
 
-        ctx.save_for_backward(img1.detach(), img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
+        dm_dmu1 = dm_dsigma1_sq = dm_dsigma12 = None
+        if train:
+            dm_dmu1 = torch.empty_like(img1)
+            dm_dsigma1_sq = torch.empty_like(img1)
+            dm_dsigma12 = torch.empty_like(img1)
 
-        return ssim, ssim_map
+        ssim_loss_map = None
+        if return_ssim_map:
+            ssim_loss_map = torch.zeros(B, H, W, 1, device=img1.device, dtype=img1.dtype)
+
+        ssim_val = _make_lazy_cuda_func("fused_ssim_forward")(
+            _tv(img1), _tv(img2),
+            _tv(dm_dmu1), _tv(dm_dsigma1_sq), _tv(dm_dsigma12),
+            _tv(ssim_loss_map), 1.0, False, is_l1
+        )
+        ssim = torch.tensor(ssim_val, device=img1.device, dtype=img1.dtype)
+
+        if train:
+            ctx.save_for_backward(img1.detach(), img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
+
+        return ssim, ssim_loss_map
 
     @staticmethod
     def backward(ctx, dL_dssim, dL_dmap):
-        # TODO: support gradient to ref_rgb
         img1, img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = ctx.saved_tensors
-        grad = _make_lazy_cuda_func("fused_ssim_backward")(img1, img2, dL_dssim, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
+        grad = torch.empty_like(img1)
+        _make_lazy_cuda_func("fused_ssim_backward")(
+            _tv(img1), _tv(img2),
+            float(dL_dssim),
+            _tv(dm_dmu1), _tv(dm_dsigma1_sq), _tv(dm_dsigma12),
+            _tv(grad), False
+        )
         return grad, None, None, None, None
 
 
@@ -334,22 +359,6 @@ class SplatTrainingLosses:
         dummy = _SoftDetach.apply(self._dummy, dummy)
         return dummy.tensors
 
-    def _get_downscale_factor(self):
-        return 1   ## TODO
-        if self.training:
-            return 2 ** max(
-                (self.config.num_downscales - self.step // self.config.resolution_schedule),
-                0,
-            )
-        else:
-            return 1
-
-    def _downscale_if_required(self, image):
-        d = self._get_downscale_factor()
-        if d > 1:
-            return resize_image(image, d)
-        return image
-
     @torch.no_grad()
     def get_gt_img(self, image: torch.Tensor):
         """Compute groundtruth image with iteration dependent downscale factor for evaluation purpose
@@ -365,8 +374,7 @@ class SplatTrainingLosses:
             image = _make_lazy_cuda_func("uint16_image_to_float")(image)
         elif image.dtype == torch.float16:
             image = image.float()
-        gt_img = self._downscale_if_required(image)
-        return gt_img
+        return image
 
     def apply_bilateral_grid(
             self,
@@ -482,7 +490,7 @@ class SplatTrainingLosses:
         with torch.no_grad():
             # load alpha
             if "mask" in batch:
-                batch_mask = self._downscale_if_required(batch['mask'].to(device).float()) > 0.5
+                batch_mask = batch['mask'].to(device).float() > 0.5
                 gt_rgb_mask = batch_mask
                 if self.config.apply_loss_for_mask:
                     gt_alpha = batch_mask
@@ -492,7 +500,6 @@ class SplatTrainingLosses:
                 gt_depth = batch['depth'].to(device)
                 if len(gt_depth.shape) == 3:
                     gt_depth = gt_depth.unsqueeze(-1)
-                gt_depth = self._downscale_if_required(gt_depth)
                 gt_depth_mask = (gt_depth != 0.0)
 
                 # sky mask
@@ -504,11 +511,12 @@ class SplatTrainingLosses:
                 gt_normal = batch['normal']
                 if gt_normal.dtype == torch.uint8:
                     gt_normal = gt_normal.float() / (255/2) - 1.0
-                gt_normal = self._downscale_if_required(gt_normal.to(device))
+                gt_normal = gt_normal.to(device)
                 gt_normal_mask = (gt_normal.sum(-1, True) > -2.366)  # background is (-1, -1, -1)
 
             # mask sky
             if none_sky_mask is not None:
+                raise NotImplementedError("TODO")
                 # apply to depth mask (already there if sky mask is there)
                 gt_depth_mask = gt_depth_mask & none_sky_mask
                 # apply to normal desk
@@ -519,6 +527,7 @@ class SplatTrainingLosses:
                 if not self.config.enable_sky_masking:
                     none_sky_mask = None
             if none_sky_mask is not None:
+                raise NotImplementedError("TODO")
                 # apply loss to discourage opacity
                 if gt_alpha is not None:
                     gt_alpha = gt_alpha & none_sky_mask
@@ -537,6 +546,7 @@ class SplatTrainingLosses:
 
             # update alpha if image is RGBA
             if gt_img_rgba.shape[-1] == 4 and self.config.alpha_loss_weight > 0.0:
+                raise NotImplementedError("TODO")
                 alpha = (gt_img_rgba[..., -1].unsqueeze(-1) > 0.5)
                 gt_img_rgba = gt_img_rgba[..., :3]
                 gt_rgb_mask = gt_rgb_mask & alpha if gt_rgb_mask is not None else alpha
@@ -546,12 +556,14 @@ class SplatTrainingLosses:
             # convert to sRGB if needed
             # don't clip; exposure correction and loss should ideally handle out-of-gamut colors
             if self.config.image_color_is_linear or self.config.image_color_gamut != None:
+                raise NotImplementedError("TODO")
                 color_matrix = get_color_transform_matrix(self.config.image_color_gamut)
                 gt_rgb = rgb_to_srgb(gt_rgb, self.config.image_color_is_linear, color_matrix)
 
         # apply bilagrid for geometry
         if self.config.use_bilateral_grid_for_geometry and \
                 (camera.metadata is not None and "cam_idx" in camera.metadata):
+            raise NotImplementedError("TODO")
             if gt_depth is not None:
                 gt_depth_pre_bilagrid = gt_depth
                 gt_depth = self.apply_bilateral_grid(
@@ -786,6 +798,7 @@ class SplatTrainingLosses:
 
         # Bilagrid backward
         if pred_rgb_pre_bilagrid is not None:
+            raise NotImplementedError("TODO")
             v_bilagrid, grads[0] = {
                 'affine': fused_bilagrid_C.bilagrid_uniform_sample_backward,
                 'ppisp': fused_bilagrid_C.bilagrid_ppisp_uniform_sample_backward,
@@ -811,6 +824,7 @@ class SplatTrainingLosses:
         # Bilagrid geometry backward
         if self.config.use_bilateral_grid_for_geometry and \
                 (camera.metadata is not None and "cam_idx" in camera.metadata):
+            raise NotImplementedError("TODO")
             # TODO: we don't need gradient to gt_geometry
             if gt_normal is not None:
                 v_bilagrid, v_geom = fused_bilagrid_C.bilagrid_normal_uniform_sample_backward(
@@ -958,6 +972,8 @@ class SplatTrainingLosses:
             loss_dict['ppisp_vram'] = self.ppisp_params.nbytes / 1024**3 * 4
 
         return loss_dict
+    
+        # TODO: following code is for reference
 
         # bilagrid regularization loss
         if self.config.use_bilateral_grid:

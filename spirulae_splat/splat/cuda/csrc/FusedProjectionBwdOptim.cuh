@@ -32,8 +32,8 @@ void fused_projection_bwd_optimizer_3dgut(
     const std::string camera_model,
     const TorchTensorView dist_coeffs,
     // fwd outputs
-    const std::optional<DeviceVector<int32_t>> camera_ids,
-    const std::optional<DeviceVector<int32_t>> gaussian_ids,
+    const DeviceVector<int32_t> camera_ids,
+    const DeviceVector<int32_t> gaussian_ids,
     DeviceTensorFloatND aabb,
     // grad outputs
     const std::vector<DeviceTensorFloatND> v_splats_world,

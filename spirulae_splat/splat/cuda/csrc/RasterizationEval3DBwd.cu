@@ -61,7 +61,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     // Gaussian parameters
     const typename SplatPrimitive::WorldBuffer splat_wbuffer,
     const typename SplatPrimitive::ScreenBuffer splat_sbuffer,
-    std::optional<DeviceVector<int32_t>> gaussian_ids,
+    DeviceVector<int32_t> gaussian_ids,
     TorchTensorView viewmats,              // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const ssplat::CameraModelType camera_model,
@@ -93,7 +93,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     std::optional<DeviceTensor3D<float>> *o_accum_weight,
     DeviceTensor2D<float>* v_viewmats
 ) {
-    uint32_t N = gaussian_ids.has_value() ? 0 : splat_wbuffer.size();
+    uint32_t N = gaussian_ids.data_ptr() ? 0 : splat_wbuffer.size();
     uint32_t I = render_Ts.size<0>(); // number of images
     uint32_t tile_height = tile_offsets.size<1>();
     uint32_t tile_width = tile_offsets.size<2>();
@@ -106,7 +106,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
 
     #define _LAUNCH_ARGS ( \
             (cudaStream_t)0, I, N, n_isects, \
-            gaussian_ids.has_value() ? (uint32_t*)gaussian_ids.value().data_ptr() : nullptr, \
+            (uint32_t*)gaussian_ids.data_ptr(), \
             splat_wbuffer, splat_sbuffer, \
             (const float*)std::get<0>(viewmats), (const float4*)std::get<0>(intrins), dist_coeffs, \
             image_width, image_height, tile_width, tile_height, \
@@ -167,7 +167,7 @@ inline std::tuple<
     int64_t num_splats,
     std::vector<DeviceTensorFloatND> splats_w,
     std::vector<DeviceTensorFloatND> splats_s,
-    std::optional<DeviceVector<int32_t>> gaussian_ids,
+    DeviceVector<int32_t> gaussian_ids,
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const ssplat::CameraModelType camera_model,
@@ -278,7 +278,7 @@ inline std::tuple<
     int64_t num_splats,
     std::vector<DeviceTensorFloatND> splats_w,
     std::vector<DeviceTensorFloatND> splats_s,
-    std::optional<DeviceVector<int32_t>> gaussian_ids,
+    DeviceVector<int32_t> gaussian_ids,
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const ssplat::CameraModelType camera_model,
@@ -332,7 +332,7 @@ std::tuple<
     int64_t num_splats,
     std::vector<DeviceTensorFloatND> splats_w,
     std::vector<DeviceTensorFloatND> splats_s,
-    std::optional<DeviceVector<int32_t>> gaussian_ids,
+    DeviceVector<int32_t> gaussian_ids,
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
@@ -388,7 +388,7 @@ std::tuple<
     int64_t num_splats,
     std::vector<DeviceTensorFloatND> splats_w,
     std::vector<DeviceTensorFloatND> splats_s,
-    std::optional<DeviceVector<int32_t>> gaussian_ids,
+    DeviceVector<int32_t> gaussian_ids,
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,

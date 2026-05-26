@@ -29,8 +29,40 @@ static TensorView<float, 4> _bhw1_view(const TorchTensorView& tv) {
     return v;
 }
 
+// Convert DeviceTensor3D<T> to contiguous TensorView<U, 4> where T packs sizeof(T)/sizeof(U) channels.
+template<typename U, typename T>
+static TensorView<U, 4> _dt3d_to_tv4(const DeviceTensor3D<T>& dt) {
+    static_assert(sizeof(T) % sizeof(U) == 0, "T must be a multiple of U");
+    constexpr int C = sizeof(T) / sizeof(U);
+    TensorView<U, 4> v;
+    v.data = (U*)dt.data_ptr();
+    v.shape[0] = dt.template size<0>();
+    v.shape[1] = dt.template size<1>();
+    v.shape[2] = dt.template size<2>();
+    v.shape[3] = C;
+    long HW = v.shape[1] * v.shape[2];
+    v.strides[0] = HW * C;
+    v.strides[1] = v.shape[2] * C;
+    v.strides[2] = C;
+    v.strides[3] = 1;
+    return v;
+}
 
-#if 0
+// Convert DeviceTensor2D<T> to contiguous TensorView<U, 3>.
+template<typename U, typename T>
+static TensorView<U, 3> _dt2d_to_tv3(const DeviceTensor2D<T>& dt) {
+    static_assert(sizeof(T) % sizeof(U) == 0, "T must be a multiple of U");
+    constexpr int C = sizeof(T) / sizeof(U);
+    TensorView<U, 3> v;
+    v.data = (U*)dt.data_ptr();
+    v.shape[0] = dt.template size<0>();
+    v.shape[1] = dt.template size<1>();
+    v.shape[2] = C;
+    v.strides[0] = v.shape[1] * C;
+    v.strides[1] = C;
+    v.strides[2] = 1;
+    return v;
+}
 
 
 // ================
@@ -76,46 +108,32 @@ __global__ void uint16_image_to_float_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor uint8_image_to_float_tensor(
-    at::Tensor &img_in  // [B, H, W, C]
+void uint8_image_to_float_tensor(
+    DeviceTensor3D<uint8_t> img_in,  // [B, H, W, C] (C packed as uint8_t)
+    DeviceTensor3D<float> img_out    // [B, H, W, C]
 ) {
-    DEVICE_GUARD(img_in);
-    CHECK_CUDA(img_in);
-
-    long b = img_in.size(0), h = img_in.size(1), w = img_in.size(2), c = img_in.size(3);
-
-    at::Tensor img_out = at::empty({b, h, w, c}, img_in.options().dtype(at::kFloat));
+    long b = img_in.size<0>(), h = img_in.size<1>(), w = img_in.size<2>();
 
     uint8_image_to_float_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<uint8_t, 4>(img_in),
-        tensor2view<float, 4>(img_out)
+        _dt3d_to_tv4<uint8_t>(img_in),
+        _dt3d_to_tv4<float>(img_out)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return img_out;
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor uint16_image_to_float_tensor(
-    at::Tensor &img_in  // [B, H, W, C]
+void uint16_image_to_float_tensor(
+    DeviceTensor3D<uint16_t> img_in,  // [B, H, W, C] (C packed as uint16_t)
+    DeviceTensor3D<float> img_out     // [B, H, W, C]
 ) {
-    DEVICE_GUARD(img_in);
-    CHECK_CUDA(img_in);
-
-    long b = img_in.size(0), h = img_in.size(1), w = img_in.size(2), c = img_in.size(3);
-
-    at::Tensor img_out = at::empty({b, h, w, c}, img_in.options().dtype(at::kFloat));
+    long b = img_in.size<0>(), h = img_in.size<1>(), w = img_in.size<2>();
 
     uint16_image_to_float_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<uint16_t, 4>(img_in),
-        tensor2view<float, 4>(img_out)
+        _dt3d_to_tv4<uint16_t>(img_in),
+        _dt3d_to_tv4<float>(img_out)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return img_out;
 }
-
-#endif
 
 
 // ================
@@ -254,8 +272,6 @@ void rendered_depth_to_expected_depth_backward(
 
 
 
-#if 0
-
 // ================
 // Blend Background
 // ================
@@ -320,63 +336,39 @@ __global__ void blend_background_backward_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor blend_background_forward(
-    at::Tensor &rgb,  // [B, H, W, 3]
-    at::Tensor &transmittance,  // [B, H, W, 1]
-    at::Tensor &background  // [B, H, W, 3]
+void blend_background_forward(
+    DeviceTensor3D<float3> rgb,           // [B, H, W, 3]
+    DeviceTensor3D<float>  transmittance, // [B, H, W, 1]
+    DeviceTensor3D<float3> background,    // [B, H, W, 3]
+    DeviceTensor3D<float3> out_rgb        // [B, H, W, 3]
 ) {
-    DEVICE_GUARD(rgb);
-    CHECK_CUDA(rgb);
-    CHECK_CUDA(transmittance);
-    CHECK_CUDA(background);
-
-    if (rgb.ndimension() != 4 || rgb.size(-1) != 3)
-        AT_ERROR("rgb shape must be (b, h, w, 3)");
-    long b = rgb.size(0), h = rgb.size(1), w = rgb.size(2);
-    if (transmittance.ndimension() != 4 || transmittance.size(0) != b || transmittance.size(1) != h || transmittance.size(2) != w || transmittance.size(3) != 1)
-        AT_ERROR("transmittance shape must be (b, h, w, 1)");
-    if (background.ndimension() != 4 || background.size(0) != b || background.size(1) != h || background.size(2) != w || background.size(3) != 3)
-        AT_ERROR("background shape must be (b, h, w, 3)");
-
-    at::Tensor out_rgb = at::empty({b, h, w, 3}, rgb.options());
+    long b = rgb.size<0>(), h = rgb.size<1>(), w = rgb.size<2>();
 
     blend_background_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<float, 4>(rgb), tensor2view<float, 4>(transmittance), tensor2view<float, 4>(background),
-        tensor2view<float, 4>(out_rgb)
+        _dt3d_to_tv4<float>(rgb), _dt3d_to_tv4<float>(transmittance), _dt3d_to_tv4<float>(background),
+        _dt3d_to_tv4<float>(out_rgb)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return out_rgb;
 }
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<at::Tensor, at::Tensor, at::Tensor>
-blend_background_backward(
-    at::Tensor &rgb,  // [B, H, W, 3]
-    at::Tensor &transmittance,  // [B, H, W, 1]
-    at::Tensor &background,  // [B, H, W, 3]
-    at::Tensor &v_out_rgb  // [B, H, W, 3]
+void blend_background_backward(
+    DeviceTensor3D<float3> rgb,              // [B, H, W, 3]
+    DeviceTensor3D<float>  transmittance,    // [B, H, W, 1]
+    DeviceTensor3D<float3> background,       // [B, H, W, 3]
+    DeviceTensor3D<float3> v_out_rgb,        // [B, H, W, 3]
+    DeviceTensor3D<float3> v_rgb,            // [B, H, W, 3]
+    DeviceTensor3D<float>  v_transmittance,  // [B, H, W, 1]
+    DeviceTensor3D<float3> v_background      // [B, H, W, 3]
 ) {
-    DEVICE_GUARD(rgb);
-    CHECK_CUDA(rgb);
-    CHECK_CUDA(transmittance);
-    CHECK_CUDA(background);
-    CHECK_CUDA(v_out_rgb);
-
-    long b = rgb.size(0), h = rgb.size(1), w = rgb.size(2);
-
-    at::Tensor v_rgb = at::empty({b, h, w, 3}, rgb.options());
-    at::Tensor v_transmittance = at::empty({b, h, w, 1}, transmittance.options());
-    at::Tensor v_background = at::empty({b, h, w, 3}, background.options());
+    long b = rgb.size<0>(), h = rgb.size<1>(), w = rgb.size<2>();
 
     blend_background_backward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<float, 4>(rgb), tensor2view<float, 4>(transmittance), tensor2view<float, 4>(background),
-        tensor2view<float, 4>(v_out_rgb),
-        tensor2view<float, 4>(v_rgb), tensor2view<float, 4>(v_transmittance), tensor2view<float, 4>(v_background)
+        _dt3d_to_tv4<float>(rgb), _dt3d_to_tv4<float>(transmittance), _dt3d_to_tv4<float>(background),
+        _dt3d_to_tv4<float>(v_out_rgb),
+        _dt3d_to_tv4<float>(v_rgb), _dt3d_to_tv4<float>(v_transmittance), _dt3d_to_tv4<float>(v_background)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return std::make_tuple(v_rgb, v_transmittance, v_background);
 }
 
 
@@ -465,66 +457,46 @@ __global__ void blend_background_noise_backward_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor blend_background_noise_forward(
+void blend_background_noise_forward(
     bool is_linear,
-    at::Tensor &rgb,  // [B, H, W, 3]
-    at::Tensor &transmittance,  // [B, H, W, 1]
+    DeviceTensor3D<float3> rgb,           // [B, H, W, 3]
+    DeviceTensor3D<float>  transmittance, // [B, H, W, 1]
     float randomize_weight,
-    uint32_t seed
+    uint32_t seed,
+    DeviceTensor3D<float3> out_rgb        // [B, H, W, 3]
 ) {
-    DEVICE_GUARD(rgb);
-    CHECK_CUDA(rgb);
-    CHECK_CUDA(transmittance);
-
-    if (rgb.ndimension() != 4 || rgb.size(-1) != 3)
-        AT_ERROR("rgb shape must be (b, h, w, 3)");
-    long b = rgb.size(0), h = rgb.size(1), w = rgb.size(2);
-    if (transmittance.ndimension() != 4 || transmittance.size(0) != b || transmittance.size(1) != h || transmittance.size(2) != w || transmittance.size(3) != 1)
-        AT_ERROR("transmittance shape must be (b, h, w, 1)");
-
-    at::Tensor out_rgb = at::empty({b, h, w, 3}, rgb.options());
+    long b = rgb.size<0>(), h = rgb.size<1>(), w = rgb.size<2>();
 
     (is_linear ? blend_background_noise_forward_kernel<true> : blend_background_noise_forward_kernel<false>)
     <<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<float, 4>(rgb), tensor2view<float, 4>(transmittance),
+        _dt3d_to_tv4<float>(rgb), _dt3d_to_tv4<float>(transmittance),
         randomize_weight, seed,
-        tensor2view<float, 4>(out_rgb)
+        _dt3d_to_tv4<float>(out_rgb)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return out_rgb;
 }
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<at::Tensor, at::Tensor>
-blend_background_noise_backward(
+void blend_background_noise_backward(
     bool is_linear,
-    at::Tensor &rgb,  // [B, H, W, 3]
-    at::Tensor &transmittance,  // [B, H, W, 1]
+    DeviceTensor3D<float3> rgb,              // [B, H, W, 3]
+    DeviceTensor3D<float>  transmittance,    // [B, H, W, 1]
     float randomize_weight,
     uint32_t seed,
-    at::Tensor &v_out_rgb  // [B, H, W, 3]
+    DeviceTensor3D<float3> v_out_rgb,        // [B, H, W, 3]
+    DeviceTensor3D<float3> v_rgb,            // [B, H, W, 3]
+    DeviceTensor3D<float>  v_transmittance   // [B, H, W, 1]
 ) {
-    DEVICE_GUARD(rgb);
-    CHECK_CUDA(rgb);
-    CHECK_CUDA(transmittance);
-    CHECK_CUDA(v_out_rgb);
-
-    long b = rgb.size(0), h = rgb.size(1), w = rgb.size(2);
-
-    at::Tensor v_rgb = at::empty({b, h, w, 3}, rgb.options());
-    at::Tensor v_transmittance = at::empty({b, h, w, 1}, transmittance.options());
+    long b = rgb.size<0>(), h = rgb.size<1>(), w = rgb.size<2>();
 
     (is_linear ? blend_background_noise_backward_kernel<true> : blend_background_noise_backward_kernel<false>)
     <<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<float, 4>(rgb), tensor2view<float, 4>(transmittance),
+        _dt3d_to_tv4<float>(rgb), _dt3d_to_tv4<float>(transmittance),
         randomize_weight, seed,
-        tensor2view<float, 4>(v_out_rgb),
-        tensor2view<float, 4>(v_rgb), tensor2view<float, 4>(v_transmittance)
+        _dt3d_to_tv4<float>(v_out_rgb),
+        _dt3d_to_tv4<float>(v_rgb), _dt3d_to_tv4<float>(v_transmittance)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return std::make_tuple(v_rgb, v_transmittance);
 }
 
 
@@ -607,57 +579,41 @@ __global__ void rgb_to_srgb_backward_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor rgb_to_srgb_forward(
+void rgb_to_srgb_forward(
     bool is_input_linear,
-    at::Tensor &rgb,  // [B, H, W, 3]
-    at::Tensor &color_matrix   // [3, 3]
+    DeviceTensor3D<float3> rgb,          // [B, H, W, 3]
+    DeviceTensor2D<float3> color_matrix, // [3, 3] stored as 3 float3
+    DeviceTensor3D<float3> out_rgb       // [B, H, W, 3]
 ) {
-    DEVICE_GUARD(rgb);
-    CHECK_CUDA(rgb);
-    CHECK_INPUT(color_matrix);
-
-    if (rgb.ndimension() != 4 || rgb.size(-1) != 3)
-        AT_ERROR("rgb shape must be (b, h, w, 3)");
-    long b = rgb.size(0), h = rgb.size(1), w = rgb.size(2);
-
-    at::Tensor out_rgb = at::empty({b, h, w, 3}, rgb.options());
+    long b = rgb.size<0>(), h = rgb.size<1>(), w = rgb.size<2>();
 
     (is_input_linear ? rgb_to_srgb_forward_kernel<true> : rgb_to_srgb_forward_kernel<false>)
     <<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<float, 4>(rgb),
-        color_matrix.data_ptr<float>(),
-        tensor2view<float, 4>(out_rgb)
+        _dt3d_to_tv4<float>(rgb),
+        (float*)color_matrix.data_ptr(),
+        _dt3d_to_tv4<float>(out_rgb)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return out_rgb;
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor rgb_to_srgb_backward(
+void rgb_to_srgb_backward(
     bool is_input_linear,
-    at::Tensor &rgb,  // [B, H, W, 3]
-    at::Tensor &color_matrix,   // [3, 3]
-    at::Tensor &v_out_rgb  // [B, H, W, 3]
+    DeviceTensor3D<float3> rgb,          // [B, H, W, 3]
+    DeviceTensor2D<float3> color_matrix, // [3, 3] stored as 3 float3
+    DeviceTensor3D<float3> v_out_rgb,    // [B, H, W, 3]
+    DeviceTensor3D<float3> v_rgb         // [B, H, W, 3]
 ) {
-    DEVICE_GUARD(rgb);
-    CHECK_CUDA(rgb);
-    CHECK_CUDA(v_out_rgb);
-
-    long b = rgb.size(0), h = rgb.size(1), w = rgb.size(2);
-
-    at::Tensor v_rgb = at::empty({b, h, w, 3}, rgb.options());
+    long b = rgb.size<0>(), h = rgb.size<1>(), w = rgb.size<2>();
 
     (is_input_linear ? rgb_to_srgb_backward_kernel<true> : rgb_to_srgb_backward_kernel<false>)
     <<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-        tensor2view<float, 4>(rgb),
-        color_matrix.data_ptr<float>(),
-        tensor2view<float, 4>(v_out_rgb),
-        tensor2view<float, 4>(v_rgb)
+        _dt3d_to_tv4<float>(rgb),
+        (float*)color_matrix.data_ptr(),
+        _dt3d_to_tv4<float>(v_out_rgb),
+        _dt3d_to_tv4<float>(v_rgb)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return v_rgb;
 }
 
 
@@ -737,64 +693,41 @@ __global__ void depth_to_points_backward_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor depth_to_points_forward(
+void depth_to_points_forward(
     std::string camera_model,
-    at::Tensor intrins,  // fx, fy, cx, cy
-    TorchTensorView dist_coeffs,
+    TorchTensorView intrins,            // [B, 4]
+    TorchTensorView dist_coeffs,        // [B, 10]
     bool is_ray_depth,
-    at::Tensor depths  // [B, H, W, 1]
+    DeviceTensor3D<float>  depths,      // [B, H, W, 1]
+    DeviceTensor3D<float3> out_points   // [B, H, W, 3]
 ) {
-    DEVICE_GUARD(depths);
-    CHECK_CUDA(depths);
-    CHECK_INPUT(intrins);
-
-    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
-        AT_ERROR("intrins shape must be (B, 4)");
-    if (depths.ndimension() != 4 || depths.size(-1) != 1)
-        AT_ERROR("depths shape must be (B, H, W, 1)");
-    if (depths.size(0) != intrins.size(0))
-        AT_ERROR("depths and intrins batch dimension mismatch");
-
-    int b = depths.size(0), h = depths.size(1), w = depths.size(2);
-    at::Tensor out_points = at::empty({b, h, w, 3}, depths.options());
+    int b = depths.size<0>(), h = depths.size<1>(), w = depths.size<2>();
 
     depth_to_points_forward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs, is_ray_depth,
-        tensor2view<float, 4>(depths), tensor2view<float, 4>(out_points)
+        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs, is_ray_depth,
+        _dt3d_to_tv4<float>(depths), _dt3d_to_tv4<float>(out_points)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return out_points;
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor depth_to_points_backward(
+void depth_to_points_backward(
     std::string camera_model,
-    at::Tensor intrins,  // fx, fy, cx, cy
-    TorchTensorView dist_coeffs,
+    TorchTensorView intrins,            // [B, 4]
+    TorchTensorView dist_coeffs,        // [B, 10]
     bool is_ray_depth,
-    at::Tensor in_depths,  // [B, H, W, 1]
-    at::Tensor v_out_points  // [B, H, W, 3]
+    DeviceTensor3D<float>  in_depths,   // [B, H, W, 1]
+    DeviceTensor3D<float3> v_out_points,// [B, H, W, 3]
+    DeviceTensor3D<float>  v_in_depths  // [B, H, W, 1]
 ) {
-    DEVICE_GUARD(in_depths);
-    CHECK_CUDA(in_depths);
-    CHECK_CUDA(v_out_points);
-    CHECK_INPUT(intrins);
-
-    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
-        AT_ERROR("intrins shape must be (B, 4)");
-
-    int b = in_depths.size(0), h = in_depths.size(1), w = in_depths.size(2);
-    at::Tensor v_in_depths = at::empty_like(in_depths);
+    int b = in_depths.size<0>(), h = in_depths.size<1>(), w = in_depths.size<2>();
 
     depth_to_points_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs, is_ray_depth,
-        tensor2view<float, 4>(in_depths), tensor2view<float, 4>(v_out_points),
-        tensor2view<float, 4>(v_in_depths)
+        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs, is_ray_depth,
+        _dt3d_to_tv4<float>(in_depths), _dt3d_to_tv4<float>(v_out_points),
+        _dt3d_to_tv4<float>(v_in_depths)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return v_in_depths;
 }
 
 
@@ -973,62 +906,42 @@ __global__ void depth_to_normal_backward_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor depth_to_normal_forward(
+void depth_to_normal_forward(
     std::string camera_model,
-    at::Tensor intrins,  // fx, fy, cx, cy
-    TorchTensorView dist_coeffs,
+    TorchTensorView intrins,            // [B, 4]
+    TorchTensorView dist_coeffs,        // [B, 10]
     bool is_ray_depth,
-    at::Tensor depths  // [B, H, W, 1]
+    DeviceTensor3D<float>  depths,      // [B, H, W, 1]
+    DeviceTensor3D<float3> normals      // [B, H, W, 3]
 ) {
-    DEVICE_GUARD(depths);
-    CHECK_CUDA(depths);
-    CHECK_INPUT(intrins);
-
-    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
-        AT_ERROR("intrins shape must be (B, 4)");
-    if (depths.ndimension() != 4 || depths.size(-1) != 1)
-        AT_ERROR("depths shape must be (B, H, W, 1)");
-    if (depths.size(0) != intrins.size(0))
-        AT_ERROR("depths and intrins batch dimension mismatch");
-
-    int b = depths.size(0), h = depths.size(1), w = depths.size(2);
-    at::Tensor normals = at::empty({b, h, w, 3}, depths.options());
+    int b = depths.size<0>(), h = depths.size<1>(), w = depths.size<2>();
 
     depth_to_normal_forward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
-        is_ray_depth, tensor2view<float, 4>(depths), tensor2view<float, 4>(normals)
+        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
+        is_ray_depth, _dt3d_to_tv4<float>(depths), _dt3d_to_tv4<float>(normals)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return normals;
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor depth_to_normal_backward(
+void depth_to_normal_backward(
     std::string camera_model,
-    at::Tensor intrins,  // fx, fy, cx, cy
-    TorchTensorView dist_coeffs,
+    TorchTensorView intrins,            // [B, 4]
+    TorchTensorView dist_coeffs,        // [B, 10]
     bool is_ray_depth,
-    at::Tensor depths,  // [B, H, W, 1]
-    at::Tensor v_normals  // [B, H, W, 3]
+    DeviceTensor3D<float>  depths,      // [B, H, W, 1]
+    DeviceTensor3D<float3> v_normals,   // [B, H, W, 3]
+    DeviceTensor3D<float>  v_depths     // [B, H, W, 1] (must be pre-zeroed)
 ) {
-    DEVICE_GUARD(depths);
-    CHECK_CUDA(depths);
-    CHECK_INPUT(intrins);
-    CHECK_CUDA(v_normals);
-
-    int b = depths.size(0), h = depths.size(1), w = depths.size(2);
-    at::Tensor v_depths = zeros_like_tensor(depths);
+    int b = depths.size<0>(), h = depths.size<1>(), w = depths.size<2>();
 
     depth_to_normal_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
-        is_ray_depth, tensor2view<float, 4>(depths),
-        tensor2view<float, 4>(v_normals),
-        tensor2view<float, 4>(v_depths)
+        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
+        is_ray_depth, _dt3d_to_tv4<float>(depths),
+        _dt3d_to_tv4<float>(v_normals),
+        _dt3d_to_tv4<float>(v_depths)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return v_depths;
 }
 
 
@@ -1156,75 +1069,47 @@ __global__ void depth_normal_loss_backward_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor depth_normal_loss_forward(
+void depth_normal_loss_forward(
     std::string camera_model,
-    at::Tensor intrins,  // fx, fy, cx, cy
-    TorchTensorView dist_coeffs,
+    TorchTensorView intrins,            // [B, 4]
+    TorchTensorView dist_coeffs,        // [B, 10]
     bool is_ray_depth,
-    at::Tensor depths,  // [B, H, W, 1]
-    at::Tensor gt_normals  // [B, H, W, 3]
+    DeviceTensor3D<float>  depths,      // [B, H, W, 1]
+    DeviceTensor3D<float3> gt_normals,  // [B, H, W, 3]
+    DeviceTensor3D<float>  losses       // [B, H, W, 1]
 ) {
-    DEVICE_GUARD(depths);
-    CHECK_CUDA(depths);
-    CHECK_CUDA(gt_normals);
-    CHECK_INPUT(intrins);
-
-    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
-        AT_ERROR("intrins shape must be (B, 4)");
-    if (depths.ndimension() != 4 || depths.size(-1) != 1)
-        AT_ERROR("depths shape must be (B, H, W, 1)");
-    if (depths.size(0) != intrins.size(0))
-        AT_ERROR("depths and intrins batch dimension mismatch");
-    if (gt_normals.ndimension() != 4 || gt_normals.size(-1) != 3)
-        AT_ERROR("gt_normals shape must be (B, H, W, 3)");
-    if (gt_normals.size(0) != intrins.size(0))
-        AT_ERROR("gt_normals and intrins batch dimension mismatch");
-
-    int b = depths.size(0), h = depths.size(1), w = depths.size(2);
-    at::Tensor losses = at::empty_like(depths);
+    int b = depths.size<0>(), h = depths.size<1>(), w = depths.size<2>();
 
     depth_normal_loss_forward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
-        is_ray_depth, tensor2view<float, 4>(depths), tensor2view<float, 4>(gt_normals),
-        tensor2view<float, 4>(losses)
+        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
+        is_ray_depth, _dt3d_to_tv4<float>(depths), _dt3d_to_tv4<float>(gt_normals),
+        _dt3d_to_tv4<float>(losses)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return losses;
 }
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<at::Tensor, at::Tensor> depth_normal_loss_backward(
+void depth_normal_loss_backward(
     std::string camera_model,
-    at::Tensor intrins,  // fx, fy, cx, cy
-    TorchTensorView dist_coeffs,
+    TorchTensorView intrins,            // [B, 4]
+    TorchTensorView dist_coeffs,        // [B, 10]
     bool is_ray_depth,
-    at::Tensor depths,  // [B, H, W, 1]
-    at::Tensor gt_normals,  // [B, H, W, 3]
-    at::Tensor v_losses  // [B, H, W, 1]
+    DeviceTensor3D<float>  depths,      // [B, H, W, 1]
+    DeviceTensor3D<float3> gt_normals,  // [B, H, W, 3]
+    DeviceTensor3D<float>  v_losses,    // [B, H, W, 1]
+    DeviceTensor3D<float>  v_depths,    // [B, H, W, 1] (must be pre-zeroed)
+    DeviceTensor3D<float3> v_gt_normals // [B, H, W, 3]
 ) {
-    DEVICE_GUARD(depths);
-    CHECK_CUDA(depths);
-    CHECK_CUDA(gt_normals);
-    CHECK_CUDA(v_losses);
-    CHECK_INPUT(intrins);
-
-    int b = depths.size(0), h = depths.size(1), w = depths.size(2);
-    at::Tensor v_depths = zeros_like_tensor(depths);
-    at::Tensor v_gt_normals = at::empty_like(gt_normals);
+    int b = depths.size<0>(), h = depths.size<1>(), w = depths.size<2>();
 
     depth_normal_loss_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
-        is_ray_depth, tensor2view<float, 4>(depths), tensor2view<float, 4>(gt_normals),
-        tensor2view<float, 4>(v_losses),
-        tensor2view<float, 4>(v_depths), tensor2view<float, 4>(v_gt_normals)
+        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
+        is_ray_depth, _dt3d_to_tv4<float>(depths), _dt3d_to_tv4<float>(gt_normals),
+        _dt3d_to_tv4<float>(v_losses),
+        _dt3d_to_tv4<float>(v_depths), _dt3d_to_tv4<float>(v_gt_normals)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return std::make_tuple(v_depths, v_gt_normals);
 }
-
-#endif
 
 
 // ================
@@ -1330,9 +1215,6 @@ void ray_depth_to_linear_depth_backward(
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
-
-
-#if 0
 
 
 // ================
@@ -1460,59 +1342,37 @@ __global__ void distort_image_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor distort_image_tensor(
+void distort_image_tensor(
     std::string camera_model,
-    at::Tensor intrins,  // fx, fy, cx, cy
-    TorchTensorView dist_coeffs,
-    at::Tensor in_image  // [B, H, W, C]
+    TorchTensorView intrins,            // [B, 4]
+    TorchTensorView dist_coeffs,        // [B, 10]
+    DeviceTensor3D<float> in_image,     // [B, H, W, C]
+    DeviceTensor3D<float> out_image     // [B, H, W, C] (must be pre-zeroed)
 ) {
-    DEVICE_GUARD(in_image);
-    CHECK_CUDA(in_image);
-    CHECK_INPUT(intrins);
-
-    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
-        AT_ERROR("intrins shape must be (B, 4)");
-    if (in_image.ndimension() != 4 || in_image.size(0) != intrins.size(0))
-        AT_ERROR("in_image shape must be (B, H, W, C) where B is consistent with intrins");
-
-    int b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
-    at::Tensor out_image = zeros_like_tensor(in_image);
+    int b = in_image.size<0>(), h = in_image.size<1>(), w = in_image.size<2>();
 
     distort_image_kernel<false><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
-        tensor2view<float, 4>(in_image), tensor2view<float, 4>(out_image)
+        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
+        _dt3d_to_tv4<float>(in_image), _dt3d_to_tv4<float>(out_image)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return out_image;
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor undistort_image_tensor(
+void undistort_image_tensor(
     std::string camera_model,
-    at::Tensor intrins,  // fx, fy, cx, cy
-    TorchTensorView dist_coeffs,
-    at::Tensor in_image  // [B, H, W, C]
+    TorchTensorView intrins,            // [B, 4]
+    TorchTensorView dist_coeffs,        // [B, 10]
+    DeviceTensor3D<float> in_image,     // [B, H, W, C]
+    DeviceTensor3D<float> out_image     // [B, H, W, C] (must be pre-zeroed)
 ) {
-    DEVICE_GUARD(in_image);
-    CHECK_CUDA(in_image);
-    CHECK_INPUT(intrins);
-
-    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
-        AT_ERROR("intrins shape must be (B, 4)");
-    if (in_image.ndimension() != 4 || in_image.size(0) != intrins.size(0))
-        AT_ERROR("in_image shape must be (B, H, W, C) where B is consistent with intrins");
-
-    int b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
-    at::Tensor out_image = zeros_like_tensor(in_image);
+    int b = in_image.size<0>(), h = in_image.size<1>(), w = in_image.size<2>();
 
     distort_image_kernel<true><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
-        tensor2view<float, 4>(in_image), tensor2view<float, 4>(out_image)
+        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
+        _dt3d_to_tv4<float>(in_image), _dt3d_to_tv4<float>(out_image)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return out_image;
 }
 
 
@@ -1571,61 +1431,43 @@ __global__ void warp_image_wide_to_pinhole_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor warp_image_wide_to_pinhole_tensor(
+void warp_image_wide_to_pinhole_tensor(
     std::string camera_model,
-    at::Tensor intrins,  // fx, fy, cx, cy
-    TorchTensorView dist_coeffs,
-    at::Tensor wide_image,  // [B, H, W, C]
-    at::Tensor axes,  // [K, 3, 3]
-    int out_w, int out_h
+    TorchTensorView intrins,            // [B, 4]
+    TorchTensorView dist_coeffs,        // [B, 10]
+    TorchTensorView wide_image,         // [B, H, W, C] (float)
+    TorchTensorView axes,               // [K, 3, 3]
+    int out_w, int out_h,
+    TorchTensorView pinhole_images      // [B, K, H, W, C] (float)
 ) {
-    DEVICE_GUARD(wide_image);
-    CHECK_CUDA(wide_image);
-    CHECK_INPUT(intrins);
-    CHECK_INPUT(axes);
+    const auto& ws = std::get<2>(wide_image);
+    int b = ws[0];
+    // Construct TensorViews from TorchTensorView
+    auto make_tv4 = [](const TorchTensorView& tv) {
+        const auto& s = std::get<2>(tv);
+        TensorView<float, 4> v;
+        v.data = (float*)std::get<0>(tv);
+        v.shape[0] = s[0]; v.shape[1] = s[1]; v.shape[2] = s[2]; v.shape[3] = s[3];
+        long s3 = s[3], s2 = s[2]*s3, s1 = s[1]*s2;
+        v.strides[0] = s1; v.strides[1] = s2; v.strides[2] = s3; v.strides[3] = 1;
+        return v;
+    };
+    auto make_tv5 = [](const TorchTensorView& tv) {
+        const auto& s = std::get<2>(tv);
+        TensorView<float, 5> v;
+        v.data = (float*)std::get<0>(tv);
+        v.shape[0] = s[0]; v.shape[1] = s[1]; v.shape[2] = s[2]; v.shape[3] = s[3]; v.shape[4] = s[4];
+        long s4 = s[4], s3 = s[3]*s4, s2 = s[2]*s3, s1 = s[1]*s2;
+        v.strides[0] = s1; v.strides[1] = s2; v.strides[2] = s3; v.strides[3] = s4; v.strides[4] = 1;
+        return v;
+    };
 
-    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
-        AT_ERROR("intrins shape must be (B, 4)");
-    if (wide_image.ndimension() != 4 || wide_image.size(0) != intrins.size(0))
-        AT_ERROR("wide_image shape must be (B, H, W, C) where B is consistent with intrins");
-    if (axes.ndimension() != 3 || axes.size(1) != 3 || axes.size(2) != 3)
-        AT_ERROR("axes shape must be (K, 3, 3)");
-
-    int b = wide_image.size(0), c = wide_image.size(3);
-    int k = axes.size(0);
-    at::Tensor pinhole_images = at::empty({b, k, out_h, out_w, c}, wide_image.options());
-
-    if (wide_image.dtype() == at::kFloat)
-        warp_image_wide_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
-            cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
-            tensor2view<float, 4>(wide_image), tensor2view<float, 5>(pinhole_images),
-            axes.data_ptr<float>()
-        );
-    else if (wide_image.dtype() == at::kByte)
-        warp_image_wide_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
-            cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
-            tensor2view<uint8_t, 4>(wide_image), tensor2view<uint8_t, 5>(pinhole_images),
-            axes.data_ptr<float>()
-        );
-    else if (wide_image.dtype() == at::kUInt16)
-        warp_image_wide_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
-            cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
-            tensor2view<uint16_t, 4>(wide_image), tensor2view<uint16_t, 5>(pinhole_images),
-            axes.data_ptr<float>()
-        );
-    else if (wide_image.dtype() == at::kBool) {
-        auto wide_image_byte = wide_image.view(at::kByte);
-        auto pinhole_image_byte = pinhole_images.view(at::kByte);
-        warp_image_wide_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
-            cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
-            tensor2view<uint8_t, 4>(wide_image_byte), tensor2view<uint8_t, 5>(pinhole_image_byte),
-            axes.data_ptr<float>()
-        );
-    }
-    else throw std::runtime_error("Unsupported image format");
+    warp_image_wide_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
+        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
+        make_tv4(wide_image), make_tv5(pinhole_images),
+        (float*)std::get<0>(axes)
+    );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return pinhole_images;
 }
 
 template<typename T>
@@ -1671,48 +1513,38 @@ __global__ void warp_image_equirectangular_to_pinhole_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor warp_image_equirectangular_to_pinhole_tensor(
-    at::Tensor equirectangular_image,  // [B, H, W, C]
-    at::Tensor axes,  // [K, 3, 3]
-    int out_w, int out_h
+void warp_image_equirectangular_to_pinhole_tensor(
+    TorchTensorView equirectangular_image,  // [B, H, W, C] (float)
+    TorchTensorView axes,                   // [K, 3, 3]
+    int out_w, int out_h,
+    TorchTensorView pinhole_images          // [B, K, H, W, C] (float)
 ) {
-    DEVICE_GUARD(equirectangular_image);
-    CHECK_CUDA(equirectangular_image);
-    CHECK_INPUT(axes);
+    const auto& es = std::get<2>(equirectangular_image);
+    int b = es[0];
+    auto make_tv4 = [](const TorchTensorView& tv) {
+        const auto& s = std::get<2>(tv);
+        TensorView<float, 4> v;
+        v.data = (float*)std::get<0>(tv);
+        v.shape[0] = s[0]; v.shape[1] = s[1]; v.shape[2] = s[2]; v.shape[3] = s[3];
+        long s3 = s[3], s2 = s[2]*s3, s1 = s[1]*s2;
+        v.strides[0] = s1; v.strides[1] = s2; v.strides[2] = s3; v.strides[3] = 1;
+        return v;
+    };
+    auto make_tv5 = [](const TorchTensorView& tv) {
+        const auto& s = std::get<2>(tv);
+        TensorView<float, 5> v;
+        v.data = (float*)std::get<0>(tv);
+        v.shape[0] = s[0]; v.shape[1] = s[1]; v.shape[2] = s[2]; v.shape[3] = s[3]; v.shape[4] = s[4];
+        long s4 = s[4], s3 = s[3]*s4, s2 = s[2]*s3, s1 = s[1]*s2;
+        v.strides[0] = s1; v.strides[1] = s2; v.strides[2] = s3; v.strides[3] = s4; v.strides[4] = 1;
+        return v;
+    };
 
-    if (equirectangular_image.ndimension() != 4)
-        AT_ERROR("equirectangular_image shape must be (B, H, W, C)");
-    if (axes.ndimension() != 3 || axes.size(1) != 3 || axes.size(2) != 3)
-        AT_ERROR("axes shape must be (K, 3, 3)");
-
-    int b = equirectangular_image.size(0), c = equirectangular_image.size(3);
-    int k = axes.size(0);
-    at::Tensor pinhole_images = at::empty({b, k, out_h, out_w, c}, equirectangular_image.options());
-
-    if (equirectangular_image.scalar_type() == at::kFloat)
-        warp_image_equirectangular_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
-            tensor2view<float, 4>(equirectangular_image), tensor2view<float, 5>(pinhole_images),
-            axes.data_ptr<float>(), 0.5f
-        );
-    else if (equirectangular_image.scalar_type() == at::kByte)
-        warp_image_equirectangular_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
-            tensor2view<uint8_t, 4>(equirectangular_image), tensor2view<uint8_t, 5>(pinhole_images),
-            axes.data_ptr<float>(), 128.0f
-        );
-    // else if (equirectangular_image.scalar_type() == at::kHalf)
-    //     warp_image_equirectangular_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
-    //         tensor2view<half, 4>(equirectangular_image), tensor2view<half, 5>(pinhole_images),
-    //         axes.data_ptr<float>(), 0.5f
-    //     );
-    else if (equirectangular_image.scalar_type() == at::kUInt16)
-        warp_image_equirectangular_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
-            tensor2view<uint16_t, 4>(equirectangular_image), tensor2view<uint16_t, 5>(pinhole_images),
-            axes.data_ptr<float>(), 32768.0f
-        );
-    else throw std::runtime_error("Unsupported image format for equirectangular");
+    warp_image_equirectangular_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
+        make_tv4(equirectangular_image), make_tv5(pinhole_images),
+        (float*)std::get<0>(axes), 0.5f
+    );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return pinhole_images;
 }
 
 enum class WarpImageType {
@@ -1836,147 +1668,159 @@ __global__ void warp_image_pinhole_to_wide_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor warp_image_pinhole_to_wide_tensor(
+void warp_image_pinhole_to_wide_tensor(
     std::string camera_model,
-    at::Tensor intrins,  // fx, fy, cx, cy
-    TorchTensorView dist_coeffs,
-    at::Tensor pinhole_images,  // [B, K, H, W, C]
-    at::Tensor axes,  // [K, 3, 3]
-    int out_w, int out_h
+    TorchTensorView intrins,            // [B, 4]
+    TorchTensorView dist_coeffs,        // [B, 10]
+    TorchTensorView pinhole_images,     // [B, K, H, W, C]
+    TorchTensorView axes,               // [K, 3, 3]
+    int out_w, int out_h,
+    TorchTensorView wide_image          // [B, H, W, C]
 ) {
-    DEVICE_GUARD(pinhole_images);
-    CHECK_CUDA(pinhole_images);
-    CHECK_INPUT(intrins);
-    CHECK_INPUT(axes);
-
-    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
-        AT_ERROR("intrins shape must be (B, 4)");
-    if (pinhole_images.ndimension() != 5 || pinhole_images.size(0) != intrins.size(0))
-        AT_ERROR("pinhole_images shape must be (B, K, H, W, C) where B is consistent with intrins");
-    if (axes.ndimension() != 3 || axes.size(1) != 3 || axes.size(2) != 3 || axes.size(0) != pinhole_images.size(1))
-        AT_ERROR("axes shape must be (K, 3, 3)");
-
-    int b = pinhole_images.size(0), k = pinhole_images.size(1), c = pinhole_images.size(4);
-    if (c > 4)
-        AT_ERROR("warp_image_pinhole_to_wide supports max 4 channels");
-    at::Tensor wide_image = at::empty({b, out_h, out_w, c}, pinhole_images.options());
+    const auto& ps = std::get<2>(pinhole_images);
+    int b = ps[0];
+    auto make_tv4 = [](const TorchTensorView& tv) {
+        const auto& s = std::get<2>(tv);
+        TensorView<float, 4> v;
+        v.data = (float*)std::get<0>(tv);
+        v.shape[0] = s[0]; v.shape[1] = s[1]; v.shape[2] = s[2]; v.shape[3] = s[3];
+        long s3 = s[3], s2 = s[2]*s3, s1 = s[1]*s2;
+        v.strides[0] = s1; v.strides[1] = s2; v.strides[2] = s3; v.strides[3] = 1;
+        return v;
+    };
+    auto make_tv5 = [](const TorchTensorView& tv) {
+        const auto& s = std::get<2>(tv);
+        TensorView<float, 5> v;
+        v.data = (float*)std::get<0>(tv);
+        v.shape[0] = s[0]; v.shape[1] = s[1]; v.shape[2] = s[2]; v.shape[3] = s[3]; v.shape[4] = s[4];
+        long s4 = s[4], s3 = s[3]*s4, s2 = s[2]*s3, s1 = s[1]*s2;
+        v.strides[0] = s1; v.strides[1] = s2; v.strides[2] = s3; v.strides[3] = s4; v.strides[4] = 1;
+        return v;
+    };
 
     warp_image_pinhole_to_wide_kernel<WarpImageType::Default><<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
-        tensor2view<float, 4>(wide_image), tensor2view<float, 5>(pinhole_images),
-        axes.data_ptr<float>()
+        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
+        make_tv4(wide_image), make_tv5(pinhole_images),
+        (float*)std::get<0>(axes)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return wide_image;
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor warp_linear_depth_pinhole_to_wide_tensor(
+void warp_linear_depth_pinhole_to_wide_tensor(
     std::string camera_model,
-    at::Tensor intrins,  // fx, fy, cx, cy
-    TorchTensorView dist_coeffs,
-    at::Tensor pinhole_images,  // [B, K, H, W, C]
-    at::Tensor axes,  // [K, 3, 3]
-    int out_w, int out_h
+    TorchTensorView intrins,            // [B, 4]
+    TorchTensorView dist_coeffs,        // [B, 10]
+    TorchTensorView pinhole_images,     // [B, K, H, W, 1]
+    TorchTensorView axes,               // [K, 3, 3]
+    int out_w, int out_h,
+    TorchTensorView wide_image          // [B, H, W, 1]
 ) {
-    DEVICE_GUARD(pinhole_images);
-    CHECK_CUDA(pinhole_images);
-    CHECK_INPUT(intrins);
-    CHECK_INPUT(axes);
-
-    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
-        AT_ERROR("intrins shape must be (B, 4)");
-    if (pinhole_images.ndimension() != 5 || pinhole_images.size(0) != intrins.size(0))
-        AT_ERROR("pinhole_images shape must be (B, K, H, W, C) where B is consistent with intrins");
-    if (axes.ndimension() != 3 || axes.size(1) != 3 || axes.size(2) != 3 || axes.size(0) != pinhole_images.size(1))
-        AT_ERROR("axes shape must be (K, 3, 3)");
-
-    int b = pinhole_images.size(0), k = pinhole_images.size(1), c = pinhole_images.size(4);
-    if (c != 1)
-        AT_ERROR("depth map must have 1 channel");
-    at::Tensor wide_image = at::empty({b, out_h, out_w, c}, pinhole_images.options());
+    const auto& ps = std::get<2>(pinhole_images);
+    int b = ps[0];
+    auto make_tv4 = [](const TorchTensorView& tv) {
+        const auto& s = std::get<2>(tv);
+        TensorView<float, 4> v;
+        v.data = (float*)std::get<0>(tv);
+        v.shape[0] = s[0]; v.shape[1] = s[1]; v.shape[2] = s[2]; v.shape[3] = s[3];
+        long s3 = s[3], s2 = s[2]*s3, s1 = s[1]*s2;
+        v.strides[0] = s1; v.strides[1] = s2; v.strides[2] = s3; v.strides[3] = 1;
+        return v;
+    };
+    auto make_tv5 = [](const TorchTensorView& tv) {
+        const auto& s = std::get<2>(tv);
+        TensorView<float, 5> v;
+        v.data = (float*)std::get<0>(tv);
+        v.shape[0] = s[0]; v.shape[1] = s[1]; v.shape[2] = s[2]; v.shape[3] = s[3]; v.shape[4] = s[4];
+        long s4 = s[4], s3 = s[3]*s4, s2 = s[2]*s3, s1 = s[1]*s2;
+        v.strides[0] = s1; v.strides[1] = s2; v.strides[2] = s3; v.strides[3] = s4; v.strides[4] = 1;
+        return v;
+    };
 
     warp_image_pinhole_to_wide_kernel<WarpImageType::LinearDepth><<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
-        tensor2view<float, 4>(wide_image), tensor2view<float, 5>(pinhole_images),
-        axes.data_ptr<float>()
+        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
+        make_tv4(wide_image), make_tv5(pinhole_images),
+        (float*)std::get<0>(axes)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return wide_image;
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor warp_ray_depth_pinhole_to_wide_tensor(
+void warp_ray_depth_pinhole_to_wide_tensor(
     std::string camera_model,
-    at::Tensor intrins,  // fx, fy, cx, cy
-    TorchTensorView dist_coeffs,
-    at::Tensor pinhole_images,  // [B, K, H, W, C]
-    at::Tensor axes,  // [K, 3, 3]
-    int out_w, int out_h
+    TorchTensorView intrins,            // [B, 4]
+    TorchTensorView dist_coeffs,        // [B, 10]
+    TorchTensorView pinhole_images,     // [B, K, H, W, 1]
+    TorchTensorView axes,               // [K, 3, 3]
+    int out_w, int out_h,
+    TorchTensorView wide_image          // [B, H, W, 1]
 ) {
-    DEVICE_GUARD(pinhole_images);
-    CHECK_CUDA(pinhole_images);
-    CHECK_INPUT(intrins);
-    CHECK_INPUT(axes);
-
-    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
-        AT_ERROR("intrins shape must be (B, 4)");
-    if (pinhole_images.ndimension() != 5 || pinhole_images.size(0) != intrins.size(0))
-        AT_ERROR("pinhole_images shape must be (B, K, H, W, C) where B is consistent with intrins");
-    if (axes.ndimension() != 3 || axes.size(1) != 3 || axes.size(2) != 3 || axes.size(0) != pinhole_images.size(1))
-        AT_ERROR("axes shape must be (K, 3, 3)");
-
-    int b = pinhole_images.size(0), k = pinhole_images.size(1), c = pinhole_images.size(4);
-    if (c != 1)
-        AT_ERROR("depth map must have 1 channel");
-    at::Tensor wide_image = at::empty({b, out_h, out_w, c}, pinhole_images.options());
+    const auto& ps = std::get<2>(pinhole_images);
+    int b = ps[0];
+    auto make_tv4 = [](const TorchTensorView& tv) {
+        const auto& s = std::get<2>(tv);
+        TensorView<float, 4> v;
+        v.data = (float*)std::get<0>(tv);
+        v.shape[0] = s[0]; v.shape[1] = s[1]; v.shape[2] = s[2]; v.shape[3] = s[3];
+        long s3 = s[3], s2 = s[2]*s3, s1 = s[1]*s2;
+        v.strides[0] = s1; v.strides[1] = s2; v.strides[2] = s3; v.strides[3] = 1;
+        return v;
+    };
+    auto make_tv5 = [](const TorchTensorView& tv) {
+        const auto& s = std::get<2>(tv);
+        TensorView<float, 5> v;
+        v.data = (float*)std::get<0>(tv);
+        v.shape[0] = s[0]; v.shape[1] = s[1]; v.shape[2] = s[2]; v.shape[3] = s[3]; v.shape[4] = s[4];
+        long s4 = s[4], s3 = s[3]*s4, s2 = s[2]*s3, s1 = s[1]*s2;
+        v.strides[0] = s1; v.strides[1] = s2; v.strides[2] = s3; v.strides[3] = s4; v.strides[4] = 1;
+        return v;
+    };
 
     warp_image_pinhole_to_wide_kernel<WarpImageType::RayDepth><<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
-        tensor2view<float, 4>(wide_image), tensor2view<float, 5>(pinhole_images),
-        axes.data_ptr<float>()
+        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
+        make_tv4(wide_image), make_tv5(pinhole_images),
+        (float*)std::get<0>(axes)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return wide_image;
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor warp_points_pinhole_to_wide_tensor(
+void warp_points_pinhole_to_wide_tensor(
     std::string camera_model,
-    at::Tensor intrins,  // fx, fy, cx, cy
-    TorchTensorView dist_coeffs,
-    at::Tensor pinhole_images,  // [B, K, H, W, C]
-    at::Tensor axes,  // [K, 3, 3]
-    int out_w, int out_h
+    TorchTensorView intrins,            // [B, 4]
+    TorchTensorView dist_coeffs,        // [B, 10]
+    TorchTensorView pinhole_images,     // [B, K, H, W, 3]
+    TorchTensorView axes,               // [K, 3, 3]
+    int out_w, int out_h,
+    TorchTensorView wide_image          // [B, H, W, 3]
 ) {
-    DEVICE_GUARD(pinhole_images);
-    CHECK_CUDA(pinhole_images);
-    CHECK_INPUT(intrins);
-    CHECK_INPUT(axes);
-
-    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
-        AT_ERROR("intrins shape must be (B, 4)");
-    if (pinhole_images.ndimension() != 5 || pinhole_images.size(0) != intrins.size(0))
-        AT_ERROR("pinhole_images shape must be (B, K, H, W, C) where B is consistent with intrins");
-    if (axes.ndimension() != 3 || axes.size(1) != 3 || axes.size(2) != 3 || axes.size(0) != pinhole_images.size(1))
-        AT_ERROR("axes shape must be (K, 3, 3)");
-
-    int b = pinhole_images.size(0), k = pinhole_images.size(1), c = pinhole_images.size(4);
-    if (c != 3)
-        AT_ERROR("point map must have 3 channels");
-    at::Tensor wide_image = at::empty({b, out_h, out_w, c}, pinhole_images.options());
+    const auto& ps = std::get<2>(pinhole_images);
+    int b = ps[0];
+    auto make_tv4 = [](const TorchTensorView& tv) {
+        const auto& s = std::get<2>(tv);
+        TensorView<float, 4> v;
+        v.data = (float*)std::get<0>(tv);
+        v.shape[0] = s[0]; v.shape[1] = s[1]; v.shape[2] = s[2]; v.shape[3] = s[3];
+        long s3 = s[3], s2 = s[2]*s3, s1 = s[1]*s2;
+        v.strides[0] = s1; v.strides[1] = s2; v.strides[2] = s3; v.strides[3] = 1;
+        return v;
+    };
+    auto make_tv5 = [](const TorchTensorView& tv) {
+        const auto& s = std::get<2>(tv);
+        TensorView<float, 5> v;
+        v.data = (float*)std::get<0>(tv);
+        v.shape[0] = s[0]; v.shape[1] = s[1]; v.shape[2] = s[2]; v.shape[3] = s[3]; v.shape[4] = s[4];
+        long s4 = s[4], s3 = s[3]*s4, s2 = s[2]*s3, s1 = s[1]*s2;
+        v.strides[0] = s1; v.strides[1] = s2; v.strides[2] = s3; v.strides[3] = s4; v.strides[4] = 1;
+        return v;
+    };
 
     warp_image_pinhole_to_wide_kernel<WarpImageType::Points><<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
-        tensor2view<float, 4>(wide_image), tensor2view<float, 5>(pinhole_images),
-        axes.data_ptr<float>()
+        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
+        make_tv4(wide_image), make_tv5(pinhole_images),
+        (float*)std::get<0>(axes)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return wide_image;
 }
 
 
@@ -2053,44 +1897,35 @@ __global__ void warp_depth_pinhole_to_wide_scale_matrix_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor warp_depth_pinhole_to_wide_scale_matrix_tensor(
+void warp_depth_pinhole_to_wide_scale_matrix_tensor(
     std::string camera_model,
-    at::Tensor intrins,  // fx, fy, cx, cy
-    TorchTensorView dist_coeffs,
-    at::Tensor pinhole_images,  // [B, K, H, W, C]
-    at::Tensor axes,  // [K, 3, 3]
-    int out_w, int out_h
+    TorchTensorView intrins,            // [B, 4]
+    TorchTensorView dist_coeffs,        // [B, 10]
+    TorchTensorView pinhole_images,     // [B, K, H, W, 1]
+    TorchTensorView axes,               // [K, 3, 3]
+    int out_w, int out_h,
+    TorchTensorView matrix              // [B, K, K] (must be pre-zeroed)
 ) {
-    DEVICE_GUARD(pinhole_images);
-    CHECK_CUDA(pinhole_images);
-    CHECK_INPUT(intrins);
-    CHECK_INPUT(axes);
-
-    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
-        AT_ERROR("intrins shape must be (B, 4)");
-    if (pinhole_images.ndimension() != 5 || pinhole_images.size(0) != intrins.size(0))
-        AT_ERROR("pinhole_images shape must be (B, K, H, W, C) where B is consistent with intrins");
-    if (axes.ndimension() != 3 || axes.size(1) != 3 || axes.size(2) != 3 || axes.size(0) != pinhole_images.size(1))
-        AT_ERROR("axes shape must be (K, 3, 3)");
-
-    int b = pinhole_images.size(0), k = pinhole_images.size(1), c = pinhole_images.size(4);
-    if (c != 1)
-        AT_ERROR("depth map must have 1 channel");
-    constexpr int MAX_K = 12;
-    if (k > MAX_K)
-        AT_ERROR("k is too large, max " + std::to_string(MAX_K));
-    at::Tensor matrix = at::zeros({b, k, k}, pinhole_images.options());
+    const auto& ps = std::get<2>(pinhole_images);
+    int b = ps[0];
+    auto make_tv5 = [](const TorchTensorView& tv) {
+        const auto& s = std::get<2>(tv);
+        TensorView<float, 5> v;
+        v.data = (float*)std::get<0>(tv);
+        v.shape[0] = s[0]; v.shape[1] = s[1]; v.shape[2] = s[2]; v.shape[3] = s[3]; v.shape[4] = s[4];
+        long s4 = s[4], s3 = s[3]*s4, s2 = s[2]*s3, s1 = s[1]*s2;
+        v.strides[0] = s1; v.strides[1] = s2; v.strides[2] = s3; v.strides[3] = s4; v.strides[4] = 1;
+        return v;
+    };
 
     warp_depth_pinhole_to_wide_scale_matrix_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)intrins.data_ptr<float>(), dist_coeffs,
+        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
         out_w, out_h,
-        tensor2view<float, 5>(pinhole_images),
-        axes.data_ptr<float>(),
-        matrix.data_ptr<float>()
+        make_tv5(pinhole_images),
+        (float*)std::get<0>(axes),
+        (float*)std::get<0>(matrix)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return matrix;
 }
 
 
@@ -2155,53 +1990,40 @@ __global__ void ppisp_forward_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor ppisp_forward(
-    at::Tensor &in_image,  // [B, H, W, C]
-    at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
-    at::Tensor &intrins,  // [B, 4]
+void ppisp_forward(
+    DeviceTensor3D<float3> in_image,    // [B, H, W, 3]
+    TorchTensorView ppisp_params,       // [B, PPISP_NUM_PARAMS]
+    TorchTensorView intrins,            // [B, 4]
     const float actual_image_width,
     const float actual_image_height,
-    std::string param_type
+    std::string param_type,
+    DeviceTensor3D<float3> out_image    // [B, H, W, 3]
 ) {
-    DEVICE_GUARD(in_image);
-    CHECK_CUDA(in_image);
-    CHECK_INPUT(ppisp_params);
-    CHECK_INPUT(intrins);
-    if (in_image.ndimension() != 4 || in_image.size(0) != ppisp_params.size(0))
-        AT_ERROR("in_image shape must be (B, H, W, C) where B is consistent with ppisp_params");
-    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
-        AT_ERROR("intrins shape must be (B, 4)");
-    long b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
-    at::Tensor out_image = at::empty_like(in_image);
+    long b = in_image.size<0>(), h = in_image.size<1>(), w = in_image.size<2>();
     if (param_type == "original" || param_type == "") {
-        if (ppisp_params.ndimension() != 2 || ppisp_params.size(1) != kNumPPISPParams)
-            AT_ERROR("ppisp_params shape must be (B, PPISP_NUM_PARAMS)");
         ppisp_forward_kernel<PPISPParamType::Original><<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-            tensor2view<float, 4>(in_image),
-            ppisp_params.data_ptr<float>(),
-            (float4*)intrins.data_ptr<float>(),
+            _dt3d_to_tv4<float>(in_image),
+            (float*)std::get<0>(ppisp_params),
+            (float4*)std::get<0>(intrins),
             actual_image_width,
             actual_image_height,
-            tensor2view<float, 4>(out_image)
+            _dt3d_to_tv4<float>(out_image)
         );
     }
     else if (param_type == "rqs") {
-        if (ppisp_params.ndimension() != 2 || ppisp_params.size(1) != kNumPPISPParamsRQS)
-            AT_ERROR("ppisp_params shape must be (B, PPISP_NUM_PARAMS_RQS)");
         ppisp_forward_kernel<PPISPParamType::RQS><<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
-            tensor2view<float, 4>(in_image),
-            ppisp_params.data_ptr<float>(),
-            (float4*)intrins.data_ptr<float>(),
+            _dt3d_to_tv4<float>(in_image),
+            (float*)std::get<0>(ppisp_params),
+            (float4*)std::get<0>(intrins),
             actual_image_width,
             actual_image_height,
-            tensor2view<float, 4>(out_image)
+            _dt3d_to_tv4<float>(out_image)
         );
     }
     else {
-        AT_ERROR("invalid PPISP param_type, must be \"original\" or \"rqs\"");
+        throw std::runtime_error("invalid PPISP param_type, must be \"original\" or \"rqs\"");
     }
     CHECK_DEVICE_ERROR(cudaGetLastError());
-    return out_image;
 }
 
 template<PPISPParamType param_type>
@@ -2289,60 +2111,46 @@ __global__ void ppisp_backward_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<at::Tensor, at::Tensor> ppisp_backward(
-    at::Tensor &in_image,  // [B, H, W, C]
-    at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
-    at::Tensor &intrins,  // [B, 4]
+void ppisp_backward(
+    DeviceTensor3D<float3> in_image,    // [B, H, W, 3]
+    TorchTensorView ppisp_params,       // [B, PPISP_NUM_PARAMS]
+    TorchTensorView intrins,            // [B, 4]
     const float actual_image_width,
     const float actual_image_height,
-    at::Tensor &v_out_image,  // [B, H, W, C]
-    std::string param_type
+    DeviceTensor3D<float3> v_out_image, // [B, H, W, 3]
+    std::string param_type,
+    DeviceTensor3D<float3> v_in_image,  // [B, H, W, 3]
+    TorchTensorView v_ppisp_params      // [B, PPISP_NUM_PARAMS] (must be pre-zeroed)
 ) {
-    DEVICE_GUARD(in_image);
-    CHECK_CUDA(in_image);
-    CHECK_INPUT(ppisp_params);
-    CHECK_INPUT(intrins);
-    CHECK_CUDA(v_out_image);
-    if (in_image.ndimension() != 4 || in_image.size(0) != ppisp_params.size(0))
-        AT_ERROR("in_image shape must be (B, H, W, C) where B is consistent with ppisp_params");
-    if (intrins.ndimension() != 2 || intrins.size(-1) != 4)
-        AT_ERROR("intrins shape must be (B, 4)");
-    long b = in_image.size(0), h = in_image.size(1), w = in_image.size(2);
-    at::Tensor v_in_image = at::empty_like(in_image);
-    at::Tensor v_ppisp_params = zeros_like_tensor(ppisp_params);
+    long b = in_image.size<0>(), h = in_image.size<1>(), w = in_image.size<2>();
     if (param_type == "original" || param_type == "") {
-        if (ppisp_params.ndimension() != 2 || ppisp_params.size(1) != kNumPPISPParams)
-            AT_ERROR("ppisp_params shape must be (B, PPISP_NUM_PARAMS)");
         ppisp_backward_kernel<PPISPParamType::Original><<<_LAUNCH_ARGS_2D(h*w, b, 64, 1)>>>(
-            tensor2view<float, 4>(in_image),
-            ppisp_params.data_ptr<float>(),
-            (float4*)intrins.data_ptr<float>(),
+            _dt3d_to_tv4<float>(in_image),
+            (float*)std::get<0>(ppisp_params),
+            (float4*)std::get<0>(intrins),
             actual_image_width,
             actual_image_height,
-            tensor2view<float, 4>(v_out_image),
-            tensor2view<float, 4>(v_in_image),
-            v_ppisp_params.data_ptr<float>()
+            _dt3d_to_tv4<float>(v_out_image),
+            _dt3d_to_tv4<float>(v_in_image),
+            (float*)std::get<0>(v_ppisp_params)
         );
     }
     else if (param_type == "rqs") {
-        if (ppisp_params.ndimension() != 2 || ppisp_params.size(1) != kNumPPISPParamsRQS)
-            AT_ERROR("ppisp_params shape must be (B, PPISP_NUM_PARAMS_RQS)");
         ppisp_backward_kernel<PPISPParamType::RQS><<<_LAUNCH_ARGS_2D(h*w, b, 64, 1)>>>(
-            tensor2view<float, 4>(in_image),
-            ppisp_params.data_ptr<float>(),
-            (float4*)intrins.data_ptr<float>(),
+            _dt3d_to_tv4<float>(in_image),
+            (float*)std::get<0>(ppisp_params),
+            (float4*)std::get<0>(intrins),
             actual_image_width,
             actual_image_height,
-            tensor2view<float, 4>(v_out_image),
-            tensor2view<float, 4>(v_in_image),
-            v_ppisp_params.data_ptr<float>()
+            _dt3d_to_tv4<float>(v_out_image),
+            _dt3d_to_tv4<float>(v_in_image),
+            (float*)std::get<0>(v_ppisp_params)
         );
     }
     else {
-        AT_ERROR("invalid PPISP param_type, must be \"original\" or \"rqs\"");
+        throw std::runtime_error("invalid PPISP param_type, must be \"original\" or \"rqs\"");
     }
     CHECK_DEVICE_ERROR(cudaGetLastError());
-    return std::make_tuple(v_in_image, v_ppisp_params);
 }
 
 template<PPISPParamType param_type>
@@ -2426,66 +2234,57 @@ __global__ void compute_ppisp_regularization_forward_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<at::Tensor, at::Tensor>
-compute_ppsip_regularization_forward(
-    at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
+void compute_ppsip_regularization_forward(
+    TorchTensorView ppisp_params,       // [B, PPISP_NUM_PARAMS]
     const std::array<float, (int)PPISPRegLossIndex::length> loss_weights_0,
-    std::string param_type
+    std::string param_type,
+    TorchTensorView losses,             // [PPISPRegLossIndex::length] (must be pre-zeroed)
+    TorchTensorView raw_losses          // [B+1, RawPPISPRegLossIndex::length] (must be pre-zeroed)
 ) {
-    DEVICE_GUARD(ppisp_params);
-    CHECK_INPUT(ppisp_params);
-
     FixedArray<float, (int)PPISPRegLossIndex::length> loss_weights =
         *reinterpret_cast<const FixedArray<float, (int)PPISPRegLossIndex::length>*>(loss_weights_0.data());
 
-    long B = ppisp_params.size(0);
-
-    at::Tensor raw_losses;
-    at::Tensor losses = at::zeros({(int)PPISPRegLossIndex::length}, ppisp_params.options());
+    long B = std::get<2>(ppisp_params)[0];
 
     if (param_type == "original" || param_type == "") {
-        raw_losses = at::zeros({B+1, (int)RawPPISPRegLossIndex::length}, ppisp_params.options());
         compute_raw_ppisp_regularization_forward_kernel<PPISPParamType::Original>
         <<<_LAUNCH_ARGS_1D(B, WARP_SIZE)>>>(
             B,
-            ppisp_params.data_ptr<float>(),
-            raw_losses.data_ptr<float>()
+            (float*)std::get<0>(ppisp_params),
+            (float*)std::get<0>(raw_losses)
         );
         CHECK_DEVICE_ERROR(cudaGetLastError());
 
         compute_ppisp_regularization_forward_kernel<PPISPParamType::Original>
         <<<1, 1>>>(
             B,
-            raw_losses.data_ptr<float>() + B*(int)RawPPISPRegLossIndex::length,
+            (float*)std::get<0>(raw_losses) + B*(int)RawPPISPRegLossIndex::length,
             loss_weights,
-            losses.data_ptr<float>()
+            (float*)std::get<0>(losses)
         );
         CHECK_DEVICE_ERROR(cudaGetLastError());
     }
     else if (param_type == "rqs") {
-        raw_losses = at::zeros({B+1, (int)RawPPISPRegLossIndexRQS::length}, ppisp_params.options());
         compute_raw_ppisp_regularization_forward_kernel<PPISPParamType::RQS>
         <<<_LAUNCH_ARGS_1D(B, WARP_SIZE)>>>(
             B,
-            ppisp_params.data_ptr<float>(),
-            raw_losses.data_ptr<float>()
+            (float*)std::get<0>(ppisp_params),
+            (float*)std::get<0>(raw_losses)
         );
         CHECK_DEVICE_ERROR(cudaGetLastError());
 
         compute_ppisp_regularization_forward_kernel<PPISPParamType::RQS>
         <<<1, 1>>>(
             B,
-            raw_losses.data_ptr<float>() + B*(int)RawPPISPRegLossIndexRQS::length,
+            (float*)std::get<0>(raw_losses) + B*(int)RawPPISPRegLossIndexRQS::length,
             loss_weights,
-            losses.data_ptr<float>()
+            (float*)std::get<0>(losses)
         );
         CHECK_DEVICE_ERROR(cudaGetLastError());
     }
     else {
-        AT_ERROR("invalid PPISP param_type, must be \"original\" or \"rqs\"");
+        throw std::runtime_error("invalid PPISP param_type, must be \"original\" or \"rqs\"");
     }
-
-    return std::make_tuple(losses, raw_losses);
 }
 
 template<PPISPParamType param_type>
@@ -2581,75 +2380,69 @@ __global__ void compute_ppisp_regularization_backward_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor compute_ppsip_regularization_backward(
-    at::Tensor &ppisp_params,  // [B, PPISP_NUM_PARAMS]
+void compute_ppsip_regularization_backward(
+    TorchTensorView ppisp_params,       // [B, PPISP_NUM_PARAMS]
     const std::array<float, (int)PPISPRegLossIndex::length> loss_weights_0,
-    at::Tensor &raw_losses,  // [B+1, RawPPISPRegLossIndex::length]
-    at::Tensor &v_losses,  // [PPISPRegLossIndex::length]
-    std::string param_type
+    TorchTensorView raw_losses,         // [B+1, RawPPISPRegLossIndex::length]
+    TorchTensorView v_losses,           // [PPISPRegLossIndex::length]
+    std::string param_type,
+    TorchTensorView v_ppisp_params      // [B, PPISP_NUM_PARAMS] (must be pre-zeroed)
 ) {
-    DEVICE_GUARD(ppisp_params);
-    CHECK_INPUT(ppisp_params);
-    CHECK_INPUT(raw_losses);
-    CHECK_INPUT(v_losses);
-
     FixedArray<float, (int)PPISPRegLossIndex::length> loss_weights =
         *reinterpret_cast<const FixedArray<float, (int)PPISPRegLossIndex::length>*>(loss_weights_0.data());
 
-    long B = ppisp_params.size(0);
-
-    at::Tensor v_raw_losses;
-    at::Tensor v_ppisp_params = zeros_like_tensor(ppisp_params);
+    long B = std::get<2>(ppisp_params)[0];
 
     if (param_type == "original" || param_type == "") {
-        v_raw_losses = at::zeros({(int)RawPPISPRegLossIndex::length}, ppisp_params.options());
+        // v_raw_losses is a small scratch buffer
+        float* v_raw_losses = DevicePool::global().acquire<float>(
+            "ppisp_v_raw_losses", (int)RawPPISPRegLossIndex::length);
+        cudaMemset(v_raw_losses, 0, (int)RawPPISPRegLossIndex::length * sizeof(float));
 
         compute_ppisp_regularization_backward_kernel<PPISPParamType::Original>
         <<<1, 1>>>(
             B,
-            raw_losses.data_ptr<float>() + B*(uint)RawPPISPRegLossIndex::length,
+            (float*)std::get<0>(raw_losses) + B*(uint)RawPPISPRegLossIndex::length,
             loss_weights,
-            v_losses.data_ptr<float>(),
-            v_raw_losses.data_ptr<float>()
+            (float*)std::get<0>(v_losses),
+            v_raw_losses
         );
         CHECK_DEVICE_ERROR(cudaGetLastError());
 
         compute_raw_ppisp_regularization_backward_kernel<PPISPParamType::Original>
         <<<_LAUNCH_ARGS_1D(B, WARP_SIZE)>>>(
             B,
-            ppisp_params.data_ptr<float>(),
-            v_raw_losses.data_ptr<float>(),
-            v_ppisp_params.data_ptr<float>()
+            (float*)std::get<0>(ppisp_params),
+            v_raw_losses,
+            (float*)std::get<0>(v_ppisp_params)
         );
         CHECK_DEVICE_ERROR(cudaGetLastError());
     }
     else if (param_type == "rqs") {
-        v_raw_losses = at::zeros({(int)RawPPISPRegLossIndexRQS::length}, ppisp_params.options());
+        float* v_raw_losses = DevicePool::global().acquire<float>(
+            "ppisp_v_raw_losses", (int)RawPPISPRegLossIndexRQS::length);
+        cudaMemset(v_raw_losses, 0, (int)RawPPISPRegLossIndexRQS::length * sizeof(float));
 
         compute_ppisp_regularization_backward_kernel<PPISPParamType::RQS>
         <<<1, 1>>>(
             B,
-            raw_losses.data_ptr<float>() + B*(uint)RawPPISPRegLossIndexRQS::length,
+            (float*)std::get<0>(raw_losses) + B*(uint)RawPPISPRegLossIndexRQS::length,
             loss_weights,
-            v_losses.data_ptr<float>(),
-            v_raw_losses.data_ptr<float>()
+            (float*)std::get<0>(v_losses),
+            v_raw_losses
         );
         CHECK_DEVICE_ERROR(cudaGetLastError());
 
         compute_raw_ppisp_regularization_backward_kernel<PPISPParamType::RQS>
         <<<_LAUNCH_ARGS_1D(B, WARP_SIZE)>>>(
             B,
-            ppisp_params.data_ptr<float>(),
-            v_raw_losses.data_ptr<float>(),
-            v_ppisp_params.data_ptr<float>()
+            (float*)std::get<0>(ppisp_params),
+            v_raw_losses,
+            (float*)std::get<0>(v_ppisp_params)
         );
         CHECK_DEVICE_ERROR(cudaGetLastError());
     }
     else {
-        AT_ERROR("invalid PPISP param_type, must be \"original\" or \"rqs\"");
+        throw std::runtime_error("invalid PPISP param_type, must be \"original\" or \"rqs\"");
     }
-
-    return v_ppisp_params;
 }
-
-#endif

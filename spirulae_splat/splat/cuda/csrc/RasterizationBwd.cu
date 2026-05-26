@@ -54,7 +54,7 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
     // Gaussian parameters
     const typename SplatPrimitive::WorldBuffer splat_wbuffer,
     const typename SplatPrimitive::ScreenBuffer splat_sbuffer,
-    std::optional<DeviceVector<int32_t>> gaussian_ids,
+    DeviceVector<int32_t> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -81,7 +81,7 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
     typename SplatPrimitive::ScreenBuffer h_splat_sbuffer,
     std::optional<DeviceTensor3D<float>> *o_accum_weight
 ) {
-    uint32_t N = gaussian_ids.has_value() ? 0 : splat_wbuffer.size();
+    uint32_t N = gaussian_ids.data_ptr() ? 0 : splat_wbuffer.size();
     uint32_t I = render_Ts.size<0>(); // number of images
     uint32_t tile_height = tile_offsets.size<1>();
     uint32_t tile_width = tile_offsets.size<2>();
@@ -94,7 +94,7 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
 
     rasterize_to_pixels_bwd_kernel_wrapper<SplatPrimitive, output_distortion, output_hessian_diagonal, output_accum_weight>(
         (cudaStream_t)0, I, N, n_isects,
-        gaussian_ids.has_value() ? (uint32_t*)gaussian_ids.value().data_ptr() : nullptr,
+        (uint32_t*)gaussian_ids.data_ptr(),
         splat_wbuffer, splat_sbuffer,
         image_width, image_height, tile_width, tile_height,
         tile_offsets.data_ptr(), flatten_ids.data_ptr(),
@@ -122,7 +122,7 @@ inline std::tuple<
     int64_t num_splats,
     std::vector<DeviceTensorFloatND> splats_w,
     std::vector<DeviceTensorFloatND> splats_s,
-    std::optional<DeviceVector<int32_t>> gaussian_ids,
+    DeviceVector<int32_t> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -217,7 +217,7 @@ inline std::tuple<
     int64_t num_splats,
     std::vector<DeviceTensorFloatND> splats_w,
     std::vector<DeviceTensorFloatND> splats_s,
-    std::optional<DeviceVector<int32_t>> gaussian_ids,
+    DeviceVector<int32_t> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -264,7 +264,7 @@ std::tuple<
     int64_t num_splats,
     std::vector<DeviceTensorFloatND> splats_w,
     std::vector<DeviceTensorFloatND> splats_s,
-    std::optional<DeviceVector<int32_t>> gaussian_ids,
+    DeviceVector<int32_t> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -302,7 +302,7 @@ std::tuple<
     int64_t num_splats,
     std::vector<DeviceTensorFloatND> splats_w,
     std::vector<DeviceTensorFloatND> splats_s,
-    std::optional<DeviceVector<int32_t>> gaussian_ids,
+    DeviceVector<int32_t> gaussian_ids,
     // image size
     const uint32_t image_width,
     const uint32_t image_height,

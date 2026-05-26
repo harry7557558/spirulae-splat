@@ -30,7 +30,7 @@ std::tuple<
     // Gaussian parameters
     std::vector<DeviceTensorFloatND> splats_w,
     std::vector<DeviceTensorFloatND> splats_s,
-    std::optional<DeviceVector<int32_t>> gaussian_ids,
+    DeviceVector<int32_t> gaussian_ids,
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,

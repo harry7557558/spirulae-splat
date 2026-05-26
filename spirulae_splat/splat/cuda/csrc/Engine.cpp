@@ -36,8 +36,8 @@ TorchTensorView camera_dist_coeffs;
 bool packed;
 
 // Forward intermediate results (kept for backward pass)
-std::optional<DeviceVector<int32_t>> fwd_camera_ids;
-std::optional<DeviceVector<int32_t>> fwd_gaussian_ids;
+DeviceVector<int32_t> fwd_camera_ids;
+DeviceVector<int32_t> fwd_gaussian_ids;
 DeviceTensor2D<float4> fwd_aabb;   // [nnz,1] packed or [C,N] non-packed
 std::vector<DeviceTensorFloatND> fwd_splats_w;
 std::vector<DeviceTensorFloatND> fwd_splats_s;
@@ -181,8 +181,8 @@ void forward_3dgs(
             throw std::runtime_error("engine_forward: unknown primitive: " + primitive);
         }
 
-        Buffers::fwd_camera_ids = std::make_optional(cam_ids);
-        Buffers::fwd_gaussian_ids = std::make_optional(gauss_ids);
+        Buffers::fwd_camera_ids = cam_ids;
+        Buffers::fwd_gaussian_ids = gauss_ids;
         Buffers::fwd_aabb = vec_to_2d_float4(aabb_vec);  // [nnz, 1] view for backward
         aabb_nd = DeviceTensorFloatND(aabb_vec);          // [nnz, 4] for intersect
         depths_nd = DeviceTensorFloatND(depths_vec);      // [nnz]   for intersect
@@ -218,8 +218,8 @@ void forward_3dgs(
             throw std::runtime_error("engine_forward: unknown primitive: " + primitive);
         }
 
-        Buffers::fwd_camera_ids = std::nullopt;
-        Buffers::fwd_gaussian_ids = std::nullopt;
+        Buffers::fwd_camera_ids = DeviceVector<int32_t>();
+        Buffers::fwd_gaussian_ids = DeviceVector<int32_t>();
         Buffers::fwd_aabb = aabb_2d;                           // [C, N] for backward
         aabb_nd = DeviceTensorFloatND(aabb_2d);                // [C, N, 4] for intersect
         depths_nd = DeviceTensorFloatND(depths_2d);            // [C, N] → numel=C*N for intersect
@@ -227,8 +227,8 @@ void forward_3dgs(
 
     // --- Tile intersection (AABB mode) ---
     DeviceVector<int32_t>* image_ids_ptr = nullptr;
-    if (packed && Buffers::fwd_camera_ids.has_value())
-        image_ids_ptr = &Buffers::fwd_camera_ids.value();
+    if (packed && Buffers::fwd_camera_ids.data_ptr() != nullptr)
+        image_ids_ptr = &Buffers::fwd_camera_ids;
 
     auto [isect_ids, flatten_ids, tile_offsets] = do_intersect_tile_generic(
         aabb_nd, depths_nd,

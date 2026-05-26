@@ -98,6 +98,7 @@ def generate_headers():
         'Densify',
         'BilagridUtils',
         'Visualizer',
+        'FusedSSIM',
     ]
 
     num_generated = 0

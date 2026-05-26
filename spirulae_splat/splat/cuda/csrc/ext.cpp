@@ -60,10 +60,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("compute_per_splat_losses_backward_with_hessian_diagonal", &compute_per_splat_losses_backward_with_hessian_diagonal);
 
     // PerPixelLoss.cuh
-    m.def("compute_per_pixel_losses_forward", &compute_per_pixel_losses_forward);
-    m.def("compute_per_pixel_losses_backward", &compute_per_pixel_losses_backward);
-    m.def("compute_multi_scale_per_pixel_losses", &compute_multi_scale_per_pixel_losses_tensor);
-    m.def("avg_pool_downsample", &avg_pool_downsample_tensor);
+    m.def("compute_multi_scale_per_pixel_losses", &compute_multi_scale_per_pixel_losses);
 
     // PixelWise.cuh
     m.def("uint8_image_to_float", &uint8_image_to_float_tensor);
@@ -101,8 +98,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // FusedSSIM.cuh
     m.def("fused_ssim_forward", &fused_ssim_forward);
     m.def("fused_ssim_backward", &fused_ssim_backward);
-    m.def("fused_ssim_forward_inplace", &fused_ssim_forward_inplace);
-    m.def("fused_ssim_backward_inplace", &fused_ssim_backward_inplace);
+    m.def("fused_ssim_inplace", &fused_ssim_inplace);
 
     // SplatTileIntersector.cuh
     m.def("intersect_splat_tile_3dgs", &intersect_splat_tile_3dgs);

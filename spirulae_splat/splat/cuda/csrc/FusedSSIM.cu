@@ -8,8 +8,6 @@
 
 #include "FusedSSIM.cuh"
 
-#if 0
-
 
 #include <cooperative_groups.h>
 #include <algorithm>
@@ -882,259 +880,144 @@ __global__ void memory_efficient_ssim_backward_kernel(
 }
 
 // ------------------------------------------
-// PyTorch Interface (Forward)
-//   Returns (ssim, ssim_loss_map (single channel non differentiable), dm_dmu1, dm_dsigma1_sq, dm_dsigma12).
-//   If train=false, derivative Tensors are empty.
+// Interface functions using TorchTensorView
 // ------------------------------------------
-std::tuple<at::Tensor, std::optional<at::Tensor>, at::Tensor, at::Tensor, at::Tensor>
-fused_ssim_forward(
-    at::Tensor &img1,
-    at::Tensor &img2,
-    bool train,
-    bool return_ssim_loss_map,
-    bool is_l1
-) {
-    DEVICE_GUARD(img1);
-    CHECK_INPUT(img1);
-    CHECK_INPUT(img2);
 
-    int B  = img1.size(0);
-    int H  = img1.size(1);
-    int W  = img1.size(2);
-    int CH = img1.size(3);
-    if (CH != 3)
-        throw std::runtime_error("Image must be (B, H, W, 3)");
+#include <Tensor.h>
 
-    // Output SSIM map
-    at::Tensor ssim = at::zeros({}, img1.options());
-    std::optional<at::Tensor> ssim_loss_map;
-    if (return_ssim_loss_map) {
-        ssim_loss_map = at::empty({B, H, W, 1}, img1.options());
-        set_zero_tensor(ssim_loss_map.value());
-    }
-
-    // Optionally allocate derivative Tensors
-    at::Tensor dm_dmu1       = train ? at::empty_like(img1) : at::empty({0}, img1.options());
-    at::Tensor dm_dsigma1_sq = train ? at::empty_like(img1) : at::empty({0}, img1.options());
-    at::Tensor dm_dsigma12   = train ? at::empty_like(img1) : at::empty({0}, img1.options());
-
-    (is_l1 ? ssim_forward_kernel<true, false> : ssim_forward_kernel<false, false>)
-    <<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X, BLOCK_Y, 1)>>>(
-        B, H, W,
-        (float3*)img1.data_ptr<float>(),
-        (float3*)img2.data_ptr<float>(),
-        ssim.data_ptr<float>(),
-        1.0f,
-        return_ssim_loss_map ? ssim_loss_map.value().data_ptr<float>() : nullptr,
-        train ? (float3*)dm_dmu1.data_ptr<float>()       : nullptr,
-        train ? (float3*)dm_dsigma1_sq.data_ptr<float>() : nullptr,
-        train ? (float3*)dm_dsigma12.data_ptr<float>()   : nullptr
-    );
-
-    return std::make_tuple(ssim, ssim_loss_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12);
+static inline float3* _nullable_f3(const TorchTensorView& tv) {
+    uint64_t ptr = std::get<0>(tv);
+    return ptr ? (float3*)ptr : nullptr;
+}
+static inline float* _nullable_f(const TorchTensorView& tv) {
+    uint64_t ptr = std::get<0>(tv);
+    return ptr ? (float*)ptr : nullptr;
+}
+static inline bool* _nullable_b(const TorchTensorView& tv) {
+    uint64_t ptr = std::get<0>(tv);
+    return ptr ? (bool*)ptr : nullptr;
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-fused_ssim_forward_inplace(
-    at::Tensor &img1,
-    at::Tensor &img2,
-    bool train,
+/*[AutoHeaderGeneratorExport]*/
+float fused_ssim_forward(
+    TorchTensorView img1,           // [B, H, W, 3]
+    TorchTensorView img2,           // [B, H, W, 3]
+    TorchTensorView dm_dmu1,        // [B, H, W, 3] output, or null
+    TorchTensorView dm_dsigma1_sq,  // [B, H, W, 3] output, or null
+    TorchTensorView dm_dsigma12,    // [B, H, W, 3] output, or null
+    TorchTensorView ssim_loss_map,  // [B, H, W, 1] output, or null
     float ssim_loss_map_weight,
-    at::Tensor &ssim_loss_map,
+    bool inplace,
     bool is_l1
 ) {
-    DEVICE_GUARD(img1);
-    CHECK_INPUT(img1);
-    CHECK_INPUT(img2);
-    CHECK_INPUT(ssim_loss_map);
+    const auto& s = std::get<2>(img1);
+    int B = s[0], H = s[1], W = s[2];
 
-    int B  = img1.size(0);
-    int H  = img1.size(1);
-    int W  = img1.size(2);
-    int CH = img1.size(3);
-    if (CH != 3)
-        throw std::runtime_error("Image must be (B, H, W, 3)");
+    float* ssim_buf = DevicePool::global().acquire<float>("ssim_scalar", 1);
+    cudaMemset(ssim_buf, 0, sizeof(float));
 
-    // Output SSIM map
-    at::Tensor ssim = at::zeros({}, img1.options());
+    auto fwd = inplace ?
+        (is_l1 ? ssim_forward_kernel<true, true> : ssim_forward_kernel<false, true>) :
+        (is_l1 ? ssim_forward_kernel<true, false> : ssim_forward_kernel<false, false>);
 
-    // Optionally allocate derivative Tensors
-    at::Tensor dm_dmu1       = train ? at::empty_like(img1) : at::empty({0}, img1.options());
-    at::Tensor dm_dsigma1_sq = train ? at::empty_like(img1) : at::empty({0}, img1.options());
-    at::Tensor dm_dsigma12   = train ? at::empty_like(img1) : at::empty({0}, img1.options());
-
-    (is_l1 ? ssim_forward_kernel<true, true> : ssim_forward_kernel<false, true>)
-    <<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X, BLOCK_Y, 1)>>>(
+    fwd<<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X, BLOCK_Y, 1)>>>(
         B, H, W,
-        (float3*)img1.data_ptr<float>(),
-        (float3*)img2.data_ptr<float>(),
-        ssim.data_ptr<float>(),
+        (float3*)std::get<0>(img1),
+        (float3*)std::get<0>(img2),
+        ssim_buf,
         ssim_loss_map_weight,
-        ssim_loss_map.data_ptr<float>(),
-        train ? (float3*)dm_dmu1.data_ptr<float>()       : nullptr,
-        train ? (float3*)dm_dsigma1_sq.data_ptr<float>() : nullptr,
-        train ? (float3*)dm_dsigma12.data_ptr<float>()   : nullptr
+        _nullable_f(ssim_loss_map),
+        _nullable_f3(dm_dmu1),
+        _nullable_f3(dm_dsigma1_sq),
+        _nullable_f3(dm_dsigma12)
     );
 
-    return std::make_tuple(ssim, dm_dmu1, dm_dsigma1_sq, dm_dsigma12);
+    float ssim_val;
+    cudaMemcpy(&ssim_val, ssim_buf, sizeof(float), cudaMemcpyDeviceToHost);
+    return ssim_val;
 }
 
-// ------------------------------------------
-// PyTorch Interface (Backward)
-//   Takes the gradient wrt the SSIM map and
-//   the partial derivatives from forward;
-//   returns dL/d(img1).
-// ------------------------------------------
-at::Tensor
-fused_ssim_backward(
-    at::Tensor &img1,
-    at::Tensor &img2,
-    const float dL_dmap,
-    std::optional<at::Tensor> &dm_dmu1,
-    std::optional<at::Tensor> &dm_dsigma1_sq,
-    std::optional<at::Tensor> &dm_dsigma12
+/*[AutoHeaderGeneratorExport]*/
+void fused_ssim_backward(
+    TorchTensorView img1,           // [B, H, W, 3]
+    TorchTensorView img2,           // [B, H, W, 3]
+    float dL_dmap,
+    TorchTensorView dm_dmu1,        // [B, H, W, 3] input, or null
+    TorchTensorView dm_dsigma1_sq,  // [B, H, W, 3] input, or null
+    TorchTensorView dm_dsigma12,    // [B, H, W, 3] input, or null
+    TorchTensorView dL_dimg1,       // [B, H, W, 3] output
+    bool inplace
 ) {
-    DEVICE_GUARD(img1);
-    CHECK_INPUT(img1);
-    CHECK_INPUT(img2);
+    const auto& s = std::get<2>(img1);
+    int B = s[0], H = s[1], W = s[2];
 
-    int B  = img1.size(0);
-    int H  = img1.size(1);
-    int W  = img1.size(2);
-    int CH = img1.size(3);
+    float3* p_dm_dmu1 = _nullable_f3(dm_dmu1);
+    float3* p_dm_dsigma1_sq = _nullable_f3(dm_dsigma1_sq);
+    float3* p_dm_dsigma12 = _nullable_f3(dm_dsigma12);
 
-    auto dL_dimg1 = at::empty_like(img1);
-
-    if (dm_dmu1.has_value() && dm_dsigma1_sq.has_value() && dm_dsigma12.has_value()) {
-        CHECK_INPUT(dm_dmu1.value());
-        CHECK_INPUT(dm_dsigma1_sq.value());
-        CHECK_INPUT(dm_dsigma12.value());
-        ssim_backward_kernel<false><<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X, BLOCK_Y, 1)>>>(
+    if (p_dm_dmu1 && p_dm_dsigma1_sq && p_dm_dsigma12) {
+        (inplace ? ssim_backward_kernel<true> : ssim_backward_kernel<false>)
+        <<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X, BLOCK_Y, 1)>>>(
             B, H, W,
-            (float3*)img1.data_ptr<float>(),
-            (float3*)img2.data_ptr<float>(),
+            (float3*)std::get<0>(img1),
+            (float3*)std::get<0>(img2),
             dL_dmap,
-            (float3*)dL_dimg1.data_ptr<float>(),
-            (float3*)dm_dmu1.value().data_ptr<float>(),
-            (float3*)dm_dsigma1_sq.value().data_ptr<float>(),
-            (float3*)dm_dsigma12.value().data_ptr<float>()
+            (float3*)std::get<0>(dL_dimg1),
+            p_dm_dmu1,
+            p_dm_dsigma1_sq,
+            p_dm_dsigma12
         );
     }
     else {
-        memory_efficient_ssim_backward_kernel<false><<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X_ME, BLOCK_Y_ME, 1)>>>(
+        (inplace ? memory_efficient_ssim_backward_kernel<true> : memory_efficient_ssim_backward_kernel<false>)
+        <<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X_ME, BLOCK_Y_ME, 1)>>>(
             B, H, W,
-            (float3*)img1.data_ptr<float>(),
-            (float3*)img2.data_ptr<float>(),
+            (float3*)std::get<0>(img1),
+            (float3*)std::get<0>(img2),
             nullptr,
             dL_dmap,
-            (float3*)dL_dimg1.data_ptr<float>(),
+            (float3*)std::get<0>(dL_dimg1),
             nullptr, 1.0f, nullptr
         );
     }
-
-    return dL_dimg1;
 }
 
-void fused_ssim_backward_inplace(
-    at::Tensor &img1,
-    at::Tensor &img2,
-    const float dL_dmap,
-    std::optional<at::Tensor> &dm_dmu1,
-    std::optional<at::Tensor> &dm_dsigma1_sq,
-    std::optional<at::Tensor> &dm_dsigma12,
-    at::Tensor &dL_dimg1
-) {
-    DEVICE_GUARD(img1);
-    CHECK_INPUT(img1);
-    CHECK_INPUT(img2);
-    CHECK_INPUT(dL_dimg1);
-
-    int B  = img1.size(0);
-    int H  = img1.size(1);
-    int W  = img1.size(2);
-    int CH = img1.size(3);
-
-    if (dm_dmu1.has_value() && dm_dsigma1_sq.has_value() && dm_dsigma12.has_value()) {
-        CHECK_INPUT(dm_dmu1.value());
-        CHECK_INPUT(dm_dsigma1_sq.value());
-        CHECK_INPUT(dm_dsigma12.value());
-        ssim_backward_kernel<true><<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X, BLOCK_Y, 1)>>>(
-            B, H, W,
-            (float3*)img1.data_ptr<float>(),
-            (float3*)img2.data_ptr<float>(),
-            dL_dmap,
-            (float3*)dL_dimg1.data_ptr<float>(),
-            (float3*)dm_dmu1.value().data_ptr<float>(),
-            (float3*)dm_dsigma1_sq.value().data_ptr<float>(),
-            (float3*)dm_dsigma12.value().data_ptr<float>()
-        );
-    }
-    else {
-        memory_efficient_ssim_backward_kernel<true><<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X_ME, BLOCK_Y_ME, 1)>>>(
-            B, H, W,
-            (float3*)img1.data_ptr<float>(),
-            (float3*)img2.data_ptr<float>(),
-            nullptr,
-            dL_dmap,
-            (float3*)dL_dimg1.data_ptr<float>(),
-            nullptr, 1.0f, nullptr
-        );
-    }
-
-}
-
-
+/*[AutoHeaderGeneratorExport]*/
 float fused_ssim_inplace(
-    at::Tensor &img1,
-    at::Tensor &img2,
-    std::optional<at::Tensor> &mask,
-    const float dL_dmap,
-    at::Tensor &dL_dimg1,
+    TorchTensorView img1,           // [B, H, W, 3]
+    TorchTensorView img2,           // [B, H, W, 3]
+    TorchTensorView mask,           // [B, H, W] bool, or null
+    float dL_dmap,
+    TorchTensorView dL_dimg1,       // [B, H, W, 3] output (accumulated)
     bool return_ssim_val,
-    std::optional<at::Tensor> ssim_loss_map,
+    TorchTensorView ssim_loss_map,  // [B, H, W, 1] output, or null
     float ssim_loss_map_weight
 ) {
-    DEVICE_GUARD(img1);
-    CHECK_INPUT(img1);
-    CHECK_INPUT(img2);
-    CHECK_INPUT(dL_dimg1);
-    if (ssim_loss_map.has_value())
-        CHECK_INPUT(ssim_loss_map.value());
+    const auto& s = std::get<2>(img1);
+    int B = s[0], H = s[1], W = s[2];
 
-    int B  = img1.size(0);
-    int H  = img1.size(1);
-    int W  = img1.size(2);
-    int CH = img1.size(3);
-
-    if (ssim_loss_map.has_value()) {
-        if (ssim_loss_map.value().ndimension() != 4 ||
-            ssim_loss_map.value().size(0) != B ||
-            ssim_loss_map.value().size(1) != H ||
-            ssim_loss_map.value().size(2) != W ||
-            ssim_loss_map.value().size(3) != 1
-        ) throw std::runtime_error("img1 and ssim_loss_map size mismatch");
-    }
-
-    at::Tensor ssim_val;
+    float* ssim_buf = nullptr;
     if (return_ssim_val) {
-        ssim_val = at::empty({1}, img1.options());
-        set_zero_tensor(ssim_val);
+        ssim_buf = DevicePool::global().acquire<float>("ssim_scalar", 1);
+        cudaMemset(ssim_buf, 0, sizeof(float));
     }
 
     memory_efficient_ssim_backward_kernel<true><<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X_ME, BLOCK_Y_ME, 1)>>>(
         B, H, W,
-        (float3*)img1.data_ptr<float>(),
-        (float3*)img2.data_ptr<float>(),
-        mask.has_value() ? mask.value().data_ptr<bool>() : nullptr,
+        (float3*)std::get<0>(img1),
+        (float3*)std::get<0>(img2),
+        _nullable_b(mask),
         dL_dmap,
-        (float3*)dL_dimg1.data_ptr<float>(),
-        return_ssim_val ? ssim_val.data_ptr<float>() : nullptr,
+        (float3*)std::get<0>(dL_dimg1),
+        ssim_buf,
         ssim_loss_map_weight,
-        ssim_loss_map.has_value() ? ssim_loss_map.value().data_ptr<float>() : nullptr
+        _nullable_f(ssim_loss_map)
     );
 
-    return return_ssim_val ?
-        ssim_val.item<float>() : -1.0f;
+    if (return_ssim_val) {
+        float val;
+        cudaMemcpy(&val, ssim_buf, sizeof(float), cudaMemcpyDeviceToHost);
+        return val;
+    }
+    return -1.0f;
 }
-
-#endif

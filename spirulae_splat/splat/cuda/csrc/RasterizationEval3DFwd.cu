@@ -44,7 +44,7 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     // Gaussian parameters
     typename SplatPrimitive::WorldBuffer splats_w,
     typename SplatPrimitive::ScreenBuffer splats_s,
-    std::optional<DeviceVector<int32_t>> gaussian_ids,
+    DeviceVector<int32_t> gaussian_ids,
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const ssplat::CameraModelType camera_model,
@@ -62,7 +62,7 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     RenderOutput::Tensor renders2,
     RenderOutput::Tensor distortions
 ) {
-    uint32_t N = gaussian_ids.has_value() ? 0 : splats_w.size(); // number of gaussians
+    uint32_t N = gaussian_ids.data_ptr() ? 0 : splats_w.size(); // number of gaussians
     uint32_t I = transmittances.size<0>();  // number of images
     uint32_t tile_height = tile_offsets.size<1>();
     uint32_t tile_width = tile_offsets.size<2>();
@@ -73,7 +73,7 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
 
     #define _LAUNCH_ARGS ( \
             (cudaStream_t)0, I, N, n_isects, \
-            gaussian_ids.has_value() ? (uint32_t*)gaussian_ids.value().data_ptr() : nullptr, \
+            (uint32_t*)gaussian_ids.data_ptr(), \
             splats_w, splats_s, \
             viewmats_ptr, intrins_ptr, dist_coeffs, \
             image_width, image_height, tile_width, tile_height, \
@@ -111,7 +111,7 @@ inline std::tuple<
     // Gaussian parameters
     std::vector<DeviceTensorFloatND> splats_w,
     std::vector<DeviceTensorFloatND> splats_s,
-    std::optional<DeviceVector<int32_t>> gaussian_ids,
+    DeviceVector<int32_t> gaussian_ids,
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const ssplat::CameraModelType camera_model,
@@ -170,7 +170,7 @@ std::tuple<
     // Gaussian parameters
     std::vector<DeviceTensorFloatND> splats_w,
     std::vector<DeviceTensorFloatND> splats_s,
-    std::optional<DeviceVector<int32_t>> gaussian_ids,
+    DeviceVector<int32_t> gaussian_ids,
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
