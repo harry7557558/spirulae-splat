@@ -29,6 +29,26 @@
 #define TORCH_INDUCTOR_CPP_WRAPPER
 #include <torch/extension.h>
 
+// at::Tensor convenience wrappers — delegate to TorchTensorView-based functions
+// needed by Primitive*.cuh code inside #ifndef NO_TORCH blocks
+static inline TorchTensorView _to_tv(const at::Tensor& t) {
+    return TorchTensorView(
+        (uint64_t)t.data_ptr(),
+        (uint32_t)t.element_size(),
+        t.sizes().vec()
+    );
+}
+
+inline void set_zero_tensor(at::Tensor& x) {
+    set_zero_tensor(_to_tv(x));
+}
+
+inline at::Tensor zeros_like_tensor(const at::Tensor& x) {
+    at::Tensor y = at::empty_like(x);
+    set_zero_tensor(y);
+    return y;
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // py::enum_<ssplat::CameraModelType>(m, "SSplatCameraModelType")
@@ -219,8 +239,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // Engine.h - unified forward/backward
     m.def("set_data_3dgs", &set_data_3dgs);
     m.def("set_camera_params", &set_camera_params);
-    m.def("forward_3dgs", &forward_3dgs);
-    m.def("backward_3dgs", &backward_3dgs);
+    m.def("set_training_data", &set_training_data);
+    m.def("engine_forward_3dgs", &forward_3dgs);
+    m.def("engine_backward_3dgs", &backward_3dgs);
+    m.def("engine_compute_loss_backward", &engine_compute_loss_backward);
+    m.def("engine_optim_step", &engine_optim_step);
 
 #if 0
     // Densify.cuh

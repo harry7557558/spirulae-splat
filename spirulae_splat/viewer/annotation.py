@@ -43,6 +43,8 @@ def annotate_train_cameras(
     if alpha.ndim == 4:
         alpha = alpha.squeeze(0)
 
+    return (255*torch.clip(rgb,0,1)).to(torch.uint8)
+
     key = '_annotation_size'
     if not hasattr(cameras, key):
         T = cameras.camera_to_worlds[:, :3, 3:4]

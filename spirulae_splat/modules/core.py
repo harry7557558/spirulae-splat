@@ -132,11 +132,12 @@ class Renderer:
             self.dist_coeffs = self.dist_coeffs.contiguous()
 
     @staticmethod
-    def _tv(tensor):
+    def _tv(tensor: torch.Tensor):
         """Convert torch.Tensor to (data_ptr, element_size, shape) for C++ Engine calls."""
         if tensor is None:
             return (0, 4, [0])
         assert tensor.is_contiguous()
+        assert tensor.is_cuda, tensor
         return (tensor.data_ptr(), tensor.element_size(), list(tensor.shape))
 
     def engine_forward(self):
@@ -150,7 +151,7 @@ class Renderer:
 
         dist_coeffs = self.dist_coeffs
         if dist_coeffs is None:
-            dist_coeffs = torch.zeros(C, 10, device=self.device, dtype=torch.float32)
+            dist_coeffs = torch.zeros(C, 10, device=rgb.device, dtype=torch.float32)
 
         _C.set_data_3dgs(
             self.cur_num_splats,
@@ -163,7 +164,7 @@ class Renderer:
             self._tv(self.intrins),
             self._tv(dist_coeffs)
         )
-        _C.forward_3dgs(
+        _C.engine_forward_3dgs(
             self.primitive,
             self.sh_degree_to_use,
             self.packed,
@@ -183,7 +184,7 @@ class Renderer:
         v_rgb = v_render_colors[0]
         v_depth = v_render_colors[1]
 
-        _C.backward_3dgs(
+        _C.engine_backward_3dgs(
             self._tv(v_rgb.contiguous()),
             self._tv(v_depth),
             self._tv(v_render_Ts.contiguous()),
@@ -233,7 +234,8 @@ class Renderer:
                 self.quant_bounds_sh = torch.zeros((n, 4), dtype=torch.float32, device=self.splats_world[-1].device)
 
         if hasattr(self, 'radii'):
-            _make_lazy_cuda_func("set_zero")(self.radii)
+            # _make_lazy_cuda_func("set_zero")(self.radii)
+            self.radii = self.radii.zero_()
 
     def projection_forward(self):
         if self.primitive not in ["3dgs", "mip", "3dgut", "3dgut_sv"]:

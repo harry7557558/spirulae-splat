@@ -384,7 +384,7 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         self.core = Renderer(
             self.config.primitive,
-            splat_params,
+            [x.cuda() for x in splat_params],
             self.seed_points[0].shape[0],  # TODO: voxel
             packed=(self.config.packed or self.config.use_bvh),
             use_bvh=self.config.use_bvh,
@@ -1086,19 +1086,23 @@ class SpirulaeSplatModel(torch.nn.Module):
         #     if 'dist_coeffs' in kwargs:
         #         kwargs['dist_coeffs'] = kwargs['dist_coeffs'][:1]
 
-        rgb, depth_im_ref, render_normal = rgbdn
+        if len(rgbdn) == 2:
+            rgb, depth_im_ref = rgbdn
+            render_normal = None
+        else:
+            rgb, depth_im_ref, render_normal = rgbdn
 
         # normals
         if render_normal is not None:  # TODO: fused kernel
             render_normal = torch.where(Ts < 1.0, F.normalize(render_normal, dim=-1), render_normal)
 
         depth_normal = None
-        if depth_im_ref is not None and not self.training:
-            depth_normal = depth_to_normal(
-                depth_im_ref, camera.camera_type[0].upper(),
-                intrins.cuda(), camera.distortion_params.cuda(),
-                is_ray_depth=(self.config.primitive not in ['3dgs', 'mip'])
-            )
+        # if depth_im_ref is not None and not self.training:
+        #     depth_normal = depth_to_normal(
+        #         depth_im_ref, camera.camera_type[0].upper(),
+        #         intrins.cuda(), camera.distortion_params.cuda(),
+        #         is_ray_depth=(self.config.primitive not in ['3dgs', 'mip'])
+        #     )
 
         # radii = meta["radii"]
         # depths = meta["depths"]
@@ -1307,6 +1311,9 @@ class SpirulaeSplatModel(torch.nn.Module):
         return outputs
 
     def backward(self, outputs, loss_grads):
+        if getattr(self, '_engine_backward_done', False):
+            self._engine_backward_done = False
+            return
         if not self.training or loss_grads is None:
             return
         if 'backward_info' not in outputs:
@@ -1335,8 +1342,65 @@ class SpirulaeSplatModel(torch.nn.Module):
 
     def optim_step(self):
         max_steps = self.trainer_config.num_iterations
-        self.core.optim_step(self.config, self.trainer_config.optimizer, self.step, max_steps)
-        self.training_losses.optim_step(self.trainer_config.optimizer, self.step, max_steps)
+        optim_config = self.trainer_config.optimizer
+
+        # Engine optimizer path
+        if self.core.primitive in ['3dgs', 'mip', '3dgut'] and not self.core.use_bvh:
+            from spirulae_splat.splat.cuda import _C
+            from spirulae_splat.modules.optimizer import OptimizerConfig
+            _tv = self._tv
+
+            if optim_config.max_steps is not None:
+                max_steps = optim_config.max_steps
+
+            sw = self.core.splats_world
+            vw = self.core.v_splats_world
+            g1 = self.core.g1_splats_world
+            g2 = self.core.g2_splats_world
+
+            _C.engine_optim_step(
+                self.step,
+                # learning rates
+                optim_config.get_scheduled_lr("means", self.step, max_steps),
+                optim_config.get_scheduled_lr("quats", self.step, max_steps),
+                optim_config.get_scheduled_lr("scales", self.step, max_steps),
+                optim_config.get_scheduled_lr("opacities", self.step, max_steps),
+                optim_config.get_scheduled_lr("features_dc", self.step, max_steps),
+                optim_config.get_scheduled_lr("features_sh", self.step, max_steps),
+                # regularization
+                self.config.max_gauss_ratio,
+                self.config.scale_regularization_weight,
+                self.config.opacity_reg,
+                self.config.scale_reg,
+                self.config.erank_reg,
+                self.config.erank_reg_s3,
+                self.config.quat_norm_reg,
+                self.config.sh_reg,
+                optim_config.use_scale_agnostic_mean,
+                self.core.quantize_sh_optim,
+                # means: param, grad, g1, g2
+                _tv(sw[0]), _tv(vw[0]), _tv(g1[0]), _tv(g2[0]),
+                # quats
+                _tv(sw[1]), _tv(vw[1]), _tv(g1[1]), _tv(g2[1]),
+                # scales
+                _tv(sw[2]), _tv(vw[2]), _tv(g1[2]), _tv(g2[2]),
+                # opacities
+                _tv(sw[3]), _tv(vw[3]), _tv(g1[3]), _tv(g2[3]),
+                # features_dc
+                _tv(sw[4]), _tv(vw[4]), _tv(g1[4]), _tv(g2[4]),
+                # features_sh
+                _tv(sw[5]), _tv(vw[5]), _tv(g1[5]), _tv(g2[5]),
+                # radii + quant bounds
+                _tv(self.core.radii),
+                _tv(getattr(self.core, 'quant_bounds_sh', None)),
+            )
+            # Skip densification for now (Phase 1 MVP)
+            # self.core.densify_step(self.step, max_steps, self.config, None)
+            return
+
+        # Legacy Python path
+        self.core.optim_step(self.config, optim_config, self.step, max_steps)
+        self.training_losses.optim_step(optim_config, self.step, max_steps)
         self.core.densify_step(self.step, max_steps, self.config, None)
         # self.step_post_backward()
 
@@ -1345,26 +1409,26 @@ class SpirulaeSplatModel(torch.nn.Module):
         if self.step % self.training_verboser.cache_skip == 0:
 
             # Per splat losses
-            hyperparams = (
-                np.sign(self.config.opacity_reg) ** 0,
-                np.sign(self.config.scale_reg) ** 0,
-                np.sign(self.config.max_gauss_ratio),
-                np.sign(self.config.scale_regularization_weight),
-                np.sign(self.config.erank_reg),
-                np.sign(self.config.erank_reg_s3),
-                np.sign(self.config.quat_norm_reg)
-            )
-            losses = _make_lazy_cuda_func("compute_per_splat_losses_forward")(
-                self.scales, self.opacities, self.quats,
-                *hyperparams
-            )
-            (opac, scale, aniso, erank, quatnorm) = losses.cpu().numpy().tolist()
-            self.training_verboser.add_metric('opac', opac, last_only=True)
-            self.training_verboser.add_metric('scale', scale, last_only=True)
-            if aniso > 0:
-                self.training_verboser.add_metric('aniso', aniso, last_only=True)
-            if erank > 0:
-                self.training_verboser.add_metric('erank', erank, last_only=True)
+            # hyperparams = (
+            #     np.sign(self.config.opacity_reg) ** 0,
+            #     np.sign(self.config.scale_reg) ** 0,
+            #     np.sign(self.config.max_gauss_ratio),
+            #     np.sign(self.config.scale_regularization_weight),
+            #     np.sign(self.config.erank_reg),
+            #     np.sign(self.config.erank_reg_s3),
+            #     np.sign(self.config.quat_norm_reg)
+            # )
+            # losses = _make_lazy_cuda_func("compute_per_splat_losses_forward")(
+            #     self.scales, self.opacities, self.quats,
+            #     *hyperparams
+            # )
+            # (opac, scale, aniso, erank, quatnorm) = losses.cpu().numpy().tolist()
+            # self.training_verboser.add_metric('opac', opac, last_only=True)
+            # self.training_verboser.add_metric('scale', scale, last_only=True)
+            # if aniso > 0:
+            #     self.training_verboser.add_metric('aniso', aniso, last_only=True)
+            # if erank > 0:
+            #     self.training_verboser.add_metric('erank', erank, last_only=True)
 
             # Static losses (mostly bilagrid and PPISP)
             static_losses = self.training_losses.get_static_losses(self.step)
@@ -1428,27 +1492,137 @@ class SpirulaeSplatModel(torch.nn.Module):
             self.camera_optimizer.get_metrics_dict(metrics_dict)
         return metrics_dict
 
+    @staticmethod
+    def _tv(tensor: torch.Tensor):
+        if tensor is None:
+            return (0, 4, [0])
+        assert tensor.is_contiguous(), f"Tensor must be contiguous, got strides {tensor.stride()}"
+        assert tensor.is_cuda
+        return (tensor.data_ptr(), tensor.element_size(), list(tensor.shape))
+
+    def _engine_get_loss_grad(self, outputs, batch, batch_size):
+        """Engine path: compute loss + backward entirely in C++."""
+        from spirulae_splat.splat.cuda import _C
+
+        device = outputs['rgb'].device
+        _tv = self._tv
+
+        # --- Prepare ground truth ---
+        gt_rgb = batch["image"].to(device)
+        if gt_rgb.dtype == torch.uint8:
+            gt_rgb = gt_rgb.float() / 255.0
+        elif gt_rgb.dtype == torch.uint16:
+            gt_rgb = gt_rgb.float() / 65535.0
+        elif gt_rgb.dtype == torch.float16:
+            gt_rgb = gt_rgb.float()
+        gt_rgb = gt_rgb[..., :3].contiguous()
+
+        gt_depth = batch.get('depth', None)
+        if gt_depth is not None:
+            gt_depth = gt_depth.to(device).float()
+            if len(gt_depth.shape) == 3:
+                gt_depth = gt_depth.unsqueeze(-1)
+            gt_depth = gt_depth.contiguous()
+
+        gt_normal = batch.get('normal', None)
+        if gt_normal is not None:
+            gt_normal = gt_normal.to(device).float()
+            if gt_normal.dtype == torch.uint8:
+                gt_normal = gt_normal.float() / (255/2) - 1.0
+            gt_normal = gt_normal.contiguous()
+
+        gt_alpha = None
+        gt_rgb_mask = None
+        gt_depth_mask = None
+        gt_normal_mask = None
+        gt_alpha_mask = None
+
+        if "mask" in batch:
+            mask = batch['mask'].to(device).float() > 0.5
+            gt_rgb_mask = mask.contiguous()
+            if self.config.apply_loss_for_mask:
+                gt_alpha = mask.contiguous()
+
+        if gt_depth is not None:
+            gt_depth_mask = (gt_depth != 0.0).contiguous()
+            gt_alpha_mask = gt_depth_mask
+
+        if gt_normal is not None:
+            gt_normal_mask = (gt_normal.sum(-1, True) > -2.366).contiguous()
+
+        _C.set_training_data(
+            _tv(gt_rgb), _tv(gt_depth), _tv(gt_normal), _tv(gt_alpha),
+            _tv(gt_rgb_mask), _tv(gt_depth_mask), _tv(gt_normal_mask), _tv(gt_alpha_mask)
+        )
+
+        # --- Loss weights ---
+        step = self.step
+        cfg = self.config
+
+        dist_factor = min(step / max(cfg.distortion_reg_warmup, 1), 1.0)
+        reg_active = float(step >= cfg.reg_warmup_length)
+        sup_active = float(step > cfg.supervision_warmup)
+        alpha_reg_factor = cfg.alpha_reg_weight * min(step / max(cfg.alpha_reg_warmup, 1), 1.0)
+
+        loss_weights = [
+            (1.0 - cfg.l2_lambda) * (1.0 - cfg.ssim_lambda) * (1.0 - cfg.lpips_lambda),  # RgbSupL1
+            cfg.l2_lambda * (1.0 - cfg.ssim_lambda) * (1.0 - cfg.lpips_lambda),  # RgbSupL2
+            sup_active * cfg.depth_supervision_weight,  # DepthSup
+            sup_active * cfg.normal_supervision_weight,  # NormalSup
+            cfg.alpha_loss_weight,  # AlphaSup
+            0.0 if gt_alpha is None else cfg.alpha_loss_weight_under,  # AlphaSupUnder
+            reg_active * cfg.normal_reg_weight * dist_factor,  # NormalReg
+            reg_active * alpha_reg_factor,  # AlphaReg
+            reg_active * cfg.rgb_distortion_reg * dist_factor,  # RgbDistReg
+            reg_active * cfg.depth_distortion_reg * dist_factor,  # DepthDistReg
+            reg_active * cfg.normal_distortion_reg * dist_factor,  # NormalDistReg
+        ]
+        w_ssim = cfg.ssim_lambda * (1.0 - cfg.lpips_lambda)
+        num_loss_scales = cfg.num_loss_scales + 1
+        compute_loss_map = cfg.use_loss_map or (cfg.compute_hessian_diagonal is not None)
+
+        # --- Ensure radii exists (engine forward doesn't populate it on Python side) ---
+        if not hasattr(self.core, 'radii') or self.core.radii is None:
+            self.core.radii = torch.zeros(self.core.max_num_splats, dtype=torch.float32, device=device)
+
+        # --- Zero grad ---
+        self.core.zero_grad()
+
+        # --- Compute loss + backward ---
+        loss_dict = _C.engine_compute_loss_backward(
+            step,
+            loss_weights,
+            w_ssim,
+            num_loss_scales,
+            compute_loss_map,
+            *[_tv(t) for t in self.core.v_splats_world]
+        )
+
+        for key, value in loss_dict.items():
+            self.training_verboser.add_metric(key, value)
+        self.training_verboser.add_metric("num_splats", self.core.cur_num_splats, last_only=True)
+        self.training_verboser.add_metric("max_num_splats", self.core.max_num_splats, last_only=True)
+        self.training_verboser.add_metric("num_sh", min(self.core.sh_degree_to_use, self.config.sh_degree), last_only=True)
+        self.training_verboser.add_metric("max_num_sh", self.config.sh_degree, last_only=True)
+
+        # Mark that backward was done in engine (skip model.backward())
+        self._engine_backward_done = True
+
+        return None  # no loss_grad needed; backward already done
+
     def get_loss_grad(self, outputs, batch, batch_size: int) -> Dict[str, torch.Tensor]:
-        """Computes and returns the losses dict.
+        """Computes and returns the losses dict."""
 
-        Args:
-            outputs: the output to compute loss dict to
-            batch: ground truth batch corresponding to outputs
-            metrics_dict: dictionary of metrics, some of which we can use for loss
-        """
+        # Engine path: set training data, compute loss + backward in C++
+        if self.core.primitive in ['3dgs', 'mip', '3dgut'] and not self.core.use_bvh:
+            return self._engine_get_loss_grad(outputs, batch, batch_size)
 
-        # Per-image losses (CUDA with .item() that involves GPU-CPU sync)
+        # Legacy Python path (kept for reference)
         self.info['num_train_data'] = self.num_train_data
-
-        # Outputs and batch are tuples if eval data is provided
-        # self.training_losses will call CUDA functions to compute training loss
         total_val_loss = None
         if isinstance(outputs, tuple) and isinstance(batch, tuple):
             raise NotImplementedError()
             loss_dict, loss_grad = self.training_losses(self.step, batch[0], outputs[0], self.info)
-            # for key, value in outputs[1].items():
-            #     if isinstance(value, torch.Tensor):
-            #         outputs[1][key] = value.detach()
             val_loss_dict, val_loss_grad = self.training_losses(self.step, batch[1], outputs[1], self.info, val=True)
             total_val_loss = torch.stack([
                 x for x in val_loss_dict.values() if isinstance(x, torch.Tensor)

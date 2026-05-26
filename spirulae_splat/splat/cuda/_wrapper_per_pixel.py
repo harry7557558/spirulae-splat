@@ -345,9 +345,11 @@ def ray_depth_to_linear_depth(
     )
 
 
-def _tv(tensor):
+def _tv(tensor: torch.Tensor):
     if tensor is None:
         return (0, 4, [0])
+    assert tensor.is_contiguous()
+    assert tensor.is_cuda
     return (tensor.data_ptr(), tensor.element_size(), list(tensor.shape))
 
 

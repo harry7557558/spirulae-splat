@@ -580,6 +580,16 @@ static void _avg_pool_downsample_bool(const TorchTensorView& src, const TorchTen
 }
 
 
+__global__ void vector_add_scaled_kernel(
+    float* __restrict__ dst,
+    const float* __restrict__ src,
+    float scale,
+    int n
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) dst[i] += src[i] * scale;
+}
+
 __global__ void avg_pool_upsample_float_kernel(
     TensorView<float, 4> image_hs,
     const TensorView<float, 4> image_ls,
@@ -773,27 +783,14 @@ std::tuple<float, float> compute_multi_scale_per_pixel_losses(
             w_ssim
         );
 
-        if (scale == 0) {
-            float host_losses[(uint)LossIndex::length];
-            cudaMemcpy(host_losses, losses_ptr, (uint)LossIndex::length * sizeof(float), cudaMemcpyDeviceToHost);
-            psnr_val = host_losses[(int)LossIndex::RgbPSNR];
+        if (scale == 0)
             ssim_val = ssim;
-        }
 
-        // Accumulate losses: total_losses += losses
-        // Use a simple kernel or cudaMemcpy + host add... just launch a trivial add
-        {
-            // add losses_ptr to total_losses_ptr on device
-            per_pixel_losses_reduce_forward_kernel<<<1, WARP_SIZE>>>(
-                0, losses_ptr, loss_weights, nullptr);  // dummy — let's just do host-side
-            // Actually, simpler: copy to host and add
-            float host_l[(uint)LossIndex::length];
-            cudaMemcpy(host_l, losses_ptr, (uint)LossIndex::length * sizeof(float), cudaMemcpyDeviceToHost);
-            float host_total[(uint)LossIndex::length];
-            cudaMemcpy(host_total, total_losses_ptr, (uint)LossIndex::length * sizeof(float), cudaMemcpyDeviceToHost);
-            for (int i = 0; i < (int)LossIndex::length; i++) host_total[i] += host_l[i];
-            cudaMemcpy(total_losses_ptr, host_total, (uint)LossIndex::length * sizeof(float), cudaMemcpyHostToDevice);
-        }
+        // Accumulate losses on device: total_losses += losses
+        constexpr int N_LOSSES = (int)LossIndex::length;
+        vector_add_scaled_kernel<<<1, N_LOSSES>>>(
+            total_losses_ptr, losses_ptr, 1.0f, N_LOSSES);
+        CHECK_DEVICE_ERROR(cudaGetLastError());
 
         // Upsample loss map
         if (_has(loss_map_out) && loss_map_ptr) {
@@ -842,13 +839,15 @@ std::tuple<float, float> compute_multi_scale_per_pixel_losses(
         upsample_grad(scale_grads.v_normal_dist, grads_out.v_normal_dist, 3);
     }
 
-    // Scale total losses by 1/num_scales
-    {
-        float host_total[(uint)LossIndex::length];
-        cudaMemcpy(host_total, total_losses_ptr, (uint)LossIndex::length * sizeof(float), cudaMemcpyDeviceToHost);
-        for (int i = 0; i < (int)LossIndex::length; i++) host_total[i] /= (float)num_loss_scales;
-        cudaMemcpy(total_losses_ptr, host_total, (uint)LossIndex::length * sizeof(float), cudaMemcpyHostToDevice);
+    // Scale total losses by 1/num_scales (device-side)
+    if (num_loss_scales > 1) {
+        constexpr int N_LOSSES = (int)LossIndex::length;
+        vector_add_scaled_kernel<<<1, N_LOSSES>>>(
+            total_losses_ptr, total_losses_ptr,
+            1.0f / (float)num_loss_scales - 1.0f, N_LOSSES);
+        CHECK_DEVICE_ERROR(cudaGetLastError());
     }
 
+    // psnr_val is not read here; caller reads it from total_losses_out after D2H
     return std::make_tuple(psnr_val, ssim_val);
 }

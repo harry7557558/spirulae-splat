@@ -274,6 +274,7 @@ class Trainer:
 
     def _render(self, c2w, fx, fy, cx, cy, w, h, camera_model):
         camera = Cameras((fx, fy, cx, cy), [0.0]*10, h, w, torch.from_numpy(c2w), camera_model)
+        camera = camera.to("cuda")
         outputs = self.model.get_outputs(camera)
         outputs['_post_processor'] = lambda tensor, **kwargs: annotate_train_cameras(
             tensor, outputs['depth'], outputs['alpha'],

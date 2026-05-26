@@ -123,10 +123,11 @@ class _BilagridFusedRegularization(torch.autograd.Function):
         return dummy, None, None
 
 
-def _tv(tensor):
+def _tv(tensor: torch.Tensor):
     if tensor is None:
         return (0, 4, [0])
     assert tensor.is_contiguous()
+    assert tensor.is_cuda
     return (tensor.data_ptr(), tensor.element_size(), list(tensor.shape))
 
 
@@ -624,6 +625,7 @@ class SplatTrainingLosses:
         pred_rgb_pre_bilagrid = None
         if self.config.use_bilateral_grid and \
                 camera.metadata is not None and "cam_idx" in camera.metadata:
+            raise NotImplementedError("TODO")
             pred_rgb_pre_bilagrid = pred_rgb
             pred_rgb = self.apply_bilateral_grid(
                 self.bilagrid,
@@ -643,6 +645,7 @@ class SplatTrainingLosses:
         pred_rgb_pre_ppisp = None
         if self.config.use_ppisp and \
                 camera.metadata is not None and "cam_idx" in camera.metadata:
+            raise NotImplementedError("TODO")
             pred_rgb_pre_ppisp = pred_rgb
             indices = camera.metadata["cam_idx"].flatten().to(device)
             pred_rgb = apply_ppisp(
@@ -764,6 +767,7 @@ class SplatTrainingLosses:
 
         # PPISP backward
         if pred_rgb_pre_ppisp is not None:
+            raise NotImplementedError("TODO")
             indices = camera.metadata["cam_idx"].flatten().to(device)  # TODO: use pre-computed
             grads[0], v_ppisp = _make_lazy_cuda_func("ppisp_backward")(
                 pred_rgb_pre_ppisp, self.ppisp_params[indices, :],
