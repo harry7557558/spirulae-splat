@@ -21,10 +21,12 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
     static constexpr RenderOutputType pixelType = RenderOutputType::RGB_D;
 
     class WorldBuffer : public _BasePrimitive3DGS<sh_degree>::WorldBuffer {
-        using _BasePrimitive3DGS<sh_degree>::WorldBuffer::WorldBuffer;
+        using _WBBase = typename _BasePrimitive3DGS<sh_degree>::WorldBuffer;
+        using _WBBase::_WBBase;
     };
     class ScreenBuffer : public _BasePrimitive3DGS<sh_degree>::ScreenBuffer {
-        using _BasePrimitive3DGS<sh_degree>::ScreenBuffer::ScreenBuffer;
+        using _SBBase = typename _BasePrimitive3DGS<sh_degree>::ScreenBuffer;
+        using _SBBase::_SBBase;
     };
 
 #ifdef __CUDACC__

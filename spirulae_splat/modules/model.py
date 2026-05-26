@@ -281,7 +281,7 @@ class SpirulaeSplatModelConfig:
     """erank regularization weight for smallest dimension, for 3DGS only"""
     quat_norm_reg: float = 0.01
     """Weight to regularize quaternion norm to identity"""
-    sh_reg: float = 0.001
+    sh_reg: float = 0.0
     """Regularize SH magnitude to find a balance between bilagrid/PPISP and improve generalizability."""
 
     # supervision using a foundation depth model
