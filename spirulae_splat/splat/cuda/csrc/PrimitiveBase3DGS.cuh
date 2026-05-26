@@ -254,9 +254,7 @@ struct _BasePrimitive3DGS {
 template<int _sh_degree>
 struct _BasePrimitive3DGUT : _BasePrimitive3DGS<_sh_degree> {
 
-    class WorldBuffer : public _BasePrimitive3DGS<_sh_degree>::WorldBuffer {
-        using _BasePrimitive3DGS<_sh_degree>::WorldBuffer::WorldBuffer;
-    };
+    using WorldBuffer = typename _BasePrimitive3DGS<_sh_degree>::WorldBuffer;
 
     #ifdef __CUDACC__
     struct World : public _BasePrimitive3DGS<_sh_degree>::World {
