@@ -854,6 +854,8 @@ struct TensorView {
 };
 
 
+#ifdef __CUDACC__
+
 __forceinline__ __device__ uint32_t hash_uint3(uint32_t a, uint32_t b, uint32_t c) {
     uint32_t hash = a;
 
@@ -883,3 +885,5 @@ __forceinline__ __device__ float sigmoid(float x) {
 __forceinline__ __device__ float logit(float x) {
     return __logf(x / (1.0f - x));
 }
+
+#endif  // #ifdef __CUDACC__

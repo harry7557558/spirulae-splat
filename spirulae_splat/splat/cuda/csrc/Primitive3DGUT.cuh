@@ -18,14 +18,8 @@ template<int sh_degree>
 struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
     static constexpr RenderOutputType pixelType = RenderOutputType::RGB_D;
 
-    class WorldBuffer : public _BasePrimitive3DGUT<sh_degree>::WorldBuffer {
-        using _WBBase = typename _BasePrimitive3DGUT<sh_degree>::WorldBuffer;
-        using _WBBase::_WBBase;
-    };
-    class ScreenBuffer : public _BasePrimitive3DGUT<sh_degree>::ScreenBuffer {
-        using _SBBase = typename _BasePrimitive3DGUT<sh_degree>::ScreenBuffer;
-        using _SBBase::_SBBase;
-    };
+    using WorldBuffer = typename _BasePrimitive3DGUT<sh_degree>::WorldBuffer;
+    using ScreenBuffer = typename _BasePrimitive3DGUT<sh_degree>::ScreenBuffer;
 
 #ifdef __CUDACC__
 
