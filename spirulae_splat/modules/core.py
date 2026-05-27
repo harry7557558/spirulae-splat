@@ -273,6 +273,7 @@ class Renderer:
         self.cur_num_splats += num_added
 
     def zero_grad(self):
+        return
         raise NotImplementedError("Use engine instead. Code below for reference.")
 
         # Engine path: gradients, optimizer state, radii managed by C++ pool

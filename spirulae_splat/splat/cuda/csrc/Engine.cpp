@@ -77,7 +77,7 @@ TorchTensorView g2_means, g2_quats, g2_scales, g2_opacities;
 TorchTensorView g2_features_dc, g2_features_sh;
 
 // Training aux (pool-backed)
-TorchTensorView radii;             // [max_N, 1] float
+DeviceVector<float> radii;         // [max_N] float
 TorchTensorView accum_buffer;      // [max_N, 2] float
 TorchTensorView quant_bounds_sh;   // [n_blocks, 4] float, or null
 DeviceVector<int32_t> bias_correction_steps;  // [max_N] int32, or null
@@ -185,7 +185,10 @@ void forward_3dgs(
     Buffers::fwd_splats_w = in_splats;
 
     DeviceTensorFloatND aabb_nd, depths_nd;
-    DeviceVector<float> proj_radii;
+
+    // Allocate and zero radii buffer before projection (kernel uses atomicMax)
+    Buffers::radii.resize("eng.radii", Buffers::max_num_splats);
+    Buffers::radii.zero();
 
     // --- Projection ---
     if (packed) {
@@ -194,29 +197,32 @@ void forward_3dgs(
         DeviceVector<float> depths_vec;
 
         if (primitive == "3dgs") {
-            auto [a, b, c, d, e, f] = projection_3dgs_packed_forward(
+            auto [a, b, c, d, e] = projection_3dgs_packed_forward(
                 Buffers::cur_num_splats, sh_degree, in_splats,
                 Buffers::camera_viewmats, Buffers::camera_intrins,
                 (uint32_t)Buffers::image_width, (uint32_t)Buffers::image_height,
-                Buffers::camera_model_str, Buffers::camera_dist_coeffs);
+                Buffers::camera_model_str, Buffers::camera_dist_coeffs,
+                Buffers::radii);
             cam_ids = a; gauss_ids = b; aabb_vec = c; depths_vec = d;
-            proj_radii = e; Buffers::fwd_splats_s = f;
+            Buffers::fwd_splats_s = e;
         } else if (primitive == "mip") {
-            auto [a, b, c, d, e, f] = projection_mip_packed_forward(
+            auto [a, b, c, d, e] = projection_mip_packed_forward(
                 Buffers::cur_num_splats, sh_degree, in_splats,
                 Buffers::camera_viewmats, Buffers::camera_intrins,
                 (uint32_t)Buffers::image_width, (uint32_t)Buffers::image_height,
-                Buffers::camera_model_str, Buffers::camera_dist_coeffs);
+                Buffers::camera_model_str, Buffers::camera_dist_coeffs,
+                Buffers::radii);
             cam_ids = a; gauss_ids = b; aabb_vec = c; depths_vec = d;
-            proj_radii = e; Buffers::fwd_splats_s = f;
+            Buffers::fwd_splats_s = e;
         } else if (primitive == "3dgut") {
-            auto [a, b, c, d, e, f] = projection_3dgut_packed_forward(
+            auto [a, b, c, d, e] = projection_3dgut_packed_forward(
                 Buffers::cur_num_splats, sh_degree, in_splats,
                 Buffers::camera_viewmats, Buffers::camera_intrins,
                 (uint32_t)Buffers::image_width, (uint32_t)Buffers::image_height,
-                Buffers::camera_model_str, Buffers::camera_dist_coeffs);
+                Buffers::camera_model_str, Buffers::camera_dist_coeffs,
+                Buffers::radii);
             cam_ids = a; gauss_ids = b; aabb_vec = c; depths_vec = d;
-            proj_radii = e; Buffers::fwd_splats_s = f;
+            Buffers::fwd_splats_s = e;
         } else {
             throw std::runtime_error("engine_forward: unknown primitive: " + primitive);
         }
@@ -231,29 +237,32 @@ void forward_3dgs(
         DeviceTensor2D<float> depths_2d;  // [C, N] — sorting depths per camera
 
         if (primitive == "3dgs") {
-            auto [a, b, c, d] = projection_3dgs_forward(
+            auto [a, b, c] = projection_3dgs_forward(
                 Buffers::cur_num_splats, sh_degree, in_splats,
                 Buffers::camera_viewmats, Buffers::camera_intrins,
                 (uint32_t)Buffers::image_width, (uint32_t)Buffers::image_height,
-                Buffers::camera_model_str, Buffers::camera_dist_coeffs);
-            aabb_2d = a; depths_2d = b; proj_radii = c;
-            Buffers::fwd_splats_s = d;
+                Buffers::camera_model_str, Buffers::camera_dist_coeffs,
+                Buffers::radii);
+            aabb_2d = a; depths_2d = b;
+            Buffers::fwd_splats_s = c;
         } else if (primitive == "mip") {
-            auto [a, b, c, d] = projection_mip_forward(
+            auto [a, b, c] = projection_mip_forward(
                 Buffers::cur_num_splats, sh_degree, in_splats,
                 Buffers::camera_viewmats, Buffers::camera_intrins,
                 (uint32_t)Buffers::image_width, (uint32_t)Buffers::image_height,
-                Buffers::camera_model_str, Buffers::camera_dist_coeffs);
-            aabb_2d = a; depths_2d = b; proj_radii = c;
-            Buffers::fwd_splats_s = d;
+                Buffers::camera_model_str, Buffers::camera_dist_coeffs,
+                Buffers::radii);
+            aabb_2d = a; depths_2d = b;
+            Buffers::fwd_splats_s = c;
         } else if (primitive == "3dgut") {
-            auto [a, b, c, d] = projection_3dgut_forward(
+            auto [a, b, c] = projection_3dgut_forward(
                 Buffers::cur_num_splats, sh_degree, in_splats,
                 Buffers::camera_viewmats, Buffers::camera_intrins,
                 (uint32_t)Buffers::image_width, (uint32_t)Buffers::image_height,
-                Buffers::camera_model_str, Buffers::camera_dist_coeffs);
-            aabb_2d = a; depths_2d = b; proj_radii = c;
-            Buffers::fwd_splats_s = d;
+                Buffers::camera_model_str, Buffers::camera_dist_coeffs,
+                Buffers::radii);
+            aabb_2d = a; depths_2d = b;
+            Buffers::fwd_splats_s = c;
         } else {
             throw std::runtime_error("engine_forward: unknown primitive: " + primitive);
         }
@@ -263,14 +272,6 @@ void forward_3dgs(
         Buffers::fwd_aabb = aabb_2d;                           // [C, N] for backward
         aabb_nd = DeviceTensorFloatND(aabb_2d);                // [C, N, 4] for intersect
         depths_nd = DeviceTensorFloatND(depths_2d);            // [C, N] → numel=C*N for intersect
-    }
-
-    // Capture projection radii to pool buffer
-    if (proj_radii.data_ptr() != nullptr) {
-        float* r = DevicePool::global().acquire<float>("eng.radii", Buffers::max_num_splats);
-        int64_t n = std::min(proj_radii.size(), Buffers::max_num_splats);
-        cudaMemcpy(r, proj_radii.data_ptr(), n * sizeof(float), cudaMemcpyDeviceToDevice);
-        Buffers::radii = TorchTensorView((uint64_t)r, 4, {Buffers::max_num_splats, 1});
     }
 
     // --- Tile intersection (AABB mode) ---
@@ -643,8 +644,8 @@ static void _ensure_optim_state(bool quantize_sh, bool use_per_splat_bias_correc
         ? _pool_tv_3d_u8("eng.g2_features_sh", N, K, 3)
         : _pool_tv_3d_f("eng.g2_features_sh", N, K, 3);
 
-    // radii [max_N, 1]
-    Buffers::radii = _pool_tv_2d("eng.radii", N, 1);
+    // radii [max_N]
+    Buffers::radii.resize("eng.radii", N);
 
     // accum_buffer [max_N, 2]
     Buffers::accum_buffer = _pool_tv_2d("eng.accum_buffer", N, 2);
@@ -673,7 +674,6 @@ static void _ensure_optim_state(bool quantize_sh, bool use_per_splat_bias_correc
     _zero_tv(Buffers::g1_opacities);   _zero_tv(Buffers::g2_opacities);
     _zero_tv(Buffers::g1_features_dc); _zero_tv(Buffers::g2_features_dc);
     _zero_tv(Buffers::g1_features_sh); _zero_tv(Buffers::g2_features_sh);
-    _zero_tv(Buffers::radii);
     _zero_tv(Buffers::accum_buffer);
     if (_tv_valid(Buffers::quant_bounds_sh))
         _zero_tv(Buffers::quant_bounds_sh);
@@ -958,12 +958,16 @@ void engine_optim_step(
         per_splat_steps = Buffers::bias_correction_steps;
     }
 
-    engine_optim_3dgs_geometry(
+    fused_optim_3dgs_geometry(
         N,
-        Buffers::world_means,     Buffers::grad_means,     Buffers::g1_means,     Buffers::g2_means,
-        Buffers::world_quats,     Buffers::grad_quats,     Buffers::g1_quats,     Buffers::g2_quats,
-        Buffers::world_scales,    Buffers::grad_scales,    Buffers::g1_scales,    Buffers::g2_scales,
-        Buffers::world_opacities, Buffers::grad_opacities, Buffers::g1_opacities, Buffers::g2_opacities,
+        DeviceVector<float3>(Buffers::world_means),     DeviceVector<float3>(Buffers::grad_means),
+        DeviceVector<float3>(Buffers::g1_means),        DeviceVector<float3>(Buffers::g2_means),
+        DeviceVector<float4>(Buffers::world_quats),     DeviceVector<float4>(Buffers::grad_quats),
+        DeviceVector<float4>(Buffers::g1_quats),        DeviceVector<float4>(Buffers::g2_quats),
+        DeviceVector<float3>(Buffers::world_scales),    DeviceVector<float3>(Buffers::grad_scales),
+        DeviceVector<float3>(Buffers::g1_scales),       DeviceVector<float3>(Buffers::g2_scales),
+        DeviceVector<float>(Buffers::world_opacities),  DeviceVector<float>(Buffers::grad_opacities),
+        DeviceVector<float>(Buffers::g1_opacities),     DeviceVector<float>(Buffers::g2_opacities),
         Buffers::radii,
         lr_means, lr_quats, lr_scales, lr_opacities,
         max_gauss_ratio, scale_regularization_weight,
@@ -973,23 +977,24 @@ void engine_optim_step(
         step + 1, per_splat_steps
     );
 
-    engine_adam_step(N,
-        Buffers::world_features_dc, Buffers::grad_features_dc,
-        Buffers::g1_features_dc, Buffers::g2_features_dc,
+    fused_adam_step(N,
+        tv_to_fnd(Buffers::world_features_dc), tv_to_fnd(Buffers::grad_features_dc),
+        tv_to_fnd(Buffers::g1_features_dc), tv_to_fnd(Buffers::g2_features_dc),
         lr_features_dc, step + 1, per_splat_steps,
         sh_reg_weight, 0.5f / 0.28209479177387814f);
 
     if (quantize_sh && _tv_valid(Buffers::quant_bounds_sh)) {
-        engine_adam_step_8bit(N,
-            Buffers::world_features_sh, Buffers::grad_features_sh,
-            Buffers::g1_features_sh, Buffers::g2_features_sh,
-            Buffers::quant_bounds_sh,
+        fused_adam_step_8bit(N,
+            tv_to_fnd(Buffers::world_features_sh), tv_to_fnd(Buffers::grad_features_sh),
+            (uint8_t*)std::get<0>(Buffers::g1_features_sh),
+            (uint8_t*)std::get<0>(Buffers::g2_features_sh),
+            (float4*)std::get<0>(Buffers::quant_bounds_sh),
             lr_features_sh, step + 1, per_splat_steps,
             sh_reg_weight, 0.0f);
     } else {
-        engine_adam_step(N,
-            Buffers::world_features_sh, Buffers::grad_features_sh,
-            Buffers::g1_features_sh, Buffers::g2_features_sh,
+        fused_adam_step(N,
+            tv_to_fnd(Buffers::world_features_sh), tv_to_fnd(Buffers::grad_features_sh),
+            tv_to_fnd(Buffers::g1_features_sh), tv_to_fnd(Buffers::g2_features_sh),
             lr_features_sh, step + 1, per_splat_steps,
             sh_reg_weight, 0.0f);
     }
@@ -1066,7 +1071,7 @@ int engine_densify_step(
     auto dv_g2_opacs = _dv<float>(Buffers::g2_opacities);
     auto dv_g2_features_dc = _dv<float3>(Buffers::g2_features_dc);
     auto dv_g2_features_sh = _dv_flat<float3>(Buffers::g2_features_sh);
-    auto dv_radii = _dv<float>(Buffers::radii);
+    auto& dv_radii = Buffers::radii;
     auto dv_accum_buf = _dv_or_null<float2>(Buffers::accum_buffer);
     auto dv_bias_steps = Buffers::bias_correction_steps;
 

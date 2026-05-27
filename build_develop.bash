@@ -17,7 +17,7 @@ fi
 
 echo ""
 
-JOB_RAM_MB=1800   # 1.8GB
+JOB_RAM_MB=1000   # 1.0GB
 AVAILABLE_KB=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
 AVAILABLE_MB=$(( AVAILABLE_KB / 1024 ))
 MAX_JOBS_FROM_RAM=$(( AVAILABLE_MB / JOB_RAM_MB ))

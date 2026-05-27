@@ -53,7 +53,6 @@ inline std::tuple<
     DeviceVector<int32_t>,    // gaussian_ids [nnz]
     DeviceVector<float4>,     // aabb [nnz]
     DeviceVector<float>,      // sorting_depths [nnz]
-    DeviceVector<float>,      // radii [N]
     std::vector<DeviceTensorFloatND>  // out splats
 > launch_projection_packed_fwd_kernel(
     const int64_t N,
@@ -64,7 +63,8 @@ inline std::tuple<
     const uint32_t image_width,
     const uint32_t image_height,
     const ssplat::CameraModelType camera_model,
-    const TorchTensorView dist_coeffs
+    const TorchTensorView dist_coeffs,
+    DeviceVector<float> radii
 ) {
     typename SplatPrimitive::WorldBuffer splats_world(in_splats);
 
@@ -107,7 +107,6 @@ inline std::tuple<
     DeviceVector<int32_t> gaussian_ids; gaussian_ids.resize("proj.gaussian_ids", nnz);
     DeviceVector<float4> aabb; aabb.resize("proj.aabb", nnz);
     DeviceVector<float> sorting_depths; sorting_depths.resize("proj.depths", nnz);
-    DeviceVector<float> radii; radii.resize("proj.radii", splats_world.size()); radii.zero();
 
     std::vector<DeviceTensorFloatND> splats_screen = SplatPrimitive::ScreenBuffer::empty_pool(nnz, "proj.screen");
 
@@ -133,7 +132,7 @@ inline std::tuple<
 
     #undef _LAUNCH_ARGS
 
-    return std::make_tuple(camera_ids, gaussian_ids, aabb, sorting_depths, radii, splats_screen);
+    return std::make_tuple(camera_ids, gaussian_ids, aabb, sorting_depths, splats_screen);
 }
 
 
@@ -144,7 +143,7 @@ inline std::tuple<
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<
     DeviceVector<int32_t>, DeviceVector<int32_t>, DeviceVector<float4>,
-    DeviceVector<float>, DeviceVector<float>, std::vector<DeviceTensorFloatND>
+    DeviceVector<float>, std::vector<DeviceTensorFloatND>
 > projection_3dgs_packed_forward(
     const int64_t num_splats,
     const int max_sh_degree,
@@ -154,7 +153,8 @@ std::tuple<
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
-    const TorchTensorView dist_coeffs
+    const TorchTensorView dist_coeffs,
+    DeviceVector<float> radii
 ) {
     int sh_degree = Vanilla3DGS<0>::WorldBuffer(in_splats).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
@@ -163,7 +163,7 @@ std::tuple<
     const float4* intr = (const float4*)std::get<0>(intrins);
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_packed_fwd_kernel<Vanilla3DGS<n>>( \
-            num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), dist_coeffs);
+            num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), dist_coeffs, radii);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
     return {};
@@ -177,7 +177,7 @@ std::tuple<
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<
     DeviceVector<int32_t>, DeviceVector<int32_t>, DeviceVector<float4>,
-    DeviceVector<float>, DeviceVector<float>, std::vector<DeviceTensorFloatND>
+    DeviceVector<float>, std::vector<DeviceTensorFloatND>
 > projection_mip_packed_forward(
     const int64_t num_splats,
     const int max_sh_degree,
@@ -187,7 +187,8 @@ std::tuple<
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
-    const TorchTensorView dist_coeffs
+    const TorchTensorView dist_coeffs,
+    DeviceVector<float> radii
 ) {
     int sh_degree = MipSplatting<0>::WorldBuffer(in_splats).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
@@ -196,7 +197,7 @@ std::tuple<
     const float4* intr = (const float4*)std::get<0>(intrins);
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_packed_fwd_kernel<MipSplatting<n>>( \
-            num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), dist_coeffs);
+            num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), dist_coeffs, radii);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
     return {};
@@ -211,7 +212,7 @@ std::tuple<
 /*[AutoHeaderGeneratorExport]*/
 std::tuple<
     DeviceVector<int32_t>, DeviceVector<int32_t>, DeviceVector<float4>,
-    DeviceVector<float>, DeviceVector<float>, std::vector<DeviceTensorFloatND>
+    DeviceVector<float>, std::vector<DeviceTensorFloatND>
 > projection_3dgut_packed_forward(
     const int64_t num_splats,
     const int max_sh_degree,
@@ -221,7 +222,8 @@ std::tuple<
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
-    const TorchTensorView dist_coeffs
+    const TorchTensorView dist_coeffs,
+    DeviceVector<float> radii
 ) {
     int sh_degree = Vanilla3DGUT<0>::WorldBuffer(in_splats).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
@@ -230,7 +232,7 @@ std::tuple<
     const float4* intr = (const float4*)std::get<0>(intrins);
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_packed_fwd_kernel<Vanilla3DGUT<n>>( \
-            num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), dist_coeffs);
+            num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), dist_coeffs, radii);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
     return {};

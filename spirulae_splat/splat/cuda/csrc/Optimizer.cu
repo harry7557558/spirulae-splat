@@ -831,36 +831,17 @@ __global__ void fused_optim_3dgs_geometry_kernel(
 /*[AutoHeaderGeneratorExport]*/
 void fused_optim_3dgs_geometry(
     int64_t num_splats,
-    TorchTensorView means,
-    TorchTensorView v_means,
-    TorchTensorView g1_means,
-    TorchTensorView g2_means,
-    TorchTensorView quats,
-    TorchTensorView v_quats,
-    TorchTensorView g1_quats,
-    TorchTensorView g2_quats,
-    TorchTensorView scales,
-    TorchTensorView v_scales,
-    TorchTensorView g1_scales,
-    TorchTensorView g2_scales,
-    TorchTensorView opacities,
-    TorchTensorView v_opacities,
-    TorchTensorView g1_opacities,
-    TorchTensorView g2_opacities,
-    TorchTensorView radii,
-    const float lr_means,
-    const float lr_quats,
-    const float lr_scales,
-    const float lr_opacs,
-    const float max_gauss_ratio,
-    const float scale_regularization_weight,
-    const float mcmc_opacity_reg_weight,
-    const float mcmc_scale_reg_weight,
-    const float erank_reg_weight,
-    const float erank_reg_weight_s3,
-    const float quat_norm_reg_weight,
+    DeviceVector<float3> means, DeviceVector<float3> v_means, DeviceVector<float3> g1_means, DeviceVector<float3> g2_means,
+    DeviceVector<float4> quats, DeviceVector<float4> v_quats, DeviceVector<float4> g1_quats, DeviceVector<float4> g2_quats,
+    DeviceVector<float3> scales, DeviceVector<float3> v_scales, DeviceVector<float3> g1_scales, DeviceVector<float3> g2_scales,
+    DeviceVector<float> opacities, DeviceVector<float> v_opacities, DeviceVector<float> g1_opacities, DeviceVector<float> g2_opacities,
+    DeviceVector<float> radii,
+    const float lr_means, const float lr_quats, const float lr_scales, const float lr_opacs,
+    const float max_gauss_ratio, const float scale_regularization_weight,
+    const float mcmc_opacity_reg_weight, const float mcmc_scale_reg_weight,
+    const float erank_reg_weight, const float erank_reg_weight_s3, const float quat_norm_reg_weight,
     bool use_scale_agnostic_mean,
-    std::variant<int32_t, TorchTensorView> step
+    int32_t step, DeviceVector<int32_t> per_splat_steps
 ) {
     if (num_splats == 0)
         return;
@@ -869,27 +850,12 @@ void fused_optim_3dgs_geometry(
         fused_optim_3dgs_geometry_kernel<true> :
         fused_optim_3dgs_geometry_kernel<false>
     )<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
-        (float3*)_tv_f(means),
-        (const float3*)_tv_f(v_means),
-        (float3*)_tv_f(g1_means),
-        (float3*)_tv_f(g2_means),
-        (float4*)_tv_f(quats),
-        (const float4*)_tv_f(v_quats),
-        (float4*)_tv_f(g1_quats),
-        (float4*)_tv_f(g2_quats),
-        (float3*)_tv_f(scales),
-        (const float3*)_tv_f(v_scales),
-        (float3*)_tv_f(g1_scales),
-        (float3*)_tv_f(g2_scales),
-        (float*)_tv_f(opacities),
-        (const float*)_tv_f(v_opacities),
-        (float*)_tv_f(g1_opacities),
-        (float*)_tv_f(g2_opacities),
-        _tv_f(radii),
-        lr_means,
-        lr_quats,
-        lr_scales,
-        lr_opacs,
+        means.data_ptr(), v_means.data_ptr(), g1_means.data_ptr(), g2_means.data_ptr(),
+        quats.data_ptr(), v_quats.data_ptr(), g1_quats.data_ptr(), g2_quats.data_ptr(),
+        scales.data_ptr(), v_scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(),
+        opacities.data_ptr(), v_opacities.data_ptr(), g1_opacities.data_ptr(), g2_opacities.data_ptr(),
+        (const float*)radii.data_ptr(),
+        lr_means, lr_quats, lr_scales, lr_opacs,
         max_gauss_ratio,
         scale_regularization_weight / (float)num_splats,
         mcmc_opacity_reg_weight / (float)num_splats,
@@ -897,9 +863,7 @@ void fused_optim_3dgs_geometry(
         erank_reg_weight / (float)num_splats,
         erank_reg_weight_s3 / (float)num_splats,
         quat_norm_reg_weight / (float)num_splats,
-        std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1,
-        std::get_if<TorchTensorView>(&step) ? _tv_i32(std::get<TorchTensorView>(step)) : nullptr,
-        num_splats
+        step, per_splat_steps.data_ptr(), num_splats
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
@@ -953,41 +917,29 @@ __global__ void fused_adam_with_steps_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-void fused_adam_with_steps_tensor(
-    uint64_t num_splats,
-    TorchTensorView param,
-    TorchTensorView grad,
-    TorchTensorView exp_avg,
-    TorchTensorView exp_avg_sq,
+void fused_adam_step(
+    int64_t num_splats,
+    DeviceTensorFloatND param,
+    DeviceTensorFloatND grad,
+    DeviceTensorFloatND exp_avg,
+    DeviceTensorFloatND exp_avg_sq,
     float lr,
-    std::variant<int32_t, TorchTensorView> step,
+    int32_t step, DeviceVector<int32_t> per_splat_steps,
     float l2_reg,
     float l2_reg_offset
 ) {
-    int64_t param_numel = _tv_numel(param);
-
-    int stride = 1;
-    if (std::get_if<TorchTensorView>(&step)) {
-        int n = (int)_tv_numel(std::get<TorchTensorView>(step));
-        if (param_numel == 0 || n == 0)
-            return;
-        stride = (int)(param_numel / n);
-    } else if (param_numel != (int64_t)num_splats) {
-        if (param_numel == 0)
-            return;
-        stride = (int)(param_numel / std::get<2>(param)[0]);
-    }
-    if (num_splats * stride == 0)
+    int64_t param_numel = param.numel();
+    if (param_numel == 0 || num_splats == 0)
         return;
+    int stride = (int)(param_numel / num_splats);
 
     fused_adam_with_steps_kernel<<<_LAUNCH_ARGS_1D(num_splats*stride, 256)>>>(
-        _tv_f(param),
-        _tv_f(grad),
-        _tv_f(exp_avg),
-        _tv_f(exp_avg_sq),
+        param.data_ptr(),
+        grad.data_ptr(),
+        exp_avg.data_ptr(),
+        exp_avg_sq.data_ptr(),
         lr,
-        std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1,
-        std::get_if<TorchTensorView>(&step) ? _tv_i32(std::get<TorchTensorView>(step)) : nullptr,
+        step, per_splat_steps.data_ptr(),
         2.0f*l2_reg/(float)(num_splats*stride),
         l2_reg_offset,
         num_splats*stride,
@@ -1075,44 +1027,32 @@ __global__ void fused_adam_with_steps_8bit_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-void fused_adam_with_steps_8bit_tensor(
-    uint64_t num_splats,
-    TorchTensorView param,
-    TorchTensorView grad,
-    TorchTensorView exp_avg,
-    TorchTensorView exp_avg_sq,
-    TorchTensorView quant_bounds,
+void fused_adam_step_8bit(
+    int64_t num_splats,
+    DeviceTensorFloatND param,
+    DeviceTensorFloatND grad,
+    uint8_t* exp_avg,
+    uint8_t* exp_avg_sq,
+    float4* quant_bounds,
     float lr,
-    std::variant<int32_t, TorchTensorView> step,
+    int32_t step, DeviceVector<int32_t> per_splat_steps,
     float l2_reg,
     float l2_reg_offset
 ) {
-    int64_t param_numel = _tv_numel(param);
-
-    int stride = 1;
-    if (std::get_if<TorchTensorView>(&step)) {
-        int n = (int)_tv_numel(std::get<TorchTensorView>(step));
-        if (param_numel == 0 || n == 0)
-            return;
-        stride = (int)(param_numel / n);
-    } else if (param_numel != (int64_t)num_splats) {
-        if (param_numel == 0)
-            return;
-        stride = (int)(param_numel / std::get<2>(param)[0]);
-    }
-    if (num_splats * stride == 0)
+    int64_t param_numel = param.numel();
+    if (param_numel == 0 || num_splats == 0)
         return;
-
+    int stride = (int)(param_numel / num_splats);
     constexpr int BLOCK_SIZE = 256;
+
     fused_adam_with_steps_8bit_kernel<BLOCK_SIZE><<<_LAUNCH_ARGS_1D(num_splats*stride, BLOCK_SIZE)>>>(
-        _tv_f(param),
-        _tv_f(grad),
-        _tv_u8(exp_avg),
-        _tv_u8(exp_avg_sq),
-        (float4*)_tv_f(quant_bounds),
+        param.data_ptr(),
+        grad.data_ptr(),
+        exp_avg,
+        exp_avg_sq,
+        quant_bounds,
         lr,
-        std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1,
-        std::get_if<TorchTensorView>(&step) ? _tv_i32(std::get<TorchTensorView>(step)) : nullptr,
+        step, per_splat_steps.data_ptr(),
         2.0f*l2_reg/(float)(num_splats*stride),
         l2_reg_offset,
         num_splats*stride,
@@ -2098,109 +2038,6 @@ void fused_adamtr_rgb_sh_optim(
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
-
-// ================
-// TorchTensorView wrappers for Engine.cpp
-// ================
-
-/*[AutoHeaderGeneratorExport]*/
-void engine_optim_3dgs_geometry(
-    int64_t num_splats,
-    TorchTensorView means, TorchTensorView v_means, TorchTensorView g1_means, TorchTensorView g2_means,
-    TorchTensorView quats, TorchTensorView v_quats, TorchTensorView g1_quats, TorchTensorView g2_quats,
-    TorchTensorView scales, TorchTensorView v_scales, TorchTensorView g1_scales, TorchTensorView g2_scales,
-    TorchTensorView opacities, TorchTensorView v_opacities, TorchTensorView g1_opacities, TorchTensorView g2_opacities,
-    TorchTensorView radii,
-    float lr_means, float lr_quats, float lr_scales, float lr_opacs,
-    float max_gauss_ratio, float scale_regularization_weight,
-    float mcmc_opacity_reg_weight, float mcmc_scale_reg_weight,
-    float erank_reg_weight, float erank_reg_weight_s3, float quat_norm_reg_weight,
-    bool use_scale_agnostic_mean,
-    int32_t step,
-    DeviceVector<int32_t> per_splat_steps
-) {
-    if (num_splats == 0) return;
-    (use_scale_agnostic_mean ?
-        fused_optim_3dgs_geometry_kernel<true> :
-        fused_optim_3dgs_geometry_kernel<false>
-    )<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
-        (float3*)_tv_f(means), (const float3*)_tv_f(v_means), (float3*)_tv_f(g1_means), (float3*)_tv_f(g2_means),
-        (float4*)_tv_f(quats), (const float4*)_tv_f(v_quats), (float4*)_tv_f(g1_quats), (float4*)_tv_f(g2_quats),
-        (float3*)_tv_f(scales), (const float3*)_tv_f(v_scales), (float3*)_tv_f(g1_scales), (float3*)_tv_f(g2_scales),
-        (float*)_tv_f(opacities), (const float*)_tv_f(v_opacities), (float*)_tv_f(g1_opacities), (float*)_tv_f(g2_opacities),
-        _tv_f(radii),
-        lr_means, lr_quats, lr_scales, lr_opacs,
-        max_gauss_ratio,
-        scale_regularization_weight / (float)num_splats,
-        mcmc_opacity_reg_weight / (float)num_splats,
-        mcmc_scale_reg_weight / (float)num_splats,
-        erank_reg_weight / (float)num_splats,
-        erank_reg_weight_s3 / (float)num_splats,
-        quat_norm_reg_weight / (float)num_splats,
-        step, per_splat_steps.data_ptr(), num_splats
-    );
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-}
-
-/*[AutoHeaderGeneratorExport]*/
-void engine_adam_step(
-    int64_t num_splats,
-    TorchTensorView param,
-    TorchTensorView grad,
-    TorchTensorView exp_avg,
-    TorchTensorView exp_avg_sq,
-    float lr,
-    int32_t step,
-    DeviceVector<int32_t> per_splat_steps,
-    float l2_reg,
-    float l2_reg_offset
-) {
-    int64_t numel = 1;
-    for (auto d : std::get<2>(param)) numel *= d;
-    if (numel == 0 || num_splats == 0) return;
-    int stride = (int)(numel / num_splats);
-
-    fused_adam_with_steps_kernel<<<_LAUNCH_ARGS_1D(num_splats*stride, 256)>>>(
-        _tv_f(param), _tv_f(grad), _tv_f(exp_avg), _tv_f(exp_avg_sq),
-        lr, step, per_splat_steps.data_ptr(),
-        2.0f * l2_reg / (float)(num_splats * stride),
-        l2_reg_offset,
-        num_splats * stride, stride
-    );
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-}
-
-/*[AutoHeaderGeneratorExport]*/
-void engine_adam_step_8bit(
-    int64_t num_splats,
-    TorchTensorView param,
-    TorchTensorView grad,
-    TorchTensorView exp_avg,
-    TorchTensorView exp_avg_sq,
-    TorchTensorView quant_bounds,
-    float lr,
-    int32_t step,
-    DeviceVector<int32_t> per_splat_steps,
-    float l2_reg,
-    float l2_reg_offset
-) {
-    int64_t numel = 1;
-    for (auto d : std::get<2>(param)) numel *= d;
-    if (numel == 0 || num_splats == 0) return;
-    int stride = (int)(numel / num_splats);
-    constexpr int BLOCK_SIZE = 256;
-
-    fused_adam_with_steps_8bit_kernel<BLOCK_SIZE><<<_LAUNCH_ARGS_1D(num_splats*stride, BLOCK_SIZE)>>>(
-        _tv_f(param), _tv_f(grad),
-        (uint8_t*)std::get<0>(exp_avg), (uint8_t*)std::get<0>(exp_avg_sq),
-        (float4*)_tv_f(quant_bounds),
-        lr, step, per_splat_steps.data_ptr(),
-        2.0f * l2_reg / (float)(num_splats * stride),
-        l2_reg_offset,
-        num_splats * stride, stride
-    );
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-}
 
 
 __global__ void increment_int32_kernel(int32_t* __restrict__ data, int64_t n) {

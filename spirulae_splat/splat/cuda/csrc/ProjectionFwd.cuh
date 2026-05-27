@@ -22,33 +22,36 @@
 
 
 std::tuple<
-    DeviceTensor2D<float4>, DeviceTensor2D<float>, DeviceVector<float>, std::vector<DeviceTensorFloatND>
+    DeviceTensor2D<float4>, DeviceTensor2D<float>, std::vector<DeviceTensorFloatND>
 > projection_3dgs_forward(
     const int64_t num_splats, const int max_sh_degree,
     const std::vector<DeviceTensorFloatND> &in_splats,
     TorchTensorView viewmats, TorchTensorView intrins,
     const uint32_t image_width, const uint32_t image_height,
-    const std::string camera_model, const TorchTensorView dist_coeffs
+    const std::string camera_model, const TorchTensorView dist_coeffs,
+    DeviceVector<float> radii
 );
 
 
 std::tuple<
-    DeviceTensor2D<float4>, DeviceTensor2D<float>, DeviceVector<float>, std::vector<DeviceTensorFloatND>
+    DeviceTensor2D<float4>, DeviceTensor2D<float>, std::vector<DeviceTensorFloatND>
 > projection_mip_forward(
     const int64_t num_splats, const int max_sh_degree,
     const std::vector<DeviceTensorFloatND> &in_splats,
     TorchTensorView viewmats, TorchTensorView intrins,
     const uint32_t image_width, const uint32_t image_height,
-    const std::string camera_model, const TorchTensorView dist_coeffs
+    const std::string camera_model, const TorchTensorView dist_coeffs,
+    DeviceVector<float> radii
 );
 
 
 std::tuple<
-    DeviceTensor2D<float4>, DeviceTensor2D<float>, DeviceVector<float>, std::vector<DeviceTensorFloatND>
+    DeviceTensor2D<float4>, DeviceTensor2D<float>, std::vector<DeviceTensorFloatND>
 > projection_3dgut_forward(
     const int64_t num_splats, const int max_sh_degree,
     const std::vector<DeviceTensorFloatND> &in_splats,
     TorchTensorView viewmats, TorchTensorView intrins,
     const uint32_t image_width, const uint32_t image_height,
-    const std::string camera_model, const TorchTensorView dist_coeffs
+    const std::string camera_model, const TorchTensorView dist_coeffs,
+    DeviceVector<float> radii
 );

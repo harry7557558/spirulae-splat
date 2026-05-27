@@ -118,61 +118,42 @@ void fused_adam_scale_agnostic_mean(
 
 void fused_optim_3dgs_geometry(
     int64_t num_splats,
-    TorchTensorView means,
-    TorchTensorView v_means,
-    TorchTensorView g1_means,
-    TorchTensorView g2_means,
-    TorchTensorView quats,
-    TorchTensorView v_quats,
-    TorchTensorView g1_quats,
-    TorchTensorView g2_quats,
-    TorchTensorView scales,
-    TorchTensorView v_scales,
-    TorchTensorView g1_scales,
-    TorchTensorView g2_scales,
-    TorchTensorView opacities,
-    TorchTensorView v_opacities,
-    TorchTensorView g1_opacities,
-    TorchTensorView g2_opacities,
-    TorchTensorView radii,
-    const float lr_means,
-    const float lr_quats,
-    const float lr_scales,
-    const float lr_opacs,
-    const float max_gauss_ratio,
-    const float scale_regularization_weight,
-    const float mcmc_opacity_reg_weight,
-    const float mcmc_scale_reg_weight,
-    const float erank_reg_weight,
-    const float erank_reg_weight_s3,
-    const float quat_norm_reg_weight,
+    DeviceVector<float3> means, DeviceVector<float3> v_means, DeviceVector<float3> g1_means, DeviceVector<float3> g2_means,
+    DeviceVector<float4> quats, DeviceVector<float4> v_quats, DeviceVector<float4> g1_quats, DeviceVector<float4> g2_quats,
+    DeviceVector<float3> scales, DeviceVector<float3> v_scales, DeviceVector<float3> g1_scales, DeviceVector<float3> g2_scales,
+    DeviceVector<float> opacities, DeviceVector<float> v_opacities, DeviceVector<float> g1_opacities, DeviceVector<float> g2_opacities,
+    DeviceVector<float> radii,
+    const float lr_means, const float lr_quats, const float lr_scales, const float lr_opacs,
+    const float max_gauss_ratio, const float scale_regularization_weight,
+    const float mcmc_opacity_reg_weight, const float mcmc_scale_reg_weight,
+    const float erank_reg_weight, const float erank_reg_weight_s3, const float quat_norm_reg_weight,
     bool use_scale_agnostic_mean,
-    std::variant<int32_t, TorchTensorView> step
+    int32_t step, DeviceVector<int32_t> per_splat_steps
 );
 
 
-void fused_adam_with_steps_tensor(
-    uint64_t num_splats,
-    TorchTensorView param,
-    TorchTensorView grad,
-    TorchTensorView exp_avg,
-    TorchTensorView exp_avg_sq,
+void fused_adam_step(
+    int64_t num_splats,
+    DeviceTensorFloatND param,
+    DeviceTensorFloatND grad,
+    DeviceTensorFloatND exp_avg,
+    DeviceTensorFloatND exp_avg_sq,
     float lr,
-    std::variant<int32_t, TorchTensorView> step,
+    int32_t step, DeviceVector<int32_t> per_splat_steps,
     float l2_reg,
     float l2_reg_offset
 );
 
 
-void fused_adam_with_steps_8bit_tensor(
-    uint64_t num_splats,
-    TorchTensorView param,
-    TorchTensorView grad,
-    TorchTensorView exp_avg,
-    TorchTensorView exp_avg_sq,
-    TorchTensorView quant_bounds,
+void fused_adam_step_8bit(
+    int64_t num_splats,
+    DeviceTensorFloatND param,
+    DeviceTensorFloatND grad,
+    uint8_t* exp_avg,
+    uint8_t* exp_avg_sq,
+    float4* quant_bounds,
     float lr,
-    std::variant<int32_t, TorchTensorView> step,
+    int32_t step, DeviceVector<int32_t> per_splat_steps,
     float l2_reg,
     float l2_reg_offset
 );
@@ -337,52 +318,6 @@ void fused_adamtr_rgb_sh_optim(
     float eps,
     float eps_tr,
     int step
-);
-
-
-void engine_optim_3dgs_geometry(
-    int64_t num_splats,
-    TorchTensorView means, TorchTensorView v_means, TorchTensorView g1_means, TorchTensorView g2_means,
-    TorchTensorView quats, TorchTensorView v_quats, TorchTensorView g1_quats, TorchTensorView g2_quats,
-    TorchTensorView scales, TorchTensorView v_scales, TorchTensorView g1_scales, TorchTensorView g2_scales,
-    TorchTensorView opacities, TorchTensorView v_opacities, TorchTensorView g1_opacities, TorchTensorView g2_opacities,
-    TorchTensorView radii,
-    float lr_means, float lr_quats, float lr_scales, float lr_opacs,
-    float max_gauss_ratio, float scale_regularization_weight,
-    float mcmc_opacity_reg_weight, float mcmc_scale_reg_weight,
-    float erank_reg_weight, float erank_reg_weight_s3, float quat_norm_reg_weight,
-    bool use_scale_agnostic_mean,
-    int32_t step,
-    DeviceVector<int32_t> per_splat_steps
-);
-
-
-void engine_adam_step(
-    int64_t num_splats,
-    TorchTensorView param,
-    TorchTensorView grad,
-    TorchTensorView exp_avg,
-    TorchTensorView exp_avg_sq,
-    float lr,
-    int32_t step,
-    DeviceVector<int32_t> per_splat_steps,
-    float l2_reg,
-    float l2_reg_offset
-);
-
-
-void engine_adam_step_8bit(
-    int64_t num_splats,
-    TorchTensorView param,
-    TorchTensorView grad,
-    TorchTensorView exp_avg,
-    TorchTensorView exp_avg_sq,
-    TorchTensorView quant_bounds,
-    float lr,
-    int32_t step,
-    DeviceVector<int32_t> per_splat_steps,
-    float l2_reg,
-    float l2_reg_offset
 );
 
 
