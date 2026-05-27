@@ -191,7 +191,94 @@ class Renderer:
             *[self._tv(t) for t in self.v_splats_world]
         )
 
+    def engine_debug_forward(self, override_features_dc=None, override_sh_degree=-1):
+        """Re-render with custom features_dc and/or sh_degree for debugging.
+        Returns RGB tensor [C, H, W, 3]."""
+        C = self.viewmats.shape[0]
+        H, W = self.height, self.width
+        out_rgb = torch.zeros(C, H, W, 3, device=self.splats_world[0].device, dtype=torch.float32)
+        _C.engine_debug_forward(
+            self._tv(override_features_dc),
+            override_sh_degree,
+            self._tv(out_rgb)
+        )
+        return out_rgb
+
+    def engine_get_accum_weight(self):
+        """Copy per-splat accum_buffer from C++ pool, compute weight as col0/col1."""
+        N = _C.engine_get_cur_num_splats()
+        buf = torch.zeros(N, 2, dtype=torch.float32, device=self.splats_world[0].device)
+        _C.engine_copy_accum_buffer(self._tv(buf))
+        weight = torch.where(buf[:, 1] != 0, buf[:, 0] / buf[:, 1], torch.zeros_like(buf[:, 0]))
+        return weight
+
+    def engine_set_training_data(self, gt_rgb, gt_depth=None, gt_normal=None,
+                                  gt_alpha=None, gt_rgb_mask=None, gt_depth_mask=None,
+                                  gt_normal_mask=None, gt_alpha_mask=None):
+        _C.set_training_data(
+            self._tv(gt_rgb), self._tv(gt_depth), self._tv(gt_normal), self._tv(gt_alpha),
+            self._tv(gt_rgb_mask), self._tv(gt_depth_mask), self._tv(gt_normal_mask), self._tv(gt_alpha_mask)
+        )
+
+    def engine_compute_loss_backward(self, step, loss_weights, w_ssim, num_loss_scales, compute_loss_map):
+        """Compute loss + rasterization backward + projection backward in C++.
+        Gradients are managed by C++ pool."""
+        loss_dict = _C.engine_compute_loss_backward(
+            step, loss_weights, w_ssim, num_loss_scales, compute_loss_map
+        )
+        return loss_dict
+
+    def engine_optim_step(self, step, max_steps, model_config, optim_config):
+        """Run optimizer step via C++ Engine. All tensors managed by C++ pool."""
+        if optim_config.max_steps is not None:
+            max_steps = optim_config.max_steps
+
+        _C.engine_optim_step(
+            step,
+            optim_config.get_scheduled_lr("means", step, max_steps),
+            optim_config.get_scheduled_lr("quats", step, max_steps),
+            optim_config.get_scheduled_lr("scales", step, max_steps),
+            optim_config.get_scheduled_lr("opacities", step, max_steps),
+            optim_config.get_scheduled_lr("features_dc", step, max_steps),
+            optim_config.get_scheduled_lr("features_sh", step, max_steps),
+            model_config.max_gauss_ratio,
+            model_config.scale_regularization_weight,
+            model_config.opacity_reg,
+            model_config.scale_reg,
+            model_config.erank_reg,
+            model_config.erank_reg_s3,
+            model_config.quat_norm_reg,
+            model_config.sh_reg,
+            optim_config.use_scale_agnostic_mean,
+            self.quantize_sh_optim,
+            optim_config.use_per_splat_bias_correction,
+        )
+
+    def engine_densify_step(self, step, max_steps, model_config):
+        """Run densification step via C++ Engine. All tensors managed by C++ pool."""
+        num_added = _C.engine_densify_step(
+            step, max_steps,
+            model_config.refine_start_iter,
+            model_config.refine_stop_num_iter,
+            model_config.refine_every,
+            model_config.growth_factor,
+            model_config.min_opacity,
+            model_config.max_screen_size,
+            model_config.max_screen_size_clip_hardness,
+            model_config.max_world_size,
+            model_config.noise_lr,
+            model_config.noise_lr_final,
+            model_config.relocate_heuristic_weight,
+        )
+        self.cur_num_splats += num_added
+
     def zero_grad(self):
+        raise NotImplementedError("Use engine instead. Code below for reference.")
+
+        # Engine path: gradients, optimizer state, radii managed by C++ pool
+        if self.primitive in ['3dgs', 'mip', '3dgut'] and not self.use_bvh:
+            return
+
         if hasattr(self, 'v_splats_world'):
             for tensor in self.v_splats_world:
                 if tensor is not None:
@@ -238,6 +325,7 @@ class Renderer:
             self.radii = self.radii.zero_()
 
     def projection_forward(self):
+        raise NotImplementedError("Use engine instead. Code below for reference.")
         if self.primitive not in ["3dgs", "mip", "3dgut", "3dgut_sv"]:
             raise NotImplementedError()
 
@@ -267,6 +355,7 @@ class Renderer:
         self.radii = torch.fmax(self.radii, radii)
 
     def rasterize_forward(self):
+        raise NotImplementedError("Use engine instead. Code below for reference.")
         if self.primitive in ['3dgs', 'mip']:
             (
                 self.render_colors, self.render_Ts, self.render_last_ids,
@@ -292,6 +381,7 @@ class Renderer:
             )
 
     def rasterize_backward(self):
+        raise NotImplementedError("Use engine instead. Code below for reference.")
         if self.compute_hessian_diagonal:
             raise NotImplementedError()
             v_splats, vr_splats, h_splats, accum_weight = _make_lazy_cuda_func(
@@ -363,6 +453,7 @@ class Renderer:
         #                      self.v_render_Ts.float()).sum(dim=(-3, -2))
 
     def projection_backward(self):
+        raise NotImplementedError("Use engine instead. Code below for reference.")
         if self.use_fused_proj_bwd_optim:
             return
 
@@ -466,7 +557,7 @@ class Renderer:
             })
             return
 
-        raise NotImplementedError()
+        raise NotImplementedError("Use engine instead. Code below for reference.")
         if self.use_bvh:
             raise NotImplementedError()
             # raise NotImplementedError()
@@ -593,7 +684,7 @@ class Renderer:
             self.engine_backward(v_render_colors, v_render_Ts)
             return
 
-        raise NotImplementedError()
+        raise NotImplementedError("Use engine instead. Code below for reference.")
         for tensor in v_render_colors:
             assert tensor is None or tensor.is_contiguous()
         assert v_render_Ts.is_contiguous()
@@ -623,6 +714,7 @@ class Renderer:
         step: int,
         max_steps: int
     ):
+        raise NotImplementedError("Use engine instead. Code below for reference.")
         if self.primitive not in ["3dgs", "mip", "3dgut", "3dgut_sv"]:
             raise NotImplementedError()
 
@@ -685,6 +777,7 @@ class Renderer:
         step: int,
         max_steps: int
     ):
+        raise NotImplementedError("Use engine instead. Code below for reference.")
         if self.use_fused_proj_bwd_optim:
             self.fused_proj_bwd_optim_step(model_config, optim_config, step, max_steps)
             return
@@ -791,6 +884,7 @@ class Renderer:
         model_config: 'spirulae_splat.modules.model.SpirulaeSplatModelConfig',
         optim_config: OptimizerConfig
     ):
+        raise NotImplementedError("Use engine instead. Code below for reference.")
         densify_ongoing = (step < max_steps - model_config.refine_stop_num_iter)
         densify_step = densify_ongoing and (step > model_config.refine_start_iter and step % model_config.refine_every == 0)
         use_revised_densification = (model_config.relocate_heuristic_weight >= 1.0)

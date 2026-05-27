@@ -15,7 +15,8 @@
 namespace Buffers {
 
 std::string primitive;
-int64_t num_splats;
+int64_t cur_num_splats;
+int64_t max_num_splats;
 int sh_degree;
 
 TorchTensorView world_means;
@@ -47,6 +48,7 @@ DeviceVector<int32_t> fwd_flatten_ids;
 DeviceTensor3D<float> fwd_render_Ts;
 DeviceTensor3D<int32_t> fwd_last_ids;
 RenderOutput::TensorTuple fwd_renders;  // for 3dgut backward
+DeviceVector<float> fwd_accum_weight;  // [max_num_splats] per-splat score from raster bwd
 
 // Training ground truth (set per batch via set_training_data)
 TorchTensorView gt_rgb;
@@ -58,6 +60,28 @@ TorchTensorView gt_depth_mask;
 TorchTensorView gt_normal_mask;
 TorchTensorView gt_alpha_mask;
 bool has_gt = false;
+
+// Pool-backed training state
+int num_sh = 0;
+bool optim_initialized = false;
+bool train_quantize_sh = false;
+
+// Gradients (pool-backed, zeroed each backward)
+TorchTensorView grad_means, grad_quats, grad_scales, grad_opacities;
+TorchTensorView grad_features_dc, grad_features_sh;
+
+// Optimizer state g1/g2 (pool-backed, persistent across steps)
+TorchTensorView g1_means, g1_quats, g1_scales, g1_opacities;
+TorchTensorView g1_features_dc, g1_features_sh;
+TorchTensorView g2_means, g2_quats, g2_scales, g2_opacities;
+TorchTensorView g2_features_dc, g2_features_sh;
+
+// Training aux (pool-backed)
+TorchTensorView radii;             // [max_N, 1] float
+TorchTensorView accum_buffer;      // [max_N, 2] float
+TorchTensorView quant_bounds_sh;   // [n_blocks, 4] float, or null
+DeviceVector<int32_t> bias_correction_steps;  // [max_N] int32, or null
+bool use_per_splat_bias_correction = false;
 
 } // namespace Buffers
 
@@ -92,7 +116,8 @@ void set_data_3dgs(
     TorchTensorView features_dc,
     TorchTensorView features_sh
 ) {
-    Buffers::num_splats = num_splats;
+    Buffers::cur_num_splats = num_splats;
+    Buffers::max_num_splats = std::get<2>(means)[0];
     Buffers::world_means = means;
     Buffers::world_quats = quats;
     Buffers::world_scales = scales;
@@ -100,14 +125,16 @@ void set_data_3dgs(
     Buffers::world_features_dc = features_dc;
     Buffers::world_features_sh = features_sh;
 
-    int64_t max_num_splats = std::get<2>(means)[0];
-    if (std::get<2>(quats)[0] != max_num_splats ||
-        std::get<2>(scales)[0] != max_num_splats ||
-        std::get<2>(opacities)[0] != max_num_splats ||
-        std::get<2>(features_dc)[0] != max_num_splats ||
-        std::get<2>(features_sh)[0] != max_num_splats)
+    auto sh_shape = std::get<2>(features_sh);
+    Buffers::num_sh = (sh_shape.size() >= 2) ? (int)sh_shape[1] : 0;
+
+    if (std::get<2>(quats)[0] != Buffers::max_num_splats ||
+        std::get<2>(scales)[0] != Buffers::max_num_splats ||
+        std::get<2>(opacities)[0] != Buffers::max_num_splats ||
+        std::get<2>(features_dc)[0] != Buffers::max_num_splats ||
+        std::get<2>(features_sh)[0] != Buffers::max_num_splats)
         throw std::runtime_error("setData3DGS: max_num_splats mismatch across splat tensors");
-    if (max_num_splats < num_splats)
+    if (Buffers::max_num_splats < num_splats)
         throw std::runtime_error("setData3DGS: tensor size smaller than num_splats");
 }
 
@@ -158,6 +185,7 @@ void forward_3dgs(
     Buffers::fwd_splats_w = in_splats;
 
     DeviceTensorFloatND aabb_nd, depths_nd;
+    DeviceVector<float> proj_radii;
 
     // --- Projection ---
     if (packed) {
@@ -167,28 +195,28 @@ void forward_3dgs(
 
         if (primitive == "3dgs") {
             auto [a, b, c, d, e, f] = projection_3dgs_packed_forward(
-                Buffers::num_splats, sh_degree, in_splats,
+                Buffers::cur_num_splats, sh_degree, in_splats,
                 Buffers::camera_viewmats, Buffers::camera_intrins,
                 (uint32_t)Buffers::image_width, (uint32_t)Buffers::image_height,
                 Buffers::camera_model_str, Buffers::camera_dist_coeffs);
             cam_ids = a; gauss_ids = b; aabb_vec = c; depths_vec = d;
-            Buffers::fwd_splats_s = f;
+            proj_radii = e; Buffers::fwd_splats_s = f;
         } else if (primitive == "mip") {
             auto [a, b, c, d, e, f] = projection_mip_packed_forward(
-                Buffers::num_splats, sh_degree, in_splats,
+                Buffers::cur_num_splats, sh_degree, in_splats,
                 Buffers::camera_viewmats, Buffers::camera_intrins,
                 (uint32_t)Buffers::image_width, (uint32_t)Buffers::image_height,
                 Buffers::camera_model_str, Buffers::camera_dist_coeffs);
             cam_ids = a; gauss_ids = b; aabb_vec = c; depths_vec = d;
-            Buffers::fwd_splats_s = f;
+            proj_radii = e; Buffers::fwd_splats_s = f;
         } else if (primitive == "3dgut") {
             auto [a, b, c, d, e, f] = projection_3dgut_packed_forward(
-                Buffers::num_splats, sh_degree, in_splats,
+                Buffers::cur_num_splats, sh_degree, in_splats,
                 Buffers::camera_viewmats, Buffers::camera_intrins,
                 (uint32_t)Buffers::image_width, (uint32_t)Buffers::image_height,
                 Buffers::camera_model_str, Buffers::camera_dist_coeffs);
             cam_ids = a; gauss_ids = b; aabb_vec = c; depths_vec = d;
-            Buffers::fwd_splats_s = f;
+            proj_radii = e; Buffers::fwd_splats_s = f;
         } else {
             throw std::runtime_error("engine_forward: unknown primitive: " + primitive);
         }
@@ -204,27 +232,27 @@ void forward_3dgs(
 
         if (primitive == "3dgs") {
             auto [a, b, c, d] = projection_3dgs_forward(
-                Buffers::num_splats, sh_degree, in_splats,
+                Buffers::cur_num_splats, sh_degree, in_splats,
                 Buffers::camera_viewmats, Buffers::camera_intrins,
                 (uint32_t)Buffers::image_width, (uint32_t)Buffers::image_height,
                 Buffers::camera_model_str, Buffers::camera_dist_coeffs);
-            aabb_2d = a; depths_2d = b;  // b = sorting_depths[C,N], c = radii[N] (unused)
+            aabb_2d = a; depths_2d = b; proj_radii = c;
             Buffers::fwd_splats_s = d;
         } else if (primitive == "mip") {
             auto [a, b, c, d] = projection_mip_forward(
-                Buffers::num_splats, sh_degree, in_splats,
+                Buffers::cur_num_splats, sh_degree, in_splats,
                 Buffers::camera_viewmats, Buffers::camera_intrins,
                 (uint32_t)Buffers::image_width, (uint32_t)Buffers::image_height,
                 Buffers::camera_model_str, Buffers::camera_dist_coeffs);
-            aabb_2d = a; depths_2d = b;
+            aabb_2d = a; depths_2d = b; proj_radii = c;
             Buffers::fwd_splats_s = d;
         } else if (primitive == "3dgut") {
             auto [a, b, c, d] = projection_3dgut_forward(
-                Buffers::num_splats, sh_degree, in_splats,
+                Buffers::cur_num_splats, sh_degree, in_splats,
                 Buffers::camera_viewmats, Buffers::camera_intrins,
                 (uint32_t)Buffers::image_width, (uint32_t)Buffers::image_height,
                 Buffers::camera_model_str, Buffers::camera_dist_coeffs);
-            aabb_2d = a; depths_2d = b;
+            aabb_2d = a; depths_2d = b; proj_radii = c;
             Buffers::fwd_splats_s = d;
         } else {
             throw std::runtime_error("engine_forward: unknown primitive: " + primitive);
@@ -235,6 +263,14 @@ void forward_3dgs(
         Buffers::fwd_aabb = aabb_2d;                           // [C, N] for backward
         aabb_nd = DeviceTensorFloatND(aabb_2d);                // [C, N, 4] for intersect
         depths_nd = DeviceTensorFloatND(depths_2d);            // [C, N] → numel=C*N for intersect
+    }
+
+    // Capture projection radii to pool buffer
+    if (proj_radii.data_ptr() != nullptr) {
+        float* r = DevicePool::global().acquire<float>("eng.radii", Buffers::max_num_splats);
+        int64_t n = std::min(proj_radii.size(), Buffers::max_num_splats);
+        cudaMemcpy(r, proj_radii.data_ptr(), n * sizeof(float), cudaMemcpyDeviceToDevice);
+        Buffers::radii = TorchTensorView((uint64_t)r, 4, {Buffers::max_num_splats, 1});
     }
 
     // --- Tile intersection (AABB mode) ---
@@ -293,6 +329,51 @@ void forward_3dgs(
 }
 
 
+void engine_debug_forward(
+    TorchTensorView override_features_dc,
+    int override_sh_degree,
+    TorchTensorView out_rgb
+) {
+    if (std::get<0>(Buffers::fwd_renders).data_ptr() == nullptr)
+        throw std::runtime_error("engine_debug_forward: forward_3dgs must be called first");
+
+    // Swap in overrides
+    TorchTensorView saved_dc = Buffers::world_features_dc;
+    int saved_sh = Buffers::sh_degree;
+    if (std::get<0>(override_features_dc) != 0)
+        Buffers::world_features_dc = override_features_dc;
+    if (override_sh_degree >= 0)
+        Buffers::sh_degree = override_sh_degree;
+
+    // Dummy depth/Ts outputs (we only care about rgb)
+    TorchTensorView null_tv(0, 4, {0});
+    forward_3dgs(Buffers::primitive, Buffers::sh_degree, Buffers::packed,
+                 out_rgb, null_tv, null_tv);
+
+    // Restore
+    Buffers::world_features_dc = saved_dc;
+    Buffers::sh_degree = saved_sh;
+}
+
+
+void engine_copy_accum_buffer(TorchTensorView dst) {
+    if (std::get<0>(Buffers::accum_buffer) == 0 || std::get<0>(dst) == 0)
+        return;
+    auto& dst_shape = std::get<2>(dst);
+    int64_t dst_n = dst_shape[0];
+    int64_t src_n = std::get<2>(Buffers::accum_buffer)[0];
+    int64_t n = std::min(dst_n, src_n);
+    cudaMemcpy((void*)std::get<0>(dst),
+               (void*)std::get<0>(Buffers::accum_buffer),
+               n * 2 * sizeof(float), cudaMemcpyDeviceToDevice);
+}
+
+
+int64_t engine_get_cur_num_splats() {
+    return Buffers::cur_num_splats;
+}
+
+
 void backward_3dgs(
     // Gradient of rendered outputs (from Python, pointing into grad tensors)
     TorchTensorView v_rgb,    // [C, H, W, 3]  float32
@@ -331,7 +412,7 @@ void backward_3dgs(
     if (Buffers::primitive == "3dgs" || Buffers::primitive == "mip") {
         // mip uses the same rasterization backward kernel as 3dgs
         auto [vw, vs, accum_weight] = rasterize_to_pixels_3dgs_bwd(
-            Buffers::num_splats,
+            Buffers::cur_num_splats,
             Buffers::fwd_splats_w,
             Buffers::fwd_splats_s,
             Buffers::fwd_gaussian_ids,
@@ -342,17 +423,17 @@ void backward_3dgs(
             Buffers::fwd_render_Ts,
             Buffers::fwd_last_ids,
             Buffers::fwd_renders,
-            std::nullopt,  // no accum_weight_map
+            DeviceTensor3D<float>(),  // no accum_weight_map
             v_render_outputs,
             v_render_Ts,
-            std::make_optional(v_splats_w),  // pre-allocated: rasterizer writes SH grads here
-            std::nullopt   // let rasterizer allocate v_splats_s
+            std::make_optional(v_splats_w),
+            std::nullopt
         );
         v_splats_w_out = vw;
         v_splats_s_out = vs;
     } else if (Buffers::primitive == "3dgut") {
         auto [vw, vs, vviewmats, accum_weight] = rasterize_to_pixels_3dgut_bwd(
-            Buffers::num_splats,
+            Buffers::cur_num_splats,
             Buffers::fwd_splats_w,
             Buffers::fwd_splats_s,
             Buffers::fwd_gaussian_ids,
@@ -366,16 +447,16 @@ void backward_3dgs(
             Buffers::fwd_flatten_ids,
             Buffers::fwd_render_Ts,
             Buffers::fwd_last_ids,
-            Buffers::fwd_renders,  // render_outputs needed for 3dgut
+            Buffers::fwd_renders,
             std::nullopt,  // render2_outputs
-            std::nullopt,  // loss_map
-            std::nullopt,  // accum_weight_map
+            DeviceTensor3D<float>(),  // loss_map
+            DeviceTensor3D<float>(),  // accum_weight_map
             v_render_outputs,
             v_render_Ts,
             std::nullopt,  // v_distortion_outputs
-            std::make_optional(v_splats_w),  // pre-allocated
-            std::nullopt,  // let rasterizer allocate v_splats_s
-            false  // need_viewmat_grad
+            std::make_optional(v_splats_w),
+            std::nullopt,
+            false
         );
         v_splats_w_out = vw;
         v_splats_s_out = vs;
@@ -386,7 +467,7 @@ void backward_3dgs(
     // --- Projection backward: accumulates geometric gradients into v_splats_w_out ---
     if (Buffers::primitive == "3dgs") {
         projection_3dgs_backward(
-            Buffers::num_splats,
+            Buffers::cur_num_splats,
             Buffers::sh_degree,
             Buffers::fwd_splats_w,
             Buffers::camera_viewmats,
@@ -404,7 +485,7 @@ void backward_3dgs(
         );
     } else if (Buffers::primitive == "mip") {
         projection_mip_backward(
-            Buffers::num_splats,
+            Buffers::cur_num_splats,
             Buffers::sh_degree,
             Buffers::fwd_splats_w,
             Buffers::camera_viewmats,
@@ -422,7 +503,7 @@ void backward_3dgs(
         );
     } else if (Buffers::primitive == "3dgut") {
         projection_3dgut_backward(
-            Buffers::num_splats,
+            Buffers::cur_num_splats,
             Buffers::sh_degree,
             Buffers::fwd_splats_w,
             Buffers::camera_viewmats,
@@ -494,25 +575,129 @@ static inline TorchTensorView _pool_tv_1d_zero(const std::string& key, int64_t N
     return TorchTensorView((uint64_t)p, 4, {N});
 }
 
+static inline TorchTensorView _pool_tv_2d(const std::string& key, int64_t N, int64_t C) {
+    float* p = DevicePool::global().acquire<float>(key, (size_t)(N * C));
+    return TorchTensorView((uint64_t)p, 4, {N, C});
+}
+
+static inline TorchTensorView _pool_tv_3d_f(const std::string& key, int64_t N, int64_t K, int64_t C) {
+    float* p = DevicePool::global().acquire<float>(key, (size_t)(N * K * C));
+    return TorchTensorView((uint64_t)p, 4, {N, K, C});
+}
+
+static inline TorchTensorView _pool_tv_3d_u8(const std::string& key, int64_t N, int64_t K, int64_t C) {
+    uint8_t* p = DevicePool::global().acquire<uint8_t>(key, (size_t)(N * K * C));
+    return TorchTensorView((uint64_t)p, 1, {N, K, C});
+}
+
+static void _zero_tv(const TorchTensorView& tv) {
+    if (std::get<0>(tv) == 0) return;
+    int64_t bytes = std::get<1>(tv);
+    for (auto s : std::get<2>(tv)) bytes *= s;
+    cudaMemset((void*)std::get<0>(tv), 0, bytes);
+}
+
+static void _alloc_grad_buffers() {
+    int64_t N = Buffers::max_num_splats;
+    int64_t K = Buffers::num_sh;
+    Buffers::grad_means       = _pool_tv_2d("eng.v_means", N, 3);
+    Buffers::grad_quats       = _pool_tv_2d("eng.v_quats", N, 4);
+    Buffers::grad_scales      = _pool_tv_2d("eng.v_scales", N, 3);
+    Buffers::grad_opacities   = _pool_tv_2d("eng.v_opacities", N, 1);
+    Buffers::grad_features_dc = _pool_tv_2d("eng.v_features_dc", N, 3);
+    Buffers::grad_features_sh = _pool_tv_3d_f("eng.v_features_sh", N, K, 3);
+    _zero_tv(Buffers::grad_means);
+    _zero_tv(Buffers::grad_quats);
+    _zero_tv(Buffers::grad_scales);
+    _zero_tv(Buffers::grad_opacities);
+    _zero_tv(Buffers::grad_features_dc);
+    _zero_tv(Buffers::grad_features_sh);
+}
+
+static void _ensure_optim_state(bool quantize_sh, bool use_per_splat_bias_correction = false) {
+    if (Buffers::optim_initialized && Buffers::train_quantize_sh == quantize_sh
+        && Buffers::use_per_splat_bias_correction == use_per_splat_bias_correction)
+        return;
+
+    int64_t N = Buffers::max_num_splats;
+    int64_t K = Buffers::num_sh;
+    Buffers::train_quantize_sh = quantize_sh;
+
+    // g1 (exp_avg)
+    Buffers::g1_means       = _pool_tv_2d("eng.g1_means", N, 3);
+    Buffers::g1_quats       = _pool_tv_2d("eng.g1_quats", N, 4);
+    Buffers::g1_scales      = _pool_tv_2d("eng.g1_scales", N, 3);
+    Buffers::g1_opacities   = _pool_tv_2d("eng.g1_opacities", N, 1);
+    Buffers::g1_features_dc = _pool_tv_2d("eng.g1_features_dc", N, 3);
+    Buffers::g1_features_sh = quantize_sh
+        ? _pool_tv_3d_u8("eng.g1_features_sh", N, K, 3)
+        : _pool_tv_3d_f("eng.g1_features_sh", N, K, 3);
+
+    // g2 (exp_avg_sq)
+    Buffers::g2_means       = _pool_tv_2d("eng.g2_means", N, 3);
+    Buffers::g2_quats       = _pool_tv_2d("eng.g2_quats", N, 4);
+    Buffers::g2_scales      = _pool_tv_2d("eng.g2_scales", N, 3);
+    Buffers::g2_opacities   = _pool_tv_2d("eng.g2_opacities", N, 1);
+    Buffers::g2_features_dc = _pool_tv_2d("eng.g2_features_dc", N, 3);
+    Buffers::g2_features_sh = quantize_sh
+        ? _pool_tv_3d_u8("eng.g2_features_sh", N, K, 3)
+        : _pool_tv_3d_f("eng.g2_features_sh", N, K, 3);
+
+    // radii [max_N, 1]
+    Buffers::radii = _pool_tv_2d("eng.radii", N, 1);
+
+    // accum_buffer [max_N, 2]
+    Buffers::accum_buffer = _pool_tv_2d("eng.accum_buffer", N, 2);
+
+    // quant_bounds_sh
+    if (quantize_sh) {
+        int64_t sh_numel = N * K * 3;
+        int64_t n_blocks = (sh_numel + 255) / 256;
+        Buffers::quant_bounds_sh = _pool_tv_2d("eng.quant_bounds_sh", n_blocks, 4);
+    } else {
+        Buffers::quant_bounds_sh = _tv_null();
+    }
+
+    // bias_correction_steps
+    Buffers::use_per_splat_bias_correction = use_per_splat_bias_correction;
+    if (use_per_splat_bias_correction) {
+        Buffers::bias_correction_steps.resize("eng.bias_correction_steps", N);
+    } else {
+        Buffers::bias_correction_steps = DeviceVector<int32_t>();
+    }
+
+    // Zero everything on first init
+    _zero_tv(Buffers::g1_means);       _zero_tv(Buffers::g2_means);
+    _zero_tv(Buffers::g1_quats);       _zero_tv(Buffers::g2_quats);
+    _zero_tv(Buffers::g1_scales);      _zero_tv(Buffers::g2_scales);
+    _zero_tv(Buffers::g1_opacities);   _zero_tv(Buffers::g2_opacities);
+    _zero_tv(Buffers::g1_features_dc); _zero_tv(Buffers::g2_features_dc);
+    _zero_tv(Buffers::g1_features_sh); _zero_tv(Buffers::g2_features_sh);
+    _zero_tv(Buffers::radii);
+    _zero_tv(Buffers::accum_buffer);
+    if (_tv_valid(Buffers::quant_bounds_sh))
+        _zero_tv(Buffers::quant_bounds_sh);
+    Buffers::bias_correction_steps.zero();
+
+    Buffers::optim_initialized = true;
+}
+
 
 std::map<std::string, float> engine_compute_loss_backward(
     int step,
     std::array<float, (int)LossWeightIndex::length> loss_weights,
     float w_ssim,
     int num_loss_scales,
-    bool compute_loss_map,
-    TorchTensorView v_means,
-    TorchTensorView v_quats,
-    TorchTensorView v_scales,
-    TorchTensorView v_opacities,
-    TorchTensorView v_features_dc,
-    TorchTensorView v_features_sh
+    bool compute_loss_map
 ) {
     // Validate that forward was run
     if (std::get<0>(Buffers::fwd_renders) .data_ptr() == nullptr)
         throw std::runtime_error("engine_compute_loss_backward: forward_3dgs must be called first");
     if (!Buffers::has_gt)
         throw std::runtime_error("engine_compute_loss_backward: set_training_data must be called first");
+
+    // Allocate and zero gradient buffers from pool
+    _alloc_grad_buffers();
 
     int64_t C = Buffers::num_cameras;
     int64_t H = Buffers::image_height;
@@ -617,19 +802,25 @@ std::map<std::string, float> engine_compute_loss_backward(
     DeviceTensor3D<float> v_render_Ts(pixel_grads.v_render_Ts);
 
     std::vector<DeviceTensorFloatND> v_splats_w = {
-        tv_to_fnd(v_means),
-        tv_to_fnd(v_quats),
-        tv_to_fnd(v_scales),
-        tv_to_fnd(v_opacities),
-        tv_to_fnd(v_features_dc),
-        tv_to_fnd(v_features_sh),
+        tv_to_fnd(Buffers::grad_means),
+        tv_to_fnd(Buffers::grad_quats),
+        tv_to_fnd(Buffers::grad_scales),
+        tv_to_fnd(Buffers::grad_opacities),
+        tv_to_fnd(Buffers::grad_features_dc),
+        tv_to_fnd(Buffers::grad_features_sh),
     };
+
+    // Build accum_weight_map from loss_map (pixel-space -> per-splat mapping in raster bwd)
+    DeviceTensor3D<float> accum_weight_map;
+    if (compute_loss_map && _tv_valid(loss_map_buf)) {
+        accum_weight_map = DeviceTensor3D<float>(loss_map_buf);
+    }
 
     std::vector<DeviceTensorFloatND> v_splats_w_out, v_splats_s_out;
 
     if (Buffers::primitive == "3dgs" || Buffers::primitive == "mip") {
         auto [vw, vs, accum_weight] = rasterize_to_pixels_3dgs_bwd(
-            Buffers::num_splats,
+            Buffers::cur_num_splats,
             Buffers::fwd_splats_w,
             Buffers::fwd_splats_s,
             Buffers::fwd_gaussian_ids,
@@ -640,7 +831,7 @@ std::map<std::string, float> engine_compute_loss_backward(
             Buffers::fwd_render_Ts,
             Buffers::fwd_last_ids,
             Buffers::fwd_renders,
-            std::nullopt,
+            accum_weight_map,
             v_render_outputs,
             v_render_Ts,
             std::make_optional(v_splats_w),
@@ -648,9 +839,10 @@ std::map<std::string, float> engine_compute_loss_backward(
         );
         v_splats_w_out = vw;
         v_splats_s_out = vs;
+        if (accum_weight.data_ptr()) Buffers::fwd_accum_weight = accum_weight;
     } else if (Buffers::primitive == "3dgut") {
         auto [vw, vs, vviewmats, accum_weight] = rasterize_to_pixels_3dgut_bwd(
-            Buffers::num_splats,
+            Buffers::cur_num_splats,
             Buffers::fwd_splats_w,
             Buffers::fwd_splats_s,
             Buffers::fwd_gaussian_ids,
@@ -665,18 +857,19 @@ std::map<std::string, float> engine_compute_loss_backward(
             Buffers::fwd_render_Ts,
             Buffers::fwd_last_ids,
             Buffers::fwd_renders,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
+            std::nullopt,  // render2_outputs
+            DeviceTensor3D<float>(),  // loss_map
+            accum_weight_map,
             v_render_outputs,
             v_render_Ts,
-            std::nullopt,
+            std::nullopt,  // v_distortion_outputs
             std::make_optional(v_splats_w),
             std::nullopt,
             false
         );
         v_splats_w_out = vw;
         v_splats_s_out = vs;
+        if (accum_weight.data_ptr()) Buffers::fwd_accum_weight = accum_weight;
     } else {
         throw std::runtime_error("engine_compute_loss_backward: unknown primitive: " + Buffers::primitive);
     }
@@ -684,7 +877,7 @@ std::map<std::string, float> engine_compute_loss_backward(
     // --- Projection backward ---
     if (Buffers::primitive == "3dgs") {
         projection_3dgs_backward(
-            Buffers::num_splats, Buffers::sh_degree, Buffers::fwd_splats_w,
+            Buffers::cur_num_splats, Buffers::sh_degree, Buffers::fwd_splats_w,
             Buffers::camera_viewmats, Buffers::camera_intrins,
             (uint32_t)Buffers::image_width, (uint32_t)Buffers::image_height,
             Buffers::camera_model_str, Buffers::camera_dist_coeffs,
@@ -692,7 +885,7 @@ std::map<std::string, float> engine_compute_loss_backward(
             Buffers::fwd_aabb, v_splats_s_out, v_splats_w_out, nullptr);
     } else if (Buffers::primitive == "mip") {
         projection_mip_backward(
-            Buffers::num_splats, Buffers::sh_degree, Buffers::fwd_splats_w,
+            Buffers::cur_num_splats, Buffers::sh_degree, Buffers::fwd_splats_w,
             Buffers::camera_viewmats, Buffers::camera_intrins,
             (uint32_t)Buffers::image_width, (uint32_t)Buffers::image_height,
             Buffers::camera_model_str, Buffers::camera_dist_coeffs,
@@ -700,7 +893,7 @@ std::map<std::string, float> engine_compute_loss_backward(
             Buffers::fwd_aabb, v_splats_s_out, v_splats_w_out, nullptr);
     } else if (Buffers::primitive == "3dgut") {
         projection_3dgut_backward(
-            Buffers::num_splats, Buffers::sh_degree, Buffers::fwd_splats_w,
+            Buffers::cur_num_splats, Buffers::sh_degree, Buffers::fwd_splats_w,
             Buffers::camera_viewmats, Buffers::camera_intrins,
             (uint32_t)Buffers::image_width, (uint32_t)Buffers::image_height,
             Buffers::camera_model_str, Buffers::camera_dist_coeffs,
@@ -752,44 +945,236 @@ void engine_optim_step(
     float erank_reg_weight, float erank_reg_weight_s3,
     float quat_norm_reg_weight, float sh_reg_weight,
     bool use_scale_agnostic_mean, bool quantize_sh,
-    TorchTensorView means,    TorchTensorView v_means,    TorchTensorView g1_means,    TorchTensorView g2_means,
-    TorchTensorView quats,    TorchTensorView v_quats,    TorchTensorView g1_quats,    TorchTensorView g2_quats,
-    TorchTensorView scales,   TorchTensorView v_scales,   TorchTensorView g1_scales,   TorchTensorView g2_scales,
-    TorchTensorView opacities,TorchTensorView v_opacities,TorchTensorView g1_opacities,TorchTensorView g2_opacities,
-    TorchTensorView features_dc, TorchTensorView v_features_dc, TorchTensorView g1_features_dc, TorchTensorView g2_features_dc,
-    TorchTensorView features_sh, TorchTensorView v_features_sh, TorchTensorView g1_features_sh, TorchTensorView g2_features_sh,
-    TorchTensorView radii,
-    TorchTensorView quant_bounds_sh
+    bool use_per_splat_bias_correction
 ) {
-    int64_t N = Buffers::num_splats;
+    _ensure_optim_state(quantize_sh, use_per_splat_bias_correction);
 
-    // Geometry optimizer (means, quats, scales, opacities)
+    int64_t N = Buffers::cur_num_splats;
+
+    // Per-splat bias correction: increment all steps by 1 before use
+    DeviceVector<int32_t> per_splat_steps;
+    if (use_per_splat_bias_correction) {
+        increment_int32_inplace(Buffers::bias_correction_steps, Buffers::max_num_splats);
+        per_splat_steps = Buffers::bias_correction_steps;
+    }
+
     engine_optim_3dgs_geometry(
         N,
-        means, v_means, g1_means, g2_means,
-        quats, v_quats, g1_quats, g2_quats,
-        scales, v_scales, g1_scales, g2_scales,
-        opacities, v_opacities, g1_opacities, g2_opacities,
-        radii,
+        Buffers::world_means,     Buffers::grad_means,     Buffers::g1_means,     Buffers::g2_means,
+        Buffers::world_quats,     Buffers::grad_quats,     Buffers::g1_quats,     Buffers::g2_quats,
+        Buffers::world_scales,    Buffers::grad_scales,    Buffers::g1_scales,    Buffers::g2_scales,
+        Buffers::world_opacities, Buffers::grad_opacities, Buffers::g1_opacities, Buffers::g2_opacities,
+        Buffers::radii,
         lr_means, lr_quats, lr_scales, lr_opacities,
         max_gauss_ratio, scale_regularization_weight,
         mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
         erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,
         use_scale_agnostic_mean,
-        step + 1
+        step + 1, per_splat_steps
     );
 
-    // Features DC optimizer (Adam)
-    engine_adam_step(N, features_dc, v_features_dc, g1_features_dc, g2_features_dc,
-        lr_features_dc, step + 1, sh_reg_weight, 0.5f / 0.28209479177387814f);
+    engine_adam_step(N,
+        Buffers::world_features_dc, Buffers::grad_features_dc,
+        Buffers::g1_features_dc, Buffers::g2_features_dc,
+        lr_features_dc, step + 1, per_splat_steps,
+        sh_reg_weight, 0.5f / 0.28209479177387814f);
 
-    // Features SH optimizer (Adam, optionally 8-bit quantized)
-    if (quantize_sh && std::get<0>(quant_bounds_sh) != 0) {
-        engine_adam_step_8bit(N, features_sh, v_features_sh, g1_features_sh, g2_features_sh,
-            quant_bounds_sh, lr_features_sh, step + 1, sh_reg_weight, 0.0f);
+    if (quantize_sh && _tv_valid(Buffers::quant_bounds_sh)) {
+        engine_adam_step_8bit(N,
+            Buffers::world_features_sh, Buffers::grad_features_sh,
+            Buffers::g1_features_sh, Buffers::g2_features_sh,
+            Buffers::quant_bounds_sh,
+            lr_features_sh, step + 1, per_splat_steps,
+            sh_reg_weight, 0.0f);
     } else {
-        engine_adam_step(N, features_sh, v_features_sh, g1_features_sh, g2_features_sh,
-            lr_features_sh, step + 1, sh_reg_weight, 0.0f);
+        engine_adam_step(N,
+            Buffers::world_features_sh, Buffers::grad_features_sh,
+            Buffers::g1_features_sh, Buffers::g2_features_sh,
+            lr_features_sh, step + 1, per_splat_steps,
+            sh_reg_weight, 0.0f);
     }
+}
+
+
+// Helper: build DeviceVector<T> from TorchTensorView (non-owning view)
+template<typename T>
+static inline DeviceVector<T> _dv(const TorchTensorView& tv) {
+    return DeviceVector<T>(tv);
+}
+// For null-able TorchTensorViews, return default (null) DeviceVector
+template<typename T>
+static inline DeviceVector<T> _dv_or_null(const TorchTensorView& tv) {
+    if (std::get<0>(tv) == 0) return DeviceVector<T>();
+    return DeviceVector<T>(tv);
+}
+// For [N, K, C] tensors like features_sh: flatten to [N*K, C] then build DeviceVector
+template<typename T>
+static inline DeviceVector<T> _dv_flat(const TorchTensorView& tv) {
+    if (std::get<0>(tv) == 0) return DeviceVector<T>();
+    const auto& shape = std::get<2>(tv);
+    int64_t flat_count = 1;
+    for (size_t i = 0; i + 1 < shape.size(); i++) flat_count *= shape[i];
+    TorchTensorView flat_tv(std::get<0>(tv), std::get<1>(tv),
+        {flat_count, (int64_t)(sizeof(T) / std::get<1>(tv))});
+    return DeviceVector<T>(flat_tv);
+}
+
+
+int engine_densify_step(
+    int step,
+    int max_steps,
+    int refine_start_iter,
+    int refine_stop_num_iter,
+    int refine_every,
+    float growth_factor,
+    float min_opacity,
+    float max_screen_size,
+    float max_screen_size_clip_hardness,
+    float max_world_size,
+    float noise_lr,
+    float noise_lr_final,
+    float relocate_heuristic_weight
+) {
+    // _ensure_optim_state(Buffers::train_quantize_sh);
+
+    int64_t cur_num_splats = Buffers::cur_num_splats;
+    int64_t max_num_splats = Buffers::max_num_splats;
+    bool quantize_sh = Buffers::train_quantize_sh;
+    int num_sh = Buffers::num_sh;
+
+    bool use_revised = (relocate_heuristic_weight >= 1.0f);
+    bool densify_ongoing = (step < max_steps - refine_stop_num_iter);
+    bool do_densify = densify_ongoing && (step > refine_start_iter && step % refine_every == 0);
+    float progress = ((float)step + 0.5f) / (float)max_steps;
+
+    // Build DeviceVectors from pool-backed and world TorchTensorViews
+    auto dv_means = _dv<float3>(Buffers::world_means);
+    auto dv_quats = _dv<float4>(Buffers::world_quats);
+    auto dv_scales = _dv<float3>(Buffers::world_scales);
+    auto dv_opacs = _dv<float>(Buffers::world_opacities);
+    auto dv_features_dc = _dv<float3>(Buffers::world_features_dc);
+    auto dv_features_sh = _dv_flat<float3>(Buffers::world_features_sh);
+    auto dv_g1_means = _dv<float3>(Buffers::g1_means);
+    auto dv_g1_quats = _dv<float4>(Buffers::g1_quats);
+    auto dv_g1_scales = _dv<float3>(Buffers::g1_scales);
+    auto dv_g1_opacs = _dv<float>(Buffers::g1_opacities);
+    auto dv_g1_features_dc = _dv<float3>(Buffers::g1_features_dc);
+    auto dv_g1_features_sh = _dv_flat<float3>(Buffers::g1_features_sh);
+    auto dv_g2_means = _dv<float3>(Buffers::g2_means);
+    auto dv_g2_quats = _dv<float4>(Buffers::g2_quats);
+    auto dv_g2_scales = _dv<float3>(Buffers::g2_scales);
+    auto dv_g2_opacs = _dv<float>(Buffers::g2_opacities);
+    auto dv_g2_features_dc = _dv<float3>(Buffers::g2_features_dc);
+    auto dv_g2_features_sh = _dv_flat<float3>(Buffers::g2_features_sh);
+    auto dv_radii = _dv<float>(Buffers::radii);
+    auto dv_accum_buf = _dv_or_null<float2>(Buffers::accum_buffer);
+    auto dv_bias_steps = Buffers::bias_correction_steps;
+
+    // Clip large splats
+    if (std::isfinite(max_screen_size) || std::isfinite(max_world_size)) {
+        densify_clip_scale_tensor(
+            cur_num_splats,
+            dv_radii, dv_scales,
+            nullptr,  // don't clip opacities
+            max_screen_size,
+            max_screen_size_clip_hardness,
+            max_world_size
+        );
+    }
+
+    // Update densification score using accum_weight from rasterization backward
+    if (densify_ongoing && use_revised && dv_accum_buf.data_ptr() != nullptr) {
+        DeviceVector<float> score;
+        if (Buffers::fwd_accum_weight.data_ptr() != nullptr) {
+            score = Buffers::fwd_accum_weight;
+        } else {
+            auto dv_v_opacs = _dv_or_null<float>(Buffers::grad_opacities);
+            score = dv_v_opacs.data_ptr() ? dv_v_opacs : dv_opacs;
+        }
+
+        densify_update_weight_tensor(
+            cur_num_splats,
+            dv_radii,
+            nullptr,
+            (float*)dv_opacs.data_ptr(),
+            score,
+            dv_accum_buf,
+            false
+        );
+    }
+
+    int num_added = 0;
+
+    if (do_densify && use_revised) {
+        // Revised relocation (long axis split)
+        relocate_splats_with_long_axis_split_tensor(
+            cur_num_splats, min_opacity,
+            dv_means, dv_quats, dv_scales, dv_opacs, dv_features_dc, dv_features_sh,
+            dv_g1_means, dv_g1_quats, dv_g1_scales, dv_g1_opacs, dv_g1_features_dc, dv_g1_features_sh,
+            dv_g2_means, dv_g2_quats, dv_g2_scales, dv_g2_opacs, dv_g2_features_dc, dv_g2_features_sh,
+            dv_accum_buf, dv_bias_steps,
+            quantize_sh, num_sh, 2 * step + 0
+        );
+
+        // Add more splats
+        int64_t n_target = std::min(max_num_splats, (int64_t)(growth_factor * cur_num_splats));
+        num_added = (int)std::max((int64_t)0, n_target - cur_num_splats);
+        if (num_added > 0) {
+            add_splats_with_long_axis_split_tensor(
+                cur_num_splats, num_added,
+                dv_means, dv_quats, dv_scales, dv_opacs, dv_features_dc, dv_features_sh,
+                dv_g1_means, dv_g1_quats, dv_g1_scales, dv_g1_opacs, dv_g1_features_dc, dv_g1_features_sh,
+                dv_g2_means, dv_g2_quats, dv_g2_scales, dv_g2_opacs, dv_g2_features_dc, dv_g2_features_sh,
+                dv_accum_buf, dv_bias_steps,
+                quantize_sh, num_sh, 2 * step + 1
+            );
+        }
+    } else if (do_densify) {
+        // MCMC relocation
+        relocate_splats_mcmc_tensor(
+            cur_num_splats, min_opacity,
+            dv_means, dv_quats, dv_scales, dv_opacs, dv_features_dc, dv_features_sh,
+            dv_g1_means, dv_g1_quats, dv_g1_scales, dv_g1_opacs, dv_g1_features_dc, dv_g1_features_sh,
+            dv_g2_means, dv_g2_quats, dv_g2_scales, dv_g2_opacs, dv_g2_features_dc, dv_g2_features_sh,
+            dv_bias_steps,
+            quantize_sh, num_sh, 2 * step + 0
+        );
+
+        // MCMC sample add
+        int64_t n_target = std::min(max_num_splats, (int64_t)(growth_factor * cur_num_splats));
+        num_added = (int)std::max((int64_t)0, n_target - cur_num_splats);
+        if (num_added > 0) {
+            add_splats_mcmc_tensor(
+                cur_num_splats, num_added, min_opacity,
+                dv_means, dv_quats, dv_scales, dv_opacs, dv_features_dc, dv_features_sh,
+                dv_g1_means, dv_g1_quats, dv_g1_scales, dv_g1_opacs, dv_g1_features_dc, dv_g1_features_sh,
+                dv_g2_means, dv_g2_quats, dv_g2_scales, dv_g2_opacs, dv_g2_features_dc, dv_g2_features_sh,
+                dv_bias_steps,
+                quantize_sh, num_sh, 2 * step + 1
+            );
+        }
+    }
+
+    // Reset accum buffer after densification step
+    if (do_densify && dv_accum_buf.data_ptr() != nullptr) {
+        cudaMemset(dv_accum_buf.data_ptr(), 0, dv_accum_buf.size() * sizeof(float2));
+    }
+
+    // Add MCMC noise
+    if (noise_lr > 0.0f && noise_lr_final > 0.0f) {
+        float noise_scalar = noise_lr * powf(noise_lr_final / noise_lr, progress);
+        if (use_revised) {
+            revised_add_noise_tensor(
+                cur_num_splats + num_added, noise_scalar,
+                dv_radii, dv_means, dv_scales, dv_quats, dv_opacs);
+        } else {
+            mcmc_add_noise_tensor(
+                cur_num_splats + num_added, noise_scalar,
+                dv_means, dv_scales, dv_quats, dv_opacs);
+        }
+    }
+
+    Buffers::cur_num_splats = cur_num_splats + num_added;
+    return num_added;
 }
 

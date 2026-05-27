@@ -85,14 +85,7 @@ std::map<std::string, float> engine_compute_loss_backward(
     std::array<float, (int)LossWeightIndex::length> loss_weights,
     float w_ssim,
     int num_loss_scales,
-    bool compute_loss_map,
-    // pre-allocated gradient output tensors (zero-initialized by Python)
-    TorchTensorView v_means,
-    TorchTensorView v_quats,
-    TorchTensorView v_scales,
-    TorchTensorView v_opacities,
-    TorchTensorView v_features_dc,
-    TorchTensorView v_features_sh
+    bool compute_loss_map
 );
 
 // --- Optimizer step ---
@@ -117,16 +110,41 @@ void engine_optim_step(
     float sh_reg_weight,
     bool use_scale_agnostic_mean,
     bool quantize_sh,
-    // splat data (params + grads + optimizer state) as TorchTensorViews
-    TorchTensorView means,    TorchTensorView v_means,    TorchTensorView g1_means,    TorchTensorView g2_means,
-    TorchTensorView quats,    TorchTensorView v_quats,    TorchTensorView g1_quats,    TorchTensorView g2_quats,
-    TorchTensorView scales,   TorchTensorView v_scales,   TorchTensorView g1_scales,   TorchTensorView g2_scales,
-    TorchTensorView opacities,TorchTensorView v_opacities,TorchTensorView g1_opacities,TorchTensorView g2_opacities,
-    TorchTensorView features_dc, TorchTensorView v_features_dc, TorchTensorView g1_features_dc, TorchTensorView g2_features_dc,
-    TorchTensorView features_sh, TorchTensorView v_features_sh, TorchTensorView g1_features_sh, TorchTensorView g2_features_sh,
-    TorchTensorView radii,
-    TorchTensorView quant_bounds_sh  // null if !quantize_sh
+    bool use_per_splat_bias_correction
 );
+
+// --- Densification step ---
+
+// Returns: number of splats added (0 if no densification this step)
+int engine_densify_step(
+    int step,
+    int max_steps,
+    // densification config
+    int refine_start_iter,
+    int refine_stop_num_iter,
+    int refine_every,
+    float growth_factor,
+    float min_opacity,
+    float max_screen_size,
+    float max_screen_size_clip_hardness,
+    float max_world_size,
+    float noise_lr,
+    float noise_lr_final,
+    float relocate_heuristic_weight
+);
+
+// --- Debug rendering ---
+
+void engine_debug_forward(
+    TorchTensorView override_features_dc,  // [max_N, 3] custom DC color, or null to use original
+    int override_sh_degree,                 // -1 to use original
+    TorchTensorView out_rgb                 // [C, H, W, 3] output
+);
+
+// --- Query internal state ---
+
+void engine_copy_accum_buffer(TorchTensorView dst);  // copy densify_accum_buffer to Python tensor
+int64_t engine_get_cur_num_splats();
 
 // --- Backward only (existing, kept for compatibility) ---
 

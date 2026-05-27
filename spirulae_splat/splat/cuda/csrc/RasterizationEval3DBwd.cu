@@ -76,13 +76,13 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
     RenderOutput::Tensor render_outputs,
-    RenderOutput::Tensor *render2_outputs,
-    const DeviceTensor3D<float>* loss_map,           // [..., image_height, image_width, 1]
-    const DeviceTensor3D<float> *accum_weight_map,  // [I, H, W]
+    RenderOutput::Tensor render2_outputs,
+    const DeviceTensor3D<float> loss_map,
+    const DeviceTensor3D<float> accum_weight_map,  // [I, H, W]
     // gradients of outputs
     RenderOutput::Tensor v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts, // [..., image_height, image_width, 1]
-    RenderOutput::Tensor *v_distortion_outputs,
+    RenderOutput::Tensor v_distortion_outputs,
     // outputs
     typename SplatPrimitive::WorldBuffer v_splat_wbuffer,
     typename SplatPrimitive::ScreenBuffer v_splat_sbuffer,
@@ -90,8 +90,8 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     typename SplatPrimitive::ScreenBuffer vr_splat_sbuffer,
     typename SplatPrimitive::WorldBuffer h_splat_wbuffer,
     typename SplatPrimitive::ScreenBuffer h_splat_sbuffer,
-    std::optional<DeviceTensor3D<float>> *o_accum_weight,
-    DeviceTensor2D<float>* v_viewmats
+    DeviceTensor3D<float> o_accum_weight,
+    DeviceTensor2D<float> v_viewmats
 ) {
     uint32_t N = gaussian_ids.data_ptr() ? 0 : splat_wbuffer.size();
     uint32_t I = render_Ts.size<0>(); // number of images
@@ -113,18 +113,18 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
             tile_offsets.data_ptr(), flatten_ids.data_ptr(), \
             render_Ts.data_ptr(), last_ids.data_ptr(), \
             render_outputs, \
-            output_distortion ? *render2_outputs : RenderOutput::Buffer(), \
-            output_hessian_diagonal ? loss_map->data_ptr() : nullptr, \
-            output_accum_weight ? accum_weight_map->data_ptr() : nullptr, \
+            render2_outputs.has_value() ? render2_outputs : RenderOutput::Buffer(), \
+            loss_map.data_ptr(), \
+            accum_weight_map.data_ptr(), \
             v_render_outputs, v_render_Ts.data_ptr(), \
-            output_distortion ? *v_distortion_outputs : RenderOutput::Buffer(), \
+            v_distortion_outputs.has_value() ? v_distortion_outputs : RenderOutput::Buffer(), \
             v_splat_wbuffer, v_splat_sbuffer, vr_splat_wbuffer, vr_splat_sbuffer, h_splat_wbuffer, h_splat_sbuffer, \
-            output_accum_weight ? o_accum_weight->value().data_ptr() : nullptr, \
-            v_viewmats != nullptr ? v_viewmats->data_ptr() : nullptr \
+            o_accum_weight.data_ptr(), \
+            v_viewmats.data_ptr() \
         )
 
     if (camera_model == ssplat::CameraModelType::PINHOLE) {
-        if (v_viewmats != nullptr)
+        if (v_viewmats.data_ptr() != nullptr)
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
                 ssplat::CameraModelType::PINHOLE, output_distortion, true, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
         else
@@ -132,7 +132,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
                 ssplat::CameraModelType::PINHOLE, output_distortion, false, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
     }
     else if (camera_model == ssplat::CameraModelType::FISHEYE) {
-        if (v_viewmats != nullptr)
+        if (v_viewmats.data_ptr() != nullptr)
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
                 ssplat::CameraModelType::FISHEYE, output_distortion, true, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
         else
@@ -140,7 +140,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
                 ssplat::CameraModelType::FISHEYE, output_distortion, false, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
     }
     else if (camera_model == ssplat::CameraModelType::EQUISOLID) {
-        if (v_viewmats != nullptr)
+        if (v_viewmats.data_ptr() != nullptr)
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
                 ssplat::CameraModelType::EQUISOLID, output_distortion, true, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
         else
@@ -161,7 +161,7 @@ inline std::tuple<
     DeviceTensor2D<float>,  // v_viewmats
     std::optional<std::vector<DeviceTensorFloatND>>, std::optional<std::vector<DeviceTensorFloatND>>,  // jacobian residual product
     std::optional<std::vector<DeviceTensorFloatND>>, std::optional<std::vector<DeviceTensorFloatND>>,  // hessian diagonal
-    std::optional<DeviceTensor3D<float>>  // accum_weight
+    DeviceVector<float>  // accum_weight
 > _rasterize_to_pixels_eval3d_bwd_tensor(
     // Gaussian parameters
     int64_t num_splats,
@@ -183,8 +183,8 @@ inline std::tuple<
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
     RenderOutput::TensorTuple render_outputs_tuple,
     std::optional<RenderOutput::TensorTuple> render2_outputs_tuple,
-    std::optional<DeviceTensor3D<float>> loss_map,  // [..., image_height, image_width, 1]
-    std::optional<DeviceTensor3D<float>> accum_weight_map,  // [I, H, W]
+    DeviceTensor3D<float> loss_map,  // [..., image_height, image_width, 1]
+    DeviceTensor3D<float> accum_weight_map,  // [I, H, W]
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts, // [..., image_height, image_width, 1]
@@ -198,7 +198,6 @@ inline std::tuple<
     if (!v_splats_s.has_value())
         v_splats_s = SplatPrimitive::ScreenBuffer::zeros_pool(splats_s, "raster_eval3d_bwd.v_screen");
 
-    // Allocate v_viewmats as a pool-backed buffer if needed
     DeviceTensor2D<float> v_viewmats_buf;
     if (need_viewmat_grad) {
         auto& shape = std::get<2>(viewmats);
@@ -207,14 +206,13 @@ inline std::tuple<
         v_viewmats_buf.resize("raster_eval3d_bwd.v_viewmats", total, 1);
         v_viewmats_buf.zero();
     }
-    DeviceTensor2D<float>* v_viewmats = need_viewmat_grad ? &v_viewmats_buf : nullptr;
 
     RenderOutput::Tensor render_outputs = render_outputs_tuple;
-    std::optional<RenderOutput::Tensor> render2_outputs = std::nullopt;
-    std::optional<RenderOutput::Tensor> v_distortion_outputs = std::nullopt;
+    RenderOutput::Tensor render2_outputs;
+    RenderOutput::Tensor v_distortion_outputs;
     if (output_distortion) {
-        render2_outputs = render2_outputs_tuple;
-        v_distortion_outputs = v_distortion_outputs_tuple;
+        render2_outputs = render2_outputs_tuple.value();
+        v_distortion_outputs = v_distortion_outputs_tuple.value();
     }
     std::vector<DeviceTensorFloatND> vr_splats_w;
     std::vector<DeviceTensorFloatND> vr_splats_s;
@@ -226,12 +224,15 @@ inline std::tuple<
         h_splats_w = SplatPrimitive::WorldBuffer::zeros_pool(splats_w, "raster_eval3d_bwd.h_world");
         h_splats_s = SplatPrimitive::ScreenBuffer::zeros_pool(splats_s, "raster_eval3d_bwd.h_screen");
     }
-    std::optional<DeviceTensor3D<float>> o_accum_weight = std::nullopt;
+    DeviceVector<float> o_accum_weight;
     if (output_accum_weight) {
-        DeviceTensor3D<float> _aw;
-        _aw.resize("raster_eval3d_bwd.accum_weight", accum_weight_map.value().size<0>(), accum_weight_map.value().size<1>(), accum_weight_map.value().size<2>());
-        _aw.zero();
-        o_accum_weight = _aw;
+        o_accum_weight.resize("raster_eval3d_bwd.accum_weight", num_splats);
+        o_accum_weight.zero();
+    }
+    DeviceTensor3D<float> o_accum_weight_3d;
+    if (output_accum_weight) {
+        TorchTensorView tv((uint64_t)o_accum_weight.data_ptr(), 4, {num_splats, 1, 1, 1});
+        o_accum_weight_3d = DeviceTensor3D<float>(tv);
     }
 
     launch_rasterize_to_pixels_eval3d_bwd_kernel<SplatPrimitive, output_distortion, output_hessian_diagonal, output_accum_weight>(
@@ -239,15 +240,13 @@ inline std::tuple<
         viewmats, intrins, camera_model, dist_coeffs,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs,
-        output_distortion ? &render2_outputs.value() : nullptr,
-        output_hessian_diagonal ? &loss_map.value() : nullptr,
-        output_accum_weight ? &accum_weight_map.value() : nullptr,
+        render2_outputs, loss_map, accum_weight_map,
         v_render_outputs, v_render_Ts,
-        output_distortion ? &v_distortion_outputs.value() : nullptr,
+        v_distortion_outputs,
         v_splats_w.value(), v_splats_s.value(),
         vr_splats_w, vr_splats_s, h_splats_w, h_splats_s,
-        &o_accum_weight,
-        v_viewmats
+        o_accum_weight_3d,
+        v_viewmats_buf
     );
 
     if (output_hessian_diagonal)
@@ -272,7 +271,7 @@ template<typename SplatPrimitive, bool output_distortion, bool output_accum_weig
 inline std::tuple<
     std::vector<DeviceTensorFloatND>, std::vector<DeviceTensorFloatND>,
     DeviceTensor2D<float>,  // v_viewmats
-    std::optional<DeviceTensor3D<float>>  // accum_weight
+    DeviceVector<float>  // accum_weight
 > rasterize_to_pixels_eval3d_bwd_tensor(
     // Gaussian parameters
     int64_t num_splats,
@@ -294,8 +293,8 @@ inline std::tuple<
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
     RenderOutput::TensorTuple render_outputs,
     std::optional<RenderOutput::TensorTuple> render2_outputs,
-    std::optional<DeviceTensor3D<float>> loss_map,  // [..., image_height, image_width, 1]
-    std::optional<DeviceTensor3D<float>> accum_weight_map,  // [I, H, W]
+    DeviceTensor3D<float> loss_map,  // [..., image_height, image_width, 1]
+    DeviceTensor3D<float> accum_weight_map,  // [I, H, W]
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts, // [..., image_height, image_width, 1]
@@ -326,7 +325,7 @@ inline std::tuple<
 std::tuple<
     std::vector<DeviceTensorFloatND>, std::vector<DeviceTensorFloatND>,  // gradient
     DeviceTensor2D<float>,  // v_viewmats
-    std::optional<DeviceTensor3D<float>>  // accum_weight
+    DeviceVector<float>  // accum_weight
 > rasterize_to_pixels_3dgut_bwd(
     // Gaussian parameters
     int64_t num_splats,
@@ -348,8 +347,8 @@ std::tuple<
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
     RenderOutput::TensorTuple render_outputs,
     std::optional<RenderOutput::TensorTuple> render2_outputs,
-    std::optional<DeviceTensor3D<float>> loss_map,  // [..., image_height, image_width, 1]
-    std::optional<DeviceTensor3D<float>> accum_weight_map,  // [I, H, W]
+    DeviceTensor3D<float> loss_map,  // [..., image_height, image_width, 1]
+    DeviceTensor3D<float> accum_weight_map,  // [I, H, W]
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts, // [..., image_height, image_width, 1]
@@ -366,7 +365,7 @@ std::tuple<
         rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, true, false>,
         rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, true, true>,
     } };
-    return funcs[v_distortion_outputs.has_value()][accum_weight_map.has_value()](
+    return funcs[v_distortion_outputs.has_value()][accum_weight_map.data_ptr() != nullptr](
         num_splats, splats_w, splats_s, gaussian_ids,
         viewmats, intrins, cmt(camera_model), dist_coeffs,
         image_width, image_height, tile_offsets, flatten_ids,
@@ -382,7 +381,7 @@ std::tuple<
     DeviceTensor2D<float>,  // v_viewmats
     std::optional<std::vector<DeviceTensorFloatND>>, std::optional<std::vector<DeviceTensorFloatND>>,  // jacobian residual product
     std::optional<std::vector<DeviceTensorFloatND>>, std::optional<std::vector<DeviceTensorFloatND>>,  // hessian diagonal
-    std::optional<DeviceTensor3D<float>>  // accum_weight
+    DeviceVector<float>  // accum_weight
 > rasterize_to_pixels_3dgut_bwd_with_hessian_diagonal(
     // Gaussian parameters
     int64_t num_splats,
@@ -404,8 +403,8 @@ std::tuple<
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
     RenderOutput::TensorTuple render_outputs,
     std::optional<RenderOutput::TensorTuple> render2_outputs,
-    std::optional<DeviceTensor3D<float>> loss_map,  // [..., image_height, image_width, 1]
-    std::optional<DeviceTensor3D<float>> accum_weight_map,  // [I, H, W]
+    DeviceTensor3D<float> loss_map,  // [..., image_height, image_width, 1]
+    DeviceTensor3D<float> accum_weight_map,  // [I, H, W]
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts, // [..., image_height, image_width, 1]
@@ -422,7 +421,7 @@ std::tuple<
         _rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, true, true, false>,
         _rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, true, true, true>,
     } };
-    return funcs[v_distortion_outputs.has_value()][accum_weight_map.has_value()](
+    return funcs[v_distortion_outputs.has_value()][accum_weight_map.data_ptr() != nullptr](
         num_splats, splats_w, splats_s, gaussian_ids,
         viewmats, intrins, cmt(camera_model), dist_coeffs,
         image_width, image_height, tile_offsets, flatten_ids,

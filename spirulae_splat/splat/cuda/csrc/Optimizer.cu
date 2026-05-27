@@ -2116,7 +2116,8 @@ void engine_optim_3dgs_geometry(
     float mcmc_opacity_reg_weight, float mcmc_scale_reg_weight,
     float erank_reg_weight, float erank_reg_weight_s3, float quat_norm_reg_weight,
     bool use_scale_agnostic_mean,
-    int32_t step
+    int32_t step,
+    DeviceVector<int32_t> per_splat_steps
 ) {
     if (num_splats == 0) return;
     (use_scale_agnostic_mean ?
@@ -2136,7 +2137,7 @@ void engine_optim_3dgs_geometry(
         erank_reg_weight / (float)num_splats,
         erank_reg_weight_s3 / (float)num_splats,
         quat_norm_reg_weight / (float)num_splats,
-        step, nullptr, num_splats
+        step, per_splat_steps.data_ptr(), num_splats
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
@@ -2150,6 +2151,7 @@ void engine_adam_step(
     TorchTensorView exp_avg_sq,
     float lr,
     int32_t step,
+    DeviceVector<int32_t> per_splat_steps,
     float l2_reg,
     float l2_reg_offset
 ) {
@@ -2160,7 +2162,7 @@ void engine_adam_step(
 
     fused_adam_with_steps_kernel<<<_LAUNCH_ARGS_1D(num_splats*stride, 256)>>>(
         _tv_f(param), _tv_f(grad), _tv_f(exp_avg), _tv_f(exp_avg_sq),
-        lr, step, nullptr,
+        lr, step, per_splat_steps.data_ptr(),
         2.0f * l2_reg / (float)(num_splats * stride),
         l2_reg_offset,
         num_splats * stride, stride
@@ -2178,6 +2180,7 @@ void engine_adam_step_8bit(
     TorchTensorView quant_bounds,
     float lr,
     int32_t step,
+    DeviceVector<int32_t> per_splat_steps,
     float l2_reg,
     float l2_reg_offset
 ) {
@@ -2191,10 +2194,23 @@ void engine_adam_step_8bit(
         _tv_f(param), _tv_f(grad),
         (uint8_t*)std::get<0>(exp_avg), (uint8_t*)std::get<0>(exp_avg_sq),
         (float4*)_tv_f(quant_bounds),
-        lr, step, nullptr,
+        lr, step, per_splat_steps.data_ptr(),
         2.0f * l2_reg / (float)(num_splats * stride),
         l2_reg_offset,
         num_splats * stride, stride
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+__global__ void increment_int32_kernel(int32_t* __restrict__ data, int64_t n) {
+    int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) data[idx] += 1;
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void increment_int32_inplace(DeviceVector<int32_t> data, int64_t n) {
+    if (n == 0 || data.data_ptr() == nullptr) return;
+    increment_int32_kernel<<<(n + 255) / 256, 256>>>(data.data_ptr(), n);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }

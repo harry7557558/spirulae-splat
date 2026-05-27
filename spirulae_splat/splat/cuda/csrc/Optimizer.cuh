@@ -352,7 +352,8 @@ void engine_optim_3dgs_geometry(
     float mcmc_opacity_reg_weight, float mcmc_scale_reg_weight,
     float erank_reg_weight, float erank_reg_weight_s3, float quat_norm_reg_weight,
     bool use_scale_agnostic_mean,
-    int32_t step
+    int32_t step,
+    DeviceVector<int32_t> per_splat_steps
 );
 
 
@@ -364,6 +365,7 @@ void engine_adam_step(
     TorchTensorView exp_avg_sq,
     float lr,
     int32_t step,
+    DeviceVector<int32_t> per_splat_steps,
     float l2_reg,
     float l2_reg_offset
 );
@@ -378,6 +380,10 @@ void engine_adam_step_8bit(
     TorchTensorView quant_bounds,
     float lr,
     int32_t step,
+    DeviceVector<int32_t> per_splat_steps,
     float l2_reg,
     float l2_reg_offset
 );
+
+
+void increment_int32_inplace(DeviceVector<int32_t> data, int64_t n);

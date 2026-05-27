@@ -21,7 +21,7 @@
 
 std::tuple<
     std::vector<DeviceTensorFloatND>, std::vector<DeviceTensorFloatND>,  // gradient
-    std::optional<DeviceTensor3D<float>>  // accum_weight
+    DeviceVector<float>  // accum_weight
 > rasterize_to_pixels_3dgs_bwd(
     // Gaussian parameters
     int64_t num_splats,
@@ -38,7 +38,7 @@ std::tuple<
     const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
     RenderOutput::TensorTuple render_outputs_tuple,
-    std::optional<DeviceTensor3D<float>> accum_weight_map,  // [I, H, W]
+    DeviceTensor3D<float> accum_weight_map,  // [I, H, W]
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts,
@@ -51,7 +51,7 @@ std::tuple<
     std::vector<DeviceTensorFloatND>, std::vector<DeviceTensorFloatND>,  // gradient
     std::optional<std::vector<DeviceTensorFloatND>>, std::optional<std::vector<DeviceTensorFloatND>>,  // jacobian residual product
     std::optional<std::vector<DeviceTensorFloatND>>, std::optional<std::vector<DeviceTensorFloatND>>,  // hessian diagonal
-    std::optional<DeviceTensor3D<float>>  // accum_weight
+    DeviceVector<float>  // accum_weight
 > rasterize_to_pixels_3dgs_bwd_with_hessian_diagonal(
     // Gaussian parameters
     int64_t num_splats,
@@ -69,8 +69,8 @@ std::tuple<
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
     RenderOutput::TensorTuple render_outputs,
     std::optional<RenderOutput::TensorTuple> render2_outputs,
-    std::optional<DeviceTensor3D<float>> loss_map,
-    std::optional<DeviceTensor3D<float>> accum_weight_map,  // [I, H, W]
+    DeviceTensor3D<float> loss_map,
+    DeviceTensor3D<float> accum_weight_map,  // [I, H, W]
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts,

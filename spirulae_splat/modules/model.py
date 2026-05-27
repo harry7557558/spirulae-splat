@@ -381,10 +381,11 @@ class SpirulaeSplatModel(torch.nn.Module):
                 self.features_dc, self.features_sh
             )
             # print([x.shape for x in splat_params])
+        splat_params = [x.cuda() for x in splat_params]
 
         self.core = Renderer(
             self.config.primitive,
-            [x.cuda() for x in splat_params],
+            splat_params,
             self.seed_points[0].shape[0],  # TODO: voxel
             packed=(self.config.packed or self.config.use_bvh),
             use_bvh=self.config.use_bvh,
@@ -1242,71 +1243,36 @@ class SpirulaeSplatModel(torch.nn.Module):
                     self.training_losses.bil_grids_normal.grids.optim_info = {'optimizer_offload': True}
 
         # return outputs
-        if not hasattr(self.core, 'densify_accum_buffer'):
-            return outputs
+        # if not hasattr(self.core, 'densify_accum_buffer'):
+        #     return outputs
 
-        # Debug SH
-        if not self.training and False:
-            old_splats_world = self.core.splats_world
-            self.core.splats_world = (
-                self.means, self.quats, self.scales,
-                self.opacities,
-                torch.zeros_like(self.features_dc), self.features_sh
+        # Debug SH: render with DC zeroed out to visualize SH-only contribution
+        if not self.training and True:
+            zero_dc = torch.zeros_like(self.features_dc)
+            sh_rgb = self.core.engine_debug_forward(
+                override_features_dc=zero_dc,
+                override_sh_degree=self.step // max(self.config.sh_degree_warmup_every, 1)
             )
-            self.core.set_params(
-                viewmats=viewmats,  # [C, 4, 4]
-                intrins=intrins * self.config.supersampling,  # [C, 4]
-                width=W * self.config.supersampling,
-                height=H * self.config.supersampling,
-                sh_degree_to_use=self.step // max(self.config.sh_degree_warmup_every, 1),
-                relative_scale=self.config.relative_scale,
-                camera_model=camera_model,
-                output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
-                compute_hessian_diagonal=self.config.compute_hessian_diagonal,
-                **kwargs,
-            )
-            self.core.forward()
-            self.core.splats_world = old_splats_world
-            outputs['sh'] = self.core.render_colors[0][0, :, :, :]
+            outputs['sh'] = sh_rgb[0]  # first camera
 
-        # Debug densification
-        if not self.training and self.step > 1 and False:
-        # if self.step > 1:
-
-            param_to_vis = self.core.densify_accum_buffer[:, 0]
-            param_to_vis = param_to_vis / param_to_vis.mean()
-            # param_to_vis = torch.log10(param_to_vis + 1e-30)
-
-            # indices = _make_lazy_cuda_func("weighted_sample_without_replacement")(
-            #     -1, self.renderer.densify_accum_buffer, None, len(param_to_vis) // 20, self.step
-            # )
-            # param_to_vis = torch.zeros_like(param_to_vis)
-            # param_to_vis[indices] = 1
-
+        # Debug densification: visualize per-splat accum weight as color
+        if not self.training and self.step > 1 and True:
+            accum_weight = self.core.engine_get_accum_weight()
+            param_to_vis = accum_weight
+            mean_val = param_to_vis.mean()
+            if mean_val > 0:
+                param_to_vis = param_to_vis / mean_val
             param_to_vis = (param_to_vis - 0.5) / 0.28
             param_to_vis = param_to_vis.unsqueeze(-1).repeat(1, 3)
-            param_to_vis = torch.concatenate((param_to_vis, torch.zeros_like(self.means[len(param_to_vis):])), 0)
-
-            old_splats_world = self.core.splats_world
-            self.core.splats_world = (
-                self.means, self.quats, self.scales,
-                self.opacities,
-                param_to_vis, torch.empty(len(self.means), 0, 3, device=self.means.device)
+            # Pad to max_num_splats
+            if len(param_to_vis) < len(self.means):
+                param_to_vis = torch.cat((param_to_vis, torch.zeros(
+                    len(self.means) - len(param_to_vis), 3, device=self.means.device)), 0)
+            vis_rgb = self.core.engine_debug_forward(
+                override_features_dc=param_to_vis.contiguous(),
+                override_sh_degree=0
             )
-            self.core.set_params(
-                viewmats=viewmats,  # [C, 4, 4]
-                intrins=intrins * self.config.supersampling,  # [C, 4]
-                width=W * self.config.supersampling,
-                height=H * self.config.supersampling,
-                relative_scale=self.config.relative_scale,
-                camera_model=camera_model,
-                output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
-                compute_hessian_diagonal=self.config.compute_hessian_diagonal,
-                **kwargs,
-            )
-            self.core.forward()
-            self.core.splats_world = old_splats_world
-            outputs['refinement_score'] = self.core.render_colors[0][0, :, :, :].mean(dim=-1, keepdim=True)
+            outputs['refinement_score'] = vis_rgb[0].mean(dim=-1, keepdim=True)
 
         return outputs
 
@@ -1344,58 +1310,10 @@ class SpirulaeSplatModel(torch.nn.Module):
         max_steps = self.trainer_config.num_iterations
         optim_config = self.trainer_config.optimizer
 
-        # Engine optimizer path
+        # Engine path: optimizer + densification via core -> Engine.cpp
         if self.core.primitive in ['3dgs', 'mip', '3dgut'] and not self.core.use_bvh:
-            from spirulae_splat.splat.cuda import _C
-            from spirulae_splat.modules.optimizer import OptimizerConfig
-            _tv = self._tv
-
-            if optim_config.max_steps is not None:
-                max_steps = optim_config.max_steps
-
-            sw = self.core.splats_world
-            vw = self.core.v_splats_world
-            g1 = self.core.g1_splats_world
-            g2 = self.core.g2_splats_world
-
-            _C.engine_optim_step(
-                self.step,
-                # learning rates
-                optim_config.get_scheduled_lr("means", self.step, max_steps),
-                optim_config.get_scheduled_lr("quats", self.step, max_steps),
-                optim_config.get_scheduled_lr("scales", self.step, max_steps),
-                optim_config.get_scheduled_lr("opacities", self.step, max_steps),
-                optim_config.get_scheduled_lr("features_dc", self.step, max_steps),
-                optim_config.get_scheduled_lr("features_sh", self.step, max_steps),
-                # regularization
-                self.config.max_gauss_ratio,
-                self.config.scale_regularization_weight,
-                self.config.opacity_reg,
-                self.config.scale_reg,
-                self.config.erank_reg,
-                self.config.erank_reg_s3,
-                self.config.quat_norm_reg,
-                self.config.sh_reg,
-                optim_config.use_scale_agnostic_mean,
-                self.core.quantize_sh_optim,
-                # means: param, grad, g1, g2
-                _tv(sw[0]), _tv(vw[0]), _tv(g1[0]), _tv(g2[0]),
-                # quats
-                _tv(sw[1]), _tv(vw[1]), _tv(g1[1]), _tv(g2[1]),
-                # scales
-                _tv(sw[2]), _tv(vw[2]), _tv(g1[2]), _tv(g2[2]),
-                # opacities
-                _tv(sw[3]), _tv(vw[3]), _tv(g1[3]), _tv(g2[3]),
-                # features_dc
-                _tv(sw[4]), _tv(vw[4]), _tv(g1[4]), _tv(g2[4]),
-                # features_sh
-                _tv(sw[5]), _tv(vw[5]), _tv(g1[5]), _tv(g2[5]),
-                # radii + quant bounds
-                _tv(self.core.radii),
-                _tv(getattr(self.core, 'quant_bounds_sh', None)),
-            )
-            # Skip densification for now (Phase 1 MVP)
-            # self.core.densify_step(self.step, max_steps, self.config, None)
+            self.core.engine_optim_step(self.step, max_steps, self.config, optim_config)
+            self.core.engine_densify_step(self.step, max_steps, self.config)
             return
 
         # Legacy Python path
@@ -1502,10 +1420,7 @@ class SpirulaeSplatModel(torch.nn.Module):
 
     def _engine_get_loss_grad(self, outputs, batch, batch_size):
         """Engine path: compute loss + backward entirely in C++."""
-        from spirulae_splat.splat.cuda import _C
-
         device = outputs['rgb'].device
-        _tv = self._tv
 
         # --- Prepare ground truth ---
         gt_rgb = batch["image"].to(device)
@@ -1526,16 +1441,11 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         gt_normal = batch.get('normal', None)
         if gt_normal is not None:
-            gt_normal = gt_normal.to(device).float()
             if gt_normal.dtype == torch.uint8:
                 gt_normal = gt_normal.float() / (255/2) - 1.0
-            gt_normal = gt_normal.contiguous()
+            gt_normal = gt_normal.to(device).float().contiguous()
 
-        gt_alpha = None
-        gt_rgb_mask = None
-        gt_depth_mask = None
-        gt_normal_mask = None
-        gt_alpha_mask = None
+        gt_alpha, gt_rgb_mask, gt_depth_mask, gt_normal_mask, gt_alpha_mask = None, None, None, None, None
 
         if "mask" in batch:
             mask = batch['mask'].to(device).float() > 0.5
@@ -1550,9 +1460,9 @@ class SpirulaeSplatModel(torch.nn.Module):
         if gt_normal is not None:
             gt_normal_mask = (gt_normal.sum(-1, True) > -2.366).contiguous()
 
-        _C.set_training_data(
-            _tv(gt_rgb), _tv(gt_depth), _tv(gt_normal), _tv(gt_alpha),
-            _tv(gt_rgb_mask), _tv(gt_depth_mask), _tv(gt_normal_mask), _tv(gt_alpha_mask)
+        self.core.engine_set_training_data(
+            gt_rgb, gt_depth, gt_normal, gt_alpha,
+            gt_rgb_mask, gt_depth_mask, gt_normal_mask, gt_alpha_mask
         )
 
         # --- Loss weights ---
@@ -1565,37 +1475,25 @@ class SpirulaeSplatModel(torch.nn.Module):
         alpha_reg_factor = cfg.alpha_reg_weight * min(step / max(cfg.alpha_reg_warmup, 1), 1.0)
 
         loss_weights = [
-            (1.0 - cfg.l2_lambda) * (1.0 - cfg.ssim_lambda) * (1.0 - cfg.lpips_lambda),  # RgbSupL1
-            cfg.l2_lambda * (1.0 - cfg.ssim_lambda) * (1.0 - cfg.lpips_lambda),  # RgbSupL2
-            sup_active * cfg.depth_supervision_weight,  # DepthSup
-            sup_active * cfg.normal_supervision_weight,  # NormalSup
-            cfg.alpha_loss_weight,  # AlphaSup
-            0.0 if gt_alpha is None else cfg.alpha_loss_weight_under,  # AlphaSupUnder
-            reg_active * cfg.normal_reg_weight * dist_factor,  # NormalReg
-            reg_active * alpha_reg_factor,  # AlphaReg
-            reg_active * cfg.rgb_distortion_reg * dist_factor,  # RgbDistReg
-            reg_active * cfg.depth_distortion_reg * dist_factor,  # DepthDistReg
-            reg_active * cfg.normal_distortion_reg * dist_factor,  # NormalDistReg
+            (1.0 - cfg.l2_lambda) * (1.0 - cfg.ssim_lambda) * (1.0 - cfg.lpips_lambda),
+            cfg.l2_lambda * (1.0 - cfg.ssim_lambda) * (1.0 - cfg.lpips_lambda),
+            sup_active * cfg.depth_supervision_weight,
+            sup_active * cfg.normal_supervision_weight,
+            cfg.alpha_loss_weight,
+            0.0 if gt_alpha is None else cfg.alpha_loss_weight_under,
+            reg_active * cfg.normal_reg_weight * dist_factor,
+            reg_active * alpha_reg_factor,
+            reg_active * cfg.rgb_distortion_reg * dist_factor,
+            reg_active * cfg.depth_distortion_reg * dist_factor,
+            reg_active * cfg.normal_distortion_reg * dist_factor,
         ]
         w_ssim = cfg.ssim_lambda * (1.0 - cfg.lpips_lambda)
         num_loss_scales = cfg.num_loss_scales + 1
         compute_loss_map = cfg.use_loss_map or (cfg.compute_hessian_diagonal is not None)
 
-        # --- Ensure radii exists (engine forward doesn't populate it on Python side) ---
-        if not hasattr(self.core, 'radii') or self.core.radii is None:
-            self.core.radii = torch.zeros(self.core.max_num_splats, dtype=torch.float32, device=device)
-
-        # --- Zero grad ---
-        self.core.zero_grad()
-
-        # --- Compute loss + backward ---
-        loss_dict = _C.engine_compute_loss_backward(
-            step,
-            loss_weights,
-            w_ssim,
-            num_loss_scales,
-            compute_loss_map,
-            *[_tv(t) for t in self.core.v_splats_world]
+        # --- Compute loss + backward via core (gradients managed by C++ pool) ---
+        loss_dict = self.core.engine_compute_loss_backward(
+            step, loss_weights, w_ssim, num_loss_scales, compute_loss_map
         )
 
         for key, value in loss_dict.items():
@@ -1605,10 +1503,8 @@ class SpirulaeSplatModel(torch.nn.Module):
         self.training_verboser.add_metric("num_sh", min(self.core.sh_degree_to_use, self.config.sh_degree), last_only=True)
         self.training_verboser.add_metric("max_num_sh", self.config.sh_degree, last_only=True)
 
-        # Mark that backward was done in engine (skip model.backward())
         self._engine_backward_done = True
-
-        return None  # no loss_grad needed; backward already done
+        return None
 
     def get_loss_grad(self, outputs, batch, batch_size: int) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict."""

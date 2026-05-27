@@ -236,7 +236,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // FusedProjectionBwdOptim.cuh
     m.def("fused_projection_bwd_optimizer_3dgut", &fused_projection_bwd_optimizer_3dgut);
 
-    // Engine.h - unified forward/backward
+    // Engine.h - unified forward/backward/optimize
     m.def("set_data_3dgs", &set_data_3dgs);
     m.def("set_camera_params", &set_camera_params);
     m.def("set_training_data", &set_training_data);
@@ -244,6 +244,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("engine_backward_3dgs", &backward_3dgs);
     m.def("engine_compute_loss_backward", &engine_compute_loss_backward);
     m.def("engine_optim_step", &engine_optim_step);
+    m.def("engine_densify_step", &engine_densify_step);
+    m.def("engine_debug_forward", &engine_debug_forward);
+    m.def("engine_copy_accum_buffer", &engine_copy_accum_buffer);
+    m.def("engine_get_cur_num_splats", &engine_get_cur_num_splats);
 
 #if 0
     // Densify.cuh
