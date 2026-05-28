@@ -196,7 +196,28 @@ void depth_to_normal_backward(
     bool is_ray_depth,
     DeviceTensor3D<float>  depths,      // [B, H, W, 1]
     DeviceTensor3D<float3> v_normals,   // [B, H, W, 3]
-    DeviceTensor3D<float>  v_depths     // [B, H, W, 1] (must be pre-zeroed)
+    DeviceTensor3D<float>  v_depths     // [B, H, W, 1] (accumulated in-place)
+);
+
+
+void depth_to_normal_forward_tv(
+    std::string camera_model,
+    TorchTensorView intrins,
+    TorchTensorView dist_coeffs,
+    bool is_ray_depth,
+    TorchTensorView depths,    // [B, H, W, 1] float32, CUDA
+    TorchTensorView normals    // [B, H, W, 3] float32, CUDA (pre-allocated output)
+);
+
+
+void depth_to_normal_backward_tv(
+    std::string camera_model,
+    TorchTensorView intrins,
+    TorchTensorView dist_coeffs,
+    bool is_ray_depth,
+    TorchTensorView depths,    // [B, H, W, 1]
+    TorchTensorView v_normals, // [B, H, W, 3]
+    TorchTensorView v_depths   // [B, H, W, 1] accumulated in-place
 );
 
 

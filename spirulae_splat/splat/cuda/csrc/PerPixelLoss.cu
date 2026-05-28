@@ -612,7 +612,7 @@ __global__ void avg_pool_upsample_float_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<float, float> compute_multi_scale_per_pixel_losses(
+LossValues compute_multi_scale_per_pixel_losses(
     int num_loss_scales,
     TorchTensorView render_rgb,
     TorchTensorView ref_rgb,
@@ -637,7 +637,6 @@ std::tuple<float, float> compute_multi_scale_per_pixel_losses(
     long num_train_images,
     TorchTensorView camera_indices,
     TorchTensorView loss_map_out,
-    TorchTensorView total_losses_out,
     PerPixelGrads& grads_out
 ) {
     const auto& s = std::get<2>(render_rgb);
@@ -708,11 +707,12 @@ std::tuple<float, float> compute_multi_scale_per_pixel_losses(
         ds_b(alpha_mask_s[sc-1], alpha_mask_s[sc], "am");
     }
 
-    // Total losses accumulator
-    float* total_losses_ptr = _fptr(total_losses_out);
+    // Total losses accumulator — pool-backed device buffer (D→H read at end)
+    float* total_losses_ptr = DevicePool::global().acquire<float>(
+        "ppl.total_losses", (uint)LossIndex::length);
     cudaMemset(total_losses_ptr, 0, (uint)LossIndex::length * sizeof(float));
 
-    float psnr_val = 0.0f, ssim_val = 0.0f;
+    float ssim_val = 0.0f;
 
     for (int scale = 0; scale < num_loss_scales; ++scale) {
         const auto& ss = std::get<2>(render_rgb_s[scale]);
@@ -848,6 +848,22 @@ std::tuple<float, float> compute_multi_scale_per_pixel_losses(
         CHECK_DEVICE_ERROR(cudaGetLastError());
     }
 
-    // psnr_val is not read here; caller reads it from total_losses_out after D2H
-    return std::make_tuple(psnr_val, ssim_val);
+    // D→H copy of accumulated losses and pack into struct
+    float h_losses[(int)LossIndex::length];
+    cudaMemcpy(h_losses, total_losses_ptr,
+               sizeof(h_losses), cudaMemcpyDeviceToHost);
+
+    LossValues out;
+    out.rgb_loss        = h_losses[(int)LossIndex::RgbLoss];
+    out.rgb_psnr        = h_losses[(int)LossIndex::RgbPSNR];
+    out.depth_sup       = h_losses[(int)LossIndex::DepthSup];
+    out.normal_sup      = h_losses[(int)LossIndex::NormalSup];
+    out.alpha_sup       = h_losses[(int)LossIndex::AlphaSup];
+    out.normal_reg      = h_losses[(int)LossIndex::NormalReg];
+    out.alpha_reg       = h_losses[(int)LossIndex::AlphaReg];
+    out.rgb_dist_reg    = h_losses[(int)LossIndex::RgbDistReg];
+    out.depth_dist_reg  = h_losses[(int)LossIndex::DepthDistReg];
+    out.normal_dist_reg = h_losses[(int)LossIndex::NormalDistReg];
+    out.ssim            = ssim_val;
+    return out;
 }

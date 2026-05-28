@@ -92,11 +92,11 @@ def annotate_train_cameras(
     view_viewmats[:, :3, :3] = R_inv
     view_viewmats[:, :3, 3:4] = T_inv
 
-    cameras = cameras.to(rgb.device)
+    cameras = cameras.to("cuda")
     R = cameras.camera_to_worlds[:, :3, :3]  # 3 x 3
     T = cameras.camera_to_worlds[:, :3, 3:4]  # 3 x 1
     # T = T * relative_scale
-    R = R * torch.tensor([[[1.0, -1.0, -1.0]]])
+    R = R * torch.tensor([[[1.0, -1.0, -1.0]]]).cuda()
     camera_to_worlds = torch.concat((R, T), dim=-1)
 
     # must match Common.h and projection_utils.slang
@@ -113,29 +113,38 @@ def annotate_train_cameras(
     else:
         camera_models = getattr(cameras, key)
 
+    # Kernel expects CUDA inputs. Coerce any CPU tensor to CUDA, then keep a
+    # reference alive in _keepalive so its data_ptr stays valid through the C++
+    # call (otherwise Python may free a temporary between _tv() and the kernel,
+    # leading to non-deterministic crashes / garbled outputs).
+    _keepalive = []
     def _tv(t):
         if t is None:
             return (0, 4, [0])
-        t = t.cpu().contiguous()
-        assert not t.is_cuda, t.device
+        if not t.is_cuda:
+            t = t.cuda()
+        t = t.contiguous()
+        _keepalive.append(t)
         return (t.data_ptr(), t.element_size(), list(t.shape))
 
     h, w = rgb.shape[0], rgb.shape[1]
-    out_rgb = torch.empty(h, w, 3, dtype=torch.uint8, device=rgb.device)
+    # Output goes to CUDA (kernel writes); caller can move to CPU as needed.
+    out_device = rgb.device if rgb.is_cuda else torch.device("cuda")
+    out_rgb = torch.empty(h, w, 3, dtype=torch.uint8, device=out_device)
 
     _C.blit_train_cameras(
         _tv(rgb), _tv(depths), _tv(alpha),
         camera_model_mapper[view_camera.camera_type[0]],
-        _tv(view_camera.intrins),
-        _tv(view_viewmats),
-        _tv(view_camera.distortion_params),
+        _tv(view_camera.intrins.cuda()),
+        _tv(view_viewmats.cuda()),
+        _tv(view_camera.distortion_params.cuda()),
         _tv(cameras.intrins),
         _tv(cameras.width),
         _tv(cameras.height),
         _tv(camera_models),
         _tv(cameras.distortion_params),
         _tv(camera_to_worlds),
-        _tv(thumbnails),
+        _tv(thumbnails.cuda()),
         size,
         kwargs.get("show_training_cameras", False),
         _tv(out_rgb),

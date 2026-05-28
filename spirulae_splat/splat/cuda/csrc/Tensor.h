@@ -4,6 +4,7 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
+#include <mutex>
 #include <tuple>
 #include <variant>
 #include <vector>
@@ -32,6 +33,10 @@ class DevicePool {
     };
 
     std::unordered_map<std::string, Slot> _slots;
+    // Guards _slots. Multiple threads (e.g., trainer + viewer post-processor)
+    // call acquire concurrently — unprotected unordered_map operations
+    // (operator[] insert, rehash) are UB across threads.
+    mutable std::mutex _mu;
 
     DevicePool() = default;
     DevicePool(const DevicePool&) = delete;
@@ -47,6 +52,7 @@ public:
     // Reallocates only when current capacity is exceeded.
     template<typename T>
     T* acquire(const std::string& key, size_t n) {
+        std::lock_guard<std::mutex> lock(_mu);
         size_t bytes = n * sizeof(T);
         auto& slot = _slots[key];
         if (bytes > slot.cap_bytes) {
@@ -60,6 +66,7 @@ public:
 
     // Free a single named buffer and remove it from the pool.
     void free(const std::string& key) {
+        std::lock_guard<std::mutex> lock(_mu);
         auto it = _slots.find(key);
         if (it != _slots.end()) {
             if (it->second.ptr) cudaFree(it->second.ptr);
@@ -69,6 +76,7 @@ public:
 
     // Free all managed CUDA memory.
     void freeAll() {
+        std::lock_guard<std::mutex> lock(_mu);
         for (auto& [key, slot] : _slots)
             if (slot.ptr) cudaFree(slot.ptr);
         _slots.clear();
@@ -76,6 +84,7 @@ public:
 
     // Total bytes allocated (capacity, not logical size).
     size_t totalAllocBytes() const {
+        std::lock_guard<std::mutex> lock(_mu);
         size_t total = 0;
         for (auto& [k, s] : _slots) total += s.cap_bytes;
         return total;
@@ -83,6 +92,7 @@ public:
 
     // Per-slot breakdown: returns [(key, used_bytes, cap_bytes), ...]
     std::vector<std::tuple<std::string, size_t, size_t>> getBreakdown() const {
+        std::lock_guard<std::mutex> lock(_mu);
         std::vector<std::tuple<std::string, size_t, size_t>> result;
         result.reserve(_slots.size());
         for (auto& [k, s] : _slots)
@@ -99,6 +109,7 @@ public:
 class DeviceScratch {
     void*  _ptr = nullptr;
     size_t _cap = 0;
+    mutable std::mutex _mu;  // protects _ptr/_cap from concurrent threads
 
     DeviceScratch() = default;
     DeviceScratch(const DeviceScratch&) = delete;
@@ -111,7 +122,12 @@ public:
     }
 
     // Returns a pointer to at least `bytes` bytes of device scratch space.
+    // Note: callers using the returned pointer asynchronously across threads must
+    // synchronize externally; cudaFree's implicit device sync inside (when
+    // growing) ensures any in-flight kernel using the previous buffer completes
+    // before the new allocation.
     void* acquire(size_t bytes) {
+        std::lock_guard<std::mutex> lock(_mu);
         if (bytes > _cap) {
             if (_ptr) cudaFree(_ptr);
             cudaMalloc(&_ptr, bytes);
@@ -120,9 +136,13 @@ public:
         return _ptr;
     }
 
-    size_t capBytes() const { return _cap; }
+    size_t capBytes() const {
+        std::lock_guard<std::mutex> lock(_mu);
+        return _cap;
+    }
 
     void freeAll() {
+        std::lock_guard<std::mutex> lock(_mu);
         if (_ptr) { cudaFree(_ptr); _ptr = nullptr; _cap = 0; }
     }
 

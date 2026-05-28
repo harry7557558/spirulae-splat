@@ -50,7 +50,8 @@ from spirulae_splat.splat.cuda._wrapper_per_pixel import (
 from spirulae_splat.splat.cuda._wrapper_projection import scatter_max
 from spirulae_splat.splat.cuda import (
     svhash_create_initial_volume,
-    svhash_get_voxels
+    svhash_get_voxels,
+    _C,
 )
 
 from spirulae_splat.modules.camera import Cameras, CameraType
@@ -1035,12 +1036,25 @@ class SpirulaeSplatModel(torch.nn.Module):
             render_normal = torch.where(Ts < 1.0, F.normalize(render_normal, dim=-1), render_normal)
 
         depth_normal = None
-        # if depth_im_ref is not None and not self.training:
-        #     depth_normal = depth_to_normal(
-        #         depth_im_ref, camera.camera_type[0].upper(),
-        #         intrins.cuda(), camera.distortion_params.cuda(),
-        #         is_ray_depth=(self.config.primitive not in ['3dgs', 'mip'])
-        #     )
+        if depth_im_ref is not None and not self.training:
+            # depth_im_ref is CPU (from engine_copy_render_to_host). Move to CUDA for the kernel.
+            depth_cuda = depth_im_ref.cuda().contiguous() if not depth_im_ref.is_cuda else depth_im_ref.contiguous()
+            intrins_cuda = intrins.cuda().contiguous() if not intrins.is_cuda else intrins.contiguous()
+            if camera.distortion_params is not None:
+                dist_coeffs_cuda = camera.distortion_params.cuda().contiguous()
+            else:
+                dist_coeffs_cuda = torch.zeros(len(camera), 10, dtype=torch.float32, device='cuda')
+            depth_normal_cuda = torch.empty(
+                *depth_cuda.shape[:-1], 3, dtype=torch.float32, device='cuda')
+            _C.depth_to_normal_forward(
+                camera.camera_type[0].upper(),
+                self.core._tv(intrins_cuda),
+                self.core._tv(dist_coeffs_cuda),
+                self.config.primitive not in ['3dgs', 'mip'],  # is_ray_depth
+                self.core._tv(depth_cuda),
+                self.core._tv(depth_normal_cuda),
+            )
+            depth_normal = depth_normal_cuda.cpu()
 
         # radii = meta["radii"]
         # depths = meta["depths"]
@@ -1214,9 +1228,6 @@ class SpirulaeSplatModel(torch.nn.Module):
         return outputs
 
     def backward(self, outputs, loss_grads):
-        if getattr(self, '_engine_backward_done', False):
-            self._engine_backward_done = False
-            return
         if not self.training or loss_grads is None:
             return
         if 'backward_info' not in outputs:

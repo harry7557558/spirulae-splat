@@ -64,12 +64,28 @@ struct PerPixelGrads {
     TorchTensorView v_render_Ts, v_rgb_dist, v_depth_dist, v_normal_dist;
 };
 
+// Per-step loss values returned by compute_multi_scale_per_pixel_losses.
+// Fields mirror LossIndex (raw weighted sums) plus ssim.
+struct LossValues {
+    float rgb_loss;
+    float rgb_psnr;
+    float depth_sup;
+    float normal_sup;
+    float alpha_sup;
+    float normal_reg;
+    float alpha_reg;
+    float rgb_dist_reg;
+    float depth_dist_reg;
+    float normal_dist_reg;
+    float ssim;
+};
+
 
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */
 
 
 
-std::tuple<float, float> compute_multi_scale_per_pixel_losses(
+LossValues compute_multi_scale_per_pixel_losses(
     int num_loss_scales,
     TorchTensorView render_rgb,
     TorchTensorView ref_rgb,
@@ -94,6 +110,5 @@ std::tuple<float, float> compute_multi_scale_per_pixel_losses(
     long num_train_images,
     TorchTensorView camera_indices,
     TorchTensorView loss_map_out,
-    TorchTensorView total_losses_out,
     PerPixelGrads& grads_out
 );

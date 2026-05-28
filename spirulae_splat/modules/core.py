@@ -181,21 +181,6 @@ class Renderer:
         self.render_colors = (rgb, depth)
         self.render_Ts = Ts
 
-    def engine_backward(self, v_render_colors, v_render_Ts):
-        """Runs rasterization + projection backward via C++ Engine."""
-        C = self.viewmats.shape[0]
-        H, W = self.height, self.width
-
-        v_rgb = v_render_colors[0]
-        v_depth = v_render_colors[1]
-
-        _C.engine_backward_3dgs(
-            self._tv(v_rgb.contiguous()),
-            self._tv(v_depth),
-            self._tv(v_render_Ts.contiguous()),
-            *[self._tv(t) for t in self.v_splats_world]
-        )
-
     def engine_debug_forward(self, override_features_dc=None, override_sh_degree=-1):
         """Re-render with custom features_dc and/or sh_degree for debugging.
         Returns CPU RGB tensor [C, H, W, 3]."""
@@ -750,44 +735,6 @@ class Renderer:
 
         self.render_colors = self.render_colors
         self.render_Ts = self.render_Ts
-
-    def backward(
-        self,
-        v_render_colors: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
-        v_render_Ts: torch.Tensor,
-        v_rgb_distortion: Optional[torch.Tensor] = None,
-        v_depth_distortion: Optional[torch.Tensor] = None,
-        v_normal_distortion: Optional[torch.Tensor] = None,
-    ):
-        assert len(v_render_colors) == 3, "v_render_colors must contain RGB, depth, and normal"
-
-        # Engine path: unified C++ backward for 3dgs/mip/3dgut
-        if self.primitive in ['3dgs', 'mip', '3dgut'] and not self.use_bvh:
-            self.engine_backward(v_render_colors, v_render_Ts)
-            return
-
-        raise NotImplementedError("Use engine instead. Code below for reference.")
-        for tensor in v_render_colors:
-            assert tensor is None or tensor.is_contiguous()
-        assert v_render_Ts.is_contiguous()
-
-        if len(self.render_colors) > 1:
-
-            v_raw_depth, v_t_from_depth = _make_lazy_cuda_func("rendered_depth_to_expected_depth_backward")(
-                self.raw_depth, self.render_Ts, v_render_colors[1])
-
-            v_render_Ts = v_render_Ts + v_t_from_depth
-            v_render_colors = (
-                v_render_colors[0],
-                v_raw_depth,
-                *v_render_colors[2:]
-            )
-
-        self.v_render_colors = v_render_colors
-        self.v_render_Ts = v_render_Ts
-
-        self.rasterize_backward()
-        self.projection_backward()
 
     def fused_proj_bwd_optim_step(
         self,

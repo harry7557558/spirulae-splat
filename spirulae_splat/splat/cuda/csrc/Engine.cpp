@@ -588,155 +588,6 @@ size_t engine_get_scratch_bytes() {
 }
 
 
-void backward_3dgs(
-    // Gradient of rendered outputs (from Python, pointing into grad tensors)
-    TorchTensorView v_rgb,    // [C, H, W, 3]  float32
-    TorchTensorView v_depth,  // [C, H, W, 1]  float32
-    TorchTensorView v_Ts,     // [C, H, W, 1]  float32
-    // Pre-allocated gradient output tensors for world-space splats (zero-initialized by Python)
-    TorchTensorView v_means,       // [N, 3]
-    TorchTensorView v_quats,       // [N, 4]
-    TorchTensorView v_scales,      // [N, 3]
-    TorchTensorView v_opacities,   // [N, 1]
-    TorchTensorView v_features_dc, // [N, 3]
-    TorchTensorView v_features_sh  // [N, K, 3]
-) {
-    // v_rgb [C, H, W, 3]: DeviceTensor3D<float3> needs shape[3]*elem_size = 3*4 = sizeof(float3)
-    // v_depth [C, H, W, 1]: DeviceTensor3D<float> needs shape[3]*elem_size = 1*4 = sizeof(float)
-    RenderOutput::TensorTuple v_render_outputs = std::make_tuple(
-        DeviceTensor3D<float3>(v_rgb),
-        DeviceTensor3D<float>(v_depth),
-        DeviceTensor3D<float3>()  // no normal gradient
-    );
-    DeviceTensor3D<float> v_render_Ts(v_Ts);
-
-    // Pre-allocated world-space gradient outputs (zero-initialized by Python via zero_grad)
-    std::vector<DeviceTensorFloatND> v_splats_w = {
-        tv_to_fnd(v_means),
-        tv_to_fnd(v_quats),
-        tv_to_fnd(v_scales),
-        tv_to_fnd(v_opacities),
-        tv_to_fnd(v_features_dc),
-        tv_to_fnd(v_features_sh),
-    };
-
-    std::vector<DeviceTensorFloatND> v_splats_w_out, v_splats_s_out;
-
-    // --- Rasterization backward ---
-    if (Buffers::primitive == "3dgs" || Buffers::primitive == "mip") {
-        // mip uses the same rasterization backward kernel as 3dgs
-        auto [vw, vs, accum_weight] = rasterize_to_pixels_3dgs_bwd(
-            Buffers::cur_num_splats,
-            Buffers::fwd_splats_w,
-            Buffers::fwd_splats_s,
-            Buffers::fwd_gaussian_ids,
-            (uint32_t)Buffers::image_width,
-            (uint32_t)Buffers::image_height,
-            Buffers::fwd_tile_offsets,
-            Buffers::fwd_flatten_ids,
-            Buffers::fwd_render_Ts,
-            Buffers::fwd_last_ids,
-            Buffers::fwd_renders,
-            DeviceTensor3D<float>(),  // no accum_weight_map
-            v_render_outputs,
-            v_render_Ts,
-            std::make_optional(v_splats_w),
-            std::nullopt
-        );
-        v_splats_w_out = vw;
-        v_splats_s_out = vs;
-    } else if (Buffers::primitive == "3dgut") {
-        auto [vw, vs, vviewmats, accum_weight] = rasterize_to_pixels_3dgut_bwd(
-            Buffers::cur_num_splats,
-            Buffers::fwd_splats_w,
-            Buffers::fwd_splats_s,
-            Buffers::fwd_gaussian_ids,
-            _dt2d_tv(Buffers::camera_viewmats),
-            _dv_tv(Buffers::camera_intrins),
-            Buffers::camera_model_str,
-            _dt2d_tv(Buffers::camera_dist_coeffs),
-            (uint32_t)Buffers::image_width,
-            (uint32_t)Buffers::image_height,
-            Buffers::fwd_tile_offsets,
-            Buffers::fwd_flatten_ids,
-            Buffers::fwd_render_Ts,
-            Buffers::fwd_last_ids,
-            Buffers::fwd_renders,
-            std::nullopt,  // render2_outputs
-            DeviceTensor3D<float>(),  // loss_map
-            DeviceTensor3D<float>(),  // accum_weight_map
-            v_render_outputs,
-            v_render_Ts,
-            std::nullopt,  // v_distortion_outputs
-            std::make_optional(v_splats_w),
-            std::nullopt,
-            false
-        );
-        v_splats_w_out = vw;
-        v_splats_s_out = vs;
-    } else {
-        throw std::runtime_error("engine_backward: unknown primitive: " + Buffers::primitive);
-    }
-
-    // --- Projection backward: accumulates geometric gradients into v_splats_w_out ---
-    if (Buffers::primitive == "3dgs") {
-        projection_3dgs_backward(
-            Buffers::cur_num_splats,
-            Buffers::sh_degree,
-            Buffers::fwd_splats_w,
-            _dt2d_tv(Buffers::camera_viewmats),
-            _dv_tv(Buffers::camera_intrins),
-            (uint32_t)Buffers::image_width,
-            (uint32_t)Buffers::image_height,
-            Buffers::camera_model_str,
-            _dt2d_tv(Buffers::camera_dist_coeffs),
-            Buffers::fwd_camera_ids,
-            Buffers::fwd_gaussian_ids,
-            Buffers::fwd_aabb,
-            v_splats_s_out,
-            v_splats_w_out,
-            nullptr  // v_viewmats: not needed
-        );
-    } else if (Buffers::primitive == "mip") {
-        projection_mip_backward(
-            Buffers::cur_num_splats,
-            Buffers::sh_degree,
-            Buffers::fwd_splats_w,
-            _dt2d_tv(Buffers::camera_viewmats),
-            _dv_tv(Buffers::camera_intrins),
-            (uint32_t)Buffers::image_width,
-            (uint32_t)Buffers::image_height,
-            Buffers::camera_model_str,
-            _dt2d_tv(Buffers::camera_dist_coeffs),
-            Buffers::fwd_camera_ids,
-            Buffers::fwd_gaussian_ids,
-            Buffers::fwd_aabb,
-            v_splats_s_out,
-            v_splats_w_out,
-            nullptr
-        );
-    } else if (Buffers::primitive == "3dgut") {
-        projection_3dgut_backward(
-            Buffers::cur_num_splats,
-            Buffers::sh_degree,
-            Buffers::fwd_splats_w,
-            _dt2d_tv(Buffers::camera_viewmats),
-            _dv_tv(Buffers::camera_intrins),
-            (uint32_t)Buffers::image_width,
-            (uint32_t)Buffers::image_height,
-            Buffers::camera_model_str,
-            _dt2d_tv(Buffers::camera_dist_coeffs),
-            Buffers::fwd_camera_ids,
-            Buffers::fwd_gaussian_ids,
-            Buffers::fwd_aabb,
-            v_splats_s_out,
-            v_splats_w_out,
-            nullptr
-        );
-    }
-}
-
-
 void set_training_data(
     TorchTensorView gt_rgb,
     TorchTensorView gt_depth,
@@ -937,7 +788,6 @@ std::map<std::string, float> engine_compute_loss_backward(
     // Pool-allocate intermediates for loss computation
     TorchTensorView loss_map_buf = compute_loss_map ?
         _pool_tv_zero("eng.loss_map", C, H, W, 1) : _tv_null();
-    TorchTensorView total_losses_buf = _pool_tv_1d_zero("eng.total_losses", (int)LossIndex::length);
 
     // v_losses: constant vector [1, 0, 1, 1, ...] (1 for all, 0 for psnr slot)
     // Initialized once; pool never shrinks so pointer is stable
@@ -967,6 +817,22 @@ std::map<std::string, float> engine_compute_loss_backward(
     TorchTensorView depth_dist = _tv_null();
     TorchTensorView normal_dist = _tv_null();
 
+    // Depth → normal: derive depth_normal from rendered depth when gt_normal is provided
+    // (matches training_losses.py logic: pred_normal is None, pred_depth exists, gt_normal exists).
+    bool compute_depth_normal = (Buffers::gt_normal.data_ptr() != nullptr);
+    bool is_ray_depth = (Buffers::primitive != "3dgs" && Buffers::primitive != "mip");
+    if (compute_depth_normal) {
+        depth_normal = _pool_tv("eng.depth_normal", C, H, W, 3);
+        depth_to_normal_forward(
+            Buffers::camera_model_str,
+            _dv_tv(Buffers::camera_intrins),
+            _dt2d_tv(Buffers::camera_dist_coeffs),
+            is_ray_depth,
+            DeviceTensor3D<float>(render_depth),
+            DeviceTensor3D<float3>(depth_normal)
+        );
+    }
+
     std::vector<bool> needs_input_grad = {
         true,   // pred_rgb
         false,  // gt_rgb
@@ -985,10 +851,13 @@ std::map<std::string, float> engine_compute_loss_backward(
     pixel_grads.v_render_rgb  = _pool_tv("eng.v_rgb",   C, H, W, 3);
     pixel_grads.v_render_depth = _pool_tv("eng.v_depth", C, H, W, 1);
     pixel_grads.v_render_Ts   = _pool_tv("eng.v_Ts",    C, H, W, 1);
+    if (compute_depth_normal) {
+        pixel_grads.v_depth_normal = _pool_tv("eng.v_depth_normal", C, H, W, 3);
+    }
     // TODO: allocate normal/distortion grads when those features are enabled
 
     // --- Compute per-pixel losses + SSIM, get gradients ---
-    auto [psnr, ssim] = compute_multi_scale_per_pixel_losses(
+    LossValues lv = compute_multi_scale_per_pixel_losses(
         num_loss_scales,
         render_rgb,
         _dt3d_tv(Buffers::gt_rgb),
@@ -1013,7 +882,6 @@ std::map<std::string, float> engine_compute_loss_backward(
         -1,  // num_train_images: -1 means use batch size
         _tv_null(),  // camera_indices: null means identity
         loss_map_buf,
-        total_losses_buf,
         pixel_grads
     );
 
@@ -1021,7 +889,19 @@ std::map<std::string, float> engine_compute_loss_backward(
     // TODO: PPISP forward/backward
     // TODO: color space conversion (rgb_to_srgb) forward/backward
     // TODO: background blending forward/backward
-    // TODO: depth_to_normal backward when depth_normal gradient is non-null
+
+    // Depth → normal backward: propagate v_depth_normal grads into v_render_depth (in-place add)
+    if (compute_depth_normal) {
+        depth_to_normal_backward(
+            Buffers::camera_model_str,
+            _dv_tv(Buffers::camera_intrins),
+            _dt2d_tv(Buffers::camera_dist_coeffs),
+            is_ray_depth,
+            DeviceTensor3D<float>(render_depth),
+            DeviceTensor3D<float3>(pixel_grads.v_depth_normal),
+            DeviceTensor3D<float>(pixel_grads.v_render_depth)
+        );
+    }
 
     // --- Rasterization + projection backward ---
     // Build v_render_outputs from pixel_grads
@@ -1139,34 +1019,27 @@ std::map<std::string, float> engine_compute_loss_backward(
     }
 
     // --- Build loss dict for display ---
-    float h_losses[(int)LossIndex::length];
-    cudaMemcpy(h_losses, (void*)std::get<0>(total_losses_buf),
-               sizeof(h_losses), cudaMemcpyDeviceToHost);
-
     auto sdiv = [](float x, float y) -> float { return y != 0.0f ? x / y : 0.0f; };
 
-    float rgb_loss = h_losses[(int)LossIndex::RgbLoss];
-
     std::map<std::string, float> loss_dict;
-    float psnr_from_losses = h_losses[(int)LossIndex::RgbPSNR];
-    loss_dict["rgb_loss"] = rgb_loss + w_ssim * (1.0f - ssim);
-    loss_dict["psnr"] = psnr_from_losses;
-    loss_dict["ssim"] = ssim;
-    loss_dict["depth_loss"] = sdiv(h_losses[(int)LossIndex::DepthSup],
+    loss_dict["rgb_loss"] = lv.rgb_loss + w_ssim * (1.0f - lv.ssim);
+    loss_dict["psnr"] = lv.rgb_psnr;
+    loss_dict["ssim"] = lv.ssim;
+    loss_dict["depth_loss"] = sdiv(lv.depth_sup,
         loss_weights[(int)LossWeightIndex::DepthSup]);
-    loss_dict["normal_loss"] = sdiv(h_losses[(int)LossIndex::NormalSup],
+    loss_dict["normal_loss"] = sdiv(lv.normal_sup,
         loss_weights[(int)LossWeightIndex::NormalSup]);
-    loss_dict["alpha_loss"] = sdiv(h_losses[(int)LossIndex::AlphaSup],
+    loss_dict["alpha_loss"] = sdiv(lv.alpha_sup,
         loss_weights[(int)LossWeightIndex::AlphaSup] + loss_weights[(int)LossWeightIndex::AlphaSupUnder]);
-    loss_dict["normal_reg"] = sdiv(h_losses[(int)LossIndex::NormalReg],
+    loss_dict["normal_reg"] = sdiv(lv.normal_reg,
         loss_weights[(int)LossWeightIndex::NormalReg]);
-    loss_dict["alpha_reg"] = sdiv(h_losses[(int)LossIndex::AlphaReg],
+    loss_dict["alpha_reg"] = sdiv(lv.alpha_reg,
         loss_weights[(int)LossWeightIndex::AlphaReg]);
-    loss_dict["rgb_dist_reg"] = sdiv(h_losses[(int)LossIndex::RgbDistReg],
+    loss_dict["rgb_dist_reg"] = sdiv(lv.rgb_dist_reg,
         loss_weights[(int)LossWeightIndex::RgbDistReg]);
-    loss_dict["depth_dist_reg"] = sdiv(h_losses[(int)LossIndex::DepthDistReg],
+    loss_dict["depth_dist_reg"] = sdiv(lv.depth_dist_reg,
         loss_weights[(int)LossWeightIndex::DepthDistReg]);
-    loss_dict["normal_dist_reg"] = sdiv(h_losses[(int)LossIndex::NormalDistReg],
+    loss_dict["normal_dist_reg"] = sdiv(lv.normal_dist_reg,
         loss_weights[(int)LossWeightIndex::NormalDistReg]);
 
     return loss_dict;

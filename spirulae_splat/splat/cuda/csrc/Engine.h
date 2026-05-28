@@ -201,17 +201,3 @@ void engine_copy_splats_to_host(
 // Pool VRAM breakdown: [(key, used_bytes, cap_bytes), ...]
 std::vector<std::tuple<std::string, size_t, size_t>> engine_get_pool_breakdown();
 size_t engine_get_scratch_bytes();
-
-// --- Backward only (existing, kept for compatibility) ---
-
-void backward_3dgs(
-    TorchTensorView v_rgb,
-    TorchTensorView v_depth,
-    TorchTensorView v_Ts,
-    TorchTensorView v_means,
-    TorchTensorView v_quats,
-    TorchTensorView v_scales,
-    TorchTensorView v_opacities,
-    TorchTensorView v_features_dc,
-    TorchTensorView v_features_sh
-);

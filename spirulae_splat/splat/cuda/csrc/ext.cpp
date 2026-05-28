@@ -78,6 +78,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("compute_per_splat_losses_forward", &compute_per_splat_losses_forward);
     m.def("compute_per_splat_losses_backward", &compute_per_splat_losses_backward);
     m.def("compute_per_splat_losses_backward_with_hessian_diagonal", &compute_per_splat_losses_backward_with_hessian_diagonal);
+    #endif
 
     // PerPixelLoss.cuh
     m.def("compute_multi_scale_per_pixel_losses", &compute_multi_scale_per_pixel_losses);
@@ -95,8 +96,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("rgb_to_srgb_backward", &rgb_to_srgb_backward);
     m.def("depth_to_points_forward", &depth_to_points_forward);
     m.def("depth_to_points_backward", &depth_to_points_backward);
-    m.def("depth_to_normal_forward", &depth_to_normal_forward);
-    m.def("depth_to_normal_backward", &depth_to_normal_backward);
+    m.def("depth_to_normal_forward", &depth_to_normal_forward_tv);
+    m.def("depth_to_normal_backward", &depth_to_normal_backward_tv);
     m.def("depth_normal_loss_forward", &depth_normal_loss_forward);
     m.def("depth_normal_loss_backward", &depth_normal_loss_backward);
     m.def("ray_depth_to_linear_depth_forward", &ray_depth_to_linear_depth_forward);
@@ -120,6 +121,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fused_ssim_backward", &fused_ssim_backward);
     m.def("fused_ssim_inplace", &fused_ssim_inplace);
 
+    #if 0
     // SplatTileIntersector.cuh
     m.def("intersect_splat_tile_3dgs", &intersect_splat_tile_3dgs);
     // m.def("intersect_splat_tile_opaque_triangle", &intersect_splat_tile_opaque_triangle);
@@ -244,7 +246,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("set_camera_params", &set_camera_params);
     m.def("set_training_data", &set_training_data);
     m.def("engine_forward_3dgs", &forward_3dgs);
-    m.def("engine_backward_3dgs", &backward_3dgs);
     m.def("engine_compute_loss_backward", &engine_compute_loss_backward);
     m.def("engine_optim_step", &engine_optim_step);
     m.def("engine_densify_step", &engine_densify_step);
