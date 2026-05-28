@@ -241,6 +241,35 @@ class Renderer:
             optim_config.use_per_splat_bias_correction,
         )
 
+    def engine_init_bilagrid(self, n_grids, rgb_type=None, rgb_LHW=None,
+                              depth_LHW=None, normal_LHW=None):
+        """One-time allocation of C++ bilagrid storage. Pass `None` for any type
+        to leave it disabled. Must be called after set_data_3dgs (i.e., after
+        engine_forward has been invoked at least once)."""
+        if rgb_type is not None and rgb_LHW is not None:
+            L, H, W = rgb_LHW
+            _C.engine_init_bilagrid_rgb(n_grids, rgb_type, L, H, W)
+        if depth_LHW is not None:
+            L, H, W = depth_LHW
+            _C.engine_init_bilagrid_depth(n_grids, L, H, W)
+        if normal_LHW is not None:
+            L, H, W = normal_LHW
+            _C.engine_init_bilagrid_normal(n_grids, L, H, W)
+
+    def engine_bilagrid_forward(self, cam_idx):
+        """Apply bilagrid forward for the selected training camera; in-place on
+        the rendered RGB and on the GT depth/normal buffers."""
+        _C.engine_bilagrid_forward(int(cam_idx))
+
+    def engine_bilagrid_optim_step(self, step, lr_rgb, lr_depth, lr_normal,
+                                    tv_weight_rgb, tv_weight_depth, tv_weight_normal):
+        """Adam step + TV-loss regularization for each enabled bilagrid type."""
+        _C.engine_bilagrid_optim_step(
+            step,
+            float(lr_rgb), float(lr_depth), float(lr_normal),
+            float(tv_weight_rgb), float(tv_weight_depth), float(tv_weight_normal)
+        )
+
     def engine_train_step(self, step, max_steps,
                           # Forward
                           sh_degree_to_use,
@@ -252,7 +281,13 @@ class Renderer:
                           # Loss config
                           loss_weights, w_ssim, num_loss_scales, compute_loss_map,
                           # Configs
-                          model_config, optim_config):
+                          model_config, optim_config,
+                          # Bilagrid (pass cam_idx + lrs + tv weights; ignored if
+                          # engine_init_bilagrid_* was never called)
+                          bilagrid_cam_idx=0,
+                          bilagrid_lr_rgb=0.0, bilagrid_lr_depth=0.0, bilagrid_lr_normal=0.0,
+                          bilagrid_tv_weight_rgb=0.0, bilagrid_tv_weight_depth=0.0,
+                          bilagrid_tv_weight_normal=0.0):
         """Single fused training step (set_camera + set_gt + fwd + loss/bwd + optim + densify).
         All input tensors are CPU; returns loss_dict for verbose."""
         if optim_config.max_steps is not None:
@@ -307,6 +342,11 @@ class Renderer:
             model_config.noise_lr,
             model_config.noise_lr_final,
             model_config.relocate_heuristic_weight,
+            # Bilagrid
+            int(bilagrid_cam_idx),
+            float(bilagrid_lr_rgb), float(bilagrid_lr_depth), float(bilagrid_lr_normal),
+            float(bilagrid_tv_weight_rgb), float(bilagrid_tv_weight_depth),
+            float(bilagrid_tv_weight_normal),
         )
         # Update Python-side cur_num_splats (densification happened in C++)
         num_added = int(result.pop("num_added", 0))

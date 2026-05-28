@@ -9,15 +9,6 @@ inline constexpr float ALPHA_THRESHOLD = (1.f/255.f);
 #ifndef NO_TORCH
 #endif
 
-// #define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
-// #define CHECK_HOST(x) TORCH_CHECK(!x.is_cuda(), #x " must be a CPU tensor")
-// #define CHECK_CONTIGUOUS(x) \
-//     TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
-// #define CHECK_INPUT(x) \
-//     do { CHECK_CUDA(x); CHECK_CONTIGUOUS(x); } while (0)
-// #define DEVICE_GUARD(_ten) \
-//     const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
-
 #define CHECK_CUDA(x)
 #define CHECK_HOST(x)
 #define CHECK_CONTIGUOUS(x)
@@ -56,54 +47,3 @@ do {                                                                \
 
 
 #include "common_utils.cuh"
-
-// #ifndef NO_TORCH
-
-// template<typename T, int ndim>
-// TensorView<T, ndim> tensor2view(at::Tensor& tensor) {
-//     TensorView<T, ndim> view;
-//     view.data = tensor.data_ptr<T>();
-//     for (int i = 0; i < ndim; i++) {
-//         view.shape[i] = tensor.size(i);
-//         view.strides[i] = *(tensor.strides().begin() + i);
-//     }
-//     return view;
-// }
-
-// #endif
-
-// #ifndef NO_TORCH
-
-
-// template<typename T>
-// inline at::Tensor zeros_like(const at::Tensor& x) {
-//     at::Tensor y = at::empty_like(x);
-//     cudaMemset(y.data_ptr<T>(), 0, y.numel() * sizeof(T));
-//     return y;
-// }
-
-// template<typename T>
-// inline void set_zero(at::Tensor& x) {
-//     cudaMemset(x.data_ptr<T>(), 0, x.numel() * sizeof(T));
-// }
-
-// at::Tensor zeros_like_tensor(const at::Tensor& x);
-
-// void set_zero_tensor(at::Tensor& x);
-
-// inline at::TensorOptions kTensorOptionF32()
-//     { return at::TensorOptions(at::kCUDA).dtype(at::kFloat); }
-
-// inline at::TensorOptions kTensorOptionI32()
-//     { return at::TensorOptions(at::kCUDA).dtype(at::kInt); }
-
-// inline at::TensorOptions kTensorOptionI64()
-//     { return at::TensorOptions(at::kCUDA).dtype(at::kLong); }
-
-// inline at::TensorOptions kTensorOptionByte()
-//     { return at::TensorOptions(at::kCUDA).dtype(at::kByte); }
-
-// inline at::TensorOptions kTensorOptionBool()
-//     { return at::TensorOptions(at::kCUDA).dtype(at::kBool); }
-
-// #endif

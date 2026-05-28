@@ -389,6 +389,95 @@ public:
 };
 
 
+// 5D device tensor — non-owning view; memory owned by DevicePool or PyTorch.
+// Channel-last expected (last dim packs into sizeof(T)); fits bilagrid [N,C,L,H,W]
+// when each cell is a single float.
+template<typename T>
+class DeviceTensor5D {
+protected:
+
+    int64_t _numel_0;
+    int64_t _numel_1;
+    int64_t _numel_2;
+    int64_t _numel_3;
+    int64_t _numel_4;
+    T* __restrict__ _data_ptr;
+
+public:
+
+    template<int dim>
+    int64_t size() const {
+        static_assert(dim >= 0 && dim < 5, "Invalid dimension");
+        if constexpr (dim == 0) return _numel_0;
+        else if constexpr (dim == 1) return _numel_1;
+        else if constexpr (dim == 2) return _numel_2;
+        else if constexpr (dim == 3) return _numel_3;
+        else if constexpr (dim == 4) return _numel_4;
+    }
+
+    int64_t numel() const {
+        return _numel_0 * _numel_1 * _numel_2 * _numel_3 * _numel_4;
+    }
+
+    T* data_ptr() const {
+        return _data_ptr;
+    }
+
+    DeviceTensor5D() : _data_ptr(nullptr),
+        _numel_0(0), _numel_1(0), _numel_2(0), _numel_3(0), _numel_4(0) {}
+
+    DeviceTensor5D(const TorchTensorView& view) {
+        _data_ptr = (T*)std::get<0>(view);
+        uint32_t element_size = std::get<1>(view);
+        std::vector<int64_t> shape = std::get<2>(view);
+        if (shape.size() == 5)
+            shape.push_back(1);
+        if (shape.size() != 6)
+            throw std::runtime_error("Expected 6D tensor view with channel-last layout");
+        if (shape[5] * element_size != sizeof(T))
+            throw std::runtime_error("Element size mismatch");
+        _numel_0 = shape[0];
+        _numel_1 = shape[1];
+        _numel_2 = shape[2];
+        _numel_3 = shape[3];
+        _numel_4 = shape[4];
+    }
+
+    // shallow copy
+    DeviceTensor5D& operator=(const DeviceTensor5D&) = default;
+
+    // Pool-backed resize: memory owned by DevicePool, this is a non-owning view.
+    void resize(const std::string& key, int64_t n0, int64_t n1, int64_t n2, int64_t n3, int64_t n4) {
+        _data_ptr = DevicePool::global().acquire<T>(key, (size_t)(n0 * n1 * n2 * n3 * n4));
+        _numel_0 = n0; _numel_1 = n1; _numel_2 = n2; _numel_3 = n3; _numel_4 = n4;
+    }
+
+    // fill zero
+    void zero() {
+        if (_data_ptr)
+            cudaMemset(_data_ptr, 0, _numel_0 * _numel_1 * _numel_2 * _numel_3 * _numel_4 * sizeof(T));
+    }
+
+#ifdef __CUDACC__
+    __device__ T load(int64_t i0, int64_t i1, int64_t i2, int64_t i3, int64_t i4) const {
+        int64_t stride_3 = _numel_4;
+        int64_t stride_2 = _numel_3 * stride_3;
+        int64_t stride_1 = _numel_2 * stride_2;
+        int64_t stride_0 = _numel_1 * stride_1;
+        return _data_ptr[i0 * stride_0 + i1 * stride_1 + i2 * stride_2 + i3 * stride_3 + i4];
+    }
+    __device__ void store(int64_t i0, int64_t i1, int64_t i2, int64_t i3, int64_t i4, T value) {
+        int64_t stride_3 = _numel_4;
+        int64_t stride_2 = _numel_3 * stride_3;
+        int64_t stride_1 = _numel_2 * stride_2;
+        int64_t stride_0 = _numel_1 * stride_1;
+        _data_ptr[i0 * stride_0 + i1 * stride_1 + i2 * stride_2 + i3 * stride_3 + i4] = value;
+    }
+#endif
+
+};
+
+
 // ND device tensor — non-owning view.
 // Intended for heterogeneous containers (e.g. std::vector of tensors with different ranks).
 // For fixed-rank device-friendly code, prefer DeviceVector/Tensor2D/Tensor3D.

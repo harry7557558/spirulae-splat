@@ -257,6 +257,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("engine_copy_splats_to_host", &engine_copy_splats_to_host);
     m.def("engine_get_pool_breakdown", &engine_get_pool_breakdown);
     m.def("engine_get_scratch_bytes", &engine_get_scratch_bytes);
+    m.def("engine_init_bilagrid_rgb", &engine_init_bilagrid_rgb);
+    m.def("engine_init_bilagrid_depth", &engine_init_bilagrid_depth);
+    m.def("engine_init_bilagrid_normal", &engine_init_bilagrid_normal);
+    m.def("engine_bilagrid_forward", &engine_bilagrid_forward);
+    m.def("engine_bilagrid_optim_step", &engine_bilagrid_optim_step);
 
 #if 0
     // Densify.cuh

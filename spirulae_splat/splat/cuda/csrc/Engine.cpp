@@ -1,7 +1,7 @@
 #include "Engine.h"
 #include "Tensor.h"
 #include "Primitive.cuh"
-#include <map>
+#include "BilagridBindings.h"
 #include "ProjectionFwd.cuh"
 #include "ProjectionPackedFwd.cuh"
 #include "ProjectionBwd.cuh"
@@ -93,7 +93,52 @@ DeviceVector<float4> quant_bounds_sh;          // [n_blocks]
 DeviceVector<int32_t> bias_correction_steps;   // [max_N], or empty
 bool use_per_splat_bias_correction = false;
 
+// ============================================================================
+// Bilagrid state (RGB / depth / normal).
+//
+// Per type we hold: grid parameters, accumulated gradients (zeroed each step),
+// Adam moments g1 / g2 (persistent), and a saved pre-bilagrid forward output
+// used to drive the backward pass.
+//
+// RGB applies to the rendered prediction (fwd_renders.rgb). Depth and normal
+// apply to the GT side (gt_depth / gt_normal), matching the Python flow.
+// ============================================================================
+
+// RGB
+DeviceTensor5D<float> bilagrid_rgb_grids;   // [N_cam, C_rgb, L, H, W]
+DeviceTensor5D<float> bilagrid_rgb_grads;
+DeviceTensor5D<float> bilagrid_rgb_g1, bilagrid_rgb_g2;
+DeviceTensor3D<float3> fwd_rgb_pre_bilagrid; // [C, H, W]
+std::string bilagrid_rgb_type;               // "affine" | "ppisp" | "loglinear"
+int bilagrid_rgb_C = 0;                      // 12 for affine, 9 for ppisp/loglinear
+bool bilagrid_rgb_enabled = false;
+bool bilagrid_rgb_optim_initialized = false;
+
+// Depth (gt-side)
+DeviceTensor5D<float> bilagrid_depth_grids;  // [N_cam, 2, L, H, W]
+DeviceTensor5D<float> bilagrid_depth_grads;
+DeviceTensor5D<float> bilagrid_depth_g1, bilagrid_depth_g2;
+DeviceTensor3D<float> fwd_depth_pre_bilagrid;
+DeviceVector<float> bilagrid_depth_scalars;  // [C], median-quantile of gt_depth
+bool bilagrid_depth_enabled = false;
+bool bilagrid_depth_optim_initialized = false;
+
+// Normal (gt-side)
+DeviceTensor5D<float> bilagrid_normal_grids; // [N_cam, 3, L, H, W]
+DeviceTensor5D<float> bilagrid_normal_grads;
+DeviceTensor5D<float> bilagrid_normal_g1, bilagrid_normal_g2;
+DeviceTensor3D<float3> fwd_normal_pre_bilagrid;
+bool bilagrid_normal_enabled = false;
+bool bilagrid_normal_optim_initialized = false;
+
+// Camera index used for the current step's bilagrid forward.
+int bilagrid_cur_cam_idx = 0;
+
 } // namespace Buffers
+
+// Forward declaration for affine identity initializer (BilagridInit.cu).
+void bilagrid_affine_identity_init(
+    float* grids, int N, int L, int H, int W, cudaStream_t stream);
 
 
 // Create DeviceTensorFloatND from TorchTensorView by appending trailing 1 (for float-typed access)
@@ -765,6 +810,14 @@ static TorchTensorView _g2_sh_tv() {
 }
 
 
+// Forward declarations for bilagrid helpers defined later in the file.
+static void _ensure_bilagrid_optim_state();
+static void _engine_bilagrid_backward_hook(
+    TorchTensorView v_render_rgb,
+    TorchTensorView v_ref_depth,
+    TorchTensorView v_ref_normal);
+
+
 std::map<std::string, float> engine_compute_loss_backward(
     int step,
     std::array<float, (int)LossWeightIndex::length> loss_weights,
@@ -834,15 +887,15 @@ std::map<std::string, float> engine_compute_loss_backward(
     }
 
     std::vector<bool> needs_input_grad = {
-        true,   // pred_rgb
-        false,  // gt_rgb
-        true,   // pred_depth
-        false,  // gt_depth  (TODO: true when bilateral grid for geometry)
-        true,   // pred_normal
-        true,   // pred_depth_normal
-        false,  // gt_normal (TODO: true when bilateral grid for geometry)
-        true,   // pred_transmittance
-        true, true, true,  // distortion
+        true,                                  // pred_rgb
+        false,                                 // gt_rgb
+        true,                                  // pred_depth
+        Buffers::bilagrid_depth_enabled,       // gt_depth (true when bilagrid depth)
+        true,                                  // pred_normal
+        true,                                  // pred_depth_normal
+        Buffers::bilagrid_normal_enabled,      // gt_normal (true when bilagrid normal)
+        true,                                  // pred_transmittance
+        true, true, true,                      // distortion
     };
 
     PerPixelGrads pixel_grads = {};
@@ -853,6 +906,12 @@ std::map<std::string, float> engine_compute_loss_backward(
     pixel_grads.v_render_Ts   = _pool_tv("eng.v_Ts",    C, H, W, 1);
     if (compute_depth_normal) {
         pixel_grads.v_depth_normal = _pool_tv("eng.v_depth_normal", C, H, W, 3);
+    }
+    if (Buffers::bilagrid_depth_enabled) {
+        pixel_grads.v_ref_depth = _pool_tv("eng.v_ref_depth", C, H, W, 1);
+    }
+    if (Buffers::bilagrid_normal_enabled) {
+        pixel_grads.v_ref_normal = _pool_tv("eng.v_ref_normal", C, H, W, 3);
     }
     // TODO: allocate normal/distortion grads when those features are enabled
 
@@ -885,7 +944,21 @@ std::map<std::string, float> engine_compute_loss_backward(
         pixel_grads
     );
 
-    // TODO: bilateral grid forward/backward
+    // --- Bilagrid backward hook ---
+    // Transforms v_render_rgb (post-bilagrid → pre-bilagrid) and accumulates
+    // gradients into bilagrid_*_grads for any enabled bilagrid types. The
+    // updated v_render_rgb then flows into rasterization backward as usual.
+    // For depth / normal (gt-side), the loss-side gradient is consumed here
+    // and only the bilagrid grid gradient is retained.
+    if (Buffers::bilagrid_rgb_enabled || Buffers::bilagrid_depth_enabled ||
+        Buffers::bilagrid_normal_enabled) {
+        _ensure_bilagrid_optim_state();
+        _engine_bilagrid_backward_hook(
+            pixel_grads.v_render_rgb,
+            pixel_grads.v_ref_depth,
+            pixel_grads.v_ref_normal);
+    }
+
     // TODO: PPISP forward/backward
     // TODO: color space conversion (rgb_to_srgb) forward/backward
     // TODO: background blending forward/backward
@@ -1043,6 +1116,374 @@ std::map<std::string, float> engine_compute_loss_backward(
         loss_weights[(int)LossWeightIndex::NormalDistReg]);
 
     return loss_dict;
+}
+
+
+// ============================================================================
+// Bilagrid integration
+// ============================================================================
+
+// Pool keys are scoped under "eng.bg.*" so the pool reports them as engine state.
+static constexpr cudaStream_t kBilagridStream = (cudaStream_t)0;
+
+void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W) {
+    int C;
+    if (type == "affine") C = 12;
+    else if (type == "ppisp" || type == "loglinear") C = 9;
+    else throw std::runtime_error("engine_init_bilagrid_rgb: unknown type " + type);
+    if (n_grids <= 0)
+        throw std::runtime_error("engine_init_bilagrid_rgb: n_grids must be > 0");
+
+    Buffers::bilagrid_rgb_type = type;
+    Buffers::bilagrid_rgb_C = C;
+    Buffers::bilagrid_rgb_grids.resize("eng.bg.rgb.grids", n_grids, C, L, H, W);
+    if (type == "affine") {
+        Buffers::bilagrid_rgb_grids.zero();
+        bilagrid_affine_identity_init(
+            Buffers::bilagrid_rgb_grids.data_ptr(), n_grids, L, H, W, kBilagridStream);
+    } else {
+        Buffers::bilagrid_rgb_grids.zero();
+    }
+    Buffers::bilagrid_rgb_enabled = true;
+    Buffers::bilagrid_rgb_optim_initialized = false;
+}
+
+void engine_init_bilagrid_depth(int n_grids, int L, int H, int W) {
+    if (n_grids <= 0)
+        throw std::runtime_error("engine_init_bilagrid_depth: n_grids must be > 0");
+    Buffers::bilagrid_depth_grids.resize("eng.bg.depth.grids", n_grids, 2, L, H, W);
+    Buffers::bilagrid_depth_grids.zero();
+    Buffers::bilagrid_depth_scalars.resize("eng.bg.depth.scalars", n_grids);
+    Buffers::bilagrid_depth_scalars.zero();
+    Buffers::bilagrid_depth_enabled = true;
+    Buffers::bilagrid_depth_optim_initialized = false;
+}
+
+void engine_init_bilagrid_normal(int n_grids, int L, int H, int W) {
+    if (n_grids <= 0)
+        throw std::runtime_error("engine_init_bilagrid_normal: n_grids must be > 0");
+    Buffers::bilagrid_normal_grids.resize("eng.bg.normal.grids", n_grids, 3, L, H, W);
+    Buffers::bilagrid_normal_grids.zero();
+    Buffers::bilagrid_normal_enabled = true;
+    Buffers::bilagrid_normal_optim_initialized = false;
+}
+
+// Compute TV losses for each enabled bilagrid into a pool-backed 3-float
+// device buffer at [rgb_tv, depth_tv, normal_tv]; unset entries stay 0.
+static void _engine_bilagrid_tv_into(float* tv_buf3_device) {
+    cudaMemsetAsync(tv_buf3_device, 0, 3 * sizeof(float), kBilagridStream);
+    auto run = [&](DeviceTensor5D<float>& grids, int slot) {
+        if (grids.data_ptr() == nullptr) return;
+        int N = (int)grids.size<0>(), C = (int)grids.size<1>();
+        int L = (int)grids.size<2>(), H = (int)grids.size<3>(), W = (int)grids.size<4>();
+        tv_loss_forward(grids.data_ptr(), tv_buf3_device + slot,
+                        N, C, L, H, W, kBilagridStream);
+    };
+    if (Buffers::bilagrid_rgb_enabled) run(Buffers::bilagrid_rgb_grids, 0);
+    if (Buffers::bilagrid_depth_enabled) run(Buffers::bilagrid_depth_grids, 1);
+    if (Buffers::bilagrid_normal_enabled) run(Buffers::bilagrid_normal_grids, 2);
+}
+
+// Apply bilagrid forward in-place for each enabled type for the given camera.
+// Saves a pre-bilagrid copy used by the backward pass.
+void engine_bilagrid_forward(int cam_idx) {
+    Buffers::bilagrid_cur_cam_idx = cam_idx;
+    int H = Buffers::image_height;
+    int W = Buffers::image_width;
+    int C_batch = (int)Buffers::num_cameras;  // batch contains 1 camera typically
+    if (C_batch <= 0) return;
+
+    // --- RGB: applies to Buffers::fwd_renders.rgb ---
+    if (Buffers::bilagrid_rgb_enabled) {
+        if (std::get<0>(Buffers::fwd_renders).data_ptr() == nullptr)
+            throw std::runtime_error("engine_bilagrid_forward: forward_3dgs must run first");
+
+        // Save pre-bilagrid render and apply in place.
+        Buffers::fwd_rgb_pre_bilagrid.resize("eng.bg.rgb.pre", C_batch, H, W);
+        float3* render_rgb = std::get<0>(Buffers::fwd_renders).data_ptr();
+        cudaMemcpyAsync(
+            Buffers::fwd_rgb_pre_bilagrid.data_ptr(),
+            render_rgb,
+            (size_t)C_batch * H * W * sizeof(float3),
+            cudaMemcpyDeviceToDevice, kBilagridStream);
+
+        int L = (int)Buffers::bilagrid_rgb_grids.size<2>();
+        int gH = (int)Buffers::bilagrid_rgb_grids.size<3>();
+        int gW = (int)Buffers::bilagrid_rgb_grids.size<4>();
+        int C_rgb = Buffers::bilagrid_rgb_C;
+        size_t grid_stride = (size_t)C_rgb * L * gH * gW;
+        float* grid_ptr = Buffers::bilagrid_rgb_grids.data_ptr()
+                          + (size_t)cam_idx * grid_stride;
+
+        // In-place: rgb input and output are the same buffer (the kernel reads
+        // and writes index-by-index per pixel, so this is safe).
+        if (Buffers::bilagrid_rgb_type == "affine") {
+            bilagrid_uniform_sample_forward(
+                grid_ptr, (const float*)render_rgb, (float*)render_rgb,
+                /*N=*/1, L, gH, gW, /*m=*/1, H, W, kBilagridStream);
+        } else if (Buffers::bilagrid_rgb_type == "ppisp") {
+            bilagrid_ppisp_uniform_sample_forward(
+                grid_ptr, (const float*)render_rgb, (float*)render_rgb,
+                /*N=*/1, L, gH, gW, /*m=*/1, H, W, kBilagridStream);
+        } else if (Buffers::bilagrid_rgb_type == "loglinear") {
+            bilagrid_loglinear_uniform_sample_forward(
+                grid_ptr, (const float*)render_rgb, (float*)render_rgb,
+                /*N=*/1, L, gH, gW, /*m=*/1, H, W, kBilagridStream);
+        }
+    }
+
+    // --- Depth (gt side) ---
+    if (Buffers::bilagrid_depth_enabled && Buffers::gt_depth.data_ptr() != nullptr) {
+        Buffers::fwd_depth_pre_bilagrid.resize("eng.bg.depth.pre", C_batch, H, W);
+        float* gt_depth_ptr = Buffers::gt_depth.data_ptr();
+        cudaMemcpyAsync(
+            Buffers::fwd_depth_pre_bilagrid.data_ptr(),
+            gt_depth_ptr,
+            (size_t)C_batch * H * W * sizeof(float),
+            cudaMemcpyDeviceToDevice, kBilagridStream);
+
+        // Compute scalar (median quantile) over pre-bilagrid depth, store in slot [cam_idx].
+        TorchTensorView depth_tv((uint64_t)Buffers::fwd_depth_pre_bilagrid.data_ptr(),
+            4, {C_batch, H, W, 1, 1});
+        float* scalar_slot = Buffers::bilagrid_depth_scalars.data_ptr() + cam_idx;
+        TorchTensorView scalar_tv((uint64_t)scalar_slot, 4, {1});
+        compute_depth_scalars_tensor(depth_tv, /*patched=*/true, scalar_tv);
+
+        int L = (int)Buffers::bilagrid_depth_grids.size<2>();
+        int gH = (int)Buffers::bilagrid_depth_grids.size<3>();
+        int gW = (int)Buffers::bilagrid_depth_grids.size<4>();
+        size_t grid_stride = (size_t)2 * L * gH * gW;
+        float* grid_ptr = Buffers::bilagrid_depth_grids.data_ptr()
+                          + (size_t)cam_idx * grid_stride;
+        bilagrid_depth_uniform_sample_forward(
+            grid_ptr,
+            (const float*)Buffers::fwd_depth_pre_bilagrid.data_ptr(),
+            scalar_slot,
+            gt_depth_ptr,
+            /*N=*/1, L, gH, gW, /*m=*/1, H, W, kBilagridStream);
+    }
+
+    // --- Normal (gt side) ---
+    if (Buffers::bilagrid_normal_enabled && Buffers::gt_normal.data_ptr() != nullptr) {
+        Buffers::fwd_normal_pre_bilagrid.resize("eng.bg.normal.pre", C_batch, H, W);
+        float3* gt_normal_ptr = Buffers::gt_normal.data_ptr();
+        cudaMemcpyAsync(
+            Buffers::fwd_normal_pre_bilagrid.data_ptr(),
+            gt_normal_ptr,
+            (size_t)C_batch * H * W * sizeof(float3),
+            cudaMemcpyDeviceToDevice, kBilagridStream);
+
+        int L = (int)Buffers::bilagrid_normal_grids.size<2>();
+        int gH = (int)Buffers::bilagrid_normal_grids.size<3>();
+        int gW = (int)Buffers::bilagrid_normal_grids.size<4>();
+        size_t grid_stride = (size_t)3 * L * gH * gW;
+        float* grid_ptr = Buffers::bilagrid_normal_grids.data_ptr()
+                          + (size_t)cam_idx * grid_stride;
+        bilagrid_normal_uniform_sample_forward(
+            grid_ptr,
+            (const float*)Buffers::fwd_normal_pre_bilagrid.data_ptr(),
+            (float*)gt_normal_ptr,
+            /*N=*/1, L, gH, gW, /*m=*/1, H, W, kBilagridStream);
+    }
+}
+
+// Bilagrid backward hook: takes the per-pixel loss-gradient output and
+// transforms / accumulates as appropriate. For RGB, overwrites v_render_rgb
+// with the pre-bilagrid gradient (used by rasterization backward) and
+// accumulates into bilagrid_rgb_grads. For depth/normal (gt-side), the input
+// gradient is the loss-gradient w.r.t. gt; we accumulate to the bilagrid grad
+// only — gt has no further gradient path.
+static void _engine_bilagrid_backward_hook(
+    TorchTensorView v_render_rgb,   // [C, H, W, 3] — overwritten when RGB enabled
+    TorchTensorView v_ref_depth,    // [C, H, W, 1] — input only
+    TorchTensorView v_ref_normal    // [C, H, W, 3] — input only
+) {
+    int H = Buffers::image_height;
+    int W = Buffers::image_width;
+    int C_batch = (int)Buffers::num_cameras;
+    int cam_idx = Buffers::bilagrid_cur_cam_idx;
+
+    // --- RGB backward ---
+    if (Buffers::bilagrid_rgb_enabled && std::get<0>(v_render_rgb) != 0 &&
+        Buffers::fwd_rgb_pre_bilagrid.data_ptr() != nullptr)
+    {
+        int L = (int)Buffers::bilagrid_rgb_grids.size<2>();
+        int gH = (int)Buffers::bilagrid_rgb_grids.size<3>();
+        int gW = (int)Buffers::bilagrid_rgb_grids.size<4>();
+        int C_rgb = Buffers::bilagrid_rgb_C;
+        size_t grid_stride = (size_t)C_rgb * L * gH * gW;
+        float* grid_ptr = Buffers::bilagrid_rgb_grids.data_ptr()
+                          + (size_t)cam_idx * grid_stride;
+        float* grad_grid_ptr = Buffers::bilagrid_rgb_grads.data_ptr()
+                               + (size_t)cam_idx * grid_stride;
+
+        // v_render_rgb is the gradient w.r.t. POST-bilagrid rgb (what entered loss).
+        // The backward overwrites it with the gradient w.r.t. PRE-bilagrid rgb.
+        float* v_rgb_ptr = (float*)std::get<0>(v_render_rgb);
+        const float* rgb_pre_ptr = (const float*)Buffers::fwd_rgb_pre_bilagrid.data_ptr();
+
+        if (Buffers::bilagrid_rgb_type == "affine") {
+            bilagrid_uniform_sample_backward_v1(
+                grid_ptr, rgb_pre_ptr, v_rgb_ptr,
+                grad_grid_ptr, v_rgb_ptr,
+                /*N=*/1, L, gH, gW, /*m=*/1, H, W,
+                /*block_x=*/8, /*block_y=*/8, /*target_tile_size=*/5,
+                kBilagridStream);
+        } else if (Buffers::bilagrid_rgb_type == "ppisp") {
+            bilagrid_ppisp_uniform_sample_backward_v1(
+                grid_ptr, rgb_pre_ptr, v_rgb_ptr,
+                grad_grid_ptr, v_rgb_ptr,
+                /*N=*/1, L, gH, gW, /*m=*/1, H, W,
+                8, 8, 5, kBilagridStream);
+        } else if (Buffers::bilagrid_rgb_type == "loglinear") {
+            bilagrid_loglinear_uniform_sample_backward_v1(
+                grid_ptr, rgb_pre_ptr, v_rgb_ptr,
+                grad_grid_ptr, v_rgb_ptr,
+                /*N=*/1, L, gH, gW, /*m=*/1, H, W,
+                8, 8, 5, kBilagridStream);
+        }
+    }
+
+    // --- Depth backward (accumulate into bilagrid grad; discard input grad) ---
+    if (Buffers::bilagrid_depth_enabled && std::get<0>(v_ref_depth) != 0 &&
+        Buffers::fwd_depth_pre_bilagrid.data_ptr() != nullptr)
+    {
+        int L = (int)Buffers::bilagrid_depth_grids.size<2>();
+        int gH = (int)Buffers::bilagrid_depth_grids.size<3>();
+        int gW = (int)Buffers::bilagrid_depth_grids.size<4>();
+        size_t grid_stride = (size_t)2 * L * gH * gW;
+        float* grid_ptr = Buffers::bilagrid_depth_grids.data_ptr()
+                          + (size_t)cam_idx * grid_stride;
+        float* grad_grid_ptr = Buffers::bilagrid_depth_grads.data_ptr()
+                               + (size_t)cam_idx * grid_stride;
+        float* scalar_slot = Buffers::bilagrid_depth_scalars.data_ptr() + cam_idx;
+        // Discard v_depth_pre: gt has no further gradient. Allocate a tiny scratch.
+        float* v_depth_pre = DevicePool::global().acquire<float>(
+            "eng.bg.depth.v_pre", (size_t)C_batch * H * W);
+        bilagrid_depth_uniform_sample_backward_v1(
+            grid_ptr,
+            (const float*)Buffers::fwd_depth_pre_bilagrid.data_ptr(),
+            scalar_slot,
+            (const float*)std::get<0>(v_ref_depth),
+            grad_grid_ptr, v_depth_pre,
+            /*N=*/1, L, gH, gW, /*m=*/1, H, W,
+            8, 8, 5, kBilagridStream);
+    }
+
+    // --- Normal backward (accumulate; discard input grad) ---
+    if (Buffers::bilagrid_normal_enabled && std::get<0>(v_ref_normal) != 0 &&
+        Buffers::fwd_normal_pre_bilagrid.data_ptr() != nullptr)
+    {
+        int L = (int)Buffers::bilagrid_normal_grids.size<2>();
+        int gH = (int)Buffers::bilagrid_normal_grids.size<3>();
+        int gW = (int)Buffers::bilagrid_normal_grids.size<4>();
+        size_t grid_stride = (size_t)3 * L * gH * gW;
+        float* grid_ptr = Buffers::bilagrid_normal_grids.data_ptr()
+                          + (size_t)cam_idx * grid_stride;
+        float* grad_grid_ptr = Buffers::bilagrid_normal_grads.data_ptr()
+                               + (size_t)cam_idx * grid_stride;
+        float* v_normal_pre = DevicePool::global().acquire<float>(
+            "eng.bg.normal.v_pre", (size_t)C_batch * H * W * 3);
+        bilagrid_normal_uniform_sample_backward_v1(
+            grid_ptr,
+            (const float*)Buffers::fwd_normal_pre_bilagrid.data_ptr(),
+            (const float*)std::get<0>(v_ref_normal),
+            grad_grid_ptr, v_normal_pre,
+            /*N=*/1, L, gH, gW, /*m=*/1, H, W,
+            8, 8, 5, kBilagridStream);
+    }
+}
+
+
+// Ensure bilagrid Adam moment buffers are allocated and zeroed for each
+// enabled bilagrid type.
+static void _ensure_bilagrid_optim_state() {
+    auto setup = [](DeviceTensor5D<float>& grids,
+                    DeviceTensor5D<float>& grads,
+                    DeviceTensor5D<float>& g1,
+                    DeviceTensor5D<float>& g2,
+                    const std::string& key_prefix,
+                    bool& done) {
+        if (done || grids.data_ptr() == nullptr) return;
+        int64_t N = grids.size<0>(), C = grids.size<1>();
+        int64_t L = grids.size<2>(), H = grids.size<3>(), W = grids.size<4>();
+        grads.resize(key_prefix + ".grads", N, C, L, H, W);
+        grads.zero();
+        g1.resize(key_prefix + ".g1", N, C, L, H, W);
+        g1.zero();
+        g2.resize(key_prefix + ".g2", N, C, L, H, W);
+        g2.zero();
+        done = true;
+    };
+    if (Buffers::bilagrid_rgb_enabled) {
+        setup(Buffers::bilagrid_rgb_grids, Buffers::bilagrid_rgb_grads,
+              Buffers::bilagrid_rgb_g1, Buffers::bilagrid_rgb_g2,
+              "eng.bg.rgb", Buffers::bilagrid_rgb_optim_initialized);
+    }
+    if (Buffers::bilagrid_depth_enabled) {
+        setup(Buffers::bilagrid_depth_grids, Buffers::bilagrid_depth_grads,
+              Buffers::bilagrid_depth_g1, Buffers::bilagrid_depth_g2,
+              "eng.bg.depth", Buffers::bilagrid_depth_optim_initialized);
+    }
+    if (Buffers::bilagrid_normal_enabled) {
+        setup(Buffers::bilagrid_normal_grids, Buffers::bilagrid_normal_grads,
+              Buffers::bilagrid_normal_g1, Buffers::bilagrid_normal_g2,
+              "eng.bg.normal", Buffers::bilagrid_normal_optim_initialized);
+    }
+}
+
+// Helper: build a DeviceTensorFloatND from a DeviceTensor5D<float> by viewing
+// it as a flat 1D float tensor of `numel` elements. This is what fused_adam_step
+// expects (it only cares about the float count).
+static DeviceTensorFloatND _bg_flat(const DeviceTensor5D<float>& t) {
+    if (t.data_ptr() == nullptr) return DeviceTensorFloatND();
+    int64_t numel = t.numel();
+    TorchTensorView tv((uint64_t)t.data_ptr(), 4, {numel, 1LL});
+    return DeviceTensorFloatND(tv);
+}
+
+void engine_bilagrid_optim_step(
+    int step,
+    float lr_rgb, float lr_depth, float lr_normal,
+    float tv_weight_rgb, float tv_weight_depth, float tv_weight_normal
+) {
+    _ensure_bilagrid_optim_state();
+    DeviceVector<int32_t> no_per_splat_steps;  // empty -> use scalar step
+    int32_t adam_step = step + 1;
+
+    auto run = [&](DeviceTensor5D<float>& grids,
+                   DeviceTensor5D<float>& grads,
+                   DeviceTensor5D<float>& g1,
+                   DeviceTensor5D<float>& g2,
+                   float lr, float tv_weight) {
+        if (grids.data_ptr() == nullptr || lr <= 0.0f) return;
+        int N = (int)grids.size<0>(), C = (int)grids.size<1>();
+        int L = (int)grids.size<2>(), H = (int)grids.size<3>(), W = (int)grids.size<4>();
+        // Accumulate TV loss gradient in-place into grads.
+        if (tv_weight > 0.0f) {
+            tv_loss_backward(
+                grids.data_ptr(), tv_weight, grads.data_ptr(),
+                N, C, L, H, W, /*inplace=*/true, kBilagridStream);
+        }
+        // Adam step over flat float buffer.
+        fused_adam_step(
+            grids.numel(),
+            _bg_flat(grids), _bg_flat(grads), _bg_flat(g1), _bg_flat(g2),
+            lr, adam_step, no_per_splat_steps,
+            /*l2_reg=*/0.0f, /*l2_reg_offset=*/0.0f);
+        // Zero accumulated gradient for next iteration.
+        grads.zero();
+    };
+
+    run(Buffers::bilagrid_rgb_grids, Buffers::bilagrid_rgb_grads,
+        Buffers::bilagrid_rgb_g1, Buffers::bilagrid_rgb_g2,
+        lr_rgb, tv_weight_rgb);
+    run(Buffers::bilagrid_depth_grids, Buffers::bilagrid_depth_grads,
+        Buffers::bilagrid_depth_g1, Buffers::bilagrid_depth_g2,
+        lr_depth, tv_weight_depth);
+    run(Buffers::bilagrid_normal_grids, Buffers::bilagrid_normal_grads,
+        Buffers::bilagrid_normal_g1, Buffers::bilagrid_normal_g2,
+        lr_normal, tv_weight_normal);
 }
 
 
@@ -1367,7 +1808,11 @@ std::map<std::string, float> engine_train_step(
     float max_screen_size, float max_screen_size_clip_hardness,
     float max_world_size,
     float noise_lr, float noise_lr_final,
-    float relocate_heuristic_weight
+    float relocate_heuristic_weight,
+    // Bilagrid config
+    int bilagrid_cam_idx,
+    float bilagrid_lr_rgb, float bilagrid_lr_depth, float bilagrid_lr_normal,
+    float bilagrid_tv_weight_rgb, float bilagrid_tv_weight_depth, float bilagrid_tv_weight_normal
 ) {
     // Camera + GT: H→D copy into pool
     set_camera_params(width, height, camera_model, viewmats, intrins, dist_coeffs);
@@ -1376,6 +1821,12 @@ std::map<std::string, float> engine_train_step(
 
     // Forward (writes to pool; no D→H)
     forward_3dgs(primitive, sh_degree, packed);
+
+    // Bilagrid forward (between rendering and loss). No-op when disabled.
+    if (Buffers::bilagrid_rgb_enabled || Buffers::bilagrid_depth_enabled ||
+        Buffers::bilagrid_normal_enabled) {
+        engine_bilagrid_forward(bilagrid_cam_idx);
+    }
 
     // Loss + backward (reads pool, writes pool grads; D→H only for scalar loss values)
     std::map<std::string, float> loss_dict = engine_compute_loss_backward(
@@ -1392,6 +1843,24 @@ std::map<std::string, float> engine_train_step(
         quat_norm_reg_weight, sh_reg_weight,
         use_scale_agnostic_mean, quantize_sh,
         use_per_splat_bias_correction);
+
+    // Bilagrid Adam step + TV regularization (after splat optim, before densify).
+    if (Buffers::bilagrid_rgb_enabled || Buffers::bilagrid_depth_enabled ||
+        Buffers::bilagrid_normal_enabled) {
+        engine_bilagrid_optim_step(
+            step,
+            bilagrid_lr_rgb, bilagrid_lr_depth, bilagrid_lr_normal,
+            bilagrid_tv_weight_rgb, bilagrid_tv_weight_depth, bilagrid_tv_weight_normal);
+
+        // Read post-update TV losses for verbose display.
+        float* tv_buf = DevicePool::global().acquire<float>("eng.bg.tv_readout", 3);
+        _engine_bilagrid_tv_into(tv_buf);
+        float h_tv[3] = {0.0f, 0.0f, 0.0f};
+        cudaMemcpy(h_tv, tv_buf, 3 * sizeof(float), cudaMemcpyDeviceToHost);
+        if (Buffers::bilagrid_rgb_enabled)    loss_dict["bilagrid_tv"]        = h_tv[0];
+        if (Buffers::bilagrid_depth_enabled)  loss_dict["bilagrid_depth_tv"]  = h_tv[1];
+        if (Buffers::bilagrid_normal_enabled) loss_dict["bilagrid_normal_tv"] = h_tv[2];
+    }
 
     // Densify (in-place on pool buffers, no copies)
     int num_added = engine_densify_step(

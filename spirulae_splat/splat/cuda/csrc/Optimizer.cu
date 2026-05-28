@@ -38,10 +38,6 @@ static inline int64_t _tv_numel(const TorchTensorView& tv) {
 }
 // Helper: get float* from TorchTensorView
 static inline float* _tv_f(const TorchTensorView& tv) { return (float*)std::get<0>(tv); }
-// Helper: get int32_t* from TorchTensorView
-static inline int32_t* _tv_i32(const TorchTensorView& tv) { return (int32_t*)std::get<0>(tv); }
-// Helper: get uint8_t* from TorchTensorView
-static inline uint8_t* _tv_u8(const TorchTensorView& tv) { return (uint8_t*)std::get<0>(tv); }
 
 __forceinline__ __device__ float3 fmaxf(float3 v, float k) {
     return {

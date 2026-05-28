@@ -110,6 +110,26 @@ void engine_optim_step(
     bool use_per_splat_bias_correction
 );
 
+// --- Bilagrid (RGB / depth / normal) ---
+// Allocates and identity-initializes a bilagrid per camera. Must be called
+// after set_camera_params. RGB applies to the rendered prediction; depth and
+// normal apply to GT (matching the Python flow in training_losses.py).
+
+void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W);
+void engine_init_bilagrid_depth(int n_grids, int L, int H, int W);
+void engine_init_bilagrid_normal(int n_grids, int L, int H, int W);
+
+// Apply forward bilagrid for the selected camera. Must be called between
+// forward_3dgs and engine_compute_loss_backward.
+void engine_bilagrid_forward(int cam_idx);
+
+// Adam step + optional TV-loss regularization for each enabled bilagrid type.
+void engine_bilagrid_optim_step(
+    int step,
+    float lr_rgb, float lr_depth, float lr_normal,
+    float tv_weight_rgb, float tv_weight_depth, float tv_weight_normal
+);
+
 // --- Densification step ---
 
 // Returns: number of splats added (0 if no densification this step)
@@ -167,7 +187,11 @@ std::map<std::string, float> engine_train_step(
     float max_screen_size, float max_screen_size_clip_hardness,
     float max_world_size,
     float noise_lr, float noise_lr_final,
-    float relocate_heuristic_weight
+    float relocate_heuristic_weight,
+    // Bilagrid (no-op when no engine_init_bilagrid_* has been called)
+    int bilagrid_cam_idx,
+    float bilagrid_lr_rgb, float bilagrid_lr_depth, float bilagrid_lr_normal,
+    float bilagrid_tv_weight_rgb, float bilagrid_tv_weight_depth, float bilagrid_tv_weight_normal
 );
 
 // --- Debug rendering ---

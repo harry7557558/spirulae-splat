@@ -37,7 +37,9 @@ from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
 from spirulae_splat.strategy import MCMCStrategy, OpaqueStrategy, SVRasterStrategy
 
-from spirulae_splat.modules.training_losses import SplatTrainingLosses
+# SplatTrainingLosses is no longer used; the only methods that were live are
+# inlined below (get_2dgs_reg_weights, get_static_losses → bilagrid metrics).
+# from spirulae_splat.modules.training_losses import SplatTrainingLosses
 from spirulae_splat.modules.verbose import TrainingVerbose
 from spirulae_splat.modules.optimizer import OptimizerConfig
 from spirulae_splat.splat.cuda._wrapper_per_pixel import (
@@ -561,7 +563,15 @@ class SpirulaeSplatModel(torch.nn.Module):
                 num_cameras=self.num_train_data, device="cpu"
             )
 
-        self.training_losses = SplatTrainingLosses(self.config, self.num_train_data)
+        # SplatTrainingLosses removed; bilagrid lives in C++ via core.engine_init_bilagrid().
+        # self.training_losses = SplatTrainingLosses(self.config, self.num_train_data)
+        # Per-type lazy-init flags. Each bilagrid type is allocated on the first
+        # iteration that proves it's actually needed (config + LR + supervision +
+        # data presence). This avoids the VRAM cost of unused grids for datasets
+        # with tens of thousands of frames.
+        self._bilagrid_rgb_init = False
+        self._bilagrid_depth_init = False
+        self._bilagrid_normal_init = False
         self.training_verboser = TrainingVerbose()
 
         self.step = 0
@@ -738,6 +748,74 @@ class SpirulaeSplatModel(torch.nn.Module):
         self.info = {}
         self.core.zero_grad()
 
+    def get_2dgs_reg_weights(self):
+        """Returns (depth_reg, normal_dist_reg, rgb_dist_reg) and normal_reg,
+        each scaled by distortion_reg_warmup progress. Lifted from training_losses.py."""
+        factor = min(self.step / max(self.config.distortion_reg_warmup, 1), 1)
+        weight_depth_reg = self.config.depth_distortion_reg * factor
+        weight_normal_dist_reg = self.config.normal_distortion_reg * factor
+        weight_rgb_dist_reg = self.config.rgb_distortion_reg * factor
+        weight_normal_reg = self.config.normal_reg_weight * factor
+        return (weight_depth_reg, weight_normal_dist_reg, weight_rgb_dist_reg), weight_normal_reg
+
+    def _maybe_init_bilagrid(self, batch):
+        """Lazily allocate each bilagrid type the first time all of its
+        enablement conditions are met. Called per training iteration.
+
+        A bilagrid is allocated only when:
+          - the corresponding config flag is True;
+          - the base learning rate (config) is positive — a 0 LR means the
+            grid would never update, so allocation is pure waste;
+          - for depth / normal: the relevant supervision weight is positive AND
+            the current batch actually contains that modality (gt depth /
+            normal). RGB always has a gradient path through the rendering loss,
+            so it doesn't gate on a supervision weight.
+
+        Once a type is allocated it stays for the rest of training; LR / TV
+        scheduling is handled per-step in engine_train_step.
+        """
+        cfg = self.config
+        optim_cfg = self.trainer_config.optimizer
+
+        # RGB: config flag + positive base LR. Always has supervision via the
+        # rendering loss, and RGB is always present in training batches.
+        if (not self._bilagrid_rgb_init
+                and cfg.use_bilateral_grid
+                and optim_cfg.bilagrid_lr > 0.0):
+            X, Y, W_g = cfg.bilagrid_shape  # (grid_X, grid_Y, grid_W) → (W, H, L)
+            self.core.engine_init_bilagrid(
+                self.num_train_data,
+                rgb_type=cfg.bilagrid_type,
+                rgb_LHW=(W_g, Y, X),
+            )
+            self._bilagrid_rgb_init = True
+
+        # Depth: config flag + LR + supervision weight + dataset has depth.
+        if (not self._bilagrid_depth_init
+                and cfg.use_bilateral_grid_for_geometry
+                and optim_cfg.bilagrid_depth_lr > 0.0
+                and cfg.depth_supervision_weight > 0.0
+                and batch.get('depth', None) is not None):
+            X, Y, W_g = cfg.bilagrid_shape_geometry
+            self.core.engine_init_bilagrid(
+                self.num_train_data,
+                depth_LHW=(W_g, Y, X),
+            )
+            self._bilagrid_depth_init = True
+
+        # Normal: config flag + LR + supervision weight + dataset has normals.
+        if (not self._bilagrid_normal_init
+                and cfg.use_bilateral_grid_for_geometry
+                and optim_cfg.bilagrid_normal_lr > 0.0
+                and cfg.normal_supervision_weight > 0.0
+                and batch.get('normal', None) is not None):
+            X, Y, W_g = cfg.bilagrid_shape_geometry
+            self.core.engine_init_bilagrid(
+                self.num_train_data,
+                normal_LHW=(W_g, Y, X),
+            )
+            self._bilagrid_normal_init = True
+
     def step_post_backward(self):
         return  # TODO
         if self.config.primitive == 'voxel':
@@ -792,6 +870,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         Returns:
             Mapping of different parameter groups
         """
+        raise NotImplementedError()
         gps = self.get_gaussian_param_groups()
         if self.config.train_background_color:
             gps["background_color"] = [self.background_color]
@@ -999,7 +1078,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             # use_bvh=True,
             relative_scale=self.config.relative_scale,
             camera_model=camera_model,
-            output_distortion=any([c != 0.0 for c in self.training_losses.get_2dgs_reg_weights()[0]]),
+            output_distortion=any([c != 0.0 for c in self.get_2dgs_reg_weights()[0]]),
             compute_hessian_diagonal=self.config.compute_hessian_diagonal,
             **kwargs,
         )
@@ -1264,6 +1343,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             self.core.engine_optim_step(self.step, max_steps, self.config, optim_config)
             self.core.engine_densify_step(self.step, max_steps, self.config)
             return
+        raise NotImplementedError()
 
         # Legacy Python path
         self.core.optim_step(self.config, optim_config, self.step, max_steps)
@@ -1297,10 +1377,8 @@ class SpirulaeSplatModel(torch.nn.Module):
             # if erank > 0:
             #     self.training_verboser.add_metric('erank', erank, last_only=True)
 
-            # Static losses (mostly bilagrid and PPISP)
-            static_losses = self.training_losses.get_static_losses(self.step)
-            for key, value in static_losses.items():
-                self.training_verboser.add_metric(key, value, last_only=True)
+            # Static losses removed; bilagrid TV losses now come from the C++
+            # engine_train_step loss_dict each iteration (see verbose metrics).
 
             # VRAM
             splat_vram, image_vram, splat_x_image_vram = 0.0, 0.0, 0.0
@@ -1555,6 +1633,35 @@ class SpirulaeSplatModel(torch.nn.Module):
         sh_degree_to_use = step // max(cfg.sh_degree_warmup_every, 1)
         max_steps = self.trainer_config.num_iterations
 
+        # --- Bilagrid: lazy per-type init on first iteration that needs it ---
+        self._maybe_init_bilagrid(batch)
+        optim_cfg = self.trainer_config.optimizer
+        max_steps_lr = optim_cfg.max_steps if optim_cfg.max_steps is not None else max_steps
+        # cam_idx is needed whenever any bilagrid is enabled; default 0 otherwise.
+        if (self._bilagrid_rgb_init or self._bilagrid_depth_init or self._bilagrid_normal_init):
+            bilagrid_cam_idx = int(camera.metadata['cam_idx'].flatten()[0].item()) \
+                if camera.metadata is not None and 'cam_idx' in camera.metadata else 0
+        else:
+            bilagrid_cam_idx = 0
+        if self._bilagrid_rgb_init:
+            bilagrid_lr_rgb = optim_cfg.get_scheduled_lr('bilagrid', step, max_steps_lr)
+            bilagrid_tv_weight_rgb = cfg.bilagrid_tv_loss_weight
+        else:
+            bilagrid_lr_rgb = 0.0
+            bilagrid_tv_weight_rgb = 0.0
+        if self._bilagrid_depth_init:
+            bilagrid_lr_depth = optim_cfg.get_scheduled_lr('bilagrid_depth', step, max_steps_lr)
+            bilagrid_tv_weight_depth = cfg.bilagrid_tv_loss_weight_geometry
+        else:
+            bilagrid_lr_depth = 0.0
+            bilagrid_tv_weight_depth = 0.0
+        if self._bilagrid_normal_init:
+            bilagrid_lr_normal = optim_cfg.get_scheduled_lr('bilagrid_normal', step, max_steps_lr)
+            bilagrid_tv_weight_normal = cfg.bilagrid_tv_loss_weight_geometry
+        else:
+            bilagrid_lr_normal = 0.0
+            bilagrid_tv_weight_normal = 0.0
+
         # --- Fused C++ training step ---
         loss_dict = self.core.engine_train_step(
             step, max_steps,
@@ -1565,6 +1672,13 @@ class SpirulaeSplatModel(torch.nn.Module):
             gt_rgb_mask, gt_depth_mask, gt_normal_mask, gt_alpha_mask,
             loss_weights, w_ssim, num_loss_scales, compute_loss_map,
             self.config, self.trainer_config.optimizer,
+            bilagrid_cam_idx=bilagrid_cam_idx,
+            bilagrid_lr_rgb=bilagrid_lr_rgb,
+            bilagrid_lr_depth=bilagrid_lr_depth,
+            bilagrid_lr_normal=bilagrid_lr_normal,
+            bilagrid_tv_weight_rgb=bilagrid_tv_weight_rgb,
+            bilagrid_tv_weight_depth=bilagrid_tv_weight_depth,
+            bilagrid_tv_weight_normal=bilagrid_tv_weight_normal,
         )
 
         # --- Verbose metrics ---
@@ -1581,6 +1695,8 @@ class SpirulaeSplatModel(torch.nn.Module):
         # Engine path: set training data, compute loss + backward in C++
         if self.core.primitive in ['3dgs', 'mip', '3dgut'] and not self.core.use_bvh:
             return self._engine_get_loss_grad(outputs, batch, batch_size)
+
+        raise NotImplementedError()
 
         # Legacy Python path (kept for reference)
         self.info['num_train_data'] = self.num_train_data

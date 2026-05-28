@@ -1,10 +1,10 @@
 from typing import Callable
 
-try:
-    from ._backend import _C
-except:
-    # possibly from setup.py
-    _C = None
+# try:
+from ._backend import _C
+# except:
+#     # possibly from setup.py
+#     _C = None
 
 from ._wrapper import *
 

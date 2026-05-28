@@ -281,53 +281,6 @@ public:
         return zeros_pool(tmpl._size, strides_arr, key_prefix);
     }
 
-#if 0
-
-    static std::vector<DeviceTensorFloatND> empty_like(const TensorArray& other) {
-        std::vector<DeviceTensorFloatND> res;
-        for (int i = 0; i < N; ++i)
-            res.push_back(
-                at::empty({other._size, other._strides[i]}, kTensorOptionF32())
-            );
-        return res;
-    }
-
-    static std::vector<DeviceTensorFloatND> zeros_like(const TensorArray& other) {
-        std::vector<DeviceTensorFloatND> res;
-        for (int i = 0; i < N; ++i) {
-            res.push_back(
-                at::empty({other._size, other._strides[i]}, kTensorOptionF32())
-            );
-            set_zero_tensor(res.back().value());
-        }
-        return res;
-    }
-
-    static std::vector<DeviceTensorFloatND> empty(int64_t size, std::array<int32_t, N> strides) {
-        std::vector<DeviceTensorFloatND> res;
-        for (int i = 0; i < N; ++i)
-            res.push_back(
-                at::empty({size, strides[i]}, kTensorOptionF32())
-            );
-        return res;
-    }
-
-    static std::vector<DeviceTensorFloatND> zeros(int64_t size, std::array<int32_t, N> strides) {
-        std::vector<DeviceTensorFloatND> res;
-        for (int i = 0; i < N; ++i) {
-            if (strides[i] < 0) {
-                res.push_back(std::nullopt);
-                continue;
-            }
-            res.push_back(
-                at::empty({size, strides[i]}, kTensorOptionF32())
-            );
-            set_zero_tensor(res.back().value());
-        }
-        return res;
-    }
-#endif
-
 };
 
 
