@@ -236,6 +236,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // FusedProjectionBwdOptim.cuh
     m.def("fused_projection_bwd_optimizer_3dgut", &fused_projection_bwd_optimizer_3dgut);
 
+    // Visualizer.cuh
+    m.def("blit_train_cameras", &blit_train_cameras_tensor);
+
     // Engine.h - unified forward/backward/optimize
     m.def("set_data_3dgs", &set_data_3dgs);
     m.def("set_camera_params", &set_camera_params);
@@ -274,8 +277,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // BilagridUtils.cuh
     m.def("dct3d_type1_ortho", &dct3d_type1_ortho_tensor);
+#endif
 
     // Visualizer.cuh
     m.def("blit_train_cameras", &blit_train_cameras_tensor);
-#endif
 }

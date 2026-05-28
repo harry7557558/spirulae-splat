@@ -9,3 +9,24 @@
 
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */
 
+
+
+void blit_train_cameras_tensor(
+    TorchTensorView render_rgbs,      // [H, W, C] float32
+    TorchTensorView render_depths,    // [H, W, 1] float32
+    TorchTensorView render_alphas,    // [H, W, 1] float32
+    const int view_camera_model,
+    TorchTensorView view_intrins,     // [1, 4] or [4] float32
+    TorchTensorView view_viewmat,     // [4, 4] float32
+    TorchTensorView view_dist_coeffs,
+    TorchTensorView intrins,          // [N, 4] float32
+    TorchTensorView widths,           // [N] int32
+    TorchTensorView heights,          // [N] int32
+    TorchTensorView camera_models,    // [N] int32
+    TorchTensorView dist_coeffs,
+    TorchTensorView camera_to_worlds, // [N, 3, 4] float32
+    TorchTensorView thumbnails,       // [B, H, W, 4] uint8
+    float camera_size,
+    bool show_training_cameras,
+    TorchTensorView out_rgb           // [H, W, 3] uint8, pre-allocated
+);

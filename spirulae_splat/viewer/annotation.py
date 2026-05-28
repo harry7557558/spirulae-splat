@@ -3,7 +3,7 @@ import numpy as np
 from spirulae_splat.modules.camera import Cameras, CameraType, _COLMAP_CAMERA_MODEL_TO_TYPE
 from spirulae_splat.viewer_legacy.utils import triangle_verts_to_quat_scale_mean
 
-from spirulae_splat.splat.cuda import _make_lazy_cuda_func
+from spirulae_splat.splat.cuda import _C
 
 
 def knn_dist(x: torch.Tensor, k: int = 4):
@@ -42,8 +42,6 @@ def annotate_train_cameras(
         depths = depths.squeeze(0)
     if alpha.ndim == 4:
         alpha = alpha.squeeze(0)
-
-    return (255*torch.clip(rgb,0,1)).to(torch.uint8)
 
     key = '_annotation_size'
     if not hasattr(cameras, key):
@@ -87,7 +85,7 @@ def annotate_train_cameras(
     R = view_camera.camera_to_worlds[:, :3, :3]  # 3 x 3
     T = view_camera.camera_to_worlds[:, :3, 3:4]  # 3 x 1
     # T = T * relative_scale
-    R = R * torch.tensor([[[1.0, -1.0, -1.0]]])
+    R = R * torch.tensor([[[1.0, -1.0, -1.0]]]).to(R)
     R_inv = R.transpose(-1, -2)
     T_inv = -torch.bmm(R_inv, T)
     view_viewmats = torch.eye(4, dtype=view_camera.camera_to_worlds.dtype)[None].repeat(len(view_camera), 1, 1)
@@ -115,27 +113,31 @@ def annotate_train_cameras(
     else:
         camera_models = getattr(cameras, key)
 
-    from time import perf_counter
-    torch.cuda.synchronize()
-    time0 = perf_counter()
-    # depths = depths * relative_scale
-    rgb = _make_lazy_cuda_func("blit_train_cameras")(
-        rgb, depths, alpha,
+    def _tv(t):
+        if t is None:
+            return (0, 4, [0])
+        t = t.contiguous()
+        assert t.is_cuda, t.device
+        return (t.data_ptr(), t.element_size(), list(t.shape))
+
+    h, w = rgb.shape[0], rgb.shape[1]
+    out_rgb = torch.empty(h, w, 3, dtype=torch.uint8, device=rgb.device)
+
+    _C.blit_train_cameras(
+        _tv(rgb), _tv(depths), _tv(alpha),
         camera_model_mapper[view_camera.camera_type[0]],
-        view_camera.intrins.cuda(),
-        view_viewmats.cuda(),
-        view_camera.distortion_params.cuda(),
-        cameras.intrins,
-        cameras.width,
-        cameras.height,
-        camera_models,
-        cameras.distortion_params,
-        camera_to_worlds,
-        thumbnails.cuda(),
+        _tv(view_camera.intrins.cuda()),
+        _tv(view_viewmats.cuda()),
+        _tv(view_camera.distortion_params.cuda()),
+        _tv(cameras.intrins),
+        _tv(cameras.width),
+        _tv(cameras.height),
+        _tv(camera_models),
+        _tv(cameras.distortion_params),
+        _tv(camera_to_worlds),
+        _tv(thumbnails.cuda()),
         size,
         kwargs.get("show_training_cameras", False),
+        _tv(out_rgb),
     )
-    torch.cuda.synchronize()
-    time1 = perf_counter()
-    # print(1e3*(time1-time0), 'ms')
-    return rgb
+    return out_rgb

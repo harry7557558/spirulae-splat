@@ -1,5 +1,6 @@
 #include <cuda_runtime.h>
 #include <cstdint>
+#include <cub/cub.cuh>
 
 #include "generated/slang.cuh"
 namespace SlangProjectionUtils {
@@ -11,6 +12,7 @@ namespace SlangProjectionUtils {
 #include <gsplat/Common.h>
 #include <gsplat/Utils.cuh>
 
+#include "Tensor.h"
 #include "types.cuh"
 #include "common.cuh"
 
@@ -18,8 +20,6 @@ namespace SlangProjectionUtils {
 
 using ssplat::CameraModelType;
 
-
-#if 0
 
 
 inline constexpr int kNumFrustumSegments = 16;
@@ -948,60 +948,71 @@ __global__ void blit_with_bvh_kernel(
     out_rgbs.store3(pix_y, pix_x, {(uint8_t)render_rgb.x, (uint8_t)render_rgb.y, (uint8_t)render_rgb.z});
 }
 
+// TorchTensorView -> TensorView helper (contiguous layout)
+template<typename T, int ndim>
+static TensorView<T, ndim> tv_to_view(const TorchTensorView& tv) {
+    TensorView<T, ndim> view;
+    view.data = (T*)std::get<0>(tv);
+    auto& shape = std::get<2>(tv);
+    long stride = 1;
+    for (int i = ndim - 1; i >= 0; i--) {
+        view.shape[i] = (i < (int)shape.size()) ? (long)shape[i] : 1L;
+        view.strides[i] = stride;
+        stride *= view.shape[i];
+    }
+    return view;
+}
+
+__global__ void fill_identity_kernel(int32_t* __restrict__ data, uint32_t n) {
+    uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) data[idx] = (int32_t)idx;
+}
+
+struct BvhResult {
+    int2* nodes;
+    float3* aabb;
+};
+
 template<VisPrimitive primitive>
-inline std::tuple<at::Tensor, at::Tensor> build_bvh(
+inline BvhResult build_bvh(
     uint32_t num_elem,
-    const at::Tensor& buffer,
+    const float4* buffer,
     float3 rootAABBMin,
     float3 rootAABBMax,
-    c10::TensorOptions options
+    const std::string& key_prefix
 ) {
-    // Morton sorting
-    at::Tensor morton = at::empty({num_elem}, options.dtype(at::kLong));
-    fill_sorting_keys_kernel<primitive>
-    <<<_LAUNCH_ARGS_1D(num_elem, 256)>>>(
-        num_elem,
-        (float4*)buffer.data_ptr<float>(),
-        rootAABBMin, rootAABBMax,
-        (uint64_t*)morton.data_ptr<int64_t>()
-    );
+    auto& pool = DevicePool::global();
+
+    uint64_t* morton = pool.acquire<uint64_t>(key_prefix + ".morton", num_elem);
+    fill_sorting_keys_kernel<primitive><<<_LAUNCH_ARGS_1D(num_elem, 256)>>>(
+        num_elem, buffer, rootAABBMin, rootAABBMax, morton);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    auto [sorted_morton, argsort] = at::sort(morton);
-    argsort = argsort.to(at::kInt);
-
-    // Build tree
-    at::Tensor internal_nodes = at::empty({num_elem-1, 2}, options.dtype(at::kInt));
-    at::Tensor parent_nodes = at::empty({num_elem-1}, options.dtype(at::kInt));
-    cudaMemset(parent_nodes.data_ptr<int32_t>(), 0xff, (num_elem-1)*sizeof(int32_t));
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-    fill_lbvh_internal_nodes_kernel<<<_LAUNCH_ARGS_1D(num_elem-1, 256)>>>(
-        num_elem,
-        (uint64_t*)sorted_morton.data_ptr<int64_t>(),
-        argsort.data_ptr<int32_t>(),
-        (int2*)internal_nodes.data_ptr<int32_t>(),
-        parent_nodes.data_ptr<int32_t>()
-    );
+    int32_t* argsort_in = pool.acquire<int32_t>(key_prefix + ".argsort_in", num_elem);
+    fill_identity_kernel<<<_LAUNCH_ARGS_1D(num_elem, 256)>>>(argsort_in, num_elem);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    // Compute AABB
-    at::Tensor treeAABB = at::empty({num_elem, 2, 3}, options);
-    fill_tree_init_aabb_kernel<<<_LAUNCH_ARGS_1D(num_elem-1, 256)>>>(
-        num_elem-1,
-        (float3*)treeAABB.data_ptr<float>()
-    );
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-    compute_lbvh_aabb_kernel<primitive>
-    <<<_LAUNCH_ARGS_1D(num_elem-1, 256)>>>(
-        num_elem,
-        (float4*)buffer.data_ptr<float>(),
-        (int2*)internal_nodes.data_ptr<int32_t>(),
-        parent_nodes.data_ptr<int32_t>(),
-        (float3*)treeAABB.data_ptr<float>()
-    );
+    uint64_t* sorted_morton = pool.acquire<uint64_t>(key_prefix + ".sorted_morton", num_elem);
+    int32_t* argsort = pool.acquire<int32_t>(key_prefix + ".argsort", num_elem);
+    CUB_WRAPPER(cub::DeviceRadixSort::SortPairs,
+        morton, sorted_morton, argsort_in, argsort, (int)num_elem);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    return std::make_tuple(internal_nodes, treeAABB);
+    int2* internal_nodes = (int2*)pool.acquire<int32_t>(key_prefix + ".nodes", (size_t)(num_elem - 1) * 2);
+    int32_t* parent_nodes = pool.acquire<int32_t>(key_prefix + ".parents", num_elem - 1);
+    cudaMemset(parent_nodes, 0xff, (num_elem - 1) * sizeof(int32_t));
+    fill_lbvh_internal_nodes_kernel<<<_LAUNCH_ARGS_1D(num_elem - 1, 256)>>>(
+        num_elem, sorted_morton, argsort, internal_nodes, parent_nodes);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    float3* treeAABB = pool.acquire<float3>(key_prefix + ".aabb", (size_t)num_elem * 2);
+    fill_tree_init_aabb_kernel<<<_LAUNCH_ARGS_1D(num_elem - 1, 256)>>>(num_elem - 1, treeAABB);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+    compute_lbvh_aabb_kernel<primitive><<<_LAUNCH_ARGS_1D(num_elem - 1, 256)>>>(
+        num_elem, buffer, internal_nodes, parent_nodes, treeAABB);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    return {internal_nodes, treeAABB};
 }
 
 __global__ void compute_min_max_kernel(
@@ -1030,181 +1041,126 @@ __global__ void compute_min_max_kernel(
 
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor blit_train_cameras_tensor(
-    at::Tensor render_rgbs,  // [H, W, 3]
-    at::Tensor render_depths,  // [H, W, 1]
-    at::Tensor render_alphas,  // [H, W, 1]
+void blit_train_cameras_tensor(
+    TorchTensorView render_rgbs,      // [H, W, C] float32
+    TorchTensorView render_depths,    // [H, W, 1] float32
+    TorchTensorView render_alphas,    // [H, W, 1] float32
     const int view_camera_model,
-    const at::Tensor view_intrins,  // [4]
-    const at::Tensor view_viewmat,  // [4, 4]
-    const TorchTensorView view_dist_coeffs,
-    const at::Tensor intrins,  // [N, 4]
-    const at::Tensor widths,  // [N]
-    const at::Tensor heights,  // [N]
-    const at::Tensor camera_models,  // [N]
-    const TorchTensorView dist_coeffs,
-    const at::Tensor camera_to_worlds,  // [N, 3, 4]
-    at::Tensor thumbnails,
-    const float camera_size,
-    const bool show_training_cameras
+    TorchTensorView view_intrins,     // [1, 4] or [4] float32
+    TorchTensorView view_viewmat,     // [4, 4] float32
+    TorchTensorView view_dist_coeffs,
+    TorchTensorView intrins,          // [N, 4] float32
+    TorchTensorView widths,           // [N] int32
+    TorchTensorView heights,          // [N] int32
+    TorchTensorView camera_models,    // [N] int32
+    TorchTensorView dist_coeffs,
+    TorchTensorView camera_to_worlds, // [N, 3, 4] float32
+    TorchTensorView thumbnails,       // [B, H, W, 4] uint8
+    float camera_size,
+    bool show_training_cameras,
+    TorchTensorView out_rgb           // [H, W, 3] uint8, pre-allocated
 ) {
-    DEVICE_GUARD(render_rgbs);
-    CHECK_CUDA(render_rgbs);
-    CHECK_CUDA(render_depths);
-    CHECK_CUDA(render_alphas);
-    CHECK_INPUT(view_intrins);
-    CHECK_INPUT(view_viewmat);
-    CHECK_INPUT(intrins);
-    CHECK_INPUT(widths);
-    CHECK_INPUT(heights);
-    CHECK_INPUT(camera_models);
-    CHECK_INPUT(camera_to_worlds);
-    CHECK_INPUT(thumbnails);
+    auto& rgb_shape = std::get<2>(render_rgbs);
+    int64_t h = rgb_shape[0], w = rgb_shape[1], c = rgb_shape[2];
+    int64_t n = std::get<2>(intrins)[0];
 
-    auto h = render_rgbs.size(-3);
-    auto w = render_rgbs.size(-2);
-    auto c = render_rgbs.size(-1);
-    auto n = intrins.size(0);
+    constexpr int kFloatPInfByte = 0x7f;
+    constexpr int kFloatNInfByte = 0xfe;
 
-    constexpr int kFloatPInfByte = 0x7f;  // 0x7f7f7f7f -> 3.39615e+38
-    constexpr int kFloatNInfByte = 0xfe;  // 0xfefefefe -> -1.69474e+38
-
-    at::Tensor min_max_tensor;
+    float* min_max = nullptr;
     if (c == 1) {
-        min_max_tensor = at::empty({2}, render_rgbs.options());
-        cudaMemset(min_max_tensor.data_ptr<float>()+0, kFloatPInfByte, sizeof(float));
-        cudaMemset(min_max_tensor.data_ptr<float>()+1, kFloatNInfByte, sizeof(float));
+        min_max = DevicePool::global().acquire<float>("vis.min_max", 2);
+        cudaMemset(min_max + 0, kFloatPInfByte, sizeof(float));
+        cudaMemset(min_max + 1, kFloatNInfByte, sizeof(float));
         compute_min_max_kernel<<<_LAUNCH_ARGS_2D(w, h, 16, 16)>>>(
-            tensor2view<float, 3>(render_rgbs),
-            min_max_tensor.data_ptr<float>()
-        );
+            tv_to_view<float, 3>(render_rgbs), min_max);
         CHECK_DEVICE_ERROR(cudaGetLastError());
     }
 
     if (!show_training_cameras) {
-        at::Tensor out_rgb = at::empty({h, w, 3}, render_rgbs.options().dtype(at::kByte));
         blit_with_bvh_kernel<<<_LAUNCH_ARGS_2D(w, h, 8, 4)>>>(
-            tensor2view<float, 3>(render_rgbs),
-            tensor2view<float, 3>(render_depths),
-            tensor2view<float, 3>(render_alphas),
-            view_camera_model,
-            w, h,
-            (float4*)view_intrins.data_ptr<float>(),
-            view_viewmat.data_ptr<float>(),
+            tv_to_view<float, 3>(render_rgbs),
+            tv_to_view<float, 3>(render_depths),
+            tv_to_view<float, 3>(render_alphas),
+            view_camera_model, w, h,
+            (float4*)std::get<0>(view_intrins),
+            (float*)std::get<0>(view_viewmat),
             view_dist_coeffs,
             nullptr, nullptr, nullptr,
             nullptr, nullptr, nullptr,
-            tensor2view<uint8_t, 4>(thumbnails),
-            c == 1 ? min_max_tensor.data_ptr<float>() : nullptr,
-            tensor2view<uint8_t, 3>(out_rgb)
+            tv_to_view<uint8_t, 4>(thumbnails),
+            min_max,
+            tv_to_view<uint8_t, 3>(out_rgb)
         );
         CHECK_DEVICE_ERROR(cudaGetLastError());
-        return out_rgb;
+        return;
     }
 
-    uint32_t num_lss = n*8*kNumFrustumSegments;
-    uint32_t num_tri = n*4*kNumFrustumFaces*kNumFrustumFaces;
-    at::Tensor lss_buffer = at::empty({num_lss, 8}, render_rgbs.options());
-    at::Tensor tri_buffer = at::empty({num_tri, 16}, render_rgbs.options());
+    uint32_t num_lss = (uint32_t)(n * 8 * kNumFrustumSegments);
+    uint32_t num_tri = (uint32_t)(n * 4 * kNumFrustumFaces * kNumFrustumFaces);
+    float4* lss_buffer = DevicePool::global().acquire<float4>("vis.lss", (size_t)num_lss * 2);
+    float4* tri_buffer = DevicePool::global().acquire<float4>("vis.tri", (size_t)num_tri * 4);
     fill_frustum_segments_kernel
-    <<<_LAUNCH_ARGS_1D(n*4*kNumFrustumSegments, 4*kNumFrustumSegments)>>>(
-        (float4*)intrins.data_ptr<float>(),
-        widths.data_ptr<int32_t>(),
-        heights.data_ptr<int32_t>(),
-        camera_models.data_ptr<int32_t>(),
+    <<<_LAUNCH_ARGS_1D(n * 4 * kNumFrustumSegments, 4 * kNumFrustumSegments)>>>(
+        (float4*)std::get<0>(intrins),
+        (int32_t*)std::get<0>(widths),
+        (int32_t*)std::get<0>(heights),
+        (int32_t*)std::get<0>(camera_models),
         dist_coeffs,
-        camera_to_worlds.data_ptr<float>(),
+        (float*)std::get<0>(camera_to_worlds),
         camera_size,
-        (float4*)lss_buffer.data_ptr<float>(),
-        (float4*)tri_buffer.data_ptr<float>()
+        lss_buffer,
+        tri_buffer
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    // compute global AABB
-    at::Tensor root_aabb_tensor = at::empty({2, 3}, render_rgbs.options());
-    cudaMemset(root_aabb_tensor.data_ptr<float>()+0, kFloatPInfByte, 3*sizeof(float));
-    cudaMemset(root_aabb_tensor.data_ptr<float>()+3, kFloatNInfByte, 3*sizeof(float));
+    float3* root_aabb = DevicePool::global().acquire<float3>("vis.root_aabb", 2);
+    cudaMemset(root_aabb + 0, kFloatPInfByte, sizeof(float3));
+    cudaMemset(root_aabb + 1, kFloatNInfByte, sizeof(float3));
     compute_aabb_kernel<VisPrimitive::LinearSweptSphere>
-    <<<_LAUNCH_ARGS_1D(num_lss, 256)>>>(
-        num_lss,
-        (float4*)lss_buffer.data_ptr<float>(),
-        (float3*)root_aabb_tensor.data_ptr<float>()
-    );
+    <<<_LAUNCH_ARGS_1D(num_lss, 256)>>>(num_lss, lss_buffer, root_aabb);
     CHECK_DEVICE_ERROR(cudaGetLastError());
     compute_aabb_kernel<VisPrimitive::Triangle>
-    <<<_LAUNCH_ARGS_1D(num_tri, 256)>>>(
-        num_tri,
-        (float4*)tri_buffer.data_ptr<float>(),
-        (float3*)root_aabb_tensor.data_ptr<float>()
-    );
+    <<<_LAUNCH_ARGS_1D(num_tri, 256)>>>(num_tri, tri_buffer, root_aabb);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    glm::vec3 rootAABBMin, rootAABBMax;
+    float3 rootAABBMin, rootAABBMax;
     {
-        root_aabb_tensor = root_aabb_tensor.cpu();
-        glm::vec3* root_aabb = (glm::vec3*)root_aabb_tensor.data_ptr<float>();
-        rootAABBMin = root_aabb[0];
-        rootAABBMax = root_aabb[1];
-        glm::vec3 center = 0.5f * (rootAABBMax + rootAABBMin);
-        glm::vec3 extend = 0.5f * (rootAABBMax - rootAABBMin);
-        float max_size = 1.01f * fmax(extend.x, fmax(extend.y, extend.z));
-        rootAABBMin = center - glm::vec3(max_size);
-        rootAABBMax = center + glm::vec3(max_size);
+        float h_aabb[6];
+        cudaMemcpy(h_aabb, root_aabb, 6 * sizeof(float), cudaMemcpyDeviceToHost);
+        float cx = 0.5f * (h_aabb[3] + h_aabb[0]);
+        float cy = 0.5f * (h_aabb[4] + h_aabb[1]);
+        float cz = 0.5f * (h_aabb[5] + h_aabb[2]);
+        float ex = 0.5f * (h_aabb[3] - h_aabb[0]);
+        float ey = 0.5f * (h_aabb[4] - h_aabb[1]);
+        float ez = 0.5f * (h_aabb[5] - h_aabb[2]);
+        float ms = 1.01f * std::max({ex, ey, ez});
+        rootAABBMin = {cx - ms, cy - ms, cz - ms};
+        rootAABBMax = {cx + ms, cy + ms, cz + ms};
     }
-    // printf("AABB: %f %f %f  %f %f %f\n", rootAABBMin.x, rootAABBMin.y, rootAABBMin.z, rootAABBMax.x, rootAABBMax.y, rootAABBMax.z);
 
-    // build tree for LSS
-    auto [lss_nodes, lss_aabb] = build_bvh<VisPrimitive::LinearSweptSphere>(
-        num_lss, lss_buffer,
-        *(float3*)&rootAABBMin, *(float3*)&rootAABBMax,
-        render_rgbs.options()
-    );
-    auto [tri_nodes, tri_aabb] = build_bvh<VisPrimitive::Triangle>(
-        num_tri, tri_buffer,
-        *(float3*)&rootAABBMin, *(float3*)&rootAABBMax,
-        render_rgbs.options()
-    );
-
-    #if 0
-    blit_aabb_bvh_kernel<<<_LAUNCH_ARGS_2D(w, h, 8, 4)>>>(
-        tensor2view<float, 3>(render_rgbs),
-        tensor2view<float, 3>(render_depths),
-        tensor2view<float, 3>(render_alphas),
-        view_camera_model,
-        w, h,
-        (float4*)view_intrins.data_ptr<float>(),
-        view_viewmat.data_ptr<float>(),
-        view_dist_coeffs,
-        num_lss-2,
-        (float3*)lss_aabb.data_ptr<float>()
-    );
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-    #endif
-
-    at::Tensor out_rgb = at::empty({h, w, 3}, render_rgbs.options().dtype(at::kByte));
+    auto lss_bvh = build_bvh<VisPrimitive::LinearSweptSphere>(
+        num_lss, lss_buffer, rootAABBMin, rootAABBMax, "vis.lss_bvh");
+    auto tri_bvh = build_bvh<VisPrimitive::Triangle>(
+        num_tri, tri_buffer, rootAABBMin, rootAABBMax, "vis.tri_bvh");
 
     blit_with_bvh_kernel<<<_LAUNCH_ARGS_2D(w, h, 8, 4)>>>(
-        tensor2view<float, 3>(render_rgbs),
-        tensor2view<float, 3>(render_depths),
-        tensor2view<float, 3>(render_alphas),
-        view_camera_model,
-        w, h,
-        (float4*)view_intrins.data_ptr<float>(),
-        view_viewmat.data_ptr<float>(),
+        tv_to_view<float, 3>(render_rgbs),
+        tv_to_view<float, 3>(render_depths),
+        tv_to_view<float, 3>(render_alphas),
+        view_camera_model, w, h,
+        (float4*)std::get<0>(view_intrins),
+        (float*)std::get<0>(view_viewmat),
         view_dist_coeffs,
-        (float4*)lss_buffer.data_ptr<float>(),
-        (int2*)lss_nodes.data_ptr<int32_t>(),
-        (float3*)lss_aabb.data_ptr<float>(),
-        (float4*)tri_buffer.data_ptr<float>(),
-        (int2*)tri_nodes.data_ptr<int32_t>(),
-        (float3*)tri_aabb.data_ptr<float>(),
-        tensor2view<uint8_t, 4>(thumbnails),
-        c == 1 ? min_max_tensor.data_ptr<float>() : nullptr,
-        tensor2view<uint8_t, 3>(out_rgb)
+        lss_buffer,
+        lss_bvh.nodes,
+        lss_bvh.aabb,
+        tri_buffer,
+        tri_bvh.nodes,
+        tri_bvh.aabb,
+        tv_to_view<uint8_t, 4>(thumbnails),
+        min_max,
+        tv_to_view<uint8_t, 3>(out_rgb)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return out_rgb;
 }
-
-#endif
