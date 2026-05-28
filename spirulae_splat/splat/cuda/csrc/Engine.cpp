@@ -131,8 +131,11 @@ DeviceTensor3D<float3> fwd_normal_pre_bilagrid;
 bool bilagrid_normal_enabled = false;
 bool bilagrid_normal_optim_initialized = false;
 
-// Camera index used for the current step's bilagrid forward.
-int bilagrid_cur_cam_idx = 0;
+// Per-image-in-batch camera indices for the current step (used by both
+// bilagrid and PPISP). Length equals current batch size (Buffers::num_cameras).
+// Empty when no cam_idx was supplied — kernels then fall back to identity
+// (image `bid` -> grid slot `bid`).
+DeviceVector<int32_t> bilagrid_cur_cam_indices;
 
 // ============================================================================
 // PPISP state (per-camera RGB-only photometric correction).
@@ -149,10 +152,6 @@ std::string ppisp_param_type;                // "original" | "rqs"
 int ppisp_num_params = 0;                    // 36 (original) | 39 (rqs)
 bool ppisp_enabled = false;
 bool ppisp_optim_initialized = false;
-// Per-camera-step shared scratch for the regularization forward/backward.
-// Allocated lazily via DevicePool.
-int ppisp_cur_cam_idx = 0;
-
 } // namespace Buffers
 
 // Forward declaration for affine identity initializer (BilagridInit.cu).
@@ -166,6 +165,11 @@ void ppisp_original_default_init(
 // Forward declaration for elementwise grad accumulation (PpispInit.cu).
 void ppisp_add_into_grad(
     const float* src, float* dst, size_t n, cudaStream_t stream);
+
+// Forward declaration for scattering per-image scalars into a per-camera table.
+void bilagrid_scatter_floats(
+    const float* src, const int* indices, int n,
+    float* dst, cudaStream_t stream);
 
 
 // Create DeviceTensorFloatND from TorchTensorView by appending trailing 1 (for float-typed access)
@@ -181,7 +185,7 @@ static DeviceTensor2D<float4> vec_to_2d_float4(const DeviceVector<float4>& vec) 
     return DeviceTensor2D<float4>(tv);
 }
 
-// --- Conversion helpers: DeviceVector/DeviceTensor → TorchTensorView (for external functions) ---
+// --- Conversion helpers: DeviceVector/DeviceTensor -> TorchTensorView (for external functions) ---
 
 template<typename T>
 static TorchTensorView _dv_tv(const DeviceVector<T>& dv) {
@@ -231,14 +235,14 @@ static bool _is_device_ptr(const void* ptr) {
     cudaPointerAttributes attr{};
     cudaError_t err = cudaPointerGetAttributes(&attr, ptr);
     if (err != cudaSuccess) {
-        // Pageable host pointer is unregistered → reset error and treat as host.
+        // Pageable host pointer is unregistered -> reset error and treat as host.
         cudaGetLastError();
         return false;
     }
     return attr.type == cudaMemoryTypeDevice || attr.type == cudaMemoryTypeManaged;
 }
 
-// --- Pool allocation + H→D copy from a host TorchTensorView, OR zero-copy view of device source ---
+// --- Pool allocation + H->D copy from a host TorchTensorView, OR zero-copy view of device source ---
 // If source pointer is already device memory, returns a view (no pool allocation, no copy).
 // If source is host, copies into pool with given key and returns view of pool buffer.
 
@@ -298,7 +302,7 @@ static DeviceTensor3D<T> _hv_to_dt3d(const std::string& key, const TorchTensorVi
     return DeviceTensor3D<T>(tv);
 }
 
-// Copy DeviceVector → host TorchTensorView (D→H)
+// Copy DeviceVector -> host TorchTensorView (D->H)
 template<typename T>
 static void _dv_to_host(const DeviceVector<T>& dv, const TorchTensorView& host_tv) {
     if (dv.data_ptr() == nullptr || std::get<0>(host_tv) == 0) return;
@@ -370,7 +374,7 @@ void set_camera_params(
         std::get<2>(dist_coeffs)[0] != Buffers::num_cameras)
         throw std::runtime_error("setCameraParams: num_cameras mismatch");
 
-    // viewmats: PyTorch shape [C, 4, 4] → treat as DeviceTensor2D<float4> [C, 4]
+    // viewmats: PyTorch shape [C, 4, 4] -> treat as DeviceTensor2D<float4> [C, 4]
     int64_t C = std::get<2>(viewmats)[0];
     {
         uint64_t src_ptr = std::get<0>(viewmats);
@@ -503,7 +507,7 @@ void forward_3dgs(
         Buffers::fwd_gaussian_ids = DeviceVector<int32_t>();
         Buffers::fwd_aabb = aabb_2d;                           // [C, N] for backward
         aabb_nd = DeviceTensorFloatND(aabb_2d);                // [C, N, 4] for intersect
-        depths_nd = DeviceTensorFloatND(depths_2d);            // [C, N] → numel=C*N for intersect
+        depths_nd = DeviceTensorFloatND(depths_2d);            // [C, N] -> numel=C*N for intersect
     }
 
     // --- Tile intersection (AABB mode) ---
@@ -567,7 +571,7 @@ void engine_debug_forward(
     if (std::get<0>(Buffers::fwd_renders).data_ptr() == nullptr)
         throw std::runtime_error("engine_debug_forward: forward_3dgs must be called first");
 
-    // Swap in overrides (H→D copy for host tensor)
+    // Swap in overrides (H->D copy for host tensor)
     DeviceVector<float3> saved_dc = Buffers::world_features_dc;
     int saved_sh = Buffers::sh_degree;
     if (std::get<0>(override_features_dc) != 0)
@@ -577,7 +581,7 @@ void engine_debug_forward(
 
     forward_3dgs(Buffers::primitive, Buffers::sh_degree, Buffers::packed);
 
-    // Copy rgb result D→H
+    // Copy rgb result D->H
     auto& rgb = std::get<0>(Buffers::fwd_renders);
     if (rgb.data_ptr() && std::get<0>(out_rgb) != 0) {
         cudaMemcpy((void*)std::get<0>(out_rgb), rgb.data_ptr(),
@@ -901,7 +905,7 @@ std::map<std::string, float> engine_compute_loss_backward(
     TorchTensorView depth_dist = _tv_null();
     TorchTensorView normal_dist = _tv_null();
 
-    // Depth → normal: derive depth_normal from rendered depth when gt_normal is provided
+    // Depth -> normal: derive depth_normal from rendered depth when gt_normal is provided
     // (matches training_losses.py logic: pred_normal is None, pred_depth exists, gt_normal exists).
     bool compute_depth_normal = (Buffers::gt_normal.data_ptr() != nullptr);
     bool is_ray_depth = (Buffers::primitive != "3dgs" && Buffers::primitive != "mip");
@@ -976,8 +980,8 @@ std::map<std::string, float> engine_compute_loss_backward(
     );
 
     // --- PPISP backward hook ---
-    // Forward order is render → bilagrid → PPISP → loss, so PPISP backward
-    // runs FIRST: it rewrites v_render_rgb (post-PPISP → pre-PPISP) and
+    // Forward order is render -> bilagrid -> PPISP -> loss, so PPISP backward
+    // runs FIRST: it rewrites v_render_rgb (post-PPISP -> pre-PPISP) and
     // accumulates the per-camera PPISP parameter gradient. The bilagrid hook
     // below then consumes the pre-PPISP v_render_rgb.
     if (Buffers::ppisp_enabled) {
@@ -986,7 +990,7 @@ std::map<std::string, float> engine_compute_loss_backward(
     }
 
     // --- Bilagrid backward hook ---
-    // Transforms v_render_rgb (post-bilagrid → pre-bilagrid) and accumulates
+    // Transforms v_render_rgb (post-bilagrid -> pre-bilagrid) and accumulates
     // gradients into bilagrid_*_grads for any enabled bilagrid types. The
     // updated v_render_rgb then flows into rasterization backward as usual.
     // For depth / normal (gt-side), the loss-side gradient is consumed here
@@ -1003,7 +1007,7 @@ std::map<std::string, float> engine_compute_loss_backward(
     // TODO: color space conversion (rgb_to_srgb) forward/backward
     // TODO: background blending forward/backward
 
-    // Depth → normal backward: propagate v_depth_normal grads into v_render_depth (in-place add)
+    // Depth -> normal backward: propagate v_depth_normal grads into v_render_depth (in-place add)
     if (compute_depth_normal) {
         depth_to_normal_backward(
             Buffers::camera_model_str,
@@ -1224,14 +1228,35 @@ static void _engine_bilagrid_tv_into(float* tv_buf3_device) {
     if (Buffers::bilagrid_normal_enabled) run(Buffers::bilagrid_normal_grids, 2);
 }
 
-// Apply bilagrid forward in-place for each enabled type for the given camera.
+// Populate Buffers::bilagrid_cur_cam_indices from a host or device int32
+// tensor. Empty/null tensor -> leave it null (kernels fall back to identity).
+// Called by engine_bilagrid_forward / engine_ppisp_forward, and directly by
+// engine_train_step before the forwards.
+static void _set_cur_cam_indices(TorchTensorView tv) {
+    if (std::get<0>(tv) == 0 || std::get<2>(tv).empty()) {
+        Buffers::bilagrid_cur_cam_indices = DeviceVector<int32_t>();
+    } else {
+        Buffers::bilagrid_cur_cam_indices = _hv_to_dv<int32_t>(
+            "eng.bg.cam_indices", tv);
+    }
+}
+
+// Apply bilagrid forward in-place for each enabled type for the current batch.
 // Saves a pre-bilagrid copy used by the backward pass.
-void engine_bilagrid_forward(int cam_idx) {
-    Buffers::bilagrid_cur_cam_idx = cam_idx;
+//
+// The kernel uses indirect grid indexing: each image in the batch (index `ni`
+// inside the kernel) reads from the grid slot `cam_indices[ni]`. This allows
+// a multi-image batch with different per-image cam_idx values to be processed
+// in a single kernel launch without any gather of grid params. When
+// `cam_indices` is empty/null, kernels fall back to identity (ni -> ni).
+void engine_bilagrid_forward(TorchTensorView cam_indices) {
+    _set_cur_cam_indices(cam_indices);
     int H = Buffers::image_height;
     int W = Buffers::image_width;
-    int C_batch = (int)Buffers::num_cameras;  // batch contains 1 camera typically
+    int C_batch = (int)Buffers::num_cameras;
     if (C_batch <= 0) return;
+
+    const int* cam_idx_dev = Buffers::bilagrid_cur_cam_indices.data_ptr();
 
     // --- RGB: applies to Buffers::fwd_renders.rgb ---
     if (Buffers::bilagrid_rgb_enabled) {
@@ -1250,25 +1275,26 @@ void engine_bilagrid_forward(int cam_idx) {
         int L = (int)Buffers::bilagrid_rgb_grids.size<2>();
         int gH = (int)Buffers::bilagrid_rgb_grids.size<3>();
         int gW = (int)Buffers::bilagrid_rgb_grids.size<4>();
-        int C_rgb = Buffers::bilagrid_rgb_C;
-        size_t grid_stride = (size_t)C_rgb * L * gH * gW;
-        float* grid_ptr = Buffers::bilagrid_rgb_grids.data_ptr()
-                          + (size_t)cam_idx * grid_stride;
+        // Pass the FULL grid table; kernel does the per-image indirect lookup.
+        float* grid_ptr = Buffers::bilagrid_rgb_grids.data_ptr();
 
         // In-place: rgb input and output are the same buffer (the kernel reads
         // and writes index-by-index per pixel, so this is safe).
         if (Buffers::bilagrid_rgb_type == "affine") {
             bilagrid_uniform_sample_forward(
                 grid_ptr, (const float*)render_rgb, (float*)render_rgb,
-                /*N=*/1, L, gH, gW, /*m=*/1, H, W, kBilagridStream);
+                /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+                kBilagridStream, cam_idx_dev);
         } else if (Buffers::bilagrid_rgb_type == "ppisp") {
             bilagrid_ppisp_uniform_sample_forward(
                 grid_ptr, (const float*)render_rgb, (float*)render_rgb,
-                /*N=*/1, L, gH, gW, /*m=*/1, H, W, kBilagridStream);
+                /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+                kBilagridStream, cam_idx_dev);
         } else if (Buffers::bilagrid_rgb_type == "loglinear") {
             bilagrid_loglinear_uniform_sample_forward(
                 grid_ptr, (const float*)render_rgb, (float*)render_rgb,
-                /*N=*/1, L, gH, gW, /*m=*/1, H, W, kBilagridStream);
+                /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+                kBilagridStream, cam_idx_dev);
         }
     }
 
@@ -1282,25 +1308,39 @@ void engine_bilagrid_forward(int cam_idx) {
             (size_t)C_batch * H * W * sizeof(float),
             cudaMemcpyDeviceToDevice, kBilagridStream);
 
-        // Compute scalar (median quantile) over pre-bilagrid depth, store in slot [cam_idx].
+        // Compute per-image scalar (median quantile) over pre-bilagrid depth
+        // and scatter into bilagrid_depth_scalars at the cam_indices slots.
+        // compute_depth_scalars_tensor writes scalars[batch_i] = quantile_i —
+        // we want to land them at scalars[cam_indices[batch_i]] in the full
+        // table. Simplest: compute into a temp [C_batch] buffer then scatter.
+        float* scalar_full = Buffers::bilagrid_depth_scalars.data_ptr();
+        float* tmp_scalars = DevicePool::global().acquire<float>(
+            "eng.bg.depth.tmp_scalars", (size_t)C_batch);
         TorchTensorView depth_tv((uint64_t)Buffers::fwd_depth_pre_bilagrid.data_ptr(),
             4, {C_batch, H, W, 1, 1});
-        float* scalar_slot = Buffers::bilagrid_depth_scalars.data_ptr() + cam_idx;
-        TorchTensorView scalar_tv((uint64_t)scalar_slot, 4, {1});
+        TorchTensorView scalar_tv((uint64_t)tmp_scalars, 4, {C_batch});
         compute_depth_scalars_tensor(depth_tv, /*patched=*/true, scalar_tv);
+        // Scatter tmp_scalars -> scalar_full at cam_indices.
+        if (cam_idx_dev != nullptr) {
+            bilagrid_scatter_floats(tmp_scalars, cam_idx_dev, C_batch,
+                                    scalar_full, kBilagridStream);
+        } else {
+            // Identity: tmp_scalars[i] -> scalar_full[i].
+            cudaMemcpyAsync(scalar_full, tmp_scalars,
+                C_batch * sizeof(float), cudaMemcpyDeviceToDevice, kBilagridStream);
+        }
 
         int L = (int)Buffers::bilagrid_depth_grids.size<2>();
         int gH = (int)Buffers::bilagrid_depth_grids.size<3>();
         int gW = (int)Buffers::bilagrid_depth_grids.size<4>();
-        size_t grid_stride = (size_t)2 * L * gH * gW;
-        float* grid_ptr = Buffers::bilagrid_depth_grids.data_ptr()
-                          + (size_t)cam_idx * grid_stride;
+        float* grid_ptr = Buffers::bilagrid_depth_grids.data_ptr();
         bilagrid_depth_uniform_sample_forward(
             grid_ptr,
             (const float*)Buffers::fwd_depth_pre_bilagrid.data_ptr(),
-            scalar_slot,
+            scalar_full,  // kernel reads scalars[cam_indices[ni]]
             gt_depth_ptr,
-            /*N=*/1, L, gH, gW, /*m=*/1, H, W, kBilagridStream);
+            /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+            kBilagridStream, cam_idx_dev);
     }
 
     // --- Normal (gt side) ---
@@ -1316,14 +1356,13 @@ void engine_bilagrid_forward(int cam_idx) {
         int L = (int)Buffers::bilagrid_normal_grids.size<2>();
         int gH = (int)Buffers::bilagrid_normal_grids.size<3>();
         int gW = (int)Buffers::bilagrid_normal_grids.size<4>();
-        size_t grid_stride = (size_t)3 * L * gH * gW;
-        float* grid_ptr = Buffers::bilagrid_normal_grids.data_ptr()
-                          + (size_t)cam_idx * grid_stride;
+        float* grid_ptr = Buffers::bilagrid_normal_grids.data_ptr();
         bilagrid_normal_uniform_sample_forward(
             grid_ptr,
             (const float*)Buffers::fwd_normal_pre_bilagrid.data_ptr(),
             (float*)gt_normal_ptr,
-            /*N=*/1, L, gH, gW, /*m=*/1, H, W, kBilagridStream);
+            /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+            kBilagridStream, cam_idx_dev);
     }
 }
 
@@ -1332,7 +1371,9 @@ void engine_bilagrid_forward(int cam_idx) {
 // with the pre-bilagrid gradient (used by rasterization backward) and
 // accumulates into bilagrid_rgb_grads. For depth/normal (gt-side), the input
 // gradient is the loss-gradient w.r.t. gt; we accumulate to the bilagrid grad
-// only — gt has no further gradient path.
+// only — gt has no further gradient path. Grid indexing for both reads and
+// writes goes through `cam_indices`; writes use atomicAdd to handle duplicate
+// cam_idx values across the batch.
 static void _engine_bilagrid_backward_hook(
     TorchTensorView v_render_rgb,   // [C, H, W, 3] — overwritten when RGB enabled
     TorchTensorView v_ref_depth,    // [C, H, W, 1] — input only
@@ -1341,7 +1382,7 @@ static void _engine_bilagrid_backward_hook(
     int H = Buffers::image_height;
     int W = Buffers::image_width;
     int C_batch = (int)Buffers::num_cameras;
-    int cam_idx = Buffers::bilagrid_cur_cam_idx;
+    const int* cam_idx_dev = Buffers::bilagrid_cur_cam_indices.data_ptr();
 
     // --- RGB backward ---
     if (Buffers::bilagrid_rgb_enabled && std::get<0>(v_render_rgb) != 0 &&
@@ -1350,12 +1391,8 @@ static void _engine_bilagrid_backward_hook(
         int L = (int)Buffers::bilagrid_rgb_grids.size<2>();
         int gH = (int)Buffers::bilagrid_rgb_grids.size<3>();
         int gW = (int)Buffers::bilagrid_rgb_grids.size<4>();
-        int C_rgb = Buffers::bilagrid_rgb_C;
-        size_t grid_stride = (size_t)C_rgb * L * gH * gW;
-        float* grid_ptr = Buffers::bilagrid_rgb_grids.data_ptr()
-                          + (size_t)cam_idx * grid_stride;
-        float* grad_grid_ptr = Buffers::bilagrid_rgb_grads.data_ptr()
-                               + (size_t)cam_idx * grid_stride;
+        float* grid_ptr = Buffers::bilagrid_rgb_grids.data_ptr();
+        float* grad_grid_ptr = Buffers::bilagrid_rgb_grads.data_ptr();
 
         // v_render_rgb is the gradient w.r.t. POST-bilagrid rgb (what entered loss).
         // The backward overwrites it with the gradient w.r.t. PRE-bilagrid rgb.
@@ -1366,21 +1403,21 @@ static void _engine_bilagrid_backward_hook(
             bilagrid_uniform_sample_backward_v1(
                 grid_ptr, rgb_pre_ptr, v_rgb_ptr,
                 grad_grid_ptr, v_rgb_ptr,
-                /*N=*/1, L, gH, gW, /*m=*/1, H, W,
+                /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
                 /*block_x=*/8, /*block_y=*/8, /*target_tile_size=*/5,
-                kBilagridStream);
+                kBilagridStream, cam_idx_dev);
         } else if (Buffers::bilagrid_rgb_type == "ppisp") {
             bilagrid_ppisp_uniform_sample_backward_v1(
                 grid_ptr, rgb_pre_ptr, v_rgb_ptr,
                 grad_grid_ptr, v_rgb_ptr,
-                /*N=*/1, L, gH, gW, /*m=*/1, H, W,
-                8, 8, 5, kBilagridStream);
+                /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+                8, 8, 5, kBilagridStream, cam_idx_dev);
         } else if (Buffers::bilagrid_rgb_type == "loglinear") {
             bilagrid_loglinear_uniform_sample_backward_v1(
                 grid_ptr, rgb_pre_ptr, v_rgb_ptr,
                 grad_grid_ptr, v_rgb_ptr,
-                /*N=*/1, L, gH, gW, /*m=*/1, H, W,
-                8, 8, 5, kBilagridStream);
+                /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+                8, 8, 5, kBilagridStream, cam_idx_dev);
         }
     }
 
@@ -1391,23 +1428,20 @@ static void _engine_bilagrid_backward_hook(
         int L = (int)Buffers::bilagrid_depth_grids.size<2>();
         int gH = (int)Buffers::bilagrid_depth_grids.size<3>();
         int gW = (int)Buffers::bilagrid_depth_grids.size<4>();
-        size_t grid_stride = (size_t)2 * L * gH * gW;
-        float* grid_ptr = Buffers::bilagrid_depth_grids.data_ptr()
-                          + (size_t)cam_idx * grid_stride;
-        float* grad_grid_ptr = Buffers::bilagrid_depth_grads.data_ptr()
-                               + (size_t)cam_idx * grid_stride;
-        float* scalar_slot = Buffers::bilagrid_depth_scalars.data_ptr() + cam_idx;
+        float* grid_ptr = Buffers::bilagrid_depth_grids.data_ptr();
+        float* grad_grid_ptr = Buffers::bilagrid_depth_grads.data_ptr();
+        float* scalars = Buffers::bilagrid_depth_scalars.data_ptr();
         // Discard v_depth_pre: gt has no further gradient. Allocate a tiny scratch.
         float* v_depth_pre = DevicePool::global().acquire<float>(
             "eng.bg.depth.v_pre", (size_t)C_batch * H * W);
         bilagrid_depth_uniform_sample_backward_v1(
             grid_ptr,
             (const float*)Buffers::fwd_depth_pre_bilagrid.data_ptr(),
-            scalar_slot,
+            scalars,
             (const float*)std::get<0>(v_ref_depth),
             grad_grid_ptr, v_depth_pre,
-            /*N=*/1, L, gH, gW, /*m=*/1, H, W,
-            8, 8, 5, kBilagridStream);
+            /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+            8, 8, 5, kBilagridStream, cam_idx_dev);
     }
 
     // --- Normal backward (accumulate; discard input grad) ---
@@ -1417,11 +1451,8 @@ static void _engine_bilagrid_backward_hook(
         int L = (int)Buffers::bilagrid_normal_grids.size<2>();
         int gH = (int)Buffers::bilagrid_normal_grids.size<3>();
         int gW = (int)Buffers::bilagrid_normal_grids.size<4>();
-        size_t grid_stride = (size_t)3 * L * gH * gW;
-        float* grid_ptr = Buffers::bilagrid_normal_grids.data_ptr()
-                          + (size_t)cam_idx * grid_stride;
-        float* grad_grid_ptr = Buffers::bilagrid_normal_grads.data_ptr()
-                               + (size_t)cam_idx * grid_stride;
+        float* grid_ptr = Buffers::bilagrid_normal_grids.data_ptr();
+        float* grad_grid_ptr = Buffers::bilagrid_normal_grads.data_ptr();
         float* v_normal_pre = DevicePool::global().acquire<float>(
             "eng.bg.normal.v_pre", (size_t)C_batch * H * W * 3);
         bilagrid_normal_uniform_sample_backward_v1(
@@ -1429,8 +1460,8 @@ static void _engine_bilagrid_backward_hook(
             (const float*)Buffers::fwd_normal_pre_bilagrid.data_ptr(),
             (const float*)std::get<0>(v_ref_normal),
             grad_grid_ptr, v_normal_pre,
-            /*N=*/1, L, gH, gW, /*m=*/1, H, W,
-            8, 8, 5, kBilagridStream);
+            /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+            8, 8, 5, kBilagridStream, cam_idx_dev);
     }
 }
 
@@ -1533,23 +1564,27 @@ void engine_bilagrid_optim_step(
 
 static constexpr cudaStream_t kPpispStream = (cudaStream_t)0;
 
-// Build a TorchTensorView for the single-camera slice of a [N_cam, P] float
-// parameter table, with shape [1, P].
-static TorchTensorView _ppisp_params_slice_tv(
-    DeviceTensor2D<float>& table, int cam_idx
-) {
-    int64_t P = table.size<1>();
-    float* base = table.data_ptr() + (size_t)cam_idx * P;
-    return TorchTensorView((uint64_t)base, 4, {1LL, P});
+// Build a TorchTensorView for the full [N_cam, P] PPISP parameter table.
+static TorchTensorView _ppisp_params_full_tv(DeviceTensor2D<float>& table) {
+    int64_t N = table.size<0>(), P = table.size<1>();
+    return TorchTensorView(
+        (uint64_t)table.data_ptr(), 4, {N, P});
 }
 
-// Build a TorchTensorView for the single-camera slice of camera_intrins ([N,4])
-// with shape [1, 4]. camera_intrins is rebuilt each step (1 camera per batch),
-// so cam_idx maps to slot 0 of the current batch — we use bid 0 of intrins.
+// Build a TorchTensorView for the current batch's camera_intrins ([C_batch, 4]).
 static TorchTensorView _ppisp_intrins_batch_tv() {
     int C_batch = (int)Buffers::num_cameras;
     return TorchTensorView(
         (uint64_t)Buffers::camera_intrins.data_ptr(), 4, {(int64_t)C_batch, 4LL});
+}
+
+// Build a TorchTensorView wrapper around the current batch's cam_indices
+// DeviceVector, or null when no cam_indices were supplied (identity mode).
+static TorchTensorView _ppisp_cam_indices_tv() {
+    const int* ptr = Buffers::bilagrid_cur_cam_indices.data_ptr();
+    if (ptr == nullptr) return TorchTensorView(0, 4, {});
+    int64_t n = Buffers::bilagrid_cur_cam_indices.size();
+    return TorchTensorView((uint64_t)ptr, 4, {n});
 }
 
 void engine_init_ppisp(int n_grids, std::string param_type) {
@@ -1575,10 +1610,14 @@ void engine_init_ppisp(int n_grids, std::string param_type) {
     Buffers::ppisp_optim_initialized = false;
 }
 
-// Apply PPISP forward in place on the current rendered RGB.
-void engine_ppisp_forward(int cam_idx) {
+// Apply PPISP forward in place on the current rendered RGB. Reads the
+// per-image PPISP parameter slot via Buffers::bilagrid_cur_cam_indices (shared
+// with bilagrid). When that index buffer is empty, fall back to identity.
+void engine_ppisp_forward(TorchTensorView cam_indices) {
     if (!Buffers::ppisp_enabled) return;
-    Buffers::ppisp_cur_cam_idx = cam_idx;
+    // Repopulating with the same tensor is cheap (DeviceVector<int32_t> takes
+    // a view of device memory when the source is on device).
+    _set_cur_cam_indices(cam_indices);
 
     int H = Buffers::image_height;
     int W = Buffers::image_width;
@@ -1604,10 +1643,11 @@ void engine_ppisp_forward(int cam_idx) {
 
     ppisp_forward(
         in_img,
-        _ppisp_params_slice_tv(Buffers::ppisp_params, cam_idx),
+        _ppisp_params_full_tv(Buffers::ppisp_params),
         _ppisp_intrins_batch_tv(),
         (float)W, (float)H,
         Buffers::ppisp_param_type,
+        _ppisp_cam_indices_tv(),
         out_img
     );
 }
@@ -1627,13 +1667,14 @@ static void _ensure_ppisp_optim_state() {
     Buffers::ppisp_optim_initialized = true;
 }
 
-// Backward hook: rewrites v_render_rgb (post-PPISP → pre-PPISP) in place and
-// accumulates the per-camera PPISP parameter gradient into ppisp_grads.
+// Backward hook: rewrites v_render_rgb (post-PPISP -> pre-PPISP) in place and
+// accumulates the per-camera PPISP parameter gradient into ppisp_grads. The
+// kernel writes via atomicAdd, so duplicate cam_indices entries are accumulated
+// correctly into the same per-camera slot.
 static void _engine_ppisp_backward_hook(TorchTensorView v_render_rgb) {
     int H = Buffers::image_height;
     int W = Buffers::image_width;
     int C_batch = (int)Buffers::num_cameras;
-    int cam_idx = Buffers::ppisp_cur_cam_idx;
     if (std::get<0>(v_render_rgb) == 0) return;
     if (Buffers::fwd_rgb_pre_ppisp.data_ptr() == nullptr) return;
 
@@ -1646,13 +1687,14 @@ static void _engine_ppisp_backward_hook(TorchTensorView v_render_rgb) {
 
     ppisp_backward(
         in_img,
-        _ppisp_params_slice_tv(Buffers::ppisp_params, cam_idx),
+        _ppisp_params_full_tv(Buffers::ppisp_params),
         _ppisp_intrins_batch_tv(),
         (float)W, (float)H,
         v_out_img,
         Buffers::ppisp_param_type,
+        _ppisp_cam_indices_tv(),
         v_in_img,
-        _ppisp_params_slice_tv(Buffers::ppisp_grads, cam_idx)
+        _ppisp_params_full_tv(Buffers::ppisp_grads)
     );
 }
 
@@ -1900,7 +1942,7 @@ int engine_densify_step(
     auto& dv_scales = Buffers::world_scales;
     auto& dv_opacs = Buffers::world_opacities;
     auto& dv_features_dc = Buffers::world_features_dc;
-    // features_sh: DeviceTensor2D<float3> [N, K] → flatten to DeviceVector<float3> [N*K]
+    // features_sh: DeviceTensor2D<float3> [N, K] -> flatten to DeviceVector<float3> [N*K]
     DeviceVector<float3> dv_features_sh;
     {
         auto& t = Buffers::world_features_sh;
@@ -2053,7 +2095,7 @@ int engine_densify_step(
 // Combines set_camera_params + set_training_data + forward_3dgs +
 //          compute_loss_backward + optim_step + densify_step
 // Returns loss_dict (+ num_splats, num_added) for verbose.
-// All tensor inputs are host (CPU); H→D happens inside; no D→H of large data.
+// All tensor inputs are host (CPU); H->D happens inside; no D->H of large data.
 // ============================================================
 
 std::map<std::string, float> engine_train_step(
@@ -2100,7 +2142,7 @@ std::map<std::string, float> engine_train_step(
     float noise_lr, float noise_lr_final,
     float relocate_heuristic_weight,
     // Bilagrid config
-    int bilagrid_cam_idx,
+    TorchTensorView bilagrid_cam_indices,
     float bilagrid_lr_rgb, float bilagrid_lr_depth, float bilagrid_lr_normal,
     float bilagrid_tv_weight_rgb, float bilagrid_tv_weight_depth, float bilagrid_tv_weight_normal,
     // PPISP config (RGB only; cam_idx reuses bilagrid_cam_idx)
@@ -2112,27 +2154,29 @@ std::map<std::string, float> engine_train_step(
     float ppisp_reg_color_mean,
     float ppisp_reg_crf_channel_var
 ) {
-    // Camera + GT: H→D copy into pool
+    // Camera + GT: H->D copy into pool
     set_camera_params(width, height, camera_model, viewmats, intrins, dist_coeffs);
     set_training_data(gt_rgb, gt_depth, gt_normal, gt_alpha,
                       gt_rgb_mask, gt_depth_mask, gt_normal_mask, gt_alpha_mask);
 
-    // Forward (writes to pool; no D→H)
+    // Forward (writes to pool; no D->H)
     forward_3dgs(primitive, sh_degree, packed);
 
     // Bilagrid forward (between rendering and loss). No-op when disabled.
+    // Both forwards populate the shared cam_indices buffer; the H->D copy of
+    // a [C_batch] int32 tensor is in the microseconds.
     if (Buffers::bilagrid_rgb_enabled || Buffers::bilagrid_depth_enabled ||
         Buffers::bilagrid_normal_enabled) {
-        engine_bilagrid_forward(bilagrid_cam_idx);
+        engine_bilagrid_forward(bilagrid_cam_indices);
     }
 
     // PPISP forward (in place on rendered RGB, AFTER bilagrid). No-op when
-    // disabled. Reuses bilagrid_cam_idx — both are the camera-index parameter.
+    // disabled.
     if (Buffers::ppisp_enabled) {
-        engine_ppisp_forward(bilagrid_cam_idx);
+        engine_ppisp_forward(bilagrid_cam_indices);
     }
 
-    // Loss + backward (reads pool, writes pool grads; D→H only for scalar loss values)
+    // Loss + backward (reads pool, writes pool grads; D->H only for scalar loss values)
     std::map<std::string, float> loss_dict = engine_compute_loss_backward(
         step, loss_weights, w_ssim, num_loss_scales, compute_loss_map);
 

@@ -15,14 +15,16 @@ void bilagrid_depth_uniform_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int m, int h, int w,
-    cudaStream_t stream
+    cudaStream_t stream,
+    const int* grid_indices
 ) {
     int total = N * m * h * w;
     int threads = 256;
     int blocks = (total + threads - 1) / threads;
     bilagrid_depth_uniform_sample_forward_kernel<<<blocks, threads, 0, stream>>>(
         bilagrid, depth, scalars, output,
-        N, L, H, W, m, h, w
+        N, L, H, W, m, h, w,
+        grid_indices
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
     // cudaDeviceSynchronize();
@@ -62,12 +64,13 @@ void bilagrid_depth_uniform_sample_backward_v1(
     int m, int h, int w,
     const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
-    cudaStream_t stream
+    cudaStream_t stream,
+    const int* grid_indices
 ) {
     // v_bilagrid
     {
         dim3 block = { block_x, block_y, 1 };
-    
+
         int mult_x = (2*w+W)/(block.x*W*target_tile_size);
         int mult_y = (2*h+H)/(block.y*H*target_tile_size);
         if (mult_x * mult_y < 4)
@@ -85,7 +88,8 @@ void bilagrid_depth_uniform_sample_backward_v1(
         };
         bilagrid_depth_uniform_sample_backward_v1_kernel_bilagrid<<<bounds, block, 0, stream>>>(
             bilagrid, depth, scalars, v_output, v_bilagrid,
-            N, L, H, W, m, h, w, mult_x, mult_y
+            N, L, H, W, m, h, w, mult_x, mult_y,
+            grid_indices
         );
         CHECK_DEVICE_ERROR(cudaGetLastError());
     }
@@ -98,7 +102,8 @@ void bilagrid_depth_uniform_sample_backward_v1(
         bilagrid_depth_uniform_sample_backward_v1_kernel_depth<<<blocks, threads, 0, stream>>>(
             bilagrid, depth, scalars, v_output,
             v_depth,
-            N, L, H, W, m, h, w
+            N, L, H, W, m, h, w,
+            grid_indices
         );
         CHECK_DEVICE_ERROR(cudaGetLastError());
     }

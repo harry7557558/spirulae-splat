@@ -1980,10 +1980,11 @@ enum class PPISPParamType : int {
 template<PPISPParamType param_type>
 __global__ void ppisp_forward_kernel(
     const TensorView<float, 4> in_image,  // [B, H, W, C]
-    const float* __restrict__ ppisp_params,  // [B, PPISP_NUM_PARAMS]
+    const float* __restrict__ ppisp_params,  // [N_cam or B, PPISP_NUM_PARAMS]
     const float4 *__restrict__ intrins,  // [B, 4]
     const float actual_image_width,
     const float actual_image_height,
+    const int* __restrict__ cam_indices,  // [B], or nullptr -> identity
     TensorView<float, 4> out_image  // [B, H, W, C]
 ) {
     unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1994,12 +1995,14 @@ __global__ void ppisp_forward_kernel(
     unsigned y = gid / W;
     unsigned x = gid % W;
 
+    int p_id = cam_indices ? cam_indices[bid] : (int)bid;
+
     static constexpr int kNumParams = (param_type == PPISPParamType::Original) ?
         kNumPPISPParams : kNumPPISPParamsRQS;
     FixedArray<float, kNumParams> params;
     #pragma unroll
     for (int i = 0; i < kNumParams; i++) {
-        params[i] = ppisp_params[bid * kNumParams + i];
+        params[i] = ppisp_params[p_id * kNumParams + i];
     }
 
     float3 pixel = in_image.load3(bid, y, x);
@@ -2028,14 +2031,17 @@ __global__ void ppisp_forward_kernel(
 /*[AutoHeaderGeneratorExport]*/
 void ppisp_forward(
     DeviceTensor3D<float3> in_image,    // [B, H, W, 3]
-    TorchTensorView ppisp_params,       // [B, PPISP_NUM_PARAMS]
+    TorchTensorView ppisp_params,       // [N_cam or B, PPISP_NUM_PARAMS]
     TorchTensorView intrins,            // [B, 4]
     const float actual_image_width,
     const float actual_image_height,
     std::string param_type,
+    TorchTensorView cam_indices,        // [B] int32, or null -> identity (ppisp_params is [B,P])
     DeviceTensor3D<float3> out_image    // [B, H, W, 3]
 ) {
     long b = in_image.size<0>(), h = in_image.size<1>(), w = in_image.size<2>();
+    const int* cam_idx_ptr = (std::get<0>(cam_indices) == 0) ?
+        nullptr : (const int*)std::get<0>(cam_indices);
     if (param_type == "original" || param_type == "") {
         ppisp_forward_kernel<PPISPParamType::Original><<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
             _dt3d_to_tv4<float>(in_image),
@@ -2043,6 +2049,7 @@ void ppisp_forward(
             (float4*)std::get<0>(intrins),
             actual_image_width,
             actual_image_height,
+            cam_idx_ptr,
             _dt3d_to_tv4<float>(out_image)
         );
     }
@@ -2053,6 +2060,7 @@ void ppisp_forward(
             (float4*)std::get<0>(intrins),
             actual_image_width,
             actual_image_height,
+            cam_idx_ptr,
             _dt3d_to_tv4<float>(out_image)
         );
     }
@@ -2065,13 +2073,14 @@ void ppisp_forward(
 template<PPISPParamType param_type>
 __global__ void ppisp_backward_kernel(
     const TensorView<float, 4> in_image,  // [B, H, W, C]
-    const float* __restrict__ ppisp_params,  // [B, PPISP_NUM_PARAMS]
+    const float* __restrict__ ppisp_params,  // [N_cam or B, PPISP_NUM_PARAMS]
     const float4 *__restrict__ intrins,  // [B, 4]
     const float actual_image_width,
     const float actual_image_height,
+    const int* __restrict__ cam_indices,  // [B], or nullptr -> identity
     const TensorView<float, 4> v_out_image,  // [B, H, W, C]
     TensorView<float, 4> v_in_image,  // [B, H, W, C]
-    float* __restrict__ v_ppisp_params  // [B, PPISP_NUM_PARAMS]
+    float* __restrict__ v_ppisp_params  // [N_cam or B, PPISP_NUM_PARAMS]
 ) {
     unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
     unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
@@ -2080,6 +2089,8 @@ __global__ void ppisp_backward_kernel(
         return;
     unsigned y = gid / W;
     unsigned x = gid % W;
+
+    int p_id = cam_indices ? cam_indices[bid] : (int)bid;
 
     float3 pixel = in_image.load3(bid, y, x);
     float3 v_out_pixel = v_out_image.load3(bid, y, x);
@@ -2090,12 +2101,12 @@ __global__ void ppisp_backward_kernel(
     FixedArray<float, kNumParams> params;
     #pragma unroll
     for (int i = 0; i < kNumParams; i++) {
-        params[i] = ppisp_params[bid * kNumParams + i];
+        params[i] = ppisp_params[p_id * kNumParams + i];
     }
 #else
     __shared__ float params_shared[kNumParams];
     if (threadIdx.x < kNumParams) {  // assume blockDim.x >= kNumParams
-        float value = ppisp_params[bid * kNumParams + threadIdx.x];
+        float value = ppisp_params[p_id * kNumParams + threadIdx.x];
         params_shared[threadIdx.x] = value;
     }
     __syncthreads();
@@ -2142,23 +2153,26 @@ __global__ void ppisp_backward_kernel(
         float param = isfinite(v_params[i]) ? v_params[i] : 0.0f;
         param = cg::reduce(warp, param, cg::plus<float>());
         if (threadIdx.x % WARP_SIZE == 0 && param != 0.0f)
-            atomicAdd(&v_ppisp_params[bid * kNumParams + i], param);
+            atomicAdd(&v_ppisp_params[p_id * kNumParams + i], param);
     }
 }
 
 /*[AutoHeaderGeneratorExport]*/
 void ppisp_backward(
     DeviceTensor3D<float3> in_image,    // [B, H, W, 3]
-    TorchTensorView ppisp_params,       // [B, PPISP_NUM_PARAMS]
+    TorchTensorView ppisp_params,       // [N_cam or B, PPISP_NUM_PARAMS]
     TorchTensorView intrins,            // [B, 4]
     const float actual_image_width,
     const float actual_image_height,
     DeviceTensor3D<float3> v_out_image, // [B, H, W, 3]
     std::string param_type,
+    TorchTensorView cam_indices,        // [B] int32, or null -> identity
     DeviceTensor3D<float3> v_in_image,  // [B, H, W, 3]
-    TorchTensorView v_ppisp_params      // [B, PPISP_NUM_PARAMS] (must be pre-zeroed)
+    TorchTensorView v_ppisp_params      // [N_cam or B, PPISP_NUM_PARAMS] (must be pre-zeroed)
 ) {
     long b = in_image.size<0>(), h = in_image.size<1>(), w = in_image.size<2>();
+    const int* cam_idx_ptr = (std::get<0>(cam_indices) == 0) ?
+        nullptr : (const int*)std::get<0>(cam_indices);
     if (param_type == "original" || param_type == "") {
         ppisp_backward_kernel<PPISPParamType::Original><<<_LAUNCH_ARGS_2D(h*w, b, 64, 1)>>>(
             _dt3d_to_tv4<float>(in_image),
@@ -2166,6 +2180,7 @@ void ppisp_backward(
             (float4*)std::get<0>(intrins),
             actual_image_width,
             actual_image_height,
+            cam_idx_ptr,
             _dt3d_to_tv4<float>(v_out_image),
             _dt3d_to_tv4<float>(v_in_image),
             (float*)std::get<0>(v_ppisp_params)
@@ -2178,6 +2193,7 @@ void ppisp_backward(
             (float4*)std::get<0>(intrins),
             actual_image_width,
             actual_image_height,
+            cam_idx_ptr,
             _dt3d_to_tv4<float>(v_out_image),
             _dt3d_to_tv4<float>(v_in_image),
             (float*)std::get<0>(v_ppisp_params)

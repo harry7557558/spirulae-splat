@@ -1,7 +1,7 @@
 // PPISP parameter default initialization (per-camera tables).
 //
-// "rqs"      → all 39 zeros (the loglinear-style parameterization's identity).
-// "original" → 24 zeros, then 3x (a, a, b, 0) with a = 0.013658988289535046,
+// "rqs"      -> all 39 zeros (the loglinear-style parameterization's identity).
+// "original" -> 24 zeros, then 3x (a, a, b, 0) with a = 0.013658988289535046,
 //              b = 0.37816452980041504 — matches DEFAULT_PPISP_PARAMS in
 //              spirulae_splat/modules/training_losses.py.
 
@@ -63,5 +63,33 @@ void ppisp_add_into_grad(
     const int BLK = 256;
     int blocks = (int)((n + BLK - 1) / BLK);
     ppisp_add_into_grad_kernel<<<blocks, BLK, 0, stream>>>(src, dst, n);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+__global__ void bilagrid_scatter_floats_kernel(
+    const float* __restrict__ src,    // [n]
+    const int* __restrict__ indices,  // [n]
+    int n,
+    float* __restrict__ dst           // [N_full]
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    dst[indices[i]] = src[i];
+}
+
+
+// Scatter src[i] into dst[indices[i]] for i in [0, n). When n is large enough
+// for two i,j to have the same index (collision), the last writer wins, which
+// is the desired behavior for "set the per-camera scalar for the cameras seen
+// in this batch."
+void bilagrid_scatter_floats(
+    const float* src, const int* indices, int n,
+    float* dst, cudaStream_t stream
+) {
+    if (n <= 0) return;
+    const int BLK = 128;
+    int blocks = (n + BLK - 1) / BLK;
+    bilagrid_scatter_floats_kernel<<<blocks, BLK, 0, stream>>>(src, indices, n, dst);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }

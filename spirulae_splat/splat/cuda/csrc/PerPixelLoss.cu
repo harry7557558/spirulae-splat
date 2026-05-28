@@ -707,7 +707,7 @@ LossValues compute_multi_scale_per_pixel_losses(
         ds_b(alpha_mask_s[sc-1], alpha_mask_s[sc], "am");
     }
 
-    // Total losses accumulator — pool-backed device buffer (D→H read at end)
+    // Total losses accumulator — pool-backed device buffer (D->H read at end)
     float* total_losses_ptr = DevicePool::global().acquire<float>(
         "ppl.total_losses", (uint)LossIndex::length);
     cudaMemset(total_losses_ptr, 0, (uint)LossIndex::length * sizeof(float));
@@ -848,7 +848,7 @@ LossValues compute_multi_scale_per_pixel_losses(
         CHECK_DEVICE_ERROR(cudaGetLastError());
     }
 
-    // D→H copy of accumulated losses and pack into struct
+    // D->H copy of accumulated losses and pack into struct
     float h_losses[(int)LossIndex::length];
     cudaMemcpy(h_losses, total_losses_ptr,
                sizeof(h_losses), cudaMemcpyDeviceToHost);

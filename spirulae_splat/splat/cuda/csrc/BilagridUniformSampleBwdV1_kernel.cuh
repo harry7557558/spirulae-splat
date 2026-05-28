@@ -12,7 +12,7 @@ __global__ void bilagrid_uniform_sample_backward_v1_kernel_bilagrid(
 #endif
     const float* __restrict__ rgb,  // [N,m,h,w,3]
     const float* __restrict__ v_output,  // [N,m,h,w,3]
-    float* __restrict__ v_bilagrid,  // [N,12,L,H,W]
+    float* __restrict__ v_bilagrid,  // [N_grids,12,L,H,W] or [N,12,L,H,W]
     int N, int L, int H, int W,
     int m, int h, int w,
 #ifdef PATCHED
@@ -22,6 +22,9 @@ __global__ void bilagrid_uniform_sample_backward_v1_kernel_bilagrid(
     int mult_x, int mult_y
 #ifdef PATCHED
     , int m_batch_stride
+#endif
+#ifndef PATCHED
+    , const int* __restrict__ grid_indices  // [N], or nullptr -> identity
 #endif
 ) {
 #ifdef PATCHED
@@ -58,6 +61,13 @@ __global__ void bilagrid_uniform_sample_backward_v1_kernel_bilagrid(
         mult_x*mult_y == 1 ||
         (mult_x % blockDim.x != 0 || mult_y % blockDim.y != 0)
     )) return;
+
+#ifndef PATCHED
+    bool use_indirect = (grid_indices != nullptr);
+    int g_id = use_indirect ? grid_indices[ni] : ni;
+#else
+    int g_id = ni;
+#endif
 
     // Loop bounds
 #ifndef PATCHED
@@ -176,7 +186,7 @@ __global__ void bilagrid_uniform_sample_backward_v1_kernel_bilagrid(
 
     // Write result
 
-    int out_idx_start = ((ni*12*L + zi)*H + yi)*W + xi;
+    int out_idx_start = ((g_id*12*L + zi)*H + yi)*W + xi;
     int out_idx_offset = L*H*W;
 
     // simply write in this case
@@ -188,7 +198,12 @@ __global__ void bilagrid_uniform_sample_backward_v1_kernel_bilagrid(
             #ifdef PATCHED
                 atomicAdd(v_bilagrid + out_idx, accum[ci]);
             #else
-                v_bilagrid[out_idx] = accum[ci];
+                // When grid_indices is set, multiple ni may map to the same
+                // grid slot -> atomic; otherwise plain write (identity mapping).
+                if (use_indirect)
+                    atomicAdd(v_bilagrid + out_idx, accum[ci]);
+                else
+                    v_bilagrid[out_idx] = accum[ci];
             #endif
         }
         return;
@@ -237,7 +252,7 @@ __global__ void bilagrid_patched_sample_backward_v1_kernel_rgb(
 #else
 __global__ void bilagrid_uniform_sample_backward_v1_kernel_rgb(
 #endif
-    const float* __restrict__ bilagrid,  // [N,12,L,H,W]
+    const float* __restrict__ bilagrid,  // [N_grids,12,L,H,W] or [N,12,L,H,W]
     const float* __restrict__ rgb,  // [N,m,h,w,3]
     const float* __restrict__ v_output,  // [N,m,h,w,3]
     float* __restrict__ v_rgb,  // [N,m,h,w,3]
@@ -246,6 +261,9 @@ __global__ void bilagrid_uniform_sample_backward_v1_kernel_rgb(
 #ifdef PATCHED
     , int h0, int w0,
     const int* __restrict__ offsets  // [N,m,2]
+#endif
+#ifndef PATCHED
+    , const int* __restrict__ grid_indices  // [N], or nullptr -> identity
 #endif
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -257,6 +275,11 @@ __global__ void bilagrid_uniform_sample_backward_v1_kernel_rgb(
     int hi = tmp % h; tmp /= h;
     int mi = tmp % m; tmp /= m;
     int ni = tmp;
+#ifndef PATCHED
+    int g_id = grid_indices ? grid_indices[ni] : ni;
+#else
+    int g_id = ni;
+#endif
 
     // input and output colors
     int g_off = (((ni * m + mi) * h + hi) * w + wi) * 3;
@@ -303,7 +326,7 @@ __global__ void bilagrid_uniform_sample_backward_v1_kernel_rgb(
             int ci = 4 * di + si;
             float gout = (di==0 ? dr : di==1 ? dg : db);
 
-            int base = ((ni*12 + ci)*L*H*W);
+            int base = ((g_id*12 + ci)*L*H*W);
             float val =
                 bilagrid[base+(z0*H+y0)*W+x0] * w000 +
                 bilagrid[base+(z0*H+y0)*W+x1] * w001 +
@@ -336,7 +359,7 @@ __global__ void bilagrid_uniform_sample_backward_v1_kernel_rgb(
         // gather the corresponding bilagrid value for each of the 12 channels
         #pragma unroll
         for (int ci = 0; ci < 12; ++ci) {
-            const float* vol = bilagrid + ((ni*12 + ci)*L*H*W);
+            const float* vol = bilagrid + ((g_id*12 + ci)*L*H*W);
             float v = vol[(zi*H + yi)*W + xi];
             int si = ci % 4, di = ci / 4;
             float r_coeff = (si==0 ? sr : si==1 ? sg : si==2 ? sb : 1.f);

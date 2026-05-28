@@ -44,7 +44,8 @@ void bilagrid_uniform_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int m, int h, int w,
-    cudaStream_t stream
+    cudaStream_t stream,
+    const int* grid_indices = nullptr
 );
 
 void bilagrid_patched_sample_forward(
@@ -67,7 +68,8 @@ void bilagrid_uniform_sample_backward_v1(
     int m, int h, int w,
     const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
-    cudaStream_t stream
+    cudaStream_t stream,
+    const int* grid_indices = nullptr
 );
 
 void bilagrid_patched_sample_backward_v1(
@@ -162,7 +164,8 @@ void bilagrid_ppisp_uniform_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int m, int h, int w,
-    cudaStream_t stream
+    cudaStream_t stream,
+    const int* grid_indices = nullptr
 );
 
 void bilagrid_ppisp_patched_sample_forward(
@@ -185,7 +188,8 @@ void bilagrid_ppisp_uniform_sample_backward_v1(
     int m, int h, int w,
     const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
-    cudaStream_t stream
+    cudaStream_t stream,
+    const int* grid_indices = nullptr
 );
 
 void bilagrid_ppisp_patched_sample_backward_v1(
@@ -209,7 +213,8 @@ void bilagrid_loglinear_uniform_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int m, int h, int w,
-    cudaStream_t stream
+    cudaStream_t stream,
+    const int* grid_indices = nullptr
 );
 
 void bilagrid_loglinear_patched_sample_forward(
@@ -232,7 +237,8 @@ void bilagrid_loglinear_uniform_sample_backward_v1(
     int m, int h, int w,
     const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
-    cudaStream_t stream
+    cudaStream_t stream,
+    const int* grid_indices = nullptr
 );
 
 void bilagrid_loglinear_patched_sample_backward_v1(
@@ -257,7 +263,8 @@ void bilagrid_depth_uniform_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int m, int h, int w,
-    cudaStream_t stream
+    cudaStream_t stream,
+    const int* grid_indices = nullptr
 );
 
 void bilagrid_depth_patched_sample_forward(
@@ -282,7 +289,8 @@ void bilagrid_depth_uniform_sample_backward_v1(
     int m, int h, int w,
     const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
-    cudaStream_t stream
+    cudaStream_t stream,
+    const int* grid_indices = nullptr
 );
 
 void bilagrid_depth_patched_sample_backward_v1(
@@ -307,7 +315,8 @@ void bilagrid_normal_uniform_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int m, int h, int w,
-    cudaStream_t stream
+    cudaStream_t stream,
+    const int* grid_indices = nullptr
 );
 
 void bilagrid_normal_patched_sample_forward(
@@ -330,7 +339,8 @@ void bilagrid_normal_uniform_sample_backward_v1(
     int m, int h, int w,
     const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
-    cudaStream_t stream
+    cudaStream_t stream,
+    const int* grid_indices = nullptr
 );
 
 void bilagrid_normal_patched_sample_backward_v1(

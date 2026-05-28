@@ -330,7 +330,7 @@ std::tuple<
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    /* Inclusive prefix sum → cumulative tile counts */
+    /* Inclusive prefix sum -> cumulative tile counts */
     DeviceVector<int64_t> cum_tiles_per_splat;
     cum_tiles_per_splat.resize("isect.cum_tiles", total_count);
     CUB_WRAPPER(cub::DeviceScan::InclusiveSum,

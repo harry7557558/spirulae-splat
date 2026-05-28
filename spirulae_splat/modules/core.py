@@ -256,10 +256,11 @@ class Renderer:
             L, H, W = normal_LHW
             _C.engine_init_bilagrid_normal(n_grids, L, H, W)
 
-    def engine_bilagrid_forward(self, cam_idx):
-        """Apply bilagrid forward for the selected training camera; in-place on
-        the rendered RGB and on the GT depth/normal buffers."""
-        _C.engine_bilagrid_forward(int(cam_idx))
+    def engine_bilagrid_forward(self, cam_indices):
+        """Apply bilagrid forward for the current batch. cam_indices: [C_batch]
+        int32 tensor of per-image camera-table indices (or None for identity).
+        In-place on rendered RGB and on the GT depth/normal buffers."""
+        _C.engine_bilagrid_forward(self._tv(cam_indices))
 
     def engine_bilagrid_optim_step(self, step, lr_rgb, lr_depth, lr_normal,
                                     tv_weight_rgb, tv_weight_depth, tv_weight_normal):
@@ -275,9 +276,10 @@ class Renderer:
         with the type's default values. Must be called after set_data_3dgs."""
         _C.engine_init_ppisp(int(n_grids), str(param_type))
 
-    def engine_ppisp_forward(self, cam_idx):
-        """Apply PPISP forward in place on the current rendered RGB."""
-        _C.engine_ppisp_forward(int(cam_idx))
+    def engine_ppisp_forward(self, cam_indices):
+        """Apply PPISP forward in place on the current rendered RGB.
+        cam_indices: [C_batch] int32 tensor (or None for identity)."""
+        _C.engine_ppisp_forward(self._tv(cam_indices))
 
     def engine_ppisp_optim_step(self, step, lr,
                                  reg_exposure_mean, reg_vig_center,
@@ -303,9 +305,10 @@ class Renderer:
                           loss_weights, w_ssim, num_loss_scales, compute_loss_map,
                           # Configs
                           model_config, optim_config,
-                          # Bilagrid (pass cam_idx + lrs + tv weights; ignored if
-                          # engine_init_bilagrid_* was never called)
-                          bilagrid_cam_idx=0,
+                          # Bilagrid (pass cam_indices + lrs + tv weights;
+                          # ignored if engine_init_bilagrid_* was never called).
+                          # cam_indices: [C_batch] int32 tensor, or None.
+                          bilagrid_cam_indices=None,
                           bilagrid_lr_rgb=0.0, bilagrid_lr_depth=0.0, bilagrid_lr_normal=0.0,
                           bilagrid_tv_weight_rgb=0.0, bilagrid_tv_weight_depth=0.0,
                           bilagrid_tv_weight_normal=0.0,
@@ -370,7 +373,7 @@ class Renderer:
             model_config.noise_lr_final,
             model_config.relocate_heuristic_weight,
             # Bilagrid
-            int(bilagrid_cam_idx),
+            self._tv(bilagrid_cam_indices),
             float(bilagrid_lr_rgb), float(bilagrid_lr_depth), float(bilagrid_lr_normal),
             float(bilagrid_tv_weight_rgb), float(bilagrid_tv_weight_depth),
             float(bilagrid_tv_weight_normal),

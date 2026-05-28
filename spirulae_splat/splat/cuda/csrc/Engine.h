@@ -119,9 +119,11 @@ void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W
 void engine_init_bilagrid_depth(int n_grids, int L, int H, int W);
 void engine_init_bilagrid_normal(int n_grids, int L, int H, int W);
 
-// Apply forward bilagrid for the selected camera. Must be called between
-// forward_3dgs and engine_compute_loss_backward.
-void engine_bilagrid_forward(int cam_idx);
+// Apply forward bilagrid for the current batch. cam_indices is a [C_batch]
+// int32 tensor of per-image camera-table indices; pass null/empty for identity
+// (image i uses grid slot i). Must be called between forward_3dgs and
+// engine_compute_loss_backward.
+void engine_bilagrid_forward(TorchTensorView cam_indices);
 
 // Adam step + optional TV-loss regularization for each enabled bilagrid type.
 void engine_bilagrid_optim_step(
@@ -132,13 +134,14 @@ void engine_bilagrid_optim_step(
 
 // --- PPISP (RGB only, applied AFTER bilagrid). ---
 // Allocates a per-camera PPISP parameter table and seeds it with the type's
-// default values ("original" → 12 zeros, 12 zeros, 3x(a,a,b,0); "rqs" → all 0).
+// default values ("original" -> 12 zeros, 12 zeros, 3x(a,a,b,0); "rqs" -> all 0).
 void engine_init_ppisp(int n_grids, std::string param_type);
 
 // Apply PPISP forward in place on the current rendered RGB; saves a pre-PPISP
-// copy used by backward. Must be called after forward_3dgs (and after
-// engine_bilagrid_forward when bilagrid is also enabled).
-void engine_ppisp_forward(int cam_idx);
+// copy used by backward. cam_indices: [C_batch] int32, or null/empty for
+// identity. Must be called after forward_3dgs (and after engine_bilagrid_forward
+// when bilagrid is also enabled).
+void engine_ppisp_forward(TorchTensorView cam_indices);
 
 // Adam step over the PPISP parameter table. Also folds in the 6 PPISP
 // regularization-loss gradients (using the provided per-loss weights) before
@@ -212,8 +215,10 @@ std::map<std::string, float> engine_train_step(
     float max_world_size,
     float noise_lr, float noise_lr_final,
     float relocate_heuristic_weight,
-    // Bilagrid (no-op when no engine_init_bilagrid_* has been called)
-    int bilagrid_cam_idx,
+    // Bilagrid (no-op when no engine_init_bilagrid_* has been called).
+    // cam_indices: [C_batch] int32 tensor of per-image camera-table indices.
+    // Null/empty -> identity (image i -> grid slot i).
+    TorchTensorView bilagrid_cam_indices,
     float bilagrid_lr_rgb, float bilagrid_lr_depth, float bilagrid_lr_normal,
     float bilagrid_tv_weight_rgb, float bilagrid_tv_weight_depth, float bilagrid_tv_weight_normal,
     // PPISP (no-op when engine_init_ppisp has not been called)

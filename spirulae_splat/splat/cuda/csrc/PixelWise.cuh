@@ -357,25 +357,27 @@ void warp_depth_pinhole_to_wide_scale_matrix_tensor(
 
 void ppisp_forward(
     DeviceTensor3D<float3> in_image,    // [B, H, W, 3]
-    TorchTensorView ppisp_params,       // [B, PPISP_NUM_PARAMS]
+    TorchTensorView ppisp_params,       // [N_cam or B, PPISP_NUM_PARAMS]
     TorchTensorView intrins,            // [B, 4]
     const float actual_image_width,
     const float actual_image_height,
     std::string param_type,
+    TorchTensorView cam_indices,        // [B] int32, or null -> identity (ppisp_params is [B,P])
     DeviceTensor3D<float3> out_image    // [B, H, W, 3]
 );
 
 
 void ppisp_backward(
     DeviceTensor3D<float3> in_image,    // [B, H, W, 3]
-    TorchTensorView ppisp_params,       // [B, PPISP_NUM_PARAMS]
+    TorchTensorView ppisp_params,       // [N_cam or B, PPISP_NUM_PARAMS]
     TorchTensorView intrins,            // [B, 4]
     const float actual_image_width,
     const float actual_image_height,
     DeviceTensor3D<float3> v_out_image, // [B, H, W, 3]
     std::string param_type,
+    TorchTensorView cam_indices,        // [B] int32, or null -> identity
     DeviceTensor3D<float3> v_in_image,  // [B, H, W, 3]
-    TorchTensorView v_ppisp_params      // [B, PPISP_NUM_PARAMS] (must be pre-zeroed)
+    TorchTensorView v_ppisp_params      // [N_cam or B, PPISP_NUM_PARAMS] (must be pre-zeroed)
 );
 
 

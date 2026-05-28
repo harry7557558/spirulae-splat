@@ -19,6 +19,9 @@ __global__ void bilagrid_ppisp_uniform_sample_forward_kernel(
     , int h0, int w0,
     const int* __restrict__ offsets  // [N,m,2]
 #endif
+#ifndef PATCHED
+    , const int* __restrict__ grid_indices  // [N], or nullptr -> identity
+#endif
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total = N * m * h * w;
@@ -29,6 +32,11 @@ __global__ void bilagrid_ppisp_uniform_sample_forward_kernel(
     int hi = tmp % h; tmp /= h;
     int mi = tmp % m; tmp /= m;
     int ni = tmp;
+#ifndef PATCHED
+    int g_id = grid_indices ? grid_indices[ni] : ni;
+#else
+    int g_id = ni;
+#endif
 
     // read coords
     int g_offset = (((ni * m + mi) * h + hi) * w + wi) * 3;
@@ -74,7 +82,7 @@ __global__ void bilagrid_ppisp_uniform_sample_forward_kernel(
     #pragma unroll
     for (int ci = 0; ci < 9; ci++) {
         // base pointer for this volume
-        int base = (ni*9 + ci)*L*H*W;
+        int base = (g_id*9 + ci)*L*H*W;
 
         // fetch 8 corners
         auto v000 = bilagrid[base+(z0*H+y0)*W+x0];

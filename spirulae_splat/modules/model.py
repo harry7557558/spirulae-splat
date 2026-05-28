@@ -1651,12 +1651,17 @@ class SpirulaeSplatModel(torch.nn.Module):
         self._maybe_init_bilagrid(batch)
         optim_cfg = self.trainer_config.optimizer
         max_steps_lr = optim_cfg.max_steps if optim_cfg.max_steps is not None else max_steps
-        # cam_idx is needed whenever any bilagrid is enabled; default 0 otherwise.
-        if (self._bilagrid_rgb_init or self._bilagrid_depth_init or self._bilagrid_normal_init):
-            bilagrid_cam_idx = int(camera.metadata['cam_idx'].flatten()[0].item()) \
-                if camera.metadata is not None and 'cam_idx' in camera.metadata else 0
+        # Pass the full per-image cam_idx tensor [C_batch] so the C++ kernels
+        # can handle batches with mixed camera indices via indirect grid/param
+        # lookup (no per-image gather, no per-image kernel launches).
+        needs_cam_indices = (
+            self._bilagrid_rgb_init or self._bilagrid_depth_init or
+            self._bilagrid_normal_init or self._ppisp_init)
+        if (needs_cam_indices and camera.metadata is not None
+                and 'cam_idx' in camera.metadata):
+            bilagrid_cam_indices = camera.metadata['cam_idx'].flatten().to(torch.int32).contiguous()
         else:
-            bilagrid_cam_idx = 0
+            bilagrid_cam_indices = None
         if self._bilagrid_rgb_init:
             bilagrid_lr_rgb = optim_cfg.get_scheduled_lr('bilagrid', step, max_steps_lr)
             bilagrid_tv_weight_rgb = cfg.bilagrid_tv_loss_weight
@@ -1705,7 +1710,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             gt_rgb_mask, gt_depth_mask, gt_normal_mask, gt_alpha_mask,
             loss_weights, w_ssim, num_loss_scales, compute_loss_map,
             self.config, self.trainer_config.optimizer,
-            bilagrid_cam_idx=bilagrid_cam_idx,
+            bilagrid_cam_indices=bilagrid_cam_indices,
             bilagrid_lr_rgb=bilagrid_lr_rgb,
             bilagrid_lr_depth=bilagrid_lr_depth,
             bilagrid_lr_normal=bilagrid_lr_normal,

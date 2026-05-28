@@ -25,6 +25,9 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_bilagrid(
 #ifdef PATCHED
     , int m_batch_stride
 #endif
+#ifndef PATCHED
+    , const int* __restrict__ grid_indices  // [N], or nullptr -> identity
+#endif
 ) {
 #ifdef PATCHED
     int idx = blockIdx.z * blockDim.z + threadIdx.z;
@@ -61,6 +64,13 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_bilagrid(
         (mult_x % blockDim.x != 0 || mult_y % blockDim.y != 0)
     )) return;
 
+#ifndef PATCHED
+    bool use_indirect = (grid_indices != nullptr);
+    int g_id = use_indirect ? grid_indices[ni] : ni;
+#else
+    int g_id = ni;
+#endif
+
     // Loop bounds
 #ifndef PATCHED
     float sw = float(w-1)/float(W-1);
@@ -81,7 +91,7 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_bilagrid(
 #endif
 
 #ifndef PATCHED
-    const float scalar = scalars[ni];
+    const float scalar = scalars[g_id];
 #else
     const float scalar = scalars[0];
 #endif
@@ -165,7 +175,7 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_bilagrid(
             #pragma unroll
             for (int ci = 0; ci < 2; ci++) {
                 // base pointer for this volume
-                int base = (ni*2 + ci)*L*H*W;
+                int base = (g_id*2 + ci)*L*H*W;
 
                 // fetch 8 corners
                 auto v000 = bilagrid[base+(z0*H+y0)*W+x0];
@@ -210,7 +220,7 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_bilagrid(
 
     // Write result
 
-    int out_idx_start = ((ni*2*L + zi)*H + yi)*W + xi;
+    int out_idx_start = ((g_id*2*L + zi)*H + yi)*W + xi;
     int out_idx_offset = L*H*W;
 
     // simply write in this case
@@ -222,7 +232,10 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_bilagrid(
             #ifdef PATCHED
                 atomicAdd(v_bilagrid + out_idx, accum[ci]);
             #else
-                v_bilagrid[out_idx] = accum[ci];
+                if (use_indirect)
+                    atomicAdd(v_bilagrid + out_idx, accum[ci]);
+                else
+                    v_bilagrid[out_idx] = accum[ci];
             #endif
         }
         return;
@@ -282,6 +295,9 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_depth(
     , int h0, int w0,
     const int* __restrict__ offsets  // [N,m,2]
 #endif
+#ifndef PATCHED
+    , const int* __restrict__ grid_indices  // [N], or nullptr -> identity
+#endif
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total = N * m * h * w;
@@ -292,9 +308,14 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_depth(
     int hi = tmp % h; tmp /= h;
     int mi = tmp % m; tmp /= m;
     int ni = tmp;
+#ifndef PATCHED
+    int g_id = grid_indices ? grid_indices[ni] : ni;
+#else
+    int g_id = ni;
+#endif
 
 #ifndef PATCHED
-    const float scalar = scalars[ni];
+    const float scalar = scalars[g_id];
 #else
     const float scalar = scalars[0];
 #endif
@@ -336,7 +357,7 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_depth(
     float affine[2];
     #pragma unroll
     for (int ci = 0; ci < 2; ci++) {
-        int base = ((ni*2 + ci)*L*H*W);
+        int base = ((g_id*2 + ci)*L*H*W);
         float val =
             bilagrid[base+(z0*H+y0)*W+x0] * w000 +
             bilagrid[base+(z0*H+y0)*W+x1] * w001 +
@@ -373,7 +394,7 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_depth(
         // gather the corresponding bilagrid value for each of the 2 channels
         #pragma unroll
         for (int ci = 0; ci < 2; ++ci) {
-            const float* vol = bilagrid + ((ni*2 + ci)*L*H*W);
+            const float* vol = bilagrid + ((g_id*2 + ci)*L*H*W);
             float v = vol[(zi*H + yi)*W + xi];
             float r_coeff = (ci==0 ? log_sr * affine[ci] : 1.f);
             float gout = dr;
