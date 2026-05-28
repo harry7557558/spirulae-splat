@@ -117,11 +117,11 @@ class TrainingVerbose:
         lines.append(
             f"    ("
             f"{boldcyan(self.get_last_metric('splat_vram', d=2))} {orange('splat')}, "
-            f">{boldcyan(self.get_last_metric('image_vram', d=2))} {orange('image')}, "
+            f"{boldcyan(self.get_last_metric('image_vram', d=2))} {orange('image')}, "
             f"{boldcyan(self.get_last_metric('splat_x_image_vram', d=2))} {orange('splat x img')}, "
-            f"{boldcyan(self.get_last_metric('bilagrid_vram', d=2))}+"
-            f"{boldcyan(self.get_last_metric('bilagrid_geom_vram', d=2))} {orange('bilagrid')}, "
-            f"{boldcyan(self.get_last_metric('ppisp_vram', d=2))} {orange('ppisp')}"
+            f"{boldcyan(self.get_last_metric('bilagrid_vram', d=2))} {orange('bilagrid')}, "
+            f"{boldcyan(self.get_last_metric('ppisp_vram', d=2))} {orange('ppisp')}, "
+            f"{boldcyan(self.get_last_metric('other_vram', d=2))} {orange('other')}"
             f")"
         )
         lines.append('-' * 80)

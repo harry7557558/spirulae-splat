@@ -1394,41 +1394,58 @@ class SpirulaeSplatModel(torch.nn.Module):
             # Static losses removed; bilagrid TV losses now come from the C++
             # engine_train_step loss_dict each iteration (see verbose metrics).
 
-            # VRAM
-            splat_vram, image_vram, splat_x_image_vram = 0.0, 0.0, 0.0
-            for key in ['splats_world', 'v_splats_world', 'g1_splats_world', 'g2_splats_world', 'quant_bounds_sh', 'densify_accum_buffer', 'optim_bias_correction_step']:
-                if hasattr(self.core, key) and getattr(self.core, key) is not None:
-                    attr = getattr(self.core, key)
-                    if isinstance(attr, torch.Tensor):
-                        splat_vram += getattr(self.core, key).nbytes / 1024**3
-                        continue
-                    elif isinstance(attr, list) or isinstance(attr, tuple):
-                        for tensor in attr:
-                            if isinstance(tensor, torch.Tensor):
-                                splat_vram += tensor.nbytes / 1024**3
-            for key in ['splats_proj', 'v_splats_proj', 'radii', 'aabb', 'depths', 'flatten_ids' 'gaussian_ids', 'camera_ids', 'isect_offsets']:
-                if hasattr(self.core, key) and getattr(self.core, key) is not None:
-                    attr = getattr(self.core, key)
-                    if isinstance(attr, torch.Tensor):
-                        splat_x_image_vram += getattr(self.core, key).nbytes / 1024**3
-                        continue
-                    elif isinstance(attr, list) or isinstance(attr, tuple):
-                        for tensor in attr:
-                            if isinstance(tensor, torch.Tensor):
-                                splat_x_image_vram += tensor.nbytes / 1024**3
-            for key in ['render_colors', 'v_render_colors', 'render_Ts', 'v_render_Ts', 'raw_depth']:
-                if hasattr(self.core, key) and getattr(self.core, key) is not None:
-                    attr = getattr(self.core, key)
-                    if isinstance(attr, torch.Tensor):
-                        image_vram += getattr(self.core, key).nbytes / 1024**3
-                        continue
-                    elif isinstance(attr, list) or isinstance(attr, tuple):
-                        for tensor in attr:
-                            if isinstance(tensor, torch.Tensor):
-                                image_vram += tensor.nbytes / 1024**3
-            self.training_verboser.add_metric('splat_vram', splat_vram, last_only=True)
-            self.training_verboser.add_metric('image_vram', image_vram, last_only=True)
-            self.training_verboser.add_metric('splat_x_image_vram', splat_x_image_vram, last_only=True)
+            # VRAM breakdown (C++ pool only — PyTorch-side tensors are tracked
+            # separately by torch.cuda.memory_allocated). Each pool key gets
+            # mapped to one of five buckets by its prefix:
+            #   splat       : world params + grads + optim states (per-Gaussian)
+            #   splat x img : projection outputs/gradients, tile intersection
+            #   image       : image-space tensors (renders, GT copies, grads)
+            #   bilagrid    : appearance + geometry grids merged
+            #   ppisp       : per-camera photometric correction params
+            #   other       : everything else (camera tables, tiny scratches)
+            from spirulae_splat.splat.cuda import _C
+            buckets = {'splat': 0.0, 'splat x img': 0.0, 'image': 0.0,
+                       'bilagrid': 0.0, 'ppisp': 0.0, 'other': 0.0}
+            GiB = 1024 ** 3
+            for key, _used, cap in _C.engine_get_pool_breakdown():
+                gib = cap / GiB
+                if key.startswith('world.') \
+                        or key.startswith('eng.v_') \
+                        or key.startswith('eng.g1_') \
+                        or key.startswith('eng.g2_') \
+                        or key in ('eng.radii', 'eng.accum_buffer',
+                                   'eng.bias_correction_steps',
+                                   'eng.quant_bounds_sh'):
+                    buckets['splat'] += gib
+                elif key.startswith('proj.') \
+                        or key.startswith('isect.') \
+                        or key.startswith('isect_post.') \
+                        or key.startswith('fused_proj_bwd.') \
+                        or key.startswith('raster_bwd.'):
+                    buckets['splat x img'] += gib
+                elif key.startswith('render.') \
+                        or key in ('eng.v_rgb', 'eng.v_depth', 'eng.v_Ts',
+                                   'eng.v_depth_normal', 'eng.v_ref_depth',
+                                   'eng.v_ref_normal',
+                                   'eng.depth_normal', 'eng.loss_map'):
+                    buckets['image'] += gib
+                elif key.startswith('eng.bg.'):
+                    buckets['bilagrid'] += gib
+                elif key.startswith('eng.ppisp.'):
+                    buckets['ppisp'] += gib
+                else:
+                    buckets['other'] += gib
+            # DeviceScratch (workspace for cub::DeviceRadixSort etc.) is part
+            # of the splat x image pipeline (used during tile intersection
+            # sort + projection backward sort).
+            buckets['splat x img'] += _C.engine_get_scratch_bytes() / GiB
+
+            self.training_verboser.add_metric('splat_vram', buckets['splat'], last_only=True)
+            self.training_verboser.add_metric('image_vram', buckets['image'], last_only=True)
+            self.training_verboser.add_metric('splat_x_image_vram', buckets['splat x img'], last_only=True)
+            self.training_verboser.add_metric('bilagrid_vram', buckets['bilagrid'], last_only=True)
+            self.training_verboser.add_metric('ppisp_vram', buckets['ppisp'], last_only=True)
+            self.training_verboser.add_metric('other_vram', buckets['other'], last_only=True)
 
         self.training_verboser.verbose(self.step, self.trainer_config.num_iterations)
 
