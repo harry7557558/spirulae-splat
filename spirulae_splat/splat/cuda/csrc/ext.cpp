@@ -248,9 +248,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("engine_compute_loss_backward", &engine_compute_loss_backward);
     m.def("engine_optim_step", &engine_optim_step);
     m.def("engine_densify_step", &engine_densify_step);
+    m.def("engine_train_step", &engine_train_step);
     m.def("engine_debug_forward", &engine_debug_forward);
     m.def("engine_copy_accum_buffer", &engine_copy_accum_buffer);
     m.def("engine_get_cur_num_splats", &engine_get_cur_num_splats);
+    m.def("engine_copy_render_to_host", &engine_copy_render_to_host);
+    m.def("engine_copy_splats_to_host", &engine_copy_splats_to_host);
+    m.def("engine_get_pool_breakdown", &engine_get_pool_breakdown);
+    m.def("engine_get_scratch_bytes", &engine_get_scratch_bytes);
 
 #if 0
     // Densify.cuh

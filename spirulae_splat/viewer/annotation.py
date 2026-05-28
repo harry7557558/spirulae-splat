@@ -96,7 +96,7 @@ def annotate_train_cameras(
     R = cameras.camera_to_worlds[:, :3, :3]  # 3 x 3
     T = cameras.camera_to_worlds[:, :3, 3:4]  # 3 x 1
     # T = T * relative_scale
-    R = R * torch.tensor([[[1.0, -1.0, -1.0]]]).cuda()
+    R = R * torch.tensor([[[1.0, -1.0, -1.0]]])
     camera_to_worlds = torch.concat((R, T), dim=-1)
 
     # must match Common.h and projection_utils.slang
@@ -116,8 +116,8 @@ def annotate_train_cameras(
     def _tv(t):
         if t is None:
             return (0, 4, [0])
-        t = t.contiguous()
-        assert t.is_cuda, t.device
+        t = t.cpu().contiguous()
+        assert not t.is_cuda, t.device
         return (t.data_ptr(), t.element_size(), list(t.shape))
 
     h, w = rgb.shape[0], rgb.shape[1]
@@ -126,16 +126,16 @@ def annotate_train_cameras(
     _C.blit_train_cameras(
         _tv(rgb), _tv(depths), _tv(alpha),
         camera_model_mapper[view_camera.camera_type[0]],
-        _tv(view_camera.intrins.cuda()),
-        _tv(view_viewmats.cuda()),
-        _tv(view_camera.distortion_params.cuda()),
+        _tv(view_camera.intrins),
+        _tv(view_viewmats),
+        _tv(view_camera.distortion_params),
         _tv(cameras.intrins),
         _tv(cameras.width),
         _tv(cameras.height),
         _tv(camera_models),
         _tv(cameras.distortion_params),
         _tv(camera_to_worlds),
-        _tv(thumbnails.cuda()),
+        _tv(thumbnails),
         size,
         kwargs.get("show_training_cameras", False),
         _tv(out_rgb),

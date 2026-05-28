@@ -381,11 +381,10 @@ class SpirulaeSplatModel(torch.nn.Module):
                 self.features_dc, self.features_sh
             )
             # print([x.shape for x in splat_params])
-        splat_params = [x.cuda() for x in splat_params]
 
         self.core = Renderer(
             self.config.primitive,
-            splat_params,
+            [x.cpu().contiguous() for x in splat_params],
             self.seed_points[0].shape[0],  # TODO: voxel
             packed=(self.config.packed or self.config.use_bvh),
             use_bvh=self.config.use_bvh,
@@ -546,7 +545,8 @@ class SpirulaeSplatModel(torch.nn.Module):
                     value = torch.concat((value, torch.zeros(new_num_points-num_points, *value.shape[1:], device=value.device, dtype=value.dtype)))
                 gauss_params[key] = torch.nn.Parameter(value)
 
-        self.gauss_params = torch.nn.ParameterDict(gauss_params)
+        # self.gauss_params = torch.nn.ParameterDict(gauss_params)
+        self.gauss_params = gauss_params
 
         optim_info = {}
         if self.config.use_mcmc and self.config.preallocate_splat_tensors:
@@ -581,72 +581,8 @@ class SpirulaeSplatModel(torch.nn.Module):
             self.background_sh = None
 
         self._train_batch_size = 1
-        self._set_strategy()
 
         torch.cuda.empty_cache()
-
-    def _set_strategy(self):
-        # Strategy for GS densification
-        if self.config.primitive in ['voxel']:
-            self.strategy = SVRasterStrategy(
-            )
-            self.strategy_state = self.strategy.initialize_state()
-            return
-
-        # opaque triangle mode
-        if self.config.primitive == "opaque_triangle":
-            current_num = len(self.means)
-            final_num = self.config.cap_max
-
-            min_warmup_steps = self.config.refine_every * self.config.reset_alpha_every
-            num_steps_until_full = math.log(max(final_num, current_num) / current_num) / math.log(self.config.growth_factor) * \
-                self.config.refine_every + (self.config.refine_start_iter + self.config.refine_every)
-            warmup_steps_0 = min(2.0*max(min_warmup_steps, num_steps_until_full), self.trainer_config.num_iterations/3)
-
-            self.strategy = OpaqueStrategy(
-                cap_max=self.config.cap_max,
-                noise_lr=self.config.noise_lr,
-                refine_start_iter=self.config.refine_start_iter,
-                warmup_steps=warmup_steps_0,
-                refine_stop_iter=self.trainer_config.num_iterations,
-                refine_every=self.config.refine_every,
-                grow_factor=self.config.growth_factor,
-                min_opacity=self.config.min_opacity,
-                relocate_scale2d=self.config.relocate_screen_size,
-                max_scale2d=self.config.max_screen_size,
-                max_scale2d_clip_hardness=self.config.max_screen_size_clip_hardness,
-                max_scale3d=self.config.max_world_size,
-                geometry_optimizer_stop_iter=self.trainer_config.num_iterations-self.config.refine_stop_num_iter
-            )
-            self.strategy_state = self.strategy.initialize_state()
-            return
-
-        # MCMC mode
-        if self.config.use_mcmc:
-            current_num = len(self.means)
-            final_num = self.config.cap_max
-            warpup_steps = math.log(max(final_num, current_num) / current_num) / math.log(self.config.growth_factor) * \
-                self.config.refine_every + (self.config.refine_start_iter + self.config.refine_every)
-            self.mcmc_num_steps_until_full = warpup_steps
-
-            self.strategy = MCMCStrategy(
-                cap_max=self.config.cap_max,
-                noise_lr=self.config.noise_lr,
-                refine_start_iter=self.config.refine_start_iter,
-                refine_stop_iter=self.trainer_config.num_iterations-self.config.refine_stop_num_iter,
-                refine_every=self.config.refine_every,
-                grow_factor=self.config.growth_factor,
-                min_opacity=self.config.min_opacity,
-                prob_grad_weight=self.config.relocate_heuristic_weight,
-                use_long_axis_split=self.config.use_long_axis_split,
-                is_3dgs=True,
-                relocate_scale2d=self.config.relocate_screen_size,
-                max_scale2d=self.config.max_screen_size,
-                max_scale2d_clip_hardness=self.config.max_screen_size_clip_hardness,
-                max_scale3d=self.config.max_world_size,
-            )
-            self.strategy_state = self.strategy.initialize_state()
-            return
 
     def _get_gauss_param(self, key: str):
         tensor = self.gauss_params.get(key, None)
@@ -1013,9 +949,10 @@ class SpirulaeSplatModel(torch.nn.Module):
                 accum_weight_map = self._downscale_if_required(accum_weight_map)
                 kwargs['accum_weight_map'] = accum_weight_map
 
-        optimized_camera_to_world = optimized_camera_to_world.to(device)
-        viewmats = viewmats.to(device)
-        intrins = intrins.to(device)
+        # Engine path: keep on CPU, C++ does H→D copy
+        optimized_camera_to_world = optimized_camera_to_world.cpu()
+        viewmats = viewmats.cpu().contiguous()
+        intrins = intrins.cpu().contiguous()
 
         TILE_SIZE = 64
         gh, gw = (H+TILE_SIZE-1) // TILE_SIZE, (W+TILE_SIZE-1) // TILE_SIZE
@@ -1200,7 +1137,7 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         # setup override required for optimizers
         # TODO: more reliable way than setattr tensor?
-        if self.training:
+        if self.training and False:
             optim_info = {
                 # 'radii': self.info['radii'],
             }
@@ -1311,6 +1248,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         optim_config = self.trainer_config.optimizer
 
         # Engine path: optimizer + densification via core -> Engine.cpp
+        # Splats stay on device — no D→H copy between iterations.
         if self.core.primitive in ['3dgs', 'mip', '3dgut'] and not self.core.use_bvh:
             self.core.engine_optim_step(self.step, max_steps, self.config, optim_config)
             self.core.engine_densify_step(self.step, max_steps, self.config)
@@ -1415,15 +1353,13 @@ class SpirulaeSplatModel(torch.nn.Module):
         if tensor is None:
             return (0, 4, [0])
         assert tensor.is_contiguous(), f"Tensor must be contiguous, got strides {tensor.stride()}"
-        assert tensor.is_cuda
         return (tensor.data_ptr(), tensor.element_size(), list(tensor.shape))
 
     def _engine_get_loss_grad(self, outputs, batch, batch_size):
         """Engine path: compute loss + backward entirely in C++."""
-        device = outputs['rgb'].device
 
-        # --- Prepare ground truth ---
-        gt_rgb = batch["image"].to(device)
+        # --- Prepare ground truth (CPU, C++ does H→D) ---
+        gt_rgb = batch["image"].cpu()
         if gt_rgb.dtype == torch.uint8:
             gt_rgb = gt_rgb.float() / 255.0
         elif gt_rgb.dtype == torch.uint16:
@@ -1434,7 +1370,7 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         gt_depth = batch.get('depth', None)
         if gt_depth is not None:
-            gt_depth = gt_depth.to(device).float()
+            gt_depth = gt_depth.cpu().float()
             if len(gt_depth.shape) == 3:
                 gt_depth = gt_depth.unsqueeze(-1)
             gt_depth = gt_depth.contiguous()
@@ -1443,12 +1379,12 @@ class SpirulaeSplatModel(torch.nn.Module):
         if gt_normal is not None:
             if gt_normal.dtype == torch.uint8:
                 gt_normal = gt_normal.float() / (255/2) - 1.0
-            gt_normal = gt_normal.to(device).float().contiguous()
+            gt_normal = gt_normal.cpu().float().contiguous()
 
         gt_alpha, gt_rgb_mask, gt_depth_mask, gt_normal_mask, gt_alpha_mask = None, None, None, None, None
 
         if "mask" in batch:
-            mask = batch['mask'].to(device).float() > 0.5
+            mask = batch['mask'].cpu().float() > 0.5
             gt_rgb_mask = mask.contiguous()
             if self.config.apply_loss_for_mask:
                 gt_alpha = mask.contiguous()
@@ -1505,6 +1441,128 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         self._engine_backward_done = True
         return None
+
+    def engine_train_step(self, camera, batch):
+        """Fused training step. Tensors passed as-is (CPU or CUDA) — C++ side detects
+        device location and avoids redundant copies. Minimizes H↔D transfers."""
+        # --- Camera params: keep on whatever device they came from ---
+        if self.config.use_camera_optimizer:
+            camera.metadata['cam_idx'] = camera.metadata['cam_idx'].flatten()
+            optimized_camera_to_world = self.camera_optimizer.apply_to_camera(camera)
+        else:
+            optimized_camera_to_world = camera.camera_to_worlds
+
+        camera_downscale = self._get_downscale_factor()
+        if camera_downscale > 1:
+            camera.rescale(1 / camera_downscale)
+
+        W, H = int(camera.width[0].item()), int(camera.height[0].item())
+        camera_model = camera.camera_type[0].upper()
+
+        R = optimized_camera_to_world[:, :3, :3]
+        T = optimized_camera_to_world[:, :3, 3:4]
+        if self.config.relative_scale is not None:
+            T = T * self.config.relative_scale
+        R = R * torch.tensor([[[1.0, -1.0, -1.0]]]).to(R)
+        R_inv = R.transpose(-1, -2)
+        T_inv = -torch.bmm(R_inv, T)
+        viewmats = torch.eye(4, dtype=optimized_camera_to_world.dtype,
+                              device=optimized_camera_to_world.device)[None].repeat(len(camera), 1, 1)
+        viewmats[:, :3, :3] = R_inv
+        viewmats[:, :3, 3:4] = T_inv
+        viewmats = viewmats.contiguous()
+        intrins = (camera.intrins * self.config.supersampling).contiguous()
+
+        dist_coeffs = None
+        if camera.distortion_params is not None and camera.distortion_params.any():
+            dist_coeffs = camera.distortion_params.contiguous()
+        if dist_coeffs is None:
+            dist_coeffs = torch.zeros(len(camera), 10, dtype=torch.float32, device=viewmats.device)
+
+        W_actual = W * self.config.supersampling
+        H_actual = H * self.config.supersampling
+
+        # --- GT data: keep on whatever device it came from ---
+        gt_rgb = batch["image"]
+        if gt_rgb.dtype == torch.uint8:
+            gt_rgb = gt_rgb.float() / 255.0
+        elif gt_rgb.dtype == torch.uint16:
+            gt_rgb = gt_rgb.float() / 65535.0
+        elif gt_rgb.dtype == torch.float16:
+            gt_rgb = gt_rgb.float()
+        gt_rgb = gt_rgb[..., :3].contiguous()
+
+        gt_depth = batch.get('depth', None)
+        if gt_depth is not None:
+            gt_depth = gt_depth.float()
+            if len(gt_depth.shape) == 3:
+                gt_depth = gt_depth.unsqueeze(-1)
+            gt_depth = gt_depth.contiguous()
+
+        gt_normal = batch.get('normal', None)
+        if gt_normal is not None:
+            if gt_normal.dtype == torch.uint8:
+                gt_normal = gt_normal.float() / (255 / 2) - 1.0
+            gt_normal = gt_normal.float().contiguous()
+
+        gt_alpha = gt_rgb_mask = gt_depth_mask = gt_normal_mask = gt_alpha_mask = None
+        if "mask" in batch:
+            mask = batch['mask'].float() > 0.5
+            gt_rgb_mask = mask.contiguous()
+            if self.config.apply_loss_for_mask:
+                gt_alpha = mask.contiguous()
+        if gt_depth is not None:
+            gt_depth_mask = (gt_depth != 0.0).contiguous()
+            gt_alpha_mask = gt_depth_mask
+        if gt_normal is not None:
+            gt_normal_mask = (gt_normal.sum(-1, True) > -2.366).contiguous()
+
+        # --- Loss weights ---
+        step = self.step
+        cfg = self.config
+        dist_factor = min(step / max(cfg.distortion_reg_warmup, 1), 1.0)
+        reg_active = float(step >= cfg.reg_warmup_length)
+        sup_active = float(step > cfg.supervision_warmup)
+        alpha_reg_factor = cfg.alpha_reg_weight * min(step / max(cfg.alpha_reg_warmup, 1), 1.0)
+        loss_weights = [
+            (1.0 - cfg.l2_lambda) * (1.0 - cfg.ssim_lambda) * (1.0 - cfg.lpips_lambda),
+            cfg.l2_lambda * (1.0 - cfg.ssim_lambda) * (1.0 - cfg.lpips_lambda),
+            sup_active * cfg.depth_supervision_weight,
+            sup_active * cfg.normal_supervision_weight,
+            cfg.alpha_loss_weight,
+            0.0 if gt_alpha is None else cfg.alpha_loss_weight_under,
+            reg_active * cfg.normal_reg_weight * dist_factor,
+            reg_active * alpha_reg_factor,
+            reg_active * cfg.rgb_distortion_reg * dist_factor,
+            reg_active * cfg.depth_distortion_reg * dist_factor,
+            reg_active * cfg.normal_distortion_reg * dist_factor,
+        ]
+        w_ssim = cfg.ssim_lambda * (1.0 - cfg.lpips_lambda)
+        num_loss_scales = cfg.num_loss_scales + 1
+        compute_loss_map = cfg.use_loss_map or (cfg.compute_hessian_diagonal is not None)
+
+        sh_degree_to_use = step // max(cfg.sh_degree_warmup_every, 1)
+        max_steps = self.trainer_config.num_iterations
+
+        # --- Fused C++ training step ---
+        loss_dict = self.core.engine_train_step(
+            step, max_steps,
+            sh_degree_to_use,
+            W_actual, H_actual, camera_model,
+            viewmats, intrins, dist_coeffs,
+            gt_rgb, gt_depth, gt_normal, gt_alpha,
+            gt_rgb_mask, gt_depth_mask, gt_normal_mask, gt_alpha_mask,
+            loss_weights, w_ssim, num_loss_scales, compute_loss_map,
+            self.config, self.trainer_config.optimizer,
+        )
+
+        # --- Verbose metrics ---
+        for key, value in loss_dict.items():
+            self.training_verboser.add_metric(key, value)
+        self.training_verboser.add_metric("num_splats", self.core.cur_num_splats, last_only=True)
+        self.training_verboser.add_metric("max_num_splats", self.core.max_num_splats, last_only=True)
+        self.training_verboser.add_metric("num_sh", min(sh_degree_to_use, self.config.sh_degree), last_only=True)
+        self.training_verboser.add_metric("max_num_sh", self.config.sh_degree, last_only=True)
 
     def get_loss_grad(self, outputs, batch, batch_size: int) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict."""

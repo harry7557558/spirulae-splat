@@ -194,16 +194,16 @@ inline std::tuple<
     bool need_viewmat_grad
 ) {
     if (!v_splats_w.has_value())
-        v_splats_w = SplatPrimitive::WorldBuffer::zeros_pool(splats_w, "raster_eval3d_bwd.v_world");
+        v_splats_w = SplatPrimitive::WorldBuffer::zeros_pool(splats_w, "raster_bwd.v_world");
     if (!v_splats_s.has_value())
-        v_splats_s = SplatPrimitive::ScreenBuffer::zeros_pool(splats_s, "raster_eval3d_bwd.v_screen");
+        v_splats_s = SplatPrimitive::ScreenBuffer::zeros_pool(splats_s, "raster_bwd.v_screen");
 
     DeviceTensor2D<float> v_viewmats_buf;
     if (need_viewmat_grad) {
         auto& shape = std::get<2>(viewmats);
         int64_t total = 1;
         for (auto s : shape) total *= s;
-        v_viewmats_buf.resize("raster_eval3d_bwd.v_viewmats", total, 1);
+        v_viewmats_buf.resize("raster_bwd.v_viewmats", total, 1);
         v_viewmats_buf.zero();
     }
 
@@ -219,14 +219,14 @@ inline std::tuple<
     std::vector<DeviceTensorFloatND> h_splats_w;
     std::vector<DeviceTensorFloatND> h_splats_s;
     if (output_hessian_diagonal) {
-        vr_splats_w = SplatPrimitive::WorldBuffer::zeros_pool(splats_w, "raster_eval3d_bwd.vr_world");
-        vr_splats_s = SplatPrimitive::ScreenBuffer::zeros_pool(splats_s, "raster_eval3d_bwd.vr_screen");
-        h_splats_w = SplatPrimitive::WorldBuffer::zeros_pool(splats_w, "raster_eval3d_bwd.h_world");
-        h_splats_s = SplatPrimitive::ScreenBuffer::zeros_pool(splats_s, "raster_eval3d_bwd.h_screen");
+        vr_splats_w = SplatPrimitive::WorldBuffer::zeros_pool(splats_w, "raster_bwd.vr_world");
+        vr_splats_s = SplatPrimitive::ScreenBuffer::zeros_pool(splats_s, "raster_bwd.vr_screen");
+        h_splats_w = SplatPrimitive::WorldBuffer::zeros_pool(splats_w, "raster_bwd.h_world");
+        h_splats_s = SplatPrimitive::ScreenBuffer::zeros_pool(splats_s, "raster_bwd.h_screen");
     }
     DeviceVector<float> o_accum_weight;
     if (output_accum_weight) {
-        o_accum_weight.resize("raster_eval3d_bwd.accum_weight", num_splats);
+        o_accum_weight.resize("raster_bwd.accum_weight", num_splats);
         o_accum_weight.zero();
     }
     DeviceTensor3D<float> o_accum_weight_3d;

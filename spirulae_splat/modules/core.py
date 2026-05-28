@@ -95,6 +95,13 @@ class Renderer:
         self.use_fused_proj_bwd_optim = use_fused_proj_bwd_optim
         self.quantize_sh_optim = quantize_sh_optim
 
+        # Engine path: upload splats to device pool once at init (idempotent on C++ side).
+        if self.primitive in ['3dgs', 'mip', '3dgut'] and not self.use_bvh:
+            _C.set_data_3dgs(
+                self.cur_num_splats,
+                *[self._tv(t) for t in self.splats_world]
+            )
+
     def set_params(
         self,
         viewmats: Tensor,  # [..., C, 4, 4]
@@ -113,8 +120,8 @@ class Renderer:
         actual_width: int = None,
         actual_height: int = None
     ):
-        self.viewmats = viewmats
-        self.intrins = intrins
+        self.viewmats = viewmats.cpu().contiguous()
+        self.intrins = intrins.cpu().contiguous()
         self.width = width
         self.height = height
         self.sh_degree_to_use = sh_degree_to_use
@@ -125,7 +132,7 @@ class Renderer:
         self.accum_weight_map = accum_weight_map
         self.max_blending_masks = max_blending_masks
         self.camera_model = camera_model
-        self.dist_coeffs = dist_coeffs
+        self.dist_coeffs = dist_coeffs.cpu() if dist_coeffs is not None else None
         self.actual_width = actual_width
         self.actual_height = actual_height
         if self.dist_coeffs is not None:
@@ -133,11 +140,11 @@ class Renderer:
 
     @staticmethod
     def _tv(tensor: torch.Tensor):
-        """Convert torch.Tensor to (data_ptr, element_size, shape) for C++ Engine calls."""
+        """Convert torch.Tensor to (data_ptr, element_size, shape) for C++ Engine calls.
+        Works with both CPU and CUDA tensors."""
         if tensor is None:
             return (0, 4, [0])
-        assert tensor.is_contiguous()
-        assert tensor.is_cuda, tensor
+        assert tensor.is_contiguous(), f"Tensor must be contiguous, got strides {tensor.stride()}"
         return (tensor.data_ptr(), tensor.element_size(), list(tensor.shape))
 
     def engine_forward(self):
@@ -145,13 +152,9 @@ class Renderer:
         C = self.viewmats.shape[0]
         H, W = self.height, self.width
 
-        rgb = torch.zeros(C, H, W, 3, device=self.device, dtype=torch.float32)
-        depth = torch.zeros(C, H, W, 1, device=self.device, dtype=torch.float32)
-        Ts = torch.zeros(C, H, W, 1, device=self.device, dtype=torch.float32)
-
         dist_coeffs = self.dist_coeffs
         if dist_coeffs is None:
-            dist_coeffs = torch.zeros(C, 10, device=rgb.device, dtype=torch.float32)
+            dist_coeffs = torch.zeros(C, 10, dtype=torch.float32)
 
         _C.set_data_3dgs(
             self.cur_num_splats,
@@ -168,10 +171,12 @@ class Renderer:
             self.primitive,
             self.sh_degree_to_use,
             self.packed,
-            self._tv(rgb),
-            self._tv(depth),
-            self._tv(Ts)
         )
+
+        rgb = torch.empty(C, H, W, 3, dtype=torch.float32)
+        depth = torch.empty(C, H, W, 1, dtype=torch.float32)
+        Ts = torch.empty(C, H, W, 1, dtype=torch.float32)
+        _C.engine_copy_render_to_host(self._tv(rgb), self._tv(depth), self._tv(Ts))
 
         self.render_colors = (rgb, depth)
         self.render_Ts = Ts
@@ -193,21 +198,18 @@ class Renderer:
 
     def engine_debug_forward(self, override_features_dc=None, override_sh_degree=-1):
         """Re-render with custom features_dc and/or sh_degree for debugging.
-        Returns RGB tensor [C, H, W, 3]."""
+        Returns CPU RGB tensor [C, H, W, 3]."""
         C = self.viewmats.shape[0]
         H, W = self.height, self.width
-        out_rgb = torch.zeros(C, H, W, 3, device=self.splats_world[0].device, dtype=torch.float32)
-        _C.engine_debug_forward(
-            self._tv(override_features_dc),
-            override_sh_degree,
-            self._tv(out_rgb)
-        )
+        out_rgb = torch.zeros(C, H, W, 3, dtype=torch.float32)
+        dc_tv = self._tv(override_features_dc) if override_features_dc is not None else (0, 4, [0])
+        _C.engine_debug_forward(dc_tv, override_sh_degree, self._tv(out_rgb))
         return out_rgb
 
     def engine_get_accum_weight(self):
-        """Copy per-splat accum_buffer from C++ pool, compute weight as col0/col1."""
+        """Copy per-splat accum_buffer from C++ pool (D→H), compute weight as col0/col1."""
         N = _C.engine_get_cur_num_splats()
-        buf = torch.zeros(N, 2, dtype=torch.float32, device=self.splats_world[0].device)
+        buf = torch.zeros(N, 2, dtype=torch.float32)
         _C.engine_copy_accum_buffer(self._tv(buf))
         weight = torch.where(buf[:, 1] != 0, buf[:, 0] / buf[:, 1], torch.zeros_like(buf[:, 0]))
         return weight
@@ -254,6 +256,81 @@ class Renderer:
             optim_config.use_per_splat_bias_correction,
         )
 
+    def engine_train_step(self, step, max_steps,
+                          # Forward
+                          sh_degree_to_use,
+                          width, height, camera_model,
+                          viewmats, intrins, dist_coeffs,
+                          # GT data
+                          gt_rgb, gt_depth, gt_normal, gt_alpha,
+                          gt_rgb_mask, gt_depth_mask, gt_normal_mask, gt_alpha_mask,
+                          # Loss config
+                          loss_weights, w_ssim, num_loss_scales, compute_loss_map,
+                          # Configs
+                          model_config, optim_config):
+        """Single fused training step (set_camera + set_gt + fwd + loss/bwd + optim + densify).
+        All input tensors are CPU; returns loss_dict for verbose."""
+        if optim_config.max_steps is not None:
+            max_steps_lr = optim_config.max_steps
+        else:
+            max_steps_lr = max_steps
+
+        result = _C.engine_train_step(
+            step, max_steps,
+            # Forward config
+            self.primitive,
+            sh_degree_to_use,
+            self.packed,
+            # Camera
+            width, height, camera_model.upper(),
+            self._tv(viewmats),
+            self._tv(intrins),
+            self._tv(dist_coeffs),
+            # GT
+            self._tv(gt_rgb), self._tv(gt_depth), self._tv(gt_normal), self._tv(gt_alpha),
+            self._tv(gt_rgb_mask), self._tv(gt_depth_mask), self._tv(gt_normal_mask), self._tv(gt_alpha_mask),
+            # Loss
+            loss_weights, w_ssim, num_loss_scales, compute_loss_map,
+            # LRs
+            optim_config.get_scheduled_lr("means", step, max_steps_lr),
+            optim_config.get_scheduled_lr("quats", step, max_steps_lr),
+            optim_config.get_scheduled_lr("scales", step, max_steps_lr),
+            optim_config.get_scheduled_lr("opacities", step, max_steps_lr),
+            optim_config.get_scheduled_lr("features_dc", step, max_steps_lr),
+            optim_config.get_scheduled_lr("features_sh", step, max_steps_lr),
+            # Regularization
+            model_config.max_gauss_ratio,
+            model_config.scale_regularization_weight,
+            model_config.opacity_reg,
+            model_config.scale_reg,
+            model_config.erank_reg,
+            model_config.erank_reg_s3,
+            model_config.quat_norm_reg,
+            model_config.sh_reg,
+            optim_config.use_scale_agnostic_mean,
+            self.quantize_sh_optim,
+            optim_config.use_per_splat_bias_correction,
+            # Densify
+            model_config.refine_start_iter,
+            model_config.refine_stop_num_iter,
+            model_config.refine_every,
+            model_config.growth_factor,
+            model_config.min_opacity,
+            model_config.max_screen_size,
+            model_config.max_screen_size_clip_hardness,
+            model_config.max_world_size,
+            model_config.noise_lr,
+            model_config.noise_lr_final,
+            model_config.relocate_heuristic_weight,
+        )
+        # Update Python-side cur_num_splats (densification happened in C++)
+        num_added = int(result.pop("num_added", 0))
+        result.pop("cur_num_splats", None)
+        result.pop("max_num_splats", None)
+        self.cur_num_splats += num_added
+        self.sh_degree_to_use = sh_degree_to_use
+        return result
+
     def engine_densify_step(self, step, max_steps, model_config):
         """Run densification step via C++ Engine. All tensors managed by C++ pool."""
         num_added = _C.engine_densify_step(
@@ -271,6 +348,10 @@ class Renderer:
             model_config.relocate_heuristic_weight,
         )
         self.cur_num_splats += num_added
+
+    def engine_sync_splats_to_host(self):
+        """Copy device splat data back to CPU PyTorch parameters after optim+densify."""
+        _C.engine_copy_splats_to_host(*[self._tv(t) for t in self.splats_world])
 
     def zero_grad(self):
         return

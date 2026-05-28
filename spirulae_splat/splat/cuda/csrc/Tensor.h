@@ -81,6 +81,15 @@ public:
         return total;
     }
 
+    // Per-slot breakdown: returns [(key, used_bytes, cap_bytes), ...]
+    std::vector<std::tuple<std::string, size_t, size_t>> getBreakdown() const {
+        std::vector<std::tuple<std::string, size_t, size_t>> result;
+        result.reserve(_slots.size());
+        for (auto& [k, s] : _slots)
+            result.emplace_back(k, s.used_bytes, s.cap_bytes);
+        return result;
+    }
+
     ~DevicePool() { freeAll(); }
 };
 

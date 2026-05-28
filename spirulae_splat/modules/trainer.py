@@ -306,10 +306,16 @@ class Trainer:
         if len(inputs) != 1:
             raise NotImplementedError()
         for i, (camera, batch) in enumerate(inputs):
-            model_outputs = self.model.get_outputs(camera)
-            loss_grad = self.model.get_loss_grad(model_outputs, batch, len(inputs))
-            self.model.backward(model_outputs, loss_grad)
-            self.model.optim_step()
+            # Engine path: fused C++ training step (no render output H↔D copy)
+            if (self.model.core.primitive in ['3dgs', 'mip', '3dgut']
+                    and not self.model.core.use_bvh
+                    and not isinstance(camera, tuple)):
+                self.model.engine_train_step(camera, batch)
+            else:
+                model_outputs = self.model.get_outputs(camera)
+                loss_grad = self.model.get_loss_grad(model_outputs, batch, len(inputs))
+                self.model.backward(model_outputs, loss_grad)
+                self.model.optim_step()
 
         self.model.verbose()
 
@@ -450,7 +456,7 @@ class Trainer:
                     f.unlink()
 
     def print_vram_breakdown(self):
-        # print(torch.cuda.memory_summary(device=None, abbreviated=False))
+        from spirulae_splat.splat.cuda import _C
 
         name_map = {}
         def add_tensor(key, value):
@@ -464,7 +470,7 @@ class Trainer:
                 name_map[value.data_ptr()] = []
             name_map[value.data_ptr()].append(key)
         for key, value in self.model.core.__dict__.items():
-            add_tensor(f"model.core.{key}", value)
+            add_tensor(f"core.{key}", value)
         for key, value in self.model.__dict__.items():
             add_tensor(f"model.{key}", value)
 
@@ -482,16 +488,34 @@ class Trainer:
             except:
                 pass
         breakdown.sort(reverse=True)
-        total = 0
+        torch_total = 0
+        print("=== PyTorch tensors ===")
         for nbytes, shape, dtype, device, ptr in breakdown:
-            print(f"{nbytes/1024**2:.2f} MiB {shape} {dtype} {device} - {' '.join(name_map.get(ptr, []))}")
-            total += nbytes
-        print(f"sum of accounted tensor sizes - {total / 1024**2:.2f} MiB")
-        print(f"torch.cuda.memory_allocated() - {torch.cuda.memory_allocated() / 1024**2:.2f} MiB")
-        print(f"torch.cuda.memory_reserved() - {torch.cuda.memory_reserved() / 1024**2:.2f} MiB")
-        free, total = torch.cuda.mem_get_info(device)
-        print(f"torch.cuda.mem_get_info(device) - {(total - free) / 1024**2:.2f} MiB")
-        print('\n'*13)
+            print(f"  {nbytes/1024**2:8.2f} MiB  {str(shape):24s} {dtype:16s}  {' '.join(name_map.get(ptr, []))}")
+            torch_total += nbytes
+
+        print(f"\n=== C++ DevicePool ===")
+        pool_breakdown = _C.engine_get_pool_breakdown()
+        pool_breakdown.sort(key=lambda x: -x[2])
+        pool_total_used = 0
+        pool_total_cap = 0
+        for key, used, cap in pool_breakdown:
+            print(f"  {cap/1024**2:8.2f} MiB  (used {used/1024**2:.2f})  {key}")
+            pool_total_used += used
+            pool_total_cap += cap
+        scratch_bytes = _C.engine_get_scratch_bytes()
+        if scratch_bytes > 0:
+            print(f"  {scratch_bytes/1024**2:8.2f} MiB  DeviceScratch")
+            pool_total_cap += scratch_bytes
+
+        print(f"\n=== Summary ===")
+        print(f"  PyTorch tensors:          {torch_total / 1024**2:8.2f} MiB")
+        print(f"  C++ pool (capacity):      {pool_total_cap / 1024**2:8.2f} MiB")
+        print(f"  torch.cuda.mem_allocated: {torch.cuda.memory_allocated() / 1024**2:8.2f} MiB")
+        print(f"  torch.cuda.mem_reserved:  {torch.cuda.memory_reserved() / 1024**2:8.2f} MiB")
+        free, total = torch.cuda.mem_get_info()
+        print(f"  GPU memory in use:        {(total - free) / 1024**2:8.2f} MiB")
+        print()
 
 
 @dataclass

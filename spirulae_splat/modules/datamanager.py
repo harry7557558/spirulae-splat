@@ -387,8 +387,9 @@ class SpirulaeSplatDataManager:
 
             patch_offsets.append((x0, y0))
 
+        # Engine path: keep training data on CPU; C++ does H→D each step.
         for key in batch:
-            batch[key] = torch.stack(batch[key]).to(self.device)
+            batch[key] = torch.stack(batch[key])
 
         camera = self.train_dataset.cameras[image_indices]
         if CameraType.EQUIRECTANGULAR.value in camera.camera_type:
@@ -404,13 +405,12 @@ class SpirulaeSplatDataManager:
         camera.width = self.config.patch_size * torch.ones_like(camera.width)
         camera.intrins[:, 2:3] -= offsets[:, 1:2].to(camera.intrins)
         camera.intrins[:, 3:4] -= offsets[:, 0:1].to(camera.intrins)
-        camera = camera.to(self.device)
         # camera.metadata["num_unique_cam_idx"] = len(set(*image_indices))
-        camera.metadata["cam_idx"] = image_indices.to(self.device)
-        camera.metadata["patch_offsets"] = torch.tensor(patch_offsets, dtype=torch.int32).to(self.device)
+        camera.metadata["cam_idx"] = image_indices
+        camera.metadata["patch_offsets"] = torch.tensor(patch_offsets, dtype=torch.int32)
 
         if self.config.compute_visibility_masks:
-            camera.metadata['visibility_masks'] = SplatTrainingLosses.get_visibility_masks(batch, self.device)
+            camera.metadata['visibility_masks'] = SplatTrainingLosses.get_visibility_masks(batch, "cpu")
 
         return camera, batch
 
@@ -512,21 +512,19 @@ class SpirulaeSplatDataManager:
                     results.extend(pack_batch(camera_i, batch_i, max_batch_size, _no_split_batch=True))
                 return results
 
+            # Engine path: keep training data on CPU; C++ does H→D in pool buffers each step.
             for key, value in camera.items():
                 if isinstance(value, torch.Tensor) and value.numel() == 0:
                     camera[key] = None
                 elif isinstance(value, torch.Tensor) and max_batch_size is not None:
-                    camera[key] = value[:max_batch_size].to(self.device)
+                    camera[key] = value[:max_batch_size]
                 else:
                     camera[key] = value
             metadata = camera.pop('metadata', {})
-            camera = Cameras(**camera).to(self.device)
-            for key, value in batch.items():
-                if isinstance(value, torch.Tensor):
-                    batch[key] = value.to(self.device)
+            camera = Cameras(**camera)
             for key, value in metadata.items():
-                if isinstance(value, torch.Tensor):
-                    metadata[key] = value.to(self.device) if value.numel() != 0 else None
+                if isinstance(value, torch.Tensor) and value.numel() == 0:
+                    metadata[key] = None
             camera.metadata = metadata
             return [(camera, batch)]
 
