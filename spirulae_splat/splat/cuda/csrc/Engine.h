@@ -130,6 +130,30 @@ void engine_bilagrid_optim_step(
     float tv_weight_rgb, float tv_weight_depth, float tv_weight_normal
 );
 
+// --- PPISP (RGB only, applied AFTER bilagrid). ---
+// Allocates a per-camera PPISP parameter table and seeds it with the type's
+// default values ("original" → 12 zeros, 12 zeros, 3x(a,a,b,0); "rqs" → all 0).
+void engine_init_ppisp(int n_grids, std::string param_type);
+
+// Apply PPISP forward in place on the current rendered RGB; saves a pre-PPISP
+// copy used by backward. Must be called after forward_3dgs (and after
+// engine_bilagrid_forward when bilagrid is also enabled).
+void engine_ppisp_forward(int cam_idx);
+
+// Adam step over the PPISP parameter table. Also folds in the 6 PPISP
+// regularization-loss gradients (using the provided per-loss weights) before
+// the Adam update. Pass loss weights in PPISPRegLossIndex order.
+void engine_ppisp_optim_step(
+    int step,
+    float lr,
+    float reg_exposure_mean,
+    float reg_vig_center,
+    float reg_vig_non_pos,
+    float reg_vig_channel_var,
+    float reg_color_mean,
+    float reg_crf_channel_var
+);
+
 // --- Densification step ---
 
 // Returns: number of splats added (0 if no densification this step)
@@ -191,7 +215,15 @@ std::map<std::string, float> engine_train_step(
     // Bilagrid (no-op when no engine_init_bilagrid_* has been called)
     int bilagrid_cam_idx,
     float bilagrid_lr_rgb, float bilagrid_lr_depth, float bilagrid_lr_normal,
-    float bilagrid_tv_weight_rgb, float bilagrid_tv_weight_depth, float bilagrid_tv_weight_normal
+    float bilagrid_tv_weight_rgb, float bilagrid_tv_weight_depth, float bilagrid_tv_weight_normal,
+    // PPISP (no-op when engine_init_ppisp has not been called)
+    float ppisp_lr,
+    float ppisp_reg_exposure_mean,
+    float ppisp_reg_vig_center,
+    float ppisp_reg_vig_non_pos,
+    float ppisp_reg_vig_channel_var,
+    float ppisp_reg_color_mean,
+    float ppisp_reg_crf_channel_var
 );
 
 // --- Debug rendering ---

@@ -270,6 +270,27 @@ class Renderer:
             float(tv_weight_rgb), float(tv_weight_depth), float(tv_weight_normal)
         )
 
+    def engine_init_ppisp(self, n_grids, param_type="original"):
+        """One-time allocation of C++ PPISP per-camera parameter table. Seeded
+        with the type's default values. Must be called after set_data_3dgs."""
+        _C.engine_init_ppisp(int(n_grids), str(param_type))
+
+    def engine_ppisp_forward(self, cam_idx):
+        """Apply PPISP forward in place on the current rendered RGB."""
+        _C.engine_ppisp_forward(int(cam_idx))
+
+    def engine_ppisp_optim_step(self, step, lr,
+                                 reg_exposure_mean, reg_vig_center,
+                                 reg_vig_non_pos, reg_vig_channel_var,
+                                 reg_color_mean, reg_crf_channel_var):
+        """Adam step over PPISP params + folds in the 6 regularization losses."""
+        _C.engine_ppisp_optim_step(
+            int(step), float(lr),
+            float(reg_exposure_mean), float(reg_vig_center),
+            float(reg_vig_non_pos), float(reg_vig_channel_var),
+            float(reg_color_mean), float(reg_crf_channel_var)
+        )
+
     def engine_train_step(self, step, max_steps,
                           # Forward
                           sh_degree_to_use,
@@ -287,7 +308,13 @@ class Renderer:
                           bilagrid_cam_idx=0,
                           bilagrid_lr_rgb=0.0, bilagrid_lr_depth=0.0, bilagrid_lr_normal=0.0,
                           bilagrid_tv_weight_rgb=0.0, bilagrid_tv_weight_depth=0.0,
-                          bilagrid_tv_weight_normal=0.0):
+                          bilagrid_tv_weight_normal=0.0,
+                          # PPISP (ignored if engine_init_ppisp was never called).
+                          # Reuses bilagrid_cam_idx for the camera selector.
+                          ppisp_lr=0.0,
+                          ppisp_reg_exposure_mean=0.0, ppisp_reg_vig_center=0.0,
+                          ppisp_reg_vig_non_pos=0.0, ppisp_reg_vig_channel_var=0.0,
+                          ppisp_reg_color_mean=0.0, ppisp_reg_crf_channel_var=0.0):
         """Single fused training step (set_camera + set_gt + fwd + loss/bwd + optim + densify).
         All input tensors are CPU; returns loss_dict for verbose."""
         if optim_config.max_steps is not None:
@@ -347,6 +374,11 @@ class Renderer:
             float(bilagrid_lr_rgb), float(bilagrid_lr_depth), float(bilagrid_lr_normal),
             float(bilagrid_tv_weight_rgb), float(bilagrid_tv_weight_depth),
             float(bilagrid_tv_weight_normal),
+            # PPISP
+            float(ppisp_lr),
+            float(ppisp_reg_exposure_mean), float(ppisp_reg_vig_center),
+            float(ppisp_reg_vig_non_pos), float(ppisp_reg_vig_channel_var),
+            float(ppisp_reg_color_mean), float(ppisp_reg_crf_channel_var),
         )
         # Update Python-side cur_num_splats (densification happened in C++)
         num_added = int(result.pop("num_added", 0))

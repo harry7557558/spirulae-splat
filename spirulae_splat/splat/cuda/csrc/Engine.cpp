@@ -134,11 +134,38 @@ bool bilagrid_normal_optim_initialized = false;
 // Camera index used for the current step's bilagrid forward.
 int bilagrid_cur_cam_idx = 0;
 
+// ============================================================================
+// PPISP state (per-camera RGB-only photometric correction).
+//
+// Mirrors the bilagrid layout: parameter table, gradient accumulator, Adam
+// moments, and a saved pre-PPISP RGB used to drive backward. PPISP is applied
+// AFTER bilagrid in forward, so its backward runs BEFORE bilagrid's backward.
+// ============================================================================
+DeviceTensor2D<float> ppisp_params;          // [N_cam, P]
+DeviceTensor2D<float> ppisp_grads;           // [N_cam, P]
+DeviceTensor2D<float> ppisp_g1, ppisp_g2;    // Adam moments
+DeviceTensor3D<float3> fwd_rgb_pre_ppisp;    // [C, H, W]
+std::string ppisp_param_type;                // "original" | "rqs"
+int ppisp_num_params = 0;                    // 36 (original) | 39 (rqs)
+bool ppisp_enabled = false;
+bool ppisp_optim_initialized = false;
+// Per-camera-step shared scratch for the regularization forward/backward.
+// Allocated lazily via DevicePool.
+int ppisp_cur_cam_idx = 0;
+
 } // namespace Buffers
 
 // Forward declaration for affine identity initializer (BilagridInit.cu).
 void bilagrid_affine_identity_init(
     float* grids, int N, int L, int H, int W, cudaStream_t stream);
+
+// Forward declaration for PPISP "original" default initializer (PpispInit.cu).
+void ppisp_original_default_init(
+    float* params, int N, cudaStream_t stream);
+
+// Forward declaration for elementwise grad accumulation (PpispInit.cu).
+void ppisp_add_into_grad(
+    const float* src, float* dst, size_t n, cudaStream_t stream);
 
 
 // Create DeviceTensorFloatND from TorchTensorView by appending trailing 1 (for float-typed access)
@@ -817,6 +844,10 @@ static void _engine_bilagrid_backward_hook(
     TorchTensorView v_ref_depth,
     TorchTensorView v_ref_normal);
 
+// Forward declarations for PPISP helpers defined later in the file.
+static void _ensure_ppisp_optim_state();
+static void _engine_ppisp_backward_hook(TorchTensorView v_render_rgb);
+
 
 std::map<std::string, float> engine_compute_loss_backward(
     int step,
@@ -944,6 +975,16 @@ std::map<std::string, float> engine_compute_loss_backward(
         pixel_grads
     );
 
+    // --- PPISP backward hook ---
+    // Forward order is render → bilagrid → PPISP → loss, so PPISP backward
+    // runs FIRST: it rewrites v_render_rgb (post-PPISP → pre-PPISP) and
+    // accumulates the per-camera PPISP parameter gradient. The bilagrid hook
+    // below then consumes the pre-PPISP v_render_rgb.
+    if (Buffers::ppisp_enabled) {
+        _ensure_ppisp_optim_state();
+        _engine_ppisp_backward_hook(pixel_grads.v_render_rgb);
+    }
+
     // --- Bilagrid backward hook ---
     // Transforms v_render_rgb (post-bilagrid → pre-bilagrid) and accumulates
     // gradients into bilagrid_*_grads for any enabled bilagrid types. The
@@ -959,7 +1000,6 @@ std::map<std::string, float> engine_compute_loss_backward(
             pixel_grads.v_ref_normal);
     }
 
-    // TODO: PPISP forward/backward
     // TODO: color space conversion (rgb_to_srgb) forward/backward
     // TODO: background blending forward/backward
 
@@ -1487,6 +1527,256 @@ void engine_bilagrid_optim_step(
 }
 
 
+// ============================================================================
+// PPISP integration
+// ============================================================================
+
+static constexpr cudaStream_t kPpispStream = (cudaStream_t)0;
+
+// Build a TorchTensorView for the single-camera slice of a [N_cam, P] float
+// parameter table, with shape [1, P].
+static TorchTensorView _ppisp_params_slice_tv(
+    DeviceTensor2D<float>& table, int cam_idx
+) {
+    int64_t P = table.size<1>();
+    float* base = table.data_ptr() + (size_t)cam_idx * P;
+    return TorchTensorView((uint64_t)base, 4, {1LL, P});
+}
+
+// Build a TorchTensorView for the single-camera slice of camera_intrins ([N,4])
+// with shape [1, 4]. camera_intrins is rebuilt each step (1 camera per batch),
+// so cam_idx maps to slot 0 of the current batch — we use bid 0 of intrins.
+static TorchTensorView _ppisp_intrins_batch_tv() {
+    int C_batch = (int)Buffers::num_cameras;
+    return TorchTensorView(
+        (uint64_t)Buffers::camera_intrins.data_ptr(), 4, {(int64_t)C_batch, 4LL});
+}
+
+void engine_init_ppisp(int n_grids, std::string param_type) {
+    if (n_grids <= 0)
+        throw std::runtime_error("engine_init_ppisp: n_grids must be > 0");
+    int P;
+    if (param_type == "original" || param_type == "") P = 36;
+    else if (param_type == "rqs") P = 39;
+    else throw std::runtime_error(
+        "engine_init_ppisp: unknown param_type \"" + param_type +
+        "\", must be \"original\" or \"rqs\"");
+
+    Buffers::ppisp_param_type = (param_type == "" ? std::string("original") : param_type);
+    Buffers::ppisp_num_params = P;
+    Buffers::ppisp_params.resize("eng.ppisp.params", n_grids, P);
+    if (Buffers::ppisp_param_type == "original") {
+        ppisp_original_default_init(
+            Buffers::ppisp_params.data_ptr(), n_grids, kPpispStream);
+    } else {
+        Buffers::ppisp_params.zero();
+    }
+    Buffers::ppisp_enabled = true;
+    Buffers::ppisp_optim_initialized = false;
+}
+
+// Apply PPISP forward in place on the current rendered RGB.
+void engine_ppisp_forward(int cam_idx) {
+    if (!Buffers::ppisp_enabled) return;
+    Buffers::ppisp_cur_cam_idx = cam_idx;
+
+    int H = Buffers::image_height;
+    int W = Buffers::image_width;
+    int C_batch = (int)Buffers::num_cameras;
+    if (C_batch <= 0) return;
+    if (std::get<0>(Buffers::fwd_renders).data_ptr() == nullptr)
+        throw std::runtime_error("engine_ppisp_forward: forward_3dgs must run first");
+
+    // Save pre-PPISP render.
+    Buffers::fwd_rgb_pre_ppisp.resize("eng.ppisp.rgb_pre", C_batch, H, W);
+    float3* render_rgb = std::get<0>(Buffers::fwd_renders).data_ptr();
+    cudaMemcpyAsync(
+        Buffers::fwd_rgb_pre_ppisp.data_ptr(),
+        render_rgb,
+        (size_t)C_batch * H * W * sizeof(float3),
+        cudaMemcpyDeviceToDevice, kPpispStream);
+
+    // Build views: in_image and out_image are the same buffer (kernel is
+    // pixel-local, so in-place is safe).
+    TorchTensorView rgb_tv((uint64_t)render_rgb, 4, {(int64_t)C_batch, H, W, 3});
+    DeviceTensor3D<float3> in_img(rgb_tv);
+    DeviceTensor3D<float3> out_img(rgb_tv);
+
+    ppisp_forward(
+        in_img,
+        _ppisp_params_slice_tv(Buffers::ppisp_params, cam_idx),
+        _ppisp_intrins_batch_tv(),
+        (float)W, (float)H,
+        Buffers::ppisp_param_type,
+        out_img
+    );
+}
+
+// Ensure PPISP Adam moment and gradient buffers are allocated + zeroed.
+static void _ensure_ppisp_optim_state() {
+    if (Buffers::ppisp_optim_initialized) return;
+    if (Buffers::ppisp_params.data_ptr() == nullptr) return;
+    int64_t N = Buffers::ppisp_params.size<0>();
+    int64_t P = Buffers::ppisp_params.size<1>();
+    Buffers::ppisp_grads.resize("eng.ppisp.grads", N, P);
+    Buffers::ppisp_grads.zero();
+    Buffers::ppisp_g1.resize("eng.ppisp.g1", N, P);
+    Buffers::ppisp_g1.zero();
+    Buffers::ppisp_g2.resize("eng.ppisp.g2", N, P);
+    Buffers::ppisp_g2.zero();
+    Buffers::ppisp_optim_initialized = true;
+}
+
+// Backward hook: rewrites v_render_rgb (post-PPISP → pre-PPISP) in place and
+// accumulates the per-camera PPISP parameter gradient into ppisp_grads.
+static void _engine_ppisp_backward_hook(TorchTensorView v_render_rgb) {
+    int H = Buffers::image_height;
+    int W = Buffers::image_width;
+    int C_batch = (int)Buffers::num_cameras;
+    int cam_idx = Buffers::ppisp_cur_cam_idx;
+    if (std::get<0>(v_render_rgb) == 0) return;
+    if (Buffers::fwd_rgb_pre_ppisp.data_ptr() == nullptr) return;
+
+    TorchTensorView pre_tv(
+        (uint64_t)Buffers::fwd_rgb_pre_ppisp.data_ptr(), 4,
+        {(int64_t)C_batch, H, W, 3});
+    DeviceTensor3D<float3> in_img(pre_tv);
+    DeviceTensor3D<float3> v_out_img(v_render_rgb);
+    DeviceTensor3D<float3> v_in_img(v_render_rgb);  // overwrite in place
+
+    ppisp_backward(
+        in_img,
+        _ppisp_params_slice_tv(Buffers::ppisp_params, cam_idx),
+        _ppisp_intrins_batch_tv(),
+        (float)W, (float)H,
+        v_out_img,
+        Buffers::ppisp_param_type,
+        v_in_img,
+        _ppisp_params_slice_tv(Buffers::ppisp_grads, cam_idx)
+    );
+}
+
+// Compute the 6 PPISP regularization losses, scaled by their loss weights.
+// Returns the [6]-float device buffer (pool-backed). When `compute_grad=true`,
+// also accumulates the per-camera parameter gradient into Buffers::ppisp_grads
+// using v_losses = ones (matching training_losses.py).
+static float* _engine_ppisp_reg_loss_into(
+    const std::array<float, (int)PPISPRegLossIndex::length>& loss_weights,
+    bool compute_grad
+) {
+    int N = (int)Buffers::ppisp_params.size<0>();
+    int kRaw = (Buffers::ppisp_param_type == "rqs")
+        ? (int)RawPPISPRegLossIndexRQS::length
+        : (int)RawPPISPRegLossIndex::length;
+    int kLoss = (int)PPISPRegLossIndex::length;
+
+    // Output losses (zeroed each call so the in-kernel write is a clean store).
+    float* losses_buf = DevicePool::global().acquire<float>("eng.ppisp.reg_losses", kLoss);
+    cudaMemsetAsync(losses_buf, 0, kLoss * sizeof(float), kPpispStream);
+
+    // Raw losses scratch ([N+1, kRaw], pre-zeroed).
+    float* raw_losses_buf = DevicePool::global().acquire<float>(
+        "eng.ppisp.reg_raw_losses", (size_t)(N + 1) * kRaw);
+    cudaMemsetAsync(raw_losses_buf, 0, (size_t)(N + 1) * kRaw * sizeof(float),
+                    kPpispStream);
+
+    TorchTensorView params_tv(
+        (uint64_t)Buffers::ppisp_params.data_ptr(), 4,
+        {(int64_t)N, (int64_t)Buffers::ppisp_num_params});
+    TorchTensorView losses_tv((uint64_t)losses_buf, 4, {(int64_t)kLoss});
+    TorchTensorView raw_tv((uint64_t)raw_losses_buf, 4,
+        {(int64_t)(N + 1), (int64_t)kRaw});
+
+    compute_ppsip_regularization_forward(
+        params_tv, loss_weights, Buffers::ppisp_param_type,
+        losses_tv, raw_tv);
+
+    if (compute_grad) {
+        // v_losses = ones[kLoss]: gradient flows back through reg-loss sum.
+        float* v_losses = DevicePool::global().acquire<float>(
+            "eng.ppisp.v_reg_losses", kLoss);
+        std::vector<float> h_ones(kLoss, 1.0f);
+        cudaMemcpyAsync(v_losses, h_ones.data(), kLoss * sizeof(float),
+                        cudaMemcpyHostToDevice, kPpispStream);
+        TorchTensorView v_losses_tv((uint64_t)v_losses, 4, {(int64_t)kLoss});
+
+        // Accumulate into ppisp_grads (the regularization backward writes a
+        // fresh tensor, so use a scratch buffer and add in afterwards).
+        float* v_params_scratch = DevicePool::global().acquire<float>(
+            "eng.ppisp.v_reg_params",
+            (size_t)N * Buffers::ppisp_num_params);
+        cudaMemsetAsync(v_params_scratch, 0,
+            (size_t)N * Buffers::ppisp_num_params * sizeof(float), kPpispStream);
+        TorchTensorView v_params_tv(
+            (uint64_t)v_params_scratch, 4,
+            {(int64_t)N, (int64_t)Buffers::ppisp_num_params});
+
+        compute_ppsip_regularization_backward(
+            params_tv, loss_weights, raw_tv, v_losses_tv,
+            Buffers::ppisp_param_type, v_params_tv);
+
+        // ppisp_grads += v_params_scratch (over all N * P floats).
+        size_t total = (size_t)N * Buffers::ppisp_num_params;
+        ppisp_add_into_grad(v_params_scratch,
+            Buffers::ppisp_grads.data_ptr(), total, kPpispStream);
+    }
+
+    return losses_buf;
+}
+
+void engine_ppisp_optim_step(
+    int step,
+    float lr,
+    float reg_exposure_mean,
+    float reg_vig_center,
+    float reg_vig_non_pos,
+    float reg_vig_channel_var,
+    float reg_color_mean,
+    float reg_crf_channel_var
+) {
+    if (!Buffers::ppisp_enabled) return;
+    _ensure_ppisp_optim_state();
+    if (lr <= 0.0f) {
+        // Still zero accumulated grads for next iteration to match other paths.
+        Buffers::ppisp_grads.zero();
+        return;
+    }
+
+    // Fold the 6 regularization losses' gradients into ppisp_grads.
+    std::array<float, (int)PPISPRegLossIndex::length> loss_weights = {
+        reg_exposure_mean,
+        reg_vig_center,
+        reg_vig_non_pos,
+        reg_vig_channel_var,
+        reg_color_mean,
+        reg_crf_channel_var
+    };
+    bool any_reg = false;
+    for (float w : loss_weights) if (w > 0.0f) { any_reg = true; break; }
+    if (any_reg) {
+        (void)_engine_ppisp_reg_loss_into(loss_weights, /*compute_grad=*/true);
+    }
+
+    int64_t N = Buffers::ppisp_params.size<0>();
+    int64_t P = Buffers::ppisp_params.size<1>();
+    int64_t numel = N * P;
+    auto flat_view = [numel](float* p) {
+        TorchTensorView tv((uint64_t)p, 4, {numel, 1LL});
+        return DeviceTensorFloatND(tv);
+    };
+    DeviceVector<int32_t> no_per_splat_steps;
+    fused_adam_step(
+        numel,
+        flat_view(Buffers::ppisp_params.data_ptr()),
+        flat_view(Buffers::ppisp_grads.data_ptr()),
+        flat_view(Buffers::ppisp_g1.data_ptr()),
+        flat_view(Buffers::ppisp_g2.data_ptr()),
+        lr, step + 1, no_per_splat_steps,
+        /*l2_reg=*/0.0f, /*l2_reg_offset=*/0.0f);
+    Buffers::ppisp_grads.zero();
+}
+
+
 void engine_optim_step(
     int step,
     float lr_means, float lr_quats, float lr_scales, float lr_opacities,
@@ -1812,7 +2102,15 @@ std::map<std::string, float> engine_train_step(
     // Bilagrid config
     int bilagrid_cam_idx,
     float bilagrid_lr_rgb, float bilagrid_lr_depth, float bilagrid_lr_normal,
-    float bilagrid_tv_weight_rgb, float bilagrid_tv_weight_depth, float bilagrid_tv_weight_normal
+    float bilagrid_tv_weight_rgb, float bilagrid_tv_weight_depth, float bilagrid_tv_weight_normal,
+    // PPISP config (RGB only; cam_idx reuses bilagrid_cam_idx)
+    float ppisp_lr,
+    float ppisp_reg_exposure_mean,
+    float ppisp_reg_vig_center,
+    float ppisp_reg_vig_non_pos,
+    float ppisp_reg_vig_channel_var,
+    float ppisp_reg_color_mean,
+    float ppisp_reg_crf_channel_var
 ) {
     // Camera + GT: H→D copy into pool
     set_camera_params(width, height, camera_model, viewmats, intrins, dist_coeffs);
@@ -1826,6 +2124,12 @@ std::map<std::string, float> engine_train_step(
     if (Buffers::bilagrid_rgb_enabled || Buffers::bilagrid_depth_enabled ||
         Buffers::bilagrid_normal_enabled) {
         engine_bilagrid_forward(bilagrid_cam_idx);
+    }
+
+    // PPISP forward (in place on rendered RGB, AFTER bilagrid). No-op when
+    // disabled. Reuses bilagrid_cam_idx — both are the camera-index parameter.
+    if (Buffers::ppisp_enabled) {
+        engine_ppisp_forward(bilagrid_cam_idx);
     }
 
     // Loss + backward (reads pool, writes pool grads; D→H only for scalar loss values)
@@ -1860,6 +2164,33 @@ std::map<std::string, float> engine_train_step(
         if (Buffers::bilagrid_rgb_enabled)    loss_dict["bilagrid_tv"]        = h_tv[0];
         if (Buffers::bilagrid_depth_enabled)  loss_dict["bilagrid_depth_tv"]  = h_tv[1];
         if (Buffers::bilagrid_normal_enabled) loss_dict["bilagrid_normal_tv"] = h_tv[2];
+    }
+
+    // PPISP Adam step + regularization (after splat optim, before densify).
+    // Also read post-update regularization losses for verbose display.
+    if (Buffers::ppisp_enabled) {
+        engine_ppisp_optim_step(
+            step, ppisp_lr,
+            ppisp_reg_exposure_mean, ppisp_reg_vig_center,
+            ppisp_reg_vig_non_pos, ppisp_reg_vig_channel_var,
+            ppisp_reg_color_mean, ppisp_reg_crf_channel_var);
+
+        std::array<float, (int)PPISPRegLossIndex::length> reg_w = {
+            ppisp_reg_exposure_mean, ppisp_reg_vig_center,
+            ppisp_reg_vig_non_pos, ppisp_reg_vig_channel_var,
+            ppisp_reg_color_mean, ppisp_reg_crf_channel_var
+        };
+        float* losses_buf = _engine_ppisp_reg_loss_into(reg_w, /*compute_grad=*/false);
+        float h_losses[(int)PPISPRegLossIndex::length] = {0};
+        cudaMemcpy(h_losses, losses_buf,
+            (int)PPISPRegLossIndex::length * sizeof(float),
+            cudaMemcpyDeviceToHost);
+        loss_dict["ppisp_reg_exposure_mean"]   = h_losses[(int)PPISPRegLossIndex::ExposureMean];
+        loss_dict["ppisp_reg_vig_center"]      = h_losses[(int)PPISPRegLossIndex::VignettingCenter];
+        loss_dict["ppisp_reg_vig_non_pos"]     = h_losses[(int)PPISPRegLossIndex::VignettingNonPositivity];
+        loss_dict["ppisp_reg_vig_channel_var"] = h_losses[(int)PPISPRegLossIndex::VignettingChannelVariance];
+        loss_dict["ppisp_reg_color_mean"]      = h_losses[(int)PPISPRegLossIndex::ColorMean];
+        loss_dict["ppisp_reg_crf_channel_var"] = h_losses[(int)PPISPRegLossIndex::CRFChannelVariance];
     }
 
     // Densify (in-place on pool buffers, no copies)

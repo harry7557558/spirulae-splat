@@ -152,7 +152,6 @@ def get_extensions():
 import importlib.util
 if importlib.util.find_spec('torch') is None:
     raise ValueError("Please make sure you have PyTorch installed.")
-no_fused_bilagrid = (importlib.util.find_spec('fused_bilagrid') is None)
 
 
 setup(
@@ -174,9 +173,7 @@ setup(
         "torchmetrics[image]",
         "typing_extensions",
         "tabulate",
-    ] + [
-        "fused_bilagrid @ git+https://github.com/harry7557558/fused-bilagrid.git@dev",
-    ] * no_fused_bilagrid,
+    ],
     extras_require={
     },
     entry_points={

@@ -262,6 +262,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("engine_init_bilagrid_normal", &engine_init_bilagrid_normal);
     m.def("engine_bilagrid_forward", &engine_bilagrid_forward);
     m.def("engine_bilagrid_optim_step", &engine_bilagrid_optim_step);
+    m.def("engine_init_ppisp", &engine_init_ppisp);
+    m.def("engine_ppisp_forward", &engine_ppisp_forward);
+    m.def("engine_ppisp_optim_step", &engine_ppisp_optim_step);
 
 #if 0
     // Densify.cuh

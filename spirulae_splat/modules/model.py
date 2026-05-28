@@ -572,6 +572,9 @@ class SpirulaeSplatModel(torch.nn.Module):
         self._bilagrid_rgb_init = False
         self._bilagrid_depth_init = False
         self._bilagrid_normal_init = False
+        # PPISP: also lazy. Allocated on first iteration where config + LR is
+        # positive (RGB always has a supervision path via rendering loss).
+        self._ppisp_init = False
         self.training_verboser = TrainingVerbose()
 
         self.step = 0
@@ -815,6 +818,17 @@ class SpirulaeSplatModel(torch.nn.Module):
                 normal_LHW=(W_g, Y, X),
             )
             self._bilagrid_normal_init = True
+
+        # PPISP (RGB only): config flag + positive base LR. Always has supervision
+        # via the rendering loss; no dataset-side gating needed.
+        if (not self._ppisp_init
+                and cfg.use_ppisp
+                and optim_cfg.ppisp_lr > 0.0):
+            self.core.engine_init_ppisp(
+                self.num_train_data,
+                param_type=cfg.ppisp_param_type
+            )
+            self._ppisp_init = True
 
     def step_post_backward(self):
         return  # TODO
@@ -1662,6 +1676,25 @@ class SpirulaeSplatModel(torch.nn.Module):
             bilagrid_lr_normal = 0.0
             bilagrid_tv_weight_normal = 0.0
 
+        # PPISP: zero LR and reg weights when not yet initialized — C++ side
+        # treats this as a no-op.
+        if self._ppisp_init:
+            ppisp_lr = optim_cfg.get_scheduled_lr('ppisp', step, max_steps_lr)
+            ppisp_reg_exposure_mean   = cfg.ppisp_reg_exposure_mean
+            ppisp_reg_vig_center      = cfg.ppisp_reg_vig_center
+            ppisp_reg_vig_non_pos     = cfg.ppisp_reg_vig_non_pos
+            ppisp_reg_vig_channel_var = cfg.ppisp_reg_vig_channel_var
+            ppisp_reg_color_mean      = cfg.ppisp_reg_color_mean
+            ppisp_reg_crf_channel_var = cfg.ppisp_reg_crf_channel_var
+        else:
+            ppisp_lr = 0.0
+            ppisp_reg_exposure_mean = 0.0
+            ppisp_reg_vig_center = 0.0
+            ppisp_reg_vig_non_pos = 0.0
+            ppisp_reg_vig_channel_var = 0.0
+            ppisp_reg_color_mean = 0.0
+            ppisp_reg_crf_channel_var = 0.0
+
         # --- Fused C++ training step ---
         loss_dict = self.core.engine_train_step(
             step, max_steps,
@@ -1679,6 +1712,13 @@ class SpirulaeSplatModel(torch.nn.Module):
             bilagrid_tv_weight_rgb=bilagrid_tv_weight_rgb,
             bilagrid_tv_weight_depth=bilagrid_tv_weight_depth,
             bilagrid_tv_weight_normal=bilagrid_tv_weight_normal,
+            ppisp_lr=ppisp_lr,
+            ppisp_reg_exposure_mean=ppisp_reg_exposure_mean,
+            ppisp_reg_vig_center=ppisp_reg_vig_center,
+            ppisp_reg_vig_non_pos=ppisp_reg_vig_non_pos,
+            ppisp_reg_vig_channel_var=ppisp_reg_vig_channel_var,
+            ppisp_reg_color_mean=ppisp_reg_color_mean,
+            ppisp_reg_crf_channel_var=ppisp_reg_crf_channel_var,
         )
 
         # --- Verbose metrics ---
