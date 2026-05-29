@@ -143,9 +143,10 @@ bool use_per_splat_bias_correction = false;
 // dome-scale (16k+ cameras) datasets. The TV-loss gradient is computed inline
 // in the fused optimizer kernel rather than materialized to a buffer.
 
-// RGB
-DeviceTensor5D<float> bilagrid_rgb_grids;   // [N_cam, C_rgb, L, H, W]
-DeviceTensor5D<float> bilagrid_rgb_image_grad;  // [C_batch, C_rgb, L, H, W] (sparse over cams)
+// RGB. Channel-last layout: 9 / 12 channels are innermost so the trilinear
+// sampler reads C contiguous floats per corner instead of stride-L*H*W ones.
+DeviceTensor5D<float> bilagrid_rgb_grids;   // [N_cam, L, H, W, C_rgb]
+DeviceTensor5D<float> bilagrid_rgb_image_grad;  // [C_batch, L, H, W, C_rgb] (sparse over cams)
 DeviceTensor5D<float> bilagrid_rgb_g1, bilagrid_rgb_g2;        // float (when !quantize)
 DeviceVector<uint8_t> bilagrid_rgb_g1_q, bilagrid_rgb_g2_q;    // uint8 (when quantize)
 DeviceVector<float4>  bilagrid_rgb_quant_bounds;               // [n_blocks], used when quantize
@@ -157,7 +158,7 @@ bool bilagrid_rgb_enabled = false;
 bool bilagrid_rgb_optim_initialized = false;
 
 // Depth (gt-side)
-DeviceTensor5D<float> bilagrid_depth_grids;  // [N_cam, 2, L, H, W]
+DeviceTensor5D<float> bilagrid_depth_grids;  // [N_cam, L, H, W, 2]
 DeviceTensor5D<float> bilagrid_depth_image_grad;
 DeviceTensor5D<float> bilagrid_depth_g1, bilagrid_depth_g2;
 DeviceVector<uint8_t> bilagrid_depth_g1_q, bilagrid_depth_g2_q;
@@ -169,7 +170,7 @@ bool bilagrid_depth_enabled = false;
 bool bilagrid_depth_optim_initialized = false;
 
 // Normal (gt-side)
-DeviceTensor5D<float> bilagrid_normal_grids; // [N_cam, 3, L, H, W]
+DeviceTensor5D<float> bilagrid_normal_grids; // [N_cam, L, H, W, 3]
 DeviceTensor5D<float> bilagrid_normal_image_grad;
 DeviceTensor5D<float> bilagrid_normal_g1, bilagrid_normal_g2;
 DeviceVector<uint8_t> bilagrid_normal_g1_q, bilagrid_normal_g2_q;
@@ -1310,7 +1311,7 @@ void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W
     Buffers::bilagrid_rgb_type = type;
     Buffers::bilagrid_rgb_C = C;
     Buffers::bilagrid_rgb_quantize_optim = quantize_optim;
-    Buffers::bilagrid_rgb_grids.resize("eng.bg.rgb.grids", n_grids, C, L, H, W);
+    Buffers::bilagrid_rgb_grids.resize("eng.bg.rgb.grids", n_grids, L, H, W, C);
     if (type == "affine") {
         Buffers::bilagrid_rgb_grids.zero();
         bilagrid_affine_identity_init(
@@ -1327,7 +1328,7 @@ void engine_init_bilagrid_depth(int n_grids, int L, int H, int W,
     if (n_grids <= 0)
         throw std::runtime_error("engine_init_bilagrid_depth: n_grids must be > 0");
     Buffers::bilagrid_depth_quantize_optim = quantize_optim;
-    Buffers::bilagrid_depth_grids.resize("eng.bg.depth.grids", n_grids, 2, L, H, W);
+    Buffers::bilagrid_depth_grids.resize("eng.bg.depth.grids", n_grids, L, H, W, 2);
     Buffers::bilagrid_depth_grids.zero();
     Buffers::bilagrid_depth_scalars.resize("eng.bg.depth.scalars", n_grids);
     Buffers::bilagrid_depth_scalars.zero();
@@ -1340,7 +1341,7 @@ void engine_init_bilagrid_normal(int n_grids, int L, int H, int W,
     if (n_grids <= 0)
         throw std::runtime_error("engine_init_bilagrid_normal: n_grids must be > 0");
     Buffers::bilagrid_normal_quantize_optim = quantize_optim;
-    Buffers::bilagrid_normal_grids.resize("eng.bg.normal.grids", n_grids, 3, L, H, W);
+    Buffers::bilagrid_normal_grids.resize("eng.bg.normal.grids", n_grids, L, H, W, 3);
     Buffers::bilagrid_normal_grids.zero();
     Buffers::bilagrid_normal_enabled = true;
     Buffers::bilagrid_normal_optim_initialized = false;
@@ -1352,8 +1353,9 @@ static void _engine_bilagrid_tv_into(float* tv_buf3_device) {
     cudaMemsetAsync(tv_buf3_device, 0, 3 * sizeof(float), kBilagridStream);
     auto run = [&](DeviceTensor5D<float>& grids, int slot) {
         if (grids.data_ptr() == nullptr) return;
-        int N = (int)grids.size<0>(), C = (int)grids.size<1>();
-        int L = (int)grids.size<2>(), H = (int)grids.size<3>(), W = (int)grids.size<4>();
+        int N = (int)grids.size<0>();
+        int L = (int)grids.size<1>(), H = (int)grids.size<2>(), W = (int)grids.size<3>();
+        int C = (int)grids.size<4>();
         tv_loss_forward(grids.data_ptr(), tv_buf3_device + slot,
                         N, C, L, H, W, kBilagridStream);
     };
@@ -1406,9 +1408,9 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
             (size_t)C_batch * H * W * sizeof(float3),
             cudaMemcpyDeviceToDevice, kBilagridStream);
 
-        int L = (int)Buffers::bilagrid_rgb_grids.size<2>();
-        int gH = (int)Buffers::bilagrid_rgb_grids.size<3>();
-        int gW = (int)Buffers::bilagrid_rgb_grids.size<4>();
+        int L = (int)Buffers::bilagrid_rgb_grids.size<1>();
+        int gH = (int)Buffers::bilagrid_rgb_grids.size<2>();
+        int gW = (int)Buffers::bilagrid_rgb_grids.size<3>();
         // Pass the FULL grid table; kernel does the per-image indirect lookup.
         float* grid_ptr = Buffers::bilagrid_rgb_grids.data_ptr();
 
@@ -1464,9 +1466,9 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
                 C_batch * sizeof(float), cudaMemcpyDeviceToDevice, kBilagridStream);
         }
 
-        int L = (int)Buffers::bilagrid_depth_grids.size<2>();
-        int gH = (int)Buffers::bilagrid_depth_grids.size<3>();
-        int gW = (int)Buffers::bilagrid_depth_grids.size<4>();
+        int L = (int)Buffers::bilagrid_depth_grids.size<1>();
+        int gH = (int)Buffers::bilagrid_depth_grids.size<2>();
+        int gW = (int)Buffers::bilagrid_depth_grids.size<3>();
         float* grid_ptr = Buffers::bilagrid_depth_grids.data_ptr();
         bilagrid_depth_uniform_sample_forward(
             grid_ptr,
@@ -1487,9 +1489,9 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
             (size_t)C_batch * H * W * sizeof(float3),
             cudaMemcpyDeviceToDevice, kBilagridStream);
 
-        int L = (int)Buffers::bilagrid_normal_grids.size<2>();
-        int gH = (int)Buffers::bilagrid_normal_grids.size<3>();
-        int gW = (int)Buffers::bilagrid_normal_grids.size<4>();
+        int L = (int)Buffers::bilagrid_normal_grids.size<1>();
+        int gH = (int)Buffers::bilagrid_normal_grids.size<2>();
+        int gW = (int)Buffers::bilagrid_normal_grids.size<3>();
         float* grid_ptr = Buffers::bilagrid_normal_grids.data_ptr();
         bilagrid_normal_uniform_sample_forward(
             grid_ptr,
@@ -1524,9 +1526,9 @@ static void _engine_bilagrid_backward_hook(
     if (Buffers::bilagrid_rgb_enabled && std::get<0>(v_render_rgb) != 0 &&
         Buffers::fwd_rgb_pre_bilagrid.data_ptr() != nullptr)
     {
-        int L = (int)Buffers::bilagrid_rgb_grids.size<2>();
-        int gH = (int)Buffers::bilagrid_rgb_grids.size<3>();
-        int gW = (int)Buffers::bilagrid_rgb_grids.size<4>();
+        int L = (int)Buffers::bilagrid_rgb_grids.size<1>();
+        int gH = (int)Buffers::bilagrid_rgb_grids.size<2>();
+        int gW = (int)Buffers::bilagrid_rgb_grids.size<3>();
         float* grid_ptr = Buffers::bilagrid_rgb_grids.data_ptr();
         _ensure_bilagrid_batch_grad(Buffers::bilagrid_rgb_image_grad,
                                     Buffers::bilagrid_rgb_grids, C_batch,
@@ -1568,9 +1570,9 @@ static void _engine_bilagrid_backward_hook(
     if (Buffers::bilagrid_depth_enabled && std::get<0>(v_ref_depth) != 0 &&
         Buffers::fwd_depth_pre_bilagrid.data_ptr() != nullptr)
     {
-        int L = (int)Buffers::bilagrid_depth_grids.size<2>();
-        int gH = (int)Buffers::bilagrid_depth_grids.size<3>();
-        int gW = (int)Buffers::bilagrid_depth_grids.size<4>();
+        int L = (int)Buffers::bilagrid_depth_grids.size<1>();
+        int gH = (int)Buffers::bilagrid_depth_grids.size<2>();
+        int gW = (int)Buffers::bilagrid_depth_grids.size<3>();
         float* grid_ptr = Buffers::bilagrid_depth_grids.data_ptr();
         _ensure_bilagrid_batch_grad(Buffers::bilagrid_depth_image_grad,
                                     Buffers::bilagrid_depth_grids, C_batch,
@@ -1593,9 +1595,9 @@ static void _engine_bilagrid_backward_hook(
     if (Buffers::bilagrid_normal_enabled && std::get<0>(v_ref_normal) != 0 &&
         Buffers::fwd_normal_pre_bilagrid.data_ptr() != nullptr)
     {
-        int L = (int)Buffers::bilagrid_normal_grids.size<2>();
-        int gH = (int)Buffers::bilagrid_normal_grids.size<3>();
-        int gW = (int)Buffers::bilagrid_normal_grids.size<4>();
+        int L = (int)Buffers::bilagrid_normal_grids.size<1>();
+        int gH = (int)Buffers::bilagrid_normal_grids.size<2>();
+        int gW = (int)Buffers::bilagrid_normal_grids.size<3>();
         float* grid_ptr = Buffers::bilagrid_normal_grids.data_ptr();
         _ensure_bilagrid_batch_grad(Buffers::bilagrid_normal_image_grad,
                                     Buffers::bilagrid_normal_grids, C_batch,
@@ -1631,9 +1633,10 @@ static void _ensure_bilagrid_optim_state() {
                     const std::string& key_prefix,
                     bool& done) {
         if (done || grids.data_ptr() == nullptr) return;
-        int64_t N = grids.size<0>(), C = grids.size<1>();
-        int64_t L = grids.size<2>(), H = grids.size<3>(), W = grids.size<4>();
-        int64_t numel = N * C * L * H * W;
+        int64_t N = grids.size<0>();
+        int64_t L = grids.size<1>(), H = grids.size<2>(), W = grids.size<3>();
+        int64_t C = grids.size<4>();
+        int64_t numel = N * L * H * W * C;
         if (quantize_optim) {
             g1_q.resize(key_prefix + ".g1_q", (size_t)numel);
             g1_q.zero();
@@ -1644,9 +1647,9 @@ static void _ensure_bilagrid_optim_state() {
             quant_bounds.resize(key_prefix + ".quant_bounds", (size_t)n_blocks);
             quant_bounds.zero();
         } else {
-            g1.resize(key_prefix + ".g1", N, C, L, H, W);
+            g1.resize(key_prefix + ".g1", N, L, H, W, C);
             g1.zero();
-            g2.resize(key_prefix + ".g2", N, C, L, H, W);
+            g2.resize(key_prefix + ".g2", N, L, H, W, C);
             g2.zero();
         }
         done = true;
@@ -1687,11 +1690,11 @@ static void _ensure_bilagrid_batch_grad(
     const std::string& key
 ) {
     if (grids.data_ptr() == nullptr) return;
-    int C = (int)grids.size<1>();
-    int L = (int)grids.size<2>();
-    int H = (int)grids.size<3>();
-    int W = (int)grids.size<4>();
-    grad.resize(key, C_batch, C, L, H, W);
+    int L = (int)grids.size<1>();
+    int H = (int)grids.size<2>();
+    int W = (int)grids.size<3>();
+    int C = (int)grids.size<4>();
+    grad.resize(key, C_batch, L, H, W, C);
     grad.zero();
 }
 
@@ -1732,8 +1735,9 @@ void engine_bilagrid_optim_step(
                    float lr, float tv_weight) {
         if (grids.data_ptr() == nullptr || lr <= 0.0f) return;
         if (image_grad.data_ptr() == nullptr) return;
-        int N = (int)grids.size<0>(), C = (int)grids.size<1>();
-        int L = (int)grids.size<2>(), H = (int)grids.size<3>(), W = (int)grids.size<4>();
+        int N = (int)grids.size<0>();
+        int L = (int)grids.size<1>(), H = (int)grids.size<2>(), W = (int)grids.size<3>();
+        int C = (int)grids.size<4>();
         fused_bilagrid_tv_adam(
             grids.data_ptr(),
             quantize_optim ? nullptr : g1.data_ptr(),
@@ -2664,23 +2668,23 @@ void engine_save_checkpoint(
             meta << "bilagrid_rgb_enabled=1\n";
             meta << "bilagrid_rgb_type=" << bilagrid_rgb_type << "\n";
             meta << "bilagrid_rgb_C=" << bilagrid_rgb_C << "\n";
-            meta << "bilagrid_rgb_L=" << bilagrid_rgb_grids.size<2>() << "\n";
-            meta << "bilagrid_rgb_H=" << bilagrid_rgb_grids.size<3>() << "\n";
-            meta << "bilagrid_rgb_W=" << bilagrid_rgb_grids.size<4>() << "\n";
+            meta << "bilagrid_rgb_L=" << bilagrid_rgb_grids.size<1>() << "\n";
+            meta << "bilagrid_rgb_H=" << bilagrid_rgb_grids.size<2>() << "\n";
+            meta << "bilagrid_rgb_W=" << bilagrid_rgb_grids.size<3>() << "\n";
             meta << "bilagrid_rgb_quantize_optim=" << (bilagrid_rgb_quantize_optim ? 1 : 0) << "\n";
         }
         if (bilagrid_depth_enabled) {
             meta << "bilagrid_depth_enabled=1\n";
-            meta << "bilagrid_depth_L=" << bilagrid_depth_grids.size<2>() << "\n";
-            meta << "bilagrid_depth_H=" << bilagrid_depth_grids.size<3>() << "\n";
-            meta << "bilagrid_depth_W=" << bilagrid_depth_grids.size<4>() << "\n";
+            meta << "bilagrid_depth_L=" << bilagrid_depth_grids.size<1>() << "\n";
+            meta << "bilagrid_depth_H=" << bilagrid_depth_grids.size<2>() << "\n";
+            meta << "bilagrid_depth_W=" << bilagrid_depth_grids.size<3>() << "\n";
             meta << "bilagrid_depth_quantize_optim=" << (bilagrid_depth_quantize_optim ? 1 : 0) << "\n";
         }
         if (bilagrid_normal_enabled) {
             meta << "bilagrid_normal_enabled=1\n";
-            meta << "bilagrid_normal_L=" << bilagrid_normal_grids.size<2>() << "\n";
-            meta << "bilagrid_normal_H=" << bilagrid_normal_grids.size<3>() << "\n";
-            meta << "bilagrid_normal_W=" << bilagrid_normal_grids.size<4>() << "\n";
+            meta << "bilagrid_normal_L=" << bilagrid_normal_grids.size<1>() << "\n";
+            meta << "bilagrid_normal_H=" << bilagrid_normal_grids.size<2>() << "\n";
+            meta << "bilagrid_normal_W=" << bilagrid_normal_grids.size<3>() << "\n";
             meta << "bilagrid_normal_quantize_optim=" << (bilagrid_normal_quantize_optim ? 1 : 0) << "\n";
         }
         if (ppisp_enabled) {

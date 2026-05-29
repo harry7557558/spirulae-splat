@@ -34,7 +34,9 @@ namespace cg = cooperative_groups;
 template<int BLOCK_SIZE, int C, bool QUANT>
 __global__ void fused_bilagrid_tv_adam_kernel(
     // Parameter table — kept on device permanently. Read AND written here.
-    float* __restrict__ grids,                  // [N_grids, C, L, H, W]
+    // Channel-last layout: the C channels of a single (l,h,w) cell are
+    // contiguous, then (cam, l, h, w) sweep outer.
+    float* __restrict__ grids,                  // [N_grids, L, H, W, C]
     // Adam moments. float path or uint8+bounds path (mutually exclusive).
     float*   __restrict__ g1_f,                 // when !QUANT
     float*   __restrict__ g2_f,                 // when !QUANT
@@ -43,7 +45,7 @@ __global__ void fused_bilagrid_tv_adam_kernel(
     float4*  __restrict__ quant_bounds,         // [n_blocks], when QUANT
     // Sparse image gradient. ni is the batch slot; the *camera* the gradient
     // belongs to is cam_indices[ni].
-    const float* __restrict__ image_grad,       // [C_batch, C, L, H, W]
+    const float* __restrict__ image_grad,       // [C_batch, L, H, W, C]
     const int*   __restrict__ cam_indices,      // [C_batch]
     int N_grids, int C_batch,
     int L, int H, int W,
@@ -61,14 +63,14 @@ __global__ void fused_bilagrid_tv_adam_kernel(
         (int64_t)blockIdx.x * BLOCK_SIZE + (int64_t)threadIdx.x;
     const bool inside = idx < total_cells;
 
-    // Decode (cam, ci, l, h, w) from the flat index. Layout: W innermost.
+    // Decode (cam, l, h, w, ci) from the flat index. Layout: C innermost.
     int cam = 0, ci = 0, l = 0, h = 0, w = 0;
     if (inside) {
         int64_t t = idx;
+        ci  = (int)(t % C); t /= C;
         w   = (int)(t % W); t /= W;
         h   = (int)(t % H); t /= H;
         l   = (int)(t % L); t /= L;
-        ci  = (int)(t % C); t /= C;
         cam = (int)t;
     }
 
@@ -83,9 +85,9 @@ __global__ void fused_bilagrid_tv_adam_kernel(
     // in range).
     float image_g = 0.0f;
     if (inside) {
-        const int64_t per_slot = (int64_t)C * L * H * W;
+        const int64_t per_slot = (int64_t)L * H * W * C;
         const int64_t cell_off =
-            ((((int64_t)ci) * L + l) * H + h) * W + w;
+            ((((int64_t)l * H + h) * W + w) * C) + ci;
         if (cam_indices == nullptr) {
             if (cam < C_batch)
                 image_g = image_grad[(int64_t)cam * per_slot + cell_off];
@@ -98,6 +100,8 @@ __global__ void fused_bilagrid_tv_adam_kernel(
     }
 
     // ---- TV gradient (inline, same formula as tv_loss_backward_kernel) ----
+    // Spatial neighbors at the same channel are stride C apart in channel-last
+    // (W neighbor), W*C (H neighbor), H*W*C (L neighbor).
     float tv_g = 0.0f;
     if (inside && tv_weight > 0.0f) {
         // Constants from tv_loss_backward.
@@ -106,17 +110,20 @@ __global__ void fused_bilagrid_tv_adam_kernel(
         const float sy = s / (float)(L * (H - 1) * W);
         const float sz = s / (float)((L - 1) * H * W);
 
-        const int64_t base =
-            ((int64_t)cam * C + ci) * (int64_t)L * H * W;
-        const int64_t self_off = ((int64_t)l * H + h) * W + w;
-        const float val = grids[base + self_off];
+        const int64_t cam_base = (int64_t)cam * L * H * W * C;
+        const int64_t self_off = (((int64_t)l * H + h) * W + w) * C + ci;
+        const float val = grids[cam_base + self_off];
 
-        if (w > 0)     tv_g += (val - grids[base + ((int64_t)l*H + h)*W + (w-1)]) * sx;
-        if (w < W - 1) tv_g += (val - grids[base + ((int64_t)l*H + h)*W + (w+1)]) * sx;
-        if (h > 0)     tv_g += (val - grids[base + ((int64_t)l*H + (h-1))*W + w]) * sy;
-        if (h < H - 1) tv_g += (val - grids[base + ((int64_t)l*H + (h+1))*W + w]) * sy;
-        if (l > 0)     tv_g += (val - grids[base + ((int64_t)(l-1)*H + h)*W + w]) * sz;
-        if (l < L - 1) tv_g += (val - grids[base + ((int64_t)(l+1)*H + h)*W + w]) * sz;
+        const int64_t sx_step = (int64_t)C;
+        const int64_t sy_step = (int64_t)W * C;
+        const int64_t sz_step = (int64_t)H * W * C;
+
+        if (w > 0)     tv_g += (val - grids[cam_base + self_off - sx_step]) * sx;
+        if (w < W - 1) tv_g += (val - grids[cam_base + self_off + sx_step]) * sx;
+        if (h > 0)     tv_g += (val - grids[cam_base + self_off - sy_step]) * sy;
+        if (h < H - 1) tv_g += (val - grids[cam_base + self_off + sy_step]) * sy;
+        if (l > 0)     tv_g += (val - grids[cam_base + self_off - sz_step]) * sz;
+        if (l < L - 1) tv_g += (val - grids[cam_base + self_off + sz_step]) * sz;
     }
 
     float v = image_g + tv_g;

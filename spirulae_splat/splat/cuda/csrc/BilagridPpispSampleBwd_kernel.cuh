@@ -12,12 +12,12 @@ __global__ void bilagrid_ppisp_packed_sample_backward_kernel_cg(
 #else
 __global__ void bilagrid_ppisp_packed_sample_backward_kernel(
 #endif  // COMPUTE_COORDS_GRAD
-    const float* __restrict__ bilagrid,  // [N,9,L,H,W]
+    const float* __restrict__ bilagrid,  // [N,L,H,W,9]
     const int64_t* __restrict__ image_indices,  // [nnz]
     const float* __restrict__ coords,  // [nnz,2]
     const float* __restrict__ rgb_in,  // [nnz,3]
     const float* __restrict__ v_rgb_out,  // [nnz,3]
-    float* __restrict__ v_bilagrid,  // [N,9,L,H,W]
+    float* __restrict__ v_bilagrid,  // [N,L,H,W,9]
     #ifdef COMPUTE_COORDS_GRAD
     float* __restrict__ v_coords,  // [nnz,2]
     #endif
@@ -30,11 +30,11 @@ __global__ void bilagrid_ppisp_sample_backward_kernel_cg(
 #else
 __global__ void bilagrid_ppisp_sample_backward_kernel(
 #endif  // COMPUTE_COORDS_GRAD
-    const float* __restrict__ bilagrid,  // [N,9,L,H,W]
+    const float* __restrict__ bilagrid,  // [N,L,H,W,9]
     const float* __restrict__ coords,  // [N,m,h,w,2]
     const float* __restrict__ rgb_in,  // [N,m,h,w,3]
     const float* __restrict__ v_rgb_out,  // [N,m,h,w,3]
-    float* __restrict__ v_bilagrid,  // [N,9,L,H,W]
+    float* __restrict__ v_bilagrid,  // [N,L,H,W,9]
     #ifdef COMPUTE_COORDS_GRAD
     float* __restrict__ v_coords,  // [N,m,h,w,2]
     #endif
@@ -98,23 +98,31 @@ __global__ void bilagrid_ppisp_sample_backward_kernel(
     float f110 = (1-fx)*fy*fz;
     float f111 = fx*fy*fz;
 
+    // Channel-last corner offsets shared across the C-channel loop.
+    int corner_base = ni * L * H * W * 9;
+    int off000 = corner_base + ((z0*H + y0)*W + x0) * 9;
+    int off001 = corner_base + ((z0*H + y0)*W + x1) * 9;
+    int off010 = corner_base + ((z0*H + y1)*W + x0) * 9;
+    int off011 = corner_base + ((z0*H + y1)*W + x1) * 9;
+    int off100 = corner_base + ((z1*H + y0)*W + x0) * 9;
+    int off101 = corner_base + ((z1*H + y0)*W + x1) * 9;
+    int off110 = corner_base + ((z1*H + y1)*W + x0) * 9;
+    int off111 = corner_base + ((z1*H + y1)*W + x1) * 9;
+
     // load PPISP params
     float exposure_param;
     ColorPPISPParams color_params;
     #pragma unroll
     for (int ci = 0; ci < 9; ci++) {
-        // base pointer for this volume
-        int base = (ni*9 + ci)*L*H*W;
-
         // fetch 8 corners
-        auto v000 = bilagrid[base+(z0*H+y0)*W+x0];
-        auto v001 = bilagrid[base+(z0*H+y0)*W+x1];
-        auto v010 = bilagrid[base+(z0*H+y1)*W+x0];
-        auto v011 = bilagrid[base+(z0*H+y1)*W+x1];
-        auto v100 = bilagrid[base+(z1*H+y0)*W+x0];
-        auto v101 = bilagrid[base+(z1*H+y0)*W+x1];
-        auto v110 = bilagrid[base+(z1*H+y1)*W+x0];
-        auto v111 = bilagrid[base+(z1*H+y1)*W+x1];
+        auto v000 = bilagrid[off000 + ci];
+        auto v001 = bilagrid[off001 + ci];
+        auto v010 = bilagrid[off010 + ci];
+        auto v011 = bilagrid[off011 + ci];
+        auto v100 = bilagrid[off100 + ci];
+        auto v101 = bilagrid[off101 + ci];
+        auto v110 = bilagrid[off110 + ci];
+        auto v111 = bilagrid[off111 + ci];
 
         // trilinear interp
         float c00 = v000*(1.0f-fx) + v001*fx;
@@ -168,15 +176,14 @@ __global__ void bilagrid_ppisp_sample_backward_kernel(
             grad_color_params.n.y);
 
         // scatter back into the eight corners
-        int base = ((ni*9 + ci)*L*H*W);
-        atomicAdd(v_bilagrid + base + (z0*H + y0)*W + x0, f000 * grad_weight);
-        atomicAdd(v_bilagrid + base + (z0*H + y0)*W + x1, f001 * grad_weight);
-        atomicAdd(v_bilagrid + base + (z0*H + y1)*W + x0, f010 * grad_weight);
-        atomicAdd(v_bilagrid + base + (z0*H + y1)*W + x1, f011 * grad_weight);
-        atomicAdd(v_bilagrid + base + (z1*H + y0)*W + x0, f100 * grad_weight);
-        atomicAdd(v_bilagrid + base + (z1*H + y0)*W + x1, f101 * grad_weight);
-        atomicAdd(v_bilagrid + base + (z1*H + y1)*W + x0, f110 * grad_weight);
-        atomicAdd(v_bilagrid + base + (z1*H + y1)*W + x1, f111 * grad_weight);
+        atomicAdd(v_bilagrid + off000 + ci, f000 * grad_weight);
+        atomicAdd(v_bilagrid + off001 + ci, f001 * grad_weight);
+        atomicAdd(v_bilagrid + off010 + ci, f010 * grad_weight);
+        atomicAdd(v_bilagrid + off011 + ci, f011 * grad_weight);
+        atomicAdd(v_bilagrid + off100 + ci, f100 * grad_weight);
+        atomicAdd(v_bilagrid + off101 + ci, f101 * grad_weight);
+        atomicAdd(v_bilagrid + off110 + ci, f110 * grad_weight);
+        atomicAdd(v_bilagrid + off111 + ci, f111 * grad_weight);
 
     }
 
@@ -203,6 +210,11 @@ __global__ void bilagrid_ppisp_sample_backward_kernel(
          (1-fx)*fy,      fx*fy
     };
 
+    const int corner_offs[8] = {
+        off000, off001, off010, off011,
+        off100, off101, off110, off111
+    };
+
     // accumulate gradient into coords (chain through bilagrid values and rgb)
     #ifdef COMPUTE_COORDS_GRAD
     float gx_grad = 0.f, gy_grad = 0.f;
@@ -210,15 +222,12 @@ __global__ void bilagrid_ppisp_sample_backward_kernel(
     float gz_grad = 0.f;
     #pragma unroll
     for (int corner = 0; corner < 8; ++corner) {
-        int xi = (corner & 1) ? x1 : x0;
-        int yi = (corner & 2) ? y1 : y0;
-        int zi = (corner & 4) ? z1 : z0;
+        int base = corner_offs[corner];
         float trilerp = 0.f;
         // gather the corresponding bilagrid value for each of the 9 parameters
         #pragma unroll
         for (int ci = 0; ci < 9; ++ci) {
-            const float* vol = bilagrid + ((ni*0 + ci)*L*H*W);
-            float v = vol[(zi*H + yi)*W + xi];
+            float v = bilagrid[base + ci];
             float grad_weight = (ci == 0 ? grad_exposure_param :
                 ci == 1 ? grad_color_params.b.x :
                 ci == 2 ? grad_color_params.b.y :

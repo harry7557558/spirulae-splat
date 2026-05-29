@@ -36,10 +36,10 @@ __global__ void bilagrid_patched_sample_backward_v2_kernel(
 #else
 __global__ void bilagrid_uniform_sample_backward_v2_kernel(
 #endif
-    const float* __restrict__ bilagrid,  // [N,12,L,H,W]
+    const float* __restrict__ bilagrid,  // [N,L,H,W,12]
     const float* __restrict__ rgb,  // [N,m,h,w,3]
     const float* __restrict__ v_output,  // [N,m,h,w,3]
-    float* __restrict__ v_bilagrid,  // [N,12,L,H,W]
+    float* __restrict__ v_bilagrid,  // [N,L,H,W,12]
     float* __restrict__ v_rgb,  // [N,m,h,w,3]
     int N, int L, int H, int W,
     int m, int h, int w
@@ -126,10 +126,13 @@ __global__ void bilagrid_uniform_sample_backward_v2_kernel(
             ((corner & 2) ? fy : (1-fy)) * ((corner & 4) ? 1 : -1);
         float f = dfdz * ((corner & 4) ? fz : (fz-1));
 
+        // Channel-last: 12 channels of this corner are contiguous; `+ ci` is innermost.
+        int corner_base = (((ni*L + zi)*H + yi)*W + xi) * 12;
+
         float trilerp = 0.f;
         #pragma unroll
         for (int ci = 0; ci < 12; ++ci) {
-            int bidx = (((ni*12 + ci)*L + zi)*H + yi)*W + xi;
+            int bidx = corner_base + ci;
             int si = ci % 4, di = ci / 4;
 
             float r_coeff = (si==0 ? sr : si==1 ? sg : si==2 ? sb : 1.f);
@@ -158,9 +161,12 @@ __global__ void bilagrid_uniform_sample_backward_v2_kernel(
             ((corner & 2) ? fy : (1-fy)) * ((corner & 4) ? 1 : -1);
         float f = dfdz * ((corner & 4) ? fz : (fz-1));
 
+        // Channel-last: 12 channels of this corner are contiguous; `+ ci` is innermost.
+        int corner_base = (((ni*L + zi)*H + yi)*W + xi) * 12;
+
         #pragma unroll
         for (int ci = 0; ci < 12; ++ci) {
-            int bidx = (((ni*12 + ci)*L + zi)*H + yi)*W + xi;
+            int bidx = corner_base + ci;
             int si = ci % 4, di = ci / 4;
 
             float r_coeff = (si==0 ? sr : si==1 ? sg : si==2 ? sb : 1.f);

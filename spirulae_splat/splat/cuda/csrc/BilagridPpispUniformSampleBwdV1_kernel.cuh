@@ -14,10 +14,10 @@ __global__ void bilagrid_ppisp_patched_sample_backward_v1_kernel_bilagrid(
 #else
 __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_bilagrid(
 #endif
-    const float* __restrict__ bilagrid,  // [N,9,L,H,W]
+    const float* __restrict__ bilagrid,  // [N,L,H,W,9]
     const float* __restrict__ rgb_in,  // [N,m,h,w,3]
     const float* __restrict__ v_rgb_out,  // [N,m,h,w,3]
-    float* __restrict__ v_bilagrid,  // [N,9,L,H,W]
+    float* __restrict__ v_bilagrid,  // [N,L,H,W,9]
     int N, int L, int H, int W,
     int m, int h, int w,
 #ifdef PATCHED
@@ -160,20 +160,27 @@ __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_bilagrid(
             // load PPISP params
             float exposure_param;
             ColorPPISPParams color_params;
+            // Channel-last corner offsets shared across the C-channel loop.
+            int corner_base = g_id * L * H * W * 9;
+            int off000 = corner_base + ((z0*H + y0)*W + x0) * 9;
+            int off001 = corner_base + ((z0*H + y0)*W + x1) * 9;
+            int off010 = corner_base + ((z0*H + y1)*W + x0) * 9;
+            int off011 = corner_base + ((z0*H + y1)*W + x1) * 9;
+            int off100 = corner_base + ((z1*H + y0)*W + x0) * 9;
+            int off101 = corner_base + ((z1*H + y0)*W + x1) * 9;
+            int off110 = corner_base + ((z1*H + y1)*W + x0) * 9;
+            int off111 = corner_base + ((z1*H + y1)*W + x1) * 9;
             #pragma unroll
             for (int ci = 0; ci < 9; ci++) {
-                // base pointer for this volume
-                int base = (g_id*9 + ci)*L*H*W;
-
                 // fetch 8 corners
-                auto v000 = bilagrid[base+(z0*H+y0)*W+x0];
-                auto v001 = bilagrid[base+(z0*H+y0)*W+x1];
-                auto v010 = bilagrid[base+(z0*H+y1)*W+x0];
-                auto v011 = bilagrid[base+(z0*H+y1)*W+x1];
-                auto v100 = bilagrid[base+(z1*H+y0)*W+x0];
-                auto v101 = bilagrid[base+(z1*H+y0)*W+x1];
-                auto v110 = bilagrid[base+(z1*H+y1)*W+x0];
-                auto v111 = bilagrid[base+(z1*H+y1)*W+x1];
+                auto v000 = bilagrid[off000 + ci];
+                auto v001 = bilagrid[off001 + ci];
+                auto v010 = bilagrid[off010 + ci];
+                auto v011 = bilagrid[off011 + ci];
+                auto v100 = bilagrid[off100 + ci];
+                auto v101 = bilagrid[off101 + ci];
+                auto v110 = bilagrid[off110 + ci];
+                auto v111 = bilagrid[off111 + ci];
 
                 // trilinear interp
                 float c00 = v000*(1.0f-fx) + v001*fx;
@@ -242,13 +249,13 @@ __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_bilagrid(
     }
 
     // Output indexed by `ni` (sparse batch slot); reads use `g_id`.
-    int out_idx_start = ((ni*9*L + zi)*H + yi)*W + xi;
-    int out_idx_offset = L*H*W;
+    // Channel-last write: 9 channels for the cell are contiguous in memory.
+    int out_idx_start = (((ni*L + zi)*H + yi)*W + xi) * 9;
 
     if (mult_x*mult_y == 1) {
         #pragma unroll
         for (int ci = 0; ci < 9; ci++) {
-            int out_idx = out_idx_start + ci * out_idx_offset;
+            int out_idx = out_idx_start + ci;
             if (isfinite(accum[ci]) && accum[ci] != 0.0f)
                 atomicAdd(v_bilagrid + out_idx, accum[ci]);
         }
@@ -259,7 +266,7 @@ __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_bilagrid(
     if (mult_x % blockDim.x != 0 || mult_y % blockDim.y != 0) {
         #pragma unroll
         for (int ci = 0; ci < 9; ci++) {
-            int out_idx = out_idx_start + ci * out_idx_offset;
+            int out_idx = out_idx_start + ci;
             if (isfinite(accum[ci]) && accum[ci] != 0.0f)
                 atomicAdd(v_bilagrid + out_idx, accum[ci]);
         }
@@ -275,7 +282,7 @@ __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_bilagrid(
 
     #pragma unroll
     for (int ci = 0; ci < 9; ci++) {
-        int out_idx = out_idx_start + ci * out_idx_offset;
+        int out_idx = out_idx_start + ci;
 
         sharedData[tid] = isfinite(accum[ci]) ? accum[ci] : 0.0f;
         __syncthreads();
@@ -298,7 +305,7 @@ __global__ void bilagrid_ppisp_patched_sample_backward_v1_kernel_rgb(
 #else
 __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_rgb(
 #endif
-    const float* __restrict__ bilagrid,  // [N,9,L,H,W]
+    const float* __restrict__ bilagrid,  // [N,L,H,W,9]
     const float* __restrict__ rgb_in,  // [N,m,h,w,3]
     const float* __restrict__ v_rgb_out,  // [N,m,h,w,3]
     float* __restrict__ v_rgb_in,  // [N,m,h,w,3]
@@ -354,23 +361,31 @@ __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_rgb(
 
     float fx = x-x0, fy = y-y0, fz = z-z0;
 
+    // Channel-last corner offsets: 9 channels of each corner are contiguous.
+    int grid_base = g_id * L * H * W * 9;
+    int off000 = grid_base + ((z0*H + y0)*W + x0) * 9;
+    int off001 = grid_base + ((z0*H + y0)*W + x1) * 9;
+    int off010 = grid_base + ((z0*H + y1)*W + x0) * 9;
+    int off011 = grid_base + ((z0*H + y1)*W + x1) * 9;
+    int off100 = grid_base + ((z1*H + y0)*W + x0) * 9;
+    int off101 = grid_base + ((z1*H + y0)*W + x1) * 9;
+    int off110 = grid_base + ((z1*H + y1)*W + x0) * 9;
+    int off111 = grid_base + ((z1*H + y1)*W + x1) * 9;
+
     // load PPISP params
     float exposure_param;
     ColorPPISPParams color_params;
     #pragma unroll
     for (int ci = 0; ci < 9; ci++) {
-        // base pointer for this volume
-        int base = (g_id*9 + ci)*L*H*W;
-
         // fetch 8 corners
-        auto v000 = bilagrid[base+(z0*H+y0)*W+x0];
-        auto v001 = bilagrid[base+(z0*H+y0)*W+x1];
-        auto v010 = bilagrid[base+(z0*H+y1)*W+x0];
-        auto v011 = bilagrid[base+(z0*H+y1)*W+x1];
-        auto v100 = bilagrid[base+(z1*H+y0)*W+x0];
-        auto v101 = bilagrid[base+(z1*H+y0)*W+x1];
-        auto v110 = bilagrid[base+(z1*H+y1)*W+x0];
-        auto v111 = bilagrid[base+(z1*H+y1)*W+x1];
+        auto v000 = bilagrid[off000 + ci];
+        auto v001 = bilagrid[off001 + ci];
+        auto v010 = bilagrid[off010 + ci];
+        auto v011 = bilagrid[off011 + ci];
+        auto v100 = bilagrid[off100 + ci];
+        auto v101 = bilagrid[off101 + ci];
+        auto v110 = bilagrid[off110 + ci];
+        auto v111 = bilagrid[off111 + ci];
 
         // trilinear interp
         float c00 = v000*(1.0f-fx) + v001*fx;
@@ -410,19 +425,21 @@ __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_rgb(
          (1-fx)*fy,      fx*fy
     };
 
+    const int corner_offs[8] = {
+        off000, off001, off010, off011,
+        off100, off101, off110, off111
+    };
+
     // accumulate gradient into coords (chain through bilagrid values and rgb)
     float gz_grad = 0.f;
     #pragma unroll
     for (int corner = 0; corner < 8; ++corner) {
-        int xi = (corner & 1) ? x1 : x0;
-        int yi = (corner & 2) ? y1 : y0;
-        int zi = (corner & 4) ? z1 : z0;
+        int base = corner_offs[corner];
         float trilerp = 0.f;
         // gather the corresponding bilagrid value for each of the 9 channels
         #pragma unroll
         for (int ci = 0; ci < 9; ++ci) {
-            const float* vol = bilagrid + ((g_id*9 + ci)*L*H*W);
-            float v = vol[(zi*H + yi)*W + xi];
+            float v = bilagrid[base + ci];
             trilerp += v * (ci == 0 ? grad_exposure_param :
                 ci == 1 ? grad_color_params.b.x :
                 ci == 2 ? grad_color_params.b.y :

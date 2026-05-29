@@ -117,8 +117,9 @@ class Field:
 
 def _maybe_reshape_bilagrid(name: str, arr: np.ndarray, meta: dict) -> np.ndarray:
     """When the on-disk array is a flat uint8 (the case for the *_g{1,2}_q.npy
-    quantized bilagrid buffers), re-impose the (N_cam, C, L, H, W) shape using
-    metadata so structural plots and axis permutations apply."""
+    quantized bilagrid buffers), re-impose the (N_cam, L, H, W, C) shape using
+    metadata so structural plots and axis permutations apply. Channel-last
+    layout matches the on-device storage; C is the innermost axis."""
     if arr.ndim != 1:
         return arr
     if name.startswith("bilagrid_rgb"):
@@ -137,11 +138,11 @@ def _maybe_reshape_bilagrid(name: str, arr: np.ndarray, meta: dict) -> np.ndarra
             C = 2
         else:
             C = 3
-        per_cam = C * L * H * W
+        per_cam = L * H * W * C
         if arr.size % per_cam != 0:
             return arr
         N = arr.size // per_cam
-        return arr.reshape(N, C, L, H, W)
+        return arr.reshape(N, L, H, W, C)
     except (KeyError, ValueError):
         return arr
 
@@ -487,14 +488,16 @@ def _build_orderings(shape: tuple) -> list[tuple[str, Optional[tuple]]]:
             label = f"perm({','.join(str(i) for i in p)})"
             out.append((label, p))
     else:
-        # 5D bilagrid (N_cam, C, L, H, W): pick a few semantically meaningful ones.
+        # 5D bilagrid (N_cam, L, H, W, C): pick a few semantically meaningful
+        # orderings. Identity is already channel-last; these explore moving
+        # the channel axis around.
         labels_perms = []
         if nd == 5:
             labels_perms = [
-                ("perm(C,N,L,H,W)", (1, 0, 2, 3, 4)),
-                ("perm(L,H,W,C,N)", (2, 3, 4, 1, 0)),
-                ("perm(N,L,H,W,C)", (0, 2, 3, 4, 1)),
-                ("perm(C,L,H,W,N)", (1, 2, 3, 4, 0)),
+                ("perm(N,C,L,H,W)", (0, 4, 1, 2, 3)),  # legacy channel-first
+                ("perm(C,N,L,H,W)", (4, 0, 1, 2, 3)),  # channel outermost
+                ("perm(L,H,W,N,C)", (1, 2, 3, 0, 4)),  # spatial outermost
+                ("perm(C,L,H,W,N)", (4, 1, 2, 3, 0)),  # cam innermost-but-channel
             ]
         for lab, p in labels_perms:
             out.append((lab, p))
@@ -821,19 +824,20 @@ def plot_sh_structure(arr: np.ndarray, title: str) -> str:
 
 
 def plot_bilagrid_structure(arr: np.ndarray, title: str) -> str:
-    """For bilagrid momentum (N_cam, C, L, H, W): channel/spatial views."""
+    """For bilagrid momentum (N_cam, L, H, W, C): channel/spatial views.
+    Channel-last layout: C is the innermost axis."""
     if arr.ndim != 5:
         return ""
-    N, C, L, H, W = arr.shape
+    N, L, H, W, C = arr.shape
     abs_arr = np.abs(arr).astype(np.float64)
 
     # Per-channel mean and max across batch/spatial.
-    per_C_mean = abs_arr.mean(axis=(0, 2, 3, 4))   # [C]
-    per_C_max  = abs_arr.max(axis=(0, 2, 3, 4))    # [C]
-    # Per-camera mean across C and spatial.
+    per_C_mean = abs_arr.mean(axis=(0, 1, 2, 3))   # [C]
+    per_C_max  = abs_arr.max(axis=(0, 1, 2, 3))    # [C]
+    # Per-camera mean across spatial+C.
     per_cam_mean = abs_arr.mean(axis=(1, 2, 3, 4)) # [N]
     # Spatial: mean over batch+C, leave (L, H, W).
-    spatial = abs_arr.mean(axis=(0, 1))            # [L, H, W]
+    spatial = abs_arr.mean(axis=(0, 4))            # [L, H, W]
 
     fig = plt.figure(figsize=(15, 6.5))
     gs = fig.add_gridspec(2, 4, hspace=0.45, wspace=0.35)
@@ -1333,10 +1337,13 @@ def main(argv=None):
             if spatial_perms_global and world_means_field is not None:
                 local_spatial = build_spatial_permutations(
                     world_means_field.array[sel], a.shape[0])
-        local_n_splats = a.shape[0] if (n_splats is not None
-                                          and len(f.shape) >= 1
-                                          and (f.shape[0] == n_splats
-                                                or (used_sel is not None))) else None
+        # Spatial-sort strategies only apply when this field's axis 0 indexes
+        # splats (not, e.g., cameras for bilagrid). Test against the original
+        # on-disk shape, not the (possibly subsampled) `a.shape`.
+        field_is_per_splat = (n_splats is not None
+                              and len(f.shape) >= 1
+                              and f.shape[0] == n_splats)
+        local_n_splats = a.shape[0] if field_is_per_splat else None
         msg = f"  analysing {f.name} ({tuple(a.shape)}, {f.kind})"
         if used_sel is not None:
             msg += f"  [subsampled to {a.shape[0]:,} of {f.shape[0]:,}]"

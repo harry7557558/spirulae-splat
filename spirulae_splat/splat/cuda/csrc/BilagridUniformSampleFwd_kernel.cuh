@@ -6,7 +6,7 @@ __global__ void bilagrid_patched_sample_forward_kernel(
 #else
 __global__ void bilagrid_uniform_sample_forward_kernel(
 #endif
-    const float* __restrict__ bilagrid, // [N_grids,12,L,H,W] or [N,12,L,H,W]
+    const float* __restrict__ bilagrid, // [N_grids,L,H,W,12] or [N,L,H,W,12]
     const float* __restrict__ rgb,  // [N,m,h,w,3]
     float* __restrict__ output,  // [N,m,h,w,3]
     int N, int L, int H, int W,
@@ -72,21 +72,31 @@ __global__ void bilagrid_uniform_sample_forward_kernel(
     float fy = y - (float)y0;
     float fz = z - (float)z0;
 
+    // Channel-last: the 12 channels of one corner are contiguous in memory,
+    // so each ci iter loads from 8 nearby cache lines instead of 8 different
+    // (L*H*W)-strided planes.
+    int corner_base = g_id * L * H * W * 12;
+    int off000 = corner_base + ((z0*H + y0)*W + x0) * 12;
+    int off001 = corner_base + ((z0*H + y0)*W + x1) * 12;
+    int off010 = corner_base + ((z0*H + y1)*W + x0) * 12;
+    int off011 = corner_base + ((z0*H + y1)*W + x1) * 12;
+    int off100 = corner_base + ((z1*H + y0)*W + x0) * 12;
+    int off101 = corner_base + ((z1*H + y0)*W + x1) * 12;
+    int off110 = corner_base + ((z1*H + y1)*W + x0) * 12;
+    int off111 = corner_base + ((z1*H + y1)*W + x1) * 12;
+
     // interpolate and and affine in one loop
     #pragma unroll
     for (int ci = 0; ci < 12; ci++) {
-        // base pointer for this volume
-        int base = (g_id*12 + ci)*L*H*W;
-
         // fetch 8 corners
-        auto v000 = bilagrid[base+(z0*H+y0)*W+x0];
-        auto v001 = bilagrid[base+(z0*H+y0)*W+x1];
-        auto v010 = bilagrid[base+(z0*H+y1)*W+x0];
-        auto v011 = bilagrid[base+(z0*H+y1)*W+x1];
-        auto v100 = bilagrid[base+(z1*H+y0)*W+x0];
-        auto v101 = bilagrid[base+(z1*H+y0)*W+x1];
-        auto v110 = bilagrid[base+(z1*H+y1)*W+x0];
-        auto v111 = bilagrid[base+(z1*H+y1)*W+x1];
+        auto v000 = bilagrid[off000 + ci];
+        auto v001 = bilagrid[off001 + ci];
+        auto v010 = bilagrid[off010 + ci];
+        auto v011 = bilagrid[off011 + ci];
+        auto v100 = bilagrid[off100 + ci];
+        auto v101 = bilagrid[off101 + ci];
+        auto v110 = bilagrid[off110 + ci];
+        auto v111 = bilagrid[off111 + ci];
 
         // trilinear interp
         float c00 = v000*(1.0f-fx) + v001*fx;
@@ -100,7 +110,7 @@ __global__ void bilagrid_uniform_sample_forward_kernel(
         // affine transform
         int si = ci % 4;
         int di = ci / 4;
-        (di == 0 ? dr : di == 1 ? dg : db) += val * 
+        (di == 0 ? dr : di == 1 ? dg : db) += val *
             (si==0 ? sr : si==1 ? sg : si==2 ? sb : 1.0f);
     }
 

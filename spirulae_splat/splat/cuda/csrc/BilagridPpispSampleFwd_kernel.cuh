@@ -7,7 +7,7 @@ using namespace bilagrid_ppisp;
 
 #ifdef PACKED
 __global__ void bilagrid_ppisp_packed_sample_forward_kernel(
-    const float* __restrict__ bilagrid, // [N,9,L,H,W]
+    const float* __restrict__ bilagrid, // [N,L,H,W,9]
     const int64_t* __restrict__ image_indices,  // [nnz]
     const float* __restrict__ coords,  // [nnz,2]
     const float* __restrict__ rgb_in,  // [nnz,3]
@@ -16,7 +16,7 @@ __global__ void bilagrid_ppisp_packed_sample_forward_kernel(
     int nnz
 #else
 __global__ void bilagrid_ppisp_sample_forward_kernel(
-    const float* __restrict__ bilagrid, // [N,9,L,H,W]
+    const float* __restrict__ bilagrid, // [N,L,H,W,9]
     const float* __restrict__ coords,  // [N,m,h,w,2]
     const float* __restrict__ rgb_in,  // [N,m,h,w,3]
     float* __restrict__ rgb_out,  // [N,m,h,w,3]
@@ -76,20 +76,28 @@ __global__ void bilagrid_ppisp_sample_forward_kernel(
     float exposure_param;
     ColorPPISPParams color_params;
 
+    // Channel-last: the 9 channels of one corner are contiguous in memory.
+    int corner_base = ni * L * H * W * 9;
+    int off000 = corner_base + ((z0*H + y0)*W + x0) * 9;
+    int off001 = corner_base + ((z0*H + y0)*W + x1) * 9;
+    int off010 = corner_base + ((z0*H + y1)*W + x0) * 9;
+    int off011 = corner_base + ((z0*H + y1)*W + x1) * 9;
+    int off100 = corner_base + ((z1*H + y0)*W + x0) * 9;
+    int off101 = corner_base + ((z1*H + y0)*W + x1) * 9;
+    int off110 = corner_base + ((z1*H + y1)*W + x0) * 9;
+    int off111 = corner_base + ((z1*H + y1)*W + x1) * 9;
+
     #pragma unroll
     for (int ci = 0; ci < 9; ci++) {
-        // base pointer for this volume
-        const float* vol = &bilagrid[((ni*9 + ci)*L*H*W)];
-
         // fetch 8 corners
-        auto v000 = vol[(z0*H+y0)*W+x0];
-        auto v001 = vol[(z0*H+y0)*W+x1];
-        auto v010 = vol[(z0*H+y1)*W+x0];
-        auto v011 = vol[(z0*H+y1)*W+x1];
-        auto v100 = vol[(z1*H+y0)*W+x0];
-        auto v101 = vol[(z1*H+y0)*W+x1];
-        auto v110 = vol[(z1*H+y1)*W+x0];
-        auto v111 = vol[(z1*H+y1)*W+x1];
+        auto v000 = bilagrid[off000 + ci];
+        auto v001 = bilagrid[off001 + ci];
+        auto v010 = bilagrid[off010 + ci];
+        auto v011 = bilagrid[off011 + ci];
+        auto v100 = bilagrid[off100 + ci];
+        auto v101 = bilagrid[off101 + ci];
+        auto v110 = bilagrid[off110 + ci];
+        auto v111 = bilagrid[off111 + ci];
 
         // trilinear interp
         float c00 = v000*(1.0f-fx) + v001*fx;

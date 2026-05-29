@@ -13,7 +13,7 @@
 
 
 __global__ void bilagrid_affine_identity_init_kernel(
-    float* __restrict__ grids,   // [N, 12, L, H, W]
+    float* __restrict__ grids,   // [N, L, H, W, 12]
     int N, int L, int H, int W
 ) {
     // Identity values for the 12-channel affine bilagrid (row-major 3x4).
@@ -30,13 +30,12 @@ __global__ void bilagrid_affine_identity_init_kernel(
     int li = li_n % L;
     int ni = li_n / L;
 
-    int64_t base_n = (int64_t)ni * 12 * L * H * W;
-    int64_t plane = (int64_t)L * H * W;
-    int64_t lhw = (int64_t)li * H * W + (int64_t)hi * W + wi;
+    // Channel-last: cell base in floats is ((ni*L + li)*H + hi)*W + wi, * 12
+    int64_t cell = ((((int64_t)ni * L + li) * H + hi) * W + wi) * 12;
 
     #pragma unroll
     for (int ci = 0; ci < 12; ci++) {
-        grids[base_n + (int64_t)ci * plane + lhw] = kIdent[ci];
+        grids[cell + ci] = kIdent[ci];
     }
 }
 
