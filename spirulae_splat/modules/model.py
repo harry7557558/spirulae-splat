@@ -1502,25 +1502,15 @@ class SpirulaeSplatModel(torch.nn.Module):
                 gt_normal = gt_normal.float() / (255/2) - 1.0
             gt_normal = gt_normal.cpu().float().contiguous()
 
-        gt_alpha, gt_rgb_mask, gt_depth_mask, gt_normal_mask, gt_alpha_mask = None, None, None, None, None
+        # External mask -> gt_alpha. The slang kernel derives RGB / depth /
+        # normal / alpha-sup masks internally from this + the gt sentinels.
+        gt_alpha = batch.get('mask', None)
+        if gt_alpha is not None:
+            if gt_alpha.dtype != torch.bool:
+                gt_alpha = gt_alpha.cpu().float() > 0.5
+            gt_alpha = gt_alpha.contiguous()
 
-        if "mask" in batch:
-            mask = batch['mask'].cpu().float() > 0.5
-            gt_rgb_mask = mask.contiguous()
-            if self.config.apply_loss_for_mask:
-                gt_alpha = mask.contiguous()
-
-        if gt_depth is not None:
-            gt_depth_mask = (gt_depth != 0.0).contiguous()
-            gt_alpha_mask = gt_depth_mask
-
-        if gt_normal is not None:
-            gt_normal_mask = (gt_normal.sum(-1, True) > -2.366).contiguous()
-
-        self.core.engine_set_training_data(
-            gt_rgb, gt_depth, gt_normal, gt_alpha,
-            gt_rgb_mask, gt_depth_mask, gt_normal_mask, gt_alpha_mask
-        )
+        self.core.engine_set_training_data(gt_rgb, gt_depth, gt_normal, gt_alpha)
 
         # --- Loss weights ---
         step = self.step
@@ -1536,8 +1526,8 @@ class SpirulaeSplatModel(torch.nn.Module):
             cfg.l2_lambda * (1.0 - cfg.ssim_lambda) * (1.0 - cfg.lpips_lambda),
             sup_active * cfg.depth_supervision_weight,
             sup_active * cfg.normal_supervision_weight,
-            cfg.alpha_loss_weight,
-            0.0 if gt_alpha is None else cfg.alpha_loss_weight_under,
+            cfg.apply_loss_for_mask * cfg.alpha_loss_weight,
+            cfg.apply_loss_for_mask * cfg.alpha_loss_weight_under,
             reg_active * cfg.normal_reg_weight * dist_factor,
             reg_active * alpha_reg_factor,
             reg_active * cfg.rgb_distortion_reg * dist_factor,
@@ -1615,11 +1605,12 @@ class SpirulaeSplatModel(torch.nn.Module):
         H_actual = H * self.config.supersampling
 
         if PROFILE_TRAIN_STEP: _t1 = _t()
-        # --- GT data: keep on whatever device it came from ---
-        # For uint8 / uint16, hand the raw bytes to the C++ engine so the H->D
-        # copy is 1/4 (uint8) or 1/2 (uint16) the size of an equivalent float
-        # buffer, and the divide-by-{255, 65535} runs as a GPU kernel inside
-        # set_training_data instead of a CPU float pass here.
+        # --- GT data: hand raw bytes to the C++ engine ---
+        # For uint8 / uint16 inputs, the C++ side does the float conversion on
+        # GPU (3-4x smaller H->D payload). The 4 per-pixel mask buffers
+        # (gt_rgb_mask, gt_depth_mask, gt_normal_mask, gt_alpha_mask) are gone:
+        # they're derived inside per_pixel_losses.slang from the gt_depth = 0
+        # sentinel, the gt_normal sum > -2.366 sentinel, and gt_alpha presence.
         gt_rgb = batch["image"]
         if gt_rgb.dtype == torch.float16:
             gt_rgb = gt_rgb.float()
@@ -1627,28 +1618,30 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         gt_depth = batch.get('depth', None)
         if gt_depth is not None:
-            gt_depth = gt_depth.float()
+            # Keep original dtype (float32 / uint16). C++ casts on GPU.
+            if gt_depth.dtype == torch.float16:
+                gt_depth = gt_depth.float()
             if len(gt_depth.shape) == 3:
                 gt_depth = gt_depth.unsqueeze(-1)
             gt_depth = gt_depth.contiguous()
 
         gt_normal = batch.get('normal', None)
         if gt_normal is not None:
-            if gt_normal.dtype == torch.uint8:
-                gt_normal = gt_normal.float() / (255 / 2) - 1.0
-            gt_normal = gt_normal.float().contiguous()
+            # Keep original dtype (float32 / uint8). C++ does the 2x/255 - 1
+            # scaling on GPU when uint8.
+            if gt_normal.dtype == torch.float16:
+                gt_normal = gt_normal.float()
+            gt_normal = gt_normal.contiguous()
 
-        gt_alpha = gt_rgb_mask = gt_depth_mask = gt_normal_mask = gt_alpha_mask = None
-        if "mask" in batch:
-            mask = batch['mask'].float() > 0.5
-            gt_rgb_mask = mask.contiguous()
-            if self.config.apply_loss_for_mask:
-                gt_alpha = mask.contiguous()
-        if gt_depth is not None:
-            gt_depth_mask = (gt_depth != 0.0).contiguous()
-            gt_alpha_mask = gt_depth_mask
-        if gt_normal is not None:
-            gt_normal_mask = (gt_normal.sum(-1, True) > -2.366).contiguous()
+        # External mask -> gt_alpha (bool / uint8). Drives RGB mask AND alpha
+        # supervision target in the slang kernel.
+        gt_alpha = batch.get('mask', None)
+        if gt_alpha is not None:
+            # Coerce to bool so the C++ side hands a 1 byte/pixel buffer to the
+            # kernel; this is small enough to keep as-is rather than convert.
+            if gt_alpha.dtype != torch.bool:
+                gt_alpha = gt_alpha > 0.5
+            gt_alpha = gt_alpha.contiguous()
 
         if PROFILE_TRAIN_STEP: _t2 = _t()
         # --- Loss weights ---
@@ -1663,8 +1656,8 @@ class SpirulaeSplatModel(torch.nn.Module):
             cfg.l2_lambda * (1.0 - cfg.ssim_lambda) * (1.0 - cfg.lpips_lambda),
             sup_active * cfg.depth_supervision_weight,
             sup_active * cfg.normal_supervision_weight,
-            cfg.alpha_loss_weight,
-            0.0 if gt_alpha is None else cfg.alpha_loss_weight_under,
+            cfg.apply_loss_for_mask * cfg.alpha_loss_weight,
+            cfg.apply_loss_for_mask * cfg.alpha_loss_weight_under,
             reg_active * cfg.normal_reg_weight * dist_factor,
             reg_active * alpha_reg_factor,
             reg_active * cfg.rgb_distortion_reg * dist_factor,
@@ -1747,7 +1740,6 @@ class SpirulaeSplatModel(torch.nn.Module):
             W_actual, H_actual, camera_model,
             viewmats, intrins, dist_coeffs,
             gt_rgb, gt_depth, gt_normal, gt_alpha,
-            gt_rgb_mask, gt_depth_mask, gt_normal_mask, gt_alpha_mask,
             loss_weights, w_ssim, num_loss_scales, compute_loss_map,
             self.config, self.trainer_config.optimizer,
             bilagrid_cam_indices=bilagrid_cam_indices,

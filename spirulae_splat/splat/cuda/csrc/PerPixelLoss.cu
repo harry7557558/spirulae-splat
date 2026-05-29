@@ -104,10 +104,7 @@ __global__ void per_pixel_losses_forward_kernel(
     const float* __restrict__ depth_dist,
     const float3* __restrict__ normal_dist,
     const bool* __restrict__ ref_alpha,
-    const bool* __restrict__ mask,
-    const bool* __restrict__ depth_mask,
-    const bool* __restrict__ normal_mask,
-    const bool* __restrict__ alpha_mask,
+    bool has_mask,                          // gt_alpha buffer present (per-pixel mask)
     FixedArray<float, (uint)LossWeightIndex::length> loss_weights,
     float* __restrict__ out_loss_map,  // non differentiable
     float* __restrict__ out_losses
@@ -134,11 +131,8 @@ __global__ void per_pixel_losses_forward_kernel(
             rgb_dist ? rgb_dist[idx] : make_float3(0),
             depth_dist ? depth_dist[idx] : 0.f,
             normal_dist ? normal_dist[idx] : make_float3(0),
-            ref_alpha ? ref_alpha[idx] : true,
-            mask ? mask[idx] : true,
-            depth_mask ? depth_mask[idx] : true,
-            normal_mask ? normal_mask[idx] : true,
-            alpha_mask ? alpha_mask[idx] : true,
+            ref_alpha ? ref_alpha[idx] : false,
+            has_mask,
             loss_weights,
             &losses
         );
@@ -205,10 +199,7 @@ __global__ void per_pixel_losses_backward_kernel(
     const float* __restrict__ depth_dist,
     const float3* __restrict__ normal_dist,
     const bool* __restrict__ ref_alpha,
-    const bool* __restrict__ mask,
-    const bool* __restrict__ depth_mask,
-    const bool* __restrict__ normal_mask,
-    const bool* __restrict__ alpha_mask,
+    bool has_mask,                          // gt_alpha buffer present
     FixedArray<float, (uint)LossWeightIndex::length> loss_weights,
     const float* __restrict__ v_out_losses,
     float3* __restrict__ v_render_rgb,
@@ -269,11 +260,8 @@ __global__ void per_pixel_losses_backward_kernel(
         rgb_dist ? rgb_dist[idx] : make_float3(0),
         depth_dist ? depth_dist[idx] : 0.f,
         normal_dist ? normal_dist[idx] : make_float3(0),
-        ref_alpha ? ref_alpha[idx] : true,
-        mask ? mask[idx] : true,
-        depth_mask ? depth_mask[idx] : true,
-        normal_mask ? normal_mask[idx] : true,
-        alpha_mask ? alpha_mask[idx] : true,
+        ref_alpha ? ref_alpha[idx] : false,
+        has_mask,
         loss_weights,
         v_losses,
         &temp_v_render_rgb,
@@ -383,10 +371,7 @@ static void _compute_per_pixel_losses_forward(
     TorchTensorView depth_dist,
     TorchTensorView normal_dist,
     TorchTensorView ref_alpha,
-    TorchTensorView mask,
-    TorchTensorView depth_mask,
-    TorchTensorView normal_mask,
-    TorchTensorView alpha_mask,
+    bool has_mask,
     FixedArray<float, (uint)LossWeightIndex::length> loss_weights,
     long num_train_images,
     TorchTensorView camera_indices,
@@ -409,10 +394,7 @@ static void _compute_per_pixel_losses_forward(
         _fptr(depth_dist),
         _f3ptr(normal_dist),
         _bptr(ref_alpha),
-        _bptr(mask),
-        _bptr(depth_mask),
-        _bptr(normal_mask),
-        _bptr(alpha_mask),
+        has_mask,
         loss_weights,
         loss_map_ptr,
         raw_losses_ptr
@@ -444,10 +426,7 @@ static void _compute_per_pixel_losses_backward(
     TorchTensorView depth_dist,
     TorchTensorView normal_dist,
     TorchTensorView ref_alpha,
-    TorchTensorView mask,
-    TorchTensorView depth_mask,
-    TorchTensorView normal_mask,
-    TorchTensorView alpha_mask,
+    bool has_mask,
     float* raw_losses_ptr,
     FixedArray<float, (uint)LossWeightIndex::length> loss_weights,
     float* v_losses_ptr,
@@ -482,10 +461,7 @@ static void _compute_per_pixel_losses_backward(
         _fptr(depth_dist),
         _f3ptr(normal_dist),
         _bptr(ref_alpha),
-        _bptr(mask),
-        _bptr(depth_mask),
-        _bptr(normal_mask),
-        _bptr(alpha_mask),
+        has_mask,
         loss_weights,
         v_raw_losses,
         _f3ptr(grads.v_render_rgb),
@@ -626,10 +602,7 @@ LossValues compute_multi_scale_per_pixel_losses(
     TorchTensorView depth_dist,
     TorchTensorView normal_dist,
     TorchTensorView ref_alpha,
-    TorchTensorView mask,
-    TorchTensorView depth_mask,
-    TorchTensorView normal_mask,
-    TorchTensorView alpha_mask,
+    bool has_mask,
     const std::array<float, (int)LossWeightIndex::length> loss_weights_0,
     const float w_ssim,
     TorchTensorView v_losses,
@@ -658,16 +631,14 @@ LossValues compute_multi_scale_per_pixel_losses(
     TorchTensorView render_normal_s[MAX_SCALES], depth_normal_s[MAX_SCALES], ref_normal_s[MAX_SCALES];
     TorchTensorView render_Ts_s[MAX_SCALES];
     TorchTensorView rgb_dist_s[MAX_SCALES], depth_dist_s[MAX_SCALES], normal_dist_s[MAX_SCALES];
-    TorchTensorView ref_alpha_s[MAX_SCALES], mask_s[MAX_SCALES];
-    TorchTensorView depth_mask_s[MAX_SCALES], normal_mask_s[MAX_SCALES], alpha_mask_s[MAX_SCALES];
+    TorchTensorView ref_alpha_s[MAX_SCALES];
 
     render_rgb_s[0] = render_rgb; ref_rgb_s[0] = ref_rgb;
     render_depth_s[0] = render_depth; ref_depth_s[0] = ref_depth;
     render_normal_s[0] = render_normal; depth_normal_s[0] = depth_normal; ref_normal_s[0] = ref_normal;
     render_Ts_s[0] = render_Ts;
     rgb_dist_s[0] = rgb_dist; depth_dist_s[0] = depth_dist; normal_dist_s[0] = normal_dist;
-    ref_alpha_s[0] = ref_alpha; mask_s[0] = mask;
-    depth_mask_s[0] = depth_mask; normal_mask_s[0] = normal_mask; alpha_mask_s[0] = alpha_mask;
+    ref_alpha_s[0] = ref_alpha;
 
     // Downsample to create scales
     for (int sc = 1; sc < num_loss_scales; ++sc) {
@@ -701,10 +672,6 @@ LossValues compute_multi_scale_per_pixel_losses(
         ds_f(depth_dist_s[sc-1], depth_dist_s[sc], "dd", 1);
         ds_f(normal_dist_s[sc-1], normal_dist_s[sc], "nd", 3);
         ds_b(ref_alpha_s[sc-1], ref_alpha_s[sc], "ra");
-        ds_b(mask_s[sc-1], mask_s[sc], "m");
-        ds_b(depth_mask_s[sc-1], depth_mask_s[sc], "dm");
-        ds_b(normal_mask_s[sc-1], normal_mask_s[sc], "nm");
-        ds_b(alpha_mask_s[sc-1], alpha_mask_s[sc], "am");
     }
 
     // Total losses accumulator — pool-backed device buffer (D->H read at end)
@@ -740,7 +707,7 @@ LossValues compute_multi_scale_per_pixel_losses(
             render_rgb_s[scale], ref_rgb_s[scale], render_depth_s[scale], ref_depth_s[scale],
             render_normal_s[scale], depth_normal_s[scale], ref_normal_s[scale], render_Ts_s[scale],
             rgb_dist_s[scale], depth_dist_s[scale], normal_dist_s[scale],
-            ref_alpha_s[scale], mask_s[scale], depth_mask_s[scale], normal_mask_s[scale], alpha_mask_s[scale],
+            ref_alpha_s[scale], has_mask,
             loss_weights, num_train_images, camera_indices,
             loss_map_ptr, raw_losses_ptr, losses_ptr
         );
@@ -768,7 +735,7 @@ LossValues compute_multi_scale_per_pixel_losses(
             render_rgb_s[scale], ref_rgb_s[scale], render_depth_s[scale], ref_depth_s[scale],
             render_normal_s[scale], depth_normal_s[scale], ref_normal_s[scale], render_Ts_s[scale],
             rgb_dist_s[scale], depth_dist_s[scale], normal_dist_s[scale],
-            ref_alpha_s[scale], mask_s[scale], depth_mask_s[scale], normal_mask_s[scale], alpha_mask_s[scale],
+            ref_alpha_s[scale], has_mask,
             raw_losses_ptr, loss_weights, _fptr(v_losses),
             num_train_images, camera_indices, scale_grads
         );
@@ -780,7 +747,7 @@ LossValues compute_multi_scale_per_pixel_losses(
         float ssim;
         if (scale == 0) {
             ssim = fused_ssim_inplace_async(
-                render_rgb_s[scale], ref_rgb_s[scale], mask_s[scale],
+                render_rgb_s[scale], ref_rgb_s[scale], ref_alpha_s[scale],
                 -w_ssim,
                 scale_grads.v_render_rgb,
                 loss_map_scale,
@@ -789,7 +756,7 @@ LossValues compute_multi_scale_per_pixel_losses(
             );
         } else {
             ssim = fused_ssim_inplace(
-                render_rgb_s[scale], ref_rgb_s[scale], mask_s[scale],
+                render_rgb_s[scale], ref_rgb_s[scale], ref_alpha_s[scale],
                 -w_ssim,
                 scale_grads.v_render_rgb,
                 /*return_ssim_val=*/false,

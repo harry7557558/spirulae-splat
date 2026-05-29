@@ -200,11 +200,11 @@ class Renderer:
         return weight
 
     def engine_set_training_data(self, gt_rgb, gt_depth=None, gt_normal=None,
-                                  gt_alpha=None, gt_rgb_mask=None, gt_depth_mask=None,
-                                  gt_normal_mask=None, gt_alpha_mask=None):
+                                  gt_alpha=None):
+        # 4-mask buffers (rgb/depth/normal/alpha) gone — derived in the slang
+        # kernel from gt_alpha / gt_depth=0 / gt_normal sentinel.
         _C.set_training_data(
-            self._tv(gt_rgb), self._tv(gt_depth), self._tv(gt_normal), self._tv(gt_alpha),
-            self._tv(gt_rgb_mask), self._tv(gt_depth_mask), self._tv(gt_normal_mask), self._tv(gt_alpha_mask)
+            self._tv(gt_rgb), self._tv(gt_depth), self._tv(gt_normal), self._tv(gt_alpha)
         )
 
     def engine_compute_loss_backward(self, step, loss_weights, w_ssim, num_loss_scales, compute_loss_map):
@@ -298,9 +298,11 @@ class Renderer:
                           sh_degree_to_use,
                           width, height, camera_model,
                           viewmats, intrins, dist_coeffs,
-                          # GT data
+                          # GT data. Per-pixel masks are derived in the slang
+                          # kernel; gt_alpha drives the RGB mask + alpha-sup
+                          # target. apply_loss_for_mask folded into weights
+                          # on the model.py side.
                           gt_rgb, gt_depth, gt_normal, gt_alpha,
-                          gt_rgb_mask, gt_depth_mask, gt_normal_mask, gt_alpha_mask,
                           # Loss config
                           loss_weights, w_ssim, num_loss_scales, compute_loss_map,
                           # Configs
@@ -338,7 +340,6 @@ class Renderer:
             self._tv(dist_coeffs),
             # GT
             self._tv(gt_rgb), self._tv(gt_depth), self._tv(gt_normal), self._tv(gt_alpha),
-            self._tv(gt_rgb_mask), self._tv(gt_depth_mask), self._tv(gt_normal_mask), self._tv(gt_alpha_mask),
             # Loss
             loss_weights, w_ssim, num_loss_scales, compute_loss_map,
             # LRs

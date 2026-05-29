@@ -176,6 +176,81 @@ void uint16_image_to_float_raw(
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
+// ---- gt_normal: uint8 [0,255] -> float in [-1, 1] ----
+// Mirrors model.py's `gt_normal.float() / (255/2) - 1.0`. Per-channel:
+//   out = (float)in / 127.5f - 1.0f
+__global__ void uint8_normal_to_float_kernel(
+    const TensorView<uint8_t, 4> img_in,
+    TensorView<float, 4> img_out
+) {
+    unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned B = img_in.shape[0], H = img_in.shape[1], W = img_in.shape[2], C = img_in.shape[3];
+    if (bid >= B || gid >= H*W)
+        return;
+    unsigned y = gid / W;
+    unsigned x = gid % W;
+    for (int i = 0; i < C; ++i) {
+        uint8_t c_in = img_in.at(bid, y, x, i);
+        float c_out = (float)c_in * (1.0f / 127.5f) - 1.0f;
+        img_out.at(bid, y, x, i) = c_out;
+    }
+}
+
+void uint8_normal_to_float_raw(
+    const uint8_t* d_in, float* d_out,
+    int B, int H, int W, int C
+) {
+    TensorView<uint8_t, 4> in_v;
+    in_v.data = const_cast<uint8_t*>(d_in);
+    in_v.shape[0] = B; in_v.shape[1] = H; in_v.shape[2] = W; in_v.shape[3] = C;
+    in_v.strides[0] = (long)H*W*C; in_v.strides[1] = (long)W*C; in_v.strides[2] = C; in_v.strides[3] = 1;
+
+    TensorView<float, 4> out_v;
+    out_v.data = d_out;
+    out_v.shape[0] = B; out_v.shape[1] = H; out_v.shape[2] = W; out_v.shape[3] = C;
+    out_v.strides[0] = (long)H*W*C; out_v.strides[1] = (long)W*C; out_v.strides[2] = C; out_v.strides[3] = 1;
+
+    uint8_normal_to_float_kernel<<<_LAUNCH_ARGS_2D(H*W, B, 256, 1)>>>(in_v, out_v);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+// ---- gt_depth: uint16 -> float (cast only, no scaling) ----
+// Mirrors model.py's `gt_depth.float()` (which preserves the raw integer value).
+__global__ void uint16_depth_to_float_kernel(
+    const TensorView<uint16_t, 4> img_in,
+    TensorView<float, 4> img_out
+) {
+    unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned B = img_in.shape[0], H = img_in.shape[1], W = img_in.shape[2], C = img_in.shape[3];
+    if (bid >= B || gid >= H*W)
+        return;
+    unsigned y = gid / W;
+    unsigned x = gid % W;
+    for (int i = 0; i < C; ++i) {
+        img_out.at(bid, y, x, i) = (float)img_in.at(bid, y, x, i);
+    }
+}
+
+void uint16_depth_to_float_raw(
+    const uint16_t* d_in, float* d_out,
+    int B, int H, int W, int C
+) {
+    TensorView<uint16_t, 4> in_v;
+    in_v.data = const_cast<uint16_t*>(d_in);
+    in_v.shape[0] = B; in_v.shape[1] = H; in_v.shape[2] = W; in_v.shape[3] = C;
+    in_v.strides[0] = (long)H*W*C; in_v.strides[1] = (long)W*C; in_v.strides[2] = C; in_v.strides[3] = 1;
+
+    TensorView<float, 4> out_v;
+    out_v.data = d_out;
+    out_v.shape[0] = B; out_v.shape[1] = H; out_v.shape[2] = W; out_v.shape[3] = C;
+    out_v.strides[0] = (long)H*W*C; out_v.strides[1] = (long)W*C; out_v.strides[2] = C; out_v.strides[3] = 1;
+
+    uint16_depth_to_float_kernel<<<_LAUNCH_ARGS_2D(H*W, B, 256, 1)>>>(in_v, out_v);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
 
 // ================
 // Rendered Depth to Expected Depth

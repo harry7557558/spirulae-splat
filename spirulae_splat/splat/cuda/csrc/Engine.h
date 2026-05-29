@@ -56,14 +56,16 @@ void set_camera_params(
 );
 
 void set_training_data(
-    TorchTensorView gt_rgb,          // [C, H, W, 3] float32 (sRGB 0-1)
-    TorchTensorView gt_depth,        // [C, H, W, 1] float32, or null
-    TorchTensorView gt_normal,       // [C, H, W, 3] float32, or null
-    TorchTensorView gt_alpha,        // [C, H, W, 1] bool,    or null
-    TorchTensorView gt_rgb_mask,     // [C, H, W, 1] bool,    or null
-    TorchTensorView gt_depth_mask,   // [C, H, W, 1] bool,    or null
-    TorchTensorView gt_normal_mask,  // [C, H, W, 1] bool,    or null
-    TorchTensorView gt_alpha_mask    // [C, H, W, 1] bool,    or null
+    // RGB: float32 [0,1], uint8 [0,255], or uint16 [0,65535]. uint8/uint16
+    // uploaded as raw bytes; converted to float on the GPU.
+    TorchTensorView gt_rgb,          // [C, H, W, 3]
+    // Depth: float32 (passthrough) or uint16 (cast on GPU, no scaling). Null OK.
+    TorchTensorView gt_depth,        // [C, H, W, 1]
+    // Normal: float32 (passthrough) or uint8 (x/127.5 - 1 on GPU). Null OK.
+    TorchTensorView gt_normal,       // [C, H, W, 3]
+    // External mask (per-pixel bool/uint8). Sets Buffers::has_mask. Null OK.
+    // Drives the RGB mask + alpha-sup target inside per_pixel_losses.slang.
+    TorchTensorView gt_alpha         // [C, H, W, 1]
 );
 
 // --- Forward ---
@@ -192,10 +194,6 @@ std::map<std::string, float> engine_train_step(
     TorchTensorView gt_depth,
     TorchTensorView gt_normal,
     TorchTensorView gt_alpha,
-    TorchTensorView gt_rgb_mask,
-    TorchTensorView gt_depth_mask,
-    TorchTensorView gt_normal_mask,
-    TorchTensorView gt_alpha_mask,
     std::array<float, (int)LossWeightIndex::length> loss_weights,
     float w_ssim,
     int num_loss_scales,

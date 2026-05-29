@@ -15,6 +15,8 @@
 // Not in PixelWise.cuh because they bypass the DeviceTensor3D shape carrier.
 void uint8_image_to_float_raw(const uint8_t* d_in, float* d_out, int B, int H, int W, int C);
 void uint16_image_to_float_raw(const uint16_t* d_in, float* d_out, int B, int H, int W, int C);
+void uint8_normal_to_float_raw(const uint8_t* d_in, float* d_out, int B, int H, int W, int C);
+void uint16_depth_to_float_raw(const uint16_t* d_in, float* d_out, int B, int H, int W, int C);
 
 
 namespace Buffers {
@@ -58,16 +60,16 @@ DeviceTensor3D<int32_t> fwd_last_ids;
 RenderOutput::TensorTuple fwd_renders;  // for 3dgut backward
 DeviceVector<float> fwd_accum_weight;  // [max_num_splats] per-splat score from raster bwd
 
-// Training ground truth (re-copied each batch to pool)
+// Training ground truth (re-copied each batch to pool).
+// The 4 mask buffers (rgb_mask, depth_mask, normal_mask, alpha_mask) were
+// dropped: they are now derived inside per_pixel_losses.slang from gt_alpha
+// (RGB mask), gt_depth (depth + alpha masks), and gt_normal (normal mask).
 DeviceTensor3D<float3> gt_rgb;         // [C, H, W]
 DeviceTensor3D<float> gt_depth;        // [C, H, W]
 DeviceTensor3D<float3> gt_normal;      // [C, H, W]
-DeviceTensor3D<bool> gt_alpha;         // [C, H, W]
-DeviceTensor3D<bool> gt_rgb_mask;      // [C, H, W]
-DeviceTensor3D<bool> gt_depth_mask;    // [C, H, W]
-DeviceTensor3D<bool> gt_normal_mask;   // [C, H, W]
-DeviceTensor3D<bool> gt_alpha_mask;    // [C, H, W]
+DeviceTensor3D<bool> gt_alpha;         // [C, H, W] external mask; sets `has_mask` for the slang kernel
 bool has_gt = false;
+bool has_mask = false;                 // gt_alpha buffer present (controls per-pixel mask in slang kernel)
 
 // Pool-backed training state
 int num_sh = 0;
@@ -669,78 +671,97 @@ size_t engine_get_scratch_bytes() {
 }
 
 
-// gt_rgb fast path: when the caller passes uint8 / uint16 (element_size != 4),
-// stage as raw bytes (1/4 or 1/2 the H->D payload of an equivalent float buffer)
-// and convert to float on the device. Saves a CPU float pass per iteration and
-// shrinks the per-step pageable H->D copy.
-static DeviceTensor3D<float3> _hv_to_dt3d_gt_rgb(const TorchTensorView& src_tv) {
-    if (std::get<0>(src_tv) == 0) return DeviceTensor3D<float3>();
+// Common ground-truth upload + GPU-side type conversion.
+//
+// kind picks the right per-element conversion:
+//   "rgb"    : uint8 -> float in [0, 1] (divide by 255)
+//   "normal" : uint8 -> float in [-1, 1] (x/127.5 - 1)
+//   "depth"  : uint16 -> float (cast only, no scaling — matches `.float()`)
+// For all kinds, `elem_size == sizeof(float)` is treated as already-float and
+// goes through the regular _hv_to_dt3d<T>() zero-copy-or-H2D path.
+//
+// The shape carrier type T (float / float3) determines the DeviceTensor3D
+// view returned. Conversion always produces a contiguous float buffer.
+template<typename T>
+static DeviceTensor3D<T> _hv_to_dt3d_gt(
+    const TorchTensorView& src_tv,
+    const std::string& key,
+    const std::string& kind
+) {
+    if (std::get<0>(src_tv) == 0) return DeviceTensor3D<T>();
     uint32_t elem_size = std::get<1>(src_tv);
     if (elem_size == 4) {
-        // Already float: existing path.
-        return _hv_to_dt3d<float3>("gt.rgb", src_tv);
+        // Already float: existing zero-copy / pageable H2D path.
+        return _hv_to_dt3d<T>(key, src_tv);
     }
 
     auto& shape = std::get<2>(src_tv);
     if (shape.size() != 4)
-        throw std::runtime_error("gt_rgb: expected [B, H, W, C] shape");
+        throw std::runtime_error(key + ": expected [B, H, W, C] shape");
     int64_t B = shape[0], H = shape[1], W = shape[2], C = shape[3];
     int64_t numel = B * H * W * C;
     uint64_t src_ptr = std::get<0>(src_tv);
     bool src_is_device = _is_device_ptr((void*)src_ptr);
 
-    // Float3 output buffer (consumed by downstream loss kernels).
-    float* d_f = DevicePool::global().acquire<float>("gt.rgb", (size_t)numel);
+    // Float output buffer (consumed downstream by loss / bilagrid kernels).
+    float* d_f = DevicePool::global().acquire<float>(key, (size_t)numel);
 
     if (elem_size == 1) {
         const uint8_t* d_u8;
-        uint8_t* staging = nullptr;
         if (src_is_device) {
             d_u8 = (const uint8_t*)src_ptr;
         } else {
-            staging = DevicePool::global().acquire<uint8_t>("gt.rgb_u8", (size_t)numel);
+            uint8_t* staging = DevicePool::global().acquire<uint8_t>(
+                key + "_u8", (size_t)numel);
             cudaMemcpy(staging, (void*)src_ptr, numel * sizeof(uint8_t), cudaMemcpyHostToDevice);
             d_u8 = staging;
         }
-        uint8_image_to_float_raw(d_u8, d_f, (int)B, (int)H, (int)W, (int)C);
+        if (kind == "rgb") {
+            uint8_image_to_float_raw(d_u8, d_f, (int)B, (int)H, (int)W, (int)C);
+        } else if (kind == "normal") {
+            uint8_normal_to_float_raw(d_u8, d_f, (int)B, (int)H, (int)W, (int)C);
+        } else {
+            throw std::runtime_error(key + ": uint8 not supported for kind '" + kind + "'");
+        }
     } else if (elem_size == 2) {
         const uint16_t* d_u16;
-        uint16_t* staging = nullptr;
         if (src_is_device) {
             d_u16 = (const uint16_t*)src_ptr;
         } else {
-            staging = DevicePool::global().acquire<uint16_t>("gt.rgb_u16", (size_t)numel);
+            uint16_t* staging = DevicePool::global().acquire<uint16_t>(
+                key + "_u16", (size_t)numel);
             cudaMemcpy(staging, (void*)src_ptr, numel * sizeof(uint16_t), cudaMemcpyHostToDevice);
             d_u16 = staging;
         }
-        uint16_image_to_float_raw(d_u16, d_f, (int)B, (int)H, (int)W, (int)C);
+        if (kind == "rgb") {
+            uint16_image_to_float_raw(d_u16, d_f, (int)B, (int)H, (int)W, (int)C);
+        } else if (kind == "depth") {
+            uint16_depth_to_float_raw(d_u16, d_f, (int)B, (int)H, (int)W, (int)C);
+        } else {
+            throw std::runtime_error(key + ": uint16 not supported for kind '" + kind + "'");
+        }
     } else {
-        throw std::runtime_error("gt_rgb: unsupported element_size (expected 1, 2, or 4)");
+        throw std::runtime_error(key + ": unsupported element_size (expected 1, 2, or 4)");
     }
 
     TorchTensorView tv((uint64_t)d_f, 4, {B, H, W, C});
-    return DeviceTensor3D<float3>(tv);
+    return DeviceTensor3D<T>(tv);
 }
 
 void set_training_data(
     TorchTensorView gt_rgb,
     TorchTensorView gt_depth,
     TorchTensorView gt_normal,
-    TorchTensorView gt_alpha,
-    TorchTensorView gt_rgb_mask,
-    TorchTensorView gt_depth_mask,
-    TorchTensorView gt_normal_mask,
-    TorchTensorView gt_alpha_mask
+    TorchTensorView gt_alpha
 ) {
-    Buffers::gt_rgb         = _hv_to_dt3d_gt_rgb(gt_rgb);
-    Buffers::gt_depth       = _hv_to_dt3d<float>("gt.depth", gt_depth);
-    Buffers::gt_normal      = _hv_to_dt3d<float3>("gt.normal", gt_normal);
-    Buffers::gt_alpha       = _hv_to_dt3d<bool>("gt.alpha", gt_alpha);
-    Buffers::gt_rgb_mask    = _hv_to_dt3d<bool>("gt.rgb_mask", gt_rgb_mask);
-    Buffers::gt_depth_mask  = _hv_to_dt3d<bool>("gt.depth_mask", gt_depth_mask);
-    Buffers::gt_normal_mask = _hv_to_dt3d<bool>("gt.normal_mask", gt_normal_mask);
-    Buffers::gt_alpha_mask  = _hv_to_dt3d<bool>("gt.alpha_mask", gt_alpha_mask);
-    Buffers::has_gt = (std::get<0>(gt_rgb) != 0);
+    Buffers::gt_rgb    = _hv_to_dt3d_gt<float3>(gt_rgb,    "gt.rgb",    "rgb");
+    Buffers::gt_depth  = _hv_to_dt3d_gt<float>(gt_depth,   "gt.depth",  "depth");
+    Buffers::gt_normal = _hv_to_dt3d_gt<float3>(gt_normal, "gt.normal", "normal");
+    // gt_alpha: small bool/uint8 buffer (the external mask). No conversion;
+    // the slang kernel reads bool per pixel. Drives Buffers::has_mask.
+    Buffers::gt_alpha  = _hv_to_dt3d<bool>("gt.alpha", gt_alpha);
+    Buffers::has_gt    = (std::get<0>(gt_rgb) != 0);
+    Buffers::has_mask  = (std::get<0>(gt_alpha) != 0);
 }
 
 
@@ -1023,10 +1044,7 @@ std::map<std::string, float> engine_compute_loss_backward(
         depth_dist,
         normal_dist,
         _dt3d_tv(Buffers::gt_alpha),
-        _dt3d_tv(Buffers::gt_rgb_mask),
-        _dt3d_tv(Buffers::gt_depth_mask),
-        _dt3d_tv(Buffers::gt_normal_mask),
-        _dt3d_tv(Buffers::gt_alpha_mask),
+        Buffers::has_mask,
         loss_weights,
         w_ssim,
         v_losses_buf,
@@ -2167,15 +2185,14 @@ std::map<std::string, float> engine_train_step(
     TorchTensorView viewmats,
     TorchTensorView intrins,
     TorchTensorView dist_coeffs,
-    // GT data (host)
+    // GT data (host). Per-pixel masks are derived inside the slang kernel from
+    // gt_depth (depth/alpha masks), gt_normal (normal mask sentinel), and
+    // gt_alpha (the external mask -> RGB mask). apply_loss_for_mask is folded
+    // into alpha_loss_weight / alpha_loss_weight_under on the Python side.
     TorchTensorView gt_rgb,
     TorchTensorView gt_depth,
     TorchTensorView gt_normal,
     TorchTensorView gt_alpha,
-    TorchTensorView gt_rgb_mask,
-    TorchTensorView gt_depth_mask,
-    TorchTensorView gt_normal_mask,
-    TorchTensorView gt_alpha_mask,
     // Loss config
     std::array<float, (int)LossWeightIndex::length> loss_weights,
     float w_ssim,
@@ -2214,8 +2231,7 @@ std::map<std::string, float> engine_train_step(
 ) {
     // Camera + GT: H->D copy into pool
     set_camera_params(width, height, camera_model, viewmats, intrins, dist_coeffs);
-    set_training_data(gt_rgb, gt_depth, gt_normal, gt_alpha,
-                      gt_rgb_mask, gt_depth_mask, gt_normal_mask, gt_alpha_mask);
+    set_training_data(gt_rgb, gt_depth, gt_normal, gt_alpha);
 
     // Forward (writes to pool; no D->H)
     forward_3dgs(primitive, sh_degree, packed);

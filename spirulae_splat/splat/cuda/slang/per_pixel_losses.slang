@@ -108,13 +108,20 @@ float[RawLossIndex::length] per_pixel_losses(
     float depth_dist,
     float3 normal_dist,
     bool ref_alpha,
-    bool mask,
-    bool depth_mask,
-    bool normal_mask,
-    bool alpha_mask,
+    no_diff bool has_mask,
     no_diff float[LossWeightIndex::length] weights
 ) {
     float[RawLossIndex::length] losses;
+
+    // Derive per-pixel validity masks (was passed in as 4 separate bool buffers).
+    //   mask         (RGB)          : 1 if no external mask, else gt_alpha.
+    //   depth_mask                  : ref_depth != 0 (sentinel for "no gt").
+    //   normal_mask                 : sum(ref_normal) > -2.366 (sentinel).
+    //   alpha_mask  (alpha sup)     : same as depth_mask (current semantics).
+    bool mask = has_mask ? ref_alpha : true;
+    bool depth_mask = (ref_depth != 0.0f);
+    bool normal_mask = (ref_normal.x + ref_normal.y + ref_normal.z > -2.366f);
+    bool alpha_mask = (ref_depth != 0.0f);
 
     // RGB - L1 and L2, for training and for PSNR calculation
     losses[RawLossIndex::RgbLoss] = float(mask) * (
@@ -191,10 +198,7 @@ void per_pixel_losses_bwd(
     float depth_dist,
     float3 normal_dist,
     bool ref_alpha,
-    bool mask,
-    bool depth_mask,
-    bool normal_mask,
-    bool alpha_mask,
+    bool has_mask,
     no_diff float[LossWeightIndex::length] weights,
     float[RawLossIndex::length] v_losses,
     out float3 v_render_rgb,
@@ -233,10 +237,7 @@ void per_pixel_losses_bwd(
         dp_depth_dist,
         dp_normal_dist,
         ref_alpha,
-        mask,
-        depth_mask,
-        normal_mask,
-        alpha_mask,
+        has_mask,
         weights,
         v_losses
     );
