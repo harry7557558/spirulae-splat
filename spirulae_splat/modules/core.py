@@ -303,6 +303,16 @@ class Renderer:
             float(reg_color_mean), float(reg_crf_channel_var)
         )
 
+    def engine_save_checkpoint(self, output_dir, step, full_dump=False):
+        """Write checkpoint files into ``output_dir`` (created if missing).
+        Always writes ``splat.ply`` (cur_num_splats only, NaN/low-opacity-filtered),
+        ``bilagrid_*.npy`` / ``ppisp.npy`` (when enabled) and ``meta.txt``.
+        When ``full_dump=True`` additionally writes a ``full/`` subfolder with
+        every world parameter (max_num_splats) plus Adam optimizer state."""
+        import os
+        os.makedirs(str(output_dir), exist_ok=True)
+        _C.engine_save_checkpoint(str(output_dir), bool(full_dump), int(step))
+
     def engine_train_step(self, step, max_steps,
                           # Forward
                           sh_degree_to_use,

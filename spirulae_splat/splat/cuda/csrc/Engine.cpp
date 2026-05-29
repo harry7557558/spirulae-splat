@@ -11,6 +11,11 @@
 #include "RasterizationEval3DFwd.cuh"
 #include "RasterizationEval3DBwd.cuh"
 
+#include "npy.hpp"
+#include <filesystem>
+#include <fstream>
+#include <cmath>
+
 // Forward decls for the raw-pointer image conversion helpers in PixelWise.cu.
 // Not in PixelWise.cuh because they bypass the DeviceTensor3D shape carrier.
 void uint8_image_to_float_raw(const uint8_t* d_in, float* d_out, int B, int H, int W, int C);
@@ -2457,4 +2462,370 @@ std::map<std::string, float> engine_train_step(
     loss_dict["cur_num_splats"] = (float)Buffers::cur_num_splats;
     loss_dict["max_num_splats"] = (float)Buffers::max_num_splats;
     return loss_dict;
+}
+
+
+// ============================================================================
+// Checkpoint save (PLY + npy)
+// ============================================================================
+
+namespace {
+
+namespace fs = std::filesystem;
+
+static void _ckpt_mkdir(const fs::path& p) {
+    std::error_code ec;
+    fs::create_directories(p, ec);
+    if (ec) throw std::runtime_error("create_directories failed: " + p.string() + " (" + ec.message() + ")");
+}
+
+// D->H copy into a freshly sized host buffer.
+template<typename T>
+static std::vector<T> _ckpt_d2h(const T* d_ptr, size_t n) {
+    std::vector<T> host(n);
+    if (n > 0 && d_ptr != nullptr) {
+        cudaMemcpy(host.data(), d_ptr, n * sizeof(T), cudaMemcpyDeviceToHost);
+    }
+    return host;
+}
+
+// Save a device-side buffer of `numel` elements as a .npy with the given shape.
+template<typename Scalar>
+static void _ckpt_save_npy(const fs::path& path, const Scalar* d_ptr, size_t numel,
+                           const npy::shape_t& shape) {
+    if (d_ptr == nullptr || numel == 0) return;
+    auto host = _ckpt_d2h<Scalar>(d_ptr, numel);
+    npy::npy_data_ptr<Scalar> data{host.data(), shape, false};
+    npy::write_npy(path.string(), data);
+}
+
+template<typename T>
+static npy::shape_t _ckpt_shape_5d(const DeviceTensor5D<T>& t) {
+    return {
+        (unsigned long)t.template size<0>(),
+        (unsigned long)t.template size<1>(),
+        (unsigned long)t.template size<2>(),
+        (unsigned long)t.template size<3>(),
+        (unsigned long)t.template size<4>(),
+    };
+}
+
+} // anon namespace
+
+
+void engine_save_checkpoint(
+    std::string output_dir,
+    bool full_dump,
+    int step
+) {
+    using namespace Buffers;
+
+    fs::path out_root(output_dir);
+    _ckpt_mkdir(out_root);
+
+    cudaDeviceSynchronize();
+
+    const int64_t N = cur_num_splats;
+    const int K = num_sh;
+
+    // --- D->H copy world splat tensors at cur_num_splats ---
+    auto h_means        = _ckpt_d2h<float3>(world_means.data_ptr(),        (size_t)N);
+    auto h_quats        = _ckpt_d2h<float4>(world_quats.data_ptr(),        (size_t)N);
+    auto h_scales       = _ckpt_d2h<float3>(world_scales.data_ptr(),       (size_t)N);
+    auto h_opacities    = _ckpt_d2h<float >(world_opacities.data_ptr(),    (size_t)N);
+    auto h_features_dc  = _ckpt_d2h<float3>(world_features_dc.data_ptr(),  (size_t)N);
+    // features_sh is stored [max_N, K] contiguous; copying first N rows = N*K float3.
+    std::vector<float3> h_features_sh;
+    if (K > 0) {
+        h_features_sh = _ckpt_d2h<float3>(world_features_sh.data_ptr(), (size_t)(N * K));
+    }
+
+    // --- Filter mask: NaN/Inf + low-opacity (logit < logit(1/255) ~= -5.5373) ---
+    const float OPA_MIN = -5.5373f;
+    auto fin1 = [](float v) { return std::isfinite(v); };
+    auto fin3 = [&](const float3& v) { return fin1(v.x) && fin1(v.y) && fin1(v.z); };
+    auto fin4 = [&](const float4& v) { return fin1(v.x) && fin1(v.y) && fin1(v.z) && fin1(v.w); };
+
+    std::vector<char> keep((size_t)N, 1);
+    int64_t kept = 0, nan_dropped = 0, lowopa_dropped = 0;
+    for (int64_t i = 0; i < N; i++) {
+        bool ok = fin3(h_means[i]) && fin4(h_quats[i]) && fin3(h_scales[i])
+                  && fin1(h_opacities[i]) && fin3(h_features_dc[i]);
+        if (ok && K > 0) {
+            for (int j = 0; j < K; j++) {
+                if (!fin3(h_features_sh[i*K + j])) { ok = false; break; }
+            }
+        }
+        if (!ok) { keep[i] = 0; nan_dropped++; continue; }
+        if (h_opacities[i] < OPA_MIN) { keep[i] = 0; lowopa_dropped++; continue; }
+        kept++;
+    }
+
+    // --- PLY (binary little-endian) ---
+    const int vertex_floats = 3 + 3 + 3 + 3 * K + 1 + 3 + 4;  // pos + normal + dc + sh + opa + scale + rot
+    fs::path ply_path = out_root / "splat.ply";
+    {
+        std::ofstream ply(ply_path, std::ios::binary);
+        if (!ply) throw std::runtime_error("Failed to open PLY for write: " + ply_path.string());
+        ply << "ply\n";
+        ply << "format binary_little_endian 1.0\n";
+        ply << "element vertex " << kept << "\n";
+        ply << "property float x\nproperty float y\nproperty float z\n";
+        ply << "property float nx\nproperty float ny\nproperty float nz\n";
+        ply << "property float f_dc_0\nproperty float f_dc_1\nproperty float f_dc_2\n";
+        for (int j = 0; j < 3 * K; j++) ply << "property float f_rest_" << j << "\n";
+        ply << "property float opacity\n";
+        ply << "property float scale_0\nproperty float scale_1\nproperty float scale_2\n";
+        ply << "property float rot_0\nproperty float rot_1\nproperty float rot_2\nproperty float rot_3\n";
+        ply << "end_header\n";
+
+        // Buffer multiple rows per write for throughput.
+        constexpr int ROWS_PER_FLUSH = 1024;
+        std::vector<float> buf((size_t)vertex_floats * ROWS_PER_FLUSH);
+        int rows_in_buf = 0;
+        auto flush = [&]() {
+            if (rows_in_buf == 0) return;
+            ply.write(reinterpret_cast<const char*>(buf.data()),
+                      (std::streamsize)rows_in_buf * vertex_floats * sizeof(float));
+            rows_in_buf = 0;
+        };
+        for (int64_t i = 0; i < N; i++) {
+            if (!keep[i]) continue;
+            float* row = buf.data() + (size_t)rows_in_buf * vertex_floats;
+            int p = 0;
+            row[p++] = h_means[i].x; row[p++] = h_means[i].y; row[p++] = h_means[i].z;
+            row[p++] = 0.f; row[p++] = 0.f; row[p++] = 0.f;  // nx, ny, nz
+            row[p++] = h_features_dc[i].x; row[p++] = h_features_dc[i].y; row[p++] = h_features_dc[i].z;
+            // SH rest in (3, K) order: r0..r_{K-1}, g0..g_{K-1}, b0..b_{K-1}
+            for (int j = 0; j < K; j++) row[p++] = h_features_sh[i*K + j].x;
+            for (int j = 0; j < K; j++) row[p++] = h_features_sh[i*K + j].y;
+            for (int j = 0; j < K; j++) row[p++] = h_features_sh[i*K + j].z;
+            row[p++] = h_opacities[i];
+            row[p++] = h_scales[i].x; row[p++] = h_scales[i].y; row[p++] = h_scales[i].z;
+            row[p++] = h_quats[i].x; row[p++] = h_quats[i].y; row[p++] = h_quats[i].z; row[p++] = h_quats[i].w;
+            rows_in_buf++;
+            if (rows_in_buf == ROWS_PER_FLUSH) flush();
+        }
+        flush();
+    }
+
+    // --- Top-level bilagrid / PPISP grids (param tables only, no optimizer state) ---
+    if (bilagrid_rgb_enabled) {
+        _ckpt_save_npy<float>(out_root / "bilagrid_rgb.npy",
+                              bilagrid_rgb_grids.data_ptr(),
+                              (size_t)bilagrid_rgb_grids.numel(),
+                              _ckpt_shape_5d(bilagrid_rgb_grids));
+    }
+    if (bilagrid_depth_enabled) {
+        _ckpt_save_npy<float>(out_root / "bilagrid_depth.npy",
+                              bilagrid_depth_grids.data_ptr(),
+                              (size_t)bilagrid_depth_grids.numel(),
+                              _ckpt_shape_5d(bilagrid_depth_grids));
+        if (bilagrid_depth_scalars.data_ptr() && bilagrid_depth_scalars.size() > 0) {
+            _ckpt_save_npy<float>(out_root / "bilagrid_depth_scalars.npy",
+                                  bilagrid_depth_scalars.data_ptr(),
+                                  (size_t)bilagrid_depth_scalars.size(),
+                                  {(unsigned long)bilagrid_depth_scalars.size()});
+        }
+    }
+    if (bilagrid_normal_enabled) {
+        _ckpt_save_npy<float>(out_root / "bilagrid_normal.npy",
+                              bilagrid_normal_grids.data_ptr(),
+                              (size_t)bilagrid_normal_grids.numel(),
+                              _ckpt_shape_5d(bilagrid_normal_grids));
+    }
+    if (ppisp_enabled) {
+        _ckpt_save_npy<float>(out_root / "ppisp.npy",
+                              ppisp_params.data_ptr(),
+                              (size_t)(ppisp_params.size<0>() * ppisp_params.size<1>()),
+                              {(unsigned long)ppisp_params.size<0>(),
+                               (unsigned long)ppisp_params.size<1>()});
+    }
+
+    // --- meta.txt ---
+    {
+        std::ofstream meta((out_root / "meta.txt").string());
+        meta << "step=" << step << "\n";
+        meta << "primitive=" << primitive << "\n";
+        meta << "cur_num_splats=" << cur_num_splats << "\n";
+        meta << "max_num_splats=" << max_num_splats << "\n";
+        meta << "num_sh=" << num_sh << "\n";
+        meta << "sh_degree=" << sh_degree << "\n";
+        meta << "num_cameras=" << num_cameras << "\n";
+        meta << "image_width=" << image_width << "\n";
+        meta << "image_height=" << image_height << "\n";
+        meta << "camera_model=" << camera_model_str << "\n";
+        meta << "train_quantize_sh=" << (train_quantize_sh ? 1 : 0) << "\n";
+        meta << "use_per_splat_bias_correction=" << (use_per_splat_bias_correction ? 1 : 0) << "\n";
+        meta << "ply_kept=" << kept << "\n";
+        meta << "ply_nan_dropped=" << nan_dropped << "\n";
+        meta << "ply_low_opacity_dropped=" << lowopa_dropped << "\n";
+        if (bilagrid_rgb_enabled) {
+            meta << "bilagrid_rgb_enabled=1\n";
+            meta << "bilagrid_rgb_type=" << bilagrid_rgb_type << "\n";
+            meta << "bilagrid_rgb_C=" << bilagrid_rgb_C << "\n";
+            meta << "bilagrid_rgb_L=" << bilagrid_rgb_grids.size<2>() << "\n";
+            meta << "bilagrid_rgb_H=" << bilagrid_rgb_grids.size<3>() << "\n";
+            meta << "bilagrid_rgb_W=" << bilagrid_rgb_grids.size<4>() << "\n";
+            meta << "bilagrid_rgb_quantize_optim=" << (bilagrid_rgb_quantize_optim ? 1 : 0) << "\n";
+        }
+        if (bilagrid_depth_enabled) {
+            meta << "bilagrid_depth_enabled=1\n";
+            meta << "bilagrid_depth_L=" << bilagrid_depth_grids.size<2>() << "\n";
+            meta << "bilagrid_depth_H=" << bilagrid_depth_grids.size<3>() << "\n";
+            meta << "bilagrid_depth_W=" << bilagrid_depth_grids.size<4>() << "\n";
+            meta << "bilagrid_depth_quantize_optim=" << (bilagrid_depth_quantize_optim ? 1 : 0) << "\n";
+        }
+        if (bilagrid_normal_enabled) {
+            meta << "bilagrid_normal_enabled=1\n";
+            meta << "bilagrid_normal_L=" << bilagrid_normal_grids.size<2>() << "\n";
+            meta << "bilagrid_normal_H=" << bilagrid_normal_grids.size<3>() << "\n";
+            meta << "bilagrid_normal_W=" << bilagrid_normal_grids.size<4>() << "\n";
+            meta << "bilagrid_normal_quantize_optim=" << (bilagrid_normal_quantize_optim ? 1 : 0) << "\n";
+        }
+        if (ppisp_enabled) {
+            meta << "ppisp_enabled=1\n";
+            meta << "ppisp_param_type=" << ppisp_param_type << "\n";
+            meta << "ppisp_num_params=" << ppisp_num_params << "\n";
+        }
+    }
+
+    if (!full_dump) return;
+
+    // --- full/ subfolder: every persistent buffer, one .npy per buffer ---
+    fs::path full_root = out_root / "full";
+    _ckpt_mkdir(full_root);
+
+    // World splat parameters at max_num_splats (full table).
+    auto save_dv_f3 = [&](const char* name, const DeviceVector<float3>& v) {
+        if (!v.data_ptr() || v.size() == 0) return;
+        _ckpt_save_npy<float>(full_root / name,
+                              reinterpret_cast<const float*>(v.data_ptr()),
+                              (size_t)v.size() * 3,
+                              {(unsigned long)v.size(), 3ul});
+    };
+    auto save_dv_f4 = [&](const char* name, const DeviceVector<float4>& v) {
+        if (!v.data_ptr() || v.size() == 0) return;
+        _ckpt_save_npy<float>(full_root / name,
+                              reinterpret_cast<const float*>(v.data_ptr()),
+                              (size_t)v.size() * 4,
+                              {(unsigned long)v.size(), 4ul});
+    };
+    auto save_dv_f1 = [&](const char* name, const DeviceVector<float>& v) {
+        if (!v.data_ptr() || v.size() == 0) return;
+        _ckpt_save_npy<float>(full_root / name, v.data_ptr(),
+                              (size_t)v.size(), {(unsigned long)v.size()});
+    };
+    auto save_dt2d_f3 = [&](const char* name, const DeviceTensor2D<float3>& t) {
+        if (!t.data_ptr()) return;
+        _ckpt_save_npy<float>(full_root / name,
+                              reinterpret_cast<const float*>(t.data_ptr()),
+                              (size_t)t.size<0>() * t.size<1>() * 3,
+                              {(unsigned long)t.size<0>(), (unsigned long)t.size<1>(), 3ul});
+    };
+    auto save_dt2d_uc3 = [&](const char* name, const DeviceTensor2D<uchar3>& t) {
+        if (!t.data_ptr()) return;
+        _ckpt_save_npy<uint8_t>(full_root / name,
+                                reinterpret_cast<const uint8_t*>(t.data_ptr()),
+                                (size_t)t.size<0>() * t.size<1>() * 3,
+                                {(unsigned long)t.size<0>(), (unsigned long)t.size<1>(), 3ul});
+    };
+    auto save_dt2d_f = [&](const char* name, const DeviceTensor2D<float>& t) {
+        if (!t.data_ptr()) return;
+        _ckpt_save_npy<float>(full_root / name, t.data_ptr(),
+                              (size_t)t.size<0>() * t.size<1>(),
+                              {(unsigned long)t.size<0>(), (unsigned long)t.size<1>()});
+    };
+    auto save_5d = [&](const char* name, const DeviceTensor5D<float>& t) {
+        if (!t.data_ptr()) return;
+        _ckpt_save_npy<float>(full_root / name, t.data_ptr(),
+                              (size_t)t.numel(), _ckpt_shape_5d(t));
+    };
+    auto save_dv_u8 = [&](const char* name, const DeviceVector<uint8_t>& v) {
+        if (!v.data_ptr() || v.size() == 0) return;
+        _ckpt_save_npy<uint8_t>(full_root / name, v.data_ptr(),
+                                (size_t)v.size(), {(unsigned long)v.size()});
+    };
+
+    // World params (max_num_splats sized).
+    save_dv_f3("world_means.npy",        world_means);
+    save_dv_f4("world_quats.npy",        world_quats);
+    save_dv_f3("world_scales.npy",       world_scales);
+    save_dv_f1("world_opacities.npy",    world_opacities);
+    save_dv_f3("world_features_dc.npy",  world_features_dc);
+    save_dt2d_f3("world_features_sh.npy", world_features_sh);
+
+    // World Adam optimizer state.
+    save_dv_f3("g1_means.npy",        g1_means);
+    save_dv_f3("g2_means.npy",        g2_means);
+    save_dv_f4("g1_quats.npy",        g1_quats);
+    save_dv_f4("g2_quats.npy",        g2_quats);
+    save_dv_f3("g1_scales.npy",       g1_scales);
+    save_dv_f3("g2_scales.npy",       g2_scales);
+    save_dv_f1("g1_opacities.npy",    g1_opacities);
+    save_dv_f1("g2_opacities.npy",    g2_opacities);
+    save_dv_f3("g1_features_dc.npy",  g1_features_dc);
+    save_dv_f3("g2_features_dc.npy",  g2_features_dc);
+    if (train_quantize_sh) {
+        save_dt2d_uc3("g1_features_sh_q.npy", g1_features_sh_q);
+        save_dt2d_uc3("g2_features_sh_q.npy", g2_features_sh_q);
+        save_dv_f4("quant_bounds_sh.npy", quant_bounds_sh);
+    } else {
+        save_dt2d_f3("g1_features_sh.npy", g1_features_sh);
+        save_dt2d_f3("g2_features_sh.npy", g2_features_sh);
+    }
+
+    // Per-splat aux.
+    if (use_per_splat_bias_correction
+        && bias_correction_steps.data_ptr() && bias_correction_steps.size() > 0) {
+        _ckpt_save_npy<int32_t>(full_root / "bias_correction_steps.npy",
+                                bias_correction_steps.data_ptr(),
+                                (size_t)bias_correction_steps.size(),
+                                {(unsigned long)bias_correction_steps.size()});
+    }
+    if (accum_buffer.data_ptr() && accum_buffer.size() > 0) {
+        _ckpt_save_npy<float>(full_root / "accum_buffer.npy",
+                              reinterpret_cast<const float*>(accum_buffer.data_ptr()),
+                              (size_t)accum_buffer.size() * 2,
+                              {(unsigned long)accum_buffer.size(), 2ul});
+    }
+
+    // Bilagrid grids + optimizer state, per type.
+    auto save_bilagrid = [&](const char* prefix, bool enabled, bool quantize,
+                             const DeviceTensor5D<float>& grids,
+                             const DeviceTensor5D<float>& g1_f,
+                             const DeviceTensor5D<float>& g2_f,
+                             const DeviceVector<uint8_t>& g1_q,
+                             const DeviceVector<uint8_t>& g2_q,
+                             const DeviceVector<float4>& bounds) {
+        if (!enabled) return;
+        save_5d((std::string(prefix) + ".npy").c_str(), grids);
+        if (quantize) {
+            save_dv_u8((std::string(prefix) + "_g1_q.npy").c_str(), g1_q);
+            save_dv_u8((std::string(prefix) + "_g2_q.npy").c_str(), g2_q);
+            save_dv_f4((std::string(prefix) + "_quant_bounds.npy").c_str(), bounds);
+        } else {
+            save_5d((std::string(prefix) + "_g1.npy").c_str(), g1_f);
+            save_5d((std::string(prefix) + "_g2.npy").c_str(), g2_f);
+        }
+    };
+    save_bilagrid("bilagrid_rgb",   bilagrid_rgb_enabled,   bilagrid_rgb_quantize_optim,
+                  bilagrid_rgb_grids, bilagrid_rgb_g1, bilagrid_rgb_g2,
+                  bilagrid_rgb_g1_q, bilagrid_rgb_g2_q, bilagrid_rgb_quant_bounds);
+    save_bilagrid("bilagrid_depth", bilagrid_depth_enabled, bilagrid_depth_quantize_optim,
+                  bilagrid_depth_grids, bilagrid_depth_g1, bilagrid_depth_g2,
+                  bilagrid_depth_g1_q, bilagrid_depth_g2_q, bilagrid_depth_quant_bounds);
+    if (bilagrid_depth_enabled) {
+        save_dv_f1("bilagrid_depth_scalars.npy", bilagrid_depth_scalars);
+    }
+    save_bilagrid("bilagrid_normal", bilagrid_normal_enabled, bilagrid_normal_quantize_optim,
+                  bilagrid_normal_grids, bilagrid_normal_g1, bilagrid_normal_g2,
+                  bilagrid_normal_g1_q, bilagrid_normal_g2_q, bilagrid_normal_quant_bounds);
+
+    // PPISP table + Adam moments.
+    if (ppisp_enabled) {
+        save_dt2d_f("ppisp.npy",    ppisp_params);
+        save_dt2d_f("ppisp_g1.npy", ppisp_g1);
+        save_dt2d_f("ppisp_g2.npy", ppisp_g2);
+    }
 }

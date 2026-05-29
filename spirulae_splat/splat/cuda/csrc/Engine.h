@@ -267,3 +267,24 @@ void engine_copy_splats_to_host(
 // Pool VRAM breakdown: [(key, used_bytes, cap_bytes), ...]
 std::vector<std::tuple<std::string, size_t, size_t>> engine_get_pool_breakdown();
 size_t engine_get_scratch_bytes();
+
+// --- Checkpoint save ---
+//
+// Default mode writes into `output_dir`:
+//   splat.ply              : cur_num_splats only, NaN+low-opacity-filtered
+//   bilagrid_rgb.npy       : [N_cam, C, L, H, W] float (when bilagrid RGB enabled)
+//   bilagrid_depth.npy     : [N_cam, 2, L, H, W] float (when enabled)
+//   bilagrid_depth_scalars.npy : [N_cam] float
+//   bilagrid_normal.npy    : [N_cam, 3, L, H, W] float (when enabled)
+//   ppisp.npy              : [N_cam, P] float (when PPISP enabled)
+//   meta.txt               : key=value training-state metadata
+//
+// `full_dump=true` additionally writes a `full/` subfolder containing every
+// world-splat parameter (sized to max_num_splats), every bilagrid grid and
+// PPISP table, and all Adam optimizer states (g1, g2; quantized variants when
+// active). One .npy per buffer, for offline inspection.
+void engine_save_checkpoint(
+    std::string output_dir,
+    bool full_dump,
+    int step
+);

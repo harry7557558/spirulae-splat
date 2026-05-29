@@ -62,13 +62,6 @@ __global__ void bilagrid_uniform_sample_backward_v1_kernel_bilagrid(
         (mult_x % blockDim.x != 0 || mult_y % blockDim.y != 0)
     )) return;
 
-#ifndef PATCHED
-    bool use_indirect = (grid_indices != nullptr);
-    int g_id = use_indirect ? grid_indices[ni] : ni;
-#else
-    int g_id = ni;
-#endif
-
     // Loop bounds
 #ifndef PATCHED
     float sw = float(w-1)/float(W-1);

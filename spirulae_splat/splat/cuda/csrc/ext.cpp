@@ -265,6 +265,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("engine_init_ppisp", &engine_init_ppisp);
     m.def("engine_ppisp_forward", &engine_ppisp_forward);
     m.def("engine_ppisp_optim_step", &engine_ppisp_optim_step);
+    m.def("engine_save_checkpoint", &engine_save_checkpoint);
 
 #if 0
     // Densify.cuh

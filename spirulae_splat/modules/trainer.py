@@ -136,6 +136,10 @@ class TrainerConfig:
         If -1, save only at the end. If zero, never save (used in benchmark)."""
     save_only_latest_checkpoint: bool = True
     """Whether to save only last checkpoint"""
+    save_full_checkpoint: bool = False
+    """If True, each checkpoint additionally dumps every world/bilagrid/PPISP
+        parameter and Adam optimizer state as one .npy per buffer in a `full/`
+        subfolder. Useful for offline inspection of training dynamics."""
     save_eval_images: bool = False
     """Whether to save eval images at end of training"""
 
@@ -491,20 +495,21 @@ class Trainer:
             json.dump(metrics, f, indent=4)
 
     def save_checkpoint(self, step: int) -> None:
+        # Checkpoints are now a directory (PLY + npy on the C++ side);
+        # torch.save(model.state_dict()) no longer captures the engine buffers.
         ckpt_path: Path = self.output_dir / f"step-{step:09d}.ckpt"
-        torch.save(
-            {
-                "step": step,
-                "model": self.model.state_dict(),
-                # "optimizers": {k: v.state_dict() for (k, v) in self.optimizers.items()},
-            },
-            ckpt_path,
+        self.model.core.engine_save_checkpoint(
+            ckpt_path, step,
+            full_dump=self.config.save_full_checkpoint,
         )
-        # delete previous checkpoint
         if self.config.save_only_latest_checkpoint:
-            for f in self.output_dir.glob("*.ckpt"):
+            import shutil
+            for f in self.output_dir.glob("step-*.ckpt"):
                 if f != ckpt_path:
-                    f.unlink()
+                    if f.is_dir():
+                        shutil.rmtree(f)
+                    else:
+                        f.unlink()
 
     def print_vram_breakdown(self):
         from spirulae_splat.splat.cuda import _C
