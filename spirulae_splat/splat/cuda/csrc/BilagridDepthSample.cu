@@ -59,7 +59,7 @@ void bilagrid_depth_uniform_sample_backward_v1(
     const float* scalars,
     const float* v_output,
     float* v_bilagrid,
-    float* v_depth,
+    float* v_depth,            // null: skip the v_pre kernel (GT isn't trained)
     int N, int L, int H, int W,
     int m, int h, int w,
     const unsigned block_x, const unsigned block_y,
@@ -67,7 +67,7 @@ void bilagrid_depth_uniform_sample_backward_v1(
     cudaStream_t stream,
     const int* grid_indices
 ) {
-    // v_bilagrid
+    // v_bilagrid (always needed: trains the bilagrid depth grid)
     {
         dim3 block = { block_x, block_y, 1 };
 
@@ -79,7 +79,6 @@ void bilagrid_depth_uniform_sample_backward_v1(
             mult_x = max(mult_x, 1) * block.x;
             mult_y = max(mult_y, 1) * block.y;
         }
-        // printf("mult_x: %d, mult_y: %d\n", mult_x, mult_y);
 
         dim3 bounds = {
             (W*mult_x +block.x-1)/block.x,
@@ -94,8 +93,9 @@ void bilagrid_depth_uniform_sample_backward_v1(
         CHECK_DEVICE_ERROR(cudaGetLastError());
     }
 
-    // v_coords and v_depth
-    {
+    // v_depth: gradient w.r.t. pre-bilagrid input depth (i.e., the raw GT).
+    // Skipped when the caller passes null — GT isn't a trainable parameter.
+    if (v_depth != nullptr) {
         int total = N * m * h * w;
         int threads = 256;
         int blocks = (total + threads - 1) / threads;

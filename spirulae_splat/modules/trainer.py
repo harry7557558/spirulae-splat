@@ -178,7 +178,7 @@ class Trainer:
             self.config,
             self.dataparser_outputs_train['metadata'],
             self.dataparser_outputs_train['cameras']
-        ).cuda()
+        )
         # self.optimizers = create_optimizers(self.model, self.config.optimizer)
 
         self.output_dir = self._setup_output_dir()

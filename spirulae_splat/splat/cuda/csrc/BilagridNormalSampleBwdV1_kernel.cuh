@@ -221,25 +221,16 @@ __global__ void bilagrid_normal_uniform_sample_backward_v1_kernel_bilagrid(
         }
     }
 
-    // Write result
-
-    int out_idx_start = ((g_id*3*L + zi)*H + yi)*W + xi;
+    // Output indexed by `ni` (sparse batch slot); reads use `g_id`.
+    int out_idx_start = ((ni*3*L + zi)*H + yi)*W + xi;
     int out_idx_offset = L*H*W;
 
-    // simply write in this case
     if (mult_x*mult_y == 1) {
         #pragma unroll
         for (int ci = 0; ci < 3; ci++) {
             int out_idx = out_idx_start + ci * out_idx_offset;
             if (isfinite(accum[ci]) && accum[ci] != 0.0f)
-            #ifdef PATCHED
                 atomicAdd(v_bilagrid + out_idx, accum[ci]);
-            #else
-                if (use_indirect)
-                    atomicAdd(v_bilagrid + out_idx, accum[ci]);
-                else
-                    v_bilagrid[out_idx] = accum[ci];
-            #endif
         }
         return;
     }

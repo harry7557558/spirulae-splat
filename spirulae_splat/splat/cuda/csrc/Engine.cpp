@@ -18,6 +18,24 @@ void uint16_image_to_float_raw(const uint16_t* d_in, float* d_out, int B, int H,
 void uint8_normal_to_float_raw(const uint8_t* d_in, float* d_out, int B, int H, int W, int C);
 void uint16_depth_to_float_raw(const uint16_t* d_in, float* d_out, int B, int H, int W, int C);
 
+// Fused image-grad + TV-loss + Adam optimizer step for bilagrid (Phase B).
+// Lives in BilagridFusedAdam.cu.
+void fused_bilagrid_tv_adam(
+    float* grids,
+    float*   g1_f,    float*   g2_f,
+    uint8_t* g1_q,    uint8_t* g2_q,
+    float4*  quant_bounds,
+    const float* image_grad,
+    const int*   cam_indices,
+    int N_grids, int C_batch, int C,
+    int L, int H, int W,
+    float lr,
+    float tv_weight,
+    int32_t adam_step,
+    bool quantize,
+    cudaStream_t stream
+);
+
 
 namespace Buffers {
 
@@ -111,10 +129,22 @@ bool use_per_splat_bias_correction = false;
 // apply to the GT side (gt_depth / gt_normal), matching the Python flow.
 // ============================================================================
 
+// Bilagrid Adam state can be stored quantized (uint8 + per-block float4 bounds)
+// like the SH path. quantize_optim is a per-type flag captured at init time.
+
+// Phase B: bilagrid_*_image_grad is the SPARSE per-batch image-loss gradient,
+// sized [C_batch, C, L, H, W] (re-sized each iter; pool high-water-marks).
+// Replaces the dense [N_grids, C, L, H, W] grads table — saves ~195 MB on
+// dome-scale (16k+ cameras) datasets. The TV-loss gradient is computed inline
+// in the fused optimizer kernel rather than materialized to a buffer.
+
 // RGB
 DeviceTensor5D<float> bilagrid_rgb_grids;   // [N_cam, C_rgb, L, H, W]
-DeviceTensor5D<float> bilagrid_rgb_grads;
-DeviceTensor5D<float> bilagrid_rgb_g1, bilagrid_rgb_g2;
+DeviceTensor5D<float> bilagrid_rgb_image_grad;  // [C_batch, C_rgb, L, H, W] (sparse over cams)
+DeviceTensor5D<float> bilagrid_rgb_g1, bilagrid_rgb_g2;        // float (when !quantize)
+DeviceVector<uint8_t> bilagrid_rgb_g1_q, bilagrid_rgb_g2_q;    // uint8 (when quantize)
+DeviceVector<float4>  bilagrid_rgb_quant_bounds;               // [n_blocks], used when quantize
+bool bilagrid_rgb_quantize_optim = false;
 DeviceTensor3D<float3> fwd_rgb_pre_bilagrid; // [C, H, W]
 std::string bilagrid_rgb_type;               // "affine" | "ppisp" | "loglinear"
 int bilagrid_rgb_C = 0;                      // 12 for affine, 9 for ppisp/loglinear
@@ -123,8 +153,11 @@ bool bilagrid_rgb_optim_initialized = false;
 
 // Depth (gt-side)
 DeviceTensor5D<float> bilagrid_depth_grids;  // [N_cam, 2, L, H, W]
-DeviceTensor5D<float> bilagrid_depth_grads;
+DeviceTensor5D<float> bilagrid_depth_image_grad;
 DeviceTensor5D<float> bilagrid_depth_g1, bilagrid_depth_g2;
+DeviceVector<uint8_t> bilagrid_depth_g1_q, bilagrid_depth_g2_q;
+DeviceVector<float4>  bilagrid_depth_quant_bounds;
+bool bilagrid_depth_quantize_optim = false;
 DeviceTensor3D<float> fwd_depth_pre_bilagrid;
 DeviceVector<float> bilagrid_depth_scalars;  // [C], median-quantile of gt_depth
 bool bilagrid_depth_enabled = false;
@@ -132,8 +165,11 @@ bool bilagrid_depth_optim_initialized = false;
 
 // Normal (gt-side)
 DeviceTensor5D<float> bilagrid_normal_grids; // [N_cam, 3, L, H, W]
-DeviceTensor5D<float> bilagrid_normal_grads;
+DeviceTensor5D<float> bilagrid_normal_image_grad;
 DeviceTensor5D<float> bilagrid_normal_g1, bilagrid_normal_g2;
+DeviceVector<uint8_t> bilagrid_normal_g1_q, bilagrid_normal_g2_q;
+DeviceVector<float4>  bilagrid_normal_quant_bounds;
+bool bilagrid_normal_quantize_optim = false;
 DeviceTensor3D<float3> fwd_normal_pre_bilagrid;
 bool bilagrid_normal_enabled = false;
 bool bilagrid_normal_optim_initialized = false;
@@ -706,13 +742,19 @@ static DeviceTensor3D<T> _hv_to_dt3d_gt(
     // Float output buffer (consumed downstream by loss / bilagrid kernels).
     float* d_f = DevicePool::global().acquire<float>(key, (size_t)numel);
 
+    // Shared H2D staging slot, reused across gt_rgb / gt_normal / gt_depth.
+    // These calls happen sequentially in set_training_data on the default
+    // stream, so each conversion kernel reads the staging buffer before the
+    // next H2D copy overwrites it. One slot replaces the previous per-key
+    // stagings (gt.rgb_u8, gt.normal_u8, gt.depth_u16) and saves ~32 MB per
+    // step on dome-scale images.
     if (elem_size == 1) {
         const uint8_t* d_u8;
         if (src_is_device) {
             d_u8 = (const uint8_t*)src_ptr;
         } else {
             uint8_t* staging = DevicePool::global().acquire<uint8_t>(
-                key + "_u8", (size_t)numel);
+                "gt.staging_u8", (size_t)numel);
             cudaMemcpy(staging, (void*)src_ptr, numel * sizeof(uint8_t), cudaMemcpyHostToDevice);
             d_u8 = staging;
         }
@@ -729,7 +771,7 @@ static DeviceTensor3D<T> _hv_to_dt3d_gt(
             d_u16 = (const uint16_t*)src_ptr;
         } else {
             uint16_t* staging = DevicePool::global().acquire<uint16_t>(
-                key + "_u16", (size_t)numel);
+                "gt.staging_u16", (size_t)numel);
             cudaMemcpy(staging, (void*)src_ptr, numel * sizeof(uint16_t), cudaMemcpyHostToDevice);
             d_u16 = staging;
         }
@@ -922,6 +964,11 @@ static TorchTensorView _g2_sh_tv() {
 
 // Forward declarations for bilagrid helpers defined later in the file.
 static void _ensure_bilagrid_optim_state();
+static void _ensure_bilagrid_batch_grad(
+    DeviceTensor5D<float>& grad,
+    const DeviceTensor5D<float>& grids,
+    int C_batch,
+    const std::string& key);
 static void _engine_bilagrid_backward_hook(
     TorchTensorView v_render_rgb,
     TorchTensorView v_ref_depth,
@@ -1246,7 +1293,8 @@ std::map<std::string, float> engine_compute_loss_backward(
 // Pool keys are scoped under "eng.bg.*" so the pool reports them as engine state.
 static constexpr cudaStream_t kBilagridStream = (cudaStream_t)0;
 
-void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W) {
+void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W,
+                              bool quantize_optim) {
     int C;
     if (type == "affine") C = 12;
     else if (type == "ppisp" || type == "loglinear") C = 9;
@@ -1256,6 +1304,7 @@ void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W
 
     Buffers::bilagrid_rgb_type = type;
     Buffers::bilagrid_rgb_C = C;
+    Buffers::bilagrid_rgb_quantize_optim = quantize_optim;
     Buffers::bilagrid_rgb_grids.resize("eng.bg.rgb.grids", n_grids, C, L, H, W);
     if (type == "affine") {
         Buffers::bilagrid_rgb_grids.zero();
@@ -1268,9 +1317,11 @@ void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W
     Buffers::bilagrid_rgb_optim_initialized = false;
 }
 
-void engine_init_bilagrid_depth(int n_grids, int L, int H, int W) {
+void engine_init_bilagrid_depth(int n_grids, int L, int H, int W,
+                                bool quantize_optim) {
     if (n_grids <= 0)
         throw std::runtime_error("engine_init_bilagrid_depth: n_grids must be > 0");
+    Buffers::bilagrid_depth_quantize_optim = quantize_optim;
     Buffers::bilagrid_depth_grids.resize("eng.bg.depth.grids", n_grids, 2, L, H, W);
     Buffers::bilagrid_depth_grids.zero();
     Buffers::bilagrid_depth_scalars.resize("eng.bg.depth.scalars", n_grids);
@@ -1279,9 +1330,11 @@ void engine_init_bilagrid_depth(int n_grids, int L, int H, int W) {
     Buffers::bilagrid_depth_optim_initialized = false;
 }
 
-void engine_init_bilagrid_normal(int n_grids, int L, int H, int W) {
+void engine_init_bilagrid_normal(int n_grids, int L, int H, int W,
+                                 bool quantize_optim) {
     if (n_grids <= 0)
         throw std::runtime_error("engine_init_bilagrid_normal: n_grids must be > 0");
+    Buffers::bilagrid_normal_quantize_optim = quantize_optim;
     Buffers::bilagrid_normal_grids.resize("eng.bg.normal.grids", n_grids, 3, L, H, W);
     Buffers::bilagrid_normal_grids.zero();
     Buffers::bilagrid_normal_enabled = true;
@@ -1442,14 +1495,16 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
     }
 }
 
-// Bilagrid backward hook: takes the per-pixel loss-gradient output and
-// transforms / accumulates as appropriate. For RGB, overwrites v_render_rgb
-// with the pre-bilagrid gradient (used by rasterization backward) and
-// accumulates into bilagrid_rgb_grads. For depth/normal (gt-side), the input
-// gradient is the loss-gradient w.r.t. gt; we accumulate to the bilagrid grad
-// only — gt has no further gradient path. Grid indexing for both reads and
-// writes goes through `cam_indices`; writes use atomicAdd to handle duplicate
-// cam_idx values across the batch.
+// Bilagrid backward hook (Phase B): image-loss gradient now writes a
+// SPARSE per-batch buffer (`eng.bg.*.image_grad` sized [C_batch, C, L, H, W])
+// instead of the full N_grids-wide dense table. Reads of the bilagrid grid
+// parameters still go through cam_indices for the true camera lookup. The
+// per-batch buffer is zeroed up front so the kernel's atomicAdds start clean.
+// The TV-loss contribution is no longer materialized here — it folds into the
+// fused optimizer step (BilagridFusedAdam.cu).
+//
+// For RGB the kernel additionally overwrites v_render_rgb (post-bilagrid ->
+// pre-bilagrid) so it can flow into rasterization backward.
 static void _engine_bilagrid_backward_hook(
     TorchTensorView v_render_rgb,   // [C, H, W, 3] — overwritten when RGB enabled
     TorchTensorView v_ref_depth,    // [C, H, W, 1] — input only
@@ -1468,7 +1523,10 @@ static void _engine_bilagrid_backward_hook(
         int gH = (int)Buffers::bilagrid_rgb_grids.size<3>();
         int gW = (int)Buffers::bilagrid_rgb_grids.size<4>();
         float* grid_ptr = Buffers::bilagrid_rgb_grids.data_ptr();
-        float* grad_grid_ptr = Buffers::bilagrid_rgb_grads.data_ptr();
+        _ensure_bilagrid_batch_grad(Buffers::bilagrid_rgb_image_grad,
+                                    Buffers::bilagrid_rgb_grids, C_batch,
+                                    "eng.bg.rgb.image_grad");
+        float* grad_grid_ptr = Buffers::bilagrid_rgb_image_grad.data_ptr();
 
         // v_render_rgb is the gradient w.r.t. POST-bilagrid rgb (what entered loss).
         // The backward overwrites it with the gradient w.r.t. PRE-bilagrid rgb.
@@ -1498,6 +1556,10 @@ static void _engine_bilagrid_backward_hook(
     }
 
     // --- Depth backward (accumulate into bilagrid grad; discard input grad) ---
+    // We pass v_depth=nullptr so the bilagrid backward skips the kernel that
+    // would compute the ∂L/∂pre-bilagrid (= ∂L/∂gt_depth) buffer. That kernel's
+    // output is never consumed downstream (GT isn't a parameter), and skipping
+    // it eliminates a full-resolution C*H*W*4 byte scratch + one kernel launch.
     if (Buffers::bilagrid_depth_enabled && std::get<0>(v_ref_depth) != 0 &&
         Buffers::fwd_depth_pre_bilagrid.data_ptr() != nullptr)
     {
@@ -1505,22 +1567,24 @@ static void _engine_bilagrid_backward_hook(
         int gH = (int)Buffers::bilagrid_depth_grids.size<3>();
         int gW = (int)Buffers::bilagrid_depth_grids.size<4>();
         float* grid_ptr = Buffers::bilagrid_depth_grids.data_ptr();
-        float* grad_grid_ptr = Buffers::bilagrid_depth_grads.data_ptr();
+        _ensure_bilagrid_batch_grad(Buffers::bilagrid_depth_image_grad,
+                                    Buffers::bilagrid_depth_grids, C_batch,
+                                    "eng.bg.depth.image_grad");
+        float* grad_grid_ptr = Buffers::bilagrid_depth_image_grad.data_ptr();
         float* scalars = Buffers::bilagrid_depth_scalars.data_ptr();
-        // Discard v_depth_pre: gt has no further gradient. Allocate a tiny scratch.
-        float* v_depth_pre = DevicePool::global().acquire<float>(
-            "eng.bg.depth.v_pre", (size_t)C_batch * H * W);
         bilagrid_depth_uniform_sample_backward_v1(
             grid_ptr,
             (const float*)Buffers::fwd_depth_pre_bilagrid.data_ptr(),
             scalars,
             (const float*)std::get<0>(v_ref_depth),
-            grad_grid_ptr, v_depth_pre,
+            grad_grid_ptr, /*v_depth=*/nullptr,
             /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
             8, 8, 5, kBilagridStream, cam_idx_dev);
     }
 
     // --- Normal backward (accumulate; discard input grad) ---
+    // Same reasoning as depth: v_rgb=nullptr skips the unused gt-side grad
+    // kernel, saving a C*H*W*12 byte scratch + one kernel launch.
     if (Buffers::bilagrid_normal_enabled && std::get<0>(v_ref_normal) != 0 &&
         Buffers::fwd_normal_pre_bilagrid.data_ptr() != nullptr)
     {
@@ -1528,14 +1592,15 @@ static void _engine_bilagrid_backward_hook(
         int gH = (int)Buffers::bilagrid_normal_grids.size<3>();
         int gW = (int)Buffers::bilagrid_normal_grids.size<4>();
         float* grid_ptr = Buffers::bilagrid_normal_grids.data_ptr();
-        float* grad_grid_ptr = Buffers::bilagrid_normal_grads.data_ptr();
-        float* v_normal_pre = DevicePool::global().acquire<float>(
-            "eng.bg.normal.v_pre", (size_t)C_batch * H * W * 3);
+        _ensure_bilagrid_batch_grad(Buffers::bilagrid_normal_image_grad,
+                                    Buffers::bilagrid_normal_grids, C_batch,
+                                    "eng.bg.normal.image_grad");
+        float* grad_grid_ptr = Buffers::bilagrid_normal_image_grad.data_ptr();
         bilagrid_normal_uniform_sample_backward_v1(
             grid_ptr,
             (const float*)Buffers::fwd_normal_pre_bilagrid.data_ptr(),
             (const float*)std::get<0>(v_ref_normal),
-            grad_grid_ptr, v_normal_pre,
+            grad_grid_ptr, /*v_rgb=*/nullptr,
             /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
             8, 8, 5, kBilagridStream, cam_idx_dev);
     }
@@ -1543,40 +1608,86 @@ static void _engine_bilagrid_backward_hook(
 
 
 // Ensure bilagrid Adam moment buffers are allocated and zeroed for each
-// enabled bilagrid type.
+// enabled bilagrid type. When quantize_optim is true, g1/g2 storage is uint8
+// (1 byte/cell) plus a float4 per 256-cell block holding the {g1 min, g1 max,
+// g2 min, g2 max} ranges — same scheme as the SH optimizer state.
+//
+// Note: the per-batch image_grad buffer is sized + zeroed per-iter in
+// _ensure_bilagrid_batch_grad (called from _engine_bilagrid_backward_hook),
+// since its size depends on the current batch size.
 static void _ensure_bilagrid_optim_state() {
     auto setup = [](DeviceTensor5D<float>& grids,
-                    DeviceTensor5D<float>& grads,
-                    DeviceTensor5D<float>& g1,
-                    DeviceTensor5D<float>& g2,
+                    DeviceTensor5D<float>& g1,         // used when !quantize
+                    DeviceTensor5D<float>& g2,         // used when !quantize
+                    DeviceVector<uint8_t>& g1_q,       // used when quantize
+                    DeviceVector<uint8_t>& g2_q,       // used when quantize
+                    DeviceVector<float4>& quant_bounds,
+                    bool quantize_optim,
                     const std::string& key_prefix,
                     bool& done) {
         if (done || grids.data_ptr() == nullptr) return;
         int64_t N = grids.size<0>(), C = grids.size<1>();
         int64_t L = grids.size<2>(), H = grids.size<3>(), W = grids.size<4>();
-        grads.resize(key_prefix + ".grads", N, C, L, H, W);
-        grads.zero();
-        g1.resize(key_prefix + ".g1", N, C, L, H, W);
-        g1.zero();
-        g2.resize(key_prefix + ".g2", N, C, L, H, W);
-        g2.zero();
+        int64_t numel = N * C * L * H * W;
+        if (quantize_optim) {
+            g1_q.resize(key_prefix + ".g1_q", (size_t)numel);
+            g1_q.zero();
+            g2_q.resize(key_prefix + ".g2_q", (size_t)numel);
+            g2_q.zero();
+            constexpr int64_t BLOCK_SIZE = 256;
+            int64_t n_blocks = (numel + BLOCK_SIZE - 1) / BLOCK_SIZE;
+            quant_bounds.resize(key_prefix + ".quant_bounds", (size_t)n_blocks);
+            quant_bounds.zero();
+        } else {
+            g1.resize(key_prefix + ".g1", N, C, L, H, W);
+            g1.zero();
+            g2.resize(key_prefix + ".g2", N, C, L, H, W);
+            g2.zero();
+        }
         done = true;
     };
     if (Buffers::bilagrid_rgb_enabled) {
-        setup(Buffers::bilagrid_rgb_grids, Buffers::bilagrid_rgb_grads,
+        setup(Buffers::bilagrid_rgb_grids,
               Buffers::bilagrid_rgb_g1, Buffers::bilagrid_rgb_g2,
+              Buffers::bilagrid_rgb_g1_q, Buffers::bilagrid_rgb_g2_q,
+              Buffers::bilagrid_rgb_quant_bounds,
+              Buffers::bilagrid_rgb_quantize_optim,
               "eng.bg.rgb", Buffers::bilagrid_rgb_optim_initialized);
     }
     if (Buffers::bilagrid_depth_enabled) {
-        setup(Buffers::bilagrid_depth_grids, Buffers::bilagrid_depth_grads,
+        setup(Buffers::bilagrid_depth_grids,
               Buffers::bilagrid_depth_g1, Buffers::bilagrid_depth_g2,
+              Buffers::bilagrid_depth_g1_q, Buffers::bilagrid_depth_g2_q,
+              Buffers::bilagrid_depth_quant_bounds,
+              Buffers::bilagrid_depth_quantize_optim,
               "eng.bg.depth", Buffers::bilagrid_depth_optim_initialized);
     }
     if (Buffers::bilagrid_normal_enabled) {
-        setup(Buffers::bilagrid_normal_grids, Buffers::bilagrid_normal_grads,
+        setup(Buffers::bilagrid_normal_grids,
               Buffers::bilagrid_normal_g1, Buffers::bilagrid_normal_g2,
+              Buffers::bilagrid_normal_g1_q, Buffers::bilagrid_normal_g2_q,
+              Buffers::bilagrid_normal_quant_bounds,
+              Buffers::bilagrid_normal_quantize_optim,
               "eng.bg.normal", Buffers::bilagrid_normal_optim_initialized);
     }
+}
+
+// Allocate + zero a per-batch image_grad buffer for one bilagrid type. Called
+// at the top of _engine_bilagrid_backward_hook so the image-loss backward
+// kernel can atomicAdd into a clean buffer. Sized [C_batch, C, L, H, W].
+static void _ensure_bilagrid_batch_grad(
+    DeviceTensor5D<float>& grad,
+    const DeviceTensor5D<float>& grids,
+    int C_batch,
+    const std::string& key
+) {
+    if (grids.data_ptr() == nullptr) return;
+    int C = (int)grids.size<1>();
+    int L = (int)grids.size<2>();
+    int H = (int)grids.size<3>();
+    int W = (int)grids.size<4>();
+    grad.resize(key, C_batch, C, L, H, W);
+    grad.zero();
 }
 
 // Helper: build a DeviceTensorFloatND from a DeviceTensor5D<float> by viewing
@@ -1595,41 +1706,57 @@ void engine_bilagrid_optim_step(
     float tv_weight_rgb, float tv_weight_depth, float tv_weight_normal
 ) {
     _ensure_bilagrid_optim_state();
-    DeviceVector<int32_t> no_per_splat_steps;  // empty -> use scalar step
     int32_t adam_step = step + 1;
+    int C_batch = (int)Buffers::num_cameras;
+    const int* cam_idx_dev = Buffers::bilagrid_cur_cam_indices.data_ptr();
 
+    // Single fused pass per bilagrid type: reads the sparse per-batch
+    // image_grad, computes the local TV gradient from `grids` neighbors, and
+    // applies Adam (float or uint8-quantized) in one kernel. The previous
+    // separate tv_loss_backward + zeroing of a dense grad table is gone —
+    // TV is inlined, image_grad is the only persistent gradient state and
+    // it gets re-zeroed at the start of the *next* iter's backward hook.
     auto run = [&](DeviceTensor5D<float>& grids,
-                   DeviceTensor5D<float>& grads,
+                   DeviceTensor5D<float>& image_grad,
                    DeviceTensor5D<float>& g1,
                    DeviceTensor5D<float>& g2,
+                   DeviceVector<uint8_t>& g1_q,
+                   DeviceVector<uint8_t>& g2_q,
+                   DeviceVector<float4>& quant_bounds,
+                   bool quantize_optim,
                    float lr, float tv_weight) {
         if (grids.data_ptr() == nullptr || lr <= 0.0f) return;
+        if (image_grad.data_ptr() == nullptr) return;
         int N = (int)grids.size<0>(), C = (int)grids.size<1>();
         int L = (int)grids.size<2>(), H = (int)grids.size<3>(), W = (int)grids.size<4>();
-        // Accumulate TV loss gradient in-place into grads.
-        if (tv_weight > 0.0f) {
-            tv_loss_backward(
-                grids.data_ptr(), tv_weight, grads.data_ptr(),
-                N, C, L, H, W, /*inplace=*/true, kBilagridStream);
-        }
-        // Adam step over flat float buffer.
-        fused_adam_step(
-            grids.numel(),
-            _bg_flat(grids), _bg_flat(grads), _bg_flat(g1), _bg_flat(g2),
-            lr, adam_step, no_per_splat_steps,
-            /*l2_reg=*/0.0f, /*l2_reg_offset=*/0.0f);
-        // Zero accumulated gradient for next iteration.
-        grads.zero();
+        fused_bilagrid_tv_adam(
+            grids.data_ptr(),
+            quantize_optim ? nullptr : g1.data_ptr(),
+            quantize_optim ? nullptr : g2.data_ptr(),
+            quantize_optim ? g1_q.data_ptr() : nullptr,
+            quantize_optim ? g2_q.data_ptr() : nullptr,
+            quantize_optim ? quant_bounds.data_ptr() : nullptr,
+            image_grad.data_ptr(),
+            cam_idx_dev,
+            N, C_batch, C, L, H, W,
+            lr, tv_weight, adam_step,
+            quantize_optim, kBilagridStream);
     };
 
-    run(Buffers::bilagrid_rgb_grids, Buffers::bilagrid_rgb_grads,
+    run(Buffers::bilagrid_rgb_grids, Buffers::bilagrid_rgb_image_grad,
         Buffers::bilagrid_rgb_g1, Buffers::bilagrid_rgb_g2,
+        Buffers::bilagrid_rgb_g1_q, Buffers::bilagrid_rgb_g2_q,
+        Buffers::bilagrid_rgb_quant_bounds, Buffers::bilagrid_rgb_quantize_optim,
         lr_rgb, tv_weight_rgb);
-    run(Buffers::bilagrid_depth_grids, Buffers::bilagrid_depth_grads,
+    run(Buffers::bilagrid_depth_grids, Buffers::bilagrid_depth_image_grad,
         Buffers::bilagrid_depth_g1, Buffers::bilagrid_depth_g2,
+        Buffers::bilagrid_depth_g1_q, Buffers::bilagrid_depth_g2_q,
+        Buffers::bilagrid_depth_quant_bounds, Buffers::bilagrid_depth_quantize_optim,
         lr_depth, tv_weight_depth);
-    run(Buffers::bilagrid_normal_grids, Buffers::bilagrid_normal_grads,
+    run(Buffers::bilagrid_normal_grids, Buffers::bilagrid_normal_image_grad,
         Buffers::bilagrid_normal_g1, Buffers::bilagrid_normal_g2,
+        Buffers::bilagrid_normal_g1_q, Buffers::bilagrid_normal_g2_q,
+        Buffers::bilagrid_normal_quant_bounds, Buffers::bilagrid_normal_quantize_optim,
         lr_normal, tv_weight_normal);
 }
 

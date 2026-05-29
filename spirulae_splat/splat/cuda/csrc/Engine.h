@@ -117,9 +117,16 @@ void engine_optim_step(
 // after set_camera_params. RGB applies to the rendered prediction; depth and
 // normal apply to GT (matching the Python flow in training_losses.py).
 
-void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W);
-void engine_init_bilagrid_depth(int n_grids, int L, int H, int W);
-void engine_init_bilagrid_normal(int n_grids, int L, int H, int W);
+// quantize_optim: store Adam g1 / g2 as uint8 + per-256-cell float4 bounds
+// (mirrors the SH-quantize path), trading a small numerical hit for ~3x
+// smaller optimizer-state VRAM. Configurable per-type so RGB and geometry
+// can be quantized independently.
+void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W,
+                              bool quantize_optim);
+void engine_init_bilagrid_depth(int n_grids, int L, int H, int W,
+                                bool quantize_optim);
+void engine_init_bilagrid_normal(int n_grids, int L, int H, int W,
+                                 bool quantize_optim);
 
 // Apply forward bilagrid for the current batch. cam_indices is a [C_batch]
 // int32 tensor of per-image camera-table indices; pass null/empty for identity

@@ -184,27 +184,25 @@ __global__ void bilagrid_uniform_sample_backward_v1_kernel_bilagrid(
         }
     }
 
-    // Write result
-
-    int out_idx_start = ((g_id*12*L + zi)*H + yi)*W + xi;
+    // Write result.
+    //
+    // Output index uses `ni` (batch slot), NOT `g_id` (camera index). The
+    // output buffer is sized [C_batch, 12, L, H, W] — sparse over the camera
+    // axis. Reads of `bilagrid` above still use `g_id` (true camera index)
+    // because that's the full [N_grids, ...] parameter table.
+    //
+    // Within a single ni, multiple threads can contribute to the same cell
+    // when mult_x*mult_y > 1 (tile decomposition); use atomicAdd. Across ni
+    // values, no contention (each ni has its own slice).
+    int out_idx_start = ((ni*12*L + zi)*H + yi)*W + xi;
     int out_idx_offset = L*H*W;
 
-    // simply write in this case
     if (mult_x*mult_y == 1) {
         #pragma unroll
         for (int ci = 0; ci < 12; ci++) {
             int out_idx = out_idx_start + ci * out_idx_offset;
             if (isfinite(accum[ci]) && accum[ci] != 0.0f)
-            #ifdef PATCHED
                 atomicAdd(v_bilagrid + out_idx, accum[ci]);
-            #else
-                // When grid_indices is set, multiple ni may map to the same
-                // grid slot -> atomic; otherwise plain write (identity mapping).
-                if (use_indirect)
-                    atomicAdd(v_bilagrid + out_idx, accum[ci]);
-                else
-                    v_bilagrid[out_idx] = accum[ci];
-            #endif
         }
         return;
     }

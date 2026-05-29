@@ -193,6 +193,10 @@ class SpirulaeSplatModelConfig:
     """If True, use bilateral grid for depth and normal (e.g. AI generated biased ones)"""
     bilagrid_shape_geometry: Tuple[int, int, int] = (8, 8, 4)
     """Shape of the bilateral grid for depth and normal (X, Y, W)"""
+    quantize_bilagrid_rgb_optim: bool = True
+    """Quantize the RGB bilagrid Adam optimizer state to uint8 to save VRAM."""
+    quantize_bilagrid_geometry_optim: bool = True
+    """Quantize the depth+normal bilagrid Adam optimizer state to uint8."""
     bilagrid_tv_loss_weight: float = 10.0
     """Total variation loss weight for bilateral grid used for radiance"""
     bilagrid_mean_reg_weight: float = 10.0
@@ -791,6 +795,7 @@ class SpirulaeSplatModel(torch.nn.Module):
                 self.num_train_data,
                 rgb_type=cfg.bilagrid_type,
                 rgb_LHW=(W_g, Y, X),
+                quantize_rgb_optim=cfg.quantize_bilagrid_rgb_optim,
             )
             self._bilagrid_rgb_init = True
 
@@ -804,6 +809,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             self.core.engine_init_bilagrid(
                 self.num_train_data,
                 depth_LHW=(W_g, Y, X),
+                quantize_geometry_optim=cfg.quantize_bilagrid_geometry_optim,
             )
             self._bilagrid_depth_init = True
 
@@ -817,6 +823,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             self.core.engine_init_bilagrid(
                 self.num_train_data,
                 normal_LHW=(W_g, Y, X),
+                quantize_geometry_optim=cfg.quantize_bilagrid_geometry_optim,
             )
             self._bilagrid_normal_init = True
 

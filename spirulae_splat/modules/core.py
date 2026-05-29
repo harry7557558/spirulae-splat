@@ -242,19 +242,29 @@ class Renderer:
         )
 
     def engine_init_bilagrid(self, n_grids, rgb_type=None, rgb_LHW=None,
-                              depth_LHW=None, normal_LHW=None):
+                              depth_LHW=None, normal_LHW=None,
+                              quantize_rgb_optim=False,
+                              quantize_geometry_optim=False):
         """One-time allocation of C++ bilagrid storage. Pass `None` for any type
         to leave it disabled. Must be called after set_data_3dgs (i.e., after
-        engine_forward has been invoked at least once)."""
+        engine_forward has been invoked at least once).
+
+        quantize_*_optim: store the Adam g1/g2 moments as uint8 + per-block
+        float4 bounds (same scheme as SH quantization). Separate per-axis
+        because the RGB grid is much larger than the geometry grids in
+        photogrammetry-scale datasets."""
         if rgb_type is not None and rgb_LHW is not None:
             L, H, W = rgb_LHW
-            _C.engine_init_bilagrid_rgb(n_grids, rgb_type, L, H, W)
+            _C.engine_init_bilagrid_rgb(n_grids, rgb_type, L, H, W,
+                                        bool(quantize_rgb_optim))
         if depth_LHW is not None:
             L, H, W = depth_LHW
-            _C.engine_init_bilagrid_depth(n_grids, L, H, W)
+            _C.engine_init_bilagrid_depth(n_grids, L, H, W,
+                                          bool(quantize_geometry_optim))
         if normal_LHW is not None:
             L, H, W = normal_LHW
-            _C.engine_init_bilagrid_normal(n_grids, L, H, W)
+            _C.engine_init_bilagrid_normal(n_grids, L, H, W,
+                                           bool(quantize_geometry_optim))
 
     def engine_bilagrid_forward(self, cam_indices):
         """Apply bilagrid forward for the current batch. cam_indices: [C_batch]

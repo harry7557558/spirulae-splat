@@ -56,7 +56,7 @@ void bilagrid_normal_uniform_sample_backward_v1(
     const float* rgb,
     const float* v_output,
     float* v_bilagrid,
-    float* v_rgb,
+    float* v_rgb,              // null: skip the v_pre kernel (GT isn't trained)
     int N, int L, int H, int W,
     int m, int h, int w,
     const unsigned block_x, const unsigned block_y,
@@ -64,7 +64,7 @@ void bilagrid_normal_uniform_sample_backward_v1(
     cudaStream_t stream,
     const int* grid_indices
 ) {
-    // v_bilagrid
+    // v_bilagrid (always needed: trains the bilagrid normal grid)
     {
         dim3 block = { block_x, block_y, 1 };
 
@@ -76,7 +76,6 @@ void bilagrid_normal_uniform_sample_backward_v1(
             mult_x = max(mult_x, 1) * block.x;
             mult_y = max(mult_y, 1) * block.y;
         }
-        // printf("mult_x: %d, mult_y: %d\n", mult_x, mult_y);
 
         dim3 bounds = {
             (W*mult_x +block.x-1)/block.x,
@@ -91,8 +90,9 @@ void bilagrid_normal_uniform_sample_backward_v1(
         CHECK_DEVICE_ERROR(cudaGetLastError());
     }
 
-    // v_coords and v_rgb
-    {
+    // v_rgb: gradient w.r.t. pre-bilagrid input normal (i.e., the raw GT
+    // normal). Skipped when the caller passes null — GT isn't trainable.
+    if (v_rgb != nullptr) {
         int total = N * m * h * w;
         int threads = 256;
         int blocks = (total + threads - 1) / threads;

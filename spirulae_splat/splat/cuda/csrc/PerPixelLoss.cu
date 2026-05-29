@@ -712,23 +712,39 @@ LossValues compute_multi_scale_per_pixel_losses(
             loss_map_ptr, raw_losses_ptr, losses_ptr
         );
 
-        // Backward losses
+        // Backward losses.
+        //
+        // Per-scale grad scratches: at scale 0 we ALIAS to grads_out so the loss
+        // kernel writes directly into the caller's gradient buffer and we skip
+        // a full-resolution scratch allocation per output field. At scale > 0
+        // we allocate a smaller per-scale-keyed scratch (ppl.g.*.s<scale>) for
+        // the kernel to write into; upsample_grad then accumulates it into
+        // grads_out. The old single key "ppl.g.*" was forced to scale-0 size
+        // by the pool's high-water-mark even when only the smaller scales
+        // actually needed it.
         PerPixelGrads scale_grads = {};
-        auto alloc_grad_f = [&](TorchTensorView& out, bool need, TorchTensorView& input, const std::string& name, int C) {
-            if (need && _has(input))
-                out = _pool_alloc_f("ppl.g." + name, B, Hs, Ws, C);
+        auto alloc_grad_f = [&](TorchTensorView& out, TorchTensorView grads_out_field,
+                                bool need, TorchTensorView& input,
+                                const std::string& name, int C) {
+            if (!(need && _has(input))) return;
+            if (scale == 0 && _has(grads_out_field)) {
+                out = grads_out_field;  // alias: kernel writes straight to grads_out
+            } else {
+                out = _pool_alloc_f("ppl.g." + name + ".s" + std::to_string(scale),
+                                    B, Hs, Ws, C);
+            }
         };
-        alloc_grad_f(scale_grads.v_render_rgb, needs_input_grad[0], render_rgb_s[scale], "vrgb", 3);
-        alloc_grad_f(scale_grads.v_ref_rgb, needs_input_grad[1], ref_rgb_s[scale], "vfrgb", 3);
-        alloc_grad_f(scale_grads.v_render_depth, needs_input_grad[2], render_depth_s[scale], "vrd", 1);
-        alloc_grad_f(scale_grads.v_ref_depth, needs_input_grad[3], ref_depth_s[scale], "vfd", 1);
-        alloc_grad_f(scale_grads.v_render_normal, needs_input_grad[4], render_normal_s[scale], "vrn", 3);
-        alloc_grad_f(scale_grads.v_depth_normal, needs_input_grad[5], depth_normal_s[scale], "vdn", 3);
-        alloc_grad_f(scale_grads.v_ref_normal, needs_input_grad[6], ref_normal_s[scale], "vfn", 3);
-        alloc_grad_f(scale_grads.v_render_Ts, needs_input_grad[7], render_Ts_s[scale], "vrT", 1);
-        alloc_grad_f(scale_grads.v_rgb_dist, needs_input_grad[8], rgb_dist_s[scale], "vrgbd", 3);
-        alloc_grad_f(scale_grads.v_depth_dist, needs_input_grad[9], depth_dist_s[scale], "vdd", 1);
-        alloc_grad_f(scale_grads.v_normal_dist, needs_input_grad[10], normal_dist_s[scale], "vnd", 3);
+        alloc_grad_f(scale_grads.v_render_rgb, grads_out.v_render_rgb,     needs_input_grad[0],  render_rgb_s[scale],   "vrgb",  3);
+        alloc_grad_f(scale_grads.v_ref_rgb,    grads_out.v_ref_rgb,        needs_input_grad[1],  ref_rgb_s[scale],      "vfrgb", 3);
+        alloc_grad_f(scale_grads.v_render_depth, grads_out.v_render_depth, needs_input_grad[2],  render_depth_s[scale], "vrd",   1);
+        alloc_grad_f(scale_grads.v_ref_depth,  grads_out.v_ref_depth,      needs_input_grad[3],  ref_depth_s[scale],    "vfd",   1);
+        alloc_grad_f(scale_grads.v_render_normal, grads_out.v_render_normal, needs_input_grad[4],  render_normal_s[scale], "vrn",   3);
+        alloc_grad_f(scale_grads.v_depth_normal, grads_out.v_depth_normal, needs_input_grad[5],  depth_normal_s[scale], "vdn",   3);
+        alloc_grad_f(scale_grads.v_ref_normal, grads_out.v_ref_normal,     needs_input_grad[6],  ref_normal_s[scale],   "vfn",   3);
+        alloc_grad_f(scale_grads.v_render_Ts,  grads_out.v_render_Ts,      needs_input_grad[7],  render_Ts_s[scale],    "vrT",   1);
+        alloc_grad_f(scale_grads.v_rgb_dist,   grads_out.v_rgb_dist,       needs_input_grad[8],  rgb_dist_s[scale],     "vrgbd", 3);
+        alloc_grad_f(scale_grads.v_depth_dist, grads_out.v_depth_dist,     needs_input_grad[9],  depth_dist_s[scale],   "vdd",   1);
+        alloc_grad_f(scale_grads.v_normal_dist, grads_out.v_normal_dist,   needs_input_grad[10], normal_dist_s[scale],  "vnd",   3);
 
         _compute_per_pixel_losses_backward(
             B, ppi,
@@ -790,9 +806,12 @@ LossValues compute_multi_scale_per_pixel_losses(
             }
         }
 
-        // Upsample gradients and accumulate into grads_out
+        // Upsample gradients and accumulate into grads_out.
+        // At scale 0 the per-scale buffer aliases grads_out (see alloc_grad_f
+        // above), so the copy becomes a self-copy — skip it via pointer check.
         auto upsample_grad = [&](TorchTensorView& grad_scale, TorchTensorView& grad_acc, int C) {
             if (_has(grad_acc) && scale == 0) {
+                if (_fptr(grad_scale) == _fptr(grad_acc)) return;  // aliased
                 cudaMemcpy(_fptr(grad_acc), _fptr(grad_scale), B * H * W * C * sizeof(float), cudaMemcpyDeviceToDevice);
                 return;
             }
