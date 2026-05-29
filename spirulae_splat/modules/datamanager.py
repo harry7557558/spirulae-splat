@@ -33,6 +33,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data._utils.collate import default_collate
 
 from spirulae_splat.splat.cuda import _make_lazy_cuda_func
+from spirulae_splat.modules._profile import PROFILE_TRAIN_STEP
 
 from tqdm import tqdm
 
@@ -138,12 +139,14 @@ class IndexGroupsWithDataLoader(IndexGroups):
                 return  # TODO: concurrency
         for group in self.groups:
             dataset = IndexedDatasetWrapper(getitem, [[i] for i in group.indices])
+            n_workers = min(max_num_workers, max(len(group), (min_num_workers+len(self.groups)-1)//len(self.groups)))
             dataloader = DataLoader(
                 dataset,
                 batch_size=min(batch_size, len(group)),
-                num_workers=min(max_num_workers, max(len(group), (min_num_workers+len(self.groups)-1)//len(self.groups))),
+                num_workers=n_workers,
                 persistent_workers=True,
                 shuffle=(not eval),
+                prefetch_factor=4 if n_workers > 0 else None,
             )
             self.dataloaders.append([dataloader, iter(dataloader)])
 
@@ -486,13 +489,29 @@ class SpirulaeSplatDataManager:
 
         Returns a Camera instead of raybundle"""
 
+        # ---- profiling probes (gated by PROFILE_TRAIN_STEP) ----
+        if PROFILE_TRAIN_STEP:
+            _prof = getattr(self, "_nt_prof", None)
+            if _prof is None:
+                self._nt_prof = _prof = {
+                    "n": 0, "warmup": 10,
+                    "pre": 0, "get_batch": 0, "warp": 0, "pack": 0, "post": 0,
+                }
+            from time import perf_counter_ns as _t
+            _t0 = _t()
+
         if not hasattr(self, 'cached_train') and self.config.cache_images != "disk":
             self.cached_train = self._load_images("train", cache_images_device=self.config.cache_images)
 
-        self.val_indices = sorted(self.train_dataset.val_indices)
-        self.train_indices = sorted(set(range(len(self.train_dataset))).difference(self.train_dataset.val_indices))
+        # train_indices / val_indices are derived from train_dataset.val_indices,
+        # which doesn't change after construction. Recomputing them per iter
+        # was ~0.7 ms of pure Python overhead; cache on first call.
         if self.train_index_group_loader is None:
+            self.val_indices = sorted(self.train_dataset.val_indices)
+            self.train_indices = sorted(
+                set(range(len(self.train_dataset))).difference(self.train_dataset.val_indices))
             self.setup_index_group_loaders()
+        if PROFILE_TRAIN_STEP: _t1 = _t()
 
         def pack_batch(camera, batch, max_batch_size=None, _no_split_batch=False) -> List[Tuple[Cameras, Dict]]:
             if self.config.split_batch and not _no_split_batch:
@@ -534,6 +553,7 @@ class SpirulaeSplatDataManager:
             results = [self.get_tiles(self.config.patch_batch_size, self.train_indices)]
         else:
             camera, batch = self.train_index_group_loader.get_batch()
+            if PROFILE_TRAIN_STEP: _t_gb = _t()
             if camera['camera_type'][0] == CameraType.EQUIRECTANGULAR.value:
                 camera['camera_to_worlds'], camera['intrins'], camera['distortion_params'], batch['image'] = \
                     warp_equirectangular_to_pinhole(camera['camera_to_worlds'].cuda(), batch['image'].cuda())
@@ -558,7 +578,9 @@ class SpirulaeSplatDataManager:
                 if 'cam_idx' in camera.get('metadata', {}):
                     camera['metadata']['cam_idx'] = torch.stack(sum([[5*i+j for j in range(5)] for i in camera['metadata']['cam_idx']], []))
                 camera['camera_type'] = [CameraType.PERSPECTIVE.value] * len(camera['intrins'])
+            if PROFILE_TRAIN_STEP: _t_warp = _t()
             results = pack_batch(camera, batch)
+            if PROFILE_TRAIN_STEP: _t_pack = _t()
 
         # Resolution scheduling
         if self.config.start_resolution is not None and max_steps is not None:
@@ -594,9 +616,37 @@ class SpirulaeSplatDataManager:
             return [self.random_cameras(self.train_batch_size()), {}]
 
         val_batch_size = self.val_batch_size(True)
-        if len(self.train_dataset.val_indices) > 0 and val_batch_size > 0:
+        has_val = len(self.train_dataset.val_indices) > 0 and val_batch_size > 0
+        if has_val:
             val_camera, val_batch = self.val_index_group_loader.get_batch()
             val_results = pack_batch(val_camera, val_batch, val_batch_size)
-            return results, val_results
 
+        if PROFILE_TRAIN_STEP:
+            _t_end = _t()
+            if _prof["warmup"] > 0:
+                _prof["warmup"] -= 1
+            else:
+                _prof["n"] += 1
+                _prof["pre"]       += (_t1 - _t0)
+                _prof["get_batch"] += (_t_gb - _t1)
+                _prof["warp"]      += (_t_warp - _t_gb)
+                _prof["pack"]      += (_t_pack - _t_warp)
+                _prof["post"]      += (_t_end - _t_pack)
+            if _prof["n"] >= 100:
+                n = _prof["n"]
+                print(
+                    f"[PROF_NT n={n}] "
+                    f"pre={_prof['pre']/n/1e6:.3f}ms "
+                    f"get_batch={_prof['get_batch']/n/1e6:.3f}ms "
+                    f"warp={_prof['warp']/n/1e6:.3f}ms "
+                    f"pack={_prof['pack']/n/1e6:.3f}ms "
+                    f"post={_prof['post']/n/1e6:.3f}ms",
+                    flush=True,
+                )
+                for k in ("pre", "get_batch", "warp", "pack", "post"):
+                    _prof[k] = 0
+                _prof["n"] = 0
+
+        if has_val:
+            return results, val_results
         return results

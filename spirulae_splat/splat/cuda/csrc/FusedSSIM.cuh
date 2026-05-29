@@ -43,3 +43,15 @@ float fused_ssim_inplace(
     TorchTensorView ssim_loss_map,  // [B, H, W, 1] output, or null
     float ssim_loss_map_weight
 );
+
+
+float fused_ssim_inplace_async(
+    TorchTensorView img1,
+    TorchTensorView img2,
+    TorchTensorView mask,
+    float dL_dmap,
+    TorchTensorView dL_dimg1,
+    TorchTensorView ssim_loss_map,
+    float ssim_loss_map_weight,
+    AsyncReadout<float>& readout
+);

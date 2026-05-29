@@ -135,6 +135,47 @@ void uint16_image_to_float_tensor(
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
+// Raw-pointer entry points so callers can drive the kernel without packing
+// inputs into DeviceTensor3D (whose element-size constraint forces a particular
+// shape carrier). Used by Engine.cpp to avoid an extra CPU float pass on
+// gt_rgb: H2D-copy uint8 [B, H, W, C] and convert on the GPU into a float
+// buffer of the same layout.
+void uint8_image_to_float_raw(
+    const uint8_t* d_in, float* d_out,
+    int B, int H, int W, int C
+) {
+    TensorView<uint8_t, 4> in_v;
+    in_v.data = const_cast<uint8_t*>(d_in);
+    in_v.shape[0] = B; in_v.shape[1] = H; in_v.shape[2] = W; in_v.shape[3] = C;
+    in_v.strides[0] = (long)H*W*C; in_v.strides[1] = (long)W*C; in_v.strides[2] = C; in_v.strides[3] = 1;
+
+    TensorView<float, 4> out_v;
+    out_v.data = d_out;
+    out_v.shape[0] = B; out_v.shape[1] = H; out_v.shape[2] = W; out_v.shape[3] = C;
+    out_v.strides[0] = (long)H*W*C; out_v.strides[1] = (long)W*C; out_v.strides[2] = C; out_v.strides[3] = 1;
+
+    uint8_image_to_float_kernel<<<_LAUNCH_ARGS_2D(H*W, B, 256, 1)>>>(in_v, out_v);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+void uint16_image_to_float_raw(
+    const uint16_t* d_in, float* d_out,
+    int B, int H, int W, int C
+) {
+    TensorView<uint16_t, 4> in_v;
+    in_v.data = const_cast<uint16_t*>(d_in);
+    in_v.shape[0] = B; in_v.shape[1] = H; in_v.shape[2] = W; in_v.shape[3] = C;
+    in_v.strides[0] = (long)H*W*C; in_v.strides[1] = (long)W*C; in_v.strides[2] = C; in_v.strides[3] = 1;
+
+    TensorView<float, 4> out_v;
+    out_v.data = d_out;
+    out_v.shape[0] = B; out_v.shape[1] = H; out_v.shape[2] = W; out_v.shape[3] = C;
+    out_v.strides[0] = (long)H*W*C; out_v.strides[1] = (long)W*C; out_v.strides[2] = C; out_v.strides[3] = 1;
+
+    uint16_image_to_float_kernel<<<_LAUNCH_ARGS_2D(H*W, B, 256, 1)>>>(in_v, out_v);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
 
 // ================
 // Rendered Depth to Expected Depth

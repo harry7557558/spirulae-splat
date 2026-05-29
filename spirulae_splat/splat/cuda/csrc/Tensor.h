@@ -21,6 +21,76 @@ typedef std::tuple<
 > TorchTensorView;
 
 
+// AsyncReadout<T> — pinned-host ring buffer for non-blocking D->H scalar readouts.
+//
+// Usage pattern (one iteration of training):
+//     static AsyncReadout<float> R(N);
+//     const float* prev = R.read_previous();   // sync on prior issue (cheap)
+//     LossValues out = prev ? pack(prev) : LossValues{};
+//     R.issue(d_src, stream);                  // async D->H of this iter
+//     return out;
+//
+// `read_previous()` returns the host pointer to the most-recently-issued slot
+// AFTER synchronizing on its completion event. Because there's a full
+// iteration of GPU work between issue() and the next read_previous(), the
+// event is essentially always already complete — `cudaEventSynchronize`
+// returns immediately, replacing what used to be a blocking `cudaMemcpy`.
+//
+// First call: read_previous() returns nullptr.
+template<typename T>
+class AsyncReadout {
+public:
+    explicit AsyncReadout(int n_elems, int n_slots = 2)
+        : _n_elems(n_elems), _n_slots(n_slots),
+          _h(n_slots, nullptr), _evt(n_slots),
+          _valid(n_slots, false), _next_write(0)
+    {
+        for (int i = 0; i < _n_slots; ++i) {
+            cudaMallocHost(&_h[i], (size_t)_n_elems * sizeof(T));
+            cudaEventCreateWithFlags(&_evt[i], cudaEventDisableTiming);
+        }
+    }
+
+    ~AsyncReadout() {
+        for (int i = 0; i < _n_slots; ++i) {
+            if (_h[i]) cudaFreeHost(_h[i]);
+            cudaEventDestroy(_evt[i]);
+        }
+    }
+
+    AsyncReadout(const AsyncReadout&) = delete;
+    AsyncReadout& operator=(const AsyncReadout&) = delete;
+
+    void issue(const T* d_src, cudaStream_t stream = 0) {
+        int i = _next_write;
+        cudaMemcpyAsync(_h[i], d_src, (size_t)_n_elems * sizeof(T),
+                        cudaMemcpyDeviceToHost, stream);
+        cudaEventRecord(_evt[i], stream);
+        _valid[i] = true;
+        _next_write = (_next_write + 1) % _n_slots;
+    }
+
+    // Pointer to the slot most recently filled by issue(), after syncing on
+    // its completion event. nullptr if no issue() yet.
+    const T* read_previous() {
+        int i = (_next_write + _n_slots - 1) % _n_slots;
+        if (!_valid[i]) return nullptr;
+        cudaEventSynchronize(_evt[i]);
+        return _h[i];
+    }
+
+    int n_elems() const { return _n_elems; }
+
+private:
+    int _n_elems;
+    int _n_slots;
+    std::vector<T*> _h;
+    std::vector<cudaEvent_t> _evt;
+    std::vector<bool> _valid;
+    int _next_write;
+};
+
+
 // Global CUDA memory pool — keyed named buffers with high-water-mark semantics.
 // Memory never shrinks on resize; only reallocates when the new size exceeds capacity.
 // freeAll() is the only way to release memory, call it at VRAM pressure or exit.

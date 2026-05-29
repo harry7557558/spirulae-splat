@@ -42,6 +42,7 @@ from spirulae_splat.strategy import MCMCStrategy, OpaqueStrategy, SVRasterStrate
 # from spirulae_splat.modules.training_losses import SplatTrainingLosses
 from spirulae_splat.modules.verbose import TrainingVerbose
 from spirulae_splat.modules.optimizer import OptimizerConfig
+from spirulae_splat.modules._profile import PROFILE_TRAIN_STEP
 from spirulae_splat.splat.cuda._wrapper_per_pixel import (
     blend_background,
     blend_background_noise,
@@ -1565,6 +1566,17 @@ class SpirulaeSplatModel(torch.nn.Module):
     def engine_train_step(self, camera, batch):
         """Fused training step. Tensors passed as-is (CPU or CUDA) — C++ side detects
         device location and avoids redundant copies. Minimizes H↔D transfers."""
+        # ---- profiling probes (gated by PROFILE_TRAIN_STEP) ----
+        if PROFILE_TRAIN_STEP:
+            _prof = getattr(self, "_ets_prof", None)
+            if _prof is None:
+                self._ets_prof = _prof = {
+                    "n": 0, "warmup": 10,
+                    "cam_prep": 0, "gt_prep": 0, "weights_prep": 0,
+                    "presync": 0, "ccall": 0, "ccall_after_sync": 0, "post": 0,
+                }
+            from time import perf_counter_ns as _t
+            _t0 = _t()
         # --- Camera params: keep on whatever device they came from ---
         if self.config.use_camera_optimizer:
             camera.metadata['cam_idx'] = camera.metadata['cam_idx'].flatten()
@@ -1602,13 +1614,14 @@ class SpirulaeSplatModel(torch.nn.Module):
         W_actual = W * self.config.supersampling
         H_actual = H * self.config.supersampling
 
+        if PROFILE_TRAIN_STEP: _t1 = _t()
         # --- GT data: keep on whatever device it came from ---
+        # For uint8 / uint16, hand the raw bytes to the C++ engine so the H->D
+        # copy is 1/4 (uint8) or 1/2 (uint16) the size of an equivalent float
+        # buffer, and the divide-by-{255, 65535} runs as a GPU kernel inside
+        # set_training_data instead of a CPU float pass here.
         gt_rgb = batch["image"]
-        if gt_rgb.dtype == torch.uint8:
-            gt_rgb = gt_rgb.float() / 255.0
-        elif gt_rgb.dtype == torch.uint16:
-            gt_rgb = gt_rgb.float() / 65535.0
-        elif gt_rgb.dtype == torch.float16:
+        if gt_rgb.dtype == torch.float16:
             gt_rgb = gt_rgb.float()
         gt_rgb = gt_rgb[..., :3].contiguous()
 
@@ -1637,6 +1650,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         if gt_normal is not None:
             gt_normal_mask = (gt_normal.sum(-1, True) > -2.366).contiguous()
 
+        if PROFILE_TRAIN_STEP: _t2 = _t()
         # --- Loss weights ---
         step = self.step
         cfg = self.config
@@ -1717,6 +1731,15 @@ class SpirulaeSplatModel(torch.nn.Module):
             ppisp_reg_color_mean = 0.0
             ppisp_reg_crf_channel_var = 0.0
 
+        if PROFILE_TRAIN_STEP:
+            _t3 = _t()
+            # Sync before the C++ call so we can attribute its time cleanly:
+            # presync = time waited for prior queued GPU work to finish;
+            # ccall   = pure C++ engine_train_step (kernel launches; after
+            #           option 3 the per-step D->H is async so this should be
+            #           sub-ms, with gpu_drain growing instead).
+            torch.cuda.synchronize()
+            _t3b = _t()
         # --- Fused C++ training step ---
         loss_dict = self.core.engine_train_step(
             step, max_steps,
@@ -1743,6 +1766,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             ppisp_reg_crf_channel_var=ppisp_reg_crf_channel_var,
         )
 
+        if PROFILE_TRAIN_STEP: _t4 = _t()
         # --- Verbose metrics ---
         for key, value in loss_dict.items():
             self.training_verboser.add_metric(key, value)
@@ -1750,6 +1774,34 @@ class SpirulaeSplatModel(torch.nn.Module):
         self.training_verboser.add_metric("max_num_splats", self.core.max_num_splats, last_only=True)
         self.training_verboser.add_metric("num_sh", min(sh_degree_to_use, self.config.sh_degree), last_only=True)
         self.training_verboser.add_metric("max_num_sh", self.config.sh_degree, last_only=True)
+
+        if PROFILE_TRAIN_STEP:
+            _t5 = _t()
+            if _prof["warmup"] > 0:
+                _prof["warmup"] -= 1
+            else:
+                _prof["n"] += 1
+                _prof["cam_prep"]        += (_t1 - _t0)
+                _prof["gt_prep"]         += (_t2 - _t1)
+                _prof["weights_prep"]    += (_t3 - _t2)
+                _prof["presync"]         += (_t3b - _t3)
+                _prof["ccall"]           += (_t4 - _t3b)
+                _prof["post"]            += (_t5 - _t4)
+            if _prof["n"] >= 100:
+                n = _prof["n"]
+                print(
+                    f"[PROF_ETS n={n}] "
+                    f"cam={_prof['cam_prep']/n/1e6:.3f}ms "
+                    f"gt={_prof['gt_prep']/n/1e6:.3f}ms "
+                    f"weights={_prof['weights_prep']/n/1e6:.3f}ms "
+                    f"presync={_prof['presync']/n/1e6:.3f}ms "
+                    f"ccall={_prof['ccall']/n/1e6:.3f}ms "
+                    f"post={_prof['post']/n/1e6:.3f}ms",
+                    flush=True,
+                )
+                for k in ("cam_prep", "gt_prep", "weights_prep", "presync", "ccall", "post"):
+                    _prof[k] = 0
+                _prof["n"] = 0
 
     def get_loss_grad(self, outputs, batch, batch_size: int) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict."""

@@ -773,15 +773,30 @@ LossValues compute_multi_scale_per_pixel_losses(
             num_train_images, camera_indices, scale_grads
         );
 
-        // SSIM backward (fused forward+backward)
-        float ssim = fused_ssim_inplace(
-            render_rgb_s[scale], ref_rgb_s[scale], mask_s[scale],
-            -w_ssim,
-            scale_grads.v_render_rgb,
-            scale == 0,
-            loss_map_scale,
-            w_ssim
-        );
+        // SSIM backward (fused forward+backward). For scale==0 we want the
+        // scalar SSIM for verbose display; route it through an async readout
+        // so the C++ engine call doesn't block on cudaMemcpy.
+        static AsyncReadout<float> ssim_readout(1);
+        float ssim;
+        if (scale == 0) {
+            ssim = fused_ssim_inplace_async(
+                render_rgb_s[scale], ref_rgb_s[scale], mask_s[scale],
+                -w_ssim,
+                scale_grads.v_render_rgb,
+                loss_map_scale,
+                w_ssim,
+                ssim_readout
+            );
+        } else {
+            ssim = fused_ssim_inplace(
+                render_rgb_s[scale], ref_rgb_s[scale], mask_s[scale],
+                -w_ssim,
+                scale_grads.v_render_rgb,
+                /*return_ssim_val=*/false,
+                loss_map_scale,
+                w_ssim
+            );
+        }
 
         if (scale == 0)
             ssim_val = ssim;
@@ -848,22 +863,28 @@ LossValues compute_multi_scale_per_pixel_losses(
         CHECK_DEVICE_ERROR(cudaGetLastError());
     }
 
-    // D->H copy of accumulated losses and pack into struct
-    float h_losses[(int)LossIndex::length];
-    cudaMemcpy(h_losses, total_losses_ptr,
-               sizeof(h_losses), cudaMemcpyDeviceToHost);
+    // Async D->H of accumulated losses: read the PREVIOUS iter's slot now
+    // (event sync is ~free because the prior async copy completed long ago),
+    // then queue this iter's async copy. The verbose display is one iter
+    // behind, which is invisible at ms-scale ticks; in exchange, the C++
+    // engine call no longer blocks the host on a per-step `cudaMemcpy`.
+    static AsyncReadout<float> losses_readout((int)LossIndex::length);
+    const float* h_prev = losses_readout.read_previous();
 
-    LossValues out;
-    out.rgb_loss        = h_losses[(int)LossIndex::RgbLoss];
-    out.rgb_psnr        = h_losses[(int)LossIndex::RgbPSNR];
-    out.depth_sup       = h_losses[(int)LossIndex::DepthSup];
-    out.normal_sup      = h_losses[(int)LossIndex::NormalSup];
-    out.alpha_sup       = h_losses[(int)LossIndex::AlphaSup];
-    out.normal_reg      = h_losses[(int)LossIndex::NormalReg];
-    out.alpha_reg       = h_losses[(int)LossIndex::AlphaReg];
-    out.rgb_dist_reg    = h_losses[(int)LossIndex::RgbDistReg];
-    out.depth_dist_reg  = h_losses[(int)LossIndex::DepthDistReg];
-    out.normal_dist_reg = h_losses[(int)LossIndex::NormalDistReg];
-    out.ssim            = ssim_val;
+    LossValues out = {};
+    if (h_prev) {
+        out.rgb_loss        = h_prev[(int)LossIndex::RgbLoss];
+        out.rgb_psnr        = h_prev[(int)LossIndex::RgbPSNR];
+        out.depth_sup       = h_prev[(int)LossIndex::DepthSup];
+        out.normal_sup      = h_prev[(int)LossIndex::NormalSup];
+        out.alpha_sup       = h_prev[(int)LossIndex::AlphaSup];
+        out.normal_reg      = h_prev[(int)LossIndex::NormalReg];
+        out.alpha_reg       = h_prev[(int)LossIndex::AlphaReg];
+        out.rgb_dist_reg    = h_prev[(int)LossIndex::RgbDistReg];
+        out.depth_dist_reg  = h_prev[(int)LossIndex::DepthDistReg];
+        out.normal_dist_reg = h_prev[(int)LossIndex::NormalDistReg];
+    }
+    out.ssim = ssim_val;
+    losses_readout.issue(total_losses_ptr);
     return out;
 }

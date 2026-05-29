@@ -11,6 +11,11 @@
 #include "RasterizationEval3DFwd.cuh"
 #include "RasterizationEval3DBwd.cuh"
 
+// Forward decls for the raw-pointer image conversion helpers in PixelWise.cu.
+// Not in PixelWise.cuh because they bypass the DeviceTensor3D shape carrier.
+void uint8_image_to_float_raw(const uint8_t* d_in, float* d_out, int B, int H, int W, int C);
+void uint16_image_to_float_raw(const uint16_t* d_in, float* d_out, int B, int H, int W, int C);
+
 
 namespace Buffers {
 
@@ -664,6 +669,59 @@ size_t engine_get_scratch_bytes() {
 }
 
 
+// gt_rgb fast path: when the caller passes uint8 / uint16 (element_size != 4),
+// stage as raw bytes (1/4 or 1/2 the H->D payload of an equivalent float buffer)
+// and convert to float on the device. Saves a CPU float pass per iteration and
+// shrinks the per-step pageable H->D copy.
+static DeviceTensor3D<float3> _hv_to_dt3d_gt_rgb(const TorchTensorView& src_tv) {
+    if (std::get<0>(src_tv) == 0) return DeviceTensor3D<float3>();
+    uint32_t elem_size = std::get<1>(src_tv);
+    if (elem_size == 4) {
+        // Already float: existing path.
+        return _hv_to_dt3d<float3>("gt.rgb", src_tv);
+    }
+
+    auto& shape = std::get<2>(src_tv);
+    if (shape.size() != 4)
+        throw std::runtime_error("gt_rgb: expected [B, H, W, C] shape");
+    int64_t B = shape[0], H = shape[1], W = shape[2], C = shape[3];
+    int64_t numel = B * H * W * C;
+    uint64_t src_ptr = std::get<0>(src_tv);
+    bool src_is_device = _is_device_ptr((void*)src_ptr);
+
+    // Float3 output buffer (consumed by downstream loss kernels).
+    float* d_f = DevicePool::global().acquire<float>("gt.rgb", (size_t)numel);
+
+    if (elem_size == 1) {
+        const uint8_t* d_u8;
+        uint8_t* staging = nullptr;
+        if (src_is_device) {
+            d_u8 = (const uint8_t*)src_ptr;
+        } else {
+            staging = DevicePool::global().acquire<uint8_t>("gt.rgb_u8", (size_t)numel);
+            cudaMemcpy(staging, (void*)src_ptr, numel * sizeof(uint8_t), cudaMemcpyHostToDevice);
+            d_u8 = staging;
+        }
+        uint8_image_to_float_raw(d_u8, d_f, (int)B, (int)H, (int)W, (int)C);
+    } else if (elem_size == 2) {
+        const uint16_t* d_u16;
+        uint16_t* staging = nullptr;
+        if (src_is_device) {
+            d_u16 = (const uint16_t*)src_ptr;
+        } else {
+            staging = DevicePool::global().acquire<uint16_t>("gt.rgb_u16", (size_t)numel);
+            cudaMemcpy(staging, (void*)src_ptr, numel * sizeof(uint16_t), cudaMemcpyHostToDevice);
+            d_u16 = staging;
+        }
+        uint16_image_to_float_raw(d_u16, d_f, (int)B, (int)H, (int)W, (int)C);
+    } else {
+        throw std::runtime_error("gt_rgb: unsupported element_size (expected 1, 2, or 4)");
+    }
+
+    TorchTensorView tv((uint64_t)d_f, 4, {B, H, W, C});
+    return DeviceTensor3D<float3>(tv);
+}
+
 void set_training_data(
     TorchTensorView gt_rgb,
     TorchTensorView gt_depth,
@@ -674,7 +732,7 @@ void set_training_data(
     TorchTensorView gt_normal_mask,
     TorchTensorView gt_alpha_mask
 ) {
-    Buffers::gt_rgb         = _hv_to_dt3d<float3>("gt.rgb", gt_rgb);
+    Buffers::gt_rgb         = _hv_to_dt3d_gt_rgb(gt_rgb);
     Buffers::gt_depth       = _hv_to_dt3d<float>("gt.depth", gt_depth);
     Buffers::gt_normal      = _hv_to_dt3d<float3>("gt.normal", gt_normal);
     Buffers::gt_alpha       = _hv_to_dt3d<bool>("gt.alpha", gt_alpha);
@@ -2200,14 +2258,19 @@ std::map<std::string, float> engine_train_step(
             bilagrid_lr_rgb, bilagrid_lr_depth, bilagrid_lr_normal,
             bilagrid_tv_weight_rgb, bilagrid_tv_weight_depth, bilagrid_tv_weight_normal);
 
-        // Read post-update TV losses for verbose display.
+        // Read post-update TV losses for verbose display. Async pattern:
+        // read previous iter's slot now (cheap event-sync), queue this iter's
+        // D->H, never block the host on cudaMemcpy.
         float* tv_buf = DevicePool::global().acquire<float>("eng.bg.tv_readout", 3);
         _engine_bilagrid_tv_into(tv_buf);
-        float h_tv[3] = {0.0f, 0.0f, 0.0f};
-        cudaMemcpy(h_tv, tv_buf, 3 * sizeof(float), cudaMemcpyDeviceToHost);
-        if (Buffers::bilagrid_rgb_enabled)    loss_dict["bilagrid_tv"]        = h_tv[0];
-        if (Buffers::bilagrid_depth_enabled)  loss_dict["bilagrid_depth_tv"]  = h_tv[1];
-        if (Buffers::bilagrid_normal_enabled) loss_dict["bilagrid_normal_tv"] = h_tv[2];
+        static AsyncReadout<float> tv_readout(3);
+        const float* h_tv = tv_readout.read_previous();
+        if (h_tv) {
+            if (Buffers::bilagrid_rgb_enabled)    loss_dict["bilagrid_tv"]        = h_tv[0];
+            if (Buffers::bilagrid_depth_enabled)  loss_dict["bilagrid_depth_tv"]  = h_tv[1];
+            if (Buffers::bilagrid_normal_enabled) loss_dict["bilagrid_normal_tv"] = h_tv[2];
+        }
+        tv_readout.issue(tv_buf);
     }
 
     // PPISP Adam step + regularization (after splat optim, before densify).
@@ -2225,16 +2288,18 @@ std::map<std::string, float> engine_train_step(
             ppisp_reg_color_mean, ppisp_reg_crf_channel_var
         };
         float* losses_buf = _engine_ppisp_reg_loss_into(reg_w, /*compute_grad=*/false);
-        float h_losses[(int)PPISPRegLossIndex::length] = {0};
-        cudaMemcpy(h_losses, losses_buf,
-            (int)PPISPRegLossIndex::length * sizeof(float),
-            cudaMemcpyDeviceToHost);
-        loss_dict["ppisp_reg_exposure_mean"]   = h_losses[(int)PPISPRegLossIndex::ExposureMean];
-        loss_dict["ppisp_reg_vig_center"]      = h_losses[(int)PPISPRegLossIndex::VignettingCenter];
-        loss_dict["ppisp_reg_vig_non_pos"]     = h_losses[(int)PPISPRegLossIndex::VignettingNonPositivity];
-        loss_dict["ppisp_reg_vig_channel_var"] = h_losses[(int)PPISPRegLossIndex::VignettingChannelVariance];
-        loss_dict["ppisp_reg_color_mean"]      = h_losses[(int)PPISPRegLossIndex::ColorMean];
-        loss_dict["ppisp_reg_crf_channel_var"] = h_losses[(int)PPISPRegLossIndex::CRFChannelVariance];
+        // Async readout: previous iter's slot now, queue this iter's D->H.
+        static AsyncReadout<float> ppisp_reg_readout((int)PPISPRegLossIndex::length);
+        const float* h_losses = ppisp_reg_readout.read_previous();
+        if (h_losses) {
+            loss_dict["ppisp_reg_exposure_mean"]   = h_losses[(int)PPISPRegLossIndex::ExposureMean];
+            loss_dict["ppisp_reg_vig_center"]      = h_losses[(int)PPISPRegLossIndex::VignettingCenter];
+            loss_dict["ppisp_reg_vig_non_pos"]     = h_losses[(int)PPISPRegLossIndex::VignettingNonPositivity];
+            loss_dict["ppisp_reg_vig_channel_var"] = h_losses[(int)PPISPRegLossIndex::VignettingChannelVariance];
+            loss_dict["ppisp_reg_color_mean"]      = h_losses[(int)PPISPRegLossIndex::ColorMean];
+            loss_dict["ppisp_reg_crf_channel_var"] = h_losses[(int)PPISPRegLossIndex::CRFChannelVariance];
+        }
+        ppisp_reg_readout.issue(losses_buf);
     }
 
     // Densify (in-place on pool buffers, no copies)

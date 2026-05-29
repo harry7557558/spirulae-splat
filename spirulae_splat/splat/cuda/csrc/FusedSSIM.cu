@@ -982,25 +982,21 @@ void fused_ssim_backward(
     }
 }
 
-/*[AutoHeaderGeneratorExport]*/
-float fused_ssim_inplace(
-    TorchTensorView img1,           // [B, H, W, 3]
-    TorchTensorView img2,           // [B, H, W, 3]
-    TorchTensorView mask,           // [B, H, W] bool, or null
+// Common kernel-launch helper: write SSIM scalar to ssim_buf if non-null,
+// accumulate gradient into dL_dimg1, optionally write loss map.
+// Internal: not exported through the auto-header generator.
+static inline void _launch_fused_ssim_inplace(
+    TorchTensorView img1,
+    TorchTensorView img2,
+    TorchTensorView mask,
     float dL_dmap,
-    TorchTensorView dL_dimg1,       // [B, H, W, 3] output (accumulated)
-    bool return_ssim_val,
-    TorchTensorView ssim_loss_map,  // [B, H, W, 1] output, or null
+    TorchTensorView dL_dimg1,
+    float* ssim_buf,                // non-null to receive SSIM scalar
+    TorchTensorView ssim_loss_map,
     float ssim_loss_map_weight
 ) {
     const auto& s = std::get<2>(img1);
     int B = s[0], H = s[1], W = s[2];
-
-    float* ssim_buf = nullptr;
-    if (return_ssim_val) {
-        ssim_buf = DevicePool::global().acquire<float>("ssim_scalar", 1);
-        cudaMemset(ssim_buf, 0, sizeof(float));
-    }
 
     memory_efficient_ssim_backward_kernel<true><<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X_ME, BLOCK_Y_ME, 1)>>>(
         B, H, W,
@@ -1013,6 +1009,28 @@ float fused_ssim_inplace(
         ssim_loss_map_weight,
         _nullable_f(ssim_loss_map)
     );
+}
+
+/*[AutoHeaderGeneratorExport]*/
+float fused_ssim_inplace(
+    TorchTensorView img1,           // [B, H, W, 3]
+    TorchTensorView img2,           // [B, H, W, 3]
+    TorchTensorView mask,           // [B, H, W] bool, or null
+    float dL_dmap,
+    TorchTensorView dL_dimg1,       // [B, H, W, 3] output (accumulated)
+    bool return_ssim_val,
+    TorchTensorView ssim_loss_map,  // [B, H, W, 1] output, or null
+    float ssim_loss_map_weight
+) {
+    float* ssim_buf = nullptr;
+    if (return_ssim_val) {
+        ssim_buf = DevicePool::global().acquire<float>("ssim_scalar", 1);
+        cudaMemset(ssim_buf, 0, sizeof(float));
+    }
+
+    _launch_fused_ssim_inplace(
+        img1, img2, mask, dL_dmap, dL_dimg1,
+        ssim_buf, ssim_loss_map, ssim_loss_map_weight);
 
     if (return_ssim_val) {
         float val;
@@ -1020,4 +1038,28 @@ float fused_ssim_inplace(
         return val;
     }
     return -1.0f;
+}
+
+/*[AutoHeaderGeneratorExport]*/
+float fused_ssim_inplace_async(
+    TorchTensorView img1,
+    TorchTensorView img2,
+    TorchTensorView mask,
+    float dL_dmap,
+    TorchTensorView dL_dimg1,
+    TorchTensorView ssim_loss_map,
+    float ssim_loss_map_weight,
+    AsyncReadout<float>& readout
+) {
+    float* ssim_buf = DevicePool::global().acquire<float>("ssim_scalar", 1);
+    cudaMemset(ssim_buf, 0, sizeof(float));
+
+    _launch_fused_ssim_inplace(
+        img1, img2, mask, dL_dmap, dL_dimg1,
+        ssim_buf, ssim_loss_map, ssim_loss_map_weight);
+
+    const float* prev = readout.read_previous();
+    float val = prev ? prev[0] : 0.0f;
+    readout.issue(ssim_buf);
+    return val;
 }

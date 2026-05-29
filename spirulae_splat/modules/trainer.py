@@ -18,6 +18,7 @@ from spirulae_splat.modules.dataset import SpirulaeSplatDataset
 from spirulae_splat.modules.optimizer import create_optimizers, FusedAdamOptimizerConfig, FusedNewtonOptimizerConfig, OptimizerConfig
 
 from spirulae_splat.viewer.annotation import annotate_train_cameras
+from spirulae_splat.modules._profile import PROFILE_TRAIN_STEP
 
 
 
@@ -290,10 +291,23 @@ class Trainer:
             return self._render(*args)
 
     def _train_step(self, step: int):
+        # ---- profiling probes (gated by PROFILE_TRAIN_STEP) ----
+        if PROFILE_TRAIN_STEP:
+            _prof = getattr(self, "_step_prof", None)
+            if _prof is None:
+                self._step_prof = _prof = {
+                    "n": 0, "warmup": 10,
+                    "step_cb": 0, "next_train": 0, "engine": 0,
+                    "verbose": 0, "gpu_drain": 0,
+                }
+            from time import perf_counter_ns as _t
+            t0 = _t()
+
         # for optim in self.optimizers.values():
         #     optim.zero_grad()
         # self.model.step_cb(self.optimizers, step)
         self.model.step_cb(step)
+        if PROFILE_TRAIN_STEP: t1 = _t()
 
         inputs = self.datamanager.next_train(step, self.config.num_iterations)  # type: List[Tuple[Cameras, Dict]]
         if isinstance(inputs, tuple):
@@ -302,6 +316,7 @@ class Trainer:
                 raise NotImplementedError("Validation with split_batch is not supported")  # TODO
             train_inputs, val_inputs = train_inputs[0], val_inputs[0]
             inputs = [((train_inputs[0], val_inputs[0]), (train_inputs[1], val_inputs[1]))]
+        if PROFILE_TRAIN_STEP: t2 = _t()
 
         if len(inputs) != 1:
             raise NotImplementedError()
@@ -317,7 +332,43 @@ class Trainer:
                 self.model.backward(model_outputs, loss_grad)
                 self.model.optim_step()
 
+        if PROFILE_TRAIN_STEP:
+            t3 = _t()
+            # GPU drain probe: how much GPU work is still queued after the
+            # engine call returns. With option 3 (async D->H), the host gets
+            # ahead and this becomes significant — meaning iter N+1's host
+            # work overlaps with iter N's GPU tail.
+            torch.cuda.synchronize()
+            t3b = _t()
+
         self.model.verbose()
+
+        if PROFILE_TRAIN_STEP:
+            t4 = _t()
+            if _prof["warmup"] > 0:
+                _prof["warmup"] -= 1
+            else:
+                _prof["n"] += 1
+                _prof["step_cb"]    += (t1 - t0)
+                _prof["next_train"] += (t2 - t1)
+                _prof["engine"]     += (t3 - t2)
+                _prof["gpu_drain"]  += (t3b - t3)
+                _prof["verbose"]    += (t4 - t3b)
+            if _prof["n"] >= 100:
+                n = _prof["n"]
+                print(
+                    f"\n[PROF n={n}] "
+                    f"step_cb={_prof['step_cb']/n/1e6:.3f}ms "
+                    f"next_train={_prof['next_train']/n/1e6:.3f}ms "
+                    f"engine={_prof['engine']/n/1e6:.3f}ms "
+                    f"gpu_drain={_prof['gpu_drain']/n/1e6:.3f}ms "
+                    f"verbose={_prof['verbose']/n/1e6:.3f}ms "
+                    f"sum={(t4-t0)/1e6:.3f}ms",
+                    flush=True,
+                )
+                for k in ("step_cb", "next_train", "engine", "gpu_drain", "verbose"):
+                    _prof[k] = 0
+                _prof["n"] = 0
 
         # for optim in self.optimizers.values():
         #     optim.step()
