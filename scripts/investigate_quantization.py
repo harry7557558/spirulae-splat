@@ -265,20 +265,84 @@ def _pad_to_blocks(flat: np.ndarray) -> np.ndarray:
     return flat.reshape(nb, BLOCK_SIZE)
 
 
-def _block_quantize(blocks: np.ndarray, sqrt_xform: bool) -> tuple[np.ndarray, np.ndarray]:
-    """Per-block uint8 quantize. Returns (dequant_blocks, block_range)."""
-    if sqrt_xform:
-        t = np.sqrt(np.maximum(blocks, 0.0)).astype(np.float64)
-    else:
-        t = blocks.astype(np.float64)
+# ---------------------------------------------------------------------------
+# Value mappings applied before the per-block min/max + uint8 quantize step.
+# A mapping is a (forward, inverse) pair acting elementwise on a float array.
+# We map -> quantize linearly in the mapped domain -> dequantize -> map^{-1}.
+#
+# Choices:
+#   linear      : identity. Good when in-block dynamic range is moderate.
+#   sqrt        : x >= 0 -> sqrt(x). Matches the on-device g2 path: spreads
+#                 [0, max] more uniformly when distribution is gradient-squared.
+#   signed_log  : preserves sign; 0 -> 0; |x| -> log1p(|x|/eps).
+#                 Useful for g1 buffers whose magnitude spans many orders of
+#                 magnitude — concentrates resolution near zero and gracefully
+#                 handles values close to zero (where Adam still cares about
+#                 sign/direction). eps controls the resolution near 0.
+#   log_pos     : non-negative input only. x -> log(max(x,0) + eps). Useful
+#                 for sqrt(g2)-style or g2 buffers, similar motivation to
+#                 signed_log without the sign-preservation cost.
+#   log_sqrt    : composite for g2: y = log(sqrt(g2) + eps). Halves the log
+#                 dynamic range vs log_pos applied to g2 directly.
+# ---------------------------------------------------------------------------
+
+VALUE_MAPPING_EPS = 1e-15        # matches the Adam denominator epsilon
+
+
+def _map_forward(x: np.ndarray, mapping: str) -> np.ndarray:
+    x = x.astype(np.float64, copy=False)
+    if mapping == "linear":
+        return x
+    if mapping == "sqrt":
+        return np.sqrt(np.maximum(x, 0.0))
+    if mapping == "signed_log":
+        return np.sign(x) * np.log1p(np.abs(x) / VALUE_MAPPING_EPS)
+    if mapping == "log_pos":
+        return np.log(np.maximum(x, 0.0) + VALUE_MAPPING_EPS)
+    if mapping == "log_sqrt":
+        return np.log(np.sqrt(np.maximum(x, 0.0)) + VALUE_MAPPING_EPS)
+    raise ValueError(f"unknown mapping: {mapping}")
+
+
+def _map_inverse(y: np.ndarray, mapping: str) -> np.ndarray:
+    if mapping == "linear":
+        return y
+    if mapping == "sqrt":
+        return y * y
+    if mapping == "signed_log":
+        return np.sign(y) * VALUE_MAPPING_EPS * np.expm1(np.abs(y))
+    if mapping == "log_pos":
+        return np.maximum(np.exp(y) - VALUE_MAPPING_EPS, 0.0)
+    if mapping == "log_sqrt":
+        s = np.maximum(np.exp(y) - VALUE_MAPPING_EPS, 0.0)
+        return s * s
+    raise ValueError(f"unknown mapping: {mapping}")
+
+
+def _block_quantize(blocks: np.ndarray, mapping: str) -> tuple[np.ndarray, np.ndarray]:
+    """Per-block 8-bit quantize under the given value mapping.
+    Returns (dequantized_blocks_in_raw_space, per_block_mapped_range)."""
+    t = _map_forward(blocks, mapping)
     lo = t.min(axis=1, keepdims=True)
     hi = t.max(axis=1, keepdims=True)
     rng = np.maximum(hi - lo, 1e-30)
     q = np.clip(np.floor(QUANT_LEVELS * (t - lo) / rng), 0, QUANT_LEVELS - 1)
-    deq = lo + rng * ((q + 0.5) / QUANT_LEVELS)
-    if sqrt_xform:
-        deq = deq * deq
+    deq_t = lo + rng * ((q + 0.5) / QUANT_LEVELS)
+    deq = _map_inverse(deq_t, mapping)
     return deq.astype(np.float32), (hi - lo).squeeze(1).astype(np.float64)
+
+
+def _default_mapping(kind: str) -> str:
+    """The mapping that matches the current on-device kernel for each kind."""
+    if kind.endswith("g2") or "_g2" in kind:
+        return "sqrt"
+    return "linear"
+
+
+def _is_positive_kind(kind: str) -> bool:
+    """Whether values in this buffer are non-negative (so log_pos / log_sqrt
+    are admissible)."""
+    return kind.endswith("g2") or "_g2" in kind
 
 
 # ---------------------------------------------------------------------------
@@ -433,12 +497,14 @@ def build_spatial_permutations(world_means: np.ndarray, n_active: int,
 
 @dataclass
 class Strategy:
-    """A reordering recipe applied to a tensor before the 8-bit / 256-cell
-    block quantizer. Components compose in this order:
+    """A reordering + value-mapping recipe applied to a tensor before the
+    8-bit / 256-cell block quantizer. Components compose in this order:
         1. axis0_perm   (per-splat reorder along axis 0)
         2. axis_perm    (transpose of all axes)
         3. sort_within  (sort by |x| within each super-block)
         4. global_sort  (sort all values by |x|; oracle)
+    Then the value mapping (linear/sqrt/signed_log/log_pos/log_sqrt) is
+    applied per-block before the uint8 quantize.
     """
     name: str
     extra: str = ""
@@ -446,6 +512,7 @@ class Strategy:
     axis_perm: Optional[tuple] = None            # axes permutation tuple
     sort_within: Optional[int] = None            # super-block size
     global_sort: bool = False
+    mapping: Optional[str] = None                # None = default for kind
 
 
 @dataclass
@@ -504,18 +571,17 @@ def _build_orderings(shape: tuple) -> list[tuple[str, Optional[tuple]]]:
     return out
 
 
-def _run_strategy(arr: np.ndarray, sqrt_xform: bool, s: Strategy) -> StrategyResult:
-    """Apply Strategy s as a reordering of arr, run the quantizer, invert,
-    measure error against the original arr."""
+def _run_strategy(arr: np.ndarray, kind: str, s: Strategy) -> StrategyResult:
+    """Apply Strategy s as a reordering + mapping of arr, run the quantizer,
+    invert, measure error against the original arr in the raw value space."""
     a = arr
     inv_axis0 = None
     inv_axis = None
+    mapping = s.mapping or _default_mapping(kind)
 
     if s.axis0_perm is not None:
-        # Restrict perm to the leading n_active rows if shorter than axis 0.
         p = s.axis0_perm
         if p.shape[0] != a.shape[0]:
-            # axis0_perm covers only the active prefix — keep tail in place.
             p_full = np.arange(a.shape[0], dtype=np.int64)
             p_full[:p.shape[0]] = p
             p = p_full
@@ -530,18 +596,29 @@ def _run_strategy(arr: np.ndarray, sqrt_xform: bool, s: Strategy) -> StrategyRes
     flat = a.reshape(-1).astype(np.float32)
     n = flat.size
 
+    # Sort key uses the mapped magnitude — for sqrt/log_pos this matches the
+    # on-device kernel (which sorts after sqrt); for signed_log it groups
+    # values by signed log-magnitude.
+    def _sort_key(x: np.ndarray) -> np.ndarray:
+        if mapping == "sqrt":
+            return np.sqrt(np.maximum(x, 0.0))
+        if mapping in ("log_pos", "log_sqrt"):
+            return np.log(np.maximum(x, 0.0) + VALUE_MAPPING_EPS)
+        if mapping == "signed_log":
+            return np.sign(x) * np.log1p(np.abs(x) / VALUE_MAPPING_EPS)
+        return x
+
     if s.global_sort:
-        key = np.sqrt(np.maximum(flat, 0)) if sqrt_xform else flat
-        order = np.argsort(key, kind="stable")
+        order = np.argsort(_sort_key(flat), kind="stable")
         flat_re = flat[order]
         blocks = _pad_to_blocks(flat_re)
-        deq, ranges = _block_quantize(blocks, sqrt_xform)
+        deq, ranges = _block_quantize(blocks, mapping)
         deq_flat = deq.reshape(-1)[:n]
         deq_back = np.empty_like(flat)
         deq_back[order] = deq_flat
     elif s.sort_within is not None:
         sb = s.sort_within
-        key = np.sqrt(np.maximum(flat, 0)) if sqrt_xform else flat
+        key = _sort_key(flat)
         order = np.empty(n, dtype=np.int64)
         nsb = (n + sb - 1) // sb
         for i in range(nsb):
@@ -549,13 +626,13 @@ def _run_strategy(arr: np.ndarray, sqrt_xform: bool, s: Strategy) -> StrategyRes
             order[lo:hi] = lo + np.argsort(key[lo:hi], kind="stable")
         flat_re = flat[order]
         blocks = _pad_to_blocks(flat_re)
-        deq, ranges = _block_quantize(blocks, sqrt_xform)
+        deq, ranges = _block_quantize(blocks, mapping)
         deq_flat = deq.reshape(-1)[:n]
         deq_back = np.empty_like(flat)
         deq_back[order] = deq_flat
     else:
         blocks = _pad_to_blocks(flat)
-        deq, ranges = _block_quantize(blocks, sqrt_xform)
+        deq, ranges = _block_quantize(blocks, mapping)
         deq_back = deq.reshape(-1)[:n]
 
     out = deq_back.reshape(a.shape)
@@ -577,12 +654,14 @@ def _run_strategy(arr: np.ndarray, sqrt_xform: bool, s: Strategy) -> StrategyRes
     )
 
 
-def build_strategies(arr_shape: tuple, n_splats: Optional[int],
+def build_strategies(arr_shape: tuple, n_splats: Optional[int], kind: str,
                      spatial_perms: dict[str, np.ndarray]) -> list[Strategy]:
-    """Enumerate every reordering strategy to evaluate on a tensor."""
+    """Enumerate every reordering + value-mapping strategy to evaluate."""
     strats: list[Strategy] = []
+    default_map = _default_mapping(kind)
+    positive = _is_positive_kind(kind)
 
-    # --- 1. identity + axis permutations ---
+    # --- 1. identity + axis permutations (default mapping) ---
     for label, perm in _build_orderings(arr_shape):
         if perm is None:
             continue
@@ -614,7 +693,6 @@ def build_strategies(arr_shape: tuple, n_splats: Optional[int],
                                     extra="per-splat reorder; "
                                           "decode cost = 1 perm table shared by all per-splat fields"))
         # Combine the best curve+norm picks with an inner-axis swap (SH: K<->3).
-        # Only emit combos when there is something to permute.
         if len(arr_shape) == 3 and "hilbert_quantile" in spatial_perms:
             strats.append(Strategy(
                 name="spatial_hilbert_quantile + perm(0,2,1)",
@@ -626,6 +704,33 @@ def build_strategies(arr_shape: tuple, n_splats: Optional[int],
                 name="spatial_morton_quantile + perm(0,2,1)",
                 axis0_perm=spatial_perms["morton_quantile"],
                 axis_perm=(0, 2, 1)))
+
+    # --- 5. value-mapping variants (decoder cost: same; bytes/cell: same) ---
+    # signed_log is admissible for signed buffers (g1, params); log_pos /
+    # log_sqrt require non-negative inputs (g2 only). The mapping replaces
+    # the default sqrt-or-linear in the per-block min/max + uint8 step.
+    mapping_variants = []
+    if positive:
+        # g2 default is sqrt; compare with two log-style alternatives.
+        mapping_variants.extend(["log_pos", "log_sqrt"])
+    else:
+        # g1 default is linear; signed_log compresses long tails.
+        mapping_variants.append("signed_log")
+
+    for m in mapping_variants:
+        if m == default_map:
+            continue
+        strats.append(Strategy(
+            name=f"identity_{m}",
+            mapping=m,
+            extra=f"value mapping: {m} (default = {default_map})"))
+        if SUPER_BLOCK_SIZES and SUPER_BLOCK_SIZES[-1] < n:
+            sb = SUPER_BLOCK_SIZES[-1]
+            strats.append(Strategy(
+                name=f"sort_within_{sb}_{m}",
+                sort_within=sb,
+                mapping=m,
+                extra=f"sort + value mapping: {m}"))
     return strats
 
 
@@ -633,22 +738,19 @@ def simulate_all_strategies(arr: np.ndarray, kind: str,
                              n_splats: Optional[int] = None,
                              spatial_perms: Optional[dict[str, np.ndarray]] = None,
                              max_workers: int = 1) -> list[StrategyResult]:
-    """Run all strategies. For g2-style fields the per-block sqrt transform is
-    applied (matching the on-device kernel); reported RMSE is in raw units.
-    Parallel across strategies via ThreadPoolExecutor (numpy releases the GIL
-    inside the hot inner loops)."""
-    sqrt_xform = kind.endswith("g2") or "_g2" in kind
-    strategies = build_strategies(arr.shape, n_splats, spatial_perms or {})
+    """Run all strategies. The reported RMSE is in raw value space (after
+    mapping inverse). Parallel across strategies via ThreadPoolExecutor."""
+    strategies = build_strategies(arr.shape, n_splats, kind, spatial_perms or {})
     if max_workers > 1 and len(strategies) > 1:
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            fut_map = {ex.submit(_run_strategy, arr, sqrt_xform, s): i
+            fut_map = {ex.submit(_run_strategy, arr, kind, s): i
                         for i, s in enumerate(strategies)}
             results: list[Optional[StrategyResult]] = [None] * len(strategies)
             for f in as_completed(fut_map):
                 results[fut_map[f]] = f.result()
         return [r for r in results if r is not None]
     else:
-        return [_run_strategy(arr, sqrt_xform, s) for s in strategies]
+        return [_run_strategy(arr, kind, s) for s in strategies]
 
 
 # ---------------------------------------------------------------------------
@@ -971,8 +1073,11 @@ def render_overview(fields: list[Field]) -> str:
             "</div>")
 
 
-def render_field(f: Field, results: list[StrategyResult]) -> str:
-    a = f.array
+def render_field(f: Field, results: list[StrategyResult],
+                  plot_arr: Optional[np.ndarray] = None) -> str:
+    """plot_arr defaults to f.array; pass the (possibly subsampled) array
+    actually used in the strategy simulation for consistency with the table."""
+    a = plot_arr if plot_arr is not None else f.array
     # Quick stats.
     finite = a[np.isfinite(a)]
     abs_a = np.abs(finite).astype(np.float64)
@@ -1190,6 +1295,414 @@ def render_spatial_ranking(per_field: list[tuple[Field, list[StrategyResult]]]) 
             "<table>" + header + "".join(body) + "</table>")
 
 
+# ---------------------------------------------------------------------------
+# Joint (g1, g2) pair analysis. Per-component SNR can mislead about training
+# dynamics: Adam's actual update direction is u = g1 / (sqrt(g2) + eps), and a
+# given quantization scheme can have great per-component SNR but waste bits on
+# components of (g1, g2) that cancel in the ratio. Here we compare schemes by
+# how well they preserve u.
+#
+# A scheme takes (g1, g2) and outputs two uint8 streams + per-block float4
+# bounds (= 2 bytes/cell + 16 bytes/256-cell block, matching the on-device
+# storage). The two streams need not be independent: in some schemes we
+# encode (u, sqrt(g2)) directly, then reconstruct g1 from the pair at decode.
+# ---------------------------------------------------------------------------
+
+ADAM_EPS = 1e-15          # Adam denominator epsilon
+ADAM_BETA1 = 0.9
+ADAM_BETA2 = 0.999
+
+
+def _quantize_field_simple(arr: np.ndarray, mapping: str) -> np.ndarray:
+    """One-shot identity-ordering 256-block uint8 round-trip on a single
+    tensor under `mapping`; returns dequantized values reshaped to `arr`."""
+    flat = arr.reshape(-1).astype(np.float32)
+    n = flat.size
+    blocks = _pad_to_blocks(flat)
+    deq, _ = _block_quantize(blocks, mapping)
+    return deq.reshape(-1)[:n].reshape(arr.shape)
+
+
+def _adam_update(g1: np.ndarray, g2: np.ndarray, eps: float = ADAM_EPS,
+                  bc_step: Optional[int] = None) -> np.ndarray:
+    """Reproduce Adam's per-cell update direction. When bc_step is given,
+    apply the standard bias correction (g1_hat = g1 / (1 - beta1^t), etc.)."""
+    g1_eff = g1
+    g2_eff = g2
+    if bc_step is not None and bc_step > 0:
+        bc1 = 1.0 - ADAM_BETA1 ** bc_step
+        bc2 = 1.0 - ADAM_BETA2 ** bc_step
+        g1_eff = g1 / bc1
+        g2_eff = g2 / bc2
+    return g1_eff / (np.sqrt(np.maximum(g2_eff, 0.0)) + eps)
+
+
+@dataclass
+class PairSchemeResult:
+    name: str
+    extra: str
+    snr_u_unbiased: float        # update SNR without bias correction
+    snr_u_biased: float          # update SNR at a representative late step
+    snr_g1: float                # per-component, for cross-reference
+    snr_g2: float
+    rmse_u: float                # raw RMSE on u
+    bytes_per_cell: int = 2      # 2 uint8 + amortized float4 bounds
+
+
+def _snr_pair(orig: np.ndarray, recon: np.ndarray) -> tuple[float, float]:
+    """Return (rmse, snr_db) computed in float64 on flattened inputs."""
+    o = orig.reshape(-1).astype(np.float64)
+    r = recon.reshape(-1).astype(np.float64)
+    finite = np.isfinite(o) & np.isfinite(r)
+    if not finite.any():
+        return 0.0, 0.0
+    o = o[finite]; r = r[finite]
+    diff = o - r
+    rmse = float(np.sqrt(np.mean(diff * diff)))
+    orig_rms = float(np.sqrt(np.mean(o * o)))
+    snr = 20.0 * np.log10(max(orig_rms, 1e-30) / max(rmse, 1e-30))
+    return rmse, snr
+
+
+def analyze_pair_schemes(g1: np.ndarray, g2: np.ndarray,
+                          eps: float = ADAM_EPS,
+                          bc_step: int = 10_000,
+                          max_workers: int = 8,
+                          ) -> list[PairSchemeResult]:
+    """Try several encodings of an Adam (g1, g2) pair, score reconstruction
+    of the Adam update direction u. Each scheme uses 16 bits per cell
+    (= 2 uint8 streams) plus shared per-block bounds.
+
+    Implementation note: a scheme's two halves are quantizations of one of the
+    primitive tensors {g1, sqrt_g2, u} under one of {linear, signed_log,
+    sqrt, log_pos, log_sqrt}. We compute the (primitive, mapping) → quantized
+    tensor table once, in parallel, then assemble each scheme's (g1_q, g2_q)
+    from cached entries. This roughly halves the work vs the obvious
+    'one quantize per scheme half' loop."""
+
+    sqrt_g2_true = np.sqrt(np.maximum(g2, 0.0))
+    u_unb = g1 / (sqrt_g2_true + eps)
+    u_true_unbiased = u_unb
+    u_true_biased = _adam_update(g1, g2, eps, bc_step=bc_step)
+
+    # Declare every (primitive, mapping) we'll need across all schemes.
+    needed: dict[str, tuple[np.ndarray, str]] = {
+        "g1_linear":         (g1, "linear"),
+        "g1_signed_log":     (g1, "signed_log"),
+        "g2_sqrt":           (g2, "sqrt"),
+        "g2_log_sqrt":       (g2, "log_sqrt"),
+        "u_linear":          (u_unb, "linear"),
+        "u_signed_log":      (u_unb, "signed_log"),
+        "sqrt_g2_linear":    (sqrt_g2_true, "linear"),
+        "sqrt_g2_log_pos":   (sqrt_g2_true, "log_pos"),
+    }
+    cache: dict[str, np.ndarray] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {ex.submit(_quantize_field_simple, arr, mapping): key
+                 for key, (arr, mapping) in needed.items()}
+        for f in as_completed(futs):
+            cache[futs[f]] = f.result()
+
+    # Scheme list as (name, extra, g1_q_factory, g2_q_factory). Factories take
+    # the cache and return the reconstructed (g1_q, g2_q) tensors.
+    indep_specs = [
+        ("indep_linear_sqrt",         "current on-device scheme",
+            "g1_linear",      "g2_sqrt"),
+        ("indep_signed_log_sqrt",     "g1 via signed log; g2 via sqrt (current)",
+            "g1_signed_log",  "g2_sqrt"),
+        ("indep_signed_log_log_sqrt", "g1 via signed log; sqrt(g2) via log",
+            "g1_signed_log",  "g2_log_sqrt"),
+        ("indep_linear_log_sqrt",     "g1 linear; sqrt(g2) via log",
+            "g1_linear",      "g2_log_sqrt"),
+    ]
+    joint_specs = [
+        ("joint_u_sqrtg2_linear",     "store (u, sqrt(g2)) linearly",
+            "u_linear",       "sqrt_g2_linear"),
+        ("joint_u_sqrtg2_signed_log", "store (signed_log(u), sqrt(g2))",
+            "u_signed_log",   "sqrt_g2_linear"),
+        ("joint_u_sqrtg2_log_log",    "store (signed_log(u), log(sqrt(g2)))",
+            "u_signed_log",   "sqrt_g2_log_pos"),
+        ("joint_u_sqrtg2_linear_log", "store (u, log(sqrt(g2)))",
+            "u_linear",       "sqrt_g2_log_pos"),
+    ]
+
+    def assemble_indep(g1_key: str, g2_key: str) -> tuple[np.ndarray, np.ndarray]:
+        return cache[g1_key], cache[g2_key]
+
+    def assemble_joint(u_key: str, s_key: str) -> tuple[np.ndarray, np.ndarray]:
+        u_q = cache[u_key]
+        sqrt_g2_q = cache[s_key]
+        g2_q = sqrt_g2_q * sqrt_g2_q
+        g1_q = u_q * (sqrt_g2_q + eps)
+        return g1_q, g2_q
+
+    pending: list[tuple[str, str, np.ndarray, np.ndarray]] = []
+    for name, extra, k1, k2 in indep_specs:
+        g1_q, g2_q = assemble_indep(k1, k2)
+        pending.append((name, extra, g1_q, g2_q))
+    for name, extra, k1, k2 in joint_specs:
+        g1_q, g2_q = assemble_joint(k1, k2)
+        pending.append((name, extra, g1_q, g2_q))
+
+    def score_one(name: str, extra: str,
+                   g1_q: np.ndarray, g2_q: np.ndarray) -> PairSchemeResult:
+        u_q_unb = _adam_update(g1_q, g2_q, eps, bc_step=None)
+        u_q_bia = _adam_update(g1_q, g2_q, eps, bc_step=bc_step)
+        rmse_u, snr_u = _snr_pair(u_true_unbiased, u_q_unb)
+        _, snr_u_bc = _snr_pair(u_true_biased, u_q_bia)
+        _, snr_g1 = _snr_pair(g1, g1_q)
+        _, snr_g2 = _snr_pair(g2, g2_q)
+        return PairSchemeResult(
+            name=name, extra=extra,
+            snr_u_unbiased=snr_u, snr_u_biased=snr_u_bc,
+            snr_g1=snr_g1, snr_g2=snr_g2,
+            rmse_u=rmse_u,
+        )
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = [ex.submit(score_one, n, e, g1q, g2q)
+                 for n, e, g1q, g2q in pending]
+        results = [f.result() for f in futs]
+
+    results.sort(key=lambda r: -r.snr_u_unbiased)
+    return results
+
+
+def _plot_pair_joint(g1: np.ndarray, g2: np.ndarray,
+                      title: str, eps: float = ADAM_EPS) -> str:
+    """Hex-bin (g1, sqrt(g2)) joint + (u, sqrt(g2)) joint side by side.
+    Shows whether the Adam update direction has structure that joint
+    encoding can exploit."""
+    rng = np.random.default_rng(0)
+    n = min(500_000, g1.size)
+    idx = rng.choice(g1.size, size=n, replace=False)
+    s_g1 = g1.reshape(-1)[idx].astype(np.float64)
+    s_g2 = g2.reshape(-1)[idx].astype(np.float64)
+    s_sqrt_g2 = np.sqrt(np.maximum(s_g2, 0.0))
+    s_u = s_g1 / (s_sqrt_g2 + eps)
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.6))
+
+    # Left: log|g1| vs log(sqrt(g2)). For decoupled gaussian noise these
+    # would be ~independent; correlation is the structure to exploit.
+    a1 = np.abs(s_g1); s2 = s_sqrt_g2
+    keep = (a1 > 0) & (s2 > 0)
+    a1, s2_l = a1[keep], s2[keep]
+    if a1.size:
+        hb = axes[0].hexbin(np.log10(a1), np.log10(s2_l),
+                             gridsize=80, cmap="viridis", bins="log")
+        fig.colorbar(hb, ax=axes[0], label="density (log)")
+        lo, hi = axes[0].get_xlim()
+        axes[0].plot([lo, hi], [lo, hi], "r--", linewidth=1,
+                     label="sqrt(g2) = |g1|")
+        axes[0].set_xlabel("log10 |g1|")
+        axes[0].set_ylabel("log10 sqrt(g2)")
+        axes[0].set_title("|g1| vs sqrt(g2) joint")
+        axes[0].legend(fontsize=8)
+
+    # Right: log(sqrt(g2)) vs Adam update direction u = g1/(sqrt(g2)+eps).
+    # If u has small dynamic range, joint encoding wins.
+    s2 = s_sqrt_g2
+    a_u = np.abs(s_u)
+    keep = (s2 > 0) & (a_u > 0)
+    if keep.any():
+        hb = axes[1].hexbin(np.log10(s2[keep]), np.log10(a_u[keep]),
+                             gridsize=80, cmap="viridis", bins="log")
+        fig.colorbar(hb, ax=axes[1], label="density (log)")
+        axes[1].set_xlabel("log10 sqrt(g2)")
+        axes[1].set_ylabel("log10 |u| = |g1| / (sqrt(g2)+eps)")
+        axes[1].set_title("u vs sqrt(g2)  (what joint schemes exploit)")
+    fig.suptitle(title)
+    return _img(fig, alt="pair joint")
+
+
+def _subsample_pair(g1: np.ndarray, g2: np.ndarray,
+                     max_numel: int = 20_000_000) -> tuple[np.ndarray, np.ndarray]:
+    """Cap pair analysis size by subsampling along the outer axis. The same
+    rows are kept for both arrays so per-cell correspondence is preserved."""
+    if g1.size <= max_numel or g1.ndim < 1 or g1.shape[0] <= 1:
+        return g1, g2
+    keep = max(int(max_numel / max(np.prod(g1.shape[1:]), 1)), 1)
+    rng = np.random.default_rng(0)
+    sel = rng.choice(g1.shape[0], size=min(keep, g1.shape[0]), replace=False)
+    sel.sort()
+    return g1[sel].copy(), g2[sel].copy()
+
+
+def render_pair_section(fields: list[Field],
+                         bc_step: int = 10_000,
+                         compute_workers: int = 8,
+                         plot_workers: int = 16,
+                         max_numel: int = 20_000_000) -> str:
+    """Pair every g1_* / g2_* across the checkpoint and report the joint
+    schemes' update-direction SNR. Each pair is analyzed in its own thread;
+    within a pair, schemes run concurrently. Plot rendering runs on a
+    separate thread budget."""
+    by_base: dict[str, dict[str, np.ndarray]] = {}
+    for f in fields:
+        if f.kind in ("g1", "bilagrid_g1", "ppisp_g1"):
+            base = (f.name[3:] if f.name.startswith("g1_")
+                     else f.name.replace("_g1", ""))
+            by_base.setdefault(base, {})["g1"] = f.array
+        elif f.kind in ("g2", "bilagrid_g2", "ppisp_g2"):
+            base = (f.name[3:] if f.name.startswith("g2_")
+                     else f.name.replace("_g2", ""))
+            by_base.setdefault(base, {})["g2"] = f.array
+
+    pairs = []
+    for k, p in by_base.items():
+        if "g1" not in p or "g2" not in p or p["g1"].shape != p["g2"].shape:
+            continue
+        g1_rms = float(np.sqrt(np.mean(p["g1"].astype(np.float64) ** 2)))
+        g2_rms = float(np.sqrt(np.mean(p["g2"].astype(np.float64) ** 2)))
+        if g1_rms < 1e-20 and g2_rms < 1e-20:
+            continue
+        g1_s, g2_s = _subsample_pair(p["g1"], p["g2"], max_numel=max_numel)
+        pairs.append((k, g1_s, g2_s, p["g1"].shape != g1_s.shape, p["g1"].shape))
+
+    if not pairs:
+        return ""
+
+    print(f"  pair analysis: {len(pairs)} pairs "
+           f"(compute_j={compute_workers}, plot_j={plot_workers})")
+
+    # Schemes per pair run inside analyze_pair_schemes via a thread pool
+    # capped at compute_workers. To run pairs themselves in parallel without
+    # multiplying that cost N times, we use a small top-level pool whose
+    # workers each sequence their own analyze (which then internally fans
+    # out to compute_workers). max_pair_concurrency is conservative: it lets
+    # 2 pairs progress at once, giving overlap between the slow SH pairs
+    # and the fast scalar ones without blowing the RAM budget.
+    max_pair_concurrency = max(1, min(len(pairs), 2))
+
+    def analyze_one(base, g1, g2):
+        t0 = time.time()
+        r = analyze_pair_schemes(g1, g2, bc_step=bc_step,
+                                  max_workers=compute_workers)
+        return base, g1, g2, r, time.time() - t0
+
+    pair_results: list[tuple] = [None] * len(pairs)
+    with ThreadPoolExecutor(max_workers=max_pair_concurrency) as ex:
+        futs = {ex.submit(analyze_one, b, g1, g2): i
+                 for i, (b, g1, g2, *_) in enumerate(pairs)}
+        for f in as_completed(futs):
+            i = futs[f]
+            base, g1, g2, results, dt = f.result()
+            pair_results[i] = (base, g1, g2, results, dt)
+            print(f"    {base:24s} {len(results)} schemes in {dt:.1f}s")
+
+    # --- Render plots in parallel ---
+    plot_jobs = []   # (pair_idx, kind, args)
+    for i, (base, g1, g2, results, _dt) in enumerate(pair_results):
+        plot_jobs.append((i, "bars", (results, base)))
+        if base in ("means", "scales", "features_dc", "features_sh"):
+            plot_jobs.append((i, "joint", (g1, g2,
+                              f"(g1, g2) joint distribution — {base}")))
+    plots_html: dict[tuple[int, str], str] = {}
+    def render_plot(kind, args):
+        if kind == "bars":
+            return _plot_pair_snr_bars(*args)
+        elif kind == "joint":
+            return _plot_pair_joint(*args)
+        return ""
+    with ThreadPoolExecutor(max_workers=plot_workers) as ex:
+        futs = {ex.submit(render_plot, k, a): (i, k) for i, k, a in plot_jobs}
+        for f in as_completed(futs):
+            plots_html[futs[f]] = f.result()
+
+    parts = ["<h2>Joint (g1, g2) pair analysis: Adam update direction</h2>",
+             "<p class='small'>Each cell of the on-device optimizer state "
+             "holds 2 bytes (one for g1, one for g2). Independent quantization "
+             "(the current scheme) can have great per-component SNR but waste "
+             "bits on (g1, g2) variations that cancel in Adam's update "
+             "<code>u = g1 / (sqrt(g2) + eps)</code>. We compare independent "
+             "vs joint encodings on how well they preserve u — the quantity "
+             "training actually consumes. "
+             f"<b>Bias correction</b> applied at step "
+             f"<code>t={bc_step}</code>: "
+             f"<code>(g1/(1-β1^t)) / (sqrt(g2/(1-β2^t)) + eps)</code> with "
+             f"<code>eps={ADAM_EPS}</code>, "
+             f"<code>β1=0.9, β2=0.999</code>. SNR is scale-invariant, so the "
+             f"unbiased and bias-corrected columns differ only when "
+             f"<code>eps</code> dominates one denominator but not the other "
+             f"(typically only for extremely small <code>sqrt(g2)</code>).</p>"]
+
+    for i, (base, g1, g2, results, _dt) in enumerate(pair_results):
+        sub_note = ""
+        # pairs[i] tuple was (base, g1, g2, was_subsampled, orig_shape)
+        was_subsampled = pairs[i][3]
+        orig_shape = pairs[i][4]
+        if was_subsampled:
+            sub_note = (f" <span class='small'>[subsampled to {g1.shape} "
+                         f"from {orig_shape}]</span>")
+        parts.append(f"<h3>{base}  <span class='small'>"
+                      f"(shape {g1.shape})</span>{sub_note}</h3>")
+        head = ("<tr><th class='left'>scheme</th>"
+                "<th>SNR(u)  unbiased</th>"
+                f"<th>SNR(u)  bc step {bc_step}</th>"
+                "<th>SNR(g1)</th><th>SNR(g2)</th>"
+                "<th>RMSE(u)</th><th class='left'>note</th></tr>")
+        rows = [head]
+        best = max(r.snr_u_unbiased for r in results)
+        baseline_idx = next((j for j, r in enumerate(results)
+                              if r.name == "indep_linear_sqrt"), None)
+        baseline = (results[baseline_idx].snr_u_unbiased
+                    if baseline_idx is not None else 0.0)
+        for r in results:
+            cls = "good" if abs(r.snr_u_unbiased - best) < 1e-6 else ""
+            delta = r.snr_u_unbiased - baseline
+            rows.append(
+                f"<tr><td class='left'><code>{r.name}</code></td>"
+                f"<td class='{cls}'>{r.snr_u_unbiased:.2f} "
+                 f"<span class='small'>({delta:+.2f})</span></td>"
+                f"<td>{r.snr_u_biased:.2f}</td>"
+                f"<td>{r.snr_g1:.2f}</td>"
+                f"<td>{r.snr_g2:.2f}</td>"
+                f"<td>{_fmt(r.rmse_u)}</td>"
+                f"<td class='left small'>{r.extra}</td></tr>"
+            )
+        parts.append("<table>" + "".join(rows) + "</table>")
+        parts.append(plots_html.get((i, "bars"), ""))
+        joint_html = plots_html.get((i, "joint"))
+        if joint_html:
+            parts.append(joint_html)
+    return "".join(parts)
+
+
+def _plot_pair_snr_bars(results: list[PairSchemeResult], base: str) -> str:
+    """Side-by-side bars: update SNR (unbiased + biased) vs per-component SNR."""
+    names = [r.name for r in results]
+    fig, axes = plt.subplots(1, 2, figsize=(13, max(2.6, 0.34 * len(results) + 1)))
+
+    idx = np.arange(len(names))
+    w = 0.35
+    axes[0].barh(idx - w / 2, [r.snr_u_unbiased for r in results], w,
+                  color="C0", label="unbiased")
+    axes[0].barh(idx + w / 2, [r.snr_u_biased for r in results], w,
+                  color="C2", label="bias-corrected")
+    axes[0].set_yticks(idx)
+    axes[0].set_yticklabels(names, fontsize=8)
+    axes[0].invert_yaxis()
+    axes[0].set_xlabel("Adam update direction SNR (dB)")
+    axes[0].grid(True, axis="x", alpha=0.3)
+    axes[0].set_title(f"update SNR per scheme — {base}")
+    axes[0].legend(fontsize=8)
+
+    axes[1].barh(idx - w / 2, [r.snr_g1 for r in results], w,
+                  color="C1", label="g1")
+    axes[1].barh(idx + w / 2, [r.snr_g2 for r in results], w,
+                  color="C3", label="g2")
+    axes[1].set_yticks(idx)
+    axes[1].set_yticklabels(names, fontsize=8)
+    axes[1].invert_yaxis()
+    axes[1].set_xlabel("per-component SNR (dB)")
+    axes[1].grid(True, axis="x", alpha=0.3)
+    axes[1].set_title("per-component SNR  (for cross-reference)")
+    axes[1].legend(fontsize=8)
+
+    return _img(fig, alt="pair snr bars")
+
+
 def render_summary(per_field: list[tuple[Field, list[StrategyResult]]]) -> str:
     """Aggregated summary: SNR improvement vs identity for each field, side-by-side."""
     fig, ax = plt.subplots(1, 1, figsize=(12, max(3.0, 0.42 * len(per_field) + 1)))
@@ -1251,6 +1764,18 @@ def main(argv=None):
     parser.add_argument("--no-spatial", action="store_true",
                         help="skip Morton/Hilbert spatial-sort strategies "
                              "(faster, smaller report)")
+    parser.add_argument("--no-pair", action="store_true",
+                        help="skip joint (g1, g2) pair analysis section")
+    parser.add_argument("--bc-step", type=int, default=10_000,
+                        help="step number at which to apply bias correction "
+                             "in the pair-analysis update-SNR metric")
+    parser.add_argument("--plot-threads", type=int,
+                        default=min(16, (os.cpu_count() or 4) * 2),
+                        help="thread budget for matplotlib plot rendering "
+                             "(cheap on memory, can run wider than --threads)")
+    parser.add_argument("--pair-max-numel", type=int, default=20_000_000,
+                        help="cap per-pair numel for joint pair analysis "
+                             "(outer-axis subsample when exceeded)")
     args = parser.parse_args(argv)
 
     ckpt_path = Path(args.ckpt).resolve()
@@ -1312,18 +1837,16 @@ def main(argv=None):
                                               world_means_field.array[:n_splats]))
 
     per_field_results: list[tuple[Field, list[StrategyResult]]] = []
+    field_subsampled_arrays: list[np.ndarray] = []
     out_html.append("<h2>Per-buffer analysis</h2>")
     for f in fields:
         if f.kind not in momentum_kinds:
             continue
         a = f.array
-        # Restrict to the active splats range (the table may be over-allocated
-        # to max_num_splats with garbage past cur_num_splats).
         is_per_splat = (n_splats is not None and a.ndim >= 1
                         and a.shape[0] == int(meta.get("max_num_splats", a.shape[0])))
         if is_per_splat and n_splats < a.shape[0]:
             a = a[:n_splats]
-        # Subsample huge tensors along the OUTER axis so structure is preserved.
         local_spatial = spatial_perms_global
         used_sel: Optional[np.ndarray] = None
         if a.size > args.max_numel and a.ndim >= 1 and a.shape[0] > 1:
@@ -1333,13 +1856,9 @@ def main(argv=None):
             sel.sort()
             a = a[sel].copy()
             used_sel = sel
-            # Rebuild spatial perms for the subsample (cheap relative to sim).
             if spatial_perms_global and world_means_field is not None:
                 local_spatial = build_spatial_permutations(
                     world_means_field.array[sel], a.shape[0])
-        # Spatial-sort strategies only apply when this field's axis 0 indexes
-        # splats (not, e.g., cameras for bilagrid). Test against the original
-        # on-disk shape, not the (possibly subsampled) `a.shape`.
         field_is_per_splat = (n_splats is not None
                               and len(f.shape) >= 1
                               and f.shape[0] == n_splats)
@@ -1361,11 +1880,40 @@ def main(argv=None):
         print(f"    {len(results)} strategies in {time.time() - t0:.1f}s "
                f"(j={args.threads})")
         per_field_results.append((f, results))
-        out_html.append(render_field(f, results))
+        field_subsampled_arrays.append(a)
+
+    # --- Render per-field HTML in parallel. Each render generates several
+    # matplotlib figures (histograms + heatmaps + strategy bar charts). The
+    # Agg backend is safe across threads as long as each figure object is
+    # owned by one thread (which is the case here). ---
+    if per_field_results:
+        print(f"  rendering {len(per_field_results)} per-field sections "
+               f"(plot_j={args.plot_threads})")
+        t0 = time.time()
+        field_html: list[Optional[str]] = [None] * len(per_field_results)
+        def _render_one(i, f, res, a):
+            return i, render_field(f, res, plot_arr=a)
+        with ThreadPoolExecutor(max_workers=args.plot_threads) as ex:
+            futs = [ex.submit(_render_one, i, f, res, a)
+                     for i, ((f, res), a) in enumerate(
+                         zip(per_field_results, field_subsampled_arrays))]
+            for fut in as_completed(futs):
+                i, html = fut.result()
+                field_html[i] = html
+        for h in field_html:
+            if h is not None:
+                out_html.append(h)
+        print(f"    rendered in {time.time() - t0:.1f}s")
 
     out_html.append(render_cross_field(fields))
     if spatial_perms_global:
         out_html.append(render_spatial_ranking(per_field_results))
+    if not args.no_pair:
+        out_html.append(render_pair_section(
+            fields, bc_step=args.bc_step,
+            compute_workers=args.threads,
+            plot_workers=args.plot_threads,
+            max_numel=args.pair_max_numel))
     out_html.append(render_summary(per_field_results))
 
     out_html.append("</body></html>")

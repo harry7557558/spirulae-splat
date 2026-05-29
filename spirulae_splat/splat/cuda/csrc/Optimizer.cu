@@ -976,13 +976,25 @@ __global__ void fused_adam_with_steps_8bit_kernel(
     if (!isfinite(v))
         v = 0.0f;
     v += decay * (fmaxf(x - decay_offset, 0.0f) + fminf(x + decay_offset, 0.0f));
-    float g1 = inside ? ((float)exp_avg[idx] + 0.5f) / 256.0f : 0.0f;
-    float g2 = inside ? ((float)exp_avg_sq[idx] + 0.5f) / 256.0f : 0.0f;
 
+    // Joint (u, sqrt(g2)) quantization:
+    //   exp_avg     stores u = g1 / (sqrt(g2) + eps)
+    //   exp_avg_sq  stores sqrt(g2)
+    //   quant_bounds.{xy} = (u_min, u_max)
+    //   quant_bounds.{zw} = (sqrt_g2_min, sqrt_g2_max)
+    // This keeps the on-device storage budget at 2 bytes/cell (+ shared
+    // float4 per 256-cell block) but preserves the Adam update direction
+    // g1/sqrt(g2) much better than per-component encoding of g1 and sqrt(g2).
+    // Endpoint-exact decode: q=0 -> lo, q=255 -> hi exactly. Eliminates
+    // the +range/512 phantom-value bias that midpoint decoding (q+0.5)/256
+    // induces for non-uniform-within-block distributions.
+    float u_norm  = inside ? (float)exp_avg[idx]    * (1.0f / 255.0f) : 0.0f;
+    float s_norm  = inside ? (float)exp_avg_sq[idx] * (1.0f / 255.0f) : 0.0f;
     float4 mm = quant_bounds[blockIdx.x];
-    g1 = mm.x + (mm.y - mm.x) * g1;
-    g2 = mm.z + (mm.w - mm.z) * g2;
-    g2 *= g2;
+    float u_val   = mm.x + (mm.y - mm.x) * u_norm;
+    float sqrt_g2 = mm.z + (mm.w - mm.z) * s_norm;
+    float g2 = sqrt_g2 * sqrt_g2;
+    float g1 = u_val * (sqrt_g2 + eps);
 
     g1 = beta1 * g1 + (1.0f - beta1) * v;
     g2 = beta2 * g2 + (1.0f - beta2) * v*v;
@@ -990,9 +1002,14 @@ __global__ void fused_adam_with_steps_8bit_kernel(
     x -= lr * inv_bias_correction1 * g1 / (sqrtf(g2 * inv_bias_correction2) + eps);
     param[idx] = x;
 
+    // Re-encode the new Adam state in the (u, sqrt(g2)) basis.
+    float sqrt_g2_new = sqrtf(g2);
+    float u_new       = g1 / (sqrt_g2_new + eps);
+
     cg::thread_block block = cg::this_thread_block();
     cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
-    mm = inside ? float4{g1, g1, sqrtf(g2), sqrtf(g2)} : float4{1e30f, -1e30f, 1e30f, -1e30f};
+    mm = inside ? float4{u_new, u_new, sqrt_g2_new, sqrt_g2_new}
+                : float4{1e30f, -1e30f, 1e30f, -1e30f};
     mm.x = cg::reduce(warp, mm.x, cg::less<float>());
     mm.y = cg::reduce(warp, mm.y, cg::greater<float>());
     mm.z = cg::reduce(warp, mm.z, cg::less<float>());
@@ -1013,10 +1030,11 @@ __global__ void fused_adam_with_steps_8bit_kernel(
     __syncthreads();
     mm = shared_reduce[threadIdx.x / WARP_SIZE];
 
-    float g1_range = fmaxf(mm.y - mm.x, eps);
-    float g2_range = fmaxf(mm.w - mm.z, eps);
-    exp_avg[idx] = (uint8_t)fminf(fmaxf(256.0f * (g1 - mm.x) / g1_range, 0.0f), 255.99f);
-    exp_avg_sq[idx] = (uint8_t)fminf(fmaxf(256.0f * (sqrtf(g2) - mm.z) / g2_range, 0.0f), 255.99f);
+    float u_range = fmaxf(mm.y - mm.x, eps);
+    float s_range = fmaxf(mm.w - mm.z, eps);
+    // Endpoint-exact encode: q = round(255 * (x - lo) / range), clamped.
+    exp_avg[idx]    = (uint8_t)fminf(fmaxf(roundf(255.0f * (u_new       - mm.x) / u_range), 0.0f), 255.0f);
+    exp_avg_sq[idx] = (uint8_t)fminf(fmaxf(roundf(255.0f * (sqrt_g2_new - mm.z) / s_range), 0.0f), 255.0f);
 
     if (threadIdx.x == 0)
         quant_bounds[blockIdx.x] = mm;

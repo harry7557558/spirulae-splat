@@ -359,6 +359,13 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
             g2_sh_ptr[i] = g2_feature_sh;
         }
     } else if constexpr (num_sh > 0) {
+        // Joint (u, sqrt(g2)) quantization for SH momentum:
+        //   g1_features_sh bytes store u = g1 / (sqrt(g2) + eps)
+        //   g2_features_sh bytes store sqrt(g2)
+        //   sh_quant_bounds.{xy} = (u_min, u_max)
+        //   sh_quant_bounds.{zw} = (sqrt_g2_min, sqrt_g2_max)
+        // Reconstruct ordinary (g1, g2) at decode so the Adam math below is
+        // unchanged.
         const uchar3* g1_sh_ptr = reinterpret_cast<const uchar3*>(g1_features_sh + 3 * num_sh * gid);
         const uchar3* g2_sh_ptr = reinterpret_cast<const uchar3*>(g2_features_sh + 3 * num_sh * gid);
         uchar3* g1_sh_out_ptr = reinterpret_cast<uchar3*>(const_cast<uint8_t*>(g1_features_sh + 3 * num_sh * gid));
@@ -372,32 +379,41 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     if (inside) {
         #pragma unroll
         for (int j = 0; j < num_sh; ++j) {
-            const uchar3 g1_bytes = g1_sh_ptr[j];
-            const uchar3 g2_bytes = g2_sh_ptr[j];
-            float3 g1_feature_sh = make_float3(
-                (g1_bytes.x + 0.5f) * (1.0f / 256.0f),
-                (g1_bytes.y + 0.5f) * (1.0f / 256.0f),
-                (g1_bytes.z + 0.5f) * (1.0f / 256.0f)
+            const uchar3 g1_bytes = g1_sh_ptr[j];   // holds u
+            const uchar3 g2_bytes = g2_sh_ptr[j];   // holds sqrt(g2)
+            // Endpoint-exact decode (q/255, not (q+0.5)/256): values at the
+            // block extremes lo / hi round-trip exactly, eliminating the
+            // phantom-update bias that pushed every "should-be-zero" SH
+            // momentum cell to a small non-zero value.
+            float3 u_norm = make_float3(
+                (float)g1_bytes.x * (1.0f / 255.0f),
+                (float)g1_bytes.y * (1.0f / 255.0f),
+                (float)g1_bytes.z * (1.0f / 255.0f)
             );
-            g1_feature_sh = make_float3(
-                quant_bounds.x + (quant_bounds.y - quant_bounds.x) * g1_feature_sh.x,
-                quant_bounds.x + (quant_bounds.y - quant_bounds.x) * g1_feature_sh.y,
-                quant_bounds.x + (quant_bounds.y - quant_bounds.x) * g1_feature_sh.z
+            float3 u_val = make_float3(
+                quant_bounds.x + (quant_bounds.y - quant_bounds.x) * u_norm.x,
+                quant_bounds.x + (quant_bounds.y - quant_bounds.x) * u_norm.y,
+                quant_bounds.x + (quant_bounds.y - quant_bounds.x) * u_norm.z
+            );
+            float3 s_norm = make_float3(
+                (float)g2_bytes.x * (1.0f / 255.0f),
+                (float)g2_bytes.y * (1.0f / 255.0f),
+                (float)g2_bytes.z * (1.0f / 255.0f)
+            );
+            float3 sqrt_g2_in = make_float3(
+                quant_bounds.z + (quant_bounds.w - quant_bounds.z) * s_norm.x,
+                quant_bounds.z + (quant_bounds.w - quant_bounds.z) * s_norm.y,
+                quant_bounds.z + (quant_bounds.w - quant_bounds.z) * s_norm.z
             );
             float3 g2_feature_sh = make_float3(
-                (g2_bytes.x + 0.5f) * (1.0f / 256.0f),
-                (g2_bytes.y + 0.5f) * (1.0f / 256.0f),
-                (g2_bytes.z + 0.5f) * (1.0f / 256.0f)
+                sqrt_g2_in.x * sqrt_g2_in.x,
+                sqrt_g2_in.y * sqrt_g2_in.y,
+                sqrt_g2_in.z * sqrt_g2_in.z
             );
-            g2_feature_sh = make_float3(
-                quant_bounds.z + (quant_bounds.w - quant_bounds.z) * g2_feature_sh.x,
-                quant_bounds.z + (quant_bounds.w - quant_bounds.z) * g2_feature_sh.y,
-                quant_bounds.z + (quant_bounds.w - quant_bounds.z) * g2_feature_sh.z
-            );
-            g2_feature_sh = make_float3(
-                g2_feature_sh.x * g2_feature_sh.x,
-                g2_feature_sh.y * g2_feature_sh.y,
-                g2_feature_sh.z * g2_feature_sh.z
+            float3 g1_feature_sh = make_float3(
+                u_val.x * (sqrt_g2_in.x + eps),
+                u_val.y * (sqrt_g2_in.y + eps),
+                u_val.z * (sqrt_g2_in.z + eps)
             );
 
             float3 sh_coeff = make_float3(sh_ptr[3*j], sh_ptr[3*j+1], sh_ptr[3*j+2]);
@@ -421,19 +437,25 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
             g1_sh_vals[j] = g1_updated;
             g2_sh_vals[j] = g2_updated;
 
-            mm.x = fminf(mm.x, g1_updated.x);
-            mm.y = fmaxf(mm.y, g1_updated.x);
-            mm.x = fminf(mm.x, g1_updated.y);
-            mm.y = fmaxf(mm.y, g1_updated.y);
-            mm.x = fminf(mm.x, g1_updated.z);
-            mm.y = fmaxf(mm.y, g1_updated.z);
-            float3 sqrt_g2 = make_float3(sqrtf(g2_updated.x), sqrtf(g2_updated.y), sqrtf(g2_updated.z));
-            mm.z = fminf(mm.z, sqrt_g2.x);
-            mm.w = fmaxf(mm.w, sqrt_g2.x);
-            mm.z = fminf(mm.z, sqrt_g2.y);
-            mm.w = fmaxf(mm.w, sqrt_g2.y);
-            mm.z = fminf(mm.z, sqrt_g2.z);
-            mm.w = fmaxf(mm.w, sqrt_g2.z);
+            // Reduce min/max in the (u, sqrt(g2)) basis.
+            float3 sqrt_g2_out = make_float3(sqrtf(g2_updated.x), sqrtf(g2_updated.y), sqrtf(g2_updated.z));
+            float3 u_out = make_float3(
+                g1_updated.x / (sqrt_g2_out.x + eps),
+                g1_updated.y / (sqrt_g2_out.y + eps),
+                g1_updated.z / (sqrt_g2_out.z + eps)
+            );
+            mm.x = fminf(mm.x, u_out.x);
+            mm.y = fmaxf(mm.y, u_out.x);
+            mm.x = fminf(mm.x, u_out.y);
+            mm.y = fmaxf(mm.y, u_out.y);
+            mm.x = fminf(mm.x, u_out.z);
+            mm.y = fmaxf(mm.y, u_out.z);
+            mm.z = fminf(mm.z, sqrt_g2_out.x);
+            mm.w = fmaxf(mm.w, sqrt_g2_out.x);
+            mm.z = fminf(mm.z, sqrt_g2_out.y);
+            mm.w = fmaxf(mm.w, sqrt_g2_out.y);
+            mm.z = fminf(mm.z, sqrt_g2_out.z);
+            mm.w = fmaxf(mm.w, sqrt_g2_out.z);
         }
     }  // inside
 
@@ -458,27 +480,35 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
         __syncthreads();
         mm = shared_reduce[threadIdx.x / WARP_SIZE];
 
-        float g1_range = fmaxf(mm.y - mm.x, eps);
-        float g2_range = fmaxf(mm.w - mm.z, eps);
+        float u_range = fmaxf(mm.y - mm.x, eps);
+        float s_range = fmaxf(mm.w - mm.z, eps);
         if (threadIdx.x == 0)
             sh_quant_bounds[blockIdx.x] = mm;
 
         if (!inside)
             return;
 
+        // Write the (u, sqrt(g2)) bytes per SH coefficient.
         #pragma unroll
         for (int j = 0; j < num_sh; ++j) {
-            float3 g1_updated = g1_sh_vals[j];
+            float3 g1_updated      = g1_sh_vals[j];
             float3 sqrt_g2_updated = make_float3(sqrtf(g2_sh_vals[j].x), sqrtf(g2_sh_vals[j].y), sqrtf(g2_sh_vals[j].z));
+            float3 u_out = make_float3(
+                g1_updated.x / (sqrt_g2_updated.x + eps),
+                g1_updated.y / (sqrt_g2_updated.y + eps),
+                g1_updated.z / (sqrt_g2_updated.z + eps)
+            );
+            // Endpoint-exact encode: round-to-nearest over 256 levels with
+            // lo / hi both exactly representable.
             uchar3 g1_bytes = make_uchar3(
-                (uint8_t)fminf(fmaxf(256.0f * (g1_updated.x - mm.x) / g1_range, 0.0f), 255.99f),
-                (uint8_t)fminf(fmaxf(256.0f * (g1_updated.y - mm.x) / g1_range, 0.0f), 255.99f),
-                (uint8_t)fminf(fmaxf(256.0f * (g1_updated.z - mm.x) / g1_range, 0.0f), 255.99f)
+                (uint8_t)fminf(fmaxf(roundf(255.0f * (u_out.x - mm.x) / u_range), 0.0f), 255.0f),
+                (uint8_t)fminf(fmaxf(roundf(255.0f * (u_out.y - mm.x) / u_range), 0.0f), 255.0f),
+                (uint8_t)fminf(fmaxf(roundf(255.0f * (u_out.z - mm.x) / u_range), 0.0f), 255.0f)
             );
             uchar3 g2_bytes = make_uchar3(
-                (uint8_t)fminf(fmaxf(256.0f * (sqrt_g2_updated.x - mm.z) / g2_range, 0.0f), 255.99f),
-                (uint8_t)fminf(fmaxf(256.0f * (sqrt_g2_updated.y - mm.z) / g2_range, 0.0f), 255.99f),
-                (uint8_t)fminf(fmaxf(256.0f * (sqrt_g2_updated.z - mm.z) / g2_range, 0.0f), 255.99f)
+                (uint8_t)fminf(fmaxf(roundf(255.0f * (sqrt_g2_updated.x - mm.z) / s_range), 0.0f), 255.0f),
+                (uint8_t)fminf(fmaxf(roundf(255.0f * (sqrt_g2_updated.y - mm.z) / s_range), 0.0f), 255.0f),
+                (uint8_t)fminf(fmaxf(roundf(255.0f * (sqrt_g2_updated.z - mm.z) / s_range), 0.0f), 255.0f)
             );
             g1_sh_out_ptr[j] = g1_bytes;
             g2_sh_out_ptr[j] = g2_bytes;
