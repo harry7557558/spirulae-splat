@@ -22,6 +22,70 @@
 // So we write SH (as well as other harmonics) manually
 
 
+// ----------------------------------------------------------------------------
+// Block-level reduce + atomic add (BLOCK_SIZE = 512 = 16 warps * 32 lanes).
+//
+// Mirrors common_utils.cuh `blockAtomicAdd<512>(float3*, float3)`: each warp
+// shfl-reduces its lane values, lane 0 writes one slot per channel into a
+// 16x3 groupshared table, a single syncthreads, then warps 0..2 each take
+// one channel, warp-reduce across the 16 partials, and lane 0 of that warp
+// issues a single global atomicAdd. Used by inplace=3 mode of the SH vjp to
+// coalesce per-pixel writes (otherwise every pixel hammers the same 25 global
+// SH coefficient slots with one atomicAdd each -> severe serialization).
+//
+// REQUIREMENTS for the caller:
+//   - Launch the kernel with EXACTLY 512 threads/block.
+//   - Every thread in the block must reach EVERY call to this helper (no
+//     early returns / warp-divergent skips); threads with no contribution
+//     should just pass val = 0.
+//   - thread_id is the flat thread index within the block:
+//       threadIdx.x + threadIdx.y*blockDim.x + threadIdx.z*blockDim.x*blockDim.y
+//
+// Single GroupMemoryBarrierWithGroupSync per call (matches the C++ helper).
+// No trailing barrier: subsequent calls write disjoint slots, and warps 0-2
+// have already read into registers before the next call's write occurs.
+// ----------------------------------------------------------------------------
+
+static const uint _SH_BLOCK_SIZE = 512u;
+static const uint _SH_WARP_SIZE  = 32u;
+static const uint _SH_NUM_WARPS  = _SH_BLOCK_SIZE / _SH_WARP_SIZE;  // 16
+
+groupshared float _sh_block_reduce_shared[3u * _SH_NUM_WARPS];
+
+[ForceInline]
+void sh_block_atomic_add_f3_512(float3 *dst, uint idx, float3 val, uint thread_id) {
+    val.x = isfinite(val.x) ? val.x : 0.0f;
+    val.y = isfinite(val.y) ? val.y : 0.0f;
+    val.z = isfinite(val.z) ? val.z : 0.0f;
+
+    // Warp-reduce each channel.
+    val.x = WaveActiveSum(val.x);
+    val.y = WaveActiveSum(val.y);
+    val.z = WaveActiveSum(val.z);
+
+    uint warp_id = thread_id / _SH_WARP_SIZE;
+    uint lane_id = thread_id % _SH_WARP_SIZE;
+
+    if (lane_id == 0u) {
+        _sh_block_reduce_shared[warp_id + 0u * _SH_NUM_WARPS] = val.x;
+        _sh_block_reduce_shared[warp_id + 1u * _SH_NUM_WARPS] = val.y;
+        _sh_block_reduce_shared[warp_id + 2u * _SH_NUM_WARPS] = val.z;
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    if (warp_id < 3u) {
+        float v = lane_id < _SH_NUM_WARPS
+            ? _sh_block_reduce_shared[lane_id + warp_id * _SH_NUM_WARPS] : 0.0f;
+        v = WaveActiveSum(v);
+        if (lane_id == 0u && v != 0.0f) {
+            if (warp_id == 0u)      InterlockedAdd(dst[idx].x, v);
+            else if (warp_id == 1u) InterlockedAdd(dst[idx].y, v);
+            else                    InterlockedAdd(dst[idx].z, v);
+        }
+    }
+}
+
+
 [ForceInline]
 [Differentiable]
 float3 mean_viewmat_to_unnormalized_viewdir(float3 mean, float3x3 R, float3 t) {
@@ -260,12 +324,18 @@ void _sh_coeffs_to_color_vjp<let inplace: int>(
     const float3 v_colors,
     inout float3 v_coeff_dc,
     float3 *v_coeffs,
-    inout float3 v_dir
+    inout float3 v_dir,
+    // Flat thread index in block; only consulted when inplace == 3 (block-
+    // reduced atomic). Caller passes 0u for inplace 0/1/2.
+    uint thread_id
 ) {
     // inplace:
     // 0: assign
     // 1: add
-    // 2: atomic add
+    // 2: atomic add (per-thread; one atomicAdd per call per channel)
+    // 3: block-reduced atomic add (one atomicAdd per block per channel via
+    //    sh_block_atomic_add_f3_512); requires BLOCK_SIZE == 512 and every
+    //    thread to participate in every call.
 
     #define sv(i, v) \
         if (inplace == 0) v_coeffs[i] = (v); \
@@ -277,6 +347,9 @@ void _sh_coeffs_to_color_vjp<let inplace: int>(
                 InterlockedAdd(v_coeffs[i].y, temp.y); \
                 InterlockedAdd(v_coeffs[i].z, temp.z); \
             } \
+        } \
+        else if (inplace == 3) { \
+            sh_block_atomic_add_f3_512(v_coeffs, (uint)(i), (v), thread_id); \
         }
 
     if (inplace != 0) {
@@ -822,7 +895,7 @@ void sh_coeffs_to_color_vjp(
     inout float3 v_dir
 ) {
     return _sh_coeffs_to_color_vjp<0>
-        (degree, dir, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_dir);
+        (degree, dir, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_dir, 0u);
 }
 
 // [CudaDeviceExport]
@@ -838,7 +911,7 @@ void sh_coeffs_to_color_vjp_inplace(
     inout float3 v_dir
 ) {
     return _sh_coeffs_to_color_vjp<1>
-        (degree, dir, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_dir);
+        (degree, dir, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_dir, 0u);
 }
 
 // [CudaDeviceExport]
@@ -854,7 +927,24 @@ void sh_coeffs_to_color_vjp_atomic(
     inout float3 v_dir
 ) {
     return _sh_coeffs_to_color_vjp<2>
-        (degree, dir, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_dir);
+        (degree, dir, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_dir, 0u);
+}
+
+// [CudaDeviceExport]
+[ForceInline]
+void sh_coeffs_to_color_vjp_block_atomic(
+    const int degree,
+    const float3 dir,
+    float3 coeff_dc,
+    float3 *coeffs,
+    const float3 v_colors,
+    inout float3 v_coeff_dc,
+    float3 *v_coeffs,
+    inout float3 v_dir,
+    uint thread_id
+) {
+    return _sh_coeffs_to_color_vjp<3>
+        (degree, dir, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_dir, thread_id);
 }
 
 // [CudaDeviceExport]
@@ -957,7 +1047,10 @@ void _sh_coeffs_to_color_vjp<let inplace: int>(
     v_colors *= float3(float(rgb.x >= -0.5), float(rgb.y >= -0.5), float(rgb.z >= -0.5));
 
     float3 v_viewdir;
-    _sh_coeffs_to_color_vjp<inplace>(degree, viewdir, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_viewdir);
+    // The (mean, R, t) wrappers never use the block-atomic mode (which needs
+    // a per-block thread_id), so pass 0u here — the float3 vjp ignores
+    // thread_id for inplace 0/1/2.
+    _sh_coeffs_to_color_vjp<inplace>(degree, viewdir, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_viewdir, 0u);
 
     DifferentialPair<float3> dp_mean = diffPair(mean);
     DifferentialPair<float3x3> dp_R = diffPair(R);
@@ -1192,6 +1285,11 @@ _DECL(0, float) _DECL(1, float) _DECL(2, float) _DECL(3, float) _DECL(4, float)
 // background SH where the per-pixel world-space ray direction is computed by
 // the caller. Forward returns the raw SH-evaluated color (no +0.5 / clamp);
 // the caller applies that post-processing and the matching clamp gradient.
+//
+// _vjp_atomic       : per-thread atomicAdd per channel per coefficient.
+// _vjp_block_atomic : block-reduced (512-thread) atomicAdd per call; caller
+//                     must launch with BLOCK_SIZE=512 and pass thread_id (see
+//                     sh_block_atomic_add_f3_512 above for requirements).
 #define _DECL_DIR(sh_degree, dtype) \
     [CudaDeviceExport] \
     float3 sh##sh_degree##_to_color_dir(float3 dir, float3 coeff_dc, dtype* coeffs) \
@@ -1202,6 +1300,9 @@ _DECL(0, float) _DECL(1, float) _DECL(2, float) _DECL(3, float) _DECL(4, float)
     [CudaDeviceExport] \
     void sh##sh_degree##_to_color_dir_vjp_atomic(float3 dir, float3 coeff_dc, dtype* coeffs, float3 v_colors, inout float3 v_coeff_dc, dtype *v_coeffs, inout float3 v_dir) \
         { sh_coeffs_to_color_vjp_atomic(sh_degree, dir, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_dir); } \
+    [CudaDeviceExport] \
+    void sh##sh_degree##_to_color_dir_vjp_block_atomic(float3 dir, float3 coeff_dc, dtype* coeffs, float3 v_colors, inout float3 v_coeff_dc, dtype *v_coeffs, inout float3 v_dir, uint thread_id) \
+        { sh_coeffs_to_color_vjp_block_atomic(sh_degree, dir, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_dir, thread_id); } \
 
 _DECL_DIR(0, float3) _DECL_DIR(1, float3) _DECL_DIR(2, float3) _DECL_DIR(3, float3) _DECL_DIR(4, float3)
 

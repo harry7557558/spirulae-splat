@@ -185,21 +185,33 @@ __global__ void __launch_bounds__(512) render_background_sh_backward_kernel(
     float3 v_dc  = {0.0f, 0.0f, 0.0f};
     float3 v_dir = {0.0f, 0.0f, 0.0f};
 
+    // Block-reduced atomic mode: 512 threads cooperate to issue ONE atomicAdd
+    // per channel per block (instead of one per pixel) for every higher-order
+    // SH band. Requires BLOCK_SIZE == 512 and that every thread in the block
+    // reach EVERY internal helper call (true here: the kernel has no early
+    // returns; out-of-bounds threads just pass v_color=0 through).
+    //
+    // The trailing 0xFFFFFFFFu is the warp active mask: slang's CUDA codegen
+    // surfaces it for any wave-intrinsic-using function, and it's safe to use
+    // a full mask here since no warp lane is masked off above.
+    const uint tid_in_block = threadIdx.x
+        + threadIdx.y * blockDim.x
+        + threadIdx.z * blockDim.x * blockDim.y;
     if constexpr (SH_DEGREE == 0)
-        SlangHarmonics::sh0_to_color_dir_vjp_atomic(
-            world_dir, dc, coeffs_l1, v_color, &v_dc, v_coeffs_l1, &v_dir);
+        SlangHarmonics::sh0_to_color_dir_vjp_block_atomic(
+            world_dir, dc, coeffs_l1, v_color, &v_dc, v_coeffs_l1, &v_dir, tid_in_block);
     else if constexpr (SH_DEGREE == 1)
-        SlangHarmonics::sh1_to_color_dir_vjp_atomic(
-            world_dir, dc, coeffs_l1, v_color, &v_dc, v_coeffs_l1, &v_dir);
+        SlangHarmonics::sh1_to_color_dir_vjp_block_atomic(
+            world_dir, dc, coeffs_l1, v_color, &v_dc, v_coeffs_l1, &v_dir, tid_in_block, 0xFFFFFFFFu);
     else if constexpr (SH_DEGREE == 2)
-        SlangHarmonics::sh2_to_color_dir_vjp_atomic(
-            world_dir, dc, coeffs_l1, v_color, &v_dc, v_coeffs_l1, &v_dir);
+        SlangHarmonics::sh2_to_color_dir_vjp_block_atomic(
+            world_dir, dc, coeffs_l1, v_color, &v_dc, v_coeffs_l1, &v_dir, tid_in_block, 0xFFFFFFFFu);
     else if constexpr (SH_DEGREE == 3)
-        SlangHarmonics::sh3_to_color_dir_vjp_atomic(
-            world_dir, dc, coeffs_l1, v_color, &v_dc, v_coeffs_l1, &v_dir);
+        SlangHarmonics::sh3_to_color_dir_vjp_block_atomic(
+            world_dir, dc, coeffs_l1, v_color, &v_dc, v_coeffs_l1, &v_dir, tid_in_block, 0xFFFFFFFFu);
     else if constexpr (SH_DEGREE == 4)
-        SlangHarmonics::sh4_to_color_dir_vjp_atomic(
-            world_dir, dc, coeffs_l1, v_color, &v_dc, v_coeffs_l1, &v_dir);
+        SlangHarmonics::sh4_to_color_dir_vjp_block_atomic(
+            world_dir, dc, coeffs_l1, v_color, &v_dc, v_coeffs_l1, &v_dir, tid_in_block, 0xFFFFFFFFu);
 
     // DC gradient: block-reduce one float3 atomic to the global table.
     atomicAddFVec<512>(&v_sh_coeffs[0], v_dc);
