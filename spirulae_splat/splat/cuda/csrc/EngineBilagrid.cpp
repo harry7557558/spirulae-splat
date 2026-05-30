@@ -113,17 +113,18 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
 
     // --- RGB: applies to engine().fwd.renders.rgb ---
     if (engine().bilagrid_rgb.enabled) {
-        if (std::get<0>(engine().fwd.renders).data_ptr() == nullptr)
+        auto& fwd_rgb_tensor = std::get<0>(engine().fwd.renders);
+        if (fwd_rgb_tensor.data_ptr() == nullptr)
             throw std::runtime_error("engine_bilagrid_forward: forward_3dgs must run first");
 
-        // Save pre-bilagrid render and apply in place.
-        engine().bilagrid_rgb.fwd_pre.resize("eng.bg.rgb.pre", C_batch, H, W);
-        float3* render_rgb = std::get<0>(engine().fwd.renders).data_ptr();
-        cudaMemcpyAsync(
-            engine().bilagrid_rgb.fwd_pre.data_ptr(),
-            render_rgb,
-            (size_t)C_batch * H * W * sizeof(float3),
-            cudaMemcpyDeviceToDevice, kBilagridStream);
+        // pre = current renders.rgb (pointer alias, no D2D copy). The bilagrid
+        // kernels already accept distinct in/out pointers, so we read pre and
+        // write into a fresh "post" buffer, then re-point engine state.
+        engine().bilagrid_rgb.fwd_pre = fwd_rgb_tensor;
+        DeviceTensor3D<float3> post_rgb;
+        post_rgb.resize("eng.bg.rgb.post", C_batch, H, W);
+        const float* in_ptr  = (const float*)engine().bilagrid_rgb.fwd_pre.data_ptr();
+        float*       out_ptr = (float*)post_rgb.data_ptr();
 
         int L = (int)engine().bilagrid_rgb.grids.size<1>();
         int gH = (int)engine().bilagrid_rgb.grids.size<2>();
@@ -131,41 +132,38 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
         // Pass the FULL grid table; kernel does the per-image indirect lookup.
         float* grid_ptr = engine().bilagrid_rgb.grids.data_ptr();
 
-        // In-place: rgb input and output are the same buffer (the kernel reads
-        // and writes index-by-index per pixel, so this is safe).
         if (engine().bilagrid_rgb.type == "affine") {
             bilagrid_uniform_sample_forward(
-                grid_ptr, (const float*)render_rgb, (float*)render_rgb,
+                grid_ptr, in_ptr, out_ptr,
                 /*N=*/C_batch, L, gH, gW, H, W,
                 kBilagridStream, cam_idx_dev);
         } else if (engine().bilagrid_rgb.type == "ppisp") {
             bilagrid_ppisp_uniform_sample_forward(
-                grid_ptr, (const float*)render_rgb, (float*)render_rgb,
+                grid_ptr, in_ptr, out_ptr,
                 /*N=*/C_batch, L, gH, gW, H, W,
                 kBilagridStream, cam_idx_dev);
         } else if (engine().bilagrid_rgb.type == "loglinear") {
             bilagrid_loglinear_uniform_sample_forward(
-                grid_ptr, (const float*)render_rgb, (float*)render_rgb,
+                grid_ptr, in_ptr, out_ptr,
                 /*N=*/C_batch, L, gH, gW, H, W,
                 kBilagridStream, cam_idx_dev);
         }
+        fwd_rgb_tensor = post_rgb;
     }
 
     // --- Depth (gt side) ---
     if (engine().bilagrid_depth.enabled && engine().gt.depth.data_ptr() != nullptr) {
-        engine().bilagrid_depth.fwd_pre.resize("eng.bg.depth.pre", C_batch, H, W);
-        float* gt_depth_ptr = engine().gt.depth.data_ptr();
-        cudaMemcpyAsync(
-            engine().bilagrid_depth.fwd_pre.data_ptr(),
-            gt_depth_ptr,
-            (size_t)C_batch * H * W * sizeof(float),
-            cudaMemcpyDeviceToDevice, kBilagridStream);
+        // pre = current gt.depth (pointer alias). The bilagrid sample kernel
+        // reads `pre` and writes a fresh "post" buffer; we re-point gt.depth
+        // at the post so the loss reads the transformed depth and the bwd
+        // hook still has the original gt via fwd_pre.
+        engine().bilagrid_depth.fwd_pre = engine().gt.depth;
+        DeviceTensor3D<float> post_depth;
+        post_depth.resize("eng.bg.depth.post", C_batch, H, W);
 
         // Compute per-image scalar (median quantile) over pre-bilagrid depth
-        // and scatter into bilagrid_depth_scalars at the cam_indices slots.
-        // compute_depth_scalars_tensor writes scalars[batch_i] = quantile_i —
-        // we want to land them at scalars[cam_indices[batch_i]] in the full
-        // table. Simplest: compute into a temp [C_batch] buffer then scatter.
+        // (the un-transformed gt.depth) and scatter into the per-camera
+        // scalars table at the cam_indices slots.
         float* scalar_full = engine().bilagrid_depth.scalars.data_ptr();
         float* tmp_scalars = DevicePool::global().acquire<float>(
             "eng.bg.depth.tmp_scalars", (size_t)C_batch);
@@ -191,20 +189,18 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
             grid_ptr,
             (const float*)engine().bilagrid_depth.fwd_pre.data_ptr(),
             scalar_full,  // kernel reads scalars[cam_indices[ni]]
-            gt_depth_ptr,
+            post_depth.data_ptr(),
             /*N=*/C_batch, L, gH, gW, H, W,
             kBilagridStream, cam_idx_dev);
+        engine().gt.depth = post_depth;
     }
 
     // --- Normal (gt side) ---
     if (engine().bilagrid_normal.enabled && engine().gt.normal.data_ptr() != nullptr) {
-        engine().bilagrid_normal.fwd_pre.resize("eng.bg.normal.pre", C_batch, H, W);
-        float3* gt_normal_ptr = engine().gt.normal.data_ptr();
-        cudaMemcpyAsync(
-            engine().bilagrid_normal.fwd_pre.data_ptr(),
-            gt_normal_ptr,
-            (size_t)C_batch * H * W * sizeof(float3),
-            cudaMemcpyDeviceToDevice, kBilagridStream);
+        // Same pointer-swap trick as depth: alias pre, write post, re-point gt.
+        engine().bilagrid_normal.fwd_pre = engine().gt.normal;
+        DeviceTensor3D<float3> post_normal;
+        post_normal.resize("eng.bg.normal.post", C_batch, H, W);
 
         int L = (int)engine().bilagrid_normal.grids.size<1>();
         int gH = (int)engine().bilagrid_normal.grids.size<2>();
@@ -213,9 +209,10 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
         bilagrid_normal_uniform_sample_forward(
             grid_ptr,
             (const float*)engine().bilagrid_normal.fwd_pre.data_ptr(),
-            (float*)gt_normal_ptr,
+            (float*)post_normal.data_ptr(),
             /*N=*/C_batch, L, gH, gW, H, W,
             kBilagridStream, cam_idx_dev);
+        engine().gt.normal = post_normal;
     }
 }
 

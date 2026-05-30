@@ -177,12 +177,10 @@ void _engine_background_forward() {
     }
 
     // ---- SH mode ----
-    // 1. Save pre-blend rgb (blend backward needs it for v_background).
-    bg.fwd_pre_blend_rgb.resize("eng.bg_sky.rgb_pre", C_batch, H, W);
-    cudaMemcpyAsync(
-        bg.fwd_pre_blend_rgb.data_ptr(), fwd_rgb_tensor.data_ptr(),
-        (size_t)C_batch * H * W * sizeof(float3),
-        cudaMemcpyDeviceToDevice, kBgStream);
+    // 1. Pre-blend rgb = current renders.rgb buffer (pointer alias, no copy).
+    //    The blend reads from this and writes to a fresh "post" buffer below,
+    //    so we don't need to preserve `current` via a D2D copy.
+    bg.fwd_pre_blend_rgb = fwd_rgb_tensor;
 
     // 2. Evaluate skybox SH into a per-batch image using engine state buffers
     //    directly (no R_wc / dist_coeffs gather). render_background_sh_*
@@ -195,9 +193,14 @@ void _engine_background_forward() {
         vs.viewmats, vs.intrins, vs.dist_coeffs,
         vs.sh_coeffs, bg_image_tv);
 
-    // 3. Blend skybox with rendered rgb in place.
+    // 3. Out-of-place blend: read pre, write to a fresh post buffer, then
+    //    re-point engine().fwd.renders.rgb at the post buffer. The old buffer
+    //    (now aliased by fwd_pre_blend_rgb) is preserved for backward.
+    DeviceTensor3D<float3> post_rgb;
+    post_rgb.resize("eng.bg_sky.rgb_post", C_batch, H, W);
     DeviceTensor3D<float3> bg_image(bg_image_tv);
-    blend_background_forward(rgb_io, Ts_in, bg_image, rgb_io);
+    blend_background_forward(bg.fwd_pre_blend_rgb, Ts_in, bg_image, post_rgb);
+    fwd_rgb_tensor = post_rgb;
 }
 
 

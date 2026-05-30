@@ -77,30 +77,25 @@ void engine_ppisp_forward(TorchTensorView cam_indices) {
     if (std::get<0>(engine().fwd.renders).data_ptr() == nullptr)
         throw std::runtime_error("engine_ppisp_forward: forward_3dgs must run first");
 
-    // Save pre-PPISP render.
-    engine().ppisp.fwd_pre.resize("eng.ppisp.rgb_pre", C_batch, H, W);
-    float3* render_rgb = std::get<0>(engine().fwd.renders).data_ptr();
-    cudaMemcpyAsync(
-        engine().ppisp.fwd_pre.data_ptr(),
-        render_rgb,
-        (size_t)C_batch * H * W * sizeof(float3),
-        cudaMemcpyDeviceToDevice, kPpispStream);
+    // pre = current renders.rgb (pointer alias, no D2D copy). ppisp_forward
+    // already accepts distinct in/out tensors, so we read pre and write a
+    // fresh "post" buffer, then re-point engine state.
+    auto& fwd_rgb_tensor = std::get<0>(engine().fwd.renders);
+    engine().ppisp.fwd_pre = fwd_rgb_tensor;
 
-    // Build views: in_image and out_image are the same buffer (kernel is
-    // pixel-local, so in-place is safe).
-    TorchTensorView rgb_tv((uint64_t)render_rgb, 4, {(int64_t)C_batch, H, W, 3});
-    DeviceTensor3D<float3> in_img(rgb_tv);
-    DeviceTensor3D<float3> out_img(rgb_tv);
+    DeviceTensor3D<float3> post_rgb;
+    post_rgb.resize("eng.ppisp.rgb_post", C_batch, H, W);
 
     ppisp_forward(
-        in_img,
+        engine().ppisp.fwd_pre,
         _ppisp_params_full_tv(engine().ppisp.params),
         _ppisp_intrins_batch_tv(),
         (float)W, (float)H,
         engine().ppisp.param_type,
         _ppisp_cam_indices_tv(),
-        out_img
+        post_rgb
     );
+    fwd_rgb_tensor = post_rgb;
 }
 
 // Ensure PPISP Adam moment and gradient buffers are allocated + zeroed.
