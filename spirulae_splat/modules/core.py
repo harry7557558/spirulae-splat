@@ -95,6 +95,12 @@ class Renderer:
         self.use_fused_proj_bwd_optim = use_fused_proj_bwd_optim
         self.quantize_sh_optim = quantize_sh_optim
 
+        # Set by the trainer when train_frame != "normalized". Equal to
+        # 1 / dataparser_scale_factor — how much bigger the training frame is
+        # than the would-be normalized frame. Used to rescale means_lr,
+        # scale_reg, max_world_size, and noise_lr in the engine_* calls.
+        self.train_frame_scale = 1.0
+
         # Engine path: upload splats to device pool once at init (idempotent on C++ side).
         if self.primitive in ['3dgs', 'mip', '3dgut'] and not self.use_bvh:
             _C.set_data_3dgs(
@@ -220,9 +226,14 @@ class Renderer:
         if optim_config.max_steps is not None:
             max_steps = optim_config.max_steps
 
+        alpha = self.train_frame_scale
+        means_lr = optim_config.get_scheduled_lr("means", step, max_steps)
+        if not optim_config.use_scale_agnostic_mean:
+            means_lr *= alpha
+
         _C.engine_optim_step(
             step,
-            optim_config.get_scheduled_lr("means", step, max_steps),
+            means_lr,
             optim_config.get_scheduled_lr("quats", step, max_steps),
             optim_config.get_scheduled_lr("scales", step, max_steps),
             optim_config.get_scheduled_lr("opacities", step, max_steps),
@@ -231,7 +242,7 @@ class Renderer:
             model_config.max_gauss_ratio,
             model_config.scale_regularization_weight,
             model_config.opacity_reg,
-            model_config.scale_reg,
+            model_config.scale_reg / alpha,
             model_config.erank_reg,
             model_config.erank_reg_s3,
             model_config.quat_norm_reg,
@@ -347,6 +358,11 @@ class Renderer:
         else:
             max_steps_lr = max_steps
 
+        alpha = self.train_frame_scale
+        means_lr = optim_config.get_scheduled_lr("means", step, max_steps_lr)
+        if not optim_config.use_scale_agnostic_mean:
+            means_lr *= alpha
+
         result = _C.engine_train_step(
             step, max_steps,
             # Forward config
@@ -363,7 +379,7 @@ class Renderer:
             # Loss
             loss_weights, w_ssim, num_loss_scales, compute_loss_map,
             # LRs
-            optim_config.get_scheduled_lr("means", step, max_steps_lr),
+            means_lr,
             optim_config.get_scheduled_lr("quats", step, max_steps_lr),
             optim_config.get_scheduled_lr("scales", step, max_steps_lr),
             optim_config.get_scheduled_lr("opacities", step, max_steps_lr),
@@ -373,7 +389,7 @@ class Renderer:
             model_config.max_gauss_ratio,
             model_config.scale_regularization_weight,
             model_config.opacity_reg,
-            model_config.scale_reg,
+            model_config.scale_reg / alpha,
             model_config.erank_reg,
             model_config.erank_reg_s3,
             model_config.quat_norm_reg,
@@ -389,9 +405,9 @@ class Renderer:
             model_config.min_opacity,
             model_config.max_screen_size,
             model_config.max_screen_size_clip_hardness,
-            model_config.max_world_size,
-            model_config.noise_lr,
-            model_config.noise_lr_final,
+            model_config.max_world_size * alpha,
+            model_config.noise_lr * alpha,
+            model_config.noise_lr_final * alpha,
             model_config.relocate_heuristic_weight,
             # Bilagrid
             self._tv(bilagrid_cam_indices),
@@ -414,6 +430,7 @@ class Renderer:
 
     def engine_densify_step(self, step, max_steps, model_config):
         """Run densification step via C++ Engine. All tensors managed by C++ pool."""
+        alpha = self.train_frame_scale
         num_added = _C.engine_densify_step(
             step, max_steps,
             model_config.refine_start_iter,
@@ -423,9 +440,9 @@ class Renderer:
             model_config.min_opacity,
             model_config.max_screen_size,
             model_config.max_screen_size_clip_hardness,
-            model_config.max_world_size,
-            model_config.noise_lr,
-            model_config.noise_lr_final,
+            model_config.max_world_size * alpha,
+            model_config.noise_lr * alpha,
+            model_config.noise_lr_final * alpha,
             model_config.relocate_heuristic_weight,
         )
         self.cur_num_splats += num_added

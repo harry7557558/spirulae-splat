@@ -3,6 +3,7 @@ from typing import Type, List, Tuple, Dict, Optional
 from pathlib import Path
 
 import threading
+import numpy as np
 import torch
 import time
 from tqdm import tqdm
@@ -175,6 +176,11 @@ class Trainer:
         self.dataset_train = SpirulaeSplatDataset(self.dataparser_outputs_train)
         self.dataset_eval = SpirulaeSplatDataset(self.dataparser_outputs_eval)
 
+        self._train_frame_scale = float(
+            self.dataparser_outputs_train.get('train_frame_scale', 1.0))
+        self._train_to_normalized_transform = self.dataparser_outputs_train.get(
+            'train_to_normalized_transform', torch.eye(4))
+
         self.datamanager = SpirulaeSplatDataManager(self.config.datamanager, device="cuda")
         self.datamanager.train_dataset = self.dataset_train
 
@@ -183,6 +189,9 @@ class Trainer:
             self.dataparser_outputs_train['metadata'],
             self.dataparser_outputs_train['cameras']
         )
+        # Push the frame scale into the engine wrapper so it can rescale
+        # means_lr / scale_reg / max_world_size / noise_lr per step.
+        self.model.core.train_frame_scale = self._train_frame_scale
         # self.optimizers = create_optimizers(self.model, self.config.optimizer)
 
         self.output_dir = self._setup_output_dir()
@@ -278,6 +287,25 @@ class Trainer:
             json.dump(dataparser_transform_dict, f, indent=4)
 
     def _render(self, c2w, fx, fy, cx, cy, w, h, camera_model):
+        if self._train_frame_scale != 1.0:
+            # Viewer client sends c2w in the legacy normalized frame; remap to
+            # the actual training frame before rendering so navigation feel
+            # (movement speed, axis-up) stays the same regardless of train_frame.
+            # T is a similarity (scale * R | t); apply the full similarity to
+            # the camera position but only the unit rotation to the c2w R block
+            # — otherwise the scale would be baked into the camera basis
+            # vectors and the camera would over-zoom by a factor of scale.
+            T = self._train_to_normalized_transform.detach().cpu().numpy().astype(c2w.dtype)
+            R_full = T[:3, :3]
+            t_full = T[:3, 3]
+            s = float(np.linalg.norm(R_full[:, 0]))
+            R_unit = R_full / s
+            R_in = c2w[:3, :3]
+            t_in = c2w[:3, 3]
+            c2w_new = np.empty((3, 4), dtype=c2w.dtype)
+            c2w_new[:3, :3] = R_unit @ R_in
+            c2w_new[:3, 3] = R_full @ t_in + t_full
+            c2w = c2w_new
         camera = Cameras((fx, fy, cx, cy), [0.0]*10, h, w, torch.from_numpy(c2w), camera_model)
         camera = camera.to("cuda")
         outputs = self.model.get_outputs(camera)

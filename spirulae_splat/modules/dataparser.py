@@ -213,6 +213,8 @@ class SpirulaeSplatDataParserConfig:
     """Whether to automatically scale the poses to fit in +/- 1 bounding box."""
     outlier_threshold: float = float('inf')
     """Threshold to reject outlier camera poses."""
+    train_frame: Literal["normalized", "camera", "points"] = "points"
+    """Coordinate frame in which splats are trained."""
     eval_mode: Literal["fraction", "filename", "interval", "all"] = "all"
     """
     The method to use for splitting the dataset into train and eval.
@@ -421,7 +423,6 @@ class SpirulaeSplatDataparser:
             )
             poses = torch.from_numpy(poses).float()
             transform_matrix = torch.from_numpy(transform_matrix).float()[:3, :]
-            # TODO: this may mess up MCMC scale regularization
             scale_factor = 1.0 / scene_scale
         else:
             poses, transform_matrix = camera_utils.auto_orient_and_center_poses(
@@ -434,9 +435,14 @@ class SpirulaeSplatDataparser:
                 scale_factor /= float(torch.max(torch.abs(poses[:, :3, 3])))
 
         scale_factor *= self.config.scale_factor
-        poses[:, :3, 3] *= scale_factor
 
-        # Apply transformation to 3D points
+        # Normalize all poses to (N, 4, 4) for the train-frame branching below.
+        # auto_orient_and_center_poses returns (N, 3, 4); gsplat returns (N, 4, 4).
+        if poses.shape[-2] == 3:
+            bottom = torch.tensor([[[0, 0, 0, 1]]], dtype=poses.dtype).expand(len(poses), 1, 4)
+            poses = torch.cat([poses, bottom], dim=1)
+
+        # Apply transformation to 3D points (orient/center only; scale handled per train_frame)
         metadata['points3D_xyz'] = (
             torch.cat(
                 (
@@ -447,7 +453,54 @@ class SpirulaeSplatDataparser:
             )
             @ transform_matrix.T
         )
-        metadata['points3D_xyz'] *= scale_factor
+
+        # Build the similarity that maps a point in the would-be camera-frame
+        # into the normalized frame:  p_n = scale_factor * (R_t @ p_c + t_t).
+        transform_4x4 = torch.eye(4, dtype=transform_matrix.dtype)
+        transform_4x4[:3, :] = transform_matrix
+        T_n_from_camera = torch.eye(4, dtype=transform_matrix.dtype)
+        T_n_from_camera[:3, :3] = transform_matrix[:3, :3] * scale_factor
+        T_n_from_camera[:3, 3] = transform_matrix[:3, 3] * scale_factor
+
+        applied_transform_4x4 = None
+        if "applied_transform" in meta:
+            at = torch.tensor(meta["applied_transform"], dtype=transform_matrix.dtype)
+            applied_transform_4x4 = torch.eye(4, dtype=transform_matrix.dtype)
+            applied_transform_4x4[:3, :] = at
+
+        train_frame = self.config.train_frame
+        if train_frame == "normalized":
+            # Current behavior: poses and points get the scale_factor applied.
+            poses[:, :3, 3] *= scale_factor
+            metadata['points3D_xyz'] *= scale_factor
+            train_frame_scale = 1.0
+            train_to_normalized_transform = torch.eye(4, dtype=transform_matrix.dtype)
+        elif train_frame in ("camera", "points"):
+            # Undo the rigid orient+center on poses and points (already applied
+            # by auto_orient/gsplat above) so they're back in the camera frame.
+            transform_4x4_inv = torch.linalg.inv(transform_4x4)
+            poses = transform_4x4_inv.unsqueeze(0) @ poses
+            homog = torch.cat(
+                (metadata['points3D_xyz'],
+                 torch.ones_like(metadata['points3D_xyz'][..., :1])), -1)
+            metadata['points3D_xyz'] = (homog @ transform_4x4_inv.T)[..., :3]
+            T_train_from_camera = torch.eye(4, dtype=transform_matrix.dtype)
+            if train_frame == "points" and applied_transform_4x4 is not None:
+                applied_inv = torch.linalg.inv(applied_transform_4x4)
+                poses = applied_inv.unsqueeze(0) @ poses
+                homog = torch.cat(
+                    (metadata['points3D_xyz'],
+                     torch.ones_like(metadata['points3D_xyz'][..., :1])), -1)
+                metadata['points3D_xyz'] = (homog @ applied_inv.T)[..., :3]
+                T_train_from_camera = applied_inv
+            # scale_factor is NOT applied to poses/points in this branch.
+            train_frame_scale = 1.0 / scale_factor if scale_factor != 0 else 1.0
+            # c2w_train = (T_n)^-1 @ c2w_normalized   for camera mode;
+            # c2w_train = (T_n @ applied)^-1 @ c2w_normalized   for points mode.
+            T_n_from_train = T_n_from_camera @ torch.linalg.inv(T_train_from_camera)
+            train_to_normalized_transform = torch.linalg.inv(T_n_from_train)
+        else:
+            raise ValueError(f"Unknown train_frame: {train_frame}")
 
         all_dataparser_outputs = []
         for split_id, indices in enumerate([i_train, i_eval]):
@@ -503,6 +556,9 @@ class SpirulaeSplatDataparser:
                 mask_filenames=mask_filenames_split if len(mask_filenames_split) > 0 else None,
                 dataparser_scale=scale_factor,
                 dataparser_transform=dataparser_transform_matrix,
+                train_frame=train_frame,
+                train_frame_scale=float(train_frame_scale),
+                train_to_normalized_transform=train_to_normalized_transform,
                 metadata={
                     "depth_filenames": depth_filenames_split if len(depth_filenames_split) > 0 else None,
                     "depth_unit_scale_factor": self.config.depth_unit_scale_factor,
