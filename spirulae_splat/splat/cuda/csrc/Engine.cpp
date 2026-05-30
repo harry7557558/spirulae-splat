@@ -28,7 +28,7 @@ void uint16_depth_to_float_raw(const uint16_t* d_in, float* d_out, int B, int H,
 void fused_bilagrid_tv_adam(
     float* grids,
     float*   g1_f,    float*   g2_f,
-    uint8_t* g1_q,    uint8_t* g2_q,
+    uint8_t* packed,                    // AoS packed (u, sqrt_g2) when quantize
     float4*  quant_bounds,
     const float* image_grad,
     const int*   cam_indices,
@@ -114,12 +114,14 @@ DeviceVector<float3> g1_scales, g2_scales;
 DeviceVector<float> g1_opacities, g2_opacities;
 DeviceVector<float3> g1_features_dc, g2_features_dc;
 DeviceTensor2D<float3> g1_features_sh, g2_features_sh;       // when !quantize
-DeviceTensor2D<uchar3> g1_features_sh_q, g2_features_sh_q;   // when quantize
+// When quantize: joint (u, sqrt(g2)) packed Adam state for SH features.
+// One thread-block worth of SH cells (BLOCK_SIZE splats * K coeffs * 3 ch)
+// shares a single float4 bounds slot; codec primitives live on the class.
+QuantizedAdamState<8, 256> sh_quant_state;
 
 // Training aux (pool-backed)
 DeviceVector<float> radii;                     // [max_N]
 DeviceVector<float2> accum_buffer;             // [max_N]
-DeviceVector<float4> quant_bounds_sh;          // [n_blocks]
 DeviceVector<int32_t> bias_correction_steps;   // [max_N], or empty
 bool use_per_splat_bias_correction = false;
 
@@ -148,8 +150,7 @@ bool use_per_splat_bias_correction = false;
 DeviceTensor5D<float> bilagrid_rgb_grids;   // [N_cam, L, H, W, C_rgb]
 DeviceTensor5D<float> bilagrid_rgb_image_grad;  // [C_batch, L, H, W, C_rgb] (sparse over cams)
 DeviceTensor5D<float> bilagrid_rgb_g1, bilagrid_rgb_g2;        // float (when !quantize)
-DeviceVector<uint8_t> bilagrid_rgb_g1_q, bilagrid_rgb_g2_q;    // uint8 (when quantize)
-DeviceVector<float4>  bilagrid_rgb_quant_bounds;               // [n_blocks], used when quantize
+QuantizedAdamState<8, 256> bilagrid_rgb_quant_state;           // when quantize
 bool bilagrid_rgb_quantize_optim = false;
 DeviceTensor3D<float3> fwd_rgb_pre_bilagrid; // [C, H, W]
 std::string bilagrid_rgb_type;               // "affine" | "ppisp" | "loglinear"
@@ -161,8 +162,7 @@ bool bilagrid_rgb_optim_initialized = false;
 DeviceTensor5D<float> bilagrid_depth_grids;  // [N_cam, L, H, W, 2]
 DeviceTensor5D<float> bilagrid_depth_image_grad;
 DeviceTensor5D<float> bilagrid_depth_g1, bilagrid_depth_g2;
-DeviceVector<uint8_t> bilagrid_depth_g1_q, bilagrid_depth_g2_q;
-DeviceVector<float4>  bilagrid_depth_quant_bounds;
+QuantizedAdamState<8, 256> bilagrid_depth_quant_state;
 bool bilagrid_depth_quantize_optim = false;
 DeviceTensor3D<float> fwd_depth_pre_bilagrid;
 DeviceVector<float> bilagrid_depth_scalars;  // [C], median-quantile of gt_depth
@@ -173,8 +173,7 @@ bool bilagrid_depth_optim_initialized = false;
 DeviceTensor5D<float> bilagrid_normal_grids; // [N_cam, L, H, W, 3]
 DeviceTensor5D<float> bilagrid_normal_image_grad;
 DeviceTensor5D<float> bilagrid_normal_g1, bilagrid_normal_g2;
-DeviceVector<uint8_t> bilagrid_normal_g1_q, bilagrid_normal_g2_q;
-DeviceVector<float4>  bilagrid_normal_quant_bounds;
+QuantizedAdamState<8, 256> bilagrid_normal_quant_state;
 bool bilagrid_normal_quantize_optim = false;
 DeviceTensor3D<float3> fwd_normal_pre_bilagrid;
 bool bilagrid_normal_enabled = false;
@@ -897,9 +896,7 @@ static void _ensure_optim_state(bool quantize_sh, bool use_per_splat_bias_correc
     Buffers::g1_scales.resize("eng.g1_scales", N);
     Buffers::g1_opacities.resize("eng.g1_opacities", N);
     Buffers::g1_features_dc.resize("eng.g1_features_dc", N);
-    if (quantize_sh)
-        Buffers::g1_features_sh_q.resize("eng.g1_features_sh", N, K);
-    else
+    if (!quantize_sh)
         Buffers::g1_features_sh.resize("eng.g1_features_sh", N, K);
 
     // g2 (exp_avg_sq)
@@ -908,9 +905,7 @@ static void _ensure_optim_state(bool quantize_sh, bool use_per_splat_bias_correc
     Buffers::g2_scales.resize("eng.g2_scales", N);
     Buffers::g2_opacities.resize("eng.g2_opacities", N);
     Buffers::g2_features_dc.resize("eng.g2_features_dc", N);
-    if (quantize_sh)
-        Buffers::g2_features_sh_q.resize("eng.g2_features_sh", N, K);
-    else
+    if (!quantize_sh)
         Buffers::g2_features_sh.resize("eng.g2_features_sh", N, K);
 
     // radii [max_N]
@@ -919,13 +914,15 @@ static void _ensure_optim_state(bool quantize_sh, bool use_per_splat_bias_correc
     // accum_buffer [max_N]
     Buffers::accum_buffer.resize("eng.accum_buffer", N);
 
-    // quant_bounds_sh
+    // Joint (u, sqrt(g2)) Adam state for SH features. The engine optim path
+    // uses Optimizer.cu's fused_adam_with_steps_8bit_kernel which launches
+    // one thread per cell (= per (splat, coef, channel)), grouped 256 threads
+    // per CUDA block. So one float4 bounds slot covers 256 contiguous cells.
     if (quantize_sh) {
-        int64_t sh_numel = N * K * 3;
-        int64_t n_blocks = (sh_numel + 255) / 256;
-        Buffers::quant_bounds_sh.resize("eng.quant_bounds_sh", n_blocks);
-    } else {
-        Buffers::quant_bounds_sh = DeviceVector<float4>();
+        constexpr int64_t BLOCK_SIZE = QuantizedAdamState<8, 256>::kBlockSize;
+        int64_t sh_cells = (int64_t)N * K * 3;
+        int64_t sh_bounds = (sh_cells + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        Buffers::sh_quant_state.resize("eng.sh_quant", sh_cells, sh_bounds);
     }
 
     // bias_correction_steps
@@ -943,28 +940,15 @@ static void _ensure_optim_state(bool quantize_sh, bool use_per_splat_bias_correc
     Buffers::g1_opacities.zero();   Buffers::g2_opacities.zero();
     Buffers::g1_features_dc.zero(); Buffers::g2_features_dc.zero();
     if (quantize_sh) {
-        Buffers::g1_features_sh_q.zero();
-        Buffers::g2_features_sh_q.zero();
+        Buffers::sh_quant_state.zero();
     } else {
         Buffers::g1_features_sh.zero();
         Buffers::g2_features_sh.zero();
     }
     Buffers::accum_buffer.zero();
-    if (Buffers::quant_bounds_sh.data_ptr())
-        Buffers::quant_bounds_sh.zero();
     Buffers::bias_correction_steps.zero();
 
     Buffers::optim_initialized = true;
-}
-
-// Helpers to get features_sh g1/g2 as TorchTensorView (handles quantize_sh variant)
-static TorchTensorView _g1_sh_tv() {
-    return Buffers::train_quantize_sh ? _dt2d_tv(Buffers::g1_features_sh_q)
-                                       : _dt2d_tv(Buffers::g1_features_sh);
-}
-static TorchTensorView _g2_sh_tv() {
-    return Buffers::train_quantize_sh ? _dt2d_tv(Buffers::g2_features_sh_q)
-                                       : _dt2d_tv(Buffers::g2_features_sh);
 }
 
 
@@ -1624,11 +1608,9 @@ static void _engine_bilagrid_backward_hook(
 // since its size depends on the current batch size.
 static void _ensure_bilagrid_optim_state() {
     auto setup = [](DeviceTensor5D<float>& grids,
-                    DeviceTensor5D<float>& g1,         // used when !quantize
-                    DeviceTensor5D<float>& g2,         // used when !quantize
-                    DeviceVector<uint8_t>& g1_q,       // used when quantize
-                    DeviceVector<uint8_t>& g2_q,       // used when quantize
-                    DeviceVector<float4>& quant_bounds,
+                    DeviceTensor5D<float>& g1,                 // used when !quantize
+                    DeviceTensor5D<float>& g2,                 // used when !quantize
+                    QuantizedAdamState<8, 256>& quant_state,   // used when quantize
                     bool quantize_optim,
                     const std::string& key_prefix,
                     bool& done) {
@@ -1638,14 +1620,10 @@ static void _ensure_bilagrid_optim_state() {
         int64_t C = grids.size<4>();
         int64_t numel = N * L * H * W * C;
         if (quantize_optim) {
-            g1_q.resize(key_prefix + ".g1_q", (size_t)numel);
-            g1_q.zero();
-            g2_q.resize(key_prefix + ".g2_q", (size_t)numel);
-            g2_q.zero();
-            constexpr int64_t BLOCK_SIZE = 256;
+            constexpr int64_t BLOCK_SIZE = QuantizedAdamState<8, 256>::kBlockSize;
             int64_t n_blocks = (numel + BLOCK_SIZE - 1) / BLOCK_SIZE;
-            quant_bounds.resize(key_prefix + ".quant_bounds", (size_t)n_blocks);
-            quant_bounds.zero();
+            quant_state.resize(key_prefix + ".bg_quant", numel, n_blocks);
+            quant_state.zero();
         } else {
             g1.resize(key_prefix + ".g1", N, L, H, W, C);
             g1.zero();
@@ -1657,24 +1635,21 @@ static void _ensure_bilagrid_optim_state() {
     if (Buffers::bilagrid_rgb_enabled) {
         setup(Buffers::bilagrid_rgb_grids,
               Buffers::bilagrid_rgb_g1, Buffers::bilagrid_rgb_g2,
-              Buffers::bilagrid_rgb_g1_q, Buffers::bilagrid_rgb_g2_q,
-              Buffers::bilagrid_rgb_quant_bounds,
+              Buffers::bilagrid_rgb_quant_state,
               Buffers::bilagrid_rgb_quantize_optim,
               "eng.bg.rgb", Buffers::bilagrid_rgb_optim_initialized);
     }
     if (Buffers::bilagrid_depth_enabled) {
         setup(Buffers::bilagrid_depth_grids,
               Buffers::bilagrid_depth_g1, Buffers::bilagrid_depth_g2,
-              Buffers::bilagrid_depth_g1_q, Buffers::bilagrid_depth_g2_q,
-              Buffers::bilagrid_depth_quant_bounds,
+              Buffers::bilagrid_depth_quant_state,
               Buffers::bilagrid_depth_quantize_optim,
               "eng.bg.depth", Buffers::bilagrid_depth_optim_initialized);
     }
     if (Buffers::bilagrid_normal_enabled) {
         setup(Buffers::bilagrid_normal_grids,
               Buffers::bilagrid_normal_g1, Buffers::bilagrid_normal_g2,
-              Buffers::bilagrid_normal_g1_q, Buffers::bilagrid_normal_g2_q,
-              Buffers::bilagrid_normal_quant_bounds,
+              Buffers::bilagrid_normal_quant_state,
               Buffers::bilagrid_normal_quantize_optim,
               "eng.bg.normal", Buffers::bilagrid_normal_optim_initialized);
     }
@@ -1728,9 +1703,7 @@ void engine_bilagrid_optim_step(
                    DeviceTensor5D<float>& image_grad,
                    DeviceTensor5D<float>& g1,
                    DeviceTensor5D<float>& g2,
-                   DeviceVector<uint8_t>& g1_q,
-                   DeviceVector<uint8_t>& g2_q,
-                   DeviceVector<float4>& quant_bounds,
+                   QuantizedAdamState<8, 256>& quant_state,
                    bool quantize_optim,
                    float lr, float tv_weight) {
         if (grids.data_ptr() == nullptr || lr <= 0.0f) return;
@@ -1742,9 +1715,8 @@ void engine_bilagrid_optim_step(
             grids.data_ptr(),
             quantize_optim ? nullptr : g1.data_ptr(),
             quantize_optim ? nullptr : g2.data_ptr(),
-            quantize_optim ? g1_q.data_ptr() : nullptr,
-            quantize_optim ? g2_q.data_ptr() : nullptr,
-            quantize_optim ? quant_bounds.data_ptr() : nullptr,
+            quantize_optim ? quant_state.packed_ptr() : nullptr,
+            quantize_optim ? quant_state.bounds_ptr() : nullptr,
             image_grad.data_ptr(),
             cam_idx_dev,
             N, C_batch, C, L, H, W,
@@ -1754,18 +1726,15 @@ void engine_bilagrid_optim_step(
 
     run(Buffers::bilagrid_rgb_grids, Buffers::bilagrid_rgb_image_grad,
         Buffers::bilagrid_rgb_g1, Buffers::bilagrid_rgb_g2,
-        Buffers::bilagrid_rgb_g1_q, Buffers::bilagrid_rgb_g2_q,
-        Buffers::bilagrid_rgb_quant_bounds, Buffers::bilagrid_rgb_quantize_optim,
+        Buffers::bilagrid_rgb_quant_state, Buffers::bilagrid_rgb_quantize_optim,
         lr_rgb, tv_weight_rgb);
     run(Buffers::bilagrid_depth_grids, Buffers::bilagrid_depth_image_grad,
         Buffers::bilagrid_depth_g1, Buffers::bilagrid_depth_g2,
-        Buffers::bilagrid_depth_g1_q, Buffers::bilagrid_depth_g2_q,
-        Buffers::bilagrid_depth_quant_bounds, Buffers::bilagrid_depth_quantize_optim,
+        Buffers::bilagrid_depth_quant_state, Buffers::bilagrid_depth_quantize_optim,
         lr_depth, tv_weight_depth);
     run(Buffers::bilagrid_normal_grids, Buffers::bilagrid_normal_image_grad,
         Buffers::bilagrid_normal_g1, Buffers::bilagrid_normal_g2,
-        Buffers::bilagrid_normal_g1_q, Buffers::bilagrid_normal_g2_q,
-        Buffers::bilagrid_normal_quant_bounds, Buffers::bilagrid_normal_quantize_optim,
+        Buffers::bilagrid_normal_quant_state, Buffers::bilagrid_normal_quantize_optim,
         lr_normal, tv_weight_normal);
 }
 
@@ -2076,13 +2045,12 @@ void engine_optim_step(
         lr_features_dc, step + 1, per_splat_steps,
         sh_reg_weight, 0.5f / 0.28209479177387814f);
 
-    if (quantize_sh && Buffers::quant_bounds_sh.data_ptr()) {
+    if (quantize_sh && Buffers::sh_quant_state.initialized()) {
         fused_adam_step_8bit(N,
             DeviceTensorFloatND(Buffers::world_features_sh),
             DeviceTensorFloatND(Buffers::grad_features_sh),
-            (uint8_t*)Buffers::g1_features_sh_q.data_ptr(),
-            (uint8_t*)Buffers::g2_features_sh_q.data_ptr(),
-            Buffers::quant_bounds_sh.data_ptr(),
+            Buffers::sh_quant_state.packed_ptr(),
+            Buffers::sh_quant_state.bounds_ptr(),
             lr_features_sh, step + 1, per_splat_steps,
             sh_reg_weight, 0.0f);
     } else {
@@ -2178,11 +2146,17 @@ int engine_densify_step(
     DeviceVector<float3> dv_g1_features_sh, dv_g2_features_sh;
     int64_t sh_flat = (int64_t)Buffers::max_num_splats * (int64_t)Buffers::num_sh;
     if (quantize_sh) {
-        // Quantized: storage is uchar3 N*K elements (3 bytes each), shape [N*K, 12], element_size=1
-        TorchTensorView tv1((uint64_t)Buffers::g1_features_sh_q.data_ptr(), 1, {sh_flat, 12LL});
-        TorchTensorView tv2((uint64_t)Buffers::g2_features_sh_q.data_ptr(), 1, {sh_flat, 12LL});
-        dv_g1_features_sh = DeviceVector<float3>(tv1);
-        dv_g2_features_sh = DeviceVector<float3>(tv2);
+        // Joint (u, sqrt(g2)) AoS layout: bytes for both halves of every cell
+        // sit in a single packed buffer. Densify only zeros bytes on dst
+        // splats, so we pass the same packed pointer for both the g1 and g2
+        // wrappers; the kernel template is instantiated with `short3` (6 bytes
+        // per SH coef = 3 channels x 2 bytes), so each write zeros the joint
+        // (u, sqrt_g2) record for one (splat, coef). The second write
+        // (g2_features_sh[i] = 0) targets the same memory and is a no-op.
+        uint8_t* packed = Buffers::sh_quant_state.packed_ptr();
+        TorchTensorView tv((uint64_t)packed, 1, {sh_flat, 12LL});
+        dv_g1_features_sh = DeviceVector<float3>(tv);
+        dv_g2_features_sh = DeviceVector<float3>(tv);
     } else {
         // Non-quantized: storage is float3 N*K elements (12 bytes each), shape [N*K, 3], element_size=4
         TorchTensorView tv1((uint64_t)Buffers::g1_features_sh.data_ptr(), 4, {sh_flat, 3LL});
@@ -2660,6 +2634,15 @@ void engine_save_checkpoint(
         meta << "image_height=" << image_height << "\n";
         meta << "camera_model=" << camera_model_str << "\n";
         meta << "train_quantize_sh=" << (train_quantize_sh ? 1 : 0) << "\n";
+        // QuantizedAdamState codec signature — tells offline tools which
+        // byte-to-(g1, g2) inverse to use when reading the *_packed.npy
+        // streams. Currently every quantized buffer (SH + bilagrid) uses the
+        // same scheme: 8-bit AoS, 256-cell blocks, joint (u, log_s) primitives
+        // with u linear and log_s = log1p(sqrt_g2 / eps), eps = 1e-15.
+        meta << "quant_codec=joint_u_log_sqrt_g2_v1\n";
+        meta << "quant_bits=8\n";
+        meta << "quant_block_size=256\n";
+        meta << "quant_eps=1e-15\n";
         meta << "use_per_splat_bias_correction=" << (use_per_splat_bias_correction ? 1 : 0) << "\n";
         meta << "ply_kept=" << kept << "\n";
         meta << "ply_nan_dropped=" << nan_dropped << "\n";
@@ -2771,9 +2754,11 @@ void engine_save_checkpoint(
     save_dv_f3("g1_features_dc.npy",  g1_features_dc);
     save_dv_f3("g2_features_dc.npy",  g2_features_dc);
     if (train_quantize_sh) {
-        save_dt2d_uc3("g1_features_sh_q.npy", g1_features_sh_q);
-        save_dt2d_uc3("g2_features_sh_q.npy", g2_features_sh_q);
-        save_dv_f4("quant_bounds_sh.npy", quant_bounds_sh);
+        // Joint (u, sqrt_g2) AoS: single packed byte stream + per-block bounds.
+        if (sh_quant_state.packed.data_ptr())
+            save_dv_u8("sh_quant_packed.npy", sh_quant_state.packed);
+        if (sh_quant_state.bounds.data_ptr())
+            save_dv_f4("sh_quant_bounds.npy", sh_quant_state.bounds);
     } else {
         save_dt2d_f3("g1_features_sh.npy", g1_features_sh);
         save_dt2d_f3("g2_features_sh.npy", g2_features_sh);
@@ -2799,15 +2784,13 @@ void engine_save_checkpoint(
                              const DeviceTensor5D<float>& grids,
                              const DeviceTensor5D<float>& g1_f,
                              const DeviceTensor5D<float>& g2_f,
-                             const DeviceVector<uint8_t>& g1_q,
-                             const DeviceVector<uint8_t>& g2_q,
-                             const DeviceVector<float4>& bounds) {
+                             const QuantizedAdamState<8, 256>& quant_state) {
         if (!enabled) return;
         save_5d((std::string(prefix) + ".npy").c_str(), grids);
         if (quantize) {
-            save_dv_u8((std::string(prefix) + "_g1_q.npy").c_str(), g1_q);
-            save_dv_u8((std::string(prefix) + "_g2_q.npy").c_str(), g2_q);
-            save_dv_f4((std::string(prefix) + "_quant_bounds.npy").c_str(), bounds);
+            // AoS packed (u, sqrt_g2) byte stream + per-block bounds.
+            save_dv_u8((std::string(prefix) + "_packed.npy").c_str(), quant_state.packed);
+            save_dv_f4((std::string(prefix) + "_quant_bounds.npy").c_str(), quant_state.bounds);
         } else {
             save_5d((std::string(prefix) + "_g1.npy").c_str(), g1_f);
             save_5d((std::string(prefix) + "_g2.npy").c_str(), g2_f);
@@ -2815,16 +2798,16 @@ void engine_save_checkpoint(
     };
     save_bilagrid("bilagrid_rgb",   bilagrid_rgb_enabled,   bilagrid_rgb_quantize_optim,
                   bilagrid_rgb_grids, bilagrid_rgb_g1, bilagrid_rgb_g2,
-                  bilagrid_rgb_g1_q, bilagrid_rgb_g2_q, bilagrid_rgb_quant_bounds);
+                  bilagrid_rgb_quant_state);
     save_bilagrid("bilagrid_depth", bilagrid_depth_enabled, bilagrid_depth_quantize_optim,
                   bilagrid_depth_grids, bilagrid_depth_g1, bilagrid_depth_g2,
-                  bilagrid_depth_g1_q, bilagrid_depth_g2_q, bilagrid_depth_quant_bounds);
+                  bilagrid_depth_quant_state);
     if (bilagrid_depth_enabled) {
         save_dv_f1("bilagrid_depth_scalars.npy", bilagrid_depth_scalars);
     }
     save_bilagrid("bilagrid_normal", bilagrid_normal_enabled, bilagrid_normal_quantize_optim,
                   bilagrid_normal_grids, bilagrid_normal_g1, bilagrid_normal_g2,
-                  bilagrid_normal_g1_q, bilagrid_normal_g2_q, bilagrid_normal_quant_bounds);
+                  bilagrid_normal_quant_state);
 
     // PPISP table + Adam moments.
     if (ppisp_enabled) {

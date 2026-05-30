@@ -90,8 +90,7 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     // optimizer states
     typename SplatPrimitive::WorldBuffer g1_splats_world,
     typename SplatPrimitive::WorldBuffer g2_splats_world,
-    const uint8_t* __restrict__ g1_features_sh,
-    const uint8_t* __restrict__ g2_features_sh,
+    const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
     float4* __restrict__ sh_quant_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
@@ -359,17 +358,13 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
             g2_sh_ptr[i] = g2_feature_sh;
         }
     } else if constexpr (num_sh > 0) {
-        // Joint (u, sqrt(g2)) quantization for SH momentum:
-        //   g1_features_sh bytes store u = g1 / (sqrt(g2) + eps)
-        //   g2_features_sh bytes store sqrt(g2)
-        //   sh_quant_bounds.{xy} = (u_min, u_max)
-        //   sh_quant_bounds.{zw} = (sqrt_g2_min, sqrt_g2_max)
-        // Reconstruct ordinary (g1, g2) at decode so the Adam math below is
-        // unchanged.
-        const uchar3* g1_sh_ptr = reinterpret_cast<const uchar3*>(g1_features_sh + 3 * num_sh * gid);
-        const uchar3* g2_sh_ptr = reinterpret_cast<const uchar3*>(g2_features_sh + 3 * num_sh * gid);
-        uchar3* g1_sh_out_ptr = reinterpret_cast<uchar3*>(const_cast<uint8_t*>(g1_features_sh + 3 * num_sh * gid));
-        uchar3* g2_sh_out_ptr = reinterpret_cast<uchar3*>(const_cast<uint8_t*>(g2_features_sh + 3 * num_sh * gid));
+        // Joint (u, sqrt(g2)) AoS quantization for SH momentum, via the shared
+        // QuantizedAdamState codec. Each cell = one (splat, coef, channel)
+        // triple holds 2 bytes (u, sqrt_g2). The codec dequantizes and rebuilds
+        // ordinary (g1, g2) so the Adam math below is unchanged.
+        using SHQState = QuantizedAdamState<8, BLOCK_SIZE>;
+        const int64_t sh_base = (int64_t)3 * num_sh * gid;
+        uint8_t* sh_packed_rw = const_cast<uint8_t*>(sh_packed);
         float4 quant_bounds = sh_quant_bounds[blockIdx.x];
         float4 mm = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
 
@@ -379,42 +374,12 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     if (inside) {
         #pragma unroll
         for (int j = 0; j < num_sh; ++j) {
-            const uchar3 g1_bytes = g1_sh_ptr[j];   // holds u
-            const uchar3 g2_bytes = g2_sh_ptr[j];   // holds sqrt(g2)
-            // Endpoint-exact decode (q/255, not (q+0.5)/256): values at the
-            // block extremes lo / hi round-trip exactly, eliminating the
-            // phantom-update bias that pushed every "should-be-zero" SH
-            // momentum cell to a small non-zero value.
-            float3 u_norm = make_float3(
-                (float)g1_bytes.x * (1.0f / 255.0f),
-                (float)g1_bytes.y * (1.0f / 255.0f),
-                (float)g1_bytes.z * (1.0f / 255.0f)
-            );
-            float3 u_val = make_float3(
-                quant_bounds.x + (quant_bounds.y - quant_bounds.x) * u_norm.x,
-                quant_bounds.x + (quant_bounds.y - quant_bounds.x) * u_norm.y,
-                quant_bounds.x + (quant_bounds.y - quant_bounds.x) * u_norm.z
-            );
-            float3 s_norm = make_float3(
-                (float)g2_bytes.x * (1.0f / 255.0f),
-                (float)g2_bytes.y * (1.0f / 255.0f),
-                (float)g2_bytes.z * (1.0f / 255.0f)
-            );
-            float3 sqrt_g2_in = make_float3(
-                quant_bounds.z + (quant_bounds.w - quant_bounds.z) * s_norm.x,
-                quant_bounds.z + (quant_bounds.w - quant_bounds.z) * s_norm.y,
-                quant_bounds.z + (quant_bounds.w - quant_bounds.z) * s_norm.z
-            );
-            float3 g2_feature_sh = make_float3(
-                sqrt_g2_in.x * sqrt_g2_in.x,
-                sqrt_g2_in.y * sqrt_g2_in.y,
-                sqrt_g2_in.z * sqrt_g2_in.z
-            );
-            float3 g1_feature_sh = make_float3(
-                u_val.x * (sqrt_g2_in.x + eps),
-                u_val.y * (sqrt_g2_in.y + eps),
-                u_val.z * (sqrt_g2_in.z + eps)
-            );
+            // Decode each of the 3 channels via the codec.
+            float2 g1g2_x = SHQState::decode_g1g2(sh_packed, sh_base + 3*j + 0, quant_bounds);
+            float2 g1g2_y = SHQState::decode_g1g2(sh_packed, sh_base + 3*j + 1, quant_bounds);
+            float2 g1g2_z = SHQState::decode_g1g2(sh_packed, sh_base + 3*j + 2, quant_bounds);
+            float3 g1_feature_sh = make_float3(g1g2_x.x, g1g2_y.x, g1g2_z.x);
+            float3 g2_feature_sh = make_float3(g1g2_x.y, g1g2_y.y, g1g2_z.y);
 
             float3 sh_coeff = make_float3(sh_ptr[3*j], sh_ptr[3*j+1], sh_ptr[3*j+2]);
             float3 v_sh_coeff = make_float3(
@@ -437,25 +402,14 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
             g1_sh_vals[j] = g1_updated;
             g2_sh_vals[j] = g2_updated;
 
-            // Reduce min/max in the (u, sqrt(g2)) basis.
-            float3 sqrt_g2_out = make_float3(sqrtf(g2_updated.x), sqrtf(g2_updated.y), sqrtf(g2_updated.z));
-            float3 u_out = make_float3(
-                g1_updated.x / (sqrt_g2_out.x + eps),
-                g1_updated.y / (sqrt_g2_out.y + eps),
-                g1_updated.z / (sqrt_g2_out.z + eps)
-            );
-            mm.x = fminf(mm.x, u_out.x);
-            mm.y = fmaxf(mm.y, u_out.x);
-            mm.x = fminf(mm.x, u_out.y);
-            mm.y = fmaxf(mm.y, u_out.y);
-            mm.x = fminf(mm.x, u_out.z);
-            mm.y = fmaxf(mm.y, u_out.z);
-            mm.z = fminf(mm.z, sqrt_g2_out.x);
-            mm.w = fmaxf(mm.w, sqrt_g2_out.x);
-            mm.z = fminf(mm.z, sqrt_g2_out.y);
-            mm.w = fmaxf(mm.w, sqrt_g2_out.y);
-            mm.z = fminf(mm.z, sqrt_g2_out.z);
-            mm.w = fmaxf(mm.w, sqrt_g2_out.z);
+            // Reduce min/max in the (u, sqrt(g2)) basis (codec helper).
+            float2 us_x = SHQState::g1g2_to_us(g1_updated.x, g2_updated.x);
+            float2 us_y = SHQState::g1g2_to_us(g1_updated.y, g2_updated.y);
+            float2 us_z = SHQState::g1g2_to_us(g1_updated.z, g2_updated.z);
+            mm.x = fminf(fminf(fminf(mm.x, us_x.x), us_y.x), us_z.x);
+            mm.y = fmaxf(fmaxf(fmaxf(mm.y, us_x.x), us_y.x), us_z.x);
+            mm.z = fminf(fminf(fminf(mm.z, us_x.y), us_y.y), us_z.y);
+            mm.w = fmaxf(fmaxf(fmaxf(mm.w, us_x.y), us_y.y), us_z.y);
         }
     }  // inside
 
@@ -480,38 +434,20 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
         __syncthreads();
         mm = shared_reduce[threadIdx.x / WARP_SIZE];
 
-        float u_range = fmaxf(mm.y - mm.x, eps);
-        float s_range = fmaxf(mm.w - mm.z, eps);
         if (threadIdx.x == 0)
             sh_quant_bounds[blockIdx.x] = mm;
 
         if (!inside)
             return;
 
-        // Write the (u, sqrt(g2)) bytes per SH coefficient.
+        // Re-encode the new Adam state via the codec.
         #pragma unroll
         for (int j = 0; j < num_sh; ++j) {
-            float3 g1_updated      = g1_sh_vals[j];
-            float3 sqrt_g2_updated = make_float3(sqrtf(g2_sh_vals[j].x), sqrtf(g2_sh_vals[j].y), sqrtf(g2_sh_vals[j].z));
-            float3 u_out = make_float3(
-                g1_updated.x / (sqrt_g2_updated.x + eps),
-                g1_updated.y / (sqrt_g2_updated.y + eps),
-                g1_updated.z / (sqrt_g2_updated.z + eps)
-            );
-            // Endpoint-exact encode: round-to-nearest over 256 levels with
-            // lo / hi both exactly representable.
-            uchar3 g1_bytes = make_uchar3(
-                (uint8_t)fminf(fmaxf(roundf(255.0f * (u_out.x - mm.x) / u_range), 0.0f), 255.0f),
-                (uint8_t)fminf(fmaxf(roundf(255.0f * (u_out.y - mm.x) / u_range), 0.0f), 255.0f),
-                (uint8_t)fminf(fmaxf(roundf(255.0f * (u_out.z - mm.x) / u_range), 0.0f), 255.0f)
-            );
-            uchar3 g2_bytes = make_uchar3(
-                (uint8_t)fminf(fmaxf(roundf(255.0f * (sqrt_g2_updated.x - mm.z) / s_range), 0.0f), 255.0f),
-                (uint8_t)fminf(fmaxf(roundf(255.0f * (sqrt_g2_updated.y - mm.z) / s_range), 0.0f), 255.0f),
-                (uint8_t)fminf(fmaxf(roundf(255.0f * (sqrt_g2_updated.z - mm.z) / s_range), 0.0f), 255.0f)
-            );
-            g1_sh_out_ptr[j] = g1_bytes;
-            g2_sh_out_ptr[j] = g2_bytes;
+            float3 g1_upd = g1_sh_vals[j];
+            float3 g2_upd = g2_sh_vals[j];
+            SHQState::encode_g1g2(sh_packed_rw, sh_base + 3*j + 0, g1_upd.x, g2_upd.x, mm);
+            SHQState::encode_g1g2(sh_packed_rw, sh_base + 3*j + 1, g1_upd.y, g2_upd.y, mm);
+            SHQState::encode_g1g2(sh_packed_rw, sh_base + 3*j + 2, g1_upd.z, g2_upd.z, mm);
         }
     }
 }
@@ -547,8 +483,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     // optimizer states
     typename SplatPrimitive::WorldBuffer g1_splats_world,
     typename SplatPrimitive::WorldBuffer g2_splats_world,
-    const uint8_t* __restrict__ g1_features_sh,
-    const uint8_t* __restrict__ g2_features_sh,
+    const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
     float4* __restrict__ sh_quant_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
@@ -570,7 +505,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     const int32_t scalar_step,
     const int32_t* __restrict__ steps
 ) {
-    bool use_quant = (g1_features_sh != nullptr && g2_features_sh != nullptr && sh_quant_bounds != nullptr);
+    bool use_quant = (sh_packed != nullptr && sh_quant_bounds != nullptr);
     constexpr int BLOCK_SIZE = 256;
 
     (use_quant ? fused_projection_bwd_optimizer_3dgs_kernel<
@@ -582,7 +517,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
         splats_world, viewmats, intrins, dist_coeffs_buffer, image_width, image_height,
         camera_id_bounds, camera_ids, aabb,
         v_splats_world, vr_splats_world, h_splats_world, v_splats_screen, vr_splats_screen, h_splats_screen,
-        g1_splats_world, g2_splats_world, g1_features_sh, g2_features_sh, sh_quant_bounds, //v_viewmats,
+        g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds, //v_viewmats,
         radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc, lr_features_sh,
         max_gauss_ratio,
         scale_regularization_weight / (float)N,

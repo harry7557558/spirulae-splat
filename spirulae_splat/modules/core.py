@@ -858,12 +858,16 @@ class Renderer:
 
         g_optim = [
             [*self.g1_splats_world], [*self.g2_splats_world],
-            None, None, None
+            None,  # sh_packed (AoS joint (u, sqrt_g2) bytes when quantize)
+            None,  # sh_quant_bounds
         ]
         if self.quantize_sh_optim:
-            g_optim[0][-1], g_optim[2] = None, g_optim[0][-1]
-            g_optim[1][-1], g_optim[3] = None, g_optim[1][-1]
-            g_optim[4] = self.quant_bounds_sh  # TODO: we don't need that many elements in this case
+            # Legacy non-engine path doesn't materialize sh_packed; engine
+            # training path uses the C++ QuantizedAdamState class directly.
+            g_optim[0][-1] = None
+            g_optim[1][-1] = None
+            g_optim[2] = self.sh_packed if hasattr(self, "sh_packed") else None
+            g_optim[3] = self.quant_bounds_sh
 
         _make_lazy_cuda_func(f"fused_projection_bwd_optimizer_{self.primitive}")(
             self.cur_num_splats,

@@ -45,8 +45,7 @@ void fused_projection_bwd_optimizer_3dgut(
     // optimizer states
     const std::vector<DeviceTensorFloatND> g1_splats_world,
     const std::vector<DeviceTensorFloatND> g2_splats_world,
-    const std::optional<TorchTensorView> g1_features_sh,
-    const std::optional<TorchTensorView> g2_features_sh,
+    const std::optional<TorchTensorView> sh_packed,         // AoS packed SH state
     const std::optional<TorchTensorView> sh_quant_bounds,
     // optimizer params
     DeviceVector<float> radii,

@@ -115,13 +115,25 @@ class Field:
     dtype: str = ""
 
 
-def _maybe_reshape_bilagrid(name: str, arr: np.ndarray, meta: dict) -> np.ndarray:
-    """When the on-disk array is a flat uint8 (the case for the *_g{1,2}_q.npy
-    quantized bilagrid buffers), re-impose the (N_cam, L, H, W, C) shape using
-    metadata so structural plots and axis permutations apply. Channel-last
-    layout matches the on-device storage; C is the innermost axis."""
+def _maybe_reshape_buffer(name: str, arr: np.ndarray, meta: dict) -> np.ndarray:
+    """When the on-disk array is a flat 1D float (the case after decoding a
+    packed AoS bilagrid or SH momentum buffer), re-impose the buffer's
+    natural multi-dim shape using metadata so structural plots and axis
+    permutations apply."""
     if arr.ndim != 1:
         return arr
+    # SH momentum: shape (N_splats, K, 3) — channel last.
+    if name.startswith("g1_features_sh") or name.startswith("g2_features_sh"):
+        try:
+            K = int(meta["num_sh"])
+            N = int(meta.get("cur_num_splats", meta.get("max_num_splats", 0)))
+            if K > 0 and arr.size % (K * 3) == 0:
+                N = arr.size // (K * 3)
+                return arr.reshape(N, K, 3)
+        except (KeyError, ValueError):
+            pass
+        return arr
+    # Bilagrid grids: shape (N_cam, L, H, W, C).
     if name.startswith("bilagrid_rgb"):
         prefix = "bilagrid_rgb"
     elif name.startswith("bilagrid_depth"):
@@ -147,14 +159,96 @@ def _maybe_reshape_bilagrid(name: str, arr: np.ndarray, meta: dict) -> np.ndarra
         return arr
 
 
+# Backwards-compat alias kept for callers that referenced the older name.
+_maybe_reshape_bilagrid = _maybe_reshape_buffer
+
+
+# ---------------------------------------------------------------------------
+# Joint AoS packed dequantizer.
+#
+# Two codecs share the same on-disk layout (one AoS uint8 stream + one float4
+# bounds array per 256-cell block); the meta.txt `quant_codec` tag picks the
+# inverse map for the second half:
+#
+#   joint_u_sqrt_g2_v0   — legacy: both halves linearly quantized in raw units.
+#                          u       = u_lo + (u_hi - u_lo) * u_q / 255
+#                          sqrt_g2 = s_lo + (s_hi - s_lo) * s_q / 255
+#
+#   joint_u_log_sqrt_g2_v1 — current: u linear, sqrt_g2 = eps · expm1(log_s).
+#                          The packed `s_q` byte encodes `log_s` linearly within
+#                          the (log-space) per-block bounds. This is what
+#                          QuantizedAdamState's forward_sqrt_g2 / inverse_sqrt_g2
+#                          do on-device. Buys ~20–30 dB of post-step SNR(u_next)
+#                          over the linear variant at no storage cost — see the
+#                          per-pair table in the report's joint-pair section.
+#
+# In both cases the reconstructed Adam state is
+#   g2 = sqrt_g2 ** 2
+#   g1 = u * (sqrt_g2 + eps)
+# matching the on-device decoder.
+# ---------------------------------------------------------------------------
+
+JOINT_AOS_EPS = 1e-15
+
+QUANT_CODEC_LINEAR = "joint_u_sqrt_g2_v0"          # legacy linear sqrt_g2
+QUANT_CODEC_LOG    = "joint_u_log_sqrt_g2_v1"      # current log_pos sqrt_g2
+
+
+def _dequant_packed_aos(packed: np.ndarray, bounds: np.ndarray,
+                         eps: float = JOINT_AOS_EPS,
+                         codec: str = QUANT_CODEC_LOG,
+                         ) -> tuple[np.ndarray, np.ndarray]:
+    """Decode a joint AoS-packed uint8 buffer into (g1, g2). `codec` picks
+    the inverse map for the sqrt_g2 half."""
+    flat_u8 = packed.reshape(-1)
+    n = flat_u8.size
+    if n % 2 != 0:
+        raise ValueError(f"packed size {n} not even — expected interleaved bytes")
+    n_cells = n // 2
+    nb = (n_cells + BLOCK_SIZE - 1) // BLOCK_SIZE
+    if bounds.shape[0] != nb:
+        raise ValueError(f"bounds shape {bounds.shape} mismatch with packed cells "
+                          f"{n_cells} → expected n_blocks={nb}")
+    u_q = flat_u8[0::2].astype(np.float32)
+    s_q = flat_u8[1::2].astype(np.float32)
+    pad = nb * BLOCK_SIZE - n_cells
+    if pad:
+        u_q = np.concatenate([u_q, np.zeros(pad, dtype=np.float32)])
+        s_q = np.concatenate([s_q, np.zeros(pad, dtype=np.float32)])
+    u_q = u_q.reshape(nb, BLOCK_SIZE)
+    s_q = s_q.reshape(nb, BLOCK_SIZE)
+    u_lo = bounds[:, 0:1]; u_hi = bounds[:, 1:2]
+    s_lo = bounds[:, 2:3]; s_hi = bounds[:, 3:4]
+    u_val = u_lo + (u_hi - u_lo) * (u_q * (1.0 / 255.0))
+    s_val = s_lo + (s_hi - s_lo) * (s_q * (1.0 / 255.0))
+    if codec == QUANT_CODEC_LOG:
+        # log_s -> sqrt_g2 = eps * expm1(log_s). expm1 in float64 to avoid
+        # overflow at large log_s (typical training values land at ~20–35).
+        sqrt_g2 = (eps * np.expm1(s_val.astype(np.float64))).astype(np.float32)
+    elif codec == QUANT_CODEC_LINEAR:
+        sqrt_g2 = s_val
+    else:
+        raise ValueError(f"unknown quant codec: {codec!r}")
+    g2 = sqrt_g2 * sqrt_g2
+    g1 = u_val * (sqrt_g2 + eps)
+    g1 = g1.reshape(-1)[:n_cells].astype(np.float32)
+    g2 = g2.reshape(-1)[:n_cells].astype(np.float32)
+    return g1, g2
+
+
 def discover_fields(full_dir: Path, meta: Optional[dict] = None) -> list[Field]:
-    """Pick optimizer-state and parameter buffers worth analyzing."""
+    """Pick optimizer-state and parameter buffers worth analyzing.
+
+    Three storage formats are recognised:
+      1. Float SoA  : `<name>.npy` (regular per-buffer float arrays).
+      2. Old quant  : `<name>_q.npy` (uint8) + sibling `*_quant_bounds.npy`
+                      (per-component encoded; legacy from the pre-joint era).
+      3. AoS packed : `<base>_packed.npy` (uint8, interleaved u and sqrt_g2)
+                      + sibling `*_quant_bounds.npy` or `*_bounds.npy`. One
+                      packed file decodes into BOTH g1 and g2 logical fields.
+    """
     meta = meta or {}
     candidates = sorted(full_dir.glob("*.npy"))
-    # We want: g1_*, g2_*, bilagrid_*_g1, bilagrid_*_g2, ppisp_g1, ppisp_g2.
-    # The quantized variants are *_q.npy (uint8) + sibling _quant_bounds.npy.
-    # World params (world_*) are kept around for context (param-vs-momentum
-    # comparison) but flagged as "param".
     fields: list[Field] = []
     by_name = {p.stem: p for p in candidates}
 
@@ -173,49 +267,125 @@ def discover_fields(full_dir: Path, meta: Optional[dict] = None) -> list[Field]:
             return "ppisp_g2"
         return None
 
-    # Resolve quantized pairs once: foo_q.npy plus matching bounds.
-    # Bounds-name resolution by buffer family (g1 and g2 share one bounds vector
-    # in the SH and bilagrid kernels — both halves of the float4 sit in the
-    # same file).
+    def find_bounds(base: str) -> Optional[Path]:
+        # Try both naming conventions emitted by engine_save_checkpoint:
+        # bilagrid: `<base>_quant_bounds.npy`; SH: `<base>_bounds.npy`.
+        for cand in (f"{base}_quant_bounds", f"{base}_bounds"):
+            if cand in by_name:
+                return by_name[cand]
+        return None
+
+    # --- AoS packed files: decode into a (g1, g2) pair ----------------------
+    consumed: set[str] = set()
     for stem, path in by_name.items():
-        if stem.endswith("_q"):
-            base = stem[:-2]               # "g1_features_sh_q" -> "g1_features_sh"
-            kind = looks_like_momentum(base) or "param"
-            if base in ("g1_features_sh", "g2_features_sh"):
-                bounds_key = "quant_bounds_sh"
-            elif base.endswith("_g1") or base.endswith("_g2"):
-                # bilagrid_<type>_g{1,2} -> bilagrid_<type>_quant_bounds
-                bounds_key = f"{base[:-3]}_quant_bounds"
-            else:
-                bounds_key = f"{base}_quant_bounds"
-            bounds_path = by_name.get(bounds_key)
-            if bounds_path is None:
-                print(f"warn: {stem} has no bounds file (expected "
-                       f"'{bounds_key}.npy'); loading raw uint8", file=sys.stderr)
-            fields.append(Field(name=base, kind=kind, path=path,
-                                 is_quantized_on_disk=True,
-                                 bounds_path=bounds_path))
-        elif looks_like_momentum(stem):
-            # Skip if we already added the quantized pair for it.
-            if f"{stem}_q" in by_name:
-                continue
+        if not stem.endswith("_packed"):
+            continue
+        base = stem[:-len("_packed")]     # "sh_quant" / "bilagrid_rgb" / ...
+        bounds_path = find_bounds(base)
+        if bounds_path is None:
+            print(f"warn: {stem} has no sibling bounds file; skipping",
+                   file=sys.stderr)
+            continue
+        consumed.add(stem)
+        consumed.add(bounds_path.stem)
+
+        if base == "sh_quant":
+            g1_name = "g1_features_sh"
+            g2_name = "g2_features_sh"
+            g1_kind = "g1"
+            g2_kind = "g2"
+        else:
+            g1_name = f"{base}_g1"
+            g2_name = f"{base}_g2"
+            g1_kind = "bilagrid_g1" if base.startswith("bilagrid_") else "param"
+            g2_kind = "bilagrid_g2" if base.startswith("bilagrid_") else "param"
+
+        # We synthesize TWO Field entries per packed file. Both share the
+        # same source `.path` (packed bytes) and `.bounds_path`, but `kind`
+        # picks which half to surface as the field's `.array`.
+        fields.append(Field(name=g1_name, kind=g1_kind, path=path,
+                             is_quantized_on_disk=True, bounds_path=bounds_path))
+        fields.append(Field(name=g2_name, kind=g2_kind, path=path,
+                             is_quantized_on_disk=True, bounds_path=bounds_path))
+
+    # --- Legacy per-component `*_q.npy` files ------------------------------
+    for stem, path in by_name.items():
+        if stem in consumed or not stem.endswith("_q"):
+            continue
+        base = stem[:-2]
+        kind = looks_like_momentum(base) or "param"
+        if base in ("g1_features_sh", "g2_features_sh"):
+            bounds_key = "quant_bounds_sh"
+        elif base.endswith("_g1") or base.endswith("_g2"):
+            bounds_key = f"{base[:-3]}_quant_bounds"
+        else:
+            bounds_key = f"{base}_quant_bounds"
+        bounds_path = by_name.get(bounds_key)
+        consumed.add(stem)
+        if bounds_path is not None:
+            consumed.add(bounds_path.stem)
+        if bounds_path is None:
+            print(f"warn: {stem} has no bounds file (expected "
+                   f"'{bounds_key}.npy'); loading raw uint8", file=sys.stderr)
+        fields.append(Field(name=base, kind=kind, path=path,
+                             is_quantized_on_disk=True,
+                             bounds_path=bounds_path))
+
+    # --- Float SoA `<name>.npy` files --------------------------------------
+    for stem, path in by_name.items():
+        if stem in consumed:
+            continue
+        if looks_like_momentum(stem):
             fields.append(Field(name=stem, kind=looks_like_momentum(stem),
                                  path=path, is_quantized_on_disk=False))
         elif stem.startswith("world_") or stem in ("accum_buffer", "bias_correction_steps"):
             fields.append(Field(name=stem, kind="param", path=path,
                                  is_quantized_on_disk=False))
 
-    # Load arrays. For quantized-on-disk fields, dequant using the bounds
-    # so we have a usable float array for analysis.
+    # --- Load arrays ------------------------------------------------------
+    # Cache decoded (g1, g2) per packed source path so we only decode once.
+    decoded_cache: dict[Path, tuple[np.ndarray, np.ndarray]] = {}
+    # Old checkpoints (saved before the codec tag was added) lacked the
+    # `quant_codec` meta line — those used the legacy linear sqrt_g2 mapping,
+    # so we fall back to that when the tag is absent.
+    codec_tag = meta.get("quant_codec", QUANT_CODEC_LINEAR)
+
+    def _decode_packed(packed_path: Path, bounds_path: Path
+                        ) -> tuple[np.ndarray, np.ndarray]:
+        if packed_path in decoded_cache:
+            return decoded_cache[packed_path]
+        packed = np.load(packed_path)
+        bounds = np.load(bounds_path)
+        if packed.dtype != np.uint8:
+            raise ValueError(f"{packed_path.name}: expected uint8, got {packed.dtype}")
+        if bounds.dtype != np.float32:
+            bounds = bounds.astype(np.float32)
+        if bounds.ndim == 1 and bounds.size % 4 == 0:
+            bounds = bounds.reshape(-1, 4)
+        if bounds.ndim != 2 or bounds.shape[1] != 4:
+            raise ValueError(f"{bounds_path.name}: expected shape [n_blocks, 4], got {bounds.shape}")
+        g1, g2 = _dequant_packed_aos(packed, bounds, codec=codec_tag)
+        decoded_cache[packed_path] = (g1, g2)
+        return g1, g2
+
     for f in fields:
-        a = np.load(f.path)
-        if f.is_quantized_on_disk and f.bounds_path is not None:
-            bounds = np.load(f.bounds_path)   # [n_blocks, 4] -> (g1lo, g1hi, sqrtg2lo, sqrtg2hi)
-            a = _dequant_uint8_blocks(a, bounds, kind=f.kind)
-            a = _maybe_reshape_bilagrid(f.name, a, meta)
-        f.array = a
-        f.shape = tuple(a.shape)
-        f.dtype = str(a.dtype)
+        if f.is_quantized_on_disk and f.bounds_path is not None and f.path.name.endswith("_packed.npy"):
+            g1, g2 = _decode_packed(f.path, f.bounds_path)
+            # Choose the right half by the field's logical role.
+            half = g1 if (f.kind.startswith(("g1", "bilagrid_g1", "ppisp_g1"))
+                          or f.name.startswith("g1_")
+                          or f.name.endswith("_g1")) else g2
+            f.array = _maybe_reshape_buffer(f.name, half, meta)
+        else:
+            a = np.load(f.path)
+            if f.is_quantized_on_disk and f.bounds_path is not None:
+                # Legacy per-component path: SoA uint8 + bounds.
+                bounds = np.load(f.bounds_path)
+                a = _dequant_uint8_blocks(a, bounds, kind=f.kind)
+                a = _maybe_reshape_buffer(f.name, a, meta)
+            f.array = a
+        f.shape = tuple(f.array.shape)
+        f.dtype = str(f.array.dtype)
 
     fields.sort(key=lambda f: (0 if f.kind.startswith(("g1", "bilagrid_g1", "ppisp_g1"))
                                 else 1 if f.kind.startswith(("g2", "bilagrid_g2", "ppisp_g2"))
@@ -1337,13 +1507,37 @@ def _adam_update(g1: np.ndarray, g2: np.ndarray, eps: float = ADAM_EPS,
     return g1_eff / (np.sqrt(np.maximum(g2_eff, 0.0)) + eps)
 
 
+def _adam_one_step_u(g1: np.ndarray, g2: np.ndarray, v: np.ndarray,
+                      eps: float = ADAM_EPS,
+                      bc_step: Optional[int] = None) -> np.ndarray:
+    """Apply ONE Adam EMA step (g1 → β1·g1 + (1-β1)·v, g2 → β2·g2 + (1-β2)·v²)
+    and return the resulting update direction `u_next = g1_new / (sqrt(g2_new) + eps)`,
+    optionally bias-corrected at step `bc_step`.
+
+    Unlike the round-trip update direction `g1/(sqrt(g2)+eps)`, this metric
+    depends on BOTH the g1 and g2 quantization errors because the gradient
+    `v` mixes them through the EMA — it breaks the analytic identity that
+    causes single-step SNR(u) to be invariant to the sqrt_g2 mapping under
+    the joint (u, sqrt_g2) scheme."""
+    g1_new = ADAM_BETA1 * g1 + (1.0 - ADAM_BETA1) * v
+    g2_new = ADAM_BETA2 * g2 + (1.0 - ADAM_BETA2) * v * v
+    if bc_step is not None and bc_step > 0:
+        bc1 = 1.0 - ADAM_BETA1 ** bc_step
+        bc2 = 1.0 - ADAM_BETA2 ** bc_step
+        g1_new = g1_new / bc1
+        g2_new = g2_new / bc2
+    return g1_new / (np.sqrt(np.maximum(g2_new, 0.0)) + eps)
+
+
 @dataclass
 class PairSchemeResult:
     name: str
     extra: str
-    snr_u_unbiased: float        # update SNR without bias correction
-    snr_u_biased: float          # update SNR at a representative late step
-    snr_g1: float                # per-component, for cross-reference
+    snr_u_unbiased: float        # round-trip SNR(u) without bias correction
+    snr_u_biased: float          # round-trip SNR(u) at a representative step
+    snr_u_next_unbiased: float   # post-one-Adam-step SNR(u) unbiased
+    snr_u_next_biased: float     # post-one-Adam-step SNR(u) bias-corrected
+    snr_g1: float                # per-component (cross-reference)
     snr_g2: float
     rmse_u: float                # raw RMSE on u
     bytes_per_cell: int = 2      # 2 uint8 + amortized float4 bounds
@@ -1384,6 +1578,16 @@ def analyze_pair_schemes(g1: np.ndarray, g2: np.ndarray,
     u_unb = g1 / (sqrt_g2_true + eps)
     u_true_unbiased = u_unb
     u_true_biased = _adam_update(g1, g2, eps, bc_step=bc_step)
+
+    # Synthetic gradient for the post-Adam-step metric: per-cell Gaussian
+    # with variance ≈ g2_true (matches steady-state Adam's E[v²] = g2 expectation).
+    # Same v is reused across all schemes so differences reflect only the
+    # quantization choice, not the gradient sample.
+    rng = np.random.default_rng(0)
+    v_synth = (rng.standard_normal(g1.shape).astype(np.float32)
+               * sqrt_g2_true.astype(np.float32))
+    u_next_true_unbiased = _adam_one_step_u(g1, g2, v_synth, eps, bc_step=None)
+    u_next_true_biased   = _adam_one_step_u(g1, g2, v_synth, eps, bc_step=bc_step + 1)
 
     # Declare every (primitive, mapping) we'll need across all schemes.
     needed: dict[str, tuple[np.ndarray, str]] = {
@@ -1448,13 +1652,18 @@ def analyze_pair_schemes(g1: np.ndarray, g2: np.ndarray,
                    g1_q: np.ndarray, g2_q: np.ndarray) -> PairSchemeResult:
         u_q_unb = _adam_update(g1_q, g2_q, eps, bc_step=None)
         u_q_bia = _adam_update(g1_q, g2_q, eps, bc_step=bc_step)
+        u_next_q_unb = _adam_one_step_u(g1_q, g2_q, v_synth, eps, bc_step=None)
+        u_next_q_bia = _adam_one_step_u(g1_q, g2_q, v_synth, eps, bc_step=bc_step + 1)
         rmse_u, snr_u = _snr_pair(u_true_unbiased, u_q_unb)
         _, snr_u_bc = _snr_pair(u_true_biased, u_q_bia)
+        _, snr_u_next_unb = _snr_pair(u_next_true_unbiased, u_next_q_unb)
+        _, snr_u_next_bia = _snr_pair(u_next_true_biased, u_next_q_bia)
         _, snr_g1 = _snr_pair(g1, g1_q)
         _, snr_g2 = _snr_pair(g2, g2_q)
         return PairSchemeResult(
             name=name, extra=extra,
             snr_u_unbiased=snr_u, snr_u_biased=snr_u_bc,
+            snr_u_next_unbiased=snr_u_next_unb, snr_u_next_biased=snr_u_next_bia,
             snr_g1=snr_g1, snr_g2=snr_g2,
             rmse_u=rmse_u,
         )
@@ -1640,28 +1849,58 @@ def render_pair_section(fields: list[Field],
         head = ("<tr><th class='left'>scheme</th>"
                 "<th>SNR(u)  unbiased</th>"
                 f"<th>SNR(u)  bc step {bc_step}</th>"
+                "<th>SNR(u_next)  unbiased</th>"
+                f"<th>SNR(u_next)  bc step {bc_step + 1}</th>"
                 "<th>SNR(g1)</th><th>SNR(g2)</th>"
                 "<th>RMSE(u)</th><th class='left'>note</th></tr>")
         rows = [head]
-        best = max(r.snr_u_unbiased for r in results)
+        # Sort the bar order by post-step SNR — the round-trip SNR(u) is
+        # degenerate across joint schemes that share the u mapping (see note
+        # below); SNR(u_next) propagates both halves through one Adam step.
+        best_next = max(r.snr_u_next_unbiased for r in results)
         baseline_idx = next((j for j, r in enumerate(results)
                               if r.name == "indep_linear_sqrt"), None)
-        baseline = (results[baseline_idx].snr_u_unbiased
+        baseline = (results[baseline_idx].snr_u_next_unbiased
                     if baseline_idx is not None else 0.0)
         for r in results:
-            cls = "good" if abs(r.snr_u_unbiased - best) < 1e-6 else ""
-            delta = r.snr_u_unbiased - baseline
+            cls = "good" if abs(r.snr_u_next_unbiased - best_next) < 1e-6 else ""
+            delta = r.snr_u_next_unbiased - baseline
             rows.append(
                 f"<tr><td class='left'><code>{r.name}</code></td>"
-                f"<td class='{cls}'>{r.snr_u_unbiased:.2f} "
-                 f"<span class='small'>({delta:+.2f})</span></td>"
+                f"<td>{r.snr_u_unbiased:.2f}</td>"
                 f"<td>{r.snr_u_biased:.2f}</td>"
+                f"<td class='{cls}'>{r.snr_u_next_unbiased:.2f} "
+                 f"<span class='small'>({delta:+.2f})</span></td>"
+                f"<td>{r.snr_u_next_biased:.2f}</td>"
                 f"<td>{r.snr_g1:.2f}</td>"
                 f"<td>{r.snr_g2:.2f}</td>"
                 f"<td>{_fmt(r.rmse_u)}</td>"
                 f"<td class='left small'>{r.extra}</td></tr>"
             )
         parts.append("<table>" + "".join(rows) + "</table>")
+        parts.append(
+            "<div class='note'>"
+            "<b>Why does SNR(u) collapse across joint variants?</b> When the "
+            "joint scheme stores <code>u</code> directly and decodes "
+            "<code>g1 = u_q · (sqrt_g2_q + ε)</code> / <code>g2 = sqrt_g2_q²</code>, "
+            "the round-trip <code>u_recon = g1 / (sqrt(g2) + ε) = u_q · "
+            "(sqrt_g2_q + ε) / (sqrt_g2_q + ε) = u_q</code> — exactly. So "
+            "<b>SNR(u) is a function of the u mapping only</b> and is "
+            "identical across (e.g.) <code>joint_u_sqrtg2_linear</code> and "
+            "<code>joint_u_sqrtg2_linear_log</code>. To see the sqrt_g2 "
+            "mapping's actual effect on training dynamics, look at "
+            "<b>SNR(u_next)</b>: it computes one Adam EMA step "
+            "<code>g1' = β1·g1 + (1-β1)·v</code>, "
+            "<code>g2' = β2·g2 + (1-β2)·v²</code> with a synthetic gradient "
+            "<code>v ~ N(0, g2_true)</code> shared across schemes, then "
+            "evaluates SNR on <code>u' = g1' / (sqrt(g2') + ε)</code>. Because "
+            "the new gradient term mixes <code>g1</code> and <code>g2</code> "
+            "through the EMA, errors in either propagate to <code>u'</code> "
+            "and the metric becomes sensitive to both quantization choices. "
+            "Per-component <code>SNR(g1)</code> and <code>SNR(g2)</code> also "
+            "distinguish the schemes."
+            "</div>"
+        )
         parts.append(plots_html.get((i, "bars"), ""))
         joint_html = plots_html.get((i, "joint"))
         if joint_html:
@@ -1670,35 +1909,48 @@ def render_pair_section(fields: list[Field],
 
 
 def _plot_pair_snr_bars(results: list[PairSchemeResult], base: str) -> str:
-    """Side-by-side bars: update SNR (unbiased + biased) vs per-component SNR."""
+    """Three side-by-side bar groups:
+      (left)   round-trip SNR(u)       — flat across joint variants that share u-mapping
+      (middle) post-one-Adam-step SNR  — separates the variants
+      (right)  per-component SNR(g1) / SNR(g2)."""
     names = [r.name for r in results]
-    fig, axes = plt.subplots(1, 2, figsize=(13, max(2.6, 0.34 * len(results) + 1)))
+    fig, axes = plt.subplots(1, 3, figsize=(17, max(2.8, 0.34 * len(results) + 1)))
 
     idx = np.arange(len(names))
     w = 0.35
+
     axes[0].barh(idx - w / 2, [r.snr_u_unbiased for r in results], w,
                   color="C0", label="unbiased")
     axes[0].barh(idx + w / 2, [r.snr_u_biased for r in results], w,
                   color="C2", label="bias-corrected")
-    axes[0].set_yticks(idx)
-    axes[0].set_yticklabels(names, fontsize=8)
+    axes[0].set_yticks(idx); axes[0].set_yticklabels(names, fontsize=8)
     axes[0].invert_yaxis()
-    axes[0].set_xlabel("Adam update direction SNR (dB)")
+    axes[0].set_xlabel("SNR(u) round-trip (dB)")
     axes[0].grid(True, axis="x", alpha=0.3)
-    axes[0].set_title(f"update SNR per scheme — {base}")
+    axes[0].set_title(f"SNR(u) — {base}\n(degenerate across joint variants)")
     axes[0].legend(fontsize=8)
 
-    axes[1].barh(idx - w / 2, [r.snr_g1 for r in results], w,
-                  color="C1", label="g1")
-    axes[1].barh(idx + w / 2, [r.snr_g2 for r in results], w,
-                  color="C3", label="g2")
-    axes[1].set_yticks(idx)
-    axes[1].set_yticklabels(names, fontsize=8)
+    axes[1].barh(idx - w / 2, [r.snr_u_next_unbiased for r in results], w,
+                  color="C4", label="unbiased")
+    axes[1].barh(idx + w / 2, [r.snr_u_next_biased for r in results], w,
+                  color="C5", label="bias-corrected")
+    axes[1].set_yticks(idx); axes[1].set_yticklabels(names, fontsize=8)
     axes[1].invert_yaxis()
-    axes[1].set_xlabel("per-component SNR (dB)")
+    axes[1].set_xlabel("SNR(u_next) after one Adam step (dB)")
     axes[1].grid(True, axis="x", alpha=0.3)
-    axes[1].set_title("per-component SNR  (for cross-reference)")
+    axes[1].set_title("SNR(u_next)\n(propagates BOTH g1 and g2 error)")
     axes[1].legend(fontsize=8)
+
+    axes[2].barh(idx - w / 2, [r.snr_g1 for r in results], w,
+                  color="C1", label="g1")
+    axes[2].barh(idx + w / 2, [r.snr_g2 for r in results], w,
+                  color="C3", label="g2")
+    axes[2].set_yticks(idx); axes[2].set_yticklabels(names, fontsize=8)
+    axes[2].invert_yaxis()
+    axes[2].set_xlabel("per-component SNR (dB)")
+    axes[2].grid(True, axis="x", alpha=0.3)
+    axes[2].set_title("per-component SNR  (cross-reference)")
+    axes[2].legend(fontsize=8)
 
     return _img(fig, alt="pair snr bars")
 

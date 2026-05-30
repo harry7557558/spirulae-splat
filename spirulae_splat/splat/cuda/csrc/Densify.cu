@@ -846,7 +846,7 @@ void relocate_splats_with_long_axis_split_tensor(
             bias_correction_steps_ptr
         );
     else
-        relocate_with_long_axis_split_kernel<uchar3><<<_LAUNCH_ARGS_1D(num_relocate, 256)>>>(
+        relocate_with_long_axis_split_kernel<short3><<<_LAUNCH_ARGS_1D(num_relocate, 256)>>>(
             cur_num_splats,
             num_relocate,
             src_indices,
@@ -856,7 +856,7 @@ void relocate_splats_with_long_axis_split_tensor(
             scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(),
             opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
             features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
-            num_sh, features_sh.data_ptr(), (uchar3*)g1_features_sh.data_ptr(), (uchar3*)g2_features_sh.data_ptr(),
+            num_sh, features_sh.data_ptr(), (short3*)g1_features_sh.data_ptr(), (short3*)g2_features_sh.data_ptr(),
             densify_accum_buffer.data_ptr(),
             bias_correction_steps_ptr
         );
@@ -900,7 +900,7 @@ void add_splats_with_long_axis_split_tensor(
             bias_correction_steps_ptr
         );
     else
-        relocate_with_long_axis_split_kernel<uchar3><<<_LAUNCH_ARGS_1D(num_new_splats, 256)>>>(
+        relocate_with_long_axis_split_kernel<short3><<<_LAUNCH_ARGS_1D(num_new_splats, 256)>>>(
             cur_num_splats,
             num_new_splats,
             split_indices,
@@ -910,7 +910,7 @@ void add_splats_with_long_axis_split_tensor(
             scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(),
             opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
             features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
-            num_sh, features_sh.data_ptr(), (uchar3*)g1_features_sh.data_ptr(), (uchar3*)g2_features_sh.data_ptr(),
+            num_sh, features_sh.data_ptr(), (short3*)g1_features_sh.data_ptr(), (short3*)g2_features_sh.data_ptr(),
             densify_accum_buffer.data_ptr(),
             bias_correction_steps_ptr
         );
@@ -1176,7 +1176,7 @@ void relocate_splats_mcmc_tensor(
             bias_correction_steps_ptr
         );
     else
-        mcmc_compute_relocation_kernel<uchar3><<<_LAUNCH_ARGS_1D(cur_num_splats, 64)>>>(
+        mcmc_compute_relocation_kernel<short3><<<_LAUNCH_ARGS_1D(cur_num_splats, 64)>>>(
             cur_num_splats,
             min_opacity,
             n_idx_buffer,
@@ -1185,7 +1185,7 @@ void relocate_splats_mcmc_tensor(
             scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(),
             opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
             features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
-            num_sh, features_sh.data_ptr(), (uchar3*)g1_features_sh.data_ptr(), (uchar3*)g2_features_sh.data_ptr(),
+            num_sh, features_sh.data_ptr(), (short3*)g1_features_sh.data_ptr(), (short3*)g2_features_sh.data_ptr(),
             bias_correction_steps_ptr
         );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -1393,7 +1393,7 @@ void add_splats_mcmc_tensor(
             bias_correction_steps_ptr
         );
     else
-        mcmc_update_add_kernel<uchar3><<<_LAUNCH_ARGS_1D(num_add, 64)>>>(
+        mcmc_update_add_kernel<short3><<<_LAUNCH_ARGS_1D(num_add, 64)>>>(
             cur_num_splats,
             num_add,
             index_map,
@@ -1402,7 +1402,7 @@ void add_splats_mcmc_tensor(
             scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(),
             opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
             features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
-            num_sh, features_sh.data_ptr(), (uchar3*)g1_features_sh.data_ptr(), (uchar3*)g2_features_sh.data_ptr(),
+            num_sh, features_sh.data_ptr(), (short3*)g1_features_sh.data_ptr(), (short3*)g2_features_sh.data_ptr(),
             bias_correction_steps_ptr
         );
     CHECK_DEVICE_ERROR(cudaGetLastError());

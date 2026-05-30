@@ -21,6 +21,7 @@
 // the user signed off on.
 
 #include "BilagridConfig.cuh"
+#include "Tensor.h"
 #include <cuda_runtime.h>
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
@@ -31,17 +32,16 @@ namespace cg = cooperative_groups;
 #define WARP_SIZE 32
 #endif
 
-template<int BLOCK_SIZE, int C, bool QUANT>
+template<int BLOCK_SIZE, int C, bool QUANT, int QUANT_BITS = 8>
 __global__ void fused_bilagrid_tv_adam_kernel(
     // Parameter table — kept on device permanently. Read AND written here.
     // Channel-last layout: the C channels of a single (l,h,w) cell are
     // contiguous, then (cam, l, h, w) sweep outer.
     float* __restrict__ grids,                  // [N_grids, L, H, W, C]
-    // Adam moments. float path or uint8+bounds path (mutually exclusive).
+    // Adam moments. float path or QuantizedAdamState path (mutually exclusive).
     float*   __restrict__ g1_f,                 // when !QUANT
     float*   __restrict__ g2_f,                 // when !QUANT
-    uint8_t* __restrict__ g1_q,                 // when QUANT
-    uint8_t* __restrict__ g2_q,                 // when QUANT
+    uint8_t* __restrict__ packed,               // when QUANT (AoS packed cells)
     float4*  __restrict__ quant_bounds,         // [n_blocks], when QUANT
     // Sparse image gradient. ni is the batch slot; the *camera* the gradient
     // belongs to is cam_indices[ni].
@@ -137,26 +137,19 @@ __global__ void fused_bilagrid_tv_adam_kernel(
     float x = inside ? grids[idx] : 0.0f;
     float g1, g2;
 
+    using QState = QuantizedAdamState<QUANT_BITS, BLOCK_SIZE>;
+    float4 mm;
     if constexpr (QUANT) {
-        // Joint (u, sqrt(g2)) quantization scheme:
-        //   * the "g1" byte stream stores u = g1 / (sqrt(g2) + eps),
-        //   * the "g2" byte stream stores sqrt(g2),
-        //   * per-block bounds float4 = (u_min, u_max, sqrt_g2_min, sqrt_g2_max).
-        // Endpoint-exact (256-level) quantization: q=0 -> lo, q=255 -> hi
-        // exactly. Midpoint quantization (the old (q+0.5)/256 formula) biases
-        // values at lo upward by range/512 and values at hi downward by
-        // range/512, which on a bilagrid block of 254 zeros + 2 outliers
-        // produces a phantom non-zero g1 in every "should-be-zero" cell —
-        // those phantoms then drive a spatially-correlated Adam update,
-        // visible as systematically smaller TV loss and smaller corrections
-        // than a no-quant baseline.
-        float u_norm  = inside ? (float)g1_q[idx] * (1.0f / 255.0f) : 0.0f;
-        float s_norm  = inside ? (float)g2_q[idx] * (1.0f / 255.0f) : 0.0f;
-        float4 mm = quant_bounds[blockIdx.x];
-        float u_val   = mm.x + (mm.y - mm.x) * u_norm;
-        float sqrt_g2 = mm.z + (mm.w - mm.z) * s_norm;
-        g2 = sqrt_g2 * sqrt_g2;
-        g1 = u_val * (sqrt_g2 + eps);
+        // Joint (u, sqrt(g2)) AoS quantization via QuantizedAdamState codec.
+        mm = quant_bounds[blockIdx.x];
+        if (inside) {
+            float2 g1g2 = QState::decode_g1g2(packed, idx, mm);
+            g1 = g1g2.x;
+            g2 = g1g2.y;
+        } else {
+            g1 = 0.0f;
+            g2 = 0.0f;
+        }
     } else {
         g1 = inside ? g1_f[idx] : 0.0f;
         g2 = inside ? g2_f[idx] : 0.0f;
@@ -170,16 +163,15 @@ __global__ void fused_bilagrid_tv_adam_kernel(
 
     // ---- Writeback (Adam moments) ----------------------------------------
     if constexpr (QUANT) {
-        // Re-encode in the (u, sqrt(g2)) basis. u = g1/(sqrt(g2)+eps) is the
-        // Adam update direction; storing it directly preserves the quantity
-        // that training actually consumes.
-        float sqrt_g2_new = sqrtf(g2);
-        float u_new       = g1 / (sqrt_g2_new + eps);
+        // Re-encode in the (u, sqrt(g2)) basis via QuantizedAdamState codec.
+        float2 us = QState::g1g2_to_us(g1, g2);
+        float u_new       = us.x;
+        float sqrt_g2_new = us.y;
 
         // Block-reduce {u, sqrt(g2)} min/max for the new per-block bounds.
         cg::thread_block block = cg::this_thread_block();
         cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
-        float4 mm = inside
+        mm = inside
             ? float4{u_new, u_new, sqrt_g2_new, sqrt_g2_new}
             : float4{1e30f, -1e30f, 1e30f, -1e30f};
         mm.x = cg::reduce(warp, mm.x, cg::less<float>());
@@ -203,14 +195,8 @@ __global__ void fused_bilagrid_tv_adam_kernel(
         __syncthreads();
         mm = shared_reduce[threadIdx.x / WARP_SIZE];
 
-        float u_range = fmaxf(mm.y - mm.x, eps);
-        float s_range = fmaxf(mm.w - mm.z, eps);
         if (inside) {
-            // Endpoint-exact: q = round(255 * (x - lo) / range), clamped.
-            g1_q[idx] = (uint8_t)fminf(fmaxf(
-                roundf(255.0f * (u_new       - mm.x) / u_range), 0.0f), 255.0f);
-            g2_q[idx] = (uint8_t)fminf(fmaxf(
-                roundf(255.0f * (sqrt_g2_new - mm.z) / s_range), 0.0f), 255.0f);
+            QState::encode_us(packed, idx, u_new, sqrt_g2_new, mm);
         }
         if (threadIdx.x == 0) quant_bounds[blockIdx.x] = mm;
     } else {
@@ -227,7 +213,7 @@ __global__ void fused_bilagrid_tv_adam_kernel(
 void fused_bilagrid_tv_adam(
     float* grids,
     float*   g1_f,    float*   g2_f,           // null when quantize
-    uint8_t* g1_q,    uint8_t* g2_q,           // null when !quantize
+    uint8_t* packed,                           // null when !quantize (AoS packed)
     float4*  quant_bounds,                     // null when !quantize
     const float* image_grad,
     const int*   cam_indices,
@@ -246,9 +232,9 @@ void fused_bilagrid_tv_adam(
     if (blocks == 0) return;
 
     #define LAUNCH(CC, QQ) \
-        fused_bilagrid_tv_adam_kernel<BLOCK_SIZE, CC, QQ> \
+        fused_bilagrid_tv_adam_kernel<BLOCK_SIZE, CC, QQ, 8> \
             <<<blocks, BLOCK_SIZE, 0, stream>>>( \
-                grids, g1_f, g2_f, g1_q, g2_q, quant_bounds, \
+                grids, g1_f, g2_f, packed, quant_bounds, \
                 image_grad, cam_indices, \
                 N_grids, C_batch, L, H, W, \
                 lr, tv_weight, adam_step)

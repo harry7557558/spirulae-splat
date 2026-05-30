@@ -548,6 +548,183 @@ public:
 };
 
 
+// ============================================================================
+// QuantizedAdamState — joint (u, log_s) Adam optimizer-state quantization.
+//
+// Per cell the codec stores TWO linearly-quantized "primitive" values:
+//     primitives.x = u     = g1 / (sqrt(g2) + eps)
+//     primitives.y = log_s = log1p(sqrt(g2) / eps)
+// log1p(x/eps) is non-negative, monotone, sends 0 -> 0 (so the all-zero
+// initial state of `packed` + `bounds` correctly decodes to sqrt_g2 = 0,
+// matching the float-path zero-init invariant), and is approximately
+// log(sqrt_g2 / eps) for sqrt_g2 >> eps. Its inverse is eps · expm1(log_s).
+//
+// Decode path:
+//     u, log_s = linear-dequantize the two bytes within the per-block bounds
+//     sqrt_g2  = eps · expm1(log_s)
+//     g1       = u · (sqrt_g2 + eps)
+//     g2       = sqrt_g2 · sqrt_g2
+// Encode path is the same transformation reversed; the block-level min/max
+// reduction inside the kernels operates on the linearly-quantized primitives
+// (`u`, `log_s`), so the per-block bounds float4 means:
+//     bounds.x, bounds.y = (u_min, u_max)             — linear u domain
+//     bounds.z, bounds.w = (log_s_min, log_s_max)     — log-mapped sqrt(g2) domain
+//
+// Why log_s instead of plain sqrt(g2)? Empirically (see
+// scripts/investigate_quantization.py "SNR(u_next)" column) the next-step
+// Adam update u' = β1·g1 / sqrt(β2·g2 + ...) is dominated by errors in
+// sqrt(g2) at small magnitudes — exactly the region where linear quantization
+// has the worst RELATIVE precision and where Adam's normalizer is most
+// sensitive. Storing log1p(sqrt_g2 / eps) gives uniform relative resolution
+// across all magnitudes within a block and consistently buys 20–30 dB on the
+// post-step SNR metric at no storage cost.
+//
+// Storage is array-of-structure (AoS) interleaved over the two primitives:
+//   BITS=8: 2 bytes/cell — byte[idx*2 + 0] = u_q, byte[idx*2 + 1] = log_s_q
+//   BITS=4: 1 byte/cell  — low nibble = u_q,    high nibble = log_s_q
+// Quantization is endpoint-exact: q=0 -> lo, q=(kLevels-1) -> hi exactly.
+//
+// Hyperparameters (bit depth, block size, eps) are compile-time template
+// arguments; all the math constants are constexpr so the codec compiles to
+// straight-line arithmetic plus log1pf / expm1f (single CUDA math-lib calls).
+// ============================================================================
+
+template<int BITS, int BLOCK_SIZE = 256>
+class QuantizedAdamState {
+public:
+    static_assert(BITS == 4 || BITS == 8,
+                  "QuantizedAdamState: only 4-bit and 8-bit are supported");
+    static_assert(BLOCK_SIZE > 0 && (BLOCK_SIZE & (BLOCK_SIZE - 1)) == 0,
+                  "QuantizedAdamState: BLOCK_SIZE must be a positive power of 2");
+
+    static constexpr int   kBits         = BITS;
+    static constexpr int   kBlockSize    = BLOCK_SIZE;
+    static constexpr int   kLevels       = 1 << BITS;
+    static constexpr float kQMax         = (float)(kLevels - 1);
+    static constexpr float kInvQMax      = 1.0f / kQMax;
+    static constexpr int   kBytesPerCell = (BITS == 8) ? 2 : 1;
+    static constexpr float kEps          = 1e-15f;   // matches Adam denominator
+
+    // Storage (non-owning views backed by the global DevicePool).
+    DeviceVector<uint8_t> packed;     // size = n_cells * kBytesPerCell
+    DeviceVector<float4>  bounds;     // size = n_bounds (caller-chosen)
+    int64_t n_cells  = 0;
+    int64_t n_bounds = 0;
+
+    // ---- Host: storage management ------------------------------------------
+
+    void resize(const std::string& key_prefix, int64_t cells, int64_t bnds) {
+        n_cells  = cells;
+        n_bounds = bnds;
+        packed.resize(key_prefix + ".q",  (size_t)(cells * kBytesPerCell));
+        bounds.resize(key_prefix + ".qb", (size_t)bnds);
+    }
+
+    void zero() {
+        if (packed.data_ptr()) packed.zero();
+        if (bounds.data_ptr()) bounds.zero();
+    }
+
+    bool initialized() const { return packed.data_ptr() != nullptr; }
+
+    uint8_t* packed_ptr() const { return packed.data_ptr(); }
+    float4*  bounds_ptr() const { return bounds.data_ptr(); }
+
+    int64_t packed_bytes() const { return n_cells * kBytesPerCell; }
+    int64_t bounds_bytes() const { return n_bounds * (int64_t)sizeof(float4); }
+    int64_t total_bytes()  const { return packed_bytes() + bounds_bytes(); }
+
+    // ---- Device: codec primitives ------------------------------------------
+#ifdef __CUDACC__
+    // Forward / inverse map for the sqrt_g2 half:
+    //   forward:  sqrt_g2 -> log1pf(sqrt_g2 / eps)
+    //   inverse:  log_s   -> eps * expm1f(log_s)
+    // Both single CUDA math-lib calls; preserve the 0 <-> 0 fixed point so
+    // the all-zero initial state of `packed` + `bounds` correctly decodes to
+    // sqrt_g2 = 0 (no special init needed).
+    __device__ static inline float forward_sqrt_g2(float sqrt_g2) {
+        return log1pf(fmaxf(sqrt_g2, 0.0f) * (1.0f / kEps));
+    }
+    __device__ static inline float inverse_sqrt_g2(float log_s) {
+        return kEps * expm1f(log_s);
+    }
+
+    // Decode the linearly-quantized primitives (u, log_s) at cell `idx`.
+    // Note: returns the INTERNAL representation, not (u, sqrt_g2). Use
+    // decode_g1g2 for the reconstructed Adam state.
+    __device__ static inline float2 decode_us(
+        const uint8_t* __restrict__ packed_ptr, int64_t idx, float4 mm
+    ) {
+        float u_q, s_q;
+        if constexpr (BITS == 8) {
+            u_q = (float)packed_ptr[idx * 2 + 0];
+            s_q = (float)packed_ptr[idx * 2 + 1];
+        } else {  // BITS == 4
+            uint8_t b = packed_ptr[idx];
+            u_q = (float)(b & 0x0Fu);
+            s_q = (float)((b >> 4) & 0x0Fu);
+        }
+        return float2{
+            mm.x + (mm.y - mm.x) * (u_q * kInvQMax),
+            mm.z + (mm.w - mm.z) * (s_q * kInvQMax)
+        };
+    }
+
+    // Decode + reconstruct Adam state (g1, g2) from the cell at `idx`.
+    __device__ static inline float2 decode_g1g2(
+        const uint8_t* __restrict__ packed_ptr, int64_t idx, float4 mm
+    ) {
+        float2 prim = decode_us(packed_ptr, idx, mm);
+        float sqrt_g2 = inverse_sqrt_g2(prim.y);
+        return float2{
+            prim.x * (sqrt_g2 + kEps),   // g1 = u * (sqrt_g2 + eps)
+            sqrt_g2 * sqrt_g2             // g2 = sqrt_g2 * sqrt_g2
+        };
+    }
+
+    // Encode the linearly-quantized primitives (u, log_s) into the packed
+    // byte stream at cell `idx`. Endpoint-exact 8-bit (or 4-bit) within mm.
+    // Kernels typically obtain (u_val, log_s_val) by calling g1g2_to_us and
+    // pass mm = the block-reduced bounds.
+    __device__ static inline void encode_us(
+        uint8_t* __restrict__ packed_ptr, int64_t idx,
+        float u_val, float log_s_val, float4 mm
+    ) {
+        float u_range = fmaxf(mm.y - mm.x, kEps);
+        float s_range = fmaxf(mm.w - mm.z, kEps);
+        uint8_t u_q = (uint8_t)fminf(
+            fmaxf(roundf(kQMax * (u_val     - mm.x) / u_range), 0.0f), kQMax);
+        uint8_t s_q = (uint8_t)fminf(
+            fmaxf(roundf(kQMax * (log_s_val - mm.z) / s_range), 0.0f), kQMax);
+        if constexpr (BITS == 8) {
+            packed_ptr[idx * 2 + 0] = u_q;
+            packed_ptr[idx * 2 + 1] = s_q;
+        } else {  // BITS == 4
+            packed_ptr[idx] = (uint8_t)((u_q & 0x0Fu) | ((s_q & 0x0Fu) << 4));
+        }
+    }
+
+    // Encode (g1, g2) — internally derives (u, log_s) via g1g2_to_us.
+    __device__ static inline void encode_g1g2(
+        uint8_t* __restrict__ packed_ptr, int64_t idx,
+        float g1, float g2, float4 mm
+    ) {
+        float2 prim = g1g2_to_us(g1, g2);
+        encode_us(packed_ptr, idx, prim.x, prim.y, mm);
+    }
+
+    // (g1, g2) -> linearly-quantized primitives (u, log_s). Block reduction
+    // inside host kernels operates on these — both halves are min/max-reduced
+    // in their own (linear) domain to produce the per-block float4 bounds.
+    __device__ static inline float2 g1g2_to_us(float g1, float g2) {
+        float sqrt_g2 = sqrtf(fmaxf(g2, 0.0f));
+        float u       = g1 / (sqrt_g2 + kEps);
+        return float2{u, forward_sqrt_g2(sqrt_g2)};
+    }
+#endif // __CUDACC__
+};
+
+
 // ND device tensor — non-owning view.
 // Intended for heterogeneous containers (e.g. std::vector of tensors with different ranks).
 // For fixed-rank device-friendly code, prefer DeviceVector/Tensor2D/Tensor3D.

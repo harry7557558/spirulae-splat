@@ -39,8 +39,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     // optimizer states
     typename SplatPrimitive::WorldBuffer g1_splats_world,
     typename SplatPrimitive::WorldBuffer g2_splats_world,
-    const uint8_t* __restrict__ g1_features_sh,
-    const uint8_t* __restrict__ g2_features_sh,
+    const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
     float4* __restrict__ sh_quant_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
@@ -111,8 +110,7 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     // optimizer states
     const std::vector<DeviceTensorFloatND> g1_splats_world,
     const std::vector<DeviceTensorFloatND> g2_splats_world,
-    const std::optional<TorchTensorView> g1_features_sh,
-    const std::optional<TorchTensorView> g2_features_sh,
+    const std::optional<TorchTensorView> sh_packed,         // AoS packed SH state
     const std::optional<TorchTensorView> sh_quant_bounds,
     // optimizer params
     DeviceVector<float> radii,
@@ -194,8 +192,7 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
             hessian_diagonal_output_mode != HessianDiagonalOutputMode::None ? vr_splats_screen.value() : typename SplatPrimitive::ScreenBuffer{}, \
             hessian_diagonal_output_mode != HessianDiagonalOutputMode::None ? h_splats_screen.value() : typename SplatPrimitive::ScreenBuffer{}, \
             g1_splats_world, g2_splats_world, \
-            g1_features_sh.has_value() ? (const uint8_t*)std::get<0>(g1_features_sh.value()) : nullptr, \
-            g2_features_sh.has_value() ? (const uint8_t*)std::get<0>(g2_features_sh.value()) : nullptr, \
+            sh_packed.has_value() ? (const uint8_t*)std::get<0>(sh_packed.value()) : nullptr, \
             sh_quant_bounds.has_value() ? (float4*)std::get<0>(sh_quant_bounds.value()) : nullptr, \
             /*v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr */ \
             radii.data_ptr(), \
@@ -250,8 +247,7 @@ void fused_projection_bwd_optimizer_3dgut(
     // optimizer states
     const std::vector<DeviceTensorFloatND> g1_splats_world,
     const std::vector<DeviceTensorFloatND> g2_splats_world,
-    const std::optional<TorchTensorView> g1_features_sh,
-    const std::optional<TorchTensorView> g2_features_sh,
+    const std::optional<TorchTensorView> sh_packed,         // AoS packed SH state
     const std::optional<TorchTensorView> sh_quant_bounds,
     // optimizer params
     DeviceVector<float> radii,
@@ -296,8 +292,7 @@ void fused_projection_bwd_optimizer_3dgut(
         h_splats_screen, \
         g1_splats_world, \
         g2_splats_world, \
-        g1_features_sh, \
-        g2_features_sh, \
+        sh_packed, \
         sh_quant_bounds, \
         radii, \
         lr_means, \

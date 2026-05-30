@@ -149,8 +149,7 @@ void fused_adam_step_8bit(
     int64_t num_splats,
     DeviceTensorFloatND param,
     DeviceTensorFloatND grad,
-    uint8_t* exp_avg,
-    uint8_t* exp_avg_sq,
+    uint8_t* packed,                    // AoS (u, sqrt_g2) packed
     float4* quant_bounds,
     float lr,
     int32_t step, DeviceVector<int32_t> per_splat_steps,

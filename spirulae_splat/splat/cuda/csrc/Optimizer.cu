@@ -945,13 +945,12 @@ void fused_adam_step(
 }
 
 
-template<int BLOCK_SIZE>
+template<int BLOCK_SIZE, int QUANT_BITS = 8>
 __global__ void fused_adam_with_steps_8bit_kernel(
     float* __restrict__ param,
     const float* __restrict__ grad,
-    uint8_t* __restrict__ exp_avg,
-    uint8_t* __restrict__ exp_avg_sq,
-    float4* __restrict__ quant_bounds,  // g1 min, g1 max, g2 min, g2 max
+    uint8_t* __restrict__ packed,       // AoS (u, sqrt_g2) packed cells
+    float4* __restrict__ quant_bounds,  // (u_min, u_max, sqrt_g2_min, sqrt_g2_max)
     const float lr,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps,
@@ -960,6 +959,7 @@ __global__ void fused_adam_with_steps_8bit_kernel(
     const int64_t numel,
     const int stride
 ) {
+    using QState = QuantizedAdamState<QUANT_BITS, BLOCK_SIZE>;
     static constexpr float eps = 1e-15f;
     static constexpr float beta1 = 0.9f;
     static constexpr float beta2 = 0.999f;
@@ -977,24 +977,17 @@ __global__ void fused_adam_with_steps_8bit_kernel(
         v = 0.0f;
     v += decay * (fmaxf(x - decay_offset, 0.0f) + fminf(x + decay_offset, 0.0f));
 
-    // Joint (u, sqrt(g2)) quantization:
-    //   exp_avg     stores u = g1 / (sqrt(g2) + eps)
-    //   exp_avg_sq  stores sqrt(g2)
-    //   quant_bounds.{xy} = (u_min, u_max)
-    //   quant_bounds.{zw} = (sqrt_g2_min, sqrt_g2_max)
-    // This keeps the on-device storage budget at 2 bytes/cell (+ shared
-    // float4 per 256-cell block) but preserves the Adam update direction
-    // g1/sqrt(g2) much better than per-component encoding of g1 and sqrt(g2).
-    // Endpoint-exact decode: q=0 -> lo, q=255 -> hi exactly. Eliminates
-    // the +range/512 phantom-value bias that midpoint decoding (q+0.5)/256
-    // induces for non-uniform-within-block distributions.
-    float u_norm  = inside ? (float)exp_avg[idx]    * (1.0f / 255.0f) : 0.0f;
-    float s_norm  = inside ? (float)exp_avg_sq[idx] * (1.0f / 255.0f) : 0.0f;
+    // Decode joint (u, sqrt(g2)) via QuantizedAdamState codec.
     float4 mm = quant_bounds[blockIdx.x];
-    float u_val   = mm.x + (mm.y - mm.x) * u_norm;
-    float sqrt_g2 = mm.z + (mm.w - mm.z) * s_norm;
-    float g2 = sqrt_g2 * sqrt_g2;
-    float g1 = u_val * (sqrt_g2 + eps);
+    float g1, g2;
+    if (inside) {
+        float2 g1g2 = QState::decode_g1g2(packed, idx, mm);
+        g1 = g1g2.x;
+        g2 = g1g2.y;
+    } else {
+        g1 = 0.0f;
+        g2 = 0.0f;
+    }
 
     g1 = beta1 * g1 + (1.0f - beta1) * v;
     g2 = beta2 * g2 + (1.0f - beta2) * v*v;
@@ -1003,8 +996,9 @@ __global__ void fused_adam_with_steps_8bit_kernel(
     param[idx] = x;
 
     // Re-encode the new Adam state in the (u, sqrt(g2)) basis.
-    float sqrt_g2_new = sqrtf(g2);
-    float u_new       = g1 / (sqrt_g2_new + eps);
+    float2 us_new = QState::g1g2_to_us(g1, g2);
+    float u_new       = us_new.x;
+    float sqrt_g2_new = us_new.y;
 
     cg::thread_block block = cg::this_thread_block();
     cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
@@ -1030,11 +1024,9 @@ __global__ void fused_adam_with_steps_8bit_kernel(
     __syncthreads();
     mm = shared_reduce[threadIdx.x / WARP_SIZE];
 
-    float u_range = fmaxf(mm.y - mm.x, eps);
-    float s_range = fmaxf(mm.w - mm.z, eps);
-    // Endpoint-exact encode: q = round(255 * (x - lo) / range), clamped.
-    exp_avg[idx]    = (uint8_t)fminf(fmaxf(roundf(255.0f * (u_new       - mm.x) / u_range), 0.0f), 255.0f);
-    exp_avg_sq[idx] = (uint8_t)fminf(fmaxf(roundf(255.0f * (sqrt_g2_new - mm.z) / s_range), 0.0f), 255.0f);
+    if (inside) {
+        QState::encode_us(packed, idx, u_new, sqrt_g2_new, mm);
+    }
 
     if (threadIdx.x == 0)
         quant_bounds[blockIdx.x] = mm;
@@ -1045,8 +1037,7 @@ void fused_adam_step_8bit(
     int64_t num_splats,
     DeviceTensorFloatND param,
     DeviceTensorFloatND grad,
-    uint8_t* exp_avg,
-    uint8_t* exp_avg_sq,
+    uint8_t* packed,                    // AoS (u, sqrt_g2) packed
     float4* quant_bounds,
     float lr,
     int32_t step, DeviceVector<int32_t> per_splat_steps,
@@ -1059,11 +1050,10 @@ void fused_adam_step_8bit(
     int stride = (int)(param_numel / num_splats);
     constexpr int BLOCK_SIZE = 256;
 
-    fused_adam_with_steps_8bit_kernel<BLOCK_SIZE><<<_LAUNCH_ARGS_1D(num_splats*stride, BLOCK_SIZE)>>>(
+    fused_adam_with_steps_8bit_kernel<BLOCK_SIZE, 8><<<_LAUNCH_ARGS_1D(num_splats*stride, BLOCK_SIZE)>>>(
         param.data_ptr(),
         grad.data_ptr(),
-        exp_avg,
-        exp_avg_sq,
+        packed,
         quant_bounds,
         lr,
         step, per_splat_steps.data_ptr(),
