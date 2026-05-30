@@ -161,10 +161,10 @@ void bilagrid_uniform_sample_forward_tensor(
 ) {
     int N = (int)_tv_dim(bilagrid, 0), L = (int)_tv_dim(bilagrid, 2),
         H = (int)_tv_dim(bilagrid, 3), W = (int)_tv_dim(bilagrid, 4);
-    int m = (int)_tv_dim(rgb, 1), h = (int)_tv_dim(rgb, 2), w = (int)_tv_dim(rgb, 3);
+    int h = (int)_tv_dim(rgb, 2), w = (int)_tv_dim(rgb, 3);
     bilagrid_uniform_sample_forward(
         _tv_cf(bilagrid), _tv_cf(rgb), _tv_f(output),
-        N, L, H, W, m, h, w, kStream);
+        N, L, H, W, h, w, kStream);
 }
 
 void bilagrid_uniform_sample_backward_tensor(
@@ -174,18 +174,18 @@ void bilagrid_uniform_sample_backward_tensor(
 ) {
     int N = (int)_tv_dim(bilagrid, 0), L = (int)_tv_dim(bilagrid, 2),
         H = (int)_tv_dim(bilagrid, 3), W = (int)_tv_dim(bilagrid, 4);
-    int m = (int)_tv_dim(rgb, 1), h = (int)_tv_dim(rgb, 2), w = (int)_tv_dim(rgb, 3);
+    int h = (int)_tv_dim(rgb, 2), w = (int)_tv_dim(rgb, 3);
     if (version == 1) {
         bilagrid_uniform_sample_backward_v1(
             _tv_cf(bilagrid), _tv_cf(rgb), _tv_cf(v_output),
             _tv_f(v_bilagrid), _tv_f(v_rgb),
-            N, L, H, W, m, h, w,
+            N, L, H, W, h, w,
             (unsigned)block_x, (unsigned)block_y, target_tile_size, kStream);
     } else if (version == 2) {
         bilagrid_uniform_sample_backward_v2(
             _tv_cf(bilagrid), _tv_cf(rgb), _tv_cf(v_output),
             _tv_f(v_bilagrid), _tv_f(v_rgb),
-            N, L, H, W, m, h, w, kStream);
+            N, L, H, W, h, w, kStream);
     }
 }
 
@@ -194,10 +194,10 @@ void bilagrid_ppisp_uniform_sample_forward_tensor(
 ) {
     int N = (int)_tv_dim(bilagrid, 0), L = (int)_tv_dim(bilagrid, 2),
         H = (int)_tv_dim(bilagrid, 3), W = (int)_tv_dim(bilagrid, 4);
-    int m = (int)_tv_dim(rgb, 1), h = (int)_tv_dim(rgb, 2), w = (int)_tv_dim(rgb, 3);
+    int h = (int)_tv_dim(rgb, 2), w = (int)_tv_dim(rgb, 3);
     bilagrid_ppisp_uniform_sample_forward(
         _tv_cf(bilagrid), _tv_cf(rgb), _tv_f(output),
-        N, L, H, W, m, h, w, kStream);
+        N, L, H, W, h, w, kStream);
 }
 
 void bilagrid_ppisp_uniform_sample_backward_tensor(
@@ -207,12 +207,12 @@ void bilagrid_ppisp_uniform_sample_backward_tensor(
 ) {
     int N = (int)_tv_dim(bilagrid, 0), L = (int)_tv_dim(bilagrid, 2),
         H = (int)_tv_dim(bilagrid, 3), W = (int)_tv_dim(bilagrid, 4);
-    int m = (int)_tv_dim(rgb, 1), h = (int)_tv_dim(rgb, 2), w = (int)_tv_dim(rgb, 3);
+    int h = (int)_tv_dim(rgb, 2), w = (int)_tv_dim(rgb, 3);
     if (version == 1 || version == 2) {
         bilagrid_ppisp_uniform_sample_backward_v1(
             _tv_cf(bilagrid), _tv_cf(rgb), _tv_cf(v_output),
             _tv_f(v_bilagrid), _tv_f(v_rgb),
-            N, L, H, W, m, h, w,
+            N, L, H, W, h, w,
             (unsigned)block_x, (unsigned)block_y, target_tile_size, kStream);
     }
 }
@@ -222,10 +222,10 @@ void bilagrid_loglinear_uniform_sample_forward_tensor(
 ) {
     int N = (int)_tv_dim(bilagrid, 0), L = (int)_tv_dim(bilagrid, 2),
         H = (int)_tv_dim(bilagrid, 3), W = (int)_tv_dim(bilagrid, 4);
-    int m = (int)_tv_dim(rgb, 1), h = (int)_tv_dim(rgb, 2), w = (int)_tv_dim(rgb, 3);
+    int h = (int)_tv_dim(rgb, 2), w = (int)_tv_dim(rgb, 3);
     bilagrid_loglinear_uniform_sample_forward(
         _tv_cf(bilagrid), _tv_cf(rgb), _tv_f(output),
-        N, L, H, W, m, h, w, kStream);
+        N, L, H, W, h, w, kStream);
 }
 
 void bilagrid_loglinear_uniform_sample_backward_tensor(
@@ -235,12 +235,12 @@ void bilagrid_loglinear_uniform_sample_backward_tensor(
 ) {
     int N = (int)_tv_dim(bilagrid, 0), L = (int)_tv_dim(bilagrid, 2),
         H = (int)_tv_dim(bilagrid, 3), W = (int)_tv_dim(bilagrid, 4);
-    int m = (int)_tv_dim(rgb, 1), h = (int)_tv_dim(rgb, 2), w = (int)_tv_dim(rgb, 3);
+    int h = (int)_tv_dim(rgb, 2), w = (int)_tv_dim(rgb, 3);
     if (version == 1 || version == 2) {
         bilagrid_loglinear_uniform_sample_backward_v1(
             _tv_cf(bilagrid), _tv_cf(rgb), _tv_cf(v_output),
             _tv_f(v_bilagrid), _tv_f(v_rgb),
-            N, L, H, W, m, h, w,
+            N, L, H, W, h, w,
             (unsigned)block_x, (unsigned)block_y, target_tile_size, kStream);
     }
 }
@@ -262,10 +262,10 @@ void bilagrid_depth_uniform_sample_forward_tensor(
 ) {
     int N = (int)_tv_dim(bilagrid, 0), L = (int)_tv_dim(bilagrid, 2),
         H = (int)_tv_dim(bilagrid, 3), W = (int)_tv_dim(bilagrid, 4);
-    int m = (int)_tv_dim(depth, 1), h = (int)_tv_dim(depth, 2), w = (int)_tv_dim(depth, 3);
+    int h = (int)_tv_dim(depth, 2), w = (int)_tv_dim(depth, 3);
     bilagrid_depth_uniform_sample_forward(
         _tv_cf(bilagrid), _tv_cf(depth), _tv_cf(scalars), _tv_f(output),
-        N, L, H, W, m, h, w, kStream);
+        N, L, H, W, h, w, kStream);
 }
 
 void bilagrid_depth_uniform_sample_backward_tensor(
@@ -276,12 +276,12 @@ void bilagrid_depth_uniform_sample_backward_tensor(
 ) {
     int N = (int)_tv_dim(bilagrid, 0), L = (int)_tv_dim(bilagrid, 2),
         H = (int)_tv_dim(bilagrid, 3), W = (int)_tv_dim(bilagrid, 4);
-    int m = (int)_tv_dim(depth, 1), h = (int)_tv_dim(depth, 2), w = (int)_tv_dim(depth, 3);
+    int h = (int)_tv_dim(depth, 2), w = (int)_tv_dim(depth, 3);
     if (version == 1 || version == 2) {
         bilagrid_depth_uniform_sample_backward_v1(
             _tv_cf(bilagrid), _tv_cf(depth), _tv_cf(scalars), _tv_cf(v_output),
             _tv_f(v_bilagrid), _tv_f(v_depth),
-            N, L, H, W, m, h, w,
+            N, L, H, W, h, w,
             (unsigned)block_x, (unsigned)block_y, target_tile_size, kStream);
     }
 }
@@ -291,10 +291,10 @@ void bilagrid_normal_uniform_sample_forward_tensor(
 ) {
     int N = (int)_tv_dim(bilagrid, 0), L = (int)_tv_dim(bilagrid, 2),
         H = (int)_tv_dim(bilagrid, 3), W = (int)_tv_dim(bilagrid, 4);
-    int m = (int)_tv_dim(rgb, 1), h = (int)_tv_dim(rgb, 2), w = (int)_tv_dim(rgb, 3);
+    int h = (int)_tv_dim(rgb, 2), w = (int)_tv_dim(rgb, 3);
     bilagrid_normal_uniform_sample_forward(
         _tv_cf(bilagrid), _tv_cf(rgb), _tv_f(output),
-        N, L, H, W, m, h, w, kStream);
+        N, L, H, W, h, w, kStream);
 }
 
 void bilagrid_normal_uniform_sample_backward_tensor(
@@ -304,12 +304,12 @@ void bilagrid_normal_uniform_sample_backward_tensor(
 ) {
     int N = (int)_tv_dim(bilagrid, 0), L = (int)_tv_dim(bilagrid, 2),
         H = (int)_tv_dim(bilagrid, 3), W = (int)_tv_dim(bilagrid, 4);
-    int m = (int)_tv_dim(rgb, 1), h = (int)_tv_dim(rgb, 2), w = (int)_tv_dim(rgb, 3);
+    int h = (int)_tv_dim(rgb, 2), w = (int)_tv_dim(rgb, 3);
     if (version == 1 || version == 2) {
         bilagrid_normal_uniform_sample_backward_v1(
             _tv_cf(bilagrid), _tv_cf(rgb), _tv_cf(v_output),
             _tv_f(v_bilagrid), _tv_f(v_rgb),
-            N, L, H, W, m, h, w,
+            N, L, H, W, h, w,
             (unsigned)block_x, (unsigned)block_y, target_tile_size, kStream);
     }
 }

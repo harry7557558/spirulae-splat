@@ -13,11 +13,19 @@ __global__ void bilagrid_normal_patched_sample_backward_v1_kernel_bilagrid(
 __global__ void bilagrid_normal_uniform_sample_backward_v1_kernel_bilagrid(
 #endif
     const float* __restrict__ bilagrid,  // [N,L,H,W,3]
+#ifdef PATCHED
     const float* __restrict__ normal_in,  // [N,m,h,w,3]
     const float* __restrict__ v_normal_out,  // [N,m,h,w,3]
+#else
+    const float* __restrict__ normal_in,  // [N,h,w,3]
+    const float* __restrict__ v_normal_out,  // [N,h,w,3]
+#endif
     float* __restrict__ v_bilagrid,  // [N,L,H,W,3]
     int N, int L, int H, int W,
-    int m, int h, int w,
+#ifdef PATCHED
+    int m,
+#endif
+    int h, int w,
 #ifdef PATCHED
     int h0, int w0,
     const int* __restrict__ offsets,  // [N,m,2]
@@ -98,8 +106,6 @@ __global__ void bilagrid_normal_uniform_sample_backward_v1_kernel_bilagrid(
     if (inside)
 #ifdef PATCHED
     for (int mi = m_batch_i; mi < m; mi += m_batch_stride)
-#else
-    for (int mi = 0; mi < m; ++mi)
 #endif
     {
     #ifdef PATCHED
@@ -131,7 +137,7 @@ __global__ void bilagrid_normal_uniform_sample_backward_v1_kernel_bilagrid(
         #ifdef PATCHED
             int g_off = (((ni*m + mi)*h + (hi-offset.y))*w + (wi-offset.x))*3;
         #else
-            int g_off = (((ni*m + mi)*h + hi)*w + wi)*3;
+            int g_off = ((ni*h + hi)*w + wi)*3;
         #endif
             float sr = normal_in[g_off+0];
             float sg = normal_in[g_off+1];
@@ -287,11 +293,20 @@ __global__ void bilagrid_normal_patched_sample_backward_v1_kernel_normal(
 __global__ void bilagrid_normal_uniform_sample_backward_v1_kernel_normal(
 #endif
     const float* __restrict__ bilagrid,  // [N,L,H,W,3]
+#ifdef PATCHED
     const float* __restrict__ normal_in,  // [N,m,h,w,3]
     const float* __restrict__ v_normal_out,  // [N,m,h,w,3]
     float* __restrict__ v_normal_in,  // [N,m,h,w,3]
+#else
+    const float* __restrict__ normal_in,  // [N,h,w,3]
+    const float* __restrict__ v_normal_out,  // [N,h,w,3]
+    float* __restrict__ v_normal_in,  // [N,h,w,3]
+#endif
     int N, int L, int H, int W,
-    int m, int h, int w
+#ifdef PATCHED
+    int m,
+#endif
+    int h, int w
 #ifdef PATCHED
     , int h0, int w0,
     const int* __restrict__ offsets  // [N,m,2]
@@ -301,13 +316,19 @@ __global__ void bilagrid_normal_uniform_sample_backward_v1_kernel_normal(
 #endif
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
+#ifdef PATCHED
     int total = N * m * h * w;
+#else
+    int total = N * h * w;
+#endif
     if (idx >= total) return;
 
     int tmp = idx;
     int wi = tmp % w; tmp /= w;
     int hi = tmp % h; tmp /= h;
+#ifdef PATCHED
     int mi = tmp % m; tmp /= m;
+#endif
     int ni = tmp;
 #ifndef PATCHED
     int g_id = grid_indices ? grid_indices[ni] : ni;
@@ -316,7 +337,11 @@ __global__ void bilagrid_normal_uniform_sample_backward_v1_kernel_normal(
 #endif
 
     // input and output colors
+#ifdef PATCHED
     int g_off = (((ni * m + mi) * h + hi) * w + wi) * 3;
+#else
+    int g_off = ((ni * h + hi) * w + wi) * 3;
+#endif
     float sr = normal_in[g_off+0];
     float sg = normal_in[g_off+1];
     float sb = normal_in[g_off+2];

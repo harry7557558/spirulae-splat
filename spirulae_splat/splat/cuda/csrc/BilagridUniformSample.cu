@@ -13,16 +13,16 @@ void bilagrid_uniform_sample_forward(
     const float* rgb,
     float* output,
     int N, int L, int H, int W,
-    int m, int h, int w,
+    int h, int w,
     cudaStream_t stream,
     const int* grid_indices  // [N], or nullptr -> identity
 ) {
-    int total = N * m * h * w;
+    int total = N * h * w;
     int threads = 256;
     int blocks = (total + threads - 1) / threads;
     bilagrid_uniform_sample_forward_kernel<<<blocks, threads, 0, stream>>>(
         bilagrid, rgb, output,
-        N, L, H, W, m, h, w,
+        N, L, H, W, h, w,
         grid_indices
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -58,7 +58,7 @@ void bilagrid_uniform_sample_backward_v1(
     float* v_bilagrid,
     float* v_rgb,
     int N, int L, int H, int W,
-    int m, int h, int w,
+    int h, int w,
     const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
     cudaStream_t stream,
@@ -85,7 +85,7 @@ void bilagrid_uniform_sample_backward_v1(
         };
         bilagrid_uniform_sample_backward_v1_kernel_bilagrid<<<bounds, block, 0, stream>>>(
             rgb, v_output, v_bilagrid,
-            N, L, H, W, m, h, w, mult_x, mult_y,
+            N, L, H, W, h, w, mult_x, mult_y,
             grid_indices
         );
         CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -93,13 +93,13 @@ void bilagrid_uniform_sample_backward_v1(
 
     // v_coords and v_rgb
     {
-        int total = N * m * h * w;
+        int total = N * h * w;
         int threads = 256;
         int blocks = (total + threads - 1) / threads;
         bilagrid_uniform_sample_backward_v1_kernel_rgb<<<blocks, threads, 0, stream>>>(
             bilagrid, rgb, v_output,
             v_rgb,
-            N, L, H, W, m, h, w,
+            N, L, H, W, h, w,
             grid_indices
         );
         CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -175,19 +175,19 @@ void bilagrid_uniform_sample_backward_v2(
     float* v_bilagrid,
     float* v_rgb,
     int N, int L, int H, int W,
-    int m, int h, int w,
+    int h, int w,
     cudaStream_t stream
 ) {
     dim3 block = { 16, 16, 1 };
     dim3 bounds = {
         (w +block.x-1)/block.x,
         (h +block.y-1)/block.y,
-        (N*m +block.z-1)/block.z
+        (N +block.z-1)/block.z
     };
     bilagrid_uniform_sample_backward_v2_kernel<<<bounds, block, 0, stream>>>(
         bilagrid, rgb, v_output,
         v_bilagrid, v_rgb,
-        N, L, H, W, m, h, w
+        N, L, H, W, h, w
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }

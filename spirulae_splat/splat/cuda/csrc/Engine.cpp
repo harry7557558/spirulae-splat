@@ -1403,17 +1403,17 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
         if (Buffers::bilagrid_rgb_type == "affine") {
             bilagrid_uniform_sample_forward(
                 grid_ptr, (const float*)render_rgb, (float*)render_rgb,
-                /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+                /*N=*/C_batch, L, gH, gW, H, W,
                 kBilagridStream, cam_idx_dev);
         } else if (Buffers::bilagrid_rgb_type == "ppisp") {
             bilagrid_ppisp_uniform_sample_forward(
                 grid_ptr, (const float*)render_rgb, (float*)render_rgb,
-                /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+                /*N=*/C_batch, L, gH, gW, H, W,
                 kBilagridStream, cam_idx_dev);
         } else if (Buffers::bilagrid_rgb_type == "loglinear") {
             bilagrid_loglinear_uniform_sample_forward(
                 grid_ptr, (const float*)render_rgb, (float*)render_rgb,
-                /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+                /*N=*/C_batch, L, gH, gW, H, W,
                 kBilagridStream, cam_idx_dev);
         }
     }
@@ -1459,7 +1459,7 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
             (const float*)Buffers::fwd_depth_pre_bilagrid.data_ptr(),
             scalar_full,  // kernel reads scalars[cam_indices[ni]]
             gt_depth_ptr,
-            /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+            /*N=*/C_batch, L, gH, gW, H, W,
             kBilagridStream, cam_idx_dev);
     }
 
@@ -1481,7 +1481,7 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
             grid_ptr,
             (const float*)Buffers::fwd_normal_pre_bilagrid.data_ptr(),
             (float*)gt_normal_ptr,
-            /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+            /*N=*/C_batch, L, gH, gW, H, W,
             kBilagridStream, cam_idx_dev);
     }
 }
@@ -1528,20 +1528,20 @@ static void _engine_bilagrid_backward_hook(
             bilagrid_uniform_sample_backward_v1(
                 grid_ptr, rgb_pre_ptr, v_rgb_ptr,
                 grad_grid_ptr, v_rgb_ptr,
-                /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+                /*N=*/C_batch, L, gH, gW, H, W,
                 /*block_x=*/8, /*block_y=*/8, /*target_tile_size=*/5,
                 kBilagridStream, cam_idx_dev);
         } else if (Buffers::bilagrid_rgb_type == "ppisp") {
             bilagrid_ppisp_uniform_sample_backward_v1(
                 grid_ptr, rgb_pre_ptr, v_rgb_ptr,
                 grad_grid_ptr, v_rgb_ptr,
-                /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+                /*N=*/C_batch, L, gH, gW, H, W,
                 8, 8, 5, kBilagridStream, cam_idx_dev);
         } else if (Buffers::bilagrid_rgb_type == "loglinear") {
             bilagrid_loglinear_uniform_sample_backward_v1(
                 grid_ptr, rgb_pre_ptr, v_rgb_ptr,
                 grad_grid_ptr, v_rgb_ptr,
-                /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+                /*N=*/C_batch, L, gH, gW, H, W,
                 8, 8, 5, kBilagridStream, cam_idx_dev);
         }
     }
@@ -1569,7 +1569,7 @@ static void _engine_bilagrid_backward_hook(
             scalars,
             (const float*)std::get<0>(v_ref_depth),
             grad_grid_ptr, /*v_depth=*/nullptr,
-            /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+            /*N=*/C_batch, L, gH, gW, H, W,
             8, 8, 5, kBilagridStream, cam_idx_dev);
     }
 
@@ -1592,7 +1592,7 @@ static void _engine_bilagrid_backward_hook(
             (const float*)Buffers::fwd_normal_pre_bilagrid.data_ptr(),
             (const float*)std::get<0>(v_ref_normal),
             grad_grid_ptr, /*v_rgb=*/nullptr,
-            /*N=*/C_batch, L, gH, gW, /*m=*/1, H, W,
+            /*N=*/C_batch, L, gH, gW, H, W,
             8, 8, 5, kBilagridStream, cam_idx_dev);
     }
 }

@@ -37,12 +37,24 @@ __global__ void bilagrid_patched_sample_backward_v2_kernel(
 __global__ void bilagrid_uniform_sample_backward_v2_kernel(
 #endif
     const float* __restrict__ bilagrid,  // [N,L,H,W,12]
+#ifdef PATCHED
     const float* __restrict__ rgb,  // [N,m,h,w,3]
     const float* __restrict__ v_output,  // [N,m,h,w,3]
+#else
+    const float* __restrict__ rgb,  // [N,h,w,3]
+    const float* __restrict__ v_output,  // [N,h,w,3]
+#endif
     float* __restrict__ v_bilagrid,  // [N,L,H,W,12]
+#ifdef PATCHED
     float* __restrict__ v_rgb,  // [N,m,h,w,3]
+#else
+    float* __restrict__ v_rgb,  // [N,h,w,3]
+#endif
     int N, int L, int H, int W,
-    int m, int h, int w
+#ifdef PATCHED
+    int m,
+#endif
+    int h, int w
 #ifdef PATCHED
     , int h0, int w0,
     const int* __restrict__ offsets  // [N,m,2]
@@ -66,13 +78,23 @@ __global__ void bilagrid_uniform_sample_backward_v2_kernel(
     int idx = blockIdx.z * blockDim.z + threadIdx.z;
 #endif
 
+#ifdef PATCHED
     bool inside = (wi < w && hi < h && idx < (N*m));
     // if (!inside) return;
     int mi = idx % m;
     int ni = idx / m;
+#else
+    bool inside = (wi < w && hi < h && idx < N);
+    // if (!inside) return;
+    int ni = idx;
+#endif
 
     // load RGB colors
+#ifdef PATCHED
     int g_off = (((ni*m + mi)*h + hi)*w + wi) * 3;
+#else
+    int g_off = ((ni*h + hi)*w + wi) * 3;
+#endif
     float sr = inside ? rgb[g_off+0] : 0.5f,
         sg = inside ? rgb[g_off+1] : 0.5f,
         sb = inside ? rgb[g_off+2] : 0.5f;

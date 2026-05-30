@@ -7,11 +7,22 @@ __global__ void bilagrid_depth_patched_sample_forward_kernel(
 __global__ void bilagrid_depth_uniform_sample_forward_kernel(
 #endif
     const float* __restrict__ bilagrid, // [N,L,H,W,2]
+#ifdef PATCHED
     const float* __restrict__ depth,  // [N,m,h,w,1]
+#else
+    const float* __restrict__ depth,  // [N,h,w,1]
+#endif
     const float* __restrict__ scalars,  // [N]
+#ifdef PATCHED
     float* __restrict__ output,  // [N,m,h,w,1]
+#else
+    float* __restrict__ output,  // [N,h,w,1]
+#endif
     int N, int L, int H, int W,
-    int m, int h, int w
+#ifdef PATCHED
+    int m,
+#endif
+    int h, int w
 #ifdef PATCHED
     , int h0, int w0,
     const int* __restrict__ offsets  // [N,m,2]
@@ -21,13 +32,19 @@ __global__ void bilagrid_depth_uniform_sample_forward_kernel(
 #endif
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
+#ifdef PATCHED
     int total = N * m * h * w;
+#else
+    int total = N * h * w;
+#endif
     if (idx >= total) return;
 
     int tmp = idx;
     int wi = tmp % w; tmp /= w;
     int hi = tmp % h; tmp /= h;
+#ifdef PATCHED
     int mi = tmp % m; tmp /= m;
+#endif
     int ni = tmp;
 #ifndef PATCHED
     int g_id = grid_indices ? grid_indices[ni] : ni;
@@ -36,7 +53,11 @@ __global__ void bilagrid_depth_uniform_sample_forward_kernel(
 #endif
 
     // read coords
+#ifdef PATCHED
     int g_offset = (((ni * m + mi) * h + hi) * w + wi);
+#else
+    int g_offset = ((ni * h + hi) * w + wi);
+#endif
 
     // input and output depths
     float sr = depth[g_offset];

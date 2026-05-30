@@ -13,16 +13,16 @@ void bilagrid_loglinear_uniform_sample_forward(
     const float* rgb,
     float* output,
     int N, int L, int H, int W,
-    int m, int h, int w,
+    int h, int w,
     cudaStream_t stream,
     const int* grid_indices
 ) {
-    int total = N * m * h * w;
+    int total = N * h * w;
     int threads = 256;
     int blocks = (total + threads - 1) / threads;
     bilagrid_loglinear_uniform_sample_forward_kernel<<<blocks, threads, 0, stream>>>(
         bilagrid, rgb, output,
-        N, L, H, W, m, h, w,
+        N, L, H, W, h, w,
         grid_indices
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -56,7 +56,7 @@ void bilagrid_loglinear_uniform_sample_backward_v1(
     float* v_bilagrid,
     float* v_rgb,
     int N, int L, int H, int W,
-    int m, int h, int w,
+    int h, int w,
     const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
     cudaStream_t stream,
@@ -83,7 +83,7 @@ void bilagrid_loglinear_uniform_sample_backward_v1(
         };
         bilagrid_loglinear_uniform_sample_backward_v1_kernel_bilagrid<<<bounds, block, 0, stream>>>(
             bilagrid, rgb, v_output, v_bilagrid,
-            N, L, H, W, m, h, w, mult_x, mult_y,
+            N, L, H, W, h, w, mult_x, mult_y,
             grid_indices
         );
         CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -91,13 +91,13 @@ void bilagrid_loglinear_uniform_sample_backward_v1(
 
     // v_coords and v_rgb
     {
-        int total = N * m * h * w;
+        int total = N * h * w;
         int threads = 256;
         int blocks = (total + threads - 1) / threads;
         bilagrid_loglinear_uniform_sample_backward_v1_kernel_rgb<<<blocks, threads, 0, stream>>>(
             bilagrid, rgb, v_output,
             v_rgb,
-            N, L, H, W, m, h, w,
+            N, L, H, W, h, w,
             grid_indices
         );
         CHECK_DEVICE_ERROR(cudaGetLastError());

@@ -14,16 +14,16 @@ void bilagrid_depth_uniform_sample_forward(
     const float* scalars,
     float* output,
     int N, int L, int H, int W,
-    int m, int h, int w,
+    int h, int w,
     cudaStream_t stream,
     const int* grid_indices
 ) {
-    int total = N * m * h * w;
+    int total = N * h * w;
     int threads = 256;
     int blocks = (total + threads - 1) / threads;
     bilagrid_depth_uniform_sample_forward_kernel<<<blocks, threads, 0, stream>>>(
         bilagrid, depth, scalars, output,
-        N, L, H, W, m, h, w,
+        N, L, H, W, h, w,
         grid_indices
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -61,7 +61,7 @@ void bilagrid_depth_uniform_sample_backward_v1(
     float* v_bilagrid,
     float* v_depth,            // null: skip the v_pre kernel (GT isn't trained)
     int N, int L, int H, int W,
-    int m, int h, int w,
+    int h, int w,
     const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
     cudaStream_t stream,
@@ -87,7 +87,7 @@ void bilagrid_depth_uniform_sample_backward_v1(
         };
         bilagrid_depth_uniform_sample_backward_v1_kernel_bilagrid<<<bounds, block, 0, stream>>>(
             bilagrid, depth, scalars, v_output, v_bilagrid,
-            N, L, H, W, m, h, w, mult_x, mult_y,
+            N, L, H, W, h, w, mult_x, mult_y,
             grid_indices
         );
         CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -96,13 +96,13 @@ void bilagrid_depth_uniform_sample_backward_v1(
     // v_depth: gradient w.r.t. pre-bilagrid input depth (i.e., the raw GT).
     // Skipped when the caller passes null — GT isn't a trainable parameter.
     if (v_depth != nullptr) {
-        int total = N * m * h * w;
+        int total = N * h * w;
         int threads = 256;
         int blocks = (total + threads - 1) / threads;
         bilagrid_depth_uniform_sample_backward_v1_kernel_depth<<<blocks, threads, 0, stream>>>(
             bilagrid, depth, scalars, v_output,
             v_depth,
-            N, L, H, W, m, h, w,
+            N, L, H, W, h, w,
             grid_indices
         );
         CHECK_DEVICE_ERROR(cudaGetLastError());
