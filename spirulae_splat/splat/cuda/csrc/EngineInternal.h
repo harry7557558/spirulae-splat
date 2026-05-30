@@ -1,0 +1,84 @@
+#pragma once
+
+// EngineInternal — declarations for engine-private helpers that cross file
+// boundaries within the Engine.cpp split, plus extern declarations for raw
+// device functions defined in other translation units (PixelWise.cu,
+// BilagridFusedAdam.cu, PpispInit.cu, BilagridInit.cu).
+//
+// Anything declared here is intentionally not part of the public Engine.h API.
+
+#include "Tensor.h"
+#include "PerPixelLoss.cuh"   // PPISPRegLossIndex, etc., via PixelWise.cuh chain
+
+#include <array>
+#include <cstdint>
+#include <cstddef>
+
+
+// --- Raw-pointer image conversion helpers (PixelWise.cu). ---
+void uint8_image_to_float_raw (const uint8_t*  d_in, float* d_out,
+                               int B, int H, int W, int C);
+void uint16_image_to_float_raw(const uint16_t* d_in, float* d_out,
+                               int B, int H, int W, int C);
+void uint8_normal_to_float_raw(const uint8_t*  d_in, float* d_out,
+                               int B, int H, int W, int C);
+void uint16_depth_to_float_raw(const uint16_t* d_in, float* d_out,
+                               int B, int H, int W, int C);
+
+// --- Fused bilagrid (image-grad + TV + Adam) kernel (BilagridFusedAdam.cu). ---
+void fused_bilagrid_tv_adam(
+    float* grids,
+    float*   g1_f,    float*   g2_f,
+    uint8_t* packed,                    // AoS packed (u, sqrt_g2) when quantize
+    float4*  quant_bounds,
+    const float* image_grad,
+    const int*   cam_indices,
+    int N_grids, int C_batch, int C,
+    int L, int H, int W,
+    float lr,
+    float tv_weight,
+    int32_t adam_step,
+    bool quantize,
+    cudaStream_t stream
+);
+
+// --- Bilagrid affine identity init (BilagridInit.cu). ---
+void bilagrid_affine_identity_init(
+    float* grids, int N, int L, int H, int W, cudaStream_t stream);
+
+// --- PPISP "original" default initializer (PpispInit.cu). ---
+void ppisp_original_default_init(
+    float* params, int N, cudaStream_t stream);
+
+// --- PPISP elementwise grad accumulation (PpispInit.cu). ---
+void ppisp_add_into_grad(
+    const float* src, float* dst, size_t n, cudaStream_t stream);
+
+// --- Scatter per-image scalars into a per-camera table (BilagridInit.cu). ---
+void bilagrid_scatter_floats(
+    const float* src, const int* indices, int n,
+    float* dst, cudaStream_t stream);
+
+
+// --- Cross-section helpers within the Engine split. ---
+
+// Stash cam_indices for the current step (used by both bilagrid and PPISP).
+void _set_cur_cam_indices(TorchTensorView tv);
+
+// Bilagrid: backward hook + state setup + TV readout. The hook overwrites
+// v_render_rgb (post->pre bilagrid) when RGB bilagrid is enabled, and
+// accumulates per-type sparse image grads.
+void _engine_bilagrid_backward_hook(
+    TorchTensorView v_render_rgb,
+    TorchTensorView v_ref_depth,
+    TorchTensorView v_ref_normal);
+void _ensure_bilagrid_optim_state();
+void _engine_bilagrid_tv_into(float* tv_buf3_device);
+
+// PPISP: backward hook + state setup + regularization-loss compute.
+void _engine_ppisp_backward_hook(TorchTensorView v_render_rgb);
+void _ensure_ppisp_optim_state();
+// Returns a pool-backed [PPISPRegLossIndex::length] device buffer.
+float* _engine_ppisp_reg_loss_into(
+    const std::array<float, (int)PPISPRegLossIndex::length>& loss_weights,
+    bool compute_grad);

@@ -221,35 +221,58 @@ class Renderer:
         )
         return loss_dict
 
-    def engine_optim_step(self, step, max_steps, model_config, optim_config):
-        """Run optimizer step via C++ Engine. All tensors managed by C++ pool."""
+    def _build_optim_config(self, step, max_steps, model_config, optim_config):
+        """Build a C++ OptimConfig with all per-step LRs + regularization
+        weights already resolved (incl. train_frame_scale / alpha)."""
         if optim_config.max_steps is not None:
             max_steps = optim_config.max_steps
-
         alpha = self.train_frame_scale
         means_lr = optim_config.get_scheduled_lr("means", step, max_steps)
         if not optim_config.use_scale_agnostic_mean:
             means_lr *= alpha
 
+        c = _C.OptimConfig()
+        c.lr_means       = means_lr
+        c.lr_quats       = optim_config.get_scheduled_lr("quats",       step, max_steps)
+        c.lr_scales      = optim_config.get_scheduled_lr("scales",      step, max_steps)
+        c.lr_opacities   = optim_config.get_scheduled_lr("opacities",   step, max_steps)
+        c.lr_features_dc = optim_config.get_scheduled_lr("features_dc", step, max_steps)
+        c.lr_features_sh = optim_config.get_scheduled_lr("features_sh", step, max_steps)
+        c.max_gauss_ratio             = model_config.max_gauss_ratio
+        c.scale_regularization_weight = model_config.scale_regularization_weight
+        c.mcmc_opacity_reg_weight     = model_config.opacity_reg
+        c.mcmc_scale_reg_weight       = model_config.scale_reg / alpha
+        c.erank_reg_weight            = model_config.erank_reg
+        c.erank_reg_weight_s3         = model_config.erank_reg_s3
+        c.quat_norm_reg_weight        = model_config.quat_norm_reg
+        c.sh_reg_weight               = model_config.sh_reg
+        c.use_scale_agnostic_mean        = optim_config.use_scale_agnostic_mean
+        c.quantize_sh                    = self.quantize_sh_optim
+        c.use_per_splat_bias_correction  = optim_config.use_per_splat_bias_correction
+        return c
+
+    def _build_densify_config(self, model_config):
+        alpha = self.train_frame_scale
+        noise_lr_scalar = 1.0 if model_config.relocate_heuristic_weight >= 1.0 else alpha
+        c = _C.DensifyConfig()
+        c.refine_start_iter             = model_config.refine_start_iter
+        c.refine_stop_num_iter          = model_config.refine_stop_num_iter
+        c.refine_every                  = model_config.refine_every
+        c.growth_factor                 = model_config.growth_factor
+        c.min_opacity                   = model_config.min_opacity
+        c.max_screen_size               = model_config.max_screen_size
+        c.max_screen_size_clip_hardness = model_config.max_screen_size_clip_hardness
+        c.max_world_size                = model_config.max_world_size * alpha
+        c.noise_lr                      = model_config.noise_lr * noise_lr_scalar
+        c.noise_lr_final                = model_config.noise_lr_final * noise_lr_scalar
+        c.relocate_heuristic_weight     = model_config.relocate_heuristic_weight
+        return c
+
+    def engine_optim_step(self, step, max_steps, model_config, optim_config):
+        """Run optimizer step via C++ Engine. All tensors managed by C++ pool."""
         _C.engine_optim_step(
             step,
-            means_lr,
-            optim_config.get_scheduled_lr("quats", step, max_steps),
-            optim_config.get_scheduled_lr("scales", step, max_steps),
-            optim_config.get_scheduled_lr("opacities", step, max_steps),
-            optim_config.get_scheduled_lr("features_dc", step, max_steps),
-            optim_config.get_scheduled_lr("features_sh", step, max_steps),
-            model_config.max_gauss_ratio,
-            model_config.scale_regularization_weight,
-            model_config.opacity_reg,
-            model_config.scale_reg / alpha,
-            model_config.erank_reg,
-            model_config.erank_reg_s3,
-            model_config.quat_norm_reg,
-            model_config.sh_reg,
-            optim_config.use_scale_agnostic_mean,
-            self.quantize_sh_optim,
-            optim_config.use_per_splat_bias_correction,
+            self._build_optim_config(step, max_steps, model_config, optim_config),
         )
 
     def engine_init_bilagrid(self, n_grids, rgb_type=None, rgb_LHW=None,
@@ -283,14 +306,24 @@ class Renderer:
         In-place on rendered RGB and on the GT depth/normal buffers."""
         _C.engine_bilagrid_forward(self._tv(cam_indices))
 
+    @staticmethod
+    def _build_bilagrid_step_config(lr_rgb, lr_depth, lr_normal,
+                                     tv_weight_rgb, tv_weight_depth, tv_weight_normal):
+        c = _C.BilagridStepConfig()
+        c.lr_rgb           = float(lr_rgb)
+        c.lr_depth         = float(lr_depth)
+        c.lr_normal        = float(lr_normal)
+        c.tv_weight_rgb    = float(tv_weight_rgb)
+        c.tv_weight_depth  = float(tv_weight_depth)
+        c.tv_weight_normal = float(tv_weight_normal)
+        return c
+
     def engine_bilagrid_optim_step(self, step, lr_rgb, lr_depth, lr_normal,
                                     tv_weight_rgb, tv_weight_depth, tv_weight_normal):
         """Adam step + TV-loss regularization for each enabled bilagrid type."""
-        _C.engine_bilagrid_optim_step(
-            step,
-            float(lr_rgb), float(lr_depth), float(lr_normal),
-            float(tv_weight_rgb), float(tv_weight_depth), float(tv_weight_normal)
-        )
+        _C.engine_bilagrid_optim_step(step, self._build_bilagrid_step_config(
+            lr_rgb, lr_depth, lr_normal,
+            tv_weight_rgb, tv_weight_depth, tv_weight_normal))
 
     def engine_init_ppisp(self, n_grids, param_type="original"):
         """One-time allocation of C++ PPISP per-camera parameter table. Seeded
@@ -302,17 +335,32 @@ class Renderer:
         cam_indices: [C_batch] int32 tensor (or None for identity)."""
         _C.engine_ppisp_forward(self._tv(cam_indices))
 
+    @staticmethod
+    def _build_ppisp_step_config(lr,
+                                 reg_exposure_mean, reg_vig_center,
+                                 reg_vig_non_pos, reg_vig_channel_var,
+                                 reg_color_mean, reg_crf_channel_var):
+        c = _C.PpispStepConfig()
+        c.lr = float(lr)
+        # Order must match enum PPISPRegLossIndex
+        # (ExposureMean, VignettingCenter, VignettingNonPositivity,
+        #  VignettingChannelVariance, ColorMean, CRFChannelVariance).
+        c.reg_weights = [
+            float(reg_exposure_mean), float(reg_vig_center),
+            float(reg_vig_non_pos),   float(reg_vig_channel_var),
+            float(reg_color_mean),    float(reg_crf_channel_var),
+        ]
+        return c
+
     def engine_ppisp_optim_step(self, step, lr,
                                  reg_exposure_mean, reg_vig_center,
                                  reg_vig_non_pos, reg_vig_channel_var,
                                  reg_color_mean, reg_crf_channel_var):
         """Adam step over PPISP params + folds in the 6 regularization losses."""
-        _C.engine_ppisp_optim_step(
-            int(step), float(lr),
-            float(reg_exposure_mean), float(reg_vig_center),
-            float(reg_vig_non_pos), float(reg_vig_channel_var),
-            float(reg_color_mean), float(reg_crf_channel_var)
-        )
+        _C.engine_ppisp_optim_step(int(step), self._build_ppisp_step_config(
+            lr, reg_exposure_mean, reg_vig_center,
+            reg_vig_non_pos, reg_vig_channel_var,
+            reg_color_mean, reg_crf_channel_var))
 
     def engine_save_checkpoint(self, output_dir, step, full_dump=False):
         """Write checkpoint files into ``output_dir`` (created if missing).
@@ -353,72 +401,31 @@ class Renderer:
                           ppisp_reg_color_mean=0.0, ppisp_reg_crf_channel_var=0.0):
         """Single fused training step (set_camera + set_gt + fwd + loss/bwd + optim + densify).
         All input tensors are CPU; returns loss_dict for verbose."""
-        if optim_config.max_steps is not None:
-            max_steps_lr = optim_config.max_steps
-        else:
-            max_steps_lr = max_steps
+        max_steps_lr = optim_config.max_steps if optim_config.max_steps is not None else max_steps
 
-        alpha = self.train_frame_scale
-        means_lr = optim_config.get_scheduled_lr("means", step, max_steps_lr)
-        if not optim_config.use_scale_agnostic_mean:
-            means_lr *= alpha
+        cfg = _C.EngineStepConfig()
+        cfg.loss.weights          = loss_weights
+        cfg.loss.w_ssim           = float(w_ssim)
+        cfg.loss.num_loss_scales  = int(num_loss_scales)
+        cfg.loss.compute_loss_map = bool(compute_loss_map)
+        cfg.optim    = self._build_optim_config(step, max_steps_lr, model_config, optim_config)
+        cfg.densify  = self._build_densify_config(model_config)
+        cfg.bilagrid = self._build_bilagrid_step_config(
+            bilagrid_lr_rgb, bilagrid_lr_depth, bilagrid_lr_normal,
+            bilagrid_tv_weight_rgb, bilagrid_tv_weight_depth, bilagrid_tv_weight_normal)
+        cfg.ppisp    = self._build_ppisp_step_config(
+            ppisp_lr, ppisp_reg_exposure_mean, ppisp_reg_vig_center,
+            ppisp_reg_vig_non_pos, ppisp_reg_vig_channel_var,
+            ppisp_reg_color_mean, ppisp_reg_crf_channel_var)
 
         result = _C.engine_train_step(
             step, max_steps,
-            # Forward config
-            self.primitive,
-            sh_degree_to_use,
-            self.packed,
-            # Camera
+            self.primitive, sh_degree_to_use, self.packed,
             width, height, camera_model.upper(),
-            self._tv(viewmats),
-            self._tv(intrins),
-            self._tv(dist_coeffs),
-            # GT
+            self._tv(viewmats), self._tv(intrins), self._tv(dist_coeffs),
             self._tv(gt_rgb), self._tv(gt_depth), self._tv(gt_normal), self._tv(gt_alpha),
-            # Loss
-            loss_weights, w_ssim, num_loss_scales, compute_loss_map,
-            # LRs
-            means_lr,
-            optim_config.get_scheduled_lr("quats", step, max_steps_lr),
-            optim_config.get_scheduled_lr("scales", step, max_steps_lr),
-            optim_config.get_scheduled_lr("opacities", step, max_steps_lr),
-            optim_config.get_scheduled_lr("features_dc", step, max_steps_lr),
-            optim_config.get_scheduled_lr("features_sh", step, max_steps_lr),
-            # Regularization
-            model_config.max_gauss_ratio,
-            model_config.scale_regularization_weight,
-            model_config.opacity_reg,
-            model_config.scale_reg / alpha,
-            model_config.erank_reg,
-            model_config.erank_reg_s3,
-            model_config.quat_norm_reg,
-            model_config.sh_reg,
-            optim_config.use_scale_agnostic_mean,
-            self.quantize_sh_optim,
-            optim_config.use_per_splat_bias_correction,
-            # Densify
-            model_config.refine_start_iter,
-            model_config.refine_stop_num_iter,
-            model_config.refine_every,
-            model_config.growth_factor,
-            model_config.min_opacity,
-            model_config.max_screen_size,
-            model_config.max_screen_size_clip_hardness,
-            model_config.max_world_size * alpha,
-            model_config.noise_lr * alpha,
-            model_config.noise_lr_final * alpha,
-            model_config.relocate_heuristic_weight,
-            # Bilagrid
             self._tv(bilagrid_cam_indices),
-            float(bilagrid_lr_rgb), float(bilagrid_lr_depth), float(bilagrid_lr_normal),
-            float(bilagrid_tv_weight_rgb), float(bilagrid_tv_weight_depth),
-            float(bilagrid_tv_weight_normal),
-            # PPISP
-            float(ppisp_lr),
-            float(ppisp_reg_exposure_mean), float(ppisp_reg_vig_center),
-            float(ppisp_reg_vig_non_pos), float(ppisp_reg_vig_channel_var),
-            float(ppisp_reg_color_mean), float(ppisp_reg_crf_channel_var),
+            cfg,
         )
         # Update Python-side cur_num_splats (densification happened in C++)
         num_added = int(result.pop("num_added", 0))
@@ -430,21 +437,8 @@ class Renderer:
 
     def engine_densify_step(self, step, max_steps, model_config):
         """Run densification step via C++ Engine. All tensors managed by C++ pool."""
-        alpha = self.train_frame_scale
-        num_added = _C.engine_densify_step(
-            step, max_steps,
-            model_config.refine_start_iter,
-            model_config.refine_stop_num_iter,
-            model_config.refine_every,
-            model_config.growth_factor,
-            model_config.min_opacity,
-            model_config.max_screen_size,
-            model_config.max_screen_size_clip_hardness,
-            model_config.max_world_size * alpha,
-            model_config.noise_lr * alpha,
-            model_config.noise_lr_final * alpha,
-            model_config.relocate_heuristic_weight,
-        )
+        num_added = _C.engine_densify_step(step, max_steps,
+                                           self._build_densify_config(model_config))
         self.cur_num_splats += num_added
 
     def engine_sync_splats_to_host(self):

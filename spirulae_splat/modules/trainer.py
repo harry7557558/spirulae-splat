@@ -281,7 +281,7 @@ class Trainer:
         # dataparser transform
         dataparser_transform_dict = {
             'transform': self.dataparser_outputs_train['dataparser_transform'][:3, :].tolist(),
-            'scale': self.dataparser_outputs_train['dataparser_scale']
+            'scale': float(self.dataparser_outputs_train['dataparser_scale']),
         }
         with open(self.output_dir / "dataparser_transforms.json", "w") as f:
             json.dump(dataparser_transform_dict, f, indent=4)

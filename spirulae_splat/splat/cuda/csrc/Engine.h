@@ -26,6 +26,8 @@
 #include "BilagridUtils.cuh"
 #include "Visualizer.cuh"
 
+#include "EngineConfig.h"
+
 #include <map>
 #include <string>
 
@@ -89,28 +91,7 @@ std::map<std::string, float> engine_compute_loss_backward(
 
 // --- Optimizer step ---
 
-void engine_optim_step(
-    int step,
-    // learning rates
-    float lr_means,
-    float lr_quats,
-    float lr_scales,
-    float lr_opacities,
-    float lr_features_dc,
-    float lr_features_sh,
-    // regularization
-    float max_gauss_ratio,
-    float scale_regularization_weight,
-    float mcmc_opacity_reg_weight,
-    float mcmc_scale_reg_weight,
-    float erank_reg_weight,
-    float erank_reg_weight_s3,
-    float quat_norm_reg_weight,
-    float sh_reg_weight,
-    bool use_scale_agnostic_mean,
-    bool quantize_sh,
-    bool use_per_splat_bias_correction
-);
+void engine_optim_step(int step, const OptimConfig& cfg);
 
 // --- Bilagrid (RGB / depth / normal) ---
 // Allocates and identity-initializes a bilagrid per camera. Must be called
@@ -135,11 +116,7 @@ void engine_init_bilagrid_normal(int n_grids, int L, int H, int W,
 void engine_bilagrid_forward(TorchTensorView cam_indices);
 
 // Adam step + optional TV-loss regularization for each enabled bilagrid type.
-void engine_bilagrid_optim_step(
-    int step,
-    float lr_rgb, float lr_depth, float lr_normal,
-    float tv_weight_rgb, float tv_weight_depth, float tv_weight_normal
-);
+void engine_bilagrid_optim_step(int step, const BilagridStepConfig& cfg);
 
 // --- PPISP (RGB only, applied AFTER bilagrid). ---
 // Allocates a per-camera PPISP parameter table and seeds it with the type's
@@ -155,39 +132,18 @@ void engine_ppisp_forward(TorchTensorView cam_indices);
 // Adam step over the PPISP parameter table. Also folds in the 6 PPISP
 // regularization-loss gradients (using the provided per-loss weights) before
 // the Adam update. Pass loss weights in PPISPRegLossIndex order.
-void engine_ppisp_optim_step(
-    int step,
-    float lr,
-    float reg_exposure_mean,
-    float reg_vig_center,
-    float reg_vig_non_pos,
-    float reg_vig_channel_var,
-    float reg_color_mean,
-    float reg_crf_channel_var
-);
+void engine_ppisp_optim_step(int step, const PpispStepConfig& cfg);
 
 // --- Densification step ---
 
 // Returns: number of splats added (0 if no densification this step)
-int engine_densify_step(
-    int step,
-    int max_steps,
-    // densification config
-    int refine_start_iter,
-    int refine_stop_num_iter,
-    int refine_every,
-    float growth_factor,
-    float min_opacity,
-    float max_screen_size,
-    float max_screen_size_clip_hardness,
-    float max_world_size,
-    float noise_lr,
-    float noise_lr_final,
-    float relocate_heuristic_weight
-);
+int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg);
 
 // --- Fused training step (set_camera + set_training + forward + loss/bwd + optim + densify) ---
-
+//
+// Bilagrid + PPISP entries in `cfg` are no-ops when the corresponding
+// engine_init_* was never called. `bilagrid_cam_indices` is a [C_batch] int32
+// tensor for per-image grid-slot lookup (null/empty -> identity).
 std::map<std::string, float> engine_train_step(
     int step, int max_steps,
     std::string primitive,
@@ -201,39 +157,8 @@ std::map<std::string, float> engine_train_step(
     TorchTensorView gt_depth,
     TorchTensorView gt_normal,
     TorchTensorView gt_alpha,
-    std::array<float, (int)LossWeightIndex::length> loss_weights,
-    float w_ssim,
-    int num_loss_scales,
-    bool compute_loss_map,
-    float lr_means, float lr_quats, float lr_scales, float lr_opacities,
-    float lr_features_dc, float lr_features_sh,
-    float max_gauss_ratio, float scale_regularization_weight,
-    float mcmc_opacity_reg_weight, float mcmc_scale_reg_weight,
-    float erank_reg_weight, float erank_reg_weight_s3,
-    float quat_norm_reg_weight, float sh_reg_weight,
-    bool use_scale_agnostic_mean,
-    bool quantize_sh,
-    bool use_per_splat_bias_correction,
-    int refine_start_iter, int refine_stop_num_iter, int refine_every,
-    float growth_factor, float min_opacity,
-    float max_screen_size, float max_screen_size_clip_hardness,
-    float max_world_size,
-    float noise_lr, float noise_lr_final,
-    float relocate_heuristic_weight,
-    // Bilagrid (no-op when no engine_init_bilagrid_* has been called).
-    // cam_indices: [C_batch] int32 tensor of per-image camera-table indices.
-    // Null/empty -> identity (image i -> grid slot i).
     TorchTensorView bilagrid_cam_indices,
-    float bilagrid_lr_rgb, float bilagrid_lr_depth, float bilagrid_lr_normal,
-    float bilagrid_tv_weight_rgb, float bilagrid_tv_weight_depth, float bilagrid_tv_weight_normal,
-    // PPISP (no-op when engine_init_ppisp has not been called)
-    float ppisp_lr,
-    float ppisp_reg_exposure_mean,
-    float ppisp_reg_vig_center,
-    float ppisp_reg_vig_non_pos,
-    float ppisp_reg_vig_channel_var,
-    float ppisp_reg_color_mean,
-    float ppisp_reg_crf_channel_var
+    const EngineStepConfig& cfg
 );
 
 // --- Debug rendering ---

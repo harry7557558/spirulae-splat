@@ -241,6 +241,70 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // Visualizer.cuh
     m.def("blit_train_cameras", &blit_train_cameras_tensor);
 
+    // Engine.h - config structs (built on the Python side, passed to engine_*_step).
+    py::class_<LossConfig>(m, "LossConfig")
+        .def(py::init<>())
+        .def_readwrite("weights",          &LossConfig::weights)
+        .def_readwrite("w_ssim",           &LossConfig::w_ssim)
+        .def_readwrite("num_loss_scales",  &LossConfig::num_loss_scales)
+        .def_readwrite("compute_loss_map", &LossConfig::compute_loss_map);
+
+    py::class_<OptimConfig>(m, "OptimConfig")
+        .def(py::init<>())
+        .def_readwrite("lr_means",        &OptimConfig::lr_means)
+        .def_readwrite("lr_quats",        &OptimConfig::lr_quats)
+        .def_readwrite("lr_scales",       &OptimConfig::lr_scales)
+        .def_readwrite("lr_opacities",    &OptimConfig::lr_opacities)
+        .def_readwrite("lr_features_dc",  &OptimConfig::lr_features_dc)
+        .def_readwrite("lr_features_sh",  &OptimConfig::lr_features_sh)
+        .def_readwrite("max_gauss_ratio",                &OptimConfig::max_gauss_ratio)
+        .def_readwrite("scale_regularization_weight",    &OptimConfig::scale_regularization_weight)
+        .def_readwrite("mcmc_opacity_reg_weight",        &OptimConfig::mcmc_opacity_reg_weight)
+        .def_readwrite("mcmc_scale_reg_weight",          &OptimConfig::mcmc_scale_reg_weight)
+        .def_readwrite("erank_reg_weight",               &OptimConfig::erank_reg_weight)
+        .def_readwrite("erank_reg_weight_s3",            &OptimConfig::erank_reg_weight_s3)
+        .def_readwrite("quat_norm_reg_weight",           &OptimConfig::quat_norm_reg_weight)
+        .def_readwrite("sh_reg_weight",                  &OptimConfig::sh_reg_weight)
+        .def_readwrite("use_scale_agnostic_mean",        &OptimConfig::use_scale_agnostic_mean)
+        .def_readwrite("quantize_sh",                    &OptimConfig::quantize_sh)
+        .def_readwrite("use_per_splat_bias_correction",  &OptimConfig::use_per_splat_bias_correction);
+
+    py::class_<DensifyConfig>(m, "DensifyConfig")
+        .def(py::init<>())
+        .def_readwrite("refine_start_iter",              &DensifyConfig::refine_start_iter)
+        .def_readwrite("refine_stop_num_iter",           &DensifyConfig::refine_stop_num_iter)
+        .def_readwrite("refine_every",                   &DensifyConfig::refine_every)
+        .def_readwrite("growth_factor",                  &DensifyConfig::growth_factor)
+        .def_readwrite("min_opacity",                    &DensifyConfig::min_opacity)
+        .def_readwrite("max_screen_size",                &DensifyConfig::max_screen_size)
+        .def_readwrite("max_screen_size_clip_hardness",  &DensifyConfig::max_screen_size_clip_hardness)
+        .def_readwrite("max_world_size",                 &DensifyConfig::max_world_size)
+        .def_readwrite("noise_lr",                       &DensifyConfig::noise_lr)
+        .def_readwrite("noise_lr_final",                 &DensifyConfig::noise_lr_final)
+        .def_readwrite("relocate_heuristic_weight",      &DensifyConfig::relocate_heuristic_weight);
+
+    py::class_<BilagridStepConfig>(m, "BilagridStepConfig")
+        .def(py::init<>())
+        .def_readwrite("lr_rgb",         &BilagridStepConfig::lr_rgb)
+        .def_readwrite("lr_depth",       &BilagridStepConfig::lr_depth)
+        .def_readwrite("lr_normal",      &BilagridStepConfig::lr_normal)
+        .def_readwrite("tv_weight_rgb",  &BilagridStepConfig::tv_weight_rgb)
+        .def_readwrite("tv_weight_depth",  &BilagridStepConfig::tv_weight_depth)
+        .def_readwrite("tv_weight_normal", &BilagridStepConfig::tv_weight_normal);
+
+    py::class_<PpispStepConfig>(m, "PpispStepConfig")
+        .def(py::init<>())
+        .def_readwrite("lr",          &PpispStepConfig::lr)
+        .def_readwrite("reg_weights", &PpispStepConfig::reg_weights);
+
+    py::class_<EngineStepConfig>(m, "EngineStepConfig")
+        .def(py::init<>())
+        .def_readwrite("loss",     &EngineStepConfig::loss)
+        .def_readwrite("optim",    &EngineStepConfig::optim)
+        .def_readwrite("densify",  &EngineStepConfig::densify)
+        .def_readwrite("bilagrid", &EngineStepConfig::bilagrid)
+        .def_readwrite("ppisp",    &EngineStepConfig::ppisp);
+
     // Engine.h - unified forward/backward/optimize
     m.def("set_data_3dgs", &set_data_3dgs);
     m.def("set_camera_params", &set_camera_params);

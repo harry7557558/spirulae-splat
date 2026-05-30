@@ -199,8 +199,6 @@ class SpirulaeSplatDataParserConfig:
         Set this to a number to divide intrinsics by that number, e.g. Mip-NeRF 360 and Zip-NeRF with images_(2|4)
         Set this to True to detect resolution, e.g. tankt_db"""
 
-    scale_factor: float = 1.0
-    """How much to scale the camera origins by."""
     downscale_factor: Optional[int] = None
     """How much to downscale images. If not set, images are chosen such that the max dimension is <1600px."""
     scene_scale: float = 1.0
@@ -423,7 +421,7 @@ class SpirulaeSplatDataparser:
             )
             poses = torch.from_numpy(poses).float()
             transform_matrix = torch.from_numpy(transform_matrix).float()[:3, :]
-            scale_factor = 1.0 / scene_scale
+            scale_factor = 1.0 / scene_scale  # TODO: this messes up scale_reg
         else:
             poses, transform_matrix = camera_utils.auto_orient_and_center_poses(
                 poses,
@@ -434,7 +432,10 @@ class SpirulaeSplatDataparser:
             if self.config.auto_scale_poses:
                 scale_factor /= float(torch.max(torch.abs(poses[:, :3, 3])))
 
-        scale_factor *= self.config.scale_factor
+        transform_matrix_scale = np.abs(np.cbrt(np.linalg.det(transform_matrix[:3, :3])))
+        transform_matrix /= transform_matrix_scale
+        poses[:, :3, 3] /= transform_matrix_scale
+        scale_factor *= transform_matrix_scale
 
         # Normalize all poses to (N, 4, 4) for the train-frame branching below.
         # auto_orient_and_center_poses returns (N, 3, 4); gsplat returns (N, 4, 4).
@@ -546,15 +547,11 @@ class SpirulaeSplatDataparser:
             else:
                 dataparser_transform_matrix = transform_matrix
 
-            if "applied_scale" in meta:
-                applied_scale = float(meta["applied_scale"])
-                scale_factor *= applied_scale
-
             dataparser_outputs = dict(
                 cameras=cameras,
                 image_filenames=image_filenames_split,
                 mask_filenames=mask_filenames_split if len(mask_filenames_split) > 0 else None,
-                dataparser_scale=scale_factor,
+                dataparser_scale=float(scale_factor),
                 dataparser_transform=dataparser_transform_matrix,
                 train_frame=train_frame,
                 train_frame_scale=float(train_frame_scale),

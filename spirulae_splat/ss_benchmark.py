@@ -69,7 +69,7 @@ def bench_360_v2(config_class, path_to_360_v2: Path):
         # config.model.use_ppisp = False
         config.datamanager.load_depths = False
         config.datamanager.load_normals = False
-        config.model.use_bilateral_grid_for_geometry = False
+        # config.model.use_bilateral_grid_for_geometry = False
 
         config.steps_per_save = 0
 

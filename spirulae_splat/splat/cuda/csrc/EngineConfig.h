@@ -1,0 +1,94 @@
+#pragma once
+
+// EngineConfig — per-step config structs accepted by the engine_*_step
+// entrypoints. These collapse what used to be ~40-arg signatures into a
+// handful of typed bundles, while keeping all scheduling on the Python side
+// (every numeric field below is the already-resolved value for this step).
+
+#include "PerPixelLoss.cuh"   // LossWeightIndex
+#include "PixelWise.cuh"      // PPISPRegLossIndex
+
+#include <array>
+
+
+// engine_compute_loss_backward keeps its (step, weights, w_ssim, scales, map)
+// signature; LossConfig exists to bundle those four scalars when called
+// transitively from engine_train_step.
+struct LossConfig {
+    std::array<float, (int)LossWeightIndex::length> weights{};
+    float w_ssim          = 0.0f;
+    int   num_loss_scales = 1;
+    bool  compute_loss_map = false;
+};
+
+
+// Per-param learning rates + per-splat regularization weights + flags.
+// All LR values are *already* multiplied by train_frame_scale / alpha on the
+// Python side where needed; the engine consumes them verbatim.
+struct OptimConfig {
+    float lr_means        = 0.0f;
+    float lr_quats        = 0.0f;
+    float lr_scales       = 0.0f;
+    float lr_opacities    = 0.0f;
+    float lr_features_dc  = 0.0f;
+    float lr_features_sh  = 0.0f;
+
+    float max_gauss_ratio              = 0.0f;
+    float scale_regularization_weight  = 0.0f;
+    float mcmc_opacity_reg_weight      = 0.0f;
+    float mcmc_scale_reg_weight        = 0.0f;
+    float erank_reg_weight             = 0.0f;
+    float erank_reg_weight_s3          = 0.0f;
+    float quat_norm_reg_weight         = 0.0f;
+    float sh_reg_weight                = 0.0f;
+
+    bool  use_scale_agnostic_mean         = false;
+    bool  quantize_sh                     = false;
+    bool  use_per_splat_bias_correction   = false;
+};
+
+
+// MCMC / revised-relocate densification controls. max_world_size / noise_lr*
+// are pre-scaled by alpha on the Python side.
+struct DensifyConfig {
+    int   refine_start_iter             = 0;
+    int   refine_stop_num_iter          = 0;
+    int   refine_every                  = 0;
+    float growth_factor                 = 1.0f;
+    float min_opacity                   = 0.0f;
+    float max_screen_size               = 0.0f;
+    float max_screen_size_clip_hardness = 0.0f;
+    float max_world_size                = 0.0f;
+    float noise_lr                      = 0.0f;
+    float noise_lr_final                = 0.0f;
+    float relocate_heuristic_weight     = 0.0f;
+};
+
+
+// Per-type Adam LR + TV regularization weight. lr <= 0 disables the channel
+// for the current step (so a single config covers "enabled but skipped" too).
+struct BilagridStepConfig {
+    float lr_rgb         = 0.0f;
+    float lr_depth       = 0.0f;
+    float lr_normal      = 0.0f;
+    float tv_weight_rgb  = 0.0f;
+    float tv_weight_depth = 0.0f;
+    float tv_weight_normal = 0.0f;
+};
+
+
+// PPISP Adam LR + 6-component regularization weights (indexed by PPISPRegLossIndex).
+struct PpispStepConfig {
+    float lr = 0.0f;
+    std::array<float, (int)PPISPRegLossIndex::length> reg_weights{};
+};
+
+
+// Bundle passed to engine_train_step covering all five per-step config groups.
+struct EngineStepConfig {
+    LossConfig         loss;
+    OptimConfig        optim;
+    DensifyConfig      densify;
+    BilagridStepConfig bilagrid;
+    PpispStepConfig    ppisp;
+};
