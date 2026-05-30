@@ -69,11 +69,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // m.def("intersect_tile_opaque_triangle", &intersect_tile_opaque_triangle_tensor);
     // m.def("intersect_tile_voxel", &intersect_tile_voxel_tensor);
 
-    #if 0
-    // BackgroundSphericalHarmonics.cuh
-    m.def("render_background_sh_forward", &render_background_sh_forward);
+    // BackgroundSphericalHarmonics.cuh — TorchTensorView API. Outputs are
+    // caller-allocated; the C++ side fills them in place.
+    m.def("render_background_sh_forward",  &render_background_sh_forward);
     m.def("render_background_sh_backward", &render_background_sh_backward);
 
+    #if 0
     // PerSplatLoss.cuh
     m.def("compute_per_splat_losses_forward", &compute_per_splat_losses_forward);
     m.def("compute_per_splat_losses_backward", &compute_per_splat_losses_backward);
@@ -297,13 +298,21 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("lr",          &PpispStepConfig::lr)
         .def_readwrite("reg_weights", &PpispStepConfig::reg_weights);
 
+    py::class_<BackgroundStepConfig>(m, "BackgroundStepConfig")
+        .def(py::init<>())
+        .def_readwrite("lr_dc",            &BackgroundStepConfig::lr_dc)
+        .def_readwrite("lr_sh",            &BackgroundStepConfig::lr_sh)
+        .def_readwrite("randomize_weight", &BackgroundStepConfig::randomize_weight)
+        .def_readwrite("seed",             &BackgroundStepConfig::seed);
+
     py::class_<EngineStepConfig>(m, "EngineStepConfig")
         .def(py::init<>())
-        .def_readwrite("loss",     &EngineStepConfig::loss)
-        .def_readwrite("optim",    &EngineStepConfig::optim)
-        .def_readwrite("densify",  &EngineStepConfig::densify)
-        .def_readwrite("bilagrid", &EngineStepConfig::bilagrid)
-        .def_readwrite("ppisp",    &EngineStepConfig::ppisp);
+        .def_readwrite("loss",       &EngineStepConfig::loss)
+        .def_readwrite("optim",      &EngineStepConfig::optim)
+        .def_readwrite("densify",    &EngineStepConfig::densify)
+        .def_readwrite("bilagrid",   &EngineStepConfig::bilagrid)
+        .def_readwrite("ppisp",      &EngineStepConfig::ppisp)
+        .def_readwrite("background", &EngineStepConfig::background);
 
     // Engine.h - unified forward/backward/optimize
     m.def("set_data_3dgs", &set_data_3dgs);
@@ -329,6 +338,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("engine_init_ppisp", &engine_init_ppisp);
     m.def("engine_ppisp_forward", &engine_ppisp_forward);
     m.def("engine_ppisp_optim_step", &engine_ppisp_optim_step);
+    m.def("engine_init_background_noise", &engine_init_background_noise);
+    m.def("engine_init_background_sh",    &engine_init_background_sh);
+    m.def("engine_set_background_step_params", &engine_set_background_step_params);
+    m.def("engine_background_optim_step", &engine_background_optim_step);
+    m.def("engine_copy_background_to_host", &engine_copy_background_to_host);
     m.def("engine_save_checkpoint", &engine_save_checkpoint);
 
 #if 0

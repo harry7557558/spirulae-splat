@@ -77,6 +77,16 @@ struct BilagridStepConfig {
 };
 
 
+// Background blending step config. When mode=Noise, only `randomize_weight`
+// Adam over the per-band SH coefficients (index 0 = DC color, 1+ = bands).
+struct BackgroundStepConfig {
+    float    lr_dc           = 0.0f;
+    float    lr_sh           = 0.0f;
+    float    randomize_weight = 0.0f;
+    uint32_t seed             = 0;
+};
+
+
 // PPISP Adam LR + 6-component regularization weights (indexed by PPISPRegLossIndex).
 struct PpispStepConfig {
     float lr = 0.0f;
@@ -84,11 +94,12 @@ struct PpispStepConfig {
 };
 
 
-// Bundle passed to engine_train_step covering all five per-step config groups.
+// Bundle passed to engine_train_step covering all per-step config groups.
 struct EngineStepConfig {
-    LossConfig         loss;
-    OptimConfig        optim;
-    DensifyConfig      densify;
-    BilagridStepConfig bilagrid;
-    PpispStepConfig    ppisp;
+    LossConfig           loss;
+    OptimConfig          optim;
+    DensifyConfig        densify;
+    BilagridStepConfig   bilagrid;
+    PpispStepConfig      ppisp;
+    BackgroundStepConfig background;
 };

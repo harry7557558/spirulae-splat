@@ -5268,3 +5268,1421 @@ inline __device__ void sh4_to_color_vjp_atomic(float3  mean_29, Matrix<float, 3,
     return;
 }
 
+inline __device__ float3  sh0_to_color_dir(float3  dir_0, float3  coeff_dc_30, float3  * coeffs_30)
+{
+    return make_float3 (0.282094806432724f) * coeff_dc_30;
+}
+
+inline __device__ void sh0_to_color_dir_vjp_inplace(float3  dir_1, float3  coeff_dc_31, float3  * coeffs_31, float3  v_colors_20, float3  * v_coeff_dc_20, float3  * v_coeffs_20, float3  * v_dir_0)
+{
+    *v_coeff_dc_20 = *v_coeff_dc_20 + make_float3 (0.282094806432724f) * v_colors_20;
+    return;
+}
+
+inline __device__ void sh0_to_color_dir_vjp_atomic(float3  dir_2, float3  coeff_dc_32, float3  * coeffs_32, float3  v_colors_21, float3  * v_coeff_dc_21, float3  * v_coeffs_21, float3  * v_dir_1)
+{
+    *v_coeff_dc_21 = *v_coeff_dc_21 + make_float3 (0.282094806432724f) * v_colors_21;
+    return;
+}
+
+inline __device__ float3  sh1_to_color_dir(float3  dir_3, float3  coeff_dc_33, float3  * coeffs_33)
+{
+    float _S1409 = dir_3.x;
+    float _S1410 = dir_3.y;
+    float _S1411 = dir_3.z;
+    float inv_norm_24 = (F32_rsqrt((_S1409 * _S1409 + _S1410 * _S1410 + _S1411 * _S1411)));
+    return make_float3 (0.282094806432724f) * coeff_dc_33 + make_float3 (0.48860251903533936f) * (make_float3 (- (_S1410 * inv_norm_24)) * *(coeffs_33 + int(0)) + make_float3 (_S1411 * inv_norm_24) * *(coeffs_33 + int(1)) - make_float3 (_S1409 * inv_norm_24) * *(coeffs_33 + int(2)));
+}
+
+inline __device__ void sh1_to_color_dir_vjp_inplace(float3  dir_4, float3  coeff_dc_34, float3  * coeffs_34, float3  v_colors_22, float3  * v_coeff_dc_22, float3  * v_coeffs_22, float3  * v_dir_2)
+{
+    *v_coeff_dc_22 = *v_coeff_dc_22 + make_float3 (0.282094806432724f) * v_colors_22;
+    float _S1412 = dir_4.x;
+    float _S1413 = dir_4.y;
+    float _S1414 = dir_4.z;
+    float inorm_0 = (F32_rsqrt((_S1412 * _S1412 + _S1413 * _S1413 + _S1414 * _S1414)));
+    float x_26 = _S1412 * inorm_0;
+    float y_24 = _S1413 * inorm_0;
+    float z_23 = _S1414 * inorm_0;
+    float3  * _S1415 = v_coeffs_22 + int(0);
+    *_S1415 = *_S1415 + make_float3 (-0.48860251903533936f * y_24) * v_colors_22;
+    float3  * _S1416 = v_coeffs_22 + int(1);
+    *_S1416 = *_S1416 + make_float3 (0.48860251903533936f * z_23) * v_colors_22;
+    float3  * _S1417 = v_coeffs_22 + int(2);
+    *_S1417 = *_S1417 + make_float3 (-0.48860251903533936f * x_26) * v_colors_22;
+    float3  dir_n_16 = make_float3 (x_26, y_24, z_23);
+    float3  v_dir_n_32 = make_float3 (-0.48860251903533936f * dot_0(*(coeffs_34 + int(2)), v_colors_22), -0.48860251903533936f * dot_0(*(coeffs_34 + int(0)), v_colors_22), 0.48860251903533936f * dot_0(*(coeffs_34 + int(1)), v_colors_22));
+    *v_dir_2 = *v_dir_2 + (v_dir_n_32 - make_float3 (dot_0(v_dir_n_32, dir_n_16)) * dir_n_16) * make_float3 (inorm_0);
+    return;
+}
+
+inline __device__ void sh1_to_color_dir_vjp_atomic(float3  dir_5, float3  coeff_dc_35, float3  * coeffs_35, float3  v_colors_23, float3  * v_coeff_dc_23, float3  * v_coeffs_23, float3  * v_dir_3)
+{
+    *v_coeff_dc_23 = *v_coeff_dc_23 + make_float3 (0.282094806432724f) * v_colors_23;
+    float _S1418 = dir_5.x;
+    float _S1419 = dir_5.y;
+    float _S1420 = dir_5.z;
+    float inorm_1 = (F32_rsqrt((_S1418 * _S1418 + _S1419 * _S1419 + _S1420 * _S1420)));
+    float x_27 = _S1418 * inorm_1;
+    float y_25 = _S1419 * inorm_1;
+    float z_24 = _S1420 * inorm_1;
+    float3  temp_200 = make_float3 (-0.48860251903533936f * y_25) * v_colors_23;
+    float _S1421 = dot_0(temp_200, temp_200);
+    bool _S1422;
+    if((F32_isfinite((_S1421))))
+    {
+        _S1422 = _S1421 != 0.0f;
+    }
+    else
+    {
+        _S1422 = false;
+    }
+    if(_S1422)
+    {
+        float3  * _S1423 = v_coeffs_23 + int(0);
+        float _S1424 = atomicAdd(&(_S1423->x), temp_200.x);
+        float _S1425 = atomicAdd(&(_S1423->y), temp_200.y);
+        float _S1426 = atomicAdd(&(_S1423->z), temp_200.z);
+    }
+    float3  temp_201 = make_float3 (0.48860251903533936f * z_24) * v_colors_23;
+    float _S1427 = dot_0(temp_201, temp_201);
+    if((F32_isfinite((_S1427))))
+    {
+        _S1422 = _S1427 != 0.0f;
+    }
+    else
+    {
+        _S1422 = false;
+    }
+    if(_S1422)
+    {
+        float3  * _S1428 = v_coeffs_23 + int(1);
+        float _S1429 = atomicAdd(&(_S1428->x), temp_201.x);
+        float _S1430 = atomicAdd(&(_S1428->y), temp_201.y);
+        float _S1431 = atomicAdd(&(_S1428->z), temp_201.z);
+    }
+    float3  temp_202 = make_float3 (-0.48860251903533936f * x_27) * v_colors_23;
+    float _S1432 = dot_0(temp_202, temp_202);
+    if((F32_isfinite((_S1432))))
+    {
+        _S1422 = _S1432 != 0.0f;
+    }
+    else
+    {
+        _S1422 = false;
+    }
+    if(_S1422)
+    {
+        float3  * _S1433 = v_coeffs_23 + int(2);
+        float _S1434 = atomicAdd(&(_S1433->x), temp_202.x);
+        float _S1435 = atomicAdd(&(_S1433->y), temp_202.y);
+        float _S1436 = atomicAdd(&(_S1433->z), temp_202.z);
+    }
+    float3  dir_n_17 = make_float3 (x_27, y_25, z_24);
+    float3  v_dir_n_33 = make_float3 (-0.48860251903533936f * dot_0(*(coeffs_35 + int(2)), v_colors_23), -0.48860251903533936f * dot_0(*(coeffs_35 + int(0)), v_colors_23), 0.48860251903533936f * dot_0(*(coeffs_35 + int(1)), v_colors_23));
+    *v_dir_3 = *v_dir_3 + (v_dir_n_33 - make_float3 (dot_0(v_dir_n_33, dir_n_17)) * dir_n_17) * make_float3 (inorm_1);
+    return;
+}
+
+inline __device__ float3  sh2_to_color_dir(float3  dir_6, float3  coeff_dc_36, float3  * coeffs_36)
+{
+    float _S1437 = dir_6.x;
+    float _S1438 = dir_6.y;
+    float _S1439 = dir_6.z;
+    float inv_norm_25 = (F32_rsqrt((_S1437 * _S1437 + _S1438 * _S1438 + _S1439 * _S1439)));
+    float x_28 = _S1437 * inv_norm_25;
+    float y_26 = _S1438 * inv_norm_25;
+    float z_25 = _S1439 * inv_norm_25;
+    float fTmp0B_18 = -1.09254848957061768f * z_25;
+    return make_float3 (0.282094806432724f) * coeff_dc_36 + make_float3 (0.48860251903533936f) * (make_float3 (- y_26) * *(coeffs_36 + int(0)) + make_float3 (z_25) * *(coeffs_36 + int(1)) - make_float3 (x_28) * *(coeffs_36 + int(2))) + (make_float3 (0.54627424478530884f * (2.0f * x_28 * y_26)) * *(coeffs_36 + int(3)) + make_float3 (fTmp0B_18 * y_26) * *(coeffs_36 + int(4)) + make_float3 (0.94617468118667603f * (z_25 * z_25) - 0.31539157032966614f) * *(coeffs_36 + int(5)) + make_float3 (fTmp0B_18 * x_28) * *(coeffs_36 + int(6)) + make_float3 (0.54627424478530884f * (x_28 * x_28 - y_26 * y_26)) * *(coeffs_36 + int(7)));
+}
+
+inline __device__ void sh2_to_color_dir_vjp_inplace(float3  dir_7, float3  coeff_dc_37, float3  * coeffs_37, float3  v_colors_24, float3  * v_coeff_dc_24, float3  * v_coeffs_24, float3  * v_dir_4)
+{
+    *v_coeff_dc_24 = *v_coeff_dc_24 + make_float3 (0.282094806432724f) * v_colors_24;
+    float _S1440 = dir_7.x;
+    float _S1441 = dir_7.y;
+    float _S1442 = dir_7.z;
+    float inorm_2 = (F32_rsqrt((_S1440 * _S1440 + _S1441 * _S1441 + _S1442 * _S1442)));
+    float x_29 = _S1440 * inorm_2;
+    float y_27 = _S1441 * inorm_2;
+    float z_26 = _S1442 * inorm_2;
+    float3  * _S1443 = v_coeffs_24 + int(0);
+    *_S1443 = *_S1443 + make_float3 (-0.48860251903533936f * y_27) * v_colors_24;
+    float3  * _S1444 = v_coeffs_24 + int(1);
+    *_S1444 = *_S1444 + make_float3 (0.48860251903533936f * z_26) * v_colors_24;
+    float3  * _S1445 = v_coeffs_24 + int(2);
+    *_S1445 = *_S1445 + make_float3 (-0.48860251903533936f * x_29) * v_colors_24;
+    float _S1446 = -0.48860251903533936f * dot_0(*(coeffs_37 + int(2)), v_colors_24);
+    float _S1447 = -0.48860251903533936f * dot_0(*(coeffs_37 + int(0)), v_colors_24);
+    float _S1448 = 0.48860251903533936f * dot_0(*(coeffs_37 + int(1)), v_colors_24);
+    float fTmp0B_19 = -1.09254848957061768f * z_26;
+    float _S1449 = 2.0f * x_29;
+    float pSH6_16 = 0.94617468118667603f * (z_26 * z_26) - 0.31539157032966614f;
+    float pSH7_15 = fTmp0B_19 * x_29;
+    float pSH5_15 = fTmp0B_19 * y_27;
+    float pSH8_15 = 0.54627424478530884f * (x_29 * x_29 - y_27 * y_27);
+    float3  * _S1450 = v_coeffs_24 + int(3);
+    *_S1450 = *_S1450 + make_float3 (0.54627424478530884f * (_S1449 * y_27)) * v_colors_24;
+    float3  * _S1451 = v_coeffs_24 + int(4);
+    *_S1451 = *_S1451 + make_float3 (pSH5_15) * v_colors_24;
+    float3  * _S1452 = v_coeffs_24 + int(5);
+    *_S1452 = *_S1452 + make_float3 (pSH6_16) * v_colors_24;
+    float3  * _S1453 = v_coeffs_24 + int(6);
+    *_S1453 = *_S1453 + make_float3 (pSH7_15) * v_colors_24;
+    float3  * _S1454 = v_coeffs_24 + int(7);
+    *_S1454 = *_S1454 + make_float3 (pSH8_15) * v_colors_24;
+    float pSH8_x_12 = 0.54627424478530884f * _S1449;
+    float3  * _S1455 = coeffs_37 + int(3);
+    float3  * _S1456 = coeffs_37 + int(7);
+    float3  * _S1457 = coeffs_37 + int(6);
+    float3  * _S1458 = coeffs_37 + int(4);
+    float3  dir_n_18 = make_float3 (x_29, y_27, z_26);
+    float3  v_dir_n_34 = make_float3 (_S1446 + dot_0(v_colors_24, make_float3 (0.54627424478530884f * (2.0f * y_27)) * *_S1455 + make_float3 (pSH8_x_12) * *_S1456 + make_float3 (fTmp0B_19) * *_S1457), _S1447 + dot_0(v_colors_24, make_float3 (pSH8_x_12) * *_S1455 + make_float3 (0.54627424478530884f * (-2.0f * y_27)) * *_S1456 + make_float3 (fTmp0B_19) * *_S1458), _S1448 + dot_0(v_colors_24, make_float3 (1.89234936237335205f * z_26) * *(coeffs_37 + int(5)) + make_float3 (-1.09254848957061768f * x_29) * *_S1457 + make_float3 (-1.09254848957061768f * y_27) * *_S1458));
+    *v_dir_4 = *v_dir_4 + (v_dir_n_34 - make_float3 (dot_0(v_dir_n_34, dir_n_18)) * dir_n_18) * make_float3 (inorm_2);
+    return;
+}
+
+inline __device__ void sh2_to_color_dir_vjp_atomic(float3  dir_8, float3  coeff_dc_38, float3  * coeffs_38, float3  v_colors_25, float3  * v_coeff_dc_25, float3  * v_coeffs_25, float3  * v_dir_5)
+{
+    *v_coeff_dc_25 = *v_coeff_dc_25 + make_float3 (0.282094806432724f) * v_colors_25;
+    float _S1459 = dir_8.x;
+    float _S1460 = dir_8.y;
+    float _S1461 = dir_8.z;
+    float inorm_3 = (F32_rsqrt((_S1459 * _S1459 + _S1460 * _S1460 + _S1461 * _S1461)));
+    float x_30 = _S1459 * inorm_3;
+    float y_28 = _S1460 * inorm_3;
+    float z_27 = _S1461 * inorm_3;
+    float3  temp_203 = make_float3 (-0.48860251903533936f * y_28) * v_colors_25;
+    float _S1462 = dot_0(temp_203, temp_203);
+    bool _S1463;
+    if((F32_isfinite((_S1462))))
+    {
+        _S1463 = _S1462 != 0.0f;
+    }
+    else
+    {
+        _S1463 = false;
+    }
+    if(_S1463)
+    {
+        float3  * _S1464 = v_coeffs_25 + int(0);
+        float _S1465 = atomicAdd(&(_S1464->x), temp_203.x);
+        float _S1466 = atomicAdd(&(_S1464->y), temp_203.y);
+        float _S1467 = atomicAdd(&(_S1464->z), temp_203.z);
+    }
+    float3  temp_204 = make_float3 (0.48860251903533936f * z_27) * v_colors_25;
+    float _S1468 = dot_0(temp_204, temp_204);
+    if((F32_isfinite((_S1468))))
+    {
+        _S1463 = _S1468 != 0.0f;
+    }
+    else
+    {
+        _S1463 = false;
+    }
+    if(_S1463)
+    {
+        float3  * _S1469 = v_coeffs_25 + int(1);
+        float _S1470 = atomicAdd(&(_S1469->x), temp_204.x);
+        float _S1471 = atomicAdd(&(_S1469->y), temp_204.y);
+        float _S1472 = atomicAdd(&(_S1469->z), temp_204.z);
+    }
+    float3  temp_205 = make_float3 (-0.48860251903533936f * x_30) * v_colors_25;
+    float _S1473 = dot_0(temp_205, temp_205);
+    if((F32_isfinite((_S1473))))
+    {
+        _S1463 = _S1473 != 0.0f;
+    }
+    else
+    {
+        _S1463 = false;
+    }
+    if(_S1463)
+    {
+        float3  * _S1474 = v_coeffs_25 + int(2);
+        float _S1475 = atomicAdd(&(_S1474->x), temp_205.x);
+        float _S1476 = atomicAdd(&(_S1474->y), temp_205.y);
+        float _S1477 = atomicAdd(&(_S1474->z), temp_205.z);
+    }
+    float _S1478 = -0.48860251903533936f * dot_0(*(coeffs_38 + int(2)), v_colors_25);
+    float _S1479 = -0.48860251903533936f * dot_0(*(coeffs_38 + int(0)), v_colors_25);
+    float _S1480 = 0.48860251903533936f * dot_0(*(coeffs_38 + int(1)), v_colors_25);
+    float fTmp0B_20 = -1.09254848957061768f * z_27;
+    float _S1481 = 2.0f * x_30;
+    float pSH6_17 = 0.94617468118667603f * (z_27 * z_27) - 0.31539157032966614f;
+    float pSH7_16 = fTmp0B_20 * x_30;
+    float pSH5_16 = fTmp0B_20 * y_28;
+    float pSH8_16 = 0.54627424478530884f * (x_30 * x_30 - y_28 * y_28);
+    float3  temp_206 = make_float3 (0.54627424478530884f * (_S1481 * y_28)) * v_colors_25;
+    float _S1482 = dot_0(temp_206, temp_206);
+    if((F32_isfinite((_S1482))))
+    {
+        _S1463 = _S1482 != 0.0f;
+    }
+    else
+    {
+        _S1463 = false;
+    }
+    if(_S1463)
+    {
+        float3  * _S1483 = v_coeffs_25 + int(3);
+        float _S1484 = atomicAdd(&(_S1483->x), temp_206.x);
+        float _S1485 = atomicAdd(&(_S1483->y), temp_206.y);
+        float _S1486 = atomicAdd(&(_S1483->z), temp_206.z);
+    }
+    float3  temp_207 = make_float3 (pSH5_16) * v_colors_25;
+    float _S1487 = dot_0(temp_207, temp_207);
+    if((F32_isfinite((_S1487))))
+    {
+        _S1463 = _S1487 != 0.0f;
+    }
+    else
+    {
+        _S1463 = false;
+    }
+    if(_S1463)
+    {
+        float3  * _S1488 = v_coeffs_25 + int(4);
+        float _S1489 = atomicAdd(&(_S1488->x), temp_207.x);
+        float _S1490 = atomicAdd(&(_S1488->y), temp_207.y);
+        float _S1491 = atomicAdd(&(_S1488->z), temp_207.z);
+    }
+    float3  temp_208 = make_float3 (pSH6_17) * v_colors_25;
+    float _S1492 = dot_0(temp_208, temp_208);
+    if((F32_isfinite((_S1492))))
+    {
+        _S1463 = _S1492 != 0.0f;
+    }
+    else
+    {
+        _S1463 = false;
+    }
+    if(_S1463)
+    {
+        float3  * _S1493 = v_coeffs_25 + int(5);
+        float _S1494 = atomicAdd(&(_S1493->x), temp_208.x);
+        float _S1495 = atomicAdd(&(_S1493->y), temp_208.y);
+        float _S1496 = atomicAdd(&(_S1493->z), temp_208.z);
+    }
+    float3  temp_209 = make_float3 (pSH7_16) * v_colors_25;
+    float _S1497 = dot_0(temp_209, temp_209);
+    if((F32_isfinite((_S1497))))
+    {
+        _S1463 = _S1497 != 0.0f;
+    }
+    else
+    {
+        _S1463 = false;
+    }
+    if(_S1463)
+    {
+        float3  * _S1498 = v_coeffs_25 + int(6);
+        float _S1499 = atomicAdd(&(_S1498->x), temp_209.x);
+        float _S1500 = atomicAdd(&(_S1498->y), temp_209.y);
+        float _S1501 = atomicAdd(&(_S1498->z), temp_209.z);
+    }
+    float3  temp_210 = make_float3 (pSH8_16) * v_colors_25;
+    float _S1502 = dot_0(temp_210, temp_210);
+    if((F32_isfinite((_S1502))))
+    {
+        _S1463 = _S1502 != 0.0f;
+    }
+    else
+    {
+        _S1463 = false;
+    }
+    if(_S1463)
+    {
+        float3  * _S1503 = v_coeffs_25 + int(7);
+        float _S1504 = atomicAdd(&(_S1503->x), temp_210.x);
+        float _S1505 = atomicAdd(&(_S1503->y), temp_210.y);
+        float _S1506 = atomicAdd(&(_S1503->z), temp_210.z);
+    }
+    float pSH8_x_13 = 0.54627424478530884f * _S1481;
+    float3  * _S1507 = coeffs_38 + int(3);
+    float3  * _S1508 = coeffs_38 + int(7);
+    float3  * _S1509 = coeffs_38 + int(6);
+    float3  * _S1510 = coeffs_38 + int(4);
+    float3  dir_n_19 = make_float3 (x_30, y_28, z_27);
+    float3  v_dir_n_35 = make_float3 (_S1478 + dot_0(v_colors_25, make_float3 (0.54627424478530884f * (2.0f * y_28)) * *_S1507 + make_float3 (pSH8_x_13) * *_S1508 + make_float3 (fTmp0B_20) * *_S1509), _S1479 + dot_0(v_colors_25, make_float3 (pSH8_x_13) * *_S1507 + make_float3 (0.54627424478530884f * (-2.0f * y_28)) * *_S1508 + make_float3 (fTmp0B_20) * *_S1510), _S1480 + dot_0(v_colors_25, make_float3 (1.89234936237335205f * z_27) * *(coeffs_38 + int(5)) + make_float3 (-1.09254848957061768f * x_30) * *_S1509 + make_float3 (-1.09254848957061768f * y_28) * *_S1510));
+    *v_dir_5 = *v_dir_5 + (v_dir_n_35 - make_float3 (dot_0(v_dir_n_35, dir_n_19)) * dir_n_19) * make_float3 (inorm_3);
+    return;
+}
+
+inline __device__ float3  sh3_to_color_dir(float3  dir_9, float3  coeff_dc_39, float3  * coeffs_39)
+{
+    float _S1511 = dir_9.x;
+    float _S1512 = dir_9.y;
+    float _S1513 = dir_9.z;
+    float inv_norm_26 = (F32_rsqrt((_S1511 * _S1511 + _S1512 * _S1512 + _S1513 * _S1513)));
+    float x_31 = _S1511 * inv_norm_26;
+    float y_29 = _S1512 * inv_norm_26;
+    float z_28 = _S1513 * inv_norm_26;
+    float z2_12 = z_28 * z_28;
+    float fTmp0B_21 = -1.09254848957061768f * z_28;
+    float fC1_12 = x_31 * x_31 - y_29 * y_29;
+    float fS1_12 = 2.0f * x_31 * y_29;
+    float fTmp0C_12 = -2.28522896766662598f * z2_12 + 0.4570457935333252f;
+    float fTmp1B_12 = 1.44530570507049561f * z_28;
+    return make_float3 (0.282094806432724f) * coeff_dc_39 + make_float3 (0.48860251903533936f) * (make_float3 (- y_29) * *(coeffs_39 + int(0)) + make_float3 (z_28) * *(coeffs_39 + int(1)) - make_float3 (x_31) * *(coeffs_39 + int(2))) + (make_float3 (0.54627424478530884f * fS1_12) * *(coeffs_39 + int(3)) + make_float3 (fTmp0B_21 * y_29) * *(coeffs_39 + int(4)) + make_float3 (0.94617468118667603f * z2_12 - 0.31539157032966614f) * *(coeffs_39 + int(5)) + make_float3 (fTmp0B_21 * x_31) * *(coeffs_39 + int(6)) + make_float3 (0.54627424478530884f * fC1_12) * *(coeffs_39 + int(7))) + (make_float3 (-0.59004360437393188f * (x_31 * fS1_12 + y_29 * fC1_12)) * *(coeffs_39 + int(8)) + make_float3 (fTmp1B_12 * fS1_12) * *(coeffs_39 + int(9)) + make_float3 (fTmp0C_12 * y_29) * *(coeffs_39 + int(10)) + make_float3 (z_28 * (1.86588168144226074f * z2_12 - 1.11952900886535645f)) * *(coeffs_39 + int(11)) + make_float3 (fTmp0C_12 * x_31) * *(coeffs_39 + int(12)) + make_float3 (fTmp1B_12 * fC1_12) * *(coeffs_39 + int(13)) + make_float3 (-0.59004360437393188f * (x_31 * fC1_12 - y_29 * fS1_12)) * *(coeffs_39 + int(14)));
+}
+
+inline __device__ void sh3_to_color_dir_vjp_inplace(float3  dir_10, float3  coeff_dc_40, float3  * coeffs_40, float3  v_colors_26, float3  * v_coeff_dc_26, float3  * v_coeffs_26, float3  * v_dir_6)
+{
+    *v_coeff_dc_26 = *v_coeff_dc_26 + make_float3 (0.282094806432724f) * v_colors_26;
+    float _S1514 = dir_10.x;
+    float _S1515 = dir_10.y;
+    float _S1516 = dir_10.z;
+    float inorm_4 = (F32_rsqrt((_S1514 * _S1514 + _S1515 * _S1515 + _S1516 * _S1516)));
+    float x_32 = _S1514 * inorm_4;
+    float y_30 = _S1515 * inorm_4;
+    float z_29 = _S1516 * inorm_4;
+    float3  * _S1517 = v_coeffs_26 + int(0);
+    *_S1517 = *_S1517 + make_float3 (-0.48860251903533936f * y_30) * v_colors_26;
+    float3  * _S1518 = v_coeffs_26 + int(1);
+    *_S1518 = *_S1518 + make_float3 (0.48860251903533936f * z_29) * v_colors_26;
+    float3  * _S1519 = v_coeffs_26 + int(2);
+    *_S1519 = *_S1519 + make_float3 (-0.48860251903533936f * x_32) * v_colors_26;
+    float _S1520 = -0.48860251903533936f * dot_0(*(coeffs_40 + int(2)), v_colors_26);
+    float _S1521 = -0.48860251903533936f * dot_0(*(coeffs_40 + int(0)), v_colors_26);
+    float _S1522 = 0.48860251903533936f * dot_0(*(coeffs_40 + int(1)), v_colors_26);
+    float z2_13 = z_29 * z_29;
+    float fTmp0B_22 = -1.09254848957061768f * z_29;
+    float fC1_13 = x_32 * x_32 - y_30 * y_30;
+    float _S1523 = 2.0f * x_32;
+    float fS1_13 = _S1523 * y_30;
+    float pSH6_18 = 0.94617468118667603f * z2_13 - 0.31539157032966614f;
+    float pSH7_17 = fTmp0B_22 * x_32;
+    float pSH5_17 = fTmp0B_22 * y_30;
+    float pSH8_17 = 0.54627424478530884f * fC1_13;
+    float3  * _S1524 = v_coeffs_26 + int(3);
+    *_S1524 = *_S1524 + make_float3 (0.54627424478530884f * fS1_13) * v_colors_26;
+    float3  * _S1525 = v_coeffs_26 + int(4);
+    *_S1525 = *_S1525 + make_float3 (pSH5_17) * v_colors_26;
+    float3  * _S1526 = v_coeffs_26 + int(5);
+    *_S1526 = *_S1526 + make_float3 (pSH6_18) * v_colors_26;
+    float3  * _S1527 = v_coeffs_26 + int(6);
+    *_S1527 = *_S1527 + make_float3 (pSH7_17) * v_colors_26;
+    float3  * _S1528 = v_coeffs_26 + int(7);
+    *_S1528 = *_S1528 + make_float3 (pSH8_17) * v_colors_26;
+    float fC1_y_8 = -2.0f * y_30;
+    float fS1_x_8 = 2.0f * y_30;
+    float pSH8_x_14 = 0.54627424478530884f * _S1523;
+    float3  * _S1529 = coeffs_40 + int(3);
+    float3  * _S1530 = coeffs_40 + int(7);
+    float3  * _S1531 = coeffs_40 + int(6);
+    float v_x_24 = _S1520 + dot_0(v_colors_26, make_float3 (0.54627424478530884f * fS1_x_8) * *_S1529 + make_float3 (pSH8_x_14) * *_S1530 + make_float3 (fTmp0B_22) * *_S1531);
+    float3  * _S1532 = coeffs_40 + int(4);
+    float v_y_24 = _S1521 + dot_0(v_colors_26, make_float3 (pSH8_x_14) * *_S1529 + make_float3 (0.54627424478530884f * fC1_y_8) * *_S1530 + make_float3 (fTmp0B_22) * *_S1532);
+    float v_z_24 = _S1522 + dot_0(v_colors_26, make_float3 (1.89234936237335205f * z_29) * *(coeffs_40 + int(5)) + make_float3 (-1.09254848957061768f * x_32) * *_S1531 + make_float3 (-1.09254848957061768f * y_30) * *_S1532);
+    float fTmp0C_13 = -2.28522896766662598f * z2_13 + 0.4570457935333252f;
+    float fTmp1B_13 = 1.44530570507049561f * z_29;
+    float pSH12_11 = z_29 * (1.86588168144226074f * z2_13 - 1.11952900886535645f);
+    float pSH13_10 = fTmp0C_13 * x_32;
+    float pSH11_10 = fTmp0C_13 * y_30;
+    float pSH14_10 = fTmp1B_13 * fC1_13;
+    float pSH10_10 = fTmp1B_13 * fS1_13;
+    float pSH15_10 = -0.59004360437393188f * (x_32 * fC1_13 - y_30 * fS1_13);
+    float3  * _S1533 = v_coeffs_26 + int(8);
+    *_S1533 = *_S1533 + make_float3 (-0.59004360437393188f * (x_32 * fS1_13 + y_30 * fC1_13)) * v_colors_26;
+    float3  * _S1534 = v_coeffs_26 + int(9);
+    *_S1534 = *_S1534 + make_float3 (pSH10_10) * v_colors_26;
+    float3  * _S1535 = v_coeffs_26 + int(10);
+    *_S1535 = *_S1535 + make_float3 (pSH11_10) * v_colors_26;
+    float3  * _S1536 = v_coeffs_26 + int(11);
+    *_S1536 = *_S1536 + make_float3 (pSH12_11) * v_colors_26;
+    float3  * _S1537 = v_coeffs_26 + int(12);
+    *_S1537 = *_S1537 + make_float3 (pSH13_10) * v_colors_26;
+    float3  * _S1538 = v_coeffs_26 + int(13);
+    *_S1538 = *_S1538 + make_float3 (pSH14_10) * v_colors_26;
+    float3  * _S1539 = v_coeffs_26 + int(14);
+    *_S1539 = *_S1539 + make_float3 (pSH15_10) * v_colors_26;
+    float fTmp0C_z_8 = -4.57045793533325195f * z_29;
+    float _S1540 = x_32 * _S1523;
+    float _S1541 = y_30 * _S1523;
+    float pSH14_x_8 = fTmp1B_13 * _S1523;
+    float3  * _S1542 = coeffs_40 + int(8);
+    float3  * _S1543 = coeffs_40 + int(14);
+    float3  * _S1544 = coeffs_40 + int(9);
+    float3  * _S1545 = coeffs_40 + int(13);
+    float3  * _S1546 = coeffs_40 + int(12);
+    float3  * _S1547 = coeffs_40 + int(10);
+    float3  dir_n_20 = make_float3 (x_32, y_30, z_29);
+    float3  v_dir_n_36 = make_float3 (v_x_24 + dot_0(v_colors_26, make_float3 (-0.59004360437393188f * (fS1_13 + x_32 * fS1_x_8 + _S1541)) * *_S1542 + make_float3 (-0.59004360437393188f * (fC1_13 + _S1540 - y_30 * fS1_x_8)) * *_S1543 + make_float3 (fTmp1B_13 * fS1_x_8) * *_S1544 + make_float3 (pSH14_x_8) * *_S1545 + make_float3 (fTmp0C_13) * *_S1546), v_y_24 + dot_0(v_colors_26, make_float3 (-0.59004360437393188f * (_S1540 + fC1_13 + y_30 * fC1_y_8)) * *_S1542 + make_float3 (-0.59004360437393188f * (x_32 * fC1_y_8 - fS1_13 - _S1541)) * *_S1543 + make_float3 (pSH14_x_8) * *_S1544 + make_float3 (fTmp1B_13 * fC1_y_8) * *_S1545 + make_float3 (fTmp0C_13) * *_S1547), v_z_24 + dot_0(v_colors_26, make_float3 (5.59764480590820312f * z2_13 - 1.11952900886535645f) * *(coeffs_40 + int(11)) + make_float3 (fTmp0C_z_8 * x_32) * *_S1546 + make_float3 (fTmp0C_z_8 * y_30) * *_S1547 + make_float3 (1.44530570507049561f * fC1_13) * *_S1545 + make_float3 (1.44530570507049561f * fS1_13) * *_S1544));
+    *v_dir_6 = *v_dir_6 + (v_dir_n_36 - make_float3 (dot_0(v_dir_n_36, dir_n_20)) * dir_n_20) * make_float3 (inorm_4);
+    return;
+}
+
+inline __device__ void sh3_to_color_dir_vjp_atomic(float3  dir_11, float3  coeff_dc_41, float3  * coeffs_41, float3  v_colors_27, float3  * v_coeff_dc_27, float3  * v_coeffs_27, float3  * v_dir_7)
+{
+    *v_coeff_dc_27 = *v_coeff_dc_27 + make_float3 (0.282094806432724f) * v_colors_27;
+    float _S1548 = dir_11.x;
+    float _S1549 = dir_11.y;
+    float _S1550 = dir_11.z;
+    float inorm_5 = (F32_rsqrt((_S1548 * _S1548 + _S1549 * _S1549 + _S1550 * _S1550)));
+    float x_33 = _S1548 * inorm_5;
+    float y_31 = _S1549 * inorm_5;
+    float z_30 = _S1550 * inorm_5;
+    float3  temp_211 = make_float3 (-0.48860251903533936f * y_31) * v_colors_27;
+    float _S1551 = dot_0(temp_211, temp_211);
+    bool _S1552;
+    if((F32_isfinite((_S1551))))
+    {
+        _S1552 = _S1551 != 0.0f;
+    }
+    else
+    {
+        _S1552 = false;
+    }
+    if(_S1552)
+    {
+        float3  * _S1553 = v_coeffs_27 + int(0);
+        float _S1554 = atomicAdd(&(_S1553->x), temp_211.x);
+        float _S1555 = atomicAdd(&(_S1553->y), temp_211.y);
+        float _S1556 = atomicAdd(&(_S1553->z), temp_211.z);
+    }
+    float3  temp_212 = make_float3 (0.48860251903533936f * z_30) * v_colors_27;
+    float _S1557 = dot_0(temp_212, temp_212);
+    if((F32_isfinite((_S1557))))
+    {
+        _S1552 = _S1557 != 0.0f;
+    }
+    else
+    {
+        _S1552 = false;
+    }
+    if(_S1552)
+    {
+        float3  * _S1558 = v_coeffs_27 + int(1);
+        float _S1559 = atomicAdd(&(_S1558->x), temp_212.x);
+        float _S1560 = atomicAdd(&(_S1558->y), temp_212.y);
+        float _S1561 = atomicAdd(&(_S1558->z), temp_212.z);
+    }
+    float3  temp_213 = make_float3 (-0.48860251903533936f * x_33) * v_colors_27;
+    float _S1562 = dot_0(temp_213, temp_213);
+    if((F32_isfinite((_S1562))))
+    {
+        _S1552 = _S1562 != 0.0f;
+    }
+    else
+    {
+        _S1552 = false;
+    }
+    if(_S1552)
+    {
+        float3  * _S1563 = v_coeffs_27 + int(2);
+        float _S1564 = atomicAdd(&(_S1563->x), temp_213.x);
+        float _S1565 = atomicAdd(&(_S1563->y), temp_213.y);
+        float _S1566 = atomicAdd(&(_S1563->z), temp_213.z);
+    }
+    float _S1567 = -0.48860251903533936f * dot_0(*(coeffs_41 + int(2)), v_colors_27);
+    float _S1568 = -0.48860251903533936f * dot_0(*(coeffs_41 + int(0)), v_colors_27);
+    float _S1569 = 0.48860251903533936f * dot_0(*(coeffs_41 + int(1)), v_colors_27);
+    float z2_14 = z_30 * z_30;
+    float fTmp0B_23 = -1.09254848957061768f * z_30;
+    float fC1_14 = x_33 * x_33 - y_31 * y_31;
+    float _S1570 = 2.0f * x_33;
+    float fS1_14 = _S1570 * y_31;
+    float pSH6_19 = 0.94617468118667603f * z2_14 - 0.31539157032966614f;
+    float pSH7_18 = fTmp0B_23 * x_33;
+    float pSH5_18 = fTmp0B_23 * y_31;
+    float pSH8_18 = 0.54627424478530884f * fC1_14;
+    float3  temp_214 = make_float3 (0.54627424478530884f * fS1_14) * v_colors_27;
+    float _S1571 = dot_0(temp_214, temp_214);
+    if((F32_isfinite((_S1571))))
+    {
+        _S1552 = _S1571 != 0.0f;
+    }
+    else
+    {
+        _S1552 = false;
+    }
+    if(_S1552)
+    {
+        float3  * _S1572 = v_coeffs_27 + int(3);
+        float _S1573 = atomicAdd(&(_S1572->x), temp_214.x);
+        float _S1574 = atomicAdd(&(_S1572->y), temp_214.y);
+        float _S1575 = atomicAdd(&(_S1572->z), temp_214.z);
+    }
+    float3  temp_215 = make_float3 (pSH5_18) * v_colors_27;
+    float _S1576 = dot_0(temp_215, temp_215);
+    if((F32_isfinite((_S1576))))
+    {
+        _S1552 = _S1576 != 0.0f;
+    }
+    else
+    {
+        _S1552 = false;
+    }
+    if(_S1552)
+    {
+        float3  * _S1577 = v_coeffs_27 + int(4);
+        float _S1578 = atomicAdd(&(_S1577->x), temp_215.x);
+        float _S1579 = atomicAdd(&(_S1577->y), temp_215.y);
+        float _S1580 = atomicAdd(&(_S1577->z), temp_215.z);
+    }
+    float3  temp_216 = make_float3 (pSH6_19) * v_colors_27;
+    float _S1581 = dot_0(temp_216, temp_216);
+    if((F32_isfinite((_S1581))))
+    {
+        _S1552 = _S1581 != 0.0f;
+    }
+    else
+    {
+        _S1552 = false;
+    }
+    if(_S1552)
+    {
+        float3  * _S1582 = v_coeffs_27 + int(5);
+        float _S1583 = atomicAdd(&(_S1582->x), temp_216.x);
+        float _S1584 = atomicAdd(&(_S1582->y), temp_216.y);
+        float _S1585 = atomicAdd(&(_S1582->z), temp_216.z);
+    }
+    float3  temp_217 = make_float3 (pSH7_18) * v_colors_27;
+    float _S1586 = dot_0(temp_217, temp_217);
+    if((F32_isfinite((_S1586))))
+    {
+        _S1552 = _S1586 != 0.0f;
+    }
+    else
+    {
+        _S1552 = false;
+    }
+    if(_S1552)
+    {
+        float3  * _S1587 = v_coeffs_27 + int(6);
+        float _S1588 = atomicAdd(&(_S1587->x), temp_217.x);
+        float _S1589 = atomicAdd(&(_S1587->y), temp_217.y);
+        float _S1590 = atomicAdd(&(_S1587->z), temp_217.z);
+    }
+    float3  temp_218 = make_float3 (pSH8_18) * v_colors_27;
+    float _S1591 = dot_0(temp_218, temp_218);
+    if((F32_isfinite((_S1591))))
+    {
+        _S1552 = _S1591 != 0.0f;
+    }
+    else
+    {
+        _S1552 = false;
+    }
+    if(_S1552)
+    {
+        float3  * _S1592 = v_coeffs_27 + int(7);
+        float _S1593 = atomicAdd(&(_S1592->x), temp_218.x);
+        float _S1594 = atomicAdd(&(_S1592->y), temp_218.y);
+        float _S1595 = atomicAdd(&(_S1592->z), temp_218.z);
+    }
+    float fC1_y_9 = -2.0f * y_31;
+    float fS1_x_9 = 2.0f * y_31;
+    float pSH8_x_15 = 0.54627424478530884f * _S1570;
+    float3  * _S1596 = coeffs_41 + int(3);
+    float3  * _S1597 = coeffs_41 + int(7);
+    float3  * _S1598 = coeffs_41 + int(6);
+    float v_x_25 = _S1567 + dot_0(v_colors_27, make_float3 (0.54627424478530884f * fS1_x_9) * *_S1596 + make_float3 (pSH8_x_15) * *_S1597 + make_float3 (fTmp0B_23) * *_S1598);
+    float3  * _S1599 = coeffs_41 + int(4);
+    float v_y_25 = _S1568 + dot_0(v_colors_27, make_float3 (pSH8_x_15) * *_S1596 + make_float3 (0.54627424478530884f * fC1_y_9) * *_S1597 + make_float3 (fTmp0B_23) * *_S1599);
+    float v_z_25 = _S1569 + dot_0(v_colors_27, make_float3 (1.89234936237335205f * z_30) * *(coeffs_41 + int(5)) + make_float3 (-1.09254848957061768f * x_33) * *_S1598 + make_float3 (-1.09254848957061768f * y_31) * *_S1599);
+    float fTmp0C_14 = -2.28522896766662598f * z2_14 + 0.4570457935333252f;
+    float fTmp1B_14 = 1.44530570507049561f * z_30;
+    float pSH12_12 = z_30 * (1.86588168144226074f * z2_14 - 1.11952900886535645f);
+    float pSH13_11 = fTmp0C_14 * x_33;
+    float pSH11_11 = fTmp0C_14 * y_31;
+    float pSH14_11 = fTmp1B_14 * fC1_14;
+    float pSH10_11 = fTmp1B_14 * fS1_14;
+    float pSH15_11 = -0.59004360437393188f * (x_33 * fC1_14 - y_31 * fS1_14);
+    float3  temp_219 = make_float3 (-0.59004360437393188f * (x_33 * fS1_14 + y_31 * fC1_14)) * v_colors_27;
+    float _S1600 = dot_0(temp_219, temp_219);
+    if((F32_isfinite((_S1600))))
+    {
+        _S1552 = _S1600 != 0.0f;
+    }
+    else
+    {
+        _S1552 = false;
+    }
+    if(_S1552)
+    {
+        float3  * _S1601 = v_coeffs_27 + int(8);
+        float _S1602 = atomicAdd(&(_S1601->x), temp_219.x);
+        float _S1603 = atomicAdd(&(_S1601->y), temp_219.y);
+        float _S1604 = atomicAdd(&(_S1601->z), temp_219.z);
+    }
+    float3  temp_220 = make_float3 (pSH10_11) * v_colors_27;
+    float _S1605 = dot_0(temp_220, temp_220);
+    if((F32_isfinite((_S1605))))
+    {
+        _S1552 = _S1605 != 0.0f;
+    }
+    else
+    {
+        _S1552 = false;
+    }
+    if(_S1552)
+    {
+        float3  * _S1606 = v_coeffs_27 + int(9);
+        float _S1607 = atomicAdd(&(_S1606->x), temp_220.x);
+        float _S1608 = atomicAdd(&(_S1606->y), temp_220.y);
+        float _S1609 = atomicAdd(&(_S1606->z), temp_220.z);
+    }
+    float3  temp_221 = make_float3 (pSH11_11) * v_colors_27;
+    float _S1610 = dot_0(temp_221, temp_221);
+    if((F32_isfinite((_S1610))))
+    {
+        _S1552 = _S1610 != 0.0f;
+    }
+    else
+    {
+        _S1552 = false;
+    }
+    if(_S1552)
+    {
+        float3  * _S1611 = v_coeffs_27 + int(10);
+        float _S1612 = atomicAdd(&(_S1611->x), temp_221.x);
+        float _S1613 = atomicAdd(&(_S1611->y), temp_221.y);
+        float _S1614 = atomicAdd(&(_S1611->z), temp_221.z);
+    }
+    float3  temp_222 = make_float3 (pSH12_12) * v_colors_27;
+    float _S1615 = dot_0(temp_222, temp_222);
+    if((F32_isfinite((_S1615))))
+    {
+        _S1552 = _S1615 != 0.0f;
+    }
+    else
+    {
+        _S1552 = false;
+    }
+    if(_S1552)
+    {
+        float3  * _S1616 = v_coeffs_27 + int(11);
+        float _S1617 = atomicAdd(&(_S1616->x), temp_222.x);
+        float _S1618 = atomicAdd(&(_S1616->y), temp_222.y);
+        float _S1619 = atomicAdd(&(_S1616->z), temp_222.z);
+    }
+    float3  temp_223 = make_float3 (pSH13_11) * v_colors_27;
+    float _S1620 = dot_0(temp_223, temp_223);
+    if((F32_isfinite((_S1620))))
+    {
+        _S1552 = _S1620 != 0.0f;
+    }
+    else
+    {
+        _S1552 = false;
+    }
+    if(_S1552)
+    {
+        float3  * _S1621 = v_coeffs_27 + int(12);
+        float _S1622 = atomicAdd(&(_S1621->x), temp_223.x);
+        float _S1623 = atomicAdd(&(_S1621->y), temp_223.y);
+        float _S1624 = atomicAdd(&(_S1621->z), temp_223.z);
+    }
+    float3  temp_224 = make_float3 (pSH14_11) * v_colors_27;
+    float _S1625 = dot_0(temp_224, temp_224);
+    if((F32_isfinite((_S1625))))
+    {
+        _S1552 = _S1625 != 0.0f;
+    }
+    else
+    {
+        _S1552 = false;
+    }
+    if(_S1552)
+    {
+        float3  * _S1626 = v_coeffs_27 + int(13);
+        float _S1627 = atomicAdd(&(_S1626->x), temp_224.x);
+        float _S1628 = atomicAdd(&(_S1626->y), temp_224.y);
+        float _S1629 = atomicAdd(&(_S1626->z), temp_224.z);
+    }
+    float3  temp_225 = make_float3 (pSH15_11) * v_colors_27;
+    float _S1630 = dot_0(temp_225, temp_225);
+    if((F32_isfinite((_S1630))))
+    {
+        _S1552 = _S1630 != 0.0f;
+    }
+    else
+    {
+        _S1552 = false;
+    }
+    if(_S1552)
+    {
+        float3  * _S1631 = v_coeffs_27 + int(14);
+        float _S1632 = atomicAdd(&(_S1631->x), temp_225.x);
+        float _S1633 = atomicAdd(&(_S1631->y), temp_225.y);
+        float _S1634 = atomicAdd(&(_S1631->z), temp_225.z);
+    }
+    float fTmp0C_z_9 = -4.57045793533325195f * z_30;
+    float _S1635 = x_33 * _S1570;
+    float _S1636 = y_31 * _S1570;
+    float pSH14_x_9 = fTmp1B_14 * _S1570;
+    float3  * _S1637 = coeffs_41 + int(8);
+    float3  * _S1638 = coeffs_41 + int(14);
+    float3  * _S1639 = coeffs_41 + int(9);
+    float3  * _S1640 = coeffs_41 + int(13);
+    float3  * _S1641 = coeffs_41 + int(12);
+    float3  * _S1642 = coeffs_41 + int(10);
+    float3  dir_n_21 = make_float3 (x_33, y_31, z_30);
+    float3  v_dir_n_37 = make_float3 (v_x_25 + dot_0(v_colors_27, make_float3 (-0.59004360437393188f * (fS1_14 + x_33 * fS1_x_9 + _S1636)) * *_S1637 + make_float3 (-0.59004360437393188f * (fC1_14 + _S1635 - y_31 * fS1_x_9)) * *_S1638 + make_float3 (fTmp1B_14 * fS1_x_9) * *_S1639 + make_float3 (pSH14_x_9) * *_S1640 + make_float3 (fTmp0C_14) * *_S1641), v_y_25 + dot_0(v_colors_27, make_float3 (-0.59004360437393188f * (_S1635 + fC1_14 + y_31 * fC1_y_9)) * *_S1637 + make_float3 (-0.59004360437393188f * (x_33 * fC1_y_9 - fS1_14 - _S1636)) * *_S1638 + make_float3 (pSH14_x_9) * *_S1639 + make_float3 (fTmp1B_14 * fC1_y_9) * *_S1640 + make_float3 (fTmp0C_14) * *_S1642), v_z_25 + dot_0(v_colors_27, make_float3 (5.59764480590820312f * z2_14 - 1.11952900886535645f) * *(coeffs_41 + int(11)) + make_float3 (fTmp0C_z_9 * x_33) * *_S1641 + make_float3 (fTmp0C_z_9 * y_31) * *_S1642 + make_float3 (1.44530570507049561f * fC1_14) * *_S1640 + make_float3 (1.44530570507049561f * fS1_14) * *_S1639));
+    *v_dir_7 = *v_dir_7 + (v_dir_n_37 - make_float3 (dot_0(v_dir_n_37, dir_n_21)) * dir_n_21) * make_float3 (inorm_5);
+    return;
+}
+
+inline __device__ float3  sh4_to_color_dir(float3  dir_12, float3  coeff_dc_42, float3  * coeffs_42)
+{
+    float _S1643 = dir_12.x;
+    float _S1644 = dir_12.y;
+    float _S1645 = dir_12.z;
+    float inv_norm_27 = (F32_rsqrt((_S1643 * _S1643 + _S1644 * _S1644 + _S1645 * _S1645)));
+    float x_34 = _S1643 * inv_norm_27;
+    float y_32 = _S1644 * inv_norm_27;
+    float z_31 = _S1645 * inv_norm_27;
+    float z2_15 = z_31 * z_31;
+    float fTmp0B_24 = -1.09254848957061768f * z_31;
+    float fC1_15 = x_34 * x_34 - y_32 * y_32;
+    float fS1_15 = 2.0f * x_34 * y_32;
+    float pSH6_20 = 0.94617468118667603f * z2_15 - 0.31539157032966614f;
+    float fTmp0C_15 = -2.28522896766662598f * z2_15 + 0.4570457935333252f;
+    float fTmp1B_15 = 1.44530570507049561f * z_31;
+    float fC2_6 = x_34 * fC1_15 - y_32 * fS1_15;
+    float fS2_6 = x_34 * fS1_15 + y_32 * fC1_15;
+    float pSH12_13 = z_31 * (1.86588168144226074f * z2_15 - 1.11952900886535645f);
+    float fTmp0D_6 = z_31 * (-4.68332576751708984f * z2_15 + 2.00713968276977539f);
+    float fTmp1C_6 = 3.31161141395568848f * z2_15 - 0.47308734059333801f;
+    float fTmp2B_6 = -1.77013075351715088f * z_31;
+    return make_float3 (0.282094806432724f) * coeff_dc_42 + make_float3 (0.48860251903533936f) * (make_float3 (- y_32) * *(coeffs_42 + int(0)) + make_float3 (z_31) * *(coeffs_42 + int(1)) - make_float3 (x_34) * *(coeffs_42 + int(2))) + (make_float3 (0.54627424478530884f * fS1_15) * *(coeffs_42 + int(3)) + make_float3 (fTmp0B_24 * y_32) * *(coeffs_42 + int(4)) + make_float3 (pSH6_20) * *(coeffs_42 + int(5)) + make_float3 (fTmp0B_24 * x_34) * *(coeffs_42 + int(6)) + make_float3 (0.54627424478530884f * fC1_15) * *(coeffs_42 + int(7))) + (make_float3 (-0.59004360437393188f * fS2_6) * *(coeffs_42 + int(8)) + make_float3 (fTmp1B_15 * fS1_15) * *(coeffs_42 + int(9)) + make_float3 (fTmp0C_15 * y_32) * *(coeffs_42 + int(10)) + make_float3 (pSH12_13) * *(coeffs_42 + int(11)) + make_float3 (fTmp0C_15 * x_34) * *(coeffs_42 + int(12)) + make_float3 (fTmp1B_15 * fC1_15) * *(coeffs_42 + int(13)) + make_float3 (-0.59004360437393188f * fC2_6) * *(coeffs_42 + int(14))) + (make_float3 (0.62583571672439575f * (x_34 * fS2_6 + y_32 * fC2_6)) * *(coeffs_42 + int(15)) + make_float3 (fTmp2B_6 * fS2_6) * *(coeffs_42 + int(16)) + make_float3 (fTmp1C_6 * fS1_15) * *(coeffs_42 + int(17)) + make_float3 (fTmp0D_6 * y_32) * *(coeffs_42 + int(18)) + make_float3 (1.9843134880065918f * z_31 * pSH12_13 - 1.00623059272766113f * pSH6_20) * *(coeffs_42 + int(19)) + make_float3 (fTmp0D_6 * x_34) * *(coeffs_42 + int(20)) + make_float3 (fTmp1C_6 * fC1_15) * *(coeffs_42 + int(21)) + make_float3 (fTmp2B_6 * fC2_6) * *(coeffs_42 + int(22)) + make_float3 (0.62583571672439575f * (x_34 * fC2_6 - y_32 * fS2_6)) * *(coeffs_42 + int(23)));
+}
+
+inline __device__ void sh4_to_color_dir_vjp_inplace(float3  dir_13, float3  coeff_dc_43, float3  * coeffs_43, float3  v_colors_28, float3  * v_coeff_dc_28, float3  * v_coeffs_28, float3  * v_dir_8)
+{
+    *v_coeff_dc_28 = *v_coeff_dc_28 + make_float3 (0.282094806432724f) * v_colors_28;
+    float _S1646 = dir_13.x;
+    float _S1647 = dir_13.y;
+    float _S1648 = dir_13.z;
+    float inorm_6 = (F32_rsqrt((_S1646 * _S1646 + _S1647 * _S1647 + _S1648 * _S1648)));
+    float x_35 = _S1646 * inorm_6;
+    float y_33 = _S1647 * inorm_6;
+    float z_32 = _S1648 * inorm_6;
+    float3  * _S1649 = v_coeffs_28 + int(0);
+    *_S1649 = *_S1649 + make_float3 (-0.48860251903533936f * y_33) * v_colors_28;
+    float3  * _S1650 = v_coeffs_28 + int(1);
+    *_S1650 = *_S1650 + make_float3 (0.48860251903533936f * z_32) * v_colors_28;
+    float3  * _S1651 = v_coeffs_28 + int(2);
+    *_S1651 = *_S1651 + make_float3 (-0.48860251903533936f * x_35) * v_colors_28;
+    float _S1652 = -0.48860251903533936f * dot_0(*(coeffs_43 + int(2)), v_colors_28);
+    float _S1653 = -0.48860251903533936f * dot_0(*(coeffs_43 + int(0)), v_colors_28);
+    float _S1654 = 0.48860251903533936f * dot_0(*(coeffs_43 + int(1)), v_colors_28);
+    float z2_16 = z_32 * z_32;
+    float fTmp0B_25 = -1.09254848957061768f * z_32;
+    float fC1_16 = x_35 * x_35 - y_33 * y_33;
+    float _S1655 = 2.0f * x_35;
+    float fS1_16 = _S1655 * y_33;
+    float pSH6_21 = 0.94617468118667603f * z2_16 - 0.31539157032966614f;
+    float pSH7_19 = fTmp0B_25 * x_35;
+    float pSH5_19 = fTmp0B_25 * y_33;
+    float pSH8_19 = 0.54627424478530884f * fC1_16;
+    float3  * _S1656 = v_coeffs_28 + int(3);
+    *_S1656 = *_S1656 + make_float3 (0.54627424478530884f * fS1_16) * v_colors_28;
+    float3  * _S1657 = v_coeffs_28 + int(4);
+    *_S1657 = *_S1657 + make_float3 (pSH5_19) * v_colors_28;
+    float3  * _S1658 = v_coeffs_28 + int(5);
+    *_S1658 = *_S1658 + make_float3 (pSH6_21) * v_colors_28;
+    float3  * _S1659 = v_coeffs_28 + int(6);
+    *_S1659 = *_S1659 + make_float3 (pSH7_19) * v_colors_28;
+    float3  * _S1660 = v_coeffs_28 + int(7);
+    *_S1660 = *_S1660 + make_float3 (pSH8_19) * v_colors_28;
+    float fC1_y_10 = -2.0f * y_33;
+    float fS1_x_10 = 2.0f * y_33;
+    float pSH6_z_8 = 1.89234936237335205f * z_32;
+    float pSH8_x_16 = 0.54627424478530884f * _S1655;
+    float3  * _S1661 = coeffs_43 + int(3);
+    float3  * _S1662 = coeffs_43 + int(7);
+    float3  * _S1663 = coeffs_43 + int(6);
+    float v_x_26 = _S1652 + dot_0(v_colors_28, make_float3 (0.54627424478530884f * fS1_x_10) * *_S1661 + make_float3 (pSH8_x_16) * *_S1662 + make_float3 (fTmp0B_25) * *_S1663);
+    float3  * _S1664 = coeffs_43 + int(4);
+    float v_y_26 = _S1653 + dot_0(v_colors_28, make_float3 (pSH8_x_16) * *_S1661 + make_float3 (0.54627424478530884f * fC1_y_10) * *_S1662 + make_float3 (fTmp0B_25) * *_S1664);
+    float v_z_26 = _S1654 + dot_0(v_colors_28, make_float3 (pSH6_z_8) * *(coeffs_43 + int(5)) + make_float3 (-1.09254848957061768f * x_35) * *_S1663 + make_float3 (-1.09254848957061768f * y_33) * *_S1664);
+    float fTmp0C_16 = -2.28522896766662598f * z2_16 + 0.4570457935333252f;
+    float fTmp1B_16 = 1.44530570507049561f * z_32;
+    float fC2_7 = x_35 * fC1_16 - y_33 * fS1_16;
+    float fS2_7 = x_35 * fS1_16 + y_33 * fC1_16;
+    float pSH12_14 = z_32 * (1.86588168144226074f * z2_16 - 1.11952900886535645f);
+    float pSH13_12 = fTmp0C_16 * x_35;
+    float pSH11_12 = fTmp0C_16 * y_33;
+    float pSH14_12 = fTmp1B_16 * fC1_16;
+    float pSH10_12 = fTmp1B_16 * fS1_16;
+    float pSH15_12 = -0.59004360437393188f * fC2_7;
+    float3  * _S1665 = v_coeffs_28 + int(8);
+    *_S1665 = *_S1665 + make_float3 (-0.59004360437393188f * fS2_7) * v_colors_28;
+    float3  * _S1666 = v_coeffs_28 + int(9);
+    *_S1666 = *_S1666 + make_float3 (pSH10_12) * v_colors_28;
+    float3  * _S1667 = v_coeffs_28 + int(10);
+    *_S1667 = *_S1667 + make_float3 (pSH11_12) * v_colors_28;
+    float3  * _S1668 = v_coeffs_28 + int(11);
+    *_S1668 = *_S1668 + make_float3 (pSH12_14) * v_colors_28;
+    float3  * _S1669 = v_coeffs_28 + int(12);
+    *_S1669 = *_S1669 + make_float3 (pSH13_12) * v_colors_28;
+    float3  * _S1670 = v_coeffs_28 + int(13);
+    *_S1670 = *_S1670 + make_float3 (pSH14_12) * v_colors_28;
+    float3  * _S1671 = v_coeffs_28 + int(14);
+    *_S1671 = *_S1671 + make_float3 (pSH15_12) * v_colors_28;
+    float fTmp0C_z_10 = -4.57045793533325195f * z_32;
+    float _S1672 = x_35 * _S1655;
+    float fC2_x_4 = fC1_16 + _S1672 - y_33 * fS1_x_10;
+    float _S1673 = y_33 * _S1655;
+    float fC2_y_4 = x_35 * fC1_y_10 - fS1_16 - _S1673;
+    float fS2_x_4 = fS1_16 + x_35 * fS1_x_10 + _S1673;
+    float fS2_y_4 = _S1672 + fC1_16 + y_33 * fC1_y_10;
+    float pSH12_z_6 = 5.59764480590820312f * z2_16 - 1.11952900886535645f;
+    float pSH14_x_10 = fTmp1B_16 * _S1655;
+    float3  * _S1674 = coeffs_43 + int(8);
+    float3  * _S1675 = coeffs_43 + int(14);
+    float3  * _S1676 = coeffs_43 + int(9);
+    float3  * _S1677 = coeffs_43 + int(13);
+    float3  * _S1678 = coeffs_43 + int(12);
+    float v_x_27 = v_x_26 + dot_0(v_colors_28, make_float3 (-0.59004360437393188f * fS2_x_4) * *_S1674 + make_float3 (-0.59004360437393188f * fC2_x_4) * *_S1675 + make_float3 (fTmp1B_16 * fS1_x_10) * *_S1676 + make_float3 (pSH14_x_10) * *_S1677 + make_float3 (fTmp0C_16) * *_S1678);
+    float3  * _S1679 = coeffs_43 + int(10);
+    float v_y_27 = v_y_26 + dot_0(v_colors_28, make_float3 (-0.59004360437393188f * fS2_y_4) * *_S1674 + make_float3 (-0.59004360437393188f * fC2_y_4) * *_S1675 + make_float3 (pSH14_x_10) * *_S1676 + make_float3 (fTmp1B_16 * fC1_y_10) * *_S1677 + make_float3 (fTmp0C_16) * *_S1679);
+    float v_z_27 = v_z_26 + dot_0(v_colors_28, make_float3 (pSH12_z_6) * *(coeffs_43 + int(11)) + make_float3 (fTmp0C_z_10 * x_35) * *_S1678 + make_float3 (fTmp0C_z_10 * y_33) * *_S1679 + make_float3 (1.44530570507049561f * fC1_16) * *_S1677 + make_float3 (1.44530570507049561f * fS1_16) * *_S1676);
+    float fTmp0D_7 = z_32 * (-4.68332576751708984f * z2_16 + 2.00713968276977539f);
+    float fTmp1C_7 = 3.31161141395568848f * z2_16 - 0.47308734059333801f;
+    float fTmp2B_7 = -1.77013075351715088f * z_32;
+    float pSH20_7 = 1.9843134880065918f * z_32 * pSH12_14 + -1.00623059272766113f * pSH6_21;
+    float pSH21_5 = fTmp0D_7 * x_35;
+    float pSH19_5 = fTmp0D_7 * y_33;
+    float pSH22_5 = fTmp1C_7 * fC1_16;
+    float pSH18_5 = fTmp1C_7 * fS1_16;
+    float pSH23_5 = fTmp2B_7 * fC2_7;
+    float pSH17_5 = fTmp2B_7 * fS2_7;
+    float pSH24_5 = 0.62583571672439575f * (x_35 * fC2_7 - y_33 * fS2_7);
+    float3  * _S1680 = v_coeffs_28 + int(15);
+    *_S1680 = *_S1680 + make_float3 (0.62583571672439575f * (x_35 * fS2_7 + y_33 * fC2_7)) * v_colors_28;
+    float3  * _S1681 = v_coeffs_28 + int(16);
+    *_S1681 = *_S1681 + make_float3 (pSH17_5) * v_colors_28;
+    float3  * _S1682 = v_coeffs_28 + int(17);
+    *_S1682 = *_S1682 + make_float3 (pSH18_5) * v_colors_28;
+    float3  * _S1683 = v_coeffs_28 + int(18);
+    *_S1683 = *_S1683 + make_float3 (pSH19_5) * v_colors_28;
+    float3  * _S1684 = v_coeffs_28 + int(19);
+    *_S1684 = *_S1684 + make_float3 (pSH20_7) * v_colors_28;
+    float3  * _S1685 = v_coeffs_28 + int(20);
+    *_S1685 = *_S1685 + make_float3 (pSH21_5) * v_colors_28;
+    float3  * _S1686 = v_coeffs_28 + int(21);
+    *_S1686 = *_S1686 + make_float3 (pSH22_5) * v_colors_28;
+    float3  * _S1687 = v_coeffs_28 + int(22);
+    *_S1687 = *_S1687 + make_float3 (pSH23_5) * v_colors_28;
+    float3  * _S1688 = v_coeffs_28 + int(23);
+    *_S1688 = *_S1688 + make_float3 (pSH24_5) * v_colors_28;
+    float fTmp0D_z_4 = -14.04997730255126953f * z2_16 + 2.00713968276977539f;
+    float fTmp1C_z_4 = 6.62322282791137695f * z_32;
+    float pSH22_x_4 = fTmp1C_7 * _S1655;
+    float3  * _S1689 = coeffs_43 + int(15);
+    float3  * _S1690 = coeffs_43 + int(23);
+    float3  * _S1691 = coeffs_43 + int(16);
+    float3  * _S1692 = coeffs_43 + int(22);
+    float3  * _S1693 = coeffs_43 + int(17);
+    float3  * _S1694 = coeffs_43 + int(21);
+    float3  * _S1695 = coeffs_43 + int(20);
+    float3  * _S1696 = coeffs_43 + int(18);
+    float3  dir_n_22 = make_float3 (x_35, y_33, z_32);
+    float3  v_dir_n_38 = make_float3 (v_x_27 + dot_0(v_colors_28, make_float3 (0.62583571672439575f * (fS2_7 + y_33 * fC2_x_4 + x_35 * fS2_x_4)) * *_S1689 + make_float3 (0.62583571672439575f * (fC2_7 + x_35 * fC2_x_4 - y_33 * fS2_x_4)) * *_S1690 + make_float3 (fTmp2B_7 * fS2_x_4) * *_S1691 + make_float3 (fTmp2B_7 * fC2_x_4) * *_S1692 + make_float3 (fTmp1C_7 * fS1_x_10) * *_S1693 + make_float3 (pSH22_x_4) * *_S1694 + make_float3 (fTmp0D_7) * *_S1695), v_y_27 + dot_0(v_colors_28, make_float3 (0.62583571672439575f * (x_35 * fS2_y_4 + fC2_7 + y_33 * fC2_y_4)) * *_S1689 + make_float3 (0.62583571672439575f * (x_35 * fC2_y_4 - fS2_7 - y_33 * fS2_y_4)) * *_S1690 + make_float3 (fTmp2B_7 * fS2_y_4) * *_S1691 + make_float3 (fTmp2B_7 * fC2_y_4) * *_S1692 + make_float3 (pSH22_x_4) * *_S1693 + make_float3 (fTmp1C_7 * fC1_y_10) * *_S1694 + make_float3 (fTmp0D_7) * *_S1696), v_z_27 + dot_0(v_colors_28, make_float3 (1.9843134880065918f * (pSH12_14 + z_32 * pSH12_z_6) + -1.00623059272766113f * pSH6_z_8) * *(coeffs_43 + int(19)) + make_float3 (fTmp0D_z_4 * x_35) * *_S1695 + make_float3 (fTmp0D_z_4 * y_33) * *_S1696 + make_float3 (fTmp1C_z_4 * fC1_16) * *_S1694 + make_float3 (fTmp1C_z_4 * fS1_16) * *_S1693 + make_float3 (-1.77013075351715088f * fC2_7) * *_S1692 + make_float3 (-1.77013075351715088f * fS2_7) * *_S1691));
+    *v_dir_8 = *v_dir_8 + (v_dir_n_38 - make_float3 (dot_0(v_dir_n_38, dir_n_22)) * dir_n_22) * make_float3 (inorm_6);
+    return;
+}
+
+inline __device__ void sh4_to_color_dir_vjp_atomic(float3  dir_14, float3  coeff_dc_44, float3  * coeffs_44, float3  v_colors_29, float3  * v_coeff_dc_29, float3  * v_coeffs_29, float3  * v_dir_9)
+{
+    *v_coeff_dc_29 = *v_coeff_dc_29 + make_float3 (0.282094806432724f) * v_colors_29;
+    float _S1697 = dir_14.x;
+    float _S1698 = dir_14.y;
+    float _S1699 = dir_14.z;
+    float inorm_7 = (F32_rsqrt((_S1697 * _S1697 + _S1698 * _S1698 + _S1699 * _S1699)));
+    float x_36 = _S1697 * inorm_7;
+    float y_34 = _S1698 * inorm_7;
+    float z_33 = _S1699 * inorm_7;
+    float3  temp_226 = make_float3 (-0.48860251903533936f * y_34) * v_colors_29;
+    float _S1700 = dot_0(temp_226, temp_226);
+    bool _S1701;
+    if((F32_isfinite((_S1700))))
+    {
+        _S1701 = _S1700 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1702 = v_coeffs_29 + int(0);
+        float _S1703 = atomicAdd(&(_S1702->x), temp_226.x);
+        float _S1704 = atomicAdd(&(_S1702->y), temp_226.y);
+        float _S1705 = atomicAdd(&(_S1702->z), temp_226.z);
+    }
+    float3  temp_227 = make_float3 (0.48860251903533936f * z_33) * v_colors_29;
+    float _S1706 = dot_0(temp_227, temp_227);
+    if((F32_isfinite((_S1706))))
+    {
+        _S1701 = _S1706 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1707 = v_coeffs_29 + int(1);
+        float _S1708 = atomicAdd(&(_S1707->x), temp_227.x);
+        float _S1709 = atomicAdd(&(_S1707->y), temp_227.y);
+        float _S1710 = atomicAdd(&(_S1707->z), temp_227.z);
+    }
+    float3  temp_228 = make_float3 (-0.48860251903533936f * x_36) * v_colors_29;
+    float _S1711 = dot_0(temp_228, temp_228);
+    if((F32_isfinite((_S1711))))
+    {
+        _S1701 = _S1711 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1712 = v_coeffs_29 + int(2);
+        float _S1713 = atomicAdd(&(_S1712->x), temp_228.x);
+        float _S1714 = atomicAdd(&(_S1712->y), temp_228.y);
+        float _S1715 = atomicAdd(&(_S1712->z), temp_228.z);
+    }
+    float _S1716 = -0.48860251903533936f * dot_0(*(coeffs_44 + int(2)), v_colors_29);
+    float _S1717 = -0.48860251903533936f * dot_0(*(coeffs_44 + int(0)), v_colors_29);
+    float _S1718 = 0.48860251903533936f * dot_0(*(coeffs_44 + int(1)), v_colors_29);
+    float z2_17 = z_33 * z_33;
+    float fTmp0B_26 = -1.09254848957061768f * z_33;
+    float fC1_17 = x_36 * x_36 - y_34 * y_34;
+    float _S1719 = 2.0f * x_36;
+    float fS1_17 = _S1719 * y_34;
+    float pSH6_22 = 0.94617468118667603f * z2_17 - 0.31539157032966614f;
+    float pSH7_20 = fTmp0B_26 * x_36;
+    float pSH5_20 = fTmp0B_26 * y_34;
+    float pSH8_20 = 0.54627424478530884f * fC1_17;
+    float3  temp_229 = make_float3 (0.54627424478530884f * fS1_17) * v_colors_29;
+    float _S1720 = dot_0(temp_229, temp_229);
+    if((F32_isfinite((_S1720))))
+    {
+        _S1701 = _S1720 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1721 = v_coeffs_29 + int(3);
+        float _S1722 = atomicAdd(&(_S1721->x), temp_229.x);
+        float _S1723 = atomicAdd(&(_S1721->y), temp_229.y);
+        float _S1724 = atomicAdd(&(_S1721->z), temp_229.z);
+    }
+    float3  temp_230 = make_float3 (pSH5_20) * v_colors_29;
+    float _S1725 = dot_0(temp_230, temp_230);
+    if((F32_isfinite((_S1725))))
+    {
+        _S1701 = _S1725 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1726 = v_coeffs_29 + int(4);
+        float _S1727 = atomicAdd(&(_S1726->x), temp_230.x);
+        float _S1728 = atomicAdd(&(_S1726->y), temp_230.y);
+        float _S1729 = atomicAdd(&(_S1726->z), temp_230.z);
+    }
+    float3  temp_231 = make_float3 (pSH6_22) * v_colors_29;
+    float _S1730 = dot_0(temp_231, temp_231);
+    if((F32_isfinite((_S1730))))
+    {
+        _S1701 = _S1730 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1731 = v_coeffs_29 + int(5);
+        float _S1732 = atomicAdd(&(_S1731->x), temp_231.x);
+        float _S1733 = atomicAdd(&(_S1731->y), temp_231.y);
+        float _S1734 = atomicAdd(&(_S1731->z), temp_231.z);
+    }
+    float3  temp_232 = make_float3 (pSH7_20) * v_colors_29;
+    float _S1735 = dot_0(temp_232, temp_232);
+    if((F32_isfinite((_S1735))))
+    {
+        _S1701 = _S1735 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1736 = v_coeffs_29 + int(6);
+        float _S1737 = atomicAdd(&(_S1736->x), temp_232.x);
+        float _S1738 = atomicAdd(&(_S1736->y), temp_232.y);
+        float _S1739 = atomicAdd(&(_S1736->z), temp_232.z);
+    }
+    float3  temp_233 = make_float3 (pSH8_20) * v_colors_29;
+    float _S1740 = dot_0(temp_233, temp_233);
+    if((F32_isfinite((_S1740))))
+    {
+        _S1701 = _S1740 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1741 = v_coeffs_29 + int(7);
+        float _S1742 = atomicAdd(&(_S1741->x), temp_233.x);
+        float _S1743 = atomicAdd(&(_S1741->y), temp_233.y);
+        float _S1744 = atomicAdd(&(_S1741->z), temp_233.z);
+    }
+    float fC1_y_11 = -2.0f * y_34;
+    float fS1_x_11 = 2.0f * y_34;
+    float pSH6_z_9 = 1.89234936237335205f * z_33;
+    float pSH8_x_17 = 0.54627424478530884f * _S1719;
+    float3  * _S1745 = coeffs_44 + int(3);
+    float3  * _S1746 = coeffs_44 + int(7);
+    float3  * _S1747 = coeffs_44 + int(6);
+    float v_x_28 = _S1716 + dot_0(v_colors_29, make_float3 (0.54627424478530884f * fS1_x_11) * *_S1745 + make_float3 (pSH8_x_17) * *_S1746 + make_float3 (fTmp0B_26) * *_S1747);
+    float3  * _S1748 = coeffs_44 + int(4);
+    float v_y_28 = _S1717 + dot_0(v_colors_29, make_float3 (pSH8_x_17) * *_S1745 + make_float3 (0.54627424478530884f * fC1_y_11) * *_S1746 + make_float3 (fTmp0B_26) * *_S1748);
+    float v_z_28 = _S1718 + dot_0(v_colors_29, make_float3 (pSH6_z_9) * *(coeffs_44 + int(5)) + make_float3 (-1.09254848957061768f * x_36) * *_S1747 + make_float3 (-1.09254848957061768f * y_34) * *_S1748);
+    float fTmp0C_17 = -2.28522896766662598f * z2_17 + 0.4570457935333252f;
+    float fTmp1B_17 = 1.44530570507049561f * z_33;
+    float fC2_8 = x_36 * fC1_17 - y_34 * fS1_17;
+    float fS2_8 = x_36 * fS1_17 + y_34 * fC1_17;
+    float pSH12_15 = z_33 * (1.86588168144226074f * z2_17 - 1.11952900886535645f);
+    float pSH13_13 = fTmp0C_17 * x_36;
+    float pSH11_13 = fTmp0C_17 * y_34;
+    float pSH14_13 = fTmp1B_17 * fC1_17;
+    float pSH10_13 = fTmp1B_17 * fS1_17;
+    float pSH15_13 = -0.59004360437393188f * fC2_8;
+    float3  temp_234 = make_float3 (-0.59004360437393188f * fS2_8) * v_colors_29;
+    float _S1749 = dot_0(temp_234, temp_234);
+    if((F32_isfinite((_S1749))))
+    {
+        _S1701 = _S1749 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1750 = v_coeffs_29 + int(8);
+        float _S1751 = atomicAdd(&(_S1750->x), temp_234.x);
+        float _S1752 = atomicAdd(&(_S1750->y), temp_234.y);
+        float _S1753 = atomicAdd(&(_S1750->z), temp_234.z);
+    }
+    float3  temp_235 = make_float3 (pSH10_13) * v_colors_29;
+    float _S1754 = dot_0(temp_235, temp_235);
+    if((F32_isfinite((_S1754))))
+    {
+        _S1701 = _S1754 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1755 = v_coeffs_29 + int(9);
+        float _S1756 = atomicAdd(&(_S1755->x), temp_235.x);
+        float _S1757 = atomicAdd(&(_S1755->y), temp_235.y);
+        float _S1758 = atomicAdd(&(_S1755->z), temp_235.z);
+    }
+    float3  temp_236 = make_float3 (pSH11_13) * v_colors_29;
+    float _S1759 = dot_0(temp_236, temp_236);
+    if((F32_isfinite((_S1759))))
+    {
+        _S1701 = _S1759 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1760 = v_coeffs_29 + int(10);
+        float _S1761 = atomicAdd(&(_S1760->x), temp_236.x);
+        float _S1762 = atomicAdd(&(_S1760->y), temp_236.y);
+        float _S1763 = atomicAdd(&(_S1760->z), temp_236.z);
+    }
+    float3  temp_237 = make_float3 (pSH12_15) * v_colors_29;
+    float _S1764 = dot_0(temp_237, temp_237);
+    if((F32_isfinite((_S1764))))
+    {
+        _S1701 = _S1764 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1765 = v_coeffs_29 + int(11);
+        float _S1766 = atomicAdd(&(_S1765->x), temp_237.x);
+        float _S1767 = atomicAdd(&(_S1765->y), temp_237.y);
+        float _S1768 = atomicAdd(&(_S1765->z), temp_237.z);
+    }
+    float3  temp_238 = make_float3 (pSH13_13) * v_colors_29;
+    float _S1769 = dot_0(temp_238, temp_238);
+    if((F32_isfinite((_S1769))))
+    {
+        _S1701 = _S1769 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1770 = v_coeffs_29 + int(12);
+        float _S1771 = atomicAdd(&(_S1770->x), temp_238.x);
+        float _S1772 = atomicAdd(&(_S1770->y), temp_238.y);
+        float _S1773 = atomicAdd(&(_S1770->z), temp_238.z);
+    }
+    float3  temp_239 = make_float3 (pSH14_13) * v_colors_29;
+    float _S1774 = dot_0(temp_239, temp_239);
+    if((F32_isfinite((_S1774))))
+    {
+        _S1701 = _S1774 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1775 = v_coeffs_29 + int(13);
+        float _S1776 = atomicAdd(&(_S1775->x), temp_239.x);
+        float _S1777 = atomicAdd(&(_S1775->y), temp_239.y);
+        float _S1778 = atomicAdd(&(_S1775->z), temp_239.z);
+    }
+    float3  temp_240 = make_float3 (pSH15_13) * v_colors_29;
+    float _S1779 = dot_0(temp_240, temp_240);
+    if((F32_isfinite((_S1779))))
+    {
+        _S1701 = _S1779 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1780 = v_coeffs_29 + int(14);
+        float _S1781 = atomicAdd(&(_S1780->x), temp_240.x);
+        float _S1782 = atomicAdd(&(_S1780->y), temp_240.y);
+        float _S1783 = atomicAdd(&(_S1780->z), temp_240.z);
+    }
+    float fTmp0C_z_11 = -4.57045793533325195f * z_33;
+    float _S1784 = x_36 * _S1719;
+    float fC2_x_5 = fC1_17 + _S1784 - y_34 * fS1_x_11;
+    float _S1785 = y_34 * _S1719;
+    float fC2_y_5 = x_36 * fC1_y_11 - fS1_17 - _S1785;
+    float fS2_x_5 = fS1_17 + x_36 * fS1_x_11 + _S1785;
+    float fS2_y_5 = _S1784 + fC1_17 + y_34 * fC1_y_11;
+    float pSH12_z_7 = 5.59764480590820312f * z2_17 - 1.11952900886535645f;
+    float pSH14_x_11 = fTmp1B_17 * _S1719;
+    float3  * _S1786 = coeffs_44 + int(8);
+    float3  * _S1787 = coeffs_44 + int(14);
+    float3  * _S1788 = coeffs_44 + int(9);
+    float3  * _S1789 = coeffs_44 + int(13);
+    float3  * _S1790 = coeffs_44 + int(12);
+    float v_x_29 = v_x_28 + dot_0(v_colors_29, make_float3 (-0.59004360437393188f * fS2_x_5) * *_S1786 + make_float3 (-0.59004360437393188f * fC2_x_5) * *_S1787 + make_float3 (fTmp1B_17 * fS1_x_11) * *_S1788 + make_float3 (pSH14_x_11) * *_S1789 + make_float3 (fTmp0C_17) * *_S1790);
+    float3  * _S1791 = coeffs_44 + int(10);
+    float v_y_29 = v_y_28 + dot_0(v_colors_29, make_float3 (-0.59004360437393188f * fS2_y_5) * *_S1786 + make_float3 (-0.59004360437393188f * fC2_y_5) * *_S1787 + make_float3 (pSH14_x_11) * *_S1788 + make_float3 (fTmp1B_17 * fC1_y_11) * *_S1789 + make_float3 (fTmp0C_17) * *_S1791);
+    float v_z_29 = v_z_28 + dot_0(v_colors_29, make_float3 (pSH12_z_7) * *(coeffs_44 + int(11)) + make_float3 (fTmp0C_z_11 * x_36) * *_S1790 + make_float3 (fTmp0C_z_11 * y_34) * *_S1791 + make_float3 (1.44530570507049561f * fC1_17) * *_S1789 + make_float3 (1.44530570507049561f * fS1_17) * *_S1788);
+    float fTmp0D_8 = z_33 * (-4.68332576751708984f * z2_17 + 2.00713968276977539f);
+    float fTmp1C_8 = 3.31161141395568848f * z2_17 - 0.47308734059333801f;
+    float fTmp2B_8 = -1.77013075351715088f * z_33;
+    float pSH20_8 = 1.9843134880065918f * z_33 * pSH12_15 + -1.00623059272766113f * pSH6_22;
+    float pSH21_6 = fTmp0D_8 * x_36;
+    float pSH19_6 = fTmp0D_8 * y_34;
+    float pSH22_6 = fTmp1C_8 * fC1_17;
+    float pSH18_6 = fTmp1C_8 * fS1_17;
+    float pSH23_6 = fTmp2B_8 * fC2_8;
+    float pSH17_6 = fTmp2B_8 * fS2_8;
+    float pSH24_6 = 0.62583571672439575f * (x_36 * fC2_8 - y_34 * fS2_8);
+    float3  temp_241 = make_float3 (0.62583571672439575f * (x_36 * fS2_8 + y_34 * fC2_8)) * v_colors_29;
+    float _S1792 = dot_0(temp_241, temp_241);
+    if((F32_isfinite((_S1792))))
+    {
+        _S1701 = _S1792 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1793 = v_coeffs_29 + int(15);
+        float _S1794 = atomicAdd(&(_S1793->x), temp_241.x);
+        float _S1795 = atomicAdd(&(_S1793->y), temp_241.y);
+        float _S1796 = atomicAdd(&(_S1793->z), temp_241.z);
+    }
+    float3  temp_242 = make_float3 (pSH17_6) * v_colors_29;
+    float _S1797 = dot_0(temp_242, temp_242);
+    if((F32_isfinite((_S1797))))
+    {
+        _S1701 = _S1797 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1798 = v_coeffs_29 + int(16);
+        float _S1799 = atomicAdd(&(_S1798->x), temp_242.x);
+        float _S1800 = atomicAdd(&(_S1798->y), temp_242.y);
+        float _S1801 = atomicAdd(&(_S1798->z), temp_242.z);
+    }
+    float3  temp_243 = make_float3 (pSH18_6) * v_colors_29;
+    float _S1802 = dot_0(temp_243, temp_243);
+    if((F32_isfinite((_S1802))))
+    {
+        _S1701 = _S1802 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1803 = v_coeffs_29 + int(17);
+        float _S1804 = atomicAdd(&(_S1803->x), temp_243.x);
+        float _S1805 = atomicAdd(&(_S1803->y), temp_243.y);
+        float _S1806 = atomicAdd(&(_S1803->z), temp_243.z);
+    }
+    float3  temp_244 = make_float3 (pSH19_6) * v_colors_29;
+    float _S1807 = dot_0(temp_244, temp_244);
+    if((F32_isfinite((_S1807))))
+    {
+        _S1701 = _S1807 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1808 = v_coeffs_29 + int(18);
+        float _S1809 = atomicAdd(&(_S1808->x), temp_244.x);
+        float _S1810 = atomicAdd(&(_S1808->y), temp_244.y);
+        float _S1811 = atomicAdd(&(_S1808->z), temp_244.z);
+    }
+    float3  temp_245 = make_float3 (pSH20_8) * v_colors_29;
+    float _S1812 = dot_0(temp_245, temp_245);
+    if((F32_isfinite((_S1812))))
+    {
+        _S1701 = _S1812 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1813 = v_coeffs_29 + int(19);
+        float _S1814 = atomicAdd(&(_S1813->x), temp_245.x);
+        float _S1815 = atomicAdd(&(_S1813->y), temp_245.y);
+        float _S1816 = atomicAdd(&(_S1813->z), temp_245.z);
+    }
+    float3  temp_246 = make_float3 (pSH21_6) * v_colors_29;
+    float _S1817 = dot_0(temp_246, temp_246);
+    if((F32_isfinite((_S1817))))
+    {
+        _S1701 = _S1817 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1818 = v_coeffs_29 + int(20);
+        float _S1819 = atomicAdd(&(_S1818->x), temp_246.x);
+        float _S1820 = atomicAdd(&(_S1818->y), temp_246.y);
+        float _S1821 = atomicAdd(&(_S1818->z), temp_246.z);
+    }
+    float3  temp_247 = make_float3 (pSH22_6) * v_colors_29;
+    float _S1822 = dot_0(temp_247, temp_247);
+    if((F32_isfinite((_S1822))))
+    {
+        _S1701 = _S1822 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1823 = v_coeffs_29 + int(21);
+        float _S1824 = atomicAdd(&(_S1823->x), temp_247.x);
+        float _S1825 = atomicAdd(&(_S1823->y), temp_247.y);
+        float _S1826 = atomicAdd(&(_S1823->z), temp_247.z);
+    }
+    float3  temp_248 = make_float3 (pSH23_6) * v_colors_29;
+    float _S1827 = dot_0(temp_248, temp_248);
+    if((F32_isfinite((_S1827))))
+    {
+        _S1701 = _S1827 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1828 = v_coeffs_29 + int(22);
+        float _S1829 = atomicAdd(&(_S1828->x), temp_248.x);
+        float _S1830 = atomicAdd(&(_S1828->y), temp_248.y);
+        float _S1831 = atomicAdd(&(_S1828->z), temp_248.z);
+    }
+    float3  temp_249 = make_float3 (pSH24_6) * v_colors_29;
+    float _S1832 = dot_0(temp_249, temp_249);
+    if((F32_isfinite((_S1832))))
+    {
+        _S1701 = _S1832 != 0.0f;
+    }
+    else
+    {
+        _S1701 = false;
+    }
+    if(_S1701)
+    {
+        float3  * _S1833 = v_coeffs_29 + int(23);
+        float _S1834 = atomicAdd(&(_S1833->x), temp_249.x);
+        float _S1835 = atomicAdd(&(_S1833->y), temp_249.y);
+        float _S1836 = atomicAdd(&(_S1833->z), temp_249.z);
+    }
+    float fTmp0D_z_5 = -14.04997730255126953f * z2_17 + 2.00713968276977539f;
+    float fTmp1C_z_5 = 6.62322282791137695f * z_33;
+    float pSH22_x_5 = fTmp1C_8 * _S1719;
+    float3  * _S1837 = coeffs_44 + int(15);
+    float3  * _S1838 = coeffs_44 + int(23);
+    float3  * _S1839 = coeffs_44 + int(16);
+    float3  * _S1840 = coeffs_44 + int(22);
+    float3  * _S1841 = coeffs_44 + int(17);
+    float3  * _S1842 = coeffs_44 + int(21);
+    float3  * _S1843 = coeffs_44 + int(20);
+    float3  * _S1844 = coeffs_44 + int(18);
+    float3  dir_n_23 = make_float3 (x_36, y_34, z_33);
+    float3  v_dir_n_39 = make_float3 (v_x_29 + dot_0(v_colors_29, make_float3 (0.62583571672439575f * (fS2_8 + y_34 * fC2_x_5 + x_36 * fS2_x_5)) * *_S1837 + make_float3 (0.62583571672439575f * (fC2_8 + x_36 * fC2_x_5 - y_34 * fS2_x_5)) * *_S1838 + make_float3 (fTmp2B_8 * fS2_x_5) * *_S1839 + make_float3 (fTmp2B_8 * fC2_x_5) * *_S1840 + make_float3 (fTmp1C_8 * fS1_x_11) * *_S1841 + make_float3 (pSH22_x_5) * *_S1842 + make_float3 (fTmp0D_8) * *_S1843), v_y_29 + dot_0(v_colors_29, make_float3 (0.62583571672439575f * (x_36 * fS2_y_5 + fC2_8 + y_34 * fC2_y_5)) * *_S1837 + make_float3 (0.62583571672439575f * (x_36 * fC2_y_5 - fS2_8 - y_34 * fS2_y_5)) * *_S1838 + make_float3 (fTmp2B_8 * fS2_y_5) * *_S1839 + make_float3 (fTmp2B_8 * fC2_y_5) * *_S1840 + make_float3 (pSH22_x_5) * *_S1841 + make_float3 (fTmp1C_8 * fC1_y_11) * *_S1842 + make_float3 (fTmp0D_8) * *_S1844), v_z_29 + dot_0(v_colors_29, make_float3 (1.9843134880065918f * (pSH12_15 + z_33 * pSH12_z_7) + -1.00623059272766113f * pSH6_z_9) * *(coeffs_44 + int(19)) + make_float3 (fTmp0D_z_5 * x_36) * *_S1843 + make_float3 (fTmp0D_z_5 * y_34) * *_S1844 + make_float3 (fTmp1C_z_5 * fC1_17) * *_S1842 + make_float3 (fTmp1C_z_5 * fS1_17) * *_S1841 + make_float3 (-1.77013075351715088f * fC2_8) * *_S1840 + make_float3 (-1.77013075351715088f * fS2_8) * *_S1839));
+    *v_dir_9 = *v_dir_9 + (v_dir_n_39 - make_float3 (dot_0(v_dir_n_39, dir_n_23)) * dir_n_23) * make_float3 (inorm_7);
+    return;
+}
+

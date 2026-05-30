@@ -1,599 +1,329 @@
+// Background spherical-harmonics renderer - produces a per-pixel skybox color
+// by evaluating an SH function along the world-space ray direction for each
+// camera pixel. SH math lives in harmonics.slang (sh{N}_to_color_dir{,_vjp_*});
+// ray generation + camera-to-world rotation come from projection_utils.slang
+// (generate_ray + transform_ray_d), the same path used by the eval3d
+// rasterizer. This keeps the convention consistent: viewmats are world->camera
+// row-major (the engine's stored form), the Y/Z axis flip is already baked
+// into them upstream, and distortion is handled per the camera model.
+//
+// Inputs and outputs are caller-allocated TorchTensorViews; no ATen
+// allocations and no transient R_wc scratch buffer.
+
 #include "BackgroundSphericalHarmonics.cuh"
 
 #include "common.cuh"
+#include "types.cuh"
+#include "gsplat/Common.h"
 
-#include <gsplat/Common.h>
-#include <gsplat/Cameras.cuh>
+#include "generated/slang.cuh"
+namespace SlangProjectionUtils {
+#include "generated/set_namespace.cuh"
+#include "generated/projection_utils.cuh"
+}
+namespace SlangHarmonics {
+#include "generated/set_namespace.cuh"
+#include "generated/harmonics.cuh"
+}
 
-#include <algorithm>
+#include <stdexcept>
 
 
-#if 0
+// ----- Common ray-from-viewmat path used by fwd + bwd ------------------------
+
+// Load viewmat[:3,:3] (row-major) as a slang-style float3x3, and intrinsics
+// and (optional) distortion for one camera.
+struct BgCamera {
+    float3x3 R;            // world->camera (slang convention)
+    float fx, fy, cx, cy;
+    CameraDistortionCoeffs dist;
+};
+
+static __device__ __forceinline__ BgCamera _load_bg_camera(
+    const float*  viewmats,    // [N_cam, 16] row-major
+    const float4* intrins,     // [N_cam]
+    const float*  dist_coeffs, // [N_cam, 10] or null
+    int cam
+) {
+    const float* vm = viewmats + (int64_t)cam * 16;
+    BgCamera c;
+    c.R = float3x3{
+        vm[0], vm[1], vm[2],   // row 0
+        vm[4], vm[5], vm[6],   // row 1
+        vm[8], vm[9], vm[10],  // row 2
+    };
+    float4 intr = intrins[cam];
+    c.fx = intr.x; c.fy = intr.y; c.cx = intr.z; c.cy = intr.w;
+    if (dist_coeffs == nullptr) {
+        #pragma unroll
+        for (int i = 0; i < 10; ++i) c.dist.m_data[i] = 0.0f;
+    } else {
+        const float* d = dist_coeffs + (int64_t)cam * 10;
+        #pragma unroll
+        for (int i = 0; i < 10; ++i) c.dist.m_data[i] = d[i];
+    }
+    return c;
+}
+
+// Compute world-space ray direction at pixel (px, py) for the given camera.
+// Returns false if the pixel maps to an invalid ray (distortion model rejected).
+static __device__ __forceinline__ bool _bg_pixel_world_ray(
+    const BgCamera& c, int camera_model, int px, int py, float3& out_world_dir
+) {
+    const float2 uv = {
+        ((float)px + 0.5f - c.cx) / c.fx,
+        ((float)py + 0.5f - c.cy) / c.fy,
+    };
+    float3 raydir;
+    if (!SlangProjectionUtils::generate_ray(uv, camera_model, c.dist, &raydir))
+        return false;
+    out_world_dir = SlangProjectionUtils::transform_ray_d(c.R, raydir);
+    return true;
+}
 
 
-template<ssplat::CameraModelType CAMERA_MODEL>
+// ---- Forward kernel ---------------------------------------------------------
+
+template<int SH_DEGREE>
 __global__ void render_background_sh_forward_kernel(
     const dim3 img_size,
-    const float4* intrins,  // fx, fy, cx, cy
-    const float* rotation,  // row major 3x3
-    const unsigned sh_degree,
-    const glm::vec3* __restrict__ sh_coeffs,
-    glm::vec3* __restrict__ out_img
+    int camera_model,
+    const float*  __restrict__ viewmats,    // [B, 16] (per-batch image)
+    const float4* __restrict__ intrins,     // [B]
+    const float*  __restrict__ dist_coeffs, // [B, 10] or null
+    const float3* __restrict__ sh_coeffs,   // [(SH_DEGREE+1)^2]
+    float3*       __restrict__ out_img      // [B, H, W]
 ) {
-    unsigned camera_id = blockIdx.z * blockDim.z + threadIdx.z;
+    unsigned bi = blockIdx.z * blockDim.z + threadIdx.z;
+    unsigned py = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned px = blockIdx.x * blockDim.x + threadIdx.x;
+    if (py >= img_size.y || px >= img_size.x || bi >= img_size.z) return;
+    int32_t pix_id = (bi * img_size.y + py) * img_size.x + px;
 
-    unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
-    unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
-    int32_t pix_id = (camera_id * img_size.y + i) * img_size.x + j;
+    // viewmats / intrins / dist_coeffs are sized to the current batch (the
+    // caller has already gathered per-image data into a [B, ...] layout), so
+    // we index directly by bi — NOT by some global camera id. Indexing by
+    // `cam_indices[bi]` (the global-cam-id pattern used by bilagrid/PPISP) is
+    // wrong here: that would read past the buffer's [B] worth of entries.
+    BgCamera c = _load_bg_camera(viewmats, intrins, dist_coeffs, (int)bi);
 
-    if (i >= img_size.y || j >= img_size.x || camera_id >= img_size.z)
-        return;
-
-    intrins += camera_id;
-    float fx = intrins[0].x, fy = intrins[0].y, cx = intrins[0].z, cy = intrins[0].w;
-
-    glm::vec2 pos_2d(j+0.5f, i+0.5f);
-    CameraRay camera_ray;
-    camera_ray.valid_flag = false;
-
-    switch (CAMERA_MODEL) {
-    case ssplat::CameraModelType::PINHOLE:
-        camera_ray = PerfectPinholeCameraModel(
-            { {{img_size.x, img_size.y}, ShutterType::GLOBAL}, {cx, cy}, {fx, fy} }
-        ).image_point_to_camera_ray(pos_2d);
-        break;
-    case ssplat::CameraModelType::FISHEYE:
-        camera_ray = OpenCVFisheyeCameraModel(
-            { {{img_size.x, img_size.y}, ShutterType::GLOBAL}, {cx, cy}, {fx, fy} }
-        ).image_point_to_camera_ray(pos_2d);
-        break;
-    }
-    if (!camera_ray.valid_flag) {
+    float3 world_dir;
+    if (!_bg_pixel_world_ray(c, camera_model, (int)px, (int)py, world_dir)) {
         out_img[pix_id] = {0.0f, 0.0f, 0.0f};
         return;
     }
 
-    float xi = camera_ray.ray_dir.x;
-    float yi = -camera_ray.ray_dir.y;
-    float zi = -camera_ray.ray_dir.z;
-    rotation += 9 * camera_id;
-    float x = rotation[0] * xi + rotation[1] * yi + rotation[2] * zi;
-    float y = rotation[3] * xi + rotation[4] * yi + rotation[5] * zi;
-    float z = rotation[6] * xi + rotation[7] * yi + rotation[8] * zi;
+    const float3 dc = sh_coeffs[0];
+    float3* coeffs_l1 = (float3*)(sh_coeffs + 1);
 
-    float xx = x*x, yy = y*y, zz = z*z;
-
-    glm::vec3 color = glm::vec3(0.0f);
-
-    // l0
-    color += 0.28209479177387814f * sh_coeffs[0];
-
-    // l1
-    if (sh_degree > 1) {
-        color += 0.4886025119029199f * y * sh_coeffs[1];
-        color += 0.4886025119029199f * z * sh_coeffs[2];
-        color += 0.4886025119029199f * x * sh_coeffs[3];
-    }
-
-    // l2
-    if (sh_degree > 2) {
-        color += 1.0925484305920792f * x * y * sh_coeffs[4];
-        color += 1.0925484305920792f * y * z * sh_coeffs[5];
-        color += (0.9461746957575601f * zz - 0.31539156525251999f) * sh_coeffs[6];
-        color += 1.0925484305920792f * x * z * sh_coeffs[7];
-        color += 0.5462742152960396f * (xx - yy) * sh_coeffs[8];
-    }
-
-    // l3
-    if (sh_degree > 3) {
-        color += 0.5900435899266435f * y * (3.0f * xx - yy) * sh_coeffs[9];
-        color += 2.890611442640554f * x * y * z * sh_coeffs[10];
-        color += 0.4570457994644658f * y * (5.0f * zz - 1.0f) * sh_coeffs[11];
-        color += 0.3731763325901154f * z * (5.0f * zz - 3.0f) * sh_coeffs[12];
-        color += 0.4570457994644658f * x * (5.0f * zz - 1.0f) * sh_coeffs[13];
-        color += 1.445305721320277f * z * (xx - yy) * sh_coeffs[14];
-        color += 0.5900435899266435f * x * (xx - 3.0f * yy) * sh_coeffs[15];
-    }
-
-    // l4
-    if (sh_degree > 4) {
-        color += 2.5033429417967046f * x * y * (xx - yy) * sh_coeffs[16];
-        color += 1.7701307697799304f * y * z * (3.0f * xx - yy) * sh_coeffs[17];
-        color += 0.9461746957575601f * x * y * (7.0f * zz - 1.0f) * sh_coeffs[18];
-        color += 0.6690465435572892f * y * z * (7.0f * zz - 3.0f) * sh_coeffs[19];
-        color += 0.10578554691520431f * (35.0f * zz * zz - 30.0f * zz + 3.0f) * sh_coeffs[20];
-        color += 0.6690465435572892f * x * z * (7.0f * zz - 3.0f) * sh_coeffs[21];
-        color += 0.47308734787878004f * (xx - yy) * (7.0f * zz - 1.0f) * sh_coeffs[22];
-        color += 1.7701307697799304f * x * z * (xx - 3.0f * yy) * sh_coeffs[23];
-        color += 0.6258357354491761f * (xx * (xx - 3.0f * yy) - yy * (3.0f * xx - yy)) * sh_coeffs[24];
-    }
+    float3 color;
+    if constexpr (SH_DEGREE == 0)
+        color = SlangHarmonics::sh0_to_color_dir(world_dir, dc, coeffs_l1);
+    else if constexpr (SH_DEGREE == 1)
+        color = SlangHarmonics::sh1_to_color_dir(world_dir, dc, coeffs_l1);
+    else if constexpr (SH_DEGREE == 2)
+        color = SlangHarmonics::sh2_to_color_dir(world_dir, dc, coeffs_l1);
+    else if constexpr (SH_DEGREE == 3)
+        color = SlangHarmonics::sh3_to_color_dir(world_dir, dc, coeffs_l1);
+    else if constexpr (SH_DEGREE == 4)
+        color = SlangHarmonics::sh4_to_color_dir(world_dir, dc, coeffs_l1);
 
     color.x = fmaxf(color.x + 0.5f, 0.0f);
     color.y = fmaxf(color.y + 0.5f, 0.0f);
     color.z = fmaxf(color.z + 0.5f, 0.0f);
-
     out_img[pix_id] = color;
 }
 
 
-template<ssplat::CameraModelType CAMERA_MODEL>
+// ---- Backward kernel --------------------------------------------------------
+
+template<int SH_DEGREE>
 __global__ void __launch_bounds__(512) render_background_sh_backward_kernel(
     const dim3 img_size,
-    const float4* intrins,  // fx, fy, cx, cy
-    const float* rotation,  // row major 3x3
-    const unsigned sh_degree,
-    const glm::vec3* __restrict__ sh_coeffs,
-    const glm::vec3* __restrict__ out_color,
-    const glm::vec3* __restrict__ v_out_color,
-    glm::vec3* __restrict__ v_rotation,
-    glm::vec3* __restrict__ v_sh_coeffs
+    int camera_model,
+    const float*  __restrict__ viewmats,    // [B, 16]
+    const float4* __restrict__ intrins,     // [B]
+    const float*  __restrict__ dist_coeffs, // [B, 10] or null
+    const float3* __restrict__ sh_coeffs,
+    const float3* __restrict__ out_color,
+    const float3* __restrict__ v_out_color,
+    float3*       __restrict__ v_sh_coeffs
 ) {
-    #if 0
-    unsigned camera_id = blockIdx.z * blockDim.z + threadIdx.z;
-    unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
-    unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
-    int32_t pix_id = (camera_id * img_size.y + i) * img_size.x + j;
-    #else
-    unsigned camera_id = blockIdx.y * blockDim.y + threadIdx.y;
-    int32_t pix_id = blockIdx.x * blockDim.x + threadIdx.x;
-    unsigned j = pix_id % img_size.x, i = pix_id / img_size.x;
-    pix_id += camera_id * img_size.y * img_size.x;
-    #endif
+    // Flattened (pix, cam) layout: improves coalescing for the atomicAdd-heavy
+    // backward (one block reduces into a small SH coefficient table).
+    unsigned bi = blockIdx.y * blockDim.y + threadIdx.y;
+    int32_t  pix_id = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned px = pix_id % img_size.x, py = pix_id / img_size.x;
+    pix_id += bi * img_size.y * img_size.x;
+    bool inside = (py < img_size.y && px < img_size.x && bi < img_size.z);
 
-    bool inside = (i < img_size.y && j < img_size.x && camera_id < img_size.z);
-
-    // backprop color output
-    glm::vec3 v_color = glm::vec3(0.0);
+    // dL/d(rgb_post_clamp) -> dL/d(rgb_pre_clamp). Zero where the clamp kicked in.
+    float3 v_color = {0.0f, 0.0f, 0.0f};
     if (inside) {
-        glm::vec3 color = out_color[pix_id];
+        float3 color = out_color[pix_id];
         v_color = v_out_color[pix_id];
         if (color.x == 0.0f || !isfinite(v_color.x)) v_color.x = 0.0f;
         if (color.y == 0.0f || !isfinite(v_color.y)) v_color.y = 0.0f;
         if (color.z == 0.0f || !isfinite(v_color.z)) v_color.z = 0.0f;
     }
 
-    // undistort
-    intrins += camera_id;
-    float fx = intrins[0].x, fy = intrins[0].y, cx = intrins[0].z, cy = intrins[0].w;
+    // See forward kernel: index directly by bi (per-batch buffers).
+    BgCamera c = _load_bg_camera(viewmats, intrins, dist_coeffs, inside ? (int)bi : 0);
 
-    glm::vec2 pos_2d(j+0.5f, i+0.5f);
-    CameraRay camera_ray;
-    camera_ray.valid_flag = false;
-
-    switch (CAMERA_MODEL) {
-    case ssplat::CameraModelType::PINHOLE:
-        camera_ray = PerfectPinholeCameraModel(
-            { {{img_size.x, img_size.y}, ShutterType::GLOBAL}, {cx, cy}, {fx, fy} }
-        ).image_point_to_camera_ray(pos_2d);
-        break;
-    case ssplat::CameraModelType::FISHEYE:
-        camera_ray = OpenCVFisheyeCameraModel(
-            { {{img_size.x, img_size.y}, ShutterType::GLOBAL}, {cx, cy}, {fx, fy} }
-        ).image_point_to_camera_ray(pos_2d);
-        break;
-    }
-    if (!camera_ray.valid_flag) {
-        inside = false;
-        v_color = glm::vec3(0.0);
+    float3 world_dir = {0.0f, 0.0f, 1.0f};
+    if (inside) {
+        if (!_bg_pixel_world_ray(c, camera_model, (int)px, (int)py, world_dir)) {
+            inside = false;
+            v_color = {0.0f, 0.0f, 0.0f};
+        }
     }
 
-    // early termination
-    {
-        #if 0
-        if (__syncthreads_count(inside) == 0)
-            return;
-        #else
-        if (__ballot_sync(~0u, inside) == 0)
-            return;
-        #endif
-    }
+    const float3 dc = sh_coeffs[0];
+    float3* coeffs_l1   = (float3*)(sh_coeffs   + 1);
+    float3* v_coeffs_l1 = (float3*)(v_sh_coeffs + 1);
 
-    // backward
+    float3 v_dc  = {0.0f, 0.0f, 0.0f};
+    float3 v_dir = {0.0f, 0.0f, 0.0f};
 
-    float xi = camera_ray.ray_dir.x;
-    float yi = -camera_ray.ray_dir.y;
-    float zi = -camera_ray.ray_dir.z;
-    rotation += 9 * camera_id;
-    float x = rotation[0] * xi + rotation[1] * yi + rotation[2] * zi;
-    float y = rotation[3] * xi + rotation[4] * yi + rotation[5] * zi;
-    float z = rotation[6] * xi + rotation[7] * yi + rotation[8] * zi;
+    if constexpr (SH_DEGREE == 0)
+        SlangHarmonics::sh0_to_color_dir_vjp_atomic(
+            world_dir, dc, coeffs_l1, v_color, &v_dc, v_coeffs_l1, &v_dir);
+    else if constexpr (SH_DEGREE == 1)
+        SlangHarmonics::sh1_to_color_dir_vjp_atomic(
+            world_dir, dc, coeffs_l1, v_color, &v_dc, v_coeffs_l1, &v_dir);
+    else if constexpr (SH_DEGREE == 2)
+        SlangHarmonics::sh2_to_color_dir_vjp_atomic(
+            world_dir, dc, coeffs_l1, v_color, &v_dc, v_coeffs_l1, &v_dir);
+    else if constexpr (SH_DEGREE == 3)
+        SlangHarmonics::sh3_to_color_dir_vjp_atomic(
+            world_dir, dc, coeffs_l1, v_color, &v_dc, v_coeffs_l1, &v_dir);
+    else if constexpr (SH_DEGREE == 4)
+        SlangHarmonics::sh4_to_color_dir_vjp_atomic(
+            world_dir, dc, coeffs_l1, v_color, &v_dc, v_coeffs_l1, &v_dir);
 
-    float xx = x*x, yy = y*y, zz = z*z;
+    // DC gradient: block-reduce one float3 atomic to the global table.
+    atomicAddFVec<512>(&v_sh_coeffs[0], v_dc);
 
-    float v_x = 0.0f, v_y = 0.0f, v_z = 0.0f;
-    float v_xx = 0.0f, v_yy = 0.0f, v_zz = 0.0f;
-
-    glm::vec3 temp3;
-    #define _ATOMIC_ADD(address, idx) \
-        atomicAddFVec<512>((float3*)&address[idx], float3{temp3.x, temp3.y, temp3.z});
-
-    // #define _ATOMIC_ADD(address, idx) \
-    //     if (inside) { \
-    //         atomicAdd((float*)address+3*idx+0, temp3.x); \
-    //         atomicAdd((float*)address+3*idx+1, temp3.y); \
-    //         atomicAdd((float*)address+3*idx+2, temp3.z); \
-    //     }
-
-    // l0
-    float v_color_dot_sh_coeff = 0.0f;
-    temp3 = 0.28209479177387814f * v_color;
-    _ATOMIC_ADD(v_sh_coeffs, 0);
-
-    // l1 - manually calculated
-    if (sh_degree > 1) {
-
-        // color += 0.4886025119029199f * y * sh_coeffs[1];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[1]);
-        v_y += 0.4886025119029199f * v_color_dot_sh_coeff;
-        temp3 = 0.4886025119029199f * y * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 1);
-
-        // color += 0.4886025119029199f * z * sh_coeffs[2];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[2]);
-        v_z += 0.4886025119029199f * v_color_dot_sh_coeff;
-        temp3 = 0.4886025119029199f * z * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 2);
-
-        // color += 0.4886025119029199f * x * sh_coeffs[3];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[3]);
-        v_x += 0.4886025119029199f * v_color_dot_sh_coeff;
-        temp3 = 0.4886025119029199f * x * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 3);
-    }
-
-    // l2 - manually calculated
-    if (sh_degree > 2) {
-
-        // color += 1.0925484305920792f * x * y * sh_coeffs[4];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[4]);
-        v_x += 1.0925484305920792f * y * v_color_dot_sh_coeff;
-        v_y += 1.0925484305920792f * x * v_color_dot_sh_coeff;
-        temp3 = 1.0925484305920792f * x * y * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 4);
-
-        // color += 1.0925484305920792f * y * z * sh_coeffs[5];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[5]);
-        v_z += 1.0925484305920792f * y * v_color_dot_sh_coeff;
-        v_y += 1.0925484305920792f * z * v_color_dot_sh_coeff;
-        temp3 = 1.0925484305920792f * y * z * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 5);
-
-        // color += (0.9461746957575601f * zz - 0.31539156525251999f) * sh_coeffs[6];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[6]);
-        v_zz += 0.9461746957575601f * v_color_dot_sh_coeff;
-        temp3 = (0.9461746957575601f * zz - 0.31539156525251999f) * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 6);
-
-        // color += 1.0925484305920792f * x * z * sh_coeffs[7];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[7]);
-        v_x += 1.0925484305920792f * z * v_color_dot_sh_coeff;
-        v_z += 1.0925484305920792f * x * v_color_dot_sh_coeff;
-        temp3 = 1.0925484305920792f * x * z * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 7);
-
-        // color += 0.5462742152960396f * (xx - yy) * sh_coeffs[8];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[8]);
-        v_xx += 0.5462742152960396f * v_color_dot_sh_coeff;
-        v_yy -= 0.5462742152960396f * v_color_dot_sh_coeff;
-        temp3 = 0.5462742152960396f * (xx - yy) * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 8);
-    }
-
-    // l3 - AI generated, one incorrect line commented
-    if (sh_degree > 3) {
-        // color += 0.5900435899266435f * y * (3.0f * xx - yy) * sh_coeffs[9];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[9]);
-        v_xx += 1.7701307697799305f * y * v_color_dot_sh_coeff;
-        v_yy -= 0.5900435899266435f * y * v_color_dot_sh_coeff;
-        v_y += 0.5900435899266435f * (3.0f * xx - yy) * v_color_dot_sh_coeff;
-        temp3 = 0.5900435899266435f * y * (3.0f * xx - yy) * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 9);
-
-        // color += 2.890611442640554f * x * y * z * sh_coeffs[10];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[10]);
-        v_x += 2.890611442640554f * y * z * v_color_dot_sh_coeff;
-        v_y += 2.890611442640554f * x * z * v_color_dot_sh_coeff;
-        v_z += 2.890611442640554f * x * y * v_color_dot_sh_coeff;
-        temp3 = 2.890611442640554f * x * y * z * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 10);
-
-        // color += 0.4570457994644658f * y * (5.0f * zz - 1.0f) * sh_coeffs[11];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[11]);
-        v_zz += 2.285228997322329f * y * v_color_dot_sh_coeff;
-        v_y += 0.4570457994644658f * (5.0f * zz - 1.0f) * v_color_dot_sh_coeff;
-        temp3 = 0.4570457994644658f * y * (5.0f * zz - 1.0f) * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 11);
-
-        // color += 0.3731763325901154f * z * (5.0f * zz - 3.0f) * sh_coeffs[12];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[12]);
-        v_z += 0.3731763325901154f * (5.0f * zz - 3.0f) * v_color_dot_sh_coeff;
-        v_zz += 1.865881662950577f * z * v_color_dot_sh_coeff;
-        temp3 = 0.3731763325901154f * z * (5.0f * zz - 3.0f) * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 12);
-
-        // color += 0.4570457994644658f * x * (5.0f * zz - 1.0f) * sh_coeffs[13];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[13]);
-        v_x += 0.4570457994644658f * (5.0f * zz - 1.0f) * v_color_dot_sh_coeff;
-        v_zz += 2.285228997322329f * x * v_color_dot_sh_coeff;
-        temp3 = 0.4570457994644658f * x * (5.0f * zz - 1.0f) * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 13);
-
-        // color += 1.445305721320277f * z * (xx - yy) * sh_coeffs[14];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[14]);
-        v_xx += 1.445305721320277f * z * v_color_dot_sh_coeff;
-        v_yy -= 1.445305721320277f * z * v_color_dot_sh_coeff;
-        v_z += 1.445305721320277f * (xx - yy) * v_color_dot_sh_coeff;
-        temp3 = 1.445305721320277f * z * (xx - yy) * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 14);
-
-        // color += 0.5900435899266435f * x * (xx - 3.0f * yy) * sh_coeffs[15];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[15]);
-        // v_xx += 1.1800871798532870f * x * v_color_dot_sh_coeff;
-        v_xx += 0.5900435899266435f * x * v_color_dot_sh_coeff;
-        v_yy -= 1.7701307697799305f * x * v_color_dot_sh_coeff;
-        v_x += 0.5900435899266435f * (xx - 3.0f * yy) * v_color_dot_sh_coeff;
-        temp3 = 0.5900435899266435f * x * (xx - 3.0f * yy) * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 15);
-    }
-
-    // l4 - AI generated, two incorrect lines commented
-    if (sh_degree > 4) {
-        // color += 2.5033429417967046f * x * y * (xx - yy) * sh_coeffs[16];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[16]);
-        v_x += 2.5033429417967046f * y * (xx - yy) * v_color_dot_sh_coeff;
-        v_y += 2.5033429417967046f * x * (xx - yy) * v_color_dot_sh_coeff;
-        v_xx += 2.5033429417967046f * x * y * v_color_dot_sh_coeff;
-        v_yy -= 2.5033429417967046f * x * y * v_color_dot_sh_coeff;
-        temp3 = 2.5033429417967046f * x * y * (xx - yy) * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 16);
-
-        // color += 1.7701307697799304f * y * z * (3.0f * xx - yy) * sh_coeffs[17];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[17]);
-        v_xx += 5.3103923093397912f * y * z * v_color_dot_sh_coeff;
-        v_yy -= 1.7701307697799304f * y * z * v_color_dot_sh_coeff;
-        v_y += 1.7701307697799304f * z * (3.0f * xx - yy) * v_color_dot_sh_coeff;
-        v_z += 1.7701307697799304f * y * (3.0f * xx - yy) * v_color_dot_sh_coeff;
-        temp3 = 1.7701307697799304f * y * z * (3.0f * xx - yy) * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 17);
-
-        // color += 0.9461746957575601f * x * y * (7.0f * zz - 1.0f) * sh_coeffs[18];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[18]);
-        v_x += 0.9461746957575601f * y * (7.0f * zz - 1.0f) * v_color_dot_sh_coeff;
-        v_y += 0.9461746957575601f * x * (7.0f * zz - 1.0f) * v_color_dot_sh_coeff;
-        v_zz += 6.6232228703029207f * x * y * v_color_dot_sh_coeff;
-        temp3 = 0.9461746957575601f * x * y * (7.0f * zz - 1.0f) * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 18);
-
-        // color += 0.6690465435572892f * y * z * (7.0f * zz - 3.0f) * sh_coeffs[19];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[19]);
-        v_y += 0.6690465435572892f * z * (7.0f * zz - 3.0f) * v_color_dot_sh_coeff;
-        v_z += 0.6690465435572892f * y * (7.0f * zz - 3.0f) * v_color_dot_sh_coeff;
-        v_zz += 4.6833258049010244f * y * z * v_color_dot_sh_coeff;
-        temp3 = 0.6690465435572892f * y * z * (7.0f * zz - 3.0f) * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 19);
-
-        // color += 0.10578554691520431f * (35.0f * zz * zz - 30.0f * zz + 3.0f) * sh_coeffs[20];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[20]);
-        v_zz += 0.10578554691520431f * (70.0f * zz - 30.0f) * v_color_dot_sh_coeff;
-        temp3 = 0.10578554691520431f * (35.0f * zz * zz - 30.0f * zz + 3.0f) * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 20);
-
-        // color += 0.6690465435572892f * x * z * (7.0f * zz - 3.0f) * sh_coeffs[21];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[21]);
-        v_x += 0.6690465435572892f * z * (7.0f * zz - 3.0f) * v_color_dot_sh_coeff;
-        v_z += 0.6690465435572892f * x * (7.0f * zz - 3.0f) * v_color_dot_sh_coeff;
-        v_zz += 4.6833258049010244f * x * z * v_color_dot_sh_coeff;
-        temp3 = 0.6690465435572892f * x * z * (7.0f * zz - 3.0f) * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 21);
-
-        // color += 0.47308734787878004f * (xx - yy) * (7.0f * zz - 1.0f) * sh_coeffs[22];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[22]);
-        v_xx += 0.47308734787878004f * (7.0f * zz - 1.0f) * v_color_dot_sh_coeff;
-        v_yy -= 0.47308734787878004f * (7.0f * zz - 1.0f) * v_color_dot_sh_coeff;
-        v_zz += 3.3116114351514603f * (xx - yy) * v_color_dot_sh_coeff;
-        temp3 = 0.47308734787878004f * (xx - yy) * (7.0f * zz - 1.0f) * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 22);
-
-        // color += 1.7701307697799304f * x * z * (xx - 3.0f * yy) * sh_coeffs[23];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[23]);
-        v_x += 1.7701307697799304f * z * (xx - 3.0f * yy) * v_color_dot_sh_coeff;
-        v_z += 1.7701307697799304f * x * (xx - 3.0f * yy) * v_color_dot_sh_coeff;
-        v_xx += 1.7701307697799304f * x * z * v_color_dot_sh_coeff;
-        v_yy -= 5.3103923093397912f * x * z * v_color_dot_sh_coeff;
-        temp3 = 1.7701307697799304f * x * z * (xx - 3.0f * yy) * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 23);
-
-        // color += 0.6258357354491761f * (xx * (xx - 3.0f * yy) - yy * (3.0f * xx - yy)) * sh_coeffs[24];
-        v_color_dot_sh_coeff = glm::dot(v_color, sh_coeffs[24]);
-        // v_xx += 0.6258357354491761f * (4.0f * xx - 6.0f * yy) * v_color_dot_sh_coeff;
-        // v_yy += 0.6258357354491761f * (6.0f * yy - 12.0f * xx) * v_color_dot_sh_coeff;
-        v_xx += 0.6258357354491761f * (2.0f * xx - 6.0f * yy) * v_color_dot_sh_coeff;
-        v_yy += 0.6258357354491761f * (2.0f * yy - 6.0f * xx) * v_color_dot_sh_coeff;
-        temp3 = 0.6258357354491761f * (xx * (xx - 3.0f * yy) - yy * (3.0f * xx - yy)) * v_color;
-        _ATOMIC_ADD(v_sh_coeffs, 24);
-    }
-
-    if (v_rotation == nullptr)
-        return;
-
-    v_x += v_xx * 2.0f*x;
-    v_y += v_yy * 2.0f*y;
-    v_z += v_zz * 2.0f*z;
-
-    glm::vec3 xyz = glm::vec3(x, y, z);
-    glm::mat3 dp_dpr = glm::mat3(1.0f) - glm::outerProduct(xyz, xyz);
-    glm::vec3 v_p = dp_dpr * glm::vec3(v_x, v_y, v_z);
-    v_p *= (inside ? 1.0f : 0.0f);
-
-    v_rotation += 3 * camera_id;
-    temp3 = glm::vec3(v_p.x * xi, v_p.x * yi, v_p.x * zi);
-    _ATOMIC_ADD(v_rotation, 0);
-    temp3 = glm::vec3(v_p.y * xi, v_p.y * yi, v_p.y * zi);
-    _ATOMIC_ADD(v_rotation, 1);
-    temp3 = glm::vec3(v_p.z * xi, v_p.z * yi, v_p.z * zi);
-    _ATOMIC_ADD(v_rotation, 2);
-
-    #undef _ATOMIC_ADD
+    // Camera gradient is not currently propagated (engine path holds cameras
+    // fixed; v_dir is discarded). A v_viewmats output can be added later via
+    // SlangProjectionUtils::transform_ray_d_vjp.
 }
 
 
+// ---- Host-side dispatchers --------------------------------------------------
+
+static inline int64_t _batch_count(const TorchTensorView& t, int64_t per_item) {
+    int64_t n = 1;
+    for (auto s : std::get<2>(t)) n *= s;
+    return n / per_item;
+}
+
+static inline int _camera_model_int(const std::string& camera_model) {
+    auto cm = cmt(camera_model);
+    if (cm == (ssplat::CameraModelType)-1)
+        throw std::runtime_error("Camera model " + camera_model + " is not supported for skybox");
+    return (int)cm;
+}
+
 
 /*[AutoHeaderGeneratorExport]*/
-at::Tensor render_background_sh_forward(
-    const unsigned w,
-    const unsigned h,
+void render_background_sh_forward(
+    int w,
+    int h,
     std::string camera_model,
-    const at::Tensor &intrins,  // fx, fy, cx, cy
-    const at::Tensor &rotation,  // row major 3x3
-    const unsigned sh_degree,
-    const at::Tensor &sh_coeffs
+    int sh_degree,                       // actual SH degree (0..4)
+    TorchTensorView viewmats,            // [B, 4, 4] row-major world->camera (per-batch)
+    TorchTensorView intrins,             // [B, 4]
+    TorchTensorView dist_coeffs,         // [B, 10]; null/empty -> zeros
+    TorchTensorView sh_coeffs,           // [(sh_degree+1)^2, 3]
+    TorchTensorView out_color            // [B, H, W, 3]  pre-allocated
 ) {
-    DEVICE_GUARD(sh_coeffs);
-    CHECK_INPUT(sh_coeffs);
-    CHECK_INPUT(intrins);
-    CHECK_INPUT(rotation);
+    if (sh_degree < 0 || sh_degree > 4)
+        throw std::runtime_error("render_background_sh_forward: sh_degree must be in [0, 4]");
 
-    if (intrins.size(-1) != 4) {
-        AT_ERROR("intrins must be (..., 4)");
+    // Batch count of output = product of out_color leading dims / (H*W*3).
+    int64_t b = _batch_count(out_color, (int64_t)h * w * 3);
+    if (b * h * w == 0) return;
+    if (_batch_count(viewmats, 16) != b || _batch_count(intrins, 4) != b)
+        throw std::runtime_error("viewmats/intrins must have batch dim matching out_color");
+
+    const dim3 img_size = {(uint32_t)w, (uint32_t)h, (uint32_t)b};
+    const float*  p_vm        = (const float*)std::get<0>(viewmats);
+    const float4* p_intrins   = (const float4*)std::get<0>(intrins);
+    const float*  p_dist      = (const float*)std::get<0>(dist_coeffs);  // null -> zero default
+    const float3* p_sh_coeffs = (const float3*)std::get<0>(sh_coeffs);
+    float3*       p_out       = (float3*)std::get<0>(out_color);
+
+    int cm = _camera_model_int(camera_model);
+
+    #define LAUNCH(DEG) \
+        render_background_sh_forward_kernel<DEG> \
+            <<<_LAUNCH_ARGS_3D(w, h, b, TILE_SIZE, TILE_SIZE, 1)>>>( \
+                img_size, cm, p_vm, p_intrins, p_dist, p_sh_coeffs, p_out)
+    switch (sh_degree) {
+        case 0: LAUNCH(0); break;
+        case 1: LAUNCH(1); break;
+        case 2: LAUNCH(2); break;
+        case 3: LAUNCH(3); break;
+        case 4: LAUNCH(4); break;
     }
-    if (rotation.size(-1) != 3 || rotation.size(-2) != 3) {
-        AT_ERROR("rotation must be (..., 3, 3)");
-    }
-    if (sh_coeffs.size(-2) != sh_degree*sh_degree ||
-        sh_coeffs.size(-1) != 3) {
-        AT_ERROR("sh_coeffs shape must be (..., sh_regree**2, 3)");
-    }
-
-    unsigned b = intrins.numel() / 4;
-    if (b != rotation.numel() / 9)
-        AT_ERROR("intrins and rotation must have same batch dimension");
-
-    const dim3 img_size = {w, h, b};
-
-    auto options = sh_coeffs.options();
-    at::Tensor out_color = at::empty({b, h, w, 3}, options);
-    if (b * h * w == 0)
-        return out_color;
-
-    if (cmt(camera_model) == ssplat::CameraModelType::FISHEYE) {
-        render_background_sh_forward_kernel<ssplat::CameraModelType::FISHEYE>
-        <<<_LAUNCH_ARGS_3D(w, h, b, TILE_SIZE, TILE_SIZE, 1)>>>(
-            img_size,
-            (float4*)intrins.data_ptr<float>(),
-            rotation.data_ptr<float>(),
-            sh_degree,
-            (glm::vec3*)sh_coeffs.contiguous().data_ptr<float>(),
-            (glm::vec3*)out_color.contiguous().data_ptr<float>()
-        );
-    } else if (cmt(camera_model) == ssplat::CameraModelType::PINHOLE) {
-        render_background_sh_forward_kernel<ssplat::CameraModelType::PINHOLE>
-        <<<_LAUNCH_ARGS_3D(w, h, b, TILE_SIZE, TILE_SIZE, 1)>>>(
-            img_size,
-            (float4*)intrins.data_ptr<float>(),
-            rotation.data_ptr<float>(),
-            sh_degree,
-            (glm::vec3*)sh_coeffs.contiguous().data_ptr<float>(),
-            (glm::vec3*)out_color.contiguous().data_ptr<float>()
-        );
-    } else {
-        throw std::runtime_error("Camera model " + camera_model + " is not supported for skybox");
-    }
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    return out_color;
 }
 
 
 /*[AutoHeaderGeneratorExport]*/
-std::tuple<
-    at::Tensor,  // v_rotation
-    at::Tensor  // v_sh_coeffs
-> render_background_sh_backward(
-    const unsigned w,
-    const unsigned h,
-    const std::string camera_model,
-    const at::Tensor &intrins,  // fx, fy, cx, cy
-    const at::Tensor &rotation,  // row major 3x3
-    const unsigned sh_degree,
-    const at::Tensor &sh_coeffs,
-    const at::Tensor &out_color,
-    const at::Tensor &v_out_color
+void render_background_sh_backward(
+    int w,
+    int h,
+    std::string camera_model,
+    int sh_degree,
+    TorchTensorView viewmats,
+    TorchTensorView intrins,
+    TorchTensorView dist_coeffs,
+    TorchTensorView sh_coeffs,
+    TorchTensorView out_color,
+    TorchTensorView v_out_color,
+    TorchTensorView v_sh_coeffs           // [(sh_degree+1)^2, 3] zeroed
 ) {
-    DEVICE_GUARD(sh_coeffs);
-    CHECK_INPUT(sh_coeffs);
-    CHECK_INPUT(intrins);
-    CHECK_INPUT(rotation);
-    CHECK_INPUT(out_color);
-    CHECK_INPUT(v_out_color);
+    if (sh_degree < 0 || sh_degree > 4)
+        throw std::runtime_error("render_background_sh_backward: sh_degree must be in [0, 4]");
 
-    if (intrins.size(-1) != 4) {
-        AT_ERROR("intrins must be (..., 4)");
-    }
-    if (rotation.size(-1) != 3 || rotation.size(-2) != 3) {
-        AT_ERROR("rotation must be (..., 3, 3)");
-    }
-    if (sh_coeffs.size(-2) != sh_degree*sh_degree ||
-        sh_coeffs.size(-1) != 3) {
-        AT_ERROR("sh_coeffs shape must be (..., sh_regree**2, 3)");
-    }
-    if (out_color.size(-3) != h ||
-        out_color.size(-2) != w ||
-        out_color.size(-1) != 3) {
-        AT_ERROR("out_color shape must be (..., h, w, 3)");
-    }
-    if (v_out_color.size(-3) != h ||
-        v_out_color.size(-2) != w ||
-        v_out_color.size(-1) != 3) {
-        AT_ERROR("v_out_color shape must be (... h, w, 3)");
-    }
-    unsigned b = intrins.numel() / 4;
+    const auto& oc = std::get<2>(out_color);
+    if (oc.size() < 3 || oc[oc.size() - 1] != 3 ||
+        oc[oc.size() - 2] != (int64_t)w || oc[oc.size() - 3] != (int64_t)h)
+        throw std::runtime_error("out_color must be (..., H, W, 3)");
+    const auto& vc = std::get<2>(v_out_color);
+    if (vc.size() < 3 || vc[vc.size() - 1] != 3 ||
+        vc[vc.size() - 2] != (int64_t)w || vc[vc.size() - 3] != (int64_t)h)
+        throw std::runtime_error("v_out_color must be (..., H, W, 3)");
 
-    // unsigned block_width = TILE_SIZE;
-    // unsigned block_width = 32;  // 1024 threads
-    const dim3 img_size = {w, h, b};
+    int64_t b = _batch_count(out_color, (int64_t)h * w * 3);
+    if (b * h * w == 0) return;
 
-    auto options = sh_coeffs.options();
-    at::Tensor v_rotation = at::zeros({b, 3, 3}, options);
-    at::Tensor v_sh_coeffs = at::zeros({sh_degree*sh_degree, 3}, options);
-    if (b * h * w == 0)
-        return std::make_tuple(v_rotation, v_sh_coeffs);
+    const dim3 img_size = {(uint32_t)w, (uint32_t)h, (uint32_t)b};
+    const float*  p_vm          = (const float*)std::get<0>(viewmats);
+    const float4* p_intrins     = (const float4*)std::get<0>(intrins);
+    const float*  p_dist        = (const float*)std::get<0>(dist_coeffs);
+    const float3* p_sh_coeffs   = (const float3*)std::get<0>(sh_coeffs);
+    const float3* p_out_color   = (const float3*)std::get<0>(out_color);
+    const float3* p_v_out_color = (const float3*)std::get<0>(v_out_color);
+    float3*       p_v_sh        = (float3*)std::get<0>(v_sh_coeffs);
 
-    if (cmt(camera_model) == ssplat::CameraModelType::FISHEYE) {
-        render_background_sh_backward_kernel<ssplat::CameraModelType::FISHEYE>
-        // <<<_LAUNCH_ARGS_3D(w, h, b, block_width, block_width, 1)>>>(
-        <<<_LAUNCH_ARGS_2D(w*h, b, 512, 1)>>>(
-            img_size,
-            (float4*)intrins.data_ptr<float>(),
-            rotation.data_ptr<float>(),
-            sh_degree,
-            (glm::vec3*)sh_coeffs.contiguous().data_ptr<float>(),
-            (glm::vec3*)out_color.contiguous().data_ptr<float>(),
-            (glm::vec3*)v_out_color.contiguous().data_ptr<float>(),
-            (glm::vec3*)v_rotation.data_ptr<float>(),
-            (glm::vec3*)v_sh_coeffs.data_ptr<float>()
-        );
-    } else if (cmt(camera_model) == ssplat::CameraModelType::PINHOLE) {
-        render_background_sh_backward_kernel<ssplat::CameraModelType::PINHOLE>
-        // <<<_LAUNCH_ARGS_3D(w, h, b, block_width, block_width, 1)>>>(
-        <<<_LAUNCH_ARGS_2D(w*h, b, 512, 1)>>>(
-            img_size,
-            (float4*)intrins.data_ptr<float>(),
-            rotation.data_ptr<float>(),
-            sh_degree,
-            (glm::vec3*)sh_coeffs.contiguous().data_ptr<float>(),
-            (glm::vec3*)out_color.contiguous().data_ptr<float>(),
-            (glm::vec3*)v_out_color.contiguous().data_ptr<float>(),
-            (glm::vec3*)v_rotation.data_ptr<float>(),
-            (glm::vec3*)v_sh_coeffs.data_ptr<float>()
-        );
-    } else {
-        throw std::runtime_error("Camera model " + camera_model + " is not supported for skybox");
+    int cm = _camera_model_int(camera_model);
+
+    #define LAUNCH(DEG) \
+        render_background_sh_backward_kernel<DEG> \
+            <<<_LAUNCH_ARGS_2D((uint32_t)(w * h), b, 512, 1)>>>( \
+                img_size, cm, p_vm, p_intrins, p_dist, p_sh_coeffs, \
+                p_out_color, p_v_out_color, p_v_sh)
+    switch (sh_degree) {
+        case 0: LAUNCH(0); break;
+        case 1: LAUNCH(1); break;
+        case 2: LAUNCH(2); break;
+        case 3: LAUNCH(3); break;
+        case 4: LAUNCH(4); break;
     }
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    #undef _TEMP_ARGS
-
-    return std::make_tuple(v_rotation, v_sh_coeffs);
 }
-
-#endif

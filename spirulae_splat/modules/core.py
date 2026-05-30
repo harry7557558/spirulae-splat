@@ -118,7 +118,6 @@ class Renderer:
         output_distortion: bool = False,
         compute_hessian_diagonal: Literal[None, "position", "all"] = None,
         relative_scale: Optional[float] = None,
-        backgrounds: Optional[Tensor] = None,
         accum_weight_map: Optional[Tensor] = None,
         max_blending_masks: Optional[Tensor] = None,
         camera_model: Literal["pinhole", "ortho", "fisheye", "equisolid"] = "pinhole",
@@ -134,7 +133,6 @@ class Renderer:
         self.output_distortion = output_distortion
         self.compute_hessian_diagonal = compute_hessian_diagonal
         self.relative_scale = relative_scale
-        self.backgrounds = backgrounds
         self.accum_weight_map = accum_weight_map
         self.max_blending_masks = max_blending_masks
         self.camera_model = camera_model
@@ -362,6 +360,33 @@ class Renderer:
             reg_vig_non_pos, reg_vig_channel_var,
             reg_color_mean, reg_crf_channel_var))
 
+    def engine_init_background_noise(self, splat_color_is_linear):
+        _C.engine_init_background_noise(bool(splat_color_is_linear))
+
+    def engine_init_background_sh(self, sh_degree, splat_color_is_linear):
+        _C.engine_init_background_sh(int(sh_degree), bool(splat_color_is_linear))
+
+    @staticmethod
+    def _build_background_step_config(lr_dc, lr_sh, randomize_weight, seed):
+        c = _C.BackgroundStepConfig()
+        c.lr_dc            = float(lr_dc)
+        c.lr_sh            = float(lr_sh)
+        c.randomize_weight = float(randomize_weight)
+        c.seed             = int(seed) & 0xFFFFFFFF
+        return c
+
+    def engine_background_optim_step(self, step, lr_dc, lr_sh):
+        """Adam step over background SH coefficients. No-op for noise mode or
+        when train_color was False at init."""
+        cfg = self._build_background_step_config(lr_dc, lr_sh, 0.0, 0)
+        _C.engine_background_optim_step(int(step), cfg)
+
+    def engine_copy_background_to_host(self, out_image):
+        """Fill a host (..., H, W, 3) float buffer with the engine's current
+        background image (skybox for SH mode, uniform mean color for noise
+        mode). Returns True if the engine has an active background mode."""
+        return bool(_C.engine_copy_background_to_host(self._tv(out_image)))
+
     def engine_save_checkpoint(self, output_dir, step, full_dump=False):
         """Write checkpoint files into ``output_dir`` (created if missing).
         Always writes ``splat.ply`` (cur_num_splats only, NaN/low-opacity-filtered),
@@ -398,7 +423,11 @@ class Renderer:
                           ppisp_lr=0.0,
                           ppisp_reg_exposure_mean=0.0, ppisp_reg_vig_center=0.0,
                           ppisp_reg_vig_non_pos=0.0, ppisp_reg_vig_channel_var=0.0,
-                          ppisp_reg_color_mean=0.0, ppisp_reg_crf_channel_var=0.0):
+                          ppisp_reg_color_mean=0.0, ppisp_reg_crf_channel_var=0.0,
+                          # Background (ignored if engine_init_background_* was
+                          # never called).
+                          bg_lr_dc=0.0, bg_lr_sh=0.0,
+                          bg_randomize_weight=0.0, bg_seed=0):
         """Single fused training step (set_camera + set_gt + fwd + loss/bwd + optim + densify).
         All input tensors are CPU; returns loss_dict for verbose."""
         max_steps_lr = optim_config.max_steps if optim_config.max_steps is not None else max_steps
@@ -417,6 +446,8 @@ class Renderer:
             ppisp_lr, ppisp_reg_exposure_mean, ppisp_reg_vig_center,
             ppisp_reg_vig_non_pos, ppisp_reg_vig_channel_var,
             ppisp_reg_color_mean, ppisp_reg_crf_channel_var)
+        cfg.background = self._build_background_step_config(
+            bg_lr_dc, bg_lr_sh, bg_randomize_weight, bg_seed)
 
         result = _C.engine_train_step(
             step, max_steps,

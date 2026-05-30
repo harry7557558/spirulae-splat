@@ -29,12 +29,21 @@ std::map<std::string, float> engine_train_step(
     set_camera_params(width, height, camera_model, viewmats, intrins, dist_coeffs);
     set_training_data(gt_rgb, gt_depth, gt_normal, gt_alpha);
 
-    // Forward (writes to pool; no D->H)
+    // Populate the shared cam_indices buffer + background per-iter params
+    // BEFORE the forward pass. The forward_3dgs path itself runs the
+    // background blend (needs cam_indices for SH-mode rotation gather), so
+    // both must be in place by the time we launch projection.
+    _set_cur_cam_indices(bilagrid_cam_indices);
+    if (engine().background.enabled) {
+        engine_set_background_step_params(cfg.background.seed,
+                                          cfg.background.randomize_weight);
+    }
+
+    // Forward (writes to pool; no D->H). Includes the background blend in
+    // place on fwd.renders.rgb when an engine background mode is active.
     forward_3dgs(primitive, sh_degree, packed);
 
     // Bilagrid forward (between rendering and loss). No-op when disabled.
-    // Both forwards populate the shared cam_indices buffer; the H->D copy of
-    // a [C_batch] int32 tensor is in the microseconds.
     if (engine().bilagrid_rgb.enabled || engine().bilagrid_depth.enabled ||
         engine().bilagrid_normal.enabled) {
         engine_bilagrid_forward(bilagrid_cam_indices);
@@ -53,6 +62,11 @@ std::map<std::string, float> engine_train_step(
 
     // Optimizer (in-place on pool buffers, no copies)
     engine_optim_step(step, cfg.optim);
+
+    // Background SH optim step (no-op for Noise mode or when train_color=false).
+    if (engine().background.enabled) {
+        engine_background_optim_step(step, cfg.background);
+    }
 
     // Bilagrid Adam step + TV regularization (after splat optim, before densify).
     if (engine().bilagrid_rgb.enabled || engine().bilagrid_depth.enabled ||

@@ -44,8 +44,8 @@ _DEFAULT_OPTIMIZERS = {
         lr=0.05, eps=1e-15,
         lr_final=0.0005, max_steps=30000,
     ),
-    "background_color": FusedAdamOptimizerConfig(lr=0.0025, eps=1e-15),
-    "background_sh": FusedAdamOptimizerConfig(lr=0.0025 / 5, eps=1e-15),
+    "background_dc": FusedAdamOptimizerConfig(lr=0.0025, eps=1e-15),
+    "background_sh": FusedAdamOptimizerConfig(lr=0.0025 / 20, eps=1e-15),
     "bilateral_grid": FusedAdamOptimizerConfig(
         lr=2e-3, eps=1e-15,
         lr_final=1e-4, max_steps=30000, warmup_steps=1000,
@@ -715,8 +715,6 @@ class TrainerConfigVoxel(TrainerConfig):
         primitive="voxel",
         use_mcmc=False,
         sh_degree=0,
-        background_color="black",
-        train_background_color=False,
         # use_bilateral_grid=False,
         use_bilateral_grid_for_geometry=False,
         alpha_reg_weight=0.0,
@@ -737,13 +735,10 @@ class TrainerConfigVoxel(TrainerConfig):
 
 
 _MODEL_PRESET_CONFINED = dict(
-    randomize_background=True,
-    train_background_color=False,
+    background_mode="noise",
 )
 _MODEL_PRESET_OPEN = dict(
-    randomize_background=False,
-    train_background_color=True,
-    background_color="gray",
+    background_mode="sh",
     background_sh_degree=4,
 )
 _MODEL_PRESET_3DGS2TR_POS = dict(
@@ -866,8 +861,6 @@ class TrainerConfigAcademicBaseline(TrainerConfig):
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
         primitive="3dgs",
         relative_scale=1.0,
-        background_color="black",
-        train_background_color=False,
         use_bilateral_grid=False,
         use_bilateral_grid_for_geometry=False,
         use_ppisp=False,
@@ -891,7 +884,6 @@ class TrainerConfigAcademicBaseline(TrainerConfig):
         erank_reg_s3=0.0,
         quat_norm_reg=0.0,
         sh_reg=0.0,
-        randomize_background=0.0,
         normal_supervision_weight=0.0,
         opacity_reg=0.01,
         scale_reg=0.01,

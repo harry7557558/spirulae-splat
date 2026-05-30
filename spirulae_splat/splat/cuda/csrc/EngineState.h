@@ -150,6 +150,41 @@ struct BilagridNormal {
     DeviceTensor3D<float3>     fwd_pre;
 };
 
+// Background blending. Applied BEFORE bilagrid/PPISP. Two modes:
+//   - Noise: random per-pixel color (warmup-weighted). No persistent state.
+//   - Sh:    skybox = SH(world ray dir) + DC color. DC + L1+ coeffs trained.
+struct EngineBackground {
+    enum class Mode { None = 0, Noise = 1, Sh = 2 };
+    Mode mode    = Mode::None;
+    bool enabled = false;
+
+    // Common config (set at init time)
+    bool splat_color_is_linear = false;  // noise mode: sRGB->linear conversion
+
+    // SH mode config
+    int  sh_degree       = 0;            // 0..4
+
+    // SH parameters: index 0 is DC (the "background_color"), 1..(deg+1)^2-1 are
+    // higher-order SH bands. Stored once on device, persistent across steps.
+    DeviceVector<float3> sh_coeffs;
+
+    // SH Adam moments (allocated lazily on first optim_step when train_sh_color).
+    DeviceVector<float3> sh_g1, sh_g2;
+    bool sh_optim_initialized = false;
+
+    // Per-iter buffers (resized each forward).
+    // - fwd_pre_blend_rgb: saved pre-blend rendered RGB (Sh mode; needed by
+    //   blend backward to compute v_background -> v_sh).
+    // - fwd_background:    skybox image (Sh mode).
+    DeviceTensor3D<float3> fwd_pre_blend_rgb;
+    DeviceTensor3D<float3> fwd_background;
+
+    // Stashed at forward time so backward can reconstruct the random skybox
+    // (Noise mode) and so the optim step can run after backward (both modes).
+    uint32_t cur_seed             = 0;
+    float    cur_randomize_weight = 0.0f;
+};
+
 // PPISP (RGB-only photometric correction; applied AFTER bilagrid).
 struct PpispState {
     DeviceTensor2D<float>  params;
@@ -183,10 +218,11 @@ struct EngineState {
     BilagridDepth  bilagrid_depth;
     BilagridNormal bilagrid_normal;
     // Per-image-in-batch camera indices for the current step (shared by
-    // bilagrid and PPISP). Empty -> kernels fall back to identity.
+    // background, bilagrid, and PPISP). Empty -> kernels fall back to identity.
     DeviceVector<int32_t> bilagrid_cur_cam_indices;
 
-    PpispState     ppisp;
+    EngineBackground background;
+    PpispState       ppisp;
 };
 
 

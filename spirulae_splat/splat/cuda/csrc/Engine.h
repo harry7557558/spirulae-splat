@@ -134,6 +134,34 @@ void engine_ppisp_forward(TorchTensorView cam_indices);
 // the Adam update. Pass loss weights in PPISPRegLossIndex order.
 void engine_ppisp_optim_step(int step, const PpispStepConfig& cfg);
 
+// --- Background blending (applied BEFORE bilagrid/PPISP) ---
+//
+// Two modes — exactly one of these init calls activates background blending:
+//   Noise: random per-pixel color, warmup-weighted via cfg.background.randomize_weight.
+//   SH:    skybox = SH(world ray dir), DC (slot 0) seeds the "background_color"
+//          plus higher-order bands; both updated by Adam when train_color=true.
+//
+// dc_color is the linear-space DC color used at SH init time (set slot 0).
+void engine_init_background_noise(bool splat_color_is_linear);
+void engine_init_background_sh(
+    int sh_degree, bool splat_color_is_linear);
+
+// Per-iter (seed, randomize_weight) for the next forward_3dgs background blend.
+// Training calls this each step; the viewer/eval path can ignore it and reuse
+// the last-stashed values (the engine defaults of 0/0 produce a uniform
+// half-gray noise blend, avoiding per-frame flicker in noise-mode viewer renders).
+void engine_set_background_step_params(uint32_t seed, float randomize_weight);
+
+// Adam step over the SH coefficient table. No-op for Noise mode or when SH
+// training was not enabled at init.
+void engine_background_optim_step(int step, const BackgroundStepConfig& cfg);
+
+// Copy the engine's background image for the current camera setup to a host
+// (..., H, W, 3) float buffer. SH mode: returns the skybox rendered by the
+// most recent forward_3dgs. Noise mode: returns a uniform mean-color image.
+// Returns 1 on success, 0 if no engine background is active.
+int engine_copy_background_to_host(TorchTensorView out_image);
+
 // --- Densification step ---
 
 // Returns: number of splats added (0 if no densification this step)

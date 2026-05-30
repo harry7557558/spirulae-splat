@@ -180,8 +180,18 @@ std::map<std::string, float> engine_compute_loss_backward(
             pixel_grads.v_ref_normal);
     }
 
+    // --- Background blend backward hook ---
+    // Forward order is render -> background -> bilagrid -> PPISP -> loss, so
+    // background backward runs LAST (after PPISP+bilagrid hooks). It rewrites
+    // v_render_rgb (post-blend -> pre-blend) and ADDS the blend's
+    // transmittance gradient into v_render_Ts before raster bwd consumes it.
+    if (engine().background.enabled) {
+        _engine_background_backward_hook(
+            pixel_grads.v_render_rgb,
+            pixel_grads.v_render_Ts);
+    }
+
     // TODO: color space conversion (rgb_to_srgb) forward/backward
-    // TODO: background blending forward/backward
 
     // Depth -> normal backward: propagate v_depth_normal grads into v_render_depth (in-place add)
     if (compute_depth_normal) {

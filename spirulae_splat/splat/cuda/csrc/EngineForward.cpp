@@ -8,6 +8,9 @@
 #include <stdexcept>
 
 
+extern void _engine_background_forward();
+
+
 void forward_3dgs(
     std::string primitive,   // "3dgs", "mip", "3dgut"
     int sh_degree,
@@ -174,6 +177,16 @@ void forward_3dgs(
     engine().fwd.render_Ts = render_Ts;
     engine().fwd.last_ids = last_ids;
 
+    // Background blend (in-place on fwd.renders.rgb). No-op when no
+    // engine_init_background_* was called. Folded into the forward path so
+    // both training (via engine_train_step) and eval/viewer renders (via
+    // direct calls to engine_forward_3dgs) see the blend. The blend reads
+    // its per-iter (seed, randomize_weight) from engine state — training
+    // sets them via engine_set_background_step_params before each call.
+    if (engine().background.enabled) {
+        _engine_background_forward();
+    }
+
     // Results stay in pool — use engine_copy_render_to_host to fetch
 }
 
@@ -186,13 +199,18 @@ void engine_debug_forward(
     if (std::get<0>(engine().fwd.renders).data_ptr() == nullptr)
         throw std::runtime_error("engine_debug_forward: forward_3dgs must be called first");
 
-    // Swap in overrides (H->D copy for host tensor)
+    // Swap in overrides (H->D copy for host tensor). Also temporarily disable
+    // the background blend — debug renders should show the raw rendered RGB
+    // (black where Ts > 0) rather than compositing over the trained skybox /
+    // randomized noise.
     DeviceVector<float3> saved_dc = engine().world.features_dc;
-    int saved_sh = engine().sh_degree;
+    int  saved_sh = engine().sh_degree;
+    bool saved_bg_enabled = engine().background.enabled;
     if (std::get<0>(override_features_dc) != 0)
         engine().world.features_dc = _hv_to_dv<float3>("debug.features_dc", override_features_dc);
     if (override_sh_degree >= 0)
         engine().sh_degree = override_sh_degree;
+    engine().background.enabled = false;
 
     forward_3dgs(engine().primitive, engine().sh_degree, engine().packed);
 
@@ -204,6 +222,7 @@ void engine_debug_forward(
     }
 
     // Restore
-    engine().world.features_dc = saved_dc;
-    engine().sh_degree = saved_sh;
+    engine().world.features_dc   = saved_dc;
+    engine().sh_degree           = saved_sh;
+    engine().background.enabled  = saved_bg_enabled;
 }

@@ -1186,3 +1186,23 @@ _DECL(0, float) _DECL(1, float) _DECL(2, float) _DECL(3, float) _DECL(4, float)
 #endif
 
 #undef _DECL
+
+
+// Direction-only entry points (no splat-mean indirection). Used for skybox /
+// background SH where the per-pixel world-space ray direction is computed by
+// the caller. Forward returns the raw SH-evaluated color (no +0.5 / clamp);
+// the caller applies that post-processing and the matching clamp gradient.
+#define _DECL_DIR(sh_degree, dtype) \
+    [CudaDeviceExport] \
+    float3 sh##sh_degree##_to_color_dir(float3 dir, float3 coeff_dc, dtype* coeffs) \
+        { return sh_coeffs_to_color(sh_degree, dir, coeff_dc, coeffs); } \
+    [CudaDeviceExport] \
+    void sh##sh_degree##_to_color_dir_vjp_inplace(float3 dir, float3 coeff_dc, dtype* coeffs, float3 v_colors, inout float3 v_coeff_dc, dtype *v_coeffs, inout float3 v_dir) \
+        { sh_coeffs_to_color_vjp_inplace(sh_degree, dir, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_dir); } \
+    [CudaDeviceExport] \
+    void sh##sh_degree##_to_color_dir_vjp_atomic(float3 dir, float3 coeff_dc, dtype* coeffs, float3 v_colors, inout float3 v_coeff_dc, dtype *v_coeffs, inout float3 v_dir) \
+        { sh_coeffs_to_color_vjp_atomic(sh_degree, dir, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_dir); } \
+
+_DECL_DIR(0, float3) _DECL_DIR(1, float3) _DECL_DIR(2, float3) _DECL_DIR(3, float3) _DECL_DIR(4, float3)
+
+#undef _DECL_DIR

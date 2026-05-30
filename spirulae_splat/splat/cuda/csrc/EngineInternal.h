@@ -75,6 +75,15 @@ void _engine_bilagrid_backward_hook(
 void _ensure_bilagrid_optim_state();
 void _engine_bilagrid_tv_into(float* tv_buf3_device);
 
+// Background blend: forward (in-place on fwd.renders.rgb; called by
+// forward_3dgs so both training and viewer renders include the blend),
+// backward hook (adds the blend's v_T contribution into v_render_Ts), and
+// per-iter (seed, randomize_weight) setter consumed by the next forward.
+void _engine_background_forward();
+void _engine_background_backward_hook(
+    TorchTensorView v_render_rgb,
+    TorchTensorView v_render_Ts);
+
 // PPISP: backward hook + state setup + regularization-loss compute.
 void _engine_ppisp_backward_hook(TorchTensorView v_render_rgb);
 void _ensure_ppisp_optim_state();

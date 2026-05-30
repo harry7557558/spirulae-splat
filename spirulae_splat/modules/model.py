@@ -75,18 +75,14 @@ class SpirulaeSplatModelConfig:
     """Increase SH degree every this number of iterations"""
     num_sv: int = 4  # 8
     """Number of spherical voronoi to use."""
-    background_color: Literal["black", "white", "gray"] = "black"
-    """Whether to randomize the background color."""
-    train_background_color: bool = False
-    """Whether to train background color."""
+    background_mode: Literal["black", "noise", "sh"] = "black"
+    """Background mode, black per convention, noise to discourage transparency, sh for skybox."""
+    background_noise_warmup: int = 2000
+    """Number of steps to warmup background noise. This applies when background_mode is noise"""
+    background_noise_pre_warmup: float = 0.25
+    """Weight of background noise at start of training (0 to 1). Higher value reduce the chance of washing away splat opacities near the beginning of training."""
     background_sh_degree: int = 4
-    """SH degree for background color."""
-    randomize_background: Literal[True, False, "opaque-only", "non-sky-only"] = False
-    """Use random noise for background color during training to discourage transparency."""
-    randomize_background_warmup: int = 2000
-    """Number of steps to warmup background randomization. This applies when randomize_background is True"""
-    randomize_background_pre_warmup: float = 0.25
-    """Weight of randomization at start of training (0 to 1). Higher value reduce the chance of washing away splat opacities near the beginning of training."""
+    """SH degree for background color, only used when background_mode is sh."""
     kernel_radius: float = 3.0
     """Radius of the splatting kernel, 3.0 for Gaussian and 0.5 for triangle"""
 
@@ -400,6 +396,29 @@ class SpirulaeSplatModel(torch.nn.Module):
             quantize_sh_optim=self.config.quantize_sh_optim,
         )
 
+        # Engine-side background blending. populate_modules already created the
+        # background_color / background_sh Parameters; mode is chosen from the
+        # config and matched in the C++ engine state. Without one of these, the
+        # engine_train_step path skips blending entirely and the model never
+        # learns to fill transparent regions (legacy `blend_background` in
+        # model.py runs only for eval/viewer rendering, not training).
+        #
+        # `_engine_bg_mode` is consulted by self.blend_background() to fetch
+        # the rendered skybox / mean-color image from the C++ side (otherwise
+        # the dropdown would render a stale Python image from the un-trained
+        # self.background_color / background_sh Parameters).
+        self._engine_bg_mode = "none"
+        if self.config.background_mode == "noise":
+            self.core.engine_init_background_noise(
+                bool(self.config.splat_color_is_linear))
+            self._engine_bg_mode = "noise"
+        elif self.config.background_mode == "sh":
+            self.core.engine_init_background_sh(
+                int(self.config.background_sh_degree),
+                splat_color_is_linear=bool(self.config.splat_color_is_linear)
+            )
+            self._engine_bg_mode = "sh"
+
     def populate_modules(self):
         if self.seed_points is not None:
             if len(self.seed_points[0]) > self.config.cap_max:
@@ -415,16 +434,10 @@ class SpirulaeSplatModel(torch.nn.Module):
         self.max_2Dsize = None
 
         scale_init, opacity_init = self.config.scale_init, self.config.opacity_init
-        if (self.config.use_mcmc and self.config.max_screen_size < 1.0) or True:
-            if scale_init is None:
-                scale_init = 0.5
-            if opacity_init is None:
-                opacity_init = 0.1
-        if self.config.train_background_color or self.config.randomize_background:
-            if scale_init is None:
-                scale_init = 0.5
-            if opacity_init is None:
-                opacity_init = 0.1
+        if scale_init is None:
+            scale_init = 0.5
+        if opacity_init is None:
+            opacity_init = 0.1
 
         if self.config.primitive in ["voxel"]:
             means_mean, means_std = torch.mean(means, 0), torch.std(means, 0)
@@ -583,21 +596,6 @@ class SpirulaeSplatModel(torch.nn.Module):
         self.training_verboser = TrainingVerbose()
 
         self.step = 0
-
-        if self.config.background_color == "gray":
-            self.background_color = torch.tensor([0.5, 0.5, 0.5])
-        elif self.config.background_color == "black":
-            self.background_color = torch.tensor([0.0, 0.0, 0.0])
-        elif self.config.background_color == "white":
-            self.background_color = torch.tensor([1.0, 1.0, 1.0])
-        if self.config.splat_color_is_linear:
-            self.background_color = self.background_color ** 2.2
-        self.background_color = torch.nn.Parameter(self.background_color)
-        if self.config.train_background_color:
-            dim_sh = num_sh_bases(self.config.background_sh_degree)
-            self.background_sh = torch.nn.Parameter(torch.zeros((dim_sh-1, 3)))
-        else:
-            self.background_sh = None
 
         self._train_batch_size = 1
 
@@ -893,11 +891,6 @@ class SpirulaeSplatModel(torch.nn.Module):
             Mapping of different parameter groups
         """
         raise NotImplementedError()
-        gps = self.get_gaussian_param_groups()
-        if self.config.train_background_color:
-            gps["background_color"] = [self.background_color]
-            if self.background_sh is not None:
-                gps["background_sh"] = [self.background_sh]
 
         if self.config.use_bilateral_grid:
             gps["bilateral_grid"] = list(self.training_losses.bil_grids.parameters())
@@ -942,6 +935,19 @@ class SpirulaeSplatModel(torch.nn.Module):
             camera_model = camera.camera_type[0]
         sh_degree = self.config.background_sh_degree
 
+        if self.config.background_mode not in ['noise', 'sh']:
+            return None
+
+        if getattr(self, "_engine_bg_mode", "none") != "none":
+            if rgb is not None and transmittance is not None:
+                return rgb
+            B = int(transmittance.shape[0]) if transmittance is not None else len(camera)
+            bg_buf = torch.empty(B, H, W, 3, dtype=torch.float32)
+            if self.core.engine_copy_background_to_host(bg_buf):
+                return bg_buf
+            return None
+
+        raise NotImplementedError()
         if self.config.randomize_background == True:
             # return torch.rand_like(self.background_color).repeat(H, W, 1)
             if rgb is None or transmittance is None:
@@ -1177,9 +1183,6 @@ class SpirulaeSplatModel(torch.nn.Module):
             for key in ['gaussian_ids', 'camera_ids', 'max_blending', 'bvh_time']:
                 if key in meta:
                     self.info[key] = meta[key]
-
-        # blend with background
-        rgb = self.blend_background(camera, optimized_camera_to_world, intrins, W, H, camera_model, rgb, Ts)
 
         # visualize PPISP for debugging
         if not self.training and False:
@@ -1712,6 +1715,22 @@ class SpirulaeSplatModel(torch.nn.Module):
             bilagrid_lr_normal = 0.0
             bilagrid_tv_weight_normal = 0.0
 
+        # Background blending per-step args.
+        if cfg.background_mode == "noise":
+            rw = min(step / max(cfg.background_noise_warmup, 1), 1.0)
+            bg_randomize_weight = 1.0 - (1.0 - cfg.background_noise_pre_warmup) * (1.0 - rw)
+            bg_lr_dc = 0.0
+            bg_lr_sh = 0.0
+        elif cfg.background_mode == "sh":
+            bg_randomize_weight = 0.0
+            bg_lr_dc = optim_cfg.get_scheduled_lr('background_dc', step, max_steps_lr)
+            bg_lr_sh = optim_cfg.get_scheduled_lr('background_sh',    step, max_steps_lr)
+        else:
+            bg_randomize_weight = 0.0
+            bg_lr_dc = 0.0
+            bg_lr_sh = 0.0
+        bg_seed = int(step) & 0x7FFFFFFF
+
         # PPISP: zero LR and reg weights when not yet initialized — C++ side
         # treats this as a no-op.
         if self._ppisp_init:
@@ -1763,6 +1782,10 @@ class SpirulaeSplatModel(torch.nn.Module):
             ppisp_reg_vig_channel_var=ppisp_reg_vig_channel_var,
             ppisp_reg_color_mean=ppisp_reg_color_mean,
             ppisp_reg_crf_channel_var=ppisp_reg_crf_channel_var,
+            bg_lr_dc=bg_lr_dc,
+            bg_lr_sh=bg_lr_sh,
+            bg_randomize_weight=bg_randomize_weight,
+            bg_seed=bg_seed,
         )
 
         if PROFILE_TRAIN_STEP: _t4 = _t()
