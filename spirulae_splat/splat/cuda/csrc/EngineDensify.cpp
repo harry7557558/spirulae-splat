@@ -82,7 +82,16 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
         // per SH coef = 3 channels x 2 bytes), so each write zeros the joint
         // (u, sqrt_g2) record for one (splat, coef). The second write
         // (g2_features_sh[i] = 0) targets the same memory and is a no-op.
-        uint8_t* packed = engine().optim.sh_quant_state.packed_ptr();
+        //
+        // FPBO mode uses a separate `sh_quant_state_fpbo` buffer because its
+        // per-block bounds granularity differs (per-splat-block vs per-cell-
+        // block). The PACKED bytes have identical layout in both modes
+        // (N*K*3*2 bytes, indexed by (splat, coef, channel)), so densify only
+        // needs to pick the right buffer; bounds get rewritten by the next
+        // optim-kernel pass and don't need touching here.
+        uint8_t* packed = engine().optim.use_fused_proj_bwd_optim
+            ? engine().optim.sh_quant_state_fpbo.packed_ptr()
+            : engine().optim.sh_quant_state.packed_ptr();
         TorchTensorView tv((uint64_t)packed, 1, {sh_flat, 12LL});
         dv_g1_features_sh = DeviceVector<float3>(tv);
         dv_g2_features_sh = DeviceVector<float3>(tv);
@@ -96,6 +105,25 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
     auto& dv_radii = engine().optim.radii;
     auto& dv_accum_buf = engine().optim.accum_buffer;
     auto& dv_bias_steps = engine().optim.bias_correction_steps;
+
+    // SH quant bounds (one float4 per block) -- needed by the densify kernels
+    // to encode (g1=0, g2=0) into the dst splats' packed bytes against the
+    // current bounds slot. FPBO mode uses a per-splat-block layout, regular
+    // Optimizer.cu uses a per-cell-block layout. Empty vector when SH quant
+    // is disabled; the kernels treat data_ptr() == nullptr as a sentinel and
+    // fall back to plain-zero writes (which don't apply to non-quant g1/g2
+    // anyway).
+    DeviceVector<float4> dv_sh_quant_bounds;
+    bool sh_bounds_per_splat = false;
+    if (quantize_sh) {
+        if (engine().optim.use_fused_proj_bwd_optim) {
+            dv_sh_quant_bounds = engine().optim.sh_quant_state_fpbo.bounds;
+            sh_bounds_per_splat = true;
+        } else {
+            dv_sh_quant_bounds = engine().optim.sh_quant_state.bounds;
+            sh_bounds_per_splat = false;
+        }
+    }
 
     // Clip large splats
     if (std::isfinite(cfg.max_screen_size) || std::isfinite(cfg.max_world_size)) {
@@ -139,7 +167,9 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
             dv_g1_means, dv_g1_quats, dv_g1_scales, dv_g1_opacs, dv_g1_features_dc, dv_g1_features_sh,
             dv_g2_means, dv_g2_quats, dv_g2_scales, dv_g2_opacs, dv_g2_features_dc, dv_g2_features_sh,
             dv_accum_buf, dv_bias_steps,
-            quantize_sh, num_sh, 2 * step + 0
+            quantize_sh, num_sh,
+            dv_sh_quant_bounds, sh_bounds_per_splat,
+            2 * step + 0
         );
 
         // Add more splats
@@ -152,7 +182,9 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
                 dv_g1_means, dv_g1_quats, dv_g1_scales, dv_g1_opacs, dv_g1_features_dc, dv_g1_features_sh,
                 dv_g2_means, dv_g2_quats, dv_g2_scales, dv_g2_opacs, dv_g2_features_dc, dv_g2_features_sh,
                 dv_accum_buf, dv_bias_steps,
-                quantize_sh, num_sh, 2 * step + 1
+                quantize_sh, num_sh,
+                dv_sh_quant_bounds, sh_bounds_per_splat,
+                2 * step + 1
             );
         }
     } else if (do_densify) {
@@ -163,7 +195,9 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
             dv_g1_means, dv_g1_quats, dv_g1_scales, dv_g1_opacs, dv_g1_features_dc, dv_g1_features_sh,
             dv_g2_means, dv_g2_quats, dv_g2_scales, dv_g2_opacs, dv_g2_features_dc, dv_g2_features_sh,
             dv_bias_steps,
-            quantize_sh, num_sh, 2 * step + 0
+            quantize_sh, num_sh,
+            dv_sh_quant_bounds, sh_bounds_per_splat,
+            2 * step + 0
         );
 
         // MCMC sample add
@@ -176,7 +210,9 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
                 dv_g1_means, dv_g1_quats, dv_g1_scales, dv_g1_opacs, dv_g1_features_dc, dv_g1_features_sh,
                 dv_g2_means, dv_g2_quats, dv_g2_scales, dv_g2_opacs, dv_g2_features_dc, dv_g2_features_sh,
                 dv_bias_steps,
-                quantize_sh, num_sh, 2 * step + 1
+                quantize_sh, num_sh,
+                dv_sh_quant_bounds, sh_bounds_per_splat,
+                2 * step + 1
             );
         }
     }

@@ -219,13 +219,20 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
 
 
 // ================
-// Vanilla3DGUT
+// Per-primitive host wrappers
 // ================
+//
+// All three primitives (3DGS, MipSplatting, 3DGUT) share the same kernel and
+// host-launcher body — they only differ in which `PrimT<sh_degree>` template
+// alias is plugged into the templated `launch_*` call. Factor the dispatch
+// into one helper templated on the primitive class template, then expose a
+// thin wrapper per primitive.
 
-/*[AutoHeaderGeneratorExport]*/
-void fused_projection_bwd_optimizer_3dgut(
+template<template<int> class PrimT>
+static inline void _fused_projection_bwd_optimizer_dispatch(
     // fwd inputs
     const int64_t num_splats,
+    const int max_sh_degree,
     std::vector<DeviceTensorFloatND> splats_world,
     TorchTensorView viewmats,
     TorchTensorView intrins,
@@ -247,7 +254,7 @@ void fused_projection_bwd_optimizer_3dgut(
     // optimizer states
     const std::vector<DeviceTensorFloatND> g1_splats_world,
     const std::vector<DeviceTensorFloatND> g2_splats_world,
-    const std::optional<TorchTensorView> sh_packed,         // AoS packed SH state
+    const std::optional<TorchTensorView> sh_packed,
     const std::optional<TorchTensorView> sh_quant_bounds,
     // optimizer params
     DeviceVector<float> radii,
@@ -312,15 +319,190 @@ void fused_projection_bwd_optimizer_3dgut(
         scalar_step, \
         steps_view \
     )
-    int sh_degree = Vanilla3DGUT<0>::WorldBuffer(splats_world).sh_degree();
+    // Match projection_*_backward: cap kernel-template SH degree at the
+    // runtime sh_degree_to_use so forward/backward agree on which bands
+    // contribute (otherwise SH backward computes a spurious gradient on
+    // unused bands, which propagates through `v_viewdir` into `v_mean`).
+    int sh_degree = typename PrimT<0>::WorldBuffer(splats_world).sh_degree();
+    sh_degree = std::min(sh_degree, max_sh_degree);
     #define LAUNCH(n) if (sh_degree == (n)) \
-        (use_scale_agnostic_mean ? \
-            launch_fused_projection_bwd_optimizer_3dgs_kernel<Vanilla3DGUT<n>, HessianDiagonalOutputMode::None, true> : \
-            launch_fused_projection_bwd_optimizer_3dgs_kernel<Vanilla3DGUT<n>, HessianDiagonalOutputMode::None, false> \
+        return (void)(use_scale_agnostic_mean ? \
+            launch_fused_projection_bwd_optimizer_3dgs_kernel<PrimT<n>, HessianDiagonalOutputMode::None, true> : \
+            launch_fused_projection_bwd_optimizer_3dgs_kernel<PrimT<n>, HessianDiagonalOutputMode::None, false> \
         ) _ARGS;
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
     #undef _ARGS
+}
+
+
+// Per-primitive thin wrappers. Identical signatures — the auto-header
+// generator extracts each declaration via regex (no preprocessor), so the
+// argument list is spelled out verbatim rather than macro-folded.
+
+/*[AutoHeaderGeneratorExport]*/
+void fused_projection_bwd_optimizer_3dgs(
+    const int64_t num_splats,
+    const int max_sh_degree,
+    std::vector<DeviceTensorFloatND> splats_world,
+    TorchTensorView viewmats,
+    TorchTensorView intrins,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const std::string camera_model,
+    const TorchTensorView dist_coeffs,
+    const DeviceVector<int32_t> camera_ids,
+    const DeviceVector<int32_t> gaussian_ids,
+    DeviceTensorFloatND aabb,
+    const std::vector<DeviceTensorFloatND> v_splats_world,
+    const std::optional<std::vector<DeviceTensorFloatND>> vr_splats_world,
+    const std::optional<std::vector<DeviceTensorFloatND>> h_splats_world,
+    const std::vector<DeviceTensorFloatND> v_splats_screen,
+    const std::optional<std::vector<DeviceTensorFloatND>> vr_splats_screen,
+    const std::optional<std::vector<DeviceTensorFloatND>> h_splats_screen,
+    const std::vector<DeviceTensorFloatND> g1_splats_world,
+    const std::vector<DeviceTensorFloatND> g2_splats_world,
+    const std::optional<TorchTensorView> sh_packed,
+    const std::optional<TorchTensorView> sh_quant_bounds,
+    DeviceVector<float> radii,
+    const float lr_means,
+    const float lr_quats,
+    const float lr_scales,
+    const float lr_opacs,
+    const float lr_features_dc,
+    const float lr_features_sh,
+    const float max_gauss_ratio,
+    const float scale_regularization_weight,
+    const float mcmc_opacity_reg_weight,
+    const float mcmc_scale_reg_weight,
+    const float erank_reg_weight,
+    const float erank_reg_weight_s3,
+    const float quat_norm_reg_weight,
+    const float sh_reg_weight,
+    bool use_scale_agnostic_mean,
+    std::variant<int32_t, TorchTensorView> step
+) {
+    _fused_projection_bwd_optimizer_dispatch<Vanilla3DGS>(
+        num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
+        camera_model, dist_coeffs, camera_ids, gaussian_ids, aabb,
+        v_splats_world, vr_splats_world, h_splats_world,
+        v_splats_screen, vr_splats_screen, h_splats_screen,
+        g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
+        radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc,
+        lr_features_sh, max_gauss_ratio, scale_regularization_weight,
+        mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
+        erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,
+        sh_reg_weight, use_scale_agnostic_mean, step);
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void fused_projection_bwd_optimizer_mip(
+    const int64_t num_splats,
+    const int max_sh_degree,
+    std::vector<DeviceTensorFloatND> splats_world,
+    TorchTensorView viewmats,
+    TorchTensorView intrins,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const std::string camera_model,
+    const TorchTensorView dist_coeffs,
+    const DeviceVector<int32_t> camera_ids,
+    const DeviceVector<int32_t> gaussian_ids,
+    DeviceTensorFloatND aabb,
+    const std::vector<DeviceTensorFloatND> v_splats_world,
+    const std::optional<std::vector<DeviceTensorFloatND>> vr_splats_world,
+    const std::optional<std::vector<DeviceTensorFloatND>> h_splats_world,
+    const std::vector<DeviceTensorFloatND> v_splats_screen,
+    const std::optional<std::vector<DeviceTensorFloatND>> vr_splats_screen,
+    const std::optional<std::vector<DeviceTensorFloatND>> h_splats_screen,
+    const std::vector<DeviceTensorFloatND> g1_splats_world,
+    const std::vector<DeviceTensorFloatND> g2_splats_world,
+    const std::optional<TorchTensorView> sh_packed,
+    const std::optional<TorchTensorView> sh_quant_bounds,
+    DeviceVector<float> radii,
+    const float lr_means,
+    const float lr_quats,
+    const float lr_scales,
+    const float lr_opacs,
+    const float lr_features_dc,
+    const float lr_features_sh,
+    const float max_gauss_ratio,
+    const float scale_regularization_weight,
+    const float mcmc_opacity_reg_weight,
+    const float mcmc_scale_reg_weight,
+    const float erank_reg_weight,
+    const float erank_reg_weight_s3,
+    const float quat_norm_reg_weight,
+    const float sh_reg_weight,
+    bool use_scale_agnostic_mean,
+    std::variant<int32_t, TorchTensorView> step
+) {
+    _fused_projection_bwd_optimizer_dispatch<MipSplatting>(
+        num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
+        camera_model, dist_coeffs, camera_ids, gaussian_ids, aabb,
+        v_splats_world, vr_splats_world, h_splats_world,
+        v_splats_screen, vr_splats_screen, h_splats_screen,
+        g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
+        radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc,
+        lr_features_sh, max_gauss_ratio, scale_regularization_weight,
+        mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
+        erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,
+        sh_reg_weight, use_scale_agnostic_mean, step);
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void fused_projection_bwd_optimizer_3dgut(
+    const int64_t num_splats,
+    const int max_sh_degree,
+    std::vector<DeviceTensorFloatND> splats_world,
+    TorchTensorView viewmats,
+    TorchTensorView intrins,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const std::string camera_model,
+    const TorchTensorView dist_coeffs,
+    const DeviceVector<int32_t> camera_ids,
+    const DeviceVector<int32_t> gaussian_ids,
+    DeviceTensorFloatND aabb,
+    const std::vector<DeviceTensorFloatND> v_splats_world,
+    const std::optional<std::vector<DeviceTensorFloatND>> vr_splats_world,
+    const std::optional<std::vector<DeviceTensorFloatND>> h_splats_world,
+    const std::vector<DeviceTensorFloatND> v_splats_screen,
+    const std::optional<std::vector<DeviceTensorFloatND>> vr_splats_screen,
+    const std::optional<std::vector<DeviceTensorFloatND>> h_splats_screen,
+    const std::vector<DeviceTensorFloatND> g1_splats_world,
+    const std::vector<DeviceTensorFloatND> g2_splats_world,
+    const std::optional<TorchTensorView> sh_packed,
+    const std::optional<TorchTensorView> sh_quant_bounds,
+    DeviceVector<float> radii,
+    const float lr_means,
+    const float lr_quats,
+    const float lr_scales,
+    const float lr_opacs,
+    const float lr_features_dc,
+    const float lr_features_sh,
+    const float max_gauss_ratio,
+    const float scale_regularization_weight,
+    const float mcmc_opacity_reg_weight,
+    const float mcmc_scale_reg_weight,
+    const float erank_reg_weight,
+    const float erank_reg_weight_s3,
+    const float quat_norm_reg_weight,
+    const float sh_reg_weight,
+    bool use_scale_agnostic_mean,
+    std::variant<int32_t, TorchTensorView> step
+) {
+    _fused_projection_bwd_optimizer_dispatch<Vanilla3DGUT>(
+        num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
+        camera_model, dist_coeffs, camera_ids, gaussian_ids, aabb,
+        v_splats_world, vr_splats_world, h_splats_world,
+        v_splats_screen, vr_splats_screen, h_splats_screen,
+        g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
+        radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc,
+        lr_features_sh, max_gauss_ratio, scale_regularization_weight,
+        mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
+        erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,
+        sh_reg_weight, use_scale_agnostic_mean, step);
 }
 
 

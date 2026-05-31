@@ -29,6 +29,11 @@ std::map<std::string, float> engine_train_step(
     set_camera_params(width, height, camera_model, viewmats, intrins, dist_coeffs);
     set_training_data(gt_rgb, gt_depth, gt_normal, gt_alpha);
 
+    // Propagate the fused projection-bwd+optim flag to engine state BEFORE
+    // forward/loss so engine_compute_loss_backward can skip projection_*_backward
+    // and stash v_splats_s for the fused optim call below.
+    engine().optim.use_fused_proj_bwd_optim = cfg.optim.use_fused_proj_bwd_optim;
+
     // Populate the shared cam_indices buffer + background per-iter params
     // BEFORE the forward pass. The forward_3dgs path itself runs the
     // background blend (needs cam_indices for SH-mode rotation gather), so

@@ -4,15 +4,28 @@
 #include "EngineCommon.h"
 #include "EngineState.h"
 
+#include <stdexcept>
+#include <variant>
+#include <vector>
+
+
+// FPBO block granularity for SH-quant bounds: one float4 per kFpboBlock splats,
+// covering all 3*K cells per splat. Mirrors the BLOCK_SIZE used inside the
+// fused projection-bwd+optim kernel launcher.
+static constexpr int64_t kFpboBlock = 256;
+
 
 static void _ensure_optim_state(bool quantize_sh, bool use_per_splat_bias_correction = false) {
+    bool fused = engine().optim.use_fused_proj_bwd_optim;
     if (engine().optim.initialized && engine().optim.quantize_sh == quantize_sh
-        && engine().optim.use_per_splat_bias_correction == use_per_splat_bias_correction)
+        && engine().optim.use_per_splat_bias_correction == use_per_splat_bias_correction
+        && engine().optim.fused_state_active == fused)
         return;
 
     int64_t N = engine().max_num_splats;
     int64_t K = engine().num_sh;
     engine().optim.quantize_sh = quantize_sh;
+    engine().optim.fused_state_active = fused;
 
     // g1 (exp_avg)
     engine().optim.g1_means.resize("eng.g1_means", N);
@@ -22,6 +35,8 @@ static void _ensure_optim_state(bool quantize_sh, bool use_per_splat_bias_correc
     engine().optim.g1_features_dc.resize("eng.g1_features_dc", N);
     if (!quantize_sh)
         engine().optim.g1_features_sh.resize("eng.g1_features_sh", N, K);
+    else
+        engine().optim.g1_features_sh = DeviceTensor2D<float3>();
 
     // g2 (exp_avg_sq)
     engine().optim.g2_means.resize("eng.g2_means", N);
@@ -31,6 +46,8 @@ static void _ensure_optim_state(bool quantize_sh, bool use_per_splat_bias_correc
     engine().optim.g2_features_dc.resize("eng.g2_features_dc", N);
     if (!quantize_sh)
         engine().optim.g2_features_sh.resize("eng.g2_features_sh", N, K);
+    else
+        engine().optim.g2_features_sh = DeviceTensor2D<float3>();
 
     // radii [max_N]
     engine().optim.radii.resize("eng.radii", N);
@@ -38,15 +55,26 @@ static void _ensure_optim_state(bool quantize_sh, bool use_per_splat_bias_correc
     // accum_buffer [max_N]
     engine().optim.accum_buffer.resize("eng.accum_buffer", N);
 
-    // Joint (u, sqrt(g2)) Adam state for SH features. The engine optim path
-    // uses Optimizer.cu's fused_adam_with_steps_8bit_kernel which launches
-    // one thread per cell (= per (splat, coef, channel)), grouped 256 threads
-    // per CUDA block. So one float4 bounds slot covers 256 contiguous cells.
-    if (quantize_sh) {
+    // Joint (u, sqrt(g2)) Adam state for SH features.
+    //   Non-fused path: Optimizer.cu's fused_adam_with_steps_8bit_kernel
+    //   launches one thread per cell (= per (splat, coef, channel)), grouped
+    //   256 threads per CUDA block -- one float4 bounds slot per 256 cells.
+    //   Fused path: FPBO launches one thread per SPLAT, grouped 256 splats
+    //   per block, and the kernel writes one bounds slot per block. So same
+    //   packed-cell count, but 3*K x fewer bounds slots.
+    int64_t sh_cells = (int64_t)N * K * 3;
+    if (quantize_sh && !fused) {
         constexpr int64_t BLOCK_SIZE = QuantizedAdamState<8, 256>::kBlockSize;
-        int64_t sh_cells = (int64_t)N * K * 3;
         int64_t sh_bounds = (sh_cells + BLOCK_SIZE - 1) / BLOCK_SIZE;
         engine().optim.sh_quant_state.resize("eng.sh_quant", sh_cells, sh_bounds);
+        engine().optim.sh_quant_state_fpbo = QuantizedAdamState<8, 256>();
+    } else if (quantize_sh && fused) {
+        int64_t sh_bounds = (N + kFpboBlock - 1) / kFpboBlock;
+        engine().optim.sh_quant_state_fpbo.resize("eng.sh_quant_fpbo", sh_cells, sh_bounds);
+        engine().optim.sh_quant_state = QuantizedAdamState<8, 256>();
+    } else {
+        engine().optim.sh_quant_state      = QuantizedAdamState<8, 256>();
+        engine().optim.sh_quant_state_fpbo = QuantizedAdamState<8, 256>();
     }
 
     // bias_correction_steps
@@ -63,8 +91,10 @@ static void _ensure_optim_state(bool quantize_sh, bool use_per_splat_bias_correc
     engine().optim.g1_scales.zero();      engine().optim.g2_scales.zero();
     engine().optim.g1_opacities.zero();   engine().optim.g2_opacities.zero();
     engine().optim.g1_features_dc.zero(); engine().optim.g2_features_dc.zero();
-    if (quantize_sh) {
+    if (quantize_sh && !fused) {
         engine().optim.sh_quant_state.zero();
+    } else if (quantize_sh && fused) {
+        engine().optim.sh_quant_state_fpbo.zero();
     } else {
         engine().optim.g1_features_sh.zero();
         engine().optim.g2_features_sh.zero();
@@ -76,7 +106,162 @@ static void _ensure_optim_state(bool quantize_sh, bool use_per_splat_bias_correc
 }
 
 
+// Build a [N, P]-shaped DeviceTensorFloatND view over a raw float buffer used
+// for the per-attribute Adam state (g1/g2). Mirrors the layout produced by
+// `DeviceTensorFloatND(DeviceVector<floatK>)`.
+static inline DeviceTensorFloatND _fnd_view(float* ptr, int64_t N, int64_t P) {
+    TorchTensorView tv((uint64_t)ptr, 4, {N, P, 1LL});
+    return DeviceTensorFloatND(tv);
+}
+
+
+// Fused projection-bwd + Adam-and-regularization optimizer step. Replaces
+// the projection_*_backward + engine_optim_step pair when
+// `cfg.use_fused_proj_bwd_optim` is set. Requires
+// engine_compute_loss_backward to have stashed v_splats_s into
+// engine().fwd.v_splats_s. World-space gradient buffers are not allocated
+// in this path (raster_*_bwd's world atomicStore is null-pointer-guarded
+// per channel, and the fused kernel's atomicLoad uses the same guard).
+void engine_fused_proj_bwd_optim_step(int step, const OptimConfig& cfg) {
+    _ensure_optim_state(cfg.quantize_sh,
+                        cfg.use_per_splat_bias_correction);
+
+    int64_t N = engine().cur_num_splats;
+    if (engine().fwd.v_splats_s.empty())
+        throw std::runtime_error(
+            "engine_fused_proj_bwd_optim_step: v_splats_s not stashed; "
+            "engine_compute_loss_backward must run first");
+
+    // World-grad vector handed to the FPBO kernel. For 3dgs / mip the
+    // per-channel slots stay null (raster_*_bwd never writes the world
+    // buffer for those prims, so there is nothing to pick up). For 3dgut,
+    // raster_*_bwd has already atomicAdded mean / quat / scale into the
+    // engine grad buffers (_alloc_grad_buffers allocates them in that case);
+    // pass those three slots so the kernel's atomicLoad picks them up and
+    // sums them with the projection-bwd contribution. Other slots remain
+    // null -- they were never written and reading 0 is correct.
+    std::vector<DeviceTensorFloatND> v_splats_w;
+    if (engine().grad.means.data_ptr() != nullptr) {
+        v_splats_w = {
+            DeviceTensorFloatND(engine().grad.means),         // [N, 3]
+            DeviceTensorFloatND(engine().grad.quats),         // [N, 4]
+            DeviceTensorFloatND(engine().grad.scales),        // [N, 3]
+            DeviceTensorFloatND(),                            // opacities -- null
+            DeviceTensorFloatND(),                            // features_dc -- null
+            DeviceTensorFloatND(),                            // features_sh -- null
+        };
+    }
+
+    // Adam state. For SH, fp32 g1/g2 OR quantized packed-bytes -- never both.
+    int64_t M  = engine().max_num_splats;
+    int64_t K3 = (int64_t)engine().num_sh * 3;
+
+    // SH g1/g2 view: zero-shaped empty view when quantized SH is active so
+    // the kernel takes its quant path (driven by sh_packed != nullptr).
+    DeviceTensorFloatND g1_sh = cfg.quantize_sh
+        ? DeviceTensorFloatND()
+        : _fnd_view((float*)engine().optim.g1_features_sh.data_ptr(), M, K3);
+    DeviceTensorFloatND g2_sh = cfg.quantize_sh
+        ? DeviceTensorFloatND()
+        : _fnd_view((float*)engine().optim.g2_features_sh.data_ptr(), M, K3);
+
+    std::vector<DeviceTensorFloatND> g1 = {
+        _fnd_view((float*)engine().optim.g1_means.data_ptr(),       M, 3),
+        _fnd_view((float*)engine().optim.g1_quats.data_ptr(),       M, 4),
+        _fnd_view((float*)engine().optim.g1_scales.data_ptr(),      M, 3),
+        _fnd_view((float*)engine().optim.g1_opacities.data_ptr(),   M, 1),
+        _fnd_view((float*)engine().optim.g1_features_dc.data_ptr(), M, 3),
+        g1_sh,
+    };
+    std::vector<DeviceTensorFloatND> g2 = {
+        _fnd_view((float*)engine().optim.g2_means.data_ptr(),       M, 3),
+        _fnd_view((float*)engine().optim.g2_quats.data_ptr(),       M, 4),
+        _fnd_view((float*)engine().optim.g2_scales.data_ptr(),      M, 3),
+        _fnd_view((float*)engine().optim.g2_opacities.data_ptr(),   M, 1),
+        _fnd_view((float*)engine().optim.g2_features_dc.data_ptr(), M, 3),
+        g2_sh,
+    };
+
+    // SH quantization: pass packed-byte + per-block bounds when active.
+    std::optional<TorchTensorView> sh_packed_opt   = std::nullopt;
+    std::optional<TorchTensorView> sh_bounds_opt   = std::nullopt;
+    if (cfg.quantize_sh && engine().optim.sh_quant_state_fpbo.initialized()) {
+        auto& qs = engine().optim.sh_quant_state_fpbo;
+        sh_packed_opt = TorchTensorView(
+            (uint64_t)qs.packed_ptr(), 1, {qs.packed_bytes()});
+        sh_bounds_opt = TorchTensorView(
+            (uint64_t)qs.bounds_ptr(), 4, {qs.n_bounds, 4LL});
+    }
+
+    // Per-splat bias correction: increment all steps by 1 before use.
+    std::variant<int32_t, TorchTensorView> step_arg;
+    if (cfg.use_per_splat_bias_correction) {
+        increment_int32_inplace(engine().optim.bias_correction_steps,
+                                engine().max_num_splats);
+        step_arg = _dv_tv(engine().optim.bias_correction_steps);
+    } else {
+        step_arg = (int32_t)(step + 1);
+    }
+
+    // World-splat tensors come straight from fwd cache; they alias the
+    // engine's mutable world params, which the fused kernel updates in place.
+    auto& splats_w = engine().fwd.splats_w;
+
+    auto aabb_nd = DeviceTensorFloatND(engine().fwd.aabb);
+
+    // Dispatch on primitive. Pass engine().sh_degree (= sh_degree_to_use) so
+    // the kernel-template SH degree matches the forward pass during warmup --
+    // otherwise SH backward computes spurious gradients on unused bands which
+    // contaminate v_mean through the viewdir chain.
+    int max_sh_degree = engine().sh_degree;
+    auto call_dispatch = [&](auto fn) {
+        fn(
+            N, max_sh_degree, splats_w,
+            _dt2d_tv(engine().camera.viewmats),
+            _dv_tv(engine().camera.intrins),
+            (uint32_t)engine().camera.width,
+            (uint32_t)engine().camera.height,
+            engine().camera.model_str,
+            _dt2d_tv(engine().camera.dist_coeffs),
+            engine().fwd.camera_ids,
+            engine().fwd.gaussian_ids,
+            aabb_nd,
+            v_splats_w, std::nullopt, std::nullopt,
+            engine().fwd.v_splats_s, std::nullopt, std::nullopt,
+            g1, g2,
+            sh_packed_opt, sh_bounds_opt,
+            engine().optim.radii,
+            cfg.lr_means, cfg.lr_quats, cfg.lr_scales,
+            cfg.lr_opacities, cfg.lr_features_dc, cfg.lr_features_sh,
+            cfg.max_gauss_ratio, cfg.scale_regularization_weight,
+            cfg.mcmc_opacity_reg_weight, cfg.mcmc_scale_reg_weight,
+            cfg.erank_reg_weight, cfg.erank_reg_weight_s3,
+            cfg.quat_norm_reg_weight, cfg.sh_reg_weight,
+            cfg.use_scale_agnostic_mean,
+            step_arg
+        );
+    };
+
+    if (engine().primitive == "3dgs") {
+        call_dispatch(&fused_projection_bwd_optimizer_3dgs);
+    } else if (engine().primitive == "mip") {
+        call_dispatch(&fused_projection_bwd_optimizer_mip);
+    } else if (engine().primitive == "3dgut") {
+        call_dispatch(&fused_projection_bwd_optimizer_3dgut);
+    } else {
+        throw std::runtime_error(
+            "engine_fused_proj_bwd_optim_step: unsupported primitive: " +
+            engine().primitive);
+    }
+}
+
+
 void engine_optim_step(int step, const OptimConfig& cfg) {
+    if (engine().optim.use_fused_proj_bwd_optim) {
+        engine_fused_proj_bwd_optim_step(step, cfg);
+        return;
+    }
+
     _ensure_optim_state(cfg.quantize_sh, cfg.use_per_splat_bias_correction);
 
     int64_t N = engine().cur_num_splats;

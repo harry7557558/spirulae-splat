@@ -322,10 +322,16 @@ void engine_save_checkpoint(
     save_dv_f3("g2_features_dc.npy",  s.optim.g2_features_dc);
     if (s.optim.quantize_sh) {
         // Joint (u, sqrt_g2) AoS: single packed byte stream + per-block bounds.
+        // FPBO mode uses a different per-bound granularity, so it lives in a
+        // separate state buffer.
         if (s.optim.sh_quant_state.packed.data_ptr())
             save_dv_u8("sh_quant_packed.npy", s.optim.sh_quant_state.packed);
         if (s.optim.sh_quant_state.bounds.data_ptr())
             save_dv_f4("sh_quant_bounds.npy", s.optim.sh_quant_state.bounds);
+        if (s.optim.sh_quant_state_fpbo.packed.data_ptr())
+            save_dv_u8("sh_quant_packed_fpbo.npy", s.optim.sh_quant_state_fpbo.packed);
+        if (s.optim.sh_quant_state_fpbo.bounds.data_ptr())
+            save_dv_f4("sh_quant_bounds_fpbo.npy", s.optim.sh_quant_state_fpbo.bounds);
     } else {
         save_dt2d_f3("g1_features_sh.npy", s.optim.g1_features_sh);
         save_dt2d_f3("g2_features_sh.npy", s.optim.g2_features_sh);

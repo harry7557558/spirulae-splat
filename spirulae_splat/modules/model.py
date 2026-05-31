@@ -107,7 +107,7 @@ class SpirulaeSplatModelConfig:
     """Pack projection outputs, reduce VRAM usage at large batch size but can be slightly slower"""
     use_bvh: bool = False
     """Use BVH for splat-patch intersection test, may be faster when batching large number of small patches"""
-    use_fused_proj_bwd_optim: bool = False
+    use_fused_proj_bwd_optim: bool = True
     """Whether to use fused projection backward and optimizer.
         More memory efficient for large number of Gaussians, with slight performance hit."""
     quantize_sh_optim: bool = True

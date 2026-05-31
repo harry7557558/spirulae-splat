@@ -23,99 +23,99 @@ from spirulae_splat.modules._profile import PROFILE_TRAIN_STEP
 
 
 
-_DEFAULT_OPTIMIZERS = {
-    "_dummy": FusedAdamOptimizerConfig(lr=1.0, eps=0.0),
-    "means": FusedAdamOptimizerConfig(
-        lr=1.6e-4, eps=1e-15,
-        lr_final=1.6e-6, max_steps=30000
-    ),
-    "scales": FusedAdamOptimizerConfig(lr=0.005, eps=1e-15),
-    "quats": FusedAdamOptimizerConfig(lr=0.0005, eps=1e-15),
-    "features_dc": FusedAdamOptimizerConfig(lr=0.0025, eps=1e-15),
-    "features_sh": FusedAdamOptimizerConfig(
-        lr=0.0025 / 20, eps=1e-15,
-        tr=1.0e-6 / 20, tr_final=1.0e-8 / 20, max_steps=30000,
-    ),
-    "features_ch": FusedAdamOptimizerConfig(lr=0.0025 / 5, eps=1e-15),
-    "sv_sites": FusedAdamOptimizerConfig(lr=0.01, eps=1e-15),
-    "sv_colors": FusedAdamOptimizerConfig(lr=0.0005, eps=1e-15),
-    "opacities": FusedAdamOptimizerConfig(lr=0.05, eps=1e-15),
-    "densities": FusedAdamOptimizerConfig(
-        lr=0.05, eps=1e-15,
-        lr_final=0.0005, max_steps=30000,
-    ),
-    "background_dc": FusedAdamOptimizerConfig(lr=0.0025, eps=1e-15),
-    "background_sh": FusedAdamOptimizerConfig(lr=0.0025 / 20, eps=1e-15),
-    "bilateral_grid": FusedAdamOptimizerConfig(
-        lr=2e-3, eps=1e-15,
-        lr_final=1e-4, max_steps=30000, warmup_steps=1000,
-    ),
-    "bilateral_grid_depth": FusedAdamOptimizerConfig(
-        lr=2e-3, eps=1e-15,
-        lr_final=1e-4, max_steps=30000, warmup_steps=2000,
-    ),
-    "bilateral_grid_normal": FusedAdamOptimizerConfig(
-        lr=5e-4, eps=1e-15,
-        lr_final=4e-5, max_steps=30000, warmup_steps=2000,
-    ),
-    "ppisp": FusedAdamOptimizerConfig(
-        lr=2e-3, eps=1e-15,
-        lr_final=2e-5, max_steps=30000, warmup_steps=500, lr_pre_warmup=2e-5
-    ),
-    "camera_opt": FusedAdamOptimizerConfig(
-        lr=1e-4, eps=1e-15,
-        lr_final=5e-7, max_steps=30000, warmup_steps=1000,
-    ),
-}
+# _DEFAULT_OPTIMIZERS = {
+#     "_dummy": FusedAdamOptimizerConfig(lr=1.0, eps=0.0),
+#     "means": FusedAdamOptimizerConfig(
+#         lr=1.6e-4, eps=1e-15,
+#         lr_final=1.6e-6, max_steps=30000
+#     ),
+#     "scales": FusedAdamOptimizerConfig(lr=0.005, eps=1e-15),
+#     "quats": FusedAdamOptimizerConfig(lr=0.0005, eps=1e-15),
+#     "features_dc": FusedAdamOptimizerConfig(lr=0.0025, eps=1e-15),
+#     "features_sh": FusedAdamOptimizerConfig(
+#         lr=0.0025 / 20, eps=1e-15,
+#         tr=1.0e-6 / 20, tr_final=1.0e-8 / 20, max_steps=30000,
+#     ),
+#     "features_ch": FusedAdamOptimizerConfig(lr=0.0025 / 5, eps=1e-15),
+#     "sv_sites": FusedAdamOptimizerConfig(lr=0.01, eps=1e-15),
+#     "sv_colors": FusedAdamOptimizerConfig(lr=0.0005, eps=1e-15),
+#     "opacities": FusedAdamOptimizerConfig(lr=0.05, eps=1e-15),
+#     "densities": FusedAdamOptimizerConfig(
+#         lr=0.05, eps=1e-15,
+#         lr_final=0.0005, max_steps=30000,
+#     ),
+#     "background_dc": FusedAdamOptimizerConfig(lr=0.0025, eps=1e-15),
+#     "background_sh": FusedAdamOptimizerConfig(lr=0.0025 / 20, eps=1e-15),
+#     "bilateral_grid": FusedAdamOptimizerConfig(
+#         lr=2e-3, eps=1e-15,
+#         lr_final=1e-4, max_steps=30000, warmup_steps=1000,
+#     ),
+#     "bilateral_grid_depth": FusedAdamOptimizerConfig(
+#         lr=2e-3, eps=1e-15,
+#         lr_final=1e-4, max_steps=30000, warmup_steps=2000,
+#     ),
+#     "bilateral_grid_normal": FusedAdamOptimizerConfig(
+#         lr=5e-4, eps=1e-15,
+#         lr_final=4e-5, max_steps=30000, warmup_steps=2000,
+#     ),
+#     "ppisp": FusedAdamOptimizerConfig(
+#         lr=2e-3, eps=1e-15,
+#         lr_final=2e-5, max_steps=30000, warmup_steps=500, lr_pre_warmup=2e-5
+#     ),
+#     "camera_opt": FusedAdamOptimizerConfig(
+#         lr=1e-4, eps=1e-15,
+#         lr_final=5e-7, max_steps=30000, warmup_steps=1000,
+#     ),
+# }
 
-_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER = {**_DEFAULT_OPTIMIZERS}
-_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER["scales"] = FusedAdamOptimizerConfig(
-    # https://arxiv.org/abs/2603.08661
-    lr=0.02, eps=1e-15,
-    lr_final=0.005, max_steps=10000, warmup_steps=1000, lr_pre_warmup=0.005
-)
-
-_TRIANGLE_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER}
-_TRIANGLE_OPTIMIZERS["means"] = FusedAdamOptimizerConfig(
-    lr=1.6e-4, eps=1e-15, lr_final=1.6e-6, max_steps=30000,
-)
-# _TRIANGLE_OPTIMIZERS["scales"] = FusedAdamOptimizerConfig(
-#     lr=0.005, eps=1e-15, lr_final=0.0002, max_steps=30000,
+# _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER = {**_DEFAULT_OPTIMIZERS}
+# _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER["scales"] = FusedAdamOptimizerConfig(
+#     # https://arxiv.org/abs/2603.08661
+#     lr=0.02, eps=1e-15,
+#     lr_final=0.005, max_steps=10000, warmup_steps=1000, lr_pre_warmup=0.005
 # )
-# _TRIANGLE_OPTIMIZERS["quats"] = FusedAdamOptimizerConfig(
-#     lr=0.0005, eps=1e-15, lr_final=0.0001, max_steps=30000,
+
+# _TRIANGLE_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER}
+# _TRIANGLE_OPTIMIZERS["means"] = FusedAdamOptimizerConfig(
+#     lr=1.6e-4, eps=1e-15, lr_final=1.6e-6, max_steps=30000,
 # )
-_TRIANGLE_OPTIMIZERS["bilateral_grid"] = FusedAdamOptimizerConfig(
-    lr=5e-4, eps=1e-15,
-    lr_final=1e-6, max_steps=30000, warmup_steps=1000,
-)
+# # _TRIANGLE_OPTIMIZERS["scales"] = FusedAdamOptimizerConfig(
+# #     lr=0.005, eps=1e-15, lr_final=0.0002, max_steps=30000,
+# # )
+# # _TRIANGLE_OPTIMIZERS["quats"] = FusedAdamOptimizerConfig(
+# #     lr=0.0005, eps=1e-15, lr_final=0.0001, max_steps=30000,
+# # )
+# _TRIANGLE_OPTIMIZERS["bilateral_grid"] = FusedAdamOptimizerConfig(
+#     lr=5e-4, eps=1e-15,
+#     lr_final=1e-6, max_steps=30000, warmup_steps=1000,
+# )
 
-_SECOND_ORDER_POSITION_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER}
-_SECOND_ORDER_POSITION_OPTIMIZERS["means"] = FusedNewtonOptimizerConfig(
-    mode="mean", lr=1.0e-6, eps=1e-15,
-    lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
-)
-
-_SECOND_ORDER_OPTIMIZERS = {**_SECOND_ORDER_POSITION_OPTIMIZERS}
-# _SECOND_ORDER_OPTIMIZERS["quats"] = FusedNewtonOptimizerConfig(
-#     mode="quat", lr=1.0e-6, eps=1e-15,
+# _SECOND_ORDER_POSITION_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER}
+# _SECOND_ORDER_POSITION_OPTIMIZERS["means"] = FusedNewtonOptimizerConfig(
+#     mode="mean", lr=1.0e-6, eps=1e-15,
 #     lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
 # )
-_SECOND_ORDER_OPTIMIZERS["scales"] = FusedNewtonOptimizerConfig(
-    mode="scale", lr=1.0e-6, eps=1e-15,
-    lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
-    # mode="scale", lr=1.0e-5, eps=1e-15,
-    # lr_final=1.0e-7, max_steps=30000, #warmup_steps=1000,
-)
-# TODO: investigate whether this messes up MCMC densification
-# _SECOND_ORDER_OPTIMIZERS["opacities"] = FusedNewtonOptimizerConfig(
-#     mode="opacity", lr=1.0e-6, eps=1e-15,
-#     lr_final=1.0e-8, max_steps=30000, #warmup_steps=3000,
-# )
-# _SECOND_ORDER_OPTIMIZERS["features_dc"] = FusedNewtonOptimizerConfig(
-#     mode="color", lr=1.0e-6, eps=1e-15,
+
+# _SECOND_ORDER_OPTIMIZERS = {**_SECOND_ORDER_POSITION_OPTIMIZERS}
+# # _SECOND_ORDER_OPTIMIZERS["quats"] = FusedNewtonOptimizerConfig(
+# #     mode="quat", lr=1.0e-6, eps=1e-15,
+# #     lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
+# # )
+# _SECOND_ORDER_OPTIMIZERS["scales"] = FusedNewtonOptimizerConfig(
+#     mode="scale", lr=1.0e-6, eps=1e-15,
 #     lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
+#     # mode="scale", lr=1.0e-5, eps=1e-15,
+#     # lr_final=1.0e-7, max_steps=30000, #warmup_steps=1000,
 # )
+# # TODO: investigate whether this messes up MCMC densification
+# # _SECOND_ORDER_OPTIMIZERS["opacities"] = FusedNewtonOptimizerConfig(
+# #     mode="opacity", lr=1.0e-6, eps=1e-15,
+# #     lr_final=1.0e-8, max_steps=30000, #warmup_steps=3000,
+# # )
+# # _SECOND_ORDER_OPTIMIZERS["features_dc"] = FusedNewtonOptimizerConfig(
+# #     mode="color", lr=1.0e-6, eps=1e-15,
+# #     lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
+# # )
 
 
 @dataclass

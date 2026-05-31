@@ -632,6 +632,57 @@ void densify_update_weight_tensor(
 // Relocation
 // ================
 
+// Resetting a splat's quantized SH Adam state to "zero" means writing the
+// (u_q, log_s_q) byte pair that decodes (with the CURRENT bounds slot for
+// that cell) as closely as possible to (g1 = 0, g2 = 0). Naively writing 0
+// bytes only matches that intent when the bounds happen to satisfy
+// mm.x <= 0 <= mm.y AND mm.z == 0 -- otherwise decode(0,0,mm) lands at
+// (mm.x, eps*expm1(mm.z)), which contaminates the new splat's first few
+// optim steps. Saturation is acceptable: the next optim pass recomputes
+// bounds and re-encodes.
+//
+// Bounds layout is one of:
+//   bounds_per_splat=true  (FPBO): one float4 per 256 splats, covering all
+//                                  3*num_sh cells per splat in the block.
+//   bounds_per_splat=false (regular Optimizer.cu): one float4 per 256 cells,
+//                                  so cells within a single splat may span
+//                                  multiple bounds slots.
+__device__ __forceinline__ uint8_t _quant_encode_zero_byte(float zero_val, float lo, float hi) {
+    float range = fmaxf(hi - lo, 1e-30f);
+    float qf = roundf(255.0f * (zero_val - lo) / range);
+    return (uint8_t)fminf(fmaxf(qf, 0.0f), 255.0f);
+}
+
+__device__ __forceinline__ void _zero_quant_sh_for_splat(
+    uint8_t* __restrict__ packed,           // 2 bytes per (splat, coef, channel)
+    int64_t splat_idx,
+    int num_sh,
+    const float4* __restrict__ bounds,
+    bool bounds_per_splat
+) {
+    int64_t cells_per_splat = (int64_t)num_sh * 3;
+    int64_t base_cell = splat_idx * cells_per_splat;
+    if (bounds_per_splat) {
+        float4 mm = bounds[splat_idx / 256];
+        uint8_t u_q     = _quant_encode_zero_byte(0.0f, mm.x, mm.y);
+        uint8_t log_s_q = _quant_encode_zero_byte(0.0f, mm.z, mm.w);
+        #pragma unroll 1
+        for (int64_t c = 0; c < cells_per_splat; ++c) {
+            int64_t cell = base_cell + c;
+            packed[cell * 2 + 0] = u_q;
+            packed[cell * 2 + 1] = log_s_q;
+        }
+    } else {
+        #pragma unroll 1
+        for (int64_t c = 0; c < cells_per_splat; ++c) {
+            int64_t cell = base_cell + c;
+            float4 mm = bounds[cell / 256];
+            packed[cell * 2 + 0] = _quant_encode_zero_byte(0.0f, mm.x, mm.y);
+            packed[cell * 2 + 1] = _quant_encode_zero_byte(0.0f, mm.z, mm.w);
+        }
+    }
+}
+
 template<typename g_features_sh_t3>
 __global__ void relocate_with_long_axis_split_kernel(
     int64_t cur_num_splats,
@@ -644,6 +695,8 @@ __global__ void relocate_with_long_axis_split_kernel(
     float*__restrict__ opacs, float*__restrict__ g1_opacs, float*__restrict__ g2_opacs,
     float3*__restrict__ features_dc, float3*__restrict__ g1_features_dc, float3*__restrict__ g2_features_dc,
     int num_sh, float3*__restrict__ features_sh, g_features_sh_t3*__restrict__ g1_features_sh, g_features_sh_t3*__restrict__ g2_features_sh,
+    const float4* __restrict__ sh_quant_bounds,  // nullptr in non-quant mode
+    bool sh_bounds_per_splat,
     float2*__restrict__ densify_accum_buffer,
     int32_t* __restrict__ bias_correction_steps
 ) {
@@ -688,9 +741,17 @@ __global__ void relocate_with_long_axis_split_kernel(
     g2_opacs[idx_dst] = 0.0f;
     g1_features_dc[idx_dst] = make_float3(0.0f);
     g2_features_dc[idx_dst] = make_float3(0.0f);
-    for (int i = 0; i < num_sh; ++i) {  // TODO: slow; more cache friendly way to do so?
-        g1_features_sh[num_sh*idx_dst+i] = g_features_sh_t3{0,0,0};
-        g2_features_sh[num_sh*idx_dst+i] = g_features_sh_t3{0,0,0};
+    if constexpr (sizeof(g_features_sh_t3) == sizeof(short3)) {
+        // Quant path: write encoded (u=0, log_s=0) bytes; g1 and g2 alias
+        // the same packed buffer, so one pass covers both.
+        _zero_quant_sh_for_splat(
+            (uint8_t*)g1_features_sh, idx_dst, num_sh,
+            sh_quant_bounds, sh_bounds_per_splat);
+    } else {
+        for (int i = 0; i < num_sh; ++i) {  // TODO: slow; more cache friendly way to do so?
+            g1_features_sh[num_sh*idx_dst+i] = g_features_sh_t3{0,0,0};
+            g2_features_sh[num_sh*idx_dst+i] = g_features_sh_t3{0,0,0};
+        }
     }
     if (bias_correction_steps)
         bias_correction_steps[idx_dst] = 0;
@@ -705,9 +766,15 @@ __global__ void relocate_with_long_axis_split_kernel(
     g2_opacs[idx_src] = 0.0f;
     g1_features_dc[idx_src] = make_float3(0.0f);
     g2_features_dc[idx_src] = make_float3(0.0f);
-    for (int i = 0; i < num_sh; ++i) {  // TODO: slow; more cache friendly way to do so?
-        g1_features_sh[num_sh*idx_src+i] = g_features_sh_t3{0,0,0};
-        g2_features_sh[num_sh*idx_src+i] = g_features_sh_t3{0,0,0};
+    if constexpr (sizeof(g_features_sh_t3) == sizeof(short3)) {
+        _zero_quant_sh_for_splat(
+            (uint8_t*)g1_features_sh, idx_src, num_sh,
+            sh_quant_bounds, sh_bounds_per_splat);
+    } else {
+        for (int i = 0; i < num_sh; ++i) {  // TODO: slow; more cache friendly way to do so?
+            g1_features_sh[num_sh*idx_src+i] = g_features_sh_t3{0,0,0};
+            g2_features_sh[num_sh*idx_src+i] = g_features_sh_t3{0,0,0};
+        }
     }
     if (bias_correction_steps)
         bias_correction_steps[idx_src] = 0;
@@ -794,6 +861,10 @@ void relocate_splats_with_long_axis_split_tensor(
     DeviceVector<int32_t> bias_correction_steps,
     bool is_quantized_sh,
     int num_sh,
+    // SH-quant bounds buffer + layout flag used to encode (g1=0, g2=0) into
+    // the dst splats' packed bytes. Null when is_quantized_sh is false.
+    DeviceVector<float4> sh_quant_bounds,
+    bool sh_bounds_per_splat,
     uint32_t seed
 ) {
     int32_t* bias_correction_steps_ptr = bias_correction_steps.data_ptr();
@@ -842,6 +913,7 @@ void relocate_splats_with_long_axis_split_tensor(
             opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
             features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
             num_sh, features_sh.data_ptr(), g1_features_sh.data_ptr(), g2_features_sh.data_ptr(),
+            /*sh_quant_bounds=*/nullptr, /*sh_bounds_per_splat=*/false,
             densify_accum_buffer.data_ptr(),
             bias_correction_steps_ptr
         );
@@ -857,6 +929,7 @@ void relocate_splats_with_long_axis_split_tensor(
             opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
             features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
             num_sh, features_sh.data_ptr(), (short3*)g1_features_sh.data_ptr(), (short3*)g2_features_sh.data_ptr(),
+            sh_quant_bounds.data_ptr(), sh_bounds_per_splat,
             densify_accum_buffer.data_ptr(),
             bias_correction_steps_ptr
         );
@@ -874,6 +947,8 @@ void add_splats_with_long_axis_split_tensor(
     DeviceVector<int32_t> bias_correction_steps,
     bool is_quantized_sh,
     int num_sh,
+    DeviceVector<float4> sh_quant_bounds,
+    bool sh_bounds_per_splat,
     uint32_t seed
 ) {
     if (num_new_splats == 0)
@@ -896,6 +971,7 @@ void add_splats_with_long_axis_split_tensor(
             opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
             features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
             num_sh, features_sh.data_ptr(), g1_features_sh.data_ptr(), g2_features_sh.data_ptr(),
+            /*sh_quant_bounds=*/nullptr, /*sh_bounds_per_splat=*/false,
             densify_accum_buffer.data_ptr(),
             bias_correction_steps_ptr
         );
@@ -911,6 +987,7 @@ void add_splats_with_long_axis_split_tensor(
             opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
             features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
             num_sh, features_sh.data_ptr(), (short3*)g1_features_sh.data_ptr(), (short3*)g2_features_sh.data_ptr(),
+            sh_quant_bounds.data_ptr(), sh_bounds_per_splat,
             densify_accum_buffer.data_ptr(),
             bias_correction_steps_ptr
         );
@@ -1040,6 +1117,8 @@ __global__ void mcmc_compute_relocation_kernel(
     float*__restrict__ opacs, float*__restrict__ g1_opacs, float*__restrict__ g2_opacs,
     float3*__restrict__ features_dc, float3*__restrict__ g1_features_dc, float3*__restrict__ g2_features_dc,
     int num_sh, float3*__restrict__ features_sh, g_features_sh_t3*__restrict__ g1_features_sh, g_features_sh_t3*__restrict__ g2_features_sh,
+    const float4* __restrict__ sh_quant_bounds,
+    bool sh_bounds_per_splat,
     int32_t* __restrict__ bias_correction_steps
 ) {
     uint32_t cur_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1069,9 +1148,15 @@ __global__ void mcmc_compute_relocation_kernel(
     g2_opacs[cur_idx] = 0.0f;
     g1_features_dc[cur_idx] = make_float3(0.0f);
     g2_features_dc[cur_idx] = make_float3(0.0f);
-    for (int i = 0; i < num_sh; ++i) {  // TODO: slow; more cache friendly way to do so?
-        g1_features_sh[num_sh*cur_idx+i] = g_features_sh_t3{0,0,0};
-        g2_features_sh[num_sh*cur_idx+i] = g_features_sh_t3{0,0,0};
+    if constexpr (sizeof(g_features_sh_t3) == sizeof(short3)) {
+        _zero_quant_sh_for_splat(
+            (uint8_t*)g1_features_sh, cur_idx, num_sh,
+            sh_quant_bounds, sh_bounds_per_splat);
+    } else {
+        for (int i = 0; i < num_sh; ++i) {  // TODO: slow; more cache friendly way to do so?
+            g1_features_sh[num_sh*cur_idx+i] = g_features_sh_t3{0,0,0};
+            g2_features_sh[num_sh*cur_idx+i] = g_features_sh_t3{0,0,0};
+        }
     }
     if (bias_correction_steps)
         bias_correction_steps[cur_idx] = 0;
@@ -1118,6 +1203,8 @@ void relocate_splats_mcmc_tensor(
     DeviceVector<int32_t> bias_correction_steps,
     bool is_quantized_sh,
     int num_sh,
+    DeviceVector<float4> sh_quant_bounds,
+    bool sh_bounds_per_splat,
     uint32_t seed
 ) {
     int32_t* bias_correction_steps_ptr = bias_correction_steps.data_ptr();
@@ -1173,6 +1260,7 @@ void relocate_splats_mcmc_tensor(
             opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
             features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
             num_sh, features_sh.data_ptr(), g1_features_sh.data_ptr(), g2_features_sh.data_ptr(),
+            /*sh_quant_bounds=*/nullptr, /*sh_bounds_per_splat=*/false,
             bias_correction_steps_ptr
         );
     else
@@ -1186,6 +1274,7 @@ void relocate_splats_mcmc_tensor(
             opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
             features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
             num_sh, features_sh.data_ptr(), (short3*)g1_features_sh.data_ptr(), (short3*)g2_features_sh.data_ptr(),
+            sh_quant_bounds.data_ptr(), sh_bounds_per_splat,
             bias_correction_steps_ptr
         );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -1274,6 +1363,8 @@ __global__ void mcmc_update_add_kernel(
     float*__restrict__ opacs, float*__restrict__ g1_opacs, float*__restrict__ g2_opacs,
     float3*__restrict__ features_dc, float3*__restrict__ g1_features_dc, float3*__restrict__ g2_features_dc,
     int num_sh, float3*__restrict__ features_sh, g_features_sh_t3*__restrict__ g1_features_sh, g_features_sh_t3*__restrict__ g2_features_sh,
+    const float4* __restrict__ sh_quant_bounds,
+    bool sh_bounds_per_splat,
     int32_t* __restrict__ bias_correction_steps
 ) {
     uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1303,9 +1394,15 @@ __global__ void mcmc_update_add_kernel(
     g2_opacs[id_dst] = 0.0f;
     g1_features_dc[id_dst] = make_float3(0.0f);
     g2_features_dc[id_dst] = make_float3(0.0f);
-    for (int i = 0; i < num_sh; ++i) {  // TODO: slow; more cache friendly way to do so?
-        g1_features_sh[num_sh*id_dst+i] = g_features_sh_t3{0,0,0};
-        g2_features_sh[num_sh*id_dst+i] = g_features_sh_t3{0,0,0};
+    if constexpr (sizeof(g_features_sh_t3) == sizeof(short3)) {
+        _zero_quant_sh_for_splat(
+            (uint8_t*)g1_features_sh, id_dst, num_sh,
+            sh_quant_bounds, sh_bounds_per_splat);
+    } else {
+        for (int i = 0; i < num_sh; ++i) {  // TODO: slow; more cache friendly way to do so?
+            g1_features_sh[num_sh*id_dst+i] = g_features_sh_t3{0,0,0};
+            g2_features_sh[num_sh*id_dst+i] = g_features_sh_t3{0,0,0};
+        }
     }
     if (bias_correction_steps)
         bias_correction_steps[id_dst] = 0;
@@ -1323,6 +1420,8 @@ void add_splats_mcmc_tensor(
     DeviceVector<int32_t> bias_correction_steps,
     bool is_quantized_sh,
     int num_sh,
+    DeviceVector<float4> sh_quant_bounds,
+    bool sh_bounds_per_splat,
     uint32_t seed
 ) {
     if (num_add == 0)
@@ -1390,6 +1489,7 @@ void add_splats_mcmc_tensor(
             opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
             features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
             num_sh, features_sh.data_ptr(), g1_features_sh.data_ptr(), g2_features_sh.data_ptr(),
+            /*sh_quant_bounds=*/nullptr, /*sh_bounds_per_splat=*/false,
             bias_correction_steps_ptr
         );
     else
@@ -1403,6 +1503,7 @@ void add_splats_mcmc_tensor(
             opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
             features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
             num_sh, features_sh.data_ptr(), (short3*)g1_features_sh.data_ptr(), (short3*)g2_features_sh.data_ptr(),
+            sh_quant_bounds.data_ptr(), sh_bounds_per_splat,
             bias_correction_steps_ptr
         );
     CHECK_DEVICE_ERROR(cudaGetLastError());

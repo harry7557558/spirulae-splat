@@ -17,6 +17,36 @@
 static void _alloc_grad_buffers() {
     int64_t N = engine().max_num_splats;
     int64_t K = engine().num_sh;
+
+    // Fused projection-bwd+optim folds the world-grad accumulation directly
+    // into the optimizer step's local registers. For 3dgs / mip, raster_*_bwd
+    // writes only screen-space grads, so all world-grad buffers can be
+    // skipped (the per-channel atomicStore guard on a null WorldBuffer turns
+    // those writes into no-ops). For 3dgut, raster_*_bwd atomicAdds
+    // mean / quat / scale into the WORLD buffer (see Primitive3DGUT.cuh
+    // FragmentBwd::atomicStore), so those three slots must remain allocated;
+    // opacity/dc/sh still go via the screen buffer or the fused optim path.
+    if (engine().optim.use_fused_proj_bwd_optim) {
+        bool need_world_geom = (engine().primitive == "3dgut" ||
+                                engine().primitive == "3dgut_sv");
+        if (need_world_geom) {
+            engine().grad.means.resize("eng.v_means", N);
+            engine().grad.quats.resize("eng.v_quats", N);
+            engine().grad.scales.resize("eng.v_scales", N);
+            engine().grad.means.zero();
+            engine().grad.quats.zero();
+            engine().grad.scales.zero();
+        } else {
+            engine().grad.means  = DeviceVector<float3>();
+            engine().grad.quats  = DeviceVector<float4>();
+            engine().grad.scales = DeviceVector<float3>();
+        }
+        engine().grad.opacities    = DeviceVector<float>();
+        engine().grad.features_dc  = DeviceVector<float3>();
+        engine().grad.features_sh  = DeviceTensor2D<float3>();
+        return;
+    }
+
     engine().grad.means.resize("eng.v_means", N);
     engine().grad.quats.resize("eng.v_quats", N);
     engine().grad.scales.resize("eng.v_scales", N);
@@ -215,20 +245,39 @@ std::map<std::string, float> engine_compute_loss_backward(
     );
     DeviceTensor3D<float> v_render_Ts(pixel_grads.v_render_Ts);
 
-    DeviceTensorFloatND v_fnd_opac;
-    {
-        TorchTensorView opac_tv((uint64_t)engine().grad.opacities.data_ptr(), 4,
-            {engine().grad.opacities.size(), 1LL, 1LL});
-        v_fnd_opac = DeviceTensorFloatND(opac_tv);  // ndim=2, shape=[N, 1]
+    // Build the world-grad vector handed to rasterize_*_bwd. Three cases:
+    //   - non-fused: all six slots are real per-channel grad buffers.
+    //   - fused + 3dgs / mip: empty vector; raster_*_bwd writes nothing into
+    //     the world buffer (its atomicStore is screen-only for those prims).
+    //   - fused + 3dgut: mean/quat/scale slots are real (raster_*_bwd atomic-
+    //     adds them); opacity/dc/sh slots are null (those flow via screen or
+    //     are accumulated inside the FPBO kernel).
+    std::vector<DeviceTensorFloatND> v_splats_w;
+    if (!engine().optim.use_fused_proj_bwd_optim) {
+        DeviceTensorFloatND v_fnd_opac;
+        {
+            TorchTensorView opac_tv((uint64_t)engine().grad.opacities.data_ptr(), 4,
+                {engine().grad.opacities.size(), 1LL, 1LL});
+            v_fnd_opac = DeviceTensorFloatND(opac_tv);  // ndim=2, shape=[N, 1]
+        }
+        v_splats_w = {
+            DeviceTensorFloatND(engine().grad.means),         // [N, 3]
+            DeviceTensorFloatND(engine().grad.quats),         // [N, 4]
+            DeviceTensorFloatND(engine().grad.scales),        // [N, 3]
+            v_fnd_opac,                                       // [N, 1]
+            DeviceTensorFloatND(engine().grad.features_dc),   // [N, 3]
+            DeviceTensorFloatND(engine().grad.features_sh),   // [N, K, 3]
+        };
+    } else if (engine().primitive == "3dgut" || engine().primitive == "3dgut_sv") {
+        v_splats_w = {
+            DeviceTensorFloatND(engine().grad.means),         // [N, 3]
+            DeviceTensorFloatND(engine().grad.quats),         // [N, 4]
+            DeviceTensorFloatND(engine().grad.scales),        // [N, 3]
+            DeviceTensorFloatND(),                            // opacities -- null
+            DeviceTensorFloatND(),                            // features_dc -- null
+            DeviceTensorFloatND(),                            // features_sh -- null
+        };
     }
-    std::vector<DeviceTensorFloatND> v_splats_w = {
-        DeviceTensorFloatND(engine().grad.means),         // [N, 3]
-        DeviceTensorFloatND(engine().grad.quats),         // [N, 4]
-        DeviceTensorFloatND(engine().grad.scales),        // [N, 3]
-        v_fnd_opac,                                       // [N, 1]
-        DeviceTensorFloatND(engine().grad.features_dc),   // [N, 3]
-        DeviceTensorFloatND(engine().grad.features_sh),   // [N, K, 3]
-    };
 
     // Build accum_weight_map from loss_map (pixel-space -> per-splat mapping in raster bwd)
     DeviceTensor3D<float> accum_weight_map;
@@ -295,7 +344,11 @@ std::map<std::string, float> engine_compute_loss_backward(
     }
 
     // --- Projection backward ---
-    if (engine().primitive == "3dgs") {
+    // In fused-proj-bwd-optim mode the projection backward is folded into the
+    // optimizer step; we just stash the screen-space gradients for that call.
+    if (engine().optim.use_fused_proj_bwd_optim) {
+        engine().fwd.v_splats_s = v_splats_s_out;
+    } else if (engine().primitive == "3dgs") {
         projection_3dgs_backward(
             engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
             _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),

@@ -45,6 +45,13 @@ struct OptimConfig {
     bool  use_scale_agnostic_mean         = false;
     bool  quantize_sh                     = false;
     bool  use_per_splat_bias_correction   = false;
+
+    // When true, fold projection-backward and Adam-based per-splat optim into
+    // a single fused kernel (FusedProjectionBwdOptim). The engine then skips
+    // the standalone projection_*_backward + engine_optim_step calls. SH
+    // quantization is not yet supported by the fused path; the MVP allocates
+    // full fp32 g1/g2 momentum (no `sh_quant_state`) in this mode.
+    bool  use_fused_proj_bwd_optim        = false;
 };
 
 

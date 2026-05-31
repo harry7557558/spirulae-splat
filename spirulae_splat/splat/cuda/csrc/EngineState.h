@@ -74,6 +74,10 @@ struct ForwardCache {
     DeviceTensor3D<int32_t>           last_ids;
     RenderOutput::TensorTuple         renders;
     DeviceVector<float>               accum_weight; // [max_num_splats] per-splat score from raster bwd
+    // Screen-space gradient handed from rasterize_*_bwd. The default path
+    // consumes this immediately inside projection_*_backward; the fused
+    // projection-bwd+optim path stashes it here for the optim step.
+    std::vector<DeviceTensorFloatND>  v_splats_s;
 };
 
 // Training ground truth (re-copied each batch).
@@ -109,10 +113,23 @@ struct SplatOptim {
     DeviceVector<float3>   g1_features_dc,   g2_features_dc;
     DeviceTensor2D<float3> g1_features_sh,   g2_features_sh;       // when !quantize
     QuantizedAdamState<8, 256> sh_quant_state;                      // when  quantize
+    // FPBO uses a different per-bound granularity (one float4 per 256 splats,
+    // covering all 3*K cells per splat), so the kernel cannot reuse
+    // `sh_quant_state`. Allocated only when use_fused_proj_bwd_optim + quantize_sh.
+    QuantizedAdamState<8, 256> sh_quant_state_fpbo;
 
     DeviceVector<float>    radii;                  // [max_N]
     DeviceVector<float2>   accum_buffer;           // [max_N]
     DeviceVector<int32_t>  bias_correction_steps;  // [max_N], or empty
+
+    // Set per-step from cfg.optim.use_fused_proj_bwd_optim before forward/loss
+    // so engine_compute_loss_backward knows to skip projection_*_backward and
+    // stash v_splats_s for the subsequent fused projection-bwd-and-optim call.
+    bool   use_fused_proj_bwd_optim = false;
+    // Mirrors use_fused_proj_bwd_optim at the time _ensure_optim_state last
+    // ran. Drives reallocation when the fused flag flips between steps (the
+    // FPBO SH-quant layout differs from the regular Optimizer.cu layout).
+    bool   fused_state_active       = false;
 };
 
 // One bilagrid channel (RGB / depth / normal).

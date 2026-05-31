@@ -23,7 +23,7 @@ using ssplat::CameraModelType;
 
 
 inline constexpr int kNumFrustumSegments = 16;
-inline constexpr int kNumFrustumFaces = 16;
+inline constexpr int kNumFrustumFaces = 8;
 
 __global__ void fill_frustum_segments_kernel(
     const float4* __restrict__ intrins, // [N, 4]

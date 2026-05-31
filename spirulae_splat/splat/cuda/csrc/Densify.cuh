@@ -96,6 +96,10 @@ void relocate_splats_with_long_axis_split_tensor(
     DeviceVector<int32_t> bias_correction_steps,
     bool is_quantized_sh,
     int num_sh,
+    // SH-quant bounds buffer + layout flag used to encode (g1=0, g2=0) into
+    // the dst splats' packed bytes. Null when is_quantized_sh is false.
+    DeviceVector<float4> sh_quant_bounds,
+    bool sh_bounds_per_splat,
     uint32_t seed
 );
 
@@ -110,6 +114,8 @@ void add_splats_with_long_axis_split_tensor(
     DeviceVector<int32_t> bias_correction_steps,
     bool is_quantized_sh,
     int num_sh,
+    DeviceVector<float4> sh_quant_bounds,
+    bool sh_bounds_per_splat,
     uint32_t seed
 );
 
@@ -123,6 +129,8 @@ void relocate_splats_mcmc_tensor(
     DeviceVector<int32_t> bias_correction_steps,
     bool is_quantized_sh,
     int num_sh,
+    DeviceVector<float4> sh_quant_bounds,
+    bool sh_bounds_per_splat,
     uint32_t seed
 );
 
@@ -137,6 +145,8 @@ void add_splats_mcmc_tensor(
     DeviceVector<int32_t> bias_correction_steps,
     bool is_quantized_sh,
     int num_sh,
+    DeviceVector<float4> sh_quant_bounds,
+    bool sh_bounds_per_splat,
     uint32_t seed
 );
 
