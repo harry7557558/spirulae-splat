@@ -1493,19 +1493,33 @@ __global__ void distort_image_kernel(
     }
 }
 
+// TorchTensorView -> contiguous TensorView<float, 4> for [B, H, W, C] images.
+// Used by distort/undistort so the channel count is taken from the runtime shape
+// rather than baked into a DeviceTensor3D<float> carrier (which would reject C != 1).
+static TensorView<float, 4> _bhwc_view(const TorchTensorView& tv) {
+    const auto& s = std::get<2>(tv);
+    int64_t B = s[0], H = s[1], W = s[2], C = (s.size() >= 4 ? s[3] : 1);
+    TensorView<float, 4> v;
+    v.data = (float*)std::get<0>(tv);
+    v.shape[0] = B; v.shape[1] = H; v.shape[2] = W; v.shape[3] = C;
+    v.strides[0] = H*W*C; v.strides[1] = W*C; v.strides[2] = C; v.strides[3] = 1;
+    return v;
+}
+
 /*[AutoHeaderGeneratorExport]*/
 void distort_image_tensor(
     std::string camera_model,
     TorchTensorView intrins,            // [B, 4]
     TorchTensorView dist_coeffs,        // [B, 10]
-    DeviceTensor3D<float> in_image,     // [B, H, W, C]
-    DeviceTensor3D<float> out_image     // [B, H, W, C] (must be pre-zeroed)
+    TorchTensorView in_image,           // [B, H, W, C] float
+    TorchTensorView out_image           // [B, H, W, C] float (must be pre-zeroed)
 ) {
-    int b = in_image.size<0>(), h = in_image.size<1>(), w = in_image.size<2>();
+    const auto& s = std::get<2>(in_image);
+    int b = s[0], h = s[1], w = s[2];
 
     distort_image_kernel<false><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
         cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
-        _dt3d_to_tv4<float>(in_image), _dt3d_to_tv4<float>(out_image)
+        _bhwc_view(in_image), _bhwc_view(out_image)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
@@ -1515,14 +1529,15 @@ void undistort_image_tensor(
     std::string camera_model,
     TorchTensorView intrins,            // [B, 4]
     TorchTensorView dist_coeffs,        // [B, 10]
-    DeviceTensor3D<float> in_image,     // [B, H, W, C]
-    DeviceTensor3D<float> out_image     // [B, H, W, C] (must be pre-zeroed)
+    TorchTensorView in_image,           // [B, H, W, C] float
+    TorchTensorView out_image           // [B, H, W, C] float (must be pre-zeroed)
 ) {
-    int b = in_image.size<0>(), h = in_image.size<1>(), w = in_image.size<2>();
+    const auto& s = std::get<2>(in_image);
+    int b = s[0], h = s[1], w = s[2];
 
     distort_image_kernel<true><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
         cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
-        _dt3d_to_tv4<float>(in_image), _dt3d_to_tv4<float>(out_image)
+        _bhwc_view(in_image), _bhwc_view(out_image)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }

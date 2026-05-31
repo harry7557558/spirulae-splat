@@ -14,6 +14,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
+    const uint32_t num_sh_buffer,
     Vanilla3DGS<1>::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
@@ -67,6 +68,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
+    const uint32_t num_sh_buffer,
     Vanilla3DGS<1>::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
@@ -120,6 +122,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
+    const uint32_t num_sh_buffer,
     Vanilla3DGS<1>::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
@@ -173,6 +176,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
+    const uint32_t num_sh_buffer,
     Vanilla3DGS<1>::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
@@ -226,6 +230,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
+    const uint32_t num_sh_buffer,
     Vanilla3DGS<1>::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
@@ -279,6 +284,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
+    const uint32_t num_sh_buffer,
     Vanilla3DGS<1>::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy

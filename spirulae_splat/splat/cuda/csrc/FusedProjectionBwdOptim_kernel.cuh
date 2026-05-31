@@ -70,6 +70,7 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
+    const uint32_t num_sh_buffer,  // stride into sh_packed; may exceed template num_sh during SH warmup
     typename SplatPrimitive::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
@@ -363,7 +364,12 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
         // triple holds 2 bytes (u, sqrt_g2). The codec dequantizes and rebuilds
         // ordinary (g1, g2) so the Adam math below is unchanged.
         using SHQState = QuantizedAdamState<8, BLOCK_SIZE>;
-        const int64_t sh_base = (int64_t)3 * num_sh * gid;
+        // Index into the packed buffer must use the BUFFER's full SH stride
+        // (engine().num_sh = model max). The template `num_sh` here equals
+        // SplatPrimitive::num_sh(), which during SH warmup is capped at the
+        // runtime sh_degree_to_use and is strictly less than num_sh_buffer --
+        // using it as the stride would corrupt neighboring splats' bytes.
+        const int64_t sh_base = (int64_t)3 * (int64_t)num_sh_buffer * gid;
         uint8_t* sh_packed_rw = const_cast<uint8_t*>(sh_packed);
         float4 quant_bounds = sh_quant_bounds[blockIdx.x];
         float4 mm = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
@@ -463,6 +469,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
+    const uint32_t num_sh_buffer,
     typename SplatPrimitive::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
@@ -513,7 +520,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     > : fused_projection_bwd_optimizer_3dgs_kernel<
         SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean, 0
     >)<<<_CEIL_DIV(N, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(
-        C, N,
+        C, N, num_sh_buffer,
         splats_world, viewmats, intrins, dist_coeffs_buffer, image_width, image_height,
         camera_id_bounds, camera_ids, aabb,
         v_splats_world, vr_splats_world, h_splats_world, v_splats_screen, vr_splats_screen, h_splats_screen,

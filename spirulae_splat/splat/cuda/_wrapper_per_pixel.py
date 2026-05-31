@@ -487,7 +487,7 @@ class _DistortOrUndistortImage(torch.autograd.Function):
     def forward(
         ctx,
         is_undistort: Literal[True, False, "linear_depth", "points", "depth_scale_matrix"],
-        image: Tensor,  # [B, H, W, C]
+        image: Tensor,  # [B, H, W, C] or [B, K, H, W, C] depending on direction
         camera_model: Literal["pinhole", "fisheye"],
         intrins: Tensor,
         dist_coeffs: Optional[Tensor],  # [..., C, 10],
@@ -504,26 +504,59 @@ class _DistortOrUndistortImage(torch.autograd.Function):
             dist_coeffs = torch.tensor(dist_coeffs)[None].to(image).repeat(len(image), 1)
 
         camera_model_type = camera_model.upper()
+        image = image.contiguous()
+        intrins = intrins.contiguous()
+        dist_coeffs_c = dist_coeffs.contiguous() if dist_coeffs is not None else None
 
         if axes is not None:
-            return _make_lazy_cuda_func({
-               True: "warp_image_wide_to_pinhole",
-               False: "warp_image_pinhole_to_wide",
-               "linear_depth": "warp_linear_depth_pinhole_to_wide",
-               "ray_depth": "warp_ray_depth_pinhole_to_wide",
-               "points": "warp_points_pinhole_to_wide",
-               "depth_scale_matrix": "warp_depth_pinhole_to_wide_scale_matrix",
-            }[is_undistort])(
-                camera_model_type, intrins.contiguous(),
-                dist_coeffs.contiguous() if dist_coeffs is not None else None,
-                image.contiguous(), axes.contiguous(), width, height
+            axes = axes.contiguous()
+            K = axes.shape[0]
+            if is_undistort is True:
+                # wide [B, H, W, C] -> pinhole [B, K, height, width, C]
+                B, _, _, C = image.shape
+                out = torch.zeros((B, K, height, width, C), dtype=image.dtype, device=image.device)
+                _make_lazy_cuda_func("warp_image_wide_to_pinhole")(
+                    camera_model_type, _tv(intrins), _tv(dist_coeffs_c),
+                    _tv(image), _tv(axes), width, height, _tv(out)
+                )
+                return out
+            if is_undistort == "depth_scale_matrix":
+                # pinhole [B, K, h, w, 1] -> matrix [B, K, K]
+                B = image.shape[0]
+                out = torch.zeros((B, K, K), dtype=image.dtype, device=image.device)
+                _make_lazy_cuda_func("warp_depth_pinhole_to_wide_scale_matrix")(
+                    camera_model_type, _tv(intrins), _tv(dist_coeffs_c),
+                    _tv(image), _tv(axes), width, height, _tv(out)
+                )
+                return out
+            # pinhole [B, K, h, w, C] -> wide [B, height, width, C_out]
+            B = image.shape[0]
+            if is_undistort == "points":
+                C_out = 3
+                fn_name = "warp_points_pinhole_to_wide"
+            elif is_undistort == "linear_depth":
+                C_out = 1
+                fn_name = "warp_linear_depth_pinhole_to_wide"
+            elif is_undistort == "ray_depth":
+                C_out = 1
+                fn_name = "warp_ray_depth_pinhole_to_wide"
+            else:
+                C_out = image.shape[-1]
+                fn_name = "warp_image_pinhole_to_wide"
+            out = torch.zeros((B, height, width, C_out), dtype=image.dtype, device=image.device)
+            _make_lazy_cuda_func(fn_name)(
+                camera_model_type, _tv(intrins), _tv(dist_coeffs_c),
+                _tv(image), _tv(axes), width, height, _tv(out)
             )
+            return out
 
-        return _make_lazy_cuda_func("un"*int(is_undistort) + "distort_image")(
-            camera_model_type, intrins.contiguous(),
-            dist_coeffs.contiguous() if dist_coeffs is not None else None,
-            image.contiguous()
+        # distort / undistort: output shape == input shape
+        out = torch.zeros_like(image)
+        _make_lazy_cuda_func("un"*int(is_undistort) + "distort_image")(
+            camera_model_type, _tv(intrins), _tv(dist_coeffs_c),
+            _tv(image), _tv(out)
         )
+        return out
 
     @staticmethod
     def backward(ctx, v_out_image):

@@ -19,6 +19,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
+    const uint32_t num_sh_buffer,
     typename SplatPrimitive::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
@@ -89,6 +90,7 @@ template<
 inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     // fwd inputs
     const int64_t N,
+    const uint32_t num_sh_buffer,
     std::vector<DeviceTensorFloatND> splats_world,
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
@@ -179,7 +181,7 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     const int32_t* steps_ptr = steps.has_value() ? (const int32_t*)std::get<0>(steps.value()) : nullptr;
 
     #define _LAUNCH_ARGS ( \
-            (cudaStream_t)0, C, N, \
+            (cudaStream_t)0, C, N, num_sh_buffer, \
             splats_world, viewmats_ptr, intrins_ptr, dist_coeffs, \
             image_width, image_height, \
             packed ? camera_id_bounds.data_ptr() : nullptr, \
@@ -279,8 +281,15 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
     std::optional<TorchTensorView> steps_view = std::get_if<TorchTensorView>(&step) ?
         (std::optional<TorchTensorView>)std::get<TorchTensorView>(step) : std::nullopt;
 
+    // Buffer's actual SH coef count (3 * (buffer_sh_degree*(buffer_sh_degree+2))).
+    // The launch dispatch below caps the kernel's *template* sh degree at the
+    // runtime sh_degree_to_use; the packed SH-Adam buffer is sized for the
+    // model's max degree (engine().num_sh) and must be indexed with that
+    // stride regardless of warmup.
+    const int _buf_sh_deg = typename PrimT<0>::WorldBuffer(splats_world).sh_degree();
+    const uint32_t num_sh_buffer = (uint32_t)(_buf_sh_deg * (_buf_sh_deg + 2));
     #define _ARGS ( \
-        num_splats, \
+        num_splats, num_sh_buffer, \
         splats_world, \
         viewmats, \
         intrins, \

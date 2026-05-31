@@ -267,8 +267,8 @@ void distort_image_tensor(
     std::string camera_model,
     TorchTensorView intrins,            // [B, 4]
     TorchTensorView dist_coeffs,        // [B, 10]
-    DeviceTensor3D<float> in_image,     // [B, H, W, C]
-    DeviceTensor3D<float> out_image     // [B, H, W, C] (must be pre-zeroed)
+    TorchTensorView in_image,           // [B, H, W, C] float
+    TorchTensorView out_image           // [B, H, W, C] float (must be pre-zeroed)
 );
 
 
@@ -276,8 +276,8 @@ void undistort_image_tensor(
     std::string camera_model,
     TorchTensorView intrins,            // [B, 4]
     TorchTensorView dist_coeffs,        // [B, 10]
-    DeviceTensor3D<float> in_image,     // [B, H, W, C]
-    DeviceTensor3D<float> out_image     // [B, H, W, C] (must be pre-zeroed)
+    TorchTensorView in_image,           // [B, H, W, C] float
+    TorchTensorView out_image           // [B, H, W, C] float (must be pre-zeroed)
 );
 
 

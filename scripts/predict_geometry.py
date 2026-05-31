@@ -339,6 +339,7 @@ def update_intrins(in_obj, out_obj):
             'OPENCV': "pinhole",
             'OPENCV_FISHEYE': "fisheye",
             'THIN_PRISM_FISHEYE': "fisheye",
+            'FISHEYE': "fisheye",
         }[in_obj['camera_model']]
     elif 'camera_model' not in out_obj:
         out_obj['camera_model'] = 'pinhole'
