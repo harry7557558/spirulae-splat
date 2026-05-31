@@ -29,29 +29,29 @@ from spirulae_splat.splat.cuda._wrapper_projection import add_gradient_component
 
 from spirulae_splat.modules.optimizer import OptimizerConfig
 
-try:
-    from fused_bilagrid import (
-        BilateralGrid,
-        BilateralGridPPISP,
-        BilateralGridLoglinear,
-        BilateralGridDepth,
-        BilateralGridNormal,
-        fused_bilagrid_sample,
-        fused_bilagrid_ppisp_sample,
-        fused_bilagrid_loglinear_sample,
-        fused_bilagrid_depth_sample,
-        fused_bilagrid_normal_sample,
-        total_variation_loss,
-        channel_mean
-    )
-    from fused_bilagrid import _C as fused_bilagrid_C
-except:
-    raise RuntimeError(
-        "\033[93m"
-        "You are likely using an incompatible version of fused_bilagrid. "
-        "Please install latest fused_bilagrid from https://github.com/harry7557558/fused-bilagrid, branch `dev`."
-        "\033[0m"
-    )
+# try:
+#     from fused_bilagrid import (
+#         BilateralGrid,
+#         BilateralGridPPISP,
+#         BilateralGridLoglinear,
+#         BilateralGridDepth,
+#         BilateralGridNormal,
+#         fused_bilagrid_sample,
+#         fused_bilagrid_ppisp_sample,
+#         fused_bilagrid_loglinear_sample,
+#         fused_bilagrid_depth_sample,
+#         fused_bilagrid_normal_sample,
+#         total_variation_loss,
+#         channel_mean
+#     )
+#     from fused_bilagrid import _C as fused_bilagrid_C
+# except:
+#     raise RuntimeError(
+#         "\033[93m"
+#         "You are likely using an incompatible version of fused_bilagrid. "
+#         "Please install latest fused_bilagrid from https://github.com/harry7557558/fused-bilagrid, branch `dev`."
+#         "\033[0m"
+#     )
 
 from typing import List, Optional, Literal, Any, Union
 
@@ -93,34 +93,34 @@ class _SoftDetach(torch.autograd.Function):
         return ctx.saved_tensors[0], None
 
 
-class _BilagridFusedRegularization(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, dummy: torch.Tensor, bilagrid: List):
-        ctx.set_materialize_grads(False)
-        ctx.bilagrid = bilagrid
-        assert ctx.bilagrid.grids.is_leaf
-        ctx.save_for_backward(dummy)
-        return (
-            fused_bilagrid_C.tv_loss_forward(ctx.bilagrid.grids),
-            fused_bilagrid_C.channel_mean_forward(ctx.bilagrid.grids)
-        )
+# class _BilagridFusedRegularization(torch.autograd.Function):
+#     @staticmethod
+#     def forward(ctx, dummy: torch.Tensor, bilagrid: List):
+#         ctx.set_materialize_grads(False)
+#         ctx.bilagrid = bilagrid
+#         assert ctx.bilagrid.grids.is_leaf
+#         ctx.save_for_backward(dummy)
+#         return (
+#             fused_bilagrid_C.tv_loss_forward(ctx.bilagrid.grids),
+#             fused_bilagrid_C.channel_mean_forward(ctx.bilagrid.grids)
+#         )
 
-    @staticmethod
-    def backward(ctx, v_tv_loss, v_channel_mean):
-        """Accumulate gradient in place"""
-        bilagrid = ctx.bilagrid
-        (dummy,) = ctx.saved_tensors
-        if v_tv_loss is not None:
-            if bilagrid.grids.grad is None:
-                bilagrid.grids.grad = fused_bilagrid_C.tv_loss_backward(bilagrid.grids, v_tv_loss.contiguous())
-            else:
-                fused_bilagrid_C.tv_loss_backward_inplace(bilagrid.grids, v_tv_loss.contiguous(), bilagrid.grids.grad)
-        if v_channel_mean is not None:
-            if bilagrid.grids.grad is None:
-                bilagrid.grids.grad = fused_bilagrid_C.channel_mean_backward(bilagrid.grids, v_channel_mean.contiguous())
-            else:
-                fused_bilagrid_C.channel_mean_backward_inplace(bilagrid.grids, v_channel_mean.contiguous(), bilagrid.grids.grad)
-        return dummy, None, None
+#     @staticmethod
+#     def backward(ctx, v_tv_loss, v_channel_mean):
+#         """Accumulate gradient in place"""
+#         bilagrid = ctx.bilagrid
+#         (dummy,) = ctx.saved_tensors
+#         if v_tv_loss is not None:
+#             if bilagrid.grids.grad is None:
+#                 bilagrid.grids.grad = fused_bilagrid_C.tv_loss_backward(bilagrid.grids, v_tv_loss.contiguous())
+#             else:
+#                 fused_bilagrid_C.tv_loss_backward_inplace(bilagrid.grids, v_tv_loss.contiguous(), bilagrid.grids.grad)
+#         if v_channel_mean is not None:
+#             if bilagrid.grids.grad is None:
+#                 bilagrid.grids.grad = fused_bilagrid_C.channel_mean_backward(bilagrid.grids, v_channel_mean.contiguous())
+#             else:
+#                 fused_bilagrid_C.channel_mean_backward_inplace(bilagrid.grids, v_channel_mean.contiguous(), bilagrid.grids.grad)
+#         return dummy, None, None
 
 
 def _tv(tensor: torch.Tensor):
@@ -301,6 +301,7 @@ DEFAULT_PPISP_PARAMS_RQS = [
 class SplatTrainingLosses:
 
     def __init__(self, config: 'spirulae_splat.modules.model.SpirulaeModelConfig', num_training_data):
+        raise NotImplementedError()
 
         self.step = 0
         self.config = config
@@ -377,50 +378,50 @@ class SplatTrainingLosses:
             image = image.float()
         return image
 
-    def apply_bilateral_grid(
-            self,
-            bilagrid: Union[BilateralGrid, BilateralGridDepth, BilateralGridNormal, BilateralGridLoglinear, BilateralGridPPISP],
-            rgb: torch.Tensor,
-            cam_idx: int,
-            bilagrid_type: Optional[str] = None,
-            **kwargs
-        ) -> torch.Tensor:
-        """rgb must be clamped to 0-1"""
-        try:
-            grid_idx = cam_idx
-            if isinstance(grid_idx, int):
-                assert False
-                grid_idx = torch.tensor(grid_idx, device=rgb.device, dtype=torch.long).flatten()
-            grids = bilagrid.grids[grid_idx]
-            if self.config.optimize_bilagrid_frequencies:
-                raise NotImplementedError()
-                grids = Dct3D.apply(grids)
-            out = {
-                'affine': fused_bilagrid_sample,
-                'ppisp': fused_bilagrid_ppisp_sample,
-                'loglinear': fused_bilagrid_loglinear_sample,
-                'depth': fused_bilagrid_depth_sample,
-                'normal': fused_bilagrid_normal_sample,
-            }[self.config.bilagrid_type if bilagrid_type is None else bilagrid_type](
-                grids, None, rgb.unsqueeze(1),
-                actual_width=kwargs.get('width', None),
-                actual_height=kwargs.get('height', None),
-                patch_offsets=kwargs.get('patch_offsets', None),
-            ).squeeze(1)
-        except TypeError:
-            raise RuntimeError(
-                "\033[93m"
-                "You are likely using an incompatible version of fused_bilagrid. "
-                "Please install latest fused_bilagrid from https://github.com/harry7557558/fused-bilagrid, branch `dev`."
-                "\033[0m"
-            )
-        # if (self.step+1) % 100 == 0 and grids.shape[1] == 9:
-        #     import matplotlib.pyplot as plt
-        #     print(grids.shape)
-        #     print(torch.std(grids))
-        #     plt.imshow(out[0].detach().cpu().numpy())
-        #     plt.show()
-        return out
+    # def apply_bilateral_grid(
+    #         self,
+    #         bilagrid: Union[BilateralGrid, BilateralGridDepth, BilateralGridNormal, BilateralGridLoglinear, BilateralGridPPISP],
+    #         rgb: torch.Tensor,
+    #         cam_idx: int,
+    #         bilagrid_type: Optional[str] = None,
+    #         **kwargs
+    #     ) -> torch.Tensor:
+    #     """rgb must be clamped to 0-1"""
+    #     try:
+    #         grid_idx = cam_idx
+    #         if isinstance(grid_idx, int):
+    #             assert False
+    #             grid_idx = torch.tensor(grid_idx, device=rgb.device, dtype=torch.long).flatten()
+    #         grids = bilagrid.grids[grid_idx]
+    #         if self.config.optimize_bilagrid_frequencies:
+    #             raise NotImplementedError()
+    #             grids = Dct3D.apply(grids)
+    #         out = {
+    #             'affine': fused_bilagrid_sample,
+    #             'ppisp': fused_bilagrid_ppisp_sample,
+    #             'loglinear': fused_bilagrid_loglinear_sample,
+    #             'depth': fused_bilagrid_depth_sample,
+    #             'normal': fused_bilagrid_normal_sample,
+    #         }[self.config.bilagrid_type if bilagrid_type is None else bilagrid_type](
+    #             grids, None, rgb.unsqueeze(1),
+    #             actual_width=kwargs.get('width', None),
+    #             actual_height=kwargs.get('height', None),
+    #             patch_offsets=kwargs.get('patch_offsets', None),
+    #         ).squeeze(1)
+    #     except TypeError:
+    #         raise RuntimeError(
+    #             "\033[93m"
+    #             "You are likely using an incompatible version of fused_bilagrid. "
+    #             "Please install latest fused_bilagrid from https://github.com/harry7557558/fused-bilagrid, branch `dev`."
+    #             "\033[0m"
+    #         )
+    #     # if (self.step+1) % 100 == 0 and grids.shape[1] == 9:
+    #     #     import matplotlib.pyplot as plt
+    #     #     print(grids.shape)
+    #     #     print(torch.std(grids))
+    #     #     plt.imshow(out[0].detach().cpu().numpy())
+    #     #     plt.show()
+    #     return out
 
     @staticmethod
     def get_visibility_masks(batch, device=torch.device("cuda")):
@@ -947,6 +948,7 @@ class SplatTrainingLosses:
     # def get_static_losses(self, step: int, gauss_quats, gauss_scales, gauss_opacities, loss_dict, backward_info: Optional[dict] = None):
     def get_static_losses(self, step: int):
         """Separately process losses that are not dependent on images"""
+        raise NotImplementedError()
         self.step = step
 
         loss_dict = {}

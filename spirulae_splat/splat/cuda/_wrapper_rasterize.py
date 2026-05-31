@@ -295,6 +295,7 @@ class _RasterizeToPixels3DGUT(_ManualFunction):
         ) = _make_lazy_cuda_func(
             "rasterization_3dgut_forward"
         )(
+            int(means.shape[-2]),  # num_splats (= cur_num_splats); see RasterizationBwd.cu fix
             (means, quats, depths, proj_scales, proj_opacities, colors),
             backward_info.get('gaussian_ids', None),
             viewmats, intrins, camera_model, dist_coeffs,

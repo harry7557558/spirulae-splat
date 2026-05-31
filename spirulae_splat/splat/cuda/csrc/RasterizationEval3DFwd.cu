@@ -42,6 +42,7 @@ void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
 template <typename SplatPrimitive, bool output_distortion>
 inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     // Gaussian parameters
+    int64_t num_splats,  // = cur_num_splats; non-packed projection layout stride
     typename SplatPrimitive::WorldBuffer splats_w,
     typename SplatPrimitive::ScreenBuffer splats_s,
     DeviceVector<int32_t> gaussian_ids,
@@ -62,7 +63,9 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     RenderOutput::Tensor renders2,
     RenderOutput::Tensor distortions
 ) {
-    uint32_t N = gaussian_ids.data_ptr() ? 0 : splats_w.size(); // number of gaussians
+    // splats_w.size() returns max_num_splats (pre-allocated); the projection
+    // layout uses cur_num_splats per camera stride. See RasterizationBwd.cu.
+    uint32_t N = gaussian_ids.data_ptr() ? 0 : (uint32_t)num_splats;
     uint32_t I = transmittances.size<0>();  // number of images
     uint32_t tile_height = tile_offsets.size<1>();
     uint32_t tile_width = tile_offsets.size<2>();
@@ -109,6 +112,7 @@ inline std::tuple<
     RenderOutput::TensorTuple  // distortions, optional
 > rasterize_to_pixels_eval3d_fwd_tensor(
     // Gaussian parameters
+    int64_t num_splats,  // = cur_num_splats
     std::vector<DeviceTensorFloatND> splats_w,
     std::vector<DeviceTensorFloatND> splats_s,
     DeviceVector<int32_t> gaussian_ids,
@@ -141,6 +145,7 @@ inline std::tuple<
     render_last_ids.resize("render.last_ids", batch, image_height, image_width);
 
     launch_rasterize_to_pixels_eval3d_fwd_kernel<SplatPrimitive, output_distortion>(
+        num_splats,
         splats_w, splats_s, gaussian_ids,
         viewmats, intrins, camera_model, dist_coeffs,
         image_width, image_height, tile_offsets, flatten_ids,
@@ -168,6 +173,7 @@ std::tuple<
     RenderOutput::TensorTuple  // distortions, optional
 > rasterize_to_pixels_3dgut_fwd(
     // Gaussian parameters
+    int64_t num_splats,
     std::vector<DeviceTensorFloatND> splats_w,
     std::vector<DeviceTensorFloatND> splats_s,
     DeviceVector<int32_t> gaussian_ids,
@@ -187,6 +193,7 @@ std::tuple<
         rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT<0>, true> :
         rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT<0>, false>
     )(
+        num_splats,
         splats_w, splats_s, gaussian_ids,
         viewmats, intrins, cmt(camera_model), dist_coeffs,
         image_width, image_height,

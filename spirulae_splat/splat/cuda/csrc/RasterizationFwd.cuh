@@ -27,6 +27,7 @@ std::tuple<
     RenderOutput::TensorTuple  // distortions, optional
 > rasterize_to_pixels_3dgs_fwd(
     // Gaussian parameters
+    int64_t num_splats,
     std::vector<DeviceTensorFloatND> splats_w,
     std::vector<DeviceTensorFloatND> splats_s,
     DeviceVector<int32_t> gaussian_ids,
@@ -48,6 +49,7 @@ std::tuple<
     RenderOutput::TensorTuple  // distortions, optional
 > rasterize_to_pixels_mip_fwd(
     // Gaussian parameters
+    int64_t num_splats,
     std::vector<DeviceTensorFloatND> splats_w,
     std::vector<DeviceTensorFloatND> splats_s,
     DeviceVector<int32_t> gaussian_ids,

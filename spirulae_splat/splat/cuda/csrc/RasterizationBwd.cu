@@ -52,6 +52,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
 template <typename SplatPrimitive, bool output_distortion, bool output_hessian_diagonal, bool output_accum_weight>
 inline void launch_rasterize_to_pixels_bwd_kernel(
     // Gaussian parameters
+    int64_t num_splats,  // = cur_num_splats; non-packed projection layout stride
     const typename SplatPrimitive::WorldBuffer splat_wbuffer,
     const typename SplatPrimitive::ScreenBuffer splat_sbuffer,
     DeviceVector<int32_t> gaussian_ids,
@@ -81,7 +82,13 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
     typename SplatPrimitive::ScreenBuffer h_splat_sbuffer,
     DeviceTensor3D<float> o_accum_weight
 ) {
-    uint32_t N = gaussian_ids.data_ptr() ? 0 : splat_wbuffer.size();
+    // Use the runtime cur_num_splats for the non-packed stride. The forward
+    // splat buffers (splat_wbuffer) are pre-allocated to max_num_splats, but
+    // the projection kernel only writes the first cur_num_splats per camera;
+    // splat_sid = cid * cur_num_splats + gid in flatten_ids, so the modulo
+    // base must be cur_num_splats to recover gid (and keep o_accum_weight
+    // indices < cur_num_splats).
+    uint32_t N = gaussian_ids.data_ptr() ? 0 : (uint32_t)num_splats;
     uint32_t I = render_Ts.size<0>(); // number of images
     uint32_t tile_height = tile_offsets.size<1>();
     uint32_t tile_width = tile_offsets.size<2>();
@@ -179,6 +186,7 @@ inline std::tuple<
 
     launch_rasterize_to_pixels_bwd_kernel
     <SplatPrimitive, output_distortion, output_hessian_diagonal, output_accum_weight>(
+        num_splats,
         splats_w, splats_s, gaussian_ids,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs,
