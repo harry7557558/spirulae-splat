@@ -9,6 +9,7 @@
 
 
 extern void _engine_background_forward();
+extern void _engine_color_space_forward();
 
 
 void forward_3dgs(
@@ -189,6 +190,11 @@ void forward_3dgs(
     if (engine().background.enabled) {
         _engine_background_forward();
     }
+
+    // Linear / wide-gamut -> sRGB. Done AFTER the background blend so the
+    // blend operates in the splat working color space (matches Python
+    // forward order: render -> bg -> rgb_to_srgb -> bilagrid -> PPISP -> loss).
+    _engine_color_space_forward();
 
     // Results stay in pool — use engine_copy_render_to_host to fetch
 }

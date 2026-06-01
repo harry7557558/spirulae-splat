@@ -52,6 +52,15 @@ struct OptimConfig {
     // quantization is not yet supported by the fused path; the MVP allocates
     // full fp32 g1/g2 momentum (no `sh_quant_state`) in this mode.
     bool  use_fused_proj_bwd_optim        = false;
+
+    // Trust-region color-space Adam.  Mirrors the
+    // fused_adamtr_(linear_)rgb_(sh_)optim variants used in Python when
+    // splat_color_is_linear or splat_color_gamut is set: the DC and SH color
+    // updates are clipped to +/-kSh0*sqrt(4*eps_tr*c/opac) per step so the
+    // working-color-space update stays inside the model's confidence radius.
+    bool  use_color_trust_region          = false;
+    bool  color_is_linear                 = false;   // gradient gets divided by linear->sRGB Jacobian
+    float eps_tr                          = 1e-6f;
 };
 
 

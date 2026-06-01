@@ -271,7 +271,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("use_scale_agnostic_mean",        &OptimConfig::use_scale_agnostic_mean)
         .def_readwrite("quantize_sh",                    &OptimConfig::quantize_sh)
         .def_readwrite("use_per_splat_bias_correction",  &OptimConfig::use_per_splat_bias_correction)
-        .def_readwrite("use_fused_proj_bwd_optim",       &OptimConfig::use_fused_proj_bwd_optim);
+        .def_readwrite("use_fused_proj_bwd_optim",       &OptimConfig::use_fused_proj_bwd_optim)
+        .def_readwrite("use_color_trust_region",         &OptimConfig::use_color_trust_region)
+        .def_readwrite("color_is_linear",                &OptimConfig::color_is_linear)
+        .def_readwrite("eps_tr",                         &OptimConfig::eps_tr);
 
     py::class_<DensifyConfig>(m, "DensifyConfig")
         .def(py::init<>())
@@ -346,6 +349,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("engine_set_background_step_params", &engine_set_background_step_params);
     m.def("engine_background_optim_step", &engine_background_optim_step);
     m.def("engine_copy_background_to_host", &engine_copy_background_to_host);
+    m.def("engine_init_color_space", &engine_init_color_space);
     m.def("engine_save_checkpoint", &engine_save_checkpoint);
 
 #if 0

@@ -30,6 +30,7 @@
 
 #include <map>
 #include <string>
+#include <vector>
 
 
 // ============================================================
@@ -162,6 +163,25 @@ void engine_background_optim_step(int step, const BackgroundStepConfig& cfg);
 // Returns 1 on success, 0 if no engine background is active.
 int engine_copy_background_to_host(TorchTensorView out_image);
 
+// --- Linear / wide-gamut color space ---
+//
+// Configure linear / wide-gamut handling for both the splat (predicted) RGB
+// and the GT image color space. When enabled, the splat-side conversion
+// (linear or wide-gamut -> sRGB) runs at the end of every forward, and is
+// inverted through the vjp on the loss-side gradient before raster bwd. The
+// image-side conversion (same direction) runs once per upload in
+// set_training_data. Pass row-major 3x3 source->Rec.709 matrices (matches
+// get_color_transform_matrix in Python). Pass empty matrices when the
+// corresponding side is not enabled.
+void engine_init_color_space(
+    bool splat_enabled,
+    bool splat_is_linear,
+    std::vector<float> splat_color_matrix,    // [9], row-major
+    bool image_enabled,
+    bool image_is_linear,
+    std::vector<float> image_color_matrix     // [9], row-major
+);
+
 // --- Densification step ---
 
 // Returns: number of splats added (0 if no densification this step)
@@ -202,10 +222,16 @@ void engine_debug_forward(
 void engine_copy_accum_buffer(TorchTensorView dst);
 int64_t engine_get_cur_num_splats();
 
+// `out_rgb_raw` is the pre-color-space-conversion render (linear / wide-gamut)
+// stashed by the color-space forward hook. Null OK; when the engine has no
+// color space configured, `out_rgb` already holds the same values so the
+// caller can pass null. When the engine has a color space, `out_rgb` is the
+// sRGB post-conversion render and `out_rgb_raw` is the working-space version.
 void engine_copy_render_to_host(
-    TorchTensorView out_rgb,    // [C, H, W, 3] float32, CPU
-    TorchTensorView out_depth,  // [C, H, W, 1] float32, CPU
-    TorchTensorView out_Ts      // [C, H, W, 1] float32, CPU
+    TorchTensorView out_rgb,      // [C, H, W, 3] float32, CPU
+    TorchTensorView out_depth,    // [C, H, W, 1] float32, CPU
+    TorchTensorView out_Ts,       // [C, H, W, 1] float32, CPU
+    TorchTensorView out_rgb_raw   // [C, H, W, 3] float32, CPU, optional
 );
 
 void engine_copy_splats_to_host(

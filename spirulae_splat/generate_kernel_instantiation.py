@@ -278,29 +278,46 @@ def generate_ProjectionBwd():
 
 def generate_FusedProjectionBwdOptim():
     definition = extract_kernel_definition("FusedProjectionBwdOptim.cu", "fused_projection_bwd_optimizer_3dgs_kernel_wrapper")
-    map_header = ["typename SplatPrimitive", None, None, None]
-    map_body = [
-        *itertools.product(
-            [
-                "Vanilla3DGS<0>", "MipSplatting<0>", "Vanilla3DGUT<0>",
-                "Vanilla3DGS<1>", "MipSplatting<1>", "Vanilla3DGUT<1>",
-                "Vanilla3DGS<2>", "MipSplatting<2>", "Vanilla3DGUT<2>",
-                "Vanilla3DGS<3>", "MipSplatting<3>", "Vanilla3DGUT<3>",
-                "Vanilla3DGS<4>", "MipSplatting<4>", "Vanilla3DGUT<4>",
-            ],
-            ["ssplat::CameraModelType::PINHOLE", "ssplat::CameraModelType::FISHEYE", "ssplat::CameraModelType::EQUISOLID"],
-            # ["HessianDiagonalOutputMode::None", "HessianDiagonalOutputMode::Position", "HessianDiagonalOutputMode::AllReasonable"],
-            ["HessianDiagonalOutputMode::None"],
-            ["true", "false"],
-        )
+    # Six template args total: SplatPrimitive, camera_model,
+    # hessian_diagonal_output_mode, use_scale_agnostic_mean,
+    # use_color_trust_region, color_is_linear.
+    map_header = ["typename SplatPrimitive", None, None, None, None, None]
+    # Color-space combos: prune impossible (color_is_linear=true requires
+    # use_color_trust_region=true OR the linear-correction path is active,
+    # but the linear correction is also gated on color_is_linear). We keep:
+    #   (tr=F, lin=F): default, no color space
+    #   (tr=T, lin=F): wide-gamut + trust region
+    #   (tr=T, lin=T): linear + trust region (Python's
+    #                  fused_adamtr_linear_rgb_*_optim variants)
+    #   (tr=F, lin=T): linear gradient correction without TR clip (matches
+    #                  the legacy fused_adam_linear_rgb_optim variant)
+    color_combos = [("false", "false"), ("true", "false"),
+                    ("true",  "true"),  ("false", "true")]
+    primitives = [
+        "Vanilla3DGS<0>", "MipSplatting<0>", "Vanilla3DGUT<0>",
+        "Vanilla3DGS<1>", "MipSplatting<1>", "Vanilla3DGUT<1>",
+        "Vanilla3DGS<2>", "MipSplatting<2>", "Vanilla3DGUT<2>",
+        "Vanilla3DGS<3>", "MipSplatting<3>", "Vanilla3DGUT<3>",
+        "Vanilla3DGS<4>", "MipSplatting<4>", "Vanilla3DGUT<4>",
     ]
+    cams = ["ssplat::CameraModelType::PINHOLE",
+            "ssplat::CameraModelType::FISHEYE",
+            "ssplat::CameraModelType::EQUISOLID"]
+    map_body = [
+        (prim, cam, "HessianDiagonalOutputMode::None", sam, tr, lin)
+        for prim in primitives
+        for cam  in cams
+        for sam  in ("true", "false")
+        for (tr, lin) in color_combos
+    ]
+    # Per primitive: 3 cams * 2 sam * 4 color_combos = 24 instantiations. The
+    # `primitives` list interleaves [3DGS, Mip, 3DGUT] per SH degree, so each
+    # SH degree contributes 2*24 Primitive3DGS entries (3DGS+Mip share the
+    # base) followed by 24 Primitive3DGUT entries. 5 degrees -> 360 total.
     includes = [*(
-        [("Primitive3DGS.cuh", "FusedProjectionBwdOptim_kernel.cuh")] * 12 +
-        [("Primitive3DGUT.cuh", "FusedProjectionBwdOptim_kernel.cuh")] * 6
-    )] * 5 #+ \
-        # [("Primitive3DGUT_SV.cuh", "FusedProjectionBwdOptim_kernel.cuh")] * 14 + \
-        # [("PrimitiveOpaqueTriangle.cuh", "FusedProjectionBwdOptim_kernel.cuh")] * 2 + \
-        # [("PrimitiveVoxel.cuh", "FusedProjectionBwdOptim_kernel.cuh")] * 2
+        [("Primitive3DGS.cuh",   "FusedProjectionBwdOptim_kernel.cuh")] * 48 +
+        [("Primitive3DGUT.cuh",  "FusedProjectionBwdOptim_kernel.cuh")] * 24
+    )] * 5
 
     generate_kernel_instantiation("FusedProjectionBwdOptim", definition, map_header, map_body, includes)
 

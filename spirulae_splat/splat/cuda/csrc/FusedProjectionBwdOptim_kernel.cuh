@@ -13,6 +13,10 @@ namespace SlangPerSplatLosses {
 #include "generated/set_namespace.cuh"
 #include "generated/per_splat_losses.cuh"
 }
+namespace SlangPixelWise {
+#include "generated/set_namespace.cuh"
+#include "generated/pixel_wise.cuh"
+}
 
 #include "types.cuh"
 
@@ -59,6 +63,8 @@ template<
     ssplat::CameraModelType camera_model,
     HessianDiagonalOutputMode hessian_diagonal_output_mode,
     bool use_scale_agnostic_mean,
+    bool use_color_trust_region,
+    bool color_is_linear,
     int BLOCK_SIZE
 >
 #if 1
@@ -111,6 +117,7 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
+    const float eps_tr,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps
 ) {
@@ -323,10 +330,38 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
 
     // update features_dc
     if (inside) {
-        float3 g1_feature_dc = beta1 * g1_splats_world.features_dc(gid) + (1.f - beta1) * v_splat_world.features_dc;
-        float3 g2_feature_dc = beta2 * g2_splats_world.features_dc(gid) + (1.f - beta2) * v_splat_world.features_dc*v_splat_world.features_dc;
-        splats_world.features_dc(gid) = splat_world.features_dc - lr_features_dc * inv_bias_correction1
-            * g1_feature_dc / (sqrtf(g2_feature_dc * inv_bias_correction2) + eps);
+        float3 v_dc = v_splat_world.features_dc;
+        // Linear -> sRGB Jacobian inversion on the gradient: divides the
+        // working-color-space grad by d(sRGB)/d(linear) so the Adam update
+        // is computed in the linear domain (matches fused_adamtr_linear_rgb).
+        if constexpr (color_is_linear) {
+            v_dc.x /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * splat_world.features_dc.x + 0.5f);
+            v_dc.y /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * splat_world.features_dc.y + 0.5f);
+            v_dc.z /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * splat_world.features_dc.z + 0.5f);
+        }
+        float3 g1_feature_dc = beta1 * g1_splats_world.features_dc(gid) + (1.f - beta1) * v_dc;
+        float3 g2_feature_dc = beta2 * g2_splats_world.features_dc(gid) + (1.f - beta2) * v_dc*v_dc;
+        float3 denom = sqrtf(g2_feature_dc * inv_bias_correction2) + make_float3(eps);
+        float3 delta = make_float3(-lr_features_dc * inv_bias_correction1) * (g1_feature_dc / denom);
+
+        if constexpr (use_color_trust_region) {
+            // Trust-region clip in the working color space (matches
+            // fused_adamtr_rgb_optim_kernel). delta_max = kSh0*sqrt(4*eps_tr*c/opac).
+            float opac = sigmoid(splat_world.opacity);
+            float3 c = fmaxf(kSh0 * splat_world.features_dc + 0.5f, (1.0f/255.0f)*(1.0f/255.0f));
+            float inv_opac = 1.0f / fmaxf(opac, 1e-12f);
+            float3 clip = kSh0 * sqrtf(make_float3(
+                4.0f * eps_tr * c.x * inv_opac,
+                4.0f * eps_tr * c.y * inv_opac,
+                4.0f * eps_tr * c.z * inv_opac));
+            delta.x = fminf(fmaxf(delta.x, -clip.x), clip.x);
+            delta.y = fminf(fmaxf(delta.y, -clip.y), clip.y);
+            delta.z = fminf(fmaxf(delta.z, -clip.z), clip.z);
+            delta.x = isfinite(delta.x) ? delta.x : 0.0f;
+            delta.y = isfinite(delta.y) ? delta.y : 0.0f;
+            delta.z = isfinite(delta.z) ? delta.z : 0.0f;
+        }
+        splats_world.features_dc(gid) = splat_world.features_dc + delta;
         g1_splats_world.features_dc(gid) = g1_feature_dc;
         g2_splats_world.features_dc(gid) = g2_feature_dc;
     }
@@ -339,28 +374,68 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     float* sh_ptr = splats_world.features_sh(gid);
     const float reg_weight = sh_reg_weight * (1.0f / (float)num_sh);
 
+    // Per-channel DC color + clip radius for trust-region SH update (mirrors
+    // fused_adamtr_rgb_sh_optim_kernel). c_dc is unclamped (used for the
+    // linear->sRGB Jacobian inversion); c_dc_clamped is the clamped variant
+    // (used for the clip radius). Both are computed once per splat from DC.
+    float3 c_dc = make_float3(0.0f), c_dc_clamped = make_float3(0.0f);
+    float3 clip_dc = make_float3(0.0f);
+    if constexpr (use_color_trust_region || color_is_linear) {
+        if (inside) {
+            c_dc = kSh0 * splat_world.features_dc + 0.5f;
+            c_dc_clamped = fmaxf(c_dc, (1.0f/255.0f)*(1.0f/255.0f));
+        }
+    }
+    if constexpr (use_color_trust_region) {
+        if (inside) {
+            float opac = sigmoid(splat_world.opacity);
+            float inv_opac = 1.0f / fmaxf(opac, 1e-12f);
+            clip_dc = kSh0 * sqrtf(make_float3(
+                4.0f * eps_tr * c_dc_clamped.x * inv_opac,
+                4.0f * eps_tr * c_dc_clamped.y * inv_opac,
+                4.0f * eps_tr * c_dc_clamped.z * inv_opac));
+        }
+    }
+
     if constexpr (BLOCK_SIZE == 0) {
         if (!inside) return;
         float* g1_sh_ptr = g1_splats_world.features_sh(gid);
         float* g2_sh_ptr = g2_splats_world.features_sh(gid);
-        #pragma unroll
-        for (; i+3 < 3*num_sh; i += 4) {
-            float4 sh_coeff = float4{sh_ptr[i], sh_ptr[i+1], sh_ptr[i+2], sh_ptr[i+3]};
-            float4 v_sh_coeff = float4{v_sh_ptr[i], v_sh_ptr[i+1], v_sh_ptr[i+2], v_sh_ptr[i+3]} + reg_weight * sh_coeff;
-            float4 g1_feature_sh = beta1 * float4{g1_sh_ptr[i], g1_sh_ptr[i+1], g1_sh_ptr[i+2], g1_sh_ptr[i+3]} + (1.f - beta1) * v_sh_coeff;
-            float4 g2_feature_sh = beta2 * float4{g2_sh_ptr[i], g2_sh_ptr[i+1], g2_sh_ptr[i+2], g2_sh_ptr[i+3]} + (1.f - beta2) * v_sh_coeff*v_sh_coeff;
-            sh_coeff -= lr_sh * g1_feature_sh / (sqrtf(g2_feature_sh * inv_bias_correction2) + eps);
-            sh_ptr[i] = sh_coeff.x; sh_ptr[i+1] = sh_coeff.y; sh_ptr[i+2] = sh_coeff.z; sh_ptr[i+3] = sh_coeff.w;
-            g1_sh_ptr[i] = g1_feature_sh.x; g1_sh_ptr[i+1] = g1_feature_sh.y; g1_sh_ptr[i+2] = g1_feature_sh.z; g1_sh_ptr[i+3] = g1_feature_sh.w;
-            g2_sh_ptr[i] = g2_feature_sh.x; g2_sh_ptr[i+1] = g2_feature_sh.y; g2_sh_ptr[i+2] = g2_feature_sh.z; g2_sh_ptr[i+3] = g2_feature_sh.w;
+        // Skip the float4 fast path when color-space trust region is on
+        // (per-channel clip / linear correction breaks the lane-coupled fast
+        // path). The scalar loop below handles every i.
+        if constexpr (!use_color_trust_region && !color_is_linear) {
+            #pragma unroll
+            for (; i+3 < 3*num_sh; i += 4) {
+                float4 sh_coeff = float4{sh_ptr[i], sh_ptr[i+1], sh_ptr[i+2], sh_ptr[i+3]};
+                float4 v_sh_coeff = float4{v_sh_ptr[i], v_sh_ptr[i+1], v_sh_ptr[i+2], v_sh_ptr[i+3]} + reg_weight * sh_coeff;
+                float4 g1_feature_sh = beta1 * float4{g1_sh_ptr[i], g1_sh_ptr[i+1], g1_sh_ptr[i+2], g1_sh_ptr[i+3]} + (1.f - beta1) * v_sh_coeff;
+                float4 g2_feature_sh = beta2 * float4{g2_sh_ptr[i], g2_sh_ptr[i+1], g2_sh_ptr[i+2], g2_sh_ptr[i+3]} + (1.f - beta2) * v_sh_coeff*v_sh_coeff;
+                sh_coeff -= lr_sh * g1_feature_sh / (sqrtf(g2_feature_sh * inv_bias_correction2) + eps);
+                sh_ptr[i] = sh_coeff.x; sh_ptr[i+1] = sh_coeff.y; sh_ptr[i+2] = sh_coeff.z; sh_ptr[i+3] = sh_coeff.w;
+                g1_sh_ptr[i] = g1_feature_sh.x; g1_sh_ptr[i+1] = g1_feature_sh.y; g1_sh_ptr[i+2] = g1_feature_sh.z; g1_sh_ptr[i+3] = g1_feature_sh.w;
+                g2_sh_ptr[i] = g2_feature_sh.x; g2_sh_ptr[i+1] = g2_feature_sh.y; g2_sh_ptr[i+2] = g2_feature_sh.z; g2_sh_ptr[i+3] = g2_feature_sh.w;
+            }
         }
         #pragma unroll
         for (; i < 3*num_sh; ++i) {
             float sh_coeff = sh_ptr[i];
             float v_sh_coeff = v_sh_ptr[i] + reg_weight * sh_coeff;
+            // Channel index 0/1/2 within (band, channel) layout.
+            const int ch = i % 3;
+            const float c_ch = (ch == 0) ? c_dc.x : (ch == 1) ? c_dc.y : c_dc.z;
+            if constexpr (color_is_linear) {
+                v_sh_coeff /= SlangPixelWise::linear_rgb_to_srgb_grad(c_ch);
+            }
             float g1_feature_sh = beta1 * g1_sh_ptr[i] + (1.f - beta1) * v_sh_coeff;
             float g2_feature_sh = beta2 * g2_sh_ptr[i] + (1.f - beta2) * v_sh_coeff*v_sh_coeff;
-            sh_ptr[i] = sh_coeff - lr_sh * g1_feature_sh / (sqrtf(g2_feature_sh * inv_bias_correction2) + eps);
+            float delta = -lr_sh * g1_feature_sh / (sqrtf(g2_feature_sh * inv_bias_correction2) + eps);
+            if constexpr (use_color_trust_region) {
+                float clip = (ch == 0) ? clip_dc.x : (ch == 1) ? clip_dc.y : clip_dc.z;
+                delta = fminf(fmaxf(delta, -clip), clip);
+                delta = isfinite(delta) ? delta : 0.0f;
+            }
+            sh_ptr[i] = sh_coeff + delta;
             g1_sh_ptr[i] = g1_feature_sh;
             g2_sh_ptr[i] = g2_feature_sh;
         }
@@ -399,14 +474,32 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
                 v_sh_ptr[3*j+1] + reg_weight * sh_coeff.y,
                 v_sh_ptr[3*j+2] + reg_weight * sh_coeff.z
             );
+            // Linear -> sRGB Jacobian inversion on the per-channel grad
+            // (matches fused_adamtr_linear_rgb_sh_optim_kernel). c_dc is the
+            // DC color in [0, 1]; the divisor is d(sRGB)/d(linear) at that c.
+            if constexpr (color_is_linear) {
+                v_sh_coeff.x /= SlangPixelWise::linear_rgb_to_srgb_grad(c_dc.x);
+                v_sh_coeff.y /= SlangPixelWise::linear_rgb_to_srgb_grad(c_dc.y);
+                v_sh_coeff.z /= SlangPixelWise::linear_rgb_to_srgb_grad(c_dc.z);
+            }
             float3 g1_updated = beta1 * g1_feature_sh + (1.f - beta1) * v_sh_coeff;
             float3 g2_updated = beta2 * g2_feature_sh + (1.f - beta2) * make_float3(v_sh_coeff.x*v_sh_coeff.x, v_sh_coeff.y*v_sh_coeff.y, v_sh_coeff.z*v_sh_coeff.z);
             float3 denom = sqrtf(g2_updated * inv_bias_correction2) + make_float3(eps);
-            float3 sh_updated = make_float3(
-                sh_coeff.x - lr_sh * g1_updated.x / denom.x,
-                sh_coeff.y - lr_sh * g1_updated.y / denom.y,
-                sh_coeff.z - lr_sh * g1_updated.z / denom.z
+            float3 sh_delta = make_float3(
+                -lr_sh * g1_updated.x / denom.x,
+                -lr_sh * g1_updated.y / denom.y,
+                -lr_sh * g1_updated.z / denom.z
             );
+            if constexpr (use_color_trust_region) {
+                // Per-channel trust-region clip using the DC's clip radius.
+                sh_delta.x = fminf(fmaxf(sh_delta.x, -clip_dc.x), clip_dc.x);
+                sh_delta.y = fminf(fmaxf(sh_delta.y, -clip_dc.y), clip_dc.y);
+                sh_delta.z = fminf(fmaxf(sh_delta.z, -clip_dc.z), clip_dc.z);
+                sh_delta.x = isfinite(sh_delta.x) ? sh_delta.x : 0.0f;
+                sh_delta.y = isfinite(sh_delta.y) ? sh_delta.y : 0.0f;
+                sh_delta.z = isfinite(sh_delta.z) ? sh_delta.z : 0.0f;
+            }
+            float3 sh_updated = sh_coeff + sh_delta;
             sh_ptr[3*j] = sh_updated.x;
             sh_ptr[3*j+1] = sh_updated.y;
             sh_ptr[3*j+2] = sh_updated.z;
@@ -468,7 +561,9 @@ template<
     typename SplatPrimitive,
     ssplat::CameraModelType camera_model,
     HessianDiagonalOutputMode hessian_diagonal_output_mode,
-    const bool use_scale_agnostic_mean
+    const bool use_scale_agnostic_mean,
+    const bool use_color_trust_region,
+    const bool color_is_linear
 >
 void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     cudaStream_t stream,
@@ -516,6 +611,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
+    const float eps_tr,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps
 ) {
@@ -523,9 +619,11 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     constexpr int BLOCK_SIZE = 256;
 
     (use_quant ? fused_projection_bwd_optimizer_3dgs_kernel<
-        SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean, BLOCK_SIZE
+        SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean,
+        use_color_trust_region, color_is_linear, BLOCK_SIZE
     > : fused_projection_bwd_optimizer_3dgs_kernel<
-        SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean, 0
+        SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean,
+        use_color_trust_region, color_is_linear, 0
     >)<<<_CEIL_DIV(N, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(
         C, N, num_sh_buffer,
         splats_world, viewmats, intrins, dist_coeffs_buffer, image_width, image_height,
@@ -541,6 +639,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
         erank_reg_weight_s3 / (float)N,
         quat_norm_reg_weight / (float)N,
         2.0f * sh_reg_weight / (float)(3*N),
+        eps_tr,
         scalar_step, steps
     );
 }

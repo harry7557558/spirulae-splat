@@ -210,18 +210,26 @@ std::map<std::string, float> engine_compute_loss_backward(
             pixel_grads.v_ref_normal);
     }
 
+    // --- Color space backward hook ---
+    // Forward order is render -> bg -> rgb_to_srgb -> bilagrid -> PPISP ->
+    // loss, so the color space backward runs BETWEEN bilagrid bwd and the
+    // background bwd. It rewrites v_render_rgb (sRGB -> linear/wide-gamut)
+    // and restores engine().fwd.renders.rgb to the pre-conversion values
+    // so the background bwd consumes the right rgb. No-op when disabled.
+    if (engine().color_space.splat_enabled) {
+        _engine_color_space_backward_hook(pixel_grads.v_render_rgb);
+    }
+
     // --- Background blend backward hook ---
-    // Forward order is render -> background -> bilagrid -> PPISP -> loss, so
-    // background backward runs LAST (after PPISP+bilagrid hooks). It rewrites
-    // v_render_rgb (post-blend -> pre-blend) and ADDS the blend's
+    // Forward order is render -> background -> rgb_to_srgb -> bilagrid ->
+    // PPISP -> loss, so background backward runs after the color-space hook.
+    // It rewrites v_render_rgb (post-blend -> pre-blend) and ADDS the blend's
     // transmittance gradient into v_render_Ts before raster bwd consumes it.
     if (engine().background.enabled) {
         _engine_background_backward_hook(
             pixel_grads.v_render_rgb,
             pixel_grads.v_render_Ts);
     }
-
-    // TODO: color space conversion (rgb_to_srgb) forward/backward
 
     // Depth -> normal backward: propagate v_depth_normal grads into v_render_depth (in-place add)
     if (compute_depth_normal) {

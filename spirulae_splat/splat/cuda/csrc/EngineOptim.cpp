@@ -238,6 +238,9 @@ void engine_fused_proj_bwd_optim_step(int step, const OptimConfig& cfg) {
             cfg.erank_reg_weight, cfg.erank_reg_weight_s3,
             cfg.quat_norm_reg_weight, cfg.sh_reg_weight,
             cfg.use_scale_agnostic_mean,
+            cfg.use_color_trust_region,
+            cfg.color_is_linear,
+            cfg.eps_tr,
             step_arg
         );
     };
@@ -288,15 +291,38 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
         step + 1, per_splat_steps
     );
 
-    fused_adam_step(N,
-        DeviceTensorFloatND(engine().world.features_dc),
-        DeviceTensorFloatND(engine().grad.features_dc),
-        DeviceTensorFloatND(engine().optim.g1_features_dc),
-        DeviceTensorFloatND(engine().optim.g2_features_dc),
-        cfg.lr_features_dc, step + 1, per_splat_steps,
-        cfg.sh_reg_weight, 0.5f / 0.28209479177387814f);
+    // DC color: trust-region Adam when the splat works in a non-sRGB color
+    // space, otherwise plain fused Adam. The TR variants live in
+    // Optimizer.cu (fused_adamtr_(linear_)rgb_optim) and clip each step to
+    // +/-kSh0*sqrt(4*eps_tr*c/opac) so the working-color-space update stays
+    // inside the model's confidence radius.
+    if (cfg.use_color_trust_region) {
+        const int s1 = step + 1;
+        const float beta1 = 0.9f, beta2 = 0.999f, eps = 1e-15f;
+        (cfg.color_is_linear ? fused_adamtr_linear_rgb_optim : fused_adamtr_rgb_optim)(
+            _dv_tv(engine().world.features_dc),
+            _dv_tv(engine().grad.features_dc),
+            _dv_tv(engine().optim.g1_features_dc),
+            _dv_tv(engine().optim.g2_features_dc),
+            _dv_tv(engine().world.opacities),
+            cfg.lr_features_dc,
+            beta1, beta2, eps, cfg.eps_tr, s1
+        );
+    } else {
+        fused_adam_step(N,
+            DeviceTensorFloatND(engine().world.features_dc),
+            DeviceTensorFloatND(engine().grad.features_dc),
+            DeviceTensorFloatND(engine().optim.g1_features_dc),
+            DeviceTensorFloatND(engine().optim.g2_features_dc),
+            cfg.lr_features_dc, step + 1, per_splat_steps,
+            cfg.sh_reg_weight, 0.5f / 0.28209479177387814f);
+    }
 
     if (cfg.quantize_sh && engine().optim.sh_quant_state.initialized()) {
+        // SH-quant + TR is not supported by fused_adamtr_*_sh_optim (those
+        // kernels need fp32 g1/g2). Fall back to the plain 8-bit kernel.
+        // Document this as a limitation for callers; FPBO doesn't have this
+        // restriction because the FPBO kernel handles both internally.
         fused_adam_step_8bit(N,
             DeviceTensorFloatND(engine().world.features_sh),
             DeviceTensorFloatND(engine().grad.features_sh),
@@ -304,6 +330,19 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
             engine().optim.sh_quant_state.bounds_ptr(),
             cfg.lr_features_sh, step + 1, per_splat_steps,
             cfg.sh_reg_weight, 0.0f);
+    } else if (cfg.use_color_trust_region) {
+        const int s1 = step + 1;
+        const float beta1 = 0.9f, beta2 = 0.999f, eps = 1e-15f;
+        (cfg.color_is_linear ? fused_adamtr_linear_rgb_sh_optim : fused_adamtr_rgb_sh_optim)(
+            _dt2d_tv(engine().world.features_sh),
+            _dt2d_tv(engine().grad.features_sh),
+            _dt2d_tv(engine().optim.g1_features_sh),
+            _dt2d_tv(engine().optim.g2_features_sh),
+            _dv_tv(engine().world.features_dc),
+            _dv_tv(engine().world.opacities),
+            cfg.lr_features_sh,
+            beta1, beta2, eps, cfg.eps_tr, s1
+        );
     } else {
         fused_adam_step(N,
             DeviceTensorFloatND(engine().world.features_sh),

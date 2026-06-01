@@ -95,6 +95,11 @@ class Renderer:
         self.use_fused_proj_bwd_optim = use_fused_proj_bwd_optim
         self.quantize_sh_optim = quantize_sh_optim
 
+        # Set by engine_init_color_space; consulted by the forward path so it
+        # can skip allocating a separate rgb_raw host buffer when no color
+        # space is active. Default is False (no color space).
+        self._has_engine_color_space = False
+
         # Set by the trainer when train_frame != "normalized". Equal to
         # 1 / dataparser_scale_factor — how much bigger the training frame is
         # than the would-be normalized frame. Used to rescale means_lr,
@@ -180,10 +185,19 @@ class Renderer:
         rgb = torch.empty(C, H, W, 3, dtype=torch.float32)
         depth = torch.empty(C, H, W, 1, dtype=torch.float32)
         Ts = torch.empty(C, H, W, 1, dtype=torch.float32)
-        _C.engine_copy_render_to_host(self._tv(rgb), self._tv(depth), self._tv(Ts))
+        # rgb_raw: pre-color-space-conversion render (linear / wide-gamut).
+        # The C++ side writes into this buffer only when an engine color
+        # space is configured; otherwise leave rgb_raw aliased to rgb so we
+        # avoid a redundant D->H of the identical buffer.
+        rgb_raw = torch.empty(C, H, W, 3, dtype=torch.float32) \
+            if self._has_engine_color_space else rgb
+        _C.engine_copy_render_to_host(
+            self._tv(rgb), self._tv(depth), self._tv(Ts), self._tv(rgb_raw)
+        )
 
         self.render_colors = (rgb, depth)
         self.render_Ts = Ts
+        self.render_rgb_raw = rgb_raw
 
     def engine_debug_forward(self, override_features_dc=None, override_sh_degree=-1):
         """Re-render with custom features_dc and/or sh_degree for debugging.
@@ -248,6 +262,9 @@ class Renderer:
         c.quantize_sh                    = self.quantize_sh_optim
         c.use_per_splat_bias_correction  = optim_config.use_per_splat_bias_correction
         c.use_fused_proj_bwd_optim       = self.use_fused_proj_bwd_optim
+        c.color_is_linear = model_config.splat_color_is_linear
+        c.use_color_trust_region = model_config.splat_color_is_linear
+        c.eps_tr = 1e-6 * 0.01 ** (step / max_steps)  # TODO: make this configurable
         return c
 
     def _build_densify_config(self, model_config):
@@ -366,6 +383,26 @@ class Renderer:
 
     def engine_init_background_sh(self, sh_degree, splat_color_is_linear):
         _C.engine_init_background_sh(int(sh_degree), bool(splat_color_is_linear))
+
+    def engine_init_color_space(
+        self,
+        splat_enabled, splat_is_linear, splat_color_matrix,
+        image_enabled, image_is_linear, image_color_matrix,
+    ):
+        # Flatten to row-major float lists. Empty lists when the side is
+        # disabled — the C++ side ignores the matrix in that case.
+        def _flat(m):
+            if m is None: return []
+            t = m.detach().contiguous().cpu().float()
+            return t.flatten().tolist()
+        _C.engine_init_color_space(
+            bool(splat_enabled), bool(splat_is_linear), _flat(splat_color_matrix),
+            bool(image_enabled), bool(image_is_linear), _flat(image_color_matrix),
+        )
+        # Cached so the forward path can decide whether to allocate a
+        # separate rgb_raw host buffer (avoids a redundant D->H copy when
+        # the engine has no color space).
+        self._has_engine_color_space = bool(splat_enabled)
 
     @staticmethod
     def _build_background_step_config(lr_dc, lr_sh, randomize_weight, seed):

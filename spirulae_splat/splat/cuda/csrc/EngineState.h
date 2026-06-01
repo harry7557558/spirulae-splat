@@ -202,6 +202,26 @@ struct EngineBackground {
     float    cur_randomize_weight = 0.0f;
 };
 
+// Linear / wide-gamut color space conversion (mirrors training_losses.py).
+// Splat side: pred RGB (rendered in working color space) is converted to sRGB
+// before loss; the loss-side gradient is converted back through the vjp.
+// Image side: GT RGB is converted to sRGB once at upload time and kept that way.
+struct ColorSpaceState {
+    // Splat (per-frame fwd + bwd)
+    bool                   splat_enabled    = false;
+    bool                   splat_is_linear  = false;
+    DeviceTensor2D<float3> splat_color_matrix;   // [3, 3], stored as 3 float3 rows
+
+    // Image (one-shot at upload)
+    bool                   image_enabled    = false;
+    bool                   image_is_linear  = false;
+    DeviceTensor2D<float3> image_color_matrix;   // [3, 3], stored as 3 float3 rows
+
+    // Per-iter scratch: pre-conversion render kept for the backward vjp
+    // (rgb_to_srgb_backward consumes the linear / wide-gamut input).
+    DeviceTensor3D<float3> fwd_pre;
+};
+
 // PPISP (RGB-only photometric correction; applied AFTER bilagrid).
 struct PpispState {
     DeviceTensor2D<float>  params;
@@ -240,6 +260,7 @@ struct EngineState {
 
     EngineBackground background;
     PpispState       ppisp;
+    ColorSpaceState  color_space;
 };
 
 

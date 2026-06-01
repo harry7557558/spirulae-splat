@@ -27,7 +27,8 @@ int64_t engine_get_cur_num_splats() {
 void engine_copy_render_to_host(
     TorchTensorView out_rgb,
     TorchTensorView out_depth,
-    TorchTensorView out_Ts
+    TorchTensorView out_Ts,
+    TorchTensorView out_rgb_raw
 ) {
     auto& renders = engine().fwd.renders;
     auto& rgb = std::get<0>(renders);
@@ -43,6 +44,16 @@ void engine_copy_render_to_host(
     if (engine().fwd.render_Ts.data_ptr() && std::get<0>(out_Ts) != 0) {
         cudaMemcpy((void*)std::get<0>(out_Ts), engine().fwd.render_Ts.data_ptr(),
                    engine().fwd.render_Ts.numel() * sizeof(float), cudaMemcpyDeviceToHost);
+    }
+    // Pre-conversion (linear / wide-gamut) render is stashed by the color
+    // space forward hook into cs.fwd_pre. When the engine has no color
+    // space configured, fwd_pre is empty; the caller mirrors out_rgb to
+    // out_rgb_raw on the Python side to avoid a redundant D->H of the
+    // identical buffer.
+    auto& cs = engine().color_space;
+    if (std::get<0>(out_rgb_raw) != 0 && cs.fwd_pre.data_ptr() != nullptr) {
+        cudaMemcpy((void*)std::get<0>(out_rgb_raw), cs.fwd_pre.data_ptr(),
+                   cs.fwd_pre.numel() * sizeof(float3), cudaMemcpyDeviceToHost);
     }
 }
 

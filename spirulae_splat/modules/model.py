@@ -419,6 +419,23 @@ class SpirulaeSplatModel(torch.nn.Module):
             )
             self._engine_bg_mode = "sh"
 
+        # Engine-side linear / wide-gamut color space. The splat side (pred
+        # RGB) runs every forward and inverts through the vjp on the loss
+        # gradient before raster bwd. The image side (GT RGB) runs once per
+        # upload inside set_training_data. Either side disabled -> identity.
+        splat_cs_on  = bool(self.config.splat_color_is_linear) or (self.config.splat_color_gamut is not None)
+        image_cs_on  = bool(self.config.image_color_is_linear) or (self.config.image_color_gamut is not None)
+        splat_matrix = get_color_transform_matrix(self.config.splat_color_gamut) if splat_cs_on else None
+        image_matrix = get_color_transform_matrix(self.config.image_color_gamut) if image_cs_on else None
+        self.core.engine_init_color_space(
+            splat_enabled=splat_cs_on,
+            splat_is_linear=bool(self.config.splat_color_is_linear),
+            splat_color_matrix=splat_matrix,
+            image_enabled=image_cs_on,
+            image_is_linear=bool(self.config.image_color_is_linear),
+            image_color_matrix=image_matrix,
+        )
+
     def populate_modules(self):
         if self.seed_points is not None:
             if len(self.seed_points[0]) > self.config.cap_max:
@@ -1234,14 +1251,18 @@ class SpirulaeSplatModel(torch.nn.Module):
                 outputs["normal"] = 0.5+0.5*outputs["normal"]
             if "depth_normal" in outputs:
                 outputs["depth_normal"] = 0.5+0.5*outputs["depth_normal"]
-            if self.config.splat_color_is_linear or self.config.splat_color_gamut != None:
-                outputs["rgb_raw"] = outputs["rgb"]
-                for key in ['rgb', 'background']:
-                    if key not in outputs:
-                        continue
-                    if self.config.splat_color_is_linear or self.config.splat_color_gamut != None:
-                        color_matrix = get_color_transform_matrix(self.config.splat_color_gamut)
-                        outputs[key] = rgb_to_srgb(outputs[key], self.config.splat_color_is_linear, color_matrix).clip(0, 1)
+            # Color-space conversion (linear / wide-gamut -> sRGB) for the
+            # rendered RGB + skybox is done entirely on the C++ side:
+            # `outputs["rgb"]` comes from engine_copy_render_to_host which
+            # writes the sRGB post-conversion render; the pre-conversion
+            # render is in self.core.render_rgb_raw. `outputs["background"]`
+            # comes from engine_copy_background_to_host which also applies
+            # the conversion before D->H. We just clip & wire here.
+            if self.config.splat_color_is_linear or self.config.splat_color_gamut is not None:
+                outputs["rgb_raw"] = self.core.render_rgb_raw
+                outputs["rgb"] = outputs["rgb"].clip(0, 1)
+                if "background" in outputs:
+                    outputs["background"] = outputs["background"].clip(0, 1)
             for key in outputs:
                 outputs[key] = outputs[key].squeeze(0)
 
@@ -1411,12 +1432,11 @@ class SpirulaeSplatModel(torch.nn.Module):
             #   splat       : world params + grads + optim states (per-Gaussian)
             #   splat x img : projection outputs/gradients, tile intersection
             #   image       : image-space tensors (renders, GT copies, grads)
-            #   bilagrid    : appearance + geometry grids merged
-            #   ppisp       : per-camera photometric correction params
+            #   appearance  : appearance + geometry grids and ppisp merged
             #   other       : everything else (camera tables, tiny scratches)
             from spirulae_splat.splat.cuda import _C
             buckets = {'splat': 0.0, 'splat x img': 0.0, 'image': 0.0,
-                       'bilagrid': 0.0, 'ppisp': 0.0, 'other': 0.0}
+                       'appearance': 0.0, 'viewer': 0.0, 'other': 0.0}
             GiB = 1024 ** 3
             for key, _used, cap in _C.engine_get_pool_breakdown():
                 gib = cap / GiB
@@ -1424,6 +1444,7 @@ class SpirulaeSplatModel(torch.nn.Module):
                         or key.startswith('eng.v_') \
                         or key.startswith('eng.g1_') \
                         or key.startswith('eng.g2_') \
+                        or key.startswith('eng.sh_quant_') \
                         or key in ('eng.radii', 'eng.accum_buffer',
                                    'eng.bias_correction_steps',
                                    'eng.quant_bounds_sh'):
@@ -1434,16 +1455,18 @@ class SpirulaeSplatModel(torch.nn.Module):
                         or key.startswith('fused_proj_bwd.') \
                         or key.startswith('raster_bwd.'):
                     buckets['splat x img'] += gib
-                elif key.startswith('render.') \
+                elif key.startswith('render.') or key.startswith('renders.') \
                         or key in ('eng.v_rgb', 'eng.v_depth', 'eng.v_Ts',
                                    'eng.v_depth_normal', 'eng.v_ref_depth',
                                    'eng.v_ref_normal',
-                                   'eng.depth_normal', 'eng.loss_map'):
+                                   'eng.depth_normal', 'eng.loss_map',
+                                   'eng.bg_sky.v_Ts_scratch',
+                                   'gt.rgb', 'gt.normal', 'gt.staging_u8'):
                     buckets['image'] += gib
-                elif key.startswith('eng.bg.'):
-                    buckets['bilagrid'] += gib
-                elif key.startswith('eng.ppisp.'):
-                    buckets['ppisp'] += gib
+                elif key.startswith('eng.bg.') or key.startswith('eng.ppisp.'):
+                    buckets['appearance'] += gib
+                elif key.startswith('vis.'):
+                    buckets['viewer'] += gib
                 else:
                     buckets['other'] += gib
             # DeviceScratch (workspace for cub::DeviceRadixSort etc.) is part
@@ -1454,8 +1477,8 @@ class SpirulaeSplatModel(torch.nn.Module):
             self.training_verboser.add_metric('splat_vram', buckets['splat'], last_only=True)
             self.training_verboser.add_metric('image_vram', buckets['image'], last_only=True)
             self.training_verboser.add_metric('splat_x_image_vram', buckets['splat x img'], last_only=True)
-            self.training_verboser.add_metric('bilagrid_vram', buckets['bilagrid'], last_only=True)
-            self.training_verboser.add_metric('ppisp_vram', buckets['ppisp'], last_only=True)
+            self.training_verboser.add_metric('appearance_vram', buckets['appearance'], last_only=True)
+            self.training_verboser.add_metric('viewer_vram', buckets['viewer'], last_only=True)
             self.training_verboser.add_metric('other_vram', buckets['other'], last_only=True)
 
         self.training_verboser.verbose(self.step, self.trainer_config.num_iterations)

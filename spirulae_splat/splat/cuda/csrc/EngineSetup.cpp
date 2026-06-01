@@ -98,4 +98,9 @@ void set_training_data(
     engine().gt.alpha  = _hv_to_dt3d<bool>("gt.alpha", gt_alpha);
     engine().gt.has_gt    = (std::get<0>(gt_rgb) != 0);
     engine().gt.has_mask  = (std::get<0>(gt_alpha) != 0);
+
+    // Apply image-side color space conversion (linear / wide-gamut -> sRGB)
+    // in place on the freshly uploaded GT. No-op when no image color space
+    // was configured.
+    _engine_color_space_apply_to_gt();
 }

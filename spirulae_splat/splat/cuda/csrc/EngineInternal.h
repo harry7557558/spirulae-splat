@@ -84,6 +84,16 @@ void _engine_background_backward_hook(
     TorchTensorView v_render_rgb,
     TorchTensorView v_render_Ts);
 
+// Color space (linear / wide-gamut): apply rgb_to_srgb_forward in-place on
+// the rendered RGB (called from forward_3dgs after the background blend);
+// no-op when no color space is configured. Backward: convert v_render_rgb
+// (post-sRGB -> pre-sRGB) through the vjp before raster bwd consumes it.
+void _engine_color_space_forward();
+void _engine_color_space_backward_hook(TorchTensorView v_render_rgb);
+// Apply image-side conversion in-place on engine().gt.rgb. Called from
+// set_training_data after the H->D upload.
+void _engine_color_space_apply_to_gt();
+
 // PPISP: backward hook + state setup + regularization-loss compute.
 void _engine_ppisp_backward_hook(TorchTensorView v_render_rgb);
 void _ensure_ppisp_optim_state();

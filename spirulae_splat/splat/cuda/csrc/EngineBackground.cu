@@ -373,14 +373,36 @@ int engine_copy_background_to_host(TorchTensorView out_image) {
     if (std::get<0>(out_image) == 0) return 0;
     size_t nbytes = (size_t)C_batch * H * W * sizeof(float3);
 
+    auto& cs = engine().color_space;
+
     if (bg.mode == EngineBackground::Mode::Sh) {
         if (bg.fwd_background.data_ptr() == nullptr) return 0;
-        cudaMemcpy((void*)std::get<0>(out_image), bg.fwd_background.data_ptr(),
-                   nbytes, cudaMemcpyDeviceToHost);
+
+        // When the splat works in a non-sRGB color space, the SH-rendered
+        // skybox is in that working color space. Convert through a scratch
+        // device buffer so the host gets sRGB without mutating fwd_background.
+        const float3* src = bg.fwd_background.data_ptr();
+        if (cs.splat_enabled) {
+            float3* scratch = DevicePool::global().acquire<float3>(
+                "color_space.bg_srgb", (size_t)C_batch * H * W);
+            DeviceTensor3D<float3> in_view(TorchTensorView(
+                (uint64_t)src, 4,
+                {(int64_t)C_batch, (int64_t)H, (int64_t)W, 3LL}));
+            DeviceTensor3D<float3> out_view(TorchTensorView(
+                (uint64_t)scratch, 4,
+                {(int64_t)C_batch, (int64_t)H, (int64_t)W, 3LL}));
+            rgb_to_srgb_forward(cs.splat_is_linear, in_view,
+                                cs.splat_color_matrix, out_view);
+            src = scratch;
+        }
+        cudaMemcpy((void*)std::get<0>(out_image), src, nbytes,
+                   cudaMemcpyDeviceToHost);
         return 1;
     }
 
-    // Noise mode: pre-fill host buffer with the mean blend color.
+    // Noise mode: pre-fill host buffer with the mean blend color. When the
+    // color space is configured we still return a uniform mid-gray; the host
+    // value here is what shows up under regions blended toward random noise.
     float* h = (float*)std::get<0>(out_image);
     float fill = bg.splat_color_is_linear
         ? 0.21404114048223255f   // srgb_to_linear(0.5)
