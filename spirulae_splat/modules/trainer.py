@@ -170,6 +170,14 @@ class Trainer:
         self,
         config: TrainerConfig
     ):
+        # Wipe any C++ EngineState left over from a prior Trainer in this
+        # process (e.g. ss_benchmark looping over scenes). Without this the
+        # next scene reuses the previous scene's world splats / camera table /
+        # bilagrid / PPISP / background / color-space state and silently
+        # produces wrong metrics and broken renders.
+        from spirulae_splat.modules.core import engine_reset
+        engine_reset()
+
         self.config = config
         self.dataparser = SpirulaeSplatDataparser(config.dataparser, config.data)
         self.dataparser_outputs_train, self.dataparser_outputs_eval = self.dataparser.parse()

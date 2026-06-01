@@ -24,6 +24,15 @@ from spirulae_splat.splat.cuda import (
 from spirulae_splat.modules.optimizer import OptimizerConfig
 
 
+def engine_reset():
+    """Wipe the C++ EngineState singleton and free all engine-pool / scratch
+    VRAM. Must be called when swapping training datasets in the same Python
+    process (e.g. ss_benchmark looping over scenes); without it the new run
+    inherits the previous run's world splats, camera table, bilagrid / PPISP /
+    background config, optimizer moments, and color-space matrices."""
+    _C.engine_reset()
+
+
 class Renderer:
 
     def __init__(

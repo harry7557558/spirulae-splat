@@ -37,6 +37,16 @@
 // Engine API — not auto-generated; manually maintained
 // ============================================================
 
+// --- Lifecycle ---
+//
+// Reset the EngineState singleton to a freshly-constructed state and free all
+// device memory owned by the global pool + scratch buffer. Must be called
+// between training runs that swap datasets (e.g. ss_benchmark looping over
+// scenes) — without it the new run inherits the previous run's world splats,
+// camera table, bilagrid / PPISP / background config, optimizer moments, and
+// color-space matrices, which produces broken renders and wrong metrics.
+void engine_reset();
+
 // --- Setup ---
 
 void set_data_3dgs(

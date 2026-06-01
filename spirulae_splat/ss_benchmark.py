@@ -2,8 +2,17 @@ import threading
 import asyncio
 
 from spirulae_splat.modules.trainer import *
+from spirulae_splat.splat.cuda import _C
 from typing import Union, Annotated, Literal
 import json
+
+
+def _engine_vram_bytes():
+    """Engine-side VRAM total: sum of pool slot capacities + scratch capacity.
+    Pool capacities grow monotonically (high-water-mark), so reading after the
+    train loop yields the peak training-time engine VRAM."""
+    pool_total = sum(cap for _, _, cap in _C.engine_get_pool_breakdown())
+    return pool_total + _C.engine_get_scratch_bytes()
 
 
 # Mip-NeRF 360 download command
@@ -77,10 +86,8 @@ def bench_360_v2(config_class, path_to_360_v2: Path):
         try:
             trainer = Trainer(config)
             time0 = perf_counter()
-            torch.cuda.reset_peak_memory_stats()
             trainer.train()
-            peak_allocated = torch.cuda.max_memory_allocated(device=None)
-            peak_reserved = torch.cuda.max_memory_reserved(device=None)
+            engine_vram = _engine_vram_bytes()
             time1 = perf_counter()
             trainer.eval()
         except:
@@ -92,8 +99,7 @@ def bench_360_v2(config_class, path_to_360_v2: Path):
         with open(trainer.output_dir / "metrics.json", "r") as fp:
             metrics = json.load(fp)
         metrics['training_time'] = time1-time0
-        metrics['peak_allocated'] = peak_allocated / 1024**2
-        metrics['peak_reserved'] = peak_reserved / 1024**2
+        metrics['engine_vram'] = engine_vram / 1024**2
         all_metrics.append((scene, metrics))
 
         del trainer
@@ -141,10 +147,8 @@ def bench_zipnerf(config_class, path_to_zipnerf: Path):
         try:
             trainer = Trainer(config)
             time0 = perf_counter()
-            torch.cuda.reset_peak_memory_stats()
             trainer.train()
-            peak_allocated = torch.cuda.max_memory_allocated(device=None)
-            peak_reserved = torch.cuda.max_memory_reserved(device=None)
+            engine_vram = _engine_vram_bytes()
             time1 = perf_counter()
             trainer.eval()
         except:
@@ -156,8 +160,7 @@ def bench_zipnerf(config_class, path_to_zipnerf: Path):
         with open(trainer.output_dir / "metrics.json", "r") as fp:
             metrics = json.load(fp)
         metrics['training_time'] = time1-time0
-        metrics['peak_allocated'] = peak_allocated / 1024**2
-        metrics['peak_reserved'] = peak_reserved / 1024**2
+        metrics['engine_vram'] = engine_vram / 1024**2
         all_metrics.append((scene, metrics))
 
         del trainer

@@ -321,6 +321,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("background", &EngineStepConfig::background);
 
     // Engine.h - unified forward/backward/optimize
+    m.def("engine_reset", &engine_reset);
     m.def("set_data_3dgs", &set_data_3dgs);
     m.def("set_camera_params", &set_camera_params);
     m.def("set_training_data", &set_training_data);
