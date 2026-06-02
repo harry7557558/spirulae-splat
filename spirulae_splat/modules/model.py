@@ -145,19 +145,30 @@ class SpirulaeSplatModelConfig:
     """Minimum Gaussian opacity before relocation"""
     growth_factor: float = 1.05
     """Multiply number of splats by this number at each densification step"""
-    relocate_heuristic_weight: float = 1.0
-    """Weight of gradient used in sampling Gaussians to relocate/add to.
-        If 0.0, use only opacity; If 1.0, use other heuristics (see strategy/mcmc.py for details)."""
+    use_revised_densification: bool = True
+    """Whether to use revised densification instead of original MCMC."""
+    densify_score_mode: Literal["mean", "max", "median", "geom"] = "median"
+    """How to accumulate per-splat scores across iterations for densification.
+        "mean":   running mean of |w|.
+        "max":    running max of |w|.
+        "median": running median of |w| (approximation).
+        "geom":   running geometric mean of |w|."""
     use_edge_aware_score: bool = False
     """Whether to use edge aware score to guide densification.
         If True, it computes edge aware score following https://arxiv.org/abs/2603.08661
-        Note that this is only active when relocate_heuristic_weight is nonzero"""
+        Note that this is only active when use_revised_densification"""
     use_loss_map: bool = True
     """Whether to use loss map to guide densification.
-        Note that this is only active when relocate_heuristic_weight is nonzero."""
+        Note that this is only active when use_revised_densification."""
+    use_structure_only_loss_map: bool = True
+    """When True, the densification loss map is filled only from the SSIM
+        structure term (no per-pixel L1/L2 / auxiliary supervisory terms and
+        no SSIM luminance/contrast). Intended to bias densification toward
+        pattern/edge mismatches instead of brightness/contrast errors.
+        Affects loss_map only; training gradients and scalar losses unchanged."""
     use_long_axis_split: bool = True
     """whether to use long-axis split described in https://arxiv.org/abs/2508.12313 for relocation and sample add.
-        When combined with relocate_heuristic_weight=1.0, this can give less blurry background details for unbounded outdoor scenes."""
+        When combined with use_revised_densification, this can give less blurry background details for unbounded outdoor scenes."""
     relocate_screen_size: float = float('inf')
     """if a gaussian is more than this fraction of screen space, relocate it
         Useful for fisheye with 3DGUT, may drop PSNR for conventional cameras
@@ -1570,10 +1581,12 @@ class SpirulaeSplatModel(torch.nn.Module):
         w_ssim = cfg.ssim_lambda * (1.0 - cfg.lpips_lambda)
         num_loss_scales = cfg.num_loss_scales + 1
         compute_loss_map = cfg.use_loss_map or (cfg.compute_hessian_diagonal is not None)
+        structure_only_loss_map = cfg.use_structure_only_loss_map
 
         # --- Compute loss + backward via core (gradients managed by C++ pool) ---
         loss_dict = self.core.engine_compute_loss_backward(
-            step, loss_weights, w_ssim, num_loss_scales, compute_loss_map
+            step, loss_weights, w_ssim, num_loss_scales, compute_loss_map,
+            structure_only_loss_map
         )
 
         for key, value in loss_dict.items():
@@ -1700,6 +1713,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         w_ssim = cfg.ssim_lambda * (1.0 - cfg.lpips_lambda)
         num_loss_scales = cfg.num_loss_scales + 1
         compute_loss_map = cfg.use_loss_map or (cfg.compute_hessian_diagonal is not None)
+        structure_only_loss_map = cfg.use_structure_only_loss_map
 
         sh_degree_to_use = step // max(cfg.sh_degree_warmup_every, 1)
         max_steps = self.trainer_config.num_iterations
@@ -1790,6 +1804,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             viewmats, intrins, dist_coeffs,
             gt_rgb, gt_depth, gt_normal, gt_alpha,
             loss_weights, w_ssim, num_loss_scales, compute_loss_map,
+            structure_only_loss_map,
             self.config, self.trainer_config.optimizer,
             bilagrid_cam_indices=bilagrid_cam_indices,
             bilagrid_lr_rgb=bilagrid_lr_rgb,

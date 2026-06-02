@@ -223,8 +223,7 @@ class Renderer:
         N = _C.engine_get_cur_num_splats()
         buf = torch.zeros(N, 2, dtype=torch.float32)
         _C.engine_copy_accum_buffer(self._tv(buf))
-        weight = torch.where(buf[:, 1] != 0, buf[:, 0] / buf[:, 1], torch.zeros_like(buf[:, 0]))
-        return weight
+        return buf[:, 0]
 
     def engine_set_training_data(self, gt_rgb, gt_depth=None, gt_normal=None,
                                   gt_alpha=None):
@@ -234,11 +233,14 @@ class Renderer:
             self._tv(gt_rgb), self._tv(gt_depth), self._tv(gt_normal), self._tv(gt_alpha)
         )
 
-    def engine_compute_loss_backward(self, step, loss_weights, w_ssim, num_loss_scales, compute_loss_map):
+    def engine_compute_loss_backward(self, step, loss_weights, w_ssim,
+                                     num_loss_scales, compute_loss_map,
+                                     structure_only_loss_map):
         """Compute loss + rasterization backward + projection backward in C++.
         Gradients are managed by C++ pool."""
         loss_dict = _C.engine_compute_loss_backward(
-            step, loss_weights, w_ssim, num_loss_scales, compute_loss_map
+            step, loss_weights, w_ssim, num_loss_scales, compute_loss_map,
+            bool(structure_only_loss_map)
         )
         return loss_dict
 
@@ -278,7 +280,7 @@ class Renderer:
 
     def _build_densify_config(self, model_config):
         alpha = self.train_frame_scale
-        noise_lr_scalar = 1.0 if model_config.relocate_heuristic_weight >= 1.0 else alpha
+        noise_lr_scalar = 1.0 if model_config.use_revised_densification else alpha
         c = _C.DensifyConfig()
         c.refine_start_iter             = model_config.refine_start_iter
         c.refine_stop_num_iter          = model_config.refine_stop_num_iter
@@ -290,7 +292,13 @@ class Renderer:
         c.max_world_size                = model_config.max_world_size * alpha
         c.noise_lr                      = model_config.noise_lr * noise_lr_scalar
         c.noise_lr_final                = model_config.noise_lr_final * noise_lr_scalar
-        c.relocate_heuristic_weight     = model_config.relocate_heuristic_weight
+        c.use_revised_densification     = model_config.use_revised_densification
+        c.score_mode                    = {
+            "mean":   0,
+            "max":    1,
+            "median": 2,
+            "geom":   3,
+        }[str(getattr(model_config, "densify_score_mode", "mean"))]
         return c
 
     def engine_optim_step(self, step, max_steps, model_config, optim_config):
@@ -456,6 +464,7 @@ class Renderer:
                           gt_rgb, gt_depth, gt_normal, gt_alpha,
                           # Loss config
                           loss_weights, w_ssim, num_loss_scales, compute_loss_map,
+                          structure_only_loss_map,
                           # Configs
                           model_config, optim_config,
                           # Bilagrid (pass cam_indices + lrs + tv weights;
@@ -484,6 +493,7 @@ class Renderer:
         cfg.loss.w_ssim           = float(w_ssim)
         cfg.loss.num_loss_scales  = int(num_loss_scales)
         cfg.loss.compute_loss_map = bool(compute_loss_map)
+        cfg.loss.structure_only_loss_map = bool(structure_only_loss_map)
         cfg.optim    = self._build_optim_config(step, max_steps_lr, model_config, optim_config)
         cfg.densify  = self._build_densify_config(model_config)
         cfg.bilagrid = self._build_bilagrid_step_config(

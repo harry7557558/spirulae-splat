@@ -610,6 +610,7 @@ LossValues compute_multi_scale_per_pixel_losses(
     long num_train_images,
     TorchTensorView camera_indices,
     TorchTensorView loss_map_out,
+    bool structure_only_loss_map,
     PerPixelGrads& grads_out
 ) {
     const auto& s = std::get<2>(render_rgb);
@@ -702,6 +703,11 @@ LossValues compute_multi_scale_per_pixel_losses(
             loss_map_ptr = _fptr(loss_map_scale);
         }
 
+        // When structure_only_loss_map is set, skip the per-pixel write into
+        // the loss map — the SSIM call below will populate it with the
+        // structure term only. The per-pixel kernel still runs to compute
+        // raw_losses (used for grad / display).
+        float* per_pixel_loss_map_ptr = structure_only_loss_map ? nullptr : loss_map_ptr;
         _compute_per_pixel_losses_forward(
             B, ppi,
             render_rgb_s[scale], ref_rgb_s[scale], render_depth_s[scale], ref_depth_s[scale],
@@ -709,7 +715,7 @@ LossValues compute_multi_scale_per_pixel_losses(
             rgb_dist_s[scale], depth_dist_s[scale], normal_dist_s[scale],
             ref_alpha_s[scale], has_mask,
             loss_weights, num_train_images, camera_indices,
-            loss_map_ptr, raw_losses_ptr, losses_ptr
+            per_pixel_loss_map_ptr, raw_losses_ptr, losses_ptr
         );
 
         // Backward losses.
@@ -768,6 +774,7 @@ LossValues compute_multi_scale_per_pixel_losses(
                 scale_grads.v_render_rgb,
                 loss_map_scale,
                 w_ssim,
+                structure_only_loss_map,
                 ssim_readout
             );
         } else {
@@ -777,7 +784,8 @@ LossValues compute_multi_scale_per_pixel_losses(
                 scale_grads.v_render_rgb,
                 /*return_ssim_val=*/false,
                 loss_map_scale,
-                w_ssim
+                w_ssim,
+                structure_only_loss_map
             );
         }
 

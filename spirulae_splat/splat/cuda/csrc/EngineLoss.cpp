@@ -67,7 +67,8 @@ std::map<std::string, float> engine_compute_loss_backward(
     std::array<float, (int)LossWeightIndex::length> loss_weights,
     float w_ssim,
     int num_loss_scales,
-    bool compute_loss_map
+    bool compute_loss_map,
+    bool structure_only_loss_map
 ) {
     // Validate that forward was run
     if (std::get<0>(engine().fwd.renders) .data_ptr() == nullptr)
@@ -182,6 +183,7 @@ std::map<std::string, float> engine_compute_loss_backward(
         -1,  // num_train_images: -1 means use batch size
         _tv_null(),  // camera_indices: null means identity
         loss_map_buf,
+        structure_only_loss_map,
         pixel_grads
     );
 

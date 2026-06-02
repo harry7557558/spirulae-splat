@@ -97,7 +97,8 @@ std::map<std::string, float> engine_compute_loss_backward(
     std::array<float, (int)LossWeightIndex::length> loss_weights,
     float w_ssim,
     int num_loss_scales,
-    bool compute_loss_map
+    bool compute_loss_map,
+    bool structure_only_loss_map
 );
 
 // --- Optimizer step ---

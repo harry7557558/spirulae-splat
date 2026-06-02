@@ -315,7 +315,8 @@ static int32_t* weighted_sample_without_replacement_internal(
     uint32_t num_sample,
     uint32_t seed
 ) {
-    int stride = (int)(weights_numel / numel);
+    // int stride = (int)(weights_numel / numel);
+    int stride = 2;  // above is incorrect during warmup
 
     float* sorting_values = DevicePool::global().acquire<float>(
         "densify_wswr_sorting_values", numel);
@@ -568,9 +569,17 @@ void densify_clip_scale_tensor(
 }
 
 
+// https://www.shadertoy.com/view/4djSRW
+__device__ __forceinline__ float hash14(float4 p4) {
+    p4 = p4 * float4{.1031, .1030, .0973, .1099};
+    p4.x = fmodf(p4.x, 1.0f); p4.y = fmodf(p4.y, 1.0f); p4.z = fmodf(p4.z, 1.0f); p4.w = fmodf(p4.w, 1.0f);
+    p4 = p4 + dot(p4, float4{p4.w, p4.z, p4.x, p4.y} + 33.33f);
+    return fmodf((p4.x + p4.y) * (p4.z + p4.w), 1.0f);
+}
+
 __global__ void densify_update_weight_kernel(
     long num_splats,
-    bool is_max_mode,
+    int score_mode,
     const float* __restrict__ radii,  // [N]
     const float3* __restrict__ scales,  // [N, 3], optional
     const float* __restrict__ opacs,  // [N], optional
@@ -590,33 +599,47 @@ __global__ void densify_update_weight_kernel(
         weight *= sigmoid(opacs[idx]);
     if (accum_weight_scalar != nullptr)
         weight *= accum_weight_scalar[0];
+    if (weight == 0.0f)
+        return;
+
     float2 accum = accum_buffer[idx];
-    accum.x *= accum.y;
-    if (is_max_mode) {
+    if (score_mode == (int)DensifyScoreMode::Max) {
         accum.x = fmaxf(accum.x, weight);
         accum.y = fmaxf(accum.y, 1.0f);
-    } else {
-        accum.x += weight;
+    } else if (score_mode == (int)DensifyScoreMode::Mean) {
+        accum.x = (accum.x * accum.y + weight) / (accum.y + 1.0f);
+        accum.y += 1.0f;
+    } else if (score_mode == (int)DensifyScoreMode::Median) {
+        float rand = hash14(1e2f * float4{weight, accum.x, accum.y, accum.y + 1.5f});
+        if (accum.y == 0.0f) {
+            accum.x = weight * exp2f(rand - 0.5f);
+            accum.y = 1.0f;
+        } else if (weight != 0.0f) {
+            float s = weight > accum.x ? 1.0f : -1.0f;
+            // accum.x *= exp2f(s / sqrtf(accum.y + 1.0f));
+            accum.x *= exp2f(s * rand);
+            accum.y += 1.0f;
+        };
+    } else if (score_mode == (int)DensifyScoreMode::Geom) {
+        accum.x = __expf((__logf(fmaxf(accum.x, 1e-30f)) * accum.y +  __logf(fmaxf(weight, 1e-30f))) / (accum.y + 1.0f));
         accum.y += 1.0f;
     }
-    if (accum.y > 0.0f)
-        accum.x /= accum.y;
     accum_buffer[idx] = accum;
 }
 
 
 /*[AutoHeaderGeneratorExport]*/
-void densify_update_weight_tensor(
+void densify_update_weight(
     int64_t num_splats,
     DeviceVector<float> radii,
     float3* scales_ptr,
     float* opacs_ptr,
     DeviceVector<float> accum_weight,
     DeviceVector<float2> accum_buffer,
-    bool is_max_mode
+    int score_mode
 ) {
     densify_update_weight_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
-        num_splats, is_max_mode,
+        num_splats, score_mode,
         radii.data_ptr(),
         scales_ptr,
         opacs_ptr,

@@ -107,5 +107,6 @@ LossValues compute_multi_scale_per_pixel_losses(
     long num_train_images,
     TorchTensorView camera_indices,
     TorchTensorView loss_map_out,
+    bool structure_only_loss_map,
     PerPixelGrads& grads_out
 );

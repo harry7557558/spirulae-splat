@@ -619,7 +619,7 @@ class SplatTrainingLosses:
         # edge detector to guide densification
         # TODO: multi resolution
         edge_map = None
-        if self.config.use_edge_aware_score and self.config.relocate_heuristic_weight != 0.0:
+        if self.config.use_edge_aware_score and self.config.use_revised_densification:
             edge_map = detect_edge(gt_rgb, gt_rgb_mask)  # no_grad
 
         # Apply bilateral grid
@@ -868,7 +868,7 @@ class SplatTrainingLosses:
         if edge_map is not None:
             if 'backward_info' in outputs:
                 outputs['backward_info']['accum_weight_map'] = edge_map
-        elif self.config.relocate_heuristic_weight != 0.0 and loss_map is not None:
+        elif self.config.use_revised_densification and loss_map is not None:
             if 'backward_info' in outputs:
                 outputs['backward_info']['accum_weight_map'] = loss_map
         # if self.step % 100 == 0:

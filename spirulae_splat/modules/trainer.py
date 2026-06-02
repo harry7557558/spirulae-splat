@@ -757,12 +757,12 @@ _MODEL_PRESET_3DGS2TR = dict(
 )
 _MODEL_PRESET_LOW_TEXTURE = dict(
     use_edge_aware_score=False,
-    relocate_heuristic_weight=0.0,
+    use_revised_densification=False,
     use_long_axis_split=False,
 )
 _MODEL_PRESET_RICH_TEXTURE = dict(
     use_edge_aware_score=True,
-    relocate_heuristic_weight=1.0,
+    use_revised_densification=True,
     use_long_axis_split=True,
     max_screen_size=0.2,  # default 0.3
 )
@@ -872,7 +872,7 @@ class TrainerConfigAcademicBaseline(TrainerConfig):
         use_bilateral_grid=False,
         use_bilateral_grid_for_geometry=False,
         use_ppisp=False,
-        relocate_heuristic_weight=0.0,
+        use_revised_densification=False,
         use_edge_aware_score=False,
         use_loss_map=False,
         use_long_axis_split=False,

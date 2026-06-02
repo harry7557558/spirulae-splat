@@ -63,7 +63,8 @@ std::map<std::string, float> engine_train_step(
     // Loss + backward (reads pool, writes pool grads; D->H only for scalar loss values)
     std::map<std::string, float> loss_dict = engine_compute_loss_backward(
         step, cfg.loss.weights, cfg.loss.w_ssim,
-        cfg.loss.num_loss_scales, cfg.loss.compute_loss_map);
+        cfg.loss.num_loss_scales, cfg.loss.compute_loss_map,
+        cfg.loss.structure_only_loss_map);
 
     // Optimizer (in-place on pool buffers, no copies)
     engine_optim_step(step, cfg.optim);

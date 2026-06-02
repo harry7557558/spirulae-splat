@@ -5,6 +5,15 @@
 #include <Tensor.h>
 
 
+// densify_update_weight score mode. Mirrors DensifyConfig::score_mode.
+enum class DensifyScoreMode : int {
+    Mean   = 0,
+    Max    = 1,
+    Median = 2,
+    Geom   = 3,
+};
+
+
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */
 
 
@@ -75,14 +84,14 @@ void densify_clip_scale_tensor(
 );
 
 
-void densify_update_weight_tensor(
+void densify_update_weight(
     int64_t num_splats,
     DeviceVector<float> radii,
     float3* scales_ptr,
     float* opacs_ptr,
     DeviceVector<float> accum_weight,
     DeviceVector<float2> accum_buffer,
-    bool is_max_mode
+    int score_mode
 );
 
 

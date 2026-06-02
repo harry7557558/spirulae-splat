@@ -40,7 +40,7 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
     bool quantize_sh = engine().optim.quantize_sh;
     int num_sh = engine().num_sh;
 
-    bool use_revised = (cfg.relocate_heuristic_weight >= 1.0f);
+    bool use_revised = (cfg.use_revised_densification);
     bool densify_ongoing = (step < max_steps - cfg.refine_stop_num_iter);
     bool do_densify = densify_ongoing && (step > cfg.refine_start_iter && step % cfg.refine_every == 0);
     float progress = ((float)step + 0.5f) / (float)max_steps;
@@ -146,14 +146,14 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
             score = engine().grad.opacities.data_ptr() ? engine().grad.opacities : dv_opacs;
         }
 
-        densify_update_weight_tensor(
+        densify_update_weight(
             cur_num_splats,
             dv_radii,
             nullptr,
             (float*)dv_opacs.data_ptr(),
             score,
             dv_accum_buf,
-            false
+            cfg.score_mode
         );
     }
 

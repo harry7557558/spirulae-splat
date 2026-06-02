@@ -250,7 +250,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("weights",          &LossConfig::weights)
         .def_readwrite("w_ssim",           &LossConfig::w_ssim)
         .def_readwrite("num_loss_scales",  &LossConfig::num_loss_scales)
-        .def_readwrite("compute_loss_map", &LossConfig::compute_loss_map);
+        .def_readwrite("compute_loss_map", &LossConfig::compute_loss_map)
+        .def_readwrite("structure_only_loss_map", &LossConfig::structure_only_loss_map);
 
     py::class_<OptimConfig>(m, "OptimConfig")
         .def(py::init<>())
@@ -288,7 +289,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("max_world_size",                 &DensifyConfig::max_world_size)
         .def_readwrite("noise_lr",                       &DensifyConfig::noise_lr)
         .def_readwrite("noise_lr_final",                 &DensifyConfig::noise_lr_final)
-        .def_readwrite("relocate_heuristic_weight",      &DensifyConfig::relocate_heuristic_weight);
+        .def_readwrite("use_revised_densification",      &DensifyConfig::use_revised_densification)
+        .def_readwrite("score_mode",                     &DensifyConfig::score_mode);
 
     py::class_<BilagridStepConfig>(m, "BilagridStepConfig")
         .def(py::init<>())
@@ -362,7 +364,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("inplace_scatter_max", &inplace_scatter_max_tensor);
     m.def("weighted_sample_without_replacement", &weighted_sample_without_replacement_tensor);
     m.def("densify_clip_scale", &densify_clip_scale_tensor);
-    m.def("densify_update_weight", &densify_update_weight_tensor);
+    m.def("densify_update_weight", &densify_update_weight);
     m.def("relocate_splats_with_long_axis_split", &relocate_splats_with_long_axis_split_tensor);
     m.def("add_splats_with_long_axis_split", &add_splats_with_long_axis_split_tensor);
     m.def("relocate_splats_mcmc", &relocate_splats_mcmc_tensor);

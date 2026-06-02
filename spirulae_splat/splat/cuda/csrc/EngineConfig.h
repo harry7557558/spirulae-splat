@@ -19,6 +19,12 @@ struct LossConfig {
     float w_ssim          = 0.0f;
     int   num_loss_scales = 1;
     bool  compute_loss_map = false;
+    // When true, the densification loss map is filled with the SSIM structure
+    // term only (s(x,y) = (2*sigma12 + C2) / (2*sigma1*sigma2 + C2)) and the
+    // per-pixel L1/L2 + auxiliary supervisory terms are NOT accumulated into
+    // the map. Affects loss_map output only; gradients, scalar loss values
+    // and the SSIM display scalar are unchanged.
+    bool  structure_only_loss_map = false;
 };
 
 
@@ -77,7 +83,8 @@ struct DensifyConfig {
     float max_world_size                = 0.0f;
     float noise_lr                      = 0.0f;
     float noise_lr_final                = 0.0f;
-    float relocate_heuristic_weight     = 0.0f;
+    bool use_revised_densification      = true;
+    int  score_mode                     = 0;    // 0=mean, 1=max, 2=median, 3=geom
 };
 
 
