@@ -48,19 +48,19 @@ class PlyViewer:
         def _read(*fields):
             return [np.asarray(vertex[field], dtype=np.float32) for field in fields]
 
-        means = torch.from_numpy(np.stack(_read("x", "y", "z"), axis=-1)).to(self.device).contiguous()
+        means = torch.from_numpy(np.stack(_read("x", "y", "z"), axis=-1)).contiguous().to(self.device)
 
         if _has("rot_0", "rot_1", "rot_2", "rot_3"):
             quats = torch.from_numpy(np.stack(_read("rot_0", "rot_1", "rot_2", "rot_3"), axis=-1))
         else:
             quats = torch.tensor([1.0, 0.0, 0.0, 0.0], dtype=torch.float32).repeat(count, 1)
-        quats = quats.to(self.device).contiguous()
+        quats = quats.contiguous().to(self.device)
 
         if _has("scale_0", "scale_1", "scale_2"):
             scales = torch.from_numpy(np.stack(_read("scale_0", "scale_1", "scale_2"), axis=-1))
         else:
             scales = torch.ones((count, 3), dtype=torch.float32)
-        scales = scales.to(self.device).contiguous()
+        scales = scales.contiguous().to(self.device)
 
         if _has("opacity"):
             opacities = torch.from_numpy(np.asarray(vertex["opacity"], dtype=np.float32)).unsqueeze(-1)
@@ -68,7 +68,7 @@ class PlyViewer:
             opacities = torch.from_numpy(np.asarray(vertex["alpha"], dtype=np.float32)).unsqueeze(-1)
         else:
             opacities = torch.ones((count, 1), dtype=torch.float32)
-        opacities = opacities.to(self.device).contiguous()
+        opacities = opacities.contiguous().to(self.device)
 
         if _has("f_dc_0", "f_dc_1", "f_dc_2"):
             features_dc = torch.from_numpy(np.stack(_read("f_dc_0", "f_dc_1", "f_dc_2"), axis=-1))
@@ -77,7 +77,7 @@ class PlyViewer:
             features_dc = torch.from_numpy(rgb.astype(np.float32) / 255.0)
         else:
             features_dc = torch.zeros((count, 3), dtype=torch.float32)
-        features_dc = features_dc.to(self.device).contiguous()
+        features_dc = features_dc.contiguous().to(self.device)
 
         sh_keys = sorted([name for name in names if name.startswith("f_rest_")], key=lambda x: int(x.split("_")[-1]))
         if sh_keys:
@@ -89,7 +89,7 @@ class PlyViewer:
             features_sh = torch.from_numpy(sh_values).permute(0, 2, 1)
         else:
             features_sh = torch.zeros((count, 0, 3), dtype=torch.float32)
-        features_sh = features_sh.to(self.device).contiguous()
+        features_sh = features_sh.contiguous().to(self.device)
 
         if primitive == "opaque_triangle":
             features_ch = torch.zeros((count, 2, 3), dtype=torch.float32, device=self.device)
