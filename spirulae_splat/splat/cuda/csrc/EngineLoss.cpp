@@ -68,7 +68,8 @@ std::map<std::string, float> engine_compute_loss_backward(
     float w_ssim,
     int num_loss_scales,
     bool compute_loss_map,
-    bool structure_only_loss_map
+    bool structure_only_loss_map,
+    float overexposure_reg_weight
 ) {
     // Validate that forward was run
     if (std::get<0>(engine().fwd.renders) .data_ptr() == nullptr)
@@ -220,6 +221,27 @@ std::map<std::string, float> engine_compute_loss_backward(
     // so the background bwd consumes the right rgb. No-op when disabled.
     if (engine().color_space.splat_enabled) {
         _engine_color_space_backward_hook(pixel_grads.v_render_rgb);
+    }
+
+    // --- Image-space overexposure regularization ---
+    // Adds dL/dx of L = w * mean(max(-x, x-1, 0)^2) into v_render_rgb in
+    // place, operating on the raw rendered RGB (pre-bilagrid / pre-PPISP /
+    // pre-color-space). At this point both buffers live in the splat
+    // working color space (color-space bwd has restored fwd.renders.rgb
+    // and rewritten v_render_rgb), so the gradient lands on the same space
+    // raster bwd will consume. No scalar loss is materialized; the kernel
+    // is skipped entirely when the weight is zero.
+    if (overexposure_reg_weight != 0.0f) {
+        // Source rgb in the pre-color-space (post-bg) working space:
+        // - color space enabled: the color-space bwd hook does not re-point
+        //   engine().fwd.renders.rgb, so render_rgb still aliases the sRGB
+        //   output; the pre-conversion buffer lives at cs.fwd_pre.
+        // - color space disabled: render_rgb already is the post-bg buffer.
+        DeviceTensor3D<float3> rgb_t = engine().color_space.splat_enabled
+            ? engine().color_space.fwd_pre
+            : DeviceTensor3D<float3>(render_rgb);
+        DeviceTensor3D<float3> v_rgb_t(pixel_grads.v_render_rgb);
+        overexposure_grad_add(rgb_t, overexposure_reg_weight, v_rgb_t);
     }
 
     // --- Background blend backward hook ---

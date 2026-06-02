@@ -25,6 +25,12 @@ struct LossConfig {
     // the map. Affects loss_map output only; gradients, scalar loss values
     // and the SSIM display scalar are unchanged.
     bool  structure_only_loss_map = false;
+    // Image-space overexposure regularization weight. When non-zero, a
+    // dedicated kernel adds dL/dx of L = w * mean(max(-x, x-1, 0)^2) directly
+    // into v_render_rgb (in the pre-bilagrid / pre-PPISP / pre-color-space
+    // working space, which is what raster bwd consumes). The scalar loss is
+    // never computed.
+    float overexposure_reg_weight = 0.0f;
 };
 
 

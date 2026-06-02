@@ -158,6 +158,13 @@ void rgb_to_srgb_backward(
 );
 
 
+void overexposure_grad_add(
+    DeviceTensor3D<float3> rgb,    // [B, H, W, 3]
+    float weight,                  // L = weight * mean(max(-x, x-1, 0)^2)
+    DeviceTensor3D<float3> v_rgb   // [B, H, W, 3], in/out
+);
+
+
 void depth_to_points_forward(
     std::string camera_model,
     TorchTensorView intrins,            // [B, 4]

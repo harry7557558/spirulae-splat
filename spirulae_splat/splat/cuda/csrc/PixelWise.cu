@@ -734,6 +734,66 @@ void rgb_to_srgb_backward(
 
 
 // ================
+// Overexposure Regularization
+// ================
+
+// Penalizes rgb values outside [0,1] with an L2 loss
+//   L = weight * mean_{b,y,x,c}( max(-x, x-1, 0)^2 )
+// The actual scalar loss is never materialized; this kernel only adds the
+// per-pixel gradient dL/dx into v_rgb in-place. With N = B*H*W*3 the
+// per-channel grad is
+//   x < 0  : 2 * weight * x / N
+//   x > 1  : 2 * weight * (x - 1) / N
+//   else   : 0
+__global__ void overexposure_grad_add_kernel(
+    const TensorView<float, 4> rgb,
+    const float scale,                // 2 * weight / (B * H * W * 3)
+    TensorView<float, 4> v_rgb
+) {
+    unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned B = rgb.shape[0], H = rgb.shape[1], W = rgb.shape[2];
+    if (bid >= B || gid >= H * W) return;
+    unsigned y = gid / W;
+    unsigned x = gid % W;
+
+    float3 c   = rgb.load3(bid, y, x);
+    float3 v   = v_rgb.load3(bid, y, x);
+
+    auto over = [scale](float v_in, float v_pix) -> float {
+        float g = (v_pix < 0.0f) ? v_pix
+                : (v_pix > 1.0f) ? (v_pix - 1.0f)
+                : 0.0f;
+        return v_in + scale * g;
+    };
+    v.x = over(v.x, c.x);
+    v.y = over(v.y, c.y);
+    v.z = over(v.z, c.z);
+
+    v_rgb.store3(bid, y, x, v);
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void overexposure_grad_add(
+    DeviceTensor3D<float3> rgb,    // [B, H, W, 3]
+    float weight,                  // L = weight * mean(max(-x, x-1, 0)^2)
+    DeviceTensor3D<float3> v_rgb   // [B, H, W, 3], in/out
+) {
+    long b = rgb.size<0>(), h = rgb.size<1>(), w = rgb.size<2>();
+    if (b <= 0 || h <= 0 || w <= 0 || weight == 0.0f) return;
+    double N = (double)b * (double)h * (double)w * 3.0;
+    float scale = (float)(2.0 * (double)weight / N);
+
+    overexposure_grad_add_kernel<<<_LAUNCH_ARGS_2D(h * w, b, 256, 1)>>>(
+        _dt3d_to_tv4<float>(rgb),
+        scale,
+        _dt3d_to_tv4<float>(v_rgb)
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+// ================
 // Depth to Points
 // ================
 

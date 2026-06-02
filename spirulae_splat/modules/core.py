@@ -235,12 +235,14 @@ class Renderer:
 
     def engine_compute_loss_backward(self, step, loss_weights, w_ssim,
                                      num_loss_scales, compute_loss_map,
-                                     structure_only_loss_map):
+                                     structure_only_loss_map,
+                                     overexposure_reg_weight=0.0):
         """Compute loss + rasterization backward + projection backward in C++.
         Gradients are managed by C++ pool."""
         loss_dict = _C.engine_compute_loss_backward(
             step, loss_weights, w_ssim, num_loss_scales, compute_loss_map,
-            bool(structure_only_loss_map)
+            bool(structure_only_loss_map),
+            float(overexposure_reg_weight),
         )
         return loss_dict
 
@@ -483,7 +485,10 @@ class Renderer:
                           # Background (ignored if engine_init_background_* was
                           # never called).
                           bg_lr_dc=0.0, bg_lr_sh=0.0,
-                          bg_randomize_weight=0.0, bg_seed=0):
+                          bg_randomize_weight=0.0, bg_seed=0,
+                          # Image-space overexposure regularization (model.py
+                          # config field). Zero -> kernel not launched.
+                          overexposure_reg_weight=0.0):
         """Single fused training step (set_camera + set_gt + fwd + loss/bwd + optim + densify).
         All input tensors are CPU; returns loss_dict for verbose."""
         max_steps_lr = optim_config.max_steps if optim_config.max_steps is not None else max_steps
@@ -494,6 +499,7 @@ class Renderer:
         cfg.loss.num_loss_scales  = int(num_loss_scales)
         cfg.loss.compute_loss_map = bool(compute_loss_map)
         cfg.loss.structure_only_loss_map = bool(structure_only_loss_map)
+        cfg.loss.overexposure_reg_weight = float(overexposure_reg_weight)
         cfg.optim    = self._build_optim_config(step, max_steps_lr, model_config, optim_config)
         cfg.densify  = self._build_densify_config(model_config)
         cfg.bilagrid = self._build_bilagrid_step_config(

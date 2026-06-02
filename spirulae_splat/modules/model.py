@@ -298,6 +298,12 @@ class SpirulaeSplatModelConfig:
     """Weight to regularize quaternion norm to identity"""
     sh_reg: float = 0.001
     """Regularize SH magnitude to find a balance between bilagrid/PPISP and improve generalizability."""
+    overexposure_reg: float = 0.0
+    """Image-space L2 penalty on rendered RGB outside [0, 1]:
+       L = w * mean(max(-x, x-1, 0)^2) over all pixels and channels of the
+       raw rendered image (pre-bilagrid / pre-PPISP / pre-color-space).
+       When non-zero a dedicated CUDA kernel adds dL/dx directly into the
+       rendered-RGB gradient; the scalar loss value is never materialized."""
 
     # supervision using a foundation depth model
     # enable these by setting `depth_model` in data manager config
@@ -1586,7 +1592,8 @@ class SpirulaeSplatModel(torch.nn.Module):
         # --- Compute loss + backward via core (gradients managed by C++ pool) ---
         loss_dict = self.core.engine_compute_loss_backward(
             step, loss_weights, w_ssim, num_loss_scales, compute_loss_map,
-            structure_only_loss_map
+            structure_only_loss_map,
+            overexposure_reg_weight=cfg.overexposure_reg,
         )
 
         for key, value in loss_dict.items():
@@ -1824,6 +1831,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             bg_lr_sh=bg_lr_sh,
             bg_randomize_weight=bg_randomize_weight,
             bg_seed=bg_seed,
+            overexposure_reg_weight=cfg.overexposure_reg,
         )
 
         if PROFILE_TRAIN_STEP: _t4 = _t()
