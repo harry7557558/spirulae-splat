@@ -1,18 +1,43 @@
-import threading
-import asyncio
+"""Multi-scene benchmark driver.
 
-from spirulae_splat.modules.trainer import *
-from spirulae_splat.splat.cuda import _C
-from typing import Union, Annotated, Literal
+Each scene runs in its own `spirulae-train` subprocess so the C++ engine state
+(world splats, bilagrid/PPISP/background, optimizer moments, color-space
+matrices, device pool) starts fresh. Running multiple scenes inside one
+process leaks engine state between scenes, which silently degrades metrics on
+later runs even after `engine_reset()` (any Python-side state we forgot to
+reset stays). Subprocesses sidestep that entirely.
+
+Each subprocess writes its own metrics.json (now includes `training_time` and
+`engine_vram`); we read it back here and aggregate.
+"""
+
 import json
+import os
+import subprocess
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Literal, Optional, Tuple
 
-
-def _engine_vram_bytes():
-    """Engine-side VRAM total: sum of pool slot capacities + scratch capacity.
-    Pool capacities grow monotonically (high-water-mark), so reading after the
-    train loop yields the peak training-time engine VRAM."""
-    pool_total = sum(cap for _, _, cap in _C.engine_get_pool_breakdown())
-    return pool_total + _C.engine_get_scratch_bytes()
+# Importing trainer configs only to read preset defaults (e.g. cap_max);
+# the actual training runs in a subprocess, not in this process.
+from spirulae_splat.modules.trainer import (
+    TrainerConfig,
+    TrainerConfigSquaredPos,
+    TrainerConfigSquared,
+    TrainerConfigPatched,
+    TrainerConfigTriangle,
+    TrainerConfigTrianglePatched,
+    TrainerConfigVoxel,
+    TrainerConfigConfinedLowTexture,
+    TrainerConfigConfined,
+    TrainerConfigConfinedSquared,
+    TrainerConfigOpenLowTexture,
+    TrainerConfigOpen,
+    TrainerConfigOpenSquared,
+    TrainerConfigCenteredObject,
+    TrainerConfigAcademicBaseline,
+)
 
 
 # Mip-NeRF 360 download command
@@ -43,14 +68,93 @@ cd ..
 """
 
 
-def bench_360_v2(config_class, path_to_360_v2: Path):
+PRESET_TO_CLASS = {
+    "3dgs": TrainerConfig,
+    "3dgs^2-pos": TrainerConfigSquaredPos,
+    "3dgs^2": TrainerConfigSquared,
+    "3dgs-patched": TrainerConfigPatched,
+    "triangle": TrainerConfigTriangle,
+    "triangle-patched": TrainerConfigTrianglePatched,
+    "voxel": TrainerConfigVoxel,
+    "3dgs-confined-low-texture": TrainerConfigConfinedLowTexture,
+    "3dgs-confined": TrainerConfigConfined,
+    "3dgs^2-confined": TrainerConfigConfinedSquared,
+    "3dgs-open-low-texture": TrainerConfigOpenLowTexture,
+    "3dgs-open": TrainerConfigOpen,
+    "3dgs^2-open": TrainerConfigOpenSquared,
+    "3dgs-centered-object": TrainerConfigCenteredObject,
+    "academic-baseline": TrainerConfigAcademicBaseline,
+}
+
+
+def _preset_cap_max(preset: str) -> int:
+    """Read the preset class's default model.cap_max so we can apply the
+    zipnerf-specific ×3 multiplier without hardcoding the base value."""
+    cls = PRESET_TO_CLASS[preset]
+    # Instantiate with a placeholder data path; we only read defaults from it.
+    inst = cls(data=Path("/dev/null"))
+    return int(inst.model.cap_max)
+
+
+def _run_scene(
+    preset: str,
+    data_dir: Path,
+    output_prefix: Path,
+    output_name: str,
+    downscale: int,
+    extra_args: List[str],
+) -> Optional[Dict]:
+    """Launch one training run in a fresh subprocess and return its metrics.
+
+    Inherits stdout/stderr so the user sees per-scene training progress.
+    Returns the parsed metrics.json dict, or None if the subprocess failed or
+    metrics.json was not written.
+    """
+    metrics_dir = output_prefix / output_name
+    metrics_path = metrics_dir / "metrics.json"
+    if metrics_path.exists():
+        # Stale leftover from a prior run with the same name would silently
+        # masquerade as this run's results. Remove it up front.
+        metrics_path.unlink()
+
+    cmd = [
+        sys.executable, "-m", "spirulae_splat.ss_trainer", preset,
+        "--data", str(data_dir),
+        "--dataparser.data-format", "colmap",
+        "--dataparser.colmap-recon-dir", "sparse/0",
+        "--dataparser.rescale-camera-to-fit", str(downscale),
+        "--dataparser.image-dir", f"images_{downscale}",
+        "--dataparser.eval-mode", "interval",
+        "--save-eval-images",
+        "--datamanager.no-load-depths",
+        "--datamanager.no-load-normals",
+        "--steps-per-save", "0",
+        "--disable-viewer",
+        "--output-dir-prefix", str(output_prefix),
+        "--output-dir-name", output_name,
+        # "--num-iterations", str(2500),
+        # "--model.refine-stop-num-iter", str(0),
+    ] + extra_args
+
+    print(">>>", " ".join(cmd), flush=True)
+    rc = subprocess.call(cmd)
+    if rc != 0:
+        print(f"!!! subprocess for {output_name} exited with code {rc}", flush=True)
+        return None
+    if not metrics_path.exists():
+        print(f"!!! subprocess for {output_name} did not write metrics.json", flush=True)
+        return None
+    with open(metrics_path, "r") as fp:
+        return json.load(fp)
+
+
+def bench_360_v2(preset: str, path_to_360_v2: Path, output_prefix: Path,
+                 run_tag: str) -> List[Tuple[str, Optional[Dict]]]:
     if not (path_to_360_v2.exists() and path_to_360_v2.is_dir()):
         print("Dataset not found. Please download from http://storage.googleapis.com/gresearch/refraw360/360_v2.zip and unzip.")
         exit(0)
 
-    all_metrics = []
-
-    for scene, downscale in [
+    scenes = [
         ("bicycle", 4),
         ("garden", 4),
         ("stump", 4),
@@ -58,115 +162,57 @@ def bench_360_v2(config_class, path_to_360_v2: Path):
         ("counter", 2),
         ("kitchen", 2),
         ("room", 2),
-    ]:
+    ]
+
+    results = []
+    for scene, downscale in scenes:
         print()
         print("Running:", scene)
-
-        config = config_class(data=path_to_360_v2 / scene)  # type: TrainerConfig
-        config.dataparser.data_format = "colmap"
-        config.dataparser.colmap_recon_dir = Path("sparse/0")
-        config.dataparser.rescale_camera_to_fit = downscale  # consistent with gsplat/Inria
-        # config.dataparser.rescale_camera_to_fit = True
-        config.dataparser.image_dir = f"images_{downscale}"
-        config.dataparser.eval_mode = "interval"
-
-        config.save_eval_images = True
-        # config.num_iterations = 2500
-        # config.model.refine_stop_num_iter = 0
-
-        # config.model.use_bilateral_grid = False
-        # config.model.use_ppisp = False
-        config.datamanager.load_depths = False
-        config.datamanager.load_normals = False
-        # config.model.use_bilateral_grid_for_geometry = False
-
-        config.steps_per_save = 0
-
-        from time import perf_counter
-        try:
-            trainer = Trainer(config)
-            time0 = perf_counter()
-            trainer.train()
-            engine_vram = _engine_vram_bytes()
-            time1 = perf_counter()
-            trainer.eval()
-        except:
-            import traceback
-            traceback.print_exc()
-            all_metrics.append((scene, None))
-            continue
-
-        with open(trainer.output_dir / "metrics.json", "r") as fp:
-            metrics = json.load(fp)
-        metrics['training_time'] = time1-time0
-        metrics['engine_vram'] = engine_vram / 1024**2
-        all_metrics.append((scene, metrics))
-
-        del trainer
-        torch.cuda.empty_cache()
-
-    return all_metrics
+        output_name = f"benchmark-{run_tag}-{scene}"
+        metrics = _run_scene(
+            preset=preset,
+            data_dir=path_to_360_v2 / scene,
+            output_prefix=output_prefix,
+            output_name=output_name,
+            downscale=downscale,
+            extra_args=[],
+        )
+        results.append((scene, metrics))
+    return results
 
 
-def bench_zipnerf(config_class, path_to_zipnerf: Path):
+def bench_zipnerf(preset: str, path_to_zipnerf: Path, output_prefix: Path,
+                  run_tag: str) -> List[Tuple[str, Optional[Dict]]]:
     if not (path_to_zipnerf.exists() and path_to_zipnerf.is_dir()):
         print("Dataset not found. Please download from https://smerf-3d.github.io/#data.")
         exit(0)
 
-    all_metrics = []
-
-    for scene, downscale in [
+    scenes = [
         ("alameda", 4),
         ("berlin", 4),
         ("london", 4),
         ("nyc", 4),
-    ]:
+    ]
+    cap_max_3x = _preset_cap_max(preset) * 3  # 3M Gaussians vs preset default
+
+    results = []
+    for scene, downscale in scenes:
         print()
         print("Running:", scene)
-
-        config = config_class(data=path_to_zipnerf / scene)  # type: TrainerConfig
-        config.dataparser.data_format = "colmap"
-        config.dataparser.colmap_recon_dir = Path("sparse/0")
-        config.dataparser.rescale_camera_to_fit = downscale
-        # config.dataparser.rescale_camera_to_fit = True
-        config.dataparser.image_dir = f"images_{downscale}"
-        config.dataparser.eval_mode = "interval"
-
-        config.save_eval_images = True
-
-        # config.model.use_bilateral_grid = False
-        # config.model.use_ppisp = False
-        config.datamanager.load_depths = False
-        config.datamanager.load_normals = False
-        config.model.use_bilateral_grid_for_geometry = False
-
-        config.steps_per_save = 0
-        config.model.cap_max *= 3  # 3M Gaussians
-
-        from time import perf_counter
-        try:
-            trainer = Trainer(config)
-            time0 = perf_counter()
-            trainer.train()
-            engine_vram = _engine_vram_bytes()
-            time1 = perf_counter()
-            trainer.eval()
-        except:
-            import traceback
-            traceback.print_exc()
-            all_metrics.append((scene, None))
-            continue
-
-        with open(trainer.output_dir / "metrics.json", "r") as fp:
-            metrics = json.load(fp)
-        metrics['training_time'] = time1-time0
-        metrics['engine_vram'] = engine_vram / 1024**2
-        all_metrics.append((scene, metrics))
-
-        del trainer
-        torch.cuda.empty_cache()
-
-    return all_metrics
+        output_name = f"benchmark-{run_tag}-{scene}"
+        metrics = _run_scene(
+            preset=preset,
+            data_dir=path_to_zipnerf / scene,
+            output_prefix=output_prefix,
+            output_name=output_name,
+            downscale=downscale,
+            extra_args=[
+                "--model.no-use-bilateral-grid-for-geometry",
+                "--model.cap-max", str(cap_max_3x),
+            ],
+        )
+        results.append((scene, metrics))
+    return results
 
 
 @dataclass
@@ -190,42 +236,37 @@ class BenchmarkConfig:
     data: Path
     """Path to folder containing benchmark dataset."""
 
+    output_dir_prefix: Path = Path("outputs")
+    """Where each per-scene subprocess writes its checkpoint + metrics.json.
+        The benchmark reads metrics.json back from `<prefix>/benchmark-<tag>-<scene>/`."""
+
     notify_on_complete_at: Optional[str] = None
     """Set this if you wish to receive a notification when training completes.
         Currently, this supports Discord webhook URL."""
 
 
 def entrypoint():
+    import datetime
 
     import tyro
     benchmark_config = tyro.cli(BenchmarkConfig)
 
-    config_class = {
-        "3dgs": TrainerConfig,
-        "3dgs^2-pos": TrainerConfigSquaredPos,
-        "3dgs^2": TrainerConfigSquared,
-        "3dgs-patched": TrainerConfigPatched,
-        "triangle": TrainerConfigTriangle,
-        "triangle-patched": TrainerConfigTrianglePatched,
-        "voxel": TrainerConfigVoxel,
-        "3dgs-confined-low-texture": TrainerConfigConfinedLowTexture,
-        "3dgs-confined": TrainerConfigConfined,
-        "3dgs^2-confined": TrainerConfigConfinedSquared,
-        "3dgs-open-low-texture": TrainerConfigOpenLowTexture,
-        "3dgs-open": TrainerConfigOpen,
-        "3dgs^2-open": TrainerConfigOpenSquared,
-        "3dgs-centered-object": TrainerConfigCenteredObject,
-        "academic-baseline": TrainerConfigAcademicBaseline,
-    }[benchmark_config.preset]
+    # Tag every scene from this benchmark run so its output dir is unique and
+    # the metrics.json files don't collide with prior runs.
+    run_tag = (f"{benchmark_config.benchmark}-{benchmark_config.preset}-"
+               f"{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}")
+    output_prefix = benchmark_config.output_dir_prefix
 
     if benchmark_config.benchmark == None:
         all_metrics = [
             (None, {"test": "If you see this message, notification is working."})
         ]
     elif benchmark_config.benchmark == "360_v2":
-        all_metrics = bench_360_v2(config_class, benchmark_config.data)
+        all_metrics = bench_360_v2(benchmark_config.preset, benchmark_config.data,
+                                    output_prefix, run_tag)
     elif benchmark_config.benchmark == "zipnerf":
-        all_metrics = bench_zipnerf(config_class, benchmark_config.data)
+        all_metrics = bench_zipnerf(benchmark_config.preset, benchmark_config.data,
+                                     output_prefix, run_tag)
     else:
         raise NotImplementedError()
 
@@ -272,7 +313,7 @@ def entrypoint():
     message += f"Your benchmark has completed. Here are the results:\n"
     if len(failed) > 0:
         message += "\n⚠️⚠️⚠️ Failed scene" + 's'*(len(failed)>1) + ": " + ', '.join([f"`{scene}`" for scene in failed]) + "\n"
-    message += f"```\n{tabulate(all_data, headers, numalign="left")}\n```"
+    message += f"```\n{tabulate(all_data, headers, numalign='left')}\n```"
 
     payload = {
         "content": message,

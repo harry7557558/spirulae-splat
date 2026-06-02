@@ -150,6 +150,10 @@ class TrainerConfig:
     viewer_port: int = 7007
     """Port used by the web viewer"""
 
+    disable_viewer: bool = False
+    """If True, ss_trainer skips starting the viewer thread. Used by
+        ss_benchmark so each scene runs without competing for the viewer port."""
+
     dataparser: SpirulaeSplatDataParserConfig = field(default_factory=SpirulaeSplatDataParserConfig)
     """Specifies configurations for data parsing"""
 
@@ -437,6 +441,11 @@ class Trainer:
 
     @torch.no_grad()
     def train(self):
+        # Engine VRAM peak: pool capacities grow monotonically (high-water
+        # mark), so engine_get_pool_breakdown + engine_get_scratch_bytes after
+        # the loop equals the training-time peak.
+        from spirulae_splat.splat.cuda import _C
+        train_wall_start = time.perf_counter()
         self.start_time = time.time()
         self.last_step_time = self.start_time
         for step in range(self.config.num_iterations):
@@ -460,6 +469,9 @@ class Trainer:
             eta = (self.config.num_iterations - self.current_step) * avg_latency
         if self.config.steps_per_save != 0:
             self.save_checkpoint(self.config.num_iterations)
+        self._training_time = time.perf_counter() - train_wall_start
+        pool_cap = sum(cap for _, _, cap in _C.engine_get_pool_breakdown())
+        self._engine_vram_bytes = pool_cap + _C.engine_get_scratch_bytes()
         print(f"Checkpoint saved to: {self.output_dir.absolute()}")
         print()
 
@@ -525,6 +537,14 @@ class Trainer:
                     path = self.output_dir / f"eval-{key}-{idx:05d}.png"
                     image = (torch.clip(image, 0, 1) * 255).to(torch.uint8).cpu().numpy()
                     cv2.imwrite(str(path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+
+        # Per-run training stats: subprocess-launched benchmarks read these
+        # back out of metrics.json since they can't observe the in-process
+        # trainer state.
+        if hasattr(self, "_training_time"):
+            metrics["training_time"] = self._training_time
+        if hasattr(self, "_engine_vram_bytes"):
+            metrics["engine_vram"] = self._engine_vram_bytes / 1024 ** 2
 
         import json
         with open(self.output_dir / "metrics.json", "w") as f:

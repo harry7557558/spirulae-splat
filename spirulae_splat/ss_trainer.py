@@ -56,11 +56,12 @@ def entrypoint():
     config = tyro.cli(Config)
     trainer = Trainer(config)
 
-    thread = threading.Thread(
-        target=lambda: asyncio.run(start_viewer(trainer)),
-        daemon=True
-    )
-    thread.start()
+    if not config.disable_viewer:
+        thread = threading.Thread(
+            target=lambda: asyncio.run(start_viewer(trainer)),
+            daemon=True
+        )
+        thread.start()
 
     trainer.train()
     # trainer._train_with_profiling()
