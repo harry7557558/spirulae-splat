@@ -8,14 +8,6 @@ import numpy as np
 
 import spirulae_splat
 
-from spirulae_splat.splat.cuda._wrapper import (
-    intersect_splat_tile,
-    fully_fused_projection,
-    fully_fused_projection_hetero,
-    rasterize_to_pixels,
-    spherical_harmonics,
-)
-
 from spirulae_splat.splat.cuda import (
     _C,
     _make_lazy_cuda_func,
@@ -519,56 +511,6 @@ class Renderer:
 
     def zero_grad(self):
         return
-        raise NotImplementedError("Use engine instead. Code below for reference.")
-
-        # Engine path: gradients, optimizer state, radii managed by C++ pool
-        if self.primitive in ['3dgs', 'mip', '3dgut'] and not self.use_bvh:
-            return
-
-        if hasattr(self, 'v_splats_world'):
-            for tensor in self.v_splats_world:
-                if tensor is not None:
-                    tensor.zero_()
-        else:
-            if self.use_fused_proj_bwd_optim:
-                if self.primitive in ['3dgs', 'mip']:
-                    self.v_splats_world = [None] * len(self.splats_world)
-                elif self.primitive in ['3dgut']:
-                    self.v_splats_world = [
-                        torch.zeros_like(self.splats_world[0]),  # means
-                        torch.zeros_like(self.splats_world[1]),  # quats
-                        torch.zeros_like(self.splats_world[2]),  # scales
-                        None,  # opacities
-                        None,  # features_dc
-                        None,  # features_sh
-                    ]
-                else:
-                    raise NotImplementedError()
-            else:
-                self.v_splats_world = [
-                    torch.zeros_like(x) for x in self.splats_world
-                ]
-
-        def alloc_optim_state():
-            if self.quantize_sh_optim:
-                return [torch.zeros_like(x) for x in self.splats_world[:-1]] + \
-                    [torch.zeros(self.splats_world[-1].shape, device=self.splats_world[-1].device, dtype=torch.uint8)]
-            return [torch.zeros_like(x) for x in self.splats_world]
-
-        if not hasattr(self, 'g1_splats_world'):
-            self.g1_splats_world = alloc_optim_state()
-        if not hasattr(self, 'g2_splats_world'):
-            self.g2_splats_world = alloc_optim_state()
-
-        if self.quantize_sh_optim:
-            if not hasattr(self, 'quant_bounds_sh'):
-                BLOCK_SIZE = 256
-                n = (self.splats_world[-1].numel() + BLOCK_SIZE-1) // BLOCK_SIZE
-                self.quant_bounds_sh = torch.zeros((n, 4), dtype=torch.float32, device=self.splats_world[-1].device)
-
-        if hasattr(self, 'radii'):
-            # _make_lazy_cuda_func("set_zero")(self.radii)
-            self.radii = self.radii.zero_()
 
     def projection_forward(self):
         raise NotImplementedError("Use engine instead. Code below for reference.")

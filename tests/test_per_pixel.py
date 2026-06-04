@@ -4,9 +4,6 @@ import torch.nn.functional as F
 
 import spirulae_splat.splat.cuda._wrapper_per_pixel as module
 
-from test_compute_per_splat_losses import Config
-from spirulae_splat.modules.training_losses import SplatTrainingLosses
-
 from utils import check_close, timeit
 
 torch.manual_seed(42)

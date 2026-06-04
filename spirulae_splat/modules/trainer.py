@@ -501,7 +501,6 @@ class Trainer:
         config.split_batch = False
         config.patch_batch_size = None
         config.deblur_training_images = False
-        config.compute_visibility_masks = False
         config.cache_images = "disk"
         self.datamanager = SpirulaeSplatDataManager(config, device="cuda", eval=True)
         self.datamanager.train_dataset = self.dataset_eval

@@ -3,9 +3,7 @@ import torch
 from torch.func import vjp  # type: ignore
 
 from spirulae_splat.splat import _torch_impl
-from spirulae_splat.splat.background_sh import render_background_sh
 import spirulae_splat.splat.cuda as _C
-from spirulae_splat.splat._camera import _Camera
 
 from utils import check_close, timeit
 

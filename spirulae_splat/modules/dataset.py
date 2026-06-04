@@ -27,7 +27,6 @@ from tqdm import tqdm
 
 import math
 
-from spirulae_splat.splat.utils import resize_image
 from spirulae_splat.modules.camera import Cameras
 from copy import deepcopy
 

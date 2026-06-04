@@ -24,7 +24,6 @@ from typing_extensions import Annotated
 from spirulae_splat.viewer_legacy.model import SplatModel
 from spirulae_splat.viewer_legacy.camera import Camera
 
-from spirulae_splat.splat._torch_impl import depth_map, depth_inv_map
 from spirulae_splat.splat import depth_to_normal
 
 
@@ -321,7 +320,6 @@ class DepthAndNormalMapsPoisson(GSMeshExporter):
             c2w[:3, 3] *= model.relative_scale
 
             rgb, depth_map = model.render(camera, c2w, return_depth=True)
-            # depth_map = depth_inv_map(depth_map)
 
             H, W = camera.h, camera.w
             c2w = torch.from_numpy(c2w).float().cuda()
@@ -470,7 +468,6 @@ class TSDFFusion(GSMeshExporter):
             c2w[:3, 3] *= model.relative_scale
 
             rgb, depth_map = model.render(camera, c2w, return_depth=True)
-            # depth_map = depth_inv_map(depth_map)
 
             H, W = camera.h, camera.w
             c2w = torch.from_numpy(c2w).float().cuda()

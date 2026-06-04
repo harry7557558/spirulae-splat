@@ -30,18 +30,9 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 
 import spirulae_splat
-from spirulae_splat.splat._torch_impl import quat_to_rotmat
 from spirulae_splat.modules.core import Renderer
-from spirulae_splat.splat.utils import resize_image
-from spirulae_splat.splat.background_sh import render_background_sh
-from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
-from spirulae_splat.strategy import MCMCStrategy
 
-# SplatTrainingLosses is no longer used; the only methods that were live are
-# inlined below (get_2dgs_reg_weights, get_static_losses → bilagrid metrics).
-# from spirulae_splat.modules.training_losses import SplatTrainingLosses
 from spirulae_splat.modules.verbose import TrainingVerbose
-from spirulae_splat.modules.optimizer import OptimizerConfig
 from spirulae_splat.modules._profile import PROFILE_TRAIN_STEP
 from spirulae_splat.splat.cuda._wrapper_per_pixel import (
     blend_background,
@@ -50,7 +41,6 @@ from spirulae_splat.splat.cuda._wrapper_per_pixel import (
     get_color_transform_matrix,
     _make_lazy_cuda_func
 )
-from spirulae_splat.splat.cuda._wrapper_projection import scatter_max
 from spirulae_splat.splat.cuda import (
     _C,
 )
@@ -88,8 +78,6 @@ class SpirulaeSplatModelConfig:
     """Weight of L2 loss, default 0.0"""
     ssim_lambda: float = 0.2
     """Weight of ssim loss; 0.2 for academic baseline, higher for potentially more high-frequency details, lower for less blurry background in outdoor scenes"""
-    lpips_lambda: float = 0.0
-    """Weight of lpips loss for better perceptual quality; Note that this can make training much slower"""
     num_loss_scales: int = 0
     """Number of scales for image loss. For multi-scale loss, image is downscaled by 2 this number of times, and losses are averaged across scales. Improves convergence for high-resolution images."""
     use_camera_optimizer: bool = False
@@ -435,7 +423,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         if opacity_init is None:
             opacity_init = 0.1
 
-        if self.config.primitive in ["3dgs", "mip", "3dgut"] or True:
+        if self.config.primitive in ["3dgs", "mip", "3dgut"]:
             from time import perf_counter
             time0 = perf_counter()
             distances, indices = self.k_nearest_neighbor(means.data, 4)
@@ -449,23 +437,6 @@ class SpirulaeSplatModel(torch.nn.Module):
             quats = F.normalize(torch.randn((num_points, 4)), dim=-1)
             opacities = torch.logit(opacity_init * torch.ones(num_points, 1))
 
-        else:
-            distances, indices = self.k_nearest_neighbor(means.data, 6)
-            distances = torch.from_numpy(distances)
-            # avg_dist = distances.mean(dim=-1, keepdim=True)
-            points = means.data[indices] - means.data[:, None, :]
-            U, S, Vt = np.linalg.svd(points)
-            Vt[:,:,2] *= np.linalg.det(Vt)[:,None]
-            num_points = means.shape[0]
-            S = np.prod(S, axis=-1, keepdims=True)**(1/3) * np.ones(S.shape)
-            scales = S
-            scales = np.log(1.5*scales+1e-8)
-            scales = torch.from_numpy(scales.astype(np.float32))
-            quats = torch.from_numpy(np.array(
-                Rotation.from_matrix(np.transpose(Vt, axes=(0, 2, 1))).as_quat(),
-                dtype=np.float32))
-            opacities = torch.logit(0.1 * torch.ones(num_points, 1))
-
         gauss_params = {}
         if self.config.primitive in ["3dgs", "mip", "3dgut"]:
             gauss_params['means'] = torch.nn.Parameter(means)
@@ -474,7 +445,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             gauss_params['opacities'] = torch.nn.Parameter(opacities)
 
         # colors
-        dim_sh = num_sh_bases(self.config.sh_degree)
+        dim_sh = (self.config.sh_degree + 1) ** 2
 
         if (
             self.seed_points is not None
@@ -543,12 +514,6 @@ class SpirulaeSplatModel(torch.nn.Module):
                 num_cameras=self.num_train_data, device="cpu"
             )
 
-        # SplatTrainingLosses removed; bilagrid lives in C++ via core.engine_init_bilagrid().
-        # self.training_losses = SplatTrainingLosses(self.config, self.num_train_data)
-        # Per-type lazy-init flags. Each bilagrid type is allocated on the first
-        # iteration that proves it's actually needed (config + LR + supervision +
-        # data presence). This avoids the VRAM cost of unused grids for datasets
-        # with tens of thousands of frames.
         self._bilagrid_rgb_init = False
         self._bilagrid_depth_init = False
         self._bilagrid_normal_init = False
@@ -610,11 +575,6 @@ class SpirulaeSplatModel(torch.nn.Module):
     @property
     def opacities(self):
         param = self._get_gauss_param("opacities")
-        # # TODO: properly do this in projection
-        # if hasattr(param, 'optim_info') and 'num_splats' in param.optim_info:
-        #     num_splats = param.optim_info['num_splats']
-        #     if num_splats < param.shape[0]:
-        #         param.data[num_splats:] = -10.0  # logit(1/255) ~ -5.54
         return param
 
     def load_state_dict(self, dict, **kwargs):  # type: ignore
@@ -823,12 +783,6 @@ class SpirulaeSplatModel(torch.nn.Module):
         else:
             return 1
 
-    def _downscale_if_required(self, image):
-        d = self._get_downscale_factor()
-        if d > 1:
-            return resize_image(image, d)
-        return image
-
     def blend_background(
             self, camera: Cameras, c2w: torch.Tensor, intrins: torch.Tensor,
             W: Optional[int] = None, H: Optional[int] = None, camera_model: str = None,
@@ -953,17 +907,9 @@ class SpirulaeSplatModel(torch.nn.Module):
         if camera.distortion_params is not None and camera.distortion_params.any():
             kwargs['dist_coeffs'] = camera.distortion_params
 
-        if 'visibility_masks' in camera.metadata:
-            visibility_masks = camera.metadata['visibility_masks']
-            if visibility_masks is None:
-                visibility_masks = torch.zeros((len(camera), H, W, 1), dtype=torch.bool, device=device)
-            visibility_masks = self._downscale_if_required(visibility_masks)
-            kwargs['max_blending_masks'] = visibility_masks.bool()
-
         if 'accum_weight_map' in camera.metadata:
             accum_weight_map = camera.metadata['accum_weight_map']
             if accum_weight_map is not None:
-                accum_weight_map = self._downscale_if_required(accum_weight_map)
                 kwargs['accum_weight_map'] = accum_weight_map
 
         # Engine path: keep on CPU, C++ does H→D copy
@@ -1084,16 +1030,9 @@ class SpirulaeSplatModel(torch.nn.Module):
                 self.info['patch_offsets'] = camera.metadata['patch_offsets']
             if 'actual_images_per_batch' in camera.metadata:
                 self.info['n_cameras'] = camera.metadata['actual_images_per_batch']
-            for key in ['gaussian_ids', 'camera_ids', 'max_blending', 'bvh_time']:
+            for key in ['gaussian_ids', 'camera_ids', 'bvh_time']:
                 if key in meta:
                     self.info[key] = meta[key]
-
-        # visualize PPISP for debugging
-        if not self.training and False:
-            ppisp_param = self.training_losses.ppisp_params[0:1]
-            # ppisp_param = ppisp_param.detach() + math.sin(self.step / 10.0)
-            from spirulae_splat.modules.training_losses import apply_ppisp
-            rgb = apply_ppisp(rgb, ppisp_param, intrins)
 
         # pack outputs
         outputs = {
@@ -1442,8 +1381,8 @@ class SpirulaeSplatModel(torch.nn.Module):
         alpha_reg_factor = cfg.alpha_reg_weight * min(step / max(cfg.alpha_reg_warmup, 1), 1.0)
 
         loss_weights = [
-            (1.0 - cfg.l2_lambda) * (1.0 - cfg.ssim_lambda) * (1.0 - cfg.lpips_lambda),
-            cfg.l2_lambda * (1.0 - cfg.ssim_lambda) * (1.0 - cfg.lpips_lambda),
+            (1.0 - cfg.l2_lambda) * (1.0 - cfg.ssim_lambda),
+            cfg.l2_lambda * (1.0 - cfg.ssim_lambda),
             sup_active * cfg.depth_supervision_weight,
             sup_active * cfg.normal_supervision_weight,
             cfg.apply_loss_for_mask * cfg.alpha_loss_weight,
@@ -1454,7 +1393,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             reg_active * cfg.depth_distortion_reg * dist_factor,
             reg_active * cfg.normal_distortion_reg * dist_factor,
         ]
-        w_ssim = cfg.ssim_lambda * (1.0 - cfg.lpips_lambda)
+        w_ssim = cfg.ssim_lambda
         num_loss_scales = cfg.num_loss_scales + 1
         compute_loss_map = cfg.use_loss_map or (cfg.compute_hessian_diagonal is not None)
         structure_only_loss_map = cfg.use_structure_only_loss_map
@@ -1575,8 +1514,8 @@ class SpirulaeSplatModel(torch.nn.Module):
         sup_active = float(step > cfg.supervision_warmup)
         alpha_reg_factor = cfg.alpha_reg_weight * min(step / max(cfg.alpha_reg_warmup, 1), 1.0)
         loss_weights = [
-            (1.0 - cfg.l2_lambda) * (1.0 - cfg.ssim_lambda) * (1.0 - cfg.lpips_lambda),
-            cfg.l2_lambda * (1.0 - cfg.ssim_lambda) * (1.0 - cfg.lpips_lambda),
+            (1.0 - cfg.l2_lambda) * (1.0 - cfg.ssim_lambda),
+            cfg.l2_lambda * (1.0 - cfg.ssim_lambda),
             sup_active * cfg.depth_supervision_weight,
             sup_active * cfg.normal_supervision_weight,
             cfg.apply_loss_for_mask * cfg.alpha_loss_weight,
@@ -1587,7 +1526,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             reg_active * cfg.depth_distortion_reg * dist_factor,
             reg_active * cfg.normal_distortion_reg * dist_factor,
         ]
-        w_ssim = cfg.ssim_lambda * (1.0 - cfg.lpips_lambda)
+        w_ssim = cfg.ssim_lambda
         num_loss_scales = cfg.num_loss_scales + 1
         compute_loss_map = cfg.use_loss_map or (cfg.compute_hessian_diagonal is not None)
         structure_only_loss_map = cfg.use_structure_only_loss_map
@@ -1747,103 +1686,6 @@ class SpirulaeSplatModel(torch.nn.Module):
         # Engine path: set training data, compute loss + backward in C++
         if self.core.primitive in ['3dgs', 'mip', '3dgut'] and not self.core.use_bvh:
             return self._engine_get_loss_grad(outputs, batch, batch_size)
-
-        raise NotImplementedError()
-
-        # Legacy Python path (kept for reference)
-        self.info['num_train_data'] = self.num_train_data
-        total_val_loss = None
-        if isinstance(outputs, tuple) and isinstance(batch, tuple):
-            raise NotImplementedError()
-            loss_dict, loss_grad = self.training_losses(self.step, batch[0], outputs[0], self.info)
-            val_loss_dict, val_loss_grad = self.training_losses(self.step, batch[1], outputs[1], self.info, val=True)
-            total_val_loss = torch.stack([
-                x for x in val_loss_dict.values() if isinstance(x, torch.Tensor)
-            ]).sum()
-        else:
-            loss_dict, loss_grad = self.training_losses(self.step, batch, outputs, self.info)
-            for key, value in loss_dict.items():
-                self.training_verboser.add_metric(key, value)
-        self.training_verboser.add_metric("num_splats", self.core.cur_num_splats, last_only=True)
-        self.training_verboser.add_metric("max_num_splats", self.core.max_num_splats, last_only=True)
-        self.training_verboser.add_metric("num_sh", min(self.core.sh_degree_to_use, self.config.sh_degree), last_only=True)
-        self.training_verboser.add_metric("max_num_sh", self.config.sh_degree, last_only=True)
-
-        # Total train and validation losses
-        with torch.no_grad():
-            total_train_loss = sum(loss_dict.values())
-
-        if total_val_loss is not None:
-            # will have gradient to e.g. bilagrid, camera poses, but not Gaussian params
-            loss_dict['val'] = total_val_loss
-            # prevent double backward
-            if isinstance(total_val_loss, torch.Tensor):
-                total_val_loss = total_val_loss.item()
-
-        # Apply scalar in batching mode
-        if batch_size != 1:
-            for key, value in loss_dict.items():
-                if isinstance(value, torch.Tensor):
-                    loss_dict[key] = value * (1 / batch_size)
-
-        # Store train/val loss running stats
-        if not hasattr(self, 'train_loss_history'):
-            self.train_loss_history = []
-        self.train_loss_history.append(total_train_loss)
-        if not hasattr(self, 'val_loss_history'):
-            self.val_loss_history = []
-        if not hasattr(self, 'val_lpips_history'):
-            self.val_lpips_history = []
-        if total_val_loss is not None:
-            raise NotImplementedError()
-            while len(self.val_loss_history) < len(self.train_loss_history):
-                self.val_loss_history.append(total_val_loss)
-            while len(self.val_lpips_history) < len(self.train_loss_history):
-                self.val_lpips_history.append(val_loss_dict['lpips_val'])
-            # TODO: possbily linear interpolation?
-        sw_width = self.config.validation_loss_average_window
-        if len(self.val_loss_history) >= sw_width:
-            raise NotImplementedError()
-            # TODO: O(1) moving average update
-            self.total_train_loss = sum(self.train_loss_history[-sw_width:]) / sw_width
-            self.total_val_loss = sum(self.val_loss_history[-sw_width:]) / sw_width
-            self.total_val_lpips = sum(self.val_lpips_history[-sw_width:]) / sw_width
-
-        # Compute overfitting score
-        if not hasattr(self, 'overfit_count'):
-            self.overfit_count = 0
-        if len(self.val_loss_history) >= 2*sw_width:
-            raise NotImplementedError()
-            # note that training loss can increase at e.g. regularization weight scheduling
-            prev_total_train_loss = sum(self.train_loss_history[-2*sw_width:-sw_width]) / sw_width
-            prev_total_val_loss = sum(self.val_loss_history[-2*sw_width:-sw_width]) / sw_width
-            prev_total_val_lpips = sum(self.val_lpips_history[-2*sw_width:-sw_width]) / sw_width
-            train_loss_increase = self.total_train_loss - prev_total_train_loss
-            val_loss_increase = self.total_val_loss - prev_total_val_loss
-            val_lpips_increase = self.total_val_lpips - prev_total_val_lpips
-            overfit_scores = []
-            overfit_scores.append(val_loss_increase - max(train_loss_increase, 0))
-            overfit_scores.append(val_lpips_increase)
-            overfit_score = max(overfit_scores) if self.config.overfit_score_aggregation_mode == 'max' else \
-                            min(overfit_scores) if self.config.overfit_score_aggregation_mode == 'min' else \
-                            sum(overfit_scores) / len(overfit_scores)
-            # overfit_score = min(val_loss_increase - max(train_loss_increase, 0), val_lpips_increase)
-            if not hasattr(self, 'overfit_score_history'):
-                self.overfit_score_history = []
-            self.overfit_score_history.append(overfit_score)
-            # Early stop of overfits
-            if len(self.overfit_score_history) >= sw_width:
-                self.overfit_score = sum(self.overfit_score_history[-sw_width:]) / sw_width
-                if self.overfit_score > 0.0:
-                    self.overfit_count += 1
-                    if self.overfit_count > self.config.early_stop_patience and \
-                            self.step > self.config.early_stop_warmup + self.config.early_stop_patience//2:
-                        print("\n\n\n\n\n\nOverfitting detected. Quality is becoming worse with more training. Quitting.\n")
-                        exit(0)
-                else:
-                    self.overfit_count = 0
-
-        return loss_grad
 
     def set_gradient_accumulation_steps(self, gradient_accumulation_step: int, _trainer=[]):
         if len(trainer) == 0:
